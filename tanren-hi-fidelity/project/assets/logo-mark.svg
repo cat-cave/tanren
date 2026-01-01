@@ -1,9 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" fill="none">
-  
-  <defs>
-    
-  </defs>
-  <rect class="plate" x="2" y="2" width="92" height="92" rx="2"></rect>
-  <text class="glyph" x="48" y="73" text-anchor="middle">鍛</text>
-  <circle class="ember" cx="84" cy="12" r="4"></circle>
-</svg>

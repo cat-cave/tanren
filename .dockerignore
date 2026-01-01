@@ -1,8 +1,0 @@
-.git
-.claude
-node_modules
-dist
-coverage
-.env
-.pnpm-store
-*.log
