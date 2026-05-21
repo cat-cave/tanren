@@ -13,6 +13,12 @@ pnpm run check
 docker compose up --build
 ```
 
+If you are moving from the pre-Drizzle hello-world baseline, reset the local Postgres volume before this smoke:
+
+```sh
+docker compose down -v
+```
+
 In another shell:
 
 ```sh

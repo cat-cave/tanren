@@ -65,7 +65,7 @@ function checkRequiredDocs(root) {
 function checkLineMax(projectFiles) {
   const diagnostics = [];
   for (const { file, text } of projectFiles) {
-    if (lineMaxExclusions.has(file)) {
+    if (lineMaxExclusions.has(file) || file.startsWith("db/migrations/meta/")) {
       continue;
     }
     const lineCount = text.endsWith("\n") ? text.split("\n").length - 1 : text.split("\n").length;
@@ -232,6 +232,38 @@ function checkGitHubActions(projectFiles) {
   return diagnostics;
 }
 
+function checkSchemaDriftWiring(projectFiles) {
+  const packageFile = projectFiles.find((item) => item.file === "package.json");
+  const hasDriftScript = projectFiles.some((item) => item.file === "scripts/check-schema-drift.sh");
+  if (!hasDriftScript) {
+    return [diagnostic("schema-drift-check-wired", "scripts/check-schema-drift.sh", "schema drift check script is missing")];
+  }
+
+  if (!packageFile) {
+    return [diagnostic("schema-drift-check-wired", "package.json", "root package.json is required for schema drift wiring")];
+  }
+
+  try {
+    const pkg = JSON.parse(packageFile.text);
+    const scripts = pkg.scripts ?? {};
+    const checkScript = String(scripts.check ?? "");
+    const driftScript = String(scripts["check:schema-drift"] ?? "");
+
+    if (!driftScript.includes("scripts/check-schema-drift.sh")) {
+      return [
+        diagnostic("schema-drift-check-wired", "package.json", "check:schema-drift must run scripts/check-schema-drift.sh")
+      ];
+    }
+    if (!checkScript.includes("check:schema-drift")) {
+      return [diagnostic("schema-drift-check-wired", "package.json", "root check must include check:schema-drift")];
+    }
+  } catch {
+    return [diagnostic("schema-drift-check-wired", "package.json", "root package.json must be valid JSON")];
+  }
+
+  return [];
+}
+
 export async function runArchitectureChecks({ root = process.cwd() } = {}) {
   const resolvedRoot = resolve(root);
   const projectFiles = await readProjectFiles(resolvedRoot);
@@ -245,7 +277,8 @@ export async function runArchitectureChecks({ root = process.cwd() } = {}) {
     ...checkFailureVariants(projectFiles),
     ...checkWriterAnswererSeparation(projectFiles),
     ...checkCostSources(projectFiles),
-    ...checkGitHubActions(projectFiles)
+    ...checkGitHubActions(projectFiles),
+    ...checkSchemaDriftWiring(projectFiles)
   ];
 }
 

@@ -23,7 +23,9 @@ async function createFixture(files: Record<string, string>) {
 describe("architecture checker", () => {
   it("accepts a minimal compliant fixture", async () => {
     const root = await createFixture({
-      "package.json": "{\"type\":\"module\"}\n",
+      "package.json":
+        "{\"type\":\"module\",\"scripts\":{\"check\":\"pnpm run check:schema-drift\",\"check:schema-drift\":\"bash scripts/check-schema-drift.sh\"}}\n",
+      "scripts/check-schema-drift.sh": "#!/usr/bin/env bash\n",
       ".github/workflows/ci.yml": "steps:\n  - uses: actions/checkout@v6\n  - uses: actions/setup-node@v6\n",
       "db/migrations/0001.sql":
         "CHECK (cost_source IN ('provider_direct','ccusage','codexbar','opportunity_computed'))\n",
@@ -54,5 +56,15 @@ describe("architecture checker", () => {
         "writer-answerer-separation"
       ])
     );
+  });
+
+  it("requires schema drift checking to stay wired into the root check", async () => {
+    const root = await createFixture({
+      "package.json": "{\"type\":\"module\",\"scripts\":{\"check\":\"pnpm run typecheck\"}}\n",
+      "scripts/check-schema-drift.sh": "#!/usr/bin/env bash\n"
+    });
+
+    const diagnostics = await runArchitectureChecks({ root });
+    expect(diagnostics.map((item) => item.rule)).toContain("schema-drift-check-wired");
   });
 });
