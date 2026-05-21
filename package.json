@@ -17,6 +17,7 @@
     "typecheck": "pnpm -r typecheck"
   },
   "devDependencies": {
+    "@mergifyio/vitest": "0.2.0",
     "@types/node": "^24.0.0",
     "@types/pg": "^8.11.11",
     "drizzle-kit": "^0.31.10",

@@ -23,6 +23,8 @@ jobs:
       - run: corepack prepare pnpm@11.1.0 --activate
       - run: pnpm install --frozen-lockfile
       - run: pnpm run check
+        env:
+          MERGIFY_TOKEN: ${{ secrets.MERGIFY_TOKEN }}
       - run: docker compose build orchestrator dashboard runner
       - run: ssh-keygen -t ed25519 -N "" -f /tmp/tanren_runner_key
       - run: TANREN_RUNNER_AUTHORIZED_KEY="$(cat /tmp/tanren_runner_key.pub)" docker compose up -d postgres vault orchestrator dashboard runner ntfy
