@@ -4,7 +4,11 @@ packages:
   - "services/*"
 
 onlyBuiltDependencies:
+  - cpu-features
   - esbuild
+  - ssh2
 allowBuilds:
+  cpu-features: true
   esbuild: true
   protobufjs: false
+  ssh2: true

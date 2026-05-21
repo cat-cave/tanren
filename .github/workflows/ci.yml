@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
+    branches: [main, "spec-*"]
 
 jobs:
   check:
@@ -32,5 +32,17 @@ jobs:
       - run: ./scripts/wait-for-url.sh http://localhost:3000/healthz
       - run: curl -fsS -X POST http://localhost:3100/hello/run
       - run: ssh -i /tmp/tanren_runner_key -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/tmp/tanren_runner_known_hosts tanren@localhost 'echo tanren-runner-ok'
+      - name: Run live SSH substrate integration
+        run: |
+          fingerprint="$(ssh-keyscan -p 2222 -t ed25519 localhost 2>/dev/null | ssh-keygen -lf - -E sha256 | awk 'NR == 1 { print $2 }')"
+          test -n "$fingerprint"
+          TANREN_SSH_INTEGRATION=1 \
+            TANREN_SSH_KEY_PATH=/tmp/tanren_runner_key \
+            TANREN_SSH_HOST=127.0.0.1 \
+            TANREN_SSH_PORT=2222 \
+            TANREN_SSH_USER=tanren \
+            TANREN_SSH_HOST_FINGERPRINT="$fingerprint" \
+            TANREN_SSH_HOST_KEY_ALGORITHMS=ssh-ed25519 \
+            pnpm exec vitest run services/orchestrator/tests/ssh.integration.test.ts
       - if: always()
         run: docker compose down -v

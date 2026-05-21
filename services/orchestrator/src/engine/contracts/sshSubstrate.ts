@@ -1,3 +1,4 @@
+import type { Failure } from "../failure.js";
 import type { SshTarget } from "./allocator.js";
 
 export interface SshCommand {
@@ -7,9 +8,12 @@ export interface SshCommand {
 }
 
 export interface SshCommandResult {
-  exitCode: number;
+  exitCode: number | null;
   stdout: string;
   stderr: string;
+  signal?: string;
+  timedOut: boolean;
+  failure?: Failure;
 }
 
 export interface SshSubstrate {
@@ -21,7 +25,8 @@ export class FakeSshSubstrate implements SshSubstrate {
     return {
       exitCode: 0,
       stdout: `fake ssh: ${command.command}`,
-      stderr: ""
+      stderr: "",
+      timedOut: false
     };
   }
 }
