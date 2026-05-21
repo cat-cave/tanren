@@ -9,7 +9,7 @@ export interface SecretStore {
   delete(ref: string): Promise<void>;
 }
 
-export class FakeSecretStore implements SecretStore {
+export class InMemorySecretStore implements SecretStore {
   private readonly values = new Map<string, string>();
 
   async put(secret: SecretValue): Promise<void> {
@@ -25,3 +25,5 @@ export class FakeSecretStore implements SecretStore {
     this.values.delete(ref);
   }
 }
+
+export class FakeSecretStore extends InMemorySecretStore {}

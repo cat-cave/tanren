@@ -68,6 +68,17 @@ describe("architecture checker", () => {
     expect(diagnostics.map((item) => item.rule)).toContain("schema-drift-check-wired");
   });
 
+  it("accepts root check delegation through just ci when the just recipe includes schema drift", async () => {
+    const root = await createFixture({
+      "package.json":
+        "{\"type\":\"module\",\"scripts\":{\"check\":\"just ci\",\"check:schema-drift\":\"bash scripts/check-schema-drift.sh\"}}\n",
+      "justfile": "ci: schema-drift\n\nschema-drift:\n  corepack pnpm run check:schema-drift\n",
+      "scripts/check-schema-drift.sh": "#!/usr/bin/env bash\n"
+    });
+
+    await expect(runArchitectureChecks({ root })).resolves.toEqual([]);
+  });
+
   it("confines Docker socket and API access to the local allocator", async () => {
     const dockerSocket = ["/var/run", "docker.sock"].join("/");
     const root = await createFixture({

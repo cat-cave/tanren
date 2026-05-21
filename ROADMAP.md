@@ -80,7 +80,7 @@ Phase 0 starts from the completed hello-world baseline and ends when a fake writ
 
 ### SPEC-0004 - hello-over-ssh
 
-**Owns**: `services/orchestrator/src/engine/helloWorkflow.ts`, `services/orchestrator/src/main.ts`, `services/orchestrator/tests/**hello**`, `cli/src/main.ts` only for output shape, `services/dashboard/src/main.tsx` only for displaying new hello events.
+**Owns**: `services/orchestrator/src/engine/helloWorkflow.ts`, `services/orchestrator/src/main.ts`, `services/orchestrator/src/engine/events.ts`, `services/orchestrator/tests/**hello**`, `.github/workflows/ci.yml` and `compose.yml` only for hello SSH smoke wiring, `cli/src/main.ts` only for output shape, `services/dashboard/src/main.tsx` only for displaying new hello events.
 **Consumes**: SPEC-0003.
 **Produces**: the current hello workflow executed across the real runner boundary.
 

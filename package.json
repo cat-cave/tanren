@@ -6,7 +6,7 @@
   "packageManager": "pnpm@11.1.0",
   "scripts": {
     "build": "pnpm -r build",
-    "check": "pnpm run format:check && pnpm run lint && pnpm run check:architecture && pnpm run check:schema-drift && pnpm run typecheck && pnpm run test && pnpm run build && pnpm run compose:config",
+    "check": "just ci",
     "check:architecture": "node scripts/check-architecture.mjs",
     "check:schema-drift": "bash scripts/check-schema-drift.sh",
     "compose:config": "docker compose config --quiet",
