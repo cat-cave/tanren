@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import pg from "pg";
+import type pg from "pg";
 import { createDbPool } from "./client.js";
 
 export async function migrate(pool: pg.Pool): Promise<void> {

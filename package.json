@@ -6,10 +6,11 @@
   "packageManager": "pnpm@11.1.0",
   "scripts": {
     "build": "pnpm -r build",
-    "check": "pnpm run format:check && pnpm run lint && pnpm run typecheck && pnpm run test && pnpm run build && pnpm run compose:config",
+    "check": "pnpm run format:check && pnpm run lint && pnpm run check:architecture && pnpm run typecheck && pnpm run test && pnpm run build && pnpm run compose:config",
+    "check:architecture": "node scripts/check-architecture.mjs",
     "compose:config": "docker compose config --quiet",
     "format:check": "node scripts/format-check.mjs",
-    "lint": "oxlint .",
+    "lint": "oxlint -c oxlintrc.json .",
     "test": "vitest run",
     "typecheck": "pnpm -r typecheck"
   },

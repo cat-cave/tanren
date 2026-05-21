@@ -1,0 +1,23 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "unicorn", "vitest"],
+  "ignorePatterns": ["dist/**", "node_modules/**", "coverage/**"],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "error",
+    "perf": "warn"
+  },
+  "rules": {
+    "eqeqeq": "error",
+    "no-debugger": "error",
+    "no-await-in-loop": "off",
+    "no-var": "error",
+    "prefer-const": "error",
+    "no-console": "off",
+    "unicorn/no-array-sort": "off",
+    "unicorn/prefer-node-protocol": "error",
+    "typescript/consistent-type-imports": "error",
+    "vitest/no-disabled-tests": "error",
+    "vitest/no-focused-tests": "error"
+  }
+}

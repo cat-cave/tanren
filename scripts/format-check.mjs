@@ -14,7 +14,7 @@ for (const pattern of patterns) {
 }
 
 let failed = false;
-for (const file of [...files].sort()) {
+for (const file of [...files].toSorted()) {
   const text = await readFile(file, "utf8");
   const lines = text.split("\n");
 

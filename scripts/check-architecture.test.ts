@@ -1,0 +1,58 @@
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, it } from "vitest";
+import { runArchitectureChecks } from "./check-architecture.mjs";
+
+async function createFixture(files: Record<string, string>) {
+  const root = await mkdtemp(join(tmpdir(), "tanren-architecture-"));
+  const requiredDocs = {
+    "AGENTS.md": "# Agents\n",
+    "docs/playbooks/spec-template.md": "# Spec Template\n",
+    "docs/playbooks/version-verification.md": "# Version Verification\n",
+    "docs/playbooks/github-workflow.md": "# GitHub Workflow\n",
+    "docs/contracts/architecture-checks.md": "# Architecture Checks\n"
+  };
+  for (const [file, text] of Object.entries({ ...requiredDocs, ...files })) {
+    await mkdir(join(root, file, ".."), { recursive: true });
+    await writeFile(join(root, file), text);
+  }
+  return root;
+}
+
+describe("architecture checker", () => {
+  it("accepts a minimal compliant fixture", async () => {
+    const root = await createFixture({
+      "package.json": "{\"type\":\"module\"}\n",
+      ".github/workflows/ci.yml": "steps:\n  - uses: actions/checkout@v6\n  - uses: actions/setup-node@v6\n",
+      "db/migrations/0001.sql":
+        "CHECK (cost_source IN ('provider_direct','ccusage','codexbar','opportunity_computed'))\n",
+      "services/orchestrator/src/engine/eventStore.ts": "export const ok = true;\n"
+    });
+
+    await expect(runArchitectureChecks({ root })).resolves.toEqual([]);
+  });
+
+  it("rejects architecture violations in fixture files", async () => {
+    const root = await createFixture({
+      ".github/workflows/ci.yml": "steps:\n  - uses: actions/checkout@v5\n",
+      "services/orchestrator/src/bad.ts": [
+        `import { spawn } from "node:${"child_process"}";`,
+        `const badCost = "${"legacy"}_unknown";`,
+        `const sql = "${"INSERT INTO"} events (payload) VALUES ('{}')";`,
+        "export const both = ['runWriter', 'runAnswerer'];"
+      ].join("\n")
+    });
+
+    const diagnostics = await runArchitectureChecks({ root });
+    expect(diagnostics.map((item) => item.rule)).toEqual(
+      expect.arrayContaining([
+        "github-actions-current-major",
+        "no-host-process-spawn",
+        "no-unknown-cost-source",
+        "single-event-writer",
+        "writer-answerer-separation"
+      ])
+    );
+  });
+});

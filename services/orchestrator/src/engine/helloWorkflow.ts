@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type pg from "pg";
+import { PgEventStore } from "./eventStore.js";
 import { fakeAuditor, fakeChecker, fakePlanner, fakeWriter } from "./providers/fake.js";
 
 export interface HelloRunSummary {
@@ -10,25 +11,11 @@ export interface HelloRunSummary {
   events: number;
 }
 
-async function insertEvent(pool: pg.Pool, opts: {
-  runId: string;
-  taskId?: string;
-  specId: string;
-  projectId: string;
-  eventType: string;
-  payload: unknown;
-}) {
-  await pool.query(
-    `INSERT INTO events (run_id, task_id, spec_id, project_id, event_type, payload)
-     VALUES ($1, $2, $3, $4, $5, $6::jsonb)`,
-    [opts.runId, opts.taskId ?? null, opts.specId, opts.projectId, opts.eventType, JSON.stringify(opts.payload)]
-  );
-}
-
 export async function runHelloWorkflow(pool: pg.Pool): Promise<HelloRunSummary> {
   const projectId = `project_${randomUUID()}`;
   const specId = `spec_${randomUUID()}`;
   const runId = `run_${randomUUID()}`;
+  const eventStore = new PgEventStore(pool);
 
   await pool.query("BEGIN");
   try {
@@ -49,7 +36,7 @@ export async function runHelloWorkflow(pool: pg.Pool): Promise<HelloRunSummary> 
       [runId, specId, projectId]
     );
 
-    await insertEvent(pool, { runId, specId, projectId, eventType: "hello.started", payload: {} });
+    await eventStore.append({ runId, specId, projectId, eventType: "hello.started", payload: {} });
 
     const planTaskId = `task_${randomUUID()}`;
     await pool.query(
@@ -58,7 +45,7 @@ export async function runHelloWorkflow(pool: pg.Pool): Promise<HelloRunSummary> 
       [planTaskId, runId]
     );
     const plan = await fakePlanner.runAnswerer({ prompt: "Plan hello world", timeoutMs: 1_000 });
-    await insertEvent(pool, { runId, taskId: planTaskId, specId, projectId, eventType: "planner.completed", payload: plan });
+    await eventStore.append({ runId, taskId: planTaskId, specId, projectId, eventType: "planner.completed", payload: plan });
 
     const writeTaskId = `task_${randomUUID()}`;
     await pool.query(
@@ -67,7 +54,7 @@ export async function runHelloWorkflow(pool: pg.Pool): Promise<HelloRunSummary> 
       [writeTaskId, runId, plan.subtasks[0]?.title ?? "Fake writer"]
     );
     const writer = await fakeWriter.runWriter({ prompt: "Write hello world", workspace: "/workspace", timeoutMs: 1_000 });
-    await insertEvent(pool, { runId, taskId: writeTaskId, specId, projectId, eventType: "writer.completed", payload: writer });
+    await eventStore.append({ runId, taskId: writeTaskId, specId, projectId, eventType: "writer.completed", payload: writer });
     await pool.query(
       `INSERT INTO cost_records
        (task_id, run_id, project_id, cli, provider, model, input_tokens, output_tokens, cached_tokens,
@@ -92,7 +79,7 @@ export async function runHelloWorkflow(pool: pg.Pool): Promise<HelloRunSummary> 
       [checkTaskId, runId]
     );
     const check = await fakeChecker.runAnswerer({ prompt: writer.diff, timeoutMs: 1_000 });
-    await insertEvent(pool, { runId, taskId: checkTaskId, specId, projectId, eventType: "checker.completed", payload: check });
+    await eventStore.append({ runId, taskId: checkTaskId, specId, projectId, eventType: "checker.completed", payload: check });
 
     const auditTaskId = `task_${randomUUID()}`;
     await pool.query(
@@ -101,11 +88,17 @@ export async function runHelloWorkflow(pool: pg.Pool): Promise<HelloRunSummary> 
       [auditTaskId, runId]
     );
     const audit = await fakeAuditor.runAnswerer({ prompt: "Audit hello world", timeoutMs: 1_000 });
-    await insertEvent(pool, { runId, taskId: auditTaskId, specId, projectId, eventType: "auditor.completed", payload: audit });
+    await eventStore.append({ runId, taskId: auditTaskId, specId, projectId, eventType: "auditor.completed", payload: audit });
 
     await pool.query("UPDATE specs SET status = 'done' WHERE spec_id = $1", [specId]);
     await pool.query("UPDATE runs SET outcome = 'hello_world_complete', ended_at = now() WHERE run_id = $1", [runId]);
-    await insertEvent(pool, { runId, specId, projectId, eventType: "hello.completed", payload: { outcome: "hello_world_complete" } });
+    await eventStore.append({
+      runId,
+      specId,
+      projectId,
+      eventType: "hello.completed",
+      payload: { outcome: "hello_world_complete" }
+    });
     await pool.query("COMMIT");
   } catch (error) {
     await pool.query("ROLLBACK");
