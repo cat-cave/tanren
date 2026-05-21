@@ -10,6 +10,7 @@ export interface AllocationRequest {
   runId: string;
   projectId: string;
   runnerImage: string;
+  identitySecretRef: string;
 }
 
 export interface RunnerAllocation {
@@ -33,7 +34,7 @@ export class FakeAllocator implements Allocator {
         port: 22,
         username: "tanren",
         hostKeyFingerprint: "SHA256:fake",
-        identitySecretRef: `runner/${request.runId}/identity`
+        identitySecretRef: request.identitySecretRef
       }
     };
   }

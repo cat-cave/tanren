@@ -67,4 +67,34 @@ describe("architecture checker", () => {
     const diagnostics = await runArchitectureChecks({ root });
     expect(diagnostics.map((item) => item.rule)).toContain("schema-drift-check-wired");
   });
+
+  it("confines Docker socket and API access to the local allocator", async () => {
+    const dockerSocket = ["/var/run", "docker.sock"].join("/");
+    const root = await createFixture({
+      "package.json":
+        "{\"type\":\"module\",\"scripts\":{\"check\":\"pnpm run check:schema-drift\",\"check:schema-drift\":\"bash scripts/check-schema-drift.sh\"}}\n",
+      "scripts/check-schema-drift.sh": "#!/usr/bin/env bash\n",
+      "compose.yml": `services:\n  orchestrator:\n    volumes:\n      - ${dockerSocket}:${dockerSocket}\n`,
+      "services/orchestrator/src/engine/allocators/dockerClient.ts": `export const socketPath = "${dockerSocket}";\n`,
+      "services/orchestrator/src/engine/not-allocator.ts": `export const socketPath = "${dockerSocket}";\n`
+    });
+
+    const diagnostics = await runArchitectureChecks({ root });
+    expect(diagnostics.map((item) => item.rule)).toContain("docker-api-allocator-only");
+  });
+
+  it("allows the Docker socket mount only on the orchestrator service", async () => {
+    const dockerSocket = ["/var/run", "docker.sock"].join("/");
+    const root = await createFixture({
+      "package.json":
+        "{\"type\":\"module\",\"scripts\":{\"check\":\"pnpm run check:schema-drift\",\"check:schema-drift\":\"bash scripts/check-schema-drift.sh\"}}\n",
+      "scripts/check-schema-drift.sh": "#!/usr/bin/env bash\n",
+      "compose.yml": `services:\n  runner:\n    volumes:\n      - ${dockerSocket}:${dockerSocket}\n`
+    });
+
+    const diagnostics = await runArchitectureChecks({ root });
+    expect(diagnostics.map((item) => item.rule)).toEqual(
+      expect.arrayContaining(["docker-api-allocator-only", "no-host-bind-mounts"])
+    );
+  });
 });
