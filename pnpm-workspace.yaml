@@ -1,0 +1,9 @@
+packages:
+  - "cli"
+  - "db"
+  - "services/*"
+
+onlyBuiltDependencies:
+  - esbuild
+allowBuilds:
+  esbuild: true

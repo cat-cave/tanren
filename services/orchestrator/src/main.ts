@@ -1,0 +1,60 @@
+import { serve } from "@hono/node-server";
+import { createDbPool, migrate } from "@tanren/db";
+import { Hono } from "hono";
+import { runHelloWorkflow } from "./engine/helloWorkflow.js";
+
+const port = Number(process.env.ORCHESTRATOR_PORT ?? 3100);
+const vaultAddr = process.env.VAULT_ADDR ?? "http://localhost:8200";
+const vaultToken = process.env.VAULT_TOKEN ?? "dev-root-token";
+const pool = createDbPool();
+
+async function vaultHealth() {
+  const response = await fetch(`${vaultAddr}/v1/sys/health`, {
+    headers: { "X-Vault-Token": vaultToken }
+  });
+  return { ok: response.ok || response.status === 429 || response.status === 472, status: response.status };
+}
+
+export async function createApp() {
+  await migrate(pool);
+
+  const app = new Hono();
+
+  app.get("/healthz", async (c) => {
+    const dbResult = await pool.query("SELECT 1 AS ok");
+    const vault = await vaultHealth();
+    return c.json({
+      service: "orchestrator",
+      ok: dbResult.rows[0]?.ok === 1 && vault.ok,
+      database: "ok",
+      vault
+    });
+  });
+
+  app.get("/version", (c) => c.json({ service: "orchestrator", version: process.env.npm_package_version ?? "0.0.0" }));
+
+  app.post("/hello/run", async (c) => {
+    const summary = await runHelloWorkflow(pool);
+    return c.json(summary, 201);
+  });
+
+  app.get("/runs/:runId", async (c) => {
+    const runId = c.req.param("runId");
+    const run = await pool.query("SELECT * FROM runs WHERE run_id = $1", [runId]);
+    if (run.rowCount === 0) {
+      return c.json({ error: "run_not_found" }, 404);
+    }
+
+    const events = await pool.query("SELECT * FROM events WHERE run_id = $1 ORDER BY ts ASC, id ASC", [runId]);
+    const costs = await pool.query("SELECT * FROM cost_records WHERE run_id = $1 ORDER BY recorded_at ASC, id ASC", [runId]);
+    return c.json({ run: run.rows[0], events: events.rows, costs: costs.rows });
+  });
+
+  return app;
+}
+
+if (import.meta.url === `file://${process.argv[1]}`) {
+  const app = await createApp();
+  serve({ fetch: app.fetch, port });
+  console.log(`orchestrator listening on :${port}`);
+}

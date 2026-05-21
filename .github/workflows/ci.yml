@@ -1,0 +1,30 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: pnpm
+      - run: corepack enable
+      - run: corepack prepare pnpm@11.1.0 --activate
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run check
+      - run: docker compose build orchestrator dashboard runner
+      - run: ssh-keygen -t ed25519 -N "" -f /tmp/tanren_runner_key
+      - run: TANREN_RUNNER_AUTHORIZED_KEY="$(cat /tmp/tanren_runner_key.pub)" docker compose up -d postgres vault orchestrator dashboard runner ntfy
+      - run: ./scripts/wait-for-url.sh http://localhost:3100/healthz
+      - run: ./scripts/wait-for-url.sh http://localhost:3000/healthz
+      - run: curl -fsS -X POST http://localhost:3100/hello/run
+      - run: ssh -i /tmp/tanren_runner_key -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/tmp/tanren_runner_known_hosts tanren@localhost 'echo tanren-runner-ok'
+      - if: always()
+        run: docker compose down -v

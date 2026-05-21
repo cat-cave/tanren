@@ -1,0 +1,14 @@
+{
+  "name": "@tanren/cli",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "tanren": "./dist/main.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && chmod +x dist/main.js",
+    "tanren": "tsx src/main.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  }
+}

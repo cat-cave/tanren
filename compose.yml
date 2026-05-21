@@ -1,0 +1,96 @@
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_DB: tanren
+      POSTGRES_USER: tanren
+      POSTGRES_PASSWORD: tanren
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tanren -d tanren"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - pgdata:/var/lib/postgresql
+
+  vault:
+    image: hashicorp/vault:1.18
+    cap_add:
+      - IPC_LOCK
+    environment:
+      VAULT_ADDR: http://127.0.0.1:8200
+      VAULT_DEV_ROOT_TOKEN_ID: dev-root-token
+      VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+    command: ["server", "-dev"]
+    ports:
+      - "18200:8200"
+    healthcheck:
+      test: ["CMD", "vault", "status"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  orchestrator:
+    build:
+      context: .
+      dockerfile: services/orchestrator/Dockerfile
+    environment:
+      DATABASE_URL: postgres://tanren:tanren@postgres:5432/tanren
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: dev-root-token
+      ORCHESTRATOR_PORT: "3100"
+    ports:
+      - "3100:3100"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      vault:
+        condition: service_healthy
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: services/dashboard/Dockerfile
+    environment:
+      DATABASE_URL: postgres://tanren:tanren@postgres:5432/tanren
+      ORCHESTRATOR_URL: http://orchestrator:3100
+      DASHBOARD_PORT: "3000"
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      orchestrator:
+        condition: service_started
+
+  runner:
+    build:
+      context: .
+      dockerfile: runner/Dockerfile
+    environment:
+      TANREN_RUNNER_AUTHORIZED_KEY: ${TANREN_RUNNER_AUTHORIZED_KEY:-}
+    ports:
+      - "2222:22"
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep sshd >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  ntfy:
+    image: binwiederhier/ntfy:latest
+    command: ["serve"]
+    ports:
+      - "8080:80"
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    profiles: ["tunnel"]
+    command: ["tunnel", "--no-autoupdate", "run"]
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARED_TUNNEL_TOKEN:-}
+
+volumes:
+  pgdata:
