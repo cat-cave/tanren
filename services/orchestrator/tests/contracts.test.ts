@@ -15,7 +15,8 @@ describe("orchestrator scaffold contracts", () => {
     const allocation = await allocator.allocate({
       runId: "run_1",
       projectId: "project_1",
-      runnerImage: "ghcr.io/cat-cave/tanren-runner:v0"
+      runnerImage: "ghcr.io/cat-cave/tanren-runner:v0",
+      identitySecretRef: "runner/run_1/identity"
     });
     const ssh = await new FakeSshSubstrate().run(allocation.target, { command: "echo ok", timeoutMs: 100 });
     const secrets = new FakeSecretStore();

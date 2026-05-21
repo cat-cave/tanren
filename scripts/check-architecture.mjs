@@ -128,10 +128,72 @@ function checkNoHostBindMounts(projectFiles) {
     }
     text.split("\n").forEach((line, index) => {
       const match = line.match(/^\s*-\s*["']?([^"'\s:]+):\/[^"']*["']?\s*$/);
+      if (match && isAllowedOrchestratorDockerSocketMount(file, text, index + 1)) {
+        return;
+      }
       if (match && isHostPath(match[1])) {
         diagnostics.push(diagnostic("no-host-bind-mounts", file, "compose service volume uses a host path", index + 1));
       }
     });
+  }
+  return diagnostics;
+}
+
+function isAllowedDockerSocketMount(file, line) {
+  return file === "compose.yml" && line.trim() === "- /var/run/docker.sock:/var/run/docker.sock";
+}
+
+function isAllowedOrchestratorDockerSocketMount(file, text, lineNumber) {
+  if (file !== "compose.yml") {
+    return false;
+  }
+
+  let currentService;
+  let inVolumes = false;
+  const lines = text.split("\n");
+  for (let index = 0; index < lineNumber; index += 1) {
+    const line = lines[index] ?? "";
+    const serviceMatch = line.match(/^  ([a-zA-Z0-9_-]+):\s*$/);
+    if (serviceMatch) {
+      currentService = serviceMatch[1];
+      inVolumes = false;
+      continue;
+    }
+    if (line.match(/^    volumes:\s*$/)) {
+      inVolumes = currentService === "orchestrator";
+      continue;
+    }
+    if (line.match(/^    [a-zA-Z0-9_-]+:/)) {
+      inVolumes = false;
+    }
+  }
+
+  return currentService === "orchestrator" && inVolumes && isAllowedDockerSocketMount(file, lines[lineNumber - 1] ?? "");
+}
+
+function checkDockerApiAllocatorOnly(projectFiles) {
+  const diagnostics = [];
+  const dockerApiPatterns = [/\/var\/run\/docker\.sock/g, /\/containers\/(?:json|[^"']*\/json)/g, /\bsocketPath\s*:/g];
+  for (const { file, text } of projectFiles) {
+    if (
+      invariantDocExclusions.has(file) ||
+      file === "scripts/check-architecture.mjs" ||
+      file.startsWith("services/orchestrator/src/engine/allocators/") ||
+      file.startsWith("services/orchestrator/tests/")
+    ) {
+      continue;
+    }
+    for (const dockerPattern of dockerApiPatterns) {
+      for (const match of text.matchAll(dockerPattern)) {
+        const lineNumber = lineFor(text, match.index);
+        if (file === "compose.yml" && isAllowedOrchestratorDockerSocketMount(file, text, lineNumber)) {
+          continue;
+        }
+        diagnostics.push(
+          diagnostic("docker-api-allocator-only", file, "Docker socket/API access is confined to local allocator code", lineNumber)
+        );
+      }
+    }
   }
   return diagnostics;
 }
@@ -273,6 +335,7 @@ export async function runArchitectureChecks({ root = process.cwd() } = {}) {
     ...checkNoHostProcessSpawn(projectFiles),
     ...checkNoDockerExec(projectFiles),
     ...checkNoHostBindMounts(projectFiles),
+    ...checkDockerApiAllocatorOnly(projectFiles),
     ...checkSingleEventWriter(projectFiles),
     ...checkFailureVariants(projectFiles),
     ...checkWriterAnswererSeparation(projectFiles),
