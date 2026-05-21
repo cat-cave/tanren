@@ -12,7 +12,7 @@ export const eventNamesByScope = {
   ci: ["ci.started", "ci.passed", "ci.failed"],
   review: ["review.requested", "review.approved", "review.changes_requested"],
   notification: ["notification.enqueued", "notification.sent", "notification.failed"],
-  hello: ["hello.started", "hello.completed"]
+  hello: ["hello.started", "hello.ssh_started", "hello.ssh_completed", "hello.completed"]
 } as const;
 
 type EventScopeMap = typeof eventNamesByScope;

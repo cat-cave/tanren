@@ -41,6 +41,7 @@ services:
       VAULT_ADDR: http://vault:8200
       VAULT_TOKEN: dev-root-token
       ORCHESTRATOR_PORT: "3100"
+      TANREN_RUNNER_IDENTITY_PRIVATE_KEY: ${TANREN_RUNNER_IDENTITY_PRIVATE_KEY:-}
     ports:
       - "3100:3100"
     volumes:

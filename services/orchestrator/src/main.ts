@@ -1,11 +1,16 @@
+import { readFile } from "node:fs/promises";
 import { serve } from "@hono/node-server";
 import { createDbPool, migrate } from "@tanren/db";
 import { Hono } from "hono";
+import { LocalDockerAllocator, PgRunnerStore } from "./engine/allocators/index.js";
+import { InMemorySecretStore } from "./engine/contracts/index.js";
 import { runHelloWorkflow } from "./engine/helloWorkflow.js";
+import { Ssh2Substrate } from "./engine/ssh/index.js";
 
 const port = Number(process.env.ORCHESTRATOR_PORT ?? 3100);
 const vaultAddr = process.env.VAULT_ADDR ?? "http://localhost:8200";
 const vaultToken = process.env.VAULT_TOKEN ?? "dev-root-token";
+const runnerIdentitySecretRef = process.env.TANREN_RUNNER_IDENTITY_SECRET_REF ?? "runner/local-docker/identity";
 const pool = createDbPool();
 
 async function vaultHealth() {
@@ -17,6 +22,13 @@ async function vaultHealth() {
 
 export async function createApp() {
   await migrate(pool);
+  const runnerSecrets = new InMemorySecretStore();
+  await seedRunnerIdentitySecret(runnerSecrets);
+  const helloDependencies = {
+    allocator: new LocalDockerAllocator({ runners: new PgRunnerStore(pool) }),
+    ssh: new Ssh2Substrate(runnerSecrets),
+    identitySecretRef: runnerIdentitySecretRef
+  };
 
   const app = new Hono();
 
@@ -34,7 +46,7 @@ export async function createApp() {
   app.get("/version", (c) => c.json({ service: "orchestrator", version: process.env.npm_package_version ?? "0.0.0" }));
 
   app.post("/hello/run", async (c) => {
-    const summary = await runHelloWorkflow(pool);
+    const summary = await runHelloWorkflow(pool, helloDependencies);
     return c.json(summary, 201);
   });
 
@@ -51,6 +63,19 @@ export async function createApp() {
   });
 
   return app;
+}
+
+async function seedRunnerIdentitySecret(secrets: InMemorySecretStore): Promise<void> {
+  const inlinePrivateKey = process.env.TANREN_RUNNER_IDENTITY_PRIVATE_KEY;
+  if (inlinePrivateKey !== undefined && inlinePrivateKey !== "") {
+    await secrets.put({ ref: runnerIdentitySecretRef, value: inlinePrivateKey });
+    return;
+  }
+
+  const keyPath = process.env.TANREN_RUNNER_IDENTITY_KEY_PATH;
+  if (keyPath !== undefined && keyPath !== "") {
+    await secrets.put({ ref: runnerIdentitySecretRef, value: await readFile(keyPath, "utf8") });
+  }
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

@@ -3,7 +3,7 @@ import { glob, readFile } from "node:fs/promises";
 import { relative, resolve } from "node:path";
 import { exit } from "node:process";
 
-const patterns = ["**/*.{ts,tsx,js,mjs,json,md,yml,yaml,sql,sh}", ".github/**/*.{yml,yaml}", "Dockerfile", "**/Dockerfile"];
+const patterns = ["**/*.{ts,tsx,js,mjs,json,md,yml,yaml,sql,sh}", ".github/**/*.{yml,yaml}", "Dockerfile", "**/Dockerfile", "justfile"];
 const ignoredDirs = new Set(["node_modules", "dist", "coverage", ".git"]);
 const lineMaxExclusions = new Set(["PROJECT_BRIEF.md", "pnpm-lock.yaml"]);
 const invariantDocExclusions = new Set(["PROJECT_BRIEF.md", "docs/contracts/architecture-checks.md"]);
@@ -296,6 +296,7 @@ function checkGitHubActions(projectFiles) {
 
 function checkSchemaDriftWiring(projectFiles) {
   const packageFile = projectFiles.find((item) => item.file === "package.json");
+  const justfile = projectFiles.find((item) => item.file === "justfile");
   const hasDriftScript = projectFiles.some((item) => item.file === "scripts/check-schema-drift.sh");
   if (!hasDriftScript) {
     return [diagnostic("schema-drift-check-wired", "scripts/check-schema-drift.sh", "schema drift check script is missing")];
@@ -316,8 +317,11 @@ function checkSchemaDriftWiring(projectFiles) {
         diagnostic("schema-drift-check-wired", "package.json", "check:schema-drift must run scripts/check-schema-drift.sh")
       ];
     }
-    if (!checkScript.includes("check:schema-drift")) {
-      return [diagnostic("schema-drift-check-wired", "package.json", "root check must include check:schema-drift")];
+    const rootCheckRunsSchemaDrift =
+      checkScript.includes("check:schema-drift") ||
+      (checkScript.includes("just ci") && justfile?.text.includes("ci:") && justfile.text.includes("schema-drift"));
+    if (!rootCheckRunsSchemaDrift) {
+      return [diagnostic("schema-drift-check-wired", "package.json", "root check must include check:schema-drift or delegate to just ci")];
     }
   } catch {
     return [diagnostic("schema-drift-check-wired", "package.json", "root package.json must be valid JSON")];
