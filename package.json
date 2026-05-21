@@ -6,9 +6,11 @@
   "packageManager": "pnpm@11.1.0",
   "scripts": {
     "build": "pnpm -r build",
-    "check": "pnpm run format:check && pnpm run lint && pnpm run check:architecture && pnpm run typecheck && pnpm run test && pnpm run build && pnpm run compose:config",
+    "check": "pnpm run format:check && pnpm run lint && pnpm run check:architecture && pnpm run check:schema-drift && pnpm run typecheck && pnpm run test && pnpm run build && pnpm run compose:config",
     "check:architecture": "node scripts/check-architecture.mjs",
+    "check:schema-drift": "bash scripts/check-schema-drift.sh",
     "compose:config": "docker compose config --quiet",
+    "db:generate": "drizzle-kit generate --config drizzle.config.ts",
     "format:check": "node scripts/format-check.mjs",
     "lint": "oxlint -c oxlintrc.json .",
     "test": "vitest run",
@@ -17,6 +19,7 @@
   "devDependencies": {
     "@types/node": "^24.0.0",
     "@types/pg": "^8.11.11",
+    "drizzle-kit": "^0.31.10",
     "oxlint": "^1.0.0",
     "tsx": "^4.19.2",
     "typescript": "^5.8.0",
