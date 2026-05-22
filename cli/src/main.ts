@@ -3,7 +3,7 @@
 const orchestratorUrl = process.env.TANREN_ORCHESTRATOR_URL ?? "http://localhost:3100";
 const dashboardUrl = process.env.TANREN_DASHBOARD_URL ?? "http://localhost:3000";
 
-async function request(path: string, init?: RequestInit) {
+export async function request(path: string, init?: RequestInit) {
   const response = await fetch(`${orchestratorUrl}${path}`, init);
   if (!response.ok) {
     throw new Error(`${init?.method ?? "GET"} ${path} failed: ${response.status} ${await response.text()}`);
@@ -11,17 +11,17 @@ async function request(path: string, init?: RequestInit) {
   return response.json() as Promise<unknown>;
 }
 
-async function doctor() {
+export async function doctor() {
   const health = await request("/healthz");
   console.log(JSON.stringify(health, null, 2));
 }
 
-async function hello() {
+export async function hello() {
   const summary = await request("/hello/run", { method: "POST" });
   console.log(JSON.stringify(summary, null, 2));
 }
 
-async function status(runId: string | undefined) {
+export async function status(runId: string | undefined) {
   if (!runId) {
     throw new Error("usage: tanren status <run_id>");
   }
@@ -29,7 +29,7 @@ async function status(runId: string | undefined) {
   console.log(JSON.stringify(run, null, 2));
 }
 
-function usage() {
+export function usage() {
   console.log(`tanren <command>
 
 Commands:
@@ -41,7 +41,7 @@ Commands:
 `);
 }
 
-async function main(argv: string[]) {
+export async function main(argv: string[]) {
   const [command, arg] = argv;
   switch (command) {
     case "doctor":
@@ -70,7 +70,9 @@ async function main(argv: string[]) {
   }
 }
 
-main(process.argv.slice(2)).catch((error: unknown) => {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exit(1);
-});
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main(process.argv.slice(2)).catch((error: unknown) => {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  });
+}
