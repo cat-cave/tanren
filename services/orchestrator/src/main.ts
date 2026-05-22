@@ -7,7 +7,10 @@ import { z } from "zod";
 import { LocalDockerAllocator, PgRunnerStore } from "./engine/allocators/index.js";
 import { InMemorySecretStore, type SecretStore, VaultSecretStore } from "./engine/contracts/index.js";
 import { storeCodexAuthBundle } from "./engine/credentials/codexAuth.js";
+import { storeGithubToken } from "./engine/credentials/githubToken.js";
+import { FetchGitHubHttpClient, type GitHubHttpClient } from "./engine/providers/github.js";
 import { Ssh2Substrate } from "./engine/ssh/index.js";
+import { DraftPrRunnerNotFoundError, DraftPrRunNotFoundError, publishDraftPullRequestForRun } from "./engine/workflow/githubDraftPr.js";
 import { runHelloWorkflow } from "./engine/workflow/helloRun.js";
 import {
   createProject,
@@ -52,6 +55,19 @@ const codexCredentialImportSchema = z.object({
   authJson: z.string().min(1)
 });
 
+const githubCredentialImportSchema = z.object({
+  ref: z.string().min(1),
+  token: z.string().min(1)
+});
+
+const draftPrInputSchema = z.object({
+  githubCredentialRef: z.string().min(1).optional(),
+  workspacePath: z.string().min(1).optional(),
+  title: z.string().min(1).optional(),
+  body: z.string().optional(),
+  timeoutMs: z.number().int().positive().optional()
+});
+
 async function vaultHealth() {
   const response = await fetch(`${vaultAddr}/v1/sys/health`, {
     headers: { "X-Vault-Token": vaultToken }
@@ -79,10 +95,14 @@ export function buildApp(input: {
   pool: pg.Pool;
   helloDependencies: Parameters<typeof runHelloWorkflow>[1];
   secrets?: SecretStore;
+  githubHttp?: GitHubHttpClient;
+  runnerIdentitySecretRef?: string;
   vaultHealthCheck?: () => Promise<{ ok: boolean; status: number }>;
 }) {
   const app = new Hono();
   const secrets = input.secrets ?? new InMemorySecretStore();
+  const githubHttp = input.githubHttp ?? new FetchGitHubHttpClient();
+  const identitySecretRef = input.runnerIdentitySecretRef ?? runnerIdentitySecretRef;
   const vaultHealthCheck = input.vaultHealthCheck ?? vaultHealth;
 
   app.get("/healthz", async (c) => {
@@ -157,9 +177,51 @@ export function buildApp(input: {
     }
   });
 
+  app.post("/credentials/github/import", async (c) => {
+    const parsed = githubCredentialImportSchema.safeParse(await c.req.json().catch(() => undefined));
+    if (!parsed.success) {
+      return c.json({ error: "invalid_github_credential", issues: parsed.error.issues }, 400);
+    }
+    try {
+      return c.json(await storeGithubToken(secrets, parsed.data), 201);
+    } catch (error) {
+      return c.json({ error: "invalid_github_credential", message: messageFromError(error) }, 400);
+    }
+  });
+
   app.post("/hello/run", async (c) => {
     const summary = await runHelloWorkflow(input.pool, input.helloDependencies);
     return c.json(summary, 201);
+  });
+
+  app.post("/runs/:runId/github/draft-pr", async (c) => {
+    const parsed = draftPrInputSchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) {
+      return c.json({ error: "invalid_draft_pr", issues: parsed.error.issues }, 400);
+    }
+    try {
+      return c.json(
+        await publishDraftPullRequestForRun({
+          pool: input.pool,
+          secrets,
+          githubHttp,
+          ssh: input.helloDependencies.ssh,
+          runId: c.req.param("runId"),
+          identitySecretRef,
+          timeoutMs: parsed.data.timeoutMs ?? 30_000,
+          ...parsed.data
+        }),
+        201
+      );
+    } catch (error) {
+      if (error instanceof DraftPrRunNotFoundError) {
+        return c.json({ error: "run_not_found", message: error.message }, 404);
+      }
+      if (error instanceof DraftPrRunnerNotFoundError) {
+        return c.json({ error: "runner_not_found", message: error.message }, 409);
+      }
+      return c.json({ error: "github_draft_pr_failed", message: messageFromError(error) }, 502);
+    }
   });
 
   app.get("/runs/:runId", async (c) => {
