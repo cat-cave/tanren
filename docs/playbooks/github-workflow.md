@@ -22,6 +22,8 @@ Mergify stacks are the default workflow for Phase 1 and later dependent PRs. Use
 - Keep stacks short. Independent specs should be separate stacks.
 - Do not manually edit stack-managed PR titles/bodies or manually merge stack PRs.
 
+Phase 1 lesson: manual stack merging is fragile. After one stacked PR lands, run `mergify stack sync` before updating remaining work. If a stack becomes dirty after a squash/rebase merge, prefer a clean stack-tool sync or a new short replacement stack over manual retargeting. Long dependent stacks should be split unless every commit genuinely depends on the prior commit.
+
 ## Review And Merge
 
 Address requested changes in the same branch. If review feedback changes a shared contract, update dependent specs before merging. Merge only after CI is green and required review policy is satisfied.

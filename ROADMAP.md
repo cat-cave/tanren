@@ -148,11 +148,11 @@ Final Phase 0 verification:
 
 ## Phase 1: Real-Agent PR Loop
 
-Status: implemented and live-proven in stacked PRs #11-#17; pending stack merge and final `main` recheck.
+Status: complete and live-proven on `main`.
 
-Phase 1 keeps the Phase 0 local runner and durable task loop, then replaces synthetic edges with real project, credential, agent, GitHub, and CI behavior. It should end with Tanren taking a persisted spec for an owned fixture repository, running at least one real Writer CLI in a runner workspace, producing a draft PR, observing CI, and making the run inspectable through durable state.
+Phase 1 kept the Phase 0 local runner and durable task loop, then replaced synthetic edges with real project, credential, agent, GitHub, and CI behavior. It ended with Tanren taking a persisted spec for an owned fixture repository, running a real Codex Writer in a runner workspace, using structured Codex Answerers for check/audit, producing a draft PR, observing CI, and making the run inspectable through durable state.
 
-Mergify stacks are now the default branch/PR coordination model for Phase 1. Merge queue can wait until PR volume makes it worthwhile.
+Mergify stacks are the default branch/PR coordination model for dependent work. Merge queue remains deferred until PR volume or CI latency makes queueing useful.
 
 Phase 1's first real CLI is Codex. This is intentionally narrower than the full v0 provider set: v0 still needs Codex, Claude, and opencode as Writer CLIs, and Codex plus Claude as Answerers. opencode remains Writer-only for v0 because it does not provide native JSON-schema enforcement strong enough for the Answerer role.
 
@@ -305,7 +305,7 @@ real Writer + GitHub PR + CI polling + Answerer checks/audit
 **Real-functionality validation**: a fixture GitHub PR exists with runner-produced commits and persisted CI/check/audit state.
 **Live validation command**: with compose Postgres, Vault, and runner running, use `TANREN_CODEX_AUTH_JSON_FILE=/path/to/auth.json TANREN_GITHUB_TOKEN_FILE=/path/to/token TANREN_GITHUB_REPO_URL=https://github.com/cat-cave/tanren-fixture-easy just live-phase1-fixture`.
 **Completion evidence**: the live fixture must leave a persisted run with `outcome = 'phase1_fixture_complete'`, a draft PR URL, and `plan`, `write`, `check`, `audit`, and `ci` tasks all `done`.
-**Current live proof**: using compose Vault for credential storage, run `run_9c21262d-012d-41dd-8068-963371563e2b` completed with `outcome = 'phase1_fixture_complete'`, all five required tasks `done`, and draft fixture PR `https://github.com/cat-cave/tanren-fixture-easy/pull/4` passing CI.
+**Current live proof**: using compose Vault for credential storage, run `run_a347d451-3911-470d-b506-280b602343a9` completed with `outcome = 'phase1_fixture_complete'`, all five required tasks `done`, and draft fixture PR `https://github.com/cat-cave/tanren-fixture-easy/pull/6` passing CI. The event log recorded `runner.allocated`, `workspace.prepared`, `workspace.git_captured`, `checker.completed`, `auditor.completed`, `github.pr.created`, `ci.passed`, `phase1.fixture.completed`, and `runner.released`.
 **Worktree-isolation safety**: owns integration wiring only; upstream contracts must be stable before this starts.
 
 ### Phase 1 Parallelization Plan
@@ -326,3 +326,61 @@ P1-0005 depends on P1-0004 and can begin as soon as the PR contract is stable. P
 - The beta design system should be pulled in when Phase 1 adds user-visible workflow state beyond the current dashboard table. Until then, keep backend/workflow specs generic and preserve UI integration as a separate owned path.
 - Remote/cloud allocators remain a later phase unless a Phase 1 live CLI provider cannot be validated in the local runner.
 - Do not start Phase 1 by trying to support every provider. Prove Codex first with ChatGPT-managed auth imported as a managed auth bundle, `codex exec`, durable event capture, allowed cost/usage attribution, and git-state-based Writer completion. Treat Codex access-token auth as a future enterprise/programmatic credential mode. Then add Claude and opencode as additional Writer implementations, and Claude as the second Answerer implementation before v0 completion.
+
+### Phase 1 Closeout Notes
+
+- Phase 1 stacked PRs worked well for reviewability and per-spec CI boundaries.
+- Manual stack merging did not work cleanly: after the first stacked PR was squash-merged, remaining PRs did not automatically retarget cleanly and required rebasing/replacement PRs.
+- Future stacks should stay short, contain only true dependencies, and be managed through `mergify stack sync` and `mergify stack push`.
+- Independent specs should be separate stacks so they can merge without dragging a long dependent chain.
+- Stack PR lifecycle policy must stay explicit. If the repo keeps the current Mergify skill guidance, stack PRs remain drafts until the user manually marks them ready; if Tanren wants agents to mark ready-for-review, update the stack instructions first.
+
+## Phase 2: Operator-Controlled Workflow
+
+Status: planned.
+
+Phase 2 should turn the live Phase 1 proof from an opt-in test harness into an operator-controlled product surface. The end state is that an operator can register a project, configure credentials, submit a spec, run the real workflow, and inspect planner/write/check/audit/PR/CI state without reading database rows, test logs, or fixture-only code.
+
+### Phase 2 Dependency Graph
+
+```text
+P2-0001 phase1-closeout-docs
+  -> P2-0002 phase2-workflow-inventory
+  -> P2-0003 design-system-import
+
+P2-0002
+  -> P2-0004 project-spec-cli-api
+  -> P2-0005 run-detail-api-contract
+
+P2-0003 + P2-0005
+  -> P2-0006 dashboard-run-detail-view
+
+P2-0004 + P2-0005
+  -> P2-0007 operator-triggered-live-workflow
+
+P2-0007
+  -> P2-0008 phase2-end-to-end-demo
+```
+
+### Phase 2 Workflow Inventory
+
+Before dashboard implementation, design and acceptance criteria should cover:
+
+- Onboarding: stack health, Vault health, runner health, first credential import.
+- Credential setup: Codex auth bundle, GitHub token or app credential, later Claude and opencode.
+- Project setup: repo URL, default branch, allocator, credential refs, runner image.
+- Spec creation: title, description, acceptance criteria, target project.
+- Run detail: planner, writer, checker, auditor, GitHub PR, CI, events, costs, failures.
+- Review handoff: draft PR created, CI passed or failed, auditor verdict, operator next action.
+- Failure recovery: credential failure, writer timeout, invalid Answerer JSON, CI failure, runner failure.
+- Settings: allocator config, provider routes, notifications, credential rotation.
+- History and costs: prior runs, task costs, token usage, infrastructure/runtime proof.
+
+### Phase 2 Prep Notes
+
+- Pull the external beta design system into this repo before user-visible Phase 2 dashboard work, but land it first as isolated source design artifacts under `docs/design/**`.
+- Wireframes and high-fidelity mockups are not required for backend-only Phase 2 specs, but they are required before serious dashboard implementation.
+- Do not globally restyle the dashboard in the same PR that imports the design system.
+- Keep provider expansion, remote allocators, and merge automation separate from the operator-control path unless their owned paths are isolated.
+- The next implementation angle is making the already-working Phase 1 loop operable by a human, not adding every v0 provider at once.
+- Use `docs/audits/phase2-readiness.md` as Phase 2 backlog input. The highest-priority prep items are operator auth, dev/prod compose separation, typed workflow/config/event contracts, runner cleanup/redaction, real planning/review/merge loops, cost persistence, queue recovery, and an executable acceptance gate.

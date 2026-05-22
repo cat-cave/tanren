@@ -37,3 +37,9 @@ TANREN_ORCHESTRATOR_URL=http://127.0.0.1:3100 \
 ```
 
 Do not use a host default path. The auth file path must be provided intentionally for each import.
+
+## GitHub Token
+
+The Phase 1 live workflow also needs a managed GitHub credential that can push a branch and open a draft PR in the target fixture repository. The current live harness accepts a token file through `TANREN_GITHUB_TOKEN_FILE` and stores the value in Vault for the run.
+
+Treat the token file as a bootstrap input, not runtime state. Create it with restrictive permissions, pass the path explicitly, and remove it after the live run. Workflow events should record only the credential ref and redacted metadata, never the token value.
