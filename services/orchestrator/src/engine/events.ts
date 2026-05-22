@@ -12,6 +12,7 @@ export const eventNamesByScope = {
   cost: ["cost.resolved", "cost.failed"],
   github: ["github.branch.pushed", "github.pr.created", "github.pr.ready", "github.pr.merged", "github.failed"],
   ci: ["ci.started", "ci.passed", "ci.failed"],
+  phase1: ["phase1.fixture.started", "phase1.fixture.ci_pending", "phase1.fixture.completed", "phase1.fixture.failed"],
   review: ["review.requested", "review.approved", "review.changes_requested"],
   notification: ["notification.enqueued", "notification.sent", "notification.failed"],
   hello: ["hello.started", "hello.ssh_started", "hello.ssh_completed", "hello.completed"]

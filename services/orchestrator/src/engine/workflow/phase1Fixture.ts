@@ -1,0 +1,322 @@
+import { randomUUID } from "node:crypto";
+import type pg from "pg";
+import type { Allocator, RunnerAllocation, SshTarget } from "../contracts/allocator.js";
+import type { SecretStore } from "../contracts/secretStore.js";
+import type { SshSubstrate } from "../contracts/sshSubstrate.js";
+import { type EventStore, PgEventStore } from "../eventStore.js";
+import type { AuditAnswer, CheckAnswer } from "../providers/answererSchemas.js";
+import type { GitHubHttpClient } from "../providers/github.js";
+import type { AnswererAdapter, WriterAdapter, WriterResult } from "../providers/types.js";
+import { quoteSshShellArg } from "../ssh/command.js";
+import { runWorkspaceSshCommand, workspaceRepoPathForRun } from "../workspace/index.js";
+import { pollCiForRun, type PollCiForRunResult } from "./ciPolling.js";
+import { publishDraftPullRequest, type PublishedDraftPullRequest } from "./githubDraftPr.js";
+import { executeStructuredAuditTask, executeStructuredCheckTask } from "./answererTasks.js";
+
+type RunStateClient = Pick<pg.Pool | pg.PoolClient, "query">;
+
+export interface Phase1FixtureRunContext {
+  runId: string;
+  specId: string;
+  projectId: string;
+  repoUrl: string;
+  targetBranch: string;
+  runBranch: string;
+  specTitle: string;
+  specDescription: string;
+  acceptanceCriteria: string[];
+  runnerImage: string;
+  identitySecretRef: string;
+  githubCredentialRef: string;
+}
+
+export interface Phase1FixtureAdapterContext {
+  runId: string;
+  target: SshTarget;
+}
+
+export interface RunPhase1FixtureInput {
+  pool: RunStateClient;
+  eventStore?: EventStore;
+  allocator: Allocator;
+  ssh: SshSubstrate;
+  secrets: SecretStore;
+  githubHttp: GitHubHttpClient;
+  context: Phase1FixtureRunContext;
+  createWriter(input: Phase1FixtureAdapterContext): WriterAdapter;
+  createChecker(input: Phase1FixtureAdapterContext): AnswererAdapter<CheckAnswer>;
+  createAuditor(input: Phase1FixtureAdapterContext): AnswererAdapter<AuditAnswer>;
+  workspacePath?: string;
+  timeoutMs: number;
+  maxCiPolls?: number;
+  ciPollDelayMs?: number;
+  sleep?: (ms: number) => Promise<void>;
+}
+
+export interface Phase1FixtureResult {
+  runId: string;
+  workspacePath: string;
+  writer: WriterResult;
+  check: CheckAnswer;
+  audit: AuditAnswer;
+  pullRequest: PublishedDraftPullRequest;
+  ci: PollCiForRunResult;
+}
+
+type Phase1TaskKind = "write" | "check" | "audit";
+
+export async function runPhase1FixtureWorkflow(input: RunPhase1FixtureInput): Promise<Phase1FixtureResult> {
+  const eventStore = input.eventStore ?? new PgEventStore(input.pool);
+  const context = input.context;
+  const workspacePath = input.workspacePath ?? workspaceRepoPathForRun(context.runId);
+  const appendEvent = async (eventType: string, payload: unknown, taskId?: string) => {
+    await eventStore.append({ runId: context.runId, specId: context.specId, projectId: context.projectId, taskId, eventType, payload });
+  };
+
+  await input.pool.query("UPDATE runs SET status = 'running', started_at = now() WHERE run_id = $1", [context.runId]);
+  await appendEvent("phase1.fixture.started", { repoUrl: context.repoUrl, targetBranch: context.targetBranch });
+  await completeQueuedPlannerTask(input.pool, appendEvent, context);
+  const allocation = await input.allocator.allocate({
+    runId: context.runId,
+    projectId: context.projectId,
+    runnerImage: context.runnerImage,
+    identitySecretRef: context.identitySecretRef
+  });
+  await appendEvent("runner.allocated", runnerPayload(allocation));
+
+  try {
+    await prepareFixtureWorkspace({ ...input, target: allocation.target, workspacePath });
+    await appendEvent("workspace.prepared", { workspacePath, repoUrl: context.repoUrl, targetBranch: context.targetBranch });
+    const adapterContext = { runId: context.runId, target: allocation.target };
+
+    const writerAdapter = input.createWriter(adapterContext);
+    const writer = await runFixtureTask(input.pool, appendEvent, context.runId, "write", "Writer fixture change", "writer", writerAdapter.cli, async () => {
+      const result = await writerAdapter.runWriter({
+        prompt: writerPrompt(context),
+        workspace: workspacePath,
+        timeoutMs: input.timeoutMs
+      });
+      await appendEvent("workspace.git_captured", { workspacePath, commits: result.commits, diffBytes: Buffer.byteLength(result.diff, "utf8") });
+      return result;
+    });
+
+    const checker = input.createChecker(adapterContext);
+    const check = await runFixtureTask(input.pool, appendEvent, context.runId, "check", "Check writer fixture output", "answerer", checker.cli, async () => {
+      const answer = await executeStructuredCheckTask(checker, {
+        specTitle: context.specTitle,
+        specDescription: context.specDescription,
+        acceptanceCriteria: context.acceptanceCriteria,
+        writerDiff: writer.diff,
+        timeoutMs: input.timeoutMs,
+        workspace: workspacePath
+      });
+      if (!answer.done) {
+        throw new Error(`fixture checker rejected writer output: ${answer.reason}`);
+      }
+      return answer;
+    });
+
+    const auditor = input.createAuditor(adapterContext);
+    const audit = await runFixtureTask(input.pool, appendEvent, context.runId, "audit", "Audit phase 1 fixture", "answerer", auditor.cli, async () => {
+      const answer = await executeStructuredAuditTask(auditor, {
+        specTitle: context.specTitle,
+        acceptanceCriteria: context.acceptanceCriteria,
+        checkAnswer: check,
+        writerDiff: writer.diff,
+        timeoutMs: input.timeoutMs,
+        workspace: workspacePath
+      });
+      if (!answer.verified) {
+        throw new Error(`fixture auditor rejected completion: ${answer.reason}`);
+      }
+      return answer;
+    });
+
+    const pullRequest = await publishDraftPullRequest({
+      pool: input.pool,
+      eventStore,
+      secrets: input.secrets,
+      githubHttp: input.githubHttp,
+      ssh: input.ssh,
+      target: allocation.target,
+      runId: context.runId,
+      specId: context.specId,
+      projectId: context.projectId,
+      workspacePath,
+      repoUrl: context.repoUrl,
+      targetBranch: context.targetBranch,
+      runBranch: context.runBranch,
+      title: `Tanren: ${context.specTitle}`,
+      body: context.specDescription,
+      githubCredentialRef: context.githubCredentialRef,
+      timeoutMs: input.timeoutMs
+    });
+    const ci = await pollCiUntilTerminal(input, appendEvent);
+
+    await input.pool.query("UPDATE specs SET status = 'done' WHERE spec_id = $1", [context.specId]);
+    await input.pool.query("UPDATE runs SET status = 'done', outcome = 'phase1_fixture_complete', ended_at = now() WHERE run_id = $1", [
+      context.runId
+    ]);
+    await appendEvent("phase1.fixture.completed", { prUrl: pullRequest.prUrl, ciStatus: ci.status });
+    return { runId: context.runId, workspacePath, writer, check, audit, pullRequest, ci };
+  } catch (error) {
+    await input.pool.query("UPDATE runs SET status = 'failed', outcome = 'failed', ended_at = now() WHERE run_id = $1", [context.runId]);
+    await appendEvent("phase1.fixture.failed", { message: messageFromError(error) });
+    throw error;
+  } finally {
+    await input.allocator.release(allocation.runnerId);
+    await appendEvent("runner.released", { runnerId: allocation.runnerId });
+  }
+}
+
+async function runFixtureTask<TOutput>(
+  pool: RunStateClient,
+  appendEvent: (eventType: string, payload: unknown, taskId?: string) => Promise<void>,
+  runId: string,
+  kind: Phase1TaskKind,
+  title: string,
+  agentKind: "writer" | "answerer",
+  cli: string,
+  run: () => Promise<TOutput>
+): Promise<TOutput> {
+  const taskId = `task_${randomUUID()}`;
+  await pool.query(
+    `INSERT INTO tasks (task_id, run_id, kind, title, status, started_at, agent_kind, cli, model)
+     VALUES ($1, $2, $3, $4, 'running', now(), $5, $6, NULL)`,
+    [taskId, runId, kind, title, agentKind, cli]
+  );
+  await appendEvent("task.started", { taskKind: kind }, taskId);
+  await appendEvent(`${roleScope(kind)}.started`, { taskKind: kind }, taskId);
+  try {
+    const output = await run();
+    await pool.query("UPDATE tasks SET status = 'done', outcome = 'ok', ended_at = now() WHERE task_id = $1", [taskId]);
+    await appendEvent(`${roleScope(kind)}.completed`, output, taskId);
+    await appendEvent("task.completed", { taskKind: kind }, taskId);
+    return output;
+  } catch (error) {
+    const failure = { kind: `${kind}_failed`, message: messageFromError(error) };
+    await pool.query("UPDATE tasks SET status = 'failed', outcome = 'failed', failure_kind = $2, ended_at = now() WHERE task_id = $1", [
+      taskId,
+      failure.kind
+    ]);
+    await appendEvent(`${roleScope(kind)}.failed`, failure, taskId);
+    await appendEvent("task.failed", { taskKind: kind, ...failure }, taskId);
+    throw error;
+  }
+}
+
+async function completeQueuedPlannerTask(
+  pool: RunStateClient,
+  appendEvent: (eventType: string, payload: unknown, taskId?: string) => Promise<void>,
+  context: Phase1FixtureRunContext
+): Promise<void> {
+  const existing = await pool.query(
+    `SELECT task_id
+     FROM tasks
+     WHERE run_id = $1 AND kind = 'plan' AND status = 'queued'
+     ORDER BY started_at ASC NULLS FIRST, task_id ASC
+     LIMIT 1`,
+    [context.runId]
+  );
+  const taskId = (existing.rows[0] as { task_id?: unknown } | undefined)?.task_id;
+  if (typeof taskId !== "string") {
+    return;
+  }
+  await pool.query("UPDATE tasks SET status = 'running', started_at = now() WHERE task_id = $1", [taskId]);
+  await appendEvent("task.started", { taskKind: "plan" }, taskId);
+  await appendEvent("planner.started", { taskKind: "plan" }, taskId);
+  const plan = {
+    subtasks: [
+      {
+        title: context.specTitle,
+        acceptanceCriteria: context.acceptanceCriteria
+      }
+    ]
+  };
+  await pool.query("UPDATE tasks SET status = 'done', outcome = 'ok', ended_at = now() WHERE task_id = $1", [taskId]);
+  await appendEvent("planner.completed", plan, taskId);
+  await appendEvent("task.completed", { taskKind: "plan" }, taskId);
+}
+
+async function prepareFixtureWorkspace(input: RunPhase1FixtureInput & { target: SshTarget; workspacePath: string }): Promise<void> {
+  await runWorkspaceSshCommand(input.ssh, input.target, {
+    label: "prepare phase 1 fixture workspace",
+    timeoutMs: input.timeoutMs,
+    command: [
+      "set -eu",
+      `rm -rf ${quoteSshShellArg(input.workspacePath)}`,
+      `git clone --depth 1 --branch ${quoteSshShellArg(input.context.targetBranch)} ${quoteSshShellArg(input.context.repoUrl)} ${quoteSshShellArg(input.workspacePath)}`,
+      `cd ${quoteSshShellArg(input.workspacePath)}`,
+      "git config user.name 'Tanren Phase 1 Fixture'",
+      "git config user.email 'phase1-fixture@tanren.invalid'"
+    ].join(" && ")
+  });
+}
+
+async function pollCiUntilTerminal(
+  input: RunPhase1FixtureInput,
+  appendEvent: (eventType: string, payload: unknown, taskId?: string) => Promise<void>
+): Promise<PollCiForRunResult> {
+  const maxPolls = input.maxCiPolls ?? 12;
+  const delayMs = input.ciPollDelayMs ?? 10_000;
+  const sleep = input.sleep ?? ((ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  let last: PollCiForRunResult | undefined;
+  for (let attempt = 0; attempt < maxPolls; attempt += 1) {
+    last = await pollCiForRun({
+      pool: input.pool,
+      eventStore: input.eventStore,
+      secrets: input.secrets,
+      githubHttp: input.githubHttp,
+      runId: input.context.runId,
+      githubCredentialRef: input.context.githubCredentialRef
+    });
+    if (last.status === "passed") {
+      return last;
+    }
+    if (last.status === "failed") {
+      throw new Error(`fixture CI failed: ${last.reason}`);
+    }
+    if (attempt < maxPolls - 1) {
+      await appendEvent("phase1.fixture.ci_pending", { attempt: attempt + 1, nextPollAfterMs: delayMs });
+      await sleep(delayMs);
+    }
+  }
+  throw new Error(`fixture CI did not finish after ${maxPolls} polls: ${last?.reason ?? "not_polled"}`);
+}
+
+function writerPrompt(context: Phase1FixtureRunContext): string {
+  return [
+    `Implement this persisted Tanren spec: ${context.specTitle}`,
+    context.specDescription,
+    "",
+    "Acceptance criteria:",
+    ...context.acceptanceCriteria.map((criterion) => `- ${criterion}`)
+  ].join("\n");
+}
+
+function roleScope(kind: Phase1TaskKind): "writer" | "checker" | "auditor" {
+  if (kind === "write") {
+    return "writer";
+  }
+  if (kind === "check") {
+    return "checker";
+  }
+  return "auditor";
+}
+
+function runnerPayload(allocation: RunnerAllocation) {
+  return {
+    runnerId: allocation.runnerId,
+    imageSha: allocation.imageSha,
+    target: {
+      host: allocation.target.host,
+      port: allocation.target.port,
+      username: allocation.target.username,
+      hostKeyFingerprint: allocation.target.hostKeyFingerprint
+    }
+  };
+}
+
+function messageFromError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}

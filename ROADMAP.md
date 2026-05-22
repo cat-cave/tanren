@@ -148,7 +148,7 @@ Final Phase 0 verification:
 
 ## Phase 1: Real-Agent PR Loop
 
-Status: planned.
+Status: implemented and live-proven in stacked PRs #11-#17; pending stack merge and final `main` recheck.
 
 Phase 1 keeps the Phase 0 local runner and durable task loop, then replaces synthetic edges with real project, credential, agent, GitHub, and CI behavior. It should end with Tanren taking a persisted spec for an owned fixture repository, running at least one real Writer CLI in a runner workspace, producing a draft PR, observing CI, and making the run inspectable through durable state.
 
@@ -303,6 +303,9 @@ real Writer + GitHub PR + CI polling + Answerer checks/audit
 **Test plan**: `corepack pnpm run check`, `just smoke`, opt-in live fixture workflow.
 **Quality bar**: every boundary is inspectable through durable state; no hidden host execution or host credential use.
 **Real-functionality validation**: a fixture GitHub PR exists with runner-produced commits and persisted CI/check/audit state.
+**Live validation command**: with compose Postgres, Vault, and runner running, use `TANREN_CODEX_AUTH_JSON_FILE=/path/to/auth.json TANREN_GITHUB_TOKEN_FILE=/path/to/token TANREN_GITHUB_REPO_URL=https://github.com/cat-cave/tanren-fixture-easy just live-phase1-fixture`.
+**Completion evidence**: the live fixture must leave a persisted run with `outcome = 'phase1_fixture_complete'`, a draft PR URL, and `plan`, `write`, `check`, `audit`, and `ci` tasks all `done`.
+**Current live proof**: using compose Vault for credential storage, run `run_9c21262d-012d-41dd-8068-963371563e2b` completed with `outcome = 'phase1_fixture_complete'`, all five required tasks `done`, and draft fixture PR `https://github.com/cat-cave/tanren-fixture-easy/pull/4` passing CI.
 **Worktree-isolation safety**: owns integration wiring only; upstream contracts must be stable before this starts.
 
 ### Phase 1 Parallelization Plan
@@ -322,4 +325,4 @@ P1-0005 depends on P1-0004 and can begin as soon as the PR contract is stable. P
 - Merge queue remains deferred until PR volume or CI wait time makes queueing useful.
 - The beta design system should be pulled in when Phase 1 adds user-visible workflow state beyond the current dashboard table. Until then, keep backend/workflow specs generic and preserve UI integration as a separate owned path.
 - Remote/cloud allocators remain a later phase unless a Phase 1 live CLI provider cannot be validated in the local runner.
-- Do not start Phase 1 by trying to support every provider. Prove Codex first with ChatGPT-managed auth or a configured Codex access token, `codex exec`, durable event capture, allowed cost/usage attribution, and git-state-based Writer completion. Then add Claude and opencode as additional Writer implementations, and Claude as the second Answerer implementation before v0 completion.
+- Do not start Phase 1 by trying to support every provider. Prove Codex first with ChatGPT-managed auth imported as a managed auth bundle, `codex exec`, durable event capture, allowed cost/usage attribution, and git-state-based Writer completion. Treat Codex access-token auth as a future enterprise/programmatic credential mode. Then add Claude and opencode as additional Writer implementations, and Claude as the second Answerer implementation before v0 completion.
