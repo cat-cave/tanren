@@ -4,9 +4,12 @@ import type { Allocator, RunnerAllocation } from "../contracts/allocator.js";
 import { type JobEnvelope, type JobQueue, PgJobQueue } from "../contracts/jobQueue.js";
 import type { SshCommandResult, SshSubstrate } from "../contracts/sshSubstrate.js";
 import { type EventStore, PgEventStore } from "../eventStore.js";
-import type { WriterResult } from "../providers/types.js";
+import type { AuditAnswer, CheckAnswer } from "../providers/answererSchemas.js";
+import { AnswererSchemaValidationError } from "../providers/codex.js";
+import { fakeAuditor, fakeChecker } from "../providers/fake.js";
+import type { AnswererAdapter, WriterResult } from "../providers/types.js";
 import { prepareGitWorkspace, workspaceRepoPathForRun } from "../workspace/index.js";
-import { executeAuditTask, executeCheckTask, executePlanTask } from "./answererTasks.js";
+import { executePlanTask, executeStructuredAuditTask, executeStructuredCheckTask } from "./answererTasks.js";
 import { executeWriteTask } from "./writerTasks.js";
 
 const defaultRunnerImage = "ghcr.io/cat-cave/tanren-runner:v0";
@@ -57,6 +60,8 @@ export interface HelloRunSummary {
 export interface HelloWorkflowDependencies {
   allocator: Allocator;
   ssh: SshSubstrate;
+  checkAnswerer?: AnswererAdapter<CheckAnswer>;
+  auditAnswerer?: AnswererAdapter<AuditAnswer>;
   eventStore?: EventStore;
   jobQueue?: JobQueue<HelloJobPayload>;
   identitySecretRef?: string;
@@ -78,6 +83,9 @@ interface HelloExecutionState {
   workspacePath: string;
   planTitle?: string;
   writer?: WriterResult;
+  check?: CheckAnswer;
+  checkAnswerer: AnswererAdapter<CheckAnswer>;
+  auditAnswerer: AnswererAdapter<AuditAnswer>;
 }
 
 export async function runHelloWorkflow(pool: pg.Pool, dependencies: HelloWorkflowDependencies): Promise<HelloRunSummary> {
@@ -115,6 +123,8 @@ export async function runHelloWorkflow(pool: pg.Pool, dependencies: HelloWorkflo
       await prepareWorkspace(context, dependencies, allocation, workspacePath);
       await drainHelloQueue(pool, context, jobQueue, tasks, {
         allocation,
+        auditAnswerer: dependencies.auditAnswerer ?? fakeAuditor,
+        checkAnswerer: dependencies.checkAnswerer ?? fakeChecker,
         ssh: dependencies.ssh,
         timeoutMs: dependencies.sshTimeoutMs ?? 10_000,
         workspacePath
@@ -224,7 +234,7 @@ async function runClaimedHelloTask(
     await jobQueue.complete(job.id);
     await context.appendEvent({ taskId: task.taskId, eventType: "task.completed", payload: { taskKind: task.kind, jobId: job.id } });
   } catch (error) {
-    const failure = { kind: failureKind(task.kind), message: messageFromError(error) };
+    const failure = failureForTask(task.kind, error);
     if (task.kind === "write") {
       await context.appendEvent({
         taskId: task.taskId,
@@ -280,11 +290,23 @@ async function executeHelloTask(
     return;
   }
   if (task.kind === "check") {
-    const check = await executeCheckTask(state.writer?.diff);
-    await context.appendEvent({ taskId: task.taskId, eventType: "checker.completed", payload: check });
+    state.check = await executeStructuredCheckTask(state.checkAnswerer, {
+      specTitle: "Hello world",
+      specDescription: "Prove Tanren service connectivity",
+      acceptanceCriteria: ["The orchestrator persists a completed synthetic run"],
+      writerDiff: state.writer?.diff ?? "",
+      timeoutMs: state.timeoutMs
+    });
+    await context.appendEvent({ taskId: task.taskId, eventType: "checker.completed", payload: state.check });
     return;
   }
-  const audit = await executeAuditTask();
+  const audit = await executeStructuredAuditTask(state.auditAnswerer, {
+    specTitle: "Hello world",
+    acceptanceCriteria: ["The orchestrator persists a completed synthetic run"],
+    checkAnswer: state.check ?? { done: false, reason: "No checker answer was recorded.", suggested_fixes: ["Run checker first."] },
+    writerDiff: state.writer?.diff ?? "",
+    timeoutMs: state.timeoutMs
+  });
   await context.appendEvent({ taskId: task.taskId, eventType: "auditor.completed", payload: audit });
 }
 
@@ -428,8 +450,11 @@ function roleScope(kind: HelloTaskKind): "planner" | "writer" | "checker" | "aud
   return "auditor";
 }
 
-function failureKind(kind: HelloTaskKind): string {
-  return `${kind}_failed`;
+function failureForTask(kind: HelloTaskKind, error: unknown): { kind: string; message: string } {
+  if (error instanceof AnswererSchemaValidationError) {
+    return { kind: "schema_validation_failed", message: error.message };
+  }
+  return { kind: `${kind}_failed`, message: messageFromError(error) };
 }
 
 function runnerAllocationPayload(allocation: RunnerAllocation) {
