@@ -1,0 +1,1 @@
+amend Codex auth plan to distinguish device-auth bootstrap from Business/Enterprise access tokens and require stored credential provisioning per runner
