@@ -10,6 +10,7 @@ import { storeCodexAuthBundle } from "./engine/credentials/codexAuth.js";
 import { storeGithubToken } from "./engine/credentials/githubToken.js";
 import { FetchGitHubHttpClient, type GitHubHttpClient } from "./engine/providers/github.js";
 import { Ssh2Substrate } from "./engine/ssh/index.js";
+import { CiPullRequestNotFoundError, CiRunNotFoundError, pollCiForRun } from "./engine/workflow/ciPolling.js";
 import { DraftPrRunnerNotFoundError, DraftPrRunNotFoundError, publishDraftPullRequestForRun } from "./engine/workflow/githubDraftPr.js";
 import { runHelloWorkflow } from "./engine/workflow/helloRun.js";
 import {
@@ -66,6 +67,10 @@ const draftPrInputSchema = z.object({
   title: z.string().min(1).optional(),
   body: z.string().optional(),
   timeoutMs: z.number().int().positive().optional()
+});
+
+const ciPollInputSchema = z.object({
+  githubCredentialRef: z.string().min(1).optional()
 });
 
 async function vaultHealth() {
@@ -224,6 +229,33 @@ export function buildApp(input: {
     }
   });
 
+  app.post("/runs/:runId/ci/poll", async (c) => {
+    const parsed = ciPollInputSchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) {
+      return c.json({ error: "invalid_ci_poll", issues: parsed.error.issues }, 400);
+    }
+    try {
+      return c.json(
+        await pollCiForRun({
+          pool: input.pool,
+          secrets,
+          githubHttp,
+          runId: c.req.param("runId"),
+          ...parsed.data
+        }),
+        200
+      );
+    } catch (error) {
+      if (error instanceof CiRunNotFoundError) {
+        return c.json({ error: "run_not_found", message: error.message }, 404);
+      }
+      if (error instanceof CiPullRequestNotFoundError) {
+        return c.json({ error: "pull_request_not_found", message: error.message }, 409);
+      }
+      return c.json({ error: "ci_poll_failed", message: messageFromError(error) }, 502);
+    }
+  });
+
   app.get("/runs/:runId", async (c) => {
     const runId = c.req.param("runId");
     const run = await input.pool.query("SELECT * FROM runs WHERE run_id = $1", [runId]);
@@ -234,7 +266,7 @@ export function buildApp(input: {
     const tasks = await input.pool.query(
       `SELECT * FROM tasks
        WHERE run_id = $1
-       ORDER BY CASE kind WHEN 'plan' THEN 1 WHEN 'write' THEN 2 WHEN 'check' THEN 3 WHEN 'audit' THEN 4 ELSE 99 END,
+       ORDER BY CASE kind WHEN 'plan' THEN 1 WHEN 'write' THEN 2 WHEN 'check' THEN 3 WHEN 'audit' THEN 4 WHEN 'ci' THEN 5 ELSE 99 END,
                 started_at ASC NULLS FIRST,
                 task_id ASC`,
       [runId]
