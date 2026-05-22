@@ -11,7 +11,7 @@
 - `docker-api-allocator-only`: Docker socket and Docker Engine container API access are confined to `services/orchestrator/src/engine/allocators/**`. The Docker socket mount in `compose.yml` exists only so `LocalDockerAllocator` can claim and inspect the shared local runner.
 - `single-event-writer`: SQL writes to `events` and Drizzle-style event inserts are allowed only in `services/orchestrator/src/engine/eventStore.ts` and database migrations.
 - `forbidden-failure-variants`: `Failure.kind` may not define host-prefixed variants. The guard helper may mention the prefix only to reject it.
-- `writer-answerer-separation`: non-dispatcher source files may not call or import both writer and answerer execution paths. Current dispatchers are `helloWorkflow.ts` and future files under `services/orchestrator/src/engine/dispatchers/**`.
+- `writer-answerer-separation`: non-dispatcher source files may not call or import both writer and answerer execution paths. Current dispatchers are files under `services/orchestrator/src/engine/workflow/**` and future files under `services/orchestrator/src/engine/dispatchers/**`.
 - `no-unknown-cost-source`: `legacy_unknown` is forbidden and SQL cost-source checks must stay within `provider_direct`, `ccusage`, `codexbar`, and `opportunity_computed`.
 - `github-actions-current-major`: CI must keep `actions/checkout@v6` and `actions/setup-node@v6`; older majors are blocked.
 - `schema-drift-check-wired`: root `package.json` must keep `check:schema-drift` wired to `scripts/check-schema-drift.sh`, and root `check` must run it.
