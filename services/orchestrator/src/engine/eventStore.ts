@@ -1,6 +1,8 @@
 import type pg from "pg";
 import { assertEventName, type EventName } from "./events.js";
 
+type EventStoreClient = Pick<pg.Pool | pg.PoolClient, "query">;
+
 export interface AppendEventInput {
   runId: string;
   taskId?: string;
@@ -15,7 +17,7 @@ export interface EventStore {
 }
 
 export class PgEventStore implements EventStore {
-  constructor(private readonly pool: pg.Pool) {}
+  constructor(private readonly pool: EventStoreClient) {}
 
   async append(input: AppendEventInput): Promise<void> {
     assertEventName(input.eventType);
