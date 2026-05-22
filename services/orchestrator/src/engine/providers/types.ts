@@ -15,7 +15,11 @@ export interface WriterResult {
   diff: string;
   commits: Commit[];
   exitReason: "completed" | "timeout" | "crashed" | "token_limit";
-  tokenUsage: TokenUsage;
+  tokenUsage?: TokenUsage;
+  telemetry?: {
+    rawEventCount: number;
+    tokenUsage?: TokenUsage;
+  };
 }
 
 export interface WriterAdapter {

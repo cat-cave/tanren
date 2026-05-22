@@ -289,6 +289,9 @@ async function executeHelloTask(
 }
 
 async function insertFakeWriterCost(pool: pg.Pool, context: HelloWorkflowContext, taskId: string, writer: WriterResult): Promise<void> {
+  if (writer.tokenUsage === undefined) {
+    throw new Error("fake writer cost requires token usage");
+  }
   await pool.query(
     `INSERT INTO cost_records
      (task_id, run_id, project_id, cli, provider, model, input_tokens, output_tokens, cached_tokens,

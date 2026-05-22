@@ -5,7 +5,7 @@ Tanren credentials are imported explicitly and stored in Vault. The orchestrator
 
 ## Codex ChatGPT Auth
 
-Bootstrap Codex auth outside Tanren, then import the resulting managed auth JSON bundle by path:
+Bootstrap Codex auth intentionally, then import the resulting managed `auth.json` bundle by path:
 
 ```sh
 corepack pnpm --filter @tanren/cli tanren credential codex import \
@@ -18,7 +18,12 @@ under the explicit ref. Responses include only the credential kind, ref, and a r
 
 Runner sessions materialize the stored bundle into a fresh per-run `CODEX_HOME` over SSH before `codex exec`.
 The returned materialization result contains only `CODEX_HOME` and the credential ref; secret values are not emitted
-as workflow events.
+as workflow events. Codex may refresh the cached login during a run; the Writer adapter reads the refreshed
+per-run `auth.json` back over SSH and stores it to the same managed credential ref when possible.
+
+Do not run `codex login --device-auth` on every container launch. Device auth is a normal OAuth device-code
+bootstrap flow, not a per-run provisioning step. Access-token auth via `codex login --with-access-token` is a
+separate future enterprise/programmatic mode, not the base Tanren path.
 
 ## Live Dev Check
 
