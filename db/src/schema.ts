@@ -48,6 +48,7 @@ export const runs = pgTable("runs", {
     .references(() => projects.projectId),
   trigger: text("trigger").notNull(),
   branch: text("branch").notNull(),
+  status: text("status").notNull().default("queued"),
   startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
   endedAt: timestamp("ended_at", { withTimezone: true }),
   outcome: text("outcome"),
@@ -64,7 +65,7 @@ export const tasks = pgTable("tasks", {
   kind: text("kind").notNull(),
   title: text("title").notNull(),
   parentTaskId: text("parent_task_id").references((): AnyPgColumn => tasks.taskId),
-  status: text("status").notNull().default("pending"),
+  status: text("status").notNull().default("queued"),
   startedAt: timestamp("started_at", { withTimezone: true }),
   endedAt: timestamp("ended_at", { withTimezone: true }),
   outcome: text("outcome"),
@@ -173,15 +174,18 @@ export const jobQueue = pgTable(
   {
     id: bigserial("id", { mode: "number" }).primaryKey(),
     runId: text("run_id"),
+    taskId: text("task_id").references(() => tasks.taskId),
     taskKind: text("task_kind").notNull(),
     payload: jsonb("payload").notNull().default(sql`'{}'::jsonb`),
-    status: text("status").notNull().default("pending"),
+    status: text("status").notNull().default("queued"),
     enqueuedAt: timestamp("enqueued_at", { withTimezone: true }).notNull().defaultNow(),
     startedAt: timestamp("started_at", { withTimezone: true }),
     endedAt: timestamp("ended_at", { withTimezone: true }),
     attempts: integer("attempts").notNull().default(0),
+    failureKind: text("failure_kind"),
+    failureMessage: text("failure_message"),
     tenantId: text("tenant_id"),
     userId: text("user_id")
   },
-  (table) => [index("job_queue_pending").on(table.taskKind, table.enqueuedAt).where(sql`${table.status} = 'pending'`)]
+  (table) => [index("job_queue_queued").on(table.taskKind, table.enqueuedAt).where(sql`${table.status} = 'queued'`)]
 );

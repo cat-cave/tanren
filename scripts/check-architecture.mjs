@@ -236,7 +236,7 @@ function checkFailureVariants(projectFiles) {
 }
 
 function isRoleDispatcher(file) {
-  return file === "services/orchestrator/src/engine/helloWorkflow.ts" || file.startsWith("services/orchestrator/src/engine/dispatchers/");
+  return file.startsWith("services/orchestrator/src/engine/workflow/") || file.startsWith("services/orchestrator/src/engine/dispatchers/");
 }
 
 function checkWriterAnswererSeparation(projectFiles) {

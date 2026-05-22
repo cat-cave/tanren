@@ -1,5 +1,6 @@
 export const eventNamesByScope = {
   run: ["run.started", "run.completed", "run.failed"],
+  task: ["task.queued", "task.started", "task.completed", "task.failed"],
   planner: ["planner.started", "planner.completed", "planner.failed"],
   writer: ["writer.started", "writer.completed", "writer.failed"],
   checker: ["checker.started", "checker.completed", "checker.failed"],

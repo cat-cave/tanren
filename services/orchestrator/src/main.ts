@@ -4,8 +4,8 @@ import { createDbPool, migrate } from "@tanren/db";
 import { Hono } from "hono";
 import { LocalDockerAllocator, PgRunnerStore } from "./engine/allocators/index.js";
 import { InMemorySecretStore } from "./engine/contracts/index.js";
-import { runHelloWorkflow } from "./engine/helloWorkflow.js";
 import { Ssh2Substrate } from "./engine/ssh/index.js";
+import { runHelloWorkflow } from "./engine/workflow/helloRun.js";
 
 const port = Number(process.env.ORCHESTRATOR_PORT ?? 3100);
 const vaultAddr = process.env.VAULT_ADDR ?? "http://localhost:8200";
@@ -57,9 +57,17 @@ export async function createApp() {
       return c.json({ error: "run_not_found" }, 404);
     }
 
+    const tasks = await pool.query(
+      `SELECT * FROM tasks
+       WHERE run_id = $1
+       ORDER BY CASE kind WHEN 'plan' THEN 1 WHEN 'write' THEN 2 WHEN 'check' THEN 3 WHEN 'audit' THEN 4 ELSE 99 END,
+                started_at ASC NULLS FIRST,
+                task_id ASC`,
+      [runId]
+    );
     const events = await pool.query("SELECT * FROM events WHERE run_id = $1 ORDER BY ts ASC, id ASC", [runId]);
     const costs = await pool.query("SELECT * FROM cost_records WHERE run_id = $1 ORDER BY recorded_at ASC, id ASC", [runId]);
-    return c.json({ run: run.rows[0], events: events.rows, costs: costs.rows });
+    return c.json({ run: run.rows[0], tasks: tasks.rows, events: events.rows, costs: costs.rows });
   });
 
   return app;
