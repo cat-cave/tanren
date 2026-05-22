@@ -5,7 +5,7 @@ import { storeCodexAuthBundle } from "../credentials/codexAuth.js";
 import { materializeCodexAuthBundle } from "../credentials/codexMaterializer.js";
 import { quoteSshShellArg } from "../ssh/command.js";
 import { runWorkspaceSshCommand } from "../workspace/index.js";
-import type { Commit, TokenUsage, WriterAdapter, WriterResult } from "./types.js";
+import type { AnswererAdapter, Commit, TokenUsage, WriterAdapter, WriterResult } from "./types.js";
 
 export interface CodexWriterDependencies {
   secrets: SecretStore;
@@ -19,6 +19,21 @@ export interface CodexWriterDependencies {
 export interface CodexEventTelemetry {
   rawEventCount: number;
   tokenUsage?: TokenUsage;
+}
+
+export interface CodexAnswererDependencies extends CodexWriterDependencies {
+  answererWorkspaceBaseDir?: string;
+}
+
+export interface CodexAnswererTelemetry extends CodexEventTelemetry {
+  schemaName: string;
+}
+
+export class AnswererSchemaValidationError extends Error {
+  constructor(schemaName: string, message: string) {
+    super(`Answerer response failed ${schemaName} validation: ${message}`);
+    this.name = "AnswererSchemaValidationError";
+  }
 }
 
 export function createCodexWriter(dependencies: CodexWriterDependencies): WriterAdapter {
@@ -69,6 +84,56 @@ export function createCodexWriter(dependencies: CodexWriterDependencies): Writer
   };
 }
 
+export function createCodexAnswerer<TOutput>(dependencies: CodexAnswererDependencies): AnswererAdapter<TOutput> {
+  return {
+    kind: "answerer",
+    cli: "codex",
+    async runAnswerer(opts): Promise<TOutput> {
+      const auth = await materializeCodexAuthBundle({
+        secrets: dependencies.secrets,
+        ssh: dependencies.ssh,
+        target: dependencies.target,
+        ref: dependencies.credentialRef,
+        runId: dependencies.runId,
+        baseDir: dependencies.codexHomeBaseDir,
+        timeoutMs: Math.min(opts.timeoutMs, 30_000)
+      });
+      const workspace = opts.workspace ?? answererWorkspacePath(dependencies, opts.outputSchema.name);
+      const schemaPath = `${auth.CODEX_HOME}/${safeSchemaFileName(opts.outputSchema.name)}.schema.json`;
+      const outputPath = `${auth.CODEX_HOME}/${safeSchemaFileName(opts.outputSchema.name)}.response.json`;
+      await prepareCodexAnswererWorkspace(dependencies, workspace, schemaPath, opts.outputSchema.jsonSchema, opts.timeoutMs);
+      const result = await dependencies.ssh.run(dependencies.target, {
+        command: buildCodexAnswererExecCommand({ codexHome: auth.CODEX_HOME, workspace, schemaPath, outputPath }),
+        stdin: opts.prompt,
+        timeoutMs: opts.timeoutMs
+      });
+      const telemetry = parseCodexJsonlTelemetry(result.stdout);
+      await persistRefreshedCodexAuthBestEffort({
+        secrets: dependencies.secrets,
+        ssh: dependencies.ssh,
+        target: dependencies.target,
+        ref: dependencies.credentialRef,
+        codexHome: auth.CODEX_HOME,
+        timeoutMs: Math.min(opts.timeoutMs, 30_000)
+      });
+      if (result.timedOut) {
+        throw new Error(`Codex Answerer timed out for schema ${opts.outputSchema.name}`);
+      }
+      if (result.failure !== undefined || result.exitCode !== 0) {
+        throw new Error(`Codex Answerer failed for schema ${opts.outputSchema.name}: exit ${result.exitCode ?? "unknown"}`);
+      }
+      const response = await dependencies.ssh.run(dependencies.target, {
+        command: `cat ${quoteSshShellArg(outputPath)}`,
+        timeoutMs: Math.min(opts.timeoutMs, 30_000)
+      });
+      if (response.exitCode !== 0 || response.failure !== undefined || response.timedOut) {
+        throw new Error(`Codex Answerer response capture failed for schema ${opts.outputSchema.name}`);
+      }
+      return parseStructuredAnswererOutput(response.stdout, opts.outputSchema, telemetry);
+    }
+  };
+}
+
 async function persistRefreshedCodexAuthBestEffort(input: {
   secrets: SecretStore;
   ssh: SshSubstrate;
@@ -104,6 +169,30 @@ export function buildCodexExecCommand(input: { codexHome: string; workspace: str
   ].join(" ");
 }
 
+export function buildCodexAnswererExecCommand(input: {
+  codexHome: string;
+  workspace: string;
+  schemaPath: string;
+  outputPath: string;
+}): string {
+  return [
+    `CODEX_HOME=${quoteSshShellArg(input.codexHome)}`,
+    "codex exec",
+    "--sandbox read-only",
+    "--json",
+    "--ignore-user-config",
+    "--ignore-rules",
+    "--skip-git-repo-check",
+    "--cd",
+    quoteSshShellArg(input.workspace),
+    "--output-schema",
+    quoteSshShellArg(input.schemaPath),
+    "--output-last-message",
+    quoteSshShellArg(input.outputPath),
+    "-"
+  ].join(" ");
+}
+
 export function parseCodexJsonlTelemetry(stdout: string): CodexEventTelemetry {
   const lines = stdout.split(/\r?\n/).filter((line) => line.trim() !== "");
   let tokenUsage: TokenUsage | undefined;
@@ -115,6 +204,55 @@ export function parseCodexJsonlTelemetry(stdout: string): CodexEventTelemetry {
     tokenUsage = findTokenUsage(parsed) ?? tokenUsage;
   }
   return { rawEventCount: lines.length, tokenUsage };
+}
+
+export function parseStructuredAnswererOutput<TOutput>(
+  stdout: string,
+  schema: { name: string; parse(value: unknown): TOutput },
+  _telemetry?: CodexAnswererTelemetry | CodexEventTelemetry
+): TOutput {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch (error) {
+    throw new AnswererSchemaValidationError(schema.name, `invalid JSON: ${messageFromUnknown(error)}`);
+  }
+  try {
+    return schema.parse(parsed);
+  } catch (error) {
+    throw new AnswererSchemaValidationError(schema.name, messageFromUnknown(error));
+  }
+}
+
+async function prepareCodexAnswererWorkspace(
+  dependencies: CodexAnswererDependencies,
+  workspace: string,
+  schemaPath: string,
+  jsonSchema: Record<string, unknown>,
+  timeoutMs: number
+): Promise<void> {
+  await dependencies.ssh.run(dependencies.target, {
+    command: `mkdir -p ${quoteSshShellArg(workspace)}`,
+    timeoutMs: Math.min(timeoutMs, 30_000)
+  });
+  await dependencies.ssh.run(dependencies.target, {
+    command: `cat > ${quoteSshShellArg(schemaPath)}`,
+    stdin: JSON.stringify(jsonSchema),
+    timeoutMs: Math.min(timeoutMs, 30_000)
+  });
+}
+
+function answererWorkspacePath(dependencies: CodexAnswererDependencies, schemaName: string): string {
+  const baseDir = dependencies.answererWorkspaceBaseDir ?? "/tmp/tanren-answerer-runs";
+  return `${baseDir}/${dependencies.runId}/${safeSchemaFileName(schemaName)}`;
+}
+
+function safeSchemaFileName(schemaName: string): string {
+  return schemaName.replaceAll(/[^a-zA-Z0-9._-]/g, "_");
+}
+
+function messageFromUnknown(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function parseJsonObject(line: string): Record<string, unknown> | undefined {
