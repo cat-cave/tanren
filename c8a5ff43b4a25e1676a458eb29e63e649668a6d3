@@ -1,0 +1,1 @@
+enable GitHub Actions on chained stack PRs by removing the pull_request base-branch filter
