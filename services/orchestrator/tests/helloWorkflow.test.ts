@@ -3,6 +3,9 @@ import type { AllocationRequest, Allocator, RunnerAllocation, SshTarget } from "
 import type { JobEnvelope, JobQueue } from "../src/engine/contracts/jobQueue.js";
 import type { SshCommand, SshCommandResult, SshSubstrate } from "../src/engine/contracts/sshSubstrate.js";
 import { FakeEventStore } from "../src/engine/eventStore.js";
+import type { CheckAnswer } from "../src/engine/providers/answererSchemas.js";
+import { parseStructuredAnswererOutput } from "../src/engine/providers/codex.js";
+import type { AnswererAdapter } from "../src/engine/providers/types.js";
 import { runHelloWorkflow } from "../src/engine/workflow/helloRun.js";
 
 describe("hello workflow", () => {
@@ -229,6 +232,52 @@ describe("hello workflow", () => {
     expect(pool.sql).toContain(
       "UPDATE tasks SET status = 'failed', outcome = 'failed', failure_kind = $2, ended_at = now() WHERE task_id = $1"
     );
+  });
+
+  it("records structured Answerer parse failures as schema validation failures", async () => {
+    const pool = new FakePool();
+    const allocator = new RecordingAllocator();
+    const sha = "dddddddddddddddddddddddddddddddddddddddd";
+    const ssh = new RecordingSsh([
+      { exitCode: 0, stdout: "tanren-hello-over-ssh\n", stderr: "", timedOut: false },
+      { exitCode: 0, stdout: "", stderr: "", timedOut: false },
+      { exitCode: 0, stdout: "", stderr: "", timedOut: false },
+      { exitCode: 0, stdout: "diff --git a/HELLO.md b/HELLO.md\n+hello world\n", stderr: "", timedOut: false },
+      { exitCode: 0, stdout: `${sha}\thello world\n`, stderr: "", timedOut: false }
+    ]);
+    const eventStore = new FakeEventStore();
+    const jobQueue = new RecordingJobQueue();
+    const badChecker: AnswererAdapter<CheckAnswer> = {
+      kind: "answerer",
+      cli: "codex",
+      async runAnswerer(opts) {
+        return parseStructuredAnswererOutput("not-json", opts.outputSchema);
+      }
+    };
+
+    await expect(
+      runHelloWorkflow(pool.asPgPool(), {
+        allocator,
+        ssh,
+        eventStore,
+        jobQueue,
+        identitySecretRef: "runner/test/identity",
+        checkAnswerer: badChecker
+      })
+    ).rejects.toThrow("Answerer response failed tanren.check_answer.v1 validation");
+
+    expect(jobQueue.failures).toEqual([
+      {
+        id: "job_3",
+        failure: {
+          kind: "schema_validation_failed",
+          message: expect.stringContaining("Answerer response failed tanren.check_answer.v1 validation") as string
+        }
+      }
+    ]);
+    expect(eventStore.events.find((event) => event.eventType === "checker.failed")?.payload).toMatchObject({
+      kind: "schema_validation_failed"
+    });
   });
 });
 

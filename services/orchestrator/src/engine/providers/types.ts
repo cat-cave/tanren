@@ -28,8 +28,19 @@ export interface WriterAdapter {
   runWriter(opts: { prompt: string; workspace: string; timeoutMs: number }): Promise<WriterResult>;
 }
 
+export interface AnswererRunOptions<TOutput> {
+  prompt: string;
+  timeoutMs: number;
+  workspace?: string;
+  outputSchema: {
+    name: string;
+    jsonSchema: Record<string, unknown>;
+    parse(value: unknown): TOutput;
+  };
+}
+
 export interface AnswererAdapter<TOutput> {
   readonly kind: "answerer";
   readonly cli: "claude" | "codex" | "fake";
-  runAnswerer(opts: { prompt: string; timeoutMs: number }): Promise<TOutput>;
+  runAnswerer(opts: AnswererRunOptions<TOutput>): Promise<TOutput>;
 }
