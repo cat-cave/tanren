@@ -18,6 +18,8 @@ schema-drift:
 typecheck:
   corepack pnpm run typecheck
 
+fast-check: format-check lint architecture schema-drift typecheck test compose-config
+
 test:
   corepack pnpm run test
 

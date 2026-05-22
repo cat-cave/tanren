@@ -1,0 +1,21 @@
+commit-msg:
+  jobs:
+    - name: mergify change-id
+      run: .git/hooks/mergify-hooks/commit-msg.sh "{1}"
+
+post-commit:
+  jobs:
+    - name: mergify change-id safety net
+      run: .git/hooks/mergify-hooks/post-commit.sh
+
+prepare-commit-msg:
+  jobs:
+    - name: mergify preserve change-id
+      run: .git/hooks/mergify-hooks/prepare-commit-msg.sh "{1}" "{2}" "{3}"
+
+pre-push:
+  jobs:
+    - name: mergify stack guard
+      run: .git/hooks/mergify-hooks/pre-push.sh
+    - name: fast check
+      run: corepack pnpm run check:fast

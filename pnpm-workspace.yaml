@@ -10,5 +10,6 @@ onlyBuiltDependencies:
 allowBuilds:
   cpu-features: true
   esbuild: true
+  lefthook: true
   protobufjs: false
   ssh2: true
