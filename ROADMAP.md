@@ -27,6 +27,8 @@ Real LLM CLIs, real credentials, real GitHub PR automation, and remote allocator
 
 ## Phase 0: Kernel
 
+Status: done.
+
 Phase 0 is sequential. Each spec defines a contract consumed by the next spec, so parallel worktrees are intentionally deferred until these contracts are boring.
 
 Phase 0 starts from the completed hello-world baseline and ends when a fake writer can mutate a real git workspace through the same local runner execution boundary that real agents will use later.
@@ -89,7 +91,7 @@ Phase 0 starts from the completed hello-world baseline and ends when a fake writ
 **How**: Allocate a runner, execute a deterministic command over SSH, append declared events for allocation/execution/release, and expose the result through CLI status and dashboard run views.
 
 **Test plan**: hello workflow tests, CLI smoke for `doctor`, `hello`, and `status`, compose smoke with runner SSH, `corepack pnpm run check`.
-**Quality bar**: The old in-process fake workflow remains understandable, but execution proof now crosses the real runner boundary.
+**Quality bar**: The synthetic workflow remains understandable, but execution proof now crosses the real runner boundary.
 **Real-functionality validation**: `tanren hello` persists SSH output from the runner and `tanren status <run_id>` shows the runner events.
 **Worktree-isolation safety**: This spec owns hello workflow surfaces and minimal CLI/dashboard display changes.
 
@@ -125,7 +127,7 @@ Phase 0 starts from the completed hello-world baseline and ends when a fake writ
 
 ## Phase 0 Exit Criteria
 
-Phase 0 is complete when all of the following are true:
+Phase 0 is complete. The following exit criteria were verified on merged `main` on 2026-05-22:
 
 - `db/src/schema.ts` is the single source of truth and generated migrations are drift-checked.
 - The orchestrator executes workflow commands over SSH in a runner.
@@ -137,4 +139,187 @@ Phase 0 is complete when all of the following are true:
 - `corepack pnpm run check` passes.
 - Compose smoke proves CLI `doctor`, `hello`, `status`, and runner SSH.
 
-Phase 1 can begin after these contracts are stable enough for parallel subagents to consume them.
+Final Phase 0 verification:
+
+- `corepack pnpm run check`
+- `just smoke`
+- GitHub Actions on `main` SHA `eebbf2aedca77fd205ceab0f56736a6c571afc7d`
+- Smoke run output showed run status `done`, ordered planner/writer/checker/auditor tasks all `done`, `workspace.git_captured` with real commit metadata and diff byte count, runner SSH output `tanren-runner-ok`, and the live SSH integration test passing.
+
+## Phase 1: Real-Agent PR Loop
+
+Status: planned.
+
+Phase 1 keeps the Phase 0 local runner and durable task loop, then replaces synthetic edges with real project, credential, agent, GitHub, and CI behavior. It should end with Tanren taking a persisted spec for an owned fixture repository, running at least one real Writer CLI in a runner workspace, producing a draft PR, observing CI, and making the run inspectable through durable state.
+
+Mergify stacks are now the default branch/PR coordination model for Phase 1. Merge queue can wait until PR volume makes it worthwhile.
+
+Phase 1's first real CLI is Codex. This is intentionally narrower than the full v0 provider set: v0 still needs Codex, Claude, and opencode as Writer CLIs, and Codex plus Claude as Answerers. opencode remains Writer-only for v0 because it does not provide native JSON-schema enforcement strong enough for the Answerer role.
+
+Codex planning assumptions were checked against OpenAI's Codex docs and the locally installed `codex` CLI on 2026-05-22:
+
+- Codex CLI can be installed with `npm i -g @openai/codex`, runs locally in a terminal, and can inspect/edit/run code in the selected directory: `https://developers.openai.com/codex/cli`.
+- Codex CLI authentication supports ChatGPT sign-in and API-key sign-in; ChatGPT sign-in is the default path for the CLI when no valid session is available: `https://developers.openai.com/codex/auth`.
+- Codex CLI command reference documents `codex exec` for non-interactive runs, `--sandbox workspace-write`, `--json` JSONL events, `--output-schema`, and `codex login` with `--device-auth`, `--with-access-token`, and `--with-api-key`: `https://developers.openai.com/codex/cli/reference`.
+- Device auth is a normal ChatGPT OAuth login mode for Codex CLI and does not require ChatGPT Business or Enterprise. It is suitable for credential bootstrap/onboarding, not for every runner launch.
+- Codex access tokens are separate from device auth, are supported for ChatGPT Business and Enterprise workspaces, and are intended for trusted non-interactive local workflows that need ChatGPT workspace identity; Platform API keys remain the simpler automation credential when ChatGPT workspace access is not needed: `https://developers.openai.com/codex/enterprise/access-tokens`.
+
+### Phase 1 Dependency Graph
+
+```text
+P1-0001 project-spec-contract
+  -> P1-0002 vault-credential-session
+  -> P1-0004 github-draft-pr-contract
+
+P1-0002 vault-credential-session
+  -> P1-0003 real-writer-cli-adapter
+  -> P1-0004 github-draft-pr-contract
+  -> P1-0006 answerer-check-audit-loop
+
+P1-0003 real-writer-cli-adapter
+  -> P1-0006 answerer-check-audit-loop
+
+P1-0004 github-draft-pr-contract
+  -> P1-0005 ci-polling-loop
+
+P1-0003 real-writer-cli-adapter +
+P1-0004 github-draft-pr-contract +
+P1-0005 ci-polling-loop +
+P1-0006 answerer-check-audit-loop
+  -> P1-0007 phase1-end-to-end-fixture
+```
+
+Dependency shape:
+
+```text
+project/spec input
+  -> credentials -> real Writer -> real Answerer checks
+  -> credentials -> GitHub draft PR -> CI polling
+
+real Writer + GitHub PR + CI polling + Answerer checks/audit
+  -> end-to-end fixture
+```
+
+### P1-0001 - project-spec-contract
+
+**Owns**: `db/src/schema.ts`, `db/migrations/**`, `services/orchestrator/src/engine/workflow/**`, `services/orchestrator/src/main.ts`, `cli/src/main.ts`, tests covering project/spec/run creation.
+**Consumes**: Phase 0 durable run/task loop.
+**Produces**: persisted project, repo, target branch, and spec input contract.
+
+**What**: Replace hard-coded hello project/spec inputs with a minimal persisted project/spec contract that can target an owned fixture repository.
+**Why**: Real PR automation needs a repo URL, target branch, spec acceptance criteria, and run identity from data rather than constants.
+**How**: Add CLI/API input for creating or selecting a project/spec, preserve the hello path as a smoke fixture, and ensure run creation consumes persisted spec data.
+
+**Test plan**: schema drift, CLI/API tests, workflow tests, `corepack pnpm run check`.
+**Quality bar**: no hidden constants for repo URL or branch in the real workflow path; hello remains an explicit fixture.
+**Real-functionality validation**: a run can be created from a persisted spec targeting a fixture repo.
+**Worktree-isolation safety**: owns project/spec input surfaces only; does not add real CLIs or GitHub PR writes.
+
+### P1-0002 - vault-credential-session
+
+**Owns**: credential contracts, Vault-backed secret store, runner credential materialization helpers, related tests and docs.
+**Consumes**: P1-0001.
+**Produces**: per-run credential loading from Vault into runner sessions, starting with Codex ChatGPT auth.
+
+**What**: Move from in-memory runner identity seeding toward a real credential/session contract for GitHub and Codex credentials.
+**Why**: `PROJECT_BRIEF.md` forbids host credential discovery and requires credentials to be managed and injected per session.
+**How**: Store credential references in project/run config, read values from Vault, transfer only required session material to the runner over the controlled SSH boundary, and redact values from logs/events. For Codex, the Phase 1 primary credential path is ChatGPT-managed auth, not API-key auth. Onboarding should support a one-time `codex login --device-auth` or equivalent browser/device flow, then store the resulting Codex auth bundle, such as the managed `auth.json` contents, in Vault for later runner provisioning. Runner launch must not require an interactive device login; provisioning materializes the stored credential bundle into a per-run `CODEX_HOME` before `codex exec`. If a ChatGPT Business/Enterprise access token is available, prefer storing it in Vault and injecting it as `CODEX_ACCESS_TOKEN` for ephemeral `codex exec` runs or piping it to `codex login --with-access-token` inside the runner session. API-key auth remains a fallback for tests and generic programmatic automation where ChatGPT workspace identity is not needed.
+
+**Test plan**: secret-store unit tests, redaction tests, runner materialization tests, Codex auth materialization tests, compose smoke with runner identity.
+**Quality bar**: no `~/.codex` or `~/.config` host discovery, no host credential bind mounts, no secret values in events, no assumption that enterprise access tokens are available unless explicitly configured.
+**Real-functionality validation**: runner can use a Vault-backed Codex credential in a fresh per-run `CODEX_HOME` without repeating interactive device auth for every container launch.
+**Worktree-isolation safety**: owns credential/secret surfaces; does not own agent adapter behavior.
+
+### P1-0003 - real-writer-cli-adapter
+
+**Owns**: Writer adapter contracts, runner command wrappers, fake-to-real adapter tests, fixture writer smoke.
+**Consumes**: P1-0001 and P1-0002.
+**Produces**: a real Writer CLI path that mutates the runner workspace and is judged by git state.
+
+**What**: Add the first real Writer CLI adapter behind the Phase 0 writer contract.
+**Why**: The next proof after fake git mutation is a real CLI making the mutation while the orchestrator still evaluates only workspace state.
+**How**: Start with Codex CLI as the first Writer. Run `codex exec` over SSH in the runner workspace with explicit automation settings, including `--sandbox workspace-write`, per-run `CODEX_HOME`, and `--json` so the orchestrator can persist JSONL events and any emitted usage fields. Capture timeout/failure and keep completion based on git diff/commit capture rather than stdout. Claude and opencode Writer adapters are v0 follow-ups after the Codex contract is proven.
+
+**Test plan**: adapter command construction tests, failure tests, opt-in live smoke for the configured CLI, `corepack pnpm run check`.
+**Quality bar**: Writer does not self-report done; no host execution; no credential leakage.
+**Real-functionality validation**: a real CLI changes a fixture repo workspace in the runner and the orchestrator captures the resulting diff.
+**Worktree-isolation safety**: owns Writer adapter surfaces; does not own GitHub PR creation.
+
+### P1-0004 - github-draft-pr-contract
+
+**Owns**: GitHub service contracts, PR event names, project repo auth usage, workspace push/branch helpers, tests.
+**Consumes**: P1-0001 and P1-0002.
+**Produces**: draft PR creation for a completed writer workspace.
+
+**What**: Push the runner workspace branch to GitHub and open a draft PR against the project target branch.
+**Why**: v0's workflow product requires code to leave the runner as a reviewable PR, not just a captured diff.
+**How**: Use a managed GitHub credential, create a deterministic branch name, push commits from the runner workspace, create a draft PR, and persist the PR URL and GitHub events.
+
+**Test plan**: branch naming tests, API contract tests with fakes, opt-in fixture repo smoke, `corepack pnpm run check`.
+**Quality bar**: PR creation is idempotent for retry; no direct host git push; run state records PR URL.
+**Real-functionality validation**: a fixture repo receives a draft PR produced from runner workspace commits.
+**Worktree-isolation safety**: owns GitHub PR creation; does not own CI polling.
+
+### P1-0005 - ci-polling-loop
+
+**Owns**: CI status polling contracts, run/task states for CI, GitHub status event handling, tests.
+**Consumes**: P1-0004.
+**Produces**: durable CI observation and loop routing after PR creation.
+
+**What**: Poll GitHub check status for the created PR and persist pass/fail state.
+**Why**: The workflow must make CI status a durable gate before review/merge decisions.
+**How**: Add a CI task/job kind, poll checks for the PR head, persist `ci.started`, `ci.passed`, or `ci.failed`, and route failures back to the planner path in later specs.
+
+**Test plan**: fake GitHub status tests, retry/backoff tests, status visibility tests, `corepack pnpm run check`.
+**Quality bar**: no process-memory-only CI state; failed CI is inspectable and resumable.
+**Real-functionality validation**: fixture PR CI status is persisted and visible from `tanren status`.
+**Worktree-isolation safety**: owns CI polling surfaces only.
+
+### P1-0006 - answerer-check-audit-loop
+
+**Owns**: Answerer adapter contracts, structured response schemas, check/audit task execution, validation tests.
+**Consumes**: P1-0002 and P1-0003.
+**Produces**: real structured Answerer checks for writer output and spec completion.
+
+**What**: Replace fake checker/auditor answers with structured Answerer calls while preserving the Writer/Answerer split.
+**Why**: Real writers need external verification before PR/CI/review gates can be trusted.
+**How**: Define schemas for check and audit answers, call Codex first over the controlled credential path using `codex exec --output-schema`, validate responses, and persist parse failures as task failures. Claude is the second v0 Answerer target. opencode is explicitly out of the v0 Answerer path until a separate client-side schema-validation contract exists.
+
+**Test plan**: schema validation tests, parse failure tests, fake answerer tests, opt-in live Answerer smoke.
+**Quality bar**: Answerers never mutate the workspace; invalid JSON is a hard task failure.
+**Real-functionality validation**: a real Answerer judges a fixture writer diff and audit criteria.
+**Worktree-isolation safety**: owns Answerer execution and schema surfaces.
+
+### P1-0007 - phase1-end-to-end-fixture
+
+**Owns**: end-to-end fixture, final Phase 1 smoke, roadmap validation docs.
+**Consumes**: P1-0003, P1-0004, P1-0005, and P1-0006.
+**Produces**: the first real-agent PR loop proof.
+
+**What**: Tie the Phase 1 contracts into one fixture workflow.
+**Why**: Phase 1 is only complete when the real-agent pieces work together, not just in isolated tests.
+**How**: Run a persisted spec against an owned fixture repo, invoke a real Writer CLI, create a draft PR, poll CI, run real or configured Answerer checks/audit, and persist the complete run.
+
+**Test plan**: `corepack pnpm run check`, `just smoke`, opt-in live fixture workflow.
+**Quality bar**: every boundary is inspectable through durable state; no hidden host execution or host credential use.
+**Real-functionality validation**: a fixture GitHub PR exists with runner-produced commits and persisted CI/check/audit state.
+**Worktree-isolation safety**: owns integration wiring only; upstream contracts must be stable before this starts.
+
+### Phase 1 Parallelization Plan
+
+Start sequentially through P1-0001 and P1-0002 because they define shared data and credential contracts. After P1-0002 is merged, fan out with Mergify stacks:
+
+- Stack A: P1-0003 real Writer adapter.
+- Stack B: P1-0004 GitHub draft PR contract.
+- Stack C: P1-0006 Answerer schema/execution contract.
+
+P1-0005 depends on P1-0004 and can begin as soon as the PR contract is stable. P1-0007 stays last and should not start until the preceding contracts are merged or stacked cleanly with green CI.
+
+### Phase 1 Prep Notes
+
+- Use Mergify stacks for dependent PRs; do not use manual chain retargeting unless stack tooling is unavailable.
+- Keep each stack short and self-contained. Independent specs should use separate stacks rather than one long chain.
+- Merge queue remains deferred until PR volume or CI wait time makes queueing useful.
+- The beta design system should be pulled in when Phase 1 adds user-visible workflow state beyond the current dashboard table. Until then, keep backend/workflow specs generic and preserve UI integration as a separate owned path.
+- Remote/cloud allocators remain a later phase unless a Phase 1 live CLI provider cannot be validated in the local runner.
+- Do not start Phase 1 by trying to support every provider. Prove Codex first with ChatGPT-managed auth or a configured Codex access token, `codex exec`, durable event capture, allowed cost/usage attribution, and git-state-based Writer completion. Then add Claude and opencode as additional Writer implementations, and Claude as the second Answerer implementation before v0 completion.
