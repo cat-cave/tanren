@@ -10,6 +10,30 @@ export interface GitHubPullRequest {
   baseBranch?: string;
 }
 
+export interface GitHubPullRequestHead {
+  sha: string;
+  ref?: string;
+}
+
+export interface GitHubCheckRun {
+  name: string;
+  status: string;
+  conclusion?: string;
+  url?: string;
+}
+
+export interface GitHubCommitStatus {
+  context: string;
+  state: string;
+  url?: string;
+}
+
+export interface GitHubPullRequestChecks {
+  head: GitHubPullRequestHead;
+  checkRuns: GitHubCheckRun[];
+  statuses: GitHubCommitStatus[];
+}
+
 export interface EnsureDraftPullRequestInput {
   repo: GitHubRepository;
   token: string;
@@ -106,6 +130,47 @@ export class GitHubPullRequestService {
   }
 }
 
+export class GitHubStatusService {
+  constructor(private readonly http: GitHubHttpClient) {}
+
+  async fetchPullRequestChecks(input: { repo: GitHubRepository; token: string; pullNumber: number }): Promise<GitHubPullRequestChecks> {
+    const pull = await this.http.request({
+      method: "GET",
+      path: repoPath(input.repo, `/pulls/${input.pullNumber}`),
+      token: input.token
+    });
+    if (pull.status !== 200) {
+      throw new Error(`GitHub PR fetch failed: HTTP ${pull.status}`);
+    }
+    const head = parsePullRequestHead(pull.body);
+
+    const [checkRuns, statuses] = await Promise.all([
+      this.http.request({
+        method: "GET",
+        path: repoPath(input.repo, `/commits/${encodeURIComponent(head.sha)}/check-runs`),
+        token: input.token
+      }),
+      this.http.request({
+        method: "GET",
+        path: repoPath(input.repo, `/commits/${encodeURIComponent(head.sha)}/status`),
+        token: input.token
+      })
+    ]);
+    if (checkRuns.status !== 200) {
+      throw new Error(`GitHub check-runs fetch failed: HTTP ${checkRuns.status}`);
+    }
+    if (statuses.status !== 200) {
+      throw new Error(`GitHub commit status fetch failed: HTTP ${statuses.status}`);
+    }
+
+    return {
+      head,
+      checkRuns: parseCheckRuns(checkRuns.body),
+      statuses: parseCommitStatuses(statuses.body)
+    };
+  }
+}
+
 export function parseGitHubRepository(repoUrl: string): GitHubRepository {
   const httpsMatch = /^https:\/\/github\.com\/([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/.exec(repoUrl);
   if (httpsMatch !== null) {
@@ -116,6 +181,14 @@ export function parseGitHubRepository(repoUrl: string): GitHubRepository {
     return { owner: sshMatch[1] ?? "", name: sshMatch[2] ?? "" };
   }
   throw new Error(`unsupported GitHub repository URL: ${repoUrl}`);
+}
+
+export function parseGitHubPullRequestUrl(prUrl: string): { repo: GitHubRepository; pullNumber: number } {
+  const match = /^https:\/\/github\.com\/([^/\s]+)\/([^/\s]+)\/pull\/([1-9][0-9]*)\/?$/.exec(prUrl);
+  if (match === null) {
+    throw new Error(`unsupported GitHub pull request URL: ${prUrl}`);
+  }
+  return { repo: { owner: match[1] ?? "", name: match[2] ?? "" }, pullNumber: Number(match[3]) };
 }
 
 export function githubHttpsRemote(repo: GitHubRepository): string {
@@ -150,4 +223,72 @@ function parseBaseBranch(value: unknown): string | undefined {
   }
   const ref = (value as Record<string, unknown>).ref;
   return typeof ref === "string" ? ref : undefined;
+}
+
+function parsePullRequestHead(value: unknown): GitHubPullRequestHead {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("GitHub PR response was not an object");
+  }
+  const head = (value as Record<string, unknown>).head;
+  if (typeof head !== "object" || head === null || Array.isArray(head)) {
+    throw new Error("GitHub PR response missing head");
+  }
+  const object = head as Record<string, unknown>;
+  if (typeof object.sha !== "string" || object.sha === "") {
+    throw new Error("GitHub PR response missing head sha");
+  }
+  return { sha: object.sha, ref: typeof object.ref === "string" ? object.ref : undefined };
+}
+
+function parseCheckRuns(value: unknown): GitHubCheckRun[] {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("GitHub check-runs response was not an object");
+  }
+  const checkRuns = (value as Record<string, unknown>).check_runs;
+  if (!Array.isArray(checkRuns)) {
+    throw new Error("GitHub check-runs response missing check_runs");
+  }
+  return checkRuns.map(parseCheckRun);
+}
+
+function parseCheckRun(value: unknown): GitHubCheckRun {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("GitHub check run was not an object");
+  }
+  const object = value as Record<string, unknown>;
+  if (typeof object.name !== "string" || typeof object.status !== "string") {
+    throw new Error("GitHub check run missing name or status");
+  }
+  return {
+    name: object.name,
+    status: object.status,
+    conclusion: typeof object.conclusion === "string" ? object.conclusion : undefined,
+    url: typeof object.html_url === "string" ? object.html_url : undefined
+  };
+}
+
+function parseCommitStatuses(value: unknown): GitHubCommitStatus[] {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("GitHub commit status response was not an object");
+  }
+  const statuses = (value as Record<string, unknown>).statuses;
+  if (!Array.isArray(statuses)) {
+    throw new Error("GitHub commit status response missing statuses");
+  }
+  return statuses.map(parseCommitStatus);
+}
+
+function parseCommitStatus(value: unknown): GitHubCommitStatus {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("GitHub commit status was not an object");
+  }
+  const object = value as Record<string, unknown>;
+  if (typeof object.context !== "string" || typeof object.state !== "string") {
+    throw new Error("GitHub commit status missing context or state");
+  }
+  return {
+    context: object.context,
+    state: object.state,
+    url: typeof object.target_url === "string" ? object.target_url : undefined
+  };
 }

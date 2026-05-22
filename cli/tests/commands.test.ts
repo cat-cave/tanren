@@ -8,6 +8,7 @@ import {
   createSpecCommand,
   importCodexCredentialCommand,
   importGithubCredentialCommand,
+  pollCiCommand,
   runSpecCommand,
   status
 } from "../src/main.js";
@@ -185,6 +186,22 @@ describe("cli package", () => {
 
     expect(fetch).toHaveBeenCalledWith(
       "http://localhost:3100/runs/run_1/github/draft-pr",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          githubCredentialRef: "credential/github/dev"
+        })
+      })
+    );
+  });
+
+  it("requests CI polling for a run", async () => {
+    const fetch = stubJsonFetch({ runId: "run_1", status: "pending", reason: "no_checks" });
+
+    await pollCiCommand(["--run-id", "run_1", "--github-credential-ref", "credential/github/dev"]);
+
+    expect(fetch).toHaveBeenCalledWith(
+      "http://localhost:3100/runs/run_1/ci/poll",
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({
