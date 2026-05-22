@@ -1,0 +1,1 @@
+fix CI-only Vitest package resolution by aliasing @tanren/db to source during tests
