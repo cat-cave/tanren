@@ -4,6 +4,7 @@ import type { SshTarget } from "./allocator.js";
 export interface SshCommand {
   command: string;
   cwd?: string;
+  stdin?: string;
   timeoutMs: number;
 }
 

@@ -84,6 +84,9 @@ export class Ssh2Substrate implements SshSubstrate {
             fail(messageFromError(error));
             return;
           }
+          if (command.stdin !== undefined) {
+            stream.end(command.stdin);
+          }
           this.collectStream(stream, state, () => {
             settle({
               exitCode: state.exitCode,

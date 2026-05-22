@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+import { readFile } from "node:fs/promises";
+
 const orchestratorUrl = process.env.TANREN_ORCHESTRATOR_URL ?? "http://localhost:3100";
 const dashboardUrl = process.env.TANREN_DASHBOARD_URL ?? "http://localhost:3000";
 
@@ -76,11 +78,22 @@ export async function runSpecCommand(argv: string[]) {
   console.log(JSON.stringify(run, null, 2));
 }
 
+export async function importCodexCredentialCommand(argv: string[]) {
+  const args = parseArgs(argv);
+  const authJson = await readFile(required(args, "auth-json-file"), "utf8");
+  const credential = await jsonRequest("/credentials/codex/import", {
+    ref: required(args, "ref"),
+    authJson
+  });
+  console.log(JSON.stringify(credential, null, 2));
+}
+
 export function usage() {
   console.log(`tanren <command>
 
 Commands:
   doctor             Check orchestrator, Postgres, and Vault connectivity
+  credential codex import --ref <ref> --auth-json-file <path>
   hello              Trigger a fake hello-world workflow run
   project create     Create a persisted project contract
   spec create        Create a persisted spec contract
@@ -116,6 +129,12 @@ export async function main(argv: string[]) {
         break;
       }
       throw new Error("usage: tanren spec <create|run>");
+    case "credential":
+      if (subcommand !== "codex" || rest[0] !== "import") {
+        throw new Error("usage: tanren credential codex import --ref <ref> --auth-json-file <path>");
+      }
+      await importCodexCredentialCommand(rest.slice(1));
+      break;
     case "status":
       await status(subcommand);
       break;
