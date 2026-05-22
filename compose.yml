@@ -72,10 +72,15 @@ services:
     build:
       context: .
       dockerfile: runner/Dockerfile
+    cap_add:
+      - SYS_ADMIN
     environment:
       TANREN_RUNNER_AUTHORIZED_KEY: ${TANREN_RUNNER_AUTHORIZED_KEY:-}
     ports:
       - "2222:22"
+    security_opt:
+      - apparmor=unconfined
+      - seccomp=unconfined
     healthcheck:
       test: ["CMD-SHELL", "pgrep sshd >/dev/null"]
       interval: 5s

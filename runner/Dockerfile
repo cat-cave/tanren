@@ -13,6 +13,9 @@ RUN apt-get update \
     tini \
   && rm -rf /var/lib/apt/lists/*
 
+RUN npm install -g @openai/codex@0.133.0 \
+  && npm cache clean --force
+
 RUN useradd --create-home --shell /bin/bash --uid 1000 tanren \
   && mkdir -p /run/sshd /workspace /home/tanren/.ssh \
   && chown -R tanren:tanren /workspace /home/tanren/.ssh \
