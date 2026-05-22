@@ -5,7 +5,8 @@ import { Hono } from "hono";
 import type pg from "pg";
 import { z } from "zod";
 import { LocalDockerAllocator, PgRunnerStore } from "./engine/allocators/index.js";
-import { InMemorySecretStore } from "./engine/contracts/index.js";
+import { InMemorySecretStore, type SecretStore, VaultSecretStore } from "./engine/contracts/index.js";
+import { storeCodexAuthBundle } from "./engine/credentials/codexAuth.js";
 import { Ssh2Substrate } from "./engine/ssh/index.js";
 import { runHelloWorkflow } from "./engine/workflow/helloRun.js";
 import {
@@ -46,6 +47,11 @@ const runInputSchema = z.object({
   branch: z.string().min(1).optional()
 });
 
+const codexCredentialImportSchema = z.object({
+  ref: z.string().min(1),
+  authJson: z.string().min(1)
+});
+
 async function vaultHealth() {
   const response = await fetch(`${vaultAddr}/v1/sys/health`, {
     headers: { "X-Vault-Token": vaultToken }
@@ -56,10 +62,11 @@ async function vaultHealth() {
 export async function createApp() {
   const pool = getProductionPool();
   await migrate(pool);
-  const runnerSecrets = new InMemorySecretStore();
+  const runnerSecrets = new VaultSecretStore({ addr: vaultAddr, token: vaultToken });
   await seedRunnerIdentitySecret(runnerSecrets);
   return buildApp({
     pool,
+    secrets: runnerSecrets,
     helloDependencies: {
       allocator: new LocalDockerAllocator({ runners: new PgRunnerStore(pool) }),
       ssh: new Ssh2Substrate(runnerSecrets),
@@ -71,9 +78,11 @@ export async function createApp() {
 export function buildApp(input: {
   pool: pg.Pool;
   helloDependencies: Parameters<typeof runHelloWorkflow>[1];
+  secrets?: SecretStore;
   vaultHealthCheck?: () => Promise<{ ok: boolean; status: number }>;
 }) {
   const app = new Hono();
+  const secrets = input.secrets ?? new InMemorySecretStore();
   const vaultHealthCheck = input.vaultHealthCheck ?? vaultHealth;
 
   app.get("/healthz", async (c) => {
@@ -136,6 +145,18 @@ export function buildApp(input: {
     }
   });
 
+  app.post("/credentials/codex/import", async (c) => {
+    const parsed = codexCredentialImportSchema.safeParse(await c.req.json().catch(() => undefined));
+    if (!parsed.success) {
+      return c.json({ error: "invalid_codex_credential", issues: parsed.error.issues }, 400);
+    }
+    try {
+      return c.json(await storeCodexAuthBundle(secrets, parsed.data), 201);
+    } catch (error) {
+      return c.json({ error: "invalid_codex_credential", message: messageFromError(error) }, 400);
+    }
+  });
+
   app.post("/hello/run", async (c) => {
     const summary = await runHelloWorkflow(input.pool, input.helloDependencies);
     return c.json(summary, 201);
@@ -169,7 +190,7 @@ function getProductionPool(): pg.Pool {
   return productionPool;
 }
 
-async function seedRunnerIdentitySecret(secrets: InMemorySecretStore): Promise<void> {
+async function seedRunnerIdentitySecret(secrets: SecretStore): Promise<void> {
   const inlinePrivateKey = process.env.TANREN_RUNNER_IDENTITY_PRIVATE_KEY;
   if (inlinePrivateKey !== undefined && inlinePrivateKey !== "") {
     await secrets.put({ ref: runnerIdentitySecretRef, value: inlinePrivateKey });
@@ -180,6 +201,10 @@ async function seedRunnerIdentitySecret(secrets: InMemorySecretStore): Promise<v
   if (keyPath !== undefined && keyPath !== "") {
     await secrets.put({ ref: runnerIdentitySecretRef, value: await readFile(keyPath, "utf8") });
   }
+}
+
+function messageFromError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
