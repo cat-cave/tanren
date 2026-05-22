@@ -3,7 +3,9 @@ import type pg from "pg";
 import type { Allocator, RunnerAllocation } from "./contracts/allocator.js";
 import type { SshCommandResult, SshSubstrate } from "./contracts/sshSubstrate.js";
 import { type EventStore, PgEventStore } from "./eventStore.js";
-import { fakeAuditor, fakeChecker, fakePlanner, fakeWriter } from "./providers/fake.js";
+import { fakeAuditor, fakeChecker, fakePlanner, createFakeWriter } from "./providers/fake.js";
+import type { WriterResult } from "./providers/types.js";
+import { prepareGitWorkspace, workspaceRepoPathForRun } from "./workspace/index.js";
 
 const defaultRunnerImage = "ghcr.io/cat-cave/tanren-runner:v0";
 const defaultIdentitySecretRef = "runner/local-docker/identity";
@@ -72,13 +74,32 @@ export async function runHelloWorkflow(pool: pg.Pool, dependencies: HelloWorkflo
   await context.appendEvent({ eventType: "hello.started", payload: {} });
 
   try {
-    const runnerProof = await proveRunnerSsh(context, dependencies);
-    await runFakeAgentSteps(pool, context);
+    const allocation = await allocateRunner(context, dependencies);
+    const workspacePath = workspaceRepoPathForRun(runId);
+    let runnerProof: HelloRunnerProof;
+
+    try {
+      runnerProof = await proveRunnerSsh(context, dependencies, allocation);
+      await prepareWorkspace(context, dependencies, allocation, workspacePath);
+      await runFakeAgentSteps(pool, context, {
+        ssh: dependencies.ssh,
+        target: allocation.target,
+        workspacePath,
+        timeoutMs: dependencies.sshTimeoutMs ?? 10_000
+      });
+    } finally {
+      await dependencies.allocator.release(allocation.runnerId);
+      await context.appendEvent({ eventType: "runner.released", payload: { runnerId: allocation.runnerId } });
+    }
+    if (runnerProof === undefined) {
+      throw new Error("runner proof missing after successful SSH proof");
+    }
+
     await pool.query("UPDATE specs SET status = 'done' WHERE spec_id = $1", [specId]);
     await pool.query("UPDATE runs SET outcome = 'hello_world_complete', ended_at = now() WHERE run_id = $1", [runId]);
     await context.appendEvent({
       eventType: "hello.completed",
-      payload: { outcome: "hello_world_complete", runnerProof }
+      payload: { outcome: "hello_world_complete", runnerProof, workspacePath }
     });
     return { runId, specId, projectId, outcome: "hello_world_complete", events: eventCount, runnerProof };
   } catch (error) {
@@ -108,58 +129,81 @@ async function insertHelloRunRows(
   );
 }
 
-async function proveRunnerSsh(
-  context: HelloWorkflowContext,
-  dependencies: HelloWorkflowDependencies
-): Promise<HelloRunnerProof> {
+async function allocateRunner(context: HelloWorkflowContext, dependencies: HelloWorkflowDependencies): Promise<RunnerAllocation> {
   const runnerImage = dependencies.runnerImage ?? defaultRunnerImage;
   const identitySecretRef = dependencies.identitySecretRef ?? defaultIdentitySecretRef;
   const allocationRequest = { runId: context.runId, projectId: context.projectId, runnerImage, identitySecretRef };
 
   await context.appendEvent({ eventType: "allocator.requested", payload: { allocator: "local-docker", runnerImage, identitySecretRef } });
 
-  let allocation: RunnerAllocation;
   try {
-    allocation = await dependencies.allocator.allocate(allocationRequest);
+    const allocation = await dependencies.allocator.allocate(allocationRequest);
+    await context.appendEvent({ eventType: "allocator.allocated", payload: runnerAllocationPayload(allocation) });
+    await context.appendEvent({ eventType: "runner.allocated", payload: runnerAllocationPayload(allocation) });
+    return allocation;
   } catch (error) {
     await context.appendEvent({ eventType: "allocator.failed", payload: { message: messageFromError(error) } });
     throw error;
   }
+}
 
-  await context.appendEvent({ eventType: "allocator.allocated", payload: runnerAllocationPayload(allocation) });
-  await context.appendEvent({ eventType: "runner.allocated", payload: runnerAllocationPayload(allocation) });
-
-  let result: SshCommandResult;
-  try {
-    await context.appendEvent({
-      eventType: "hello.ssh_started",
-      payload: {
-        runnerId: allocation.runnerId,
-        command: runnerProofCommand,
-        target: runnerAllocationPayload(allocation).target
-      }
-    });
-    result = await dependencies.ssh.run(allocation.target, {
+async function proveRunnerSsh(
+  context: HelloWorkflowContext,
+  dependencies: HelloWorkflowDependencies,
+  allocation: RunnerAllocation
+): Promise<HelloRunnerProof> {
+  await context.appendEvent({
+    eventType: "hello.ssh_started",
+    payload: {
+      runnerId: allocation.runnerId,
       command: runnerProofCommand,
+      target: runnerAllocationPayload(allocation).target
+    }
+  });
+  const result = await dependencies.ssh.run(allocation.target, {
+    command: runnerProofCommand,
+    timeoutMs: dependencies.sshTimeoutMs ?? 10_000
+  });
+  if (result.failure !== undefined || result.exitCode !== 0 || result.stdout !== expectedRunnerProofStdout) {
+    await context.appendEvent({
+      eventType: "runner.failed",
+      payload: { runnerId: allocation.runnerId, command: runnerProofCommand, result }
+    });
+    throw new Error(`hello SSH proof failed for ${allocation.runnerId}: ${runnerProofFailureText(result)}`);
+  }
+  const proof = runnerProofPayload(allocation, result);
+  await context.appendEvent({ eventType: "hello.ssh_completed", payload: proof });
+  return proof;
+}
+
+async function prepareWorkspace(
+  context: HelloWorkflowContext,
+  dependencies: HelloWorkflowDependencies,
+  allocation: RunnerAllocation,
+  workspacePath: string
+): Promise<void> {
+  try {
+    await prepareGitWorkspace({
+      ssh: dependencies.ssh,
+      target: allocation.target,
+      workspacePath,
       timeoutMs: dependencies.sshTimeoutMs ?? 10_000
     });
-    if (result.failure !== undefined || result.exitCode !== 0 || result.stdout !== expectedRunnerProofStdout) {
-      await context.appendEvent({
-        eventType: "runner.failed",
-        payload: { runnerId: allocation.runnerId, command: runnerProofCommand, result }
-      });
-      throw new Error(`hello SSH proof failed for ${allocation.runnerId}: ${runnerProofFailureText(result)}`);
-    }
-    const proof = runnerProofPayload(allocation, result);
-    await context.appendEvent({ eventType: "hello.ssh_completed", payload: proof });
-    return proof;
-  } finally {
-    await dependencies.allocator.release(allocation.runnerId);
-    await context.appendEvent({ eventType: "runner.released", payload: { runnerId: allocation.runnerId } });
+    await context.appendEvent({ eventType: "workspace.prepared", payload: { runnerId: allocation.runnerId, workspacePath } });
+  } catch (error) {
+    await context.appendEvent({
+      eventType: "workspace.failed",
+      payload: { runnerId: allocation.runnerId, workspacePath, message: messageFromError(error) }
+    });
+    throw error;
   }
 }
 
-async function runFakeAgentSteps(pool: pg.Pool, context: HelloWorkflowContext): Promise<void> {
+async function runFakeAgentSteps(
+  pool: pg.Pool,
+  context: HelloWorkflowContext,
+  writerInput: { ssh: SshSubstrate; target: RunnerAllocation["target"]; workspacePath: string; timeoutMs: number }
+): Promise<void> {
   const planTaskId = `task_${randomUUID()}`;
   await pool.query(
     `INSERT INTO tasks (task_id, run_id, kind, title, status, outcome, agent_kind, cli, model)
@@ -172,11 +216,34 @@ async function runFakeAgentSteps(pool: pg.Pool, context: HelloWorkflowContext): 
   const writeTaskId = `task_${randomUUID()}`;
   await pool.query(
     `INSERT INTO tasks (task_id, run_id, kind, title, status, outcome, agent_kind, cli, model)
-     VALUES ($1, $2, 'write', $3, 'done', 'ok', 'writer', 'fake', 'fake-writer')`,
+     VALUES ($1, $2, 'write', $3, 'running', null, 'writer', 'fake', 'fake-writer')`,
     [writeTaskId, context.runId, plan.subtasks[0]?.title ?? "Fake writer"]
   );
-  const writer = await fakeWriter.runWriter({ prompt: "Write hello world", workspace: "/workspace", timeoutMs: 1_000 });
+  const fakeWriter = createFakeWriter({ ssh: writerInput.ssh, target: writerInput.target });
+  let writer: WriterResult;
+  try {
+    writer = await fakeWriter.runWriter({
+      prompt: "Write hello world",
+      workspace: writerInput.workspacePath,
+      timeoutMs: writerInput.timeoutMs
+    });
+  } catch (error) {
+    const payload = { workspacePath: writerInput.workspacePath, message: messageFromError(error) };
+    await pool.query(
+      "UPDATE tasks SET status = 'failed', outcome = 'failed', failure_kind = 'workspace_failed', ended_at = now() WHERE task_id = $1",
+      [writeTaskId]
+    );
+    await context.appendEvent({ taskId: writeTaskId, eventType: "workspace.failed", payload });
+    await context.appendEvent({ taskId: writeTaskId, eventType: "writer.failed", payload });
+    throw error;
+  }
+  await context.appendEvent({
+    taskId: writeTaskId,
+    eventType: "workspace.git_captured",
+    payload: { workspacePath: writerInput.workspacePath, commits: writer.commits, diffBytes: Buffer.byteLength(writer.diff, "utf8") }
+  });
   await context.appendEvent({ taskId: writeTaskId, eventType: "writer.completed", payload: writer });
+  await pool.query("UPDATE tasks SET status = 'done', outcome = 'ok', ended_at = now() WHERE task_id = $1", [writeTaskId]);
   await pool.query(
     `INSERT INTO cost_records
      (task_id, run_id, project_id, cli, provider, model, input_tokens, output_tokens, cached_tokens,

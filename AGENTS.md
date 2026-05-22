@@ -21,7 +21,7 @@ The compose smoke for infrastructure changes is:
 
 ```sh
 docker compose build orchestrator dashboard runner
-TANREN_RUNNER_AUTHORIZED_KEY="$(cat /tmp/tanren_runner_key.pub)" docker compose up -d postgres vault orchestrator dashboard runner ntfy
+TANREN_RUNNER_AUTHORIZED_KEY="$(cat /tmp/tanren_runner_key.pub)" TANREN_RUNNER_IDENTITY_PRIVATE_KEY="$(cat /tmp/tanren_runner_key)" docker compose up -d postgres vault orchestrator dashboard runner ntfy
 ```
 
 Then verify CLI `doctor`, `hello`, and `status`, plus runner SSH.

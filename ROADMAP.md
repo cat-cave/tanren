@@ -95,7 +95,7 @@ Phase 0 starts from the completed hello-world baseline and ends when a fake writ
 
 ### SPEC-0005 - workspace-git-contract
 
-**Owns**: `services/orchestrator/src/engine/workspace/**`, `services/orchestrator/src/engine/providers/fake.ts`, `services/orchestrator/src/engine/providers/types.ts`, `fixtures/**`, `runner/**` only for workspace prerequisites.
+**Owns**: `services/orchestrator/src/engine/workspace/**`, `services/orchestrator/src/engine/providers/fake.ts`, `services/orchestrator/src/engine/providers/types.ts`, `services/orchestrator/src/engine/helloWorkflow.ts`, `services/orchestrator/src/engine/events.ts`, `services/orchestrator/tests/**workspace**`, `services/orchestrator/tests/**fakeProviders**`, `services/orchestrator/tests/**hello**`, `fixtures/**`, `runner/**` only for workspace prerequisites.
 **Consumes**: SPEC-0004.
 **Produces**: a stable runner workspace and git mutation contract for Writer tasks.
 

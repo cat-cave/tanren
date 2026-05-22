@@ -5,10 +5,18 @@ import { FakeEventStore } from "../src/engine/eventStore.js";
 import { runHelloWorkflow } from "../src/engine/helloWorkflow.js";
 
 describe("hello workflow", () => {
-  it("allocates a runner, proves SSH execution, releases it, and keeps fake agent behavior", async () => {
+  it("allocates a runner, proves SSH, writes in a git workspace, captures metadata, and releases it", async () => {
     const pool = new FakePool();
     const allocator = new RecordingAllocator();
-    const ssh = new RecordingSsh({ exitCode: 0, stdout: "tanren-hello-over-ssh\n", stderr: "", timedOut: false });
+    const sha = "cccccccccccccccccccccccccccccccccccccccc";
+    const diff = "diff --git a/HELLO.md b/HELLO.md\nnew file mode 100644\n+hello world\n";
+    const ssh = new RecordingSsh([
+      { exitCode: 0, stdout: "tanren-hello-over-ssh\n", stderr: "", timedOut: false },
+      { exitCode: 0, stdout: "", stderr: "", timedOut: false },
+      { exitCode: 0, stdout: "", stderr: "", timedOut: false },
+      { exitCode: 0, stdout: diff, stderr: "", timedOut: false },
+      { exitCode: 0, stdout: `${sha}\thello world\n`, stderr: "", timedOut: false }
+    ]);
     const eventStore = new FakeEventStore();
 
     const summary = await runHelloWorkflow(pool.asPgPool(), {
@@ -28,12 +36,17 @@ describe("hello workflow", () => {
         identitySecretRef: "runner/test/identity"
       }
     ]);
-    expect(ssh.runs).toEqual([
-      {
-        target: allocator.allocation.target,
-        command: { command: "printf 'tanren-hello-over-ssh\\n'", timeoutMs: 250 }
-      }
-    ]);
+    const workspacePath = `/workspace/runs/${summary.runId}/repo`;
+    expect(ssh.runs.map((run) => run.command.cwd)).toEqual([undefined, undefined, workspacePath, workspacePath, workspacePath]);
+    expect(ssh.runs[0]).toEqual({
+      target: allocator.allocation.target,
+      command: { command: "printf 'tanren-hello-over-ssh\\n'", timeoutMs: 250 }
+    });
+    expect(ssh.runs[1]?.command.command).toContain(`mkdir -p '${workspacePath}'`);
+    expect(ssh.runs[1]?.command.command).toContain("git init -b main");
+    expect(ssh.runs[2]?.command.command).toContain("HELLO.md");
+    expect(ssh.runs[3]?.command.command).toBe("git diff --no-color HEAD~1..HEAD");
+    expect(ssh.runs[4]?.command.command).toBe("git log -1 --format='%H%x09%s' HEAD");
     expect(allocator.releases).toEqual(["runner_test"]);
     expect(eventStore.events.map((event) => event.eventType)).toEqual([
       "hello.started",
@@ -42,13 +55,24 @@ describe("hello workflow", () => {
       "runner.allocated",
       "hello.ssh_started",
       "hello.ssh_completed",
-      "runner.released",
+      "workspace.prepared",
       "planner.completed",
+      "workspace.git_captured",
       "writer.completed",
       "checker.completed",
       "auditor.completed",
+      "runner.released",
       "hello.completed"
     ]);
+    expect(eventStore.events.find((event) => event.eventType === "workspace.prepared")?.payload).toEqual({
+      runnerId: "runner_test",
+      workspacePath
+    });
+    expect(eventStore.events.find((event) => event.eventType === "writer.completed")?.payload).toMatchObject({
+      diff,
+      commits: [{ sha, message: "hello world" }]
+    });
+    expect(pool.sql).toContain("UPDATE tasks SET status = 'done', outcome = 'ok', ended_at = now() WHERE task_id = $1");
     expect(summary.runnerProof).toMatchObject({
       runnerId: "runner_test",
       stdout: "tanren-hello-over-ssh\n",
@@ -61,7 +85,7 @@ describe("hello workflow", () => {
   it("releases the runner and records failure when SSH proof fails", async () => {
     const pool = new FakePool();
     const allocator = new RecordingAllocator();
-    const ssh = new RecordingSsh({ exitCode: 7, stdout: "", stderr: "nope", timedOut: false });
+    const ssh = new RecordingSsh([{ exitCode: 7, stdout: "", stderr: "nope", timedOut: false }]);
     const eventStore = new FakeEventStore();
 
     await expect(
@@ -85,7 +109,7 @@ describe("hello workflow", () => {
   it("rejects zero-exit SSH results with the wrong proof output", async () => {
     const pool = new FakePool();
     const allocator = new RecordingAllocator();
-    const ssh = new RecordingSsh({ exitCode: 0, stdout: "wrong\n", stderr: "", timedOut: false });
+    const ssh = new RecordingSsh([{ exitCode: 0, stdout: "wrong\n", stderr: "", timedOut: false }]);
     const eventStore = new FakeEventStore();
 
     await expect(
@@ -103,6 +127,40 @@ describe("hello workflow", () => {
       "runner.released",
       "run.failed"
     ]);
+  });
+
+  it("releases the runner and records failure when the fake writer SSH command fails", async () => {
+    const pool = new FakePool();
+    const allocator = new RecordingAllocator();
+    const ssh = new RecordingSsh([
+      { exitCode: 0, stdout: "tanren-hello-over-ssh\n", stderr: "", timedOut: false },
+      { exitCode: 0, stdout: "", stderr: "", timedOut: false },
+      { exitCode: 9, stdout: "", stderr: "cannot write", timedOut: false }
+    ]);
+    const eventStore = new FakeEventStore();
+
+    await expect(
+      runHelloWorkflow(pool.asPgPool(), { allocator, ssh, eventStore, identitySecretRef: "runner/test/identity" })
+    ).rejects.toThrow("fake writer mutation failed: exit 9");
+
+    expect(allocator.releases).toEqual(["runner_test"]);
+    expect(eventStore.events.map((event) => event.eventType)).toEqual([
+      "hello.started",
+      "allocator.requested",
+      "allocator.allocated",
+      "runner.allocated",
+      "hello.ssh_started",
+      "hello.ssh_completed",
+      "workspace.prepared",
+      "planner.completed",
+      "workspace.failed",
+      "writer.failed",
+      "runner.released",
+      "run.failed"
+    ]);
+    expect(pool.sql).toContain(
+      "UPDATE tasks SET status = 'failed', outcome = 'failed', failure_kind = 'workspace_failed', ended_at = now() WHERE task_id = $1"
+    );
   });
 });
 
@@ -147,10 +205,14 @@ class RecordingAllocator implements Allocator {
 class RecordingSsh implements SshSubstrate {
   readonly runs: Array<{ target: SshTarget; command: SshCommand }> = [];
 
-  constructor(private readonly result: SshCommandResult) {}
+  constructor(private readonly results: SshCommandResult[]) {}
 
   async run(target: SshTarget, command: SshCommand): Promise<SshCommandResult> {
     this.runs.push({ target, command });
-    return this.result;
+    const result = this.results.shift();
+    if (result === undefined) {
+      throw new Error(`unexpected SSH command: ${command.command}`);
+    }
+    return result;
   }
 }
