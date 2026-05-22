@@ -32,6 +32,12 @@ Roadmap specs must declare owned paths before work starts. Parallel agents shoul
 
 Do not revert user changes. If a file has unrelated edits, preserve them and scope your patch to the task.
 
+## Mergify Stacks
+
+Use Mergify stacks for dependent Phase 1+ PRs. Each commit in a stack becomes its own PR and must be independently green. Keep independent specs in separate stacks; use one stack only when later commits genuinely depend on earlier commits.
+
+Do not manually edit stack-managed PR titles or bodies. Put the PR context and validation in the commit message, use `mergify stack push`, and add a `mergify stack note` before pushing any amendment to an already-pushed commit.
+
 ## Version Verification
 
 Before changing any version pin, verify the current version against the upstream project source. This applies to GitHub Actions, Docker images, Node, pnpm, Postgres, Vault, oxlint, TypeScript, and any new runtime dependency. Record the upstream source in the PR or roadmap spec.

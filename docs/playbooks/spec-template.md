@@ -22,3 +22,16 @@ Use this template for every roadmap node. The spec describes work and verificati
 ```
 
 Every spec must be small enough for a single agent to finish without crossing ownership boundaries.
+
+For phases that are no longer sequential, add a dependency graph before the specs:
+
+```text
+SPEC-A
+  -> SPEC-B
+  -> SPEC-C
+
+SPEC-B
+  -> SPEC-D
+```
+
+Only fan out with parallel worktrees or Mergify stacks after the shared contracts at the top of the graph are stable enough for downstream specs to consume.
