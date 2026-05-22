@@ -1,5 +1,8 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createProjectCommand, createSpecCommand, runSpecCommand, status } from "../src/main.js";
+import { createProjectCommand, createSpecCommand, importCodexCredentialCommand, runSpecCommand, status } from "../src/main.js";
 
 describe("cli package", () => {
   afterEach(() => {
@@ -120,6 +123,28 @@ describe("cli package", () => {
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({ trigger: "cli", branch: "tanren/custom" })
+      })
+    );
+  });
+
+  it("imports Codex credentials from an explicit file path", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tanren-cli-"));
+    const authPath = join(dir, "auth.json");
+    const authJson = JSON.stringify({ tokens: { access_token: "secret-token" } });
+    const fetch = stubJsonFetch({ credentialKind: "codex_chatgpt_auth", ref: "credential/codex/dev", redacted: true });
+
+    try {
+      await writeFile(authPath, authJson, "utf8");
+      await importCodexCredentialCommand(["--ref", "credential/codex/dev", "--auth-json-file", authPath]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+
+    expect(fetch).toHaveBeenCalledWith(
+      "http://localhost:3100/credentials/codex/import",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ ref: "credential/codex/dev", authJson })
       })
     );
   });
