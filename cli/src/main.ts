@@ -88,14 +88,41 @@ export async function importCodexCredentialCommand(argv: string[]) {
   console.log(JSON.stringify(credential, null, 2));
 }
 
+export async function importGithubCredentialCommand(argv: string[]) {
+  const args = parseArgs(argv);
+  const token = await readFile(required(args, "token-file"), "utf8");
+  const credential = await jsonRequest("/credentials/github/import", {
+    ref: required(args, "ref"),
+    token
+  });
+  console.log(JSON.stringify(credential, null, 2));
+}
+
+export async function createDraftPrCommand(argv: string[]) {
+  const args = parseArgs(argv);
+  const runId = optional(args, "run-id") ?? args._[0];
+  if (runId === undefined) {
+    throw new Error("usage: tanren run draft-pr --run-id <run_id>");
+  }
+  const draftPr = await jsonRequest(`/runs/${runId}/github/draft-pr`, {
+    githubCredentialRef: optional(args, "github-credential-ref"),
+    workspacePath: optional(args, "workspace-path"),
+    title: optional(args, "title"),
+    body: optional(args, "body")
+  });
+  console.log(JSON.stringify(draftPr, null, 2));
+}
+
 export function usage() {
   console.log(`tanren <command>
 
 Commands:
   doctor             Check orchestrator, Postgres, and Vault connectivity
   credential codex import --ref <ref> --auth-json-file <path>
+  credential github import --ref <ref> --token-file <path>
   hello              Trigger a fake hello-world workflow run
   project create     Create a persisted project contract
+  run draft-pr       Push a runner workspace branch and open/reuse a draft PR
   spec create        Create a persisted spec contract
   spec run           Create a queued run from a persisted spec
   status <run_id>    Print persisted run state
@@ -130,10 +157,20 @@ export async function main(argv: string[]) {
       }
       throw new Error("usage: tanren spec <create|run>");
     case "credential":
-      if (subcommand !== "codex" || rest[0] !== "import") {
-        throw new Error("usage: tanren credential codex import --ref <ref> --auth-json-file <path>");
+      if (subcommand === "codex" && rest[0] === "import") {
+        await importCodexCredentialCommand(rest.slice(1));
+        break;
       }
-      await importCodexCredentialCommand(rest.slice(1));
+      if (subcommand === "github" && rest[0] === "import") {
+        await importGithubCredentialCommand(rest.slice(1));
+        break;
+      }
+      throw new Error("usage: tanren credential <codex|github> import");
+    case "run":
+      if (subcommand !== "draft-pr") {
+        throw new Error("usage: tanren run draft-pr --run-id <run_id>");
+      }
+      await createDraftPrCommand(rest);
       break;
     case "status":
       await status(subcommand);

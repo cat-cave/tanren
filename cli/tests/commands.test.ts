@@ -2,7 +2,15 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createProjectCommand, createSpecCommand, importCodexCredentialCommand, runSpecCommand, status } from "../src/main.js";
+import {
+  createDraftPrCommand,
+  createProjectCommand,
+  createSpecCommand,
+  importCodexCredentialCommand,
+  importGithubCredentialCommand,
+  runSpecCommand,
+  status
+} from "../src/main.js";
 
 describe("cli package", () => {
   afterEach(() => {
@@ -145,6 +153,43 @@ describe("cli package", () => {
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({ ref: "credential/codex/dev", authJson })
+      })
+    );
+  });
+
+  it("imports GitHub credentials from an explicit file path", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tanren-cli-"));
+    const tokenPath = join(dir, "github-token");
+    const fetch = stubJsonFetch({ credentialKind: "github_token", ref: "credential/github/dev", redacted: true });
+
+    try {
+      await writeFile(tokenPath, "ghp_secretToken", "utf8");
+      await importGithubCredentialCommand(["--ref", "credential/github/dev", "--token-file", tokenPath]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+
+    expect(fetch).toHaveBeenCalledWith(
+      "http://localhost:3100/credentials/github/import",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ ref: "credential/github/dev", token: "ghp_secretToken" })
+      })
+    );
+  });
+
+  it("requests draft PR creation for a run", async () => {
+    const fetch = stubJsonFetch({ prUrl: "https://github.com/cat-cave/repo/pull/1" });
+
+    await createDraftPrCommand(["--run-id", "run_1", "--github-credential-ref", "credential/github/dev"]);
+
+    expect(fetch).toHaveBeenCalledWith(
+      "http://localhost:3100/runs/run_1/github/draft-pr",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          githubCredentialRef: "credential/github/dev"
+        })
       })
     );
   });
