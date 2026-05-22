@@ -5,6 +5,7 @@ export interface WorkspaceSshCommand {
   command: string;
   cwd?: string;
   label: string;
+  stdin?: string;
   timeoutMs: number;
 }
 
@@ -41,4 +42,3 @@ function workspaceFailureMessage(label: string, result: SshCommandResult): strin
   }
   return `${label} failed: exit ${result.exitCode ?? "unknown"}`;
 }
-

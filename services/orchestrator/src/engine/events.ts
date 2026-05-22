@@ -10,7 +10,7 @@ export const eventNamesByScope = {
   workspace: ["workspace.prepared", "workspace.git_captured", "workspace.failed"],
   credential: ["credential.requested", "credential.loaded", "credential.failed"],
   cost: ["cost.resolved", "cost.failed"],
-  github: ["github.pr.created", "github.pr.ready", "github.pr.merged", "github.failed"],
+  github: ["github.branch.pushed", "github.pr.created", "github.pr.ready", "github.pr.merged", "github.failed"],
   ci: ["ci.started", "ci.passed", "ci.failed"],
   review: ["review.requested", "review.approved", "review.changes_requested"],
   notification: ["notification.enqueued", "notification.sent", "notification.failed"],

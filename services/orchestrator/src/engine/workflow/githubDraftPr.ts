@@ -1,0 +1,267 @@
+import type pg from "pg";
+import type { SshTarget } from "../contracts/allocator.js";
+import type { SecretStore } from "../contracts/secretStore.js";
+import type { SshSubstrate } from "../contracts/sshSubstrate.js";
+import { redactedGithubTokenResult, validateGithubCredentialRef, validateGithubToken } from "../credentials/githubToken.js";
+import { type EventStore, PgEventStore } from "../eventStore.js";
+import { GitHubPullRequestService, parseGitHubRepository, type GitHubHttpClient } from "../providers/github.js";
+import { workspaceRepoPathForRun } from "../workspace/index.js";
+import { draftPrBranchName, pushWorkspaceBranchToGitHub } from "../workspace/githubPush.js";
+
+type RunStateClient = Pick<pg.Pool | pg.PoolClient, "query">;
+
+export interface PublishDraftPullRequestInput {
+  pool: RunStateClient;
+  eventStore?: EventStore;
+  secrets: SecretStore;
+  githubHttp: GitHubHttpClient;
+  ssh: SshSubstrate;
+  target: SshTarget;
+  runId: string;
+  specId: string;
+  projectId: string;
+  workspacePath: string;
+  repoUrl: string;
+  targetBranch: string;
+  runBranch?: string;
+  title: string;
+  body?: string;
+  githubCredentialRef?: string;
+  projectConfig?: Record<string, unknown>;
+  timeoutMs: number;
+}
+
+export interface PublishedDraftPullRequest {
+  branch: string;
+  prUrl: string;
+  prNumber: number;
+  reused: boolean;
+}
+
+export interface PublishDraftPullRequestForRunInput {
+  pool: RunStateClient;
+  eventStore?: EventStore;
+  secrets: SecretStore;
+  githubHttp: GitHubHttpClient;
+  ssh: SshSubstrate;
+  runId: string;
+  githubCredentialRef?: string;
+  identitySecretRef: string;
+  workspacePath?: string;
+  title?: string;
+  body?: string;
+  timeoutMs: number;
+}
+
+export class DraftPrRunNotFoundError extends Error {
+  constructor(runId: string) {
+    super(`run not found for draft PR publication: ${runId}`);
+  }
+}
+
+export class DraftPrRunnerNotFoundError extends Error {
+  constructor(runId: string) {
+    super(`runner not found for draft PR publication: ${runId}`);
+  }
+}
+
+export async function publishDraftPullRequest(input: PublishDraftPullRequestInput): Promise<PublishedDraftPullRequest> {
+  const eventStore = input.eventStore ?? new PgEventStore(input.pool);
+  const context = eventContext(input);
+  const branch = draftPrBranchName({ runId: input.runId, requestedBranch: input.runBranch });
+  const credentialRef = githubCredentialRefFromInput(input);
+
+  try {
+    await eventStore.append({
+      ...context,
+      eventType: "credential.requested",
+      payload: redactedGithubTokenResult(credentialRef)
+    });
+    const token = await loadGithubToken(input.secrets, credentialRef);
+    await eventStore.append({
+      ...context,
+      eventType: "credential.loaded",
+      payload: redactedGithubTokenResult(credentialRef)
+    });
+    await pushWorkspaceBranchToGitHub({ ...input, branch, credentialRef });
+    await eventStore.append({
+      ...context,
+      eventType: "github.branch.pushed",
+      payload: { repoUrl: input.repoUrl, branch, credentialRef, redacted: true }
+    });
+
+    const service = new GitHubPullRequestService(input.githubHttp);
+    const pr = await service.ensureDraftPullRequest({
+      repo: parseGitHubRepository(input.repoUrl),
+      token,
+      headBranch: branch,
+      baseBranch: input.targetBranch,
+      title: input.title,
+      body: input.body
+    });
+    await input.pool.query("UPDATE runs SET pr_url = $2 WHERE run_id = $1", [input.runId, pr.url]);
+    await eventStore.append({
+      ...context,
+      eventType: "github.pr.created",
+      payload: { repoUrl: input.repoUrl, branch, targetBranch: input.targetBranch, prUrl: pr.url, prNumber: pr.number, reused: pr.reused }
+    });
+    return { branch, prUrl: pr.url, prNumber: pr.number, reused: pr.reused };
+  } catch (error) {
+    await eventStore.append({
+      ...context,
+      eventType: "github.failed",
+      payload: { operation: "publish_draft_pull_request", branch, message: messageFromError(error) }
+    });
+    throw error;
+  }
+}
+
+export async function publishDraftPullRequestForRun(input: PublishDraftPullRequestForRunInput): Promise<PublishedDraftPullRequest> {
+  const context = await loadDraftPrRunContext(input.pool, input.runId);
+  if (context === undefined) {
+    throw new DraftPrRunNotFoundError(input.runId);
+  }
+  if (context.runner === undefined) {
+    throw new DraftPrRunnerNotFoundError(input.runId);
+  }
+
+  return await publishDraftPullRequest({
+    pool: input.pool,
+    eventStore: input.eventStore,
+    secrets: input.secrets,
+    githubHttp: input.githubHttp,
+    ssh: input.ssh,
+    target: {
+      host: context.runner.sshHost,
+      port: context.runner.sshPort,
+      username: "tanren",
+      hostKeyFingerprint: context.runner.hostKeyFingerprint,
+      identitySecretRef: input.identitySecretRef
+    },
+    runId: context.runId,
+    specId: context.specId,
+    projectId: context.projectId,
+    workspacePath: input.workspacePath ?? workspaceRepoPathForRun(context.runId),
+    repoUrl: context.repoUrl,
+    targetBranch: context.defaultBranch,
+    runBranch: context.branch,
+    title: input.title ?? `Tanren: ${context.specTitle}`,
+    body: input.body ?? context.specDescription,
+    githubCredentialRef: input.githubCredentialRef,
+    projectConfig: context.projectConfig,
+    timeoutMs: input.timeoutMs
+  });
+}
+
+async function loadDraftPrRunContext(pool: RunStateClient, runId: string): Promise<DraftPrRunContext | undefined> {
+  const result = await pool.query(
+    `SELECT
+       r.run_id,
+       r.spec_id,
+       r.project_id,
+       r.branch,
+       p.repo_url,
+       p.default_branch,
+       p.config,
+       s.title AS spec_title,
+       s.description AS spec_description,
+       runner.ssh_host,
+       runner.ssh_port,
+       runner.host_key_fingerprint
+     FROM runs r
+     JOIN projects p ON p.project_id = r.project_id
+     JOIN specs s ON s.spec_id = r.spec_id
+     LEFT JOIN LATERAL (
+       SELECT ssh_host, ssh_port, host_key_fingerprint
+       FROM runners
+       WHERE run_id = r.run_id
+       ORDER BY created_at DESC
+       LIMIT 1
+     ) runner ON true
+     WHERE r.run_id = $1`,
+    [runId]
+  );
+  const row = result.rows[0] as DraftPrRunRow | undefined;
+  if (row === undefined) {
+    return undefined;
+  }
+  return {
+    runId: row.run_id,
+    specId: row.spec_id,
+    projectId: row.project_id,
+    branch: row.branch,
+    repoUrl: row.repo_url,
+    defaultBranch: row.default_branch,
+    projectConfig: asRecord(row.config),
+    specTitle: row.spec_title,
+    specDescription: row.spec_description,
+    runner:
+      row.ssh_host === null || row.ssh_port === null || row.host_key_fingerprint === null
+        ? undefined
+        : {
+            sshHost: row.ssh_host,
+            sshPort: Number(row.ssh_port),
+            hostKeyFingerprint: row.host_key_fingerprint
+          }
+  };
+}
+
+function githubCredentialRefFromInput(input: PublishDraftPullRequestInput): string {
+  const configured = input.githubCredentialRef ?? input.projectConfig?.githubCredentialRef;
+  if (typeof configured !== "string") {
+    throw new Error("GitHub credential ref is required");
+  }
+  return validateGithubCredentialRef(configured);
+}
+
+async function loadGithubToken(secrets: SecretStore, ref: string): Promise<string> {
+  const secret = await secrets.get(ref);
+  if (secret === undefined) {
+    throw new Error(`missing GitHub credential ref: ${ref}`);
+  }
+  return validateGithubToken(secret.value);
+}
+
+function eventContext(input: PublishDraftPullRequestInput) {
+  return { runId: input.runId, specId: input.specId, projectId: input.projectId };
+}
+
+interface DraftPrRunContext {
+  runId: string;
+  specId: string;
+  projectId: string;
+  branch: string;
+  repoUrl: string;
+  defaultBranch: string;
+  projectConfig: Record<string, unknown>;
+  specTitle: string;
+  specDescription: string;
+  runner?: {
+    sshHost: string;
+    sshPort: number;
+    hostKeyFingerprint: string;
+  };
+}
+
+interface DraftPrRunRow {
+  run_id: string;
+  spec_id: string;
+  project_id: string;
+  branch: string;
+  repo_url: string;
+  default_branch: string;
+  config: unknown;
+  spec_title: string;
+  spec_description: string;
+  ssh_host: string | null;
+  ssh_port: number | null;
+  host_key_fingerprint: string | null;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function messageFromError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
