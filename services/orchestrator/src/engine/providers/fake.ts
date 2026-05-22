@@ -1,3 +1,6 @@
+import type { SshTarget } from "../contracts/allocator.js";
+import type { SshSubstrate } from "../contracts/sshSubstrate.js";
+import { captureGitMutation, runFakeWriterMutation } from "../workspace/index.js";
 import type { AnswererAdapter, WriterAdapter, WriterResult } from "./types.js";
 
 export interface FakePlan {
@@ -15,6 +18,11 @@ export interface FakeCheck {
 export interface FakeAudit {
   verified: boolean;
   reason: string;
+}
+
+export interface FakeWriterDependencies {
+  ssh: SshSubstrate;
+  target: SshTarget;
 }
 
 export const fakePlanner: AnswererAdapter<FakePlan> = {
@@ -36,14 +44,26 @@ export const fakeWriter: WriterAdapter = {
   kind: "writer",
   cli: "fake",
   async runWriter(): Promise<WriterResult> {
-    return {
-      diff: "diff --git a/HELLO.md b/HELLO.md\n+hello from tanren\n",
-      commits: [{ sha: "fake-commit", message: "hello world" }],
-      exitReason: "completed",
-      tokenUsage: { inputTokens: 32, outputTokens: 16, cachedTokens: 0 }
-    };
+    throw new Error("fake writer requires a runner SSH target; use createFakeWriter");
   }
 };
+
+export function createFakeWriter(dependencies: FakeWriterDependencies): WriterAdapter {
+  return {
+    kind: "writer",
+    cli: "fake",
+    async runWriter(opts): Promise<WriterResult> {
+      const input = {
+        ssh: dependencies.ssh,
+        target: dependencies.target,
+        workspacePath: opts.workspace,
+        timeoutMs: opts.timeoutMs
+      };
+      await runFakeWriterMutation(input);
+      return await captureGitMutation(input);
+    }
+  };
+}
 
 export const fakeChecker: AnswererAdapter<FakeCheck> = {
   kind: "answerer",

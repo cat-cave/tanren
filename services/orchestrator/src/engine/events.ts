@@ -6,6 +6,7 @@ export const eventNamesByScope = {
   auditor: ["auditor.started", "auditor.completed", "auditor.failed"],
   runner: ["runner.allocated", "runner.released", "runner.failed"],
   allocator: ["allocator.requested", "allocator.allocated", "allocator.failed"],
+  workspace: ["workspace.prepared", "workspace.git_captured", "workspace.failed"],
   credential: ["credential.requested", "credential.loaded", "credential.failed"],
   cost: ["cost.resolved", "cost.failed"],
   github: ["github.pr.created", "github.pr.ready", "github.pr.merged", "github.failed"],
