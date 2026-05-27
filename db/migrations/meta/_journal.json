@@ -50,6 +50,13 @@
       "when": 1779924542412,
       "tag": "0006_groovy_flatman",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1779924944429,
+      "tag": "0007_superb_black_knight",
+      "breakpoints": true
     }
   ]
 }
