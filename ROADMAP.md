@@ -337,50 +337,152 @@ P1-0005 depends on P1-0004 and can begin as soon as the PR contract is stable. P
 
 ## Phase 2: Operator-Controlled Workflow
 
-Status: planned.
+Status: planned. Scoped 2026-05-27 against `docs/audits/phase2-readiness.md`; re-scoped 2026-05-28 against the hi-fi vision artifact (`tanren-hi-fidelity` bundle).
 
-Phase 2 should turn the live Phase 1 proof from an opt-in test harness into an operator-controlled product surface. The end state is that an operator can register a project, configure credentials, submit a spec, run the real workflow, and inspect planner/write/check/audit/PR/CI state without reading database rows, test logs, or fixture-only code.
+Phase 2 turns the live Phase 1 proof from an opt-in test harness into an operator-controlled product surface that matches a defined subset of the hi-fi long-term vision. The end state is that an operator can register a GitHub org as a Tanren tenant, link a repo, configure credentials and routing, submit a spec, run the real workflow, recover from failure, and view the resulting PR — all through the dashboard with no CLI or DB access.
 
-### Phase 2 Dependency Graph
+Phase 2 is split into 2A (operator backend and contracts, no user-visible UI changes) and 2B (operator dashboard and the first operator-driven live run). Design tokens are imported at the 2A→2B boundary; hi-fi screens must be locked per surface before each 2B spec begins.
 
-```text
-P2-0001 phase1-closeout-docs
-  -> P2-0002 phase2-workflow-inventory
-  -> P2-0003 design-system-import
+The hi-fi is treated as a **vision artifact** depicting the long-term product. Phase 2 ships a defined subset of it. ROADMAP carries the phasing; the hi-fi is not phase-tagged by ROADMAP. Items present in the hi-fi but deferred from Phase 2 are named explicitly in the "Phase 2 scope against the hi-fi" subsection and again in Phase 3.
 
-P2-0002
-  -> P2-0004 project-spec-cli-api
-  -> P2-0005 run-detail-api-contract
+### Phase 2 Decision Record
 
-P2-0003 + P2-0005
-  -> P2-0006 dashboard-run-detail-view
+The following ground rules were locked between 2026-05-27 and 2026-05-28 and shape every spec below:
 
-P2-0004 + P2-0005
-  -> P2-0007 operator-triggered-live-workflow
+- Multi-user authentication from day one with **organization** as the top-level tenant (= GitHub org). GitHub OAuth is the first identity provider; an OIDC provider interface (Authentik first) is prepared even though Authentik does not ship in Phase 2.
+- Redaction is raw-stored and applied on read against actor access scope; the event log is treated as a compliance substrate.
+- Zod is the single source of truth for workflow state, project config, event payloads, Answerer schemas, and the product-entity model (organizations, projects, personas, behaviors, milestones, spec dependencies).
+- Dev and prod compose profiles are split; prod requires operator-provided Vault and Postgres secrets and publishes only the dashboard.
+- The acceptance gate runs locally via `just acceptance`; live Codex/GitHub credentials never enter GitHub Actions secrets.
+- Cost persistence is mandatory; unattributable usage fails the task. No unknown-source rows.
+- The v0 routing table has **six roles**: plan, write, check, audit, demo, forge. All except `write` use the Answerer interface. Routing is stored as a per-role fallback chain `(cli, model, authRef)[]`, even when v0 has only Codex entries — the schema does not change when Claude and opencode arrive in Phase 3.
+- **Forge** is an Answerer role with broader read scope (cross-spec + target repo + Tanren DB) and conversation-mode invocation. Phase 2 ships its data substrate (turns table, tool schema, read-only tool stubs, a small set of operator-actionable write buttons) but not an LLM-driven conversation backend.
+- **demo** is a legitimate Answerer role (spec-completion narration for review). Phase 2 ships its schema and a templated v0 generator.
+- **Config bucketing is principled**: artifacts that GitHub or Mergify reads (`.github/workflows/tanren-ci.yml`, `.mergify.yml`, `CODEOWNERS`) live in the target repo with the target repo as source of truth; everything else (routing, retry budgets, notifications matrix, allocator selection, Vault refs, personas, behaviors, milestones, governance posture, Forge persona) lives in the orchestrator DB. No two-way sync. Phase 2 writes config to DB only; Phase 3 introduces the optional `tanren-config` repo audit gate and the brownfield config-injection PR pattern (which generates a one-time `.tanren/PROJECT.md` snapshot, not an ongoing mirror).
+- Review and merge loops remain Phase 3; the Phase 2 review surface displays state and supports behavior verification, but its sign-off CTAs reflect "merge integration is configurable per-repo and not yet wired" rather than acting on the PR.
+- Notifications matrix schema is full (per-event × per-channel × severity, with dev-layered overrides on org defaults); v0 implementation only wires ntfy. Slack and GitHub Checks ship in Phase 3.
+- Codex remains the only working provider in Phase 2 (Writer, Answerer, Planner, demo generator, forge stub generator). Claude and opencode arrive in Phase 3.
 
-P2-0007
-  -> P2-0008 phase2-end-to-end-demo
-```
+### Phase 2 Dependency Summary
+
+Phase 2A has six work groups; full ASCII dependency graphs are in [`docs/roadmap/phase-2a-specs.md`](docs/roadmap/phase-2a-specs.md) and [`docs/roadmap/phase-2b-specs.md`](docs/roadmap/phase-2b-specs.md).
+
+- **Foundation (sequential, blocks everything)**: P2A-0001 → P2A-0002.
+- **Security stack**: P2A-0003 → P2A-0004.
+- **Typed-contracts stack**: P2A-0005 → P2A-0018 → (P2A-0006 ∥ P2A-0007 ∥ P2A-0008).
+- **Runtime stack**: P2A-0009 (after 0003 + 0007), P2A-0010 (after 0004 + 0005), P2A-0011 (after 0005 + 0007), P2A-0017 (after 0006 + 0007 + 0011).
+- **Workflow stack**: P2A-0012 (after 0005 + 0008 + 0011) → P2A-0019 → P2A-0020.
+- **Product API stack**: P2A-0013 (after 0003 + 0006 + 0018), P2A-0014 (after 0005 + 0007 + 0009 + 0011 + 0019 + 0020 + 0002).
+- **Closeout + boundary**: P2A-0015 acceptance gate closes 2A; P2A-0016 tokens land at the 2A→2B boundary.
+
+Phase 2B fans out from P2A-0016 + P2A-0003 into P2B-0001 (shell), which gates P2B-0002…0005 + P2B-0008 + P2B-0009 in parallel. P2B-0006 (operator-triggered live workflow) requires P2B-0002 + P2B-0003 + P2B-0004 + P2B-0008 + P2A-0015. P2B-0007 (demo) closes Phase 2.
 
 ### Phase 2 Workflow Inventory
 
-Before dashboard implementation, design and acceptance criteria should cover:
+Locked in P2A-0002 against the hi-fi vision. Phase 2B may not ship a screen whose acceptance criteria are not artifacted under `docs/design/acceptance-criteria/**`. Each row names the hi-fi surface, the owning Phase 2B spec, and any reductions from the hi-fi as-shown:
 
-- Onboarding: stack health, Vault health, runner health, first credential import.
-- Credential setup: Codex auth bundle, GitHub token or app credential, later Claude and opencode.
-- Project setup: repo URL, default branch, allocator, credential refs, runner image.
-- Spec creation: title, description, acceptance criteria, target project.
-- Run detail: planner, writer, checker, auditor, GitHub PR, CI, events, costs, failures.
-- Review handoff: draft PR created, CI passed or failed, auditor verdict, operator next action.
-- Failure recovery: credential failure, writer timeout, invalid Answerer JSON, CI failure, runner failure.
-- Settings: allocator config, provider routes, notifications, credential rotation.
-- History and costs: prior runs, task costs, token usage, infrastructure/runtime proof.
+- **Shell + ⌘K palette**: top bar (org pill, project crumb, ink/ash, ⌘K, notifications), sidenav (org/projects/setup/onboarding groups). Owned by P2B-0001. Reductions: org/personas/DORA sidenav rows ship as labeled placeholders (Phase 3).
+- **Onboarding · org setup** (hi-fi 01a, 4 steps): GitHub org link, credentials (org+dev), notifications, infrastructure (allocator + budgets). Owned by P2B-0002. Reductions: cloud allocators are visual stubs (Phase 4+); infrastructure step shows local-docker only in v0; the "label → allocator routing" future-panel stays as a phase-tagged stub.
+- **Onboarding · existing project (minimal)** (hi-fi 01c, subset): step 1 link-repo + a thin project-config form replacing steps 2–5. Owned by P2B-0002. Reductions: brownfield recon agent, config-injection PR, agent-gap analysis, governance-posture picker, codeowners scaffold all defer to Phase 3.
+- **Onboarding · greenfield new project (stretch)** (hi-fi 01b, thin): step 1 a basic project-create form (title, description, repo, behaviors as free-text). Owned by P2B-0009. Reductions: the full Forge interview, derived spec DAG, sources/audits/arrival pages defer to Phase 3.
+- **Project view · chat-primary** (hi-fi 03 chat mode): Forge attention queue + suboptimal callouts (retry hotspot, model mismatch, pace anomaly) + activity feed + velocity card. Owned by P2B-0003. Reductions: dag-primary mode (full DAG canvas, milestones, behavior badges) defers to Phase 3; "stuck" and "review stall" callouts defer (require DAG dependency chain + review polling).
+- **Run detail** (hi-fi 05): cost bar (4 sources), trajectory spine with planner subtasks, writer's reasoning (intent + BDD + tool calls + decisions). Owned by P2B-0004. Reductions: live preview deploy pane (Phase 3); subscription-window heatmap is not shown here (lives in costs).
+- **Review handoff** (hi-fi 06): behaviors checklist, deferrals resolution, preview pane, readiness gate. Owned by P2B-0004 sub-surface. Reductions: sign-off CTAs render as "merge integration · configurable per-repo · not wired in v0"; live preview-deploy iframe defers to Phase 3.
+- **Failure recovery** (hi-fi 07): halted-run page with 4 recovery cards (revise spec, replan with steering, rollback, open inspection thread) + DAG impact strip. Owned by P2B-0008. Reductions: DAG impact strip renders as a flat list of downstream-blocked specs (no DAG layout) until Phase 3.
+- **Settings · routing & limits** (hi-fi 08): 6-role × fallback-chain UI, Vault per-cred policy list, escape hatches, Forge config edit prompt. Owned by P2B-0003 sub-surface. Reductions: only Codex-bound chain rows are functional in v0; "edits land as a pr" is conditional on the org's audit-gate setting which defaults off in Phase 2.
+- **History & costs** (hi-fi 09): total spend stacked bar (4 sources), provider breakdown table, burn projection, subscription-window headroom panel. Owned by P2B-0005. Reductions: subscription-window utilization heatmap and DORA panel defer to Phase 3.
+- **Spec discovery** (hi-fi 02): defers to Phase 3 entirely (requires thick Forge + full DAG + behaviors).
+- **Notifications matrix** (within hi-fi 01a step 3): per-event × per-channel × severity matrix UI. Owned by P2B-0002. Reductions: only ntfy is implementable in v0; slack/github-checks render as "configured but not yet wired" stubs; teams/discord/email/twilio/pagerduty/webhook render as phase-badged future channels (already done in hi-fi).
 
 ### Phase 2 Prep Notes
 
-- Pull the external beta design system into this repo before user-visible Phase 2 dashboard work, but land it first as isolated source design artifacts under `docs/design/**`.
-- Wireframes and high-fidelity mockups are not required for backend-only Phase 2 specs, but they are required before serious dashboard implementation.
-- Do not globally restyle the dashboard in the same PR that imports the design system.
-- Keep provider expansion, remote allocators, and merge automation separate from the operator-control path unless their owned paths are isolated.
-- The next implementation angle is making the already-working Phase 1 loop operable by a human, not adding every v0 provider at once.
-- Use `docs/audits/phase2-readiness.md` as Phase 2 backlog input. The highest-priority prep items are operator auth, dev/prod compose separation, typed workflow/config/event contracts, runner cleanup/redaction, real planning/review/merge loops, cost persistence, queue recovery, and an executable acceptance gate.
+- The hi-fi (`tanren-hi-fidelity` bundle, May 2026) is the long-term product vision and is not phase-tagged by this ROADMAP. Vision-level changes to the hi-fi are tracked separately in `docs/design/hifi-vision-changes.md`; phase-tagging happens here, not in the hi-fi.
+- Design tokens land in P2A-0016 at the 2A→2B boundary. Hi-fi screens must be locked per surface before each 2B spec begins; no global dashboard restyle in the import spec.
+- Phase 2A is the largest contract block this project has scoped (20 specs). Mergify stacks must stay short and self-contained; the parallelization plan below identifies the five independent swimlanes.
+- Real review and merge loops (PROJECT_BRIEF §2.1 steps 9–11) are Phase 3, not Phase 2B. The hi-fi review readiness gate is repo-configurable in the long-term vision; Phase 2 ships the CTAs as `merge integration · not wired in v0`.
+- Provider expansion (Claude Writer, Claude Answerer, opencode Writer with Zai GLM 5.1) is Phase 3. Wafer pass-through through opencode was discontinued on 2026-05-27 and no longer appears in any Phase 2, Phase 3, or hi-fi plan; PROJECT_BRIEF §3.1 still references it and is amended at Phase 3 entry.
+- Remote allocators (Hetzner, manual-SSH) remain Phase 3.
+- Brownfield onboarding ships its "minimal existing" form in Phase 2: link the repo + fill a project-config form. Brownfield recon agent, agent-gap analysis, config-injection PR (which generates a one-time `.tanren/PROJECT.md` snapshot as a transparency artifact), and codeowners scaffolding all defer to Phase 3.
+- Greenfield onboarding ships only as a stretch goal in Phase 2 and only in a thin form (no Forge interview). The full multi-round vision interview, derived spec DAG, and sources/audits/arrival surfaces are Phase 3.
+- All Phase 2A schema migrations are destructive against existing local dev data. The Phase 1 live proof (`run_a347d451…`) is preserved as a ROADMAP record, not as a preserved DB row.
+- Use `docs/audits/phase2-readiness.md` as the audit reference. Every audit critical and high finding is owned by a Phase 2A spec, with the exception of review/merge implementation (Phase 3), required-check awareness (Phase 3), queue lease recovery (Phase 3), latency observability (Phase 3), and coverage thresholds (Phase 3).
+
+Detailed Owns / Consumes / Produces / What / Why / How / Test plan / Quality bar / Real-functionality validation / Worktree-isolation safety entries for each P2A spec are in [`docs/roadmap/phase-2a-specs.md`](docs/roadmap/phase-2a-specs.md).
+
+| Spec | Title | Notes |
+|---|---|---|
+| P2A-0001 | phase1-closeout-docs | Operator-readable Phase 1 closeout. |
+| P2A-0002 | phase2-workflow-inventory | Lock low-fi wireframes + acceptance criteria per surface. |
+| P2A-0003 | operator-auth-control-plane | Orgs + users + GitHub OAuth + OIDC interface. |
+| P2A-0004 | dev-prod-compose-split | `compose.dev.yml` and `compose.prod.yml` profiles. |
+| P2A-0005 | typed-workflow-state-contract | Zod discriminated unions for run/spec/task/job/actor state. |
+| P2A-0006 | versioned-project-config | 6-role × fallback-chain routing; org + project config. |
+| P2A-0007 | event-payload-schemas | Semantic-rich event payloads for Forge narration. |
+| P2A-0008 | answerer-schema-single-source | Zod source for all 5 Answerer roles (plan/check/audit/demo/forge). |
+| P2A-0009 | redaction-access-scope | Raw-stored, redact-on-read by actor scope. |
+| P2A-0010 | runner-allocator-isolation | Allocator sidecar; ephemeral runners; workspace + auth cleanup. |
+| P2A-0011 | cost-record-persistence | Mandatory attribution; no unknown-source rows. |
+| P2A-0012 | planner-feedback-loops | Real Planner subtasks; checker + auditor rejection loops. |
+| P2A-0013 | project-spec-cli-api | Orgs/projects/specs/behaviors/milestones/credentials CRUD + `/doctor`. |
+| P2A-0014 | run-detail-api-contract | Read API the dashboard consumes; SSE, pagination, redaction. |
+| P2A-0015 | executable-acceptance-gate | `just acceptance-easy` and `just acceptance-medium`. |
+| P2A-0016 | design-system-import | Tokens land at the 2A→2B boundary; no restyle. |
+| P2A-0017 | notifications-contract | Full event×channel×severity matrix schema; ntfy-only impl. |
+| P2A-0018 | product-entities-contract | Personas / behaviors / milestones / spec-dependency edges. |
+| P2A-0019 | forge-narration-and-tool-surface | Threads + turns + tool schema + read-only stubs + operator-button write actions. |
+| P2A-0020 | workflow-insights-contract | `retry_hotspot`, `model_mismatch`, `pace_anomaly` insights. |
+
+### P2A Parallelization Plan
+
+After P2A-0001 and P2A-0002 land, five independent swimlanes proceed in parallel as Mergify stacks:
+
+- **Security stack**: P2A-0003 then P2A-0004.
+- **Typed-contracts stack**: P2A-0005, P2A-0018, P2A-0006, P2A-0007, P2A-0008 (P2A-0005 first; P2A-0018 next; the rest fan out).
+- **Runtime stack**: P2A-0009 (after P2A-0003 + P2A-0007), P2A-0010 (after P2A-0004 + P2A-0005), P2A-0011 (after P2A-0005 + P2A-0007), P2A-0017 (after P2A-0007 + P2A-0011 + P2A-0006).
+- **Workflow stack**: P2A-0012 (after P2A-0005, P2A-0008, P2A-0011), then P2A-0019 (after P2A-0006 + P2A-0007 + P2A-0008 + P2A-0011 + P2A-0018), then P2A-0020 (after P2A-0007 + P2A-0011 + P2A-0012).
+- **Product API stack**: P2A-0013 (after P2A-0003 + P2A-0006 + P2A-0018), P2A-0014 (after P2A-0005 + P2A-0007 + P2A-0009 + P2A-0011 + P2A-0019 + P2A-0020 + P2A-0002).
+
+P2A-0015 (acceptance gate) closes 2A and requires the workflow and product API stacks complete. P2A-0016 (design tokens) ships independently and lands at the 2A→2B boundary.
+
+Phase 1's closeout note that manual stack merging did not work cleanly applies here: Mergify stacks must be managed through `mergify stack sync` and `mergify stack push`, and independent specs must live on separate stacks.
+
+Detailed entries for each P2B spec are in [`docs/roadmap/phase-2b-specs.md`](docs/roadmap/phase-2b-specs.md).
+
+| Spec | Title | Notes |
+|---|---|---|
+| P2B-0001 | dashboard-shell-and-auth-flow | Shell + GitHub OAuth + ⌘K Forge palette. |
+| P2B-0002 | dashboard-onboarding-and-credentials | Org-setup full track + minimal existing-project track. |
+| P2B-0003 | dashboard-project-and-spec | Chat-primary project view + spec form + routing settings UI. |
+| P2B-0004 | dashboard-run-detail-view | Cost bar + trajectory spine + writer reasoning. |
+| P2B-0005 | dashboard-history-and-costs | Stacked spend, breakdown table, projections (no heatmap/DORA). |
+| P2B-0006 | operator-triggered-live-workflow | End-to-end live wiring incl. forced-halt recovery exercise. |
+| P2B-0007 | phase2-end-to-end-demo | Recorded Phase 2 closeout evidence. |
+| P2B-0008 | dashboard-failure-recovery | Revise / replan / rollback / inspect recovery cards. |
+| P2B-0009 | dashboard-greenfield-new-project | Thin greenfield form. **STRETCH** — Phase 3 if not done. |
+
+### Phase 2 Exit Criteria
+
+Phase 2 is complete when, on merged `main`:
+
+- The orchestrator and dashboard require operator auth; GitHub OAuth sign-in is the first identity provider; organizations are first-class tenants; an OIDC provider interface is in place.
+- Dev and prod compose profiles are split; the prod profile starts only with operator-provided secrets.
+- Workflow state, project config (with 6-role fallback-chain routing), event payloads (with semantic-rich writer/planner fields), all five Answerer schemas, and the product-entity model (orgs/personas/behaviors/milestones/spec-dependencies) are Zod-sourced with no `unknown`/`Record<string, unknown>`/raw-cast paths remaining in workflow code.
+- The redaction layer applies on read against actor access scope; raw access is audited.
+- The allocator sidecar owns the Docker socket; runners are per-run ephemeral; workspaces and `CODEX_HOME` are wiped on release.
+- Cost records exist for every real Codex call; no unknown-source rows; all three PROJECT_BRIEF §4 cost models render in the dashboard.
+- The Planner emits typed subtasks; checker and auditor rejection loops execute with a configurable retry budget.
+- The Forge data substrate (threads + turns + tool surface + read-only stubs + operator-button write actions) supports the dashboard's narration and palette features.
+- The workflow-insights contract emits at least the three v0 insights (retry_hotspot, model_mismatch, pace_anomaly) where the data supports them.
+- The notifications matrix schema admits all hi-fi channels; the ntfy channel is implemented and wired.
+- The dashboard runs end-to-end for an operator: sign in, org onboarding, credential import, repo link (minimal existing), spec creation against a milestone + behavior, run trigger, run detail inspection, cost review, AND **failure recovery on a forced-halt run**.
+- `just acceptance-easy` and `just acceptance-medium` pass end-to-end against live fixture repos.
+- The Phase 2 demo evidence (run IDs, PR URL, recovery-action lineage) is committed under this section.
+## Phase 3: v0 Completion
+
+Status: scoped, not started.
+
+Phase 3 closes the v0 workflow above the Phase 2 operator-control baseline, adds the remaining providers, brings the hi-fi's deferred surfaces online, hardens deployment, and clears the audit's remaining medium-priority items. The full scope-bucket list is in [`docs/roadmap/phase-3.md`](docs/roadmap/phase-3.md).
+
+Headline buckets: workflow completion (review/merge with per-repo configurable integrations) · thick Forge LLM backend · spec DAG canvas · spec discovery flow · full greenfield + brownfield onboarding · `tanren-config` audit-gate · subscription-window heatmap + DORA · live preview deploys · demo-role LLM wiring · additional workflow insights (stuck, review_stall) · scheduled audits library · issue source ingestion · external-push governance posture · provider expansion (Claude, opencode-Zai) · notification channel rollout (Slack, GitHub Checks, etc.) · acceptance hard tier · allocator expansion · CI/queue hardening · observability · deployment hardening including Authentik OIDC.
+
+PROJECT_BRIEF §3.1 (opencode provider list) is amended at Phase 3 entry to remove the Wafer reference. PROJECT_BRIEF was otherwise treated as fixed during Phase 2 planning.
