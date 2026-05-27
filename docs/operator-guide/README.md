@@ -1,5 +1,24 @@
 # Operator Guide
 
+## Current state (post-Phase 1)
+
+Phase 1 (real-agent PR loop) is complete and live-proven on `main`. The Phase 1 baseline that Phase 2 specs extend:
+
+- The orchestrator and dashboard run from `docker compose up`; the orchestrator drives a runner container over a real SSH boundary; the local Docker allocator records and releases runner allocations.
+- A persisted spec for an owned fixture repository can be planned, written by a real Codex CLI writer in a runner workspace, judged by Codex `--output-schema` Answerers on checker and auditor verdicts, and shipped as a draft PR. CI status against the PR is polled and persisted.
+- The thin CLI (`tanren doctor`, `tanren hello`, `tanren status`) exists. Live Phase 1 proof: run `run_a347d451-3911-470d-b506-280b602343a9`, draft PR `https://github.com/cat-cave/tanren-fixture-easy/pull/6`.
+
+Phase 2 turns this baseline into an operator-controlled product surface. The end state is that an operator can register a GitHub org as a Tanren tenant, link a repo, configure credentials and routing, submit a spec, run the real workflow, recover from failure, and view the resulting PR — all through the dashboard with no CLI or DB access. Phase 2 spec entries are tracked in `ROADMAP.md` and `docs/roadmap/phase-2a-specs.md` / `docs/roadmap/phase-2b-specs.md`. The Phase 2 readiness audit (`docs/audits/phase2-readiness.md`) is the backlog input.
+
+## Phase 2 backlog at a glance
+
+- **Phase 2A (operator backend + contracts, 20 specs)**: organizations as tenants; multi-user GitHub OAuth; typed workflow state; 6-role fallback-chain routing; semantic-rich events; Answerer schemas for plan/check/audit/demo/forge; redaction by access scope; allocator sidecar isolation; mandatory cost attribution; planner feedback loops; Forge narration substrate; workflow insights; product entities (personas/behaviors/milestones/spec-deps); typed CLI/API + `/doctor`; run-detail read API; acceptance gate (easy + medium); design tokens import; notifications matrix; dev/prod compose split.
+- **Phase 2B (operator dashboard, 9 specs incl. one stretch)**: dashboard shell with ⌘K palette; org-full + minimal-existing onboarding; chat-primary project view; spec creation; run detail; history and costs; failure recovery; operator-triggered live workflow; demo recording. Optional: thin greenfield project create.
+
+Open the per-spec detail files for the implementation contracts (Owns / Consumes / Produces / What / Why / How / Test plan / Quality bar / Real-functionality validation / Worktree-isolation safety) of every Phase 2 entry.
+
+## Running the stack
+
 Start with the local smoke:
 
 ```sh
