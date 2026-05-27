@@ -6,7 +6,7 @@ import type pg from "pg";
 import { z } from "zod";
 import type { ActorContext, IdentityProviderId } from "./auth/index.js";
 import { GitHubOAuthProvider, IdentityStore, type IdentityProvider } from "./auth/index.js";
-import { LocalDockerAllocator, PgRunnerStore } from "./engine/allocators/index.js";
+import { PgRunnerStore, SidecarHttpAllocator } from "./engine/allocators/index.js";
 import { InMemorySecretStore, type SecretStore, VaultSecretStore } from "./engine/contracts/index.js";
 import { storeCodexAuthBundle } from "./engine/credentials/codexAuth.js";
 import { storeGithubToken } from "./engine/credentials/githubToken.js";
@@ -95,7 +95,11 @@ export async function createApp() {
     secrets: runnerSecrets,
     auth: buildAuthFromEnv(pool),
     helloDependencies: {
-      allocator: new LocalDockerAllocator({ runners: new PgRunnerStore(pool) }),
+      allocator: new SidecarHttpAllocator({
+        baseUrl: process.env.TANREN_ALLOCATOR_URL ?? "http://allocator:3200",
+        authToken: process.env.TANREN_ALLOCATOR_TOKEN ?? "dev",
+        runners: new PgRunnerStore(pool)
+      }),
       ssh: new Ssh2Substrate(runnerSecrets),
       identitySecretRef: runnerIdentitySecretRef
     }

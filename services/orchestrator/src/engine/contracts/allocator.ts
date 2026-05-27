@@ -11,6 +11,13 @@ export interface AllocationRequest {
   projectId: string;
   runnerImage: string;
   identitySecretRef: string;
+  /**
+   * Optional list of Vault references whose values the allocator must
+   * materialize into the runner's `CODEX_HOME` mount before signaling that
+   * the runner is ready. The allocator owns the lifetime of any files
+   * derived from these refs and wipes them on release.
+   */
+  vaultRefs?: string[];
 }
 
 export interface RunnerAllocation {
@@ -19,9 +26,17 @@ export interface RunnerAllocation {
   imageSha: string;
 }
 
+export type ReleaseReason = "completed" | "failed" | "abandoned";
+
 export interface Allocator {
   allocate(request: AllocationRequest): Promise<RunnerAllocation>;
-  release(runnerId: string): Promise<void>;
+  /**
+   * Release the runner. `reason` is best-effort metadata for the allocator's
+   * finalizer log; allocator implementations must always run the same
+   * destroy + wipe path regardless of the reason. Calling release on an
+   * already-released runner is a no-op.
+   */
+  release(runnerId: string, reason?: ReleaseReason): Promise<void>;
 }
 
 export class FakeAllocator implements Allocator {

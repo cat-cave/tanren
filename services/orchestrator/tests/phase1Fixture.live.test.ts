@@ -2,7 +2,11 @@ import { readFile } from "node:fs/promises";
 import { createDbPool, migrate } from "@tanren/db";
 import type { ServerHostKeyAlgorithm } from "ssh2";
 import { describe, expect, it } from "vitest";
-import { LocalDockerAllocator, PgRunnerStore } from "../src/engine/allocators/index.js";
+import type {
+  AllocationRequest,
+  Allocator,
+  RunnerAllocation
+} from "../src/engine/contracts/allocator.js";
 import { type SecretStore, VaultSecretStore } from "../src/engine/contracts/secretStore.js";
 import { storeCodexAuthBundle } from "../src/engine/credentials/codexAuth.js";
 import { storeGithubToken } from "../src/engine/credentials/githubToken.js";
@@ -54,11 +58,16 @@ describeLive("live phase 1 fixture workflow", () => {
     const run = await createQueuedRunFromSpec(pool, { specId: spec.specId, branch: `tanren/phase1-live-${unique}` });
     const result = await runPhase1FixtureWorkflow({
       pool,
-      allocator: new LocalDockerAllocator({
-        runners: new PgRunnerStore(pool),
-        sshHost: process.env.TANREN_SSH_HOST ?? "127.0.0.1",
-        sshPort: Number(process.env.TANREN_SSH_PORT ?? "2222"),
-        sshUsername: process.env.TANREN_SSH_USER ?? "tanren"
+      // The live phase 1 fixture test executes on the host directly against
+      // the compose static dev runner (kept at host port 2222 for backward
+      // compatibility). The orchestrator service running inside the docker
+      // stack uses the SidecarHttpAllocator; this host-side opt-in test does
+      // not. See docs/operator-guide/runners.md for the dev/prod split.
+      allocator: new StaticRunnerAllocator({
+        host: process.env.TANREN_SSH_HOST ?? "127.0.0.1",
+        port: Number(process.env.TANREN_SSH_PORT ?? "2222"),
+        username: process.env.TANREN_SSH_USER ?? "tanren",
+        hostKeyFingerprint: requireEnv("TANREN_SSH_HOST_FINGERPRINT")
       }),
       ssh,
       secrets,
@@ -125,4 +134,36 @@ function createLiveSecretStore(): SecretStore {
 
 function parseHostKeyAlgorithms(value: string | undefined): ServerHostKeyAlgorithm[] | undefined {
   return value?.split(",").map((item) => item.trim()).filter((item) => item !== "") as ServerHostKeyAlgorithm[] | undefined;
+}
+
+/**
+ * Minimal Allocator that hands back a fixed SSH target. Used by host-side live
+ * integration tests against the dev compose static runner; the production
+ * allocator (`SidecarHttpAllocator`) is exercised in containerized tests.
+ */
+class StaticRunnerAllocator implements Allocator {
+  constructor(
+    private readonly options: {
+      host: string;
+      port: number;
+      username: string;
+      hostKeyFingerprint: string;
+    }
+  ) {}
+
+  async allocate(request: AllocationRequest): Promise<RunnerAllocation> {
+    return {
+      runnerId: `runner_${request.runId}`,
+      imageSha: `${request.runnerImage}@sha256:static`,
+      target: {
+        host: this.options.host,
+        port: this.options.port,
+        username: this.options.username,
+        hostKeyFingerprint: this.options.hostKeyFingerprint,
+        identitySecretRef: request.identitySecretRef
+      }
+    };
+  }
+
+  async release(): Promise<void> {}
 }
