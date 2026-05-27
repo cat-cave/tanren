@@ -12,7 +12,7 @@
     "check:schema-drift": "bash scripts/check-schema-drift.sh",
     "check:state-drift": "node scripts/generate-state-checks.mjs --check",
     "codegen:state": "node scripts/generate-state-checks.mjs",
-    "compose:config": "docker compose config --quiet",
+    "compose:config": "docker compose -f compose.dev.yml config --quiet",
     "db:generate": "drizzle-kit generate --config drizzle.config.ts",
     "format:check": "node scripts/format-check.mjs",
     "lint": "oxlint -c oxlintrc.json .",

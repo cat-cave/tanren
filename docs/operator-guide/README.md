@@ -67,5 +67,7 @@ just compose-down
 If you are moving from an older local database shape, reset the volume before running the smoke:
 
 ```sh
-docker compose down -v
+docker compose -f compose.dev.yml down -v
 ```
+
+For prod deployment and the Vault init flow, see `deploy.md` (P2A-0004).

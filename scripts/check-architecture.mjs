@@ -143,12 +143,16 @@ function checkNoHostBindMounts(projectFiles) {
   return diagnostics;
 }
 
+function isComposeFile(file) {
+  return file === "compose.yml" || file === "compose.dev.yml" || file === "compose.prod.yml";
+}
+
 function isAllowedDockerSocketMount(file, line) {
-  return file === "compose.yml" && line.trim() === "- /var/run/docker.sock:/var/run/docker.sock";
+  return isComposeFile(file) && line.trim() === "- /var/run/docker.sock:/var/run/docker.sock";
 }
 
 function isAllowedOrchestratorDockerSocketMount(file, text, lineNumber) {
-  if (file !== "compose.yml") {
+  if (!isComposeFile(file)) {
     return false;
   }
 
@@ -190,7 +194,7 @@ function checkDockerApiAllocatorOnly(projectFiles) {
     for (const dockerPattern of dockerApiPatterns) {
       for (const match of text.matchAll(dockerPattern)) {
         const lineNumber = lineFor(text, match.index);
-        if (file === "compose.yml" && isAllowedOrchestratorDockerSocketMount(file, text, lineNumber)) {
+        if (isComposeFile(file) && isAllowedOrchestratorDockerSocketMount(file, text, lineNumber)) {
           continue;
         }
         diagnostics.push(
