@@ -8,7 +8,7 @@
 - `no-host-process-spawn`: `node:child_process` and `child_process` imports are allowed only in `services/orchestrator/src/engine/cli-runner/**`.
 - `no-docker-exec-for-workloads`: `container.exec(` and shell `docker exec` workload patterns are allowed only in allocator lifecycle code.
 - `no-host-bind-mounts`: Compose and Docker API host bind mounts are blocked. Named volumes are allowed. The only host bind exception is the orchestrator Docker socket mount documented below.
-- `docker-api-allocator-only`: Docker socket and Docker Engine container API access are confined to `services/orchestrator/src/engine/allocators/**`. The Docker socket mount in `compose.yml` exists only so `LocalDockerAllocator` can claim and inspect the shared local runner.
+- `docker-api-allocator-only`: Docker socket and Docker Engine container API access are confined to `services/orchestrator/src/engine/allocators/**`. The Docker socket mount in `compose.dev.yml` and `compose.prod.yml` exists only so `LocalDockerAllocator` can claim and inspect the shared local runner.
 - `single-event-writer`: SQL writes to `events` and Drizzle-style event inserts are allowed only in `services/orchestrator/src/engine/eventStore.ts` and database migrations.
 - `forbidden-failure-variants`: `Failure.kind` may not define host-prefixed variants. The guard helper may mention the prefix only to reject it.
 - `writer-answerer-separation`: non-dispatcher source files may not call or import both writer and answerer execution paths. Current dispatchers are files under `services/orchestrator/src/engine/workflow/**` and future files under `services/orchestrator/src/engine/dispatchers/**`.
@@ -23,4 +23,4 @@ Prefer refactoring over exceptions. A new exception requires a short entry in th
 
 Active exception: `db/migrations/meta/**` is Drizzle-generated migration metadata and may exceed 500 lines. Delete this exception if Drizzle supports split or compact metadata that preserves drift detection.
 
-Active exception: `compose.yml` mounts `/var/run/docker.sock` into `orchestrator` for SPEC-0003 local runner lifecycle metadata. Workload execution still goes through `SshSubstrate`; allocator code may inspect/claim containers but must not run agent workloads through Docker. Delete this exception when local allocation no longer needs direct Docker Engine access.
+Active exception: `compose.dev.yml` and `compose.prod.yml` mount `/var/run/docker.sock` into `orchestrator` for SPEC-0003 local runner lifecycle metadata. Workload execution still goes through `SshSubstrate`; allocator code may inspect/claim containers but must not run agent workloads through Docker. Delete this exception when P2A-0010 lands the dedicated allocator sidecar and local allocation no longer needs direct Docker Engine access from the orchestrator.

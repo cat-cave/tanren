@@ -43,8 +43,10 @@ just compose-down
 If you are moving from an older local baseline, reset the local Postgres volume before the smoke:
 
 ```sh
-docker compose down -v
+docker compose -f compose.dev.yml down -v
 ```
+
+The single `compose.yml` was split into `compose.dev.yml` (the current local baseline) and `compose.prod.yml` in P2A-0004. See `docs/operator-guide/deploy.md` for the prod profile and Vault init flow.
 
 ## Roadmap
 

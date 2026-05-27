@@ -35,16 +35,38 @@ compose-config:
 ci: format-check lint architecture schema-drift state-drift typecheck test build compose-config
 
 compose-build:
-  docker compose build orchestrator dashboard runner
+  docker compose -f compose.dev.yml build orchestrator dashboard runner
 
 runner-key:
   test -f /tmp/tanren_runner_key || ssh-keygen -t ed25519 -N "" -f /tmp/tanren_runner_key
 
-compose-up: runner-key
-  TANREN_RUNNER_AUTHORIZED_KEY="$(cat /tmp/tanren_runner_key.pub)" TANREN_RUNNER_IDENTITY_PRIVATE_KEY="$(cat /tmp/tanren_runner_key)" docker compose up -d postgres vault orchestrator dashboard runner ntfy
+# Dev profile: developer ergonomics. Static Vault root token, exposed
+# Postgres/runner SSH/orchestrator/dashboard/ntfy host ports, no required env.
+up-dev: runner-key
+  TANREN_RUNNER_AUTHORIZED_KEY="$(cat /tmp/tanren_runner_key.pub)" TANREN_RUNNER_IDENTITY_PRIVATE_KEY="$(cat /tmp/tanren_runner_key)" docker compose -f compose.dev.yml up -d postgres vault orchestrator dashboard runner ntfy
 
-compose-down:
-  docker compose down -v
+down-dev:
+  docker compose -f compose.dev.yml down -v
+
+# Prod profile: fails fast if required env is missing. Operator must run
+# `just vault-init-prod` once before `just up-prod`. See
+# docs/operator-guide/deploy.md.
+up-prod:
+  docker compose -f compose.prod.yml up -d postgres vault orchestrator dashboard runner ntfy
+
+down-prod:
+  docker compose -f compose.prod.yml down
+
+# Operator-run once per fresh Vault: writes the GitHub OAuth client secret to
+# the Vault path the orchestrator reads, and ensures per-service AppRoles
+# exist. Idempotent.
+vault-init-prod:
+  ./scripts/vault-init/run.sh prod
+
+# Backward-compat aliases for the Phase 1 recipe names.
+compose-up: up-dev
+
+compose-down: down-dev
 
 wait-for-stack:
   ./scripts/wait-for-url.sh http://localhost:3100/healthz
