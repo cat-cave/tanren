@@ -337,3 +337,134 @@ export const apiTokens = pgTable(
   },
   (table) => [index("api_tokens_user_id").on(table.userId), uniqueIndex("api_tokens_hash_unique").on(table.tokenHash)]
 );
+
+// ---------------------------------------------------------------------------
+// P2A-0018 product entities: personas, behaviors, milestones, spec links,
+// directed spec dependency edges. See docs/architecture/product-entities.md.
+// ---------------------------------------------------------------------------
+
+export const personas = pgTable(
+  "personas",
+  {
+    id: text("id").primaryKey(),
+    scope: text("scope").notNull(),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organizations.id),
+    projectId: text("project_id").references(() => projects.projectId),
+    name: text("name").notNull(),
+    description: text("description").notNull(),
+    metadata: jsonb("metadata").notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => [
+    check("personas_scope_check", sql`${table.scope} IN ('org','project')`),
+    check(
+      "personas_scope_project_check",
+      sql`(${table.scope} = 'org' AND ${table.projectId} IS NULL) OR (${table.scope} = 'project' AND ${table.projectId} IS NOT NULL)`
+    ),
+    index("personas_org_id").on(table.orgId),
+    index("personas_project_id").on(table.projectId)
+  ]
+);
+
+export const behaviors = pgTable(
+  "behaviors",
+  {
+    id: text("id").primaryKey(),
+    personaId: text("persona_id")
+      .notNull()
+      .references(() => personas.id),
+    title: text("title").notNull(),
+    given: text("given").notNull(),
+    when: text("when").notNull(),
+    // eslint-disable-next-line unicorn/no-thenable
+    then: text("then").notNull(),
+    description: text("description"),
+    metadata: jsonb("metadata").notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => [index("behaviors_persona_id").on(table.personaId)]
+);
+
+export const milestones = pgTable(
+  "milestones",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.projectId),
+    label: text("label").notNull(),
+    name: text("name").notNull(),
+    description: text("description"),
+    orderIndex: integer("order_index").notNull(),
+    eta: timestamp("eta", { withTimezone: true }),
+    status: text("status").notNull().default("planned"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => [
+    check("milestones_status_check", sql`${table.status} IN ('planned','in_flight','done','abandoned')`),
+    uniqueIndex("milestones_project_label_unique").on(table.projectId, table.label),
+    uniqueIndex("milestones_project_order_unique").on(table.projectId, table.orderIndex)
+  ]
+);
+
+export const specBehaviors = pgTable(
+  "spec_behaviors",
+  {
+    specId: text("spec_id")
+      .notNull()
+      .references(() => specs.specId),
+    behaviorId: text("behavior_id")
+      .notNull()
+      .references(() => behaviors.id),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => [
+    primaryKey({ columns: [table.specId, table.behaviorId] }),
+    index("spec_behaviors_behavior_id").on(table.behaviorId)
+  ]
+);
+
+// spec_milestones is modeled as a join table to keep the schema additive for
+// future many-to-many evolution, but a unique index on spec_id enforces the
+// current one-milestone-per-spec product rule (documented in
+// docs/architecture/product-entities.md).
+export const specMilestones = pgTable(
+  "spec_milestones",
+  {
+    specId: text("spec_id")
+      .notNull()
+      .references(() => specs.specId),
+    milestoneId: text("milestone_id")
+      .notNull()
+      .references(() => milestones.id),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => [
+    primaryKey({ columns: [table.specId, table.milestoneId] }),
+    uniqueIndex("spec_milestones_spec_unique").on(table.specId),
+    index("spec_milestones_milestone_id").on(table.milestoneId)
+  ]
+);
+
+export const specDependencies = pgTable(
+  "spec_dependencies",
+  {
+    fromSpecId: text("from_spec_id")
+      .notNull()
+      .references(() => specs.specId),
+    toSpecId: text("to_spec_id")
+      .notNull()
+      .references(() => specs.specId),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => [
+    primaryKey({ columns: [table.fromSpecId, table.toSpecId] }),
+    check("spec_dependencies_no_self_loop", sql`${table.fromSpecId} <> ${table.toSpecId}`),
+    index("spec_dependencies_to_spec_id").on(table.toSpecId)
+  ]
+);
