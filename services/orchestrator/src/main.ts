@@ -4,6 +4,8 @@ import { createDbPool, migrate } from "@tanren/db";
 import { Hono } from "hono";
 import type pg from "pg";
 import { z } from "zod";
+import type { ActorContext, IdentityProviderId } from "./auth/index.js";
+import { GitHubOAuthProvider, IdentityStore, type IdentityProvider } from "./auth/index.js";
 import { LocalDockerAllocator, PgRunnerStore } from "./engine/allocators/index.js";
 import { InMemorySecretStore, type SecretStore, VaultSecretStore } from "./engine/contracts/index.js";
 import { storeCodexAuthBundle } from "./engine/credentials/codexAuth.js";
@@ -17,11 +19,14 @@ import {
   createProject,
   createQueuedRunFromSpec,
   createSpec,
+  ProjectAccessDeniedError,
   ProjectNotFoundError,
   SpecDependenciesBlockedError,
   SpecNotRunnableError,
   SpecNotFoundError
 } from "./engine/workflow/projectSpec.js";
+import { createAuthMiddleware, type ActorContextEnv } from "./middleware/auth.js";
+import { createAuthRoutes } from "./routes/auth/index.js";
 
 const port = Number(process.env.ORCHESTRATOR_PORT ?? 3100);
 const vaultAddr = process.env.VAULT_ADDR ?? "http://localhost:8200";
@@ -88,12 +93,42 @@ export async function createApp() {
   return buildApp({
     pool,
     secrets: runnerSecrets,
+    auth: buildAuthFromEnv(pool),
     helloDependencies: {
       allocator: new LocalDockerAllocator({ runners: new PgRunnerStore(pool) }),
       ssh: new Ssh2Substrate(runnerSecrets),
       identitySecretRef: runnerIdentitySecretRef
     }
   });
+}
+
+export interface BuildAppAuthOptions {
+  store: IdentityStore;
+  providers: Map<IdentityProviderId, IdentityProvider>;
+  publicBaseUrl: string;
+  cookieSecure?: boolean;
+  platformAdminUserIds?: ReadonlySet<string>;
+  /** When set, requests without a session/token resolve to this actor. Used in tests/dev. */
+  localDevActor?: ActorContext;
+}
+
+function buildAuthFromEnv(pool: pg.Pool): BuildAppAuthOptions | undefined {
+  const clientId = process.env.TANREN_GITHUB_OAUTH_CLIENT_ID;
+  const clientSecret = process.env.TANREN_GITHUB_OAUTH_CLIENT_SECRET;
+  const publicBaseUrl = process.env.TANREN_PUBLIC_BASE_URL ?? `http://localhost:${port}`;
+  const providers = new Map<IdentityProviderId, IdentityProvider>();
+  if (clientId !== undefined && clientId !== "" && clientSecret !== undefined && clientSecret !== "") {
+    providers.set("github_oauth", new GitHubOAuthProvider({ clientId, clientSecret }));
+  }
+  if (providers.size === 0) {
+    return undefined;
+  }
+  return {
+    store: new IdentityStore(pool),
+    providers,
+    publicBaseUrl,
+    cookieSecure: process.env.TANREN_COOKIE_SECURE === "1"
+  };
 }
 
 export function buildApp(input: {
@@ -103,12 +138,34 @@ export function buildApp(input: {
   githubHttp?: GitHubHttpClient;
   runnerIdentitySecretRef?: string;
   vaultHealthCheck?: () => Promise<{ ok: boolean; status: number }>;
+  auth?: BuildAppAuthOptions;
 }) {
-  const app = new Hono();
+  const app = new Hono<ActorContextEnv>();
   const secrets = input.secrets ?? new InMemorySecretStore();
   const githubHttp = input.githubHttp ?? new FetchGitHubHttpClient();
   const identitySecretRef = input.runnerIdentitySecretRef ?? runnerIdentitySecretRef;
   const vaultHealthCheck = input.vaultHealthCheck ?? vaultHealth;
+
+  if (input.auth !== undefined) {
+    app.route(
+      "/auth",
+      createAuthRoutes({
+        providers: input.auth.providers,
+        store: input.auth.store,
+        publicBaseUrl: input.auth.publicBaseUrl,
+        cookieSecure: input.auth.cookieSecure
+      })
+    );
+    app.use(
+      "*",
+      createAuthMiddleware({
+        store: input.auth.store,
+        platformAdminUserIds: input.auth.platformAdminUserIds,
+        localDevActor: input.auth.localDevActor
+      })
+    );
+  }
+
 
   app.get("/healthz", async (c) => {
     const dbResult = await input.pool.query("SELECT 1 AS ok");
@@ -128,7 +185,7 @@ export function buildApp(input: {
     if (!parsed.success) {
       return c.json({ error: "invalid_project", issues: parsed.error.issues }, 400);
     }
-    return c.json(await createProject(input.pool, parsed.data), 201);
+    return c.json(await createProject(input.pool, parsed.data, actorOf(c)), 201);
   });
 
   app.post("/specs", async (c) => {
@@ -137,10 +194,13 @@ export function buildApp(input: {
       return c.json({ error: "invalid_spec", issues: parsed.error.issues }, 400);
     }
     try {
-      return c.json(await createSpec(input.pool, parsed.data), 201);
+      return c.json(await createSpec(input.pool, parsed.data, actorOf(c)), 201);
     } catch (error) {
       if (error instanceof ProjectNotFoundError) {
         return c.json({ error: "project_not_found", message: error.message }, 404);
+      }
+      if (error instanceof ProjectAccessDeniedError) {
+        return c.json({ error: "project_access_denied", message: error.message }, 403);
       }
       if (error instanceof SpecNotFoundError) {
         return c.json({ error: "spec_dependency_not_found", message: error.message }, 404);
@@ -155,10 +215,20 @@ export function buildApp(input: {
       return c.json({ error: "invalid_run", issues: parsed.error.issues }, 400);
     }
     try {
-      return c.json(await createQueuedRunFromSpec(input.pool, { specId: c.req.param("specId"), ...parsed.data }), 201);
+      return c.json(
+        await createQueuedRunFromSpec(
+          input.pool,
+          { specId: c.req.param("specId"), ...parsed.data },
+          actorOf(c)
+        ),
+        201
+      );
     } catch (error) {
       if (error instanceof SpecNotFoundError) {
         return c.json({ error: "spec_not_found", message: error.message }, 404);
+      }
+      if (error instanceof ProjectAccessDeniedError) {
+        return c.json({ error: "project_access_denied", message: error.message }, 403);
       }
       if (error instanceof SpecDependenciesBlockedError) {
         return c.json({ error: "spec_dependencies_blocked", message: error.message }, 409);
@@ -299,6 +369,10 @@ async function seedRunnerIdentitySecret(secrets: SecretStore): Promise<void> {
 
 function messageFromError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function actorOf(c: { var: { actor?: ActorContext } }): ActorContext | undefined {
+  return c.var.actor;
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

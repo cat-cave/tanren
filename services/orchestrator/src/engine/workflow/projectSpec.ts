@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type pg from "pg";
 import { z } from "zod";
+import type { ActorContext } from "../../auth/schemas.js";
 import { PgEventStore } from "../eventStore.js";
 
 const defaultBranch = "main";
@@ -88,7 +89,17 @@ export class SpecNotRunnableError extends Error {
   }
 }
 
-export async function createProject(pool: pg.Pool, input: CreateProjectInput): Promise<ProjectContract> {
+export class ProjectAccessDeniedError extends Error {
+  constructor(projectId: string) {
+    super(`actor cannot access project: ${projectId}`);
+  }
+}
+
+export async function createProject(
+  pool: pg.Pool,
+  input: CreateProjectInput,
+  _actor?: ActorContext
+): Promise<ProjectContract> {
   const projectId = `project_${randomUUID()}`;
   const project = {
     projectId,
@@ -101,8 +112,8 @@ export async function createProject(pool: pg.Pool, input: CreateProjectInput): P
   };
 
   await pool.query(
-    `INSERT INTO projects (project_id, name, repo_url, default_branch, runner_image, allocator, config)
-     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)`,
+    `INSERT INTO projects (project_id, name, repo_url, default_branch, runner_image, allocator, config, org_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)`,
     [
       project.projectId,
       project.name,
@@ -110,14 +121,27 @@ export async function createProject(pool: pg.Pool, input: CreateProjectInput): P
       project.defaultBranch,
       project.runnerImage,
       project.allocator,
-      JSON.stringify(project.config)
+      JSON.stringify(project.config),
+      _actor?.orgId ?? null
     ]
   );
+  if (_actor !== undefined) {
+    await pool.query(
+      `INSERT INTO project_members (project_id, user_id, role) VALUES ($1, $2, 'admin')
+       ON CONFLICT (project_id, user_id) DO NOTHING`,
+      [project.projectId, _actor.userId]
+    );
+  }
   return project;
 }
 
-export async function createSpec(pool: pg.Pool, input: CreateSpecInput): Promise<SpecContract> {
+export async function createSpec(
+  pool: pg.Pool,
+  input: CreateSpecInput,
+  actor?: ActorContext
+): Promise<SpecContract> {
   await ensureProjectExists(pool, input.projectId);
+  await ensureProjectAccess(pool, input.projectId, actor);
   await ensureSpecDependenciesExist(pool, input.projectId, input.dependsOn ?? []);
   const spec: SpecContract = {
     specId: `spec_${randomUUID()}`,
@@ -145,11 +169,15 @@ export async function createSpec(pool: pg.Pool, input: CreateSpecInput): Promise
   return spec;
 }
 
-export async function createQueuedRunFromSpec(pool: pg.Pool, input: CreateSpecRunInput): Promise<SpecRunContract> {
+export async function createQueuedRunFromSpec(
+  pool: pg.Pool,
+  input: CreateSpecRunInput,
+  actor?: ActorContext
+): Promise<SpecRunContract> {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    const run = await createQueuedRunFromSpecOnClient(client, input);
+    const run = await createQueuedRunFromSpecOnClient(client, input, actor);
     await client.query("COMMIT");
     return run;
   } catch (error) {
@@ -158,6 +186,32 @@ export async function createQueuedRunFromSpec(pool: pg.Pool, input: CreateSpecRu
   } finally {
     client.release();
   }
+}
+
+async function ensureProjectAccess(pool: pg.Pool, projectId: string, actor?: ActorContext): Promise<void> {
+  if (actor === undefined || actor.scopes.includes("platform:admin")) {
+    return;
+  }
+  const result = await pool.query<{ org_id: string | null }>(
+    "SELECT org_id FROM projects WHERE project_id = $1",
+    [projectId]
+  );
+  const projectOrg = result.rows[0]?.org_id ?? null;
+  if (projectOrg === null) {
+    // Legacy / unscoped projects bypass org-scoping for backwards compatibility with existing rows.
+    return;
+  }
+  const memberResult = await pool.query<{ role: string }>(
+    "SELECT role FROM project_members WHERE project_id = $1 AND user_id = $2",
+    [projectId, actor.userId]
+  );
+  if ((memberResult.rowCount ?? 0) > 0) {
+    return;
+  }
+  if (actor.orgId === projectOrg && actor.scopes.includes("org:member")) {
+    return;
+  }
+  throw new ProjectAccessDeniedError(projectId);
 }
 
 function defaultRunBranch(spec: SpecContract): string {
@@ -194,9 +248,11 @@ async function ensureSpecDependenciesExist(pool: pg.Pool, projectId: string, dep
 
 async function createQueuedRunFromSpecOnClient(
   client: pg.PoolClient,
-  input: CreateSpecRunInput
+  input: CreateSpecRunInput,
+  actor?: ActorContext
 ): Promise<SpecRunContract> {
   const loaded = await loadSpecWithProject(client, input.specId);
+  await ensureClientProjectAccess(client, loaded.project.projectId, actor);
   await ensureSpecDependenciesDone(client, loaded.spec);
   const plannerTaskId = `task_${randomUUID()}`;
   const run: SpecRunContract = {
@@ -365,3 +421,32 @@ const SpecProjectRowSchema = z.object({
   depends_on: StringArrayOrEmpty,
   status: z.string()
 });
+
+async function ensureClientProjectAccess(
+  client: pg.PoolClient,
+  projectId: string,
+  actor?: ActorContext
+): Promise<void> {
+  if (actor === undefined || actor.scopes.includes("platform:admin")) {
+    return;
+  }
+  const projectRow = await client.query<{ org_id: string | null }>(
+    "SELECT org_id FROM projects WHERE project_id = $1",
+    [projectId]
+  );
+  const projectOrg = projectRow.rows[0]?.org_id ?? null;
+  if (projectOrg === null) {
+    return;
+  }
+  const memberResult = await client.query<{ role: string }>(
+    "SELECT role FROM project_members WHERE project_id = $1 AND user_id = $2",
+    [projectId, actor.userId]
+  );
+  if ((memberResult.rowCount ?? 0) > 0) {
+    return;
+  }
+  if (actor.orgId === projectOrg && actor.scopes.includes("org:member")) {
+    return;
+  }
+  throw new ProjectAccessDeniedError(projectId);
+}

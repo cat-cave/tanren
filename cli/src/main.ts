@@ -1,16 +1,32 @@
 #!/usr/bin/env node
 
 import { readFile } from "node:fs/promises";
+import { authHeaders, CliLoginIncomplete, deleteAuth, login, readAuth, writeAuth } from "./auth/index.js";
 
 const orchestratorUrl = process.env.TANREN_ORCHESTRATOR_URL ?? "http://localhost:3100";
 const dashboardUrl = process.env.TANREN_DASHBOARD_URL ?? "http://localhost:3000";
 
 export async function request(path: string, init?: RequestInit) {
-  const response = await fetch(`${orchestratorUrl}${path}`, init);
+  const auth = await authHeaders();
+  const finalInit = mergeAuthHeaders(init, auth);
+  const response = await fetch(`${orchestratorUrl}${path}`, finalInit);
   if (!response.ok) {
     throw new Error(`${init?.method ?? "GET"} ${path} failed: ${response.status} ${await response.text()}`);
   }
   return response.json() as Promise<unknown>;
+}
+
+function mergeAuthHeaders(init: RequestInit | undefined, auth: Record<string, string>): RequestInit | undefined {
+  if (Object.keys(auth).length === 0) {
+    return init;
+  }
+  const headers = new Headers(init?.headers);
+  for (const [name, value] of Object.entries(auth)) {
+    if (!headers.has(name)) {
+      headers.set(name, value);
+    }
+  }
+  return { ...init, headers };
 }
 
 export async function jsonRequest(path: string, body: unknown) {
@@ -19,6 +35,59 @@ export async function jsonRequest(path: string, body: unknown) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body)
   });
+}
+
+export async function authLoginCommand(argv: string[]) {
+  const args = parseArgs(argv);
+  const token = optional(args, "token");
+  try {
+    const result = await login({
+      orchestratorUrl,
+      token,
+      name: optional(args, "name"),
+      onAuthorizeUrl: (url) => console.log(`Open this URL in your browser to sign in:\n  ${url}`)
+    });
+    console.log(JSON.stringify({ ok: true, orchestratorUrl: result.auth.orchestratorUrl }, null, 2));
+  } catch (error) {
+    if (error instanceof CliLoginIncomplete) {
+      console.error(error.message);
+      process.exit(2);
+    }
+    throw error;
+  }
+}
+
+export async function authStatusCommand() {
+  const auth = await readAuth();
+  if (auth === undefined) {
+    console.log(JSON.stringify({ ok: false, reason: "no_auth_file" }, null, 2));
+    return;
+  }
+  const tokenPrefix = auth.token.slice(0, 8);
+  console.log(
+    JSON.stringify(
+      { ok: true, orchestratorUrl: auth.orchestratorUrl, tokenPrefix, name: auth.name ?? null },
+      null,
+      2
+    )
+  );
+}
+
+export async function authLogoutCommand() {
+  await deleteAuth();
+  console.log(JSON.stringify({ ok: true }, null, 2));
+}
+
+export async function authPersistTokenCommand(argv: string[]) {
+  const args = parseArgs(argv);
+  const token = required(args, "token");
+  await writeAuth({
+    orchestratorUrl,
+    token,
+    name: optional(args, "name") ?? "cli",
+    createdAt: new Date().toISOString()
+  });
+  console.log(JSON.stringify({ ok: true }, null, 2));
 }
 
 export async function doctor() {
@@ -129,6 +198,9 @@ export function usage() {
   console.log(`tanren <command>
 
 Commands:
+  auth login         Start CLI sign-in (use --token <raw> after browser flow)
+  auth status        Print stored auth metadata (never the token)
+  auth logout        Remove stored CLI auth
   doctor             Check orchestrator, Postgres, and Vault connectivity
   credential codex import --ref <ref> --auth-json-file <path>
   credential github import --ref <ref> --token-file <path>
@@ -147,6 +219,24 @@ Commands:
 export async function main(argv: string[]) {
   const [command, subcommand, ...rest] = argv;
   switch (command) {
+    case "auth":
+      if (subcommand === "login") {
+        await authLoginCommand(rest);
+        break;
+      }
+      if (subcommand === "status") {
+        await authStatusCommand();
+        break;
+      }
+      if (subcommand === "logout") {
+        await authLogoutCommand();
+        break;
+      }
+      if (subcommand === "set-token") {
+        await authPersistTokenCommand(rest);
+        break;
+      }
+      throw new Error("usage: tanren auth <login|status|logout|set-token>");
     case "doctor":
       await doctor();
       break;
