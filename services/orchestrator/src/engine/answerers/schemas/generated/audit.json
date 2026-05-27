@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "outstandingBehaviorIds": {
+      "items": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "passed": {
+      "type": "boolean"
+    },
+    "reasoning": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "recommendedAction": {
+      "enum": [
+        "pass",
+        "loop_to_planner",
+        "halt"
+      ],
+      "type": "string"
+    }
+  },
+  "required": [
+    "passed",
+    "reasoning",
+    "outstandingBehaviorIds",
+    "recommendedAction"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.audit_answer.v2"
+}

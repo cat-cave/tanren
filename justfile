@@ -21,10 +21,13 @@ state-drift:
 event-drift:
   corepack pnpm run check:event-drift
 
+answerer-schema-drift:
+  corepack pnpm run check:answerer-schema-drift
+
 typecheck:
   corepack pnpm run typecheck
 
-fast-check: format-check lint architecture schema-drift state-drift event-drift typecheck test compose-config
+fast-check: format-check lint architecture schema-drift state-drift event-drift answerer-schema-drift typecheck test compose-config
 
 test:
   corepack pnpm run test
@@ -35,7 +38,7 @@ build:
 compose-config:
   corepack pnpm run compose:config
 
-ci: format-check lint architecture schema-drift state-drift event-drift typecheck test build compose-config
+ci: format-check lint architecture schema-drift state-drift event-drift answerer-schema-drift typecheck test build compose-config
 
 compose-build:
   docker compose -f compose.dev.yml build orchestrator dashboard runner
