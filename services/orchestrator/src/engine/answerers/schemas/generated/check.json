@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "behaviorIdsFailed": {
+      "items": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "behaviorIdsPassed": {
+      "items": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "passed": {
+      "type": "boolean"
+    },
+    "reasoning": {
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "passed",
+    "reasoning",
+    "behaviorIdsPassed",
+    "behaviorIdsFailed"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.check_answer.v2"
+}

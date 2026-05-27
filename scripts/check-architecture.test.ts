@@ -24,9 +24,10 @@ describe("architecture checker", () => {
   it("accepts a minimal compliant fixture", async () => {
     const root = await createFixture({
       "package.json":
-        "{\"type\":\"module\",\"scripts\":{\"check\":\"pnpm run check:schema-drift && pnpm run check:state-drift\",\"check:schema-drift\":\"bash scripts/check-schema-drift.sh\",\"check:state-drift\":\"node scripts/generate-state-checks.mjs --check\"}}\n",
+        "{\"type\":\"module\",\"scripts\":{\"check\":\"pnpm run check:schema-drift && pnpm run check:state-drift && pnpm run check:answerer-schema-drift\",\"check:schema-drift\":\"bash scripts/check-schema-drift.sh\",\"check:state-drift\":\"node scripts/generate-state-checks.mjs --check\",\"check:answerer-schema-drift\":\"node scripts/answerer-schema-export.mjs --check\"}}\n",
       "scripts/check-schema-drift.sh": "#!/usr/bin/env bash\n",
       "scripts/generate-state-checks.mjs": "#!/usr/bin/env node\n",
+      "scripts/answerer-schema-export.mjs": "#!/usr/bin/env node\n",
       ".github/workflows/ci.yml": "steps:\n  - uses: actions/checkout@v6\n  - uses: actions/setup-node@v6\n",
       "db/migrations/0001.sql":
         "CHECK (cost_source IN ('provider_direct','ccusage','codexbar','opportunity_computed'))\n",
@@ -69,14 +70,27 @@ describe("architecture checker", () => {
     expect(diagnostics.map((item) => item.rule)).toContain("schema-drift-check-wired");
   });
 
+  it("requires answerer schema drift checking to stay wired into the root check", async () => {
+    const root = await createFixture({
+      "package.json": "{\"type\":\"module\",\"scripts\":{\"check\":\"pnpm run typecheck\"}}\n",
+      "scripts/check-schema-drift.sh": "#!/usr/bin/env bash\n",
+      "scripts/generate-state-checks.mjs": "#!/usr/bin/env node\n",
+      "scripts/answerer-schema-export.mjs": "#!/usr/bin/env node\n"
+    });
+
+    const diagnostics = await runArchitectureChecks({ root });
+    expect(diagnostics.map((item) => item.rule)).toContain("answerer-schema-drift-check-wired");
+  });
+
   it("accepts root check delegation through just ci when the just recipe includes schema drift", async () => {
     const root = await createFixture({
       "package.json":
-        "{\"type\":\"module\",\"scripts\":{\"check\":\"just ci\",\"check:schema-drift\":\"bash scripts/check-schema-drift.sh\",\"check:state-drift\":\"node scripts/generate-state-checks.mjs --check\"}}\n",
+        "{\"type\":\"module\",\"scripts\":{\"check\":\"just ci\",\"check:schema-drift\":\"bash scripts/check-schema-drift.sh\",\"check:state-drift\":\"node scripts/generate-state-checks.mjs --check\",\"check:answerer-schema-drift\":\"node scripts/answerer-schema-export.mjs --check\"}}\n",
       "justfile":
-        "ci: schema-drift state-drift\n\nschema-drift:\n  corepack pnpm run check:schema-drift\n\nstate-drift:\n  corepack pnpm run check:state-drift\n",
+        "ci: schema-drift state-drift answerer-schema-drift\n\nschema-drift:\n  corepack pnpm run check:schema-drift\n\nstate-drift:\n  corepack pnpm run check:state-drift\n\nanswerer-schema-drift:\n  corepack pnpm run check:answerer-schema-drift\n",
       "scripts/check-schema-drift.sh": "#!/usr/bin/env bash\n",
-      "scripts/generate-state-checks.mjs": "#!/usr/bin/env node\n"
+      "scripts/generate-state-checks.mjs": "#!/usr/bin/env node\n",
+      "scripts/answerer-schema-export.mjs": "#!/usr/bin/env node\n"
     });
 
     await expect(runArchitectureChecks({ root })).resolves.toEqual([]);
