@@ -8,6 +8,7 @@
     "build": "pnpm -r build",
     "check": "just ci",
     "check:architecture": "node scripts/check-architecture.mjs",
+    "check:design-tokens-drift": "node scripts/check-design-tokens-drift.mjs",
     "check:fast": "just fast-check",
     "check:schema-drift": "bash scripts/check-schema-drift.sh",
     "compose:config": "docker compose config --quiet",

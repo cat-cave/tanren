@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 100" fill="none">
+  
+  <defs>
+    
+  </defs>
+  <text class="word" x="0" y="74">tanren</text>
+  
+  <circle class="ember" cx="262" cy="32" r="4"></circle>
+  
+  <g transform="translate(280, 38)">
+    <rect x="0" y="0" width="70" height="36" fill="none" stroke="currentColor" stroke-width="1"></rect>
+    <text class="kanji" x="35" y="24" text-anchor="middle">鍛錬</text>
+  </g>
+</svg>
