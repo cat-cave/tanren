@@ -1,9 +1,11 @@
 import { serve } from "@hono/node-server";
 import { createDbPool, migrate } from "@tanren/db";
 import { Hono } from "hono";
+import { loginUrl, useSession } from "./auth/index.js";
 
 const port = Number(process.env.DASHBOARD_PORT ?? 3000);
 const orchestratorUrl = process.env.ORCHESTRATOR_URL ?? "http://localhost:3100";
+const requireAuth = process.env.TANREN_REQUIRE_AUTH === "1";
 const pool = createDbPool();
 
 function Layout(props: { title: string; children: unknown }) {
@@ -38,6 +40,22 @@ export async function createApp() {
     const orchestrator = await fetch(`${orchestratorUrl}/healthz`).then((r) => r.ok).catch(() => false);
     return c.json({ service: "dashboard", ok: dbResult.rows[0]?.ok === 1, orchestrator });
   });
+
+  app.use("*", async (c, next) => {
+    if (c.req.path === "/healthz" || c.req.path === "/auth/login") {
+      return next();
+    }
+    if (!requireAuth) {
+      return next();
+    }
+    const session = await useSession(c.req.header("cookie"), { orchestratorUrl });
+    if (session === undefined) {
+      return c.redirect("/auth/login");
+    }
+    return next();
+  });
+
+  app.get("/auth/login", (c) => c.redirect(loginUrl(orchestratorUrl, c.req.query("next") ?? "/")));
 
   app.get("/", async (c) => {
     const runs = await pool.query("SELECT run_id, outcome, started_at, ended_at FROM runs ORDER BY started_at DESC LIMIT 10");

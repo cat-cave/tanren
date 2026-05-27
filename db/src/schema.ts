@@ -8,8 +8,10 @@ import {
   jsonb,
   numeric,
   pgTable,
+  primaryKey,
   text,
-  timestamp
+  timestamp,
+  uniqueIndex
 } from "drizzle-orm/pg-core";
 import { stateEnumLists } from "./stateEnums.js";
 
@@ -27,7 +29,8 @@ export const projects = pgTable("projects", {
   allocator: text("allocator").notNull().default("local-docker"),
   config: jsonb("config").notNull().default(sql`'{}'::jsonb`),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  tenantId: text("tenant_id")
+  tenantId: text("tenant_id"),
+  orgId: text("org_id")
 });
 
 export const specs = pgTable(
@@ -228,4 +231,108 @@ export const jobQueue = pgTable(
     enumCheck("job_queue_status_check", table.status, stateEnumLists.job_queue_status),
     enumCheck("job_queue_task_kind_check", table.taskKind, stateEnumLists.job_queue_task_kind)
   ]
+);
+
+export const organizations = pgTable(
+  "organizations",
+  {
+    id: text("id").primaryKey(),
+    kind: text("kind").notNull(),
+    externalId: text("external_id").notNull(),
+    login: text("login").notNull(),
+    displayName: text("display_name").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => [
+    check("organizations_kind_check", sql`${table.kind} IN ('github_org','github_user','oidc')`),
+    uniqueIndex("organizations_provider_unique").on(table.kind, table.externalId)
+  ]
+);
+
+export const users = pgTable(
+  "users",
+  {
+    id: text("id").primaryKey(),
+    provider: text("provider").notNull(),
+    providerSubject: text("provider_subject").notNull(),
+    login: text("login"),
+    email: text("email"),
+    displayName: text("display_name"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => [
+    check("users_provider_check", sql`${table.provider} IN ('github_oauth','oidc','local_dev')`),
+    uniqueIndex("users_provider_subject_unique").on(table.provider, table.providerSubject)
+  ]
+);
+
+export const orgMembers = pgTable(
+  "org_members",
+  {
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organizations.id),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id),
+    role: text("role").notNull().default("member"),
+    joinedAt: timestamp("joined_at", { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => [
+    primaryKey({ columns: [table.orgId, table.userId] }),
+    check("org_members_role_check", sql`${table.role} IN ('admin','member')`)
+  ]
+);
+
+export const projectMembers = pgTable(
+  "project_members",
+  {
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.projectId),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id),
+    role: text("role").notNull().default("member"),
+    joinedAt: timestamp("joined_at", { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => [
+    primaryKey({ columns: [table.projectId, table.userId] }),
+    check("project_members_role_check", sql`${table.role} IN ('admin','member')`)
+  ]
+);
+
+export const sessions = pgTable(
+  "sessions",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id),
+    csrfToken: text("csrf_token").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    ip: text("ip"),
+    userAgent: text("user_agent")
+  },
+  (table) => [index("sessions_user_id").on(table.userId), index("sessions_expires_at").on(table.expiresAt)]
+);
+
+export const apiTokens = pgTable(
+  "api_tokens",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id),
+    name: text("name").notNull(),
+    tokenHash: text("token_hash").notNull(),
+    scopes: text("scopes").array().notNull().default(sql`'{}'::text[]`),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow()
+  },
+  (table) => [index("api_tokens_user_id").on(table.userId), uniqueIndex("api_tokens_hash_unique").on(table.tokenHash)]
 );

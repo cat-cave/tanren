@@ -22,6 +22,13 @@
       "when": 1779921522434,
       "tag": "0002_thankful_menace",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1779922477402,
+      "tag": "0003_typical_gargoyle",
+      "breakpoints": true
     }
   ]
 }
