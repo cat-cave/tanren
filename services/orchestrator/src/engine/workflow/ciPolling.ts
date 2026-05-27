@@ -294,7 +294,7 @@ function ciEventPayload(prUrl: string, credentialRef: string, observation: CiObs
   return {
     prUrl,
     credentialRef,
-    redacted: true,
+    redacted: true as const,
     status: observation.status,
     reason: observation.reason,
     headSha: observation.headSha,

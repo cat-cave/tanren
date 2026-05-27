@@ -3,6 +3,7 @@ import type pg from "pg";
 import type { Allocator, RunnerAllocation } from "../contracts/allocator.js";
 import { type JobEnvelope, type JobQueue, PgJobQueue } from "../contracts/jobQueue.js";
 import type { SshCommandResult, SshSubstrate } from "../contracts/sshSubstrate.js";
+import type { EventName, EventPayload } from "../events/index.js";
 import { type EventStore, PgEventStore } from "../eventStore.js";
 import type { AuditAnswer, CheckAnswer } from "../providers/answererSchemas.js";
 import { AnswererSchemaValidationError } from "../providers/codex.js";
@@ -73,7 +74,7 @@ interface HelloWorkflowContext {
   runId: string;
   specId: string;
   projectId: string;
-  appendEvent(input: { taskId?: string; eventType: string; payload: unknown }): Promise<void>;
+  appendEvent<N extends EventName>(input: { taskId?: string; eventType: N; payload: EventPayload<N> }): Promise<void>;
 }
 
 interface HelloExecutionState {
@@ -228,7 +229,7 @@ async function runClaimedHelloTask(
   try {
     await pool.query("UPDATE tasks SET status = 'running', started_at = now() WHERE task_id = $1", [task.taskId]);
     await context.appendEvent({ taskId: task.taskId, eventType: "task.started", payload: { taskKind: task.kind, jobId: job.id } });
-    await context.appendEvent({ taskId: task.taskId, eventType: `${roleScope(task.kind)}.started`, payload: { taskKind: task.kind } });
+    await emitRoleStarted(context, task);
     await executeHelloTask(pool, context, task, state);
     await pool.query("UPDATE tasks SET status = 'done', outcome = 'ok', ended_at = now() WHERE task_id = $1", [task.taskId]);
     await jobQueue.complete(job.id);
@@ -247,7 +248,7 @@ async function runClaimedHelloTask(
       [task.taskId, failure.kind]
     );
     await jobQueue.fail(job.id, failure);
-    await context.appendEvent({ taskId: task.taskId, eventType: `${roleScope(task.kind)}.failed`, payload: failure });
+    await emitRoleFailed(context, task, failure);
     await context.appendEvent({ taskId: task.taskId, eventType: "task.failed", payload: { taskKind: task.kind, jobId: job.id, ...failure } });
     throw error;
   }
@@ -437,17 +438,15 @@ function helloTaskDefinitions(): HelloTaskDefinition[] {
   ];
 }
 
-function roleScope(kind: HelloTaskKind): "planner" | "writer" | "checker" | "auditor" {
-  if (kind === "plan") {
-    return "planner";
-  }
-  if (kind === "write") {
-    return "writer";
-  }
-  if (kind === "check") {
-    return "checker";
-  }
-  return "auditor";
+const roleStartedFor = { plan: "planner.started", write: "writer.started", check: "checker.started", audit: "auditor.started" } as const;
+const roleFailedFor = { plan: "planner.failed", write: "writer.failed", check: "checker.failed", audit: "auditor.failed" } as const;
+
+async function emitRoleStarted(context: HelloWorkflowContext, task: HelloTaskDefinition): Promise<void> {
+  await context.appendEvent({ taskId: task.taskId, eventType: roleStartedFor[task.kind], payload: { taskKind: task.kind } });
+}
+
+async function emitRoleFailed(context: HelloWorkflowContext, task: HelloTaskDefinition, failure: { kind: string; message: string }): Promise<void> {
+  await context.appendEvent({ taskId: task.taskId, eventType: roleFailedFor[task.kind], payload: failure });
 }
 
 function failureForTask(kind: HelloTaskKind, error: unknown): { kind: string; message: string } {

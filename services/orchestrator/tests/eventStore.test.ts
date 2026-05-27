@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest";
 import { FakeEventStore } from "../src/engine/eventStore.js";
 import { listEventNames } from "../src/engine/events.js";
 
-describe("event store", () => {
+describe("event store (legacy shim)", () => {
+  it("re-exports listEventNames from the registry barrel", () => {
+    expect(listEventNames()).toContain("planner.completed");
+  });
+
   it("accepts declared event names", async () => {
     const store = new FakeEventStore();
 
@@ -15,7 +19,6 @@ describe("event store", () => {
     });
 
     expect(store.events).toHaveLength(1);
-    expect(listEventNames()).toContain("planner.completed");
   });
 
   it("rejects undeclared event names", async () => {
@@ -26,8 +29,9 @@ describe("event store", () => {
         runId: "run_1",
         specId: "spec_1",
         projectId: "project_1",
-        eventType: "made_up.event",
-        payload: {}
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        eventType: "made_up.event" as never,
+        payload: {} as never
       })
     ).rejects.toThrow("undeclared event name");
   });

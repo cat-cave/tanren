@@ -13,6 +13,7 @@ import {
   timestamp,
   uniqueIndex
 } from "drizzle-orm/pg-core";
+import { eventTypeNames } from "./eventTypes.js";
 import { stateEnumLists } from "./stateEnums.js";
 
 function enumCheck(name: string, column: AnyPgColumn, values: ReadonlyArray<string>) {
@@ -163,7 +164,11 @@ export const events = pgTable(
     tenantId: text("tenant_id"),
     userId: text("user_id")
   },
-  (table) => [index("events_run_id_ts").on(table.runId, table.ts), index("events_event_type").on(table.eventType)]
+  (table) => [
+    index("events_run_id_ts").on(table.runId, table.ts),
+    index("events_event_type").on(table.eventType),
+    enumCheck("events_event_type_check", table.eventType, eventTypeNames)
+  ]
 );
 
 export const runners = pgTable("runners", {

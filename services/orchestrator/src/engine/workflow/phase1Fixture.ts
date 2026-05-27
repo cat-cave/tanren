@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { Allocator, RunnerAllocation, SshTarget } from "../contracts/allocator.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { SshSubstrate } from "../contracts/sshSubstrate.js";
+import { type EventName, type EventPayload } from "../events/index.js";
 import { type EventStore, PgEventStore } from "../eventStore.js";
 import type { AuditAnswer, CheckAnswer } from "../providers/answererSchemas.js";
 import type { GitHubHttpClient } from "../providers/github.js";
@@ -72,7 +73,7 @@ export async function runPhase1FixtureWorkflow(input: RunPhase1FixtureInput): Pr
   const eventStore = input.eventStore ?? new PgEventStore(input.pool);
   const context = input.context;
   const workspacePath = input.workspacePath ?? workspaceRepoPathForRun(context.runId);
-  const appendEvent = async (eventType: string, payload: unknown, taskId?: string) => {
+  const appendEvent = async <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string) => {
     await eventStore.append({ runId: context.runId, specId: context.specId, projectId: context.projectId, taskId, eventType, payload });
   };
 
@@ -174,7 +175,7 @@ export async function runPhase1FixtureWorkflow(input: RunPhase1FixtureInput): Pr
 
 async function runFixtureTask<TOutput>(
   pool: RunStateClient,
-  appendEvent: (eventType: string, payload: unknown, taskId?: string) => Promise<void>,
+  appendEvent: <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string) => Promise<void>,
   runId: string,
   kind: Phase1TaskKind,
   title: string,
@@ -189,11 +190,11 @@ async function runFixtureTask<TOutput>(
     [taskId, runId, kind, title, agentKind, cli]
   );
   await appendEvent("task.started", { taskKind: kind }, taskId);
-  await appendEvent(`${roleScope(kind)}.started`, { taskKind: kind }, taskId);
+  await appendRoleStarted(appendEvent, kind, taskId);
   try {
     const output = await run();
     await pool.query("UPDATE tasks SET status = 'done', outcome = 'ok', ended_at = now() WHERE task_id = $1", [taskId]);
-    await appendEvent(`${roleScope(kind)}.completed`, output, taskId);
+    await appendRoleCompleted(appendEvent, kind, output, taskId);
     await appendEvent("task.completed", { taskKind: kind }, taskId);
     return output;
   } catch (error) {
@@ -202,15 +203,65 @@ async function runFixtureTask<TOutput>(
       taskId,
       failure.kind
     ]);
-    await appendEvent(`${roleScope(kind)}.failed`, failure, taskId);
+    await appendRoleFailed(appendEvent, kind, failure, taskId);
     await appendEvent("task.failed", { taskKind: kind, ...failure }, taskId);
     throw error;
   }
 }
 
+async function appendRoleStarted(
+  appendEvent: <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string) => Promise<void>,
+  kind: Phase1TaskKind,
+  taskId: string
+): Promise<void> {
+  if (kind === "write") {
+    await appendEvent("writer.started", { taskKind: kind }, taskId);
+    return;
+  }
+  if (kind === "check") {
+    await appendEvent("checker.started", { taskKind: kind }, taskId);
+    return;
+  }
+  await appendEvent("auditor.started", { taskKind: kind }, taskId);
+}
+
+async function appendRoleCompleted<TOutput>(
+  appendEvent: <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string) => Promise<void>,
+  kind: Phase1TaskKind,
+  output: TOutput,
+  taskId: string
+): Promise<void> {
+  if (kind === "write") {
+    await appendEvent("writer.completed", output as EventPayload<"writer.completed">, taskId);
+    return;
+  }
+  if (kind === "check") {
+    await appendEvent("checker.completed", output as EventPayload<"checker.completed">, taskId);
+    return;
+  }
+  await appendEvent("auditor.completed", output as EventPayload<"auditor.completed">, taskId);
+}
+
+async function appendRoleFailed(
+  appendEvent: <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string) => Promise<void>,
+  kind: Phase1TaskKind,
+  failure: { kind: string; message: string },
+  taskId: string
+): Promise<void> {
+  if (kind === "write") {
+    await appendEvent("writer.failed", failure, taskId);
+    return;
+  }
+  if (kind === "check") {
+    await appendEvent("checker.failed", failure, taskId);
+    return;
+  }
+  await appendEvent("auditor.failed", failure, taskId);
+}
+
 async function completeQueuedPlannerTask(
   pool: RunStateClient,
-  appendEvent: (eventType: string, payload: unknown, taskId?: string) => Promise<void>,
+  appendEvent: <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string) => Promise<void>,
   context: Phase1FixtureRunContext
 ): Promise<void> {
   const existing = await pool.query(
@@ -259,7 +310,7 @@ async function prepareFixtureWorkspace(input: RunPhase1FixtureInput & { target: 
 
 async function pollCiUntilTerminal(
   input: RunPhase1FixtureInput,
-  appendEvent: (eventType: string, payload: unknown, taskId?: string) => Promise<void>
+  appendEvent: <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string) => Promise<void>
 ): Promise<PollCiForRunResult> {
   const maxPolls = input.maxCiPolls ?? 12;
   const delayMs = input.ciPollDelayMs ?? 10_000;
@@ -296,16 +347,6 @@ function writerPrompt(context: Phase1FixtureRunContext): string {
     "Acceptance criteria:",
     ...context.acceptanceCriteria.map((criterion) => `- ${criterion}`)
   ].join("\n");
-}
-
-function roleScope(kind: Phase1TaskKind): "writer" | "checker" | "auditor" {
-  if (kind === "write") {
-    return "writer";
-  }
-  if (kind === "check") {
-    return "checker";
-  }
-  return "auditor";
 }
 
 function runnerPayload(allocation: RunnerAllocation) {
