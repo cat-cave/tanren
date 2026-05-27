@@ -11,6 +11,12 @@ import {
   text,
   timestamp
 } from "drizzle-orm/pg-core";
+import { stateEnumLists } from "./stateEnums.js";
+
+function enumCheck(name: string, column: AnyPgColumn, values: ReadonlyArray<string>) {
+  const literals = sql.raw(values.map((value) => `'${value.replace(/'/g, "''")}'`).join(","));
+  return check(name, sql`${column} IN (${literals})`);
+}
 
 export const projects = pgTable("projects", {
   projectId: text("project_id").primaryKey(),
@@ -24,59 +30,89 @@ export const projects = pgTable("projects", {
   tenantId: text("tenant_id")
 });
 
-export const specs = pgTable("specs", {
-  specId: text("spec_id").primaryKey(),
-  projectId: text("project_id")
-    .notNull()
-    .references(() => projects.projectId),
-  title: text("title").notNull(),
-  description: text("description").notNull(),
-  acceptanceCriteria: jsonb("acceptance_criteria").notNull().default(sql`'[]'::jsonb`),
-  dependsOn: text("depends_on").array().notNull().default(sql`'{}'::text[]`),
-  status: text("status").notNull().default("pending"),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  tenantId: text("tenant_id")
-});
+export const specs = pgTable(
+  "specs",
+  {
+    specId: text("spec_id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.projectId),
+    title: text("title").notNull(),
+    description: text("description").notNull(),
+    acceptanceCriteria: jsonb("acceptance_criteria").notNull().default(sql`'[]'::jsonb`),
+    dependsOn: text("depends_on").array().notNull().default(sql`'{}'::text[]`),
+    status: text("status").notNull().default("pending"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    tenantId: text("tenant_id")
+  },
+  (table) => [enumCheck("specs_status_check", table.status, stateEnumLists.specs_status)]
+);
 
-export const runs = pgTable("runs", {
-  runId: text("run_id").primaryKey(),
-  specId: text("spec_id")
-    .notNull()
-    .references(() => specs.specId),
-  projectId: text("project_id")
-    .notNull()
-    .references(() => projects.projectId),
-  trigger: text("trigger").notNull(),
-  branch: text("branch").notNull(),
-  status: text("status").notNull().default("queued"),
-  startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
-  endedAt: timestamp("ended_at", { withTimezone: true }),
-  outcome: text("outcome"),
-  prUrl: text("pr_url"),
-  tenantId: text("tenant_id"),
-  userId: text("user_id")
-});
+export const runs = pgTable(
+  "runs",
+  {
+    runId: text("run_id").primaryKey(),
+    specId: text("spec_id")
+      .notNull()
+      .references(() => specs.specId),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.projectId),
+    trigger: text("trigger").notNull(),
+    branch: text("branch").notNull(),
+    status: text("status").notNull().default("queued"),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+    endedAt: timestamp("ended_at", { withTimezone: true }),
+    outcome: text("outcome"),
+    prUrl: text("pr_url"),
+    tenantId: text("tenant_id"),
+    userId: text("user_id")
+  },
+  (table) => [
+    enumCheck("runs_status_check", table.status, stateEnumLists.runs_status),
+    check(
+      "runs_outcome_check",
+      sql`${table.outcome} IS NULL OR ${table.outcome} IN (${sql.raw(
+        stateEnumLists.runs_outcome.map((value) => `'${value.replace(/'/g, "''")}'`).join(",")
+      )})`
+    )
+  ]
+);
 
-export const tasks = pgTable("tasks", {
-  taskId: text("task_id").primaryKey(),
-  runId: text("run_id")
-    .notNull()
-    .references(() => runs.runId),
-  kind: text("kind").notNull(),
-  title: text("title").notNull(),
-  parentTaskId: text("parent_task_id").references((): AnyPgColumn => tasks.taskId),
-  status: text("status").notNull().default("queued"),
-  startedAt: timestamp("started_at", { withTimezone: true }),
-  endedAt: timestamp("ended_at", { withTimezone: true }),
-  outcome: text("outcome"),
-  failureKind: text("failure_kind"),
-  agentKind: text("agent_kind").notNull(),
-  cli: text("cli").notNull(),
-  model: text("model"),
-  attempt: integer("attempt").notNull().default(1),
-  tenantId: text("tenant_id"),
-  userId: text("user_id")
-});
+export const tasks = pgTable(
+  "tasks",
+  {
+    taskId: text("task_id").primaryKey(),
+    runId: text("run_id")
+      .notNull()
+      .references(() => runs.runId),
+    kind: text("kind").notNull(),
+    title: text("title").notNull(),
+    parentTaskId: text("parent_task_id").references((): AnyPgColumn => tasks.taskId),
+    status: text("status").notNull().default("queued"),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    endedAt: timestamp("ended_at", { withTimezone: true }),
+    outcome: text("outcome"),
+    failureKind: text("failure_kind"),
+    agentKind: text("agent_kind").notNull(),
+    cli: text("cli").notNull(),
+    model: text("model"),
+    attempt: integer("attempt").notNull().default(1),
+    tenantId: text("tenant_id"),
+    userId: text("user_id")
+  },
+  (table) => [
+    enumCheck("tasks_kind_check", table.kind, stateEnumLists.tasks_kind),
+    enumCheck("tasks_status_check", table.status, stateEnumLists.tasks_status),
+    enumCheck("tasks_agent_kind_check", table.agentKind, stateEnumLists.tasks_agent_kind),
+    check(
+      "tasks_outcome_check",
+      sql`${table.outcome} IS NULL OR ${table.outcome} IN (${sql.raw(
+        stateEnumLists.tasks_outcome.map((value) => `'${value.replace(/'/g, "''")}'`).join(",")
+      )})`
+    )
+  ]
+);
 
 export const costRecords = pgTable(
   "cost_records",
@@ -187,5 +223,9 @@ export const jobQueue = pgTable(
     tenantId: text("tenant_id"),
     userId: text("user_id")
   },
-  (table) => [index("job_queue_queued").on(table.taskKind, table.enqueuedAt).where(sql`${table.status} = 'queued'`)]
+  (table) => [
+    index("job_queue_queued").on(table.taskKind, table.enqueuedAt).where(sql`${table.status} = 'queued'`),
+    enumCheck("job_queue_status_check", table.status, stateEnumLists.job_queue_status),
+    enumCheck("job_queue_task_kind_check", table.taskKind, stateEnumLists.job_queue_task_kind)
+  ]
 );

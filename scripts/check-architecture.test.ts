@@ -24,8 +24,9 @@ describe("architecture checker", () => {
   it("accepts a minimal compliant fixture", async () => {
     const root = await createFixture({
       "package.json":
-        "{\"type\":\"module\",\"scripts\":{\"check\":\"pnpm run check:schema-drift\",\"check:schema-drift\":\"bash scripts/check-schema-drift.sh\"}}\n",
+        "{\"type\":\"module\",\"scripts\":{\"check\":\"pnpm run check:schema-drift && pnpm run check:state-drift\",\"check:schema-drift\":\"bash scripts/check-schema-drift.sh\",\"check:state-drift\":\"node scripts/generate-state-checks.mjs --check\"}}\n",
       "scripts/check-schema-drift.sh": "#!/usr/bin/env bash\n",
+      "scripts/generate-state-checks.mjs": "#!/usr/bin/env node\n",
       ".github/workflows/ci.yml": "steps:\n  - uses: actions/checkout@v6\n  - uses: actions/setup-node@v6\n",
       "db/migrations/0001.sql":
         "CHECK (cost_source IN ('provider_direct','ccusage','codexbar','opportunity_computed'))\n",
@@ -71,9 +72,11 @@ describe("architecture checker", () => {
   it("accepts root check delegation through just ci when the just recipe includes schema drift", async () => {
     const root = await createFixture({
       "package.json":
-        "{\"type\":\"module\",\"scripts\":{\"check\":\"just ci\",\"check:schema-drift\":\"bash scripts/check-schema-drift.sh\"}}\n",
-      "justfile": "ci: schema-drift\n\nschema-drift:\n  corepack pnpm run check:schema-drift\n",
-      "scripts/check-schema-drift.sh": "#!/usr/bin/env bash\n"
+        "{\"type\":\"module\",\"scripts\":{\"check\":\"just ci\",\"check:schema-drift\":\"bash scripts/check-schema-drift.sh\",\"check:state-drift\":\"node scripts/generate-state-checks.mjs --check\"}}\n",
+      "justfile":
+        "ci: schema-drift state-drift\n\nschema-drift:\n  corepack pnpm run check:schema-drift\n\nstate-drift:\n  corepack pnpm run check:state-drift\n",
+      "scripts/check-schema-drift.sh": "#!/usr/bin/env bash\n",
+      "scripts/generate-state-checks.mjs": "#!/usr/bin/env node\n"
     });
 
     await expect(runArchitectureChecks({ root })).resolves.toEqual([]);

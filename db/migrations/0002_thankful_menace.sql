@@ -1,0 +1,9 @@
+ALTER TABLE "job_queue" ADD CONSTRAINT "job_queue_status_check" CHECK ("job_queue"."status" IN ('queued','claimed','running','done','failed','cancelled'));--> statement-breakpoint
+ALTER TABLE "job_queue" ADD CONSTRAINT "job_queue_task_kind_check" CHECK ("job_queue"."task_kind" IN ('hello','phase1_fixture','phase2_easy','phase2_medium','ci_poll','recovery_revise','recovery_replan','recovery_rollback','plan','write','check','audit','ci','demo','forge'));--> statement-breakpoint
+ALTER TABLE "runs" ADD CONSTRAINT "runs_status_check" CHECK ("runs"."status" IN ('queued','running','halted','completed','failed','cancelled','done'));--> statement-breakpoint
+ALTER TABLE "runs" ADD CONSTRAINT "runs_outcome_check" CHECK ("runs"."outcome" IS NULL OR "runs"."outcome" IN ('hello_complete','phase1_fixture_complete','phase2_easy_complete','phase2_medium_complete','halted','escape_hatch_hit','retry_budget_exhausted','cancelled','hello_world_complete','ok','failed','pending'));--> statement-breakpoint
+ALTER TABLE "specs" ADD CONSTRAINT "specs_status_check" CHECK ("specs"."status" IN ('open','in_flight','review','merged','halted','cancelled','pending','active','done'));--> statement-breakpoint
+ALTER TABLE "tasks" ADD CONSTRAINT "tasks_kind_check" CHECK ("tasks"."kind" IN ('plan','write','check','audit','ci','demo','forge'));--> statement-breakpoint
+ALTER TABLE "tasks" ADD CONSTRAINT "tasks_status_check" CHECK ("tasks"."status" IN ('queued','claimed','running','done','failed','cancelled'));--> statement-breakpoint
+ALTER TABLE "tasks" ADD CONSTRAINT "tasks_agent_kind_check" CHECK ("tasks"."agent_kind" IN ('system','operator','writer_codex','answerer_codex','forge_template','ci_poller','writer','answerer'));--> statement-breakpoint
+ALTER TABLE "tasks" ADD CONSTRAINT "tasks_outcome_check" CHECK ("tasks"."outcome" IS NULL OR "tasks"."outcome" IN ('passed','failed','rejected_by_checker','rejected_by_auditor','timed_out','crashed','cancelled','ok','pending'));

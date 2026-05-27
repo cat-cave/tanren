@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type pg from "pg";
+import { z } from "zod";
 import { PgEventStore } from "../eventStore.js";
 
 const defaultBranch = "main";
@@ -312,52 +313,55 @@ async function loadSpecWithProject(
      WHERE s.spec_id = $1`,
     [specId]
   );
-  const row = result.rows[0] as SpecProjectRow | undefined;
+  const row = result.rows[0];
   if (row === undefined) {
     throw new SpecNotFoundError(specId);
   }
+  const decoded = SpecProjectRowSchema.parse(row);
   return {
     project: {
-      projectId: row.project_id,
-      name: row.name,
-      repoUrl: row.repo_url,
-      defaultBranch: row.default_branch,
-      runnerImage: row.runner_image,
-      allocator: row.allocator,
-      config: asRecord(row.config)
+      projectId: decoded.project_id,
+      name: decoded.name,
+      repoUrl: decoded.repo_url,
+      defaultBranch: decoded.default_branch,
+      runnerImage: decoded.runner_image,
+      allocator: decoded.allocator,
+      config: decoded.config
     },
     spec: {
-      specId: row.spec_id,
-      projectId: row.project_id,
-      title: row.title,
-      description: row.description,
-      acceptanceCriteria: asStringArray(row.acceptance_criteria),
-      dependsOn: asStringArray(row.depends_on),
-      status: row.status
+      specId: decoded.spec_id,
+      projectId: decoded.project_id,
+      title: decoded.title,
+      description: decoded.description,
+      acceptanceCriteria: decoded.acceptance_criteria,
+      dependsOn: decoded.depends_on,
+      status: decoded.status
     }
   };
 }
 
-interface SpecProjectRow {
-  project_id: string;
-  name: string;
-  repo_url: string;
-  default_branch: string;
-  runner_image: string;
-  allocator: string;
-  config: unknown;
-  spec_id: string;
-  title: string;
-  description: string;
-  acceptance_criteria: unknown;
-  depends_on: unknown;
-  status: string;
-}
+const RecordOrEmpty = z
+  .unknown()
+  .transform((value) =>
+    typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : {}
+  );
 
-function asRecord(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
-}
+const StringArrayOrEmpty = z
+  .unknown()
+  .transform((value) => (Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []));
 
-function asStringArray(value: unknown): string[] {
-  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
-}
+const SpecProjectRowSchema = z.object({
+  project_id: z.string(),
+  name: z.string(),
+  repo_url: z.string(),
+  default_branch: z.string(),
+  runner_image: z.string(),
+  allocator: z.string(),
+  config: RecordOrEmpty,
+  spec_id: z.string(),
+  title: z.string(),
+  description: z.string(),
+  acceptance_criteria: StringArrayOrEmpty,
+  depends_on: StringArrayOrEmpty,
+  status: z.string()
+});

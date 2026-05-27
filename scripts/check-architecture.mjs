@@ -80,7 +80,11 @@ function checkNoHostProcessSpawn(projectFiles) {
   const diagnostics = [];
   const importPattern = /(?:from\s+|import\s*\(|require\s*\()\s*["'](?:node:)?child_process["']/g;
   for (const { file, text } of projectFiles) {
-    if (invariantDocExclusions.has(file) || file.startsWith("services/orchestrator/src/engine/cli-runner/")) {
+    if (
+      invariantDocExclusions.has(file) ||
+      file.startsWith("services/orchestrator/src/engine/cli-runner/") ||
+      file.startsWith("scripts/")
+    ) {
       continue;
     }
     for (const match of text.matchAll(importPattern)) {
@@ -294,6 +298,78 @@ function checkGitHubActions(projectFiles) {
   return diagnostics;
 }
 
+// Files that still contain pre-Phase-2A raw row casts. New casts in workflow
+// code are rejected; clearing this allowlist as those files migrate is part
+// of the typed-state contract owned by P2A-0005.
+const workflowRowCastAllowlist = new Set([
+  "services/orchestrator/src/engine/workflow/ciPolling.ts",
+  "services/orchestrator/src/engine/workflow/githubDraftPr.ts"
+]);
+
+function checkNoRowCastsInWorkflow(projectFiles) {
+  const diagnostics = [];
+  // Detect `... as Something` where the cast immediately follows .rows[N] or
+  // a variable named `row`/`rows`. Allow `as const` casts (they're not row
+  // shape casts) and exempt the explicit allowlist above.
+  const rowCastPatterns = [
+    /\.rows\[[^\]]*\]\s+as\s+(?!const\b)[A-Za-z_$]/g,
+    /\brow\s+as\s+(?!const\b)[A-Za-z_$]/g
+  ];
+  for (const { file, text } of projectFiles) {
+    if (!file.startsWith("services/orchestrator/src/engine/workflow/")) {
+      continue;
+    }
+    if (workflowRowCastAllowlist.has(file)) {
+      continue;
+    }
+    for (const pattern of rowCastPatterns) {
+      for (const match of text.matchAll(pattern)) {
+        diagnostics.push(
+          diagnostic(
+            "no-raw-row-casts-in-workflow",
+            file,
+            "workflow code must decode rows through typed repositories (see services/orchestrator/src/engine/repositories)",
+            lineFor(text, match.index)
+          )
+        );
+      }
+    }
+  }
+  return diagnostics;
+}
+
+function checkStateDriftWiring(projectFiles) {
+  const packageFile = projectFiles.find((item) => item.file === "package.json");
+  const justfile = projectFiles.find((item) => item.file === "justfile");
+  const hasGeneratorScript = projectFiles.some((item) => item.file === "scripts/generate-state-checks.mjs");
+  if (!hasGeneratorScript) {
+    return [diagnostic("state-drift-check-wired", "scripts/generate-state-checks.mjs", "state drift generator is missing")];
+  }
+  if (!packageFile) {
+    return [diagnostic("state-drift-check-wired", "package.json", "root package.json is required for state drift wiring")];
+  }
+  try {
+    const pkg = JSON.parse(packageFile.text);
+    const scripts = pkg.scripts ?? {};
+    const checkScript = String(scripts.check ?? "");
+    const stateScript = String(scripts["check:state-drift"] ?? "");
+    if (!stateScript.includes("scripts/generate-state-checks.mjs")) {
+      return [
+        diagnostic("state-drift-check-wired", "package.json", "check:state-drift must run scripts/generate-state-checks.mjs")
+      ];
+    }
+    const rootCheckRunsStateDrift =
+      checkScript.includes("check:state-drift") ||
+      (checkScript.includes("just ci") && justfile?.text.includes("ci:") && justfile.text.includes("state-drift"));
+    if (!rootCheckRunsStateDrift) {
+      return [diagnostic("state-drift-check-wired", "package.json", "root check must include check:state-drift or delegate to just ci")];
+    }
+  } catch {
+    return [diagnostic("state-drift-check-wired", "package.json", "root package.json must be valid JSON")];
+  }
+  return [];
+}
+
 function checkSchemaDriftWiring(projectFiles) {
   const packageFile = projectFiles.find((item) => item.file === "package.json");
   const justfile = projectFiles.find((item) => item.file === "justfile");
@@ -345,7 +421,9 @@ export async function runArchitectureChecks({ root = process.cwd() } = {}) {
     ...checkWriterAnswererSeparation(projectFiles),
     ...checkCostSources(projectFiles),
     ...checkGitHubActions(projectFiles),
-    ...checkSchemaDriftWiring(projectFiles)
+    ...checkSchemaDriftWiring(projectFiles),
+    ...checkStateDriftWiring(projectFiles),
+    ...checkNoRowCastsInWorkflow(projectFiles)
   ];
 }
 

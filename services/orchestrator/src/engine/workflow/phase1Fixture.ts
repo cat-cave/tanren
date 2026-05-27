@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type pg from "pg";
+import { z } from "zod";
 import type { Allocator, RunnerAllocation, SshTarget } from "../contracts/allocator.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { SshSubstrate } from "../contracts/sshSubstrate.js";
@@ -14,6 +15,8 @@ import { publishDraftPullRequest, type PublishedDraftPullRequest } from "./githu
 import { executeStructuredAuditTask, executeStructuredCheckTask } from "./answererTasks.js";
 
 type RunStateClient = Pick<pg.Pool | pg.PoolClient, "query">;
+
+const QueuedPlannerRow = z.object({ task_id: z.string() });
 
 export interface Phase1FixtureRunContext {
   runId: string;
@@ -218,10 +221,11 @@ async function completeQueuedPlannerTask(
      LIMIT 1`,
     [context.runId]
   );
-  const taskId = (existing.rows[0] as { task_id?: unknown } | undefined)?.task_id;
-  if (typeof taskId !== "string") {
+  const parsed = QueuedPlannerRow.safeParse(existing.rows[0]);
+  if (!parsed.success) {
     return;
   }
+  const taskId = parsed.data.task_id;
   await pool.query("UPDATE tasks SET status = 'running', started_at = now() WHERE task_id = $1", [taskId]);
   await appendEvent("task.started", { taskKind: "plan" }, taskId);
   await appendEvent("planner.started", { taskKind: "plan" }, taskId);
