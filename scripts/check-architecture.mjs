@@ -100,7 +100,11 @@ function checkNoDockerExec(projectFiles) {
   const diagnostics = [];
   const execPatterns = [/container\.exec\s*\(/g, /\bdocker\s+exec\b/g];
   for (const { file, text } of projectFiles) {
-    if (invariantDocExclusions.has(file) || file.startsWith("services/orchestrator/src/engine/allocators/")) {
+    if (
+      invariantDocExclusions.has(file) ||
+      file.startsWith("services/allocator/") ||
+      file.startsWith("services/orchestrator/src/engine/allocators/")
+    ) {
       continue;
     }
     for (const pattern of execPatterns) {
@@ -122,7 +126,11 @@ function checkNoHostBindMounts(projectFiles) {
   const diagnostics = [];
   const apiPatterns = [/\bBinds\b\s*:/g, /\bMounts\b\s*:/g, /\btype\s*[:=]\s*["']?bind["']?/g];
   for (const { file, text } of projectFiles) {
-    if (invariantDocExclusions.has(file) || file.startsWith("services/orchestrator/src/engine/allocators/")) {
+    if (
+      invariantDocExclusions.has(file) ||
+      file.startsWith("services/allocator/") ||
+      file.startsWith("services/orchestrator/src/engine/allocators/")
+    ) {
       continue;
     }
     for (const pattern of apiPatterns) {
@@ -132,7 +140,7 @@ function checkNoHostBindMounts(projectFiles) {
     }
     text.split("\n").forEach((line, index) => {
       const match = line.match(/^\s*-\s*["']?([^"'\s:]+):\/[^"']*["']?\s*$/);
-      if (match && isAllowedOrchestratorDockerSocketMount(file, text, index + 1)) {
+      if (match && isAllowedAllocatorDockerSocketMount(file, text, index + 1)) {
         return;
       }
       if (match && isHostPath(match[1])) {
@@ -151,7 +159,7 @@ function isAllowedDockerSocketMount(file, line) {
   return isComposeFile(file) && line.trim() === "- /var/run/docker.sock:/var/run/docker.sock";
 }
 
-function isAllowedOrchestratorDockerSocketMount(file, text, lineNumber) {
+function isAllowedAllocatorDockerSocketMount(file, text, lineNumber) {
   if (!isComposeFile(file)) {
     return false;
   }
@@ -168,7 +176,7 @@ function isAllowedOrchestratorDockerSocketMount(file, text, lineNumber) {
       continue;
     }
     if (line.match(/^    volumes:\s*$/)) {
-      inVolumes = currentService === "orchestrator";
+      inVolumes = currentService === "allocator";
       continue;
     }
     if (line.match(/^    [a-zA-Z0-9_-]+:/)) {
@@ -176,7 +184,7 @@ function isAllowedOrchestratorDockerSocketMount(file, text, lineNumber) {
     }
   }
 
-  return currentService === "orchestrator" && inVolumes && isAllowedDockerSocketMount(file, lines[lineNumber - 1] ?? "");
+  return currentService === "allocator" && inVolumes && isAllowedDockerSocketMount(file, lines[lineNumber - 1] ?? "");
 }
 
 function checkDockerApiAllocatorOnly(projectFiles) {
@@ -186,6 +194,8 @@ function checkDockerApiAllocatorOnly(projectFiles) {
     if (
       invariantDocExclusions.has(file) ||
       file === "scripts/check-architecture.mjs" ||
+      file.startsWith("docs/operator-guide/") ||
+      file.startsWith("services/allocator/") ||
       file.startsWith("services/orchestrator/src/engine/allocators/") ||
       file.startsWith("services/orchestrator/tests/")
     ) {
@@ -194,7 +204,7 @@ function checkDockerApiAllocatorOnly(projectFiles) {
     for (const dockerPattern of dockerApiPatterns) {
       for (const match of text.matchAll(dockerPattern)) {
         const lineNumber = lineFor(text, match.index);
-        if (isComposeFile(file) && isAllowedOrchestratorDockerSocketMount(file, text, lineNumber)) {
+        if (isComposeFile(file) && isAllowedAllocatorDockerSocketMount(file, text, lineNumber)) {
           continue;
         }
         diagnostics.push(

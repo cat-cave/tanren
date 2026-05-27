@@ -12,12 +12,17 @@
 ##   TANREN_RUNNER_AUTHORIZED_KEY        SSH authorized_keys entry the orchestrator uses.
 ##   TANREN_RUNNER_IDENTITY_PRIVATE_KEY  Private key the orchestrator uses to SSH into runner.
 ##   TANREN_PUBLIC_BASE_URL              Absolute URL the orchestrator is reachable at (used for OAuth redirect URI).
+##   TANREN_ALLOCATOR_TOKEN              Bearer token the orchestrator uses to talk to the allocator sidecar.
 ##
 ## Optional env:
 ##   DASHBOARD_HOST_PORT                 Host port to publish the dashboard on (default 3000).
+##   TANREN_MAX_RUN_HOURS                Max wall-clock hours before the allocator reclaims an abandoned runner (default 6).
 ##
 ## Only the dashboard publishes a host port. Postgres, Vault, orchestrator,
-## runner SSH, and ntfy are reachable only on the internal docker network.
+## allocator, runner SSH, and ntfy are reachable only on the internal docker
+## network. The Docker socket is mounted only into the allocator sidecar;
+## per-run runner containers are created and destroyed by the allocator and
+## never publish a host port in prod.
 
 services:
   postgres:
@@ -67,7 +72,32 @@ services:
       TANREN_GITHUB_OAUTH_CLIENT_ID: ${TANREN_GITHUB_OAUTH_CLIENT_ID:?TANREN_GITHUB_OAUTH_CLIENT_ID must be set for the prod profile}
       TANREN_GITHUB_OAUTH_CLIENT_SECRET: ${TANREN_GITHUB_OAUTH_CLIENT_SECRET:?TANREN_GITHUB_OAUTH_CLIENT_SECRET must be set for the prod profile}
       TANREN_PUBLIC_BASE_URL: ${TANREN_PUBLIC_BASE_URL:?TANREN_PUBLIC_BASE_URL must be set for the prod profile}
+      TANREN_ALLOCATOR_URL: http://allocator:3200
+      TANREN_ALLOCATOR_TOKEN: ${TANREN_ALLOCATOR_TOKEN:?TANREN_ALLOCATOR_TOKEN must be set for the prod profile}
       TANREN_COOKIE_SECURE: "1"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      vault:
+        condition: service_healthy
+      allocator:
+        condition: service_started
+
+  allocator:
+    build:
+      context: .
+      dockerfile: services/allocator/Dockerfile
+    environment:
+      DATABASE_URL: postgres://tanren:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set for the prod profile}@postgres:5432/tanren
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: ${VAULT_ROOT_TOKEN:?VAULT_ROOT_TOKEN must be set for the prod profile}
+      ALLOCATOR_PORT: "3200"
+      TANREN_ALLOCATOR_TOKEN: ${TANREN_ALLOCATOR_TOKEN:?TANREN_ALLOCATOR_TOKEN must be set for the prod profile}
+      TANREN_ALLOCATOR_NETWORK: ${COMPOSE_PROJECT_NAME:-tanren}_default
+      TANREN_ALLOCATOR_SSH_HOSTNAME_TEMPLATE: "{container}"
+      TANREN_MAX_RUN_HOURS: ${TANREN_MAX_RUN_HOURS:-6}
+      TANREN_RUNNER_IMAGE: ${TANREN_RUNNER_IMAGE:-ghcr.io/cat-cave/tanren-runner:v0}
+      TANREN_RUNNER_AUTHORIZED_KEY: ${TANREN_RUNNER_AUTHORIZED_KEY:?TANREN_RUNNER_AUTHORIZED_KEY must be set for the prod profile}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
@@ -91,23 +121,6 @@ services:
         condition: service_healthy
       orchestrator:
         condition: service_started
-
-  runner:
-    build:
-      context: .
-      dockerfile: runner/Dockerfile
-    cap_add:
-      - SYS_ADMIN
-    environment:
-      TANREN_RUNNER_AUTHORIZED_KEY: ${TANREN_RUNNER_AUTHORIZED_KEY:?TANREN_RUNNER_AUTHORIZED_KEY must be set for the prod profile}
-    security_opt:
-      - apparmor=unconfined
-      - seccomp=unconfined
-    healthcheck:
-      test: ["CMD-SHELL", "pgrep sshd >/dev/null"]
-      interval: 5s
-      timeout: 5s
-      retries: 20
 
   ntfy:
     image: binwiederhier/ntfy:latest

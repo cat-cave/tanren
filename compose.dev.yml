@@ -45,10 +45,37 @@ services:
       TANREN_GITHUB_OAUTH_CLIENT_ID: ${TANREN_GITHUB_OAUTH_CLIENT_ID:-}
       TANREN_GITHUB_OAUTH_CLIENT_SECRET: ${TANREN_GITHUB_OAUTH_CLIENT_SECRET:-}
       TANREN_PUBLIC_BASE_URL: ${TANREN_PUBLIC_BASE_URL:-http://localhost:3100}
+      TANREN_ALLOCATOR_URL: http://allocator:3200
+      TANREN_ALLOCATOR_TOKEN: dev
     ports:
       - "3100:3100"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      vault:
+        condition: service_healthy
+      allocator:
+        condition: service_started
+
+  allocator:
+    build:
+      context: .
+      dockerfile: services/allocator/Dockerfile
+    environment:
+      DATABASE_URL: postgres://tanren:tanren@postgres:5432/tanren
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: dev-root-token
+      ALLOCATOR_PORT: "3200"
+      TANREN_ALLOCATOR_TOKEN: dev
+      TANREN_ALLOCATOR_NETWORK: ${COMPOSE_PROJECT_NAME:-tanren}_default
+      TANREN_ALLOCATOR_SSH_HOSTNAME_TEMPLATE: "{container}"
+      TANREN_MAX_RUN_HOURS: "6"
+      TANREN_RUNNER_IMAGE: ghcr.io/cat-cave/tanren-runner:v0
+      TANREN_RUNNER_AUTHORIZED_KEY: ${TANREN_RUNNER_AUTHORIZED_KEY:-}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+    ports:
+      - "3200:3200"
     depends_on:
       postgres:
         condition: service_healthy
@@ -72,6 +99,10 @@ services:
         condition: service_started
 
   runner:
+    # Dev-only static runner: backward-compat target for `just smoke`'s direct
+    # SSH proof and the host-side live integration tests. Production removes
+    # this service entirely; the allocator sidecar creates ephemeral runners
+    # on demand. See docs/operator-guide/runners.md.
     build:
       context: .
       dockerfile: runner/Dockerfile

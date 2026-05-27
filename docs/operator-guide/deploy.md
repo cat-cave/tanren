@@ -45,7 +45,11 @@ Missing any required env causes `docker compose -f compose.prod.yml config` to f
 
 ## Port exposure (prod)
 
-Only the dashboard publishes a host port. Postgres, Vault, the orchestrator HTTP port, runner SSH, and ntfy are reachable only on the internal docker network. The orchestrator's outward-facing surface is intentionally the dashboard; a future Phase 3 spec will add a reverse-proxied operator endpoint and (optionally) a cloudflared tunnel.
+Only the dashboard publishes a host port. Postgres, Vault, the orchestrator HTTP port, the allocator sidecar, per-run runner SSH, and ntfy are reachable only on the internal docker network. The orchestrator's outward-facing surface is intentionally the dashboard; a future Phase 3 spec will add a reverse-proxied operator endpoint and (optionally) a cloudflared tunnel.
+
+## Allocator sidecar (P2A-0010)
+
+The Docker socket is mounted only into the `allocator` service. The orchestrator container no longer has any Docker access; it calls the allocator over HTTP on the internal docker network. Per-run runner containers are created and destroyed by the allocator; workspaces and `CODEX_HOME` are wiped on every release (success, failure, or TTL-driven abandoned reclaim). See `docs/operator-guide/runners.md`.
 
 ## Vault init flow
 
