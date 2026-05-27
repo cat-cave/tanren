@@ -241,6 +241,7 @@ export const organizations = pgTable(
     externalId: text("external_id").notNull(),
     login: text("login").notNull(),
     displayName: text("display_name").notNull(),
+    config: jsonb("config").notNull().default(sql`'{}'::jsonb`),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
   },

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type pg from "pg";
 import { z } from "zod";
 import type { ActorContext } from "../../auth/schemas.js";
+import { type ProjectConfigV1, migrateProjectConfig } from "../config/index.js";
 import { PgEventStore } from "../eventStore.js";
 
 const defaultBranch = "main";
@@ -15,7 +16,11 @@ export interface CreateProjectInput {
   defaultBranch?: string;
   runnerImage?: string;
   allocator?: string;
-  config?: Record<string, unknown>;
+  // The HTTP/CLI surface still accepts an arbitrary jsonb-ish blob for
+  // backwards compatibility with Phase 1 callers; `createProject` normalizes
+  // it through `migrateProjectConfig` before persisting and never stores
+  // unknown fields in the typed V1 shape.
+  config?: unknown;
 }
 
 export interface ProjectContract {
@@ -25,7 +30,7 @@ export interface ProjectContract {
   defaultBranch: string;
   runnerImage: string;
   allocator: string;
-  config: Record<string, unknown>;
+  config: ProjectConfigV1;
 }
 
 export interface CreateSpecInput {
@@ -101,14 +106,17 @@ export async function createProject(
   _actor?: ActorContext
 ): Promise<ProjectContract> {
   const projectId = `project_${randomUUID()}`;
-  const project = {
+  const project: ProjectContract = {
     projectId,
     name: input.name,
     repoUrl: input.repoUrl,
     defaultBranch: input.defaultBranch ?? defaultBranch,
     runnerImage: input.runnerImage ?? defaultRunnerImage,
     allocator: input.allocator ?? defaultAllocator,
-    config: input.config ?? {}
+    // migrateProjectConfig normalizes legacy versionless blobs (Phase 1
+    // `{}`-shaped rows or arbitrary maps from API callers) into a
+    // fully-defaulted V1. A V1-shaped input with unknown keys is rejected.
+    config: migrateProjectConfig(input.config ?? {})
   };
 
   await pool.query(
@@ -382,7 +390,10 @@ async function loadSpecWithProject(
       defaultBranch: decoded.default_branch,
       runnerImage: decoded.runner_image,
       allocator: decoded.allocator,
-      config: decoded.config
+      // Read-path parser: a Phase 1 fixture project stored as `{}` jsonb
+      // returns a fully-defaulted V1; future versions raise a typed
+      // UnknownConfigVersionError out of migrateProjectConfig.
+      config: migrateProjectConfig(decoded.config)
     },
     spec: {
       specId: decoded.spec_id,
