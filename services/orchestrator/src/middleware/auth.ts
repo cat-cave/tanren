@@ -8,6 +8,7 @@ export const CSRF_HEADER = "x-csrf-token";
 const PUBLIC_PATHS = new Set([
   "/healthz",
   "/version",
+  "/doctor",
   "/auth/login",
   "/auth/callback",
   "/auth/providers",

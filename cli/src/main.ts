@@ -2,6 +2,7 @@
 
 import { readFile } from "node:fs/promises";
 import { authHeaders, CliLoginIncomplete, deleteAuth, login, readAuth, writeAuth } from "./auth/index.js";
+import { findProductHandler, listProductCommands } from "./commands/dispatch.js";
 
 const orchestratorUrl = process.env.TANREN_ORCHESTRATOR_URL ?? "http://localhost:3100";
 const dashboardUrl = process.env.TANREN_DASHBOARD_URL ?? "http://localhost:3000";
@@ -29,9 +30,13 @@ function mergeAuthHeaders(init: RequestInit | undefined, auth: Record<string, st
   return { ...init, headers };
 }
 
-export async function jsonRequest(path: string, body: unknown) {
+export async function jsonRequest(
+  path: string,
+  body: unknown,
+  options: { method?: "POST" | "PATCH" | "PUT" | "DELETE" } = {}
+) {
   return await request(path, {
-    method: "POST",
+    method: options.method ?? "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body)
   });
@@ -213,11 +218,24 @@ Commands:
   status <run_id>    Print persisted run state
   dashboard          Print the dashboard URL
   version            Print CLI version
+
+P2A-0013 product API (see docs/operator-guide/cli.md):
+${listProductCommands()
+  .map((line) => `  tanren ${line}`)
+  .join("\n")}
 `);
 }
 
 export async function main(argv: string[]) {
   const [command, subcommand, ...rest] = argv;
+  // P2A-0013 product API commands (orgs/projects/specs/personas/behaviors/milestones/credentials)
+  if (command !== undefined) {
+    const handler = findProductHandler(command, subcommand);
+    if (handler !== undefined) {
+      await handler(rest);
+      return;
+    }
+  }
   switch (command) {
     case "auth":
       if (subcommand === "login") {
