@@ -15,10 +15,13 @@ architecture:
 schema-drift:
   corepack pnpm run check:schema-drift
 
+design-tokens-drift:
+  corepack pnpm run check:design-tokens-drift
+
 typecheck:
   corepack pnpm run typecheck
 
-fast-check: format-check lint architecture schema-drift typecheck test compose-config
+fast-check: format-check lint architecture schema-drift design-tokens-drift typecheck test compose-config
 
 test:
   corepack pnpm run test
@@ -29,7 +32,7 @@ build:
 compose-config:
   corepack pnpm run compose:config
 
-ci: format-check lint architecture schema-drift typecheck test build compose-config
+ci: format-check lint architecture schema-drift design-tokens-drift typecheck test build compose-config
 
 compose-build:
   docker compose build orchestrator dashboard runner

@@ -1,0 +1,320 @@
+/* =======================================================================
+   Tanren — colors_and_type.css
+   The foundational tokens. Everything else in the system composes these.
+   ======================================================================= */
+
+/* ---- Fonts -------------------------------------------------------------
+   Display: Syne          — avant-garde, angular, fashion-techno. Heavy.
+   UI:      Space Grotesk — geometric, slightly quirky, techno-fashion canon.
+   Mono:    JetBrains Mono— developer-canon, with personality. Italics carry weight.
+   Stamp:   Noto Serif JP — default; many decorative alternates pitched in
+            preview/type-families.html. The stamp is decorative, go wild.
+   All from Google Fonts. To self-host, drop files into ./fonts/ and rewrite.
+   ----------------------------------------------------------------------- */
+@import url("https://fonts.googleapis.com/css2?family=Syne:wght@500;600;700;800&family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&family=Noto+Serif+JP:wght@300;500;700&family=Reggae+One&display=swap");
+
+:root {
+  /* ====================================================================
+     COLOR — base palette
+     A two-temperature system: warm "paper" surfaces, cool "ink" text,
+     a single "ember" accent (the forge), and a quenched "steel" cool tone.
+     Authored in oklch for predictable lightness scaling.
+     ==================================================================== */
+
+  /* Ink — the writing temperature. Used for fg, borders, depth. */
+  --ink-12: oklch(8% 0.012 60);    /* deepest, true near-black with the slightest warmth */
+  --ink-11: oklch(14% 0.012 60);
+  --ink-10: oklch(20% 0.010 60);
+  --ink-09: oklch(28% 0.008 60);
+  --ink-08: oklch(38% 0.006 60);
+  --ink-07: oklch(50% 0.006 60);   /* mid-gray, captions */
+  --ink-06: oklch(62% 0.004 60);
+  --ink-05: oklch(72% 0.004 60);   /* hairline borders on dark surfaces */
+  --ink-04: oklch(82% 0.004 60);
+  --ink-03: oklch(89% 0.005 70);
+  --ink-02: oklch(94% 0.006 75);
+  --ink-01: oklch(97% 0.006 78);   /* paper-tinted near-white */
+
+  /* Ash — the cool industrial light surfaces. Brushed concrete, not paper.
+     Slight cool-cyan undertone reads as polished metal, not warm craft. */
+  --ash-00: oklch(98.0% 0.003 220);   /* lightest — close to but not pure white */
+  --ash-01: oklch(95.4% 0.004 220);   /* canvas — primary light bg */
+  --ash-02: oklch(92.0% 0.005 220);
+  --ash-03: oklch(87.5% 0.007 220);   /* hairline-equivalent in light mode */
+
+  /* Legacy paper aliases — kept for back-compat. Point at ash. */
+  --paper-00: var(--ash-00);
+  --paper-01: var(--ash-01);
+  --paper-02: var(--ash-02);
+  --paper-03: var(--ash-03);
+
+  /* Ember — the forge accent. The only saturated brand color.
+     Pushed hotter & more saturated for the industrial-punk pivot. */
+  --ember-12: oklch(22% 0.12 30);
+  --ember-11: oklch(34% 0.16 32);
+  --ember-10: oklch(48% 0.20 34);
+  --ember-09: oklch(60% 0.22 36);
+  --ember-08: oklch(68% 0.22 40);    /* primary ember — buttons, focus */
+  --ember-07: oklch(76% 0.20 48);
+  --ember-06: oklch(84% 0.15 56);
+  --ember-05: oklch(90% 0.10 62);
+  --ember-04: oklch(94% 0.05 70);    /* ember-tinted surface */
+  --ember-03: oklch(96.5% 0.03 72);
+  --ember-02: oklch(98% 0.018 75);
+
+  /* Steel — the quenched-cool counterpart. Sparing use. */
+  --steel-10: oklch(36% 0.05 230);
+  --steel-09: oklch(48% 0.07 230);
+  --steel-08: oklch(60% 0.09 230);
+  --steel-07: oklch(70% 0.08 230);
+  --steel-06: oklch(80% 0.05 230);
+  --steel-04: oklch(93% 0.02 230);
+  --steel-02: oklch(97% 0.01 230);
+
+  /* The three cost-model semantic colors (§4 of the brief) */
+  --cost-token: oklch(66% 0.18 42);      /* per-token == ember; real dollars */
+  --cost-window: oklch(60% 0.16 295);    /* subscription window == violet */
+  --cost-opportunity: oklch(70% 0.14 165); /* self-hosted == mint, "use it or lose it" */
+
+  /* Status semantics */
+  --status-ok: oklch(66% 0.14 155);
+  --status-warn: oklch(78% 0.16 85);
+  --status-fail: oklch(60% 0.20 25);
+  --status-run: oklch(70% 0.16 240);      /* in-flight, "alive" */
+
+  /* ====================================================================
+     SEMANTIC ALIASES (light theme default)
+     Components and screens should reference THESE, not the raw scales.
+     ==================================================================== */
+  --bg-canvas: var(--ash-01);
+  --bg-surface: var(--ash-00);
+  --bg-sunken: var(--ash-02);
+  --bg-inverted: var(--ink-12);
+
+  --fg-1: var(--ink-12);   /* primary text */
+  --fg-2: var(--ink-09);   /* secondary */
+  --fg-3: var(--ink-07);   /* tertiary / captions */
+  --fg-4: var(--ink-05);   /* disabled / hairline-on-text */
+  --fg-on-inverted: var(--paper-00);
+
+  --line-1: var(--ash-03);     /* hairline */
+  --line-2: var(--ink-04);     /* harder border */
+  --line-hot: var(--ember-08); /* focus / active outline */
+
+  --accent: var(--ember-08);
+  --accent-hover: var(--ember-09);
+  --accent-press: var(--ember-10);
+  --accent-tint: var(--ember-03);
+  --accent-on: var(--ink-12); /* fg color on ember bg — dark text on hot orange */
+
+  /* ====================================================================
+     TYPE FAMILIES
+     ==================================================================== */
+  --font-display: "Syne", "Space Grotesk", "Inter Tight", system-ui, sans-serif;
+  --font-ui: "Space Grotesk", "Geist", -apple-system, "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --font-jp: "Reggae One", "Noto Serif JP", "Hiragino Mincho ProN", "Yu Mincho", serif;
+
+  /* ====================================================================
+     TYPE SCALE
+     Display = serif, generous leading, italic supported.
+     UI      = sans, tight tracking on small sizes, looser on display.
+     Mono    = always tabular numbers.
+     ==================================================================== */
+  --t-display-xl: 7.5rem;   /* 120px hero moments */
+  --t-display-l:  4.5rem;   /* 72px */
+  --t-display-m:  3rem;     /* 48px */
+  --t-display-s:  2rem;     /* 32px */
+
+  --t-h1: 2.25rem;          /* 36px */
+  --t-h2: 1.625rem;         /* 26px */
+  --t-h3: 1.25rem;          /* 20px */
+  --t-h4: 1rem;             /* 16px */
+
+  --t-body-l: 1.125rem;     /* 18px */
+  --t-body:   0.9375rem;    /* 15px */
+  --t-body-s: 0.8125rem;    /* 13px */
+  --t-caption: 0.6875rem;   /* 11px */
+
+  /* ====================================================================
+     SPACING — 4px base scale (named for memorability)
+     ==================================================================== */
+  --s-0: 0;
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 20px;
+  --s-6: 24px;
+  --s-7: 32px;
+  --s-8: 40px;
+  --s-9: 56px;
+  --s-10: 72px;
+  --s-11: 96px;
+  --s-12: 128px;
+
+  /* ====================================================================
+     RADII — modest. Tanren is a hairline-precise system; corners stay tight.
+     ==================================================================== */
+  --r-0: 0;
+  --r-1: 2px;       /* tags, badges */
+  --r-2: 4px;       /* buttons, inputs */
+  --r-3: 6px;       /* cards */
+  --r-4: 10px;      /* large surfaces */
+  --r-full: 999px;  /* pills, only when warranted */
+
+  /* ====================================================================
+     SHADOWS — mostly absent. Used sparingly for elevated menus.
+     We prefer hairline borders to shadows. When shadows appear, they are
+     warm-tinted (ink-12 with low alpha), never neutral gray.
+     ==================================================================== */
+  --shadow-0: none;
+  --shadow-1: 0 1px 0 0 oklch(8% 0.012 60 / 0.04);
+  --shadow-2: 0 1px 2px 0 oklch(8% 0.012 60 / 0.06), 0 1px 0 0 oklch(8% 0.012 60 / 0.04);
+  --shadow-3: 0 6px 24px -8px oklch(8% 0.012 60 / 0.18), 0 1px 0 0 oklch(8% 0.012 60 / 0.06);
+  --shadow-4: 0 20px 60px -20px oklch(8% 0.012 60 / 0.30);
+  /* Ember glow — for active/focused interactive surfaces only */
+  --shadow-ember: 0 0 0 1px var(--ember-08), 0 6px 20px -8px oklch(66% 0.18 42 / 0.35);
+
+  /* ====================================================================
+     MOTION — sharp, intentional. No bounce.
+     ==================================================================== */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);    /* expo-out */
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --ease-in: cubic-bezier(0.7, 0, 0.84, 0);
+  --dur-fast: 120ms;
+  --dur: 200ms;
+  --dur-slow: 380ms;
+  --dur-page: 600ms;
+}
+
+/* =======================================================================
+   DARK THEME — Tanren defaults to light "paper" surfaces in marketing &
+   long-form, but the product UI usually wears dark. Apply [data-theme="dark"]
+   on <html> or any container.
+   ======================================================================= */
+[data-theme="dark"] {
+  --bg-canvas: var(--ink-12);
+  --bg-surface: var(--ink-11);
+  --bg-sunken: oklch(5% 0.012 60);
+  --bg-inverted: var(--paper-00);
+
+  --fg-1: var(--paper-00);
+  --fg-2: var(--ink-04);
+  --fg-3: var(--ink-06);
+  --fg-4: var(--ink-08);
+  --fg-on-inverted: var(--ink-12);
+
+  --line-1: oklch(20% 0.008 60);
+  --line-2: oklch(28% 0.010 60);
+  --line-hot: var(--ember-08);
+
+  --accent-tint: oklch(22% 0.06 35);
+  --shadow-1: 0 1px 0 0 oklch(0% 0 0 / 0.4);
+  --shadow-2: 0 1px 2px 0 oklch(0% 0 0 / 0.5);
+  --shadow-3: 0 8px 24px -8px oklch(0% 0 0 / 0.6);
+  --shadow-4: 0 24px 60px -20px oklch(0% 0 0 / 0.7);
+}
+
+/* =======================================================================
+   ELEMENT DEFAULTS — opt-in, scoped under [data-tanren-type]
+   Use <body data-tanren-type> on any page to inherit base typography.
+   ======================================================================= */
+[data-tanren-type],
+[data-tanren-type] * {
+  box-sizing: border-box;
+}
+
+[data-tanren-type] {
+  font-family: var(--font-ui);
+  font-size: var(--t-body);
+  line-height: 1.5;
+  color: var(--fg-1);
+  background: var(--bg-canvas);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  font-feature-settings: "ss01", "cv11"; /* Geist's preferred set, single-storey a */
+}
+
+[data-tanren-type] h1,
+[data-tanren-type] h2,
+[data-tanren-type] h3,
+[data-tanren-type] h4 {
+  font-family: var(--font-display);
+  font-weight: 700;             /* Syne reads punk-industrial at 700+ */
+  letter-spacing: -0.02em;
+  line-height: 1.0;
+  text-wrap: balance;
+  color: var(--fg-1);
+  margin: 0;
+  text-transform: none;
+}
+[data-tanren-type] h1 { font-size: var(--t-display-m); letter-spacing: -0.035em; font-weight: 800; }
+[data-tanren-type] h2 { font-size: var(--t-h1); letter-spacing: -0.025em; }
+[data-tanren-type] h3 { font-size: var(--t-h2); font-weight: 600; }
+[data-tanren-type] h4 { font-size: var(--t-h3); font-family: var(--font-ui); font-weight: 500; letter-spacing: -0.005em; }
+
+[data-tanren-type] p {
+  margin: 0 0 1em;
+  text-wrap: pretty;
+  max-width: 64ch;
+}
+
+[data-tanren-type] code,
+[data-tanren-type] pre,
+[data-tanren-type] kbd,
+[data-tanren-type] .mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+[data-tanren-type] code {
+  font-size: 0.92em;
+  background: var(--bg-sunken);
+  border: 1px solid var(--line-1);
+  padding: 0.08em 0.34em;
+  border-radius: var(--r-1);
+}
+
+[data-tanren-type] a {
+  color: var(--fg-1);
+  text-decoration: underline;
+  text-decoration-color: var(--accent);
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 3px;
+  transition: text-decoration-color var(--dur) var(--ease-out), color var(--dur) var(--ease-out);
+}
+[data-tanren-type] a:hover {
+  color: var(--accent);
+  text-decoration-color: var(--accent-hover);
+}
+
+/* The "Eyebrow" — small uppercase label used everywhere as a section anchor */
+[data-tanren-type] .eyebrow {
+  font-family: var(--font-mono);
+  font-size: var(--t-caption);
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: var(--fg-3);
+  font-weight: 500;
+}
+
+/* The "Numeral" — tabular, oversized display numbers (cost dashboards, etc.) */
+[data-tanren-type] .numeral {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum", "zero";
+  letter-spacing: -0.02em;
+}
+
+/* The "Stamp" — for the 鍛錬 kanji seal moments */
+[data-tanren-type] .stamp {
+  font-family: var(--font-jp);
+  font-weight: 500;
+  letter-spacing: 0.05em;
+}
+
+/* Selection */
+[data-tanren-type] ::selection {
+  background: var(--ember-08);
+  color: var(--ink-12);
+}
