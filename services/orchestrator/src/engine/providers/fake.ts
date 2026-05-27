@@ -9,9 +9,17 @@ export interface FakeWriterDependencies {
   target: SshTarget;
 }
 
+// Fake adapters used by hello and Phase 1 fixture tests are attributed as
+// self-hosted opportunity-cost calls. PROJECT_BRIEF §4.2 treats fixed-fee
+// local compute as opportunity_computed; the cost recorder then computes a
+// dollar figure from runtime seconds. The ref must still match a real v0
+// attribution rule — no unknown source is allowed (P2A-0011).
+export const fakeSelfHostedAuthRef = "credential/self-hosted/tanren-fake";
+
 export const fakePlanner: AnswererAdapter<PlanAnswer> = {
   kind: "answerer",
   cli: "fake",
+  authRef: fakeSelfHostedAuthRef,
   async runAnswerer() {
     return {
       subtasks: [
@@ -27,6 +35,7 @@ export const fakePlanner: AnswererAdapter<PlanAnswer> = {
 export const fakeWriter: WriterAdapter = {
   kind: "writer",
   cli: "fake",
+  authRef: fakeSelfHostedAuthRef,
   async runWriter(): Promise<WriterResult> {
     throw new Error("fake writer requires a runner SSH target; use createFakeWriter");
   }
@@ -36,6 +45,7 @@ export function createFakeWriter(dependencies: FakeWriterDependencies): WriterAd
   return {
     kind: "writer",
     cli: "fake",
+    authRef: fakeSelfHostedAuthRef,
     async runWriter(opts): Promise<WriterResult> {
       const input = {
         ssh: dependencies.ssh,
@@ -52,6 +62,7 @@ export function createFakeWriter(dependencies: FakeWriterDependencies): WriterAd
 export const fakeChecker: AnswererAdapter<CheckAnswer> = {
   kind: "answerer",
   cli: "fake",
+  authRef: fakeSelfHostedAuthRef,
   async runAnswerer() {
     return { done: true, reason: "Synthetic writer output satisfies the hello-world criteria.", suggested_fixes: null };
   }
@@ -60,6 +71,7 @@ export const fakeChecker: AnswererAdapter<CheckAnswer> = {
 export const fakeAuditor: AnswererAdapter<AuditAnswer> = {
   kind: "answerer",
   cli: "fake",
+  authRef: fakeSelfHostedAuthRef,
   async runAnswerer() {
     return {
       verified: true,

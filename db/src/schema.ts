@@ -150,6 +150,19 @@ export const costRecords = pgTable(
   ]
 );
 
+// Rolling denominator used to convert subscription-window usage into a USD
+// equivalent (PROJECT_BRIEF §4.3). v0 starts each auth ref with a
+// conservative theoretical maximum and refines it from observed history.
+// The 30-day rolling sum is recomputed by the CostRecorder on every write.
+export const subscriptionWindowDenominators = pgTable(
+  "subscription_window_denominators",
+  {
+    authRef: text("auth_ref").primaryKey(),
+    observedMaxMonthlyTokens: integer("observed_max_monthly_tokens").notNull().default(0),
+    lastUpdatedAt: timestamp("last_updated_at", { withTimezone: true }).notNull().defaultNow()
+  }
+);
+
 export const events = pgTable(
   "events",
   {

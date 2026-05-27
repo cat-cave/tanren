@@ -75,14 +75,17 @@ describe("hello workflow", () => {
       "writer.started",
       "workspace.git_captured",
       "writer.completed",
+      "cost.resolved",
       "task.completed",
       "task.started",
       "checker.started",
       "checker.completed",
+      "cost.resolved",
       "task.completed",
       "task.started",
       "auditor.started",
       "auditor.completed",
+      "cost.resolved",
       "task.completed",
       "runner.released",
       "run.completed",
@@ -250,6 +253,7 @@ describe("hello workflow", () => {
     const badChecker: AnswererAdapter<CheckAnswer> = {
       kind: "answerer",
       cli: "codex",
+      authRef: "credential/codex/hello-workflow-test",
       async runAnswerer(opts) {
         return parseStructuredAnswererOutput("not-json", opts.outputSchema);
       }

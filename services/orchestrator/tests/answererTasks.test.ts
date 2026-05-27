@@ -43,6 +43,7 @@ describe("structured Answerer task helpers", () => {
     const badAdapter: AnswererAdapter<CheckAnswer> = {
       kind: "answerer",
       cli: "codex",
+      authRef: "credential/codex/answerer-tasks-test",
       async runAnswerer(opts) {
         return parseStructuredAnswererOutput("not-json", opts.outputSchema);
       }
@@ -63,6 +64,7 @@ describe("structured Answerer task helpers", () => {
 class RecordingAnswerer<TOutput> implements AnswererAdapter<TOutput> {
   readonly kind = "answerer";
   readonly cli = "fake";
+  readonly authRef = "credential/self-hosted/answerer-tasks-test";
   lastSchemaName: string | undefined;
 
   constructor(private readonly output: TOutput) {}

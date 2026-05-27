@@ -281,6 +281,15 @@ export const sensitivityRules: SensitivityRule[] = [
     ["costSource", "public"]
   ]),
   ...rulesFor("cost.failed", [["taskId", "public"], ["message", "public"]]),
+  ...rulesFor("cost.unattributable", [
+    ["taskId", "public"],
+    ["cli", "public"],
+    ["authRef", "redacted"],
+    ["reason", "public"],
+    ["inputTokens", "public"],
+    ["outputTokens", "public"],
+    ["cachedTokens", "public"]
+  ]),
 
   // github
   ...rulesFor("github.branch.pushed", [

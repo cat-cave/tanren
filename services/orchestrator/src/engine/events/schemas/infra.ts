@@ -132,3 +132,19 @@ export const CostFailedPayload = z
     message: z.string()
   })
   .strict();
+
+// Emitted when a completed Codex call has token usage but the orchestrator
+// cannot attribute it to one of the three v0 cost models. The task fails
+// with failureKind="cost.unattributable" and the run halts so no row lands
+// in cost_records with a placeholder source. See P2A-0011.
+export const CostUnattributablePayload = z
+  .object({
+    taskId: z.string(),
+    cli: z.string(),
+    authRef: z.string(),
+    reason: z.string(),
+    inputTokens: z.number().int().optional(),
+    outputTokens: z.number().int().optional(),
+    cachedTokens: z.number().int().optional()
+  })
+  .strict();
