@@ -6,3 +6,6 @@ coverage/
 *.log
 .pnpm-store/
 .turbo/
+
+# Claude Code agent worktrees
+.claude/
