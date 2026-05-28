@@ -180,6 +180,66 @@ describe("dashboard auth flow", () => {
   });
 });
 
+// DEV-ONLY: with the local_dev escape hatch on, /auth/login must NOT 302 the
+// browser cross-origin to the docker-internal orchestrator (the original bug).
+// It runs the handshake server-side and 303s to `next` with a session cookie.
+function mockDevLoginOrchestrator(): void {
+  vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+    const url = typeof input === "string" ? input : input.toString();
+    if (url.includes("/auth/login")) {
+      const headers = new Headers();
+      headers.set("location", "http://orchestrator:3100/auth/callback?provider=local_dev&state=st1&code=local-dev");
+      headers.append("set-cookie", "tanren_oauth_state=st1; Path=/; HttpOnly; SameSite=Lax; Max-Age=600");
+      return new Response(null, { status: 302, headers });
+    }
+    if (url.includes("/auth/callback")) {
+      const headers = new Headers();
+      headers.append("set-cookie", "tanren_session=sess-1; Path=/; HttpOnly; SameSite=Lax");
+      return new Response(JSON.stringify({ ok: true }), { status: 200, headers });
+    }
+    return new Response("not found", { status: 404 });
+  });
+}
+
+describe("dashboard dev-login proxy (TANREN_DEV_LOGIN=1)", () => {
+  afterEach(() => {
+    delete process.env.TANREN_DEV_LOGIN;
+  });
+
+  it("303s to next with a re-emitted tanren_session cookie instead of a cross-origin redirect", async () => {
+    process.env.TANREN_DEV_LOGIN = "1";
+    mockDevLoginOrchestrator();
+    const app = await build();
+    const res = await app.request("/auth/login?next=/projects");
+    expect(res.status).toBe(303);
+    expect(res.headers.get("location")).toBe("/projects");
+    const setCookie = res.headers.get("set-cookie") ?? "";
+    expect(setCookie).toContain("tanren_session=sess-1");
+    // Must NOT leak the internal orchestrator host to the browser.
+    expect(setCookie).not.toContain("orchestrator:3100");
+  });
+
+  it("bounces back to /signin with an error when the handshake fails", async () => {
+    process.env.TANREN_DEV_LOGIN = "1";
+    vi.stubGlobal("fetch", async () => new Response("boom", { status: 500 }));
+    const app = await build();
+    const res = await app.request("/auth/login?next=/projects");
+    expect(res.status).toBe(302);
+    const location = res.headers.get("location") ?? "";
+    expect(location).toContain("/signin");
+    expect(location).toContain("error=dev_login_failed");
+    expect(location).not.toContain("orchestrator:3100");
+  });
+
+  it("renders the sign-in error banner when /signin carries an error param", async () => {
+    process.env.TANREN_DEV_LOGIN = "1";
+    mockDevLoginOrchestrator();
+    const app = await build();
+    const html = await (await app.request("/signin?error=dev_login_failed")).text();
+    expect(html).toContain('data-testid="signin-error"');
+  });
+});
+
 // Regression guard for the whole fan-out: a child screen registered at a
 // placeholder path (via the append-only SCREEN_MOUNTS registry) must win, and
 // the shell must NOT shadow it with a placeholder.

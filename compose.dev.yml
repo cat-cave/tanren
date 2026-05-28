@@ -118,7 +118,8 @@ services:
       # MUST never set it. See docs/operator-guide/auth.md.
       TANREN_DEV_LOGIN: ${TANREN_DEV_LOGIN:-}
     ports:
-      - "3000:3000"
+      # Host port is remappable (default 3000) when :3000 is taken; in-container stays 3000.
+      - "${DASHBOARD_HOST_PORT:-3000}:3000"
     depends_on:
       postgres:
         condition: service_healthy
