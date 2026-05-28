@@ -185,12 +185,16 @@ describe("P2B-0004 run-detail screen", () => {
     expect(html).toContain(`/runs/${RUN_ID}/stream`);
   });
 
-  it("delegates /runs/halted to the shell placeholder (P2B-0008 owns it)", async () => {
+  it("delegates /runs/halted to P2B-0008's halted-run list (not the run-detail page)", async () => {
+    // The `:runId` handler must NOT treat the literal `halted` as a run id —
+    // it delegates via next() so P2B-0008's halted-run list claims the route.
     mockOrchestrator();
     const app = await build();
     const html = await (await app.request("/runs/halted")).text();
-    expect(html).toContain("documented placeholder");
-    expect(html).toContain("P2B-0008");
+    expect(html).toContain("halted runs");
+    // not the run-detail body, not run-not-found
+    expect(html).not.toContain("run not visible");
+    expect(html).not.toContain("the agent");
   });
 
   it("renders run-not-found for an unknown run", async () => {
