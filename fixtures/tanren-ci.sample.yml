@@ -1,0 +1,40 @@
+# Sample tanren-ci.yml — the repo-sourced tiered CI contract.
+#
+# Drop this file at the root of a target repo to control which shell steps run
+# at each point in a Tanren run's lifecycle. The SAME file is read by GitHub
+# Actions (the CI poller) and by Tanren's in-loop gate, so a step you put in
+# the `fast` tier runs both on every iteration locally and in CI.
+#
+# See docs/operator-guide/ci-config.md for the full schema reference.
+
+version: 1
+
+# Optional. Run once before any tier to provision dependencies. P3-0006
+# workspace bootstrap reads this field.
+bootstrap:
+  run: "pnpm install --frozen-lockfile"
+
+# Tiers are named lists of shell steps. `fast` and `slow` are required; you
+# may add extra named tiers (e.g. `integration`) and map them under `when`.
+tiers:
+  fast:
+    - name: lint
+      run: "pnpm lint"
+    - name: typecheck
+      run: "pnpm typecheck"
+    - name: unit
+      run: "pnpm test"
+  slow:
+    - name: build
+      run: "pnpm build"
+    - name: integration-test
+      run: "pnpm test:integration"
+
+# Declarative tier -> lifecycle-point mapping. Every tier MUST appear here;
+# valid points are per_iteration, pre_audit, and pre_merge.
+when:
+  fast:
+    - per_iteration
+  slow:
+    - pre_audit
+    - pre_merge
