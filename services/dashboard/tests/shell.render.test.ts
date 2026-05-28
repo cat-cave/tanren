@@ -14,8 +14,11 @@
 //   - unauthenticated requests redirect to the OAuth login (with `next`).
 
 import type pg from "pg";
+import type { Hono } from "hono";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/main.js";
+import { loadShellContext, renderShell, type ShellDeps } from "../src/app/mountShell.js";
+import { SCREEN_MOUNTS } from "../src/app/screens.js";
 
 const ORG = { id: "org_acme", kind: "github_org", login: "cat-cave", displayName: "Cat Cave", role: "org:admin" };
 const PROJECTS = [
@@ -174,5 +177,41 @@ describe("dashboard auth flow", () => {
     const location = res.headers.get("location") ?? "";
     expect(location).toContain("provider=github_oauth");
     expect(location).toContain("next=%2Fprojects");
+  });
+});
+
+// Regression guard for the whole fan-out: a child screen registered at a
+// placeholder path (via the append-only SCREEN_MOUNTS registry) must win, and
+// the shell must NOT shadow it with a placeholder.
+describe("screen-router mounting convention (fan-out extension point)", () => {
+  afterEach(() => {
+    SCREEN_MOUNTS.length = 0;
+  });
+
+  it("renders a registered child route at a placeholder path instead of the placeholder", async () => {
+    mockOrchestrator();
+    SCREEN_MOUNTS.push((app: Hono, deps: ShellDeps) => {
+      app.get("/costs", async (c) => {
+        const ctx = await loadShellContext(c, deps, { activeNavId: "costs" });
+        return renderShell(c, ctx, { title: "tanren · costs" }, "REAL_COSTS_SCREEN");
+      });
+    });
+    const app = await build();
+    const html = await (await app.request("/costs")).text();
+    expect(html).toContain("REAL_COSTS_SCREEN");
+    expect(html).not.toContain("documented placeholder");
+  });
+
+  it("still serves the placeholder for rows no child screen claims", async () => {
+    mockOrchestrator();
+    SCREEN_MOUNTS.push((app: Hono, deps: ShellDeps) => {
+      app.get("/costs", async (c) => {
+        const ctx = await loadShellContext(c, deps, { activeNavId: "costs" });
+        return renderShell(c, ctx, { title: "tanren · costs" }, "REAL_COSTS_SCREEN");
+      });
+    });
+    const app = await build();
+    const html = await (await app.request("/notifications")).text();
+    expect(html).toContain("documented placeholder");
   });
 });

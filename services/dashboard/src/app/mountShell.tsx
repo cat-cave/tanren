@@ -1,18 +1,28 @@
 /**
  * Shell mounting + the extension-point convention every child screen uses.
  *
- * `mountShell(app, deps)` registers the chrome routes on the Hono app:
- *   - one route per sidenav row (placeholders during 2B),
- *   - a project route `/projects/:projectId` that sets the project crumb.
+ * ## How child screens (P2B-0002…0009) mount their routes — THE convention
  *
- * Child screens (P2B-0002…0009) "mount their route here" by calling
- * `renderShell(c, deps, { ... }, <PageBody/>)` from their own handler instead of
- * the placeholder. The contract:
- *   1. resolve the shell context with `loadShellContext` (org + projects +
+ * 1. **Add a mount function to the append-only screen registry** in
+ *    `./screens.ts`: `SCREEN_MOUNTS.push(mountCostsScreen)`. Each entry is a
+ *    `(app, deps) => void` that registers the spec's own routes under its owned
+ *    `src/routes/<area>/**` subtree. The array is append-only so parallel
+ *    fan-out PRs never conflict on it.
+ * 2. **Render through the shell** with `renderShell(c, ctx, { title }, <Body/>)`:
+ *    - resolve the shell context with `loadShellContext` (org + projects +
  *      palette), passing the active nav id and project id;
- *   2. render their page body inside `ShellLayout` via `renderShell`.
- * They never touch TopBar/SideNav/ForgePalette or this file — they register
- * their own `app.get(...)` and reuse `renderShell`. See README in tests/e2e.
+ *    - render the page body inside `ShellLayout` via `renderShell`.
+ *    Child screens never touch TopBar/SideNav/ForgePalette or this file.
+ *
+ * ## Ordering contract (makes "real route always wins" order-robust)
+ *
+ * `createApp` runs the screen registry (`mountScreens`) BEFORE `mountShell`.
+ * `mountShell` then registers placeholders ONLY for paths that have no GET
+ * handler yet (it inspects `app.routes`). So a child route registered via the
+ * registry is always present first and is never shadowed by a placeholder —
+ * regardless of Hono's first-match-wins chain semantics. A child screen owning
+ * a sidenav row simply registers its real GET at that row's `path` and the
+ * placeholder is skipped automatically.
  */
 
 import type { Context, Hono } from "hono";
@@ -88,10 +98,22 @@ export function renderShell(
   );
 }
 
-/** Register a single placeholder route for a sidenav row. */
+/**
+ * True when a GET handler is already registered for `path`. Hono exposes the
+ * registered routes as `{ method, path, handler }[]`; a child screen route
+ * mounted earlier (via the screen registry) makes the shell skip its placeholder.
+ */
+function hasGetRoute(app: Hono, path: string): boolean {
+  return app.routes.some((route) => route.method === "GET" && route.path === path);
+}
+
+/**
+ * Register a placeholder GET for a sidenav row, ONLY if no handler claims its
+ * path yet. Project-scoped template paths are owned by the project route below.
+ */
 function mountPlaceholder(app: Hono, deps: ShellDeps, row: NavRow): void {
-  // Skip project-scoped template paths — those are handled by the project route.
   if (row.path.includes(":projectId")) return;
+  if (hasGetRoute(app, row.path)) return;
   app.get(row.path, async (c) => {
     const ctx = await loadShellContext(c, deps, { activeNavId: row.id });
     return renderShell(c, ctx, { title: `tanren · ${row.label}` }, <PlaceholderBody row={row} />);
@@ -99,38 +121,38 @@ function mountPlaceholder(app: Hono, deps: ShellDeps, row: NavRow): void {
 }
 
 /**
- * Mount the shell chrome routes. Call once during app construction, BEFORE
- * child-screen routers so a child can override a placeholder by registering the
- * same path later (Hono last-match-wins per method on identical paths is not
- * guaranteed; child specs own distinct subtrees, so collisions are by design
- * avoided — see the per-spec `Owns` map).
+ * Mount the shell chrome routes. Call once during app construction, AFTER the
+ * screen registry (`mountScreens`). Every route here is gap-filling: it is
+ * registered only when no child screen already claims that path, so a real
+ * child route is never shadowed by the shell.
  */
 export function mountShell(app: Hono, deps: ShellDeps): void {
   // Landing: redirect root to the project list (the operator home in 2B).
-  app.get("/", (c) => c.redirect("/projects"));
+  if (!hasGetRoute(app, "/")) {
+    app.get("/", (c) => c.redirect("/projects"));
+  }
 
   // Project list (placeholder until P2B-0003).
-  app.get("/projects", async (c) => {
-    const ctx = await loadShellContext(c, deps, { activeNavId: "projects" });
-    return renderShell(
-      c,
-      ctx,
-      { title: "tanren · projects" },
-      <ProjectListBody ctx={ctx} />
-    );
-  });
+  if (!hasGetRoute(app, "/projects")) {
+    app.get("/projects", async (c) => {
+      const ctx = await loadShellContext(c, deps, { activeNavId: "projects" });
+      return renderShell(c, ctx, { title: "tanren · projects" }, <ProjectListBody ctx={ctx} />);
+    });
+  }
 
   // Project-scoped landing: sets the crumb + switcher selection.
-  app.get("/projects/:projectId", async (c) => {
-    const projectId = c.req.param("projectId");
-    const ctx = await loadShellContext(c, deps, { activeNavId: "projects", projectId });
-    return renderShell(
-      c,
-      ctx,
-      { title: `tanren · ${ctx.project?.name ?? projectId}` },
-      <ProjectPlaceholderBody projectId={projectId} found={ctx.project !== undefined} />
-    );
-  });
+  if (!hasGetRoute(app, "/projects/:projectId")) {
+    app.get("/projects/:projectId", async (c) => {
+      const projectId = c.req.param("projectId");
+      const ctx = await loadShellContext(c, deps, { activeNavId: "projects", projectId });
+      return renderShell(
+        c,
+        ctx,
+        { title: `tanren · ${ctx.project?.name ?? projectId}` },
+        <ProjectPlaceholderBody projectId={projectId} found={ctx.project !== undefined} />
+      );
+    });
+  }
 
   for (const row of allNavRows()) {
     mountPlaceholder(app, deps, row);

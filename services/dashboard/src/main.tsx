@@ -6,6 +6,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { OrchestratorClient } from "./api/orchestrator.js";
 import { mountShell, type ShellDeps } from "./app/mountShell.js";
+import { mountScreens } from "./app/screens.js";
 import { loginUrl, useSession } from "./auth/index.js";
 
 /** Public, unauthenticated paths (never gated by the auth middleware). */
@@ -84,8 +85,12 @@ export async function createApp(options: CreateAppOptions = {}) {
     return c.json(result);
   });
 
-  // Shell chrome routes (TopBar + SideNav + palette) and sidenav placeholders.
-  // Child screens (P2B-0002…0009) register their own routes + reuse renderShell.
+  // Child screens (P2B-0002…0009) FIRST, via the append-only screen registry,
+  // so their real routes claim their paths before the shell fills the gaps.
+  mountScreens(app, shellDeps);
+
+  // Shell chrome routes (TopBar + SideNav + palette) + gap-filling placeholders
+  // for every sidenav row no child screen has claimed yet.
   mountShell(app, shellDeps);
 
   return app;
