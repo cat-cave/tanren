@@ -1,4 +1,4 @@
-import type { AuditAnswer, CheckAnswer, PlanAnswer } from "../answerers/schemas/index.js";
+import type { AuditAnswer, CheckAnswer, DemoAnswer, PlanAnswer } from "../answerers/schemas/index.js";
 import type { RoutingChainEntry, RoutingTable } from "../config/shared.js";
 import type { SshTarget } from "../contracts/allocator.js";
 import type { SecretStore } from "../contracts/secretStore.js";
@@ -124,4 +124,23 @@ function chainHead(routing: RoutingTable, role: "plan" | "write" | "check" | "au
     throw new EmptyRoutingChainError(role);
   }
   return head;
+}
+
+// P3-0011: resolves the project's `demo` routing chain into an Answerer that
+// emits the P2A-0008 DemoAnswer. The demo role defaults to an EMPTY chain
+// (see RoutingTable in config/shared.ts), so a project without a configured
+// demo credential resolves to `null` — the signal the demo narrator uses to
+// fall back to its deterministic template instead of hard-failing. When the
+// chain IS configured, its head selects the provider (Codex by default, or
+// Claude when the entry's cli is "claude"), reusing buildAnswererAdapter so
+// the demo role shares the exact provider seam every other Answerer uses.
+export function buildDemoAnswererOrNull(
+  deps: AdapterSelectorDependencies,
+  routing: RoutingTable
+): AnswererAdapter<DemoAnswer> | null {
+  const head = routing.demo.chain[0];
+  if (head === undefined) {
+    return null;
+  }
+  return buildAnswererAdapter<DemoAnswer>(deps, head);
 }
