@@ -491,3 +491,8 @@ export const specDependencies = pgTable(
 // (re-exported below) to keep this file under the file-line-max-500
 // architecture rule. See docs/operator-guide/notifications.md.
 export { notificationTargets, notificationRoutes } from "./schemaNotifications.js";
+
+// P2A-0019 Forge conversation substrate (forge_threads, forge_turns) lives
+// in `schemaForge.ts` and is re-exported here so the migration generator
+// and downstream `schema.*` consumers see a single namespace.
+export { forgeThreads, forgeTurns } from "./schemaForge.js";
