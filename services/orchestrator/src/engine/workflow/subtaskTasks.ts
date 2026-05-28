@@ -46,7 +46,7 @@ export async function insertChildTask(pool: LoopQueryClient, task: ChildTaskInse
 export async function markTaskDone(
   pool: LoopQueryClient,
   taskId: string,
-  outcome: "passed" | "rejected_by_checker" | "rejected_by_auditor"
+  outcome: "passed" | "rejected_by_checker" | "rejected_by_auditor" | "window_exhausted"
 ): Promise<void> {
   await pool.query(
     `UPDATE tasks SET status = 'done', outcome = $2, ended_at = now() WHERE task_id = $1`,

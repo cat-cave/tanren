@@ -7,12 +7,9 @@ export const DEFAULT_WINDOW_PRESSURE_THRESHOLD = 100;
 // evaluateWindowPressure is a PURE pre-flight check: given the live windows for
 // a provider, it returns the single WORST window at/over the threshold, or null
 // when every window is below it. "Worst" = highest usedPercent; ties break by
-// the soonest reset (the more urgent constraint).
-//
-// TODO(P2A-cost-monitors-wiring): the workflow will call this before dispatch
-// and escalate window pressure (PROJECT_BRIEF §4.3) instead of dispatching a
-// doomed call. That wiring lands in the NEXT PR; this PR only exposes the
-// helper, the monitors, and the events.
+// the soonest reset (the more urgent constraint). The planner loop calls it
+// (via SshUsageProbe) before dispatch and escalates window pressure
+// (PROJECT_BRIEF §4.3) instead of dispatching a doomed call.
 export function evaluateWindowPressure(
   windows: SubscriptionWindow[],
   thresholdPercent: number = DEFAULT_WINDOW_PRESSURE_THRESHOLD

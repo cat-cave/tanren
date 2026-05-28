@@ -142,4 +142,68 @@ describe("CostRecorder", () => {
     expect(serialized.join("\n")).not.toContain(`${"legacy"}_${"unknown"}`);
     expect(serialized.join("\n")).not.toContain("unknown_source");
   });
+
+  it("records a ccusage figure as cost_basis 'ccusage' when given a positive per-call ccusageCostUsd", async () => {
+    const pool = new FakeCostPool();
+    const recorder = new CostRecorder(pool as never, new FakeEventStore());
+    const result = await recorder.record(
+      { ...context, cli: "codex", model: "gpt-codex", authRef: "credential/codex/dev", ccusageCostUsd: 0.75 },
+      usage({ inputTokens: 100, totalTokens: 100 }),
+      {}
+    );
+    expect(result.costBasis).toBe("ccusage");
+    expect(result.costUsd).toBe("0.750000");
+    expect(pool.inserts[0]?.params[COST_BASIS]).toBe("ccusage");
+    expect(pool.inserts[0]?.params[COST_USD]).toBe("0.750000");
+  });
+});
+
+// Pool that serves a SELECT of run rows and captures the apportioning UPDATEs.
+class ReconcilePool {
+  readonly updates: Array<{ id: string; costUsd: string }> = [];
+
+  constructor(private readonly rows: Array<{ id: string; total_tokens: number }>) {}
+
+  async query(sql: string, params: ReadonlyArray<unknown> = []): Promise<{ rows: ReadonlyArray<Record<string, unknown>>; rowCount: number }> {
+    if (sql.startsWith("SELECT id, total_tokens FROM cost_records")) {
+      return { rows: this.rows, rowCount: this.rows.length };
+    }
+    if (sql.startsWith("UPDATE cost_records SET cost_usd")) {
+      this.updates.push({ id: String(params[0]), costUsd: String(params[1]) });
+      return { rows: [], rowCount: 1 };
+    }
+    return { rows: [], rowCount: 0 };
+  }
+}
+
+describe("CostRecorder.reconcileRunCostFromCcusage", () => {
+  it("apportions the real ccusage cost across rows by token share so they sum to the total", async () => {
+    const pool = new ReconcilePool([
+      { id: "1", total_tokens: 750 },
+      { id: "2", total_tokens: 250 }
+    ]);
+    const recorder = new CostRecorder(pool as never, new FakeEventStore());
+    const { updated } = await recorder.reconcileRunCostFromCcusage("run_test", 4);
+    expect(updated).toBe(2);
+    expect(pool.updates).toEqual([
+      { id: "1", costUsd: "3.000000" },
+      { id: "2", costUsd: "1.000000" }
+    ]);
+    const summed = pool.updates.reduce((sum, update) => sum + Number(update.costUsd), 0);
+    expect(summed).toBeCloseTo(4, 6);
+  });
+
+  it("is a no-op for a zero/absent ccusage cost (cost-unknown stays an honest NULL)", async () => {
+    const pool = new ReconcilePool([{ id: "1", total_tokens: 100 }]);
+    const recorder = new CostRecorder(pool as never, new FakeEventStore());
+    expect(await recorder.reconcileRunCostFromCcusage("run_test", 0)).toEqual({ updated: 0 });
+    expect(pool.updates).toHaveLength(0);
+  });
+
+  it("is a no-op when the run recorded zero tokens (cannot apportion)", async () => {
+    const pool = new ReconcilePool([{ id: "1", total_tokens: 0 }]);
+    const recorder = new CostRecorder(pool as never, new FakeEventStore());
+    expect(await recorder.reconcileRunCostFromCcusage("run_test", 5)).toEqual({ updated: 0 });
+    expect(pool.updates).toHaveLength(0);
+  });
 });

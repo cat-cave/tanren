@@ -29,6 +29,7 @@ export const TaskOutcome = z.enum([
   "rejected_by_auditor",
   "timed_out",
   "crashed",
+  "window_exhausted",
   "cancelled",
   // Phase 0/1 historical outcomes still present in the database
   "ok",

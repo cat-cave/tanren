@@ -65,6 +65,27 @@ describe("cost source attribution", () => {
     const source = resolveCostSource({ cli: "codex", authRef: "", rawUsage: {} });
     expect(source.costBasis).toBe("unknown");
   });
+
+  it("lets a positive ccusage figure win over the static provider table", () => {
+    const source = resolveCostSource({ cli: "codex", authRef: "credential/openai-api/k", ccusageCostUsd: 0.42, rawUsage: {} });
+    expect(source.costBasis).toBe("ccusage");
+    expect(source.ccusageCostUsd).toBe(0.42);
+    expect(source.rate).toBeNull();
+  });
+
+  it("lets ccusage price a subscription credential (the only real dollars it gets)", () => {
+    const source = resolveCostSource({ cli: "codex", authRef: "credential/codex/dev", ccusageCostUsd: 1.5, rawUsage: {} });
+    expect(source.billingMode).toBe("subscription");
+    expect(source.costBasis).toBe("ccusage");
+    expect(source.ccusageCostUsd).toBe(1.5);
+  });
+
+  it("ignores a zero/negative ccusage figure and falls back to the normal basis", () => {
+    const zero = resolveCostSource({ cli: "codex", authRef: "credential/openai-api/k", ccusageCostUsd: 0, rawUsage: {} });
+    expect(zero.costBasis).toBe("provider_pricing");
+    const negative = resolveCostSource({ cli: "codex", authRef: "credential/codex/dev", ccusageCostUsd: -3, rawUsage: {} });
+    expect(negative.costBasis).toBe("unknown");
+  });
 });
 
 describe("cost USD computation", () => {
@@ -91,5 +112,11 @@ describe("cost USD computation", () => {
   it("returns null cost for self-hosted billing", () => {
     const source = resolveCostSource({ cli: "fake", authRef: "credential/self-hosted/qwen", rawUsage: {} });
     expect(computeCostUsd(source, usage({ inputTokens: 100, outputTokens: 100 }))).toBeNull();
+  });
+
+  it("returns the real ccusage figure (not a token-priced estimate) for cost_basis 'ccusage'", () => {
+    const source = resolveCostSource({ cli: "codex", authRef: "credential/codex/dev", ccusageCostUsd: 3.25, rawUsage: {} });
+    // Tokens are irrelevant to the dollar figure here — ccusage already priced it.
+    expect(computeCostUsd(source, usage({ inputTokens: 9_999_999, outputTokens: 9_999_999 }))).toBe("3.250000");
   });
 });

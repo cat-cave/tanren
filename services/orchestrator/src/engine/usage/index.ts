@@ -1,10 +1,7 @@
 // Usage monitoring surface: live subscription-window state (codexbar) and
 // token-consumption accounting (ccusage), both run in the runner over SSH.
-//
-// TODO(P2A-cost-monitors-wiring): the planner/writer loop will consume these
-// (window pre-flight + ccusage cost-basis) in the next PR. This PR only
-// exposes the contracts, parsers, SSH adapters, the pressure helper, and the
-// usage.* events.
+// The planner loop consumes these through a UsageProbe (window pre-flight +
+// run-level ccusage cost reconciliation).
 export type {
   CcusageAccounting,
   CcusageModelUsage,
@@ -23,3 +20,4 @@ export {
   SshCodexbarUsageMonitor,
   type UsageNote
 } from "./sshMonitors.js";
+export { SshUsageProbe, type SshUsageProbeConfig, type UsageProbe, type WindowObservation } from "./probe.js";

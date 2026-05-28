@@ -22,6 +22,7 @@ export const stateEnumLists = {
     "halted",
     "escape_hatch_hit",
     "retry_budget_exhausted",
+    "window_exhausted",
     "cancelled",
     "hello_world_complete",
     "ok",
@@ -63,6 +64,7 @@ export const stateEnumLists = {
     "rejected_by_auditor",
     "timed_out",
     "crashed",
+    "window_exhausted",
     "cancelled",
     "ok",
     "pending"

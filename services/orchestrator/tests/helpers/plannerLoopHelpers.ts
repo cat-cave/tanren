@@ -32,9 +32,21 @@ interface FakePoolRecord {
 export class FakePool {
   readonly tasks: FakePoolRecord[] = [];
   readonly costInserts: Array<{ taskId: string; cli: string }> = [];
+  // cost_records rows keyed by synthetic id, with the total_tokens needed by
+  // reconcileRunCostFromCcusage. costUpdates captures the apportioning UPDATEs.
+  readonly costRows: Array<{ id: string; totalTokens: number }> = [];
+  readonly costUpdates: Array<{ id: string; costUsd: string }> = [];
+  private nextCostId = 1;
 
   async query(sql: string, params: ReadonlyArray<unknown> = []): Promise<{ rows: ReadonlyArray<Record<string, unknown>>; rowCount: number }> {
     const trimmed = sql.trim();
+    if (trimmed.startsWith("SELECT id, total_tokens FROM cost_records")) {
+      return { rows: this.costRows.map((row) => ({ id: row.id, total_tokens: row.totalTokens })), rowCount: this.costRows.length };
+    }
+    if (trimmed.startsWith("UPDATE cost_records SET cost_usd")) {
+      this.costUpdates.push({ id: String(params[0]), costUsd: String(params[1]) });
+      return { rows: [], rowCount: 1 };
+    }
     if (trimmed.startsWith("INSERT INTO tasks")) {
       if (trimmed.includes("parent_task_id")) {
         this.tasks.push({
@@ -73,6 +85,7 @@ export class FakePool {
     }
     if (trimmed.startsWith("INSERT INTO cost_records")) {
       this.costInserts.push({ taskId: String(params[0]), cli: String(params[3]) });
+      this.costRows.push({ id: String(this.nextCostId++), totalTokens: Number(params[11] ?? 0) });
       return { rows: [], rowCount: 1 };
     }
     return { rows: [], rowCount: 0 };

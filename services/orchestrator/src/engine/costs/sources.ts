@@ -40,12 +40,21 @@ export interface CostSource {
   provider: string;
   // Per-token rate entry when costBasis === 'provider_pricing', else null.
   rate: ProviderRate | null;
+  // Real dollar figure carried over from ccusage when costBasis === 'ccusage',
+  // else null. ccusage reports actual billed/computed cost from the CLI's own
+  // session logs, so when present it OUTRANKS the static provider table.
+  ccusageCostUsd: number | null;
   rawUsage: RawUsage;
 }
 
 export interface AttributionInput {
   cli: "codex" | "claude" | "opencode" | "fake";
   authRef: string;
+  // Real dollar figure for THIS call, derived from ccusage (apportioned by
+  // token share against the run-level ccusage total — see CostRecorder
+  // .reconcileRunCostFromCcusage). A positive value wins over the static
+  // provider table regardless of billing mode; null/0 falls back.
+  ccusageCostUsd?: number | null;
   rawUsage: RawUsage;
 }
 
@@ -112,13 +121,22 @@ function refTailSegment(ref: string): string | undefined {
 // cost_basis = 'unknown' (cost_usd will be null). Token accounting still
 // happens for every call.
 //
-// TODO(P2A-cost-monitors-wiring): the real ccusage/codexbar monitors now live
-// in services/orchestrator/src/engine/usage/ (runner-side over SSH). The NEXT
-// PR plugs them in here — a per_token call with a positive ccusage costUSD
-// resolves to cost_basis = 'ccusage', and subscription-window percent-of-window
-// data attaches to the raw payload. This PR ships only the monitors + events.
+// Cost-basis precedence (PROJECT_BRIEF §4): a positive ccusage figure is a
+// REAL billed/computed dollar amount from the CLI's own logs, so it wins over
+// everything — even for a subscription credential, where ccusage may still
+// compute a comparable cost. Otherwise a per_token credential with a known
+// provider rate prices from the static table; anything else is honestly
+// unknown (cost_usd NULL), which does NOT fail the task.
 export function resolveCostSource(input: AttributionInput): CostSource {
   const classification = classifyAuthRef(input.authRef);
+  const ccusageCostUsd =
+    typeof input.ccusageCostUsd === "number" && Number.isFinite(input.ccusageCostUsd) && input.ccusageCostUsd > 0
+      ? input.ccusageCostUsd
+      : null;
+  const billingMode: BillingMode = classification.billingMode === "unknown" ? "self_hosted" : classification.billingMode;
+  if (ccusageCostUsd !== null) {
+    return { billingMode, costBasis: "ccusage", provider: classification.provider, rate: null, ccusageCostUsd, rawUsage: input.rawUsage };
+  }
   if (classification.billingMode === "per_token") {
     const rate = providerRate(classification.provider) ?? null;
     return {
@@ -127,15 +145,17 @@ export function resolveCostSource(input: AttributionInput): CostSource {
       costBasis: rate === null ? "unknown" : "provider_pricing",
       provider: classification.provider,
       rate,
+      ccusageCostUsd: null,
       rawUsage: input.rawUsage
     };
   }
   // subscription, self_hosted, or unknown → no reliable per-call dollar basis.
   return {
-    billingMode: classification.billingMode === "unknown" ? "self_hosted" : classification.billingMode,
+    billingMode,
     costBasis: "unknown",
     provider: classification.provider,
     rate: null,
+    ccusageCostUsd: null,
     rawUsage: input.rawUsage
   };
 }
@@ -144,6 +164,9 @@ export function resolveCostSource(input: AttributionInput): CostSource {
 // cost_records.cost_usd column, or null when cost is genuinely unknown
 // (subscription / self-hosted / unpriced model). NO fake estimate.
 export function computeCostUsd(source: CostSource, tokens: TokenUsage): string | null {
+  if (source.costBasis === "ccusage" && source.ccusageCostUsd !== null) {
+    return formatUsd(source.ccusageCostUsd);
+  }
   if (source.costBasis !== "provider_pricing" || source.rate === null) {
     return null;
   }

@@ -26,6 +26,12 @@ export interface CostRecordContext {
   // Wall-clock runtime of the underlying call — recorded in cost_source_raw
   // for audit; no longer used to fabricate a dollar figure.
   runtimeSeconds?: number;
+  // Real per-call dollar figure derived from ccusage (apportioned by token
+  // share against the run-level ccusage total). Positive → cost_basis becomes
+  // 'ccusage'. Usually null at first write: the run-level total is only known
+  // once every call has run, so the loop back-fills via
+  // reconcileRunCostFromCcusage at run end.
+  ccusageCostUsd?: number | null;
   tenantId?: string | null;
   userId?: string | null;
 }
@@ -51,6 +57,7 @@ export class CostRecorder {
     const attribution: AttributionInput = {
       cli: context.cli,
       authRef: context.authRef,
+      ccusageCostUsd: context.ccusageCostUsd ?? null,
       rawUsage
     };
     const source = resolveCostSource(attribution);
@@ -112,5 +119,34 @@ export class CostRecorder {
       tokens,
       provider: source.provider
     };
+  }
+
+  // reconcileRunCostFromCcusage back-fills the REAL ccusage dollar figure for a
+  // run. ccusage reports run-cumulative cost (against the isolated per-run
+  // CODEX_HOME), so we apportion it across the run's cost_records rows by
+  // total-token share — the rows then sum to the real ccusage total. Only rows
+  // that were not already priced from ccusage are touched. A zero/absent cost
+  // (e.g. a pure subscription window with no computed dollars) is a no-op:
+  // cost-unknown stays an honest NULL. Returns the number of rows repriced.
+  async reconcileRunCostFromCcusage(runId: string, ccusageCostUsd: number): Promise<{ updated: number }> {
+    if (!(Number.isFinite(ccusageCostUsd) && ccusageCostUsd > 0)) {
+      return { updated: 0 };
+    }
+    const rows = await this.pool.query<{ id: string; total_tokens: number }>(
+      "SELECT id, total_tokens FROM cost_records WHERE run_id = $1",
+      [runId]
+    );
+    const totalTokens = rows.rows.reduce((sum, row) => sum + Number(row.total_tokens), 0);
+    if (totalTokens <= 0) {
+      return { updated: 0 };
+    }
+    let updated = 0;
+    for (const row of rows.rows) {
+      const share = Number(row.total_tokens) / totalTokens;
+      const costUsd = (ccusageCostUsd * share).toFixed(6);
+      await this.pool.query("UPDATE cost_records SET cost_usd = $2, cost_basis = 'ccusage' WHERE id = $1", [row.id, costUsd]);
+      updated += 1;
+    }
+    return { updated };
   }
 }
