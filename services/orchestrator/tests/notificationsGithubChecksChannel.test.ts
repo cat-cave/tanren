@@ -1,0 +1,163 @@
+import { generateKeyPairSync } from "node:crypto";
+import { describe, expect, it } from "vitest";
+import { GithubChecksChannel } from "../src/engine/notifications/channels/githubChecks.js";
+import { GithubAppTokenMinter } from "../src/engine/providers/githubAppTokenMinter.js";
+import type {
+  GitHubHttpClient,
+  GitHubHttpRequest,
+  GitHubHttpResponse
+} from "../src/engine/providers/github.js";
+import type { SecretStore, SecretValue } from "../src/engine/contracts/secretStore.js";
+import type { OrgGithubAppInstallation } from "../src/engine/config/orgConfig.js";
+import type { NotificationPayload, NotificationTargetRow } from "../src/engine/notifications/index.js";
+
+// P3-0024 GitHub Checks channel tests. The GitHub HTTP client is mocked so we
+// assert the request shape (PR head-sha lookup, then commit-status POST) and
+// the P3-0003 token resolution path (App installation token vs static) without
+// a real network.
+
+function target(overrides: Partial<NotificationTargetRow> = {}): NotificationTargetRow {
+  return {
+    id: "t",
+    orgId: "org",
+    scope: "org",
+    userId: null,
+    channelKind: "github_checks",
+    destination: overrides.destination ?? "https://github.com/cat-cave/tanren/pull/42",
+    label: "github checks",
+    enabled: true,
+    weekendMute: false,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    ...overrides
+  };
+}
+
+const payload: NotificationPayload = {
+  title: "[FAIL] run.failed",
+  body: "run failed",
+  severity: "fail",
+  eventName: "run.failed",
+  url: "https://tanren.example/runs/run_1"
+};
+
+class MemorySecrets implements SecretStore {
+  constructor(private readonly map: Record<string, string>) {}
+  async get(ref: string): Promise<SecretValue | undefined> {
+    const value = this.map[ref];
+    return value === undefined ? undefined : { value };
+  }
+}
+
+class FakeGitHubHttp implements GitHubHttpClient {
+  readonly requests: GitHubHttpRequest[] = [];
+  constructor(private readonly responder: (req: GitHubHttpRequest) => GitHubHttpResponse) {}
+  async request(input: GitHubHttpRequest): Promise<GitHubHttpResponse> {
+    this.requests.push(input);
+    return this.responder(input);
+  }
+}
+
+function prAndStatusResponder(headSha: string): (req: GitHubHttpRequest) => GitHubHttpResponse {
+  return (req) => {
+    if (req.method === "GET" && req.path.includes("/pulls/")) {
+      return { status: 200, body: { head: { sha: headSha } } };
+    }
+    if (req.method === "POST" && req.path.includes("/statuses/")) {
+      return { status: 201, body: { id: 1 } };
+    }
+    return { status: 404, body: undefined };
+  };
+}
+
+describe("GithubChecksChannel", () => {
+  it("posts a commit status to the PR head sha via the static token path", async () => {
+    const http = new FakeGitHubHttp(prAndStatusResponder("deadbeef"));
+    const secrets = new MemorySecrets({ "credential/github/default": "static-token-123" });
+    const channel = new GithubChecksChannel({ secrets, http });
+
+    await channel.publish(target(), payload);
+
+    expect(http.requests).toHaveLength(2);
+    const lookup = http.requests[0]!;
+    expect(lookup.method).toBe("GET");
+    expect(lookup.path).toBe("/repos/cat-cave/tanren/pulls/42");
+    expect(lookup.token).toBe("static-token-123");
+
+    const post = http.requests[1]!;
+    expect(post.method).toBe("POST");
+    expect(post.path).toBe("/repos/cat-cave/tanren/statuses/deadbeef");
+    expect(post.token).toBe("static-token-123");
+    const body = post.body as Record<string, unknown>;
+    expect(body.state).toBe("error"); // fail -> error
+    expect(body.context).toBe("tanren");
+    expect(body.target_url).toBe("https://tanren.example/runs/run_1");
+  });
+
+  it("maps severity to commit-status state", async () => {
+    const cases: Array<[NotificationPayload["severity"], string]> = [
+      ["ok", "success"],
+      ["info", "success"],
+      ["warn", "failure"],
+      ["fail", "error"]
+    ];
+    for (const [severity, expected] of cases) {
+      const http = new FakeGitHubHttp(prAndStatusResponder("sha1"));
+      const channel = new GithubChecksChannel({
+        secrets: new MemorySecrets({ "credential/github/default": "tok" }),
+        http
+      });
+      await channel.publish(target(), { ...payload, severity });
+      const post = http.requests.find((r) => r.method === "POST")!;
+      expect((post.body as Record<string, unknown>).state).toBe(expected);
+    }
+  });
+
+  it("mints an auto-rotating App installation token via the P3-0003 resolver", async () => {
+    // A real RSA key so the minter's JWT signing succeeds; the mint HTTP call
+    // is stubbed to return an installation token.
+    const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    const pem = privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+    const secrets = new MemorySecrets({
+      "credential/github_app/cat-cave": JSON.stringify({ appId: "123456", privateKeyPem: pem })
+    });
+    let mintCalls = 0;
+    const mintFetch: typeof fetch = async () => {
+      mintCalls += 1;
+      return new Response(
+        JSON.stringify({ token: "ghs_installation_token", expires_at: "2999-01-01T00:00:00Z" }),
+        { status: 201 }
+      );
+    };
+    const minter = new GithubAppTokenMinter({ secrets, fetchImpl: mintFetch });
+    const installation: OrgGithubAppInstallation = {
+      installationId: "987",
+      appId: "123456",
+      credentialRef: "credential/github_app/cat-cave",
+      installedAt: "2026-01-01T00:00:00Z"
+    };
+    const http = new FakeGitHubHttp(prAndStatusResponder("appsha"));
+    const channel = new GithubChecksChannel({ secrets, installation, minter, http });
+
+    await channel.publish(target(), payload);
+
+    expect(mintCalls).toBe(1);
+    const post = http.requests.find((r) => r.method === "POST")!;
+    expect(post.token).toBe("ghs_installation_token");
+    expect(post.refreshToken).toBeTypeOf("function");
+  });
+
+  it("throws when the status POST does not return 201", async () => {
+    const http = new FakeGitHubHttp((req) => {
+      if (req.method === "GET") return { status: 200, body: { head: { sha: "s" } } };
+      return { status: 403, body: { message: "forbidden" } };
+    });
+    const channel = new GithubChecksChannel({
+      secrets: new MemorySecrets({ "credential/github/default": "tok" }),
+      http
+    });
+    await expect(channel.publish(target(), payload)).rejects.toThrow(
+      /github_checks publish failed: HTTP 403/
+    );
+  });
+});

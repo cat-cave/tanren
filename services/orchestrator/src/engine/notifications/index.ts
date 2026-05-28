@@ -21,6 +21,11 @@ export {
   NotificationChannel
 } from "./channels/types.js";
 export { NtfyChannel, type NtfyChannelDeps } from "./channels/ntfy.js";
+export { SlackChannel, type SlackChannelDeps } from "./channels/slack.js";
+export {
+  GithubChecksChannel,
+  type GithubChecksChannelDeps
+} from "./channels/githubChecks.js";
 export { StubChannel } from "./channels/stub.js";
 
 export {
