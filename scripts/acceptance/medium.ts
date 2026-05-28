@@ -55,9 +55,9 @@ async function main(): Promise<void> {
       "change, and the suite must be green before completion."
     ].join(" "),
     acceptanceCriteria: [
-      "src/status.ts exports an ok() helper returning a success status",
-      "src/status.ts exports a fail(reason) helper returning a failure status",
-      "tests/status.test.ts passes"
+      "src/status.ts exports ok(): returns a frozen (Object.freeze) { ok: true } with no extra keys",
+      "src/status.ts exports fail(reason): trims surrounding whitespace from reason, throws on an empty or whitespace-only reason, and returns a frozen { ok: false, reason } with no extra keys",
+      "tests/status.test.ts passes (verified deterministically by the repo's CI)"
     ]
   });
   const run = await createQueuedRunFromSpec(ctx.pool, {
@@ -99,7 +99,7 @@ async function main(): Promise<void> {
         githubCredentialRef: ctx.githubCredentialRef,
         codexCredentialRef: ctx.codexCredentialRef
       },
-      escapeHatches: { maxPlannerRerunsPerSpec: 3, maxWriterIterPerSubtask: 5, maxRetriesPerTransientFailure: 3 },
+      escapeHatches: { maxPlannerRerunsPerSpec: 5, maxWriterIterPerSubtask: 5, maxRetriesPerTransientFailure: 3 },
       timeoutMs: env.timeoutMs,
       maxCiPolls: env.maxCiPolls,
       ciPollDelayMs: env.ciPollDelayMs
