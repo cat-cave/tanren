@@ -9,6 +9,7 @@ import { GitHubOAuthProvider, IdentityStore, type IdentityProvider } from "./aut
 import { PgRunnerStore, SidecarHttpAllocator, StaticRunnerAllocator } from "./engine/allocators/index.js";
 import type { Allocator } from "./engine/contracts/allocator.js";
 import { InMemorySecretStore, type SecretStore, VaultSecretStore } from "./engine/contracts/index.js";
+import { parseRawViewOptIn, redactEventRows } from "./routes/runs/redaction.js";
 import { storeCodexAuthBundle } from "./engine/credentials/codexAuth.js";
 import { storeGithubToken } from "./engine/credentials/githubToken.js";
 import { FetchGitHubHttpClient, type GitHubHttpClient } from "./engine/providers/github.js";
@@ -406,7 +407,14 @@ export function buildApp(input: {
     );
     const events = await input.pool.query("SELECT * FROM events WHERE run_id = $1 ORDER BY ts ASC, id ASC", [runId]);
     const costs = await input.pool.query("SELECT * FROM cost_records WHERE run_id = $1 ORDER BY recorded_at ASC, id ASC", [runId]);
-    return c.json({ run: run.rows[0], tasks: tasks.rows, events: events.rows, costs: costs.rows });
+    const { events: serializedEvents } = await redactEventRows({
+      pool: input.pool,
+      rows: events.rows,
+      runId,
+      actor: actorOf(c),
+      rawView: parseRawViewOptIn(c)
+    });
+    return c.json({ run: run.rows[0], tasks: tasks.rows, events: serializedEvents, costs: costs.rows });
   });
 
   return app;

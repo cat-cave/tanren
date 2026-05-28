@@ -377,6 +377,20 @@ export const sensitivityRules: SensitivityRule[] = [
     ["runnerProof.stdout", "secret"],
     ["runnerProof.stderr", "secret"],
     ["runnerProof.timedOut", "public"]
+  ]),
+
+  // redaction.raw_access audit event — these fields are the audit metadata
+  // itself, not redacted payload values. All public so org/platform admins
+  // can see who accessed what.
+  ...rulesFor("redaction.raw_access", [
+    ["actorUserId", "public"],
+    ["actorScopes", "public"],
+    ["actorScopes[]", "public"],
+    ["eventReadId", "public"],
+    ["eventReadType", "public"],
+    ["paths", "public"],
+    ["paths[]", "public"],
+    ["at", "public"]
   ])
 ];
 

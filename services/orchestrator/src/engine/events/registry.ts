@@ -69,6 +69,7 @@ import {
   TaskQueuedPayload,
   TaskStartedPayload
 } from "./schemas/lifecycle.js";
+import { RedactionRawAccessPayload } from "./schemas/redaction.js";
 
 // The EventRegistry is the single source of truth mapping event names to
 // their typed Zod payload schemas. Adding a new event name requires:
@@ -170,7 +171,11 @@ export const EventRegistry = {
   "hello.started": HelloStartedPayload,
   "hello.ssh_started": HelloSshStartedPayload,
   "hello.ssh_completed": HelloSshCompletedPayload,
-  "hello.completed": HelloCompletedPayload
+  "hello.completed": HelloCompletedPayload,
+
+  // Redaction audit (P2A-0009): emitted whenever an elevated-scope actor
+  // reads raw payload values via the redaction serializer.
+  "redaction.raw_access": RedactionRawAccessPayload
 } as const satisfies Record<string, z.ZodTypeAny>;
 
 export type EventRegistry = typeof EventRegistry;

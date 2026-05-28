@@ -42,6 +42,7 @@ export const eventTypeNames = [
   "planner.failed",
   "planner.started",
   "planner.subtasks.emitted",
+  "redaction.raw_access",
   "review.approved",
   "review.changes_requested",
   "review.requested",
