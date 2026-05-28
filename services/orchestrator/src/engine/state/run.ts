@@ -26,6 +26,7 @@ export const RunOutcome = z.enum([
   "halted",
   "escape_hatch_hit",
   "retry_budget_exhausted",
+  "window_exhausted",
   "cancelled",
   // Phase 0/1 historical outcomes still present in the database
   "hello_world_complete",

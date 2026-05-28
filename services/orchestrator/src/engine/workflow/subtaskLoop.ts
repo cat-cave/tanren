@@ -21,6 +21,7 @@ import { type CostRecorder } from "../costs/index.js";
 import type { EventName, EventPayload } from "../events/index.js";
 import type { EventStore } from "../eventStore.js";
 import type { AnswererAdapter, WriterAdapter, WriterResult } from "../providers/types.js";
+import type { UsageProbe } from "../usage/index.js";
 import type { PlannerRejectionFeedback, PlannerSpecContext } from "./planner/planner.js";
 import { type SubtaskCostContext } from "./subtaskCost.js";
 import { insertPlannerTask, markTaskDone } from "./subtaskTasks.js";
@@ -57,12 +58,18 @@ export interface SubtaskLoopInput {
   timeoutMs: number;
   onEvent?: (event: { eventType: EventName; taskId?: string }) => void;
   costHooks?: SubtaskLoopCostHooks;
+  // Optional usage monitoring for the credential this run uses. When present
+  // the loop runs a window pre-flight before each planner iteration (escalating
+  // PROJECT_BRIEF §4.3 window pressure instead of dispatching a doomed call)
+  // and reconciles the real ccusage cost into the run's cost_records at the end.
+  usageProbe?: UsageProbe;
 }
 
 export type SubtaskLoopOutcome =
   | { kind: "passed"; plannerTaskId: string; subtasks: ReadonlyArray<PlanSubtask>; plannerRerunCount: number }
   | { kind: "retry_budget_exhausted"; plannerRerunCount: number; lastRejection: PlannerRejectionFeedback }
-  | { kind: "halted"; plannerRerunCount: number; reason: string };
+  | { kind: "halted"; plannerRerunCount: number; reason: string }
+  | { kind: "window_exhausted"; plannerRerunCount: number; provider: string; slot: string; usedPercent: number; resetsAt: string };
 
 interface AppendEvent {
   <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string): Promise<void>;
@@ -88,6 +95,16 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
   };
 
   const plannerTaskId = `task_${randomUUID()}`;
+
+  // finalize runs run-level ccusage accounting (the real cost figure is only
+  // known once every call has run) and reconciles it into cost_records, then
+  // returns the terminal outcome. Routed through EVERY return so cost is
+  // captured regardless of how the run ended.
+  const finalize = async (outcome: SubtaskLoopOutcome): Promise<SubtaskLoopOutcome> => {
+    await observeRunAccounting(input, appendEvent, plannerTaskId);
+    return outcome;
+  };
+
   await insertPlannerTask(input.pool, input.context.runId, plannerTaskId, input.adapters.planner);
   await appendEvent("task.started", { taskKind: "plan" }, plannerTaskId);
   await appendEvent("planner.started", { taskKind: "plan" }, plannerTaskId);
@@ -96,6 +113,11 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
   let plannerRerunCount = 0;
 
   while (true) {
+    const windowOutcome = await checkWindowPreflight(input, appendEvent, plannerTaskId, plannerRerunCount);
+    if (windowOutcome !== null) {
+      await markTaskDone(input.pool, plannerTaskId, "window_exhausted");
+      return await finalize(windowOutcome);
+    }
     const plan = await runPlannerStage({
       pool: input.pool,
       costCtx,
@@ -125,7 +147,7 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
         history: rejectionHistory
       });
       if (exhausted) {
-        return { kind: "retry_budget_exhausted", plannerRerunCount: plannerRerunCount + 1, lastRejection: checkerRejection };
+        return await finalize({ kind: "retry_budget_exhausted", plannerRerunCount: plannerRerunCount + 1, lastRejection: checkerRejection });
       }
       plannerRerunCount += 1;
       continue;
@@ -149,11 +171,11 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
     });
     if (audit.decision.kind === "pass") {
       await markTaskDone(input.pool, plannerTaskId, "passed");
-      return { kind: "passed", plannerTaskId, subtasks: plan.subtasks, plannerRerunCount };
+      return await finalize({ kind: "passed", plannerTaskId, subtasks: plan.subtasks, plannerRerunCount });
     }
     if (audit.decision.action === "halt") {
       await markTaskDone(input.pool, plannerTaskId, "rejected_by_auditor");
-      return { kind: "halted", plannerRerunCount, reason: audit.decision.reason };
+      return await finalize({ kind: "halted", plannerRerunCount, reason: audit.decision.reason });
     }
     const auditorRejection: PlannerRejectionFeedback = {
       producer: "auditor",
@@ -169,9 +191,89 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
       history: rejectionHistory
     });
     if (exhausted) {
-      return { kind: "retry_budget_exhausted", plannerRerunCount: plannerRerunCount + 1, lastRejection: auditorRejection };
+      return await finalize({ kind: "retry_budget_exhausted", plannerRerunCount: plannerRerunCount + 1, lastRejection: auditorRejection });
     }
     plannerRerunCount += 1;
+  }
+}
+
+// checkWindowPreflight reads the live subscription-window state (codexbar) for
+// the run's credential and escalates PROJECT_BRIEF §4.3 window pressure. It
+// emits usage.window.observed for the live state and, when a window is at/over
+// the pressure threshold, usage.window.pressure plus a window_exhausted
+// outcome so the loop halts BEFORE dispatching a doomed planner call. No probe
+// (or no data) → returns null (proceed normally).
+async function checkWindowPreflight(
+  input: SubtaskLoopInput,
+  appendEvent: AppendEvent,
+  plannerTaskId: string,
+  plannerRerunCount: number
+): Promise<Extract<SubtaskLoopOutcome, { kind: "window_exhausted" }> | null> {
+  if (input.usageProbe === undefined) {
+    return null;
+  }
+  const { usage, pressure } = await input.usageProbe.observeWindow();
+  if (usage !== null) {
+    await appendEvent(
+      "usage.window.observed",
+      {
+        provider: usage.provider,
+        windows: usage.windows.map((window) => ({
+          slot: window.slot,
+          usedPercent: window.usedPercent,
+          resetsAt: window.resetsAt,
+          windowMinutes: window.windowMinutes,
+          resetDescription: window.resetDescription
+        })),
+        creditsRemaining: usage.creditsRemaining,
+        source: usage.source,
+        capturedAt: usage.capturedAt
+      },
+      plannerTaskId
+    );
+  }
+  if (pressure === null) {
+    return null;
+  }
+  const provider = usage?.provider ?? "unknown";
+  await appendEvent(
+    "usage.window.pressure",
+    { provider, slot: pressure.slot, usedPercent: pressure.usedPercent, resetsAt: pressure.resetsAt },
+    plannerTaskId
+  );
+  return {
+    kind: "window_exhausted",
+    plannerRerunCount,
+    provider,
+    slot: pressure.slot,
+    usedPercent: pressure.usedPercent,
+    resetsAt: pressure.resetsAt
+  };
+}
+
+// observeRunAccounting reads run-cumulative token accounting (ccusage) once at
+// run end and, when ccusage reports a positive cost, reconciles the real dollar
+// figure into the run's cost_records (apportioned by token share). It emits
+// usage.accounting.observed with the disjoint token totals regardless of cost.
+async function observeRunAccounting(
+  input: SubtaskLoopInput,
+  appendEvent: AppendEvent,
+  plannerTaskId: string
+): Promise<void> {
+  if (input.usageProbe === undefined) {
+    return;
+  }
+  const accounting = await input.usageProbe.observeAccounting();
+  if (accounting === null) {
+    return;
+  }
+  await appendEvent(
+    "usage.accounting.observed",
+    { cli: accounting.cli, totals: accounting.totals, costUsd: accounting.costUsd, capturedAt: accounting.capturedAt },
+    plannerTaskId
+  );
+  if (accounting.costUsd !== null) {
+    await input.recorder.reconcileRunCostFromCcusage(input.context.runId, accounting.costUsd);
   }
 }
 
