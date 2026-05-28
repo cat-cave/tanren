@@ -379,7 +379,7 @@ Phase 2B fans out from P2A-0016 + P2A-0003 into P2B-0001 (shell), which gates P2
 
 ### Phase 2 Workflow Inventory
 
-Locked in P2A-0002 against the hi-fi vision. Phase 2B may not ship a screen whose acceptance criteria are not artifacted under `docs/design/acceptance-criteria/**`. Each row names the hi-fi surface, the owning Phase 2B spec, and any reductions from the hi-fi as-shown:
+Locked in P2A-0002 against the hi-fi vision. Phase 2B may not ship a screen whose acceptance criteria are not artifacted under `docs/design/acceptance-criteria/**` ([README](docs/design/acceptance-criteria/README.md)). Each row names the hi-fi surface, the owning Phase 2B spec, and any reductions from the hi-fi as-shown:
 
 - **Shell + ⌘K palette**: top bar (org pill, project crumb, ink/ash, ⌘K, notifications), sidenav (org/projects/setup/onboarding groups). Owned by P2B-0001. Reductions: org/personas/DORA sidenav rows ship as labeled placeholders (Phase 3).
 - **Onboarding · org setup** (hi-fi 01a, 4 steps): GitHub org link, credentials (org+dev), notifications, infrastructure (allocator + budgets). Owned by P2B-0002. Reductions: cloud allocators are visual stubs (Phase 4+); infrastructure step shows local-docker only in v0; the "label → allocator routing" future-panel stays as a phase-tagged stub.
