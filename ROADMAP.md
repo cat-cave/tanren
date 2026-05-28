@@ -477,6 +477,13 @@ Phase 2 is complete when, on merged `main`:
 - The dashboard runs end-to-end for an operator: sign in, org onboarding, credential import, repo link (minimal existing), spec creation against a milestone + behavior, run trigger, run detail inspection, cost review, AND **failure recovery on a forced-halt run**.
 - `just acceptance-easy` and `just acceptance-medium` pass end-to-end against live fixture repos.
 - The Phase 2 demo evidence (run IDs, PR URL, recovery-action lineage) is committed under this section.
+
+### Phase 2A live proof
+
+**Easy tier (`just acceptance-easy`)** — live-proven on current `main` (post token-accounting, usage-monitor, and planner-loop run-trigger merges): run `run_cd09b273-b0e9-4c5f-90ca-c632977b7643`, `outcome=phase2_easy_complete`, status `done`, draft PR `https://github.com/cat-cave/tanren-fixture-easy/pull/7`, CI passed, tasks `plan/write/check/audit/ci`, 3 cost rows (write/check/audit, `subscription`/`unknown` — the easy tier runs the Phase 1 linear flow, so no ccusage/credits reconcile; that path is the planner-loop/medium tier), 98s.
+
+**Medium tier (`just acceptance-medium`)** — run-trigger wired (`runPlannerLoopWorkflow` + live driver); pending a live green run against `cat-cave/tanren-fixture-medium`.
+
 ## Phase 3: v0 Completion
 
 Status: scoped, not started.

@@ -161,6 +161,7 @@ describe("CostRecorder", () => {
 // Pool that serves a SELECT of run rows and captures the apportioning UPDATEs.
 class ReconcilePool {
   readonly updates: Array<{ id: string; costUsd: string }> = [];
+  readonly bases: string[] = [];
 
   constructor(private readonly rows: Array<{ id: string; total_tokens: number }>) {}
 
@@ -170,6 +171,9 @@ class ReconcilePool {
     }
     if (sql.startsWith("UPDATE cost_records SET cost_usd")) {
       this.updates.push({ id: String(params[0]), costUsd: String(params[1]) });
+      if (params[2] !== undefined) {
+        this.bases.push(String(params[2]));
+      }
       return { rows: [], rowCount: 1 };
     }
     return { rows: [], rowCount: 0 };
@@ -204,6 +208,38 @@ describe("CostRecorder.reconcileRunCostFromCcusage", () => {
     const pool = new ReconcilePool([{ id: "1", total_tokens: 0 }]);
     const recorder = new CostRecorder(pool as never, new FakeEventStore());
     expect(await recorder.reconcileRunCostFromCcusage("run_test", 5)).toEqual({ updated: 0 });
+    expect(pool.updates).toHaveLength(0);
+  });
+});
+
+describe("CostRecorder.reconcileRunCostFromCredits", () => {
+  it("prices consumed credits at the rate and apportions across rows as cost_basis 'credits'", async () => {
+    const pool = new ReconcilePool([
+      { id: "1", total_tokens: 750 },
+      { id: "2", total_tokens: 250 }
+    ]);
+    const recorder = new CostRecorder(pool as never, new FakeEventStore());
+    // 10 credits × $0.04 = $0.40, split 75/25.
+    const { updated } = await recorder.reconcileRunCostFromCredits("run_test", 10, 0.04);
+    expect(updated).toBe(2);
+    expect(pool.updates).toEqual([
+      { id: "1", costUsd: "0.300000" },
+      { id: "2", costUsd: "0.100000" }
+    ]);
+  });
+
+  it("stamps cost_basis 'credits' on the repriced rows", async () => {
+    const pool = new ReconcilePool([{ id: "1", total_tokens: 100 }]);
+    const recorder = new CostRecorder(pool as never, new FakeEventStore());
+    await recorder.reconcileRunCostFromCredits("run_test", 5, 0.04);
+    expect(pool.bases).toEqual(["credits"]);
+  });
+
+  it("is a no-op for zero credits consumed or a non-positive rate", async () => {
+    const pool = new ReconcilePool([{ id: "1", total_tokens: 100 }]);
+    const recorder = new CostRecorder(pool as never, new FakeEventStore());
+    expect(await recorder.reconcileRunCostFromCredits("run_test", 0, 0.04)).toEqual({ updated: 0 });
+    expect(await recorder.reconcileRunCostFromCredits("run_test", 10, 0)).toEqual({ updated: 0 });
     expect(pool.updates).toHaveLength(0);
   });
 });

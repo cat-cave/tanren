@@ -17,7 +17,7 @@ import { randomUUID } from "node:crypto";
 import type pg from "pg";
 import type { AuditAnswer, CheckAnswer, PlanAnswer, PlanSubtask } from "../answerers/schemas/index.js";
 import type { EscapeHatches } from "../config/shared.js";
-import { type CostRecorder } from "../costs/index.js";
+import { type CostRecorder, DEFAULT_CREDIT_USD_RATE } from "../costs/index.js";
 import type { EventName, EventPayload } from "../events/index.js";
 import type { EventStore } from "../eventStore.js";
 import type { AnswererAdapter, WriterAdapter, WriterResult } from "../providers/types.js";
@@ -61,8 +61,12 @@ export interface SubtaskLoopInput {
   // Optional usage monitoring for the credential this run uses. When present
   // the loop runs a window pre-flight before each planner iteration (escalating
   // PROJECT_BRIEF §4.3 window pressure instead of dispatching a doomed call)
-  // and reconciles the real ccusage cost into the run's cost_records at the end.
+  // and reconciles the real cost (credit drawdown, else ccusage) into the run's
+  // cost_records at the end.
   usageProbe?: UsageProbe;
+  // Dollar value of one prepaid credit, for credit-drawdown cost. Defaults to
+  // DEFAULT_CREDIT_USD_RATE (the observed Pro-account rate).
+  creditUsdRate?: number;
 }
 
 export type SubtaskLoopOutcome =
@@ -95,13 +99,16 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
   };
 
   const plannerTaskId = `task_${randomUUID()}`;
+  // Prepaid-credit balance at the first window pre-flight; the run-end credit
+  // drawdown (atStart - atEnd) is the run's real marginal dollar cost.
+  const creditState: CreditState = { atStart: null };
 
-  // finalize runs run-level ccusage accounting (the real cost figure is only
-  // known once every call has run) and reconciles it into cost_records, then
-  // returns the terminal outcome. Routed through EVERY return so cost is
-  // captured regardless of how the run ended.
+  // finalize runs run-level accounting (the real cost is only known once every
+  // call has run) and reconciles it into cost_records — credit drawdown when
+  // present, else ccusage — then returns the terminal outcome. Routed through
+  // EVERY return so cost is captured regardless of how the run ended.
   const finalize = async (outcome: SubtaskLoopOutcome): Promise<SubtaskLoopOutcome> => {
-    await observeRunAccounting(input, appendEvent, plannerTaskId);
+    await observeRunAccounting(input, appendEvent, plannerTaskId, creditState);
     return outcome;
   };
 
@@ -113,7 +120,7 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
   let plannerRerunCount = 0;
 
   while (true) {
-    const windowOutcome = await checkWindowPreflight(input, appendEvent, plannerTaskId, plannerRerunCount);
+    const windowOutcome = await checkWindowPreflight(input, appendEvent, plannerTaskId, plannerRerunCount, creditState);
     if (windowOutcome !== null) {
       await markTaskDone(input.pool, plannerTaskId, "window_exhausted");
       return await finalize(windowOutcome);
@@ -203,16 +210,26 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
 // the pressure threshold, usage.window.pressure plus a window_exhausted
 // outcome so the loop halts BEFORE dispatching a doomed planner call. No probe
 // (or no data) → returns null (proceed normally).
+interface CreditState {
+  atStart: number | null;
+}
+
 async function checkWindowPreflight(
   input: SubtaskLoopInput,
   appendEvent: AppendEvent,
   plannerTaskId: string,
-  plannerRerunCount: number
+  plannerRerunCount: number,
+  creditState: CreditState
 ): Promise<Extract<SubtaskLoopOutcome, { kind: "window_exhausted" }> | null> {
   if (input.usageProbe === undefined) {
     return null;
   }
   const { usage, pressure } = await input.usageProbe.observeWindow();
+  // Capture the credit balance at the first observation that reports one; the
+  // run-end drawdown against this baseline is the run's marginal dollar cost.
+  if (creditState.atStart === null && usage !== null && usage.creditsRemaining !== null) {
+    creditState.atStart = usage.creditsRemaining;
+  }
   if (usage !== null) {
     await appendEvent(
       "usage.window.observed",
@@ -251,30 +268,84 @@ async function checkWindowPreflight(
   };
 }
 
-// observeRunAccounting reads run-cumulative token accounting (ccusage) once at
-// run end and, when ccusage reports a positive cost, reconciles the real dollar
-// figure into the run's cost_records (apportioned by token share). It emits
-// usage.accounting.observed with the disjoint token totals regardless of cost.
+// observeRunAccounting captures the run's real cost at the end. It reads:
+//   1. ccusage token accounting (emits usage.accounting.observed), and
+//   2. a final window observation (emits usage.window.observed) to read the
+//      ending credit balance.
+// Reconcile precedence: a positive credit drawdown is the true marginal spend
+// for subscription-overage usage, so it wins; otherwise a positive ccusage
+// cost applies; otherwise the per-call rows keep their honest provider_pricing
+// / NULL basis. Either reconcile apportions the run total by token share.
 async function observeRunAccounting(
   input: SubtaskLoopInput,
   appendEvent: AppendEvent,
-  plannerTaskId: string
+  plannerTaskId: string,
+  creditState: CreditState
 ): Promise<void> {
   if (input.usageProbe === undefined) {
     return;
   }
   const accounting = await input.usageProbe.observeAccounting();
-  if (accounting === null) {
+  if (accounting !== null) {
+    await appendEvent(
+      "usage.accounting.observed",
+      { cli: accounting.cli, totals: accounting.totals, costUsd: accounting.costUsd, capturedAt: accounting.capturedAt },
+      plannerTaskId
+    );
+  }
+
+  const creditsConsumed = await readEndingCreditDrawdown(input, appendEvent, plannerTaskId, creditState);
+  if (creditsConsumed !== null && creditsConsumed > 0) {
+    await input.recorder.reconcileRunCostFromCredits(
+      input.context.runId,
+      creditsConsumed,
+      input.creditUsdRate ?? DEFAULT_CREDIT_USD_RATE
+    );
     return;
   }
-  await appendEvent(
-    "usage.accounting.observed",
-    { cli: accounting.cli, totals: accounting.totals, costUsd: accounting.costUsd, capturedAt: accounting.capturedAt },
-    plannerTaskId
-  );
-  if (accounting.costUsd !== null) {
+  if (accounting !== null && accounting.costUsd !== null) {
     await input.recorder.reconcileRunCostFromCcusage(input.context.runId, accounting.costUsd);
   }
+}
+
+// readEndingCreditDrawdown does a final window observation, emits it, and
+// returns (creditsAtStart - creditsAtEnd) when both are known, else null.
+// Credit balances update asynchronously provider-side, so this is best-effort
+// and may undercount a just-completed call's drawdown.
+async function readEndingCreditDrawdown(
+  input: SubtaskLoopInput,
+  appendEvent: AppendEvent,
+  plannerTaskId: string,
+  creditState: CreditState
+): Promise<number | null> {
+  if (input.usageProbe === undefined || creditState.atStart === null) {
+    return null;
+  }
+  const { usage } = await input.usageProbe.observeWindow();
+  if (usage === null) {
+    return null;
+  }
+  await appendEvent(
+    "usage.window.observed",
+    {
+      provider: usage.provider,
+      windows: usage.windows.map((window) => ({
+        slot: window.slot,
+        usedPercent: window.usedPercent,
+        resetsAt: window.resetsAt,
+        windowMinutes: window.windowMinutes,
+        resetDescription: window.resetDescription
+      })),
+      creditsRemaining: usage.creditsRemaining,
+      source: usage.source,
+      capturedAt: usage.capturedAt
+    },
+    plannerTaskId
+  );
+  if (usage.creditsRemaining === null) {
+    return null;
+  }
+  return creditState.atStart - usage.creditsRemaining;
 }
 
 // runSubtaskSequence walks the plan in order, executing each subtask's
