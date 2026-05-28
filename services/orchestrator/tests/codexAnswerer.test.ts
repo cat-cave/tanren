@@ -6,6 +6,7 @@ import { checkAnswerSchema, type CheckAnswer } from "../src/engine/providers/ans
 import {
   AnswererSchemaValidationError,
   buildCodexAnswererExecCommand,
+  CodexUsageLimitError,
   createCodexAnswerer,
   parseStructuredAnswererOutput
 } from "../src/engine/providers/codex.js";
@@ -74,6 +75,28 @@ describe("Codex Answerer adapter", () => {
     expect(command).toContain("--output-last-message '/home/tanren/codex/check.response.json'");
     expect(command).not.toContain("--sandbox workspace-write");
     expect(command).not.toContain("--add-dir");
+  });
+
+  it("raises CodexUsageLimitError (not a generic failure) when the account hits its usage limit", async () => {
+    const usageLimitStdout = [
+      '{"type":"thread.started","thread_id":"t1"}',
+      '{"type":"turn.failed","error":{"message":"You\'ve hit your usage limit. try again at May 30th, 2026 8:19 PM."}}'
+    ].join("\n");
+    const ssh = new ScriptedSsh([ok(""), ok(""), ok(""), ok(usageLimitStdout), ok(authJson)]);
+    const secrets = new InMemorySecretStore();
+    await secrets.put({ ref: "credential/codex/dev", value: authJson });
+
+    const answerer = createCodexAnswerer<CheckAnswer>({
+      secrets,
+      ssh,
+      target,
+      credentialRef: "credential/codex/dev",
+      runId: "run_answerer_limit"
+    });
+
+    await expect(
+      answerer.runAnswerer({ prompt: "judge", timeoutMs: 1000, outputSchema: checkAnswerSchema })
+    ).rejects.toBeInstanceOf(CodexUsageLimitError);
   });
 
   it("turns invalid JSON and nonconforming output into hard schema failures", () => {

@@ -108,6 +108,8 @@ export const sensitivityRules: SensitivityRule[] = [
     ["telemetry.tokenUsage.inputTokens", "public"],
     ["telemetry.tokenUsage.outputTokens", "public"],
     ["telemetry.tokenUsage.cachedTokens", "public"],
+    // Provider usage-limit notice (names the reset time); no secret material.
+    ["telemetry.usageLimit.message", "public"],
     ["intent", "public"],
     ["decisions[].summary", "public"],
     ["decisions[].code", "redacted"],

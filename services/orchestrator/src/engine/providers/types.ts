@@ -14,12 +14,25 @@ export interface Commit {
 export interface WriterResult {
   diff: string;
   commits: Commit[];
-  exitReason: "completed" | "timeout" | "crashed" | "token_limit";
+  // `window_exhausted`: the provider authenticated successfully but the
+  // subscription window / usage quota is spent (PROJECT_BRIEF §4.3). This is
+  // an expected, recoverable condition — distinct from `crashed` — so the
+  // workflow can escalate it as window pressure rather than a hard failure.
+  exitReason: "completed" | "timeout" | "crashed" | "token_limit" | "window_exhausted";
   tokenUsage?: TokenUsage;
   telemetry?: {
     rawEventCount: number;
     tokenUsage?: TokenUsage;
+    usageLimit?: UsageLimitSignal;
   };
+}
+
+// UsageLimitSignal is parsed from the Codex JSONL `turn.failed` / `error`
+// event when the account hits its usage limit. Carries the provider's
+// human-readable message (which usually names the reset time) so the
+// operator gets an actionable signal instead of a generic crash.
+export interface UsageLimitSignal {
+  message: string;
 }
 
 export interface WriterAdapter {

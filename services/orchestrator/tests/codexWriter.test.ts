@@ -122,6 +122,31 @@ describe("Codex writer adapter", () => {
       tokenUsage: { inputTokens: 7, outputTokens: 4, cachedTokens: 0 }
     });
   });
+
+  it("detects a usage-limit signal from the turn.failed error envelope", () => {
+    const stdout = [
+      '{"type":"thread.started","thread_id":"t1"}',
+      '{"type":"turn.started"}',
+      '{"type":"error","message":"You\'ve hit your usage limit. Visit ... or try again at May 30th, 2026 8:19 PM."}',
+      '{"type":"turn.failed","error":{"message":"You\'ve hit your usage limit. ... try again at May 30th, 2026 8:19 PM."}}'
+    ].join("\n");
+    const telemetry = parseCodexJsonlTelemetry(stdout);
+    expect(telemetry.usageLimit?.message).toContain("usage limit");
+    expect(telemetry.usageLimit?.message).toContain("May 30th");
+  });
+
+  it("returns window_exhausted (not crashed) when the account hits its usage limit", async () => {
+    const usageLimitStdout = [
+      '{"type":"thread.started","thread_id":"t1"}',
+      '{"type":"turn.started"}',
+      '{"type":"turn.failed","error":{"message":"You\'ve hit your usage limit. try again at May 30th, 2026 8:19 PM."}}'
+    ].join("\n");
+    // exitCode 0 here proves the distinction is driven by the parsed signal,
+    // not the process exit code: codex can exit 0 yet still report the limit.
+    const result = await runWithCodexResult({ exitCode: 0, stdout: usageLimitStdout, stderr: "", timedOut: false });
+    expect(result.exitReason).toBe("window_exhausted");
+    expect(result.telemetry?.usageLimit?.message).toContain("usage limit");
+  });
 });
 
 function commitSha(char: string): string {
