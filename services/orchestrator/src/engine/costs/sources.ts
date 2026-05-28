@@ -112,9 +112,11 @@ function refTailSegment(ref: string): string | undefined {
 // cost_basis = 'unknown' (cost_usd will be null). Token accounting still
 // happens for every call.
 //
-// TODO(P2A-cost-monitors): ccusage/codexbar integration plugs in here — a
-// per_token call may resolve to cost_basis = 'ccusage', and subscription-window
-// percent-of-window data will attach to the raw payload.
+// TODO(P2A-cost-monitors-wiring): the real ccusage/codexbar monitors now live
+// in services/orchestrator/src/engine/usage/ (runner-side over SSH). The NEXT
+// PR plugs them in here — a per_token call with a positive ccusage costUSD
+// resolves to cost_basis = 'ccusage', and subscription-window percent-of-window
+// data attaches to the raw payload. This PR ships only the monitors + events.
 export function resolveCostSource(input: AttributionInput): CostSource {
   const classification = classifyAuthRef(input.authRef);
   if (classification.billingMode === "per_token") {

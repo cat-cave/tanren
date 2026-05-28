@@ -42,7 +42,7 @@ Two orthogonal axes describe each row:
 | `cost_basis`       | Meaning                                          |
 | ------------------ | ------------------------------------------------ |
 | `provider_pricing` | dollar figure computed from a per-token rate table |
-| `ccusage`          | reserved for the ccusage tool (next PR)          |
+| `ccusage`          | dollar figure from the ccusage tool (only when ccusage reports a positive `costUSD`) |
 | `unknown`          | no reliable basis → `cost_usd IS NULL`           |
 
 `provider_pricing` is computed from the disjoint buckets:
@@ -67,9 +67,31 @@ The recorder reads the adapter's `authRef` and classifies its `billing_mode`:
 4. Anything else → `self_hosted` billing with `cost_basis = 'unknown'`. The
    recorder still writes the row; it never throws for missing cost.
 
-<!-- TODO(P2A-cost-monitors): ccusage/codexbar integration plugs in here — a
-per_token call may resolve to cost_basis = 'ccusage', and subscription-window
-percent-of-window data attaches to the raw payload. -->
+## Usage monitors (codexbar + ccusage)
+
+Two distinct tools observe usage, both run **runner-side over SSH** against the
+per-run materialized `CODEX_HOME` (the orchestrator engine never spawns host
+processes). Both are CLI/provider-agnostic and are always invoked with an
+explicit provider/cli parameter:
+
+- **codexbar** reports LIVE subscription-window state — one or more concurrent
+  rolling windows (`primary`/`secondary`/`tertiary`) as percent-of-window
+  consumed + reset time. There is no token denominator. Surfaced as
+  `usage.window.observed`; a window at/over the pressure threshold surfaces as
+  `usage.window.pressure`.
+- **ccusage** reports token-consumption accounting (disjoint buckets, matching
+  the cost schema) plus a best-effort `costUSD`. Surfaced as
+  `usage.accounting.observed`. A subscription usually reports `costUSD: 0`;
+  only a **positive** figure becomes a `cost_basis = 'ccusage'` cost — a zero
+  is treated as NULL, never an invented estimate.
+
+The runner image bundles both (pinned via the `CODEXBAR_VERSION` /
+`CCUSAGE_VERSION` build args in `runner/Dockerfile`). Operators can eyeball the
+tools against a host `CODEX_HOME` with `just usage [provider] [cli]`.
+
+<!-- TODO(P2A-cost-monitors-wiring): the monitors live in
+services/orchestrator/src/engine/usage/; the planner/writer loop consumes them
+(window pre-flight + ccusage cost-basis) in the next PR. -->
 
 ## Operational checks
 
