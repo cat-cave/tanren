@@ -192,6 +192,26 @@ export const MergeConflictPayload = z
   })
   .strict();
 
+// P3-0023 external-push governance posture. Emitted at the merge decision when
+// the configured posture (strict | open | audit_only) holds an auto-merge:
+//   strict + external change     → mode "operator_approval" (needs a human OK)
+//   audit_only + external change → mode "audit_only" (observed, never merged)
+// `externalLogins` are the non-Tanren contributor logins that drove the block.
+export const GovernancePostureMode = z.enum(["strict", "open", "audit_only"]);
+export const MergeBlockMode = z.enum(["operator_approval", "audit_only"]);
+
+export const MergeBlockedPayload = z
+  .object({
+    prUrl: z.string(),
+    prNumber: z.number().int(),
+    integration: MergeIntegrationMode,
+    posture: GovernancePostureMode,
+    mode: MergeBlockMode,
+    externalLogins: z.array(z.string()),
+    reason: z.string()
+  })
+  .strict();
+
 export const NotificationEnqueuedPayload = z
   .object({
     channel: z.string(),

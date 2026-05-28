@@ -20,15 +20,27 @@ import type { SecretStore } from "../../contracts/secretStore.js";
 import { resolveGithubToken } from "../../credentials/githubTokenResolver.js";
 import { type EventStore, PgEventStore } from "../../eventStore.js";
 import type { GithubAppTokenMinter } from "../../providers/githubAppTokenMinter.js";
-import { parseGitHubPullRequestUrl, type GitHubHttpClient } from "../../providers/github.js";
+import { parseGitHubPullRequestUrl, type GitHubHttpClient, type GitHubRepository } from "../../providers/github.js";
 import { GitHubReviewMergeService, type MergePullRequestResult } from "../../providers/githubReviewMerge.js";
 import { loadReviewMergeRunContext, type ReviewMergeRunContext, type RunStateClient } from "./context.js";
+import {
+  assessExternalChange,
+  decidePosture,
+  tanrenIdentity,
+  type ContributorProbe,
+  type PostureDecision,
+  type PullRequestContributors
+} from "./governancePosture.js";
 
 /** The integration modes the merge stage actually dispatches to. */
 export type DispatchedIntegration = "mergify_queue" | "direct_merge" | "external_reviewer";
 
-/** The outcome of the merge stage; `conflict` is the recoverable branch. */
-export type MergeOutcomeKind = "merged" | "queued" | "handed_off" | "conflict" | "failed";
+/**
+ * The outcome of the merge stage. `conflict` is the recoverable branch;
+ * `blocked` is the P3-0023 governance-posture outcome — a strict-posture
+ * external change held for operator approval, or an audit_only observed change.
+ */
+export type MergeOutcomeKind = "merged" | "queued" | "handed_off" | "conflict" | "failed" | "blocked";
 
 export interface MergeForRunResult {
   runId: string;
@@ -58,6 +70,12 @@ export interface MergeForRunInput {
    * GitHubReviewMergeService drives both through the resolved token.
    */
   mergeProbe?: MergeProbe;
+  /**
+   * P3-0023 test seam. Resolves the PR's distinct contributor logins for
+   * external-change detection. Production omits it → the dispatcher lists the
+   * PR commits through `githubHttp` and derives the logins.
+   */
+  contributorProbe?: ContributorProbe;
   /**
    * P3-0008 conflict-resolver scaffolding. Invoked on a detected merge conflict
    * BEFORE the recoverable `merge.conflict` outcome is emitted. The default is a
@@ -113,6 +131,19 @@ export async function mergeForRun(input: MergeForRunInput): Promise<MergeForRunR
   const probe = input.mergeProbe ?? (await buildGitHubProbe(input, context, pr.repo, pr.pullNumber));
   const dispatcher = new MergeDispatcher({ input, context, eventStore, taskId, integration, pr, probe });
 
+  // P3-0023 governance posture gate. Only Tanren-initiated auto-merges
+  // (direct_merge / mergify_queue) are governed: a strict-posture external
+  // change blocks (operator approval required); an audit_only external change
+  // is observed (no merge call). The external_reviewer / not_configured
+  // hand-off is already a human-merge path — Tanren is not auto-merging, so
+  // there is nothing for the posture to block and the gate is skipped.
+  if (integration !== "external_reviewer") {
+    const decision = await evaluatePosture(input, context, pr.repo, pr.pullNumber);
+    if (decision.kind !== "proceed") {
+      return dispatcher.blockByPosture(decision);
+    }
+  }
+
   if (integration === "external_reviewer") {
     return dispatcher.handOff();
   }
@@ -120,6 +151,27 @@ export async function mergeForRun(input: MergeForRunInput): Promise<MergeForRunR
     return dispatcher.enqueueMergify();
   }
   return dispatcher.directMerge();
+}
+
+/**
+ * Resolve the PR contributors and run the posture gate against them. The `open`
+ * posture always proceeds regardless of contributors, so we skip the (paid)
+ * contributor lookup entirely for it — only `strict` / `audit_only` need to
+ * know whether external changes are present.
+ */
+async function evaluatePosture(
+  input: MergeForRunInput,
+  context: ReviewMergeRunContext,
+  repo: GitHubRepository,
+  pullNumber: number
+): Promise<PostureDecision> {
+  if (context.governancePosture === "open") {
+    return decidePosture("open", { hasExternalChange: false, externalLogins: [] });
+  }
+  const probe = input.contributorProbe ?? buildContributorProbe(input, context, repo, pullNumber);
+  const contributors = await probe.listContributors();
+  const identity = tanrenIdentity(context.tanrenLogins);
+  return decidePosture(context.governancePosture, assessExternalChange(contributors, identity));
 }
 
 interface DispatcherDeps {
@@ -143,6 +195,32 @@ class MergeDispatcher {
   private prFields() {
     const { context, pr } = this.deps;
     return { prUrl: context.prUrl, prNumber: pr.pullNumber };
+  }
+
+  /**
+   * P3-0023: a governance posture blocked the merge. Emits the typed
+   * `merge.blocked` event with the posture, mode, and external logins, then
+   * leaves the task `running` so the operator-approval / audit recovery surface
+   * can pick it up (the block is recoverable, not a hard failure — analogous to
+   * the conflict branch). No merge call is made.
+   */
+  async blockByPosture(decision: PostureDecision): Promise<MergeForRunResult> {
+    const { eventStore, integration } = this.deps;
+    const mode = decision.kind === "block" ? "operator_approval" : "audit_only";
+    await eventStore.append({
+      ...this.base(),
+      eventType: "merge.blocked",
+      payload: {
+        ...this.prFields(),
+        integration,
+        posture: decision.posture,
+        mode,
+        externalLogins: [...decision.externalLogins],
+        reason: decision.reason
+      }
+    });
+    await this.finalize("blocked", { taskOutcome: "pending", taskStatus: "running" });
+    return this.result("blocked", { message: decision.reason });
   }
 
   /** external_reviewer / not_configured: stop at ready, emit the hand-off. */
@@ -299,6 +377,65 @@ async function buildGitHubProbe(
         refreshToken: resolved.refresh
       })
   };
+}
+
+/**
+ * P3-0023 production contributor probe. Lists the PR's commits through the
+ * resolved GitHub token and collects the distinct author + committer logins.
+ * The HTTP call lives here (not the provider surface) so external-change
+ * detection stays inside the governance/review-merge decision path. Token
+ * resolution is lazy — only paid when the gate actually needs contributors.
+ */
+function buildContributorProbe(
+  input: MergeForRunInput,
+  context: ReviewMergeRunContext,
+  repo: GitHubRepository,
+  pullNumber: number
+): ContributorProbe {
+  return {
+    listContributors: async (): Promise<PullRequestContributors> => {
+      const resolved = await resolveGithubToken({
+        secrets: input.secrets,
+        installation: context.installation,
+        staticRef: context.staticCredentialRef,
+        minter: input.githubAppMinter
+      });
+      const response = await input.githubHttp.request({
+        method: "GET",
+        path: `/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}/pulls/${pullNumber}/commits`,
+        token: resolved.token,
+        refreshToken: resolved.refresh
+      });
+      if (response.status !== 200) {
+        throw new Error(`GitHub PR commits fetch failed: HTTP ${response.status}`);
+      }
+      return { logins: parseCommitLogins(response.body) };
+    }
+  };
+}
+
+/** Collect the distinct author + committer logins from a PR commits response. */
+function parseCommitLogins(body: unknown): string[] {
+  if (!Array.isArray(body)) {
+    throw new Error("GitHub PR commits response was not an array");
+  }
+  const logins: string[] = [];
+  for (const entry of body) {
+    if (typeof entry !== "object" || entry === null) {
+      continue;
+    }
+    const record = entry as Record<string, unknown>;
+    logins.push(loginFrom(record.author), loginFrom(record.committer));
+  }
+  return logins;
+}
+
+function loginFrom(user: unknown): string {
+  if (typeof user !== "object" || user === null || Array.isArray(user)) {
+    return "";
+  }
+  const login = (user as Record<string, unknown>).login;
+  return typeof login === "string" ? login : "";
 }
 
 async function ensureMergeTask(pool: RunStateClient, context: ReviewMergeRunContext): Promise<string> {

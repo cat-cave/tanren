@@ -1,13 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import { FakeEventStore } from "../src/engine/eventStore.js";
-import type { MergeIntegration } from "../src/engine/config/shared.js";
+import type { GovernancePosture, MergeIntegration } from "../src/engine/config/shared.js";
 import { reduceReviewVerdict } from "../src/engine/providers/githubReviewMerge.js";
 import {
+  assessExternalChange,
+  decidePosture,
   dispatchedIntegrationFor,
   mergeForRun,
   noopConflictResolver,
   reviewerRejection,
+  tanrenIdentity,
+  type ContributorProbe,
   type MergeProbe,
   type ReviewProbe
 } from "../src/engine/workflow/reviewMerge/index.js";
@@ -203,6 +207,139 @@ describe("merge dispatch stage", () => {
   });
 });
 
+describe("external-change detection", () => {
+  const identity = tanrenIdentity(["tanren[bot]", "App/123"]);
+
+  it("flags a non-Tanren login as an external change", () => {
+    const out = assessExternalChange({ logins: ["tanren[bot]", "alice"] }, identity);
+    expect(out.hasExternalChange).toBe(true);
+    expect(out.externalLogins).toEqual(["alice"]);
+  });
+
+  it("treats a Tanren-only PR as having no external change (case-insensitive)", () => {
+    const out = assessExternalChange({ logins: ["Tanren[bot]", "app/123", "tanren[bot]"] }, identity);
+    expect(out.hasExternalChange).toBe(false);
+    expect(out.externalLogins).toEqual([]);
+  });
+
+  it("treats an unattributed (empty) login as external and de-duplicates", () => {
+    const out = assessExternalChange({ logins: ["", "", "bob", "bob"] }, identity);
+    expect(out.hasExternalChange).toBe(true);
+    expect(out.externalLogins).toEqual(["<unknown>", "bob"]);
+  });
+
+  it("with no Tanren identity, every contributor is external", () => {
+    const out = assessExternalChange({ logins: ["tanren[bot]"] }, tanrenIdentity([]));
+    expect(out.hasExternalChange).toBe(true);
+  });
+});
+
+describe("posture decision", () => {
+  const external = assessExternalChange({ logins: ["alice"] }, tanrenIdentity(["tanren[bot]"]));
+  const internal = assessExternalChange({ logins: ["tanren[bot]"] }, tanrenIdentity(["tanren[bot]"]));
+
+  it("open always proceeds", () => {
+    expect(decidePosture("open", external).kind).toBe("proceed");
+    expect(decidePosture("open", internal).kind).toBe("proceed");
+  });
+
+  it("strict blocks an external change, proceeds on Tanren-only", () => {
+    expect(decidePosture("strict", external).kind).toBe("block");
+    expect(decidePosture("strict", internal).kind).toBe("proceed");
+  });
+
+  it("audit_only observes an external change, proceeds on Tanren-only", () => {
+    expect(decidePosture("audit_only", external).kind).toBe("observe");
+    expect(decidePosture("audit_only", internal).kind).toBe("proceed");
+  });
+});
+
+describe("governance posture gate at the merge decision", () => {
+  const externalProbe: ContributorProbe = { listContributors: async () => ({ logins: ["tanren[bot]", "mallory"] }) };
+  const internalProbe: ContributorProbe = { listContributors: async () => ({ logins: ["tanren[bot]"] }) };
+
+  it("strict + external change → merge.blocked (operator_approval), no merge call, task left running", async () => {
+    const pool = new ReviewMergePool("direct_merge", "strict");
+    const events = new FakeEventStore();
+    const probe = recordingMergeProbe({ merged: true, mergeSha: "x", conflict: false, status: 200, message: "merged" });
+
+    const result = await mergeForRun({
+      pool: pool.asPgPool(),
+      eventStore: events,
+      secrets: new FakeSecretStore(),
+      githubHttp: unusedHttp(),
+      runId: "run_1",
+      mergeProbe: probe,
+      contributorProbe: externalProbe
+    });
+
+    expect(result.outcome).toBe("blocked");
+    expect(probe.mergeCalls).toBe(0);
+    const blocked = events.events.find((e) => e.eventType === "merge.blocked");
+    expect(blocked?.payload).toMatchObject({ posture: "strict", mode: "operator_approval", externalLogins: ["mallory"] });
+    expect(pool.tasks.find((t) => t.kind === "merge")?.status).toBe("running");
+  });
+
+  it("audit_only + external change → merge.blocked (audit_only), no merge call", async () => {
+    const pool = new ReviewMergePool("direct_merge", "audit_only");
+    const events = new FakeEventStore();
+    const probe = recordingMergeProbe({ merged: true, conflict: false, status: 200, message: "merged" });
+
+    const result = await mergeForRun({
+      pool: pool.asPgPool(),
+      eventStore: events,
+      secrets: new FakeSecretStore(),
+      githubHttp: unusedHttp(),
+      runId: "run_1",
+      mergeProbe: probe,
+      contributorProbe: externalProbe
+    });
+
+    expect(result.outcome).toBe("blocked");
+    expect(probe.mergeCalls).toBe(0);
+    expect(events.events.find((e) => e.eventType === "merge.blocked")?.payload).toMatchObject({ posture: "audit_only", mode: "audit_only" });
+  });
+
+  it("strict + Tanren-only change → proceeds to a real merge", async () => {
+    const pool = new ReviewMergePool("direct_merge", "strict");
+    const events = new FakeEventStore();
+    const probe = recordingMergeProbe({ merged: true, mergeSha: "deadbeef", conflict: false, status: 200, message: "merged" });
+
+    const result = await mergeForRun({
+      pool: pool.asPgPool(),
+      eventStore: events,
+      secrets: new FakeSecretStore(),
+      githubHttp: unusedHttp(),
+      runId: "run_1",
+      mergeProbe: probe,
+      contributorProbe: internalProbe
+    });
+
+    expect(result.outcome).toBe("merged");
+    expect(probe.mergeCalls).toBe(1);
+    expect(events.events.find((e) => e.eventType === "merge.blocked")).toBeUndefined();
+  });
+
+  it("open + external change → proceeds (coexists), merge happens", async () => {
+    const pool = new ReviewMergePool("direct_merge", "open");
+    const events = new FakeEventStore();
+    const probe = recordingMergeProbe({ merged: true, mergeSha: "abc", conflict: false, status: 200, message: "merged" });
+
+    const result = await mergeForRun({
+      pool: pool.asPgPool(),
+      eventStore: events,
+      secrets: new FakeSecretStore(),
+      githubHttp: unusedHttp(),
+      runId: "run_1",
+      mergeProbe: probe,
+      contributorProbe: externalProbe
+    });
+
+    expect(result.outcome).toBe("merged");
+    expect(probe.mergeCalls).toBe(1);
+  });
+});
+
 // --- harness -------------------------------------------------------------
 
 function unusedHttp() {
@@ -241,7 +378,10 @@ class ReviewMergePool {
   readonly events: Array<Record<string, unknown>> = [];
   readonly runs = [{ run_id: "run_1", spec_id: "spec_1", project_id: "project_1", pr_url: "https://github.com/cat-cave/fix/pull/7" }];
 
-  constructor(private readonly mergeIntegration: MergeIntegration) {}
+  constructor(
+    private readonly mergeIntegration: MergeIntegration,
+    private readonly governancePosture: GovernancePosture = "open"
+  ) {}
 
   async query(sql: string, params: unknown[]): Promise<{ rows: unknown[]; rowCount: number }> {
     if (sql.includes("FROM runs r") && sql.includes("default_branch")) {
@@ -256,7 +396,12 @@ class ReviewMergePool {
                   spec_id: run.spec_id,
                   project_id: run.project_id,
                   pr_url: run.pr_url,
-                  config: { version: 1, mergeIntegration: this.mergeIntegration, credentials: { githubCredentialRef: "credential/github/dev" } },
+                  config: {
+                    version: 1,
+                    mergeIntegration: this.mergeIntegration,
+                    governancePosture: this.governancePosture,
+                    credentials: { githubCredentialRef: "credential/github/dev" }
+                  },
                   default_branch: "main",
                   org_config: null
                 }
