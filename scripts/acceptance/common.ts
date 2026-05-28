@@ -214,8 +214,17 @@ export interface AcceptanceCriteriaInput {
 
 // assertAcceptanceCriteria implements the spec's persisted-state assertions
 // for both tiers. Easy: writer/checker/auditor cost records + PR URL + CI
-// pass + correct outcome. Medium: planner cost present, ≥ 2 writer tasks
-// (subtasks), ≥ 1 planner.rerequested event (checker rejection loop).
+// pass + correct outcome. Medium adds the planner cost + ≥ 2 writer tasks
+// (subtasks). Post-PR GitHub CI is the deterministic test gate for both tiers.
+//
+// NOTE: an earlier medium assertion required ≥ 1 planner.rerequested event.
+// That was mis-specified — it asserted nondeterministic LLM behavior (a
+// checker rejection) as a hard gate, which conflated the agent's read-only
+// reasoning with a deterministic test result. The checker-rejection loop is a
+// capability that is exercised when the writer's first attempt is inadequate;
+// it is proven by the loop's tests and observed opportunistically in live
+// runs, not asserted on every run. The deterministic "tests pass" signal lives
+// in post-PR CI here, and (Phase 3) in an in-loop gate-check stage.
 export function assertAcceptanceCriteria(input: AcceptanceCriteriaInput): void {
   const { tier, expectedOutcome, snapshot } = input;
   const failures: string[] = [];
@@ -251,11 +260,6 @@ export function assertAcceptanceCriteria(input: AcceptanceCriteriaInput): void {
   if (tier === "medium") {
     if (snapshot.taskCounts.write < 2) {
       failures.push(`medium tier expects ≥ 2 write tasks (subtasks), got ${snapshot.taskCounts.write}`);
-    }
-    if (snapshot.plannerRerequestedCount < 1) {
-      failures.push(
-        `medium tier expects ≥ 1 planner.rerequested event (checker rejection loop), got ${snapshot.plannerRerequestedCount}`
-      );
     }
   }
 
