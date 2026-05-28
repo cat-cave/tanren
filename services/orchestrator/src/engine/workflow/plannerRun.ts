@@ -16,6 +16,7 @@
 // window_exhausted rather than a generic failure (PROJECT_BRIEF §4.3).
 import type pg from "pg";
 import type { AuditAnswer, CheckAnswer, PlanAnswer } from "../answerers/schemas/index.js";
+import type { CiWhen } from "../ci/index.js";
 import type { EscapeHatches } from "../config/shared.js";
 import type { Allocator, RunnerAllocation, SshTarget } from "../contracts/allocator.js";
 import type { SecretStore } from "../contracts/secretStore.js";
@@ -30,6 +31,7 @@ import { quoteSshShellArg } from "../ssh/command.js";
 import { SshCcusageAccountant, SshCodexbarUsageMonitor, SshUsageProbe, type UsageProbe } from "../usage/index.js";
 import { bootstrapWorkspace, WorkspaceBootstrapError, runWorkspaceSshCommand, workspaceRepoPathForRun } from "../workspace/index.js";
 import { pollCiForRun, type PollCiForRunResult } from "./ciPolling.js";
+import { type GateOutcome, resolveGateConfig, runGateForWhen } from "./gate/index.js";
 import { publishDraftPullRequest, type PublishedDraftPullRequest } from "./githubDraftPr.js";
 import { runSubtaskLoop, type SubtaskLoopAdapters, type SubtaskLoopOutcome } from "./subtaskLoop.js";
 
@@ -88,6 +90,12 @@ export interface RunPlannerLoopInput {
   // that drive the loop with a RecordingSsh fake inject a no-op (or scripted
   // failure) so unit runs never depend on a real install.
   runBootstrap?: (input: BootstrapStepInput) => Promise<void>;
+  // P3-0005 test seam: the deterministic gate the loop runs per writer
+  // iteration (fast tier) and before audit (slow tier). When omitted, the
+  // default reads the workspace's tanren-ci.yml (or the P3-0004 default) and
+  // runs the mapped tiers over SSH. Tests inject a mock to assert routing
+  // without a live runner.
+  runGate?: (input: { when: CiWhen; taskId?: string }) => Promise<GateOutcome>;
   // Test seams. Omitted in production → real Codex adapters + SSH usage probe.
   buildAdapters?: (ctx: PlannerRunAdapterContext) => SubtaskLoopAdapters;
   buildUsageProbe?: (ctx: PlannerRunAdapterContext) => UsageProbe | undefined;
@@ -151,6 +159,12 @@ export async function runPlannerLoopWorkflow(input: RunPlannerLoopInput): Promis
     const adapters = (input.buildAdapters ?? ((ctx) => defaultCodexAdapters(input, ctx)))(adapterCtx);
     const usageProbe = (input.buildUsageProbe ?? ((ctx) => defaultUsageProbe(input, ctx)))(adapterCtx);
 
+    // P3-0005: the deterministic gate runs on the just-bootstrapped workspace.
+    // Resolve the CI config once (tanren-ci.yml, else the default) and run the
+    // tiers mapped to each lifecycle point over SSH — exit codes only, no
+    // Answerer. Tests inject input.runGate to skip the live runner.
+    const runGate = input.runGate ?? buildDefaultGate(input, allocation.target, workspacePath, eventStore);
+
     const outcome = await runSubtaskLoop({
       pool: input.pool,
       eventStore,
@@ -169,7 +183,8 @@ export async function runPlannerLoopWorkflow(input: RunPlannerLoopInput): Promis
       },
       escapeHatches: input.escapeHatches,
       timeoutMs: input.timeoutMs,
-      usageProbe
+      usageProbe,
+      runGate
     });
 
     if (outcome.kind !== "passed") {
@@ -246,6 +261,40 @@ function defaultCodexAdapters(input: RunPlannerLoopInput, ctx: PlannerRunAdapter
     writer: createCodexWriter(deps),
     checker: createCodexAnswerer<CheckAnswer>(deps),
     auditor: createCodexAnswerer<AuditAnswer>(deps)
+  };
+}
+
+// Builds the production gate callback. The CI config is resolved lazily on the
+// first gate call (the workspace is bootstrapped by then) and cached for the
+// rest of the run, so a malformed tanren-ci.yml surfaces at the first gate
+// rather than crashing the workflow before the loop starts. Each call runs the
+// tiers mapped to `when` over SSH and emits gate.* through the run's store.
+function buildDefaultGate(
+  input: RunPlannerLoopInput,
+  target: SshTarget,
+  workspacePath: string,
+  eventStore: EventStore
+): (gate: { when: CiWhen; taskId?: string }) => Promise<GateOutcome> {
+  const context = input.context;
+  let configPromise: ReturnType<typeof resolveGateConfig> | undefined;
+  const appendEvent = async <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string) => {
+    await eventStore.append({ runId: context.runId, specId: context.specId, projectId: context.projectId, taskId, eventType, payload });
+  };
+  return async ({ when, taskId }) => {
+    if (configPromise === undefined) {
+      configPromise = resolveGateConfig({ ssh: input.ssh, target, workspacePath, timeoutMs: input.timeoutMs });
+    }
+    const config = await configPromise;
+    return runGateForWhen({
+      ssh: input.ssh,
+      target,
+      workspacePath,
+      config,
+      when,
+      timeoutMs: input.timeoutMs,
+      appendEvent,
+      taskId
+    });
   };
 }
 

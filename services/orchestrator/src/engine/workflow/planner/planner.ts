@@ -27,9 +27,10 @@ export interface PlannerSpecContext {
 // A single rejection feedback record handed to the planner on re-invocation.
 // Carrying both the producer and the structured reason matters because the
 // auditor and the checker reject for very different reasons (a checker
-// rejects per-subtask criteria; the auditor rejects the integrated result).
+// rejects per-subtask criteria; the auditor rejects the integrated result;
+// P3-0005's deterministic gate rejects on a nonzero build/test/lint exit).
 export interface PlannerRejectionFeedback {
-  producer: "checker" | "auditor";
+  producer: "checker" | "auditor" | "gate";
   rejectionReason: string;
   behaviorIdsFailed: ReadonlyArray<string>;
   previousSubtasks: ReadonlyArray<PlanSubtask>;

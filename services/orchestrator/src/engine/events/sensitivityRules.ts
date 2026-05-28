@@ -240,6 +240,38 @@ export const sensitivityRules: SensitivityRule[] = [
     ["recommendedAction", "public"]
   ]),
 
+  // P3-0005 in-loop gate-check stage. Tier/step names + exit codes are public
+  // identifiers; captured command output tails carry stdout/stderr, which the
+  // taxonomy treats as secret (may surface env values or paths).
+  ...rulesFor("gate.started", [
+    ["tier", "public"],
+    ["when", "public"],
+    ["stepNames", "public"],
+    ["stepNames[]", "public"]
+  ]),
+  ...rulesFor("gate.passed", [
+    ["tier", "public"],
+    ["when", "public"],
+    ["steps[].name", "public"],
+    ["steps[].run", "public"],
+    ["steps[].exitCode", "public"],
+    ["steps[].passed", "public"],
+    ["steps[].timedOut", "public"],
+    ["steps[].outputTail", "secret"]
+  ]),
+  ...rulesFor("gate.failed", [
+    ["tier", "public"],
+    ["when", "public"],
+    ["failedStep", "public"],
+    ["exitCode", "public"],
+    ["steps[].name", "public"],
+    ["steps[].run", "public"],
+    ["steps[].exitCode", "public"],
+    ["steps[].passed", "public"],
+    ["steps[].timedOut", "public"],
+    ["steps[].outputTail", "secret"]
+  ]),
+
   // P2B-0008 recovery lineage — operator-authored prose + identifiers, public.
   ...rulesFor("recovery.revise_routed", [
     ["runId", "public"],

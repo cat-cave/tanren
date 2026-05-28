@@ -67,6 +67,11 @@ import {
   ReviewRequestedPayload
 } from "./schemas/integrations.js";
 import {
+  GateFailedPayload,
+  GatePassedPayload,
+  GateStartedPayload
+} from "./schemas/gate.js";
+import {
   RunCompletedPayload,
   RunFailedPayload,
   RunQueuedPayload,
@@ -173,6 +178,11 @@ export const EventRegistry = {
   "ci.started": CiStartedPayload,
   "ci.passed": CiPassedPayload,
   "ci.failed": CiFailedPayload,
+
+  // P3-0005 in-loop deterministic gate-check stage (exit-code driven; no agent)
+  "gate.started": GateStartedPayload,
+  "gate.passed": GatePassedPayload,
+  "gate.failed": GateFailedPayload,
 
   // Phase 1 fixture orchestration
   "phase1.fixture.started": Phase1FixtureStartedPayload,
