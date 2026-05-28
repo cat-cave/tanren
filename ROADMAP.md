@@ -482,7 +482,7 @@ Phase 2 is complete when, on merged `main`:
 
 **Easy tier (`just acceptance-easy`)** — live-proven on current `main` (post token-accounting, usage-monitor, and planner-loop run-trigger merges): run `run_cd09b273-b0e9-4c5f-90ca-c632977b7643`, `outcome=phase2_easy_complete`, status `done`, draft PR `https://github.com/cat-cave/tanren-fixture-easy/pull/7`, CI passed, tasks `plan/write/check/audit/ci`, 3 cost rows (write/check/audit, `subscription`/`unknown` — the easy tier runs the Phase 1 linear flow, so no ccusage/credits reconcile; that path is the planner-loop/medium tier), 98s.
 
-**Medium tier (`just acceptance-medium`)** — run-trigger wired (`runPlannerLoopWorkflow` + live driver); pending a live green run against `cat-cave/tanren-fixture-medium`.
+**Medium tier (`just acceptance-medium`)** — the planner loop is wired (`runPlannerLoopWorkflow` + live driver) and its mechanism is live-proven against `cat-cave/tanren-fixture-medium`: ≥ 2 subtasks, a genuine checker rejection → `planner.rerequested` re-plan, and credit-drawdown cost accounting. The checker judges intent against explicit criteria; the deterministic test gate is post-PR CI. (The checker-rejection loop is opportunistic, not a per-run assertion. The in-loop two-tier gate-check is the Phase 3 opener.)
 
 ## Phase 3: v0 Completion
 
@@ -490,6 +490,6 @@ Status: scoped, not started.
 
 Phase 3 closes the v0 workflow above the Phase 2 operator-control baseline, adds the remaining providers, brings the hi-fi's deferred surfaces online, hardens deployment, and clears the audit's remaining medium-priority items. The full scope-bucket list is in [`docs/roadmap/phase-3.md`](docs/roadmap/phase-3.md).
 
-Headline buckets: workflow completion (review/merge with per-repo configurable integrations) · thick Forge LLM backend · spec DAG canvas · spec discovery flow · full greenfield + brownfield onboarding · `tanren-config` audit-gate · subscription-window heatmap + DORA · live preview deploys · demo-role LLM wiring · additional workflow insights (stuck, review_stall) · scheduled audits library · issue source ingestion · external-push governance posture · provider expansion (Claude, opencode-Zai) · notification channel rollout (Slack, GitHub Checks, etc.) · acceptance hard tier · allocator expansion · CI/queue hardening · observability · deployment hardening including Authentik OIDC.
+Headline buckets: workflow completion (review/merge with per-repo configurable integrations · two-tier in-loop gate-checks from a repo-sourced `tanren-ci.yml`, with the checker Answerer reframed to intent/review-only) · thick Forge LLM backend · spec DAG canvas · spec discovery flow · full greenfield + brownfield onboarding · `tanren-config` audit-gate · subscription-window heatmap + DORA · live preview deploys · demo-role LLM wiring · additional workflow insights (stuck, review_stall) · scheduled audits library · issue source ingestion · external-push governance posture · provider expansion (Claude, opencode-Zai) · notification channel rollout (Slack, GitHub Checks, etc.) · acceptance hard tier · allocator expansion · CI/queue hardening · observability · deployment hardening including Authentik OIDC.
 
 PROJECT_BRIEF §3.1 (opencode provider list) is amended at Phase 3 entry to remove the Wafer reference. PROJECT_BRIEF was otherwise treated as fixed during Phase 2 planning.

@@ -3,13 +3,14 @@
 // Medium adds two requirements on top of the easy tier:
 //   - ≥ 2 write tasks under the planner (i.e. the planner emitted ≥ 2
 //     subtasks)
-//   - ≥ 1 `planner.rerequested` event (the checker rejection loop fired
-//     at least once)
 //   - a planner cost record alongside writer/checker/auditor
 //
-// We verify both paths against synthetic completed-run snapshots so CI
+// The checker-rejection loop (planner.rerequested) is a capability exercised
+// opportunistically, NOT a hard per-run gate — asserting it would assert
+// nondeterministic LLM behavior. Deterministic "tests pass" lives in post-PR
+// CI. We verify these paths against synthetic completed-run snapshots so CI
 // gates the medium criteria even while the live runner against
-// `cat-cave/tanren-fixture-medium` is pending operator-setup.
+// `cat-cave/tanren-fixture-medium` is exercised locally.
 
 import { describe, expect, it } from "vitest";
 import {
@@ -78,7 +79,11 @@ describe("phase2 acceptance — medium tier dry-run smoke", () => {
     ).toThrow(/≥ 2 write tasks/);
   });
 
-  it("fails when the checker rejection loop never fired", () => {
+  it("passes when the loop converged on the first plan (rejection loop is opportunistic, not required)", () => {
+    // A medium run where the writer satisfied the checker on the first plan —
+    // no planner.rerequested. This must NOT fail: the rejection loop is a
+    // capability, not a per-run gate (it would assert nondeterministic LLM
+    // behavior). ≥ 2 subtasks + completion + costs + post-PR CI still hold.
     expect(() =>
       assertAcceptanceCriteria({
         tier: "medium",
@@ -88,7 +93,7 @@ describe("phase2 acceptance — medium tier dry-run smoke", () => {
           events: mediumSnapshot().events.filter((name) => name !== "planner.rerequested")
         })
       })
-    ).toThrow(/planner\.rerequested/);
+    ).not.toThrow();
   });
 
   it("fails when the planner cost record is missing", () => {
