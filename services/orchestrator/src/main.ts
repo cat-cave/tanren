@@ -28,6 +28,15 @@ import {
 } from "./engine/workflow/projectSpec.js";
 import { createAuthMiddleware, type ActorContextEnv } from "./middleware/auth.js";
 import { createAuthRoutes } from "./routes/auth/index.js";
+import { createBehaviorRoutes } from "./routes/behaviors/index.js";
+import { createBrownfieldRoutes } from "./routes/brownfield/index.js";
+import { createCredentialRoutes, InMemoryCredentialRegistry, type CredentialRegistry } from "./routes/credentials/index.js";
+import { createDoctorRoutes } from "./routes/doctor/index.js";
+import { createMilestoneRoutes } from "./routes/milestones/index.js";
+import { createOrgRoutes } from "./routes/orgs/index.js";
+import { createPersonaRoutes } from "./routes/personas/index.js";
+import { createProjectRoutes } from "./routes/projects/index.js";
+import { createSpecRoutes } from "./routes/specs/index.js";
 
 const port = Number(process.env.ORCHESTRATOR_PORT ?? 3100);
 const vaultAddr = process.env.VAULT_ADDR ?? "http://localhost:8200";
@@ -168,6 +177,7 @@ export function buildApp(input: {
   runnerIdentitySecretRef?: string;
   vaultHealthCheck?: () => Promise<{ ok: boolean; status: number }>;
   auth?: BuildAppAuthOptions;
+  credentialRegistry?: CredentialRegistry;
 }) {
   const app = new Hono<ActorContextEnv>();
   const secrets = input.secrets ?? new InMemorySecretStore();
@@ -195,6 +205,30 @@ export function buildApp(input: {
     );
   }
 
+  const credentialRegistry = input.credentialRegistry ?? new InMemoryCredentialRegistry();
+
+  app.route("/orgs", createOrgRoutes({ pool: input.pool }));
+  app.route("/orgs", createProjectRoutes({ pool: input.pool }));
+  app.route("/orgs", createSpecRoutes({ pool: input.pool }));
+  app.route("/orgs", createPersonaRoutes({ pool: input.pool }));
+  app.route("/orgs", createBehaviorRoutes({ pool: input.pool }));
+  app.route("/orgs", createMilestoneRoutes({ pool: input.pool }));
+  app.route(
+    "/orgs",
+    createBrownfieldRoutes({ pool: input.pool, secrets, githubHttp })
+  );
+  app.route(
+    "/",
+    createCredentialRoutes({ pool: input.pool, secrets, registry: credentialRegistry })
+  );
+  app.route(
+    "/",
+    createDoctorRoutes({
+      pool: input.pool,
+      secrets,
+      vaultHealthCheck
+    })
+  );
 
   app.get("/healthz", async (c) => {
     const dbResult = await input.pool.query("SELECT 1 AS ok");
