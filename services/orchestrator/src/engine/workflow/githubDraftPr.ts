@@ -1,10 +1,13 @@
 import type pg from "pg";
+import { migrateOrgConfig, type OrgGithubAppInstallation } from "../config/orgConfig.js";
 import type { SshTarget } from "../contracts/allocator.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { SshSubstrate } from "../contracts/sshSubstrate.js";
-import { redactedGithubTokenResult, validateGithubCredentialRef, validateGithubToken } from "../credentials/githubToken.js";
+import { redactedGithubTokenResult, validateGithubCredentialRef } from "../credentials/githubToken.js";
+import { resolveGithubToken } from "../credentials/githubTokenResolver.js";
 import { type EventStore, PgEventStore } from "../eventStore.js";
 import { GitHubPullRequestService, parseGitHubRepository, type GitHubHttpClient } from "../providers/github.js";
+import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import { workspaceRepoPathForRun } from "../workspace/index.js";
 import { draftPrBranchName, pushWorkspaceBranchToGitHub } from "../workspace/githubPush.js";
 
@@ -29,6 +32,9 @@ export interface PublishDraftPullRequestInput {
   githubCredentialRef?: string;
   projectConfig?: Record<string, unknown>;
   timeoutMs: number;
+  /** P3-0003: org App installation; when set, prefer minting an App token. */
+  installation?: OrgGithubAppInstallation;
+  githubAppMinter?: GithubAppTokenMinter;
 }
 
 export interface PublishedDraftPullRequest {
@@ -51,6 +57,8 @@ export interface PublishDraftPullRequestForRunInput {
   title?: string;
   body?: string;
   timeoutMs: number;
+  /** P3-0003: shared installation-token minter (cache lives here). */
+  githubAppMinter?: GithubAppTokenMinter;
 }
 
 export class DraftPrRunNotFoundError extends Error {
@@ -69,31 +77,40 @@ export async function publishDraftPullRequest(input: PublishDraftPullRequestInpu
   const eventStore = input.eventStore ?? new PgEventStore(input.pool);
   const context = eventContext(input);
   const branch = draftPrBranchName({ runId: input.runId, requestedBranch: input.runBranch });
-  const credentialRef = githubCredentialRefFromInput(input);
+  // With an App installation the static ref is optional; the ledger label is
+  // the App credential ref in that case.
+  const staticRef = input.installation === undefined ? githubCredentialRefFromInput(input) : credentialRefOrUndefined(input);
+  const ledgerRef = input.installation?.credentialRef ?? staticRef ?? "github_app";
 
   try {
     await eventStore.append({
       ...context,
       eventType: "credential.requested",
-      payload: redactedGithubTokenResult(credentialRef)
+      payload: redactedGithubTokenResult(ledgerRef)
     });
-    const token = await loadGithubToken(input.secrets, credentialRef);
+    const resolved = await resolveGithubToken({
+      secrets: input.secrets,
+      installation: input.installation,
+      staticRef,
+      minter: input.githubAppMinter
+    });
     await eventStore.append({
       ...context,
       eventType: "credential.loaded",
-      payload: redactedGithubTokenResult(credentialRef)
+      payload: redactedGithubTokenResult(ledgerRef)
     });
-    await pushWorkspaceBranchToGitHub({ ...input, branch, credentialRef });
+    await pushWorkspaceBranchToGitHub({ ...input, branch, credentialRef: ledgerRef, token: resolved.token });
     await eventStore.append({
       ...context,
       eventType: "github.branch.pushed",
-      payload: { repoUrl: input.repoUrl, branch, credentialRef, redacted: true }
+      payload: { repoUrl: input.repoUrl, branch, credentialRef: ledgerRef, redacted: true }
     });
 
     const service = new GitHubPullRequestService(input.githubHttp);
     const pr = await service.ensureDraftPullRequest({
       repo: parseGitHubRepository(input.repoUrl),
-      token,
+      token: resolved.token,
+      refreshToken: resolved.refresh,
       headBranch: branch,
       baseBranch: input.targetBranch,
       title: input.title,
@@ -149,7 +166,9 @@ export async function publishDraftPullRequestForRun(input: PublishDraftPullReque
     body: input.body ?? context.specDescription,
     githubCredentialRef: input.githubCredentialRef,
     projectConfig: context.projectConfig,
-    timeoutMs: input.timeoutMs
+    timeoutMs: input.timeoutMs,
+    installation: context.installation,
+    githubAppMinter: input.githubAppMinter
   });
 }
 
@@ -163,6 +182,7 @@ async function loadDraftPrRunContext(pool: RunStateClient, runId: string): Promi
        p.repo_url,
        p.default_branch,
        p.config,
+       o.config AS org_config,
        s.title AS spec_title,
        s.description AS spec_description,
        runner.ssh_host,
@@ -170,6 +190,7 @@ async function loadDraftPrRunContext(pool: RunStateClient, runId: string): Promi
        runner.host_key_fingerprint
      FROM runs r
      JOIN projects p ON p.project_id = r.project_id
+     LEFT JOIN organizations o ON o.id = p.org_id
      JOIN specs s ON s.spec_id = r.spec_id
      LEFT JOIN LATERAL (
        SELECT ssh_host, ssh_port, host_key_fingerprint
@@ -193,6 +214,7 @@ async function loadDraftPrRunContext(pool: RunStateClient, runId: string): Promi
     repoUrl: row.repo_url,
     defaultBranch: row.default_branch,
     projectConfig: asRecord(row.config),
+    installation: installationFromOrgConfig(row.org_config),
     specTitle: row.spec_title,
     specDescription: row.spec_description,
     runner:
@@ -214,12 +236,9 @@ function githubCredentialRefFromInput(input: PublishDraftPullRequestInput): stri
   return validateGithubCredentialRef(configured);
 }
 
-async function loadGithubToken(secrets: SecretStore, ref: string): Promise<string> {
-  const secret = await secrets.get(ref);
-  if (secret === undefined) {
-    throw new Error(`missing GitHub credential ref: ${ref}`);
-  }
-  return validateGithubToken(secret.value);
+function credentialRefOrUndefined(input: PublishDraftPullRequestInput): string | undefined {
+  const configured = input.githubCredentialRef ?? input.projectConfig?.githubCredentialRef;
+  return typeof configured === "string" ? validateGithubCredentialRef(configured) : undefined;
 }
 
 function eventContext(input: PublishDraftPullRequestInput) {
@@ -234,6 +253,7 @@ interface DraftPrRunContext {
   repoUrl: string;
   defaultBranch: string;
   projectConfig: Record<string, unknown>;
+  installation?: OrgGithubAppInstallation;
   specTitle: string;
   specDescription: string;
   runner?: {
@@ -251,6 +271,7 @@ interface DraftPrRunRow {
   repo_url: string;
   default_branch: string;
   config: unknown;
+  org_config: unknown;
   spec_title: string;
   spec_description: string;
   ssh_host: string | null;
@@ -260,6 +281,17 @@ interface DraftPrRunRow {
 
 function asRecord(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function installationFromOrgConfig(orgConfig: unknown): OrgGithubAppInstallation | undefined {
+  if (orgConfig === null || orgConfig === undefined) {
+    return undefined;
+  }
+  try {
+    return migrateOrgConfig(orgConfig).github_app;
+  } catch {
+    return undefined;
+  }
 }
 
 function messageFromError(error: unknown): string {

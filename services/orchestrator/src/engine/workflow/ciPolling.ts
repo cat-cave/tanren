@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type pg from "pg";
+import { migrateOrgConfig, type OrgGithubAppInstallation } from "../config/orgConfig.js";
 import type { SecretStore } from "../contracts/secretStore.js";
-import { validateGithubCredentialRef, validateGithubToken } from "../credentials/githubToken.js";
+import { validateGithubCredentialRef } from "../credentials/githubToken.js";
+import { resolveGithubToken } from "../credentials/githubTokenResolver.js";
+import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import { type EventStore, PgEventStore } from "../eventStore.js";
 import {
   GitHubStatusService,
@@ -34,6 +37,8 @@ export interface PollCiForRunInput {
   githubHttp: GitHubHttpClient;
   runId: string;
   githubCredentialRef?: string;
+  /** P3-0003: shared installation-token minter (cache lives here). */
+  githubAppMinter?: GithubAppTokenMinter;
 }
 
 export interface PollCiForRunResult {
@@ -84,12 +89,22 @@ export async function pollCiForRun(input: PollCiForRunInput): Promise<PollCiForR
       payload: { taskKind: "ci" }
     });
   }
-  const credentialRef = githubCredentialRefFromInput(input.githubCredentialRef, context.projectConfig);
-  const token = await loadGithubToken(input.secrets, credentialRef);
+  const staticRef = context.installation === undefined
+    ? githubCredentialRefFromInput(input.githubCredentialRef, context.projectConfig)
+    : credentialRefOrUndefined(input.githubCredentialRef, context.projectConfig);
+  const ledgerRef = context.installation?.credentialRef ?? staticRef ?? "github_app";
+  const resolved = await resolveGithubToken({
+    secrets: input.secrets,
+    installation: context.installation,
+    staticRef,
+    minter: input.githubAppMinter
+  });
+  const credentialRef = ledgerRef;
   const pr = parseGitHubPullRequestUrl(context.prUrl);
   const checks = await new GitHubStatusService(input.githubHttp).fetchPullRequestChecks({
     repo: pr.repo,
-    token,
+    token: resolved.token,
+    refreshToken: resolved.refresh,
     pullNumber: pr.pullNumber
   });
   const observation = evaluateCiObservation(checks);
@@ -200,9 +215,10 @@ export function computeCiRetryDelayMs(attempt: number): number {
 
 async function loadCiRunContext(pool: RunStateClient, runId: string): Promise<CiRunContext | undefined> {
   const result = await pool.query(
-    `SELECT r.run_id, r.spec_id, r.project_id, r.pr_url, p.config
+    `SELECT r.run_id, r.spec_id, r.project_id, r.pr_url, p.config, o.config AS org_config
      FROM runs r
      JOIN projects p ON p.project_id = r.project_id
+     LEFT JOIN organizations o ON o.id = p.org_id
      WHERE r.run_id = $1`,
     [runId]
   );
@@ -215,7 +231,8 @@ async function loadCiRunContext(pool: RunStateClient, runId: string): Promise<Ci
     specId: row.spec_id,
     projectId: row.project_id,
     prUrl: row.pr_url,
-    projectConfig: asRecord(row.config)
+    projectConfig: asRecord(row.config),
+    installation: installationFromOrgConfig(row.org_config)
   };
 }
 
@@ -272,12 +289,20 @@ function githubCredentialRefFromInput(override: string | undefined, projectConfi
   return validateGithubCredentialRef(configured);
 }
 
-async function loadGithubToken(secrets: SecretStore, ref: string): Promise<string> {
-  const secret = await secrets.get(ref);
-  if (secret === undefined) {
-    throw new Error(`missing GitHub credential ref: ${ref}`);
+function credentialRefOrUndefined(override: string | undefined, projectConfig: Record<string, unknown>): string | undefined {
+  const configured = override ?? projectConfig.githubCredentialRef;
+  return typeof configured === "string" ? validateGithubCredentialRef(configured) : undefined;
+}
+
+function installationFromOrgConfig(orgConfig: unknown): OrgGithubAppInstallation | undefined {
+  if (orgConfig === null || orgConfig === undefined) {
+    return undefined;
   }
-  return validateGithubToken(secret.value);
+  try {
+    return migrateOrgConfig(orgConfig).github_app;
+  } catch {
+    return undefined;
+  }
 }
 
 function eventTypeForObservation(observation: CiObservation): "ci.started" | "ci.passed" | "ci.failed" {
@@ -338,6 +363,7 @@ interface CiRunContext {
   projectId: string;
   prUrl: string | null;
   projectConfig: Record<string, unknown>;
+  installation?: OrgGithubAppInstallation;
 }
 
 interface CiRunRow {
@@ -346,6 +372,7 @@ interface CiRunRow {
   project_id: string;
   pr_url: string | null;
   config: unknown;
+  org_config: unknown;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

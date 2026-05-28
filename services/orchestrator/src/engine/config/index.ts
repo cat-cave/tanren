@@ -23,6 +23,7 @@ export {
   OrgConfigV1,
   OrgConfigVersioned,
   OrgDefaultCredentials,
+  OrgGithubAppInstallation,
   SUPPORTED_ORG_CONFIG_VERSIONS,
   defaultOrgConfigV1,
   migrateOrgConfig,

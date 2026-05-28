@@ -41,6 +41,8 @@ export interface EnsureDraftPullRequestInput {
   baseBranch: string;
   title: string;
   body?: string;
+  /** P3-0003: re-mint token + retry once on a 401. */
+  refreshToken?: () => Promise<string>;
 }
 
 export interface EnsureDraftPullRequestResult extends GitHubPullRequest {
@@ -52,6 +54,13 @@ export interface GitHubHttpRequest {
   path: string;
   token: string;
   body?: unknown;
+  /**
+   * P3-0003: optional token-supplier. When provided and the request returns
+   * 401 (e.g. an installation token expired/was revoked between mint and use),
+   * the client re-mints once via `refreshToken()` and retries the request a
+   * single time with the fresh token. Static-token callers omit this.
+   */
+  refreshToken?: () => Promise<string>;
 }
 
 export interface GitHubHttpResponse {
@@ -67,15 +76,24 @@ export class FetchGitHubHttpClient implements GitHubHttpClient {
   constructor(private readonly apiBaseUrl = "https://api.github.com", private readonly fetchImpl: typeof fetch = fetch) {}
 
   async request(input: GitHubHttpRequest): Promise<GitHubHttpResponse> {
-    const response = await this.fetchImpl(`${this.apiBaseUrl}${input.path}`, {
-      method: input.method,
+    const first = await this.send(input.path, input.method, input.token, input.body);
+    if (first.status !== 401 || input.refreshToken === undefined) {
+      return first;
+    }
+    const freshToken = await input.refreshToken();
+    return this.send(input.path, input.method, freshToken, input.body);
+  }
+
+  private async send(path: string, method: "GET" | "POST", token: string, body: unknown): Promise<GitHubHttpResponse> {
+    const response = await this.fetchImpl(`${this.apiBaseUrl}${path}`, {
+      method,
       headers: {
         Accept: "application/vnd.github+json",
-        Authorization: `Bearer ${input.token}`,
+        Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
         "X-GitHub-Api-Version": "2022-11-28"
       },
-      body: input.body === undefined ? undefined : JSON.stringify(input.body)
+      body: body === undefined ? undefined : JSON.stringify(body)
     });
     const text = await response.text();
     return { status: response.status, body: text === "" ? undefined : JSON.parse(text) };
@@ -95,6 +113,7 @@ export class GitHubPullRequestService {
       method: "POST",
       path: repoPath(input.repo, "/pulls"),
       token: input.token,
+      refreshToken: input.refreshToken,
       body: {
         title: input.title,
         head: input.headBranch,
@@ -120,7 +139,8 @@ export class GitHubPullRequestService {
     const response = await this.http.request({
       method: "GET",
       path: repoPath(input.repo, `/pulls?${query.toString()}`),
-      token: input.token
+      token: input.token,
+      refreshToken: input.refreshToken
     });
     if (response.status !== 200) {
       throw new Error(`GitHub PR lookup failed: HTTP ${response.status}`);
@@ -133,11 +153,17 @@ export class GitHubPullRequestService {
 export class GitHubStatusService {
   constructor(private readonly http: GitHubHttpClient) {}
 
-  async fetchPullRequestChecks(input: { repo: GitHubRepository; token: string; pullNumber: number }): Promise<GitHubPullRequestChecks> {
+  async fetchPullRequestChecks(input: {
+    repo: GitHubRepository;
+    token: string;
+    pullNumber: number;
+    refreshToken?: () => Promise<string>;
+  }): Promise<GitHubPullRequestChecks> {
     const pull = await this.http.request({
       method: "GET",
       path: repoPath(input.repo, `/pulls/${input.pullNumber}`),
-      token: input.token
+      token: input.token,
+      refreshToken: input.refreshToken
     });
     if (pull.status !== 200) {
       throw new Error(`GitHub PR fetch failed: HTTP ${pull.status}`);
@@ -148,12 +174,14 @@ export class GitHubStatusService {
       this.http.request({
         method: "GET",
         path: repoPath(input.repo, `/commits/${encodeURIComponent(head.sha)}/check-runs`),
-        token: input.token
+        token: input.token,
+        refreshToken: input.refreshToken
       }),
       this.http.request({
         method: "GET",
         path: repoPath(input.repo, `/commits/${encodeURIComponent(head.sha)}/status`),
-        token: input.token
+        token: input.token,
+        refreshToken: input.refreshToken
       })
     ]);
     if (checkRuns.status !== 200) {

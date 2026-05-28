@@ -28,6 +28,18 @@ import { mountOnboardingActions } from "./actions.js";
 /** The public GitHub App install URL (configurable; sensible default). */
 const GITHUB_APP_URL = process.env.TANREN_GITHUB_APP_URL ?? "https://github.com/apps/tanren/installations/new";
 
+// P3-0003: when set, the org-setup wizard offers the orchestrator-driven App
+// install flow (`/auth/github-app/install?orgId=…`) which provisions an
+// auto-rotating installation token. Points at the orchestrator's public URL.
+const ORCHESTRATOR_PUBLIC_URL = process.env.TANREN_ORCHESTRATOR_PUBLIC_URL;
+
+function appInstallHrefFor(orgId: string | undefined): string | undefined {
+  if (ORCHESTRATOR_PUBLIC_URL === undefined || ORCHESTRATOR_PUBLIC_URL === "" || orgId === undefined) {
+    return undefined;
+  }
+  return `${ORCHESTRATOR_PUBLIC_URL.replace(/\/$/, "")}/auth/github-app/install?orgId=${encodeURIComponent(orgId)}`;
+}
+
 function clientFor(c: Context, deps: ShellDeps): OrchestratorClient {
   return new OrchestratorClient({ orchestratorUrl: deps.orchestratorUrl, cookieHeader: c.req.header("cookie") });
 }
@@ -72,6 +84,7 @@ export function mountOnboardingScreens(app: Hono, deps: ShellDeps): void {
           step={step}
           orgLogin={ctx.org?.login ?? "your org"}
           githubAppUrl={GITHUB_APP_URL}
+          appInstallHref={appInstallHrefFor(orgId)}
           doctor={doctor}
           orgCredentials={orgCredentials}
           myCredentials={myCredentials}
