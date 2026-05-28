@@ -48,14 +48,21 @@ For local UI testing you usually do **not** want to register a real GitHub OAuth
 - The orchestrator registers the `LocalDevProvider` alongside (or instead of) `github_oauth`. `/auth/login?provider=local_dev` runs the **same** session-mint + first-login org-creation handshake as github_oauth — there is no parallel auth bypass. The first sign-in creates a synthetic tenant org (`login: tanren-dev`, a stable synthetic `external_id`) and a dev admin user.
 - The dashboard points its `/auth/login` redirect at `provider=local_dev` and serves a visible **`/signin`** page with a one-click "sign in (dev)" button. Unauthenticated requests (with `TANREN_REQUIRE_AUTH=1`) are redirected to `/signin` instead of straight to the orchestrator.
 
-**It is dev-only and opt-in.** The flag defaults off; with it unset, behavior is byte-for-byte unchanged (github_oauth only). `compose.dev.yml` sets it on both the orchestrator and dashboard so `just up-dev` is test-ready; **`compose.prod.yml` must never set it**. As a defense-in-depth guard the orchestrator refuses the flag (logs a warning and ignores it) when `TANREN_COOKIE_SECURE=1` — i.e. under a prod-like context.
+**It is dev-only and opt-in.** The flag defaults **off**; with it unset, behavior is byte-for-byte unchanged (github_oauth only, and the open `just smoke` flow is unaffected because no auth middleware mounts). `compose.dev.yml` reads it from host env with an empty default (`${TANREN_DEV_LOGIN:-}` / `${TANREN_REQUIRE_AUTH:-}`), so you opt in by setting those vars; **`compose.prod.yml` never reads them**. As a defense-in-depth guard the orchestrator refuses the flag (logs a warning and ignores it) when `TANREN_COOKIE_SECURE=1` — i.e. under a prod-like context.
 
 **How to use it for manual UI testing:**
 
-1. `just up-dev`
-2. Open http://localhost:3000 — you are redirected to `/signin`.
-3. Click **"sign in (dev)"**. You land authenticated against the synthetic `tanren-dev` org.
-4. Drive the operator-driven run flow from there (link the `cat-cave/tanren-fixture-medium` repo into the org by URL — repo linking is by URL + a stored GitHub credential, independent of the tenant org's GitHub identity). See `operator-driven-run.md`.
+1. Opt in by copying the example env (Docker Compose auto-reads `.env` in the repo root):
+
+   ```sh
+   cp .env.example .env   # already sets TANREN_DEV_LOGIN=1 and TANREN_REQUIRE_AUTH=1
+   ```
+
+   (Or, without a `.env` file: `export TANREN_DEV_LOGIN=1 TANREN_REQUIRE_AUTH=1` before `just up-dev`.)
+2. `just up-dev`
+3. Open http://localhost:3000 — you are redirected to `/signin`.
+4. Click **"sign in (dev)"**. You land authenticated against the synthetic `tanren-dev` org.
+5. Drive the operator-driven run flow from there (link the `cat-cave/tanren-fixture-medium` repo into the org by URL — repo linking is by URL + a stored GitHub credential, independent of the tenant org's GitHub identity). See `operator-driven-run.md`.
 
 ## CSRF protection
 

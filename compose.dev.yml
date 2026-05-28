@@ -45,12 +45,14 @@ services:
       TANREN_GITHUB_OAUTH_CLIENT_ID: ${TANREN_GITHUB_OAUTH_CLIENT_ID:-}
       TANREN_GITHUB_OAUTH_CLIENT_SECRET: ${TANREN_GITHUB_OAUTH_CLIENT_SECRET:-}
       TANREN_PUBLIC_BASE_URL: ${TANREN_PUBLIC_BASE_URL:-http://localhost:3100}
-      # DEV-ONLY sign-in escape hatch (feat/dev-login-escape-hatch). Registers
-      # the local_dev identity provider so `just up-dev` is test-ready without a
-      # registered GitHub OAuth app: open the dashboard, click "sign in (dev)",
-      # land authenticated against the synthetic `tanren-dev` org. compose.prod.yml
+      # DEV-ONLY sign-in escape hatch (feat/dev-login-escape-hatch). OPT-IN via
+      # host env, default OFF: when empty, buildAuthFromEnv returns undefined and
+      # no auth middleware mounts (so the open smoke flow is unaffected). Set
+      # TANREN_DEV_LOGIN=1 (copy .env.example to .env) to register the local_dev
+      # provider, then open the dashboard, click "sign in (dev)", and land
+      # authenticated against the synthetic `tanren-dev` org. compose.prod.yml
       # MUST never set this flag. See docs/operator-guide/auth.md.
-      TANREN_DEV_LOGIN: "1"
+      TANREN_DEV_LOGIN: ${TANREN_DEV_LOGIN:-}
       # Dev profile: orchestrator routes /hello/run to the long-lived static
       # `runner` service over the compose network. The allocator sidecar is
       # still up for parity with prod (and to service ephemeral runs), but
@@ -106,13 +108,15 @@ services:
       DATABASE_URL: postgres://tanren:tanren@postgres:5432/tanren
       ORCHESTRATOR_URL: http://orchestrator:3100
       DASHBOARD_PORT: "3000"
-      # Exercise the auth gate so the sign-in flow is actually driven in dev.
-      TANREN_REQUIRE_AUTH: "1"
+      # OPT-IN via host env, default OFF (keeps CI smoke open). Set to 1 to
+      # exercise the auth gate so the sign-in flow is actually driven in dev.
+      TANREN_REQUIRE_AUTH: ${TANREN_REQUIRE_AUTH:-}
       # DEV-ONLY sign-in escape hatch (must match the orchestrator flag above).
-      # Drives the orchestrator's local_dev provider and surfaces a visible
-      # "sign in (dev)" button at /signin. compose.prod.yml MUST never set it.
-      # See docs/operator-guide/auth.md.
-      TANREN_DEV_LOGIN: "1"
+      # OPT-IN via host env, default OFF. Set TANREN_DEV_LOGIN=1 (copy
+      # .env.example to .env) to drive the orchestrator's local_dev provider and
+      # surface a visible "sign in (dev)" button at /signin. compose.prod.yml
+      # MUST never set it. See docs/operator-guide/auth.md.
+      TANREN_DEV_LOGIN: ${TANREN_DEV_LOGIN:-}
     ports:
       - "3000:3000"
     depends_on:
