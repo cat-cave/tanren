@@ -41,7 +41,7 @@ compose-config:
 ci: format-check lint architecture schema-drift state-drift event-drift answerer-schema-drift typecheck test build compose-config
 
 compose-build:
-  docker compose -f compose.dev.yml build orchestrator dashboard runner
+  docker compose -f compose.dev.yml build orchestrator allocator dashboard runner
 
 runner-key:
   test -f /tmp/tanren_runner_key || ssh-keygen -t ed25519 -N "" -f /tmp/tanren_runner_key
@@ -49,7 +49,7 @@ runner-key:
 # Dev profile: developer ergonomics. Static Vault root token, exposed
 # Postgres/runner SSH/orchestrator/dashboard/ntfy host ports, no required env.
 up-dev: runner-key
-  TANREN_RUNNER_AUTHORIZED_KEY="$(cat /tmp/tanren_runner_key.pub)" TANREN_RUNNER_IDENTITY_PRIVATE_KEY="$(cat /tmp/tanren_runner_key)" docker compose -f compose.dev.yml up -d postgres vault orchestrator dashboard runner ntfy
+  TANREN_RUNNER_AUTHORIZED_KEY="$(cat /tmp/tanren_runner_key.pub)" TANREN_RUNNER_IDENTITY_PRIVATE_KEY="$(cat /tmp/tanren_runner_key)" docker compose -f compose.dev.yml up -d postgres vault orchestrator allocator dashboard runner ntfy
 
 down-dev:
   docker compose -f compose.dev.yml down -v
