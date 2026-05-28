@@ -41,6 +41,13 @@ export const ProjectConfigV1 = z
     forgePersona: PartialForgePersona.default({}),
     governancePosture: GovernancePosture.default("strict"),
     mergeIntegration: MergeIntegration.default("not_configured"),
+    // P3-0025: optional per-project preview-deploy URL pattern. Drives the live
+    // preview iframe in the Review surface. Supports `{branch}` and `{pr}`
+    // placeholders (e.g. `https://pr-{pr}.preview.fly.dev`). Optional + additive:
+    // legacy rows carry no key and parse to an absent field (no migration), and
+    // `.strict()` round-trips it untouched on save. The dashboard never writes a
+    // preview URL onto runs — it derives one from this pattern at render time.
+    previewUrlPattern: z.string().min(1).optional(),
     // P3-0002: optional credential refs the run executor resolves before a run.
     // Backward-compatible — legacy rows carry no `credentials` key and parse to
     // an absent field (the resolver then falls back to the org defaults).

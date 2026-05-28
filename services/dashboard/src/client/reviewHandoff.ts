@@ -2,7 +2,8 @@
  * Review-handoff island (P2B-0004). Hydrates the server-rendered review chat:
  *   - clicking a behavior row toggles its you-verified state;
  *   - clicking a deferral action (handle / defer / dismiss) resolves it;
- *   - the readiness-gate pills + nudge turn recompute live from those states.
+ *   - the readiness-gate pills + nudge turn recompute live from those states;
+ *   - clicking a device tab (P3-0025) re-widths the live preview iframe.
  *
  * No server round-trip for the checklist (it is operator-local verification);
  * `request changes` is a real form POST handled server-side. Sign-off CTAs stay
@@ -72,8 +73,26 @@ export function initReviewHandoff(): void {
     }
   };
 
+  // P3-0025: device-tab switching re-widths the live preview iframe (or its
+  // empty-state placeholder). Tabs carry a `data-width` (CSS max-width); the
+  // active tab gets the `.active` class. No server round-trip — pure view state.
+  const previewFrame =
+    root.querySelector<HTMLElement>('[data-review="preview-frame"]') ??
+    root.querySelector<HTMLElement>('[data-review="preview-empty"]');
+  const deviceTabs = root.querySelectorAll<HTMLElement>('[data-review="device-tabs"] button');
+  const selectDevice = (tab: HTMLElement): void => {
+    for (const t of deviceTabs) t.classList.toggle("active", t === tab);
+    if (previewFrame !== null) previewFrame.style.maxWidth = tab.dataset.width ?? "none";
+  };
+
   root.addEventListener("click", (event) => {
     const target = event.target as HTMLElement;
+
+    const deviceTab = target.closest<HTMLElement>('[data-review="device-tabs"] button');
+    if (deviceTab !== null) {
+      selectDevice(deviceTab);
+      return;
+    }
 
     const behavior = target.closest<HTMLElement>("[data-review-behavior]");
     if (behavior !== null) {
