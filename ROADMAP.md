@@ -478,6 +478,8 @@ Phase 2 is complete when, on merged `main`:
 - `just acceptance-easy` and `just acceptance-medium` pass end-to-end against live fixture repos.
 - The Phase 2 demo evidence (run IDs, PR URL, recovery-action lineage) is committed under this section.
 
+> **Note (2026-05-28):** the two criteria above that require a run to *complete through the dashboard* (end-to-end operator run; failure-recovery re-plan completing) depend on the run executor, which was deferred and is built in Phase 3 (P3-0001). Their real validation is **P3-0009**, not the 2B merges. The `acceptance-easy`/`-medium` scripts that currently prove the workflow are direct-execution harnesses and are **removed once P3-0001 lands** (real-system testing only).
+
 ### Phase 2A live proof
 
 **Easy tier (`just acceptance-easy`)** — live-proven on current `main` (post token-accounting, usage-monitor, and planner-loop run-trigger merges): run `run_cd09b273-b0e9-4c5f-90ca-c632977b7643`, `outcome=phase2_easy_complete`, status `done`, draft PR `https://github.com/cat-cave/tanren-fixture-easy/pull/7`, CI passed, tasks `plan/write/check/audit/ci`, 3 cost rows (write/check/audit, `subscription`/`unknown` — the easy tier runs the Phase 1 linear flow, so no ccusage/credits reconcile; that path is the planner-loop/medium tier), 98s.
@@ -486,9 +488,11 @@ Phase 2 is complete when, on merged `main`:
 
 ## Phase 3: v0 Completion
 
-Status: scoped, not started.
+Status: **in progress** — spec'd and building. Scope buckets in [`docs/roadmap/phase-3.md`](docs/roadmap/phase-3.md); the **spec-by-spec plan (P3-0001…0030)** is in [`docs/roadmap/phase-3-specs.md`](docs/roadmap/phase-3-specs.md), split into a **Tier 1 foundational vertical slice** (the loop machinery that makes one real operator-driven run execute→green→merge) and **Tier 2 expansion**.
 
-Phase 3 closes the v0 workflow above the Phase 2 operator-control baseline, adds the remaining providers, brings the hi-fi's deferred surfaces online, hardens deployment, and clears the audit's remaining medium-priority items. The full scope-bucket list is in [`docs/roadmap/phase-3.md`](docs/roadmap/phase-3.md).
+**Reconciliation with Phase 2B (recorded in phase-3-specs.md):** Phase 2B shipped the operator dashboard *surfaces*, but the orchestrator has **no run executor** — `createQueuedRunFromSpec` enqueues a `plan` job that nothing in the service dequeues (`runPlannerLoopWorkflow` is invoked only by the `scripts/acceptance/*` harness). So the "completes successfully" / "runs end-to-end" validation claims in P2B-0006, P2B-0008, and the Phase 2 Exit Criteria below shipped as UI/contract wiring and are **superseded by P3-0009** (the live demo on the real loop). The run executor (P3-0001) was the implicit, un-specced prerequisite; Tier 1 names and builds it. Once P3-0001 lands, the direct-execution acceptance scripts are removed so the system is only ever tested through the real dequeue+execute path.
+
+Phase 3 closes the v0 workflow above the Phase 2 operator-control baseline, adds the remaining providers, brings the hi-fi's deferred surfaces online, hardens deployment, and clears the audit's remaining medium-priority items.
 
 Headline buckets: workflow completion (review/merge with per-repo configurable integrations · two-tier in-loop gate-checks from a repo-sourced `tanren-ci.yml`, with the checker Answerer reframed to intent/review-only) · thick Forge LLM backend · spec DAG canvas · spec discovery flow · full greenfield + brownfield onboarding · `tanren-config` audit-gate · subscription-window heatmap + DORA · live preview deploys · demo-role LLM wiring · additional workflow insights (stuck, review_stall) · scheduled audits library · issue source ingestion · external-push governance posture · provider expansion (Claude, opencode-Zai) · notification channel rollout (Slack, GitHub Checks, etc.) · acceptance hard tier · allocator expansion · CI/queue hardening · observability · deployment hardening including Authentik OIDC.
 
