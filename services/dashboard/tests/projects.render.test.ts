@@ -174,6 +174,17 @@ function mockOrchestrator(): void {
     if (url.endsWith("/projects/project_easy") && method === "GET") {
       return new Response(JSON.stringify(PROJECT_DETAIL), { status: 200 });
     }
+    if (/\/orgs\/[^/]+\/credentials$/.test(url) && method === "GET") {
+      return new Response(
+        JSON.stringify({
+          credentials: [
+            { ref: "credential/codex/org/o/c", kind: "codex_chatgpt_auth", scope: "org", ownerId: "o", createdAt: "2026-05-01" },
+            { ref: "credential/github/org/o/g", kind: "github_token", scope: "org", ownerId: "o", createdAt: "2026-05-01" }
+          ]
+        }),
+        { status: 200 }
+      );
+    }
     if (url.endsWith("/projects/project_easy") && method === "PATCH") {
       patchCalls.push({ url, body });
       return new Response(JSON.stringify({ projectId: "project_easy", config: body.config }), { status: 200 });
@@ -439,6 +450,44 @@ describe("routing & limits settings", () => {
     expect(res.status).toBe(302);
     const body = patchCalls[0].body as { config: { escapeHatches: { maxWriterIterPerSubtask: number } } };
     expect(body.config.escapeHatches.maxWriterIterPerSubtask).toBe(8);
+  });
+
+  it("renders the credentials binding panel with org refs in both dropdowns", async () => {
+    const app = await build();
+    const html = await (await app.request("/settings/routing/project_easy")).text();
+    expect(html).toContain("codex + github binding");
+    expect(html).toContain("credential/codex/org/o/c");
+    expect(html).toContain("credential/github/org/o/g");
+    expect(html).toContain("inherit org default");
+  });
+
+  it("binds selected credential refs and PATCHes them into project config", async () => {
+    const app = await build();
+    const res = await app.request("/settings/routing/project_easy/credentials", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        orgId: "org_acme",
+        codexCredentialRef: "credential/codex/org/o/c",
+        githubCredentialRef: "credential/github/org/o/g"
+      })
+    });
+    expect(res.status).toBe(302);
+    expect((patchCalls[0].body as { config: { credentials: unknown } }).config.credentials).toEqual({
+      codexCredentialRef: "credential/codex/org/o/c",
+      githubCredentialRef: "credential/github/org/o/g"
+    });
+  });
+
+  it("clears the binding when both selections are empty (inherit org default)", async () => {
+    const app = await build();
+    const res = await app.request("/settings/routing/project_easy/credentials", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ orgId: "org_acme", codexCredentialRef: "", githubCredentialRef: "" })
+    });
+    expect(res.status).toBe(302);
+    expect((patchCalls[0].body as { config: { credentials?: unknown } }).config.credentials).toBeUndefined();
   });
 
   it("redirects /settings/routing to the active project's routing page", async () => {

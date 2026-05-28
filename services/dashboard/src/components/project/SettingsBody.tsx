@@ -15,6 +15,7 @@
 
 import {
   ROLE_IDS,
+  type CredentialRecord,
   type EscapeHatches,
   type ProjectSummary,
   type RoleId,
@@ -78,6 +79,10 @@ export interface SettingsBodyProps {
   auditGate: boolean;
   /** True after a successful save; renders the saved banner. */
   saved?: boolean;
+  /** Org-scoped credential refs (P3-0002), used to populate the binding dropdowns. */
+  orgCredentials?: CredentialRecord[];
+  /** The project's currently-bound credential refs (P3-0002). */
+  boundCredentials?: { codexCredentialRef?: string; githubCredentialRef?: string };
 }
 
 export function SettingsBody(props: SettingsBodyProps) {
@@ -107,6 +112,7 @@ export function SettingsBody(props: SettingsBodyProps) {
             <VaultPanel />
           </div>
         </div>
+        <CredentialsPanel {...props} />
         <EscapeHatchesPanel {...props} />
         <AuditGatePanel {...props} />
       </div>
@@ -223,6 +229,84 @@ function VaultPanel() {
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Credentials binding (P3-0002). Two dropdowns — Codex + GitHub — populated
+ * from the org's credential REFERENCES (never values), persisting the chosen
+ * refs into project config via the settings PATCH path. An empty selection
+ * clears the binding so the run falls back to the org default. No secret value
+ * is ever rendered — only the ref string + kind.
+ */
+function CredentialsPanel(props: SettingsBodyProps) {
+  const records = props.orgCredentials ?? [];
+  const codexOptions = records.filter((r) => r.kind === "codex_chatgpt_auth");
+  const githubOptions = records.filter((r) => r.kind === "github_token");
+  return (
+    <div class="panel" style="margin-top:14px">
+      <div class="panel-head">
+        <h3>
+          credentials · <em>codex + github binding</em>
+        </h3>
+        <span class="meta">refs only · no values · empty = inherit org default</span>
+      </div>
+      <div class="panel-body">
+        <div class="audit-caption" style="margin-bottom:8px">
+          bind the run's codex bundle + github token · import new ones under{" "}
+          <a href="/onboarding/credentials">credentials ↗</a>
+        </div>
+        <form method="post" action={`/settings/routing/${props.project.projectId}/credentials`}>
+          <input type="hidden" name="orgId" value={props.orgId} />
+          <div class="settings-grid">
+            <CredentialSelect
+              name="codexCredentialRef"
+              label="codex bundle"
+              options={codexOptions}
+              selected={props.boundCredentials?.codexCredentialRef}
+              emptyNote="no codex bundles in this org yet"
+            />
+            <CredentialSelect
+              name="githubCredentialRef"
+              label="github token"
+              options={githubOptions}
+              selected={props.boundCredentials?.githubCredentialRef}
+              emptyNote="no github tokens in this org yet"
+            />
+          </div>
+          <div class="head-actions" style="margin-top:12px">
+            <button class="btn primary" type="submit">
+              save credentials
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function CredentialSelect(props: {
+  name: string;
+  label: string;
+  options: CredentialRecord[];
+  selected?: string;
+  emptyNote: string;
+}) {
+  return (
+    <div class="field">
+      <label for={props.name}>{props.label}</label>
+      <select id={props.name} name={props.name}>
+        <option value="" selected={props.selected === undefined || props.selected === ""}>
+          — inherit org default —
+        </option>
+        {props.options.map((record) => (
+          <option value={record.ref} selected={record.ref === props.selected}>
+            {record.ref}
+          </option>
+        ))}
+      </select>
+      {props.options.length === 0 ? <div class="audit-caption">{props.emptyNote}</div> : null}
     </div>
   );
 }

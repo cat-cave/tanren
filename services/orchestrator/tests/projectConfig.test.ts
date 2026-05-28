@@ -132,6 +132,46 @@ describe("ProjectConfigV1 parser", () => {
     ).toThrow(/.+/);
   });
 
+  it("omits the credentials field on a legacy row (backward compatible)", () => {
+    const cfg = migrateProjectConfig({});
+    expect(cfg.credentials).toBeUndefined();
+  });
+
+  it("parses bound credential refs and round-trips them", () => {
+    const cfg = migrateProjectConfig({
+      version: 1,
+      credentials: {
+        codexCredentialRef: "credential/codex/org/o/p",
+        githubCredentialRef: "credential/github/org/o/p"
+      }
+    });
+    expect(cfg.credentials).toEqual({
+      codexCredentialRef: "credential/codex/org/o/p",
+      githubCredentialRef: "credential/github/org/o/p"
+    });
+    expect(migrateProjectConfig(cfg)).toEqual(cfg);
+  });
+
+  it("accepts a credentials object binding only one kind", () => {
+    const cfg = migrateProjectConfig({
+      version: 1,
+      credentials: { githubCredentialRef: "credential/github/org/o/p" }
+    });
+    expect(cfg.credentials).toEqual({ githubCredentialRef: "credential/github/org/o/p" });
+  });
+
+  it("rejects unknown keys inside the credentials object", () => {
+    expect(() =>
+      migrateProjectConfig({ version: 1, credentials: { somethingElse: "x" } })
+    ).toThrow(/.+/);
+  });
+
+  it("rejects an empty-string credential ref", () => {
+    expect(() =>
+      migrateProjectConfig({ version: 1, credentials: { codexCredentialRef: "" } })
+    ).toThrow(/.+/);
+  });
+
   it("is idempotent on a V1-shaped input (V1 -> V1)", () => {
     const first = migrateProjectConfig({});
     const second = migrateProjectConfig(first);

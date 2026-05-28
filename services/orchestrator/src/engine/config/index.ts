@@ -22,6 +22,7 @@ export {
 export {
   OrgConfigV1,
   OrgConfigVersioned,
+  OrgDefaultCredentials,
   SUPPORTED_ORG_CONFIG_VERSIONS,
   defaultOrgConfigV1,
   migrateOrgConfig,
@@ -31,6 +32,7 @@ export {
 export {
   ProjectConfigV1,
   ProjectConfigVersioned,
+  ProjectCredentialRefs,
   SUPPORTED_PROJECT_CONFIG_VERSIONS,
   defaultProjectConfigV1,
   migrateProjectConfig,

@@ -68,6 +68,29 @@ export function mountOnboardingActions(app: Hono, deps: ShellDeps): void {
     return redirectTo(c, "/onboarding/credentials", result.ok ? "codex bundle imported" : "import failed");
   });
 
+  app.post("/onboarding/credentials/github", async (c) => {
+    // GitHub token import (P3-0002). Org-scoped (billed to / shared by the org)
+    // so a project can resolve it as the run's GitHub credential. The token is
+    // forwarded write-only and never echoed back. Ref defaults into the
+    // P2A-0013 managed namespace (`credential/github/org/<orgId>/<label>`).
+    const client = clientFor(c, deps);
+    const orgId = await firstOrgId(client);
+    const form = await c.req.parseBody();
+    const label = String(form.label ?? "").trim();
+    const token = String(form.token ?? "");
+    if (orgId === undefined || label === "" || token === "") {
+      return redirectTo(c, "/onboarding/credentials", "missing label or token");
+    }
+    const ref = `credential/github/org/${orgId}/${label}`;
+    const result = await client.importCredential({
+      scope: "org",
+      orgId,
+      kind: "github_token",
+      body: { ref, token }
+    });
+    return redirectTo(c, "/onboarding/credentials", result.ok ? `saved ${label}` : "save failed");
+  });
+
   app.post("/onboarding/credentials/delete", async (c) => {
     const client = clientFor(c, deps);
     const orgId = await firstOrgId(client);

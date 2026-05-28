@@ -22,6 +22,18 @@ const defaultEscapeHatches = () => EscapeHatches.parse({});
 const defaultAllocator = () => AllocatorConfig.parse({});
 const defaultForgePersona = () => ForgePersona.parse({});
 
+// P3-0002: org-level default credential refs, keyed by P2A-0013 credential
+// kind. A project that binds no credential of a given kind inherits the org
+// default. Stored in `organizations.config` JSONB so no DB migration is needed.
+// Both keys are optional; an org may default only one kind.
+export const OrgDefaultCredentials = z
+  .object({
+    codex_chatgpt_auth: z.string().min(1).optional(),
+    github_token: z.string().min(1).optional()
+  })
+  .strict();
+export type OrgDefaultCredentials = z.infer<typeof OrgDefaultCredentials>;
+
 export const OrgConfigV1 = z
   .object({
     version: z.literal(1),
@@ -30,7 +42,8 @@ export const OrgConfigV1 = z
     allocator: AllocatorConfig.default(defaultAllocator),
     notificationTargets: z.array(NotificationTargetRef).default([]),
     forgePersona: ForgePersona.default(defaultForgePersona),
-    auditGateEnabled: z.boolean().default(false)
+    auditGateEnabled: z.boolean().default(false),
+    defaultCredentials: OrgDefaultCredentials.optional()
   })
   .strict();
 export type OrgConfigV1 = z.infer<typeof OrgConfigV1>;

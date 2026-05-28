@@ -15,6 +15,7 @@
  *   GET  /settings/routing                             routing & limits (active project)
  *   GET  /settings/routing/:projectId                  routing & limits (explicit project)
  *   POST /settings/routing/:projectId/add|remove|reorder|hatches  config mutations (→ P2A-0013/0006)
+ *   POST /settings/routing/:projectId/credentials                 bind codex+github refs (P3-0002)
  */
 
 import type { Context, Hono } from "hono";
@@ -258,8 +259,12 @@ export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
       return renderShell(c, ctx, { title: "tanren · routing & limits" }, notFoundBody(projectId));
     }
     const client = clientFor(c, deps);
-    const detail = await client.getProject(ctx.org.id, projectId);
+    const [detail, orgCredentials] = await Promise.all([
+      client.getProject(ctx.org.id, projectId),
+      client.listOrgCredentials(ctx.org.id)
+    ]);
     const { routing, escapeHatches } = resolveConfig(detail?.config);
+    const boundCredentials = detail?.config?.credentials ?? {};
     const saved = c.req.query("saved") === "1";
     return renderShell(
       c,
@@ -272,6 +277,8 @@ export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
         orgId={ctx.org.id}
         auditGate={false}
         saved={saved}
+        orgCredentials={orgCredentials}
+        boundCredentials={boundCredentials}
       />
     );
   });
@@ -327,6 +334,27 @@ export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
       if (index >= 0 && index < chain.length && target >= 0 && target < chain.length) {
         const [moved] = chain.splice(index, 1);
         chain.splice(target, 0, moved);
+      }
+    });
+    return c.redirect(`/settings/routing/${projectId}?saved=1`);
+  });
+
+  // Bind the project's Codex + GitHub credential refs (P3-0002). An empty
+  // submitted value clears the binding so the run inherits the org default.
+  app.post("/settings/routing/:projectId/credentials", async (c) => {
+    const projectId = c.req.param("projectId");
+    const form = await c.req.parseBody();
+    const orgId = String(form.orgId ?? "");
+    const codexCredentialRef = String(form.codexCredentialRef ?? "").trim();
+    const githubCredentialRef = String(form.githubCredentialRef ?? "").trim();
+    await mutateConfig(c, deps, orgId, projectId, (config) => {
+      const credentials: { codexCredentialRef?: string; githubCredentialRef?: string } = {};
+      if (codexCredentialRef !== "") credentials.codexCredentialRef = codexCredentialRef;
+      if (githubCredentialRef !== "") credentials.githubCredentialRef = githubCredentialRef;
+      if (Object.keys(credentials).length === 0) {
+        delete config.credentials;
+      } else {
+        config.credentials = credentials;
       }
     });
     return c.redirect(`/settings/routing/${projectId}?saved=1`);
