@@ -11,6 +11,7 @@
  */
 
 import type { DashboardSession } from "../auth/session.js";
+import type { DoraMetrics } from "./dora.js";
 import { OrchestratorRecoveryClient } from "./recoveryClient.js";
 import type {
   BehaviorSummary,
@@ -173,6 +174,23 @@ export class OrchestratorClient extends OrchestratorRecoveryClient {
     const all = json?.insights ?? [];
     const v0 = new Set(["retry_hotspot", "model_mismatch", "pace_anomaly"]);
     return all.filter((insight) => v0.has(insight.kind) && insight.acknowledgedAt === null);
+  }
+
+  /**
+   * DORA-like delivery metrics for a project over a window (P3-0019). Reported,
+   * not targeted; derived from existing run/event data. `undefined` on failure
+   * so the panel degrades to an empty state instead of 500-ing.
+   */
+  async getDora(
+    orgId: string,
+    projectId: string,
+    windowDays?: number
+  ): Promise<DoraMetrics | undefined> {
+    const qs = windowDays === undefined ? "" : `?windowDays=${windowDays}`;
+    const json = await this.getJson<{ metrics?: DoraMetrics }>(
+      `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/dora${qs}`
+    );
+    return json?.metrics;
   }
 
   /** Project milestones for the velocity card + spec form (P2A-0018). */
