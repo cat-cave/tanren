@@ -14,6 +14,7 @@ import { CodexUsageLimitError } from "../src/engine/providers/codex.js";
 import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "../src/engine/providers/github.js";
 import type { AnswererAdapter, CcusageAccounting, UsageProbe, WindowObservation } from "../src/engine/usage/index.js";
 import { runPlannerLoopWorkflow, type PlannerRunContext } from "../src/engine/workflow/plannerRun.js";
+import { WorkspaceBootstrapError } from "../src/engine/workspace/index.js";
 import {
   buildPlan,
   failingCheck,
@@ -225,6 +226,63 @@ describe("runPlannerLoopWorkflow", () => {
     expect(result.pullRequest).toBeUndefined();
     expect(pool.runStatus).toEqual({ status: "halted", outcome: "window_exhausted" });
     expect(github.requests).toHaveLength(0);
+    expect(allocator.releases).toEqual(["runner_planner"]);
+  });
+
+  it("bootstraps the workspace after clone and before the writer loop on the happy path", async () => {
+    const { ctx, pool, events, secrets, allocator, ssh } = await setup();
+    const bootstrapCalls: string[] = [];
+
+    await runPlannerLoopWorkflow({
+      pool: pool.asPgPool(),
+      eventStore: events,
+      allocator,
+      ssh,
+      secrets,
+      githubHttp: passingGitHub(),
+      context: ctx,
+      escapeHatches: { maxPlannerRerunsPerSpec: 3, maxWriterIterPerSubtask: 5, maxRetriesPerTransientFailure: 3 },
+      timeoutMs: 100,
+      maxCiPolls: 1,
+      sleep: async () => undefined,
+      bootstrapCommand: "pnpm install --frozen-lockfile",
+      runBootstrap: async (input) => {
+        bootstrapCalls.push(input.command ?? "<default>");
+      },
+      buildAdapters: () => twoSubtaskAdapters([passingCheck, passingCheck]),
+      buildUsageProbe: () => fakeProbe(healthyWindow(), accounting(0.5))
+    });
+
+    expect(bootstrapCalls).toEqual(["pnpm install --frozen-lockfile"]);
+    const names = events.events.map((event) => event.eventType);
+    expect(names.indexOf("workspace.prepared")).toBeLessThan(names.indexOf("writer.subtask.started"));
+  });
+
+  it("halts on a workspace bootstrap failure and surfaces it as a recoverable run", async () => {
+    const { ctx, pool, events, secrets, allocator, ssh } = await setup();
+
+    await expect(
+      runPlannerLoopWorkflow({
+        pool: pool.asPgPool(),
+        eventStore: events,
+        allocator,
+        ssh,
+        secrets,
+        githubHttp: new ScriptedGitHubHttp([]),
+        context: ctx,
+        escapeHatches: { maxPlannerRerunsPerSpec: 3, maxWriterIterPerSubtask: 5, maxRetriesPerTransientFailure: 3 },
+        timeoutMs: 100,
+        runBootstrap: async (input) => {
+          throw new WorkspaceBootstrapError(input.workspacePath, "pnpm install", 1, "vitest: not found", false);
+        },
+        buildAdapters: () => twoSubtaskAdapters([passingCheck, passingCheck]),
+        buildUsageProbe: () => fakeProbe(healthyWindow(), accounting(null))
+      })
+    ).rejects.toBeInstanceOf(WorkspaceBootstrapError);
+
+    expect(pool.runStatus).toEqual({ status: "halted", outcome: "halted" });
+    const failure = events.events.find((event) => event.eventType === "workspace.failed");
+    expect(failure?.payload).toMatchObject({ message: expect.stringContaining("vitest: not found") });
     expect(allocator.releases).toEqual(["runner_planner"]);
   });
 
