@@ -35,6 +35,7 @@ import type {
   RunDetail,
   RunListItem,
   RunLocation,
+  RunSummary,
   SpecSummary
 } from "./types.js";
 
@@ -255,6 +256,26 @@ export class OrchestratorClient extends OrchestratorRecoveryClient {
       "POST",
       `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/specs`,
       input
+    );
+  }
+
+  /**
+   * Trigger a live run from a spec (P2B-0006). POSTs to the orchestrator's
+   * run-from-spec endpoint with `trigger: "dashboard"` so the run's origin is
+   * recorded as the operator-driven dashboard flow. The body is forwarded as-is
+   * by `sendJson`, so a 4xx (403 org/project access, 409 deps-blocked /
+   * not-runnable) surfaces with its status for the route handler to render.
+   */
+  async triggerRun(
+    orgId: string,
+    projectId: string,
+    specId: string,
+    input: { trigger?: string; branch?: string } = {}
+  ): Promise<{ ok: boolean; status: number; body: RunSummary | undefined }> {
+    return this.sendJson<RunSummary>(
+      "POST",
+      `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/specs/${encodeURIComponent(specId)}/runs`,
+      { trigger: input.trigger ?? "dashboard", ...(input.branch !== undefined ? { branch: input.branch } : {}) }
     );
   }
 

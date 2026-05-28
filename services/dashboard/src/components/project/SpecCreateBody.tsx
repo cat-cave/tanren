@@ -182,6 +182,10 @@ export function SpecListBody(props: {
   project: ProjectSummary;
   specs: SpecSummary[];
   runBySpec: Record<string, string | undefined>;
+  /** Set when a prior run-trigger (P2B-0006) failed; shown inline on the row. */
+  error?: string;
+  /** The spec id the trigger error belongs to. */
+  errorSpecId?: string;
 }) {
   return (
     <div class="p2b">
@@ -216,16 +220,31 @@ export function SpecListBody(props: {
                 const href = runId !== undefined
                   ? `/projects/${props.project.projectId}/runs/${runId}`
                   : `/projects/${props.project.projectId}/specs/new`;
+                const showError = props.error !== undefined && props.errorSpecId === spec.specId;
                 return (
-                  <a class="spec-row" href={href}>
-                    <span class={`status st-${spec.status}`}>{spec.status}</span>
-                    <div>
-                      <div class="t">{spec.title}</div>
-                      <div class="d">{spec.acceptanceCriteria.length} criteria · {spec.dependsOn.length} deps</div>
+                  <>
+                    {showError && <div class="row-error">{props.error}</div>}
+                    <div class="spec-row-wrap">
+                      <a class="spec-row" href={href}>
+                        <span class={`status st-${spec.status}`}>{spec.status}</span>
+                        <div>
+                          <div class="t">{spec.title}</div>
+                          <div class="d">{spec.acceptanceCriteria.length} criteria · {spec.dependsOn.length} deps</div>
+                        </div>
+                        <span class="d">{runId !== undefined ? "run ↗" : "no runs"}</span>
+                        <span class="arrow" style="color:var(--ember-08)">↗</span>
+                      </a>
+                      <form
+                        class="run-trigger"
+                        method="post"
+                        action={`/projects/${props.project.projectId}/specs/${spec.specId}/run`}
+                      >
+                        <button class="btn ghost" type="submit" title="start a live run from this spec">
+                          ▶ start a run
+                        </button>
+                      </form>
                     </div>
-                    <span class="d">{runId !== undefined ? "run ↗" : "no runs"}</span>
-                    <span class="arrow" style="color:var(--ember-08)">↗</span>
-                  </a>
+                  </>
                 );
               })
             )}
