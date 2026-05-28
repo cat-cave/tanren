@@ -4,8 +4,10 @@
 import { describe, expect, it } from "vitest";
 import {
   buildTrajectory,
+  derivePreviewUrl,
   failedTasks,
   formatDuration,
+  prNumberFrom,
   reasoningForTask,
   reviewMergeStateFromEvents,
   runFailed,
@@ -193,5 +195,54 @@ describe("failure detection (rejection loop inspection)", () => {
     } as unknown as RunDetail;
     expect(runFailed(detail)).toBe(true);
     expect(failedTasks(detail).map((t) => t.taskId)).toEqual(["bad"]);
+  });
+});
+
+function previewRun(over: { branch?: string; prUrl?: string | null } = {}): { branch: string; prUrl: string | null } {
+  return {
+    branch: over.branch ?? "tanren/spec_settings",
+    prUrl: over.prUrl === undefined ? "https://github.com/cat-cave/repo/pull/142" : over.prUrl
+  };
+}
+
+describe("derivePreviewUrl — P3-0025 per-PR preview-deploy URL", () => {
+  const run = previewRun;
+
+  it("returns null when no pattern is configured (graceful empty state)", () => {
+    expect(derivePreviewUrl(undefined, run())).toBeNull();
+    expect(derivePreviewUrl("", run())).toBeNull();
+  });
+
+  it("fills the {pr} placeholder from the PR url", () => {
+    expect(derivePreviewUrl("https://pr-{pr}.preview.fly.dev", run())).toBe(
+      "https://pr-142.preview.fly.dev"
+    );
+  });
+
+  it("fills the {branch} placeholder (url-encoded)", () => {
+    expect(derivePreviewUrl("https://preview.example.com/{branch}", run())).toBe(
+      "https://preview.example.com/tanren%2Fspec_settings"
+    );
+  });
+
+  it("returns null when the pattern needs {pr} but the run has no PR yet", () => {
+    expect(derivePreviewUrl("https://pr-{pr}.preview.fly.dev", run({ prUrl: null }))).toBeNull();
+  });
+
+  it("still derives a branch-only URL when there is no PR", () => {
+    expect(derivePreviewUrl("https://preview.example.com/{branch}", run({ prUrl: null }))).toBe(
+      "https://preview.example.com/tanren%2Fspec_settings"
+    );
+  });
+
+  it("refuses non-http(s) origins (no javascript: into an iframe src)", () => {
+    expect(derivePreviewUrl("javascript:alert(1)", run())).toBeNull();
+    expect(derivePreviewUrl("data:text/html,x", run())).toBeNull();
+  });
+
+  it("prNumberFrom parses GitHub PR urls and returns null otherwise", () => {
+    expect(prNumberFrom("https://github.com/o/r/pull/77")).toBe("77");
+    expect(prNumberFrom("https://github.com/o/r")).toBeNull();
+    expect(prNumberFrom(null)).toBeNull();
   });
 });

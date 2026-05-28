@@ -244,3 +244,89 @@ describe("P2B-0004 review handoff", () => {
     expect(html).toContain("P2A-0012");
   });
 });
+
+// ---------------------------------------------------------------------------
+// P3-0025 — live preview-deploy pane in the review surface.
+// ---------------------------------------------------------------------------
+
+/**
+ * Mock that ALSO answers the project-detail read (`getProject`) so the review
+ * route can derive a preview URL from `config.previewUrlPattern`. When
+ * `previewUrlPattern` is undefined the project parses with no preview field.
+ */
+function mockOrchestratorWithProject(previewUrlPattern?: string): void {
+  vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+    const url = typeof input === "string" ? input : input.toString();
+    if (url.endsWith("/auth/me")) {
+      return new Response(JSON.stringify({ userId: "u1", csrfToken: "c", expiresAt: "2030-01-01" }), { status: 200 });
+    }
+    if (url.endsWith("/orgs")) {
+      return new Response(JSON.stringify({ orgs: [ORG] }), { status: 200 });
+    }
+    if (url.endsWith(`/orgs/${ORG.id}/projects`)) {
+      return new Response(JSON.stringify({ projects: [PROJECT] }), { status: 200 });
+    }
+    // project detail (getProject) — carries the merged config incl. preview pattern
+    if (url.endsWith(`/orgs/${ORG.id}/projects/${PROJECT.projectId}`)) {
+      return new Response(
+        JSON.stringify({
+          ...PROJECT,
+          defaultBranch: "main",
+          runnerImage: null,
+          allocator: "local_docker",
+          config: {
+            version: 1,
+            routing: {},
+            escapeHatches: {},
+            mergeIntegration: "not_configured",
+            ...(previewUrlPattern !== undefined ? { previewUrlPattern } : {})
+          }
+        }),
+        { status: 200 }
+      );
+    }
+    if (url.endsWith(`/projects/${PROJECT.projectId}/runs`)) {
+      return new Response(JSON.stringify({ items: [{ ...RUN_DETAIL.run, specTitle: RUN_DETAIL.spec.title, costTotalUsd: "0.0240", lastEventAt: null, needsReview: false }] }), { status: 200 });
+    }
+    if (url.includes(`/runs/${RUN_ID}`) && !url.includes("/stream")) {
+      return new Response(JSON.stringify(RUN_DETAIL), { status: 200 });
+    }
+    if (url.endsWith("/healthz")) {
+      return new Response("ok", { status: 200 });
+    }
+    return new Response("not found", { status: 404 });
+  });
+}
+
+describe("P3-0025 live preview-deploy pane", () => {
+  it("renders a sandboxed iframe at the per-PR preview URL when a pattern is configured", async () => {
+    mockOrchestratorWithProject("https://pr-{pr}.preview.fly.dev");
+    const app = await build();
+    const html = await (await app.request(`/runs/${RUN_ID}/review`)).text();
+    // PR #142 from the run's prUrl filled into the pattern
+    expect(html).toContain("https://pr-142.preview.fly.dev");
+    expect(html).toContain('class="preview-iframe"');
+    // sandboxed for safety — no allow-same-origin so it can't reach the session
+    expect(html).toContain('sandbox="allow-scripts allow-forms allow-popups"');
+    expect(html).not.toContain("allow-same-origin");
+    // device-width tabs present with their widths
+    expect(html).toContain('data-review="device-tabs"');
+    expect(html).toContain('data-width="768px"');
+    expect(html).toContain('data-width="375px"');
+    // open-in-new-tab link to the live preview
+    expect(html).toContain("open ↗");
+  });
+
+  it("renders the graceful empty state when no preview URL is configured", async () => {
+    mockOrchestratorWithProject(); // project has no previewUrlPattern
+    const app = await build();
+    const html = await (await app.request(`/runs/${RUN_ID}/review`)).text();
+    expect(html).toContain("no preview url configured");
+    expect(html).toContain("no live preview for this run");
+    expect(html).toContain("previewUrlPattern");
+    // no iframe in the empty state
+    expect(html).not.toContain('class="preview-iframe"');
+    // device tabs still render (they re-width the placeholder)
+    expect(html).toContain('data-review="device-tabs"');
+  });
+});

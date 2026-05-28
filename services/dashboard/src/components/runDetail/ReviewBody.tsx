@@ -4,7 +4,9 @@
  *   - page head (PR + repo eyebrow, "review with forge", spec/change sub-line)
  *   - Forge review chat (left): opening narration, clickable behavior checklist,
  *     writer-deferred items with handle/defer/dismiss actions, a live nudge turn
- *   - preview pane (right): static placeholder card + device tabs + open ↗
+ *   - preview pane (right): live preview-deploy iframe (P3-0025) at a per-PR
+ *     preview URL, device-width tabs (desktop/tablet/mobile), open ↗, and a
+ *     graceful empty state when no preview URL is configured/available
  *   - readiness gate (bottom): three state pills + sign-off CTAs per the
  *     configured merge integration (disabled in v0) + always-available
  *     `request changes`
@@ -42,6 +44,12 @@ export interface ReviewBodyProps {
   signOffHref: string;
   /** Project settings link (for the not_configured branch). */
   settingsHref: string;
+  /**
+   * P3-0025: the per-PR preview-deploy URL for the live iframe, derived from the
+   * project's `previewUrlPattern` + run state. `null` when no pattern is
+   * configured / no PR exists yet — the preview pane renders its empty state.
+   */
+  previewUrl: string | null;
 }
 
 /** Human label + pill class for the derived review/merge phase (P3-0008). */
@@ -124,37 +132,62 @@ function MergeActions(props: { mode: MergeIntegration; settingsHref: string; sig
   );
 }
 
-function PreviewPane(props: { detail: RunDetail }) {
-  const previewUrl = props.detail.run.prUrl;
+// P3-0025: the live preview-deploy pane. When the project declares a
+// `previewUrlPattern`, we render a sandboxed iframe at the per-PR preview URL
+// with device-width tabs (the `review` island swaps the iframe's max-width).
+// The iframe is `sandbox`ed (scripts only, same-origin denied) so a hostile
+// preview deploy can't reach the dashboard session. When no preview URL is
+// available we render a graceful empty state pointing at project settings.
+function PreviewPane(props: { detail: RunDetail; previewUrl: string | null; settingsHref: string }) {
+  const { previewUrl } = props;
   return (
     <div class="preview" data-review="preview">
       <div class="head">
         <span class="moment-eyebrow" style="font-size:9.5px">preview</span>
-        <span class="url">{previewUrl ?? "no preview url declared"}</span>
+        <span class="url">{previewUrl ?? "no preview url configured"}</span>
         <div class="device-tabs" data-review="device-tabs">
-          <button class="active" data-device="desktop">desktop</button>
-          <button data-device="tablet">tablet</button>
-          <button data-device="mobile">mobile</button>
+          <button class="active" data-device="desktop" data-width="none">desktop</button>
+          <button data-device="tablet" data-width="768px">tablet</button>
+          <button data-device="mobile" data-width="375px">mobile</button>
         </div>
         {previewUrl !== null ? (
           <a class="btn" href={previewUrl} target="_blank" rel="noreferrer" style="font-size:11px">open ↗</a>
         ) : null}
       </div>
       <div class="frame">
-        <div class="placeholder-frame" data-review="preview-frame" style="max-width:none">
-          <div class="pl-title">{props.detail.spec.title}</div>
-          <div class="pl-note">
-            Live preview-deploy iframes are Phase 3. This static placeholder reflects the change under review.
-            {previewUrl !== null ? (
-              <>
-                <br />
-                <a href={previewUrl} target="_blank" rel="noreferrer">open the PR / preview ↗</a>
-              </>
-            ) : null}
+        {previewUrl !== null ? (
+          <iframe
+            class="preview-iframe"
+            data-review="preview-frame"
+            src={previewUrl}
+            title="live preview deploy"
+            loading="lazy"
+            sandbox="allow-scripts allow-forms allow-popups"
+            referrerpolicy="no-referrer"
+            style="max-width:none"
+          ></iframe>
+        ) : (
+          <div class="placeholder-frame" data-review="preview-empty" style="max-width:none">
+            <div class="pl-title">no live preview for this run</div>
+            <div class="pl-note">
+              This project has no preview-deploy URL configured, or this run has no PR yet. Set a{" "}
+              <code>previewUrlPattern</code> (e.g. <code>https://pr-{"{pr}"}.preview.fly.dev</code>) in{" "}
+              <a href={props.settingsHref}>project settings ↗</a> to see the PR's deploy here.
+              {props.detail.run.prUrl !== null ? (
+                <>
+                  <br />
+                  <a href={props.detail.run.prUrl} target="_blank" rel="noreferrer">open the PR on github ↗</a>
+                </>
+              ) : null}
+            </div>
           </div>
-        </div>
+        )}
       </div>
-      <div class="rd-foot">3 device sizes · live preview iframe ships Phase 3</div>
+      <div class="rd-foot">
+        {previewUrl !== null
+          ? "3 device sizes · sandboxed live preview deploy"
+          : "live preview deploy · configure a preview url to enable"}
+      </div>
     </div>
   );
 }
@@ -280,7 +313,7 @@ export function ReviewBody(props: ReviewBodyProps) {
               </div>
             </div>
 
-            <PreviewPane detail={detail} />
+            <PreviewPane detail={detail} previewUrl={props.previewUrl} settingsHref={props.settingsHref} />
           </div>
         </div>
 
