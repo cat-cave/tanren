@@ -46,10 +46,11 @@ const PENDING_MESSAGE = [
 ].join("\n");
 
 async function main(): Promise<void> {
-  // Env validation runs even in pending mode so `just acceptance` fails
+  // Config validation runs even in pending mode so `just acceptance` fails
   // fast at the medium step when the operator forgot a credential — the
   // operator gets the same error they would for the easy tier.
-  loadAcceptanceEnv();
+  const env = await loadAcceptanceEnv();
+  process.stdout.write(`tanren acceptance-medium: config loaded from ${env.configSource}\n`);
   process.stdout.write(`${PENDING_MESSAGE}\n`);
 }
 

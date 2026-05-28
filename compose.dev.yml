@@ -135,7 +135,9 @@ services:
     image: binwiederhier/ntfy:latest
     command: ["serve"]
     ports:
-      - "8080:80"
+      # Default host port shifted off 8080 (common conflict — Tomcat, qBittorrent,
+      # gatus, dozzle, hokora). Override with TANREN_NTFY_HOST_PORT when needed.
+      - "${TANREN_NTFY_HOST_PORT:-18080}:80"
 
   cloudflared:
     image: cloudflare/cloudflared:latest

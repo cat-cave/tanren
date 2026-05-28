@@ -1,0 +1,9 @@
+{
+  "$schema": "Tanren acceptance gate config (P2A-0015).",
+  "$docs": "Copy this file to `tanren.acceptance.json` at the repo root and fill in your absolute paths. See docs/operator-guide/acceptance.md for the full contract.",
+
+  "codex_auth_file": "/absolute/path/to/codex/auth.json",
+  "github_token_file": "/absolute/path/to/github-token",
+  "github_repo_url": "https://github.com/your-org/tanren-fixture-easy",
+  "github_base_branch": "main"
+}

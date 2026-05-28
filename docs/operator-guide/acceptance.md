@@ -7,46 +7,66 @@ status, and cost attribution. The gate is **local-only** — it never runs
 in GitHub Actions because it calls real Codex CLIs and creates real draft
 PRs against the fixture repos.
 
-## Recipes
+## Setup (once per machine)
 
-```sh
-just acceptance-easy     # easy tier (Phase 1 fixture-easy repo)
-just acceptance-medium   # medium tier (Phase 2 fixture-medium repo, pending operator setup)
-just acceptance          # both
-```
+The gate reads operator-supplied credentials and the target repo from a
+single config file at the repo root. Stack-internal details
+(Postgres URL, Vault address/token, SSH host/port/user/key, SSH host
+fingerprint) come from the dev compose contract and are auto-discovered
+or hardcoded — the operator never has to set them.
 
-Each recipe calls `scripts/acceptance/check-env.sh` first, which
-fails fast if any required environment variable is missing.
+1. Bring up the dev stack:
 
-## Required environment
+   ```sh
+   just up-dev
+   ```
 
-The acceptance gate reuses the Phase 1 live-proof env-var contract:
+2. Copy the template config and fill in your absolute paths:
 
-| Variable                       | Purpose                                                    |
-| ------------------------------ | ---------------------------------------------------------- |
-| `TANREN_CODEX_AUTH_JSON_FILE`  | Path to the Codex auth bundle (ChatGPT subscription JSON). |
-| `TANREN_GITHUB_TOKEN_FILE`     | Path to a GitHub PAT file with `repo` scope on the fixture repo. |
-| `TANREN_GITHUB_REPO_URL`       | HTTPS URL of the fixture repo (`https://github.com/cat-cave/tanren-fixture-easy` for easy). |
-| `TANREN_DATABASE_URL`          | Postgres URL pointing at the local compose stack. |
-| `TANREN_VAULT_TOKEN`           | Vault root token (dev token in the dev profile). |
-| `TANREN_SSH_HOST_FINGERPRINT`  | SHA256 fingerprint of the runner SSH host key. |
+   ```sh
+   cp tanren.acceptance.example.json tanren.acceptance.json
+   $EDITOR tanren.acceptance.json
+   ```
 
-Optional overrides:
+   The file is gitignored. Required keys:
 
-| Variable                             | Default                                       |
-| ------------------------------------ | --------------------------------------------- |
-| `TANREN_SSH_KEY_PATH`                | `/tmp/tanren_runner_key`                      |
-| `TANREN_SSH_HOST`                    | `127.0.0.1`                                   |
-| `TANREN_SSH_PORT`                    | `2222`                                        |
-| `TANREN_SSH_USER`                    | `tanren`                                      |
-| `TANREN_VAULT_ADDR`                  | `http://127.0.0.1:18200`                      |
-| `TANREN_GITHUB_BASE_BRANCH`          | `main`                                        |
-| `TANREN_ACCEPTANCE_TIMEOUT_MS`       | `300000` (5 min per Codex call)               |
-| `TANREN_ACCEPTANCE_MAX_CI_POLLS`     | `18`                                          |
-| `TANREN_ACCEPTANCE_CI_POLL_DELAY_MS` | `10000`                                       |
+   | Key                  | Meaning                                                                                  |
+   | -------------------- | ---------------------------------------------------------------------------------------- |
+   | `codex_auth_file`    | Absolute path to the Codex CLI auth.json bundle (from `codex login --device-auth`).      |
+   | `github_token_file`  | Absolute path to a file containing a GitHub PAT (or App install token) with `repo` scope on the fixture repo. |
+   | `github_repo_url`    | HTTPS URL of the fixture repository (`https://github.com/cat-cave/tanren-fixture-easy` for easy tier). |
 
-The runner SSH fingerprint matches what `just live-phase1-fixture` already
-uses; the same `ssh-keyscan` snippet from `justfile` populates it.
+   Optional keys:
+
+   | Key                  | Default | Meaning                          |
+   | -------------------- | ------- | -------------------------------- |
+   | `github_base_branch` | `main`  | Base branch on the fixture repo. |
+
+3. Run the gate:
+
+   ```sh
+   just acceptance-easy     # easy tier
+   just acceptance-medium   # medium tier (pending fixture-medium operator setup)
+   just acceptance          # both
+   ```
+
+## What the gate auto-discovers
+
+These details come from the running dev stack — operator never sets them:
+
+| Detail                       | Source                                                    |
+| ---------------------------- | --------------------------------------------------------- |
+| Postgres connection          | `postgres://tanren:tanren@127.0.0.1:5432/tanren` (compose.dev.yml) |
+| Vault address                | `http://127.0.0.1:18200` (compose.dev.yml)                |
+| Vault root token             | `dev-root-token` (compose.dev.yml)                        |
+| Runner SSH host / port / user | `127.0.0.1:2222` as `tanren` (compose.dev.yml)            |
+| Runner SSH key path          | `/tmp/tanren_runner_key` (generated by `just up-dev` via the `runner-key` recipe) |
+| Runner SSH host fingerprint  | Auto-discovered via `ssh-keyscan -p 2222 -t ed25519 127.0.0.1` |
+
+For non-dev deployments (you're running against a non-default Postgres,
+Vault, or SSH endpoint), override each value with the matching
+environment variable; the script's defaults are documented in
+`scripts/acceptance/config.ts`. Production deployment is Phase 3.
 
 ## What the gate asserts (persisted-state criteria)
 
@@ -69,30 +89,13 @@ the persisted `runId` for the operator to investigate.
 On success the script prints a structured proof block that the operator
 pastes into `ROADMAP.md` under the Phase 2A live-proof section.
 
-## Easy tier (live today)
-
-```sh
-TANREN_CODEX_AUTH_JSON_FILE=/path/to/auth.json \
-TANREN_GITHUB_TOKEN_FILE=/path/to/github-token \
-TANREN_GITHUB_REPO_URL=https://github.com/cat-cave/tanren-fixture-easy \
-TANREN_DATABASE_URL=postgres://tanren:tanren@localhost:5432/tanren \
-TANREN_VAULT_TOKEN=dev-root-token \
-TANREN_SSH_HOST_FINGERPRINT="$(ssh-keyscan -p 2222 -t ed25519 localhost 2>/dev/null | ssh-keygen -lf - -E sha256 | awk 'NR == 1 { print $2 }')" \
-just acceptance-easy
-```
-
-The easy tier reuses the Phase 1 fixture flow (single-file change, single
-subtask, no rejection loop) and tags the resulting run with the
-`phase2_easy_complete` outcome value after every Phase 2 criterion has
-been verified.
-
 ## Medium tier (pending operator setup)
 
-`just acceptance-medium` currently validates the env and prints a pending
-notice. To unblock the live runner, the operator pre-creates a fresh
-GitHub repo `cat-cave/tanren-fixture-medium`, pushes the initial content
-from `fixtures/acceptance-medium/` to it, and the live runner code is
-landed in a follow-up commit.
+`just acceptance-medium` currently validates the config and prints a
+pending notice. To unblock the live runner, the operator pre-creates a
+fresh GitHub repo `cat-cave/tanren-fixture-medium`, pushes the initial
+content from `fixtures/acceptance-medium/` to it, and the live runner
+code is landed in a follow-up commit.
 
 ### Initial fixture-medium content
 
@@ -129,6 +132,15 @@ medium criteria against synthetic completed-run snapshots so CI catches
 regressions in `scripts/acceptance/common.ts` even while the live
 runner is pending.
 
+## Config resolution order
+
+The script looks for the operator config in this order; the first match wins:
+
+1. `$TANREN_ACCEPTANCE_CONFIG` env var (explicit absolute path)
+2. `./tanren.acceptance.json` at the repo root
+3. `~/.config/tanren/acceptance.json`
+4. **Legacy**: the original `TANREN_*` env vars from Phase 1 (emits a deprecation hint pointing at this doc)
+
 ## Reading the proof block
 
 On success the script emits a block like:
@@ -159,7 +171,10 @@ as the completion evidence Phase 1 documented with its
 
 | Symptom                                              | Likely cause                                        |
 | ---------------------------------------------------- | --------------------------------------------------- |
-| `required env vars missing` and exit 2               | One of the variables above is unset.                |
+| `no acceptance config found` and exit 2              | Copy `tanren.acceptance.example.json` to `tanren.acceptance.json` and fill in. |
+| `ssh-keyscan 127.0.0.1:2222 failed`                  | Stack is not up — run `just up-dev` first. |
+| `All configured authentication methods failed`       | Stack was started without the runner key — bring it down (`just down-dev`) and back up with `just up-dev`. |
+| `Codex Answerer failed for schema ...`               | The Codex auth bundle is invalid or expired; re-run `codex login --device-auth` and update `tanren.acceptance.json`. |
 | `pr_url is null` and exit 1                          | The Codex writer failed to commit; check task rows. |
 | `ci.passed event not present` and exit 1             | The fixture repo's CI failed; inspect the draft PR. |
 | `cost_records have unknown source rows`              | A new adapter bypassed `CostRecorder`; this is a release block (P2A-0011 invariant). |

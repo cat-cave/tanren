@@ -18,18 +18,13 @@ import { createDbPool, migrate } from "../../db/src/index.js";
 import { VaultSecretStore, type SecretStore } from "../../services/orchestrator/src/engine/contracts/secretStore.js";
 import { storeCodexAuthBundle } from "../../services/orchestrator/src/engine/credentials/codexAuth.js";
 import { storeGithubToken } from "../../services/orchestrator/src/engine/credentials/githubToken.js";
+import { AcceptanceConfigError, loadAcceptanceConfig, type AcceptanceConfig } from "./config.js";
 
-// -- env loading -----------------------------------------------------------
+// -- back-compat aliases (existing callers spell these in camelCase) ------
 
-const REQUIRED_ENV = [
-  "TANREN_CODEX_AUTH_JSON_FILE",
-  "TANREN_GITHUB_TOKEN_FILE",
-  "TANREN_GITHUB_REPO_URL",
-  "TANREN_DATABASE_URL",
-  "TANREN_VAULT_TOKEN"
-] as const;
+export type AcceptanceEnv = AcceptanceEnvShape;
 
-export interface AcceptanceEnv {
+interface AcceptanceEnvShape {
   codexAuthJsonFile: string;
   githubTokenFile: string;
   githubRepoUrl: string;
@@ -45,44 +40,42 @@ export interface AcceptanceEnv {
   timeoutMs: number;
   maxCiPolls: number;
   ciPollDelayMs: number;
+  configSource: string;
 }
 
 export class AcceptanceEnvError extends Error {}
 
-export function loadAcceptanceEnv(): AcceptanceEnv {
-  const missing = REQUIRED_ENV.filter((name) => !nonEmpty(process.env[name]));
-  if (missing.length > 0) {
-    throw new AcceptanceEnvError(`required env vars missing: ${missing.join(", ")}`);
+// loadAcceptanceEnv is retained for back-compat as a thin async-to-sync
+// shim around loadAcceptanceConfig. New callers should prefer
+// loadAcceptanceConfig directly.
+export async function loadAcceptanceEnv(): Promise<AcceptanceEnvShape> {
+  let config: AcceptanceConfig;
+  try {
+    config = await loadAcceptanceConfig();
+  } catch (error) {
+    if (error instanceof AcceptanceConfigError) {
+      throw new AcceptanceEnvError(error.message);
+    }
+    throw error;
   }
   return {
-    codexAuthJsonFile: requireEnv("TANREN_CODEX_AUTH_JSON_FILE"),
-    githubTokenFile: requireEnv("TANREN_GITHUB_TOKEN_FILE"),
-    githubRepoUrl: requireEnv("TANREN_GITHUB_REPO_URL"),
-    databaseUrl: requireEnv("TANREN_DATABASE_URL"),
-    vaultAddr: process.env.TANREN_VAULT_ADDR ?? "http://127.0.0.1:18200",
-    vaultToken: requireEnv("TANREN_VAULT_TOKEN"),
-    sshKeyPath: process.env.TANREN_SSH_KEY_PATH ?? "/tmp/tanren_runner_key",
-    sshHost: process.env.TANREN_SSH_HOST ?? "127.0.0.1",
-    sshPort: Number(process.env.TANREN_SSH_PORT ?? "2222"),
-    sshUser: process.env.TANREN_SSH_USER ?? "tanren",
-    sshHostFingerprint: requireEnv("TANREN_SSH_HOST_FINGERPRINT"),
-    baseBranch: process.env.TANREN_GITHUB_BASE_BRANCH ?? "main",
-    timeoutMs: Number(process.env.TANREN_ACCEPTANCE_TIMEOUT_MS ?? "300000"),
-    maxCiPolls: Number(process.env.TANREN_ACCEPTANCE_MAX_CI_POLLS ?? "18"),
-    ciPollDelayMs: Number(process.env.TANREN_ACCEPTANCE_CI_POLL_DELAY_MS ?? "10000")
+    codexAuthJsonFile: config.codex_auth_file,
+    githubTokenFile: config.github_token_file,
+    githubRepoUrl: config.github_repo_url,
+    databaseUrl: config.database_url,
+    vaultAddr: config.vault_addr,
+    vaultToken: config.vault_token,
+    sshKeyPath: config.ssh_key_path,
+    sshHost: config.ssh_host,
+    sshPort: config.ssh_port,
+    sshUser: config.ssh_user,
+    sshHostFingerprint: config.ssh_host_fingerprint,
+    baseBranch: config.github_base_branch ?? "main",
+    timeoutMs: config.timeout_ms,
+    maxCiPolls: config.max_ci_polls,
+    ciPollDelayMs: config.ci_poll_delay_ms,
+    configSource: config.source
   };
-}
-
-function requireEnv(name: string): string {
-  const value = process.env[name];
-  if (!nonEmpty(value)) {
-    throw new AcceptanceEnvError(`${name} is required`);
-  }
-  return value as string;
-}
-
-function nonEmpty(value: string | undefined): boolean {
-  return value !== undefined && value !== "";
 }
 
 // -- secrets + db ---------------------------------------------------------

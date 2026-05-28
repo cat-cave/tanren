@@ -113,15 +113,17 @@ smoke: compose-build compose-up wait-for-stack smoke-hello smoke-ssh-integration
 
 # P2A-0015: executable acceptance gate. Local-only — never runs in CI
 # because it calls real Codex and creates real draft PRs.
-# See docs/operator-guide/acceptance.md for the env-var contract.
+#
+# Config comes from tanren.acceptance.json at the repo root (copy
+# tanren.acceptance.example.json to get started). Stack defaults match
+# compose.dev.yml; the SSH host fingerprint is auto-discovered from the
+# running stack. See docs/operator-guide/acceptance.md.
 acceptance-easy:
   @echo "Phase 2A acceptance — easy tier (fixture-easy)"
-  @./scripts/acceptance/check-env.sh
   corepack pnpm exec tsx scripts/acceptance/easy.ts
 
 acceptance-medium:
   @echo "Phase 2A acceptance — medium tier (fixture-medium)"
-  @./scripts/acceptance/check-env.sh
   corepack pnpm exec tsx scripts/acceptance/medium.ts
 
 acceptance: acceptance-easy acceptance-medium
