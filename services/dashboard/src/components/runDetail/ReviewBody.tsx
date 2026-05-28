@@ -16,7 +16,7 @@
  */
 
 import type { RunDetail, RunEventRow } from "../../api/types.js";
-import { summarizeCosts, formatUsd } from "./model.js";
+import { summarizeCosts, formatUsd, reviewMergeStateFromEvents, type ReviewMergeState } from "./model.js";
 import { RUN_DETAIL_CSS } from "./runDetail.css.js";
 
 /** The four Phase-2 merge-integration modes (mirrors P2A-0006 MergeIntegration). */
@@ -38,8 +38,32 @@ export interface ReviewBodyProps {
   runHref: string;
   /** Dashboard route that records a request-changes action. */
   requestChangesHref: string;
+  /** Dashboard route that drives the operator merge/hand-off sign-off. */
+  signOffHref: string;
   /** Project settings link (for the not_configured branch). */
   settingsHref: string;
+}
+
+/** Human label + pill class for the derived review/merge phase (P3-0008). */
+function reviewMergePill(state: ReviewMergeState): { label: string; cls: "ok" | "warn" | "danger" } {
+  switch (state.phase) {
+    case "merged":
+      return { label: `merged${state.mergeSha ? ` · ${state.mergeSha.slice(0, 7)}` : ""}`, cls: "ok" };
+    case "approved":
+      return { label: "review approved", cls: "ok" };
+    case "merge_queued":
+      return { label: `merge queued${state.integration ? ` · ${state.integration}` : ""}`, cls: "warn" };
+    case "review_requested":
+      return { label: "review requested", cls: "warn" };
+    case "changes_requested":
+      return { label: "changes requested", cls: "danger" };
+    case "merge_conflict":
+      return { label: "merge conflict", cls: "danger" };
+    case "merge_failed":
+      return { label: "merge failed", cls: "danger" };
+    default:
+      return { label: "review pending", cls: "warn" };
+  }
 }
 
 /** Pull writer-deferral items out of the run's typed events (no stdout parsing). */
@@ -70,40 +94,33 @@ function repoFromUrl(url: string | null): string {
   return match ? match[1] : "repo";
 }
 
-function MergeActions(props: { mode: MergeIntegration; settingsHref: string }) {
-  const disabledTip = "merge integration · not wired in v0 — Phase 3";
+// The sign-off CTA drives the P3-0008 merge stage through its per-repo
+// integration. The gesture posts to `signOffHref`; the orchestrator dispatches
+// to the configured integration (direct merge / mergify queue / external-
+// reviewer hand-off). `not_configured` has no merge path — only a settings link.
+function MergeActions(props: { mode: MergeIntegration; settingsHref: string; signOffHref: string; done: boolean }) {
   if (props.mode === "not_configured") {
     return (
-      <>
-        <span class="merge-note">
-          repo has no merge integration · <a href={props.settingsHref}>configure ↗</a>
-        </span>
-        <button class="btn" disabled title="configure a merge integration in project settings" data-review="signoff">
-          sign off · merge integration not configured
-        </button>
-      </>
+      <span class="merge-note">
+        repo has no merge integration · <a href={props.settingsHref}>configure ↗</a>
+      </span>
     );
   }
-  if (props.mode === "external_reviewer") {
-    return (
-      <button class="btn primary notched" disabled title={disabledTip} data-review="signoff">
-        approve · notify reviewer
-      </button>
-    );
+  if (props.done) {
+    return <span class="merge-note">merge stage complete · see status above</span>;
   }
-  if (props.mode === "direct_merge") {
-    return (
-      <button class="btn primary notched" disabled title={disabledTip} data-review="signoff">
-        sign off · merge now ↗
-      </button>
-    );
-  }
-  // mergify_queue
+  const label =
+    props.mode === "external_reviewer"
+      ? "approve · notify reviewer"
+      : props.mode === "direct_merge"
+        ? "sign off · merge now ↗"
+        : "sign off · queue with mergify";
   return (
-    <>
-      <button class="btn" disabled title={disabledTip} data-review="signoff">sign off · queue with mergify</button>
-      <button class="btn primary notched" disabled title={disabledTip} data-review="signoff">sign off · merge now ↗</button>
-    </>
+    <form method="post" action={props.signOffHref} style="display:inline">
+      <button class="btn primary notched" type="submit" data-review="signoff">
+        {label}
+      </button>
+    </form>
   );
 }
 
@@ -150,6 +167,10 @@ export function ReviewBody(props: ReviewBodyProps) {
   const ciTask = detail.tasks.find((t) => t.kind === "ci");
   const ciGreen = ciTask?.outcome === "passed";
   const forgedBy = detail.tasks.find((t) => t.kind === "write")?.cli ?? detail.tasks[0]?.cli ?? "agent";
+  // P3-0008: derive the live review/merge phase from the run's typed events.
+  const reviewState = reviewMergeStateFromEvents(detail.recentEvents);
+  const reviewPill = reviewMergePill(reviewState);
+  const mergeDone = reviewState.phase === "merged" || reviewState.phase === "merge_queued";
 
   return (
     <>
@@ -265,6 +286,9 @@ export function ReviewBody(props: ReviewBodyProps) {
 
         {/* Readiness gate */}
         <div class="readiness" data-review="readiness">
+          <span class={`pill ${reviewPill.cls}`} data-review="phase">
+            <span class="d"></span>{reviewPill.label}
+          </span>
           <span class={`pill ${ciGreen ? "ok" : "warn"}`}><span class="d"></span>{ciGreen ? "ci green" : "ci pending"}</span>
           <span class="pill warn" data-review="pill-verified">
             <span class="d"></span><span data-review="verified-count">0</span> / {behaviors.length} you-verified
@@ -277,7 +301,7 @@ export function ReviewBody(props: ReviewBodyProps) {
             <form method="post" action={props.requestChangesHref} style="display:inline">
               <button class="btn danger" type="submit">request changes ↗</button>
             </form>
-            <MergeActions mode={props.mergeIntegration} settingsHref={props.settingsHref} />
+            <MergeActions mode={props.mergeIntegration} settingsHref={props.settingsHref} signOffHref={props.signOffHref} done={mergeDone} />
           </div>
         </div>
       </div>

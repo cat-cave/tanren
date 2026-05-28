@@ -134,6 +134,13 @@
       "when": 1780005721074,
       "tag": "0018_bumpy_aqueduct",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1780008452804,
+      "tag": "0019_dazzling_starbolt",
+      "breakpoints": true
     }
   ]
 }

@@ -277,7 +277,9 @@ export const PlannerRerequestedPayload = z
     plannerTaskId: z.string(),
     // P3-0005 adds "gate": the deterministic exit-code gate is a third
     // rejection producer alongside the checker and auditor Answerers.
-    producer: z.enum(["checker", "auditor", "gate"]),
+    // P3-0008 adds "reviewer": a changes-requested PR review routed back through
+    // the same rework path.
+    producer: z.enum(["checker", "auditor", "gate", "reviewer"]),
     rejectionReason: z.string(),
     behaviorIdsFailed: z.array(z.string()),
     plannerRerunCount: z.number().int(),

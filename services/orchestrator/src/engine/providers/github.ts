@@ -50,7 +50,7 @@ export interface EnsureDraftPullRequestResult extends GitHubPullRequest {
 }
 
 export interface GitHubHttpRequest {
-  method: "GET" | "POST";
+  method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
   path: string;
   token: string;
   body?: unknown;
@@ -84,7 +84,12 @@ export class FetchGitHubHttpClient implements GitHubHttpClient {
     return this.send(input.path, input.method, freshToken, input.body);
   }
 
-  private async send(path: string, method: "GET" | "POST", token: string, body: unknown): Promise<GitHubHttpResponse> {
+  private async send(
+    path: string,
+    method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE",
+    token: string,
+    body: unknown
+  ): Promise<GitHubHttpResponse> {
     const response = await this.fetchImpl(`${this.apiBaseUrl}${path}`, {
       method,
       headers: {

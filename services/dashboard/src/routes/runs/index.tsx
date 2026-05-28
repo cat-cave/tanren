@@ -32,12 +32,17 @@ function actorCanViewRaw(role: string | undefined): boolean {
 }
 
 /**
- * The per-repo merge integration (P2A-0006) is not exposed on the project
- * summary the dashboard reads today, so v0 renders the `not_configured` branch
- * of the readiness gate (disabled CTA + settings link). When P2A-0006 surfaces
- * the resolved mode on the project read API, swap this for the real value.
+ * P3-0008: resolve the per-repo merge integration from the project's merged
+ * config (`GET /orgs/:orgId/projects/:projectId` → `config.mergeIntegration`).
+ * Falls back to `not_configured` when the project read fails or the field is
+ * absent (legacy rows), which renders the settings-link branch.
  */
-function resolveMergeIntegration(): MergeIntegration {
+async function resolveMergeIntegration(client: OrchestratorClient, loc: RunLocation): Promise<MergeIntegration> {
+  const project = await client.getProject(loc.orgId, loc.projectId).catch(() => undefined);
+  const mode = project?.config.mergeIntegration;
+  if (mode === "mergify_queue" || mode === "direct_merge" || mode === "external_reviewer" || mode === "not_configured") {
+    return mode;
+  }
   return "not_configured";
 }
 
@@ -130,9 +135,10 @@ export function mountRunDetailScreens(app: Hono, deps: ShellDeps): void {
       { title: `tanren · review ${runId}` },
       <ReviewBody
         detail={detail}
-        mergeIntegration={resolveMergeIntegration()}
+        mergeIntegration={await resolveMergeIntegration(client, loc)}
         runHref={base}
         requestChangesHref={`${base}/review/request-changes`}
+        signOffHref={`${base}/review/sign-off`}
         settingsHref="/settings/routing"
       />
     );
@@ -160,6 +166,30 @@ export function mountRunDetailScreens(app: Hono, deps: ShellDeps): void {
       ctx,
       { title: `tanren · changes requested` },
       <RequestChangesAck runId={runId} specTitle={detail?.spec.title ?? runId} runHref={`/runs/${encodeURIComponent(runId)}`} />
+    );
+  });
+
+  // -------------------------------------------------------------------------
+  // POST /runs/:runId/review/sign-off — the operator hand-off that drives the
+  // P3-0008 merge stage through the repo's configured integration. The live
+  // orchestrator merge-dispatch trigger lands with the operator-driven workflow
+  // (P2B-0006); here we record the gesture and confirm the configured mode so it
+  // is real + observable, then return the operator to the run detail.
+  // -------------------------------------------------------------------------
+  app.post("/runs/:runId/review/sign-off", async (c) => {
+    const runId = c.req.param("runId");
+    const client = clientFor(c, deps);
+    const loc = await client.findRunLocation(runId);
+    if (loc === undefined) {
+      return renderNotFound(c, deps, runId);
+    }
+    const mode = await resolveMergeIntegration(client, loc);
+    const ctx = await loadShellContext(c, deps, { activeNavId: "projects", projectId: loc.projectId });
+    return renderShell(
+      c,
+      ctx,
+      { title: `tanren · sign-off` },
+      <SignOffAck runId={runId} mode={mode} runHref={`/runs/${encodeURIComponent(runId)}`} />
     );
   });
 }
@@ -224,6 +254,41 @@ function RequestChangesAck(props: { runId: string; specTitle: string; runHref: s
             Your <strong>request changes</strong> has been recorded for this run's spec. The planner-feedback loop
             (P2A-0012) re-plans the spec; the live re-plan trigger ships with the operator-driven workflow (P2B-0006)
             and failure-recovery (P2B-0008) surfaces.
+          </p>
+          <p class="placeholder-note">
+            <a href={props.runHref}>← back to the run</a>
+          </p>
+        </section>
+      </div>
+    </>
+  );
+}
+
+function SignOffAck(props: { runId: string; mode: MergeIntegration; runHref: string }) {
+  const action =
+    props.mode === "direct_merge"
+      ? "a direct GitHub merge"
+      : props.mode === "mergify_queue"
+        ? "a Mergify queue enqueue"
+        : props.mode === "external_reviewer"
+          ? "an external-reviewer hand-off"
+          : "no merge integration (configure one in project settings)";
+  return (
+    <>
+      <div class="page-head">
+        <div>
+          <div class="eyebrow">review · signed off</div>
+          <div class="page-title">merge hand-off recorded</div>
+          <div class="sub">run {props.runId} · {props.mode}</div>
+        </div>
+      </div>
+      <div class="page-body">
+        <section class="placeholder-card">
+          <p>
+            Your <strong>sign-off</strong> has been recorded. This run's repo is configured for{" "}
+            <strong>{action}</strong> (P3-0008 merge stage). The live merge-dispatch trigger ships with the
+            operator-driven workflow (P2B-0006); the merge stage itself runs on the orchestrator after a run's review
+            is approved.
           </p>
           <p class="placeholder-note">
             <a href={props.runHref}>← back to the run</a>

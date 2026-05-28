@@ -7,12 +7,17 @@ import {
   failedTasks,
   formatDuration,
   reasoningForTask,
+  reviewMergeStateFromEvents,
   runFailed,
   spineProgress,
   summarizeCosts,
   taskState
 } from "../src/components/runDetail/model.js";
-import type { RunCostRecord, RunDetail, TaskTimelineEntry } from "../src/api/types.js";
+import type { RunCostRecord, RunDetail, RunEventRow, TaskTimelineEntry } from "../src/api/types.js";
+
+function ev(eventType: string, payload: unknown = {}): RunEventRow {
+  return { id: 1, ts: "2026-05-28T10:00:00.000Z", runId: "run_1", taskId: null, specId: null, projectId: null, eventType, payload, redactedPaths: [] };
+}
 
 function task(over: Partial<TaskTimelineEntry>): TaskTimelineEntry {
   return {
@@ -55,6 +60,43 @@ function cost(over: Partial<RunCostRecord>): RunCostRecord {
     ...over
   };
 }
+
+describe("reviewMergeStateFromEvents — P3-0008 review/merge phase", () => {
+  it("defaults to none with no review/merge events", () => {
+    expect(reviewMergeStateFromEvents([]).phase).toBe("none");
+  });
+
+  it("tracks the review→merge progression to merged with the latest event winning", () => {
+    const state = reviewMergeStateFromEvents([
+      ev("github.pr.ready", { prUrl: "u", prNumber: 7 }),
+      ev("review.requested", { prUrl: "u", prNumber: 7 }),
+      ev("review.approved", { prUrl: "u", prNumber: 7 }),
+      ev("merge.queued", { prUrl: "u", prNumber: 7, integration: "direct_merge" }),
+      ev("merge.completed", { prUrl: "u", prNumber: 7, integration: "direct_merge", mergeSha: "abc123" })
+    ]);
+    expect(state.phase).toBe("merged");
+    expect(state.mergeSha).toBe("abc123");
+    expect(state.integration).toBe("direct_merge");
+  });
+
+  it("surfaces changes_requested with the reviewer message", () => {
+    const state = reviewMergeStateFromEvents([
+      ev("review.requested", { prUrl: "u", prNumber: 7 }),
+      ev("review.changes_requested", { prUrl: "u", prNumber: 7, message: "fix it" })
+    ]);
+    expect(state.phase).toBe("changes_requested");
+    expect(state.message).toBe("fix it");
+  });
+
+  it("surfaces a merge conflict as a recoverable phase", () => {
+    const state = reviewMergeStateFromEvents([
+      ev("merge.queued", { prUrl: "u", prNumber: 7, integration: "direct_merge" }),
+      ev("merge.conflict", { prUrl: "u", prNumber: 7, integration: "direct_merge", baseBranch: "main", message: "conflict" })
+    ]);
+    expect(state.phase).toBe("merge_conflict");
+    expect(state.message).toBe("conflict");
+  });
+});
 
 describe("summarizeCosts — cost bar across all sources", () => {
   it("aggregates real dollars, tokens, and per-source/per-model totals", () => {

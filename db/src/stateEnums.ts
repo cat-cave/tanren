@@ -46,6 +46,8 @@ export const stateEnumLists = {
     "check",
     "audit",
     "ci",
+    "review",
+    "merge",
     "demo",
     "forge"
   ],
@@ -97,6 +99,8 @@ export const stateEnumLists = {
     "recovery_replan",
     "recovery_rollback",
     "gate",
+    "review",
+    "merge",
     "plan",
     "write",
     "check",
