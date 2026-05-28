@@ -34,6 +34,7 @@ import { createBrownfieldRoutes } from "./routes/brownfield/index.js";
 import { createCredentialRoutes, InMemoryCredentialRegistry, type CredentialRegistry } from "./routes/credentials/index.js";
 import { createDoctorRoutes } from "./routes/doctor/index.js";
 import { createForgeRoutes } from "./routes/forge/index.js";
+import { createInsightRoutes } from "./routes/insights/index.js";
 import { createMilestoneRoutes } from "./routes/milestones/index.js";
 import { createOrgRoutes } from "./routes/orgs/index.js";
 import { createPersonaRoutes } from "./routes/personas/index.js";
@@ -223,6 +224,7 @@ export function buildApp(input: {
     "/orgs",
     createForgeRoutes({ pool: input.pool, secrets, githubHttp })
   );
+  app.route("/orgs", createInsightRoutes({ pool: input.pool }));
   app.route(
     "/",
     createCredentialRoutes({ pool: input.pool, secrets, registry: credentialRegistry })
