@@ -21,8 +21,8 @@ function window(partial: Partial<SubscriptionWindow>): SubscriptionWindow {
   return { slot: "primary", usedPercent: 0, resetsAt: "2026-06-01T00:00:00Z", windowMinutes: 300, resetDescription: "soon", ...partial };
 }
 
-function windowUsage(windows: SubscriptionWindow[]): WindowUsage {
-  return { provider: "codex", windows, creditsRemaining: null, accountEmail: null, source: "codex-cli", capturedAt: "2026-05-28T00:00:00Z" };
+function windowUsage(windows: SubscriptionWindow[], creditsRemaining: number | null = null): WindowUsage {
+  return { provider: "codex", windows, creditsRemaining, accountEmail: null, source: "codex-cli", capturedAt: "2026-05-28T00:00:00Z" };
 }
 
 class FakeMonitor implements UsageMonitor {
@@ -71,6 +71,20 @@ describe("SshUsageProbe.observeWindow", () => {
     const result = await probe(new FakeMonitor(null), new FakeAccountant(null)).observeWindow();
     expect(result.usage).toBeNull();
     expect(result.pressure).toBeNull();
+  });
+
+  it("does NOT flag pressure on a maxed window when credits cover the overage", async () => {
+    // Credits available → a 100% window is not a doomed call (overage draws
+    // credits), so the pre-flight must let the run proceed.
+    const usage = windowUsage([window({ slot: "secondary", usedPercent: 100 })], 1000);
+    const result = await probe(new FakeMonitor(usage), new FakeAccountant(null)).observeWindow();
+    expect(result.pressure).toBeNull();
+  });
+
+  it("flags pressure on a maxed window when credits are exhausted (0)", async () => {
+    const usage = windowUsage([window({ slot: "secondary", usedPercent: 100 })], 0);
+    const result = await probe(new FakeMonitor(usage), new FakeAccountant(null)).observeWindow();
+    expect(result.pressure?.usedPercent).toBe(100);
   });
 });
 
