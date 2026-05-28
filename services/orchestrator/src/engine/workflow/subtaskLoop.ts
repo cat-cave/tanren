@@ -79,6 +79,11 @@ export interface SubtaskLoopInput {
   // that drive the loop without a workspace). Tests inject a mock to assert
   // routing without a live runner. `taskId` correlates the gate.* events.
   runGate?: (input: { when: CiWhen; taskId?: string }) => Promise<GateOutcome>;
+  // P3-0008: prior rejections to seed the planner's rejectionHistory with before
+  // the first plan. Used by the review-rework re-entry to carry a
+  // changes-requested PR review forward as planner steering, so the re-plan
+  // addresses the reviewer's feedback. Empty/omitted on the normal first pass.
+  seedRejections?: ReadonlyArray<PlannerRejectionFeedback>;
 }
 
 export type SubtaskLoopOutcome =
@@ -128,7 +133,7 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
   await appendEvent("task.started", { taskKind: "plan" }, plannerTaskId);
   await appendEvent("planner.started", { taskKind: "plan" }, plannerTaskId);
 
-  const rejectionHistory: PlannerRejectionFeedback[] = [];
+  const rejectionHistory: PlannerRejectionFeedback[] = [...(input.seedRejections ?? [])];
   let plannerRerunCount = 0;
 
   while (true) {

@@ -55,6 +55,10 @@ import {
   HelloSshCompletedPayload,
   HelloSshStartedPayload,
   HelloStartedPayload,
+  MergeCompletedPayload,
+  MergeConflictPayload,
+  MergeFailedPayload,
+  MergeQueuedPayload,
   NotificationEnqueuedPayload,
   NotificationFailedPayload,
   NotificationSentPayload,
@@ -190,10 +194,16 @@ export const EventRegistry = {
   "phase1.fixture.completed": Phase1FixtureCompletedPayload,
   "phase1.fixture.failed": Phase1FixtureFailedPayload,
 
-  // Review lifecycle (schemas declared in Phase 2; emitters land later)
+  // Review lifecycle (schemas from Phase 2; P3-0008 wires the emitters)
   "review.requested": ReviewRequestedPayload,
   "review.approved": ReviewApprovedPayload,
   "review.changes_requested": ReviewChangesRequestedPayload,
+
+  // P3-0008 merge stage: per-repo integration dispatch + conflict scaffolding
+  "merge.queued": MergeQueuedPayload,
+  "merge.completed": MergeCompletedPayload,
+  "merge.failed": MergeFailedPayload,
+  "merge.conflict": MergeConflictPayload,
 
   // Notification dispatch (schemas declared; dispatcher lands in P2A-0017)
   "notification.enqueued": NotificationEnqueuedPayload,

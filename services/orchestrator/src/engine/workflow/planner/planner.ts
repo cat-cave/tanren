@@ -30,7 +30,10 @@ export interface PlannerSpecContext {
 // rejects per-subtask criteria; the auditor rejects the integrated result;
 // P3-0005's deterministic gate rejects on a nonzero build/test/lint exit).
 export interface PlannerRejectionFeedback {
-  producer: "checker" | "auditor" | "gate";
+  // P3-0008 adds "reviewer": a changes-requested PR review routed back through
+  // the same rework path the checker/auditor/gate use, so the planner re-plans
+  // against the reviewer's feedback.
+  producer: "checker" | "auditor" | "gate" | "reviewer";
   rejectionReason: string;
   behaviorIdsFailed: ReadonlyArray<string>;
   previousSubtasks: ReadonlyArray<PlanSubtask>;

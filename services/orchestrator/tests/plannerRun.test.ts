@@ -116,6 +116,24 @@ async function setup() {
   return { ctx, pool, events, secrets, allocator, ssh };
 }
 
+// P3-0008: inject an approving review probe + a no-op merge probe so the
+// post-CI review→merge tail completes without hitting GitHub. The default
+// project config in the test pool resolves mergeIntegration=not_configured →
+// the merge stage hands off (no merge call), so the merge probe is never used.
+function approvingReview() {
+  return {
+    markReady: async () => undefined,
+    fetchVerdict: async () => ({ verdict: "approved" as const, latest: { state: "approved" as const, reviewer: "reviewer-bot" } })
+  };
+}
+
+function noopMerge() {
+  return {
+    applyQueueLabel: async () => undefined,
+    merge: async () => ({ merged: true, mergeSha: "merge-sha", conflict: false, status: 200, message: "merged" })
+  };
+}
+
 function passingGitHub(): ScriptedGitHubHttp {
   return new ScriptedGitHubHttp([
     { status: 200, body: [] },
@@ -144,7 +162,9 @@ describe("runPlannerLoopWorkflow", () => {
       maxCiPolls: 1,
       sleep: async () => undefined,
       buildAdapters: () => twoSubtaskAdapters([passingCheck, passingCheck]),
-      buildUsageProbe: () => fakeProbe(healthyWindow(), accounting(0.5))
+      buildUsageProbe: () => fakeProbe(healthyWindow(), accounting(0.5)),
+      reviewProbe: approvingReview(),
+      mergeProbe: noopMerge()
     });
 
     expect(result.outcome.kind).toBe("passed");
@@ -196,7 +216,9 @@ describe("runPlannerLoopWorkflow", () => {
       maxCiPolls: 1,
       sleep: async () => undefined,
       buildAdapters: () => adapters,
-      buildUsageProbe: () => fakeProbe(healthyWindow(), accounting(null))
+      buildUsageProbe: () => fakeProbe(healthyWindow(), accounting(null)),
+      reviewProbe: approvingReview(),
+      mergeProbe: noopMerge()
     });
 
     expect(result.outcome.kind).toBe("passed");
@@ -250,7 +272,9 @@ describe("runPlannerLoopWorkflow", () => {
         bootstrapCalls.push(input.command ?? "<default>");
       },
       buildAdapters: () => twoSubtaskAdapters([passingCheck, passingCheck]),
-      buildUsageProbe: () => fakeProbe(healthyWindow(), accounting(0.5))
+      buildUsageProbe: () => fakeProbe(healthyWindow(), accounting(0.5)),
+      reviewProbe: approvingReview(),
+      mergeProbe: noopMerge()
     });
 
     expect(bootstrapCalls).toEqual(["pnpm install --frozen-lockfile"]);
@@ -401,7 +425,10 @@ class PlannerRunPool {
             spec_id: this.runContext.specId,
             project_id: this.runContext.projectId,
             pr_url: this.prUrl,
-            config: { githubCredentialRef: this.runContext.githubCredentialRef }
+            config: { githubCredentialRef: this.runContext.githubCredentialRef },
+            // P3-0008 review/merge context columns (shares this SELECT prefix).
+            default_branch: "main",
+            org_config: null
           }
         ],
         rowCount: 1

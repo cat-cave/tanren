@@ -99,7 +99,17 @@ function fakeWorkflowRunner(github: GitHubHttpClient) {
       ciPollDelayMs: 0,
       sleep: async () => undefined,
       buildAdapters: () => passingAdapters(),
-      buildUsageProbe: () => fakeProbe()
+      buildUsageProbe: () => fakeProbe(),
+      // P3-0008 review→merge tail: approve the review and no-op the merge so the
+      // dequeue→execute seam runs end-to-end without real GitHub review/merge.
+      reviewProbe: {
+        markReady: async () => undefined,
+        fetchVerdict: async () => ({ verdict: "approved" as const, latest: { state: "approved" as const, reviewer: "reviewer-bot" } })
+      },
+      mergeProbe: {
+        applyQueueLabel: async () => undefined,
+        merge: async () => ({ merged: true, mergeSha: "merge-sha", conflict: false, status: 200, message: "merged" })
+      }
     });
 }
 
@@ -391,6 +401,11 @@ class WorkerPool {
       this.specStatus = "done";
       return { rows: [], rowCount: 1 };
     }
+    // P3-0008 merge stage marks the spec merged/done with a parameterized status.
+    if (trimmed.startsWith("UPDATE specs SET status = $2")) {
+      this.specStatus = String(params[1]);
+      return { rows: [], rowCount: 1 };
+    }
     // cost_records reconcile path
     if (trimmed.startsWith("SELECT id, total_tokens FROM cost_records")) {
       return { rows: this.costRows.map((r) => ({ id: r.id, total_tokens: r.total_tokens })), rowCount: this.costRows.length };
@@ -420,7 +435,10 @@ class WorkerPool {
         spec_id: run.spec_id,
         project_id: run.project_id,
         pr_url: this.prUrl,
-        config: { githubCredentialRef }
+        config: { githubCredentialRef },
+        // P3-0008 review/merge context columns (shares this SELECT prefix).
+        default_branch: "main",
+        org_config: null
       });
     }
     if (trimmed.startsWith("SELECT task_id, attempt")) {

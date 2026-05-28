@@ -12,6 +12,9 @@ export const JobKind = z.enum([
   "recovery_rollback",
   // P3-0005 in-loop deterministic gate-check stage
   "gate",
+  // P3-0008 review→merge completion stages (run AFTER CI passes)
+  "review",
+  "merge",
   // Phase 0/1 task-kind values that are also enqueued as jobs today
   "plan",
   "write",

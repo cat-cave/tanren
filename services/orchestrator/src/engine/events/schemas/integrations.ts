@@ -144,6 +144,54 @@ export const ReviewChangesRequestedPayload = z
   })
   .strict();
 
+// P3-0008 merge stage. The integration is one of the per-repo MergeIntegration
+// modes (mergify_queue / direct_merge / external_reviewer). `merge.queued`
+// fires when the PR is handed to the integration (a Mergify label, a direct
+// merge attempt, or an external-reviewer hand-off); `merge.completed` carries
+// the merge sha on a real GitHub merge; `merge.failed` records a non-conflict
+// failure; `merge.conflict` is the typed recoverable branch the conflict
+// resolver scaffolding hooks into.
+export const MergeIntegrationMode = z.enum(["mergify_queue", "direct_merge", "external_reviewer"]);
+
+export const MergeQueuedPayload = z
+  .object({
+    prUrl: z.string(),
+    prNumber: z.number().int(),
+    integration: MergeIntegrationMode,
+    /** Label applied for the mergify_queue path; absent for other modes. */
+    queueLabel: z.string().optional()
+  })
+  .strict();
+
+export const MergeCompletedPayload = z
+  .object({
+    prUrl: z.string(),
+    prNumber: z.number().int(),
+    integration: MergeIntegrationMode,
+    mergeSha: z.string().optional()
+  })
+  .strict();
+
+export const MergeFailedPayload = z
+  .object({
+    prUrl: z.string(),
+    prNumber: z.number().int(),
+    integration: MergeIntegrationMode,
+    message: z.string()
+  })
+  .strict();
+
+export const MergeConflictPayload = z
+  .object({
+    prUrl: z.string(),
+    prNumber: z.number().int(),
+    integration: MergeIntegrationMode,
+    baseBranch: z.string(),
+    headBranch: z.string().optional(),
+    message: z.string()
+  })
+  .strict();
+
 export const NotificationEnqueuedPayload = z
   .object({
     channel: z.string(),

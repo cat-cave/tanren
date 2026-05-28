@@ -227,11 +227,11 @@ describe("P2B-0004 review handoff", () => {
     expect(html).toContain("request changes");
   });
 
-  it("renders the not_configured sign-off CTA (merge integration Phase 3)", async () => {
+  it("renders the not_configured merge branch (no merge integration → configure link)", async () => {
     mockOrchestrator();
     const app = await build();
     const html = await (await app.request(`/runs/${RUN_ID}/review`)).text();
-    expect(html).toContain("sign off · merge integration not configured");
+    expect(html).toContain("repo has no merge integration");
     expect(html).toContain("configure ↗");
   });
 

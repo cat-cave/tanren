@@ -181,6 +181,34 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["message", "public"]
   ]),
 
+  // P3-0008 merge stage — PR identifiers + integration mode + prose, all public
+  ...rulesFor("merge.queued", [
+    ["prUrl", "public"],
+    ["prNumber", "public"],
+    ["integration", "public"],
+    ["queueLabel", "public"]
+  ]),
+  ...rulesFor("merge.completed", [
+    ["prUrl", "public"],
+    ["prNumber", "public"],
+    ["integration", "public"],
+    ["mergeSha", "public"]
+  ]),
+  ...rulesFor("merge.failed", [
+    ["prUrl", "public"],
+    ["prNumber", "public"],
+    ["integration", "public"],
+    ["message", "public"]
+  ]),
+  ...rulesFor("merge.conflict", [
+    ["prUrl", "public"],
+    ["prNumber", "public"],
+    ["integration", "public"],
+    ["baseBranch", "public"],
+    ["headBranch", "public"],
+    ["message", "public"]
+  ]),
+
   // notifications
   ...rulesFor("notification.enqueued", [["channel", "public"], ["eventName", "public"]]),
   ...rulesFor("notification.sent", [["channel", "public"], ["attempts", "public"]]),

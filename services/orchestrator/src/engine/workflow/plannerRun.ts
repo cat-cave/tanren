@@ -33,6 +33,17 @@ import { bootstrapWorkspace, WorkspaceBootstrapError, runWorkspaceSshCommand, wo
 import { pollCiForRun, type PollCiForRunResult } from "./ciPolling.js";
 import { type GateOutcome, resolveGateConfig, runGateForWhen } from "./gate/index.js";
 import { publishDraftPullRequest, type PublishedDraftPullRequest } from "./githubDraftPr.js";
+import type { PlannerRejectionFeedback } from "./planner/planner.js";
+import {
+  mergeForRun,
+  pollReviewForRun,
+  type ConflictResolverHook,
+  type MergeForRunResult,
+  type MergeProbe,
+  type PollReviewForRunResult,
+  type ReviewProbe
+} from "./reviewMerge/index.js";
+import { reviewerRejection } from "./reviewMerge/steering.js";
 import { runSubtaskLoop, type SubtaskLoopAdapters, type SubtaskLoopOutcome } from "./subtaskLoop.js";
 
 type RunStateClient = Pick<pg.Pool | pg.PoolClient, "query">;
@@ -99,6 +110,14 @@ export interface RunPlannerLoopInput {
   // Test seams. Omitted in production → real Codex adapters + SSH usage probe.
   buildAdapters?: (ctx: PlannerRunAdapterContext) => SubtaskLoopAdapters;
   buildUsageProbe?: (ctx: PlannerRunAdapterContext) => UsageProbe | undefined;
+  // P3-0008 review→merge tail seams. Omitted in production → the real GitHub
+  // review/merge stages drive through the P3-0003 resolver. Tests inject mocks
+  // so unit runs never hit GitHub.
+  reviewProbe?: ReviewProbe;
+  mergeProbe?: MergeProbe;
+  resolveConflict?: ConflictResolverHook;
+  // Max review→rework re-entries before the run halts pending operator action.
+  maxReviewReworks?: number;
 }
 
 export interface BootstrapStepInput {
@@ -115,6 +134,11 @@ export interface PlannerRunResult {
   outcome: SubtaskLoopOutcome;
   pullRequest?: PublishedDraftPullRequest;
   ci?: PollCiForRunResult;
+  // P3-0008 review→merge tail. `review` carries the final review verdict and
+  // `merge` the merge-stage outcome. Both omitted when the run halted before CI
+  // or stopped at changes-requested after exhausting the rework budget.
+  review?: PollReviewForRunResult;
+  merge?: MergeForRunResult;
 }
 
 export async function runPlannerLoopWorkflow(input: RunPlannerLoopInput): Promise<PlannerRunResult> {
@@ -165,57 +189,126 @@ export async function runPlannerLoopWorkflow(input: RunPlannerLoopInput): Promis
     // Answerer. Tests inject input.runGate to skip the live runner.
     const runGate = input.runGate ?? buildDefaultGate(input, allocation.target, workspacePath, eventStore);
 
-    const outcome = await runSubtaskLoop({
-      pool: input.pool,
-      eventStore,
-      recorder,
-      adapters,
-      context: {
-        specTitle: context.specTitle,
-        specDescription: context.specDescription,
-        acceptanceCriteria: context.acceptanceCriteria,
-        behaviorIds: context.behaviorIds ?? [],
-        behaviorContext: context.behaviorContext ?? [],
+    // P3-0008: the write→gate→PR→CI→review tail can re-enter on a
+    // changes-requested review, re-running the loop with the reviewer feedback
+    // seeded as planner steering, up to maxReviewReworks. On approval it
+    // proceeds to the merge stage; on a non-pass loop it halts as before.
+    const maxReworks = input.maxReviewReworks ?? 1;
+    const seedRejections: PlannerRejectionFeedback[] = [];
+    let outcome: SubtaskLoopOutcome | undefined;
+    let pullRequest: PublishedDraftPullRequest | undefined;
+    let ci: PollCiForRunResult | undefined;
+    let review: PollReviewForRunResult | undefined;
+
+    for (let reworks = 0; ; reworks += 1) {
+      outcome = await runSubtaskLoop({
+        pool: input.pool,
+        eventStore,
+        recorder,
+        adapters,
+        context: {
+          specTitle: context.specTitle,
+          specDescription: context.specDescription,
+          acceptanceCriteria: context.acceptanceCriteria,
+          behaviorIds: context.behaviorIds ?? [],
+          behaviorContext: context.behaviorContext ?? [],
+          runId: context.runId,
+          specId: context.specId,
+          projectId: context.projectId,
+          workspacePath
+        },
+        escapeHatches: input.escapeHatches,
+        timeoutMs: input.timeoutMs,
+        usageProbe,
+        runGate,
+        seedRejections: [...seedRejections]
+      });
+
+      if (outcome.kind !== "passed") {
+        await finalizeNonPass(input.pool, context.runId, runOutcomeFor(outcome));
+        return { runId: context.runId, workspacePath, outcome };
+      }
+
+      pullRequest = await publishDraftPullRequest({
+        pool: input.pool,
+        eventStore,
+        secrets: input.secrets,
+        githubHttp: input.githubHttp,
+        ssh: input.ssh,
+        target: allocation.target,
         runId: context.runId,
         specId: context.specId,
         projectId: context.projectId,
-        workspacePath
-      },
-      escapeHatches: input.escapeHatches,
-      timeoutMs: input.timeoutMs,
-      usageProbe,
-      runGate
-    });
+        workspacePath,
+        repoUrl: context.repoUrl,
+        targetBranch: context.targetBranch,
+        runBranch: context.runBranch,
+        title: `Tanren: ${context.specTitle}`,
+        body: context.specDescription,
+        githubCredentialRef: context.githubCredentialRef,
+        timeoutMs: input.timeoutMs
+      });
+      ci = await pollCiUntilTerminal(input);
 
-    if (outcome.kind !== "passed") {
-      await finalizeNonPass(input.pool, context.runId, runOutcomeFor(outcome));
-      return { runId: context.runId, workspacePath, outcome };
+      review = await pollReviewForRun({
+        pool: input.pool,
+        eventStore,
+        secrets: input.secrets,
+        githubHttp: input.githubHttp,
+        runId: context.runId,
+        maxPolls: input.maxCiPolls,
+        pollDelayMs: input.ciPollDelayMs,
+        sleep: input.sleep,
+        reviewProbe: input.reviewProbe
+      });
+
+      if (review.verdict === "approved") {
+        break;
+      }
+      if (review.verdict === "changes_requested" && reworks < maxReworks) {
+        // Re-enter the writer loop with the reviewer feedback as planner
+        // steering. The spec returns to in_flight; the next pass re-plans
+        // against the changes-requested feedback.
+        seedRejections.push(reviewerRejection(review, pullRequest.branch));
+        await input.pool.query("UPDATE specs SET status = 'in_flight' WHERE spec_id = $1", [context.specId]);
+        continue;
+      }
+      // Pending after the budget, or changes-requested with the rework budget
+      // exhausted: halt for operator action (surfaces on the review sub-surface
+      // + the recovery surface). No merge.
+      await finalizeNonPass(input.pool, context.runId, "halted");
+      return { runId: context.runId, workspacePath, outcome, pullRequest, ci, review };
     }
 
-    const pullRequest = await publishDraftPullRequest({
+    const merge = await mergeForRun({
       pool: input.pool,
       eventStore,
       secrets: input.secrets,
       githubHttp: input.githubHttp,
-      ssh: input.ssh,
-      target: allocation.target,
       runId: context.runId,
-      specId: context.specId,
-      projectId: context.projectId,
-      workspacePath,
-      repoUrl: context.repoUrl,
-      targetBranch: context.targetBranch,
-      runBranch: context.runBranch,
-      title: `Tanren: ${context.specTitle}`,
-      body: context.specDescription,
-      githubCredentialRef: context.githubCredentialRef,
-      timeoutMs: input.timeoutMs
+      mergeProbe: input.mergeProbe,
+      resolveConflict: input.resolveConflict
     });
-    const ci = await pollCiUntilTerminal(input);
 
-    await input.pool.query("UPDATE specs SET status = 'done' WHERE spec_id = $1", [context.specId]);
+    if (merge.outcome === "conflict") {
+      // A merge conflict is recoverable: halt the run with the conflict surfaced
+      // (merge.conflict already emitted) for the P2B-0008 recovery surface /
+      // future conflict resolver. The spec is not marked done.
+      await finalizeNonPass(input.pool, context.runId, "halted");
+      return { runId: context.runId, workspacePath, outcome, pullRequest, ci, review, merge };
+    }
+    if (merge.outcome === "failed") {
+      await input.pool.query("UPDATE runs SET status = 'failed', outcome = 'failed', ended_at = now() WHERE run_id = $1", [context.runId]);
+      return { runId: context.runId, workspacePath, outcome, pullRequest, ci, review, merge };
+    }
+
+    // merged / queued / handed_off: the run's job is done. A direct merge marks
+    // the spec merged; a queue/hand-off leaves the merge to Mergify/an operator,
+    // so the spec is review-complete (done) and the merge event records the rest.
+    const specStatus = merge.outcome === "merged" ? "merged" : "done";
+    await input.pool.query("UPDATE specs SET status = $2 WHERE spec_id = $1", [context.specId, specStatus]);
     await input.pool.query("UPDATE runs SET status = 'done', outcome = 'ok', ended_at = now() WHERE run_id = $1", [context.runId]);
-    return { runId: context.runId, workspacePath, outcome, pullRequest, ci };
+    return { runId: context.runId, workspacePath, outcome, pullRequest, ci, review, merge };
   } catch (error) {
     if (error instanceof WorkspaceBootstrapError) {
       // Dependency install failed: the workspace can't build/test, so the run
