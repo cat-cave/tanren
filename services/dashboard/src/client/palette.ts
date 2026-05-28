@@ -83,11 +83,18 @@ export function initPalette(): void {
     setActive(0);
   };
 
-  const open = (): void => {
+  // `prefill` seeds the input (e.g. the costs heatmap's "schedule overnight
+  // audits" affordance opens the palette pre-typed with the audit prompt). The
+  // server emits the seed text via `data-palette-prefill`; the island only types
+  // it — it never invents an action beyond the rendered items.
+  const open = (prefill = ""): void => {
     refs.root.hidden = false;
-    refs.input.value = "";
+    refs.input.value = prefill;
     filter();
-    setTimeout(() => refs.input.focus(), 30);
+    setTimeout(() => {
+      refs.input.focus();
+      if (prefill !== "") refs.input.setSelectionRange(prefill.length, prefill.length);
+    }, 30);
   };
   const close = (): void => {
     refs.root.hidden = true;
@@ -145,9 +152,10 @@ export function initPalette(): void {
     }
   });
 
-  // Trigger button(s) — the "ask forge" key in the top bar.
-  for (const trigger of document.querySelectorAll('[data-island-trigger="palette"]')) {
-    trigger.addEventListener("click", () => open());
+  // Trigger button(s) — the "ask forge" key in the top bar, plus any affordance
+  // carrying a `data-palette-prefill` seed (e.g. the costs heatmap audits CTA).
+  for (const trigger of document.querySelectorAll<HTMLElement>('[data-island-trigger="palette"]')) {
+    trigger.addEventListener("click", () => open(trigger.dataset.palettePrefill ?? ""));
   }
 
   // Global ⌘K / Ctrl+K toggle, Escape to close.

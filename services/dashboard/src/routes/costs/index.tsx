@@ -19,6 +19,7 @@ import type { CostRecord, RunListItem } from "../../api/types.js";
 import { loadShellContext, renderShell, type ShellDeps } from "../../app/mountShell.js";
 import type { ShellContext } from "../../app/shell.js";
 import { observeMetrics, projectBurn, summarizeCosts } from "../../components/costs/aggregate.js";
+import { buildHeatmap } from "../../components/costs/heatmap.js";
 import { CostsBody } from "../../components/costs/CostsBody.js";
 import { HistoryBody } from "../../components/costs/HistoryBody.js";
 
@@ -80,12 +81,16 @@ export function mountCostsScreen(app: Hono, deps: ShellDeps): void {
 
     let records: CostRecord[] = [];
     let runs: RunListItem[] = [];
+    // The heatmap spans its own fixed 30-day window, so it reads the full
+    // gathered record set — never the range-filtered slice the pills control.
+    let allRecords: CostRecord[] = [];
     if (ctx.org !== undefined) {
       const client = new OrchestratorClient({
         orchestratorUrl: deps.orchestratorUrl,
         cookieHeader: c.req.header("cookie")
       });
       const gathered = await gatherCosts(client, ctx.org.id, ctx.projects);
+      allRecords = gathered.records;
       records = withinRange(gathered.records, range, now);
       runs = withinRange(gathered.runs, range, now);
     }
@@ -93,11 +98,13 @@ export function mountCostsScreen(app: Hono, deps: ShellDeps): void {
     const summary = summarizeCosts(records);
     const burn = projectBurn(records, { now });
     const metrics = observeMetrics(runs, summary.totalUsd);
+    const heatmap = buildHeatmap(allRecords, { now });
 
     return renderCostsShell(c, ctx, {
       summary,
       burn,
       metrics,
+      heatmap,
       range,
       orgLogin: ctx.org?.login ?? ""
     });

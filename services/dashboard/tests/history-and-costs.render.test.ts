@@ -209,6 +209,26 @@ describe("costs dashboard (/costs)", () => {
     expect(html).toContain("export csv");
     expect(html).toContain('href="/costs/export.csv"');
   });
+
+  // P3-0018 — the subscription-window utilization heatmap on the costs page.
+  it("renders the subscription-window heatmap + overnight-audits Forge prompt", async () => {
+    const app = await build();
+    const html = await (await app.request("/costs")).text();
+    // Panel heading + the 5-window y-axis labels.
+    expect(html).toContain("subscription window");
+    expect(html).toContain("utilization");
+    expect(html).toContain("00 – 05");
+    expect(html).toContain("20 – 00");
+    // The grid is server-rendered (cells carry the design-token ember fill).
+    expect(html).toContain("heatmap-row");
+    expect(html).toContain("heatmap-cell");
+    expect(html).toContain("avg fill");
+    // The "scheduled overnight audits" Forge affordance opens the palette,
+    // pre-seeded with the audit prompt (stays inside the P2A-0019 surface).
+    expect(html).toContain("ask forge to schedule overnight audits");
+    expect(html).toContain('data-island-trigger="palette"');
+    expect(html).toContain("data-palette-prefill");
+  });
 });
 
 describe("costs CSV export (/costs/export.csv)", () => {

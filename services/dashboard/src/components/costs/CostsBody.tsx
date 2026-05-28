@@ -8,12 +8,16 @@
 
 import { COST_BASIS_META, type CostSummary, type BurnProjection, type ObservedMetrics } from "./aggregate.js";
 import { pct, tokens, usd } from "./format.js";
+import { HeatmapPanel } from "./HeatmapPanel.js";
+import type { HeatmapMatrix } from "./heatmap.js";
 import { COSTS_SCREEN_CSS } from "./styles.js";
 
 export interface CostsBodyProps {
   summary: CostSummary;
   burn: BurnProjection;
   metrics: ObservedMetrics;
+  /** P3-0018 subscription-window utilization heatmap (30d × 5-window). */
+  heatmap: HeatmapMatrix;
   /** Active date-range pill (7d / 30d / 90d / all). */
   range: string;
   /** Org login for the eyebrow scope line. */
@@ -28,7 +32,7 @@ const RANGES: { id: string; label: string }[] = [
 ];
 
 export function CostsBody(props: CostsBodyProps) {
-  const { summary, burn, metrics, range } = props;
+  const { summary, burn, metrics, range, heatmap } = props;
   const empty = summary.totalRecords === 0;
   return (
     <>
@@ -62,6 +66,7 @@ export function CostsBody(props: CostsBodyProps) {
           ) : (
             <>
               <TotalSpendPanel summary={summary} burn={burn} />
+              <HeatmapPanel matrix={heatmap} />
               <div class="split-row">
                 <ProviderBreakdown summary={summary} />
                 <div class="scroll-col">
