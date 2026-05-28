@@ -2,6 +2,7 @@ export type FailureKind =
   | "provider_failed"
   | "schema_validation_failed"
   | "cost_resolution_failed"
+  | "cost.unattributable"
   | "allocator_failed"
   | "ssh_failed"
   | "github_failed"
@@ -15,6 +16,7 @@ export type Failure =
   | { kind: "provider_failed"; provider: string; message: string }
   | { kind: "schema_validation_failed"; schema: string; message: string }
   | { kind: "cost_resolution_failed"; source: string; message: string }
+  | { kind: "cost.unattributable"; authRef: string; message: string }
   | { kind: "allocator_failed"; allocator: string; message: string }
   | { kind: "ssh_failed"; target: string; message: string }
   | { kind: "github_failed"; operation: string; message: string }
@@ -28,6 +30,7 @@ const allowedFailureKinds = new Set<FailureKind>([
   "provider_failed",
   "schema_validation_failed",
   "cost_resolution_failed",
+  "cost.unattributable",
   "allocator_failed",
   "ssh_failed",
   "github_failed",

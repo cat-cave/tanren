@@ -25,6 +25,7 @@ import {
   AllocatorRequestedPayload,
   CostFailedPayload,
   CostResolvedPayload,
+  CostUnattributablePayload,
   CredentialFailedPayload,
   CredentialLoadedPayload,
   CredentialRequestedPayload,
@@ -138,6 +139,7 @@ export const EventRegistry = {
   // Cost resolution
   "cost.resolved": CostResolvedPayload,
   "cost.failed": CostFailedPayload,
+  "cost.unattributable": CostUnattributablePayload,
 
   // GitHub integration
   "github.branch.pushed": GithubBranchPushedPayload,

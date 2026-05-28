@@ -3,14 +3,17 @@ import type pg from "pg";
 import type { Allocator, RunnerAllocation } from "../contracts/allocator.js";
 import { type JobEnvelope, type JobQueue, PgJobQueue } from "../contracts/jobQueue.js";
 import type { SshCommandResult, SshSubstrate } from "../contracts/sshSubstrate.js";
+import { CostRecorder, CostUnattributableError } from "../costs/index.js";
 import type { EventName, EventPayload } from "../events/index.js";
 import { type EventStore, PgEventStore } from "../eventStore.js";
+import { fakeSelfHostedAuthRef } from "../providers/fake.js";
 import type { AuditAnswer, CheckAnswer } from "../providers/answererSchemas.js";
 import { AnswererSchemaValidationError } from "../providers/codex.js";
 import { fakeAuditor, fakeChecker } from "../providers/fake.js";
 import type { AnswererAdapter, WriterResult } from "../providers/types.js";
 import { prepareGitWorkspace, workspaceRepoPathForRun } from "../workspace/index.js";
 import { executePlanTask, executeStructuredAuditTask, executeStructuredCheckTask } from "./answererTasks.js";
+import { recordHelloTaskCost } from "./helloCost.js";
 import { executeWriteTask } from "./writerTasks.js";
 
 const defaultRunnerImage = "ghcr.io/cat-cave/tanren-runner:v0";
@@ -87,24 +90,22 @@ interface HelloExecutionState {
   check?: CheckAnswer;
   checkAnswerer: AnswererAdapter<CheckAnswer>;
   auditAnswerer: AnswererAdapter<AuditAnswer>;
+  recorder: CostRecorder;
 }
 
 export async function runHelloWorkflow(pool: pg.Pool, dependencies: HelloWorkflowDependencies): Promise<HelloRunSummary> {
   const projectId = `project_${randomUUID()}`;
   const specId = `spec_${randomUUID()}`;
   const runId = `run_${randomUUID()}`;
-  const eventStore = dependencies.eventStore ?? new PgEventStore(pool);
+  const innerEventStore = dependencies.eventStore ?? new PgEventStore(pool);
   const jobQueue = dependencies.jobQueue ?? new PgJobQueue<HelloJobPayload>(pool);
   let eventCount = 0;
-
+  // Counting wrapper so CostRecorder's cost.resolved events also tally toward
+  // the summary count (P2A-0011).
+  const eventStore: EventStore = { append: async (input) => { await innerEventStore.append(input); eventCount += 1; } };
   const context: HelloWorkflowContext = {
-    runId,
-    specId,
-    projectId,
-    async appendEvent(input) {
-      await eventStore.append({ runId, specId, projectId, ...input });
-      eventCount += 1;
-    }
+    runId, specId, projectId,
+    appendEvent: (input) => eventStore.append({ runId, specId, projectId, ...input })
   };
 
   const tasks = helloTaskDefinitions();
@@ -128,7 +129,8 @@ export async function runHelloWorkflow(pool: pg.Pool, dependencies: HelloWorkflo
         checkAnswerer: dependencies.checkAnswerer ?? fakeChecker,
         ssh: dependencies.ssh,
         timeoutMs: dependencies.sshTimeoutMs ?? 10_000,
-        workspacePath
+        workspacePath,
+        recorder: new CostRecorder(pool, eventStore)
       });
     } finally {
       await dependencies.allocator.release(allocation.runnerId);
@@ -287,7 +289,10 @@ async function executeHelloTask(
       payload: { workspacePath: state.workspacePath, commits: state.writer.commits, diffBytes: Buffer.byteLength(state.writer.diff, "utf8") }
     });
     await context.appendEvent({ taskId: task.taskId, eventType: "writer.completed", payload: state.writer });
-    await insertFakeWriterCost(pool, context, task.taskId, state.writer);
+    await recordHelloTaskCost({
+      recorder: state.recorder, scope: context, taskId: task.taskId, cli: "fake",
+      model: "fake-writer", authRef: fakeSelfHostedAuthRef, tokenUsage: state.writer.tokenUsage
+    });
     return;
   }
   if (task.kind === "check") {
@@ -299,6 +304,10 @@ async function executeHelloTask(
       timeoutMs: state.timeoutMs
     });
     await context.appendEvent({ taskId: task.taskId, eventType: "checker.completed", payload: state.check });
+    await recordHelloTaskCost({
+      recorder: state.recorder, scope: context, taskId: task.taskId,
+      cli: state.checkAnswerer.cli, model: "fake-checker", authRef: state.checkAnswerer.authRef
+    });
     return;
   }
   const audit = await executeStructuredAuditTask(state.auditAnswerer, {
@@ -309,28 +318,10 @@ async function executeHelloTask(
     timeoutMs: state.timeoutMs
   });
   await context.appendEvent({ taskId: task.taskId, eventType: "auditor.completed", payload: audit });
-}
-
-async function insertFakeWriterCost(pool: pg.Pool, context: HelloWorkflowContext, taskId: string, writer: WriterResult): Promise<void> {
-  if (writer.tokenUsage === undefined) {
-    throw new Error("fake writer cost requires token usage");
-  }
-  await pool.query(
-    `INSERT INTO cost_records
-     (task_id, run_id, project_id, cli, provider, model, input_tokens, output_tokens, cached_tokens,
-      cost_usd, pricing_mode, cost_source, cost_source_raw)
-     VALUES ($1, $2, $3, 'fake', 'fake', 'fake-writer', $4, $5, $6, 0,
-             'opportunity_cost', 'opportunity_computed', $7::jsonb)`,
-    [
-      taskId,
-      context.runId,
-      context.projectId,
-      writer.tokenUsage.inputTokens,
-      writer.tokenUsage.outputTokens,
-      writer.tokenUsage.cachedTokens,
-      JSON.stringify({ source: "hello-world fake adapter" })
-    ]
-  );
+  await recordHelloTaskCost({
+    recorder: state.recorder, scope: context, taskId: task.taskId,
+    cli: state.auditAnswerer.cli, model: "fake-auditor", authRef: state.auditAnswerer.authRef
+  });
 }
 
 async function allocateRunner(context: HelloWorkflowContext, dependencies: HelloWorkflowDependencies): Promise<RunnerAllocation> {
@@ -452,6 +443,12 @@ async function emitRoleFailed(context: HelloWorkflowContext, task: HelloTaskDefi
 function failureForTask(kind: HelloTaskKind, error: unknown): { kind: string; message: string } {
   if (error instanceof AnswererSchemaValidationError) {
     return { kind: "schema_validation_failed", message: error.message };
+  }
+  if (error instanceof CostUnattributableError) {
+    // P2A-0011: cost attribution failures fail the task without writing a
+    // cost row. The cost.unattributable event has already been appended by
+    // the recorder.
+    return { kind: "cost.unattributable", message: error.message };
   }
   return { kind: `${kind}_failed`, message: messageFromError(error) };
 }

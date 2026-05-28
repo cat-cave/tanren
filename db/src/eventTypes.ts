@@ -19,6 +19,7 @@ export const eventTypeNames = [
   "ci.started",
   "cost.failed",
   "cost.resolved",
+  "cost.unattributable",
   "credential.failed",
   "credential.loaded",
   "credential.requested",

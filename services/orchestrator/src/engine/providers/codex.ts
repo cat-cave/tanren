@@ -40,6 +40,7 @@ export function createCodexWriter(dependencies: CodexWriterDependencies): Writer
   return {
     kind: "writer",
     cli: "codex",
+    authRef: dependencies.credentialRef,
     async runWriter(opts): Promise<WriterResult> {
       const auth = await materializeCodexAuthBundle({
         secrets: dependencies.secrets,
@@ -88,6 +89,7 @@ export function createCodexAnswerer<TOutput>(dependencies: CodexAnswererDependen
   return {
     kind: "answerer",
     cli: "codex",
+    authRef: dependencies.credentialRef,
     async runAnswerer(opts): Promise<TOutput> {
       const auth = await materializeCodexAuthBundle({
         secrets: dependencies.secrets,

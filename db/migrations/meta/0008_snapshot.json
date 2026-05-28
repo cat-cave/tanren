@@ -1,5 +1,5 @@
 {
-  "id": "1bcd8180-22c5-4c4c-b446-2ae479be18c5",
+  "id": "2bbae3da-4c1e-4274-8285-96bf3c7ecbae",
   "prevId": "94912b4c-3b3b-44f5-a5bb-c88deccbd165",
   "version": "7",
   "dialect": "postgresql",
@@ -473,7 +473,7 @@
       "checkConstraints": {
         "events_event_type_check": {
           "name": "events_event_type_check",
-          "value": "\"events\".\"event_type\" IN ('allocator.allocated','allocator.failed','allocator.requested','auditor.completed','auditor.failed','auditor.started','auditor.verdict','checker.completed','checker.failed','checker.started','checker.verdict','ci.failed','ci.passed','ci.started','cost.failed','cost.resolved','credential.failed','credential.loaded','credential.requested','github.branch.pushed','github.failed','github.pr.created','github.pr.merged','github.pr.ready','hello.completed','hello.ssh_completed','hello.ssh_started','hello.started','notification.enqueued','notification.failed','notification.sent','phase1.fixture.ci_pending','phase1.fixture.completed','phase1.fixture.failed','phase1.fixture.started','planner.completed','planner.failed','planner.started','planner.subtasks.emitted','redaction.raw_access','review.approved','review.changes_requested','review.requested','run.completed','run.failed','run.queued','run.started','runner.allocated','runner.failed','runner.released','task.completed','task.failed','task.queued','task.started','workspace.failed','workspace.git_captured','workspace.prepared','writer.completed','writer.failed','writer.started','writer.subtask.completed','writer.subtask.failed','writer.subtask.started')"
+          "value": "\"events\".\"event_type\" IN ('allocator.allocated','allocator.failed','allocator.requested','auditor.completed','auditor.failed','auditor.started','auditor.verdict','checker.completed','checker.failed','checker.started','checker.verdict','ci.failed','ci.passed','ci.started','cost.failed','cost.resolved','cost.unattributable','credential.failed','credential.loaded','credential.requested','github.branch.pushed','github.failed','github.pr.created','github.pr.merged','github.pr.ready','hello.completed','hello.ssh_completed','hello.ssh_started','hello.started','notification.enqueued','notification.failed','notification.sent','phase1.fixture.ci_pending','phase1.fixture.completed','phase1.fixture.failed','phase1.fixture.started','planner.completed','planner.failed','planner.started','planner.subtasks.emitted','redaction.raw_access','review.approved','review.changes_requested','review.requested','run.completed','run.failed','run.queued','run.started','runner.allocated','runner.failed','runner.released','task.completed','task.failed','task.queued','task.started','workspace.failed','workspace.git_captured','workspace.prepared','writer.completed','writer.failed','writer.started','writer.subtask.completed','writer.subtask.failed','writer.subtask.started')"
         }
       },
       "isRLSEnabled": false
@@ -2092,6 +2092,39 @@
           "value": "\"specs\".\"status\" IN ('open','in_flight','review','merged','halted','cancelled','pending','active','done')"
         }
       },
+      "isRLSEnabled": false
+    },
+    "public.subscription_window_denominators": {
+      "name": "subscription_window_denominators",
+      "schema": "",
+      "columns": {
+        "auth_ref": {
+          "name": "auth_ref",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "observed_max_monthly_tokens": {
+          "name": "observed_max_monthly_tokens",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "last_updated_at": {
+          "name": "last_updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
       "isRLSEnabled": false
     },
     "public.tasks": {

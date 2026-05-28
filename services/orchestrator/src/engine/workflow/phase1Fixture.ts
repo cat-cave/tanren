@@ -4,11 +4,12 @@ import { z } from "zod";
 import type { Allocator, RunnerAllocation, SshTarget } from "../contracts/allocator.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { SshSubstrate } from "../contracts/sshSubstrate.js";
+import { CostRecorder, CostUnattributableError } from "../costs/index.js";
 import { type EventName, type EventPayload } from "../events/index.js";
 import { type EventStore, PgEventStore } from "../eventStore.js";
 import type { AuditAnswer, CheckAnswer } from "../providers/answererSchemas.js";
 import type { GitHubHttpClient } from "../providers/github.js";
-import type { AnswererAdapter, WriterAdapter, WriterResult } from "../providers/types.js";
+import type { AnswererAdapter, TokenUsage, WriterAdapter, WriterResult } from "../providers/types.js";
 import { quoteSshShellArg } from "../ssh/command.js";
 import { runWorkspaceSshCommand, workspaceRepoPathForRun } from "../workspace/index.js";
 import { pollCiForRun, type PollCiForRunResult } from "./ciPolling.js";
@@ -73,6 +74,7 @@ export async function runPhase1FixtureWorkflow(input: RunPhase1FixtureInput): Pr
   const eventStore = input.eventStore ?? new PgEventStore(input.pool);
   const context = input.context;
   const workspacePath = input.workspacePath ?? workspaceRepoPathForRun(context.runId);
+  const recorder = new CostRecorder(input.pool, eventStore);
   const appendEvent = async <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string) => {
     await eventStore.append({ runId: context.runId, specId: context.specId, projectId: context.projectId, taskId, eventType, payload });
   };
@@ -94,18 +96,31 @@ export async function runPhase1FixtureWorkflow(input: RunPhase1FixtureInput): Pr
     const adapterContext = { runId: context.runId, target: allocation.target };
 
     const writerAdapter = input.createWriter(adapterContext);
-    const writer = await runFixtureTask(input.pool, appendEvent, context.runId, "write", "Writer fixture change", "writer", writerAdapter.cli, async () => {
+    const writerStartedAt = Date.now();
+    const writer = await runFixtureTask(input.pool, appendEvent, context.runId, "write", "Writer fixture change", "writer", writerAdapter.cli, async (taskId) => {
       const result = await writerAdapter.runWriter({
         prompt: writerPrompt(context),
         workspace: workspacePath,
         timeoutMs: input.timeoutMs
       });
       await appendEvent("workspace.git_captured", { workspacePath, commits: result.commits, diffBytes: Buffer.byteLength(result.diff, "utf8") });
+      await recordFixtureCost({
+        recorder,
+        context,
+        taskId,
+        cli: writerAdapter.cli,
+        model: "phase1-fixture-writer",
+        authRef: writerAdapter.authRef,
+        tokenUsage: result.tokenUsage,
+        runtimeSeconds: secondsSince(writerStartedAt),
+        rawUsage: { role: "writer", telemetry: result.telemetry ?? null }
+      });
       return result;
     });
 
     const checker = input.createChecker(adapterContext);
-    const check = await runFixtureTask(input.pool, appendEvent, context.runId, "check", "Check writer fixture output", "answerer", checker.cli, async () => {
+    const checkerStartedAt = Date.now();
+    const check = await runFixtureTask(input.pool, appendEvent, context.runId, "check", "Check writer fixture output", "answerer", checker.cli, async (taskId) => {
       const answer = await executeStructuredCheckTask(checker, {
         specTitle: context.specTitle,
         specDescription: context.specDescription,
@@ -117,11 +132,23 @@ export async function runPhase1FixtureWorkflow(input: RunPhase1FixtureInput): Pr
       if (!answer.done) {
         throw new Error(`fixture checker rejected writer output: ${answer.reason}`);
       }
+      await recordFixtureCost({
+        recorder,
+        context,
+        taskId,
+        cli: checker.cli,
+        model: "phase1-fixture-checker",
+        authRef: checker.authRef,
+        tokenUsage: undefined,
+        runtimeSeconds: secondsSince(checkerStartedAt),
+        rawUsage: { role: "checker" }
+      });
       return answer;
     });
 
     const auditor = input.createAuditor(adapterContext);
-    const audit = await runFixtureTask(input.pool, appendEvent, context.runId, "audit", "Audit phase 1 fixture", "answerer", auditor.cli, async () => {
+    const auditorStartedAt = Date.now();
+    const audit = await runFixtureTask(input.pool, appendEvent, context.runId, "audit", "Audit phase 1 fixture", "answerer", auditor.cli, async (taskId) => {
       const answer = await executeStructuredAuditTask(auditor, {
         specTitle: context.specTitle,
         acceptanceCriteria: context.acceptanceCriteria,
@@ -133,6 +160,17 @@ export async function runPhase1FixtureWorkflow(input: RunPhase1FixtureInput): Pr
       if (!answer.verified) {
         throw new Error(`fixture auditor rejected completion: ${answer.reason}`);
       }
+      await recordFixtureCost({
+        recorder,
+        context,
+        taskId,
+        cli: auditor.cli,
+        model: "phase1-fixture-auditor",
+        authRef: auditor.authRef,
+        tokenUsage: undefined,
+        runtimeSeconds: secondsSince(auditorStartedAt),
+        rawUsage: { role: "auditor" }
+      });
       return answer;
     });
 
@@ -181,7 +219,7 @@ async function runFixtureTask<TOutput>(
   title: string,
   agentKind: "writer" | "answerer",
   cli: string,
-  run: () => Promise<TOutput>
+  run: (taskId: string) => Promise<TOutput>
 ): Promise<TOutput> {
   const taskId = `task_${randomUUID()}`;
   await pool.query(
@@ -192,13 +230,13 @@ async function runFixtureTask<TOutput>(
   await appendEvent("task.started", { taskKind: kind }, taskId);
   await appendRoleStarted(appendEvent, kind, taskId);
   try {
-    const output = await run();
+    const output = await run(taskId);
     await pool.query("UPDATE tasks SET status = 'done', outcome = 'ok', ended_at = now() WHERE task_id = $1", [taskId]);
     await appendRoleCompleted(appendEvent, kind, output, taskId);
     await appendEvent("task.completed", { taskKind: kind }, taskId);
     return output;
   } catch (error) {
-    const failure = { kind: `${kind}_failed`, message: messageFromError(error) };
+    const failure = failureForFixtureTask(kind, error);
     await pool.query("UPDATE tasks SET status = 'failed', outcome = 'failed', failure_kind = $2, ended_at = now() WHERE task_id = $1", [
       taskId,
       failure.kind
@@ -207,6 +245,56 @@ async function runFixtureTask<TOutput>(
     await appendEvent("task.failed", { taskKind: kind, ...failure }, taskId);
     throw error;
   }
+}
+
+// Maps a thrown error from a fixture task body to the typed failure payload
+// persisted on the row + emitted on the task.failed event. P2A-0011 lifts
+// cost.unattributable into a first-class failure kind so the run halts with
+// an audit-trail event when usage cannot be sourced.
+function failureForFixtureTask(kind: Phase1TaskKind, error: unknown): { kind: string; message: string } {
+  if (error instanceof CostUnattributableError) {
+    return { kind: "cost.unattributable", message: error.message };
+  }
+  return { kind: `${kind}_failed`, message: messageFromError(error) };
+}
+
+interface FixtureCostInput {
+  recorder: CostRecorder;
+  context: Phase1FixtureRunContext;
+  taskId: string;
+  cli: "codex" | "claude" | "opencode" | "fake";
+  model: string;
+  authRef: string;
+  tokenUsage: TokenUsage | undefined;
+  runtimeSeconds: number;
+  rawUsage: Record<string, unknown>;
+}
+
+// recordFixtureCost is the single mandatory call at fixture task completion.
+// Throws CostUnattributableError when the adapter's auth ref does not match
+// one of the three v0 attribution rules; the surrounding runFixtureTask
+// converts that into a typed task failure.
+async function recordFixtureCost(input: FixtureCostInput): Promise<void> {
+  const tokens = input.tokenUsage ?? { inputTokens: 0, outputTokens: 0, cachedTokens: 0 };
+  await input.recorder.record(
+    {
+      runId: input.context.runId,
+      taskId: input.taskId,
+      specId: input.context.specId,
+      projectId: input.context.projectId,
+      cli: input.cli,
+      model: input.model,
+      authRef: input.authRef,
+      runtimeSeconds: input.runtimeSeconds
+    },
+    tokens,
+    input.rawUsage
+  );
+}
+
+function secondsSince(startedAtMs: number): number {
+  const elapsed = (Date.now() - startedAtMs) / 1000;
+  return elapsed > 0 ? elapsed : 0.001;
 }
 
 async function appendRoleStarted(
