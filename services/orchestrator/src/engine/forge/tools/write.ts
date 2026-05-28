@@ -123,26 +123,31 @@ export async function tanrenRerunTask(
 }
 
 // ---------------------------------------------------------------------------
-// `tanren.acknowledge_insight` — P2A-0020 owns the insight table; v0 is a
-// forward-compatible no-op that records the acknowledgement in-memory so
-// the dashboard's operator buttons can fire the action without a 501. The
-// real ack-write lands when P2A-0020 ships.
+// `tanren.acknowledge_insight` — writes through to the P2A-0020 cache table.
+// A second in-memory mirror is kept so dashboards (and the legacy P2A-0019
+// tool stub tests) that ack an insight which never made it into the cache
+// (e.g. a synthetic insight emitted by the v0 narration generator before
+// the route persists it) still see a recorded ack. The DB is the source of
+// truth; the mirror is purely a forward-compatible UX nicety.
 // ---------------------------------------------------------------------------
+
+import { acknowledgeInsight } from "../../insights/index.js";
 
 const ACKED_INSIGHTS = new Map<string, { acknowledgedBy: string; acknowledgedAt: Date }>();
 
 export async function tanrenAcknowledgeInsight(
-  _deps: WriteToolDeps,
+  deps: WriteToolDeps,
   args: { insightId: string },
   actor: ActorContext
-): Promise<{ insightId: string; acknowledgedBy: string; acknowledgedAt: Date }> {
-  const entry = { acknowledgedBy: actor.userId, acknowledgedAt: new Date() };
+): Promise<{ insightId: string; acknowledgedBy: string; acknowledgedAt: Date; persisted: boolean }> {
+  const now = new Date();
+  const persisted = await acknowledgeInsight(deps.pool, args.insightId, actor.userId, now);
+  const entry = { acknowledgedBy: actor.userId, acknowledgedAt: now };
   ACKED_INSIGHTS.set(args.insightId, entry);
-  return { insightId: args.insightId, ...entry };
+  return { insightId: args.insightId, ...entry, persisted };
 }
 
-// Test-only escape hatch so the v0 stub can be inspected without exposing
-// the map at the module level.
+// Test-only escape hatch so callers can inspect the in-memory mirror.
 export function peekAcknowledgedInsightForTests(insightId: string):
   | { acknowledgedBy: string; acknowledgedAt: Date }
   | undefined {

@@ -273,10 +273,12 @@ export async function tanrenReadMilestones(
 }
 
 // ---------------------------------------------------------------------------
-// `tanren.read_insights` — P2A-0020 owns the implementation. v0 returns an
-// empty list as a forward-compatible stub so the dashboard's ⌘K palette
-// can already invoke the tool.
+// `tanren.read_insights` — wraps the P2A-0020 compute-on-read dispatcher.
+// The dashboard's ⌘K palette and the Forge narration generator both call
+// this tool, so a single shared loader keeps the cache hit-rate consistent.
 // ---------------------------------------------------------------------------
+
+import { loadInsightsForProject } from "../../insights/index.js";
 
 export async function tanrenReadInsights(
   deps: ToolDeps,
@@ -284,5 +286,6 @@ export async function tanrenReadInsights(
   actor: ActorContext
 ): Promise<{ insights: ReadonlyArray<Record<string, unknown>> }> {
   await assertProjectAccess(deps.pool, args.projectId, actor);
-  return { insights: [] };
+  const insights = await loadInsightsForProject(deps.pool, { projectId: args.projectId });
+  return { insights: insights as unknown as ReadonlyArray<Record<string, unknown>> };
 }

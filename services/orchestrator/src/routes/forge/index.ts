@@ -17,6 +17,7 @@ import {
   ForgeTurnStore,
   generateProjectViewNarration,
   generateRunDetailNarration,
+  type NarrationInsight,
   repoGrep,
   repoReadFile,
   repoReadIssue,
@@ -36,6 +37,9 @@ import {
 } from "../../engine/forge/index.js";
 import type { GitHubHttpClient } from "../../engine/providers/github.js";
 import type { SecretStore } from "../../engine/contracts/secretStore.js";
+import { loadInsightsForProject } from "../../engine/insights/index.js";
+import type { Insight, InsightAction } from "../../engine/insights/index.js";
+import { ForgeInsightKind } from "../../engine/answerers/schemas/forge.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg } from "../orgs/index.js";
 
@@ -353,7 +357,7 @@ async function generateProjectViewTurn(args: GenerateProjectViewArgs) {
     })),
     weekToDateCostUsd,
     budgetUsdPerWeek: args.budgetUsdPerWeek,
-    insights: [],
+    insights: await loadNarrationInsights(args.pool, args.projectId),
     actor: args.actor
   });
 
@@ -431,7 +435,7 @@ async function generateRunDetailTurn(args: GenerateRunDetailArgs) {
     taskCount,
     failedTaskCount,
     costUsd: Number(costResult.rows[0]?.total ?? "0"),
-    insights: [],
+    insights: await loadNarrationInsights(args.pool, runRow.project_id),
     actor: args.actor
   });
   return ForgeTurnStore.append(
@@ -445,6 +449,43 @@ async function generateRunDetailTurn(args: GenerateRunDetailArgs) {
     },
     args.actor
   );
+}
+
+// Convert P2A-0020 insights into the NarrationInsight shape expected by the
+// v0 narration generator. Actions whose `toolCall` doesn't parse as a known
+// ForgeToolCall (e.g. a future variant added before the schema is updated)
+// are dropped so the narration stays renderable.
+async function loadNarrationInsights(
+  pool: pg.Pool,
+  projectId: string
+): Promise<NarrationInsight[]> {
+  const insights = await loadInsightsForProject(pool, { projectId });
+  return insights.map((insight) => toNarrationInsight(insight)).filter(
+    (entry): entry is NarrationInsight => entry !== undefined
+  );
+}
+
+function toNarrationInsight(insight: Insight): NarrationInsight | undefined {
+  const kindParse = ForgeInsightKind.safeParse(insight.kind);
+  if (!kindParse.success) return undefined;
+  const actions = insight.actions
+    .map((action) => normalizeInsightAction(action))
+    .filter((action): action is { label: string; toolCall: z.infer<typeof ForgeToolCall> } => action !== undefined);
+  return {
+    id: insight.id,
+    kind: kindParse.data,
+    title: insight.title,
+    body: insight.body,
+    actions
+  };
+}
+
+function normalizeInsightAction(
+  action: InsightAction
+): { label: string; toolCall: z.infer<typeof ForgeToolCall> } | undefined {
+  const parsed = ForgeToolCall.safeParse(action.toolCall);
+  if (!parsed.success) return undefined;
+  return { label: action.label, toolCall: parsed.data };
 }
 
 function requireActor(c: { var: { actor?: ActorContext } }): ActorContext {
