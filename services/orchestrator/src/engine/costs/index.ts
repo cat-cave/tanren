@@ -8,6 +8,7 @@ export {
   type RawUsage,
   BillingMode,
   CostBasis,
+  DEFAULT_CREDIT_USD_RATE,
   type AttributionInput,
   type ProviderRate,
   classifyAuthRef,

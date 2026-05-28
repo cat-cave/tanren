@@ -25,8 +25,16 @@ import type { TokenUsage } from "../providers/types.js";
 export const BillingMode = z.enum(["per_token", "subscription", "self_hosted"]);
 export type BillingMode = z.infer<typeof BillingMode>;
 
-export const CostBasis = z.enum(["ccusage", "provider_pricing", "unknown"]);
+export const CostBasis = z.enum(["ccusage", "provider_pricing", "credits", "unknown"]);
 export type CostBasis = z.infer<typeof CostBasis>;
+
+// Dollar value of one prepaid Codex/ChatGPT credit. Observed on the live Pro
+// account: 1000 credits for $40 (and $10 for 250) → $0.04/credit (pre-tax list
+// rate). Credit drawdown is the REAL marginal spend for subscription-overage
+// usage (within-window usage draws no credits), so it is recorded as a first-
+// class cost (cost_basis='credits'). This rate is account/plan-specific and
+// should become per-credential config when more providers are wired.
+export const DEFAULT_CREDIT_USD_RATE = 0.04;
 
 export const RawUsage = z.record(z.string(), z.unknown());
 export type RawUsage = z.infer<typeof RawUsage>;

@@ -124,12 +124,30 @@ export class CostRecorder {
   // reconcileRunCostFromCcusage back-fills the REAL ccusage dollar figure for a
   // run. ccusage reports run-cumulative cost (against the isolated per-run
   // CODEX_HOME), so we apportion it across the run's cost_records rows by
-  // total-token share — the rows then sum to the real ccusage total. Only rows
-  // that were not already priced from ccusage are touched. A zero/absent cost
-  // (e.g. a pure subscription window with no computed dollars) is a no-op:
-  // cost-unknown stays an honest NULL. Returns the number of rows repriced.
+  // total-token share — the rows then sum to the real ccusage total. A
+  // zero/absent cost (e.g. a pure subscription window with no computed dollars)
+  // is a no-op: cost-unknown stays an honest NULL. Returns rows repriced.
   async reconcileRunCostFromCcusage(runId: string, ccusageCostUsd: number): Promise<{ updated: number }> {
-    if (!(Number.isFinite(ccusageCostUsd) && ccusageCostUsd > 0)) {
+    return this.apportionRunCost(runId, ccusageCostUsd, "ccusage");
+  }
+
+  // reconcileRunCostFromCredits back-fills the REAL marginal dollar cost of a
+  // run from prepaid-credit drawdown. Within-window subscription usage draws no
+  // credits, so a positive consumed-credits delta IS the run's true marginal
+  // spend (PROJECT_BRIEF §4) — it takes precedence over notional ccusage
+  // token-pricing for subscription overage. dollars = creditsConsumed × rate,
+  // apportioned across the run's rows by token share (cost_basis='credits').
+  async reconcileRunCostFromCredits(runId: string, creditsConsumed: number, creditUsdRate: number): Promise<{ updated: number }> {
+    if (!(Number.isFinite(creditsConsumed) && creditsConsumed > 0 && Number.isFinite(creditUsdRate) && creditUsdRate > 0)) {
+      return { updated: 0 };
+    }
+    return this.apportionRunCost(runId, creditsConsumed * creditUsdRate, "credits");
+  }
+
+  // Apportions a run-level dollar total across the run's cost_records rows by
+  // total-token share so the rows sum to the total, stamping each with `basis`.
+  private async apportionRunCost(runId: string, totalCostUsd: number, basis: "ccusage" | "credits"): Promise<{ updated: number }> {
+    if (!(Number.isFinite(totalCostUsd) && totalCostUsd > 0)) {
       return { updated: 0 };
     }
     const rows = await this.pool.query<{ id: string; total_tokens: number }>(
@@ -143,8 +161,8 @@ export class CostRecorder {
     let updated = 0;
     for (const row of rows.rows) {
       const share = Number(row.total_tokens) / totalTokens;
-      const costUsd = (ccusageCostUsd * share).toFixed(6);
-      await this.pool.query("UPDATE cost_records SET cost_usd = $2, cost_basis = 'ccusage' WHERE id = $1", [row.id, costUsd]);
+      const costUsd = (totalCostUsd * share).toFixed(6);
+      await this.pool.query("UPDATE cost_records SET cost_usd = $2, cost_basis = $3 WHERE id = $1", [row.id, costUsd, basis]);
       updated += 1;
     }
     return { updated };

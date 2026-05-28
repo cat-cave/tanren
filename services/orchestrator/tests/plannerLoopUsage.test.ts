@@ -102,6 +102,42 @@ describe("subtask loop — usage probe wiring", () => {
     expect(pool.costUpdates).toHaveLength(0);
   });
 
+  it("prices a run from credit drawdown (overriding ccusage) when credits are consumed", async () => {
+    // observeWindow yields 1000 credits at the pre-flight, 990 at the run-end
+    // read → 10 credits consumed × $0.04 = $0.40, apportioned across the run's
+    // cost rows. ccusage reports a positive (notional) cost that must be
+    // overridden by the real credit drawdown.
+    const creditQueue = [1000, 990];
+    const probe: UsageProbe = {
+      async observeWindow(): Promise<WindowObservation> {
+        const remaining = creditQueue.shift() ?? 990;
+        return {
+          usage: {
+            provider: "openai",
+            windows: [{ slot: "primary", usedPercent: 30, resetsAt: "2026-06-01T00:00:00Z", windowMinutes: 300, resetDescription: "soon" }],
+            creditsRemaining: remaining,
+            accountEmail: null,
+            source: "codex-cli",
+            capturedAt: "2026-05-28T00:00:00Z"
+          },
+          pressure: null
+        };
+      },
+      async observeAccounting() {
+        return accounting(5);
+      }
+    };
+
+    const { input, pool } = defaultLoopInput({ usageProbe: probe, creditUsdRate: 0.04 });
+    const outcome = await runSubtaskLoop(input);
+
+    expect(outcome.kind).toBe("passed");
+    expect(pool.costUpdates.length).toBe(pool.costInserts.length);
+    expect(pool.costUpdates.every((update) => update.basis === "credits")).toBe(true);
+    const summed = pool.costUpdates.reduce((sum, update) => sum + Number(update.costUsd), 0);
+    expect(summed).toBeCloseTo(0.4, 5);
+  });
+
   it("runs exactly as before when no usage probe is supplied", async () => {
     const { input, events } = defaultLoopInput();
     const outcome = await runSubtaskLoop(input);

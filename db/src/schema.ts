@@ -150,7 +150,7 @@ export const costRecords = pgTable(
   },
   (table) => [
     check("cost_records_billing_mode_check", sql`${table.billingMode} IN ('per_token','subscription','self_hosted')`),
-    check("cost_records_cost_basis_check", sql`${table.costBasis} IN ('ccusage','provider_pricing','unknown')`)
+    check("cost_records_cost_basis_check", sql`${table.costBasis} IN ('ccusage','provider_pricing','credits','unknown')`)
   ]
 );
 

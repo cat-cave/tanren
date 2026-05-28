@@ -45,8 +45,14 @@ export class SshUsageProbe implements UsageProbe {
       target: this.config.target,
       timeoutMs: this.config.timeoutMs
     });
+    // Window pressure is credit-aware: a maxed subscription window is NOT a
+    // doomed call when prepaid credits are available, because overage draws
+    // those credits (verified live — Codex Pro runs against credits with the
+    // weekly window at 100%). Only escalate window pressure when there is no
+    // credit headroom (creditsRemaining is null or 0). If credits run out
+    // mid-run the call surfaces a usage-limit error, which the loop handles.
     const pressure =
-      usage === null
+      usage === null || hasCreditHeadroom(usage)
         ? null
         : evaluateWindowPressure(
             usage.windows,
@@ -63,4 +69,11 @@ export class SshUsageProbe implements UsageProbe {
       timeoutMs: this.config.timeoutMs
     });
   }
+}
+
+// Credits cover window overage, so a positive balance means a maxed window is
+// not a blocker. A null balance (provider reports no credit pool) does NOT
+// count as headroom — fall through to window-percent pressure.
+function hasCreditHeadroom(usage: WindowUsage): boolean {
+  return usage.creditsRemaining !== null && usage.creditsRemaining > 0;
 }
