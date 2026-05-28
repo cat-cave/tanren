@@ -2,14 +2,17 @@ import type { z } from "zod";
 import {
   AuditorCompletedPayload,
   AuditorFailedPayload,
+  AuditorRejectedPayload,
   AuditorStartedPayload,
   AuditorVerdictPayload,
   CheckerCompletedPayload,
   CheckerFailedPayload,
+  CheckerRejectedPayload,
   CheckerStartedPayload,
   CheckerVerdictPayload,
   PlannerCompletedPayload,
   PlannerFailedPayload,
+  PlannerRerequestedPayload,
   PlannerStartedPayload,
   PlannerSubtasksEmittedPayload,
   WriterCompletedPayload,
@@ -97,6 +100,7 @@ export const EventRegistry = {
   "planner.completed": PlannerCompletedPayload,
   "planner.failed": PlannerFailedPayload,
   "planner.subtasks.emitted": PlannerSubtasksEmittedPayload,
+  "planner.rerequested": PlannerRerequestedPayload,
 
   // Writer role (legacy + Phase 2 subtask narration)
   "writer.started": WriterStartedPayload,
@@ -111,12 +115,14 @@ export const EventRegistry = {
   "checker.completed": CheckerCompletedPayload,
   "checker.failed": CheckerFailedPayload,
   "checker.verdict": CheckerVerdictPayload,
+  "checker.rejected": CheckerRejectedPayload,
 
   // Auditor role
   "auditor.started": AuditorStartedPayload,
   "auditor.completed": AuditorCompletedPayload,
   "auditor.failed": AuditorFailedPayload,
   "auditor.verdict": AuditorVerdictPayload,
+  "auditor.rejected": AuditorRejectedPayload,
 
   // Runner allocation
   "runner.allocated": RunnerAllocatedPayload,
