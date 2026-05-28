@@ -39,8 +39,10 @@ RUN set -eu; \
   ASSET="CodexBarCLI-v${CODEXBAR_VERSION}-linux-${CODEXBAR_ARCH}.tar.gz"; \
   BASE="https://github.com/steipete/CodexBar/releases/download/v${CODEXBAR_VERSION}"; \
   cd /tmp; \
-  curl -fsSL -o "${ASSET}" "${BASE}/${ASSET}"; \
-  curl -fsSL -o "${ASSET}.sha256" "${BASE}/${ASSET}.sha256"; \
+  # --retry: the GitHub-releases download flakes intermittently in CI
+  # ("curl (56) Connection reset"), which fails `just smoke` on unrelated PRs.
+  curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 --connect-timeout 30 -o "${ASSET}" "${BASE}/${ASSET}"; \
+  curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 --connect-timeout 30 -o "${ASSET}.sha256" "${BASE}/${ASSET}.sha256"; \
   EXPECTED="$(awk '{print $1}' "${ASSET}.sha256")"; \
   ACTUAL="$(sha256sum "${ASSET}" | awk '{print $1}')"; \
   [ "${EXPECTED}" = "${ACTUAL}" ] || { echo "codexbar sha256 mismatch: expected ${EXPECTED} got ${ACTUAL}" >&2; exit 1; }; \
