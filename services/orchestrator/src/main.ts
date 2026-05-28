@@ -36,6 +36,7 @@ import { createDoctorRoutes } from "./routes/doctor/index.js";
 import { createForgeRoutes } from "./routes/forge/index.js";
 import { createInsightRoutes } from "./routes/insights/index.js";
 import { createMilestoneRoutes } from "./routes/milestones/index.js";
+import { createNotificationRoutes } from "./routes/notifications/index.js";
 import { createOrgRoutes } from "./routes/orgs/index.js";
 import { createPersonaRoutes } from "./routes/personas/index.js";
 import { createProjectRoutes } from "./routes/projects/index.js";
@@ -226,6 +227,7 @@ export function buildApp(input: {
     createForgeRoutes({ pool: input.pool, secrets, githubHttp })
   );
   app.route("/orgs", createInsightRoutes({ pool: input.pool }));
+  app.route("/orgs", createNotificationRoutes({ pool: input.pool }));
   app.route("/orgs", createRunRoutes({ pool: input.pool }));
   app.route(
     "/",

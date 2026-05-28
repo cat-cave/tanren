@@ -215,3 +215,109 @@ export interface ProjectDetail {
   allocator: string | null;
   config: ProjectConfig;
 }
+
+// ── P2B-0002 onboarding / credentials / notifications additions ──────────
+// All additive: read the fields the onboarding/credentials/notifications
+// screens render off the P2A-0013 (doctor/credentials/brownfield) and
+// P2A-0017 (notifications) contracts. Local + minimal, like the rest.
+
+/** A single `/doctor` check (P2A-0013 DoctorCheck). */
+export interface DoctorCheck {
+  name: string;
+  status: "ok" | "warn" | "fail";
+  detail: string;
+  latencyMs: number | null;
+}
+
+/** `/doctor` report (P2A-0013 DoctorReport). */
+export interface DoctorReport {
+  ok: boolean;
+  checks: DoctorCheck[];
+  generatedAt: string;
+}
+
+/** A credential reference record (P2A-0013 CredentialRecord). Never a value. */
+export interface CredentialRecord {
+  ref: string;
+  kind: "codex_chatgpt_auth" | "github_token" | "opaque";
+  scope: "org" | "me";
+  ownerId: string;
+  createdAt: string;
+}
+
+/** A detected (read-only, never written) target-repo file (P2A-0013). */
+export interface BrownfieldDetectedFile {
+  path: string;
+  present: boolean;
+  size?: number;
+  preview?: string;
+}
+
+/** Result of the brownfield link call (P2A-0013). */
+export interface BrownfieldLinkResult {
+  projectId: string;
+  repoUrl: string;
+  orgId: string;
+  detectedFiles: BrownfieldDetectedFile[];
+  writesPerformed: number;
+}
+
+/** A created project (P2A-0013 project create). */
+export interface CreatedProject {
+  projectId: string;
+  name: string;
+  repoUrl: string;
+  defaultBranch: string | null;
+  runnerImage: string | null;
+  allocator: string | null;
+}
+
+/** P2A-0017 notification channel kinds. */
+export type ChannelKind =
+  | "ntfy"
+  | "slack"
+  | "github_checks"
+  | "teams"
+  | "discord"
+  | "email"
+  | "twilio"
+  | "pagerduty"
+  | "webhook";
+
+/** P2A-0017 severity taxonomy. */
+export type Severity = "ok" | "info" | "warn" | "fail";
+
+/** A configured notification destination (P2A-0017 NotificationTargetRow). */
+export interface NotificationTarget {
+  id: string;
+  orgId: string;
+  scope: "org" | "user";
+  userId: string | null;
+  channelKind: ChannelKind;
+  destination: string;
+  label: string;
+  enabled: boolean;
+  weekendMute: boolean;
+}
+
+/** A per-(target × event) opt-in (P2A-0017 NotificationRouteRow). */
+export interface NotificationRoute {
+  id: string;
+  targetId: string;
+  eventName: string;
+  enabled: boolean;
+  minSeverity: Severity;
+}
+
+/** An event-registry row + its default severity, for the matrix rows. */
+export interface NotificationEvent {
+  eventName: string;
+  defaultSeverity: Severity;
+}
+
+/** The full notifications-matrix payload the screen renders against. */
+export interface NotificationMatrix {
+  targets: NotificationTarget[];
+  routes: NotificationRoute[];
+  events: NotificationEvent[];
+}

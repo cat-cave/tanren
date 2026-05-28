@@ -42,6 +42,10 @@ export const SCREEN_MOUNTS: ScreenMount[] = [];
 import { mountProjectScreens } from "../routes/projects/index.js";
 SCREEN_MOUNTS.push(mountProjectScreens);
 
+// P2B-0002 onboarding (org setup + existing-project) + credentials + notifications.
+import { mountOnboardingScreens } from "../routes/onboarding/index.js";
+SCREEN_MOUNTS.push(mountOnboardingScreens);
+
 /** Run every registered screen mount. Called BEFORE `mountShell`. */
 export function mountScreens(app: Hono, deps: ShellDeps): void {
   for (const mount of SCREEN_MOUNTS) {
