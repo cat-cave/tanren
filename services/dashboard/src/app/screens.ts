@@ -38,6 +38,10 @@ export type ScreenMount = (app: Hono, deps: ShellDeps) => void;
  */
 export const SCREEN_MOUNTS: ScreenMount[] = [];
 
+// P2B-0003 — chat-primary project view, spec creation, routing & limits.
+import { mountProjectScreens } from "../routes/projects/index.js";
+SCREEN_MOUNTS.push(mountProjectScreens);
+
 /** Run every registered screen mount. Called BEFORE `mountShell`. */
 export function mountScreens(app: Hono, deps: ShellDeps): void {
   for (const mount of SCREEN_MOUNTS) {
