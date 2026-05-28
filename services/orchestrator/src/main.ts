@@ -21,14 +21,8 @@ import { CiPullRequestNotFoundError, CiRunNotFoundError, pollCiForRun } from "./
 import { DraftPrRunnerNotFoundError, DraftPrRunNotFoundError, publishDraftPullRequestForRun } from "./engine/workflow/githubDraftPr.js";
 import { runHelloWorkflow } from "./engine/workflow/helloRun.js";
 import {
-  createProject,
-  createQueuedRunFromSpec,
-  createSpec,
-  ProjectAccessDeniedError,
-  ProjectNotFoundError,
-  SpecDependenciesBlockedError,
-  SpecNotRunnableError,
-  SpecNotFoundError
+  createProject, createQueuedRunFromSpec, createSpec, ProjectAccessDeniedError,
+  ProjectNotFoundError, SpecDependenciesBlockedError, SpecNotRunnableError, SpecNotFoundError
 } from "./engine/workflow/projectSpec.js";
 import { createAuthMiddleware, type ActorContextEnv } from "./middleware/auth.js";
 import { createAuthRoutes } from "./routes/auth/index.js";
@@ -36,6 +30,7 @@ import { createBehaviorRoutes } from "./routes/behaviors/index.js";
 import { createBrownfieldRoutes } from "./routes/brownfield/index.js";
 import { createCredentialRoutes, InMemoryCredentialRegistry, type CredentialRegistry } from "./routes/credentials/index.js";
 import { createDoctorRoutes } from "./routes/doctor/index.js";
+import { createDoraRoutes } from "./routes/dora/index.js";
 import { createForgeRoutes } from "./routes/forge/index.js";
 import { createInsightRoutes } from "./routes/insights/index.js";
 import { createMilestoneRoutes } from "./routes/milestones/index.js";
@@ -243,6 +238,7 @@ export function buildApp(input: {
   mountGithubAppInstallFromEnv(app, { pool: input.pool, secrets, minter: githubAppMinter });
   app.route("/orgs", createForgeRoutes({ pool: input.pool, secrets, githubHttp }));
   app.route("/orgs", createInsightRoutes({ pool: input.pool }));
+  app.route("/orgs", createDoraRoutes({ pool: input.pool }));
   app.route("/orgs", createNotificationRoutes({ pool: input.pool }));
   app.route("/orgs", createRunRoutes({ pool: input.pool }));
   app.route("/orgs", createRecoveryRoutes({ pool: input.pool }));

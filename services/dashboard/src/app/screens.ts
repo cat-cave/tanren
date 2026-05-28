@@ -64,6 +64,10 @@ SCREEN_MOUNTS.push(mountHaltedRunScreens);
 import { mountTriggerScreens } from "../routes/runs/trigger/index.js";
 SCREEN_MOUNTS.push(mountTriggerScreens);
 
+// P3-0019: DORA-like delivery metrics panel (overrides the /dora placeholder).
+import { mountDoraScreen } from "../routes/dora/index.js";
+SCREEN_MOUNTS.push(mountDoraScreen);
+
 /** Run every registered screen mount. Called BEFORE `mountShell`. */
 export function mountScreens(app: Hono, deps: ShellDeps): void {
   for (const mount of SCREEN_MOUNTS) {

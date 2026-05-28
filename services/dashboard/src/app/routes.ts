@@ -50,7 +50,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { id: "roadmap", glyph: "⌥", label: "roadmap", path: "/roadmap", phase: "3+" },
       { id: "personas", glyph: "◍", label: "personas", path: "/personas", phase: "3+" },
       { id: "costs", glyph: "$", label: "history & costs", path: "/costs", phase: "2b", spec: "P2B-0005" },
-      { id: "dora", glyph: "↗", label: "DORA", path: "/dora", phase: "3+" }
+      { id: "dora", glyph: "↗", label: "DORA", path: "/dora", phase: "2b", spec: "P3-0019" }
     ]
   },
   {

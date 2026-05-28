@@ -89,7 +89,7 @@ describe("dashboard shell rendering", () => {
     mockOrchestrator();
     const app = await build();
     const html = await (await app.request("/projects")).text();
-    // roadmap/personas/DORA/overview/discovery are phase 3+.
+    // overview/roadmap/personas/discovery are phase 3+ (DORA shipped in P3-0019).
     expect(html).toContain("roadmap");
     expect(html).toMatch(/roadmap[\s\S]*?phase 3\+/);
     expect((html.match(/phase 3\+/g) ?? []).length).toBeGreaterThanOrEqual(4);
