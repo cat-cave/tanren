@@ -54,6 +54,12 @@ SCREEN_MOUNTS.push(mountCostsScreen);
 import { mountRunDetailScreens } from "../routes/runs/index.js";
 SCREEN_MOUNTS.push(mountRunDetailScreens);
 
+// P2B-0008: halted-run failure-recovery surface (`/runs/halted` list +
+// `/runs/:runId/recover`). Appended AFTER P2B-0004 so its `/runs/:runId`
+// handler delegates the `halted` literal back via next() and lands here.
+import { mountHaltedRunScreens } from "../routes/runs/halted.js";
+SCREEN_MOUNTS.push(mountHaltedRunScreens);
+
 /** Run every registered screen mount. Called BEFORE `mountShell`. */
 export function mountScreens(app: Hono, deps: ShellDeps): void {
   for (const mount of SCREEN_MOUNTS) {

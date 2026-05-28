@@ -11,7 +11,7 @@
  */
 
 import type { DashboardSession } from "../auth/session.js";
-import { OrchestratorHttpClient } from "./httpClient.js";
+import { OrchestratorRecoveryClient } from "./recoveryClient.js";
 import type {
   BehaviorSummary,
   BrownfieldLinkResult,
@@ -40,7 +40,7 @@ import type {
 
 export type { OrchestratorClientDeps } from "./httpClient.js";
 
-export class OrchestratorClient extends OrchestratorHttpClient {
+export class OrchestratorClient extends OrchestratorRecoveryClient {
   /** Resolve the current session via `/auth/me`. `undefined` when unauthenticated. */
   async session(): Promise<DashboardSession | undefined> {
     const response = await this.fetchImpl(`${this.orchestratorUrl}/auth/me`, {
@@ -450,4 +450,5 @@ export class OrchestratorClient extends OrchestratorHttpClient {
     const query = opts.rawView === true ? "?raw=true" : "";
     return `${this.orchestratorUrl}/orgs/${encodeURIComponent(loc.orgId)}/projects/${encodeURIComponent(loc.projectId)}/runs/${encodeURIComponent(runId)}/stream${query}`;
   }
+
 }

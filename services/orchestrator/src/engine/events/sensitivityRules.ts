@@ -240,6 +240,36 @@ export const sensitivityRules: SensitivityRule[] = [
     ["recommendedAction", "public"]
   ]),
 
+  // P2B-0008 recovery lineage — operator-authored prose + identifiers, public.
+  ...rulesFor("recovery.revise_routed", [
+    ["runId", "public"],
+    ["specId", "public"],
+    ["action", "public"],
+    ["editHref", "public"]
+  ]),
+  ...rulesFor("recovery.replan_queued", [
+    ["runId", "public"],
+    ["specId", "public"],
+    ["action", "public"],
+    ["steeringNote", "public"],
+    ["replanRunId", "public"],
+    ["plannerTaskId", "public"]
+  ]),
+  ...rulesFor("recovery.rollback_queued", [
+    ["runId", "public"],
+    ["specId", "public"],
+    ["action", "public"],
+    ["commitSha", "public"],
+    ["confirmed", "public"],
+    ["replanRunId", "public"]
+  ]),
+  ...rulesFor("recovery.inspection_opened", [
+    ["runId", "public"],
+    ["specId", "public"],
+    ["action", "public"],
+    ["threadId", "public"]
+  ]),
+
   // Infrastructure + integration rules (runner/allocator/workspace/credential,
   // cost + usage telemetry, github/ci/phase1/reviews/notifications/hello/
   // redaction) live in sensitivityRules.infra.ts to keep this file under the

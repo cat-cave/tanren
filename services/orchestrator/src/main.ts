@@ -40,6 +40,7 @@ import { createNotificationRoutes } from "./routes/notifications/index.js";
 import { createOrgRoutes } from "./routes/orgs/index.js";
 import { createPersonaRoutes } from "./routes/personas/index.js";
 import { createProjectRoutes } from "./routes/projects/index.js";
+import { createRecoveryRoutes } from "./routes/recovery/index.js";
 import { createRunRoutes } from "./routes/runs/index.js";
 import { createSpecRoutes } from "./routes/specs/index.js";
 
@@ -229,6 +230,7 @@ export function buildApp(input: {
   app.route("/orgs", createInsightRoutes({ pool: input.pool }));
   app.route("/orgs", createNotificationRoutes({ pool: input.pool }));
   app.route("/orgs", createRunRoutes({ pool: input.pool }));
+  app.route("/orgs", createRecoveryRoutes({ pool: input.pool }));
   app.route(
     "/",
     createCredentialRoutes({ pool: input.pool, secrets, registry: credentialRegistry })

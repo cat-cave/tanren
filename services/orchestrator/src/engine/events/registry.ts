@@ -76,6 +76,12 @@ import {
   TaskQueuedPayload,
   TaskStartedPayload
 } from "./schemas/lifecycle.js";
+import {
+  RecoveryInspectionOpenedPayload,
+  RecoveryReplanQueuedPayload,
+  RecoveryReviseRoutedPayload,
+  RecoveryRollbackQueuedPayload
+} from "./schemas/recovery.js";
 import { RedactionRawAccessPayload } from "./schemas/redaction.js";
 
 // The EventRegistry is the single source of truth mapping event names to
@@ -192,7 +198,14 @@ export const EventRegistry = {
 
   // Redaction audit (P2A-0009): emitted whenever an elevated-scope actor
   // reads raw payload values via the redaction serializer.
-  "redaction.raw_access": RedactionRawAccessPayload
+  "redaction.raw_access": RedactionRawAccessPayload,
+
+  // P2B-0008 failure recovery: operator-initiated recovery actions against a
+  // halted run, persisted as run lineage in the events table.
+  "recovery.revise_routed": RecoveryReviseRoutedPayload,
+  "recovery.replan_queued": RecoveryReplanQueuedPayload,
+  "recovery.rollback_queued": RecoveryRollbackQueuedPayload,
+  "recovery.inspection_opened": RecoveryInspectionOpenedPayload
 } as const satisfies Record<string, z.ZodTypeAny>;
 
 export type EventRegistry = typeof EventRegistry;

@@ -485,3 +485,13 @@ export interface RunLocation {
   orgId: string;
   projectId: string;
 }
+
+// P2B-0008 failure-recovery contracts live in `recoveryTypes.ts` (re-exported
+// here so existing `from "./types.js"` imports keep working) to keep this file
+// under the 500-line architecture cap.
+export {
+  isRecoverableRun,
+  RECOVERABLE_OUTCOMES,
+  type RecoveryActionResult,
+  type RecoveryContext
+} from "./recoveryTypes.js";

@@ -121,7 +121,14 @@ const SEVERITY_OVERRIDES: Partial<Record<EventName, Severity>> = {
   "hello.completed": "ok",
 
   // Redaction audit — info, never raised, but auditable surface.
-  "redaction.raw_access": "info"
+  "redaction.raw_access": "info",
+
+  // P2B-0008 recovery lineage — operator-initiated recovery progress; info so
+  // the matrix rows default off but the records stay auditable.
+  "recovery.revise_routed": "info",
+  "recovery.replan_queued": "info",
+  "recovery.rollback_queued": "info",
+  "recovery.inspection_opened": "info"
 };
 
 // Sealed: every EventName must have a default severity. Missing keys would
