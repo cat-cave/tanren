@@ -117,19 +117,11 @@ live-phase1-fixture:
 
 smoke: compose-build compose-up wait-for-stack smoke-hello smoke-ssh-integration
 
-# P2A-0015: executable acceptance gate. Local-only — never runs in CI
-# because it calls real Codex and creates real draft PRs.
-#
-# Config comes from tanren.acceptance.json at the repo root (copy
-# tanren.acceptance.example.json to get started). Stack defaults match
-# compose.dev.yml; the SSH host fingerprint is auto-discovered from the
-# running stack. See docs/operator-guide/acceptance.md.
-acceptance-easy:
-  @echo "Phase 2A acceptance — easy tier (fixture-easy)"
-  corepack pnpm exec tsx scripts/acceptance/easy.ts
-
-acceptance-medium:
-  @echo "Phase 2A acceptance — medium tier (fixture-medium)"
-  corepack pnpm exec tsx scripts/acceptance/medium.ts
-
-acceptance: acceptance-easy acceptance-medium
+# P3-0001: the Phase 2A direct-execution acceptance gate (`just acceptance`,
+# scripts/acceptance/easy.ts + medium.ts) was removed once the run executor
+# landed. The system is now only ever exercised through the real
+# dequeue→execute path (the background run worker, TANREN_RUN_WORKER=1). The
+# per-tier persisted-state ASSERTIONS still ship as CI dry-run smokes
+# (services/orchestrator/tests/phase2Acceptance{Easy,Medium}.test.ts) which
+# import scripts/acceptance/common.ts. Component-level live smokes
+# (live-codex-*, live-github-*, live-ci-poll, live-phase1-fixture) remain.

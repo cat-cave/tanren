@@ -14,6 +14,7 @@ import { storeCodexAuthBundle } from "./engine/credentials/codexAuth.js";
 import { storeGithubToken } from "./engine/credentials/githubToken.js";
 import { FetchGitHubHttpClient, type GitHubHttpClient } from "./engine/providers/github.js";
 import { Ssh2Substrate } from "./engine/ssh/index.js";
+import { runWorkerEnabled, startRunWorker } from "./engine/worker/index.js";
 import { CiPullRequestNotFoundError, CiRunNotFoundError, pollCiForRun } from "./engine/workflow/ciPolling.js";
 import { DraftPrRunnerNotFoundError, DraftPrRunNotFoundError, publishDraftPullRequestForRun } from "./engine/workflow/githubDraftPr.js";
 import { runHelloWorkflow } from "./engine/workflow/helloRun.js";
@@ -122,11 +123,9 @@ function buildAllocatorFromEnv(pool: pg.Pool): Allocator {
   const runners = new PgRunnerStore(pool);
   const kind = (process.env.TANREN_ALLOCATOR_KIND ?? "sidecar").toLowerCase();
   if (kind === "static") {
-    // Dev-only: orchestrator routes /hello/run to the long-lived dev compose
-    // static runner. Preserves the P2A-0010 security boundary (no docker
-    // socket on orchestrator) while keeping `just smoke` working without the
-    // sidecar having to allocate a fresh ephemeral runner container per run.
-    // See docs/operator-guide/runners.md for the dev/prod split.
+    // Dev-only: route to the long-lived dev compose static runner. Preserves
+    // the P2A-0010 security boundary (no docker socket on orchestrator) while
+    // keeping `just smoke` working. See docs/operator-guide/runners.md.
     return new StaticRunnerAllocator({
       host: process.env.TANREN_RUNNER_SSH_HOST ?? "runner",
       port: Number(process.env.TANREN_RUNNER_SSH_PORT ?? 22),
@@ -479,4 +478,21 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const app = await createApp();
   serve({ fetch: app.fetch, port });
   console.log(`orchestrator listening on :${port}`);
+  // P3-0001: the run worker dequeues queued `plan` jobs and runs the real
+  // planner-loop workflow. OFF by default (opt in with TANREN_RUN_WORKER=1). It
+  // reuses the same pool/secrets/allocator/SSH/github construction as the HTTP
+  // server (migrate + identity-secret seeding already ran in createApp).
+  if (runWorkerEnabled()) {
+    const workerPool = getProductionPool();
+    const workerSecrets = new VaultSecretStore({ addr: vaultAddr, token: vaultToken });
+    startRunWorker({
+      pool: workerPool,
+      allocator: buildAllocatorFromEnv(workerPool),
+      ssh: new Ssh2Substrate(workerSecrets),
+      secrets: workerSecrets,
+      githubHttp: new FetchGitHubHttpClient(),
+      identitySecretRef: runnerIdentitySecretRef
+    });
+    console.log("run worker started");
+  }
 }
