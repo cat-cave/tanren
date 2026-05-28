@@ -367,6 +367,40 @@ export function reviewMergeStateFromEvents(events: RunEventRow[]): ReviewMergeSt
   return state;
 }
 
+// ---------------------------------------------------------------------------
+// P3-0025 live preview-deploy URL (derived from per-project config + run state)
+// ---------------------------------------------------------------------------
+
+/** Pull the PR number out of a GitHub PR URL (`.../pull/142` → `142`), or null. */
+export function prNumberFrom(prUrl: string | null): string | null {
+  if (prUrl === null) return null;
+  const match = /\/pull\/(\d+)/.exec(prUrl);
+  return match ? match[1] : null;
+}
+
+/**
+ * Derive a per-PR preview-deploy URL for the Review iframe from the project's
+ * configured `previewUrlPattern` and the run's own state. We never fabricate a
+ * URL: if no pattern is configured we return null (the Review surface then shows
+ * its graceful empty state). Supported placeholders:
+ *   - `{pr}`     the PR number parsed from `run.prUrl` (`.../pull/<n>`)
+ *   - `{branch}` the run's branch
+ * A pattern that needs `{pr}` but has no PR yet yields null (nothing to preview).
+ */
+export function derivePreviewUrl(
+  previewUrlPattern: string | undefined,
+  run: { branch: string; prUrl: string | null }
+): string | null {
+  if (previewUrlPattern === undefined || previewUrlPattern === "") return null;
+  const pr = prNumberFrom(run.prUrl);
+  if (previewUrlPattern.includes("{pr}") && pr === null) return null;
+  const url = previewUrlPattern
+    .replaceAll("{pr}", pr ?? "")
+    .replaceAll("{branch}", encodeURIComponent(run.branch));
+  // Only surface an http(s) origin into an iframe `src` (no `javascript:` etc).
+  return /^https?:\/\//i.test(url) ? url : null;
+}
+
 /** Did the run fail / halt? Drives the failure-diagnostics banner. */
 export function runFailed(detail: RunDetail): boolean {
   const status = detail.run.status;

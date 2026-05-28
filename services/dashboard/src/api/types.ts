@@ -254,13 +254,13 @@ export interface BehaviorSummary {
 }
 
 /**
- * A workflow-insight (`GET .../insights`, P2A-0020). Only `retry_hotspot`,
- * `model_mismatch`, `pace_anomaly` are surfaced in v0. `payload` carries the
- * kind-specific fields; `actions` carry operator-button tool calls.
+ * A workflow-insight (`GET .../insights`, P2A-0020; `stuck` + `review_stall`
+ * added in P3-0020). `payload` carries the kind-specific fields; `actions`
+ * carry operator-button tool calls.
  */
 export interface InsightSummary {
   id: string;
-  kind: "retry_hotspot" | "model_mismatch" | "pace_anomaly";
+  kind: "retry_hotspot" | "model_mismatch" | "pace_anomaly" | "stuck" | "review_stall";
   projectId: string;
   severity: "info" | "warn" | "fail";
   title: string;
@@ -328,6 +328,7 @@ export interface ProjectConfig {
   escapeHatches: Partial<EscapeHatches>;
   governancePosture?: string;
   mergeIntegration?: string;
+  previewUrlPattern?: string; // P3-0025: preview-deploy URL pattern ({branch}/{pr})
   /** Project-bound credential refs (P3-0002); org default fills any omitted kind. */
   credentials?: { codexCredentialRef?: string; githubCredentialRef?: string };
   [key: string]: unknown;

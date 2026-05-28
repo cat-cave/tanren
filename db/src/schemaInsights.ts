@@ -30,7 +30,7 @@ export const workflowInsights = pgTable(
   (table) => [
     check(
       "workflow_insights_kind_check",
-      sql`${table.kind} IN ('retry_hotspot','model_mismatch','pace_anomaly')`
+      sql`${table.kind} IN ('retry_hotspot','model_mismatch','pace_anomaly','stuck','review_stall')`
     ),
     check(
       "workflow_insights_severity_check",

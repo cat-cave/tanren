@@ -23,6 +23,7 @@ import {
   ReviewBody,
   type MergeIntegration
 } from "../../components/runDetail/ReviewBody.js";
+import { derivePreviewUrl } from "../../components/runDetail/model.js";
 
 /** Admin scopes that may opt into raw (unredacted) event payloads (P2A-0009). */
 const ADMIN_ROLES = new Set(["org:admin", "platform:admin", "project:admin"]);
@@ -37,13 +38,16 @@ function actorCanViewRaw(role: string | undefined): boolean {
  * Falls back to `not_configured` when the project read fails or the field is
  * absent (legacy rows), which renders the settings-link branch.
  */
-async function resolveMergeIntegration(client: OrchestratorClient, loc: RunLocation): Promise<MergeIntegration> {
-  const project = await client.getProject(loc.orgId, loc.projectId).catch(() => undefined);
-  const mode = project?.config.mergeIntegration;
+function mergeIntegrationFromConfig(mode: unknown): MergeIntegration {
   if (mode === "mergify_queue" || mode === "direct_merge" || mode === "external_reviewer" || mode === "not_configured") {
     return mode;
   }
   return "not_configured";
+}
+
+async function resolveMergeIntegration(client: OrchestratorClient, loc: RunLocation): Promise<MergeIntegration> {
+  const project = await client.getProject(loc.orgId, loc.projectId).catch(() => undefined);
+  return mergeIntegrationFromConfig(project?.config.mergeIntegration);
 }
 
 export function mountRunDetailScreens(app: Hono, deps: ShellDeps): void {
@@ -129,17 +133,22 @@ export function mountRunDetailScreens(app: Hono, deps: ShellDeps): void {
     }
     const ctx = await loadShellContext(c, deps, { activeNavId: "projects", projectId: loc.projectId });
     const base = `/runs/${encodeURIComponent(runId)}`;
+    // P3-0008 + P3-0025: read the project once and derive both the merge
+    // integration and the per-PR preview-deploy URL from its config.
+    const project = await client.getProject(loc.orgId, loc.projectId).catch(() => undefined);
+    const previewUrl = derivePreviewUrl(project?.config.previewUrlPattern, detail.run);
     return renderShell(
       c,
       ctx,
       { title: `tanren · review ${runId}` },
       <ReviewBody
         detail={detail}
-        mergeIntegration={await resolveMergeIntegration(client, loc)}
+        mergeIntegration={mergeIntegrationFromConfig(project?.config.mergeIntegration)}
         runHref={base}
         requestChangesHref={`${base}/review/request-changes`}
         signOffHref={`${base}/review/sign-off`}
         settingsHref="/settings/routing"
+        previewUrl={previewUrl}
       />
     );
   });

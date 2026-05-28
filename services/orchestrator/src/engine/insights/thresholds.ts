@@ -16,6 +16,9 @@ export interface InsightThresholds {
   paceAnomalyMultiplier: number;
   paceAnomalyWindowDays: number;
   paceAnomalyMinSamples: number;
+  // review_stall (P3-0020). `stuck` needs no threshold — it is a pure
+  // graph-reachability check over current spec statuses.
+  reviewStallHours: number;
   // cache freshness
   cacheFreshnessMs: number;
 }
@@ -29,5 +32,6 @@ export const DEFAULT_THRESHOLDS: InsightThresholds = {
   paceAnomalyMultiplier: 2,
   paceAnomalyWindowDays: 30,
   paceAnomalyMinSamples: 3,
+  reviewStallHours: 48,
   cacheFreshnessMs: 60 * 60 * 1000
 };
