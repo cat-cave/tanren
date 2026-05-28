@@ -148,3 +148,60 @@ export const CostUnattributablePayload = z
     cachedInputTokens: z.number().int().optional()
   })
   .strict();
+
+// Usage monitoring (P2A-cost-monitors): codexbar (live subscription windows)
+// and ccusage (token-consumption accounting), captured in the runner over SSH.
+
+// One concurrent rolling subscription window, mirroring the codexbar shape.
+const SubscriptionWindowSummary = z
+  .object({
+    slot: z.enum(["primary", "secondary", "tertiary"]),
+    usedPercent: z.number(),
+    resetsAt: z.string(),
+    windowMinutes: z.number().int(),
+    resetDescription: z.string()
+  })
+  .strict();
+
+// usage.window.observed — the live subscription-window state for a provider.
+export const UsageWindowObservedPayload = z
+  .object({
+    provider: z.string(),
+    windows: z.array(SubscriptionWindowSummary),
+    creditsRemaining: z.number().nullable(),
+    source: z.string(),
+    capturedAt: z.string()
+  })
+  .strict();
+
+// usage.window.pressure — a window is at/over the configured pressure
+// threshold; carries the offending slot so the workflow can escalate.
+export const UsageWindowPressurePayload = z
+  .object({
+    provider: z.string(),
+    slot: z.enum(["primary", "secondary", "tertiary"]),
+    usedPercent: z.number(),
+    resetsAt: z.string()
+  })
+  .strict();
+
+// usage.accounting.observed — token-consumption accounting from ccusage. The
+// token buckets are disjoint (same convention as the cost schema); costUsd is
+// best-effort and null unless ccusage reports a positive figure.
+export const UsageAccountingObservedPayload = z
+  .object({
+    cli: z.string(),
+    totals: z
+      .object({
+        inputTokens: z.number().int(),
+        cachedInputTokens: z.number().int(),
+        cacheCreationTokens: z.number().int(),
+        outputTokens: z.number().int(),
+        reasoningOutputTokens: z.number().int(),
+        totalTokens: z.number().int()
+      })
+      .strict(),
+    costUsd: z.number().nullable(),
+    capturedAt: z.string()
+  })
+  .strict();

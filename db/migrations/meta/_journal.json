@@ -99,6 +99,13 @@
       "when": 1779938461081,
       "tag": "0013_token_type_accounting",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1779940533959,
+      "tag": "0014_bitter_angel",
+      "breakpoints": true
     }
   ]
 }

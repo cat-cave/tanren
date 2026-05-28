@@ -46,6 +46,12 @@ compose-build:
 runner-key:
   test -f /tmp/tanren_runner_key || ssh-keygen -t ed25519 -N "" -f /tmp/tanren_runner_key
 
+# Host-side sanity-check for the usage tools (codexbar live windows + ccusage
+# token accounting) against a real CODEX_HOME. In a real run these execute
+# runner-side over SSH; this recipe just lets an operator eyeball the tools.
+usage provider="codex" cli="codex" codex_home="":
+  scripts/usage/print-usage.sh {{provider}} {{cli}} {{codex_home}}
+
 # Dev profile: developer ergonomics. Static Vault root token, exposed
 # Postgres/runner SSH/orchestrator/dashboard/ntfy host ports, no required env.
 up-dev: runner-key

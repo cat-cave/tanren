@@ -35,6 +35,9 @@ import {
   RunnerAllocatedPayload,
   RunnerFailedPayload,
   RunnerReleasedPayload,
+  UsageAccountingObservedPayload,
+  UsageWindowObservedPayload,
+  UsageWindowPressurePayload,
   WorkspaceFailedPayload,
   WorkspaceGitCapturedPayload,
   WorkspacePreparedPayload
@@ -146,6 +149,12 @@ export const EventRegistry = {
   "cost.resolved": CostResolvedPayload,
   "cost.failed": CostFailedPayload,
   "cost.unattributable": CostUnattributablePayload,
+
+  // Usage monitoring (P2A-cost-monitors): codexbar live subscription windows
+  // + ccusage token-consumption accounting, captured runner-side over SSH.
+  "usage.window.observed": UsageWindowObservedPayload,
+  "usage.window.pressure": UsageWindowPressurePayload,
+  "usage.accounting.observed": UsageAccountingObservedPayload,
 
   // GitHub integration
   "github.branch.pushed": GithubBranchPushedPayload,
