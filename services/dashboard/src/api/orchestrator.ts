@@ -11,7 +11,21 @@
  */
 
 import type { DashboardSession } from "../auth/session.js";
-import type { OrgSummary, PaletteGroup, ProjectSummary } from "./types.js";
+import type {
+  BehaviorSummary,
+  ForgeAnswer,
+  InsightSummary,
+  MilestoneSummary,
+  OrgSummary,
+  PaletteGroup,
+  PersonaSummary,
+  ProjectConfig,
+  ProjectDetail,
+  ProjectFeedItem,
+  ProjectSummary,
+  RunListItem,
+  SpecSummary
+} from "./types.js";
 
 export interface OrchestratorClientDeps {
   orchestratorUrl: string;
@@ -97,6 +111,185 @@ export class OrchestratorClient {
       return undefined;
     }
     return response.json();
+  }
+
+  // -------------------------------------------------------------------------
+  // P2B-0003 reads — project view, spec creation, routing settings. Each call
+  // forwards the session cookie and degrades to an empty/undefined result on
+  // failure so a page never 500s when one panel's data source is unavailable.
+  // -------------------------------------------------------------------------
+
+  private async getJson<T>(path: string): Promise<T | undefined> {
+    const response = await this.fetchImpl(`${this.orchestratorUrl}${path}`, {
+      headers: this.headers()
+    }).catch(() => undefined);
+    if (response === undefined || !response.ok) {
+      return undefined;
+    }
+    return (await response.json().catch(() => undefined)) as T | undefined;
+  }
+
+  private async sendJson<T>(
+    method: "POST" | "PATCH",
+    path: string,
+    body: unknown
+  ): Promise<{ ok: boolean; status: number; body: T | undefined }> {
+    const response = await this.fetchImpl(`${this.orchestratorUrl}${path}`, {
+      method,
+      headers: this.headers({ "content-type": "application/json" }),
+      body: JSON.stringify(body)
+    }).catch(() => undefined);
+    if (response === undefined) {
+      return { ok: false, status: 0, body: undefined };
+    }
+    const json = (await response.json().catch(() => undefined)) as T | undefined;
+    return { ok: response.ok, status: response.status, body: json };
+  }
+
+  /** Runs for the project's attention queue + KPIs (P2A-0014). */
+  async listRuns(
+    orgId: string,
+    projectId: string,
+    query: { status?: string; specId?: string } = {}
+  ): Promise<RunListItem[]> {
+    const params = new URLSearchParams();
+    if (query.status !== undefined && query.status !== "") params.set("status", query.status);
+    if (query.specId !== undefined && query.specId !== "") params.set("specId", query.specId);
+    const qs = params.toString();
+    const json = await this.getJson<{ items?: RunListItem[] }>(
+      `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/runs${qs ? `?${qs}` : ""}`
+    );
+    return json?.items ?? [];
+  }
+
+  /** Project activity feed (P2A-0014). */
+  async listFeed(orgId: string, projectId: string): Promise<ProjectFeedItem[]> {
+    const json = await this.getJson<{ items?: ProjectFeedItem[] }>(
+      `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/feed`
+    );
+    return json?.items ?? [];
+  }
+
+  /** Workflow insights, filtered to the three v0-supported kinds (P2A-0020). */
+  async listInsights(orgId: string, projectId: string): Promise<InsightSummary[]> {
+    const json = await this.getJson<{ insights?: InsightSummary[] }>(
+      `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/insights`
+    );
+    const all = json?.insights ?? [];
+    const v0 = new Set(["retry_hotspot", "model_mismatch", "pace_anomaly"]);
+    return all.filter((insight) => v0.has(insight.kind) && insight.acknowledgedAt === null);
+  }
+
+  /** Project milestones for the velocity card + spec form (P2A-0018). */
+  async listMilestones(orgId: string, projectId: string): Promise<MilestoneSummary[]> {
+    const json = await this.getJson<{ milestones?: MilestoneSummary[] }>(
+      `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/milestones`
+    );
+    return json?.milestones ?? [];
+  }
+
+  /** Project specs (spec list + dependency picker, P2A-0013). */
+  async listSpecs(orgId: string, projectId: string): Promise<SpecSummary[]> {
+    const json = await this.getJson<{ specs?: SpecSummary[] }>(
+      `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/specs`
+    );
+    return json?.specs ?? [];
+  }
+
+  /** Project personas — needed to enumerate behaviors (P2A-0018). */
+  async listPersonas(orgId: string, projectId: string): Promise<PersonaSummary[]> {
+    const json = await this.getJson<{ personas?: PersonaSummary[] }>(
+      `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/personas`
+    );
+    return json?.personas ?? [];
+  }
+
+  /** Behaviors for a persona (the spec-form behavior picker, P2A-0018). */
+  async listBehaviors(
+    orgId: string,
+    projectId: string,
+    personaId: string
+  ): Promise<BehaviorSummary[]> {
+    const json = await this.getJson<{ behaviors?: BehaviorSummary[] }>(
+      `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/behaviors?personaId=${encodeURIComponent(personaId)}`
+    );
+    return json?.behaviors ?? [];
+  }
+
+  /** All project behaviors, gathered across personas (spec-form picker). */
+  async listAllBehaviors(orgId: string, projectId: string): Promise<BehaviorSummary[]> {
+    const personas = await this.listPersonas(orgId, projectId);
+    const lists = await Promise.all(
+      personas.map((persona) => this.listBehaviors(orgId, projectId, persona.id))
+    );
+    return lists.flat();
+  }
+
+  /** Full project incl. merged config (routing + escape hatches, P2A-0013). */
+  async getProject(orgId: string, projectId: string): Promise<ProjectDetail | undefined> {
+    return this.getJson<ProjectDetail>(
+      `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}`
+    );
+  }
+
+  /** Persist project config (routing/escape-hatches save flow, P2A-0013). */
+  async patchProjectConfig(
+    orgId: string,
+    projectId: string,
+    config: ProjectConfig
+  ): Promise<{ ok: boolean; status: number }> {
+    const result = await this.sendJson<unknown>(
+      "PATCH",
+      `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}`,
+      { config }
+    );
+    return { ok: result.ok, status: result.status };
+  }
+
+  /** Create a spec attached to the project (P2A-0013). */
+  async createSpec(
+    orgId: string,
+    projectId: string,
+    input: {
+      title: string;
+      description: string;
+      acceptanceCriteria: string[];
+      dependsOn?: string[];
+    }
+  ): Promise<{ ok: boolean; status: number; body: SpecSummary | undefined }> {
+    return this.sendJson<SpecSummary>(
+      "POST",
+      `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/specs`,
+      input
+    );
+  }
+
+  /**
+   * Best-effort Forge project-view narration (P2A-0019): create a project
+   * thread, generate the templated turn, and return its render payload. Any
+   * failure yields `undefined` so the project view degrades to the
+   * data-derived attention queue without the narration pulse line.
+   */
+  async generateProjectNarration(
+    orgId: string,
+    projectId: string,
+    budgetUsdPerWeek?: number
+  ): Promise<ForgeAnswer | undefined> {
+    const thread = await this.sendJson<{ id?: string }>(
+      "POST",
+      `/orgs/${encodeURIComponent(orgId)}/forge/threads`,
+      { scope: "project", projectId }
+    );
+    const threadId = thread.body?.id;
+    if (!thread.ok || threadId === undefined) {
+      return undefined;
+    }
+    const turn = await this.sendJson<{ render?: ForgeAnswer }>(
+      "POST",
+      `/orgs/${encodeURIComponent(orgId)}/forge/threads/${encodeURIComponent(threadId)}/turns/generate-project-view`,
+      budgetUsdPerWeek === undefined ? { projectId } : { projectId, budgetUsdPerWeek }
+    );
+    return turn.body?.render;
   }
 }
 
