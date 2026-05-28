@@ -10,7 +10,6 @@ import { PgRunnerStore, SidecarHttpAllocator, StaticRunnerAllocator } from "./en
 import type { Allocator } from "./engine/contracts/allocator.js";
 import { InMemorySecretStore, type SecretStore, VaultSecretStore } from "./engine/contracts/index.js";
 import { parseRawViewOptIn, redactEventRows } from "./routes/runs/redaction.js";
-import { storeCodexAuthBundle } from "./engine/credentials/codexAuth.js";
 import { storeGithubToken } from "./engine/credentials/githubToken.js";
 import { FetchGitHubHttpClient, type GitHubHttpClient } from "./engine/providers/github.js";
 import { GithubAppTokenMinter } from "./engine/providers/githubAppTokenMinter.js";
@@ -34,6 +33,7 @@ import { createAuthMiddleware, type ActorContextEnv } from "./middleware/auth.js
 import { createAuthRoutes } from "./routes/auth/index.js";
 import { createBehaviorRoutes } from "./routes/behaviors/index.js";
 import { createBrownfieldRoutes } from "./routes/brownfield/index.js";
+import { registerAuthBundleImportRoutes } from "./routes/credentials/authBundleImports.js";
 import { createCredentialRoutes, InMemoryCredentialRegistry, type CredentialRegistry } from "./routes/credentials/index.js";
 import { createDoctorRoutes } from "./routes/doctor/index.js";
 import { createForgeRoutes } from "./routes/forge/index.js";
@@ -73,11 +73,6 @@ const specInputSchema = z.object({
 const runInputSchema = z.object({
   trigger: z.enum(["cli", "dashboard", "api", "webhook"]).optional(),
   branch: z.string().min(1).optional()
-});
-
-const codexCredentialImportSchema = z.object({
-  ref: z.string().min(1),
-  authJson: z.string().min(1)
 });
 
 const githubCredentialImportSchema = z.object({
@@ -332,17 +327,8 @@ export function buildApp(input: {
     }
   });
 
-  app.post("/credentials/codex/import", async (c) => {
-    const parsed = codexCredentialImportSchema.safeParse(await c.req.json().catch(() => undefined));
-    if (!parsed.success) {
-      return c.json({ error: "invalid_codex_credential", issues: parsed.error.issues }, 400);
-    }
-    try {
-      return c.json(await storeCodexAuthBundle(secrets, parsed.data), 201);
-    } catch (error) {
-      return c.json({ error: "invalid_codex_credential", message: messageFromError(error) }, 400);
-    }
-  });
+  // Codex (Phase 1) + Claude/opencode (P3-0012) auth-bundle import routes.
+  registerAuthBundleImportRoutes(app, secrets);
 
   app.post("/credentials/github/import", async (c) => {
     const parsed = githubCredentialImportSchema.safeParse(await c.req.json().catch(() => undefined));
