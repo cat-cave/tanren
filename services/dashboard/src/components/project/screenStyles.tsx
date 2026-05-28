@@ -190,6 +190,11 @@ export const PROJECT_SCREEN_CSS = `
 .p2b .spec-row .st-halted { color:var(--status-fail,oklch(60% 0.18 25)); border-color:currentColor; }
 .p2b .spec-row .t { font-family:var(--font-ui); font-size:13px; color:var(--fg-1); }
 .p2b .spec-row .d { font-family:var(--font-mono); font-size:10px; color:var(--fg-3); }
+.p2b .spec-row-wrap { display:flex; align-items:stretch; gap:6px; margin-bottom:6px; }
+.p2b .spec-row-wrap .spec-row { flex:1 1 auto; margin-bottom:0; }
+.p2b .run-trigger { display:flex; align-items:center; }
+.p2b .run-trigger .btn { white-space:nowrap; }
+.p2b .row-error { font-family:var(--font-mono); font-size:11px; color:var(--status-fail,oklch(60% 0.18 25)); padding:6px 11px; border:1px solid var(--status-fail,oklch(60% 0.18 25)); border-radius:var(--r-1); margin:0 0 8px; }
 `;
 
 /**

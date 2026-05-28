@@ -60,6 +60,10 @@ SCREEN_MOUNTS.push(mountRunDetailScreens);
 import { mountHaltedRunScreens } from "../routes/runs/halted.js";
 SCREEN_MOUNTS.push(mountHaltedRunScreens);
 
+// P2B-0006: operator-triggered live run (POST /projects/:projectId/specs/:specId/run).
+import { mountTriggerScreens } from "../routes/runs/trigger/index.js";
+SCREEN_MOUNTS.push(mountTriggerScreens);
+
 /** Run every registered screen mount. Called BEFORE `mountShell`. */
 export function mountScreens(app: Hono, deps: ShellDeps): void {
   for (const mount of SCREEN_MOUNTS) {
