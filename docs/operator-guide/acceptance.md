@@ -1,10 +1,24 @@
 # Phase 2A Acceptance Gate
 
-`just acceptance` is the **executable Phase 2A release gate** owned by
-P2A-0015. It runs the easy and medium fixture repos through the real
-Tanren workflow end-to-end and asserts persisted outcome, PR URL, CI
-status, and cost attribution. The gate is **local-only** — it never runs
-in GitHub Actions because it calls real Codex CLIs and creates real draft
+> **Removed in P3-0001 (2026-05-28).** The direct-execution acceptance
+> drivers (`just acceptance`, `acceptance-easy`, `acceptance-medium`,
+> `scripts/acceptance/easy.ts`, `scripts/acceptance/medium.ts`) have been
+> **deleted**. The system is now only ever exercised through the real
+> dequeue→execute path: a dashboard/API-triggered run enqueues a `plan`
+> job and the **background run worker** (`TANREN_RUN_WORKER=1`, see
+> `services/orchestrator/src/engine/worker/`) claims and executes it. To
+> exercise a full run live, trigger it through the dashboard/API with the
+> worker enabled. The per-tier persisted-state **assertions** survive as
+> CI dry-run smokes (`services/orchestrator/tests/phase2Acceptance{Easy,Medium}.test.ts`,
+> backed by `scripts/acceptance/common.ts`). Component-level live smokes
+> (`just live-codex-*`, `live-github-*`, `live-ci-poll`, `live-phase1-fixture`)
+> remain. The rest of this document is retained for historical context.
+
+`just acceptance` was the **executable Phase 2A release gate** owned by
+P2A-0015. It ran the easy and medium fixture repos through the real
+Tanren workflow end-to-end and asserted persisted outcome, PR URL, CI
+status, and cost attribution. The gate was **local-only** — it never ran
+in GitHub Actions because it called real Codex CLIs and created real draft
 PRs against the fixture repos.
 
 ## Setup (once per machine)
