@@ -127,12 +127,13 @@ export const WriterCompletedPayload = z
   .object({
     diff: z.string(),
     commits: z.array(CommitSummary),
-    exitReason: z.enum(["completed", "timeout", "crashed", "token_limit"]),
+    exitReason: z.enum(["completed", "timeout", "crashed", "token_limit", "window_exhausted"]),
     tokenUsage: TokenUsageSummary.optional(),
     telemetry: z
       .object({
         rawEventCount: z.number().int(),
-        tokenUsage: TokenUsageSummary.optional()
+        tokenUsage: TokenUsageSummary.optional(),
+        usageLimit: z.object({ message: z.string() }).optional()
       })
       .optional(),
     // Phase 2 narration enrichments

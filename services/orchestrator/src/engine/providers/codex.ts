@@ -5,7 +5,7 @@ import { storeCodexAuthBundle } from "../credentials/codexAuth.js";
 import { materializeCodexAuthBundle } from "../credentials/codexMaterializer.js";
 import { quoteSshShellArg } from "../ssh/command.js";
 import { runWorkspaceSshCommand } from "../workspace/index.js";
-import type { AnswererAdapter, Commit, TokenUsage, WriterAdapter, WriterResult } from "./types.js";
+import type { AnswererAdapter, Commit, TokenUsage, UsageLimitSignal, WriterAdapter, WriterResult } from "./types.js";
 
 export interface CodexWriterDependencies {
   secrets: SecretStore;
@@ -19,6 +19,21 @@ export interface CodexWriterDependencies {
 export interface CodexEventTelemetry {
   rawEventCount: number;
   tokenUsage?: TokenUsage;
+  usageLimit?: UsageLimitSignal;
+}
+
+// Raised by the Answerer path when Codex authenticated but the account's
+// usage limit / subscription window is exhausted. Distinct from a generic
+// Codex failure so the workflow can escalate it as window pressure
+// (PROJECT_BRIEF §4.3) rather than treating it as a crash.
+export class CodexUsageLimitError extends Error {
+  constructor(
+    readonly schemaName: string,
+    readonly providerMessage: string
+  ) {
+    super(`Codex usage limit reached for schema ${schemaName}: ${providerMessage}`);
+    this.name = "CodexUsageLimitError";
+  }
 }
 
 export interface CodexAnswererDependencies extends CodexWriterDependencies {
@@ -71,6 +86,12 @@ export function createCodexWriter(dependencies: CodexWriterDependencies): Writer
       if (codex.timedOut) {
         return failedResult("timeout", telemetry, gitState);
       }
+      // Usage-limit exhaustion is an authenticated-but-out-of-quota state, not
+      // a crash. Surface it distinctly so the workflow escalates window
+      // pressure (PROJECT_BRIEF §4.3) instead of retrying a doomed call.
+      if (telemetry.usageLimit !== undefined) {
+        return failedResult("window_exhausted", telemetry, gitState);
+      }
       if (codex.failure !== undefined || codex.exitCode !== 0) {
         return failedResult("crashed", telemetry, gitState);
       }
@@ -120,6 +141,9 @@ export function createCodexAnswerer<TOutput>(dependencies: CodexAnswererDependen
       });
       if (result.timedOut) {
         throw new Error(`Codex Answerer timed out for schema ${opts.outputSchema.name}`);
+      }
+      if (telemetry.usageLimit !== undefined) {
+        throw new CodexUsageLimitError(opts.outputSchema.name, telemetry.usageLimit.message);
       }
       if (result.failure !== undefined || result.exitCode !== 0) {
         throw new Error(`Codex Answerer failed for schema ${opts.outputSchema.name}: exit ${result.exitCode ?? "unknown"}`);
@@ -198,14 +222,38 @@ export function buildCodexAnswererExecCommand(input: {
 export function parseCodexJsonlTelemetry(stdout: string): CodexEventTelemetry {
   const lines = stdout.split(/\r?\n/).filter((line) => line.trim() !== "");
   let tokenUsage: TokenUsage | undefined;
+  let usageLimit: UsageLimitSignal | undefined;
   for (const line of lines) {
     const parsed = parseJsonObject(line);
     if (parsed === undefined) {
       continue;
     }
     tokenUsage = findTokenUsage(parsed) ?? tokenUsage;
+    usageLimit = detectUsageLimit(parsed) ?? usageLimit;
   }
-  return { rawEventCount: lines.length, tokenUsage };
+  return { rawEventCount: lines.length, tokenUsage, usageLimit };
+}
+
+// detectUsageLimit recognizes the Codex JSONL events emitted when the account
+// hits its usage limit:
+//   {"type":"error","message":"You've hit your usage limit. ... try again at ..."}
+//   {"type":"turn.failed","error":{"message":"You've hit your usage limit. ..."}}
+// Matched on the stable "usage limit" phrase rather than the event type so a
+// minor CLI wording change in the error envelope still surfaces it.
+function detectUsageLimit(event: Record<string, unknown>): UsageLimitSignal | undefined {
+  const candidates: unknown[] = [event.message];
+  const errorField = event.error;
+  if (typeof errorField === "object" && errorField !== null && !Array.isArray(errorField)) {
+    candidates.push((errorField as Record<string, unknown>).message);
+  } else {
+    candidates.push(errorField);
+  }
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && /usage limit/i.test(candidate)) {
+      return { message: candidate };
+    }
+  }
+  return undefined;
 }
 
 export function parseStructuredAnswererOutput<TOutput>(
@@ -394,7 +442,7 @@ function parseGitLogCommits(stdout: string): Commit[] {
 }
 
 function failedResult(
-  exitReason: "timeout" | "crashed",
+  exitReason: "timeout" | "crashed" | "window_exhausted",
   telemetry: CodexEventTelemetry,
   gitState: Pick<WriterResult, "diff" | "commits">
 ): WriterResult {
