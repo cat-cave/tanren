@@ -11,48 +11,36 @@
  */
 
 import type { DashboardSession } from "../auth/session.js";
+import { OrchestratorHttpClient } from "./httpClient.js";
 import type {
   BehaviorSummary,
+  BrownfieldLinkResult,
+  CostRecord,
+  CreatedProject,
+  CredentialRecord,
+  CursorPage,
+  DoctorReport,
   ForgeAnswer,
   InsightSummary,
   MilestoneSummary,
+  NotificationMatrix,
+  NotificationRoute,
+  NotificationTarget,
   OrgSummary,
-  PaletteGroup,
   PersonaSummary,
   ProjectConfig,
   ProjectDetail,
   ProjectFeedItem,
   ProjectSummary,
+  RunDetail,
   RunListItem,
+  RunLocation,
   SpecSummary
 } from "./types.js";
 
-export interface OrchestratorClientDeps {
-  orchestratorUrl: string;
-  /** Inbound dashboard request cookie header, forwarded for session auth. */
-  cookieHeader?: string;
-  fetchImpl?: typeof fetch;
-}
+export type { OrchestratorClientDeps } from "./httpClient.js";
 
-export class OrchestratorClient {
-  private readonly orchestratorUrl: string;
-  private readonly cookieHeader: string | undefined;
-  private readonly fetchImpl: typeof fetch;
-
-  constructor(deps: OrchestratorClientDeps) {
-    this.orchestratorUrl = deps.orchestratorUrl;
-    this.cookieHeader = deps.cookieHeader;
-    this.fetchImpl = deps.fetchImpl ?? fetch;
-  }
-
-  private headers(extra?: Record<string, string>): Record<string, string> {
-    const base: Record<string, string> = { Accept: "application/json", ...extra };
-    if (this.cookieHeader !== undefined && this.cookieHeader !== "") {
-      base.cookie = this.cookieHeader;
-    }
-    return base;
-  }
-
+export class OrchestratorClient extends OrchestratorHttpClient {
   /** Resolve the current session via `/auth/me`. `undefined` when unauthenticated. */
   async session(): Promise<DashboardSession | undefined> {
     const response = await this.fetchImpl(`${this.orchestratorUrl}/auth/me`, {
@@ -90,6 +78,41 @@ export class OrchestratorClient {
   }
 
   /**
+   * All cost records for a run (`GET .../runs/:runId/costs`, P2A-0011), walking
+   * the cursor pages so the costs dashboard sees the full set. Capped at
+   * `maxPages` so a runaway cursor can never spin forever. Empty on failure.
+   */
+  async listRunCosts(
+    orgId: string,
+    projectId: string,
+    runId: string,
+    opts: { maxPages?: number } = {}
+  ): Promise<CostRecord[]> {
+    const maxPages = opts.maxPages ?? 20;
+    const base = `${this.orchestratorUrl}/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(
+      projectId
+    )}/runs/${encodeURIComponent(runId)}/costs`;
+    const all: CostRecord[] = [];
+    let cursor: string | null = null;
+    for (let page = 0; page < maxPages; page += 1) {
+      const url = cursor === null ? base : `${base}?cursor=${encodeURIComponent(cursor)}`;
+      const response = await this.fetchImpl(url, { headers: this.headers() }).catch(() => undefined);
+      if (response === undefined || !response.ok) {
+        break;
+      }
+      const json = (await response.json()) as Partial<CursorPage<CostRecord>>;
+      for (const item of json.items ?? []) {
+        all.push(item);
+      }
+      cursor = json.nextCursor ?? null;
+      if (cursor === null) {
+        break;
+      }
+    }
+    return all;
+  }
+
+  /**
    * Invoke a Forge write tool (operator-button action) via
    * `POST /orgs/:orgId/forge/tools`. Returns the raw `{ tool, result }` body or
    * `undefined` on failure (the caller decides how to surface it).
@@ -113,38 +136,9 @@ export class OrchestratorClient {
     return response.json();
   }
 
-  // -------------------------------------------------------------------------
-  // P2B-0003 reads — project view, spec creation, routing settings. Each call
-  // forwards the session cookie and degrades to an empty/undefined result on
-  // failure so a page never 500s when one panel's data source is unavailable.
-  // -------------------------------------------------------------------------
-
-  private async getJson<T>(path: string): Promise<T | undefined> {
-    const response = await this.fetchImpl(`${this.orchestratorUrl}${path}`, {
-      headers: this.headers()
-    }).catch(() => undefined);
-    if (response === undefined || !response.ok) {
-      return undefined;
-    }
-    return (await response.json().catch(() => undefined)) as T | undefined;
-  }
-
-  private async sendJson<T>(
-    method: "POST" | "PATCH",
-    path: string,
-    body: unknown
-  ): Promise<{ ok: boolean; status: number; body: T | undefined }> {
-    const response = await this.fetchImpl(`${this.orchestratorUrl}${path}`, {
-      method,
-      headers: this.headers({ "content-type": "application/json" }),
-      body: JSON.stringify(body)
-    }).catch(() => undefined);
-    if (response === undefined) {
-      return { ok: false, status: 0, body: undefined };
-    }
-    const json = (await response.json().catch(() => undefined)) as T | undefined;
-    return { ok: response.ok, status: response.status, body: json };
-  }
+  // Product reads/writes below use the shared `getJson`/`sendJson` helpers from
+  // `OrchestratorHttpClient`; each forwards the session cookie and degrades to
+  // an empty/undefined result so a page never 500s when a data source is down.
 
   /** Runs for the project's attention queue + KPIs (P2A-0014). */
   async listRuns(
@@ -291,73 +285,169 @@ export class OrchestratorClient {
     );
     return turn.body?.render;
   }
-}
 
-/**
- * Build the v0 palette groups for an org's project context. These are the
- * templated suggestions described in the spec — quick actions (read routes),
- * forge-this write suggestions (operator-button tools), and ask-forge prompts.
- * Thick-LLM palette responses are Phase 3; this surface is deliberately static.
- *
- * Read actions carry `route`; write actions carry a `tool` id declared in the
- * P2A-0019 Forge tool surface so the palette can never invoke an undeclared
- * tool. Projects are passed in so quick actions can deep-link the live project.
- */
-export function buildPaletteGroups(input: {
-  orgLogin: string;
-  projects: ProjectSummary[];
-}): PaletteGroup[] {
-  const firstProject = input.projects[0];
-  const quickActions: PaletteGroup = {
-    group: "quick actions",
-    items: [
-      {
-        glyph: "+",
-        title: "new spec",
-        desc: "describe work · tanren plans & forges",
-        route: firstProject ? `/projects/${firstProject.projectId}/specs/new` : "/onboarding/new"
-      },
-      {
-        glyph: "→",
-        title: firstProject ? `go to ${firstProject.name}` : "go to a project",
-        desc: firstProject ? firstProject.repoUrl : "no projects yet · onboard one",
-        route: firstProject ? `/projects/${firstProject.projectId}` : "/onboarding/existing"
-      },
-      {
-        glyph: "↻",
-        title: "review halted runs",
-        desc: "runs that hit an escape hatch",
-        route: firstProject ? `/projects/${firstProject.projectId}/runs/halted` : "/projects"
+  // ── P2B-0002 onboarding / credentials / notifications ──────────────────
+
+  /** Stack-health report (P2A-0013 `/doctor`). `undefined` when unreachable. */
+  async doctor(): Promise<DoctorReport | undefined> {
+    return this.getJson<DoctorReport>("/doctor");
+  }
+
+  /** Org-scoped credential references (P2A-0013). Never returns values. */
+  async listOrgCredentials(orgId: string): Promise<CredentialRecord[]> {
+    const json = await this.getJson<{ credentials?: CredentialRecord[] }>(
+      `/orgs/${encodeURIComponent(orgId)}/credentials`
+    );
+    return json?.credentials ?? [];
+  }
+
+  /** Personal credential references (P2A-0013). Never returns values. */
+  async listMyCredentials(): Promise<CredentialRecord[]> {
+    const json = await this.getJson<{ credentials?: CredentialRecord[] }>("/credentials/me");
+    return json?.credentials ?? [];
+  }
+
+  /** Import a credential (write-only). `kind` selects the typed import path. */
+  async importCredential(input: {
+    scope: "org" | "me";
+    orgId?: string;
+    kind: string;
+    body: Record<string, unknown>;
+  }): Promise<{ ok: boolean; status: number; body: unknown }> {
+    const base =
+      input.scope === "org"
+        ? `/orgs/${encodeURIComponent(input.orgId ?? "")}/credentials`
+        : "/credentials/me";
+    return this.sendJson("POST", `${base}?kind=${encodeURIComponent(input.kind)}`, input.body);
+  }
+
+  /** Delete an org-scoped credential reference (P2A-0013). */
+  async deleteOrgCredential(orgId: string, ref: string): Promise<boolean> {
+    const result = await this.sendJson(
+      "DELETE",
+      `/orgs/${encodeURIComponent(orgId)}/credentials/${encodeURIComponent(ref)}`
+    );
+    return result.ok;
+  }
+
+  /** Create a project row (P2A-0013, non-brownfield create path). */
+  async createProject(
+    orgId: string,
+    body: Record<string, unknown>
+  ): Promise<CreatedProject | undefined> {
+    const result = await this.sendJson("POST", `/orgs/${encodeURIComponent(orgId)}/projects`, body);
+    if (!result.ok) return undefined;
+    return result.body as CreatedProject;
+  }
+
+  /**
+   * Link a target repo (P2A-0013 brownfield). Reads `.github/workflows/`,
+   * `.mergify.yml`, `CODEOWNERS` for display; WRITES NOTHING to the target.
+   */
+  async brownfieldLink(
+    orgId: string,
+    projectId: string,
+    body: Record<string, unknown>
+  ): Promise<{ ok: boolean; status: number; result?: BrownfieldLinkResult; error?: string }> {
+    const result = await this.sendJson(
+      "POST",
+      `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/link`,
+      body
+    );
+    if (!result.ok) {
+      const errBody = result.body as { error?: string; message?: string } | undefined;
+      return { ok: false, status: result.status, error: errBody?.message ?? errBody?.error };
+    }
+    return { ok: true, status: result.status, result: result.body as BrownfieldLinkResult };
+  }
+
+  /** The full notifications matrix for an org (P2A-0017). Empty on failure. */
+  async notificationMatrix(orgId: string): Promise<NotificationMatrix> {
+    const json = await this.getJson<NotificationMatrix>(
+      `/orgs/${encodeURIComponent(orgId)}/notifications/matrix`
+    );
+    return json ?? { targets: [], routes: [], events: [] };
+  }
+
+  /** Create a notification target (P2A-0017). */
+  async createNotificationTarget(
+    orgId: string,
+    body: Record<string, unknown>
+  ): Promise<NotificationTarget | undefined> {
+    const result = await this.sendJson(
+      "POST",
+      `/orgs/${encodeURIComponent(orgId)}/notifications/targets`,
+      body
+    );
+    if (!result.ok) return undefined;
+    return result.body as NotificationTarget;
+  }
+
+  /** Create/replace a notification route opt-in (P2A-0017). */
+  async createNotificationRoute(
+    orgId: string,
+    body: Record<string, unknown>
+  ): Promise<NotificationRoute | undefined> {
+    const result = await this.sendJson(
+      "POST",
+      `/orgs/${encodeURIComponent(orgId)}/notifications/routes`,
+      body
+    );
+    if (!result.ok) return undefined;
+    return result.body as NotificationRoute;
+  }
+
+  // ── P2B-0004 run-detail / review / SSE ─────────────────────────────────
+  // The dashboard route is `/runs/:runId` (the spec permits deriving
+  // org/project from the run); the orchestrator API is org+project-scoped, so
+  // we resolve the run's location by scanning the operator's orgs + projects
+  // for a matching run, then fetch the snapshot.
+  // -------------------------------------------------------------------------
+
+  /**
+   * Resolve which org+project a run belongs to by scanning the operator's
+   * orgs and their projects. `undefined` when the run is not visible. The
+   * snapshot endpoint enforces the real authz boundary; this is just routing.
+   */
+  async findRunLocation(runId: string): Promise<RunLocation | undefined> {
+    const orgs = await this.listOrgs();
+    for (const org of orgs) {
+      const projects = await this.listProjects(org.id);
+      for (const project of projects) {
+        const runs = await this.listRuns(org.id, project.projectId);
+        if (runs.some((run) => run.runId === runId)) {
+          return { orgId: org.id, projectId: project.projectId };
+        }
       }
-    ]
-  };
-  const forgeThis: PaletteGroup = {
-    group: "forge this",
-    items: [
-      {
-        glyph: "鍛",
-        kanji: true,
-        title: "draft a spec from rough notes",
-        desc: "i'll plan & dependency-rank it",
-        tool: "tanren.create_spec",
-        args: firstProject ? { projectId: firstProject.projectId } : {}
-      },
-      {
-        glyph: "鍛",
-        kanji: true,
-        title: "acknowledge a suboptimal callout",
-        desc: "clear an open insight",
-        tool: "tanren.acknowledge_insight",
-        args: {}
-      }
-    ]
-  };
-  const askForge: PaletteGroup = {
-    group: "ask forge",
-    items: [
-      { glyph: "?", title: "what's blocking my milestones?", desc: "natural-language query", route: "/overview" },
-      { glyph: "?", title: "how are my costs trending?", desc: "this week vs last", route: "/costs" }
-    ]
-  };
-  return [quickActions, forgeThis, askForge];
+    }
+    return undefined;
+  }
+
+  /**
+   * Fetch the full run-detail snapshot. `rawView` opts into unredacted
+   * payloads via `?raw=true` (the orchestrator emits the P2A-0009 audit
+   * trail); the dashboard only sets it for admins. `undefined` when the run
+   * is missing or access is denied.
+   */
+  async getRunDetail(
+    loc: RunLocation,
+    runId: string,
+    opts: { rawView?: boolean } = {}
+  ): Promise<RunDetail | undefined> {
+    const query = opts.rawView === true ? "?raw=true" : "";
+    const response = await this.fetchImpl(
+      `${this.orchestratorUrl}/orgs/${encodeURIComponent(loc.orgId)}/projects/${encodeURIComponent(loc.projectId)}/runs/${encodeURIComponent(runId)}${query}`,
+      { headers: this.headers(opts.rawView === true ? { "x-view-raw": "true" } : undefined) }
+    ).catch(() => undefined);
+    if (response === undefined || !response.ok) {
+      return undefined;
+    }
+    return (await response.json()) as RunDetail;
+  }
+
+  /** Build the SSE stream URL for the run's live feed (consumed by the client island). */
+  streamUrl(loc: RunLocation, runId: string, opts: { rawView?: boolean } = {}): string {
+    const query = opts.rawView === true ? "?raw=true" : "";
+    return `${this.orchestratorUrl}/orgs/${encodeURIComponent(loc.orgId)}/projects/${encodeURIComponent(loc.projectId)}/runs/${encodeURIComponent(runId)}/stream${query}`;
+  }
 }
