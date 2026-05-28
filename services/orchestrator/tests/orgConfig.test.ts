@@ -74,6 +74,31 @@ describe("OrgConfigV1 parser", () => {
     expect(() => migrateOrgConfig({ version: 1, allocator: { kind: "hetzner" } })).toThrow(/.+/);
   });
 
+  it("omits defaultCredentials on a legacy row (backward compatible)", () => {
+    expect(migrateOrgConfig({}).defaultCredentials).toBeUndefined();
+  });
+
+  it("parses per-kind default credential refs and round-trips them", () => {
+    const cfg = migrateOrgConfig({
+      version: 1,
+      defaultCredentials: {
+        codex_chatgpt_auth: "credential/codex/org/o/default",
+        github_token: "credential/github/org/o/default"
+      }
+    });
+    expect(cfg.defaultCredentials).toEqual({
+      codex_chatgpt_auth: "credential/codex/org/o/default",
+      github_token: "credential/github/org/o/default"
+    });
+    expect(migrateOrgConfig(cfg)).toEqual(cfg);
+  });
+
+  it("rejects unknown keys inside defaultCredentials", () => {
+    expect(() =>
+      migrateOrgConfig({ version: 1, defaultCredentials: { gitlab_token: "x" } })
+    ).toThrow(/.+/);
+  });
+
   it("is idempotent on a V1-shaped input", () => {
     const first = migrateOrgConfig({});
     const second = migrateOrgConfig(first);

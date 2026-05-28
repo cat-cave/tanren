@@ -222,6 +222,31 @@ describe("credentials", () => {
     expect(state.credentialImports).toHaveLength(1);
     expect(state.credentialImports[0]?.url).toContain("kind=codex_chatgpt_auth");
   });
+
+  it("renders the github token import form (write-only) in the org column", async () => {
+    mockOrchestrator();
+    const app = await build();
+    const html = await (await app.request("/onboarding/credentials")).text();
+    expect(html).toContain("import github token");
+    expect(html).toContain('action="/onboarding/credentials/github"');
+  });
+
+  it("github import POST forwards the token org-scoped + write-only", async () => {
+    const state = mockOrchestrator();
+    const app = await build();
+    const res = await app.request("/onboarding/credentials/github", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: "label=tanren-bot&token=ghp_secret"
+    });
+    expect(res.status).toBe(303);
+    expect(state.credentialImports).toHaveLength(1);
+    expect(state.credentialImports[0]?.url).toContain("kind=github_token");
+    expect(state.credentialImports[0]?.url).toContain("/orgs/org_acme/credentials");
+    const body = state.credentialImports[0]?.body as { ref: string; token: string };
+    expect(body.ref).toBe("credential/github/org/org_acme/tanren-bot");
+    expect(body.token).toBe("ghp_secret");
+  });
 });
 
 describe("existing-project minimal link flow", () => {

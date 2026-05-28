@@ -17,6 +17,16 @@ import {
 // top of the org-level defaults; the routing table is a full table at the
 // project layer because the operator UI renders the merged view per role.
 
+// P3-0002: a project's bound credential references. Both fields are optional;
+// a project may bind only one kind and inherit the other from the org default.
+export const ProjectCredentialRefs = z
+  .object({
+    codexCredentialRef: z.string().min(1).optional(),
+    githubCredentialRef: z.string().min(1).optional()
+  })
+  .strict();
+export type ProjectCredentialRefs = z.infer<typeof ProjectCredentialRefs>;
+
 export const ProjectConfigV1 = z
   .object({
     version: z.literal(1),
@@ -30,7 +40,13 @@ export const ProjectConfigV1 = z
     notificationTargets: z.array(NotificationTargetRef).default([]),
     forgePersona: PartialForgePersona.default({}),
     governancePosture: GovernancePosture.default("strict"),
-    mergeIntegration: MergeIntegration.default("not_configured")
+    mergeIntegration: MergeIntegration.default("not_configured"),
+    // P3-0002: optional credential refs the run executor resolves before a run.
+    // Backward-compatible — legacy rows carry no `credentials` key and parse to
+    // an absent field (the resolver then falls back to the org defaults).
+    // Refs are the P2A-0013 managed namespace (`credential/<kind>/<scope>/...`),
+    // not vault:// URIs.
+    credentials: ProjectCredentialRefs.optional()
   })
   .strict();
 export type ProjectConfigV1 = z.infer<typeof ProjectConfigV1>;

@@ -105,6 +105,27 @@ export function CredentialsBody(props: CredentialsBodyProps) {
               </button>
             </div>
           </form>
+
+          <div class="section-label" style="margin-top:4px">
+            ▮ github tokens · {props.orgCredentials.filter((c) => c.kind === "github_token").length}
+          </div>
+          <form class="col-card live" method="post" action="/onboarding/credentials/github" style="gap:8px;padding:12px">
+            <div class="h">+ import github token</div>
+            <Field name="label" label="label" placeholder='e.g. "tanren-bot"' required />
+            <Field
+              name="token"
+              label="token"
+              type="password"
+              placeholder="ghp_… / github_pat_… (encrypted to vault, write-only)"
+              hint="used to publish draft PRs + poll CI · bind it to a project under settings"
+              required
+            />
+            <div style="display:flex;margin-top:4px">
+              <button type="submit" class="btn primary" style="margin-left:auto">
+                save token
+              </button>
+            </div>
+          </form>
         </div>
 
         {/* ── dev · {user} ────────────────────────────────────────────── */}
