@@ -8,6 +8,11 @@ export default defineConfig({
     }
   },
   test: {
-    reporters: ["default", new MergifyReporter()]
+    reporters: ["default", new MergifyReporter()],
+    // P2A-0015: the fixture content under fixtures/acceptance-medium/ is
+    // pushed verbatim to the operator-pre-created GitHub repo by the
+    // medium acceptance gate. The placeholder vitest test there is meant
+    // to run inside the fixture repo's CI, not in the Tanren repo's CI.
+    exclude: ["**/node_modules/**", "**/dist/**", "fixtures/**"]
   }
 });
