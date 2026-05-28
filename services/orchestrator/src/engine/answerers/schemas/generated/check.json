@@ -3,6 +3,7 @@
   "additionalProperties": false,
   "properties": {
     "behaviorIdsFailed": {
+      "description": "Behavior ids whose intent the diff does not satisfy.",
       "items": {
         "minLength": 1,
         "type": "string"
@@ -10,6 +11,7 @@
       "type": "array"
     },
     "behaviorIdsPassed": {
+      "description": "Behavior ids whose intent the diff satisfies.",
       "items": {
         "minLength": 1,
         "type": "string"
@@ -17,9 +19,11 @@
       "type": "array"
     },
     "passed": {
+      "description": "Overall intent verdict: true only when the subtask intent and every relevant acceptance criterion are satisfied by the diff. Never reflects test/build/lint outcomes.",
       "type": "boolean"
     },
     "reasoning": {
+      "description": "Per-criterion rationale: cite each acceptance criterion / behavior and state whether the diff satisfies its intent. Do not assert or speculate about test/build/lint results.",
       "minLength": 1,
       "type": "string"
     }

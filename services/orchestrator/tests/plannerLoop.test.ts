@@ -4,7 +4,7 @@
 import { describe, expect, it } from "vitest";
 import { runSubtaskLoop } from "../src/engine/workflow/subtaskLoop.js";
 import { decideAuditorOutcome } from "../src/engine/workflow/auditor/auditor.js";
-import { decideCheckerOutcome } from "../src/engine/workflow/checker/checker.js";
+import { buildCheckerPrompt, decideCheckerOutcome } from "../src/engine/workflow/checker/checker.js";
 import { buildPlannerPrompt } from "../src/engine/workflow/planner/planner.js";
 import {
   buildPlan,
@@ -244,6 +244,56 @@ describe("planner prompt + verdict decisions (pure)", () => {
       kind: "reject",
       reason: failingCheck.reasoning,
       behaviorIdsFailed: failingCheck.behaviorIdsFailed
+    });
+  });
+
+  // P3-0007: the checker is reframed to judge intent satisfaction only. The
+  // prompt must forbid running/asserting tests/build/lint (a separate
+  // deterministic gate owns correctness) and must require per-criterion
+  // citation against the spec's explicit acceptance criteria.
+  it("buildCheckerPrompt judges intent only and forbids running/asserting tests", () => {
+    const prompt = buildCheckerPrompt({
+      specTitle: "Spec",
+      specDescription: "Do the thing.",
+      acceptanceCriteria: ["AC1: file exists", "AC2: behavior wired"],
+      subtask: {
+        index: 0,
+        title: "T1",
+        intent: "wire the behavior",
+        behaviorIds: ["B1"],
+        estimatedTokens: null
+      },
+      writerDiff: "diff --git a/x b/x\n"
+    });
+    // Intent-only framing + explicit criteria are present.
+    expect(prompt).toContain("intent");
+    expect(prompt).toContain("Explicit acceptance criteria");
+    expect(prompt).toContain("AC1: file exists");
+    expect(prompt).toContain("AC2: behavior wired");
+    // Forbids running, simulating, or asserting tests/build/lint, and defers
+    // correctness to a separate deterministic gate.
+    expect(prompt).toMatch(/Do NOT run, simulate, invoke, or shell out to tests/);
+    expect(prompt).toMatch(/Do NOT assert, claim, predict, or report whether tests/);
+    expect(prompt).toMatch(/separate .*deterministic gate/i);
+    // Requires citing each criterion in the rationale.
+    expect(prompt).toMatch(/cite each acceptance criterion/i);
+    // Still forbids workspace mutation.
+    expect(prompt).toContain("Do NOT edit files");
+  });
+
+  it("an unmet acceptance criterion routes the checker verdict to rework", () => {
+    // A verdict with passed=false (a criterion's intent is unmet) must drive
+    // the reject/re-plan branch the loop consumes, unchanged by the reframe.
+    const unmet: typeof failingCheck = {
+      passed: false,
+      reasoning: "AC2 intent not satisfied: behavior B1 was never wired.",
+      behaviorIdsPassed: [],
+      behaviorIdsFailed: ["B1"]
+    };
+    expect(decideCheckerOutcome(unmet)).toEqual({
+      kind: "reject",
+      reason: unmet.reasoning,
+      behaviorIdsFailed: ["B1"]
     });
   });
 
