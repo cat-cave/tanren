@@ -7,10 +7,10 @@ import { z } from "zod";
 import { OrchestratorClient } from "./api/orchestrator.js";
 import { mountShell, type ShellDeps } from "./app/mountShell.js";
 import { mountScreens } from "./app/screens.js";
-import { loginUrl, useSession } from "./auth/index.js";
+import { devLoginEnabled, loginUrl, useSession } from "./auth/index.js";
 
 /** Public, unauthenticated paths (never gated by the auth middleware). */
-const PUBLIC_PATHS = new Set(["/healthz", "/auth/login"]);
+const PUBLIC_PATHS = new Set(["/healthz", "/auth/login", "/signin"]);
 
 /** Body for the dashboard's forge-tools proxy (operator-button write actions). */
 const ForgeToolProxyBody = z.object({
@@ -62,12 +62,54 @@ export async function createApp(options: CreateAppOptions = {}) {
     }
     const session = await useSession(c.req.header("cookie"), { orchestratorUrl });
     if (session === undefined) {
+      // DEV-ONLY: when the escape hatch is on, send unauthenticated operators to
+      // a visible sign-in page with a one-click "sign in (dev)" button instead of
+      // bouncing straight through. github_oauth behavior (flag off) is unchanged.
+      if (devLoginEnabled()) {
+        return c.redirect(`/signin?next=${encodeURIComponent(c.req.path)}`);
+      }
       return c.redirect(`/auth/login?next=${encodeURIComponent(c.req.path)}`);
     }
     return next();
   });
 
   app.get("/auth/login", (c) => c.redirect(loginUrl(orchestratorUrl, c.req.query("next") ?? "/")));
+
+  // DEV-ONLY sign-in landing: a visible one-click affordance that drives the
+  // orchestrator's local_dev provider (through /auth/login). Only reachable when
+  // TANREN_DEV_LOGIN=1 — otherwise it 404s and operators use github_oauth.
+  app.get("/signin", (c) => {
+    if (!devLoginEnabled()) {
+      return c.notFound();
+    }
+    const next = c.req.query("next") ?? "/";
+    const href = `/auth/login?next=${encodeURIComponent(next)}`;
+    return c.html(
+      <html lang="en" data-theme="dark">
+        <head>
+          <meta charset="utf-8" />
+          <meta name="viewport" content="width=device-width, initial-scale=1" />
+          <title>tanren · sign in (dev)</title>
+          <link rel="stylesheet" href="/static/tokens.css" />
+          <link rel="stylesheet" href="/static/shell.css" />
+        </head>
+        <body>
+          <main class="main" style="display:grid;place-items:center;min-height:100vh">
+            <section class="placeholder-card" style="text-align:center;max-width:32rem">
+              <div class="eyebrow">dev login</div>
+              <h1 class="page-title">tanren</h1>
+              <p>Dev sign-in escape hatch is enabled. No GitHub OAuth app required.</p>
+              <p>
+                <a class="forge-key" href={href} data-testid="dev-signin">
+                  sign in (dev)
+                </a>
+              </p>
+            </section>
+          </main>
+        </body>
+      </html>
+    );
+  });
 
   // Operator-button write-action proxy: the palette POSTs here, we forward the
   // cookie to the orchestrator Forge tool surface (keeps the orchestrator URL

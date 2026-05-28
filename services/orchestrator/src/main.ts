@@ -5,7 +5,7 @@ import { Hono } from "hono";
 import type pg from "pg";
 import { z } from "zod";
 import type { ActorContext, IdentityProviderId } from "./auth/index.js";
-import { GitHubOAuthProvider, IdentityStore, type IdentityProvider } from "./auth/index.js";
+import { createDevLoginProvider, GitHubOAuthProvider, IdentityStore, type IdentityProvider } from "./auth/index.js";
 import { PgRunnerStore, SidecarHttpAllocator, StaticRunnerAllocator } from "./engine/allocators/index.js";
 import type { Allocator } from "./engine/contracts/allocator.js";
 import { InMemorySecretStore, type SecretStore, VaultSecretStore } from "./engine/contracts/index.js";
@@ -156,13 +156,29 @@ export interface BuildAppAuthOptions {
   localDevActor?: ActorContext;
 }
 
-function buildAuthFromEnv(pool: pg.Pool): BuildAppAuthOptions | undefined {
+export function buildAuthFromEnv(pool: pg.Pool): BuildAppAuthOptions | undefined {
   const clientId = process.env.TANREN_GITHUB_OAUTH_CLIENT_ID;
   const clientSecret = process.env.TANREN_GITHUB_OAUTH_CLIENT_SECRET;
   const publicBaseUrl = process.env.TANREN_PUBLIC_BASE_URL ?? `http://localhost:${port}`;
   const providers = new Map<IdentityProviderId, IdentityProvider>();
   if (clientId !== undefined && clientId !== "" && clientSecret !== undefined && clientSecret !== "") {
     providers.set("github_oauth", new GitHubOAuthProvider({ clientId, clientSecret }));
+  }
+  // DEV-ONLY escape hatch. Opt-in via TANREN_DEV_LOGIN=1 (set only in
+  // compose.dev.yml — compose.prod.yml MUST never set it). When enabled it
+  // registers a LocalDevProvider so `/auth/login?provider=local_dev` mints a
+  // real session against the synthetic dev org, unblocking manual UI testing
+  // without a registered GitHub OAuth app. Defaults off → byte-for-byte
+  // unchanged behavior. Refused (with a loud warning, flag ignored) under a
+  // prod-like cookie-secure context as a defense-in-depth guard.
+  if (process.env.TANREN_DEV_LOGIN === "1") {
+    if (process.env.TANREN_COOKIE_SECURE === "1") {
+      console.warn(
+        "[auth] TANREN_DEV_LOGIN=1 ignored: refusing dev-login escape hatch under TANREN_COOKIE_SECURE=1 (prod-like context)"
+      );
+    } else {
+      providers.set("local_dev", createDevLoginProvider());
+    }
   }
   if (providers.size === 0) {
     return undefined;

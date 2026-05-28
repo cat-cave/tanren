@@ -32,7 +32,18 @@ export async function useSession(
   return json;
 }
 
+/**
+ * True when the DEV-ONLY sign-in escape hatch is enabled (TANREN_DEV_LOGIN=1).
+ * Only ever set in compose.dev.yml; compose.prod.yml MUST never set it. When on,
+ * the dashboard drives the orchestrator's `local_dev` provider so an operator can
+ * land authenticated without a registered GitHub OAuth app.
+ */
+export function devLoginEnabled(): boolean {
+  return process.env.TANREN_DEV_LOGIN === "1";
+}
+
 export function loginUrl(orchestratorUrl: string, next: string = "/"): string {
-  const params = new URLSearchParams({ provider: "github_oauth", next });
+  const provider = devLoginEnabled() ? "local_dev" : "github_oauth";
+  const params = new URLSearchParams({ provider, next });
   return `${orchestratorUrl}/auth/login?${params.toString()}`;
 }
