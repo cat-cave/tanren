@@ -16,6 +16,9 @@ export default defineConfig({
     // `.claude/**` excludes Claude Code agent worktrees, which are full
     // checkouts of the repo and would otherwise be discovered (and re-run)
     // by vitest during local development.
-    exclude: ["**/node_modules/**", "**/dist/**", "fixtures/**", ".claude/**"]
+    // `**/tests/e2e/**` excludes the dashboard's LOCAL-ONLY Playwright smoke
+    // (P2B-0001): it imports `@playwright/test` (not a CI dependency) and is run
+    // manually via `pnpm test:e2e`, never through the unit `vitest run` gate.
+    exclude: ["**/node_modules/**", "**/dist/**", "fixtures/**", ".claude/**", "**/tests/e2e/**"]
   }
 });

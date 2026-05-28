@@ -4,15 +4,21 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && pnpm run build:client",
+    "build:client": "node scripts/build-client.mjs",
     "dev": "tsx src/main.tsx",
     "start": "node dist/main.js",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.client.json",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.8",
     "@tanren/db": "workspace:*",
     "hono": "^4.12.0",
-    "pg": "^8.13.1"
+    "pg": "^8.13.1",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.0"
   }
 }
