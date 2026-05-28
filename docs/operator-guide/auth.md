@@ -29,7 +29,7 @@ v0 ships three implementations:
 
 - `GitHubOAuthProvider` — the production identity provider. Calls `https://github.com/login/oauth/access_token`, then `/user`, `/user/emails`, and `/user/orgs` on `api.github.com` to assemble identity claims. Org claims become `organizations` rows; user claims become a `users` row.
 - `OidcProvider` — stub. Wires through `IdentityProvider.id === "oidc"` and exists so the interface is exercised. The production OIDC provider (Authentik first) is not wired in v0.
-- `LocalDevProvider` — returns a fixed identity. Used in tests and explicit dev mode only. Never enabled by default.
+- `LocalDevProvider` — returns a fixed identity. Used in tests and the opt-in dev-login escape hatch (`TANREN_DEV_LOGIN=1`, see below). Never enabled by default and never in prod.
 
 ## Browser flow
 
@@ -38,6 +38,31 @@ v0 ships three implementations:
 3. The orchestrator generates a random `state`, stores it in a short-lived cookie, and 302s to GitHub.
 4. GitHub returns to `/auth/callback?provider=github_oauth&code=...&state=...`.
 5. The orchestrator validates the state, exchanges the code, upserts the user and any orgs the user belongs to, creates a server-side session, and sets the `tanren_session` HTTP-only cookie. The JSON response includes the `csrfToken` the dashboard needs for state-changing calls.
+
+## Dev-login escape hatch (dev only)
+
+For local UI testing you usually do **not** want to register a real GitHub OAuth app. The dev-login escape hatch lets an operator land authenticated in the dev compose stack with one click.
+
+**What it does.** When `TANREN_DEV_LOGIN=1` is set:
+
+- The orchestrator registers the `LocalDevProvider` alongside (or instead of) `github_oauth`. `/auth/login?provider=local_dev` runs the **same** session-mint + first-login org-creation handshake as github_oauth — there is no parallel auth bypass. The first sign-in creates a synthetic tenant org (`login: tanren-dev`, a stable synthetic `external_id`) and a dev admin user.
+- The dashboard points its `/auth/login` redirect at `provider=local_dev` and serves a visible **`/signin`** page with a one-click "sign in (dev)" button. Unauthenticated requests (with `TANREN_REQUIRE_AUTH=1`) are redirected to `/signin` instead of straight to the orchestrator.
+
+**It is dev-only and opt-in.** The flag defaults **off**; with it unset, behavior is byte-for-byte unchanged (github_oauth only, and the open `just smoke` flow is unaffected because no auth middleware mounts). `compose.dev.yml` reads it from host env with an empty default (`${TANREN_DEV_LOGIN:-}` / `${TANREN_REQUIRE_AUTH:-}`), so you opt in by setting those vars; **`compose.prod.yml` never reads them**. As a defense-in-depth guard the orchestrator refuses the flag (logs a warning and ignores it) when `TANREN_COOKIE_SECURE=1` — i.e. under a prod-like context.
+
+**How to use it for manual UI testing:**
+
+1. Opt in by copying the example env (Docker Compose auto-reads `.env` in the repo root):
+
+   ```sh
+   cp .env.example .env   # already sets TANREN_DEV_LOGIN=1 and TANREN_REQUIRE_AUTH=1
+   ```
+
+   (Or, without a `.env` file: `export TANREN_DEV_LOGIN=1 TANREN_REQUIRE_AUTH=1` before `just up-dev`.)
+2. `just up-dev`
+3. Open http://localhost:3000 — you are redirected to `/signin`.
+4. Click **"sign in (dev)"**. You land authenticated against the synthetic `tanren-dev` org.
+5. Drive the operator-driven run flow from there (link the `cat-cave/tanren-fixture-medium` repo into the org by URL — repo linking is by URL + a stored GitHub credential, independent of the tenant org's GitHub identity). See `operator-driven-run.md`.
 
 ## CSRF protection
 
