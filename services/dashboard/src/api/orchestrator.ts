@@ -11,7 +11,18 @@
  */
 
 import type { DashboardSession } from "../auth/session.js";
-import type { OrgSummary, PaletteGroup, ProjectSummary } from "./types.js";
+import type {
+  BrownfieldLinkResult,
+  CreatedProject,
+  CredentialRecord,
+  DoctorReport,
+  NotificationMatrix,
+  NotificationRoute,
+  NotificationTarget,
+  OrgSummary,
+  PaletteGroup,
+  ProjectSummary
+} from "./types.js";
 
 export interface OrchestratorClientDeps {
   orchestratorUrl: string;
@@ -97,6 +108,140 @@ export class OrchestratorClient {
       return undefined;
     }
     return response.json();
+  }
+
+  // ── P2B-0002 onboarding / credentials / notifications ──────────────────
+
+  private async getJson<T>(path: string): Promise<T | undefined> {
+    const response = await this.fetchImpl(`${this.orchestratorUrl}${path}`, {
+      headers: this.headers()
+    }).catch(() => undefined);
+    if (response === undefined || !response.ok) return undefined;
+    return (await response.json()) as T;
+  }
+
+  private async sendJson(
+    method: "POST" | "DELETE",
+    path: string,
+    body?: unknown
+  ): Promise<{ ok: boolean; status: number; body: unknown }> {
+    const response = await this.fetchImpl(`${this.orchestratorUrl}${path}`, {
+      method,
+      headers: this.headers(body === undefined ? {} : { "content-type": "application/json" }),
+      body: body === undefined ? undefined : JSON.stringify(body)
+    }).catch(() => undefined);
+    if (response === undefined) return { ok: false, status: 0, body: undefined };
+    const parsed = await response.json().catch(() => undefined);
+    return { ok: response.ok, status: response.status, body: parsed };
+  }
+
+  /** Stack-health report (P2A-0013 `/doctor`). `undefined` when unreachable. */
+  async doctor(): Promise<DoctorReport | undefined> {
+    return this.getJson<DoctorReport>("/doctor");
+  }
+
+  /** Org-scoped credential references (P2A-0013). Never returns values. */
+  async listOrgCredentials(orgId: string): Promise<CredentialRecord[]> {
+    const json = await this.getJson<{ credentials?: CredentialRecord[] }>(
+      `/orgs/${encodeURIComponent(orgId)}/credentials`
+    );
+    return json?.credentials ?? [];
+  }
+
+  /** Personal credential references (P2A-0013). Never returns values. */
+  async listMyCredentials(): Promise<CredentialRecord[]> {
+    const json = await this.getJson<{ credentials?: CredentialRecord[] }>("/credentials/me");
+    return json?.credentials ?? [];
+  }
+
+  /** Import a credential (write-only). `kind` selects the typed import path. */
+  async importCredential(input: {
+    scope: "org" | "me";
+    orgId?: string;
+    kind: string;
+    body: Record<string, unknown>;
+  }): Promise<{ ok: boolean; status: number; body: unknown }> {
+    const base =
+      input.scope === "org"
+        ? `/orgs/${encodeURIComponent(input.orgId ?? "")}/credentials`
+        : "/credentials/me";
+    return this.sendJson("POST", `${base}?kind=${encodeURIComponent(input.kind)}`, input.body);
+  }
+
+  /** Delete an org-scoped credential reference (P2A-0013). */
+  async deleteOrgCredential(orgId: string, ref: string): Promise<boolean> {
+    const result = await this.sendJson(
+      "DELETE",
+      `/orgs/${encodeURIComponent(orgId)}/credentials/${encodeURIComponent(ref)}`
+    );
+    return result.ok;
+  }
+
+  /** Create a project row (P2A-0013, non-brownfield create path). */
+  async createProject(
+    orgId: string,
+    body: Record<string, unknown>
+  ): Promise<CreatedProject | undefined> {
+    const result = await this.sendJson("POST", `/orgs/${encodeURIComponent(orgId)}/projects`, body);
+    if (!result.ok) return undefined;
+    return result.body as CreatedProject;
+  }
+
+  /**
+   * Link a target repo (P2A-0013 brownfield). Reads `.github/workflows/`,
+   * `.mergify.yml`, `CODEOWNERS` for display; WRITES NOTHING to the target.
+   */
+  async brownfieldLink(
+    orgId: string,
+    projectId: string,
+    body: Record<string, unknown>
+  ): Promise<{ ok: boolean; status: number; result?: BrownfieldLinkResult; error?: string }> {
+    const result = await this.sendJson(
+      "POST",
+      `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/link`,
+      body
+    );
+    if (!result.ok) {
+      const errBody = result.body as { error?: string; message?: string } | undefined;
+      return { ok: false, status: result.status, error: errBody?.message ?? errBody?.error };
+    }
+    return { ok: true, status: result.status, result: result.body as BrownfieldLinkResult };
+  }
+
+  /** The full notifications matrix for an org (P2A-0017). Empty on failure. */
+  async notificationMatrix(orgId: string): Promise<NotificationMatrix> {
+    const json = await this.getJson<NotificationMatrix>(
+      `/orgs/${encodeURIComponent(orgId)}/notifications/matrix`
+    );
+    return json ?? { targets: [], routes: [], events: [] };
+  }
+
+  /** Create a notification target (P2A-0017). */
+  async createNotificationTarget(
+    orgId: string,
+    body: Record<string, unknown>
+  ): Promise<NotificationTarget | undefined> {
+    const result = await this.sendJson(
+      "POST",
+      `/orgs/${encodeURIComponent(orgId)}/notifications/targets`,
+      body
+    );
+    if (!result.ok) return undefined;
+    return result.body as NotificationTarget;
+  }
+
+  /** Create/replace a notification route opt-in (P2A-0017). */
+  async createNotificationRoute(
+    orgId: string,
+    body: Record<string, unknown>
+  ): Promise<NotificationRoute | undefined> {
+    const result = await this.sendJson(
+      "POST",
+      `/orgs/${encodeURIComponent(orgId)}/notifications/routes`,
+      body
+    );
+    if (!result.ok) return undefined;
+    return result.body as NotificationRoute;
   }
 }
 
