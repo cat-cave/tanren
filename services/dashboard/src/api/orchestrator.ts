@@ -166,14 +166,17 @@ export class OrchestratorClient extends OrchestratorRecoveryClient {
     return json?.items ?? [];
   }
 
-  /** Workflow insights, filtered to the three v0-supported kinds (P2A-0020). */
+  /**
+   * Workflow insights, filtered to the supported kinds (P2A-0020 trio plus the
+   * P3-0020 `stuck` + `review_stall` additions). Acknowledged rows drop out.
+   */
   async listInsights(orgId: string, projectId: string): Promise<InsightSummary[]> {
     const json = await this.getJson<{ insights?: InsightSummary[] }>(
       `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/insights`
     );
     const all = json?.insights ?? [];
-    const v0 = new Set(["retry_hotspot", "model_mismatch", "pace_anomaly"]);
-    return all.filter((insight) => v0.has(insight.kind) && insight.acknowledgedAt === null);
+    const supported = new Set(["retry_hotspot", "model_mismatch", "pace_anomaly", "stuck", "review_stall"]);
+    return all.filter((insight) => supported.has(insight.kind) && insight.acknowledgedAt === null);
   }
 
   /**

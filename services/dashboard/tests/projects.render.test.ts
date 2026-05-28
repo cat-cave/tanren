@@ -6,7 +6,7 @@
 //
 // Coverage maps to the three acceptance-criteria checklists:
 //   - project-view-chat-primary.md: page head, KPI strip, narration pulse,
-//     attention queue, subopt callouts (3 kinds only), velocity, activity, dag.
+//     attention queue, subopt callouts (supported kinds), velocity, activity, dag.
 //   - project-and-spec.md: spec list, spec creation form (schema-bound, no JSON
 //     editor), create POST → P2A-0013.
 //   - routing-and-limits.md: 6-role chains, vault panel, escape hatches,
@@ -77,14 +77,14 @@ const INSIGHTS = [
     acknowledgedAt: null
   },
   {
-    // A Phase-3 kind that MUST be filtered out of the v0 surface.
+    // P3-0020 review_stall — now a supported kind that MUST render.
     id: "ins_2",
     kind: "review_stall",
     projectId: "project_easy",
-    severity: "info",
-    title: "review stall (phase 3)",
-    body: "should not render",
-    payload: { kind: "review_stall" },
+    severity: "warn",
+    title: "review stall on auth PR",
+    body: "PR #42 awaiting review for 3d with no approval or merge.",
+    payload: { kind: "review_stall", specId: "spec_a", prNumber: 42 },
     actions: [],
     computedAt: "2026-05-28T08:00:00.000Z",
     acknowledgedAt: null
@@ -286,13 +286,13 @@ describe("project view (chat-primary)", () => {
     expect(html).toContain("/projects/project_easy/runs/run_review");
   });
 
-  it("renders subopt callouts for v0 kinds only and filters phase-3 kinds", async () => {
+  it("renders subopt callouts including the P3-0020 review_stall kind", async () => {
     const app = await build();
     const html = await (await app.request("/projects/project_easy")).text();
     expect(html).toContain("retry hotspot");
     expect(html).toContain("writer retries on supplier-scorecard class");
-    // the review_stall (phase-3) insight must NOT render.
-    expect(html).not.toContain("review stall (phase 3)");
+    // P3-0020 review_stall now renders (kind label is underscore-stripped).
+    expect(html).toContain("review stall on auth PR");
     // callout action posts the carried tool call.
     expect(html).toContain('action="/projects/project_easy/insights/act"');
     expect(html).toContain('value="tanren.create_spec"');

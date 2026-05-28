@@ -8,7 +8,9 @@ export {
   InsightSeverity,
   ModelMismatchPayload,
   PaceAnomalyPayload,
-  RetryHotspotPayload
+  RetryHotspotPayload,
+  ReviewStallPayload,
+  StuckPayload
 } from "./types.js";
 
 export { DEFAULT_THRESHOLDS, type InsightThresholds } from "./thresholds.js";
@@ -24,6 +26,8 @@ export {
 export { computeRetryHotspot } from "./retryHotspot.js";
 export { computeModelMismatch } from "./modelMismatch.js";
 export { computePaceAnomaly } from "./paceAnomaly.js";
+export { computeStuck } from "./stuck.js";
+export { computeReviewStall } from "./reviewStall.js";
 
 export {
   readFreshInsights,

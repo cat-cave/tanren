@@ -17,6 +17,12 @@ export interface SeedSpec {
   spec_id: string;
   title: string;
   project_id: string;
+  status?: string;
+}
+
+export interface SeedSpecDependency {
+  from_spec_id: string;
+  to_spec_id: string;
 }
 
 export interface SeedRun {
@@ -82,6 +88,7 @@ export interface SeedInsightRow {
 
 export class InsightsMemoryClient {
   specs: SeedSpec[] = [];
+  specDependencies: SeedSpecDependency[] = [];
   runs: SeedRun[] = [];
   tasks: SeedTask[] = [];
   costs: SeedCost[] = [];
@@ -314,6 +321,53 @@ export class InsightsMemoryClient {
         .sort((a, b) => b.ts.getTime() - a.ts.getTime())[0];
       if (row === undefined) return { rows: [], rowCount: 0 };
       return { rows: [{ index: Number(row.payload.subtaskIndex ?? 0) }], rowCount: 1 };
+    }
+    if (t.startsWith("SELECT d.from_spec_id,") && t.includes("FROM spec_dependencies d")) {
+      // stuck dependency-edge query
+      const projectId = String(params[0]);
+      const rows: Array<Record<string, unknown>> = [];
+      for (const edge of this.specDependencies) {
+        const from = this.specs.find((s) => s.spec_id === edge.from_spec_id);
+        const to = this.specs.find((s) => s.spec_id === edge.to_spec_id);
+        if (from === undefined || to === undefined) continue;
+        if (from.project_id !== projectId) continue;
+        rows.push({
+          from_spec_id: from.spec_id,
+          from_title: from.title,
+          from_status: from.status ?? "pending",
+          to_spec_id: to.spec_id,
+          to_title: to.title,
+          to_status: to.status ?? "pending"
+        });
+      }
+      return { rows, rowCount: rows.length };
+    }
+    if (t.startsWith("SELECT e.spec_id,") && t.includes("FROM events e") && t.includes("INNER JOIN specs s")) {
+      // review_stall review/merge-event query
+      const projectId = String(params[0]);
+      const types = params[1] as string[];
+      const rows = this.events
+        .filter((event) => {
+          if (event.spec_id === null) return false;
+          if (!types.includes(event.event_type)) return false;
+          const spec = this.specs.find((s) => s.spec_id === event.spec_id);
+          return spec !== undefined && spec.project_id === projectId;
+        })
+        .sort((a, b) => b.ts.getTime() - a.ts.getTime())
+        .map((event) => {
+          const spec = this.specs.find((s) => s.spec_id === event.spec_id);
+          const prNumber = event.payload.prNumber;
+          const prUrl = event.payload.prUrl;
+          return {
+            spec_id: event.spec_id,
+            spec_title: spec?.title ?? event.spec_id,
+            event_type: event.event_type,
+            ts: event.ts,
+            pr_number: typeof prNumber === "number" ? prNumber : null,
+            pr_url: typeof prUrl === "string" ? prUrl : null
+          };
+        });
+      return { rows, rowCount: rows.length };
     }
     return { rows: [], rowCount: 0 };
   }

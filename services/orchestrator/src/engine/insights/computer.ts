@@ -8,6 +8,8 @@ import type pg from "pg";
 import { computeModelMismatch } from "./modelMismatch.js";
 import { computePaceAnomaly } from "./paceAnomaly.js";
 import { computeRetryHotspot } from "./retryHotspot.js";
+import { computeReviewStall } from "./reviewStall.js";
+import { computeStuck } from "./stuck.js";
 import { readFreshOrCompute } from "./cache.js";
 import { DEFAULT_THRESHOLDS, type InsightThresholds } from "./thresholds.js";
 import { type Insight, type InsightKind } from "./types.js";
@@ -30,13 +32,19 @@ export async function computeInsight(
       return computeModelMismatch(pool, context);
     case "pace_anomaly":
       return computePaceAnomaly(pool, context);
+    case "stuck":
+      return computeStuck(pool, context);
+    case "review_stall":
+      return computeReviewStall(pool, context);
   }
 }
 
 export const INSIGHT_KINDS: ReadonlyArray<InsightKind> = [
   "retry_hotspot",
   "model_mismatch",
-  "pace_anomaly"
+  "pace_anomaly",
+  "stuck",
+  "review_stall"
 ];
 
 export interface LoadInsightsOptions {
