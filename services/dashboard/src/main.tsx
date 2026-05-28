@@ -7,7 +7,7 @@ import { z } from "zod";
 import { OrchestratorClient } from "./api/orchestrator.js";
 import { mountShell, type ShellDeps } from "./app/mountShell.js";
 import { mountScreens } from "./app/screens.js";
-import { devLoginEnabled, loginUrl, useSession } from "./auth/index.js";
+import { devLoginEnabled, devLoginHandshake, loginUrl, useSession } from "./auth/index.js";
 
 /** Public, unauthenticated paths (never gated by the auth middleware). */
 const PUBLIC_PATHS = new Set(["/healthz", "/auth/login", "/signin"]);
@@ -73,7 +73,30 @@ export async function createApp(options: CreateAppOptions = {}) {
     return next();
   });
 
-  app.get("/auth/login", (c) => c.redirect(loginUrl(orchestratorUrl, c.req.query("next") ?? "/")));
+  // DEV-ONLY: when the local_dev escape hatch is enabled the orchestrator runs on a
+  // different (docker-internal) origin than the browser, so a cross-origin redirect
+  // would 302 the browser to an unresolvable host. Instead run the whole login→callback
+  // handshake server-side (BFF proxy) against the internal ORCHESTRATOR_URL and
+  // re-emit the minted session cookie on the dashboard's own (localhost) origin, then
+  // 303 the browser to the dashboard-relative `next`. The github_oauth path is left
+  // untouched: real OAuth REQUIRES the browser to visit GitHub, so it still redirects.
+  app.get("/auth/login", async (c) => {
+    const next = c.req.query("next") ?? "/";
+    if (!devLoginEnabled()) {
+      return c.redirect(loginUrl(orchestratorUrl, next));
+    }
+    try {
+      const result = await devLoginHandshake(orchestratorUrl, next);
+      // Re-emit the orchestrator's session Set-Cookie verbatim on our origin so the
+      // browser stores it on the shared `localhost` host (valid for every port).
+      c.header("Set-Cookie", result.sessionSetCookie);
+      return c.redirect(result.next, 303);
+    } catch {
+      // Never leak the internal orchestrator URL — bounce back to the visible
+      // sign-in page with a generic error to render.
+      return c.redirect(`/signin?next=${encodeURIComponent(next)}&error=dev_login_failed`);
+    }
+  });
 
   // DEV-ONLY sign-in landing: a visible one-click affordance that drives the
   // orchestrator's local_dev provider (through /auth/login). Only reachable when
@@ -84,6 +107,7 @@ export async function createApp(options: CreateAppOptions = {}) {
     }
     const next = c.req.query("next") ?? "/";
     const href = `/auth/login?next=${encodeURIComponent(next)}`;
+    const hasError = c.req.query("error") !== undefined;
     return c.html(
       <html lang="en" data-theme="dark">
         <head>
@@ -99,6 +123,11 @@ export async function createApp(options: CreateAppOptions = {}) {
               <div class="eyebrow">dev login</div>
               <h1 class="page-title">tanren</h1>
               <p>Dev sign-in escape hatch is enabled. No GitHub OAuth app required.</p>
+              {hasError ? (
+                <p class="error" data-testid="signin-error" style="color:var(--color-danger,#f87171)">
+                  Sign-in did not complete. Check that the orchestrator is up, then try again.
+                </p>
+              ) : null}
               <p>
                 <a class="forge-key" href={href} data-testid="dev-signin">
                   sign in (dev)

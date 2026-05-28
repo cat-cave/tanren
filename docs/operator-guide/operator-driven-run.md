@@ -19,14 +19,21 @@ just up-dev
 The dashboard serves at <http://localhost:3000>; the orchestrator API sits
 behind it. Confirm both are healthy before signing in (the dashboard degrades
 gracefully when the orchestrator is unreachable, so a blank project list usually
-means the API is still starting).
+means the API is still starting). If host `:3000` is already in use, set
+`DASHBOARD_HOST_PORT` in `.env` (e.g. `DASHBOARD_HOST_PORT=3003`) to remap the
+published port and open <http://localhost:3003> instead — the in-container port
+stays 3000.
 
 ## 2. Sign in
 
-Open <http://localhost:3000>. You land on the project list. Sign in with
-**GitHub OAuth** — see [auth.md](./auth.md) for the OAuth app setup and the
-`TANREN_REQUIRE_AUTH` dev escape hatch. After sign-in the shell shows your org
-in the top-left and your projects in the sidenav.
+Open <http://localhost:3000> (or your remapped `DASHBOARD_HOST_PORT`). With the
+dev escape hatch on (`TANREN_DEV_LOGIN=1`, `TANREN_REQUIRE_AUTH=1`) you are sent
+to **`/signin`**: click **"sign in (dev)"** — a single URL, one click. The
+dashboard completes the `local_dev` handshake server-side and lands you
+authenticated back at your destination (`next`), no cross-origin hop. For real
+deployments, sign in with **GitHub OAuth** instead. See [auth.md](./auth.md) for
+both flows and the OAuth app setup. After sign-in the shell shows your org in
+the top-left and your projects in the sidenav.
 
 ## 3. Onboard an existing project + import credentials
 

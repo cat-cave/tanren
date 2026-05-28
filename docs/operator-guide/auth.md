@@ -46,7 +46,8 @@ For local UI testing you usually do **not** want to register a real GitHub OAuth
 **What it does.** When `TANREN_DEV_LOGIN=1` is set:
 
 - The orchestrator registers the `LocalDevProvider` alongside (or instead of) `github_oauth`. `/auth/login?provider=local_dev` runs the **same** session-mint + first-login org-creation handshake as github_oauth — there is no parallel auth bypass. The first sign-in creates a synthetic tenant org (`login: tanren-dev`, a stable synthetic `external_id`) and a dev admin user.
-- The dashboard points its `/auth/login` redirect at `provider=local_dev` and serves a visible **`/signin`** page with a one-click "sign in (dev)" button. Unauthenticated requests (with `TANREN_REQUIRE_AUTH=1`) are redirected to `/signin` instead of straight to the orchestrator.
+- The dashboard serves a visible **`/signin`** page with a one-click "sign in (dev)" button. Unauthenticated requests (with `TANREN_REQUIRE_AUTH=1`) are redirected to `/signin` instead of straight to the orchestrator.
+- **Single-URL one-click flow (BFF proxy).** Because the dev stack runs the dashboard and orchestrator on different origins (the dashboard reaches the orchestrator at the docker-internal `http://orchestrator:3100`, which a browser cannot resolve), the dashboard does **not** redirect the browser cross-origin for dev-login. Instead, clicking "sign in (dev)" hits the dashboard's own `GET /auth/login`, which runs the entire `local_dev` login→callback handshake **server-side** against the internal `ORCHESTRATOR_URL`, then re-emits the minted `tanren_session` cookie on the dashboard's own (`localhost`) origin and `303`s the browser straight to `next`. The cookie is host-scoped to `localhost` (no `Domain`, not `Secure` in dev), so it is valid for every localhost port. Net effect: one click, no cross-origin hop, and you land authenticated at `next`. If the handshake fails, the dashboard bounces back to `/signin` with an error banner and never leaks the internal orchestrator URL. The `github_oauth` path is unchanged: real OAuth still redirects the browser to GitHub.
 
 **It is dev-only and opt-in.** The flag defaults **off**; with it unset, behavior is byte-for-byte unchanged (github_oauth only, and the open `just smoke` flow is unaffected because no auth middleware mounts). `compose.dev.yml` reads it from host env with an empty default (`${TANREN_DEV_LOGIN:-}` / `${TANREN_REQUIRE_AUTH:-}`), so you opt in by setting those vars; **`compose.prod.yml` never reads them**. As a defense-in-depth guard the orchestrator refuses the flag (logs a warning and ignores it) when `TANREN_COOKIE_SECURE=1` — i.e. under a prod-like context.
 
@@ -60,8 +61,8 @@ For local UI testing you usually do **not** want to register a real GitHub OAuth
 
    (Or, without a `.env` file: `export TANREN_DEV_LOGIN=1 TANREN_REQUIRE_AUTH=1` before `just up-dev`.)
 2. `just up-dev`
-3. Open http://localhost:3000 — you are redirected to `/signin`.
-4. Click **"sign in (dev)"**. You land authenticated against the synthetic `tanren-dev` org.
+3. Open http://localhost:3000 — you are redirected to `/signin`. (If host `:3000` is already taken, set `DASHBOARD_HOST_PORT` in `.env` to remap the published port — e.g. `DASHBOARD_HOST_PORT=3003`, then open http://localhost:3003. The in-container port stays 3000.)
+4. Click **"sign in (dev)"** — a single URL. The dashboard completes the handshake server-side and lands you authenticated at `next` against the synthetic `tanren-dev` org (no cross-origin redirect, no JSON dead-end).
 5. Drive the operator-driven run flow from there (link the `cat-cave/tanren-fixture-medium` repo into the org by URL — repo linking is by URL + a stored GitHub credential, independent of the tenant org's GitHub identity). See `operator-driven-run.md`.
 
 ## CSRF protection
