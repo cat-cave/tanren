@@ -7,12 +7,17 @@
 
 import { initOrgSwitcher } from "./orgSwitcher.js";
 import { initPalette } from "./palette.js";
+import { initReviewHandoff } from "./reviewHandoff.js";
+import { initRunStream } from "./runStream.js";
 import { initTheme } from "./theme.js";
 
 function boot(): void {
   initTheme();
   initOrgSwitcher();
   initPalette();
+  // P2B-0004 run-detail + review islands (no-op when their markup is absent).
+  initRunStream();
+  initReviewHandoff();
 }
 
 if (document.readyState === "loading") {

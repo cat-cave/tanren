@@ -106,6 +106,79 @@ export interface CostRecord {
   recordedAt: string;
 }
 
+// Run-detail read API (P2A-0014) — narrow mirrors of the orchestrator contract
+// (`services/orchestrator/src/routes/runs/contract.ts`). These are the shapes
+// the run-detail + review surfaces (P2B-0004) read. They mirror the JSON the
+// API ships (dates arrive as ISO strings over the wire, so they are typed as
+// `string` here — the UI formats them, the API never reshapes for the UI).
+// Widen these alongside the orchestrator contract when it widens.
+// ---------------------------------------------------------------------------
+
+/** `GET .../runs/:runId` → `run`. */
+export interface RunSummary {
+  runId: string;
+  specId: string;
+  projectId: string;
+  branch: string;
+  trigger: string;
+  status: string;
+  outcome: string | null;
+  startedAt: string;
+  endedAt: string | null;
+  prUrl: string | null;
+}
+
+/** A planner/write/check/audit/ci task in the run timeline. */
+export interface TaskTimelineEntry {
+  taskId: string;
+  runId: string;
+  kind: string;
+  parentTaskId: string | null;
+  title: string;
+  status: string;
+  outcome: string | null;
+  failureKind: string | null;
+  attempt: number;
+  cli: string;
+  model: string | null;
+  startedAt: string | null;
+  endedAt: string | null;
+}
+
+/** A redacted-by-default event row. `payload` is opaque; `redactedPaths` lists dropped fields. */
+export interface RunEventRow {
+  id: number | string;
+  ts: string;
+  runId: string | null;
+  taskId: string | null;
+  specId: string | null;
+  projectId: string | null;
+  eventType: string;
+  payload: unknown;
+  redactedPaths: string[];
+}
+
+/** A typed cost record (P2A-0011) attributed to a source + model. */
+export interface RunCostRecord {
+  id: number | string;
+  runId: string;
+  taskId: string;
+  projectId: string;
+  cli: string;
+  provider: string;
+  model: string;
+  inputTokens: number;
+  cachedInputTokens: number;
+  cacheCreationTokens: number;
+  outputTokens: number;
+  reasoningOutputTokens: number;
+  totalTokens: number;
+  costUsd: string | null;
+  billingMode: "per_token" | "subscription" | "self_hosted";
+  costBasis: "ccusage" | "provider_pricing" | "unknown";
+  recordedAt: string;
+}
+
 /**
  * A run summary row for the history list (`GET .../runs` items). Extends the
  * base run summary with the spec title, an aggregated run-level cost total, the
@@ -379,4 +452,36 @@ export interface NotificationMatrix {
 export interface CursorPage<T> {
   items: T[];
   nextCursor: string | null;
+}
+
+/** The spec embedded in a run detail. */
+export interface RunSpecSummary {
+  specId: string;
+  title: string;
+  description: string;
+  behaviorIds: string[];
+  milestoneId: string | null;
+}
+
+/** Forge thread bound to the run, with recent turns (rendered opaque). */
+export interface RunForgeBundle {
+  threadId: string;
+  recentTurns: unknown[];
+}
+
+/** Full `GET .../runs/:runId` response. */
+export interface RunDetail {
+  run: RunSummary;
+  spec: RunSpecSummary;
+  tasks: TaskTimelineEntry[];
+  recentEvents: RunEventRow[];
+  costs: RunCostRecord[];
+  insights: unknown[];
+  forgeThread: RunForgeBundle | null;
+}
+
+/** The org+project a run lives in, resolved from the run-list endpoints. */
+export interface RunLocation {
+  orgId: string;
+  projectId: string;
 }

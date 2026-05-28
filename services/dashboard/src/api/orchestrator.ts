@@ -32,7 +32,9 @@ import type {
   ProjectDetail,
   ProjectFeedItem,
   ProjectSummary,
+  RunDetail,
   RunListItem,
+  RunLocation,
   SpecSummary
 } from "./types.js";
 
@@ -448,6 +450,60 @@ export class OrchestratorClient {
     );
     if (!result.ok) return undefined;
     return result.body as NotificationRoute;
+  }
+
+  // ── P2B-0004 run-detail / review / SSE ─────────────────────────────────
+  // The dashboard route is `/runs/:runId` (the spec permits deriving
+  // org/project from the run); the orchestrator API is org+project-scoped, so
+  // we resolve the run's location by scanning the operator's orgs + projects
+  // for a matching run, then fetch the snapshot.
+  // -------------------------------------------------------------------------
+
+  /**
+   * Resolve which org+project a run belongs to by scanning the operator's
+   * orgs and their projects. `undefined` when the run is not visible. The
+   * snapshot endpoint enforces the real authz boundary; this is just routing.
+   */
+  async findRunLocation(runId: string): Promise<RunLocation | undefined> {
+    const orgs = await this.listOrgs();
+    for (const org of orgs) {
+      const projects = await this.listProjects(org.id);
+      for (const project of projects) {
+        const runs = await this.listRuns(org.id, project.projectId);
+        if (runs.some((run) => run.runId === runId)) {
+          return { orgId: org.id, projectId: project.projectId };
+        }
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * Fetch the full run-detail snapshot. `rawView` opts into unredacted
+   * payloads via `?raw=true` (the orchestrator emits the P2A-0009 audit
+   * trail); the dashboard only sets it for admins. `undefined` when the run
+   * is missing or access is denied.
+   */
+  async getRunDetail(
+    loc: RunLocation,
+    runId: string,
+    opts: { rawView?: boolean } = {}
+  ): Promise<RunDetail | undefined> {
+    const query = opts.rawView === true ? "?raw=true" : "";
+    const response = await this.fetchImpl(
+      `${this.orchestratorUrl}/orgs/${encodeURIComponent(loc.orgId)}/projects/${encodeURIComponent(loc.projectId)}/runs/${encodeURIComponent(runId)}${query}`,
+      { headers: this.headers(opts.rawView === true ? { "x-view-raw": "true" } : undefined) }
+    ).catch(() => undefined);
+    if (response === undefined || !response.ok) {
+      return undefined;
+    }
+    return (await response.json()) as RunDetail;
+  }
+
+  /** Build the SSE stream URL for the run's live feed (consumed by the client island). */
+  streamUrl(loc: RunLocation, runId: string, opts: { rawView?: boolean } = {}): string {
+    const query = opts.rawView === true ? "?raw=true" : "";
+    return `${this.orchestratorUrl}/orgs/${encodeURIComponent(loc.orgId)}/projects/${encodeURIComponent(loc.projectId)}/runs/${encodeURIComponent(runId)}/stream${query}`;
   }
 }
 
