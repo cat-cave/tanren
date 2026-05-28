@@ -110,3 +110,18 @@ live-phase1-fixture:
   fingerprint="$(ssh-keyscan -p 2222 -t ed25519 localhost 2>/dev/null | ssh-keygen -lf - -E sha256 | awk 'NR == 1 { print $2 }')"; test -n "$fingerprint"; DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_PHASE1_FIXTURE_LIVE=1 TANREN_CODEX_AUTH_JSON_FILE="${TANREN_CODEX_AUTH_JSON_FILE}" TANREN_GITHUB_TOKEN_FILE="${TANREN_GITHUB_TOKEN_FILE}" TANREN_GITHUB_REPO_URL="${TANREN_GITHUB_REPO_URL}" TANREN_GITHUB_BASE_BRANCH="${TANREN_GITHUB_BASE_BRANCH:-main}" TANREN_SSH_KEY_PATH=/tmp/tanren_runner_key TANREN_SSH_HOST=127.0.0.1 TANREN_SSH_PORT=2222 TANREN_SSH_USER=tanren TANREN_SSH_HOST_FINGERPRINT="$fingerprint" TANREN_SSH_HOST_KEY_ALGORITHMS=ssh-ed25519 corepack pnpm exec vitest run services/orchestrator/tests/phase1Fixture.live.test.ts
 
 smoke: compose-build compose-up wait-for-stack smoke-hello smoke-ssh-integration
+
+# P2A-0015: executable acceptance gate. Local-only — never runs in CI
+# because it calls real Codex and creates real draft PRs.
+# See docs/operator-guide/acceptance.md for the env-var contract.
+acceptance-easy:
+  @echo "Phase 2A acceptance — easy tier (fixture-easy)"
+  @./scripts/acceptance/check-env.sh
+  corepack pnpm exec tsx scripts/acceptance/easy.ts
+
+acceptance-medium:
+  @echo "Phase 2A acceptance — medium tier (fixture-medium)"
+  @./scripts/acceptance/check-env.sh
+  corepack pnpm exec tsx scripts/acceptance/medium.ts
+
+acceptance: acceptance-easy acceptance-medium
