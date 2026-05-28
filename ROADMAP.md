@@ -337,7 +337,7 @@ P1-0005 depends on P1-0004 and can begin as soon as the PR contract is stable. P
 
 ## Phase 2: Operator-Controlled Workflow
 
-Status: planned. Scoped 2026-05-27 against `docs/audits/phase2-readiness.md`; re-scoped 2026-05-28 against the hi-fi vision artifact (`tanren-hi-fidelity` bundle).
+Status: 2A complete (all P2A specs merged; easy tier live-proven, medium mechanism live-proven). 2B in progress — hi-fi handoff imported at `tanren-hi-fidelity/`, building from P2B-0001 (shell). Execution plan + session decision log: [`docs/roadmap/phase-2b-execution-plan.md`](docs/roadmap/phase-2b-execution-plan.md). Scoped 2026-05-27 against `docs/audits/phase2-readiness.md`; re-scoped 2026-05-28 against the hi-fi vision artifact (`tanren-hi-fidelity` bundle).
 
 Phase 2 turns the live Phase 1 proof from an opt-in test harness into an operator-controlled product surface that matches a defined subset of the hi-fi long-term vision. The end state is that an operator can register a GitHub org as a Tanren tenant, link a repo, configure credentials and routing, submit a spec, run the real workflow, recover from failure, and view the resulting PR — all through the dashboard with no CLI or DB access.
 
