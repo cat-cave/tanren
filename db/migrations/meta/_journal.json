@@ -148,6 +148,13 @@
       "when": 1780011175330,
       "tag": "0020_smiling_albert_cleary",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1780012565605,
+      "tag": "0021_gifted_longshot",
+      "breakpoints": true
     }
   ]
 }
