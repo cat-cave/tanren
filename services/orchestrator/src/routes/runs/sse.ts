@@ -203,8 +203,9 @@ export class SseDriver {
   private async pollNewCosts(): Promise<RunCostRecord[]> {
     const { rows } = await this.args.pool.query<Record<string, unknown>>(
       `SELECT id, task_id, run_id, project_id, cli, provider, model,
-              input_tokens, output_tokens, cached_tokens, cost_usd,
-              pricing_mode, cost_source, recorded_at
+              input_tokens, cached_input_tokens, cache_creation_tokens,
+              output_tokens, reasoning_output_tokens, total_tokens, cost_usd,
+              billing_mode, cost_basis, recorded_at
          FROM cost_records
         WHERE run_id = $1 AND id > $2
         ORDER BY recorded_at ASC, id ASC
@@ -220,11 +221,14 @@ export class SseDriver {
       provider: String(row.provider),
       model: String(row.model),
       inputTokens: Number(row.input_tokens ?? 0),
+      cachedInputTokens: Number(row.cached_input_tokens ?? 0),
+      cacheCreationTokens: Number(row.cache_creation_tokens ?? 0),
       outputTokens: Number(row.output_tokens ?? 0),
-      cachedTokens: Number(row.cached_tokens ?? 0),
-      costUsd: String(row.cost_usd),
-      pricingMode: row.pricing_mode as RunCostRecord["pricingMode"],
-      costSource: row.cost_source as RunCostRecord["costSource"],
+      reasoningOutputTokens: Number(row.reasoning_output_tokens ?? 0),
+      totalTokens: Number(row.total_tokens ?? 0),
+      costUsd: row.cost_usd === null || row.cost_usd === undefined ? null : String(row.cost_usd),
+      billingMode: row.billing_mode as RunCostRecord["billingMode"],
+      costBasis: row.cost_basis as RunCostRecord["costBasis"],
       recordedAt: row.recorded_at as Date
     }));
   }

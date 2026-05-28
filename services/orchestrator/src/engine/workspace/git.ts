@@ -5,7 +5,14 @@ import { quoteSshShellArg } from "../ssh/command.js";
 import { runWorkspaceSshCommand } from "./ssh.js";
 
 const authorEnv = "GIT_AUTHOR_DATE='2026-01-01T00:00:00Z' GIT_COMMITTER_DATE='2026-01-01T00:00:00Z'";
-const fakeTokenUsage = { inputTokens: 32, outputTokens: 16, cachedTokens: 0 };
+const fakeTokenUsage = {
+  inputTokens: 32,
+  cachedInputTokens: 0,
+  cacheCreationTokens: 0,
+  outputTokens: 16,
+  reasoningOutputTokens: 0,
+  totalTokens: 48
+};
 
 export interface WorkspaceGitInput {
   ssh: SshSubstrate;

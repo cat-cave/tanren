@@ -10,10 +10,9 @@ export interface FakeWriterDependencies {
 }
 
 // Fake adapters used by hello and Phase 1 fixture tests are attributed as
-// self-hosted opportunity-cost calls. PROJECT_BRIEF §4.2 treats fixed-fee
-// local compute as opportunity_computed; the cost recorder then computes a
-// dollar figure from runtime seconds. The ref must still match a real v0
-// attribution rule — no unknown source is allowed (P2A-0011).
+// self-hosted billing. PROJECT_BRIEF §4.2 treats fixed-fee local compute as a
+// self-hosted endpoint with no per-call dollar basis, so the recorder writes
+// cost_usd = NULL / cost_basis = 'unknown'. Token accounting still lands.
 export const fakeSelfHostedAuthRef = "credential/self-hosted/tanren-fake";
 
 export const fakePlanner: AnswererAdapter<PlanAnswer> = {

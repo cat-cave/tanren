@@ -14,7 +14,8 @@ const requiredDocs = [
   "docs/playbooks/github-workflow.md",
   "docs/contracts/architecture-checks.md"
 ];
-const costSources = new Set(["provider_direct", "ccusage", "codexbar", "opportunity_computed"]);
+const costBases = new Set(["ccusage", "provider_pricing", "unknown"]);
+const billingModes = new Set(["per_token", "subscription", "self_hosted"]);
 
 function normalizePath(path) {
   return path.split("\\").join("/");
@@ -277,7 +278,11 @@ function checkWriterAnswererSeparation(projectFiles) {
 function checkCostSources(projectFiles) {
   const diagnostics = [];
   const legacy = new RegExp(`${"legacy"}_${"unknown"}`, "g");
-  const sqlCheck = /cost_source\s+IN\s*\(([^)]*)\)/gi;
+  // Each column's SQL CHECK must exactly match its accepted value set.
+  const enumChecks = [
+    { pattern: /cost_basis\s+IN\s*\(([^)]*)\)/gi, allowed: costBases, label: "cost_basis (ccusage, provider_pricing, unknown)" },
+    { pattern: /billing_mode\s+IN\s*\(([^)]*)\)/gi, allowed: billingModes, label: "billing_mode (per_token, subscription, self_hosted)" }
+  ];
   for (const { file, text } of projectFiles) {
     if (invariantDocExclusions.has(file)) {
       continue;
@@ -285,13 +290,12 @@ function checkCostSources(projectFiles) {
     for (const match of text.matchAll(legacy)) {
       diagnostics.push(diagnostic("no-unknown-cost-source", file, "placeholder cost sources are not allowed", lineFor(text, match.index)));
     }
-    for (const match of text.matchAll(sqlCheck)) {
-      const values = [...match[1].matchAll(/'([^']+)'/g)].map((value) => value[1]);
-      const invalid = values.filter((value) => !costSources.has(value));
-      if (invalid.length > 0 || values.length !== costSources.size) {
-        diagnostics.push(
-          diagnostic("no-unknown-cost-source", file, "cost_source checks must exactly match the accepted brief values", lineFor(text, match.index))
-        );
+    for (const { pattern, allowed, label } of enumChecks) {
+      for (const match of text.matchAll(pattern)) {
+        const values = [...match[1].matchAll(/'([^']+)'/g)].map((value) => value[1]);
+        if (values.some((value) => !allowed.has(value)) || values.length !== allowed.size) {
+          diagnostics.push(diagnostic("no-unknown-cost-source", file, `${label} checks must exactly match the accepted values`, lineFor(text, match.index)));
+        }
       }
     }
   }

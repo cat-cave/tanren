@@ -1,10 +1,26 @@
 export type AgentKind = "writer" | "answerer";
 
+// Token consumption by TYPE. Disjoint buckets — never fold into one number.
+// All buckets are mutually exclusive and sum to totalTokens.
 export interface TokenUsage {
-  inputTokens: number;
-  outputTokens: number;
-  cachedTokens: number;
+  inputTokens: number; // uncached prompt tokens
+  cachedInputTokens: number; // cache-read tokens
+  cacheCreationTokens: number; // cache-write/creation (Anthropic; 0 for Codex)
+  outputTokens: number; // non-reasoning completion tokens
+  reasoningOutputTokens: number; // reasoning tokens
+  totalTokens: number; // provider-reported total, else sum of the five
 }
+
+// Zero-token usage with the full disjoint shape — used as the default when an
+// adapter does not report usage (e.g. fake fixtures).
+export const emptyTokenUsage: TokenUsage = {
+  inputTokens: 0,
+  cachedInputTokens: 0,
+  cacheCreationTokens: 0,
+  outputTokens: 0,
+  reasoningOutputTokens: 0,
+  totalTokens: 0
+};
 
 export interface Commit {
   sha: string;

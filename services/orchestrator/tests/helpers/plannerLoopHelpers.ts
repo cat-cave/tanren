@@ -75,15 +75,6 @@ export class FakePool {
       this.costInserts.push({ taskId: String(params[0]), cli: String(params[3]) });
       return { rows: [], rowCount: 1 };
     }
-    if (trimmed.startsWith("SELECT observed_max_monthly_tokens")) {
-      return { rows: [], rowCount: 0 };
-    }
-    if (trimmed.startsWith("SELECT COALESCE(SUM(input_tokens")) {
-      return { rows: [{ total: "0" }], rowCount: 1 };
-    }
-    if (trimmed.startsWith("INSERT INTO subscription_window_denominators")) {
-      return { rows: [], rowCount: 1 };
-    }
     return { rows: [], rowCount: 0 };
   }
 }
@@ -145,7 +136,7 @@ export function makeWriter(diffs: ReadonlyArray<string>): WriterAdapter & { call
         diff,
         commits: diff.length === 0 ? [] : [{ sha: `sha_${index}`, message: `subtask ${index}` }],
         exitReason: "completed",
-        tokenUsage: { inputTokens: 1, outputTokens: 1, cachedTokens: 0 },
+        tokenUsage: { inputTokens: 1, cachedInputTokens: 0, cacheCreationTokens: 0, outputTokens: 1, reasoningOutputTokens: 0, totalTokens: 2 },
         telemetry: { rawEventCount: 1 }
       };
     }

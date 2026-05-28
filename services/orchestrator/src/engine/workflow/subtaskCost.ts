@@ -1,14 +1,10 @@
 // P2A-0012: cost-recording helpers for the planner-feedback loop. Extracted
 // out of subtaskLoop.ts so the orchestration file stays under the 500-line
-// architecture cap. Every Answerer/Writer call in the loop runs through
-// these helpers; cost.unattributable errors bubble back up so the loop
-// converts them into a task failure.
-import { CostUnattributableError, type CostRecorder } from "../costs/index.js";
-import type {
-  AnswererAdapter,
-  TokenUsage,
-  WriterAdapter
-} from "../providers/types.js";
+// architecture cap. Every Answerer/Writer call in the loop runs through these
+// helpers. Token accounting is mandatory; cost is best-effort (NULL when
+// unknown), so recording never fails the task for missing cost.
+import type { CostRecorder } from "../costs/index.js";
+import { emptyTokenUsage, type AnswererAdapter, type TokenUsage, type WriterAdapter } from "../providers/types.js";
 
 export interface SubtaskCostContext {
   recorder: CostRecorder;
@@ -36,34 +32,28 @@ export interface WriterCostInput {
 }
 
 // recordAnswererCost wraps the CostRecorder for the planner/checker/auditor
-// call sites. The thrown CostUnattributableError surfaces back to the loop;
-// the recorder has already emitted the audit event before throwing.
+// call sites. Answerer adapters do not surface a token breakdown, so the
+// audit row carries zero tokens; cost is recorded best-effort (NULL when the
+// ref has no per-token price basis).
 export async function recordAnswererCost<TOutput>(input: AnswererCostInput<TOutput>): Promise<void> {
-  try {
-    await input.ctx.recorder.record(
-      {
-        runId: input.ctx.runId,
-        taskId: input.taskId,
-        specId: input.ctx.specId,
-        projectId: input.ctx.projectId,
-        cli: input.adapter.cli,
-        model: input.model,
-        authRef: input.adapter.authRef,
-        runtimeSeconds: input.runtimeSeconds
-      },
-      { inputTokens: 0, outputTokens: 0, cachedTokens: 0 },
-      input.rawUsage
-    );
-  } catch (error) {
-    if (error instanceof CostUnattributableError) {
-      throw error;
-    }
-    throw error;
-  }
+  await input.ctx.recorder.record(
+    {
+      runId: input.ctx.runId,
+      taskId: input.taskId,
+      specId: input.ctx.specId,
+      projectId: input.ctx.projectId,
+      cli: input.adapter.cli,
+      model: input.model,
+      authRef: input.adapter.authRef,
+      runtimeSeconds: input.runtimeSeconds
+    },
+    emptyTokenUsage,
+    input.rawUsage
+  );
 }
 
 export async function recordWriterCost(input: WriterCostInput): Promise<void> {
-  const tokens = input.tokenUsage ?? { inputTokens: 0, outputTokens: 0, cachedTokens: 0 };
+  const tokens = input.tokenUsage ?? emptyTokenUsage;
   await input.ctx.recorder.record(
     {
       runId: input.ctx.runId,

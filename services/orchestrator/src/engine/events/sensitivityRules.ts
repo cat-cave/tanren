@@ -102,12 +102,18 @@ export const sensitivityRules: SensitivityRule[] = [
     ["commits[].message", "public"],
     ["exitReason", "public"],
     ["tokenUsage.inputTokens", "public"],
+    ["tokenUsage.cachedInputTokens", "public"],
+    ["tokenUsage.cacheCreationTokens", "public"],
     ["tokenUsage.outputTokens", "public"],
-    ["tokenUsage.cachedTokens", "public"],
+    ["tokenUsage.reasoningOutputTokens", "public"],
+    ["tokenUsage.totalTokens", "public"],
     ["telemetry.rawEventCount", "public"],
     ["telemetry.tokenUsage.inputTokens", "public"],
+    ["telemetry.tokenUsage.cachedInputTokens", "public"],
+    ["telemetry.tokenUsage.cacheCreationTokens", "public"],
     ["telemetry.tokenUsage.outputTokens", "public"],
-    ["telemetry.tokenUsage.cachedTokens", "public"],
+    ["telemetry.tokenUsage.reasoningOutputTokens", "public"],
+    ["telemetry.tokenUsage.totalTokens", "public"],
     // Provider usage-limit notice (names the reset time); no secret material.
     ["telemetry.usageLimit.message", "public"],
     ["intent", "public"],
@@ -309,8 +315,8 @@ export const sensitivityRules: SensitivityRule[] = [
     ["provider", "public"],
     ["model", "public"],
     ["costUsd", "public"],
-    ["pricingMode", "public"],
-    ["costSource", "public"]
+    ["billingMode", "public"],
+    ["costBasis", "public"]
   ]),
   ...rulesFor("cost.failed", [["taskId", "public"], ["message", "public"]]),
   ...rulesFor("cost.unattributable", [
@@ -320,7 +326,7 @@ export const sensitivityRules: SensitivityRule[] = [
     ["reason", "public"],
     ["inputTokens", "public"],
     ["outputTokens", "public"],
-    ["cachedTokens", "public"]
+    ["cachedInputTokens", "public"]
   ]),
 
   // github

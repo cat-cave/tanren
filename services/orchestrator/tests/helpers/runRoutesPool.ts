@@ -68,11 +68,14 @@ export interface CostRow {
   provider: string;
   model: string;
   input_tokens: number;
+  cached_input_tokens: number;
+  cache_creation_tokens: number;
   output_tokens: number;
-  cached_tokens: number;
-  cost_usd: string;
-  pricing_mode: string;
-  cost_source: string;
+  reasoning_output_tokens: number;
+  total_tokens: number;
+  cost_usd: string | null;
+  billing_mode: string;
+  cost_basis: string;
   recorded_at: Date;
 }
 
@@ -166,11 +169,14 @@ export class RunRoutesPool {
       provider: input.provider ?? "openai",
       model: input.model ?? "gpt-x",
       input_tokens: input.input_tokens ?? 0,
+      cached_input_tokens: input.cached_input_tokens ?? 0,
+      cache_creation_tokens: input.cache_creation_tokens ?? 0,
       output_tokens: input.output_tokens ?? 0,
-      cached_tokens: input.cached_tokens ?? 0,
+      reasoning_output_tokens: input.reasoning_output_tokens ?? 0,
+      total_tokens: input.total_tokens ?? 0,
       cost_usd: input.cost_usd ?? "0.001",
-      pricing_mode: input.pricing_mode ?? "per_token",
-      cost_source: input.cost_source ?? "provider_direct",
+      billing_mode: input.billing_mode ?? "per_token",
+      cost_basis: input.cost_basis ?? "provider_pricing",
       recorded_at: input.recorded_at ?? new Date(2026, 4, 1, 0, 0, input.id)
     };
     this.costs.push(row);

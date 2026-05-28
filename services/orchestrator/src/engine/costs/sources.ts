@@ -1,96 +1,58 @@
-// Cost-attribution rules and the typed CostSource discriminated union (P2A-0011).
+// Cost-attribution model. Token accounting is MANDATORY and first-class;
+// cost in dollars is BEST-EFFORT.
 //
-// Every completed Codex planner/writer/checker/auditor call must be attributed
-// to exactly one of the three v0 cost models from PROJECT_BRIEF §4:
+// Two orthogonal axes describe every recorded call:
 //
-//   provider_direct      — token-billed API key (§4.1)
-//   codexbar             — ChatGPT subscription consumed via Codex CLI (§4.3)
-//   opportunity_computed — self-hosted GPU / fixed-fee endpoint (§4.2)
+//   billing_mode — how the credential is billed (from the auth ref):
+//     per_token    — token-billed API key (provider list prices apply)
+//     subscription — server-enforced rolling/weekly/monthly window
+//                    (ChatGPT/Claude subscription via the CLI). There is NO
+//                    fixed token denominator, so no dollar figure is invented.
+//     self_hosted  — local GPU / fixed-fee endpoint; no per-call dollar basis.
 //
-// The attribution rule consults the credential auth ref. If the ref does not
-// match any rule the recorder throws CostUnattributableError; the task fails
-// with failureKind="cost.unattributable" and the run halts. There is no
-// silent fallback and no `unknown_source` row.
+//   cost_basis — how the dollar figure (if any) was derived:
+//     ccusage          — derived from the ccusage tool (next PR).
+//     provider_pricing — computed from a known per-token price table.
+//     unknown          — no reliable basis; cost_usd IS NULL. This is an
+//                        HONEST, ALLOWED state — it does NOT fail the task.
+//
+// Subscription windows are percent-of-window limits, not token budgets, so we
+// never fabricate a "$20 / 50M tokens" estimate. When we cannot price a call
+// we record cost_usd = NULL with cost_basis = 'unknown' and move on.
 import { z } from "zod";
+import type { TokenUsage } from "../providers/types.js";
 
-export const PricingMode = z.enum(["per_token", "subscription_window", "opportunity_cost"]);
-export type PricingMode = z.infer<typeof PricingMode>;
+export const BillingMode = z.enum(["per_token", "subscription", "self_hosted"]);
+export type BillingMode = z.infer<typeof BillingMode>;
+
+export const CostBasis = z.enum(["ccusage", "provider_pricing", "unknown"]);
+export type CostBasis = z.infer<typeof CostBasis>;
 
 export const RawUsage = z.record(z.string(), z.unknown());
 export type RawUsage = z.infer<typeof RawUsage>;
 
-// CostSource is the typed input to the CostRecorder. The orchestrator builds
-// the matching variant from the auth ref (see resolveCostSource) and the
-// per-call token usage.
-export const CostSource = z.discriminatedUnion("source", [
-  z
-    .object({
-      source: z.literal("provider_direct"),
-      pricingMode: z.literal("per_token"),
-      provider: z.string(),
-      inputCostPerMillion: z.number(),
-      outputCostPerMillion: z.number(),
-      cachedInputCostPerMillion: z.number().nullable(),
-      rawUsage: RawUsage
-    })
-    .strict(),
-  z
-    .object({
-      source: z.literal("codexbar"),
-      pricingMode: z.literal("subscription_window"),
-      provider: z.literal("openai"),
-      subscriptionMonthlyFee: z.number(),
-      observedMaxMonthlyTokens: z.number(),
-      rawUsage: RawUsage
-    })
-    .strict(),
-  z
-    .object({
-      source: z.literal("opportunity_computed"),
-      pricingMode: z.literal("opportunity_cost"),
-      provider: z.string(),
-      hourlyOpportunityCostUsd: z.number(),
-      runtimeSeconds: z.number(),
-      rawUsage: RawUsage
-    })
-    .strict()
-]);
-export type CostSource = z.infer<typeof CostSource>;
+// CostSource is the typed result of resolving an auth ref + token usage into a
+// (possibly null) dollar figure plus its provenance. Built by resolveCostSource
+// and persisted by the CostRecorder.
+export interface CostSource {
+  billingMode: BillingMode;
+  costBasis: CostBasis;
+  provider: string;
+  // Per-token rate entry when costBasis === 'provider_pricing', else null.
+  rate: ProviderRate | null;
+  rawUsage: RawUsage;
+}
 
 export interface AttributionInput {
   cli: "codex" | "claude" | "opencode" | "fake";
   authRef: string;
   rawUsage: RawUsage;
-  // For opportunity_computed we need the wall-clock runtime of the call.
-  runtimeSeconds?: number;
-  // For codexbar we need the (possibly already-refined) denominator pulled
-  // from subscription_window_denominators by the caller.
-  observedMaxMonthlyTokens?: number;
 }
-
-export class CostUnattributableError extends Error {
-  readonly kind = "cost.unattributable" as const;
-  constructor(
-    readonly authRef: string,
-    readonly reason: string,
-    readonly cli: string,
-    readonly attempted: ReadonlyArray<string>
-  ) {
-    super(`cost.unattributable: no rule matched cli=${cli} ref=${authRef} reason=${reason}`);
-    this.name = "CostUnattributableError";
-  }
-}
-
-// Defaults documented in docs/operator-guide/costs.md. The denominator is
-// intentionally conservative on month one and refines from observed history
-// (see CostRecorder.refineSubscriptionDenominator).
-const codexbarSubscriptionMonthlyFeeUsd = 20;
-const codexbarTheoreticalMaxMonthlyTokens = 50_000_000;
 
 // Provider price tables. Pinned at known v0 list prices. Refining these is a
 // separate concern from cost attribution; see docs/operator-guide/costs.md
 // for the source-of-truth dates.
-interface ProviderRate {
+export interface ProviderRate {
   inputCostPerMillion: number;
   outputCostPerMillion: number;
   cachedInputCostPerMillion: number | null;
@@ -106,38 +68,38 @@ export function providerRate(provider: string): ProviderRate | undefined {
   return providerRateTable[provider];
 }
 
-// Classification of a credential ref. Order matters: codexbar must win over
-// provider_direct when the ref is a Codex ChatGPT subscription bundle so a
-// ChatGPT-Pro operator is never charged at provider list prices.
+// Classification of a credential ref into a billing mode. Order matters:
+// subscription bundles must win over per_token when the ref is a Codex/Claude
+// ChatGPT subscription bundle so a subscription operator is never charged at
+// provider list prices.
 type RefClassification =
-  | { kind: "codexbar" }
-  | { kind: "provider_direct"; provider: string }
-  | { kind: "opportunity_computed"; provider: string }
-  | { kind: "unattributable"; reason: string };
+  | { billingMode: "subscription"; provider: string }
+  | { billingMode: "per_token"; provider: string }
+  | { billingMode: "self_hosted"; provider: string }
+  | { billingMode: "unknown"; provider: string };
 
 export function classifyAuthRef(authRef: string): RefClassification {
   if (authRef === "") {
-    return { kind: "unattributable", reason: "empty auth ref" };
+    return { billingMode: "unknown", provider: "unknown" };
   }
-  // Codex CLI ChatGPT-subscription bundles always live under credential/codex/
-  // (see services/orchestrator/src/engine/credentials/codexAuth.ts). These
-  // are subscription-window dollars, never per-token.
+  // Codex/Claude CLI ChatGPT-subscription bundles live under credential/codex/.
+  // These are subscription-window dollars, never per-token.
   if (authRef.startsWith("credential/codex/")) {
-    return { kind: "codexbar" };
+    return { billingMode: "subscription", provider: "openai" };
   }
   if (authRef.startsWith("credential/anthropic/")) {
-    return { kind: "provider_direct", provider: "anthropic" };
+    return { billingMode: "per_token", provider: "anthropic" };
   }
   if (authRef.startsWith("credential/openai-api/")) {
-    return { kind: "provider_direct", provider: "openai" };
+    return { billingMode: "per_token", provider: "openai" };
   }
   if (authRef.startsWith("credential/openrouter/")) {
-    return { kind: "provider_direct", provider: "openrouter" };
+    return { billingMode: "per_token", provider: "openrouter" };
   }
   if (authRef.startsWith("credential/self-hosted/")) {
-    return { kind: "opportunity_computed", provider: refTailSegment(authRef) ?? "self-hosted" };
+    return { billingMode: "self_hosted", provider: refTailSegment(authRef) ?? "self-hosted" };
   }
-  return { kind: "unattributable", reason: `no rule for ref prefix: ${authRef.split("/").slice(0, 2).join("/")}/` };
+  return { billingMode: "unknown", provider: "unknown" };
 }
 
 function refTailSegment(ref: string): string | undefined {
@@ -145,96 +107,55 @@ function refTailSegment(ref: string): string | undefined {
   return parts[parts.length - 1];
 }
 
-// resolveCostSource is the entry point. It either returns a fully-typed
-// CostSource ready for the recorder to persist, or throws
-// CostUnattributableError. Callers must NOT swallow the error.
+// resolveCostSource maps an auth ref to a billing mode and a cost basis.
+// It NEVER throws for an unrecognized ref: an unknown billing mode resolves to
+// cost_basis = 'unknown' (cost_usd will be null). Token accounting still
+// happens for every call.
+//
+// TODO(P2A-cost-monitors): ccusage/codexbar integration plugs in here — a
+// per_token call may resolve to cost_basis = 'ccusage', and subscription-window
+// percent-of-window data will attach to the raw payload.
 export function resolveCostSource(input: AttributionInput): CostSource {
   const classification = classifyAuthRef(input.authRef);
-  const attempted = ["provider_direct", "codexbar", "opportunity_computed"];
-  if (classification.kind === "unattributable") {
-    throw new CostUnattributableError(input.authRef, classification.reason, input.cli, attempted);
-  }
-  if (classification.kind === "codexbar") {
+  if (classification.billingMode === "per_token") {
+    const rate = providerRate(classification.provider) ?? null;
     return {
-      source: "codexbar",
-      pricingMode: "subscription_window",
-      provider: "openai",
-      subscriptionMonthlyFee: codexbarSubscriptionMonthlyFeeUsd,
-      observedMaxMonthlyTokens: input.observedMaxMonthlyTokens ?? codexbarTheoreticalMaxMonthlyTokens,
-      rawUsage: input.rawUsage
-    };
-  }
-  if (classification.kind === "provider_direct") {
-    const rate = providerRate(classification.provider);
-    if (rate === undefined) {
-      throw new CostUnattributableError(
-        input.authRef,
-        `provider ${classification.provider} has no rate entry`,
-        input.cli,
-        attempted
-      );
-    }
-    return {
-      source: "provider_direct",
-      pricingMode: "per_token",
+      billingMode: "per_token",
+      // Known price → provider_pricing; otherwise we cannot price it.
+      costBasis: rate === null ? "unknown" : "provider_pricing",
       provider: classification.provider,
-      inputCostPerMillion: rate.inputCostPerMillion,
-      outputCostPerMillion: rate.outputCostPerMillion,
-      cachedInputCostPerMillion: rate.cachedInputCostPerMillion,
+      rate,
       rawUsage: input.rawUsage
     };
   }
-  // opportunity_computed
-  if (input.runtimeSeconds === undefined) {
-    throw new CostUnattributableError(
-      input.authRef,
-      "opportunity_computed requires runtimeSeconds",
-      input.cli,
-      attempted
-    );
-  }
-  // Default opportunity-cost figure for v0: $0.50/hour. Operators can
-  // configure this per credential in P2A-0006 follow-ups; the recorder reads
-  // the configured value when present, falling back to this default.
+  // subscription, self_hosted, or unknown → no reliable per-call dollar basis.
   return {
-    source: "opportunity_computed",
-    pricingMode: "opportunity_cost",
+    billingMode: classification.billingMode === "unknown" ? "self_hosted" : classification.billingMode,
+    costBasis: "unknown",
     provider: classification.provider,
-    hourlyOpportunityCostUsd: 0.5,
-    runtimeSeconds: input.runtimeSeconds,
+    rate: null,
     rawUsage: input.rawUsage
   };
 }
 
-export interface TokenCounts {
-  inputTokens: number;
-  outputTokens: number;
-  cachedTokens: number;
-}
-
-// Computes the dollar amount per the three formulas in PROJECT_BRIEF §4.
-// Returns a fixed-precision string so callers can write it straight into the
-// NUMERIC(14,6) cost_records.cost_usd column without floating-point drift.
-export function computeCostUsd(source: CostSource, tokens: TokenCounts): string {
-  if (source.source === "provider_direct") {
-    const cachedCost =
-      source.cachedInputCostPerMillion === null
-        ? 0
-        : (tokens.cachedTokens * source.cachedInputCostPerMillion) / 1_000_000;
-    const dollars =
-      (tokens.inputTokens * source.inputCostPerMillion) / 1_000_000 +
-      (tokens.outputTokens * source.outputCostPerMillion) / 1_000_000 +
-      cachedCost;
-    return formatUsd(dollars);
+// computeCostUsd returns a fixed-precision dollar string for the NUMERIC(14,6)
+// cost_records.cost_usd column, or null when cost is genuinely unknown
+// (subscription / self-hosted / unpriced model). NO fake estimate.
+export function computeCostUsd(source: CostSource, tokens: TokenUsage): string | null {
+  if (source.costBasis !== "provider_pricing" || source.rate === null) {
+    return null;
   }
-  if (source.source === "codexbar") {
-    const totalTokens = tokens.inputTokens + tokens.outputTokens + tokens.cachedTokens;
-    if (source.observedMaxMonthlyTokens <= 0) {
-      return formatUsd(0);
-    }
-    return formatUsd((source.subscriptionMonthlyFee / source.observedMaxMonthlyTokens) * totalTokens);
-  }
-  return formatUsd(source.hourlyOpportunityCostUsd * (source.runtimeSeconds / 3600));
+  const rate = source.rate;
+  // reasoning tokens are billed at the output rate; cached-input at the cache
+  // rate when known, otherwise treated as uncached input.
+  const cacheRate = rate.cachedInputCostPerMillion ?? rate.inputCostPerMillion;
+  const dollars =
+    (tokens.inputTokens * rate.inputCostPerMillion) / 1_000_000 +
+    (tokens.cachedInputTokens * cacheRate) / 1_000_000 +
+    (tokens.cacheCreationTokens * rate.inputCostPerMillion) / 1_000_000 +
+    (tokens.outputTokens * rate.outputCostPerMillion) / 1_000_000 +
+    (tokens.reasoningOutputTokens * rate.outputCostPerMillion) / 1_000_000;
+  return formatUsd(dollars);
 }
 
 function formatUsd(value: number): string {
@@ -243,8 +164,3 @@ function formatUsd(value: number): string {
   }
   return value.toFixed(6);
 }
-
-export const costSourceConstants = {
-  codexbarSubscriptionMonthlyFeeUsd,
-  codexbarTheoreticalMaxMonthlyTokens
-} as const;
