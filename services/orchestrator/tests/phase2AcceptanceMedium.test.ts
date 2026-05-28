@@ -26,13 +26,13 @@ function mediumSnapshot(overrides: Partial<PersistedRunSnapshot> = {}): Persiste
     prUrl: "https://github.com/cat-cave/tanren-fixture-medium/pull/7",
     taskKinds: ["plan", "write", "check", "write", "check", "audit", "ci"],
     taskCounts: { plan: 1, write: 2, check: 2, audit: 1, ci: 1 },
-    costSources: [
-      { taskKind: "plan", source: "codexbar" },
-      { taskKind: "write", source: "codexbar" },
-      { taskKind: "check", source: "codexbar" },
-      { taskKind: "write", source: "codexbar" },
-      { taskKind: "check", source: "codexbar" },
-      { taskKind: "audit", source: "codexbar" }
+    costBases: [
+      { taskKind: "plan", basis: "unknown", billingMode: "subscription" },
+      { taskKind: "write", basis: "unknown", billingMode: "subscription" },
+      { taskKind: "check", basis: "unknown", billingMode: "subscription" },
+      { taskKind: "write", basis: "unknown", billingMode: "subscription" },
+      { taskKind: "check", basis: "unknown", billingMode: "subscription" },
+      { taskKind: "audit", basis: "unknown", billingMode: "subscription" }
     ],
     events: [
       "planner.started",
@@ -97,10 +97,10 @@ describe("phase2 acceptance — medium tier dry-run smoke", () => {
         tier: "medium",
         expectedOutcome: "phase2_medium_complete",
         snapshot: mediumSnapshot({
-          costSources: [
-            { taskKind: "write", source: "codexbar" },
-            { taskKind: "check", source: "codexbar" },
-            { taskKind: "audit", source: "codexbar" }
+          costBases: [
+            { taskKind: "write", basis: "unknown", billingMode: "subscription" },
+            { taskKind: "check", basis: "unknown", billingMode: "subscription" },
+            { taskKind: "audit", basis: "unknown", billingMode: "subscription" }
           ]
         })
       })

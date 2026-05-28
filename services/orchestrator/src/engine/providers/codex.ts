@@ -332,14 +332,25 @@ function findTokenUsage(value: unknown): TokenUsage | undefined {
   return undefined;
 }
 
+// Transforms Codex's INCLUSIVE token shape into the disjoint TokenUsage
+// buckets. In Codex JSONL, cached_input_tokens ⊆ input_tokens and
+// reasoning_output_tokens ⊆ output_tokens, so we subtract the overlaps to
+// keep the buckets mutually exclusive (total = sum of parts).
 function tokenUsageFromRecord(record: Record<string, unknown>): TokenUsage | undefined {
-  const inputTokens = numberField(record, ["input_tokens", "inputTokens", "prompt_tokens", "promptTokens"]);
-  const outputTokens = numberField(record, ["output_tokens", "outputTokens", "completion_tokens", "completionTokens"]);
-  const cachedTokens = numberField(record, ["cached_tokens", "cachedTokens", "cache_read_input_tokens", "cachedInputTokens"]) ?? 0;
-  if (inputTokens === undefined || outputTokens === undefined) {
+  const rawInput = numberField(record, ["input_tokens", "inputTokens", "prompt_tokens", "promptTokens"]);
+  const rawOutput = numberField(record, ["output_tokens", "outputTokens", "completion_tokens", "completionTokens"]);
+  if (rawInput === undefined || rawOutput === undefined) {
     return undefined;
   }
-  return { inputTokens, outputTokens, cachedTokens };
+  const cachedInputTokens = numberField(record, ["cached_input_tokens", "cachedInputTokens", "cache_read_input_tokens"]) ?? 0;
+  const cacheCreationTokens = numberField(record, ["cache_creation_input_tokens", "cacheCreationTokens", "cache_creation_tokens"]) ?? 0;
+  const reasoningOutputTokens = numberField(record, ["reasoning_output_tokens", "reasoningOutputTokens"]) ?? 0;
+  const inputTokens = Math.max(0, rawInput - cachedInputTokens); // de-overlap: codex input includes cached
+  const outputTokens = Math.max(0, rawOutput - reasoningOutputTokens); // de-overlap: codex output includes reasoning
+  const totalTokens =
+    numberField(record, ["total_tokens", "totalTokens"]) ??
+    inputTokens + cachedInputTokens + cacheCreationTokens + outputTokens + reasoningOutputTokens;
+  return { inputTokens, cachedInputTokens, cacheCreationTokens, outputTokens, reasoningOutputTokens, totalTokens };
 }
 
 function numberField(record: Record<string, unknown>, keys: string[]): number | undefined {

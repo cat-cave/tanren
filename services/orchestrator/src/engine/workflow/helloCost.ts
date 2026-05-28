@@ -4,7 +4,7 @@
 // the hello flow's cost recording in its own module keeps helloRun.ts under
 // the architecture-check 500-line cap.
 import type { CostRecorder } from "../costs/index.js";
-import type { TokenUsage } from "../providers/types.js";
+import { emptyTokenUsage, type TokenUsage } from "../providers/types.js";
 
 export interface HelloCostScope {
   runId: string;
@@ -22,13 +22,13 @@ export interface HelloCostInput {
   tokenUsage?: TokenUsage;
 }
 
-// Fake hello-world adapters resolve as opportunity_computed (PROJECT_BRIEF
-// §4.2): runtime-based dollar figures with the self-hosted rate. The fixed
-// 1-second runtime is intentional — hello-world runs do not exercise real
-// LLMs, so the cost row carries the audit-trail shape, not a meaningful
-// dollar value.
+// Fake hello-world adapters resolve as self-hosted billing (PROJECT_BRIEF
+// §4.2): no per-call dollar basis, so the cost row carries cost_usd = NULL
+// with cost_basis = 'unknown'. The token breakdown still lands for audit. The
+// fixed 1-second runtime is intentional — hello-world runs do not exercise
+// real LLMs.
 export async function recordHelloTaskCost(input: HelloCostInput): Promise<void> {
-  const tokens = input.tokenUsage ?? { inputTokens: 0, outputTokens: 0, cachedTokens: 0 };
+  const tokens = input.tokenUsage ?? emptyTokenUsage;
   await input.recorder.record(
     {
       runId: input.scope.runId,

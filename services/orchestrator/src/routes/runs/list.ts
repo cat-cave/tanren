@@ -312,22 +312,7 @@ export async function fetchFeedPage(
 // Costs
 // ---------------------------------------------------------------------------
 
-interface CostQueryRow {
-  id: unknown;
-  task_id: unknown;
-  run_id: unknown;
-  project_id: unknown;
-  cli: unknown;
-  provider: unknown;
-  model: unknown;
-  input_tokens: unknown;
-  output_tokens: unknown;
-  cached_tokens: unknown;
-  cost_usd: unknown;
-  pricing_mode: unknown;
-  cost_source: unknown;
-  recorded_at: unknown;
-}
+type CostQueryRow = Record<string, unknown>;
 
 function decodeCostRow(raw: CostQueryRow): RunCostRecord {
   return RunCostRecord.parse({
@@ -339,11 +324,14 @@ function decodeCostRow(raw: CostQueryRow): RunCostRecord {
     provider: String(raw.provider),
     model: String(raw.model),
     inputTokens: Number(raw.input_tokens ?? 0),
+    cachedInputTokens: Number(raw.cached_input_tokens ?? 0),
+    cacheCreationTokens: Number(raw.cache_creation_tokens ?? 0),
     outputTokens: Number(raw.output_tokens ?? 0),
-    cachedTokens: Number(raw.cached_tokens ?? 0),
-    costUsd: String(raw.cost_usd),
-    pricingMode: raw.pricing_mode as RunCostRecord["pricingMode"],
-    costSource: raw.cost_source as RunCostRecord["costSource"],
+    reasoningOutputTokens: Number(raw.reasoning_output_tokens ?? 0),
+    totalTokens: Number(raw.total_tokens ?? 0),
+    costUsd: raw.cost_usd === null || raw.cost_usd === undefined ? null : String(raw.cost_usd),
+    billingMode: raw.billing_mode as RunCostRecord["billingMode"],
+    costBasis: raw.cost_basis as RunCostRecord["costBasis"],
     recordedAt: raw.recorded_at as Date
   });
 }
@@ -351,8 +339,8 @@ function decodeCostRow(raw: CostQueryRow): RunCostRecord {
 export async function fetchRunCostsForSnapshot(pool: pg.Pool, runId: string): Promise<RunCostRecord[]> {
   const result = await pool.query<CostQueryRow>(
     `SELECT id, task_id, run_id, project_id, cli, provider, model,
-            input_tokens, output_tokens, cached_tokens, cost_usd,
-            pricing_mode, cost_source, recorded_at
+            input_tokens, cached_input_tokens, cache_creation_tokens, output_tokens, reasoning_output_tokens, total_tokens,
+            cost_usd, billing_mode, cost_basis, recorded_at
        FROM cost_records
       WHERE run_id = $1
       ORDER BY recorded_at ASC, id ASC`,
@@ -382,8 +370,8 @@ export async function fetchCostsPage(
   params.push(limit + 1);
   const result = await pool.query<CostQueryRow>(
     `SELECT id, task_id, run_id, project_id, cli, provider, model,
-            input_tokens, output_tokens, cached_tokens, cost_usd,
-            pricing_mode, cost_source, recorded_at
+            input_tokens, cached_input_tokens, cache_creation_tokens, output_tokens, reasoning_output_tokens, total_tokens,
+            cost_usd, billing_mode, cost_basis, recorded_at
        FROM cost_records
       WHERE run_id = $1${cursorClause}
       ORDER BY recorded_at ASC, id ASC

@@ -3,7 +3,7 @@ import type pg from "pg";
 import type { Allocator, RunnerAllocation } from "../contracts/allocator.js";
 import { type JobEnvelope, type JobQueue, PgJobQueue } from "../contracts/jobQueue.js";
 import type { SshCommandResult, SshSubstrate } from "../contracts/sshSubstrate.js";
-import { CostRecorder, CostUnattributableError } from "../costs/index.js";
+import { CostRecorder } from "../costs/index.js";
 import type { EventName, EventPayload } from "../events/index.js";
 import { type EventStore, PgEventStore } from "../eventStore.js";
 import { fakeSelfHostedAuthRef } from "../providers/fake.js";
@@ -443,12 +443,6 @@ async function emitRoleFailed(context: HelloWorkflowContext, task: HelloTaskDefi
 function failureForTask(kind: HelloTaskKind, error: unknown): { kind: string; message: string } {
   if (error instanceof AnswererSchemaValidationError) {
     return { kind: "schema_validation_failed", message: error.message };
-  }
-  if (error instanceof CostUnattributableError) {
-    // P2A-0011: cost attribution failures fail the task without writing a
-    // cost row. The cost.unattributable event has already been appended by
-    // the recorder.
-    return { kind: "cost.unattributable", message: error.message };
   }
   return { kind: `${kind}_failed`, message: messageFromError(error) };
 }

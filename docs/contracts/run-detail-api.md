@@ -135,8 +135,10 @@ Cursor-paginated cost records for a run.
 
 `RunCostRecord` mirrors the persisted `cost_records` row:
 
-- `pricingMode`: `per_token` | `opportunity_cost` | `subscription_window` (matches P2A-0011).
-- `costSource`: `provider_direct` | `ccusage` | `codexbar` | `opportunity_computed` (the only allowed sources per `PROJECT_BRIEF`).
+- Disjoint token buckets: `inputTokens`, `cachedInputTokens`, `cacheCreationTokens`, `outputTokens`, `reasoningOutputTokens`, `totalTokens`.
+- `costUsd`: a fixed-precision dollar string, or `null` when cost is unknown (best-effort).
+- `billingMode`: `per_token` | `subscription` | `self_hosted`.
+- `costBasis`: `ccusage` | `provider_pricing` | `unknown` (`unknown` ⇒ `costUsd` is null).
 
 ---
 

@@ -97,7 +97,7 @@ const fakeWriterResult: WriterResult = {
   diff: "diff --git a/PHASE1_FIXTURE.md b/PHASE1_FIXTURE.md\n+tanren phase 1 ok\n",
   commits: [{ sha: "ffffffffffffffffffffffffffffffffffffffff", message: "phase 1 fixture" }],
   exitReason: "completed",
-  tokenUsage: { inputTokens: 1, outputTokens: 1, cachedTokens: 0 }
+  tokenUsage: { inputTokens: 1, cachedInputTokens: 0, cacheCreationTokens: 0, outputTokens: 1, reasoningOutputTokens: 0, totalTokens: 2 }
 };
 
 const fakeWriter: WriterAdapter = {

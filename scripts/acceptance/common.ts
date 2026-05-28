@@ -130,7 +130,9 @@ export interface PersistedRunSnapshot {
   prUrl: string | null;
   taskKinds: string[];
   taskCounts: { plan: number; write: number; check: number; audit: number; ci: number };
-  costSources: { taskKind: string; source: string }[];
+  // One row per recorded cost_records entry: the task kind and how the dollar
+  // figure was derived (cost_basis). 'unknown' is a legitimate, allowed basis.
+  costBases: { taskKind: string; basis: string; billingMode: string }[];
   events: string[];
   plannerRerequestedCount: number;
   workspacePathHints: string[];
@@ -161,8 +163,8 @@ export async function loadRunSnapshot(pool: pg.Pool, runId: string): Promise<Per
     }
   }
 
-  const costRows = await pool.query<{ task_kind: string; cost_source: string }>(
-    `SELECT t.kind AS task_kind, cr.cost_source
+  const costRows = await pool.query<{ task_kind: string; cost_basis: string; billing_mode: string }>(
+    `SELECT t.kind AS task_kind, cr.cost_basis, cr.billing_mode
        FROM cost_records cr
        JOIN tasks t ON t.task_id = cr.task_id
       WHERE cr.run_id = $1
@@ -190,7 +192,7 @@ export async function loadRunSnapshot(pool: pg.Pool, runId: string): Promise<Per
     prUrl: runRow.rows[0]?.pr_url ?? null,
     taskKinds,
     taskCounts: counts,
-    costSources: costRows.rows.map((row) => ({ taskKind: row.task_kind, source: row.cost_source })),
+    costBases: costRows.rows.map((row) => ({ taskKind: row.task_kind, basis: row.cost_basis, billingMode: row.billing_mode })),
     events,
     plannerRerequestedCount,
     workspacePathHints,
@@ -233,14 +235,17 @@ export function assertAcceptanceCriteria(input: AcceptanceCriteriaInput): void {
   // accept additional sources (e.g. subscription-window denominator refines).
   const requiredCostKinds: string[] =
     tier === "easy" ? ["write", "check", "audit"] : ["plan", "write", "check", "audit"];
-  const observedCostKinds = new Set(snapshot.costSources.map((row) => row.taskKind));
+  const observedCostKinds = new Set(snapshot.costBases.map((row) => row.taskKind));
   const missingCostKinds = requiredCostKinds.filter((kind) => !observedCostKinds.has(kind));
   if (missingCostKinds.length > 0) {
     failures.push(`missing cost_records for task kinds: ${missingCostKinds.join(", ")}`);
   }
-  const unknownSources = snapshot.costSources.filter((row) => row.source === "unknown" || row.source === "");
-  if (unknownSources.length > 0) {
-    failures.push(`cost_records have unknown source rows: ${unknownSources.length}`);
+  // Token accounting is mandatory; cost is best-effort, so 'unknown' cost_basis
+  // is allowed. Every row must still carry a billing_mode (the credential's
+  // billing classification is never empty).
+  const missingBillingMode = snapshot.costBases.filter((row) => row.billingMode === "");
+  if (missingBillingMode.length > 0) {
+    failures.push(`cost_records missing billing_mode: ${missingBillingMode.length}`);
   }
 
   if (tier === "medium") {
@@ -287,7 +292,7 @@ export function printProofBlock(input: {
     `prUrl           : ${String(snapshot.prUrl)}`,
     `ciStatus        : ${snapshot.ciStatus}`,
     `tasks           : ${snapshot.taskKinds.join(", ")}`,
-    `costRecords     : ${snapshot.costSources.length} (${snapshot.costSources.map((c) => `${c.taskKind}:${c.source}`).join(", ")})`,
+    `costRecords     : ${snapshot.costBases.length} (${snapshot.costBases.map((c) => `${c.taskKind}:${c.billingMode}/${c.basis}`).join(", ")})`,
     `plannerReruns   : ${snapshot.plannerRerequestedCount}`,
     `repo            : ${repoUrl}`,
     `duration_s      : ${durationS}`,

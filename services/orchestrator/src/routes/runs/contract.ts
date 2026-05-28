@@ -88,11 +88,14 @@ export const RunCostRecord = z
     provider: z.string().min(1),
     model: z.string().min(1),
     inputTokens: z.number().int().nonnegative(),
+    cachedInputTokens: z.number().int().nonnegative(),
+    cacheCreationTokens: z.number().int().nonnegative(),
     outputTokens: z.number().int().nonnegative(),
-    cachedTokens: z.number().int().nonnegative(),
-    costUsd: z.string().min(1),
-    pricingMode: z.enum(["per_token", "opportunity_cost", "subscription_window"]),
-    costSource: z.enum(["provider_direct", "ccusage", "codexbar", "opportunity_computed"]),
+    reasoningOutputTokens: z.number().int().nonnegative(),
+    totalTokens: z.number().int().nonnegative(),
+    costUsd: z.string().min(1).nullable(),
+    billingMode: z.enum(["per_token", "subscription", "self_hosted"]),
+    costBasis: z.enum(["ccusage", "provider_pricing", "unknown"]),
     recordedAt: z.coerce.date()
   })
   .strict();

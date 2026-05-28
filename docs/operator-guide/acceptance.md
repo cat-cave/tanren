@@ -155,7 +155,7 @@ status          : done
 prUrl           : https://github.com/cat-cave/tanren-fixture-easy/pull/N
 ciStatus        : passed
 tasks           : plan, write, check, audit, ci
-costRecords     : 3 (write:codexbar, check:codexbar, audit:codexbar)
+costRecords     : 3 (write:subscription/unknown, check:subscription/unknown, audit:subscription/unknown)
 plannerReruns   : 0
 repo            : https://github.com/cat-cave/tanren-fixture-easy
 duration_s      : XX

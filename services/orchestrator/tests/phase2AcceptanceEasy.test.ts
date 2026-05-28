@@ -25,10 +25,10 @@ function easySnapshot(overrides: Partial<PersistedRunSnapshot> = {}): PersistedR
     prUrl: "https://github.com/cat-cave/tanren-fixture-easy/pull/123",
     taskKinds: ["plan", "write", "check", "audit", "ci"],
     taskCounts: { plan: 1, write: 1, check: 1, audit: 1, ci: 1 },
-    costSources: [
-      { taskKind: "write", source: "codexbar" },
-      { taskKind: "check", source: "codexbar" },
-      { taskKind: "audit", source: "codexbar" }
+    costBases: [
+      { taskKind: "write", basis: "unknown", billingMode: "subscription" },
+      { taskKind: "check", basis: "unknown", billingMode: "subscription" },
+      { taskKind: "audit", basis: "unknown", billingMode: "subscription" }
     ],
     events: [
       "phase1.fixture.started",
@@ -102,24 +102,40 @@ describe("phase2 acceptance — easy tier dry-run smoke", () => {
       assertAcceptanceCriteria({
         tier: "easy",
         expectedOutcome: "phase2_easy_complete",
-        snapshot: easySnapshot({ costSources: [{ taskKind: "write", source: "codexbar" }] })
+        snapshot: easySnapshot({ costBases: [{ taskKind: "write", basis: "unknown", billingMode: "subscription" }] })
       })
     ).toThrow(/cost_records/);
   });
 
-  it("rejects unknown cost sources (no placeholder rows ever land)", () => {
+  it("accepts 'unknown' cost basis (cost is best-effort)", () => {
     expect(() =>
       assertAcceptanceCriteria({
         tier: "easy",
         expectedOutcome: "phase2_easy_complete",
         snapshot: easySnapshot({
-          costSources: [
-            { taskKind: "write", source: "codexbar" },
-            { taskKind: "check", source: "codexbar" },
-            { taskKind: "audit", source: "unknown" }
+          costBases: [
+            { taskKind: "write", basis: "provider_pricing", billingMode: "per_token" },
+            { taskKind: "check", basis: "unknown", billingMode: "subscription" },
+            { taskKind: "audit", basis: "unknown", billingMode: "self_hosted" }
           ]
         })
       })
-    ).toThrow(/unknown source/);
+    ).not.toThrow();
+  });
+
+  it("rejects cost rows missing a billing_mode", () => {
+    expect(() =>
+      assertAcceptanceCriteria({
+        tier: "easy",
+        expectedOutcome: "phase2_easy_complete",
+        snapshot: easySnapshot({
+          costBases: [
+            { taskKind: "write", basis: "unknown", billingMode: "subscription" },
+            { taskKind: "check", basis: "unknown", billingMode: "subscription" },
+            { taskKind: "audit", basis: "unknown", billingMode: "" }
+          ]
+        })
+      })
+    ).toThrow(/billing_mode/);
   });
 });

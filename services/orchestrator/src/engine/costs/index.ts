@@ -1,20 +1,19 @@
-// Barrel for the P2A-0011 cost-record-persistence surface. Importing from
-// here is the only supported way for workflow code to attribute and persist
-// LLM cost; the workflow MUST call CostRecorder.record at task completion
-// and propagate CostUnattributableError so the task fails with
-// failureKind="cost.unattributable" and the run halts.
+// Barrel for the cost-record-persistence surface. Importing from here is the
+// only supported way for workflow code to attribute and persist LLM cost; the
+// workflow MUST call CostRecorder.record at task completion. Token accounting
+// is mandatory; cost in dollars is best-effort (NULL when unknown), so the
+// recorder never halts a run for missing cost.
 export {
-  CostSource,
+  type CostSource,
   type RawUsage,
-  PricingMode,
+  BillingMode,
+  CostBasis,
   type AttributionInput,
-  CostUnattributableError,
+  type ProviderRate,
   classifyAuthRef,
   computeCostUsd,
-  costSourceConstants,
   providerRate,
-  resolveCostSource,
-  type TokenCounts
+  resolveCostSource
 } from "./sources.js";
 
 export { CostRecorder, type CostRecordContext, type RecordedCost } from "./recorder.js";

@@ -120,9 +120,10 @@ export const CostResolvedPayload = z
     cli: z.string(),
     provider: z.string(),
     model: z.string(),
-    costUsd: z.string(),
-    pricingMode: z.string(),
-    costSource: z.string()
+    // cost is best-effort: null when no reliable basis exists.
+    costUsd: z.string().nullable(),
+    billingMode: z.string(),
+    costBasis: z.string()
   })
   .strict();
 
@@ -133,10 +134,9 @@ export const CostFailedPayload = z
   })
   .strict();
 
-// Emitted when a completed Codex call has token usage but the orchestrator
-// cannot attribute it to one of the three v0 cost models. The task fails
-// with failureKind="cost.unattributable" and the run halts so no row lands
-// in cost_records with a placeholder source. See P2A-0011.
+// cost.unattributable is retained in the event registry for compatibility but
+// is no longer thrown for missing cost (cost-unknown is now an allowed state
+// recorded as cost_usd = NULL). Kept harmless per the locked contract.
 export const CostUnattributablePayload = z
   .object({
     taskId: z.string(),
@@ -145,6 +145,6 @@ export const CostUnattributablePayload = z
     reason: z.string(),
     inputTokens: z.number().int().optional(),
     outputTokens: z.number().int().optional(),
-    cachedTokens: z.number().int().optional()
+    cachedInputTokens: z.number().int().optional()
   })
   .strict();

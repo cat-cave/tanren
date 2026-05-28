@@ -209,10 +209,10 @@ describe("NotificationDispatcher", () => {
         intent: "happy intent",
         commits: [],
         exitReason: "ok",
-        tokenUsage: { inputTokens: 1, outputTokens: 1, cachedTokens: 0 },
+        tokenUsage: { inputTokens: 1, cachedInputTokens: 0, cacheCreationTokens: 0, outputTokens: 1, reasoningOutputTokens: 0, totalTokens: 2 },
         telemetry: {
           rawEventCount: 0,
-          tokenUsage: { inputTokens: 1, outputTokens: 1, cachedTokens: 0 }
+          tokenUsage: { inputTokens: 1, cachedInputTokens: 0, cacheCreationTokens: 0, outputTokens: 1, reasoningOutputTokens: 0, totalTokens: 2 }
         },
         decisions: [],
         toolCalls: [

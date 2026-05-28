@@ -25,8 +25,11 @@ describe("orchestrator scaffold contracts", () => {
       provider: "fake",
       model: "fake",
       inputTokens: 1,
+      cachedInputTokens: 0,
+      cacheCreationTokens: 0,
       outputTokens: 1,
-      cachedTokens: 0
+      reasoningOutputTokens: 0,
+      totalTokens: 2
     });
     const queue = new FakeJobQueue();
     const job = await queue.enqueue({ taskKind: "plan", payload: { ok: true } });
@@ -36,7 +39,8 @@ describe("orchestrator scaffold contracts", () => {
     expect(allocation.runnerId).toBe("runner_run_1");
     expect(ssh.exitCode).toBe(0);
     await expect(secrets.get("credential/fake")).resolves.toEqual({ ref: "credential/fake", value: "secret" });
-    expect(cost.costSource).toBe("opportunity_computed");
+    expect(cost.costBasis).toBe("unknown");
+    expect(cost.costUsd).toBeNull();
     expect(job.id).toBe("job_1");
     expect(notification.id).toBe("notification_1");
     expect(rpcRun.status).toBe("queued");

@@ -25,7 +25,7 @@ describe("Codex writer adapter", () => {
     const ssh = new ScriptedSsh([
       ok(""),
       ok("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n"),
-      ok("{\"type\":\"usage\",\"usage\":{\"input_tokens\":12,\"output_tokens\":5,\"cached_tokens\":3}}\n"),
+      ok("{\"type\":\"usage\",\"usage\":{\"input_tokens\":12,\"output_tokens\":5,\"cached_input_tokens\":3}}\n"),
       ok(refreshedAuthJson()),
       ok(""),
       ok("diff --git a/LIVE.md b/LIVE.md\n+done\n"),
@@ -48,8 +48,11 @@ describe("Codex writer adapter", () => {
       diff: "diff --git a/LIVE.md b/LIVE.md\n+done\n",
       commits: [],
       exitReason: "completed",
-      tokenUsage: { inputTokens: 12, outputTokens: 5, cachedTokens: 3 },
-      telemetry: { rawEventCount: 1, tokenUsage: { inputTokens: 12, outputTokens: 5, cachedTokens: 3 } }
+      tokenUsage: { inputTokens: 9, cachedInputTokens: 3, cacheCreationTokens: 0, outputTokens: 5, reasoningOutputTokens: 0, totalTokens: 17 },
+      telemetry: {
+        rawEventCount: 1,
+        tokenUsage: { inputTokens: 9, cachedInputTokens: 3, cacheCreationTokens: 0, outputTokens: 5, reasoningOutputTokens: 0, totalTokens: 17 }
+      }
     });
   });
 
@@ -119,7 +122,25 @@ describe("Codex writer adapter", () => {
   it("parses raw Codex JSONL count and optional token usage", () => {
     expect(parseCodexJsonlTelemetry("{}\nnot-json\n{\"usage\":{\"promptTokens\":7,\"completionTokens\":4}}\n")).toEqual({
       rawEventCount: 3,
-      tokenUsage: { inputTokens: 7, outputTokens: 4, cachedTokens: 0 }
+      tokenUsage: { inputTokens: 7, cachedInputTokens: 0, cacheCreationTokens: 0, outputTokens: 4, reasoningOutputTokens: 0, totalTokens: 11 }
+    });
+  });
+
+  it("de-overlaps Codex inclusive token shape into disjoint buckets", () => {
+    // Real Codex shape: cached_input_tokens ⊆ input_tokens and
+    // reasoning_output_tokens ⊆ output_tokens, so input/output must shed the
+    // overlap to keep the buckets mutually exclusive.
+    const line = JSON.stringify({
+      type: "usage",
+      usage: { input_tokens: 11460, cached_input_tokens: 4480, output_tokens: 461, reasoning_output_tokens: 316, total_tokens: 11921 }
+    });
+    expect(parseCodexJsonlTelemetry(`${line}\n`).tokenUsage).toEqual({
+      inputTokens: 6980,
+      cachedInputTokens: 4480,
+      cacheCreationTokens: 0,
+      outputTokens: 145,
+      reasoningOutputTokens: 316,
+      totalTokens: 11921
     });
   });
 

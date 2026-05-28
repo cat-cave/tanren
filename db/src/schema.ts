@@ -130,37 +130,28 @@ export const costRecords = pgTable(
     cli: text("cli").notNull(),
     provider: text("provider").notNull(),
     model: text("model").notNull(),
+    // Disjoint token-type buckets (see providers/types.ts TokenUsage). Token
+    // accounting is mandatory and first-class; never fold types together.
     inputTokens: integer("input_tokens").notNull().default(0),
+    cachedInputTokens: integer("cached_input_tokens").notNull().default(0),
+    cacheCreationTokens: integer("cache_creation_tokens").notNull().default(0),
     outputTokens: integer("output_tokens").notNull().default(0),
-    cachedTokens: integer("cached_tokens").notNull().default(0),
-    costUsd: numeric("cost_usd", { precision: 14, scale: 6 }).notNull(),
-    pricingMode: text("pricing_mode").notNull(),
-    costSource: text("cost_source").notNull(),
+    reasoningOutputTokens: integer("reasoning_output_tokens").notNull().default(0),
+    totalTokens: integer("total_tokens").notNull().default(0),
+    // Cost is best-effort. NULL is an honest, allowed state when no reliable
+    // cost basis exists (subscription/self-hosted/unpriced models).
+    costUsd: numeric("cost_usd", { precision: 14, scale: 6 }),
+    billingMode: text("billing_mode").notNull(),
+    costBasis: text("cost_basis").notNull(),
     costSourceRaw: jsonb("cost_source_raw").notNull().default(sql`'{}'::jsonb`),
     recordedAt: timestamp("recorded_at", { withTimezone: true }).notNull().defaultNow(),
     tenantId: text("tenant_id"),
     userId: text("user_id")
   },
   (table) => [
-    check("cost_records_pricing_mode_check", sql`${table.pricingMode} IN ('per_token','opportunity_cost','subscription_window')`),
-    check(
-      "cost_records_cost_source_check",
-      sql`${table.costSource} IN ('provider_direct','ccusage','codexbar','opportunity_computed')`
-    )
+    check("cost_records_billing_mode_check", sql`${table.billingMode} IN ('per_token','subscription','self_hosted')`),
+    check("cost_records_cost_basis_check", sql`${table.costBasis} IN ('ccusage','provider_pricing','unknown')`)
   ]
-);
-
-// Rolling denominator used to convert subscription-window usage into a USD
-// equivalent (PROJECT_BRIEF §4.3). v0 starts each auth ref with a
-// conservative theoretical maximum and refines it from observed history.
-// The 30-day rolling sum is recomputed by the CostRecorder on every write.
-export const subscriptionWindowDenominators = pgTable(
-  "subscription_window_denominators",
-  {
-    authRef: text("auth_ref").primaryKey(),
-    observedMaxMonthlyTokens: integer("observed_max_monthly_tokens").notNull().default(0),
-    lastUpdatedAt: timestamp("last_updated_at", { withTimezone: true }).notNull().defaultNow()
-  }
 );
 
 export const events = pgTable(

@@ -4,12 +4,12 @@ import { z } from "zod";
 import type { Allocator, RunnerAllocation, SshTarget } from "../contracts/allocator.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { SshSubstrate } from "../contracts/sshSubstrate.js";
-import { CostRecorder, CostUnattributableError } from "../costs/index.js";
+import { CostRecorder } from "../costs/index.js";
 import { type EventName, type EventPayload } from "../events/index.js";
 import { type EventStore, PgEventStore } from "../eventStore.js";
 import type { AuditAnswer, CheckAnswer } from "../providers/answererSchemas.js";
 import type { GitHubHttpClient } from "../providers/github.js";
-import type { AnswererAdapter, TokenUsage, WriterAdapter, WriterResult } from "../providers/types.js";
+import { emptyTokenUsage, type AnswererAdapter, type TokenUsage, type WriterAdapter, type WriterResult } from "../providers/types.js";
 import { quoteSshShellArg } from "../ssh/command.js";
 import { runWorkspaceSshCommand, workspaceRepoPathForRun } from "../workspace/index.js";
 import { pollCiForRun, type PollCiForRunResult } from "./ciPolling.js";
@@ -248,13 +248,10 @@ async function runFixtureTask<TOutput>(
 }
 
 // Maps a thrown error from a fixture task body to the typed failure payload
-// persisted on the row + emitted on the task.failed event. P2A-0011 lifts
-// cost.unattributable into a first-class failure kind so the run halts with
-// an audit-trail event when usage cannot be sourced.
+// persisted on the row + emitted on the task.failed event. Cost-unknown is no
+// longer a failure (the recorder records cost_usd = NULL instead), so there is
+// no cost-specific failure branch here.
 function failureForFixtureTask(kind: Phase1TaskKind, error: unknown): { kind: string; message: string } {
-  if (error instanceof CostUnattributableError) {
-    return { kind: "cost.unattributable", message: error.message };
-  }
   return { kind: `${kind}_failed`, message: messageFromError(error) };
 }
 
@@ -271,11 +268,10 @@ interface FixtureCostInput {
 }
 
 // recordFixtureCost is the single mandatory call at fixture task completion.
-// Throws CostUnattributableError when the adapter's auth ref does not match
-// one of the three v0 attribution rules; the surrounding runFixtureTask
-// converts that into a typed task failure.
+// Token accounting is mandatory; cost is best-effort (NULL when the ref has no
+// per-token price basis), so this never fails the task for missing cost.
 async function recordFixtureCost(input: FixtureCostInput): Promise<void> {
-  const tokens = input.tokenUsage ?? { inputTokens: 0, outputTokens: 0, cachedTokens: 0 };
+  const tokens = input.tokenUsage ?? emptyTokenUsage;
   await input.recorder.record(
     {
       runId: input.context.runId,

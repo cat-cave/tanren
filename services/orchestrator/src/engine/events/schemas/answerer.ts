@@ -95,8 +95,11 @@ const CommitSummary = z
 const TokenUsageSummary = z
   .object({
     inputTokens: z.number().int(),
+    cachedInputTokens: z.number().int(),
+    cacheCreationTokens: z.number().int(),
     outputTokens: z.number().int(),
-    cachedTokens: z.number().int()
+    reasoningOutputTokens: z.number().int(),
+    totalTokens: z.number().int()
   })
   .strict();
 

@@ -1,155 +1,95 @@
 import { describe, expect, it } from "vitest";
-import {
-  CostUnattributableError,
-  classifyAuthRef,
-  computeCostUsd,
-  costSourceConstants,
-  resolveCostSource
-} from "../src/engine/costs/index.js";
+import { classifyAuthRef, computeCostUsd, resolveCostSource } from "../src/engine/costs/index.js";
+import type { TokenUsage } from "../src/engine/providers/types.js";
+
+function usage(partial: Partial<TokenUsage>): TokenUsage {
+  return {
+    inputTokens: 0,
+    cachedInputTokens: 0,
+    cacheCreationTokens: 0,
+    outputTokens: 0,
+    reasoningOutputTokens: 0,
+    totalTokens: 0,
+    ...partial
+  };
+}
 
 describe("cost source attribution", () => {
-  it("classifies a Codex ChatGPT subscription ref as codexbar", () => {
-    expect(classifyAuthRef("credential/codex/team-prod")).toEqual({ kind: "codexbar" });
+  it("classifies a Codex ChatGPT subscription ref as subscription billing", () => {
+    expect(classifyAuthRef("credential/codex/team-prod")).toEqual({ billingMode: "subscription", provider: "openai" });
   });
 
-  it("classifies an Anthropic API key ref as provider_direct", () => {
-    expect(classifyAuthRef("credential/anthropic/prod")).toEqual({
-      kind: "provider_direct",
-      provider: "anthropic"
-    });
+  it("classifies an Anthropic API key ref as per_token billing", () => {
+    expect(classifyAuthRef("credential/anthropic/prod")).toEqual({ billingMode: "per_token", provider: "anthropic" });
   });
 
-  it("classifies an OpenAI direct-API ref as provider_direct", () => {
-    expect(classifyAuthRef("credential/openai-api/prod")).toEqual({
-      kind: "provider_direct",
-      provider: "openai"
-    });
+  it("classifies an OpenAI direct-API ref as per_token billing", () => {
+    expect(classifyAuthRef("credential/openai-api/prod")).toEqual({ billingMode: "per_token", provider: "openai" });
   });
 
-  it("classifies a self-hosted endpoint ref as opportunity_computed", () => {
-    expect(classifyAuthRef("credential/self-hosted/local-qwen")).toEqual({
-      kind: "opportunity_computed",
-      provider: "local-qwen"
-    });
+  it("classifies a self-hosted endpoint ref as self_hosted billing", () => {
+    expect(classifyAuthRef("credential/self-hosted/local-qwen")).toEqual({ billingMode: "self_hosted", provider: "local-qwen" });
   });
 
-  it("rejects an unrecognized credential prefix", () => {
-    const result = classifyAuthRef("credential/legacy/whatever");
-    expect(result.kind).toBe("unattributable");
+  it("classifies an unrecognized credential prefix as unknown billing", () => {
+    expect(classifyAuthRef("credential/legacy/whatever").billingMode).toBe("unknown");
   });
 
-  it("resolves codexbar with subscription_window pricing", () => {
-    const source = resolveCostSource({
-      cli: "codex",
-      authRef: "credential/codex/dev",
-      rawUsage: { foo: "bar" }
-    });
-    if (source.source !== "codexbar") {
-      throw new Error(`expected codexbar, got ${source.source}`);
-    }
-    expect(source.pricingMode).toBe("subscription_window");
-    expect(source.subscriptionMonthlyFee).toBe(costSourceConstants.codexbarSubscriptionMonthlyFeeUsd);
+  it("resolves a subscription ref to cost_basis 'unknown' (no fake estimate)", () => {
+    const source = resolveCostSource({ cli: "codex", authRef: "credential/codex/dev", rawUsage: { foo: "bar" } });
+    expect(source.billingMode).toBe("subscription");
+    expect(source.costBasis).toBe("unknown");
+    expect(source.rate).toBeNull();
   });
 
-  it("resolves provider_direct with the openai rate table", () => {
-    const source = resolveCostSource({
-      cli: "codex",
-      authRef: "credential/openai-api/key1",
-      rawUsage: {}
-    });
-    if (source.source !== "provider_direct") {
-      throw new Error(`expected provider_direct, got ${source.source}`);
-    }
+  it("resolves a per_token ref to provider_pricing with the openai rate table", () => {
+    const source = resolveCostSource({ cli: "codex", authRef: "credential/openai-api/key1", rawUsage: {} });
+    expect(source.billingMode).toBe("per_token");
+    expect(source.costBasis).toBe("provider_pricing");
     expect(source.provider).toBe("openai");
-    expect(source.inputCostPerMillion).toBeGreaterThan(0);
+    expect(source.rate?.inputCostPerMillion).toBeGreaterThan(0);
   });
 
-  it("requires runtimeSeconds for opportunity_computed attribution", () => {
-    expect(() =>
-      resolveCostSource({
-        cli: "fake",
-        authRef: "credential/self-hosted/qwen",
-        rawUsage: {}
-      })
-    ).toThrow(CostUnattributableError);
+  it("resolves a self-hosted ref to cost_basis 'unknown'", () => {
+    const source = resolveCostSource({ cli: "fake", authRef: "credential/self-hosted/qwen", rawUsage: {} });
+    expect(source.billingMode).toBe("self_hosted");
+    expect(source.costBasis).toBe("unknown");
   });
 
-  it("resolves opportunity_computed with runtime seconds", () => {
-    const source = resolveCostSource({
-      cli: "fake",
-      authRef: "credential/self-hosted/qwen",
-      rawUsage: {},
-      runtimeSeconds: 3600
-    });
-    if (source.source !== "opportunity_computed") {
-      throw new Error(`expected opportunity_computed, got ${source.source}`);
-    }
-    expect(source.runtimeSeconds).toBe(3600);
+  it("resolves an unknown ref to cost_basis 'unknown' without throwing", () => {
+    const source = resolveCostSource({ cli: "codex", authRef: "vault/secret/dev/random", rawUsage: {} });
+    expect(source.costBasis).toBe("unknown");
   });
 
-  it("throws CostUnattributableError when the auth ref matches no rule", () => {
-    expect(() =>
-      resolveCostSource({
-        cli: "codex",
-        authRef: "vault/secret/dev/random",
-        rawUsage: {}
-      })
-    ).toThrow(CostUnattributableError);
-  });
-
-  it("throws CostUnattributableError on an empty auth ref", () => {
-    expect(() =>
-      resolveCostSource({
-        cli: "codex",
-        authRef: "",
-        rawUsage: {}
-      })
-    ).toThrow(CostUnattributableError);
+  it("resolves an empty ref to cost_basis 'unknown' without throwing", () => {
+    const source = resolveCostSource({ cli: "codex", authRef: "", rawUsage: {} });
+    expect(source.costBasis).toBe("unknown");
   });
 });
 
 describe("cost USD computation", () => {
-  it("computes per_token cost using input + output rates", () => {
-    const source = resolveCostSource({
-      cli: "codex",
-      authRef: "credential/openai-api/k",
-      rawUsage: {}
-    });
-    const usd = computeCostUsd(source, { inputTokens: 1_000_000, outputTokens: 500_000, cachedTokens: 0 });
+  it("computes provider_pricing cost from disjoint buckets", () => {
+    const source = resolveCostSource({ cli: "codex", authRef: "credential/openai-api/k", rawUsage: {} });
+    const usd = computeCostUsd(source, usage({ inputTokens: 1_000_000, outputTokens: 500_000 }));
     // openai rate table: 2.5/in, 10/out -> 2.5 + 5 = 7.5
     expect(Number(usd)).toBeCloseTo(7.5, 5);
   });
 
-  it("computes codexbar cost as fee/denominator * tokens", () => {
-    const source = resolveCostSource({
-      cli: "codex",
-      authRef: "credential/codex/dev",
-      rawUsage: {},
-      observedMaxMonthlyTokens: 1_000_000
-    });
-    const usd = computeCostUsd(source, { inputTokens: 100_000, outputTokens: 100_000, cachedTokens: 0 });
-    // 20 / 1_000_000 * 200_000 = 4
-    expect(Number(usd)).toBeCloseTo(4, 5);
+  it("bills cached-input at the cache rate and reasoning at the output rate", () => {
+    const source = resolveCostSource({ cli: "codex", authRef: "credential/openai-api/k", rawUsage: {} });
+    // openai: in 2.5, out 10, cached 1.25.
+    // 1M cached @1.25 + 1M reasoning @10 = 1.25 + 10 = 11.25
+    const usd = computeCostUsd(source, usage({ cachedInputTokens: 1_000_000, reasoningOutputTokens: 1_000_000 }));
+    expect(Number(usd)).toBeCloseTo(11.25, 5);
   });
 
-  it("computes opportunity_computed cost from runtime", () => {
-    const source = resolveCostSource({
-      cli: "fake",
-      authRef: "credential/self-hosted/qwen",
-      rawUsage: {},
-      runtimeSeconds: 1800
-    });
-    // 0.5 USD/hour * 0.5 hour = 0.25
-    expect(Number(computeCostUsd(source, { inputTokens: 0, outputTokens: 0, cachedTokens: 0 }))).toBeCloseTo(0.25, 5);
+  it("returns null cost for subscription billing (no fake denominator)", () => {
+    const source = resolveCostSource({ cli: "codex", authRef: "credential/codex/dev", rawUsage: {} });
+    expect(computeCostUsd(source, usage({ inputTokens: 100_000, outputTokens: 100_000 }))).toBeNull();
   });
 
-  it("treats a zero denominator as zero cost for codexbar (no division by zero)", () => {
-    const source = resolveCostSource({
-      cli: "codex",
-      authRef: "credential/codex/dev",
-      rawUsage: {},
-      observedMaxMonthlyTokens: 0
-    });
-    expect(Number(computeCostUsd(source, { inputTokens: 100, outputTokens: 100, cachedTokens: 0 }))).toBe(0);
+  it("returns null cost for self-hosted billing", () => {
+    const source = resolveCostSource({ cli: "fake", authRef: "credential/self-hosted/qwen", rawUsage: {} });
+    expect(computeCostUsd(source, usage({ inputTokens: 100, outputTokens: 100 }))).toBeNull();
   });
 });

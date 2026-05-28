@@ -218,14 +218,20 @@ export async function tanrenReadCosts(
   const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
   const result = await deps.pool.query(
     `SELECT id, task_id, run_id, project_id, cli, provider, model,
-            input_tokens, output_tokens, cached_tokens, cost_usd,
-            pricing_mode, cost_source, recorded_at
+            input_tokens, cached_input_tokens, cache_creation_tokens,
+            output_tokens, reasoning_output_tokens, total_tokens, cost_usd,
+            billing_mode, cost_basis, recorded_at
      FROM cost_records
      ${where}
      ORDER BY recorded_at ASC, id ASC`,
     params
   );
-  const totalUsd = result.rows.reduce<number>((sum, row) => sum + Number((row as { cost_usd: string }).cost_usd), 0);
+  // cost_usd is best-effort and may be NULL; null rows contribute nothing to
+  // the dollar total but are still returned with their token breakdown.
+  const totalUsd = result.rows.reduce<number>((sum, row) => {
+    const value = (row as { cost_usd: string | null }).cost_usd;
+    return value === null || value === undefined ? sum : sum + Number(value);
+  }, 0);
   return {
     costs: result.rows as ReadonlyArray<Record<string, unknown>>,
     totalUsd: totalUsd.toFixed(6)
