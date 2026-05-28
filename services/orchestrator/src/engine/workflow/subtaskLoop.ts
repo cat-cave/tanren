@@ -16,13 +16,16 @@
 import { randomUUID } from "node:crypto";
 import type pg from "pg";
 import type { AuditAnswer, CheckAnswer, PlanAnswer, PlanSubtask } from "../answerers/schemas/index.js";
+import type { CiWhen } from "../ci/index.js";
 import type { EscapeHatches } from "../config/shared.js";
 import { type CostRecorder, DEFAULT_CREDIT_USD_RATE } from "../costs/index.js";
 import type { EventName, EventPayload } from "../events/index.js";
 import type { EventStore } from "../eventStore.js";
 import type { AnswererAdapter, WriterAdapter, WriterResult } from "../providers/types.js";
 import type { UsageProbe } from "../usage/index.js";
+import type { GateOutcome } from "./gate/index.js";
 import type { PlannerRejectionFeedback, PlannerSpecContext } from "./planner/planner.js";
+import { gateRejection, handleRejection } from "./subtaskRework.js";
 import { type SubtaskCostContext } from "./subtaskCost.js";
 import { insertPlannerTask, markTaskDone } from "./subtaskTasks.js";
 import { runAuditorStage, runCheckerStage, runPlannerStage, runWriterStage } from "./subtaskStages.js";
@@ -67,6 +70,15 @@ export interface SubtaskLoopInput {
   // Dollar value of one prepaid credit, for credit-drawdown cost. Defaults to
   // DEFAULT_CREDIT_USD_RATE (the observed Pro-account rate).
   creditUsdRate?: number;
+  // P3-0005: the deterministic, exit-code-driven gate-check seam. Runs the CI
+  // tiers mapped to a lifecycle point over the bootstrapped workspace (NO
+  // Answerer). The loop calls it with when="per_iteration" after each writer
+  // iteration (a fail routes back to writer rework via the planner-rerequest
+  // path) and with when="pre_audit" before the audit (a fail blocks the audit
+  // and routes to rework). Omitted → the gate is skipped (legacy / unit paths
+  // that drive the loop without a workspace). Tests inject a mock to assert
+  // routing without a live runner. `taskId` correlates the gate.* events.
+  runGate?: (input: { when: CiWhen; taskId?: string }) => Promise<GateOutcome>;
 }
 
 export type SubtaskLoopOutcome =
@@ -158,6 +170,28 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
       }
       plannerRerunCount += 1;
       continue;
+    }
+
+    // P3-0005: the slow tier (build/test) runs before the audit. A nonzero exit
+    // blocks the audit — auditing a tree that does not build/test is wasted —
+    // and routes the run to rework via the same planner-rerequest path.
+    if (input.runGate !== undefined) {
+      const preAuditGate = await input.runGate({ when: "pre_audit", taskId: plannerTaskId });
+      if (!preAuditGate.passed) {
+        const gateReject = gateRejection(preAuditGate, plan.subtasks);
+        const exhausted = await handleRejection({
+          appendEvent, plannerTaskId, runId: input.context.runId,
+          max: input.escapeHatches.maxPlannerRerunsPerSpec,
+          rejection: gateReject,
+          plannerRerunCount,
+          history: rejectionHistory
+        });
+        if (exhausted) {
+          return await finalize({ kind: "retry_budget_exhausted", plannerRerunCount: plannerRerunCount + 1, lastRejection: gateReject });
+        }
+        plannerRerunCount += 1;
+        continue;
+      }
     }
 
     const audit = await runAuditorStage({
@@ -376,6 +410,17 @@ async function runSubtaskSequence(args: {
       appendEvent,
       buildUsage: input.costHooks?.buildWriterUsage
     });
+    // P3-0005: deterministic per-iteration gate. The fast tier runs over the
+    // bootstrapped workspace right after the writer edits. A nonzero exit means
+    // the tree is broken (build/lint/typecheck/unit), so route straight back to
+    // writer rework via the planner-rerequest path BEFORE spending a checker
+    // call on a known-broken tree.
+    if (input.runGate !== undefined) {
+      const gate = await input.runGate({ when: "per_iteration", taskId: writeTaskId });
+      if (!gate.passed) {
+        return gateRejection(gate, plan.subtasks);
+      }
+    }
     const checkerTaskId = `task_${randomUUID()}`;
     const decision = await runCheckerStage({
       pool: input.pool,
@@ -405,36 +450,6 @@ async function runSubtaskSequence(args: {
     writerResults.push({ subtask, writer: writerResult });
   }
   return undefined;
-}
-
-async function handleRejection(args: {
-  appendEvent: AppendEvent;
-  plannerTaskId: string;
-  runId: string;
-  max: number;
-  rejection: PlannerRejectionFeedback;
-  plannerRerunCount: number;
-  history: PlannerRejectionFeedback[];
-}): Promise<boolean> {
-  const nextCount = args.plannerRerunCount + 1;
-  if (nextCount > args.max) {
-    return true;
-  }
-  await args.appendEvent(
-    "planner.rerequested",
-    {
-      runId: args.runId,
-      plannerTaskId: args.plannerTaskId,
-      producer: args.rejection.producer,
-      rejectionReason: args.rejection.rejectionReason,
-      behaviorIdsFailed: [...args.rejection.behaviorIdsFailed],
-      plannerRerunCount: nextCount,
-      maxPlannerRerunsPerSpec: args.max
-    },
-    args.plannerTaskId
-  );
-  args.history.push(args.rejection);
-  return false;
 }
 
 function writerPromptFor(input: SubtaskLoopInput, subtask: PlanSubtask): string {

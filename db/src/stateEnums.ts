@@ -96,6 +96,7 @@ export const stateEnumLists = {
     "recovery_revise",
     "recovery_replan",
     "recovery_rollback",
+    "gate",
     "plan",
     "write",
     "check",
