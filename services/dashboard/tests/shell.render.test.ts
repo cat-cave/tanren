@@ -183,6 +183,13 @@ describe("dashboard auth flow", () => {
 // Regression guard for the whole fan-out: a child screen registered at a
 // placeholder path (via the append-only SCREEN_MOUNTS registry) must win, and
 // the shell must NOT shadow it with a placeholder.
+//
+// These tests deliberately probe a *permanently phase-3+* row (`/roadmap`,
+// `/personas`) rather than a Phase-2B path. Phase-2B fan-out specs progressively
+// turn their own rows (`/costs`, `/notifications`, `/projects`, …) into real
+// screens, so probing those would make this guard fail the moment its owning
+// spec lands. The phase-3+ rows stay placeholders for all of Phase 2B, keeping
+// this regression test stable regardless of merge order.
 describe("screen-router mounting convention (fan-out extension point)", () => {
   afterEach(() => {
     SCREEN_MOUNTS.length = 0;
@@ -191,27 +198,28 @@ describe("screen-router mounting convention (fan-out extension point)", () => {
   it("renders a registered child route at a placeholder path instead of the placeholder", async () => {
     mockOrchestrator();
     SCREEN_MOUNTS.push((app: Hono, deps: ShellDeps) => {
-      app.get("/costs", async (c) => {
-        const ctx = await loadShellContext(c, deps, { activeNavId: "costs" });
-        return renderShell(c, ctx, { title: "tanren · costs" }, "REAL_COSTS_SCREEN");
+      app.get("/roadmap", async (c) => {
+        const ctx = await loadShellContext(c, deps, { activeNavId: "roadmap" });
+        return renderShell(c, ctx, { title: "tanren · roadmap" }, "REAL_FANOUT_SCREEN");
       });
     });
     const app = await build();
-    const html = await (await app.request("/costs")).text();
-    expect(html).toContain("REAL_COSTS_SCREEN");
+    const html = await (await app.request("/roadmap")).text();
+    expect(html).toContain("REAL_FANOUT_SCREEN");
     expect(html).not.toContain("documented placeholder");
   });
 
   it("still serves the placeholder for rows no child screen claims", async () => {
     mockOrchestrator();
+    // Claiming one row must not shadow an unrelated unclaimed row.
     SCREEN_MOUNTS.push((app: Hono, deps: ShellDeps) => {
-      app.get("/costs", async (c) => {
-        const ctx = await loadShellContext(c, deps, { activeNavId: "costs" });
-        return renderShell(c, ctx, { title: "tanren · costs" }, "REAL_COSTS_SCREEN");
+      app.get("/roadmap", async (c) => {
+        const ctx = await loadShellContext(c, deps, { activeNavId: "roadmap" });
+        return renderShell(c, ctx, { title: "tanren · roadmap" }, "REAL_FANOUT_SCREEN");
       });
     });
     const app = await build();
-    const html = await (await app.request("/notifications")).text();
+    const html = await (await app.request("/personas")).text();
     expect(html).toContain("documented placeholder");
   });
 });
