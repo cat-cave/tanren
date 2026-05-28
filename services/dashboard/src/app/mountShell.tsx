@@ -26,7 +26,8 @@
  */
 
 import type { Context, Hono } from "hono";
-import { buildPaletteGroups, OrchestratorClient } from "../api/orchestrator.js";
+import { OrchestratorClient } from "../api/orchestrator.js";
+import { buildPaletteGroups } from "../api/palette.js";
 import type { OrgSummary, ProjectSummary } from "../api/types.js";
 import { PlaceholderBody } from "./placeholder.js";
 import { allNavRows, type NavRow } from "./routes.js";

@@ -11,6 +11,7 @@
  */
 
 import type { DashboardSession } from "../auth/session.js";
+import { OrchestratorHttpClient } from "./httpClient.js";
 import type {
   BehaviorSummary,
   BrownfieldLinkResult,
@@ -26,7 +27,6 @@ import type {
   NotificationRoute,
   NotificationTarget,
   OrgSummary,
-  PaletteGroup,
   PersonaSummary,
   ProjectConfig,
   ProjectDetail,
@@ -38,32 +38,9 @@ import type {
   SpecSummary
 } from "./types.js";
 
-export interface OrchestratorClientDeps {
-  orchestratorUrl: string;
-  /** Inbound dashboard request cookie header, forwarded for session auth. */
-  cookieHeader?: string;
-  fetchImpl?: typeof fetch;
-}
+export type { OrchestratorClientDeps } from "./httpClient.js";
 
-export class OrchestratorClient {
-  private readonly orchestratorUrl: string;
-  private readonly cookieHeader: string | undefined;
-  private readonly fetchImpl: typeof fetch;
-
-  constructor(deps: OrchestratorClientDeps) {
-    this.orchestratorUrl = deps.orchestratorUrl;
-    this.cookieHeader = deps.cookieHeader;
-    this.fetchImpl = deps.fetchImpl ?? fetch;
-  }
-
-  private headers(extra?: Record<string, string>): Record<string, string> {
-    const base: Record<string, string> = { Accept: "application/json", ...extra };
-    if (this.cookieHeader !== undefined && this.cookieHeader !== "") {
-      base.cookie = this.cookieHeader;
-    }
-    return base;
-  }
-
+export class OrchestratorClient extends OrchestratorHttpClient {
   /** Resolve the current session via `/auth/me`. `undefined` when unauthenticated. */
   async session(): Promise<DashboardSession | undefined> {
     const response = await this.fetchImpl(`${this.orchestratorUrl}/auth/me`, {
@@ -159,41 +136,9 @@ export class OrchestratorClient {
     return response.json();
   }
 
-  // -------------------------------------------------------------------------
-  // Shared JSON helpers. `getJson` is defensive (network + parse failures yield
-  // `undefined`); `sendJson` serves every write caller across the dashboard
-  // (POST/PATCH/DELETE, optional body — content-type is only set when a body is
-  // present). Every product read/write below forwards the session cookie and
-  // degrades to an empty/undefined result so a page never 500s when one panel's
-  // data source is unavailable.
-  // -------------------------------------------------------------------------
-
-  private async getJson<T>(path: string): Promise<T | undefined> {
-    const response = await this.fetchImpl(`${this.orchestratorUrl}${path}`, {
-      headers: this.headers()
-    }).catch(() => undefined);
-    if (response === undefined || !response.ok) {
-      return undefined;
-    }
-    return (await response.json().catch(() => undefined)) as T | undefined;
-  }
-
-  private async sendJson<T = unknown>(
-    method: "POST" | "PATCH" | "DELETE",
-    path: string,
-    body?: unknown
-  ): Promise<{ ok: boolean; status: number; body: T | undefined }> {
-    const response = await this.fetchImpl(`${this.orchestratorUrl}${path}`, {
-      method,
-      headers: this.headers(body === undefined ? {} : { "content-type": "application/json" }),
-      body: body === undefined ? undefined : JSON.stringify(body)
-    }).catch(() => undefined);
-    if (response === undefined) {
-      return { ok: false, status: 0, body: undefined };
-    }
-    const json = (await response.json().catch(() => undefined)) as T | undefined;
-    return { ok: response.ok, status: response.status, body: json };
-  }
+  // Product reads/writes below use the shared `getJson`/`sendJson` helpers from
+  // `OrchestratorHttpClient`; each forwards the session cookie and degrades to
+  // an empty/undefined result so a page never 500s when a data source is down.
 
   /** Runs for the project's attention queue + KPIs (P2A-0014). */
   async listRuns(
@@ -505,73 +450,4 @@ export class OrchestratorClient {
     const query = opts.rawView === true ? "?raw=true" : "";
     return `${this.orchestratorUrl}/orgs/${encodeURIComponent(loc.orgId)}/projects/${encodeURIComponent(loc.projectId)}/runs/${encodeURIComponent(runId)}/stream${query}`;
   }
-}
-
-/**
- * Build the v0 palette groups for an org's project context. These are the
- * templated suggestions described in the spec — quick actions (read routes),
- * forge-this write suggestions (operator-button tools), and ask-forge prompts.
- * Thick-LLM palette responses are Phase 3; this surface is deliberately static.
- *
- * Read actions carry `route`; write actions carry a `tool` id declared in the
- * P2A-0019 Forge tool surface so the palette can never invoke an undeclared
- * tool. Projects are passed in so quick actions can deep-link the live project.
- */
-export function buildPaletteGroups(input: {
-  orgLogin: string;
-  projects: ProjectSummary[];
-}): PaletteGroup[] {
-  const firstProject = input.projects[0];
-  const quickActions: PaletteGroup = {
-    group: "quick actions",
-    items: [
-      {
-        glyph: "+",
-        title: "new spec",
-        desc: "describe work · tanren plans & forges",
-        route: firstProject ? `/projects/${firstProject.projectId}/specs/new` : "/onboarding/new"
-      },
-      {
-        glyph: "→",
-        title: firstProject ? `go to ${firstProject.name}` : "go to a project",
-        desc: firstProject ? firstProject.repoUrl : "no projects yet · onboard one",
-        route: firstProject ? `/projects/${firstProject.projectId}` : "/onboarding/existing"
-      },
-      {
-        glyph: "↻",
-        title: "review halted runs",
-        desc: "runs that hit an escape hatch",
-        route: firstProject ? `/projects/${firstProject.projectId}/runs/halted` : "/projects"
-      }
-    ]
-  };
-  const forgeThis: PaletteGroup = {
-    group: "forge this",
-    items: [
-      {
-        glyph: "鍛",
-        kanji: true,
-        title: "draft a spec from rough notes",
-        desc: "i'll plan & dependency-rank it",
-        tool: "tanren.create_spec",
-        args: firstProject ? { projectId: firstProject.projectId } : {}
-      },
-      {
-        glyph: "鍛",
-        kanji: true,
-        title: "acknowledge a suboptimal callout",
-        desc: "clear an open insight",
-        tool: "tanren.acknowledge_insight",
-        args: {}
-      }
-    ]
-  };
-  const askForge: PaletteGroup = {
-    group: "ask forge",
-    items: [
-      { glyph: "?", title: "what's blocking my milestones?", desc: "natural-language query", route: "/overview" },
-      { glyph: "?", title: "how are my costs trending?", desc: "this week vs last", route: "/costs" }
-    ]
-  };
-  return [quickActions, forgeThis, askForge];
 }
