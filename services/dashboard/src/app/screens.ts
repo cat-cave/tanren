@@ -27,6 +27,8 @@
 
 import type { Hono } from "hono";
 import type { ShellDeps } from "./mountShell.js";
+// P2B-0005 history & costs — real /costs route + /history + /costs/export.csv.
+import { mountCostsScreen } from "../routes/costs/index.js";
 
 /** A child-screen mount function: registers the spec's routes on the app. */
 export type ScreenMount = (app: Hono, deps: ShellDeps) => void;
@@ -37,6 +39,9 @@ export type ScreenMount = (app: Hono, deps: ShellDeps) => void;
  * and appends its mount function here.
  */
 export const SCREEN_MOUNTS: ScreenMount[] = [];
+
+// P2B-0005: dashboard history & costs (overrides the /costs placeholder).
+SCREEN_MOUNTS.push(mountCostsScreen);
 
 /** Run every registered screen mount. Called BEFORE `mountShell`. */
 export function mountScreens(app: Hono, deps: ShellDeps): void {

@@ -11,7 +11,14 @@
  */
 
 import type { DashboardSession } from "../auth/session.js";
-import type { OrgSummary, PaletteGroup, ProjectSummary } from "./types.js";
+import type {
+  CostRecord,
+  CursorPage,
+  OrgSummary,
+  PaletteGroup,
+  ProjectSummary,
+  RunListItem
+} from "./types.js";
 
 export interface OrchestratorClientDeps {
   orchestratorUrl: string;
@@ -73,6 +80,66 @@ export class OrchestratorClient {
     }
     const json = (await response.json()) as { projects?: ProjectSummary[] };
     return json.projects ?? [];
+  }
+
+  /**
+   * Filtered run list for a project (`GET .../runs`, P2A-0014). Backs the
+   * history list. Empty array on failure / unauthenticated. `status` and
+   * `specId` are optional server-side filters.
+   */
+  async listRuns(
+    orgId: string,
+    projectId: string,
+    filters: { status?: string; specId?: string } = {}
+  ): Promise<RunListItem[]> {
+    const params = new URLSearchParams();
+    if (filters.status !== undefined && filters.status !== "") params.set("status", filters.status);
+    if (filters.specId !== undefined && filters.specId !== "") params.set("specId", filters.specId);
+    const query = params.toString();
+    const url =
+      `${this.orchestratorUrl}/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/runs` +
+      (query === "" ? "" : `?${query}`);
+    const response = await this.fetchImpl(url, { headers: this.headers() }).catch(() => undefined);
+    if (response === undefined || !response.ok) {
+      return [];
+    }
+    const json = (await response.json()) as { items?: RunListItem[] };
+    return json.items ?? [];
+  }
+
+  /**
+   * All cost records for a run (`GET .../runs/:runId/costs`, P2A-0011), walking
+   * the cursor pages so the costs dashboard sees the full set. Capped at
+   * `maxPages` so a runaway cursor can never spin forever. Empty on failure.
+   */
+  async listRunCosts(
+    orgId: string,
+    projectId: string,
+    runId: string,
+    opts: { maxPages?: number } = {}
+  ): Promise<CostRecord[]> {
+    const maxPages = opts.maxPages ?? 20;
+    const base = `${this.orchestratorUrl}/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(
+      projectId
+    )}/runs/${encodeURIComponent(runId)}/costs`;
+    const all: CostRecord[] = [];
+    let cursor: string | null = null;
+    for (let page = 0; page < maxPages; page += 1) {
+      const url = cursor === null ? base : `${base}?cursor=${encodeURIComponent(cursor)}`;
+      const response = await this.fetchImpl(url, { headers: this.headers() }).catch(() => undefined);
+      if (response === undefined || !response.ok) {
+        break;
+      }
+      const json = (await response.json()) as Partial<CursorPage<CostRecord>>;
+      for (const item of json.items ?? []) {
+        all.push(item);
+      }
+      cursor = json.nextCursor ?? null;
+      if (cursor === null) {
+        break;
+      }
+    }
+    return all;
   }
 
   /**
