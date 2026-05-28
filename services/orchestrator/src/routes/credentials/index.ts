@@ -10,9 +10,11 @@ import type pg from "pg";
 import { z } from "zod";
 import type { ActorContext } from "../../auth/schemas.js";
 import type { SecretStore } from "../../engine/contracts/secretStore.js";
+import { storeClaudeAuthBundle } from "../../engine/credentials/claudeAuth.js";
 import { storeCodexAuthBundle } from "../../engine/credentials/codexAuth.js";
 import { storeGithubAppCredential } from "../../engine/credentials/githubApp.js";
 import { storeGithubToken } from "../../engine/credentials/githubToken.js";
+import { storeOpencodeAuthBundle } from "../../engine/credentials/opencodeAuth.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg } from "../orgs/index.js";
 
@@ -25,7 +27,7 @@ interface CredentialRoutesOptions {
 
 export interface CredentialRecord {
   ref: string;
-  kind: "codex_chatgpt_auth" | "github_token" | "github_app" | "opaque";
+  kind: "codex_chatgpt_auth" | "claude_cli_auth" | "opencode_cli_auth" | "github_token" | "github_app" | "opaque";
   scope: "org" | "me";
   ownerId: string;
   createdAt: string;
@@ -60,7 +62,9 @@ export class InMemoryCredentialRegistry implements CredentialRegistry {
   }
 }
 
-const CodexImportBody = z.object({
+// Codex, Claude, and opencode all import a JSON auth bundle under {ref, authJson};
+// the bundle's own validator (in the credentials module) enforces its shape.
+const AuthBundleImportBody = z.object({
   ref: z.string().min(1),
   authJson: z.string().min(1)
 });
@@ -166,12 +170,45 @@ async function handleImport(
 ): Promise<Response> {
   const raw = await c.req.json().catch(() => undefined);
   if (kind === "codex_chatgpt_auth") {
-    const parsed = CodexImportBody.safeParse(raw);
+    const parsed = AuthBundleImportBody.safeParse(raw);
     if (!parsed.success) {
       return c.json({ error: "invalid_codex_credential", issues: parsed.error.issues }, 400);
     }
-    const stored = await storeCodexAuthBundle(options.secrets, parsed.data);
+    let stored;
+    try {
+      stored = await storeCodexAuthBundle(options.secrets, parsed.data);
+    } catch (error) {
+      return c.json({ error: "invalid_codex_credential", message: error instanceof Error ? error.message : String(error) }, 400);
+    }
     await registry.put({ ref: stored.ref, kind: "codex_chatgpt_auth", scope, ownerId, createdAt: new Date().toISOString() });
+    return c.json(stored, 201);
+  }
+  if (kind === "claude_cli_auth") {
+    const parsed = AuthBundleImportBody.safeParse(raw);
+    if (!parsed.success) {
+      return c.json({ error: "invalid_claude_credential", issues: parsed.error.issues }, 400);
+    }
+    let stored;
+    try {
+      stored = await storeClaudeAuthBundle(options.secrets, parsed.data);
+    } catch (error) {
+      return c.json({ error: "invalid_claude_credential", message: error instanceof Error ? error.message : String(error) }, 400);
+    }
+    await registry.put({ ref: stored.ref, kind: "claude_cli_auth", scope, ownerId, createdAt: new Date().toISOString() });
+    return c.json(stored, 201);
+  }
+  if (kind === "opencode_cli_auth") {
+    const parsed = AuthBundleImportBody.safeParse(raw);
+    if (!parsed.success) {
+      return c.json({ error: "invalid_opencode_credential", issues: parsed.error.issues }, 400);
+    }
+    let stored;
+    try {
+      stored = await storeOpencodeAuthBundle(options.secrets, parsed.data);
+    } catch (error) {
+      return c.json({ error: "invalid_opencode_credential", message: error instanceof Error ? error.message : String(error) }, 400);
+    }
+    await registry.put({ ref: stored.ref, kind: "opencode_cli_auth", scope, ownerId, createdAt: new Date().toISOString() });
     return c.json(stored, 201);
   }
   if (kind === "github_token") {
