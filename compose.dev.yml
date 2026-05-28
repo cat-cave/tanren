@@ -45,6 +45,14 @@ services:
       TANREN_GITHUB_OAUTH_CLIENT_ID: ${TANREN_GITHUB_OAUTH_CLIENT_ID:-}
       TANREN_GITHUB_OAUTH_CLIENT_SECRET: ${TANREN_GITHUB_OAUTH_CLIENT_SECRET:-}
       TANREN_PUBLIC_BASE_URL: ${TANREN_PUBLIC_BASE_URL:-http://localhost:3100}
+      # Dev profile: orchestrator routes /hello/run to the long-lived static
+      # `runner` service over the compose network. The allocator sidecar is
+      # still up for parity with prod (and to service ephemeral runs), but
+      # the smoke flow doesn't require it. Prod compose sets KIND=sidecar.
+      TANREN_ALLOCATOR_KIND: static
+      TANREN_RUNNER_SSH_HOST: runner
+      TANREN_RUNNER_SSH_PORT: "22"
+      TANREN_RUNNER_SSH_USER: tanren
       TANREN_ALLOCATOR_URL: http://allocator:3200
       TANREN_ALLOCATOR_TOKEN: dev
     ports:
@@ -56,6 +64,8 @@ services:
         condition: service_healthy
       allocator:
         condition: service_started
+      runner:
+        condition: service_healthy
 
   allocator:
     build:
