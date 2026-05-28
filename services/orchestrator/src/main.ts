@@ -39,6 +39,7 @@ import { createMilestoneRoutes } from "./routes/milestones/index.js";
 import { createOrgRoutes } from "./routes/orgs/index.js";
 import { createPersonaRoutes } from "./routes/personas/index.js";
 import { createProjectRoutes } from "./routes/projects/index.js";
+import { createRunRoutes } from "./routes/runs/index.js";
 import { createSpecRoutes } from "./routes/specs/index.js";
 
 const port = Number(process.env.ORCHESTRATOR_PORT ?? 3100);
@@ -225,6 +226,7 @@ export function buildApp(input: {
     createForgeRoutes({ pool: input.pool, secrets, githubHttp })
   );
   app.route("/orgs", createInsightRoutes({ pool: input.pool }));
+  app.route("/orgs", createRunRoutes({ pool: input.pool }));
   app.route(
     "/",
     createCredentialRoutes({ pool: input.pool, secrets, registry: credentialRegistry })
