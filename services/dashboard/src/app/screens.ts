@@ -36,7 +36,12 @@ export type ScreenMount = (app: Hono, deps: ShellDeps) => void;
  * sidenav row resolves to a documented placeholder until its owning spec lands
  * and appends its mount function here.
  */
+import { mountRunDetailScreens } from "../routes/runs/index.js";
+
 export const SCREEN_MOUNTS: ScreenMount[] = [];
+
+// P2B-0004: run-detail view + review-handoff sub-surface (SSE live).
+SCREEN_MOUNTS.push(mountRunDetailScreens);
 
 /** Run every registered screen mount. Called BEFORE `mountShell`. */
 export function mountScreens(app: Hono, deps: ShellDeps): void {
