@@ -39,7 +39,8 @@ import {
 } from "./common.js";
 
 async function main(): Promise<void> {
-  const env = loadAcceptanceEnv();
+  const env = await loadAcceptanceEnv();
+  process.stdout.write(`tanren acceptance-easy: config loaded from ${env.configSource}\n`);
   const ctx = await bootstrapAcceptanceContext(env, "easy");
   const startedAt = new Date();
   const unique = Date.now();

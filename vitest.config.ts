@@ -13,6 +13,9 @@ export default defineConfig({
     // pushed verbatim to the operator-pre-created GitHub repo by the
     // medium acceptance gate. The placeholder vitest test there is meant
     // to run inside the fixture repo's CI, not in the Tanren repo's CI.
-    exclude: ["**/node_modules/**", "**/dist/**", "fixtures/**"]
+    // `.claude/**` excludes Claude Code agent worktrees, which are full
+    // checkouts of the repo and would otherwise be discovered (and re-run)
+    // by vitest during local development.
+    exclude: ["**/node_modules/**", "**/dist/**", "fixtures/**", ".claude/**"]
   }
 });
