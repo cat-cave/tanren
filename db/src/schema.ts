@@ -486,3 +486,8 @@ export const specDependencies = pgTable(
     index("spec_dependencies_to_spec_id").on(table.toSpecId)
   ]
 );
+
+// P2A-0017 notifications matrix tables live in `schemaNotifications.ts`
+// (re-exported below) to keep this file under the file-line-max-500
+// architecture rule. See docs/operator-guide/notifications.md.
+export { notificationTargets, notificationRoutes } from "./schemaNotifications.js";
