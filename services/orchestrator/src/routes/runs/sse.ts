@@ -1,0 +1,259 @@
+// P2A-0014 SSE handler — emits status/task/event/cost frames as the run
+// progresses. v0 uses a poll-based source at 1s tick (acceptable per spec);
+// the contract surface is shaped so a Postgres LISTEN/NOTIFY swap-in lands
+// behind the same frame format.
+//
+// Frame format follows the SSE spec: `event: <name>\ndata: <json>\n\n`. The
+// initial frame is `snapshot` carrying a partial RunDetail (run + tasks +
+// recentEvents + costs). Subsequent frames are deltas. Heartbeats fire
+// every 15s wall-clock when nothing else has been sent. The stream ends
+// when the run reaches a terminal status AND one final post-terminal poll
+// has flushed any remaining events/costs/tasks.
+
+import type pg from "pg";
+import type { Context } from "hono";
+import { stream as honoStream } from "hono/streaming";
+import type { ActorContext } from "../../auth/schemas.js";
+import {
+  RECENT_EVENT_CAP,
+  type RunCostRecord,
+  type RunEventRow,
+  type SseEventName,
+  type TaskTimelineEntry
+} from "./contract.js";
+import {
+  fetchRunCostsForSnapshot,
+  fetchRunEventsForSnapshot,
+  fetchRunSummary,
+  fetchRunTasks
+} from "./list.js";
+
+interface SseStreamArgs {
+  pool: pg.Pool;
+  runId: string;
+  projectId: string;
+  actor: ActorContext;
+  rawView: boolean;
+  intervalMs: number;
+  now?: () => Date;
+}
+
+const HEARTBEAT_INTERVAL_MS = 15_000;
+// Terminal statuses end the stream once a final post-terminal poll flushes
+// remaining deltas. Matches the canonical Phase 2 transitions; "done" is
+// kept for legacy fixture runs still pinned to the Phase 1 outcome.
+const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled", "halted", "done"]);
+
+const TERMINAL_GRACE_POLLS = 1;
+
+export async function handleSseStream(c: Context, args: SseStreamArgs): Promise<Response> {
+  return honoStream(c, async (writer) => {
+    const driver = new SseDriver(args, async (frame) => {
+      await writer.write(frame);
+    });
+    await driver.run();
+  });
+}
+
+// SseDriver is split out so the test harness can drive it directly without a
+// real HTTP response. The driver collects frames via a writer callback; the
+// route handler hands it a streaming writer, tests hand it an array push.
+export class SseDriver {
+  private lastEventId = 0;
+  private lastCostId = 0;
+  private lastTaskFingerprint = new Map<string, string>();
+  private lastStatusFingerprint = "";
+  private lastEmitAt: number;
+  private terminalPollsRemaining: number | undefined;
+
+  constructor(
+    private readonly args: SseStreamArgs,
+    private readonly write: (frame: string) => Promise<void> | void
+  ) {
+    this.lastEmitAt = this.nowMs();
+  }
+
+  private nowMs(): number {
+    return (this.args.now?.() ?? new Date()).getTime();
+  }
+
+  async run(): Promise<void> {
+    // Initial snapshot frame.
+    const run = await fetchRunSummary(this.args.pool, this.args.runId);
+    if (run === undefined) {
+      await this.emit("status", { runId: this.args.runId, status: "failed", outcome: null });
+      return;
+    }
+    const tasks = await fetchRunTasks(this.args.pool, this.args.runId);
+    const recentEvents = await fetchRunEventsForSnapshot(this.args.pool, {
+      runId: this.args.runId,
+      limit: RECENT_EVENT_CAP,
+      actor: this.args.actor,
+      rawView: this.args.rawView
+    });
+    const costs = await fetchRunCostsForSnapshot(this.args.pool, this.args.runId);
+    await this.emit("snapshot", { run, tasks, recentEvents, costs });
+
+    this.lastStatusFingerprint = `${run.status}:${run.outcome ?? ""}`;
+    for (const task of tasks) {
+      this.lastTaskFingerprint.set(task.taskId, fingerprintTask(task));
+    }
+    this.lastEventId = recentEvents.length > 0 ? Number(recentEvents[recentEvents.length - 1].id) : 0;
+    this.lastCostId = costs.length > 0 ? Number(costs[costs.length - 1].id) : 0;
+
+    if (TERMINAL_STATUSES.has(run.status)) {
+      this.terminalPollsRemaining = TERMINAL_GRACE_POLLS;
+    }
+
+    while (true) {
+      await this.sleep(this.args.intervalMs);
+      const stop = await this.tick();
+      if (stop) return;
+    }
+  }
+
+  // tick polls for deltas; returns true when the loop should terminate.
+  async tick(): Promise<boolean> {
+    const run = await fetchRunSummary(this.args.pool, this.args.runId);
+    if (run === undefined) return true;
+    const fp = `${run.status}:${run.outcome ?? ""}`;
+    if (fp !== this.lastStatusFingerprint) {
+      await this.emit("status", { runId: run.runId, status: run.status, outcome: run.outcome });
+      this.lastStatusFingerprint = fp;
+    }
+    const tasks = await fetchRunTasks(this.args.pool, this.args.runId);
+    const changed: TaskTimelineEntry[] = [];
+    for (const task of tasks) {
+      const fpTask = fingerprintTask(task);
+      if (this.lastTaskFingerprint.get(task.taskId) !== fpTask) {
+        changed.push(task);
+        this.lastTaskFingerprint.set(task.taskId, fpTask);
+      }
+    }
+    for (const task of changed) {
+      await this.emit("task", task);
+    }
+    const newEvents = await this.pollNewEvents();
+    if (newEvents.length > 0) {
+      await this.emit("events", { events: newEvents });
+      this.lastEventId = Number(newEvents[newEvents.length - 1].id);
+    }
+    const newCosts = await this.pollNewCosts();
+    if (newCosts.length > 0) {
+      await this.emit("costs", { costs: newCosts });
+      this.lastCostId = Number(newCosts[newCosts.length - 1].id);
+    }
+    if (this.nowMs() - this.lastEmitAt >= HEARTBEAT_INTERVAL_MS) {
+      await this.emit("heartbeat", { ts: this.args.now?.() ?? new Date() });
+    }
+    if (TERMINAL_STATUSES.has(run.status)) {
+      if (this.terminalPollsRemaining === undefined) {
+        this.terminalPollsRemaining = TERMINAL_GRACE_POLLS;
+      } else if (this.terminalPollsRemaining <= 0) {
+        return true;
+      } else {
+        this.terminalPollsRemaining -= 1;
+      }
+    }
+    return false;
+  }
+
+  private async pollNewEvents(): Promise<RunEventRow[]> {
+    // Read new event rows by id > lastEventId. The redaction pass mirrors
+    // the snapshot loader to keep payload shapes identical between the
+    // initial frame and subsequent delta frames.
+    const { rows } = await this.args.pool.query<Record<string, unknown>>(
+      `SELECT id, ts, run_id, task_id, spec_id, project_id, event_type, payload
+         FROM events
+        WHERE run_id = $1 AND id > $2
+        ORDER BY ts ASC, id ASC
+        LIMIT 200`,
+      [this.args.runId, this.lastEventId]
+    );
+    if (rows.length === 0) return [];
+    // Re-use the redaction path through fetchRunEventsForSnapshot by giving
+    // it a custom query; for simplicity we inline here.
+    const { redactEventPayload } = await import("../../engine/redaction/index.js");
+    const { isEventName } = await import("../../engine/events/index.js");
+    const out: RunEventRow[] = [];
+    for (const row of rows) {
+      const eventType = String(row.event_type);
+      let payload: unknown = row.payload;
+      let redactedPaths: string[] = [];
+      if (isEventName(eventType)) {
+        const r = redactEventPayload({ eventName: eventType, payload: row.payload, actor: this.args.actor, rawView: this.args.rawView });
+        payload = r.payload;
+        redactedPaths = r.redactedPaths;
+      }
+      out.push({
+        id: row.id as number | string,
+        ts: row.ts as Date,
+        runId: row.run_id === null || row.run_id === undefined ? null : String(row.run_id),
+        taskId: row.task_id === null || row.task_id === undefined ? null : String(row.task_id),
+        specId: row.spec_id === null || row.spec_id === undefined ? null : String(row.spec_id),
+        projectId: row.project_id === null || row.project_id === undefined ? null : String(row.project_id),
+        eventType,
+        payload,
+        redactedPaths
+      });
+    }
+    return out;
+  }
+
+  private async pollNewCosts(): Promise<RunCostRecord[]> {
+    const { rows } = await this.args.pool.query<Record<string, unknown>>(
+      `SELECT id, task_id, run_id, project_id, cli, provider, model,
+              input_tokens, output_tokens, cached_tokens, cost_usd,
+              pricing_mode, cost_source, recorded_at
+         FROM cost_records
+        WHERE run_id = $1 AND id > $2
+        ORDER BY recorded_at ASC, id ASC
+        LIMIT 200`,
+      [this.args.runId, this.lastCostId]
+    );
+    return rows.map((row) => ({
+      id: row.id as number | string,
+      runId: String(row.run_id),
+      taskId: String(row.task_id),
+      projectId: String(row.project_id),
+      cli: String(row.cli),
+      provider: String(row.provider),
+      model: String(row.model),
+      inputTokens: Number(row.input_tokens ?? 0),
+      outputTokens: Number(row.output_tokens ?? 0),
+      cachedTokens: Number(row.cached_tokens ?? 0),
+      costUsd: String(row.cost_usd),
+      pricingMode: row.pricing_mode as RunCostRecord["pricingMode"],
+      costSource: row.cost_source as RunCostRecord["costSource"],
+      recordedAt: row.recorded_at as Date
+    }));
+  }
+
+  private async emit(name: SseEventName, data: unknown): Promise<void> {
+    const frame = `event: ${name}\ndata: ${JSON.stringify(data, jsonDateReplacer)}\n\n`;
+    await this.write(frame);
+    this.lastEmitAt = this.nowMs();
+  }
+
+  private async sleep(ms: number): Promise<void> {
+    if (ms <= 0) return;
+    await new Promise((resolve) => setTimeout(resolve, ms));
+  }
+}
+
+function fingerprintTask(task: TaskTimelineEntry): string {
+  return [
+    task.status,
+    task.outcome ?? "",
+    task.failureKind ?? "",
+    task.startedAt?.toISOString() ?? "",
+    task.endedAt?.toISOString() ?? ""
+  ].join("|");
+}
+
+// JSON.stringify drops the Date wrapper; we keep ISO strings so the
+// dashboard can parse uniformly without sniffing the source field.
+function jsonDateReplacer(_key: string, value: unknown): unknown {
+  if (value instanceof Date) return value.toISOString();
+  return value;
+}
