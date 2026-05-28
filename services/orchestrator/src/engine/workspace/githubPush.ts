@@ -20,15 +20,18 @@ export interface GitHubWorkspacePushInput {
   branch: string;
   credentialRef: string;
   timeoutMs: number;
+  /**
+   * P3-0003: pre-resolved push token. When the caller already minted an App
+   * installation token (or read the static secret) via the token resolver, it
+   * passes it here and we skip the ref-based read. Installation tokens are used
+   * over HTTPS as the `x-access-token` password, exactly like a PAT, so the
+   * `git push` command below is unchanged. Omitted → legacy ref-based read.
+   */
+  token?: string;
 }
 
 export async function pushWorkspaceBranchToGitHub(input: GitHubWorkspacePushInput): Promise<void> {
-  const credentialRef = validateGithubCredentialRef(input.credentialRef);
-  const secret = await input.secrets.get(credentialRef);
-  if (secret === undefined) {
-    throw new Error(`missing GitHub credential ref: ${credentialRef}`);
-  }
-  const token = validateGithubToken(secret.value);
+  const token = input.token ?? (await readStaticPushToken(input.secrets, input.credentialRef));
   await runWorkspaceSshCommand(input.ssh, input.target, {
     label: "push workspace branch to GitHub",
     cwd: input.workspacePath,
@@ -36,6 +39,15 @@ export async function pushWorkspaceBranchToGitHub(input: GitHubWorkspacePushInpu
     command: buildGitHubPushCommand({ repoUrl: input.repoUrl, branch: input.branch }),
     stdin: token
   });
+}
+
+async function readStaticPushToken(secrets: SecretStore, ref: string): Promise<string> {
+  const credentialRef = validateGithubCredentialRef(ref);
+  const secret = await secrets.get(credentialRef);
+  if (secret === undefined) {
+    throw new Error(`missing GitHub credential ref: ${credentialRef}`);
+  }
+  return validateGithubToken(secret.value);
 }
 
 export function draftPrBranchName(input: DraftPrBranchInput): string {

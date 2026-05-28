@@ -103,7 +103,7 @@ function StackHealth(props: { report: DoctorReport | undefined }) {
   );
 }
 
-function Step1LinkOrg(props: { orgLogin: string; report: DoctorReport | undefined; githubAppUrl: string }) {
+function Step1LinkOrg(props: { orgLogin: string; report: DoctorReport | undefined; githubAppUrl: string; appInstallHref?: string }) {
   const scopes: Array<[string, string, boolean]> = [
     ["▸", "read · contents, metadata, issues, prs · selected repos only", true],
     ["▸", "write · create branches, prs, comments, issues", true],
@@ -135,10 +135,21 @@ function Step1LinkOrg(props: { orgLogin: string; report: DoctorReport | undefine
             <div style="flex:1">
               authorize <b>tanren</b> on {props.orgLogin} · one-time · editable later
             </div>
-            <a class="btn primary" href={props.githubAppUrl} target="_blank" rel="noreferrer">
-              open github ↗
-            </a>
+            {props.appInstallHref !== undefined ? (
+              <a class="btn primary" href={props.appInstallHref}>
+                install github app ↗
+              </a>
+            ) : (
+              <a class="btn primary" href={props.githubAppUrl} target="_blank" rel="noreferrer">
+                open github ↗
+              </a>
+            )}
           </div>
+          {props.appInstallHref !== undefined ? (
+            <div class="sub" style="margin-top:6px">
+              installs the tanren github app on {props.orgLogin} · uses auto-rotating installation tokens (no static pat to manage).
+            </div>
+          ) : null}
           <div class="sunken">
             <div class="section-label" style="margin-bottom:6px">
               what tanren will ask for
@@ -299,6 +310,8 @@ export interface OrgWizardBodyProps {
   myCredentials: CredentialRecord[];
   matrix: NotificationMatrix;
   operator: string;
+  /** P3-0003: orchestrator install-flow href (`/auth/github-app/install?orgId=…`). */
+  appInstallHref?: string;
 }
 
 export function OrgWizardBody(props: OrgWizardBodyProps) {
@@ -308,7 +321,7 @@ export function OrgWizardBody(props: OrgWizardBodyProps) {
     <div class="onb">
       <JourneyStepper steps={STEPS} current={step} basePath={BASE} />
       {step === 1 ? (
-        <Step1LinkOrg orgLogin={props.orgLogin} report={props.doctor} githubAppUrl={props.githubAppUrl} />
+        <Step1LinkOrg orgLogin={props.orgLogin} report={props.doctor} githubAppUrl={props.githubAppUrl} appInstallHref={props.appInstallHref} />
       ) : step === 2 ? (
         <>
           <StepHeading

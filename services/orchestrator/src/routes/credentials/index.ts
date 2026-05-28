@@ -11,6 +11,7 @@ import { z } from "zod";
 import type { ActorContext } from "../../auth/schemas.js";
 import type { SecretStore } from "../../engine/contracts/secretStore.js";
 import { storeCodexAuthBundle } from "../../engine/credentials/codexAuth.js";
+import { storeGithubAppCredential } from "../../engine/credentials/githubApp.js";
 import { storeGithubToken } from "../../engine/credentials/githubToken.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg } from "../orgs/index.js";
@@ -24,7 +25,7 @@ interface CredentialRoutesOptions {
 
 export interface CredentialRecord {
   ref: string;
-  kind: "codex_chatgpt_auth" | "github_token" | "opaque";
+  kind: "codex_chatgpt_auth" | "github_token" | "github_app" | "opaque";
   scope: "org" | "me";
   ownerId: string;
   createdAt: string;
@@ -67,6 +68,12 @@ const CodexImportBody = z.object({
 const GithubImportBody = z.object({
   ref: z.string().min(1),
   token: z.string().min(1)
+});
+
+const GithubAppImportBody = z.object({
+  ref: z.string().min(1),
+  appId: z.string().min(1),
+  privateKeyPem: z.string().min(1)
 });
 
 const OpaqueImportBody = z.object({
@@ -174,6 +181,20 @@ async function handleImport(
     }
     const stored = await storeGithubToken(options.secrets, parsed.data);
     await registry.put({ ref: stored.ref, kind: "github_token", scope, ownerId, createdAt: new Date().toISOString() });
+    return c.json(stored, 201);
+  }
+  if (kind === "github_app") {
+    const parsed = GithubAppImportBody.safeParse(raw);
+    if (!parsed.success) {
+      return c.json({ error: "invalid_github_app_credential", issues: parsed.error.issues }, 400);
+    }
+    let stored;
+    try {
+      stored = await storeGithubAppCredential(options.secrets, parsed.data);
+    } catch (error) {
+      return c.json({ error: "invalid_github_app_credential", message: error instanceof Error ? error.message : String(error) }, 400);
+    }
+    await registry.put({ ref: stored.ref, kind: "github_app", scope, ownerId, createdAt: new Date().toISOString() });
     return c.json(stored, 201);
   }
   const parsed = OpaqueImportBody.safeParse(raw);

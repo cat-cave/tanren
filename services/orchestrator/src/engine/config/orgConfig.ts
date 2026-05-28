@@ -34,6 +34,21 @@ export const OrgDefaultCredentials = z
   .strict();
 export type OrgDefaultCredentials = z.infer<typeof OrgDefaultCredentials>;
 
+// P3-0003: per-org GitHub App installation. When present, the token resolver
+// prefers minting an auto-rotating installation token (from the App private
+// key stored in Vault under `credentialRef`) over the static `github_token`
+// fallback. Persisted in `organizations.config` JSONB — no DB migration. The
+// App private key itself never lands here; only the credential *ref* does.
+export const OrgGithubAppInstallation = z
+  .object({
+    installationId: z.string().min(1),
+    appId: z.string().min(1),
+    credentialRef: z.string().min(1),
+    installedAt: z.string().min(1)
+  })
+  .strict();
+export type OrgGithubAppInstallation = z.infer<typeof OrgGithubAppInstallation>;
+
 export const OrgConfigV1 = z
   .object({
     version: z.literal(1),
@@ -43,7 +58,8 @@ export const OrgConfigV1 = z
     notificationTargets: z.array(NotificationTargetRef).default([]),
     forgePersona: ForgePersona.default(defaultForgePersona),
     auditGateEnabled: z.boolean().default(false),
-    defaultCredentials: OrgDefaultCredentials.optional()
+    defaultCredentials: OrgDefaultCredentials.optional(),
+    github_app: OrgGithubAppInstallation.optional()
   })
   .strict();
 export type OrgConfigV1 = z.infer<typeof OrgConfigV1>;

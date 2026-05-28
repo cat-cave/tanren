@@ -13,6 +13,8 @@ import { parseRawViewOptIn, redactEventRows } from "./routes/runs/redaction.js";
 import { storeCodexAuthBundle } from "./engine/credentials/codexAuth.js";
 import { storeGithubToken } from "./engine/credentials/githubToken.js";
 import { FetchGitHubHttpClient, type GitHubHttpClient } from "./engine/providers/github.js";
+import { GithubAppTokenMinter } from "./engine/providers/githubAppTokenMinter.js";
+import { mountGithubAppInstallFromEnv } from "./routes/auth/githubAppInstall.js";
 import { Ssh2Substrate } from "./engine/ssh/index.js";
 import { runWorkerEnabled, startRunWorker } from "./engine/worker/index.js";
 import { CiPullRequestNotFoundError, CiRunNotFoundError, pollCiForRun } from "./engine/workflow/ciPolling.js";
@@ -205,6 +207,8 @@ export function buildApp(input: {
   const githubHttp = input.githubHttp ?? new FetchGitHubHttpClient();
   const identitySecretRef = input.runnerIdentitySecretRef ?? runnerIdentitySecretRef;
   const vaultHealthCheck = input.vaultHealthCheck ?? vaultHealth;
+  // P3-0003: one shared minter so installation-token caching spans routes.
+  const githubAppMinter = new GithubAppTokenMinter({ secrets });
 
   if (input.auth !== undefined) {
     app.route(
@@ -234,14 +238,10 @@ export function buildApp(input: {
   app.route("/orgs", createPersonaRoutes({ pool: input.pool }));
   app.route("/orgs", createBehaviorRoutes({ pool: input.pool }));
   app.route("/orgs", createMilestoneRoutes({ pool: input.pool }));
-  app.route(
-    "/orgs",
-    createBrownfieldRoutes({ pool: input.pool, secrets, githubHttp })
-  );
-  app.route(
-    "/orgs",
-    createForgeRoutes({ pool: input.pool, secrets, githubHttp })
-  );
+  app.route("/orgs", createBrownfieldRoutes({ pool: input.pool, secrets, githubHttp, githubAppMinter }));
+  // P3-0003: GitHub App install flow; mounts only when configured via env.
+  mountGithubAppInstallFromEnv(app, { pool: input.pool, secrets, minter: githubAppMinter });
+  app.route("/orgs", createForgeRoutes({ pool: input.pool, secrets, githubHttp }));
   app.route("/orgs", createInsightRoutes({ pool: input.pool }));
   app.route("/orgs", createNotificationRoutes({ pool: input.pool }));
   app.route("/orgs", createRunRoutes({ pool: input.pool }));
@@ -376,6 +376,7 @@ export function buildApp(input: {
           runId: c.req.param("runId"),
           identitySecretRef,
           timeoutMs: parsed.data.timeoutMs ?? 30_000,
+          githubAppMinter,
           ...parsed.data
         }),
         201
@@ -403,6 +404,7 @@ export function buildApp(input: {
           secrets,
           githubHttp,
           runId: c.req.param("runId"),
+          githubAppMinter,
           ...parsed.data
         }),
         200

@@ -11,8 +11,14 @@ import type pg from "pg";
 import { z } from "zod";
 import type { ActorContext } from "../../auth/schemas.js";
 import type { SecretStore } from "../../engine/contracts/secretStore.js";
+import {
+  resolveGithubToken,
+  type ResolvedGithubToken
+} from "../../engine/credentials/githubTokenResolver.js";
 import type { GitHubHttpClient } from "../../engine/providers/github.js";
 import { parseGitHubRepository } from "../../engine/providers/github.js";
+import type { GithubAppTokenMinter } from "../../engine/providers/githubAppTokenMinter.js";
+import { loadOrgGithubAppInstallation } from "../../engine/credentials/orgGithubApp.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg } from "../orgs/index.js";
 
@@ -20,6 +26,8 @@ interface BrownfieldRoutesOptions {
   pool: pg.Pool;
   secrets: SecretStore;
   githubHttp: GitHubHttpClient;
+  /** P3-0003: shared installation-token minter (cache lives here). */
+  githubAppMinter?: GithubAppTokenMinter;
 }
 
 const BrownfieldLinkSchema = z.object({
@@ -70,15 +78,24 @@ export function createBrownfieldRoutes(options: BrownfieldRoutesOptions) {
     }
 
     const repo = parseGitHubRepository(parsed.data.repoUrl);
-    const token = await loadGithubToken(options.secrets, parsed.data.githubCredentialRef);
-    if (token === undefined) {
+    let resolved: ResolvedGithubToken;
+    try {
+      const installation = await loadOrgGithubAppInstallation(options.pool, orgId);
+      resolved = await resolveGithubToken({
+        secrets: options.secrets,
+        installation,
+        staticRef: parsed.data.githubCredentialRef,
+        minter: options.githubAppMinter
+      });
+    } catch {
       return c.json({ error: "github_credential_missing" }, 400);
     }
 
     const repoCheck = await options.githubHttp.request({
       method: "GET",
       path: `/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}`,
-      token
+      token: resolved.token,
+      refreshToken: resolved.refresh
     });
     if (repoCheck.status === 404) {
       return c.json({ error: "repo_not_reachable", message: "GitHub App cannot see this repository" }, 404);
@@ -95,7 +112,7 @@ export function createBrownfieldRoutes(options: BrownfieldRoutesOptions) {
 
     const detected: BrownfieldDetectedFile[] = [];
     for (const path of DETECTED_FILES) {
-      detected.push(await readRepoFile(options.githubHttp, repo, path, token));
+      detected.push(await readRepoFile(options.githubHttp, repo, path, resolved));
     }
 
     await options.pool.query(
@@ -115,22 +132,17 @@ export function createBrownfieldRoutes(options: BrownfieldRoutesOptions) {
   return app;
 }
 
-async function loadGithubToken(secrets: SecretStore, ref?: string): Promise<string | undefined> {
-  const resolvedRef = ref ?? process.env.TANREN_GITHUB_APP_TOKEN_REF ?? "credential/github/default";
-  const value = await secrets.get(resolvedRef);
-  return value?.value;
-}
-
 async function readRepoFile(
   http: GitHubHttpClient,
   repo: { owner: string; name: string },
   path: string,
-  token: string
+  resolved: ResolvedGithubToken
 ): Promise<BrownfieldDetectedFile> {
   const response = await http.request({
     method: "GET",
     path: `/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}/contents/${encodeRepoPath(path)}`,
-    token
+    token: resolved.token,
+    refreshToken: resolved.refresh
   });
   if (response.status === 404) {
     return { path, present: false };

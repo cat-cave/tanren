@@ -124,6 +124,10 @@ export class RoutesPool {
       const org = this.orgs.get(String(params[0]));
       return single(org);
     }
+    if (trimmed.startsWith("SELECT config FROM organizations WHERE id = $1")) {
+      const org = this.orgs.get(String(params[0]));
+      return single(org === undefined ? undefined : { config: org.config });
+    }
     if (trimmed.startsWith("UPDATE organizations SET config")) {
       const org = this.orgs.get(String(params[1]));
       if (org === undefined) return { rows: [], rowCount: 0 };
