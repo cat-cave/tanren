@@ -9,9 +9,7 @@ import { GitHubOAuthProvider, IdentityStore, type IdentityProvider } from "./aut
 import { PgRunnerStore, SidecarHttpAllocator, StaticRunnerAllocator } from "./engine/allocators/index.js";
 import type { Allocator } from "./engine/contracts/allocator.js";
 import { InMemorySecretStore, type SecretStore, VaultSecretStore } from "./engine/contracts/index.js";
-import { PgEventStore } from "./engine/eventStore.js";
-import { isEventName } from "./engine/events/index.js";
-import { emitRedactionAudit, hasElevatedScope, redactEventPayload } from "./engine/redaction/index.js";
+import { parseRawViewOptIn, redactEventRows } from "./routes/runs/redaction.js";
 import { storeCodexAuthBundle } from "./engine/credentials/codexAuth.js";
 import { storeGithubToken } from "./engine/credentials/githubToken.js";
 import { FetchGitHubHttpClient, type GitHubHttpClient } from "./engine/providers/github.js";
@@ -409,58 +407,13 @@ export function buildApp(input: {
     );
     const events = await input.pool.query("SELECT * FROM events WHERE run_id = $1 ORDER BY ts ASC, id ASC", [runId]);
     const costs = await input.pool.query("SELECT * FROM cost_records WHERE run_id = $1 ORDER BY recorded_at ASC, id ASC", [runId]);
-
-    // Apply the P2A-0009 redaction layer to event payloads at read time.
-    // Raw payloads stay in the events table; this serializer hides
-    // sensitive fields based on the actor's scope. The ?raw=true query
-    // (or X-View-Raw: true header) lets elevated-scope actors opt into
-    // raw view, which emits a redaction.raw_access audit row.
-    const actor = actorOf(c);
-    const rawView = parseRawViewOptIn(c);
-    const eventStoreForAudit = new PgEventStore(input.pool);
-    const auditEmissions: Promise<void>[] = [];
-    const serializedEvents = events.rows.map((row) => {
-      const eventType = String(row.event_type);
-      if (actor === undefined || !isEventName(eventType)) {
-        // No actor (public endpoint hit in tests) or unknown event type:
-        // we still apply the safe-default serializer so leaks aren't
-        // possible; unknown types fall through to the redacted default.
-        return row;
-      }
-      const output = redactEventPayload({
-        eventName: eventType,
-        payload: row.payload,
-        actor,
-        rawView
-      });
-      if (rawView && output.rawAccessedPaths.length > 0 && hasElevatedScope(actor)) {
-        auditEmissions.push(
-          emitRedactionAudit({
-            store: eventStoreForAudit,
-            actor,
-            runId: String(row.run_id ?? runId),
-            specId: String(row.spec_id ?? ""),
-            projectId: String(row.project_id ?? ""),
-            taskId: row.task_id !== null ? String(row.task_id) : undefined,
-            eventReadId: String(row.id),
-            eventReadType: eventType,
-            paths: output.rawAccessedPaths
-          })
-        );
-      }
-      return {
-        ...row,
-        payload: output.payload,
-        redactedPaths: output.redactedPaths
-      };
+    const { events: serializedEvents } = await redactEventRows({
+      pool: input.pool,
+      rows: events.rows,
+      runId,
+      actor: actorOf(c),
+      rawView: parseRawViewOptIn(c)
     });
-    // Wait for any audit writes so the audit row is durable before the
-    // response leaves the server. Failures bubble up — auditing must not
-    // silently drop.
-    if (auditEmissions.length > 0) {
-      await Promise.all(auditEmissions);
-    }
-
     return c.json({ run: run.rows[0], tasks: tasks.rows, events: serializedEvents, costs: costs.rows });
   });
 
@@ -491,22 +444,6 @@ function messageFromError(error: unknown): string {
 
 function actorOf(c: { var: { actor?: ActorContext } }): ActorContext | undefined {
   return c.var.actor;
-}
-
-// parseRawViewOptIn extracts the raw-view opt-in signal. Two equivalent
-// surfaces are accepted: the `X-View-Raw: true` header (for programmatic
-// callers) and the `?raw=true` query parameter (for UI links). Either is
-// the actor explicitly stating "I want the raw values" — the audit emitter
-// rows-this so the operator trail captures the decision.
-function parseRawViewOptIn(c: {
-  req: { header: (name: string) => string | undefined; query: (name: string) => string | undefined };
-}): boolean {
-  const header = c.req.header("x-view-raw");
-  if (header !== undefined && /^(1|true|yes)$/i.test(header.trim())) {
-    return true;
-  }
-  const query = c.req.query("raw");
-  return query !== undefined && /^(1|true|yes)$/i.test(query.trim());
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
