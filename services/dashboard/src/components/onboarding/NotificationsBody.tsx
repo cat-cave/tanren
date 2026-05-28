@@ -4,9 +4,9 @@
  * per-channel × severity matrix, an add-channel form, and a weekend-mute
  * toggle per target.
  *
- * v0 wiring reduction: only `ntfy` actually delivers. Every other channel
- * has a working schema + matrix opt-ins but no dispatch wiring, so its row
- * VISIBLY says "configured but not yet wired".
+ * Wiring: `ntfy`, `slack` and `github_checks` actually deliver (P3-0024).
+ * Every other channel has a working schema + matrix opt-ins but no dispatch
+ * wiring, so its row VISIBLY says "configured but not yet wired".
  */
 
 import type {
@@ -21,8 +21,8 @@ import { PhaseBadge, SevBadge, Toggle } from "./primitives.js";
 /** Channel catalog: glyph + phase badge + whether dispatch is wired in v0. */
 const CHANNELS: Array<{ kind: ChannelKind; glyph: string; label: string; phase: "v0" | "p3" | "p4"; wired: boolean }> = [
   { kind: "ntfy", glyph: "▮", label: "ntfy", phase: "v0", wired: true },
-  { kind: "slack", glyph: "⌥", label: "slack", phase: "p3", wired: false },
-  { kind: "github_checks", glyph: "⌬", label: "github checks", phase: "p3", wired: false },
+  { kind: "slack", glyph: "⌥", label: "slack", phase: "p3", wired: true },
+  { kind: "github_checks", glyph: "⌬", label: "github checks", phase: "p3", wired: true },
   { kind: "teams", glyph: "◈", label: "microsoft teams", phase: "p3", wired: false },
   { kind: "discord", glyph: "◉", label: "discord", phase: "p3", wired: false },
   { kind: "email", glyph: "✉", label: "email", phase: "p3", wired: false },
@@ -95,7 +95,7 @@ function ChannelsColumn(props: { targets: NotificationTarget[] }) {
             save ntfy target
           </button>
         </div>
-        <div class="mono-dim">only ntfy delivers in v0 · other channel kinds persist + opt-in but don't dispatch yet</div>
+        <div class="mono-dim">ntfy, slack + github checks dispatch · other channel kinds persist + opt-in but don't dispatch yet</div>
       </form>
     </div>
   );

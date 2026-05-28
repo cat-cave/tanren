@@ -152,10 +152,11 @@ describe("NotificationDispatcher", () => {
 
   it("records stubbed delivery for unwired channels", async () => {
     const client = new NotificationMemoryClient();
-    await seedOrgTarget(client, "slack");
-    await seedRoute(client, { id: "r_slack", targetId: "target_slack", eventName: "run.failed" });
+    // `teams` is still unwired (only ntfy/slack/github_checks are wired).
+    await seedOrgTarget(client, "teams");
+    await seedRoute(client, { id: "r_teams", targetId: "target_teams", eventName: "run.failed" });
 
-    const channels = baseRegistry(); // every kind stubbed except ntfy real
+    const channels = baseRegistry();
     const dispatcher = new NotificationDispatcher({
       query: client as unknown as pg.Pool,
       channels,
@@ -166,7 +167,51 @@ describe("NotificationDispatcher", () => {
       { orgId: "org_1", actorUserId: null }
     );
     expect(client.dispatches[0]?.status).toBe("stubbed");
+    expect(client.dispatches[0]?.channel).toBe("teams");
+  });
+
+  it("routes an event to the wired slack channel", async () => {
+    const client = new NotificationMemoryClient();
+    await seedOrgTarget(client, "slack");
+    await seedRoute(client, { id: "r_slack", targetId: "target_slack", eventName: "run.failed" });
+
+    const slack = new CapturingChannel("slack");
+    const dispatcher = new NotificationDispatcher({
+      query: client as unknown as pg.Pool,
+      channels: baseRegistry({ slack }),
+      now: () => new Date("2026-01-05T12:00:00Z")
+    });
+    await dispatcher.onEvent(
+      { eventType: "run.failed", payload: { status: "failed", message: "x" } },
+      { orgId: "org_1", actorUserId: null }
+    );
+    expect(slack.calls).toHaveLength(1);
+    expect(client.dispatches[0]?.status).toBe("sent");
     expect(client.dispatches[0]?.channel).toBe("slack");
+  });
+
+  it("routes an event to the wired github_checks channel", async () => {
+    const client = new NotificationMemoryClient();
+    await seedOrgTarget(client, "github_checks");
+    await seedRoute(client, {
+      id: "r_gh",
+      targetId: "target_github_checks",
+      eventName: "run.failed"
+    });
+
+    const github = new CapturingChannel("github_checks");
+    const dispatcher = new NotificationDispatcher({
+      query: client as unknown as pg.Pool,
+      channels: baseRegistry({ github_checks: github }),
+      now: () => new Date("2026-01-05T12:00:00Z")
+    });
+    await dispatcher.onEvent(
+      { eventType: "run.failed", payload: { status: "failed", message: "x" } },
+      { orgId: "org_1", actorUserId: null }
+    );
+    expect(github.calls).toHaveLength(1);
+    expect(client.dispatches[0]?.status).toBe("sent");
+    expect(client.dispatches[0]?.channel).toBe("github_checks");
   });
 
   it("records failed when a wired channel throws and does not propagate", async () => {
