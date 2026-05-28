@@ -4,9 +4,12 @@ import type { SshCommand, SshCommandResult, SshSubstrate } from "../src/engine/c
 import { defineFailure } from "../src/engine/failure.js";
 import { createFakeWriter } from "../src/engine/providers/fake.js";
 import {
+  bootstrapWorkspace,
+  DEFAULT_BOOTSTRAP_COMMAND,
   parseGitLogCommit,
   prepareGitWorkspace,
   runWorkspaceSshCommand,
+  WorkspaceBootstrapError,
   WorkspaceCommandError,
   workspaceRepoPathForRun
 } from "../src/engine/workspace/index.js";
@@ -83,6 +86,60 @@ describe("workspace git contract", () => {
     expect(ssh.commands[1]?.command.command).toContain("HELLO.md");
     expect(ssh.commands[2]?.command.command).toBe("git diff --no-color HEAD~1..HEAD");
     expect(ssh.commands[3]?.command.command).toBe("git log -1 --format='%H%x09%s' HEAD");
+  });
+});
+
+describe("workspace bootstrap (P3-0006)", () => {
+  const workspacePath = workspaceRepoPathForRun("run_bootstrap");
+
+  it("runs the install command in the workspace dir and returns success", async () => {
+    const ssh = new ScriptedSsh([{ exitCode: 0, stdout: "Packages: +120", stderr: "", timedOut: false }]);
+    const result = await bootstrapWorkspace({ ssh, target, workspacePath, command: "pnpm install", timeoutMs: 100 });
+
+    expect(result.exitCode).toBe(0);
+    expect(ssh.commands).toHaveLength(1);
+    expect(ssh.commands[0]?.command.command).toBe("pnpm install");
+    expect(ssh.commands[0]?.command.cwd).toBe(workspacePath);
+  });
+
+  it("falls back to the default pnpm/npm-detecting command when none is given", async () => {
+    const ssh = new ScriptedSsh([{ exitCode: 0, stdout: "", stderr: "", timedOut: false }]);
+    await bootstrapWorkspace({ ssh, target, workspacePath, timeoutMs: 100 });
+
+    expect(ssh.commands[0]?.command.command).toBe(DEFAULT_BOOTSTRAP_COMMAND);
+    expect(DEFAULT_BOOTSTRAP_COMMAND).toContain("pnpm install");
+  });
+
+  it("throws a typed WorkspaceBootstrapError with exit code + output tail on failure", async () => {
+    const ssh = new ScriptedSsh([{ exitCode: 1, stdout: "resolving", stderr: "ERR_PNPM_NO_LOCKFILE\nvitest: not found", timedOut: false }]);
+
+    const error = await bootstrapWorkspace({ ssh, target, workspacePath, command: "pnpm install", timeoutMs: 100 }).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(WorkspaceBootstrapError);
+    const typed = error as WorkspaceBootstrapError;
+    expect(typed.exitCode).toBe(1);
+    expect(typed.workspacePath).toBe(workspacePath);
+    expect(typed.outputTail).toContain("vitest: not found");
+    expect(typed.message).toContain("exited 1");
+  });
+
+  it("treats a timeout and a substrate failure as bootstrap errors", async () => {
+    const timedOut = new ScriptedSsh([{ exitCode: null, stdout: "", stderr: "", timedOut: true }]);
+    const timeoutError = await bootstrapWorkspace({ ssh: timedOut, target, workspacePath, timeoutMs: 50 }).catch((caught: unknown) => caught);
+    expect(timeoutError).toBeInstanceOf(WorkspaceBootstrapError);
+    expect((timeoutError as WorkspaceBootstrapError).message).toContain("timed out");
+
+    const failed = new ScriptedSsh([
+      {
+        exitCode: null,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        failure: defineFailure({ kind: "ssh_failed", target: "tanren@runner:22", message: "connection reset" })
+      }
+    ]);
+    const substrateError = await bootstrapWorkspace({ ssh: failed, target, workspacePath, timeoutMs: 50 }).catch((caught: unknown) => caught);
+    expect(substrateError).toBeInstanceOf(WorkspaceBootstrapError);
+    expect((substrateError as WorkspaceBootstrapError).outputTail).toContain("connection reset");
   });
 });
 

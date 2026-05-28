@@ -28,7 +28,7 @@ import { CodexUsageLimitError, createCodexAnswerer, createCodexWriter } from "..
 import type { GitHubHttpClient } from "../providers/github.js";
 import { quoteSshShellArg } from "../ssh/command.js";
 import { SshCcusageAccountant, SshCodexbarUsageMonitor, SshUsageProbe, type UsageProbe } from "../usage/index.js";
-import { runWorkspaceSshCommand, workspaceRepoPathForRun } from "../workspace/index.js";
+import { bootstrapWorkspace, WorkspaceBootstrapError, runWorkspaceSshCommand, workspaceRepoPathForRun } from "../workspace/index.js";
 import { pollCiForRun, type PollCiForRunResult } from "./ciPolling.js";
 import { publishDraftPullRequest, type PublishedDraftPullRequest } from "./githubDraftPr.js";
 import { runSubtaskLoop, type SubtaskLoopAdapters, type SubtaskLoopOutcome } from "./subtaskLoop.js";
@@ -79,9 +79,26 @@ export interface RunPlannerLoopInput {
   ciPollDelayMs?: number;
   sleep?: (ms: number) => Promise<void>;
   pressureThresholdPercent?: number;
+  // P3-0006: the install command run over SSH in the workspace after clone and
+  // before the writer loop, so gating + intent-checking see a built tree.
+  // Omitted → the default pnpm/npm-detecting command (DEFAULT_BOOTSTRAP_COMMAND).
+  // TODO: source from tanren-ci.yml (P3-0004) once merged.
+  bootstrapCommand?: string;
+  // Test seam: when omitted, the real bootstrapWorkspace runs over SSH. Tests
+  // that drive the loop with a RecordingSsh fake inject a no-op (or scripted
+  // failure) so unit runs never depend on a real install.
+  runBootstrap?: (input: BootstrapStepInput) => Promise<void>;
   // Test seams. Omitted in production → real Codex adapters + SSH usage probe.
   buildAdapters?: (ctx: PlannerRunAdapterContext) => SubtaskLoopAdapters;
   buildUsageProbe?: (ctx: PlannerRunAdapterContext) => UsageProbe | undefined;
+}
+
+export interface BootstrapStepInput {
+  ssh: SshSubstrate;
+  target: SshTarget;
+  workspacePath: string;
+  command?: string;
+  timeoutMs: number;
 }
 
 export interface PlannerRunResult {
@@ -114,6 +131,17 @@ export async function runPlannerLoopWorkflow(input: RunPlannerLoopInput): Promis
   try {
     await prepareWorkspace(input, allocation.target, workspacePath);
     await appendEvent("workspace.prepared", { workspacePath, repoUrl: context.repoUrl, targetBranch: context.targetBranch });
+
+    // P3-0006: install the target repo's deps in the freshly-cloned workspace
+    // before the writer loop, so the checker/auditor gate a built tree.
+    const runBootstrap = input.runBootstrap ?? ((stepInput) => bootstrapWorkspace(stepInput).then(() => undefined));
+    await runBootstrap({
+      ssh: input.ssh,
+      target: allocation.target,
+      workspacePath,
+      command: input.bootstrapCommand,
+      timeoutMs: input.timeoutMs
+    });
 
     const adapterCtx: PlannerRunAdapterContext = {
       runId: context.runId,
@@ -174,6 +202,15 @@ export async function runPlannerLoopWorkflow(input: RunPlannerLoopInput): Promis
     await input.pool.query("UPDATE runs SET status = 'done', outcome = 'ok', ended_at = now() WHERE run_id = $1", [context.runId]);
     return { runId: context.runId, workspacePath, outcome, pullRequest, ci };
   } catch (error) {
+    if (error instanceof WorkspaceBootstrapError) {
+      // Dependency install failed: the workspace can't build/test, so the run
+      // can't be gated. Surface it as a halting, recoverable outcome (lands on
+      // the P2B-0008 recovery surface) rather than a crash, reusing the
+      // workspace.failed event + the halted run state.
+      await appendEvent("workspace.failed", { workspacePath, message: error.message });
+      await finalizeNonPass(input.pool, context.runId, "halted");
+      throw error;
+    }
     if (error instanceof CodexUsageLimitError) {
       // Authenticated but out of quota mid-loop: a recoverable window state,
       // not a crash (PROJECT_BRIEF §4.3). Record it as such.
