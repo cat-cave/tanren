@@ -1,7 +1,7 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
   "plugins": ["typescript", "unicorn", "vitest"],
-  "ignorePatterns": ["dist/**", "node_modules/**", "coverage/**"],
+  "ignorePatterns": ["dist/**", "node_modules/**", "coverage/**", "tanren-hi-fidelity/**"],
   "categories": {
     "correctness": "error",
     "suspicious": "error",
