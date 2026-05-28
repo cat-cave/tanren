@@ -191,8 +191,17 @@ describe("dashboard auth flow", () => {
 // spec lands. The phase-3+ rows stay placeholders for all of Phase 2B, keeping
 // this regression test stable regardless of merge order.
 describe("screen-router mounting convention (fan-out extension point)", () => {
+  // Isolate the registry: real child screens (e.g. P2B-0005's mountCostsScreen)
+  // self-register at module load, so reset before each case to exercise ONLY
+  // the fake mount this block pushes. The /costs example path is now a real
+  // route, so without this reset the real screen would shadow the fake one.
+  let savedMounts: typeof SCREEN_MOUNTS = [];
+  beforeEach(() => {
+    savedMounts = SCREEN_MOUNTS.splice(0, SCREEN_MOUNTS.length);
+  });
   afterEach(() => {
     SCREEN_MOUNTS.length = 0;
+    SCREEN_MOUNTS.push(...savedMounts);
   });
 
   it("renders a registered child route at a placeholder path instead of the placeholder", async () => {
