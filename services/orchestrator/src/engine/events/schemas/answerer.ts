@@ -262,3 +262,39 @@ export const AuditorFailedPayload = z
     message: z.string()
   })
   .strict();
+
+// P2A-0012 rejection events. The planner-feedback-loop emits one of these on
+// every rejection, carrying a structured `producer` (which Answerer rejected),
+// the rejection `reason`, and the resulting `plannerRerunCount` so the run
+// detail timeline can render the loop without joining tasks.
+export const PlannerRerequestedPayload = z
+  .object({
+    runId: z.string(),
+    plannerTaskId: z.string(),
+    producer: z.enum(["checker", "auditor"]),
+    rejectionReason: z.string(),
+    behaviorIdsFailed: z.array(z.string()),
+    plannerRerunCount: z.number().int(),
+    maxPlannerRerunsPerSpec: z.number().int()
+  })
+  .strict();
+
+export const CheckerRejectedPayload = z
+  .object({
+    runId: z.string(),
+    taskId: z.string(),
+    subtaskIndex: z.number().int(),
+    reason: z.string(),
+    behaviorIdsFailed: z.array(z.string())
+  })
+  .strict();
+
+export const AuditorRejectedPayload = z
+  .object({
+    runId: z.string(),
+    auditTaskId: z.string(),
+    reason: z.string(),
+    outstandingBehaviorIds: z.array(z.string()),
+    recommendedAction: z.enum(["loop_to_planner", "halt"])
+  })
+  .strict();

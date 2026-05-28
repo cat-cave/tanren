@@ -150,6 +150,18 @@ export const sensitivityRules: SensitivityRule[] = [
     ["message", "public"]
   ]),
 
+  // P2A-0012 planner rejection-loop event
+  ...rulesFor("planner.rerequested", [
+    ["runId", "public"],
+    ["plannerTaskId", "public"],
+    ["producer", "public"],
+    ["rejectionReason", "public"],
+    ["behaviorIdsFailed", "public"],
+    ["behaviorIdsFailed[]", "public"],
+    ["plannerRerunCount", "public"],
+    ["maxPlannerRerunsPerSpec", "public"]
+  ]),
+
   // checker role
   ...rulesFor("checker.started", [["taskKind", "public"]]),
   ...rulesFor("checker.completed", [
@@ -176,6 +188,15 @@ export const sensitivityRules: SensitivityRule[] = [
     ["behaviorIdsFailed", "public"],
     ["behaviorIdsFailed[]", "public"]
   ]),
+  // P2A-0012 rejection event emitted by the checker rejection-loop branch
+  ...rulesFor("checker.rejected", [
+    ["runId", "public"],
+    ["taskId", "public"],
+    ["subtaskIndex", "public"],
+    ["reason", "public"],
+    ["behaviorIdsFailed", "public"],
+    ["behaviorIdsFailed[]", "public"]
+  ]),
 
   // auditor role
   ...rulesFor("auditor.started", [["taskKind", "public"]]),
@@ -196,6 +217,15 @@ export const sensitivityRules: SensitivityRule[] = [
     ["runId", "public"],
     ["passed", "public"],
     ["reasoning", "public"],
+    ["outstandingBehaviorIds", "public"],
+    ["outstandingBehaviorIds[]", "public"],
+    ["recommendedAction", "public"]
+  ]),
+  // P2A-0012 rejection event emitted by the auditor rejection-loop branch
+  ...rulesFor("auditor.rejected", [
+    ["runId", "public"],
+    ["auditTaskId", "public"],
+    ["reason", "public"],
     ["outstandingBehaviorIds", "public"],
     ["outstandingBehaviorIds[]", "public"],
     ["recommendedAction", "public"]
