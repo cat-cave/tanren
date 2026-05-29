@@ -53,6 +53,12 @@ services:
       # authenticated against the synthetic `tanren-dev` org. compose.prod.yml
       # MUST never set this flag. See docs/operator-guide/auth.md.
       TANREN_DEV_LOGIN: ${TANREN_DEV_LOGIN:-}
+      # Run-executor worker (P3-0001). OPT-IN via host env, default OFF (so CI
+      # smoke/tests are unaffected). Set TANREN_RUN_WORKER=1 (in .env) to have the
+      # orchestrator dequeue queued runs and drive them end-to-end — required for
+      # real-loop manual validation. TANREN_RUN_WORKER_CONCURRENCY bounds in-flight runs.
+      TANREN_RUN_WORKER: ${TANREN_RUN_WORKER:-}
+      TANREN_RUN_WORKER_CONCURRENCY: ${TANREN_RUN_WORKER_CONCURRENCY:-2}
       # Dev profile: orchestrator routes /hello/run to the long-lived static
       # `runner` service over the compose network. The allocator sidecar is
       # still up for parity with prod (and to service ephemeral runs), but
