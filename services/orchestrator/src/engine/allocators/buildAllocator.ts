@@ -5,10 +5,11 @@ import { AwsEc2Allocator } from "./awsEc2Allocator.js";
 import { DigitalOceanAllocator } from "./digitalOceanAllocator.js";
 import { GcpAllocator } from "./gcpAllocator.js";
 import { HetznerAllocator } from "./hetznerAllocator.js";
+import { KubernetesAllocator } from "./kubernetesAllocator.js";
 import { ManualSshAllocator, type ManualSshHost } from "./manualSshAllocator.js";
 import { AllocatorRoutingConfig, type AllocatorKind } from "./poolPolicy.js";
 import { PgRunnerStore, type RunnerStore } from "./runnerStore.js";
-import { KubernetesAllocator, UnconfiguredAllocator } from "./scaffoldedAllocators.js";
+import { UnconfiguredAllocator } from "./scaffoldedAllocators.js";
 import { SidecarHttpAllocator } from "./sidecarHttpAllocator.js";
 import { StaticRunnerAllocator } from "./staticRunnerAllocator.js";
 
@@ -162,6 +163,43 @@ function buildAwsEc2(runners: RunnerStore): AwsEc2Allocator {
   });
 }
 
+function buildKubernetes(runners: RunnerStore): KubernetesAllocator {
+  // The token is a resolved secret here. In production it is sourced from a
+  // Vault ref (TANREN_K8S_TOKEN_REF names that ref) by the operator's secret
+  // tooling, never hardcoded.
+  const apiServer = env("TANREN_K8S_API_SERVER");
+  const token = env("TANREN_K8S_TOKEN_REF");
+  const namespace = env("TANREN_K8S_NAMESPACE");
+  const runnerImage = env("TANREN_K8S_RUNNER_IMAGE");
+  const sshPublicKey = env("TANREN_K8S_SSH_PUBLIC_KEY");
+  const hostKeyFingerprint = env("TANREN_K8S_HOST_FINGERPRINT");
+  if (
+    apiServer === undefined ||
+    token === undefined ||
+    namespace === undefined ||
+    runnerImage === undefined ||
+    sshPublicKey === undefined ||
+    hostKeyFingerprint === undefined
+  ) {
+    throw new Error(
+      "kubernetes allocator requires TANREN_K8S_API_SERVER, TANREN_K8S_TOKEN_REF, " +
+        "TANREN_K8S_NAMESPACE, TANREN_K8S_RUNNER_IMAGE, TANREN_K8S_SSH_PUBLIC_KEY, " +
+        "and TANREN_K8S_HOST_FINGERPRINT"
+    );
+  }
+  return new KubernetesAllocator({
+    apiServer,
+    token,
+    namespace,
+    runnerImage,
+    sshPublicKey,
+    hostKeyFingerprint,
+    caPem: env("TANREN_K8S_CA_PEM"),
+    sshUsername: env("TANREN_K8S_SSH_USER") ?? "tanren",
+    runners
+  });
+}
+
 /**
  * Builds the single allocator kind named by `kind`, or throws for the
  * scaffolded kinds (which only exist behind the router registry). This is the
@@ -181,6 +219,8 @@ function buildSingle(kind: string, runners: RunnerStore): Allocator {
       return buildGcp(runners);
     case "aws_ec2":
       return buildAwsEc2(runners);
+    case "kubernetes":
+      return buildKubernetes(runners);
     case "sidecar":
       return buildSidecar(runners);
     default:
@@ -221,7 +261,9 @@ function buildRegistry(runners: RunnerStore, config: AllocatorRoutingConfig): Al
       case "aws_ec2":
         return usedKinds.has("aws_ec2") ? buildAwsEc2(runners) : new UnconfiguredAllocator("aws_ec2");
       case "kubernetes":
-        return new KubernetesAllocator();
+        return usedKinds.has("kubernetes")
+          ? buildKubernetes(runners)
+          : new UnconfiguredAllocator("kubernetes");
     }
   };
 

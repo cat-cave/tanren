@@ -6,49 +6,15 @@ import type {
 } from "../contracts/allocator.js";
 
 /**
- * Error thrown by the scaffolded cloud allocators. These allocators exist to
- * prove the {@link Allocator} interface shape and the selector wiring; the
- * provider-specific provisioning logic is a P3-0027 follow-up.
- */
-export class AllocatorNotImplementedError extends Error {
-  constructor(public readonly provider: string) {
-    super(
-      `${provider} allocator is not yet implemented (P3-0027 follow-up). ` +
-        `Implemented allocators: static, sidecar, manual_ssh, hetzner, digitalocean, gcp, aws_ec2. ` +
-        `See docs/operator-guide/runners.md.`
-    );
-    this.name = "AllocatorNotImplementedError";
-  }
-}
-
-/**
- * Base for scaffolded cloud allocators. Each subclass fixes its provider name;
- * both methods throw {@link AllocatorNotImplementedError} so the shape is
- * proven and registered in the selector without pretending to provision.
- */
-abstract class ScaffoldedAllocator implements Allocator {
-  protected abstract readonly provider: string;
-
-  async allocate(_request: AllocationRequest): Promise<RunnerAllocation> {
-    throw new AllocatorNotImplementedError(this.provider);
-  }
-
-  async release(_runnerId: string, _reason?: ReleaseReason): Promise<void> {
-    throw new AllocatorNotImplementedError(this.provider);
-  }
-}
-
-/** Scaffold: schedule a runner pod on a Kubernetes cluster. */
-export class KubernetesAllocator extends ScaffoldedAllocator {
-  protected readonly provider = "kubernetes";
-}
-
-/**
  * Placeholder for a *real* allocator kind that the router registers but the
  * operator never routes to (so its credentials are not configured). Throws a
  * clear error if it is ever selected, instead of constructing a real allocator
- * with bogus credentials. Distinct from the scaffolded stubs above, which
- * represent kinds with no implementation yet.
+ * with bogus credentials.
+ *
+ * Every allocator kind now has a real implementation; this stub is the only one
+ * left. It exists purely so the router registry stays total over
+ * {@link AllocatorKind} without loading credentials for kinds the operator did
+ * not opt into via routing rules.
  */
 export class UnconfiguredAllocator implements Allocator {
   constructor(private readonly kind: string) {}

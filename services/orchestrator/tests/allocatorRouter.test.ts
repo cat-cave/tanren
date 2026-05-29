@@ -5,10 +5,7 @@ import {
   PoolCapacityExceededError,
   selectAllocatorKind
 } from "../src/engine/allocators/poolPolicy.js";
-import {
-  AllocatorNotImplementedError,
-  KubernetesAllocator
-} from "../src/engine/allocators/scaffoldedAllocators.js";
+import { UnconfiguredAllocator } from "../src/engine/allocators/scaffoldedAllocators.js";
 import type { AllocationRequest, Allocator, RunnerAllocation } from "../src/engine/contracts/allocator.js";
 
 /** Records which allocator served a request; never actually provisions. */
@@ -40,7 +37,8 @@ function registry(overrides: Partial<AllocatorRegistry> = {}): {
     hetzner: new RecordingAllocator("hetzner"),
     digitalocean: new RecordingAllocator("digitalocean"),
     gcp: new RecordingAllocator("gcp"),
-    aws_ec2: new RecordingAllocator("aws_ec2")
+    aws_ec2: new RecordingAllocator("aws_ec2"),
+    kubernetes: new RecordingAllocator("kubernetes")
   };
   const reg: AllocatorRegistry = {
     static: recorders.static,
@@ -50,7 +48,7 @@ function registry(overrides: Partial<AllocatorRegistry> = {}): {
     digitalocean: recorders.digitalocean,
     gcp: recorders.gcp,
     aws_ec2: recorders.aws_ec2,
-    kubernetes: new KubernetesAllocator(),
+    kubernetes: recorders.kubernetes,
     ...overrides
   };
   return { reg, recorders };
@@ -142,6 +140,20 @@ describe("AllocatorRouter", () => {
     expect(recorders.sidecar.allocated).toEqual([]);
   });
 
+  it("routes by label/config to the kubernetes allocator", async () => {
+    const config = AllocatorRoutingConfig.parse({
+      defaultAllocator: "sidecar",
+      rules: [{ matchLabels: { cloud: "k8s" }, allocator: "kubernetes" }]
+    });
+    const { reg, recorders } = registry();
+    const router = new AllocatorRouter(reg, config);
+
+    await router.allocate(req("run_k8s", { cloud: "k8s" }));
+
+    expect(recorders.kubernetes.allocated.map((r) => r.runId)).toEqual(["run_k8s"]);
+    expect(recorders.sidecar.allocated).toEqual([]);
+  });
+
   it("release routes back to the allocator that served the runner", async () => {
     const config = AllocatorRoutingConfig.parse({
       defaultAllocator: "sidecar",
@@ -192,24 +204,23 @@ describe("AllocatorRouter", () => {
     expect(router.inFlightCount("manual_ssh")).toBe(0);
   });
 
-  it("routing to a scaffolded kind throws the clear not-implemented error", async () => {
+  it("routing to an unconfigured kind throws the clear not-configured error", async () => {
     const config = AllocatorRoutingConfig.parse({
       defaultAllocator: "kubernetes"
     });
-    const { reg } = registry();
+    // Registry where kubernetes was never wired with credentials.
+    const { reg } = registry({ kubernetes: new UnconfiguredAllocator("kubernetes") });
     const router = new AllocatorRouter(reg, config);
-    await expect(router.allocate(req("run_k8s"))).rejects.toBeInstanceOf(AllocatorNotImplementedError);
+    await expect(router.allocate(req("run_k8s"))).rejects.toThrow(/not configured/);
     // And the failed allocation did not leak a slot.
     expect(router.inFlightCount("kubernetes")).toBe(0);
   });
 });
 
-describe("scaffolded allocators", () => {
-  it("each throws AllocatorNotImplementedError with provider + follow-up hint", async () => {
-    for (const allocator of [new KubernetesAllocator()]) {
-      await expect(allocator.allocate(req("r"))).rejects.toBeInstanceOf(AllocatorNotImplementedError);
-      await expect(allocator.allocate(req("r"))).rejects.toThrow(/P3-0027 follow-up/);
-      await expect(allocator.release("r")).rejects.toBeInstanceOf(AllocatorNotImplementedError);
-    }
+describe("UnconfiguredAllocator", () => {
+  it("throws a clear not-configured error on allocate and release", async () => {
+    const allocator = new UnconfiguredAllocator("kubernetes");
+    await expect(allocator.allocate(req("r"))).rejects.toThrow(/not configured/);
+    await expect(allocator.release("r")).rejects.toThrow(/not configured/);
   });
 });
