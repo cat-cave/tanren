@@ -6,6 +6,7 @@ import type { SshSubstrate } from "../contracts/sshSubstrate.js";
 import { timedAnswererAdapter, timedWriterAdapter } from "../observability/index.js";
 import { createClaudeAnswerer, createClaudeWriter } from "./claude.js";
 import { createCodexAnswerer, createCodexWriter } from "./codex.js";
+import { ANSWERER_CAPABLE_CLIS, harnessSupportsRole, WRITER_CAPABLE_CLIS } from "./harnessCapability.js";
 import { createOpencodeWriter } from "./opencode.js";
 import type { AnswererAdapter, WriterAdapter } from "./types.js";
 
@@ -24,14 +25,16 @@ import type { AnswererAdapter, WriterAdapter } from "./types.js";
 //   - "opencode": Writer only, Zai GLM 5.1 (no Answerer; mirrors the type-level
 //                 AnswererAdapter.cli union which excludes opencode)
 
-// The provider CLIs this selector can resolve. Mirrors the WriterAdapter.cli
-// union (minus "fake", which is wired directly in tests). Kept as a value
-// (not just a type) so callers can validate / enumerate selectable providers
-// for the operator UI without a separate source of truth.
-export const SELECTABLE_WRITER_CLIS = ["codex", "claude", "opencode"] as const;
+// The provider CLIs this selector can resolve, DERIVED from the harness
+// capability table (harnessCapability.ts) — the single source of truth for
+// which harness can serve which protocol role. Kept as values (not just types)
+// so callers can validate / enumerate selectable providers for the operator UI
+// without a separate source of truth. Adding a harness = one capability entry +
+// its adapter; these sets and the role checks below follow automatically.
+export const SELECTABLE_WRITER_CLIS = WRITER_CAPABLE_CLIS;
 export type SelectableWriterCli = (typeof SELECTABLE_WRITER_CLIS)[number];
 
-export const SELECTABLE_ANSWERER_CLIS = ["codex", "claude"] as const;
+export const SELECTABLE_ANSWERER_CLIS = ANSWERER_CAPABLE_CLIS;
 export type SelectableAnswererCli = (typeof SELECTABLE_ANSWERER_CLIS)[number];
 
 export interface AdapterSelectorDependencies {
@@ -56,6 +59,12 @@ export class UnsupportedProviderError extends Error {
 // `model` (when present) pins the model the CLI runs.
 export function buildWriterAdapter(deps: AdapterSelectorDependencies, entry: RoutingChainEntry): WriterAdapter {
   const base = { secrets: deps.secrets, ssh: deps.ssh, target: deps.target, runId: deps.runId, credentialRef: entry.authRef };
+  // The harness capability table gates role-eligibility (harnessCapability.ts):
+  // a cli the table does not mark "write"-capable is rejected before we try to
+  // build an adapter for it.
+  if (!harnessSupportsRole(entry.cli, "write")) {
+    throw new UnsupportedProviderError(entry.cli, "writer");
+  }
   // P3-0029: wrap the built adapter so every real provider call emits a
   // boundary timing record. The adapter's core logic is untouched.
   switch (entry.cli) {
@@ -82,6 +91,13 @@ export function buildAnswererAdapter<TOutput>(
   role = "answerer"
 ): AnswererAdapter<TOutput> {
   const base = { secrets: deps.secrets, ssh: deps.ssh, target: deps.target, runId: deps.runId, credentialRef: entry.authRef };
+  // Answerer-eligibility is the harness's structured-output capability: a cli
+  // not marked "answer"-capable in the table (e.g. opencode, writer-only) is
+  // rejected here — the same UnsupportedProviderError surfaced for an unknown
+  // cli below, just decided from the single capability source of truth.
+  if (!harnessSupportsRole(entry.cli, "answer")) {
+    throw new UnsupportedProviderError(entry.cli, "answerer");
+  }
   switch (entry.cli) {
     case "codex":
       return timedAnswererAdapter(createCodexAnswerer<TOutput>(base), role);
