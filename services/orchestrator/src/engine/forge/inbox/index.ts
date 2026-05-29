@@ -23,6 +23,16 @@ export {
 } from "./githubConnector.js";
 
 export {
+  SentryConfig,
+  createSentryConnector,
+  FetchSentryHttpClient,
+  type SentryConnectorDeps,
+  type SentryHttpClient,
+  type SentryHttpRequest,
+  type SentryHttpResponse
+} from "./sentryConnector.js";
+
+export {
   createSource,
   listSources,
   getSource,
