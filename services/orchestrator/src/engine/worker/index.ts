@@ -7,6 +7,7 @@ import { PgJobQueue } from "../contracts/jobQueue.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { SshSubstrate } from "../contracts/sshSubstrate.js";
 import type { GitHubHttpClient } from "../providers/github.js";
+import { JobReaper } from "./jobReaper.js";
 import { RunWorker, type RunWorkerOptions } from "./runWorker.js";
 
 export {
@@ -15,10 +16,19 @@ export {
   DEFAULT_TIMEOUT_MS,
   DEFAULT_MAX_CI_POLLS,
   DEFAULT_CI_POLL_DELAY_MS,
+  DEFAULT_HEARTBEAT_INTERVAL_MS,
+  DEFAULT_LEASE_MS,
   type RunExecutorDeps,
   type ExecuteJobResult
 } from "./runExecutor.js";
 export { RunWorker, type RunWorkerOptions } from "./runWorker.js";
+export {
+  reapExpiredJobs,
+  JobReaper,
+  type ReapJobsDeps,
+  type ReapJobsResult,
+  type JobReaperOptions
+} from "./jobReaper.js";
 export {
   loadRunExecutionContext,
   RunExecutionContextNotFoundError,
@@ -58,10 +68,11 @@ export interface StartRunWorkerInput {
  * function always starts so it stays trivially testable.
  */
 export function startRunWorker(input: StartRunWorkerInput): RunWorker {
+  const jobQueue = new PgJobQueue(input.pool);
   const worker = new RunWorker(
     {
       pool: input.pool,
-      jobQueue: new PgJobQueue(input.pool),
+      jobQueue,
       allocator: input.allocator,
       ssh: input.ssh,
       secrets: input.secrets,
@@ -71,22 +82,24 @@ export function startRunWorker(input: StartRunWorkerInput): RunWorker {
     { concurrency: workerConcurrencyFromEnv(), ...input.options }
   );
   worker.start();
-  installSignalHandlers(worker);
+  // P3-0028: a co-located reaper recovers leases dropped by crashed workers.
+  const reaper = new JobReaper({ pool: input.pool, jobQueue });
+  reaper.start();
+  installSignalHandlers(worker, reaper);
   return worker;
 }
 
 let signalHandlersInstalled = false;
 
-/** Wire SIGTERM/SIGINT to drain the worker, then exit. Installed once. */
-function installSignalHandlers(worker: RunWorker): void {
+/** Wire SIGTERM/SIGINT to drain the worker + reaper, then exit. Installed once. */
+function installSignalHandlers(worker: RunWorker, reaper: JobReaper): void {
   if (signalHandlersInstalled) {
     return;
   }
   signalHandlersInstalled = true;
   const drain = (signal: NodeJS.Signals) => {
     console.log(`[run-worker] ${signal} received — draining in-flight jobs`);
-    worker
-      .stop()
+    Promise.all([worker.stop(), reaper.stop()])
       .catch((error) => console.error(`[run-worker] drain error: ${String(error)}`))
       .finally(() => process.exit(0));
   };

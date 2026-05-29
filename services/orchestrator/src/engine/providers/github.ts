@@ -32,6 +32,14 @@ export interface GitHubPullRequestChecks {
   head: GitHubPullRequestHead;
   checkRuns: GitHubCheckRun[];
   statuses: GitHubCommitStatus[];
+  /**
+   * P3-0028 required-check awareness: the branch-protection required status
+   * check contexts for the PR's base branch, or `undefined` when the base
+   * branch has no protection (or it could not be read). A run only passes when
+   * every required context is green; when this is `undefined` the loop falls
+   * back to "all observed checks green" (prior behavior).
+   */
+  requiredContexts?: string[];
 }
 
 export interface EnsureDraftPullRequestInput {
@@ -66,22 +74,72 @@ export interface GitHubHttpRequest {
 export interface GitHubHttpResponse {
   status: number;
   body: unknown;
+  /**
+   * P3-0028: rate-limit signal lifted from the response headers. Present when
+   * GitHub reports a `Retry-After` (seconds) or an exhausted primary rate-limit
+   * window (`X-RateLimit-Remaining: 0` + `X-RateLimit-Reset` epoch seconds).
+   */
+  retryAfterMs?: number;
 }
 
 export interface GitHubHttpClient {
   request(input: GitHubHttpRequest): Promise<GitHubHttpResponse>;
 }
 
+/** P3-0028 rate-limit backoff bounds: never wait less than this, never more. */
+export const MIN_RATE_LIMIT_BACKOFF_MS = 1_000;
+export const MAX_RATE_LIMIT_BACKOFF_MS = 60_000;
+/** Default number of times the client re-tries a rate-limited request before surfacing it. */
+export const DEFAULT_RATE_LIMIT_RETRIES = 2;
+
+export interface FetchGitHubHttpClientOptions {
+  apiBaseUrl?: string;
+  fetchImpl?: typeof fetch;
+  /** Test seam: sleep used between rate-limit retries. */
+  sleep?: (ms: number) => Promise<void>;
+  /** How many times to honor a `Retry-After` / reset before giving up. */
+  maxRateLimitRetries?: number;
+  /** Clock seam (epoch ms) for computing the wait from `X-RateLimit-Reset`. */
+  now?: () => number;
+}
+
 export class FetchGitHubHttpClient implements GitHubHttpClient {
-  constructor(private readonly apiBaseUrl = "https://api.github.com", private readonly fetchImpl: typeof fetch = fetch) {}
+  private readonly apiBaseUrl: string;
+  private readonly fetchImpl: typeof fetch;
+  private readonly sleep: (ms: number) => Promise<void>;
+  private readonly maxRateLimitRetries: number;
+  private readonly now: () => number;
+
+  constructor(options: FetchGitHubHttpClientOptions | string = {}, legacyFetch?: typeof fetch) {
+    // Back-compat: the prior signature was `(apiBaseUrl, fetchImpl)`.
+    const opts: FetchGitHubHttpClientOptions =
+      typeof options === "string" ? { apiBaseUrl: options, fetchImpl: legacyFetch } : options;
+    this.apiBaseUrl = opts.apiBaseUrl ?? "https://api.github.com";
+    this.fetchImpl = opts.fetchImpl ?? fetch;
+    this.sleep = opts.sleep ?? ((ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+    this.maxRateLimitRetries = opts.maxRateLimitRetries ?? DEFAULT_RATE_LIMIT_RETRIES;
+    this.now = opts.now ?? (() => Date.now());
+  }
 
   async request(input: GitHubHttpRequest): Promise<GitHubHttpResponse> {
-    const first = await this.send(input.path, input.method, input.token, input.body);
-    if (first.status !== 401 || input.refreshToken === undefined) {
-      return first;
+    let token = input.token;
+    let refreshed = false;
+    for (let attempt = 0; ; attempt += 1) {
+      const response = await this.send(input.path, input.method, token, input.body);
+      // 401 with a token supplier: re-mint once and retry (P3-0003 behavior).
+      if (response.status === 401 && input.refreshToken !== undefined && !refreshed) {
+        refreshed = true;
+        token = await input.refreshToken();
+        continue;
+      }
+      // P3-0028: rate-limited — honor Retry-After / X-RateLimit-Reset, back off,
+      // and retry up to the configured ceiling rather than hammering GitHub.
+      if (response.retryAfterMs !== undefined && attempt < this.maxRateLimitRetries) {
+        await this.sleep(response.retryAfterMs);
+        continue;
+      }
+      return response;
     }
-    const freshToken = await input.refreshToken();
-    return this.send(input.path, input.method, freshToken, input.body);
   }
 
   private async send(
@@ -101,8 +159,51 @@ export class FetchGitHubHttpClient implements GitHubHttpClient {
       body: body === undefined ? undefined : JSON.stringify(body)
     });
     const text = await response.text();
-    return { status: response.status, body: text === "" ? undefined : JSON.parse(text) };
+    return {
+      status: response.status,
+      body: text === "" ? undefined : JSON.parse(text),
+      retryAfterMs: rateLimitBackoffMs(response.status, headerGetter(response.headers), this.now())
+    };
   }
+}
+
+type HeaderGetter = (name: string) => string | null;
+
+function headerGetter(headers: Headers | undefined): HeaderGetter {
+  return (name) => (headers === undefined ? null : headers.get(name));
+}
+
+/**
+ * P3-0028: compute how long to wait before retrying a rate-limited GitHub
+ * response, or `undefined` if the response is not rate-limited. Honors
+ * `Retry-After` (delta seconds) first, then a `403/429` with
+ * `X-RateLimit-Remaining: 0` + `X-RateLimit-Reset` (epoch seconds). The wait is
+ * clamped to [MIN, MAX] so a bogus header can't stall the worker indefinitely.
+ */
+export function rateLimitBackoffMs(status: number, getHeader: HeaderGetter, nowMs: number): number | undefined {
+  if (status !== 403 && status !== 429) {
+    return undefined;
+  }
+  const retryAfter = getHeader("retry-after");
+  if (retryAfter !== null && retryAfter.trim() !== "") {
+    const seconds = Number(retryAfter);
+    if (Number.isFinite(seconds) && seconds >= 0) {
+      return clampBackoff(seconds * 1_000);
+    }
+  }
+  const remaining = getHeader("x-ratelimit-remaining");
+  const reset = getHeader("x-ratelimit-reset");
+  if (remaining === "0" && reset !== null && reset.trim() !== "") {
+    const resetEpoch = Number(reset);
+    if (Number.isFinite(resetEpoch)) {
+      return clampBackoff(resetEpoch * 1_000 - nowMs);
+    }
+  }
+  return undefined;
+}
+
+function clampBackoff(ms: number): number {
+  return Math.min(MAX_RATE_LIMIT_BACKOFF_MS, Math.max(MIN_RATE_LIMIT_BACKOFF_MS, Math.ceil(ms)));
 }
 
 export class GitHubPullRequestService {
@@ -174,6 +275,7 @@ export class GitHubStatusService {
       throw new Error(`GitHub PR fetch failed: HTTP ${pull.status}`);
     }
     const head = parsePullRequestHead(pull.body);
+    const baseBranch = parseBaseBranch((pull.body as Record<string, unknown> | undefined)?.base);
 
     const [checkRuns, statuses] = await Promise.all([
       this.http.request({
@@ -196,12 +298,68 @@ export class GitHubStatusService {
       throw new Error(`GitHub commit status fetch failed: HTTP ${statuses.status}`);
     }
 
+    const requiredContexts =
+      baseBranch === undefined
+        ? undefined
+        : await this.fetchRequiredContexts({ ...input, baseBranch });
+
     return {
       head,
       checkRuns: parseCheckRuns(checkRuns.body),
-      statuses: parseCommitStatuses(statuses.body)
+      statuses: parseCommitStatuses(statuses.body),
+      requiredContexts
     };
   }
+
+  /**
+   * P3-0028: read the branch-protection required status check contexts for a
+   * base branch. Returns `undefined` when the branch is unprotected (404) or
+   * the protection config can't be read — callers treat that as "no required
+   * gating" and fall back to the all-observed-green rule.
+   */
+  async fetchRequiredContexts(input: {
+    repo: GitHubRepository;
+    token: string;
+    baseBranch: string;
+    refreshToken?: () => Promise<string>;
+  }): Promise<string[] | undefined> {
+    const response = await this.http.request({
+      method: "GET",
+      path: repoPath(input.repo, `/branches/${encodeURIComponent(input.baseBranch)}/protection/required_status_checks`),
+      token: input.token,
+      refreshToken: input.refreshToken
+    });
+    if (response.status === 404) {
+      return undefined;
+    }
+    if (response.status !== 200) {
+      return undefined;
+    }
+    return parseRequiredContexts(response.body);
+  }
+}
+
+function parseRequiredContexts(value: unknown): string[] | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  const object = value as Record<string, unknown>;
+  // The modern `checks` array carries per-check `context`; `contexts` is the
+  // legacy string list. Prefer `checks` and fall back to `contexts`.
+  const checks = object.checks;
+  if (Array.isArray(checks)) {
+    const names = checks
+      .map((entry) => (typeof entry === "object" && entry !== null ? (entry as Record<string, unknown>).context : undefined))
+      .filter((name): name is string => typeof name === "string");
+    if (names.length > 0) {
+      return names;
+    }
+  }
+  const contexts = object.contexts;
+  if (Array.isArray(contexts)) {
+    return contexts.filter((name): name is string => typeof name === "string");
+  }
+  return [];
 }
 
 export function parseGitHubRepository(repoUrl: string): GitHubRepository {

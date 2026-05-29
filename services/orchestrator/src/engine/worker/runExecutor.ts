@@ -46,6 +46,13 @@ export const DEFAULT_TIMEOUT_MS = 300_000;
 export const DEFAULT_MAX_CI_POLLS = 18;
 export const DEFAULT_CI_POLL_DELAY_MS = 10_000;
 
+// P3-0028 queue lease recovery. While a claimed job executes, the worker
+// renews its lease on this interval; the lease window is a multiple of the
+// interval so a single missed heartbeat does not trip the reaper. A crashed
+// worker stops heartbeating, its lease lapses, and the reaper recovers the job.
+export const DEFAULT_HEARTBEAT_INTERVAL_MS = 15_000;
+export const DEFAULT_LEASE_MS = 60_000;
+
 export interface RunExecutorDeps {
   pool: pg.Pool;
   jobQueue: JobQueue;
@@ -61,6 +68,11 @@ export interface RunExecutorDeps {
   timeoutMs?: number;
   maxCiPolls?: number;
   ciPollDelayMs?: number;
+  // P3-0028 lease tuning. `leaseMs` is the lease window stamped on claim and on
+  // each heartbeat; `heartbeatIntervalMs` is how often the worker renews it
+  // while the workflow runs.
+  leaseMs?: number;
+  heartbeatIntervalMs?: number;
   // Test seam: defaults to the real planner-loop workflow. Tests inject a
   // wrapper that calls the real workflow with fake adapters / usage probe so
   // the dequeue→execute seam is proven without real Codex/SSH.
@@ -80,7 +92,8 @@ export type ExecuteJobResult =
  * into a recoverable state.
  */
 export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<ExecuteJobResult> {
-  const job = await deps.jobQueue.claim("plan");
+  const leaseMs = deps.leaseMs ?? DEFAULT_LEASE_MS;
+  const job = await deps.jobQueue.claim("plan", { leaseMs });
   if (job === undefined) {
     return { kind: "idle" };
   }
@@ -91,6 +104,10 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
     return { kind: "failed", jobId: job.id, failure };
   }
 
+  // P3-0028: renew the lease on an interval so a healthy worker holds its claim
+  // while the (potentially long) workflow runs. The reaper only recovers a job
+  // whose lease has lapsed — i.e. a crashed worker that stopped heartbeating.
+  const stopHeartbeat = startHeartbeat(deps, job.id, leaseMs);
   try {
     const { context } = await loadRunExecutionContext(deps.pool, {
       runId,
@@ -116,7 +133,48 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
     await deps.jobQueue.fail(job.id, failure);
     await finalizeRunRecoverable(deps.pool, runId, failure.message);
     return { kind: "failed", jobId: job.id, runId, failure };
+  } finally {
+    await stopHeartbeat();
   }
+}
+
+/**
+ * Start a periodic lease-renewal loop for a claimed job. Returns a stopper that
+ * cancels the loop and resolves once it has stopped. The interval defaults to a
+ * fraction of the lease window so a single slow/missed beat does not lapse the
+ * lease. Heartbeat failures are swallowed — a transient DB blip should not kill
+ * the job; if the worker has truly crashed the lease lapses and the reaper acts.
+ */
+function startHeartbeat(deps: RunExecutorDeps, jobId: string, leaseMs: number): () => Promise<void> {
+  const intervalMs = Math.max(1, deps.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS);
+  const control = { running: true, inFlight: Promise.resolve(), timer: undefined as ReturnType<typeof setTimeout> | undefined };
+
+  const schedule = (): void => {
+    if (!control.running) {
+      return;
+    }
+    control.timer = setTimeout(() => {
+      // Swallow heartbeat failures: a transient DB blip should not kill the
+      // job; a truly crashed worker stops beating and the reaper recovers it.
+      control.inFlight = deps.jobQueue
+        .heartbeat(jobId, leaseMs)
+        .catch(() => undefined)
+        .then(schedule);
+    }, intervalMs);
+    if (typeof control.timer.unref === "function") {
+      control.timer.unref();
+    }
+  };
+
+  schedule();
+
+  return async () => {
+    control.running = false;
+    if (control.timer !== undefined) {
+      clearTimeout(control.timer);
+    }
+    await control.inFlight;
+  };
 }
 
 /**

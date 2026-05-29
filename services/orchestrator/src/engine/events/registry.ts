@@ -77,6 +77,7 @@ import {
   GateStartedPayload
 } from "./schemas/gate.js";
 import {
+  JobDeadLetteredPayload,
   RunCompletedPayload,
   RunFailedPayload,
   RunQueuedPayload,
@@ -113,6 +114,10 @@ export const EventRegistry = {
   "task.started": TaskStartedPayload,
   "task.completed": TaskCompletedPayload,
   "task.failed": TaskFailedPayload,
+
+  // P3-0028 queue hardening: a job whose retry budget is exhausted is
+  // dead-lettered (terminal) rather than retried forever.
+  "job.dead_lettered": JobDeadLetteredPayload,
 
   // Planner role (legacy single-pass + Phase 2 subtask emission)
   "planner.started": PlannerStartedPayload,
