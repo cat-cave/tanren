@@ -108,9 +108,90 @@ go through the sidecar and use ephemeral runners on the internal network.
   `socketPath:`) appear only in `services/allocator/**` and the orchestrator's
   allocator client surface.
 
+## Remote allocators, routing, and pool policy (P3-0027)
+
+P3-0027 adds remote allocators behind the same `Allocator` interface
+(`allocate(request) → RunnerAllocation`, `release(runnerId, reason)`), plus a
+**router** that picks an allocator by run labels and enforces per-kind **pool
+policy**. All of this lives in `services/orchestrator/src/engine/allocators/**`;
+no schema migration was required — routing/pool policy is plain config (env JSON
+today, and can live in the existing `projects.config` JSONB later).
+
+### Allocator kinds
+
+| Kind            | Status        | What it does                                                                 |
+| --------------- | ------------- | ---------------------------------------------------------------------------- |
+| `static`        | implemented   | Dev compose static runner (TOFU host key). Existing behavior.                |
+| `sidecar`       | implemented   | Ephemeral per-run container via the allocator sidecar. Existing behavior.    |
+| `manual_ssh`    | implemented   | Leases a pre-provisioned SSH host from a configured pool. No cloud API.      |
+| `hetzner`       | implemented   | Provisions a Hetzner Cloud server on demand; destroys it on release.         |
+| `digitalocean`  | **scaffold**  | Typed stub; throws `not yet implemented (P3-0027 follow-up)`.                 |
+| `aws_ec2`       | **scaffold**  | Typed stub; throws `not yet implemented (P3-0027 follow-up)`.                 |
+| `kubernetes`    | **scaffold**  | Typed stub; throws `not yet implemented (P3-0027 follow-up)`.                 |
+
+The scaffolds are registered in the selector so the interface shape is proven
+end to end; selecting one fails fast with a clear, actionable error.
+
+### Label routing + pool policy
+
+Set `TANREN_ALLOCATOR_KIND=router` and supply `TANREN_ALLOCATOR_ROUTING` as a
+JSON document:
+
+```jsonc
+{
+  "defaultAllocator": "sidecar",
+  "rules": [
+    { "matchLabels": { "tier": "gpu" }, "allocator": "hetzner" },
+    { "matchLabels": { "env": "staging" }, "allocator": "manual_ssh" }
+  ],
+  "pools": {
+    "hetzner":    { "maxConcurrent": 5, "reuse": false },
+    "manual_ssh": { "maxConcurrent": 3, "reuse": true }
+  }
+}
+```
+
+- **Routing**: a run's labels are matched against `rules` in order; the first
+  rule whose `matchLabels` are *all* present (exact value match) wins. If no
+  rule matches, `defaultAllocator` is used.
+- **Pool policy**: `maxConcurrent` caps in-flight runners per kind — the router
+  rejects an `allocate` past the cap with `PoolCapacityExceededError` (release
+  frees a slot). `reuse` records whether targets are long-lived (manual-ssh
+  reuses hosts) or ephemeral (hetzner destroys on release).
+
+Only the kinds the routing config can actually select are constructed with real
+credentials; an unrouted real kind resolves to a stub that throws if selected,
+so a misconfigured token never silently provisions.
+
+### Single-kind selection (no router)
+
+For a single backend, keep `TANREN_ALLOCATOR_KIND` set to `static`, `sidecar`,
+`manual_ssh`, or `hetzner` (default `sidecar`). Behavior is unchanged for the
+two pre-existing kinds.
+
+### Env for the new allocators
+
+| Env var                          | Used by      | Notes                                                                 |
+| -------------------------------- | ------------ | --------------------------------------------------------------------- |
+| `TANREN_ALLOCATOR_KIND=router`   | router       | Enables label routing + pool policy                                   |
+| `TANREN_ALLOCATOR_ROUTING`       | router       | JSON routing config (see above)                                       |
+| `TANREN_MANUAL_SSH_HOSTS`        | `manual_ssh` | JSON array `[{ id, host, port?, username?, hostKeyFingerprint, identitySecretRef? }]` |
+| `TANREN_HETZNER_API_TOKEN`       | `hetzner`    | API token. Sourced from a Vault ref by operator tooling; never hardcode |
+| `TANREN_HETZNER_HOST_FINGERPRINT`| `hetzner`    | Pinned SHA256 host key fingerprint (baked into the image / cloud-init) |
+| `TANREN_HETZNER_SERVER_TYPE`     | `hetzner`    | e.g. `cx22` (default)                                                  |
+| `TANREN_HETZNER_IMAGE`           | `hetzner`    | e.g. `docker-ce` (default)                                             |
+| `TANREN_HETZNER_LOCATION`        | `hetzner`    | e.g. `nbg1`                                                            |
+| `TANREN_HETZNER_SSH_KEYS`        | `hetzner`    | Comma-separated Hetzner SSH key ids/names to authorize                 |
+| `TANREN_HETZNER_SSH_USER`        | `hetzner`    | SSH username (default `root`)                                          |
+
+Cloud allocators take credentials via config/Vault refs only; the Hetzner API
+calls go through an injectable HTTP client and are unit-tested against a mocked
+API with no live credentials.
+
 ## What is not in this spec
 
-- Remote allocators (Hetzner, AWS, k8s) are Phase 3+.
+- The DigitalOcean / AWS EC2 / Kubernetes allocators are scaffolded stubs; their
+  provisioning logic is a P3-0027 follow-up.
 - The allocator-side workflow / job queue split (currently the
   orchestrator-side mirror in `runners` is best-effort consistent) lands when
   the post-Phase-2A operator workflow story does.
