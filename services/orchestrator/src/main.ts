@@ -3,8 +3,11 @@ import { serve } from "@hono/node-server";
 import { createDbPool, migrate } from "@tanren/db";
 import { Hono } from "hono";
 import type pg from "pg";
-import { z } from "zod";
 import type { ActorContext, IdentityProviderId } from "./auth/index.js";
+import {
+  ciPollInputSchema, draftPrInputSchema, githubCredentialImportSchema,
+  projectInputSchema, runInputSchema, specInputSchema
+} from "./inputSchemas.js";
 import { buildOidcProviderFromEnv, createDevLoginProvider, GitHubOAuthProvider, IdentityStore, type IdentityProvider } from "./auth/index.js";
 import { buildAllocatorFromEnv } from "./engine/allocators/index.js";
 import { InMemorySecretStore, type SecretStore, VaultSecretStore } from "./engine/contracts/index.js";
@@ -38,6 +41,7 @@ import { createDoctorRoutes } from "./routes/doctor/index.js";
 import { createDoraRoutes } from "./routes/dora/index.js";
 import { createForgeAskRoutes } from "./routes/forge/ask.js";
 import { createInboxRoutes } from "./routes/inbox/index.js";
+import { createAuditRoutes } from "./routes/audits/index.js";
 import { createForgeRoutes } from "./routes/forge/index.js";
 import { createGithubWebhookRoutes } from "./routes/githubWebhooks/index.js";
 import { createInsightRoutes } from "./routes/insights/index.js";
@@ -56,45 +60,6 @@ const vaultAddr = process.env.VAULT_ADDR ?? "http://localhost:8200";
 const vaultToken = process.env.VAULT_TOKEN ?? "dev-root-token";
 const runnerIdentitySecretRef = process.env.TANREN_RUNNER_IDENTITY_SECRET_REF ?? "runner/local-docker/identity";
 let productionPool: pg.Pool | undefined;
-
-const projectInputSchema = z.object({
-  name: z.string().min(1),
-  repoUrl: z.string().min(1),
-  defaultBranch: z.string().min(1).optional(),
-  runnerImage: z.string().min(1).optional(),
-  allocator: z.string().min(1).optional(),
-  config: z.record(z.string(), z.unknown()).optional()
-});
-
-const specInputSchema = z.object({
-  projectId: z.string().min(1),
-  title: z.string().min(1),
-  description: z.string().min(1),
-  acceptanceCriteria: z.array(z.string().min(1)).min(1),
-  dependsOn: z.array(z.string().min(1)).optional()
-});
-
-const runInputSchema = z.object({
-  trigger: z.enum(["cli", "dashboard", "api", "webhook"]).optional(),
-  branch: z.string().min(1).optional()
-});
-
-const githubCredentialImportSchema = z.object({
-  ref: z.string().min(1),
-  token: z.string().min(1)
-});
-
-const draftPrInputSchema = z.object({
-  githubCredentialRef: z.string().min(1).optional(),
-  workspacePath: z.string().min(1).optional(),
-  title: z.string().min(1).optional(),
-  body: z.string().optional(),
-  timeoutMs: z.number().int().positive().optional()
-});
-
-const ciPollInputSchema = z.object({
-  githubCredentialRef: z.string().min(1).optional()
-});
 
 async function vaultHealth() {
   const response = await fetch(`${vaultAddr}/v1/sys/health`, {
@@ -248,6 +213,11 @@ export function buildApp(input: {
   // P3-0022: candidate inbox — issue sources → Forge triage → discovery accept;
   // connector reads via the App resolver, triage answerer injectable.
   app.route("/orgs", createInboxRoutes({ pool: input.pool, secrets, githubHttp }));
+  // P3-0021: scheduled audits — recurring read-only Answerer passes (the audit
+  // job library). A run executes a read-only pass and emits findings into the
+  // candidate inbox as a system (auto-routing) source; the pass runner is
+  // injectable (defaults to a safe no-op until an SSH-backed runner is wired).
+  app.route("/orgs", createAuditRoutes({ pool: input.pool }));
   app.route("/orgs", createDoraRoutes({ pool: input.pool }));
   app.route("/orgs", createNotificationRoutes({ pool: input.pool }));
   app.route("/orgs", createRunRoutes({ pool: input.pool }));

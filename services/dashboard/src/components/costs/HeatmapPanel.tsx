@@ -159,6 +159,11 @@ function PatternCallout(props: { matrix: HeatmapMatrix }) {
       >
         ask forge to schedule overnight audits
       </button>
+      {/* P3-0021: direct route to the scheduled-audits library (the surface
+          that turns this idle-window pitch into real recurring passes). */}
+      <a class="btn ghost" href="/audits" data-audits-cta>
+        open scheduled audits ↗
+      </a>
     </div>
   );
 }
