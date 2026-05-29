@@ -29,16 +29,16 @@ export async function insertPlannerTask(
   planner: AnswererAdapter<PlanAnswer>,
 ): Promise<void> {
   await pool.query(
-    `INSERT INTO tasks (task_id, run_id, kind, title, status, started_at, agent_kind, cli, model)
-     VALUES ($1, $2, 'plan', 'plan spec', 'running', now(), 'answerer', $3, NULL)`,
+    `INSERT INTO tasks (task_id, run_id, org_id, kind, title, status, started_at, agent_kind, cli, model)
+     VALUES ($1, $2, (SELECT org_id FROM runs WHERE run_id = $2), 'plan', 'plan spec', 'running', now(), 'answerer', $3, NULL)`,
     [taskId, runId, planner.cli],
   );
 }
 
 export async function insertChildTask(pool: LoopQueryClient, task: ChildTaskInsert): Promise<void> {
   await pool.query(
-    `INSERT INTO tasks (task_id, run_id, kind, title, parent_task_id, status, started_at, agent_kind, cli, model)
-     VALUES ($1, $2, $3, $4, $5, 'running', now(), $6, $7, $8)`,
+    `INSERT INTO tasks (task_id, run_id, org_id, kind, title, parent_task_id, status, started_at, agent_kind, cli, model)
+     VALUES ($1, $2, (SELECT org_id FROM runs WHERE run_id = $2), $3, $4, $5, 'running', now(), $6, $7, $8)`,
     [task.taskId, task.runId, task.kind, task.title, task.parentTaskId, task.agentKind, task.cli, task.model],
   );
 }

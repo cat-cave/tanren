@@ -33,8 +33,12 @@ export class PgEventStore implements EventStore {
     assertEventName(input.eventType);
     const parsed = parseEventPayload(input.eventType, input.payload);
     await this.pool.query(
-      `INSERT INTO events (run_id, task_id, spec_id, project_id, event_type, payload)
-       VALUES ($1, $2, $3, $4, $5, $6::jsonb)`,
+      // org_id is the mandatory tenant-isolation key (tanren tenancy hardening),
+      // derived in-statement from the event's project so every event row carries
+      // its org directly rather than relying on a route-layer gate or a nullable
+      // project_id → projects.org_id hop.
+      `INSERT INTO events (run_id, task_id, spec_id, project_id, org_id, event_type, payload)
+       VALUES ($1, $2, $3, $4, (SELECT org_id FROM projects WHERE project_id = $4), $5, $6::jsonb)`,
       [input.runId, input.taskId ?? null, input.specId, input.projectId, input.eventType, JSON.stringify(parsed)],
     );
   }

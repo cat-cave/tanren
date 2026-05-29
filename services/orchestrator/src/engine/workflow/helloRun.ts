@@ -122,23 +122,36 @@ export async function runHelloWorkflow(
   }
 }
 
+// org_id is mandatory on every core table (tanren tenancy hardening). The
+// hello fixture is a synthetic connectivity check that owns no real tenant, so
+// it ensures a single deterministic fixture org exists and scopes its rows to
+// it. Downstream rows derive org_id from the project so the chain stays
+// internally consistent.
+const HELLO_FIXTURE_ORG_ID = "org_hello_fixture";
+
 async function insertHelloRunRows(
   pool: pg.Pool,
   input: { projectId: string; specId: string; runId: string; runnerImage: string },
 ): Promise<void> {
   await pool.query(
-    `INSERT INTO projects (project_id, name, repo_url, default_branch, runner_image, allocator)
-     VALUES ($1, 'hello-world', 'https://github.com/cat-cave/tanren-fixture-easy', 'main', $2, 'local-docker')`,
-    [input.projectId, input.runnerImage],
+    `INSERT INTO organizations (id, kind, external_id, login, display_name)
+     VALUES ($1, 'github_user', 'hello-fixture', 'hello-fixture', 'Hello Fixture')
+     ON CONFLICT (id) DO NOTHING`,
+    [HELLO_FIXTURE_ORG_ID],
   );
   await pool.query(
-    `INSERT INTO specs (spec_id, project_id, title, description, acceptance_criteria, status)
-     VALUES ($1, $2, 'Hello world', 'Prove Tanren service connectivity', $3::jsonb, 'active')`,
+    `INSERT INTO projects (project_id, name, repo_url, default_branch, runner_image, allocator, org_id)
+     VALUES ($1, 'hello-world', 'https://github.com/cat-cave/tanren-fixture-easy', 'main', $2, 'local-docker', $3)`,
+    [input.projectId, input.runnerImage, HELLO_FIXTURE_ORG_ID],
+  );
+  await pool.query(
+    `INSERT INTO specs (spec_id, project_id, org_id, title, description, acceptance_criteria, status)
+     VALUES ($1, $2, (SELECT org_id FROM projects WHERE project_id = $2), 'Hello world', 'Prove Tanren service connectivity', $3::jsonb, 'active')`,
     [input.specId, input.projectId, JSON.stringify(["A synthetic run completes and is visible"])],
   );
   await pool.query(
-    `INSERT INTO runs (run_id, spec_id, project_id, trigger, branch, status)
-     VALUES ($1, $2, $3, 'cli', 'tanren/hello-world', 'queued')`,
+    `INSERT INTO runs (run_id, spec_id, project_id, org_id, trigger, branch, status)
+     VALUES ($1, $2, $3, (SELECT org_id FROM projects WHERE project_id = $3), 'cli', 'tanren/hello-world', 'queued')`,
     [input.runId, input.specId, input.projectId],
   );
 }
@@ -151,8 +164,8 @@ async function queueHelloTasks(
 ): Promise<void> {
   for (const task of tasks) {
     await pool.query(
-      `INSERT INTO tasks (task_id, run_id, kind, title, status, agent_kind, cli, model)
-       VALUES ($1, $2, $3, $4, 'queued', $5, 'fake', $6)`,
+      `INSERT INTO tasks (task_id, run_id, org_id, kind, title, status, agent_kind, cli, model)
+       VALUES ($1, $2, (SELECT org_id FROM runs WHERE run_id = $2), $3, $4, 'queued', $5, 'fake', $6)`,
       [task.taskId, context.runId, task.kind, task.title, task.agentKind, task.model],
     );
     const job = await jobQueue.enqueue({

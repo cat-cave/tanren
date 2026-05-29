@@ -33,6 +33,9 @@ export const runs = pgTable(
     projectId: text("project_id")
       .notNull()
       .references(() => projects.projectId),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organizations.id),
     trigger: text("trigger").notNull(),
     branch: text("branch").notNull(),
     status: text("status").notNull().default("queued"),
@@ -40,7 +43,6 @@ export const runs = pgTable(
     endedAt: timestamp("ended_at", { withTimezone: true }),
     outcome: text("outcome"),
     prUrl: text("pr_url"),
-    tenantId: text("tenant_id"),
     userId: text("user_id"),
   },
   (table) => [
@@ -51,6 +53,9 @@ export const runs = pgTable(
         stateEnumLists.runs_outcome.map((value) => `'${value.replace(/'/g, "''")}'`).join(","),
       )})`,
     ),
+    index("runs_org_id").on(table.orgId),
+    index("runs_org_run").on(table.orgId, table.runId),
+    index("runs_org_project").on(table.orgId, table.projectId),
   ],
 );
 
@@ -61,6 +66,9 @@ export const tasks = pgTable(
     runId: text("run_id")
       .notNull()
       .references(() => runs.runId),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organizations.id),
     kind: text("kind").notNull(),
     title: text("title").notNull(),
     parentTaskId: text("parent_task_id").references((): AnyPgColumn => tasks.taskId),
@@ -73,7 +81,6 @@ export const tasks = pgTable(
     cli: text("cli").notNull(),
     model: text("model"),
     attempt: integer("attempt").notNull().default(1),
-    tenantId: text("tenant_id"),
     userId: text("user_id"),
   },
   (table) => [
@@ -86,6 +93,8 @@ export const tasks = pgTable(
         stateEnumLists.tasks_outcome.map((value) => `'${value.replace(/'/g, "''")}'`).join(","),
       )})`,
     ),
+    index("tasks_org_id").on(table.orgId),
+    index("tasks_org_run").on(table.orgId, table.runId),
   ],
 );
 
@@ -98,6 +107,9 @@ export const costRecords = pgTable(
       .references(() => tasks.taskId),
     runId: text("run_id").notNull(),
     projectId: text("project_id").notNull(),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organizations.id),
     cli: text("cli").notNull(),
     provider: text("provider").notNull(),
     model: text("model").notNull(),
@@ -118,7 +130,6 @@ export const costRecords = pgTable(
       .notNull()
       .default(sql`'{}'::jsonb`),
     recordedAt: timestamp("recorded_at", { withTimezone: true }).notNull().defaultNow(),
-    tenantId: text("tenant_id"),
     userId: text("user_id"),
   },
   (table) => [
@@ -127,6 +138,8 @@ export const costRecords = pgTable(
       "cost_records_cost_basis_check",
       sql`${table.costBasis} IN ('ccusage','provider_pricing','credits','unknown')`,
     ),
+    index("cost_records_org_id").on(table.orgId),
+    index("cost_records_org_run").on(table.orgId, table.runId),
   ],
 );
 
@@ -139,36 +152,47 @@ export const events = pgTable(
     taskId: text("task_id"),
     specId: text("spec_id"),
     projectId: text("project_id"),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organizations.id),
     eventType: text("event_type").notNull(),
     payload: jsonb("payload")
       .notNull()
       .default(sql`'{}'::jsonb`),
-    tenantId: text("tenant_id"),
     userId: text("user_id"),
   },
   (table) => [
     index("events_run_id_ts").on(table.runId, table.ts),
     index("events_event_type").on(table.eventType),
     enumCheck("events_event_type_check", table.eventType, eventTypeNames),
+    index("events_org_id").on(table.orgId),
+    index("events_org_run_ts").on(table.orgId, table.runId, table.ts),
+    index("events_org_project_ts").on(table.orgId, table.projectId, table.ts),
   ],
 );
 
-export const runners = pgTable("runners", {
-  runnerId: text("runner_id").primaryKey(),
-  runId: text("run_id").references(() => runs.runId),
-  projectId: text("project_id").references(() => projects.projectId),
-  allocator: text("allocator").notNull(),
-  status: text("status").notNull(),
-  sshHost: text("ssh_host").notNull(),
-  sshPort: integer("ssh_port").notNull(),
-  hostKeyFingerprint: text("host_key_fingerprint").notNull(),
-  imageSha: text("image_sha").notNull(),
-  containerId: text("container_id"),
-  hcloudServerId: text("hcloud_server_id"),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  releasedAt: timestamp("released_at", { withTimezone: true }),
-  tenantId: text("tenant_id"),
-});
+export const runners = pgTable(
+  "runners",
+  {
+    runnerId: text("runner_id").primaryKey(),
+    runId: text("run_id").references(() => runs.runId),
+    projectId: text("project_id").references(() => projects.projectId),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organizations.id),
+    allocator: text("allocator").notNull(),
+    status: text("status").notNull(),
+    sshHost: text("ssh_host").notNull(),
+    sshPort: integer("ssh_port").notNull(),
+    hostKeyFingerprint: text("host_key_fingerprint").notNull(),
+    imageSha: text("image_sha").notNull(),
+    containerId: text("container_id"),
+    hcloudServerId: text("hcloud_server_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    releasedAt: timestamp("released_at", { withTimezone: true }),
+  },
+  (table) => [index("runners_org_id").on(table.orgId)],
+);
 
 export const rateLimitObservations = pgTable("rate_limit_observations", {
   id: bigserial("id", { mode: "number" }).primaryKey(),

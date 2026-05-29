@@ -282,8 +282,8 @@ async function runFixtureTask<TOutput>(
 ): Promise<TOutput> {
   const taskId = `task_${randomUUID()}`;
   await pool.query(
-    `INSERT INTO tasks (task_id, run_id, kind, title, status, started_at, agent_kind, cli, model)
-     VALUES ($1, $2, $3, $4, 'running', now(), $5, $6, NULL)`,
+    `INSERT INTO tasks (task_id, run_id, org_id, kind, title, status, started_at, agent_kind, cli, model)
+     VALUES ($1, $2, (SELECT org_id FROM runs WHERE run_id = $2), $3, $4, 'running', now(), $5, $6, NULL)`,
     [taskId, runId, kind, title, agentKind, cli],
   );
   await appendEvent("task.started", { taskKind: kind }, taskId);

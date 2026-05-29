@@ -27,6 +27,9 @@ interface SseStreamArgs {
   pool: pg.Pool;
   runId: string;
   projectId: string;
+  // org_id is a defense-in-depth tenant predicate (tanren tenancy hardening):
+  // every loader query and the SSE delta polls filter by it.
+  orgId: string;
   actor: ActorContext;
   rawView: boolean;
   intervalMs: number;
@@ -74,19 +77,20 @@ export class SseDriver {
 
   async run(): Promise<void> {
     // Initial snapshot frame.
-    const run = await fetchRunSummary(this.args.pool, this.args.runId);
+    const run = await fetchRunSummary(this.args.pool, this.args.runId, this.args.orgId);
     if (run === undefined) {
       await this.emit("status", { runId: this.args.runId, status: "failed", outcome: null });
       return;
     }
-    const tasks = await fetchRunTasks(this.args.pool, this.args.runId);
+    const tasks = await fetchRunTasks(this.args.pool, this.args.runId, this.args.orgId);
     const recentEvents = await fetchRunEventsForSnapshot(this.args.pool, {
       runId: this.args.runId,
+      orgId: this.args.orgId,
       limit: RECENT_EVENT_CAP,
       actor: this.args.actor,
       rawView: this.args.rawView,
     });
-    const costs = await fetchRunCostsForSnapshot(this.args.pool, this.args.runId);
+    const costs = await fetchRunCostsForSnapshot(this.args.pool, this.args.runId, this.args.orgId);
     await this.emit("snapshot", { run, tasks, recentEvents, costs });
 
     this.lastStatusFingerprint = `${run.status}:${run.outcome ?? ""}`;
@@ -111,14 +115,14 @@ export class SseDriver {
 
   // tick polls for deltas; returns true when the loop should terminate.
   async tick(): Promise<boolean> {
-    const run = await fetchRunSummary(this.args.pool, this.args.runId);
+    const run = await fetchRunSummary(this.args.pool, this.args.runId, this.args.orgId);
     if (run === undefined) return true;
     const fp = `${run.status}:${run.outcome ?? ""}`;
     if (fp !== this.lastStatusFingerprint) {
       await this.emit("status", { runId: run.runId, status: run.status, outcome: run.outcome });
       this.lastStatusFingerprint = fp;
     }
-    const tasks = await fetchRunTasks(this.args.pool, this.args.runId);
+    const tasks = await fetchRunTasks(this.args.pool, this.args.runId, this.args.orgId);
     const changed: TaskTimelineEntry[] = [];
     for (const task of tasks) {
       const fpTask = fingerprintTask(task);
@@ -164,10 +168,10 @@ export class SseDriver {
     const { rows } = await this.args.pool.query<Record<string, unknown>>(
       `SELECT id, ts, run_id, task_id, spec_id, project_id, event_type, payload
          FROM events
-        WHERE run_id = $1 AND id > $2
+        WHERE run_id = $1 AND org_id = $3 AND id > $2
         ORDER BY ts ASC, id ASC
         LIMIT 200`,
-      [this.args.runId, this.lastEventId],
+      [this.args.runId, this.lastEventId, this.args.orgId],
     );
     if (rows.length === 0) return [];
     // Re-use the redaction path through fetchRunEventsForSnapshot by giving
@@ -211,10 +215,10 @@ export class SseDriver {
               output_tokens, reasoning_output_tokens, total_tokens, cost_usd,
               billing_mode, cost_basis, recorded_at
          FROM cost_records
-        WHERE run_id = $1 AND id > $2
+        WHERE run_id = $1 AND org_id = $3 AND id > $2
         ORDER BY recorded_at ASC, id ASC
         LIMIT 200`,
-      [this.args.runId, this.lastCostId],
+      [this.args.runId, this.lastCostId, this.args.orgId],
     );
     return rows.map((row) => ({
       id: row["id"] as number | string,

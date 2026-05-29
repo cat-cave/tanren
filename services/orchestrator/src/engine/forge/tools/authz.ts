@@ -11,21 +11,19 @@ export async function assertProjectAccess(
   pool: pg.Pool,
   projectId: string,
   actor: ActorContext,
-): Promise<{ orgId: string | null }> {
-  if (actor.scopes.includes("platform:admin")) {
-    const result = await pool.query<{ org_id: string | null }>("SELECT org_id FROM projects WHERE project_id = $1", [
-      projectId,
-    ]);
-    return { orgId: result.rows[0]?.org_id ?? null };
-  }
+): Promise<{ orgId: string }> {
+  // org_id is now mandatory on projects (tanren tenancy hardening): there is no
+  // null-org bypass. A missing project (or, defensively, a project with no org)
+  // is denied, never granted.
   const projectResult = await pool.query<{ org_id: string | null }>(
     "SELECT org_id FROM projects WHERE project_id = $1",
     [projectId],
   );
   const orgId = projectResult.rows[0]?.org_id ?? null;
   if (orgId === null) {
-    // Legacy / unscoped projects bypass org-scoping (mirrors
-    // projectSpec.ensureProjectAccess).
+    throw new ToolAccessDeniedError(`actor cannot access project ${projectId}`);
+  }
+  if (actor.scopes.includes("platform:admin")) {
     return { orgId };
   }
   const member = await pool.query<{ role: string }>(

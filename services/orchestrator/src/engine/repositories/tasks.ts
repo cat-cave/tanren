@@ -20,7 +20,7 @@ export const TaskRow = z.object({
   cli: z.string(),
   model: z.string().nullable(),
   attempt: z.number(),
-  tenantId: z.string().nullable(),
+  orgId: z.string(),
   userId: z.string().nullable(),
 });
 export type TaskRow = z.infer<typeof TaskRow>;
@@ -40,7 +40,7 @@ interface RawTaskRow {
   cli: unknown;
   model: unknown;
   attempt: unknown;
-  tenant_id: unknown;
+  org_id: unknown;
   user_id: unknown;
 }
 
@@ -59,7 +59,7 @@ const SELECT_TASK_COLUMNS = `
   cli,
   model,
   attempt,
-  tenant_id,
+  org_id,
   user_id
 `;
 
@@ -79,7 +79,7 @@ function decodeTaskRow(raw: RawTaskRow): TaskRow {
     cli: raw.cli,
     model: raw.model,
     attempt: typeof raw.attempt === "number" ? raw.attempt : Number(raw.attempt),
-    tenantId: raw.tenant_id,
+    orgId: raw.org_id,
     userId: raw.user_id,
   });
 }
