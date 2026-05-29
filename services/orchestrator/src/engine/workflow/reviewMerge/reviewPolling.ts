@@ -226,8 +226,8 @@ async function ensureReviewTask(pool: RunStateClient, context: ReviewMergeRunCon
   }
   const taskId = `task_${randomUUID()}`;
   await pool.query(
-    `INSERT INTO tasks (task_id, run_id, kind, title, status, started_at, agent_kind, cli, model, attempt)
-     VALUES ($1, $2, 'review', 'Poll pull request review', 'running', now(), 'system', 'github', NULL, 1)`,
+    `INSERT INTO tasks (task_id, run_id, org_id, kind, title, status, started_at, agent_kind, cli, model, attempt)
+     VALUES ($1, $2, (SELECT org_id FROM runs WHERE run_id = $2), 'review', 'Poll pull request review', 'running', now(), 'system', 'github', NULL, 1)`,
     [taskId, context.runId],
   );
   return taskId;

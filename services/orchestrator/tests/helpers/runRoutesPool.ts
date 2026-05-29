@@ -19,10 +19,16 @@ interface QueryResult<R = unknown> {
   rowCount: number;
 }
 
+// org_id is mandatory on the core tables (tanren tenancy hardening). Rows
+// default to this fixture org so seeds stay terse; tests that probe
+// cross-tenant isolation override it explicitly.
+const DEFAULT_ORG_ID = "org_acme";
+
 export interface RunRow {
   run_id: string;
   spec_id: string;
   project_id: string;
+  org_id: string;
   trigger: string;
   branch: string;
   status: string;
@@ -35,6 +41,7 @@ export interface RunRow {
 export interface TaskRow {
   task_id: string;
   run_id: string;
+  org_id: string;
   kind: string;
   title: string;
   parent_task_id: string | null;
@@ -55,6 +62,7 @@ export interface EventRow {
   task_id: string | null;
   spec_id: string | null;
   project_id: string | null;
+  org_id: string;
   event_type: string;
   payload: unknown;
 }
@@ -64,6 +72,7 @@ export interface CostRow {
   task_id: string;
   run_id: string;
   project_id: string;
+  org_id: string;
   cli: string;
   provider: string;
   model: string;
@@ -131,6 +140,7 @@ export class RunRoutesPool {
       run_id: input.run_id,
       spec_id: input.spec_id,
       project_id: input.project_id,
+      org_id: input.org_id ?? this.projects.get(input.project_id)?.org_id ?? DEFAULT_ORG_ID,
       trigger: input.trigger ?? "cli",
       branch: input.branch ?? "main",
       status: input.status ?? "running",
@@ -147,6 +157,7 @@ export class RunRoutesPool {
     const row: TaskRow = {
       task_id: input.task_id,
       run_id: input.run_id,
+      org_id: input.org_id ?? this.runs.find((r) => r.run_id === input.run_id)?.org_id ?? DEFAULT_ORG_ID,
       kind: input.kind,
       title: input.title ?? input.kind,
       parent_task_id: input.parent_task_id ?? null,
@@ -171,6 +182,10 @@ export class RunRoutesPool {
       task_id: input.task_id ?? null,
       spec_id: input.spec_id ?? null,
       project_id: input.project_id ?? null,
+      org_id:
+        input.org_id ??
+        (input.project_id !== undefined ? this.projects.get(input.project_id)?.org_id : undefined) ??
+        DEFAULT_ORG_ID,
       event_type: input.event_type,
       payload: input.payload ?? {},
     };
@@ -184,6 +199,7 @@ export class RunRoutesPool {
       task_id: input.task_id,
       run_id: input.run_id,
       project_id: input.project_id,
+      org_id: input.org_id ?? this.runs.find((r) => r.run_id === input.run_id)?.org_id ?? DEFAULT_ORG_ID,
       cli: input.cli ?? "codex",
       provider: input.provider ?? "openai",
       model: input.model ?? "gpt-x",
@@ -232,17 +248,18 @@ export class RunRoutesPool {
         : { rows: [{ project_id: run.project_id, spec_id: run.spec_id }], rowCount: 1 };
     }
 
-    // Run snapshot loaders
-    if (trimmed.startsWith("SELECT") && /FROM runs WHERE run_id = \$1/.test(trimmed)) {
-      const run = this.runs.find((r) => r.run_id === String(params[0]));
+    // Run snapshot loaders. org_id is the second predicate (defense-in-depth).
+    if (trimmed.startsWith("SELECT") && /FROM runs WHERE run_id = \$1 AND org_id = \$2/.test(trimmed)) {
+      const run = this.runs.find((r) => r.run_id === String(params[0]) && r.org_id === String(params[1]));
       return run === undefined ? { rows: [], rowCount: 0 } : { rows: [run], rowCount: 1 };
     }
     if (trimmed.startsWith("SELECT") && /FROM runs/.test(trimmed) && /WHERE/.test(trimmed)) {
-      // list loader
+      // list loader: params are [projectId, orgId, ...status/spec filters].
       const projectId = String(params[0]);
+      const orgId = String(params[1]);
       const filtered = this.runs
-        .filter((r) => r.project_id === projectId)
-        .filter((r) => params[1] === undefined || r.status === params[1] || r.spec_id === params[1])
+        .filter((r) => r.project_id === projectId && r.org_id === orgId)
+        .filter((r) => params[2] === undefined || r.status === params[2] || r.spec_id === params[2])
         .map((r) => ({
           ...r,
           spec_title: this.specs.find((s) => s.spec_id === r.spec_id)?.title ?? null,
@@ -259,10 +276,10 @@ export class RunRoutesPool {
       return { rows: filtered, rowCount: filtered.length };
     }
 
-    // Tasks list
-    if (/FROM tasks\s+WHERE run_id = \$1/.test(trimmed)) {
+    // Tasks list (run_id = $1 AND org_id = $2)
+    if (/FROM tasks\s+WHERE run_id = \$1 AND org_id = \$2/.test(trimmed)) {
       const rows = this.tasks
-        .filter((t) => t.run_id === String(params[0]))
+        .filter((t) => t.run_id === String(params[0]) && t.org_id === String(params[1]))
         .sort((a, b) => {
           if (taskKindOrder(a.kind) !== taskKindOrder(b.kind)) {
             return taskKindOrder(a.kind) - taskKindOrder(b.kind);
@@ -291,35 +308,37 @@ export class RunRoutesPool {
         : { rows: [{ milestone_id: milestoneId }], rowCount: 1 };
     }
 
-    // Events: snapshot
+    // Events: snapshot (run_id = $1 AND org_id = $3; params [runId, limit, orgId])
     if (
-      /FROM \(\s*SELECT id, ts, run_id, task_id, spec_id, project_id, event_type, payload\s+FROM events\s+WHERE run_id = \$1/.test(
+      /FROM \(\s*SELECT id, ts, run_id, task_id, spec_id, project_id, event_type, payload\s+FROM events\s+WHERE run_id = \$1 AND org_id = \$3/.test(
         trimmed,
       )
     ) {
       const limit = Number(params[1]);
+      const orgId = String(params[2]);
       const rows = this.events
-        .filter((e) => e.run_id === String(params[0]))
+        .filter((e) => e.run_id === String(params[0]) && e.org_id === orgId)
         .sort((a, b) => b.ts.getTime() - a.ts.getTime() || b.id - a.id)
         .slice(0, limit)
         .sort((a, b) => a.ts.getTime() - b.ts.getTime() || a.id - b.id);
       return { rows, rowCount: rows.length };
     }
 
-    // Events: paginated
+    // Events: paginated (run_id = $1 AND org_id = $2; params [runId, orgId, ...cursor, limit])
     if (
-      /FROM events\s+WHERE run_id = \$1(\s+AND \(ts, id\) >|\s+ORDER)/.test(trimmed) &&
+      /FROM events\s+WHERE run_id = \$1 AND org_id = \$2(\s+AND \(ts, id\) >|\s+ORDER)/.test(trimmed) &&
       trimmed.includes("ORDER BY ts ASC")
     ) {
+      const orgId = String(params[1]);
       const limit = Number(params[params.length - 1]);
       let cursorTs: Date | undefined;
       let cursorId: number | undefined;
-      if (params.length === 4) {
-        cursorTs = params[1] as Date;
-        cursorId = Number(params[2]);
+      if (params.length === 5) {
+        cursorTs = params[2] as Date;
+        cursorId = Number(params[3]);
       }
       const rows = this.events
-        .filter((e) => e.run_id === String(params[0]))
+        .filter((e) => e.run_id === String(params[0]) && e.org_id === orgId)
         .filter((e) => {
           if (cursorTs === undefined || cursorId === undefined) return true;
           if (e.ts.getTime() > cursorTs.getTime()) return true;
@@ -331,27 +350,29 @@ export class RunRoutesPool {
       return { rows, rowCount: rows.length };
     }
 
-    // Events: SSE polling (id > $2)
-    if (/FROM events\s+WHERE run_id = \$1 AND id > \$2/.test(trimmed)) {
+    // Events: SSE polling (run_id = $1 AND org_id = $3 AND id > $2)
+    if (/FROM events\s+WHERE run_id = \$1 AND org_id = \$3 AND id > \$2/.test(trimmed)) {
       const lastId = Number(params[1]);
+      const orgId = String(params[2]);
       const rows = this.events
-        .filter((e) => e.run_id === String(params[0]) && e.id > lastId)
+        .filter((e) => e.run_id === String(params[0]) && e.org_id === orgId && e.id > lastId)
         .sort((a, b) => a.ts.getTime() - b.ts.getTime() || a.id - b.id)
         .slice(0, 200);
       return { rows, rowCount: rows.length };
     }
 
-    // Activity feed
-    if (/FROM events\s+WHERE project_id = \$1 AND run_id IS NOT NULL/.test(trimmed)) {
+    // Activity feed (project_id = $1 AND org_id = $2 AND run_id IS NOT NULL)
+    if (/FROM events\s+WHERE project_id = \$1 AND org_id = \$2 AND run_id IS NOT NULL/.test(trimmed)) {
+      const orgId = String(params[1]);
       const limit = Number(params[params.length - 1]);
       let cursorTs: Date | undefined;
       let cursorId: number | undefined;
-      if (params.length === 4) {
-        cursorTs = params[1] as Date;
-        cursorId = Number(params[2]);
+      if (params.length === 5) {
+        cursorTs = params[2] as Date;
+        cursorId = Number(params[3]);
       }
       const rows = this.events
-        .filter((e) => e.project_id === String(params[0]) && e.run_id !== null)
+        .filter((e) => e.project_id === String(params[0]) && e.org_id === orgId && e.run_id !== null)
         .filter((e) => {
           if (cursorTs === undefined || cursorId === undefined) return true;
           if (e.ts.getTime() < cursorTs.getTime()) return true;
@@ -363,28 +384,30 @@ export class RunRoutesPool {
       return { rows, rowCount: rows.length };
     }
 
-    // Costs: snapshot
-    if (/FROM cost_records\s+WHERE run_id = \$1\s+ORDER BY recorded_at ASC/.test(trimmed)) {
+    // Costs: snapshot (run_id = $1 AND org_id = $2)
+    if (/FROM cost_records\s+WHERE run_id = \$1 AND org_id = \$2\s+ORDER BY recorded_at ASC/.test(trimmed)) {
+      const orgId = String(params[1]);
       const rows = this.costs
-        .filter((c) => c.run_id === String(params[0]))
+        .filter((c) => c.run_id === String(params[0]) && c.org_id === orgId)
         .sort((a, b) => a.recorded_at.getTime() - b.recorded_at.getTime() || a.id - b.id);
       return { rows, rowCount: rows.length };
     }
 
-    // Costs: paginated
+    // Costs: paginated (run_id = $1 AND org_id = $2; params [runId, orgId, ...cursor, limit])
     if (
-      /FROM cost_records\s+WHERE run_id = \$1.*ORDER BY recorded_at ASC/.test(trimmed) ||
-      /FROM cost_records\s+WHERE run_id = \$1 AND \(recorded_at, id\)/.test(trimmed)
+      /FROM cost_records\s+WHERE run_id = \$1 AND org_id = \$2.*ORDER BY recorded_at ASC/.test(trimmed) ||
+      /FROM cost_records\s+WHERE run_id = \$1 AND org_id = \$2 AND \(recorded_at, id\)/.test(trimmed)
     ) {
+      const orgId = String(params[1]);
       const limit = Number(params[params.length - 1]);
       let cursorTs: Date | undefined;
       let cursorId: number | undefined;
-      if (params.length === 4) {
-        cursorTs = params[1] as Date;
-        cursorId = Number(params[2]);
+      if (params.length === 5) {
+        cursorTs = params[2] as Date;
+        cursorId = Number(params[3]);
       }
       const rows = this.costs
-        .filter((c) => c.run_id === String(params[0]))
+        .filter((c) => c.run_id === String(params[0]) && c.org_id === orgId)
         .filter((c) => {
           if (cursorTs === undefined || cursorId === undefined) return true;
           if (c.recorded_at.getTime() > cursorTs.getTime()) return true;
@@ -396,11 +419,12 @@ export class RunRoutesPool {
       return { rows, rowCount: rows.length };
     }
 
-    // Costs: SSE polling (id > $2)
-    if (/FROM cost_records\s+WHERE run_id = \$1 AND id > \$2/.test(trimmed)) {
+    // Costs: SSE polling (run_id = $1 AND org_id = $3 AND id > $2)
+    if (/FROM cost_records\s+WHERE run_id = \$1 AND org_id = \$3 AND id > \$2/.test(trimmed)) {
       const lastId = Number(params[1]);
+      const orgId = String(params[2]);
       const rows = this.costs
-        .filter((c) => c.run_id === String(params[0]) && c.id > lastId)
+        .filter((c) => c.run_id === String(params[0]) && c.org_id === orgId && c.id > lastId)
         .sort((a, b) => a.recorded_at.getTime() - b.recorded_at.getTime() || a.id - b.id)
         .slice(0, 200);
       return { rows, rowCount: rows.length };

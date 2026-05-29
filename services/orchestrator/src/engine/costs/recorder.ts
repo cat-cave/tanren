@@ -32,7 +32,6 @@ export interface CostRecordContext {
   // once every call has run, so the loop back-fills via
   // reconcileRunCostFromCcusage at run end.
   ccusageCostUsd?: number | null;
-  tenantId?: string | null;
   userId?: string | null;
 }
 
@@ -67,11 +66,14 @@ export class CostRecorder {
     const source = resolveCostSource(attribution);
     const costUsd = computeCostUsd(source, tokens);
     await this.pool.query(
+      // org_id is the mandatory tenant-isolation key (tanren tenancy hardening).
+      // It is derived in-statement from the parent run so every cost row carries
+      // its org directly rather than via a project_id → projects.org_id hop.
       `INSERT INTO cost_records
-       (task_id, run_id, project_id, cli, provider, model,
+       (task_id, run_id, project_id, org_id, cli, provider, model,
         input_tokens, cached_input_tokens, cache_creation_tokens, output_tokens, reasoning_output_tokens, total_tokens,
-        cost_usd, billing_mode, cost_basis, cost_source_raw, tenant_id, user_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::jsonb, $17, $18)`,
+        cost_usd, billing_mode, cost_basis, cost_source_raw, user_id)
+       VALUES ($1, $2, $3, (SELECT org_id FROM runs WHERE run_id = $2), $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::jsonb, $17)`,
       [
         context.taskId,
         context.runId,
@@ -96,7 +98,6 @@ export class CostRecorder {
           provider: source.provider,
           rawUsage,
         }),
-        context.tenantId ?? null,
         context.userId ?? null,
       ],
     );

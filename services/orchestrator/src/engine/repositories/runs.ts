@@ -16,7 +16,7 @@ export const RunRow = z.object({
   prUrl: z.string().nullable(),
   startedAt: z.date(),
   endedAt: z.date().nullable(),
-  tenantId: z.string().nullable(),
+  orgId: z.string(),
   userId: z.string().nullable(),
 });
 export type RunRow = z.infer<typeof RunRow>;
@@ -32,7 +32,7 @@ interface RawRunRow {
   pr_url: unknown;
   started_at: unknown;
   ended_at: unknown;
-  tenant_id: unknown;
+  org_id: unknown;
   user_id: unknown;
 }
 
@@ -47,7 +47,7 @@ const SELECT_RUN_COLUMNS = `
   pr_url,
   started_at,
   ended_at,
-  tenant_id,
+  org_id,
   user_id
 `;
 
@@ -63,7 +63,7 @@ function decodeRunRow(raw: RawRunRow): RunRow {
     prUrl: raw.pr_url,
     startedAt: raw.started_at,
     endedAt: raw.ended_at,
-    tenantId: raw.tenant_id,
+    orgId: raw.org_id,
     userId: raw.user_id,
   });
 }

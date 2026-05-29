@@ -60,25 +60,29 @@ const SELECT_RUN_COLUMNS = `
 // Run summary + tasks
 // ---------------------------------------------------------------------------
 
-export async function fetchRunSummary(pool: pg.Pool, runId: string): Promise<RunSummary | undefined> {
-  const result = await pool.query<RawRunRow>(`SELECT ${SELECT_RUN_COLUMNS} FROM runs WHERE run_id = $1`, [runId]);
-  const row = result.rows[0];
-  return row === undefined ? undefined : decodeRunSummary(row);
+// orgId is a defense-in-depth tenant predicate (tanren tenancy hardening): the
+// loaders filter by the actor's resolved org so a missing/buggy route gate can
+// never leak cross-tenant rows. Callers pass the path org after validating it
+// against the actor (actorCanAccessOrg).
+export async function fetchRunSummary(pool: pg.Pool, runId: string, orgId: string): Promise<RunSummary | undefined> {
+  const q = `SELECT ${SELECT_RUN_COLUMNS} FROM runs WHERE run_id = $1 AND org_id = $2`;
+  const result = await pool.query<RawRunRow>(q, [runId, orgId]);
+  return result.rows[0] === undefined ? undefined : decodeRunSummary(result.rows[0]);
 }
 
-export async function fetchRunTasks(pool: pg.Pool, runId: string): Promise<TaskTimelineEntry[]> {
+export async function fetchRunTasks(pool: pg.Pool, runId: string, orgId: string): Promise<TaskTimelineEntry[]> {
   const result = await pool.query<Record<string, unknown>>(
     `SELECT task_id, run_id, kind, title, parent_task_id, status, outcome, failure_kind,
             attempt, cli, model, started_at, ended_at
        FROM tasks
-      WHERE run_id = $1
+      WHERE run_id = $1 AND org_id = $2
       ORDER BY CASE kind
                  WHEN 'plan' THEN 1 WHEN 'write' THEN 2 WHEN 'check' THEN 3
                  WHEN 'audit' THEN 4 WHEN 'ci' THEN 5 ELSE 99
                END,
                started_at ASC NULLS FIRST,
                task_id ASC`,
-    [runId],
+    [runId, orgId],
   );
   return result.rows.map((row) =>
     TaskTimelineEntry.parse({
@@ -199,31 +203,32 @@ function applyEventRedaction(
 
 interface SnapshotEventsArgs {
   runId: string;
+  orgId: string;
   limit: number;
   actor: ActorContext;
   rawView: boolean;
 }
 
 export async function fetchRunEventsForSnapshot(pool: pg.Pool, args: SnapshotEventsArgs): Promise<RunEventRow[]> {
-  // For the snapshot we want the most recent N events but rendered
-  // chronologically so the dashboard timeline reads top-down.
+  // Most recent N events rendered chronologically; org_id filters by tenant.
   const result = await pool.query<EventQueryRow>(
     `SELECT id, ts, run_id, task_id, spec_id, project_id, event_type, payload
        FROM (
          SELECT id, ts, run_id, task_id, spec_id, project_id, event_type, payload
            FROM events
-          WHERE run_id = $1
+          WHERE run_id = $1 AND org_id = $3
           ORDER BY ts DESC, id DESC
           LIMIT $2
        ) recent
       ORDER BY ts ASC, id ASC`,
-    [args.runId, args.limit],
+    [args.runId, args.limit, args.orgId],
   );
   return applyEventRedaction(result.rows, args.actor, args.rawView);
 }
 
 interface EventsPageArgs {
   runId: string;
+  orgId: string;
   cursor: string | undefined;
   pageSize: string | undefined;
   actor: ActorContext;
@@ -236,7 +241,7 @@ export async function fetchEventsPage(
 ): Promise<{ items: RunEventRow[]; nextCursor: string | null }> {
   const limit = parsePageSize(args.pageSize);
   const cursor = args.cursor === undefined || args.cursor === "" ? undefined : decodeCursor(args.cursor);
-  const params: unknown[] = [args.runId];
+  const params: unknown[] = [args.runId, args.orgId];
   let cursorClause = "";
   if (cursor !== undefined) {
     params.push(cursor.ts, cursor.id);
@@ -246,7 +251,7 @@ export async function fetchEventsPage(
   const result = await pool.query<EventQueryRow>(
     `SELECT id, ts, run_id, task_id, spec_id, project_id, event_type, payload
        FROM events
-      WHERE run_id = $1${cursorClause}
+      WHERE run_id = $1 AND org_id = $2${cursorClause}
       ORDER BY ts ASC, id ASC
       LIMIT $${params.length}`,
     params,
@@ -269,6 +274,7 @@ export async function fetchEventsPage(
 
 interface FeedPageArgs {
   projectId: string;
+  orgId: string;
   cursor: string | undefined;
   pageSize: string | undefined;
   actor: ActorContext;
@@ -280,10 +286,10 @@ export async function fetchFeedPage(
   args: FeedPageArgs,
 ): Promise<{ items: ProjectFeedItemType[]; nextCursor: string | null }> {
   const limit = parsePageSize(args.pageSize);
-  // Newest-first ordering for the activity feed; cursor goes backwards in
-  // time. The cursor encodes the (ts, id) of the oldest item already shown.
+  // Newest-first feed; cursor goes backwards in time, encoding the (ts, id) of
+  // the oldest item shown. org_id is a defense-in-depth tenant predicate.
   const cursor = args.cursor === undefined || args.cursor === "" ? undefined : decodeCursor(args.cursor);
-  const params: unknown[] = [args.projectId];
+  const params: unknown[] = [args.projectId, args.orgId];
   let cursorClause = "";
   if (cursor !== undefined) {
     params.push(cursor.ts, cursor.id);
@@ -293,7 +299,7 @@ export async function fetchFeedPage(
   const result = await pool.query<EventQueryRow>(
     `SELECT id, ts, run_id, task_id, spec_id, project_id, event_type, payload
        FROM events
-      WHERE project_id = $1 AND run_id IS NOT NULL${cursorClause}
+      WHERE project_id = $1 AND org_id = $2 AND run_id IS NOT NULL${cursorClause}
       ORDER BY ts DESC, id DESC
       LIMIT $${params.length}`,
     params,
@@ -340,21 +346,22 @@ function decodeCostRow(raw: CostQueryRow): RunCostRecord {
   });
 }
 
-export async function fetchRunCostsForSnapshot(pool: pg.Pool, runId: string): Promise<RunCostRecord[]> {
+export async function fetchRunCostsForSnapshot(pool: pg.Pool, runId: string, orgId: string): Promise<RunCostRecord[]> {
   const result = await pool.query<CostQueryRow>(
     `SELECT id, task_id, run_id, project_id, cli, provider, model,
             input_tokens, cached_input_tokens, cache_creation_tokens, output_tokens, reasoning_output_tokens, total_tokens,
             cost_usd, billing_mode, cost_basis, recorded_at
        FROM cost_records
-      WHERE run_id = $1
+      WHERE run_id = $1 AND org_id = $2
       ORDER BY recorded_at ASC, id ASC`,
-    [runId],
+    [runId, orgId],
   );
   return result.rows.map(decodeCostRow);
 }
 
 interface CostsPageArgs {
   runId: string;
+  orgId: string;
   cursor: string | undefined;
   pageSize: string | undefined;
 }
@@ -365,7 +372,7 @@ export async function fetchCostsPage(
 ): Promise<{ items: RunCostRecord[]; nextCursor: string | null }> {
   const limit = parsePageSize(args.pageSize);
   const cursor = args.cursor === undefined || args.cursor === "" ? undefined : decodeCursor(args.cursor);
-  const params: unknown[] = [args.runId];
+  const params: unknown[] = [args.runId, args.orgId];
   let cursorClause = "";
   if (cursor !== undefined) {
     params.push(cursor.ts, cursor.id);
@@ -377,7 +384,7 @@ export async function fetchCostsPage(
             input_tokens, cached_input_tokens, cache_creation_tokens, output_tokens, reasoning_output_tokens, total_tokens,
             cost_usd, billing_mode, cost_basis, recorded_at
        FROM cost_records
-      WHERE run_id = $1${cursorClause}
+      WHERE run_id = $1 AND org_id = $2${cursorClause}
       ORDER BY recorded_at ASC, id ASC
       LIMIT $${params.length}`,
     params,
@@ -425,6 +432,7 @@ export async function fetchRunInsights(
 
 interface RunListArgs {
   projectId: string;
+  orgId: string;
   status: string | undefined;
   specId: string | undefined;
 }
@@ -436,8 +444,8 @@ interface RawRunListRow extends RawRunRow {
 }
 
 export async function fetchRunListItems(pool: pg.Pool, args: RunListArgs): Promise<RunListItem[]> {
-  const params: unknown[] = [args.projectId];
-  const clauses: string[] = ["r.project_id = $1"];
+  const params: unknown[] = [args.projectId, args.orgId];
+  const clauses: string[] = ["r.project_id = $1", "r.org_id = $2"];
   if (args.status !== undefined && args.status !== "") {
     params.push(args.status);
     clauses.push(`r.status = $${params.length}`);

@@ -13,7 +13,7 @@ export const SpecRow = z.object({
   acceptanceCriteria: z.array(z.string()),
   dependsOn: z.array(z.string()),
   status: SpecStatus,
-  tenantId: z.string().nullable(),
+  orgId: z.string(),
 });
 export type SpecRow = z.infer<typeof SpecRow>;
 
@@ -25,7 +25,7 @@ interface RawSpecRow {
   acceptance_criteria: unknown;
   depends_on: unknown;
   status: unknown;
-  tenant_id: unknown;
+  org_id: unknown;
 }
 
 const SELECT_SPEC_COLUMNS = `
@@ -36,7 +36,7 @@ const SELECT_SPEC_COLUMNS = `
   acceptance_criteria,
   depends_on,
   status,
-  tenant_id
+  org_id
 `;
 
 function asStringArray(value: unknown): string[] {
@@ -52,7 +52,7 @@ function decodeSpecRow(raw: RawSpecRow): SpecRow {
     acceptanceCriteria: asStringArray(raw.acceptance_criteria),
     dependsOn: asStringArray(raw.depends_on),
     status: raw.status,
-    tenantId: raw.tenant_id,
+    orgId: raw.org_id,
   });
 }
 

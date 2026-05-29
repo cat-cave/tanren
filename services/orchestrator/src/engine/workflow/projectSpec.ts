@@ -164,8 +164,10 @@ export async function createSpec(pool: pg.Pool, input: CreateSpecInput, actor?: 
   };
 
   await pool.query(
-    `INSERT INTO specs (spec_id, project_id, title, description, acceptance_criteria, depends_on, status)
-     VALUES ($1, $2, $3, $4, $5::jsonb, $6::text[], $7)`,
+    // org_id is mandatory; derive it in-statement from the parent project so
+    // every spec carries its tenant directly (tanren tenancy hardening).
+    `INSERT INTO specs (spec_id, project_id, org_id, title, description, acceptance_criteria, depends_on, status)
+     VALUES ($1, $2, (SELECT org_id FROM projects WHERE project_id = $2), $3, $4, $5::jsonb, $6::text[], $7)`,
     [
       spec.specId,
       spec.projectId,
@@ -206,9 +208,10 @@ async function ensureProjectAccess(pool: pg.Pool, projectId: string, actor?: Act
     projectId,
   ]);
   const projectOrg = result.rows[0]?.org_id ?? null;
+  // org_id is mandatory (tanren tenancy hardening): no null-org bypass. A
+  // project with no resolvable org is denied, never granted.
   if (projectOrg === null) {
-    // Legacy / unscoped projects bypass org-scoping for backwards compatibility with existing rows.
-    return;
+    throw new ProjectAccessDeniedError(projectId);
   }
   const memberResult = await pool.query<{ role: string }>(
     "SELECT role FROM project_members WHERE project_id = $1 AND user_id = $2",
@@ -278,14 +281,16 @@ async function createQueuedRunFromSpecOnClient(
   };
 
   await client.query(
-    `INSERT INTO runs (run_id, spec_id, project_id, trigger, branch, status)
-     VALUES ($1, $2, $3, $4, $5, 'queued')`,
+    // org_id is mandatory; derive it from the parent project (tanren tenancy).
+    `INSERT INTO runs (run_id, spec_id, project_id, org_id, trigger, branch, status)
+     VALUES ($1, $2, $3, (SELECT org_id FROM projects WHERE project_id = $3), $4, $5, 'queued')`,
     [run.runId, run.specId, run.projectId, run.trigger, run.branch],
   );
   await claimPendingSpec(client, loaded.spec);
   await client.query(
-    `INSERT INTO tasks (task_id, run_id, kind, title, status, agent_kind, cli, model)
-     VALUES ($1, $2, 'plan', 'Plan spec implementation', 'queued', 'answerer', 'fake', $3)`,
+    // org_id derived from the parent run so the task carries its tenant directly.
+    `INSERT INTO tasks (task_id, run_id, org_id, kind, title, status, agent_kind, cli, model)
+     VALUES ($1, $2, (SELECT org_id FROM runs WHERE run_id = $2), 'plan', 'Plan spec implementation', 'queued', 'answerer', 'fake', $3)`,
     [plannerTaskId, run.runId, initialPlannerModel],
   );
   const job = await client.query(
@@ -448,8 +453,9 @@ async function ensureClientProjectAccess(
     [projectId],
   );
   const projectOrg = projectRow.rows[0]?.org_id ?? null;
+  // org_id is mandatory (tanren tenancy hardening): no null-org bypass.
   if (projectOrg === null) {
-    return;
+    throw new ProjectAccessDeniedError(projectId);
   }
   const memberResult = await client.query<{ role: string }>(
     "SELECT role FROM project_members WHERE project_id = $1 AND user_id = $2",

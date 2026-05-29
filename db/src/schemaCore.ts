@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { type AnyPgColumn, check, jsonb, pgTable, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
+import { type AnyPgColumn, check, index, jsonb, pgTable, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
 import { stateEnumLists } from "./stateEnums.js";
 
 // Core identity + project/spec tables. These are referenced by the split
@@ -14,20 +14,31 @@ export function enumCheck(name: string, column: AnyPgColumn, values: ReadonlyArr
   return check(name, sql`${column} IN (${literals})`);
 }
 
-export const projects = pgTable("projects", {
-  projectId: text("project_id").primaryKey(),
-  name: text("name").notNull(),
-  repoUrl: text("repo_url").notNull(),
-  defaultBranch: text("default_branch").notNull().default("main"),
-  runnerImage: text("runner_image").notNull().default("ghcr.io/cat-cave/tanren-runner:v0"),
-  allocator: text("allocator").notNull().default("local-docker"),
-  config: jsonb("config")
-    .notNull()
-    .default(sql`'{}'::jsonb`),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  tenantId: text("tenant_id"),
-  orgId: text("org_id"),
-});
+// org_id is the tenant-isolation root of the run-execution chain (P-tenancy:
+// mandatory-org-id). projects.org_id is NOT NULL and FK → organizations.id; the
+// migration backfills legacy rows from a placeholder org before tightening. All
+// downstream core tables (specs/runs/tasks/events/cost_records/runners) carry a
+// derived, mandatory, indexed org_id so isolation no longer relies on a nullable
+// project_id → projects.org_id hop or a route-layer gate alone.
+export const projects = pgTable(
+  "projects",
+  {
+    projectId: text("project_id").primaryKey(),
+    name: text("name").notNull(),
+    repoUrl: text("repo_url").notNull(),
+    defaultBranch: text("default_branch").notNull().default("main"),
+    runnerImage: text("runner_image").notNull().default("ghcr.io/cat-cave/tanren-runner:v0"),
+    allocator: text("allocator").notNull().default("local-docker"),
+    config: jsonb("config")
+      .notNull()
+      .default(sql`'{}'::jsonb`),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organizations.id),
+  },
+  (table) => [index("projects_org_id").on(table.orgId)],
+);
 
 export const specs = pgTable(
   "specs",
@@ -36,6 +47,9 @@ export const specs = pgTable(
     projectId: text("project_id")
       .notNull()
       .references(() => projects.projectId),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organizations.id),
     title: text("title").notNull(),
     description: text("description").notNull(),
     acceptanceCriteria: jsonb("acceptance_criteria")
@@ -50,9 +64,11 @@ export const specs = pgTable(
       .notNull()
       .default(sql`'{}'::jsonb`), // P3-0014: discovery provenance under `discovery` key
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-    tenantId: text("tenant_id"),
   },
-  (table) => [enumCheck("specs_status_check", table.status, stateEnumLists.specs_status)],
+  (table) => [
+    enumCheck("specs_status_check", table.status, stateEnumLists.specs_status),
+    index("specs_org_id").on(table.orgId),
+  ],
 );
 
 export const organizations = pgTable(

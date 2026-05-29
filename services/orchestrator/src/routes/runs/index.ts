@@ -67,6 +67,7 @@ export function createRunRoutes(options: RunRoutesOptions) {
 
     const items = await fetchRunListItems(options.pool, {
       projectId,
+      orgId,
       status: c.req.query("status"),
       specId: c.req.query("specId"),
     });
@@ -85,7 +86,7 @@ export function createRunRoutes(options: RunRoutesOptions) {
     const runId = c.req.param("runId");
     const projectId = c.req.param("projectId");
 
-    const summary = await fetchRunSummary(options.pool, runId);
+    const summary = await fetchRunSummary(options.pool, runId, orgId);
     if (summary === undefined) {
       return c.json({ error: "run_not_found" }, 404);
     }
@@ -98,9 +99,9 @@ export function createRunRoutes(options: RunRoutesOptions) {
     const rawView = parseRawViewOptIn(c);
     const [spec, tasks, recentEvents, costs, insights, forgeThread] = await Promise.all([
       fetchRunSpecSummary(options.pool, summary.specId),
-      fetchRunTasks(options.pool, runId),
-      fetchRunEventsForSnapshot(options.pool, { runId, limit: RECENT_EVENT_CAP, actor, rawView }),
-      fetchRunCostsForSnapshot(options.pool, runId),
+      fetchRunTasks(options.pool, runId, orgId),
+      fetchRunEventsForSnapshot(options.pool, { runId, orgId, limit: RECENT_EVENT_CAP, actor, rawView }),
+      fetchRunCostsForSnapshot(options.pool, runId, orgId),
       fetchRunInsights(options.pool, summary.projectId, summary.specId, runId),
       fetchForgeBundle(options.pool, { orgId, projectId, runId, actor }),
     ]);
@@ -143,6 +144,7 @@ export function createRunRoutes(options: RunRoutesOptions) {
     try {
       const page = await fetchEventsPage(options.pool, {
         runId,
+        orgId,
         cursor: c.req.query("cursor"),
         pageSize: c.req.query("pageSize"),
         actor,
@@ -182,6 +184,7 @@ export function createRunRoutes(options: RunRoutesOptions) {
     try {
       const page = await fetchCostsPage(options.pool, {
         runId,
+        orgId,
         cursor: c.req.query("cursor"),
         pageSize: c.req.query("pageSize"),
       });
@@ -241,6 +244,7 @@ export function createRunRoutes(options: RunRoutesOptions) {
       pool: options.pool,
       runId,
       projectId,
+      orgId,
       actor,
       rawView: parseRawViewOptIn(c),
       intervalMs: options.sseIntervalMs ?? 1_000,
@@ -263,6 +267,7 @@ export function createRunRoutes(options: RunRoutesOptions) {
     try {
       const page = await fetchFeedPage(options.pool, {
         projectId,
+        orgId,
         cursor: c.req.query("cursor"),
         pageSize: c.req.query("pageSize"),
         actor,

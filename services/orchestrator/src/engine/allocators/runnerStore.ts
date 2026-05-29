@@ -22,11 +22,13 @@ export class PgRunnerStore implements RunnerStore {
 
   async claim(input: ClaimRunnerInput): Promise<void> {
     await this.pool.query(
+      // org_id is mandatory (tanren tenancy hardening); derive it from the
+      // run this runner is claimed for so the runner row is tenant-scoped.
       `INSERT INTO runners (
-         runner_id, run_id, project_id, allocator, status, ssh_host, ssh_port,
+         runner_id, run_id, project_id, org_id, allocator, status, ssh_host, ssh_port,
          host_key_fingerprint, image_sha, container_id
        )
-       VALUES ($1, $2, $3, $4, 'claimed', $5, $6, $7, $8, $9)`,
+       VALUES ($1, $2, $3, (SELECT org_id FROM runs WHERE run_id = $2), $4, 'claimed', $5, $6, $7, $8, $9)`,
       [
         input.runnerId,
         input.runId,

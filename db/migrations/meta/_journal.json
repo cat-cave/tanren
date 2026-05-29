@@ -183,6 +183,13 @@
       "when": 1780030028750,
       "tag": "0025_fine_gunslinger",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1780084249877,
+      "tag": "0026_mandatory_org_id_tenancy",
+      "breakpoints": true
     }
   ]
 }
