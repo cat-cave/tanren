@@ -4,6 +4,7 @@ import type { SshTarget } from "../contracts/allocator.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { SshSubstrate } from "../contracts/sshSubstrate.js";
 import { timedAnswererAdapter, timedWriterAdapter } from "../observability/index.js";
+import { createAiderWriter } from "./aider.js";
 import { createClaudeAnswerer, createClaudeWriter } from "./claude.js";
 import { createCodexAnswerer, createCodexWriter } from "./codex.js";
 import { ANSWERER_CAPABLE_CLIS, harnessSupportsRole, WRITER_CAPABLE_CLIS } from "./harnessCapability.js";
@@ -24,6 +25,8 @@ import type { AnswererAdapter, WriterAdapter } from "./types.js";
 //   - "claude":   Writer + Answerer
 //   - "opencode": Writer only, Zai GLM 5.1 (no Answerer; mirrors the type-level
 //                 AnswererAdapter.cli union which excludes opencode)
+//   - "aider":    Writer only (no structured output → no Answerer; rejected as
+//                 an answerer by the capability table)
 
 // The provider CLIs this selector can resolve, DERIVED from the harness
 // capability table (harnessCapability.ts) — the single source of truth for
@@ -74,6 +77,8 @@ export function buildWriterAdapter(deps: AdapterSelectorDependencies, entry: Rou
       return timedWriterAdapter(createClaudeWriter({ ...base, model: entry.model }));
     case "opencode":
       return timedWriterAdapter(createOpencodeWriter({ ...base, model: entry.model }));
+    case "aider":
+      return timedWriterAdapter(createAiderWriter({ ...base, model: entry.model }));
     default:
       throw new UnsupportedProviderError(entry.cli, "writer");
   }

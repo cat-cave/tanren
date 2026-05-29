@@ -36,10 +36,19 @@ function entry(cli: string, model: string, authRef: string): RoutingChainEntry {
 }
 
 describe("adapter selector (P3-0012 fallback-chain resolution)", () => {
-  it("resolves codex, claude, and opencode writer chain entries to the right cli", () => {
+  it("resolves codex, claude, opencode, and aider writer chain entries to the right cli", () => {
     expect(buildWriterAdapter(deps(), entry("codex", "gpt-5", "credential/codex/dev")).cli).toBe("codex");
     expect(buildWriterAdapter(deps(), entry("claude", "claude-opus-4-8", "credential/claude/dev")).cli).toBe("claude");
     expect(buildWriterAdapter(deps(), entry("opencode", "zai/glm-5.1", "credential/opencode/dev")).cli).toBe("opencode");
+    expect(buildWriterAdapter(deps(), entry("aider", "anthropic/claude-opus-4-8", "credential/aider/dev")).cli).toBe("aider");
+  });
+
+  it("treats aider as Writer-only — it routes for write but is not a selectable Answerer", () => {
+    expect(SELECTABLE_WRITER_CLIS).toContain("aider");
+    expect(SELECTABLE_ANSWERER_CLIS).not.toContain("aider");
+    expect(() => buildAnswererAdapter<CheckAnswer>(deps(), entry("aider", "gpt-5", "credential/aider/dev"))).toThrow(
+      UnsupportedProviderError
+    );
   });
 
   it("resolves codex and claude answerer chain entries to the right cli", () => {
@@ -118,8 +127,8 @@ describe("harness capability model (Track C §4 protocol contract)", () => {
     expect(HARNESS_PROTOCOL_VERSION).toBe("v1");
   });
 
-  it("derives SELECTABLE_WRITER_CLIS to exactly today's writers (codex, claude, opencode)", () => {
-    expect([...SELECTABLE_WRITER_CLIS].toSorted()).toEqual(["claude", "codex", "opencode"]);
+  it("derives SELECTABLE_WRITER_CLIS to exactly today's writers (codex, claude, opencode, aider)", () => {
+    expect([...SELECTABLE_WRITER_CLIS].toSorted()).toEqual(["aider", "claude", "codex", "opencode"]);
   });
 
   it("derives SELECTABLE_ANSWERER_CLIS to exactly today's answerers (codex, claude)", () => {
@@ -137,6 +146,8 @@ describe("harness capability model (Track C §4 protocol contract)", () => {
     expect(harnessSupportsRole("claude", "answer")).toBe(true);
     expect(harnessSupportsRole("opencode", "answer")).toBe(false);
     expect(harnessSupportsRole("opencode", "write")).toBe(true);
+    expect(harnessSupportsRole("aider", "answer")).toBe(false);
+    expect(harnessSupportsRole("aider", "write")).toBe(true);
     expect(harnessSupportsRole("wafer", "write")).toBe(false);
   });
 });

@@ -1,0 +1,212 @@
+import type { SshTarget } from "../contracts/allocator.js";
+import type { SecretStore } from "../contracts/secretStore.js";
+import type { SshSubstrate } from "../contracts/sshSubstrate.js";
+import { validateCredentialRef } from "../credentials/codexAuth.js";
+import { quoteSshShellArg } from "../ssh/command.js";
+import type { TokenUsage, UsageLimitSignal, WriterAdapter, WriterResult } from "./types.js";
+import { captureBaselineSha, captureGitStateAfterWriter } from "./writerGit.js";
+
+// aider harness adapter — a Writer-only CLI harness conforming to the v1
+// harness protocol (docs/architecture/harness-protocol.md). aider has NO
+// structured-JSON output channel, so it is writer-only (like opencode); the
+// capability table (harnessCapability.ts) rejects aider-as-answerer.
+//
+// aider drives an underlying LLM (Anthropic/OpenAI/etc.). We run it
+// non-interactively over SSH in the workspace, let it edit + commit, then
+// derive the WriterResult from git state (shared writerGit helpers, same as
+// the Claude/opencode writers).
+//
+// Invocation contract (aider's documented batch flags):
+//   aider --yes-always --no-stream --no-check-update \
+//         --no-auto-commits=false (i.e. let aider commit) \
+//         --model <model> --message <prompt>
+// Notes / assumptions:
+//   * `--yes-always` answers every confirmation prompt with "yes" so the run
+//     is fully non-interactive (aider's documented batch flag; older builds
+//     spelled it `--yes`).
+//   * `--message <prompt>` runs a single instruction then exits (aider's
+//     documented one-shot/batch mode).
+//   * We let aider make its own git commits (its default `--auto-commits`),
+//     then ALSO run the shared commit/diff capture to fold in any
+//     uncommitted residue and produce the unified diff vs. the baseline. This
+//     matches the opencode/Claude writers, which capture git state after the
+//     CLI exits regardless of whether the CLI committed.
+//   * aider does not emit a machine-readable token-usage stream in v1 of this
+//     adapter. We best-effort scrape its human-readable "Tokens: …" summary
+//     line; when absent, tokenUsage is omitted (the orchestrator treats this
+//     as emptyTokenUsage). TODO(aider-telemetry): adopt aider's structured
+//     usage output if/when a stable machine-readable form is documented.
+
+// The env var aider reads the underlying-LLM API key from depends on the
+// provider the pinned model belongs to. aider follows the LiteLLM convention
+// (model id is `provider/model` or a bare OpenAI/Anthropic name). We resolve
+// the relevant var from the model id so the SAME credential-ref mechanism
+// (a raw API key in the secret store) works across providers.
+const DEFAULT_AIDER_MODEL = "anthropic/claude-opus-4-8";
+
+export interface AiderWriterDependencies {
+  secrets: SecretStore;
+  ssh: SshSubstrate;
+  target: SshTarget;
+  credentialRef: string;
+  runId: string;
+  // The aider model id this adapter pins (e.g. "anthropic/claude-opus-4-8",
+  // "gpt-5", "openai/gpt-5"). Defaults to DEFAULT_AIDER_MODEL.
+  model?: string;
+}
+
+export interface AiderTelemetry {
+  rawEventCount: number;
+  tokenUsage?: TokenUsage;
+  usageLimit?: UsageLimitSignal;
+}
+
+export function createAiderWriter(dependencies: AiderWriterDependencies): WriterAdapter {
+  return {
+    kind: "writer",
+    cli: "aider",
+    authRef: dependencies.credentialRef,
+    async runWriter(opts): Promise<WriterResult> {
+      const model = dependencies.model ?? DEFAULT_AIDER_MODEL;
+      const apiKey = await resolveAiderApiKey(dependencies.secrets, dependencies.credentialRef);
+      const baselineSha = await captureBaselineSha(dependencies.ssh, dependencies.target, opts.workspace, opts.timeoutMs);
+      const aider = await dependencies.ssh.run(dependencies.target, {
+        command: buildAiderWriterCommand({ apiKeyEnvVar: apiKeyEnvVarForModel(model), apiKey, model, prompt: opts.prompt }),
+        cwd: opts.workspace,
+        timeoutMs: opts.timeoutMs
+      });
+      const telemetry = parseAiderTelemetry(aider.stdout + "\n" + aider.stderr);
+      const gitState = await captureGitStateAfterWriter(
+        dependencies.ssh,
+        dependencies.target,
+        opts.workspace,
+        baselineSha,
+        "aider writer",
+        opts.timeoutMs
+      );
+      if (aider.timedOut) {
+        return failedResult("timeout", telemetry, gitState);
+      }
+      if (telemetry.usageLimit !== undefined) {
+        return failedResult("window_exhausted", telemetry, gitState);
+      }
+      if (aider.failure !== undefined || aider.exitCode !== 0) {
+        return failedResult("crashed", telemetry, gitState);
+      }
+      return { ...gitState, exitReason: "completed", tokenUsage: telemetry.tokenUsage, telemetry };
+    }
+  };
+}
+
+// Resolves the underlying-LLM API key for the aider run from the secret store
+// via the chain entry's authRef (same managed-ref mechanism as the other
+// harnesses). The stored secret IS the raw API key string aider passes to its
+// LLM provider.
+export async function resolveAiderApiKey(secrets: SecretStore, ref: string): Promise<string> {
+  const validated = validateCredentialRef(ref);
+  const secret = await secrets.get(validated);
+  if (secret === undefined) {
+    throw new Error(`missing aider credential ref: ${validated}`);
+  }
+  if (secret.value.trim() === "") {
+    throw new Error(`aider credential ref ${validated} resolved to an empty api key`);
+  }
+  return secret.value;
+}
+
+// aider reads the LLM API key from a provider-specific env var. We map the
+// pinned model's provider prefix to that var (LiteLLM/aider convention). A
+// bare `gpt-*`/`o*` name is OpenAI; everything else defaults to Anthropic,
+// which is the project's primary writer model family.
+export function apiKeyEnvVarForModel(model: string): string {
+  const lower = model.toLowerCase();
+  if (lower.startsWith("openai/") || lower.startsWith("gpt-") || lower.startsWith("o1") || lower.startsWith("o3")) {
+    return "OPENAI_API_KEY";
+  }
+  if (lower.startsWith("gemini/") || lower.startsWith("gemini-")) {
+    return "GEMINI_API_KEY";
+  }
+  // Default: Anthropic (anthropic/*, claude-*). aider reads ANTHROPIC_API_KEY.
+  return "ANTHROPIC_API_KEY";
+}
+
+// Builds the non-interactive aider invocation. The API key is injected as a
+// command-scoped env var (provider-specific) so it never lands in a file and
+// is redacted from the adapter's own result. The workspace is the cwd (the
+// SshCommand.cwd cd's into it), so aider operates on the run's git repo.
+export function buildAiderWriterCommand(input: {
+  apiKeyEnvVar: string;
+  apiKey: string;
+  model: string;
+  prompt: string;
+}): string {
+  return [
+    `${input.apiKeyEnvVar}=${quoteSshShellArg(input.apiKey)}`,
+    "aider",
+    "--yes-always",
+    "--no-stream",
+    "--no-check-update",
+    "--no-gui",
+    "--model",
+    quoteSshShellArg(input.model),
+    "--message",
+    quoteSshShellArg(input.prompt)
+  ].join(" ");
+}
+
+// aider does not emit a structured event stream in v1 of this adapter. We
+// best-effort scrape:
+//   * a usage-limit signal from the stable "rate limit"/"usage limit" phrasing
+//     aider surfaces when the underlying provider rejects on quota, and
+//   * a token-usage summary from aider's human-readable "Tokens: <in> sent,
+//     <out> received" line, when present.
+export function parseAiderTelemetry(output: string): AiderTelemetry {
+  const lines = output.split(/\r?\n/).filter((line) => line.trim() !== "");
+  let usageLimit: UsageLimitSignal | undefined;
+  for (const line of lines) {
+    if (/usage limit|rate limit/i.test(line)) {
+      usageLimit = { message: line.trim() };
+    }
+  }
+  return { rawEventCount: lines.length, tokenUsage: parseAiderTokenUsage(output), usageLimit };
+}
+
+// Matches aider's "Tokens: 1,234 sent, 567 received" summary line. Buckets are
+// disjoint (sent ⇒ input, received ⇒ output); aider does not break out cache
+// or reasoning tokens, so those stay 0. Returns undefined when no such line is
+// present.
+function parseAiderTokenUsage(output: string): TokenUsage | undefined {
+  const match = /Tokens:\s*([\d,]+)\s*sent,\s*([\d,]+)\s*received/i.exec(output);
+  if (match === null) {
+    return undefined;
+  }
+  const inputTokens = parseCount(match[1]);
+  const outputTokens = parseCount(match[2]);
+  if (inputTokens === undefined || outputTokens === undefined) {
+    return undefined;
+  }
+  return {
+    inputTokens,
+    cachedInputTokens: 0,
+    cacheCreationTokens: 0,
+    outputTokens,
+    reasoningOutputTokens: 0,
+    totalTokens: inputTokens + outputTokens
+  };
+}
+
+function parseCount(raw: string | undefined): number | undefined {
+  if (raw === undefined) {
+    return undefined;
+  }
+  const value = Number(raw.replaceAll(",", ""));
+  return Number.isFinite(value) ? value : undefined;
+}
+
+function failedResult(
+  exitReason: "timeout" | "crashed" | "window_exhausted",
+  telemetry: AiderTelemetry,
+  gitState: Pick<WriterResult, "diff" | "commits">
+): WriterResult {
+  return { ...gitState, exitReason, tokenUsage: telemetry.tokenUsage, telemetry };
+}
