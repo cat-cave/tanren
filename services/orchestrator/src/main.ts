@@ -14,6 +14,7 @@ import { storeGithubToken } from "./engine/credentials/githubToken.js";
 import { FetchGitHubHttpClient, type GitHubHttpClient } from "./engine/providers/github.js";
 import { GithubAppTokenMinter } from "./engine/providers/githubAppTokenMinter.js";
 import { mountGithubAppInstallFromEnv } from "./routes/auth/githubAppInstall.js";
+import { TimedGitHubHttpClient, TimedSshSubstrate } from "./engine/observability/index.js";
 import { Ssh2Substrate } from "./engine/ssh/index.js";
 import { runWorkerEnabled, startRunWorker } from "./engine/worker/index.js";
 import { CiPullRequestNotFoundError, CiRunNotFoundError, pollCiForRun } from "./engine/workflow/ciPolling.js";
@@ -105,7 +106,9 @@ export async function createApp() {
     auth: buildAuthFromEnv(pool),
     helloDependencies: {
       allocator: buildAllocatorFromEnv(pool),
-      ssh: new Ssh2Substrate(runnerSecrets),
+      // P3-0029: wrap the SSH substrate so every runner command emits a
+      // boundary timing record. Behavior is unchanged; this only measures.
+      ssh: new TimedSshSubstrate(new Ssh2Substrate(runnerSecrets)),
       identitySecretRef: runnerIdentitySecretRef
     }
   });
@@ -201,7 +204,9 @@ export function buildApp(input: {
 }) {
   const app = new Hono<ActorContextEnv>();
   const secrets = input.secrets ?? new InMemorySecretStore();
-  const githubHttp = input.githubHttp ?? new FetchGitHubHttpClient();
+  // P3-0029: wrap the GitHub HTTP client so every API round trip emits a
+  // boundary timing record (with method, path template, status, 429 flag).
+  const githubHttp = new TimedGitHubHttpClient(input.githubHttp ?? new FetchGitHubHttpClient());
   const identitySecretRef = input.runnerIdentitySecretRef ?? runnerIdentitySecretRef;
   const vaultHealthCheck = input.vaultHealthCheck ?? vaultHealth;
   // P3-0003: one shared minter so installation-token caching spans routes.
@@ -479,9 +484,12 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     startRunWorker({
       pool: workerPool,
       allocator: buildAllocatorFromEnv(workerPool),
-      ssh: new Ssh2Substrate(workerSecrets),
+      // P3-0029: same boundary timing wrappers as the HTTP server path. The
+      // worker internals (P3-0028) are untouched — only its injected SSH /
+      // GitHub clients are decorated here at the construction site.
+      ssh: new TimedSshSubstrate(new Ssh2Substrate(workerSecrets)),
       secrets: workerSecrets,
-      githubHttp: new FetchGitHubHttpClient(),
+      githubHttp: new TimedGitHubHttpClient(new FetchGitHubHttpClient()),
       identitySecretRef: runnerIdentitySecretRef
     });
     console.log("run worker started");

@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import type pg from "pg";
 import type { AuditAnswer, CheckAnswer, PlanAnswer, PlanSubtask } from "../answerers/schemas/index.js";
 import type { EventName, EventPayload } from "../events/index.js";
+import { emitStageTiming } from "../observability/index.js";
 import type { AnswererAdapter, WriterAdapter, WriterResult } from "../providers/types.js";
 import {
   decideAuditorOutcome,
@@ -58,6 +59,8 @@ export async function runPlannerStage(args: PlannerStageInput): Promise<PlanAnsw
     rejectionHistory: args.rejectionHistory
   });
   const runtimeSeconds = secondsSince(startedAt);
+  // P3-0029: stage-transition latency as a structured timing log (no schema).
+  emitStageTiming("plan", Date.now() - startedAt, { runId: args.runId, attempt: args.attempt });
   await args.appendEvent(
     "planner.subtasks.emitted",
     {
@@ -130,6 +133,7 @@ export async function runWriterStage(args: WriterStageInput): Promise<WriterResu
     timeoutMs: args.timeoutMs
   });
   const runtimeSeconds = secondsSince(startedAt);
+  emitStageTiming("write", Date.now() - startedAt, { runId: args.runId, subtaskIndex: args.subtask.index });
   await args.appendEvent(
     "writer.subtask.completed",
     {
@@ -203,6 +207,7 @@ export async function runCheckerStage(args: CheckerStageInput): Promise<CheckerD
     workspace: args.workspacePath
   });
   const runtimeSeconds = secondsSince(startedAt);
+  emitStageTiming("check", Date.now() - startedAt, { runId: args.runId, subtaskIndex: args.subtask.index });
   await args.appendEvent(
     "checker.verdict",
     {
@@ -292,6 +297,7 @@ export async function runAuditorStage(args: AuditorStageInput): Promise<{ decisi
     workspace: args.workspacePath
   });
   const runtimeSeconds = secondsSince(startedAt);
+  emitStageTiming("audit", Date.now() - startedAt, { runId: args.runId });
   await args.appendEvent(
     "auditor.verdict",
     {
