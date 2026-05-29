@@ -44,6 +44,7 @@ Optional:
 | `TANREN_OIDC_ISSUER` | _(unset)_ | OIDC issuer URL. Registers the `oidc` provider when set together with the client id/secret (see OIDC below). |
 | `TANREN_OIDC_CLIENT_ID` | _(unset)_ | OIDC confidential-client id. |
 | `TANREN_OIDC_CLIENT_SECRET` | _(unset)_ | OIDC confidential-client secret. |
+| `TANREN_OIDC_PRESET` | _(unset)_ | Optional turnkey claim-mapping preset. `authentik` fills Authentik's standard claim shape + scopes by default so a homelab operator only supplies issuer + client id/secret. See [oidc-authentik.md](oidc-authentik.md). |
 | `TANREN_OIDC_SCOPES` | `openid profile email groups` | Space-separated OAuth scopes requested at authorize time. |
 | `TANREN_OIDC_SUBJECT_CLAIM` | `sub` | userinfo claim used as the stable subject. |
 | `TANREN_OIDC_LOGIN_CLAIM` | `preferred_username` | userinfo claim used as the login/username. |
@@ -73,6 +74,10 @@ In Authentik, create an **OAuth2/OpenID Provider** plus an Application bound to 
 - **Issuer:** set `TANREN_OIDC_ISSUER` to the provider's issuer URL (Authentik exposes discovery at `<issuer>/.well-known/openid-configuration`).
 
 Restart the orchestrator after setting the envs; `GET /auth/providers` then lists `oidc` alongside `github_oauth`.
+
+### Authentik turnkey preset
+
+For a self-hosted homelab Authentik you can skip the per-claim env tuning entirely. Set `TANREN_OIDC_PRESET=authentik` and the orchestrator fills Authentik's standard claim shape (`sub` -> subject, `preferred_username` -> login, `name` -> display name, `email`, `groups` -> orgs) and the `openid profile email groups` scopes by default, so you only supply issuer + client id/secret. Every preset value stays overridable — an explicit `TANREN_OIDC_*` env always wins. With no preset, the generic provider behavior is unchanged. A full homelab walkthrough (Authentik app/provider registration, a same-network compose snippet, and a `.env` example) lives in [oidc-authentik.md](oidc-authentik.md).
 
 ## Cloudflared tunnel exposure profile — P3-0030
 
