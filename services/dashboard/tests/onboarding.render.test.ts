@@ -165,13 +165,13 @@ describe("org-setup wizard", () => {
     expect(html).toContain("never re-shown");
   });
 
-  it("step 3 renders the notifications matrix with unwired-channel hints", async () => {
+  it("step 3 renders the notifications matrix with all channels wired", async () => {
     mockOrchestrator();
     const app = await build();
     const html = await (await app.request("/onboarding/org?step=3")).text();
     expect(html).toContain("run.failed");
-    expect(html).toContain("configured but not yet wired");
-    expect(html).toContain("phase-v0"); // ntfy is the wired channel
+    expect(html).toContain("all channel kinds dispatch");
+    expect(html).toContain("phase-v0"); // ntfy is a wired channel
   });
 
   it("step 4 shows local-docker active + cloud allocators as phase-badged stubs", async () => {
@@ -187,16 +187,16 @@ describe("org-setup wizard", () => {
 });
 
 describe("notifications matrix", () => {
-  it("renders all nine channels with phase badges, only ntfy marked wired", async () => {
+  it("renders all nine channels with phase badges, all marked wired", async () => {
     mockOrchestrator();
     const app = await build();
     const html = await (await app.request("/notifications")).text();
     for (const channel of ["ntfy", "slack", "microsoft teams", "pagerduty", "webhook · custom"]) {
       expect(html).toContain(channel);
     }
-    // Unwired channels visibly say so; ntfy does not.
-    expect(html).toContain("configured but not yet wired");
-    expect(html).toContain("only ntfy delivers in v0");
+    // All channels now dispatch once their credentials are configured.
+    expect(html).toContain("all channel kinds dispatch");
+    expect(html).not.toContain("configured but not yet wired");
   });
 
   it("add-target form POST proxies to the orchestrator", async () => {
