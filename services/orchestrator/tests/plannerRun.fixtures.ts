@@ -24,6 +24,7 @@ import {
 export {
   buildPlan,
   failingCheck,
+  loopAudit,
   makeAuditor,
   makeChecker,
   makePlanner,
@@ -142,15 +143,94 @@ export function twoSubtaskAdapters(checks: ReadonlyArray<CheckAnswer>) {
   };
 }
 
-export async function setup() {
+export async function setup(projectConfig?: Record<string, unknown>) {
   const ctx = context();
-  const pool = new PlannerRunPool(ctx);
+  const pool = new PlannerRunPool(ctx, projectConfig);
   const events = new FakeEventStore();
   const secrets = new FakeSecretStore();
   await storeGithubToken(secrets, { ref: ctx.githubCredentialRef, token: "ghp_secretToken" });
   const allocator = new RecordingAllocator();
   const ssh = new RecordingSsh();
   return { ctx, pool, events, secrets, allocator, ssh };
+}
+
+// Project config that routes the merge stage down the direct-merge branch with
+// an open governance posture (so the posture gate proceeds without a contributor
+// lookup). The merge probe then decides merged / conflict / failed.
+export function directMergeConfig(): Record<string, unknown> {
+  return {
+    // version:1 so migrateProjectConfig reads it (an unversioned config is
+    // ignored → not_configured/strict defaults). Strict schema, so the static
+    // credential ref lives under `credentials`.
+    version: 1,
+    mergeIntegration: "direct_merge",
+    governancePosture: "open",
+    credentials: { githubCredentialRef: "credential/github/dev" },
+  };
+}
+
+// A review probe that returns changes_requested with a written body, then
+// approved on the next poll — used to drive the review-rework re-entry.
+export function changesThenApproveReview() {
+  let calls = 0;
+  return {
+    markReady: async () => undefined,
+    fetchVerdict: async () => {
+      calls += 1;
+      if (calls === 1) {
+        return {
+          verdict: "changes_requested" as const,
+          latest: { state: "changes_requested" as const, reviewer: "reviewer-bot", body: "please rename ok()" },
+        };
+      }
+      return { verdict: "approved" as const, latest: { state: "approved" as const, reviewer: "reviewer-bot" } };
+    },
+  };
+}
+
+// A review probe that always returns changes_requested (with feedback), used to
+// drive the rework-budget-exhausted halt.
+export function alwaysChangesReview() {
+  return {
+    markReady: async () => undefined,
+    fetchVerdict: async () => ({
+      verdict: "changes_requested" as const,
+      latest: { state: "changes_requested" as const, reviewer: "reviewer-bot", body: "still wrong" },
+    }),
+  };
+}
+
+// A review probe whose verdict never resolves (stays pending) — drives the
+// pending-after-budget halt branch.
+export function pendingReview() {
+  return {
+    markReady: async () => undefined,
+    fetchVerdict: async () => ({ verdict: "pending" as const }),
+  };
+}
+
+// Direct-merge probe whose merge() reports a GitHub-detected conflict (405/409).
+export function conflictMerge() {
+  return {
+    applyQueueLabel: async () => undefined,
+    merge: async () => ({ merged: false, conflict: true, status: 409, message: "merge conflict" }),
+  };
+}
+
+// Direct-merge probe whose merge() neither merges nor conflicts → failed.
+export function failedMerge() {
+  return {
+    applyQueueLabel: async () => undefined,
+    merge: async () => ({ merged: false, conflict: false, status: 500, message: "merge api error" }),
+  };
+}
+
+// Direct-merge probe whose merge() succeeds.
+export function mergedMerge() {
+  return {
+    applyQueueLabel: async () => undefined,
+    merge: async () => ({ merged: true, mergeSha: "merge-sha", conflict: false, status: 200, message: "merged" }),
+  };
 }
 
 // P3-0008: inject an approving review probe + a no-op merge probe so the
@@ -255,11 +335,24 @@ export class PlannerRunPool {
   runStatus: { status: string; outcome: string | null } = { status: "queued", outcome: null };
   prUrl: string | null = null;
   readonly taskKinds: string[] = [];
+  // Every `UPDATE specs SET status = ...` in spec-write order. The review-rework
+  // re-entry writes 'in_flight'; the merged/handed-off tail writes merged/done.
+  readonly specStatuses: string[] = [];
   private readonly costRows: Array<{ id: string; total_tokens: number }> = [];
   private nextCostId = 1;
   private ciTask: { taskId: string; attempt: number } | undefined;
 
-  constructor(private readonly runContext: PlannerRunContext) {}
+  // The project config row the review/merge tail loads. Defaults to the
+  // not_configured hand-off; tests pass { mergeIntegration: "direct_merge",
+  // governancePosture: "open", ... } to exercise the direct-merge branches.
+  private readonly projectConfig: Record<string, unknown>;
+
+  constructor(
+    private readonly runContext: PlannerRunContext,
+    projectConfig?: Record<string, unknown>,
+  ) {
+    this.projectConfig = projectConfig ?? { githubCredentialRef: runContext.githubCredentialRef };
+  }
 
   async query(sql: string, params: unknown[] = []): Promise<{ rows: unknown[]; rowCount: number }> {
     const trimmed = sql.trim();
@@ -291,7 +384,7 @@ export class PlannerRunPool {
             spec_id: this.runContext.specId,
             project_id: this.runContext.projectId,
             pr_url: this.prUrl,
-            config: { githubCredentialRef: this.runContext.githubCredentialRef },
+            config: this.projectConfig,
             // P3-0008 review/merge context columns (shares this SELECT prefix).
             default_branch: "main",
             org_config: null,
@@ -299,6 +392,17 @@ export class PlannerRunPool {
         ],
         rowCount: 1,
       };
+    }
+    if (trimmed.startsWith("UPDATE specs SET status = 'in_flight'")) {
+      // The review-rework re-entry sets the spec back in_flight (status inline,
+      // $1 = spec_id) before re-running the loop against the reviewer feedback.
+      this.specStatuses.push("in_flight");
+      return { rows: [], rowCount: 1 };
+    }
+    if (trimmed.startsWith("UPDATE specs SET status = $2")) {
+      // The merged / handed-off tail sets the final spec status ($2 = status).
+      this.specStatuses.push(String(params[1]));
+      return { rows: [], rowCount: 1 };
     }
     if (trimmed.startsWith("SELECT task_id, attempt")) {
       return {
