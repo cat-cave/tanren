@@ -60,21 +60,19 @@ const SideNav = ({ active, onNav }) => {
   const proj = [
     { id: "project",  glyph: "◇", label: "tanren-fixture-easy", count: 2, countWarn: false },
     { id: "discovery", glyph: "+", label: "discover spec" },
+    { id: "inbox",     glyph: "▤", label: "candidate inbox", count: 11, countWarn: false },
     { id: "failure",   glyph: "×", label: "halted runs", count: 1, countWarn: true },
   ];
-  const setup = [
+  const system = [
+    { id: "audits",        glyph: "⟳", label: "scheduled audits" },
     { id: "settings",      glyph: "⚙", label: "routing & limits" },
+    { id: "config",        glyph: "⊟", label: "tanren-config" },
     { id: "notifications", glyph: "✉", label: "notifications" },
-  ];
-  const onboard = [
-    { id: "onb-org",   glyph: "鍛", label: "org setup", kanji: true },
-    { id: "onb-new",   glyph: "+", label: "new project" },
-    { id: "onb-exist", glyph: "↗", label: "existing project" },
   ];
   const renderRow = (it) => (
     <a
       key={it.id}
-      className={active === it.id || (it.id === "project" && (active === "run" || active === "review")) ? "active" : ""}
+      className={active === it.id || (it.id === "project" && (active === "run" || active === "review" || active === "spec")) ? "active" : ""}
       onClick={() => !it.soon && onNav?.(it.id)}
       style={it.soon ? { opacity: 0.5, cursor: "default" } : null}
     >
@@ -90,10 +88,8 @@ const SideNav = ({ active, onNav }) => {
       {org.map(renderRow)}
       <div className="group-label" style={{ marginTop: 8 }}>▮ projects</div>
       {proj.map(renderRow)}
-      <div className="group-label" style={{ marginTop: 8 }}>▮ set up</div>
-      {setup.map(renderRow)}
-      <div className="group-label" style={{ marginTop: 8 }}>▮ onboarding</div>
-      {onboard.map(renderRow)}
+      <div className="group-label" style={{ marginTop: 8 }}>▮ system</div>
+      {system.map(renderRow)}
     </nav>
   );
 };
@@ -116,17 +112,37 @@ const KpiStrip = ({ items }) => (
 // =====================================================================
 // FORGE PALETTE (⌘K modal)
 // =====================================================================
-const ForgePalette = ({ open, onClose, onAction }) => {
+// Forge · unified ⌘K palette that MORPHS into a chat thread.
+//   palette mode — search / command / navigate (grouped suggestions)
+//   chat mode    — a real thread: forge answers, chips to follow up, and
+//                  action cards that auto-navigate mid-conversation.
+// Navigation items route immediately; ask/free-text items morph to chat.
+const ForgePalette = ({ open, onClose, onAction, seed, onSeedConsumed }) => {
+  const [mode, setMode] = React.useState("palette");
   const [query, setQuery] = React.useState("");
   const [active, setActive] = React.useState(0);
+  const [messages, setMessages] = React.useState([]);
   const inputRef = React.useRef();
+  const msgsRef = React.useRef();
 
   React.useEffect(() => {
     if (open) {
-      setTimeout(() => inputRef.current?.focus(), 50);
+      setTimeout(() => inputRef.current?.focus(), 60);
       setQuery(""); setActive(0);
+      if (seed && FORGE_ANSWERS[seed]) {
+        const a = FORGE_ANSWERS[seed];
+        setMode("chat");
+        setMessages([{ who: "user", text: a.q || "tell me about this" }, { who: "forge", ...a }]);
+        onSeedConsumed?.();
+      } else {
+        setMode("palette"); setMessages([]);
+      }
     }
   }, [open]);
+
+  React.useEffect(() => {
+    if (msgsRef.current) msgsRef.current.scrollTop = msgsRef.current.scrollHeight;
+  }, [messages]);
 
   if (!open) return null;
 
@@ -136,77 +152,133 @@ const ForgePalette = ({ open, onClose, onAction }) => {
     : null;
   const items = filtered || flat;
 
+  // Append a user turn + forge's answer (keyed canned answer, or generic).
+  const askForge = (text, key) => {
+    const answer = (key && FORGE_ANSWERS[key]) || FORGE_ANSWERS.generic;
+    setMode("chat");
+    setMessages(m => [...m, { who: "user", text }, { who: "forge", ...answer }]);
+    setQuery("");
+  };
+
+  const exec = (it) => {
+    if (it.route) { onAction?.("nav", it.route); onClose(); return; }
+    if (it.ask)   { askForge(it.title, it.ask); return; }
+    onClose();
+  };
+
   const onKey = (e) => {
     if (e.key === "Escape") { onClose(); return; }
+    if (mode === "chat") {
+      if (e.key === "Enter" && query.trim()) { e.preventDefault(); askForge(query.trim(), "generic"); }
+      return;
+    }
     if (e.key === "ArrowDown") { e.preventDefault(); setActive(a => Math.min(items.length - 1, a + 1)); }
     if (e.key === "ArrowUp")   { e.preventDefault(); setActive(a => Math.max(0, a - 1)); }
     if (e.key === "Enter") {
       e.preventDefault();
-      const it = items[active];
-      if (it?.route) { onAction?.("nav", it.route); onClose(); }
-      else onClose();
+      if (items[active]) exec(items[active]);
+      else if (query.trim()) askForge(query.trim(), "generic");
     }
   };
 
-  const groupsToShow = filtered
-    ? [{ group: "results", items: filtered }]
-    : FORGE_PALETTE;
-
+  const groupsToShow = filtered ? [{ group: "results", items: filtered }] : FORGE_PALETTE;
   let idx = 0;
 
   return (
     <div className="forge-backdrop" onClick={onClose}>
-      <div className="forge-modal" onClick={e => e.stopPropagation()}>
+      <div className={"forge-modal" + (mode === "chat" ? " chat-mode" : "")} onClick={e => e.stopPropagation()}>
         <div className="input-row">
           <span className="stamp">鍛</span>
+          {mode === "chat" && (
+            <button className="fc-back" onClick={() => { setMode("palette"); setMessages([]); setQuery(""); }} title="back to commands">←</button>
+          )}
           <input
             ref={inputRef}
             value={query}
             onChange={e => { setQuery(e.target.value); setActive(0); }}
             onKeyDown={onKey}
-            placeholder="ask, command, or describe…"
+            placeholder={mode === "chat" ? "follow up · ↵ to send" : "ask, command, or describe…"}
           />
           <span className="esc">esc</span>
         </div>
-        <div className="results">
-          {groupsToShow.map((g, gi) => (
-            <React.Fragment key={gi}>
-              <div className="group">▮ {g.group}</div>
-              {g.items.map((it) => {
-                const myIdx = idx++;
-                const isActive = myIdx === active;
-                return (
-                  <div
-                    key={myIdx}
-                    className={"item" + (isActive ? " active" : "")}
-                    onMouseEnter={() => setActive(myIdx)}
-                    onClick={() => {
-                      if (it.route) { onAction?.("nav", it.route); onClose(); }
-                      else onClose();
-                    }}
-                  >
-                    <div className={"glyph" + (it.kanji ? " kanji" : "")}>{it.glyph}</div>
-                    <div>
-                      <div className="t">{it.title}</div>
-                      <div className="d">{it.desc}</div>
+
+        {mode === "palette" && (
+          <div className="results">
+            {groupsToShow.map((g, gi) => (
+              <React.Fragment key={gi}>
+                <div className="group">▮ {g.group}</div>
+                {g.items.map((it) => {
+                  const myIdx = idx++;
+                  const isActive = myIdx === active;
+                  return (
+                    <div
+                      key={myIdx}
+                      className={"item" + (isActive ? " active" : "")}
+                      onMouseEnter={() => setActive(myIdx)}
+                      onClick={() => exec(it)}
+                    >
+                      <div className={"glyph" + (it.kanji ? " kanji" : "")}>{it.glyph}</div>
+                      <div>
+                        <div className="t">{it.title}</div>
+                        <div className="d">{it.desc}</div>
+                      </div>
+                      <div className="k">{it.ask ? "ask ↵" : "↵"}</div>
                     </div>
-                    <div className="k">↵</div>
-                  </div>
-                );
-              })}
-            </React.Fragment>
-          ))}
-          {items.length === 0 && (
-            <div style={{ padding: "20px 18px", fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--fg-3)" }}>
-              No matches. Press ↵ to ask forge anyway.
-            </div>
-          )}
-        </div>
+                  );
+                })}
+              </React.Fragment>
+            ))}
+            {items.length === 0 && (
+              <div className="forge-empty">
+                No command matches “{query}”. Press ↵ to ask forge in chat.
+              </div>
+            )}
+          </div>
+        )}
+
+        {mode === "chat" && (
+          <div className="forge-chat" ref={msgsRef}>
+            {messages.map((m, i) => (
+              <div key={i} className={"fc-msg " + m.who}>
+                <div className="who">{m.who === "user" ? "TW" : "鍛"}</div>
+                <div className="fc-col">
+                  <div className="fc-bubble" dangerouslySetInnerHTML={{ __html: m.text }} />
+                  {m.card && (
+                    <div className="fc-card" onClick={() => { onAction?.("nav", m.card.route, m.card.payload); onClose(); }}>
+                      <div className="lbl">▸ {m.card.lbl}</div>
+                      <div className="t">{m.card.title}</div>
+                      <div className="go">↗</div>
+                    </div>
+                  )}
+                  {m.chips && (
+                    <div className="fc-chips">
+                      {m.chips.map((c, j) => (
+                        <span key={j} className="chip" onClick={() => askForge(c, "generic")}><span className="pre">↑</span> {c}</span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
         <div className="footer">
-          <span>↑↓ navigate</span>
-          <span>↵ select</span>
-          <span>esc close</span>
-          <span style={{ marginLeft: "auto", color: "var(--ember-08)" }}>forge palette · ⌘K</span>
+          {mode === "chat" ? (
+            <>
+              <span>↵ send</span>
+              <span>← commands</span>
+              <span>esc close</span>
+              <span style={{ marginLeft: "auto", color: "var(--ember-08)" }}>forge · chat</span>
+            </>
+          ) : (
+            <>
+              <span>↑↓ navigate</span>
+              <span>↵ select</span>
+              <span>esc close</span>
+              <span style={{ marginLeft: "auto", color: "var(--ember-08)" }}>forge · ⌘K</span>
+            </>
+          )}
         </div>
       </div>
     </div>

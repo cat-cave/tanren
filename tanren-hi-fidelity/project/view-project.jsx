@@ -83,7 +83,7 @@ const DagSnapshot = ({ onNodeClick }) => (
           className="dag-node"
           transform={`translate(${n.x}, ${ny})`}
           onClick={() => onNodeClick?.(n)}
-          style={{ cursor: n.s === "queued" ? "default" : "pointer" }}
+          style={{ cursor: "pointer" }}
         >
           {pulses && (
             <rect
@@ -250,7 +250,7 @@ const ForgeNarrationCard = ({ onAttn, onSubopt, showSubopt, onNav }) => {
 // =====================================================================
 // PROJECT VIEW · CHAT-PRIMARY
 // =====================================================================
-const ProjectViewChat = ({ onNav, mode, setMode, showSubopt }) => (
+const ProjectViewChat = ({ onNav, onOpenSpec, mode, setMode, showSubopt }) => (
   <>
     <PageHead
       eyebrow="▮ project · tanren-fixture-easy"
@@ -259,7 +259,7 @@ const ProjectViewChat = ({ onNav, mode, setMode, showSubopt }) => (
         <>
           <span className="pill run"><span className="d"></span>forge live · 12s ago</span>
           <button className="btn" onClick={() => setMode("dag")}>↹ full dag</button>
-          <button className="btn primary notched">+ discover spec ↗</button>
+          <button className="btn primary notched" onClick={() => onNav?.("discovery")}>+ discover spec ↗</button>
         </>
       }
     />
@@ -267,7 +267,10 @@ const ProjectViewChat = ({ onNav, mode, setMode, showSubopt }) => (
     <div className="page-body">
       <div className="split-row split-chat">
         <ForgeNarrationCard onNav={onNav} showSubopt={showSubopt}
-          onAttn={(a) => { if (a.route === "review") onNav?.("review"); }}
+          onAttn={(a) => {
+            const route = a.route === "budget" ? "costs" : a.route;
+            if (["review", "discovery", "costs"].includes(route)) onNav?.(route);
+          }}
         />
         <div className="col" style={{ gap: 12, minHeight: 0 }}>
           <div className="dag-shell">
@@ -278,10 +281,7 @@ const ProjectViewChat = ({ onNav, mode, setMode, showSubopt }) => (
               <button className="seg-btn" style={{ marginLeft: "auto" }} onClick={() => setMode("dag")}>expand ⤢</button>
             </div>
             <div className="dag-canvas">
-              <DagSnapshot onNodeClick={(n) => {
-                const r = routeForNode(n);
-                if (r) onNav?.(r);
-              }} />
+              <DagSnapshot onNodeClick={(n) => onOpenSpec?.(n)} />
             </div>
           </div>
           <VelocityCard />
@@ -294,7 +294,7 @@ const ProjectViewChat = ({ onNav, mode, setMode, showSubopt }) => (
 // =====================================================================
 // PROJECT VIEW · DAG-PRIMARY
 // =====================================================================
-const ProjectViewDag = ({ onNav, setMode, showSubopt }) => {
+const ProjectViewDag = ({ onNav, onOpenSpec, setMode, showSubopt }) => {
   const [group, setGroup] = React.useState("milestone");
   return (
     <>
@@ -308,7 +308,7 @@ const ProjectViewDag = ({ onNav, setMode, showSubopt }) => {
             <button className="btn" onClick={() => setMode("chat")}>
               <span style={{ fontFamily: "var(--font-jp)", fontSize: 13, color: "var(--ember-08)" }}>鍛</span> expand forge
             </button>
-            <button className="btn primary notched">+ discover spec ↗</button>
+            <button className="btn primary notched" onClick={() => onNav?.("discovery")}>+ discover spec ↗</button>
           </>
         }
       />
@@ -326,11 +326,11 @@ const ProjectViewDag = ({ onNav, setMode, showSubopt }) => {
                 ▮ 3 need you
               </span>
               {[
-                { n: 1, kind: "review",  t: "PR #142 · supplier scorecard",   sub: "review-ready · 2h",   route: "review" },
-                { n: 2, kind: "budget",  t: "M5 will need claude credits",    sub: "forecast · 9d out",   route: null },
-                { n: 3, kind: "blocked", t: "edi-mapping-ui · 4h 12m stuck",  sub: "behind M5 decision",  route: null },
+                { n: 1, kind: "review",  t: "PR #142 · supplier scorecard",   sub: "review-ready · 2h",   act: () => onNav?.("review") },
+                { n: 2, kind: "budget",  t: "M5 will need claude credits",    sub: "forecast · 9d out",   act: () => onNav?.("costs") },
+                { n: 3, kind: "blocked", t: "edi-mapping-ui · 4h 12m stuck",  sub: "behind M5 decision",  act: () => onOpenSpec?.({ t: "edi mapping ui", s: "blocked" }) },
               ].map((item) => (
-                <div key={item.n} className={"needs-item kind-" + item.kind} onClick={() => item.route && onNav?.(item.route)}>
+                <div key={item.n} className={"needs-item kind-" + item.kind} onClick={() => item.act && item.act()}>
                   <span className={"badge-num kind-" + item.kind}>{item.n}</span>
                   <div>
                     <div className="t">{item.t}</div>
@@ -354,10 +354,7 @@ const ProjectViewDag = ({ onNav, setMode, showSubopt }) => {
               </div>
             </div>
             <div className="dag-canvas">
-              <DagSnapshot onNodeClick={(n) => {
-                const r = routeForNode(n);
-                if (r) onNav?.(r);
-              }} />
+              <DagSnapshot onNodeClick={(n) => onOpenSpec?.(n)} />
             </div>
 
             {/* Legend — bottom-left, anchored. Reads as a graphical key, not chrome. */}
@@ -449,10 +446,10 @@ const ProjectViewDag = ({ onNav, setMode, showSubopt }) => {
 // =====================================================================
 // EXPORT
 // =====================================================================
-const ProjectView = ({ onNav, mode, setMode, showSubopt }) => {
+const ProjectView = ({ onNav, onOpenSpec, mode, setMode, showSubopt }) => {
   return mode === "dag"
-    ? <ProjectViewDag onNav={onNav} setMode={setMode} showSubopt={showSubopt} />
-    : <ProjectViewChat onNav={onNav} mode={mode} setMode={setMode} showSubopt={showSubopt} />;
+    ? <ProjectViewDag onNav={onNav} onOpenSpec={onOpenSpec} setMode={setMode} showSubopt={showSubopt} />
+    : <ProjectViewChat onNav={onNav} onOpenSpec={onOpenSpec} mode={mode} setMode={setMode} showSubopt={showSubopt} />;
 };
 
 window.ProjectView = ProjectView;

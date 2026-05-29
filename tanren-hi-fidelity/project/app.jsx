@@ -1,16 +1,18 @@
-// app.jsx — top-level shell. Routing, surface theme, Tweaks, ⌘K.
+// app.jsx — top-level shell. Routing, surface theme, Tweaks, ⌘K Forge.
 
 const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "surface": "ink",
   "projectMode": "chat",
   "showSubopt": true,
   "discoveryVariant": "feature",
-  "auditGate": false,
+  "auditGate": true,
   "mergeIntegration": "mergify"
 }/*EDITMODE-END*/;
 
-// Onboarding routes are shells of their own (no sidebar). All other routes
-// land in the main app shell.
+// Onboarding routes are designer-convenience shells (no sidebar). In a real
+// product, onboarding is a once-per-org first-run flow, not standing nav —
+// so it's reachable only from the Tweaks "all flows" panel and the Overview
+// "+ new project" / "+ link existing" buttons, never the product sidebar.
 const ONBOARDING_ROUTES = ["onb-org", "onb-new", "onb-exist"];
 
 const App = () => {
@@ -21,6 +23,12 @@ const App = () => {
   const [view, setView] = React.useState("project");
   const [onbStep, setOnbStep] = React.useState(1);
   const [forgeOpen, setForgeOpen] = React.useState(false);
+  const [forgeSeed, setForgeSeed] = React.useState(null);
+
+  // Spec surface: a node click opens the minimal drawer; "open full page"
+  // escalates to the SpecView route. Both read the same node.
+  const [specNode, setSpecNode] = React.useState(null);
+  const [specDrawerOpen, setSpecDrawerOpen] = React.useState(false);
 
   React.useEffect(() => {
     document.documentElement.dataset.theme = t.surface === "ash" ? "light" : "dark";
@@ -30,30 +38,44 @@ const App = () => {
     const onKey = (e) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
+        setForgeSeed(null);
         setForgeOpen(o => !o);
       }
-      if (e.key === "Escape" && forgeOpen) setForgeOpen(false);
+      if (e.key === "Escape") {
+        if (specDrawerOpen) { setSpecDrawerOpen(false); return; }
+        if (forgeOpen) setForgeOpen(false);
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [forgeOpen]);
+  }, [forgeOpen, specDrawerOpen]);
 
   const onNav = (id, payload) => {
-    // Reset step counter whenever we enter an onboarding flow
-    if (ONBOARDING_ROUTES.includes(id)) {
-      setOnbStep(1);
+    if (ONBOARDING_ROUTES.includes(id)) setOnbStep(1);
+    if (id === "spec") {
+      const node = typeof payload === "string"
+        ? { t: payload, s: (window.SPECS[payload] && window.SPECS[payload].status) || "queued" }
+        : (payload || specNode);
+      setSpecNode(node);
+      setSpecDrawerOpen(false);
     }
     setView(id);
   };
 
+  // Open the minimal drawer over the current view (from a DAG node click).
+  const openSpec = (node) => { setSpecNode(node); setSpecDrawerOpen(true); };
+
+  // Open Forge straight into a chat answer (from "ask forge" affordances).
+  const onAsk = (key) => { setForgeSeed(key); setForgeOpen(true); };
+
   const onForgeAction = (action, payload) => {
-    if (action === "nav") onNav(payload);
+    if (action === "nav") onNav(payload, undefined);
   };
 
   const isOnboarding = ONBOARDING_ROUTES.includes(view);
 
   const projectName = view === "project" ? null :
-                      view === "run" || view === "review" ? "tanren-fixture-easy" :
+                      view === "run" || view === "review" || view === "spec" ? "tanren-fixture-easy" :
                       view === "discovery" ? "tanren-fixture-easy · + discover" :
                       view === "failure" ? "tanren-fixture-easy · halted run" :
                       null;
@@ -70,6 +92,8 @@ const App = () => {
           open={forgeOpen}
           onClose={() => setForgeOpen(false)}
           onAction={onForgeAction}
+          seed={forgeSeed}
+          onSeedConsumed={() => setForgeSeed(null)}
         />
 
         {renderTweaks(t, setTweak, view, setView, setOnbStep, setForgeOpen)}
@@ -84,22 +108,27 @@ const App = () => {
         project={projectName}
         surface={t.surface}
         setSurface={(v) => setTweak("surface", v)}
-        onForge={() => setForgeOpen(true)}
+        onForge={() => { setForgeSeed(null); setForgeOpen(true); }}
       />
       <SideNav active={view} onNav={onNav} />
       <main className="main">
         {view === "project" && (
           <ProjectView
             onNav={onNav}
+            onOpenSpec={openSpec}
             mode={t.projectMode}
             setMode={(m) => setTweak("projectMode", m)}
             showSubopt={t.showSubopt}
           />
         )}
+        {view === "spec" && <window.SpecView node={specNode} onNav={onNav} onAsk={onAsk} />}
         {view === "run" && <RunView onNav={onNav} showSubopt={t.showSubopt} />}
         {view === "review" && <ReviewView onNav={onNav} showSubopt={t.showSubopt} mergeIntegration={t.mergeIntegration} />}
         {view === "discovery" && <window.DiscoveryView onNav={onNav} variant={t.discoveryVariant} />}
         {view === "failure" && <window.FailureView onNav={onNav} />}
+        {view === "inbox" && <window.InboxView onNav={onNav} />}
+        {view === "audits" && <window.AuditsView onNav={onNav} />}
+        {view === "config" && <window.ConfigView onNav={onNav} auditGate={t.auditGate} setAuditGate={(v) => setTweak("auditGate", v)} />}
         {view === "settings" && <window.SettingsView onNav={onNav} auditGate={t.auditGate} />}
         {view === "costs" && <window.CostsView onNav={onNav} />}
         {view === "notifications" && <window.NotificationsView onNav={onNav} />}
@@ -109,18 +138,29 @@ const App = () => {
         {view === "dora" && <window.DoraView onNav={onNav} />}
       </main>
 
+      {specDrawerOpen && (
+        <window.SpecDrawer
+          node={specNode}
+          onClose={() => setSpecDrawerOpen(false)}
+          onOpenSpec={(n) => setSpecNode(n)}
+          onNav={(id) => { setSpecDrawerOpen(false); onNav(id); }}
+          onAsk={(k) => { setSpecDrawerOpen(false); onAsk(k); }}
+          onFullPage={(n) => { setSpecDrawerOpen(false); setSpecNode(n); setView("spec"); }}
+        />
+      )}
+
       <ForgePalette
         open={forgeOpen}
         onClose={() => setForgeOpen(false)}
         onAction={onForgeAction}
+        seed={forgeSeed}
+        onSeedConsumed={() => setForgeSeed(null)}
       />
 
       {renderTweaks(t, setTweak, view, setView, setOnbStep, setForgeOpen)}
     </div>
   );
 };
-
-// PlaceholderView used to live here; every nav target now has a real view.
 
 const renderTweaks = (t, setTweak, view, setView, setOnbStep, setForgeOpen) => {
   if (!window.TweaksPanel) return null;
@@ -158,6 +198,14 @@ const renderTweaks = (t, setTweak, view, setView, setOnbStep, setForgeOpen) => {
         />
       </window.TweakSection>
 
+      <window.TweakSection title="config · audit gate">
+        <window.TweakToggle
+          label="route config edits through a pr"
+          value={t.auditGate}
+          onChange={(v) => setTweak("auditGate", v)}
+        />
+      </window.TweakSection>
+
       {view === "review" && (
         <window.TweakSection title="review · per-repo merge integration">
           <window.TweakSelect
@@ -170,16 +218,6 @@ const renderTweaks = (t, setTweak, view, setView, setOnbStep, setForgeOpen) => {
               { label: "no merge integration",     value: "none" },
             ]}
             onChange={(v) => setTweak("mergeIntegration", v)}
-          />
-        </window.TweakSection>
-      )}
-
-      {view === "settings" && (
-        <window.TweakSection title="settings · audit gate">
-          <window.TweakToggle
-            label="audit gate (tanren-config repo)"
-            value={t.auditGate}
-            onChange={(v) => setTweak("auditGate", v)}
           />
         </window.TweakSection>
       )}
@@ -199,15 +237,19 @@ const renderTweaks = (t, setTweak, view, setView, setOnbStep, setForgeOpen) => {
         </window.TweakSection>
       )}
 
-      <window.TweakSection title="navigate · all flows">
+      <window.TweakSection title="navigate · product surfaces">
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           {[
-            ["project", "→ project view", null],
+            ["project", "→ project · dag", null],
+            ["spec", "→ spec detail", null],
             ["run", "→ run detail", null],
             ["review", "→ review handoff", null],
             ["discovery", "→ spec discovery", null],
+            ["inbox", "→ candidate inbox", null],
+            ["audits", "→ scheduled audits", null],
+            ["config", "→ tanren-config", null],
             ["failure", "→ failure recovery", "danger"],
-            ["settings", "→ settings · routing", null],
+            ["settings", "→ routing & limits", null],
             ["costs", "→ history & costs", null],
             ["DIVIDER", "ORG SURFACES", null],
             ["overview", "→ overview", null],
@@ -215,7 +257,7 @@ const renderTweaks = (t, setTweak, view, setView, setOnbStep, setForgeOpen) => {
             ["roadmap", "→ roadmap", null],
             ["personas", "→ personas", null],
             ["dora", "→ DORA", null],
-            ["DIVIDER", "ONBOARDING TRACKS", null],
+            ["DIVIDER", "ONBOARDING · designer-only (not in product nav)", null],
             ["onb-org", "→ org setup (4 steps)", "ember"],
             ["onb-new", "→ new project (3 steps)", "ember"],
             ["onb-exist", "→ existing project (5 steps)", "ember"],

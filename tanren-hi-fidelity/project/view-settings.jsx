@@ -65,7 +65,7 @@ window.SettingsView = ({ onNav, auditGate }) => (
           <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--status-warn)" }}>! 3 unsaved changes</span>
           <button className="btn">view as yaml</button>
           <button className="btn ghost">discard</button>
-          <button className="btn primary notched">{auditGate ? "propose pr ↗" : "save changes"}</button>
+          <button className="btn primary notched" onClick={() => auditGate && onNav?.("config")}>{auditGate ? "propose pr ↗" : "save changes"}</button>
         </>
       }
     />
@@ -158,11 +158,11 @@ window.SettingsView = ({ onNav, auditGate }) => (
         </div>
         {auditGate ? (
           <span style={{ fontFamily: "var(--font-mono)", fontSize: 9.5, color: "var(--fg-3)" }}>
-            edits land as a pr in <code style={{ color: "var(--ember-07)", background: "var(--bg-sunken)", padding: "0 5px", border: "1px solid var(--line-1)" }}>cat-cave/tanren-config</code> · review before merge
+            edits land as a pr in <code style={{ color: "var(--ember-07)", background: "var(--bg-sunken)", padding: "0 5px", border: "1px solid var(--line-1)" }}>cat-cave/tanren-config</code> · <a style={{ color: "var(--ember-08)", cursor: "pointer" }} onClick={() => onNav?.("config")}>review before merge ↗</a>
           </span>
         ) : (
           <span style={{ fontFamily: "var(--font-mono)", fontSize: 9.5, color: "var(--fg-3)" }}>
-            edits land in the dashboard · no pr required · <a style={{ color: "var(--ember-08)", cursor: "pointer" }}>enable audit gate ↗</a>
+            edits land in the dashboard · no pr required · <a style={{ color: "var(--ember-08)", cursor: "pointer" }} onClick={() => onNav?.("config")}>enable audit gate ↗</a>
           </span>
         )}
       </div>
