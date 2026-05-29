@@ -8,7 +8,6 @@ import {
 import {
   AllocatorNotImplementedError,
   AwsEc2Allocator,
-  DigitalOceanAllocator,
   KubernetesAllocator
 } from "../src/engine/allocators/scaffoldedAllocators.js";
 import type { AllocationRequest, Allocator, RunnerAllocation } from "../src/engine/contracts/allocator.js";
@@ -39,14 +38,15 @@ function registry(overrides: Partial<AllocatorRegistry> = {}): {
     static: new RecordingAllocator("static"),
     sidecar: new RecordingAllocator("sidecar"),
     manual_ssh: new RecordingAllocator("manual_ssh"),
-    hetzner: new RecordingAllocator("hetzner")
+    hetzner: new RecordingAllocator("hetzner"),
+    digitalocean: new RecordingAllocator("digitalocean")
   };
   const reg: AllocatorRegistry = {
     static: recorders.static,
     sidecar: recorders.sidecar,
     manual_ssh: recorders.manual_ssh,
     hetzner: recorders.hetzner,
-    digitalocean: new DigitalOceanAllocator(),
+    digitalocean: recorders.digitalocean,
     aws_ec2: new AwsEc2Allocator(),
     kubernetes: new KubernetesAllocator(),
     ...overrides
@@ -96,6 +96,20 @@ describe("AllocatorRouter", () => {
 
     expect(recorders.sidecar.allocated.map((r) => r.runId)).toEqual(["run_default"]);
     expect(recorders.hetzner.allocated.map((r) => r.runId)).toEqual(["run_gpu"]);
+  });
+
+  it("routes by label/config to the digitalocean allocator", async () => {
+    const config = AllocatorRoutingConfig.parse({
+      defaultAllocator: "sidecar",
+      rules: [{ matchLabels: { cloud: "do" }, allocator: "digitalocean" }]
+    });
+    const { reg, recorders } = registry();
+    const router = new AllocatorRouter(reg, config);
+
+    await router.allocate(req("run_do", { cloud: "do" }));
+
+    expect(recorders.digitalocean.allocated.map((r) => r.runId)).toEqual(["run_do"]);
+    expect(recorders.sidecar.allocated).toEqual([]);
   });
 
   it("release routes back to the allocator that served the runner", async () => {
@@ -162,7 +176,7 @@ describe("AllocatorRouter", () => {
 
 describe("scaffolded allocators", () => {
   it("each throws AllocatorNotImplementedError with provider + follow-up hint", async () => {
-    for (const allocator of [new DigitalOceanAllocator(), new AwsEc2Allocator(), new KubernetesAllocator()]) {
+    for (const allocator of [new AwsEc2Allocator(), new KubernetesAllocator()]) {
       await expect(allocator.allocate(req("r"))).rejects.toBeInstanceOf(AllocatorNotImplementedError);
       await expect(allocator.allocate(req("r"))).rejects.toThrow(/P3-0027 follow-up/);
       await expect(allocator.release("r")).rejects.toBeInstanceOf(AllocatorNotImplementedError);
