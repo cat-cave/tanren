@@ -4,9 +4,11 @@
  * per-channel × severity matrix, an add-channel form, and a weekend-mute
  * toggle per target.
  *
- * Wiring: `ntfy`, `slack` and `github_checks` actually deliver (P3-0024).
- * Every other channel has a working schema + matrix opt-ins but no dispatch
- * wiring, so its row VISIBLY says "configured but not yet wired".
+ * Wiring: all 9 channel kinds (ntfy, slack, github_checks, teams, discord,
+ * email, twilio, pagerduty, webhook) now have real dispatch adapters. Each
+ * delivers once its credentials are configured in the secret store. The
+ * `wired` flag stays in the catalog so a future unwired channel can still
+ * render its "configured but not yet wired" hint.
  */
 
 import type {
@@ -23,12 +25,12 @@ const CHANNELS: Array<{ kind: ChannelKind; glyph: string; label: string; phase: 
   { kind: "ntfy", glyph: "▮", label: "ntfy", phase: "v0", wired: true },
   { kind: "slack", glyph: "⌥", label: "slack", phase: "p3", wired: true },
   { kind: "github_checks", glyph: "⌬", label: "github checks", phase: "p3", wired: true },
-  { kind: "teams", glyph: "◈", label: "microsoft teams", phase: "p3", wired: false },
-  { kind: "discord", glyph: "◉", label: "discord", phase: "p3", wired: false },
-  { kind: "email", glyph: "✉", label: "email", phase: "p3", wired: false },
-  { kind: "twilio", glyph: "▢", label: "sms · twilio", phase: "p4", wired: false },
-  { kind: "pagerduty", glyph: "↘", label: "pagerduty", phase: "p4", wired: false },
-  { kind: "webhook", glyph: "↗", label: "webhook · custom", phase: "p4", wired: false }
+  { kind: "teams", glyph: "◈", label: "microsoft teams", phase: "p3", wired: true },
+  { kind: "discord", glyph: "◉", label: "discord", phase: "p3", wired: true },
+  { kind: "email", glyph: "✉", label: "email", phase: "p3", wired: true },
+  { kind: "twilio", glyph: "▢", label: "sms · twilio", phase: "p4", wired: true },
+  { kind: "pagerduty", glyph: "↘", label: "pagerduty", phase: "p4", wired: true },
+  { kind: "webhook", glyph: "↗", label: "webhook · custom", phase: "p4", wired: true }
 ];
 
 const WIRED_KINDS = new Set<ChannelKind>(CHANNELS.filter((c) => c.wired).map((c) => c.kind));
@@ -95,7 +97,7 @@ function ChannelsColumn(props: { targets: NotificationTarget[] }) {
             save ntfy target
           </button>
         </div>
-        <div class="mono-dim">ntfy, slack + github checks dispatch · other channel kinds persist + opt-in but don't dispatch yet</div>
+        <div class="mono-dim">all channel kinds dispatch · configure each channel's credentials in the secret store</div>
       </form>
     </div>
   );
