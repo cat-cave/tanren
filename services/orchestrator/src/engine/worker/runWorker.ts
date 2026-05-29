@@ -100,6 +100,8 @@ export class RunWorker {
 function defaultOnResult(result: ExecuteJobResult): void {
   if (result.kind === "completed") {
     console.log(`[run-worker] job ${result.jobId} completed run ${result.runId} (outcome=${result.outcome})`);
+  } else if (result.kind === "quota_denied") {
+    console.warn(`[run-worker] job ${result.jobId} denied run ${result.runId} (quota_exceeded): ${result.reason}`);
   } else if (result.kind === "failed") {
     console.warn(`[run-worker] job ${result.jobId} failed (${result.failure.kind}): ${result.failure.message}`);
   }

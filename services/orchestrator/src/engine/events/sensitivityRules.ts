@@ -44,6 +44,10 @@ export const sensitivityRules: SensitivityRule[] = [
     ["status", "public"],
     ["message", "public"],
   ]),
+  ...rulesFor("run.quota_exceeded", [
+    ["reason", "public"],
+    ["windowKey", "public"],
+  ]),
 
   // task lifecycle
   ...rulesFor("task.queued", [
