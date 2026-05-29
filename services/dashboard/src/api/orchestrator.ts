@@ -12,7 +12,7 @@
 
 import type { DashboardSession } from "../auth/session.js";
 import type { DoraMetrics } from "./dora.js";
-import { OrchestratorRecoveryClient } from "./recoveryClient.js";
+import { OrchestratorForgeConversationClient } from "./forgeConversationClient.js";
 import type {
   BehaviorSummary,
   BrownfieldLinkResult,
@@ -42,7 +42,7 @@ import type {
 
 export type { OrchestratorClientDeps } from "./httpClient.js";
 
-export class OrchestratorClient extends OrchestratorRecoveryClient {
+export class OrchestratorClient extends OrchestratorForgeConversationClient {
   /** Resolve the current session via `/auth/me`. `undefined` when unauthenticated. */
   async session(): Promise<DashboardSession | undefined> {
     const response = await this.fetchImpl(`${this.orchestratorUrl}/auth/me`, {

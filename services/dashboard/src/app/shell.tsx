@@ -69,7 +69,7 @@ export function ShellLayout(props: ShellLayoutProps) {
           <SideNav activeId={ctx.activeNavId} activeProjectId={ctx.project?.projectId} />
           <main class="main">{props.children}</main>
         </div>
-        <ForgePalette groups={ctx.paletteGroups} orgId={ctx.org?.id} />
+        <ForgePalette groups={ctx.paletteGroups} orgId={ctx.org?.id} projectId={ctx.project?.projectId} />
         <script type="module" src="/static/client.js"></script>
       </body>
     </html>

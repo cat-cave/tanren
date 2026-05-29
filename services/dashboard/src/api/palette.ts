@@ -66,11 +66,13 @@ export function buildPaletteGroups(input: {
       }
     ]
   };
+  // ask-forge items carry NEITHER route nor tool: the palette morphs into a
+  // thick-Forge chat thread (P3-0010) and sends the title as the question.
   const askForge: PaletteGroup = {
     group: "ask forge",
     items: [
-      { glyph: "?", title: "what's blocking my milestones?", desc: "natural-language query", route: "/overview" },
-      { glyph: "?", title: "how are my costs trending?", desc: "this week vs last", route: "/costs" }
+      { glyph: "?", title: "what's blocking my milestones?", desc: "natural-language query · ask in chat" },
+      { glyph: "?", title: "how are my costs trending?", desc: "this week vs last · ask in chat" }
     ]
   };
   return [quickActions, forgeThis, askForge];

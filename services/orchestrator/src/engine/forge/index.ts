@@ -18,6 +18,11 @@ export { ForgeThreadStore, ForgeThreadAccessDeniedError } from "./threads.js";
 export { ForgeTurnStore, actorCanViewAudience } from "./turns.js";
 
 export * from "./tools/index.js";
+
+// P3-0010: thick-Forge LLM conversation backend (the Phase 3 swap-in for the
+// templated v0 narration on operator-driven questions).
+export * from "./conversation/index.js";
+
 export {
   generateProjectViewNarration,
   generateRunDetailNarration,

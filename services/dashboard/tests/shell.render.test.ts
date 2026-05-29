@@ -122,6 +122,21 @@ describe("dashboard shell rendering", () => {
     expect(html).toContain('data-tool="tanren.create_spec"');
   });
 
+  it("renders the P3-0010 thick-Forge chat morph scaffold", async () => {
+    mockOrchestrator();
+    const app = await build();
+    const html = await (await app.request("/projects")).text();
+    // The chat container + back button + chat footer are server-rendered
+    // (hidden until the island morphs the palette into a thread).
+    expect(html).toContain("data-palette-chat");
+    expect(html).toContain("data-palette-back");
+    expect(html).toContain("data-palette-footer-chat");
+    expect(html).toContain("forge · chat");
+    // ask-forge prompts (no route/tool) carry data-ask="1" so the island knows
+    // to morph to chat rather than navigate.
+    expect(html).toContain('data-ask="1"');
+  });
+
   it("wires the ink/ash data-theme and loads the client bundle", async () => {
     mockOrchestrator();
     const app = await build();
