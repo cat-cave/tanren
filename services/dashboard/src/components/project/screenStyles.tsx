@@ -13,6 +13,11 @@ export const PROJECT_SCREEN_CSS = `
 .p2b .page-head .title { font-family:var(--font-display); font-weight:700; font-size:22px; color:var(--fg-1); letter-spacing:-0.01em; }
 .p2b .page-head .title em { color:var(--ember-08); font-style:normal; }
 .p2b .head-actions { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+.p2b .mode-toggle { display:inline-flex; border:1px solid var(--line-2); border-radius:var(--r-1); overflow:hidden; }
+.p2b .mode-toggle .seg-btn { font-family:var(--font-mono); font-size:11px; padding:6px 10px; border:none; background:var(--bg-surface); color:var(--fg-3); cursor:pointer; text-decoration:none; display:inline-flex; align-items:center; gap:4px; }
+.p2b .mode-toggle .seg-btn + .seg-btn { border-left:1px solid var(--line-2); }
+.p2b .mode-toggle .seg-btn:hover { color:var(--fg-1); }
+.p2b .mode-toggle .seg-btn.active { color:var(--ember-08); background:var(--bg-canvas); }
 .p2b .btn { font-family:var(--font-mono); font-size:11px; padding:6px 11px; border:1px solid var(--line-2); background:var(--bg-surface); color:var(--fg-2); border-radius:var(--r-1); cursor:pointer; text-decoration:none; display:inline-flex; align-items:center; gap:5px; }
 .p2b .btn:hover { border-color:var(--ember-08); color:var(--fg-1); }
 .p2b .btn.primary { background:var(--ember-08); border-color:var(--ember-08); color:var(--accent-on); }

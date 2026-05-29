@@ -6,8 +6,11 @@
  * go through the typed `OrchestratorClient` (extended additively); writes are
  * server-side form POSTs that call P2A-0013/0019 and redirect back.
  *
+ * P3-0013 adds a DAG-primary mode (`?mode=dag` + persisted cookie) and
+ * delegates the spec drawer / full-page routes to `./specRoutes`.
+ *
  * Routes registered:
- *   GET  /projects/:projectId                          chat-primary project view
+ *   GET  /projects/:projectId                          project view (chat | dag)
  *   GET  /projects/:projectId/specs                    spec list
  *   GET  /projects/:projectId/specs/new                spec creation form
  *   POST /projects/:projectId/specs                    create spec (→ P2A-0013)
@@ -20,6 +23,7 @@
 
 import type { Context, Hono } from "hono";
 import { OrchestratorClient } from "../../api/orchestrator.js";
+import { getProjectDag } from "../../api/projectDag.js";
 import {
   ROLE_IDS,
   type EscapeHatches,
@@ -29,10 +33,12 @@ import {
   type RoutingTable
 } from "../../api/types.js";
 import { loadShellContext, renderShell, type ShellDeps } from "../../app/mountShell.js";
+import { ProjectDagBody } from "../../components/project/ProjectDagBody.js";
 import { ProjectViewBody } from "../../components/project/ProjectViewBody.js";
 import { buildProjectViewModel, sumRunCosts } from "../../components/project/projectViewData.js";
 import { ESCAPE_HATCH_DEFAULTS, SettingsBody } from "../../components/project/SettingsBody.js";
 import { SpecCreateBody, SpecListBody } from "../../components/project/SpecCreateBody.js";
+import { mountSpecDetailRoutes, notFoundBody, resolveProjectMode } from "./specRoutes.js";
 
 function clientFor(c: Context, deps: ShellDeps): OrchestratorClient {
   return new OrchestratorClient({
@@ -75,6 +81,7 @@ export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
     }
     const orgId = ctx.org.id;
     const client = clientFor(c, deps);
+    const mode = resolveProjectMode(c);
     const [runs, insights, milestones, feed, narration] = await Promise.all([
       client.listRuns(orgId, projectId),
       client.listInsights(orgId, projectId),
@@ -92,6 +99,15 @@ export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
       narration,
       weekSpendUsd: sumRunCosts(runs)
     });
+    if (mode === "dag") {
+      const dag = await getProjectDag(client, orgId, projectId);
+      return renderShell(
+        c,
+        ctx,
+        { title: `tanren · ${ctx.project.name} · dag` },
+        <ProjectDagBody projectId={projectId} projectName={ctx.project.name} dag={dag} model={model} />
+      );
+    }
     return renderShell(
       c,
       ctx,
@@ -148,6 +164,11 @@ export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
       <SpecCreateBody project={ctx.project} milestones={milestones} behaviors={behaviors} specs={specs} />
     );
   });
+
+  // P3-0013 spec drawer fragment + full-page spec view (split into specRoutes
+  // to stay under the line cap). Registered after `/specs/new` so the static
+  // route is not shadowed by the `:specId` param route.
+  mountSpecDetailRoutes(app, deps);
 
   // -------------------------------------------------------------------------
   // Create spec (POST → P2A-0013). Re-renders the form with an error banner on
@@ -437,24 +458,6 @@ async function mutateConfig(
   };
   edit(working);
   await client.patchProjectConfig(orgId, projectId, working);
-}
-
-function notFoundBody(projectId: string) {
-  return (
-    <div class="p2b">
-      <div class="page-head">
-        <div>
-          <div class="eyebrow">project · not found</div>
-          <div class="page-title">project not found</div>
-        </div>
-      </div>
-      <div class="page-body">
-        <section class="placeholder-card">
-          <p>No project {projectId} is visible to you.</p>
-        </section>
-      </div>
-    </div>
-  );
 }
 
 /** Re-render the spec form (shared by the create-spec validation/error path). */
