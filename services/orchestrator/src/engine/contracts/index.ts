@@ -4,4 +4,8 @@ export * from "./internalRpc.js";
 export * from "./jobQueue.js";
 export * from "./notificationOutbox.js";
 export * from "./secretStore.js";
+export * from "./gcpSecretManager.js";
+export * from "./awsSecretsManager.js";
+export * from "./onePassword.js";
+export * from "./secretStoreFactory.js";
 export * from "./sshSubstrate.js";
