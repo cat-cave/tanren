@@ -20,8 +20,11 @@ import type { IngestedItem, InboxSource, SourceConnector } from "./types.js";
 // The `config` shape a GitHub Issues source carries. `owner`/`repo` name the
 // repository; `labels` (optional) filters to `spec-candidate`-style labels;
 // `staticRef`/`installation` pick the auth path (mirrors the resolver inputs).
+// `provider` is optional (the `issues` dispatcher keyed on it); absent on
+// existing GitHub sources, so they keep parsing unchanged.
 export const GitHubIssuesConfig = z
   .object({
+    provider: z.literal("github").optional(),
     owner: z.string().min(1),
     repo: z.string().min(1),
     labels: z.array(z.string().min(1)).default([]),

@@ -33,6 +33,21 @@ export {
 } from "./sentryConnector.js";
 
 export {
+  LinearConfig,
+  createLinearConnector,
+  FetchLinearHttpClient,
+  type LinearConnectorDeps,
+  type LinearHttpClient,
+  type LinearHttpRequest,
+  type LinearHttpResponse
+} from "./linearConnector.js";
+
+export {
+  createIssuesConnector,
+  type IssuesConnectorDeps
+} from "./issuesConnector.js";
+
+export {
   createSource,
   listSources,
   getSource,

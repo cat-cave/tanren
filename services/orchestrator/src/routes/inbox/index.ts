@@ -26,9 +26,12 @@ import {
   CandidateNotPlaceableError,
   closeDuplicateCandidate,
   createGitHubIssuesConnector,
+  createIssuesConnector,
+  createLinearConnector,
   createSentryConnector,
   createSource,
   dismissCandidate,
+  FetchLinearHttpClient,
   FetchSentryHttpClient,
   foldCandidate,
   getSource,
@@ -37,6 +40,7 @@ import {
   listSources,
   SourceKind,
   type InboxEngineDeps,
+  type LinearHttpClient,
   type SentryHttpClient,
   type SourceConnector,
   type TriageAnswerer
@@ -51,6 +55,9 @@ export interface InboxRoutesOptions {
   // Injectable Sentry transport (defaults to a fetch-based client). The Sentry
   // connector reuses `secrets` for its auth token (config `tokenRef`).
   sentryHttp?: SentryHttpClient;
+  // Injectable Linear transport (defaults to a fetch-based client). The Linear
+  // connector reuses `secrets` for its auth token (config `tokenRef`).
+  linearHttp?: LinearHttpClient;
   // Injectable triage answerer (provider wrap or a test fake).
   answererFactory?: () => TriageAnswerer;
   // Test seam: override the connector map (defaults to GitHub + Sentry).
@@ -83,7 +90,19 @@ export function createInboxRoutes(options: InboxRoutesOptions) {
   const connectors =
     options.connectors ??
     new Map<string, SourceConnector>([
-      ["issues", createGitHubIssuesConnector({ secrets: options.secrets, githubHttp: options.githubHttp })],
+      // The `issues` slot dispatches by `config.provider` (default `github`, or
+      // `linear`) — Linear reuses the existing issue-tracker kind (no enum/
+      // DB-CHECK change). GitHub sources carry no `provider` and keep working.
+      [
+        "issues",
+        createIssuesConnector({
+          github: createGitHubIssuesConnector({ secrets: options.secrets, githubHttp: options.githubHttp }),
+          linear: createLinearConnector({
+            secrets: options.secrets,
+            linearHttp: options.linearHttp ?? new FetchLinearHttpClient()
+          })
+        })
+      ],
       // Sentry is wired under the `errors` source kind (no enum/DB-CHECK change).
       [
         "errors",
