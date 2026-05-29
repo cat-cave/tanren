@@ -3,6 +3,7 @@ import type { RoutingChainEntry, RoutingTable } from "../config/shared.js";
 import type { SshTarget } from "../contracts/allocator.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { SshSubstrate } from "../contracts/sshSubstrate.js";
+import { timedAnswererAdapter, timedWriterAdapter } from "../observability/index.js";
 import { createClaudeAnswerer, createClaudeWriter } from "./claude.js";
 import { createCodexAnswerer, createCodexWriter } from "./codex.js";
 import { createOpencodeWriter } from "./opencode.js";
@@ -55,13 +56,15 @@ export class UnsupportedProviderError extends Error {
 // `model` (when present) pins the model the CLI runs.
 export function buildWriterAdapter(deps: AdapterSelectorDependencies, entry: RoutingChainEntry): WriterAdapter {
   const base = { secrets: deps.secrets, ssh: deps.ssh, target: deps.target, runId: deps.runId, credentialRef: entry.authRef };
+  // P3-0029: wrap the built adapter so every real provider call emits a
+  // boundary timing record. The adapter's core logic is untouched.
   switch (entry.cli) {
     case "codex":
-      return createCodexWriter(base);
+      return timedWriterAdapter(createCodexWriter(base));
     case "claude":
-      return createClaudeWriter({ ...base, model: entry.model });
+      return timedWriterAdapter(createClaudeWriter({ ...base, model: entry.model }));
     case "opencode":
-      return createOpencodeWriter({ ...base, model: entry.model });
+      return timedWriterAdapter(createOpencodeWriter({ ...base, model: entry.model }));
     default:
       throw new UnsupportedProviderError(entry.cli, "writer");
   }
@@ -72,14 +75,18 @@ export function buildWriterAdapter(deps: AdapterSelectorDependencies, entry: Rou
 // AnswererAdapter.cli type union which excludes "opencode").
 export function buildAnswererAdapter<TOutput>(
   deps: AdapterSelectorDependencies,
-  entry: RoutingChainEntry
+  entry: RoutingChainEntry,
+  // P3-0029: the loop role (plan/check/audit/demo) the resolved Answerer
+  // serves, threaded into the boundary timing record. Defaults to the generic
+  // "answerer" dimension when a caller does not pin a role.
+  role = "answerer"
 ): AnswererAdapter<TOutput> {
   const base = { secrets: deps.secrets, ssh: deps.ssh, target: deps.target, runId: deps.runId, credentialRef: entry.authRef };
   switch (entry.cli) {
     case "codex":
-      return createCodexAnswerer<TOutput>(base);
+      return timedAnswererAdapter(createCodexAnswerer<TOutput>(base), role);
     case "claude":
-      return createClaudeAnswerer<TOutput>({ ...base, model: entry.model });
+      return timedAnswererAdapter(createClaudeAnswerer<TOutput>({ ...base, model: entry.model }), role);
     default:
       throw new UnsupportedProviderError(entry.cli, "answerer");
   }
@@ -111,10 +118,10 @@ export class EmptyRoutingChainError extends Error {
 // Writer, with NO schema or DB migration (the chain shape is unchanged).
 export function buildAdaptersFromRouting(deps: AdapterSelectorDependencies, routing: RoutingTable): RoutingDrivenAdapters {
   return {
-    planner: buildAnswererAdapter<PlanAnswer>(deps, chainHead(routing, "plan")),
+    planner: buildAnswererAdapter<PlanAnswer>(deps, chainHead(routing, "plan"), "planner"),
     writer: buildWriterAdapter(deps, chainHead(routing, "write")),
-    checker: buildAnswererAdapter<CheckAnswer>(deps, chainHead(routing, "check")),
-    auditor: buildAnswererAdapter<AuditAnswer>(deps, chainHead(routing, "audit"))
+    checker: buildAnswererAdapter<CheckAnswer>(deps, chainHead(routing, "check"), "checker"),
+    auditor: buildAnswererAdapter<AuditAnswer>(deps, chainHead(routing, "audit"), "auditor")
   };
 }
 
@@ -142,5 +149,5 @@ export function buildDemoAnswererOrNull(
   if (head === undefined) {
     return null;
   }
-  return buildAnswererAdapter<DemoAnswer>(deps, head);
+  return buildAnswererAdapter<DemoAnswer>(deps, head, "demo");
 }

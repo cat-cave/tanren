@@ -20,7 +20,8 @@
     "db:generate": "drizzle-kit generate --config drizzle.config.ts",
     "format:check": "node scripts/format-check.mjs",
     "lint": "oxlint -c oxlintrc.json .",
-    "test": "vitest run",
+    "test": "vitest run --coverage",
+    "test:no-coverage": "vitest run",
     "typecheck": "pnpm -r typecheck"
   },
   "devDependencies": {
@@ -28,6 +29,7 @@
     "@types/node": "^24.0.0",
     "@types/pg": "^8.11.11",
     "@types/ssh2": "1.15.5",
+    "@vitest/coverage-v8": "3.2.4",
     "drizzle-kit": "^0.31.10",
     "lefthook": "2.1.8",
     "oxlint": "^1.0.0",
