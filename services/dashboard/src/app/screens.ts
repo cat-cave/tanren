@@ -68,6 +68,12 @@ SCREEN_MOUNTS.push(mountTriggerScreens);
 import { mountDoraScreen } from "../routes/dora/index.js";
 SCREEN_MOUNTS.push(mountDoraScreen);
 
+// P3-0014: spec discovery (insight → classification → proposed specs →
+// DAG placement → accept with provenance). Overrides the /discovery placeholder
+// and adds the project-scoped discovery routes.
+import { mountDiscoveryScreens } from "../routes/discovery/index.js";
+SCREEN_MOUNTS.push(mountDiscoveryScreens);
+
 /** Run every registered screen mount. Called BEFORE `mountShell`. */
 export function mountScreens(app: Hono, deps: ShellDeps): void {
   for (const mount of SCREEN_MOUNTS) {

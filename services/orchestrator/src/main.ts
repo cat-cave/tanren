@@ -29,6 +29,7 @@ import { createBehaviorRoutes } from "./routes/behaviors/index.js";
 import { createBrownfieldRoutes } from "./routes/brownfield/index.js";
 import { registerAuthBundleImportRoutes } from "./routes/credentials/authBundleImports.js";
 import { createCredentialRoutes, InMemoryCredentialRegistry, type CredentialRegistry } from "./routes/credentials/index.js";
+import { createDiscoveryRoutes } from "./routes/discovery/index.js";
 import { createDoctorRoutes } from "./routes/doctor/index.js";
 import { createDoraRoutes } from "./routes/dora/index.js";
 import { createForgeAskRoutes } from "./routes/forge/ask.js";
@@ -227,6 +228,9 @@ export function buildApp(input: {
   // `/github/webhooks/ci`. Polling remains the default fallback.
   app.route("/", createGithubWebhookRoutes({ pool: input.pool, secrets, githubHttp, githubAppMinter }));
   app.route("/orgs", createInsightRoutes({ pool: input.pool }));
+  // P3-0014: spec discovery — classify an insight into proposed specs +
+  // DAG-placement options, accept → create specs with provenance.
+  app.route("/orgs", createDiscoveryRoutes({ pool: input.pool }));
   app.route("/orgs", createDoraRoutes({ pool: input.pool }));
   app.route("/orgs", createNotificationRoutes({ pool: input.pool }));
   app.route("/orgs", createRunRoutes({ pool: input.pool }));

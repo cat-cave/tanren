@@ -6,6 +6,7 @@
  */
 
 import { initDagCanvas } from "./dagCanvas.js";
+import { initDiscovery } from "./discovery.js";
 import { initOrgSwitcher } from "./orgSwitcher.js";
 import { initPalette } from "./palette.js";
 import { initReviewHandoff } from "./reviewHandoff.js";
@@ -21,6 +22,8 @@ function boot(): void {
   initReviewHandoff();
   // P3-0013 DAG-primary canvas + spec drawer (no-op when absent).
   initDagCanvas();
+  // P3-0014 spec-discovery placement selection (no-op when absent).
+  initDiscovery();
 }
 
 if (document.readyState === "loading") {

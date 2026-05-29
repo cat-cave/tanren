@@ -46,6 +46,7 @@ export const specs = pgTable(
     acceptanceCriteria: jsonb("acceptance_criteria").notNull().default(sql`'[]'::jsonb`),
     dependsOn: text("depends_on").array().notNull().default(sql`'{}'::text[]`),
     status: text("status").notNull().default("pending"),
+    metadata: jsonb("metadata").notNull().default(sql`'{}'::jsonb`), // P3-0014: discovery provenance under `discovery` key
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     tenantId: text("tenant_id")
   },
@@ -451,8 +452,7 @@ export const specBehaviors = pgTable(
 
 // spec_milestones is modeled as a join table to keep the schema additive for
 // future many-to-many evolution, but a unique index on spec_id enforces the
-// current one-milestone-per-spec product rule (documented in
-// docs/architecture/product-entities.md).
+// current one-milestone-per-spec product rule (see docs product-entities.md).
 export const specMilestones = pgTable(
   "spec_milestones",
   {
