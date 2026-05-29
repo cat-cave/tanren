@@ -27,10 +27,12 @@ import {
   closeDuplicateCandidate,
   createGitHubIssuesConnector,
   createIssuesConnector,
+  createJiraConnector,
   createLinearConnector,
   createSentryConnector,
   createSource,
   dismissCandidate,
+  FetchJiraHttpClient,
   FetchLinearHttpClient,
   FetchSentryHttpClient,
   foldCandidate,
@@ -40,6 +42,7 @@ import {
   listSources,
   SourceKind,
   type InboxEngineDeps,
+  type JiraHttpClient,
   type LinearHttpClient,
   type SentryHttpClient,
   type SourceConnector,
@@ -58,6 +61,9 @@ export interface InboxRoutesOptions {
   // Injectable Linear transport (defaults to a fetch-based client). The Linear
   // connector reuses `secrets` for its auth token (config `tokenRef`).
   linearHttp?: LinearHttpClient;
+  // Injectable Jira transport (defaults to a fetch-based client). The Jira
+  // connector reuses `secrets` for its API token (config `tokenRef`).
+  jiraHttp?: JiraHttpClient;
   // Injectable triage answerer (provider wrap or a test fake).
   answererFactory?: () => TriageAnswerer;
   // Test seam: override the connector map (defaults to GitHub + Sentry).
@@ -91,8 +97,9 @@ export function createInboxRoutes(options: InboxRoutesOptions) {
     options.connectors ??
     new Map<string, SourceConnector>([
       // The `issues` slot dispatches by `config.provider` (default `github`, or
-      // `linear`) — Linear reuses the existing issue-tracker kind (no enum/
-      // DB-CHECK change). GitHub sources carry no `provider` and keep working.
+      // `linear`/`jira`) — each provider reuses the existing issue-tracker kind
+      // (no enum/DB-CHECK change). GitHub sources carry no `provider` and keep
+      // working.
       [
         "issues",
         createIssuesConnector({
@@ -100,6 +107,10 @@ export function createInboxRoutes(options: InboxRoutesOptions) {
           linear: createLinearConnector({
             secrets: options.secrets,
             linearHttp: options.linearHttp ?? new FetchLinearHttpClient()
+          }),
+          jira: createJiraConnector({
+            secrets: options.secrets,
+            jiraHttp: options.jiraHttp ?? new FetchJiraHttpClient()
           })
         })
       ],

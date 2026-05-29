@@ -43,6 +43,16 @@ export {
 } from "./linearConnector.js";
 
 export {
+  JiraConfig,
+  createJiraConnector,
+  FetchJiraHttpClient,
+  type JiraConnectorDeps,
+  type JiraHttpClient,
+  type JiraHttpRequest,
+  type JiraHttpResponse
+} from "./jiraConnector.js";
+
+export {
   createIssuesConnector,
   type IssuesConnectorDeps
 } from "./issuesConnector.js";

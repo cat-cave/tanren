@@ -8,11 +8,12 @@
 //     Issues connector. Existing GitHub sources carry no `provider` field, so
 //     they keep working unchanged.
 //   • `linear` → the Linear GraphQL connector.
+//   • `jira` → the Jira REST connector.
 //
 // Reusing the existing `issues` kind means no `SourceKind` enum value and no DB
 // CHECK migration is added (the same no-migration move the Sentry connector
 // made under `errors`). The factory in routes/inbox/index.ts builds this
-// dispatcher with both provider connectors injected.
+// dispatcher with the provider connectors injected.
 
 import { z } from "zod";
 import type { IngestedItem, InboxSource, SourceConnector } from "./types.js";
@@ -20,12 +21,13 @@ import type { IngestedItem, InboxSource, SourceConnector } from "./types.js";
 // Just enough of the config to pick a provider; each provider connector
 // validates the rest of the shape itself.
 const ProviderProbe = z
-  .object({ provider: z.enum(["github", "linear"]).default("github") })
+  .object({ provider: z.enum(["github", "linear", "jira"]).default("github") })
   .passthrough();
 
 export interface IssuesConnectorDeps {
   github: SourceConnector;
   linear: SourceConnector;
+  jira: SourceConnector;
 }
 
 export function createIssuesConnector(deps: IssuesConnectorDeps): SourceConnector {
@@ -33,8 +35,9 @@ export function createIssuesConnector(deps: IssuesConnectorDeps): SourceConnecto
     kind: "issues",
     async fetch(source: InboxSource): Promise<IngestedItem[]> {
       const { provider } = ProviderProbe.parse(source.config);
-      const connector = provider === "linear" ? deps.linear : deps.github;
-      return connector.fetch(source);
+      if (provider === "linear") return deps.linear.fetch(source);
+      if (provider === "jira") return deps.jira.fetch(source);
+      return deps.github.fetch(source);
     }
   };
 }
