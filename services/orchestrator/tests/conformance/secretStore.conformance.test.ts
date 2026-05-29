@@ -5,7 +5,13 @@
 // coverage by adding one harness here.
 import { InMemorySecretStore, VaultSecretStore } from "../../src/engine/contracts/secretStore.js";
 import type { SecretStore } from "../../src/engine/contracts/secretStore.js";
+import { GcpSecretManagerStore } from "../../src/engine/contracts/gcpSecretManager.js";
+import { AwsSecretsManagerStore } from "../../src/engine/contracts/awsSecretsManager.js";
+import { OnePasswordStore } from "../../src/engine/contracts/onePassword.js";
 import { describeSecretStoreConformance } from "./secretStoreConformance.js";
+import { gcpSecretManagerFetch } from "./fakes/gcpSecretManagerFetch.js";
+import { awsSecretsManagerFetch } from "./fakes/awsSecretsManagerFetch.js";
+import { onePasswordConnectFetch } from "./fakes/onePasswordConnectFetch.js";
 
 // --- InMemorySecretStore ----------------------------------------------------
 describeSecretStoreConformance("InMemorySecretStore", {
@@ -53,5 +59,37 @@ describeSecretStoreConformance("VaultSecretStore", {
       addr: "http://vault:8200",
       token: "test-token",
       fetchImpl: vaultFetch(),
+    }),
+});
+
+// --- GcpSecretManagerStore (mocked Secret Manager v1) -----------------------
+describeSecretStoreConformance("GcpSecretManagerStore", {
+  make: (): SecretStore =>
+    new GcpSecretManagerStore({
+      project: "test-project",
+      accessToken: "test-token",
+      fetchImpl: gcpSecretManagerFetch("test-project"),
+    }),
+});
+
+// --- AwsSecretsManagerStore (mocked Secrets Manager JSON API) ----------------
+describeSecretStoreConformance("AwsSecretsManagerStore", {
+  make: (): SecretStore =>
+    new AwsSecretsManagerStore({
+      accessKeyId: "AKIAEXAMPLE",
+      secretAccessKey: "secret",
+      region: "us-east-1",
+      fetchImpl: awsSecretsManagerFetch(),
+    }),
+});
+
+// --- OnePasswordStore (mocked Connect API) ----------------------------------
+describeSecretStoreConformance("OnePasswordStore", {
+  make: (): SecretStore =>
+    new OnePasswordStore({
+      connectUrl: "https://connect.example.com",
+      token: "test-token",
+      vaultId: "vault-uuid",
+      fetchImpl: onePasswordConnectFetch("vault-uuid"),
     }),
 });

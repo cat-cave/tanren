@@ -14,7 +14,7 @@ import {
 } from "./inputSchemas.js";
 import { buildAuthFromEnv, type BuildAppAuthOptions } from "./mainAuth.js";
 import { buildAllocatorFromEnv } from "./engine/allocators/index.js";
-import { InMemorySecretStore, type SecretStore, VaultSecretStore } from "./engine/contracts/index.js";
+import { buildSecretStore, InMemorySecretStore, type SecretStore } from "./engine/contracts/index.js";
 import { parseRawViewOptIn, redactEventRows } from "./routes/runs/redaction.js";
 import { storeGithubToken } from "./engine/credentials/githubToken.js";
 import { FetchGitHubHttpClient, type GitHubHttpClient } from "./engine/providers/github.js";
@@ -94,7 +94,10 @@ async function vaultHealth() {
 export async function createApp() {
   const pool = getProductionPool();
   await migrate(pool);
-  const runnerSecrets = new VaultSecretStore({ addr: vaultAddr, token: vaultToken });
+  // P2B: the secret-store backend is selected by TANREN_SECRET_STORE
+  // (default `vault`, so existing deployments are unchanged). See
+  // engine/contracts/secretStoreFactory.ts.
+  const runnerSecrets = buildSecretStore();
   await seedRunnerIdentitySecret(runnerSecrets);
   return buildApp({
     pool,
@@ -431,7 +434,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   // server (migrate + identity-secret seeding already ran in createApp).
   if (runWorkerEnabled()) {
     const workerPool = getProductionPool();
-    const workerSecrets = new VaultSecretStore({ addr: vaultAddr, token: vaultToken });
+    const workerSecrets = buildSecretStore();
     startRunWorker({
       pool: workerPool,
       allocator: buildAllocatorFromEnv(workerPool),
