@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { glob, readFile } from "node:fs/promises";
 import { relative, resolve } from "node:path";
 import { exit } from "node:process";
+import { runStructureChecks } from "./check-architecture-structure.mjs";
 
 const patterns = ["**/*.{ts,tsx,js,mjs,json,md,yml,yaml,sql,sh}", ".github/**/*.{yml,yaml}", "Dockerfile", "**/Dockerfile", "justfile"];
 const ignoredDirs = new Set(["node_modules", "dist", "coverage", ".git"]);
@@ -476,7 +477,8 @@ export async function runArchitectureChecks({ root = process.cwd() } = {}) {
     ...checkSchemaDriftWiring(projectFiles),
     ...checkStateDriftWiring(projectFiles),
     ...checkAnswererSchemaDriftWiring(projectFiles),
-    ...checkNoRowCastsInWorkflow(projectFiles)
+    ...checkNoRowCastsInWorkflow(projectFiles),
+    ...runStructureChecks(projectFiles)
   ];
 }
 

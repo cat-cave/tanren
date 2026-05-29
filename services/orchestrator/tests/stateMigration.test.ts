@@ -1,7 +1,7 @@
 import { readdir, readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { stateEnumLists } from "../../../db/src/stateEnums.js";
+import { stateEnumLists } from "@tanren/db";
 
 const migrationsDir = fileURLToPath(new URL("../../../db/migrations/", import.meta.url));
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { stateEnumLists } from "../../../db/src/stateEnums.js";
+import { stateEnumLists } from "@tanren/db";
 import { listStateEnums } from "../src/engine/state/index.js";
 
 // The Zod source of truth in services/orchestrator/src/engine/state and the

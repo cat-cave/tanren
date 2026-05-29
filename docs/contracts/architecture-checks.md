@@ -18,6 +18,14 @@
 - `answerer-schema-drift-check-wired`: root `package.json` must keep `check:answerer-schema-drift` wired to `scripts/answerer-schema-export.mjs`, and root `check` must run it (directly or via `just ci`).
 - `required-docs-present`: `AGENTS.md`, core playbooks, and this contract must exist.
 
+## Structural ratchets (Track B wave 3)
+
+These three live in the sibling module `scripts/check-architecture-structure.mjs` (kept separate so `check-architecture.mjs` stays under the 500-line cap). They are heuristic, regex/brace-matching scanners — not a real AST — and each is a **non-regressing ratchet**: the threshold is pinned at or just above the current repo maximum so existing code passes today, and is meant to be tightened in a later wave as the flagged hotspot is refactored. Tightening a cap is the deliverable, not an exception.
+
+- `cyclomatic-complexity-cap`: per-function heuristic complexity (1 + one per `if`/`case`/`&&`/`||`/ternary `?`/`catch`/`for`/`while`; `??`, `?.`, and `?:` are not branches) on `services/orchestrator/src/engine/workflow/**` and `services/orchestrator/src/engine/answerers/**`. **Measured current max: 23** (`runPlannerLoopWorkflow` in `engine/workflow/plannerRun.ts`). **Cap: 25.** Ratchet target: decompose `plannerRun` and lower the cap toward ~15.
+- `max-params-cap`: per-function positional parameter count on the same critical directories. **Measured current max: 6** (a step helper in `engine/workflow/helloRun.ts`). **Cap: 6** (pinned at current max). New functions that would exceed it must thread an options object.
+- `cross-package-deep-import`: an import may only reach another workspace package through its public entry. Bare `@tanren/<pkg>/src/**` specifiers and relative specifiers that resolve into a *different* package's tree are flagged. **Two historical violations** (orchestrator state tests importing `../../../db/src/stateEnums.js`) were fixed in this wave by re-exporting `stateEnumLists`/`StateEnumName` from the `@tanren/db` entry and importing via `@tanren/db`; the allowlist is empty.
+
 ## Exception Path
 
 Prefer refactoring over exceptions. A new exception requires a short entry in this file naming the rule, file path, why the invariant still holds, and the deletion condition. The checker should point at that exact allowlist.
