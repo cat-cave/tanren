@@ -6,6 +6,7 @@ import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
 import {
   loadGithubAppCredential,
   storeGithubAppCredential,
+  validateGithubAppCredential,
   validateGithubAppCredentialRef,
 } from "../src/engine/credentials/githubApp.js";
 import { createAuthMiddleware, type ActorContextEnv } from "../src/middleware/auth.js";
@@ -43,6 +44,52 @@ describe("github app credential storage", () => {
 
   it("rejects refs outside the credential/github_app/ namespace", () => {
     expect(() => validateGithubAppCredentialRef("credential/github/x")).toThrow(/credential\/github_app\//);
+  });
+
+  it("trims the app id and round-trips it through the stored envelope", async () => {
+    const secrets = new InMemorySecretStore();
+    const privateKeyPem = pem();
+    const result = await storeGithubAppCredential(secrets, {
+      ref: "credential/github_app/org/o1/default",
+      appId: "  4242  ",
+      privateKeyPem,
+    });
+    expect(result.appId).toBe("4242");
+    const loaded = await loadGithubAppCredential(secrets, "credential/github_app/org/o1/default");
+    expect(loaded.appId).toBe("4242");
+    expect(loaded.privateKeyPem).toBe(privateKeyPem);
+  });
+
+  it("requires both the BEGIN and PRIVATE KEY----- PEM markers", () => {
+    // Has BEGIN but not the closing key marker.
+    expect(() =>
+      validateGithubAppCredential({ appId: "1", privateKeyPem: "-----BEGIN SOMETHING-----\nx\n-----END-----" }),
+    ).toThrow(/PEM-encoded private key/);
+    // Has the key marker but not BEGIN.
+    expect(() => validateGithubAppCredential({ appId: "1", privateKeyPem: "PRIVATE KEY-----" })).toThrow(
+      /PEM-encoded private key/,
+    );
+    // A genuine PEM passes and is returned verbatim.
+    const ok = validateGithubAppCredential({ appId: "9", privateKeyPem: pem() });
+    expect(ok.appId).toBe("9");
+  });
+
+  it("rejects a non-object credential value and a blank app id", () => {
+    expect(() => validateGithubAppCredential(null)).toThrow(/must be an object/);
+    expect(() => validateGithubAppCredential([])).toThrow(/must be an object/);
+    expect(() => validateGithubAppCredential("nope")).toThrow(/must be an object/);
+    expect(() => validateGithubAppCredential({ appId: "", privateKeyPem: pem() })).toThrow(/numeric/);
+  });
+
+  it("loadGithubAppCredential throws on a missing ref and on a non-JSON envelope", async () => {
+    const secrets = new InMemorySecretStore();
+    await expect(loadGithubAppCredential(secrets, "credential/github_app/org/o1/missing")).rejects.toThrow(
+      /missing GitHub App credential ref: credential\/github_app\/org\/o1\/missing/,
+    );
+    await secrets.put({ ref: "credential/github_app/org/o1/garbage", value: "not-json" });
+    await expect(loadGithubAppCredential(secrets, "credential/github_app/org/o1/garbage")).rejects.toThrow(
+      /envelope must be valid JSON/,
+    );
   });
 
   it("rejects non-numeric app ids and non-PEM keys", async () => {
