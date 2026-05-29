@@ -1,0 +1,51 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "workspaces": {
+    ".": {
+      "entry": ["scripts/**/*.{mjs,ts}"],
+      "project": ["scripts/**/*.{mjs,ts}"]
+    },
+    "cli": {
+      "entry": ["tests/**/*.test.ts"],
+      "project": ["src/**/*.ts"]
+    },
+    "db": {
+      "project": ["src/**/*.ts"]
+    },
+    "services/orchestrator": {
+      "entry": ["tests/**/*.test.ts"],
+      "project": ["src/**/*.ts"]
+    },
+    "services/allocator": {
+      "entry": ["src/index.ts", "tests/**/*.test.ts"],
+      "project": ["src/**/*.ts"]
+    },
+    "services/dashboard": {
+      "entry": ["src/client/index.ts", "tests/**/*.test.ts"],
+      "project": ["src/**/*.{ts,tsx}"]
+    }
+  },
+  "ignore": [
+    "services/dashboard/src/design/index.ts",
+    "services/dashboard/src/design/tokens.ts",
+    "services/orchestrator/src/routes/costs/index.ts",
+    "services/orchestrator/src/routes/events/index.ts"
+  ],
+  "ignoreDependencies": [
+    "@playwright/test",
+    "hono"
+  ],
+  "ignoreBinaries": [
+    "just",
+    "playwright"
+  ],
+  "ignoreExportsUsedInFile": true,
+  "rules": {
+    "exports": "off",
+    "types": "off",
+    "nsExports": "off",
+    "nsTypes": "off",
+    "enumMembers": "off",
+    "duplicates": "off"
+  }
+}
