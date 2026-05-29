@@ -9,27 +9,41 @@ export default defineConfig({
   },
   test: {
     reporters: ["default", new MergifyReporter()],
-    // P3-0029 observability: coverage thresholds for WORKFLOW-CRITICAL modules
-    // only — the planner-feedback loop stages, the answerer reasoning paths
+    // P3-0029 observability: per-glob coverage thresholds for WORKFLOW-CRITICAL
+    // modules — the planner-feedback loop stages, the answerer reasoning paths
     // (planner/checker/auditor), the cost-recording path, and the
     // credential-resolution path. These are per-glob ratchets set at or just
     // BELOW the measured coverage (so the gate does not go red) to guard
-    // against regressions in the modules an autonomous run depends on. There is
-    // deliberately NO global threshold (that would couple the whole suite to
-    // these numbers). Observed coverage at authoring time is noted per glob.
+    // against regressions in the modules an autonomous run depends on.
+    //
+    // Strictness wave 2: a REPO-WIDE coverage floor is ALSO enforced (the
+    // top-level `thresholds.{statements,branches,functions,lines}` below). The
+    // `include` is broadened to all package `src/**` so the global numbers
+    // reflect the whole codebase. The global floor is a non-breaking ratchet
+    // set just BELOW the measured repo-wide baseline (see comment below) so it
+    // prevents regression without coupling the suite to the exact numbers. The
+    // per-glob thresholds above continue to key off their own subsets of the
+    // broadened include. Observed coverage is noted per glob and globally.
     coverage: {
       provider: "v8",
-      // Only the critical modules are instrumented; everything else is
-      // excluded so the thresholds key off these files alone.
+      // Instrument every package's source so the repo-wide floor below is
+      // computed against the whole codebase; per-glob thresholds still apply
+      // to their (narrower) subsets of this set.
       include: [
-        "services/orchestrator/src/engine/workflow/subtaskStages.ts",
-        "services/orchestrator/src/engine/workflow/subtaskCost.ts",
-        "services/orchestrator/src/engine/workflow/auditor/**",
-        "services/orchestrator/src/engine/workflow/checker/**",
-        "services/orchestrator/src/engine/workflow/planner/**",
-        "services/orchestrator/src/engine/credentials/**"
+        "cli/src/**",
+        "db/src/**",
+        "services/*/src/**"
       ],
       thresholds: {
+        // Strictness wave 2 — REPO-WIDE floor. Measured baseline at authoring
+        // time (corepack pnpm vitest run --coverage over all src):
+        //   statements 79.53%  branches 74.16%  functions 84.8%  lines 79.53%
+        // Floors set just below each to be non-breaking guards against
+        // regression of the whole suite.
+        statements: 79,
+        branches: 73,
+        functions: 84,
+        lines: 79,
         // Answerer reasoning paths — observed 100/100/100. Floor well below.
         "services/orchestrator/src/engine/workflow/auditor/**": {
           statements: 90,
