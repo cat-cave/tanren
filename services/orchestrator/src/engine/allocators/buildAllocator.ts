@@ -2,6 +2,7 @@ import type pg from "pg";
 import type { Allocator } from "../contracts/allocator.js";
 import { AllocatorRouter, type AllocatorRegistry } from "./allocatorRouter.js";
 import { DigitalOceanAllocator } from "./digitalOceanAllocator.js";
+import { GcpAllocator } from "./gcpAllocator.js";
 import { HetznerAllocator } from "./hetznerAllocator.js";
 import { ManualSshAllocator, type ManualSshHost } from "./manualSshAllocator.js";
 import { AllocatorRoutingConfig, type AllocatorKind } from "./poolPolicy.js";
@@ -89,6 +90,40 @@ function buildDigitalOcean(runners: RunnerStore): DigitalOceanAllocator {
   });
 }
 
+function buildGcp(runners: RunnerStore): GcpAllocator {
+  // The access token is a resolved secret here. In production it is minted from
+  // a service-account JSON / token ref by the operator's secret tooling and
+  // sourced from a Vault ref, never hardcoded.
+  const accessToken = env("TANREN_GCP_ACCESS_TOKEN");
+  const project = env("TANREN_GCP_PROJECT");
+  const zone = env("TANREN_GCP_ZONE");
+  const sshPublicKey = env("TANREN_GCP_SSH_PUBLIC_KEY");
+  const hostKeyFingerprint = env("TANREN_GCP_HOST_FINGERPRINT");
+  if (
+    accessToken === undefined ||
+    project === undefined ||
+    zone === undefined ||
+    sshPublicKey === undefined ||
+    hostKeyFingerprint === undefined
+  ) {
+    throw new Error(
+      "gcp allocator requires TANREN_GCP_ACCESS_TOKEN, TANREN_GCP_PROJECT, TANREN_GCP_ZONE, " +
+        "TANREN_GCP_SSH_PUBLIC_KEY, and TANREN_GCP_HOST_FINGERPRINT"
+    );
+  }
+  return new GcpAllocator({
+    accessToken,
+    project,
+    zone,
+    hostKeyFingerprint,
+    sshPublicKey,
+    machineType: env("TANREN_GCP_MACHINE_TYPE") ?? "e2-small",
+    sourceImage: env("TANREN_GCP_IMAGE") ?? "projects/cos-cloud/global/images/family/cos-stable",
+    sshUsername: env("TANREN_GCP_SSH_USER") ?? "tanren",
+    runners
+  });
+}
+
 /**
  * Builds the single allocator kind named by `kind`, or throws for the
  * scaffolded kinds (which only exist behind the router registry). This is the
@@ -104,6 +139,8 @@ function buildSingle(kind: string, runners: RunnerStore): Allocator {
       return buildHetzner(runners);
     case "digitalocean":
       return buildDigitalOcean(runners);
+    case "gcp":
+      return buildGcp(runners);
     case "sidecar":
       return buildSidecar(runners);
     default:
@@ -139,6 +176,8 @@ function buildRegistry(runners: RunnerStore, config: AllocatorRoutingConfig): Al
         return usedKinds.has("digitalocean")
           ? buildDigitalOcean(runners)
           : new UnconfiguredAllocator("digitalocean");
+      case "gcp":
+        return usedKinds.has("gcp") ? buildGcp(runners) : new UnconfiguredAllocator("gcp");
       case "aws_ec2":
         return new AwsEc2Allocator();
       case "kubernetes":
@@ -152,6 +191,7 @@ function buildRegistry(runners: RunnerStore, config: AllocatorRoutingConfig): Al
     manual_ssh: build("manual_ssh"),
     hetzner: build("hetzner"),
     digitalocean: build("digitalocean"),
+    gcp: build("gcp"),
     aws_ec2: build("aws_ec2"),
     kubernetes: build("kubernetes")
   };

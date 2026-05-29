@@ -39,7 +39,8 @@ function registry(overrides: Partial<AllocatorRegistry> = {}): {
     sidecar: new RecordingAllocator("sidecar"),
     manual_ssh: new RecordingAllocator("manual_ssh"),
     hetzner: new RecordingAllocator("hetzner"),
-    digitalocean: new RecordingAllocator("digitalocean")
+    digitalocean: new RecordingAllocator("digitalocean"),
+    gcp: new RecordingAllocator("gcp")
   };
   const reg: AllocatorRegistry = {
     static: recorders.static,
@@ -47,6 +48,7 @@ function registry(overrides: Partial<AllocatorRegistry> = {}): {
     manual_ssh: recorders.manual_ssh,
     hetzner: recorders.hetzner,
     digitalocean: recorders.digitalocean,
+    gcp: recorders.gcp,
     aws_ec2: new AwsEc2Allocator(),
     kubernetes: new KubernetesAllocator(),
     ...overrides
@@ -109,6 +111,20 @@ describe("AllocatorRouter", () => {
     await router.allocate(req("run_do", { cloud: "do" }));
 
     expect(recorders.digitalocean.allocated.map((r) => r.runId)).toEqual(["run_do"]);
+    expect(recorders.sidecar.allocated).toEqual([]);
+  });
+
+  it("routes by label/config to the gcp allocator", async () => {
+    const config = AllocatorRoutingConfig.parse({
+      defaultAllocator: "sidecar",
+      rules: [{ matchLabels: { cloud: "gcp" }, allocator: "gcp" }]
+    });
+    const { reg, recorders } = registry();
+    const router = new AllocatorRouter(reg, config);
+
+    await router.allocate(req("run_gcp", { cloud: "gcp" }));
+
+    expect(recorders.gcp.allocated.map((r) => r.runId)).toEqual(["run_gcp"]);
     expect(recorders.sidecar.allocated).toEqual([]);
   });
 

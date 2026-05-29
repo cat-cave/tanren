@@ -13,6 +13,7 @@ export const AllocatorKind = z.enum([
   "manual_ssh",
   "hetzner",
   "digitalocean",
+  "gcp",
   "aws_ec2",
   "kubernetes"
 ]);
