@@ -7,13 +7,13 @@ import { RunnerLifecycle } from "./runnerLifecycle.js";
 import { AbandonedRunSweeper } from "./sweeper.js";
 import { VaultSecretsClient } from "./vaultSecrets.js";
 
-const port = Number(process.env.ALLOCATOR_PORT ?? 3200);
-const authToken = process.env.TANREN_ALLOCATOR_TOKEN ?? "dev";
-const maxRunHours = Number(process.env.TANREN_MAX_RUN_HOURS ?? 6);
-const networkName = process.env.TANREN_ALLOCATOR_NETWORK ?? "tanren_default";
-const hostSshPortEnv = process.env.TANREN_ALLOCATOR_HOST_SSH_PORT;
-const sshHostnameTemplate = process.env.TANREN_ALLOCATOR_SSH_HOSTNAME_TEMPLATE ?? "{container}";
-const sweeperIntervalMs = Number(process.env.TANREN_ALLOCATOR_SWEEPER_INTERVAL_MS ?? 60_000);
+const port = Number(process.env["ALLOCATOR_PORT"] ?? 3200);
+const authToken = process.env["TANREN_ALLOCATOR_TOKEN"] ?? "dev";
+const maxRunHours = Number(process.env["TANREN_MAX_RUN_HOURS"] ?? 6);
+const networkName = process.env["TANREN_ALLOCATOR_NETWORK"] ?? "tanren_default";
+const hostSshPortEnv = process.env["TANREN_ALLOCATOR_HOST_SSH_PORT"];
+const sshHostnameTemplate = process.env["TANREN_ALLOCATOR_SSH_HOSTNAME_TEMPLATE"] ?? "{container}";
+const sweeperIntervalMs = Number(process.env["TANREN_ALLOCATOR_SWEEPER_INTERVAL_MS"] ?? 60_000);
 
 async function main(): Promise<void> {
   const docker = new HttpDockerEngineClient();
@@ -21,8 +21,8 @@ async function main(): Promise<void> {
   await migrate(pool);
   const store = new PgRunnerStore(pool);
   const secrets = new VaultSecretsClient({
-    addr: process.env.VAULT_ADDR ?? "http://vault:8200",
-    token: process.env.VAULT_TOKEN ?? "dev-root-token"
+    addr: process.env["VAULT_ADDR"] ?? "http://vault:8200",
+    token: process.env["VAULT_TOKEN"] ?? "dev-root-token"
   });
 
   const lifecycle = new RunnerLifecycle({
@@ -32,8 +32,8 @@ async function main(): Promise<void> {
     networkName,
     hostSshPort: hostSshPortEnv === undefined || hostSshPortEnv === "" ? undefined : Number(hostSshPortEnv),
     sshHostnameForOrchestrator: (container) => sshHostnameTemplate.replace("{container}", container),
-    capAdd: (process.env.TANREN_RUNNER_CAP_ADD ?? "SYS_ADMIN").split(",").filter((part) => part !== ""),
-    securityOpt: (process.env.TANREN_RUNNER_SECURITY_OPT ?? "apparmor=unconfined,seccomp=unconfined").split(",").filter((part) => part !== "")
+    capAdd: (process.env["TANREN_RUNNER_CAP_ADD"] ?? "SYS_ADMIN").split(",").filter((part) => part !== ""),
+    securityOpt: (process.env["TANREN_RUNNER_SECURITY_OPT"] ?? "apparmor=unconfined,seccomp=unconfined").split(",").filter((part) => part !== "")
   });
 
   const sweeper = new AbandonedRunSweeper({

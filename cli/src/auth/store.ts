@@ -12,7 +12,7 @@ export interface StoredAuth {
 }
 
 export function defaultAuthPath(): string {
-  return process.env.TANREN_AUTH_FILE ?? join(homedir(), ".config", "tanren", "auth.json");
+  return process.env["TANREN_AUTH_FILE"] ?? join(homedir(), ".config", "tanren", "auth.json");
 }
 
 export async function readAuth(path = defaultAuthPath()): Promise<StoredAuth | undefined> {

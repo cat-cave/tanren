@@ -1,6 +1,6 @@
 // `tanren behaviors ...` commands.
 
-import { jsonRequest, request } from "../../main.js";
+import { jsonRequest, request } from "../../httpClient.js";
 import { jsonOutput, optional, parseArgs, required } from "../args.js";
 
 export async function behaviorsList(argv: string[]): Promise<void> {

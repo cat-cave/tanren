@@ -181,11 +181,11 @@ export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
       return renderShell(c, ctx, { title: "tanren · new spec" }, notFoundBody(projectId));
     }
     const form = await c.req.parseBody({ all: true });
-    const title = String(form.title ?? "").trim();
-    const description = String(form.description ?? "").trim();
-    const acceptanceCriteria = asArray(form.acceptanceCriteria as string | string[] | undefined);
-    const dependsOn = asArray(form.dependsOn as string | string[] | undefined);
-    const milestoneId = String(form.milestoneId ?? "");
+    const title = String(form["title"] ?? "").trim();
+    const description = String(form["description"] ?? "").trim();
+    const acceptanceCriteria = asArray(form["acceptanceCriteria"] as string | string[] | undefined);
+    const dependsOn = asArray(form["dependsOn"] as string | string[] | undefined);
+    const milestoneId = String(form["milestoneId"] ?? "");
 
     const client = clientFor(c, deps);
     const reRender = (error: string) =>
@@ -229,11 +229,11 @@ export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
   app.post("/projects/:projectId/insights/act", async (c) => {
     const projectId = c.req.param("projectId");
     const form = await c.req.parseBody();
-    const orgId = String(form.orgId ?? "");
-    const tool = String(form.tool ?? "");
+    const orgId = String(form["orgId"] ?? "");
+    const tool = String(form["tool"] ?? "");
     let args: Record<string, unknown> = {};
     try {
-      args = JSON.parse(String(form.args ?? "{}")) as Record<string, unknown>;
+      args = JSON.parse(String(form["args"] ?? "{}")) as Record<string, unknown>;
     } catch {
       args = {};
     }
@@ -315,12 +315,12 @@ export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
   app.post("/settings/routing/:projectId/add", async (c) => {
     const projectId = c.req.param("projectId");
     const form = await c.req.parseBody();
-    const orgId = String(form.orgId ?? "");
-    const role = String(form.role ?? "") as RoleId;
+    const orgId = String(form["orgId"] ?? "");
+    const role = String(form["role"] ?? "") as RoleId;
     const entry: RoutingChainEntry = {
-      cli: String(form.cli ?? "").trim(),
-      model: String(form.model ?? "").trim(),
-      authRef: String(form.authRef ?? "").trim()
+      cli: String(form["cli"] ?? "").trim(),
+      model: String(form["model"] ?? "").trim(),
+      authRef: String(form["authRef"] ?? "").trim()
     };
     await mutateConfig(c, deps, orgId, projectId, (config) => {
       if (ROLE_IDS.includes(role) && entry.cli !== "" && entry.model !== "" && entry.authRef !== "") {
@@ -333,9 +333,9 @@ export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
   app.post("/settings/routing/:projectId/remove", async (c) => {
     const projectId = c.req.param("projectId");
     const form = await c.req.parseBody();
-    const orgId = String(form.orgId ?? "");
-    const role = String(form.role ?? "") as RoleId;
-    const index = Number(form.index ?? "-1");
+    const orgId = String(form["orgId"] ?? "");
+    const role = String(form["role"] ?? "") as RoleId;
+    const index = Number(form["index"] ?? "-1");
     await mutateConfig(c, deps, orgId, projectId, (config) => {
       if (ROLE_IDS.includes(role)) {
         const chain = config.routing[role].chain;
@@ -348,17 +348,17 @@ export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
   app.post("/settings/routing/:projectId/reorder", async (c) => {
     const projectId = c.req.param("projectId");
     const form = await c.req.parseBody();
-    const orgId = String(form.orgId ?? "");
-    const role = String(form.role ?? "") as RoleId;
-    const index = Number(form.index ?? "-1");
-    const direction = String(form.direction ?? "");
+    const orgId = String(form["orgId"] ?? "");
+    const role = String(form["role"] ?? "") as RoleId;
+    const index = Number(form["index"] ?? "-1");
+    const direction = String(form["direction"] ?? "");
     await mutateConfig(c, deps, orgId, projectId, (config) => {
       if (!ROLE_IDS.includes(role)) return;
       const chain = config.routing[role].chain;
       const target = direction === "up" ? index - 1 : index + 1;
       if (index >= 0 && index < chain.length && target >= 0 && target < chain.length) {
         const [moved] = chain.splice(index, 1);
-        chain.splice(target, 0, moved);
+        if (moved !== undefined) chain.splice(target, 0, moved);
       }
     });
     return c.redirect(`/settings/routing/${projectId}?saved=1`);
@@ -369,9 +369,9 @@ export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
   app.post("/settings/routing/:projectId/credentials", async (c) => {
     const projectId = c.req.param("projectId");
     const form = await c.req.parseBody();
-    const orgId = String(form.orgId ?? "");
-    const codexCredentialRef = String(form.codexCredentialRef ?? "").trim();
-    const githubCredentialRef = String(form.githubCredentialRef ?? "").trim();
+    const orgId = String(form["orgId"] ?? "");
+    const codexCredentialRef = String(form["codexCredentialRef"] ?? "").trim();
+    const githubCredentialRef = String(form["githubCredentialRef"] ?? "").trim();
     await mutateConfig(c, deps, orgId, projectId, (config) => {
       const credentials: { codexCredentialRef?: string; githubCredentialRef?: string } = {};
       if (codexCredentialRef !== "") credentials.codexCredentialRef = codexCredentialRef;
@@ -388,7 +388,7 @@ export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
   app.post("/settings/routing/:projectId/hatches", async (c) => {
     const projectId = c.req.param("projectId");
     const form = await c.req.parseBody();
-    const orgId = String(form.orgId ?? "");
+    const orgId = String(form["orgId"] ?? "");
     await mutateConfig(c, deps, orgId, projectId, (config) => {
       const next: Partial<EscapeHatches> = { ...config.escapeHatches };
       for (const field of [

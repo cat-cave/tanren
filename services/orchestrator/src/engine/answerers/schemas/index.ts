@@ -5,11 +5,7 @@
 // `codex exec --output-schema` callers.
 import { z, type ZodType } from "zod";
 
-import { AUDIT_ANSWER_SCHEMA_ID, AuditAnswer } from "./audit.js";
-import { CHECK_ANSWER_SCHEMA_ID, CheckAnswer } from "./check.js";
-import { DEMO_ANSWER_SCHEMA_ID, DemoAnswer } from "./demo.js";
-import { FORGE_ANSWER_SCHEMA_ID, ForgeAnswer } from "./forge.js";
-import { PLAN_ANSWER_SCHEMA_ID, PlanAnswer } from "./plan.js";
+import { answererSchemaCatalog, type AnswererRole, type AnswererSchemaDescriptor } from "./catalog.js";
 
 export {
   PlanAnswer,
@@ -42,52 +38,11 @@ export {
 } from "./forge.js";
 export { answererOutputSchemaFor, type AnswererOutputSchema } from "./adapter.js";
 
-export type AnswererRole = "plan" | "check" | "audit" | "demo" | "forge";
-
-export interface AnswererSchemaDescriptor {
-  readonly role: AnswererRole;
-  readonly schemaId: string;
-  readonly generatedFile: string;
-  readonly zod: ZodType;
-}
-
-// answererSchemaCatalog drives both the codegen step
-// (scripts/answerer-schema-export.ts) and the drift test
-// (services/orchestrator/tests/answererSchemaDrift.test.ts). Order is part
-// of the contract: keeping it stable keeps the generated file ordering
-// stable for human-friendly diffs.
-export const answererSchemaCatalog: Readonly<Record<AnswererRole, AnswererSchemaDescriptor>> = {
-  plan: {
-    role: "plan",
-    schemaId: PLAN_ANSWER_SCHEMA_ID,
-    generatedFile: "plan.json",
-    zod: PlanAnswer
-  },
-  check: {
-    role: "check",
-    schemaId: CHECK_ANSWER_SCHEMA_ID,
-    generatedFile: "check.json",
-    zod: CheckAnswer
-  },
-  audit: {
-    role: "audit",
-    schemaId: AUDIT_ANSWER_SCHEMA_ID,
-    generatedFile: "audit.json",
-    zod: AuditAnswer
-  },
-  demo: {
-    role: "demo",
-    schemaId: DEMO_ANSWER_SCHEMA_ID,
-    generatedFile: "demo.json",
-    zod: DemoAnswer
-  },
-  forge: {
-    role: "forge",
-    schemaId: FORGE_ANSWER_SCHEMA_ID,
-    generatedFile: "forge.json",
-    zod: ForgeAnswer
-  }
-} as const;
+export {
+  answererSchemaCatalog,
+  type AnswererRole,
+  type AnswererSchemaDescriptor
+} from "./catalog.js";
 
 export function listAnswererSchemas(): ReadonlyArray<AnswererSchemaDescriptor> {
   return (Object.keys(answererSchemaCatalog) as AnswererRole[]).map((role) => answererSchemaCatalog[role]);

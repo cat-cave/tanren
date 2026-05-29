@@ -55,10 +55,10 @@ import { createRecoveryRoutes } from "./routes/recovery/index.js";
 import { createRunRoutes } from "./routes/runs/index.js";
 import { createSpecRoutes } from "./routes/specs/index.js";
 
-const port = Number(process.env.ORCHESTRATOR_PORT ?? 3100);
-const vaultAddr = process.env.VAULT_ADDR ?? "http://localhost:8200";
-const vaultToken = process.env.VAULT_TOKEN ?? "dev-root-token";
-const runnerIdentitySecretRef = process.env.TANREN_RUNNER_IDENTITY_SECRET_REF ?? "runner/local-docker/identity";
+const port = Number(process.env["ORCHESTRATOR_PORT"] ?? 3100);
+const vaultAddr = process.env["VAULT_ADDR"] ?? "http://localhost:8200";
+const vaultToken = process.env["VAULT_TOKEN"] ?? "dev-root-token";
+const runnerIdentitySecretRef = process.env["TANREN_RUNNER_IDENTITY_SECRET_REF"] ?? "runner/local-docker/identity";
 let productionPool: pg.Pool | undefined;
 
 async function vaultHealth() {
@@ -98,9 +98,9 @@ export interface BuildAppAuthOptions {
 }
 
 export function buildAuthFromEnv(pool: pg.Pool): BuildAppAuthOptions | undefined {
-  const clientId = process.env.TANREN_GITHUB_OAUTH_CLIENT_ID;
-  const clientSecret = process.env.TANREN_GITHUB_OAUTH_CLIENT_SECRET;
-  const publicBaseUrl = process.env.TANREN_PUBLIC_BASE_URL ?? `http://localhost:${port}`;
+  const clientId = process.env["TANREN_GITHUB_OAUTH_CLIENT_ID"];
+  const clientSecret = process.env["TANREN_GITHUB_OAUTH_CLIENT_SECRET"];
+  const publicBaseUrl = process.env["TANREN_PUBLIC_BASE_URL"] ?? `http://localhost:${port}`;
   const providers = new Map<IdentityProviderId, IdentityProvider>();
   if (clientId !== undefined && clientId !== "" && clientSecret !== undefined && clientSecret !== "") {
     providers.set("github_oauth", new GitHubOAuthProvider({ clientId, clientSecret }));
@@ -119,8 +119,8 @@ export function buildAuthFromEnv(pool: pg.Pool): BuildAppAuthOptions | undefined
   // without a registered GitHub OAuth app. Defaults off → byte-for-byte
   // unchanged behavior. Refused (with a loud warning, flag ignored) under a
   // prod-like cookie-secure context as a defense-in-depth guard.
-  if (process.env.TANREN_DEV_LOGIN === "1") {
-    if (process.env.TANREN_COOKIE_SECURE === "1") {
+  if (process.env["TANREN_DEV_LOGIN"] === "1") {
+    if (process.env["TANREN_COOKIE_SECURE"] === "1") {
       console.warn(
         "[auth] TANREN_DEV_LOGIN=1 ignored: refusing dev-login escape hatch under TANREN_COOKIE_SECURE=1 (prod-like context)"
       );
@@ -135,7 +135,7 @@ export function buildAuthFromEnv(pool: pg.Pool): BuildAppAuthOptions | undefined
     store: new IdentityStore(pool),
     providers,
     publicBaseUrl,
-    cookieSecure: process.env.TANREN_COOKIE_SECURE === "1"
+    cookieSecure: process.env["TANREN_COOKIE_SECURE"] === "1"
   };
 }
 
@@ -246,7 +246,7 @@ export function buildApp(input: {
     });
   });
 
-  app.get("/version", (c) => c.json({ service: "orchestrator", version: process.env.npm_package_version ?? "0.0.0" }));
+  app.get("/version", (c) => c.json({ service: "orchestrator", version: process.env["npm_package_version"] ?? "0.0.0" }));
 
   app.post("/projects", async (c) => {
     const parsed = projectInputSchema.safeParse(await c.req.json().catch(() => undefined));
@@ -423,13 +423,13 @@ function getProductionPool(): pg.Pool {
 }
 
 async function seedRunnerIdentitySecret(secrets: SecretStore): Promise<void> {
-  const inlinePrivateKey = process.env.TANREN_RUNNER_IDENTITY_PRIVATE_KEY;
+  const inlinePrivateKey = process.env["TANREN_RUNNER_IDENTITY_PRIVATE_KEY"];
   if (inlinePrivateKey !== undefined && inlinePrivateKey !== "") {
     await secrets.put({ ref: runnerIdentitySecretRef, value: inlinePrivateKey });
     return;
   }
 
-  const keyPath = process.env.TANREN_RUNNER_IDENTITY_KEY_PATH;
+  const keyPath = process.env["TANREN_RUNNER_IDENTITY_KEY_PATH"];
   if (keyPath !== undefined && keyPath !== "") {
     await secrets.put({ ref: runnerIdentitySecretRef, value: await readFile(keyPath, "utf8") });
   }

@@ -129,10 +129,10 @@ export function parseOpencodeStreamTelemetry(stdout: string): OpencodeEventTelem
 }
 
 function detectUsageLimit(event: Record<string, unknown>): UsageLimitSignal | undefined {
-  const candidates: unknown[] = [event.message, event.error];
-  const errorField = event.error;
+  const candidates: unknown[] = [event["message"], event["error"]];
+  const errorField = event["error"];
   if (typeof errorField === "object" && errorField !== null && !Array.isArray(errorField)) {
-    candidates.push((errorField as Record<string, unknown>).message);
+    candidates.push((errorField as Record<string, unknown>)["message"]);
   }
   for (const candidate of candidates) {
     if (typeof candidate === "string" && /usage limit|rate limit/i.test(candidate)) {

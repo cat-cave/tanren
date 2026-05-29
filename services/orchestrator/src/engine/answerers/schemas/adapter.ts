@@ -14,7 +14,7 @@ import type { ZodType } from "zod";
 import {
   answererSchemaCatalog,
   type AnswererRole
-} from "./index.js";
+} from "./catalog.js";
 
 export interface AnswererOutputSchema<TOutput> {
   name: string;

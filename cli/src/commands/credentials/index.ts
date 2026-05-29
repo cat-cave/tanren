@@ -1,6 +1,6 @@
 // `tanren credentials ...` commands.
 
-import { jsonRequest, request } from "../../main.js";
+import { jsonRequest, request } from "../../httpClient.js";
 import { jsonOutput, optional, parseArgs, required } from "../args.js";
 
 export async function credentialsList(argv: string[]): Promise<void> {
@@ -20,11 +20,11 @@ export async function credentialsCreate(argv: string[]): Promise<void> {
       : `/orgs/${encodeURIComponent(orgId)}/credentials?kind=${encodeURIComponent(kind)}`;
   const body: Record<string, string> = { ref: required(args, "ref") };
   if (kind === "github_token") {
-    body.token = required(args, "value");
+    body["token"] = required(args, "value");
   } else if (kind === "codex_chatgpt_auth") {
-    body.authJson = required(args, "value");
+    body["authJson"] = required(args, "value");
   } else {
-    body.value = required(args, "value");
+    body["value"] = required(args, "value");
   }
   jsonOutput(args, await jsonRequest(path, body));
 }

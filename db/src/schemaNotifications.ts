@@ -10,7 +10,7 @@ import {
   uniqueIndex
 } from "drizzle-orm/pg-core";
 import { eventTypeNames } from "./eventTypes.js";
-import { organizations, users } from "./schema.js";
+import { organizations, users } from "./schemaCore.js";
 
 // P2A-0017 notifications matrix. Split from schema.ts to keep that file
 // inside the file-line-max-500 architecture rule. The two tables are the

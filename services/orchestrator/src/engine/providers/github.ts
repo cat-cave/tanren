@@ -275,7 +275,7 @@ export class GitHubStatusService {
       throw new Error(`GitHub PR fetch failed: HTTP ${pull.status}`);
     }
     const head = parsePullRequestHead(pull.body);
-    const baseBranch = parseBaseBranch((pull.body as Record<string, unknown> | undefined)?.base);
+    const baseBranch = parseBaseBranch((pull.body as Record<string, unknown> | undefined)?.["base"]);
 
     const [checkRuns, statuses] = await Promise.all([
       this.http.request({
@@ -346,16 +346,16 @@ function parseRequiredContexts(value: unknown): string[] | undefined {
   const object = value as Record<string, unknown>;
   // The modern `checks` array carries per-check `context`; `contexts` is the
   // legacy string list. Prefer `checks` and fall back to `contexts`.
-  const checks = object.checks;
+  const checks = object["checks"];
   if (Array.isArray(checks)) {
     const names = checks
-      .map((entry) => (typeof entry === "object" && entry !== null ? (entry as Record<string, unknown>).context : undefined))
+      .map((entry) => (typeof entry === "object" && entry !== null ? (entry as Record<string, unknown>)["context"] : undefined))
       .filter((name): name is string => typeof name === "string");
     if (names.length > 0) {
       return names;
     }
   }
-  const contexts = object.contexts;
+  const contexts = object["contexts"];
   if (Array.isArray(contexts)) {
     return contexts.filter((name): name is string => typeof name === "string");
   }
@@ -395,10 +395,10 @@ function parsePullRequest(value: unknown): GitHubPullRequest {
     throw new Error("GitHub PR response was not an object");
   }
   const object = value as Record<string, unknown>;
-  if (typeof object.number !== "number" || typeof object.html_url !== "string") {
+  if (typeof object["number"] !== "number" || typeof object["html_url"] !== "string") {
     throw new Error("GitHub PR response missing number or html_url");
   }
-  return { number: object.number, url: object.html_url, draft: object.draft === true, baseBranch: parseBaseBranch(object.base) };
+  return { number: object["number"], url: object["html_url"], draft: object["draft"] === true, baseBranch: parseBaseBranch(object["base"]) };
 }
 
 function asPullArray(value: unknown): unknown[] {
@@ -412,7 +412,7 @@ function parseBaseBranch(value: unknown): string | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return undefined;
   }
-  const ref = (value as Record<string, unknown>).ref;
+  const ref = (value as Record<string, unknown>)["ref"];
   return typeof ref === "string" ? ref : undefined;
 }
 
@@ -420,22 +420,22 @@ function parsePullRequestHead(value: unknown): GitHubPullRequestHead {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new Error("GitHub PR response was not an object");
   }
-  const head = (value as Record<string, unknown>).head;
+  const head = (value as Record<string, unknown>)["head"];
   if (typeof head !== "object" || head === null || Array.isArray(head)) {
     throw new Error("GitHub PR response missing head");
   }
   const object = head as Record<string, unknown>;
-  if (typeof object.sha !== "string" || object.sha === "") {
+  if (typeof object["sha"] !== "string" || object["sha"] === "") {
     throw new Error("GitHub PR response missing head sha");
   }
-  return { sha: object.sha, ref: typeof object.ref === "string" ? object.ref : undefined };
+  return { sha: object["sha"], ref: typeof object["ref"] === "string" ? object["ref"] : undefined };
 }
 
 function parseCheckRuns(value: unknown): GitHubCheckRun[] {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new Error("GitHub check-runs response was not an object");
   }
-  const checkRuns = (value as Record<string, unknown>).check_runs;
+  const checkRuns = (value as Record<string, unknown>)["check_runs"];
   if (!Array.isArray(checkRuns)) {
     throw new Error("GitHub check-runs response missing check_runs");
   }
@@ -447,14 +447,14 @@ function parseCheckRun(value: unknown): GitHubCheckRun {
     throw new Error("GitHub check run was not an object");
   }
   const object = value as Record<string, unknown>;
-  if (typeof object.name !== "string" || typeof object.status !== "string") {
+  if (typeof object["name"] !== "string" || typeof object["status"] !== "string") {
     throw new Error("GitHub check run missing name or status");
   }
   return {
-    name: object.name,
-    status: object.status,
-    conclusion: typeof object.conclusion === "string" ? object.conclusion : undefined,
-    url: typeof object.html_url === "string" ? object.html_url : undefined
+    name: object["name"],
+    status: object["status"],
+    conclusion: typeof object["conclusion"] === "string" ? object["conclusion"] : undefined,
+    url: typeof object["html_url"] === "string" ? object["html_url"] : undefined
   };
 }
 
@@ -462,7 +462,7 @@ function parseCommitStatuses(value: unknown): GitHubCommitStatus[] {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new Error("GitHub commit status response was not an object");
   }
-  const statuses = (value as Record<string, unknown>).statuses;
+  const statuses = (value as Record<string, unknown>)["statuses"];
   if (!Array.isArray(statuses)) {
     throw new Error("GitHub commit status response missing statuses");
   }
@@ -474,12 +474,12 @@ function parseCommitStatus(value: unknown): GitHubCommitStatus {
     throw new Error("GitHub commit status was not an object");
   }
   const object = value as Record<string, unknown>;
-  if (typeof object.context !== "string" || typeof object.state !== "string") {
+  if (typeof object["context"] !== "string" || typeof object["state"] !== "string") {
     throw new Error("GitHub commit status missing context or state");
   }
   return {
-    context: object.context,
-    state: object.state,
-    url: typeof object.target_url === "string" ? object.target_url : undefined
+    context: object["context"],
+    state: object["state"],
+    url: typeof object["target_url"] === "string" ? object["target_url"] : undefined
   };
 }

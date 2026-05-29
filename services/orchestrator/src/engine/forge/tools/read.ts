@@ -147,28 +147,28 @@ export async function tanrenReadEvents(
     params
   );
   const events: RedactedEventRow[] = result.rows.map((row: Record<string, unknown>) => {
-    const eventType = String(row.event_type);
+    const eventType = String(row["event_type"]);
     if (!isEventName(eventType)) {
       return {
-        id: row.id as number | string,
-        ts: row.ts as Date,
-        runId: row.run_id === null || row.run_id === undefined ? null : String(row.run_id),
-        taskId: row.task_id === null || row.task_id === undefined ? null : String(row.task_id),
-        specId: row.spec_id === null || row.spec_id === undefined ? null : String(row.spec_id),
-        projectId: row.project_id === null || row.project_id === undefined ? null : String(row.project_id),
+        id: row["id"] as number | string,
+        ts: row["ts"] as Date,
+        runId: row["run_id"] === null || row["run_id"] === undefined ? null : String(row["run_id"]),
+        taskId: row["task_id"] === null || row["task_id"] === undefined ? null : String(row["task_id"]),
+        specId: row["spec_id"] === null || row["spec_id"] === undefined ? null : String(row["spec_id"]),
+        projectId: row["project_id"] === null || row["project_id"] === undefined ? null : String(row["project_id"]),
         eventType,
-        payload: row.payload,
+        payload: row["payload"],
         redactedPaths: []
       };
     }
-    const output = redactEventPayload({ eventName: eventType, payload: row.payload, actor, rawView: false });
+    const output = redactEventPayload({ eventName: eventType, payload: row["payload"], actor, rawView: false });
     return {
-      id: row.id as number | string,
-      ts: row.ts as Date,
-      runId: row.run_id === null || row.run_id === undefined ? null : String(row.run_id),
-      taskId: row.task_id === null || row.task_id === undefined ? null : String(row.task_id),
-      specId: row.spec_id === null || row.spec_id === undefined ? null : String(row.spec_id),
-      projectId: row.project_id === null || row.project_id === undefined ? null : String(row.project_id),
+      id: row["id"] as number | string,
+      ts: row["ts"] as Date,
+      runId: row["run_id"] === null || row["run_id"] === undefined ? null : String(row["run_id"]),
+      taskId: row["task_id"] === null || row["task_id"] === undefined ? null : String(row["task_id"]),
+      specId: row["spec_id"] === null || row["spec_id"] === undefined ? null : String(row["spec_id"]),
+      projectId: row["project_id"] === null || row["project_id"] === undefined ? null : String(row["project_id"]),
       eventType,
       payload: output.payload,
       redactedPaths: output.redactedPaths

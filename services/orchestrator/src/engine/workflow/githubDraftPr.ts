@@ -229,7 +229,7 @@ async function loadDraftPrRunContext(pool: RunStateClient, runId: string): Promi
 }
 
 function githubCredentialRefFromInput(input: PublishDraftPullRequestInput): string {
-  const configured = input.githubCredentialRef ?? input.projectConfig?.githubCredentialRef;
+  const configured = input.githubCredentialRef ?? input.projectConfig?.["githubCredentialRef"];
   if (typeof configured !== "string") {
     throw new Error("GitHub credential ref is required");
   }
@@ -237,7 +237,7 @@ function githubCredentialRefFromInput(input: PublishDraftPullRequestInput): stri
 }
 
 function credentialRefOrUndefined(input: PublishDraftPullRequestInput): string | undefined {
-  const configured = input.githubCredentialRef ?? input.projectConfig?.githubCredentialRef;
+  const configured = input.githubCredentialRef ?? input.projectConfig?.["githubCredentialRef"];
   return typeof configured === "string" ? validateGithubCredentialRef(configured) : undefined;
 }
 

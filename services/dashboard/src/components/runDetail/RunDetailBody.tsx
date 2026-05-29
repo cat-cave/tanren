@@ -195,7 +195,7 @@ function eventSummary(event: RunEventRow): string {
   const payload = event.payload;
   if (typeof payload === "object" && payload !== null) {
     const rec = payload as Record<string, unknown>;
-    const summary = rec.summary ?? rec.headline ?? rec.title ?? rec.message;
+    const summary = rec["summary"] ?? rec["headline"] ?? rec["title"] ?? rec["message"];
     if (typeof summary === "string") return summary;
     const keys = Object.keys(rec);
     return keys.length === 0 ? "(empty)" : `{ ${keys.slice(0, 4).join(", ")} }`;
@@ -224,11 +224,11 @@ function Reasoning(props: RunDetailBodyProps & { selectedTaskId: string | null }
           <h2 data-rd="moment-headline">{reasoning.headline}</h2>
         </div>
 
-        {insightForTask !== undefined && typeof insightForTask.kind === "string" ? (
+        {insightForTask !== undefined && typeof insightForTask["kind"] === "string" ? (
           <div class="subopt">
-            <span class="tag">workflow insight · {String(insightForTask.kind)}</span>
+            <span class="tag">workflow insight · {String(insightForTask["kind"])}</span>
             <span class="t">
-              {typeof insightForTask.specTitle === "string" ? String(insightForTask.specTitle) : "a suboptimal pattern was detected on this run"}
+              {typeof insightForTask["specTitle"] === "string" ? String(insightForTask["specTitle"]) : "a suboptimal pattern was detected on this run"}
             </span>
           </div>
         ) : null}

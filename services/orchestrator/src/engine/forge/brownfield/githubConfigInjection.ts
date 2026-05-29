@@ -124,9 +124,9 @@ export class FetchConfigInjectionGitHub implements ConfigInjectionGitHub {
 
 function baseRefSha(body: unknown): string {
   if (typeof body === "object" && body !== null) {
-    const objectRef = (body as Record<string, unknown>).object;
+    const objectRef = (body as Record<string, unknown>)["object"];
     if (typeof objectRef === "object" && objectRef !== null) {
-      const sha = (objectRef as Record<string, unknown>).sha;
+      const sha = (objectRef as Record<string, unknown>)["sha"];
       if (typeof sha === "string" && sha !== "") return sha;
     }
   }
@@ -135,7 +135,7 @@ function baseRefSha(body: unknown): string {
 
 function contentSha(body: unknown): string | undefined {
   if (typeof body === "object" && body !== null) {
-    const sha = (body as Record<string, unknown>).sha;
+    const sha = (body as Record<string, unknown>)["sha"];
     if (typeof sha === "string" && sha !== "") return sha;
   }
   return undefined;

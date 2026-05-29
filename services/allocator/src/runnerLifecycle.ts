@@ -110,7 +110,7 @@ export class RunnerLifecycle {
       name: containerName,
       image: input.runnerImage,
       env: {
-        TANREN_RUNNER_AUTHORIZED_KEY: process.env.TANREN_RUNNER_AUTHORIZED_KEY ?? "",
+        TANREN_RUNNER_AUTHORIZED_KEY: process.env["TANREN_RUNNER_AUTHORIZED_KEY"] ?? "",
         TANREN_CODEX_HOME_BUNDLE: codexHomeBundle,
         TANREN_RUNNER_EPHEMERAL: "1"
       },

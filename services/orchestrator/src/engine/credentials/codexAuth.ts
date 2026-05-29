@@ -65,11 +65,11 @@ export function validateCodexCredentialRef(ref: string): string {
 }
 
 function looksLikeCodexAuthJson(value: Record<string, unknown>): boolean {
-  const tokens = value.tokens;
-  if (typeof value.auth_mode === "string" && tokensObjectHasAnyToken(tokens)) {
+  const tokens = value["tokens"];
+  if (typeof value["auth_mode"] === "string" && tokensObjectHasAnyToken(tokens)) {
     return true;
   }
-  return tokensObjectHasAnyToken(tokens) || typeof value.OPENAI_API_KEY === "string" && value.OPENAI_API_KEY !== "";
+  return tokensObjectHasAnyToken(tokens) || typeof value["OPENAI_API_KEY"] === "string" && value["OPENAI_API_KEY"] !== "";
 }
 
 function tokensObjectHasAnyToken(value: unknown): boolean {

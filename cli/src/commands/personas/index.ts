@@ -1,6 +1,6 @@
 // `tanren personas ...` commands mirroring the /personas HTTP routes.
 
-import { jsonRequest, request } from "../../main.js";
+import { jsonRequest, request } from "../../httpClient.js";
 import { jsonOutput, optional, parseArgs, required } from "../args.js";
 
 export async function personasList(argv: string[]): Promise<void> {

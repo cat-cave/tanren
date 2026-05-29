@@ -58,8 +58,8 @@ function getRefs(): PaletteRefs | undefined {
     chat,
     footerPalette,
     footerChat,
-    orgId: root.dataset.orgId ?? "",
-    projectId: root.dataset.projectId ?? ""
+    orgId: root.dataset['orgId'] ?? "",
+    projectId: root.dataset['projectId'] ?? ""
   };
 }
 
@@ -148,8 +148,8 @@ export function initPalette(): void {
     for (const el of items(refs)) {
       const hit =
         query === "" ||
-        (el.dataset.title ?? "").includes(query) ||
-        (el.dataset.desc ?? "").includes(query);
+        (el.dataset['title'] ?? "").includes(query) ||
+        (el.dataset['desc'] ?? "").includes(query);
       el.hidden = !hit;
       if (hit) shown += 1;
     }
@@ -190,13 +190,13 @@ export function initPalette(): void {
   };
 
   const select = async (el: HTMLElement): Promise<void> => {
-    const route = el.dataset.route ?? "";
-    const tool = el.dataset.tool ?? "";
-    const isAsk = (el.dataset.ask ?? "") === "1";
+    const route = el.dataset['route'] ?? "";
+    const tool = el.dataset['tool'] ?? "";
+    const isAsk = (el.dataset['ask'] ?? "") === "1";
     if (tool !== "" && refs.orgId !== "") {
       let args: Record<string, unknown> = {};
       try {
-        args = el.dataset.args ? (JSON.parse(el.dataset.args) as Record<string, unknown>) : {};
+        args = el.dataset['args'] ? (JSON.parse(el.dataset['args']) as Record<string, unknown>) : {};
       } catch {
         args = {};
       }
@@ -271,7 +271,7 @@ export function initPalette(): void {
   // Trigger button(s) — the "ask forge" key in the top bar, plus any affordance
   // carrying a `data-palette-prefill` seed (e.g. the costs heatmap audits CTA).
   for (const trigger of document.querySelectorAll<HTMLElement>('[data-island-trigger="palette"]')) {
-    trigger.addEventListener("click", () => open(trigger.dataset.palettePrefill ?? ""));
+    trigger.addEventListener("click", () => open(trigger.dataset['palettePrefill'] ?? ""));
   }
 
   // Global ⌘K / Ctrl+K toggle, Escape to close.

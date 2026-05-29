@@ -174,6 +174,8 @@ function buildVelocity(input: BuildProjectViewInput): VelocityModel | null {
     input.milestones.find((m) => m.status !== "done" && m.eta !== null) ??
     input.milestones.find((m) => m.eta !== null) ??
     input.milestones[0];
+  // `input.milestones` is non-empty (guarded above), so `target` is defined.
+  if (target === undefined) return null;
   // Sparkline: completed-run counts bucketed over recent runs. With no cost/run
   // history the sparkline is flat-minimal rather than fabricated.
   const completed = input.runs.filter(

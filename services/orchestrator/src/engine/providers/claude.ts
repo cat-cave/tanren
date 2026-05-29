@@ -222,8 +222,8 @@ export function extractClaudeFinalText(stdout: string): string {
     if (parsed === undefined) {
       continue;
     }
-    if (parsed.type === "result" && typeof parsed.result === "string") {
-      return parsed.result;
+    if (parsed["type"] === "result" && typeof parsed["result"] === "string") {
+      return parsed["result"];
     }
     const assistantText = assistantTextFromEvent(parsed);
     if (assistantText !== undefined) {
@@ -234,19 +234,19 @@ export function extractClaudeFinalText(stdout: string): string {
 }
 
 function assistantTextFromEvent(event: Record<string, unknown>): string | undefined {
-  if (event.type !== "assistant") {
+  if (event["type"] !== "assistant") {
     return undefined;
   }
-  const message = event.message;
+  const message = event["message"];
   if (typeof message !== "object" || message === null) {
     return undefined;
   }
-  const content = (message as Record<string, unknown>).content;
+  const content = (message as Record<string, unknown>)["content"];
   if (!Array.isArray(content)) {
     return undefined;
   }
   const text = content
-    .map((block) => (typeof block === "object" && block !== null ? (block as Record<string, unknown>).text : undefined))
+    .map((block) => (typeof block === "object" && block !== null ? (block as Record<string, unknown>)["text"] : undefined))
     .filter((value): value is string => typeof value === "string")
     .join("");
   return text === "" ? undefined : text;
@@ -279,10 +279,10 @@ function stripJsonFences(text: string): string {
 // rejection. Matched on the stable "usage limit" phrase so a minor wording
 // change in the error envelope still surfaces it.
 function detectUsageLimit(event: Record<string, unknown>): UsageLimitSignal | undefined {
-  const candidates: unknown[] = [event.message, event.result, event.error];
-  const errorField = event.error;
+  const candidates: unknown[] = [event["message"], event["result"], event["error"]];
+  const errorField = event["error"];
   if (typeof errorField === "object" && errorField !== null && !Array.isArray(errorField)) {
-    candidates.push((errorField as Record<string, unknown>).message);
+    candidates.push((errorField as Record<string, unknown>)["message"]);
   }
   for (const candidate of candidates) {
     if (typeof candidate === "string" && /usage limit/i.test(candidate)) {

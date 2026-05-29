@@ -182,7 +182,7 @@ export class OidcProvider implements IdentityProvider {
       throw new IdentityProviderError(this.id, `userinfo missing '${this.subjectClaim}' claim`);
     }
     const login = stringClaim(claims[this.loginClaim]);
-    const email = stringClaim(claims.email);
+    const email = stringClaim(claims["email"]);
     const displayName = stringClaim(claims[this.nameClaim]);
     return {
       providerSubject: subject,

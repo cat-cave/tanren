@@ -85,19 +85,19 @@ export async function fetchRunTasks(pool: pg.Pool, runId: string): Promise<TaskT
   );
   return result.rows.map((row) =>
     TaskTimelineEntry.parse({
-      taskId: String(row.task_id),
-      runId: String(row.run_id),
-      kind: TaskKind.parse(row.kind),
-      parentTaskId: row.parent_task_id === null || row.parent_task_id === undefined ? null : String(row.parent_task_id),
-      title: String(row.title ?? ""),
-      status: TaskStatus.parse(row.status),
-      outcome: row.outcome === null || row.outcome === undefined ? null : TaskOutcome.parse(row.outcome),
-      failureKind: row.failure_kind === null || row.failure_kind === undefined ? null : String(row.failure_kind),
-      attempt: Number(row.attempt ?? 1),
-      cli: String(row.cli ?? ""),
-      model: row.model === null || row.model === undefined ? null : String(row.model),
-      startedAt: row.started_at === null || row.started_at === undefined ? null : (row.started_at as Date),
-      endedAt: row.ended_at === null || row.ended_at === undefined ? null : (row.ended_at as Date)
+      taskId: String(row["task_id"]),
+      runId: String(row["run_id"]),
+      kind: TaskKind.parse(row["kind"]),
+      parentTaskId: row["parent_task_id"] === null || row["parent_task_id"] === undefined ? null : String(row["parent_task_id"]),
+      title: String(row["title"] ?? ""),
+      status: TaskStatus.parse(row["status"]),
+      outcome: row["outcome"] === null || row["outcome"] === undefined ? null : TaskOutcome.parse(row["outcome"]),
+      failureKind: row["failure_kind"] === null || row["failure_kind"] === undefined ? null : String(row["failure_kind"]),
+      attempt: Number(row["attempt"] ?? 1),
+      cli: String(row["cli"] ?? ""),
+      model: row["model"] === null || row["model"] === undefined ? null : String(row["model"]),
+      startedAt: row["started_at"] === null || row["started_at"] === undefined ? null : (row["started_at"] as Date),
+      endedAt: row["ended_at"] === null || row["ended_at"] === undefined ? null : (row["ended_at"] as Date)
     })
   );
 }
@@ -316,23 +316,23 @@ type CostQueryRow = Record<string, unknown>;
 
 function decodeCostRow(raw: CostQueryRow): RunCostRecord {
   return RunCostRecord.parse({
-    id: raw.id as number | string,
-    runId: String(raw.run_id),
-    taskId: String(raw.task_id),
-    projectId: String(raw.project_id),
-    cli: String(raw.cli),
-    provider: String(raw.provider),
-    model: String(raw.model),
-    inputTokens: Number(raw.input_tokens ?? 0),
-    cachedInputTokens: Number(raw.cached_input_tokens ?? 0),
-    cacheCreationTokens: Number(raw.cache_creation_tokens ?? 0),
-    outputTokens: Number(raw.output_tokens ?? 0),
-    reasoningOutputTokens: Number(raw.reasoning_output_tokens ?? 0),
-    totalTokens: Number(raw.total_tokens ?? 0),
-    costUsd: raw.cost_usd === null || raw.cost_usd === undefined ? null : String(raw.cost_usd),
-    billingMode: raw.billing_mode as RunCostRecord["billingMode"],
-    costBasis: raw.cost_basis as RunCostRecord["costBasis"],
-    recordedAt: raw.recorded_at as Date
+    id: raw["id"] as number | string,
+    runId: String(raw["run_id"]),
+    taskId: String(raw["task_id"]),
+    projectId: String(raw["project_id"]),
+    cli: String(raw["cli"]),
+    provider: String(raw["provider"]),
+    model: String(raw["model"]),
+    inputTokens: Number(raw["input_tokens"] ?? 0),
+    cachedInputTokens: Number(raw["cached_input_tokens"] ?? 0),
+    cacheCreationTokens: Number(raw["cache_creation_tokens"] ?? 0),
+    outputTokens: Number(raw["output_tokens"] ?? 0),
+    reasoningOutputTokens: Number(raw["reasoning_output_tokens"] ?? 0),
+    totalTokens: Number(raw["total_tokens"] ?? 0),
+    costUsd: raw["cost_usd"] === null || raw["cost_usd"] === undefined ? null : String(raw["cost_usd"]),
+    billingMode: raw["billing_mode"] as RunCostRecord["billingMode"],
+    costBasis: raw["cost_basis"] as RunCostRecord["costBasis"],
+    recordedAt: raw["recorded_at"] as Date
   });
 }
 
@@ -382,7 +382,7 @@ export async function fetchCostsPage(
   const items = rows.map(decodeCostRow);
   const nextCursor =
     result.rows.length > limit
-      ? encodeCursor({ ts: rows[rows.length - 1]?.recorded_at as Date, id: rows[rows.length - 1]?.id as number })
+      ? encodeCursor({ ts: rows[rows.length - 1]?.["recorded_at"] as Date, id: rows[rows.length - 1]?.["id"] as number })
       : null;
   return CursorPage(RunCostRecord).parse({ items, nextCursor });
 }

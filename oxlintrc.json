@@ -1,10 +1,11 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["typescript", "unicorn", "vitest"],
+  "plugins": ["typescript", "unicorn", "vitest", "import"],
   "ignorePatterns": ["dist/**", "node_modules/**", "coverage/**", "tanren-hi-fidelity/**"],
   "categories": {
     "correctness": "error",
     "suspicious": "error",
+    "pedantic": "warn",
     "perf": "warn"
   },
   "rules": {
@@ -18,6 +19,8 @@
     "unicorn/prefer-node-protocol": "error",
     "typescript/consistent-type-imports": "error",
     "vitest/no-disabled-tests": "error",
-    "vitest/no-focused-tests": "error"
+    "vitest/no-focused-tests": "error",
+    "import/no-cycle": "error",
+    "import/no-self-import": "error"
   }
 }

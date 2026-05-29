@@ -26,7 +26,7 @@ import { loadShellContext, renderShell, type ShellDeps } from "../../../app/moun
 import type { ShellContext } from "../../../app/shell.js";
 import { ExistingFullBody } from "../../../components/onboarding/existing/ExistingFullBody.js";
 
-const GITHUB_APP_URL = process.env.TANREN_GITHUB_APP_URL ?? "https://github.com/apps/tanren/installations/new";
+const GITHUB_APP_URL = process.env["TANREN_GITHUB_APP_URL"] ?? "https://github.com/apps/tanren/installations/new";
 
 function brownfieldClient(c: Context, deps: ShellDeps): ExistingBrownfieldClient {
   return new ExistingBrownfieldClient({ orchestratorUrl: deps.orchestratorUrl, cookieHeader: c.req.header("cookie") });
@@ -69,7 +69,7 @@ export function mountExistingBrownfield(app: Hono, deps: ShellDeps): void {
   app.post("/onboarding/existing", async (c) => {
     const ctx = await loadShellContext(c, deps, { activeNavId: "onb-exist" });
     const form = await c.req.parseBody();
-    const phase = String(form.phase ?? "advance");
+    const phase = String(form["phase"] ?? "advance");
     if (phase === "link") return handleLink(c, ctx, deps, form);
     if (phase === "advance") return handleAdvance(c, ctx, deps, form);
     if (phase === "open-pr") return handleOpenPr(c, ctx, deps, form);
@@ -83,8 +83,8 @@ export function mountExistingBrownfield(app: Hono, deps: ShellDeps): void {
 async function handleLink(c: Context, ctx: ShellContext, deps: ShellDeps, form: Record<string, unknown>) {
   const orgLogin = ctx.org?.login ?? "your org";
   const orgId = ctx.org?.id;
-  const repoUrl = String(form.repoUrl ?? "").trim();
-  const name = String(form.name ?? "").trim() || repoUrl.split("/").pop() || "linked-project";
+  const repoUrl = String(form["repoUrl"] ?? "").trim();
+  const name = String(form["name"] ?? "").trim() || repoUrl.split("/").pop() || "linked-project";
   const linkError = (error: string, linked?: { repoUrl: string; files: BrownfieldDetectedFile[]; projectId: string }) =>
     render(c, ctx, <ExistingFullBody step={1} orgLogin={orgLogin} githubAppUrl={GITHUB_APP_URL} link={{ error, linked }} />);
 
@@ -93,9 +93,9 @@ async function handleLink(c: Context, ctx: ShellContext, deps: ShellDeps, form: 
   const project = await product.createProject(orgId, {
     name,
     repoUrl,
-    defaultBranch: String(form.defaultBranch ?? "main"),
-    allocator: String(form.allocator ?? "local_docker"),
-    runnerImage: String(form.runnerImage ?? "tanren-runner")
+    defaultBranch: String(form["defaultBranch"] ?? "main"),
+    allocator: String(form["allocator"] ?? "local_docker"),
+    runnerImage: String(form["runnerImage"] ?? "tanren-runner")
   });
   if (project === undefined) return linkError("project create failed");
   const link = await product.brownfieldLink(orgId, project.projectId, { repoUrl });
@@ -121,9 +121,9 @@ async function handleLink(c: Context, ctx: ShellContext, deps: ShellDeps, form: 
 // Generic step advance (2→3, 3→4, 4→5): re-render the next step with the report.
 async function handleAdvance(c: Context, ctx: ShellContext, deps: ShellDeps, form: Record<string, unknown>) {
   const orgLogin = ctx.org?.login ?? "your org";
-  const step = Number.parseInt(String(form.step ?? "2"), 10) || 2;
-  const repoUrl = String(form.repoUrl ?? "");
-  const report = parseReport(form.report);
+  const step = Number.parseInt(String(form["step"] ?? "2"), 10) || 2;
+  const repoUrl = String(form["repoUrl"] ?? "");
+  const report = parseReport(form["report"]);
   const projectId = projectIdFromForm(form, ctx);
   const next = (Math.min(5, step + 1)) as 2 | 3 | 4 | 5;
   return render(
@@ -137,8 +137,8 @@ async function handleAdvance(c: Context, ctx: ShellContext, deps: ShellDeps, for
 async function handleOpenPr(c: Context, ctx: ShellContext, deps: ShellDeps, form: Record<string, unknown>) {
   const orgLogin = ctx.org?.login ?? "your org";
   const orgId = ctx.org?.id;
-  const repoUrl = String(form.repoUrl ?? "");
-  const report = parseReport(form.report);
+  const repoUrl = String(form["repoUrl"] ?? "");
+  const report = parseReport(form["report"]);
   const posture = postureFromForm(form);
   const projectId = projectIdFromForm(form, ctx);
   const kept = keepPathsFromForm(form);
@@ -166,8 +166,8 @@ async function handleOpenPr(c: Context, ctx: ShellContext, deps: ShellDeps, form
 async function handleSeed(c: Context, ctx: ShellContext, deps: ShellDeps, form: Record<string, unknown>) {
   const orgLogin = ctx.org?.login ?? "your org";
   const orgId = ctx.org?.id;
-  const repoUrl = String(form.repoUrl ?? "");
-  const report = parseReport(form.report);
+  const repoUrl = String(form["repoUrl"] ?? "");
+  const report = parseReport(form["report"]);
   const projectId = projectIdFromForm(form, ctx);
   if (orgId === undefined || projectId === undefined || report === undefined) {
     return render(c, ctx, <ExistingFullBody step={1} orgLogin={orgLogin} githubAppUrl={GITHUB_APP_URL} link={{ error: "lost the recon report — restart." }} />);
@@ -184,7 +184,7 @@ async function handleSeed(c: Context, ctx: ShellContext, deps: ShellDeps, form: 
 async function handleGovernance(c: Context, ctx: ShellContext, deps: ShellDeps, form: Record<string, unknown>) {
   const orgLogin = ctx.org?.login ?? "your org";
   const orgId = ctx.org?.id;
-  const repoUrl = String(form.repoUrl ?? "");
+  const repoUrl = String(form["repoUrl"] ?? "");
   const posture = postureFromForm(form);
   const projectId = projectIdFromForm(form, ctx);
   const saved =
@@ -209,21 +209,21 @@ const ALL_PROPOSED_PATHS = [
 ];
 
 function keepPathsFromForm(form: Record<string, unknown>): string[] {
-  const raw = form.keep;
+  const raw = form["keep"];
   if (Array.isArray(raw)) return raw.map(String);
   if (typeof raw === "string") return [raw];
   return [];
 }
 
 function postureFromForm(form: Record<string, unknown>): GovernancePosture {
-  const value = String(form.posture ?? "strict");
+  const value = String(form["posture"] ?? "strict");
   return value === "open" || value === "audit_only" ? value : "strict";
 }
 
 // The projectId rides forward on a hidden field once linked. We also fall back
 // to the only project on the shell context when present (single-project case).
 function projectIdFromForm(form: Record<string, unknown>, ctx: ShellContext): string | undefined {
-  const fromForm = String(form.projectId ?? "");
+  const fromForm = String(form["projectId"] ?? "");
   if (fromForm !== "") return fromForm;
   return ctx.projects.length === 1 ? ctx.projects[0]?.projectId : undefined;
 }

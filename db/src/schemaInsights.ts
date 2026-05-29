@@ -11,7 +11,7 @@
 import { sql } from "drizzle-orm";
 import { check, index, jsonb, pgTable, text, timestamp } from "drizzle-orm/pg-core";
 import { desc } from "drizzle-orm";
-import { projects, users } from "./schema.js";
+import { projects, users } from "./schemaCore.js";
 
 export const workflowInsights = pgTable(
   "workflow_insights",

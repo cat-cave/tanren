@@ -15,7 +15,7 @@ import {
   timestamp,
   uniqueIndex
 } from "drizzle-orm/pg-core";
-import { organizations, projects } from "./schema.js";
+import { organizations, projects } from "./schemaCore.js";
 
 export const forgeThreads = pgTable(
   "forge_threads",

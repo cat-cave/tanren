@@ -82,9 +82,9 @@ export function deferralsFromEvents(events: RunEventRow[]): ReviewDeferral[] {
       event.eventType.includes("defer") || event.eventType.includes("followup") || event.eventType.includes("follow_up");
     if (!isDeferral) continue;
     const payload = typeof event.payload === "object" && event.payload !== null ? (event.payload as Record<string, unknown>) : {};
-    const title = typeof payload.title === "string" ? payload.title : typeof payload.summary === "string" ? payload.summary : event.eventType;
-    const detail = typeof payload.detail === "string" ? payload.detail : typeof payload.reason === "string" ? payload.reason : "Deferred by the writer during the run.";
-    const tag = typeof payload.tag === "string" ? payload.tag : "deferred";
+    const title = typeof payload["title"] === "string" ? payload["title"] : typeof payload["summary"] === "string" ? payload["summary"] : event.eventType;
+    const detail = typeof payload["detail"] === "string" ? payload["detail"] : typeof payload["reason"] === "string" ? payload["reason"] : "Deferred by the writer during the run.";
+    const tag = typeof payload["tag"] === "string" ? payload["tag"] : "deferred";
     out.push({ id: String(event.id), tag, title, detail });
   }
   return out;
@@ -93,13 +93,13 @@ export function deferralsFromEvents(events: RunEventRow[]): ReviewDeferral[] {
 function prNumberFromUrl(url: string | null): string {
   if (url === null) return "pr";
   const match = /\/pull\/(\d+)/.exec(url);
-  return match ? `pr #${match[1]}` : "pr";
+  return match?.[1] !== undefined ? `pr #${match[1]}` : "pr";
 }
 
 function repoFromUrl(url: string | null): string {
   if (url === null) return "repo";
   const match = /github\.com\/([^/]+\/[^/]+)/.exec(url);
-  return match ? match[1] : "repo";
+  return match?.[1] ?? "repo";
 }
 
 // The sign-off CTA drives the P3-0008 merge stage through its per-repo

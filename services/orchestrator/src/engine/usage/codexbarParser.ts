@@ -24,8 +24,11 @@ export function parseCodexbarUsage(stdout: string, provider: string): WindowUsag
   if (entries.length === 0) {
     return null;
   }
-  const match = entries.find((entry) => entry.provider === provider) ?? entries[0];
-  const usage = isObject(match.usage) ? (match.usage as Record<string, unknown>) : undefined;
+  const match = entries.find((entry) => entry["provider"] === provider) ?? entries[0];
+  if (match === undefined) {
+    return null;
+  }
+  const usage = isObject(match["usage"]) ? (match["usage"] as Record<string, unknown>) : undefined;
   if (usage === undefined) {
     return null;
   }
@@ -33,12 +36,12 @@ export function parseCodexbarUsage(stdout: string, provider: string): WindowUsag
     (window): window is SubscriptionWindow => window !== null
   );
   return {
-    provider: stringField(match.provider) ?? provider,
+    provider: stringField(match["provider"]) ?? provider,
     windows,
-    creditsRemaining: parseCreditsRemaining(match.credits),
-    accountEmail: stringField(usage.accountEmail) ?? identityEmail(usage.identity),
-    source: stringField(match.source) ?? "",
-    capturedAt: stringField(usage.updatedAt) ?? stringField(creditsUpdatedAt(match.credits)) ?? new Date().toISOString()
+    creditsRemaining: parseCreditsRemaining(match["credits"]),
+    accountEmail: stringField(usage["accountEmail"]) ?? identityEmail(usage["identity"]),
+    source: stringField(match["source"]) ?? "",
+    capturedAt: stringField(usage["updatedAt"]) ?? stringField(creditsUpdatedAt(match["credits"])) ?? new Date().toISOString()
   };
 }
 
@@ -46,9 +49,9 @@ function parseWindow(slot: SubscriptionWindow["slot"], value: unknown): Subscrip
   if (!isObject(value)) {
     return null;
   }
-  const usedPercent = numberField(value.usedPercent);
-  const windowMinutes = numberField(value.windowMinutes);
-  const resetsAt = stringField(value.resetsAt);
+  const usedPercent = numberField(value["usedPercent"]);
+  const windowMinutes = numberField(value["windowMinutes"]);
+  const resetsAt = stringField(value["resetsAt"]);
   if (usedPercent === undefined || windowMinutes === undefined || resetsAt === undefined) {
     return null;
   }
@@ -57,7 +60,7 @@ function parseWindow(slot: SubscriptionWindow["slot"], value: unknown): Subscrip
     usedPercent,
     resetsAt,
     windowMinutes,
-    resetDescription: stringField(value.resetDescription) ?? ""
+    resetDescription: stringField(value["resetDescription"]) ?? ""
   };
 }
 
@@ -65,23 +68,23 @@ function parseCreditsRemaining(credits: unknown): number | null {
   if (!isObject(credits)) {
     return null;
   }
-  const remaining = numberField(credits.remaining);
+  const remaining = numberField(credits["remaining"]);
   return remaining ?? null;
 }
 
 function creditsUpdatedAt(credits: unknown): unknown {
-  return isObject(credits) ? credits.updatedAt : undefined;
+  return isObject(credits) ? credits["updatedAt"] : undefined;
 }
 
 function identityEmail(identity: unknown): string | null {
   if (!isObject(identity)) {
     return null;
   }
-  return stringField(identity.accountEmail) ?? null;
+  return stringField(identity["accountEmail"]) ?? null;
 }
 
 function isErrorEnvelope(value: unknown): boolean {
-  return isObject(value) && "error" in value && value.error !== undefined && value.error !== null;
+  return isObject(value) && "error" in value && value["error"] !== undefined && value["error"] !== null;
 }
 
 function parseJson(stdout: string): unknown {

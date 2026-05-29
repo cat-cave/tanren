@@ -76,11 +76,11 @@ export function validateGithubAppCredential(value: unknown): GithubAppCredential
     throw new Error("GitHub App credential must be an object");
   }
   const object = value as Record<string, unknown>;
-  const appId = typeof object.appId === "string" ? object.appId.trim() : "";
+  const appId = typeof object["appId"] === "string" ? object["appId"].trim() : "";
   if (!/^[0-9]+$/.test(appId)) {
     throw new Error("GitHub App id must be a numeric string");
   }
-  const privateKeyPem = typeof object.privateKeyPem === "string" ? object.privateKeyPem : "";
+  const privateKeyPem = typeof object["privateKeyPem"] === "string" ? object["privateKeyPem"] : "";
   if (!privateKeyPem.includes("-----BEGIN") || !privateKeyPem.includes("PRIVATE KEY-----")) {
     throw new Error("GitHub App private key must be a PEM-encoded private key");
   }

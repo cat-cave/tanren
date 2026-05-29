@@ -62,7 +62,7 @@ export function createNotificationRoutes(options: NotificationRoutesOptions) {
     }
     const raw = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
     // user-scope rows are bound to the requesting actor (dev override layer).
-    const scope = raw.scope === "user" ? "user" : "org";
+    const scope = raw["scope"] === "user" ? "user" : "org";
     const parsed = NotificationTargetCreateInput.safeParse({
       ...raw,
       orgId,

@@ -83,8 +83,8 @@ export function mountConfigScreen(app: Hono, deps: ShellDeps): void {
   app.post("/settings/config/toggle", async (c: Context) => {
     const ctx = await loadShellContext(c, deps, { activeNavId: "settings" });
     const form = await c.req.parseBody();
-    const enable = String(form.enable ?? "") === "1";
-    const repo = String(form.repo ?? "").trim();
+    const enable = String(form["enable"] ?? "") === "1";
+    const repo = String(form["repo"] ?? "").trim();
     if (ctx.org !== undefined) {
       const client = clientFor(c, deps);
       const current = await client.getOrg(ctx.org.id);

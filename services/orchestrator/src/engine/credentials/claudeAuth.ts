@@ -64,10 +64,10 @@ export function validateClaudeCredentialRef(ref: string): string {
 // raw API key. We match on the stable container key rather than the exact token
 // shape so a minor CLI wording change still imports cleanly.
 function looksLikeClaudeAuthJson(value: Record<string, unknown>): boolean {
-  if (oauthBundleHasAnyToken(value.claudeAiOauth)) {
+  if (oauthBundleHasAnyToken(value["claudeAiOauth"])) {
     return true;
   }
-  return typeof value.ANTHROPIC_API_KEY === "string" && value.ANTHROPIC_API_KEY !== "";
+  return typeof value["ANTHROPIC_API_KEY"] === "string" && value["ANTHROPIC_API_KEY"] !== "";
 }
 
 function oauthBundleHasAnyToken(value: unknown): boolean {

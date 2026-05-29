@@ -167,7 +167,7 @@ function applyTask(root: HTMLElement, task: TaskFrame): void {
 export function initRunStream(): void {
   const root = document.querySelector<HTMLElement>('[data-island="run-stream"]');
   if (root === null) return;
-  const url = root.dataset.streamUrl;
+  const url = root.dataset['streamUrl'];
   if (url === undefined || url === "") return;
   if (typeof EventSource === "undefined") return;
 
@@ -231,7 +231,7 @@ export function initRunStream(): void {
   root.addEventListener("click", (clickEvent) => {
     const moment = (clickEvent.target as HTMLElement).closest<HTMLElement>("[data-rd-moment]");
     if (moment === null) return;
-    const taskId = moment.dataset.rdMoment;
+    const taskId = moment.dataset['rdMoment'];
     if (taskId === undefined) return;
     const params = new URLSearchParams(window.location.search);
     params.set("moment", taskId);

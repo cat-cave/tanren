@@ -26,7 +26,7 @@
 
 import { sql } from "drizzle-orm";
 import { check, index, jsonb, pgTable, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
-import { organizations, projects, specs } from "./schema.js";
+import { organizations, projects, specs } from "./schemaCore.js";
 
 // Connector kinds — mirrors the hi-fi `INBOX_SOURCES` glyph keys. `system`
 // sources auto-route; the rest feed candidates that wait for an operator call.

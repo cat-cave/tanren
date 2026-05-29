@@ -134,7 +134,7 @@ async function openDrawer(root: HTMLElement, projectId: string, specId: string):
     return;
   }
   const host = document.createElement("div");
-  host.dataset.dagDrawerHost = "1";
+  host.dataset['dagDrawerHost'] = "1";
   host.innerHTML = html;
   document.body.appendChild(host);
 
@@ -149,7 +149,7 @@ async function openDrawer(root: HTMLElement, projectId: string, specId: string):
   // Dependency chips walk the graph inside the drawer.
   if (drawer !== null) {
     for (const chip of drawer.querySelectorAll<HTMLElement>("[data-spec-id]")) {
-      const next = chip.dataset.specId;
+      const next = chip.dataset['specId'];
       if (next === undefined || next === specId) continue;
       chip.addEventListener("click", () => void openDrawer(root, projectId, next));
     }
@@ -167,7 +167,7 @@ function initModeToggle(): void {
   if (toggle === null) return;
   for (const link of toggle.querySelectorAll<HTMLAnchorElement>("[data-mode-value]")) {
     link.addEventListener("click", () => {
-      const mode = link.dataset.modeValue === "chat" ? "chat" : "dag";
+      const mode = link.dataset['modeValue'] === "chat" ? "chat" : "dag";
       persistMode(mode);
     });
   }
@@ -179,10 +179,10 @@ export function initDagCanvas(): void {
   const root = document.querySelector<HTMLElement>('[data-island="dag-canvas"]');
   if (root === null) return;
 
-  const projectId = root.dataset.projectId ?? "";
+  const projectId = root.dataset['projectId'] ?? "";
   let dag: ProjectDag;
   try {
-    dag = JSON.parse(root.dataset.dag ?? "{}") as ProjectDag;
+    dag = JSON.parse(root.dataset['dag'] ?? "{}") as ProjectDag;
   } catch {
     return;
   }
@@ -204,7 +204,7 @@ export function initDagCanvas(): void {
 
   const wireNodes = (): void => {
     for (const node of root.querySelectorAll<SVGGElement>(".dag-node[data-spec-id]")) {
-      const specId = node.dataset.specId;
+      const specId = node.dataset['specId'];
       if (specId === undefined) continue;
       node.addEventListener("click", () => void openDrawer(root, projectId, specId));
       node.addEventListener("keydown", (event) => {
@@ -218,7 +218,7 @@ export function initDagCanvas(): void {
 
   // Needs-strip items also open the drawer for their target node.
   for (const item of root.querySelectorAll<HTMLElement>(".needs-item[data-spec-id]")) {
-    const specId = item.dataset.specId;
+    const specId = item.dataset['specId'];
     if (specId === undefined) continue;
     item.addEventListener("click", () => void openDrawer(root, projectId, specId));
   }
@@ -226,7 +226,7 @@ export function initDagCanvas(): void {
   // Group-by controls.
   for (const btn of root.querySelectorAll<HTMLButtonElement>("[data-group]")) {
     btn.addEventListener("click", () => {
-      group = (btn.dataset.group as GroupBy) ?? "milestone";
+      group = (btn.dataset['group'] as GroupBy) ?? "milestone";
       for (const other of root.querySelectorAll<HTMLButtonElement>("[data-group]")) {
         other.classList.toggle("active", other === btn);
       }
@@ -243,7 +243,7 @@ export function initDagCanvas(): void {
   };
   for (const btn of root.querySelectorAll<HTMLButtonElement>("[data-zoom]")) {
     btn.addEventListener("click", () => {
-      const kind = btn.dataset.zoom;
+      const kind = btn.dataset['zoom'];
       if (kind === "in") setZoom(view.zoom * 1.2);
       else if (kind === "out") setZoom(view.zoom / 1.2);
       else {

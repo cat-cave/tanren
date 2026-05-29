@@ -87,7 +87,7 @@ export class GithubRepoReader implements RepoReader {
     if (response.status !== 200 || typeof response.body !== "object" || response.body === null) {
       return [];
     }
-    const tree = (response.body as Record<string, unknown>).tree;
+    const tree = (response.body as Record<string, unknown>)["tree"];
     return Array.isArray(tree) ? (tree as TreeEntry[]) : [];
   }
 

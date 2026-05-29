@@ -113,17 +113,17 @@ export function mountGreenfieldOnboarding(app: Hono, deps: ShellDeps): void {
       return renderShell(c, ctx, { title: "tanren · new project" }, noOrgBody());
     }
     const form = await c.req.parseBody();
-    const phase = String(form.phase ?? "round");
+    const phase = String(form["phase"] ?? "round");
     const step = Number.parseInt(c.req.query("step") ?? "1", 10) || 1;
 
     if (phase === "round") {
       return handleRound(c, ctx, deps, form);
     }
     if (step === 2) {
-      return handleDerive(c, ctx, deps, parseCapture(form.capture));
+      return handleDerive(c, ctx, deps, parseCapture(form["capture"]));
     }
     // step 3 advance: the projectId rode forward on the derived-summary form.
-    const projectId = String(form.projectId ?? "");
+    const projectId = String(form["projectId"] ?? "");
     if (projectId === "") {
       return renderShell(c, ctx, { title: "tanren · new project" }, noOrgBody("lost the derived project — restart the interview."));
     }
@@ -133,9 +133,9 @@ export function mountGreenfieldOnboarding(app: Hono, deps: ShellDeps): void {
 
 async function handleRound(c: Context, ctx: ShellContext, deps: ShellDeps, form: Record<string, unknown>) {
   const orgId = ctx.org!.id;
-  const round = Number.parseInt(String(form.round ?? "1"), 10) || 1;
-  const answer = String(form.answer ?? "");
-  const capture = parseCapture(form.capture);
+  const round = Number.parseInt(String(form["round"] ?? "1"), 10) || 1;
+  const answer = String(form["answer"] ?? "");
+  const capture = parseCapture(form["capture"]);
   const { result } = await newClient(c, deps).round(orgId, { round, answer, capture });
   return renderShell(
     c,

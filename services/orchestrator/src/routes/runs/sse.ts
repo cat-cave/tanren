@@ -98,8 +98,10 @@ export class SseDriver {
     for (const task of tasks) {
       this.lastTaskFingerprint.set(task.taskId, fingerprintTask(task));
     }
-    this.lastEventId = recentEvents.length > 0 ? Number(recentEvents[recentEvents.length - 1].id) : 0;
-    this.lastCostId = costs.length > 0 ? Number(costs[costs.length - 1].id) : 0;
+    const lastEvent = recentEvents.at(-1);
+    this.lastEventId = lastEvent !== undefined ? Number(lastEvent.id) : 0;
+    const lastCost = costs.at(-1);
+    this.lastCostId = lastCost !== undefined ? Number(lastCost.id) : 0;
 
     if (TERMINAL_STATUSES.has(run.status)) {
       this.terminalPollsRemaining = TERMINAL_GRACE_POLLS;
@@ -134,14 +136,16 @@ export class SseDriver {
       await this.emit("task", task);
     }
     const newEvents = await this.pollNewEvents();
-    if (newEvents.length > 0) {
+    const lastNewEvent = newEvents.at(-1);
+    if (lastNewEvent !== undefined) {
       await this.emit("events", { events: newEvents });
-      this.lastEventId = Number(newEvents[newEvents.length - 1].id);
+      this.lastEventId = Number(lastNewEvent.id);
     }
     const newCosts = await this.pollNewCosts();
-    if (newCosts.length > 0) {
+    const lastNewCost = newCosts.at(-1);
+    if (lastNewCost !== undefined) {
       await this.emit("costs", { costs: newCosts });
-      this.lastCostId = Number(newCosts[newCosts.length - 1].id);
+      this.lastCostId = Number(lastNewCost.id);
     }
     if (this.nowMs() - this.lastEmitAt >= HEARTBEAT_INTERVAL_MS) {
       await this.emit("heartbeat", { ts: this.args.now?.() ?? new Date() });
@@ -177,21 +181,21 @@ export class SseDriver {
     const { isEventName } = await import("../../engine/events/index.js");
     const out: RunEventRow[] = [];
     for (const row of rows) {
-      const eventType = String(row.event_type);
-      let payload: unknown = row.payload;
+      const eventType = String(row["event_type"]);
+      let payload: unknown = row["payload"];
       let redactedPaths: string[] = [];
       if (isEventName(eventType)) {
-        const r = redactEventPayload({ eventName: eventType, payload: row.payload, actor: this.args.actor, rawView: this.args.rawView });
+        const r = redactEventPayload({ eventName: eventType, payload: row["payload"], actor: this.args.actor, rawView: this.args.rawView });
         payload = r.payload;
         redactedPaths = r.redactedPaths;
       }
       out.push({
-        id: row.id as number | string,
-        ts: row.ts as Date,
-        runId: row.run_id === null || row.run_id === undefined ? null : String(row.run_id),
-        taskId: row.task_id === null || row.task_id === undefined ? null : String(row.task_id),
-        specId: row.spec_id === null || row.spec_id === undefined ? null : String(row.spec_id),
-        projectId: row.project_id === null || row.project_id === undefined ? null : String(row.project_id),
+        id: row["id"] as number | string,
+        ts: row["ts"] as Date,
+        runId: row["run_id"] === null || row["run_id"] === undefined ? null : String(row["run_id"]),
+        taskId: row["task_id"] === null || row["task_id"] === undefined ? null : String(row["task_id"]),
+        specId: row["spec_id"] === null || row["spec_id"] === undefined ? null : String(row["spec_id"]),
+        projectId: row["project_id"] === null || row["project_id"] === undefined ? null : String(row["project_id"]),
         eventType,
         payload,
         redactedPaths
@@ -213,23 +217,23 @@ export class SseDriver {
       [this.args.runId, this.lastCostId]
     );
     return rows.map((row) => ({
-      id: row.id as number | string,
-      runId: String(row.run_id),
-      taskId: String(row.task_id),
-      projectId: String(row.project_id),
-      cli: String(row.cli),
-      provider: String(row.provider),
-      model: String(row.model),
-      inputTokens: Number(row.input_tokens ?? 0),
-      cachedInputTokens: Number(row.cached_input_tokens ?? 0),
-      cacheCreationTokens: Number(row.cache_creation_tokens ?? 0),
-      outputTokens: Number(row.output_tokens ?? 0),
-      reasoningOutputTokens: Number(row.reasoning_output_tokens ?? 0),
-      totalTokens: Number(row.total_tokens ?? 0),
-      costUsd: row.cost_usd === null || row.cost_usd === undefined ? null : String(row.cost_usd),
-      billingMode: row.billing_mode as RunCostRecord["billingMode"],
-      costBasis: row.cost_basis as RunCostRecord["costBasis"],
-      recordedAt: row.recorded_at as Date
+      id: row["id"] as number | string,
+      runId: String(row["run_id"]),
+      taskId: String(row["task_id"]),
+      projectId: String(row["project_id"]),
+      cli: String(row["cli"]),
+      provider: String(row["provider"]),
+      model: String(row["model"]),
+      inputTokens: Number(row["input_tokens"] ?? 0),
+      cachedInputTokens: Number(row["cached_input_tokens"] ?? 0),
+      cacheCreationTokens: Number(row["cache_creation_tokens"] ?? 0),
+      outputTokens: Number(row["output_tokens"] ?? 0),
+      reasoningOutputTokens: Number(row["reasoning_output_tokens"] ?? 0),
+      totalTokens: Number(row["total_tokens"] ?? 0),
+      costUsd: row["cost_usd"] === null || row["cost_usd"] === undefined ? null : String(row["cost_usd"]),
+      billingMode: row["billing_mode"] as RunCostRecord["billingMode"],
+      costBasis: row["cost_basis"] as RunCostRecord["costBasis"],
+      recordedAt: row["recorded_at"] as Date
     }));
   }
 
