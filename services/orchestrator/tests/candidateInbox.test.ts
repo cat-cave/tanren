@@ -17,10 +17,13 @@ import {
   acceptCandidate,
   createDeterministicTriageAnswerer,
   createGitHubIssuesConnector,
+  createSentryConnector,
   dismissCandidate,
   ingestSource,
   type InboxEngineDeps,
   type InboxSource,
+  type SentryHttpClient,
+  type SentryHttpRequest,
   type SourceConnector,
   type TriageAnswererContext
 } from "../src/engine/forge/inbox/index.js";
@@ -54,13 +57,39 @@ const auditSource: InboxSource = {
   autoRoute: true
 };
 
+// A Sentry source wired under the `errors` kind (no enum/DB-CHECK change).
+const sentrySource: InboxSource = {
+  id: "src_sentry",
+  orgId: "org_a",
+  projectId: "project_a",
+  kind: "errors",
+  name: "sentry · cat-cave/app",
+  detail: "unresolved issues",
+  config: { org: "cat-cave", project: "app", tokenRef: "credential/sentry/x" },
+  enabled: true,
+  autoRoute: false
+};
+
 const secrets = new InMemorySecretStore();
 await secrets.put({ ref: "credential/github/x", value: "ghs_token" });
+await secrets.put({ ref: "credential/sentry/x", value: "sntrys_token" });
 
 // A GitHubHttpClient returning two issues + one PR (which must be filtered).
 function fakeGitHub(issues: unknown[]): { client: GitHubHttpClient; calls: GitHubHttpRequest[] } {
   const calls: GitHubHttpRequest[] = [];
   const client: GitHubHttpClient = {
+    async request(input) {
+      calls.push(input);
+      return { status: 200, body: issues };
+    }
+  };
+  return { client, calls };
+}
+
+// A fake SentryHttpClient returning a fixed issue list (no network/token).
+function fakeSentry(issues: unknown[]): { client: SentryHttpClient; calls: SentryHttpRequest[] } {
+  const calls: SentryHttpRequest[] = [];
+  const client: SentryHttpClient = {
     async request(input) {
       calls.push(input);
       return { status: 200, body: issues };
@@ -81,7 +110,8 @@ function stubPool(existingSpecs: Array<{ spec_id: string; title: string; status:
   const specs = new Map<string, unknown>();
   const sources = new Map<string, InboxSource>([
     [issuesSource.id, issuesSource],
-    [auditSource.id, auditSource]
+    [auditSource.id, auditSource],
+    [sentrySource.id, sentrySource]
   ]);
 
   const candidateRow = (id: string) => {
@@ -282,5 +312,101 @@ describe("accept → discovery hand-off", () => {
     const { candidates: ingested } = await ingestSource(deps, issuesSource);
     const out = await dismissCandidate(deps, ingested[0]!.id);
     expect(out.status).toBe("dismissed");
+  });
+});
+
+describe("sentry connector (mocked)", () => {
+  const sentryIssues = [
+    {
+      id: "4001",
+      shortId: "APP-1",
+      title: "TypeError: cannot read property 'id' of undefined",
+      culprit: "orders/checkout.ts in submit",
+      level: "error",
+      permalink: "https://sentry.io/organizations/cat-cave/issues/4001/",
+      count: "1287",
+      userCount: 42,
+      metadata: { type: "TypeError", value: "cannot read property 'id' of undefined" }
+    },
+    {
+      id: "4002",
+      title: "slow query on /reports",
+      level: "warning",
+      permalink: "https://sentry.io/organizations/cat-cave/issues/4002/",
+      metadata: { value: "query exceeded 5s" }
+    },
+    // A degenerate row with neither id nor title signal — must be dropped.
+    { level: "info" }
+  ];
+
+  it("maps unresolved sentry issues to candidates with permalink + metadata body", async () => {
+    const { client, calls } = fakeSentry(sentryIssues);
+    const connector = createSentryConnector({ secrets, sentryHttp: client });
+    const items = await connector.fetch(sentrySource);
+
+    expect(items).toHaveLength(2);
+    // externalId is the stable Sentry issue id (idempotency key).
+    expect(items[0]?.externalId).toBe("sentry-4001");
+    expect(items[0]?.title).toContain("TypeError");
+    // body carries the permalink + computed metadata for downstream triage.
+    expect(items[0]?.body).toContain("https://sentry.io/organizations/cat-cave/issues/4001/");
+    expect(items[0]?.body).toContain("users affected: 42");
+    // the request hit the org/project-scoped issues endpoint with the default
+    // unresolved query and the auth token from the secret store.
+    expect(calls[0]?.path).toContain("/api/0/projects/cat-cave/app/issues/");
+    expect(calls[0]?.path).toContain("is%3Aunresolved");
+    expect(calls[0]?.token).toBe("sntrys_token");
+  });
+
+  it("maps sentry level to severity (error→fail, warning→warn, else→info)", async () => {
+    const { client } = fakeSentry(sentryIssues);
+    const items = await createSentryConnector({ secrets, sentryHttp: client }).fetch(sentrySource);
+    expect(items[0]?.severity).toBe("fail"); // error
+    expect(items[1]?.severity).toBe("warn"); // warning
+  });
+
+  it("forwards an optional level filter into the query", async () => {
+    const { client, calls } = fakeSentry([]);
+    await createSentryConnector({ secrets, sentryHttp: client }).fetch({
+      ...sentrySource,
+      config: { ...sentrySource.config, level: "fatal" }
+    });
+    expect(calls[0]?.path).toContain("level%3Afatal");
+  });
+
+  it("ingests + triages sentry candidates as triaged (needs_call)", async () => {
+    const { client } = fakeSentry(sentryIssues);
+    const { pool, candidates } = stubPool();
+    const connectors = new Map<string, SourceConnector>([["errors", createSentryConnector({ secrets, sentryHttp: client })]]);
+    const { candidates: out } = await ingestSource(depsFor(connectors, pool), sentrySource);
+    expect(out).toHaveLength(2);
+    expect(out[0]?.status).toBe("triaged");
+    expect(out[0]?.triage?.verdict).toBe("needs_call");
+    // a fail-severity sentry error proposes a bug discovery variant.
+    expect(out[0]?.triage?.discoveryVariant).toBe("bug");
+    expect(candidates.size).toBe(2);
+  });
+
+  it("routes a sentry fail touching an in-flight spec to fold into the live run", async () => {
+    const { client } = fakeSentry([sentryIssues[0]]);
+    const { pool } = stubPool([{ spec_id: "spec_co1", title: "orders checkout submit flow", status: "in_flight" }]);
+    const connectors = new Map<string, SourceConnector>([["errors", createSentryConnector({ secrets, sentryHttp: client })]]);
+    const { candidates: out } = await ingestSource(depsFor(connectors, pool), sentrySource);
+    expect(out[0]?.triage?.verdict).toBe("needs_call");
+    expect(out[0]?.triage?.match).toContain("in-flight");
+    expect(out[0]?.triage?.placement).toContain("live run");
+  });
+
+  it("is idempotent: re-ingesting the same sentry issue updates rather than duplicates", async () => {
+    const issues = [{ id: "4001", title: "TypeError v1", level: "error", permalink: "https://sentry.io/4001/" }];
+    const { client } = fakeSentry(issues);
+    const { pool, candidates } = stubPool();
+    const connectors = new Map<string, SourceConnector>([["errors", createSentryConnector({ secrets, sentryHttp: client })]]);
+    const deps = depsFor(connectors, pool);
+    await ingestSource(deps, sentrySource);
+    issues[0]!.title = "TypeError v2";
+    await ingestSource(deps, sentrySource);
+    expect(candidates.size).toBe(1);
+    expect([...candidates.values()][0]?.title).toBe("TypeError v2");
   });
 });

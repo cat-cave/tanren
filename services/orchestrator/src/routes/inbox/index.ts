@@ -26,8 +26,10 @@ import {
   CandidateNotPlaceableError,
   closeDuplicateCandidate,
   createGitHubIssuesConnector,
+  createSentryConnector,
   createSource,
   dismissCandidate,
+  FetchSentryHttpClient,
   foldCandidate,
   getSource,
   ingestSource,
@@ -35,6 +37,7 @@ import {
   listSources,
   SourceKind,
   type InboxEngineDeps,
+  type SentryHttpClient,
   type SourceConnector,
   type TriageAnswerer
 } from "../../engine/forge/inbox/index.js";
@@ -45,9 +48,12 @@ export interface InboxRoutesOptions {
   pool: pg.Pool;
   secrets: SecretStore;
   githubHttp: GitHubHttpClient;
+  // Injectable Sentry transport (defaults to a fetch-based client). The Sentry
+  // connector reuses `secrets` for its auth token (config `tokenRef`).
+  sentryHttp?: SentryHttpClient;
   // Injectable triage answerer (provider wrap or a test fake).
   answererFactory?: () => TriageAnswerer;
-  // Test seam: override the connector map (defaults to the GitHub connector).
+  // Test seam: override the connector map (defaults to GitHub + Sentry).
   connectors?: ReadonlyMap<string, SourceConnector>;
 }
 
@@ -77,7 +83,15 @@ export function createInboxRoutes(options: InboxRoutesOptions) {
   const connectors =
     options.connectors ??
     new Map<string, SourceConnector>([
-      ["issues", createGitHubIssuesConnector({ secrets: options.secrets, githubHttp: options.githubHttp })]
+      ["issues", createGitHubIssuesConnector({ secrets: options.secrets, githubHttp: options.githubHttp })],
+      // Sentry is wired under the `errors` source kind (no enum/DB-CHECK change).
+      [
+        "errors",
+        createSentryConnector({
+          secrets: options.secrets,
+          sentryHttp: options.sentryHttp ?? new FetchSentryHttpClient()
+        })
+      ]
     ]);
   const deps: InboxEngineDeps = { pool: options.pool, connectors, ...(answerer !== undefined ? { answerer } : {}) };
 
