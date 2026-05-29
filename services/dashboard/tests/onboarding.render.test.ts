@@ -99,6 +99,22 @@ function mockOrchestrator(opts: { doctor?: unknown; matrix?: unknown } = {}): Mo
         writesPerformed: 0
       });
     }
+    // P3-0016 full-track recon (read-only Answerer pre-fill).
+    if (url.endsWith("/recon") && method === "POST") {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      return json({
+        repoUrl: body.repoUrl,
+        filesIndexed: 84,
+        report: {
+          identity: { slug: "tanren-fixture-easy", purpose: "smoke fixture", inferredFrom: "README.md" },
+          personas: [{ name: "developer · maintainer", description: "maintains the codebase", inferredFrom: "code" }],
+          behaviors: [{ persona: "developer · maintainer", title: "build & test", inferredFrom: "ci" }],
+          architecture: [{ layer: "ci", detail: "github actions" }],
+          risks: [{ severity: "warn", note: "no CODEOWNERS file" }],
+          gaps: [{ id: "design-dna", chapter: "design dna", question: "default to industrial?", options: ["use industrial"] }]
+        }
+      });
+    }
     if (url.includes("/projects")) return json({ projects: [] });
     if (url.endsWith("/healthz")) return new Response("ok", { status: 200 });
     return new Response("not found", { status: 404 });
@@ -249,18 +265,18 @@ describe("credentials", () => {
   });
 });
 
-describe("existing-project minimal link flow", () => {
-  it("renders the link-only scope (no recon, no config-injection PR)", async () => {
+describe("existing-project full track (P3-0016)", () => {
+  it("renders the 5-step brownfield shell on the link step", async () => {
     mockOrchestrator();
     const app = await build();
     const html = await (await app.request("/onboarding/existing")).text();
+    expect(html).toContain('data-screen="onboarding-existing-full"');
     expect(html).toContain("point at");
-    expect(html).toContain("does NOT write to the target repo");
-    expect(html).toContain("does NOT run a recon agent");
+    expect(html).toContain("existing project · brownfield");
     expect(html).toContain("never push to main");
   });
 
-  it("link POST creates the project, calls brownfield link, shows detected files + 0 writes", async () => {
+  it("link POST creates the project, calls brownfield link, then runs recon → step 2", async () => {
     const state = mockOrchestrator();
     const app = await build();
     const res = await app.request("/onboarding/existing/link", {
@@ -271,9 +287,10 @@ describe("existing-project minimal link flow", () => {
     const html = await res.text();
     expect(state.projectCreates).toHaveLength(1);
     expect(state.brownfieldLinks).toHaveLength(1);
-    expect(html).toContain("0 writes to the target repo");
-    expect(html).toContain("CODEOWNERS");
-    expect(html).toContain("open project ↗");
+    // Advances into the recon step with the pre-filled chapters + gaps.
+    expect(html).toContain("knows most of it");
+    expect(html).toContain("indexed 84 files");
+    expect(html).toContain("no CODEOWNERS file");
   });
 
   it("link POST surfaces a clear error when the repo is not reachable", async () => {

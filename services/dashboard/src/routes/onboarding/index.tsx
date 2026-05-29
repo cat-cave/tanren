@@ -12,18 +12,20 @@
 import type { Context, Hono } from "hono";
 import { OrchestratorClient } from "../../api/orchestrator.js";
 import type {
-  BrownfieldDetectedFile,
   CredentialRecord,
   DoctorReport,
   NotificationMatrix
 } from "../../api/types.js";
 import { loadShellContext, renderShell, type ShellDeps } from "../../app/mountShell.js";
 import { CredentialsBody } from "../../components/onboarding/CredentialsBody.js";
-import { ExistingProjectBody } from "../../components/onboarding/ExistingProjectBody.js";
 import { NotificationsBody } from "../../components/onboarding/NotificationsBody.js";
 import { OrgWizardBody } from "../../components/onboarding/OrgWizardBody.js";
 import { OnbStyles } from "../../components/onboarding/styles.js";
 import { mountOnboardingActions } from "./actions.js";
+// P3-0016: the brownfield `existing` handlers (5-step full track) live in their
+// own module. The shared route file delegates the entire `existing` section to
+// it — the org/credentials/notifications handlers below are untouched.
+import { mountExistingBrownfield } from "./existing/index.js";
 
 /** The public GitHub App install URL (configurable; sensible default). */
 const GITHUB_APP_URL = process.env.TANREN_GITHUB_APP_URL ?? "https://github.com/apps/tanren/installations/new";
@@ -51,6 +53,9 @@ function noticeOf(c: Context): string | undefined {
 
 export function mountOnboardingScreens(app: Hono, deps: ShellDeps): void {
   mountOnboardingActions(app, deps);
+  // P3-0016: brownfield `existing` full track (link → recon → config-injection
+  // PR → DAG seed → governance). Owns GET/POST `/onboarding/existing`.
+  mountExistingBrownfield(app, deps);
 
   // ── org-setup wizard ─────────────────────────────────────────────────────
   app.get("/onboarding/org", async (c) => {
@@ -160,67 +165,6 @@ export function mountOnboardingScreens(app: Hono, deps: ShellDeps): void {
     );
   });
 
-  // ── existing-project minimal link flow ───────────────────────────────────
-  app.get("/onboarding/existing", async (c) => {
-    const ctx = await loadShellContext(c, deps, { activeNavId: "onb-exist" });
-    return renderShell(
-      c,
-      ctx,
-      { title: "tanren · link existing project" },
-      <>
-        <OnbStyles />
-        <ExistingProjectBody
-          orgLogin={ctx.org?.login ?? "your org"}
-          repos={[]}
-          githubAppUrl={GITHUB_APP_URL}
-          error={noticeOf(c)}
-        />
-      </>
-    );
-  });
-
-  // Create project + brownfield link, then render the detected-files
-  // confirmation inside the shell (so the read-only file list is visible).
-  app.post("/onboarding/existing/link", async (c) => {
-    const ctx = await loadShellContext(c, deps, { activeNavId: "onb-exist" });
-    const client = clientFor(c, deps);
-    const orgId = ctx.org?.id;
-    const form = await c.req.parseBody();
-    const repoUrl = String(form.repoUrl ?? "").trim();
-    const name = String(form.name ?? "").trim() || repoUrl.split("/").pop() || "linked-project";
-    const defaultBranch = String(form.defaultBranch ?? "main");
-    const allocator = String(form.allocator ?? "local_docker");
-    const runnerImage = String(form.runnerImage ?? "tanren-runner");
-
-    const renderExisting = (props: {
-      error?: string;
-      linked?: { repoUrl: string; files: BrownfieldDetectedFile[]; projectId: string };
-    }) =>
-      renderShell(
-        c,
-        ctx,
-        { title: "tanren · link existing project" },
-        <>
-          <OnbStyles />
-          <ExistingProjectBody
-            orgLogin={ctx.org?.login ?? "your org"}
-            repos={[]}
-            githubAppUrl={GITHUB_APP_URL}
-            error={props.error}
-            linked={props.linked}
-          />
-        </>
-      );
-
-    if (orgId === undefined || repoUrl === "") return renderExisting({ error: "pick a repo first" });
-    const project = await client.createProject(orgId, { name, repoUrl, defaultBranch, allocator, runnerImage });
-    if (project === undefined) return renderExisting({ error: "project create failed" });
-    const link = await client.brownfieldLink(orgId, project.projectId, { repoUrl });
-    if (!link.ok || link.result === undefined) {
-      return renderExisting({ error: link.error ?? "link failed (is the repo reachable by the GitHub App?)" });
-    }
-    return renderExisting({
-      linked: { repoUrl: link.result.repoUrl, files: link.result.detectedFiles, projectId: project.projectId }
-    });
-  });
+  // The brownfield `existing` flow (GET + link/step POSTs) is owned by
+  // `mountExistingBrownfield` (P3-0016, called above) — see ./existing/index.tsx.
 }
