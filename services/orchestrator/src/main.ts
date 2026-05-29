@@ -37,6 +37,7 @@ import { createDiscoveryRoutes } from "./routes/discovery/index.js";
 import { createDoctorRoutes } from "./routes/doctor/index.js";
 import { createDoraRoutes } from "./routes/dora/index.js";
 import { createForgeAskRoutes } from "./routes/forge/ask.js";
+import { createInboxRoutes } from "./routes/inbox/index.js";
 import { createForgeRoutes } from "./routes/forge/index.js";
 import { createGithubWebhookRoutes } from "./routes/githubWebhooks/index.js";
 import { createInsightRoutes } from "./routes/insights/index.js";
@@ -215,8 +216,7 @@ export function buildApp(input: {
   const credentialRegistry = input.credentialRegistry ?? new InMemoryCredentialRegistry();
 
   // P3-0017: audit-gate GitHub port factory. Mints the org's App token (or the
-  // static fallback) and wraps the shared HTTP client so a Bucket-B write opens
-  // a PR in the org's `tanren-config` repo. Injectable for tests.
+  // static fallback) so a Bucket-B write opens a PR in `tanren-config`. Injectable.
   const configGateGithub: ConfigGateGithubFactory = async (orgId) => {
     const installation = await loadOrgGithubAppInstallation(input.pool, orgId);
     const resolved = await resolveGithubToken({ secrets, installation, minter: githubAppMinter });
@@ -243,6 +243,11 @@ export function buildApp(input: {
   // P3-0014: spec discovery — classify an insight into proposed specs +
   // DAG-placement options, accept → create specs with provenance.
   app.route("/orgs", createDiscoveryRoutes({ pool: input.pool }));
+  // P3-0022: candidate inbox — configurable issue sources feed candidates;
+  // Forge triages each (dedupe → match → DAG placement → verdict); accept
+  // composes the P3-0014 discovery accept path. Connector reads via the App
+  // resolver; triage answerer is injectable.
+  app.route("/orgs", createInboxRoutes({ pool: input.pool, secrets, githubHttp }));
   app.route("/orgs", createDoraRoutes({ pool: input.pool }));
   app.route("/orgs", createNotificationRoutes({ pool: input.pool }));
   app.route("/orgs", createRunRoutes({ pool: input.pool }));

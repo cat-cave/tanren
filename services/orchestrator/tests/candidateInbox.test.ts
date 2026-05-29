@@ -1,0 +1,286 @@
+// P3-0022 candidate-inbox engine tests.
+//
+// Exercises the GitHub Issues connector (MOCKED GitHubHttpClient + secrets — no
+// network), the deterministic triage answerer (dedupe / match / placement /
+// verdict + auto-route for system sources), the ingest pipeline (connector →
+// triage → upsert), and the accept→discovery hand-off (reuses the P3-0014
+// accept path, creating a spec + resolving the candidate). The pool is a
+// lightweight in-memory stub keyed by SQL substring, mirroring the orchestrator
+// engine-test pattern (see specDiscovery.test.ts).
+
+import type pg from "pg";
+import { describe, expect, it } from "vitest";
+import type { ActorContext } from "../src/auth/schemas.js";
+import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
+import type { GitHubHttpClient, GitHubHttpRequest } from "../src/engine/providers/github.js";
+import {
+  acceptCandidate,
+  createDeterministicTriageAnswerer,
+  createGitHubIssuesConnector,
+  dismissCandidate,
+  ingestSource,
+  type InboxEngineDeps,
+  type InboxSource,
+  type SourceConnector,
+  type TriageAnswererContext
+} from "../src/engine/forge/inbox/index.js";
+
+const actor: ActorContext = {
+  userId: "user_a",
+  orgId: "org_a",
+  projectId: "project_a",
+  scopes: ["platform:admin"],
+  source: "session"
+};
+
+const issuesSource: InboxSource = {
+  id: "src_gh",
+  orgId: "org_a",
+  projectId: "project_a",
+  kind: "issues",
+  name: "github · cat-cave",
+  detail: "issues labeled spec-candidate",
+  config: { owner: "cat-cave", repo: "app", labels: ["spec-candidate"], staticRef: "credential/github/x" },
+  enabled: true,
+  autoRoute: false
+};
+
+const auditSource: InboxSource = {
+  ...issuesSource,
+  id: "src_audit",
+  kind: "scheduled_audit",
+  name: "scheduled audits",
+  config: {},
+  autoRoute: true
+};
+
+const secrets = new InMemorySecretStore();
+await secrets.put({ ref: "credential/github/x", value: "ghs_token" });
+
+// A GitHubHttpClient returning two issues + one PR (which must be filtered).
+function fakeGitHub(issues: unknown[]): { client: GitHubHttpClient; calls: GitHubHttpRequest[] } {
+  const calls: GitHubHttpRequest[] = [];
+  const client: GitHubHttpClient = {
+    async request(input) {
+      calls.push(input);
+      return { status: 200, body: issues };
+    }
+  };
+  return { client, calls };
+}
+
+// In-memory pool that tracks inbox_sources + candidates + specs so the ingest
+// upsert and the accept→discovery round-trip are observable.
+function stubPool(existingSpecs: Array<{ spec_id: string; title: string; status: string }> = []): {
+  pool: pg.Pool;
+  candidates: Map<string, Record<string, unknown>>;
+  specs: Map<string, unknown>;
+} {
+  const candidates = new Map<string, Record<string, unknown>>();
+  const byExternal = new Map<string, string>();
+  const specs = new Map<string, unknown>();
+  const sources = new Map<string, InboxSource>([
+    [issuesSource.id, issuesSource],
+    [auditSource.id, auditSource]
+  ]);
+
+  const candidateRow = (id: string) => {
+    const c = candidates.get(id)!;
+    const src = sources.get(c.source_id as string)!;
+    return { ...c, source_name: src.name, source_kind: src.kind };
+  };
+
+  const query = async (text: string, params: unknown[] = []): Promise<{ rows: unknown[]; rowCount: number }> => {
+    const sql = text.replace(/\s+/g, " ").trim();
+    if (sql.startsWith("SELECT spec_id, title, status FROM specs")) {
+      return { rows: existingSpecs, rowCount: existingSpecs.length };
+    }
+    if (sql.startsWith("INSERT INTO candidates")) {
+      const [id, sourceId, orgId, projectId, externalId, title, body, severity, status, triage] = params as string[];
+      const key = `${sourceId}::${externalId}`;
+      const existingId = byExternal.get(key);
+      const cid = existingId ?? id;
+      candidates.set(cid, {
+        id: cid, source_id: sourceId, org_id: orgId, project_id: projectId, external_id: externalId,
+        title, body, severity, status, triage: JSON.parse(triage), resolved_spec_id: null
+      });
+      byExternal.set(key, cid);
+      return { rows: [candidateRow(cid)], rowCount: 1 };
+    }
+    if (sql.startsWith("SELECT c.id, c.source_id") && sql.includes("WHERE c.id = $1")) {
+      const c = candidates.get(String(params[0]));
+      return c === undefined ? { rows: [], rowCount: 0 } : { rows: [candidateRow(String(params[0]))], rowCount: 1 };
+    }
+    if (sql.startsWith("UPDATE candidates c SET status")) {
+      const [cid, status, specId] = params as (string | null)[];
+      const c = candidates.get(String(cid));
+      if (c === undefined) return { rows: [], rowCount: 0 };
+      c.status = status; c.resolved_spec_id = specId;
+      return { rows: [candidateRow(String(cid))], rowCount: 1 };
+    }
+    // discovery acceptProposals → createSpec path
+    if (sql.startsWith("SELECT project_id FROM projects")) {
+      return { rows: [{ project_id: params[0] }], rowCount: 1 };
+    }
+    if (sql.startsWith("INSERT INTO specs")) {
+      specs.set(String(params[0]), { metadata: {} });
+      return { rows: [], rowCount: 1 };
+    }
+    if (sql.startsWith("SELECT metadata FROM specs")) {
+      const row = specs.get(String(params[0]));
+      return row === undefined ? { rows: [], rowCount: 0 } : { rows: [row], rowCount: 1 };
+    }
+    if (sql.startsWith("UPDATE specs SET metadata")) {
+      specs.set(String(params[0]), { metadata: JSON.parse(String(params[1])) });
+      return { rows: [{ spec_id: params[0] }], rowCount: 1 };
+    }
+    if (sql.includes("FROM spec_dependencies") || sql.startsWith("INSERT INTO spec_dependencies")) {
+      return { rows: [], rowCount: 0 };
+    }
+    return { rows: [], rowCount: 0 };
+  };
+  return { pool: { query } as unknown as pg.Pool, candidates, specs };
+}
+
+function depsFor(connectors: ReadonlyMap<string, SourceConnector>, pool: pg.Pool): InboxEngineDeps {
+  return { pool, connectors };
+}
+
+describe("github issues connector (mocked)", () => {
+  it("maps open issues to candidates and drops pull requests", async () => {
+    const { client, calls } = fakeGitHub([
+      { number: 88, title: "feature · CSV export", body: "cfo wants csv", labels: ["spec-candidate"] },
+      { number: 91, title: "bug · 500 on pagination", body: "stack trace", labels: [{ name: "bug" }] },
+      { number: 92, title: "a PR", pull_request: { url: "x" } }
+    ]);
+    const connector = createGitHubIssuesConnector({ secrets, githubHttp: client });
+    const items = await connector.fetch(issuesSource);
+    expect(items).toHaveLength(2);
+    expect(items[0]?.externalId).toBe("gh-cat-cave/app#88");
+    // bug label → fail severity.
+    expect(items[1]?.severity).toBe("fail");
+    // label filter is forwarded to the Issues API.
+    expect(calls[0]?.path).toContain("labels=spec-candidate");
+    expect(calls[0]?.path).toContain("state=open");
+  });
+});
+
+describe("deterministic triage answerer", () => {
+  const answerer = createDeterministicTriageAnswerer();
+  const baseCtx = (over: Partial<TriageAnswererContext>): TriageAnswererContext => ({
+    candidate: { title: "csv export", body: "", severity: "info", sourceKind: "issues", projectId: "project_a" },
+    source: issuesSource,
+    existingSpecs: [],
+    ...over
+  });
+
+  it("auto-routes system-source candidates with an auto_routable verdict", async () => {
+    const t = await answerer.triage(baseCtx({ source: auditSource }));
+    expect(t.verdict).toBe("auto_routable");
+    expect(t.placement).toContain("auto");
+  });
+
+  it("dedupe → close when the candidate matches a shipped spec", async () => {
+    const t = await answerer.triage(
+      baseCtx({
+        candidate: { title: "dark mode toggle theme", body: "", severity: "info", sourceKind: "issues", projectId: "project_a" },
+        existingSpecs: [{ specId: "spec_a4f", title: "dark mode toggle theme", status: "merged" }]
+      })
+    );
+    expect(t.verdict).toBe("dedupe_close");
+    expect(t.duplicateOfSpecId).toBe("spec_a4f");
+  });
+
+  it("needs_call · fold into the live run when a fail touches an in-flight spec", async () => {
+    const t = await answerer.triage(
+      baseCtx({
+        candidate: { title: "500 on orders pagination cursor", body: "", severity: "fail", sourceKind: "errors", projectId: "project_a" },
+        existingSpecs: [{ specId: "spec_b21", title: "orders pagination cursor list", status: "in_flight" }]
+      })
+    );
+    expect(t.verdict).toBe("needs_call");
+    expect(t.placement).toContain("live run");
+    expect(t.discoveryVariant).toBe("bug");
+  });
+
+  it("needs_call with a proposed placement for a fresh candidate", async () => {
+    const t = await answerer.triage(baseCtx({}));
+    expect(t.verdict).toBe("needs_call");
+    expect(t.match).toContain("new behavior");
+  });
+});
+
+describe("ingestSource (connector → triage → upsert)", () => {
+  it("triages each issue and persists external candidates as triaged", async () => {
+    const { client } = fakeGitHub([{ number: 88, title: "feature · CSV export", body: "x", labels: [] }]);
+    const { pool, candidates } = stubPool();
+    const connectors = new Map<string, SourceConnector>([["issues", createGitHubIssuesConnector({ secrets, githubHttp: client })]]);
+    const { candidates: out } = await ingestSource(depsFor(connectors, pool), issuesSource);
+    expect(out).toHaveLength(1);
+    expect(out[0]?.status).toBe("triaged");
+    expect(out[0]?.triage?.verdict).toBe("needs_call");
+    expect(candidates.size).toBe(1);
+  });
+
+  it("auto-routes a system source's findings (status auto_routed)", async () => {
+    const connector: SourceConnector = {
+      kind: "scheduled_audit",
+      fetch: async () => [{ externalId: "a11y-1", title: "contrast failure", body: "", severity: "warn", projectId: "project_a" }]
+    };
+    const { pool } = stubPool();
+    const connectors = new Map<string, SourceConnector>([["scheduled_audit", connector]]);
+    const { candidates: out } = await ingestSource(depsFor(connectors, pool), auditSource);
+    expect(out[0]?.status).toBe("auto_routed");
+    expect(out[0]?.triage?.verdict).toBe("auto_routable");
+  });
+
+  it("is idempotent: re-ingesting the same issue updates rather than duplicates", async () => {
+    const issues = [{ number: 88, title: "CSV export", body: "v1", labels: [] }];
+    const { client } = fakeGitHub(issues);
+    const { pool, candidates } = stubPool();
+    const connectors = new Map<string, SourceConnector>([["issues", createGitHubIssuesConnector({ secrets, githubHttp: client })]]);
+    const deps = depsFor(connectors, pool);
+    await ingestSource(deps, issuesSource);
+    issues[0]!.body = "v2";
+    await ingestSource(deps, issuesSource);
+    expect(candidates.size).toBe(1);
+    expect([...candidates.values()][0]?.body).toBe("v2");
+  });
+});
+
+describe("accept → discovery hand-off", () => {
+  it("creates a spec via the discovery accept path and resolves the candidate", async () => {
+    const { client } = fakeGitHub([{ number: 88, title: "CSV export", body: "x", labels: [] }]);
+    const { pool, specs } = stubPool();
+    const connectors = new Map<string, SourceConnector>([["issues", createGitHubIssuesConnector({ secrets, githubHttp: client })]]);
+    const deps = depsFor(connectors, pool);
+    const { candidates: ingested } = await ingestSource(deps, issuesSource);
+    const candidateId = ingested[0]!.id;
+
+    const result = await acceptCandidate(deps, {
+      candidateId,
+      orgId: "org_a",
+      proposals: [
+        { proposalId: "p1", title: "add csv export", description: "button + endpoint", acceptanceCriteria: ["exports csv"], dependsOn: [], priority: "P1", estLabel: "2h" }
+      ],
+      placementKind: "jump_backlog",
+      placementLabel: "jump the p1 backlog",
+      actor
+    });
+    expect(result.candidate.status).toBe("accepted");
+    expect(result.specId).toMatch(/^spec_/);
+    expect(result.candidate.resolvedSpecId).toBe(result.specId);
+    // a spec was actually created through the discovery accept path.
+    expect(specs.size).toBe(1);
+  });
+
+  it("dismiss transitions the candidate to dismissed", async () => {
+    const { client } = fakeGitHub([{ number: 88, title: "CSV export", body: "x", labels: [] }]);
+    const { pool } = stubPool();
+    const connectors = new Map<string, SourceConnector>([["issues", createGitHubIssuesConnector({ secrets, githubHttp: client })]]);
+    const deps = depsFor(connectors, pool);
+    const { candidates: ingested } = await ingestSource(deps, issuesSource);
+    const out = await dismissCandidate(deps, ingested[0]!.id);
+    expect(out.status).toBe("dismissed");
+  });
+});
