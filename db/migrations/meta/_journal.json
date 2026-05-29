@@ -176,6 +176,13 @@
       "when": 1780027518628,
       "tag": "0024_pale_betty_ross",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1780030028750,
+      "tag": "0025_fine_gunslinger",
+      "breakpoints": true
     }
   ]
 }

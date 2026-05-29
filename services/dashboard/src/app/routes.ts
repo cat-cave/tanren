@@ -65,6 +65,7 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     label: "set up",
     rows: [
+      { id: "audits", glyph: "⌬", label: "scheduled audits", path: "/audits", phase: "2b", spec: "P3-0021" },
       { id: "settings", glyph: "⚙", label: "routing & limits", path: "/settings/routing", phase: "2b", spec: "P2B-0003" },
       { id: "config", glyph: "▮", label: "tanren-config", path: "/settings/config", phase: "2b", spec: "P3-0017" },
       { id: "notifications", glyph: "✉", label: "notifications", path: "/notifications", phase: "2b", spec: "P2B-0002" }
