@@ -14,7 +14,7 @@ const SubtaskSummary = z
     index: z.number().int().optional(),
     intent: z.string().optional(),
     estimatedTokens: z.number().int().nullable().optional(),
-    behaviorIds: z.array(z.string()).optional()
+    behaviorIds: z.array(z.string()).optional(),
   })
   .strict();
 
@@ -24,7 +24,7 @@ export const PlannerStartedPayload = z
   .object({
     taskKind: z.string(),
     intent: z.string().optional(),
-    rationale: z.string().optional()
+    rationale: z.string().optional(),
   })
   .strict();
 
@@ -33,7 +33,7 @@ export const PlannerCompletedPayload = z
     subtasks: z.array(SubtaskSummary).min(1),
     // rationale is the planner's declared reason for the decomposition. It
     // is the narration field the Forge "planner reasoning" pane consumes.
-    rationale: z.string().optional()
+    rationale: z.string().optional(),
   })
   .strict();
 
@@ -41,7 +41,7 @@ export const PlannerFailedPayload = z
   .object({
     kind: z.string().optional(),
     message: z.string(),
-    reason: z.string().optional()
+    reason: z.string().optional(),
   })
   .strict();
 
@@ -59,11 +59,11 @@ export const PlannerSubtasksEmittedPayload = z
           title: z.string(),
           intent: z.string(),
           estimatedTokens: z.number().int().nullable(),
-          behaviorIds: z.array(z.string())
+          behaviorIds: z.array(z.string()),
         })
-        .strict()
+        .strict(),
     ),
-    rationale: z.string()
+    rationale: z.string(),
   })
   .strict();
 
@@ -73,7 +73,7 @@ const WriterDecision = z
   .object({
     summary: z.string(),
     code: z.string().nullable(),
-    rationale: z.string().nullable()
+    rationale: z.string().nullable(),
   })
   .strict();
 
@@ -81,14 +81,14 @@ const WriterToolCall = z
   .object({
     name: z.string(),
     args: z.record(z.string(), z.unknown()),
-    outputSummary: z.string()
+    outputSummary: z.string(),
   })
   .strict();
 
 const CommitSummary = z
   .object({
     sha: z.string(),
-    message: z.string()
+    message: z.string(),
   })
   .strict();
 
@@ -99,7 +99,7 @@ const TokenUsageSummary = z
     cacheCreationTokens: z.number().int(),
     outputTokens: z.number().int(),
     reasoningOutputTokens: z.number().int(),
-    totalTokens: z.number().int()
+    totalTokens: z.number().int(),
   })
   .strict();
 
@@ -107,7 +107,7 @@ export const WriterStartedPayload = z
   .object({
     taskKind: z.string(),
     intent: z.string().optional(),
-    behaviorIds: z.array(z.string()).optional()
+    behaviorIds: z.array(z.string()).optional(),
   })
   .strict();
 
@@ -119,7 +119,7 @@ export const WriterSubtaskStartedPayload = z
     taskId: z.string(),
     subtaskIndex: z.number().int(),
     intent: z.string(),
-    behaviorIds: z.array(z.string())
+    behaviorIds: z.array(z.string()),
   })
   .strict();
 
@@ -136,7 +136,7 @@ export const WriterCompletedPayload = z
       .object({
         rawEventCount: z.number().int(),
         tokenUsage: TokenUsageSummary.optional(),
-        usageLimit: z.object({ message: z.string() }).optional()
+        usageLimit: z.object({ message: z.string() }).optional(),
       })
       .optional(),
     // Phase 2 narration enrichments
@@ -144,7 +144,7 @@ export const WriterCompletedPayload = z
     decisions: z.array(WriterDecision).optional(),
     toolCalls: z.array(WriterToolCall).optional(),
     diffBytes: z.number().int().optional(),
-    commitSha: z.string().nullable().optional()
+    commitSha: z.string().nullable().optional(),
   })
   .strict();
 
@@ -157,14 +157,14 @@ export const WriterSubtaskCompletedPayload = z
     decisions: z.array(WriterDecision),
     toolCalls: z.array(WriterToolCall),
     diffBytes: z.number().int(),
-    commitSha: z.string().nullable()
+    commitSha: z.string().nullable(),
   })
   .strict();
 
 export const WriterFailedPayload = z
   .object({
     kind: z.string(),
-    message: z.string()
+    message: z.string(),
   })
   .strict();
 
@@ -175,7 +175,7 @@ export const WriterSubtaskFailedPayload = z
     subtaskIndex: z.number().int(),
     intent: z.string(),
     failureKind: z.string(),
-    message: z.string()
+    message: z.string(),
   })
   .strict();
 
@@ -183,13 +183,13 @@ const CriterionStatus = z
   .object({
     criterion: z.string(),
     satisfied: z.boolean(),
-    reason: z.string()
+    reason: z.string(),
   })
   .strict();
 
 export const CheckerStartedPayload = z
   .object({
-    taskKind: z.string()
+    taskKind: z.string(),
   })
   .strict();
 
@@ -204,7 +204,7 @@ export const CheckerCompletedPayload = z
     passed: z.boolean().optional(),
     reasoning: z.string().optional(),
     behaviorIdsPassed: z.array(z.string()).optional(),
-    behaviorIdsFailed: z.array(z.string()).optional()
+    behaviorIdsFailed: z.array(z.string()).optional(),
   })
   .strict();
 
@@ -216,20 +216,20 @@ export const CheckerVerdictPayload = z
     passed: z.boolean(),
     reasoning: z.string(),
     behaviorIdsPassed: z.array(z.string()),
-    behaviorIdsFailed: z.array(z.string())
+    behaviorIdsFailed: z.array(z.string()),
   })
   .strict();
 
 export const CheckerFailedPayload = z
   .object({
     kind: z.string(),
-    message: z.string()
+    message: z.string(),
   })
   .strict();
 
 export const AuditorStartedPayload = z
   .object({
-    taskKind: z.string()
+    taskKind: z.string(),
   })
   .strict();
 
@@ -238,7 +238,7 @@ export const AuditorCompletedPayload = z
     verified: z.boolean(),
     criteria_status: z
       .object({
-        criteria: z.array(CriterionStatus).min(1)
+        criteria: z.array(CriterionStatus).min(1),
       })
       .strict(),
     reason: z.string(),
@@ -246,7 +246,7 @@ export const AuditorCompletedPayload = z
     passed: z.boolean().optional(),
     reasoning: z.string().optional(),
     outstandingBehaviorIds: z.array(z.string()).optional(),
-    recommendedAction: z.enum(["pass", "loop_to_planner", "halt"]).optional()
+    recommendedAction: z.enum(["pass", "loop_to_planner", "halt"]).optional(),
   })
   .strict();
 
@@ -256,14 +256,14 @@ export const AuditorVerdictPayload = z
     passed: z.boolean(),
     reasoning: z.string(),
     outstandingBehaviorIds: z.array(z.string()),
-    recommendedAction: z.enum(["pass", "loop_to_planner", "halt"])
+    recommendedAction: z.enum(["pass", "loop_to_planner", "halt"]),
   })
   .strict();
 
 export const AuditorFailedPayload = z
   .object({
     kind: z.string(),
-    message: z.string()
+    message: z.string(),
   })
   .strict();
 
@@ -283,7 +283,7 @@ export const PlannerRerequestedPayload = z
     rejectionReason: z.string(),
     behaviorIdsFailed: z.array(z.string()),
     plannerRerunCount: z.number().int(),
-    maxPlannerRerunsPerSpec: z.number().int()
+    maxPlannerRerunsPerSpec: z.number().int(),
   })
   .strict();
 
@@ -293,7 +293,7 @@ export const CheckerRejectedPayload = z
     taskId: z.string(),
     subtaskIndex: z.number().int(),
     reason: z.string(),
-    behaviorIdsFailed: z.array(z.string())
+    behaviorIdsFailed: z.array(z.string()),
   })
   .strict();
 
@@ -303,6 +303,6 @@ export const AuditorRejectedPayload = z
     auditTaskId: z.string(),
     reason: z.string(),
     outstandingBehaviorIds: z.array(z.string()),
-    recommendedAction: z.enum(["loop_to_planner", "halt"])
+    recommendedAction: z.enum(["loop_to_planner", "halt"]),
   })
   .strict();

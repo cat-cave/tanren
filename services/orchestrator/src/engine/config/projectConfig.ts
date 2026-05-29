@@ -9,7 +9,7 @@ import {
   RoutingTable,
   UnknownConfigVersionError,
   emptyRoutingTable,
-  readObservedVersion
+  readObservedVersion,
 } from "./shared.js";
 
 // Top-level versioned Zod schema for project-level config. Persisted as a
@@ -22,7 +22,7 @@ import {
 export const ProjectCredentialRefs = z
   .object({
     codexCredentialRef: z.string().min(1).optional(),
-    githubCredentialRef: z.string().min(1).optional()
+    githubCredentialRef: z.string().min(1).optional(),
   })
   .strict();
 export type ProjectCredentialRefs = z.infer<typeof ProjectCredentialRefs>;
@@ -53,7 +53,7 @@ export const ProjectConfigV1 = z
     // an absent field (the resolver then falls back to the org defaults).
     // Refs are the P2A-0013 managed namespace (`credential/<kind>/<scope>/...`),
     // not vault:// URIs.
-    credentials: ProjectCredentialRefs.optional()
+    credentials: ProjectCredentialRefs.optional(),
   })
   .strict();
 export type ProjectConfigV1 = z.infer<typeof ProjectConfigV1>;

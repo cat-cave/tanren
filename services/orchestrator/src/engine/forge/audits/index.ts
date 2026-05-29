@@ -9,7 +9,7 @@ export {
   AuditJob,
   type AuditFinding,
   type AuditPassResult,
-  type AuditPassRunner
+  type AuditPassRunner,
 } from "./types.js";
 
 export {
@@ -18,15 +18,10 @@ export {
   getAuditJob,
   setAuditJobEnabled,
   recordAuditRun,
-  type CreateAuditJobInput
+  type CreateAuditJobInput,
 } from "./store.js";
 
-export {
-  runAuditJob,
-  summarizeFindings,
-  type AuditSchedulerDeps,
-  type RunAuditJobResult
-} from "./scheduler.js";
+export { runAuditJob, summarizeFindings, type AuditSchedulerDeps, type RunAuditJobResult } from "./scheduler.js";
 
 export { recommendCoverage, type AuditRecommendation } from "./recommended.js";
 

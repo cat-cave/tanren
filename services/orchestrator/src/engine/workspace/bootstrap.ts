@@ -23,7 +23,7 @@ const OUTPUT_TAIL_LIMIT = 4_000;
 // heuristic default. P3-0004 is being built in parallel and is not yet merged,
 // so for now the command is a parameter with this sensible default.
 export const DEFAULT_BOOTSTRAP_COMMAND =
-  'if [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile; elif [ -f package-lock.json ]; then npm ci; else pnpm install; fi';
+  "if [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile; elif [ -f package-lock.json ]; then npm ci; else pnpm install; fi";
 
 export interface BootstrapWorkspaceInput {
   ssh: SshSubstrate;
@@ -46,7 +46,7 @@ export class WorkspaceBootstrapError extends Error {
     readonly command: string,
     readonly exitCode: number | null,
     readonly outputTail: string,
-    readonly timedOut: boolean
+    readonly timedOut: boolean,
   ) {
     super(bootstrapFailureMessage(command, exitCode, outputTail, timedOut));
   }
@@ -60,7 +60,7 @@ export async function bootstrapWorkspace(input: BootstrapWorkspaceInput): Promis
   const result = await input.ssh.run(input.target, {
     command,
     cwd: input.workspacePath,
-    timeoutMs: input.timeoutMs
+    timeoutMs: input.timeoutMs,
   });
 
   const succeeded = result.failure === undefined && !result.timedOut && result.exitCode === 0;
@@ -70,7 +70,7 @@ export async function bootstrapWorkspace(input: BootstrapWorkspaceInput): Promis
       command,
       result.exitCode,
       tailOf(combinedOutput(result)),
-      result.timedOut
+      result.timedOut,
     );
   }
   return result;
@@ -91,7 +91,12 @@ function tailOf(output: string): string {
   return output.slice(output.length - OUTPUT_TAIL_LIMIT);
 }
 
-function bootstrapFailureMessage(command: string, exitCode: number | null, outputTail: string, timedOut: boolean): string {
+function bootstrapFailureMessage(
+  command: string,
+  exitCode: number | null,
+  outputTail: string,
+  timedOut: boolean,
+): string {
   const reason = timedOut ? "timed out" : `exited ${exitCode ?? "unknown"}`;
   const tail = outputTail === "" ? "" : `: ${outputTail}`;
   return `workspace bootstrap (${command}) ${reason}${tail}`;

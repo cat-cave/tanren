@@ -6,21 +6,21 @@ Reductions from the hi-fi as-shown are explicit in each file. They are not "out 
 
 ## Surfaces and owning specs
 
-| Surface | File | Owning P2B spec |
-|---|---|---|
-| Shell + ⌘K palette + auth flow | `shell-and-palette.md` | P2B-0001 |
-| Org-setup onboarding (4 steps) | `onboarding-org-setup.md` | P2B-0002 |
-| Existing-project onboarding (minimal) | `onboarding-existing-project-minimal.md` | P2B-0002 |
-| Credentials management | `credentials.md` | P2B-0002 |
-| Notifications matrix UI | `notifications-matrix.md` | P2B-0002 |
-| Project + spec management | `project-and-spec.md` | P2B-0003 |
-| Routing & limits settings | `routing-and-limits.md` | P2B-0003 |
-| Project view (chat-primary) | `project-view-chat-primary.md` | P2B-0003 |
-| Run detail | `run-detail.md` | P2B-0004 |
-| Review handoff | `review-handoff.md` | P2B-0004 |
-| History & costs | `history-and-costs.md` | P2B-0005 |
-| Failure recovery | `failure-recovery.md` | P2B-0008 |
-| Greenfield new project (stretch, thin) | `onboarding-new-project-thin.md` | P2B-0009 |
+| Surface                                | File                                     | Owning P2B spec |
+| -------------------------------------- | ---------------------------------------- | --------------- |
+| Shell + ⌘K palette + auth flow         | `shell-and-palette.md`                   | P2B-0001        |
+| Org-setup onboarding (4 steps)         | `onboarding-org-setup.md`                | P2B-0002        |
+| Existing-project onboarding (minimal)  | `onboarding-existing-project-minimal.md` | P2B-0002        |
+| Credentials management                 | `credentials.md`                         | P2B-0002        |
+| Notifications matrix UI                | `notifications-matrix.md`                | P2B-0002        |
+| Project + spec management              | `project-and-spec.md`                    | P2B-0003        |
+| Routing & limits settings              | `routing-and-limits.md`                  | P2B-0003        |
+| Project view (chat-primary)            | `project-view-chat-primary.md`           | P2B-0003        |
+| Run detail                             | `run-detail.md`                          | P2B-0004        |
+| Review handoff                         | `review-handoff.md`                      | P2B-0004        |
+| History & costs                        | `history-and-costs.md`                   | P2B-0005        |
+| Failure recovery                       | `failure-recovery.md`                    | P2B-0008        |
+| Greenfield new project (stretch, thin) | `onboarding-new-project-thin.md`         | P2B-0009        |
 
 Each acceptance-criteria file follows the same shape:
 

@@ -11,7 +11,7 @@ import type {
   ForgeAnswererStep,
   ForgeConversationAnswerer,
   ForgeConversationContext,
-  ForgeReadToolCall
+  ForgeReadToolCall,
 } from "../../engine/forge/index.js";
 import type { ForgeAnswer, ForgeAttentionItem } from "../../engine/answerers/schemas/forge.js";
 
@@ -53,7 +53,7 @@ export function createDeterministicForgeAnswerer(): ForgeConversationAnswerer {
         return { kind: "tools", toolCalls: [tool] };
       }
       return { kind: "final", answer: finalize(topic, context) };
-    }
+    },
   };
 }
 
@@ -65,7 +65,7 @@ function finalize(topic: Topic, context: ForgeConversationContext): ForgeAnswer 
     body,
     attentionItems,
     insights: [],
-    prompts: promptsFor(topic)
+    prompts: promptsFor(topic),
   };
 }
 
@@ -96,8 +96,11 @@ function attentionFor(topic: Topic, context: ForgeConversationContext): ForgeAtt
         priority: "review",
         title: "Open the run detail",
         sub: `Run ${context.runId}`,
-        action: { label: "Open run", toolCall: { tool: "tanren.read_run", args: { runId: context.runId } } }
-      }
+        action: {
+          label: "Open run",
+          toolCall: { tool: "tanren.read_run", args: { runId: context.runId } },
+        },
+      },
     ];
   }
   if (context.runId !== null && topic === "costs") {
@@ -106,8 +109,11 @@ function attentionFor(topic: Topic, context: ForgeConversationContext): ForgeAtt
         priority: "budget",
         title: "View this run's costs",
         sub: "Per-task spend breakdown",
-        action: { label: "View costs", toolCall: { tool: "tanren.read_costs", args: { runId: context.runId } } }
-      }
+        action: {
+          label: "View costs",
+          toolCall: { tool: "tanren.read_costs", args: { runId: context.runId } },
+        },
+      },
     ];
   }
   return [];
@@ -118,7 +124,11 @@ function promptsFor(topic: Topic): string[] {
     case "costs":
       return ["where's the waste?", "forecast end of month", "what's the next spec I should run?"];
     case "run":
-      return ["walk me through the writer's reasoning", "show me the auditor's verdict", "what's the next step for this PR?"];
+      return [
+        "walk me through the writer's reasoning",
+        "show me the auditor's verdict",
+        "what's the next step for this PR?",
+      ];
     case "insights":
       return ["what needs me right now?", "where's the loop slowest?"];
     case "milestones":

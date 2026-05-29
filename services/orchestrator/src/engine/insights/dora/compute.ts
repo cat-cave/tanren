@@ -110,9 +110,9 @@ export function deriveDoraMetrics(inputs: DoraInputs, options: DeriveOptions): D
       merges: merges.length,
       finishedRuns: finishedRuns.length,
       failedRuns,
-      recoveries: restoreSeconds.length
+      recoveries: restoreSeconds.length,
     },
-    computedAt: options.windowEnd.toISOString()
+    computedAt: options.windowEnd.toISOString(),
   });
 }
 
@@ -145,7 +145,7 @@ interface RecoveryQueryRow {
  */
 export async function computeDoraMetrics(
   pool: Pick<pg.Pool, "query">,
-  options: ComputeDoraOptions
+  options: ComputeDoraOptions,
 ): Promise<DoraMetrics> {
   const windowDays = options.windowDays ?? DEFAULT_WINDOW_DAYS;
   const now = options.now ?? new Date();
@@ -164,7 +164,7 @@ export async function computeDoraMetrics(
          AND e.spec_id IS NOT NULL
          AND e.ts >= $2
        ORDER BY e.ts ASC`,
-    [options.projectId, since]
+    [options.projectId, since],
   );
 
   // Terminal runs in the window — the change-failure denominator.
@@ -175,7 +175,7 @@ export async function computeDoraMetrics(
          AND r.ended_at IS NOT NULL
          AND r.ended_at >= $2
          AND r.status IN ('done','completed','failed','halted','cancelled')`,
-    [options.projectId, since]
+    [options.projectId, since],
   );
 
   // Halt → recovery pairs: each run that halted, matched to the earliest
@@ -198,31 +198,31 @@ export async function computeDoraMetrics(
               AND m.event_type = 'merge.completed'
               AND m.ts > halt.halted_at
        GROUP BY halt.spec_id, halt.halted_at`,
-    [options.projectId, since]
+    [options.projectId, since],
   );
 
   const inputs: DoraInputs = {
     merges: mergesResult.rows.map((row) => ({
       specId: row.spec_id,
       specCreatedAt: new Date(row.spec_created_at),
-      mergedAt: new Date(row.merged_at)
+      mergedAt: new Date(row.merged_at),
     })),
     finishedRuns: finishedResult.rows.map((row) => ({
       runId: row.run_id,
       status: row.status,
-      endedAt: new Date(row.ended_at)
+      endedAt: new Date(row.ended_at),
     })),
     recoveries: recoveryResult.rows.map((row) => ({
       specId: row.spec_id,
       haltedAt: new Date(row.halted_at),
-      recoveredAt: new Date(row.recovered_at)
-    }))
+      recoveredAt: new Date(row.recovered_at),
+    })),
   };
 
   return deriveDoraMetrics(inputs, {
     projectId: options.projectId,
     windowStart: since,
     windowEnd: now,
-    windowDays
+    windowDays,
   });
 }

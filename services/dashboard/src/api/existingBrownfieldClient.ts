@@ -17,7 +17,7 @@ import type {
   GovernanceResult,
   ReconReport,
   ReconResult,
-  SeedDagResult
+  SeedDagResult,
 } from "./existingBrownfieldTypes.js";
 
 function projectBase(orgId: string, projectId: string): string {
@@ -29,9 +29,11 @@ export class ExistingBrownfieldClient extends OrchestratorHttpClient {
   async recon(
     orgId: string,
     projectId: string,
-    repoUrl: string
+    repoUrl: string,
   ): Promise<{ ok: boolean; status: number; result: ReconResult | undefined }> {
-    const r = await this.sendJson<ReconResult>("POST", `${projectBase(orgId, projectId)}/recon`, { repoUrl });
+    const r = await this.sendJson<ReconResult>("POST", `${projectBase(orgId, projectId)}/recon`, {
+      repoUrl,
+    });
     return { ok: r.ok, status: r.status, result: r.body };
   }
 
@@ -39,12 +41,32 @@ export class ExistingBrownfieldClient extends OrchestratorHttpClient {
   async configInjection(
     orgId: string,
     projectId: string,
-    input: { repoUrl: string; baseBranch: string; report: ReconReport; posture: GovernancePosture; excludePaths: string[] }
-  ): Promise<{ ok: boolean; status: number; result: ConfigInjectionResult | undefined; error?: string }> {
-    const r = await this.sendJson<ConfigInjectionResult>("POST", `${projectBase(orgId, projectId)}/config-injection`, input);
+    input: {
+      repoUrl: string;
+      baseBranch: string;
+      report: ReconReport;
+      posture: GovernancePosture;
+      excludePaths: string[];
+    },
+  ): Promise<{
+    ok: boolean;
+    status: number;
+    result: ConfigInjectionResult | undefined;
+    error?: string;
+  }> {
+    const r = await this.sendJson<ConfigInjectionResult>(
+      "POST",
+      `${projectBase(orgId, projectId)}/config-injection`,
+      input,
+    );
     if (!r.ok) {
       const body = r.body as { error?: string; message?: string } | undefined;
-      return { ok: false, status: r.status, result: undefined, error: body?.message ?? body?.error };
+      return {
+        ok: false,
+        status: r.status,
+        result: undefined,
+        error: body?.message ?? body?.error,
+      };
     }
     return { ok: true, status: r.status, result: r.body };
   }
@@ -53,7 +75,7 @@ export class ExistingBrownfieldClient extends OrchestratorHttpClient {
   async seedDag(
     orgId: string,
     projectId: string,
-    input: { repoUrl: string; report: ReconReport; includeIssues: boolean }
+    input: { repoUrl: string; report: ReconReport; includeIssues: boolean },
   ): Promise<{ ok: boolean; status: number; result: SeedDagResult | undefined }> {
     const r = await this.sendJson<SeedDagResult>("POST", `${projectBase(orgId, projectId)}/seed-dag`, input);
     return { ok: r.ok, status: r.status, result: r.body };
@@ -63,7 +85,7 @@ export class ExistingBrownfieldClient extends OrchestratorHttpClient {
   async governance(
     orgId: string,
     projectId: string,
-    posture: GovernancePosture
+    posture: GovernancePosture,
   ): Promise<{ ok: boolean; status: number; result: GovernanceResult | undefined }> {
     const r = await this.sendJson<GovernanceResult>("POST", `${projectBase(orgId, projectId)}/governance`, { posture });
     return { ok: r.ok, status: r.status, result: r.body };

@@ -42,7 +42,7 @@ export abstract class OrchestratorHttpClient {
 
   protected async getJson<T>(path: string): Promise<T | undefined> {
     const response = await this.fetchImpl(`${this.orchestratorUrl}${path}`, {
-      headers: this.headers()
+      headers: this.headers(),
     }).catch(() => undefined);
     if (response === undefined || !response.ok) {
       return undefined;
@@ -53,12 +53,12 @@ export abstract class OrchestratorHttpClient {
   protected async sendJson<T = unknown>(
     method: "POST" | "PATCH" | "DELETE",
     path: string,
-    body?: unknown
+    body?: unknown,
   ): Promise<{ ok: boolean; status: number; body: T | undefined }> {
     const response = await this.fetchImpl(`${this.orchestratorUrl}${path}`, {
       method,
       headers: this.headers(body === undefined ? {} : { "content-type": "application/json" }),
-      body: body === undefined ? undefined : JSON.stringify(body)
+      body: body === undefined ? undefined : JSON.stringify(body),
     }).catch(() => undefined);
     if (response === undefined) {
       return { ok: false, status: 0, body: undefined };

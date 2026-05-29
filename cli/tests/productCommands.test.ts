@@ -9,7 +9,7 @@ import { specsCreate, specsRun } from "../src/commands/specs/index.js";
 
 function stubJsonFetch(body: unknown) {
   const fetch = vi.fn<typeof globalThis.fetch>(
-    async (_url, _init) => new Response(JSON.stringify(body), { status: 200 })
+    async (_url, _init) => new Response(JSON.stringify(body), { status: 200 }),
   );
   vi.stubGlobal("fetch", fetch);
   vi.spyOn(console, "log").mockImplementation(() => undefined);
@@ -54,14 +54,7 @@ describe("P2A-0013 product CLI commands", () => {
 
   it("projects create POSTs to the org-scoped projects route", async () => {
     const fetch = stubJsonFetch({ projectId: "project_1" });
-    await projectsCreate([
-      "--org-id",
-      "org_acme",
-      "--name",
-      "Tanren",
-      "--repo-url",
-      "https://github.com/cat-cave/x"
-    ]);
+    await projectsCreate(["--org-id", "org_acme", "--name", "Tanren", "--repo-url", "https://github.com/cat-cave/x"]);
     const call = fetch.mock.calls[0];
     expect(call?.[0]).toBe("http://localhost:3100/orgs/org_acme/projects");
     expect(JSON.parse(String((call?.[1] as RequestInit)?.body))).toMatchObject({ name: "Tanren" });
@@ -75,11 +68,11 @@ describe("P2A-0013 product CLI commands", () => {
       "--project-id",
       "project_1",
       "--repo-url",
-      "https://github.com/cat-cave/x"
+      "https://github.com/cat-cave/x",
     ]);
     expect(fetch).toHaveBeenCalledWith(
       "http://localhost:3100/orgs/org_acme/projects/project_1/link",
-      expect.objectContaining({ method: "POST" })
+      expect.objectContaining({ method: "POST" }),
     );
   });
 
@@ -97,7 +90,7 @@ describe("P2A-0013 product CLI commands", () => {
       "--acceptance",
       "C1",
       "--acceptance",
-      "C2"
+      "C2",
     ]);
     const body = JSON.parse(String((fetch.mock.calls[0]?.[1] as RequestInit)?.body));
     expect(body).toMatchObject({ acceptanceCriteria: ["C1", "C2"] });
@@ -113,18 +106,20 @@ describe("P2A-0013 product CLI commands", () => {
       "--spec-id",
       "spec_1",
       "--branch",
-      "tanren/foo"
+      "tanren/foo",
     ]);
     expect(fetch).toHaveBeenCalledWith(
       "http://localhost:3100/orgs/org_acme/projects/project_1/specs/spec_1/runs",
-      expect.objectContaining({ method: "POST" })
+      expect.objectContaining({ method: "POST" }),
     );
   });
 
   it("personas create defaults scope to org when no project provided", async () => {
     const fetch = stubJsonFetch({ id: "persona_1" });
     await personasCreate(["--org-id", "org_acme", "--name", "Sales"]);
-    expect(JSON.parse(String((fetch.mock.calls[0]?.[1] as RequestInit)?.body))).toMatchObject({ scope: "org" });
+    expect(JSON.parse(String((fetch.mock.calls[0]?.[1] as RequestInit)?.body))).toMatchObject({
+      scope: "org",
+    });
   });
 
   it("milestones create parses order-index as a number", async () => {
@@ -139,9 +134,11 @@ describe("P2A-0013 product CLI commands", () => {
       "--name",
       "Milestone One",
       "--order-index",
-      "3"
+      "3",
     ]);
-    expect(JSON.parse(String((fetch.mock.calls[0]?.[1] as RequestInit)?.body))).toMatchObject({ orderIndex: 3 });
+    expect(JSON.parse(String((fetch.mock.calls[0]?.[1] as RequestInit)?.body))).toMatchObject({
+      orderIndex: 3,
+    });
   });
 
   it("credentials list defaults to /credentials/me without --org-id", async () => {

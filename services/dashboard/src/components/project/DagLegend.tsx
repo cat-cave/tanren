@@ -12,7 +12,7 @@ const ROWS: { k: DagStatus; pulse: boolean }[] = [
   { k: "live", pulse: true },
   { k: "review", pulse: true },
   { k: "blocked", pulse: true },
-  { k: "queued", pulse: false }
+  { k: "queued", pulse: false },
 ];
 
 export function DagLegend() {
@@ -23,7 +23,10 @@ export function DagLegend() {
         const s = STATUS_STYLES[row.k];
         return (
           <div class="legend-row">
-            <span class={`swatch${row.pulse ? " pulse" : ""}`} style={`background:${s.fill};border-color:${s.stroke};color:${s.stroke}`}>
+            <span
+              class={`swatch${row.pulse ? " pulse" : ""}`}
+              style={`background:${s.fill};border-color:${s.stroke};color:${s.stroke}`}
+            >
               {s.glyph}
             </span>
             <span class="k">{row.k}</span>

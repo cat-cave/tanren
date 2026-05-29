@@ -13,23 +13,23 @@ const realCodexbarOutput = JSON.stringify([
         usedPercent: 0,
         resetsAt: "2026-05-28T08:37:21Z",
         windowMinutes: 300,
-        resetDescription: "tomorrow, 3:37 AM"
+        resetDescription: "tomorrow, 3:37 AM",
       },
       secondary: {
         usedPercent: 100,
         resetsAt: "2026-05-30T20:19:33Z",
         windowMinutes: 10080,
-        resetDescription: "May 30 at 3:19 PM"
+        resetDescription: "May 30 at 3:19 PM",
       },
       tertiary: null,
       identity: { accountEmail: "operator@example.com", loginMethod: "pro", providerID: "codex" },
       loginMethod: "pro",
-      updatedAt: "2026-05-28T03:41:23Z"
+      updatedAt: "2026-05-28T03:41:23Z",
     },
     credits: { events: [], remaining: 0, updatedAt: "2026-05-28T03:41:23Z" },
     source: "codex-cli",
-    provider: "codex"
-  }
+    provider: "codex",
+  },
 ]);
 
 describe("parseCodexbarUsage", () => {
@@ -42,8 +42,20 @@ describe("parseCodexbarUsage", () => {
     expect(usage?.creditsRemaining).toBe(0);
     expect(usage?.capturedAt).toBe("2026-05-28T03:41:23Z");
     expect(usage?.windows).toEqual([
-      { slot: "primary", usedPercent: 0, resetsAt: "2026-05-28T08:37:21Z", windowMinutes: 300, resetDescription: "tomorrow, 3:37 AM" },
-      { slot: "secondary", usedPercent: 100, resetsAt: "2026-05-30T20:19:33Z", windowMinutes: 10080, resetDescription: "May 30 at 3:19 PM" }
+      {
+        slot: "primary",
+        usedPercent: 0,
+        resetsAt: "2026-05-28T08:37:21Z",
+        windowMinutes: 300,
+        resetDescription: "tomorrow, 3:37 AM",
+      },
+      {
+        slot: "secondary",
+        usedPercent: 100,
+        resetsAt: "2026-05-30T20:19:33Z",
+        windowMinutes: 10080,
+        resetDescription: "May 30 at 3:19 PM",
+      },
     ]);
   });
 
@@ -62,10 +74,15 @@ describe("parseCodexbarUsage", () => {
         provider: "codex",
         source: "codex-cli",
         usage: {
-          primary: { usedPercent: 12, resetsAt: "2026-05-28T08:37:21Z", windowMinutes: 300, resetDescription: "soon" },
-          identity: { accountEmail: "fallback@example.com" }
-        }
-      }
+          primary: {
+            usedPercent: 12,
+            resetsAt: "2026-05-28T08:37:21Z",
+            windowMinutes: 300,
+            resetDescription: "soon",
+          },
+          identity: { accountEmail: "fallback@example.com" },
+        },
+      },
     ]);
     const usage = parseCodexbarUsage(output, "codex");
     expect(usage?.accountEmail).toBe("fallback@example.com");
@@ -74,8 +91,20 @@ describe("parseCodexbarUsage", () => {
 
   it("selects the entry matching the requested provider when several are returned", () => {
     const output = JSON.stringify([
-      { provider: "claude", source: "claude-cli", usage: { primary: { usedPercent: 50, resetsAt: "x", windowMinutes: 300, resetDescription: "" } } },
-      { provider: "codex", source: "codex-cli", usage: { primary: { usedPercent: 7, resetsAt: "y", windowMinutes: 300, resetDescription: "" } } }
+      {
+        provider: "claude",
+        source: "claude-cli",
+        usage: {
+          primary: { usedPercent: 50, resetsAt: "x", windowMinutes: 300, resetDescription: "" },
+        },
+      },
+      {
+        provider: "codex",
+        source: "codex-cli",
+        usage: {
+          primary: { usedPercent: 7, resetsAt: "y", windowMinutes: 300, resetDescription: "" },
+        },
+      },
     ]);
     const usage = parseCodexbarUsage(output, "codex");
     expect(usage?.provider).toBe("codex");

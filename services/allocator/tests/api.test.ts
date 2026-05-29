@@ -1,15 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { createAllocatorApi } from "../src/api.js";
-import type {
-  ContainerInspectResult,
-  CreateContainerSpec,
-  DockerEngineClient
-} from "../src/dockerEngine.js";
+import type { ContainerInspectResult, CreateContainerSpec, DockerEngineClient } from "../src/dockerEngine.js";
 import {
   RunnerLifecycle,
   type RunnerRecord,
   type RunnerSecretsClient,
-  type RunnerStore
+  type RunnerStore,
 } from "../src/runnerLifecycle.js";
 
 class FakeDocker implements DockerEngineClient {
@@ -80,23 +76,28 @@ function buildApp() {
     sshHostnameForOrchestrator: (container) => container,
     sleep: () => Promise.resolve(),
     hostKeyReadAttempts: 1,
-    hostKeyReadDelayMs: 0
+    hostKeyReadDelayMs: 0,
   });
   const app = createAllocatorApi({
     lifecycle,
     authToken: "test-token",
-    dockerPing: async () => true
+    dockerPing: async () => true,
   });
   return { app, docker, store, lifecycle };
 }
 
-async function postJson(app: { fetch: (req: Request) => Promise<Response> }, path: string, body: unknown, token = "test-token"): Promise<Response> {
+async function postJson(
+  app: { fetch: (req: Request) => Promise<Response> },
+  path: string,
+  body: unknown,
+  token = "test-token",
+): Promise<Response> {
   return app.fetch(
     new Request(`http://allocator${path}`, {
       method: "POST",
       headers: { "Content-Type": "application/json", authorization: `Bearer ${token}` },
-      body: JSON.stringify(body)
-    })
+      body: JSON.stringify(body),
+    }),
   );
 }
 
@@ -107,8 +108,8 @@ describe("allocator HTTP API", () => {
       new Request("http://allocator/allocate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ runId: "run_1", projectId: "p", runnerImage: "img", vaultRefs: [] })
-      })
+        body: JSON.stringify({ runId: "run_1", projectId: "p", runnerImage: "img", vaultRefs: [] }),
+      }),
     );
     expect(response.status).toBe(401);
   });
@@ -126,13 +127,16 @@ describe("allocator HTTP API", () => {
       runId: "run_api",
       projectId: "proj",
       runnerImage: "ghcr.io/cat-cave/tanren-runner:v0",
-      vaultRefs: []
+      vaultRefs: [],
     });
     expect(allocated.status).toBe(201);
     const allocatedBody = (await allocated.json()) as { runnerId: string };
     expect(allocatedBody.runnerId).toBe("runner_run_api");
 
-    const released = await postJson(app, "/release", { runnerId: allocatedBody.runnerId, reason: "completed" });
+    const released = await postJson(app, "/release", {
+      runnerId: allocatedBody.runnerId,
+      reason: "completed",
+    });
     expect(released.status).toBe(200);
     expect(await released.json()).toEqual({ released: true });
     expect(docker.containers[0]?.removed).toBe(true);
@@ -141,7 +145,10 @@ describe("allocator HTTP API", () => {
 
   it("/release on an unknown runner returns released: false", async () => {
     const { app } = buildApp();
-    const response = await postJson(app, "/release", { runnerId: "runner_missing", reason: "completed" });
+    const response = await postJson(app, "/release", {
+      runnerId: "runner_missing",
+      reason: "completed",
+    });
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ released: false });
   });

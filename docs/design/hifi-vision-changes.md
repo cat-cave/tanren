@@ -20,11 +20,13 @@ Also delete the matching Vault entry: in the `SETTINGS_VAULT` array, drop `{ lab
 
 **File**: `view-review.jsx` readiness gate (bottom of the file)
 **Current state**: Sign-off CTAs render as fixed defaults:
+
 - `request changes ↗`
 - `sign off · queue with mergify`
 - `sign off · merge now ↗`
 
 **Change**: Make the merge-related CTAs render conditionally based on per-repo merge-integration configuration. Possible long-term states:
+
 - Repo configured for **Mergify queue** → show `sign off · queue with mergify`
 - Repo configured for **direct GitHub merge** → show `sign off · merge now ↗`
 - Repo configured for **external-reviewer handoff** → show `approve · notify reviewer`
@@ -38,6 +40,7 @@ Also delete the matching Vault entry: in the `SETTINGS_VAULT` array, drop `{ lab
 
 **File**: `view-onboard-existing.jsx` step E3 (config injection PR), file list around line 206
 **Current state**: The PR file list shows:
+
 - `.tanren/config.yaml` (+38, selected)
 - `.github/workflows/tanren-ci.yml` (+84)
 - `.mergify.yml` (+42)
@@ -49,7 +52,7 @@ Also delete the matching Vault entry: in the `SETTINGS_VAULT` array, drop `{ lab
 
 The other five files keep their current labels — those are Bucket A (GitHub/Mergify-read) files that legitimately need to land in the target repo.
 
-**Reason**: Per the principled config bucketing decided 2026-05-28, project config lives in the orchestrator DB, not in the target repo. The brownfield config-injection PR creates a *one-time* transparency snapshot under `.tanren/PROJECT.md` at onboarding; there is no ongoing mirror. The hi-fi previously implied `.tanren/config.yaml` was an authoritative config file Tanren reads — that's no longer the long-term vision.
+**Reason**: Per the principled config bucketing decided 2026-05-28, project config lives in the orchestrator DB, not in the target repo. The brownfield config-injection PR creates a _one-time_ transparency snapshot under `.tanren/PROJECT.md` at onboarding; there is no ongoing mirror. The hi-fi previously implied `.tanren/config.yaml` was an authoritative config file Tanren reads — that's no longer the long-term vision.
 
 ### Settings · "edits land as a pr" caption — conditional on audit-gate
 
@@ -57,6 +60,7 @@ The other five files keep their current labels — those are Bucket A (GitHub/Me
 **Current state**: The bottom panel caption reads "edits land as a pr · review before merge" as a fixed footer.
 
 **Change**: Make the "edits land as a pr" caption conditional on the org's audit-gate setting. Two long-term rendering paths:
+
 - **Audit gate on** → caption reads "edits land as a pr in `<org>/tanren-config` · review before merge"
 - **Audit gate off** → caption reads "edits land in the dashboard · no PR required"
 

@@ -24,7 +24,7 @@ export async function orgsConfigSet(argv: string[]): Promise<void> {
   const result = await jsonRequest(
     `/orgs/${encodeURIComponent(orgId)}`,
     { config: JSON.parse(configJson) as Record<string, unknown> },
-    { method: "PATCH" }
+    { method: "PATCH" },
   );
   jsonOutput(args, result);
 }

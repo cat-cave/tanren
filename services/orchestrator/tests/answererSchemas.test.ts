@@ -5,7 +5,7 @@ import {
   buildCheckPrompt,
   checkAnswerSchema,
   planAnswerSchema,
-  type CheckAnswer
+  type CheckAnswer,
 } from "../src/engine/providers/answererSchemas.js";
 
 describe("structured Answerer schemas", () => {
@@ -13,7 +13,7 @@ describe("structured Answerer schemas", () => {
     const valid = {
       done: true,
       reason: "The diff satisfies the spec.",
-      suggested_fixes: null
+      suggested_fixes: null,
     };
 
     expect(checkAnswerSchema.parse(valid)).toEqual(valid);
@@ -25,21 +25,24 @@ describe("structured Answerer schemas", () => {
     const valid = {
       verified: true,
       criteria_status: {
-        criteria: [{ criterion: "Adds marker file", satisfied: true, reason: "The diff adds MARKER.md." }]
+        criteria: [{ criterion: "Adds marker file", satisfied: true, reason: "The diff adds MARKER.md." }],
       },
-      reason: "The check is complete."
+      reason: "The check is complete.",
     };
 
     expect(auditAnswerSchema.parse(valid)).toEqual(valid);
     expect(() => auditAnswerSchema.parse({ ...valid, unknown: true })).toThrow(/Unrecognized key/);
     expect(() =>
-      auditAnswerSchema.parse({ ...valid, criteria_status: { criteria: [{ criterion: "", satisfied: true, reason: "ok" }] } })
+      auditAnswerSchema.parse({
+        ...valid,
+        criteria_status: { criteria: [{ criterion: "", satisfied: true, reason: "ok" }] },
+      }),
     ).toThrow(/Too small/);
   });
 
   it("validates plan answers with acceptance criteria", () => {
     const valid = {
-      subtasks: [{ title: "Add marker", acceptanceCriteria: ["README includes ok"] }]
+      subtasks: [{ title: "Add marker", acceptanceCriteria: ["README includes ok"] }],
     };
 
     expect(planAnswerSchema.parse(valid)).toEqual(valid);
@@ -50,19 +53,19 @@ describe("structured Answerer schemas", () => {
     const check: CheckAnswer = {
       done: true,
       reason: "ok",
-      suggested_fixes: null
+      suggested_fixes: null,
     };
     const checkPrompt = buildCheckPrompt({
       specTitle: "Fixture",
       specDescription: "Review a diff",
       acceptanceCriteria: ["README includes ok"],
-      writerDiff: "diff --git a/README.md b/README.md\n+ok\n"
+      writerDiff: "diff --git a/README.md b/README.md\n+ok\n",
     });
     const auditPrompt = buildAuditPrompt({
       specTitle: "Fixture",
       acceptanceCriteria: ["README includes ok"],
       checkAnswer: check,
-      writerDiff: "diff --git a/README.md b/README.md\n+ok\n"
+      writerDiff: "diff --git a/README.md b/README.md\n+ok\n",
     });
 
     expect(checkPrompt).toContain("Do not edit files");

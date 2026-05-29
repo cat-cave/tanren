@@ -1,9 +1,4 @@
-import type {
-  AllocationRequest,
-  Allocator,
-  ReleaseReason,
-  RunnerAllocation
-} from "../contracts/allocator.js";
+import type { AllocationRequest, Allocator, ReleaseReason, RunnerAllocation } from "../contracts/allocator.js";
 import type { RunnerStore } from "./runnerStore.js";
 
 const allocatorName = "kubernetes";
@@ -131,9 +126,7 @@ export class KubernetesAllocator implements Allocator {
 
   constructor(private readonly options: KubernetesAllocatorOptions) {
     if (options.apiServer === "" || options.token === "") {
-      throw new KubernetesAllocatorError(
-        "KubernetesAllocator requires a non-empty apiServer and token"
-      );
+      throw new KubernetesAllocatorError("KubernetesAllocator requires a non-empty apiServer and token");
     }
     if (options.namespace === "") {
       throw new KubernetesAllocatorError("KubernetesAllocator requires a non-empty namespace");
@@ -153,13 +146,13 @@ export class KubernetesAllocator implements Allocator {
     const secretName = `${name}-ssh`;
     const labels = {
       "tanren-run": labelValue(request.runId),
-      "tanren-project": labelValue(request.projectId)
+      "tanren-project": labelValue(request.projectId),
     };
 
     await this.client.createSecret({
       name: secretName,
       sshPublicKey: this.options.sshPublicKey,
-      labels
+      labels,
     });
 
     let pod: KubernetesPod;
@@ -168,7 +161,7 @@ export class KubernetesAllocator implements Allocator {
         name,
         image: this.options.runnerImage,
         sshKeySecretName: secretName,
-        labels
+        labels,
       });
       pod = await this.waitForRunning(name);
     } catch (error) {
@@ -189,7 +182,7 @@ export class KubernetesAllocator implements Allocator {
     request: AllocationRequest,
     podName: string,
     secretName: string,
-    ip: string
+    ip: string,
   ): Promise<RunnerAllocation> {
     const port = 22;
     const username = this.options.sshUsername ?? "tanren";
@@ -204,8 +197,8 @@ export class KubernetesAllocator implements Allocator {
         port,
         username,
         hostKeyFingerprint: this.options.hostKeyFingerprint,
-        identitySecretRef: request.identitySecretRef
-      }
+        identitySecretRef: request.identitySecretRef,
+      },
     };
 
     try {
@@ -218,7 +211,7 @@ export class KubernetesAllocator implements Allocator {
         sshPort: port,
         hostKeyFingerprint: this.options.hostKeyFingerprint,
         imageSha: allocation.imageSha,
-        containerId: podName
+        containerId: podName,
       });
     } catch (error) {
       await this.cleanup(podName, secretName);
@@ -258,13 +251,12 @@ export class KubernetesAllocator implements Allocator {
       }
       if (pod.phase === "Failed" || pod.phase === "Succeeded") {
         throw new KubernetesAllocatorError(
-          `kubernetes pod ${name} entered terminal phase '${pod.phase}' before becoming reachable`
+          `kubernetes pod ${name} entered terminal phase '${pod.phase}' before becoming reachable`,
         );
       }
       if (Date.now() >= deadline) {
         throw new KubernetesAllocatorError(
-          `kubernetes pod ${name} did not become Running within ${readyTimeoutMs}ms ` +
-            `(last phase: ${pod.phase})`
+          `kubernetes pod ${name} did not become Running within ${readyTimeoutMs}ms (last phase: ${pod.phase})`,
         );
       }
       await this.sleep(pollIntervalMs);
@@ -274,12 +266,18 @@ export class KubernetesAllocator implements Allocator {
 
 /** Pod / Secret names must be DNS-1123 labels: lowercase, digits, dashes, <=63. */
 function resourceName(runId: string): string {
-  return `tanren-${runId}`.toLowerCase().replace(/[^a-z0-9-]/g, "-").slice(0, 58);
+  return `tanren-${runId}`
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, "-")
+    .slice(0, 58);
 }
 
 /** Kubernetes label values: <=63 chars, alnum plus `-_.`, alnum at the edges. */
 function labelValue(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9_.-]/g, "-").slice(0, 63);
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9_.-]/g, "-")
+    .slice(0, 63);
 }
 
 // --- response mapping --------------------------------------------------------
@@ -298,7 +296,7 @@ function toPod(body: PodResponse, fallbackName: string): KubernetesPod {
   return {
     name: body.metadata?.name ?? fallbackName,
     phase: body.status?.phase ?? "Unknown",
-    podIp: body.status?.podIP
+    podIp: body.status?.podIP,
   };
 }
 
@@ -310,7 +308,7 @@ function secretManifest(input: KubernetesSecretInput, namespace: string): unknow
     kind: "Secret",
     metadata: { name: input.name, namespace, labels: input.labels },
     type: "Opaque",
-    stringData: { "ssh-authorized-key": input.sshPublicKey }
+    stringData: { "ssh-authorized-key": input.sshPublicKey },
   };
 }
 
@@ -330,13 +328,13 @@ function podManifest(input: KubernetesPodInput, namespace: string): unknown {
             {
               name: "TANREN_SSH_AUTHORIZED_KEY",
               valueFrom: {
-                secretKeyRef: { name: input.sshKeySecretName, key: "ssh-authorized-key" }
-              }
-            }
-          ]
-        }
-      ]
-    }
+                secretKeyRef: { name: input.sshKeySecretName, key: "ssh-authorized-key" },
+              },
+            },
+          ],
+        },
+      ],
+    },
   };
 }
 
@@ -356,24 +354,22 @@ function podManifest(input: KubernetesPodInput, namespace: string): unknown {
  */
 export function fetchKubernetesClient(
   options: Pick<KubernetesAllocatorOptions, "apiServer" | "token" | "namespace" | "caPem">,
-  fetchImpl: typeof fetch = fetch
+  fetchImpl: typeof fetch = fetch,
 ): KubernetesClient {
   const base = `${options.apiServer.replace(/\/+$/, "")}/api/v1/namespaces/${options.namespace}`;
   const authHeaders = {
     authorization: `Bearer ${options.token}`,
-    "Content-Type": "application/json"
+    "Content-Type": "application/json",
   } as const;
 
   async function create(resource: string, manifest: unknown, action: string): Promise<PodResponse> {
     const response = await fetchImpl(`${base}/${resource}`, {
       method: "POST",
       headers: authHeaders,
-      body: JSON.stringify(manifest)
+      body: JSON.stringify(manifest),
     });
     if (!response.ok) {
-      throw new KubernetesAllocatorError(
-        `kubernetes ${action} failed: ${response.status} ${await response.text()}`
-      );
+      throw new KubernetesAllocatorError(`kubernetes ${action} failed: ${response.status} ${await response.text()}`);
     }
     return (await response.json()) as PodResponse;
   }
@@ -381,13 +377,11 @@ export function fetchKubernetesClient(
   async function remove(resource: string, name: string, action: string): Promise<void> {
     const response = await fetchImpl(`${base}/${resource}/${name}`, {
       method: "DELETE",
-      headers: authHeaders
+      headers: authHeaders,
     });
     // 404 means already gone — treat as success (idempotent destroy).
     if (!response.ok && response.status !== 404) {
-      throw new KubernetesAllocatorError(
-        `kubernetes ${action} failed: ${response.status} ${await response.text()}`
-      );
+      throw new KubernetesAllocatorError(`kubernetes ${action} failed: ${response.status} ${await response.text()}`);
     }
   }
 
@@ -397,21 +391,16 @@ export function fetchKubernetesClient(
     },
 
     async createPod(input: KubernetesPodInput): Promise<KubernetesPod> {
-      return toPod(
-        await create("pods", podManifest(input, options.namespace), "createPod"),
-        input.name
-      );
+      return toPod(await create("pods", podManifest(input, options.namespace), "createPod"), input.name);
     },
 
     async getPod(name: string): Promise<KubernetesPod> {
       const response = await fetchImpl(`${base}/pods/${name}`, {
         method: "GET",
-        headers: authHeaders
+        headers: authHeaders,
       });
       if (!response.ok) {
-        throw new KubernetesAllocatorError(
-          `kubernetes getPod failed: ${response.status} ${await response.text()}`
-        );
+        throw new KubernetesAllocatorError(`kubernetes getPod failed: ${response.status} ${await response.text()}`);
       }
       return toPod((await response.json()) as PodResponse, name);
     },
@@ -422,6 +411,6 @@ export function fetchKubernetesClient(
 
     async deleteSecret(name: string): Promise<void> {
       await remove("secrets", name, "deleteSecret");
-    }
+    },
   };
 }

@@ -5,14 +5,14 @@ export {
   IllegalRunTransitionError,
   isAllowedRunTransition,
   listAllowedRunTransitions,
-  transitionRun
+  transitionRun,
 } from "./run.js";
 export {
   SpecStatus,
   IllegalSpecTransitionError,
   isAllowedSpecTransition,
   listAllowedSpecTransitions,
-  transitionSpec
+  transitionSpec,
 } from "./spec.js";
 export {
   TaskKind,
@@ -21,7 +21,7 @@ export {
   IllegalTaskTransitionError,
   isAllowedTaskTransition,
   listAllowedTaskTransitions,
-  transitionTask
+  transitionTask,
 } from "./task.js";
 export {
   JobKind,
@@ -29,7 +29,7 @@ export {
   IllegalJobTransitionError,
   isAllowedJobTransition,
   listAllowedJobTransitions,
-  transitionJob
+  transitionJob,
 } from "./job.js";
 export { ActorKind, ActorRef, systemActor } from "./actor.js";
 
@@ -52,7 +52,7 @@ export const stateEnumCatalog = {
   tasks_outcome: { table: "tasks", column: "outcome", values: TaskOutcome.options },
   tasks_agent_kind: { table: "tasks", column: "agent_kind", values: ActorKind.options },
   job_queue_status: { table: "job_queue", column: "status", values: JobStatus.options },
-  job_queue_task_kind: { table: "job_queue", column: "task_kind", values: JobKind.options }
+  job_queue_task_kind: { table: "job_queue", column: "task_kind", values: JobKind.options },
 } as const;
 
 export type StateEnumName = keyof typeof stateEnumCatalog;
@@ -66,6 +66,6 @@ export interface StateEnumDescriptor {
 export function listStateEnums(): Array<{ name: StateEnumName } & StateEnumDescriptor> {
   return (Object.keys(stateEnumCatalog) as StateEnumName[]).map((name) => ({
     name,
-    ...stateEnumCatalog[name]
+    ...stateEnumCatalog[name],
   }));
 }

@@ -5,7 +5,7 @@ import type { SshCommand, SshCommandResult, SshSubstrate } from "../src/engine/c
 import {
   buildClaudeWriterCommand,
   createClaudeWriter,
-  parseClaudeStreamTelemetry
+  parseClaudeStreamTelemetry,
 } from "../src/engine/providers/claude.js";
 
 const target: SshTarget = {
@@ -13,11 +13,11 @@ const target: SshTarget = {
   port: 22,
   username: "tanren",
   hostKeyFingerprint: "SHA256:runner-host",
-  identitySecretRef: "runner/test/identity"
+  identitySecretRef: "runner/test/identity",
 };
 
 const authJson = JSON.stringify({
-  claudeAiOauth: { accessToken: "secret-access-token", refreshToken: "secret-refresh-token" }
+  claudeAiOauth: { accessToken: "secret-access-token", refreshToken: "secret-refresh-token" },
 });
 
 const baselineSha = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -26,7 +26,14 @@ describe("Claude writer adapter", () => {
   it("constructs claude -p with per-run CLAUDE_CONFIG_DIR, model, workspace, and stdin prompt", async () => {
     const usageLine = JSON.stringify({
       type: "assistant",
-      message: { usage: { input_tokens: 12, output_tokens: 5, cache_read_input_tokens: 3, cache_creation_input_tokens: 2 } }
+      message: {
+        usage: {
+          input_tokens: 12,
+          output_tokens: 5,
+          cache_read_input_tokens: 3,
+          cache_creation_input_tokens: 2,
+        },
+      },
     });
     const ssh = new ScriptedSsh([
       ok(""), // materialize auth
@@ -34,7 +41,7 @@ describe("Claude writer adapter", () => {
       ok(`${usageLine}\n`), // claude run
       ok(""), // commit
       ok("diff --git a/X.md b/X.md\n+done\n"), // diff
-      ok("") // log
+      ok(""), // log
     ]);
     const secrets = new InMemorySecretStore();
     await secrets.put({ ref: "credential/claude/dev", value: authJson });
@@ -45,9 +52,13 @@ describe("Claude writer adapter", () => {
       target,
       credentialRef: "credential/claude/dev",
       runId: "run_claude_1",
-      model: "claude-opus-4-8"
+      model: "claude-opus-4-8",
     });
-    const result = await writer.runWriter({ prompt: "make a tiny edit", workspace: "/workspace/repo", timeoutMs: 1000 });
+    const result = await writer.runWriter({
+      prompt: "make a tiny edit",
+      workspace: "/workspace/repo",
+      timeoutMs: 1000,
+    });
 
     expect(ssh.commands[0]?.command.command).toContain("/run_claude_1/claude-home");
     expect(ssh.commands[0]?.command.stdin).toBe(authJson);
@@ -61,31 +72,61 @@ describe("Claude writer adapter", () => {
       diff: "diff --git a/X.md b/X.md\n+done\n",
       commits: [],
       exitReason: "completed",
-      tokenUsage: { inputTokens: 12, cachedInputTokens: 3, cacheCreationTokens: 2, outputTokens: 5, reasoningOutputTokens: 0, totalTokens: 22 }
+      tokenUsage: {
+        inputTokens: 12,
+        cachedInputTokens: 3,
+        cacheCreationTokens: 2,
+        outputTokens: 5,
+        reasoningOutputTokens: 0,
+        totalTokens: 22,
+      },
     });
   });
 
   it("returns timeout and crashed without treating stdout as completion", async () => {
-    const timeout = await runWithClaudeResult({ exitCode: null, stdout: "{}\n", stderr: "", timedOut: true });
-    const crashed = await runWithClaudeResult({ exitCode: 1, stdout: "{}\n", stderr: "bad", timedOut: false });
+    const timeout = await runWithClaudeResult({
+      exitCode: null,
+      stdout: "{}\n",
+      stderr: "",
+      timedOut: true,
+    });
+    const crashed = await runWithClaudeResult({
+      exitCode: 1,
+      stdout: "{}\n",
+      stderr: "bad",
+      timedOut: false,
+    });
     expect(timeout.exitReason).toBe("timeout");
     expect(crashed.exitReason).toBe("crashed");
   });
 
   it("returns window_exhausted (not crashed) when the account hits its usage limit", async () => {
     const usageLimit = '{"type":"result","result":"You have hit your usage limit. Try again at 8 PM."}';
-    const result = await runWithClaudeResult({ exitCode: 0, stdout: `${usageLimit}\n`, stderr: "", timedOut: false });
+    const result = await runWithClaudeResult({
+      exitCode: 0,
+      stdout: `${usageLimit}\n`,
+      stderr: "",
+      timedOut: false,
+    });
     expect(result.exitReason).toBe("window_exhausted");
     expect(result.telemetry?.usageLimit?.message).toContain("usage limit");
   });
 
   it("does not leak auth secrets through commands or writer results", async () => {
-    const result = await runWithClaudeResult({ exitCode: 0, stdout: "{}\n", stderr: "", timedOut: false });
+    const result = await runWithClaudeResult({
+      exitCode: 0,
+      stdout: "{}\n",
+      stderr: "",
+      timedOut: false,
+    });
     expect(JSON.stringify(result)).not.toContain("secret-access-token");
   });
 
   it("omits the --model flag when no model is pinned", () => {
-    const command = buildClaudeWriterCommand({ configDir: "/home/tanren/claude", workspace: "/workspace/repo" });
+    const command = buildClaudeWriterCommand({
+      configDir: "/home/tanren/claude",
+      workspace: "/workspace/repo",
+    });
     expect(command).not.toContain("--model");
     expect(command).toContain("--add-dir '/workspace/repo'");
   });
@@ -93,7 +134,12 @@ describe("Claude writer adapter", () => {
   it("maps the Claude disjoint usage shape straight across with no de-overlap", () => {
     const line = JSON.stringify({
       type: "result",
-      usage: { input_tokens: 100, output_tokens: 40, cache_read_input_tokens: 10, cache_creation_input_tokens: 5 }
+      usage: {
+        input_tokens: 100,
+        output_tokens: 40,
+        cache_read_input_tokens: 10,
+        cache_creation_input_tokens: 5,
+      },
     });
     expect(parseClaudeStreamTelemetry(`${line}\n`).tokenUsage).toEqual({
       inputTokens: 100,
@@ -101,7 +147,7 @@ describe("Claude writer adapter", () => {
       cacheCreationTokens: 5,
       outputTokens: 40,
       reasoningOutputTokens: 0,
-      totalTokens: 155
+      totalTokens: 155,
     });
   });
 });
@@ -114,7 +160,13 @@ async function runWithClaudeResult(claudeResult: SshCommandResult) {
   const ssh = new ScriptedSsh([ok(""), ok(`${baselineSha}\n`), claudeResult, ok(""), ok(""), ok("")]);
   const secrets = new InMemorySecretStore();
   await secrets.put({ ref: "credential/claude/dev", value: authJson });
-  const writer = createClaudeWriter({ secrets, ssh, target, credentialRef: "credential/claude/dev", runId: "run_claude_2" });
+  const writer = createClaudeWriter({
+    secrets,
+    ssh,
+    target,
+    credentialRef: "credential/claude/dev",
+    runId: "run_claude_2",
+  });
   return await writer.runWriter({ prompt: "write", workspace: "/workspace/repo", timeoutMs: 1000 });
 }
 

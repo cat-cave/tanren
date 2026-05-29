@@ -5,7 +5,7 @@ import {
   fetchDigitalOceanClient,
   type DigitalOceanClient,
   type DigitalOceanCreateDropletInput,
-  type DigitalOceanDroplet
+  type DigitalOceanDroplet,
 } from "../src/engine/allocators/digitalOceanAllocator.js";
 import type { ClaimRunnerInput, RunnerStore } from "../src/engine/allocators/runnerStore.js";
 
@@ -42,7 +42,7 @@ class FakeDigitalOceanClient implements DigitalOceanClient {
     return {
       id: dropletId,
       status: "active",
-      publicIpv4: this.opts.noIp ? undefined : "203.0.113.20"
+      publicIpv4: this.opts.noIp ? undefined : "203.0.113.20",
     };
   }
   async deleteDroplet(dropletId: number): Promise<void> {
@@ -58,7 +58,7 @@ const baseOpts = (client: DigitalOceanClient, runners: RunnerStore) => ({
   image: "docker-20-04",
   runners,
   client,
-  sleep: async () => undefined
+  sleep: async () => undefined,
 });
 
 function req(runId: string) {
@@ -66,7 +66,7 @@ function req(runId: string) {
     runId,
     projectId: "proj_do",
     runnerImage: "ghcr.io/cat-cave/tanren-runner:v0",
-    identitySecretRef: "runner/identity"
+    identitySecretRef: "runner/identity",
   };
 }
 
@@ -115,7 +115,7 @@ describe("DigitalOceanAllocator", () => {
     const allocator = new DigitalOceanAllocator({
       ...baseOpts(client, runners),
       readyTimeoutMs: 5,
-      pollIntervalMs: 1
+      pollIntervalMs: 1,
     });
     await expect(allocator.allocate(req("run_3"))).rejects.toBeInstanceOf(DigitalOceanAllocatorError);
     await expect(allocator.allocate(req("run_3"))).rejects.toThrow(/did not become active/);
@@ -128,7 +128,7 @@ describe("DigitalOceanAllocator", () => {
     const allocator = new DigitalOceanAllocator({
       ...baseOpts(client, runners),
       readyTimeoutMs: 5,
-      pollIntervalMs: 1
+      pollIntervalMs: 1,
     });
     await expect(allocator.allocate(req("run_4"))).rejects.toBeInstanceOf(DigitalOceanAllocatorError);
     expect(client.deleted).toContain(99);
@@ -145,14 +145,18 @@ describe("DigitalOceanAllocator", () => {
   it("requires a token and pinned fingerprint", () => {
     const runners = new FakeRunnerStore();
     expect(
-      () => new DigitalOceanAllocator({ ...baseOpts(new FakeDigitalOceanClient(), runners), apiToken: "" })
+      () =>
+        new DigitalOceanAllocator({
+          ...baseOpts(new FakeDigitalOceanClient(), runners),
+          apiToken: "",
+        }),
     ).toThrow(/non-empty apiToken/);
     expect(
       () =>
         new DigitalOceanAllocator({
           ...baseOpts(new FakeDigitalOceanClient(), runners),
-          hostKeyFingerprint: ""
-        })
+          hostKeyFingerprint: "",
+        }),
     ).toThrow(/pinned hostKeyFingerprint/);
   });
 
@@ -163,7 +167,7 @@ describe("DigitalOceanAllocator", () => {
       captured = {
         url,
         method: init?.method,
-        auth: (init?.headers as Record<string, string> | undefined)?.authorization
+        auth: (init?.headers as Record<string, string> | undefined)?.authorization,
       };
       return new Response(
         JSON.stringify({
@@ -173,12 +177,12 @@ describe("DigitalOceanAllocator", () => {
             networks: {
               v4: [
                 { ip_address: "10.0.0.1", type: "private" },
-                { ip_address: "198.51.100.9", type: "public" }
-              ]
-            }
-          }
+                { ip_address: "198.51.100.9", type: "public" },
+              ],
+            },
+          },
         }),
-        { status: 202, headers: { "Content-Type": "application/json" } }
+        { status: 202, headers: { "Content-Type": "application/json" } },
       );
     }) as typeof fetch;
 
@@ -187,7 +191,7 @@ describe("DigitalOceanAllocator", () => {
       name: "n",
       region: "nyc3",
       size: "s-1vcpu-1gb",
-      image: "docker-20-04"
+      image: "docker-20-04",
     });
     expect(captured.url).toMatch(/\/droplets$/);
     expect(captured.method).toBe("POST");

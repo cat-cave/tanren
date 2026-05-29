@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ActorContext } from "../src/auth/schemas.js";
-import {
-  BehaviorStore,
-  MilestoneStore,
-  PersonaStore
-} from "../src/engine/entities/index.js";
+import { BehaviorStore, MilestoneStore, PersonaStore } from "../src/engine/entities/index.js";
 import { EntityMemoryClient } from "./helpers/entityMemoryClient.js";
 
 const orgAdmin: ActorContext = {
@@ -12,7 +8,7 @@ const orgAdmin: ActorContext = {
   orgId: "org_1",
   projectId: null,
   scopes: ["org:admin", "org:member"],
-  source: "session"
+  source: "session",
 };
 
 const platformAdmin: ActorContext = {
@@ -20,7 +16,7 @@ const platformAdmin: ActorContext = {
   orgId: null,
   projectId: null,
   scopes: ["platform:admin"],
-  source: "session"
+  source: "session",
 };
 
 const projectOnlyMember: ActorContext = {
@@ -28,7 +24,7 @@ const projectOnlyMember: ActorContext = {
   orgId: null,
   projectId: "project_1",
   scopes: ["project:member"],
-  source: "session"
+  source: "session",
 };
 
 describe("PersonaStore", () => {
@@ -36,8 +32,14 @@ describe("PersonaStore", () => {
     const client = new EntityMemoryClient();
     const persona = await PersonaStore.create(
       client,
-      { scope: "org", orgId: "org_1", projectId: null, name: "Sales Manager", description: "regional ops lead" },
-      orgAdmin
+      {
+        scope: "org",
+        orgId: "org_1",
+        projectId: null,
+        name: "Sales Manager",
+        description: "regional ops lead",
+      },
+      orgAdmin,
     );
     expect(persona.scope).toBe("org");
     expect(persona.projectId).toBeNull();
@@ -51,8 +53,8 @@ describe("PersonaStore", () => {
       PersonaStore.create(
         client,
         { scope: "org", orgId: "org_1", projectId: "project_1", name: "X", description: "" },
-        orgAdmin
-      )
+        orgAdmin,
+      ),
     ).rejects.toThrow(/projectId/);
   });
 
@@ -62,8 +64,8 @@ describe("PersonaStore", () => {
       PersonaStore.create(
         client,
         { scope: "project", orgId: "org_1", projectId: null, name: "X", description: "" },
-        orgAdmin
-      )
+        orgAdmin,
+      ),
     ).rejects.toThrow(/projectId/);
   });
 
@@ -72,17 +74,29 @@ describe("PersonaStore", () => {
     await PersonaStore.create(
       client,
       { scope: "org", orgId: "org_1", projectId: null, name: "Org Persona", description: "" },
-      orgAdmin
+      orgAdmin,
     );
     await PersonaStore.create(
       client,
-      { scope: "project", orgId: "org_1", projectId: "project_1", name: "Project Persona", description: "" },
-      orgAdmin
+      {
+        scope: "project",
+        orgId: "org_1",
+        projectId: "project_1",
+        name: "Project Persona",
+        description: "",
+      },
+      orgAdmin,
     );
     await PersonaStore.create(
       client,
-      { scope: "project", orgId: "org_1", projectId: "project_2", name: "Other Project Persona", description: "" },
-      orgAdmin
+      {
+        scope: "project",
+        orgId: "org_1",
+        projectId: "project_2",
+        name: "Other Project Persona",
+        description: "",
+      },
+      orgAdmin,
     );
     const list = await PersonaStore.listForProject(client, { orgId: "org_1", projectId: "project_1" }, orgAdmin);
     const names = list.map((p) => p.name).sort();
@@ -96,14 +110,14 @@ describe("PersonaStore", () => {
       orgId: "org_other",
       projectId: null,
       scopes: ["org:member"],
-      source: "session"
+      source: "session",
     };
     await expect(
       PersonaStore.create(
         client,
         { scope: "org", orgId: "org_1", projectId: null, name: "X", description: "" },
-        otherOrg
-      )
+        otherOrg,
+      ),
     ).rejects.toThrow(/not scoped to org/);
   });
 
@@ -112,7 +126,7 @@ describe("PersonaStore", () => {
     const persona = await PersonaStore.create(
       client,
       { scope: "org", orgId: "org_1", projectId: null, name: "Admin Persona", description: "" },
-      platformAdmin
+      platformAdmin,
     );
     expect(persona.name).toBe("Admin Persona");
   });
@@ -124,7 +138,7 @@ describe("BehaviorStore", () => {
     const persona = await PersonaStore.create(
       client,
       { scope: "org", orgId: "org_1", projectId: null, name: "Dev", description: "" },
-      orgAdmin
+      orgAdmin,
     );
     /* eslint-disable unicorn/no-thenable */
     const behavior = await BehaviorStore.create(
@@ -134,9 +148,9 @@ describe("BehaviorStore", () => {
         title: "export stats data as csv",
         given: "operator on dashboard",
         when: "they click export",
-        then: "a csv file downloads"
+        then: "a csv file downloads",
       },
-      orgAdmin
+      orgAdmin,
     );
     /* eslint-enable unicorn/no-thenable */
     expect(behavior.title).toBe("export stats data as csv");
@@ -150,13 +164,13 @@ describe("BehaviorStore", () => {
     const persona = await PersonaStore.create(
       client,
       { scope: "org", orgId: "org_1", projectId: null, name: "Dev", description: "" },
-      orgAdmin
+      orgAdmin,
     );
     /* eslint-disable unicorn/no-thenable */
     const behavior = await BehaviorStore.create(
       client,
       { personaId: persona.id, title: "b1", given: "g", when: "w", then: "t" },
-      orgAdmin
+      orgAdmin,
     );
     /* eslint-enable unicorn/no-thenable */
     await BehaviorStore.linkToSpec(client, { specId: "spec_1", behaviorId: behavior.id }, orgAdmin);
@@ -171,7 +185,7 @@ describe("MilestoneStore", () => {
     const m = await MilestoneStore.create(
       client,
       { projectId: "project_1", label: "M1", name: "Hello", orderIndex: 0 },
-      orgAdmin
+      orgAdmin,
     );
     expect(m.status).toBe("planned");
     expect(m.eta).toBeNull();
@@ -184,14 +198,14 @@ describe("MilestoneStore", () => {
     await MilestoneStore.create(
       client,
       { projectId: "project_1", label: "M1", name: "Hello", orderIndex: 0 },
-      orgAdmin
+      orgAdmin,
     );
     await expect(
       MilestoneStore.create(
         client,
         { projectId: "project_1", label: "M1", name: "Duplicate", orderIndex: 1 },
-        orgAdmin
-      )
+        orgAdmin,
+      ),
     ).rejects.toThrow(/duplicate milestone label/);
   });
 
@@ -200,14 +214,10 @@ describe("MilestoneStore", () => {
     await MilestoneStore.create(
       client,
       { projectId: "project_1", label: "M1", name: "Hello", orderIndex: 0 },
-      orgAdmin
+      orgAdmin,
     );
     await expect(
-      MilestoneStore.create(
-        client,
-        { projectId: "project_1", label: "M2", name: "Two", orderIndex: 0 },
-        orgAdmin
-      )
+      MilestoneStore.create(client, { projectId: "project_1", label: "M2", name: "Two", orderIndex: 0 }, orgAdmin),
     ).rejects.toThrow(/order_index/);
   });
 
@@ -216,12 +226,12 @@ describe("MilestoneStore", () => {
     const m1 = await MilestoneStore.create(
       client,
       { projectId: "project_1", label: "M1", name: "Hello", orderIndex: 0 },
-      orgAdmin
+      orgAdmin,
     );
     const m2 = await MilestoneStore.create(
       client,
       { projectId: "project_1", label: "M2", name: "Two", orderIndex: 1 },
-      orgAdmin
+      orgAdmin,
     );
     await MilestoneStore.setSpecMilestone(client, { specId: "spec_1", milestoneId: m1.id }, orgAdmin);
     expect((await MilestoneStore.getSpecMilestone(client, "spec_1", orgAdmin))?.id).toBe(m1.id);
@@ -234,7 +244,7 @@ describe("MilestoneStore", () => {
     await MilestoneStore.create(
       client,
       { projectId: "project_1", label: "M1", name: "Hello", orderIndex: 0 },
-      projectOnlyMember
+      projectOnlyMember,
     );
     const list = await MilestoneStore.listForProject(client, "project_1", projectOnlyMember);
     expect(list).toHaveLength(1);

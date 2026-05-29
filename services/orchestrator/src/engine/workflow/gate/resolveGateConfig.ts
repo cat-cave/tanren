@@ -31,7 +31,7 @@ export async function resolveGateConfig(input: ResolveGateConfigInput): Promise<
     // so we can distinguish "no config" (→ default) from real content without
     // treating an absent file as an error.
     command: `if [ -f ${quoteSshShellArg(path)} ]; then cat ${quoteSshShellArg(path)}; fi`,
-    timeoutMs: input.timeoutMs
+    timeoutMs: input.timeoutMs,
   });
   if (result.failure !== undefined || result.timedOut || result.exitCode !== 0) {
     return resolveCiConfig(undefined);

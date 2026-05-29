@@ -43,8 +43,8 @@ export class PgRunnerStore implements RunnerStore {
         record.hostKeyFingerprint,
         record.imageSha,
         record.containerId,
-        record.createdAt
-      ]
+        record.createdAt,
+      ],
     );
   }
 
@@ -65,7 +65,7 @@ export class PgRunnerStore implements RunnerStore {
            released_at = COALESCE(released_at, now())
        WHERE runner_id = $1
        RETURNING runner_id, run_id, project_id, container_id, ssh_host, ssh_port, host_key_fingerprint, image_sha, created_at`,
-      [runnerId, releaseStatusFor(reason)]
+      [runnerId, releaseStatusFor(reason)],
     );
     const row = result.rows[0];
     if (row === undefined) {
@@ -84,7 +84,7 @@ export class PgRunnerStore implements RunnerStore {
       imageSha: row.image_sha,
       vaultRefs: [],
       createdAt: row.created_at,
-      released: true
+      released: true,
     };
   }
 
@@ -103,7 +103,7 @@ export class PgRunnerStore implements RunnerStore {
       `SELECT runner_id, run_id, project_id, container_id, ssh_host, ssh_port, host_key_fingerprint, image_sha, created_at
        FROM runners
        WHERE runner_id = $1 AND released_at IS NULL`,
-      [runnerId]
+      [runnerId],
     );
     const row = result.rows[0];
     if (row === undefined) {
@@ -127,7 +127,7 @@ export class PgRunnerStore implements RunnerStore {
       `SELECT runner_id, run_id, project_id, container_id, ssh_host, ssh_port, host_key_fingerprint, image_sha, created_at
        FROM runners
        WHERE released_at IS NULL AND created_at < $1`,
-      [threshold]
+      [threshold],
     );
     return result.rows.map(materialize);
   }
@@ -157,7 +157,7 @@ function materialize(row: {
     imageSha: row.image_sha,
     vaultRefs: [],
     createdAt: row.created_at,
-    released: false
+    released: false,
   };
 }
 

@@ -13,12 +13,12 @@ const STORAGE_KEY = "tanren_surface";
 function applySurface(surface: Surface): void {
   const root = document.documentElement;
   if (surface === "ink") {
-    root.dataset['theme'] = "dark";
+    root.dataset["theme"] = "dark";
   } else {
-    delete root.dataset['theme'];
+    delete root.dataset["theme"];
   }
   for (const btn of document.querySelectorAll<HTMLButtonElement>("[data-theme-value]")) {
-    btn.classList.toggle("active", btn.dataset['themeValue'] === surface);
+    btn.classList.toggle("active", btn.dataset["themeValue"] === surface);
   }
 }
 
@@ -33,7 +33,7 @@ function persist(surface: Surface): void {
 
 function currentSurface(): Surface {
   const root = document.documentElement;
-  return root.dataset['theme'] === "dark" ? "ink" : "ash";
+  return root.dataset["theme"] === "dark" ? "ink" : "ash";
 }
 
 export function initTheme(): void {
@@ -53,7 +53,7 @@ export function initTheme(): void {
   toggle.addEventListener("click", (event) => {
     const target = (event.target as HTMLElement).closest<HTMLButtonElement>("[data-theme-value]");
     if (target === null) return;
-    const surface = target.dataset['themeValue'] === "ash" ? "ash" : "ink";
+    const surface = target.dataset["themeValue"] === "ash" ? "ash" : "ink";
     applySurface(surface);
     persist(surface);
   });

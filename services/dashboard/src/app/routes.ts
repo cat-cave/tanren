@@ -49,36 +49,121 @@ export const NAV_GROUPS: NavGroup[] = [
       { id: "overview", glyph: "▤", label: "overview", path: "/overview", phase: "3+" },
       { id: "roadmap", glyph: "⌥", label: "roadmap", path: "/roadmap", phase: "3+" },
       { id: "personas", glyph: "◍", label: "personas", path: "/personas", phase: "3+" },
-      { id: "costs", glyph: "$", label: "history & costs", path: "/costs", phase: "2b", spec: "P2B-0005" },
-      { id: "dora", glyph: "↗", label: "DORA", path: "/dora", phase: "2b", spec: "P3-0019" }
-    ]
+      {
+        id: "costs",
+        glyph: "$",
+        label: "history & costs",
+        path: "/costs",
+        phase: "2b",
+        spec: "P2B-0005",
+      },
+      { id: "dora", glyph: "↗", label: "DORA", path: "/dora", phase: "2b", spec: "P3-0019" },
+    ],
   },
   {
     label: "projects",
     rows: [
-      { id: "projects", glyph: "◇", label: "project list", path: "/projects", phase: "2b", spec: "P2B-0003" },
-      { id: "discovery", glyph: "+", label: "discover spec", path: "/discovery", phase: "2b", spec: "P3-0014" },
-      { id: "inbox", glyph: "◍", label: "candidate inbox", path: "/inbox", phase: "2b", spec: "P3-0022" },
-      { id: "failure", glyph: "×", label: "halted runs", path: "/runs/halted", phase: "2b", spec: "P2B-0008" }
-    ]
+      {
+        id: "projects",
+        glyph: "◇",
+        label: "project list",
+        path: "/projects",
+        phase: "2b",
+        spec: "P2B-0003",
+      },
+      {
+        id: "discovery",
+        glyph: "+",
+        label: "discover spec",
+        path: "/discovery",
+        phase: "2b",
+        spec: "P3-0014",
+      },
+      {
+        id: "inbox",
+        glyph: "◍",
+        label: "candidate inbox",
+        path: "/inbox",
+        phase: "2b",
+        spec: "P3-0022",
+      },
+      {
+        id: "failure",
+        glyph: "×",
+        label: "halted runs",
+        path: "/runs/halted",
+        phase: "2b",
+        spec: "P2B-0008",
+      },
+    ],
   },
   {
     label: "set up",
     rows: [
-      { id: "audits", glyph: "⌬", label: "scheduled audits", path: "/audits", phase: "2b", spec: "P3-0021" },
-      { id: "settings", glyph: "⚙", label: "routing & limits", path: "/settings/routing", phase: "2b", spec: "P2B-0003" },
-      { id: "config", glyph: "▮", label: "tanren-config", path: "/settings/config", phase: "2b", spec: "P3-0017" },
-      { id: "notifications", glyph: "✉", label: "notifications", path: "/notifications", phase: "2b", spec: "P2B-0002" }
-    ]
+      {
+        id: "audits",
+        glyph: "⌬",
+        label: "scheduled audits",
+        path: "/audits",
+        phase: "2b",
+        spec: "P3-0021",
+      },
+      {
+        id: "settings",
+        glyph: "⚙",
+        label: "routing & limits",
+        path: "/settings/routing",
+        phase: "2b",
+        spec: "P2B-0003",
+      },
+      {
+        id: "config",
+        glyph: "▮",
+        label: "tanren-config",
+        path: "/settings/config",
+        phase: "2b",
+        spec: "P3-0017",
+      },
+      {
+        id: "notifications",
+        glyph: "✉",
+        label: "notifications",
+        path: "/notifications",
+        phase: "2b",
+        spec: "P2B-0002",
+      },
+    ],
   },
   {
     label: "onboarding",
     rows: [
-      { id: "onb-org", glyph: "鍛", kanji: true, label: "org setup", path: "/onboarding/org", phase: "2b", spec: "P2B-0002" },
-      { id: "onb-new", glyph: "+", label: "new project", path: "/onboarding/new", phase: "2b", spec: "P2B-0009" },
-      { id: "onb-exist", glyph: "↗", label: "existing project", path: "/onboarding/existing", phase: "2b", spec: "P2B-0002" }
-    ]
-  }
+      {
+        id: "onb-org",
+        glyph: "鍛",
+        kanji: true,
+        label: "org setup",
+        path: "/onboarding/org",
+        phase: "2b",
+        spec: "P2B-0002",
+      },
+      {
+        id: "onb-new",
+        glyph: "+",
+        label: "new project",
+        path: "/onboarding/new",
+        phase: "2b",
+        spec: "P2B-0009",
+      },
+      {
+        id: "onb-exist",
+        glyph: "↗",
+        label: "existing project",
+        path: "/onboarding/existing",
+        phase: "2b",
+        spec: "P2B-0002",
+      },
+    ],
+  },
 ];
 
 /** Flatten all rows (handy for route registration + lookups). */

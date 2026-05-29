@@ -19,7 +19,7 @@ import type {
   GovernanceResult,
   ReconReport,
   ReconResult,
-  SeedDagResult
+  SeedDagResult,
 } from "../../../api/existingBrownfieldTypes.js";
 import type { BrownfieldDetectedFile } from "../../../api/types.js";
 import { ExistingProjectBody } from "../ExistingProjectBody.js";
@@ -35,7 +35,7 @@ const STEPS: Array<{ l: string; e: string }> = [
   { l: "confirm what the", e: "agent found" },
   { l: "merge the", e: "integration pr" },
   { l: "seed the", e: "dag from reality" },
-  { l: "decide", e: "the posture" }
+  { l: "decide", e: "the posture" },
 ];
 
 export const EXISTING_FULL_BASE = "/onboarding/existing";
@@ -101,7 +101,12 @@ export function ExistingFullBody(props: ExistingFullBodyProps) {
           />
         ) : null}
         {props.step === 2 && props.recon !== undefined && props.repoUrl !== undefined ? (
-          <ReconStep repoUrl={props.repoUrl} result={props.recon} baseAction={EXISTING_FULL_BASE} projectId={props.projectId} />
+          <ReconStep
+            repoUrl={props.repoUrl}
+            result={props.recon}
+            baseAction={EXISTING_FULL_BASE}
+            projectId={props.projectId}
+          />
         ) : null}
         {props.step === 3 && props.report !== undefined && props.repoUrl !== undefined ? (
           <ConfigInjectionStep
@@ -115,7 +120,13 @@ export function ExistingFullBody(props: ExistingFullBodyProps) {
           />
         ) : null}
         {props.step === 4 && props.report !== undefined && props.repoUrl !== undefined ? (
-          <SeedDagStep repoUrl={props.repoUrl} report={props.report} baseAction={EXISTING_FULL_BASE} projectId={props.projectId} seeded={props.seeded} />
+          <SeedDagStep
+            repoUrl={props.repoUrl}
+            report={props.report}
+            baseAction={EXISTING_FULL_BASE}
+            projectId={props.projectId}
+            seeded={props.seeded}
+          />
         ) : null}
         {props.step === 5 && props.projectId !== undefined && props.repoUrl !== undefined ? (
           <GovernanceStep

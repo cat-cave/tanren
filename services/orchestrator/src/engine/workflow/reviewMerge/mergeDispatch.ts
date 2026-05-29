@@ -29,7 +29,7 @@ import {
   tanrenIdentity,
   type ContributorProbe,
   type PostureDecision,
-  type PullRequestContributors
+  type PullRequestContributors,
 } from "./governancePosture.js";
 
 /** The integration modes the merge stage actually dispatches to. */
@@ -125,11 +125,19 @@ export async function mergeForRun(input: MergeForRunInput): Promise<MergeForRunR
     projectId: context.projectId,
     taskId,
     eventType: "task.started",
-    payload: { taskKind: "merge" }
+    payload: { taskKind: "merge" },
   });
 
   const probe = input.mergeProbe ?? (await buildGitHubProbe(input, context, pr.repo, pr.pullNumber));
-  const dispatcher = new MergeDispatcher({ input, context, eventStore, taskId, integration, pr, probe });
+  const dispatcher = new MergeDispatcher({
+    input,
+    context,
+    eventStore,
+    taskId,
+    integration,
+    pr,
+    probe,
+  });
 
   // P3-0023 governance posture gate. Only Tanren-initiated auto-merges
   // (direct_merge / mergify_queue) are governed: a strict-posture external
@@ -163,7 +171,7 @@ async function evaluatePosture(
   input: MergeForRunInput,
   context: ReviewMergeRunContext,
   repo: GitHubRepository,
-  pullNumber: number
+  pullNumber: number,
 ): Promise<PostureDecision> {
   if (context.governancePosture === "open") {
     return decidePosture("open", { hasExternalChange: false, externalLogins: [] });
@@ -216,8 +224,8 @@ class MergeDispatcher {
         posture: decision.posture,
         mode,
         externalLogins: [...decision.externalLogins],
-        reason: decision.reason
-      }
+        reason: decision.reason,
+      },
     });
     await this.finalize("blocked", { taskOutcome: "pending", taskStatus: "running" });
     return this.result("blocked", { message: decision.reason });
@@ -229,7 +237,7 @@ class MergeDispatcher {
     await eventStore.append({
       ...this.base(),
       eventType: "merge.queued",
-      payload: { ...this.prFields(), integration }
+      payload: { ...this.prFields(), integration },
     });
     await this.finalize("handed_off", { taskOutcome: "ok", taskStatus: "done" });
     return this.result("handed_off");
@@ -243,7 +251,7 @@ class MergeDispatcher {
     await eventStore.append({
       ...this.base(),
       eventType: "merge.queued",
-      payload: { ...this.prFields(), integration: "mergify_queue", queueLabel: label }
+      payload: { ...this.prFields(), integration: "mergify_queue", queueLabel: label },
     });
     await this.finalize("queued", { taskOutcome: "ok", taskStatus: "done" });
     return this.result("queued", { message: `enqueued with label ${label}` });
@@ -255,7 +263,7 @@ class MergeDispatcher {
     await eventStore.append({
       ...this.base(),
       eventType: "merge.queued",
-      payload: { ...this.prFields(), integration: "direct_merge" }
+      payload: { ...this.prFields(), integration: "direct_merge" },
     });
     let merge = await probe.merge();
     if (!merge.merged && merge.conflict) {
@@ -268,7 +276,7 @@ class MergeDispatcher {
       await eventStore.append({
         ...this.base(),
         eventType: "merge.completed",
-        payload: { ...this.prFields(), integration: "direct_merge", mergeSha: merge.mergeSha }
+        payload: { ...this.prFields(), integration: "direct_merge", mergeSha: merge.mergeSha },
       });
       await this.finalize("merged", { taskOutcome: "ok", taskStatus: "done" });
       return this.result("merged", { mergeSha: merge.mergeSha });
@@ -279,9 +287,13 @@ class MergeDispatcher {
     await eventStore.append({
       ...this.base(),
       eventType: "merge.failed",
-      payload: { ...this.prFields(), integration: "direct_merge", message: merge.message }
+      payload: { ...this.prFields(), integration: "direct_merge", message: merge.message },
     });
-    await this.finalize("failed", { taskOutcome: "failed", taskStatus: "failed", failureKind: "merge_failed" });
+    await this.finalize("failed", {
+      taskOutcome: "failed",
+      taskStatus: "failed",
+      failureKind: "merge_failed",
+    });
     return this.result("failed", { message: merge.message });
   }
 
@@ -293,7 +305,7 @@ class MergeDispatcher {
       prUrl: context.prUrl,
       prNumber: pr.pullNumber,
       baseBranch: context.baseBranch,
-      message: merge.message
+      message: merge.message,
     });
     return outcome.resolved ? await probe.merge() : undefined;
   }
@@ -304,7 +316,12 @@ class MergeDispatcher {
     await eventStore.append({
       ...this.base(),
       eventType: "merge.conflict",
-      payload: { ...this.prFields(), integration: "direct_merge", baseBranch: context.baseBranch, message }
+      payload: {
+        ...this.prFields(),
+        integration: "direct_merge",
+        baseBranch: context.baseBranch,
+        message,
+      },
     });
     // A conflict is recoverable, not a hard failure: leave the task running so
     // the P2B-0008 recovery surface can pick it up.
@@ -314,27 +331,41 @@ class MergeDispatcher {
 
   private async finalize(
     _outcome: MergeOutcomeKind,
-    state: { taskOutcome: "ok" | "failed" | "pending"; taskStatus: "done" | "failed" | "running"; failureKind?: string }
+    state: {
+      taskOutcome: "ok" | "failed" | "pending";
+      taskStatus: "done" | "failed" | "running";
+      failureKind?: string;
+    },
   ): Promise<void> {
     const { input, taskId, eventStore, integration } = this.deps;
     if (state.taskStatus === "done") {
-      await input.pool.query("UPDATE tasks SET status = 'done', outcome = $2, ended_at = now() WHERE task_id = $1", [taskId, "ok"]);
-      await eventStore.append({ ...this.base(), eventType: "task.completed", payload: { taskKind: "merge", status: integration } });
+      await input.pool.query("UPDATE tasks SET status = 'done', outcome = $2, ended_at = now() WHERE task_id = $1", [
+        taskId,
+        "ok",
+      ]);
+      await eventStore.append({
+        ...this.base(),
+        eventType: "task.completed",
+        payload: { taskKind: "merge", status: integration },
+      });
       return;
     }
     if (state.taskStatus === "failed") {
       await input.pool.query(
         "UPDATE tasks SET status = 'failed', outcome = 'failed', failure_kind = $2, ended_at = now() WHERE task_id = $1",
-        [taskId, state.failureKind ?? "merge_failed"]
+        [taskId, state.failureKind ?? "merge_failed"],
       );
       await eventStore.append({
         ...this.base(),
         eventType: "task.failed",
-        payload: { taskKind: "merge", failureKind: state.failureKind ?? "merge_failed" }
+        payload: { taskKind: "merge", failureKind: state.failureKind ?? "merge_failed" },
       });
       return;
     }
-    await input.pool.query("UPDATE tasks SET status = 'running', outcome = 'pending', ended_at = NULL WHERE task_id = $1", [taskId]);
+    await input.pool.query(
+      "UPDATE tasks SET status = 'running', outcome = 'pending', ended_at = NULL WHERE task_id = $1",
+      [taskId],
+    );
   }
 
   private result(outcome: MergeOutcomeKind, extra: { mergeSha?: string; message?: string } = {}): MergeForRunResult {
@@ -347,7 +378,7 @@ class MergeDispatcher {
       prUrl: context.prUrl,
       prNumber: pr.pullNumber,
       mergeSha: extra.mergeSha,
-      message: extra.message
+      message: extra.message,
     };
   }
 }
@@ -356,26 +387,32 @@ async function buildGitHubProbe(
   input: MergeForRunInput,
   context: ReviewMergeRunContext,
   repo: ReturnType<typeof parseGitHubPullRequestUrl>["repo"],
-  pullNumber: number
+  pullNumber: number,
 ): Promise<MergeProbe> {
   const resolved = await resolveGithubToken({
     secrets: input.secrets,
     installation: context.installation,
     staticRef: context.staticCredentialRef,
-    minter: input.githubAppMinter
+    minter: input.githubAppMinter,
   });
   const service = new GitHubReviewMergeService(input.githubHttp);
   return {
     applyQueueLabel: (label) =>
-      service.applyQueueLabel({ repo, pullNumber, label, token: resolved.token, refreshToken: resolved.refresh }),
+      service.applyQueueLabel({
+        repo,
+        pullNumber,
+        label,
+        token: resolved.token,
+        refreshToken: resolved.refresh,
+      }),
     merge: () =>
       service.mergePullRequest({
         repo,
         pullNumber,
         mergeMethod: input.mergeMethod,
         token: resolved.token,
-        refreshToken: resolved.refresh
-      })
+        refreshToken: resolved.refresh,
+      }),
   };
 }
 
@@ -390,7 +427,7 @@ function buildContributorProbe(
   input: MergeForRunInput,
   context: ReviewMergeRunContext,
   repo: GitHubRepository,
-  pullNumber: number
+  pullNumber: number,
 ): ContributorProbe {
   return {
     listContributors: async (): Promise<PullRequestContributors> => {
@@ -398,19 +435,19 @@ function buildContributorProbe(
         secrets: input.secrets,
         installation: context.installation,
         staticRef: context.staticCredentialRef,
-        minter: input.githubAppMinter
+        minter: input.githubAppMinter,
       });
       const response = await input.githubHttp.request({
         method: "GET",
         path: `/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}/pulls/${pullNumber}/commits`,
         token: resolved.token,
-        refreshToken: resolved.refresh
+        refreshToken: resolved.refresh,
       });
       if (response.status !== 200) {
         throw new Error(`GitHub PR commits fetch failed: HTTP ${response.status}`);
       }
       return { logins: parseCommitLogins(response.body) };
-    }
+    },
   };
 }
 
@@ -441,20 +478,21 @@ function loginFrom(user: unknown): string {
 async function ensureMergeTask(pool: RunStateClient, context: ReviewMergeRunContext): Promise<string> {
   const existing = await pool.query(
     "SELECT task_id FROM tasks WHERE run_id = $1 AND kind = 'merge' ORDER BY started_at DESC NULLS LAST, task_id ASC LIMIT 1",
-    [context.runId]
+    [context.runId],
   );
   const existingTask = existing.rows[0] as { task_id: string } | undefined;
   if (existingTask !== undefined) {
-    await pool.query("UPDATE tasks SET status = 'running', started_at = COALESCE(started_at, now()), ended_at = NULL WHERE task_id = $1", [
-      existingTask.task_id
-    ]);
+    await pool.query(
+      "UPDATE tasks SET status = 'running', started_at = COALESCE(started_at, now()), ended_at = NULL WHERE task_id = $1",
+      [existingTask.task_id],
+    );
     return existingTask.task_id;
   }
   const taskId = `task_${randomUUID()}`;
   await pool.query(
     `INSERT INTO tasks (task_id, run_id, kind, title, status, started_at, agent_kind, cli, model, attempt)
      VALUES ($1, $2, 'merge', 'Merge pull request', 'running', now(), 'system', 'github', NULL, 1)`,
-    [taskId, context.runId]
+    [taskId, context.runId],
   );
   return taskId;
 }

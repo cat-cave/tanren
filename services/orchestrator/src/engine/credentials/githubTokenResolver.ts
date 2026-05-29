@@ -41,13 +41,13 @@ export async function resolveGithubToken(input: GithubTokenResolverInput): Promi
     const minter = input.minter ?? new GithubAppTokenMinter({ secrets: input.secrets });
     const request = {
       installationId: input.installation.installationId,
-      credentialRef: input.installation.credentialRef
+      credentialRef: input.installation.credentialRef,
     };
     const token = await minter.getInstallationToken(request);
     return {
       token,
       source: "github_app",
-      refresh: () => minter.refreshInstallationToken(request)
+      refresh: () => minter.refreshInstallationToken(request),
     };
   }
 
@@ -62,6 +62,6 @@ export async function resolveGithubToken(input: GithubTokenResolverInput): Promi
   return {
     token: await readStatic(),
     source: "static",
-    refresh: readStatic
+    refresh: readStatic,
   };
 }

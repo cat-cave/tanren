@@ -2,11 +2,7 @@
 // AuditAnswer schema (P2A-0008) after every subtask has passed its checker
 // pass, and exposes a `decideAuditorOutcome` helper that maps the
 // `recommendedAction` into the rejection-loop branch the subtask loop takes.
-import {
-  answererOutputSchemaFor,
-  AuditAnswer,
-  type AuditRecommendedAction
-} from "../../answerers/schemas/index.js";
+import { answererOutputSchemaFor, AuditAnswer, type AuditRecommendedAction } from "../../answerers/schemas/index.js";
 import type { PlanSubtask } from "../../answerers/schemas/index.js";
 import type { AnswererAdapter } from "../../providers/types.js";
 
@@ -31,7 +27,7 @@ export interface AuditorInvocationResult {
 
 export async function invokeAuditor(
   auditor: AnswererAdapter<AuditAnswer>,
-  input: AuditorInvokeInput
+  input: AuditorInvokeInput,
 ): Promise<AuditorInvocationResult> {
   const outputSchema = answererOutputSchemaFor("audit", AuditAnswer);
   const prompt = buildAuditorPrompt(input.context);
@@ -39,7 +35,7 @@ export async function invokeAuditor(
     prompt,
     timeoutMs: input.timeoutMs,
     workspace: input.workspace,
-    outputSchema
+    outputSchema,
   });
   return { verdict, schemaId: outputSchema.name };
 }
@@ -58,7 +54,7 @@ export function buildAuditorPrompt(context: AuditorSpecContext): string {
     "Executed subtasks:",
     ...context.subtasks.map(
       (subtask) =>
-        `- [${subtask.index}] ${subtask.title} (intent: ${subtask.intent}, behaviors: ${subtask.behaviorIds.join(", ") || "(none)"})`
+        `- [${subtask.index}] ${subtask.title} (intent: ${subtask.intent}, behaviors: ${subtask.behaviorIds.join(", ") || "(none)"})`,
     ),
     "",
     "Set passed=true only when every acceptance criterion is satisfied by the combined writer diff.",
@@ -67,7 +63,7 @@ export function buildAuditorPrompt(context: AuditorSpecContext): string {
     "Set recommendedAction='halt' when the spec is not recoverable in this run.",
     "",
     "Combined writer diff:",
-    context.combinedDiff
+    context.combinedDiff,
   ].join("\n");
 }
 
@@ -76,7 +72,12 @@ export function buildAuditorPrompt(context: AuditorSpecContext): string {
 // deterministically without re-running the Codex CLI.
 export type AuditorDecision =
   | { kind: "pass" }
-  | { kind: "reject"; action: Extract<AuditRecommendedAction, "loop_to_planner" | "halt">; reason: string; outstandingBehaviorIds: ReadonlyArray<string> };
+  | {
+      kind: "reject";
+      action: Extract<AuditRecommendedAction, "loop_to_planner" | "halt">;
+      reason: string;
+      outstandingBehaviorIds: ReadonlyArray<string>;
+    };
 
 export function decideAuditorOutcome(verdict: AuditAnswer): AuditorDecision {
   if (verdict.passed) {
@@ -87,7 +88,7 @@ export function decideAuditorOutcome(verdict: AuditAnswer): AuditorDecision {
       kind: "reject",
       action: "halt",
       reason: verdict.reasoning,
-      outstandingBehaviorIds: verdict.outstandingBehaviorIds
+      outstandingBehaviorIds: verdict.outstandingBehaviorIds,
     };
   }
   // The auditor schema enum admits "pass" | "loop_to_planner" | "halt"; the
@@ -99,6 +100,6 @@ export function decideAuditorOutcome(verdict: AuditAnswer): AuditorDecision {
     kind: "reject",
     action: "loop_to_planner",
     reason: verdict.reasoning,
-    outstandingBehaviorIds: verdict.outstandingBehaviorIds
+    outstandingBehaviorIds: verdict.outstandingBehaviorIds,
   };
 }

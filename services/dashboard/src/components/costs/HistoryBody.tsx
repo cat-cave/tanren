@@ -26,7 +26,7 @@ const STATUS_FILTERS: { id: string; label: string }[] = [
   { id: "", label: "all" },
   { id: "running", label: "running" },
   { id: "succeeded", label: "succeeded" },
-  { id: "failed", label: "failed" }
+  { id: "failed", label: "failed" },
 ];
 
 /** Map a run outcome to a badge class + label. */
@@ -48,9 +48,7 @@ export function HistoryBody(props: HistoryBodyProps) {
       <style data-screen="costs" dangerouslySetInnerHTML={{ __html: COSTS_SCREEN_CSS }} />
       <div class="page-head">
         <div>
-          <div class="eyebrow">
-            ▮ run history · {props.noProject ? props.orgLogin || "org" : props.projectName}
-          </div>
+          <div class="eyebrow">▮ run history · {props.noProject ? props.orgLogin || "org" : props.projectName}</div>
           <div class="page-title">prior runs</div>
           {!props.noProject && <div class="sub">{runs.length} runs · scoped to this project</div>}
         </div>
@@ -72,8 +70,7 @@ export function HistoryBody(props: HistoryBodyProps) {
           <section class="panel">
             {props.noProject ? (
               <div class="empty">
-                No projects yet. Onboard a repo to start forging — run history appears here once a
-                project has runs.
+                No projects yet. Onboard a repo to start forging — run history appears here once a project has runs.
               </div>
             ) : runs.length === 0 ? (
               <div class="empty">No runs match this filter yet.</div>
@@ -91,7 +88,7 @@ export function HistoryBody(props: HistoryBodyProps) {
                   {runs.map((run) => {
                     const badge = outcomeBadge(run);
                     const href = `/orgs/${encodeURIComponent(props.orgId)}/projects/${encodeURIComponent(
-                      run.projectId
+                      run.projectId,
                     )}/runs/${encodeURIComponent(run.runId)}`;
                     return (
                       <a class="run-row" href={href}>

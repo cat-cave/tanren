@@ -18,12 +18,11 @@ function target(overrides: Partial<NotificationTargetRow> = {}): NotificationTar
     weekendMute: false,
     createdAt: new Date(),
     updatedAt: new Date(),
-    ...overrides
+    ...overrides,
   };
 }
 
-const failingFetch: typeof fetch = async () =>
-  new Response("bad", { status: 400, statusText: "Bad Request" });
+const failingFetch: typeof fetch = async () => new Response("bad", { status: 400, statusText: "Bad Request" });
 
 class MemorySecrets implements SecretStore {
   constructor(private readonly map: Record<string, string>) {}
@@ -43,7 +42,7 @@ describe("DiscordChannel", () => {
       return new Response(null, { status: 204 });
     };
     const secrets = new MemorySecrets({
-      "credential/discord/alerts": "https://discord.com/api/webhooks/1/abc"
+      "credential/discord/alerts": "https://discord.com/api/webhooks/1/abc",
     });
     const channel = new DiscordChannel({ fetch: fakeFetch, secrets });
     await channel.publish(target(), {
@@ -51,7 +50,7 @@ describe("DiscordChannel", () => {
       body: "run failed details",
       severity: "fail",
       eventName: "run.failed",
-      url: "https://tanren.example/runs/run_1"
+      url: "https://tanren.example/runs/run_1",
     });
     expect(captured).not.toBeNull();
     expect(captured!.url).toBe("https://discord.com/api/webhooks/1/abc");
@@ -76,7 +75,7 @@ describe("DiscordChannel", () => {
       title: "t",
       body: "b",
       severity: "info",
-      eventName: "run.started"
+      eventName: "run.started",
     });
     expect(capturedUrl).toBe("https://discord.com/api/webhooks/x");
   });
@@ -88,8 +87,8 @@ describe("DiscordChannel", () => {
         title: "t",
         body: "b",
         severity: "info",
-        eventName: "run.started"
-      })
+        eventName: "run.started",
+      }),
     ).rejects.toThrow(/discord publish failed: 400/);
   });
 });

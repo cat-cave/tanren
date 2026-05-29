@@ -11,7 +11,7 @@ const fakeTokenUsage = {
   cacheCreationTokens: 0,
   outputTokens: 16,
   reasoningOutputTokens: 0,
-  totalTokens: 48
+  totalTokens: 48,
 };
 
 export interface WorkspaceGitInput {
@@ -36,8 +36,8 @@ export async function prepareGitWorkspace(input: WorkspaceGitInput): Promise<voi
       "git config user.email 'fake-writer@tanren.invalid'",
       "printf '%s\\n' '# Tanren workspace baseline' > README.md",
       "git add README.md",
-      `${authorEnv} git commit -m baseline`
-    ].join(" && ")
+      `${authorEnv} git commit -m baseline`,
+    ].join(" && "),
   });
 }
 
@@ -50,8 +50,8 @@ export async function runFakeWriterMutation(input: WorkspaceGitInput): Promise<v
       "set -eu",
       "printf '%s\\n' '# Hello from Tanren' '' 'hello world' > HELLO.md",
       "git add HELLO.md",
-      `${authorEnv} git commit -m 'hello world'`
-    ].join(" && ")
+      `${authorEnv} git commit -m 'hello world'`,
+    ].join(" && "),
   });
 }
 
@@ -60,20 +60,20 @@ export async function captureGitMutation(input: WorkspaceGitInput): Promise<Writ
     label: "capture git diff",
     timeoutMs: input.timeoutMs,
     cwd: input.workspacePath,
-    command: "git diff --no-color HEAD~1..HEAD"
+    command: "git diff --no-color HEAD~1..HEAD",
   });
   const log = await runWorkspaceSshCommand(input.ssh, input.target, {
     label: "capture git commit",
     timeoutMs: input.timeoutMs,
     cwd: input.workspacePath,
-    command: "git log -1 --format='%H%x09%s' HEAD"
+    command: "git log -1 --format='%H%x09%s' HEAD",
   });
 
   return {
     diff: diff.stdout,
     commits: [parseGitLogCommit(log.stdout)],
     exitReason: "completed",
-    tokenUsage: fakeTokenUsage
+    tokenUsage: fakeTokenUsage,
   };
 }
 
@@ -94,4 +94,3 @@ export function parseGitLogCommit(stdout: string): Commit {
   }
   return { sha, message };
 }
-

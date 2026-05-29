@@ -11,7 +11,7 @@ import {
   runWorkspaceSshCommand,
   WorkspaceBootstrapError,
   WorkspaceCommandError,
-  workspaceRepoPathForRun
+  workspaceRepoPathForRun,
 } from "../src/engine/workspace/index.js";
 
 const target: SshTarget = {
@@ -19,7 +19,7 @@ const target: SshTarget = {
   port: 22,
   username: "tanren",
   hostKeyFingerprint: "SHA256:runner-host",
-  identitySecretRef: "runner/test/identity"
+  identitySecretRef: "runner/test/identity",
 };
 
 describe("workspace git contract", () => {
@@ -32,14 +32,22 @@ describe("workspace git contract", () => {
 
   it("turns nonzero, timeout, and substrate failures into workspace command errors", async () => {
     const nonzero = new ScriptedSsh([{ exitCode: 7, stdout: "", stderr: "bad", timedOut: false }]);
-    await expect(runWorkspaceSshCommand(nonzero, target, { label: "git step", command: "git status", timeoutMs: 50 })).rejects.toThrow(
-      WorkspaceCommandError
-    );
+    await expect(
+      runWorkspaceSshCommand(nonzero, target, {
+        label: "git step",
+        command: "git status",
+        timeoutMs: 50,
+      }),
+    ).rejects.toThrow(WorkspaceCommandError);
 
     const timedOut = new ScriptedSsh([{ exitCode: null, stdout: "", stderr: "", timedOut: true }]);
-    await expect(runWorkspaceSshCommand(timedOut, target, { label: "slow step", command: "sleep 10", timeoutMs: 50 })).rejects.toThrow(
-      "slow step timed out"
-    );
+    await expect(
+      runWorkspaceSshCommand(timedOut, target, {
+        label: "slow step",
+        command: "sleep 10",
+        timeoutMs: 50,
+      }),
+    ).rejects.toThrow("slow step timed out");
 
     const failed = new ScriptedSsh([
       {
@@ -47,18 +55,22 @@ describe("workspace git contract", () => {
         stdout: "",
         stderr: "",
         timedOut: false,
-        failure: defineFailure({ kind: "ssh_failed", target: "tanren@runner:22", message: "connection failed" })
-      }
+        failure: defineFailure({
+          kind: "ssh_failed",
+          target: "tanren@runner:22",
+          message: "connection failed",
+        }),
+      },
     ]);
-    await expect(runWorkspaceSshCommand(failed, target, { label: "ssh step", command: "true", timeoutMs: 50 })).rejects.toThrow(
-      "ssh step failed: connection failed"
-    );
+    await expect(
+      runWorkspaceSshCommand(failed, target, { label: "ssh step", command: "true", timeoutMs: 50 }),
+    ).rejects.toThrow("ssh step failed: connection failed");
   });
 
   it("parses captured git commit metadata", () => {
     expect(parseGitLogCommit("0123456789abcdef0123456789abcdef01234567\thello world\n")).toEqual({
       sha: "0123456789abcdef0123456789abcdef01234567",
-      message: "hello world"
+      message: "hello world",
     });
     expect(() => parseGitLogCommit("not-a-sha\thello world\n")).toThrow("invalid sha");
     expect(() => parseGitLogCommit("0123456789abcdef0123456789abcdef01234567\n")).toThrow("separator");
@@ -71,17 +83,26 @@ describe("workspace git contract", () => {
       { exitCode: 0, stdout: "", stderr: "", timedOut: false },
       { exitCode: 0, stdout: "", stderr: "", timedOut: false },
       { exitCode: 0, stdout: diff, stderr: "", timedOut: false },
-      { exitCode: 0, stdout: `${sha}\thello world\n`, stderr: "", timedOut: false }
+      { exitCode: 0, stdout: `${sha}\thello world\n`, stderr: "", timedOut: false },
     ]);
     const workspacePath = workspaceRepoPathForRun("run_git_contract");
 
     await prepareGitWorkspace({ ssh, target, workspacePath, timeoutMs: 100 });
     const writer = createFakeWriter({ ssh, target });
-    const result = await writer.runWriter({ prompt: "write", workspace: workspacePath, timeoutMs: 100 });
+    const result = await writer.runWriter({
+      prompt: "write",
+      workspace: workspacePath,
+      timeoutMs: 100,
+    });
 
     expect(result.diff).toBe(diff);
     expect(result.commits).toEqual([{ sha, message: "hello world" }]);
-    expect(ssh.commands.map((item) => item.command.cwd)).toEqual([undefined, workspacePath, workspacePath, workspacePath]);
+    expect(ssh.commands.map((item) => item.command.cwd)).toEqual([
+      undefined,
+      workspacePath,
+      workspacePath,
+      workspacePath,
+    ]);
     expect(ssh.commands[0]?.command.command).toContain("git init -b main");
     expect(ssh.commands[1]?.command.command).toContain("HELLO.md");
     expect(ssh.commands[2]?.command.command).toBe("git diff --no-color HEAD~1..HEAD");
@@ -94,7 +115,13 @@ describe("workspace bootstrap (P3-0006)", () => {
 
   it("runs the install command in the workspace dir and returns success", async () => {
     const ssh = new ScriptedSsh([{ exitCode: 0, stdout: "Packages: +120", stderr: "", timedOut: false }]);
-    const result = await bootstrapWorkspace({ ssh, target, workspacePath, command: "pnpm install", timeoutMs: 100 });
+    const result = await bootstrapWorkspace({
+      ssh,
+      target,
+      workspacePath,
+      command: "pnpm install",
+      timeoutMs: 100,
+    });
 
     expect(result.exitCode).toBe(0);
     expect(ssh.commands).toHaveLength(1);
@@ -111,9 +138,22 @@ describe("workspace bootstrap (P3-0006)", () => {
   });
 
   it("throws a typed WorkspaceBootstrapError with exit code + output tail on failure", async () => {
-    const ssh = new ScriptedSsh([{ exitCode: 1, stdout: "resolving", stderr: "ERR_PNPM_NO_LOCKFILE\nvitest: not found", timedOut: false }]);
+    const ssh = new ScriptedSsh([
+      {
+        exitCode: 1,
+        stdout: "resolving",
+        stderr: "ERR_PNPM_NO_LOCKFILE\nvitest: not found",
+        timedOut: false,
+      },
+    ]);
 
-    const error = await bootstrapWorkspace({ ssh, target, workspacePath, command: "pnpm install", timeoutMs: 100 }).catch((caught: unknown) => caught);
+    const error = await bootstrapWorkspace({
+      ssh,
+      target,
+      workspacePath,
+      command: "pnpm install",
+      timeoutMs: 100,
+    }).catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(WorkspaceBootstrapError);
     const typed = error as WorkspaceBootstrapError;
     expect(typed.exitCode).toBe(1);
@@ -124,7 +164,12 @@ describe("workspace bootstrap (P3-0006)", () => {
 
   it("treats a timeout and a substrate failure as bootstrap errors", async () => {
     const timedOut = new ScriptedSsh([{ exitCode: null, stdout: "", stderr: "", timedOut: true }]);
-    const timeoutError = await bootstrapWorkspace({ ssh: timedOut, target, workspacePath, timeoutMs: 50 }).catch((caught: unknown) => caught);
+    const timeoutError = await bootstrapWorkspace({
+      ssh: timedOut,
+      target,
+      workspacePath,
+      timeoutMs: 50,
+    }).catch((caught: unknown) => caught);
     expect(timeoutError).toBeInstanceOf(WorkspaceBootstrapError);
     expect((timeoutError as WorkspaceBootstrapError).message).toContain("timed out");
 
@@ -134,10 +179,19 @@ describe("workspace bootstrap (P3-0006)", () => {
         stdout: "",
         stderr: "",
         timedOut: false,
-        failure: defineFailure({ kind: "ssh_failed", target: "tanren@runner:22", message: "connection reset" })
-      }
+        failure: defineFailure({
+          kind: "ssh_failed",
+          target: "tanren@runner:22",
+          message: "connection reset",
+        }),
+      },
     ]);
-    const substrateError = await bootstrapWorkspace({ ssh: failed, target, workspacePath, timeoutMs: 50 }).catch((caught: unknown) => caught);
+    const substrateError = await bootstrapWorkspace({
+      ssh: failed,
+      target,
+      workspacePath,
+      timeoutMs: 50,
+    }).catch((caught: unknown) => caught);
     expect(substrateError).toBeInstanceOf(WorkspaceBootstrapError);
     expect((substrateError as WorkspaceBootstrapError).outputTail).toContain("connection reset");
   });

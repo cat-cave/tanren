@@ -29,7 +29,7 @@ export const InsightKind = z.enum([
   // `stuck` from spec-dependency-chain analysis (P2A-0018), `review_stall`
   // from review.* events (P3-0008).
   "stuck",
-  "review_stall"
+  "review_stall",
 ]);
 export type InsightKind = z.infer<typeof InsightKind>;
 
@@ -42,7 +42,7 @@ export const InsightAction = z
     // ForgeToolCall shape from P2A-0008. Typed as unknown here to avoid a
     // module-level coupling between insights and the Forge tool schema; the
     // route layer re-parses through the discriminated union before dispatch.
-    toolCall: z.unknown()
+    toolCall: z.unknown(),
   })
   .strict();
 export type InsightAction = z.infer<typeof InsightAction>;
@@ -60,7 +60,7 @@ export const RetryHotspotPayload = z
     writerModel: z.string().min(1),
     retryCount: z.number().int().nonnegative(),
     windowDays: z.number().int().positive(),
-    rejectionSummaries: z.array(z.string())
+    rejectionSummaries: z.array(z.string()),
   })
   .strict();
 export type RetryHotspotPayload = z.infer<typeof RetryHotspotPayload>;
@@ -76,7 +76,7 @@ export const ModelMismatchPayload = z
     alternativeCli: z.string().min(1),
     alternativeCostPerMergedSpec: z.number().nonnegative(),
     monthlySavings: z.number(),
-    comparisonWindowDays: z.number().int().positive()
+    comparisonWindowDays: z.number().int().positive(),
   })
   .strict();
 export type ModelMismatchPayload = z.infer<typeof ModelMismatchPayload>;
@@ -90,7 +90,7 @@ export const PaceAnomalyPayload = z
     elapsedSeconds: z.number().nonnegative(),
     classAverageSeconds: z.number().nonnegative(),
     multiplier: z.number().positive(),
-    specClass: z.string().min(1)
+    specClass: z.string().min(1),
   })
   .strict();
 export type PaceAnomalyPayload = z.infer<typeof PaceAnomalyPayload>;
@@ -109,12 +109,12 @@ export const StuckPayload = z
           .object({
             specId: z.string().min(1),
             title: z.string().min(1),
-            status: z.string().min(1)
+            status: z.string().min(1),
           })
-          .strict()
+          .strict(),
       )
       .min(1),
-    chainDepth: z.number().int().positive()
+    chainDepth: z.number().int().positive(),
   })
   .strict();
 export type StuckPayload = z.infer<typeof StuckPayload>;
@@ -133,7 +133,7 @@ export const ReviewStallPayload = z
     prUrl: z.string().min(1),
     phase: z.enum(["awaiting_review", "changes_requested"]),
     stalledHours: z.number().nonnegative(),
-    thresholdHours: z.number().positive()
+    thresholdHours: z.number().positive(),
   })
   .strict();
 export type ReviewStallPayload = z.infer<typeof ReviewStallPayload>;
@@ -143,7 +143,7 @@ export const InsightPayload = z.discriminatedUnion("kind", [
   ModelMismatchPayload,
   PaceAnomalyPayload,
   StuckPayload,
-  ReviewStallPayload
+  ReviewStallPayload,
 ]);
 export type InsightPayload = z.infer<typeof InsightPayload>;
 
@@ -159,7 +159,7 @@ export const Insight = z
     actions: z.array(InsightAction),
     computedAt: z.date(),
     acknowledgedAt: z.date().nullable(),
-    acknowledgedBy: z.string().nullable()
+    acknowledgedBy: z.string().nullable(),
   })
   .strict()
   .superRefine((row, ctx) => {
@@ -167,7 +167,7 @@ export const Insight = z
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["payload", "kind"],
-        message: `insight.kind (${row.kind}) must match payload.kind (${row.payload.kind})`
+        message: `insight.kind (${row.kind}) must match payload.kind (${row.payload.kind})`,
       });
     }
   });

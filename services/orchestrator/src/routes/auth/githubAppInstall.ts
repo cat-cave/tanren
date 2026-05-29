@@ -42,7 +42,7 @@ export interface GithubAppInstallRoutesOptions {
 const installQuerySchema = z.object({ orgId: z.string().min(1) });
 const callbackQuerySchema = z.object({
   installation_id: z.string().min(1),
-  state: z.string().min(1)
+  state: z.string().min(1),
 });
 
 export function createGithubAppInstallRoutes(options: GithubAppInstallRoutesOptions) {
@@ -65,7 +65,7 @@ export function createGithubAppInstallRoutes(options: GithubAppInstallRoutesOpti
   app.get("/callback", async (c) => {
     const parsed = callbackQuerySchema.safeParse({
       installation_id: c.req.query("installation_id"),
-      state: c.req.query("state")
+      state: c.req.query("state"),
     });
     if (!parsed.success) {
       return c.json({ error: "invalid_callback", issues: parsed.error.issues }, 400);
@@ -87,7 +87,7 @@ export function createGithubAppInstallRoutes(options: GithubAppInstallRoutesOpti
       appId = credential.appId;
       await minter.refreshInstallationToken({
         installationId: parsed.data.installation_id,
-        credentialRef: options.appCredentialRef
+        credentialRef: options.appCredentialRef,
       });
     } catch (error) {
       return c.json({ error: "install_verification_failed", message: messageOf(error) }, 502);
@@ -97,7 +97,7 @@ export function createGithubAppInstallRoutes(options: GithubAppInstallRoutesOpti
       installationId: parsed.data.installation_id,
       appId,
       credentialRef: options.appCredentialRef,
-      installedAt: new Date().toISOString()
+      installedAt: new Date().toISOString(),
     };
     const persisted = await persistOrgGithubAppInstallation(options.pool, orgId, installation);
     if (!persisted) {
@@ -107,7 +107,11 @@ export function createGithubAppInstallRoutes(options: GithubAppInstallRoutesOpti
     return c.json({
       ok: true,
       orgId,
-      installation: { installationId: installation.installationId, appId, installedAt: installation.installedAt }
+      installation: {
+        installationId: installation.installationId,
+        appId,
+        installedAt: installation.installedAt,
+      },
     });
   });
 
@@ -122,7 +126,7 @@ export function createGithubAppInstallRoutes(options: GithubAppInstallRoutesOpti
  */
 export function mountGithubAppInstallFromEnv(
   app: Hono<ActorContextEnv>,
-  deps: { pool: pg.Pool; secrets: SecretStore; minter: GithubAppTokenMinter }
+  deps: { pool: pg.Pool; secrets: SecretStore; minter: GithubAppTokenMinter },
 ): void {
   const installUrl = process.env["TANREN_GITHUB_APP_INSTALL_URL"];
   const appCredentialRef = process.env["TANREN_GITHUB_APP_CREDENTIAL_REF"];
@@ -137,8 +141,8 @@ export function mountGithubAppInstallFromEnv(
       appCredentialRef,
       installUrl,
       minter: deps.minter,
-      cookieSecure: process.env["TANREN_COOKIE_SECURE"] === "1"
-    })
+      cookieSecure: process.env["TANREN_COOKIE_SECURE"] === "1",
+    }),
   );
 }
 

@@ -33,12 +33,7 @@ export async function credentialsGet(argv: string[]): Promise<void> {
   const args = parseArgs(argv);
   const orgId = required(args, "org-id");
   const ref = required(args, "ref");
-  jsonOutput(
-    args,
-    await request(
-      `/orgs/${encodeURIComponent(orgId)}/credentials/${encodeURIComponent(ref)}`
-    )
-  );
+  jsonOutput(args, await request(`/orgs/${encodeURIComponent(orgId)}/credentials/${encodeURIComponent(ref)}`));
 }
 
 export async function credentialsDelete(argv: string[]): Promise<void> {
@@ -47,9 +42,8 @@ export async function credentialsDelete(argv: string[]): Promise<void> {
   const ref = required(args, "ref");
   jsonOutput(
     args,
-    await request(
-      `/orgs/${encodeURIComponent(orgId)}/credentials/${encodeURIComponent(ref)}`,
-      { method: "DELETE" }
-    )
+    await request(`/orgs/${encodeURIComponent(orgId)}/credentials/${encodeURIComponent(ref)}`, {
+      method: "DELETE",
+    }),
   );
 }

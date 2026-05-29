@@ -20,7 +20,13 @@ import { createApp } from "../src/main.js";
 import { loadShellContext, renderShell, type ShellDeps } from "../src/app/mountShell.js";
 import { SCREEN_MOUNTS } from "../src/app/screens.js";
 
-const ORG = { id: "org_acme", kind: "github_org", login: "cat-cave", displayName: "Cat Cave", role: "org:admin" };
+const ORG = {
+  id: "org_acme",
+  kind: "github_org",
+  login: "cat-cave",
+  displayName: "Cat Cave",
+  role: "org:admin",
+};
 const PROJECTS = [
   {
     projectId: "project_easy",
@@ -28,14 +34,14 @@ const PROJECTS = [
     repoUrl: "https://github.com/cat-cave/tanren-fixture-easy",
     defaultBranch: "main",
     runnerImage: null,
-    allocator: "local_docker"
-  }
+    allocator: "local_docker",
+  },
 ];
 
 /** Minimal pg.Pool stub — only `query("SELECT 1 AS ok")` is exercised (healthz). */
 function stubPool(): pg.Pool {
   return {
-    query: async () => ({ rows: [{ ok: 1 }], rowCount: 1 })
+    query: async () => ({ rows: [{ ok: 1 }], rowCount: 1 }),
   } as unknown as pg.Pool;
 }
 
@@ -45,7 +51,9 @@ function mockOrchestrator(opts: { authed: boolean } = { authed: true }): void {
     const url = typeof input === "string" ? input : input.toString();
     if (url.endsWith("/auth/me")) {
       return opts.authed
-        ? new Response(JSON.stringify({ userId: "u1", csrfToken: "c", expiresAt: "2030-01-01" }), { status: 200 })
+        ? new Response(JSON.stringify({ userId: "u1", csrfToken: "c", expiresAt: "2030-01-01" }), {
+            status: 200,
+          })
         : new Response("unauthorized", { status: 401 });
     }
     if (url.endsWith("/orgs")) {

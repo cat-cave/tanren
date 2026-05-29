@@ -3,8 +3,20 @@ import { glob, readFile } from "node:fs/promises";
 import { relative, resolve } from "node:path";
 import { exit } from "node:process";
 import { runStructureChecks } from "./check-architecture-structure.mjs";
+import {
+  checkDockerApiAllocatorOnly,
+  checkNoDockerExec,
+  checkNoHostBindMounts,
+  checkNoHostProcessSpawn,
+} from "./check-architecture-substrate.mjs";
 
-const patterns = ["**/*.{ts,tsx,js,mjs,json,md,yml,yaml,sql,sh}", ".github/**/*.{yml,yaml}", "Dockerfile", "**/Dockerfile", "justfile"];
+const patterns = [
+  "**/*.{ts,tsx,js,mjs,json,md,yml,yaml,sql,sh}",
+  ".github/**/*.{yml,yaml}",
+  "Dockerfile",
+  "**/Dockerfile",
+  "justfile",
+];
 const ignoredDirs = new Set(["node_modules", "dist", "coverage", ".git"]);
 const lineMaxExclusions = new Set(["PROJECT_BRIEF.md", "pnpm-lock.yaml"]);
 const invariantDocExclusions = new Set(["PROJECT_BRIEF.md", "docs/contracts/architecture-checks.md"]);
@@ -13,7 +25,7 @@ const requiredDocs = [
   "docs/playbooks/spec-template.md",
   "docs/playbooks/version-verification.md",
   "docs/playbooks/github-workflow.md",
-  "docs/contracts/architecture-checks.md"
+  "docs/contracts/architecture-checks.md",
 ];
 const costBases = new Set(["ccusage", "provider_pricing", "unknown"]);
 const billingModes = new Set(["per_token", "subscription", "self_hosted"]);
@@ -82,146 +94,6 @@ function checkLineMax(projectFiles) {
   return diagnostics;
 }
 
-function checkNoHostProcessSpawn(projectFiles) {
-  const diagnostics = [];
-  const importPattern = /(?:from\s+|import\s*\(|require\s*\()\s*["'](?:node:)?child_process["']/g;
-  for (const { file, text } of projectFiles) {
-    if (
-      invariantDocExclusions.has(file) ||
-      file.startsWith("services/orchestrator/src/engine/cli-runner/") ||
-      file.startsWith("scripts/")
-    ) {
-      continue;
-    }
-    for (const match of text.matchAll(importPattern)) {
-      diagnostics.push(
-        diagnostic("no-host-process-spawn", file, "child_process imports are confined to cli-runner", lineFor(text, match.index))
-      );
-    }
-  }
-  return diagnostics;
-}
-
-function checkNoDockerExec(projectFiles) {
-  const diagnostics = [];
-  const execPatterns = [/container\.exec\s*\(/g, /\bdocker\s+exec\b/g];
-  for (const { file, text } of projectFiles) {
-    if (
-      invariantDocExclusions.has(file) ||
-      file.startsWith("services/allocator/") ||
-      file.startsWith("services/orchestrator/src/engine/allocators/")
-    ) {
-      continue;
-    }
-    for (const pattern of execPatterns) {
-      for (const match of text.matchAll(pattern)) {
-        diagnostics.push(
-          diagnostic("no-docker-exec-for-workloads", file, "workload execution must go through SSH", lineFor(text, match.index))
-        );
-      }
-    }
-  }
-  return diagnostics;
-}
-
-function isHostPath(source) {
-  return /^(\/|\.{1,2}\/|~\/|\$\{?(?:PWD|HOME)\}?|[A-Za-z]:[\\/])/.test(source);
-}
-
-function checkNoHostBindMounts(projectFiles) {
-  const diagnostics = [];
-  const apiPatterns = [/\bBinds\b\s*:/g, /\bMounts\b\s*:/g, /\btype\s*[:=]\s*["']?bind["']?/g];
-  for (const { file, text } of projectFiles) {
-    if (
-      invariantDocExclusions.has(file) ||
-      file.startsWith("services/allocator/") ||
-      file.startsWith("services/orchestrator/src/engine/allocators/")
-    ) {
-      continue;
-    }
-    for (const pattern of apiPatterns) {
-      for (const match of text.matchAll(pattern)) {
-        diagnostics.push(diagnostic("no-host-bind-mounts", file, "host bind mounts are not allowed", lineFor(text, match.index)));
-      }
-    }
-    text.split("\n").forEach((line, index) => {
-      const match = line.match(/^\s*-\s*["']?([^"'\s:]+):\/[^"']*["']?\s*$/);
-      if (match && isAllowedAllocatorDockerSocketMount(file, text, index + 1)) {
-        return;
-      }
-      if (match && isHostPath(match[1])) {
-        diagnostics.push(diagnostic("no-host-bind-mounts", file, "compose service volume uses a host path", index + 1));
-      }
-    });
-  }
-  return diagnostics;
-}
-
-function isComposeFile(file) {
-  return file === "compose.yml" || file === "compose.dev.yml" || file === "compose.prod.yml";
-}
-
-function isAllowedDockerSocketMount(file, line) {
-  return isComposeFile(file) && line.trim() === "- /var/run/docker.sock:/var/run/docker.sock";
-}
-
-function isAllowedAllocatorDockerSocketMount(file, text, lineNumber) {
-  if (!isComposeFile(file)) {
-    return false;
-  }
-
-  let currentService;
-  let inVolumes = false;
-  const lines = text.split("\n");
-  for (let index = 0; index < lineNumber; index += 1) {
-    const line = lines[index] ?? "";
-    const serviceMatch = line.match(/^  ([a-zA-Z0-9_-]+):\s*$/);
-    if (serviceMatch) {
-      currentService = serviceMatch[1];
-      inVolumes = false;
-      continue;
-    }
-    if (line.match(/^    volumes:\s*$/)) {
-      inVolumes = currentService === "allocator";
-      continue;
-    }
-    if (line.match(/^    [a-zA-Z0-9_-]+:/)) {
-      inVolumes = false;
-    }
-  }
-
-  return currentService === "allocator" && inVolumes && isAllowedDockerSocketMount(file, lines[lineNumber - 1] ?? "");
-}
-
-function checkDockerApiAllocatorOnly(projectFiles) {
-  const diagnostics = [];
-  const dockerApiPatterns = [/\/var\/run\/docker\.sock/g, /\/containers\/(?:json|[^"']*\/json)/g, /\bsocketPath\s*:/g];
-  for (const { file, text } of projectFiles) {
-    if (
-      invariantDocExclusions.has(file) ||
-      file === "scripts/check-architecture.mjs" ||
-      file.startsWith("docs/operator-guide/") ||
-      file.startsWith("services/allocator/") ||
-      file.startsWith("services/orchestrator/src/engine/allocators/") ||
-      file.startsWith("services/orchestrator/tests/")
-    ) {
-      continue;
-    }
-    for (const dockerPattern of dockerApiPatterns) {
-      for (const match of text.matchAll(dockerPattern)) {
-        const lineNumber = lineFor(text, match.index);
-        if (isComposeFile(file) && isAllowedAllocatorDockerSocketMount(file, text, lineNumber)) {
-          continue;
-        }
-        diagnostics.push(
-          diagnostic("docker-api-allocator-only", file, "Docker socket/API access is confined to local allocator code", lineNumber)
-        );
-      }
-    }
-  }
-  return diagnostics;
-}
-
 function checkSingleEventWriter(projectFiles) {
   const diagnostics = [];
   const sqlInsert = new RegExp("INSERT\\s+INTO\\s+events", "gi");
@@ -236,7 +108,14 @@ function checkSingleEventWriter(projectFiles) {
     }
     for (const pattern of [sqlInsert, drizzleInsert]) {
       for (const match of text.matchAll(pattern)) {
-        diagnostics.push(diagnostic("single-event-writer", file, "events may only be written through eventStore", lineFor(text, match.index)));
+        diagnostics.push(
+          diagnostic(
+            "single-event-writer",
+            file,
+            "events may only be written through eventStore",
+            lineFor(text, match.index),
+          ),
+        );
       }
     }
   }
@@ -252,7 +131,14 @@ function checkFailureVariants(projectFiles) {
     }
     for (const pattern of failurePatterns) {
       for (const match of text.matchAll(pattern)) {
-        diagnostics.push(diagnostic("forbidden-failure-variants", file, "host-prefixed failure variants are forbidden", lineFor(text, match.index)));
+        diagnostics.push(
+          diagnostic(
+            "forbidden-failure-variants",
+            file,
+            "host-prefixed failure variants are forbidden",
+            lineFor(text, match.index),
+          ),
+        );
       }
     }
   }
@@ -260,7 +146,10 @@ function checkFailureVariants(projectFiles) {
 }
 
 function isRoleDispatcher(file) {
-  return file.startsWith("services/orchestrator/src/engine/workflow/") || file.startsWith("services/orchestrator/src/engine/dispatchers/");
+  return (
+    file.startsWith("services/orchestrator/src/engine/workflow/") ||
+    file.startsWith("services/orchestrator/src/engine/dispatchers/")
+  );
 }
 
 function checkWriterAnswererSeparation(projectFiles) {
@@ -270,7 +159,13 @@ function checkWriterAnswererSeparation(projectFiles) {
       continue;
     }
     if (text.includes("runWriter") && text.includes("runAnswerer")) {
-      diagnostics.push(diagnostic("writer-answerer-separation", file, "non-dispatcher code may not mix writer and answerer execution paths"));
+      diagnostics.push(
+        diagnostic(
+          "writer-answerer-separation",
+          file,
+          "non-dispatcher code may not mix writer and answerer execution paths",
+        ),
+      );
     }
   }
   return diagnostics;
@@ -281,21 +176,43 @@ function checkCostSources(projectFiles) {
   const legacy = new RegExp(`${"legacy"}_${"unknown"}`, "g");
   // Each column's SQL CHECK must exactly match its accepted value set.
   const enumChecks = [
-    { pattern: /cost_basis\s+IN\s*\(([^)]*)\)/gi, allowed: costBases, label: "cost_basis (ccusage, provider_pricing, unknown)" },
-    { pattern: /billing_mode\s+IN\s*\(([^)]*)\)/gi, allowed: billingModes, label: "billing_mode (per_token, subscription, self_hosted)" }
+    {
+      pattern: /cost_basis\s+IN\s*\(([^)]*)\)/gi,
+      allowed: costBases,
+      label: "cost_basis (ccusage, provider_pricing, unknown)",
+    },
+    {
+      pattern: /billing_mode\s+IN\s*\(([^)]*)\)/gi,
+      allowed: billingModes,
+      label: "billing_mode (per_token, subscription, self_hosted)",
+    },
   ];
   for (const { file, text } of projectFiles) {
     if (invariantDocExclusions.has(file)) {
       continue;
     }
     for (const match of text.matchAll(legacy)) {
-      diagnostics.push(diagnostic("no-unknown-cost-source", file, "placeholder cost sources are not allowed", lineFor(text, match.index)));
+      diagnostics.push(
+        diagnostic(
+          "no-unknown-cost-source",
+          file,
+          "placeholder cost sources are not allowed",
+          lineFor(text, match.index),
+        ),
+      );
     }
     for (const { pattern, allowed, label } of enumChecks) {
       for (const match of text.matchAll(pattern)) {
         const values = [...match[1].matchAll(/'([^']+)'/g)].map((value) => value[1]);
         if (values.some((value) => !allowed.has(value)) || values.length !== allowed.size) {
-          diagnostics.push(diagnostic("no-unknown-cost-source", file, `${label} checks must exactly match the accepted values`, lineFor(text, match.index)));
+          diagnostics.push(
+            diagnostic(
+              "no-unknown-cost-source",
+              file,
+              `${label} checks must exactly match the accepted values`,
+              lineFor(text, match.index),
+            ),
+          );
         }
       }
     }
@@ -313,7 +230,14 @@ function checkGitHubActions(projectFiles) {
       const pattern = new RegExp(`${action}@v(\\d+)`, "g");
       for (const match of text.matchAll(pattern)) {
         if (match[1] !== "6") {
-          diagnostics.push(diagnostic("github-actions-current-major", file, `${action} must use verified major v6`, lineFor(text, match.index)));
+          diagnostics.push(
+            diagnostic(
+              "github-actions-current-major",
+              file,
+              `${action} must use verified major v6`,
+              lineFor(text, match.index),
+            ),
+          );
         }
       }
     }
@@ -326,7 +250,7 @@ function checkGitHubActions(projectFiles) {
 // of the typed-state contract owned by P2A-0005.
 const workflowRowCastAllowlist = new Set([
   "services/orchestrator/src/engine/workflow/ciPolling.ts",
-  "services/orchestrator/src/engine/workflow/githubDraftPr.ts"
+  "services/orchestrator/src/engine/workflow/githubDraftPr.ts",
 ]);
 
 function checkNoRowCastsInWorkflow(projectFiles) {
@@ -334,10 +258,7 @@ function checkNoRowCastsInWorkflow(projectFiles) {
   // Detect `... as Something` where the cast immediately follows .rows[N] or
   // a variable named `row`/`rows`. Allow `as const` casts (they're not row
   // shape casts) and exempt the explicit allowlist above.
-  const rowCastPatterns = [
-    /\.rows\[[^\]]*\]\s+as\s+(?!const\b)[A-Za-z_$]/g,
-    /\brow\s+as\s+(?!const\b)[A-Za-z_$]/g
-  ];
+  const rowCastPatterns = [/\.rows\[[^\]]*\]\s+as\s+(?!const\b)[A-Za-z_$]/g, /\brow\s+as\s+(?!const\b)[A-Za-z_$]/g];
   for (const { file, text } of projectFiles) {
     if (!file.startsWith("services/orchestrator/src/engine/workflow/")) {
       continue;
@@ -352,8 +273,8 @@ function checkNoRowCastsInWorkflow(projectFiles) {
             "no-raw-row-casts-in-workflow",
             file,
             "workflow code must decode rows through typed repositories (see services/orchestrator/src/engine/repositories)",
-            lineFor(text, match.index)
-          )
+            lineFor(text, match.index),
+          ),
         );
       }
     }
@@ -366,10 +287,14 @@ function checkStateDriftWiring(projectFiles) {
   const justfile = projectFiles.find((item) => item.file === "justfile");
   const hasGeneratorScript = projectFiles.some((item) => item.file === "scripts/generate-state-checks.mjs");
   if (!hasGeneratorScript) {
-    return [diagnostic("state-drift-check-wired", "scripts/generate-state-checks.mjs", "state drift generator is missing")];
+    return [
+      diagnostic("state-drift-check-wired", "scripts/generate-state-checks.mjs", "state drift generator is missing"),
+    ];
   }
   if (!packageFile) {
-    return [diagnostic("state-drift-check-wired", "package.json", "root package.json is required for state drift wiring")];
+    return [
+      diagnostic("state-drift-check-wired", "package.json", "root package.json is required for state drift wiring"),
+    ];
   }
   try {
     const pkg = JSON.parse(packageFile.text);
@@ -378,14 +303,24 @@ function checkStateDriftWiring(projectFiles) {
     const stateScript = String(scripts["check:state-drift"] ?? "");
     if (!stateScript.includes("scripts/generate-state-checks.mjs")) {
       return [
-        diagnostic("state-drift-check-wired", "package.json", "check:state-drift must run scripts/generate-state-checks.mjs")
+        diagnostic(
+          "state-drift-check-wired",
+          "package.json",
+          "check:state-drift must run scripts/generate-state-checks.mjs",
+        ),
       ];
     }
     const rootCheckRunsStateDrift =
       checkScript.includes("check:state-drift") ||
       (checkScript.includes("just ci") && justfile?.text.includes("ci:") && justfile.text.includes("state-drift"));
     if (!rootCheckRunsStateDrift) {
-      return [diagnostic("state-drift-check-wired", "package.json", "root check must include check:state-drift or delegate to just ci")];
+      return [
+        diagnostic(
+          "state-drift-check-wired",
+          "package.json",
+          "root check must include check:state-drift or delegate to just ci",
+        ),
+      ];
     }
   } catch {
     return [diagnostic("state-drift-check-wired", "package.json", "root package.json must be valid JSON")];
@@ -409,13 +344,17 @@ function checkAnswererSchemaDriftWiring(projectFiles) {
     const drift = String(scripts["check:answerer-schema-drift"] ?? "");
     const check = String(scripts.check ?? "");
     if (!drift.includes("scripts/answerer-schema-export.mjs")) {
-      return [diagnostic(rule, "package.json", "check:answerer-schema-drift must run scripts/answerer-schema-export.mjs")];
+      return [
+        diagnostic(rule, "package.json", "check:answerer-schema-drift must run scripts/answerer-schema-export.mjs"),
+      ];
     }
     const wired =
       check.includes("check:answerer-schema-drift") ||
       (check.includes("just ci") && just?.text.includes("ci:") && just.text.includes("answerer-schema-drift"));
     if (!wired) {
-      return [diagnostic(rule, "package.json", "root check must include check:answerer-schema-drift or delegate to just ci")];
+      return [
+        diagnostic(rule, "package.json", "root check must include check:answerer-schema-drift or delegate to just ci"),
+      ];
     }
   } catch {
     return [diagnostic(rule, "package.json", "root package.json must be valid JSON")];
@@ -428,11 +367,15 @@ function checkSchemaDriftWiring(projectFiles) {
   const justfile = projectFiles.find((item) => item.file === "justfile");
   const hasDriftScript = projectFiles.some((item) => item.file === "scripts/check-schema-drift.sh");
   if (!hasDriftScript) {
-    return [diagnostic("schema-drift-check-wired", "scripts/check-schema-drift.sh", "schema drift check script is missing")];
+    return [
+      diagnostic("schema-drift-check-wired", "scripts/check-schema-drift.sh", "schema drift check script is missing"),
+    ];
   }
 
   if (!packageFile) {
-    return [diagnostic("schema-drift-check-wired", "package.json", "root package.json is required for schema drift wiring")];
+    return [
+      diagnostic("schema-drift-check-wired", "package.json", "root package.json is required for schema drift wiring"),
+    ];
   }
 
   try {
@@ -443,14 +386,24 @@ function checkSchemaDriftWiring(projectFiles) {
 
     if (!driftScript.includes("scripts/check-schema-drift.sh")) {
       return [
-        diagnostic("schema-drift-check-wired", "package.json", "check:schema-drift must run scripts/check-schema-drift.sh")
+        diagnostic(
+          "schema-drift-check-wired",
+          "package.json",
+          "check:schema-drift must run scripts/check-schema-drift.sh",
+        ),
       ];
     }
     const rootCheckRunsSchemaDrift =
       checkScript.includes("check:schema-drift") ||
       (checkScript.includes("just ci") && justfile?.text.includes("ci:") && justfile.text.includes("schema-drift"));
     if (!rootCheckRunsSchemaDrift) {
-      return [diagnostic("schema-drift-check-wired", "package.json", "root check must include check:schema-drift or delegate to just ci")];
+      return [
+        diagnostic(
+          "schema-drift-check-wired",
+          "package.json",
+          "root check must include check:schema-drift or delegate to just ci",
+        ),
+      ];
     }
   } catch {
     return [diagnostic("schema-drift-check-wired", "package.json", "root package.json must be valid JSON")];
@@ -478,7 +431,7 @@ export async function runArchitectureChecks({ root = process.cwd() } = {}) {
     ...checkStateDriftWiring(projectFiles),
     ...checkAnswererSchemaDriftWiring(projectFiles),
     ...checkNoRowCastsInWorkflow(projectFiles),
-    ...runStructureChecks(projectFiles)
+    ...runStructureChecks(projectFiles),
   ];
 }
 

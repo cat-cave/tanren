@@ -6,7 +6,7 @@ import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
 import {
   loadGithubAppCredential,
   storeGithubAppCredential,
-  validateGithubAppCredentialRef
+  validateGithubAppCredentialRef,
 } from "../src/engine/credentials/githubApp.js";
 import { createAuthMiddleware, type ActorContextEnv } from "../src/middleware/auth.js";
 import { createCredentialRoutes, InMemoryCredentialRegistry } from "../src/routes/credentials/index.js";
@@ -22,7 +22,7 @@ const alice: ActorContext = {
   orgId: "org_acme",
   projectId: null,
   scopes: ["org:member", "org:admin"],
-  source: "session"
+  source: "session",
 };
 
 describe("github app credential storage", () => {
@@ -32,7 +32,7 @@ describe("github app credential storage", () => {
     const result = await storeGithubAppCredential(secrets, {
       ref: "credential/github_app/org/org_acme/default",
       appId: "123456",
-      privateKeyPem
+      privateKeyPem,
     });
     expect(result.redacted).toBe(true);
     expect(result.appId).toBe("123456");
@@ -48,10 +48,18 @@ describe("github app credential storage", () => {
   it("rejects non-numeric app ids and non-PEM keys", async () => {
     const secrets = new InMemorySecretStore();
     await expect(
-      storeGithubAppCredential(secrets, { ref: "credential/github_app/x", appId: "abc", privateKeyPem: pem() })
+      storeGithubAppCredential(secrets, {
+        ref: "credential/github_app/x",
+        appId: "abc",
+        privateKeyPem: pem(),
+      }),
     ).rejects.toThrow(/numeric/);
     await expect(
-      storeGithubAppCredential(secrets, { ref: "credential/github_app/x", appId: "1", privateKeyPem: "not-a-key" })
+      storeGithubAppCredential(secrets, {
+        ref: "credential/github_app/x",
+        appId: "1",
+        privateKeyPem: "not-a-key",
+      }),
     ).rejects.toThrow(/PEM/);
   });
 });
@@ -73,10 +81,10 @@ function buildCredHarness() {
         },
         async resolveActorContext() {
           return alice;
-        }
+        },
       } as never,
-      localDevActor: alice
-    })
+      localDevActor: alice,
+    }),
   );
   app.route("/", createCredentialRoutes({ pool: pool.asPgPool(), secrets, registry }));
   return { app, registry };
@@ -88,7 +96,11 @@ describe("credential route github_app kind", () => {
     const response = await app.request("/orgs/org_acme/credentials?kind=github_app", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ref: "credential/github_app/org/org_acme/default", appId: "987654", privateKeyPem: pem() })
+      body: JSON.stringify({
+        ref: "credential/github_app/org/org_acme/default",
+        appId: "987654",
+        privateKeyPem: pem(),
+      }),
     });
     expect(response.status).toBe(201);
     const body = (await response.json()) as Record<string, unknown>;
@@ -103,7 +115,11 @@ describe("credential route github_app kind", () => {
     const response = await app.request("/orgs/org_acme/credentials?kind=github_app", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ref: "credential/github_app/org/org_acme/default", appId: "x", privateKeyPem: "bad" })
+      body: JSON.stringify({
+        ref: "credential/github_app/org/org_acme/default",
+        appId: "x",
+        privateKeyPem: "bad",
+      }),
     });
     expect(response.status).toBe(400);
   });

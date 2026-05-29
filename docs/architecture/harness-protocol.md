@@ -1,7 +1,7 @@
 # Harness↔Orchestrator Protocol (v1)
 
 This document is the **versioned, documented contract** between the orchestrator
-and any *harness* — the thing that runs an agentic CLI (codex/claude/opencode
+and any _harness_ — the thing that runs an agentic CLI (codex/claude/opencode
 today; agy/aider/pi/reasonix and a future native Rust harness later). It is
 Track C §4 of [`portability-and-longevity.md`](./portability-and-longevity.md):
 
@@ -11,7 +11,7 @@ Track C §4 of [`portability-and-longevity.md`](./portability-and-longevity.md):
 > protocol; harnesses without structured output declare a writer-only capability.
 
 The contract — not the implementation — is the durable asset. A harness is
-conformant if it satisfies this contract; *how* it shells out to a CLI (or, for
+conformant if it satisfies this contract; _how_ it shells out to a CLI (or, for
 the future Rust harness, runs in-process) is its own concern. The orchestrator
 never depends on a CLI's quirks, only on this protocol.
 
@@ -40,10 +40,10 @@ discriminator is **structured output**:
 
 This yields exactly two capability classes:
 
-| Class                | Roles              | `structuredOutput` | Harnesses today |
-| -------------------- | ------------------ | ------------------ | --------------- |
-| Structured-capable   | `write` + `answer` | `true`             | codex, claude   |
-| Writer-only          | `write`            | `false`            | opencode, agy\* |
+| Class              | Roles              | `structuredOutput` | Harnesses today |
+| ------------------ | ------------------ | ------------------ | --------------- |
+| Structured-capable | `write` + `answer` | `true`             | codex, claude   |
+| Writer-only        | `write`            | `false`            | opencode, agy\* |
 
 \* agy is an incoming writer-only harness; it is documented here as the second
 member of the writer-only class but is **not** wired in this change.
@@ -54,9 +54,9 @@ Each entry is a typed record:
 
 ```ts
 interface HarnessCapability {
-  readonly cli: HarnessCli;                 // "codex" | "claude" | "opencode"
-  readonly roles: readonly HarnessRole[];   // ("write" | "answer")[]
-  readonly structuredOutput: boolean;       // true ⟺ "answer" ∈ roles
+  readonly cli: HarnessCli; // "codex" | "claude" | "opencode"
+  readonly roles: readonly HarnessRole[]; // ("write" | "answer")[]
+  readonly structuredOutput: boolean; // true ⟺ "answer" ∈ roles
 }
 ```
 
@@ -70,16 +70,16 @@ this table (§6), so there is no second place to keep in sync.
 The orchestrator hands the harness a **task descriptor**. The fields the
 protocol guarantees:
 
-| Field            | Roles        | Meaning                                                     |
-| ---------------- | ------------ | ---------------------------------------------------------- |
-| `prompt`         | both         | The spec/subtask instruction text (delivered on stdin)     |
-| `workspace`      | `write`      | Absolute path to the git workspace to mutate               |
-| `workspace?`     | `answer`     | Optional read-only context dir for the reasoning task      |
-| `role`           | both         | The protocol role (`write` / `answer`) being requested     |
-| `outputSchema`   | `answer`     | The structured-output schema (name + JSON Schema + parser) |
-| `timeoutMs`      | both         | Hard wall-clock budget for the invocation                  |
-| `model?`         | both         | Optional model id pin (else the harness default)           |
-| `authRef`        | both         | Credential reference the harness materializes at call time |
+| Field          | Roles    | Meaning                                                    |
+| -------------- | -------- | ---------------------------------------------------------- |
+| `prompt`       | both     | The spec/subtask instruction text (delivered on stdin)     |
+| `workspace`    | `write`  | Absolute path to the git workspace to mutate               |
+| `workspace?`   | `answer` | Optional read-only context dir for the reasoning task      |
+| `role`         | both     | The protocol role (`write` / `answer`) being requested     |
+| `outputSchema` | `answer` | The structured-output schema (name + JSON Schema + parser) |
+| `timeoutMs`    | both     | Hard wall-clock budget for the invocation                  |
+| `model?`       | both     | Optional model id pin (else the harness default)           |
+| `authRef`      | both     | Credential reference the harness materializes at call time |
 
 In the TS providers layer these map to `runWriter(opts)` /
 `runAnswerer(opts)` in
@@ -97,12 +97,13 @@ read-only against its optional context workspace and never produces a diff.
 
 ```ts
 interface WriterResult {
-  diff: string;                 // unified diff vs. the captured baseline sha
-  commits: Commit[];            // commits made on top of baseline ({ sha, message })
-  exitReason:                   // see §5
-    | "completed" | "timeout" | "crashed" | "token_limit" | "window_exhausted";
-  tokenUsage?: TokenUsage;      // disjoint buckets (§4.3)
-  telemetry?: {                 // raw-event accounting + parsed signals
+  diff: string; // unified diff vs. the captured baseline sha
+  commits: Commit[]; // commits made on top of baseline ({ sha, message })
+  exitReason: // see §5
+    "completed" | "timeout" | "crashed" | "token_limit" | "window_exhausted";
+  tokenUsage?: TokenUsage; // disjoint buckets (§4.3)
+  telemetry?: {
+    // raw-event accounting + parsed signals
     rawEventCount: number;
     tokenUsage?: TokenUsage;
     usageLimit?: UsageLimitSignal;
@@ -129,16 +130,16 @@ must never be folded into one number:
 
 ```ts
 interface TokenUsage {
-  inputTokens: number;          // uncached prompt tokens
-  cachedInputTokens: number;    // cache-read tokens
-  cacheCreationTokens: number;  // cache-write/creation
-  outputTokens: number;         // non-reasoning completion tokens
-  reasoningOutputTokens: number;// reasoning tokens
-  totalTokens: number;          // provider-reported total, else sum of the five
+  inputTokens: number; // uncached prompt tokens
+  cachedInputTokens: number; // cache-read tokens
+  cacheCreationTokens: number; // cache-write/creation
+  outputTokens: number; // non-reasoning completion tokens
+  reasoningOutputTokens: number; // reasoning tokens
+  totalTokens: number; // provider-reported total, else sum of the five
 }
 ```
 
-A harness whose CLI reports an *inclusive* shape (e.g. Codex, where cached ⊆
+A harness whose CLI reports an _inclusive_ shape (e.g. Codex, where cached ⊆
 input and reasoning ⊆ output) must **de-overlap** into these disjoint buckets;
 a harness whose CLI already reports disjoint buckets (e.g. opencode) maps
 straight across. If a harness cannot report usage it returns `emptyTokenUsage`.
@@ -157,13 +158,13 @@ stream as a first-class protocol output is a candidate for a later version.)
 `exitReason` is the single classification the orchestrator routes on for the
 `write` role; the `answer` role raises the analogous typed errors.
 
-| `exitReason`       | Meaning                                                              | Orchestrator treatment            |
-| ------------------ | ------------------------------------------------------------------- | --------------------------------- |
-| `completed`        | The task ran to completion                                          | Use the result                    |
-| `timeout`          | The `timeoutMs` budget was exceeded                                 | Recoverable / retriable           |
-| `crashed`          | Non-zero exit, transport failure, or unparseable output             | Hard failure                      |
-| `token_limit`      | The model's context/output token limit was hit mid-task            | Recoverable                       |
-| `window_exhausted` | Authenticated but the subscription window / usage quota is spent    | Escalate as window pressure       |
+| `exitReason`       | Meaning                                                          | Orchestrator treatment      |
+| ------------------ | ---------------------------------------------------------------- | --------------------------- |
+| `completed`        | The task ran to completion                                       | Use the result              |
+| `timeout`          | The `timeoutMs` budget was exceeded                              | Recoverable / retriable     |
+| `crashed`          | Non-zero exit, transport failure, or unparseable output          | Hard failure                |
+| `token_limit`      | The model's context/output token limit was hit mid-task          | Recoverable                 |
+| `window_exhausted` | Authenticated but the subscription window / usage quota is spent | Escalate as window pressure |
 
 `window_exhausted` is **distinct from `crashed`**: the harness authenticated
 successfully but the account is out of quota (PROJECT_BRIEF §4.3). A harness
@@ -185,7 +186,7 @@ The capability table backs adapter selection in
   the table (`WRITER_CAPABLE_CLIS` / `ANSWERER_CAPABLE_CLIS`) rather than
   hardcoded — so they cannot drift from the declared capabilities.
 - `buildWriterAdapter` / `buildAnswererAdapter` call `harnessSupportsRole(cli,
-  role)` **before** constructing an adapter. A cli the table does not mark
+role)` **before** constructing an adapter. A cli the table does not mark
   eligible for the requested role throws `UnsupportedProviderError` — this is
   how opencode (writer-only) is rejected as an Answerer from the single source
   of truth, instead of an ad-hoc `switch` default.

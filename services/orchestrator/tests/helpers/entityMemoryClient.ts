@@ -32,7 +32,7 @@ export class EntityMemoryClient {
       const orgId = String(params[0]);
       const projectId = String(params[1]);
       const rows = [...this.personas.values()].filter(
-        (p) => p.org_id === orgId && (p.scope === "org" || p.project_id === projectId)
+        (p) => p.org_id === orgId && (p.scope === "org" || p.project_id === projectId),
       );
       return { rowCount: rows.length, rows };
     }
@@ -118,7 +118,7 @@ export class EntityMemoryClient {
       const row = {
         from_spec_id: String(params[0]),
         to_spec_id: String(params[1]),
-        created_at: this.now
+        created_at: this.now,
       };
       return { rowCount: 1, rows: [row] };
     }
@@ -164,7 +164,7 @@ export class EntityMemoryClient {
       description: String(params[5]),
       metadata: JSON.parse(String(params[6])),
       created_at: this.now,
-      updated_at: this.now
+      updated_at: this.now,
     };
     this.personas.set(id, row);
     return { rowCount: 1, rows: [row] };
@@ -183,7 +183,7 @@ export class EntityMemoryClient {
       description: (params[6] as string | null) ?? null,
       metadata: JSON.parse(String(params[7])),
       created_at: this.now,
-      updated_at: this.now
+      updated_at: this.now,
     };
     /* eslint-enable unicorn/no-thenable */
     this.behaviors.set(id, row);
@@ -202,7 +202,7 @@ export class EntityMemoryClient {
       eta: (params[6] as Date | null) ?? null,
       status: String(params[7]),
       created_at: this.now,
-      updated_at: this.now
+      updated_at: this.now,
     };
     for (const existing of this.milestones.values()) {
       if (existing.project_id === row.project_id && existing.label === row.label) {

@@ -13,7 +13,7 @@ import {
   InterviewRoundOutput,
   type InterviewAnswerer,
   type InterviewAnswererContext,
-  type InterviewRoundOutput as InterviewRoundOutputType
+  type InterviewRoundOutput as InterviewRoundOutputType,
 } from "./types.js";
 
 const STEP_SCHEMA_NAME = "tanren.vision_interview_round.v1";
@@ -26,7 +26,7 @@ export interface WrapProviderInterviewAnswererOptions {
 
 export function wrapProviderInterviewAnswerer(
   adapter: AnswererAdapter<InterviewRoundOutputType>,
-  options: WrapProviderInterviewAnswererOptions = {}
+  options: WrapProviderInterviewAnswererOptions = {},
 ): InterviewAnswerer {
   const jsonSchema = renderAnswererJsonSchema(InterviewRoundOutput);
   return {
@@ -37,9 +37,9 @@ export function wrapProviderInterviewAnswerer(
         outputSchema: {
           name: STEP_SCHEMA_NAME,
           jsonSchema,
-          parse: (value) => InterviewRoundOutput.parse(value)
-        }
+          parse: (value) => InterviewRoundOutput.parse(value),
+        },
       });
-    }
+    },
   };
 }

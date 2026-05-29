@@ -35,7 +35,7 @@ const RunSpecProjectRowSchema = z.object({
   org_id: z.string().nullable(),
   title: z.string(),
   description: z.string(),
-  acceptance_criteria: z.unknown()
+  acceptance_criteria: z.unknown(),
 });
 
 function stringArray(value: unknown): string[] {
@@ -60,7 +60,7 @@ export interface RunExecutionContext {
  */
 export async function loadRunExecutionContext(
   pool: QueryClient,
-  input: { runId: string; identitySecretRef: string }
+  input: { runId: string; identitySecretRef: string },
 ): Promise<RunExecutionContext> {
   const result = await pool.query(
     `SELECT
@@ -80,7 +80,7 @@ export async function loadRunExecutionContext(
      JOIN specs s ON s.spec_id = r.spec_id
      JOIN projects p ON p.project_id = r.project_id
      WHERE r.run_id = $1`,
-    [input.runId]
+    [input.runId],
   );
   const row = result.rows[0];
   if (row === undefined) {
@@ -97,7 +97,7 @@ export async function loadRunExecutionContext(
   // resolver throws MissingCredentialError when neither layer supplies a ref.
   const resolved = await resolveCredentialsForRun(pool, {
     projectConfig,
-    orgId: decoded.org_id ?? ""
+    orgId: decoded.org_id ?? "",
   });
 
   const context: PlannerRunContext = {
@@ -113,7 +113,7 @@ export async function loadRunExecutionContext(
     runnerImage: decoded.runner_image,
     identitySecretRef: input.identitySecretRef,
     githubCredentialRef: resolved.githubCredentialRef,
-    codexCredentialRef: resolved.codexCredentialRef
+    codexCredentialRef: resolved.codexCredentialRef,
   };
 
   return { context, projectConfig, orgId: decoded.org_id };

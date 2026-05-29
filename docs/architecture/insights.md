@@ -10,11 +10,11 @@ Owner spec: `P2A-0020` in `docs/roadmap/phase-2a-specs.md`.
 
 ## v0 kinds
 
-| kind             | source                                        | severity rule                                  |
-| ---------------- | --------------------------------------------- | ---------------------------------------------- |
-| `retry_hotspot`  | tasks (writer) joined with planner.rerequested| `warn` when ≥ `min+1` attempts; otherwise `info` |
-| `model_mismatch` | cost_records joined with merged runs + spec_milestones | `warn` whenever the ratio is exceeded   |
-| `pace_anomaly`   | in-flight writer tasks vs class average       | `warn` at ≥ 1.5× the multiplier; otherwise `info`|
+| kind             | source                                                 | severity rule                                     |
+| ---------------- | ------------------------------------------------------ | ------------------------------------------------- |
+| `retry_hotspot`  | tasks (writer) joined with planner.rerequested         | `warn` when ≥ `min+1` attempts; otherwise `info`  |
+| `model_mismatch` | cost_records joined with merged runs + spec_milestones | `warn` whenever the ratio is exceeded             |
+| `pace_anomaly`   | in-flight writer tasks vs class average                | `warn` at ≥ 1.5× the multiplier; otherwise `info` |
 
 `stuck` and `review_stall` defer to Phase 3 — they depend on
 spec-dependency-chain analysis and review polling.
@@ -41,17 +41,17 @@ testable from synthetic fixture data.
 
 `services/orchestrator/src/engine/insights/thresholds.ts` defines:
 
-| field                              | default | rationale                                     |
-| ---------------------------------- | ------- | --------------------------------------------- |
-| `retryHotspotMinAttempts`          | 2       | matches spec; one retry is normal              |
-| `retryHotspotWindowDays`           | 7       | one sprint                                    |
-| `modelMismatchWindowDays`          | 30      | one billing cycle                             |
-| `modelMismatchMinMergedPerModel`   | 3       | minimum sample size for the average to mean anything |
-| `modelMismatchCostRatio`           | 2       | the headline "materially higher" threshold from spec |
-| `paceAnomalyMultiplier`            | 2.0     | the headline "materially slower" threshold from spec |
-| `paceAnomalyWindowDays`            | 30      | window for class-average baseline             |
-| `paceAnomalyMinSamples`            | 3       | minimum sample size for the average to mean anything |
-| `cacheFreshnessMs`                 | 1 hour  | matches spec read-path                        |
+| field                            | default | rationale                                            |
+| -------------------------------- | ------- | ---------------------------------------------------- |
+| `retryHotspotMinAttempts`        | 2       | matches spec; one retry is normal                    |
+| `retryHotspotWindowDays`         | 7       | one sprint                                           |
+| `modelMismatchWindowDays`        | 30      | one billing cycle                                    |
+| `modelMismatchMinMergedPerModel` | 3       | minimum sample size for the average to mean anything |
+| `modelMismatchCostRatio`         | 2       | the headline "materially higher" threshold from spec |
+| `paceAnomalyMultiplier`          | 2.0     | the headline "materially slower" threshold from spec |
+| `paceAnomalyWindowDays`          | 30      | window for class-average baseline                    |
+| `paceAnomalyMinSamples`          | 3       | minimum sample size for the average to mean anything |
+| `cacheFreshnessMs`               | 1 hour  | matches spec read-path                               |
 
 Phase 3 will make these per-org configurable. The compute-function signature
 already accepts an explicit `thresholds: Partial<InsightThresholds>` so the
@@ -63,11 +63,11 @@ Each insight carries one or more `InsightAction` records. The action's
 `toolCall` is shaped like a P2A-0008 `ForgeToolCall`. v0 reuses the existing
 tool variants only — no new tool variant was needed for the three v0 kinds:
 
-| insight kind     | actions                                                            |
-| ---------------- | ------------------------------------------------------------------ |
-| `retry_hotspot`  | `tanren.create_spec` (open BDD · refine), `tanren.acknowledge_insight` |
+| insight kind     | actions                                                                   |
+| ---------------- | ------------------------------------------------------------------------- |
+| `retry_hotspot`  | `tanren.create_spec` (open BDD · refine), `tanren.acknowledge_insight`    |
 | `model_mismatch` | `tanren.create_spec` (routing-change draft), `tanren.acknowledge_insight` |
-| `pace_anomaly`   | `tanren.read_run`, `tanren.acknowledge_insight`                    |
+| `pace_anomaly`   | `tanren.read_run`, `tanren.acknowledge_insight`                           |
 
 When the operator clicks the action button, the dashboard hits the existing
 `POST /orgs/.../forge/tools` route (P2A-0019), which dispatches into the

@@ -4,7 +4,7 @@ import {
   CyclicSpecDependencyError,
   SelfSpecDependencyError,
   SpecDependencyStore,
-  assertNoCycle
+  assertNoCycle,
 } from "../src/engine/entities/index.js";
 import { EntityMemoryClient } from "./helpers/entityMemoryClient.js";
 
@@ -13,7 +13,7 @@ const actor: ActorContext = {
   orgId: "org_1",
   projectId: null,
   scopes: ["org:admin", "org:member"],
-  source: "session"
+  source: "session",
 };
 
 describe("SpecDependencyStore cycle detection", () => {
@@ -26,7 +26,7 @@ describe("SpecDependencyStore cycle detection", () => {
   it("rejects a self-loop", async () => {
     const client = new EntityMemoryClient();
     await expect(
-      SpecDependencyStore.insert(client, { fromSpecId: "spec_a", toSpecId: "spec_a" }, actor)
+      SpecDependencyStore.insert(client, { fromSpecId: "spec_a", toSpecId: "spec_a" }, actor),
     ).rejects.toThrowError(SelfSpecDependencyError);
   });
 
@@ -34,13 +34,9 @@ describe("SpecDependencyStore cycle detection", () => {
     const client = new EntityMemoryClient();
     await SpecDependencyStore.insert(client, { fromSpecId: "spec_a", toSpecId: "spec_b" }, actor);
     await SpecDependencyStore.insert(client, { fromSpecId: "spec_b", toSpecId: "spec_c" }, actor);
-    const error = await SpecDependencyStore.insert(
-      client,
-      { fromSpecId: "spec_c", toSpecId: "spec_a" },
-      actor
-    ).then(
+    const error = await SpecDependencyStore.insert(client, { fromSpecId: "spec_c", toSpecId: "spec_a" }, actor).then(
       () => undefined,
-      (err: unknown) => err
+      (err: unknown) => err,
     );
     expect(error).toBeInstanceOf(CyclicSpecDependencyError);
     const cycle = (error as CyclicSpecDependencyError).cycle;
@@ -56,7 +52,7 @@ describe("SpecDependencyStore cycle detection", () => {
     await SpecDependencyStore.insert(client, { fromSpecId: "spec_a", toSpecId: "spec_b" }, actor);
     await SpecDependencyStore.insert(client, { fromSpecId: "spec_a", toSpecId: "spec_c" }, actor);
     await expect(
-      SpecDependencyStore.insert(client, { fromSpecId: "spec_c", toSpecId: "spec_b" }, actor)
+      SpecDependencyStore.insert(client, { fromSpecId: "spec_c", toSpecId: "spec_b" }, actor),
     ).resolves.toBeDefined();
   });
 

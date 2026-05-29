@@ -7,7 +7,7 @@ describe("project/spec workflow contract", () => {
     const app = buildApp({
       pool: pool.asPgPool(),
       helloDependencies: {} as never,
-      vaultHealthCheck: async () => ({ ok: true, status: 200 })
+      vaultHealthCheck: async () => ({ ok: true, status: 200 }),
     });
 
     const projectResponse = await app.request("/projects", {
@@ -16,8 +16,8 @@ describe("project/spec workflow contract", () => {
       body: JSON.stringify({
         name: "Tanren",
         repoUrl: "https://github.com/cat-cave/tanren-fixture-easy",
-        config: { budgetUsd: 25 }
-      })
+        config: { budgetUsd: 25 },
+      }),
     });
     const project = await projectResponse.json();
 
@@ -26,7 +26,7 @@ describe("project/spec workflow contract", () => {
       projectId: expect.stringMatching(/^project_/),
       defaultBranch: "main",
       runnerImage: "ghcr.io/cat-cave/tanren-runner:v0",
-      allocator: "local-docker"
+      allocator: "local-docker",
     });
 
     const foundationResponse = await app.request("/specs", {
@@ -36,8 +36,8 @@ describe("project/spec workflow contract", () => {
         projectId: project.projectId,
         title: "Foundation",
         description: "Prepare the repo",
-        acceptanceCriteria: ["Foundation exists"]
-      })
+        acceptanceCriteria: ["Foundation exists"],
+      }),
     });
     const foundation = await foundationResponse.json();
     pool.markSpecDone(foundation.specId);
@@ -50,8 +50,8 @@ describe("project/spec workflow contract", () => {
         title: "Add health check",
         description: "Add a health endpoint",
         acceptanceCriteria: ["GET /healthz returns ok"],
-        dependsOn: [foundation.specId]
-      })
+        dependsOn: [foundation.specId],
+      }),
     });
     const spec = await specResponse.json();
 
@@ -60,7 +60,7 @@ describe("project/spec workflow contract", () => {
       specId: expect.stringMatching(/^spec_/),
       projectId: project.projectId,
       status: "pending",
-      dependsOn: [foundation.specId]
+      dependsOn: [foundation.specId],
     });
 
     const runResponse = await app.request(`/specs/${spec.specId}/runs`, { method: "POST" });
@@ -74,14 +74,31 @@ describe("project/spec workflow contract", () => {
       trigger: "cli",
       branch: expect.stringMatching(/^tanren\/add-health-check-/),
       status: "queued",
-      project: { repoUrl: "https://github.com/cat-cave/tanren-fixture-easy", defaultBranch: "main" },
+      project: {
+        repoUrl: "https://github.com/cat-cave/tanren-fixture-easy",
+        defaultBranch: "main",
+      },
       spec: { acceptanceCriteria: ["GET /healthz returns ok"], status: "active" },
       plannerTaskId: expect.stringMatching(/^task_/),
-      plannerJobId: expect.stringMatching(/^\d+$/)
+      plannerJobId: expect.stringMatching(/^\d+$/),
     });
-    expect(pool.runs[0]).toMatchObject({ specId: spec.specId, projectId: project.projectId, status: "queued" });
-    expect(pool.tasks[0]).toMatchObject({ runId: run.runId, kind: "plan", status: "queued", agentKind: "answerer" });
-    expect(pool.jobs[0]).toMatchObject({ runId: run.runId, taskId: run.plannerTaskId, taskKind: "plan", status: "queued" });
+    expect(pool.runs[0]).toMatchObject({
+      specId: spec.specId,
+      projectId: project.projectId,
+      status: "queued",
+    });
+    expect(pool.tasks[0]).toMatchObject({
+      runId: run.runId,
+      kind: "plan",
+      status: "queued",
+      agentKind: "answerer",
+    });
+    expect(pool.jobs[0]).toMatchObject({
+      runId: run.runId,
+      taskId: run.plannerTaskId,
+      taskKind: "plan",
+      status: "queued",
+    });
     const duplicateRun = await app.request(`/specs/${spec.specId}/runs`, { method: "POST" });
 
     expect(duplicateRun.status).toBe(409);
@@ -94,8 +111,11 @@ describe("project/spec workflow contract", () => {
         eventType: "run.queued",
         payload: expect.objectContaining({
           branch: run.branch,
-          project: expect.objectContaining({ repoUrl: "https://github.com/cat-cave/tanren-fixture-easy", defaultBranch: "main" })
-        })
+          project: expect.objectContaining({
+            repoUrl: "https://github.com/cat-cave/tanren-fixture-easy",
+            defaultBranch: "main",
+          }),
+        }),
       }),
       expect.objectContaining({
         runId: run.runId,
@@ -103,8 +123,8 @@ describe("project/spec workflow contract", () => {
         specId: spec.specId,
         projectId: project.projectId,
         eventType: "task.queued",
-        payload: { taskKind: "plan", jobId: run.plannerJobId }
-      })
+        payload: { taskKind: "plan", jobId: run.plannerJobId },
+      }),
     ]);
   });
 
@@ -112,7 +132,7 @@ describe("project/spec workflow contract", () => {
     const app = buildApp({
       pool: new ContractPool().asPgPool(),
       helloDependencies: {} as never,
-      vaultHealthCheck: async () => ({ ok: true, status: 200 })
+      vaultHealthCheck: async () => ({ ok: true, status: 200 }),
     });
 
     const response = await app.request("/specs", {
@@ -122,8 +142,8 @@ describe("project/spec workflow contract", () => {
         projectId: "project_missing",
         title: "Missing",
         description: "Missing project",
-        acceptanceCriteria: ["A 404 is returned"]
-      })
+        acceptanceCriteria: ["A 404 is returned"],
+      }),
     });
 
     await expect(response.json()).resolves.toMatchObject({ error: "project_not_found" });
@@ -135,18 +155,26 @@ describe("project/spec workflow contract", () => {
     const app = buildApp({
       pool: pool.asPgPool(),
       helloDependencies: {} as never,
-      vaultHealthCheck: async () => ({ ok: true, status: 200 })
+      vaultHealthCheck: async () => ({ ok: true, status: 200 }),
     });
     const projectResponse = await app.request("/projects", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: "Tanren", repoUrl: "https://github.com/cat-cave/tanren-fixture-easy" })
+      body: JSON.stringify({
+        name: "Tanren",
+        repoUrl: "https://github.com/cat-cave/tanren-fixture-easy",
+      }),
     });
     const project = await projectResponse.json();
     const invalidSpec = await app.request("/specs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ projectId: project.projectId, title: "Bad", description: "Bad", acceptanceCriteria: [] })
+      body: JSON.stringify({
+        projectId: project.projectId,
+        title: "Bad",
+        description: "Bad",
+        acceptanceCriteria: [],
+      }),
     });
 
     expect(invalidSpec.status).toBe(400);
@@ -157,13 +185,16 @@ describe("project/spec workflow contract", () => {
     const app = buildApp({
       pool: pool.asPgPool(),
       helloDependencies: {} as never,
-      vaultHealthCheck: async () => ({ ok: true, status: 200 })
+      vaultHealthCheck: async () => ({ ok: true, status: 200 }),
     });
     const project = await (
       await app.request("/projects", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: "Tanren", repoUrl: "https://github.com/cat-cave/tanren-fixture-easy" })
+        body: JSON.stringify({
+          name: "Tanren",
+          repoUrl: "https://github.com/cat-cave/tanren-fixture-easy",
+        }),
       })
     ).json();
     const foundation = await (
@@ -174,8 +205,8 @@ describe("project/spec workflow contract", () => {
           projectId: project.projectId,
           title: "Foundation",
           description: "Prepare the repo",
-          acceptanceCriteria: ["Foundation exists"]
-        })
+          acceptanceCriteria: ["Foundation exists"],
+        }),
       })
     ).json();
     const dependent = await (
@@ -187,8 +218,8 @@ describe("project/spec workflow contract", () => {
           title: "Dependent",
           description: "Needs foundation",
           acceptanceCriteria: ["Dependency is enforced"],
-          dependsOn: [foundation.specId]
-        })
+          dependsOn: [foundation.specId],
+        }),
       })
     ).json();
 
@@ -197,7 +228,7 @@ describe("project/spec workflow contract", () => {
     const invalidTrigger = await app.request(`/specs/${dependent.specId}/runs`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ trigger: "cron" })
+      body: JSON.stringify({ trigger: "cron" }),
     });
 
     expect(blocked.status).toBe(409);
@@ -225,7 +256,10 @@ class ContractPool {
     }
     if (sql.startsWith("SELECT project_id FROM projects")) {
       const project = this.projects.get(String(params[0]));
-      return { rows: project === undefined ? [] : [{ project_id: project.projectId }], rowCount: project === undefined ? 0 : 1 };
+      return {
+        rows: project === undefined ? [] : [{ project_id: project.projectId }],
+        rowCount: project === undefined ? 0 : 1,
+      };
     }
     if (sql.startsWith("SELECT spec_id FROM specs WHERE project_id = $1 AND spec_id = ANY")) {
       return this.selectSpecsForProject(String(params[0]), params[1] as string[]);
@@ -323,10 +357,10 @@ class ContractPool {
           description: spec.description,
           acceptance_criteria: spec.acceptanceCriteria,
           depends_on: spec.dependsOn,
-          status: spec.status
-        }
+          status: spec.status,
+        },
       ],
-      rowCount: 1
+      rowCount: 1,
     };
   }
 }
@@ -393,7 +427,7 @@ function projectFromParams(params: unknown[]): ProjectRow {
     defaultBranch: String(params[3]),
     runnerImage: String(params[4]),
     allocator: String(params[5]),
-    config: JSON.parse(String(params[6])) as Record<string, unknown>
+    config: JSON.parse(String(params[6])) as Record<string, unknown>,
   };
 }
 
@@ -405,7 +439,7 @@ function specFromParams(params: unknown[]): SpecRow {
     description: String(params[3]),
     acceptanceCriteria: JSON.parse(String(params[4])) as string[],
     dependsOn: params[5] as string[],
-    status: String(params[6])
+    status: String(params[6]),
   };
 }
 
@@ -416,7 +450,7 @@ function runFromParams(params: unknown[]): RunRow {
     projectId: String(params[2]),
     trigger: String(params[3]),
     branch: String(params[4]),
-    status: "queued"
+    status: "queued",
   };
 }
 
@@ -426,7 +460,7 @@ function taskFromParams(params: unknown[]): TaskRow {
     runId: String(params[1]),
     kind: "plan",
     status: "queued",
-    agentKind: "answerer"
+    agentKind: "answerer",
   };
 }
 
@@ -436,7 +470,7 @@ function jobFromParams(params: unknown[], id: number): JobRow {
     runId: String(params[0]),
     taskId: String(params[1]),
     taskKind: "plan",
-    status: "queued"
+    status: "queued",
   };
 }
 
@@ -447,6 +481,6 @@ function eventFromParams(params: unknown[]): EventRow {
     specId: String(params[2]),
     projectId: String(params[3]),
     eventType: String(params[4]),
-    payload: JSON.parse(String(params[5])) as unknown
+    payload: JSON.parse(String(params[5])) as unknown,
   };
 }

@@ -37,7 +37,7 @@ function rangeDays(range: string): number | undefined {
 async function gatherCosts(
   client: OrchestratorClient,
   orgId: string,
-  projects: { projectId: string }[]
+  projects: { projectId: string }[],
 ): Promise<{ records: CostRecord[]; runs: RunListItem[] }> {
   const records: CostRecord[] = [];
   const runs: RunListItem[] = [];
@@ -53,11 +53,7 @@ async function gatherCosts(
 }
 
 /** Apply the date-range cutoff to records (by recordedAt) + runs (by startedAt). */
-function withinRange<T extends { recordedAt?: string; startedAt?: string }>(
-  items: T[],
-  range: string,
-  now: Date
-): T[] {
+function withinRange<T extends { recordedAt?: string; startedAt?: string }>(items: T[], range: string, now: Date): T[] {
   const days = rangeDays(range);
   if (days === undefined) return items;
   const cutoff = now.getTime() - days * 24 * 60 * 60 * 1000;
@@ -87,7 +83,7 @@ export function mountCostsScreen(app: Hono, deps: ShellDeps): void {
     if (ctx.org !== undefined) {
       const client = new OrchestratorClient({
         orchestratorUrl: deps.orchestratorUrl,
-        cookieHeader: c.req.header("cookie")
+        cookieHeader: c.req.header("cookie"),
       });
       const gathered = await gatherCosts(client, ctx.org.id, ctx.projects);
       allRecords = gathered.records;
@@ -106,7 +102,7 @@ export function mountCostsScreen(app: Hono, deps: ShellDeps): void {
       metrics,
       heatmap,
       range,
-      orgLogin: ctx.org?.login ?? ""
+      orgLogin: ctx.org?.login ?? "",
     });
   });
 
@@ -119,7 +115,7 @@ export function mountCostsScreen(app: Hono, deps: ShellDeps): void {
     if (ctx.org !== undefined) {
       const client = new OrchestratorClient({
         orchestratorUrl: deps.orchestratorUrl,
-        cookieHeader: c.req.header("cookie")
+        cookieHeader: c.req.header("cookie"),
       });
       const gathered = await gatherCosts(client, ctx.org.id, ctx.projects);
       records = gathered.records;
@@ -137,8 +133,8 @@ export function mountCostsScreen(app: Hono, deps: ShellDeps): void {
         row.runs,
         row.totalTokens,
         row.priced ? row.costUsd.toFixed(6) : "",
-        row.share.toFixed(4)
-      ].join(",")
+        row.share.toFixed(4),
+      ].join(","),
     );
     const body = [header, ...lines].join("\n");
     c.header("content-type", "text/csv; charset=utf-8");
@@ -153,14 +149,13 @@ export function mountCostsScreen(app: Hono, deps: ShellDeps): void {
     const ctx = await loadShellContext(c, deps, { activeNavId: "costs" });
     const status = c.req.query("status") ?? "";
     const requestedProject = c.req.query("projectId");
-    const project =
-      ctx.projects.find((p) => p.projectId === requestedProject) ?? ctx.projects[0];
+    const project = ctx.projects.find((p) => p.projectId === requestedProject) ?? ctx.projects[0];
 
     let runs: RunListItem[] = [];
     if (ctx.org !== undefined && project !== undefined) {
       const client = new OrchestratorClient({
         orchestratorUrl: deps.orchestratorUrl,
-        cookieHeader: c.req.header("cookie")
+        cookieHeader: c.req.header("cookie"),
       });
       runs = await client.listRuns(ctx.org.id, project.projectId, { status });
     }
@@ -177,7 +172,7 @@ export function mountCostsScreen(app: Hono, deps: ShellDeps): void {
         projectId={project?.projectId ?? ""}
         projectName={project?.name ?? ""}
         noProject={project === undefined}
-      />
+      />,
     );
   });
 }
@@ -190,7 +185,7 @@ function csv(value: string): string {
 function renderCostsShell(
   c: Context,
   ctx: ShellContext,
-  props: Parameters<typeof CostsBody>[0]
+  props: Parameters<typeof CostsBody>[0],
 ): Response | Promise<Response> {
   return renderShell(c, ctx, { title: "tanren · costs" }, <CostsBody {...props} />);
 }

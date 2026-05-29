@@ -21,9 +21,9 @@ const realCcusageOutput = JSON.stringify({
           cachedInputTokens: 500,
           reasoningOutputTokens: 50,
           totalTokens: 1750,
-          isFallback: false
-        }
-      }
+          isFallback: false,
+        },
+      },
     },
     {
       date: "2026-05-26",
@@ -34,9 +34,16 @@ const realCcusageOutput = JSON.stringify({
       totalTokens: 13,
       costUSD: 0,
       models: {
-        "gpt-5-codex": { inputTokens: 10, outputTokens: 2, cachedInputTokens: 0, reasoningOutputTokens: 1, totalTokens: 13, isFallback: false }
-      }
-    }
+        "gpt-5-codex": {
+          inputTokens: 10,
+          outputTokens: 2,
+          cachedInputTokens: 0,
+          reasoningOutputTokens: 1,
+          totalTokens: 13,
+          isFallback: false,
+        },
+      },
+    },
   ],
   totals: {
     inputTokens: 1010,
@@ -44,8 +51,8 @@ const realCcusageOutput = JSON.stringify({
     cachedInputTokens: 500,
     reasoningOutputTokens: 51,
     totalTokens: 1763,
-    costUSD: 0
-  }
+    costUSD: 0,
+  },
 });
 
 describe("parseCcusageAccounting", () => {
@@ -60,18 +67,38 @@ describe("parseCcusageAccounting", () => {
       cacheCreationTokens: 0,
       outputTokens: 202,
       reasoningOutputTokens: 51,
-      totalTokens: 1763
+      totalTokens: 1763,
     });
     expect(accounting?.perModel).toEqual([
       {
         model: "gpt-5-codex",
-        usage: { inputTokens: 1010, cachedInputTokens: 500, cacheCreationTokens: 0, outputTokens: 202, reasoningOutputTokens: 51, totalTokens: 1763 }
-      }
+        usage: {
+          inputTokens: 1010,
+          cachedInputTokens: 500,
+          cacheCreationTokens: 0,
+          outputTokens: 202,
+          reasoningOutputTokens: 51,
+          totalTokens: 1763,
+        },
+      },
     ]);
   });
 
   it("yields zero totals and null cost for an empty ccusage report", () => {
-    const accounting = parseCcusageAccounting(JSON.stringify({ daily: [], totals: { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, reasoningOutputTokens: 0, totalTokens: 0, costUSD: 0 } }), "codex");
+    const accounting = parseCcusageAccounting(
+      JSON.stringify({
+        daily: [],
+        totals: {
+          inputTokens: 0,
+          outputTokens: 0,
+          cachedInputTokens: 0,
+          reasoningOutputTokens: 0,
+          totalTokens: 0,
+          costUSD: 0,
+        },
+      }),
+      "codex",
+    );
     expect(accounting?.costUsd).toBeNull();
     expect(accounting?.totals.totalTokens).toBe(0);
     expect(accounting?.perModel).toEqual([]);
@@ -79,8 +106,18 @@ describe("parseCcusageAccounting", () => {
 
   it("surfaces a positive ccusage costUSD as a real cost figure", () => {
     const accounting = parseCcusageAccounting(
-      JSON.stringify({ daily: [], totals: { inputTokens: 100, outputTokens: 20, cachedInputTokens: 0, reasoningOutputTokens: 0, totalTokens: 120, costUSD: 1.234 } }),
-      "codex"
+      JSON.stringify({
+        daily: [],
+        totals: {
+          inputTokens: 100,
+          outputTokens: 20,
+          cachedInputTokens: 0,
+          reasoningOutputTokens: 0,
+          totalTokens: 120,
+          costUSD: 1.234,
+        },
+      }),
+      "codex",
     );
     expect(accounting?.costUsd).toBe(1.234);
   });

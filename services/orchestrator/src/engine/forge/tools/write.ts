@@ -16,7 +16,7 @@ import {
   createQueuedRunFromSpec,
   createSpec,
   type SpecContract,
-  type SpecRunContract
+  type SpecRunContract,
 } from "../../workflow/projectSpec.js";
 
 interface WriteToolDeps {
@@ -41,8 +41,13 @@ export interface TanrenCreateSpecArgs {
 export async function tanrenCreateSpec(
   deps: WriteToolDeps,
   args: TanrenCreateSpecArgs,
-  actor: ActorContext
-): Promise<SpecContract & { behaviors: ReadonlyArray<{ specId: string; behaviorId: string }>; milestoneId?: string }> {
+  actor: ActorContext,
+): Promise<
+  SpecContract & {
+    behaviors: ReadonlyArray<{ specId: string; behaviorId: string }>;
+    milestoneId?: string;
+  }
+> {
   const spec = await createSpec(
     deps.pool,
     {
@@ -54,9 +59,9 @@ export async function tanrenCreateSpec(
       // operator-button forms the criteria array; when omitted we use a
       // sensible single-criterion placeholder so the spec is still
       // runnable. Phase 3 will tighten this contract.
-      acceptanceCriteria: args.acceptanceCriteria ?? ["Define acceptance criteria"]
+      acceptanceCriteria: args.acceptanceCriteria ?? ["Define acceptance criteria"],
     },
-    actor
+    actor,
   );
   const behaviorLinks: Array<{ specId: string; behaviorId: string }> = [];
   if (args.behaviorIds !== undefined) {
@@ -66,11 +71,7 @@ export async function tanrenCreateSpec(
     }
   }
   if (args.milestoneId !== undefined) {
-    await MilestoneStore.setSpecMilestone(
-      deps.pool,
-      { specId: spec.specId, milestoneId: args.milestoneId },
-      actor
-    );
+    await MilestoneStore.setSpecMilestone(deps.pool, { specId: spec.specId, milestoneId: args.milestoneId }, actor);
   }
   return { ...spec, behaviors: behaviorLinks, milestoneId: args.milestoneId };
 }
@@ -82,13 +83,9 @@ export async function tanrenCreateSpec(
 export async function tanrenTriggerRun(
   deps: WriteToolDeps,
   args: { specId: string; trigger?: string; branch?: string },
-  actor: ActorContext
+  actor: ActorContext,
 ): Promise<SpecRunContract> {
-  return createQueuedRunFromSpec(
-    deps.pool,
-    { specId: args.specId, trigger: args.trigger, branch: args.branch },
-    actor
-  );
+  return createQueuedRunFromSpec(deps.pool, { specId: args.specId, trigger: args.trigger, branch: args.branch }, actor);
 }
 
 // ---------------------------------------------------------------------------
@@ -102,23 +99,19 @@ export async function tanrenTriggerRun(
 export async function tanrenRerunTask(
   deps: WriteToolDeps,
   args: { taskId: string },
-  actor: ActorContext
+  actor: ActorContext,
 ): Promise<{ taskId: string; rerunRun: SpecRunContract }> {
   const result = await deps.pool.query<{ spec_id: string }>(
     `SELECT r.spec_id FROM tasks t
      INNER JOIN runs r ON r.run_id = t.run_id
      WHERE t.task_id = $1`,
-    [args.taskId]
+    [args.taskId],
   );
   const specId = result.rows[0]?.spec_id;
   if (specId === undefined) {
     throw new WriteToolAccessDeniedError(`task not found: ${args.taskId}`);
   }
-  const rerunRun = await createQueuedRunFromSpec(
-    deps.pool,
-    { specId, trigger: "api" },
-    actor
-  );
+  const rerunRun = await createQueuedRunFromSpec(deps.pool, { specId, trigger: "api" }, actor);
   return { taskId: args.taskId, rerunRun };
 }
 
@@ -138,8 +131,13 @@ const ACKED_INSIGHTS = new Map<string, { acknowledgedBy: string; acknowledgedAt:
 export async function tanrenAcknowledgeInsight(
   deps: WriteToolDeps,
   args: { insightId: string },
-  actor: ActorContext
-): Promise<{ insightId: string; acknowledgedBy: string; acknowledgedAt: Date; persisted: boolean }> {
+  actor: ActorContext,
+): Promise<{
+  insightId: string;
+  acknowledgedBy: string;
+  acknowledgedAt: Date;
+  persisted: boolean;
+}> {
   const now = new Date();
   const persisted = await acknowledgeInsight(deps.pool, args.insightId, actor.userId, now);
   const entry = { acknowledgedBy: actor.userId, acknowledgedAt: now };
@@ -148,8 +146,8 @@ export async function tanrenAcknowledgeInsight(
 }
 
 // Test-only escape hatch so callers can inspect the in-memory mirror.
-export function peekAcknowledgedInsightForTests(insightId: string):
-  | { acknowledgedBy: string; acknowledgedAt: Date }
-  | undefined {
+export function peekAcknowledgedInsightForTests(
+  insightId: string,
+): { acknowledgedBy: string; acknowledgedAt: Date } | undefined {
   return ACKED_INSIGHTS.get(insightId);
 }

@@ -7,7 +7,7 @@ import {
   parseYaml,
   resolveCiConfig,
   stepsFor,
-  tiersFor
+  tiersFor,
 } from "../src/engine/ci/index.js";
 
 const VALID = `version: 1

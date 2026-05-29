@@ -96,8 +96,27 @@ export class RunRoutesPool {
   specMilestones = new Map<string, string>();
   projects = new Map<string, { project_id: string; org_id: string | null }>();
   projectMembers = new Set<string>();
-  forgeThreads: Array<{ id: string; org_id: string; project_id: string | null; run_id: string | null; scope: string; title: string | null; created_at: Date; updated_at: Date; closed_at: Date | null }> = [];
-  forgeTurns: Array<{ id: string; thread_id: string; turn_index: number; source: unknown; audience: string; author_kind: string; render: unknown; created_at: Date }> = [];
+  forgeThreads: Array<{
+    id: string;
+    org_id: string;
+    project_id: string | null;
+    run_id: string | null;
+    scope: string;
+    title: string | null;
+    created_at: Date;
+    updated_at: Date;
+    closed_at: Date | null;
+  }> = [];
+  forgeTurns: Array<{
+    id: string;
+    thread_id: string;
+    turn_index: number;
+    source: unknown;
+    audience: string;
+    author_kind: string;
+    render: unknown;
+    created_at: Date;
+  }> = [];
 
   seedProject(input: { project_id: string; org_id: string | null }): void {
     this.projects.set(input.project_id, input);
@@ -118,7 +137,7 @@ export class RunRoutesPool {
       outcome: input.outcome ?? null,
       pr_url: input.pr_url ?? null,
       started_at: input.started_at ?? new Date("2026-05-01T00:00:00.000Z"),
-      ended_at: input.ended_at ?? null
+      ended_at: input.ended_at ?? null,
     };
     this.runs.push(row);
     return row;
@@ -138,7 +157,7 @@ export class RunRoutesPool {
       cli: input.cli ?? "codex",
       model: input.model ?? null,
       started_at: input.started_at ?? null,
-      ended_at: input.ended_at ?? null
+      ended_at: input.ended_at ?? null,
     };
     this.tasks.push(row);
     return row;
@@ -153,7 +172,7 @@ export class RunRoutesPool {
       spec_id: input.spec_id ?? null,
       project_id: input.project_id ?? null,
       event_type: input.event_type,
-      payload: input.payload ?? {}
+      payload: input.payload ?? {},
     };
     this.events.push(row);
     return row;
@@ -177,7 +196,7 @@ export class RunRoutesPool {
       cost_usd: input.cost_usd ?? "0.001",
       billing_mode: input.billing_mode ?? "per_token",
       cost_basis: input.cost_basis ?? "provider_pricing",
-      recorded_at: input.recorded_at ?? new Date(2026, 4, 1, 0, 0, input.id)
+      recorded_at: input.recorded_at ?? new Date(2026, 4, 1, 0, 0, input.id),
     };
     this.costs.push(row);
     return row;
@@ -188,7 +207,7 @@ export class RunRoutesPool {
       spec_id: input.spec_id,
       project_id: input.project_id,
       title: input.title ?? "Spec",
-      description: input.description ?? "spec description"
+      description: input.description ?? "spec description",
     };
     this.specs.push(row);
     return row;
@@ -200,9 +219,7 @@ export class RunRoutesPool {
     // assertProjectAccess and friends
     if (trimmed.startsWith("SELECT org_id FROM projects WHERE project_id = $1")) {
       const project = this.projects.get(String(params[0]));
-      return project === undefined
-        ? { rows: [], rowCount: 0 }
-        : { rows: [{ org_id: project.org_id }], rowCount: 1 };
+      return project === undefined ? { rows: [], rowCount: 0 } : { rows: [{ org_id: project.org_id }], rowCount: 1 };
     }
     if (trimmed.startsWith("SELECT role FROM project_members")) {
       const ok = this.projectMembers.has(`${String(params[0])}:${String(params[1])}`);
@@ -237,7 +254,7 @@ export class RunRoutesPool {
             this.events
               .filter((e) => e.run_id === r.run_id)
               .map((e) => e.ts)
-              .sort((a, b) => b.getTime() - a.getTime())[0] ?? null
+              .sort((a, b) => b.getTime() - a.getTime())[0] ?? null,
         }));
       return { rows: filtered, rowCount: filtered.length };
     }
@@ -269,22 +286,31 @@ export class RunRoutesPool {
     }
     if (trimmed.startsWith("SELECT milestone_id FROM spec_milestones")) {
       const milestoneId = this.specMilestones.get(String(params[0]));
-      return milestoneId === undefined ? { rows: [], rowCount: 0 } : { rows: [{ milestone_id: milestoneId }], rowCount: 1 };
+      return milestoneId === undefined
+        ? { rows: [], rowCount: 0 }
+        : { rows: [{ milestone_id: milestoneId }], rowCount: 1 };
     }
 
     // Events: snapshot
-    if (/FROM \(\s*SELECT id, ts, run_id, task_id, spec_id, project_id, event_type, payload\s+FROM events\s+WHERE run_id = \$1/.test(trimmed)) {
+    if (
+      /FROM \(\s*SELECT id, ts, run_id, task_id, spec_id, project_id, event_type, payload\s+FROM events\s+WHERE run_id = \$1/.test(
+        trimmed,
+      )
+    ) {
       const limit = Number(params[1]);
       const rows = this.events
         .filter((e) => e.run_id === String(params[0]))
-        .sort((a, b) => (b.ts.getTime() - a.ts.getTime()) || (b.id - a.id))
+        .sort((a, b) => b.ts.getTime() - a.ts.getTime() || b.id - a.id)
         .slice(0, limit)
-        .sort((a, b) => (a.ts.getTime() - b.ts.getTime()) || (a.id - b.id));
+        .sort((a, b) => a.ts.getTime() - b.ts.getTime() || a.id - b.id);
       return { rows, rowCount: rows.length };
     }
 
     // Events: paginated
-    if (/FROM events\s+WHERE run_id = \$1(\s+AND \(ts, id\) >|\s+ORDER)/.test(trimmed) && trimmed.includes("ORDER BY ts ASC")) {
+    if (
+      /FROM events\s+WHERE run_id = \$1(\s+AND \(ts, id\) >|\s+ORDER)/.test(trimmed) &&
+      trimmed.includes("ORDER BY ts ASC")
+    ) {
       const limit = Number(params[params.length - 1]);
       let cursorTs: Date | undefined;
       let cursorId: number | undefined;
@@ -300,7 +326,7 @@ export class RunRoutesPool {
           if (e.ts.getTime() === cursorTs.getTime()) return e.id > cursorId;
           return false;
         })
-        .sort((a, b) => (a.ts.getTime() - b.ts.getTime()) || (a.id - b.id))
+        .sort((a, b) => a.ts.getTime() - b.ts.getTime() || a.id - b.id)
         .slice(0, limit);
       return { rows, rowCount: rows.length };
     }
@@ -310,7 +336,7 @@ export class RunRoutesPool {
       const lastId = Number(params[1]);
       const rows = this.events
         .filter((e) => e.run_id === String(params[0]) && e.id > lastId)
-        .sort((a, b) => (a.ts.getTime() - b.ts.getTime()) || (a.id - b.id))
+        .sort((a, b) => a.ts.getTime() - b.ts.getTime() || a.id - b.id)
         .slice(0, 200);
       return { rows, rowCount: rows.length };
     }
@@ -332,7 +358,7 @@ export class RunRoutesPool {
           if (e.ts.getTime() === cursorTs.getTime()) return e.id < cursorId;
           return false;
         })
-        .sort((a, b) => (b.ts.getTime() - a.ts.getTime()) || (b.id - a.id))
+        .sort((a, b) => b.ts.getTime() - a.ts.getTime() || b.id - a.id)
         .slice(0, limit);
       return { rows, rowCount: rows.length };
     }
@@ -341,12 +367,15 @@ export class RunRoutesPool {
     if (/FROM cost_records\s+WHERE run_id = \$1\s+ORDER BY recorded_at ASC/.test(trimmed)) {
       const rows = this.costs
         .filter((c) => c.run_id === String(params[0]))
-        .sort((a, b) => (a.recorded_at.getTime() - b.recorded_at.getTime()) || (a.id - b.id));
+        .sort((a, b) => a.recorded_at.getTime() - b.recorded_at.getTime() || a.id - b.id);
       return { rows, rowCount: rows.length };
     }
 
     // Costs: paginated
-    if (/FROM cost_records\s+WHERE run_id = \$1.*ORDER BY recorded_at ASC/.test(trimmed) || /FROM cost_records\s+WHERE run_id = \$1 AND \(recorded_at, id\)/.test(trimmed)) {
+    if (
+      /FROM cost_records\s+WHERE run_id = \$1.*ORDER BY recorded_at ASC/.test(trimmed) ||
+      /FROM cost_records\s+WHERE run_id = \$1 AND \(recorded_at, id\)/.test(trimmed)
+    ) {
       const limit = Number(params[params.length - 1]);
       let cursorTs: Date | undefined;
       let cursorId: number | undefined;
@@ -362,7 +391,7 @@ export class RunRoutesPool {
           if (c.recorded_at.getTime() === cursorTs.getTime()) return c.id > cursorId;
           return false;
         })
-        .sort((a, b) => (a.recorded_at.getTime() - b.recorded_at.getTime()) || (a.id - b.id))
+        .sort((a, b) => a.recorded_at.getTime() - b.recorded_at.getTime() || a.id - b.id)
         .slice(0, limit);
       return { rows, rowCount: rows.length };
     }
@@ -372,7 +401,7 @@ export class RunRoutesPool {
       const lastId = Number(params[1]);
       const rows = this.costs
         .filter((c) => c.run_id === String(params[0]) && c.id > lastId)
-        .sort((a, b) => (a.recorded_at.getTime() - b.recorded_at.getTime()) || (a.id - b.id))
+        .sort((a, b) => a.recorded_at.getTime() - b.recorded_at.getTime() || a.id - b.id)
         .slice(0, 200);
       return { rows, rowCount: rows.length };
     }
@@ -380,7 +409,7 @@ export class RunRoutesPool {
     // Forge threads list by run
     if (/FROM forge_threads\s+WHERE org_id = \$1 AND project_id = \$2 AND run_id = \$3/.test(trimmed)) {
       const rows = this.forgeThreads.filter(
-        (t) => t.org_id === String(params[0]) && t.project_id === String(params[1]) && t.run_id === String(params[2])
+        (t) => t.org_id === String(params[0]) && t.project_id === String(params[1]) && t.run_id === String(params[2]),
       );
       return { rows, rowCount: rows.length };
     }

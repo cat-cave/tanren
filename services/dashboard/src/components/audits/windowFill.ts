@@ -25,7 +25,7 @@ export function windowFillColumns(matrix: HeatmapMatrix): WindowFillColumn[] {
   return matrix.rows.map((row) => ({
     label: row.sub,
     pct: Math.round(row.avgFill * 100),
-    tier: tierOf(row.avgFill)
+    tier: tierOf(row.avgFill),
   }));
 }
 

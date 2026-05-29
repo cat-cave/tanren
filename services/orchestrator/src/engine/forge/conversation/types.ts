@@ -47,7 +47,7 @@ export const FORGE_READ_TOOLS = [
   "tanren.read_insights",
   "repo.read_file",
   "repo.grep",
-  "repo.read_issue"
+  "repo.read_issue",
 ] as const;
 
 export function isReadToolName(tool: string): boolean {

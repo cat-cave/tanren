@@ -15,12 +15,12 @@ export class OnboardingNewClient extends OrchestratorHttpClient {
   /** Run one interview round; returns the next question + updated capture. */
   async round(
     orgId: string,
-    input: { round: number; answer: string; capture: InterviewCapture }
+    input: { round: number; answer: string; capture: InterviewCapture },
   ): Promise<{ ok: boolean; status: number; result: InterviewRoundResult | undefined }> {
     const r = await this.sendJson<InterviewRoundResult>(
       "POST",
       `/orgs/${encodeURIComponent(orgId)}/onboarding/interview/round`,
-      input
+      input,
     );
     return { ok: r.ok, status: r.status, result: r.body };
   }
@@ -28,12 +28,12 @@ export class OnboardingNewClient extends OrchestratorHttpClient {
   /** Derive the product graph (project + personas/behaviors/milestones/specs). */
   async derive(
     orgId: string,
-    input: { capture: InterviewCapture; repoUrl?: string }
+    input: { capture: InterviewCapture; repoUrl?: string },
   ): Promise<{ ok: boolean; status: number; result: DeriveResult | undefined }> {
     const r = await this.sendJson<DeriveResult>(
       "POST",
       `/orgs/${encodeURIComponent(orgId)}/onboarding/interview/derive`,
-      input
+      input,
     );
     return { ok: r.ok, status: r.status, result: r.body };
   }

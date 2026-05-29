@@ -37,7 +37,7 @@ export class AuditsClient extends OrchestratorHttpClient {
     const verb = enabled ? "enable" : "disable";
     const r = await this.sendJson<{ job?: AuditJob }>(
       "POST",
-      `${this.base(orgId)}/${encodeURIComponent(jobId)}/${verb}`
+      `${this.base(orgId)}/${encodeURIComponent(jobId)}/${verb}`,
     );
     return { ok: r.ok, ...(r.body?.job !== undefined ? { job: r.body.job } : {}) };
   }

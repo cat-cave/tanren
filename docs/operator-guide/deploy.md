@@ -25,31 +25,31 @@ The dev profile reads `TANREN_GITHUB_OAUTH_CLIENT_ID` and `TANREN_GITHUB_OAUTH_C
 
 Before `just up-prod` will succeed, the operator must export:
 
-| Env var | What it sets |
-| --- | --- |
-| `VAULT_ROOT_TOKEN` | Vault root token. The operator MUST rotate this away from the bootstrap value once the stack is healthy; see the rotation note below. |
-| `POSTGRES_PASSWORD` | Password for the `tanren` Postgres user. |
-| `TANREN_GITHUB_OAUTH_CLIENT_ID` | GitHub OAuth app client id used by `services/orchestrator/src/auth/githubProvider.ts`. |
-| `TANREN_GITHUB_OAUTH_CLIENT_SECRET` | GitHub OAuth app client secret. Also written to Vault by `just vault-init-prod`. |
-| `TANREN_PUBLIC_BASE_URL` | The absolute URL the orchestrator is reachable at; used to compute the OAuth redirect URI. |
-| `TANREN_RUNNER_AUTHORIZED_KEY` | SSH `authorized_keys` line installed on the runner. |
-| `TANREN_RUNNER_IDENTITY_PRIVATE_KEY` | Private key the orchestrator uses to SSH into the runner. |
+| Env var                              | What it sets                                                                                                                          |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `VAULT_ROOT_TOKEN`                   | Vault root token. The operator MUST rotate this away from the bootstrap value once the stack is healthy; see the rotation note below. |
+| `POSTGRES_PASSWORD`                  | Password for the `tanren` Postgres user.                                                                                              |
+| `TANREN_GITHUB_OAUTH_CLIENT_ID`      | GitHub OAuth app client id used by `services/orchestrator/src/auth/githubProvider.ts`.                                                |
+| `TANREN_GITHUB_OAUTH_CLIENT_SECRET`  | GitHub OAuth app client secret. Also written to Vault by `just vault-init-prod`.                                                      |
+| `TANREN_PUBLIC_BASE_URL`             | The absolute URL the orchestrator is reachable at; used to compute the OAuth redirect URI.                                            |
+| `TANREN_RUNNER_AUTHORIZED_KEY`       | SSH `authorized_keys` line installed on the runner.                                                                                   |
+| `TANREN_RUNNER_IDENTITY_PRIVATE_KEY` | Private key the orchestrator uses to SSH into the runner.                                                                             |
 
 Optional:
 
-| Env var | Default | What it sets |
-| --- | --- | --- |
-| `DASHBOARD_HOST_PORT` | `3000` | Host port the dashboard publishes on. The only host-published port in the prod profile. |
-| `CLOUDFLARED_TUNNEL_TOKEN` | _(unset)_ | Cloudflare Tunnel token. Required **only** when running the `tunnel` profile (see below). |
-| `TANREN_OIDC_ISSUER` | _(unset)_ | OIDC issuer URL. Registers the `oidc` provider when set together with the client id/secret (see OIDC below). |
-| `TANREN_OIDC_CLIENT_ID` | _(unset)_ | OIDC confidential-client id. |
-| `TANREN_OIDC_CLIENT_SECRET` | _(unset)_ | OIDC confidential-client secret. |
-| `TANREN_OIDC_PRESET` | _(unset)_ | Optional turnkey claim-mapping preset. `authentik` fills Authentik's standard claim shape + scopes by default so a homelab operator only supplies issuer + client id/secret. See [oidc-authentik.md](oidc-authentik.md). |
-| `TANREN_OIDC_SCOPES` | `openid profile email groups` | Space-separated OAuth scopes requested at authorize time. |
-| `TANREN_OIDC_SUBJECT_CLAIM` | `sub` | userinfo claim used as the stable subject. |
-| `TANREN_OIDC_LOGIN_CLAIM` | `preferred_username` | userinfo claim used as the login/username. |
-| `TANREN_OIDC_NAME_CLAIM` | `name` | userinfo claim used as the display name. |
-| `TANREN_OIDC_GROUPS_CLAIM` | `groups` | userinfo claim carrying org/group membership (array of strings). |
+| Env var                     | Default                       | What it sets                                                                                                                                                                                                             |
+| --------------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `DASHBOARD_HOST_PORT`       | `3000`                        | Host port the dashboard publishes on. The only host-published port in the prod profile.                                                                                                                                  |
+| `CLOUDFLARED_TUNNEL_TOKEN`  | _(unset)_                     | Cloudflare Tunnel token. Required **only** when running the `tunnel` profile (see below).                                                                                                                                |
+| `TANREN_OIDC_ISSUER`        | _(unset)_                     | OIDC issuer URL. Registers the `oidc` provider when set together with the client id/secret (see OIDC below).                                                                                                             |
+| `TANREN_OIDC_CLIENT_ID`     | _(unset)_                     | OIDC confidential-client id.                                                                                                                                                                                             |
+| `TANREN_OIDC_CLIENT_SECRET` | _(unset)_                     | OIDC confidential-client secret.                                                                                                                                                                                         |
+| `TANREN_OIDC_PRESET`        | _(unset)_                     | Optional turnkey claim-mapping preset. `authentik` fills Authentik's standard claim shape + scopes by default so a homelab operator only supplies issuer + client id/secret. See [oidc-authentik.md](oidc-authentik.md). |
+| `TANREN_OIDC_SCOPES`        | `openid profile email groups` | Space-separated OAuth scopes requested at authorize time.                                                                                                                                                                |
+| `TANREN_OIDC_SUBJECT_CLAIM` | `sub`                         | userinfo claim used as the stable subject.                                                                                                                                                                               |
+| `TANREN_OIDC_LOGIN_CLAIM`   | `preferred_username`          | userinfo claim used as the login/username.                                                                                                                                                                               |
+| `TANREN_OIDC_NAME_CLAIM`    | `name`                        | userinfo claim used as the display name.                                                                                                                                                                                 |
+| `TANREN_OIDC_GROUPS_CLAIM`  | `groups`                      | userinfo claim carrying org/group membership (array of strings).                                                                                                                                                         |
 
 Missing any **required** env causes `docker compose -f compose.prod.yml config` to fail with `variable is not set` referencing the specific variable. The optional OIDC and tunnel variables default to empty and never block boot.
 

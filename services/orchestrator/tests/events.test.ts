@@ -10,7 +10,7 @@ describe("typed event store", () => {
       specId: "spec_1",
       projectId: "project_1",
       eventType: "hello.started",
-      payload: {}
+      payload: {},
     });
     await store.append({
       runId: "run_1",
@@ -24,8 +24,8 @@ describe("typed event store", () => {
         passed: true,
         reasoning: "criteria satisfied",
         behaviorIdsPassed: ["B1"],
-        behaviorIdsFailed: []
-      }
+        behaviorIdsFailed: [],
+      },
     });
     expect(store.events).toHaveLength(2);
     expect(store.events[1]?.payload).toMatchObject({ passed: true, behaviorIdsPassed: ["B1"] });
@@ -40,8 +40,8 @@ describe("typed event store", () => {
         projectId: "project_1",
         eventType: "checker.verdict",
         // Missing fields — Zod must reject.
-        payload: { passed: true } as never
-      })
+        payload: { passed: true } as never,
+      }),
     ).rejects.toThrow(/invalid|required|expected/i);
   });
 
@@ -54,8 +54,8 @@ describe("typed event store", () => {
         projectId: "project_1",
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         eventType: "made_up.event" as never,
-        payload: {} as never
-      })
+        payload: {} as never,
+      }),
     ).rejects.toThrow("undeclared event name");
   });
 
@@ -74,8 +74,8 @@ describe("typed event store", () => {
         specId: "spec_1",
         projectId: "project_1",
         eventType: "run.started",
-        payload: { status: "running", extra: "no" } as never
-      })
+        payload: { status: "running", extra: "no" } as never,
+      }),
     ).rejects.toThrow(/unrecognized|extra|strict/i);
   });
 });

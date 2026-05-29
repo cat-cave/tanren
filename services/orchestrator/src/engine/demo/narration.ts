@@ -20,10 +20,7 @@
 // therefore never hard-fails for lack of a credential — it just narrates with
 // less polish.
 
-import {
-  answererOutputSchemaFor,
-  DemoAnswer
-} from "../answerers/schemas/index.js";
+import { answererOutputSchemaFor, DemoAnswer } from "../answerers/schemas/index.js";
 import type { AnswererAdapter } from "../providers/types.js";
 
 // Behavior the run demonstrated. Mirrors the P2A-0018 behavior shape the
@@ -78,7 +75,7 @@ export function buildDemoPrompt(input: DemoNarrationInput): string {
     "",
     `Spec title: ${input.specTitle}`,
     `Spec description: ${input.specDescription}`,
-    ""
+    "",
   ];
   const behaviors =
     input.behaviors.length === 0
@@ -88,9 +85,9 @@ export function buildDemoPrompt(input: DemoNarrationInput): string {
           ...input.behaviors.map((behavior) =>
             behavior.scenario === ""
               ? `- ${behavior.id}: ${behavior.title}`
-              : `- ${behavior.id}: ${behavior.title} — ${behavior.scenario}`
+              : `- ${behavior.id}: ${behavior.title} — ${behavior.scenario}`,
           ),
-          ""
+          "",
         ];
   const risks =
     input.unresolvedRisks.length === 0
@@ -98,7 +95,7 @@ export function buildDemoPrompt(input: DemoNarrationInput): string {
       : [
           "Unresolved risks (surface every one in showStopperRisks):",
           ...input.unresolvedRisks.map((risk) => `- ${risk}`),
-          ""
+          "",
         ];
   const link =
     input.prUrl !== undefined && input.prUrl !== ""
@@ -110,7 +107,7 @@ export function buildDemoPrompt(input: DemoNarrationInput): string {
     "- body: a short paragraph describing what the run demonstrated",
     "- highlightBehaviorIds: the behavior ids worth showing off (subset of the ids above)",
     "- showStopperRisks: every unresolved risk above, verbatim or paraphrased",
-    "- links: relevant links (the PR above, when present)"
+    "- links: relevant links (the PR above, when present)",
   ];
   return [...header, ...behaviors, ...risks, ...link, ...footer].join("\n");
 }
@@ -130,22 +127,19 @@ export function templateDemoNarration(input: DemoNarrationInput): DemoAnswer {
     bodyParts.push(
       `This run demonstrated ${behaviorCount} behavior${behaviorCount === 1 ? "" : "s"}: ${input.behaviors
         .map((behavior) => behavior.title)
-        .join(", ")}.`
+        .join(", ")}.`,
     );
   }
   if (input.unresolvedRisks.length > 0) {
     bodyParts.push(`${input.unresolvedRisks.length} risk(s) remain open.`);
   }
-  const links =
-    input.prUrl !== undefined && input.prUrl !== ""
-      ? [{ label: "Open PR", url: input.prUrl }]
-      : [];
+  const links = input.prUrl !== undefined && input.prUrl !== "" ? [{ label: "Open PR", url: input.prUrl }] : [];
   return DemoAnswer.parse({
     headline,
     body: bodyParts.filter((part) => part !== "").join(" "),
     highlightBehaviorIds: input.behaviors.map((behavior) => behavior.id),
     showStopperRisks: [...input.unresolvedRisks],
-    links
+    links,
   });
 }
 
@@ -158,23 +152,31 @@ export function templateDemoNarration(input: DemoNarrationInput): DemoAnswer {
 // configured), it goes straight to the template.
 export async function generateDemoNarration(
   answerer: AnswererAdapter<DemoAnswer> | null,
-  input: DemoNarrationInput
+  input: DemoNarrationInput,
 ): Promise<DemoNarrationResult> {
   const outputSchema = answererOutputSchemaFor("demo", DemoAnswer);
   if (answerer === null) {
-    return { answer: templateDemoNarration(input), provenance: "template", schemaId: outputSchema.name };
+    return {
+      answer: templateDemoNarration(input),
+      provenance: "template",
+      schemaId: outputSchema.name,
+    };
   }
   try {
     const answer = await answerer.runAnswerer({
       prompt: buildDemoPrompt(input),
       timeoutMs: input.timeoutMs,
       workspace: input.workspace,
-      outputSchema
+      outputSchema,
     });
     return { answer, provenance: "answerer", schemaId: outputSchema.name };
   } catch {
     // Graceful degradation: any live-Answerer failure falls back to the
     // template so the demo still produces a valid DemoAnswer.
-    return { answer: templateDemoNarration(input), provenance: "template", schemaId: outputSchema.name };
+    return {
+      answer: templateDemoNarration(input),
+      provenance: "template",
+      schemaId: outputSchema.name,
+    };
   }
 }

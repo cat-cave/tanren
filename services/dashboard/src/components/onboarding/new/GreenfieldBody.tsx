@@ -17,7 +17,7 @@ import { InterviewStep } from "./InterviewStep.js";
 const STEPS: Array<{ l: string; e: string }> = [
   { l: "say what", e: "we're building" },
   { l: "seed the", e: "spec dag" },
-  { l: "light the", e: "fire" }
+  { l: "light the", e: "fire" },
 ];
 
 export interface GreenfieldBodyProps {

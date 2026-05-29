@@ -7,7 +7,7 @@ import {
   loadInsightsForProject,
   readFreshOrCompute,
   writeInsights,
-  type Insight
+  type Insight,
 } from "../src/engine/insights/index.js";
 import { InsightsMemoryClient } from "./helpers/insightsMemoryClient.js";
 
@@ -33,13 +33,18 @@ function syntheticInsight(overrides: Partial<Insight> = {}): Insight {
       writerModel: "gpt-5",
       retryCount: 2,
       windowDays: 7,
-      rejectionSummaries: ["reason"]
+      rejectionSummaries: ["reason"],
     },
-    actions: [{ label: "Ack", toolCall: { tool: "tanren.acknowledge_insight", args: { insightId: "insight_test_1" } } }],
+    actions: [
+      {
+        label: "Ack",
+        toolCall: { tool: "tanren.acknowledge_insight", args: { insightId: "insight_test_1" } },
+      },
+    ],
     computedAt: NOW,
     acknowledgedAt: null,
     acknowledgedBy: null,
-    ...overrides
+    ...overrides,
   } as Insight;
 }
 
@@ -51,7 +56,7 @@ describe("readFreshOrCompute", () => {
       projectId: "project_a",
       kind: "retry_hotspot",
       now: NOW,
-      compute
+      compute,
     });
     expect(compute).toHaveBeenCalledTimes(1);
     expect(result.source).toBe("compute");
@@ -67,7 +72,7 @@ describe("readFreshOrCompute", () => {
       projectId: "project_a",
       kind: "retry_hotspot",
       now: new Date(NOW.getTime() + 30 * 60 * 1000),
-      compute
+      compute,
     });
     expect(compute).not.toHaveBeenCalled();
     expect(result.source).toBe("cache");
@@ -82,7 +87,7 @@ describe("readFreshOrCompute", () => {
       projectId: "project_a",
       kind: "retry_hotspot",
       now: new Date(NOW.getTime() + 2 * 60 * 60 * 1000),
-      compute
+      compute,
     });
     expect(compute).toHaveBeenCalledTimes(1);
     expect(result.source).toBe("compute");
@@ -99,7 +104,7 @@ describe("readFreshOrCompute", () => {
       projectId: "project_a",
       kind: "retry_hotspot",
       now: new Date(NOW.getTime() + 30 * 60 * 1000),
-      compute
+      compute,
     });
     expect(result.source).toBe("compute");
   });
@@ -115,7 +120,7 @@ describe("loadInsightsForProject", () => {
       spec_id: "spec_a",
       project_id: "project_a",
       outcome: "merged",
-      ended_at: NOW
+      ended_at: NOW,
     });
     client.tasks.push({
       task_id: "task_1",
@@ -128,9 +133,12 @@ describe("loadInsightsForProject", () => {
       started_at: NOW,
       ended_at: NOW,
       attempt: 1,
-      parent_task_id: null
+      parent_task_id: null,
     });
-    const insights = await loadInsightsForProject(pool(client), { projectId: "project_a", now: NOW });
+    const insights = await loadInsightsForProject(pool(client), {
+      projectId: "project_a",
+      now: NOW,
+    });
     expect(insights).toEqual([]);
   });
 });

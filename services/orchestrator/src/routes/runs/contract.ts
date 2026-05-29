@@ -26,7 +26,7 @@ export const RunSummary = z
     outcome: RunOutcome.nullable(),
     startedAt: z.coerce.date(),
     endedAt: z.coerce.date().nullable(),
-    prUrl: z.string().nullable()
+    prUrl: z.string().nullable(),
   })
   .strict();
 export type RunSummary = z.infer<typeof RunSummary>;
@@ -45,7 +45,7 @@ export const TaskTimelineEntry = z
     cli: z.string().min(1),
     model: z.string().nullable(),
     startedAt: z.coerce.date().nullable(),
-    endedAt: z.coerce.date().nullable()
+    endedAt: z.coerce.date().nullable(),
   })
   .strict();
 export type TaskTimelineEntry = z.infer<typeof TaskTimelineEntry>;
@@ -69,7 +69,7 @@ export const RunEventRow = z
     projectId: z.string().nullable(),
     eventType: z.string().min(1),
     payload: z.unknown(),
-    redactedPaths: z.array(z.string()).default([])
+    redactedPaths: z.array(z.string()).default([]),
   })
   .strict();
 export type RunEventRow = z.infer<typeof RunEventRow>;
@@ -96,7 +96,7 @@ export const RunCostRecord = z
     costUsd: z.string().min(1).nullable(),
     billingMode: z.enum(["per_token", "subscription", "self_hosted"]),
     costBasis: z.enum(["ccusage", "provider_pricing", "unknown"]),
-    recordedAt: z.coerce.date()
+    recordedAt: z.coerce.date(),
   })
   .strict();
 export type RunCostRecord = z.infer<typeof RunCostRecord>;
@@ -111,7 +111,7 @@ export const RunSpecSummary = z
     title: z.string(),
     description: z.string(),
     behaviorIds: z.array(z.string().min(1)),
-    milestoneId: z.string().nullable()
+    milestoneId: z.string().nullable(),
   })
   .strict();
 export type RunSpecSummary = z.infer<typeof RunSpecSummary>;
@@ -123,7 +123,7 @@ export type RunSpecSummary = z.infer<typeof RunSpecSummary>;
 export const RunForgeBundle = z
   .object({
     threadId: z.string().min(1),
-    recentTurns: z.array(z.unknown())
+    recentTurns: z.array(z.unknown()),
   })
   .strict();
 export type RunForgeBundle = z.infer<typeof RunForgeBundle>;
@@ -144,7 +144,7 @@ export const RunDetail = z
     // here so this contract stays decoupled from the InsightPayload union
     // (which may add kinds in addendums).
     insights: z.array(z.unknown()),
-    forgeThread: RunForgeBundle.nullable()
+    forgeThread: RunForgeBundle.nullable(),
   })
   .strict();
 export type RunDetail = z.infer<typeof RunDetail>;
@@ -165,7 +165,7 @@ export const RunListItem = RunSummary.extend({
   // True when the run is in a review state with an open PR — derived from
   // runs.outcome plus presence of pr_url. Drives the attention queue in the
   // project view without leaking UI-specific shaping into the API.
-  needsReview: z.boolean()
+  needsReview: z.boolean(),
 }).strict();
 export type RunListItem = z.infer<typeof RunListItem>;
 
@@ -179,7 +179,7 @@ export function CursorPage<T extends z.ZodTypeAny>(item: T) {
   return z
     .object({
       items: z.array(item),
-      nextCursor: z.string().nullable()
+      nextCursor: z.string().nullable(),
     })
     .strict();
 }
@@ -241,21 +241,14 @@ export function parsePageSize(raw: string | undefined): number {
 // SSE frame contract
 // ---------------------------------------------------------------------------
 
-export const SseEventName = z.enum([
-  "snapshot",
-  "status",
-  "task",
-  "events",
-  "costs",
-  "heartbeat"
-]);
+export const SseEventName = z.enum(["snapshot", "status", "task", "events", "costs", "heartbeat"]);
 export type SseEventName = z.infer<typeof SseEventName>;
 
 export const SseStatusFrame = z
   .object({
     runId: z.string(),
     status: RunStatus,
-    outcome: RunOutcome.nullable()
+    outcome: RunOutcome.nullable(),
   })
   .strict();
 export type SseStatusFrame = z.infer<typeof SseStatusFrame>;
@@ -265,21 +258,21 @@ export type SseTaskFrame = TaskTimelineEntry;
 
 export const SseEventsFrame = z
   .object({
-    events: z.array(RunEventRow)
+    events: z.array(RunEventRow),
   })
   .strict();
 export type SseEventsFrame = z.infer<typeof SseEventsFrame>;
 
 export const SseCostsFrame = z
   .object({
-    costs: z.array(RunCostRecord)
+    costs: z.array(RunCostRecord),
   })
   .strict();
 export type SseCostsFrame = z.infer<typeof SseCostsFrame>;
 
 export const SseHeartbeatFrame = z
   .object({
-    ts: z.coerce.date()
+    ts: z.coerce.date(),
   })
   .strict();
 export type SseHeartbeatFrame = z.infer<typeof SseHeartbeatFrame>;
@@ -295,6 +288,6 @@ export type SseHeartbeatFrame = z.infer<typeof SseHeartbeatFrame>;
 export const ProjectFeedItem = RunEventRow.extend({
   // RunEventRow.runId is nullable for org-scoped events; in the feed we
   // require a runId because the feed filters to events belonging to runs.
-  runId: z.string().min(1)
+  runId: z.string().min(1),
 }).strict();
 export type ProjectFeedItem = z.infer<typeof ProjectFeedItem>;

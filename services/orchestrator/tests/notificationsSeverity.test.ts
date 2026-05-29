@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { listEventNames } from "../src/engine/events/index.js";
-import {
-  defaultSeverityFor,
-  eventDefaultSeverity
-} from "../src/engine/notifications/index.js";
+import { defaultSeverityFor, eventDefaultSeverity } from "../src/engine/notifications/index.js";
 
 // P2A-0017: every EventName in the P2A-0007 registry must have a default
 // severity in the matrix UI. Missing entries would silently fall back to

@@ -17,7 +17,7 @@ import type {
   DiscoveryResult,
   ImpactDelta,
   PlacementOption,
-  ProposedSpec
+  ProposedSpec,
 } from "./types.js";
 
 // The three canonical placement options, ordered by impact on existing work.
@@ -34,7 +34,7 @@ function placementsFor(variant: DiscoveryResult["variant"]): PlacementOption[] {
       sideEffects: "no other timelines move",
       priority: variant === "strategic" ? "new cluster · post-Q2" : "P2 · end of milestone",
       recommended: recommend === "slot_after",
-      risk: false
+      risk: false,
     },
     {
       kind: "jump_backlog",
@@ -43,7 +43,7 @@ function placementsFor(variant: DiscoveryResult["variant"]): PlacementOption[] {
       sideEffects: "next milestone slips ~2 days",
       priority: "P1 · next after P0s",
       recommended: recommend === "jump_backlog",
-      risk: false
+      risk: false,
     },
     {
       kind: "interrupt",
@@ -52,8 +52,8 @@ function placementsFor(variant: DiscoveryResult["variant"]): PlacementOption[] {
       sideEffects: variant === "bug" ? "pauses current backlog — fixes prod" : "pauses current p0 — not recommended",
       priority: "P0",
       recommended: recommend === "interrupt",
-      risk: variant !== "bug"
-    }
+      risk: variant !== "bug",
+    },
   ];
 }
 
@@ -66,12 +66,12 @@ function featureProposals(): ProposedSpec[] {
         "Add a CSV export to the stats page so the persona can pull the data for an external report. Deliverable: an export button plus a GET endpoint that streams the current stats as CSV, with one BDD test.",
       acceptanceCriteria: [
         "given a user on the stats page, when they click export, then a CSV of the current stats downloads",
-        "given the export endpoint, when called, then it returns text/csv with a header row"
+        "given the export endpoint, when called, then it returns text/csv with a header row",
       ],
       dependsOn: [],
       priority: "P1",
-      estLabel: "2h · $0.45"
-    }
+      estLabel: "2h · $0.45",
+    },
   ];
 }
 
@@ -80,11 +80,12 @@ function bugProposals(): ProposedSpec[] {
     {
       proposalId: "p1",
       title: "fix session race · await flush before read",
-      description: "Await the session flush before the read so the post-write read can no longer race (the ~3% intermittent-login root cause).",
+      description:
+        "Await the session flush before the read so the post-write read can no longer race (the ~3% intermittent-login root cause).",
       acceptanceCriteria: ["given a login, when the session is written, then the subsequent read always observes it"],
       dependsOn: [],
       priority: "P0",
-      estLabel: "1h · $0.28"
+      estLabel: "1h · $0.28",
     },
     {
       proposalId: "p2",
@@ -93,17 +94,18 @@ function bugProposals(): ProposedSpec[] {
       acceptanceCriteria: ["given the auth e2e, when run 20x, then it passes every time without the @flaky tag"],
       dependsOn: [],
       priority: "P0",
-      estLabel: "1.5h · $0.34"
+      estLabel: "1.5h · $0.34",
     },
     {
       proposalId: "p3",
       title: "add session-read trace · catch future regressions",
-      description: "Add a trace around session reads so a future pre-flush regression is caught in observability before it ships.",
+      description:
+        "Add a trace around session reads so a future pre-flush regression is caught in observability before it ships.",
       acceptanceCriteria: ["given a session read, when it occurs, then a trace span records write→read ordering"],
       dependsOn: [],
       priority: "P1",
-      estLabel: "45m · $0.18"
-    }
+      estLabel: "45m · $0.18",
+    },
   ];
 }
 
@@ -112,38 +114,89 @@ function strategicProposals(): ProposedSpec[] {
     ["connect · oauth to the new ads api", "OAuth connect flow to the third-party ads API.", "P1 · 3 specs"],
     ["campaign · create / edit / pause crud", "Campaign CRUD: create, edit, and pause campaigns.", "P1 · 4 specs"],
     ["creatives · upload / tag / preview", "Creative upload with tagging and a pre-publish preview.", "P2 · 3 specs"],
-    ["reporting · pivot · csv export · pacing alerts", "Pivot reporting, CSV export, and pacing alerts.", "P2 · 4 specs"]
+    [
+      "reporting · pivot · csv export · pacing alerts",
+      "Pivot reporting, CSV export, and pacing alerts.",
+      "P2 · 4 specs",
+    ],
   ];
   return clusters.map(([title, description, estLabel], i) => ({
     proposalId: `p${i + 1}`,
     title,
     description,
-    acceptanceCriteria: [`given the new persona, when they use ${title.split(" · ")[0]}, then the cluster behavior is demonstrated`],
+    acceptanceCriteria: [
+      `given the new persona, when they use ${title.split(" · ")[0]}, then the cluster behavior is demonstrated`,
+    ],
     dependsOn: [],
     priority: i < 2 ? ("P1" as const) : ("P2" as const),
-    estLabel
+    estLabel,
   }));
 }
 
 function deltasFor(variant: DiscoveryResult["variant"], proposals: ProposedSpec[]): ImpactDelta[] {
   if (variant === "bug") {
     return [
-      { title: "personas", kind: "impact", count: "all authed users", deltas: ["all authed users · existing · trust restored"] },
-      { title: "behaviors", kind: "mod", count: "1 hardened", deltas: ["user logs in · existing · reliable-in-fact"] },
-      { title: "specs", kind: "add", count: `${proposals.length} proposed`, deltas: proposals.map((p) => `${p.priority} · ${p.title} · ${p.estLabel}`) }
+      {
+        title: "personas",
+        kind: "impact",
+        count: "all authed users",
+        deltas: ["all authed users · existing · trust restored"],
+      },
+      {
+        title: "behaviors",
+        kind: "mod",
+        count: "1 hardened",
+        deltas: ["user logs in · existing · reliable-in-fact"],
+      },
+      {
+        title: "specs",
+        kind: "add",
+        count: `${proposals.length} proposed`,
+        deltas: proposals.map((p) => `${p.priority} · ${p.title} · ${p.estLabel}`),
+      },
     ];
   }
   if (variant === "strategic") {
     return [
-      { title: "personas", kind: "add", count: "2 new", deltas: ["ad manager · campaigns + reports", "content creator · uploads + tags"] },
-      { title: "behaviors", kind: "add", count: "8 new", deltas: ["connect · launch · pause · pacing alert · pivot report", "upload creative · tag + caption · preview"] },
-      { title: "specs", kind: "add", count: `${proposals.length} cluster heads`, deltas: proposals.map((p) => `${p.title} · ${p.estLabel}`) }
+      {
+        title: "personas",
+        kind: "add",
+        count: "2 new",
+        deltas: ["ad manager · campaigns + reports", "content creator · uploads + tags"],
+      },
+      {
+        title: "behaviors",
+        kind: "add",
+        count: "8 new",
+        deltas: ["connect · launch · pause · pacing alert · pivot report", "upload creative · tag + caption · preview"],
+      },
+      {
+        title: "specs",
+        kind: "add",
+        count: `${proposals.length} cluster heads`,
+        deltas: proposals.map((p) => `${p.title} · ${p.estLabel}`),
+      },
     ];
   }
   return [
-    { title: "personas", kind: "impact", count: "1 impacted", deltas: ["existing persona · gains 1 new behavior"] },
-    { title: "behaviors", kind: "add", count: "1 added", deltas: ["export stats data · for an external report"] },
-    { title: "specs", kind: "add", count: `${proposals.length} proposed`, deltas: proposals.map((p) => `${p.title} · ${p.priority} · ${p.estLabel}`) }
+    {
+      title: "personas",
+      kind: "impact",
+      count: "1 impacted",
+      deltas: ["existing persona · gains 1 new behavior"],
+    },
+    {
+      title: "behaviors",
+      kind: "add",
+      count: "1 added",
+      deltas: ["export stats data · for an external report"],
+    },
+    {
+      title: "specs",
+      kind: "add",
+      count: `${proposals.length} proposed`,
+      deltas: proposals.map((p) => `${p.title} · ${p.priority} · ${p.estLabel}`),
+    },
   ];
 }
 
@@ -182,8 +235,8 @@ export function createDeterministicDiscoveryAnswerer(): DiscoveryAnswerer {
         proposals,
         placements: placementsFor(variant),
         deltas: deltasFor(variant, proposals),
-        readSummary: `grounded on ${context.existingSpecs.length} existing spec(s)`
+        readSummary: `grounded on ${context.existingSpecs.length} existing spec(s)`,
       };
-    }
+    },
   };
 }

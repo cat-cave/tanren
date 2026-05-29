@@ -27,7 +27,7 @@ export class FakeSshSubstrate implements SshSubstrate {
       exitCode: 0,
       stdout: `fake ssh: ${command.command}`,
       stderr: "",
-      timedOut: false
+      timedOut: false,
     };
   }
 }

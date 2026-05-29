@@ -34,10 +34,7 @@ interface RejectionRow {
   reason: string;
 }
 
-export async function computeRetryHotspot(
-  pool: Pick<pg.Pool, "query">,
-  context: ComputeContext
-): Promise<Insight[]> {
+export async function computeRetryHotspot(pool: Pick<pg.Pool, "query">, context: ComputeContext): Promise<Insight[]> {
   const t: InsightThresholds = { ...DEFAULT_THRESHOLDS, ...context.thresholds };
   const now = context.now ?? new Date();
   const since = new Date(now.getTime() - t.retryHotspotWindowDays * 24 * 60 * 60 * 1000);
@@ -60,7 +57,7 @@ export async function computeRetryHotspot(
          AND t.started_at >= $2
        GROUP BY s.spec_id, s.title, t.cli, t.model
        HAVING COUNT(*) >= $3`,
-    [context.projectId, since, t.retryHotspotMinAttempts]
+    [context.projectId, since, t.retryHotspotMinAttempts],
   );
 
   if (attemptsResult.rows.length === 0) {
@@ -76,7 +73,7 @@ export async function computeRetryHotspot(
          AND e.spec_id = ANY($1::text[])
          AND e.ts >= $2
        ORDER BY e.ts DESC`,
-    [specIds, since]
+    [specIds, since],
   );
 
   const rejectionsBySpec = new Map<string, string[]>();
@@ -97,7 +94,7 @@ export async function computeRetryHotspot(
       writerModel: row.model ?? "unknown",
       retryCount,
       windowDays: t.retryHotspotWindowDays,
-      rejectionSummaries: rejectionsBySpec.get(row.spec_id) ?? []
+      rejectionSummaries: rejectionsBySpec.get(row.spec_id) ?? [],
     };
     const severity = retryCount >= t.retryHotspotMinAttempts + 1 ? "warn" : "info";
     const title = `${row.spec_title} retried ${retryCount}× in ${t.retryHotspotWindowDays}d`;
@@ -124,18 +121,18 @@ export async function computeRetryHotspot(
               title: `Refine: ${row.spec_title}`,
               description: `Refine failing behavior for spec ${row.spec_id}. ${
                 payload.rejectionSummaries[0] ?? "Writer kept getting rejected."
-              }`
-            }
-          }
+              }`,
+            },
+          },
         },
         {
           label: "Snooze · 24h",
-          toolCall: { tool: "tanren.acknowledge_insight", args: { insightId } }
-        }
+          toolCall: { tool: "tanren.acknowledge_insight", args: { insightId } },
+        },
       ],
       computedAt: now,
       acknowledgedAt: null,
-      acknowledgedBy: null
+      acknowledgedBy: null,
     };
   });
 }

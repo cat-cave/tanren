@@ -8,7 +8,7 @@ const SshTargetSummary = z
     host: z.string(),
     port: z.number().int(),
     username: z.string(),
-    hostKeyFingerprint: z.string()
+    hostKeyFingerprint: z.string(),
   })
   .strict();
 
@@ -16,7 +16,7 @@ const RunnerAllocationSummary = z
   .object({
     runnerId: z.string(),
     imageSha: z.string(),
-    target: SshTargetSummary
+    target: SshTargetSummary,
   })
   .strict();
 
@@ -24,7 +24,7 @@ export const AllocatorRequestedPayload = z
   .object({
     allocator: z.string(),
     runnerImage: z.string(),
-    identitySecretRef: z.string()
+    identitySecretRef: z.string(),
   })
   .strict();
 
@@ -32,7 +32,7 @@ export const AllocatorAllocatedPayload = RunnerAllocationSummary;
 
 export const AllocatorFailedPayload = z
   .object({
-    message: z.string()
+    message: z.string(),
   })
   .strict();
 
@@ -40,14 +40,14 @@ export const RunnerAllocatedPayload = RunnerAllocationSummary;
 
 export const RunnerReleasedPayload = z
   .object({
-    runnerId: z.string()
+    runnerId: z.string(),
   })
   .strict();
 
 const SshCommandFailure = z
   .union([
     z.object({ reason: z.string(), message: z.string().optional() }).strict(),
-    z.object({ reason: z.string() }).strict()
+    z.object({ reason: z.string() }).strict(),
   ])
   .or(z.record(z.string(), z.unknown()));
 
@@ -58,7 +58,7 @@ const SshCommandResultSummary = z
     stderr: z.string(),
     signal: z.string().optional(),
     timedOut: z.boolean(),
-    failure: SshCommandFailure.optional()
+    failure: SshCommandFailure.optional(),
   })
   .strict();
 
@@ -66,7 +66,7 @@ export const RunnerFailedPayload = z
   .object({
     runnerId: z.string(),
     command: z.string(),
-    result: SshCommandResultSummary
+    result: SshCommandResultSummary,
   })
   .strict();
 
@@ -75,17 +75,15 @@ export const WorkspacePreparedPayload = z
     runnerId: z.string().optional(),
     workspacePath: z.string(),
     repoUrl: z.string().optional(),
-    targetBranch: z.string().optional()
+    targetBranch: z.string().optional(),
   })
   .strict();
 
 export const WorkspaceGitCapturedPayload = z
   .object({
     workspacePath: z.string(),
-    commits: z.array(
-      z.object({ sha: z.string(), message: z.string() }).strict()
-    ),
-    diffBytes: z.number().int()
+    commits: z.array(z.object({ sha: z.string(), message: z.string() }).strict()),
+    diffBytes: z.number().int(),
   })
   .strict();
 
@@ -93,7 +91,7 @@ export const WorkspaceFailedPayload = z
   .object({
     runnerId: z.string().optional(),
     workspacePath: z.string(),
-    message: z.string()
+    message: z.string(),
   })
   .strict();
 
@@ -101,7 +99,7 @@ const CredentialReference = z
   .object({
     credentialKind: z.string(),
     ref: z.string(),
-    redacted: z.literal(true)
+    redacted: z.literal(true),
   })
   .strict();
 
@@ -110,7 +108,7 @@ export const CredentialLoadedPayload = CredentialReference;
 export const CredentialFailedPayload = z
   .object({
     ref: z.string().optional(),
-    message: z.string()
+    message: z.string(),
   })
   .strict();
 
@@ -123,14 +121,14 @@ export const CostResolvedPayload = z
     // cost is best-effort: null when no reliable basis exists.
     costUsd: z.string().nullable(),
     billingMode: z.string(),
-    costBasis: z.string()
+    costBasis: z.string(),
   })
   .strict();
 
 export const CostFailedPayload = z
   .object({
     taskId: z.string().optional(),
-    message: z.string()
+    message: z.string(),
   })
   .strict();
 
@@ -145,7 +143,7 @@ export const CostUnattributablePayload = z
     reason: z.string(),
     inputTokens: z.number().int().optional(),
     outputTokens: z.number().int().optional(),
-    cachedInputTokens: z.number().int().optional()
+    cachedInputTokens: z.number().int().optional(),
   })
   .strict();
 
@@ -159,7 +157,7 @@ const SubscriptionWindowSummary = z
     usedPercent: z.number(),
     resetsAt: z.string(),
     windowMinutes: z.number().int(),
-    resetDescription: z.string()
+    resetDescription: z.string(),
   })
   .strict();
 
@@ -170,7 +168,7 @@ export const UsageWindowObservedPayload = z
     windows: z.array(SubscriptionWindowSummary),
     creditsRemaining: z.number().nullable(),
     source: z.string(),
-    capturedAt: z.string()
+    capturedAt: z.string(),
   })
   .strict();
 
@@ -181,7 +179,7 @@ export const UsageWindowPressurePayload = z
     provider: z.string(),
     slot: z.enum(["primary", "secondary", "tertiary"]),
     usedPercent: z.number(),
-    resetsAt: z.string()
+    resetsAt: z.string(),
   })
   .strict();
 
@@ -198,10 +196,10 @@ export const UsageAccountingObservedPayload = z
         cacheCreationTokens: z.number().int(),
         outputTokens: z.number().int(),
         reasoningOutputTokens: z.number().int(),
-        totalTokens: z.number().int()
+        totalTokens: z.number().int(),
       })
       .strict(),
     costUsd: z.number().nullable(),
-    capturedAt: z.string()
+    capturedAt: z.string(),
   })
   .strict();

@@ -4,7 +4,7 @@ import {
   isWeekendInUtc,
   severityMeetsFloor,
   type NotificationRouteRow,
-  type NotificationTargetRow
+  type NotificationTargetRow,
 } from "../src/engine/notifications/index.js";
 
 // P2A-0017 matrix-evaluation unit tests. The matrix routes (target × route)
@@ -23,7 +23,7 @@ function target(overrides: Partial<NotificationTargetRow>): NotificationTargetRo
     enabled: overrides.enabled ?? true,
     weekendMute: overrides.weekendMute ?? false,
     createdAt: overrides.createdAt ?? new Date("2026-01-01T00:00:00Z"),
-    updatedAt: overrides.updatedAt ?? new Date("2026-01-01T00:00:00Z")
+    updatedAt: overrides.updatedAt ?? new Date("2026-01-01T00:00:00Z"),
   };
 }
 
@@ -35,7 +35,7 @@ function route(overrides: Partial<NotificationRouteRow>): NotificationRouteRow {
     enabled: overrides.enabled ?? true,
     minSeverity: overrides.minSeverity ?? "info",
     createdAt: overrides.createdAt ?? new Date("2026-01-01T00:00:00Z"),
-    updatedAt: overrides.updatedAt ?? new Date("2026-01-01T00:00:00Z")
+    updatedAt: overrides.updatedAt ?? new Date("2026-01-01T00:00:00Z"),
   };
 }
 
@@ -68,7 +68,7 @@ describe("evaluateMatrix", () => {
       routes: [routeRow],
       actorUserId: null,
       eventName: "run.failed",
-      effectiveSeverity: "fail"
+      effectiveSeverity: "fail",
     });
     expect(matches.map((m) => m.layering)).toEqual(["org_default"]);
   });
@@ -79,7 +79,7 @@ describe("evaluateMatrix", () => {
       id: "t_user",
       scope: "user",
       userId: "user_1",
-      label: "personal ntfy"
+      label: "personal ntfy",
     });
     const orgRoute = route({ id: "r_org", targetId: "t_org" });
     const userRoute = route({ id: "r_user", targetId: "t_user" });
@@ -88,7 +88,7 @@ describe("evaluateMatrix", () => {
       routes: [orgRoute, userRoute],
       actorUserId: "user_1",
       eventName: "run.failed",
-      effectiveSeverity: "fail"
+      effectiveSeverity: "fail",
     });
     expect(matches.map((m) => m.target.id)).toEqual(["t_user"]);
     expect(matches[0]?.layering).toBe("user_override");
@@ -100,7 +100,7 @@ describe("evaluateMatrix", () => {
       id: "t_user",
       scope: "user",
       userId: "user_1",
-      enabled: false
+      enabled: false,
     });
     const orgRoute = route({ id: "r_org", targetId: "t_org" });
     const userRoute = route({ id: "r_user", targetId: "t_user" });
@@ -109,7 +109,7 @@ describe("evaluateMatrix", () => {
       routes: [orgRoute, userRoute],
       actorUserId: "user_1",
       eventName: "run.failed",
-      effectiveSeverity: "fail"
+      effectiveSeverity: "fail",
     });
     expect(matches).toEqual([]);
   });
@@ -119,7 +119,7 @@ describe("evaluateMatrix", () => {
     const userTarget = target({
       id: "t_user_other",
       scope: "user",
-      userId: "user_other"
+      userId: "user_other",
     });
     const orgRoute = route({ id: "r_org", targetId: "t_org" });
     const userRoute = route({ id: "r_user", targetId: "t_user_other" });
@@ -128,7 +128,7 @@ describe("evaluateMatrix", () => {
       routes: [orgRoute, userRoute],
       actorUserId: "user_1",
       eventName: "run.failed",
-      effectiveSeverity: "fail"
+      effectiveSeverity: "fail",
     });
     expect(matches.map((m) => m.target.id)).toEqual(["t_org"]);
   });
@@ -141,7 +141,7 @@ describe("evaluateMatrix", () => {
       routes: [orgRoute],
       actorUserId: null,
       eventName: "run.started",
-      effectiveSeverity: "info"
+      effectiveSeverity: "info",
     });
     expect(matches).toEqual([]);
   });
@@ -154,7 +154,7 @@ describe("evaluateMatrix", () => {
       routes: [orgRoute],
       actorUserId: null,
       eventName: "run.failed",
-      effectiveSeverity: "fail"
+      effectiveSeverity: "fail",
     });
     expect(matches).toEqual([]);
   });
@@ -167,7 +167,7 @@ describe("evaluateMatrix", () => {
       routes: [orgRoute],
       actorUserId: null,
       eventName: "run.failed",
-      effectiveSeverity: "fail"
+      effectiveSeverity: "fail",
     });
     expect(matches).toEqual([]);
   });

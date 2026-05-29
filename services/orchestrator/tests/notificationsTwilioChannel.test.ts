@@ -19,18 +19,17 @@ function target(overrides: Partial<NotificationTargetRow> = {}): NotificationTar
     weekendMute: false,
     createdAt: new Date(),
     updatedAt: new Date(),
-    ...overrides
+    ...overrides,
   };
 }
 
-const failingFetch: typeof fetch = async () =>
-  new Response("bad", { status: 401, statusText: "Unauthorized" });
+const failingFetch: typeof fetch = async () => new Response("bad", { status: 401, statusText: "Unauthorized" });
 
 function secrets(): SecretStore {
   const map: Record<string, string> = {
     "credential/twilio/account-sid": "ACxxx",
     "credential/twilio/auth-token": "tok_secret",
-    "credential/twilio/from-number": "+15551234567"
+    "credential/twilio/from-number": "+15551234567",
   };
   return {
     async put() {},
@@ -38,7 +37,7 @@ function secrets(): SecretStore {
       const value = map[ref];
       return value === undefined ? undefined : { ref, value };
     },
-    async delete() {}
+    async delete() {},
   };
 }
 
@@ -52,23 +51,19 @@ describe("TwilioChannel", () => {
     const channel = new TwilioChannel({
       fetch: fakeFetch,
       secrets: secrets(),
-      apiBaseUrl: "https://api.twilio.test"
+      apiBaseUrl: "https://api.twilio.test",
     });
     await channel.publish(target(), {
       title: "run failed",
       body: "details",
       severity: "fail",
       eventName: "run.failed",
-      url: "https://tanren.example/runs/run_1"
+      url: "https://tanren.example/runs/run_1",
     });
-    expect(captured!.url).toBe(
-      "https://api.twilio.test/2010-04-01/Accounts/ACxxx/Messages.json"
-    );
+    expect(captured!.url).toBe("https://api.twilio.test/2010-04-01/Accounts/ACxxx/Messages.json");
     const headers = captured!.init.headers as Record<string, string>;
     expect(headers["Content-Type"]).toBe("application/x-www-form-urlencoded");
-    expect(headers["Authorization"]).toBe(
-      `Basic ${Buffer.from("ACxxx:tok_secret").toString("base64")}`
-    );
+    expect(headers["Authorization"]).toBe(`Basic ${Buffer.from("ACxxx:tok_secret").toString("base64")}`);
     const form = new URLSearchParams(captured!.init.body as string);
     expect(form.get("To")).toBe("+15557654321");
     expect(form.get("From")).toBe("+15551234567");
@@ -83,8 +78,8 @@ describe("TwilioChannel", () => {
         title: "t",
         body: "b",
         severity: "info",
-        eventName: "run.started"
-      })
+        eventName: "run.started",
+      }),
     ).rejects.toThrow(/twilio publish failed: 401/);
   });
 
@@ -94,7 +89,7 @@ describe("TwilioChannel", () => {
       async get() {
         return undefined;
       },
-      async delete() {}
+      async delete() {},
     };
     const channel = new TwilioChannel({ secrets: empty });
     await expect(
@@ -102,8 +97,8 @@ describe("TwilioChannel", () => {
         title: "t",
         body: "b",
         severity: "info",
-        eventName: "run.started"
-      })
+        eventName: "run.started",
+      }),
     ).rejects.toThrow(/missing twilio credential ref/);
   });
 
@@ -114,8 +109,8 @@ describe("TwilioChannel", () => {
         title: "t",
         body: "b",
         severity: "info",
-        eventName: "run.started"
-      })
+        eventName: "run.started",
+      }),
     ).rejects.toThrow(/needs a secret store/);
   });
 });

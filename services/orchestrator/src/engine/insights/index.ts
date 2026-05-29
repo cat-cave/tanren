@@ -10,7 +10,7 @@ export {
   PaceAnomalyPayload,
   RetryHotspotPayload,
   ReviewStallPayload,
-  StuckPayload
+  StuckPayload,
 } from "./types.js";
 
 export { DEFAULT_THRESHOLDS, type InsightThresholds } from "./thresholds.js";
@@ -20,7 +20,7 @@ export {
   loadInsightsForProject,
   INSIGHT_KINDS,
   type ComputeInsightContext,
-  type LoadInsightsOptions
+  type LoadInsightsOptions,
 } from "./computer.js";
 
 export { computeRetryHotspot } from "./retryHotspot.js";
@@ -34,5 +34,5 @@ export {
   readFreshOrCompute,
   writeInsights,
   acknowledgeInsight,
-  type ReadOrComputeOptions
+  type ReadOrComputeOptions,
 } from "./cache.js";

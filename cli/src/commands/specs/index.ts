@@ -13,9 +13,7 @@ export async function specsList(argv: string[]): Promise<void> {
   const args = parseArgs(argv);
   const orgId = required(args, "org-id");
   const projectId = required(args, "project-id");
-  const result = await request(
-    `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/specs`
-  );
+  const result = await request(`/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/specs`);
   jsonOutput(args, result);
 }
 
@@ -31,8 +29,8 @@ export async function specsCreate(argv: string[]): Promise<void> {
       title: required(args, "title"),
       description: required(args, "description"),
       acceptanceCriteria: acceptance,
-      dependsOn: manyOf(args, "depends-on")
-    }
+      dependsOn: manyOf(args, "depends-on"),
+    },
   );
   jsonOutput(args, result);
 }
@@ -43,7 +41,7 @@ export async function specsGet(argv: string[]): Promise<void> {
   const projectId = required(args, "project-id");
   const specId = required(args, "spec-id");
   const result = await request(
-    `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/specs/${encodeURIComponent(specId)}`
+    `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/specs/${encodeURIComponent(specId)}`,
   );
   jsonOutput(args, result);
 }
@@ -57,8 +55,8 @@ export async function specsRun(argv: string[]): Promise<void> {
     `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/specs/${encodeURIComponent(specId)}/runs`,
     {
       trigger: optional(args, "trigger") ?? "cli",
-      branch: optional(args, "branch")
-    }
+      branch: optional(args, "branch"),
+    },
   );
   jsonOutput(args, result);
 }

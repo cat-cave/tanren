@@ -34,7 +34,7 @@ export function parseCcusageAccounting(stdout: string, cli: string): CcusageAcco
     totals,
     costUsd: positiveCostOrNull(totalsRecord?.["costUSD"]),
     perModel: collectPerModel(dailyArray ?? []),
-    capturedAt: new Date().toISOString()
+    capturedAt: new Date().toISOString(),
   };
 }
 
@@ -67,7 +67,14 @@ function tokenUsageFromRecord(record: Record<string, unknown>): TokenUsage {
   const totalTokens =
     numberField(record["totalTokens"]) ??
     inputTokens + cachedInputTokens + cacheCreationTokens + outputTokens + reasoningOutputTokens;
-  return { inputTokens, cachedInputTokens, cacheCreationTokens, outputTokens, reasoningOutputTokens, totalTokens };
+  return {
+    inputTokens,
+    cachedInputTokens,
+    cacheCreationTokens,
+    outputTokens,
+    reasoningOutputTokens,
+    totalTokens,
+  };
 }
 
 function addUsage(a: TokenUsage, b: TokenUsage): TokenUsage {
@@ -77,7 +84,7 @@ function addUsage(a: TokenUsage, b: TokenUsage): TokenUsage {
     cacheCreationTokens: a.cacheCreationTokens + b.cacheCreationTokens,
     outputTokens: a.outputTokens + b.outputTokens,
     reasoningOutputTokens: a.reasoningOutputTokens + b.reasoningOutputTokens,
-    totalTokens: a.totalTokens + b.totalTokens
+    totalTokens: a.totalTokens + b.totalTokens,
   };
 }
 
@@ -88,7 +95,7 @@ function emptyUsage(): TokenUsage {
     cacheCreationTokens: 0,
     outputTokens: 0,
     reasoningOutputTokens: 0,
-    totalTokens: 0
+    totalTokens: 0,
   };
 }
 

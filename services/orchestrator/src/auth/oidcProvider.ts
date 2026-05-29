@@ -38,7 +38,7 @@ const discoverySchema = z.object({
   issuer: z.string().min(1),
   authorization_endpoint: z.string().url(),
   token_endpoint: z.string().url(),
-  userinfo_endpoint: z.string().url()
+  userinfo_endpoint: z.string().url(),
 });
 type Discovery = z.infer<typeof discoverySchema>;
 
@@ -48,7 +48,7 @@ const tokenResponseSchema = z.object({
   scope: z.string().optional(),
   id_token: z.string().optional(),
   error: z.string().optional(),
-  error_description: z.string().optional()
+  error_description: z.string().optional(),
 });
 
 // userinfo is provider-shaped; keep it permissive and read claims by configured key.
@@ -85,7 +85,7 @@ export class OidcProvider implements IdentityProvider {
       redirect_uri: redirectUri,
       response_type: "code",
       scope: this.scopes.join(" "),
-      state
+      state,
     });
     return `${this.authorizeEndpoint()}?${params.toString()}`;
   }
@@ -126,22 +126,18 @@ export class OidcProvider implements IdentityProvider {
     return parsed.data;
   }
 
-  private async fetchAccessToken(
-    discovery: Discovery,
-    code: string,
-    redirectUri: string
-  ): Promise<string> {
+  private async fetchAccessToken(discovery: Discovery, code: string, redirectUri: string): Promise<string> {
     const body = new URLSearchParams({
       grant_type: "authorization_code",
       code,
       redirect_uri: redirectUri,
       client_id: this.config.clientId,
-      client_secret: this.config.clientSecret
+      client_secret: this.config.clientSecret,
     });
     const response = await this.fetchImpl(discovery.token_endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
-      body: body.toString()
+      body: body.toString(),
     });
     if (!response.ok) {
       throw new IdentityProviderError(this.id, `token endpoint returned ${response.status}`);
@@ -159,12 +155,9 @@ export class OidcProvider implements IdentityProvider {
     return parsed.data.access_token;
   }
 
-  private async fetchUserinfo(
-    discovery: Discovery,
-    token: string
-  ): Promise<Record<string, unknown>> {
+  private async fetchUserinfo(discovery: Discovery, token: string): Promise<Record<string, unknown>> {
     const response = await this.fetchImpl(discovery.userinfo_endpoint, {
-      headers: { Authorization: `Bearer ${token}`, Accept: "application/json" }
+      headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
     });
     if (!response.ok) {
       throw new IdentityProviderError(this.id, `userinfo endpoint returned ${response.status}`);
@@ -189,7 +182,7 @@ export class OidcProvider implements IdentityProvider {
       login: login,
       email: email,
       displayName: displayName ?? login,
-      orgs: this.mapOrgs(claims[this.groupsClaim])
+      orgs: this.mapOrgs(claims[this.groupsClaim]),
     };
   }
 
@@ -208,7 +201,7 @@ export class OidcProvider implements IdentityProvider {
         externalId: group,
         login,
         displayName: group,
-        kind: "oidc" as const
+        kind: "oidc" as const,
       });
     }
     return orgs;

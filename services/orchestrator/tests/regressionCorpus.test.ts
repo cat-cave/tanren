@@ -10,7 +10,7 @@ import { containsCredentialSubstring, looksLikeCredential } from "../src/engine/
 import {
   FetchGitHubHttpClient,
   parseGitHubPullRequestUrl,
-  parseGitHubRepository
+  parseGitHubRepository,
 } from "../src/engine/providers/github.js";
 
 // Audit (High): "Redaction is not centralized. Add one redaction layer for
@@ -26,7 +26,9 @@ describe("regression: high-entropy credential detection (audit High — redactio
   });
 
   it("detects a credential embedded inside a larger string (e.g. an error message)", () => {
-    expect(containsCredentialSubstring("connect failed using token ghs_AbCdEf0123456789AbCdEf0123456789AbCdEf")).toBe(true);
+    expect(containsCredentialSubstring("connect failed using token ghs_AbCdEf0123456789AbCdEf0123456789AbCdEf")).toBe(
+      true,
+    );
   });
 });
 
@@ -57,14 +59,20 @@ describe("regression: SSH host-key fingerprint verification (audit High — runn
 // malformed URL must throw, not silently target the wrong repo.
 describe("regression: GitHub URL parsing (audit High — review/merge + repo scoping)", () => {
   it("parses owner/name from an https remote with and without .git", () => {
-    expect(parseGitHubRepository("https://github.com/acme/widget.git")).toEqual({ owner: "acme", name: "widget" });
-    expect(parseGitHubRepository("git@github.com:acme/widget.git")).toEqual({ owner: "acme", name: "widget" });
+    expect(parseGitHubRepository("https://github.com/acme/widget.git")).toEqual({
+      owner: "acme",
+      name: "widget",
+    });
+    expect(parseGitHubRepository("git@github.com:acme/widget.git")).toEqual({
+      owner: "acme",
+      name: "widget",
+    });
   });
 
   it("parses the pull number out of a PR url", () => {
     expect(parseGitHubPullRequestUrl("https://github.com/acme/widget/pull/42")).toEqual({
       repo: { owner: "acme", name: "widget" },
-      pullNumber: 42
+      pullNumber: 42,
     });
   });
 
@@ -90,7 +98,7 @@ describe("regression: GitHub 401 token re-mint retry (audit Medium — installat
       method: "GET",
       path: "/repos/a/b",
       token: "stale",
-      refreshToken: async () => "fresh"
+      refreshToken: async () => "fresh",
     });
     expect(response.status).toBe(200);
     expect(seen).toEqual(["Bearer stale", "Bearer fresh"]);

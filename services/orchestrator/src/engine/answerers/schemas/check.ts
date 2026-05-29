@@ -17,20 +17,16 @@ export const CheckAnswer = z
     passed: z
       .boolean()
       .describe(
-        "Overall intent verdict: true only when the subtask intent and every relevant acceptance criterion are satisfied by the diff. Never reflects test/build/lint outcomes."
+        "Overall intent verdict: true only when the subtask intent and every relevant acceptance criterion are satisfied by the diff. Never reflects test/build/lint outcomes.",
       ),
     reasoning: z
       .string()
       .min(1)
       .describe(
-        "Per-criterion rationale: cite each acceptance criterion / behavior and state whether the diff satisfies its intent. Do not assert or speculate about test/build/lint results."
+        "Per-criterion rationale: cite each acceptance criterion / behavior and state whether the diff satisfies its intent. Do not assert or speculate about test/build/lint results.",
       ),
-    behaviorIdsPassed: z
-      .array(z.string().min(1))
-      .describe("Behavior ids whose intent the diff satisfies."),
-    behaviorIdsFailed: z
-      .array(z.string().min(1))
-      .describe("Behavior ids whose intent the diff does not satisfy.")
+    behaviorIdsPassed: z.array(z.string().min(1)).describe("Behavior ids whose intent the diff satisfies."),
+    behaviorIdsFailed: z.array(z.string().min(1)).describe("Behavior ids whose intent the diff does not satisfy."),
   })
   .strict();
 

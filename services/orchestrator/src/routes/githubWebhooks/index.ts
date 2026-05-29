@@ -36,7 +36,7 @@ export function createGithubWebhookRoutes(deps: GithubWebhookRouteDeps) {
         githubHttp: deps.githubHttp,
         githubAppMinter: deps.githubAppMinter,
         event,
-        payload
+        payload,
       });
       return c.json(result, 200);
     } catch (error) {
@@ -47,7 +47,13 @@ export function createGithubWebhookRoutes(deps: GithubWebhookRouteDeps) {
         // The webhook references a PR/run we can't advance; treat as a no-op.
         return c.json({ event, matchedRunIds: [], results: [] }, 200);
       }
-      return c.json({ error: "ci_webhook_failed", message: error instanceof Error ? error.message : String(error) }, 502);
+      return c.json(
+        {
+          error: "ci_webhook_failed",
+          message: error instanceof Error ? error.message : String(error),
+        },
+        502,
+      );
     }
   });
 

@@ -55,17 +55,14 @@ export class ReviewMergePullRequestNotFoundError extends Error {
   }
 }
 
-export async function loadReviewMergeRunContext(
-  pool: RunStateClient,
-  runId: string
-): Promise<ReviewMergeRunContext> {
+export async function loadReviewMergeRunContext(pool: RunStateClient, runId: string): Promise<ReviewMergeRunContext> {
   const result = await pool.query(
     `SELECT r.run_id, r.spec_id, r.project_id, r.pr_url, p.config, p.default_branch, o.config AS org_config
      FROM runs r
      JOIN projects p ON p.project_id = r.project_id
      LEFT JOIN organizations o ON o.id = p.org_id
      WHERE r.run_id = $1`,
-    [runId]
+    [runId],
   );
   const rawRow = result.rows[0];
   if (rawRow === undefined) {
@@ -87,7 +84,7 @@ export async function loadReviewMergeRunContext(
     governancePosture: projectConfig.governancePosture,
     tanrenLogins: tanrenLoginsFor(installation),
     installation,
-    staticCredentialRef: credentialRefFromConfig(row.config)
+    staticCredentialRef: credentialRefFromConfig(row.config),
   };
 }
 
@@ -107,8 +104,12 @@ function tanrenLoginsFor(installation: OrgGithubAppInstallation | undefined): Re
 }
 
 function credentialRefFromConfig(config: unknown): string | undefined {
-  const record = typeof config === "object" && config !== null && !Array.isArray(config) ? (config as Record<string, unknown>) : {};
-  const credentials = typeof record["credentials"] === "object" && record["credentials"] !== null ? (record["credentials"] as Record<string, unknown>) : {};
+  const record =
+    typeof config === "object" && config !== null && !Array.isArray(config) ? (config as Record<string, unknown>) : {};
+  const credentials =
+    typeof record["credentials"] === "object" && record["credentials"] !== null
+      ? (record["credentials"] as Record<string, unknown>)
+      : {};
   const ref = credentials["githubCredentialRef"] ?? record["githubCredentialRef"];
   return typeof ref === "string" ? validateGithubCredentialRef(ref) : undefined;
 }
@@ -133,5 +134,5 @@ const ReviewMergeRunRow = z.object({
   pr_url: z.string().nullable(),
   config: z.unknown(),
   default_branch: z.string().nullable(),
-  org_config: z.unknown()
+  org_config: z.unknown(),
 });

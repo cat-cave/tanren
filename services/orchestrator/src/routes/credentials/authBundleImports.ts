@@ -13,7 +13,7 @@ import { storeOpencodeAuthBundle } from "../../engine/credentials/opencodeAuth.j
 
 const authBundleImportSchema = z.object({
   ref: z.string().min(1),
-  authJson: z.string().min(1)
+  authJson: z.string().min(1),
 });
 
 const authBundleImporters: ReadonlyArray<{
@@ -23,7 +23,7 @@ const authBundleImporters: ReadonlyArray<{
 }> = [
   { slug: "codex", error: "invalid_codex_credential", store: storeCodexAuthBundle },
   { slug: "claude", error: "invalid_claude_credential", store: storeClaudeAuthBundle },
-  { slug: "opencode", error: "invalid_opencode_credential", store: storeOpencodeAuthBundle }
+  { slug: "opencode", error: "invalid_opencode_credential", store: storeOpencodeAuthBundle },
 ];
 
 export function registerAuthBundleImportRoutes<E extends Env>(app: Hono<E>, secrets: SecretStore): void {
@@ -36,7 +36,13 @@ export function registerAuthBundleImportRoutes<E extends Env>(app: Hono<E>, secr
       try {
         return c.json(await provider.store(secrets, parsed.data), 201);
       } catch (error) {
-        return c.json({ error: provider.error, message: error instanceof Error ? error.message : String(error) }, 400);
+        return c.json(
+          {
+            error: provider.error,
+            message: error instanceof Error ? error.message : String(error),
+          },
+          400,
+        );
       }
     });
   }

@@ -7,25 +7,10 @@ import { z, type ZodType } from "zod";
 
 import { answererSchemaCatalog, type AnswererRole, type AnswererSchemaDescriptor } from "./catalog.js";
 
-export {
-  PlanAnswer,
-  PlanSubtask,
-  PLAN_ANSWER_SCHEMA_ID
-} from "./plan.js";
-export {
-  CheckAnswer,
-  CHECK_ANSWER_SCHEMA_ID
-} from "./check.js";
-export {
-  AuditAnswer,
-  AuditRecommendedAction,
-  AUDIT_ANSWER_SCHEMA_ID
-} from "./audit.js";
-export {
-  DemoAnswer,
-  DemoLink,
-  DEMO_ANSWER_SCHEMA_ID
-} from "./demo.js";
+export { PlanAnswer, PlanSubtask, PLAN_ANSWER_SCHEMA_ID } from "./plan.js";
+export { CheckAnswer, CHECK_ANSWER_SCHEMA_ID } from "./check.js";
+export { AuditAnswer, AuditRecommendedAction, AUDIT_ANSWER_SCHEMA_ID } from "./audit.js";
+export { DemoAnswer, DemoLink, DEMO_ANSWER_SCHEMA_ID } from "./demo.js";
 export {
   ForgeAnswer,
   ForgeToolCall,
@@ -34,15 +19,11 @@ export {
   ForgeInsight,
   ForgeAttentionPriority,
   ForgeInsightKind,
-  FORGE_ANSWER_SCHEMA_ID
+  FORGE_ANSWER_SCHEMA_ID,
 } from "./forge.js";
 export { answererOutputSchemaFor, type AnswererOutputSchema } from "./adapter.js";
 
-export {
-  answererSchemaCatalog,
-  type AnswererRole,
-  type AnswererSchemaDescriptor
-} from "./catalog.js";
+export { answererSchemaCatalog, type AnswererRole, type AnswererSchemaDescriptor } from "./catalog.js";
 
 export function listAnswererSchemas(): ReadonlyArray<AnswererSchemaDescriptor> {
   return (Object.keys(answererSchemaCatalog) as AnswererRole[]).map((role) => answererSchemaCatalog[role]);

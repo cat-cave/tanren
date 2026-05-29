@@ -86,25 +86,32 @@ function rejectionReason(events: RunEventRow[]): { reason: string; detail: strin
     findLast(
       events,
       (e) =>
-        e.eventType === "auditor.rejected" ||
-        e.eventType === "auditor.verdict" ||
-        e.eventType === "checker.rejected"
+        e.eventType === "auditor.rejected" || e.eventType === "auditor.verdict" || e.eventType === "checker.rejected",
     ) ?? findLast(events, (e) => e.eventType === "planner.rerequested");
   const payload = (rejection?.payload ?? {}) as Record<string, unknown>;
-  const reasonText = typeof payload["reason"] === "string" ? payload["reason"]
-    : typeof payload["rejectionReason"] === "string" ? payload["rejectionReason"]
-    : undefined;
+  const reasonText =
+    typeof payload["reason"] === "string"
+      ? payload["reason"]
+      : typeof payload["rejectionReason"] === "string"
+        ? payload["rejectionReason"]
+        : undefined;
   const rerunCount = typeof payload["plannerRerunCount"] === "number" ? payload["plannerRerunCount"] : undefined;
   if (rejection?.eventType.startsWith("auditor")) {
     return {
       reason: `auditor disagrees with writer${rerunCount !== undefined ? ` · ${rerunCount}×` : ""}`,
-      detail: reasonText ?? "writer says behavior demonstrates · auditor disagrees"
+      detail: reasonText ?? "writer says behavior demonstrates · auditor disagrees",
     };
   }
   if (rejection?.eventType.startsWith("checker")) {
-    return { reason: "checker rejected the writer's change", detail: reasonText ?? "the checker found the change does not satisfy the criterion" };
+    return {
+      reason: "checker rejected the writer's change",
+      detail: reasonText ?? "the checker found the change does not satisfy the criterion",
+    };
   }
-  return { reason: "the loop hit its escape hatch", detail: reasonText ?? "the planner-feedback loop exhausted its retry budget" };
+  return {
+    reason: "the loop hit its escape hatch",
+    detail: reasonText ?? "the planner-feedback loop exhausted its retry budget",
+  };
 }
 
 /** The latest captured-commit event detail line. */
@@ -113,10 +120,7 @@ function lastCommitDetail(tasks: TaskTimelineEntry[]): string {
   return lastDone === undefined ? "before the failing subtask" : `after ${lastDone.title}`;
 }
 
-export function buildFailureContext(
-  detail: RunDetail,
-  lastGoodCommit: string | null
-): FailureContext {
+export function buildFailureContext(detail: RunDetail, lastGoodCommit: string | null): FailureContext {
   const { reason, detail: blockedDetail } = rejectionReason(detail.recentEvents);
   const retries = detail.tasks.reduce((sum, t) => sum + t.attempt, 0);
   const gitEvent = findLast(detail.recentEvents, (e) => e.eventType === "workspace.git_captured");
@@ -129,7 +133,7 @@ export function buildFailureContext(
     elapsed: formatElapsed(detail.run.startedAt, detail.run.endedAt),
     retries,
     dollarsBurned: sumDollars(detail),
-    hatchLabel: hatchLabel(detail.run.outcome)
+    hatchLabel: hatchLabel(detail.run.outcome),
   };
 }
 
@@ -146,12 +150,12 @@ export interface DownstreamImpact {
  */
 export function buildDownstreamImpact(
   detail: RunDetail,
-  specs: Array<{ specId: string; title: string; dependsOn: string[] }>
+  specs: Array<{ specId: string; title: string; dependsOn: string[] }>,
 ): DownstreamImpact {
   const haltedSpecId = detail.run.specId;
   const blocked = specs.filter((s) => s.dependsOn.includes(haltedSpecId)).map((s) => s.title);
   return {
     blockedSpecs: blocked,
-    haltedSpecTitle: detail.spec.title
+    haltedSpecTitle: detail.spec.title,
   };
 }

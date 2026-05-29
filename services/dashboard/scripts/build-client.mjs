@@ -31,7 +31,7 @@ await build({
   sourcemap: true,
   outfile: resolve(outDir, "client.js"),
   tsconfig: resolve(root, "tsconfig.client.json"),
-  logLevel: "info"
+  logLevel: "info",
 });
 
 // Stylesheets served as static assets next to the bundle.

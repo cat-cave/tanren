@@ -12,25 +12,19 @@
  */
 
 import { OrchestratorHttpClient } from "./httpClient.js";
-import type {
-  AcceptResult,
-  DiscoveryInsight,
-  DiscoveryResult,
-  PlacementKind,
-  ProposedSpec
-} from "./discoveryTypes.js";
+import type { AcceptResult, DiscoveryInsight, DiscoveryResult, PlacementKind, ProposedSpec } from "./discoveryTypes.js";
 
 export class DiscoveryClient extends OrchestratorHttpClient {
   /** Classify an insight into proposed specs + placement options. */
   async classify(
     orgId: string,
     projectId: string,
-    insight: DiscoveryInsight
+    insight: DiscoveryInsight,
   ): Promise<{ ok: boolean; status: number; result: DiscoveryResult | undefined }> {
     const r = await this.sendJson<DiscoveryResult>(
       "POST",
       `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/discovery/classify`,
-      insight
+      insight,
     );
     return { ok: r.ok, status: r.status, result: r.body };
   }
@@ -44,12 +38,12 @@ export class DiscoveryClient extends OrchestratorHttpClient {
       proposals: ProposedSpec[];
       placementKind: PlacementKind;
       placementLabel: string;
-    }
+    },
   ): Promise<{ ok: boolean; status: number; result: AcceptResult | undefined }> {
     const r = await this.sendJson<AcceptResult>(
       "POST",
       `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/discovery/accept`,
-      input
+      input,
     );
     return { ok: r.ok, status: r.status, result: r.body };
   }

@@ -3,11 +3,7 @@
 import type pg from "pg";
 import { describe, expect, it } from "vitest";
 import type { ActorContext } from "../src/auth/schemas.js";
-import {
-  actorCanViewAudience,
-  ForgeThreadStore,
-  ForgeTurnStore
-} from "../src/engine/forge/index.js";
+import { actorCanViewAudience, ForgeThreadStore, ForgeTurnStore } from "../src/engine/forge/index.js";
 import { ForgeMemoryClient } from "./helpers/forgeMemoryClient.js";
 
 const orgAdmin: ActorContext = {
@@ -15,7 +11,7 @@ const orgAdmin: ActorContext = {
   orgId: "org_a",
   projectId: null,
   scopes: ["org:admin", "org:member"],
-  source: "session"
+  source: "session",
 };
 
 const orgMember: ActorContext = {
@@ -23,7 +19,7 @@ const orgMember: ActorContext = {
   orgId: "org_a",
   projectId: null,
   scopes: ["org:member"],
-  source: "session"
+  source: "session",
 };
 
 const platformAdmin: ActorContext = {
@@ -31,7 +27,7 @@ const platformAdmin: ActorContext = {
   orgId: null,
   projectId: null,
   scopes: ["platform:admin"],
-  source: "session"
+  source: "session",
 };
 
 const projectMember: ActorContext = {
@@ -39,7 +35,7 @@ const projectMember: ActorContext = {
   orgId: null,
   projectId: "project_a",
   scopes: ["project:member"],
-  source: "session"
+  source: "session",
 };
 
 function pool(client: ForgeMemoryClient): pg.Pool {
@@ -50,7 +46,7 @@ const validRender = {
   body: "Project pulse: 1 run in flight; $0 spent this week.",
   attentionItems: [],
   insights: [],
-  prompts: ["What's next?"]
+  prompts: ["What's next?"],
 };
 
 describe("ForgeThreadStore", () => {
@@ -59,7 +55,7 @@ describe("ForgeThreadStore", () => {
     const thread = await ForgeThreadStore.create(
       pool(client),
       { orgId: "org_a", scope: "org", projectId: null, runId: null, title: null },
-      orgAdmin
+      orgAdmin,
     );
     expect(thread.id).toMatch(/^forge_thread_/);
     expect(thread.scope).toBe("org");
@@ -72,8 +68,8 @@ describe("ForgeThreadStore", () => {
       ForgeThreadStore.create(
         pool(client),
         { orgId: "org_a", scope: "project", projectId: null, runId: null, title: null },
-        orgAdmin
-      )
+        orgAdmin,
+      ),
     ).rejects.toThrow(/projectId/);
   });
 
@@ -83,8 +79,8 @@ describe("ForgeThreadStore", () => {
       ForgeThreadStore.create(
         pool(client),
         { orgId: "org_a", scope: "run", projectId: "project_a", runId: null, title: null },
-        orgAdmin
-      )
+        orgAdmin,
+      ),
     ).rejects.toThrow(/runId/);
   });
 
@@ -95,14 +91,14 @@ describe("ForgeThreadStore", () => {
       orgId: "org_b",
       projectId: null,
       scopes: ["org:member"],
-      source: "session"
+      source: "session",
     };
     await expect(
       ForgeThreadStore.create(
         pool(client),
         { orgId: "org_a", scope: "org", projectId: null, runId: null, title: null },
-        stranger
-      )
+        stranger,
+      ),
     ).rejects.toThrow(/cannot reach/);
   });
 
@@ -111,7 +107,7 @@ describe("ForgeThreadStore", () => {
     const thread = await ForgeThreadStore.create(
       pool(client),
       { orgId: "org_a", scope: "project", projectId: "project_a", runId: null, title: null },
-      platformAdmin
+      platformAdmin,
     );
     expect(thread.scope).toBe("project");
     expect(thread.projectId).toBe("project_a");
@@ -124,7 +120,7 @@ describe("ForgeTurnStore", () => {
     const thread = await ForgeThreadStore.create(
       pool(client),
       { orgId: "org_a", scope: "project", projectId: "project_a", runId: null, title: null },
-      orgAdmin
+      orgAdmin,
     );
     const first = await ForgeTurnStore.append(
       pool(client),
@@ -133,9 +129,9 @@ describe("ForgeTurnStore", () => {
         source: { kind: "operator", userId: orgAdmin.userId },
         audience: "project:member",
         authorKind: "forge_template",
-        render: validRender
+        render: validRender,
       },
-      orgAdmin
+      orgAdmin,
     );
     const second = await ForgeTurnStore.append(
       pool(client),
@@ -144,9 +140,9 @@ describe("ForgeTurnStore", () => {
         source: { kind: "prior_turn", priorTurnId: first.id },
         audience: "project:member",
         authorKind: "forge_template",
-        render: validRender
+        render: validRender,
       },
-      orgAdmin
+      orgAdmin,
     );
     expect(first.index).toBe(0);
     expect(second.index).toBe(1);
@@ -157,7 +153,7 @@ describe("ForgeTurnStore", () => {
     const thread = await ForgeThreadStore.create(
       pool(client),
       { orgId: "org_a", scope: "project", projectId: "project_a", runId: null, title: null },
-      orgAdmin
+      orgAdmin,
     );
     await expect(
       ForgeTurnStore.append(
@@ -168,10 +164,14 @@ describe("ForgeTurnStore", () => {
           audience: "project:member",
           authorKind: "forge_template",
           // Missing required `body` — should fail the ForgeAnswer parse.
-          render: { attentionItems: [], insights: [], prompts: [] } as unknown as typeof validRender
+          render: {
+            attentionItems: [],
+            insights: [],
+            prompts: [],
+          } as unknown as typeof validRender,
         },
-        orgAdmin
-      )
+        orgAdmin,
+      ),
     ).rejects.toThrow(/body/);
   });
 
@@ -180,7 +180,7 @@ describe("ForgeTurnStore", () => {
     const thread = await ForgeThreadStore.create(
       pool(client),
       { orgId: "org_a", scope: "project", projectId: "project_a", runId: null, title: null },
-      orgAdmin
+      orgAdmin,
     );
     await ForgeTurnStore.append(
       pool(client),
@@ -189,9 +189,9 @@ describe("ForgeTurnStore", () => {
         source: { kind: "operator", userId: orgAdmin.userId },
         audience: "project:member",
         authorKind: "forge_template",
-        render: validRender
+        render: validRender,
       },
-      orgAdmin
+      orgAdmin,
     );
     await ForgeTurnStore.append(
       pool(client),
@@ -200,9 +200,9 @@ describe("ForgeTurnStore", () => {
         source: { kind: "operator", userId: orgAdmin.userId },
         audience: "org:admin",
         authorKind: "forge_template",
-        render: validRender
+        render: validRender,
       },
-      orgAdmin
+      orgAdmin,
     );
     const memberTurns = await ForgeTurnStore.list(pool(client), { threadId: thread.id }, orgMember);
     expect(memberTurns).toHaveLength(1);
@@ -219,7 +219,7 @@ describe("actorCanViewAudience", () => {
       orgId: null,
       projectId: "project_a",
       scopes: ["project:member"],
-      source: "session"
+      source: "session",
     };
     expect(actorCanViewAudience(member, "project:member")).toBe(true);
     expect(actorCanViewAudience(member, "project:admin")).toBe(false);

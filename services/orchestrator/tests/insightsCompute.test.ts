@@ -10,7 +10,7 @@ import {
   computeModelMismatch,
   computePaceAnomaly,
   computeRetryHotspot,
-  Insight
+  Insight,
 } from "../src/engine/insights/index.js";
 import { InsightsMemoryClient } from "./helpers/insightsMemoryClient.js";
 
@@ -33,7 +33,7 @@ describe("computeRetryHotspot", () => {
       spec_id: "spec_a",
       project_id: "project_a",
       outcome: "merged",
-      ended_at: daysAgo(1)
+      ended_at: daysAgo(1),
     });
     client.tasks.push({
       task_id: "task_writer_1",
@@ -46,7 +46,7 @@ describe("computeRetryHotspot", () => {
       started_at: daysAgo(1),
       ended_at: daysAgo(1),
       attempt: 1,
-      parent_task_id: null
+      parent_task_id: null,
     });
     const result = await computeRetryHotspot(pool(client), { projectId: "project_a", now: NOW });
     expect(result).toHaveLength(0);
@@ -60,7 +60,7 @@ describe("computeRetryHotspot", () => {
       spec_id: "spec_a",
       project_id: "project_a",
       outcome: null,
-      ended_at: null
+      ended_at: null,
     });
     for (let i = 0; i < 2; i += 1) {
       client.tasks.push({
@@ -74,7 +74,7 @@ describe("computeRetryHotspot", () => {
         started_at: daysAgo(1),
         ended_at: daysAgo(1),
         attempt: i + 1,
-        parent_task_id: null
+        parent_task_id: null,
       });
     }
     client.events.push({
@@ -82,7 +82,7 @@ describe("computeRetryHotspot", () => {
       task_id: null,
       event_type: "planner.rerequested",
       payload: { rejectionReason: "checker rejected behavior X" },
-      ts: daysAgo(1)
+      ts: daysAgo(1),
     });
     const result = await computeRetryHotspot(pool(client), { projectId: "project_a", now: NOW });
     expect(result).toHaveLength(1);
@@ -105,7 +105,7 @@ describe("computeRetryHotspot", () => {
       spec_id: "spec_a",
       project_id: "project_a",
       outcome: null,
-      ended_at: null
+      ended_at: null,
     });
     for (let i = 0; i < 3; i += 1) {
       client.tasks.push({
@@ -119,7 +119,7 @@ describe("computeRetryHotspot", () => {
         started_at: daysAgo(30),
         ended_at: daysAgo(30),
         attempt: i + 1,
-        parent_task_id: null
+        parent_task_id: null,
       });
     }
     const result = await computeRetryHotspot(pool(client), { projectId: "project_a", now: NOW });
@@ -141,7 +141,7 @@ describe("computeModelMismatch", () => {
         spec_id: spec,
         project_id: "project_a",
         outcome: "merged",
-        ended_at: daysAgo(2)
+        ended_at: daysAgo(2),
       });
       const task = `task_${i}`;
       client.tasks.push({
@@ -155,7 +155,7 @@ describe("computeModelMismatch", () => {
         started_at: daysAgo(2),
         ended_at: daysAgo(2),
         attempt: 1,
-        parent_task_id: null
+        parent_task_id: null,
       });
       client.costs.push({
         task_id: task,
@@ -163,7 +163,7 @@ describe("computeModelMismatch", () => {
         cli: "codex",
         model: "gpt-5",
         cost_usd: 0.5,
-        recorded_at: daysAgo(2)
+        recorded_at: daysAgo(2),
       });
     }
     const result = await computeModelMismatch(pool(client), { projectId: "project_a", now: NOW });
@@ -184,7 +184,7 @@ describe("computeModelMismatch", () => {
         spec_id: spec,
         project_id: "project_a",
         outcome: "merged",
-        ended_at: daysAgo(20)
+        ended_at: daysAgo(20),
       });
       const task = `task_cheap_${i}`;
       client.tasks.push({
@@ -198,7 +198,7 @@ describe("computeModelMismatch", () => {
         started_at: daysAgo(20),
         ended_at: daysAgo(20),
         attempt: 1,
-        parent_task_id: null
+        parent_task_id: null,
       });
       client.costs.push({
         task_id: task,
@@ -206,7 +206,7 @@ describe("computeModelMismatch", () => {
         cli: "codex",
         model: "gpt-4o",
         cost_usd: 0.2,
-        recorded_at: daysAgo(20)
+        recorded_at: daysAgo(20),
       });
     }
     // 3 specs merged on gpt-5 at $1.00 each (more recent).
@@ -220,7 +220,7 @@ describe("computeModelMismatch", () => {
         spec_id: spec,
         project_id: "project_a",
         outcome: "merged",
-        ended_at: daysAgo(2)
+        ended_at: daysAgo(2),
       });
       const task = `task_expensive_${i}`;
       client.tasks.push({
@@ -234,7 +234,7 @@ describe("computeModelMismatch", () => {
         started_at: daysAgo(2),
         ended_at: daysAgo(2),
         attempt: 1,
-        parent_task_id: null
+        parent_task_id: null,
       });
       client.costs.push({
         task_id: task,
@@ -242,7 +242,7 @@ describe("computeModelMismatch", () => {
         cli: "codex",
         model: "gpt-5",
         cost_usd: 1.0,
-        recorded_at: daysAgo(2)
+        recorded_at: daysAgo(2),
       });
     }
     const result = await computeModelMismatch(pool(client), { projectId: "project_a", now: NOW });
@@ -279,7 +279,7 @@ describe("computePaceAnomaly", () => {
         spec_id: spec,
         project_id: "project_a",
         outcome: "merged",
-        ended_at: daysAgo(1)
+        ended_at: daysAgo(1),
       });
       client.tasks.push({
         task_id: `task_done_${i}`,
@@ -292,7 +292,7 @@ describe("computePaceAnomaly", () => {
         started_at: new Date(daysAgo(1).getTime() - 60_000),
         ended_at: daysAgo(1),
         attempt: 1,
-        parent_task_id: null
+        parent_task_id: null,
       });
     }
     // One in-flight task started 200 seconds ago — 3.33× the class average.
@@ -303,7 +303,7 @@ describe("computePaceAnomaly", () => {
       spec_id: "spec_live",
       project_id: "project_a",
       outcome: null,
-      ended_at: null
+      ended_at: null,
     });
     client.tasks.push({
       task_id: "task_live",
@@ -316,14 +316,14 @@ describe("computePaceAnomaly", () => {
       started_at: new Date(NOW.getTime() - 200_000),
       ended_at: null,
       attempt: 1,
-      parent_task_id: "task_planner_live"
+      parent_task_id: "task_planner_live",
     });
     client.events.push({
       spec_id: null,
       task_id: "task_live",
       event_type: "writer.subtask.started",
       payload: { subtaskIndex: 2 },
-      ts: new Date(NOW.getTime() - 200_000)
+      ts: new Date(NOW.getTime() - 200_000),
     });
     const result = await computePaceAnomaly(pool(client), { projectId: "project_a", now: NOW });
     expect(result).toHaveLength(1);
@@ -347,7 +347,7 @@ describe("computePaceAnomaly", () => {
       spec_id: "spec_one",
       project_id: "project_a",
       outcome: "merged",
-      ended_at: daysAgo(1)
+      ended_at: daysAgo(1),
     });
     client.tasks.push({
       task_id: "task_one",
@@ -360,7 +360,7 @@ describe("computePaceAnomaly", () => {
       started_at: new Date(daysAgo(1).getTime() - 60_000),
       ended_at: daysAgo(1),
       attempt: 1,
-      parent_task_id: null
+      parent_task_id: null,
     });
     client.specs.push({ spec_id: "spec_live", title: "spec_live", project_id: "project_a" });
     client.specMilestones.push({ spec_id: "spec_live", milestone_id: "m_1" });
@@ -369,7 +369,7 @@ describe("computePaceAnomaly", () => {
       spec_id: "spec_live",
       project_id: "project_a",
       outcome: null,
-      ended_at: null
+      ended_at: null,
     });
     client.tasks.push({
       task_id: "task_live",
@@ -382,7 +382,7 @@ describe("computePaceAnomaly", () => {
       started_at: new Date(NOW.getTime() - 600_000),
       ended_at: null,
       attempt: 1,
-      parent_task_id: null
+      parent_task_id: null,
     });
     const result = await computePaceAnomaly(pool(client), { projectId: "project_a", now: NOW });
     expect(result).toHaveLength(0);

@@ -38,9 +38,9 @@ export async function recordHelloTaskCost(input: HelloCostInput): Promise<void> 
       cli: input.cli,
       model: input.model,
       authRef: input.authRef,
-      runtimeSeconds: 1
+      runtimeSeconds: 1,
     },
     tokens,
-    { source: "hello-world fake adapter" }
+    { source: "hello-world fake adapter" },
   );
 }

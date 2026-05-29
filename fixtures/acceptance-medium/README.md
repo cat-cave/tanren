@@ -8,6 +8,7 @@ subtasks and to trigger at least one checker-rejection loop, so the
 repo needs a multi-file surface to exercise.
 
 Files:
+
 - `src/status.ts` — placeholder `getStatus()` export the writer fills in.
 - `tests/status.test.ts` — placeholder vitest case the writer extends.
 - `package.json` — minimal vitest setup so CI green is meaningful.

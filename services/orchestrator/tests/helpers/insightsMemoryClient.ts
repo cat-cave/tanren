@@ -109,7 +109,7 @@ export class InsightsMemoryClient {
         payload,
         computed_at: params[5] as Date,
         acknowledged_at: (params[6] ?? null) as Date | null,
-        acknowledged_by: (params[7] ?? null) as string | null
+        acknowledged_by: (params[7] ?? null) as string | null,
       };
       const existing = this.insights.find((entry) => entry.id === row.id);
       if (existing === undefined) this.insights.push(row);
@@ -140,7 +140,7 @@ export class InsightsMemoryClient {
             entry.project_id === projectId &&
             entry.kind === kind &&
             entry.acknowledged_at === null &&
-            entry.computed_at.getTime() > cutoff.getTime()
+            entry.computed_at.getTime() > cutoff.getTime(),
         )
         .sort((a, b) => b.computed_at.getTime() - a.computed_at.getTime());
       return { rows, rowCount: rows.length };
@@ -150,7 +150,10 @@ export class InsightsMemoryClient {
       const projectId = String(params[0]);
       const since = params[1] as Date;
       const minAttempts = Number(params[2]);
-      const buckets = new Map<string, { spec_id: string; spec_title: string; cli: string; model: string | null; count: number }>();
+      const buckets = new Map<
+        string,
+        { spec_id: string; spec_title: string; cli: string; model: string | null; count: number }
+      >();
       for (const task of this.tasks) {
         if (task.agent_kind !== "writer") continue;
         if (task.started_at === null) continue;
@@ -167,7 +170,7 @@ export class InsightsMemoryClient {
             spec_title: spec.title,
             cli: task.cli,
             model: task.model,
-            count: 1
+            count: 1,
           });
         } else {
           existing.count += 1;
@@ -180,7 +183,7 @@ export class InsightsMemoryClient {
           spec_title: bucket.spec_title,
           cli: bucket.cli,
           model: bucket.model,
-          attempt_count: String(bucket.count)
+          attempt_count: String(bucket.count),
         }));
       return { rows, rowCount: rows.length };
     }
@@ -193,10 +196,13 @@ export class InsightsMemoryClient {
             event.event_type === "planner.rerequested" &&
             event.spec_id !== null &&
             specIds.includes(event.spec_id) &&
-            event.ts.getTime() >= since.getTime()
+            event.ts.getTime() >= since.getTime(),
         )
         .sort((a, b) => b.ts.getTime() - a.ts.getTime())
-        .map((event) => ({ spec_id: event.spec_id, reason: String(event.payload.rejectionReason ?? "") }));
+        .map((event) => ({
+          spec_id: event.spec_id,
+          reason: String(event.payload.rejectionReason ?? ""),
+        }));
       return { rows, rowCount: rows.length };
     }
     if (t.includes("WITH merged_runs") && t.includes("class_lookup")) {
@@ -209,7 +215,7 @@ export class InsightsMemoryClient {
           run.project_id === projectId &&
           run.outcome === "merged" &&
           run.ended_at !== null &&
-          run.ended_at.getTime() >= since.getTime()
+          run.ended_at.getTime() >= since.getTime(),
       );
       const classByRun = new Map<string, { spec_class: string; spec_id: string }>();
       for (const run of mergedRuns) {
@@ -221,7 +227,14 @@ export class InsightsMemoryClient {
       }
       const buckets = new Map<
         string,
-        { spec_class: string; cli: string; model: string; cost: number; specs: Set<string>; last: Date }
+        {
+          spec_class: string;
+          cli: string;
+          model: string;
+          cost: number;
+          specs: Set<string>;
+          last: Date;
+        }
       >();
       for (const cost of this.costs) {
         const lookup = classByRun.get(cost.run_id);
@@ -237,7 +250,7 @@ export class InsightsMemoryClient {
             model: cost.model,
             cost: cost.cost_usd,
             specs: new Set([lookup.spec_id]),
-            last: cost.recorded_at
+            last: cost.recorded_at,
           });
         } else {
           existing.cost += cost.cost_usd;
@@ -253,7 +266,7 @@ export class InsightsMemoryClient {
           model: bucket.model,
           merged_specs: String(bucket.specs.size),
           total_cost: String(bucket.cost),
-          last_used_at: bucket.last
+          last_used_at: bucket.last,
         }));
       return { rows, rowCount: rows.length };
     }
@@ -276,7 +289,7 @@ export class InsightsMemoryClient {
           spec_title: spec.title,
           spec_class: milestone?.label ?? "unclassified",
           started_at: task.started_at,
-          parent_task_id: task.parent_task_id
+          parent_task_id: task.parent_task_id,
         });
       }
       return { rows, rowCount: rows.length };
@@ -310,7 +323,7 @@ export class InsightsMemoryClient {
         .map(([cls, agg]) => ({
           spec_class: cls,
           avg_seconds: String(agg.total / agg.count),
-          samples: String(agg.count)
+          samples: String(agg.count),
         }));
       return { rows, rowCount: rows.length };
     }
@@ -337,7 +350,7 @@ export class InsightsMemoryClient {
           from_status: from.status ?? "pending",
           to_spec_id: to.spec_id,
           to_title: to.title,
-          to_status: to.status ?? "pending"
+          to_status: to.status ?? "pending",
         });
       }
       return { rows, rowCount: rows.length };
@@ -364,7 +377,7 @@ export class InsightsMemoryClient {
             event_type: event.event_type,
             ts: event.ts,
             pr_number: typeof prNumber === "number" ? prNumber : null,
-            pr_url: typeof prUrl === "string" ? prUrl : null
+            pr_url: typeof prUrl === "string" ? prUrl : null,
           };
         });
       return { rows, rowCount: rows.length };

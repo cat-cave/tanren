@@ -16,7 +16,7 @@ import type { RunLocation } from "./types.js";
 export abstract class OrchestratorRecoveryClient extends OrchestratorHttpClient {
   private recoveryBase(loc: RunLocation, runId: string): string {
     return `/orgs/${encodeURIComponent(loc.orgId)}/projects/${encodeURIComponent(
-      loc.projectId
+      loc.projectId,
     )}/runs/${encodeURIComponent(runId)}/recovery`;
   }
 
@@ -34,7 +34,7 @@ export abstract class OrchestratorRecoveryClient extends OrchestratorHttpClient 
   /** replan_with_steering — re-invoke the planner with the operator's note. */
   async recoveryReplan(loc: RunLocation, runId: string, steeringNote: string): Promise<RecoveryActionResult> {
     const r = await this.sendJson<RecoveryActionResult>("POST", `${this.recoveryBase(loc, runId)}/replan`, {
-      steeringNote
+      steeringNote,
     });
     return r.body ?? { ok: r.ok };
   }
@@ -43,7 +43,7 @@ export abstract class OrchestratorRecoveryClient extends OrchestratorHttpClient 
   async recoveryRollback(
     loc: RunLocation,
     runId: string,
-    input: { commitSha: string; confirmed: boolean }
+    input: { commitSha: string; confirmed: boolean },
   ): Promise<RecoveryActionResult> {
     const r = await this.sendJson<RecoveryActionResult>("POST", `${this.recoveryBase(loc, runId)}/rollback`, input);
     return r.body ?? { ok: r.ok };
@@ -51,10 +51,7 @@ export abstract class OrchestratorRecoveryClient extends OrchestratorHttpClient 
 
   /** open_inspection_thread — create a run-scoped Forge thread (read-only). */
   async recoveryInspectionThread(loc: RunLocation, runId: string): Promise<RecoveryActionResult> {
-    const r = await this.sendJson<RecoveryActionResult>(
-      "POST",
-      `${this.recoveryBase(loc, runId)}/inspection-thread`
-    );
+    const r = await this.sendJson<RecoveryActionResult>("POST", `${this.recoveryBase(loc, runId)}/inspection-thread`);
     return r.body ?? { ok: r.ok };
   }
 }

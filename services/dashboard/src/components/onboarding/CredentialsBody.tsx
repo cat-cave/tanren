@@ -16,7 +16,7 @@ const API_SCHEMAS: Array<[string, string]> = [
   ["openai_v1_responses", "openai · v1 responses"],
   ["openai_v1_chat", "openai · v1 chat completions"],
   ["openai_compatible", "openai-compatible"],
-  ["custom", "custom"]
+  ["custom", "custom"],
 ];
 
 function kindLabel(kind: CredentialRecord["kind"]): string {
@@ -31,22 +31,34 @@ function CredentialRow(props: { record: CredentialRecord; scope: "org" | "me" })
   return (
     <div class="sunken" style="display:flex;flex-direction:column;gap:6px">
       <div style="display:flex;align-items:center;gap:8px">
-        <span class="mono" style="color:var(--fg-1);font-weight:600">{kindLabel(record.kind)}</span>
+        <span class="mono" style="color:var(--fg-1);font-weight:600">
+          {kindLabel(record.kind)}
+        </span>
         <span class="pill ok" style="margin-left:auto">
           <span class="d"></span>active
         </span>
       </div>
       <div class="mono-dim" style="display:grid;grid-template-columns:72px 1fr;gap:4px">
         <span>ref</span>
-        <span class="mono" style="font-size:10px">{record.ref}</span>
+        <span class="mono" style="font-size:10px">
+          {record.ref}
+        </span>
         <span>imported</span>
-        <span class="mono" style="font-size:10px">{record.createdAt}</span>
+        <span class="mono" style="font-size:10px">
+          {record.createdAt}
+        </span>
         <span>value</span>
-        <span class="mono" style="font-size:10px;color:var(--fg-3)">redacted · never shown (P2A-0009)</span>
+        <span class="mono" style="font-size:10px;color:var(--fg-3)">
+          redacted · never shown (P2A-0009)
+        </span>
       </div>
       <div style="display:flex;gap:6px">
-        <span class="btn ghost" style="color:var(--ember-08)">re-import</span>
-        <span class="btn ghost" title="metadata only — never contents">view metadata</span>
+        <span class="btn ghost" style="color:var(--ember-08)">
+          re-import
+        </span>
+        <span class="btn ghost" title="metadata only — never contents">
+          view metadata
+        </span>
         {deleteAction ? (
           <form method="post" action={deleteAction} style="margin-left:auto">
             <input type="hidden" name="ref" value={record.ref} />
@@ -91,14 +103,25 @@ export function CredentialsBody(props: CredentialsBodyProps) {
             props.orgCredentials.map((record) => <CredentialRow record={record} scope="org" />)
           )}
 
-          <form class="col-card live" method="post" action="/onboarding/credentials/org/apikey" style="gap:8px;padding:12px">
+          <form
+            class="col-card live"
+            method="post"
+            action="/onboarding/credentials/org/apikey"
+            style="gap:8px;padding:12px"
+          >
             <div class="h">+ add api key</div>
             <div class="grid-2">
               <Field name="label" label="label" placeholder='e.g. "anthropic-prod"' required />
               <Field name="baseUrl" label="base url" placeholder="api.anthropic.com" />
             </div>
             <SelectField name="schema" label="api schema" options={API_SCHEMAS} />
-            <Field name="value" label="api key" type="password" placeholder="sk-… (encrypted to vault, write-only)" required />
+            <Field
+              name="value"
+              label="api key"
+              type="password"
+              placeholder="sk-… (encrypted to vault, write-only)"
+              required
+            />
             <div style="display:flex;margin-top:4px">
               <button type="submit" class="btn primary" style="margin-left:auto">
                 save key
@@ -109,7 +132,12 @@ export function CredentialsBody(props: CredentialsBodyProps) {
           <div class="section-label" style="margin-top:4px">
             ▮ github tokens · {props.orgCredentials.filter((c) => c.kind === "github_token").length}
           </div>
-          <form class="col-card live" method="post" action="/onboarding/credentials/github" style="gap:8px;padding:12px">
+          <form
+            class="col-card live"
+            method="post"
+            action="/onboarding/credentials/github"
+            style="gap:8px;padding:12px"
+          >
             <div class="h">+ import github token</div>
             <Field name="label" label="label" placeholder='e.g. "tanren-bot"' required />
             <Field
@@ -146,7 +174,12 @@ export function CredentialsBody(props: CredentialsBodyProps) {
             props.myCredentials.map((record) => <CredentialRow record={record} scope="me" />)
           )}
 
-          <form class="col-card live" method="post" action="/onboarding/credentials/dev/codex" style="gap:8px;padding:12px">
+          <form
+            class="col-card live"
+            method="post"
+            action="/onboarding/credentials/dev/codex"
+            style="gap:8px;padding:12px"
+          >
             <div class="h">+ import codex chatgpt bundle</div>
             <Field name="ref" label="vault ref" placeholder="credential/codex_chatgpt_auth/me/auth" required />
             <div class="field">
@@ -154,7 +187,7 @@ export function CredentialsBody(props: CredentialsBodyProps) {
               <textarea
                 id="authJson"
                 name="authJson"
-                placeholder='paste auth.json (write-only · stored in vault · never re-shown)'
+                placeholder="paste auth.json (write-only · stored in vault · never re-shown)"
                 style="font-family:var(--font-mono);font-size:11px;background:var(--bg-canvas);border:1px solid var(--line-1);border-radius:2px;padding:8px;min-height:80px;color:var(--fg-1)"
                 required
               ></textarea>
@@ -173,7 +206,7 @@ export function CredentialsBody(props: CredentialsBodyProps) {
             {[
               ["opencode", "subscription · phase 3"],
               ["claude bundle", "claude code login · phase 3"],
-              ["custom", "drop a json file · phase 3"]
+              ["custom", "drop a json file · phase 3"],
             ].map(([name, desc]) => (
               <div class="sunken" style="opacity:0.55">
                 <div class="mono" style="font-size:11.5px">

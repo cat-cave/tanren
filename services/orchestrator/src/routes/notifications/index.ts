@@ -15,7 +15,7 @@ import {
   NotificationRouteCreateInput,
   NotificationRouteStore,
   NotificationTargetCreateInput,
-  NotificationTargetStore
+  NotificationTargetStore,
 } from "../../engine/notifications/index.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg } from "../orgs/index.js";
@@ -50,7 +50,7 @@ export function createNotificationRoutes(options: NotificationRoutesOptions) {
     return c.json({
       targets: targets.map(toTargetContract),
       routes: routes.map(toRouteContract),
-      events: eventCatalog()
+      events: eventCatalog(),
     });
   });
 
@@ -67,7 +67,7 @@ export function createNotificationRoutes(options: NotificationRoutesOptions) {
       ...raw,
       orgId,
       scope,
-      userId: scope === "user" ? actor.userId : null
+      userId: scope === "user" ? actor.userId : null,
     });
     if (!parsed.success) {
       return c.json({ error: "invalid_target", issues: parsed.error.issues }, 400);
@@ -119,7 +119,7 @@ function toTargetContract(row: {
     destination: row.destination,
     label: row.label,
     enabled: row.enabled,
-    weekendMute: row.weekendMute
+    weekendMute: row.weekendMute,
   };
 }
 
@@ -135,7 +135,7 @@ function toRouteContract(row: {
     targetId: row.targetId,
     eventName: row.eventName,
     enabled: row.enabled,
-    minSeverity: row.minSeverity
+    minSeverity: row.minSeverity,
   };
 }
 

@@ -14,12 +14,7 @@ import type pg from "pg";
 import type { ActorContext } from "../../auth/schemas.js";
 import { ForgeAnswer } from "../answerers/schemas/forge.js";
 import { ForgeThreadStore } from "./threads.js";
-import {
-  ForgeTurnAppendInput,
-  type ForgeTurnAudience,
-  type ForgeTurnRow,
-  type ForgeTurnSource
-} from "./schemas.js";
+import { ForgeTurnAppendInput, type ForgeTurnAudience, type ForgeTurnRow, type ForgeTurnSource } from "./schemas.js";
 
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
@@ -56,7 +51,7 @@ function decodeTurnRow(raw: RawTurnRow): ForgeTurnRow {
     audience: String(raw.audience) as ForgeTurnAudience,
     authorKind: String(raw.author_kind) as ForgeTurnRow["authorKind"],
     render,
-    createdAt: raw.created_at as Date
+    createdAt: raw.created_at as Date,
   };
 }
 
@@ -67,7 +62,7 @@ const AUDIENCE_ORDER: Record<ForgeTurnAudience, number> = {
   "project:member": 0,
   "project:admin": 1,
   "org:admin": 2,
-  "platform:admin": 3
+  "platform:admin": 3,
 };
 
 function actorAudienceTier(actor: ActorContext): number {
@@ -85,11 +80,7 @@ export function actorCanViewAudience(actor: ActorContext, audience: ForgeTurnAud
 }
 
 export const ForgeTurnStore = {
-  async append(
-    client: QueryClient,
-    input: ForgeTurnAppendInput,
-    actor: ActorContext
-  ): Promise<ForgeTurnRow> {
+  async append(client: QueryClient, input: ForgeTurnAppendInput, actor: ActorContext): Promise<ForgeTurnRow> {
     const parsed = ForgeTurnAppendInput.parse(input);
     // Touch the parent thread for authz — this throws if the actor can't
     // reach the thread's scope.
@@ -110,7 +101,7 @@ export const ForgeTurnStore = {
     const nextIndexResult = await client.query<{ next_index: number | string | null }>(
       `SELECT COALESCE(MAX(turn_index), -1) + 1 AS next_index
        FROM forge_turns WHERE thread_id = $1`,
-      [parsed.threadId]
+      [parsed.threadId],
     );
     const nextIndex = Number(nextIndexResult.rows[0]?.next_index ?? 0);
 
@@ -126,8 +117,8 @@ export const ForgeTurnStore = {
         JSON.stringify(parsed.source),
         parsed.audience,
         parsed.authorKind,
-        JSON.stringify(validatedRender)
-      ]
+        JSON.stringify(validatedRender),
+      ],
     );
     await ForgeThreadStore.touch(client, parsed.threadId);
     return decodeTurnRow(result.rows[0] as RawTurnRow);
@@ -136,7 +127,7 @@ export const ForgeTurnStore = {
   async list(
     client: QueryClient,
     args: { threadId: string; limit?: number; sinceIndex?: number },
-    actor: ActorContext
+    actor: ActorContext,
   ): Promise<ForgeTurnRow[]> {
     const thread = await ForgeThreadStore.get(client, args.threadId, actor);
     if (thread === undefined) {
@@ -149,21 +140,14 @@ export const ForgeTurnStore = {
        WHERE thread_id = $1 AND turn_index > $2
        ORDER BY turn_index ASC
        LIMIT $3`,
-      [args.threadId, sinceIndex, limit]
+      [args.threadId, sinceIndex, limit],
     );
     const rows = result.rows.map((row) => decodeTurnRow(row as RawTurnRow));
     return rows.filter((row) => actorCanViewAudience(actor, row.audience));
   },
 
-  async get(
-    client: QueryClient,
-    turnId: string,
-    actor: ActorContext
-  ): Promise<ForgeTurnRow | undefined> {
-    const result = await client.query(
-      `SELECT ${SELECT_TURN_COLUMNS} FROM forge_turns WHERE id = $1`,
-      [turnId]
-    );
+  async get(client: QueryClient, turnId: string, actor: ActorContext): Promise<ForgeTurnRow | undefined> {
+    const result = await client.query(`SELECT ${SELECT_TURN_COLUMNS} FROM forge_turns WHERE id = $1`, [turnId]);
     const row = result.rows[0];
     if (row === undefined) return undefined;
     const turn = decodeTurnRow(row as RawTurnRow);
@@ -177,5 +161,5 @@ export const ForgeTurnStore = {
       return undefined;
     }
     return turn;
-  }
+  },
 } as const;

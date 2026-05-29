@@ -29,11 +29,17 @@ import { ExistingFullBody } from "../../../components/onboarding/existing/Existi
 const GITHUB_APP_URL = process.env["TANREN_GITHUB_APP_URL"] ?? "https://github.com/apps/tanren/installations/new";
 
 function brownfieldClient(c: Context, deps: ShellDeps): ExistingBrownfieldClient {
-  return new ExistingBrownfieldClient({ orchestratorUrl: deps.orchestratorUrl, cookieHeader: c.req.header("cookie") });
+  return new ExistingBrownfieldClient({
+    orchestratorUrl: deps.orchestratorUrl,
+    cookieHeader: c.req.header("cookie"),
+  });
 }
 
 function orchestratorClient(c: Context, deps: ShellDeps): OrchestratorClient {
-  return new OrchestratorClient({ orchestratorUrl: deps.orchestratorUrl, cookieHeader: c.req.header("cookie") });
+  return new OrchestratorClient({
+    orchestratorUrl: deps.orchestratorUrl,
+    cookieHeader: c.req.header("cookie"),
+  });
 }
 
 function parseReport(raw: unknown): ReconReport | undefined {
@@ -53,7 +59,11 @@ export function mountExistingBrownfield(app: Hono, deps: ShellDeps): void {
   // Step 1 entry (GET): the minimal link form (reused) inside the full shell.
   app.get("/onboarding/existing", async (c) => {
     const ctx = await loadShellContext(c, deps, { activeNavId: "onb-exist" });
-    return render(c, ctx, <ExistingFullBody step={1} orgLogin={ctx.org?.login ?? "your org"} githubAppUrl={GITHUB_APP_URL} />);
+    return render(
+      c,
+      ctx,
+      <ExistingFullBody step={1} orgLogin={ctx.org?.login ?? "your org"} githubAppUrl={GITHUB_APP_URL} />,
+    );
   });
 
   // Step 1 → 2 link POST. The reused P2B-0002 `ExistingProjectBody` form posts
@@ -75,7 +85,11 @@ export function mountExistingBrownfield(app: Hono, deps: ShellDeps): void {
     if (phase === "open-pr") return handleOpenPr(c, ctx, deps, form);
     if (phase === "seed") return handleSeed(c, ctx, deps, form);
     if (phase === "governance") return handleGovernance(c, ctx, deps, form);
-    return render(c, ctx, <ExistingFullBody step={1} orgLogin={ctx.org?.login ?? "your org"} githubAppUrl={GITHUB_APP_URL} />);
+    return render(
+      c,
+      ctx,
+      <ExistingFullBody step={1} orgLogin={ctx.org?.login ?? "your org"} githubAppUrl={GITHUB_APP_URL} />,
+    );
   });
 }
 
@@ -86,7 +100,11 @@ async function handleLink(c: Context, ctx: ShellContext, deps: ShellDeps, form: 
   const repoUrl = String(form["repoUrl"] ?? "").trim();
   const name = String(form["name"] ?? "").trim() || repoUrl.split("/").pop() || "linked-project";
   const linkError = (error: string, linked?: { repoUrl: string; files: BrownfieldDetectedFile[]; projectId: string }) =>
-    render(c, ctx, <ExistingFullBody step={1} orgLogin={orgLogin} githubAppUrl={GITHUB_APP_URL} link={{ error, linked }} />);
+    render(
+      c,
+      ctx,
+      <ExistingFullBody step={1} orgLogin={orgLogin} githubAppUrl={GITHUB_APP_URL} link={{ error, linked }} />,
+    );
 
   if (orgId === undefined || repoUrl === "") return linkError("pick a repo first");
   const product = orchestratorClient(c, deps);
@@ -95,7 +113,7 @@ async function handleLink(c: Context, ctx: ShellContext, deps: ShellDeps, form: 
     repoUrl,
     defaultBranch: String(form["defaultBranch"] ?? "main"),
     allocator: String(form["allocator"] ?? "local_docker"),
-    runnerImage: String(form["runnerImage"] ?? "tanren-runner")
+    runnerImage: String(form["runnerImage"] ?? "tanren-runner"),
   });
   if (project === undefined) return linkError("project create failed");
   const link = await product.brownfieldLink(orgId, project.projectId, { repoUrl });
@@ -106,15 +124,24 @@ async function handleLink(c: Context, ctx: ShellContext, deps: ShellDeps, form: 
   const recon = await brownfieldClient(c, deps).recon(orgId, project.projectId, repoUrl);
   if (!recon.ok || recon.result === undefined) {
     // Recon failed — show the linked confirmation so the operator can retry.
-    return linkError(
-      "linked, but recon could not read the repo — retry from the link step.",
-      { repoUrl, files: link.result.detectedFiles, projectId: project.projectId }
-    );
+    return linkError("linked, but recon could not read the repo — retry from the link step.", {
+      repoUrl,
+      files: link.result.detectedFiles,
+      projectId: project.projectId,
+    });
   }
   return render(
     c,
     ctx,
-    <ExistingFullBody step={2} orgLogin={orgLogin} githubAppUrl={GITHUB_APP_URL} projectId={project.projectId} repoUrl={repoUrl} recon={recon.result} report={recon.result.report} />
+    <ExistingFullBody
+      step={2}
+      orgLogin={orgLogin}
+      githubAppUrl={GITHUB_APP_URL}
+      projectId={project.projectId}
+      repoUrl={repoUrl}
+      recon={recon.result}
+      report={recon.result.report}
+    />,
   );
 }
 
@@ -125,11 +152,18 @@ async function handleAdvance(c: Context, ctx: ShellContext, deps: ShellDeps, for
   const repoUrl = String(form["repoUrl"] ?? "");
   const report = parseReport(form["report"]);
   const projectId = projectIdFromForm(form, ctx);
-  const next = (Math.min(5, step + 1)) as 2 | 3 | 4 | 5;
+  const next = Math.min(5, step + 1) as 2 | 3 | 4 | 5;
   return render(
     c,
     ctx,
-    <ExistingFullBody step={next} orgLogin={orgLogin} githubAppUrl={GITHUB_APP_URL} projectId={projectId} repoUrl={repoUrl} report={report} />
+    <ExistingFullBody
+      step={next}
+      orgLogin={orgLogin}
+      githubAppUrl={GITHUB_APP_URL}
+      projectId={projectId}
+      repoUrl={repoUrl}
+      report={report}
+    />,
   );
 }
 
@@ -143,7 +177,20 @@ async function handleOpenPr(c: Context, ctx: ShellContext, deps: ShellDeps, form
   const projectId = projectIdFromForm(form, ctx);
   const kept = keepPathsFromForm(form);
   const baseStep3 = (extra: Record<string, unknown>) =>
-    render(c, ctx, <ExistingFullBody step={3} orgLogin={orgLogin} githubAppUrl={GITHUB_APP_URL} projectId={projectId} repoUrl={repoUrl} report={report} posture={posture} {...extra} />);
+    render(
+      c,
+      ctx,
+      <ExistingFullBody
+        step={3}
+        orgLogin={orgLogin}
+        githubAppUrl={GITHUB_APP_URL}
+        projectId={projectId}
+        repoUrl={repoUrl}
+        report={report}
+        posture={posture}
+        {...extra}
+      />,
+    );
 
   if (orgId === undefined || projectId === undefined || report === undefined) {
     return baseStep3({ configInjectionError: "lost the recon report — restart from step 1." });
@@ -154,10 +201,12 @@ async function handleOpenPr(c: Context, ctx: ShellContext, deps: ShellDeps, form
     baseBranch: "main",
     report,
     posture,
-    excludePaths
+    excludePaths,
   });
   if (!result.ok || result.result === undefined) {
-    return baseStep3({ configInjectionError: result.error ?? "could not open the config-injection PR — try again." });
+    return baseStep3({
+      configInjectionError: result.error ?? "could not open the config-injection PR — try again.",
+    });
   }
   return baseStep3({ configInjection: result.result });
 }
@@ -170,13 +219,34 @@ async function handleSeed(c: Context, ctx: ShellContext, deps: ShellDeps, form: 
   const report = parseReport(form["report"]);
   const projectId = projectIdFromForm(form, ctx);
   if (orgId === undefined || projectId === undefined || report === undefined) {
-    return render(c, ctx, <ExistingFullBody step={1} orgLogin={orgLogin} githubAppUrl={GITHUB_APP_URL} link={{ error: "lost the recon report — restart." }} />);
+    return render(
+      c,
+      ctx,
+      <ExistingFullBody
+        step={1}
+        orgLogin={orgLogin}
+        githubAppUrl={GITHUB_APP_URL}
+        link={{ error: "lost the recon report — restart." }}
+      />,
+    );
   }
-  const result = await brownfieldClient(c, deps).seedDag(orgId, projectId, { repoUrl, report, includeIssues: true });
+  const result = await brownfieldClient(c, deps).seedDag(orgId, projectId, {
+    repoUrl,
+    report,
+    includeIssues: true,
+  });
   return render(
     c,
     ctx,
-    <ExistingFullBody step={4} orgLogin={orgLogin} githubAppUrl={GITHUB_APP_URL} projectId={projectId} repoUrl={repoUrl} report={report} seeded={result.result} />
+    <ExistingFullBody
+      step={4}
+      orgLogin={orgLogin}
+      githubAppUrl={GITHUB_APP_URL}
+      projectId={projectId}
+      repoUrl={repoUrl}
+      report={report}
+      seeded={result.result}
+    />,
   );
 }
 
@@ -194,7 +264,15 @@ async function handleGovernance(c: Context, ctx: ShellContext, deps: ShellDeps, 
   return render(
     c,
     ctx,
-    <ExistingFullBody step={5} orgLogin={orgLogin} githubAppUrl={GITHUB_APP_URL} projectId={projectId} repoUrl={repoUrl} posture={posture} governance={saved} />
+    <ExistingFullBody
+      step={5}
+      orgLogin={orgLogin}
+      githubAppUrl={GITHUB_APP_URL}
+      projectId={projectId}
+      repoUrl={repoUrl}
+      posture={posture}
+      governance={saved}
+    />,
   );
 }
 
@@ -205,7 +283,7 @@ const ALL_PROPOSED_PATHS = [
   ".mergify.yml",
   "CODEOWNERS",
   ".gitignore",
-  ".github/PULL_REQUEST_TEMPLATE.md"
+  ".github/PULL_REQUEST_TEMPLATE.md",
 ];
 
 function keepPathsFromForm(form: Record<string, unknown>): string[] {

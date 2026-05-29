@@ -6,7 +6,7 @@ import {
   UnknownConfigVersionError,
   defaultOrgConfigV1,
   migrateOrgConfig,
-  orgConfigJsonSchema
+  orgConfigJsonSchema,
 } from "../src/engine/config/index.js";
 
 function captureOrgMigrationError(raw: unknown): UnknownConfigVersionError {
@@ -31,14 +31,14 @@ describe("OrgConfigV1 parser", () => {
       maxWriterIterPerSubtask: 5,
       maxPlannerRerunsPerSpec: 3,
       maxRetriesPerTransientFailure: 3,
-      maxSpecDiscoveryRoundsWithForge: 20
+      maxSpecDiscoveryRoundsWithForge: 20,
     });
     expect(cfg.allocator).toEqual({
       kind: "local-docker",
       concurrency: 3,
       memoryMb: 4096,
       cpus: 2,
-      runnerImage: "ghcr.io/cat-cave/tanren-runner:v0"
+      runnerImage: "ghcr.io/cat-cave/tanren-runner:v0",
     });
     expect(cfg.forgePersona).toEqual({ systemPromptOverride: null, enableTools: [] });
   });
@@ -54,8 +54,8 @@ describe("OrgConfigV1 parser", () => {
     const cfg = migrateOrgConfig({
       version: 1,
       routing: {
-        write: { chain: [{ cli: "codex", model: "gpt-5", authRef: "vault://codex-prod" }] }
-      }
+        write: { chain: [{ cli: "codex", model: "gpt-5", authRef: "vault://codex-prod" }] },
+      },
     });
     expect(cfg.routing.write.chain).toHaveLength(1);
     expect(cfg.routing.write.chain[0]?.cli).toBe("codex");
@@ -70,7 +70,7 @@ describe("OrgConfigV1 parser", () => {
     const cfg = migrateOrgConfig({
       version: 1,
       auditGateEnabled: true,
-      auditGate: { repo: "cat-cave/tanren-config" }
+      auditGate: { repo: "cat-cave/tanren-config" },
     });
     expect(cfg.auditGate?.repo).toBe("cat-cave/tanren-config");
     expect(cfg.auditGate?.baseBranch).toBe("main");
@@ -99,20 +99,18 @@ describe("OrgConfigV1 parser", () => {
       version: 1,
       defaultCredentials: {
         codex_chatgpt_auth: "credential/codex/org/o/default",
-        github_token: "credential/github/org/o/default"
-      }
+        github_token: "credential/github/org/o/default",
+      },
     });
     expect(cfg.defaultCredentials).toEqual({
       codex_chatgpt_auth: "credential/codex/org/o/default",
-      github_token: "credential/github/org/o/default"
+      github_token: "credential/github/org/o/default",
     });
     expect(migrateOrgConfig(cfg)).toEqual(cfg);
   });
 
   it("rejects unknown keys inside defaultCredentials", () => {
-    expect(() =>
-      migrateOrgConfig({ version: 1, defaultCredentials: { gitlab_token: "x" } })
-    ).toThrow(/.+/);
+    expect(() => migrateOrgConfig({ version: 1, defaultCredentials: { gitlab_token: "x" } })).toThrow(/.+/);
   });
 
   it("is idempotent on a V1-shaped input", () => {

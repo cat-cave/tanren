@@ -34,8 +34,12 @@ describe("typed-state-constraints migration history", () => {
 
   it("defines nullable outcome CHECKs", async () => {
     const sql = await readAllMigrations();
-    expect(sql).toContain(`"runs"."outcome" IS NULL OR "runs"."outcome" IN (${literalList(stateEnumLists.runs_outcome)})`);
-    expect(sql).toContain(`"tasks"."outcome" IS NULL OR "tasks"."outcome" IN (${literalList(stateEnumLists.tasks_outcome)})`);
+    expect(sql).toContain(
+      `"runs"."outcome" IS NULL OR "runs"."outcome" IN (${literalList(stateEnumLists.runs_outcome)})`,
+    );
+    expect(sql).toContain(
+      `"tasks"."outcome" IS NULL OR "tasks"."outcome" IN (${literalList(stateEnumLists.tasks_outcome)})`,
+    );
   });
 
   it("defines the task kind, agent_kind, and job task_kind CHECKs", async () => {

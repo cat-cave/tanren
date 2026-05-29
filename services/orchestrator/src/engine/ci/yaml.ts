@@ -93,7 +93,11 @@ function block(lines: Line[], start: number, indent: number): { value: YamlValue
 function sequence(lines: Line[], start: number, indent: number): { value: YamlValue; next: number } {
   const items: YamlValue[] = [];
   let i = start;
-  for (let line = lines[i]; line !== undefined && line.indent === indent && (line.content === "-" || line.content.startsWith("- ")); line = lines[i]) {
+  for (
+    let line = lines[i];
+    line !== undefined && line.indent === indent && (line.content === "-" || line.content.startsWith("- "));
+    line = lines[i]
+  ) {
     const rest = line.content === "-" ? "" : line.content.slice(2).trim();
     if (rest.length === 0) {
       const result = block(lines, i + 1, indent + 2);
@@ -120,7 +124,7 @@ function inlineMappingItem(
   lines: Line[],
   start: number,
   indent: number,
-  rest: string
+  rest: string,
 ): { value: YamlValue; next: number } {
   const keyIndent = indent + 2;
   const startLine = lines[start];

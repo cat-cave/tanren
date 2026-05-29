@@ -4,8 +4,8 @@ import type { SshSubstrate } from "../contracts/sshSubstrate.js";
 import { storeCodexAuthBundle } from "../credentials/codexAuth.js";
 import { materializeCodexAuthBundle } from "../credentials/codexMaterializer.js";
 import { quoteSshShellArg } from "../ssh/command.js";
-import { runWorkspaceSshCommand } from "../workspace/index.js";
-import type { AnswererAdapter, Commit, TokenUsage, UsageLimitSignal, WriterAdapter, WriterResult } from "./types.js";
+import type { AnswererAdapter, TokenUsage, UsageLimitSignal, WriterAdapter, WriterResult } from "./types.js";
+import { captureBaselineSha, captureGitStateAfterCodex } from "./codexGit.js";
 
 export interface CodexWriterDependencies {
   secrets: SecretStore;
@@ -29,7 +29,7 @@ export interface CodexEventTelemetry {
 export class CodexUsageLimitError extends Error {
   constructor(
     readonly schemaName: string,
-    readonly providerMessage: string
+    readonly providerMessage: string,
   ) {
     super(`Codex usage limit reached for schema ${schemaName}: ${providerMessage}`);
     this.name = "CodexUsageLimitError";
@@ -64,13 +64,18 @@ export function createCodexWriter(dependencies: CodexWriterDependencies): Writer
         ref: dependencies.credentialRef,
         runId: dependencies.runId,
         baseDir: dependencies.codexHomeBaseDir,
-        timeoutMs: Math.min(opts.timeoutMs, 30_000)
+        timeoutMs: Math.min(opts.timeoutMs, 30_000),
       });
-      const baselineSha = await captureBaselineSha(dependencies.ssh, dependencies.target, opts.workspace, opts.timeoutMs);
+      const baselineSha = await captureBaselineSha(
+        dependencies.ssh,
+        dependencies.target,
+        opts.workspace,
+        opts.timeoutMs,
+      );
       const codex = await dependencies.ssh.run(dependencies.target, {
         command: buildCodexExecCommand({ codexHome: auth.CODEX_HOME, workspace: opts.workspace }),
         stdin: opts.prompt,
-        timeoutMs: opts.timeoutMs
+        timeoutMs: opts.timeoutMs,
       });
       const telemetry = parseCodexJsonlTelemetry(codex.stdout);
       await persistRefreshedCodexAuthBestEffort({
@@ -79,10 +84,16 @@ export function createCodexWriter(dependencies: CodexWriterDependencies): Writer
         target: dependencies.target,
         ref: dependencies.credentialRef,
         codexHome: auth.CODEX_HOME,
-        timeoutMs: Math.min(opts.timeoutMs, 30_000)
+        timeoutMs: Math.min(opts.timeoutMs, 30_000),
       });
 
-      const gitState = await captureGitStateAfterCodex(dependencies.ssh, dependencies.target, opts.workspace, baselineSha, opts.timeoutMs);
+      const gitState = await captureGitStateAfterCodex(
+        dependencies.ssh,
+        dependencies.target,
+        opts.workspace,
+        baselineSha,
+        opts.timeoutMs,
+      );
       if (codex.timedOut) {
         return failedResult("timeout", telemetry, gitState);
       }
@@ -100,9 +111,9 @@ export function createCodexWriter(dependencies: CodexWriterDependencies): Writer
         ...gitState,
         exitReason: "completed",
         tokenUsage: telemetry.tokenUsage,
-        telemetry
+        telemetry,
       };
-    }
+    },
   };
 }
 
@@ -119,16 +130,27 @@ export function createCodexAnswerer<TOutput>(dependencies: CodexAnswererDependen
         ref: dependencies.credentialRef,
         runId: dependencies.runId,
         baseDir: dependencies.codexHomeBaseDir,
-        timeoutMs: Math.min(opts.timeoutMs, 30_000)
+        timeoutMs: Math.min(opts.timeoutMs, 30_000),
       });
       const workspace = opts.workspace ?? answererWorkspacePath(dependencies, opts.outputSchema.name);
       const schemaPath = `${auth.CODEX_HOME}/${safeSchemaFileName(opts.outputSchema.name)}.schema.json`;
       const outputPath = `${auth.CODEX_HOME}/${safeSchemaFileName(opts.outputSchema.name)}.response.json`;
-      await prepareCodexAnswererWorkspace(dependencies, workspace, schemaPath, opts.outputSchema.jsonSchema, opts.timeoutMs);
+      await prepareCodexAnswererWorkspace(
+        dependencies,
+        workspace,
+        schemaPath,
+        opts.outputSchema.jsonSchema,
+        opts.timeoutMs,
+      );
       const result = await dependencies.ssh.run(dependencies.target, {
-        command: buildCodexAnswererExecCommand({ codexHome: auth.CODEX_HOME, workspace, schemaPath, outputPath }),
+        command: buildCodexAnswererExecCommand({
+          codexHome: auth.CODEX_HOME,
+          workspace,
+          schemaPath,
+          outputPath,
+        }),
         stdin: opts.prompt,
-        timeoutMs: opts.timeoutMs
+        timeoutMs: opts.timeoutMs,
       });
       const telemetry = parseCodexJsonlTelemetry(result.stdout);
       await persistRefreshedCodexAuthBestEffort({
@@ -137,7 +159,7 @@ export function createCodexAnswerer<TOutput>(dependencies: CodexAnswererDependen
         target: dependencies.target,
         ref: dependencies.credentialRef,
         codexHome: auth.CODEX_HOME,
-        timeoutMs: Math.min(opts.timeoutMs, 30_000)
+        timeoutMs: Math.min(opts.timeoutMs, 30_000),
       });
       if (result.timedOut) {
         throw new Error(`Codex Answerer timed out for schema ${opts.outputSchema.name}`);
@@ -146,17 +168,19 @@ export function createCodexAnswerer<TOutput>(dependencies: CodexAnswererDependen
         throw new CodexUsageLimitError(opts.outputSchema.name, telemetry.usageLimit.message);
       }
       if (result.failure !== undefined || result.exitCode !== 0) {
-        throw new Error(`Codex Answerer failed for schema ${opts.outputSchema.name}: exit ${result.exitCode ?? "unknown"}`);
+        throw new Error(
+          `Codex Answerer failed for schema ${opts.outputSchema.name}: exit ${result.exitCode ?? "unknown"}`,
+        );
       }
       const response = await dependencies.ssh.run(dependencies.target, {
         command: `cat ${quoteSshShellArg(outputPath)}`,
-        timeoutMs: Math.min(opts.timeoutMs, 30_000)
+        timeoutMs: Math.min(opts.timeoutMs, 30_000),
       });
       if (response.exitCode !== 0 || response.failure !== undefined || response.timedOut) {
         throw new Error(`Codex Answerer response capture failed for schema ${opts.outputSchema.name}`);
       }
       return parseStructuredAnswererOutput(response.stdout, opts.outputSchema, telemetry);
-    }
+    },
   };
 }
 
@@ -170,7 +194,7 @@ async function persistRefreshedCodexAuthBestEffort(input: {
 }): Promise<void> {
   const result = await input.ssh.run(input.target, {
     command: `cat ${quoteSshShellArg(`${input.codexHome}/auth.json`)}`,
-    timeoutMs: input.timeoutMs
+    timeoutMs: input.timeoutMs,
   });
   if (result.exitCode !== 0 || result.timedOut || result.failure !== undefined) {
     return;
@@ -191,7 +215,7 @@ export function buildCodexExecCommand(input: { codexHome: string; workspace: str
     "--ignore-user-config",
     "--cd",
     quoteSshShellArg(input.workspace),
-    "-"
+    "-",
   ].join(" ");
 }
 
@@ -215,7 +239,7 @@ export function buildCodexAnswererExecCommand(input: {
     quoteSshShellArg(input.schemaPath),
     "--output-last-message",
     quoteSshShellArg(input.outputPath),
-    "-"
+    "-",
   ].join(" ");
 }
 
@@ -259,7 +283,7 @@ function detectUsageLimit(event: Record<string, unknown>): UsageLimitSignal | un
 export function parseStructuredAnswererOutput<TOutput>(
   stdout: string,
   schema: { name: string; parse(value: unknown): TOutput },
-  _telemetry?: CodexAnswererTelemetry | CodexEventTelemetry
+  _telemetry?: CodexAnswererTelemetry | CodexEventTelemetry,
 ): TOutput {
   let parsed: unknown;
   try {
@@ -279,16 +303,16 @@ async function prepareCodexAnswererWorkspace(
   workspace: string,
   schemaPath: string,
   jsonSchema: Record<string, unknown>,
-  timeoutMs: number
+  timeoutMs: number,
 ): Promise<void> {
   await dependencies.ssh.run(dependencies.target, {
     command: `mkdir -p ${quoteSshShellArg(workspace)}`,
-    timeoutMs: Math.min(timeoutMs, 30_000)
+    timeoutMs: Math.min(timeoutMs, 30_000),
   });
   await dependencies.ssh.run(dependencies.target, {
     command: `cat > ${quoteSshShellArg(schemaPath)}`,
     stdin: JSON.stringify(jsonSchema),
-    timeoutMs: Math.min(timeoutMs, 30_000)
+    timeoutMs: Math.min(timeoutMs, 30_000),
   });
 }
 
@@ -308,7 +332,9 @@ function messageFromUnknown(error: unknown): string {
 function parseJsonObject(line: string): Record<string, unknown> | undefined {
   try {
     const value = JSON.parse(line) as unknown;
-    return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+    return typeof value === "object" && value !== null && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : undefined;
   } catch {
     return undefined;
   }
@@ -342,15 +368,24 @@ function tokenUsageFromRecord(record: Record<string, unknown>): TokenUsage | und
   if (rawInput === undefined || rawOutput === undefined) {
     return undefined;
   }
-  const cachedInputTokens = numberField(record, ["cached_input_tokens", "cachedInputTokens", "cache_read_input_tokens"]) ?? 0;
-  const cacheCreationTokens = numberField(record, ["cache_creation_input_tokens", "cacheCreationTokens", "cache_creation_tokens"]) ?? 0;
+  const cachedInputTokens =
+    numberField(record, ["cached_input_tokens", "cachedInputTokens", "cache_read_input_tokens"]) ?? 0;
+  const cacheCreationTokens =
+    numberField(record, ["cache_creation_input_tokens", "cacheCreationTokens", "cache_creation_tokens"]) ?? 0;
   const reasoningOutputTokens = numberField(record, ["reasoning_output_tokens", "reasoningOutputTokens"]) ?? 0;
   const inputTokens = Math.max(0, rawInput - cachedInputTokens); // de-overlap: codex input includes cached
   const outputTokens = Math.max(0, rawOutput - reasoningOutputTokens); // de-overlap: codex output includes reasoning
   const totalTokens =
     numberField(record, ["total_tokens", "totalTokens"]) ??
     inputTokens + cachedInputTokens + cacheCreationTokens + outputTokens + reasoningOutputTokens;
-  return { inputTokens, cachedInputTokens, cacheCreationTokens, outputTokens, reasoningOutputTokens, totalTokens };
+  return {
+    inputTokens,
+    cachedInputTokens,
+    cacheCreationTokens,
+    outputTokens,
+    reasoningOutputTokens,
+    totalTokens,
+  };
 }
 
 function numberField(record: Record<string, unknown>, keys: string[]): number | undefined {
@@ -363,99 +398,10 @@ function numberField(record: Record<string, unknown>, keys: string[]): number | 
   return undefined;
 }
 
-async function captureBaselineSha(ssh: SshSubstrate, target: SshTarget, workspace: string, timeoutMs: number): Promise<string> {
-  const result = await runWorkspaceSshCommand(ssh, target, {
-    label: "capture baseline git sha",
-    cwd: workspace,
-    command: "git rev-parse HEAD",
-    timeoutMs
-  });
-  const sha = result.stdout.trim();
-  if (!/^[0-9a-f]{40}$/.test(sha)) {
-    throw new Error(`baseline git capture returned invalid sha: ${sha}`);
-  }
-  return sha;
-}
-
-async function commitWorkspaceChangesAfterCodex(
-  ssh: SshSubstrate,
-  target: SshTarget,
-  workspace: string,
-  timeoutMs: number
-): Promise<void> {
-  await runWorkspaceSshCommand(ssh, target, {
-    label: "commit codex workspace changes",
-    cwd: workspace,
-    command: [
-      "set -eu",
-      "git add -A",
-      "if ! git diff --cached --quiet --exit-code; then",
-      "GIT_AUTHOR_DATE='2026-01-01T00:00:00Z' GIT_COMMITTER_DATE='2026-01-01T00:00:00Z' git commit -m 'codex writer'",
-      "fi"
-    ].join("\n"),
-    timeoutMs
-  });
-}
-
-async function captureGitStateAfterCodex(
-  ssh: SshSubstrate,
-  target: SshTarget,
-  workspace: string,
-  baselineSha: string,
-  timeoutMs: number
-): Promise<Pick<WriterResult, "diff" | "commits">> {
-  await commitWorkspaceChangesAfterCodex(ssh, target, workspace, timeoutMs);
-  return await captureGitStateAfterBaseline(ssh, target, workspace, baselineSha, timeoutMs);
-}
-
-async function captureGitStateAfterBaseline(
-  ssh: SshSubstrate,
-  target: SshTarget,
-  workspace: string,
-  baselineSha: string,
-  timeoutMs: number
-): Promise<Pick<WriterResult, "diff" | "commits">> {
-  const diff = await runWorkspaceSshCommand(ssh, target, {
-    label: "capture codex git diff",
-    cwd: workspace,
-    command: `git diff --no-color ${baselineSha}`,
-    timeoutMs
-  });
-  const log = await runWorkspaceSshCommand(ssh, target, {
-    label: "capture codex git commits",
-    cwd: workspace,
-    command: `git log --format='%H%x09%s' --reverse ${baselineSha}..HEAD`,
-    timeoutMs
-  });
-  return { diff: diff.stdout, commits: parseGitLogCommits(log.stdout) };
-}
-
-function parseGitLogCommits(stdout: string): Commit[] {
-  return stdout
-    .trimEnd()
-    .split("\n")
-    .filter((line) => line !== "")
-    .map((line) => {
-      const separator = line.indexOf("\t");
-      if (separator === -1) {
-        throw new Error("git commit capture did not include sha/message separator");
-      }
-      const sha = line.slice(0, separator);
-      const message = line.slice(separator + 1);
-      if (!/^[0-9a-f]{40}$/.test(sha)) {
-        throw new Error(`git commit capture returned invalid sha: ${sha}`);
-      }
-      if (message === "") {
-        throw new Error("git commit capture returned an empty commit message");
-      }
-      return { sha, message };
-    });
-}
-
 function failedResult(
   exitReason: "timeout" | "crashed" | "window_exhausted",
   telemetry: CodexEventTelemetry,
-  gitState: Pick<WriterResult, "diff" | "commits">
+  gitState: Pick<WriterResult, "diff" | "commits">,
 ): WriterResult {
   return { ...gitState, exitReason, tokenUsage: telemetry.tokenUsage, telemetry };
 }

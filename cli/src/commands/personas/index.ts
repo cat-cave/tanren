@@ -21,7 +21,7 @@ export async function personasCreate(argv: string[]): Promise<void> {
   const body = {
     scope: projectId === undefined ? "org" : "project",
     name: required(args, "name"),
-    description: optional(args, "description") ?? ""
+    description: optional(args, "description") ?? "",
   };
   const path =
     projectId === undefined
@@ -34,8 +34,5 @@ export async function personasGet(argv: string[]): Promise<void> {
   const args = parseArgs(argv);
   const orgId = required(args, "org-id");
   const personaId = required(args, "persona-id");
-  jsonOutput(
-    args,
-    await request(`/orgs/${encodeURIComponent(orgId)}/personas/${encodeURIComponent(personaId)}`)
-  );
+  jsonOutput(args, await request(`/orgs/${encodeURIComponent(orgId)}/personas/${encodeURIComponent(personaId)}`));
 }

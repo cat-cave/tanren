@@ -63,7 +63,7 @@ export class RoutesPool {
       external_id: input.external_id ?? input.id,
       login: input.login ?? input.id,
       display_name: input.display_name ?? input.login ?? input.id,
-      config: input.config ?? {}
+      config: input.config ?? {},
     };
     this.orgs.set(row.id, row);
     return row;
@@ -82,7 +82,7 @@ export class RoutesPool {
       runner_image: input.runner_image ?? "ghcr.io/example/runner:v0",
       allocator: input.allocator ?? "local-docker",
       config: input.config ?? {},
-      org_id: input.org_id
+      org_id: input.org_id,
     };
     this.projects.set(row.project_id, row);
     return row;
@@ -96,7 +96,7 @@ export class RoutesPool {
       description: input.description ?? "Spec description",
       acceptance_criteria: input.acceptance_criteria ?? ["criterion"],
       depends_on: input.depends_on ?? [],
-      status: input.status ?? "pending"
+      status: input.status ?? "pending",
     };
     this.specs.set(row.spec_id, row);
     return row;
@@ -160,7 +160,7 @@ export class RoutesPool {
         runner_image: String(params[4]),
         allocator: String(params[5]),
         config: JSON.parse(String(params[6])) as unknown,
-        org_id: params[7] === null ? null : String(params[7])
+        org_id: params[7] === null ? null : String(params[7]),
       });
       return { rows: [], rowCount: 1 };
     }
@@ -180,7 +180,7 @@ export class RoutesPool {
       this.projectMembers.set(`${String(params[0])}:${String(params[1])}`, {
         project_id: String(params[0]),
         user_id: String(params[1]),
-        role: String(params[2])
+        role: String(params[2]),
       });
       return { rows: [], rowCount: 1 };
     }
@@ -212,7 +212,7 @@ export class RoutesPool {
         description: String(params[3]),
         acceptance_criteria: JSON.parse(String(params[4])) as unknown,
         depends_on: params[5] as string[],
-        status: String(params[6])
+        status: String(params[6]),
       });
       return { rows: [], rowCount: 1 };
     }

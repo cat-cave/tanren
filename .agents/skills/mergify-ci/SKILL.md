@@ -36,6 +36,7 @@ mergify ci junit-process \
 `FILES` can be individual paths or quoted glob patterns (e.g. `'reports/**/*.xml'`). Always quote the pattern so Mergify expands it rather than the shell — this is the recommended approach for large, sharded test suites.
 
 **Key options:**
+
 - `--token` / `-t` (env: `MERGIFY_TOKEN`) -- CI Insights application key
 - `--repository` / `-r` -- Repository full name (auto-detected in GitHub Actions)
 - `--tests-target-branch` / `-ttb` -- Branch used for quarantine evaluation. Auto-detected per CI provider: GitHub Actions (`GITHUB_BASE_REF` → `GITHUB_HEAD_REF` → `GITHUB_REF_NAME` → `GITHUB_REF`), Buildkite (`BUILDKITE_PULL_REQUEST_BASE_BRANCH` → `BUILDKITE_BRANCH`), CircleCI (`CIRCLE_BRANCH`), Jenkins (`CHANGE_TARGET` → `GIT_BRANCH`).
@@ -45,6 +46,7 @@ mergify ci junit-process \
 - `--test-exit-code` / `-e` (env: `MERGIFY_TEST_EXIT_CODE`) -- Exit code of the test runner, used to detect silent failures where the runner crashed but the JUnit report appears clean
 
 **Behavior:**
+
 1. Parses JUnit XML files into test spans
 2. Checks quarantine status for failing tests against the Mergify API
 3. Uploads all test spans to Mergify CI Insights
@@ -53,6 +55,7 @@ mergify ci junit-process \
 6. If `--test-exit-code` is non-zero but no test failures are found, exits with code 1 (silent failure detection)
 
 **GitHub Actions example:**
+
 ```yaml
 - name: Run tests
   id: tests
@@ -80,6 +83,7 @@ mergify ci git-refs
 ```
 
 **Output formats (`--format`):**
+
 - `text` (default) — human-readable `Base:` / `Head:` lines
 - `shell` — `MERGIFY_GIT_REFS_{BASE,HEAD,SOURCE}=...` lines suitable for `eval`, with POSIX-safe shell quoting. When base can't be detected, `MERGIFY_GIT_REFS_BASE=''`.
 - `json` — single-line JSON object with `base`, `head`, `source` keys. `base` may be `null` when it can't be detected (e.g., `workflow_dispatch` events); use `jq -r '.base // ""'` to coalesce to empty string.
@@ -113,6 +117,7 @@ mergify ci scopes --config .mergify.yml --write scopes.json
 ```
 
 **Key options:**
+
 - `--config` (env: `MERGIFY_CONFIG_PATH`) -- Path to the Mergify YAML config file (auto-detected)
 - `--base` -- Base git reference (auto-detected)
 - `--head` -- Head git reference (default: HEAD)
@@ -136,6 +141,7 @@ mergify ci scopes-send --scopes-file scopes.txt -p 123
 ```
 
 **Key options:**
+
 - `--token` / `-t` (env: `MERGIFY_TOKEN`) -- Mergify key
 - `--repository` / `-r` -- Repository full name (auto-detected)
 - `--pull-request` / `-p` -- Pull request number (auto-detected in GitHub Actions)
@@ -163,6 +169,7 @@ mergify tests show -r owner/repo \
 ```
 
 **Key options:**
+
 - `--repository` / `-r` -- Repository full name (`owner/repo`); required.
 - `--token` / `-t` (env: `MERGIFY_TOKEN`, then `GITHUB_TOKEN`) -- Auth token.
 - `--api-url` / `-u` (env: `MERGIFY_API_URL`) -- API base URL.
@@ -172,6 +179,7 @@ mergify tests show -r owner/repo \
 - `--json` -- Emit a single JSON document `{"tests": [...]}` to stdout.
 
 **Exit codes:**
+
 - `0` -- All matched tests are `healthy` or unknown (or no match at all).
 - `1` -- At least one test is `flaky`.
 - `6` -- At least one test is `broken` (consistently failing).
@@ -190,6 +198,7 @@ This command is useful in CI workflows that need to know whether the current run
 ## Common Patterns
 
 ### Full CI pipeline with quarantine
+
 ```yaml
 jobs:
   test:
@@ -205,6 +214,7 @@ jobs:
 ```
 
 ### Selective testing with scopes
+
 ```yaml
 jobs:
   detect:

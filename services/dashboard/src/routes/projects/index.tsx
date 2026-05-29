@@ -30,20 +30,20 @@ import {
   type ProjectConfig,
   type RoleId,
   type RoutingChainEntry,
-  type RoutingTable
 } from "../../api/types.js";
 import { loadShellContext, renderShell, type ShellDeps } from "../../app/mountShell.js";
 import { ProjectDagBody } from "../../components/project/ProjectDagBody.js";
 import { ProjectViewBody } from "../../components/project/ProjectViewBody.js";
 import { buildProjectViewModel, sumRunCosts } from "../../components/project/projectViewData.js";
-import { ESCAPE_HATCH_DEFAULTS, SettingsBody } from "../../components/project/SettingsBody.js";
+import { SettingsBody } from "../../components/project/SettingsBody.js";
+import { resolveConfig } from "./projectConfig.js";
 import { SpecCreateBody, SpecListBody } from "../../components/project/SpecCreateBody.js";
 import { mountSpecDetailRoutes, notFoundBody, resolveProjectMode } from "./specRoutes.js";
 
 function clientFor(c: Context, deps: ShellDeps): OrchestratorClient {
   return new OrchestratorClient({
     orchestratorUrl: deps.orchestratorUrl,
-    cookieHeader: c.req.header("cookie")
+    cookieHeader: c.req.header("cookie"),
   });
 }
 
@@ -76,7 +76,7 @@ export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
               <p>No project {projectId} is visible to you.</p>
             </section>
           </div>
-        </div>
+        </div>,
       );
     }
     const orgId = ctx.org.id;
@@ -87,7 +87,7 @@ export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
       client.listInsights(orgId, projectId),
       client.listMilestones(orgId, projectId),
       client.listFeed(orgId, projectId),
-      client.generateProjectNarration(orgId, projectId)
+      client.generateProjectNarration(orgId, projectId),
     ]);
     const model = buildProjectViewModel({
       projectId,
@@ -97,7 +97,7 @@ export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
       milestones,
       feed,
       narration,
-      weekSpendUsd: sumRunCosts(runs)
+      weekSpendUsd: sumRunCosts(runs),
     });
     if (mode === "dag") {
       const dag = await getProjectDag(client, orgId, projectId);
@@ -105,14 +105,20 @@ export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
         c,
         ctx,
         { title: `tanren · ${ctx.project.name} · dag` },
-        <ProjectDagBody projectId={projectId} projectName={ctx.project.name} dag={dag} model={model} />
+        <ProjectDagBody projectId={projectId} projectName={ctx.project.name} dag={dag} model={model} />,
       );
     }
     return renderShell(
       c,
       ctx,
       { title: `tanren · ${ctx.project.name}` },
-      <ProjectViewBody projectId={projectId} projectName={ctx.project.name} orgId={orgId} model={model} insights={insights} />
+      <ProjectViewBody
+        projectId={projectId}
+        projectName={ctx.project.name}
+        orgId={orgId}
+        model={model}
+        insights={insights}
+      />,
     );
   });
 
@@ -128,7 +134,7 @@ export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
     const client = clientFor(c, deps);
     const [specs, runs] = await Promise.all([
       client.listSpecs(ctx.org.id, projectId),
-      client.listRuns(ctx.org.id, projectId)
+      client.listRuns(ctx.org.id, projectId),
     ]);
     const runBySpec: Record<string, string | undefined> = {};
     for (const run of runs) {
@@ -138,7 +144,7 @@ export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
       c,
       ctx,
       { title: `tanren · ${ctx.project.name} specs` },
-      <SpecListBody project={ctx.project} specs={specs} runBySpec={runBySpec} />
+      <SpecListBody project={ctx.project} specs={specs} runBySpec={runBySpec} />,
     );
   });
 
@@ -155,13 +161,13 @@ export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
     const [milestones, behaviors, specs] = await Promise.all([
       client.listMilestones(ctx.org.id, projectId),
       client.listAllBehaviors(ctx.org.id, projectId),
-      client.listSpecs(ctx.org.id, projectId)
+      client.listSpecs(ctx.org.id, projectId),
     ]);
     return renderShell(
       c,
       ctx,
       { title: `tanren · new spec` },
-      <SpecCreateBody project={ctx.project} milestones={milestones} behaviors={behaviors} specs={specs} />
+      <SpecCreateBody project={ctx.project} milestones={milestones} behaviors={behaviors} specs={specs} />,
     );
   });
 
@@ -193,7 +199,7 @@ export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
         title,
         description,
         acceptanceCriteria,
-        milestoneId
+        milestoneId,
       });
 
     if (title === "" || description === "" || acceptanceCriteria.length === 0) {
@@ -204,13 +210,13 @@ export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
       title,
       description,
       acceptanceCriteria,
-      ...(dependsOn.length > 0 ? { dependsOn } : {})
+      ...(dependsOn.length > 0 ? { dependsOn } : {}),
     });
     if (!result.ok) {
       return reRender(
         result.status === 0
           ? "could not reach the orchestrator. try again."
-          : `spec creation failed (status ${result.status}).`
+          : `spec creation failed (status ${result.status}).`,
       );
     }
     // Milestone + behavior associations are carried as form fields; the
@@ -264,10 +270,12 @@ export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
           </div>
           <div class="page-body">
             <section class="placeholder-card">
-              <p>Link a project first — routing chains are per-project. <a href="/onboarding/existing">link a repo ↗</a></p>
+              <p>
+                Link a project first — routing chains are per-project. <a href="/onboarding/existing">link a repo ↗</a>
+              </p>
             </section>
           </div>
-        </div>
+        </div>,
       );
     }
     return c.redirect(`/settings/routing/${project.projectId}`);
@@ -283,7 +291,7 @@ export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
     const [detail, orgCredentials, org] = await Promise.all([
       client.getProject(ctx.org.id, projectId),
       client.listOrgCredentials(ctx.org.id),
-      client.getOrg(ctx.org.id)
+      client.getOrg(ctx.org.id),
     ]);
     const { routing, escapeHatches } = resolveConfig(detail?.config);
     const boundCredentials = detail?.config?.credentials ?? {};
@@ -304,7 +312,7 @@ export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
         saved={saved}
         orgCredentials={orgCredentials}
         boundCredentials={boundCredentials}
-      />
+      />,
     );
   });
 
@@ -320,7 +328,7 @@ export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
     const entry: RoutingChainEntry = {
       cli: String(form["cli"] ?? "").trim(),
       model: String(form["model"] ?? "").trim(),
-      authRef: String(form["authRef"] ?? "").trim()
+      authRef: String(form["authRef"] ?? "").trim(),
     };
     await mutateConfig(c, deps, orgId, projectId, (config) => {
       if (ROLE_IDS.includes(role) && entry.cli !== "" && entry.model !== "" && entry.authRef !== "") {
@@ -394,7 +402,7 @@ export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
       for (const field of [
         "maxWriterIterPerSubtask",
         "maxPlannerRerunsPerSpec",
-        "maxRetriesPerTransientFailure"
+        "maxRetriesPerTransientFailure",
       ] as const) {
         const raw = form[field];
         if (raw !== undefined) {
@@ -408,36 +416,6 @@ export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
   });
 }
 
-/** Resolve a project's merged routing table + escape hatches, defaulted. */
-function resolveConfig(config: ProjectConfig | undefined): {
-  routing: RoutingTable;
-  escapeHatches: EscapeHatches;
-} {
-  const routing = emptyRoutingTable();
-  if (config?.routing !== undefined) {
-    for (const role of ROLE_IDS) {
-      const chain = config.routing[role]?.chain;
-      if (Array.isArray(chain)) routing[role].chain = chain;
-    }
-  }
-  const escapeHatches: EscapeHatches = {
-    ...ESCAPE_HATCH_DEFAULTS,
-    ...config?.escapeHatches
-  };
-  return { routing, escapeHatches };
-}
-
-function emptyRoutingTable(): RoutingTable {
-  return {
-    plan: { chain: [] },
-    write: { chain: [] },
-    check: { chain: [] },
-    audit: { chain: [] },
-    demo: { chain: [] },
-    forge: { chain: [] }
-  };
-}
-
 /**
  * Load the merged config, apply `edit` to a working copy, PATCH it back. The
  * working copy is built from a defaulted routing table + escape hatches so the
@@ -448,17 +426,21 @@ async function mutateConfig(
   deps: ShellDeps,
   orgId: string,
   projectId: string,
-  edit: (config: ProjectConfig) => void
+  edit: (config: ProjectConfig) => void,
 ): Promise<void> {
   if (orgId === "") return;
   const client = clientFor(c, deps);
   const detail = await client.getProject(orgId, projectId);
   const resolved = resolveConfig(detail?.config);
   const working: ProjectConfig = {
-    ...(detail?.config ?? { version: 1, routing: resolved.routing, escapeHatches: resolved.escapeHatches }),
+    ...(detail?.config ?? {
+      version: 1,
+      routing: resolved.routing,
+      escapeHatches: resolved.escapeHatches,
+    }),
     version: 1,
     routing: resolved.routing,
-    escapeHatches: resolved.escapeHatches
+    escapeHatches: resolved.escapeHatches,
   };
   edit(working);
   await client.patchProjectConfig(orgId, projectId, working);
@@ -471,7 +453,7 @@ async function renderForm(
   deps: ShellDeps,
   projectId: string,
   error: string,
-  values: { title: string; description: string; acceptanceCriteria: string[]; milestoneId: string }
+  values: { title: string; description: string; acceptanceCriteria: string[]; milestoneId: string },
 ) {
   if (ctx.org === undefined || ctx.project === undefined) {
     return renderShell(c, ctx, { title: "tanren · new spec" }, notFoundBody(projectId));
@@ -480,12 +462,19 @@ async function renderForm(
   const [milestones, behaviors, specs] = await Promise.all([
     client.listMilestones(ctx.org.id, projectId),
     client.listAllBehaviors(ctx.org.id, projectId),
-    client.listSpecs(ctx.org.id, projectId)
+    client.listSpecs(ctx.org.id, projectId),
   ]);
   return renderShell(
     c,
     ctx,
     { title: "tanren · new spec" },
-    <SpecCreateBody project={ctx.project} milestones={milestones} behaviors={behaviors} specs={specs} error={error} values={values} />
+    <SpecCreateBody
+      project={ctx.project}
+      milestones={milestones}
+      behaviors={behaviors}
+      specs={specs}
+      error={error}
+      values={values}
+    />,
   );
 }

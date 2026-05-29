@@ -34,7 +34,7 @@ export class FakeCostResolver implements CostResolver {
       costUsd: null,
       billingMode: "self_hosted",
       costBasis: "unknown",
-      raw: { provider: input.provider, model: input.model }
+      raw: { provider: input.provider, model: input.model },
     };
   }
 }

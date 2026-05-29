@@ -49,9 +49,18 @@ export interface DeriveResult {
 }
 
 const SCAFFOLD_SPECS: Array<{ title: string; description: string }> = [
-  { title: "monorepo scaffold", description: "Stand up the monorepo: workspaces, base tsconfig, shared types package." },
-  { title: "build · turbo", description: "Wire the build pipeline (turbo) so every package builds + caches." },
-  { title: "ci · gh actions", description: "CI on GitHub Actions: install, lint, typecheck, test, build on every PR." }
+  {
+    title: "monorepo scaffold",
+    description: "Stand up the monorepo: workspaces, base tsconfig, shared types package.",
+  },
+  {
+    title: "build · turbo",
+    description: "Wire the build pipeline (turbo) so every package builds + caches.",
+  },
+  {
+    title: "ci · gh actions",
+    description: "CI on GitHub Actions: install, lint, typecheck, test, build on every PR.",
+  },
 ];
 
 // A behavior belongs to an interface when its persona's surface matches the
@@ -60,13 +69,13 @@ const SCAFFOLD_SPECS: Array<{ title: string; description: string }> = [
 function interfaceForBehavior(
   behavior: CaptureBehavior,
   capture: InterviewCapture,
-  interfaces: CaptureInterface[]
+  interfaces: CaptureInterface[],
 ): CaptureInterface | undefined {
   const persona = capture.personas.find((p) => p.name.toLowerCase() === behavior.persona.toLowerCase());
   const surface = (persona?.surface ?? "").toLowerCase();
   if (surface !== "") {
     const match = interfaces.find(
-      (i) => i.name.toLowerCase().includes(surface) || surface.includes(i.name.toLowerCase().split(" ")[0] ?? "")
+      (i) => i.name.toLowerCase().includes(surface) || surface.includes(i.name.toLowerCase().split(" ")[0] ?? ""),
     );
     if (match !== undefined) return match;
   }
@@ -91,7 +100,7 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
   const project = await createProject(
     pool,
     { name: slug, repoUrl, config: {} },
-    { ...input.actor, orgId: input.orgId }
+    { ...input.actor, orgId: input.orgId },
   );
   const projectId = project.projectId;
   const actor: ActorContext = { ...input.actor, orgId: input.orgId, projectId };
@@ -106,9 +115,9 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
         orgId: input.orgId,
         projectId,
         name: persona.name,
-        description: persona.description
+        description: persona.description,
       }),
-      actor
+      actor,
     );
     personaIdByName.set(persona.name.toLowerCase(), row.id);
   }
@@ -117,8 +126,14 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
   const milestoneIds: string[] = [];
   const scaffold = await MilestoneStore.create(
     pool,
-    MilestoneCreateInput.parse({ projectId, label: "M1", name: "scaffold", orderIndex: 0, status: "planned" }),
-    actor
+    MilestoneCreateInput.parse({
+      projectId,
+      label: "M1",
+      name: "scaffold",
+      orderIndex: 0,
+      status: "planned",
+    }),
+    actor,
   );
   milestoneIds.push(scaffold.id);
 
@@ -127,8 +142,13 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
   for (const def of SCAFFOLD_SPECS) {
     const spec = await createSpec(
       pool,
-      { projectId, title: def.title, description: def.description, acceptanceCriteria: [`given the repo, when ${def.title} lands, then the pipeline is green`] },
-      actor
+      {
+        projectId,
+        title: def.title,
+        description: def.description,
+        acceptanceCriteria: [`given the repo, when ${def.title} lands, then the pipeline is green`],
+      },
+      actor,
     );
     await MilestoneStore.setSpecMilestone(pool, { specId: spec.specId, milestoneId: scaffold.id }, actor);
     scaffoldSpecIds.push(spec.specId);
@@ -142,8 +162,14 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
     const order = index + 1; // M1 is the scaffold milestone; interfaces start at M2.
     const milestone = await MilestoneStore.create(
       pool,
-      MilestoneCreateInput.parse({ projectId, label: `M${order + 1}`, name: iface.name, orderIndex: order, status: "planned" }),
-      actor
+      MilestoneCreateInput.parse({
+        projectId,
+        label: `M${order + 1}`,
+        name: iface.name,
+        orderIndex: order,
+        status: "planned",
+      }),
+      actor,
     );
     milestoneIds.push(milestone.id);
 
@@ -155,15 +181,15 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
         title: `${iface.name} · schema + scaffold`,
         description: `Schema + surface scaffold for the ${iface.name}.`,
         acceptanceCriteria: [`given the ${iface.name}, when scaffolded, then its schema + routing exist`],
-        dependsOn: scaffoldSpecIds
+        dependsOn: scaffoldSpecIds,
       },
-      actor
+      actor,
     );
     await MilestoneStore.setSpecMilestone(pool, { specId: schemaSpec.specId, milestoneId: milestone.id }, actor);
     specIds.push(schemaSpec.specId);
 
     const ifaceBehaviors = capture.behaviors.filter(
-      (b) => interfaceForBehavior(b, capture, interfaces)?.name === iface.name
+      (b) => interfaceForBehavior(b, capture, interfaces)?.name === iface.name,
     );
     for (const behavior of ifaceBehaviors) {
       const behaviorSpec = await deriveBehaviorSpec(pool, {
@@ -173,7 +199,7 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
         milestoneId: milestone.id,
         dependsOn: [...scaffoldSpecIds, schemaSpec.specId],
         personaIdByName,
-        actor
+        actor,
       });
       specIds.push(behaviorSpec.specId);
       if (behaviorSpec.behaviorId !== undefined) behaviorIds.push(behaviorSpec.behaviorId);
@@ -186,7 +212,7 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
     specIds,
     personaIds: [...personaIdByName.values()],
     behaviorIds,
-    milestoneIds
+    milestoneIds,
   };
 }
 
@@ -204,7 +230,7 @@ interface DeriveBehaviorSpecInput {
 // link the two (spec ⇄ behavior) so the DAG shows the b-tag tie.
 async function deriveBehaviorSpec(
   pool: pg.Pool,
-  input: DeriveBehaviorSpecInput
+  input: DeriveBehaviorSpecInput,
 ): Promise<SpecContract & { behaviorId?: string }> {
   const spec = await createSpec(
     pool,
@@ -213,9 +239,9 @@ async function deriveBehaviorSpec(
       title: input.behavior.title,
       description: `${input.behavior.persona}: ${input.behavior.title}.`,
       acceptanceCriteria: acceptanceFor(input.behavior),
-      dependsOn: input.dependsOn
+      dependsOn: input.dependsOn,
     },
-    input.actor
+    input.actor,
   );
   await MilestoneStore.setSpecMilestone(pool, { specId: spec.specId, milestoneId: input.milestoneId }, input.actor);
 
@@ -232,9 +258,9 @@ async function deriveBehaviorSpec(
       title: input.behavior.title,
       given: input.behavior.given,
       when: input.behavior.when,
-      then: input.behavior.then
+      then: input.behavior.then,
     }),
-    input.actor
+    input.actor,
   );
   /* eslint-enable unicorn/no-thenable */
   await BehaviorStore.linkToSpec(pool, { specId: spec.specId, behaviorId: behaviorRow.id }, input.actor);

@@ -1,14 +1,9 @@
-import type {
-  AllocationRequest,
-  Allocator,
-  ReleaseReason,
-  RunnerAllocation
-} from "../contracts/allocator.js";
+import type { AllocationRequest, Allocator, ReleaseReason, RunnerAllocation } from "../contracts/allocator.js";
 import {
   type AllocatorKind,
   type AllocatorRoutingConfig,
   PoolCapacityExceededError,
-  selectAllocatorKind
+  selectAllocatorKind,
 } from "./poolPolicy.js";
 
 /**
@@ -42,7 +37,7 @@ export class AllocatorRouter implements Allocator {
 
   constructor(
     private readonly registry: AllocatorRegistry,
-    private readonly config: AllocatorRoutingConfig
+    private readonly config: AllocatorRoutingConfig,
   ) {}
 
   async allocate(request: AllocationRequest): Promise<RunnerAllocation> {

@@ -66,7 +66,7 @@ export class GitHubReviewMergeService {
       path: repoPath(input.repo, `/pulls/${input.pullNumber}`),
       token: input.token,
       refreshToken: input.refreshToken,
-      body: { draft: false }
+      body: { draft: false },
     });
     if (response.status !== 200) {
       throw new Error(`GitHub mark-ready failed: HTTP ${response.status}`);
@@ -74,12 +74,14 @@ export class GitHubReviewMergeService {
   }
 
   /** Fetch the PR reviews and reduce them to a single actionable verdict. */
-  async fetchReviewVerdict(input: { repo: GitHubRepository; pullNumber: number } & TokenInput): Promise<ReviewVerdictResult> {
+  async fetchReviewVerdict(
+    input: { repo: GitHubRepository; pullNumber: number } & TokenInput,
+  ): Promise<ReviewVerdictResult> {
     const response = await this.http.request({
       method: "GET",
       path: repoPath(input.repo, `/pulls/${input.pullNumber}/reviews`),
       token: input.token,
-      refreshToken: input.refreshToken
+      refreshToken: input.refreshToken,
     });
     if (response.status !== 200) {
       throw new Error(`GitHub PR reviews fetch failed: HTTP ${response.status}`);
@@ -92,13 +94,15 @@ export class GitHubReviewMergeService {
    * Apply a label to the PR (the Mergify queue trigger). Mergify watches for the
    * configured label and enqueues the PR; the merge itself happens off-platform.
    */
-  async applyQueueLabel(input: { repo: GitHubRepository; pullNumber: number; label: string } & TokenInput): Promise<void> {
+  async applyQueueLabel(
+    input: { repo: GitHubRepository; pullNumber: number; label: string } & TokenInput,
+  ): Promise<void> {
     const response = await this.http.request({
       method: "POST",
       path: repoPath(input.repo, `/issues/${input.pullNumber}/labels`),
       token: input.token,
       refreshToken: input.refreshToken,
-      body: { labels: [input.label] }
+      body: { labels: [input.label] },
     });
     if (response.status !== 200 && response.status !== 201) {
       throw new Error(`GitHub label apply failed: HTTP ${response.status}`);
@@ -113,17 +117,27 @@ export class GitHubReviewMergeService {
    * 405 and surfaces as a non-merged result.
    */
   async mergePullRequest(
-    input: { repo: GitHubRepository; pullNumber: number; mergeMethod?: "merge" | "squash" | "rebase" } & TokenInput
+    input: {
+      repo: GitHubRepository;
+      pullNumber: number;
+      mergeMethod?: "merge" | "squash" | "rebase";
+    } & TokenInput,
   ): Promise<MergePullRequestResult> {
     const response = await this.http.request({
       method: "PUT",
       path: repoPath(input.repo, `/pulls/${input.pullNumber}/merge`),
       token: input.token,
       refreshToken: input.refreshToken,
-      body: { merge_method: input.mergeMethod ?? "squash" }
+      body: { merge_method: input.mergeMethod ?? "squash" },
     });
     if (response.status === 200) {
-      return { merged: true, mergeSha: parseMergeSha(response.body), conflict: false, status: 200, message: "merged" };
+      return {
+        merged: true,
+        mergeSha: parseMergeSha(response.body),
+        conflict: false,
+        status: 200,
+        message: "merged",
+      };
     }
     const message = parseMessage(response.body) ?? `HTTP ${response.status}`;
     const conflict = response.status === 405 || response.status === 409;
@@ -148,7 +162,7 @@ function parseReview(value: unknown): GitHubReview {
     state: normalizeReviewState(rawState),
     reviewer: reviewerLogin(object["user"]),
     body: typeof object["body"] === "string" && object["body"] !== "" ? object["body"] : undefined,
-    submittedAt: typeof object["submitted_at"] === "string" ? object["submitted_at"] : undefined
+    submittedAt: typeof object["submitted_at"] === "string" ? object["submitted_at"] : undefined,
   };
 }
 

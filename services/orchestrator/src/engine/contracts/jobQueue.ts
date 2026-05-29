@@ -65,7 +65,7 @@ export class FakeJobQueue<TPayload = unknown> implements JobQueue<TPayload> {
       attempts: job.attempts ?? 0,
       maxAttempts: job.maxAttempts ?? DEFAULT_MAX_ATTEMPTS,
       id: `job_${this.jobs.length + 1}`,
-      status: "queued" as const
+      status: "queued" as const,
     };
     this.jobs.push(envelope);
     return envelopeFromRow(envelope);
@@ -73,11 +73,11 @@ export class FakeJobQueue<TPayload = unknown> implements JobQueue<TPayload> {
 
   async claim(
     taskKind: string,
-    options?: { runId?: string; leaseMs?: number }
+    options?: { runId?: string; leaseMs?: number },
   ): Promise<JobEnvelope<TPayload> | undefined> {
     const job = this.jobs.find(
       (candidate) =>
-        candidate.status === "queued" && candidate.taskKind === taskKind && matchesRun(candidate.runId, options?.runId)
+        candidate.status === "queued" && candidate.taskKind === taskKind && matchesRun(candidate.runId, options?.runId),
     );
     if (job === undefined) {
       return undefined;
@@ -156,15 +156,15 @@ export class PgJobQueue<TPayload = unknown> implements JobQueue<TPayload> {
         job.taskKind,
         JSON.stringify(job.payload),
         job.attempts ?? 0,
-        job.maxAttempts ?? DEFAULT_MAX_ATTEMPTS
-      ]
+        job.maxAttempts ?? DEFAULT_MAX_ATTEMPTS,
+      ],
     );
     return envelopeFromRow(result.rows[0]);
   }
 
   async claim(
     taskKind: string,
-    options?: { runId?: string; leaseMs?: number }
+    options?: { runId?: string; leaseMs?: number },
   ): Promise<JobEnvelope<TPayload> | undefined> {
     const leaseMs = options?.leaseMs ?? DEFAULT_LEASE_MS;
     const client = await this.pool.connect();
@@ -189,7 +189,7 @@ export class PgJobQueue<TPayload = unknown> implements JobQueue<TPayload> {
              leased_until = now() + ($3 * interval '1 millisecond')
          WHERE id IN (SELECT id FROM next_job)
          RETURNING id::text, run_id, task_id, task_kind, payload, attempts, max_attempts`,
-        [taskKind, options?.runId ?? null, leaseMs]
+        [taskKind, options?.runId ?? null, leaseMs],
       );
       await client.query("COMMIT");
       const row = result.rows[0];
@@ -208,12 +208,14 @@ export class PgJobQueue<TPayload = unknown> implements JobQueue<TPayload> {
       `UPDATE job_queue
        SET heartbeat_at = now(), leased_until = now() + ($2 * interval '1 millisecond')
        WHERE id = $1 AND status = 'running'`,
-      [id, lease]
+      [id, lease],
     );
   }
 
   async complete(id: string): Promise<void> {
-    await this.pool.query("UPDATE job_queue SET status = 'done', ended_at = now(), leased_until = NULL WHERE id = $1", [id]);
+    await this.pool.query("UPDATE job_queue SET status = 'done', ended_at = now(), leased_until = NULL WHERE id = $1", [
+      id,
+    ]);
   }
 
   async fail(id: string, failure: { kind: string; message: string }): Promise<void> {
@@ -221,7 +223,7 @@ export class PgJobQueue<TPayload = unknown> implements JobQueue<TPayload> {
       `UPDATE job_queue
        SET status = 'failed', ended_at = now(), leased_until = NULL, failure_kind = $2, failure_message = $3
        WHERE id = $1`,
-      [id, failure.kind, failure.message]
+      [id, failure.kind, failure.message],
     );
   }
 
@@ -230,7 +232,7 @@ export class PgJobQueue<TPayload = unknown> implements JobQueue<TPayload> {
       `UPDATE job_queue
        SET status = 'failed', ended_at = now(), failure_kind = $2, failure_message = $3
        WHERE run_id = $1 AND status = 'queued'`,
-      [runId, failure.kind, failure.message]
+      [runId, failure.kind, failure.message],
     );
   }
 
@@ -255,7 +257,7 @@ export class PgJobQueue<TPayload = unknown> implements JobQueue<TPayload> {
          AND leased_until IS NOT NULL
          AND leased_until < ${now === undefined ? "now()" : "$1"}
        RETURNING id::text, run_id, task_kind, attempts, max_attempts, status`,
-      now === undefined ? [] : [now]
+      now === undefined ? [] : [now],
     );
     return result.rows.map((row: ReapRow) => ({
       id: String(row.id),
@@ -263,7 +265,7 @@ export class PgJobQueue<TPayload = unknown> implements JobQueue<TPayload> {
       taskKind: row.task_kind,
       attempts: row.attempts ?? 0,
       maxAttempts: row.max_attempts ?? DEFAULT_MAX_ATTEMPTS,
-      outcome: row.status === "dead_letter" ? "dead_lettered" : "requeued"
+      outcome: row.status === "dead_letter" ? "dead_lettered" : "requeued",
     }));
   }
 }
@@ -284,7 +286,7 @@ function reapedFromRow<TPayload>(job: JobEnvelope<TPayload>, outcome: ReapedJob[
     taskKind: job.taskKind,
     attempts: job.attempts,
     maxAttempts: job.maxAttempts,
-    outcome
+    outcome,
   };
 }
 
@@ -312,6 +314,6 @@ function envelopeFromRow<TPayload>(row: {
     taskKind: row.task_kind ?? row.taskKind ?? "",
     payload: row.payload,
     attempts: row.attempts ?? 0,
-    maxAttempts: row.max_attempts ?? row.maxAttempts ?? DEFAULT_MAX_ATTEMPTS
+    maxAttempts: row.max_attempts ?? row.maxAttempts ?? DEFAULT_MAX_ATTEMPTS,
   };
 }

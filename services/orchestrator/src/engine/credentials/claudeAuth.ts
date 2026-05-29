@@ -20,7 +20,7 @@ export interface ClaudeAuthImportResult {
 
 export async function storeClaudeAuthBundle(
   secrets: SecretStore,
-  input: { ref: string; authJson: string }
+  input: { ref: string; authJson: string },
 ): Promise<ClaudeAuthImportResult> {
   const ref = validateClaudeCredentialRef(input.ref);
   const bundle = validateClaudeAuthBundle(input.authJson);
@@ -76,6 +76,6 @@ function oauthBundleHasAnyToken(value: unknown): boolean {
   }
   const oauth = value as Record<string, unknown>;
   return ["accessToken", "refreshToken", "access_token", "refresh_token"].some(
-    (key) => typeof oauth[key] === "string" && oauth[key] !== ""
+    (key) => typeof oauth[key] === "string" && oauth[key] !== "",
   );
 }

@@ -25,12 +25,12 @@ import {
   deriveFromCapture,
   InterviewCapture,
   runRound,
-  type InterviewAnswerer
+  type InterviewAnswerer,
 } from "../../engine/forge/interview/index.js";
 import {
   ProjectAccessDeniedError,
   ProjectNotFoundError,
-  SpecNotFoundError
+  SpecNotFoundError,
 } from "../../engine/workflow/projectSpec.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg } from "../orgs/index.js";
@@ -46,14 +46,14 @@ const RoundBody = z
   .object({
     round: z.number().int().min(1).max(100),
     answer: z.string().max(8000).default(""),
-    capture: InterviewCapture.default(InterviewCapture.parse({}))
+    capture: InterviewCapture.default(InterviewCapture.parse({})),
   })
   .strict();
 
 const DeriveBody = z
   .object({
     capture: InterviewCapture,
-    repoUrl: z.string().min(1).max(400).optional()
+    repoUrl: z.string().min(1).max(400).optional(),
   })
   .strict();
 
@@ -74,7 +74,7 @@ export function createOnboardingRoutes(options: OnboardingRoutesOptions) {
     try {
       const result = await runRound(
         { pool: options.pool, ...(answerer !== undefined ? { answerer } : {}) },
-        parsed.data
+        parsed.data,
       );
       return c.json(result, 200);
     } catch (error) {
@@ -99,8 +99,8 @@ export function createOnboardingRoutes(options: OnboardingRoutesOptions) {
           orgId,
           capture: parsed.data.capture,
           actor: { ...actor, orgId },
-          ...(parsed.data.repoUrl !== undefined ? { repoUrl: parsed.data.repoUrl } : {})
-        }
+          ...(parsed.data.repoUrl !== undefined ? { repoUrl: parsed.data.repoUrl } : {}),
+        },
       );
       return c.json(result, 201);
     } catch (error) {

@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  buildChannelRegistry,
-  type ChannelRegistryDeps
-} from "../src/engine/notifications/registry.js";
+import { buildChannelRegistry, type ChannelRegistryDeps } from "../src/engine/notifications/registry.js";
 import { ChannelKind } from "../src/engine/notifications/index.js";
 
 // Registry tests: the six batch channels wire to real (wired:true) adapters
@@ -18,15 +15,7 @@ describe("buildChannelRegistry", () => {
 
   it("falls back to a stub for every dep-gated channel when no deps are given", () => {
     const registry = buildChannelRegistry();
-    for (const kind of [
-      "github_checks",
-      "teams",
-      "discord",
-      "email",
-      "twilio",
-      "pagerduty",
-      "webhook"
-    ] as const) {
+    for (const kind of ["github_checks", "teams", "discord", "email", "twilio", "pagerduty", "webhook"] as const) {
       expect(registry[kind].kind).toBe(kind);
       expect(registry[kind].wired).toBe(false);
     }
@@ -39,7 +28,7 @@ describe("buildChannelRegistry", () => {
       email: {},
       twilio: {},
       pagerduty: {},
-      webhook: {}
+      webhook: {},
     };
     const registry = buildChannelRegistry(deps);
     for (const kind of ["teams", "discord", "email", "twilio", "pagerduty", "webhook"] as const) {

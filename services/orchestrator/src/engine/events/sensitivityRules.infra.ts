@@ -11,7 +11,7 @@ export const infraSensitivityRules: SensitivityRule[] = [
   ...rulesFor("allocator.requested", [
     ["allocator", "public"],
     ["runnerImage", "public"],
-    ["identitySecretRef", "redacted"]
+    ["identitySecretRef", "redacted"],
   ]),
   ...rulesFor("allocator.allocated", [
     ["runnerId", "public"],
@@ -19,7 +19,7 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["target.host", "redacted"],
     ["target.port", "redacted"],
     ["target.username", "public"],
-    ["target.hostKeyFingerprint", "redacted"]
+    ["target.hostKeyFingerprint", "redacted"],
   ]),
   ...rulesFor("allocator.failed", [["message", "public"]]),
   ...rulesFor("runner.allocated", [
@@ -28,7 +28,7 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["target.host", "redacted"],
     ["target.port", "redacted"],
     ["target.username", "public"],
-    ["target.hostKeyFingerprint", "redacted"]
+    ["target.hostKeyFingerprint", "redacted"],
   ]),
   ...rulesFor("runner.released", [["runnerId", "public"]]),
   ...rulesFor("runner.failed", [
@@ -41,7 +41,7 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["result.signal", "public"],
     ["result.failure", "redacted"],
     ["result.failure.reason", "redacted"],
-    ["result.failure.message", "redacted"]
+    ["result.failure.message", "redacted"],
   ]),
 
   // workspace
@@ -49,32 +49,35 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["runnerId", "public"],
     ["workspacePath", "public"],
     ["repoUrl", "public"],
-    ["targetBranch", "public"]
+    ["targetBranch", "public"],
   ]),
   ...rulesFor("workspace.git_captured", [
     ["workspacePath", "public"],
     ["commits[].sha", "public"],
     ["commits[].message", "public"],
-    ["diffBytes", "public"]
+    ["diffBytes", "public"],
   ]),
   ...rulesFor("workspace.failed", [
     ["runnerId", "public"],
     ["workspacePath", "public"],
-    ["message", "public"]
+    ["message", "public"],
   ]),
 
   // credentials — refs are redacted; raw value never appears in payloads
   ...rulesFor("credential.requested", [
     ["credentialKind", "public"],
     ["ref", "redacted"],
-    ["redacted", "public"]
+    ["redacted", "public"],
   ]),
   ...rulesFor("credential.loaded", [
     ["credentialKind", "public"],
     ["ref", "redacted"],
-    ["redacted", "public"]
+    ["redacted", "public"],
   ]),
-  ...rulesFor("credential.failed", [["ref", "redacted"], ["message", "public"]]),
+  ...rulesFor("credential.failed", [
+    ["ref", "redacted"],
+    ["message", "public"],
+  ]),
 
   // cost
   ...rulesFor("cost.resolved", [
@@ -84,9 +87,12 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["model", "public"],
     ["costUsd", "public"],
     ["billingMode", "public"],
-    ["costBasis", "public"]
+    ["costBasis", "public"],
   ]),
-  ...rulesFor("cost.failed", [["taskId", "public"], ["message", "public"]]),
+  ...rulesFor("cost.failed", [
+    ["taskId", "public"],
+    ["message", "public"],
+  ]),
   ...rulesFor("cost.unattributable", [
     ["taskId", "public"],
     ["cli", "public"],
@@ -94,7 +100,7 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["reason", "public"],
     ["inputTokens", "public"],
     ["outputTokens", "public"],
-    ["cachedInputTokens", "public"]
+    ["cachedInputTokens", "public"],
   ]),
 
   // usage monitoring (P2A-cost-monitors) — percent-of-window + token counts
@@ -108,13 +114,13 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["windows[].resetDescription", "public"],
     ["creditsRemaining", "public"],
     ["source", "public"],
-    ["capturedAt", "public"]
+    ["capturedAt", "public"],
   ]),
   ...rulesFor("usage.window.pressure", [
     ["provider", "public"],
     ["slot", "public"],
     ["usedPercent", "public"],
-    ["resetsAt", "public"]
+    ["resetsAt", "public"],
   ]),
   ...rulesFor("usage.accounting.observed", [
     ["cli", "public"],
@@ -125,7 +131,7 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["totals.reasoningOutputTokens", "public"],
     ["totals.totalTokens", "public"],
     ["costUsd", "public"],
-    ["capturedAt", "public"]
+    ["capturedAt", "public"],
   ]),
 
   // github
@@ -133,7 +139,7 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["repoUrl", "public"],
     ["branch", "public"],
     ["credentialRef", "redacted"],
-    ["redacted", "public"]
+    ["redacted", "public"],
   ]),
   ...rulesFor("github.pr.created", [
     ["repoUrl", "public"],
@@ -141,15 +147,22 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["targetBranch", "public"],
     ["prUrl", "public"],
     ["prNumber", "public"],
-    ["reused", "public"]
+    ["reused", "public"],
   ]),
-  ...rulesFor("github.pr.ready", [["prUrl", "public"], ["prNumber", "public"]]),
+  ...rulesFor("github.pr.ready", [
+    ["prUrl", "public"],
+    ["prNumber", "public"],
+  ]),
   ...rulesFor("github.pr.merged", [
     ["prUrl", "public"],
     ["prNumber", "public"],
-    ["mergeSha", "public"]
+    ["mergeSha", "public"],
   ]),
-  ...rulesFor("github.failed", [["operation", "public"], ["branch", "public"], ["message", "public"]]),
+  ...rulesFor("github.failed", [
+    ["operation", "public"],
+    ["branch", "public"],
+    ["message", "public"],
+  ]),
 
   // ci.* (observation payloads share field shape)
   ...ciObservationRules("ci.started"),
@@ -157,9 +170,18 @@ export const infraSensitivityRules: SensitivityRule[] = [
   ...ciObservationRules("ci.failed"),
 
   // phase 1 fixture orchestration
-  ...rulesFor("phase1.fixture.started", [["repoUrl", "public"], ["targetBranch", "public"]]),
-  ...rulesFor("phase1.fixture.ci_pending", [["attempt", "public"], ["nextPollAfterMs", "public"]]),
-  ...rulesFor("phase1.fixture.completed", [["prUrl", "public"], ["ciStatus", "public"]]),
+  ...rulesFor("phase1.fixture.started", [
+    ["repoUrl", "public"],
+    ["targetBranch", "public"],
+  ]),
+  ...rulesFor("phase1.fixture.ci_pending", [
+    ["attempt", "public"],
+    ["nextPollAfterMs", "public"],
+  ]),
+  ...rulesFor("phase1.fixture.completed", [
+    ["prUrl", "public"],
+    ["ciStatus", "public"],
+  ]),
   ...rulesFor("phase1.fixture.failed", [["message", "public"]]),
 
   // reviews
@@ -167,18 +189,18 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["prUrl", "public"],
     ["prNumber", "public"],
     ["reviewers", "public"],
-    ["reviewers[]", "public"]
+    ["reviewers[]", "public"],
   ]),
   ...rulesFor("review.approved", [
     ["prUrl", "public"],
     ["prNumber", "public"],
-    ["reviewer", "public"]
+    ["reviewer", "public"],
   ]),
   ...rulesFor("review.changes_requested", [
     ["prUrl", "public"],
     ["prNumber", "public"],
     ["reviewer", "public"],
-    ["message", "public"]
+    ["message", "public"],
   ]),
 
   // P3-0008 merge stage — PR identifiers + integration mode + prose, all public
@@ -186,19 +208,19 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["prUrl", "public"],
     ["prNumber", "public"],
     ["integration", "public"],
-    ["queueLabel", "public"]
+    ["queueLabel", "public"],
   ]),
   ...rulesFor("merge.completed", [
     ["prUrl", "public"],
     ["prNumber", "public"],
     ["integration", "public"],
-    ["mergeSha", "public"]
+    ["mergeSha", "public"],
   ]),
   ...rulesFor("merge.failed", [
     ["prUrl", "public"],
     ["prNumber", "public"],
     ["integration", "public"],
-    ["message", "public"]
+    ["message", "public"],
   ]),
   ...rulesFor("merge.conflict", [
     ["prUrl", "public"],
@@ -206,7 +228,7 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["integration", "public"],
     ["baseBranch", "public"],
     ["headBranch", "public"],
-    ["message", "public"]
+    ["message", "public"],
   ]),
   // P3-0023 governance posture block — PR identifiers + posture + external
   // contributor logins (public GitHub handles) + prose, all public.
@@ -218,13 +240,22 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["mode", "public"],
     ["externalLogins", "public"],
     ["externalLogins[]", "public"],
-    ["reason", "public"]
+    ["reason", "public"],
   ]),
 
   // notifications
-  ...rulesFor("notification.enqueued", [["channel", "public"], ["eventName", "public"]]),
-  ...rulesFor("notification.sent", [["channel", "public"], ["attempts", "public"]]),
-  ...rulesFor("notification.failed", [["channel", "public"], ["message", "public"]]),
+  ...rulesFor("notification.enqueued", [
+    ["channel", "public"],
+    ["eventName", "public"],
+  ]),
+  ...rulesFor("notification.sent", [
+    ["channel", "public"],
+    ["attempts", "public"],
+  ]),
+  ...rulesFor("notification.failed", [
+    ["channel", "public"],
+    ["message", "public"],
+  ]),
 
   // hello run
   ...rulesFor("hello.started", []),
@@ -234,7 +265,7 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["target.host", "redacted"],
     ["target.port", "redacted"],
     ["target.username", "public"],
-    ["target.hostKeyFingerprint", "redacted"]
+    ["target.hostKeyFingerprint", "redacted"],
   ]),
   ...rulesFor("hello.ssh_completed", [
     ["runnerId", "public"],
@@ -247,7 +278,7 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["exitCode", "public"],
     ["stdout", "secret"],
     ["stderr", "secret"],
-    ["timedOut", "public"]
+    ["timedOut", "public"],
   ]),
   ...rulesFor("hello.completed", [
     ["outcome", "public"],
@@ -262,7 +293,7 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["runnerProof.exitCode", "public"],
     ["runnerProof.stdout", "secret"],
     ["runnerProof.stderr", "secret"],
-    ["runnerProof.timedOut", "public"]
+    ["runnerProof.timedOut", "public"],
   ]),
 
   // redaction.raw_access audit event — these fields are the audit metadata
@@ -276,8 +307,8 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["eventReadType", "public"],
     ["paths", "public"],
     ["paths[]", "public"],
-    ["at", "public"]
-  ])
+    ["at", "public"],
+  ]),
 ];
 
 function rulesFor(eventName: string, entries: ReadonlyArray<[string, SensitivityRule["tag"]]>): SensitivityRule[] {
@@ -306,6 +337,6 @@ function ciObservationRules(eventName: string): SensitivityRule[] {
     ["pendingChecks[].kind", "public"],
     ["pendingChecks[].name", "public"],
     ["pendingChecks[].state", "public"],
-    ["pendingChecks[].url", "public"]
+    ["pendingChecks[].url", "public"],
   ]);
 }

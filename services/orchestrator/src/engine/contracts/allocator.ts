@@ -55,8 +55,8 @@ export class FakeAllocator implements Allocator {
         port: 22,
         username: "tanren",
         hostKeyFingerprint: "SHA256:fake",
-        identitySecretRef: request.identitySecretRef
-      }
+        identitySecretRef: request.identitySecretRef,
+      },
     };
   }
 

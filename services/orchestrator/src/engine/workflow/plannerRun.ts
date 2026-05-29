@@ -15,7 +15,6 @@
 // without a PR. A Codex usage-limit thrown mid-loop is caught and recorded as
 // window_exhausted rather than a generic failure (PROJECT_BRIEF §4.3).
 import type pg from "pg";
-import type { AuditAnswer, CheckAnswer, PlanAnswer } from "../answerers/schemas/index.js";
 import type { CiWhen } from "../ci/index.js";
 import type { EscapeHatches } from "../config/shared.js";
 import type { Allocator, RunnerAllocation, SshTarget } from "../contracts/allocator.js";
@@ -25,13 +24,19 @@ import { CostRecorder } from "../costs/index.js";
 import { codexHomeForRun } from "../credentials/codexMaterializer.js";
 import { type EventName, type EventPayload } from "../events/index.js";
 import { type EventStore, PgEventStore } from "../eventStore.js";
-import { CodexUsageLimitError, createCodexAnswerer, createCodexWriter } from "../providers/codex.js";
+import { CodexUsageLimitError } from "../providers/codex.js";
 import type { GitHubHttpClient } from "../providers/github.js";
 import { quoteSshShellArg } from "../ssh/command.js";
-import { SshCcusageAccountant, SshCodexbarUsageMonitor, SshUsageProbe, type UsageProbe } from "../usage/index.js";
-import { bootstrapWorkspace, WorkspaceBootstrapError, runWorkspaceSshCommand, workspaceRepoPathForRun } from "../workspace/index.js";
+import type { UsageProbe } from "../usage/index.js";
+import {
+  bootstrapWorkspace,
+  WorkspaceBootstrapError,
+  runWorkspaceSshCommand,
+  workspaceRepoPathForRun,
+} from "../workspace/index.js";
 import { pollCiForRun, type PollCiForRunResult } from "./ciPolling.js";
-import { type GateOutcome, resolveGateConfig, runGateForWhen } from "./gate/index.js";
+import type { GateOutcome } from "./gate/index.js";
+import { buildDefaultGate, defaultCodexAdapters, defaultUsageProbe } from "./plannerRunAdapters.js";
 import { publishDraftPullRequest, type PublishedDraftPullRequest } from "./githubDraftPr.js";
 import type { PlannerRejectionFeedback } from "./planner/planner.js";
 import {
@@ -41,7 +46,7 @@ import {
   type MergeForRunResult,
   type MergeProbe,
   type PollReviewForRunResult,
-  type ReviewProbe
+  type ReviewProbe,
 } from "./reviewMerge/index.js";
 import { reviewerRejection } from "./reviewMerge/steering.js";
 import { runSubtaskLoop, type SubtaskLoopAdapters, type SubtaskLoopOutcome } from "./subtaskLoop.js";
@@ -85,7 +90,10 @@ export interface RunPlannerLoopInput {
   secrets: SecretStore;
   githubHttp: GitHubHttpClient;
   context: PlannerRunContext;
-  escapeHatches: Pick<EscapeHatches, "maxPlannerRerunsPerSpec" | "maxWriterIterPerSubtask" | "maxRetriesPerTransientFailure">;
+  escapeHatches: Pick<
+    EscapeHatches,
+    "maxPlannerRerunsPerSpec" | "maxWriterIterPerSubtask" | "maxRetriesPerTransientFailure"
+  >;
   timeoutMs: number;
   workspacePath?: string;
   maxCiPolls?: number;
@@ -147,7 +155,14 @@ export async function runPlannerLoopWorkflow(input: RunPlannerLoopInput): Promis
   const workspacePath = input.workspacePath ?? workspaceRepoPathForRun(context.runId);
   const recorder = new CostRecorder(input.pool, eventStore);
   const appendEvent = async <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string) => {
-    await eventStore.append({ runId: context.runId, specId: context.specId, projectId: context.projectId, taskId, eventType, payload });
+    await eventStore.append({
+      runId: context.runId,
+      specId: context.specId,
+      projectId: context.projectId,
+      taskId,
+      eventType,
+      payload,
+    });
   };
 
   await input.pool.query("UPDATE runs SET status = 'running', started_at = now() WHERE run_id = $1", [context.runId]);
@@ -156,13 +171,17 @@ export async function runPlannerLoopWorkflow(input: RunPlannerLoopInput): Promis
     runId: context.runId,
     projectId: context.projectId,
     runnerImage: context.runnerImage,
-    identitySecretRef: context.identitySecretRef
+    identitySecretRef: context.identitySecretRef,
   });
   await appendEvent("runner.allocated", runnerPayload(allocation));
 
   try {
     await prepareWorkspace(input, allocation.target, workspacePath);
-    await appendEvent("workspace.prepared", { workspacePath, repoUrl: context.repoUrl, targetBranch: context.targetBranch });
+    await appendEvent("workspace.prepared", {
+      workspacePath,
+      repoUrl: context.repoUrl,
+      targetBranch: context.targetBranch,
+    });
 
     // P3-0006: install the target repo's deps in the freshly-cloned workspace
     // before the writer loop, so the checker/auditor gate a built tree.
@@ -172,13 +191,13 @@ export async function runPlannerLoopWorkflow(input: RunPlannerLoopInput): Promis
       target: allocation.target,
       workspacePath,
       command: input.bootstrapCommand,
-      timeoutMs: input.timeoutMs
+      timeoutMs: input.timeoutMs,
     });
 
     const adapterCtx: PlannerRunAdapterContext = {
       runId: context.runId,
       target: allocation.target,
-      codexHome: codexHomeForRun(context.runId)
+      codexHome: codexHomeForRun(context.runId),
     };
     const adapters = (input.buildAdapters ?? ((ctx) => defaultCodexAdapters(input, ctx)))(adapterCtx);
     const usageProbe = (input.buildUsageProbe ?? ((ctx) => defaultUsageProbe(input, ctx)))(adapterCtx);
@@ -215,13 +234,13 @@ export async function runPlannerLoopWorkflow(input: RunPlannerLoopInput): Promis
           runId: context.runId,
           specId: context.specId,
           projectId: context.projectId,
-          workspacePath
+          workspacePath,
         },
         escapeHatches: input.escapeHatches,
         timeoutMs: input.timeoutMs,
         usageProbe,
         runGate,
-        seedRejections: [...seedRejections]
+        seedRejections: [...seedRejections],
       });
 
       if (outcome.kind !== "passed") {
@@ -246,7 +265,7 @@ export async function runPlannerLoopWorkflow(input: RunPlannerLoopInput): Promis
         title: `Tanren: ${context.specTitle}`,
         body: context.specDescription,
         githubCredentialRef: context.githubCredentialRef,
-        timeoutMs: input.timeoutMs
+        timeoutMs: input.timeoutMs,
       });
       ci = await pollCiUntilTerminal(input);
 
@@ -259,7 +278,7 @@ export async function runPlannerLoopWorkflow(input: RunPlannerLoopInput): Promis
         maxPolls: input.maxCiPolls,
         pollDelayMs: input.ciPollDelayMs,
         sleep: input.sleep,
-        reviewProbe: input.reviewProbe
+        reviewProbe: input.reviewProbe,
       });
 
       if (review.verdict === "approved") {
@@ -287,7 +306,7 @@ export async function runPlannerLoopWorkflow(input: RunPlannerLoopInput): Promis
       githubHttp: input.githubHttp,
       runId: context.runId,
       mergeProbe: input.mergeProbe,
-      resolveConflict: input.resolveConflict
+      resolveConflict: input.resolveConflict,
     });
 
     if (merge.outcome === "conflict") {
@@ -298,7 +317,10 @@ export async function runPlannerLoopWorkflow(input: RunPlannerLoopInput): Promis
       return { runId: context.runId, workspacePath, outcome, pullRequest, ci, review, merge };
     }
     if (merge.outcome === "failed") {
-      await input.pool.query("UPDATE runs SET status = 'failed', outcome = 'failed', ended_at = now() WHERE run_id = $1", [context.runId]);
+      await input.pool.query(
+        "UPDATE runs SET status = 'failed', outcome = 'failed', ended_at = now() WHERE run_id = $1",
+        [context.runId],
+      );
       return { runId: context.runId, workspacePath, outcome, pullRequest, ci, review, merge };
     }
 
@@ -307,7 +329,9 @@ export async function runPlannerLoopWorkflow(input: RunPlannerLoopInput): Promis
     // so the spec is review-complete (done) and the merge event records the rest.
     const specStatus = merge.outcome === "merged" ? "merged" : "done";
     await input.pool.query("UPDATE specs SET status = $2 WHERE spec_id = $1", [context.specId, specStatus]);
-    await input.pool.query("UPDATE runs SET status = 'done', outcome = 'ok', ended_at = now() WHERE run_id = $1", [context.runId]);
+    await input.pool.query("UPDATE runs SET status = 'done', outcome = 'ok', ended_at = now() WHERE run_id = $1", [
+      context.runId,
+    ]);
     return { runId: context.runId, workspacePath, outcome, pullRequest, ci, review, merge };
   } catch (error) {
     if (error instanceof WorkspaceBootstrapError) {
@@ -327,81 +351,19 @@ export async function runPlannerLoopWorkflow(input: RunPlannerLoopInput): Promis
         provider: "openai",
         slot: "primary",
         usedPercent: 100,
-        resetsAt: new Date().toISOString()
+        resetsAt: new Date().toISOString(),
       });
       throw error;
     }
-    await input.pool.query("UPDATE runs SET status = 'failed', outcome = 'failed', ended_at = now() WHERE run_id = $1", [context.runId]);
+    await input.pool.query(
+      "UPDATE runs SET status = 'failed', outcome = 'failed', ended_at = now() WHERE run_id = $1",
+      [context.runId],
+    );
     throw error;
   } finally {
     await input.allocator.release(allocation.runnerId);
     await appendEvent("runner.released", { runnerId: allocation.runnerId });
   }
-}
-
-function defaultCodexAdapters(input: RunPlannerLoopInput, ctx: PlannerRunAdapterContext): SubtaskLoopAdapters {
-  const credentialRef = input.context.codexCredentialRef;
-  if (credentialRef === undefined || credentialRef === "") {
-    throw new Error("codexCredentialRef is required to build the default Codex adapters");
-  }
-  // All four roles share one runId → one CODEX_HOME (codexHomeForRun), so
-  // ccusage at run end accounts for the whole run and codexbar reads the run's
-  // subscription account. The loop is sequential, so there is no concurrent
-  // write to the shared home.
-  const deps = { secrets: input.secrets, ssh: input.ssh, target: ctx.target, credentialRef, runId: ctx.runId };
-  return {
-    planner: createCodexAnswerer<PlanAnswer>(deps),
-    writer: createCodexWriter(deps),
-    checker: createCodexAnswerer<CheckAnswer>(deps),
-    auditor: createCodexAnswerer<AuditAnswer>(deps)
-  };
-}
-
-// Builds the production gate callback. The CI config is resolved lazily on the
-// first gate call (the workspace is bootstrapped by then) and cached for the
-// rest of the run, so a malformed tanren-ci.yml surfaces at the first gate
-// rather than crashing the workflow before the loop starts. Each call runs the
-// tiers mapped to `when` over SSH and emits gate.* through the run's store.
-function buildDefaultGate(
-  input: RunPlannerLoopInput,
-  target: SshTarget,
-  workspacePath: string,
-  eventStore: EventStore
-): (gate: { when: CiWhen; taskId?: string }) => Promise<GateOutcome> {
-  const context = input.context;
-  let configPromise: ReturnType<typeof resolveGateConfig> | undefined;
-  const appendEvent = async <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string) => {
-    await eventStore.append({ runId: context.runId, specId: context.specId, projectId: context.projectId, taskId, eventType, payload });
-  };
-  return async ({ when, taskId }) => {
-    if (configPromise === undefined) {
-      configPromise = resolveGateConfig({ ssh: input.ssh, target, workspacePath, timeoutMs: input.timeoutMs });
-    }
-    const config = await configPromise;
-    return runGateForWhen({
-      ssh: input.ssh,
-      target,
-      workspacePath,
-      config,
-      when,
-      timeoutMs: input.timeoutMs,
-      appendEvent,
-      taskId
-    });
-  };
-}
-
-function defaultUsageProbe(input: RunPlannerLoopInput, ctx: PlannerRunAdapterContext): UsageProbe {
-  return new SshUsageProbe({
-    monitor: new SshCodexbarUsageMonitor(input.ssh),
-    accountant: new SshCcusageAccountant(input.ssh),
-    provider: "codex",
-    cli: "codex",
-    codexHome: ctx.codexHome,
-    target: ctx.target,
-    timeoutMs: input.timeoutMs,
-    pressureThresholdPercent: input.pressureThresholdPercent
-  });
 }
 
 // Maps a non-pass loop outcome to the persisted run.outcome value. All map to a
@@ -419,9 +381,12 @@ function runOutcomeFor(outcome: SubtaskLoopOutcome): "window_exhausted" | "retry
 async function finalizeNonPass(
   pool: RunStateClient,
   runId: string,
-  outcome: "window_exhausted" | "retry_budget_exhausted" | "halted"
+  outcome: "window_exhausted" | "retry_budget_exhausted" | "halted",
 ): Promise<void> {
-  await pool.query("UPDATE runs SET status = 'halted', outcome = $2, ended_at = now() WHERE run_id = $1", [runId, outcome]);
+  await pool.query("UPDATE runs SET status = 'halted', outcome = $2, ended_at = now() WHERE run_id = $1", [
+    runId,
+    outcome,
+  ]);
 }
 
 // The spec-run trigger pre-creates a queued 'plan' task + job_queue row for the
@@ -429,9 +394,10 @@ async function finalizeNonPass(
 // creates its own planner task, so the pre-created artifacts are vestigial —
 // cancel them so the run does not carry a dangling queued task.
 async function supersedeQueuedPlannerTask(pool: RunStateClient, runId: string): Promise<void> {
-  await pool.query("UPDATE tasks SET status = 'cancelled', outcome = 'cancelled', ended_at = now() WHERE run_id = $1 AND kind = 'plan' AND status = 'queued'", [
-    runId
-  ]);
+  await pool.query(
+    "UPDATE tasks SET status = 'cancelled', outcome = 'cancelled', ended_at = now() WHERE run_id = $1 AND kind = 'plan' AND status = 'queued'",
+    [runId],
+  );
   await pool.query("UPDATE job_queue SET status = 'cancelled' WHERE run_id = $1 AND status = 'queued'", [runId]);
 }
 
@@ -445,8 +411,8 @@ async function prepareWorkspace(input: RunPlannerLoopInput, target: SshTarget, w
       `git clone --depth 1 --branch ${quoteSshShellArg(input.context.targetBranch)} ${quoteSshShellArg(input.context.repoUrl)} ${quoteSshShellArg(workspacePath)}`,
       `cd ${quoteSshShellArg(workspacePath)}`,
       "git config user.name 'Tanren Planner'",
-      "git config user.email 'planner@tanren.invalid'"
-    ].join(" && ")
+      "git config user.email 'planner@tanren.invalid'",
+    ].join(" && "),
   });
 }
 
@@ -462,7 +428,7 @@ async function pollCiUntilTerminal(input: RunPlannerLoopInput): Promise<PollCiFo
       secrets: input.secrets,
       githubHttp: input.githubHttp,
       runId: input.context.runId,
-      githubCredentialRef: input.context.githubCredentialRef
+      githubCredentialRef: input.context.githubCredentialRef,
     });
     if (last.status === "passed") {
       return last;
@@ -485,7 +451,7 @@ function runnerPayload(allocation: RunnerAllocation) {
       host: allocation.target.host,
       port: allocation.target.port,
       username: allocation.target.username,
-      hostKeyFingerprint: allocation.target.hostKeyFingerprint
-    }
+      hostKeyFingerprint: allocation.target.hostKeyFingerprint,
+    },
   };
 }

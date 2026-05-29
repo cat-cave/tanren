@@ -18,7 +18,7 @@ const MilestoneCreateBody = z.object({
   description: z.string().nullable().optional(),
   orderIndex: z.number().int(),
   eta: z.string().datetime().nullable().optional(),
-  status: MilestoneStatus.optional()
+  status: MilestoneStatus.optional(),
 });
 
 export function createMilestoneRoutes(options: MilestoneRoutesOptions) {
@@ -32,11 +32,11 @@ export function createMilestoneRoutes(options: MilestoneRoutesOptions) {
       return c.json({ error: "org_access_denied" }, 403);
     }
     try {
-      const rows = await MilestoneStore.listForProject(
-        options.pool,
+      const rows = await MilestoneStore.listForProject(options.pool, projectId, {
+        ...actor,
+        orgId,
         projectId,
-        { ...actor, orgId, projectId }
-      );
+      });
       return c.json({ milestones: rows });
     } catch (error) {
       return c.json({ error: "milestone_access_denied", message: messageOf(error) }, 403);
@@ -65,9 +65,9 @@ export function createMilestoneRoutes(options: MilestoneRoutesOptions) {
           description: data.description ?? null,
           orderIndex: data.orderIndex,
           eta: data.eta === undefined || data.eta === null ? null : new Date(data.eta),
-          status: data.status ?? "planned"
+          status: data.status ?? "planned",
         },
-        { ...actor, orgId, projectId }
+        { ...actor, orgId, projectId },
       );
       return c.json(milestone, 201);
     } catch (error) {
@@ -84,7 +84,11 @@ export function createMilestoneRoutes(options: MilestoneRoutesOptions) {
       return c.json({ error: "org_access_denied" }, 403);
     }
     try {
-      const milestone = await MilestoneStore.get(options.pool, milestoneId, { ...actor, orgId, projectId });
+      const milestone = await MilestoneStore.get(options.pool, milestoneId, {
+        ...actor,
+        orgId,
+        projectId,
+      });
       if (milestone === undefined) {
         return c.json({ error: "milestone_not_found" }, 404);
       }

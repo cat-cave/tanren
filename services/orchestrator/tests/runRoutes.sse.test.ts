@@ -13,7 +13,7 @@ const actor: ActorContext = {
   orgId: "org_acme",
   projectId: null,
   scopes: ["org:member"],
-  source: "session"
+  source: "session",
 };
 
 function setup() {
@@ -26,7 +26,7 @@ function setup() {
     run_id: "run_x",
     kind: "plan",
     status: "running",
-    started_at: new Date("2026-05-01T00:00:00.000Z")
+    started_at: new Date("2026-05-01T00:00:00.000Z"),
   });
   const frames: Array<{ event: string; data: unknown }> = [];
   const driver = new SseDriver(
@@ -37,12 +37,12 @@ function setup() {
       actor,
       rawView: false,
       intervalMs: 0,
-      now: () => new Date("2026-05-01T00:00:00.000Z")
+      now: () => new Date("2026-05-01T00:00:00.000Z"),
     },
     (frame) => {
       const parsed = parseFrame(frame);
       if (parsed !== undefined) frames.push(parsed);
-    }
+    },
   );
   return { pool, frames, driver };
 }
@@ -73,12 +73,12 @@ describe("P2A-0014 SSE driver", () => {
         actor,
         rawView: false,
         intervalMs: 0,
-        now: () => new Date("2026-05-01T00:00:00.000Z")
+        now: () => new Date("2026-05-01T00:00:00.000Z"),
       },
       (frame) => {
         const parsed = parseFrame(frame);
         if (parsed !== undefined) localFrames.push(parsed);
-      }
+      },
     );
     await localDriver.run();
     expect(localFrames[0]?.event).toBe("snapshot");
@@ -93,7 +93,12 @@ describe("P2A-0014 SSE driver", () => {
 
   it("emits a status frame when the run's status changes between ticks", async () => {
     const pool = new RunRoutesPool();
-    pool.seedRun({ run_id: "run_y", spec_id: "spec_y", project_id: "project_y", status: "running" });
+    pool.seedRun({
+      run_id: "run_y",
+      spec_id: "spec_y",
+      project_id: "project_y",
+      status: "running",
+    });
     const captured: Array<{ event: string; data: unknown }> = [];
     const driver = new SseDriver(
       {
@@ -103,12 +108,12 @@ describe("P2A-0014 SSE driver", () => {
         actor,
         rawView: false,
         intervalMs: 0,
-        now: () => new Date("2026-05-01T00:00:00.000Z")
+        now: () => new Date("2026-05-01T00:00:00.000Z"),
       },
       (frame) => {
         const parsed = parseFrame(frame);
         if (parsed !== undefined) captured.push(parsed);
-      }
+      },
     );
     // Manually call internal methods via run; need a partially-initialized
     // driver state. Instead, drive snapshot then mutate then tick.
@@ -119,14 +124,22 @@ describe("P2A-0014 SSE driver", () => {
     pool.runs[0].outcome = "phase2_easy_complete";
     await driver.tick();
     expect(captured.find((f) => f.event === "status")).toBeDefined();
-    const status = captured.find((f) => f.event === "status")!.data as { status: string; outcome: string | null };
+    const status = captured.find((f) => f.event === "status")!.data as {
+      status: string;
+      outcome: string | null;
+    };
     expect(status.status).toBe("completed");
     expect(status.outcome).toBe("phase2_easy_complete");
   });
 
   it("emits a heartbeat after the configured interval passes without other frames", async () => {
     const pool = new RunRoutesPool();
-    pool.seedRun({ run_id: "run_h", spec_id: "spec_h", project_id: "project_h", status: "running" });
+    pool.seedRun({
+      run_id: "run_h",
+      spec_id: "spec_h",
+      project_id: "project_h",
+      status: "running",
+    });
     let nowMs = 0;
     const captured: Array<{ event: string; data: unknown }> = [];
     const driver = new SseDriver(
@@ -137,12 +150,12 @@ describe("P2A-0014 SSE driver", () => {
         actor,
         rawView: false,
         intervalMs: 0,
-        now: () => new Date(nowMs)
+        now: () => new Date(nowMs),
       },
       (frame) => {
         const parsed = parseFrame(frame);
         if (parsed !== undefined) captured.push(parsed);
-      }
+      },
     );
     (driver as unknown as { lastStatusFingerprint: string }).lastStatusFingerprint = "running:";
     // Advance simulated clock past the 15s heartbeat threshold.

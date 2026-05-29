@@ -25,12 +25,7 @@ import { ForgeThreadStore, ForgeTurnStore } from "../../engine/forge/index.js";
 import { loadInsightsForProject } from "../../engine/insights/index.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg } from "../orgs/index.js";
-import {
-  type RunDetail,
-  type RunListItem,
-  type RunSpecSummary,
-  RECENT_EVENT_CAP
-} from "./contract.js";
+import { type RunDetail, type RunListItem, type RunSpecSummary, RECENT_EVENT_CAP } from "./contract.js";
 import {
   fetchCostsPage,
   fetchEventsPage,
@@ -41,7 +36,7 @@ import {
   fetchRunListItems,
   fetchRunSummary,
   fetchRunSpecSummary,
-  fetchRunTasks
+  fetchRunTasks,
 } from "./list.js";
 import { handleSseStream } from "./sse.js";
 import { parseRawViewOptIn } from "./redaction.js";
@@ -73,7 +68,7 @@ export function createRunRoutes(options: RunRoutesOptions) {
     const items = await fetchRunListItems(options.pool, {
       projectId,
       status: c.req.query("status"),
-      specId: c.req.query("specId")
+      specId: c.req.query("specId"),
     });
     return c.json({ items });
   });
@@ -107,7 +102,7 @@ export function createRunRoutes(options: RunRoutesOptions) {
       fetchRunEventsForSnapshot(options.pool, { runId, limit: RECENT_EVENT_CAP, actor, rawView }),
       fetchRunCostsForSnapshot(options.pool, runId),
       fetchRunInsights(options.pool, summary.projectId, summary.specId, runId),
-      fetchForgeBundle(options.pool, { orgId, projectId, runId, actor })
+      fetchForgeBundle(options.pool, { orgId, projectId, runId, actor }),
     ]);
 
     const detail: RunDetail = {
@@ -117,7 +112,7 @@ export function createRunRoutes(options: RunRoutesOptions) {
       recentEvents,
       costs,
       insights,
-      forgeThread
+      forgeThread,
     };
     return c.json(detail);
   });
@@ -151,7 +146,7 @@ export function createRunRoutes(options: RunRoutesOptions) {
         cursor: c.req.query("cursor"),
         pageSize: c.req.query("pageSize"),
         actor,
-        rawView: parseRawViewOptIn(c)
+        rawView: parseRawViewOptIn(c),
       });
       return c.json(page);
     } catch (error) {
@@ -188,7 +183,7 @@ export function createRunRoutes(options: RunRoutesOptions) {
       const page = await fetchCostsPage(options.pool, {
         runId,
         cursor: c.req.query("cursor"),
-        pageSize: c.req.query("pageSize")
+        pageSize: c.req.query("pageSize"),
       });
       return c.json(page);
     } catch (error) {
@@ -249,7 +244,7 @@ export function createRunRoutes(options: RunRoutesOptions) {
       actor,
       rawView: parseRawViewOptIn(c),
       intervalMs: options.sseIntervalMs ?? 1_000,
-      now: options.sseNow
+      now: options.sseNow,
     });
   });
 
@@ -271,7 +266,7 @@ export function createRunRoutes(options: RunRoutesOptions) {
         cursor: c.req.query("cursor"),
         pageSize: c.req.query("pageSize"),
         actor,
-        rawView: parseRawViewOptIn(c)
+        rawView: parseRawViewOptIn(c),
       });
       return c.json(page);
     } catch (error) {
@@ -296,7 +291,7 @@ async function gateProjectAccess(
   pool: pg.Pool,
   projectId: string,
   actor: ActorContext,
-  c: Context
+  c: Context,
 ): Promise<Response | undefined> {
   try {
     await assertProjectAccess(pool, projectId, actor);
@@ -329,15 +324,12 @@ interface ForgeBundleArgs {
   actor: ActorContext;
 }
 
-async function fetchForgeBundle(
-  pool: pg.Pool,
-  args: ForgeBundleArgs
-): Promise<RunDetail["forgeThread"]> {
+async function fetchForgeBundle(pool: pg.Pool, args: ForgeBundleArgs): Promise<RunDetail["forgeThread"]> {
   try {
     const threads = await ForgeThreadStore.listForRun(
       pool,
       { orgId: args.orgId, projectId: args.projectId, runId: args.runId },
-      args.actor
+      args.actor,
     );
     const head = threads[0];
     if (head === undefined) return null;
@@ -361,7 +353,7 @@ function fallbackSpec(specId: string): RunSpecSummary {
     title: "(spec not found)",
     description: "",
     behaviorIds: [],
-    milestoneId: null
+    milestoneId: null,
   };
 }
 

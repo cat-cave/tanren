@@ -14,7 +14,10 @@ interface InsertedRow {
 class FakeCostPool {
   readonly inserts: InsertedRow[] = [];
 
-  async query(sql: string, params: ReadonlyArray<unknown> = []): Promise<{ rows: ReadonlyArray<Record<string, unknown>>; rowCount: number }> {
+  async query(
+    sql: string,
+    params: ReadonlyArray<unknown> = [],
+  ): Promise<{ rows: ReadonlyArray<Record<string, unknown>>; rowCount: number }> {
     if (sql.trim().startsWith("INSERT INTO cost_records")) {
       this.inserts.push({ table: "cost_records", params });
       return { rows: [], rowCount: 1 };
@@ -31,7 +34,7 @@ function usage(partial: Partial<TokenUsage>): TokenUsage {
     outputTokens: 0,
     reasoningOutputTokens: 0,
     totalTokens: 0,
-    ...partial
+    ...partial,
   };
 }
 
@@ -39,7 +42,7 @@ const context = {
   runId: "run_test",
   taskId: "task_test",
   specId: "spec_test",
-  projectId: "project_test"
+  projectId: "project_test",
 };
 
 // Insert param positions (1-based in SQL → 0-based here):
@@ -57,7 +60,7 @@ describe("CostRecorder", () => {
     const result = await recorder.record(
       { ...context, cli: "codex", model: "gpt-test", authRef: "credential/openai-api/prod" },
       usage({ inputTokens: 1_000_000, totalTokens: 1_000_000 }),
-      { foo: "bar" }
+      { foo: "bar" },
     );
     expect(result.billingMode).toBe("per_token");
     expect(result.costBasis).toBe("provider_pricing");
@@ -78,12 +81,12 @@ describe("CostRecorder", () => {
       cachedInputTokens: 4480,
       outputTokens: 145,
       reasoningOutputTokens: 316,
-      totalTokens: 11921
+      totalTokens: 11921,
     });
     const result = await recorder.record(
       { ...context, cli: "codex", model: "gpt-codex", authRef: "credential/codex/dev" },
       tokens,
-      { stream: "test" }
+      { stream: "test" },
     );
     expect(result.billingMode).toBe("subscription");
     expect(result.costBasis).toBe("unknown");
@@ -103,9 +106,15 @@ describe("CostRecorder", () => {
     const events = new FakeEventStore();
     const recorder = new CostRecorder(pool as never, events);
     const result = await recorder.record(
-      { ...context, cli: "fake", model: "qwen", authRef: "credential/self-hosted/qwen", runtimeSeconds: 60 },
+      {
+        ...context,
+        cli: "fake",
+        model: "qwen",
+        authRef: "credential/self-hosted/qwen",
+        runtimeSeconds: 60,
+      },
       usage({}),
-      {}
+      {},
     );
     expect(result.billingMode).toBe("self_hosted");
     expect(result.costBasis).toBe("unknown");
@@ -119,7 +128,7 @@ describe("CostRecorder", () => {
     const result = await recorder.record(
       { ...context, cli: "codex", model: "gpt", authRef: "vault/secret/dev/legacy" },
       usage({ inputTokens: 12, outputTokens: 8, totalTokens: 20 }),
-      {}
+      {},
     );
     expect(result.costBasis).toBe("unknown");
     expect(result.costUsd).toBeNull();
@@ -134,10 +143,10 @@ describe("CostRecorder", () => {
     await recorder.record(
       { ...context, cli: "codex", model: "gpt-codex", authRef: "credential/codex/dev" },
       usage({ inputTokens: 1, outputTokens: 1, totalTokens: 2 }),
-      {}
+      {},
     );
     const serialized = pool.inserts.flatMap((insert) =>
-      insert.params.map((param) => (typeof param === "string" ? param : JSON.stringify(param)))
+      insert.params.map((param) => (typeof param === "string" ? param : JSON.stringify(param))),
     );
     expect(serialized.join("\n")).not.toContain(`${"legacy"}_${"unknown"}`);
     expect(serialized.join("\n")).not.toContain("unknown_source");
@@ -147,9 +156,15 @@ describe("CostRecorder", () => {
     const pool = new FakeCostPool();
     const recorder = new CostRecorder(pool as never, new FakeEventStore());
     const result = await recorder.record(
-      { ...context, cli: "codex", model: "gpt-codex", authRef: "credential/codex/dev", ccusageCostUsd: 0.75 },
+      {
+        ...context,
+        cli: "codex",
+        model: "gpt-codex",
+        authRef: "credential/codex/dev",
+        ccusageCostUsd: 0.75,
+      },
       usage({ inputTokens: 100, totalTokens: 100 }),
-      {}
+      {},
     );
     expect(result.costBasis).toBe("ccusage");
     expect(result.costUsd).toBe("0.750000");
@@ -165,7 +180,10 @@ class ReconcilePool {
 
   constructor(private readonly rows: Array<{ id: string; total_tokens: number }>) {}
 
-  async query(sql: string, params: ReadonlyArray<unknown> = []): Promise<{ rows: ReadonlyArray<Record<string, unknown>>; rowCount: number }> {
+  async query(
+    sql: string,
+    params: ReadonlyArray<unknown> = [],
+  ): Promise<{ rows: ReadonlyArray<Record<string, unknown>>; rowCount: number }> {
     if (sql.startsWith("SELECT id, total_tokens FROM cost_records")) {
       return { rows: this.rows, rowCount: this.rows.length };
     }
@@ -184,14 +202,14 @@ describe("CostRecorder.reconcileRunCostFromCcusage", () => {
   it("apportions the real ccusage cost across rows by token share so they sum to the total", async () => {
     const pool = new ReconcilePool([
       { id: "1", total_tokens: 750 },
-      { id: "2", total_tokens: 250 }
+      { id: "2", total_tokens: 250 },
     ]);
     const recorder = new CostRecorder(pool as never, new FakeEventStore());
     const { updated } = await recorder.reconcileRunCostFromCcusage("run_test", 4);
     expect(updated).toBe(2);
     expect(pool.updates).toEqual([
       { id: "1", costUsd: "3.000000" },
-      { id: "2", costUsd: "1.000000" }
+      { id: "2", costUsd: "1.000000" },
     ]);
     const summed = pool.updates.reduce((sum, update) => sum + Number(update.costUsd), 0);
     expect(summed).toBeCloseTo(4, 6);
@@ -216,7 +234,7 @@ describe("CostRecorder.reconcileRunCostFromCredits", () => {
   it("prices consumed credits at the rate and apportions across rows as cost_basis 'credits'", async () => {
     const pool = new ReconcilePool([
       { id: "1", total_tokens: 750 },
-      { id: "2", total_tokens: 250 }
+      { id: "2", total_tokens: 250 },
     ]);
     const recorder = new CostRecorder(pool as never, new FakeEventStore());
     // 10 credits × $0.04 = $0.40, split 75/25.
@@ -224,7 +242,7 @@ describe("CostRecorder.reconcileRunCostFromCredits", () => {
     expect(updated).toBe(2);
     expect(pool.updates).toEqual([
       { id: "1", costUsd: "0.300000" },
-      { id: "2", costUsd: "0.100000" }
+      { id: "2", costUsd: "0.100000" },
     ]);
   });
 

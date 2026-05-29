@@ -50,7 +50,7 @@ const STATUS_META: Record<DagStatus, { label: string; pill: SpecDetail["pill"]; 
   live: { label: "forging", pill: "run", glyph: "↻" },
   review: { label: "review-ready", pill: "warn", glyph: "!" },
   blocked: { label: "blocked", pill: "fail", glyph: "⏳" },
-  queued: { label: "queued", pill: "cold", glyph: "○" }
+  queued: { label: "queued", pill: "cold", glyph: "○" },
 };
 
 const HALTED = new Set(["halted", "escape_hatch_hit", "retry_budget_exhausted"]);
@@ -84,7 +84,7 @@ function toRunRow(projectId: string, run: RunListItem): SpecRunRow {
     when: run.lastEventAt ?? run.startedAt,
     costUsd: run.costTotalUsd,
     href: runHref(projectId, run.runId),
-    live
+    live,
   };
 }
 
@@ -103,7 +103,7 @@ function depChip(specId: string, allSpecs: SpecSummary[], statusBySpecId: Map<st
   return {
     specId,
     title: found?.title ?? specId,
-    status: statusBySpecId.get(specId) ?? "queued"
+    status: statusBySpecId.get(specId) ?? "queued",
   };
 }
 
@@ -158,6 +158,6 @@ export function buildSpecDetail(input: BuildSpecDetailInput): SpecDetail {
     latestRun,
     blockedReason,
     spendUsd: `$${spend.toFixed(2)}`,
-    primaryAction
+    primaryAction,
   };
 }

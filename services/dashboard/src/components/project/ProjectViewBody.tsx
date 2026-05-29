@@ -10,13 +10,7 @@
 import type { InsightSummary } from "../../api/types.js";
 import { ScreenStyles } from "./screenStyles.js";
 import { KpiStrip, PageHead, relativeTime } from "./shared.js";
-import type {
-  ActivityRow,
-  AttentionEntry,
-  DagNode,
-  ProjectViewModel,
-  VelocityModel
-} from "./projectViewData.js";
+import type { ActivityRow, AttentionEntry, DagNode, ProjectViewModel, VelocityModel } from "./projectViewData.js";
 
 export interface ProjectViewBodyProps {
   projectId: string;
@@ -98,7 +92,9 @@ function ForgeNarrationCard(props: ProjectViewBodyProps) {
         <div class="forge-turn">
           <div class="turn-label">▮ {model.attention.length} things need you · ranked</div>
           {model.attention.length === 0 ? (
-            <div class="empty-note">Nothing needs you right now. Forge will surface review handoffs and open runs here.</div>
+            <div class="empty-note">
+              Nothing needs you right now. Forge will surface review handoffs and open runs here.
+            </div>
           ) : (
             <div class="col" style="gap:6px">
               {model.attention.map((entry) => (
@@ -183,11 +179,7 @@ function SuboptCallout(props: { insight: InsightSummary; orgId: string | undefin
             <form method="post" action={`/projects/${props.projectId}/insights/act`}>
               <input type="hidden" name="orgId" value={props.orgId} />
               <input type="hidden" name="tool" value={action.toolCall.tool} />
-              <input
-                type="hidden"
-                name="args"
-                value={JSON.stringify(action.toolCall.args ?? {})}
-              />
+              <input type="hidden" name="args" value={JSON.stringify(action.toolCall.args ?? {})} />
               <button type="submit">{action.label}</button>
             </form>
           ))}
@@ -222,9 +214,19 @@ function DagSnapshot(props: { nodes: DagNode[] }) {
         {props.nodes.length === 0 ? (
           <div class="empty-note">No runs yet — the DAG snapshot renders nodes once a spec runs.</div>
         ) : (
-          <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="xMidYMid meet" role="img" aria-label="project dag snapshot">
+          <svg
+            viewBox={`0 0 ${width} ${height}`}
+            preserveAspectRatio="xMidYMid meet"
+            role="img"
+            aria-label="project dag snapshot"
+          >
             {props.nodes.map((node, index) => (
-              <DagNodeRect node={node} x={(index % cols) * cellW + 8} y={Math.floor(index / cols) * cellH + 8} w={cellW - 16} />
+              <DagNodeRect
+                node={node}
+                x={(index % cols) * cellW + 8}
+                y={Math.floor(index / cols) * cellH + 8}
+                w={cellW - 16}
+              />
             ))}
           </svg>
         )}
@@ -235,11 +237,31 @@ function DagSnapshot(props: { nodes: DagNode[] }) {
 }
 
 const DAG_COLORS: Record<DagNode["status"], { fill: string; stroke: string; text: string; glyph: string }> = {
-  done: { fill: "oklch(58% 0.18 155 / 0.14)", stroke: "var(--status-ok, oklch(58% 0.18 155))", text: "var(--fg-2)", glyph: "✓" },
-  live: { fill: "var(--accent-tint)", stroke: "var(--ember-08)", text: "var(--ember-08)", glyph: "↻" },
-  review: { fill: "oklch(70% 0.16 75 / 0.22)", stroke: "var(--status-warn, oklch(70% 0.16 75))", text: "var(--status-warn, oklch(70% 0.16 75))", glyph: "!" },
-  blocked: { fill: "oklch(60% 0.18 25 / 0.14)", stroke: "var(--status-fail, oklch(60% 0.18 25))", text: "var(--status-fail, oklch(60% 0.18 25))", glyph: "⏳" },
-  queued: { fill: "var(--bg-canvas)", stroke: "var(--line-2)", text: "var(--fg-3)", glyph: "○" }
+  done: {
+    fill: "oklch(58% 0.18 155 / 0.14)",
+    stroke: "var(--status-ok, oklch(58% 0.18 155))",
+    text: "var(--fg-2)",
+    glyph: "✓",
+  },
+  live: {
+    fill: "var(--accent-tint)",
+    stroke: "var(--ember-08)",
+    text: "var(--ember-08)",
+    glyph: "↻",
+  },
+  review: {
+    fill: "oklch(70% 0.16 75 / 0.22)",
+    stroke: "var(--status-warn, oklch(70% 0.16 75))",
+    text: "var(--status-warn, oklch(70% 0.16 75))",
+    glyph: "!",
+  },
+  blocked: {
+    fill: "oklch(60% 0.18 25 / 0.14)",
+    stroke: "var(--status-fail, oklch(60% 0.18 25))",
+    text: "var(--status-fail, oklch(60% 0.18 25))",
+    glyph: "⏳",
+  },
+  queued: { fill: "var(--bg-canvas)", stroke: "var(--line-2)", text: "var(--fg-3)", glyph: "○" },
 };
 
 function DagNodeRect(props: { node: DagNode; x: number; y: number; w: number }) {
@@ -247,7 +269,11 @@ function DagNodeRect(props: { node: DagNode; x: number; y: number; w: number }) 
   const c = DAG_COLORS[node.status];
   const label = `${c.glyph} ${node.milestone} · ${truncate(node.title, 26)}`;
   const rect = (
-    <g class="dag-node" transform={`translate(${props.x}, ${props.y})`} style={node.href === null ? "cursor:default" : "cursor:pointer"}>
+    <g
+      class="dag-node"
+      transform={`translate(${props.x}, ${props.y})`}
+      style={node.href === null ? "cursor:default" : "cursor:pointer"}
+    >
       <rect width={props.w} height="34" rx="3" fill={c.fill} stroke={c.stroke} stroke-width="1" />
       <text x="9" y="21" fill={c.text} font-family="var(--font-mono)" font-size="11">
         {label}
@@ -297,7 +323,9 @@ function ActivityFeed(props: { rows: ActivityRow[] }) {
       </div>
       <div class="body">
         {props.rows.length === 0 ? (
-          <div class="empty-note" style="padding:12px 13px">No recent events for this project.</div>
+          <div class="empty-note" style="padding:12px 13px">
+            No recent events for this project.
+          </div>
         ) : (
           props.rows.map((row) => (
             <a class="row" href={row.href}>

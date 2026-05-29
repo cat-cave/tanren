@@ -43,7 +43,7 @@ export class SshUsageProbe implements UsageProbe {
       provider: this.config.provider,
       codexHome: this.config.codexHome,
       target: this.config.target,
-      timeoutMs: this.config.timeoutMs
+      timeoutMs: this.config.timeoutMs,
     });
     // Window pressure is credit-aware: a maxed subscription window is NOT a
     // doomed call when prepaid credits are available, because overage draws
@@ -56,7 +56,7 @@ export class SshUsageProbe implements UsageProbe {
         ? null
         : evaluateWindowPressure(
             usage.windows,
-            this.config.pressureThresholdPercent ?? DEFAULT_WINDOW_PRESSURE_THRESHOLD
+            this.config.pressureThresholdPercent ?? DEFAULT_WINDOW_PRESSURE_THRESHOLD,
           );
     return { usage, pressure };
   }
@@ -66,7 +66,7 @@ export class SshUsageProbe implements UsageProbe {
       cli: this.config.cli,
       codexHome: this.config.codexHome,
       target: this.config.target,
-      timeoutMs: this.config.timeoutMs
+      timeoutMs: this.config.timeoutMs,
     });
   }
 }

@@ -16,6 +16,6 @@ export const RedactionRawAccessPayload = z
     eventReadId: z.string(),
     eventReadType: z.string(),
     paths: z.array(z.string()),
-    at: z.string()
+    at: z.string(),
   })
   .strict();

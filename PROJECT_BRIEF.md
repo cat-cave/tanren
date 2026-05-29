@@ -190,6 +190,7 @@ Writers write code. They:
 Concrete consequence: if a Writer spends 45 minutes writing high-quality code and never emits a status JSON, the orchestrator does not panic. It closes the writer session, captures the diff, and routes to an Answerer. If a Writer hangs / times out / OOMs / crashes mid-session, the orchestrator captures the partial diff (or empty diff), still routes to an Answerer, and lets the Answerer judge what to do next.
 
 Writers in v0:
+
 - **opencode** (with ZAI, Wafer, OpenRouter, or any opencode provider — the operator's choice).
 - **claude** (claude-code CLI; despite supporting structured output, it can also be used purely as a Writer).
 - **codex** (codex CLI; same).
@@ -211,6 +212,7 @@ Concrete answer types in v0:
 - **Conflict-resolution-planner Answerer** (v1+): input = merge conflict; output = N-subtask plan to resolve.
 
 Answerers in v0:
+
 - **claude** (structured-output mode).
 - **codex** (structured-output mode).
 - **opencode** is **NOT a v0 Answerer** because it lacks first-class JSON-schema enforcement. It can be used as an Answerer post-v0 once a JSONL-with-schema-validation contract is in place, but v0 ships only claude and codex in the Answerer role.
@@ -439,11 +441,11 @@ Tanren has exactly one execution adapter: `SshSubstrate`. It speaks SSH to a run
 
 The **allocator** decides where the SSH target lives. v0 ships three:
 
-| Allocator | What it does |
-|---|---|
+| Allocator      | What it does                                                                                                                                                                                                          |
+| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `local-docker` | `docker run -d --rm -p 127.0.0.1:<rand>:22 ghcr.io/cat-cave/tanren-runner:v0`. Target is `{host: '127.0.0.1', port: <rand>}`. The orchestrator container reaches the local Docker daemon via the DooD-mounted socket. |
-| `manual-ssh` | Operator pre-allocated a Docker+sshd host (or just an SSH-reachable VM with Docker installed). Target from config. |
-| `hetzner` | hcloud API provisions a VM with cloudinit that installs Docker and starts the runner container. Target = `{host: <vm-public-ip>, port: 22}`. |
+| `manual-ssh`   | Operator pre-allocated a Docker+sshd host (or just an SSH-reachable VM with Docker installed). Target from config.                                                                                                    |
+| `hetzner`      | hcloud API provisions a VM with cloudinit that installs Docker and starts the runner container. Target = `{host: <vm-public-ip>, port: 22}`.                                                                          |
 
 **Extensibility is first-class.** v1+ allocators (GCP, AWS, DigitalOcean, Fly, Lambda Labs, etc.) plug into the `Allocator` interface. Adding an allocator does NOT touch the substrate code; it adds a new module under `src/engine/allocators/`. Every allocator must return an `SshTarget`; that is the only thing the substrate trusts.
 
@@ -452,6 +454,7 @@ The **allocator** decides where the SSH target lives. v0 ships three:
 The lifecycle unit is **a workflow run**, not a subtask. A run may span many subtasks; the same runner container can serve all of them. But the runner container is **not** assumed to persist forever — workflows are decoupled from container longevity. If subtask 5 of 12 dies because the VM rebooted or the container OOMed, the orchestrator allocates a new runner, replays the workspace state via `git checkout` to the last committed state, and resumes from subtask 6.
 
 This implies:
+
 - **Commits between units of work.** Each subtask, on success, makes a commit (or pushes to the remote feature branch). Workspace state is recoverable from the remote SCM.
 - **Runners are interchangeable within a workflow.** Any runner can pick up the workflow's branch via `git clone` + `git checkout`.
 - **Workflow state lives in Postgres**, not in the runner. The orchestrator tracks "subtask 5 of 12 complete, next is 6, runner died, allocate new runner."
@@ -492,14 +495,14 @@ Agent-authored code, credentials, and worktrees are NEVER on the host. The runne
 
 The Tanren v0 runner image is intentionally a **base** that projects build on top of. The base image:
 
-| Property | v0 base value |
-|---|---|
-| Image | `ghcr.io/cat-cave/tanren-runner:v0` |
-| Base | `debian:trixie-slim` (current Debian stable as of 2026-05) |
-| Packages | `openssh-server`, `git`, `gh`, `curl`, `ca-certificates`, `node` (current LTS), `python` (3.13+), `build-essential` |
-| Pre-installed CLIs | `claude-code`, `codex`, `opencode`, `ccusage`, `codexbar` |
-| sshd | as PID 1 via tini; pubkey-only; no password; runs as `tanren` user (uid 1000) |
-| Workspace | `/workspace` owned by `tanren` user |
+| Property           | v0 base value                                                                                                       |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------- |
+| Image              | `ghcr.io/cat-cave/tanren-runner:v0`                                                                                 |
+| Base               | `debian:trixie-slim` (current Debian stable as of 2026-05)                                                          |
+| Packages           | `openssh-server`, `git`, `gh`, `curl`, `ca-certificates`, `node` (current LTS), `python` (3.13+), `build-essential` |
+| Pre-installed CLIs | `claude-code`, `codex`, `opencode`, `ccusage`, `codexbar`                                                           |
+| sshd               | as PID 1 via tini; pubkey-only; no password; runs as `tanren` user (uid 1000)                                       |
+| Workspace          | `/workspace` owned by `tanren` user                                                                                 |
 
 Projects build their own image **from** this base, adding language toolchains, dependencies, and project-specific tools:
 
@@ -520,6 +523,7 @@ RUN git clone https://github.com/myorg/myrepo.git /workspace && cd /workspace &&
 The project's runner image is declared in `[project.runner_image]` config. When Tanren provisions a runner for that project, it uses the project-specific image, not the base.
 
 This gives:
+
 - **Fast cold starts** for projects that have pre-installed dependencies in their custom image.
 - **Reproducibility** — the runner image is content-addressable; CI runs against the same image the workflow used.
 - **Operator freedom** to add tooling without modifying Tanren.
@@ -557,6 +561,7 @@ Tanren's credential system is a v0 requirement, not a layered-on feature. Prior 
 **Configuration is separate from secrets.** Settings (Hetzner VM tier, default branch, runner-image override) live in Postgres-backed configuration tables. Secrets (Hetzner API token, Wafer API key, claude OAuth refresh-token) live in the secret manager. The dashboard and CLI surface both, but the storage and access paths are distinct.
 
 **Transport**: when the orchestrator needs to invoke a writer or answerer in a runner, it:
+
 1. Reads the required credentials from the secret manager.
 2. Opens an SSH session to the runner.
 3. Injects credentials per-session via SSH env-var injection (`session.env('ANTHROPIC_API_KEY', value)` before `session.exec(['claude', ...])`).
@@ -569,16 +574,19 @@ Tanren's credential system is a v0 requirement, not a layered-on feature. Prior 
 Each CLI has its own auth model. v0 supports all three:
 
 **claude-code**:
+
 - OAuth (device token) — the canonical claude-max path. Token + refresh-token + expiry stored.
 - API key (Anthropic direct) — for operators who pay per-token directly.
 - Either path lands a credential in the secret manager via the onboarding flow.
 
 **codex**:
+
 - OAuth (device token) — the canonical chatgpt-pro path.
 - API key (OpenAI direct).
 - Same flow.
 
 **opencode**:
+
 - API key per provider (ZAI, Wafer, OpenRouter, Anthropic, OpenAI, local model endpoints, etc.).
 - **opencode also requires a config file** (`~/.opencode/opencode.json` or `OPENCODE_CONFIG_PATH=...`) that maps providers to keys, sets default model, etc. The onboarding flow generates this config file from the operator's secret manager state and writes it into the runner via the SSH transport.
 
@@ -815,34 +823,34 @@ Workers loop with `SELECT ... FOR UPDATE SKIP LOCKED` and wake on `LISTEN/NOTIFY
 
 Each pick is mechanical: pick the tool people are actually using in 2026, not the most-familiar option from earlier years. Each pick is verified against community consensus (sources cited in §22).
 
-| Concern | Pick | Justification |
-|---|---|---|
-| Compiler | tsgo (TS 7.0) | 10× faster typecheck than tsc. Stable as of 2026-Q1. |
-| Runtime | Node 24 LTS | Active LTS through 2028. Bun considered, deferred to v0+2-weeks evaluation pending its Rust-rewrite stabilization (open in §20). |
-| Package mgr | pnpm 11.x | Current as of 2026-05. |
-| Database | Postgres 18 (18.4 patch) | One backend, one schema, no SQLite path. Compose service. |
-| ORM | Drizzle (postgres-only) | Schema-as-code, drizzle-kit migrations, no per-dialect compat. |
-| Validation | Zod 4 | Every external boundary (provider stdout, MCP call, dashboard request, secret-manager response) `schema.safeParse(raw)`. |
-| Errors | Plain discriminated unions | tsgo exhaustiveness via `switch (f.kind)`. No Effect, no neverthrow. |
-| Linter | oxlint 1.x | 50-100× faster than ESLint. CI gate. |
-| Formatter | oxfmt 1.x | Pairs with oxlint. Replaces Prettier. |
-| Type-aware lint | oxlint type-aware mode (or eslint-typescript fallback for the one rule) | `switch-exhaustiveness-check` is non-negotiable. |
-| Testing | Vitest 3 | Standard for Node TS in 2026. |
-| Coverage | v8 native via Vitest | No c8. |
-| Bundler | tsdown | Library-author default. |
-| Queue | Postgres `SKIP LOCKED` + `LISTEN/NOTIFY` | Already in stack. No Redis. No BullMQ. |
-| MCP | (deferred to v1; HTTP, not stdio) | v0 ships no MCP. |
-| LLM SDK | none in orchestrator | Every LLM call goes through a CLI subprocess via `ProviderAdapter`. |
-| Substrate | dockerode 5.x (lifecycle) + ssh2 1.17 (workloads) | One adapter, three v0 allocators. |
-| Logging | pino | Structured JSON. |
-| Web framework | Hono + JSX server-rendered + HTMX | Dashboard service in compose. |
-| Frontend interactivity | HTMX (vendored) | No React/Solid/Vue in v0. |
-| Secret manager | Hashicorp Vault (compose service) | v0; pgcrypto fallback considered (§20 open). |
-| Notifications | ntfy.sh (compose service) | Free, push-to-phone. |
-| Webhooks / remote access | Cloudflared (compose service) | For incoming webhooks and remote dashboard access from a homelab setup. |
-| CI | GitHub Actions | Free for OSS. |
-| Container runtime target | Docker Engine 29.x (29.5.1 as of 2026-05-18) | The operator must have Docker; that is the only host dependency. |
-| 500-line-max custom oxlint rule | yes | Hard cap; prevents monolith files. |
+| Concern                         | Pick                                                                    | Justification                                                                                                                    |
+| ------------------------------- | ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| Compiler                        | tsgo (TS 7.0)                                                           | 10× faster typecheck than tsc. Stable as of 2026-Q1.                                                                             |
+| Runtime                         | Node 24 LTS                                                             | Active LTS through 2028. Bun considered, deferred to v0+2-weeks evaluation pending its Rust-rewrite stabilization (open in §20). |
+| Package mgr                     | pnpm 11.x                                                               | Current as of 2026-05.                                                                                                           |
+| Database                        | Postgres 18 (18.4 patch)                                                | One backend, one schema, no SQLite path. Compose service.                                                                        |
+| ORM                             | Drizzle (postgres-only)                                                 | Schema-as-code, drizzle-kit migrations, no per-dialect compat.                                                                   |
+| Validation                      | Zod 4                                                                   | Every external boundary (provider stdout, MCP call, dashboard request, secret-manager response) `schema.safeParse(raw)`.         |
+| Errors                          | Plain discriminated unions                                              | tsgo exhaustiveness via `switch (f.kind)`. No Effect, no neverthrow.                                                             |
+| Linter                          | oxlint 1.x                                                              | 50-100× faster than ESLint. CI gate.                                                                                             |
+| Formatter                       | oxfmt 1.x                                                               | Pairs with oxlint. Replaces Prettier.                                                                                            |
+| Type-aware lint                 | oxlint type-aware mode (or eslint-typescript fallback for the one rule) | `switch-exhaustiveness-check` is non-negotiable.                                                                                 |
+| Testing                         | Vitest 3                                                                | Standard for Node TS in 2026.                                                                                                    |
+| Coverage                        | v8 native via Vitest                                                    | No c8.                                                                                                                           |
+| Bundler                         | tsdown                                                                  | Library-author default.                                                                                                          |
+| Queue                           | Postgres `SKIP LOCKED` + `LISTEN/NOTIFY`                                | Already in stack. No Redis. No BullMQ.                                                                                           |
+| MCP                             | (deferred to v1; HTTP, not stdio)                                       | v0 ships no MCP.                                                                                                                 |
+| LLM SDK                         | none in orchestrator                                                    | Every LLM call goes through a CLI subprocess via `ProviderAdapter`.                                                              |
+| Substrate                       | dockerode 5.x (lifecycle) + ssh2 1.17 (workloads)                       | One adapter, three v0 allocators.                                                                                                |
+| Logging                         | pino                                                                    | Structured JSON.                                                                                                                 |
+| Web framework                   | Hono + JSX server-rendered + HTMX                                       | Dashboard service in compose.                                                                                                    |
+| Frontend interactivity          | HTMX (vendored)                                                         | No React/Solid/Vue in v0.                                                                                                        |
+| Secret manager                  | Hashicorp Vault (compose service)                                       | v0; pgcrypto fallback considered (§20 open).                                                                                     |
+| Notifications                   | ntfy.sh (compose service)                                               | Free, push-to-phone.                                                                                                             |
+| Webhooks / remote access        | Cloudflared (compose service)                                           | For incoming webhooks and remote dashboard access from a homelab setup.                                                          |
+| CI                              | GitHub Actions                                                          | Free for OSS.                                                                                                                    |
+| Container runtime target        | Docker Engine 29.x (29.5.1 as of 2026-05-18)                            | The operator must have Docker; that is the only host dependency.                                                                 |
+| 500-line-max custom oxlint rule | yes                                                                     | Hard cap; prevents monolith files.                                                                                               |
 
 ### §10.1 oxlint custom rules
 
@@ -873,11 +881,11 @@ Tanren's observability surface in v0 is: structured pino logs from each containe
 ```typescript
 // src/engine/providers/types.ts
 
-export type AgentKind = 'writer' | 'answerer';
+export type AgentKind = "writer" | "answerer";
 
 export interface WriterAdapter {
-  readonly kind: 'writer';
-  readonly cli: 'claude' | 'codex' | 'opencode';
+  readonly kind: "writer";
+  readonly cli: "claude" | "codex" | "opencode";
   runWriter(opts: {
     runner: RunnerHandle;
     prompt: string;
@@ -890,14 +898,14 @@ export interface WriterAdapter {
 export interface WriterResult {
   diff: string;
   commits: Commit[];
-  exitReason: 'completed' | 'timeout' | 'crashed' | 'token_limit';
+  exitReason: "completed" | "timeout" | "crashed" | "token_limit";
   tokenUsage: TokenUsage;
   costRecord: CostRecord;
 }
 
 export interface AnswererAdapter<TSchema extends z.ZodTypeAny> {
-  readonly kind: 'answerer';
-  readonly cli: 'claude' | 'codex';   // opencode NOT a v0 answerer (no native schema enforcement)
+  readonly kind: "answerer";
+  readonly cli: "claude" | "codex"; // opencode NOT a v0 answerer (no native schema enforcement)
   runAnswerer(opts: {
     runner: RunnerHandle;
     prompt: string;
@@ -915,16 +923,19 @@ The compile-time split (`WriterAdapter` vs `AnswererAdapter`) is what makes the 
 ### §11.2 The three CLIs
 
 **claude** (`claude-code` CLI):
+
 - Writer mode: `claude --print --output-format text` — output is the model's text response (which includes any diffs the writer wrote inline; the writer is asked to also commit via `git`).
 - Answerer mode: `claude --print --output-format json --output-schema <schema-file>` — structured JSON output validating against the provided schema.
 - Auth: OAuth (device token, the canonical claude-max path) or Anthropic API key.
 
 **codex** (`codex` CLI):
+
 - Writer mode: similar, text streaming.
 - Answerer mode: `codex --output-schema <schema-file>` — structured JSON.
 - Auth: OAuth or OpenAI API key.
 
 **opencode** (`opencode` CLI with multi-provider support — ZAI, Wafer, OpenRouter, Anthropic, OpenAI, local endpoints):
+
 - Writer mode: JSONL event stream; writer's diff is extracted from the workspace, not parsed from the stream.
 - **NOT an answerer in v0.** opencode does not enforce JSON schema natively. Post-v0, an "opencode answerer" can ship with an additional client-side schema-validation layer, but v0 explicitly excludes opencode from the answerer role.
 - Auth: per-provider config file (`~/.opencode/opencode.json` or equivalent) plus API keys.
@@ -932,6 +943,7 @@ The compile-time split (`WriterAdapter` vs `AnswererAdapter`) is what makes the 
 ### §11.3 Cost resolution: the three models flow through one entry point
 
 Per call:
+
 1. Writer or answerer produces output.
 2. The CLI's structured output includes a `usage` block (claude format) or equivalent (codex, opencode-provider-specific).
 3. Tanren's per-CLI parser extracts `input_tokens`, `output_tokens`, `cached_tokens`.
@@ -1087,7 +1099,7 @@ The gate is **the workflow's quality bar**, not a stress test of the infrastruct
 
 ### §15.2 What we don't test (and what we honestly admit)
 
-**Semantic correctness of writer output is not tested by Tanren.** That is the answerer's job. Tanren tests that the answerer ran, returned valid JSON, and the auditor's verdict was honored. Whether the writer wrote *correct* code for an arbitrary natural-language prompt is an open research problem; Tanren delegates it to the answerer agents.
+**Semantic correctness of writer output is not tested by Tanren.** That is the answerer's job. Tanren tests that the answerer ran, returned valid JSON, and the auditor's verdict was honored. Whether the writer wrote _correct_ code for an arbitrary natural-language prompt is an open research problem; Tanren delegates it to the answerer agents.
 
 The auditor's verdict is the quality bar. The acceptance gate (§14) requires the auditor to approve. If the auditor approves bad code, that is a prompt-template bug (or a model-capability gap), tracked as a workflow-quality issue, not an infrastructure issue.
 
@@ -1134,28 +1146,29 @@ Per §11.3: if a writer or answerer call cannot be cost-resolved (provider didn'
 The first concrete action of v0 is to migrate `trevorWieland/tanren` to `cat-cave/tanren`. GitHub's repo-transfer feature handles the redirect; existing clones continue to work via the redirect.
 
 After transfer:
+
 1. Open a fresh branch on the migrated repo: existing main (the Rust attempt) is archived to `archive/v2`, and a new `main` is started empty.
 2. Add `PROJECT_BRIEF.md` (this document) as the first commit.
 3. Scaffold the compose stack and the orchestrator's TS source per §18.
 
 ### §17.2 What carries forward from `n8n-autocoder` and prior `tanren`
 
-| Source | Status |
-|---|---|
-| `n8n-autocoder/audits/F-01 … F-36` | Lifted as regression-test corpus (§15.3). |
-| `n8n-autocoder/custom-nodes/.../shared/costSources/*` | Lifted to `src/engine/cost/sources/`. Cleanest part of the n8n-autocoder. |
-| `n8n-autocoder/custom-nodes/.../shared/githubApp.ts` | Lifted to `src/engine/providers/github/installationToken.ts`. |
-| `n8n-autocoder/custom-nodes/.../exec/SSHExecAdapter.ts` + `sshPool` + `sshTransport` + `remoteAuthProvisioner` | Lifted to `src/engine/substrate/`. These ARE the substrate. |
-| `n8n-autocoder/custom-nodes/.../shared/hcloud.ts` | Lifted to `src/engine/allocators/hetzner.ts`. |
-| `n8n-autocoder/custom-nodes/.../prompts/*` and `schemas/*` | Lifted to `src/prompts/`. |
-| `tanren/v2/<various>` (Rust) | Reference only. Concepts (behaviors, equivalent-operations rule) inform the v3 design. |
-| `quikode/quikode/agents/json_protocol.py` | Conceptual ancestor of the WriterAdapter/AnswererAdapter split. Lift the IDEA, write fresh in TS. |
-| `quikode/quikode/retry_classify.py` | Conceptual ancestor of the `Failure` discriminated union's classifier. |
-| `quikode/quikode/evaluation_contract.py` | Conceptual ancestor of the spec's acceptance-criteria contract. |
-| `tanren/v1/packages/tanren-core/src/tanren_core/dispatch_orchestrator.py` (recovered from git history) | Concepts (concurrent execute, teardown guards) inform the orchestrator design. |
-| All n8n workflow JSON | NOT lifted. |
-| All n8n custom-node packaging | NOT lifted. |
-| All host-side scripts | NOT lifted. |
+| Source                                                                                                         | Status                                                                                            |
+| -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `n8n-autocoder/audits/F-01 … F-36`                                                                             | Lifted as regression-test corpus (§15.3).                                                         |
+| `n8n-autocoder/custom-nodes/.../shared/costSources/*`                                                          | Lifted to `src/engine/cost/sources/`. Cleanest part of the n8n-autocoder.                         |
+| `n8n-autocoder/custom-nodes/.../shared/githubApp.ts`                                                           | Lifted to `src/engine/providers/github/installationToken.ts`.                                     |
+| `n8n-autocoder/custom-nodes/.../exec/SSHExecAdapter.ts` + `sshPool` + `sshTransport` + `remoteAuthProvisioner` | Lifted to `src/engine/substrate/`. These ARE the substrate.                                       |
+| `n8n-autocoder/custom-nodes/.../shared/hcloud.ts`                                                              | Lifted to `src/engine/allocators/hetzner.ts`.                                                     |
+| `n8n-autocoder/custom-nodes/.../prompts/*` and `schemas/*`                                                     | Lifted to `src/prompts/`.                                                                         |
+| `tanren/v2/<various>` (Rust)                                                                                   | Reference only. Concepts (behaviors, equivalent-operations rule) inform the v3 design.            |
+| `quikode/quikode/agents/json_protocol.py`                                                                      | Conceptual ancestor of the WriterAdapter/AnswererAdapter split. Lift the IDEA, write fresh in TS. |
+| `quikode/quikode/retry_classify.py`                                                                            | Conceptual ancestor of the `Failure` discriminated union's classifier.                            |
+| `quikode/quikode/evaluation_contract.py`                                                                       | Conceptual ancestor of the spec's acceptance-criteria contract.                                   |
+| `tanren/v1/packages/tanren-core/src/tanren_core/dispatch_orchestrator.py` (recovered from git history)         | Concepts (concurrent execute, teardown guards) inform the orchestrator design.                    |
+| All n8n workflow JSON                                                                                          | NOT lifted.                                                                                       |
+| All n8n custom-node packaging                                                                                  | NOT lifted.                                                                                       |
+| All host-side scripts                                                                                          | NOT lifted.                                                                                       |
 
 ### §17.3 The old n8n-autocoder
 
@@ -1235,31 +1248,31 @@ Every source file is bounded to 500 lines (§10.1). Every service is its own Doc
 
 ## §19 — Considered and rejected
 
-| Option | Why rejected | Conditions to revisit |
-|---|---|---|
-| Host-process execution (any tier, any condition) | Security invariant (§1.2.1). Autonomous LLM agents writing code MUST be sandboxed. | Never. |
-| Auto-discover local credentials (~/.config/claude, ANTHROPIC_API_KEY envvar) | Anti-pattern. Works for one user, breaks for two. Breaks remote execution. Breaks rotation. | Never. |
-| SQLite as v0 default | One backend (§1.2.2). SQLite + Postgres dual-backend means code-paths-that-only-work-on-one. | Never for v0; v1+ might re-evaluate at scale if Postgres becomes overkill for embedded deployments. |
-| MCP server in v0 (stdio or HTTP) | STDIO MCP is a trap (no auth, no observability, can't be reached from a second client). HTTP MCP requires an HTTP API to exist first. | When HTTP API ships (v1). |
-| HTTP API in v0 | The CLI is sufficient for v0. API adds attack surface, auth, rate-limiting, versioning. | v1 with the dashboard's API consumers. |
-| Time-gated acceptance | v0 builds the workflow; speed comes later. | Never re-introduce a time gate to v0. |
-| Hybrid agents (one agent does both writing and structured-output reporting) | §3.4: workflow brittleness compounds. | Never. |
-| Hard-coded concurrency limits (e.g., "3 codex CLIs max") | §1.2.7: real limits or no limits. | Never. |
-| Bind-mounted credentials | §1.2.3: credentials live in the secret manager; transport per-session via SSH. | Never. |
-| Bind-mounted worktrees | §7.3: agent code lives in the runner's filesystem. | Never. |
-| One container per subtask | §7.2: workflows span containers via remote-SCM checkpoints. Per-subtask containers prevent in-workflow state continuity. | Never. |
-| Bun in v0 | §10.2: ecosystem still has compat gaps for long-running daemon workloads as of 2026-05. | v1 re-evaluation. |
-| Prettier in v0 | oxfmt is the 2026 standard, pairs with oxlint. | Never re-introduce. |
-| BullMQ / Redis | Postgres has SKIP LOCKED + LISTEN/NOTIFY; no extra service required. | When team-builder hits Postgres queue throughput limits AND an observation in the event log shows it (not before). |
-| Effect / neverthrow / ts-pattern | Plain discriminated unions with tsgo exhaustiveness are enough. | When a documented case shows the plain pattern frays. |
-| OpenTelemetry in v0 | Event log + dashboard + pino are sufficient. | When first enterprise customer requires OTLP export. |
-| Slack / Discord integrations in v0 | ntfy covers v0; chat-surface integrations are team-builder features. | When team-builder names chat as the primary notification surface. |
-| schema_version column enforcement | Nobody reads it in any prior attempt. | When v1 has a second-version emitter and a read-side dispatch on the version. |
-| opencode as a v0 answerer | No native JSON-schema enforcement; would require client-side schema validation that costs more than it saves at v0. | When client-side schema-validation contract is in place AND operator names opencode as preferred answerer. |
-| n8n + TS DSL | Doesn't solve the observation problem; misaligned with the platform-not-workflow-engine framing. | Never. |
-| Tanren-as-a-claude-code-replacement framing | Tanren is a platform, not a CLI swap. | Never re-introduce. |
-| Workflow simplification (skipping planner / checker / auditor steps in v0) | §2.3: each step is load-bearing for arbitrary-task reliability. | When workflow-quality telemetry shows a specific step adds no value for a given project. |
-| Time-to-first-PR (TTFPR) metric | Not meaningful for arbitrary tasks; only relevant for trivial canonical fixtures. | Never re-introduce as a primary v0 metric. |
+| Option                                                                       | Why rejected                                                                                                                          | Conditions to revisit                                                                                              |
+| ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| Host-process execution (any tier, any condition)                             | Security invariant (§1.2.1). Autonomous LLM agents writing code MUST be sandboxed.                                                    | Never.                                                                                                             |
+| Auto-discover local credentials (~/.config/claude, ANTHROPIC_API_KEY envvar) | Anti-pattern. Works for one user, breaks for two. Breaks remote execution. Breaks rotation.                                           | Never.                                                                                                             |
+| SQLite as v0 default                                                         | One backend (§1.2.2). SQLite + Postgres dual-backend means code-paths-that-only-work-on-one.                                          | Never for v0; v1+ might re-evaluate at scale if Postgres becomes overkill for embedded deployments.                |
+| MCP server in v0 (stdio or HTTP)                                             | STDIO MCP is a trap (no auth, no observability, can't be reached from a second client). HTTP MCP requires an HTTP API to exist first. | When HTTP API ships (v1).                                                                                          |
+| HTTP API in v0                                                               | The CLI is sufficient for v0. API adds attack surface, auth, rate-limiting, versioning.                                               | v1 with the dashboard's API consumers.                                                                             |
+| Time-gated acceptance                                                        | v0 builds the workflow; speed comes later.                                                                                            | Never re-introduce a time gate to v0.                                                                              |
+| Hybrid agents (one agent does both writing and structured-output reporting)  | §3.4: workflow brittleness compounds.                                                                                                 | Never.                                                                                                             |
+| Hard-coded concurrency limits (e.g., "3 codex CLIs max")                     | §1.2.7: real limits or no limits.                                                                                                     | Never.                                                                                                             |
+| Bind-mounted credentials                                                     | §1.2.3: credentials live in the secret manager; transport per-session via SSH.                                                        | Never.                                                                                                             |
+| Bind-mounted worktrees                                                       | §7.3: agent code lives in the runner's filesystem.                                                                                    | Never.                                                                                                             |
+| One container per subtask                                                    | §7.2: workflows span containers via remote-SCM checkpoints. Per-subtask containers prevent in-workflow state continuity.              | Never.                                                                                                             |
+| Bun in v0                                                                    | §10.2: ecosystem still has compat gaps for long-running daemon workloads as of 2026-05.                                               | v1 re-evaluation.                                                                                                  |
+| Prettier in v0                                                               | oxfmt is the 2026 standard, pairs with oxlint.                                                                                        | Never re-introduce.                                                                                                |
+| BullMQ / Redis                                                               | Postgres has SKIP LOCKED + LISTEN/NOTIFY; no extra service required.                                                                  | When team-builder hits Postgres queue throughput limits AND an observation in the event log shows it (not before). |
+| Effect / neverthrow / ts-pattern                                             | Plain discriminated unions with tsgo exhaustiveness are enough.                                                                       | When a documented case shows the plain pattern frays.                                                              |
+| OpenTelemetry in v0                                                          | Event log + dashboard + pino are sufficient.                                                                                          | When first enterprise customer requires OTLP export.                                                               |
+| Slack / Discord integrations in v0                                           | ntfy covers v0; chat-surface integrations are team-builder features.                                                                  | When team-builder names chat as the primary notification surface.                                                  |
+| schema_version column enforcement                                            | Nobody reads it in any prior attempt.                                                                                                 | When v1 has a second-version emitter and a read-side dispatch on the version.                                      |
+| opencode as a v0 answerer                                                    | No native JSON-schema enforcement; would require client-side schema validation that costs more than it saves at v0.                   | When client-side schema-validation contract is in place AND operator names opencode as preferred answerer.         |
+| n8n + TS DSL                                                                 | Doesn't solve the observation problem; misaligned with the platform-not-workflow-engine framing.                                      | Never.                                                                                                             |
+| Tanren-as-a-claude-code-replacement framing                                  | Tanren is a platform, not a CLI swap.                                                                                                 | Never re-introduce.                                                                                                |
+| Workflow simplification (skipping planner / checker / auditor steps in v0)   | §2.3: each step is load-bearing for arbitrary-task reliability.                                                                       | When workflow-quality telemetry shows a specific step adds no value for a given project.                           |
+| Time-to-first-PR (TTFPR) metric                                              | Not meaningful for arbitrary tasks; only relevant for trivial canonical fixtures.                                                     | Never re-introduce as a primary v0 metric.                                                                         |
 
 ---
 
@@ -1335,27 +1348,27 @@ This template is materialized in the roadmap doc; the brief just declares its sh
 
 Every version pin verified against current community consensus.
 
-| Tool | v0 pin | Source |
-|---|---|---|
-| Postgres | 18 (18.4 patch released 2026-05-14) | postgresql.org news |
-| Docker Engine | 29.x (29.5.1 released 2026-05-18) | docs.docker.com release notes |
-| Node.js | 24 LTS (Active through 2028) | endoflife.date/nodejs |
-| pnpm | 11.1.x | pnpm.io |
-| tsgo / TypeScript | 7.0 stable (Jan 2026) | microsoft/typescript-go |
-| Drizzle | 0.45.x stable | orm.drizzle.team |
-| Zod | 4.x | npmjs.com/package/zod |
-| oxlint | 1.x stable since June 2025 | oxc.rs |
-| oxfmt | 1.0 stable | oxc.rs |
-| Vitest | 3.x | vitest.dev |
-| Hono | 4.12.x | hono.dev |
-| HTMX | (vendored, 2.x) | htmx.org |
-| dockerode | 5.0.x | npmjs.com/package/dockerode |
-| ssh2 | 1.17.x | npmjs.com/package/ssh2 |
-| pino | 9.x | getpino.io |
-| MCP SDK | (deferred to v1) | modelcontextprotocol.io |
-| Hashicorp Vault | 1.18.x | hashicorp.com/products/vault |
-| ntfy.sh | 2.x | ntfy.sh |
-| Cloudflared | current | cloudflare.com |
+| Tool              | v0 pin                              | Source                        |
+| ----------------- | ----------------------------------- | ----------------------------- |
+| Postgres          | 18 (18.4 patch released 2026-05-14) | postgresql.org news           |
+| Docker Engine     | 29.x (29.5.1 released 2026-05-18)   | docs.docker.com release notes |
+| Node.js           | 24 LTS (Active through 2028)        | endoflife.date/nodejs         |
+| pnpm              | 11.1.x                              | pnpm.io                       |
+| tsgo / TypeScript | 7.0 stable (Jan 2026)               | microsoft/typescript-go       |
+| Drizzle           | 0.45.x stable                       | orm.drizzle.team              |
+| Zod               | 4.x                                 | npmjs.com/package/zod         |
+| oxlint            | 1.x stable since June 2025          | oxc.rs                        |
+| oxfmt             | 1.0 stable                          | oxc.rs                        |
+| Vitest            | 3.x                                 | vitest.dev                    |
+| Hono              | 4.12.x                              | hono.dev                      |
+| HTMX              | (vendored, 2.x)                     | htmx.org                      |
+| dockerode         | 5.0.x                               | npmjs.com/package/dockerode   |
+| ssh2              | 1.17.x                              | npmjs.com/package/ssh2        |
+| pino              | 9.x                                 | getpino.io                    |
+| MCP SDK           | (deferred to v1)                    | modelcontextprotocol.io       |
+| Hashicorp Vault   | 1.18.x                              | hashicorp.com/products/vault  |
+| ntfy.sh           | 2.x                                 | ntfy.sh                       |
+| Cloudflared       | current                             | cloudflare.com                |
 
 A `scripts/check-pin-rot.sh` runs quarterly and emits a soft CI advisory when a pin is more than 12 months behind upstream. The operator decides whether to bump.
 
@@ -1375,4 +1388,4 @@ A `scripts/check-pin-rot.sh` runs quarterly and emits a soft CI advisory when a 
 
 ---
 
-*— PROJECT_BRIEF.md for Tanren v3, written 2026-05-21. This document is the durable contract. ROADMAP.md takes it from here.*
+_— PROJECT_BRIEF.md for Tanren v3, written 2026-05-21. This document is the durable contract. ROADMAP.md takes it from here._

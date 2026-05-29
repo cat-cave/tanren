@@ -18,12 +18,11 @@ function target(overrides: Partial<NotificationTargetRow> = {}): NotificationTar
     weekendMute: false,
     createdAt: new Date(),
     updatedAt: new Date(),
-    ...overrides
+    ...overrides,
   };
 }
 
-const failingFetch: typeof fetch = async () =>
-  new Response("bad", { status: 400, statusText: "Bad Request" });
+const failingFetch: typeof fetch = async () => new Response("bad", { status: 400, statusText: "Bad Request" });
 
 class MemorySecrets implements SecretStore {
   constructor(private readonly map: Record<string, string>) {}
@@ -43,12 +42,12 @@ describe("PagerDutyChannel", () => {
       return new Response("{}", { status: 202 });
     };
     const secrets = new MemorySecrets({
-      "credential/pagerduty/routing-key": "R0UTINGKEY"
+      "credential/pagerduty/routing-key": "R0UTINGKEY",
     });
     const channel = new PagerDutyChannel({
       fetch: fakeFetch,
       secrets,
-      apiBaseUrl: "https://events.pagerduty.test"
+      apiBaseUrl: "https://events.pagerduty.test",
     });
     await channel.publish(target(), {
       title: "run failed",
@@ -56,7 +55,7 @@ describe("PagerDutyChannel", () => {
       severity: "fail",
       eventName: "run.failed",
       url: "https://tanren.example/runs/run_1",
-      tags: ["tanren"]
+      tags: ["tanren"],
     });
     expect(captured!.url).toBe("https://events.pagerduty.test/v2/enqueue");
     const body = JSON.parse(captured!.init.body as string) as {
@@ -84,7 +83,7 @@ describe("PagerDutyChannel", () => {
       title: "t",
       body: "b",
       severity: "info",
-      eventName: "run.started"
+      eventName: "run.started",
     });
     expect(body!.routing_key).toBe("BAREKEY1234567890BAREKEY12345678");
   });
@@ -104,7 +103,7 @@ describe("PagerDutyChannel", () => {
         title: "t",
         body: "b",
         severity,
-        eventName: "run.failed"
+        eventName: "run.failed",
       });
     }
     expect(captured).toEqual(["info", "info", "warning", "critical"]);
@@ -117,8 +116,8 @@ describe("PagerDutyChannel", () => {
         title: "t",
         body: "b",
         severity: "info",
-        eventName: "run.started"
-      })
+        eventName: "run.started",
+      }),
     ).rejects.toThrow(/pagerduty publish failed: 400/);
   });
 
@@ -129,8 +128,8 @@ describe("PagerDutyChannel", () => {
         title: "t",
         body: "b",
         severity: "info",
-        eventName: "run.started"
-      })
+        eventName: "run.started",
+      }),
     ).rejects.toThrow(/missing pagerduty routing-key credential ref/);
   });
 });

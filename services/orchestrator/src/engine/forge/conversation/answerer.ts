@@ -17,7 +17,7 @@ import type {
   ForgeAnswererStep,
   ForgeConversationAnswerer,
   ForgeConversationContext,
-  ForgeReadToolCall
+  ForgeReadToolCall,
 } from "./types.js";
 
 // The provider returns this discriminated union each step. We re-use the
@@ -25,7 +25,7 @@ import type {
 // at the engine boundary (defence in depth; the prompt also forbids them).
 export const ForgeAnswererStepSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("tools"), toolCalls: z.array(ForgeToolCall).min(1) }).strict(),
-  z.object({ kind: z.literal("final"), answer: ForgeAnswer }).strict()
+  z.object({ kind: z.literal("final"), answer: ForgeAnswer }).strict(),
 ]);
 
 export type ForgeAnswererStepOutput = z.infer<typeof ForgeAnswererStepSchema>;
@@ -42,7 +42,7 @@ export interface WrapProviderAnswererOptions {
 // is one structured provider call returning a ForgeAnswererStep.
 export function wrapProviderAnswerer(
   adapter: AnswererAdapter<ForgeAnswererStepOutput>,
-  options: WrapProviderAnswererOptions = {}
+  options: WrapProviderAnswererOptions = {},
 ): ForgeConversationAnswerer {
   const jsonSchema = renderAnswererJsonSchema(ForgeAnswererStepSchema);
   return {
@@ -53,11 +53,11 @@ export function wrapProviderAnswerer(
         outputSchema: {
           name: STEP_SCHEMA_NAME,
           jsonSchema,
-          parse: (value) => ForgeAnswererStepSchema.parse(value)
-        }
+          parse: (value) => ForgeAnswererStepSchema.parse(value),
+        },
       });
       return normalizeStep(output);
-    }
+    },
   };
 }
 
@@ -93,9 +93,12 @@ export function createFakeForgeAnswerer(options: FakeForgeAnswererOptions): Forg
       const step = options.script[Math.min(index, options.script.length - 1)];
       index += 1;
       if (step === undefined) {
-        return { kind: "final", answer: { body: "(no script)", attentionItems: [], insights: [], prompts: [] } };
+        return {
+          kind: "final",
+          answer: { body: "(no script)", attentionItems: [], insights: [], prompts: [] },
+        };
       }
       return step.kind === "tools" ? normalizeStep(step) : step;
-    }
+    },
   };
 }

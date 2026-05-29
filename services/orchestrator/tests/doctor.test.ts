@@ -16,7 +16,7 @@ describe("/doctor route", () => {
     const pool = new DoctorPool();
     const report = await runDoctor({
       pool: pool.asPgPool(),
-      vaultHealthCheck: async () => ({ ok: true, status: 200 })
+      vaultHealthCheck: async () => ({ ok: true, status: 200 }),
     });
     expect(() => DoctorReport.parse(report)).not.toThrow();
     expect(report.checks.map((check) => check.name)).toEqual(["postgres", "vault"]);
@@ -27,7 +27,7 @@ describe("/doctor route", () => {
     const pool = new DoctorPool();
     const report = await runDoctor({
       pool: pool.asPgPool(),
-      vaultHealthCheck: async () => ({ ok: false, status: 503 })
+      vaultHealthCheck: async () => ({ ok: false, status: 503 }),
     });
     expect(report.ok).toBe(false);
     expect(report.checks.find((check) => check.name === "vault")?.status).toBe("fail");
@@ -40,8 +40,8 @@ describe("/doctor route", () => {
       "/",
       createDoctorRoutes({
         pool: pool.asPgPool(),
-        vaultHealthCheck: async () => ({ ok: true, status: 200 })
-      })
+        vaultHealthCheck: async () => ({ ok: true, status: 200 }),
+      }),
     );
     const response = await app.request("/doctor");
     expect(response.status).toBe(200);
@@ -56,7 +56,7 @@ describe("/doctor route", () => {
       pool: pool.asPgPool(),
       vaultHealthCheck: async () => ({ ok: true, status: 200 }),
       githubAppCheck: async () => ({ ok: true, detail: "github app reachable" }),
-      runnerImageCheck: async () => ({ ok: false, detail: "image missing" })
+      runnerImageCheck: async () => ({ ok: false, detail: "image missing" }),
     });
     expect(report.checks.every((check) => typeof check.latencyMs === "number")).toBe(true);
     expect(report.checks.find((check) => check.name === "runner_image")?.status).toBe("warn");

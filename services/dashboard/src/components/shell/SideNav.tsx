@@ -33,11 +33,7 @@ function Row(props: { row: NavRow; activeId: string | undefined; activeProjectId
   const isActive = props.activeId === row.id;
   const isPlaceholder = row.phase !== "2b";
   return (
-    <a
-      class={isActive ? "active" : ""}
-      href={hrefFor(row, props.activeProjectId)}
-      data-nav-id={row.id}
-    >
+    <a class={isActive ? "active" : ""} href={hrefFor(row, props.activeProjectId)} data-nav-id={row.id}>
       <span
         class={`glyph${row.kanji ? " kanji" : ""}`}
         style={row.kanji ? "font-family: var(--font-jp); font-size: 13px; color: var(--ember-08)" : ""}

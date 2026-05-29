@@ -6,8 +6,7 @@ import type { NotificationTargetRow } from "../src/engine/notifications/index.js
 // the URL resolution, headers, and body shape match the ntfy server's
 // expectations without requiring a live broker.
 
-const failingFetch: typeof fetch = async () =>
-  new Response("nope", { status: 503, statusText: "Service Unavailable" });
+const failingFetch: typeof fetch = async () => new Response("nope", { status: 503, statusText: "Service Unavailable" });
 
 function target(overrides: Partial<NotificationTargetRow> = {}): NotificationTargetRow {
   return {
@@ -22,7 +21,7 @@ function target(overrides: Partial<NotificationTargetRow> = {}): NotificationTar
     weekendMute: false,
     createdAt: new Date(),
     updatedAt: new Date(),
-    ...overrides
+    ...overrides,
   };
 }
 
@@ -38,7 +37,7 @@ describe("NtfyChannel", () => {
       title: "[FAIL] run.failed",
       body: "run failed",
       severity: "fail",
-      eventName: "run.failed"
+      eventName: "run.failed",
     });
     expect(captured).not.toBeNull();
     expect(captured!.url).toBe("http://ntfy.local/tanren-runs");
@@ -64,7 +63,7 @@ describe("NtfyChannel", () => {
       title: "t",
       body: "b",
       severity: "info",
-      eventName: "run.started"
+      eventName: "run.started",
     });
     expect(capturedUrl).toBe("https://ntfy.example.com/private-topic");
   });
@@ -81,7 +80,7 @@ describe("NtfyChannel", () => {
         title: "t",
         body: "b",
         severity,
-        eventName: "run.failed"
+        eventName: "run.failed",
       });
     }
     expect(captured.map((h) => h["Priority"])).toEqual(["low", "default", "high", "urgent"]);
@@ -90,7 +89,12 @@ describe("NtfyChannel", () => {
   it("throws when the server returns a non-2xx status", async () => {
     const channel = new NtfyChannel({ fetch: failingFetch, baseUrl: "http://ntfy" });
     await expect(
-      channel.publish(target(), { title: "t", body: "b", severity: "info", eventName: "run.started" })
+      channel.publish(target(), {
+        title: "t",
+        body: "b",
+        severity: "info",
+        eventName: "run.started",
+      }),
     ).rejects.toThrow(/ntfy publish failed: 503/);
   });
 
@@ -106,7 +110,7 @@ describe("NtfyChannel", () => {
       body: "b",
       severity: "info",
       eventName: "run.completed",
-      url: "https://tanren.example/runs/run_1"
+      url: "https://tanren.example/runs/run_1",
     });
     const headers = captured!.init.headers as Record<string, string>;
     expect(headers["Click"]).toBe("https://tanren.example/runs/run_1");

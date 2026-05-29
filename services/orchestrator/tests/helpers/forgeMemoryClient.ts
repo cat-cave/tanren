@@ -49,7 +49,7 @@ export class ForgeMemoryClient {
         title: params[5] === null || params[5] === undefined ? null : String(params[5]),
         created_at: this.now,
         updated_at: this.now,
-        closed_at: null
+        closed_at: null,
       };
       this.threads.set(row.id, row);
       return single(row);
@@ -60,14 +60,12 @@ export class ForgeMemoryClient {
     }
     if (trimmed.includes("FROM forge_threads") && trimmed.includes("org_id = $1 AND project_id = $2 AND run_id = $3")) {
       const rows = [...this.threads.values()].filter(
-        (t) => t.org_id === params[0] && t.project_id === params[1] && t.run_id === params[2]
+        (t) => t.org_id === params[0] && t.project_id === params[1] && t.run_id === params[2],
       );
       return { rows, rowCount: rows.length };
     }
     if (trimmed.includes("FROM forge_threads") && trimmed.includes("org_id = $1 AND project_id = $2")) {
-      const rows = [...this.threads.values()].filter(
-        (t) => t.org_id === params[0] && t.project_id === params[1]
-      );
+      const rows = [...this.threads.values()].filter((t) => t.org_id === params[0] && t.project_id === params[1]);
       return { rows, rowCount: rows.length };
     }
     if (trimmed.startsWith("UPDATE forge_threads SET updated_at")) {
@@ -100,7 +98,7 @@ export class ForgeMemoryClient {
         audience: String(params[4]),
         author_kind: String(params[5]),
         render: JSON.parse(String(params[6])),
-        created_at: this.now
+        created_at: this.now,
       };
       this.turns.push(row);
       return single(row);

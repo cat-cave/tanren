@@ -8,7 +8,7 @@ import {
   buildCodexAnswererExecCommand,
   CodexUsageLimitError,
   createCodexAnswerer,
-  parseStructuredAnswererOutput
+  parseStructuredAnswererOutput,
 } from "../src/engine/providers/codex.js";
 
 const target: SshTarget = {
@@ -16,15 +16,15 @@ const target: SshTarget = {
   port: 22,
   username: "tanren",
   hostKeyFingerprint: "SHA256:runner-host",
-  identitySecretRef: "runner/test/identity"
+  identitySecretRef: "runner/test/identity",
 };
 
 const authJson = JSON.stringify({
   auth_mode: "chatgpt",
   tokens: {
     access_token: "secret-access-token",
-    refresh_token: "secret-refresh-token"
-  }
+    refresh_token: "secret-refresh-token",
+  },
 });
 
 describe("Codex Answerer adapter", () => {
@@ -32,9 +32,9 @@ describe("Codex Answerer adapter", () => {
     const answer = JSON.stringify({
       done: true,
       reason: "The writer diff satisfies the fixture criteria.",
-      suggested_fixes: null
+      suggested_fixes: null,
     });
-    const ssh = new ScriptedSsh([ok(""), ok(""), ok(""), ok("{\"type\":\"done\"}\n"), ok(authJson), ok(answer)]);
+    const ssh = new ScriptedSsh([ok(""), ok(""), ok(""), ok('{"type":"done"}\n'), ok(authJson), ok(answer)]);
     const secrets = new InMemorySecretStore();
     await secrets.put({ ref: "credential/codex/dev", value: authJson });
 
@@ -43,19 +43,19 @@ describe("Codex Answerer adapter", () => {
       ssh,
       target,
       credentialRef: "credential/codex/dev",
-      runId: "run_answerer_1"
+      runId: "run_answerer_1",
     });
     const result = await answerer.runAnswerer({
       prompt: "judge this diff",
       timeoutMs: 1000,
-      outputSchema: checkAnswerSchema
+      outputSchema: checkAnswerSchema,
     });
 
     expect(ssh.commands[0]?.command.command).toContain("/run_answerer_1/codex-home");
     expect(ssh.commands[2]?.command.command).toContain("cat >");
     expect(ssh.commands[2]?.command.stdin).toBe(JSON.stringify(checkAnswerSchema.jsonSchema));
     expect(ssh.commands[3]?.command.command).toBe(
-      "CODEX_HOME='/home/tanren/.tanren/runs/run_answerer_1/codex-home' codex exec --sandbox read-only --json --ignore-user-config --ignore-rules --skip-git-repo-check --cd '/tmp/tanren-answerer-runs/run_answerer_1/tanren.check_answer.v1' --output-schema '/home/tanren/.tanren/runs/run_answerer_1/codex-home/tanren.check_answer.v1.schema.json' --output-last-message '/home/tanren/.tanren/runs/run_answerer_1/codex-home/tanren.check_answer.v1.response.json' -"
+      "CODEX_HOME='/home/tanren/.tanren/runs/run_answerer_1/codex-home' codex exec --sandbox read-only --json --ignore-user-config --ignore-rules --skip-git-repo-check --cd '/tmp/tanren-answerer-runs/run_answerer_1/tanren.check_answer.v1' --output-schema '/home/tanren/.tanren/runs/run_answerer_1/codex-home/tanren.check_answer.v1.schema.json' --output-last-message '/home/tanren/.tanren/runs/run_answerer_1/codex-home/tanren.check_answer.v1.response.json' -",
     );
     expect(ssh.commands[3]?.command.command).not.toContain("workspace-write");
     expect(ssh.commands[3]?.command.stdin).toBe("judge this diff");
@@ -67,7 +67,7 @@ describe("Codex Answerer adapter", () => {
       codexHome: "/home/tanren/codex",
       workspace: "/tmp/answerer",
       schemaPath: "/home/tanren/codex/check.schema.json",
-      outputPath: "/home/tanren/codex/check.response.json"
+      outputPath: "/home/tanren/codex/check.response.json",
     });
 
     expect(command).toContain("--sandbox read-only");
@@ -80,7 +80,7 @@ describe("Codex Answerer adapter", () => {
   it("raises CodexUsageLimitError (not a generic failure) when the account hits its usage limit", async () => {
     const usageLimitStdout = [
       '{"type":"thread.started","thread_id":"t1"}',
-      '{"type":"turn.failed","error":{"message":"You\'ve hit your usage limit. try again at May 30th, 2026 8:19 PM."}}'
+      '{"type":"turn.failed","error":{"message":"You\'ve hit your usage limit. try again at May 30th, 2026 8:19 PM."}}',
     ].join("\n");
     const ssh = new ScriptedSsh([ok(""), ok(""), ok(""), ok(usageLimitStdout), ok(authJson)]);
     const secrets = new InMemorySecretStore();
@@ -91,11 +91,11 @@ describe("Codex Answerer adapter", () => {
       ssh,
       target,
       credentialRef: "credential/codex/dev",
-      runId: "run_answerer_limit"
+      runId: "run_answerer_limit",
     });
 
     await expect(
-      answerer.runAnswerer({ prompt: "judge", timeoutMs: 1000, outputSchema: checkAnswerSchema })
+      answerer.runAnswerer({ prompt: "judge", timeoutMs: 1000, outputSchema: checkAnswerSchema }),
     ).rejects.toBeInstanceOf(CodexUsageLimitError);
   });
 
@@ -104,8 +104,8 @@ describe("Codex Answerer adapter", () => {
     expect(() =>
       parseStructuredAnswererOutput(
         JSON.stringify({ done: true, reason: "missing suggested fixes" }),
-        checkAnswerSchema
-      )
+        checkAnswerSchema,
+      ),
     ).toThrow(AnswererSchemaValidationError);
   });
 
@@ -120,9 +120,9 @@ describe("Codex Answerer adapter", () => {
         JSON.stringify({
           done: false,
           reason: "No criteria were satisfied.",
-          suggested_fixes: ["Provide a diff that adds ok."]
-        })
-      )
+          suggested_fixes: ["Provide a diff that adds ok."],
+        }),
+      ),
     ]);
     const secrets = new InMemorySecretStore();
     await secrets.put({ ref: "credential/codex/dev", value: authJson });
@@ -132,9 +132,13 @@ describe("Codex Answerer adapter", () => {
       ssh,
       target,
       credentialRef: "credential/codex/dev",
-      runId: "run_secret"
+      runId: "run_secret",
     });
-    const result = await answerer.runAnswerer({ prompt: "judge", timeoutMs: 1000, outputSchema: checkAnswerSchema });
+    const result = await answerer.runAnswerer({
+      prompt: "judge",
+      timeoutMs: 1000,
+      outputSchema: checkAnswerSchema,
+    });
     const commandText = ssh.commands.map((item) => item.command.command).join("\n");
 
     expect(commandText).not.toContain("secret-access-token");

@@ -9,7 +9,7 @@ export const ActorKind = z.enum([
   "ci_poller",
   // Phase 0/1 historical agent_kind values still persisted on tasks
   "writer",
-  "answerer"
+  "answerer",
 ]);
 export type ActorKind = z.infer<typeof ActorKind>;
 
@@ -19,7 +19,7 @@ export type ActorKind = z.infer<typeof ActorKind>;
 export const ActorRef = z.object({
   kind: ActorKind,
   id: z.string().min(1).optional(),
-  label: z.string().min(1).optional()
+  label: z.string().min(1).optional(),
 });
 export type ActorRef = z.infer<typeof ActorRef>;
 

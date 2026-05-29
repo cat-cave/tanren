@@ -17,7 +17,7 @@ export async function authLoginCommand(argv: string[]) {
       orchestratorUrl,
       token,
       name: optional(args, "name"),
-      onAuthorizeUrl: (url) => console.log(`Open this URL in your browser to sign in:\n  ${url}`)
+      onAuthorizeUrl: (url) => console.log(`Open this URL in your browser to sign in:\n  ${url}`),
     });
     console.log(JSON.stringify({ ok: true, orchestratorUrl: result.auth.orchestratorUrl }, null, 2));
   } catch (error) {
@@ -37,11 +37,7 @@ export async function authStatusCommand() {
   }
   const tokenPrefix = auth.token.slice(0, 8);
   console.log(
-    JSON.stringify(
-      { ok: true, orchestratorUrl: auth.orchestratorUrl, tokenPrefix, name: auth.name ?? null },
-      null,
-      2
-    )
+    JSON.stringify({ ok: true, orchestratorUrl: auth.orchestratorUrl, tokenPrefix, name: auth.name ?? null }, null, 2),
   );
 }
 
@@ -57,7 +53,7 @@ export async function authPersistTokenCommand(argv: string[]) {
     orchestratorUrl,
     token,
     name: optional(args, "name") ?? "cli",
-    createdAt: new Date().toISOString()
+    createdAt: new Date().toISOString(),
   });
   console.log(JSON.stringify({ ok: true }, null, 2));
 }
@@ -89,7 +85,7 @@ export async function createProjectCommand(argv: string[]) {
     defaultBranch: optional(args, "default-branch"),
     runnerImage: optional(args, "runner-image"),
     allocator: optional(args, "allocator"),
-    config: configJson === undefined ? undefined : parseJsonObject(configJson, "config-json")
+    config: configJson === undefined ? undefined : parseJsonObject(configJson, "config-json"),
   });
   console.log(JSON.stringify(project, null, 2));
 }
@@ -101,7 +97,7 @@ export async function createSpecCommand(argv: string[]) {
     title: required(args, "title"),
     description: required(args, "description"),
     acceptanceCriteria: requiredMany(args, "acceptance"),
-    dependsOn: optionalMany(args, "depends-on")
+    dependsOn: optionalMany(args, "depends-on"),
   });
   console.log(JSON.stringify(spec, null, 2));
 }
@@ -114,7 +110,7 @@ export async function runSpecCommand(argv: string[]) {
   }
   const run = await jsonRequest(`/specs/${specId}/runs`, {
     trigger: optional(args, "trigger") ?? "cli",
-    branch: optional(args, "branch")
+    branch: optional(args, "branch"),
   });
   console.log(JSON.stringify(run, null, 2));
 }
@@ -124,7 +120,7 @@ export async function importCodexCredentialCommand(argv: string[]) {
   const authJson = await readFile(required(args, "auth-json-file"), "utf8");
   const credential = await jsonRequest("/credentials/codex/import", {
     ref: required(args, "ref"),
-    authJson
+    authJson,
   });
   console.log(JSON.stringify(credential, null, 2));
 }
@@ -134,7 +130,7 @@ export async function importGithubCredentialCommand(argv: string[]) {
   const token = await readFile(required(args, "token-file"), "utf8");
   const credential = await jsonRequest("/credentials/github/import", {
     ref: required(args, "ref"),
-    token
+    token,
   });
   console.log(JSON.stringify(credential, null, 2));
 }
@@ -149,7 +145,7 @@ export async function createDraftPrCommand(argv: string[]) {
     githubCredentialRef: optional(args, "github-credential-ref"),
     workspacePath: optional(args, "workspace-path"),
     title: optional(args, "title"),
-    body: optional(args, "body")
+    body: optional(args, "body"),
   });
   console.log(JSON.stringify(draftPr, null, 2));
 }
@@ -161,7 +157,7 @@ export async function pollCiCommand(argv: string[]) {
     throw new Error("usage: tanren run poll-ci --run-id <run_id>");
   }
   const ci = await jsonRequest(`/runs/${runId}/ci/poll`, {
-    githubCredentialRef: optional(args, "github-credential-ref")
+    githubCredentialRef: optional(args, "github-credential-ref"),
   });
   console.log(JSON.stringify(ci, null, 2));
 }

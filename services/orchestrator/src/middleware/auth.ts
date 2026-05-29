@@ -13,7 +13,7 @@ const PUBLIC_PATHS = new Set([
   "/auth/callback",
   "/auth/providers",
   "/auth/cli/start",
-  "/auth/cli/complete"
+  "/auth/cli/complete",
 ]);
 
 const STATE_CHANGING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
@@ -51,7 +51,7 @@ export function createAuthMiddleware(options: AuthMiddlewareOptions): Middleware
         orgId: extractOrgId(c),
         projectId: extractProjectId(c),
         source: "api_token",
-        platformAdminUserIds: options.platformAdminUserIds
+        platformAdminUserIds: options.platformAdminUserIds,
       });
       c.set("actor", actor);
       return next();
@@ -72,7 +72,7 @@ export function createAuthMiddleware(options: AuthMiddlewareOptions): Middleware
           orgId: extractOrgId(c),
           projectId: extractProjectId(c),
           source: "session",
-          platformAdminUserIds: options.platformAdminUserIds
+          platformAdminUserIds: options.platformAdminUserIds,
         });
         c.set("actor", actor);
         return next();
@@ -113,12 +113,7 @@ export function readCookie(c: Context, name: string): string | undefined {
 }
 
 export function setSessionCookie(value: string, options: { secure?: boolean; maxAgeSeconds?: number } = {}): string {
-  const parts = [
-    `${SESSION_COOKIE}=${encodeURIComponent(value)}`,
-    "Path=/",
-    "HttpOnly",
-    "SameSite=Lax"
-  ];
+  const parts = [`${SESSION_COOKIE}=${encodeURIComponent(value)}`, "Path=/", "HttpOnly", "SameSite=Lax"];
   if (options.secure === true) {
     parts.push("Secure");
   }

@@ -15,7 +15,7 @@ export const AllocatorKind = z.enum([
   "digitalocean",
   "gcp",
   "aws_ec2",
-  "kubernetes"
+  "kubernetes",
 ]);
 export type AllocatorKind = z.infer<typeof AllocatorKind>;
 
@@ -31,7 +31,7 @@ export const PoolPolicy = z
     /** Max concurrent in-flight runners for this kind. Omit for unbounded. */
     maxConcurrent: z.number().int().min(1).optional(),
     /** true = reuse long-lived targets; false = ephemeral, destroy on release. */
-    reuse: z.boolean().default(false)
+    reuse: z.boolean().default(false),
   })
   .strict();
 export type PoolPolicy = z.infer<typeof PoolPolicy>;
@@ -45,7 +45,7 @@ export type PoolPolicy = z.infer<typeof PoolPolicy>;
 export const LabelRoutingRule = z
   .object({
     matchLabels: z.record(z.string(), z.string()),
-    allocator: AllocatorKind
+    allocator: AllocatorKind,
   })
   .strict();
 export type LabelRoutingRule = z.infer<typeof LabelRoutingRule>;
@@ -62,7 +62,7 @@ export const AllocatorRoutingConfig = z
     /** Ordered label-routing rules; first match wins. */
     rules: z.array(LabelRoutingRule).default([]),
     /** Per-kind pool policies. Kinds absent here are unbounded + ephemeral. */
-    pools: z.partialRecord(AllocatorKind, PoolPolicy).default({})
+    pools: z.partialRecord(AllocatorKind, PoolPolicy).default({}),
   })
   .strict();
 export type AllocatorRoutingConfig = z.infer<typeof AllocatorRoutingConfig>;
@@ -73,7 +73,7 @@ export type AllocatorRoutingConfig = z.infer<typeof AllocatorRoutingConfig>;
  */
 export function selectAllocatorKind(
   config: AllocatorRoutingConfig,
-  labels: Readonly<Record<string, string>>
+  labels: Readonly<Record<string, string>>,
 ): AllocatorKind {
   for (const rule of config.rules) {
     if (matchesAllLabels(rule.matchLabels, labels)) {
@@ -85,7 +85,7 @@ export function selectAllocatorKind(
 
 function matchesAllLabels(
   required: Readonly<Record<string, string>>,
-  actual: Readonly<Record<string, string>>
+  actual: Readonly<Record<string, string>>,
 ): boolean {
   for (const [key, value] of Object.entries(required)) {
     if (actual[key] !== value) {
@@ -99,7 +99,7 @@ function matchesAllLabels(
 export class PoolCapacityExceededError extends Error {
   constructor(
     public readonly kind: AllocatorKind,
-    public readonly maxConcurrent: number
+    public readonly maxConcurrent: number,
   ) {
     super(`allocator pool '${kind}' at capacity: ${maxConcurrent} concurrent runner(s) in flight`);
     this.name = "PoolCapacityExceededError";

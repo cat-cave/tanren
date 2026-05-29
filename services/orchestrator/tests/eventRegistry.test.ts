@@ -4,7 +4,7 @@ import {
   UnknownEventTypeError,
   decodeEvent,
   isEventName,
-  listEventNames
+  listEventNames,
 } from "../src/engine/events/index.js";
 
 describe("event registry", () => {
@@ -83,7 +83,7 @@ describe("event registry", () => {
       "hello.started",
       "hello.ssh_started",
       "hello.ssh_completed",
-      "hello.completed"
+      "hello.completed",
     ];
     for (const name of expectedNames) {
       expect(isEventName(name)).toBe(true);
@@ -93,20 +93,18 @@ describe("event registry", () => {
   it("decodeEvent parses known names and rejects unknown names", () => {
     const decoded = decodeEvent({
       event_type: "run.started",
-      payload: { status: "running" }
+      payload: { status: "running" },
     });
     expect(decoded.eventType).toBe("run.started");
     expect(decoded.payload).toEqual({ status: "running" });
 
-    expect(() =>
-      decodeEvent({ event_type: "made_up.event", payload: {} })
-    ).toThrow(UnknownEventTypeError);
+    expect(() => decodeEvent({ event_type: "made_up.event", payload: {} })).toThrow(UnknownEventTypeError);
   });
 
   it("decodeEvent rejects payloads that violate the schema", () => {
-    expect(() =>
-      decodeEvent({ event_type: "run.started", payload: { status: 42 } })
-    ).toThrow(/invalid|expected|string/i);
+    expect(() => decodeEvent({ event_type: "run.started", payload: { status: 42 } })).toThrow(
+      /invalid|expected|string/i,
+    );
   });
 
   it("isEventName narrows the union", () => {

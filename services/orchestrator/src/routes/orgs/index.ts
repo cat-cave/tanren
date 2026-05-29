@@ -19,7 +19,7 @@ import type { ActorContextEnv } from "../../middleware/auth.js";
  */
 export type ConfigGateGithubFactory = (
   orgId: string,
-  target: OrgAuditGateTarget
+  target: OrgAuditGateTarget,
 ) => Promise<ConfigGateGitHub | undefined>;
 
 interface OrgRoutesOptions {
@@ -29,7 +29,7 @@ interface OrgRoutesOptions {
 }
 
 const OrgConfigPatchSchema = z.object({
-  config: z.record(z.string(), z.unknown())
+  config: z.record(z.string(), z.unknown()),
 });
 
 export function createOrgRoutes(options: OrgRoutesOptions) {
@@ -43,7 +43,7 @@ export function createOrgRoutes(options: OrgRoutesOptions) {
          INNER JOIN org_members m ON m.org_id = o.id
         WHERE m.user_id = $1
         ORDER BY o.login`,
-      [actor.userId]
+      [actor.userId],
     );
     return c.json({
       orgs: rows.rows.map((row) => ({
@@ -51,8 +51,8 @@ export function createOrgRoutes(options: OrgRoutesOptions) {
         kind: row.kind,
         login: row.login,
         displayName: row.display_name,
-        role: row.role
-      }))
+        role: row.role,
+      })),
     });
   });
 
@@ -64,7 +64,7 @@ export function createOrgRoutes(options: OrgRoutesOptions) {
     }
     const result = await options.pool.query<OrgConfigRow>(
       "SELECT id, kind, login, display_name, config FROM organizations WHERE id = $1",
-      [orgId]
+      [orgId],
     );
     const row = result.rows[0];
     if (row === undefined) {
@@ -75,7 +75,7 @@ export function createOrgRoutes(options: OrgRoutesOptions) {
       kind: row.kind,
       login: row.login,
       displayName: row.display_name,
-      config: migrateOrgConfig(row.config)
+      config: migrateOrgConfig(row.config),
     });
   });
 
@@ -97,10 +97,9 @@ export function createOrgRoutes(options: OrgRoutesOptions) {
     }
 
     // Load the current config so the audit gate can detect a Bucket-B change.
-    const current = await options.pool.query<{ config: unknown }>(
-      "SELECT config FROM organizations WHERE id = $1",
-      [orgId]
-    );
+    const current = await options.pool.query<{ config: unknown }>("SELECT config FROM organizations WHERE id = $1", [
+      orgId,
+    ]);
     if (current.rows[0] === undefined) {
       return c.json({ error: "org_not_found" }, 404);
     }
@@ -117,7 +116,7 @@ export function createOrgRoutes(options: OrgRoutesOptions) {
         github:
           nextConfig.auditGate !== undefined && options.configGateGithub !== undefined
             ? await options.configGateGithub(orgId, nextConfig.auditGate)
-            : undefined
+            : undefined,
       });
     } catch (error) {
       return c.json({ error: "audit_gate_failed", message: messageOf(error) }, 502);
@@ -130,7 +129,7 @@ export function createOrgRoutes(options: OrgRoutesOptions) {
 
     const updated = await options.pool.query<{ id: string }>(
       "UPDATE organizations SET config = $1::jsonb, updated_at = now() WHERE id = $2 RETURNING id",
-      [JSON.stringify(gated.config), orgId]
+      [JSON.stringify(gated.config), orgId],
     );
     if (updated.rowCount === 0) {
       return c.json({ error: "org_not_found" }, 404);

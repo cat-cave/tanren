@@ -26,14 +26,14 @@ export const DoctorCheck = z.object({
   name: z.string(),
   status: DoctorCheckStatus,
   detail: z.string(),
-  latencyMs: z.number().int().nullable()
+  latencyMs: z.number().int().nullable(),
 });
 export type DoctorCheck = z.infer<typeof DoctorCheck>;
 
 export const DoctorReport = z.object({
   ok: z.boolean(),
   checks: z.array(DoctorCheck),
-  generatedAt: z.string()
+  generatedAt: z.string(),
 });
 export type DoctorReport = z.infer<typeof DoctorReport>;
 
@@ -46,7 +46,7 @@ export async function runDoctor(options: DoctorRoutesOptions): Promise<DoctorRep
       return result.rows[0]?.ok === 1
         ? { status: "ok", detail: "SELECT 1 returned" }
         : { status: "fail", detail: "SELECT 1 did not return 1" };
-    })
+    }),
   );
 
   if (options.vaultHealthCheck !== undefined) {
@@ -56,7 +56,7 @@ export async function runDoctor(options: DoctorRoutesOptions): Promise<DoctorRep
         return result.ok
           ? { status: "ok", detail: `vault status ${result.status}` }
           : { status: "fail", detail: `vault status ${result.status}` };
-      })
+      }),
     );
   }
 
@@ -64,10 +64,8 @@ export async function runDoctor(options: DoctorRoutesOptions): Promise<DoctorRep
     checks.push(
       await timedCheck("runner_ssh", async () => {
         const result = await options.runnerSshCheck!();
-        return result.ok
-          ? { status: "ok", detail: result.detail }
-          : { status: "fail", detail: result.detail };
-      })
+        return result.ok ? { status: "ok", detail: result.detail } : { status: "fail", detail: result.detail };
+      }),
     );
   }
 
@@ -75,10 +73,8 @@ export async function runDoctor(options: DoctorRoutesOptions): Promise<DoctorRep
     checks.push(
       await timedCheck("github_app", async () => {
         const result = await options.githubAppCheck!();
-        return result.ok
-          ? { status: "ok", detail: result.detail }
-          : { status: "warn", detail: result.detail };
-      })
+        return result.ok ? { status: "ok", detail: result.detail } : { status: "warn", detail: result.detail };
+      }),
     );
   }
 
@@ -86,10 +82,8 @@ export async function runDoctor(options: DoctorRoutesOptions): Promise<DoctorRep
     checks.push(
       await timedCheck("runner_image", async () => {
         const result = await options.runnerImageCheck!();
-        return result.ok
-          ? { status: "ok", detail: result.detail }
-          : { status: "warn", detail: result.detail };
-      })
+        return result.ok ? { status: "ok", detail: result.detail } : { status: "warn", detail: result.detail };
+      }),
     );
   }
 
@@ -97,13 +91,13 @@ export async function runDoctor(options: DoctorRoutesOptions): Promise<DoctorRep
   return {
     ok,
     checks,
-    generatedAt: new Date().toISOString()
+    generatedAt: new Date().toISOString(),
   };
 }
 
 async function timedCheck(
   name: string,
-  body: () => Promise<{ status: DoctorCheckStatus; detail: string }>
+  body: () => Promise<{ status: DoctorCheckStatus; detail: string }>,
 ): Promise<DoctorCheck> {
   const start = Date.now();
   try {
@@ -114,7 +108,7 @@ async function timedCheck(
       name,
       status: "fail",
       detail: error instanceof Error ? error.message : String(error),
-      latencyMs: Date.now() - start
+      latencyMs: Date.now() - start,
     };
   }
 }

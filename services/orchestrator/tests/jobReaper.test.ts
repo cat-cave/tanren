@@ -9,7 +9,10 @@ import { reapExpiredJobs } from "../src/engine/worker/jobReaper.js";
 class ReaperPool {
   async query(sql: string, params: unknown[]): Promise<{ rows: unknown[]; rowCount: number }> {
     if (sql.startsWith("SELECT spec_id, project_id FROM runs")) {
-      return { rows: [{ spec_id: `spec_for_${String(params[0])}`, project_id: "project_1" }], rowCount: 1 };
+      return {
+        rows: [{ spec_id: `spec_for_${String(params[0])}`, project_id: "project_1" }],
+        rowCount: 1,
+      };
     }
     return { rows: [], rowCount: 0 };
   }
@@ -30,7 +33,7 @@ describe("job reaper (P3-0028)", () => {
       pool: new ReaperPool().asPgPool(),
       jobQueue,
       eventStore: events,
-      now: new Date(Date.now() + 1_000)
+      now: new Date(Date.now() + 1_000),
     });
 
     expect(result).toMatchObject({ requeued: 1, deadLettered: 0 });
@@ -49,7 +52,7 @@ describe("job reaper (P3-0028)", () => {
       pool: new ReaperPool().asPgPool(),
       jobQueue,
       eventStore: events,
-      now: new Date(Date.now() + 1_000)
+      now: new Date(Date.now() + 1_000),
     });
 
     expect(result).toMatchObject({ requeued: 0, deadLettered: 1 });
@@ -59,7 +62,7 @@ describe("job reaper (P3-0028)", () => {
       runId: "run_1",
       specId: "spec_for_run_1",
       projectId: "project_1",
-      payload: { taskKind: "plan", attempts: 1, maxAttempts: 1, failureKind: "lease_expired" }
+      payload: { taskKind: "plan", attempts: 1, maxAttempts: 1, failureKind: "lease_expired" },
     });
     // Terminal — never re-claimed.
     expect(await jobQueue.claim("plan")).toBeUndefined();
@@ -71,7 +74,11 @@ describe("job reaper (P3-0028)", () => {
     await jobQueue.claim("plan", { leaseMs: 60_000 });
     const events = new FakeEventStore();
 
-    const result = await reapExpiredJobs({ pool: new ReaperPool().asPgPool(), jobQueue, eventStore: events });
+    const result = await reapExpiredJobs({
+      pool: new ReaperPool().asPgPool(),
+      jobQueue,
+      eventStore: events,
+    });
 
     expect(result).toMatchObject({ requeued: 0, deadLettered: 0, jobs: [] });
     expect(events.events).toEqual([]);

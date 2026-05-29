@@ -46,24 +46,23 @@ export const inboxSources = pgTable(
     name: text("name").notNull(),
     detail: text("detail").notNull().default(""),
     // Connector-specific config (repo, labels, linear team, sentry query, …).
-    config: jsonb("config").notNull().default(sql`'{}'::jsonb`),
+    config: jsonb("config")
+      .notNull()
+      .default(sql`'{}'::jsonb`),
     // `enabled` toggles polling/ingest; `autoRoute` marks a system source whose
     // findings skip manual triage (verdict auto-routable → accepted).
     enabled: text("enabled").notNull().default("true"),
     autoRoute: text("auto_route").notNull().default("false"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
-    check(
-      "inbox_sources_kind_check",
-      sql`${table.kind} IN ('issues','errors','system','manual','scheduled_audit')`
-    ),
+    check("inbox_sources_kind_check", sql`${table.kind} IN ('issues','errors','system','manual','scheduled_audit')`),
     check("inbox_sources_enabled_check", sql`${table.enabled} IN ('true','false')`),
     check("inbox_sources_auto_route_check", sql`${table.autoRoute} IN ('true','false')`),
     index("inbox_sources_org_id").on(table.orgId),
-    index("inbox_sources_project_id").on(table.projectId)
-  ]
+    index("inbox_sources_project_id").on(table.projectId),
+  ],
 );
 
 // Candidate lifecycle: `triaged` is the resting state for external candidates
@@ -77,7 +76,7 @@ const CANDIDATE_STATUSES = [
   "accepted",
   "folded",
   "dismissed",
-  "closed_duplicate"
+  "closed_duplicate",
 ] as const;
 
 export const candidates = pgTable(
@@ -99,26 +98,25 @@ export const candidates = pgTable(
     severity: text("severity").notNull().default("info"),
     status: text("status").notNull().default("new"),
     // The Forge triage read-out: { dedupe, match, placement, verdict, ... }.
-    triage: jsonb("triage").notNull().default(sql`'{}'::jsonb`),
+    triage: jsonb("triage")
+      .notNull()
+      .default(sql`'{}'::jsonb`),
     // Set when accept→discovery created a spec, so the inbox links to the node.
     resolvedSpecId: text("resolved_spec_id").references(() => specs.specId),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
-    check(
-      "candidates_severity_check",
-      sql`${table.severity} IN ('info','warn','fail')`
-    ),
+    check("candidates_severity_check", sql`${table.severity} IN ('info','warn','fail')`),
     check(
       "candidates_status_check",
-      sql`${table.status} IN ('new','triaged','auto_routed','accepted','folded','dismissed','closed_duplicate')`
+      sql`${table.status} IN ('new','triaged','auto_routed','accepted','folded','dismissed','closed_duplicate')`,
     ),
     uniqueIndex("candidates_source_external_unique").on(table.sourceId, table.externalId),
     index("candidates_org_id").on(table.orgId),
     index("candidates_project_id").on(table.projectId),
-    index("candidates_status").on(table.status)
-  ]
+    index("candidates_status").on(table.status),
+  ],
 );
 
 // Runtime literal lists, exported for the orchestrator engine to validate

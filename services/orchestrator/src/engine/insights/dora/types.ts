@@ -22,7 +22,7 @@ export const DoraMetricFigure = z
     /** The headline value in the metric's native unit; null when uncomputable. */
     value: z.number().nullable(),
     /** Sample size the figure was computed from (merges, runs, recoveries). */
-    sample: z.number().int().nonnegative()
+    sample: z.number().int().nonnegative(),
   })
   .strict();
 export type DoraMetricFigure = z.infer<typeof DoraMetricFigure>;
@@ -49,10 +49,10 @@ export const DoraMetrics = z
         merges: z.number().int().nonnegative(),
         finishedRuns: z.number().int().nonnegative(),
         failedRuns: z.number().int().nonnegative(),
-        recoveries: z.number().int().nonnegative()
+        recoveries: z.number().int().nonnegative(),
       })
       .strict(),
-    computedAt: z.string()
+    computedAt: z.string(),
   })
   .strict();
 export type DoraMetrics = z.infer<typeof DoraMetrics>;

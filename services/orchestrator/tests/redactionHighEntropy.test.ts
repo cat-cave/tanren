@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   containsCredentialSubstring,
   looksLikeCredential,
-  shannonEntropyBitsPerChar
+  shannonEntropyBitsPerChar,
 } from "../src/engine/redaction/highEntropy.js";
 
 describe("high-entropy detector", () => {
@@ -21,9 +21,7 @@ describe("high-entropy detector", () => {
   it("rejects english words and prose", () => {
     expect(looksLikeCredential("supercalifragilisticexpialidocious")).toBe(false);
     expect(
-      looksLikeCredential(
-        "the planner decided to decompose this work into three subtasks because the spec mentioned"
-      )
+      looksLikeCredential("the planner decided to decompose this work into three subtasks because the spec mentioned"),
     ).toBe(false);
   });
 
@@ -41,16 +39,12 @@ describe("high-entropy detector", () => {
   });
 
   it("containsCredentialSubstring catches embedded tokens in log lines", () => {
-    expect(
-      containsCredentialSubstring("auth=Y3JlZGVudGlhbHN1cGVybG9uZ29wYXF1ZXRva2VuMjAyNg==aaaa")
-    ).toBe(true);
+    expect(containsCredentialSubstring("auth=Y3JlZGVudGlhbHN1cGVybG9uZ29wYXF1ZXRva2VuMjAyNg==aaaa")).toBe(true);
   });
 
   it("containsCredentialSubstring tolerates normal log lines", () => {
     expect(
-      containsCredentialSubstring(
-        "the writer applied a diff to PHASE1.md and committed deadbeef as the new HEAD"
-      )
+      containsCredentialSubstring("the writer applied a diff to PHASE1.md and committed deadbeef as the new HEAD"),
     ).toBe(false);
   });
 });

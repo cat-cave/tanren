@@ -10,7 +10,7 @@ import {
   projectBurn,
   summarizeCosts,
   PRICING_MODELS,
-  COST_BASIS_META
+  COST_BASIS_META,
 } from "../src/components/costs/aggregate.js";
 
 function rec(over: Partial<CostRecord>): CostRecord {
@@ -32,16 +32,35 @@ function rec(over: Partial<CostRecord>): CostRecord {
     billingMode: "per_token",
     costBasis: "provider_pricing",
     recordedAt: "2026-05-28T12:00:00.000Z",
-    ...over
+    ...over,
   };
 }
 
 describe("summarizeCosts — three pricing models", () => {
   it("rolls each billingMode into its own model bucket (all three always present)", () => {
     const records: CostRecord[] = [
-      rec({ runId: "r1", billingMode: "per_token", costBasis: "provider_pricing", costUsd: "10.00" }),
-      rec({ runId: "r2", billingMode: "subscription", costBasis: "unknown", costUsd: null, provider: "openai", cli: "codex" }),
-      rec({ runId: "r3", billingMode: "self_hosted", costBasis: "unknown", costUsd: null, provider: "qwen", cli: "opencode" })
+      rec({
+        runId: "r1",
+        billingMode: "per_token",
+        costBasis: "provider_pricing",
+        costUsd: "10.00",
+      }),
+      rec({
+        runId: "r2",
+        billingMode: "subscription",
+        costBasis: "unknown",
+        costUsd: null,
+        provider: "openai",
+        cli: "codex",
+      }),
+      rec({
+        runId: "r3",
+        billingMode: "self_hosted",
+        costBasis: "unknown",
+        costUsd: null,
+        provider: "qwen",
+        cli: "opencode",
+      }),
     ];
     const summary = summarizeCosts(records);
     expect(summary.models.map((m) => m.mode)).toEqual([...PRICING_MODELS]);
@@ -60,7 +79,7 @@ describe("summarizeCosts — three pricing models", () => {
   it("computes per-model share against priced total", () => {
     const records: CostRecord[] = [
       rec({ runId: "r1", billingMode: "per_token", costUsd: "75.00" }),
-      rec({ runId: "r2", billingMode: "per_token", costUsd: "25.00", costBasis: "ccusage" })
+      rec({ runId: "r2", billingMode: "per_token", costUsd: "25.00", costBasis: "ccusage" }),
     ];
     const summary = summarizeCosts(records);
     expect(summary.totalUsd).toBeCloseTo(100);
@@ -74,7 +93,15 @@ describe("summarizeCosts — every row shows its REAL source", () => {
     const records: CostRecord[] = [
       rec({ runId: "r1", costBasis: "provider_pricing", costUsd: "5.00" }),
       rec({ runId: "r1", costBasis: "ccusage", costUsd: "3.00" }),
-      rec({ runId: "r2", billingMode: "subscription", costBasis: "unknown", costUsd: null, provider: "openai", cli: "codex", model: "gpt-5.5" })
+      rec({
+        runId: "r2",
+        billingMode: "subscription",
+        costBasis: "unknown",
+        costUsd: null,
+        provider: "openai",
+        cli: "codex",
+        model: "gpt-5.5",
+      }),
     ];
     const summary = summarizeCosts(records);
     // provider_pricing and ccusage for the same triple are NOT merged — the
@@ -94,7 +121,7 @@ describe("summarizeCosts — every row shows its REAL source", () => {
   it("counts unpriced records honestly", () => {
     const records: CostRecord[] = [
       rec({ costUsd: "1.00" }),
-      rec({ costUsd: null, billingMode: "subscription", costBasis: "unknown" })
+      rec({ costUsd: null, billingMode: "subscription", costBasis: "unknown" }),
     ];
     const summary = summarizeCosts(records);
     expect(summary.unpricedRecords).toBe(1);
@@ -104,7 +131,7 @@ describe("summarizeCosts — every row shows its REAL source", () => {
     const records: CostRecord[] = [
       rec({ runId: "a", model: "haiku", costUsd: "2.00" }),
       rec({ runId: "b", model: "opus", costUsd: "40.00" }),
-      rec({ runId: "c", model: "sonnet", costUsd: "12.00" })
+      rec({ runId: "c", model: "sonnet", costUsd: "12.00" }),
     ];
     const summary = summarizeCosts(records);
     expect(summary.providers[0]?.model).toBe("opus");
@@ -119,7 +146,12 @@ describe("projectBurn", () => {
       rec({ recordedAt: "2026-05-28T10:00:00.000Z", costUsd: "2.00" }),
       rec({ recordedAt: "2026-05-27T10:00:00.000Z", costUsd: "4.00" }),
       // Unpriced records contribute nothing to burn.
-      rec({ recordedAt: "2026-05-26T10:00:00.000Z", costUsd: null, billingMode: "subscription", costBasis: "unknown" })
+      rec({
+        recordedAt: "2026-05-26T10:00:00.000Z",
+        costUsd: null,
+        billingMode: "subscription",
+        costBasis: "unknown",
+      }),
     ];
     const burn = projectBurn(records, { now, windowDays: 14 });
     expect(burn.daily).toHaveLength(14);
@@ -137,7 +169,7 @@ describe("observeMetrics", () => {
       { outcome: "phase2_easy_complete" },
       { outcome: "phase2_medium_complete" },
       { outcome: "halted" },
-      { outcome: null }
+      { outcome: null },
     ];
     const metrics = observeMetrics(runs, 20);
     expect(metrics.specsMerged).toBe(2);

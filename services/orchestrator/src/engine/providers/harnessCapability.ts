@@ -53,11 +53,13 @@ export const HARNESS_CAPABILITIES: readonly HarnessCapability[] = [
   { cli: "codex", roles: ["write", "answer"], structuredOutput: true },
   { cli: "claude", roles: ["write", "answer"], structuredOutput: true },
   { cli: "opencode", roles: ["write"], structuredOutput: false },
-  { cli: "aider", roles: ["write"], structuredOutput: false }
+  { cli: "aider", roles: ["write"], structuredOutput: false },
 ] as const;
 
 function capabilitiesFor(role: HarnessRole): readonly HarnessCli[] {
-  return HARNESS_CAPABILITIES.filter((capability) => capability.roles.includes(role)).map((capability) => capability.cli);
+  return HARNESS_CAPABILITIES.filter((capability) => capability.roles.includes(role)).map(
+    (capability) => capability.cli,
+  );
 }
 
 // The clis selectable as Writers / Answerers, DERIVED from the capability

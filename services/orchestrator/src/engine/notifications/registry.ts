@@ -44,9 +44,7 @@ export interface ChannelRegistryDeps {
   webhook?: WebhookChannelDeps;
 }
 
-export function buildChannelRegistry(
-  deps: ChannelRegistryDeps = {}
-): Record<ChannelKind, NotificationChannel> {
+export function buildChannelRegistry(deps: ChannelRegistryDeps = {}): Record<ChannelKind, NotificationChannel> {
   const registry: Partial<Record<ChannelKind, NotificationChannel>> = {};
   for (const kind of ChannelKind.options) {
     registry[kind] = buildChannel(kind, deps);
@@ -63,9 +61,7 @@ function buildChannel(kind: ChannelKind, deps: ChannelRegistryDeps): Notificatio
     case "github_checks":
       // github_checks needs a secret store to resolve tokens; without it we
       // cannot mint/read credentials, so fall back to a stub.
-      return deps.github !== undefined
-        ? new GithubChecksChannel(deps.github)
-        : new StubChannel(kind);
+      return deps.github !== undefined ? new GithubChecksChannel(deps.github) : new StubChannel(kind);
     case "teams":
       return deps.teams !== undefined ? new TeamsChannel(deps.teams) : new StubChannel(kind);
     case "discord":
@@ -77,9 +73,7 @@ function buildChannel(kind: ChannelKind, deps: ChannelRegistryDeps): Notificatio
     case "twilio":
       return deps.twilio !== undefined ? new TwilioChannel(deps.twilio) : new StubChannel(kind);
     case "pagerduty":
-      return deps.pagerduty !== undefined
-        ? new PagerDutyChannel(deps.pagerduty)
-        : new StubChannel(kind);
+      return deps.pagerduty !== undefined ? new PagerDutyChannel(deps.pagerduty) : new StubChannel(kind);
     default:
       return new StubChannel(kind);
   }

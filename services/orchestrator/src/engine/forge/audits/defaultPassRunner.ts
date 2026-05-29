@@ -14,6 +14,6 @@ export function createNoopPassRunner(): AuditPassRunner {
   return {
     async run(): Promise<AuditPassResult> {
       return { findings: [] };
-    }
+    },
   };
 }

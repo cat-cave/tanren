@@ -20,9 +20,7 @@ import type { IngestedItem, InboxSource, SourceConnector } from "./types.js";
 
 // Just enough of the config to pick a provider; each provider connector
 // validates the rest of the shape itself.
-const ProviderProbe = z
-  .object({ provider: z.enum(["github", "linear", "jira"]).default("github") })
-  .passthrough();
+const ProviderProbe = z.object({ provider: z.enum(["github", "linear", "jira"]).default("github") }).passthrough();
 
 export interface IssuesConnectorDeps {
   github: SourceConnector;
@@ -38,6 +36,6 @@ export function createIssuesConnector(deps: IssuesConnectorDeps): SourceConnecto
       if (provider === "linear") return deps.linear.fetch(source);
       if (provider === "jira") return deps.jira.fetch(source);
       return deps.github.fetch(source);
-    }
+    },
   };
 }

@@ -16,7 +16,7 @@ import {
   parseDiscoveryProvenance,
   type DiscoveryAnswerer,
   type DiscoveryInsight,
-  type DiscoveryResult
+  type DiscoveryResult,
 } from "../src/engine/forge/discovery/index.js";
 
 const actor: ActorContext = {
@@ -24,7 +24,7 @@ const actor: ActorContext = {
   orgId: "org_a",
   projectId: "project_a",
   scopes: ["platform:admin"],
-  source: "session"
+  source: "session",
 };
 
 const featureInsight: DiscoveryInsight = {
@@ -34,7 +34,7 @@ const featureInsight: DiscoveryInsight = {
   who: "dani · ae",
   when: "2h ago",
   glyph: "⌥",
-  body: "acme wants to export the stats page to csv for their monthly board pack."
+  body: "acme wants to export the stats page to csv for their monthly board pack.",
 };
 
 // In-memory pool: tracks inserted specs + their metadata so the accept path's
@@ -91,19 +91,30 @@ describe("classifyInsight (mocked answerer)", () => {
               acceptanceCriteria: ["exports csv"],
               dependsOn: [],
               priority: "P1",
-              estLabel: "2h"
-            }
+              estLabel: "2h",
+            },
           ],
           placements: [
-            { kind: "jump_backlog", label: "jump", eta: "3d", sideEffects: "none", priority: "P1", recommended: true, risk: false }
+            {
+              kind: "jump_backlog",
+              label: "jump",
+              eta: "3d",
+              sideEffects: "none",
+              priority: "P1",
+              recommended: true,
+              risk: false,
+            },
           ],
           deltas: [],
-          readSummary: ""
+          readSummary: "",
         } satisfies DiscoveryResult;
-      }
+      },
     };
 
-    const result = await classifyInsight({ pool, answerer }, { projectId: "project_a", insight: featureInsight, actor });
+    const result = await classifyInsight(
+      { pool, answerer },
+      { projectId: "project_a", insight: featureInsight, actor },
+    );
     expect(seenExisting).toBe(1);
     expect(result.proposals[0]?.title).toBe("csv export");
     expect(result.placements.some((p) => p.recommended)).toBe(true);
@@ -111,7 +122,11 @@ describe("classifyInsight (mocked answerer)", () => {
 });
 
 describe("deterministic discovery answerer · per variant", () => {
-  for (const [variant, minProposals] of [["feature", 1], ["bug", 3], ["strategic", 4]] as const) {
+  for (const [variant, minProposals] of [
+    ["feature", 1],
+    ["bug", 3],
+    ["strategic", 4],
+  ] as const) {
     it(`${variant}: proposes ${minProposals}+ spec(s) + three placement options with one recommended`, async () => {
       const { pool } = stubPool([{ spec_id: "s_done", title: "stats page", status: "done" }]);
       const insight: DiscoveryInsight = { ...featureInsight, variant };
@@ -137,7 +152,7 @@ describe("deterministic discovery answerer · per variant", () => {
     const result = await answerer.classify({
       insight: { ...featureInsight, variant: "bug" },
       projectId: "project_a",
-      existingSpecs: []
+      existingSpecs: [],
     });
     const recommended = result.placements.find((p) => p.recommended);
     expect(recommended?.kind).toBe("interrupt");
@@ -160,13 +175,13 @@ describe("acceptProposals · creates specs + stamps provenance", () => {
             acceptanceCriteria: ["exports csv"],
             dependsOn: [],
             priority: "P1",
-            estLabel: "2h · $0.45"
-          }
+            estLabel: "2h · $0.45",
+          },
         ],
         placementKind: "jump_backlog",
         placementLabel: "jump the p1 backlog",
-        actor
-      }
+        actor,
+      },
     );
 
     expect(result.accepted).toHaveLength(1);
@@ -189,7 +204,7 @@ describe("acceptProposals · creates specs + stamps provenance", () => {
     const classification = await answerer.classify({
       insight: { ...featureInsight, variant: "bug" },
       projectId: "project_a",
-      existingSpecs: []
+      existingSpecs: [],
     });
     const result = await acceptProposals(
       { pool },
@@ -199,8 +214,8 @@ describe("acceptProposals · creates specs + stamps provenance", () => {
         proposals: classification.proposals,
         placementKind: "interrupt",
         placementLabel: "interrupt now",
-        actor
-      }
+        actor,
+      },
     );
     expect(result.accepted).toHaveLength(3);
     expect(specs.size).toBe(3);

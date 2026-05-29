@@ -12,7 +12,7 @@ export {
   NotificationTargetCreateInput,
   NotificationTargetRow,
   severityMeetsFloor,
-  severityRank
+  severityRank,
 } from "./schemas.js";
 
 export { defaultSeverityFor, eventDefaultSeverity } from "./eventDefaultSeverity.js";
@@ -20,10 +20,7 @@ export { defaultSeverityFor, eventDefaultSeverity } from "./eventDefaultSeverity
 export type { NotificationChannel } from "./channels/types.js";
 export { NtfyChannel, type NtfyChannelDeps } from "./channels/ntfy.js";
 export { SlackChannel, type SlackChannelDeps } from "./channels/slack.js";
-export {
-  GithubChecksChannel,
-  type GithubChecksChannelDeps
-} from "./channels/githubChecks.js";
+export { GithubChecksChannel, type GithubChecksChannelDeps } from "./channels/githubChecks.js";
 export { TeamsChannel, type TeamsChannelDeps } from "./channels/teams.js";
 export { DiscordChannel, type DiscordChannelDeps } from "./channels/discord.js";
 export { WebhookChannel, type WebhookChannelDeps } from "./channels/webhook.js";
@@ -32,7 +29,7 @@ export {
   HttpEmailTransport,
   type EmailChannelDeps,
   type EmailTransport,
-  type EmailMessage
+  type EmailMessage,
 } from "./channels/email.js";
 export { TwilioChannel, type TwilioChannelDeps } from "./channels/twilio.js";
 export { PagerDutyChannel, type PagerDutyChannelDeps } from "./channels/pagerduty.js";
@@ -43,7 +40,7 @@ export {
   NotificationRouteStore,
   NotificationDispatchLog,
   type DispatchLogInput,
-  type DispatchStatus
+  type DispatchStatus,
 } from "./store.js";
 
 export {
@@ -51,14 +48,9 @@ export {
   isWeekendInUtc,
   type MatrixContext,
   type MatrixEvaluationInput,
-  type MatrixMatch
+  type MatrixMatch,
 } from "./matrix.js";
 
-export {
-  NotificationDispatcher,
-  effectiveSeverityFor,
-  type DispatcherDeps,
-  type EventContext
-} from "./dispatcher.js";
+export { NotificationDispatcher, effectiveSeverityFor, type DispatcherDeps, type EventContext } from "./dispatcher.js";
 
 export { buildChannelRegistry, type ChannelRegistryDeps } from "./registry.js";

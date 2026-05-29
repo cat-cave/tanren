@@ -78,7 +78,7 @@ export async function timed<T>(options: TimedOptions, operation: () => Promise<T
     event: "timing" as const,
     boundary: options.boundary,
     operation: options.operation,
-    attributes: options.attributes
+    attributes: options.attributes,
   };
   try {
     const result = await operation();
@@ -86,7 +86,7 @@ export async function timed<T>(options: TimedOptions, operation: () => Promise<T
       ...base,
       durationMs: roundMs(now() - startedAt),
       outcome: "ok",
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
     return result;
   } catch (error) {
@@ -94,7 +94,7 @@ export async function timed<T>(options: TimedOptions, operation: () => Promise<T
       ...base,
       durationMs: roundMs(now() - startedAt),
       outcome: "error",
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     });
     throw error;
   }
@@ -108,7 +108,7 @@ export function emitStageTiming(
   stage: string,
   durationMs: number,
   attributes?: Record<string, string | number | boolean>,
-  sink: TimingSink = consoleTimingSink
+  sink: TimingSink = consoleTimingSink,
 ): void {
   safeEmit(sink, {
     event: "timing",
@@ -117,7 +117,7 @@ export function emitStageTiming(
     durationMs: roundMs(durationMs),
     outcome: "ok",
     attributes,
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
   });
 }
 

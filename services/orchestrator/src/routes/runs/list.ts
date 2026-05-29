@@ -20,7 +20,7 @@ import {
   RunListItem,
   RunSpecSummary,
   RunSummary,
-  TaskTimelineEntry
+  TaskTimelineEntry,
 } from "./contract.js";
 import type { ProjectFeedItem as ProjectFeedItemType, RunDetail } from "./contract.js";
 
@@ -48,7 +48,7 @@ function decodeRunSummary(raw: RawRunRow): RunSummary {
     outcome: raw.outcome === null || raw.outcome === undefined ? null : RunOutcome.parse(raw.outcome),
     startedAt: raw.started_at as Date,
     endedAt: raw.ended_at === null || raw.ended_at === undefined ? null : (raw.ended_at as Date),
-    prUrl: raw.pr_url === null || raw.pr_url === undefined ? null : String(raw.pr_url)
+    prUrl: raw.pr_url === null || raw.pr_url === undefined ? null : String(raw.pr_url),
   });
 }
 
@@ -61,10 +61,7 @@ const SELECT_RUN_COLUMNS = `
 // ---------------------------------------------------------------------------
 
 export async function fetchRunSummary(pool: pg.Pool, runId: string): Promise<RunSummary | undefined> {
-  const result = await pool.query<RawRunRow>(
-    `SELECT ${SELECT_RUN_COLUMNS} FROM runs WHERE run_id = $1`,
-    [runId]
-  );
+  const result = await pool.query<RawRunRow>(`SELECT ${SELECT_RUN_COLUMNS} FROM runs WHERE run_id = $1`, [runId]);
   const row = result.rows[0];
   return row === undefined ? undefined : decodeRunSummary(row);
 }
@@ -81,24 +78,26 @@ export async function fetchRunTasks(pool: pg.Pool, runId: string): Promise<TaskT
                END,
                started_at ASC NULLS FIRST,
                task_id ASC`,
-    [runId]
+    [runId],
   );
   return result.rows.map((row) =>
     TaskTimelineEntry.parse({
       taskId: String(row["task_id"]),
       runId: String(row["run_id"]),
       kind: TaskKind.parse(row["kind"]),
-      parentTaskId: row["parent_task_id"] === null || row["parent_task_id"] === undefined ? null : String(row["parent_task_id"]),
+      parentTaskId:
+        row["parent_task_id"] === null || row["parent_task_id"] === undefined ? null : String(row["parent_task_id"]),
       title: String(row["title"] ?? ""),
       status: TaskStatus.parse(row["status"]),
       outcome: row["outcome"] === null || row["outcome"] === undefined ? null : TaskOutcome.parse(row["outcome"]),
-      failureKind: row["failure_kind"] === null || row["failure_kind"] === undefined ? null : String(row["failure_kind"]),
+      failureKind:
+        row["failure_kind"] === null || row["failure_kind"] === undefined ? null : String(row["failure_kind"]),
       attempt: Number(row["attempt"] ?? 1),
       cli: String(row["cli"] ?? ""),
       model: row["model"] === null || row["model"] === undefined ? null : String(row["model"]),
       startedAt: row["started_at"] === null || row["started_at"] === undefined ? null : (row["started_at"] as Date),
-      endedAt: row["ended_at"] === null || row["ended_at"] === undefined ? null : (row["ended_at"] as Date)
-    })
+      endedAt: row["ended_at"] === null || row["ended_at"] === undefined ? null : (row["ended_at"] as Date),
+    }),
   );
 }
 
@@ -109,7 +108,7 @@ export async function fetchRunTasks(pool: pg.Pool, runId: string): Promise<TaskT
 export async function fetchRunSpecSummary(pool: pg.Pool, specId: string): Promise<RunSpecSummary | undefined> {
   const specResult = await pool.query<{ spec_id: string; title: string; description: string }>(
     "SELECT spec_id, title, description FROM specs WHERE spec_id = $1",
-    [specId]
+    [specId],
   );
   const spec = specResult.rows[0];
   if (spec === undefined) return undefined;
@@ -120,7 +119,7 @@ export async function fetchRunSpecSummary(pool: pg.Pool, specId: string): Promis
     title: spec.title,
     description: spec.description,
     behaviorIds,
-    milestoneId
+    milestoneId,
   });
 }
 
@@ -130,7 +129,7 @@ async function fetchBehaviorIds(pool: pg.Pool, specId: string): Promise<string[]
   try {
     const result = await pool.query<{ behavior_id: string }>(
       "SELECT behavior_id FROM spec_behaviors WHERE spec_id = $1 ORDER BY behavior_id",
-      [specId]
+      [specId],
     );
     return result.rows.map((row) => row.behavior_id);
   } catch {
@@ -142,7 +141,7 @@ async function fetchSpecMilestone(pool: pg.Pool, specId: string): Promise<string
   try {
     const result = await pool.query<{ milestone_id: string }>(
       "SELECT milestone_id FROM spec_milestones WHERE spec_id = $1 LIMIT 1",
-      [specId]
+      [specId],
     );
     return result.rows[0]?.milestone_id ?? null;
   } catch {
@@ -168,14 +167,19 @@ interface EventQueryRow {
 function applyEventRedaction(
   rows: ReadonlyArray<EventQueryRow>,
   actor: ActorContext | undefined,
-  rawView: boolean
+  rawView: boolean,
 ): RunEventRow[] {
   return rows.map((row) => {
     const eventType = String(row.event_type);
     let payload: unknown = row.payload;
     let redactedPaths: string[] = [];
     if (actor !== undefined && isEventName(eventType)) {
-      const out = redactEventPayload({ eventName: eventType, payload: row.payload, actor, rawView });
+      const out = redactEventPayload({
+        eventName: eventType,
+        payload: row.payload,
+        actor,
+        rawView,
+      });
       payload = out.payload;
       redactedPaths = out.redactedPaths;
     }
@@ -188,7 +192,7 @@ function applyEventRedaction(
       projectId: row.project_id === null || row.project_id === undefined ? null : String(row.project_id),
       eventType,
       payload,
-      redactedPaths
+      redactedPaths,
     });
   });
 }
@@ -200,10 +204,7 @@ interface SnapshotEventsArgs {
   rawView: boolean;
 }
 
-export async function fetchRunEventsForSnapshot(
-  pool: pg.Pool,
-  args: SnapshotEventsArgs
-): Promise<RunEventRow[]> {
+export async function fetchRunEventsForSnapshot(pool: pg.Pool, args: SnapshotEventsArgs): Promise<RunEventRow[]> {
   // For the snapshot we want the most recent N events but rendered
   // chronologically so the dashboard timeline reads top-down.
   const result = await pool.query<EventQueryRow>(
@@ -216,7 +217,7 @@ export async function fetchRunEventsForSnapshot(
           LIMIT $2
        ) recent
       ORDER BY ts ASC, id ASC`,
-    [args.runId, args.limit]
+    [args.runId, args.limit],
   );
   return applyEventRedaction(result.rows, args.actor, args.rawView);
 }
@@ -231,7 +232,7 @@ interface EventsPageArgs {
 
 export async function fetchEventsPage(
   pool: pg.Pool,
-  args: EventsPageArgs
+  args: EventsPageArgs,
 ): Promise<{ items: RunEventRow[]; nextCursor: string | null }> {
   const limit = parsePageSize(args.pageSize);
   const cursor = args.cursor === undefined || args.cursor === "" ? undefined : decodeCursor(args.cursor);
@@ -248,13 +249,16 @@ export async function fetchEventsPage(
       WHERE run_id = $1${cursorClause}
       ORDER BY ts ASC, id ASC
       LIMIT $${params.length}`,
-    params
+    params,
   );
   const rows = result.rows.slice(0, limit);
   const items = applyEventRedaction(rows, args.actor, args.rawView);
   const nextCursor =
     result.rows.length > limit
-      ? encodeCursor({ ts: rows[rows.length - 1]?.ts as Date, id: rows[rows.length - 1]?.id as number })
+      ? encodeCursor({
+          ts: rows[rows.length - 1]?.ts as Date,
+          id: rows[rows.length - 1]?.id as number,
+        })
       : null;
   return CursorPage(RunEventRow).parse({ items, nextCursor });
 }
@@ -273,7 +277,7 @@ interface FeedPageArgs {
 
 export async function fetchFeedPage(
   pool: pg.Pool,
-  args: FeedPageArgs
+  args: FeedPageArgs,
 ): Promise<{ items: ProjectFeedItemType[]; nextCursor: string | null }> {
   const limit = parsePageSize(args.pageSize);
   // Newest-first ordering for the activity feed; cursor goes backwards in
@@ -292,7 +296,7 @@ export async function fetchFeedPage(
       WHERE project_id = $1 AND run_id IS NOT NULL${cursorClause}
       ORDER BY ts DESC, id DESC
       LIMIT $${params.length}`,
-    params
+    params,
   );
   const rows = result.rows.slice(0, limit);
   const redacted = applyEventRedaction(rows, args.actor, args.rawView);
@@ -302,7 +306,7 @@ export async function fetchFeedPage(
     result.rows.length > limit
       ? encodeCursor({
           ts: rows[rows.length - 1]?.ts as Date,
-          id: rows[rows.length - 1]?.id as number
+          id: rows[rows.length - 1]?.id as number,
         })
       : null;
   return { items, nextCursor };
@@ -332,7 +336,7 @@ function decodeCostRow(raw: CostQueryRow): RunCostRecord {
     costUsd: raw["cost_usd"] === null || raw["cost_usd"] === undefined ? null : String(raw["cost_usd"]),
     billingMode: raw["billing_mode"] as RunCostRecord["billingMode"],
     costBasis: raw["cost_basis"] as RunCostRecord["costBasis"],
-    recordedAt: raw["recorded_at"] as Date
+    recordedAt: raw["recorded_at"] as Date,
   });
 }
 
@@ -344,7 +348,7 @@ export async function fetchRunCostsForSnapshot(pool: pg.Pool, runId: string): Pr
        FROM cost_records
       WHERE run_id = $1
       ORDER BY recorded_at ASC, id ASC`,
-    [runId]
+    [runId],
   );
   return result.rows.map(decodeCostRow);
 }
@@ -357,7 +361,7 @@ interface CostsPageArgs {
 
 export async function fetchCostsPage(
   pool: pg.Pool,
-  args: CostsPageArgs
+  args: CostsPageArgs,
 ): Promise<{ items: RunCostRecord[]; nextCursor: string | null }> {
   const limit = parsePageSize(args.pageSize);
   const cursor = args.cursor === undefined || args.cursor === "" ? undefined : decodeCursor(args.cursor);
@@ -376,13 +380,16 @@ export async function fetchCostsPage(
       WHERE run_id = $1${cursorClause}
       ORDER BY recorded_at ASC, id ASC
       LIMIT $${params.length}`,
-    params
+    params,
   );
   const rows = result.rows.slice(0, limit);
   const items = rows.map(decodeCostRow);
   const nextCursor =
     result.rows.length > limit
-      ? encodeCursor({ ts: rows[rows.length - 1]?.["recorded_at"] as Date, id: rows[rows.length - 1]?.["id"] as number })
+      ? encodeCursor({
+          ts: rows[rows.length - 1]?.["recorded_at"] as Date,
+          id: rows[rows.length - 1]?.["id"] as number,
+        })
       : null;
   return CursorPage(RunCostRecord).parse({ items, nextCursor });
 }
@@ -395,7 +402,7 @@ export async function fetchRunInsights(
   pool: pg.Pool,
   projectId: string,
   specId: string,
-  runId: string
+  runId: string,
 ): Promise<RunDetail["insights"]> {
   const all = await loadInsightsForProject(pool, { projectId });
   // pace_anomaly carries a runId; retry_hotspot/model_mismatch are spec-class
@@ -451,7 +458,7 @@ export async function fetchRunListItems(pool: pg.Pool, args: RunListArgs): Promi
        LEFT JOIN specs s ON s.spec_id = r.spec_id
       WHERE ${where}
       ORDER BY r.started_at DESC, r.run_id ASC`,
-    params
+    params,
   );
   return result.rows.map((row) => {
     const summary = decodeRunSummary(row);
@@ -461,7 +468,7 @@ export async function fetchRunListItems(pool: pg.Pool, args: RunListArgs): Promi
       specTitle: row.spec_title ?? "(spec missing)",
       costTotalUsd: row.cost_total_usd ?? "0",
       lastEventAt: row.last_event_at ?? null,
-      needsReview
+      needsReview,
     });
   });
 }

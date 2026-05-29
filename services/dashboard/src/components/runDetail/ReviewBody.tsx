@@ -53,14 +53,23 @@ export interface ReviewBodyProps {
 }
 
 /** Human label + pill class for the derived review/merge phase (P3-0008). */
-function reviewMergePill(state: ReviewMergeState): { label: string; cls: "ok" | "warn" | "danger" } {
+function reviewMergePill(state: ReviewMergeState): {
+  label: string;
+  cls: "ok" | "warn" | "danger";
+} {
   switch (state.phase) {
     case "merged":
-      return { label: `merged${state.mergeSha ? ` · ${state.mergeSha.slice(0, 7)}` : ""}`, cls: "ok" };
+      return {
+        label: `merged${state.mergeSha ? ` · ${state.mergeSha.slice(0, 7)}` : ""}`,
+        cls: "ok",
+      };
     case "approved":
       return { label: "review approved", cls: "ok" };
     case "merge_queued":
-      return { label: `merge queued${state.integration ? ` · ${state.integration}` : ""}`, cls: "warn" };
+      return {
+        label: `merge queued${state.integration ? ` · ${state.integration}` : ""}`,
+        cls: "warn",
+      };
     case "review_requested":
       return { label: "review requested", cls: "warn" };
     case "changes_requested":
@@ -79,11 +88,24 @@ export function deferralsFromEvents(events: RunEventRow[]): ReviewDeferral[] {
   const out: ReviewDeferral[] = [];
   for (const event of events) {
     const isDeferral =
-      event.eventType.includes("defer") || event.eventType.includes("followup") || event.eventType.includes("follow_up");
+      event.eventType.includes("defer") ||
+      event.eventType.includes("followup") ||
+      event.eventType.includes("follow_up");
     if (!isDeferral) continue;
-    const payload = typeof event.payload === "object" && event.payload !== null ? (event.payload as Record<string, unknown>) : {};
-    const title = typeof payload["title"] === "string" ? payload["title"] : typeof payload["summary"] === "string" ? payload["summary"] : event.eventType;
-    const detail = typeof payload["detail"] === "string" ? payload["detail"] : typeof payload["reason"] === "string" ? payload["reason"] : "Deferred by the writer during the run.";
+    const payload =
+      typeof event.payload === "object" && event.payload !== null ? (event.payload as Record<string, unknown>) : {};
+    const title =
+      typeof payload["title"] === "string"
+        ? payload["title"]
+        : typeof payload["summary"] === "string"
+          ? payload["summary"]
+          : event.eventType;
+    const detail =
+      typeof payload["detail"] === "string"
+        ? payload["detail"]
+        : typeof payload["reason"] === "string"
+          ? payload["reason"]
+          : "Deferred by the writer during the run.";
     const tag = typeof payload["tag"] === "string" ? payload["tag"] : "deferred";
     out.push({ id: String(event.id), tag, title, detail });
   }
@@ -143,15 +165,25 @@ function PreviewPane(props: { detail: RunDetail; previewUrl: string | null; sett
   return (
     <div class="preview" data-review="preview">
       <div class="head">
-        <span class="moment-eyebrow" style="font-size:9.5px">preview</span>
+        <span class="moment-eyebrow" style="font-size:9.5px">
+          preview
+        </span>
         <span class="url">{previewUrl ?? "no preview url configured"}</span>
         <div class="device-tabs" data-review="device-tabs">
-          <button class="active" data-device="desktop" data-width="none">desktop</button>
-          <button data-device="tablet" data-width="768px">tablet</button>
-          <button data-device="mobile" data-width="375px">mobile</button>
+          <button class="active" data-device="desktop" data-width="none">
+            desktop
+          </button>
+          <button data-device="tablet" data-width="768px">
+            tablet
+          </button>
+          <button data-device="mobile" data-width="375px">
+            mobile
+          </button>
         </div>
         {previewUrl !== null ? (
-          <a class="btn" href={previewUrl} target="_blank" rel="noreferrer" style="font-size:11px">open ↗</a>
+          <a class="btn" href={previewUrl} target="_blank" rel="noreferrer" style="font-size:11px">
+            open ↗
+          </a>
         ) : null}
       </div>
       <div class="frame">
@@ -176,7 +208,9 @@ function PreviewPane(props: { detail: RunDetail; previewUrl: string | null; sett
               {props.detail.run.prUrl !== null ? (
                 <>
                   <br />
-                  <a href={props.detail.run.prUrl} target="_blank" rel="noreferrer">open the PR on github ↗</a>
+                  <a href={props.detail.run.prUrl} target="_blank" rel="noreferrer">
+                    open the PR on github ↗
+                  </a>
                 </>
               ) : null}
             </div>
@@ -217,16 +251,22 @@ export function ReviewBody(props: ReviewBodyProps) {
       >
         <div class="page-head">
           <div>
-            <div class="eyebrow">▮ {prNumberFromUrl(detail.run.prUrl)} · {repoFromUrl(detail.run.prUrl)}</div>
+            <div class="eyebrow">
+              ▮ {prNumberFromUrl(detail.run.prUrl)} · {repoFromUrl(detail.run.prUrl)}
+            </div>
             <div class="page-title">review with forge</div>
             <div class="sub">
               {detail.spec.title} · forged by {forgedBy} · {formatUsd(totals.perTokenUsd)}
             </div>
           </div>
           <div class="rd-actions">
-            <a class="btn ghost" href={props.runHref}>← back to run</a>
+            <a class="btn ghost" href={props.runHref}>
+              ← back to run
+            </a>
             {detail.run.prUrl !== null ? (
-              <a class="btn" href={detail.run.prUrl} target="_blank" rel="noreferrer">open pr on github ↗</a>
+              <a class="btn" href={detail.run.prUrl} target="_blank" rel="noreferrer">
+                open pr on github ↗
+              </a>
             ) : null}
           </div>
         </div>
@@ -260,9 +300,14 @@ export function ReviewBody(props: ReviewBodyProps) {
                       behaviors.map((b, i) => (
                         <div class="behavior" data-review-behavior={b} role="button" tabindex={0}>
                           <div class="check"></div>
-                          <div class="t"><b>b{i + 1}</b>{b}</div>
+                          <div class="t">
+                            <b>b{i + 1}</b>
+                            {b}
+                          </div>
                           <span class="ci">ci {ciGreen ? "✓" : "—"}</span>
-                          <span class="you" data-review-you>you ○</span>
+                          <span class="you" data-review-you>
+                            you ○
+                          </span>
                         </div>
                       ))
                     )}
@@ -290,9 +335,15 @@ export function ReviewBody(props: ReviewBodyProps) {
                           </div>
                           <div class="det">{d.detail}</div>
                           <div class="actions" data-review-deferral-actions>
-                            <button class="btn primary notched" data-resolve="handle now">handle now · replan + subtasks</button>
-                            <button class="btn" data-resolve="defer">defer · spawn follow-up spec</button>
-                            <button class="btn ghost" data-resolve="dismiss">dismiss · won't fix</button>
+                            <button class="btn primary notched" data-resolve="handle now">
+                              handle now · replan + subtasks
+                            </button>
+                            <button class="btn" data-resolve="defer">
+                              defer · spawn follow-up spec
+                            </button>
+                            <button class="btn ghost" data-resolve="dismiss">
+                              dismiss · won't fix
+                            </button>
                           </div>
                         </div>
                       ))
@@ -320,21 +371,36 @@ export function ReviewBody(props: ReviewBodyProps) {
         {/* Readiness gate */}
         <div class="readiness" data-review="readiness">
           <span class={`pill ${reviewPill.cls}`} data-review="phase">
-            <span class="d"></span>{reviewPill.label}
+            <span class="d"></span>
+            {reviewPill.label}
           </span>
-          <span class={`pill ${ciGreen ? "ok" : "warn"}`}><span class="d"></span>{ciGreen ? "ci green" : "ci pending"}</span>
+          <span class={`pill ${ciGreen ? "ok" : "warn"}`}>
+            <span class="d"></span>
+            {ciGreen ? "ci green" : "ci pending"}
+          </span>
           <span class="pill warn" data-review="pill-verified">
-            <span class="d"></span><span data-review="verified-count">0</span> / {behaviors.length} you-verified
+            <span class="d"></span>
+            <span data-review="verified-count">0</span> / {behaviors.length} you-verified
           </span>
           <span class="pill warn" data-review="pill-deferred">
-            <span class="d"></span>{deferrals.length} deferred · <span data-review="resolved-count">0</span> resolved
+            <span class="d"></span>
+            {deferrals.length} deferred · <span data-review="resolved-count">0</span> resolved
           </span>
-          <span class="note" data-review="gate-note">· can't sign off until behaviors + deferrals are settled</span>
+          <span class="note" data-review="gate-note">
+            · can't sign off until behaviors + deferrals are settled
+          </span>
           <div class="grow">
             <form method="post" action={props.requestChangesHref} style="display:inline">
-              <button class="btn danger" type="submit">request changes ↗</button>
+              <button class="btn danger" type="submit">
+                request changes ↗
+              </button>
             </form>
-            <MergeActions mode={props.mergeIntegration} settingsHref={props.settingsHref} signOffHref={props.signOffHref} done={mergeDone} />
+            <MergeActions
+              mode={props.mergeIntegration}
+              settingsHref={props.settingsHref}
+              signOffHref={props.signOffHref}
+              done={mergeDone}
+            />
           </div>
         </div>
       </div>

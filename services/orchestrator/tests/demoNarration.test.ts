@@ -8,12 +8,9 @@ import {
   buildDemoPrompt,
   generateDemoNarration,
   templateDemoNarration,
-  type DemoNarrationInput
+  type DemoNarrationInput,
 } from "../src/engine/demo/index.js";
-import {
-  buildDemoAnswererOrNull,
-  type AdapterSelectorDependencies
-} from "../src/engine/providers/adapterSelector.js";
+import { buildDemoAnswererOrNull, type AdapterSelectorDependencies } from "../src/engine/providers/adapterSelector.js";
 import type { AnswererAdapter } from "../src/engine/providers/types.js";
 import { emptyRoutingTable, RoutingTable } from "../src/engine/config/shared.js";
 
@@ -21,12 +18,16 @@ const baseInput: DemoNarrationInput = {
   specTitle: "Supplier onboarding flow",
   specDescription: "Let an operator invite a supplier and track their first order.",
   behaviors: [
-    { id: "beh_invite", title: "Invite a supplier", scenario: "Given an operator, when they send an invite, then the supplier receives it." },
-    { id: "beh_order", title: "Track first order", scenario: "" }
+    {
+      id: "beh_invite",
+      title: "Invite a supplier",
+      scenario: "Given an operator, when they send an invite, then the supplier receives it.",
+    },
+    { id: "beh_order", title: "Track first order", scenario: "" },
   ],
   prUrl: "https://github.com/example/repo/pull/207",
   unresolvedRisks: ["Email delivery not yet load-tested"],
-  timeoutMs: 1_000
+  timeoutMs: 1_000,
 };
 
 class RecordingAnswerer implements AnswererAdapter<DemoAnswer> {
@@ -63,7 +64,7 @@ describe("demo-role narration (P3-0011)", () => {
       body: "The run wired up the invite flow and first-order tracking against the spec.",
       highlightBehaviorIds: ["beh_invite", "beh_order"],
       showStopperRisks: ["Email delivery not yet load-tested"],
-      links: [{ label: "Open PR", url: "https://github.com/example/repo/pull/207" }]
+      links: [{ label: "Open PR", url: "https://github.com/example/repo/pull/207" }],
     };
     const answerer = new RecordingAnswerer(llmAnswer);
 
@@ -106,7 +107,7 @@ describe("demo-role narration (P3-0011)", () => {
       specDescription: "Nothing fancy.",
       behaviors: [],
       unresolvedRisks: [],
-      timeoutMs: 1_000
+      timeoutMs: 1_000,
     });
     expect(answer.headline).toBe("Completed: Bare spec");
     expect(answer.highlightBehaviorIds).toEqual([]);
@@ -127,7 +128,7 @@ describe("buildDemoAnswererOrNull (P3-0011 selector)", () => {
     secrets: {} as AdapterSelectorDependencies["secrets"],
     ssh: {} as AdapterSelectorDependencies["ssh"],
     target: {} as AdapterSelectorDependencies["target"],
-    runId: "run_demo_test"
+    runId: "run_demo_test",
   };
 
   it("returns null when the demo chain is empty (default — no credential)", () => {
@@ -136,7 +137,7 @@ describe("buildDemoAnswererOrNull (P3-0011 selector)", () => {
 
   it("defaults to the Codex Answerer when the demo chain heads with codex", () => {
     const routing = RoutingTable.parse({
-      demo: { chain: [{ cli: "codex", model: "gpt-5-codex", authRef: "credential/codex/demo" }] }
+      demo: { chain: [{ cli: "codex", model: "gpt-5-codex", authRef: "credential/codex/demo" }] },
     });
     const answerer = buildDemoAnswererOrNull(deps, routing);
     expect(answerer).not.toBeNull();
@@ -146,7 +147,9 @@ describe("buildDemoAnswererOrNull (P3-0011 selector)", () => {
 
   it("selects the Claude Answerer when the demo chain heads with claude", () => {
     const routing = RoutingTable.parse({
-      demo: { chain: [{ cli: "claude", model: "claude-opus-4", authRef: "credential/claude/demo" }] }
+      demo: {
+        chain: [{ cli: "claude", model: "claude-opus-4", authRef: "credential/claude/demo" }],
+      },
     });
     const answerer = buildDemoAnswererOrNull(deps, routing);
     expect(answerer?.cli).toBe("claude");

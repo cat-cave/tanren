@@ -32,7 +32,7 @@ export const WINDOW_LABELS: readonly { range: string; sub: string }[] = [
   { range: "05 – 10", sub: "morning" },
   { range: "10 – 15", sub: "midday" },
   { range: "15 – 20", sub: "afternoon" },
-  { range: "20 – 00", sub: "evening" }
+  { range: "20 – 00", sub: "evening" },
 ];
 
 /** Number of windows per day (5 × ~5-hour bands covering 24h). */
@@ -95,10 +95,7 @@ function dayKey(iso: string): string {
  * `HEATMAP_DAYS` window (ending at `now`, UTC days) contribute; everything else
  * is ignored. Fill is each cell's tokens normalized against the busiest cell.
  */
-export function buildHeatmap(
-  records: readonly CostRecord[],
-  opts: { now?: Date } = {}
-): HeatmapMatrix {
+export function buildHeatmap(records: readonly CostRecord[], opts: { now?: Date } = {}): HeatmapMatrix {
   const now = opts.now ?? new Date();
 
   // The 30 UTC day keys, oldest → newest (today last), and a key → column map.
@@ -113,9 +110,7 @@ export function buildHeatmap(
   }
 
   // tokenGrid[window][day] accumulates subscription token volume.
-  const tokenGrid: number[][] = WINDOW_LABELS.map(() =>
-    Array.from({ length: HEATMAP_DAYS }, () => 0)
-  );
+  const tokenGrid: number[][] = WINDOW_LABELS.map(() => Array.from({ length: HEATMAP_DAYS }, () => 0));
   let recordCount = 0;
   let totalTokens = 0;
   let peakCellTokens = 0;
@@ -139,7 +134,7 @@ export function buildHeatmap(
     const tokenRow = tokenGrid[w] ?? [];
     const cells: HeatmapCell[] = tokenRow.map((tokens) => ({
       tokens,
-      fill: peakCellTokens > 0 ? tokens / peakCellTokens : 0
+      fill: peakCellTokens > 0 ? tokens / peakCellTokens : 0,
     }));
     const avgFill = cells.length > 0 ? cells.reduce((s, c) => s + c.fill, 0) / cells.length : 0;
     return { range: label.range, sub: label.sub, cells, avgFill };
@@ -151,7 +146,7 @@ export function buildHeatmap(
     records: recordCount,
     totalTokens,
     peakCellTokens,
-    empty: recordCount === 0
+    empty: recordCount === 0,
   };
 }
 

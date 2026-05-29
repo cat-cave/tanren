@@ -12,15 +12,31 @@ describe("fake provider adapters", () => {
       ssh: new ScriptedSsh([
         { exitCode: 0, stdout: "", stderr: "", timedOut: false },
         { exitCode: 0, stdout: diff, stderr: "", timedOut: false },
-        { exitCode: 0, stdout: `${sha}\thello world\n`, stderr: "", timedOut: false }
+        { exitCode: 0, stdout: `${sha}\thello world\n`, stderr: "", timedOut: false },
       ]),
-      target
+      target,
     });
 
-    const plan = await fakePlanner.runAnswerer({ prompt: "plan", timeoutMs: 100, outputSchema: planAnswerSchema });
-    const writer = await fakeWriter.runWriter({ prompt: "write", workspace: "/workspace", timeoutMs: 100 });
-    const check = await fakeChecker.runAnswerer({ prompt: writer.diff, timeoutMs: 100, outputSchema: checkAnswerSchema });
-    const audit = await fakeAuditor.runAnswerer({ prompt: JSON.stringify(plan), timeoutMs: 100, outputSchema: auditAnswerSchema });
+    const plan = await fakePlanner.runAnswerer({
+      prompt: "plan",
+      timeoutMs: 100,
+      outputSchema: planAnswerSchema,
+    });
+    const writer = await fakeWriter.runWriter({
+      prompt: "write",
+      workspace: "/workspace",
+      timeoutMs: 100,
+    });
+    const check = await fakeChecker.runAnswerer({
+      prompt: writer.diff,
+      timeoutMs: 100,
+      outputSchema: checkAnswerSchema,
+    });
+    const audit = await fakeAuditor.runAnswerer({
+      prompt: JSON.stringify(plan),
+      timeoutMs: 100,
+      outputSchema: auditAnswerSchema,
+    });
 
     expect(plan.subtasks).toHaveLength(1);
     expect(writer.exitReason).toBe("completed");
@@ -36,7 +52,7 @@ const target: SshTarget = {
   port: 22,
   username: "tanren",
   hostKeyFingerprint: "SHA256:runner-host",
-  identitySecretRef: "runner/test/identity"
+  identitySecretRef: "runner/test/identity",
 };
 
 class ScriptedSsh implements SshSubstrate {

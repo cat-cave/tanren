@@ -5,12 +5,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { CostRecord } from "../src/api/types.js";
-import {
-  buildHeatmap,
-  underfilledWindows,
-  HEATMAP_DAYS,
-  WINDOW_COUNT
-} from "../src/components/costs/heatmap.js";
+import { buildHeatmap, underfilledWindows, HEATMAP_DAYS, WINDOW_COUNT } from "../src/components/costs/heatmap.js";
 
 function rec(over: Partial<CostRecord>): CostRecord {
   return {
@@ -31,7 +26,7 @@ function rec(over: Partial<CostRecord>): CostRecord {
     billingMode: "subscription",
     costBasis: "unknown",
     recordedAt: "2026-05-28T12:00:00.000Z",
-    ...over
+    ...over,
   };
 }
 
@@ -63,9 +58,9 @@ describe("buildHeatmap — only subscription records, bucketed by window", () =>
     const matrix = buildHeatmap(
       [
         rec({ billingMode: "per_token", costUsd: "5.00", recordedAt: "2026-05-28T12:00:00.000Z" }),
-        rec({ billingMode: "self_hosted", recordedAt: "2026-05-28T12:00:00.000Z" })
+        rec({ billingMode: "self_hosted", recordedAt: "2026-05-28T12:00:00.000Z" }),
       ],
-      { now: NOW }
+      { now: NOW },
     );
     expect(matrix.empty).toBe(true);
     expect(matrix.totalTokens).toBe(0);
@@ -77,9 +72,9 @@ describe("buildHeatmap — only subscription records, bucketed by window", () =>
       [
         rec({ recordedAt: "2026-05-28T02:00:00.000Z", totalTokens: 100 }),
         rec({ recordedAt: "2026-05-28T12:00:00.000Z", totalTokens: 400 }),
-        rec({ recordedAt: "2026-05-28T22:00:00.000Z", totalTokens: 200 })
+        rec({ recordedAt: "2026-05-28T22:00:00.000Z", totalTokens: 200 }),
       ],
-      { now: NOW }
+      { now: NOW },
     );
     const last = HEATMAP_DAYS - 1;
     expect(matrix.rows[0]?.cells[last]?.tokens).toBe(100); // night
@@ -90,10 +85,7 @@ describe("buildHeatmap — only subscription records, bucketed by window", () =>
   });
 
   it("drops records older than the 30-day window", () => {
-    const matrix = buildHeatmap(
-      [rec({ recordedAt: "2026-01-01T12:00:00.000Z", totalTokens: 999 })],
-      { now: NOW }
-    );
+    const matrix = buildHeatmap([rec({ recordedAt: "2026-01-01T12:00:00.000Z", totalTokens: 999 })], { now: NOW });
     expect(matrix.empty).toBe(true);
   });
 
@@ -101,9 +93,9 @@ describe("buildHeatmap — only subscription records, bucketed by window", () =>
     const matrix = buildHeatmap(
       [
         rec({ recordedAt: "2026-05-28T12:00:00.000Z", totalTokens: 100 }),
-        rec({ recordedAt: "2026-05-28T13:00:00.000Z", totalTokens: 150 })
+        rec({ recordedAt: "2026-05-28T13:00:00.000Z", totalTokens: 150 }),
       ],
-      { now: NOW }
+      { now: NOW },
     );
     expect(matrix.rows[2]?.cells[HEATMAP_DAYS - 1]?.tokens).toBe(250);
   });
@@ -114,9 +106,9 @@ describe("buildHeatmap — fill normalization + avg-fill", () => {
     const matrix = buildHeatmap(
       [
         rec({ recordedAt: "2026-05-28T12:00:00.000Z", totalTokens: 1000 }), // peak (midday)
-        rec({ recordedAt: "2026-05-28T02:00:00.000Z", totalTokens: 250 }) // night = 1/4 fill
+        rec({ recordedAt: "2026-05-28T02:00:00.000Z", totalTokens: 250 }), // night = 1/4 fill
       ],
-      { now: NOW }
+      { now: NOW },
     );
     expect(matrix.peakCellTokens).toBe(1000);
     const last = HEATMAP_DAYS - 1;
@@ -126,10 +118,7 @@ describe("buildHeatmap — fill normalization + avg-fill", () => {
 
   it("computes per-window avg-fill across the 30 day-cells", () => {
     // One full-peak midday cell → that window's avg = 1/30 of the grid.
-    const matrix = buildHeatmap(
-      [rec({ recordedAt: "2026-05-28T12:00:00.000Z", totalTokens: 1000 })],
-      { now: NOW }
-    );
+    const matrix = buildHeatmap([rec({ recordedAt: "2026-05-28T12:00:00.000Z", totalTokens: 1000 })], { now: NOW });
     expect(matrix.rows[2]?.avgFill).toBeCloseTo(1 / HEATMAP_DAYS);
     // Untouched windows average 0.
     expect(matrix.rows[0]?.avgFill).toBe(0);

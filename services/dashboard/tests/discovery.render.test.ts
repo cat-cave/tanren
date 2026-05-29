@@ -9,14 +9,20 @@ import type pg from "pg";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/main.js";
 
-const ORG = { id: "org_acme", kind: "github_org", login: "cat-cave", displayName: "Cat Cave", role: "org:admin" };
+const ORG = {
+  id: "org_acme",
+  kind: "github_org",
+  login: "cat-cave",
+  displayName: "Cat Cave",
+  role: "org:admin",
+};
 const PROJECT = {
   projectId: "project_easy",
   name: "tanren-fixture-easy",
   repoUrl: "https://github.com/cat-cave/tanren-fixture-easy",
   defaultBranch: "main",
   runnerImage: null,
-  allocator: "local_docker"
+  allocator: "local_docker",
 };
 
 const CLASSIFY_RESULT = {
@@ -30,23 +36,62 @@ const CLASSIFY_RESULT = {
       acceptanceCriteria: ["exports csv"],
       dependsOn: ["s_done"],
       priority: "P1",
-      estLabel: "2h · $0.45"
-    }
+      estLabel: "2h · $0.45",
+    },
   ],
   placements: [
-    { kind: "slot_after", label: "slot in after current p1 work", eta: "ready ≈ 2 weeks", sideEffects: "no other timelines move", priority: "P2", recommended: false, risk: false },
-    { kind: "jump_backlog", label: "jump the p1 backlog", eta: "ready ≈ 3 days", sideEffects: "next milestone slips ~2 days", priority: "P1", recommended: true, risk: false },
-    { kind: "interrupt", label: "interrupt now", eta: "ready ≈ 4 hours", sideEffects: "pauses current p0 — not recommended", priority: "P0", recommended: false, risk: true }
+    {
+      kind: "slot_after",
+      label: "slot in after current p1 work",
+      eta: "ready ≈ 2 weeks",
+      sideEffects: "no other timelines move",
+      priority: "P2",
+      recommended: false,
+      risk: false,
+    },
+    {
+      kind: "jump_backlog",
+      label: "jump the p1 backlog",
+      eta: "ready ≈ 3 days",
+      sideEffects: "next milestone slips ~2 days",
+      priority: "P1",
+      recommended: true,
+      risk: false,
+    },
+    {
+      kind: "interrupt",
+      label: "interrupt now",
+      eta: "ready ≈ 4 hours",
+      sideEffects: "pauses current p0 — not recommended",
+      priority: "P0",
+      recommended: false,
+      risk: true,
+    },
   ],
   deltas: [
-    { title: "personas", kind: "impact", count: "1 impacted", deltas: ["sales manager · gains 1 behavior"] },
-    { title: "specs", kind: "add", count: "1 proposed", deltas: ["add csv export · P1 · 2h"] }
+    {
+      title: "personas",
+      kind: "impact",
+      count: "1 impacted",
+      deltas: ["sales manager · gains 1 behavior"],
+    },
+    { title: "specs", kind: "add", count: "1 proposed", deltas: ["add csv export · P1 · 2h"] },
   ],
-  readSummary: "grounded on 1 existing spec(s)"
+  readSummary: "grounded on 1 existing spec(s)",
 };
 
 const ACCEPT_RESULT = {
-  accepted: [{ proposalId: "p1", spec: { specId: "spec_new1", projectId: "project_easy", title: "add csv export to the stats page", status: "pending" } }]
+  accepted: [
+    {
+      proposalId: "p1",
+      spec: {
+        specId: "spec_new1",
+        projectId: "project_easy",
+        title: "add csv export to the stats page",
+        status: "pending",
+      },
+    },
+  ],
 };
 
 function stubPool(): pg.Pool {
@@ -57,12 +102,17 @@ function mockOrchestrator(): void {
   vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input.toString();
     const method = init?.method ?? "GET";
-    if (url.endsWith("/auth/me")) return new Response(JSON.stringify({ userId: "u1", csrfToken: "c", expiresAt: "2030-01-01" }), { status: 200 });
+    if (url.endsWith("/auth/me"))
+      return new Response(JSON.stringify({ userId: "u1", csrfToken: "c", expiresAt: "2030-01-01" }), { status: 200 });
     if (url.endsWith("/orgs")) return new Response(JSON.stringify({ orgs: [ORG] }), { status: 200 });
-    if (/\/orgs\/[^/]+\/projects$/.test(url)) return new Response(JSON.stringify({ projects: [PROJECT] }), { status: 200 });
-    if (url.endsWith("/projects/project_easy") && method === "GET") return new Response(JSON.stringify(PROJECT), { status: 200 });
-    if (url.endsWith("/discovery/classify") && method === "POST") return new Response(JSON.stringify(CLASSIFY_RESULT), { status: 200 });
-    if (url.endsWith("/discovery/accept") && method === "POST") return new Response(JSON.stringify(ACCEPT_RESULT), { status: 201 });
+    if (/\/orgs\/[^/]+\/projects$/.test(url))
+      return new Response(JSON.stringify({ projects: [PROJECT] }), { status: 200 });
+    if (url.endsWith("/projects/project_easy") && method === "GET")
+      return new Response(JSON.stringify(PROJECT), { status: 200 });
+    if (url.endsWith("/discovery/classify") && method === "POST")
+      return new Response(JSON.stringify(CLASSIFY_RESULT), { status: 200 });
+    if (url.endsWith("/discovery/accept") && method === "POST")
+      return new Response(JSON.stringify(ACCEPT_RESULT), { status: 201 });
     if (url.endsWith("/healthz")) return new Response("ok", { status: 200 });
     return new Response("not found", { status: 404 });
   });
@@ -117,7 +167,7 @@ describe("discovery classification (POST)", () => {
     const res = await app.request("/projects/project_easy/discovery", {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({ variant: "feature", body: "acme wants csv export" })
+      body: new URLSearchParams({ variant: "feature", body: "acme wants csv export" }),
     });
     const html = await res.text();
     // classification panel is the discovery island.
@@ -150,7 +200,7 @@ describe("discovery accept (POST)", () => {
       who: "dani · ae",
       when: "2h ago",
       glyph: "⌥",
-      body: "csv export"
+      body: "csv export",
     });
     const proposals = JSON.stringify(CLASSIFY_RESULT.proposals);
     const res = await app.request("/projects/project_easy/discovery/accept", {
@@ -161,8 +211,8 @@ describe("discovery accept (POST)", () => {
         insight,
         proposals,
         placementKind: "jump_backlog",
-        placementLabel: "jump the p1 backlog"
-      })
+        placementLabel: "jump the p1 backlog",
+      }),
     });
     const html = await res.text();
     expect(html).toContain("added");
@@ -175,7 +225,13 @@ describe("discovery accept (POST)", () => {
     const res = await app.request("/projects/project_easy/discovery/accept", {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({ variant: "feature", insight: "", proposals: "", placementKind: "slot_after", placementLabel: "" })
+      body: new URLSearchParams({
+        variant: "feature",
+        insight: "",
+        proposals: "",
+        placementKind: "slot_after",
+        placementLabel: "",
+      }),
     });
     const html = await res.text();
     expect(html).toContain("could not read the accepted proposals");

@@ -32,7 +32,7 @@ const SLACK_EMOJI_BY_SEVERITY: Record<NotificationPayload["severity"], string> =
   ok: ":white_check_mark:",
   info: ":information_source:",
   warn: ":warning:",
-  fail: ":rotating_light:"
+  fail: ":rotating_light:",
 };
 
 export class SlackChannel implements NotificationChannel {
@@ -52,13 +52,11 @@ export class SlackChannel implements NotificationChannel {
     const response = await this.fetchImpl(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body
+      body,
     });
     if (!response.ok) {
       const detail = await safeReadText(response);
-      throw new Error(
-        `slack publish failed: ${response.status} ${response.statusText} ${detail}`.trim()
-      );
+      throw new Error(`slack publish failed: ${response.status} ${response.statusText} ${detail}`.trim());
     }
   }
 
@@ -69,9 +67,7 @@ export class SlackChannel implements NotificationChannel {
       return destination;
     }
     if (this.secrets === undefined) {
-      throw new Error(
-        `slack channel needs a secret store to resolve credential ref: ${destination}`
-      );
+      throw new Error(`slack channel needs a secret store to resolve credential ref: ${destination}`);
     }
     const secret = await this.secrets.get(destination);
     if (secret === undefined) {
@@ -91,7 +87,7 @@ function buildSlackMessage(payload: NotificationPayload): SlackMessage {
   const headerText = `${emoji} ${payload.title}`;
   const blocks: unknown[] = [
     { type: "header", text: { type: "plain_text", text: truncate(headerText, 150) } },
-    { type: "section", text: { type: "mrkdwn", text: codeBlock(payload.body) } }
+    { type: "section", text: { type: "mrkdwn", text: codeBlock(payload.body) } },
   ];
   const contextElements = [`*event* ${payload.eventName}`, `*severity* ${payload.severity}`];
   if (payload.tags !== undefined && payload.tags.length > 0) {
@@ -99,7 +95,7 @@ function buildSlackMessage(payload: NotificationPayload): SlackMessage {
   }
   blocks.push({
     type: "context",
-    elements: [{ type: "mrkdwn", text: contextElements.join("  |  ") }]
+    elements: [{ type: "mrkdwn", text: contextElements.join("  |  ") }],
   });
   if (payload.url !== undefined) {
     blocks.push({
@@ -108,9 +104,9 @@ function buildSlackMessage(payload: NotificationPayload): SlackMessage {
         {
           type: "button",
           text: { type: "plain_text", text: "view run" },
-          url: payload.url
-        }
-      ]
+          url: payload.url,
+        },
+      ],
     });
   }
   // `text` is the fallback/notification summary Slack shows in the sidebar.

@@ -26,13 +26,13 @@ const KIND_GLYPH: Record<AuditKind, string> = {
   mutation: "⊘",
   perf: "↗",
   license: "§",
-  stale_specs: "⌬"
+  stale_specs: "⌬",
 };
 
 const CADENCE_LABEL: Record<string, string> = {
   nightly: "nightly · 03:00",
   weekly: "weekly · sun 04:00",
-  monthly: "monthly · 1st 04:00"
+  monthly: "monthly · 1st 04:00",
 };
 
 function WindowFill(props: { columns: WindowFillColumn[] }) {
@@ -61,14 +61,18 @@ function WhyAudits(props: { columns: WindowFillColumn[]; lowNames: string[] }) {
         <div class="wbody">
           {props.lowNames.length > 0 ? (
             <>
-              Your <b class="bad">{names} window{props.lowNames.length > 1 ? "s sit" : " sits"} under 30% filled</b> — you
-              pay for that subscription cap whether you use it or not. Scheduled audits run in those windows: security,
-              dependencies, a11y, mutation tests. They cost nothing extra and surface work before it bites.
+              Your{" "}
+              <b class="bad">
+                {names} window{props.lowNames.length > 1 ? "s sit" : " sits"} under 30% filled
+              </b>{" "}
+              — you pay for that subscription cap whether you use it or not. Scheduled audits run in those windows:
+              security, dependencies, a11y, mutation tests. They cost nothing extra and surface work before it bites.
             </>
           ) : (
             <>
-              Your windows are filling well — scheduled audits can still keep paid-for capacity busy through quieter days
-              (security, dependencies, a11y, mutation) without raising the cap. Findings become candidates automatically.
+              Your windows are filling well — scheduled audits can still keep paid-for capacity busy through quieter
+              days (security, dependencies, a11y, mutation) without raising the cap. Findings become candidates
+              automatically.
             </>
           )}
         </div>
@@ -118,7 +122,9 @@ function AuditRow(props: { job: AuditJob }) {
       <div class="alast">last · {relativeTime(job.lastRun)}</div>
       <div class="row-actions">
         <form method="post" action={`/audits/${job.id}/run`} style="display:contents">
-          <button class="btn ghost" style="font-size:10px" type="submit" data-action="run">run now</button>
+          <button class="btn ghost" style="font-size:10px" type="submit" data-action="run">
+            run now
+          </button>
         </form>
         {toggleForm(job.id, job.enabled)}
       </div>
@@ -197,7 +203,9 @@ function Composer() {
           </label>
         </div>
         <div class="composer-actions">
-          <button class="btn primary notched" type="submit" data-action="create">create audit ↗</button>
+          <button class="btn primary notched" type="submit" data-action="create">
+            create audit ↗
+          </button>
         </div>
       </form>
     </section>
@@ -222,9 +230,17 @@ export function AuditsBody(props: AuditsBodyProps) {
       <AuditsStyles />
       <PageHead
         eyebrow="▮ automation · scheduled audits"
-        title={<>fill the idle <em>windows</em></>}
+        title={
+          <>
+            fill the idle <em>windows</em>
+          </>
+        }
         sub={<>recurring read-only audit passes · run on a schedule · findings become candidates</>}
-        actions={<a class="btn ghost" href="/costs">cost windows ↗</a>}
+        actions={
+          <a class="btn ghost" href="/costs">
+            cost windows ↗
+          </a>
+        }
       />
       <div class="page-body">
         <KpiStrip
@@ -232,11 +248,13 @@ export function AuditsBody(props: AuditsBodyProps) {
             { k: "audit jobs", v: String(jobs.length) },
             { k: "active", v: String(active) },
             { k: "open findings", v: String(open), tone: open > 0 ? "hot" : undefined },
-            { k: "recommended", v: String(props.snapshot.recommended.length) }
+            { k: "recommended", v: String(props.snapshot.recommended.length) },
           ]}
         />
         {props.error !== undefined && (
-          <div class="placeholder-card" style="border-left:2px solid var(--ember-08)">{props.error}</div>
+          <div class="placeholder-card" style="border-left:2px solid var(--ember-08)">
+            {props.error}
+          </div>
         )}
         <WhyAudits columns={props.windowColumns} lowNames={props.lowNames} />
 
@@ -245,7 +263,9 @@ export function AuditsBody(props: AuditsBodyProps) {
             <h3>
               audit <em>jobs</em>
             </h3>
-            <span class="meta">{active} active · {jobs.length} total</span>
+            <span class="meta">
+              {active} active · {jobs.length} total
+            </span>
           </div>
           <div class="audit-jobs">
             {jobs.length === 0 && (
@@ -253,12 +273,16 @@ export function AuditsBody(props: AuditsBodyProps) {
                 No scheduled audits yet — compose one below or schedule a forge-recommended coverage gap.
               </div>
             )}
-            {jobs.map((job) => <AuditRow job={job} />)}
+            {jobs.map((job) => (
+              <AuditRow job={job} />
+            ))}
           </div>
           <div class="audit-foot">
             <span style="color:var(--ember-08);margin-right:6px">↑</span>
-            audits are Answerers — read-only, no diffs. findings route to the{" "}
-            <a href="/inbox">candidate inbox ↗</a> automatically.
+            audits are Answerers — read-only, no diffs. findings route to the <a href="/inbox">
+              candidate inbox ↗
+            </a>{" "}
+            automatically.
           </div>
         </section>
 

@@ -24,7 +24,9 @@ export interface MaterializedOpencodeAuth {
   redacted: true;
 }
 
-export async function materializeOpencodeAuthBundle(input: MaterializeOpencodeAuthInput): Promise<MaterializedOpencodeAuth> {
+export async function materializeOpencodeAuthBundle(
+  input: MaterializeOpencodeAuthInput,
+): Promise<MaterializedOpencodeAuth> {
   const ref = validateOpencodeCredentialRef(input.ref);
   const secret = await input.secrets.get(ref);
   if (secret === undefined) {
@@ -33,7 +35,11 @@ export async function materializeOpencodeAuthBundle(input: MaterializeOpencodeAu
   const bundle = validateOpencodeAuthBundle(secret.value);
   const dataHome = opencodeDataHomeForRun(input.runId, input.baseDir);
   const command = buildOpencodeAuthMaterializationCommand(dataHome);
-  const result = await input.ssh.run(input.target, { command, stdin: bundle.authJson, timeoutMs: input.timeoutMs ?? 30_000 });
+  const result = await input.ssh.run(input.target, {
+    command,
+    stdin: bundle.authJson,
+    timeoutMs: input.timeoutMs ?? 30_000,
+  });
   if (result.failure !== undefined) {
     throw new Error(`opencode credential materialization failed: ${failureMessage(result.failure)}`);
   }
@@ -60,6 +66,6 @@ export function buildOpencodeAuthMaterializationCommand(dataHome: string): strin
     "umask 077",
     `mkdir -p ${quoteSshShellArg(`${dataHome}/opencode`)}`,
     `cat > ${quoteSshShellArg(authPath)}`,
-    `chmod 600 ${quoteSshShellArg(authPath)}`
+    `chmod 600 ${quoteSshShellArg(authPath)}`,
   ].join(" && ");
 }

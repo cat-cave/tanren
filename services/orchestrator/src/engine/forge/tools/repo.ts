@@ -20,12 +20,12 @@ async function loadProjectRepo(
   pool: pg.Pool,
   secrets: SecretStore,
   projectId: string,
-  actor: ActorContext
+  actor: ActorContext,
 ): Promise<{ repo: { owner: string; name: string }; token: string }> {
   await assertProjectAccess(pool, projectId, actor);
   const result = await pool.query<{ repo_url: string; config: Record<string, unknown> | null }>(
     "SELECT repo_url, config FROM projects WHERE project_id = $1",
-    [projectId]
+    [projectId],
   );
   const row = result.rows[0];
   if (row === undefined) {
@@ -65,19 +65,23 @@ export interface RepoReadFileResult {
 export async function repoReadFile(
   deps: RepoToolDeps,
   args: { projectId: string; path: string },
-  actor: ActorContext
+  actor: ActorContext,
 ): Promise<RepoReadFileResult> {
   const { repo, token } = await loadProjectRepo(deps.pool, deps.secrets, args.projectId, actor);
   const response = await deps.githubHttp.request({
     method: "GET",
     path: `/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}/contents/${encodeRepoPath(args.path)}`,
-    token
+    token,
   });
   if (response.status === 404) {
     return { path: args.path, present: false };
   }
   if (response.status !== 200) {
-    return { path: args.path, present: false, preview: `repo lookup failed: HTTP ${response.status}` };
+    return {
+      path: args.path,
+      present: false,
+      preview: `repo lookup failed: HTTP ${response.status}`,
+    };
   }
   const body = response.body as { content?: string; encoding?: string; size?: number } | undefined;
   if (body === undefined || typeof body !== "object") {
@@ -99,7 +103,7 @@ export async function repoReadFile(
     path: args.path,
     present: true,
     size: typeof body.size === "number" ? body.size : content.length,
-    preview: content.slice(0, 8 * 1024)
+    preview: content.slice(0, 8 * 1024),
   };
 }
 
@@ -110,7 +114,7 @@ export interface RepoGrepResult {
 export async function repoGrep(
   deps: RepoToolDeps,
   args: { projectId: string; pattern: string },
-  actor: ActorContext
+  actor: ActorContext,
 ): Promise<RepoGrepResult> {
   const { repo, token } = await loadProjectRepo(deps.pool, deps.secrets, args.projectId, actor);
   // GitHub Code Search returns at most 100 results per request and only
@@ -119,7 +123,7 @@ export async function repoGrep(
   const response = await deps.githubHttp.request({
     method: "GET",
     path: `/search/code?q=${encodeURIComponent(query)}`,
-    token
+    token,
   });
   if (response.status !== 200) {
     return { matches: [] };
@@ -150,13 +154,13 @@ export interface RepoIssueResult {
 export async function repoReadIssue(
   deps: RepoToolDeps,
   args: { projectId: string; number: number },
-  actor: ActorContext
+  actor: ActorContext,
 ): Promise<RepoIssueResult> {
   const { repo, token } = await loadProjectRepo(deps.pool, deps.secrets, args.projectId, actor);
   const response = await deps.githubHttp.request({
     method: "GET",
     path: `/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}/issues/${args.number}`,
-    token
+    token,
   });
   if (response.status !== 200) {
     throw new ToolAccessDeniedError(`issue lookup failed: HTTP ${response.status}`);
@@ -169,6 +173,6 @@ export async function repoReadIssue(
     title: typeof body?.title === "string" ? body.title : "",
     state: typeof body?.state === "string" ? body.state : "unknown",
     body: typeof body?.body === "string" ? body.body : null,
-    url: typeof body?.html_url === "string" ? body.html_url : ""
+    url: typeof body?.html_url === "string" ? body.html_url : "",
   };
 }

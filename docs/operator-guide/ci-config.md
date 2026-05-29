@@ -27,15 +27,15 @@ requires touching orchestrator code — only the repo's `tanren-ci.yml`.
 ## Schema
 
 ```yaml
-version: 1                    # required; literal 1
+version: 1 # required; literal 1
 
-bootstrap:                    # optional
+bootstrap: # optional
   run: "pnpm install --frozen-lockfile"
 
-tiers:                        # required; `fast` and `slow` are mandatory
-  fast:                       # a tier is a non-empty list of named steps
-    - name: lint              # step name (free text, non-empty)
-      run: "pnpm lint"        # shell command run verbatim by the consumer
+tiers: # required; `fast` and `slow` are mandatory
+  fast: # a tier is a non-empty list of named steps
+    - name: lint # step name (free text, non-empty)
+      run: "pnpm lint" # shell command run verbatim by the consumer
     - name: typecheck
       run: "pnpm typecheck"
   slow:
@@ -46,9 +46,9 @@ tiers:                        # required; `fast` and `slow` are mandatory
   #   - name: e2e
   #     run: "pnpm test:e2e"
 
-when:                         # required; every declared tier MUST appear here
+when: # required; every declared tier MUST appear here
   fast:
-    - per_iteration           # valid points: per_iteration | pre_audit | pre_merge
+    - per_iteration # valid points: per_iteration | pre_audit | pre_merge
   slow:
     - pre_audit
     - pre_merge
@@ -56,12 +56,12 @@ when:                         # required; every declared tier MUST appear here
 
 ### Fields
 
-| Field          | Required | Description                                                                                       |
-| -------------- | -------- | ------------------------------------------------------------------------------------------------- |
-| `version`      | yes      | Schema version. Must be the literal `1`.                                                          |
-| `bootstrap.run`| no       | Install/provision command run once before any tier. Read by P3-0006 workspace bootstrap.         |
-| `tiers`        | yes      | Map of tier name to a non-empty list of `{ name, run }` steps. `fast` and `slow` are required.   |
-| `when`         | yes      | Map of tier name to a non-empty list of lifecycle points. Every declared tier must have an entry. |
+| Field           | Required | Description                                                                                       |
+| --------------- | -------- | ------------------------------------------------------------------------------------------------- |
+| `version`       | yes      | Schema version. Must be the literal `1`.                                                          |
+| `bootstrap.run` | no       | Install/provision command run once before any tier. Read by P3-0006 workspace bootstrap.          |
+| `tiers`         | yes      | Map of tier name to a non-empty list of `{ name, run }` steps. `fast` and `slow` are required.    |
+| `when`          | yes      | Map of tier name to a non-empty list of lifecycle points. Every declared tier must have an entry. |
 
 ### Lifecycle points
 
@@ -90,10 +90,10 @@ values — not arbitrary YAML.)
 If a repo ships no `tanren-ci.yml`, `resolveCiConfig(undefined)` returns a
 built-in default that mirrors this monorepo's own conventions:
 
-| Tier   | Steps                            | Runs at               |
-| ------ | -------------------------------- | --------------------- |
-| `fast` | `lint`, `typecheck`, `unit`      | `per_iteration`       |
-| `slow` | `build`, `test`                  | `pre_audit`, `pre_merge` |
+| Tier   | Steps                       | Runs at                  |
+| ------ | --------------------------- | ------------------------ |
+| `fast` | `lint`, `typecheck`, `unit` | `per_iteration`          |
+| `slow` | `build`, `test`             | `pre_audit`, `pre_merge` |
 
 The default `bootstrap.run` is `pnpm install --frozen-lockfile`.
 

@@ -21,7 +21,7 @@ const defaultNote: UsageNote = (message) => {
 export class SshCodexbarUsageMonitor implements UsageMonitor {
   constructor(
     private readonly ssh: SshSubstrate,
-    private readonly note: UsageNote = defaultNote
+    private readonly note: UsageNote = defaultNote,
   ) {}
 
   async readWindowState(input: {
@@ -30,7 +30,10 @@ export class SshCodexbarUsageMonitor implements UsageMonitor {
     target: SshTarget;
     timeoutMs: number;
   }): Promise<WindowUsage | null> {
-    const command = buildCodexbarUsageCommand({ provider: input.provider, codexHome: input.codexHome });
+    const command = buildCodexbarUsageCommand({
+      provider: input.provider,
+      codexHome: input.codexHome,
+    });
     const result = await this.ssh.run(input.target, { command, timeoutMs: input.timeoutMs });
     if (!usableResult(result, "codexbar", input.provider, this.note)) {
       return null;
@@ -44,7 +47,7 @@ export class SshCodexbarUsageMonitor implements UsageMonitor {
 export class SshCcusageAccountant implements UsageAccountant {
   constructor(
     private readonly ssh: SshSubstrate,
-    private readonly note: UsageNote = defaultNote
+    private readonly note: UsageNote = defaultNote,
   ) {}
 
   async readAccounting(input: {
@@ -70,13 +73,15 @@ export function buildCodexbarUsageCommand(input: { provider: string; codexHome: 
     "--provider",
     quoteSshShellArg(input.provider),
     "--source cli",
-    "--format json"
+    "--format json",
   ].join(" ");
 }
 
 // `CODEX_HOME=<q> ccusage <cli> --json`
 export function buildCcusageCommand(input: { cli: string; codexHome: string }): string {
-  return [`CODEX_HOME=${quoteSshShellArg(input.codexHome)}`, "ccusage", quoteSshShellArg(input.cli), "--json"].join(" ");
+  return [`CODEX_HOME=${quoteSshShellArg(input.codexHome)}`, "ccusage", quoteSshShellArg(input.cli), "--json"].join(
+    " ",
+  );
 }
 
 // A non-zero exit, a timeout, or an SSH failure is "no data" (return null) plus

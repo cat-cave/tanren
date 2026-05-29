@@ -34,11 +34,17 @@ import type { ShellContext } from "../../../app/shell.js";
 import { GreenfieldBody } from "../../../components/onboarding/new/GreenfieldBody.js";
 
 function newClient(c: Context, deps: ShellDeps): OnboardingNewClient {
-  return new OnboardingNewClient({ orchestratorUrl: deps.orchestratorUrl, cookieHeader: c.req.header("cookie") });
+  return new OnboardingNewClient({
+    orchestratorUrl: deps.orchestratorUrl,
+    cookieHeader: c.req.header("cookie"),
+  });
 }
 
 function orchestratorClient(c: Context, deps: ShellDeps): OrchestratorClient {
-  return new OrchestratorClient({ orchestratorUrl: deps.orchestratorUrl, cookieHeader: c.req.header("cookie") });
+  return new OrchestratorClient({
+    orchestratorUrl: deps.orchestratorUrl,
+    cookieHeader: c.req.header("cookie"),
+  });
 }
 
 function parseCapture(raw: unknown): InterviewCapture {
@@ -61,7 +67,7 @@ function noOrgBody(error?: string) {
         suggestions: [],
         priorAnswer: "",
         capture: emptyCapture(),
-        complete: false
+        complete: false,
       }}
       error={error ?? "no org yet — finish org setup, then start a new project."}
     />
@@ -84,7 +90,7 @@ export function mountGreenfieldOnboarding(app: Hono, deps: ShellDeps): void {
     const { result } = await newClient(c, deps).round(ctx.org.id, {
       round: 1,
       answer: "",
-      capture: emptyCapture()
+      capture: emptyCapture(),
     });
     return renderShell(
       c,
@@ -99,10 +105,10 @@ export function mountGreenfieldOnboarding(app: Hono, deps: ShellDeps): void {
           suggestions: result?.suggestions ?? [],
           priorAnswer: "",
           capture: result?.capture ?? emptyCapture(),
-          complete: result?.complete ?? false
+          complete: result?.complete ?? false,
         }}
         error={result === undefined ? "forge is unreachable — try again." : undefined}
-      />
+      />,
     );
   });
 
@@ -125,7 +131,12 @@ export function mountGreenfieldOnboarding(app: Hono, deps: ShellDeps): void {
     // step 3 advance: the projectId rode forward on the derived-summary form.
     const projectId = String(form["projectId"] ?? "");
     if (projectId === "") {
-      return renderShell(c, ctx, { title: "tanren · new project" }, noOrgBody("lost the derived project — restart the interview."));
+      return renderShell(
+        c,
+        ctx,
+        { title: "tanren · new project" },
+        noOrgBody("lost the derived project — restart the interview."),
+      );
     }
     return renderDerivedStep(c, ctx, deps, 3, projectId);
   });
@@ -150,10 +161,10 @@ async function handleRound(c: Context, ctx: ShellContext, deps: ShellDeps, form:
         suggestions: result?.suggestions ?? [],
         priorAnswer: answer,
         capture: result?.capture ?? capture,
-        complete: result?.complete ?? false
+        complete: result?.complete ?? false,
       }}
       error={result === undefined ? "forge is unreachable — your answer was kept; try again." : undefined}
-    />
+    />,
   );
 }
 
@@ -168,9 +179,17 @@ async function handleDerive(c: Context, ctx: ShellContext, deps: ShellDeps, capt
       { title: "tanren · new project" },
       <GreenfieldBody
         step={1}
-        interview={{ round: 14, totalRounds: 14, say: "Derive failed — try again.", suggestions: [], priorAnswer: "", capture, complete: true }}
+        interview={{
+          round: 14,
+          totalRounds: 14,
+          say: "Derive failed — try again.",
+          suggestions: [],
+          priorAnswer: "",
+          capture,
+          complete: true,
+        }}
         error="could not derive the spec dag — try again."
-      />
+      />,
     );
   }
   return renderDerivedStep(c, ctx, deps, 2, result.projectId, result.projectName);
@@ -183,16 +202,19 @@ async function renderDerivedStep(
   deps: ShellDeps,
   step: 2 | 3,
   projectId: string,
-  projectName?: string
+  projectName?: string,
 ) {
   const orgId = ctx.org!.id;
   const dag = await loadDag(c, deps, orgId, projectId);
-  const name = projectName ?? ctx.projects.find((p: { projectId: string; name: string }) => p.projectId === projectId)?.name ?? "your project";
+  const name =
+    projectName ??
+    ctx.projects.find((p: { projectId: string; name: string }) => p.projectId === projectId)?.name ??
+    "your project";
   return renderShell(
     c,
     ctx,
     { title: "tanren · new project" },
-    <GreenfieldBody step={step} derived={{ projectId, projectName: name, dag }} />
+    <GreenfieldBody step={step} derived={{ projectId, projectName: name, dag }} />,
   );
 }
 
@@ -205,7 +227,16 @@ async function loadDag(c: Context, deps: ShellDeps, orgId: string, projectId: st
       edges: [],
       milestones: [],
       attention: [],
-      counts: { total: 0, done: 0, live: 0, review: 0, blocked: 0, queued: 0, criticalPath: 0, behaviors: 0 }
+      counts: {
+        total: 0,
+        done: 0,
+        live: 0,
+        review: 0,
+        blocked: 0,
+        queued: 0,
+        criticalPath: 0,
+        behaviors: 0,
+      },
     };
   }
 }

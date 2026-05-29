@@ -63,23 +63,21 @@ export class TwilioChannel implements NotificationChannel {
     const form = new URLSearchParams({
       To: target.destination,
       From: fromNumber,
-      Body: buildSmsBody(payload)
+      Body: buildSmsBody(payload),
     });
     const auth = Buffer.from(`${accountSid}:${authToken}`).toString("base64");
     const response = await this.fetchImpl(url, {
       method: "POST",
       headers: {
         "Content-Type": "application/x-www-form-urlencoded",
-        Authorization: `Basic ${auth}`
+        Authorization: `Basic ${auth}`,
       },
-      body: form.toString()
+      body: form.toString(),
     });
     // Twilio returns 201 Created on a queued message.
     if (!response.ok) {
       const detail = await safeReadText(response);
-      throw new Error(
-        `twilio publish failed: ${response.status} ${response.statusText} ${detail}`.trim()
-      );
+      throw new Error(`twilio publish failed: ${response.status} ${response.statusText} ${detail}`.trim());
     }
   }
 

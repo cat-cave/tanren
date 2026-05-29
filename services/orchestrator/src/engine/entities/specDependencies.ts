@@ -12,7 +12,7 @@ type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 export const SpecDependencyRow = z.object({
   fromSpecId: z.string().min(1),
   toSpecId: z.string().min(1),
-  createdAt: z.date()
+  createdAt: z.date(),
 });
 export type SpecDependencyRow = z.infer<typeof SpecDependencyRow>;
 
@@ -28,7 +28,7 @@ function decodeDependencyRow(raw: RawSpecDependencyRow): SpecDependencyRow {
   return SpecDependencyRow.parse({
     fromSpecId: raw.from_spec_id,
     toSpecId: raw.to_spec_id,
-    createdAt: raw.created_at
+    createdAt: raw.created_at,
   });
 }
 
@@ -50,11 +50,7 @@ export class SelfSpecDependencyError extends Error {
 // `toSpecId` (following `from -> to` edges forward). If it reaches
 // `fromSpecId`, adding (fromSpecId -> toSpecId) would close a cycle; we throw
 // with the full path so operators can see exactly which edges to remove.
-export async function assertNoCycle(
-  client: QueryClient,
-  fromSpecId: string,
-  toSpecId: string
-): Promise<void> {
+export async function assertNoCycle(client: QueryClient, fromSpecId: string, toSpecId: string): Promise<void> {
   if (fromSpecId === toSpecId) {
     throw new SelfSpecDependencyError(fromSpecId);
   }
@@ -86,7 +82,7 @@ export async function assertNoCycle(
       // reverse, [toSpecId, ..., fromSpecId]. Prepending fromSpecId shows the
       // new edge that would close the cycle.
       // Manual reverse to avoid both Array#reverse (which mutates) and
-       // Array#toReversed (which needs a newer lib target).
+      // Array#toReversed (which needs a newer lib target).
       const existingChain: string[] = [];
       for (let i = backtrack.length - 1; i >= 0; i--) {
         const entry = backtrack[i];
@@ -96,10 +92,7 @@ export async function assertNoCycle(
       throw new CyclicSpecDependencyError(cyclePath);
     }
 
-    const result = await client.query(
-      `SELECT to_spec_id FROM spec_dependencies WHERE from_spec_id = $1`,
-      [current]
-    );
+    const result = await client.query(`SELECT to_spec_id FROM spec_dependencies WHERE from_spec_id = $1`, [current]);
     for (const row of result.rows as Array<{ to_spec_id: unknown }>) {
       const next = String(row.to_spec_id);
       if (!visited.has(next)) {
@@ -114,7 +107,7 @@ export const SpecDependencyStore = {
   async insert(
     client: QueryClient,
     args: { fromSpecId: string; toSpecId: string },
-    _actor: ActorContext
+    _actor: ActorContext,
   ): Promise<SpecDependencyRow> {
     await assertNoCycle(client, args.fromSpecId, args.toSpecId);
     const result = await client.query(
@@ -122,7 +115,7 @@ export const SpecDependencyStore = {
        VALUES ($1, $2)
        ON CONFLICT (from_spec_id, to_spec_id) DO UPDATE SET created_at = spec_dependencies.created_at
        RETURNING ${SELECT_DEPENDENCY_COLUMNS}`,
-      [args.fromSpecId, args.toSpecId]
+      [args.fromSpecId, args.toSpecId],
     );
     return decodeDependencyRow(result.rows[0] as RawSpecDependencyRow);
   },
@@ -130,39 +123,31 @@ export const SpecDependencyStore = {
   async remove(
     client: QueryClient,
     args: { fromSpecId: string; toSpecId: string },
-    _actor: ActorContext
+    _actor: ActorContext,
   ): Promise<void> {
-    await client.query(
-      `DELETE FROM spec_dependencies WHERE from_spec_id = $1 AND to_spec_id = $2`,
-      [args.fromSpecId, args.toSpecId]
-    );
+    await client.query(`DELETE FROM spec_dependencies WHERE from_spec_id = $1 AND to_spec_id = $2`, [
+      args.fromSpecId,
+      args.toSpecId,
+    ]);
   },
 
-  async listOutgoing(
-    client: QueryClient,
-    fromSpecId: string,
-    _actor: ActorContext
-  ): Promise<SpecDependencyRow[]> {
+  async listOutgoing(client: QueryClient, fromSpecId: string, _actor: ActorContext): Promise<SpecDependencyRow[]> {
     const result = await client.query(
       `SELECT ${SELECT_DEPENDENCY_COLUMNS} FROM spec_dependencies
        WHERE from_spec_id = $1
        ORDER BY to_spec_id`,
-      [fromSpecId]
+      [fromSpecId],
     );
     return result.rows.map((row) => decodeDependencyRow(row as RawSpecDependencyRow));
   },
 
-  async listIncoming(
-    client: QueryClient,
-    toSpecId: string,
-    _actor: ActorContext
-  ): Promise<SpecDependencyRow[]> {
+  async listIncoming(client: QueryClient, toSpecId: string, _actor: ActorContext): Promise<SpecDependencyRow[]> {
     const result = await client.query(
       `SELECT ${SELECT_DEPENDENCY_COLUMNS} FROM spec_dependencies
        WHERE to_spec_id = $1
        ORDER BY from_spec_id`,
-      [toSpecId]
+      [toSpecId],
     );
     return result.rows.map((row) => decodeDependencyRow(row as RawSpecDependencyRow));
-  }
+  },
 } as const;

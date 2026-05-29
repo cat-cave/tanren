@@ -8,7 +8,7 @@ import {
   NotificationRouteCreateInput as NotificationRouteCreateInputSchema,
   NotificationRouteRow as NotificationRouteRowSchema,
   NotificationTargetCreateInput as NotificationTargetCreateInputSchema,
-  NotificationTargetRow as NotificationTargetRowSchema
+  NotificationTargetRow as NotificationTargetRowSchema,
 } from "./schemas.js";
 
 // P2A-0017 repository layer for `notification_targets` and
@@ -63,7 +63,7 @@ function decodeTargetRow(raw: RawTargetRow): NotificationTargetRow {
     enabled: raw.enabled === 1 || raw.enabled === true,
     weekendMute: raw.weekend_mute === 1 || raw.weekend_mute === true,
     createdAt: raw.created_at,
-    updatedAt: raw.updated_at
+    updatedAt: raw.updated_at,
   });
 }
 
@@ -75,15 +75,12 @@ function decodeRouteRow(raw: RawRouteRow): NotificationRouteRow {
     enabled: raw.enabled === 1 || raw.enabled === true,
     minSeverity: raw.min_severity,
     createdAt: raw.created_at,
-    updatedAt: raw.updated_at
+    updatedAt: raw.updated_at,
   });
 }
 
 export const NotificationTargetStore = {
-  async create(
-    client: QueryClient,
-    input: NotificationTargetCreateInput
-  ): Promise<NotificationTargetRow> {
+  async create(client: QueryClient, input: NotificationTargetCreateInput): Promise<NotificationTargetRow> {
     const parsed = NotificationTargetCreateInputSchema.parse(input);
     const id = parsed.id ?? `notif_target_${randomUUID()}`;
     const result = await client.query(
@@ -100,17 +97,14 @@ export const NotificationTargetStore = {
         parsed.destination,
         parsed.label,
         parsed.enabled ? 1 : 0,
-        parsed.weekendMute ? 1 : 0
-      ]
+        parsed.weekendMute ? 1 : 0,
+      ],
     );
     return decodeTargetRow(result.rows[0] as RawTargetRow);
   },
 
   async get(client: QueryClient, id: string): Promise<NotificationTargetRow | undefined> {
-    const result = await client.query(
-      `SELECT ${TARGET_COLUMNS} FROM notification_targets WHERE id = $1`,
-      [id]
-    );
+    const result = await client.query(`SELECT ${TARGET_COLUMNS} FROM notification_targets WHERE id = $1`, [id]);
     const row = result.rows[0];
     if (row === undefined) return undefined;
     return decodeTargetRow(row as RawTargetRow);
@@ -119,17 +113,14 @@ export const NotificationTargetStore = {
   async listForOrg(client: QueryClient, orgId: string): Promise<NotificationTargetRow[]> {
     const result = await client.query(
       `SELECT ${TARGET_COLUMNS} FROM notification_targets WHERE org_id = $1 ORDER BY scope, channel_kind, label`,
-      [orgId]
+      [orgId],
     );
     return result.rows.map((row) => decodeTargetRow(row as RawTargetRow));
-  }
+  },
 } as const;
 
 export const NotificationRouteStore = {
-  async create(
-    client: QueryClient,
-    input: NotificationRouteCreateInput
-  ): Promise<NotificationRouteRow> {
+  async create(client: QueryClient, input: NotificationRouteCreateInput): Promise<NotificationRouteRow> {
     const parsed = NotificationRouteCreateInputSchema.parse(input);
     const id = parsed.id ?? `notif_route_${randomUUID()}`;
     const result = await client.query(
@@ -137,7 +128,7 @@ export const NotificationRouteStore = {
          (id, target_id, event_name, enabled, min_severity)
        VALUES ($1, $2, $3, $4, $5)
        RETURNING ${ROUTE_COLUMNS}`,
-      [id, parsed.targetId, parsed.eventName, parsed.enabled ? 1 : 0, parsed.minSeverity]
+      [id, parsed.targetId, parsed.eventName, parsed.enabled ? 1 : 0, parsed.minSeverity],
     );
     return decodeRouteRow(result.rows[0] as RawRouteRow);
   },
@@ -147,14 +138,14 @@ export const NotificationRouteStore = {
   // event without joining at query time.
   async listForOrgEvent(
     client: QueryClient,
-    args: { orgId: string; eventName: string }
+    args: { orgId: string; eventName: string },
   ): Promise<NotificationRouteRow[]> {
     const result = await client.query(
       `SELECT ${qualifiedRouteColumns()}
          FROM notification_routes r
          JOIN notification_targets t ON r.target_id = t.id
         WHERE t.org_id = $1 AND r.event_name = $2`,
-      [args.orgId, args.eventName]
+      [args.orgId, args.eventName],
     );
     return result.rows.map((row) => decodeRouteRow(row as RawRouteRow));
   },
@@ -162,10 +153,10 @@ export const NotificationRouteStore = {
   async listForTarget(client: QueryClient, targetId: string): Promise<NotificationRouteRow[]> {
     const result = await client.query(
       `SELECT ${ROUTE_COLUMNS} FROM notification_routes WHERE target_id = $1 ORDER BY event_name`,
-      [targetId]
+      [targetId],
     );
     return result.rows.map((row) => decodeRouteRow(row as RawRouteRow));
-  }
+  },
 } as const;
 
 function qualifiedRouteColumns(): string {
@@ -193,13 +184,7 @@ export const NotificationDispatchLog = {
     await client.query(
       `INSERT INTO notifications (channel, payload, status, attempts, sent_at)
        VALUES ($1, $2::jsonb, $3, $4, $5)`,
-      [
-        input.channel,
-        JSON.stringify(input.payload),
-        input.status,
-        input.attempts,
-        input.sentAt
-      ]
+      [input.channel, JSON.stringify(input.payload), input.status, input.attempts, input.sentAt],
     );
-  }
+  },
 } as const;

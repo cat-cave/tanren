@@ -24,7 +24,7 @@ const SIGNAL_FRAGMENTS = [
   "prisma/schema.prisma",
   ".github/workflows/",
   "codeowners",
-  ".mergify.yml"
+  ".mergify.yml",
 ];
 
 function repoApi(repo: GitHubRepository, suffix: string): string {
@@ -82,7 +82,7 @@ export class GithubRepoReader implements RepoReader {
       method: "GET",
       path: repoApi(repo, `/git/trees/${encodeURIComponent(this.deps.defaultBranch)}?recursive=1`),
       token: this.deps.resolved.token,
-      refreshToken: this.deps.resolved.refresh
+      refreshToken: this.deps.resolved.refresh,
     });
     if (response.status !== 200 || typeof response.body !== "object" || response.body === null) {
       return [];
@@ -100,7 +100,7 @@ export class GithubRepoReader implements RepoReader {
       method: "GET",
       path: repoApi(repo, `/contents/${encoded}?ref=${encodeURIComponent(this.deps.defaultBranch)}`),
       token: this.deps.resolved.token,
-      refreshToken: this.deps.resolved.refresh
+      refreshToken: this.deps.resolved.refresh,
     });
     if (response.status !== 200 || typeof response.body !== "object" || response.body === null) {
       return "";

@@ -46,7 +46,7 @@ import {
   type LinearHttpClient,
   type SentryHttpClient,
   type SourceConnector,
-  type TriageAnswerer
+  type TriageAnswerer,
 } from "../../engine/forge/inbox/index.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg } from "../orgs/index.js";
@@ -78,7 +78,7 @@ const CreateSourceBody = z
     detail: z.string().max(200).default(""),
     config: z.record(z.string(), z.unknown()).default({}),
     enabled: z.boolean().default(true),
-    autoRoute: z.boolean().default(false)
+    autoRoute: z.boolean().default(false),
   })
   .strict();
 
@@ -86,7 +86,7 @@ const AcceptBody = z
   .object({
     proposals: z.array(ProposedSpec).min(1),
     placementKind: PlacementKind,
-    placementLabel: z.string().min(1).max(120)
+    placementLabel: z.string().min(1).max(120),
   })
   .strict();
 
@@ -103,34 +103,41 @@ export function createInboxRoutes(options: InboxRoutesOptions) {
       [
         "issues",
         createIssuesConnector({
-          github: createGitHubIssuesConnector({ secrets: options.secrets, githubHttp: options.githubHttp }),
+          github: createGitHubIssuesConnector({
+            secrets: options.secrets,
+            githubHttp: options.githubHttp,
+          }),
           linear: createLinearConnector({
             secrets: options.secrets,
-            linearHttp: options.linearHttp ?? new FetchLinearHttpClient()
+            linearHttp: options.linearHttp ?? new FetchLinearHttpClient(),
           }),
           jira: createJiraConnector({
             secrets: options.secrets,
-            jiraHttp: options.jiraHttp ?? new FetchJiraHttpClient()
-          })
-        })
+            jiraHttp: options.jiraHttp ?? new FetchJiraHttpClient(),
+          }),
+        }),
       ],
       // Sentry is wired under the `errors` source kind (no enum/DB-CHECK change).
       [
         "errors",
         createSentryConnector({
           secrets: options.secrets,
-          sentryHttp: options.sentryHttp ?? new FetchSentryHttpClient()
-        })
-      ]
+          sentryHttp: options.sentryHttp ?? new FetchSentryHttpClient(),
+        }),
+      ],
     ]);
-  const deps: InboxEngineDeps = { pool: options.pool, connectors, ...(answerer !== undefined ? { answerer } : {}) };
+  const deps: InboxEngineDeps = {
+    pool: options.pool,
+    connectors,
+    ...(answerer !== undefined ? { answerer } : {}),
+  };
 
   app.get("/:orgId/inbox", async (c) => {
     const orgId = c.req.param("orgId");
     if (!guard(c, orgId)) return c.json({ error: "org_access_denied" }, 403);
     const [sources, candidates] = await Promise.all([
       listSources(options.pool, orgId),
-      listCandidates(options.pool, orgId)
+      listCandidates(options.pool, orgId),
     ]);
     return c.json({ sources, candidates }, 200);
   });
@@ -172,7 +179,7 @@ export function createInboxRoutes(options: InboxRoutesOptions) {
         proposals: parsed.data.proposals,
         placementKind: parsed.data.placementKind,
         placementLabel: parsed.data.placementLabel,
-        actor
+        actor,
       });
       return c.json(result, 201);
     } catch (error) {
@@ -192,7 +199,7 @@ function registerResolution(
   _pool: pg.Pool,
   verb: string,
   action: (deps: InboxEngineDeps, candidateId: string) => Promise<unknown>,
-  deps: InboxEngineDeps
+  deps: InboxEngineDeps,
 ): void {
   app.post(`/:orgId/inbox/candidates/:id/${verb}`, async (c) => {
     const orgId = c.req.param("orgId");
@@ -216,8 +223,10 @@ function requireActor(c: { var: { actor?: ActorContext } }): ActorContext {
 }
 
 function errorResponse(c: Context, error: unknown, code: string) {
-  if (error instanceof CandidateNotFoundError) return c.json({ error: "candidate_not_found", message: error.message }, 404);
-  if (error instanceof CandidateNotPlaceableError) return c.json({ error: "candidate_not_placeable", message: error.message }, 422);
+  if (error instanceof CandidateNotFoundError)
+    return c.json({ error: "candidate_not_found", message: error.message }, 404);
+  if (error instanceof CandidateNotPlaceableError)
+    return c.json({ error: "candidate_not_placeable", message: error.message }, 422);
   return c.json({ error: code, message: messageOf(error) }, 500);
 }
 

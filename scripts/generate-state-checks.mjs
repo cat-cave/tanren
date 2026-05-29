@@ -33,7 +33,7 @@ process.stdout.write(JSON.stringify(out));
 function dumpEnumsViaTsx() {
   const result = spawnSync("corepack", ["pnpm", "exec", "tsx", "--eval", dumper], {
     cwd: repoRoot,
-    encoding: "utf8"
+    encoding: "utf8",
   });
   if (result.status !== 0) {
     process.stderr.write(result.stderr || "tsx eval failed\n");
@@ -50,7 +50,7 @@ function renderStateEnumsTs(enums) {
     "// The drift check at `scripts/check-schema-drift.sh` and the dedicated state",
     "// drift check confirm this file matches the Zod source.",
     "",
-    "export const stateEnumLists = {"
+    "export const stateEnumLists = {",
   ];
   const entries = Object.entries(enums);
   entries.forEach(([name, descriptor], index) => {

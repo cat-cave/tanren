@@ -12,7 +12,7 @@ export const DEFAULT_WINDOW_PRESSURE_THRESHOLD = 100;
 // (PROJECT_BRIEF §4.3) instead of dispatching a doomed call.
 export function evaluateWindowPressure(
   windows: SubscriptionWindow[],
-  thresholdPercent: number = DEFAULT_WINDOW_PRESSURE_THRESHOLD
+  thresholdPercent: number = DEFAULT_WINDOW_PRESSURE_THRESHOLD,
 ): SubscriptionWindow | null {
   let worst: SubscriptionWindow | null = null;
   for (const window of windows) {

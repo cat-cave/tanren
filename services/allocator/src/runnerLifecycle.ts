@@ -112,17 +112,17 @@ export class RunnerLifecycle {
       env: {
         TANREN_RUNNER_AUTHORIZED_KEY: process.env["TANREN_RUNNER_AUTHORIZED_KEY"] ?? "",
         TANREN_CODEX_HOME_BUNDLE: codexHomeBundle,
-        TANREN_RUNNER_EPHEMERAL: "1"
+        TANREN_RUNNER_EPHEMERAL: "1",
       },
       labels: allocatorLabels(input.runId),
       volumes: [
         { volumeName: workspaceVolume, containerPath: "/workspace" },
-        { volumeName: codexHomeVolume, containerPath: "/tanren-runtime/codex-home" }
+        { volumeName: codexHomeVolume, containerPath: "/tanren-runtime/codex-home" },
       ],
       networkName: this.networkName,
       hostSshPort: this.hostSshPort,
       capAdd: this.capAdd,
-      securityOpt: this.securityOpt
+      securityOpt: this.securityOpt,
     });
     await this.docker.startContainer(containerId);
     const inspected = await this.docker.inspectContainer(containerId);
@@ -144,7 +144,7 @@ export class RunnerLifecycle {
       imageSha: inspected.imageSha,
       vaultRefs: input.vaultRefs,
       createdAt: this.clock(),
-      released: false
+      released: false,
     };
     await this.store.insert(record);
 
@@ -153,7 +153,7 @@ export class RunnerLifecycle {
       sshHost,
       sshPort,
       hostKeyFingerprint,
-      imageSha: inspected.imageSha
+      imageSha: inspected.imageSha,
     };
   }
 
@@ -216,7 +216,7 @@ export class RunnerLifecycle {
       await this.sleep(this.hostKeyReadDelayMs);
     }
     throw new Error(
-      `runner container ${containerId} did not expose an SSH host key in time${lastError instanceof Error ? `: ${lastError.message}` : ""}`
+      `runner container ${containerId} did not expose an SSH host key in time${lastError instanceof Error ? `: ${lastError.message}` : ""}`,
     );
   }
 }
@@ -225,14 +225,14 @@ export function volumeNamesFor(runId: string): { workspace: string; codexHome: s
   const slug = `tanren-runner-${runId}`.replaceAll(/[^A-Za-z0-9_.-]/g, "-");
   return {
     workspace: `${slug}-workspace`,
-    codexHome: `${slug}-codex-home`
+    codexHome: `${slug}-codex-home`,
   };
 }
 
 export function allocatorLabels(runId: string): Record<string, string> {
   return {
     "tanren.managed-by": "allocator",
-    "tanren.run-id": runId
+    "tanren.run-id": runId,
   };
 }
 

@@ -146,7 +146,7 @@ export class FetchGitHubHttpClient implements GitHubHttpClient {
     path: string,
     method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE",
     token: string,
-    body: unknown
+    body: unknown,
   ): Promise<GitHubHttpResponse> {
     const response = await this.fetchImpl(`${this.apiBaseUrl}${path}`, {
       method,
@@ -154,15 +154,15 @@ export class FetchGitHubHttpClient implements GitHubHttpClient {
         Accept: "application/vnd.github+json",
         Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
-        "X-GitHub-Api-Version": "2022-11-28"
+        "X-GitHub-Api-Version": "2022-11-28",
       },
-      body: body === undefined ? undefined : JSON.stringify(body)
+      body: body === undefined ? undefined : JSON.stringify(body),
     });
     const text = await response.text();
     return {
       status: response.status,
       body: text === "" ? undefined : JSON.parse(text),
-      retryAfterMs: rateLimitBackoffMs(response.status, headerGetter(response.headers), this.now())
+      retryAfterMs: rateLimitBackoffMs(response.status, headerGetter(response.headers), this.now()),
     };
   }
 }
@@ -225,8 +225,8 @@ export class GitHubPullRequestService {
         head: input.headBranch,
         base: input.baseBranch,
         body: input.body,
-        draft: true
-      }
+        draft: true,
+      },
     });
     if (created.status === 201) {
       return { ...parsePullRequest(created.body), reused: false };
@@ -241,12 +241,16 @@ export class GitHubPullRequestService {
   }
 
   private async findOpenPullRequest(input: EnsureDraftPullRequestInput): Promise<GitHubPullRequest | undefined> {
-    const query = new URLSearchParams({ state: "open", head: `${input.repo.owner}:${input.headBranch}`, base: input.baseBranch });
+    const query = new URLSearchParams({
+      state: "open",
+      head: `${input.repo.owner}:${input.headBranch}`,
+      base: input.baseBranch,
+    });
     const response = await this.http.request({
       method: "GET",
       path: repoPath(input.repo, `/pulls?${query.toString()}`),
       token: input.token,
-      refreshToken: input.refreshToken
+      refreshToken: input.refreshToken,
     });
     if (response.status !== 200) {
       throw new Error(`GitHub PR lookup failed: HTTP ${response.status}`);
@@ -269,7 +273,7 @@ export class GitHubStatusService {
       method: "GET",
       path: repoPath(input.repo, `/pulls/${input.pullNumber}`),
       token: input.token,
-      refreshToken: input.refreshToken
+      refreshToken: input.refreshToken,
     });
     if (pull.status !== 200) {
       throw new Error(`GitHub PR fetch failed: HTTP ${pull.status}`);
@@ -282,14 +286,14 @@ export class GitHubStatusService {
         method: "GET",
         path: repoPath(input.repo, `/commits/${encodeURIComponent(head.sha)}/check-runs`),
         token: input.token,
-        refreshToken: input.refreshToken
+        refreshToken: input.refreshToken,
       }),
       this.http.request({
         method: "GET",
         path: repoPath(input.repo, `/commits/${encodeURIComponent(head.sha)}/status`),
         token: input.token,
-        refreshToken: input.refreshToken
-      })
+        refreshToken: input.refreshToken,
+      }),
     ]);
     if (checkRuns.status !== 200) {
       throw new Error(`GitHub check-runs fetch failed: HTTP ${checkRuns.status}`);
@@ -299,15 +303,13 @@ export class GitHubStatusService {
     }
 
     const requiredContexts =
-      baseBranch === undefined
-        ? undefined
-        : await this.fetchRequiredContexts({ ...input, baseBranch });
+      baseBranch === undefined ? undefined : await this.fetchRequiredContexts({ ...input, baseBranch });
 
     return {
       head,
       checkRuns: parseCheckRuns(checkRuns.body),
       statuses: parseCommitStatuses(statuses.body),
-      requiredContexts
+      requiredContexts,
     };
   }
 
@@ -327,7 +329,7 @@ export class GitHubStatusService {
       method: "GET",
       path: repoPath(input.repo, `/branches/${encodeURIComponent(input.baseBranch)}/protection/required_status_checks`),
       token: input.token,
-      refreshToken: input.refreshToken
+      refreshToken: input.refreshToken,
     });
     if (response.status === 404) {
       return undefined;
@@ -349,7 +351,9 @@ function parseRequiredContexts(value: unknown): string[] | undefined {
   const checks = object["checks"];
   if (Array.isArray(checks)) {
     const names = checks
-      .map((entry) => (typeof entry === "object" && entry !== null ? (entry as Record<string, unknown>)["context"] : undefined))
+      .map((entry) =>
+        typeof entry === "object" && entry !== null ? (entry as Record<string, unknown>)["context"] : undefined,
+      )
       .filter((name): name is string => typeof name === "string");
     if (names.length > 0) {
       return names;
@@ -374,7 +378,10 @@ export function parseGitHubRepository(repoUrl: string): GitHubRepository {
   throw new Error(`unsupported GitHub repository URL: ${repoUrl}`);
 }
 
-export function parseGitHubPullRequestUrl(prUrl: string): { repo: GitHubRepository; pullNumber: number } {
+export function parseGitHubPullRequestUrl(prUrl: string): {
+  repo: GitHubRepository;
+  pullNumber: number;
+} {
   const match = /^https:\/\/github\.com\/([^/\s]+)\/([^/\s]+)\/pull\/([1-9][0-9]*)\/?$/.exec(prUrl);
   if (match === null) {
     throw new Error(`unsupported GitHub pull request URL: ${prUrl}`);
@@ -398,7 +405,12 @@ function parsePullRequest(value: unknown): GitHubPullRequest {
   if (typeof object["number"] !== "number" || typeof object["html_url"] !== "string") {
     throw new Error("GitHub PR response missing number or html_url");
   }
-  return { number: object["number"], url: object["html_url"], draft: object["draft"] === true, baseBranch: parseBaseBranch(object["base"]) };
+  return {
+    number: object["number"],
+    url: object["html_url"],
+    draft: object["draft"] === true,
+    baseBranch: parseBaseBranch(object["base"]),
+  };
 }
 
 function asPullArray(value: unknown): unknown[] {
@@ -454,7 +466,7 @@ function parseCheckRun(value: unknown): GitHubCheckRun {
     name: object["name"],
     status: object["status"],
     conclusion: typeof object["conclusion"] === "string" ? object["conclusion"] : undefined,
-    url: typeof object["html_url"] === "string" ? object["html_url"] : undefined
+    url: typeof object["html_url"] === "string" ? object["html_url"] : undefined,
   };
 }
 
@@ -480,6 +492,6 @@ function parseCommitStatus(value: unknown): GitHubCommitStatus {
   return {
     context: object["context"],
     state: object["state"],
-    url: typeof object["target_url"] === "string" ? object["target_url"] : undefined
+    url: typeof object["target_url"] === "string" ? object["target_url"] : undefined,
   };
 }

@@ -25,50 +25,50 @@ const CATALOG: ReadonlyArray<AuditRecommendation> = [
     name: "performance budget",
     why: "perf milestones depend on a baseline you're not yet measuring nightly.",
     window: "evening (20–00) · low fill",
-    cadence: "nightly"
+    cadence: "nightly",
   },
   {
     kind: "license",
     name: "license compliance",
     why: "transitive deps can change license class silently — currently unaudited.",
     window: "night (00–05) · low fill",
-    cadence: "weekly"
+    cadence: "weekly",
   },
   {
     kind: "security",
     name: "security scan",
     why: "advisories land daily; a nightly scan surfaces them before they bite.",
     window: "night (00–05) · low fill",
-    cadence: "nightly"
+    cadence: "nightly",
   },
   {
     kind: "deps",
     name: "dependency freshness",
     why: "stale deps accrue silently between releases — a nightly sweep keeps them current.",
     window: "night (00–05) · low fill",
-    cadence: "nightly"
+    cadence: "nightly",
   },
   {
     kind: "a11y",
     name: "accessibility (a11y)",
     why: "contrast + landmark regressions slip past CI; a weekly sweep catches them.",
     window: "night (00–05) · low fill",
-    cadence: "weekly"
+    cadence: "weekly",
   },
   {
     kind: "mutation",
     name: "mutation tests",
     why: "test-suite gaps hide in green CI; mutation runs prove your tests bite.",
     window: "self-host gpu (idle)",
-    cadence: "weekly"
+    cadence: "weekly",
   },
   {
     kind: "stale_specs",
     name: "stale-spec sweep",
     why: "queued specs drift from reality; a monthly sweep flags ones to revisit.",
     window: "night (00–05) · low fill",
-    cadence: "monthly"
-  }
+    cadence: "monthly",
+  },
 ];
 
 // Recommend the kinds the org has no ENABLED job for, capped to the top gaps so

@@ -9,7 +9,16 @@ import { describe, expect, it } from "vitest";
 import type { CiWhen } from "../src/engine/ci/index.js";
 import type { GateOutcome } from "../src/engine/workflow/gate/index.js";
 import { runSubtaskLoop } from "../src/engine/workflow/subtaskLoop.js";
-import { buildPlan, defaultLoopInput, makeAuditor, makeChecker, makePlanner, makeWriter, passingAudit, passingCheck } from "./helpers/plannerLoopHelpers.js";
+import {
+  buildPlan,
+  defaultLoopInput,
+  makeAuditor,
+  makeChecker,
+  makePlanner,
+  makeWriter,
+  passingAudit,
+  passingCheck,
+} from "./helpers/plannerLoopHelpers.js";
 
 const passGate: GateOutcome = { passed: true, results: [] };
 
@@ -17,7 +26,7 @@ function failGate(tier: string, when: CiWhen, failedStep: string): GateOutcome {
   return {
     passed: false,
     results: [],
-    failure: { passed: false, tier, when, failedStep, exitCode: 1, steps: [] }
+    failure: { passed: false, tier, when, failedStep, exitCode: 1, steps: [] },
   };
 }
 
@@ -51,7 +60,7 @@ describe("gate routing in the subtask loop", () => {
     const { runGate, calls } = scriptedGate([failGate("fast", "per_iteration", "lint"), passGate, passGate]);
     const planner = makePlanner([
       buildPlan([{ title: "T1", intent: "first", behaviorIds: ["B1"] }]),
-      buildPlan([{ title: "T2", intent: "second", behaviorIds: ["B1"] }])
+      buildPlan([{ title: "T2", intent: "second", behaviorIds: ["B1"] }]),
     ]);
     const { input, events } = defaultLoopInput({
       runGate,
@@ -59,8 +68,8 @@ describe("gate routing in the subtask loop", () => {
         planner,
         writer: makeWriter(["diff one\n", "diff two\n"]),
         checker: makeChecker([passingCheck, passingCheck]),
-        auditor: makeAuditor([passingAudit])
-      }
+        auditor: makeAuditor([passingAudit]),
+      },
     });
     const outcome = await runSubtaskLoop(input);
 
@@ -76,13 +85,10 @@ describe("gate routing in the subtask loop", () => {
   it("blocks the audit when the slow tier (pre_audit) fails and routes to rework", async () => {
     // First plan: fast passes, slow (pre_audit) fails → rework before audit.
     // Second plan: both pass → audit runs and passes.
-    const { runGate, calls } = scriptedGate([
-      passGate, failGate("slow", "pre_audit", "build"),
-      passGate, passGate
-    ]);
+    const { runGate, calls } = scriptedGate([passGate, failGate("slow", "pre_audit", "build"), passGate, passGate]);
     const planner = makePlanner([
       buildPlan([{ title: "T1", intent: "first", behaviorIds: ["B1"] }]),
-      buildPlan([{ title: "T2", intent: "second", behaviorIds: ["B1"] }])
+      buildPlan([{ title: "T2", intent: "second", behaviorIds: ["B1"] }]),
     ]);
     const auditor = makeAuditor([passingAudit]);
     const { input, events } = defaultLoopInput({
@@ -91,8 +97,8 @@ describe("gate routing in the subtask loop", () => {
         planner,
         writer: makeWriter(["diff one\n", "diff two\n"]),
         checker: makeChecker([passingCheck, passingCheck]),
-        auditor
-      }
+        auditor,
+      },
     });
     const outcome = await runSubtaskLoop(input);
 
@@ -110,12 +116,16 @@ describe("gate routing in the subtask loop", () => {
     const { runGate } = scriptedGate([failGate("fast", "per_iteration", "lint")]);
     const { input } = defaultLoopInput({
       runGate,
-      escapeHatches: { maxPlannerRerunsPerSpec: 1, maxWriterIterPerSubtask: 5, maxRetriesPerTransientFailure: 3 }
+      escapeHatches: {
+        maxPlannerRerunsPerSpec: 1,
+        maxWriterIterPerSubtask: 5,
+        maxRetriesPerTransientFailure: 3,
+      },
     });
     const outcome = await runSubtaskLoop(input);
     expect(outcome).toMatchObject({
       kind: "retry_budget_exhausted",
-      lastRejection: { producer: "gate" }
+      lastRejection: { producer: "gate" },
     });
   });
 

@@ -49,9 +49,9 @@ export function HeatmapPanel(props: HeatmapPanelProps) {
           <span class="meta">5-hour windows · 30d · relative fill</span>
         </div>
         <div class="empty">
-          No subscription-window usage in the last 30 days. Once a run forges with a subscription
-          credential (chatgpt / claude / a bundle), every call lands here and this heatmap shows
-          which windows you're filling — and which paid-for capacity is going unused.
+          No subscription-window usage in the last 30 days. Once a run forges with a subscription credential (chatgpt /
+          claude / a bundle), every call lands here and this heatmap shows which windows you're filling — and which
+          paid-for capacity is going unused.
         </div>
       </section>
     );
@@ -65,9 +65,9 @@ export function HeatmapPanel(props: HeatmapPanelProps) {
         <span class="meta">5-hour windows · 30d · % of peak filled</span>
       </div>
       <div class="hm-intro">
-        Every dark cell is subscription capacity you paid for and didn't use; light cells are windows
-        you filled well. Fill is each window's token volume relative to your busiest window — the
-        pattern reveals where the engine could run harder on capacity you've already bought.
+        Every dark cell is subscription capacity you paid for and didn't use; light cells are windows you filled well.
+        Fill is each window's token volume relative to your busiest window — the pattern reveals where the engine could
+        run harder on capacity you've already bought.
       </div>
       <div class="heatmap-grid">
         <div class="heatmap-labels-y">
@@ -138,25 +138,19 @@ function PatternCallout(props: { matrix: HeatmapMatrix }) {
       <div class="body">
         {low.length > 0 ? (
           <>
-            {capitalize(names)} window{low.length > 1 ? "s" : ""} average{" "}
-            <b class="bad">under 30% fill</b>. You're paying for the subscription window but only
-            filling it during operator-hours. <b class="hot">Scheduled audits could run then</b> —
-            security scans, dependency updates, mutation tests — using subscription capacity you've
-            already paid for.
+            {capitalize(names)} window{low.length > 1 ? "s" : ""} average <b class="bad">under 30% fill</b>. You're
+            paying for the subscription window but only filling it during operator-hours.{" "}
+            <b class="hot">Scheduled audits could run then</b> — security scans, dependency updates, mutation tests —
+            using subscription capacity you've already paid for.
           </>
         ) : (
           <>
-            Every window is averaging healthy fill. <b class="hot">Scheduled overnight audits</b> can
-            still keep paid-for capacity busy through quieter days without raising the cap.
+            Every window is averaging healthy fill. <b class="hot">Scheduled overnight audits</b> can still keep
+            paid-for capacity busy through quieter days without raising the cap.
           </>
         )}
       </div>
-      <button
-        type="button"
-        class="btn primary"
-        data-island-trigger="palette"
-        data-palette-prefill={FORGE_AUDIT_PROMPT}
-      >
+      <button type="button" class="btn primary" data-island-trigger="palette" data-palette-prefill={FORGE_AUDIT_PROMPT}>
         ask forge to schedule overnight audits
       </button>
       {/* P3-0021: direct route to the scheduled-audits library (the surface

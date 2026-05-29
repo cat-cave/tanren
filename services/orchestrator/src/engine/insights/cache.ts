@@ -29,7 +29,7 @@ interface CacheRow {
 
 export async function readFreshInsights(
   pool: Pick<pg.Pool, "query">,
-  options: { projectId: string; kind: InsightKind; now?: Date; cacheFreshnessMs?: number }
+  options: { projectId: string; kind: InsightKind; now?: Date; cacheFreshnessMs?: number },
 ): Promise<Insight[]> {
   const now = options.now ?? new Date();
   const freshness = options.cacheFreshnessMs ?? DEFAULT_THRESHOLDS.cacheFreshnessMs;
@@ -43,7 +43,7 @@ export async function readFreshInsights(
          AND acknowledged_at IS NULL
          AND computed_at > $3
        ORDER BY computed_at DESC`,
-    [options.projectId, options.kind, cutoff]
+    [options.projectId, options.kind, cutoff],
   );
   return result.rows.map(decodeRow);
 }
@@ -59,17 +59,14 @@ interface PayloadEnvelope {
   actions: ReadonlyArray<{ label: string; toolCall: unknown }>;
 }
 
-export async function writeInsights(
-  pool: Pick<pg.Pool, "query">,
-  insights: ReadonlyArray<Insight>
-): Promise<void> {
+export async function writeInsights(pool: Pick<pg.Pool, "query">, insights: ReadonlyArray<Insight>): Promise<void> {
   if (insights.length === 0) return;
   for (const insight of insights) {
     const envelope: PayloadEnvelope = {
       data: insight.payload as unknown as Record<string, unknown>,
       title: insight.title,
       body: insight.body,
-      actions: insight.actions
+      actions: insight.actions,
     };
     await pool.query(
       `INSERT INTO workflow_insights
@@ -84,8 +81,8 @@ export async function writeInsights(
         JSON.stringify(envelope),
         insight.computedAt,
         insight.acknowledgedAt,
-        insight.acknowledgedBy
-      ]
+        insight.acknowledgedBy,
+      ],
     );
   }
 }
@@ -100,13 +97,13 @@ export interface ReadOrComputeOptions {
 
 export async function readFreshOrCompute(
   pool: Pick<pg.Pool, "query">,
-  options: ReadOrComputeOptions
+  options: ReadOrComputeOptions,
 ): Promise<{ insights: Insight[]; source: "cache" | "compute" }> {
   const fresh = await readFreshInsights(pool, {
     projectId: options.projectId,
     kind: options.kind,
     now: options.now,
-    cacheFreshnessMs: options.cacheFreshnessMs
+    cacheFreshnessMs: options.cacheFreshnessMs,
   });
   if (fresh.length > 0) {
     return { insights: fresh, source: "cache" };
@@ -122,13 +119,13 @@ export async function acknowledgeInsight(
   pool: Pick<pg.Pool, "query">,
   insightId: string,
   actorUserId: string,
-  now: Date = new Date()
+  now: Date = new Date(),
 ): Promise<boolean> {
   const result = await pool.query(
     `UPDATE workflow_insights
        SET acknowledged_at = $2, acknowledged_by = $3
        WHERE id = $1 AND acknowledged_at IS NULL`,
-    [insightId, now, actorUserId]
+    [insightId, now, actorUserId],
   );
   return (result.rowCount ?? 0) > 0;
 }
@@ -150,6 +147,6 @@ function decodeRow(row: CacheRow): Insight {
     actions: actions.map((entry) => entry as { label: string; toolCall: unknown }),
     computedAt: row.computed_at,
     acknowledgedAt: row.acknowledged_at,
-    acknowledgedBy: row.acknowledged_by
+    acknowledgedBy: row.acknowledged_by,
   });
 }

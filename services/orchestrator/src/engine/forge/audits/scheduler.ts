@@ -26,7 +26,7 @@ import {
   type AuditFinding,
   type AuditFindingsSummary as Summary,
   type AuditJob,
-  type AuditPassRunner
+  type AuditPassRunner,
 } from "./types.js";
 
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
@@ -56,7 +56,7 @@ const AUDIT_SOURCE_NAME = "scheduled audits";
 
 async function findOrCreateAuditSource(client: QueryClient, orgId: string): Promise<InboxSource> {
   const existing = (await listSources(client, orgId)).find(
-    (s) => s.kind === "scheduled_audit" && s.name === AUDIT_SOURCE_NAME
+    (s) => s.kind === "scheduled_audit" && s.name === AUDIT_SOURCE_NAME,
   );
   if (existing !== undefined) return existing;
   return createSource(client, {
@@ -67,7 +67,7 @@ async function findOrCreateAuditSource(client: QueryClient, orgId: string): Prom
     detail: "auto-routes findings · no manual triage",
     config: {},
     enabled: true,
-    autoRoute: true
+    autoRoute: true,
   });
 }
 
@@ -76,7 +76,11 @@ const SEVERITY_RANK: Record<string, number> = { info: 1, warn: 2, fail: 3 };
 
 export function summarizeFindings(findings: ReadonlyArray<AuditFinding>): Summary {
   if (findings.length === 0) {
-    return AuditFindingsSummary.parse({ count: 0, severity: "ok", note: "clean · no new findings" });
+    return AuditFindingsSummary.parse({
+      count: 0,
+      severity: "ok",
+      note: "clean · no new findings",
+    });
   }
   let worst: AuditFinding["severity"] = "info";
   for (const finding of findings) {
@@ -106,10 +110,10 @@ export async function runAuditJob(deps: AuditSchedulerDeps, job: AuditJob): Prom
           body: finding.body,
           severity: finding.severity,
           sourceKind: source.kind,
-          projectId: job.projectId
+          projectId: job.projectId,
         },
         source,
-        existingSpecs: []
+        existingSpecs: [],
       });
       // System source ⇒ auto_routable ⇒ candidate rests `auto_routed`.
       const status = triage.verdict === "auto_routable" ? "auto_routed" : "triaged";
@@ -122,16 +126,20 @@ export async function runAuditJob(deps: AuditSchedulerDeps, job: AuditJob): Prom
             title: finding.title,
             body: finding.body,
             severity: finding.severity,
-            projectId: job.projectId
+            projectId: job.projectId,
           },
           triage,
-          status
-        )
+          status,
+        ),
       );
     }
   }
 
   const summary = summarizeFindings(findings);
   const updated = await recordAuditRun(deps.pool, job.id, summary, now);
-  return { job: updated ?? { ...job, lastRun: now.toISOString(), findings: summary }, candidates, findings };
+  return {
+    job: updated ?? { ...job, lastRun: now.toISOString(), findings: summary },
+    candidates,
+    findings,
+  };
 }

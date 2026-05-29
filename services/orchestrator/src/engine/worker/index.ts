@@ -19,7 +19,7 @@ export {
   DEFAULT_HEARTBEAT_INTERVAL_MS,
   DEFAULT_LEASE_MS,
   type RunExecutorDeps,
-  type ExecuteJobResult
+  type ExecuteJobResult,
 } from "./runExecutor.js";
 export { RunWorker, type RunWorkerOptions } from "./runWorker.js";
 export {
@@ -27,12 +27,12 @@ export {
   JobReaper,
   type ReapJobsDeps,
   type ReapJobsResult,
-  type JobReaperOptions
+  type JobReaperOptions,
 } from "./jobReaper.js";
 export {
   loadRunExecutionContext,
   RunExecutionContextNotFoundError,
-  type RunExecutionContext
+  type RunExecutionContext,
 } from "./runExecutionContext.js";
 
 /** True when the in-process run worker is enabled (TANREN_RUN_WORKER=1). */
@@ -77,9 +77,9 @@ export function startRunWorker(input: StartRunWorkerInput): RunWorker {
       ssh: input.ssh,
       secrets: input.secrets,
       githubHttp: input.githubHttp,
-      identitySecretRef: input.identitySecretRef
+      identitySecretRef: input.identitySecretRef,
     },
-    { concurrency: workerConcurrencyFromEnv(), ...input.options }
+    { concurrency: workerConcurrencyFromEnv(), ...input.options },
   );
   worker.start();
   // P3-0028: a co-located reaper recovers leases dropped by crashed workers.

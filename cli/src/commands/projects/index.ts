@@ -19,7 +19,7 @@ export async function projectsCreate(argv: string[]): Promise<void> {
     repoUrl: required(args, "repo-url"),
     defaultBranch: optional(args, "default-branch"),
     runnerImage: optional(args, "runner-image"),
-    allocator: optional(args, "allocator")
+    allocator: optional(args, "allocator"),
   });
   jsonOutput(args, result);
 }
@@ -28,9 +28,7 @@ export async function projectsGet(argv: string[]): Promise<void> {
   const args = parseArgs(argv);
   const orgId = required(args, "org-id");
   const projectId = required(args, "project-id");
-  const result = await request(
-    `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}`
-  );
+  const result = await request(`/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}`);
   jsonOutput(args, result);
 }
 
@@ -42,8 +40,8 @@ export async function projectsLink(argv: string[]): Promise<void> {
     `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/link`,
     {
       repoUrl: required(args, "repo-url"),
-      githubCredentialRef: optional(args, "github-credential-ref")
-    }
+      githubCredentialRef: optional(args, "github-credential-ref"),
+    },
   );
   jsonOutput(args, result);
 }

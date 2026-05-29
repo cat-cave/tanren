@@ -25,7 +25,7 @@ import {
   type SentryHttpClient,
   type SentryHttpRequest,
   type SourceConnector,
-  type TriageAnswererContext
+  type TriageAnswererContext,
 } from "../src/engine/forge/inbox/index.js";
 
 const actor: ActorContext = {
@@ -33,7 +33,7 @@ const actor: ActorContext = {
   orgId: "org_a",
   projectId: "project_a",
   scopes: ["platform:admin"],
-  source: "session"
+  source: "session",
 };
 
 const issuesSource: InboxSource = {
@@ -43,9 +43,14 @@ const issuesSource: InboxSource = {
   kind: "issues",
   name: "github · cat-cave",
   detail: "issues labeled spec-candidate",
-  config: { owner: "cat-cave", repo: "app", labels: ["spec-candidate"], staticRef: "credential/github/x" },
+  config: {
+    owner: "cat-cave",
+    repo: "app",
+    labels: ["spec-candidate"],
+    staticRef: "credential/github/x",
+  },
   enabled: true,
-  autoRoute: false
+  autoRoute: false,
 };
 
 const auditSource: InboxSource = {
@@ -54,7 +59,7 @@ const auditSource: InboxSource = {
   kind: "scheduled_audit",
   name: "scheduled audits",
   config: {},
-  autoRoute: true
+  autoRoute: true,
 };
 
 // A Sentry source wired under the `errors` kind (no enum/DB-CHECK change).
@@ -67,7 +72,7 @@ const sentrySource: InboxSource = {
   detail: "unresolved issues",
   config: { org: "cat-cave", project: "app", tokenRef: "credential/sentry/x" },
   enabled: true,
-  autoRoute: false
+  autoRoute: false,
 };
 
 const secrets = new InMemorySecretStore();
@@ -81,7 +86,7 @@ function fakeGitHub(issues: unknown[]): { client: GitHubHttpClient; calls: GitHu
     async request(input) {
       calls.push(input);
       return { status: 200, body: issues };
-    }
+    },
   };
   return { client, calls };
 }
@@ -93,7 +98,7 @@ function fakeSentry(issues: unknown[]): { client: SentryHttpClient; calls: Sentr
     async request(input) {
       calls.push(input);
       return { status: 200, body: issues };
-    }
+    },
   };
   return { client, calls };
 }
@@ -111,7 +116,7 @@ function stubPool(existingSpecs: Array<{ spec_id: string; title: string; status:
   const sources = new Map<string, InboxSource>([
     [issuesSource.id, issuesSource],
     [auditSource.id, auditSource],
-    [sentrySource.id, sentrySource]
+    [sentrySource.id, sentrySource],
   ]);
 
   const candidateRow = (id: string) => {
@@ -131,8 +136,17 @@ function stubPool(existingSpecs: Array<{ spec_id: string; title: string; status:
       const existingId = byExternal.get(key);
       const cid = existingId ?? id;
       candidates.set(cid, {
-        id: cid, source_id: sourceId, org_id: orgId, project_id: projectId, external_id: externalId,
-        title, body, severity, status, triage: JSON.parse(triage), resolved_spec_id: null
+        id: cid,
+        source_id: sourceId,
+        org_id: orgId,
+        project_id: projectId,
+        external_id: externalId,
+        title,
+        body,
+        severity,
+        status,
+        triage: JSON.parse(triage),
+        resolved_spec_id: null,
       });
       byExternal.set(key, cid);
       return { rows: [candidateRow(cid)], rowCount: 1 };
@@ -145,7 +159,8 @@ function stubPool(existingSpecs: Array<{ spec_id: string; title: string; status:
       const [cid, status, specId] = params as (string | null)[];
       const c = candidates.get(String(cid));
       if (c === undefined) return { rows: [], rowCount: 0 };
-      c.status = status; c.resolved_spec_id = specId;
+      c.status = status;
+      c.resolved_spec_id = specId;
       return { rows: [candidateRow(String(cid))], rowCount: 1 };
     }
     // discovery acceptProposals → createSpec path
@@ -179,9 +194,19 @@ function depsFor(connectors: ReadonlyMap<string, SourceConnector>, pool: pg.Pool
 describe("github issues connector (mocked)", () => {
   it("maps open issues to candidates and drops pull requests", async () => {
     const { client, calls } = fakeGitHub([
-      { number: 88, title: "feature · CSV export", body: "cfo wants csv", labels: ["spec-candidate"] },
-      { number: 91, title: "bug · 500 on pagination", body: "stack trace", labels: [{ name: "bug" }] },
-      { number: 92, title: "a PR", pull_request: { url: "x" } }
+      {
+        number: 88,
+        title: "feature · CSV export",
+        body: "cfo wants csv",
+        labels: ["spec-candidate"],
+      },
+      {
+        number: 91,
+        title: "bug · 500 on pagination",
+        body: "stack trace",
+        labels: [{ name: "bug" }],
+      },
+      { number: 92, title: "a PR", pull_request: { url: "x" } },
     ]);
     const connector = createGitHubIssuesConnector({ secrets, githubHttp: client });
     const items = await connector.fetch(issuesSource);
@@ -198,10 +223,16 @@ describe("github issues connector (mocked)", () => {
 describe("deterministic triage answerer", () => {
   const answerer = createDeterministicTriageAnswerer();
   const baseCtx = (over: Partial<TriageAnswererContext>): TriageAnswererContext => ({
-    candidate: { title: "csv export", body: "", severity: "info", sourceKind: "issues", projectId: "project_a" },
+    candidate: {
+      title: "csv export",
+      body: "",
+      severity: "info",
+      sourceKind: "issues",
+      projectId: "project_a",
+    },
     source: issuesSource,
     existingSpecs: [],
-    ...over
+    ...over,
   });
 
   it("auto-routes system-source candidates with an auto_routable verdict", async () => {
@@ -213,9 +244,15 @@ describe("deterministic triage answerer", () => {
   it("dedupe → close when the candidate matches a shipped spec", async () => {
     const t = await answerer.triage(
       baseCtx({
-        candidate: { title: "dark mode toggle theme", body: "", severity: "info", sourceKind: "issues", projectId: "project_a" },
-        existingSpecs: [{ specId: "spec_a4f", title: "dark mode toggle theme", status: "merged" }]
-      })
+        candidate: {
+          title: "dark mode toggle theme",
+          body: "",
+          severity: "info",
+          sourceKind: "issues",
+          projectId: "project_a",
+        },
+        existingSpecs: [{ specId: "spec_a4f", title: "dark mode toggle theme", status: "merged" }],
+      }),
     );
     expect(t.verdict).toBe("dedupe_close");
     expect(t.duplicateOfSpecId).toBe("spec_a4f");
@@ -224,9 +261,15 @@ describe("deterministic triage answerer", () => {
   it("needs_call · fold into the live run when a fail touches an in-flight spec", async () => {
     const t = await answerer.triage(
       baseCtx({
-        candidate: { title: "500 on orders pagination cursor", body: "", severity: "fail", sourceKind: "errors", projectId: "project_a" },
-        existingSpecs: [{ specId: "spec_b21", title: "orders pagination cursor list", status: "in_flight" }]
-      })
+        candidate: {
+          title: "500 on orders pagination cursor",
+          body: "",
+          severity: "fail",
+          sourceKind: "errors",
+          projectId: "project_a",
+        },
+        existingSpecs: [{ specId: "spec_b21", title: "orders pagination cursor list", status: "in_flight" }],
+      }),
     );
     expect(t.verdict).toBe("needs_call");
     expect(t.placement).toContain("live run");
@@ -244,7 +287,9 @@ describe("ingestSource (connector → triage → upsert)", () => {
   it("triages each issue and persists external candidates as triaged", async () => {
     const { client } = fakeGitHub([{ number: 88, title: "feature · CSV export", body: "x", labels: [] }]);
     const { pool, candidates } = stubPool();
-    const connectors = new Map<string, SourceConnector>([["issues", createGitHubIssuesConnector({ secrets, githubHttp: client })]]);
+    const connectors = new Map<string, SourceConnector>([
+      ["issues", createGitHubIssuesConnector({ secrets, githubHttp: client })],
+    ]);
     const { candidates: out } = await ingestSource(depsFor(connectors, pool), issuesSource);
     expect(out).toHaveLength(1);
     expect(out[0]?.status).toBe("triaged");
@@ -255,7 +300,15 @@ describe("ingestSource (connector → triage → upsert)", () => {
   it("auto-routes a system source's findings (status auto_routed)", async () => {
     const connector: SourceConnector = {
       kind: "scheduled_audit",
-      fetch: async () => [{ externalId: "a11y-1", title: "contrast failure", body: "", severity: "warn", projectId: "project_a" }]
+      fetch: async () => [
+        {
+          externalId: "a11y-1",
+          title: "contrast failure",
+          body: "",
+          severity: "warn",
+          projectId: "project_a",
+        },
+      ],
     };
     const { pool } = stubPool();
     const connectors = new Map<string, SourceConnector>([["scheduled_audit", connector]]);
@@ -268,7 +321,9 @@ describe("ingestSource (connector → triage → upsert)", () => {
     const issues = [{ number: 88, title: "CSV export", body: "v1", labels: [] }];
     const { client } = fakeGitHub(issues);
     const { pool, candidates } = stubPool();
-    const connectors = new Map<string, SourceConnector>([["issues", createGitHubIssuesConnector({ secrets, githubHttp: client })]]);
+    const connectors = new Map<string, SourceConnector>([
+      ["issues", createGitHubIssuesConnector({ secrets, githubHttp: client })],
+    ]);
     const deps = depsFor(connectors, pool);
     await ingestSource(deps, issuesSource);
     issues[0]!.body = "v2";
@@ -282,7 +337,9 @@ describe("accept → discovery hand-off", () => {
   it("creates a spec via the discovery accept path and resolves the candidate", async () => {
     const { client } = fakeGitHub([{ number: 88, title: "CSV export", body: "x", labels: [] }]);
     const { pool, specs } = stubPool();
-    const connectors = new Map<string, SourceConnector>([["issues", createGitHubIssuesConnector({ secrets, githubHttp: client })]]);
+    const connectors = new Map<string, SourceConnector>([
+      ["issues", createGitHubIssuesConnector({ secrets, githubHttp: client })],
+    ]);
     const deps = depsFor(connectors, pool);
     const { candidates: ingested } = await ingestSource(deps, issuesSource);
     const candidateId = ingested[0]!.id;
@@ -291,11 +348,19 @@ describe("accept → discovery hand-off", () => {
       candidateId,
       orgId: "org_a",
       proposals: [
-        { proposalId: "p1", title: "add csv export", description: "button + endpoint", acceptanceCriteria: ["exports csv"], dependsOn: [], priority: "P1", estLabel: "2h" }
+        {
+          proposalId: "p1",
+          title: "add csv export",
+          description: "button + endpoint",
+          acceptanceCriteria: ["exports csv"],
+          dependsOn: [],
+          priority: "P1",
+          estLabel: "2h",
+        },
       ],
       placementKind: "jump_backlog",
       placementLabel: "jump the p1 backlog",
-      actor
+      actor,
     });
     expect(result.candidate.status).toBe("accepted");
     expect(result.specId).toMatch(/^spec_/);
@@ -307,7 +372,9 @@ describe("accept → discovery hand-off", () => {
   it("dismiss transitions the candidate to dismissed", async () => {
     const { client } = fakeGitHub([{ number: 88, title: "CSV export", body: "x", labels: [] }]);
     const { pool } = stubPool();
-    const connectors = new Map<string, SourceConnector>([["issues", createGitHubIssuesConnector({ secrets, githubHttp: client })]]);
+    const connectors = new Map<string, SourceConnector>([
+      ["issues", createGitHubIssuesConnector({ secrets, githubHttp: client })],
+    ]);
     const deps = depsFor(connectors, pool);
     const { candidates: ingested } = await ingestSource(deps, issuesSource);
     const out = await dismissCandidate(deps, ingested[0]!.id);
@@ -326,17 +393,17 @@ describe("sentry connector (mocked)", () => {
       permalink: "https://sentry.io/organizations/cat-cave/issues/4001/",
       count: "1287",
       userCount: 42,
-      metadata: { type: "TypeError", value: "cannot read property 'id' of undefined" }
+      metadata: { type: "TypeError", value: "cannot read property 'id' of undefined" },
     },
     {
       id: "4002",
       title: "slow query on /reports",
       level: "warning",
       permalink: "https://sentry.io/organizations/cat-cave/issues/4002/",
-      metadata: { value: "query exceeded 5s" }
+      metadata: { value: "query exceeded 5s" },
     },
     // A degenerate row with neither id nor title signal — must be dropped.
-    { level: "info" }
+    { level: "info" },
   ];
 
   it("maps unresolved sentry issues to candidates with permalink + metadata body", async () => {
@@ -369,7 +436,7 @@ describe("sentry connector (mocked)", () => {
     const { client, calls } = fakeSentry([]);
     await createSentryConnector({ secrets, sentryHttp: client }).fetch({
       ...sentrySource,
-      config: { ...sentrySource.config, level: "fatal" }
+      config: { ...sentrySource.config, level: "fatal" },
     });
     expect(calls[0]?.path).toContain("level%3Afatal");
   });
@@ -377,7 +444,9 @@ describe("sentry connector (mocked)", () => {
   it("ingests + triages sentry candidates as triaged (needs_call)", async () => {
     const { client } = fakeSentry(sentryIssues);
     const { pool, candidates } = stubPool();
-    const connectors = new Map<string, SourceConnector>([["errors", createSentryConnector({ secrets, sentryHttp: client })]]);
+    const connectors = new Map<string, SourceConnector>([
+      ["errors", createSentryConnector({ secrets, sentryHttp: client })],
+    ]);
     const { candidates: out } = await ingestSource(depsFor(connectors, pool), sentrySource);
     expect(out).toHaveLength(2);
     expect(out[0]?.status).toBe("triaged");
@@ -390,7 +459,9 @@ describe("sentry connector (mocked)", () => {
   it("routes a sentry fail touching an in-flight spec to fold into the live run", async () => {
     const { client } = fakeSentry([sentryIssues[0]]);
     const { pool } = stubPool([{ spec_id: "spec_co1", title: "orders checkout submit flow", status: "in_flight" }]);
-    const connectors = new Map<string, SourceConnector>([["errors", createSentryConnector({ secrets, sentryHttp: client })]]);
+    const connectors = new Map<string, SourceConnector>([
+      ["errors", createSentryConnector({ secrets, sentryHttp: client })],
+    ]);
     const { candidates: out } = await ingestSource(depsFor(connectors, pool), sentrySource);
     expect(out[0]?.triage?.verdict).toBe("needs_call");
     expect(out[0]?.triage?.match).toContain("in-flight");
@@ -401,7 +472,9 @@ describe("sentry connector (mocked)", () => {
     const issues = [{ id: "4001", title: "TypeError v1", level: "error", permalink: "https://sentry.io/4001/" }];
     const { client } = fakeSentry(issues);
     const { pool, candidates } = stubPool();
-    const connectors = new Map<string, SourceConnector>([["errors", createSentryConnector({ secrets, sentryHttp: client })]]);
+    const connectors = new Map<string, SourceConnector>([
+      ["errors", createSentryConnector({ secrets, sentryHttp: client })],
+    ]);
     const deps = depsFor(connectors, pool);
     await ingestSource(deps, sentrySource);
     issues[0]!.title = "TypeError v2";

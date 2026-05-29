@@ -1,9 +1,4 @@
-import type {
-  AllocationRequest,
-  Allocator,
-  ReleaseReason,
-  RunnerAllocation
-} from "../contracts/allocator.js";
+import type { AllocationRequest, Allocator, ReleaseReason, RunnerAllocation } from "../contracts/allocator.js";
 import type { RunnerStore } from "./runnerStore.js";
 
 const allocatorName = "digitalocean";
@@ -122,8 +117,8 @@ export class DigitalOceanAllocator implements Allocator {
       sshKeys: this.options.sshKeys,
       userData: this.options.userData,
       tags: [`tanren-run-${request.runId}`, `tanren-project-${request.projectId}`].map((t) =>
-        t.toLowerCase().replace(/[^a-z0-9:_-]/g, "-")
-      )
+        t.toLowerCase().replace(/[^a-z0-9:_-]/g, "-"),
+      ),
     });
 
     let droplet = created;
@@ -138,9 +133,7 @@ export class DigitalOceanAllocator implements Allocator {
     const ip = droplet.publicIpv4;
     if (ip === undefined || ip === "") {
       await this.client.deleteDroplet(droplet.id).catch(() => undefined);
-      throw new DigitalOceanAllocatorError(
-        `digitalocean droplet ${droplet.id} became active without a public IPv4`
-      );
+      throw new DigitalOceanAllocatorError(`digitalocean droplet ${droplet.id} became active without a public IPv4`);
     }
 
     const port = 22;
@@ -156,8 +149,8 @@ export class DigitalOceanAllocator implements Allocator {
         port,
         username,
         hostKeyFingerprint: this.options.hostKeyFingerprint,
-        identitySecretRef: request.identitySecretRef
-      }
+        identitySecretRef: request.identitySecretRef,
+      },
     };
 
     try {
@@ -170,7 +163,7 @@ export class DigitalOceanAllocator implements Allocator {
         sshPort: port,
         hostKeyFingerprint: this.options.hostKeyFingerprint,
         imageSha: allocation.imageSha,
-        containerId: String(droplet.id)
+        containerId: String(droplet.id),
       });
     } catch (error) {
       await this.client.deleteDroplet(droplet.id).catch(() => undefined);
@@ -204,7 +197,7 @@ export class DigitalOceanAllocator implements Allocator {
       if (Date.now() >= deadline) {
         throw new DigitalOceanAllocatorError(
           `digitalocean droplet ${dropletId} did not become active within ${readyTimeoutMs}ms ` +
-            `(last status: ${droplet.status})`
+            `(last status: ${droplet.status})`,
         );
       }
       await this.sleep(pollIntervalMs);
@@ -237,7 +230,7 @@ function toDroplet(body: DigitalOceanDropletResponse): DigitalOceanDroplet {
   return {
     id: body.droplet.id,
     status: body.droplet.status,
-    publicIpv4: publicIpv4Of(body.droplet.networks?.v4)
+    publicIpv4: publicIpv4Of(body.droplet.networks?.v4),
   };
 }
 
@@ -246,13 +239,10 @@ function toDroplet(body: DigitalOceanDropletResponse): DigitalOceanDroplet {
  * API. The token is supplied by the caller (resolved from Vault), never read
  * from the environment here.
  */
-export function fetchDigitalOceanClient(
-  apiToken: string,
-  fetchImpl: typeof fetch = fetch
-): DigitalOceanClient {
+export function fetchDigitalOceanClient(apiToken: string, fetchImpl: typeof fetch = fetch): DigitalOceanClient {
   const authHeaders = {
     authorization: `Bearer ${apiToken}`,
-    "Content-Type": "application/json"
+    "Content-Type": "application/json",
   } as const;
 
   return {
@@ -267,12 +257,12 @@ export function fetchDigitalOceanClient(
           image: input.image,
           ssh_keys: input.sshKeys,
           user_data: input.userData,
-          tags: input.tags
-        })
+          tags: input.tags,
+        }),
       });
       if (!response.ok) {
         throw new DigitalOceanAllocatorError(
-          `digitalocean createDroplet failed: ${response.status} ${await response.text()}`
+          `digitalocean createDroplet failed: ${response.status} ${await response.text()}`,
         );
       }
       return toDroplet((await response.json()) as DigitalOceanDropletResponse);
@@ -281,11 +271,11 @@ export function fetchDigitalOceanClient(
     async getDroplet(dropletId: number): Promise<DigitalOceanDroplet> {
       const response = await fetchImpl(`${digitalOceanApiBase}/droplets/${dropletId}`, {
         method: "GET",
-        headers: authHeaders
+        headers: authHeaders,
       });
       if (!response.ok) {
         throw new DigitalOceanAllocatorError(
-          `digitalocean getDroplet failed: ${response.status} ${await response.text()}`
+          `digitalocean getDroplet failed: ${response.status} ${await response.text()}`,
         );
       }
       return toDroplet((await response.json()) as DigitalOceanDropletResponse);
@@ -294,14 +284,14 @@ export function fetchDigitalOceanClient(
     async deleteDroplet(dropletId: number): Promise<void> {
       const response = await fetchImpl(`${digitalOceanApiBase}/droplets/${dropletId}`, {
         method: "DELETE",
-        headers: authHeaders
+        headers: authHeaders,
       });
       // 404 means already gone — treat as success (idempotent destroy).
       if (!response.ok && response.status !== 404) {
         throw new DigitalOceanAllocatorError(
-          `digitalocean deleteDroplet failed: ${response.status} ${await response.text()}`
+          `digitalocean deleteDroplet failed: ${response.status} ${await response.text()}`,
         );
       }
-    }
+    },
   };
 }

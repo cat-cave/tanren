@@ -33,7 +33,7 @@ export const RECOVERABLE_OUTCOMES = new Set([
   "halted",
   "escape_hatch_hit",
   "retry_budget_exhausted",
-  "window_exhausted"
+  "window_exhausted",
 ]);
 
 /** True when a run's status/outcome routes it to the recovery surface. */

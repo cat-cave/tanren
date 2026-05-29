@@ -16,12 +16,18 @@ import type {
   NotificationMatrix,
   NotificationRoute,
   NotificationTarget,
-  Severity
+  Severity,
 } from "../../api/types.js";
 import { PhaseBadge, SevBadge, Toggle } from "./primitives.js";
 
 /** Channel catalog: glyph + phase badge + whether dispatch is wired in v0. */
-const CHANNELS: Array<{ kind: ChannelKind; glyph: string; label: string; phase: "v0" | "p3" | "p4"; wired: boolean }> = [
+const CHANNELS: Array<{
+  kind: ChannelKind;
+  glyph: string;
+  label: string;
+  phase: "v0" | "p3" | "p4";
+  wired: boolean;
+}> = [
   { kind: "ntfy", glyph: "▮", label: "ntfy", phase: "v0", wired: true },
   { kind: "slack", glyph: "⌥", label: "slack", phase: "p3", wired: true },
   { kind: "github_checks", glyph: "⌬", label: "github checks", phase: "p3", wired: true },
@@ -30,16 +36,12 @@ const CHANNELS: Array<{ kind: ChannelKind; glyph: string; label: string; phase: 
   { kind: "email", glyph: "✉", label: "email", phase: "p3", wired: true },
   { kind: "twilio", glyph: "▢", label: "sms · twilio", phase: "p4", wired: true },
   { kind: "pagerduty", glyph: "↘", label: "pagerduty", phase: "p4", wired: true },
-  { kind: "webhook", glyph: "↗", label: "webhook · custom", phase: "p4", wired: true }
+  { kind: "webhook", glyph: "↗", label: "webhook · custom", phase: "p4", wired: true },
 ];
 
 const WIRED_KINDS = new Set<ChannelKind>(CHANNELS.filter((c) => c.wired).map((c) => c.kind));
 
-function routeFor(
-  routes: NotificationRoute[],
-  targetId: string,
-  eventName: string
-): NotificationRoute | undefined {
+function routeFor(routes: NotificationRoute[], targetId: string, eventName: string): NotificationRoute | undefined {
   return routes.find((r) => r.targetId === targetId && r.eventName === eventName);
 }
 
@@ -74,14 +76,19 @@ function ChannelsColumn(props: { targets: NotificationTarget[] }) {
               dataAttrs={{
                 "data-notif-channel": channel.kind,
                 "data-notif-target": target?.id ?? "",
-                "data-notif-wired": channel.wired ? "1" : "0"
+                "data-notif-wired": channel.wired ? "1" : "0",
               }}
             />
           </div>
         );
       })}
 
-      <form class="col-card live" method="post" action="/notifications/targets" style="gap:8px;padding:12px;margin-top:4px">
+      <form
+        class="col-card live"
+        method="post"
+        action="/notifications/targets"
+        style="gap:8px;padding:12px;margin-top:4px"
+      >
         <div class="h">+ add ntfy target</div>
         <div class="field">
           <label for="label">label</label>
@@ -89,7 +96,13 @@ function ChannelsColumn(props: { targets: NotificationTarget[] }) {
         </div>
         <div class="field">
           <label for="destination">ntfy url or topic</label>
-          <input id="destination" name="destination" placeholder="https://ntfy.sh/cat-cave-alerts" required autocomplete="off" />
+          <input
+            id="destination"
+            name="destination"
+            placeholder="https://ntfy.sh/cat-cave-alerts"
+            required
+            autocomplete="off"
+          />
         </div>
         <input type="hidden" name="channelKind" value="ntfy" />
         <div style="display:flex">
@@ -97,7 +110,9 @@ function ChannelsColumn(props: { targets: NotificationTarget[] }) {
             save ntfy target
           </button>
         </div>
-        <div class="mono-dim">all channel kinds dispatch · configure each channel's credentials in the secret store</div>
+        <div class="mono-dim">
+          all channel kinds dispatch · configure each channel's credentials in the secret store
+        </div>
       </form>
     </div>
   );
@@ -150,7 +165,11 @@ function MatrixGrid(props: { matrix: NotificationMatrix }) {
                       <button
                         type="submit"
                         class={`matrix-check ${on ? "on" : ""}`}
-                        title={WIRED_KINDS.has(target.channelKind) ? "toggle opt-in" : "opt-in persists; channel not wired in v0"}
+                        title={
+                          WIRED_KINDS.has(target.channelKind)
+                            ? "toggle opt-in"
+                            : "opt-in persists; channel not wired in v0"
+                        }
                       >
                         {on ? "✓" : ""}
                       </button>

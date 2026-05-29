@@ -24,7 +24,7 @@ const BehaviorCreateBody = z.object({
   when: z.string().default(""),
   then: z.string().default(""),
   description: z.string().nullable().optional(),
-  metadata: z.record(z.string(), z.unknown()).optional()
+  metadata: z.record(z.string(), z.unknown()).optional(),
 });
 /* eslint-enable unicorn/no-thenable */
 
@@ -70,9 +70,9 @@ export function createBehaviorRoutes(options: BehaviorRoutesOptions) {
           when: parsed.data.when,
           then: parsed.data.then,
           description: parsed.data.description ?? null,
-          metadata: parsed.data.metadata ?? {}
+          metadata: parsed.data.metadata ?? {},
         },
-        { ...actor, orgId }
+        { ...actor, orgId },
       );
       /* eslint-enable unicorn/no-thenable */
       return c.json(behavior, 201);

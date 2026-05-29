@@ -24,7 +24,7 @@ import {
   type JiraHttpClient,
   type LinearHttpClient,
   type LinearHttpRequest,
-  type SourceConnector
+  type SourceConnector,
 } from "../src/engine/forge/inbox/index.js";
 
 // A stub Jira client for the dispatcher wiring (this file's dispatcher tests
@@ -32,7 +32,7 @@ import {
 const stubJira: JiraHttpClient = {
   async request() {
     return { status: 200, body: { issues: [] } };
-  }
+  },
 };
 
 // A Linear source wired under the `issues` kind (dispatch by config.provider).
@@ -45,7 +45,7 @@ const linearSource: InboxSource = {
   detail: "open issues",
   config: { provider: "linear", tokenRef: "credential/linear/x", teamId: "team_1" },
   enabled: true,
-  autoRoute: false
+  autoRoute: false,
 };
 
 // A GitHub source under the same `issues` kind, with no provider field (the
@@ -57,9 +57,14 @@ const githubSource: InboxSource = {
   kind: "issues",
   name: "github · cat-cave",
   detail: "issues labeled spec-candidate",
-  config: { owner: "cat-cave", repo: "app", labels: ["spec-candidate"], staticRef: "credential/github/x" },
+  config: {
+    owner: "cat-cave",
+    repo: "app",
+    labels: ["spec-candidate"],
+    staticRef: "credential/github/x",
+  },
   enabled: true,
-  autoRoute: false
+  autoRoute: false,
 };
 
 const secrets = new InMemorySecretStore();
@@ -74,7 +79,7 @@ function fakeLinear(nodes: unknown[]): { client: LinearHttpClient; calls: Linear
     async request(input) {
       calls.push(input);
       return { status: 200, body: { data: { issues: { nodes } } } };
-    }
+    },
   };
   return { client, calls };
 }
@@ -83,7 +88,7 @@ function fakeGitHub(issues: unknown[]): GitHubHttpClient {
   return {
     async request() {
       return { status: 200, body: issues };
-    }
+    },
   };
 }
 
@@ -93,7 +98,7 @@ function stubPool(): { pool: pg.Pool; candidates: Map<string, Record<string, unk
   const byExternal = new Map<string, string>();
   const sources = new Map<string, InboxSource>([
     [linearSource.id, linearSource],
-    [githubSource.id, githubSource]
+    [githubSource.id, githubSource],
   ]);
   const candidateRow = (id: string) => {
     const c = candidates.get(id)!;
@@ -110,8 +115,17 @@ function stubPool(): { pool: pg.Pool; candidates: Map<string, Record<string, unk
       const key = `${sourceId}::${externalId}`;
       const cid = byExternal.get(key) ?? id;
       candidates.set(cid, {
-        id: cid, source_id: sourceId, org_id: orgId, project_id: projectId, external_id: externalId,
-        title, body, severity, status, triage: JSON.parse(triage), resolved_spec_id: null
+        id: cid,
+        source_id: sourceId,
+        org_id: orgId,
+        project_id: projectId,
+        external_id: externalId,
+        title,
+        body,
+        severity,
+        status,
+        triage: JSON.parse(triage),
+        resolved_spec_id: null,
       });
       byExternal.set(key, cid);
       return { rows: [candidateRow(cid)], rowCount: 1 };
@@ -133,7 +147,7 @@ const linearIssues = [
     description: "repro: clear cart then submit",
     url: "https://linear.app/cat-cave/issue/CAT-12",
     priority: 1, // Urgent
-    labels: { nodes: [{ name: "Bug" }] }
+    labels: { nodes: [{ name: "Bug" }] },
   },
   {
     id: "lin_bbb",
@@ -142,7 +156,7 @@ const linearIssues = [
     description: "cfo wants csv",
     url: "https://linear.app/cat-cave/issue/CAT-13",
     priority: 2, // High
-    labels: { nodes: [{ name: "feature" }] }
+    labels: { nodes: [{ name: "feature" }] },
   },
   {
     id: "lin_ccc",
@@ -151,10 +165,10 @@ const linearIssues = [
     description: "",
     url: "https://linear.app/cat-cave/issue/CAT-14",
     priority: 0, // No priority
-    labels: { nodes: [] }
+    labels: { nodes: [] },
   },
   // A degenerate node with neither id nor title — must be dropped.
-  { priority: 3 }
+  { priority: 3 },
 ];
 
 describe("linear connector (mocked)", () => {
@@ -188,7 +202,7 @@ describe("linear connector (mocked)", () => {
     const { client } = fakeLinear(linearIssues);
     const items = await createLinearConnector({ secrets, linearHttp: client }).fetch({
       ...linearSource,
-      config: { ...linearSource.config, labels: ["bug"] }
+      config: { ...linearSource.config, labels: ["bug"] },
     });
     expect(items).toHaveLength(1);
     expect(items[0]?.externalId).toBe("linear-lin_aaa");
@@ -199,15 +213,17 @@ describe("linear connector (mocked)", () => {
     await expect(
       createLinearConnector({ secrets, linearHttp: client }).fetch({
         ...linearSource,
-        config: { ...linearSource.config, tokenRef: "credential/linear/missing" }
-      })
+        config: { ...linearSource.config, tokenRef: "credential/linear/missing" },
+      }),
     ).rejects.toThrow(/no secret at ref/);
   });
 
   it("ingests + triages linear candidates as triaged (fail → bug variant)", async () => {
     const { client } = fakeLinear(linearIssues);
     const { pool, candidates } = stubPool();
-    const connectors = new Map<string, SourceConnector>([["issues", createLinearConnector({ secrets, linearHttp: client })]]);
+    const connectors = new Map<string, SourceConnector>([
+      ["issues", createLinearConnector({ secrets, linearHttp: client })],
+    ]);
     const { candidates: out } = await ingestSource(depsFor(connectors, pool), linearSource);
     expect(out).toHaveLength(3);
     expect(out[0]?.status).toBe("triaged");
@@ -220,7 +236,9 @@ describe("linear connector (mocked)", () => {
     const nodes = [{ id: "lin_aaa", title: "v1", url: "https://linear.app/x", priority: 0 }];
     const { client } = fakeLinear(nodes);
     const { pool, candidates } = stubPool();
-    const connectors = new Map<string, SourceConnector>([["issues", createLinearConnector({ secrets, linearHttp: client })]]);
+    const connectors = new Map<string, SourceConnector>([
+      ["issues", createLinearConnector({ secrets, linearHttp: client })],
+    ]);
     const deps = depsFor(connectors, pool);
     await ingestSource(deps, linearSource);
     nodes[0]!.title = "v2";
@@ -233,9 +251,15 @@ describe("linear connector (mocked)", () => {
 describe("issues dispatcher (provider routing)", () => {
   const dispatcher = () =>
     createIssuesConnector({
-      github: createGitHubIssuesConnector({ secrets, githubHttp: fakeGitHub([{ number: 1, title: "gh issue", body: "", labels: [] }]) }),
-      linear: createLinearConnector({ secrets, linearHttp: fakeLinear([{ id: "lin_z", title: "lin issue", url: "https://linear.app/z", priority: 0 }]).client }),
-      jira: createJiraConnector({ secrets, jiraHttp: stubJira })
+      github: createGitHubIssuesConnector({
+        secrets,
+        githubHttp: fakeGitHub([{ number: 1, title: "gh issue", body: "", labels: [] }]),
+      }),
+      linear: createLinearConnector({
+        secrets,
+        linearHttp: fakeLinear([{ id: "lin_z", title: "lin issue", url: "https://linear.app/z", priority: 0 }]).client,
+      }),
+      jira: createJiraConnector({ secrets, jiraHttp: stubJira }),
     });
 
   it("routes config.provider=linear to the Linear connector", async () => {
@@ -251,7 +275,10 @@ describe("issues dispatcher (provider routing)", () => {
   });
 
   it("routes config.provider=github explicitly to the GitHub connector", async () => {
-    const items = await dispatcher().fetch({ ...githubSource, config: { ...githubSource.config, provider: "github" } });
+    const items = await dispatcher().fetch({
+      ...githubSource,
+      config: { ...githubSource.config, provider: "github" },
+    });
     expect(items[0]?.externalId).toBe("gh-cat-cave/app#1");
   });
 });

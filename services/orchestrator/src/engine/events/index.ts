@@ -16,7 +16,7 @@ export {
   assertEventName,
   listEventNames,
   decodeEvent,
-  UnknownEventTypeError
+  UnknownEventTypeError,
 } from "./registry.js";
 
 export {
@@ -28,7 +28,7 @@ export {
   listSensitivityPathsFor,
   registerSensitivity,
   registerSensitivities,
-  resetSensitivityRulesForTesting
+  resetSensitivityRulesForTesting,
 } from "./sensitivity.js";
 
 export { ensureSensitivityRulesRegistered, sensitivityRules } from "./sensitivityRules.js";

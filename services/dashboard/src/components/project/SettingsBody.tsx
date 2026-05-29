@@ -19,7 +19,7 @@ import {
   type EscapeHatches,
   type ProjectSummary,
   type RoleId,
-  type RoutingTable
+  type RoutingTable,
 } from "../../api/types.js";
 import { ScreenStyles } from "./screenStyles.js";
 import { PageHead } from "./shared.js";
@@ -31,7 +31,7 @@ export const ROLE_DESCRIPTIONS: Record<RoleId, string> = {
   check: "verify per-subtask · cheap model preferred",
   audit: "spec-level verdict · strongest reasoning model · no dev bundles",
   demo: "spec-completion narration for review · cheap, optional",
-  forge: "read-only narration with operator write-buttons · config edits land via this surface"
+  forge: "read-only narration with operator write-buttons · config edits land via this surface",
 };
 
 /** Default escape-hatch values (P2A-0006 schema defaults) shown as the diff cue. */
@@ -39,7 +39,7 @@ export const ESCAPE_HATCH_DEFAULTS: EscapeHatches = {
   maxWriterIterPerSubtask: 5,
   maxPlannerRerunsPerSpec: 3,
   maxRetriesPerTransientFailure: 3,
-  maxSpecDiscoveryRoundsWithForge: 20
+  maxSpecDiscoveryRoundsWithForge: 20,
 };
 
 interface VaultEntry {
@@ -60,14 +60,14 @@ const VAULT_ENTRIES: VaultEntry[] = [
     label: "codex chatgpt bundle",
     path: "vault://dev/codex/chatgpt",
     policy: "auto-refresh on use",
-    detail: "session cookie refreshes on each runner launch · no manual rotation needed"
+    detail: "session cookie refreshes on each runner launch · no manual rotation needed",
   },
   {
     label: "github app",
     path: "vault://org/github/app",
     policy: "auto · jwt + installation token",
-    detail: "short-lived tokens minted per call · jwt rotates yearly"
-  }
+    detail: "short-lived tokens minted per call · jwt rotates yearly",
+  },
 ];
 
 export interface SettingsBodyProps {
@@ -99,9 +99,11 @@ export function SettingsBody(props: SettingsBodyProps) {
           </>
         }
         sub={
-          props.auditGate
-            ? <>config committed via pr · forge can edit</>
-            : <>{props.project.name} · routing &amp; limits · stored in dashboard</>
+          props.auditGate ? (
+            <>config committed via pr · forge can edit</>
+          ) : (
+            <>{props.project.name} · routing &amp; limits · stored in dashboard</>
+          )
         }
       />
       <div class="page-body">
@@ -133,7 +135,12 @@ function RoutingPanel(props: SettingsBodyProps) {
       </div>
       <div class="panel-body">
         {ROLE_IDS.map((role) => (
-          <RoleRow role={role} chain={props.routing[role]?.chain ?? []} orgId={props.orgId} projectId={props.project.projectId} />
+          <RoleRow
+            role={role}
+            chain={props.routing[role]?.chain ?? []}
+            orgId={props.orgId}
+            projectId={props.project.projectId}
+          />
         ))}
         <div class="audit-caption" style="margin-top:8px">
           ↑ auth refs point at vault entries from org setup · only codex bindings function in v0
@@ -166,7 +173,7 @@ function RoleRow(props: {
             <span class="model">{entry.model}</span>
             <span class="auth">{entry.authRef}</span>
             <span class={`health ${entry.healthHint ?? "ok"}`}>
-              {entry.healthHint === "rate_limited" ? "rate-limited" : entry.healthHint ?? "ok"}
+              {entry.healthHint === "rate_limited" ? "rate-limited" : (entry.healthHint ?? "ok")}
             </span>
             <span class="acts">
               {index > 0 && (
@@ -175,7 +182,9 @@ function RoleRow(props: {
                   <input type="hidden" name="role" value={props.role} />
                   <input type="hidden" name="index" value={String(index)} />
                   <input type="hidden" name="direction" value="up" />
-                  <button type="submit" title="move up">↑</button>
+                  <button type="submit" title="move up">
+                    ↑
+                  </button>
                 </form>
               )}
               {index < props.chain.length - 1 && (
@@ -184,14 +193,18 @@ function RoleRow(props: {
                   <input type="hidden" name="role" value={props.role} />
                   <input type="hidden" name="index" value={String(index)} />
                   <input type="hidden" name="direction" value="down" />
-                  <button type="submit" title="move down">↓</button>
+                  <button type="submit" title="move down">
+                    ↓
+                  </button>
                 </form>
               )}
               <form method="post" action={`${base}/remove`}>
                 <input type="hidden" name="orgId" value={props.orgId} />
                 <input type="hidden" name="role" value={props.role} />
                 <input type="hidden" name="index" value={String(index)} />
-                <button type="submit" title="remove">×</button>
+                <button type="submit" title="remove">
+                  ×
+                </button>
               </form>
             </span>
           </div>
@@ -321,10 +334,27 @@ interface HatchCard {
 }
 
 const HATCH_CARDS: HatchCard[] = [
-  { field: "maxWriterIterPerSubtask", label: "max writer iter per subtask", onExceed: "→ escalate to operator (halt)" },
-  { field: "maxPlannerRerunsPerSpec", label: "max planner re-runs per spec", onExceed: "→ revise spec (halt)" },
-  { field: "maxRetriesPerTransientFailure", label: "max retries per task on transient fail", onExceed: "→ try next fallback in chain" },
-  { field: "maxSpecDiscoveryRoundsWithForge", label: "max spec-discovery rounds with forge", onExceed: "→ checkpoint · resume later", stub: true }
+  {
+    field: "maxWriterIterPerSubtask",
+    label: "max writer iter per subtask",
+    onExceed: "→ escalate to operator (halt)",
+  },
+  {
+    field: "maxPlannerRerunsPerSpec",
+    label: "max planner re-runs per spec",
+    onExceed: "→ revise spec (halt)",
+  },
+  {
+    field: "maxRetriesPerTransientFailure",
+    label: "max retries per task on transient fail",
+    onExceed: "→ try next fallback in chain",
+  },
+  {
+    field: "maxSpecDiscoveryRoundsWithForge",
+    label: "max spec-discovery rounds with forge",
+    onExceed: "→ checkpoint · resume later",
+    stub: true,
+  },
 ];
 
 function EscapeHatchesPanel(props: SettingsBodyProps) {
@@ -338,9 +368,9 @@ function EscapeHatchesPanel(props: SettingsBodyProps) {
       </div>
       <div class="panel-body">
         <div class="escape-note">
-          tanren's leverage is parallel dag execution. don't squeeze individual specs for speed — these limits
-          exist to stop runaway loops, nothing else. <b>not configured here:</b> per-task time limits · per-spec
-          wallclock caps. the escape hatch is the count, not the clock.
+          tanren's leverage is parallel dag execution. don't squeeze individual specs for speed — these limits exist to
+          stop runaway loops, nothing else. <b>not configured here:</b> per-task time limits · per-spec wallclock caps.
+          the escape hatch is the count, not the clock.
         </div>
         <form method="post" action={`/settings/routing/${props.project.projectId}/hatches`}>
           <input type="hidden" name="orgId" value={props.orgId} />
@@ -354,10 +384,14 @@ function EscapeHatchesPanel(props: SettingsBodyProps) {
                     {card.label}
                     {card.stub === true && <span class="badge"> phase 3 stub</span>}
                   </div>
-                  <input type="number" name={card.field} value={String(current)} min="0" disabled={card.stub === true} />
-                  <div class="prev">
-                    {isDefault ? "default" : `was ${ESCAPE_HATCH_DEFAULTS[card.field]} (default)`}
-                  </div>
+                  <input
+                    type="number"
+                    name={card.field}
+                    value={String(current)}
+                    min="0"
+                    disabled={card.stub === true}
+                  />
+                  <div class="prev">{isDefault ? "default" : `was ${ESCAPE_HATCH_DEFAULTS[card.field]} (default)`}</div>
                   <div class="t">{card.onExceed}</div>
                 </div>
               );
@@ -392,13 +426,18 @@ function AuditGatePanel(props: SettingsBodyProps) {
       <div class="panel-body" style="padding-top:0">
         {props.auditGate ? (
           <div class="audit-caption">
-            edits land as a pr in <code>{props.auditGateRepo ?? "your tanren-config repo"}</code> · review before merge ·{" "}
-            <a href="/settings/config">view config gate ↗</a>
+            edits land as a pr in <code>{props.auditGateRepo ?? "your tanren-config repo"}</code> · review before merge
+            · <a href="/settings/config">view config gate ↗</a>
           </div>
         ) : (
           <div class="audit-caption">edits land in the dashboard · no pr required (audit gate off)</div>
         )}
-        <form method="post" action="/settings/config/toggle" class="audit-toggle" style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <form
+          method="post"
+          action="/settings/config/toggle"
+          class="audit-toggle"
+          style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap"
+        >
           <input type="hidden" name="enable" value={props.auditGate ? "0" : "1"} />
           {!props.auditGate && (
             <input

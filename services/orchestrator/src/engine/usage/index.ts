@@ -8,7 +8,7 @@ export type {
   SubscriptionWindow,
   UsageAccountant,
   UsageMonitor,
-  WindowUsage
+  WindowUsage,
 } from "./contracts.js";
 export { parseCodexbarUsage } from "./codexbarParser.js";
 export { parseCcusageAccounting } from "./ccusageParser.js";
@@ -18,6 +18,6 @@ export {
   buildCodexbarUsageCommand,
   SshCcusageAccountant,
   SshCodexbarUsageMonitor,
-  type UsageNote
+  type UsageNote,
 } from "./sshMonitors.js";
 export { SshUsageProbe, type SshUsageProbeConfig, type UsageProbe, type WindowObservation } from "./probe.js";

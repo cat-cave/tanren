@@ -27,7 +27,7 @@ export function describeSecretStoreConformance(label: string, harness: SecretSto
       await store.put({ ref: "runner/identity", value: "private-key-material" });
       await expect(store.get("runner/identity")).resolves.toEqual({
         ref: "runner/identity",
-        value: "private-key-material"
+        value: "private-key-material",
       });
     });
 
@@ -42,7 +42,7 @@ export function describeSecretStoreConformance(label: string, harness: SecretSto
       await store.put({ ref: "credential/token", value: "second" });
       await expect(store.get("credential/token")).resolves.toEqual({
         ref: "credential/token",
-        value: "second"
+        value: "second",
       });
     });
 

@@ -22,7 +22,7 @@ class MemoryEventPool {
         runId: params[0] as string,
         specId: params[2] as string,
         projectId: params[3] as string,
-        eventType: params[4] as string
+        eventType: params[4] as string,
       });
     }
     return { rows: [], rowCount: 0 };
@@ -48,10 +48,10 @@ describeEventStoreConformance("FakeEventStore", {
           runId: event.runId,
           specId: event.specId,
           projectId: event.projectId,
-          eventType: event.eventType
-        }))
+          eventType: event.eventType,
+        })),
     };
-  }
+  },
 });
 
 // --- PgEventStore (in-memory pool) ------------------------------------------
@@ -60,7 +60,7 @@ describeEventStoreConformance("PgEventStore", {
     const pool = new MemoryEventPool();
     return {
       store: new PgEventStore(pool.asPgPool()),
-      readBack: async (): Promise<ObservedEvent[]> => pool.observed()
+      readBack: async (): Promise<ObservedEvent[]> => pool.observed(),
     };
-  }
+  },
 });

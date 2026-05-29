@@ -15,13 +15,13 @@ TLS posture, see [deploy.md](deploy.md). For the auth model itself, see
 `TANREN_OIDC_PRESET=authentik` selects Authentik-correct claim-mapping defaults
 so you do **not** have to set the per-claim envs:
 
-| Setting | Preset default | Maps to |
-| --- | --- | --- |
-| scopes | `openid profile email groups` | userinfo includes the `groups` claim |
-| `TANREN_OIDC_SUBJECT_CLAIM` | `sub` | stable Tanren subject |
-| `TANREN_OIDC_LOGIN_CLAIM` | `preferred_username` | Tanren login / username |
-| `TANREN_OIDC_NAME_CLAIM` | `name` | human display name |
-| `TANREN_OIDC_GROUPS_CLAIM` | `groups` | org/group membership (array of strings) -> Tanren orgs, `kind: oidc` |
+| Setting                     | Preset default                | Maps to                                                              |
+| --------------------------- | ----------------------------- | -------------------------------------------------------------------- |
+| scopes                      | `openid profile email groups` | userinfo includes the `groups` claim                                 |
+| `TANREN_OIDC_SUBJECT_CLAIM` | `sub`                         | stable Tanren subject                                                |
+| `TANREN_OIDC_LOGIN_CLAIM`   | `preferred_username`          | Tanren login / username                                              |
+| `TANREN_OIDC_NAME_CLAIM`    | `name`                        | human display name                                                   |
+| `TANREN_OIDC_GROUPS_CLAIM`  | `groups`                      | org/group membership (array of strings) -> Tanren orgs, `kind: oidc` |
 
 Every value stays overridable: an explicit `TANREN_OIDC_*` env always wins, the
 preset only fills the gaps you leave unset. The generic OIDC provider is
@@ -99,12 +99,12 @@ services:
       TANREN_OIDC_CLIENT_SECRET: ${TANREN_OIDC_CLIENT_SECRET:-}
     networks:
       - default
-      - authentik   # the external network Authentik publishes on
+      - authentik # the external network Authentik publishes on
 
 networks:
   authentik:
     external: true
-    name: authentik_default   # match `docker network ls` for your Authentik stack
+    name: authentik_default # match `docker network ls` for your Authentik stack
 ```
 
 For a pure LAN deployment (no shared docker network), set

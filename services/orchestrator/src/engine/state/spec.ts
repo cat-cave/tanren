@@ -11,7 +11,7 @@ export const SpecStatus = z.enum([
   // Phase 0/1 historical values still present in the database
   "pending",
   "active",
-  "done"
+  "done",
 ]);
 export type SpecStatus = z.infer<typeof SpecStatus>;
 
@@ -25,7 +25,7 @@ const allowedSpecTransitions: Record<SpecStatus, ReadonlyArray<SpecStatus>> = {
   // Legacy transitions kept until callers migrate
   pending: ["active", "open"],
   active: ["done", "halted", "cancelled", "in_flight"],
-  done: []
+  done: [],
 };
 
 export function isAllowedSpecTransition(from: SpecStatus, to: SpecStatus): boolean {
@@ -33,7 +33,10 @@ export function isAllowedSpecTransition(from: SpecStatus, to: SpecStatus): boole
 }
 
 export class IllegalSpecTransitionError extends Error {
-  constructor(readonly from: SpecStatus, readonly to: SpecStatus) {
+  constructor(
+    readonly from: SpecStatus,
+    readonly to: SpecStatus,
+  ) {
     super(`illegal spec transition: ${from} -> ${to}`);
   }
 }

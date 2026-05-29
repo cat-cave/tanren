@@ -16,7 +16,7 @@ export {
   RoutingChainEntry,
   RoutingTable,
   UnknownConfigVersionError,
-  emptyRoutingTable
+  emptyRoutingTable,
 } from "./shared.js";
 
 export {
@@ -28,7 +28,7 @@ export {
   SUPPORTED_ORG_CONFIG_VERSIONS,
   defaultOrgConfigV1,
   migrateOrgConfig,
-  orgConfigJsonSchema
+  orgConfigJsonSchema,
 } from "./orgConfig.js";
 
 export {
@@ -37,13 +37,13 @@ export {
   gatedConfigWrite,
   isBucketBChange,
   renderTanrenYaml,
-  renderTanrenYamlDiff
+  renderTanrenYamlDiff,
 } from "./tanrenConfigGate.js";
 export type {
   ConfigYamlDiffLine,
   GatedConfigWriteInput,
   GatedConfigWriteResult,
-  GateConfigPullRequest
+  GateConfigPullRequest,
 } from "./tanrenConfigGate.js";
 
 export {
@@ -53,5 +53,5 @@ export {
   SUPPORTED_PROJECT_CONFIG_VERSIONS,
   defaultProjectConfigV1,
   migrateProjectConfig,
-  projectConfigJsonSchema
+  projectConfigJsonSchema,
 } from "./projectConfig.js";

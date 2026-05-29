@@ -12,7 +12,7 @@ const DISCOVERY = {
   issuer: ISSUER,
   authorization_endpoint: `${ISSUER}/application/o/authorize/`,
   token_endpoint: `${ISSUER}/application/o/token/`,
-  userinfo_endpoint: `${ISSUER}/application/o/userinfo/`
+  userinfo_endpoint: `${ISSUER}/application/o/userinfo/`,
 };
 
 interface FetchCall {
@@ -22,7 +22,7 @@ interface FetchCall {
 
 function buildProvider(
   handler: (call: FetchCall) => Response | Promise<Response>,
-  overrides: Partial<ConstructorParameters<typeof OidcProvider>[0]> = {}
+  overrides: Partial<ConstructorParameters<typeof OidcProvider>[0]> = {},
 ) {
   const calls: FetchCall[] = [];
   const fetchImpl: typeof fetch = (async (input, init) => {
@@ -35,13 +35,15 @@ function buildProvider(
     clientId: "client_id_value",
     clientSecret: "client_secret_value",
     fetchImpl,
-    ...overrides
+    ...overrides,
   });
   return { provider, calls };
 }
 
 function discoveryResponse(): Response {
-  return new Response(JSON.stringify(DISCOVERY), { headers: { "Content-Type": "application/json" } });
+  return new Response(JSON.stringify(DISCOVERY), {
+    headers: { "Content-Type": "application/json" },
+  });
 }
 
 describe("OidcProvider", () => {
@@ -61,7 +63,7 @@ describe("OidcProvider", () => {
       if (call.url.endsWith("/.well-known/openid-configuration")) return discoveryResponse();
       if (call.url === DISCOVERY.token_endpoint) {
         return new Response(JSON.stringify({ access_token: "oidc_access_token", token_type: "Bearer" }), {
-          headers: { "Content-Type": "application/json" }
+          headers: { "Content-Type": "application/json" },
         });
       }
       if (call.url === DISCOVERY.userinfo_endpoint) {
@@ -71,9 +73,9 @@ describe("OidcProvider", () => {
             preferred_username: "OctoOidc",
             name: "Octo OIDC",
             email: "octo@example.com",
-            groups: ["Platform-Admins", "engineering"]
+            groups: ["Platform-Admins", "engineering"],
           }),
-          { headers: { "Content-Type": "application/json" } }
+          { headers: { "Content-Type": "application/json" } },
         );
       }
       return new Response("not found", { status: 404 });
@@ -84,11 +86,16 @@ describe("OidcProvider", () => {
       providerSubject: "subject-123",
       login: "OctoOidc",
       email: "octo@example.com",
-      displayName: "Octo OIDC"
+      displayName: "Octo OIDC",
     });
     expect(claims.orgs).toEqual([
-      { externalId: "Platform-Admins", login: "platform-admins", displayName: "Platform-Admins", kind: "oidc" },
-      { externalId: "engineering", login: "engineering", displayName: "engineering", kind: "oidc" }
+      {
+        externalId: "Platform-Admins",
+        login: "platform-admins",
+        displayName: "Platform-Admins",
+        kind: "oidc",
+      },
+      { externalId: "engineering", login: "engineering", displayName: "engineering", kind: "oidc" },
     ]);
 
     const tokenCall = calls.find((c) => c.url === DISCOVERY.token_endpoint);
@@ -103,10 +110,12 @@ describe("OidcProvider", () => {
       if (call.url.endsWith("/.well-known/openid-configuration")) return discoveryResponse();
       if (call.url === DISCOVERY.token_endpoint) {
         return new Response(JSON.stringify({ access_token: "tok" }), {
-          headers: { "Content-Type": "application/json" }
+          headers: { "Content-Type": "application/json" },
         });
       }
-      return new Response(JSON.stringify({ sub: "s1" }), { headers: { "Content-Type": "application/json" } });
+      return new Response(JSON.stringify({ sub: "s1" }), {
+        headers: { "Content-Type": "application/json" },
+      });
     });
     await provider.exchangeCode("c", "https://app.example.com/cb");
     const userinfoCall = calls.find((c) => c.url === DISCOVERY.userinfo_endpoint);
@@ -121,37 +130,33 @@ describe("OidcProvider", () => {
         if (call.url.endsWith("/.well-known/openid-configuration")) return discoveryResponse();
         if (call.url === DISCOVERY.token_endpoint) {
           return new Response(JSON.stringify({ access_token: "tok" }), {
-            headers: { "Content-Type": "application/json" }
+            headers: { "Content-Type": "application/json" },
           });
         }
-        return new Response(
-          JSON.stringify({ oid: "oid-9", uname: "custom-user", teams: ["alpha"] }),
-          { headers: { "Content-Type": "application/json" } }
-        );
+        return new Response(JSON.stringify({ oid: "oid-9", uname: "custom-user", teams: ["alpha"] }), {
+          headers: { "Content-Type": "application/json" },
+        });
       },
-      { subjectClaim: "oid", loginClaim: "uname", groupsClaim: "teams" }
+      { subjectClaim: "oid", loginClaim: "uname", groupsClaim: "teams" },
     );
     const claims = await provider.exchangeCode("c", "https://app.example.com/cb");
     expect(claims.providerSubject).toBe("oid-9");
     expect(claims.login).toBe("custom-user");
-    expect(claims.orgs).toEqual([
-      { externalId: "alpha", login: "alpha", displayName: "alpha", kind: "oidc" }
-    ]);
+    expect(claims.orgs).toEqual([{ externalId: "alpha", login: "alpha", displayName: "alpha", kind: "oidc" }]);
   });
 
   it("raises IdentityProviderError when the token endpoint returns an error payload", async () => {
     const { provider } = buildProvider((call) => {
       if (call.url.endsWith("/.well-known/openid-configuration")) return discoveryResponse();
       if (call.url === DISCOVERY.token_endpoint) {
-        return new Response(
-          JSON.stringify({ error: "invalid_grant", error_description: "code expired" }),
-          { headers: { "Content-Type": "application/json" } }
-        );
+        return new Response(JSON.stringify({ error: "invalid_grant", error_description: "code expired" }), {
+          headers: { "Content-Type": "application/json" },
+        });
       }
       return new Response("nope", { status: 500 });
     });
     await expect(provider.exchangeCode("bad", "https://app.example.com/cb")).rejects.toBeInstanceOf(
-      IdentityProviderError
+      IdentityProviderError,
     );
   });
 
@@ -160,15 +165,15 @@ describe("OidcProvider", () => {
       if (call.url.endsWith("/.well-known/openid-configuration")) return discoveryResponse();
       if (call.url === DISCOVERY.token_endpoint) {
         return new Response(JSON.stringify({ access_token: "tok" }), {
-          headers: { "Content-Type": "application/json" }
+          headers: { "Content-Type": "application/json" },
         });
       }
       return new Response(JSON.stringify({ name: "no subject here" }), {
-        headers: { "Content-Type": "application/json" }
+        headers: { "Content-Type": "application/json" },
       });
     });
     await expect(provider.exchangeCode("c", "https://app.example.com/cb")).rejects.toBeInstanceOf(
-      IdentityProviderError
+      IdentityProviderError,
     );
   });
 });
@@ -183,7 +188,7 @@ describe("buildOidcProviderFromEnv", () => {
     "TANREN_OIDC_SUBJECT_CLAIM",
     "TANREN_OIDC_LOGIN_CLAIM",
     "TANREN_OIDC_NAME_CLAIM",
-    "TANREN_OIDC_GROUPS_CLAIM"
+    "TANREN_OIDC_GROUPS_CLAIM",
   ] as const;
   const SAVED: Record<string, string | undefined> = {};
 

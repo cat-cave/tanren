@@ -14,12 +14,12 @@ const allocateSchema = z.object({
   runId: z.string().min(1),
   projectId: z.string().min(1),
   runnerImage: z.string().min(1),
-  vaultRefs: z.array(z.string().min(1)).default([])
+  vaultRefs: z.array(z.string().min(1)).default([]),
 });
 
 const releaseSchema = z.object({
   runnerId: z.string().min(1),
-  reason: z.enum(["completed", "failed", "abandoned"])
+  reason: z.enum(["completed", "failed", "abandoned"]),
 });
 
 export function createAllocatorApi(options: AllocatorApiOptions): Hono {
@@ -63,7 +63,13 @@ export function createAllocatorApi(options: AllocatorApiOptions): Hono {
 }
 
 function requireBearer(token: string) {
-  return async (c: { req: { header: (name: string) => string | undefined }; json: (body: unknown, status: number) => unknown }, next: () => Promise<void>) => {
+  return async (
+    c: {
+      req: { header: (name: string) => string | undefined };
+      json: (body: unknown, status: number) => unknown;
+    },
+    next: () => Promise<void>,
+  ) => {
     const provided = c.req.header("authorization");
     if (provided !== `Bearer ${token}`) {
       return c.json({ error: "unauthorized" }, 401);

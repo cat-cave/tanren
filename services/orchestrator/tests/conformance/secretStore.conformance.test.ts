@@ -9,7 +9,7 @@ import { describeSecretStoreConformance } from "./secretStoreConformance.js";
 
 // --- InMemorySecretStore ----------------------------------------------------
 describeSecretStoreConformance("InMemorySecretStore", {
-  make: (): SecretStore => new InMemorySecretStore()
+  make: (): SecretStore => new InMemorySecretStore(),
 });
 
 /**
@@ -41,7 +41,7 @@ function vaultFetch(): typeof fetch {
     }
     return new Response(JSON.stringify({ data: { data: { value } } }), {
       status: 200,
-      headers: { "Content-Type": "application/json" }
+      headers: { "Content-Type": "application/json" },
     });
   }) as typeof fetch;
 }
@@ -49,5 +49,9 @@ function vaultFetch(): typeof fetch {
 // --- VaultSecretStore (mocked Vault KV v2) ----------------------------------
 describeSecretStoreConformance("VaultSecretStore", {
   make: (): SecretStore =>
-    new VaultSecretStore({ addr: "http://vault:8200", token: "test-token", fetchImpl: vaultFetch() })
+    new VaultSecretStore({
+      addr: "http://vault:8200",
+      token: "test-token",
+      fetchImpl: vaultFetch(),
+    }),
 });

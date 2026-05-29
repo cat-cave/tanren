@@ -14,33 +14,33 @@ export const RunQueuedPayload = z
       repoUrl: z.string(),
       defaultBranch: z.string(),
       runnerImage: z.string(),
-      allocator: z.string()
+      allocator: z.string(),
     }),
     spec: z.object({
       title: z.string(),
       acceptanceCriteria: z.array(z.string()),
-      dependsOn: z.array(z.string())
-    })
+      dependsOn: z.array(z.string()),
+    }),
   })
   .strict();
 
 export const RunStartedPayload = z
   .object({
-    status: z.string()
+    status: z.string(),
   })
   .strict();
 
 export const RunCompletedPayload = z
   .object({
     status: z.string(),
-    outcome: z.string()
+    outcome: z.string(),
   })
   .strict();
 
 export const RunFailedPayload = z
   .object({
     status: z.string(),
-    message: z.string()
+    message: z.string(),
   })
   .strict();
 
@@ -52,14 +52,14 @@ const TaskKindLiteral = z.string();
 export const TaskQueuedPayload = z
   .object({
     taskKind: TaskKindLiteral,
-    jobId: z.string().optional()
+    jobId: z.string().optional(),
   })
   .strict();
 
 export const TaskStartedPayload = z
   .object({
     taskKind: TaskKindLiteral,
-    jobId: z.string().optional()
+    jobId: z.string().optional(),
   })
   .strict();
 
@@ -68,7 +68,7 @@ export const TaskCompletedPayload = z
     taskKind: TaskKindLiteral,
     jobId: z.string().optional(),
     status: z.string().optional(),
-    reason: z.string().optional()
+    reason: z.string().optional(),
   })
   .strict();
 
@@ -80,7 +80,7 @@ export const TaskFailedPayload = z
     failureKind: z.string().optional(),
     message: z.string().optional(),
     status: z.string().optional(),
-    reason: z.string().optional()
+    reason: z.string().optional(),
   })
   .strict();
 
@@ -96,6 +96,6 @@ export const JobDeadLetteredPayload = z
     attempts: z.number().int(),
     maxAttempts: z.number().int(),
     failureKind: z.string(),
-    message: z.string()
+    message: z.string(),
   })
   .strict();

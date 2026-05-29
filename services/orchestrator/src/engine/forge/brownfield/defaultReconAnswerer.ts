@@ -10,7 +10,11 @@
 import type { ReconAnswerer, ReconArchitectureLine, ReconIndex, ReconReport, ReconRisk } from "./types.js";
 
 function slugFromRepoUrl(repoUrl: string): string {
-  const tail = repoUrl.replace(/\.git$/, "").replace(/\/$/, "").split("/").pop();
+  const tail = repoUrl
+    .replace(/\.git$/, "")
+    .replace(/\/$/, "")
+    .split("/")
+    .pop();
   return tail !== undefined && tail !== "" ? tail : "linked-repo";
 }
 
@@ -40,13 +44,19 @@ function detectArchitecture(index: ReconIndex): ReconArchitectureLine[] {
 function detectRisks(index: ReconIndex): ReconRisk[] {
   const risks: ReconRisk[] = [];
   if (!hasFile(index, "codeowners")) {
-    risks.push({ severity: "warn", note: "no CODEOWNERS file — review-gate routing has no owners" });
+    risks.push({
+      severity: "warn",
+      note: "no CODEOWNERS file — review-gate routing has no owners",
+    });
   }
   if (!hasFile(index, ".mergify.yml")) {
     risks.push({ severity: "info", note: "no mergify config detected" });
   }
   if (!hasPathContaining(index, "tanren-ci")) {
-    risks.push({ severity: "warn", note: "no tanren-ci workflow — runs cannot gate on PR checks yet" });
+    risks.push({
+      severity: "warn",
+      note: "no tanren-ci workflow — runs cannot gate on PR checks yet",
+    });
   }
   return risks;
 }
@@ -67,18 +77,26 @@ export function createDeterministicReconAnswerer(): ReconAnswerer {
           purpose: `linked repository ${slug} (recon-inferred)`,
           inferredFrom: index.files.some((f) => f.path.toLowerCase() === "readme.md")
             ? "README.md · package.json"
-            : "repo layout"
+            : "repo layout",
         },
         personas: [
           {
             name: "developer · maintainer",
             description: "maintains the codebase and reviews changes",
-            inferredFrom: "no other user roles found in code"
-          }
+            inferredFrom: "no other user roles found in code",
+          },
         ],
         behaviors: [
-          { persona: "developer · maintainer", title: "build & test the project", inferredFrom: "ci workflows" },
-          { persona: "developer · maintainer", title: "review incoming changes", inferredFrom: "branch protection" }
+          {
+            persona: "developer · maintainer",
+            title: "build & test the project",
+            inferredFrom: "ci workflows",
+          },
+          {
+            persona: "developer · maintainer",
+            title: "review incoming changes",
+            inferredFrom: "branch protection",
+          },
         ],
         architecture,
         risks,
@@ -87,22 +105,23 @@ export function createDeterministicReconAnswerer(): ReconAnswerer {
             id: "design-dna",
             chapter: "design dna",
             question: "The repo has no clear design system. Default to industrial (tanren-style) or import one?",
-            options: ["use industrial", "import from url", "ask me later"]
+            options: ["use industrial", "import from url", "ask me later"],
           },
           {
             id: "test-coverage",
             chapter: "tests",
             question: "Test coverage looks thin. Should tanren's first specs include coverage work?",
-            options: ["add coverage specs", "intentional · skip"]
+            options: ["add coverage specs", "intentional · skip"],
           },
           {
             id: "external-pushes",
             chapter: "risks",
-            question: "Contributors push directly to feature branches. Auto-spec their changes, or stay out of the way?",
-            options: ["defer to governance"]
-          }
-        ]
+            question:
+              "Contributors push directly to feature branches. Auto-spec their changes, or stay out of the way?",
+            options: ["defer to governance"],
+          },
+        ],
       };
-    }
+    },
   };
 }

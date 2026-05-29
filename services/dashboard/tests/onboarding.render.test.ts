@@ -7,7 +7,13 @@ import type pg from "pg";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/main.js";
 
-const ORG = { id: "org_acme", kind: "github_org", login: "cat-cave", displayName: "Cat Cave", role: "org:admin" };
+const ORG = {
+  id: "org_acme",
+  kind: "github_org",
+  login: "cat-cave",
+  displayName: "Cat Cave",
+  role: "org:admin",
+};
 
 interface MockState {
   credentialImports: Array<{ url: string; body: unknown }>;
@@ -30,8 +36,8 @@ const DOCTOR_OK = {
   generatedAt: "2026-05-28T00:00:00Z",
   checks: [
     { name: "postgres", status: "ok", detail: "SELECT 1 returned", latencyMs: 2 },
-    { name: "vault", status: "ok", detail: "vault status 200", latencyMs: 5 }
-  ]
+    { name: "vault", status: "ok", detail: "vault status 200", latencyMs: 5 },
+  ],
 };
 
 const DOCTOR_FAIL = {
@@ -39,8 +45,8 @@ const DOCTOR_FAIL = {
   generatedAt: "2026-05-28T00:00:00Z",
   checks: [
     { name: "postgres", status: "ok", detail: "ok", latencyMs: 2 },
-    { name: "vault", status: "fail", detail: "sealed", latencyMs: 5 }
-  ]
+    { name: "vault", status: "fail", detail: "sealed", latencyMs: 5 },
+  ],
 };
 
 function mockOrchestrator(opts: { doctor?: unknown; matrix?: unknown } = {}): MockState {
@@ -49,7 +55,7 @@ function mockOrchestrator(opts: { doctor?: unknown; matrix?: unknown } = {}): Mo
     targetCreates: [],
     projectCreates: [],
     brownfieldLinks: [],
-    brownfieldOk: true
+    brownfieldOk: true,
   };
   vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input.toString();
@@ -59,7 +65,13 @@ function mockOrchestrator(opts: { doctor?: unknown; matrix?: unknown } = {}): Mo
     if (url.endsWith("/orgs")) return json({ orgs: [ORG] });
     if (url.endsWith("/doctor")) return json(opts.doctor ?? DOCTOR_OK);
     if (url.includes("/notifications/matrix")) {
-      return json(opts.matrix ?? { targets: [], routes: [], events: [{ eventName: "run.failed", defaultSeverity: "fail" }] });
+      return json(
+        opts.matrix ?? {
+          targets: [],
+          routes: [],
+          events: [{ eventName: "run.failed", defaultSeverity: "fail" }],
+        },
+      );
     }
     if (url.includes("/notifications/targets") && method === "POST") {
       const body = JSON.parse(String(init?.body ?? "{}"));
@@ -77,8 +89,14 @@ function mockOrchestrator(opts: { doctor?: unknown; matrix?: unknown } = {}): Mo
     if (url.includes("/credentials/me")) {
       return json({
         credentials: [
-          { ref: "credential/codex_chatgpt_auth/me/auth", kind: "codex_chatgpt_auth", scope: "me", ownerId: "u1", createdAt: "2026-05-28" }
-        ]
+          {
+            ref: "credential/codex_chatgpt_auth/me/auth",
+            kind: "codex_chatgpt_auth",
+            scope: "me",
+            ownerId: "u1",
+            createdAt: "2026-05-28",
+          },
+        ],
       });
     }
     if (url.includes("/credentials")) return json({ credentials: [] });
@@ -96,7 +114,7 @@ function mockOrchestrator(opts: { doctor?: unknown; matrix?: unknown } = {}): Mo
         repoUrl: body.repoUrl,
         orgId: "org_acme",
         detectedFiles: [{ path: "CODEOWNERS", present: true, size: 12 }],
-        writesPerformed: 0
+        writesPerformed: 0,
       });
     }
     // P3-0016 full-track recon (read-only Answerer pre-fill).
@@ -106,13 +124,30 @@ function mockOrchestrator(opts: { doctor?: unknown; matrix?: unknown } = {}): Mo
         repoUrl: body.repoUrl,
         filesIndexed: 84,
         report: {
-          identity: { slug: "tanren-fixture-easy", purpose: "smoke fixture", inferredFrom: "README.md" },
-          personas: [{ name: "developer · maintainer", description: "maintains the codebase", inferredFrom: "code" }],
+          identity: {
+            slug: "tanren-fixture-easy",
+            purpose: "smoke fixture",
+            inferredFrom: "README.md",
+          },
+          personas: [
+            {
+              name: "developer · maintainer",
+              description: "maintains the codebase",
+              inferredFrom: "code",
+            },
+          ],
           behaviors: [{ persona: "developer · maintainer", title: "build & test", inferredFrom: "ci" }],
           architecture: [{ layer: "ci", detail: "github actions" }],
           risks: [{ severity: "warn", note: "no CODEOWNERS file" }],
-          gaps: [{ id: "design-dna", chapter: "design dna", question: "default to industrial?", options: ["use industrial"] }]
-        }
+          gaps: [
+            {
+              id: "design-dna",
+              chapter: "design dna",
+              question: "default to industrial?",
+              options: ["use industrial"],
+            },
+          ],
+        },
       });
     }
     if (url.includes("/projects")) return json({ projects: [] });
@@ -205,11 +240,14 @@ describe("notifications matrix", () => {
     const res = await app.request("/notifications/targets", {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: "label=alerts&destination=https://ntfy.sh/cat-cave&channelKind=ntfy"
+      body: "label=alerts&destination=https://ntfy.sh/cat-cave&channelKind=ntfy",
     });
     expect(res.status).toBe(303);
     expect(state.targetCreates).toHaveLength(1);
-    expect(state.targetCreates[0]).toMatchObject({ channelKind: "ntfy", destination: "https://ntfy.sh/cat-cave" });
+    expect(state.targetCreates[0]).toMatchObject({
+      channelKind: "ntfy",
+      destination: "https://ntfy.sh/cat-cave",
+    });
   });
 });
 
@@ -232,7 +270,7 @@ describe("credentials", () => {
     const res = await app.request("/onboarding/credentials/dev/codex", {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: "ref=credential/codex_chatgpt_auth/me/auth&authJson=" + encodeURIComponent('{"token":"x"}')
+      body: "ref=credential/codex_chatgpt_auth/me/auth&authJson=" + encodeURIComponent('{"token":"x"}'),
     });
     expect(res.status).toBe(303);
     expect(state.credentialImports).toHaveLength(1);
@@ -253,7 +291,7 @@ describe("credentials", () => {
     const res = await app.request("/onboarding/credentials/github", {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: "label=tanren-bot&token=ghp_secret"
+      body: "label=tanren-bot&token=ghp_secret",
     });
     expect(res.status).toBe(303);
     expect(state.credentialImports).toHaveLength(1);
@@ -282,7 +320,10 @@ describe("existing-project full track (P3-0016)", () => {
     const res = await app.request("/onboarding/existing/link", {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: "repoUrl=" + encodeURIComponent("https://github.com/cat-cave/tanren-fixture-easy") + "&name=tanren-fixture-easy"
+      body:
+        "repoUrl=" +
+        encodeURIComponent("https://github.com/cat-cave/tanren-fixture-easy") +
+        "&name=tanren-fixture-easy",
     });
     const html = await res.text();
     expect(state.projectCreates).toHaveLength(1);
@@ -300,7 +341,7 @@ describe("existing-project full track (P3-0016)", () => {
     const res = await app.request("/onboarding/existing/link", {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: "repoUrl=" + encodeURIComponent("https://github.com/cat-cave/missing") + "&name=missing"
+      body: "repoUrl=" + encodeURIComponent("https://github.com/cat-cave/missing") + "&name=missing",
     });
     const html = await res.text();
     expect(html).toContain("cannot see repo");

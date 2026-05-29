@@ -23,7 +23,7 @@ describe("phase 1 end-to-end fixture workflow", () => {
       acceptanceCriteria: ["PHASE1_FIXTURE.md contains tanren phase 1 ok"],
       runnerImage: "ghcr.io/cat-cave/tanren-runner:test",
       identitySecretRef: "runner/test/identity",
-      githubCredentialRef: "credential/github/dev"
+      githubCredentialRef: "credential/github/dev",
     };
     const pool = new FixturePool(context);
     const events = new FakeEventStore();
@@ -33,10 +33,35 @@ describe("phase 1 end-to-end fixture workflow", () => {
     const ssh = new RecordingSsh();
     const github = new ScriptedGitHubHttp([
       { status: 200, body: [] },
-      { status: 201, body: { number: 42, html_url: "https://github.com/cat-cave/tanren-fixture-easy/pull/42", draft: true, base: { ref: "main" } } },
-      { status: 200, body: { head: { sha: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", ref: "tanren/phase1-fixture" } } },
-      { status: 200, body: { check_runs: [{ name: "check", status: "completed", conclusion: "success", html_url: "https://ci.example/check" }] } },
-      { status: 200, body: { statuses: [] } }
+      {
+        status: 201,
+        body: {
+          number: 42,
+          html_url: "https://github.com/cat-cave/tanren-fixture-easy/pull/42",
+          draft: true,
+          base: { ref: "main" },
+        },
+      },
+      {
+        status: 200,
+        body: {
+          head: { sha: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", ref: "tanren/phase1-fixture" },
+        },
+      },
+      {
+        status: 200,
+        body: {
+          check_runs: [
+            {
+              name: "check",
+              status: "completed",
+              conclusion: "success",
+              html_url: "https://ci.example/check",
+            },
+          ],
+        },
+      },
+      { status: 200, body: { statuses: [] } },
     ]);
 
     const result = await runPhase1FixtureWorkflow({
@@ -52,7 +77,7 @@ describe("phase 1 end-to-end fixture workflow", () => {
       createAuditor: () => fakeAuditor,
       timeoutMs: 100,
       maxCiPolls: 1,
-      sleep: async () => undefined
+      sleep: async () => undefined,
     });
 
     expect(result.pullRequest.prNumber).toBe(42);
@@ -64,8 +89,8 @@ describe("phase 1 end-to-end fixture workflow", () => {
         runId: context.runId,
         projectId: context.projectId,
         runnerImage: context.runnerImage,
-        identitySecretRef: context.identitySecretRef
-      }
+        identitySecretRef: context.identitySecretRef,
+      },
     ]);
     expect(ssh.commands[0]?.command.command).toContain("git clone --depth 1");
     expect(events.events.map((event) => event.eventType)).toEqual(
@@ -76,8 +101,8 @@ describe("phase 1 end-to-end fixture workflow", () => {
         "auditor.completed",
         "github.pr.created",
         "ci.passed",
-        "phase1.fixture.completed"
-      ])
+        "phase1.fixture.completed",
+      ]),
     );
     expect(JSON.stringify(events.events)).not.toContain("ghp_secretToken");
     expect(JSON.stringify(github.requests)).not.toContain("ghp_secretToken");
@@ -90,14 +115,21 @@ const target: SshTarget = {
   port: 22,
   username: "tanren",
   hostKeyFingerprint: "SHA256:runner-host",
-  identitySecretRef: "runner/test/identity"
+  identitySecretRef: "runner/test/identity",
 };
 
 const fakeWriterResult: WriterResult = {
   diff: "diff --git a/PHASE1_FIXTURE.md b/PHASE1_FIXTURE.md\n+tanren phase 1 ok\n",
   commits: [{ sha: "ffffffffffffffffffffffffffffffffffffffff", message: "phase 1 fixture" }],
   exitReason: "completed",
-  tokenUsage: { inputTokens: 1, cachedInputTokens: 0, cacheCreationTokens: 0, outputTokens: 1, reasoningOutputTokens: 0, totalTokens: 2 }
+  tokenUsage: {
+    inputTokens: 1,
+    cachedInputTokens: 0,
+    cacheCreationTokens: 0,
+    outputTokens: 1,
+    reasoningOutputTokens: 0,
+    totalTokens: 2,
+  },
 };
 
 const fakeWriter: WriterAdapter = {
@@ -106,7 +138,7 @@ const fakeWriter: WriterAdapter = {
   authRef: "credential/self-hosted/phase1-fixture-test",
   async runWriter() {
     return fakeWriterResult;
-  }
+  },
 };
 
 class RecordingAllocator implements Allocator {
@@ -163,14 +195,17 @@ class FixturePool {
             spec_id: this.context.specId,
             project_id: this.context.projectId,
             pr_url: this.prUrl,
-            config: { githubCredentialRef: this.context.githubCredentialRef }
-          }
+            config: { githubCredentialRef: this.context.githubCredentialRef },
+          },
         ],
-        rowCount: 1
+        rowCount: 1,
       };
     }
     if (sql.startsWith("SELECT task_id, attempt")) {
-      return { rows: this.ciTask === undefined ? [] : [{ task_id: this.ciTask.taskId, attempt: this.ciTask.attempt }], rowCount: this.ciTask === undefined ? 0 : 1 };
+      return {
+        rows: this.ciTask === undefined ? [] : [{ task_id: this.ciTask.taskId, attempt: this.ciTask.attempt }],
+        rowCount: this.ciTask === undefined ? 0 : 1,
+      };
     }
     if (sql.startsWith("INSERT INTO tasks") && sql.includes("'ci'")) {
       this.ciTask = { taskId: String(params[0]), attempt: 1 };

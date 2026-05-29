@@ -35,7 +35,7 @@ import {
   ToolAccessDeniedError,
   type ForgeConversationAnswerer,
   type ForgeReadToolCall,
-  type ForgeReadToolDispatcher
+  type ForgeReadToolDispatcher,
 } from "../../engine/forge/index.js";
 import type { GitHubHttpClient } from "../../engine/providers/github.js";
 import type { SecretStore } from "../../engine/contracts/secretStore.js";
@@ -54,7 +54,7 @@ export interface ForgeAskRoutesOptions {
 
 const AskBody = z.object({
   question: z.string().min(1).max(4000),
-  audience: z.enum(["project:member", "project:admin", "org:admin", "platform:admin"]).optional()
+  audience: z.enum(["project:member", "project:admin", "org:admin", "platform:admin"]).optional(),
 });
 
 export function createForgeAskRoutes(options: ForgeAskRoutesOptions) {
@@ -76,22 +76,22 @@ export function createForgeAskRoutes(options: ForgeAskRoutesOptions) {
         {
           client: options.pool,
           answerer: answererFactory(),
-          dispatchReadTool: buildReadToolDispatcher(options)
+          dispatchReadTool: buildReadToolDispatcher(options),
         },
         {
           threadId: c.req.param("threadId"),
           question: parsed.data.question,
           audience: parsed.data.audience ?? "project:member",
-          actor
-        }
+          actor,
+        },
       );
       return c.json(
         {
           operatorTurn: result.operatorTurn,
           forgeTurn: result.forgeTurn,
-          toolsUsed: result.toolResults.map((entry) => entry.call.tool)
+          toolsUsed: result.toolResults.map((entry) => entry.call.tool),
         },
-        201
+        201,
       );
     } catch (error) {
       if (error instanceof ForgeThreadAccessDeniedError) {

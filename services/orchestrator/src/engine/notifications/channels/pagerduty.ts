@@ -29,7 +29,7 @@ const PD_SEVERITY_BY_SEVERITY: Record<NotificationPayload["severity"], string> =
   ok: "info",
   info: "info",
   warn: "warning",
-  fail: "critical"
+  fail: "critical",
 };
 
 export class PagerDutyChannel implements NotificationChannel {
@@ -53,13 +53,11 @@ export class PagerDutyChannel implements NotificationChannel {
     const response = await this.fetchImpl(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body
+      body,
     });
     if (response.status !== 202) {
       const detail = await safeReadText(response);
-      throw new Error(
-        `pagerduty publish failed: ${response.status} ${response.statusText} ${detail}`.trim()
-      );
+      throw new Error(`pagerduty publish failed: ${response.status} ${response.statusText} ${detail}`.trim());
     }
   }
 
@@ -70,9 +68,7 @@ export class PagerDutyChannel implements NotificationChannel {
       return destination;
     }
     if (this.secrets === undefined) {
-      throw new Error(
-        `pagerduty channel needs a secret store to resolve credential ref: ${destination}`
-      );
+      throw new Error(`pagerduty channel needs a secret store to resolve credential ref: ${destination}`);
     }
     const secret = await this.secrets.get(destination);
     if (secret === undefined) {
@@ -106,9 +102,9 @@ function buildEvent(routingKey: string, payload: NotificationPayload): PagerDuty
       severity: PD_SEVERITY_BY_SEVERITY[payload.severity],
       custom_details: {
         body: payload.body,
-        ...(payload.tags !== undefined ? { tags: payload.tags } : {})
-      }
-    }
+        ...(payload.tags !== undefined ? { tags: payload.tags } : {}),
+      },
+    },
   };
   if (payload.url !== undefined) {
     event.client = "tanren";

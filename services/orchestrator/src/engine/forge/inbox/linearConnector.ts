@@ -33,7 +33,7 @@ export const LinearConfig = z
     projectId: z.string().min(1).optional(),
     states: z.array(z.string().min(1)).default([]),
     labels: z.array(z.string().min(1)).default([]),
-    endpoint: z.string().url().default("https://api.linear.app/graphql")
+    endpoint: z.string().url().default("https://api.linear.app/graphql"),
   })
   .strict();
 export type LinearConfig = z.infer<typeof LinearConfig>;
@@ -75,9 +75,9 @@ export class FetchLinearHttpClient implements LinearHttpClient {
       headers: {
         Authorization: input.token,
         "Content-Type": "application/json",
-        Accept: "application/json"
+        Accept: "application/json",
       },
-      body: JSON.stringify({ query: input.query, variables: input.variables })
+      body: JSON.stringify({ query: input.query, variables: input.variables }),
     });
     const text = await response.text();
     return { status: response.status, body: text === "" ? undefined : JSON.parse(text) };
@@ -164,7 +164,7 @@ function bodyFor(issue: RawLinearIssue): string {
 // completed/canceled), optionally scoped to a team/project.
 function buildFilter(config: LinearConfig): Record<string, unknown> {
   const filter: Record<string, unknown> = {
-    state: { type: { nin: ["completed", "canceled"] } }
+    state: { type: { nin: ["completed", "canceled"] } },
   };
   if (config.teamId !== undefined) filter["team"] = { id: { eq: config.teamId } };
   if (config.projectId !== undefined) filter["project"] = { id: { eq: config.projectId } };
@@ -199,7 +199,7 @@ export function createLinearConnector(deps: LinearConnectorDeps): SourceConnecto
         endpoint: config.endpoint,
         token: secret.value,
         query: ISSUES_QUERY,
-        variables: { filter: buildFilter(config), first: 50 }
+        variables: { filter: buildFilter(config), first: 50 },
       });
       if (response.status !== 200) return [];
 
@@ -219,10 +219,10 @@ export function createLinearConnector(deps: LinearConnectorDeps): SourceConnecto
           title: title.slice(0, 300),
           body: bodyFor(issue),
           severity: severityFor(issue),
-          projectId: source.projectId
+          projectId: source.projectId,
         });
       }
       return items;
-    }
+    },
   };
 }

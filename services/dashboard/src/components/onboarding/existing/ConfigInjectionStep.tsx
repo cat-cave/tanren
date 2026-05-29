@@ -26,7 +26,7 @@ const PROPOSED: PreviewFile[] = [
   { path: ".mergify.yml", addedLines: 14 },
   { path: "CODEOWNERS", addedLines: 4 },
   { path: ".gitignore", addedLines: 3 },
-  { path: ".github/PULL_REQUEST_TEMPLATE.md", addedLines: 4 }
+  { path: ".github/PULL_REQUEST_TEMPLATE.md", addedLines: 4 },
 ];
 
 export function ConfigInjectionStep(props: {
@@ -40,7 +40,13 @@ export function ConfigInjectionStep(props: {
 }) {
   if (props.opened !== undefined) {
     return (
-      <OpenedView opened={props.opened} repoUrl={props.repoUrl} report={props.report} baseAction={props.baseAction} projectId={props.projectId} />
+      <OpenedView
+        opened={props.opened}
+        repoUrl={props.repoUrl}
+        report={props.report}
+        baseAction={props.baseAction}
+        projectId={props.projectId}
+      />
     );
   }
   return (
@@ -48,10 +54,19 @@ export function ConfigInjectionStep(props: {
       <div class="step-heading">
         <div>
           <div class="eyebrow">step 3 · config injection pr</div>
-          <div class="title">review what <em>we'll add</em></div>
-          <div class="sub">tanren proposes the integration files from what the agent read. nothing lands until you merge this pr. exclude any file; tanren adapts.</div>
+          <div class="title">
+            review what <em>we'll add</em>
+          </div>
+          <div class="sub">
+            tanren proposes the integration files from what the agent read. nothing lands until you merge this pr.
+            exclude any file; tanren adapts.
+          </div>
         </div>
-        <div class="right"><span class="pill ok"><span class="d"></span>one pr · then it's yours</span></div>
+        <div class="right">
+          <span class="pill ok">
+            <span class="d"></span>one pr · then it's yours
+          </span>
+        </div>
       </div>
       {props.error !== undefined ? <div class="alert fail">{props.error}</div> : null}
 
@@ -84,16 +99,26 @@ export function ConfigInjectionStep(props: {
           <div style="display:flex;flex-direction:column;gap:12px">
             <div class="col-card">
               <div class="h">
-                <span>.tanren/PROJECT.md <em>· one-time snapshot</em></span>
+                <span>
+                  .tanren/PROJECT.md <em>· one-time snapshot</em>
+                </span>
               </div>
               <div class="ex-preview">{snapshotPreview(props.report, props.posture)}</div>
             </div>
             <div class="col-card live" style="flex-direction:row;align-items:center;gap:12px">
-              <span class="mono-dim" style="color:var(--ember-08);letter-spacing:0.18em;text-transform:uppercase;font-weight:700">↑ before you click</span>
+              <span
+                class="mono-dim"
+                style="color:var(--ember-08);letter-spacing:0.18em;text-transform:uppercase;font-weight:700"
+              >
+                ↑ before you click
+              </span>
               <div style="font-family:var(--font-ui);font-size:12px;color:var(--fg-1);line-height:1.4;flex:1">
-                this opens a PR on the target repo. tanren will <b>NOT</b> start runs until you merge it. comment, edit, or reject like any other pr.
+                this opens a PR on the target repo. tanren will <b>NOT</b> start runs until you merge it. comment, edit,
+                or reject like any other pr.
               </div>
-              <button type="submit" class="btn primary">open the pr ↗</button>
+              <button type="submit" class="btn primary">
+                open the pr ↗
+              </button>
             </div>
           </div>
         </div>
@@ -122,26 +147,41 @@ function snapshotPreview(report: ReconReport, posture: string): string {
     architecture,
     "",
     "## merge posture",
-    `- ${posture}`
+    `- ${posture}`,
   ].join("\n");
 }
 
-function OpenedView(props: { opened: ConfigInjectionResult; repoUrl: string; report: ReconReport; baseAction: string; projectId?: string }) {
+function OpenedView(props: {
+  opened: ConfigInjectionResult;
+  repoUrl: string;
+  report: ReconReport;
+  baseAction: string;
+  projectId?: string;
+}) {
   return (
     <>
       <div class="step-heading">
         <div>
           <div class="eyebrow">step 3 · config injection pr · opened</div>
-          <div class="title">pr <em>#{props.opened.pullRequest.number}</em> opened</div>
-          <div class="sub">no runs start until this PR merges. review + merge it in the target repo, then continue seeding the DAG.</div>
+          <div class="title">
+            pr <em>#{props.opened.pullRequest.number}</em> opened
+          </div>
+          <div class="sub">
+            no runs start until this PR merges. review + merge it in the target repo, then continue seeding the DAG.
+          </div>
         </div>
       </div>
       <div class="alert ok">
-        Opened <a href={props.opened.pullRequest.url} target="_blank" rel="noreferrer" style="color:var(--ember-08)">PR #{props.opened.pullRequest.number}</a>{" "}
+        Opened{" "}
+        <a href={props.opened.pullRequest.url} target="_blank" rel="noreferrer" style="color:var(--ember-08)">
+          PR #{props.opened.pullRequest.number}
+        </a>{" "}
         on branch <b>{props.opened.pullRequest.branch}</b> · {props.opened.files.length} files · no runs until merged.
       </div>
       <div class="col-card" style="gap:8px">
-        <div class="h"><span>files committed</span></div>
+        <div class="h">
+          <span>files committed</span>
+        </div>
         {props.opened.files.map((f) => (
           <div class="ex-seed-row">
             <span style="color:var(--status-ok)">+</span>
@@ -159,7 +199,9 @@ function OpenedView(props: { opened: ConfigInjectionResult; repoUrl: string; rep
         <div class="foot">
           <div class="hint">↑ the integration pr is the one-time gate · all brownfield onboarding lands through it</div>
           <div class="grow"></div>
-          <button type="submit" class="btn primary">next · spec dag + ingest ↗</button>
+          <button type="submit" class="btn primary">
+            next · spec dag + ingest ↗
+          </button>
         </div>
       </form>
     </>

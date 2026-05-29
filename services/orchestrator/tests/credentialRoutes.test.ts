@@ -11,7 +11,7 @@ const alice: ActorContext = {
   orgId: "org_acme",
   projectId: null,
   scopes: ["org:member", "org:admin"],
-  source: "session"
+  source: "session",
 };
 
 function buildHarness(actor: ActorContext) {
@@ -31,10 +31,10 @@ function buildHarness(actor: ActorContext) {
         },
         async resolveActorContext() {
           return actor;
-        }
+        },
       } as never,
-      localDevActor: actor
-    })
+      localDevActor: actor,
+    }),
   );
   app.route("/", createCredentialRoutes({ pool: pool.asPgPool(), secrets, registry }));
   return { app, pool, secrets, registry };
@@ -46,7 +46,10 @@ describe("credential routes", () => {
     const created = await app.request("/orgs/org_acme/credentials?kind=opaque", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ref: "credential/opaque/org/org_acme/api-key", value: "secret-value" })
+      body: JSON.stringify({
+        ref: "credential/opaque/org/org_acme/api-key",
+        value: "secret-value",
+      }),
     });
     expect(created.status).toBe(201);
     const createdBody = (await created.json()) as { ref: string; redacted: boolean };
@@ -63,7 +66,7 @@ describe("credential routes", () => {
     await app.request("/orgs/org_acme/credentials?kind=opaque", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ref: "credential/opaque/org/org_acme/k1", value: "shh" })
+      body: JSON.stringify({ ref: "credential/opaque/org/org_acme/k1", value: "shh" }),
     });
     const got = await app.request("/orgs/org_acme/credentials/credential%2Fopaque%2Forg%2Forg_acme%2Fk1");
     const body = (await got.json()) as Record<string, unknown>;
@@ -82,12 +85,11 @@ describe("credential routes", () => {
     await app.request("/orgs/org_acme/credentials?kind=opaque", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ref: "credential/opaque/org/org_acme/k2", value: "v" })
+      body: JSON.stringify({ ref: "credential/opaque/org/org_acme/k2", value: "v" }),
     });
-    const response = await app.request(
-      "/orgs/org_acme/credentials/credential%2Fopaque%2Forg%2Forg_acme%2Fk2",
-      { method: "DELETE" }
-    );
+    const response = await app.request("/orgs/org_acme/credentials/credential%2Fopaque%2Forg%2Forg_acme%2Fk2", {
+      method: "DELETE",
+    });
     expect(response.status).toBe(200);
     expect(await secrets.get("credential/opaque/org/org_acme/k2")).toBeUndefined();
     expect(await registry.get("credential/opaque/org/org_acme/k2")).toBeUndefined();
@@ -98,10 +100,12 @@ describe("credential routes", () => {
     await app.request("/credentials/me?kind=opaque", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ref: "credential/opaque/me/user_alice/dev", value: "v" })
+      body: JSON.stringify({ ref: "credential/opaque/me/user_alice/dev", value: "v" }),
     });
     const response = await app.request("/credentials/me");
-    const body = (await response.json()) as { credentials: Array<{ ownerId: string; scope: string }> };
+    const body = (await response.json()) as {
+      credentials: Array<{ ownerId: string; scope: string }>;
+    };
     expect(body.credentials.length).toBe(1);
     expect(body.credentials[0]?.scope).toBe("me");
     expect(body.credentials[0]?.ownerId).toBe("user_alice");

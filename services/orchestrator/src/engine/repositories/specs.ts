@@ -13,7 +13,7 @@ export const SpecRow = z.object({
   acceptanceCriteria: z.array(z.string()),
   dependsOn: z.array(z.string()),
   status: SpecStatus,
-  tenantId: z.string().nullable()
+  tenantId: z.string().nullable(),
 });
 export type SpecRow = z.infer<typeof SpecRow>;
 
@@ -52,7 +52,7 @@ function decodeSpecRow(raw: RawSpecRow): SpecRow {
     acceptanceCriteria: asStringArray(raw.acceptance_criteria),
     dependsOn: asStringArray(raw.depends_on),
     status: raw.status,
-    tenantId: raw.tenant_id
+    tenantId: raw.tenant_id,
   });
 }
 
@@ -68,9 +68,12 @@ export const SpecStore = {
 
   async list(client: QueryClient, filter: { projectId?: string } | undefined, _actor: ActorRef): Promise<SpecRow[]> {
     const projectId = filter?.projectId;
-    const result = projectId === undefined
-      ? await client.query(`SELECT ${SELECT_SPEC_COLUMNS} FROM specs ORDER BY spec_id`)
-      : await client.query(`SELECT ${SELECT_SPEC_COLUMNS} FROM specs WHERE project_id = $1 ORDER BY spec_id`, [projectId]);
+    const result =
+      projectId === undefined
+        ? await client.query(`SELECT ${SELECT_SPEC_COLUMNS} FROM specs ORDER BY spec_id`)
+        : await client.query(`SELECT ${SELECT_SPEC_COLUMNS} FROM specs WHERE project_id = $1 ORDER BY spec_id`, [
+            projectId,
+          ]);
     return result.rows.map((row) => decodeSpecRow(row as RawSpecRow));
   },
 
@@ -78,16 +81,16 @@ export const SpecStore = {
     client: QueryClient,
     specId: string,
     next: { from: z.infer<typeof SpecStatus>; to: z.infer<typeof SpecStatus> },
-    _actor: ActorRef
+    _actor: ActorRef,
   ): Promise<SpecRow> {
     transitionSpec(next.from, next.to);
     const result = await client.query(
       `UPDATE specs SET status = $2 WHERE spec_id = $1 RETURNING ${SELECT_SPEC_COLUMNS}`,
-      [specId, next.to]
+      [specId, next.to],
     );
     if (result.rows.length === 0) {
       throw new Error(`spec not found: ${specId}`);
     }
     return decodeSpecRow(result.rows[0] as RawSpecRow);
-  }
+  },
 } as const;

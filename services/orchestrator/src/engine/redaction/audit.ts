@@ -48,8 +48,8 @@ export async function emitRedactionAudit(input: RedactionAuditInput): Promise<vo
       eventReadId: input.eventReadId,
       eventReadType: input.eventReadType,
       paths: [...input.paths],
-      at
-    }
+      at,
+    },
   });
 }
 

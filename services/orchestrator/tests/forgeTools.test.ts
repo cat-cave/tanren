@@ -10,7 +10,7 @@ import {
   tanrenReadMilestones,
   tanrenReadRun,
   tanrenTriggerRun,
-  ToolAccessDeniedError
+  ToolAccessDeniedError,
 } from "../src/engine/forge/index.js";
 import { RoutesPool } from "./helpers/routesPool.js";
 
@@ -19,7 +19,7 @@ const orgMember: ActorContext = {
   orgId: "org_a",
   projectId: null,
   scopes: ["org:member"],
-  source: "session"
+  source: "session",
 };
 
 const stranger: ActorContext = {
@@ -27,7 +27,7 @@ const stranger: ActorContext = {
   orgId: "org_b",
   projectId: null,
   scopes: ["org:member"],
-  source: "session"
+  source: "session",
 };
 
 function pool(p: RoutesPool): pg.Pool {
@@ -51,9 +51,9 @@ describe("tanrenReadInsights", () => {
   it("rejects an actor outside the project's org", async () => {
     const p = new RoutesPool();
     seedProject(p, "project_a", "org_a");
-    await expect(
-      tanrenReadInsights({ pool: pool(p) }, { projectId: "project_a" }, stranger)
-    ).rejects.toBeInstanceOf(ToolAccessDeniedError);
+    await expect(tanrenReadInsights({ pool: pool(p) }, { projectId: "project_a" }, stranger)).rejects.toBeInstanceOf(
+      ToolAccessDeniedError,
+    );
   });
 });
 
@@ -70,20 +70,16 @@ describe("tanrenReadRun authz", () => {
   it("404-equivalent throw when run does not exist", async () => {
     const p = new RoutesPool();
     seedProject(p, "project_a", "org_a");
-    await expect(
-      tanrenReadRun({ pool: pool(p) }, { runId: "run_missing" }, orgMember)
-    ).rejects.toBeInstanceOf(ToolAccessDeniedError);
+    await expect(tanrenReadRun({ pool: pool(p) }, { runId: "run_missing" }, orgMember)).rejects.toBeInstanceOf(
+      ToolAccessDeniedError,
+    );
   });
 });
 
 describe("tanrenAcknowledgeInsight stub", () => {
   it("records the ack with the actor's userId", async () => {
     const p = new RoutesPool();
-    const result = await tanrenAcknowledgeInsight(
-      { pool: pool(p) },
-      { insightId: "insight_42" },
-      orgMember
-    );
+    const result = await tanrenAcknowledgeInsight({ pool: pool(p) }, { insightId: "insight_42" }, orgMember);
     expect(result.insightId).toBe("insight_42");
     expect(result.acknowledgedBy).toBe("user_m");
     expect(peekAcknowledgedInsightForTests("insight_42")?.acknowledgedBy).toBe("user_m");
@@ -101,8 +97,6 @@ describe("tanrenTriggerRun authz", () => {
     const p = new RoutesPool();
     seedProject(p, "project_a", "org_a");
     p.seedSpec({ spec_id: "spec_a", project_id: "project_a", status: "pending" });
-    await expect(
-      tanrenTriggerRun({ pool: pool(p) }, { specId: "spec_a" }, stranger)
-    ).rejects.toThrow(/spec|access/i);
+    await expect(tanrenTriggerRun({ pool: pool(p) }, { specId: "spec_a" }, stranger)).rejects.toThrow(/spec|access/i);
   });
 });

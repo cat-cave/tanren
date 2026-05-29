@@ -132,7 +132,9 @@ function ActivityPanel(props: { rows: ProjectViewModel["activity"] }) {
           props.rows.slice(0, 9).map((row) => (
             <a class="row" href={row.href}>
               <span class="ts">{relativeTime(row.ts)}</span>
-              <span class={`icn ${row.kind}`}>{row.kind === "ok" ? "✓" : row.kind === "run" ? "↻" : row.kind === "warn" ? "!" : "▮"}</span>
+              <span class={`icn ${row.kind}`}>
+                {row.kind === "ok" ? "✓" : row.kind === "run" ? "↻" : row.kind === "warn" ? "!" : "▮"}
+              </span>
               <div>
                 <div class="ev">{row.event}</div>
                 <div class="det">{row.detail}</div>

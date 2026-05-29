@@ -20,7 +20,9 @@ export function parseCodexbarUsage(stdout: string, provider: string): WindowUsag
   if (parsed.every((entry) => isErrorEnvelope(entry))) {
     return null;
   }
-  const entries = parsed.filter((entry): entry is Record<string, unknown> => isObject(entry) && !isErrorEnvelope(entry));
+  const entries = parsed.filter(
+    (entry): entry is Record<string, unknown> => isObject(entry) && !isErrorEnvelope(entry),
+  );
   if (entries.length === 0) {
     return null;
   }
@@ -33,7 +35,7 @@ export function parseCodexbarUsage(stdout: string, provider: string): WindowUsag
     return null;
   }
   const windows = WINDOW_SLOTS.map((slot) => parseWindow(slot, usage[slot])).filter(
-    (window): window is SubscriptionWindow => window !== null
+    (window): window is SubscriptionWindow => window !== null,
   );
   return {
     provider: stringField(match["provider"]) ?? provider,
@@ -41,7 +43,8 @@ export function parseCodexbarUsage(stdout: string, provider: string): WindowUsag
     creditsRemaining: parseCreditsRemaining(match["credits"]),
     accountEmail: stringField(usage["accountEmail"]) ?? identityEmail(usage["identity"]),
     source: stringField(match["source"]) ?? "",
-    capturedAt: stringField(usage["updatedAt"]) ?? stringField(creditsUpdatedAt(match["credits"])) ?? new Date().toISOString()
+    capturedAt:
+      stringField(usage["updatedAt"]) ?? stringField(creditsUpdatedAt(match["credits"])) ?? new Date().toISOString(),
   };
 }
 
@@ -60,7 +63,7 @@ function parseWindow(slot: SubscriptionWindow["slot"], value: unknown): Subscrip
     usedPercent,
     resetsAt,
     windowMinutes,
-    resetDescription: stringField(value["resetDescription"]) ?? ""
+    resetDescription: stringField(value["resetDescription"]) ?? "",
   };
 }
 

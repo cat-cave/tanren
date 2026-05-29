@@ -7,7 +7,7 @@ export {
   ReviewMergeRunNotFoundError,
   ReviewMergePullRequestNotFoundError,
   type ReviewMergeRunContext,
-  type RunStateClient
+  type RunStateClient,
 } from "./context.js";
 export {
   assessExternalChange,
@@ -18,13 +18,13 @@ export {
   type PostureDecision,
   type PostureDecisionKind,
   type PullRequestContributors,
-  type TanrenIdentity
+  type TanrenIdentity,
 } from "./governancePosture.js";
 export {
   pollReviewForRun,
   type PollReviewForRunInput,
   type PollReviewForRunResult,
-  type ReviewProbe
+  type ReviewProbe,
 } from "./reviewPolling.js";
 export {
   mergeForRun,
@@ -36,6 +36,6 @@ export {
   type DispatchedIntegration,
   type MergeProbe,
   type ConflictResolverHook,
-  type ConflictContext
+  type ConflictContext,
 } from "./mergeDispatch.js";
 export { reviewerRejection } from "./steering.js";

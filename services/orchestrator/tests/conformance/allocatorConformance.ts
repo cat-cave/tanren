@@ -38,7 +38,7 @@ const SHA256_FINGERPRINT = /^SHA256:.+/;
 
 function expectWellFormedAllocation(
   allocation: Awaited<ReturnType<Allocator["allocate"]>>,
-  identitySecretRef: string
+  identitySecretRef: string,
 ): void {
   // runnerId: non-empty stable handle the orchestrator releases later.
   expect(typeof allocation.runnerId).toBe("string");
@@ -110,7 +110,6 @@ export function describeAllocatorConformance(label: string, harness: AllocatorCo
       const allocation = await allocator.allocate(harness.request("conf_alloc_4"));
       await expect(allocator.release(allocation.runnerId)).resolves.toBeUndefined();
     });
-
   });
 }
 

@@ -30,7 +30,7 @@ const alice: ActorContext = {
   orgId: ORG,
   projectId: null,
   scopes: ["org:member"],
-  source: "session"
+  source: "session",
 };
 
 function buildHarness(actor: ActorContext | undefined = alice) {
@@ -48,10 +48,10 @@ function buildHarness(actor: ActorContext | undefined = alice) {
         },
         async resolveActorContext() {
           return actor as ActorContext;
-        }
+        },
       } as never,
-      localDevActor: actor
-    })
+      localDevActor: actor,
+    }),
   );
   app.route("/orgs", createSpecRoutes({ pool: pool.asPgPool() }));
   return { app, pool };
@@ -59,12 +59,12 @@ function buildHarness(actor: ActorContext | undefined = alice) {
 
 async function createSpec(
   app: Hono<ActorContextEnv>,
-  body: { title: string; description: string; acceptanceCriteria: string[]; dependsOn?: string[] }
+  body: { title: string; description: string; acceptanceCriteria: string[]; dependsOn?: string[] },
 ): Promise<{ specId: string }> {
   const response = await app.request(`/orgs/${ORG}/projects/${PROJECT}/specs`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body)
+    body: JSON.stringify(body),
   });
   expect(response.status).toBe(201);
   return (await response.json()) as { specId: string };
@@ -77,23 +77,29 @@ describe("P2B-0006 operator-triggered live run — contract", () => {
     const spec = await createSpec(app, {
       title: "Supplier scorecard export",
       description: "Export the supplier scorecard",
-      acceptanceCriteria: ["CSV export downloads"]
+      acceptanceCriteria: ["CSV export downloads"],
     });
 
     const response = await app.request(`/orgs/${ORG}/projects/${PROJECT}/specs/${spec.specId}/runs`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ trigger: "dashboard" })
+      body: JSON.stringify({ trigger: "dashboard" }),
     });
 
     expect(response.status).toBe(201);
-    const run = (await response.json()) as { runId: string; specId: string; projectId: string; trigger: string; status: string };
+    const run = (await response.json()) as {
+      runId: string;
+      specId: string;
+      projectId: string;
+      trigger: string;
+      status: string;
+    };
     expect(run).toMatchObject({
       runId: expect.stringMatching(/^run_/),
       specId: spec.specId,
       projectId: PROJECT,
       trigger: "dashboard",
-      status: "queued"
+      status: "queued",
     });
     // The dashboard origin is persisted on the run row.
     expect(pool.runs[0]).toMatchObject({ specId: spec.specId, trigger: "dashboard" });
@@ -108,7 +114,7 @@ describe("P2B-0006 operator-triggered live run — contract", () => {
     const response = await app.request(`/orgs/org_other/projects/project_other/specs/spec_whatever/runs`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ trigger: "dashboard" })
+      body: JSON.stringify({ trigger: "dashboard" }),
     });
 
     expect(response.status).toBe(403);
@@ -121,20 +127,20 @@ describe("P2B-0006 operator-triggered live run — contract", () => {
     const foundation = await createSpec(app, {
       title: "Foundation",
       description: "Prepare the repo",
-      acceptanceCriteria: ["Foundation exists"]
+      acceptanceCriteria: ["Foundation exists"],
     });
     const dependent = await createSpec(app, {
       title: "Dependent",
       description: "Needs foundation",
       acceptanceCriteria: ["Dependency is enforced"],
-      dependsOn: [foundation.specId]
+      dependsOn: [foundation.specId],
     });
 
     // foundation is still `pending` — the dependency is not done.
     const response = await app.request(`/orgs/${ORG}/projects/${PROJECT}/specs/${dependent.specId}/runs`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ trigger: "dashboard" })
+      body: JSON.stringify({ trigger: "dashboard" }),
     });
 
     expect(response.status).toBe(409);
@@ -162,7 +168,13 @@ interface SpecRow {
 class SpecRunPool {
   readonly projects = new Map<string, { projectId: string; orgId: string }>();
   readonly specs = new Map<string, SpecRow>();
-  readonly runs: Array<{ runId: string; specId: string; projectId: string; trigger: string; branch: string }> = [];
+  readonly runs: Array<{
+    runId: string;
+    specId: string;
+    projectId: string;
+    trigger: string;
+    branch: string;
+  }> = [];
   readonly tasks: Array<{ taskId: string; runId: string }> = [];
   readonly jobs: Array<{ id: number; runId: string; taskId: string }> = [];
   readonly events: Array<{ runId: string; eventType: string; payload: unknown }> = [];
@@ -183,9 +195,7 @@ class SpecRunPool {
     }
     if (sql.startsWith("SELECT org_id FROM projects WHERE project_id")) {
       const project = this.projects.get(String(params[0]));
-      return project === undefined
-        ? { rows: [], rowCount: 0 }
-        : { rows: [{ org_id: project.orgId }], rowCount: 1 };
+      return project === undefined ? { rows: [], rowCount: 0 } : { rows: [{ org_id: project.orgId }], rowCount: 1 };
     }
     if (sql.startsWith("SELECT role FROM project_members")) {
       return { rows: [], rowCount: 0 };
@@ -219,7 +229,7 @@ class SpecRunPool {
         specId: String(params[1]),
         projectId: String(params[2]),
         trigger: String(params[3]),
-        branch: String(params[4])
+        branch: String(params[4]),
       });
       return { rows: [], rowCount: 1 };
     }
@@ -236,7 +246,7 @@ class SpecRunPool {
       this.events.push({
         runId: String(params[0]),
         eventType: String(params[4]),
-        payload: JSON.parse(String(params[5])) as unknown
+        payload: JSON.parse(String(params[5])) as unknown,
       });
       return { rows: [], rowCount: 1 };
     }
@@ -290,10 +300,10 @@ class SpecRunPool {
           description: spec.description,
           acceptance_criteria: spec.acceptanceCriteria,
           depends_on: spec.dependsOn,
-          status: spec.status
-        }
+          status: spec.status,
+        },
       ],
-      rowCount: 1
+      rowCount: 1,
     };
   }
 }
@@ -306,6 +316,6 @@ function specFromParams(params: unknown[]): SpecRow {
     description: String(params[3]),
     acceptanceCriteria: JSON.parse(String(params[4])) as string[],
     dependsOn: params[5] as string[],
-    status: String(params[6])
+    status: String(params[6]),
   };
 }

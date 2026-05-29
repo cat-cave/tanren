@@ -45,10 +45,10 @@ export async function recordAnswererCost<TOutput>(input: AnswererCostInput<TOutp
       cli: input.adapter.cli,
       model: input.model,
       authRef: input.adapter.authRef,
-      runtimeSeconds: input.runtimeSeconds
+      runtimeSeconds: input.runtimeSeconds,
     },
     emptyTokenUsage,
-    input.rawUsage
+    input.rawUsage,
   );
 }
 
@@ -63,10 +63,10 @@ export async function recordWriterCost(input: WriterCostInput): Promise<void> {
       cli: input.adapter.cli,
       model: "tanren-writer",
       authRef: input.adapter.authRef,
-      runtimeSeconds: input.runtimeSeconds
+      runtimeSeconds: input.runtimeSeconds,
     },
     tokens,
-    input.rawUsage
+    input.rawUsage,
   );
 }
 

@@ -24,21 +24,24 @@ class ScopingPool {
       const project = this.projects.get(String(params[0]));
       return {
         rows: project === undefined ? [] : [{ project_id: project.projectId }],
-        rowCount: project === undefined ? 0 : 1
+        rowCount: project === undefined ? 0 : 1,
       };
     }
     if (trimmed.startsWith("SELECT org_id FROM projects WHERE project_id = $1")) {
       const project = this.projects.get(String(params[0]));
       return {
         rows: project === undefined ? [] : [{ org_id: project.orgId }],
-        rowCount: project === undefined ? 0 : 1
+        rowCount: project === undefined ? 0 : 1,
       };
     }
     if (trimmed.startsWith("SELECT role FROM project_members")) {
       const projectId = String(params[0]);
       const userId = String(params[1]);
       const row = this.projectMembers.find((m) => m.projectId === projectId && m.userId === userId);
-      return { rows: row === undefined ? [] : [{ role: row.role }], rowCount: row === undefined ? 0 : 1 };
+      return {
+        rows: row === undefined ? [] : [{ role: row.role }],
+        rowCount: row === undefined ? 0 : 1,
+      };
     }
     if (trimmed.startsWith("SELECT spec_id FROM specs WHERE project_id = $1 AND spec_id = ANY")) {
       return { rows: [], rowCount: 0 };
@@ -66,7 +69,7 @@ const baseActor = (overrides: Partial<ActorContext>): ActorContext => ({
   projectId: null,
   scopes: [],
   source: "session",
-  ...overrides
+  ...overrides,
 });
 
 describe("project scoping by actor context", () => {
@@ -74,13 +77,17 @@ describe("project scoping by actor context", () => {
     const pool = new ScopingPool();
     pool.projects.set("project_a", { projectId: "project_a", orgId: "org_1" });
     pool.projectMembers.push({ projectId: "project_a", userId: "user_a", role: "member" });
-    const actor = baseActor({ userId: "user_a", orgId: "org_1", scopes: ["org:member", "project:member"] });
+    const actor = baseActor({
+      userId: "user_a",
+      orgId: "org_1",
+      scopes: ["org:member", "project:member"],
+    });
     await expect(
       createSpec(
         pool.asPgPool(),
         { projectId: "project_a", title: "t", description: "d", acceptanceCriteria: ["a"] },
-        actor
-      )
+        actor,
+      ),
     ).resolves.toMatchObject({ projectId: "project_a" });
   });
 
@@ -92,8 +99,8 @@ describe("project scoping by actor context", () => {
       createSpec(
         pool.asPgPool(),
         { projectId: "project_a", title: "t", description: "d", acceptanceCriteria: ["a"] },
-        actor
-      )
+        actor,
+      ),
     ).rejects.toBeInstanceOf(ProjectAccessDeniedError);
   });
 
@@ -105,8 +112,8 @@ describe("project scoping by actor context", () => {
       createSpec(
         pool.asPgPool(),
         { projectId: "project_a", title: "t", description: "d", acceptanceCriteria: ["a"] },
-        actor
-      )
+        actor,
+      ),
     ).resolves.toBeDefined();
   });
 
@@ -118,8 +125,8 @@ describe("project scoping by actor context", () => {
       createSpec(
         pool.asPgPool(),
         { projectId: "project_a", title: "t", description: "d", acceptanceCriteria: ["a"] },
-        actor
-      )
+        actor,
+      ),
     ).resolves.toBeDefined();
   });
 });

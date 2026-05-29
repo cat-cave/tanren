@@ -67,9 +67,7 @@ export interface RedactionOutput {
 // redactEventPayload is the entry point. It is intentionally pure (no I/O)
 // so the caller can decide whether to emit the audit event based on
 // `rawAccessedPaths`.
-export function redactEventPayload<N extends EventName>(
-  input: RedactionInput<N>
-): RedactionOutput {
+export function redactEventPayload<N extends EventName>(input: RedactionInput<N>): RedactionOutput {
   const redacted: string[] = [];
   const rawAccessed: string[] = [];
   const clone = walk(input.eventName, input.payload, "", input.actor, input.rawView ?? false, redacted, rawAccessed);
@@ -91,7 +89,7 @@ function walk(
   actor: ActorContext,
   rawView: boolean,
   redacted: string[],
-  rawAccessed: string[]
+  rawAccessed: string[],
 ): unknown {
   if (value === null || value === undefined) {
     return value;
@@ -139,7 +137,7 @@ function applyPolicy(
   actor: ActorContext,
   rawView: boolean,
   redacted: string[],
-  rawAccessed: string[]
+  rawAccessed: string[],
 ): unknown {
   let sensitivity = sensitivityFor(eventName, path) ?? UNKNOWN_SENSITIVITY_DEFAULT;
   // High-entropy bump-up: a public string that smells like a credential

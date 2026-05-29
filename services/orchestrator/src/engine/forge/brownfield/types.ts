@@ -28,7 +28,7 @@ export const ReconIndexedFile = z
     path: z.string().min(1).max(400),
     size: z.number().int().min(0).default(0),
     /** Decoded UTF-8 preview, truncated for prompt economy. */
-    preview: z.string().max(8000).default("")
+    preview: z.string().max(8000).default(""),
   })
   .strict();
 export type ReconIndexedFile = z.infer<typeof ReconIndexedFile>;
@@ -38,7 +38,7 @@ export const ReconIndex = z
   .object({
     repoUrl: z.string().min(1).max(400),
     filesIndexed: z.number().int().min(0).default(0),
-    files: z.array(ReconIndexedFile).default([])
+    files: z.array(ReconIndexedFile).default([]),
   })
   .strict();
 export type ReconIndex = z.infer<typeof ReconIndex>;
@@ -49,7 +49,7 @@ export const ReconPersona = z
   .object({
     name: z.string().min(1).max(80),
     description: z.string().min(1).max(280),
-    inferredFrom: z.string().max(200).default("")
+    inferredFrom: z.string().max(200).default(""),
   })
   .strict();
 export type ReconPersona = z.infer<typeof ReconPersona>;
@@ -58,7 +58,7 @@ export const ReconBehavior = z
   .object({
     persona: z.string().min(1).max(80),
     title: z.string().min(1).max(160),
-    inferredFrom: z.string().max(200).default("")
+    inferredFrom: z.string().max(200).default(""),
   })
   .strict();
 export type ReconBehavior = z.infer<typeof ReconBehavior>;
@@ -66,7 +66,7 @@ export type ReconBehavior = z.infer<typeof ReconBehavior>;
 export const ReconArchitectureLine = z
   .object({
     layer: z.string().min(1).max(40),
-    detail: z.string().min(1).max(200)
+    detail: z.string().min(1).max(200),
   })
   .strict();
 export type ReconArchitectureLine = z.infer<typeof ReconArchitectureLine>;
@@ -76,7 +76,7 @@ export type ReconArchitectureLine = z.infer<typeof ReconArchitectureLine>;
 export const ReconRisk = z
   .object({
     severity: z.enum(["info", "warn", "fail"]).default("warn"),
-    note: z.string().min(1).max(280)
+    note: z.string().min(1).max(280),
   })
   .strict();
 export type ReconRisk = z.infer<typeof ReconRisk>;
@@ -89,7 +89,7 @@ export const ReconGap = z
     id: z.string().min(1).max(80),
     chapter: z.string().min(1).max(80),
     question: z.string().min(1).max(400),
-    options: z.array(z.string().min(1).max(80)).max(4).default([])
+    options: z.array(z.string().min(1).max(80)).max(4).default([]),
   })
   .strict();
 export type ReconGap = z.infer<typeof ReconGap>;
@@ -101,14 +101,14 @@ export const ReconReport = z
       .object({
         slug: z.string().min(1).max(80),
         purpose: z.string().min(1).max(280),
-        inferredFrom: z.string().max(200).default("")
+        inferredFrom: z.string().max(200).default(""),
       })
       .strict(),
     personas: z.array(ReconPersona).default([]),
     behaviors: z.array(ReconBehavior).default([]),
     architecture: z.array(ReconArchitectureLine).default([]),
     risks: z.array(ReconRisk).default([]),
-    gaps: z.array(ReconGap).default([])
+    gaps: z.array(ReconGap).default([]),
   })
   .strict();
 export type ReconReport = z.infer<typeof ReconReport>;

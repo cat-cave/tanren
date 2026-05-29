@@ -19,7 +19,7 @@ import {
   transitionJob,
   transitionRun,
   transitionSpec,
-  transitionTask
+  transitionTask,
 } from "../src/engine/state/index.js";
 
 describe("RunStatus transitions", () => {

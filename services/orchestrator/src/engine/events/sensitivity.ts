@@ -11,7 +11,7 @@ export const Sensitivity = z.enum([
   // requires project:admin scope to view raw
   "redacted",
   // requires platform:admin scope to view raw
-  "secret"
+  "secret",
 ]);
 export type Sensitivity = z.infer<typeof Sensitivity>;
 

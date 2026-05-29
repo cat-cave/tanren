@@ -24,7 +24,7 @@ import { isVariant, SEED_INSIGHTS } from "../../components/discovery/seeds.js";
 function clientFor(c: Context, deps: ShellDeps): DiscoveryClient {
   return new DiscoveryClient({
     orchestratorUrl: deps.orchestratorUrl,
-    cookieHeader: c.req.header("cookie")
+    cookieHeader: c.req.header("cookie"),
   });
 }
 
@@ -76,7 +76,7 @@ export function mountDiscoveryScreens(app: Hono, deps: ShellDeps): void {
               </p>
             </section>
           </div>
-        </div>
+        </div>,
       );
     }
     return c.redirect(`/projects/${project.projectId}/discovery`);
@@ -94,7 +94,7 @@ export function mountDiscoveryScreens(app: Hono, deps: ShellDeps): void {
       c,
       ctx,
       { title: `tanren · ${ctx.project.name} · discover` },
-      <DiscoveryBody project={ctx.project} orgId={ctx.org.id} variant={variant} insight={SEED_INSIGHTS[variant]} />
+      <DiscoveryBody project={ctx.project} orgId={ctx.org.id} variant={variant} insight={SEED_INSIGHTS[variant]} />,
     );
   });
 
@@ -116,7 +116,7 @@ export function mountDiscoveryScreens(app: Hono, deps: ShellDeps): void {
       who: String(form["who"] ?? seed.who) || seed.who,
       when: String(form["when"] ?? seed.when) || seed.when,
       glyph: String(form["glyph"] ?? seed.glyph) || seed.glyph,
-      body: (String(form["body"] ?? seed.body)).trim() || seed.body
+      body: String(form["body"] ?? seed.body).trim() || seed.body,
     };
     const client = clientFor(c, deps);
     const { result } = await client.classify(ctx.org.id, projectId, insight);
@@ -131,7 +131,7 @@ export function mountDiscoveryScreens(app: Hono, deps: ShellDeps): void {
         insight={insight}
         result={result}
         error={result === undefined ? "forge classification failed — try again." : undefined}
-      />
+      />,
     );
   });
 
@@ -161,7 +161,7 @@ export function mountDiscoveryScreens(app: Hono, deps: ShellDeps): void {
           variant={variant}
           insight={insight ?? SEED_INSIGHTS[variant]}
           error={error}
-        />
+        />,
       );
 
     if (insight === undefined || proposals.length === 0 || placementLabel === "") {
@@ -173,7 +173,7 @@ export function mountDiscoveryScreens(app: Hono, deps: ShellDeps): void {
       insight,
       proposals,
       placementKind,
-      placementLabel
+      placementLabel,
     });
     if (!ok || result === undefined) {
       return reRender("could not add the specs to the dag — try again.");
@@ -188,7 +188,7 @@ export function mountDiscoveryScreens(app: Hono, deps: ShellDeps): void {
         variant={variant}
         insight={insight}
         accepted={{ count: result.accepted.length, placementLabel }}
-      />
+      />,
     );
   });
 }

@@ -2,10 +2,7 @@
 // per-subtask check prompt against the typed CheckAnswer schema (P2A-0008)
 // and exposes a `decideCheckerOutcome` helper the subtask loop uses to
 // branch into the rejection-loop path.
-import {
-  answererOutputSchemaFor,
-  CheckAnswer
-} from "../../answerers/schemas/index.js";
+import { answererOutputSchemaFor, CheckAnswer } from "../../answerers/schemas/index.js";
 import type { PlanSubtask } from "../../answerers/schemas/index.js";
 import type { AnswererAdapter } from "../../providers/types.js";
 
@@ -30,7 +27,7 @@ export interface CheckerInvocationResult {
 
 export async function invokeChecker(
   checker: AnswererAdapter<CheckAnswer>,
-  input: CheckerInvokeInput
+  input: CheckerInvokeInput,
 ): Promise<CheckerInvocationResult> {
   const outputSchema = answererOutputSchemaFor("check", CheckAnswer);
   const prompt = buildCheckerPrompt(input.context);
@@ -38,7 +35,7 @@ export async function invokeChecker(
     prompt,
     timeoutMs: input.timeoutMs,
     workspace: input.workspace,
-    outputSchema
+    outputSchema,
   });
   return { verdict, schemaId: outputSchema.name };
 }
@@ -81,7 +78,7 @@ export function buildCheckerPrompt(context: CheckerSubtaskContext): string {
     "arrays when none), reflecting intent satisfaction — not test/build outcomes.",
     "",
     "Writer diff:",
-    context.writerDiff
+    context.writerDiff,
   ].join("\n");
 }
 
@@ -99,6 +96,6 @@ export function decideCheckerOutcome(verdict: CheckAnswer): CheckerDecision {
   return {
     kind: "reject",
     reason: verdict.reasoning,
-    behaviorIdsFailed: verdict.behaviorIdsFailed
+    behaviorIdsFailed: verdict.behaviorIdsFailed,
   };
 }

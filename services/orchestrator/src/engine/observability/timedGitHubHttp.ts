@@ -11,7 +11,7 @@ import { consoleTimingSink, timed, type TimingSink } from "./timing.js";
 export class TimedGitHubHttpClient implements GitHubHttpClient {
   constructor(
     private readonly inner: GitHubHttpClient,
-    private readonly sink: TimingSink = consoleTimingSink
+    private readonly sink: TimingSink = consoleTimingSink,
   ) {}
 
   async request(input: GitHubHttpRequest): Promise<GitHubHttpResponse> {
@@ -21,7 +21,7 @@ export class TimedGitHubHttpClient implements GitHubHttpClient {
         boundary: "github",
         operation: "github.request",
         sink: this.sink,
-        attributes: { method: input.method, path: pathTemplate }
+        attributes: { method: input.method, path: pathTemplate },
       },
       async () => {
         const response = await this.inner.request(input);
@@ -35,12 +35,12 @@ export class TimedGitHubHttpClient implements GitHubHttpClient {
             method: input.method,
             path: pathTemplate,
             status: response.status,
-            rateLimited: response.status === 429
+            rateLimited: response.status === 429,
           },
-          timestamp: new Date().toISOString()
+          timestamp: new Date().toISOString(),
         });
         return response;
-      }
+      },
     );
   }
 }

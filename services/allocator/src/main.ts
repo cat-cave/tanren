@@ -22,7 +22,7 @@ async function main(): Promise<void> {
   const store = new PgRunnerStore(pool);
   const secrets = new VaultSecretsClient({
     addr: process.env["VAULT_ADDR"] ?? "http://vault:8200",
-    token: process.env["VAULT_TOKEN"] ?? "dev-root-token"
+    token: process.env["VAULT_TOKEN"] ?? "dev-root-token",
   });
 
   const lifecycle = new RunnerLifecycle({
@@ -33,13 +33,15 @@ async function main(): Promise<void> {
     hostSshPort: hostSshPortEnv === undefined || hostSshPortEnv === "" ? undefined : Number(hostSshPortEnv),
     sshHostnameForOrchestrator: (container) => sshHostnameTemplate.replace("{container}", container),
     capAdd: (process.env["TANREN_RUNNER_CAP_ADD"] ?? "SYS_ADMIN").split(",").filter((part) => part !== ""),
-    securityOpt: (process.env["TANREN_RUNNER_SECURITY_OPT"] ?? "apparmor=unconfined,seccomp=unconfined").split(",").filter((part) => part !== "")
+    securityOpt: (process.env["TANREN_RUNNER_SECURITY_OPT"] ?? "apparmor=unconfined,seccomp=unconfined")
+      .split(",")
+      .filter((part) => part !== ""),
   });
 
   const sweeper = new AbandonedRunSweeper({
     lifecycle,
     maxRunHours,
-    intervalMs: sweeperIntervalMs
+    intervalMs: sweeperIntervalMs,
   });
   sweeper.start();
 
@@ -54,7 +56,7 @@ async function main(): Promise<void> {
         // Any HTTP response — even 404 — proves the daemon is reachable.
         return error instanceof Error && /status (?:404|400|500)/.test(error.message);
       }
-    }
+    },
   });
 
   serve({ fetch: app.fetch, port });

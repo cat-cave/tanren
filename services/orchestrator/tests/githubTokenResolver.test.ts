@@ -15,7 +15,10 @@ describe("resolveGithubToken", () => {
   it("reads a static secret when no installation is configured", async () => {
     const secrets = new InMemorySecretStore();
     await secrets.put({ ref: "credential/github/org/o1/default", value: "ghp_static" });
-    const resolved = await resolveGithubToken({ secrets, staticRef: "credential/github/org/o1/default" });
+    const resolved = await resolveGithubToken({
+      secrets,
+      staticRef: "credential/github/org/o1/default",
+    });
     expect(resolved.source).toBe("static");
     expect(resolved.token).toBe("ghp_static");
     expect(await resolved.refresh()).toBe("ghp_static");
@@ -23,17 +26,32 @@ describe("resolveGithubToken", () => {
 
   it("prefers an App installation token when an installation is configured", async () => {
     const secrets = new InMemorySecretStore();
-    await storeGithubAppCredential(secrets, { ref: "credential/github_app/org/o1/default", appId: "1", privateKeyPem: pem() });
+    await storeGithubAppCredential(secrets, {
+      ref: "credential/github_app/org/o1/default",
+      appId: "1",
+      privateKeyPem: pem(),
+    });
     const fetchImpl = (async () =>
-      new Response(JSON.stringify({ token: "ghs_app", expires_at: new Date(Date.now() + 3_600_000).toISOString() }), {
-        status: 201
-      })) as unknown as typeof fetch;
+      new Response(
+        JSON.stringify({
+          token: "ghs_app",
+          expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+        }),
+        {
+          status: 201,
+        },
+      )) as unknown as typeof fetch;
     const minter = new GithubAppTokenMinter({ secrets, fetchImpl });
     const resolved = await resolveGithubToken({
       secrets,
-      installation: { installationId: "42", appId: "1", credentialRef: "credential/github_app/org/o1/default", installedAt: "now" },
+      installation: {
+        installationId: "42",
+        appId: "1",
+        credentialRef: "credential/github_app/org/o1/default",
+        installedAt: "now",
+      },
       staticRef: "credential/github/org/o1/default",
-      minter
+      minter,
     });
     expect(resolved.source).toBe("github_app");
     expect(resolved.token).toBe("ghs_app");
@@ -54,7 +72,7 @@ describe("FetchGitHubHttpClient 401 refresh", () => {
       method: "GET",
       path: "/repos/x/y",
       token: "stale",
-      refreshToken: async () => "fresh"
+      refreshToken: async () => "fresh",
     });
     expect(response.status).toBe(200);
     expect(call).toBe(2);

@@ -47,11 +47,11 @@ private key is never returned.
 
 ## 3. Wire the orchestrator environment
 
-| Variable                          | Purpose                                                            |
-| --------------------------------- | ------------------------------------------------------------------ |
-| `TANREN_GITHUB_APP_CREDENTIAL_REF`| Vault ref of the App credential from step 2.                       |
-| `TANREN_GITHUB_APP_INSTALL_URL`   | The App install URL from step 1.                                   |
-| `TANREN_GITHUB_APP_TOKEN_REF`     | (optional) static-token fallback ref, e.g. `credential/github/...` |
+| Variable                           | Purpose                                                            |
+| ---------------------------------- | ------------------------------------------------------------------ |
+| `TANREN_GITHUB_APP_CREDENTIAL_REF` | Vault ref of the App credential from step 2.                       |
+| `TANREN_GITHUB_APP_INSTALL_URL`    | The App install URL from step 1.                                   |
+| `TANREN_GITHUB_APP_TOKEN_REF`      | (optional) static-token fallback ref, e.g. `credential/github/...` |
 
 The install route (`/auth/github-app/*`) only mounts when both
 `TANREN_GITHUB_APP_CREDENTIAL_REF` and `TANREN_GITHUB_APP_INSTALL_URL` are set.

@@ -31,14 +31,14 @@ export async function checkDesignTokensDrift({ root = process.cwd() } = {}) {
     } catch (error) {
       diagnostics.push({
         copy,
-        message: `unable to read token copy: ${error instanceof Error ? error.message : String(error)}`
+        message: `unable to read token copy: ${error instanceof Error ? error.message : String(error)}`,
       });
       continue;
     }
     if (copyText !== source) {
       diagnostics.push({
         copy,
-        message: `drift detected against ${SOURCE_OF_TRUTH} — regenerate by copying the source over the dashboard copy`
+        message: `drift detected against ${SOURCE_OF_TRUTH} — regenerate by copying the source over the dashboard copy`,
       });
     }
   }

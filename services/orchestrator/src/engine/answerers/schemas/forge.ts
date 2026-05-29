@@ -12,13 +12,13 @@ export const ForgeToolCall = z.discriminatedUnion("tool", [
   z
     .object({
       tool: z.literal("tanren.read_spec"),
-      args: z.object({ specId: z.string().min(1) }).strict()
+      args: z.object({ specId: z.string().min(1) }).strict(),
     })
     .strict(),
   z
     .object({
       tool: z.literal("tanren.read_run"),
-      args: z.object({ runId: z.string().min(1) }).strict()
+      args: z.object({ runId: z.string().min(1) }).strict(),
     })
     .strict(),
   z
@@ -29,9 +29,9 @@ export const ForgeToolCall = z.discriminatedUnion("tool", [
           runId: z.string().min(1).optional(),
           specId: z.string().min(1).optional(),
           since: z.string().min(1).optional(),
-          limit: z.number().int().optional()
+          limit: z.number().int().optional(),
         })
-        .strict()
+        .strict(),
     })
     .strict(),
   z
@@ -40,27 +40,27 @@ export const ForgeToolCall = z.discriminatedUnion("tool", [
       args: z
         .object({
           runId: z.string().min(1).optional(),
-          since: z.string().min(1).optional()
+          since: z.string().min(1).optional(),
         })
-        .strict()
+        .strict(),
     })
     .strict(),
   z
     .object({
       tool: z.literal("tanren.read_behaviors"),
-      args: z.object({ projectId: z.string().min(1) }).strict()
+      args: z.object({ projectId: z.string().min(1) }).strict(),
     })
     .strict(),
   z
     .object({
       tool: z.literal("tanren.read_milestones"),
-      args: z.object({ projectId: z.string().min(1) }).strict()
+      args: z.object({ projectId: z.string().min(1) }).strict(),
     })
     .strict(),
   z
     .object({
       tool: z.literal("tanren.read_insights"),
-      args: z.object({ projectId: z.string().min(1) }).strict()
+      args: z.object({ projectId: z.string().min(1) }).strict(),
     })
     .strict(),
   z
@@ -69,9 +69,9 @@ export const ForgeToolCall = z.discriminatedUnion("tool", [
       args: z
         .object({
           projectId: z.string().min(1),
-          path: z.string().min(1)
+          path: z.string().min(1),
         })
-        .strict()
+        .strict(),
     })
     .strict(),
   z
@@ -80,9 +80,9 @@ export const ForgeToolCall = z.discriminatedUnion("tool", [
       args: z
         .object({
           projectId: z.string().min(1),
-          pattern: z.string().min(1)
+          pattern: z.string().min(1),
         })
-        .strict()
+        .strict(),
     })
     .strict(),
   z
@@ -91,9 +91,9 @@ export const ForgeToolCall = z.discriminatedUnion("tool", [
       args: z
         .object({
           projectId: z.string().min(1),
-          number: z.number().int()
+          number: z.number().int(),
         })
-        .strict()
+        .strict(),
     })
     .strict(),
   z
@@ -105,35 +105,35 @@ export const ForgeToolCall = z.discriminatedUnion("tool", [
           title: z.string().min(1),
           description: z.string().min(1),
           behaviorIds: z.array(z.string().min(1)).optional(),
-          milestoneId: z.string().min(1).optional()
+          milestoneId: z.string().min(1).optional(),
         })
-        .strict()
+        .strict(),
     })
     .strict(),
   z
     .object({
       tool: z.literal("tanren.trigger_run"),
-      args: z.object({ specId: z.string().min(1) }).strict()
+      args: z.object({ specId: z.string().min(1) }).strict(),
     })
     .strict(),
   z
     .object({
       tool: z.literal("tanren.rerun_task"),
-      args: z.object({ taskId: z.string().min(1) }).strict()
+      args: z.object({ taskId: z.string().min(1) }).strict(),
     })
     .strict(),
   z
     .object({
       tool: z.literal("tanren.acknowledge_insight"),
-      args: z.object({ insightId: z.string().min(1) }).strict()
+      args: z.object({ insightId: z.string().min(1) }).strict(),
     })
-    .strict()
+    .strict(),
 ]);
 
 export const ForgeSuggestedAction = z
   .object({
     label: z.string().min(1),
-    toolCall: ForgeToolCall
+    toolCall: ForgeToolCall,
   })
   .strict();
 
@@ -144,24 +144,18 @@ export const ForgeAttentionItem = z
     priority: ForgeAttentionPriority,
     title: z.string().min(1),
     sub: z.string(),
-    action: ForgeSuggestedAction.nullable()
+    action: ForgeSuggestedAction.nullable(),
   })
   .strict();
 
-export const ForgeInsightKind = z.enum([
-  "retry_hotspot",
-  "model_mismatch",
-  "pace_anomaly",
-  "stuck",
-  "review_stall"
-]);
+export const ForgeInsightKind = z.enum(["retry_hotspot", "model_mismatch", "pace_anomaly", "stuck", "review_stall"]);
 
 export const ForgeInsight = z
   .object({
     kind: ForgeInsightKind,
     title: z.string().min(1),
     body: z.string().min(1),
-    actions: z.array(ForgeSuggestedAction)
+    actions: z.array(ForgeSuggestedAction),
   })
   .strict();
 
@@ -170,7 +164,7 @@ export const ForgeAnswer = z
     body: z.string().min(1),
     attentionItems: z.array(ForgeAttentionItem).default([]),
     insights: z.array(ForgeInsight).default([]),
-    prompts: z.array(z.string().min(1)).default([])
+    prompts: z.array(z.string().min(1)).default([]),
   })
   .strict();
 

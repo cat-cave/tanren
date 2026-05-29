@@ -9,10 +9,7 @@ import { dirname, relative, resolve } from "node:path";
 
 // The two critical paths these structural caps guard. Keep in sync with the
 // directory list documented in the architecture-checks contract.
-const criticalDirs = [
-  "services/orchestrator/src/engine/workflow/",
-  "services/orchestrator/src/engine/answerers/"
-];
+const criticalDirs = ["services/orchestrator/src/engine/workflow/", "services/orchestrator/src/engine/answerers/"];
 
 // --- thresholds (ratchets) ---------------------------------------------------
 // Cyclomatic complexity: measured current max is 23 (the runPlannerLoopWorkflow
@@ -96,7 +93,16 @@ function findFunctions(text) {
 // branches and are excluded from the ternary match.
 function complexityOf(body) {
   let score = 1;
-  for (const pattern of [/\bif\b/g, /\bcase\b/g, /\bcatch\b/g, /\bfor\b/g, /\bwhile\b/g, /&&/g, /\|\|/g, /\?(?![?.:])/g]) {
+  for (const pattern of [
+    /\bif\b/g,
+    /\bcase\b/g,
+    /\bcatch\b/g,
+    /\bfor\b/g,
+    /\bwhile\b/g,
+    /&&/g,
+    /\|\|/g,
+    /\?(?![?.:])/g,
+  ]) {
     score += (body.match(pattern) ?? []).length;
   }
   return score;
@@ -105,7 +111,7 @@ function complexityOf(body) {
 // Count top-level parameters in a parameter-list string by splitting on commas
 // at bracket depth zero (so object/array/generic params count once).
 function paramCount(params) {
-  const trimmed = params.trim();
+  const trimmed = params.trim().replace(/,\s*$/, "");
   if (trimmed === "") {
     return 0;
   }
@@ -137,8 +143,8 @@ export function checkCyclomaticComplexity(projectFiles) {
             "cyclomatic-complexity-cap",
             file,
             `function complexity ${score} exceeds the ${COMPLEXITY_CAP} cap (ratchet: decompose toward simpler branches)`,
-            lineFor(text, head.index)
-          )
+            lineFor(text, head.index),
+          ),
         );
       }
     }
@@ -160,8 +166,8 @@ export function checkMaxParams(projectFiles) {
             "max-params-cap",
             file,
             `function takes ${count} params exceeding the ${MAX_PARAMS_CAP} cap (ratchet: pass an options object instead)`,
-            lineFor(text, head.index)
-          )
+            lineFor(text, head.index),
+          ),
         );
       }
     }
@@ -183,6 +189,12 @@ export function checkCrossPackageDeepImports(projectFiles) {
     if (!(file.endsWith(".ts") || file.endsWith(".tsx")) || file.includes("/dist/")) {
       continue;
     }
+    // The scripts/ checker carries its own unit tests, whose fixtures embed
+    // deep-import specifier strings as test data; skip the checker's tests so
+    // those fixtures aren't mistaken for real imports.
+    if (file === "scripts/check-architecture.test.ts") {
+      continue;
+    }
     const ownPackage = packageOf(file);
     let match;
     while ((match = importPattern.exec(text)) !== null) {
@@ -193,12 +205,19 @@ export function checkCrossPackageDeepImports(projectFiles) {
       }
       if (/^@tanren\/[a-z-]+\/src\//.test(specifier)) {
         diagnostics.push(
-          diagnostic("cross-package-deep-import", file, `deep import "${specifier}" must go through the package's public entry`, line)
+          diagnostic(
+            "cross-package-deep-import",
+            file,
+            `deep import "${specifier}" must go through the package's public entry`,
+            line,
+          ),
         );
         continue;
       }
       if (specifier.startsWith(".") && ownPackage !== undefined) {
-        const target = relative(".", resolve(dirname(file), specifier)).split("\\").join("/");
+        const target = relative(".", resolve(dirname(file), specifier))
+          .split("\\")
+          .join("/");
         const targetPackage = packageOf(target);
         if (targetPackage !== undefined && targetPackage !== ownPackage) {
           diagnostics.push(
@@ -206,8 +225,8 @@ export function checkCrossPackageDeepImports(projectFiles) {
               "cross-package-deep-import",
               file,
               `relative import "${specifier}" reaches into ${targetPackage}; import via its package entry instead`,
-              line
-            )
+              line,
+            ),
           );
         }
       }
@@ -220,6 +239,6 @@ export function runStructureChecks(projectFiles) {
   return [
     ...checkCyclomaticComplexity(projectFiles),
     ...checkMaxParams(projectFiles),
-    ...checkCrossPackageDeepImports(projectFiles)
+    ...checkCrossPackageDeepImports(projectFiles),
   ];
 }

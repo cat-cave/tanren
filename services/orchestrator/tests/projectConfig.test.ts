@@ -6,7 +6,7 @@ import {
   UnknownConfigVersionError,
   defaultProjectConfigV1,
   migrateProjectConfig,
-  projectConfigJsonSchema
+  projectConfigJsonSchema,
 } from "../src/engine/config/index.js";
 
 function captureProjectMigrationError(raw: unknown): UnknownConfigVersionError {
@@ -44,11 +44,15 @@ describe("ProjectConfigV1 parser", () => {
     const cfg = migrateProjectConfig({
       version: 1,
       routing: {
-        write: { chain: [{ cli: "codex", model: "gpt-5", authRef: "vault://codex" }] }
-      }
+        write: { chain: [{ cli: "codex", model: "gpt-5", authRef: "vault://codex" }] },
+      },
     });
     expect(cfg.routing.write.chain).toHaveLength(1);
-    expect(cfg.routing.write.chain[0]).toMatchObject({ cli: "codex", model: "gpt-5", authRef: "vault://codex" });
+    expect(cfg.routing.write.chain[0]).toMatchObject({
+      cli: "codex",
+      model: "gpt-5",
+      authRef: "vault://codex",
+    });
     // Other roles still default to empty chains.
     expect(cfg.routing.plan.chain).toEqual([]);
   });
@@ -62,11 +66,16 @@ describe("ProjectConfigV1 parser", () => {
           {
             chain: [
               { cli: "codex", model: "gpt-5", authRef: "vault://primary" },
-              { cli: "claude", model: "haiku-4.5", authRef: "vault://secondary", healthHint: "warn" }
-            ]
-          }
-        ])
-      )
+              {
+                cli: "claude",
+                model: "haiku-4.5",
+                authRef: "vault://secondary",
+                healthHint: "warn",
+              },
+            ],
+          },
+        ]),
+      ),
     };
     const cfg = migrateProjectConfig(raw);
     for (const role of RoleId.options) {
@@ -76,24 +85,24 @@ describe("ProjectConfigV1 parser", () => {
   });
 
   it("rejects unknown top-level fields with a typed parse error", () => {
-    expect(() =>
-      migrateProjectConfig({ version: 1, somethingElse: 42 })
-    ).toThrow(/.+/);
+    expect(() => migrateProjectConfig({ version: 1, somethingElse: 42 })).toThrow(/.+/);
   });
 
   it("rejects unknown fields inside a routing chain entry", () => {
     expect(() =>
       migrateProjectConfig({
         version: 1,
-        routing: { write: { chain: [{ cli: "codex", model: "gpt-5", authRef: "x", extra: true }] } }
-      })
+        routing: {
+          write: { chain: [{ cli: "codex", model: "gpt-5", authRef: "x", extra: true }] },
+        },
+      }),
     ).toThrow(/.+/);
   });
 
   it("accepts partial escape hatches that override only one budget", () => {
     const cfg = migrateProjectConfig({
       version: 1,
-      escapeHatches: { maxWriterIterPerSubtask: 9 }
+      escapeHatches: { maxWriterIterPerSubtask: 9 },
     });
     expect(cfg.escapeHatches.maxWriterIterPerSubtask).toBe(9);
     // Other fields remain unspecified (project layer is partial); merge with
@@ -102,16 +111,14 @@ describe("ProjectConfigV1 parser", () => {
   });
 
   it("rejects negative numeric escape hatches", () => {
-    expect(() =>
-      migrateProjectConfig({ version: 1, escapeHatches: { maxWriterIterPerSubtask: 0 } })
-    ).toThrow(/.+/);
+    expect(() => migrateProjectConfig({ version: 1, escapeHatches: { maxWriterIterPerSubtask: 0 } })).toThrow(/.+/);
   });
 
   it("accepts a governance posture and merge integration override", () => {
     const cfg = migrateProjectConfig({
       version: 1,
       governancePosture: "audit_only",
-      mergeIntegration: "mergify_queue"
+      mergeIntegration: "mergify_queue",
     });
     expect(cfg.governancePosture).toBe("audit_only");
     expect(cfg.mergeIntegration).toBe("mergify_queue");
@@ -121,15 +128,13 @@ describe("ProjectConfigV1 parser", () => {
     const ref = "11111111-1111-4111-8111-111111111111";
     const cfg = migrateProjectConfig({
       version: 1,
-      notificationTargets: [ref]
+      notificationTargets: [ref],
     });
     expect(cfg.notificationTargets).toEqual([ref]);
   });
 
   it("rejects non-uuid notification target refs", () => {
-    expect(() =>
-      migrateProjectConfig({ version: 1, notificationTargets: ["not-a-uuid"] })
-    ).toThrow(/.+/);
+    expect(() => migrateProjectConfig({ version: 1, notificationTargets: ["not-a-uuid"] })).toThrow(/.+/);
   });
 
   it("omits the credentials field on a legacy row (backward compatible)", () => {
@@ -142,12 +147,12 @@ describe("ProjectConfigV1 parser", () => {
       version: 1,
       credentials: {
         codexCredentialRef: "credential/codex/org/o/p",
-        githubCredentialRef: "credential/github/org/o/p"
-      }
+        githubCredentialRef: "credential/github/org/o/p",
+      },
     });
     expect(cfg.credentials).toEqual({
       codexCredentialRef: "credential/codex/org/o/p",
-      githubCredentialRef: "credential/github/org/o/p"
+      githubCredentialRef: "credential/github/org/o/p",
     });
     expect(migrateProjectConfig(cfg)).toEqual(cfg);
   });
@@ -155,21 +160,17 @@ describe("ProjectConfigV1 parser", () => {
   it("accepts a credentials object binding only one kind", () => {
     const cfg = migrateProjectConfig({
       version: 1,
-      credentials: { githubCredentialRef: "credential/github/org/o/p" }
+      credentials: { githubCredentialRef: "credential/github/org/o/p" },
     });
     expect(cfg.credentials).toEqual({ githubCredentialRef: "credential/github/org/o/p" });
   });
 
   it("rejects unknown keys inside the credentials object", () => {
-    expect(() =>
-      migrateProjectConfig({ version: 1, credentials: { somethingElse: "x" } })
-    ).toThrow(/.+/);
+    expect(() => migrateProjectConfig({ version: 1, credentials: { somethingElse: "x" } })).toThrow(/.+/);
   });
 
   it("rejects an empty-string credential ref", () => {
-    expect(() =>
-      migrateProjectConfig({ version: 1, credentials: { codexCredentialRef: "" } })
-    ).toThrow(/.+/);
+    expect(() => migrateProjectConfig({ version: 1, credentials: { codexCredentialRef: "" } })).toThrow(/.+/);
   });
 
   it("is idempotent on a V1-shaped input (V1 -> V1)", () => {

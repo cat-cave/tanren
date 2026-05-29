@@ -12,5 +12,5 @@ export {
   assertEventName,
   listEventNames,
   decodeEvent,
-  UnknownEventTypeError
+  UnknownEventTypeError,
 } from "./events/index.js";

@@ -4,7 +4,13 @@
 
 import type pg from "pg";
 import { randomUUID } from "node:crypto";
-import { AuditJob, AuditFindingsSummary, type AuditCadence, type AuditFindingsSummary as Summary, type AuditKind } from "./types.js";
+import {
+  AuditJob,
+  AuditFindingsSummary,
+  type AuditCadence,
+  type AuditFindingsSummary as Summary,
+  type AuditKind,
+} from "./types.js";
 
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
@@ -29,7 +35,7 @@ function isoOf(value: Date | string | null): string | null {
 
 function mapJob(row: JobRow): AuditJob {
   const findings: Summary = AuditFindingsSummary.parse(
-    row.findings === null || typeof row.findings !== "object" ? {} : row.findings
+    row.findings === null || typeof row.findings !== "object" ? {} : row.findings,
   );
   return AuditJob.parse({
     id: row.id,
@@ -42,12 +48,11 @@ function mapJob(row: JobRow): AuditJob {
     answererCli: row.answerer_cli,
     enabled: row.enabled === "true",
     lastRun: isoOf(row.last_run),
-    findings
+    findings,
   });
 }
 
-const COLUMNS =
-  "id, org_id, project_id, kind, name, cadence, target_window, answerer_cli, enabled, last_run, findings";
+const COLUMNS = "id, org_id, project_id, kind, name, cadence, target_window, answerer_cli, enabled, last_run, findings";
 
 export interface CreateAuditJobInput {
   orgId: string;
@@ -75,17 +80,16 @@ export async function createAuditJob(client: QueryClient, input: CreateAuditJobI
       input.cadence,
       input.targetWindow ?? "",
       input.answererCli ?? "",
-      input.enabled === false ? "false" : "true"
-    ]
+      input.enabled === false ? "false" : "true",
+    ],
   );
   return mapJob(result.rows[0]!);
 }
 
 export async function listAuditJobs(client: QueryClient, orgId: string): Promise<AuditJob[]> {
-  const result = await client.query<JobRow>(
-    `SELECT ${COLUMNS} FROM audit_jobs WHERE org_id = $1 ORDER BY created_at`,
-    [orgId]
-  );
+  const result = await client.query<JobRow>(`SELECT ${COLUMNS} FROM audit_jobs WHERE org_id = $1 ORDER BY created_at`, [
+    orgId,
+  ]);
   return result.rows.map(mapJob);
 }
 
@@ -99,11 +103,11 @@ export async function getAuditJob(client: QueryClient, jobId: string): Promise<A
 export async function setAuditJobEnabled(
   client: QueryClient,
   jobId: string,
-  enabled: boolean
+  enabled: boolean,
 ): Promise<AuditJob | undefined> {
   const result = await client.query<JobRow>(
     `UPDATE audit_jobs SET enabled = $2, updated_at = now() WHERE id = $1 RETURNING ${COLUMNS}`,
-    [jobId, enabled ? "true" : "false"]
+    [jobId, enabled ? "true" : "false"],
   );
   const row = result.rows[0];
   return row === undefined ? undefined : mapJob(row);
@@ -114,12 +118,12 @@ export async function recordAuditRun(
   client: QueryClient,
   jobId: string,
   findings: Summary,
-  ranAt: Date
+  ranAt: Date,
 ): Promise<AuditJob | undefined> {
   const result = await client.query<JobRow>(
     `UPDATE audit_jobs SET last_run = $2, findings = $3::jsonb, updated_at = now()
      WHERE id = $1 RETURNING ${COLUMNS}`,
-    [jobId, ranAt.toISOString(), JSON.stringify(findings)]
+    [jobId, ranAt.toISOString(), JSON.stringify(findings)],
   );
   const row = result.rows[0];
   return row === undefined ? undefined : mapJob(row);

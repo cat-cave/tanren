@@ -16,8 +16,13 @@ export function timedWriterAdapter(inner: WriterAdapter, sink: TimingSink = cons
     authRef: inner.authRef,
     runWriter: (opts) =>
       timed<WriterResult>(
-        { boundary: "provider", operation: "provider.write", sink, attributes: { cli: inner.cli, role: "writer" } },
-        () => inner.runWriter(opts)
-      )
+        {
+          boundary: "provider",
+          operation: "provider.write",
+          sink,
+          attributes: { cli: inner.cli, role: "writer" },
+        },
+        () => inner.runWriter(opts),
+      ),
   };
 }

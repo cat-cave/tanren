@@ -24,7 +24,7 @@ import {
   type JiraHttpClient,
   type JiraHttpRequest,
   type LinearHttpClient,
-  type SourceConnector
+  type SourceConnector,
 } from "../src/engine/forge/inbox/index.js";
 
 // A Jira source wired under the `issues` kind (dispatch by config.provider).
@@ -40,10 +40,10 @@ const jiraSource: InboxSource = {
     baseUrl: "https://cat-cave.atlassian.net",
     email: "bot@cat-cave.dev",
     tokenRef: "credential/jira/x",
-    project: "CAT"
+    project: "CAT",
   },
   enabled: true,
-  autoRoute: false
+  autoRoute: false,
 };
 
 const githubSource: InboxSource = {
@@ -53,9 +53,14 @@ const githubSource: InboxSource = {
   kind: "issues",
   name: "github · cat-cave",
   detail: "issues labeled spec-candidate",
-  config: { owner: "cat-cave", repo: "app", labels: ["spec-candidate"], staticRef: "credential/github/x" },
+  config: {
+    owner: "cat-cave",
+    repo: "app",
+    labels: ["spec-candidate"],
+    staticRef: "credential/github/x",
+  },
   enabled: true,
-  autoRoute: false
+  autoRoute: false,
 };
 
 const linearSource: InboxSource = {
@@ -67,7 +72,7 @@ const linearSource: InboxSource = {
   detail: "open issues",
   config: { provider: "linear", tokenRef: "credential/linear/x", teamId: "team_1" },
   enabled: true,
-  autoRoute: false
+  autoRoute: false,
 };
 
 const secrets = new InMemorySecretStore();
@@ -83,7 +88,7 @@ function fakeJira(issues: unknown[]): { client: JiraHttpClient; calls: JiraHttpR
     async request(input) {
       calls.push(input);
       return { status: 200, body: { issues } };
-    }
+    },
   };
   return { client, calls };
 }
@@ -92,7 +97,7 @@ function fakeLinear(): LinearHttpClient {
   return {
     async request() {
       return { status: 200, body: { data: { issues: { nodes: [] } } } };
-    }
+    },
   };
 }
 
@@ -100,7 +105,7 @@ function fakeGitHub(issues: unknown[]): GitHubHttpClient {
   return {
     async request() {
       return { status: 200, body: issues };
-    }
+    },
   };
 }
 
@@ -124,8 +129,17 @@ function stubPool(): { pool: pg.Pool; candidates: Map<string, Record<string, unk
       const key = `${sourceId}::${externalId}`;
       const cid = byExternal.get(key) ?? id;
       candidates.set(cid, {
-        id: cid, source_id: sourceId, org_id: orgId, project_id: projectId, external_id: externalId,
-        title, body, severity, status, triage: JSON.parse(triage), resolved_spec_id: null
+        id: cid,
+        source_id: sourceId,
+        org_id: orgId,
+        project_id: projectId,
+        external_id: externalId,
+        title,
+        body,
+        severity,
+        status,
+        triage: JSON.parse(triage),
+        resolved_spec_id: null,
       });
       byExternal.set(key, cid);
       return { rows: [candidateRow(cid)], rowCount: 1 };
@@ -143,9 +157,7 @@ function depsFor(connectors: ReadonlyMap<string, SourceConnector>, pool: pg.Pool
 const adfDescription = {
   type: "doc",
   version: 1,
-  content: [
-    { type: "paragraph", content: [{ type: "text", text: "repro: clear cart then submit" }] }
-  ]
+  content: [{ type: "paragraph", content: [{ type: "text", text: "repro: clear cart then submit" }] }],
 };
 
 const jiraIssues = [
@@ -154,27 +166,27 @@ const jiraIssues = [
     fields: {
       summary: "checkout crashes on empty cart",
       description: adfDescription,
-      priority: { name: "Highest" }
-    }
+      priority: { name: "Highest" },
+    },
   },
   {
     key: "CAT-13",
     fields: {
       summary: "CSV export for reports",
       description: "cfo wants csv", // plain-string description (older configs)
-      priority: { name: "Medium" }
-    }
+      priority: { name: "Medium" },
+    },
   },
   {
     key: "CAT-14",
     fields: {
       summary: "tidy up settings copy",
       description: null,
-      priority: { name: "Low" }
-    }
+      priority: { name: "Low" },
+    },
   },
   // A degenerate issue with neither key nor summary — must be dropped.
-  { fields: { priority: { name: "High" } } }
+  { fields: { priority: { name: "High" } } },
 ];
 
 describe("jira connector (mocked)", () => {
@@ -211,7 +223,7 @@ describe("jira connector (mocked)", () => {
     const { client, calls } = fakeJira([]);
     await createJiraConnector({ secrets, jiraHttp: client }).fetch({
       ...jiraSource,
-      config: { ...jiraSource.config, jql: "assignee = currentUser() AND statusCategory != Done" }
+      config: { ...jiraSource.config, jql: "assignee = currentUser() AND statusCategory != Done" },
     });
     expect(calls[0]?.body["jql"]).toBe("assignee = currentUser() AND statusCategory != Done");
   });
@@ -220,13 +232,17 @@ describe("jira connector (mocked)", () => {
     const { client, calls } = fakeJira([]);
     await createJiraConnector({ secrets, jiraHttp: client }).fetch({
       ...jiraSource,
-      config: { ...jiraSource.config, status: "To Do" }
+      config: { ...jiraSource.config, status: "To Do" },
     });
     expect(calls[0]?.body["jql"]).toBe('project = "CAT" AND status = "To Do" ORDER BY updated DESC');
   });
 
   it("returns no items on a non-200 response", async () => {
-    const client: JiraHttpClient = { async request() { return { status: 401, body: { errorMessages: ["bad creds"] } }; } };
+    const client: JiraHttpClient = {
+      async request() {
+        return { status: 401, body: { errorMessages: ["bad creds"] } };
+      },
+    };
     const items = await createJiraConnector({ secrets, jiraHttp: client }).fetch(jiraSource);
     expect(items).toHaveLength(0);
   });
@@ -236,15 +252,17 @@ describe("jira connector (mocked)", () => {
     await expect(
       createJiraConnector({ secrets, jiraHttp: client }).fetch({
         ...jiraSource,
-        config: { ...jiraSource.config, tokenRef: "credential/jira/missing" }
-      })
+        config: { ...jiraSource.config, tokenRef: "credential/jira/missing" },
+      }),
     ).rejects.toThrow(/no secret at ref/);
   });
 
   it("ingests + triages jira candidates as triaged (fail → bug variant)", async () => {
     const { client } = fakeJira(jiraIssues);
     const { pool, candidates } = stubPool();
-    const connectors = new Map<string, SourceConnector>([["issues", createJiraConnector({ secrets, jiraHttp: client })]]);
+    const connectors = new Map<string, SourceConnector>([
+      ["issues", createJiraConnector({ secrets, jiraHttp: client })],
+    ]);
     const { candidates: out } = await ingestSource(depsFor(connectors, pool), jiraSource);
     expect(out).toHaveLength(3);
     expect(out[0]?.status).toBe("triaged");
@@ -257,7 +275,9 @@ describe("jira connector (mocked)", () => {
     const issues = [{ key: "CAT-99", fields: { summary: "v1", description: null, priority: { name: "Low" } } }];
     const { client } = fakeJira(issues);
     const { pool, candidates } = stubPool();
-    const connectors = new Map<string, SourceConnector>([["issues", createJiraConnector({ secrets, jiraHttp: client })]]);
+    const connectors = new Map<string, SourceConnector>([
+      ["issues", createJiraConnector({ secrets, jiraHttp: client })],
+    ]);
     const deps = depsFor(connectors, pool);
     await ingestSource(deps, jiraSource);
     issues[0]!.fields.summary = "v2";
@@ -270,9 +290,20 @@ describe("jira connector (mocked)", () => {
 describe("issues dispatcher (jira provider routing)", () => {
   const dispatcher = () =>
     createIssuesConnector({
-      github: createGitHubIssuesConnector({ secrets, githubHttp: fakeGitHub([{ number: 1, title: "gh issue", body: "", labels: [] }]) }),
+      github: createGitHubIssuesConnector({
+        secrets,
+        githubHttp: fakeGitHub([{ number: 1, title: "gh issue", body: "", labels: [] }]),
+      }),
       linear: createLinearConnector({ secrets, linearHttp: fakeLinear() }),
-      jira: createJiraConnector({ secrets, jiraHttp: fakeJira([{ key: "CAT-1", fields: { summary: "jira issue", description: null, priority: { name: "Low" } } }]).client })
+      jira: createJiraConnector({
+        secrets,
+        jiraHttp: fakeJira([
+          {
+            key: "CAT-1",
+            fields: { summary: "jira issue", description: null, priority: { name: "Low" } },
+          },
+        ]).client,
+      }),
     });
 
   it("routes config.provider=jira to the Jira connector", async () => {

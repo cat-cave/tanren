@@ -17,10 +17,7 @@ import type { PaletteGroup, ProjectSummary } from "./types.js";
  * P2A-0019 Forge tool surface so the palette can never invoke an undeclared
  * tool. Projects are passed in so quick actions can deep-link the live project.
  */
-export function buildPaletteGroups(input: {
-  orgLogin: string;
-  projects: ProjectSummary[];
-}): PaletteGroup[] {
+export function buildPaletteGroups(input: { orgLogin: string; projects: ProjectSummary[] }): PaletteGroup[] {
   const firstProject = input.projects[0];
   const quickActions: PaletteGroup = {
     group: "quick actions",
@@ -29,21 +26,21 @@ export function buildPaletteGroups(input: {
         glyph: "+",
         title: "new spec",
         desc: "describe work · tanren plans & forges",
-        route: firstProject ? `/projects/${firstProject.projectId}/specs/new` : "/onboarding/new"
+        route: firstProject ? `/projects/${firstProject.projectId}/specs/new` : "/onboarding/new",
       },
       {
         glyph: "→",
         title: firstProject ? `go to ${firstProject.name}` : "go to a project",
         desc: firstProject ? firstProject.repoUrl : "no projects yet · onboard one",
-        route: firstProject ? `/projects/${firstProject.projectId}` : "/onboarding/existing"
+        route: firstProject ? `/projects/${firstProject.projectId}` : "/onboarding/existing",
       },
       {
         glyph: "↻",
         title: "review halted runs",
         desc: "runs that hit an escape hatch",
-        route: firstProject ? `/projects/${firstProject.projectId}/runs/halted` : "/projects"
-      }
-    ]
+        route: firstProject ? `/projects/${firstProject.projectId}/runs/halted` : "/projects",
+      },
+    ],
   };
   const forgeThis: PaletteGroup = {
     group: "forge this",
@@ -54,7 +51,7 @@ export function buildPaletteGroups(input: {
         title: "draft a spec from rough notes",
         desc: "i'll plan & dependency-rank it",
         tool: "tanren.create_spec",
-        args: firstProject ? { projectId: firstProject.projectId } : {}
+        args: firstProject ? { projectId: firstProject.projectId } : {},
       },
       {
         glyph: "鍛",
@@ -62,18 +59,22 @@ export function buildPaletteGroups(input: {
         title: "acknowledge a suboptimal callout",
         desc: "clear an open insight",
         tool: "tanren.acknowledge_insight",
-        args: {}
-      }
-    ]
+        args: {},
+      },
+    ],
   };
   // ask-forge items carry NEITHER route nor tool: the palette morphs into a
   // thick-Forge chat thread (P3-0010) and sends the title as the question.
   const askForge: PaletteGroup = {
     group: "ask forge",
     items: [
-      { glyph: "?", title: "what's blocking my milestones?", desc: "natural-language query · ask in chat" },
-      { glyph: "?", title: "how are my costs trending?", desc: "this week vs last · ask in chat" }
-    ]
+      {
+        glyph: "?",
+        title: "what's blocking my milestones?",
+        desc: "natural-language query · ask in chat",
+      },
+      { glyph: "?", title: "how are my costs trending?", desc: "this week vs last · ask in chat" },
+    ],
   };
   return [quickActions, forgeThis, askForge];
 }

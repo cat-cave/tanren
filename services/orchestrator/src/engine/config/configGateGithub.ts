@@ -12,7 +12,7 @@ import {
   GitHubPullRequestService,
   parseGitHubRepository,
   type GitHubHttpClient,
-  type GitHubRepository
+  type GitHubRepository,
 } from "../providers/github.js";
 import type { ConfigGateGitHub, GateConfigPullRequest } from "./tanrenConfigGate.js";
 
@@ -59,7 +59,7 @@ export class FetchConfigGateGitHub implements ConfigGateGitHub {
       headBranch: input.headBranch,
       baseBranch: input.baseBranch,
       title: input.title,
-      body: input.body
+      body: input.body,
     });
     return { number: pr.number, url: pr.url, branch: input.headBranch };
   }
@@ -70,7 +70,7 @@ export class FetchConfigGateGitHub implements ConfigGateGitHub {
       method: "GET",
       path: repoApi(repo, `/git/ref/${encodeRepoPath(`heads/${baseBranch}`)}`),
       token: this.deps.token,
-      refreshToken: this.deps.refreshToken
+      refreshToken: this.deps.refreshToken,
     });
     if (ref.status !== 200) {
       throw new Error(`could not read base branch ${baseBranch}: HTTP ${ref.status}`);
@@ -81,7 +81,7 @@ export class FetchConfigGateGitHub implements ConfigGateGitHub {
       path: repoApi(repo, "/git/refs"),
       token: this.deps.token,
       refreshToken: this.deps.refreshToken,
-      body: { ref: `refs/heads/${headBranch}`, sha }
+      body: { ref: `refs/heads/${headBranch}`, sha },
     });
     // 201 created, 422 already-exists → both fine for an idempotent open.
     if (create.status !== 201 && create.status !== 422) {
@@ -95,13 +95,13 @@ export class FetchConfigGateGitHub implements ConfigGateGitHub {
     headBranch: string,
     configFile: string,
     yaml: string,
-    message: string
+    message: string,
   ): Promise<void> {
     const existing = await this.deps.http.request({
       method: "GET",
       path: repoApi(repo, `/contents/${encodeRepoPath(configFile)}?ref=${encodeURIComponent(headBranch)}`),
       token: this.deps.token,
-      refreshToken: this.deps.refreshToken
+      refreshToken: this.deps.refreshToken,
     });
     const sha = existing.status === 200 ? contentSha(existing.body) : undefined;
     const put = await this.deps.http.request({
@@ -113,8 +113,8 @@ export class FetchConfigGateGitHub implements ConfigGateGitHub {
         message,
         branch: headBranch,
         content: Buffer.from(yaml, "utf8").toString("base64"),
-        ...(sha !== undefined ? { sha } : {})
-      }
+        ...(sha !== undefined ? { sha } : {}),
+      },
     });
     if (put.status !== 200 && put.status !== 201) {
       throw new Error(`could not commit ${configFile}: HTTP ${put.status}`);

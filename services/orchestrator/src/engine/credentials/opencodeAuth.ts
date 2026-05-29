@@ -22,7 +22,7 @@ export interface OpencodeAuthImportResult {
 
 export async function storeOpencodeAuthBundle(
   secrets: SecretStore,
-  input: { ref: string; authJson: string }
+  input: { ref: string; authJson: string },
 ): Promise<OpencodeAuthImportResult> {
   const ref = validateOpencodeCredentialRef(input.ref);
   const bundle = validateOpencodeAuthBundle(input.authJson);
@@ -72,6 +72,6 @@ function looksLikeZaiOpencodeAuth(value: Record<string, unknown>): boolean {
   }
   const entry = zai as Record<string, unknown>;
   return ["key", "apiKey", "api_key", "access", "accessToken"].some(
-    (field) => typeof entry[field] === "string" && entry[field] !== ""
+    (field) => typeof entry[field] === "string" && entry[field] !== "",
   );
 }

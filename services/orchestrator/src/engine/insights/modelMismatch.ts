@@ -31,10 +31,7 @@ interface ClassModelStatRow {
   last_used_at: Date;
 }
 
-export async function computeModelMismatch(
-  pool: Pick<pg.Pool, "query">,
-  context: ComputeContext
-): Promise<Insight[]> {
+export async function computeModelMismatch(pool: Pick<pg.Pool, "query">, context: ComputeContext): Promise<Insight[]> {
   const t: InsightThresholds = { ...DEFAULT_THRESHOLDS, ...context.thresholds };
   const now = context.now ?? new Date();
   const since = new Date(now.getTime() - t.modelMismatchWindowDays * 24 * 60 * 60 * 1000);
@@ -78,7 +75,7 @@ export async function computeModelMismatch(
        FROM joined
        GROUP BY spec_class, cli, model
        HAVING COUNT(DISTINCT spec_id) >= $3`,
-    [context.projectId, since, t.modelMismatchMinMergedPerModel]
+    [context.projectId, since, t.modelMismatchMinMergedPerModel],
   );
 
   const byClass = new Map<string, ClassModelStatRow[]>();
@@ -101,19 +98,18 @@ export async function computeModelMismatch(
         mergedSpecs,
         totalCost,
         costPerMerged,
-        lastUsedAt: new Date(row.last_used_at)
+        lastUsedAt: new Date(row.last_used_at),
       };
     });
     const cheapest = enriched.reduce((best, row) => (row.costPerMerged < best.costPerMerged ? row : best));
     const mostRecent = enriched.reduce((latest, row) =>
-      row.lastUsedAt.getTime() > latest.lastUsedAt.getTime() ? row : latest
+      row.lastUsedAt.getTime() > latest.lastUsedAt.getTime() ? row : latest,
     );
     if (mostRecent.model === cheapest.model && mostRecent.cli === cheapest.cli) continue;
     if (cheapest.costPerMerged <= 0) continue;
     if (mostRecent.costPerMerged < cheapest.costPerMerged * t.modelMismatchCostRatio) continue;
 
-    const monthlySavings =
-      (mostRecent.costPerMerged - cheapest.costPerMerged) * Math.max(mostRecent.mergedSpecs, 1);
+    const monthlySavings = (mostRecent.costPerMerged - cheapest.costPerMerged) * Math.max(mostRecent.mergedSpecs, 1);
     const payload: ModelMismatchPayload = {
       kind: "model_mismatch",
       specClass,
@@ -124,7 +120,7 @@ export async function computeModelMismatch(
       alternativeCli: cheapest.cli,
       alternativeCostPerMergedSpec: round6(cheapest.costPerMerged),
       monthlySavings: round6(monthlySavings),
-      comparisonWindowDays: t.modelMismatchWindowDays
+      comparisonWindowDays: t.modelMismatchWindowDays,
     };
     const insightId = `insight_modelmismatch_${specClass}_${randomUUID()}`;
     insights.push({
@@ -143,18 +139,18 @@ export async function computeModelMismatch(
             args: {
               projectId: context.projectId,
               title: `Routing: ${specClass} → ${cheapest.cli}/${cheapest.model}`,
-              description: `Reroute writer for milestone "${specClass}" from ${mostRecent.cli}/${mostRecent.model} to ${cheapest.cli}/${cheapest.model}. Estimated savings $${monthlySavings.toFixed(2)} / window.`
-            }
-          }
+              description: `Reroute writer for milestone "${specClass}" from ${mostRecent.cli}/${mostRecent.model} to ${cheapest.cli}/${cheapest.model}. Estimated savings $${monthlySavings.toFixed(2)} / window.`,
+            },
+          },
         },
         {
           label: "Dismiss · we want this model",
-          toolCall: { tool: "tanren.acknowledge_insight", args: { insightId } }
-        }
+          toolCall: { tool: "tanren.acknowledge_insight", args: { insightId } },
+        },
       ],
       computedAt: now,
       acknowledgedAt: null,
-      acknowledgedBy: null
+      acknowledgedBy: null,
     });
   }
   return insights;

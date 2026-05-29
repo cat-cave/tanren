@@ -116,7 +116,7 @@ export function layoutDag(dag: ProjectDag, group: GroupBy): DagLayout {
       x,
       cx,
       status: headerStatus(group, bucket.nodes),
-      attention: bucket.nodes.find((n) => n.attention !== null)?.attention ?? null
+      attention: bucket.nodes.find((n) => n.attention !== null)?.attention ?? null,
     });
     bucket.nodes.forEach((node, rowIndex) => {
       const y = TOP_PAD + rowIndex * (NODE_H + ROW_GAP);
@@ -139,7 +139,7 @@ export function layoutDag(dag: ProjectDag, group: GroupBy): DagLayout {
       x1: a.x + a.w / 2,
       y1: a.y + a.h / 2,
       x2: b.x + b.w / 2,
-      y2: b.y + b.h / 2
+      y2: b.y + b.h / 2,
     });
   }
 

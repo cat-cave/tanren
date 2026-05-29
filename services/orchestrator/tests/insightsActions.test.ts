@@ -14,11 +14,7 @@ import { describe, expect, it } from "vitest";
 import type { ActorContext } from "../src/auth/schemas.js";
 import { ForgeToolCall } from "../src/engine/answerers/schemas/forge.js";
 import { tanrenAcknowledgeInsight } from "../src/engine/forge/index.js";
-import {
-  acknowledgeInsight,
-  loadInsightsForProject,
-  writeInsights
-} from "../src/engine/insights/index.js";
+import { acknowledgeInsight, loadInsightsForProject, writeInsights } from "../src/engine/insights/index.js";
 import { InsightsMemoryClient } from "./helpers/insightsMemoryClient.js";
 
 function pool(client: InsightsMemoryClient): pg.Pool {
@@ -31,7 +27,7 @@ const ACTOR: ActorContext = {
   orgId: "org_a",
   projectId: "project_a",
   scopes: ["org:member", "project:member"],
-  source: "session"
+  source: "session",
 };
 
 function daysAgo(days: number): Date {
@@ -48,7 +44,7 @@ function seedMultiRun(client: InsightsMemoryClient): void {
     spec_id: "spec_x",
     project_id: "project_a",
     outcome: null,
-    ended_at: null
+    ended_at: null,
   });
   for (let i = 0; i < 2; i += 1) {
     client.tasks.push({
@@ -62,7 +58,7 @@ function seedMultiRun(client: InsightsMemoryClient): void {
       started_at: daysAgo(1),
       ended_at: daysAgo(1),
       attempt: i + 1,
-      parent_task_id: null
+      parent_task_id: null,
     });
   }
   client.events.push({
@@ -70,7 +66,7 @@ function seedMultiRun(client: InsightsMemoryClient): void {
     task_id: null,
     event_type: "planner.rerequested",
     payload: { rejectionReason: "auditor rejected behavior Y" },
-    ts: daysAgo(1)
+    ts: daysAgo(1),
   });
   // 3 specs merged on cheap gpt-4o ($0.20 each).
   for (let i = 0; i < 3; i += 1) {
@@ -83,7 +79,7 @@ function seedMultiRun(client: InsightsMemoryClient): void {
       spec_id: spec,
       project_id: "project_a",
       outcome: "merged",
-      ended_at: daysAgo(20)
+      ended_at: daysAgo(20),
     });
     const task = `task_cheap_${i}`;
     client.tasks.push({
@@ -97,7 +93,7 @@ function seedMultiRun(client: InsightsMemoryClient): void {
       started_at: daysAgo(20),
       ended_at: daysAgo(20),
       attempt: 1,
-      parent_task_id: null
+      parent_task_id: null,
     });
     client.costs.push({
       task_id: task,
@@ -105,7 +101,7 @@ function seedMultiRun(client: InsightsMemoryClient): void {
       cli: "codex",
       model: "gpt-4o",
       cost_usd: 0.2,
-      recorded_at: daysAgo(20)
+      recorded_at: daysAgo(20),
     });
   }
   // 3 specs merged on expensive gpt-5 ($1.00 each, more recent).
@@ -119,7 +115,7 @@ function seedMultiRun(client: InsightsMemoryClient): void {
       spec_id: spec,
       project_id: "project_a",
       outcome: "merged",
-      ended_at: daysAgo(2)
+      ended_at: daysAgo(2),
     });
     const task = `task_expensive_${i}`;
     client.tasks.push({
@@ -133,7 +129,7 @@ function seedMultiRun(client: InsightsMemoryClient): void {
       started_at: daysAgo(2),
       ended_at: daysAgo(2),
       attempt: 1,
-      parent_task_id: null
+      parent_task_id: null,
     });
     client.costs.push({
       task_id: task,
@@ -141,7 +137,7 @@ function seedMultiRun(client: InsightsMemoryClient): void {
       cli: "codex",
       model: "gpt-5",
       cost_usd: 1.0,
-      recorded_at: daysAgo(2)
+      recorded_at: daysAgo(2),
     });
   }
 }
@@ -152,7 +148,7 @@ describe("multi-run scenario", () => {
     seedMultiRun(client);
     const insights = await loadInsightsForProject(pool(client), {
       projectId: "project_a",
-      now: NOW
+      now: NOW,
     });
     const kinds = insights.map((entry) => entry.kind).sort();
     expect(kinds).toContain("retry_hotspot");
@@ -164,7 +160,7 @@ describe("multi-run scenario", () => {
     seedMultiRun(client);
     const insights = await loadInsightsForProject(pool(client), {
       projectId: "project_a",
-      now: NOW
+      now: NOW,
     });
     expect(insights.length).toBeGreaterThan(0);
     for (const insight of insights) {
@@ -195,25 +191,24 @@ describe("acknowledge action routing", () => {
           writerModel: "gpt-5",
           retryCount: 2,
           windowDays: 7,
-          rejectionSummaries: []
+          rejectionSummaries: [],
         },
         actions: [
           {
             label: "Ack",
-            toolCall: { tool: "tanren.acknowledge_insight", args: { insightId: "insight_route_1" } }
-          }
+            toolCall: {
+              tool: "tanren.acknowledge_insight",
+              args: { insightId: "insight_route_1" },
+            },
+          },
         ],
         computedAt: NOW,
         acknowledgedAt: null,
-        acknowledgedBy: null
-      }
+        acknowledgedBy: null,
+      },
     ]);
 
-    const result = await tanrenAcknowledgeInsight(
-      { pool: pool(client) },
-      { insightId: "insight_route_1" },
-      ACTOR
-    );
+    const result = await tanrenAcknowledgeInsight({ pool: pool(client) }, { insightId: "insight_route_1" }, ACTOR);
     expect(result.insightId).toBe("insight_route_1");
     expect(result.persisted).toBe(true);
     const acked = await acknowledgeInsight(pool(client), "insight_route_1", ACTOR.userId, NOW);

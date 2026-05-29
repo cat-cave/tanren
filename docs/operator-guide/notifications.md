@@ -37,14 +37,15 @@ slack route while leaving the org's ntfy route active.
 Every event in the P2A-0007 registry has a default severity in
 `services/orchestrator/src/engine/notifications/eventDefaultSeverity.ts`:
 
-| Severity | When                                                                                       |
-| -------- | ------------------------------------------------------------------------------------------ |
-| `ok`     | Happy-path completions: `run.completed`, `ci.passed`, `github.pr.merged`.                  |
-| `info`   | Normal-flight progress: `*.started`, `*.queued`, `writer.subtask.completed`, audit reads.  |
-| `warn`   | Recoverable degradation: `ci.failed`, `*.failed`, checker/auditor rejection verdicts.      |
-| `fail`   | Run-halting / unattributable: `run.failed`, `cost.unattributable`, `phase1.fixture.failed`.|
+| Severity | When                                                                                        |
+| -------- | ------------------------------------------------------------------------------------------- |
+| `ok`     | Happy-path completions: `run.completed`, `ci.passed`, `github.pr.merged`.                   |
+| `info`   | Normal-flight progress: `*.started`, `*.queued`, `writer.subtask.completed`, audit reads.   |
+| `warn`   | Recoverable degradation: `ci.failed`, `*.failed`, checker/auditor rejection verdicts.       |
+| `fail`   | Run-halting / unattributable: `run.failed`, `cost.unattributable`, `phase1.fixture.failed`. |
 
 A few payload shapes promote at fire time:
+
 - `checker.verdict` / `auditor.verdict` with `passed=false` promote one
   tier (e.g. base `info` → `warn`).
 - `run.completed` with an outcome containing `fail` promotes one tier.
@@ -89,6 +90,7 @@ not change.
 
 Notifications never block workflow progress. Every publish is
 fire-and-forget:
+
 - A wired channel that throws is caught, logged as
   `status='failed'` in the dispatch ledger, and the workflow continues.
 - A stubbed channel that throws is caught, logged at warn level, and

@@ -7,7 +7,11 @@ import { FakeEventStore } from "../src/engine/eventStore.js";
 import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "../src/engine/providers/github.js";
 import { GitHubPullRequestService, parseGitHubRepository } from "../src/engine/providers/github.js";
 import { publishDraftPullRequest, publishDraftPullRequestForRun } from "../src/engine/workflow/githubDraftPr.js";
-import { buildGitHubPushCommand, draftPrBranchName, pushWorkspaceBranchToGitHub } from "../src/engine/workspace/githubPush.js";
+import {
+  buildGitHubPushCommand,
+  draftPrBranchName,
+  pushWorkspaceBranchToGitHub,
+} from "../src/engine/workspace/githubPush.js";
 import { buildApp } from "../src/main.js";
 
 const target: SshTarget = {
@@ -15,30 +19,44 @@ const target: SshTarget = {
   port: 22,
   username: "tanren",
   hostKeyFingerprint: "SHA256:runner-host",
-  identitySecretRef: "runner/test/identity"
+  identitySecretRef: "runner/test/identity",
 };
 
 describe("GitHub draft PR contract", () => {
   it("validates managed GitHub credential refs and redacts token import results", async () => {
     const secrets = new FakeSecretStore();
 
-    const result = await storeGithubToken(secrets, { ref: "credential/github/dev", token: "ghp_secretToken" });
+    const result = await storeGithubToken(secrets, {
+      ref: "credential/github/dev",
+      token: "ghp_secretToken",
+    });
 
-    expect(result).toEqual({ credentialKind: "github_token", ref: "credential/github/dev", redacted: true });
+    expect(result).toEqual({
+      credentialKind: "github_token",
+      ref: "credential/github/dev",
+      redacted: true,
+    });
     expect(JSON.stringify(result)).not.toContain("ghp_secretToken");
-    await expect(secrets.get("credential/github/dev")).resolves.toEqual({ ref: "credential/github/dev", value: "ghp_secretToken" });
+    await expect(secrets.get("credential/github/dev")).resolves.toEqual({
+      ref: "credential/github/dev",
+      value: "ghp_secretToken",
+    });
     expect(() => validateGithubCredentialRef("credential/codex/dev")).toThrow("credential/github/");
-    await expect(storeGithubToken(secrets, { ref: "credential/github/bad", token: "has whitespace" })).rejects.toThrow("whitespace");
+    await expect(storeGithubToken(secrets, { ref: "credential/github/bad", token: "has whitespace" })).rejects.toThrow(
+      "whitespace",
+    );
   });
 
   it("builds deterministic safe branch names", () => {
     expect(draftPrBranchName({ runId: "run_123" })).toBe("tanren/run_123");
     expect(draftPrBranchName({ runId: "run_123", requestedBranch: "tanren/add-health-check-abcd1234" })).toBe(
-      "tanren/add-health-check-abcd1234"
+      "tanren/add-health-check-abcd1234",
     );
     expect(() => draftPrBranchName({ runId: "run_bad/path" })).toThrow("unsafe run id");
     expect(() => draftPrBranchName({ runId: "run_123", requestedBranch: "../main" })).toThrow("unsafe git branch");
-    expect(() => draftPrBranchName({ runId: "run_123", requestedBranch: "tanren/bad token" })).toThrow("unsafe git branch");
+    expect(() => draftPrBranchName({ runId: "run_123", requestedBranch: "tanren/bad token" })).toThrow(
+      "unsafe git branch",
+    );
   });
 
   it("constructs runner git push commands without embedding the token", async () => {
@@ -54,7 +72,7 @@ describe("GitHub draft PR contract", () => {
       repoUrl: "https://github.com/cat-cave/tanren-fixture-easy",
       branch: "tanren/run_123",
       credentialRef: "credential/github/dev",
-      timeoutMs: 500
+      timeoutMs: 500,
     });
 
     expect(ssh.commands[0]?.command.cwd).toBe("/workspace/runs/run_123/repo");
@@ -68,20 +86,30 @@ describe("GitHub draft PR contract", () => {
   it("parses GitHub repo URLs and rejects non-GitHub remotes", () => {
     expect(parseGitHubRepository("https://github.com/cat-cave/tanren-fixture-easy.git")).toEqual({
       owner: "cat-cave",
-      name: "tanren-fixture-easy"
+      name: "tanren-fixture-easy",
     });
     expect(parseGitHubRepository("git@github.com:cat-cave/tanren-fixture-easy.git")).toEqual({
       owner: "cat-cave",
-      name: "tanren-fixture-easy"
+      name: "tanren-fixture-easy",
     });
     expect(() => buildGitHubPushCommand({ repoUrl: "https://example.com/repo.git", branch: "tanren/run_123" })).toThrow(
-      "unsupported GitHub"
+      "unsupported GitHub",
     );
   });
 
   it("reuses an existing open PR instead of creating duplicates", async () => {
     const http = new ScriptedGitHubHttp([
-      { status: 200, body: [{ number: 7, html_url: "https://github.com/cat-cave/repo/pull/7", draft: true, base: { ref: "main" } }] }
+      {
+        status: 200,
+        body: [
+          {
+            number: 7,
+            html_url: "https://github.com/cat-cave/repo/pull/7",
+            draft: true,
+            base: { ref: "main" },
+          },
+        ],
+      },
     ]);
     const service = new GitHubPullRequestService(http);
 
@@ -90,7 +118,7 @@ describe("GitHub draft PR contract", () => {
       token: "ghp_secretToken",
       headBranch: "tanren/run_123",
       baseBranch: "main",
-      title: "Tanren run run_123"
+      title: "Tanren run run_123",
     });
 
     expect(result).toEqual({
@@ -98,10 +126,12 @@ describe("GitHub draft PR contract", () => {
       url: "https://github.com/cat-cave/repo/pull/7",
       draft: true,
       baseBranch: "main",
-      reused: true
+      reused: true,
     });
     expect(http.requests).toHaveLength(1);
-    expect(http.requests[0]?.path).toBe("/repos/cat-cave/repo/pulls?state=open&head=cat-cave%3Atanren%2Frun_123&base=main");
+    expect(http.requests[0]?.path).toBe(
+      "/repos/cat-cave/repo/pulls?state=open&head=cat-cave%3Atanren%2Frun_123&base=main",
+    );
   });
 
   it("does not reuse open PRs for the wrong base branch or non-draft PRs", async () => {
@@ -109,11 +139,29 @@ describe("GitHub draft PR contract", () => {
       {
         status: 200,
         body: [
-          { number: 7, html_url: "https://github.com/cat-cave/repo/pull/7", draft: true, base: { ref: "develop" } },
-          { number: 8, html_url: "https://github.com/cat-cave/repo/pull/8", draft: false, base: { ref: "main" } }
-        ]
+          {
+            number: 7,
+            html_url: "https://github.com/cat-cave/repo/pull/7",
+            draft: true,
+            base: { ref: "develop" },
+          },
+          {
+            number: 8,
+            html_url: "https://github.com/cat-cave/repo/pull/8",
+            draft: false,
+            base: { ref: "main" },
+          },
+        ],
       },
-      { status: 201, body: { number: 9, html_url: "https://github.com/cat-cave/repo/pull/9", draft: true, base: { ref: "main" } } }
+      {
+        status: 201,
+        body: {
+          number: 9,
+          html_url: "https://github.com/cat-cave/repo/pull/9",
+          draft: true,
+          base: { ref: "main" },
+        },
+      },
     ]);
     const service = new GitHubPullRequestService(http);
 
@@ -122,7 +170,7 @@ describe("GitHub draft PR contract", () => {
       token: "ghp_secretToken",
       headBranch: "tanren/run_123",
       baseBranch: "main",
-      title: "Tanren run run_123"
+      title: "Tanren run run_123",
     });
 
     expect(result).toMatchObject({ number: 9, reused: false, draft: true, baseBranch: "main" });
@@ -135,7 +183,15 @@ describe("GitHub draft PR contract", () => {
     const ssh = new RecordingSsh();
     const http = new ScriptedGitHubHttp([
       { status: 200, body: [] },
-      { status: 201, body: { number: 9, html_url: "https://github.com/cat-cave/repo/pull/9", draft: true, base: { ref: "main" } } }
+      {
+        status: 201,
+        body: {
+          number: 9,
+          html_url: "https://github.com/cat-cave/repo/pull/9",
+          draft: true,
+          base: { ref: "main" },
+        },
+      },
     ]);
     const events = new FakeEventStore();
     const pool = new RecordingPool();
@@ -156,16 +212,21 @@ describe("GitHub draft PR contract", () => {
       runBranch: "tanren/run_123",
       title: "Tanren run run_123",
       projectConfig: { githubCredentialRef: "credential/github/dev" },
-      timeoutMs: 500
+      timeoutMs: 500,
     });
 
-    expect(result).toEqual({ branch: "tanren/run_123", prUrl: "https://github.com/cat-cave/repo/pull/9", prNumber: 9, reused: false });
+    expect(result).toEqual({
+      branch: "tanren/run_123",
+      prUrl: "https://github.com/cat-cave/repo/pull/9",
+      prNumber: 9,
+      reused: false,
+    });
     expect(pool.updates).toEqual([{ runId: "run_123", prUrl: "https://github.com/cat-cave/repo/pull/9" }]);
     expect(events.events.map((event) => event.eventType)).toEqual([
       "credential.requested",
       "credential.loaded",
       "github.branch.pushed",
-      "github.pr.created"
+      "github.pr.created",
     ]);
     expect(JSON.stringify(events.events)).not.toContain("ghp_secretToken");
     expect(JSON.stringify(http.requests)).not.toContain("ghp_secretToken");
@@ -178,7 +239,15 @@ describe("GitHub draft PR contract", () => {
     const ssh = new RecordingSsh();
     const http = new ScriptedGitHubHttp([
       { status: 200, body: [] },
-      { status: 201, body: { number: 10, html_url: "https://github.com/cat-cave/repo/pull/10", draft: true, base: { ref: "main" } } }
+      {
+        status: 201,
+        body: {
+          number: 10,
+          html_url: "https://github.com/cat-cave/repo/pull/10",
+          draft: true,
+          base: { ref: "main" },
+        },
+      },
     ]);
     const events = new FakeEventStore();
     const pool = new RecordingRunPool();
@@ -191,7 +260,7 @@ describe("GitHub draft PR contract", () => {
       ssh,
       runId: "run_123",
       identitySecretRef: "runner/local/identity",
-      timeoutMs: 500
+      timeoutMs: 500,
     });
 
     expect(result).toMatchObject({ branch: "tanren/run_123", prNumber: 10 });
@@ -199,7 +268,7 @@ describe("GitHub draft PR contract", () => {
       host: "runner",
       port: 22,
       username: "tanren",
-      identitySecretRef: "runner/local/identity"
+      identitySecretRef: "runner/local/identity",
     });
     expect(ssh.commands[0]?.command.cwd).toBe("/workspace/runs/run_123/repo");
     expect(pool.updates).toEqual([{ runId: "run_123", prUrl: "https://github.com/cat-cave/repo/pull/10" }]);
@@ -211,18 +280,22 @@ describe("GitHub draft PR contract", () => {
       pool: {} as never,
       helloDependencies: { ssh: new RecordingSsh() } as never,
       secrets,
-      vaultHealthCheck: async () => ({ ok: true, status: 200 })
+      vaultHealthCheck: async () => ({ ok: true, status: 200 }),
     });
 
     const response = await app.request("/credentials/github/import", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ref: "credential/github/http", token: "ghp_secretToken" })
+      body: JSON.stringify({ ref: "credential/github/http", token: "ghp_secretToken" }),
     });
     const body = await response.json();
 
     expect(response.status).toBe(201);
-    expect(body).toEqual({ credentialKind: "github_token", ref: "credential/github/http", redacted: true });
+    expect(body).toEqual({
+      credentialKind: "github_token",
+      ref: "credential/github/http",
+      redacted: true,
+    });
     expect(JSON.stringify(body)).not.toContain("ghp_secretToken");
   });
 });
@@ -287,9 +360,9 @@ class RecordingRunPool extends RecordingPool {
             spec_description: "Create fixture file",
             ssh_host: "runner",
             ssh_port: 22,
-            host_key_fingerprint: "SHA256:runner-host"
-          }
-        ]
+            host_key_fingerprint: "SHA256:runner-host",
+          },
+        ],
       };
     }
     return await super.query(sql, params);

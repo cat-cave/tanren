@@ -33,12 +33,23 @@ const VALID_KINDS = new Set<AuditKind>(["security", "deps", "a11y", "mutation", 
 const VALID_CADENCES = new Set<AuditCadence>(["nightly", "weekly", "monthly"]);
 
 function auditsClient(c: Context, deps: ShellDeps): AuditsClient {
-  return new AuditsClient({ orchestratorUrl: deps.orchestratorUrl, cookieHeader: c.req.header("cookie") });
+  return new AuditsClient({
+    orchestratorUrl: deps.orchestratorUrl,
+    cookieHeader: c.req.header("cookie"),
+  });
 }
 
 /** Gather subscription cost records across every visible project for the heatmap. */
-async function gatherRecords(c: Context, deps: ShellDeps, orgId: string, projects: { projectId: string }[]): Promise<CostRecord[]> {
-  const client = new OrchestratorClient({ orchestratorUrl: deps.orchestratorUrl, cookieHeader: c.req.header("cookie") });
+async function gatherRecords(
+  c: Context,
+  deps: ShellDeps,
+  orgId: string,
+  projects: { projectId: string }[],
+): Promise<CostRecord[]> {
+  const client = new OrchestratorClient({
+    orchestratorUrl: deps.orchestratorUrl,
+    cookieHeader: c.req.header("cookie"),
+  });
   const records: CostRecord[] = [];
   for (const project of projects) {
     const runs = await client.listRuns(orgId, project.projectId);
@@ -62,7 +73,13 @@ export function mountAuditScreens(app: Hono, deps: ShellDeps): void {
         c,
         ctx,
         { title: "tanren · scheduled audits" },
-        <AuditsBody orgId="" snapshot={EMPTY} windowColumns={[]} lowNames={[]} error="link an org to schedule audits." />
+        <AuditsBody
+          orgId=""
+          snapshot={EMPTY}
+          windowColumns={[]}
+          lowNames={[]}
+          error="link an org to schedule audits."
+        />,
       );
     }
     const snapshot = (await auditsClient(c, deps).snapshot(ctx.org.id)) ?? EMPTY;
@@ -73,7 +90,12 @@ export function mountAuditScreens(app: Hono, deps: ShellDeps): void {
       c,
       ctx,
       { title: "tanren · scheduled audits" },
-      <AuditsBody orgId={ctx.org.id} snapshot={snapshot} windowColumns={columns} lowNames={underfilledNames(columns)} />
+      <AuditsBody
+        orgId={ctx.org.id}
+        snapshot={snapshot}
+        windowColumns={columns}
+        lowNames={underfilledNames(columns)}
+      />,
     );
   });
 
@@ -91,7 +113,7 @@ export function mountAuditScreens(app: Hono, deps: ShellDeps): void {
           cadence,
           projectId: null,
           targetWindow: str(form, "targetWindow"),
-          answererCli: str(form, "answererCli")
+          answererCli: str(form, "answererCli"),
         });
       }
     }

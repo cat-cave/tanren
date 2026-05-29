@@ -1,10 +1,5 @@
 import { createHash, createHmac } from "node:crypto";
-import type {
-  AllocationRequest,
-  Allocator,
-  ReleaseReason,
-  RunnerAllocation
-} from "../contracts/allocator.js";
+import type { AllocationRequest, Allocator, ReleaseReason, RunnerAllocation } from "../contracts/allocator.js";
 import type { RunnerStore } from "./runnerStore.js";
 
 const allocatorName = "aws_ec2";
@@ -141,8 +136,8 @@ export class AwsEc2Allocator implements Allocator {
       tags: {
         Name: `tanren-${request.runId}`.toLowerCase().replace(/[^a-z0-9-]/g, "-"),
         "tanren-run": request.runId,
-        "tanren-project": request.projectId
-      }
+        "tanren-project": request.projectId,
+      },
     });
 
     let instance: AwsEc2Instance;
@@ -157,9 +152,7 @@ export class AwsEc2Allocator implements Allocator {
     const ip = instance.publicIp;
     if (ip === undefined || ip === "") {
       await this.client.terminateInstance(instance.instanceId).catch(() => undefined);
-      throw new AwsEc2AllocatorError(
-        `aws ec2 instance ${instance.instanceId} became running without a public IP`
-      );
+      throw new AwsEc2AllocatorError(`aws ec2 instance ${instance.instanceId} became running without a public IP`);
     }
 
     return this.claim(request, instance.instanceId, ip);
@@ -179,8 +172,8 @@ export class AwsEc2Allocator implements Allocator {
         port,
         username,
         hostKeyFingerprint: this.options.hostKeyFingerprint,
-        identitySecretRef: request.identitySecretRef
-      }
+        identitySecretRef: request.identitySecretRef,
+      },
     };
 
     try {
@@ -193,7 +186,7 @@ export class AwsEc2Allocator implements Allocator {
         sshPort: port,
         hostKeyFingerprint: this.options.hostKeyFingerprint,
         imageSha: allocation.imageSha,
-        containerId: instanceId
+        containerId: instanceId,
       });
     } catch (error) {
       await this.client.terminateInstance(instanceId).catch(() => undefined);
@@ -226,13 +219,13 @@ export class AwsEc2Allocator implements Allocator {
       }
       if (instance.state === "terminated" || instance.state === "shutting-down") {
         throw new AwsEc2AllocatorError(
-          `aws ec2 instance ${instanceId} entered terminal state '${instance.state}' before running`
+          `aws ec2 instance ${instanceId} entered terminal state '${instance.state}' before running`,
         );
       }
       if (Date.now() >= deadline) {
         throw new AwsEc2AllocatorError(
           `aws ec2 instance ${instanceId} did not become running within ${readyTimeoutMs}ms ` +
-            `(last state: ${instance.state})`
+            `(last state: ${instance.state})`,
         );
       }
       await this.sleep(pollIntervalMs);
@@ -279,10 +272,7 @@ function signingKey(secretKey: string, date: string, region: string, service: st
 
 /** RFC-3986 encode for canonical query strings (encodeURIComponent + extras). */
 function rfc3986(value: string): string {
-  return encodeURIComponent(value).replace(
-    /[!'()*]/g,
-    (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`
-  );
+  return encodeURIComponent(value).replace(/[!'()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
 }
 
 function canonicalQuery(params: Record<string, string>): string {
@@ -306,13 +296,9 @@ function authorizationHeader(ctx: SigV4Context, query: string): string {
   const service = "ec2";
   const canonicalHeaders = `host:${ctx.host}\nx-amz-date:${ctx.amzDate}\n`;
   const signedHeaders = "host;x-amz-date";
-  const canonicalRequest = ["GET", "/", query, canonicalHeaders, signedHeaders, sha256Hex("")].join(
-    "\n"
-  );
+  const canonicalRequest = ["GET", "/", query, canonicalHeaders, signedHeaders, sha256Hex("")].join("\n");
   const scope = `${ctx.dateStamp}/${ctx.region}/${service}/aws4_request`;
-  const stringToSign = ["AWS4-HMAC-SHA256", ctx.amzDate, scope, sha256Hex(canonicalRequest)].join(
-    "\n"
-  );
+  const stringToSign = ["AWS4-HMAC-SHA256", ctx.amzDate, scope, sha256Hex(canonicalRequest)].join("\n");
   const key = signingKey(ctx.secretAccessKey, ctx.dateStamp, ctx.region, service);
   const signature = createHmac("sha256", key).update(stringToSign, "utf8").digest("hex");
   return (
@@ -329,7 +315,7 @@ function runInstancesParams(input: AwsRunInstancesInput): Record<string, string>
     ImageId: input.imageId,
     InstanceType: input.instanceType,
     MinCount: "1",
-    MaxCount: "1"
+    MaxCount: "1",
   };
   if (input.keyName !== undefined) {
     params["KeyName"] = input.keyName;
@@ -361,11 +347,8 @@ function runInstancesParams(input: AwsRunInstancesInput): Record<string, string>
  * dependency-free, and injectable/mockable like the DO/GCP allocators.
  */
 export function fetchAwsEc2Client(
-  options: Pick<
-    AwsEc2AllocatorOptions,
-    "accessKeyId" | "secretAccessKey" | "sessionToken" | "region"
-  >,
-  fetchImpl: typeof fetch = fetch
+  options: Pick<AwsEc2AllocatorOptions, "accessKeyId" | "secretAccessKey" | "sessionToken" | "region">,
+  fetchImpl: typeof fetch = fetch,
 ): AwsEc2Client {
   const host = `ec2.${options.region}.amazonaws.com`;
   const endpoint = `https://${host}/`;
@@ -386,9 +369,9 @@ export function fetchAwsEc2Client(
         region: options.region,
         host,
         amzDate,
-        dateStamp
+        dateStamp,
       },
-      query
+      query,
     );
     const headers: Record<string, string> = { authorization, "x-amz-date": amzDate };
     if (options.sessionToken !== undefined) {
@@ -422,6 +405,6 @@ export function fetchAwsEc2Client(
         }
         throw error;
       }
-    }
+    },
   };
 }

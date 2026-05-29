@@ -23,7 +23,7 @@ export interface ComputeInsightContext {
 export async function computeInsight(
   kind: InsightKind,
   context: ComputeInsightContext,
-  pool: Pick<pg.Pool, "query">
+  pool: Pick<pg.Pool, "query">,
 ): Promise<Insight[]> {
   switch (kind) {
     case "retry_hotspot":
@@ -44,7 +44,7 @@ export const INSIGHT_KINDS: ReadonlyArray<InsightKind> = [
   "model_mismatch",
   "pace_anomaly",
   "stuck",
-  "review_stall"
+  "review_stall",
 ];
 
 export interface LoadInsightsOptions {
@@ -56,7 +56,7 @@ export interface LoadInsightsOptions {
 
 export async function loadInsightsForProject(
   pool: Pick<pg.Pool, "query">,
-  options: LoadInsightsOptions
+  options: LoadInsightsOptions,
 ): Promise<Insight[]> {
   const t: InsightThresholds = { ...DEFAULT_THRESHOLDS, ...options.thresholds };
   const out: Insight[] = [];
@@ -67,11 +67,7 @@ export async function loadInsightsForProject(
       now: options.now,
       cacheFreshnessMs: options.cacheFreshnessMs ?? t.cacheFreshnessMs,
       compute: () =>
-        computeInsight(
-          kind,
-          { projectId: options.projectId, now: options.now, thresholds: options.thresholds },
-          pool
-        )
+        computeInsight(kind, { projectId: options.projectId, now: options.now, thresholds: options.thresholds }, pool),
     });
     out.push(...result.insights);
   }

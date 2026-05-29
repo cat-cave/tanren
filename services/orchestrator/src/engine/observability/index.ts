@@ -10,7 +10,7 @@ export {
   type TimingBoundary,
   type TimingOutcome,
   type TimingRecord,
-  type TimingSink
+  type TimingSink,
 } from "./timing.js";
 
 export { TimedSshSubstrate } from "./timedSubstrate.js";

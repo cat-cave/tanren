@@ -38,9 +38,9 @@ export async function handleRejection(args: {
       rejectionReason: args.rejection.rejectionReason,
       behaviorIdsFailed: [...args.rejection.behaviorIdsFailed],
       plannerRerunCount: nextCount,
-      maxPlannerRerunsPerSpec: args.max
+      maxPlannerRerunsPerSpec: args.max,
     },
-    args.plannerTaskId
+    args.plannerTaskId,
   );
   args.history.push(args.rejection);
   return false;
@@ -53,7 +53,7 @@ export async function handleRejection(args: {
 // verdict (it is exit-code only), so behaviorIdsFailed is empty.
 export function gateRejection(
   outcome: Extract<GateOutcome, { passed: false }>,
-  subtasks: ReadonlyArray<PlanSubtask>
+  subtasks: ReadonlyArray<PlanSubtask>,
 ): PlannerRejectionFeedback {
   const { failure } = outcome;
   const exit = failure.exitCode === null ? "no exit code (timed out or substrate failure)" : `exit ${failure.exitCode}`;
@@ -61,6 +61,6 @@ export function gateRejection(
     producer: "gate",
     rejectionReason: `gate tier "${failure.tier}" (${failure.when}) failed at step "${failure.failedStep}" with ${exit}`,
     behaviorIdsFailed: [],
-    previousSubtasks: subtasks
+    previousSubtasks: subtasks,
   };
 }

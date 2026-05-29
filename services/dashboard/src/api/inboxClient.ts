@@ -27,10 +27,7 @@ export class InboxClient extends OrchestratorHttpClient {
 
   /** Pull → triage → upsert a source's candidates. */
   async ingest(orgId: string, sourceId: string): Promise<{ ok: boolean }> {
-    const r = await this.sendJson(
-      "POST",
-      `${this.base(orgId)}/sources/${encodeURIComponent(sourceId)}/ingest`
-    );
+    const r = await this.sendJson("POST", `${this.base(orgId)}/sources/${encodeURIComponent(sourceId)}/ingest`);
     return { ok: r.ok };
   }
 
@@ -42,26 +39,32 @@ export class InboxClient extends OrchestratorHttpClient {
       proposals: unknown[];
       placementKind: string;
       placementLabel: string;
-    }
+    },
   ): Promise<{ ok: boolean; candidate?: Candidate }> {
     const r = await this.sendJson<{ candidate?: Candidate }>(
       "POST",
       `${this.base(orgId)}/candidates/${encodeURIComponent(candidateId)}/accept`,
-      input
+      input,
     );
-    return { ok: r.ok, ...(r.body?.candidate !== undefined ? { candidate: r.body.candidate } : {}) };
+    return {
+      ok: r.ok,
+      ...(r.body?.candidate !== undefined ? { candidate: r.body.candidate } : {}),
+    };
   }
 
   /** Fold / dismiss / close-as-duplicate — the three status-transition actions. */
   async resolve(
     orgId: string,
     candidateId: string,
-    verb: "fold" | "dismiss" | "close-duplicate"
+    verb: "fold" | "dismiss" | "close-duplicate",
   ): Promise<{ ok: boolean; candidate?: Candidate }> {
     const r = await this.sendJson<{ candidate?: Candidate }>(
       "POST",
-      `${this.base(orgId)}/candidates/${encodeURIComponent(candidateId)}/${verb}`
+      `${this.base(orgId)}/candidates/${encodeURIComponent(candidateId)}/${verb}`,
     );
-    return { ok: r.ok, ...(r.body?.candidate !== undefined ? { candidate: r.body.candidate } : {}) };
+    return {
+      ok: r.ok,
+      ...(r.body?.candidate !== undefined ? { candidate: r.body.candidate } : {}),
+    };
   }
 }

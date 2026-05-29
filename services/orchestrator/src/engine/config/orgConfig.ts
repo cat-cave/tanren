@@ -7,7 +7,7 @@ import {
   RoutingTable,
   UnknownConfigVersionError,
   emptyRoutingTable,
-  readObservedVersion
+  readObservedVersion,
 } from "./shared.js";
 
 // Top-level versioned Zod schema for org-level config. Persisted as a JSONB
@@ -29,7 +29,7 @@ const defaultForgePersona = () => ForgePersona.parse({});
 export const OrgDefaultCredentials = z
   .object({
     codex_chatgpt_auth: z.string().min(1).optional(),
-    github_token: z.string().min(1).optional()
+    github_token: z.string().min(1).optional(),
   })
   .strict();
 export type OrgDefaultCredentials = z.infer<typeof OrgDefaultCredentials>;
@@ -44,7 +44,7 @@ export const OrgGithubAppInstallation = z
     installationId: z.string().min(1),
     appId: z.string().min(1),
     credentialRef: z.string().min(1),
-    installedAt: z.string().min(1)
+    installedAt: z.string().min(1),
   })
   .strict();
 export type OrgGithubAppInstallation = z.infer<typeof OrgGithubAppInstallation>;
@@ -63,7 +63,7 @@ export const OrgAuditGateTarget = z
     repo: z.string().regex(/^[^/\s]+\/[^/\s]+$/, "expected owner/name"),
     baseBranch: z.string().min(1).default("main"),
     branchPrefix: z.string().min(1).default("forge"),
-    configFile: z.string().min(1).default("tanren.yaml")
+    configFile: z.string().min(1).default("tanren.yaml"),
   })
   .strict();
 export type OrgAuditGateTarget = z.infer<typeof OrgAuditGateTarget>;
@@ -79,7 +79,7 @@ export const OrgConfigV1 = z
     auditGateEnabled: z.boolean().default(false),
     auditGate: OrgAuditGateTarget.optional(),
     defaultCredentials: OrgDefaultCredentials.optional(),
-    github_app: OrgGithubAppInstallation.optional()
+    github_app: OrgGithubAppInstallation.optional(),
   })
   .strict();
 export type OrgConfigV1 = z.infer<typeof OrgConfigV1>;

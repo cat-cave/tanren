@@ -42,7 +42,7 @@ function fakeClientFactory(opts: FakeClientOptions) {
         return emitter;
       },
       destroy: () => undefined,
-      end: () => undefined
+      end: () => undefined,
     };
   };
 }
@@ -54,14 +54,14 @@ describe("StaticRunnerAllocator", () => {
       host: "runner",
       port: 22,
       hostKeyFingerprint: "SHA256:precooked",
-      runners
+      runners,
     });
 
     const allocation = await allocator.allocate({
       runId: "run_abc",
       projectId: "proj_abc",
       runnerImage: "ghcr.io/cat-cave/tanren-runner:v0",
-      identitySecretRef: "runner/dev/identity"
+      identitySecretRef: "runner/dev/identity",
     });
 
     expect(allocation.runnerId).toBe("runner_run_abc");
@@ -85,15 +85,15 @@ describe("StaticRunnerAllocator", () => {
         // ssh2 hashes the wire-format host key; with hostHash: "sha256" the
         // hex-encoded digest is passed to hostVerifier. The exact bytes do
         // not matter for this test — only that the normalizer round-trips it.
-        fingerprint: "a".repeat(64)
-      })
+        fingerprint: "a".repeat(64),
+      }),
     });
 
     const allocation = await allocator.allocate({
       runId: "run_tofu",
       projectId: "proj_tofu",
       runnerImage: "ghcr.io/cat-cave/tanren-runner:v0",
-      identitySecretRef: "runner/dev/identity"
+      identitySecretRef: "runner/dev/identity",
     });
 
     expect(allocation.target.hostKeyFingerprint).toMatch(/^SHA256:/);
@@ -106,7 +106,7 @@ describe("StaticRunnerAllocator", () => {
       host: "runner",
       port: 22,
       runners,
-      clientFactory: fakeClientFactory({ fingerprint: undefined, emitError: true })
+      clientFactory: fakeClientFactory({ fingerprint: undefined, emitError: true }),
     });
 
     await expect(
@@ -114,8 +114,8 @@ describe("StaticRunnerAllocator", () => {
         runId: "run_err",
         projectId: "p",
         runnerImage: "img",
-        identitySecretRef: "runner/dev/identity"
-      })
+        identitySecretRef: "runner/dev/identity",
+      }),
     ).rejects.toThrow(/host key discovery failed/);
   });
 
@@ -125,7 +125,7 @@ describe("StaticRunnerAllocator", () => {
       host: "runner",
       port: 22,
       hostKeyFingerprint: "SHA256:test",
-      runners
+      runners,
     });
 
     await allocator.release("runner_run_xyz", "completed");

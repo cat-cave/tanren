@@ -10,7 +10,7 @@ export const projectInputSchema = z.object({
   defaultBranch: z.string().min(1).optional(),
   runnerImage: z.string().min(1).optional(),
   allocator: z.string().min(1).optional(),
-  config: z.record(z.string(), z.unknown()).optional()
+  config: z.record(z.string(), z.unknown()).optional(),
 });
 
 export const specInputSchema = z.object({
@@ -18,17 +18,17 @@ export const specInputSchema = z.object({
   title: z.string().min(1),
   description: z.string().min(1),
   acceptanceCriteria: z.array(z.string().min(1)).min(1),
-  dependsOn: z.array(z.string().min(1)).optional()
+  dependsOn: z.array(z.string().min(1)).optional(),
 });
 
 export const runInputSchema = z.object({
   trigger: z.enum(["cli", "dashboard", "api", "webhook"]).optional(),
-  branch: z.string().min(1).optional()
+  branch: z.string().min(1).optional(),
 });
 
 export const githubCredentialImportSchema = z.object({
   ref: z.string().min(1),
-  token: z.string().min(1)
+  token: z.string().min(1),
 });
 
 export const draftPrInputSchema = z.object({
@@ -36,9 +36,9 @@ export const draftPrInputSchema = z.object({
   workspacePath: z.string().min(1).optional(),
   title: z.string().min(1).optional(),
   body: z.string().optional(),
-  timeoutMs: z.number().int().positive().optional()
+  timeoutMs: z.number().int().positive().optional(),
 });
 
 export const ciPollInputSchema = z.object({
-  githubCredentialRef: z.string().min(1).optional()
+  githubCredentialRef: z.string().min(1).optional(),
 });

@@ -78,12 +78,12 @@ If the trigger is refused, the spec list re-renders with a typed, inline error
 on the offending row — these are **meaningful operator feedback, not silent
 failures**:
 
-| What you see | Why | What to do |
-| --- | --- | --- |
-| *this spec is blocked: a spec it depends on has not finished yet* (`409 spec_dependencies_blocked`) | A `dependsOn` spec is not `done`. | Finish the dependency run first, then re-trigger. |
-| *this spec is not runnable* (`409 spec_not_runnable`) | The spec already started a run or is not in a runnable state. | Open its existing run from the spec row instead. |
-| *you do not have access to start a run for this spec* (`403`) | Org/project access denied. | Check you are in the right org/project. |
-| *could not reach the orchestrator* | The API is down. | Confirm the stack is up (step 1), then retry. |
+| What you see                                                                                        | Why                                                           | What to do                                        |
+| --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- | ------------------------------------------------- |
+| _this spec is blocked: a spec it depends on has not finished yet_ (`409 spec_dependencies_blocked`) | A `dependsOn` spec is not `done`.                             | Finish the dependency run first, then re-trigger. |
+| _this spec is not runnable_ (`409 spec_not_runnable`)                                               | The spec already started a run or is not in a runnable state. | Open its existing run from the spec row instead.  |
+| _you do not have access to start a run for this spec_ (`403`)                                       | Org/project access denied.                                    | Check you are in the right org/project.           |
+| _could not reach the orchestrator_                                                                  | The API is down.                                              | Confirm the stack is up (step 1), then retry.     |
 
 ## 6. Watch the run live
 

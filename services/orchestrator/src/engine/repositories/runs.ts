@@ -17,7 +17,7 @@ export const RunRow = z.object({
   startedAt: z.date(),
   endedAt: z.date().nullable(),
   tenantId: z.string().nullable(),
-  userId: z.string().nullable()
+  userId: z.string().nullable(),
 });
 export type RunRow = z.infer<typeof RunRow>;
 
@@ -64,7 +64,7 @@ function decodeRunRow(raw: RawRunRow): RunRow {
     startedAt: raw.started_at,
     endedAt: raw.ended_at,
     tenantId: raw.tenant_id,
-    userId: raw.user_id
+    userId: raw.user_id,
   });
 }
 
@@ -80,17 +80,25 @@ export const RunStore = {
 
   async list(client: QueryClient, filter: { projectId?: string } | undefined, _actor: ActorRef): Promise<RunRow[]> {
     const projectId = filter?.projectId;
-    const result = projectId === undefined
-      ? await client.query(`SELECT ${SELECT_RUN_COLUMNS} FROM runs ORDER BY started_at DESC`)
-      : await client.query(`SELECT ${SELECT_RUN_COLUMNS} FROM runs WHERE project_id = $1 ORDER BY started_at DESC`, [projectId]);
+    const result =
+      projectId === undefined
+        ? await client.query(`SELECT ${SELECT_RUN_COLUMNS} FROM runs ORDER BY started_at DESC`)
+        : await client.query(`SELECT ${SELECT_RUN_COLUMNS} FROM runs WHERE project_id = $1 ORDER BY started_at DESC`, [
+            projectId,
+          ]);
     return result.rows.map((row) => decodeRunRow(row as RawRunRow));
   },
 
   async updateStatus(
     client: QueryClient,
     runId: string,
-    next: { from: z.infer<typeof RunStatus>; to: z.infer<typeof RunStatus>; outcome?: z.infer<typeof RunOutcome>; setEndedAt?: boolean },
-    _actor: ActorRef
+    next: {
+      from: z.infer<typeof RunStatus>;
+      to: z.infer<typeof RunStatus>;
+      outcome?: z.infer<typeof RunOutcome>;
+      setEndedAt?: boolean;
+    },
+    _actor: ActorRef,
   ): Promise<RunRow> {
     transitionRun(next.from, next.to);
     const params: unknown[] = [runId, next.to];
@@ -102,11 +110,11 @@ export const RunStore = {
     const setEnded = next.setEndedAt === true ? ", ended_at = now()" : "";
     const result = await client.query(
       `UPDATE runs SET status = $2${setOutcome}${setEnded} WHERE run_id = $1 RETURNING ${SELECT_RUN_COLUMNS}`,
-      params
+      params,
     );
     if (result.rows.length === 0) {
       throw new Error(`run not found: ${runId}`);
     }
     return decodeRunRow(result.rows[0] as RawRunRow);
-  }
+  },
 } as const;

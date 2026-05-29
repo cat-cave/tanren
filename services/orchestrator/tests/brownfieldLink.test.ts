@@ -21,7 +21,7 @@ const alice: ActorContext = {
   orgId: "org_acme",
   projectId: null,
   scopes: ["org:member", "org:admin"],
-  source: "session"
+  source: "session",
 };
 
 function buildHarness(actor: ActorContext, http: GitHubHttpClient) {
@@ -40,10 +40,10 @@ function buildHarness(actor: ActorContext, http: GitHubHttpClient) {
         },
         async resolveActorContext() {
           return actor;
-        }
+        },
       } as never,
-      localDevActor: actor
-    })
+      localDevActor: actor,
+    }),
   );
   app.route("/orgs", createBrownfieldRoutes({ pool: pool.asPgPool(), secrets, githubHttp: http }));
   return { app, pool, secrets };
@@ -61,8 +61,8 @@ describe("brownfield link endpoint", () => {
           body: {
             encoding: "base64",
             size: 7,
-            content: Buffer.from("ci: yes\n").toString("base64")
-          }
+            content: Buffer.from("ci: yes\n").toString("base64"),
+          },
         };
       }
       return { status: 404, body: undefined };
@@ -74,7 +74,7 @@ describe("brownfield link endpoint", () => {
     const response = await app.request("/orgs/org_acme/projects/project_1/link", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ repoUrl: "https://github.com/cat-cave/fixture" })
+      body: JSON.stringify({ repoUrl: "https://github.com/cat-cave/fixture" }),
     });
 
     expect(response.status).toBe(200);
@@ -98,7 +98,7 @@ describe("brownfield link endpoint", () => {
     const response = await app.request("/orgs/org_acme/projects/project_1/link", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ repoUrl: "https://github.com/cat-cave/missing" })
+      body: JSON.stringify({ repoUrl: "https://github.com/cat-cave/missing" }),
     });
 
     expect(response.status).toBe(404);
@@ -114,7 +114,7 @@ describe("brownfield link endpoint", () => {
     const response = await app.request("/orgs/org_acme/projects/project_other/link", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ repoUrl: "https://github.com/cat-cave/x" })
+      body: JSON.stringify({ repoUrl: "https://github.com/cat-cave/x" }),
     });
     expect(response.status).toBe(403);
   });
@@ -127,7 +127,7 @@ describe("brownfield link endpoint", () => {
     const response = await app.request("/orgs/org_acme/projects/project_1/link", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ repoUrl: "https://github.com/cat-cave/x" })
+      body: JSON.stringify({ repoUrl: "https://github.com/cat-cave/x" }),
     });
     expect(response.status).toBe(400);
   });

@@ -10,18 +10,17 @@ export class ToolAccessDeniedError extends Error {}
 export async function assertProjectAccess(
   pool: pg.Pool,
   projectId: string,
-  actor: ActorContext
+  actor: ActorContext,
 ): Promise<{ orgId: string | null }> {
   if (actor.scopes.includes("platform:admin")) {
-    const result = await pool.query<{ org_id: string | null }>(
-      "SELECT org_id FROM projects WHERE project_id = $1",
-      [projectId]
-    );
+    const result = await pool.query<{ org_id: string | null }>("SELECT org_id FROM projects WHERE project_id = $1", [
+      projectId,
+    ]);
     return { orgId: result.rows[0]?.org_id ?? null };
   }
   const projectResult = await pool.query<{ org_id: string | null }>(
     "SELECT org_id FROM projects WHERE project_id = $1",
-    [projectId]
+    [projectId],
   );
   const orgId = projectResult.rows[0]?.org_id ?? null;
   if (orgId === null) {
@@ -31,13 +30,10 @@ export async function assertProjectAccess(
   }
   const member = await pool.query<{ role: string }>(
     "SELECT role FROM project_members WHERE project_id = $1 AND user_id = $2",
-    [projectId, actor.userId]
+    [projectId, actor.userId],
   );
   if ((member.rowCount ?? 0) > 0) return { orgId };
-  if (
-    actor.orgId === orgId &&
-    (actor.scopes.includes("org:member") || actor.scopes.includes("org:admin"))
-  ) {
+  if (actor.orgId === orgId && (actor.scopes.includes("org:member") || actor.scopes.includes("org:admin"))) {
     return { orgId };
   }
   throw new ToolAccessDeniedError(`actor cannot access project ${projectId}`);
@@ -46,11 +42,11 @@ export async function assertProjectAccess(
 export async function assertRunAccess(
   pool: pg.Pool,
   runId: string,
-  actor: ActorContext
+  actor: ActorContext,
 ): Promise<{ projectId: string; specId: string }> {
   const result = await pool.query<{ project_id: string; spec_id: string }>(
     "SELECT project_id, spec_id FROM runs WHERE run_id = $1",
-    [runId]
+    [runId],
   );
   const row = result.rows[0];
   if (row === undefined) {
@@ -63,12 +59,9 @@ export async function assertRunAccess(
 export async function assertSpecAccess(
   pool: pg.Pool,
   specId: string,
-  actor: ActorContext
+  actor: ActorContext,
 ): Promise<{ projectId: string }> {
-  const result = await pool.query<{ project_id: string }>(
-    "SELECT project_id FROM specs WHERE spec_id = $1",
-    [specId]
-  );
+  const result = await pool.query<{ project_id: string }>("SELECT project_id FROM specs WHERE spec_id = $1", [specId]);
   const row = result.rows[0];
   if (row === undefined) {
     throw new ToolAccessDeniedError(`spec not found: ${specId}`);

@@ -23,23 +23,33 @@ export function ReconStep(props: { repoUrl: string; result: ReconResult; baseAct
         title="forge already"
         em="knows most of it"
         sub={`the read-only answerer indexed ${filesIndexed} files and pre-filled the chapters below. confirm what it inferred; settle the gaps.`}
-        right={<span class="pill cold"><span class="d"></span>read-only answerer · writes nothing</span>}
+        right={
+          <span class="pill cold">
+            <span class="d"></span>read-only answerer · writes nothing
+          </span>
+        }
       />
       <div class="ex-cols">
         <div style="display:flex;flex-direction:column;gap:10px">
           <div class="ex-chapter">
             <div class="h">
-              <span class="gl" style="color:var(--status-ok)">✓</span>
+              <span class="gl" style="color:var(--status-ok)">
+                ✓
+              </span>
               <span class="ch">identity</span>
             </div>
-            <div class="body" style="color:var(--fg-1)">{report.identity.slug}</div>
+            <div class="body" style="color:var(--fg-1)">
+              {report.identity.slug}
+            </div>
             <div class="body">{report.identity.purpose}</div>
             <div class="from">↑ from {report.identity.inferredFrom}</div>
           </div>
 
           <div class="ex-chapter">
             <div class="h">
-              <span class="gl" style="color:var(--status-ok)">✓</span>
+              <span class="gl" style="color:var(--status-ok)">
+                ✓
+              </span>
               <span class="ch">personas · {report.personas.length} captured</span>
             </div>
             {report.personas.map((p) => (
@@ -51,17 +61,23 @@ export function ReconStep(props: { repoUrl: string; result: ReconResult; baseAct
 
           <div class="ex-chapter">
             <div class="h">
-              <span class="gl" style="color:var(--status-ok)">✓</span>
+              <span class="gl" style="color:var(--status-ok)">
+                ✓
+              </span>
               <span class="ch">behaviors · {report.behaviors.length} captured</span>
             </div>
             {report.behaviors.map((b) => (
-              <div class="body">{b.persona} · {b.title}</div>
+              <div class="body">
+                {b.persona} · {b.title}
+              </div>
             ))}
           </div>
 
           <div class="ex-chapter">
             <div class="h">
-              <span class="gl" style="color:var(--status-ok)">✓</span>
+              <span class="gl" style="color:var(--status-ok)">
+                ✓
+              </span>
               <span class="ch">architecture · detected</span>
             </div>
             {report.architecture.map((a) => (
@@ -73,7 +89,9 @@ export function ReconStep(props: { repoUrl: string; result: ReconResult; baseAct
 
           <div class="ex-chapter warn">
             <div class="h">
-              <span class="gl" style="color:var(--status-warn)">!</span>
+              <span class="gl" style="color:var(--status-warn)">
+                !
+              </span>
               <span class="ch">risks · {report.risks.length} flagged</span>
             </div>
             {report.risks.map((r) => (
@@ -86,16 +104,23 @@ export function ReconStep(props: { repoUrl: string; result: ReconResult; baseAct
         </div>
 
         <div style="display:flex;flex-direction:column;gap:10px">
-          <div class="mono-dim" style="font-family:var(--font-mono);color:var(--ember-08);letter-spacing:0.18em;text-transform:uppercase;font-weight:700;font-size:9px">
+          <div
+            class="mono-dim"
+            style="font-family:var(--font-mono);color:var(--ember-08);letter-spacing:0.18em;text-transform:uppercase;font-weight:700;font-size:9px"
+          >
             ▮ {report.gaps.length} things the agent couldn't decide
           </div>
           {report.gaps.map((g, i) => (
             <div class="ex-gap">
-              <div class="lbl">↑ gap {i + 1} · {g.chapter}</div>
+              <div class="lbl">
+                ↑ gap {i + 1} · {g.chapter}
+              </div>
               <div class="q">{g.question}</div>
               <div class="opts">
                 {g.options.map((opt) => (
-                  <span class="pill" style="font-size:10px">{opt}</span>
+                  <span class="pill" style="font-size:10px">
+                    {opt}
+                  </span>
                 ))}
               </div>
             </div>
@@ -110,7 +135,9 @@ export function ReconStep(props: { repoUrl: string; result: ReconResult; baseAct
             <div class="foot">
               <div class="hint">↑ no writes happen until the config-injection PR in step 3</div>
               <div class="grow"></div>
-              <button type="submit" class="btn primary">next · config injection pr ↗</button>
+              <button type="submit" class="btn primary">
+                next · config injection pr ↗
+              </button>
             </div>
           </form>
         </div>

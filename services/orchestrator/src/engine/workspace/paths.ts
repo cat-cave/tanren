@@ -7,4 +7,3 @@ export function workspaceRepoPathForRun(runId: string): string {
   }
   return `${workspaceRoot}/${runId}/repo`;
 }
-

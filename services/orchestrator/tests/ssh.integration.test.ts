@@ -13,22 +13,32 @@ describeIntegration("SSH substrate live runner integration", () => {
     const keyPath = requiredEnv("TANREN_SSH_KEY_PATH");
     const hostFingerprint = requiredEnv("TANREN_SSH_HOST_FINGERPRINT");
     const secrets = new FakeSecretStore();
-    await secrets.put({ ref: "runner/integration/identity", value: await readFile(keyPath, "utf8") });
+    await secrets.put({
+      ref: "runner/integration/identity",
+      value: await readFile(keyPath, "utf8"),
+    });
 
     const substrate = new Ssh2Substrate(secrets, {
-      serverHostKeyAlgorithms: parseHostKeyAlgorithms(process.env.TANREN_SSH_HOST_KEY_ALGORITHMS)
+      serverHostKeyAlgorithms: parseHostKeyAlgorithms(process.env.TANREN_SSH_HOST_KEY_ALGORITHMS),
     });
     const target: SshTarget = {
       host: process.env.TANREN_SSH_HOST ?? "127.0.0.1",
       port: Number(process.env.TANREN_SSH_PORT ?? "22"),
       username: process.env.TANREN_SSH_USER ?? "tanren",
       hostKeyFingerprint: hostFingerprint,
-      identitySecretRef: "runner/integration/identity"
+      identitySecretRef: "runner/integration/identity",
     };
 
     const success = await substrate.run(target, { command: "printf 'ok'", timeoutMs: 10_000 });
-    const nonzero = await substrate.run(target, { command: "printf 'err' >&2; exit 7", timeoutMs: 10_000 });
-    const cwd = await substrate.run(target, { command: "pwd", cwd: "/workspace", timeoutMs: 10_000 });
+    const nonzero = await substrate.run(target, {
+      command: "printf 'err' >&2; exit 7",
+      timeoutMs: 10_000,
+    });
+    const cwd = await substrate.run(target, {
+      command: "pwd",
+      cwd: "/workspace",
+      timeoutMs: 10_000,
+    });
 
     expect(success).toMatchObject({ exitCode: 0, stdout: "ok", stderr: "", timedOut: false });
     expect(success.failure).toBeUndefined();
@@ -48,5 +58,8 @@ function requiredEnv(name: string): string {
 }
 
 function parseHostKeyAlgorithms(value: string | undefined): ServerHostKeyAlgorithm[] | undefined {
-  return value?.split(",").map((item) => item.trim()).filter((item) => item !== "") as ServerHostKeyAlgorithm[] | undefined;
+  return value
+    ?.split(",")
+    .map((item) => item.trim())
+    .filter((item) => item !== "") as ServerHostKeyAlgorithm[] | undefined;
 }

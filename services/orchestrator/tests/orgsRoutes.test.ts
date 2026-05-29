@@ -23,10 +23,10 @@ function buildHarness(actor: ActorContext) {
         },
         async resolveActorContext() {
           return actor;
-        }
+        },
       } as never,
-      localDevActor: actor
-    })
+      localDevActor: actor,
+    }),
   );
   app.route("/orgs", createOrgRoutes({ pool: pool.asPgPool() }));
   app.route("/orgs", createProjectRoutes({ pool: pool.asPgPool() }));
@@ -38,7 +38,7 @@ const aliceInAcme: ActorContext = {
   orgId: "org_acme",
   projectId: null,
   scopes: ["org:member", "org:admin"],
-  source: "session"
+  source: "session",
 };
 
 describe("org routes", () => {
@@ -78,7 +78,7 @@ describe("org routes", () => {
     const response = await app.request("/orgs/org_acme", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ config: { version: 1, auditGateEnabled: true } })
+      body: JSON.stringify({ config: { version: 1, auditGateEnabled: true } }),
     });
     expect(response.status).toBe(200);
     const body = (await response.json()) as { id: string; config: { auditGateEnabled: boolean } };
@@ -91,14 +91,14 @@ describe("org routes", () => {
       orgId: "org_acme",
       projectId: null,
       scopes: ["org:member"],
-      source: "session"
+      source: "session",
     };
     const { app, pool } = buildHarness(memberOnly);
     pool.seedOrg({ id: "org_acme" });
     const response = await app.request("/orgs/org_acme", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ config: { version: 1 } })
+      body: JSON.stringify({ config: { version: 1 } }),
     });
     expect(response.status).toBe(403);
   });
@@ -127,7 +127,7 @@ describe("org routes", () => {
     const response = await app.request("/orgs/org_acme/projects", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: "Tanren", repoUrl: "https://github.com/cat-cave/x" })
+      body: JSON.stringify({ name: "Tanren", repoUrl: "https://github.com/cat-cave/x" }),
     });
     expect(response.status).toBe(201);
     const body = (await response.json()) as { projectId: string };

@@ -27,6 +27,6 @@ export function buildInterviewPrompt(context: InterviewAnswererContext): string 
     "Return exactly one InterviewRoundOutput: `say` is your next question (or a closing",
     "summary when the interview is complete), `captureDelta` is ONLY the new capture this",
     "round adds (the engine merges it), `suggestions` are optional inline answers, and",
-    "`complete` is true once every capture area is filled. Ask one focused question at a time."
+    "`complete` is true once every capture area is filled. Ask one focused question at a time.",
   ].join("\n");
 }

@@ -9,7 +9,7 @@ export interface AnswererOutputSchema<TOutput> {
 const planSubtaskSchema = z
   .object({
     title: z.string().min(1),
-    acceptanceCriteria: z.array(z.string().min(1)).min(1)
+    acceptanceCriteria: z.array(z.string().min(1)).min(1),
   })
   .strict();
 
@@ -17,13 +17,13 @@ const criterionStatusSchema = z
   .object({
     criterion: z.string().min(1),
     satisfied: z.boolean(),
-    reason: z.string().min(1)
+    reason: z.string().min(1),
   })
   .strict();
 
 export const planAnswerZodSchema = z
   .object({
-    subtasks: z.array(planSubtaskSchema).min(1)
+    subtasks: z.array(planSubtaskSchema).min(1),
   })
   .strict();
 
@@ -31,7 +31,7 @@ export const checkAnswerZodSchema = z
   .object({
     done: z.boolean(),
     reason: z.string().min(1),
-    suggested_fixes: z.array(z.string().min(1)).nullable()
+    suggested_fixes: z.array(z.string().min(1)).nullable(),
   })
   .strict();
 
@@ -40,10 +40,10 @@ export const auditAnswerZodSchema = z
     verified: z.boolean(),
     criteria_status: z
       .object({
-        criteria: z.array(criterionStatusSchema).min(1)
+        criteria: z.array(criterionStatusSchema).min(1),
       })
       .strict(),
-    reason: z.string().min(1)
+    reason: z.string().min(1),
   })
   .strict();
 
@@ -67,15 +67,19 @@ export const planAnswerSchema: AnswererOutputSchema<PlanAnswer> = {
           required: ["title", "acceptanceCriteria"],
           properties: {
             title: { type: "string", minLength: 1 },
-            acceptanceCriteria: { type: "array", minItems: 1, items: { type: "string", minLength: 1 } }
-          }
-        }
-      }
-    }
+            acceptanceCriteria: {
+              type: "array",
+              minItems: 1,
+              items: { type: "string", minLength: 1 },
+            },
+          },
+        },
+      },
+    },
   },
   parse(value) {
     return planAnswerZodSchema.parse(value);
-  }
+  },
 };
 
 export const checkAnswerSchema: AnswererOutputSchema<CheckAnswer> = {
@@ -87,12 +91,14 @@ export const checkAnswerSchema: AnswererOutputSchema<CheckAnswer> = {
     properties: {
       done: { type: "boolean" },
       reason: { type: "string", minLength: 1 },
-      suggested_fixes: { anyOf: [{ type: "array", items: { type: "string", minLength: 1 } }, { type: "null" }] }
-    }
+      suggested_fixes: {
+        anyOf: [{ type: "array", items: { type: "string", minLength: 1 } }, { type: "null" }],
+      },
+    },
   },
   parse(value) {
     return checkAnswerZodSchema.parse(value);
-  }
+  },
 };
 
 export const auditAnswerSchema: AnswererOutputSchema<AuditAnswer> = {
@@ -118,18 +124,18 @@ export const auditAnswerSchema: AnswererOutputSchema<AuditAnswer> = {
               properties: {
                 criterion: { type: "string", minLength: 1 },
                 satisfied: { type: "boolean" },
-                reason: { type: "string", minLength: 1 }
-              }
-            }
-          }
-        }
+                reason: { type: "string", minLength: 1 },
+              },
+            },
+          },
+        },
       },
-      reason: { type: "string", minLength: 1 }
-    }
+      reason: { type: "string", minLength: 1 },
+    },
   },
   parse(value) {
     return auditAnswerZodSchema.parse(value);
-  }
+  },
 };
 
 export function buildCheckPrompt(input: {
@@ -151,7 +157,7 @@ export function buildCheckPrompt(input: {
     "Set done=true only when every acceptance criterion is satisfied. Use suggested_fixes=null when no fixes are needed.",
     "",
     "Writer diff:",
-    input.writerDiff
+    input.writerDiff,
   ].join("\n");
 }
 
@@ -176,6 +182,6 @@ export function buildAuditPrompt(input: {
     JSON.stringify(input.checkAnswer, null, 2),
     "",
     "Writer diff:",
-    input.writerDiff
+    input.writerDiff,
   ].join("\n");
 }

@@ -27,7 +27,11 @@ export interface RunGateForWhenInput {
 // first failing tier's result is surfaced so the caller can route to rework.
 export type GateOutcome =
   | { passed: true; results: GateTierResult[] }
-  | { passed: false; results: GateTierResult[]; failure: Extract<GateTierResult, { passed: false }> };
+  | {
+      passed: false;
+      results: GateTierResult[];
+      failure: Extract<GateTierResult, { passed: false }>;
+    };
 
 export async function runGateForWhen(input: RunGateForWhenInput): Promise<GateOutcome> {
   const tiers = tiersFor(input.config, input.when);
@@ -43,7 +47,7 @@ export async function runGateForWhen(input: RunGateForWhenInput): Promise<GateOu
       steps,
       timeoutMs: input.timeoutMs,
       appendEvent: input.appendEvent,
-      taskId: input.taskId
+      taskId: input.taskId,
     });
     results.push(result);
     if (!result.passed) {

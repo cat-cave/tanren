@@ -22,7 +22,7 @@ import type {
   DiscoveryResult,
   DiscoveryVariant,
   PlacementOption,
-  ProposedSpec
+  ProposedSpec,
 } from "../../api/discoveryTypes.js";
 import { ScreenStyles } from "../project/screenStyles.js";
 import { PageHead } from "../project/shared.js";
@@ -250,9 +250,8 @@ export function DiscoveryBody(props: DiscoveryBodyProps) {
               ✓
             </div>
             <div class="body" style="margin-top:0;">
-              added <b>{props.accepted.count}</b> spec(s) to the dag · placement{" "}
-              <b>{props.accepted.placementLabel}</b> · provenance stamped on each spec.{" "}
-              <a href={`/projects/${project.projectId}?mode=dag`}>view the dag ↗</a>
+              added <b>{props.accepted.count}</b> spec(s) to the dag · placement <b>{props.accepted.placementLabel}</b>{" "}
+              · provenance stamped on each spec. <a href={`/projects/${project.projectId}?mode=dag`}>view the dag ↗</a>
             </div>
           </div>
         ) : null}
@@ -260,7 +259,12 @@ export function DiscoveryBody(props: DiscoveryBodyProps) {
         <VariantTabs project={project} active={variant} />
         <InsightBanner insight={insight} variant={variant} />
 
-        <form method="post" action={`/projects/${project.projectId}/discovery`} class="disc-form" data-discovery="classify-form">
+        <form
+          method="post"
+          action={`/projects/${project.projectId}/discovery`}
+          class="disc-form"
+          data-discovery="classify-form"
+        >
           <input type="hidden" name="variant" value={variant} />
           <input type="hidden" name="source" value={insight.source} />
           <input type="hidden" name="sourceLabel" value={insight.sourceLabel} />

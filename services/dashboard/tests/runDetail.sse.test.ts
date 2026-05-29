@@ -9,8 +9,21 @@ import type pg from "pg";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/main.js";
 
-const ORG = { id: "org_acme", kind: "github_org", login: "cat-cave", displayName: "Cat Cave", role: "org:admin" };
-const PROJECT = { projectId: "project_medium", name: "tanren-fixture-medium", repoUrl: "https://github.com/cat-cave/tanren-fixture-medium", defaultBranch: "main", runnerImage: null, allocator: "local_docker" };
+const ORG = {
+  id: "org_acme",
+  kind: "github_org",
+  login: "cat-cave",
+  displayName: "Cat Cave",
+  role: "org:admin",
+};
+const PROJECT = {
+  projectId: "project_medium",
+  name: "tanren-fixture-medium",
+  repoUrl: "https://github.com/cat-cave/tanren-fixture-medium",
+  defaultBranch: "main",
+  runnerImage: null,
+  allocator: "local_docker",
+};
 const RUN_ID = "run_medium_001";
 
 // A canned SSE body the fake orchestrator returns: a snapshot frame plus a
@@ -18,7 +31,7 @@ const RUN_ID = "run_medium_001";
 const FAKE_SSE_BODY = [
   `event: snapshot\ndata: ${JSON.stringify({ run: { runId: RUN_ID, status: "running", outcome: null }, tasks: [], recentEvents: [], costs: [{ billingMode: "per_token", model: "gpt-5", inputTokens: 100, outputTokens: 50, cachedInputTokens: 0, totalTokens: 150, costUsd: "0.0100" }] })}\n\n`,
   `event: costs\ndata: ${JSON.stringify({ costs: [{ billingMode: "subscription", model: "claude", inputTokens: 200, outputTokens: 80, cachedInputTokens: 0, totalTokens: 280, costUsd: null }] })}\n\n`,
-  `event: status\ndata: ${JSON.stringify({ runId: RUN_ID, status: "completed", outcome: "phase2_medium_complete" })}\n\n`
+  `event: status\ndata: ${JSON.stringify({ runId: RUN_ID, status: "completed", outcome: "phase2_medium_complete" })}\n\n`,
 ].join("");
 
 function stubPool(): pg.Pool {
@@ -30,12 +43,38 @@ function mockOrchestrator(): void {
     const url = typeof input === "string" ? input : input.toString();
     if (url.endsWith("/auth/me")) return new Response(JSON.stringify({ userId: "u1" }), { status: 200 });
     if (url.endsWith("/orgs")) return new Response(JSON.stringify({ orgs: [ORG] }), { status: 200 });
-    if (url.endsWith(`/orgs/${ORG.id}/projects`)) return new Response(JSON.stringify({ projects: [PROJECT] }), { status: 200 });
+    if (url.endsWith(`/orgs/${ORG.id}/projects`))
+      return new Response(JSON.stringify({ projects: [PROJECT] }), { status: 200 });
     if (url.endsWith(`/projects/${PROJECT.projectId}/runs`)) {
-      return new Response(JSON.stringify({ items: [{ runId: RUN_ID, specId: "s", projectId: PROJECT.projectId, branch: "b", trigger: "operator", status: "running", outcome: null, startedAt: new Date().toISOString(), endedAt: null, prUrl: null, specTitle: "t", costTotalUsd: "0", lastEventAt: null, needsReview: false }] }), { status: 200 });
+      return new Response(
+        JSON.stringify({
+          items: [
+            {
+              runId: RUN_ID,
+              specId: "s",
+              projectId: PROJECT.projectId,
+              branch: "b",
+              trigger: "operator",
+              status: "running",
+              outcome: null,
+              startedAt: new Date().toISOString(),
+              endedAt: null,
+              prUrl: null,
+              specTitle: "t",
+              costTotalUsd: "0",
+              lastEventAt: null,
+              needsReview: false,
+            },
+          ],
+        }),
+        { status: 200 },
+      );
     }
     if (url.includes(`/runs/${RUN_ID}/stream`)) {
-      return new Response(FAKE_SSE_BODY, { status: 200, headers: { "content-type": "text/event-stream" } });
+      return new Response(FAKE_SSE_BODY, {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      });
     }
     return new Response("not found", { status: 404 });
   });

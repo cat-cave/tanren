@@ -36,7 +36,7 @@ function request(runId: string): AllocationRequest {
     runId,
     projectId: "proj_conformance",
     runnerImage: "ghcr.io/cat-cave/tanren-runner:v0",
-    identitySecretRef: "runner/identity"
+    identitySecretRef: "runner/identity",
   };
 }
 
@@ -55,7 +55,7 @@ function hetznerClient(fail = false): HetznerClient {
       polls += 1;
       return fail || polls < 2 ? { id, status: "initializing" } : { id, status: "running", publicIpv4: "203.0.113.10" };
     },
-    async deleteServer(): Promise<void> {}
+    async deleteServer(): Promise<void> {},
   };
 }
 
@@ -69,7 +69,7 @@ function digitalOceanClient(fail = false): DigitalOceanClient {
       polls += 1;
       return fail || polls < 2 ? { id, status: "new" } : { id, status: "active", publicIpv4: "203.0.113.20" };
     },
-    async deleteDroplet(): Promise<void> {}
+    async deleteDroplet(): Promise<void> {},
   };
 }
 
@@ -84,9 +84,11 @@ function gcpClient(fail = false): GcpComputeClient {
     },
     async getInstance(name: string): Promise<{ name: string; status: string; externalIp?: string }> {
       polls += 1;
-      return fail || polls < 2 ? { name, status: "PROVISIONING" } : { name, status: "RUNNING", externalIp: "203.0.113.50" };
+      return fail || polls < 2
+        ? { name, status: "PROVISIONING" }
+        : { name, status: "RUNNING", externalIp: "203.0.113.50" };
     },
-    async deleteInstance(): Promise<void> {}
+    async deleteInstance(): Promise<void> {},
   };
 }
 
@@ -98,9 +100,11 @@ function awsClient(fail = false): AwsEc2Client {
     },
     async describeInstance(instanceId: string): Promise<{ instanceId: string; state: string; publicIp?: string }> {
       polls += 1;
-      return fail || polls < 2 ? { instanceId, state: "pending" } : { instanceId, state: "running", publicIp: "203.0.113.7" };
+      return fail || polls < 2
+        ? { instanceId, state: "pending" }
+        : { instanceId, state: "running", publicIp: "203.0.113.7" };
     },
-    async terminateInstance(): Promise<void> {}
+    async terminateInstance(): Promise<void> {},
   };
 }
 
@@ -116,7 +120,7 @@ function kubernetesClient(fail = false): KubernetesClient {
       return fail || polls < 2 ? { name, phase: "Pending" } : { name, phase: "Running", podIp: "10.1.2.3" };
     },
     async deletePod(): Promise<void> {},
-    async deleteSecret(): Promise<void> {}
+    async deleteSecret(): Promise<void> {},
   };
 }
 
@@ -125,33 +129,40 @@ function sidecarFetch(): typeof fetch {
   return (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = typeof input === "string" ? input : input.toString();
     if (url.endsWith("/allocate")) {
-      const body = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as { runId: string };
+      const body = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as {
+        runId: string;
+      };
       return new Response(
         JSON.stringify({
           runnerId: `runner_${body.runId}`,
           sshHost: "tanren-runner",
           sshPort: 22,
           hostKeyFingerprint: PINNED_FINGERPRINT,
-          imageSha: "ghcr.io/cat-cave/tanren-runner@sha256:sidecar"
+          imageSha: "ghcr.io/cat-cave/tanren-runner@sha256:sidecar",
         }),
-        { status: 201, headers: { "Content-Type": "application/json" } }
+        { status: 201, headers: { "Content-Type": "application/json" } },
       );
     }
     return new Response(JSON.stringify({ released: true }), {
       status: 200,
-      headers: { "Content-Type": "application/json" }
+      headers: { "Content-Type": "application/json" },
     });
   }) as typeof fetch;
 }
 
 // --- Per-impl allocator factories -------------------------------------------
 const makeStatic = (): Allocator =>
-  new StaticRunnerAllocator({ host: "runner", port: 22, hostKeyFingerprint: PINNED_FINGERPRINT, runners: new MemoryRunnerStore() });
+  new StaticRunnerAllocator({
+    host: "runner",
+    port: 22,
+    hostKeyFingerprint: PINNED_FINGERPRINT,
+    runners: new MemoryRunnerStore(),
+  });
 
 const makeManual = (): Allocator =>
   new ManualSshAllocator({
     hosts: [{ id: "host-1", host: "10.0.0.1", hostKeyFingerprint: PINNED_FINGERPRINT }],
-    runners: new MemoryRunnerStore()
+    runners: new MemoryRunnerStore(),
   });
 
 const makeSidecar = (): Allocator =>
@@ -160,7 +171,7 @@ const makeSidecar = (): Allocator =>
     authToken: "token",
     runners: new MemoryRunnerStore(),
     fetchImpl: sidecarFetch(),
-    sshUsername: "tanren"
+    sshUsername: "tanren",
   });
 
 const makeHetzner = (fail = false): Allocator =>
@@ -171,7 +182,7 @@ const makeHetzner = (fail = false): Allocator =>
     image: "docker-ce",
     runners: new MemoryRunnerStore(),
     client: hetznerClient(fail),
-    ...slowReady
+    ...slowReady,
   });
 
 const makeDigitalOcean = (fail = false): Allocator =>
@@ -183,7 +194,7 @@ const makeDigitalOcean = (fail = false): Allocator =>
     image: "docker-20-04",
     runners: new MemoryRunnerStore(),
     client: digitalOceanClient(fail),
-    ...slowReady
+    ...slowReady,
   });
 
 const makeGcp = (fail = false): Allocator =>
@@ -198,7 +209,7 @@ const makeGcp = (fail = false): Allocator =>
     hostKeyFingerprint: PINNED_FINGERPRINT,
     runners: new MemoryRunnerStore(),
     client: gcpClient(fail),
-    ...slowReady
+    ...slowReady,
   });
 
 const makeAws = (fail = false): Allocator =>
@@ -212,7 +223,7 @@ const makeAws = (fail = false): Allocator =>
     sshUsername: "ec2-user",
     runners: new MemoryRunnerStore(),
     client: awsClient(fail),
-    ...slowReady
+    ...slowReady,
   });
 
 const makeKubernetes = (fail = false): Allocator =>
@@ -226,19 +237,28 @@ const makeKubernetes = (fail = false): Allocator =>
     sshUsername: "tanren",
     runners: new MemoryRunnerStore(),
     client: kubernetesClient(fail),
-    ...slowReady
+    ...slowReady,
   });
 
 // --- Contract conformance (all 9 impls) -------------------------------------
-describeAllocatorConformance("FakeAllocator", { make: (): Allocator => new FakeAllocator(), request });
+describeAllocatorConformance("FakeAllocator", {
+  make: (): Allocator => new FakeAllocator(),
+  request,
+});
 describeAllocatorConformance("StaticRunnerAllocator", { make: makeStatic, request });
 describeAllocatorConformance("ManualSshAllocator", { make: makeManual, request });
 describeAllocatorConformance("SidecarHttpAllocator", { make: makeSidecar, request });
 describeAllocatorConformance("HetznerAllocator", { make: (): Allocator => makeHetzner(), request });
-describeAllocatorConformance("DigitalOceanAllocator", { make: (): Allocator => makeDigitalOcean(), request });
+describeAllocatorConformance("DigitalOceanAllocator", {
+  make: (): Allocator => makeDigitalOcean(),
+  request,
+});
 describeAllocatorConformance("GcpAllocator", { make: (): Allocator => makeGcp(), request });
 describeAllocatorConformance("AwsEc2Allocator", { make: (): Allocator => makeAws(), request });
-describeAllocatorConformance("KubernetesAllocator", { make: (): Allocator => makeKubernetes(), request });
+describeAllocatorConformance("KubernetesAllocator", {
+  make: (): Allocator => makeKubernetes(),
+  request,
+});
 
 // --- Failure conformance (impls with an injectable failure path) ------------
 describeAllocatorFailureConformance("ManualSshAllocator", {
@@ -247,20 +267,20 @@ describeAllocatorFailureConformance("ManualSshAllocator", {
     const allocator = makeManual();
     void allocator.allocate(request("conf_fail_seed"));
     return { allocator, request: request("conf_fail_second") };
-  }
+  },
 });
 describeAllocatorFailureConformance("HetznerAllocator", {
-  makeFailing: () => ({ allocator: makeHetzner(true), request: request("conf_fail") })
+  makeFailing: () => ({ allocator: makeHetzner(true), request: request("conf_fail") }),
 });
 describeAllocatorFailureConformance("DigitalOceanAllocator", {
-  makeFailing: () => ({ allocator: makeDigitalOcean(true), request: request("conf_fail") })
+  makeFailing: () => ({ allocator: makeDigitalOcean(true), request: request("conf_fail") }),
 });
 describeAllocatorFailureConformance("GcpAllocator", {
-  makeFailing: () => ({ allocator: makeGcp(true), request: request("conf_fail") })
+  makeFailing: () => ({ allocator: makeGcp(true), request: request("conf_fail") }),
 });
 describeAllocatorFailureConformance("AwsEc2Allocator", {
-  makeFailing: () => ({ allocator: makeAws(true), request: request("conf_fail") })
+  makeFailing: () => ({ allocator: makeAws(true), request: request("conf_fail") }),
 });
 describeAllocatorFailureConformance("KubernetesAllocator", {
-  makeFailing: () => ({ allocator: makeKubernetes(true), request: request("conf_fail") })
+  makeFailing: () => ({ allocator: makeKubernetes(true), request: request("conf_fail") }),
 });

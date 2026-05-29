@@ -4,14 +4,24 @@ import {
   listEventNames,
   listSensitivityPathsFor,
   listSensitivityRules,
-  sensitivityFor
+  sensitivityFor,
 } from "../src/engine/events/index.js";
 
 // Enumerates every leaf path in a Zod schema. Used to assert sensitivity
 // coverage: every reachable payload field must have a registered tag.
 function collectZodPaths(schema: unknown, prefix = ""): string[] {
   const paths: string[] = [];
-  const def = (schema as { def?: { type?: string; shape?: Record<string, unknown>; element?: unknown; innerType?: unknown; options?: unknown[] } }).def;
+  const def = (
+    schema as {
+      def?: {
+        type?: string;
+        shape?: Record<string, unknown>;
+        element?: unknown;
+        innerType?: unknown;
+        options?: unknown[];
+      };
+    }
+  ).def;
   if (def === undefined) {
     if (prefix !== "") {
       paths.push(prefix);
@@ -79,10 +89,10 @@ describe("event semantic fields", () => {
           title: "first subtask",
           intent: "demonstrate planner emit",
           estimatedTokens: 500,
-          behaviorIds: ["B1", "B2"]
-        }
+          behaviorIds: ["B1", "B2"],
+        },
       ],
-      rationale: "decompose by file boundary"
+      rationale: "decompose by file boundary",
     };
     expect(() => schema.parse(sample)).not.toThrow();
   });
@@ -98,14 +108,12 @@ describe("event semantic fields", () => {
         {
           summary: "added marker line",
           code: "+ tanren ok",
-          rationale: "AC1 requires marker file"
-        }
+          rationale: "AC1 requires marker file",
+        },
       ],
-      toolCalls: [
-        { name: "apply_diff", args: { path: "PHASE1.md" }, outputSummary: "diff applied" }
-      ],
+      toolCalls: [{ name: "apply_diff", args: { path: "PHASE1.md" }, outputSummary: "diff applied" }],
       diffBytes: 42,
-      commitSha: "deadbeef"
+      commitSha: "deadbeef",
     };
     expect(() => schema.parse(sample)).not.toThrow();
   });
@@ -118,7 +126,7 @@ describe("event semantic fields", () => {
       passed: true,
       reasoning: "all behaviors satisfied",
       behaviorIdsPassed: ["B1"],
-      behaviorIdsFailed: []
+      behaviorIdsFailed: [],
     });
     expect(verdict.passed).toBe(true);
 
@@ -127,7 +135,7 @@ describe("event semantic fields", () => {
       passed: false,
       reasoning: "B2 outstanding",
       outstandingBehaviorIds: ["B2"],
-      recommendedAction: "loop_to_planner"
+      recommendedAction: "loop_to_planner",
     });
     expect(audit.recommendedAction).toBe("loop_to_planner");
   });

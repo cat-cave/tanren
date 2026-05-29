@@ -54,7 +54,7 @@ export class MissingCredentialError extends Error {
     super(
       kind === "codex_chatgpt_auth"
         ? "No Codex credential resolved for this run (project config and org default are both unset)"
-        : "No GitHub credential resolved for this run (project config and org default are both unset)"
+        : "No GitHub credential resolved for this run (project config and org default are both unset)",
     );
     this.name = "MissingCredentialError";
     this.kind = kind;
@@ -69,7 +69,7 @@ export class MissingCredentialError extends Error {
  */
 export async function resolveCredentialsForRun(
   pool: OrgConfigClient,
-  input: ResolveCredentialsInput
+  input: ResolveCredentialsInput,
 ): Promise<ResolvedRunCredentials> {
   const orgDefaults = await loadOrgDefaultCredentials(pool, input.orgId);
   const projectCredentials = input.projectConfig.credentials ?? {};
@@ -78,23 +78,20 @@ export async function resolveCredentialsForRun(
     "codex_chatgpt_auth",
     input.override?.codexCredentialRef,
     projectCredentials.codexCredentialRef,
-    orgDefaults?.codex_chatgpt_auth
+    orgDefaults?.codex_chatgpt_auth,
   );
   const githubCredentialRef = pickRef(
     "github_token",
     input.override?.githubCredentialRef,
     projectCredentials.githubCredentialRef,
-    orgDefaults?.github_token
+    orgDefaults?.github_token,
   );
 
   return { codexCredentialRef, githubCredentialRef };
 }
 
 /** First non-empty layer wins; otherwise the kind is unresolved. */
-function pickRef(
-  kind: RunCredentialKind,
-  ...layers: Array<string | undefined>
-): string {
+function pickRef(kind: RunCredentialKind, ...layers: Array<string | undefined>): string {
   for (const layer of layers) {
     if (typeof layer === "string" && layer.trim() !== "") {
       return layer;
@@ -111,12 +108,9 @@ function pickRef(
  */
 async function loadOrgDefaultCredentials(
   pool: OrgConfigClient,
-  orgId: string
+  orgId: string,
 ): Promise<OrgDefaultCredentials | undefined> {
-  const result = await pool.query<{ config: unknown }>(
-    "SELECT config FROM organizations WHERE id = $1",
-    [orgId]
-  );
+  const result = await pool.query<{ config: unknown }>("SELECT config FROM organizations WHERE id = $1", [orgId]);
   const row = result.rows[0];
   if (row === undefined) {
     return undefined;

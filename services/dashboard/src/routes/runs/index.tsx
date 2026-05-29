@@ -19,10 +19,7 @@ import { OrchestratorClient } from "../../api/orchestrator.js";
 import type { RunLocation } from "../../api/types.js";
 import { loadShellContext, renderShell, type ShellDeps } from "../../app/mountShell.js";
 import { RunDetailBody } from "../../components/runDetail/RunDetailBody.js";
-import {
-  ReviewBody,
-  type MergeIntegration
-} from "../../components/runDetail/ReviewBody.js";
+import { ReviewBody, type MergeIntegration } from "../../components/runDetail/ReviewBody.js";
 import { derivePreviewUrl } from "../../components/runDetail/model.js";
 
 /** Admin scopes that may opt into raw (unredacted) event payloads (P2A-0009). */
@@ -39,7 +36,12 @@ function actorCanViewRaw(role: string | undefined): boolean {
  * absent (legacy rows), which renders the settings-link branch.
  */
 function mergeIntegrationFromConfig(mode: unknown): MergeIntegration {
-  if (mode === "mergify_queue" || mode === "direct_merge" || mode === "external_reviewer" || mode === "not_configured") {
+  if (
+    mode === "mergify_queue" ||
+    mode === "direct_merge" ||
+    mode === "external_reviewer" ||
+    mode === "not_configured"
+  ) {
     return mode;
   }
   return "not_configured";
@@ -70,7 +72,10 @@ export function mountRunDetailScreens(app: Hono, deps: ShellDeps): void {
     if (detail === undefined) {
       return renderNotFound(c, deps, runId);
     }
-    const ctx = await loadShellContext(c, deps, { activeNavId: "projects", projectId: loc.projectId });
+    const ctx = await loadShellContext(c, deps, {
+      activeNavId: "projects",
+      projectId: loc.projectId,
+    });
     const base = `/runs/${encodeURIComponent(runId)}`;
     return renderShell(
       c,
@@ -83,7 +88,7 @@ export function mountRunDetailScreens(app: Hono, deps: ShellDeps): void {
         reviewHref={`${base}/review`}
         rawToggleHref={rawView ? base : `${base}?raw=true`}
         streamUrl={`${base}/stream${rawView ? "?raw=true" : ""}`}
-      />
+      />,
     );
   });
 
@@ -101,8 +106,8 @@ export function mountRunDetailScreens(app: Hono, deps: ShellDeps): void {
     const upstream = await fetch(client.streamUrl(loc, runId, { rawView }), {
       headers: {
         Accept: "text/event-stream",
-        ...(c.req.header("cookie") !== undefined ? { cookie: c.req.header("cookie") as string } : {})
-      }
+        ...(c.req.header("cookie") !== undefined ? { cookie: c.req.header("cookie") as string } : {}),
+      },
     }).catch(() => undefined);
     if (upstream === undefined || upstream.body === null) {
       return c.text("stream unavailable", 502);
@@ -112,8 +117,8 @@ export function mountRunDetailScreens(app: Hono, deps: ShellDeps): void {
       headers: {
         "content-type": "text/event-stream",
         "cache-control": "no-cache",
-        connection: "keep-alive"
-      }
+        connection: "keep-alive",
+      },
     });
   });
 
@@ -131,7 +136,10 @@ export function mountRunDetailScreens(app: Hono, deps: ShellDeps): void {
     if (detail === undefined) {
       return renderNotFound(c, deps, runId);
     }
-    const ctx = await loadShellContext(c, deps, { activeNavId: "projects", projectId: loc.projectId });
+    const ctx = await loadShellContext(c, deps, {
+      activeNavId: "projects",
+      projectId: loc.projectId,
+    });
     const base = `/runs/${encodeURIComponent(runId)}`;
     // P3-0008 + P3-0025: read the project once and derive both the merge
     // integration and the per-PR preview-deploy URL from its config.
@@ -149,7 +157,7 @@ export function mountRunDetailScreens(app: Hono, deps: ShellDeps): void {
         signOffHref={`${base}/review/sign-off`}
         settingsHref="/settings/routing"
         previewUrl={previewUrl}
-      />
+      />,
     );
   });
 
@@ -169,12 +177,19 @@ export function mountRunDetailScreens(app: Hono, deps: ShellDeps): void {
       return renderNotFound(c, deps, runId);
     }
     const detail = await client.getRunDetail(loc, runId);
-    const ctx = await loadShellContext(c, deps, { activeNavId: "projects", projectId: loc.projectId });
+    const ctx = await loadShellContext(c, deps, {
+      activeNavId: "projects",
+      projectId: loc.projectId,
+    });
     return renderShell(
       c,
       ctx,
       { title: `tanren · changes requested` },
-      <RequestChangesAck runId={runId} specTitle={detail?.spec.title ?? runId} runHref={`/runs/${encodeURIComponent(runId)}`} />
+      <RequestChangesAck
+        runId={runId}
+        specTitle={detail?.spec.title ?? runId}
+        runHref={`/runs/${encodeURIComponent(runId)}`}
+      />,
     );
   });
 
@@ -193,12 +208,15 @@ export function mountRunDetailScreens(app: Hono, deps: ShellDeps): void {
       return renderNotFound(c, deps, runId);
     }
     const mode = await resolveMergeIntegration(client, loc);
-    const ctx = await loadShellContext(c, deps, { activeNavId: "projects", projectId: loc.projectId });
+    const ctx = await loadShellContext(c, deps, {
+      activeNavId: "projects",
+      projectId: loc.projectId,
+    });
     return renderShell(
       c,
       ctx,
       { title: `tanren · sign-off` },
-      <SignOffAck runId={runId} mode={mode} runHref={`/runs/${encodeURIComponent(runId)}`} />
+      <SignOffAck runId={runId} mode={mode} runHref={`/runs/${encodeURIComponent(runId)}`} />,
     );
   });
 }
@@ -206,7 +224,7 @@ export function mountRunDetailScreens(app: Hono, deps: ShellDeps): void {
 function clientFor(c: Context, deps: ShellDeps): OrchestratorClient {
   return new OrchestratorClient({
     orchestratorUrl: deps.orchestratorUrl,
-    cookieHeader: c.req.header("cookie")
+    cookieHeader: c.req.header("cookie"),
   });
 }
 
@@ -224,7 +242,7 @@ async function isOrgAdmin(client: OrchestratorClient, loc: RunLocation): Promise
 
 function renderNotFound(c: Context, deps: ShellDeps, runId: string) {
   return loadShellContext(c, deps, { activeNavId: "projects" }).then((ctx) =>
-    renderShell(c, ctx, { title: "tanren · run not found" }, <RunNotFoundBody runId={runId} />)
+    renderShell(c, ctx, { title: "tanren · run not found" }, <RunNotFoundBody runId={runId} />),
   );
 }
 
@@ -239,8 +257,12 @@ function RunNotFoundBody(props: { runId: string }) {
       </div>
       <div class="page-body">
         <section class="placeholder-card">
-          <p>No run <code>{props.runId}</code> is visible to you, or it has not started yet.</p>
-          <p class="placeholder-note"><a href="/projects">← back to projects</a></p>
+          <p>
+            No run <code>{props.runId}</code> is visible to you, or it has not started yet.
+          </p>
+          <p class="placeholder-note">
+            <a href="/projects">← back to projects</a>
+          </p>
         </section>
       </div>
     </>
@@ -254,7 +276,9 @@ function RequestChangesAck(props: { runId: string; specTitle: string; runHref: s
         <div>
           <div class="eyebrow">review · changes requested</div>
           <div class="page-title">looped back to the planner</div>
-          <div class="sub">{props.specTitle} · run {props.runId}</div>
+          <div class="sub">
+            {props.specTitle} · run {props.runId}
+          </div>
         </div>
       </div>
       <div class="page-body">
@@ -288,7 +312,9 @@ function SignOffAck(props: { runId: string; mode: MergeIntegration; runHref: str
         <div>
           <div class="eyebrow">review · signed off</div>
           <div class="page-title">merge hand-off recorded</div>
-          <div class="sub">run {props.runId} · {props.mode}</div>
+          <div class="sub">
+            run {props.runId} · {props.mode}
+          </div>
         </div>
       </div>
       <div class="page-body">
@@ -296,8 +322,8 @@ function SignOffAck(props: { runId: string; mode: MergeIntegration; runHref: str
           <p>
             Your <strong>sign-off</strong> has been recorded. This run's repo is configured for{" "}
             <strong>{action}</strong> (P3-0008 merge stage). The live merge-dispatch trigger ships with the
-            operator-driven workflow (P2B-0006); the merge stage itself runs on the orchestrator after a run's review
-            is approved.
+            operator-driven workflow (P2B-0006); the merge stage itself runs on the orchestrator after a run's review is
+            approved.
           </p>
           <p class="placeholder-note">
             <a href={props.runHref}>← back to the run</a>

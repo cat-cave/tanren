@@ -10,7 +10,7 @@ import {
   hostKeyFingerprintMatches,
   normalizeHostKeyFingerprint,
   sshSha256Fingerprint,
-  Ssh2Substrate
+  Ssh2Substrate,
 } from "../src/engine/ssh/index.js";
 
 const target: SshTarget = {
@@ -18,7 +18,7 @@ const target: SshTarget = {
   port: 22,
   username: "tanren",
   hostKeyFingerprint: "SHA256:47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU",
-  identitySecretRef: "runner/run_1/identity"
+  identitySecretRef: "runner/run_1/identity",
 };
 
 describe("SSH substrate contract", () => {
@@ -29,14 +29,23 @@ describe("SSH substrate contract", () => {
   it("preserves the fake SSH substrate", async () => {
     const result = await new FakeSshSubstrate().run(target, { command: "echo ok", timeoutMs: 100 });
 
-    expect(result).toEqual({ exitCode: 0, stdout: "fake ssh: echo ok", stderr: "", timedOut: false });
+    expect(result).toEqual({
+      exitCode: 0,
+      stdout: "fake ssh: echo ok",
+      stderr: "",
+      timedOut: false,
+    });
   });
 
   it("wraps commands with safely quoted cwd", () => {
     expect(buildSshExecCommand({ command: "pwd", timeoutMs: 100 })).toBe("pwd");
-    expect(buildSshExecCommand({ command: "pwd", cwd: "/work/path with spaces/it's fine", timeoutMs: 100 })).toBe(
-      "cd '/work/path with spaces/it'\\''s fine' && pwd"
-    );
+    expect(
+      buildSshExecCommand({
+        command: "pwd",
+        cwd: "/work/path with spaces/it's fine",
+        timeoutMs: 100,
+      }),
+    ).toBe("cd '/work/path with spaces/it'\\''s fine' && pwd");
     expect(() => buildSshExecCommand({ command: "pwd", cwd: "bad\0path", timeoutMs: 100 })).toThrow("null byte");
   });
 
@@ -54,14 +63,17 @@ describe("SSH substrate contract", () => {
   });
 
   it("returns ssh_failed when the identity secret is missing", async () => {
-    const result = await new Ssh2Substrate(new FakeSecretStore()).run(target, { command: "echo ok", timeoutMs: 100 });
+    const result = await new Ssh2Substrate(new FakeSecretStore()).run(target, {
+      command: "echo ok",
+      timeoutMs: 100,
+    });
 
     expect(result.exitCode).toBeNull();
     expect(result.timedOut).toBe(false);
     expect(result.failure).toEqual({
       kind: "ssh_failed",
       target: "tanren@runner:22",
-      message: "missing SSH identity secret: runner/run_1/identity"
+      message: "missing SSH identity secret: runner/run_1/identity",
     });
   });
 
@@ -89,7 +101,7 @@ function createNeverReadyClient(): Client {
     connect: () => client,
     destroy: () => client,
     end: () => client,
-    exec: () => client
+    exec: () => client,
   });
   return client as unknown as Client;
 }

@@ -22,18 +22,8 @@ import type pg from "pg";
 import type { ActorContext } from "../../../auth/schemas.js";
 import { acceptProposals, type DiscoveryInsight, type PlacementKind } from "../discovery/index.js";
 import { createDeterministicTriageAnswerer } from "./defaultAnswerer.js";
-import {
-  getCandidate,
-  resolveCandidate,
-  upsertCandidate
-} from "./store.js";
-import type {
-  Candidate,
-  CandidateTriage,
-  InboxSource,
-  SourceConnector,
-  TriageAnswerer
-} from "./types.js";
+import { getCandidate, resolveCandidate, upsertCandidate } from "./store.js";
+import type { Candidate, CandidateTriage, InboxSource, SourceConnector, TriageAnswerer } from "./types.js";
 
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
@@ -48,12 +38,12 @@ export interface InboxEngineDeps {
 
 async function loadExistingSpecs(
   client: QueryClient,
-  projectId: string | null
+  projectId: string | null,
 ): Promise<Array<{ specId: string; title: string; status: string }>> {
   if (projectId === null) return [];
   const result = await client.query<{ spec_id: string; title: string; status: string }>(
     "SELECT spec_id, title, status FROM specs WHERE project_id = $1 ORDER BY title",
-    [projectId]
+    [projectId],
   );
   return result.rows.map((r) => ({ specId: r.spec_id, title: r.title, status: r.status }));
 }
@@ -80,10 +70,10 @@ export async function ingestSource(deps: InboxEngineDeps, source: InboxSource): 
         body: item.body,
         severity: item.severity,
         sourceKind: source.kind,
-        projectId: item.projectId
+        projectId: item.projectId,
       },
       source,
-      existingSpecs
+      existingSpecs,
     });
     // System sources whose triage is auto-routable promote straight through.
     const status = triage.verdict === "auto_routable" ? "auto_routed" : "triaged";
@@ -103,7 +93,7 @@ function insightFor(candidate: Candidate): DiscoveryInsight {
     who: candidate.sourceName || candidate.sourceKind,
     when: "from inbox",
     glyph: variant === "bug" ? "×" : "◍",
-    body: `${candidate.title}\n\n${candidate.body}`.slice(0, 8000) || candidate.title
+    body: `${candidate.title}\n\n${candidate.body}`.slice(0, 8000) || candidate.title,
   };
 }
 
@@ -139,7 +129,7 @@ export interface AcceptCandidateResult {
 // the candidate to `accepted` carrying the new spec-id.
 export async function acceptCandidate(
   deps: InboxEngineDeps,
-  input: AcceptCandidateInput
+  input: AcceptCandidateInput,
 ): Promise<AcceptCandidateResult> {
   const candidate = await getCandidate(deps.pool, input.candidateId);
   if (candidate === undefined) throw new CandidateNotFoundError(input.candidateId);
@@ -153,8 +143,8 @@ export async function acceptCandidate(
       proposals: input.proposals,
       placementKind: input.placementKind,
       placementLabel: input.placementLabel,
-      actor: { ...input.actor, orgId: input.orgId }
-    }
+      actor: { ...input.actor, orgId: input.orgId },
+    },
   );
   const specId = accepted[0]?.spec.specId ?? null;
   const resolved = await resolveCandidate(deps.pool, input.candidateId, "accepted", specId);
@@ -177,7 +167,7 @@ export async function closeDuplicateCandidate(deps: InboxEngineDeps, candidateId
 async function requireResolved(
   deps: InboxEngineDeps,
   candidateId: string,
-  status: Candidate["status"]
+  status: Candidate["status"],
 ): Promise<Candidate> {
   const resolved = await resolveCandidate(deps.pool, candidateId, status, null);
   if (resolved === undefined) throw new CandidateNotFoundError(candidateId);

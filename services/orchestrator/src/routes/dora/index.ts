@@ -53,8 +53,11 @@ export function createDoraRoutes(options: DoraRoutesOptions) {
       return c.json({ metrics });
     } catch (error) {
       return c.json(
-        { error: "dora_read_failed", message: error instanceof Error ? error.message : String(error) },
-        500
+        {
+          error: "dora_read_failed",
+          message: error instanceof Error ? error.message : String(error),
+        },
+        500,
       );
     }
   });

@@ -17,7 +17,10 @@ export class FakeInternalOrchestratorRpc implements InternalOrchestratorRpc {
   private readonly runs = new Map<string, RunResponse>();
 
   async createRun(request: RunRequest): Promise<RunResponse> {
-    const response = { runId: `run_${request.specId}_${request.projectId}`, status: "queued" as const };
+    const response = {
+      runId: `run_${request.specId}_${request.projectId}`,
+      status: "queued" as const,
+    };
     this.runs.set(response.runId, response);
     return response;
   }

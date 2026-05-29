@@ -20,7 +20,7 @@ export const ActorScopeSchema = z.enum([
   "org:admin",
   "org:member",
   "project:admin",
-  "project:member"
+  "project:member",
 ]);
 export type ActorScope = z.infer<typeof ActorScopeSchema>;
 
@@ -31,7 +31,7 @@ export const OrgSchema = z.object({
   login: z.string().min(1),
   displayName: z.string().min(1),
   createdAt: z.date(),
-  updatedAt: z.date()
+  updatedAt: z.date(),
 });
 export type Org = z.infer<typeof OrgSchema>;
 
@@ -43,7 +43,7 @@ export const UserSchema = z.object({
   email: z.string().nullable(),
   displayName: z.string().nullable(),
   createdAt: z.date(),
-  updatedAt: z.date()
+  updatedAt: z.date(),
 });
 export type User = z.infer<typeof UserSchema>;
 
@@ -54,7 +54,7 @@ export const SessionSchema = z.object({
   expiresAt: z.date(),
   createdAt: z.date(),
   ip: z.string().nullable(),
-  userAgent: z.string().nullable()
+  userAgent: z.string().nullable(),
 });
 export type Session = z.infer<typeof SessionSchema>;
 
@@ -66,7 +66,7 @@ export const ApiTokenSchema = z.object({
   scopes: z.array(TokenScopeSchema),
   expiresAt: z.date().nullable(),
   lastUsedAt: z.date().nullable(),
-  createdAt: z.date()
+  createdAt: z.date(),
 });
 export type ApiToken = z.infer<typeof ApiTokenSchema>;
 
@@ -75,7 +75,7 @@ export const ActorContextSchema = z.object({
   orgId: z.string().min(1).nullable(),
   projectId: z.string().min(1).nullable(),
   scopes: z.array(ActorScopeSchema),
-  source: z.enum(["session", "api_token", "local_dev"])
+  source: z.enum(["session", "api_token", "local_dev"]),
 });
 export type ActorContext = z.infer<typeof ActorContextSchema>;
 
@@ -83,7 +83,7 @@ export const IdentityOrgClaimSchema = z.object({
   externalId: z.string().min(1),
   login: z.string().min(1),
   displayName: z.string().min(1),
-  kind: OrgKindSchema.default("github_org")
+  kind: OrgKindSchema.default("github_org"),
 });
 export type IdentityOrgClaim = z.infer<typeof IdentityOrgClaimSchema>;
 
@@ -92,6 +92,6 @@ export const IdentityClaimsSchema = z.object({
   login: z.string().min(1).nullable(),
   email: z.string().min(1).nullable(),
   displayName: z.string().min(1).nullable(),
-  orgs: z.array(IdentityOrgClaimSchema).default([])
+  orgs: z.array(IdentityOrgClaimSchema).default([]),
 });
 export type IdentityClaims = z.infer<typeof IdentityClaimsSchema>;

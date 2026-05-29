@@ -14,12 +14,7 @@
  */
 
 import type { RunDetail } from "../../api/types.js";
-import {
-  buildDownstreamImpact,
-  buildFailureContext,
-  type DownstreamImpact,
-  type FailureContext
-} from "./model.js";
+import { buildDownstreamImpact, buildFailureContext, type DownstreamImpact, type FailureContext } from "./model.js";
 import { RECOVERY_CSS } from "./recovery.css.js";
 
 export interface HaltedRunBodyProps {
@@ -65,7 +60,8 @@ function PageHead(props: { detail: RunDetail; ctx: FailureContext; runHref: stri
 
 function FailureContextStrip(props: { ctx: FailureContext; impact: DownstreamImpact }) {
   const { ctx, impact } = props;
-  const blockedList = impact.blockedSpecs.length === 0 ? "no downstream specs blocked" : impact.blockedSpecs.join(" · ");
+  const blockedList =
+    impact.blockedSpecs.length === 0 ? "no downstream specs blocked" : impact.blockedSpecs.join(" · ");
   return (
     <div class="fail-context">
       <div class="cell danger">
@@ -76,7 +72,13 @@ function FailureContextStrip(props: { ctx: FailureContext; impact: DownstreamImp
       <div class="cell">
         <div class="l">last good state</div>
         <div class="v">
-          {ctx.lastGoodCommit === null ? "no prior commit" : <>commit <code>{ctx.lastGoodCommit}</code></>}
+          {ctx.lastGoodCommit === null ? (
+            "no prior commit"
+          ) : (
+            <>
+              commit <code>{ctx.lastGoodCommit}</code>
+            </>
+          )}
         </div>
         <div class="s">
           {ctx.lastGoodAgo} · {ctx.lastGoodDetail}
@@ -162,7 +164,10 @@ function RecoveryCards(props: { actionBase: string; ctx: FailureContext }) {
       <div class="recovery-card">
         <div class="lbl">replan with instructions</div>
         <div class="t">send back to planner · with steering</div>
-        <div class="det">same spec, fresh plan, with your instructions. useful when the spec is right but the agent's approach was wrong.</div>
+        <div class="det">
+          same spec, fresh plan, with your instructions. useful when the spec is right but the agent's approach was
+          wrong.
+        </div>
         <form method="post" action={`${actionBase}/replan`}>
           <textarea
             name="steeringNote"
@@ -200,7 +205,8 @@ function RecoveryCards(props: { actionBase: string; ctx: FailureContext }) {
               <input type="hidden" name="commitSha" value={ctx.lastGoodCommit ?? ""} />
             </div>
             <label class="disabled-note">
-              <input type="checkbox" name="confirmed" value="true" required /> confirm — discards partial work, cannot be undone
+              <input type="checkbox" name="confirmed" value="true" required /> confirm — discards partial work, cannot
+              be undone
             </label>
             <div class="card-actions">
               <button class="btn danger" type="submit">
@@ -222,7 +228,10 @@ function RecoveryCards(props: { actionBase: string; ctx: FailureContext }) {
       <div class="recovery-card">
         <div class="lbl">resolve via conversation</div>
         <div class="t">explore with forge before deciding</div>
-        <div class="det">opens an inspection thread with read access to the auditor/writer disagreement history. reading it changes no state.</div>
+        <div class="det">
+          opens an inspection thread with read access to the auditor/writer disagreement history. reading it changes no
+          state.
+        </div>
         <form class="card-actions" method="post" action={`${actionBase}/inspection-thread`}>
           <button class="btn ghost" style="color: var(--ember-08)" type="submit">
             open inspection thread ↗
@@ -234,8 +243,14 @@ function RecoveryCards(props: { actionBase: string; ctx: FailureContext }) {
       <div class="recovery-card last-resort">
         <div class="lbl">last resort</div>
         <div class="last-resort-row">
-          <div style="font-family: var(--font-ui); font-size: 12px; color: var(--fg-1)">abandon · move spec to backlog</div>
-          <a class="btn ghost" style="color: var(--status-fail)" href={`${actionBase.replace(/\/recover$/, "")}/review`}>
+          <div style="font-family: var(--font-ui); font-size: 12px; color: var(--fg-1)">
+            abandon · move spec to backlog
+          </div>
+          <a
+            class="btn ghost"
+            style="color: var(--status-fail)"
+            href={`${actionBase.replace(/\/recover$/, "")}/review`}
+          >
             cancel run ↗
           </a>
         </div>
@@ -251,9 +266,7 @@ function DagImpactStrip(props: { impact: DownstreamImpact; specId: string }) {
     <div class="dag-impact">
       <div class="head">
         <span class="lbl">▮ dag impact · while paused</span>
-        <span class="meta">
-          {impact.blockedSpecs.length} downstream specs wait on resolution
-        </span>
+        <span class="meta">{impact.blockedSpecs.length} downstream specs wait on resolution</span>
       </div>
       <div class="track">
         <span class="node halted">× {impact.haltedSpecTitle} halted</span>

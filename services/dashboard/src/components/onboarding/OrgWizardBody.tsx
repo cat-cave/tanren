@@ -19,7 +19,7 @@ const STEPS: WizardStep[] = [
   { index: 1, label: "link org" },
   { index: 2, label: "credentials" },
   { index: 3, label: "notifications" },
-  { index: 4, label: "infrastructure" }
+  { index: 4, label: "infrastructure" },
 ];
 
 const BASE = "/onboarding/org";
@@ -37,8 +37,8 @@ function StackHealth(props: { report: DoctorReport | undefined }) {
           </span>
         </div>
         <div class="alert warn">
-          The orchestrator <code>/doctor</code> endpoint is unreachable. Start the stack, then reload —
-          this card shows live Postgres / Vault / runner-SSH / runner-image / GitHub checks.
+          The orchestrator <code>/doctor</code> endpoint is unreachable. Start the stack, then reload — this card shows
+          live Postgres / Vault / runner-SSH / runner-image / GitHub checks.
         </div>
       </div>
     );
@@ -103,14 +103,19 @@ function StackHealth(props: { report: DoctorReport | undefined }) {
   );
 }
 
-function Step1LinkOrg(props: { orgLogin: string; report: DoctorReport | undefined; githubAppUrl: string; appInstallHref?: string }) {
+function Step1LinkOrg(props: {
+  orgLogin: string;
+  report: DoctorReport | undefined;
+  githubAppUrl: string;
+  appInstallHref?: string;
+}) {
   const scopes: Array<[string, string, boolean]> = [
     ["▸", "read · contents, metadata, issues, prs · selected repos only", true],
     ["▸", "write · create branches, prs, comments, issues", true],
     ["▸", "read · org members (for review-gate routing)", true],
     ["▸", "read · ci / check status", true],
     ["×", "never · push directly to default branches", false],
-    ["×", "never · admin · billing · secrets", false]
+    ["×", "never · admin · billing · secrets", false],
   ];
   return (
     <>
@@ -147,7 +152,8 @@ function Step1LinkOrg(props: { orgLogin: string; report: DoctorReport | undefine
           </div>
           {props.appInstallHref !== undefined ? (
             <div class="sub" style="margin-top:6px">
-              installs the tanren github app on {props.orgLogin} · uses auto-rotating installation tokens (no static pat to manage).
+              installs the tanren github app on {props.orgLogin} · uses auto-rotating installation tokens (no static pat
+              to manage).
             </div>
           ) : null}
           <div class="sunken">
@@ -174,7 +180,10 @@ function Step1LinkOrg(props: { orgLogin: string; report: DoctorReport | undefine
 
 function CloudAllocatorStub(props: { name: string; desc: string; glyph: string; price: string }) {
   return (
-    <div class="sunken" style="display:grid;grid-template-columns:auto 1fr auto auto;gap:12px;align-items:center;opacity:0.7">
+    <div
+      class="sunken"
+      style="display:grid;grid-template-columns:auto 1fr auto auto;gap:12px;align-items:center;opacity:0.7"
+    >
       <div style="width:26px;height:26px;border:1px solid var(--line-2);display:flex;align-items:center;justify-content:center;font-family:var(--font-mono)">
         {props.glyph}
       </div>
@@ -214,7 +223,9 @@ function Step4Infra(props: { orgLogin: string }) {
             <div class="display-h">
               local <em>docker</em>
             </div>
-            <div class="mono-dim">spawns runner containers on the docker host that runs tanren itself · zero infra cost</div>
+            <div class="mono-dim">
+              spawns runner containers on the docker host that runs tanren itself · zero infra cost
+            </div>
             <div class="grid-2">
               <div class="field">
                 <label for="concurrency">concurrency</label>
@@ -321,7 +332,12 @@ export function OrgWizardBody(props: OrgWizardBodyProps) {
     <div class="onb">
       <JourneyStepper steps={STEPS} current={step} basePath={BASE} />
       {step === 1 ? (
-        <Step1LinkOrg orgLogin={props.orgLogin} report={props.doctor} githubAppUrl={props.githubAppUrl} appInstallHref={props.appInstallHref} />
+        <Step1LinkOrg
+          orgLogin={props.orgLogin}
+          report={props.doctor}
+          githubAppUrl={props.githubAppUrl}
+          appInstallHref={props.appInstallHref}
+        />
       ) : step === 2 ? (
         <>
           <StepHeading
@@ -362,12 +378,20 @@ export function OrgWizardBody(props: OrgWizardBodyProps) {
 
 function footFor(step: number): { hint: string; primaryHref: string; primaryLabel: string } {
   if (step === 4) {
-    return { hint: "↑ allocators editable from /settings/infrastructure", primaryHref: "/onboarding/existing", primaryLabel: "finish · connect a repo" };
+    return {
+      hint: "↑ allocators editable from /settings/infrastructure",
+      primaryHref: "/onboarding/existing",
+      primaryLabel: "finish · connect a repo",
+    };
   }
   const hints = [
     "↑ this page is the audit root — every action tanren can take is listed above",
     "↑ no roles assigned here · /settings/routing decides which key answers each loop phase",
-    "↑ devs can override these per channel in /notifications"
+    "↑ devs can override these per channel in /notifications",
   ];
-  return { hint: hints[step - 1] ?? "", primaryHref: `${BASE}?step=${step + 1}`, primaryLabel: `next · ${STEPS[step]?.label}` };
+  return {
+    hint: hints[step - 1] ?? "",
+    primaryHref: `${BASE}?step=${step + 1}`,
+    primaryLabel: `next · ${STEPS[step]?.label}`,
+  };
 }

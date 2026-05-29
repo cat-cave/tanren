@@ -30,30 +30,30 @@ export const answererSchemaCatalog: Readonly<Record<AnswererRole, AnswererSchema
     role: "plan",
     schemaId: PLAN_ANSWER_SCHEMA_ID,
     generatedFile: "plan.json",
-    zod: PlanAnswer
+    zod: PlanAnswer,
   },
   check: {
     role: "check",
     schemaId: CHECK_ANSWER_SCHEMA_ID,
     generatedFile: "check.json",
-    zod: CheckAnswer
+    zod: CheckAnswer,
   },
   audit: {
     role: "audit",
     schemaId: AUDIT_ANSWER_SCHEMA_ID,
     generatedFile: "audit.json",
-    zod: AuditAnswer
+    zod: AuditAnswer,
   },
   demo: {
     role: "demo",
     schemaId: DEMO_ANSWER_SCHEMA_ID,
     generatedFile: "demo.json",
-    zod: DemoAnswer
+    zod: DemoAnswer,
   },
   forge: {
     role: "forge",
     schemaId: FORGE_ANSWER_SCHEMA_ID,
     generatedFile: "forge.json",
-    zod: ForgeAnswer
-  }
+    zod: ForgeAnswer,
+  },
 } as const;

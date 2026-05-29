@@ -11,7 +11,7 @@ export const TaskActorRow = z.object({
   taskId: z.string(),
   agentKind: ActorKind,
   cli: z.string(),
-  model: z.string().nullable()
+  model: z.string().nullable(),
 });
 export type TaskActorRow = z.infer<typeof TaskActorRow>;
 
@@ -27,7 +27,7 @@ function decodeTaskActorRow(raw: RawTaskActorRow): TaskActorRow {
     taskId: raw.task_id,
     agentKind: raw.agent_kind,
     cli: raw.cli,
-    model: raw.model
+    model: raw.model,
   });
 }
 
@@ -44,8 +44,8 @@ export const ActorStore = {
   async listForRun(client: QueryClient, runId: string, _actor: ActorRef): Promise<TaskActorRow[]> {
     const result = await client.query(
       "SELECT task_id, agent_kind, cli, model FROM tasks WHERE run_id = $1 ORDER BY task_id",
-      [runId]
+      [runId],
     );
     return result.rows.map((row) => decodeTaskActorRow(row as RawTaskActorRow));
-  }
+  },
 } as const;

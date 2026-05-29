@@ -9,12 +9,9 @@ import { migrateOrgConfig, type OrgGithubAppInstallation } from "../config/orgCo
 
 export async function loadOrgGithubAppInstallation(
   pool: pg.Pool,
-  orgId: string
+  orgId: string,
 ): Promise<OrgGithubAppInstallation | undefined> {
-  const result = await pool.query<{ config: unknown }>(
-    "SELECT config FROM organizations WHERE id = $1",
-    [orgId]
-  );
+  const result = await pool.query<{ config: unknown }>("SELECT config FROM organizations WHERE id = $1", [orgId]);
   const row = result.rows[0];
   if (row === undefined) {
     return undefined;
@@ -25,12 +22,9 @@ export async function loadOrgGithubAppInstallation(
 export async function persistOrgGithubAppInstallation(
   pool: pg.Pool,
   orgId: string,
-  installation: OrgGithubAppInstallation
+  installation: OrgGithubAppInstallation,
 ): Promise<boolean> {
-  const result = await pool.query<{ config: unknown }>(
-    "SELECT config FROM organizations WHERE id = $1",
-    [orgId]
-  );
+  const result = await pool.query<{ config: unknown }>("SELECT config FROM organizations WHERE id = $1", [orgId]);
   const row = result.rows[0];
   if (row === undefined) {
     return false;
@@ -38,7 +32,7 @@ export async function persistOrgGithubAppInstallation(
   const next = { ...migrateOrgConfig(row.config), github_app: installation };
   const updated = await pool.query<{ id: string }>(
     "UPDATE organizations SET config = $1::jsonb, updated_at = now() WHERE id = $2 RETURNING id",
-    [JSON.stringify(next), orgId]
+    [JSON.stringify(next), orgId],
   );
   return updated.rowCount !== null && updated.rowCount > 0;
 }

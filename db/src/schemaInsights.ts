@@ -25,17 +25,14 @@ export const workflowInsights = pgTable(
     payload: jsonb("payload").notNull(),
     computedAt: timestamp("computed_at", { withTimezone: true }).notNull().defaultNow(),
     acknowledgedAt: timestamp("acknowledged_at", { withTimezone: true }),
-    acknowledgedBy: text("acknowledged_by").references(() => users.id)
+    acknowledgedBy: text("acknowledged_by").references(() => users.id),
   },
   (table) => [
     check(
       "workflow_insights_kind_check",
-      sql`${table.kind} IN ('retry_hotspot','model_mismatch','pace_anomaly','stuck','review_stall')`
+      sql`${table.kind} IN ('retry_hotspot','model_mismatch','pace_anomaly','stuck','review_stall')`,
     ),
-    check(
-      "workflow_insights_severity_check",
-      sql`${table.severity} IN ('info','warn','fail')`
-    ),
-    index("workflow_insights_project_kind").on(table.projectId, table.kind, desc(table.computedAt))
-  ]
+    check("workflow_insights_severity_check", sql`${table.severity} IN ('info','warn','fail')`),
+    index("workflow_insights_project_kind").on(table.projectId, table.kind, desc(table.computedAt)),
+  ],
 );
