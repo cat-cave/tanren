@@ -7,7 +7,7 @@ Phase 2A splits the single `compose.yml` into two profiles:
 
 CI runs the dev profile. The Phase 1 fixture flow is unchanged.
 
-Cloudflared tunnel exposure, TLS termination, and any other deployment hardening are deferred to Phase 3 (see `ROADMAP.md`).
+Phase 3 (P3-0030) hardens the prod profile: a cloudflared tunnel exposure profile, TLS-termination guidance, a Vault enterprise key-rotation-policy note, and Authentik OIDC as a second identity provider. Those are documented below.
 
 ## Dev quickstart
 
@@ -40,12 +40,69 @@ Optional:
 | Env var | Default | What it sets |
 | --- | --- | --- |
 | `DASHBOARD_HOST_PORT` | `3000` | Host port the dashboard publishes on. The only host-published port in the prod profile. |
+| `CLOUDFLARED_TUNNEL_TOKEN` | _(unset)_ | Cloudflare Tunnel token. Required **only** when running the `tunnel` profile (see below). |
+| `TANREN_OIDC_ISSUER` | _(unset)_ | OIDC issuer URL. Registers the `oidc` provider when set together with the client id/secret (see OIDC below). |
+| `TANREN_OIDC_CLIENT_ID` | _(unset)_ | OIDC confidential-client id. |
+| `TANREN_OIDC_CLIENT_SECRET` | _(unset)_ | OIDC confidential-client secret. |
+| `TANREN_OIDC_SCOPES` | `openid profile email groups` | Space-separated OAuth scopes requested at authorize time. |
+| `TANREN_OIDC_SUBJECT_CLAIM` | `sub` | userinfo claim used as the stable subject. |
+| `TANREN_OIDC_LOGIN_CLAIM` | `preferred_username` | userinfo claim used as the login/username. |
+| `TANREN_OIDC_NAME_CLAIM` | `name` | userinfo claim used as the display name. |
+| `TANREN_OIDC_GROUPS_CLAIM` | `groups` | userinfo claim carrying org/group membership (array of strings). |
 
-Missing any required env causes `docker compose -f compose.prod.yml config` to fail with `variable is not set` referencing the specific variable.
+Missing any **required** env causes `docker compose -f compose.prod.yml config` to fail with `variable is not set` referencing the specific variable. The optional OIDC and tunnel variables default to empty and never block boot.
+
+## OIDC identity provider (Authentik) — P3-0030
+
+OIDC is a **second, additive** identity provider alongside the P2A-0003 GitHub OAuth provider. The orchestrator registers the `oidc` provider only when **all three** of `TANREN_OIDC_ISSUER`, `TANREN_OIDC_CLIENT_ID`, and `TANREN_OIDC_CLIENT_SECRET` are set; otherwise behavior is byte-for-byte unchanged (GitHub OAuth and the dev-login escape hatch only). No DB migration is needed — `oidc` is already an enumerated provider in the `users` table.
+
+The provider implements the standard OIDC code flow:
+
+1. **Discovery** — fetches `<issuer>/.well-known/openid-configuration` (cached for the process lifetime) to resolve the `token_endpoint` and `userinfo_endpoint`.
+2. **Authorize** — `GET /auth/login?provider=oidc` redirects to the IdP's authorization endpoint with `response_type=code`, the configured scopes, and a CSRF `state`.
+3. **Code exchange** — `GET /auth/callback?provider=oidc` exchanges the code at the token endpoint (confidential client, `client_secret_post`) and reads claims from the userinfo endpoint.
+4. **Claim mapping** — `sub` -> subject, `preferred_username` -> login, `email`, `name` -> display name, and the `groups` array -> org claims with kind `oidc`. Each is overridable via the `TANREN_OIDC_*_CLAIM` envs for non-default IdPs.
+
+### Authentik setup
+
+In Authentik, create an **OAuth2/OpenID Provider** plus an Application bound to it:
+
+- **Client type:** Confidential. Copy the generated client id/secret into `TANREN_OIDC_CLIENT_ID` / `TANREN_OIDC_CLIENT_SECRET`.
+- **Redirect URI:** `<TANREN_PUBLIC_BASE_URL>/auth/callback?provider=oidc` (exact match).
+- **Scopes:** `openid`, `profile`, `email`, and the `groups` scope so the userinfo `groups` claim is emitted; Authentik maps user group membership into Tanren orgs.
+- **Issuer:** set `TANREN_OIDC_ISSUER` to the provider's issuer URL (Authentik exposes discovery at `<issuer>/.well-known/openid-configuration`).
+
+Restart the orchestrator after setting the envs; `GET /auth/providers` then lists `oidc` alongside `github_oauth`.
+
+## Cloudflared tunnel exposure profile — P3-0030
+
+`compose.prod.yml` defines a `cloudflared` service gated behind the `tunnel` Docker Compose profile, so it is **off by default** and starts only when the profile is requested:
+
+```sh
+export CLOUDFLARED_TUNNEL_TOKEN=...   # from Cloudflare Zero Trust; never commit it
+docker compose -f compose.prod.yml --profile tunnel up -d
+```
+
+The tunnel token is supplied via `CLOUDFLARED_TUNNEL_TOKEN` (env / secret manager only — nothing is committed). The compose var has a soft empty default so the base `docker compose config` still validates, but cloudflared exits immediately on an empty token, so the operator must set it when starting the `tunnel` profile. The named tunnel's public hostname -> origin routing (point it at the `dashboard` service on the internal docker network) is configured in the Cloudflare Zero Trust dashboard, not in compose. When the tunnel is in use you can keep the stack fully private: cloudflared dials the origin over the internal docker network, so `DASHBOARD_HOST_PORT` does not need to be published to the host.
+
+## TLS termination — P3-0030
+
+TLS is terminated **at Cloudflare's edge** when the tunnel profile is used: cloudflared holds an outbound-only connection to Cloudflare and serves HTTPS for the public hostname, so the origin services never need a host-bound TLS listener or an inbound port. This is the recommended posture and pairs with `TANREN_COOKIE_SECURE=1` (already set in the prod profile), which marks session/state cookies `Secure` for the HTTPS public origin.
+
+If you instead expose the stack without the tunnel (e.g. behind your own load balancer), terminate TLS at that reverse proxy and forward to the dashboard's published host port over the trusted internal network. In either case `TANREN_PUBLIC_BASE_URL` must be the externally reachable **https://** URL so OAuth/OIDC redirect URIs and cookie scoping line up.
+
+## Vault enterprise key-rotation policy — P3-0030
+
+The prod profile still boots Vault in dev mode (single root token, no seal) as a phase placeholder. For a production-grade deployment, replace it with a sealed Vault and adopt an enterprise key-rotation policy:
+
+- **Auto-unseal + key rotation:** back the seal with a cloud KMS auto-unseal and run `vault operator rekey` on a scheduled cadence to rotate the unseal/recovery key shares. Vault Enterprise's automated key rotation can re-key the barrier without an operator-driven rekey ceremony.
+- **Encryption-key rotation:** run `vault operator rotate` to advance the barrier encryption key; older keyring versions stay available to decrypt existing data while new writes use the latest key.
+- **Token/credential TTLs:** keep the service AppRole token TTLs short (the init script uses 1-hour TTLs, 24-hour max) so leaked tokens expire quickly; rotate the bootstrap root token immediately after init (see the rotation note below).
+- **Dynamic secrets:** where supported, prefer Vault's dynamic secrets / leases over static long-lived credentials so rotation is automatic on lease expiry.
 
 ## Port exposure (prod)
 
-Only the dashboard publishes a host port. Postgres, Vault, the orchestrator HTTP port, the allocator sidecar, per-run runner SSH, and ntfy are reachable only on the internal docker network. The orchestrator's outward-facing surface is intentionally the dashboard; a future Phase 3 spec will add a reverse-proxied operator endpoint and (optionally) a cloudflared tunnel.
+Only the dashboard publishes a host port. Postgres, Vault, the orchestrator HTTP port, the allocator sidecar, per-run runner SSH, and ntfy are reachable only on the internal docker network. The orchestrator's outward-facing surface is intentionally the dashboard. P3-0030 adds the optional cloudflared `tunnel` profile (see below) so the public surface can be served through Cloudflare's edge with no host-published port at all.
 
 ## Allocator sidecar (P2A-0010)
 
@@ -89,7 +146,6 @@ This deploy doc covers the secrets and host-port surface only. The broader princ
 
 ## What is not in this spec
 
-- Cloudflared tunnel exposure (Phase 3).
-- TLS termination (Phase 3).
-- A sealed (non-dev-mode) Vault. The prod profile still starts Vault in dev mode but with no static token; replacing it with a sealed Vault is a Phase 3 hardening task.
+- A sealed (non-dev-mode) Vault. The prod profile still starts Vault in dev mode but with no static token; the enterprise key-rotation policy above documents the target posture, but wiring a sealed/auto-unseal Vault into the compose profile remains a follow-up hardening task.
 - Per-org GitHub OAuth client id/secret overrides. P2A-0003 names the path shape; this spec only writes the `default` org value.
+- Per-org OIDC client overrides. P3-0030 wires a single platform-wide OIDC provider via env; per-org OIDC clients are a later spec.
