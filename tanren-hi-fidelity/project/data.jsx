@@ -240,20 +240,22 @@ const REVIEW_PROMPTS = [
 
 const FORGE_PALETTE = [
   { group: "quick actions", items: [
-    { glyph: "+", title: "new spec", desc: "describe work · tanren plans & forges" },
+    { glyph: "+", title: "new spec", desc: "describe work · tanren plans & forges", ask: "new_spec" },
     { glyph: "↗", title: "open run_a347 · localStorage persistence", desc: "live · subtask 2/3 streaming", route: "run" },
     { glyph: "→", title: "review PR #142 · supplier scorecard",     desc: "auditor pass · ci green",       route: "review" },
-    { glyph: "→", title: "go to project view",                       desc: "tanren-fixture-easy",           route: "project" },
+    { glyph: "▤", title: "candidate inbox · triage open issues",     desc: "11 candidates · 2 auto-routable", route: "inbox" },
+    { glyph: "⟳", title: "scheduled audits",                         desc: "4 jobs · fills idle windows",   route: "audits" },
   ]},
   { group: "forge this", items: [
-    { glyph: "鍛", kanji: true, title: "shape a new user behavior",        desc: "agentic crafter · cross-project persona" },
-    { glyph: "鍛", kanji: true, title: "draft a milestone from rough notes", desc: "i'll dependency-rank against the DAG" },
-    { glyph: "鍛", kanji: true, title: "switch writer for supplier specs",  desc: "haiku-4.5 · projected −$22/mo" },
+    { glyph: "鍛", kanji: true, title: "shape a new user behavior",        desc: "agentic crafter · cross-project persona", ask: "new_spec" },
+    { glyph: "鍛", kanji: true, title: "draft a milestone from rough notes", desc: "i'll dependency-rank against the DAG", ask: "m7_eta" },
+    { glyph: "鍛", kanji: true, title: "switch audit primary to claude opus", desc: "lands as a config pr · review before merge", route: "config" },
+    { glyph: "鍛", kanji: true, title: "triage open issues across projects",  desc: "linear · github · sentry · summarize", ask: "triage" },
   ]},
   { group: "ask forge", items: [
-    { glyph: "?", title: "what's blocking M5?",            desc: "natural-language query" },
-    { glyph: "?", title: "how are my costs trending?",     desc: "this week vs last" },
-    { glyph: "?", title: "estimate when M7 perf ships",    desc: "velocity-projected ETA" },
+    { glyph: "?", title: "what's blocking M5?",            desc: "natural-language query",     ask: "blocking_m5" },
+    { glyph: "?", title: "how are my costs trending?",     desc: "this week vs last",          ask: "costs_week" },
+    { glyph: "?", title: "estimate when M7 perf ships",    desc: "velocity-projected ETA",     ask: "m7_eta" },
   ]},
 ];
 

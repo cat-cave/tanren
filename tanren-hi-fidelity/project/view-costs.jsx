@@ -144,7 +144,7 @@ window.CostsView = ({ onNav }) => (
           <div style={{ fontFamily: "var(--font-ui)", fontSize: 12.5, color: "var(--fg-1)", lineHeight: 1.45, flex: 1 }}>
             Night windows (00–05) and evenings (20–00) average <b style={{ color: "var(--status-fail)" }}>under 30% fill</b>. You're paying for the cap but only filling it during operator-hours. <b style={{ color: "var(--ember-08)" }}>Scheduled audits could run overnight</b> — security scans, dependency updates, mutation tests — and use that subscription window you're already paying for.
           </div>
-          <button className="btn primary notched" style={{ fontSize: 11 }}>ask forge to schedule overnight audits</button>
+          <button className="btn primary notched" style={{ fontSize: 11 }} onClick={() => onNav?.("audits")}>ask forge to schedule overnight audits</button>
         </div>
       </div>
 
