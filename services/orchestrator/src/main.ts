@@ -33,7 +33,7 @@ import {
 import { createAuthMiddleware, type ActorContextEnv } from "./middleware/auth.js";
 import { createAuthRoutes } from "./routes/auth/index.js";
 import { createBehaviorRoutes } from "./routes/behaviors/index.js";
-import { createBrownfieldRoutes } from "./routes/brownfield/index.js";
+import { mountBrownfieldRoutes } from "./routes/brownfield/mount.js";
 import { registerAuthBundleImportRoutes } from "./routes/credentials/authBundleImports.js";
 import { createCredentialRoutes, InMemoryCredentialRegistry, type CredentialRegistry } from "./routes/credentials/index.js";
 import { createDiscoveryRoutes } from "./routes/discovery/index.js";
@@ -194,13 +194,11 @@ export function buildApp(input: {
   app.route("/orgs", createPersonaRoutes({ pool: input.pool }));
   app.route("/orgs", createBehaviorRoutes({ pool: input.pool }));
   app.route("/orgs", createMilestoneRoutes({ pool: input.pool }));
-  app.route("/orgs", createBrownfieldRoutes({ pool: input.pool, secrets, githubHttp, githubAppMinter }));
+  mountBrownfieldRoutes(app, { pool: input.pool, secrets, githubHttp, githubAppMinter });
   // P3-0003: GitHub App install flow; mounts only when configured via env.
   mountGithubAppInstallFromEnv(app, { pool: input.pool, secrets, minter: githubAppMinter });
   app.route("/orgs", createForgeRoutes({ pool: input.pool, secrets, githubHttp }));
-  // P3-0010: thick-Forge LLM conversation endpoint (⌘K chat morph). Mounted
-  // alongside the P2A-0019 Forge routes; the default deterministic answerer is
-  // grounded via the read-tool surface (provider Answerer is injectable).
+  // P3-0010: thick-Forge LLM conversation endpoint (⌘K chat morph); answerer injectable.
   app.route("/orgs", createForgeAskRoutes({ pool: input.pool, secrets, githubHttp }));
   // P3-0028 webhook-driven CI (option). Mounted at root so GitHub posts to
   // `/github/webhooks/ci`. Polling remains the default fallback.
@@ -209,15 +207,11 @@ export function buildApp(input: {
   // P3-0014: spec discovery — classify an insight into proposed specs +
   // DAG-placement options, accept → create specs with provenance.
   app.route("/orgs", createDiscoveryRoutes({ pool: input.pool }));
-  // P3-0015: greenfield onboarding — a multi-round Forge vision interview that
-  // accumulates a structured capture, then derives the project's product graph
-  // (personas/behaviors/milestones/specs) via the existing creation paths. The
-  // interview answerer is injectable; the deterministic fallback keeps it live.
+  // P3-0015: greenfield onboarding — Forge vision interview → derived product
+  // graph via the existing creation paths; interview answerer injectable.
   app.route("/orgs", createOnboardingRoutes({ pool: input.pool }));
-  // P3-0022: candidate inbox — configurable issue sources feed candidates;
-  // Forge triages each (dedupe → match → DAG placement → verdict); accept
-  // composes the P3-0014 discovery accept path. Connector reads via the App
-  // resolver; triage answerer is injectable.
+  // P3-0022: candidate inbox — issue sources → Forge triage → discovery accept;
+  // connector reads via the App resolver, triage answerer injectable.
   app.route("/orgs", createInboxRoutes({ pool: input.pool, secrets, githubHttp }));
   // P3-0021: scheduled audits — recurring read-only Answerer passes (the audit
   // job library). A run executes a read-only pass and emits findings into the
