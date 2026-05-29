@@ -44,9 +44,14 @@ export function ProjectViewBody(props: ProjectViewBodyProps) {
               <span class="d"></span>
               {model.liveLabel}
             </span>
-            <a class="btn" href={`/projects/${props.projectId}?mode=dag`}>
-              ↹ full dag
-            </a>
+            <div class="mode-toggle" data-mode-toggle data-project-id={props.projectId}>
+              <a class="seg-btn active" data-mode-value="chat" href={`/projects/${props.projectId}?mode=chat`}>
+                鍛 forge
+              </a>
+              <a class="seg-btn" data-mode-value="dag" href={`/projects/${props.projectId}?mode=dag`}>
+                ↹ dag
+              </a>
+            </div>
             <a class="btn primary" href={`/projects/${props.projectId}/specs/new`}>
               + discover spec ↗
             </a>

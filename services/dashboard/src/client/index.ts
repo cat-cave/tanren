@@ -5,6 +5,7 @@
  * client router and no virtual DOM. esbuild bundles this to `static/client.js`.
  */
 
+import { initDagCanvas } from "./dagCanvas.js";
 import { initOrgSwitcher } from "./orgSwitcher.js";
 import { initPalette } from "./palette.js";
 import { initReviewHandoff } from "./reviewHandoff.js";
@@ -18,6 +19,8 @@ function boot(): void {
   // P2B-0004 run-detail + review islands (no-op when their markup is absent).
   initRunStream();
   initReviewHandoff();
+  // P3-0013 DAG-primary canvas + spec drawer (no-op when absent).
+  initDagCanvas();
 }
 
 if (document.readyState === "loading") {
