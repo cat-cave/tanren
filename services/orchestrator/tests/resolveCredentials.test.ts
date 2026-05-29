@@ -139,6 +139,15 @@ describe("resolveCredentialsForRun", () => {
     });
   });
 
+  it("names Codex vs GitHub in the MissingCredentialError message", async () => {
+    const codexMissing = new MissingCredentialError("codex_chatgpt_auth");
+    expect(codexMissing.message).toContain("Codex credential");
+    expect(codexMissing.kind).toBe("codex_chatgpt_auth");
+    const githubMissing = new MissingCredentialError("github_token");
+    expect(githubMissing.message).toContain("GitHub credential");
+    expect(githubMissing.kind).toBe("github_token");
+  });
+
   it("ignores blank/whitespace refs and falls through to the next layer", async () => {
     const pool = fakePool({
       org_1: {

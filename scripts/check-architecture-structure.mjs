@@ -175,6 +175,128 @@ export function checkMaxParams(projectFiles) {
   return diagnostics;
 }
 
+// --- behavior-based tests (no implementationy tests) -------------------------
+// A test block that ONLY checks how a collaborator was called (spy call counts:
+// toHaveBeenCalled*, .mock.calls) — with no co-located assertion on an
+// observable outcome (returned/printed value, HTTP status/body, persisted
+// state) — is coupled to the implementation, not the behavior. Require every
+// block that contains a mock-call assertion to ALSO contain at least one
+// outcome assertion. Separately, freeze module mocking (`vi.mock(`) at the
+// current count of zero. See docs/contracts/architecture-checks.md
+// (Behavior-based tests). Heuristic, brace-matched, line-scanner — no parser.
+
+// Assertions that observe a real outcome (value / state / response / render),
+// the opposite of a spy-call assertion. Match the matcher token broadly so new
+// outcome matchers don't need to be enumerated one-by-one.
+const outcomeAssertionPatterns = [
+  /\.toBe\b/,
+  /\.toEqual\b/,
+  /\.toStrictEqual\b/,
+  /\.toMatch\b/,
+  /\.toMatchObject\b/,
+  /\.toMatchInlineSnapshot\b/,
+  /\.toMatchSnapshot\b/,
+  /\.toContain\b/,
+  /\.toContainEqual\b/,
+  /\.toThrow\b/,
+  /\.toBeDefined\b/,
+  /\.toBeUndefined\b/,
+  /\.toBeNull\b/,
+  /\.toBeTruthy\b/,
+  /\.toBeFalsy\b/,
+  /\.toBeGreaterThan/,
+  /\.toBeLessThan/,
+  /\.toBeInstanceOf\b/,
+  /\.toHaveProperty\b/,
+  /\.toHaveLength\b/,
+  /\.resolves\b/,
+  /\.rejects\b/,
+  /\.status\b/,
+  /\.json\(/,
+];
+
+// Spy-call ("implementationy") assertions: how a collaborator was invoked.
+const mockCallAssertionPatterns = [/\.toHaveBeenCalled/, /\.mock\.calls\b/];
+
+// Files permitted to use `vi.mock(` module mocking. Currently empty — module
+// mocking is frozen. Adding an entry requires a matching note in the
+// architecture-checks contract.
+const moduleMockAllowlist = new Set();
+
+// Find `it(`/`test(` block bodies: locate the call, then the first `{` that
+// opens its callback body (after a `=> {` or `function (...) {`), and brace
+// match it. Returns the head index (for line reporting) and body text.
+function findTestBlocks(text) {
+  const blocks = [];
+  const blockStart = /\b(?:it|test)\s*(?:\.\s*(?:each|skip|only|todo|concurrent|fails)\b[^(]*)?\(/g;
+  let match;
+  while ((match = blockStart.exec(text)) !== null) {
+    const bodyOpen = text.indexOf("=> {", match.index);
+    const funcOpen = text.slice(match.index).search(/function\b[^(]*\([^)]*\)\s*\{/);
+    let open = -1;
+    if (bodyOpen !== -1) {
+      open = text.indexOf("{", bodyOpen);
+    }
+    if (funcOpen !== -1) {
+      const absolute = match.index + funcOpen;
+      const braceAfterFunc = text.indexOf("{", absolute);
+      if (open === -1 || (braceAfterFunc !== -1 && braceAfterFunc < open)) {
+        open = braceAfterFunc;
+      }
+    }
+    if (open === -1) {
+      continue;
+    }
+    const end = matchBrace(text, open);
+    if (end === -1) {
+      continue;
+    }
+    blocks.push({ index: match.index, body: text.slice(open, end + 1) });
+  }
+  return blocks;
+}
+
+export function checkNoMockOnlyTests(projectFiles) {
+  const diagnostics = [];
+  for (const { file, text } of projectFiles) {
+    if (!isTestFile(file) || file === "scripts/check-architecture.test.ts") {
+      continue;
+    }
+    if (!moduleMockAllowlist.has(file)) {
+      const viMock = /\bvi\s*\.\s*mock\s*\(/g;
+      let mockMatch;
+      while ((mockMatch = viMock.exec(text)) !== null) {
+        diagnostics.push(
+          diagnostic(
+            "no-mock-only-tests",
+            file,
+            "module mocking via vi.mock(...) is frozen (allowlist is empty); test the behavior through a seam/stub instead",
+            lineFor(text, mockMatch.index),
+          ),
+        );
+      }
+    }
+    for (const block of findTestBlocks(text)) {
+      const hasMockCall = mockCallAssertionPatterns.some((pattern) => pattern.test(block.body));
+      if (!hasMockCall) {
+        continue;
+      }
+      const hasOutcome = outcomeAssertionPatterns.some((pattern) => pattern.test(block.body));
+      if (!hasOutcome) {
+        diagnostics.push(
+          diagnostic(
+            "no-mock-only-tests",
+            file,
+            "test asserts only on mock-call expectations; add an observable-outcome assertion (returned/printed value, HTTP status/body, persisted state)",
+            lineFor(text, block.index),
+          ),
+        );
+      }
+    }
+  }
+  return diagnostics;
+}
+
 function packageOf(file) {
   return packageRoots.find((root) => file === root || file.startsWith(`${root}/`));
 }
@@ -240,5 +362,6 @@ export function runStructureChecks(projectFiles) {
     ...checkCyclomaticComplexity(projectFiles),
     ...checkMaxParams(projectFiles),
     ...checkCrossPackageDeepImports(projectFiles),
+    ...checkNoMockOnlyTests(projectFiles),
   ];
 }

@@ -24,6 +24,44 @@ describe("resolveGithubToken", () => {
     expect(await resolved.refresh()).toBe("ghp_static");
   });
 
+  it("throws a descriptive error when the configured static ref is missing", async () => {
+    const secrets = new InMemorySecretStore();
+    await expect(resolveGithubToken({ secrets, staticRef: "credential/github/org/o1/absent" })).rejects.toThrow(
+      "missing GitHub credential ref: credential/github/org/o1/absent",
+    );
+  });
+
+  it("falls back to TANREN_GITHUB_APP_TOKEN_REF then the built-in default ref", async () => {
+    const secrets = new InMemorySecretStore();
+    await secrets.put({ ref: "credential/github/env-ref", value: "ghp_from_env" });
+    const prior = process.env["TANREN_GITHUB_APP_TOKEN_REF"];
+    process.env["TANREN_GITHUB_APP_TOKEN_REF"] = "credential/github/env-ref";
+    try {
+      const viaEnv = await resolveGithubToken({ secrets });
+      expect(viaEnv.token).toBe("ghp_from_env");
+    } finally {
+      if (prior === undefined) {
+        delete process.env["TANREN_GITHUB_APP_TOKEN_REF"];
+      } else {
+        process.env["TANREN_GITHUB_APP_TOKEN_REF"] = prior;
+      }
+    }
+    // With neither staticRef nor env set, the built-in default ref is used.
+    delete process.env["TANREN_GITHUB_APP_TOKEN_REF"];
+    await secrets.put({ ref: "credential/github/default", value: "ghp_default" });
+    const viaDefault = await resolveGithubToken({ secrets });
+    expect(viaDefault.token).toBe("ghp_default");
+  });
+
+  it("re-reads the static secret on refresh, observing a rotated value", async () => {
+    const secrets = new InMemorySecretStore();
+    await secrets.put({ ref: "credential/github/org/o1/default", value: "ghp_v1" });
+    const resolved = await resolveGithubToken({ secrets, staticRef: "credential/github/org/o1/default" });
+    expect(resolved.token).toBe("ghp_v1");
+    await secrets.put({ ref: "credential/github/org/o1/default", value: "ghp_v2" });
+    expect(await resolved.refresh()).toBe("ghp_v2");
+  });
+
   it("prefers an App installation token when an installation is configured", async () => {
     const secrets = new InMemorySecretStore();
     await storeGithubAppCredential(secrets, {
@@ -31,16 +69,20 @@ describe("resolveGithubToken", () => {
       appId: "1",
       privateKeyPem: pem(),
     });
-    const fetchImpl = (async () =>
-      new Response(
+    // A static fallback secret IS present, so this test also proves the App
+    // path is PREFERRED over the static ref (the static value must never win).
+    await secrets.put({ ref: "credential/github/org/o1/default", value: "ghp_static_should_not_win" });
+    let minted = 0;
+    const fetchImpl = (async () => {
+      minted += 1;
+      return new Response(
         JSON.stringify({
-          token: "ghs_app",
+          token: `ghs_app_${minted}`,
           expires_at: new Date(Date.now() + 3_600_000).toISOString(),
         }),
-        {
-          status: 201,
-        },
-      )) as unknown as typeof fetch;
+        { status: 201 },
+      );
+    }) as unknown as typeof fetch;
     const minter = new GithubAppTokenMinter({ secrets, fetchImpl });
     const resolved = await resolveGithubToken({
       secrets,
@@ -54,7 +96,9 @@ describe("resolveGithubToken", () => {
       minter,
     });
     expect(resolved.source).toBe("github_app");
-    expect(resolved.token).toBe("ghs_app");
+    expect(resolved.token).toBe("ghs_app_1");
+    // refresh() force-mints a NEW installation token rather than reusing cache.
+    expect(await resolved.refresh()).toBe("ghs_app_2");
   });
 });
 
