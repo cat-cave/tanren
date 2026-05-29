@@ -107,6 +107,42 @@ describe("KubernetesAllocator", () => {
     expect(runners.claims[0]?.containerId).toBe(client.pods[0]?.name);
   });
 
+  it("defaults the SSH username to tanren when none is configured", async () => {
+    const client = new FakeKubernetesClient();
+    const { sshUsername: _omit, ...rest } = baseOpts(client, new FakeRunnerStore());
+    const allocation = await new KubernetesAllocator(rest).allocate(req("run_def"));
+    expect(allocation.target.username).toBe("tanren");
+  });
+
+  it("honors an explicit SSH username override", async () => {
+    const client = new FakeKubernetesClient();
+    const allocation = await new KubernetesAllocator({
+      ...baseOpts(client, new FakeRunnerStore()),
+      sshUsername: "operator",
+    }).allocate(req("run_ov"));
+    expect(allocation.target.username).toBe("operator");
+  });
+
+  it("sanitizes the run id into a pod name and derives the -ssh secret name", async () => {
+    const client = new FakeKubernetesClient();
+    const allocator = new KubernetesAllocator(baseOpts(client, new FakeRunnerStore()));
+    await allocator.allocate(req("Run_ABC/9"));
+    const podName = client.pods[0]!.name;
+    expect(podName).toBe("tanren-run-abc-9");
+    expect(podName).not.toMatch(/[^a-z0-9-]/);
+    // The secret name is always the pod name plus the "-ssh" suffix.
+    expect(client.secrets[0]!.name).toBe(`${podName}-ssh`);
+    expect(client.pods[0]!.sshKeySecretName).toBe(`${podName}-ssh`);
+  });
+
+  it("sanitizes label values to the k8s-allowed charset (keeps dots, drops slashes)", async () => {
+    const client = new FakeKubernetesClient();
+    const allocator = new KubernetesAllocator(baseOpts(client, new FakeRunnerStore()));
+    await allocator.allocate(req("Run/With.Dots"));
+    // labelValue allows [a-z0-9_.-]; "/" -> "-", "." preserved, lowercased.
+    expect(client.pods[0]!.labels["tanren-run"]).toBe("run-with.dots");
+  });
+
   it("deletes the pod + secret and clears the mirror row on release", async () => {
     const client = new FakeKubernetesClient();
     const runners = new FakeRunnerStore();

@@ -104,6 +104,22 @@ describe("AwsEc2Allocator", () => {
     expect(runners.claims[0]?.containerId).toBe("i-1");
   });
 
+  it("defaults the SSH username to ec2-user when none is configured", async () => {
+    const client = new FakeAwsEc2Client();
+    const { sshUsername: _omit, ...rest } = baseOpts(client, new FakeRunnerStore());
+    const allocation = await new AwsEc2Allocator(rest).allocate(req("run_def"));
+    expect(allocation.target.username).toBe("ec2-user");
+  });
+
+  it("honors an explicit SSH username override", async () => {
+    const client = new FakeAwsEc2Client();
+    const allocation = await new AwsEc2Allocator({
+      ...baseOpts(client, new FakeRunnerStore()),
+      sshUsername: "admin",
+    }).allocate(req("run_ov"));
+    expect(allocation.target.username).toBe("admin");
+  });
+
   it("terminates the instance and clears the mirror row on release", async () => {
     const client = new FakeAwsEc2Client();
     const runners = new FakeRunnerStore();
@@ -257,7 +273,39 @@ describe("fetchAwsEc2Client", () => {
     expect(url).toMatch(/Action=RunInstances/);
     expect(url).toMatch(/ImageId=ami-1/);
     expect(url).toMatch(/InstanceType=t3.micro/);
+    // MinCount/MaxCount are fixed at 1 each (single runner per allocation).
+    expect(url).toMatch(/MinCount=1/);
+    expect(url).toMatch(/MaxCount=1/);
+    // Optional params present in the input must appear in the query...
+    expect(url).toMatch(/KeyName=kp/);
+    expect(url).toMatch(/SecurityGroupId\.1=sg-9/);
+    expect(url).toMatch(/TagSpecification\.1\.ResourceType=instance/);
+    expect(url).toMatch(/TagSpecification\.1\.Tag\.1\.Key=Name/);
+    expect(url).toMatch(/TagSpecification\.1\.Tag\.1\.Value=tanren-x/);
+    // ...and ones that were not supplied must be absent.
+    expect(url).not.toMatch(/SubnetId=/);
+    expect(url).not.toMatch(/UserData=/);
+    expect(url).not.toMatch(/SecurityGroupId\.2=/);
     expect(instance).toEqual({ instanceId: "i-new", state: "pending", publicIp: undefined });
+  });
+
+  it("omits optional RunInstances params when they are not supplied", async () => {
+    let url = "";
+    const fetchImpl = (async (input: string | URL | Request): Promise<Response> => {
+      url = typeof input === "string" ? input : input.toString();
+      return new Response(
+        `<RunInstancesResponse><instancesSet><item><instanceId>i-min</instanceId>` +
+          `<instanceState><name>pending</name></instanceState></item></instancesSet></RunInstancesResponse>`,
+        { status: 200, headers: { "Content-Type": "text/xml" } },
+      );
+    }) as typeof fetch;
+    const client = fetchAwsEc2Client({ accessKeyId: "k", secretAccessKey: "s", region: "us-east-1" }, fetchImpl);
+    await client.runInstances({ imageId: "ami-1", instanceType: "t3.micro" });
+    expect(url).not.toMatch(/KeyName=/);
+    expect(url).not.toMatch(/SubnetId=/);
+    expect(url).not.toMatch(/SecurityGroupId\./);
+    expect(url).not.toMatch(/UserData=/);
+    expect(url).not.toMatch(/TagSpecification/);
   });
 
   it("includes the session token header when temporary credentials are used", async () => {

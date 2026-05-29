@@ -20,7 +20,21 @@ interface FakeClientOptions {
   emitError?: boolean;
 }
 
-function fakeClientFactory(opts: FakeClientOptions) {
+// The exact ssh2 connect config the discovery handshake builds. Captured so a
+// test can assert the host-key-only handshake parameters (username, hostHash,
+// and that hostVerifier rejects the connection) — these are distinct mutation
+// survivors the type-only checks above cannot reach.
+interface CapturedConnect {
+  config?: {
+    host?: string;
+    port?: number;
+    username?: string;
+    hostHash?: string;
+    hostVerifier?: (fingerprint: string) => boolean;
+  };
+}
+
+function fakeClientFactory(opts: FakeClientOptions, captured?: CapturedConnect) {
   return () => {
     const emitter = new EventEmitter();
     return {
@@ -28,7 +42,10 @@ function fakeClientFactory(opts: FakeClientOptions) {
         emitter.once(event, handler);
         return emitter;
       },
-      connect: (config: { hostVerifier?: (fingerprint: string) => boolean }) => {
+      connect: (config: NonNullable<CapturedConnect["config"]>) => {
+        if (captured) {
+          captured.config = config;
+        }
         // Simulate ssh2: hostVerifier is invoked, then connection is aborted
         // (since we return false) and an "error" event follows.
         queueMicrotask(() => {
@@ -96,8 +113,70 @@ describe("StaticRunnerAllocator", () => {
       identitySecretRef: "runner/dev/identity",
     });
 
-    expect(allocation.target.hostKeyFingerprint).toMatch(/^SHA256:/);
+    // The captured hex fingerprint is normalized to SHA256:<base64-no-pad>.
+    // Pin the exact value so the hex->base64 conversion + "=" padding strip
+    // are behavior-asserted, not just the prefix.
+    const expected = "SHA256:" + Buffer.from("a".repeat(64), "hex").toString("base64").replace(/=+$/, "");
+    expect(allocation.target.hostKeyFingerprint).toBe(expected);
+    expect(expected).not.toMatch(/=$/);
+    expect(allocation.imageSha).toBe("ghcr.io/cat-cave/tanren-runner:v0@sha256:static");
     expect(runners.claims).toHaveLength(1);
+    expect(runners.claims[0]?.hostKeyFingerprint).toBe(expected);
+  });
+
+  it("opens the discovery handshake to the configured host with a host-key-only ssh2 config", async () => {
+    const captured: CapturedConnect = {};
+    const runners = new FakeRunnerStore();
+    const allocator = new StaticRunnerAllocator({
+      host: "10.0.0.7",
+      port: 2222,
+      runners,
+      clientFactory: fakeClientFactory({ fingerprint: "b".repeat(64) }, captured),
+    });
+
+    await allocator.allocate({
+      runId: "run_cfg",
+      projectId: "p",
+      runnerImage: "img",
+      identitySecretRef: "runner/dev/identity",
+    });
+
+    // The discovery connect must target the configured host/port.
+    expect(captured.config?.host).toBe("10.0.0.7");
+    expect(captured.config?.port).toBe(2222);
+    // It is a host-key-only handshake: ssh2 is told to SHA256-hash the key and
+    // authenticates as "tanren" (no identity is offered — the handshake aborts
+    // after the key is captured).
+    expect(captured.config?.username).toBe("tanren");
+    expect(captured.config?.hostHash).toBe("sha256");
+    // The verifier must REJECT the connection (return false): we only needed
+    // the fingerprint, so the handshake is intentionally torn down.
+    expect(typeof captured.config?.hostVerifier).toBe("function");
+    expect(captured.config?.hostVerifier?.("b".repeat(64))).toBe(false);
+  });
+
+  it("rejects when discovery completes without ever capturing a fingerprint", async () => {
+    const runners = new FakeRunnerStore();
+    const allocator = new StaticRunnerAllocator({
+      host: "runner",
+      port: 22,
+      runners,
+      // No fingerprint captured, but also no error emitted by connect: force
+      // the discovery timeout path so the "completed without a fingerprint" /
+      // timeout rejection fires instead of resolving.
+      discoverTimeoutMs: 5,
+      clientFactory: fakeClientFactory({ fingerprint: undefined, emitError: false }),
+    });
+
+    await expect(
+      allocator.allocate({
+        runId: "run_to",
+        projectId: "p",
+        runnerImage: "img",
+        identitySecretRef: "runner/dev/identity",
+      }),
+    ).rejects.toThrow(/timed out/);
+    expect(runners.claims).toEqual([]);
   });
 
   it("rejects when the SSH handshake errors before a fingerprint is captured", async () => {
