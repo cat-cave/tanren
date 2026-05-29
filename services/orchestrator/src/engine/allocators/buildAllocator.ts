@@ -203,9 +203,8 @@ function buildKubernetes(runners: RunnerStore): KubernetesAllocator {
 }
 
 /**
- * Builds the single allocator kind named by `kind`, or throws for the
- * scaffolded kinds (which only exist behind the router registry). This is the
- * non-router path used by the existing `static` / `sidecar` deployments.
+ * Builds the single allocator kind named by `kind`. This is the non-router path
+ * used by the existing `static` / `sidecar` deployments.
  */
 function buildSingle(kind: string, runners: RunnerStore): Allocator {
   switch (kind) {
@@ -235,7 +234,8 @@ function buildSingle(kind: string, runners: RunnerStore): Allocator {
  * kinds that need credentials are constructed lazily-ish: manual/hetzner throw
  * at build time if their env is missing, so the router is only assembled when
  * the operator opts into routing and has configured the kinds they route to.
- * Scaffolded kinds always resolve to throwing stubs.
+ * Kinds the routing config never selects resolve to throwing UnconfiguredAllocator
+ * stubs (their credentials are never loaded).
  */
 function buildRegistry(runners: RunnerStore, config: AllocatorRoutingConfig): AllocatorRegistry {
   // Determine which kinds the routing config can actually select.

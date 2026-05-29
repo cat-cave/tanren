@@ -2,9 +2,9 @@ import { z } from "zod";
 
 // Versioned Zod schema for `tanren-ci.yml` — the repo-sourced tiered CI
 // contract. This file is the single source of truth that BOTH GitHub Actions
-// and the (future) in-loop gate read so the same shell steps run in both
-// places. This module is the contract + parser ONLY: it never executes any
-// step (the in-loop gate stage is a separate spec).
+// and the in-loop gate read so the same shell steps run in both places. This
+// module is the contract + parser ONLY: it never executes any step (the in-loop
+// gate stage that runs the steps lives under workflow/gate/).
 
 // ---- Lifecycle points -----------------------------------------------------
 

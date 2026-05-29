@@ -29,7 +29,7 @@ import { loadRunExecutionContext } from "./runExecutionContext.js";
 import { runPlannerLoopWorkflow, type PlannerRunResult, type RunPlannerLoopInput } from "../workflow/plannerRun.js";
 import { NoopQuotaPolicy, SINGLE_RUN_REQUEST, getRunUsage, type QuotaPolicy } from "../quota/index.js";
 
-/** Escape-hatch + CI-poll defaults mirroring scripts/acceptance/medium.ts. */
+/** Escape-hatch + CI-poll defaults the run worker applies to a dequeued plan job. */
 export const DEFAULT_ESCAPE_HATCHES: Pick<
   EscapeHatches,
   "maxPlannerRerunsPerSpec" | "maxWriterIterPerSubtask" | "maxRetriesPerTransientFailure"

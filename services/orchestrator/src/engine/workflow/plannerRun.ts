@@ -6,8 +6,8 @@
 // The workflow stays generic and testable: adapters + the usage probe are
 // built through injectable factories that DEFAULT to real Codex / SSH usage
 // monitors. Tests inject fakes (and omit codexCredentialRef so no auth is
-// materialized). The acceptance driver (scripts/acceptance/medium.ts) uses the
-// defaults to exercise the live path end-to-end.
+// materialized). In production the background run worker (executeNextPlanJob)
+// drives this with the defaults to exercise the live path end-to-end.
 //
 // On a passing loop the workflow publishes a draft PR and polls CI (the same
 // tail Phase 1 lives-proved), then upgrades run state. Non-pass loop outcomes
@@ -103,7 +103,8 @@ export interface RunPlannerLoopInput {
   // P3-0006: the install command run over SSH in the workspace after clone and
   // before the writer loop, so gating + intent-checking see a built tree.
   // Omitted → the default pnpm/npm-detecting command (DEFAULT_BOOTSTRAP_COMMAND).
-  // TODO: source from tanren-ci.yml (P3-0004) once merged.
+  // TODO: feed this from the repo's tanren-ci.yml `bootstrap.run` (P3-0004's
+  // bootstrapCommand resolver) — the run path does not source it yet.
   bootstrapCommand?: string;
   // Test seam: when omitted, the real bootstrapWorkspace runs over SSH. Tests
   // that drive the loop with a RecordingSsh fake inject a no-op (or scripted
