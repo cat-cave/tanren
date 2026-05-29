@@ -55,6 +55,7 @@ import {
   HelloSshCompletedPayload,
   HelloSshStartedPayload,
   HelloStartedPayload,
+  MergeBlockedPayload,
   MergeCompletedPayload,
   MergeConflictPayload,
   MergeFailedPayload,
@@ -204,6 +205,8 @@ export const EventRegistry = {
   "merge.completed": MergeCompletedPayload,
   "merge.failed": MergeFailedPayload,
   "merge.conflict": MergeConflictPayload,
+  // P3-0023 external-push governance posture block (strict / audit_only)
+  "merge.blocked": MergeBlockedPayload,
 
   // Notification dispatch (schemas declared; dispatcher lands in P2A-0017)
   "notification.enqueued": NotificationEnqueuedPayload,

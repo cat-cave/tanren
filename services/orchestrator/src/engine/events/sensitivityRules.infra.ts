@@ -208,6 +208,18 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["headBranch", "public"],
     ["message", "public"]
   ]),
+  // P3-0023 governance posture block — PR identifiers + posture + external
+  // contributor logins (public GitHub handles) + prose, all public.
+  ...rulesFor("merge.blocked", [
+    ["prUrl", "public"],
+    ["prNumber", "public"],
+    ["integration", "public"],
+    ["posture", "public"],
+    ["mode", "public"],
+    ["externalLogins", "public"],
+    ["externalLogins[]", "public"],
+    ["reason", "public"]
+  ]),
 
   // notifications
   ...rulesFor("notification.enqueued", [["channel", "public"], ["eventName", "public"]]),

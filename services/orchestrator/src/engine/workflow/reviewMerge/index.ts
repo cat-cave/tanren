@@ -2,12 +2,24 @@
 // plannerRun.ts (and tests) import the stages + their types from one place.
 
 export {
+  DEFAULT_TANREN_LOGIN,
   loadReviewMergeRunContext,
   ReviewMergeRunNotFoundError,
   ReviewMergePullRequestNotFoundError,
   type ReviewMergeRunContext,
   type RunStateClient
 } from "./context.js";
+export {
+  assessExternalChange,
+  decidePosture,
+  tanrenIdentity,
+  type ContributorProbe,
+  type ExternalChangeAssessment,
+  type PostureDecision,
+  type PostureDecisionKind,
+  type PullRequestContributors,
+  type TanrenIdentity
+} from "./governancePosture.js";
 export {
   pollReviewForRun,
   type PollReviewForRunInput,

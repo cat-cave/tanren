@@ -7,10 +7,18 @@ import type pg from "pg";
 import { z } from "zod";
 import { migrateOrgConfig, type OrgGithubAppInstallation } from "../../config/orgConfig.js";
 import { migrateProjectConfig } from "../../config/projectConfig.js";
-import type { MergeIntegration } from "../../config/shared.js";
+import type { GovernancePosture, MergeIntegration } from "../../config/shared.js";
 import { validateGithubCredentialRef } from "../../credentials/githubToken.js";
 
 export type RunStateClient = Pick<pg.Pool | pg.PoolClient, "query">;
+
+/**
+ * P3-0023: the conventional login Tanren's own pushes carry when no org App is
+ * installed. The GitHub App bot login is `<app-slug>[bot]`; absent a configured
+ * slug we fall back to this so external-change detection still has a Tanren
+ * identity to compare against.
+ */
+export const DEFAULT_TANREN_LOGIN = "tanren[bot]";
 
 export interface ReviewMergeRunContext {
   runId: string;
@@ -21,6 +29,14 @@ export interface ReviewMergeRunContext {
   baseBranch: string;
   /** Resolved per-repo merge integration (project config). */
   mergeIntegration: MergeIntegration;
+  /** P3-0023: external-push governance posture (project config). */
+  governancePosture: GovernancePosture;
+  /**
+   * P3-0023: GitHub logins that represent Tanren's own pushes on this repo.
+   * External-change detection treats any other contributor as non-Tanren. The
+   * App bot login when an App is installed, plus the default bot login.
+   */
+  tanrenLogins: ReadonlyArray<string>;
   /** App installation, when the org has installed the App (preferred token). */
   installation?: OrgGithubAppInstallation;
   /** Static GitHub credential ref (fallback when no App is installed). */
@@ -60,6 +76,7 @@ export async function loadReviewMergeRunContext(
     throw new ReviewMergePullRequestNotFoundError(runId);
   }
   const projectConfig = migrateProjectConfig(row.config);
+  const installation = installationFromOrgConfig(row.org_config);
   return {
     runId: row.run_id,
     specId: row.spec_id,
@@ -67,9 +84,26 @@ export async function loadReviewMergeRunContext(
     prUrl: row.pr_url,
     baseBranch: row.default_branch ?? "main",
     mergeIntegration: projectConfig.mergeIntegration,
-    installation: installationFromOrgConfig(row.org_config),
+    governancePosture: projectConfig.governancePosture,
+    tanrenLogins: tanrenLoginsFor(installation),
+    installation,
     staticCredentialRef: credentialRefFromConfig(row.config)
   };
+}
+
+/**
+ * The logins Tanren's own pushes carry. Always includes the default bot login;
+ * a GitHub App installation contributes `<app-slug>[bot]` when the slug is
+ * derivable. The org App config carries only `appId`/`installationId`, so the
+ * App bot login is added only when an installation is present (the bot pushes
+ * under the App identity); the default login keeps detection working without
+ * an App. De-duplication happens downstream in `tanrenIdentity`.
+ */
+function tanrenLoginsFor(installation: OrgGithubAppInstallation | undefined): ReadonlyArray<string> {
+  if (installation === undefined) {
+    return [DEFAULT_TANREN_LOGIN];
+  }
+  return [DEFAULT_TANREN_LOGIN, `app/${installation.appId}`];
 }
 
 function credentialRefFromConfig(config: unknown): string | undefined {
