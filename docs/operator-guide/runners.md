@@ -125,12 +125,29 @@ today, and can live in the existing `projects.config` JSONB later).
 | `sidecar`       | implemented   | Ephemeral per-run container via the allocator sidecar. Existing behavior.    |
 | `manual_ssh`    | implemented   | Leases a pre-provisioned SSH host from a configured pool. No cloud API.      |
 | `hetzner`       | implemented   | Provisions a Hetzner Cloud server on demand; destroys it on release.         |
-| `digitalocean`  | **scaffold**  | Typed stub; throws `not yet implemented (P3-0027 follow-up)`.                 |
-| `aws_ec2`       | **scaffold**  | Typed stub; throws `not yet implemented (P3-0027 follow-up)`.                 |
-| `kubernetes`    | **scaffold**  | Typed stub; throws `not yet implemented (P3-0027 follow-up)`.                 |
+| `digitalocean`  | implemented   | Provisions a DigitalOcean droplet on demand; destroys it on release.         |
+| `gcp`           | implemented   | Provisions a GCE instance on demand; deletes it on release.                  |
+| `aws_ec2`       | implemented   | Runs an EC2 instance on demand; terminates it on release.                    |
+| `kubernetes`    | implemented   | Schedules a runner Pod on demand; deletes the Pod + SSH-key Secret on release. |
 
-The scaffolds are registered in the selector so the interface shape is proven
-end to end; selecting one fails fast with a clear, actionable error.
+Every kind now has a real implementation. An unrouted real kind that is never
+selected resolves to a stub that throws a clear "not configured" error if it is
+ever selected, so a misconfigured deployment fails fast rather than silently
+provisioning.
+
+The `kubernetes` allocator schedules a single-tenant runner **Pod** (runner
+image, `restartPolicy: Never`) in `TANREN_K8S_NAMESPACE`, delivering the runner
+SSH public key via a per-run Opaque **Secret** referenced as a container env var
+(no key material in the Pod spec or image). It polls the Pod until `phase:
+Running` with a non-empty `podIP`, then returns that **Pod IP** on port 22 as the
+SSH target. This assumes the orchestrator can reach Pod IPs directly (running
+in-cluster, or via a flat pod network / VPN); no Service or NodePort is created.
+Like the other cloud allocators it pins a pre-known host-key fingerprint
+(`TANREN_K8S_HOST_FINGERPRINT`, baked into the runner image) rather than doing
+TOFU. Required env: `TANREN_K8S_API_SERVER`, `TANREN_K8S_TOKEN_REF`,
+`TANREN_K8S_NAMESPACE`, `TANREN_K8S_RUNNER_IMAGE`, `TANREN_K8S_SSH_PUBLIC_KEY`,
+`TANREN_K8S_HOST_FINGERPRINT` (optional: `TANREN_K8S_SSH_USER`,
+`TANREN_K8S_CA_PEM`).
 
 ### Label routing + pool policy
 
