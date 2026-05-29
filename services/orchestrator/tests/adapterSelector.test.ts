@@ -13,6 +13,11 @@ import {
   UnsupportedProviderError
 } from "../src/engine/providers/adapterSelector.js";
 import type { CheckAnswer } from "../src/engine/providers/answererSchemas.js";
+import {
+  HARNESS_CAPABILITIES,
+  HARNESS_PROTOCOL_VERSION,
+  harnessSupportsRole
+} from "../src/engine/providers/harnessCapability.js";
 
 const target: SshTarget = {
   host: "runner",
@@ -100,6 +105,39 @@ describe("buildAdaptersFromRouting (the buildAdapters seam)", () => {
   it("throws when a required role's chain is empty", () => {
     const routing = RoutingTable.parse({ plan: { chain: [] } });
     expect(() => buildAdaptersFromRouting(deps(), routing)).toThrow(EmptyRoutingChainError);
+  });
+});
+
+// Track C §4: the selectable-cli sets are DERIVED from the harness capability
+// table (harnessCapability.ts). This conformance test pins that the derivation
+// reproduces today's behavior — codex/claude for both roles, opencode
+// writer-only — so a future capability edit that would change selection is
+// caught here, not in production.
+describe("harness capability model (Track C §4 protocol contract)", () => {
+  it("declares the v1 protocol version", () => {
+    expect(HARNESS_PROTOCOL_VERSION).toBe("v1");
+  });
+
+  it("derives SELECTABLE_WRITER_CLIS to exactly today's writers (codex, claude, opencode)", () => {
+    expect([...SELECTABLE_WRITER_CLIS].toSorted()).toEqual(["claude", "codex", "opencode"]);
+  });
+
+  it("derives SELECTABLE_ANSWERER_CLIS to exactly today's answerers (codex, claude)", () => {
+    expect([...SELECTABLE_ANSWERER_CLIS].toSorted()).toEqual(["claude", "codex"]);
+  });
+
+  it("keeps structuredOutput exactly equivalent to answer-eligibility for every harness", () => {
+    for (const capability of HARNESS_CAPABILITIES) {
+      expect(capability.structuredOutput).toBe(capability.roles.includes("answer"));
+    }
+  });
+
+  it("classifies the two capability classes: codex/claude structured-capable, opencode writer-only", () => {
+    expect(harnessSupportsRole("codex", "answer")).toBe(true);
+    expect(harnessSupportsRole("claude", "answer")).toBe(true);
+    expect(harnessSupportsRole("opencode", "answer")).toBe(false);
+    expect(harnessSupportsRole("opencode", "write")).toBe(true);
+    expect(harnessSupportsRole("wafer", "write")).toBe(false);
   });
 });
 
