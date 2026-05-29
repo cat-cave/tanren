@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { AllocatorRouter, type AllocatorRegistry } from "../src/engine/allocators/allocatorRouter.js";
 import {
+  AllocatorKind,
   AllocatorRoutingConfig,
   PoolCapacityExceededError,
+  PoolPolicy,
   selectAllocatorKind,
 } from "../src/engine/allocators/poolPolicy.js";
 import { UnconfiguredAllocator } from "../src/engine/allocators/scaffoldedAllocators.js";
@@ -228,5 +230,61 @@ describe("UnconfiguredAllocator", () => {
     const allocator = new UnconfiguredAllocator("kubernetes");
     await expect(allocator.allocate(req("r"))).rejects.toThrow(/not configured/);
     await expect(allocator.release("r")).rejects.toThrow(/not configured/);
+  });
+
+  it("names the offending kind and the remediation env in its error", async () => {
+    const allocator = new UnconfiguredAllocator("gcp");
+    // The two string fragments are distinct mutation survivors; pin both the
+    // kind interpolation and the "no routing rule references it" explanation so
+    // a blanked-out message string is caught.
+    await expect(allocator.allocate(req("r"))).rejects.toThrow(/allocator kind 'gcp' was selected/);
+    await expect(allocator.allocate(req("r"))).rejects.toThrow(/no routing rule references it/);
+    await expect(allocator.allocate(req("r"))).rejects.toThrow(/TANREN_ALLOCATOR_ROUTING/);
+  });
+});
+
+describe("AllocatorKind enum", () => {
+  it("accepts exactly the eight supported kinds", () => {
+    expect(new Set(AllocatorKind.options)).toEqual(
+      new Set(["static", "sidecar", "manual_ssh", "hetzner", "digitalocean", "gcp", "aws_ec2", "kubernetes"]),
+    );
+  });
+
+  it("rejects an unknown kind", () => {
+    expect(AllocatorKind.safeParse("fly_io").success).toBe(false);
+  });
+});
+
+describe("PoolPolicy schema defaults", () => {
+  it("defaults reuse to false (ephemeral) when omitted", () => {
+    expect(PoolPolicy.parse({}).reuse).toBe(false);
+  });
+
+  it("preserves an explicit reuse=true", () => {
+    expect(PoolPolicy.parse({ reuse: true }).reuse).toBe(true);
+  });
+
+  it("rejects maxConcurrent below 1", () => {
+    expect(PoolPolicy.safeParse({ maxConcurrent: 0 }).success).toBe(false);
+  });
+});
+
+describe("AllocatorRoutingConfig schema defaults", () => {
+  it("defaults rules to an empty array and pools to an empty record", () => {
+    const config = AllocatorRoutingConfig.parse({ defaultAllocator: "sidecar" });
+    expect(config.rules).toEqual([]);
+    expect(config.pools).toEqual({});
+  });
+});
+
+describe("PoolCapacityExceededError", () => {
+  it("carries the kind + cap and a message naming both", () => {
+    const error = new PoolCapacityExceededError("hetzner", 3);
+    expect(error.kind).toBe("hetzner");
+    expect(error.maxConcurrent).toBe(3);
+    expect(error.name).toBe("PoolCapacityExceededError");
+    expect(error.message).toContain("hetzner");
+    expect(error.message).toContain("3");
+    expect(error.message).toMatch(/at capacity/);
   });
 });

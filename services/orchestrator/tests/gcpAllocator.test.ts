@@ -166,6 +166,36 @@ describe("GcpAllocator", () => {
     expect(client.deleted).toContain("tanren-run-4");
   });
 
+  it("sanitizes and truncates the run id into a <=62 char instance name", async () => {
+    const client = new FakeGcpComputeClient();
+    const allocator = new GcpAllocator(baseOpts(client, new FakeRunnerStore()));
+    const longRunId = "RUN_" + "X".repeat(80);
+    await allocator.allocate(req(longRunId));
+    const name = client.inserted[0]!.name;
+    expect(name.length).toBe(62);
+    expect(name).toMatch(/^tanren-run-x+$/);
+    // Uppercase + underscore are normalized to lowercase + hyphen.
+    expect(name).not.toMatch(/[^a-z0-9-]/);
+  });
+
+  it("sanitizes label values to the gcp-allowed charset", async () => {
+    const client = new FakeGcpComputeClient();
+    const allocator = new GcpAllocator(baseOpts(client, new FakeRunnerStore()));
+    await allocator.allocate(req("Run/With.Dots"));
+    const runLabel = client.inserted[0]!.labels?.["tanren-run"];
+    // labelValue lowercases and replaces anything outside [a-z0-9_-] with "-".
+    expect(runLabel).toBe("run-with-dots");
+  });
+
+  it("honors a configured SSH username override on the returned target", async () => {
+    const client = new FakeGcpComputeClient();
+    const allocation = await new GcpAllocator({
+      ...baseOpts(client, new FakeRunnerStore()),
+      sshUsername: "operator",
+    }).allocate(req("run_ov"));
+    expect(allocation.target.username).toBe("operator");
+  });
+
   it("requires a token, ssh public key, and pinned fingerprint", () => {
     const runners = new FakeRunnerStore();
     expect(() => new GcpAllocator({ ...baseOpts(new FakeGcpComputeClient(), runners), accessToken: "" })).toThrow(
@@ -211,6 +241,53 @@ describe("GcpAllocator", () => {
     expect(captured.method).toBe("GET");
     expect(captured.auth).toBe("Bearer secret-token");
     expect(instance).toEqual({ name: "tanren-x", status: "RUNNING", externalIp: "198.51.100.42" });
+  });
+
+  it("fetchGcpComputeClient builds the insert request body (machine type, boot disk, NAT, ssh-keys metadata)", async () => {
+    let captured: { url: string; method?: string; body: Record<string, unknown> } = { url: "", body: {} };
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      captured = {
+        url: typeof input === "string" ? input : input.toString(),
+        method: init?.method,
+        body: JSON.parse(String(init?.body)) as Record<string, unknown>,
+      };
+      return new Response(JSON.stringify({ name: "op-1", status: "RUNNING" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    const client = fetchGcpComputeClient({ accessToken: "t", project: "proj-x", zone: "europe-west1-b" }, fetchImpl);
+    await client.insertInstance({
+      name: "tanren-run-1",
+      machineType: "e2-medium",
+      sourceImage: "projects/cos-cloud/global/images/family/cos-stable",
+      sshUsername: "tanren",
+      sshPublicKey: "ssh-ed25519 KEY",
+      labels: { "tanren-run": "run-1" },
+    });
+
+    expect(captured.url).toMatch(/\/projects\/proj-x\/zones\/europe-west1-b\/instances$/);
+    expect(captured.method).toBe("POST");
+    // machineType is rendered as a zone-qualified path.
+    expect(captured.body.machineType).toBe("zones/europe-west1-b/machineTypes/e2-medium");
+    expect(captured.body.labels).toEqual({ "tanren-run": "run-1" });
+
+    const disks = captured.body.disks as Array<Record<string, unknown>>;
+    expect(disks).toHaveLength(1);
+    expect(disks[0]).toMatchObject({ boot: true, autoDelete: true });
+    expect((disks[0]!.initializeParams as Record<string, unknown>).sourceImage).toBe(
+      "projects/cos-cloud/global/images/family/cos-stable",
+    );
+
+    const networkInterfaces = captured.body.networkInterfaces as Array<Record<string, unknown>>;
+    const accessConfigs = networkInterfaces[0]!.accessConfigs as Array<Record<string, unknown>>;
+    expect(accessConfigs[0]).toMatchObject({ type: "ONE_TO_ONE_NAT", name: "External NAT" });
+
+    const items = (captured.body.metadata as { items: Array<{ key: string; value: string }> }).items;
+    const sshKeys = items.find((item) => item.key === "ssh-keys");
+    // The ssh-keys metadata is "<username>:<publickey>".
+    expect(sshKeys?.value).toBe("tanren:ssh-ed25519 KEY");
   });
 
   it("fetchGcpComputeClient surfaces operation errors from the insert response", async () => {

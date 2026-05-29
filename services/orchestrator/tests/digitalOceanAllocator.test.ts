@@ -204,4 +204,32 @@ describe("DigitalOceanAllocator", () => {
     const client = fetchDigitalOceanClient("secret-token", fetchImpl);
     await expect(client.deleteDroplet(123)).resolves.toBeUndefined();
   });
+
+  it("sanitizes the run id into a lowercase, hyphen-only droplet name", async () => {
+    const client = new FakeDigitalOceanClient();
+    const allocator = new DigitalOceanAllocator(baseOpts(client, new FakeRunnerStore()));
+    await allocator.allocate(req("Run_ABC/1"));
+    expect(client.created[0]?.name).toBe("tanren-run-abc-1");
+  });
+
+  it("uses the configured SSH username over the default", async () => {
+    const client = new FakeDigitalOceanClient();
+    const allocator = new DigitalOceanAllocator({
+      ...baseOpts(client, new FakeRunnerStore()),
+      sshUsername: "operator",
+    });
+    const allocation = await allocator.allocate(req("run_u"));
+    expect(allocation.target.username).toBe("operator");
+  });
+
+  it("fetchDigitalOceanClient yields no IP when the droplet has no networks", async () => {
+    const fetchImpl = (async (): Promise<Response> =>
+      new Response(JSON.stringify({ droplet: { id: 8, status: "new" } }), {
+        status: 202,
+        headers: { "Content-Type": "application/json" },
+      })) as typeof fetch;
+    const client = fetchDigitalOceanClient("secret-token", fetchImpl);
+    const droplet = await client.createDroplet({ name: "n", region: "nyc3", size: "s", image: "i" });
+    expect(droplet.publicIpv4).toBeUndefined();
+  });
 });

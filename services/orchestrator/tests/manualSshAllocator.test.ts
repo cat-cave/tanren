@@ -61,6 +61,29 @@ describe("ManualSshAllocator", () => {
     expect(allocation.target.identitySecretRef).toBe("runner/identity");
   });
 
+  it("uses the host username over the configured default", async () => {
+    const runners = new FakeRunnerStore();
+    const allocator = new ManualSshAllocator({
+      hosts: [{ id: "h", host: "h.example", username: "host-user", hostKeyFingerprint: "SHA256:x" }],
+      defaultUsername: "poolDefault",
+      runners,
+    });
+    const allocation = await allocator.allocate(req("run_hu"));
+    expect(allocation.target.username).toBe("host-user");
+  });
+
+  it("falls back to the configured default username when the host omits one", async () => {
+    const runners = new FakeRunnerStore();
+    const allocator = new ManualSshAllocator({
+      hosts: [{ id: "h", host: "h.example", hostKeyFingerprint: "SHA256:x" }],
+      defaultUsername: "poolDefault",
+      runners,
+    });
+    const allocation = await allocator.allocate(req("run_du"));
+    // host has no username, so the pool default wins over the final "tanren".
+    expect(allocation.target.username).toBe("poolDefault");
+  });
+
   it("leases distinct hosts and fails fast when the pool is exhausted", async () => {
     const runners = new FakeRunnerStore();
     const allocator = new ManualSshAllocator({

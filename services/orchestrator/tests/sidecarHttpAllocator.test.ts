@@ -14,6 +14,20 @@ class FakeRunnerStore implements RunnerStore {
   }
 }
 
+/** A fetch stub returning a fixed happy-path /allocate response. */
+const makeAllocateFetch = (): typeof fetch =>
+  (async (): Promise<Response> =>
+    new Response(
+      JSON.stringify({
+        runnerId: "runner_u",
+        sshHost: "h",
+        sshPort: 22,
+        hostKeyFingerprint: "SHA256:y",
+        imageSha: "sha256:z",
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    )) as typeof fetch;
+
 describe("SidecarHttpAllocator", () => {
   it("POSTs /allocate with the bearer token and mirrors the runner row", async () => {
     let captured: {
@@ -117,5 +131,124 @@ describe("SidecarHttpAllocator", () => {
         identitySecretRef: "r",
       }),
     ).rejects.toThrow(/allocate failed/);
+  });
+
+  it("strips a trailing slash from baseUrl so the path is single-slashed", async () => {
+    let allocateUrl = "";
+    let releaseUrl = "";
+    const fetchImpl = (async (input: string | URL | Request): Promise<Response> => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.endsWith("/release")) {
+        releaseUrl = url;
+        return new Response(JSON.stringify({ released: true }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      allocateUrl = url;
+      return new Response(
+        JSON.stringify({
+          runnerId: "runner_x",
+          sshHost: "h",
+          sshPort: 22,
+          hostKeyFingerprint: "SHA256:y",
+          imageSha: "sha256:z",
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }) as typeof fetch;
+
+    const allocator = new SidecarHttpAllocator({
+      baseUrl: "http://allocator:3200/",
+      authToken: "t",
+      runners: new FakeRunnerStore(),
+      fetchImpl,
+    });
+    const alloc = await allocator.allocate({
+      runId: "r",
+      projectId: "p",
+      runnerImage: "img",
+      identitySecretRef: "ref",
+    });
+    await allocator.release(alloc.runnerId);
+    expect(allocateUrl).toBe("http://allocator:3200/allocate");
+    expect(releaseUrl).toBe("http://allocator:3200/release");
+  });
+
+  it("defaults the SSH username to tanren and honors an override", async () => {
+    const reqInput = { runId: "r", projectId: "p", runnerImage: "img", identitySecretRef: "ref" };
+
+    const defaulted = await new SidecarHttpAllocator({
+      baseUrl: "http://a:1",
+      authToken: "t",
+      runners: new FakeRunnerStore(),
+      fetchImpl: makeAllocateFetch(),
+    }).allocate(reqInput);
+    expect(defaulted.target.username).toBe("tanren");
+
+    const overridden = await new SidecarHttpAllocator({
+      baseUrl: "http://a:1",
+      authToken: "t",
+      sshUsername: "operator",
+      runners: new FakeRunnerStore(),
+      fetchImpl: makeAllocateFetch(),
+    }).allocate(reqInput);
+    expect(overridden.target.username).toBe("operator");
+  });
+
+  it("dedupes vaultRefs and drops empty refs, keeping the identity ref first", async () => {
+    let sentRefs: string[] = [];
+    const fetchImpl = (async (_url: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      sentRefs = (JSON.parse(String(init?.body)) as { vaultRefs: string[] }).vaultRefs;
+      return new Response(
+        JSON.stringify({
+          runnerId: "runner_d",
+          sshHost: "h",
+          sshPort: 22,
+          hostKeyFingerprint: "SHA256:y",
+          imageSha: "sha256:z",
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }) as typeof fetch;
+    await new SidecarHttpAllocator({
+      baseUrl: "http://a:1",
+      authToken: "t",
+      runners: new FakeRunnerStore(),
+      fetchImpl,
+    }).allocate({
+      runId: "r",
+      projectId: "p",
+      runnerImage: "img",
+      identitySecretRef: "runner/identity",
+      vaultRefs: ["runner/identity", "credential/a", "", "credential/a", "credential/b"],
+    });
+    // identity first, then unique non-empty refs in order, no duplicates/empties.
+    expect(sentRefs).toEqual(["runner/identity", "credential/a", "credential/b"]);
+  });
+
+  it("does not clear the mirror row when the sidecar reports released=false", async () => {
+    const fetchImpl = (async (): Promise<Response> =>
+      new Response(JSON.stringify({ released: false }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })) as typeof fetch;
+    const runners = new FakeRunnerStore();
+    await new SidecarHttpAllocator({ baseUrl: "http://a:1", authToken: "t", runners, fetchImpl }).release(
+      "runner_keep",
+    );
+    expect(runners.releases).toEqual([]);
+  });
+
+  it("throws when the sidecar /release response is not 2xx", async () => {
+    const fetchImpl = (async (): Promise<Response> => new Response("nope", { status: 500 })) as typeof fetch;
+    await expect(
+      new SidecarHttpAllocator({
+        baseUrl: "http://a:1",
+        authToken: "t",
+        runners: new FakeRunnerStore(),
+        fetchImpl,
+      }).release("runner_x"),
+    ).rejects.toThrow(/release failed/);
   });
 });

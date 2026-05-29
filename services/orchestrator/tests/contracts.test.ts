@@ -46,6 +46,20 @@ describe("orchestrator scaffold contracts", () => {
     });
 
     expect(allocation.runnerId).toBe("runner_run_1");
+    // Pin the full FakeAllocation shape: every literal the fake derives from the
+    // request is a distinct mutation survivor unless asserted here. imageSha is
+    // the request image suffixed with the fake digest; the SshTarget carries the
+    // fixed dev host/port/user, a SHA256 fingerprint, and echoes the request's
+    // identity ref (never inlined key material).
+    expect(allocation.imageSha).toBe("ghcr.io/cat-cave/tanren-runner:v0@sha256:fake");
+    expect(allocation.target).toEqual({
+      host: "runner",
+      port: 22,
+      username: "tanren",
+      hostKeyFingerprint: "SHA256:fake",
+      identitySecretRef: "runner/run_1/identity",
+    });
+    await expect(allocator.release(allocation.runnerId)).resolves.toBeUndefined();
     expect(ssh.exitCode).toBe(0);
     await expect(secrets.get("credential/fake")).resolves.toEqual({
       ref: "credential/fake",

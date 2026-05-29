@@ -131,6 +131,41 @@ describe("HetznerAllocator", () => {
     ).toThrow(/pinned hostKeyFingerprint/);
   });
 
+  it("sanitizes the run id into a lowercase, hyphen-only server name", async () => {
+    const client = new FakeHetznerClient();
+    const runners = new FakeRunnerStore();
+    const allocator = new HetznerAllocator(baseOpts(client, runners));
+    await allocator.allocate(req("Run_ABC/123"));
+    // tanren- prefix, lowercased, every non [a-z0-9-] char replaced with "-".
+    expect(client.created[0]?.name).toBe("tanren-run-abc-123");
+  });
+
+  it("destroys the server and rejects when it becomes running without an IP", async () => {
+    const client = new FakeHetznerClient({ noIp: true });
+    const runners = new FakeRunnerStore();
+    const allocator = new HetznerAllocator({
+      ...baseOpts(client, runners),
+      readyTimeoutMs: 5,
+      pollIntervalMs: 1,
+    });
+    // status reaches "running" but publicIpv4 stays undefined: the ready
+    // condition requires BOTH, so it never returns and the deadline trips.
+    await expect(allocator.allocate(req("run_no_ip"))).rejects.toThrow(/did not become running/);
+    expect(client.deleted).toEqual([42]);
+    expect(runners.claims).toEqual([]);
+  });
+
+  it("toServer treats a null public_net as no IP (via fetchHetznerClient)", async () => {
+    const fetchImpl = (async (): Promise<Response> =>
+      new Response(JSON.stringify({ server: { id: 9, status: "initializing", public_net: null } }), {
+        status: 201,
+        headers: { "Content-Type": "application/json" },
+      })) as typeof fetch;
+    const client = fetchHetznerClient("tok", fetchImpl);
+    const server = await client.createServer({ name: "n", serverType: "cx22", image: "docker-ce" });
+    expect(server.publicIpv4).toBeUndefined();
+  });
+
   it("fetchHetznerClient maps the API response and sends the bearer token", async () => {
     let captured: { url: string; method?: string; auth?: string } = { url: "" };
     const fetchImpl = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
