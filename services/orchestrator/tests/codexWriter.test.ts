@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { SshTarget } from "../src/engine/contracts/allocator.js";
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
 import type { SshCommand, SshCommandResult, SshSubstrate } from "../src/engine/contracts/sshSubstrate.js";
-import { createCodexWriter, parseCodexJsonlTelemetry } from "../src/engine/providers/codex.js";
+import { buildCodexExecCommand, createCodexWriter, parseCodexJsonlTelemetry } from "../src/engine/providers/codex.js";
 
 const target: SshTarget = {
   host: "runner",
@@ -119,6 +119,22 @@ describe("Codex writer adapter", () => {
     expect(result.diff).toContain("+codex");
     expect(result.commits).toEqual([{ sha: completedCommitSha, message: "codex change" }]);
     expect(result.exitReason).toBe("completed");
+  });
+
+  // SaaS Tier-B #5: managed mode points codex at the platform endpoint via
+  // OPENAI_BASE_URL; BYOK (no override) leaves it untouched.
+  it("sets OPENAI_BASE_URL when a managed endpoint override is present", () => {
+    const command = buildCodexExecCommand({
+      codexHome: "/home/tanren/.codex",
+      workspace: "/workspace/repo",
+      endpointBaseUrl: "https://openrouter.ai/api/v1",
+    });
+    expect(command).toContain("OPENAI_BASE_URL='https://openrouter.ai/api/v1'");
+  });
+
+  it("does not set OPENAI_BASE_URL for a BYOK run", () => {
+    const command = buildCodexExecCommand({ codexHome: "/home/tanren/.codex", workspace: "/workspace/repo" });
+    expect(command).not.toContain("OPENAI_BASE_URL");
   });
 
   it("does not leak auth secrets through commands or writer results", async () => {

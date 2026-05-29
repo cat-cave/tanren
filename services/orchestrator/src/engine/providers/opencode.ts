@@ -34,6 +34,10 @@ export interface OpencodeWriterDependencies {
   // (ZAI_GLM_MODEL); only Zai GLM is supported by this expansion.
   model?: string;
   opencodeDataBaseDir?: string;
+  // SaaS Tier-B #5: optional managed-endpoint base URL. When set (managed run),
+  // opencode is pointed at this OpenAI-compatible endpoint (the platform
+  // OpenRouter shell) via OPENAI_BASE_URL. Absent ⇒ BYOK: no override.
+  endpointBaseUrl?: string;
 }
 
 export interface OpencodeEventTelemetry {
@@ -68,6 +72,7 @@ export function createOpencodeWriter(dependencies: OpencodeWriterDependencies): 
           dataHome: auth.XDG_DATA_HOME,
           workspace: opts.workspace,
           model: dependencies.model ?? ZAI_GLM_MODEL,
+          endpointBaseUrl: dependencies.endpointBaseUrl,
         }),
         stdin: opts.prompt,
         timeoutMs: opts.timeoutMs,
@@ -99,9 +104,15 @@ export function createOpencodeWriter(dependencies: OpencodeWriterDependencies): 
 // point XDG_DATA_HOME at the per-run data dir (where the materialized auth.json
 // lives), pin the model, and run with the workspace as the project directory.
 // `--print-logs` emits the structured event stream we parse telemetry from.
-export function buildOpencodeWriterCommand(input: { dataHome: string; workspace: string; model: string }): string {
+export function buildOpencodeWriterCommand(input: {
+  dataHome: string;
+  workspace: string;
+  model: string;
+  endpointBaseUrl?: string;
+}): string {
   return [
     `XDG_DATA_HOME=${quoteSshShellArg(input.dataHome)}`,
+    ...opencodeEndpointEnv(input.endpointBaseUrl),
     "opencode",
     "run",
     "--print-logs",
@@ -111,6 +122,14 @@ export function buildOpencodeWriterCommand(input: { dataHome: string; workspace:
     quoteSshShellArg(input.workspace),
     "-",
   ].join(" ");
+}
+
+// SaaS Tier-B #5: the managed-endpoint env override opencode reads. When a
+// managed run resolves the platform endpoint, we set OPENAI_BASE_URL so
+// opencode's OpenAI-compatible calls go to the platform OpenRouter shell. BYOK
+// ⇒ no override (unchanged).
+function opencodeEndpointEnv(endpointBaseUrl?: string): string[] {
+  return endpointBaseUrl === undefined ? [] : [`OPENAI_BASE_URL=${quoteSshShellArg(endpointBaseUrl)}`];
 }
 
 // Parses opencode's `--print-logs` output: one JSON object per line. Token

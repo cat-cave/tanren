@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ManagedProviderConfig, ProviderMode } from "./managedProvider.js";
 import {
   AllocatorConfig,
   EscapeHatches,
@@ -80,6 +81,16 @@ export const OrgConfigV1 = z
     auditGate: OrgAuditGateTarget.optional(),
     defaultCredentials: OrgDefaultCredentials.optional(),
     github_app: OrgGithubAppInstallation.optional(),
+    // SaaS Tier-B #5: the BYOK-vs-managed provider toggle. `byok` (default)
+    // resolves the tenant's own credential — unchanged behavior. `managed`
+    // resolves the platform-owned credential (managedProvider.credentialRef)
+    // and points the harness at the managed endpoint. Additive + defaulted so
+    // legacy rows parse to `byok` with no migration; the hosting layer flips it.
+    providerMode: ProviderMode.default("byok"),
+    // Optional managed-provider override (platform credential ref + endpoint).
+    // Absent ⇒ the managed defaults (platform OpenRouter shell) apply; only
+    // consulted when providerMode === "managed".
+    managedProvider: ManagedProviderConfig.optional(),
   })
   .strict();
 export type OrgConfigV1 = z.infer<typeof OrgConfigV1>;

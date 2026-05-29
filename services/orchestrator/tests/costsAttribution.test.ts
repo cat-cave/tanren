@@ -47,6 +47,28 @@ describe("cost source attribution", () => {
     expect(classifyAuthRef("credential/legacy/whatever").billingMode).toBe("unknown");
   });
 
+  // SaaS Tier-B #5: a MANAGED run resolves the platform OpenRouter ref. It must
+  // classify exactly like any other OpenRouter credential so the hosting layer's
+  // metering captures managed usage as per_token / provider_pricing.
+  it("classifies the managed platform OpenRouter ref as per_token openrouter billing", () => {
+    expect(classifyAuthRef("credential/openrouter/platform/default")).toEqual({
+      billingMode: "per_token",
+      provider: "openrouter",
+    });
+  });
+
+  it("prices a managed platform OpenRouter run via provider_pricing", () => {
+    const source = resolveCostSource({
+      cli: "aider",
+      authRef: "credential/openrouter/platform/default",
+      rawUsage: {},
+    });
+    expect(source.billingMode).toBe("per_token");
+    expect(source.costBasis).toBe("provider_pricing");
+    expect(source.provider).toBe("openrouter");
+    expect(source.rate?.inputCostPerMillion).toBeGreaterThan(0);
+  });
+
   it("resolves a subscription ref to cost_basis 'unknown' (no fake estimate)", () => {
     const source = resolveCostSource({
       cli: "codex",

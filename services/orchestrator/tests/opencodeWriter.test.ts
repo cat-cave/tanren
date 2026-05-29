@@ -83,6 +83,27 @@ describe("opencode writer adapter", () => {
     expect(command).toContain("--model 'zai/glm-5.1'");
   });
 
+  // SaaS Tier-B #5: managed mode points opencode at the platform endpoint via
+  // OPENAI_BASE_URL; BYOK (no override) leaves it untouched.
+  it("sets OPENAI_BASE_URL when a managed endpoint override is present", () => {
+    const command = buildOpencodeWriterCommand({
+      dataHome: "/data",
+      workspace: "/workspace/repo",
+      model: ZAI_GLM_MODEL,
+      endpointBaseUrl: "https://openrouter.ai/api/v1",
+    });
+    expect(command).toContain("OPENAI_BASE_URL='https://openrouter.ai/api/v1'");
+  });
+
+  it("does not set OPENAI_BASE_URL for a BYOK run", () => {
+    const command = buildOpencodeWriterCommand({
+      dataHome: "/data",
+      workspace: "/workspace/repo",
+      model: ZAI_GLM_MODEL,
+    });
+    expect(command).not.toContain("OPENAI_BASE_URL");
+  });
+
   it("returns timeout, crashed, and window_exhausted distinctly", async () => {
     const timeout = await runWith({ exitCode: null, stdout: "{}\n", stderr: "", timedOut: true });
     const crashed = await runWith({ exitCode: 3, stdout: "{}\n", stderr: "boom", timedOut: false });

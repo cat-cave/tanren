@@ -119,6 +119,19 @@ Typed reads derived straight from `cost_records` grouped by `org_id` (the rich, 
 
 `costUsd` is best-effort (unpriced rows contribute 0 dollars but still count tokens), mirroring the ledger's honest-NULL cost model. The hosting layer maps these figures to its own pricing/credits.
 
+### 3. Managed-provider seam — BYOK vs. a platform-provided LLM (`engine/config` + `engine/credentials` + `engine/providers`)
+
+A self-hosted tenant brings its own LLM key (**BYOK**: it imports its own Codex/Claude/OpenRouter credential, today's default). A hosting layer may instead want to offer a **platform-provided LLM** — an OpenRouter-style shell where tenants run against the platform's single OpenRouter key and the platform meters + bills the usage. That is **managed** mode. As with the quota + metering seams above, the OSS exposes only the **toggle + plumbing**; **who** gets managed and the **platform key + pricing** are HOSTING concerns outside this repo. A deployment that sets nothing stays BYOK — default behavior is unchanged.
+
+The seam is a credential-**source** + endpoint toggle, NOT a new harness adapter:
+
+- **`providerMode: "byok" | "managed"`** (`engine/config/managedProvider.ts`), added to org config (default `"byok"`) and project-overridable. Additive + `.strict()`-safe in the `config` JSONB — legacy rows parse to `byok`, **no migration**.
+- **Credential resolution** (`engine/credentials/resolveCredentials.ts`): under `managed`, the run resolves a **platform-owned** ref (`credential/openrouter/platform/default` by default — the secret-store key the hosting layer writes the platform OpenRouter API key under) instead of the tenant's imported LLM credential. The GitHub credential is always the tenant's; managed mode only swaps the LLM source. An explicit credential pin forces BYOK. The OSS only **selects** the platform ref — it never sees the key.
+- **Harness endpoint override** (`engine/providers/{aider,opencode,claude,codex}.ts`): each OpenAI-API-compatible adapter takes an optional base-URL override. A managed run points the harness at the OpenRouter endpoint (`https://openrouter.ai/api/v1`) — aider via `--openai-api-base` + `OPENAI_API_KEY`, codex/opencode via `OPENAI_BASE_URL`, claude via `ANTHROPIC_BASE_URL`. BYOK passes no override, so the existing native-endpoint behavior is byte-identical. The endpoint is resolved from config and injectable for tests.
+- **Metering stays tenant-scoped.** A managed run's `authRef` is the `credential/openrouter/platform/...` ref, which the cost path (`engine/costs/sources.ts`) already classifies as `per_token` / `openrouter` / `provider_pricing`, and `cost_records.org_id` is derived in-statement from the run. So managed usage is priced and **metered to the tenant's org** through the very same metering-export read the hosting layer bills off — no separate path.
+
+The hosting layer therefore wires: the platform OpenRouter key into the secret store, the `providerMode: "managed"` policy onto the orgs it chooses, and its `QuotaPolicy` + billing on top of the (already tenant-tagged) `cost_records`.
+
 ## What already supports this (don't regress it)
 
 Multi-service boundaries (orchestrator/allocator/dashboard/db over HTTP+SQL+SSH+events); Zod-sourced contracts with drift checks; the `app.request` HTTP test pattern; injectable/mockable seams everywhere; answerer-schema JSON export. The deltas to pursue are §1–§5 above, incrementally — not a big-bang.

@@ -20,6 +20,16 @@ export {
 } from "./shared.js";
 
 export {
+  DEFAULT_MANAGED_CREDENTIAL_REF,
+  DEFAULT_MANAGED_ENDPOINT,
+  ManagedProviderConfig,
+  ProviderMode,
+  defaultManagedProviderConfig,
+  resolveHarnessEndpointOverride,
+} from "./managedProvider.js";
+export type { HarnessEndpointOverride } from "./managedProvider.js";
+
+export {
   OrgAuditGateTarget,
   OrgConfigV1,
   OrgConfigVersioned,

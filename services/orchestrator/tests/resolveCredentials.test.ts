@@ -39,6 +39,7 @@ describe("resolveCredentialsForRun", () => {
     expect(resolved).toEqual({
       codexCredentialRef: codexProjectRef,
       githubCredentialRef: githubProjectRef,
+      providerMode: "byok",
     });
   });
 
@@ -58,6 +59,7 @@ describe("resolveCredentialsForRun", () => {
     expect(resolved).toEqual({
       codexCredentialRef: codexOrgRef,
       githubCredentialRef: githubProjectRef,
+      providerMode: "byok",
     });
   });
 
@@ -83,6 +85,7 @@ describe("resolveCredentialsForRun", () => {
     expect(resolved).toEqual({
       codexCredentialRef: "credential/codex/me/pin",
       githubCredentialRef: "credential/github/me/pin",
+      providerMode: "byok",
     });
   });
 
@@ -99,6 +102,7 @@ describe("resolveCredentialsForRun", () => {
     expect(resolved).toEqual({
       codexCredentialRef: codexOrgRef,
       githubCredentialRef: githubOrgRef,
+      providerMode: "byok",
     });
   });
 
@@ -136,6 +140,7 @@ describe("resolveCredentialsForRun", () => {
     expect(resolved).toEqual({
       codexCredentialRef: codexProjectRef,
       githubCredentialRef: githubProjectRef,
+      providerMode: "byok",
     });
   });
 
@@ -162,5 +167,99 @@ describe("resolveCredentialsForRun", () => {
       override: { codexCredentialRef: "   " },
     });
     expect(resolved.codexCredentialRef).toBe(codexOrgRef);
+  });
+
+  // SaaS Tier-B #5: BYOK-vs-managed provider seam. These assert OUTCOMES — the
+  // resolved LLM credential ref + the endpoint override — not mock calls.
+  describe("managed provider mode", () => {
+    const platformRef = "credential/openrouter/platform/default";
+
+    it("resolves the PLATFORM credential + managed endpoint when the org is managed", async () => {
+      const pool = fakePool({
+        org_1: {
+          version: 1,
+          providerMode: "managed",
+          defaultCredentials: { codex_chatgpt_auth: codexOrgRef, github_token: githubOrgRef },
+        },
+      });
+      const projectConfig = migrateProjectConfig({ version: 1 });
+      const resolved = await resolveCredentialsForRun(pool, { projectConfig, orgId: "org_1" });
+      expect(resolved.providerMode).toBe("managed");
+      // The tenant's own codex default is NOT used — the platform ref is.
+      expect(resolved.codexCredentialRef).toBe(platformRef);
+      expect(resolved.codexCredentialRef).not.toBe(codexOrgRef);
+      // GitHub stays the tenant's own credential.
+      expect(resolved.githubCredentialRef).toBe(githubOrgRef);
+      // The harness is pointed at the OpenRouter OpenAI-compatible endpoint.
+      expect(resolved.endpointOverride).toEqual({ baseUrl: "https://openrouter.ai/api/v1" });
+    });
+
+    it("honors an org managedProvider override of ref + endpoint", async () => {
+      const pool = fakePool({
+        org_1: {
+          version: 1,
+          providerMode: "managed",
+          managedProvider: { credentialRef: "credential/openrouter/platform/eu", endpoint: "https://eu.openrouter/v1" },
+          defaultCredentials: { github_token: githubOrgRef },
+        },
+      });
+      const resolved = await resolveCredentialsForRun(pool, {
+        projectConfig: migrateProjectConfig({ version: 1 }),
+        orgId: "org_1",
+      });
+      expect(resolved.codexCredentialRef).toBe("credential/openrouter/platform/eu");
+      expect(resolved.endpointOverride).toEqual({ baseUrl: "https://eu.openrouter/v1" });
+    });
+
+    it("lets a project override the org's byok default into managed", async () => {
+      const pool = fakePool({
+        org_1: { version: 1, providerMode: "byok", defaultCredentials: { github_token: githubOrgRef } },
+      });
+      const projectConfig = migrateProjectConfig({ version: 1, providerMode: "managed" });
+      const resolved = await resolveCredentialsForRun(pool, { projectConfig, orgId: "org_1" });
+      expect(resolved.providerMode).toBe("managed");
+      expect(resolved.codexCredentialRef).toBe(platformRef);
+    });
+
+    it("lets a project pin back to byok over a managed org default", async () => {
+      const pool = fakePool({
+        org_1: {
+          version: 1,
+          providerMode: "managed",
+          defaultCredentials: { codex_chatgpt_auth: codexOrgRef, github_token: githubOrgRef },
+        },
+      });
+      const projectConfig = migrateProjectConfig({ version: 1, providerMode: "byok" });
+      const resolved = await resolveCredentialsForRun(pool, { projectConfig, orgId: "org_1" });
+      expect(resolved.providerMode).toBe("byok");
+      expect(resolved.codexCredentialRef).toBe(codexOrgRef);
+      expect(resolved.endpointOverride).toBeUndefined();
+    });
+
+    it("an explicit codex override forces byok even under a managed org", async () => {
+      const pool = fakePool({
+        org_1: { version: 1, providerMode: "managed", defaultCredentials: { github_token: githubOrgRef } },
+      });
+      const resolved = await resolveCredentialsForRun(pool, {
+        projectConfig: migrateProjectConfig({ version: 1 }),
+        orgId: "org_1",
+        override: { codexCredentialRef: "credential/codex/me/pin" },
+      });
+      expect(resolved.providerMode).toBe("byok");
+      expect(resolved.codexCredentialRef).toBe("credential/codex/me/pin");
+      expect(resolved.endpointOverride).toBeUndefined();
+    });
+
+    it("never throws MissingCredentialError for the LLM kind in managed mode", async () => {
+      // No codex default anywhere; managed mode resolves the platform ref instead.
+      const pool = fakePool({
+        org_1: { version: 1, providerMode: "managed", defaultCredentials: { github_token: githubOrgRef } },
+      });
+      const resolved = await resolveCredentialsForRun(pool, {
+        projectConfig: migrateProjectConfig({ version: 1 }),
+        orgId: "org_1",
+      });
+      expect(resolved.codexCredentialRef).toBe(platformRef);
+    });
   });
 });

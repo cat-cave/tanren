@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ManagedProviderConfig, ProviderMode } from "./managedProvider.js";
 import {
   GovernancePosture,
   MergeIntegration,
@@ -54,6 +55,13 @@ export const ProjectConfigV1 = z
     // Refs are the P2A-0013 managed namespace (`credential/<kind>/<scope>/...`),
     // not vault:// URIs.
     credentials: ProjectCredentialRefs.optional(),
+    // SaaS Tier-B #5: optional per-project override of the org's BYOK-vs-managed
+    // toggle. Absent ⇒ inherit the org `providerMode` (so legacy rows parse to
+    // an absent field and the org default applies — no migration). When set, it
+    // wins over the org for this project. `managedProvider` likewise overrides
+    // the org's platform credential ref + endpoint for this project only.
+    providerMode: ProviderMode.optional(),
+    managedProvider: ManagedProviderConfig.optional(),
   })
   .strict();
 export type ProjectConfigV1 = z.infer<typeof ProjectConfigV1>;
