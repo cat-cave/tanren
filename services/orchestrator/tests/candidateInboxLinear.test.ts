@@ -16,14 +16,24 @@ import type { GitHubHttpClient } from "../src/engine/providers/github.js";
 import {
   createGitHubIssuesConnector,
   createIssuesConnector,
+  createJiraConnector,
   createLinearConnector,
   ingestSource,
   type InboxEngineDeps,
   type InboxSource,
+  type JiraHttpClient,
   type LinearHttpClient,
   type LinearHttpRequest,
   type SourceConnector
 } from "../src/engine/forge/inbox/index.js";
+
+// A stub Jira client for the dispatcher wiring (this file's dispatcher tests
+// exercise github/linear routing; the jira connector has its own test file).
+const stubJira: JiraHttpClient = {
+  async request() {
+    return { status: 200, body: { issues: [] } };
+  }
+};
 
 // A Linear source wired under the `issues` kind (dispatch by config.provider).
 const linearSource: InboxSource = {
@@ -224,7 +234,8 @@ describe("issues dispatcher (provider routing)", () => {
   const dispatcher = () =>
     createIssuesConnector({
       github: createGitHubIssuesConnector({ secrets, githubHttp: fakeGitHub([{ number: 1, title: "gh issue", body: "", labels: [] }]) }),
-      linear: createLinearConnector({ secrets, linearHttp: fakeLinear([{ id: "lin_z", title: "lin issue", url: "https://linear.app/z", priority: 0 }]).client })
+      linear: createLinearConnector({ secrets, linearHttp: fakeLinear([{ id: "lin_z", title: "lin issue", url: "https://linear.app/z", priority: 0 }]).client }),
+      jira: createJiraConnector({ secrets, jiraHttp: stubJira })
     });
 
   it("routes config.provider=linear to the Linear connector", async () => {
