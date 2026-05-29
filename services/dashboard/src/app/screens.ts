@@ -80,6 +80,13 @@ SCREEN_MOUNTS.push(mountDiscoveryScreens);
 import { mountInboxScreens } from "../routes/inbox/index.js";
 SCREEN_MOUNTS.push(mountInboxScreens);
 
+// P3-0015: greenfield onboarding (the FULL `/onboarding/new` track —
+// multi-round vision interview → derived spec DAG → arrival). Owns its routes
+// entirely under routes/onboarding/new; does not touch the shared brownfield
+// onboarding handler.
+import { mountGreenfieldOnboarding } from "../routes/onboarding/new/index.js";
+SCREEN_MOUNTS.push(mountGreenfieldOnboarding);
+
 /** Run every registered screen mount. Called BEFORE `mountShell`. */
 export function mountScreens(app: Hono, deps: ShellDeps): void {
   for (const mount of SCREEN_MOUNTS) {

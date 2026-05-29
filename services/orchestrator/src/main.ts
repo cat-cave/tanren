@@ -39,6 +39,7 @@ import { createGithubWebhookRoutes } from "./routes/githubWebhooks/index.js";
 import { createInsightRoutes } from "./routes/insights/index.js";
 import { createMilestoneRoutes } from "./routes/milestones/index.js";
 import { createNotificationRoutes } from "./routes/notifications/index.js";
+import { createOnboardingRoutes } from "./routes/onboarding/index.js";
 import { createOrgRoutes } from "./routes/orgs/index.js";
 import { createPersonaRoutes } from "./routes/personas/index.js";
 import { createProjectRoutes } from "./routes/projects/index.js";
@@ -232,6 +233,11 @@ export function buildApp(input: {
   // P3-0014: spec discovery — classify an insight into proposed specs +
   // DAG-placement options, accept → create specs with provenance.
   app.route("/orgs", createDiscoveryRoutes({ pool: input.pool }));
+  // P3-0015: greenfield onboarding — a multi-round Forge vision interview that
+  // accumulates a structured capture, then derives the project's product graph
+  // (personas/behaviors/milestones/specs) via the existing creation paths. The
+  // interview answerer is injectable; the deterministic fallback keeps it live.
+  app.route("/orgs", createOnboardingRoutes({ pool: input.pool }));
   // P3-0022: candidate inbox — configurable issue sources feed candidates;
   // Forge triages each (dedupe → match → DAG placement → verdict); accept
   // composes the P3-0014 discovery accept path. Connector reads via the App
