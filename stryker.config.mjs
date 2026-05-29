@@ -74,13 +74,23 @@ const config = {
   // Measured full-scope baseline: 39.89% (926 killed + 64 timeout of ~2483
   // mutants). Note: the planner/checker/auditor modules report 0% in the
   // full-scope run as a Stryker scoping artifact — when measured in isolation
-  // they score ~56% (planner 66 / checker 60 / auditor 39), so the true scope
-  // strength is higher than 39.89%. The floor is deliberately set against the
-  // number this exact command emits (39.89%) so the gate is reproducible.
+  // they score ~56% (planner 66 / checker 60 / auditor 39).
+  //
+  // chore/mutation-ratchet-runloop: the run-loop core cluster
+  // (plannerRun / subtaskLoop / subtaskRework + planner/checker/auditor) was
+  // measured in isolation (stryker.runloop.mjs, 594 mutants) at 55.39% and
+  // strengthened to 81.99% — +158 newly-detected mutants (329 → 487 killed+timeout):
+  //   auditor 40.82 → 97.96, checker 35.09 → 98.25, planner 41.94 → 98.39,
+  //   plannerRun 53.11 → 68.36, subtaskLoop 69.29 → 86.43, subtaskRework 63.64 → 100.
+  // Those +158 detected mutants land in the full-scope denominator too, so the
+  // full-scope score rises to ~46% ((990 + 158) / 2483). The full re-measure is
+  // too slow to block this PR, so the `break` floor is raised CONSERVATIVELY to
+  // 42 — comfortably above the prior 38 and safely below the ~46% estimate, with
+  // headroom for measurement variance. A precise full re-measure is follow-up.
   thresholds: {
     high: 80,
     low: 60,
-    break: 38,
+    break: 42,
   },
   // Keep CI logs quiet; the html report carries the detail.
   logLevel: "info",
