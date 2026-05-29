@@ -13,9 +13,9 @@ register in the selector/registry + mocked-API tests) — **no core refactor**.
 |---|---|---|
 | **Allocators** — `engine/allocators` (`Allocator`, `AllocatorRouter`, `buildAllocator`, `AllocatorKind`) | DigitalOcean, AWS-EC2, Kubernetes (enum-scaffolded stubs → implement); **GCP** (new kind) | Hetzner + manual-SSH done. Shared `buildAllocator.ts`/`poolPolicy.ts` → serialize. Live-validate needs cloud creds. |
 | **Inbox source connectors** — `engine/forge/inbox` (`SourceConnector`) | **Sentry** (errors), Linear, Jira | GitHub Issues done. Each = config schema + `fetch()` + triage. |
-| **LLM providers** — `engine/providers/adapterSelector` (`cli` switch) | Gemini, Mistral, local/OpenAI-compatible | Codex/Claude/opencode done. Add adapter + selector case + materializer. |
+| **Agent-harness adapters** — `engine/providers/adapterSelector` (`cli` switch) | **agy** (antigravity CLI; replaces deprecated gemini CLI), aider, pi, reasonix, … | Unit is the coding-agent CLI/harness (each auths to its own LLM backend), not the raw model. Codex/Claude/opencode done. **Structured-output gate:** harnesses without structured JSON (agy, opencode) are WRITER-ONLY; answerer roles (plan/check/audit/discovery/forge) require structured output. Each = CLI invocation + auth-to-LLM + a structured-output capability flag. |
 | **Notification channels** — `engine/notifications` (`NotificationChannel`, registry) | Teams, Discord, Email, Twilio, PagerDuty, Webhook | ntfy/slack/github-checks done; rest are `StubChannel`. |
-| **Identity providers** — `auth/**` (`IdentityProvider`) | Okta, Auth0, Keycloak | Mostly config over the generic `OidcProvider`. |
+| **Identity providers** — `auth/**` (`IdentityProvider`) | **Authentik turnkey preset** (homelab self-hosting), Okta, Auth0, Keycloak | Generic `OidcProvider` already ships (P3-0030) + works with Authentik via `TANREN_OIDC_ISSUER`. Add an Authentik claim-mapping preset + self-hosting doc/compose so it's zero-fiddle. |
 | **Secret stores / cost resolvers** — `contracts/{secretStore,costResolver}` | AWS Secrets Manager, K8s secrets; custom pricing | Clean ifaces; lower priority. |
 
 ### Deferred (NOT a clean adapter) — GitLab / VCS-provider abstraction
