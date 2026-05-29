@@ -1,4 +1,4 @@
-# Phase 2A Acceptance Gate
+# Tanren Acceptance Gates
 
 > **Removed in P3-0001 (2026-05-28).** The direct-execution acceptance
 > drivers (`just acceptance`, `acceptance-easy`, `acceptance-medium`,
@@ -13,6 +13,131 @@
 > backed by `scripts/acceptance/common.ts`). Component-level live smokes
 > (`just live-codex-*`, `live-github-*`, `live-ci-poll`, `live-phase1-fixture`)
 > remain. The rest of this document is retained for historical context.
+
+---
+
+# Phase 3 Acceptance — Hard Tier (final v0 gate)
+
+> **P3-0026.** The final v0 acceptance gate. Where the easy/medium tiers
+> proved a *clean* run end-to-end, the **hard tier** proves the system
+> survives its three hardest paths in a single run:
+>
+> 1. a **planner re-plan** driven by the in-loop deterministic gate
+>    (P3-0005) failing a writer iteration,
+> 2. an **auditor rejection loop** (`recommendedAction: loop_to_planner`)
+>    routed back through the planner as rework, and
+> 3. a **merge conflict** resolved through the P3-0008 conflict-resolver
+>    hook so the run still lands a coherent terminal state.
+>
+> Like everything since P3-0001, the hard tier is exercised **only through
+> the real dequeue→execute path** — a triggered run enqueues a `plan` job
+> and the background worker (`TANREN_RUN_WORKER=1`) claims and executes it.
+> There is **no** direct-execution script (the deleted `scripts/acceptance/*`
+> are not reintroduced).
+
+## Deterministic hard-tier gate (CI / local, no live credentials)
+
+The deterministic proof is a real-system test that runs the **actual**
+`runPlannerLoopWorkflow` through the worker's claim→execute seam
+(`executeNextPlanJob`), with the adapters / gate / review / merge probes
+scripted through the workflow's existing injection seams to force all
+three hard paths. No real Codex, SSH, or GitHub is touched.
+
+```sh
+just acceptance-hard      # runs the deterministic hard-tier test
+# or directly:
+corepack pnpm exec vitest run services/orchestrator/tests/acceptanceHardTier.test.ts
+```
+
+The test
+(`services/orchestrator/tests/acceptanceHardTier.test.ts`) asserts:
+
+- The worker **claims** the queued `plan` job and runs the workflow to a
+  `completed` result with loop outcome `passed`.
+- **Re-plan path:** the first `per_iteration` gate call fails, so the loop
+  re-plans (`planner.rerequested`, gate-producer) instead of checking a
+  known-broken tree.
+- **Auditor-rejection path:** the auditor rejects once (`loop_to_planner`)
+  before passing — observable as ≥ 2 `pre_audit` gate calls and a third
+  planner invocation.
+- **Conflict-resolution path:** the approved PR's first direct merge
+  reports a conflict, the conflict-resolver hook fires exactly once, and
+  the retried merge succeeds.
+- **Coherent terminal state:** the run lands `done / ok` and the spec
+  `merged` — not halted.
+- **Bounded loops:** a companion case proves a never-satisfied checker
+  halts as `retry_budget_exhausted` after exactly `maxPlannerRerunsPerSpec`
+  re-plans, never running away.
+
+## Live fixture-hard scenario (operator, through the dashboard)
+
+This is the real-system replacement for the deleted `just acceptance-*`
+recipes: instead of a script invoking the workflow directly, the operator
+**triggers a run through the dashboard** and observes the hard paths in
+the run timeline as the background worker executes it.
+
+### What a `fixture-hard` repo must contain
+
+Create a GitHub repo `cat-cave/tanren-fixture-hard` whose single spec is
+**crafted to force all three hard paths** in one run:
+
+1. **Forces ≥ 1 in-loop gate failure → re-plan.** The repo ships a
+   `tanren-ci.yml` whose fast tier runs the unit tests, and the task is
+   phrased so a naive first writer attempt leaves the tree failing that
+   tier (e.g. a function whose new test the writer is likely to break or
+   leave unimplemented on the first pass). A nonzero fast-tier exit routes
+   the run back to the planner via `planner.rerequested` (producer `gate`)
+   **before** any checker call.
+2. **Forces ≥ 1 auditor rejection → rework.** The acceptance criteria
+   include a cross-cutting behavior (e.g. "the public API is documented in
+   the README *and* exported from the package index") that a per-subtask
+   checker can pass while the integrated result still misses it — so the
+   auditor returns `loop_to_planner` at least once.
+3. **Forces a merge conflict.** The fixture's base branch carries a commit
+   that touches the same lines the run's branch will edit (e.g. a
+   conflicting edit to the file the task changes), so the post-approval
+   direct merge reports a 409 conflict and exercises the conflict-resolver
+   hook. The project must be configured with `mergeIntegration:
+   "direct_merge"` for Tanren to attempt the merge (otherwise it hands off
+   to a human and the conflict path is not reached).
+
+### How the operator runs it
+
+1. Bring up the dev stack **with the worker enabled**:
+
+   ```sh
+   TANREN_RUN_WORKER=1 just up-dev
+   ```
+
+   (Or set `TANREN_RUN_WORKER=1` on the orchestrator service; the worker
+   is the only thing that dequeues `plan` jobs.)
+
+2. Create the project for `cat-cave/tanren-fixture-hard` with
+   `mergeIntegration: "direct_merge"` and the hard spec text, then
+   **trigger the run from the dashboard** (Spec → Run). The trigger only
+   enqueues a `plan` job; the worker claims and executes it.
+
+3. Observe the hard paths in the **run timeline** (the same events the
+   deterministic test asserts):
+
+   - `gate.failed` (fast tier, `per_iteration`) → `planner.rerequested`
+     (producer `gate`) — the re-plan fired.
+   - a second `planner.rerequested` (producer `auditor`) after a
+     `pre_audit` gate pass — the auditor-rejection rework fired.
+   - `merge.conflict` followed by a successful `merge.completed` (the
+     conflict resolver resolved it) — or, if the resolver cannot resolve,
+     the run halts with the conflict surfaced on the recovery surface
+     (still a coherent, recoverable terminal state).
+   - the run reaches `done` and the spec `merged`.
+
+If the resolver stub (P3-0008) cannot resolve the conflict, the run halts
+recoverably with `merge.conflict` surfaced — this is the expected v0
+behavior until a real conflict resolver lands, and the operator resolves
+the conflict manually on the PR.
+
+---
+
+# Phase 2A Acceptance Gate (historical)
 
 `just acceptance` was the **executable Phase 2A release gate** owned by
 P2A-0015. It ran the easy and medium fixture repos through the real
