@@ -9,6 +9,12 @@ format-check:
 lint:
   corepack pnpm run lint
 
+# Type-aware lint pass (eslint + @typescript-eslint). Slower than oxlint
+# because it loads type info; scoped to shipped src. Catches floating/misused
+# promises and awaited non-thenables that oxlint (AST-only) cannot.
+types-lint:
+  corepack pnpm run check:types-lint
+
 architecture:
   corepack pnpm run check:architecture
 
@@ -30,7 +36,7 @@ knip:
 typecheck:
   corepack pnpm run typecheck
 
-fast-check: format-check lint architecture schema-drift state-drift event-drift answerer-schema-drift knip typecheck test compose-config
+fast-check: format-check lint types-lint architecture schema-drift state-drift event-drift answerer-schema-drift knip typecheck test compose-config
 
 test:
   corepack pnpm run test
@@ -41,7 +47,7 @@ build:
 compose-config:
   corepack pnpm run compose:config
 
-ci: format-check lint architecture schema-drift state-drift event-drift answerer-schema-drift knip typecheck test build compose-config
+ci: format-check lint types-lint architecture schema-drift state-drift event-drift answerer-schema-drift knip typecheck test build compose-config
 
 compose-build:
   docker compose -f compose.dev.yml build orchestrator allocator dashboard runner
