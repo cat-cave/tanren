@@ -20,6 +20,7 @@ export {
 } from "./shared.js";
 
 export {
+  OrgAuditGateTarget,
   OrgConfigV1,
   OrgConfigVersioned,
   OrgDefaultCredentials,
@@ -29,6 +30,21 @@ export {
   migrateOrgConfig,
   orgConfigJsonSchema
 } from "./orgConfig.js";
+
+export {
+  applyOnMerge,
+  buildConfigPrTitle,
+  gatedConfigWrite,
+  isBucketBChange,
+  renderTanrenYaml,
+  renderTanrenYamlDiff
+} from "./tanrenConfigGate.js";
+export type {
+  ConfigYamlDiffLine,
+  GatedConfigWriteInput,
+  GatedConfigWriteResult,
+  GateConfigPullRequest
+} from "./tanrenConfigGate.js";
 
 export {
   ProjectConfigV1,

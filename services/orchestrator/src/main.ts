@@ -13,6 +13,10 @@ import { storeGithubToken } from "./engine/credentials/githubToken.js";
 import { FetchGitHubHttpClient, type GitHubHttpClient } from "./engine/providers/github.js";
 import { GithubAppTokenMinter } from "./engine/providers/githubAppTokenMinter.js";
 import { mountGithubAppInstallFromEnv } from "./routes/auth/githubAppInstall.js";
+import { FetchConfigGateGitHub } from "./engine/config/configGateGithub.js";
+import { loadOrgGithubAppInstallation } from "./engine/credentials/orgGithubApp.js";
+import { resolveGithubToken } from "./engine/credentials/githubTokenResolver.js";
+import type { ConfigGateGithubFactory } from "./routes/orgs/index.js";
 import { TimedGitHubHttpClient, TimedSshSubstrate } from "./engine/observability/index.js";
 import { Ssh2Substrate } from "./engine/ssh/index.js";
 import { runWorkerEnabled, startRunWorker } from "./engine/worker/index.js";
@@ -210,7 +214,15 @@ export function buildApp(input: {
 
   const credentialRegistry = input.credentialRegistry ?? new InMemoryCredentialRegistry();
 
-  app.route("/orgs", createOrgRoutes({ pool: input.pool }));
+  // P3-0017: audit-gate GitHub port factory. Mints the org's App token (or the
+  // static fallback) and wraps the shared HTTP client so a Bucket-B write opens
+  // a PR in the org's `tanren-config` repo. Injectable for tests.
+  const configGateGithub: ConfigGateGithubFactory = async (orgId) => {
+    const installation = await loadOrgGithubAppInstallation(input.pool, orgId);
+    const resolved = await resolveGithubToken({ secrets, installation, minter: githubAppMinter });
+    return new FetchConfigGateGitHub({ http: githubHttp, token: resolved.token, refreshToken: resolved.refresh });
+  };
+  app.route("/orgs", createOrgRoutes({ pool: input.pool, configGateGithub }));
   app.route("/orgs", createProjectRoutes({ pool: input.pool }));
   app.route("/orgs", createSpecRoutes({ pool: input.pool }));
   app.route("/orgs", createPersonaRoutes({ pool: input.pool }));

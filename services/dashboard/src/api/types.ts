@@ -321,6 +321,9 @@ export interface EscapeHatches {
   maxSpecDiscoveryRoundsWithForge: number;
 }
 
+// P3-0017 org-config types live in `orgConfigTypes.ts` (split for the line cap).
+export type { OrgAuditGateTarget, OrgConfig, OrgDetail } from "./orgConfigTypes.js";
+
 /** A project's full versioned config (`GET .../projects/:projectId` → `config`). */
 export interface ProjectConfig {
   version: 1;
@@ -345,10 +348,8 @@ export interface ProjectDetail {
   config: ProjectConfig;
 }
 
-// ── P2B-0002 onboarding / credentials / notifications additions ──────────
-// All additive: read the fields the onboarding/credentials/notifications
-// screens render off the P2A-0013 (doctor/credentials/brownfield) and
-// P2A-0017 (notifications) contracts. Local + minimal, like the rest.
+// P2B-0002 onboarding/credentials/notifications: additive reads off the
+// P2A-0013 (doctor/credentials/brownfield) + P2A-0017 (notifications) contracts.
 
 /** A single `/doctor` check (P2A-0013 DoctorCheck). */
 export interface DoctorCheck {
@@ -490,8 +491,7 @@ export interface RunLocation {
 }
 
 // P2B-0008 failure-recovery contracts live in `recoveryTypes.ts` (re-exported
-// here so existing `from "./types.js"` imports keep working) to keep this file
-// under the 500-line architecture cap.
+// here so existing `from "./types.js"` imports keep working; line-cap split).
 export {
   isRecoverableRun,
   RECOVERABLE_OUTCOMES,

@@ -7,11 +7,25 @@ import { Hono } from "hono";
 import type pg from "pg";
 import { z } from "zod";
 import type { ActorContext } from "../../auth/schemas.js";
-import { migrateOrgConfig } from "../../engine/config/orgConfig.js";
+import { migrateOrgConfig, type OrgAuditGateTarget, type OrgConfigV1 } from "../../engine/config/orgConfig.js";
+import { gatedConfigWrite, type ConfigGateGitHub } from "../../engine/config/tanrenConfigGate.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
+
+/**
+ * P3-0017: resolve the injectable GitHub port the audit gate opens its PR with,
+ * for a given org + target. `undefined` means "no client available" — the route
+ * then refuses to apply a gated write rather than silently bypassing the gate.
+ * The factory is async + per-request so the App token is freshly minted.
+ */
+export type ConfigGateGithubFactory = (
+  orgId: string,
+  target: OrgAuditGateTarget
+) => Promise<ConfigGateGitHub | undefined>;
 
 interface OrgRoutesOptions {
   pool: pg.Pool;
+  /** P3-0017 audit-gate GitHub port factory; omitted in pure config tests. */
+  configGateGithub?: ConfigGateGithubFactory;
 }
 
 const OrgConfigPatchSchema = z.object({
@@ -75,20 +89,53 @@ export function createOrgRoutes(options: OrgRoutesOptions) {
     if (!parsed.success) {
       return c.json({ error: "invalid_org_config", issues: parsed.error.issues }, 400);
     }
-    let nextConfig;
+    let nextConfig: OrgConfigV1;
     try {
       nextConfig = migrateOrgConfig(parsed.data.config);
     } catch (error) {
       return c.json({ error: "invalid_org_config", message: messageOf(error) }, 400);
     }
+
+    // Load the current config so the audit gate can detect a Bucket-B change.
+    const current = await options.pool.query<{ config: unknown }>(
+      "SELECT config FROM organizations WHERE id = $1",
+      [orgId]
+    );
+    if (current.rows[0] === undefined) {
+      return c.json({ error: "org_not_found" }, 404);
+    }
+    const prevConfig = migrateOrgConfig(current.rows[0].config);
+
+    // P3-0017: when the gate is ON and this is a Bucket-B write, do NOT apply —
+    // open a PR in the tanren-config repo and report the gated outcome instead.
+    let gated: Awaited<ReturnType<typeof gatedConfigWrite>>;
+    try {
+      gated = await gatedConfigWrite({
+        prev: prevConfig,
+        next: nextConfig,
+        target: nextConfig.auditGate,
+        github:
+          nextConfig.auditGate !== undefined && options.configGateGithub !== undefined
+            ? await options.configGateGithub(orgId, nextConfig.auditGate)
+            : undefined
+      });
+    } catch (error) {
+      return c.json({ error: "audit_gate_failed", message: messageOf(error) }, 502);
+    }
+
+    if (gated.kind === "gated") {
+      // The DB stays the source of truth; the write applies on PR merge.
+      return c.json({ id: orgId, gated: true, pr: gated.pr, diff: gated.diff }, 202);
+    }
+
     const updated = await options.pool.query<{ id: string }>(
       "UPDATE organizations SET config = $1::jsonb, updated_at = now() WHERE id = $2 RETURNING id",
-      [JSON.stringify(nextConfig), orgId]
+      [JSON.stringify(gated.config), orgId]
     );
     if (updated.rowCount === 0) {
       return c.json({ error: "org_not_found" }, 404);
     }
-    return c.json({ id: orgId, config: nextConfig });
+    return c.json({ id: orgId, config: gated.config });
   });
 
   return app;

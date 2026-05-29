@@ -74,6 +74,11 @@ SCREEN_MOUNTS.push(mountDoraScreen);
 import { mountDiscoveryScreens } from "../routes/discovery/index.js";
 SCREEN_MOUNTS.push(mountDiscoveryScreens);
 
+// P3-0017: tanren-config audit-gate surface (config-as-code PR review) + the
+// Settings toggle. Overrides the /settings/config placeholder.
+import { mountConfigScreen } from "../routes/config/index.js";
+SCREEN_MOUNTS.push(mountConfigScreen);
+
 /** Run every registered screen mount. Called BEFORE `mountShell`. */
 export function mountScreens(app: Hono, deps: ShellDeps): void {
   for (const mount of SCREEN_MOUNTS) {
