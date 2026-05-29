@@ -14,7 +14,7 @@ export class AllocatorNotImplementedError extends Error {
   constructor(public readonly provider: string) {
     super(
       `${provider} allocator is not yet implemented (P3-0027 follow-up). ` +
-        `Implemented allocators: static, sidecar, manual_ssh, hetzner, digitalocean. ` +
+        `Implemented allocators: static, sidecar, manual_ssh, hetzner, digitalocean, gcp, aws_ec2. ` +
         `See docs/operator-guide/runners.md.`
     );
     this.name = "AllocatorNotImplementedError";
@@ -36,11 +36,6 @@ abstract class ScaffoldedAllocator implements Allocator {
   async release(_runnerId: string, _reason?: ReleaseReason): Promise<void> {
     throw new AllocatorNotImplementedError(this.provider);
   }
-}
-
-/** Scaffold: provision an AWS EC2 instance on demand. */
-export class AwsEc2Allocator extends ScaffoldedAllocator {
-  protected readonly provider = "aws_ec2";
 }
 
 /** Scaffold: schedule a runner pod on a Kubernetes cluster. */

@@ -7,7 +7,6 @@ import {
 } from "../src/engine/allocators/poolPolicy.js";
 import {
   AllocatorNotImplementedError,
-  AwsEc2Allocator,
   KubernetesAllocator
 } from "../src/engine/allocators/scaffoldedAllocators.js";
 import type { AllocationRequest, Allocator, RunnerAllocation } from "../src/engine/contracts/allocator.js";
@@ -40,7 +39,8 @@ function registry(overrides: Partial<AllocatorRegistry> = {}): {
     manual_ssh: new RecordingAllocator("manual_ssh"),
     hetzner: new RecordingAllocator("hetzner"),
     digitalocean: new RecordingAllocator("digitalocean"),
-    gcp: new RecordingAllocator("gcp")
+    gcp: new RecordingAllocator("gcp"),
+    aws_ec2: new RecordingAllocator("aws_ec2")
   };
   const reg: AllocatorRegistry = {
     static: recorders.static,
@@ -49,7 +49,7 @@ function registry(overrides: Partial<AllocatorRegistry> = {}): {
     hetzner: recorders.hetzner,
     digitalocean: recorders.digitalocean,
     gcp: recorders.gcp,
-    aws_ec2: new AwsEc2Allocator(),
+    aws_ec2: recorders.aws_ec2,
     kubernetes: new KubernetesAllocator(),
     ...overrides
   };
@@ -128,6 +128,20 @@ describe("AllocatorRouter", () => {
     expect(recorders.sidecar.allocated).toEqual([]);
   });
 
+  it("routes by label/config to the aws_ec2 allocator", async () => {
+    const config = AllocatorRoutingConfig.parse({
+      defaultAllocator: "sidecar",
+      rules: [{ matchLabels: { cloud: "aws" }, allocator: "aws_ec2" }]
+    });
+    const { reg, recorders } = registry();
+    const router = new AllocatorRouter(reg, config);
+
+    await router.allocate(req("run_aws", { cloud: "aws" }));
+
+    expect(recorders.aws_ec2.allocated.map((r) => r.runId)).toEqual(["run_aws"]);
+    expect(recorders.sidecar.allocated).toEqual([]);
+  });
+
   it("release routes back to the allocator that served the runner", async () => {
     const config = AllocatorRoutingConfig.parse({
       defaultAllocator: "sidecar",
@@ -192,7 +206,7 @@ describe("AllocatorRouter", () => {
 
 describe("scaffolded allocators", () => {
   it("each throws AllocatorNotImplementedError with provider + follow-up hint", async () => {
-    for (const allocator of [new AwsEc2Allocator(), new KubernetesAllocator()]) {
+    for (const allocator of [new KubernetesAllocator()]) {
       await expect(allocator.allocate(req("r"))).rejects.toBeInstanceOf(AllocatorNotImplementedError);
       await expect(allocator.allocate(req("r"))).rejects.toThrow(/P3-0027 follow-up/);
       await expect(allocator.release("r")).rejects.toBeInstanceOf(AllocatorNotImplementedError);

@@ -1,13 +1,14 @@
 import type pg from "pg";
 import type { Allocator } from "../contracts/allocator.js";
 import { AllocatorRouter, type AllocatorRegistry } from "./allocatorRouter.js";
+import { AwsEc2Allocator } from "./awsEc2Allocator.js";
 import { DigitalOceanAllocator } from "./digitalOceanAllocator.js";
 import { GcpAllocator } from "./gcpAllocator.js";
 import { HetznerAllocator } from "./hetznerAllocator.js";
 import { ManualSshAllocator, type ManualSshHost } from "./manualSshAllocator.js";
 import { AllocatorRoutingConfig, type AllocatorKind } from "./poolPolicy.js";
 import { PgRunnerStore, type RunnerStore } from "./runnerStore.js";
-import { AwsEc2Allocator, KubernetesAllocator, UnconfiguredAllocator } from "./scaffoldedAllocators.js";
+import { KubernetesAllocator, UnconfiguredAllocator } from "./scaffoldedAllocators.js";
 import { SidecarHttpAllocator } from "./sidecarHttpAllocator.js";
 import { StaticRunnerAllocator } from "./staticRunnerAllocator.js";
 
@@ -124,6 +125,43 @@ function buildGcp(runners: RunnerStore): GcpAllocator {
   });
 }
 
+function buildAwsEc2(runners: RunnerStore): AwsEc2Allocator {
+  // The credentials are resolved secrets here. In production they are sourced
+  // from a Vault ref by the operator's secret tooling, never hardcoded.
+  const accessKeyId = env("TANREN_AWS_ACCESS_KEY_ID");
+  const secretAccessKey = env("TANREN_AWS_SECRET_ACCESS_KEY");
+  const region = env("TANREN_AWS_REGION");
+  const imageId = env("TANREN_AWS_IMAGE_ID");
+  const hostKeyFingerprint = env("TANREN_AWS_HOST_FINGERPRINT");
+  if (
+    accessKeyId === undefined ||
+    secretAccessKey === undefined ||
+    region === undefined ||
+    imageId === undefined ||
+    hostKeyFingerprint === undefined
+  ) {
+    throw new Error(
+      "aws_ec2 allocator requires TANREN_AWS_ACCESS_KEY_ID, TANREN_AWS_SECRET_ACCESS_KEY, " +
+        "TANREN_AWS_REGION, TANREN_AWS_IMAGE_ID, and TANREN_AWS_HOST_FINGERPRINT"
+    );
+  }
+  return new AwsEc2Allocator({
+    accessKeyId,
+    secretAccessKey,
+    sessionToken: env("TANREN_AWS_SESSION_TOKEN"),
+    region,
+    imageId,
+    hostKeyFingerprint,
+    instanceType: env("TANREN_AWS_INSTANCE_TYPE") ?? "t3.small",
+    keyName: env("TANREN_AWS_KEY_NAME"),
+    subnetId: env("TANREN_AWS_SUBNET_ID"),
+    securityGroupIds: env("TANREN_AWS_SECURITY_GROUP_IDS")?.split(",").map((s) => s.trim()),
+    userData: env("TANREN_AWS_USER_DATA"),
+    sshUsername: env("TANREN_AWS_SSH_USER") ?? "ec2-user",
+    runners
+  });
+}
+
 /**
  * Builds the single allocator kind named by `kind`, or throws for the
  * scaffolded kinds (which only exist behind the router registry). This is the
@@ -141,6 +179,8 @@ function buildSingle(kind: string, runners: RunnerStore): Allocator {
       return buildDigitalOcean(runners);
     case "gcp":
       return buildGcp(runners);
+    case "aws_ec2":
+      return buildAwsEc2(runners);
     case "sidecar":
       return buildSidecar(runners);
     default:
@@ -179,7 +219,7 @@ function buildRegistry(runners: RunnerStore, config: AllocatorRoutingConfig): Al
       case "gcp":
         return usedKinds.has("gcp") ? buildGcp(runners) : new UnconfiguredAllocator("gcp");
       case "aws_ec2":
-        return new AwsEc2Allocator();
+        return usedKinds.has("aws_ec2") ? buildAwsEc2(runners) : new UnconfiguredAllocator("aws_ec2");
       case "kubernetes":
         return new KubernetesAllocator();
     }
