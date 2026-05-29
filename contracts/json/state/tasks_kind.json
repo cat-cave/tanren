@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "enum": [
+    "plan",
+    "write",
+    "check",
+    "audit",
+    "ci",
+    "review",
+    "merge",
+    "demo",
+    "forge"
+  ],
+  "type": "string",
+  "x-tanren-schema-id": "tanren.state.tasks_kind"
+}

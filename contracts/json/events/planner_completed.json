@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "rationale": {
+      "type": "string"
+    },
+    "subtasks": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "acceptanceCriteria": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "behaviorIds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "estimatedTokens": {
+            "anyOf": [
+              {
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "index": {
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer"
+          },
+          "intent": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title"
+        ],
+        "type": "object"
+      },
+      "minItems": 1,
+      "type": "array"
+    }
+  },
+  "required": [
+    "subtasks"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.planner.completed"
+}

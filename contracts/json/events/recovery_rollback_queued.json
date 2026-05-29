@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "const": "rollback_to_commit",
+      "type": "string"
+    },
+    "commitSha": {
+      "type": "string"
+    },
+    "confirmed": {
+      "const": true,
+      "type": "boolean"
+    },
+    "replanRunId": {
+      "type": "string"
+    },
+    "runId": {
+      "type": "string"
+    },
+    "specId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "runId",
+    "specId",
+    "action",
+    "commitSha",
+    "confirmed",
+    "replanRunId"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.recovery.rollback_queued"
+}

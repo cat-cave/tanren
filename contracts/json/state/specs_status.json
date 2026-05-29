@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "enum": [
+    "open",
+    "in_flight",
+    "review",
+    "merged",
+    "halted",
+    "cancelled",
+    "pending",
+    "active",
+    "done"
+  ],
+  "type": "string",
+  "x-tanren-schema-id": "tanren.state.specs_status"
+}

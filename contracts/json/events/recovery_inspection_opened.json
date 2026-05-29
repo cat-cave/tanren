@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "const": "open_inspection_thread",
+      "type": "string"
+    },
+    "runId": {
+      "type": "string"
+    },
+    "specId": {
+      "type": "string"
+    },
+    "threadId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "runId",
+    "specId",
+    "action",
+    "threadId"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.recovery.inspection_opened"
+}

@@ -82,7 +82,8 @@ function checkLineMax(projectFiles) {
     if (
       lineMaxExclusions.has(file) ||
       file.startsWith("db/migrations/meta/") ||
-      file.startsWith("services/orchestrator/src/engine/answerers/schemas/generated/")
+      file.startsWith("services/orchestrator/src/engine/answerers/schemas/generated/") ||
+      file.startsWith("contracts/json/")
     ) {
       continue;
     }
@@ -362,6 +363,40 @@ function checkAnswererSchemaDriftWiring(projectFiles) {
   return [];
 }
 
+function checkContractSchemaDriftWiring(projectFiles) {
+  const rule = "contract-schema-drift-check-wired";
+  const pkg = projectFiles.find((item) => item.file === "package.json");
+  const just = projectFiles.find((item) => item.file === "justfile");
+  if (!projectFiles.some((item) => item.file === "scripts/contract-schema-export.mjs")) {
+    return [diagnostic(rule, "scripts/contract-schema-export.mjs", "contract schema codegen script is missing")];
+  }
+  if (!pkg) {
+    return [diagnostic(rule, "package.json", "root package.json is required for contract schema drift wiring")];
+  }
+  try {
+    const json = JSON.parse(pkg.text);
+    const scripts = json.scripts ?? {};
+    const drift = String(scripts["check:contract-schema-drift"] ?? "");
+    const check = String(scripts.check ?? "");
+    if (!drift.includes("scripts/contract-schema-export.mjs")) {
+      return [
+        diagnostic(rule, "package.json", "check:contract-schema-drift must run scripts/contract-schema-export.mjs"),
+      ];
+    }
+    const wired =
+      check.includes("check:contract-schema-drift") ||
+      (check.includes("just ci") && just?.text.includes("ci:") && just.text.includes("contract-schema-drift"));
+    if (!wired) {
+      return [
+        diagnostic(rule, "package.json", "root check must include check:contract-schema-drift or delegate to just ci"),
+      ];
+    }
+  } catch {
+    return [diagnostic(rule, "package.json", "root package.json must be valid JSON")];
+  }
+  return [];
+}
+
 function checkSchemaDriftWiring(projectFiles) {
   const packageFile = projectFiles.find((item) => item.file === "package.json");
   const justfile = projectFiles.find((item) => item.file === "justfile");
@@ -430,6 +465,7 @@ export async function runArchitectureChecks({ root = process.cwd() } = {}) {
     ...checkSchemaDriftWiring(projectFiles),
     ...checkStateDriftWiring(projectFiles),
     ...checkAnswererSchemaDriftWiring(projectFiles),
+    ...checkContractSchemaDriftWiring(projectFiles),
     ...checkNoRowCastsInWorkflow(projectFiles),
     ...runStructureChecks(projectFiles),
   ];

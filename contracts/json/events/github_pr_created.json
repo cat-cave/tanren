@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "branch": {
+      "type": "string"
+    },
+    "prNumber": {
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+    },
+    "prUrl": {
+      "type": "string"
+    },
+    "repoUrl": {
+      "type": "string"
+    },
+    "reused": {
+      "type": "boolean"
+    },
+    "targetBranch": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "repoUrl",
+    "branch",
+    "targetBranch",
+    "prUrl",
+    "prNumber",
+    "reused"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.github.pr.created"
+}

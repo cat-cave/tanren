@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "command": {
+      "type": "string"
+    },
+    "exitCode": {
+      "anyOf": [
+        {
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "imageSha": {
+      "type": "string"
+    },
+    "runnerId": {
+      "type": "string"
+    },
+    "stderr": {
+      "type": "string"
+    },
+    "stdout": {
+      "type": "string"
+    },
+    "target": {
+      "additionalProperties": false,
+      "properties": {
+        "host": {
+          "type": "string"
+        },
+        "hostKeyFingerprint": {
+          "type": "string"
+        },
+        "port": {
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+        },
+        "username": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "host",
+        "port",
+        "username",
+        "hostKeyFingerprint"
+      ],
+      "type": "object"
+    },
+    "timedOut": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "runnerId",
+    "imageSha",
+    "target",
+    "command",
+    "exitCode",
+    "stdout",
+    "stderr",
+    "timedOut"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.hello.ssh_completed"
+}

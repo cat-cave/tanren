@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "branch": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "costTotalUsd": {
+      "type": "string"
+    },
+    "endedAt": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "lastEventAt": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "needsReview": {
+      "type": "boolean"
+    },
+    "outcome": {
+      "anyOf": [
+        {
+          "enum": [
+            "hello_complete",
+            "phase1_fixture_complete",
+            "phase2_easy_complete",
+            "phase2_medium_complete",
+            "halted",
+            "escape_hatch_hit",
+            "retry_budget_exhausted",
+            "window_exhausted",
+            "cancelled",
+            "hello_world_complete",
+            "ok",
+            "failed",
+            "pending"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "prUrl": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "projectId": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "runId": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "specId": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "specTitle": {
+      "type": "string"
+    },
+    "startedAt": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "queued",
+        "running",
+        "halted",
+        "completed",
+        "failed",
+        "cancelled",
+        "done"
+      ],
+      "type": "string"
+    },
+    "trigger": {
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "runId",
+    "specId",
+    "projectId",
+    "branch",
+    "trigger",
+    "status",
+    "outcome",
+    "startedAt",
+    "endedAt",
+    "prUrl",
+    "specTitle",
+    "costTotalUsd",
+    "lastEventAt",
+    "needsReview"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.http.RunListItem"
+}

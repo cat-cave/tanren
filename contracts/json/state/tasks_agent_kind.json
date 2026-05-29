@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "enum": [
+    "system",
+    "operator",
+    "writer_codex",
+    "answerer_codex",
+    "forge_template",
+    "ci_poller",
+    "writer",
+    "answerer"
+  ],
+  "type": "string",
+  "x-tanren-schema-id": "tanren.state.tasks_agent_kind"
+}

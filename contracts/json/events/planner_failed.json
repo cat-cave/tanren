@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "kind": {
+      "type": "string"
+    },
+    "message": {
+      "type": "string"
+    },
+    "reason": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "message"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.planner.failed"
+}

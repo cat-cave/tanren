@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "prNumber": {
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+    },
+    "prUrl": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "prUrl",
+    "prNumber"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.github.pr.ready"
+}

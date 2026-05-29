@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "behaviorIdsFailed": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "behaviorIdsPassed": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "done": {
+      "type": "boolean"
+    },
+    "passed": {
+      "type": "boolean"
+    },
+    "reason": {
+      "type": "string"
+    },
+    "reasoning": {
+      "type": "string"
+    },
+    "suggested_fixes": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "done",
+    "reason",
+    "suggested_fixes"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.checker.completed"
+}

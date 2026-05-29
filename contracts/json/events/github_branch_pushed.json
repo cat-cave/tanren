@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "branch": {
+      "type": "string"
+    },
+    "credentialRef": {
+      "type": "string"
+    },
+    "redacted": {
+      "const": true,
+      "type": "boolean"
+    },
+    "repoUrl": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "repoUrl",
+    "branch",
+    "credentialRef",
+    "redacted"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.github.branch.pushed"
+}

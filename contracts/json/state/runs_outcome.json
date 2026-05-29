@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "enum": [
+    "hello_complete",
+    "phase1_fixture_complete",
+    "phase2_easy_complete",
+    "phase2_medium_complete",
+    "halted",
+    "escape_hatch_hit",
+    "retry_budget_exhausted",
+    "window_exhausted",
+    "cancelled",
+    "hello_world_complete",
+    "ok",
+    "failed",
+    "pending"
+  ],
+  "type": "string",
+  "x-tanren-schema-id": "tanren.state.runs_outcome"
+}

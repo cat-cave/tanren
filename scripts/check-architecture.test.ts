@@ -31,10 +31,11 @@ describe("architecture checker", () => {
   it("accepts a minimal compliant fixture", async () => {
     const root = await createFixture({
       "package.json":
-        '{"type":"module","scripts":{"check":"pnpm run check:schema-drift && pnpm run check:state-drift && pnpm run check:answerer-schema-drift","check:schema-drift":"bash scripts/check-schema-drift.sh","check:state-drift":"node scripts/generate-state-checks.mjs --check","check:answerer-schema-drift":"node scripts/answerer-schema-export.mjs --check"}}\n',
+        '{"type":"module","scripts":{"check":"pnpm run check:schema-drift && pnpm run check:state-drift && pnpm run check:answerer-schema-drift && pnpm run check:contract-schema-drift","check:schema-drift":"bash scripts/check-schema-drift.sh","check:state-drift":"node scripts/generate-state-checks.mjs --check","check:answerer-schema-drift":"node scripts/answerer-schema-export.mjs --check","check:contract-schema-drift":"node scripts/contract-schema-export.mjs --check"}}\n',
       "scripts/check-schema-drift.sh": "#!/usr/bin/env bash\n",
       "scripts/generate-state-checks.mjs": "#!/usr/bin/env node\n",
       "scripts/answerer-schema-export.mjs": "#!/usr/bin/env node\n",
+      "scripts/contract-schema-export.mjs": "#!/usr/bin/env node\n",
       ".github/workflows/ci.yml": "steps:\n  - uses: actions/checkout@v6\n  - uses: actions/setup-node@v6\n",
       "db/migrations/0001.sql":
         "CHECK (cost_basis IN ('ccusage','provider_pricing','unknown'))\nCHECK (billing_mode IN ('per_token','subscription','self_hosted'))\n",
@@ -89,15 +90,29 @@ describe("architecture checker", () => {
     expect(diagnostics.map((item) => item.rule)).toContain("answerer-schema-drift-check-wired");
   });
 
-  it("accepts root check delegation through just ci when the just recipe includes schema drift", async () => {
+  it("requires contract schema drift checking to stay wired into the root check", async () => {
     const root = await createFixture({
-      "package.json":
-        '{"type":"module","scripts":{"check":"just ci","check:schema-drift":"bash scripts/check-schema-drift.sh","check:state-drift":"node scripts/generate-state-checks.mjs --check","check:answerer-schema-drift":"node scripts/answerer-schema-export.mjs --check"}}\n',
-      justfile:
-        "ci: schema-drift state-drift answerer-schema-drift\n\nschema-drift:\n  corepack pnpm run check:schema-drift\n\nstate-drift:\n  corepack pnpm run check:state-drift\n\nanswerer-schema-drift:\n  corepack pnpm run check:answerer-schema-drift\n",
+      "package.json": '{"type":"module","scripts":{"check":"pnpm run typecheck"}}\n',
       "scripts/check-schema-drift.sh": "#!/usr/bin/env bash\n",
       "scripts/generate-state-checks.mjs": "#!/usr/bin/env node\n",
       "scripts/answerer-schema-export.mjs": "#!/usr/bin/env node\n",
+      "scripts/contract-schema-export.mjs": "#!/usr/bin/env node\n",
+    });
+
+    const diagnostics = await runArchitectureChecks({ root });
+    expect(diagnostics.map((item) => item.rule)).toContain("contract-schema-drift-check-wired");
+  });
+
+  it("accepts root check delegation through just ci when the just recipe includes schema drift", async () => {
+    const root = await createFixture({
+      "package.json":
+        '{"type":"module","scripts":{"check":"just ci","check:schema-drift":"bash scripts/check-schema-drift.sh","check:state-drift":"node scripts/generate-state-checks.mjs --check","check:answerer-schema-drift":"node scripts/answerer-schema-export.mjs --check","check:contract-schema-drift":"node scripts/contract-schema-export.mjs --check"}}\n',
+      justfile:
+        "ci: schema-drift state-drift answerer-schema-drift contract-schema-drift\n\nschema-drift:\n  corepack pnpm run check:schema-drift\n\nstate-drift:\n  corepack pnpm run check:state-drift\n\nanswerer-schema-drift:\n  corepack pnpm run check:answerer-schema-drift\n\ncontract-schema-drift:\n  corepack pnpm run check:contract-schema-drift\n",
+      "scripts/check-schema-drift.sh": "#!/usr/bin/env bash\n",
+      "scripts/generate-state-checks.mjs": "#!/usr/bin/env node\n",
+      "scripts/answerer-schema-export.mjs": "#!/usr/bin/env node\n",
+      "scripts/contract-schema-export.mjs": "#!/usr/bin/env node\n",
     });
 
     await expect(runArchitectureChecks({ root })).resolves.toEqual([]);

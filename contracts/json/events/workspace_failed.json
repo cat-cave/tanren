@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "message": {
+      "type": "string"
+    },
+    "runnerId": {
+      "type": "string"
+    },
+    "workspacePath": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "workspacePath",
+    "message"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.workspace.failed"
+}
