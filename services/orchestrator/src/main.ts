@@ -5,7 +5,7 @@ import { Hono } from "hono";
 import type pg from "pg";
 import { z } from "zod";
 import type { ActorContext, IdentityProviderId } from "./auth/index.js";
-import { createDevLoginProvider, GitHubOAuthProvider, IdentityStore, type IdentityProvider } from "./auth/index.js";
+import { buildOidcProviderFromEnv, createDevLoginProvider, GitHubOAuthProvider, IdentityStore, type IdentityProvider } from "./auth/index.js";
 import { PgRunnerStore, SidecarHttpAllocator, StaticRunnerAllocator } from "./engine/allocators/index.js";
 import type { Allocator } from "./engine/contracts/allocator.js";
 import { InMemorySecretStore, type SecretStore, VaultSecretStore } from "./engine/contracts/index.js";
@@ -154,6 +154,13 @@ export function buildAuthFromEnv(pool: pg.Pool): BuildAppAuthOptions | undefined
   const providers = new Map<IdentityProviderId, IdentityProvider>();
   if (clientId !== undefined && clientId !== "" && clientSecret !== undefined && clientSecret !== "") {
     providers.set("github_oauth", new GitHubOAuthProvider({ clientId, clientSecret }));
+  }
+  // P3-0030: Authentik (or any OIDC IdP) as a second identity provider. Additive
+  // and opt-in: registers only when issuer + client id/secret are all set, so
+  // github_oauth/local_dev behavior is unchanged when the OIDC env is absent.
+  const oidc = buildOidcProviderFromEnv();
+  if (oidc !== undefined) {
+    providers.set("oidc", oidc);
   }
   // DEV-ONLY escape hatch. Opt-in via TANREN_DEV_LOGIN=1 (set only in
   // compose.dev.yml — compose.prod.yml MUST never set it). When enabled it

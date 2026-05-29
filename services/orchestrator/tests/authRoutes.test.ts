@@ -128,10 +128,33 @@ describe("auth routes and middleware", () => {
     expect(response.status).toBe(401);
   });
 
-  it("OIDC provider stub is exercised by buildAuthorizeUrl and exchangeCode and reports not-wired", async () => {
-    const oidc = new OidcProvider({ issuer: "https://idp.example.com", clientId: "x", clientSecret: "y" });
+  it("OIDC provider builds an authorize URL and exchanges a code via mocked endpoints (P3-0030)", async () => {
+    const issuer = "https://idp.example.com";
+    const discovery = {
+      issuer,
+      authorization_endpoint: `${issuer}/application/o/authorize/`,
+      token_endpoint: `${issuer}/application/o/token/`,
+      userinfo_endpoint: `${issuer}/application/o/userinfo/`
+    };
+    const fetchImpl: typeof fetch = (async (input) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.endsWith("/.well-known/openid-configuration")) {
+        return new Response(JSON.stringify(discovery), { headers: { "Content-Type": "application/json" } });
+      }
+      if (url === discovery.token_endpoint) {
+        return new Response(JSON.stringify({ access_token: "tok" }), {
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+      return new Response(JSON.stringify({ sub: "sub-1", preferred_username: "octo" }), {
+        headers: { "Content-Type": "application/json" }
+      });
+    }) as typeof fetch;
+    const oidc = new OidcProvider({ issuer, clientId: "x", clientSecret: "y", fetchImpl });
     expect(oidc.id).toBe("oidc");
-    expect(() => oidc.buildAuthorizeUrl("s", "https://cb")).toThrow(/not yet wired/);
-    await expect(oidc.exchangeCode("c", "https://cb")).rejects.toThrow(/not yet wired/);
+    expect(oidc.buildAuthorizeUrl("s", "https://cb")).toContain("response_type=code");
+    const claims = await oidc.exchangeCode("c", "https://cb");
+    expect(claims.providerSubject).toBe("sub-1");
+    expect(claims.login).toBe("octo");
   });
 });

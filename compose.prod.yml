@@ -17,6 +17,17 @@
 ## Optional env:
 ##   DASHBOARD_HOST_PORT                 Host port to publish the dashboard on (default 3000).
 ##   TANREN_MAX_RUN_HOURS                Max wall-clock hours before the allocator reclaims an abandoned runner (default 6).
+##   CLOUDFLARED_TUNNEL_TOKEN            Cloudflare Tunnel token. Required only when running the `tunnel` profile
+##                                       (`docker compose -f compose.prod.yml --profile tunnel up`). Never commit it;
+##                                       supply via env / secret manager. See docs/operator-guide/deploy.md.
+##   TANREN_OIDC_ISSUER                  OIDC issuer URL (e.g. https://authentik.example.com/application/o/tanren).
+##   TANREN_OIDC_CLIENT_ID               OIDC confidential-client id. Registers the `oidc` provider when set with the secret.
+##   TANREN_OIDC_CLIENT_SECRET           OIDC confidential-client secret.
+##   TANREN_OIDC_SCOPES                  Space-separated scopes (default `openid profile email groups`).
+##   TANREN_OIDC_SUBJECT_CLAIM           userinfo claim used as the stable subject (default `sub`).
+##   TANREN_OIDC_LOGIN_CLAIM             userinfo claim used as the login (default `preferred_username`).
+##   TANREN_OIDC_NAME_CLAIM              userinfo claim used as the display name (default `name`).
+##   TANREN_OIDC_GROUPS_CLAIM            userinfo claim carrying org/group membership (default `groups`).
 ##
 ## Only the dashboard publishes a host port. Postgres, Vault, orchestrator,
 ## allocator, runner SSH, and ntfy are reachable only on the internal docker
@@ -75,6 +86,19 @@ services:
       TANREN_ALLOCATOR_URL: http://allocator:3200
       TANREN_ALLOCATOR_TOKEN: ${TANREN_ALLOCATOR_TOKEN:?TANREN_ALLOCATOR_TOKEN must be set for the prod profile}
       TANREN_COOKIE_SECURE: "1"
+      ## P3-0030: Authentik/OIDC as a second identity provider. Additive and
+      ## opt-in — the orchestrator registers the `oidc` provider only when all of
+      ## issuer + client id + client secret are set; absent values leave
+      ## github_oauth behavior unchanged. Defaults to empty so the prod profile
+      ## boots with GitHub OAuth only when these are not supplied.
+      TANREN_OIDC_ISSUER: ${TANREN_OIDC_ISSUER:-}
+      TANREN_OIDC_CLIENT_ID: ${TANREN_OIDC_CLIENT_ID:-}
+      TANREN_OIDC_CLIENT_SECRET: ${TANREN_OIDC_CLIENT_SECRET:-}
+      TANREN_OIDC_SCOPES: ${TANREN_OIDC_SCOPES:-}
+      TANREN_OIDC_SUBJECT_CLAIM: ${TANREN_OIDC_SUBJECT_CLAIM:-}
+      TANREN_OIDC_LOGIN_CLAIM: ${TANREN_OIDC_LOGIN_CLAIM:-}
+      TANREN_OIDC_NAME_CLAIM: ${TANREN_OIDC_NAME_CLAIM:-}
+      TANREN_OIDC_GROUPS_CLAIM: ${TANREN_OIDC_GROUPS_CLAIM:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -125,6 +149,30 @@ services:
   ntfy:
     image: binwiederhier/ntfy:latest
     command: ["serve"]
+
+  ## P3-0030: Cloudflare Tunnel exposure profile. OFF by default — it only
+  ## starts under the `tunnel` profile:
+  ##   docker compose -f compose.prod.yml --profile tunnel up
+  ## The tunnel token is supplied via CLOUDFLARED_TUNNEL_TOKEN (never committed);
+  ## the named tunnel's public hostname -> service routing (e.g. the dashboard on
+  ## the internal docker network) is configured in the Cloudflare Zero Trust
+  ## dashboard. cloudflared terminates TLS at Cloudflare's edge and dials the
+  ## origin over the internal docker network, so no host port needs to be
+  ## published when the tunnel is in use. See docs/operator-guide/deploy.md.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    profiles: ["tunnel"]
+    command: ["tunnel", "--no-autoupdate", "run"]
+    environment:
+      ## Soft default so `docker compose config` validates the base profile
+      ## (compose interpolates all services regardless of profile). The token is
+      ## only consulted when the `tunnel` profile actually starts; supply it then
+      ## via env / secret manager — cloudflared exits immediately on an empty
+      ## token. Never commit a real value.
+      TUNNEL_TOKEN: ${CLOUDFLARED_TUNNEL_TOKEN:-}
+    depends_on:
+      dashboard:
+        condition: service_started
 
 volumes:
   pgdata:
