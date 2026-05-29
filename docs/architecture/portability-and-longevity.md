@@ -80,6 +80,18 @@ The `x-tanren-schema-id` annotation on each file is the stable contract identifi
 
 - "How strong are the tests" should be a number. **Stryker** mutation testing on the workflow-critical + seam modules, with a mutation-score gate, makes test quality measurable and prevents shallow tests from passing as coverage.
 
+**Status: wired up (Track C §5).** Stryker (`@stryker-mutator/core` + `@stryker-mutator/vitest-runner`) is configured in `stryker.config.mjs` and runs via `just mutation` (`pnpm check:mutation` -> `stryker run`).
+
+- **Scope (the highest-value modules only):** the workflow `planner` / `checker` / `auditor`, `engine/credentials/**` (credential resolution + materialization), the `Allocator` / `JobQueue` / `SecretStore` seam contracts (now conformance-covered), and the concrete allocators behind the Allocator seam. Nothing else is mutated.
+- **Deliberately NOT in the per-PR gate.** Mutation testing is slow (~7-8 min for this scope), so it is excluded from `just ci` / `just fast-check`. Run it on demand or nightly: `just mutation`.
+- **Measured baseline (first run):** **39.89%** full-scope mutation score (926 killed + 64 timed-out of ~2,483 mutants). `thresholds.break` is pinned just below that, at **38**, so `just mutation` passes today and any regression below the floor fails — a non-breaking ratchet. Raising the floor by killing surviving mutants is follow-up work; the value delivered here is the number plus the regression gate, not fixing every weak test now.
+- **Where the tests look weakest** (lowest mutation scores / most surviving mutants — prioritize these when ratcheting up):
+  - `engine/credentials/**` is the weakest cluster (~33% scope score). `codexAuth.ts` (33%, 55 survivors), the `opencode` / `claude` auth + materializer files (~35%), and several credential files with no mutated coverage at all (`githubToken.ts`, `orgGithubApp.ts`, `resolveCredentials.ts`).
+  - The `Allocator` seam contract (`contracts/allocator.ts`, 37.5%) and several allocators the per-PR suite never exercises under Stryker (`allocatorRouter.ts`, `buildAllocator.ts`, `poolPolicy.ts`, `staticRunnerAllocator.ts`, `runnerStore.ts`, `scaffoldedAllocators.ts` — all 0%).
+  - Strongest today: `manualSshAllocator.ts` (88%), `secretStore.ts` (75%), `githubTokenResolver.ts` (74%).
+  - The workflow `planner` / `checker` / `auditor` report 0% in the full-scope run as a Stryker scoping artifact (per-test coverage attribution fails for these ESM `.js`-import + `@tanren/db`-alias modules). Measured in isolation they score ~56% (planner 66 / checker 60 / auditor 39), so the true scope strength is above the 39.89% headline.
+- **How to run:** `just mutation`. The HTML report lands at `reports/mutation/index.html` and the machine-readable score at `reports/mutation/mutation.json` (both gitignored under `reports/`).
+
 ## What already supports this (don't regress it)
 
 Multi-service boundaries (orchestrator/allocator/dashboard/db over HTTP+SQL+SSH+events); Zod-sourced contracts with drift checks; the `app.request` HTTP test pattern; injectable/mockable seams everywhere; answerer-schema JSON export. The deltas to pursue are §1–§5 above, incrementally — not a big-bang.

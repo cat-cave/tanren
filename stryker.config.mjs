@@ -1,0 +1,93 @@
+/**
+ * Stryker mutation testing — Track C §5 of
+ * docs/architecture/portability-and-longevity.md.
+ *
+ * Mutation testing turns "how strong are the tests" into a number: Stryker
+ * introduces small faults (mutants) into the SCOPED source and checks whether
+ * the existing vitest suite catches them. A mutant that survives is a behavior
+ * the tests do not actually pin.
+ *
+ * SCOPE (highest-value modules only — mutation testing is slow, so it is NOT
+ * run repo-wide and is deliberately kept OUT of the per-PR `just ci` /
+ * `just fast-check` gate). It is an on-demand / nightly check (`just mutation`).
+ *
+ * The scope is the workflow-critical reasoning modules plus the
+ * conformance-covered adapter seams:
+ *   - workflow planner / checker / auditor (the autonomous run's reasoning)
+ *   - engine/credentials/** (credential resolution + materialization)
+ *   - the Allocator / JobQueue / SecretStore seam contracts (conformance-covered)
+ *   - the concrete allocators behind the Allocator seam
+ */
+const config = {
+  testRunner: "vitest",
+  // pnpm's isolated node_modules means the default `@stryker-mutator/*` plugin
+  // glob does not always resolve the runner; declare it explicitly.
+  plugins: ["@stryker-mutator/vitest-runner"],
+  // Stryker manages coverage/reporters internally; it points the vitest runner
+  // at the repo-root config so the same module resolution (@tanren/db alias)
+  // and test discovery apply.
+  vitest: {
+    configFile: "vitest.config.ts",
+    // `related: true` (the default) uses vitest's changed-file heuristic to
+    // pick which test files even load. With this repo's `.js`-extension imports
+    // + the `@tanren/db` alias, that heuristic failed to associate the
+    // planner/checker/auditor tests with their source. Disabling it loads the
+    // full suite so every scoped module's tests actually run.
+    related: false,
+  },
+  // `coverageAnalysis: "all"` (not the faster "perTest") is required here.
+  // perTest asks the runner to attribute each mutant to the specific tests
+  // that cover it; with this repo's ESM `.js`-extension imports + `@tanren/db`
+  // alias, that attribution silently fails for the workflow planner/checker/
+  // auditor modules — every mutant in them is reported as "no coverage" and
+  // the score reads a false 0%, even though plannerLoop.test.ts imports and
+  // exercises them. "all" runs the full suite against each mutant (slower, but
+  // this is an on-demand/nightly check, not the per-PR gate) and yields an
+  // honest score. See the `thresholds` note below for the measured baseline.
+  coverageAnalysis: "all",
+  // ONLY the scoped modules are mutated. Everything else is untouched.
+  mutate: [
+    // Workflow-critical reasoning modules.
+    "services/orchestrator/src/engine/workflow/planner/**/*.ts",
+    "services/orchestrator/src/engine/workflow/checker/**/*.ts",
+    "services/orchestrator/src/engine/workflow/auditor/**/*.ts",
+    // Credential resolution + materialization.
+    "services/orchestrator/src/engine/credentials/**/*.ts",
+    // Conformance-covered adapter seams.
+    "services/orchestrator/src/engine/contracts/allocator.ts",
+    "services/orchestrator/src/engine/contracts/jobQueue.ts",
+    "services/orchestrator/src/engine/contracts/secretStore.ts",
+    // Concrete allocators behind the Allocator seam.
+    "services/orchestrator/src/engine/allocators/**/*.ts",
+  ],
+  reporters: ["html", "json", "clear-text", "progress"],
+  htmlReporter: { fileName: "reports/mutation/index.html" },
+  jsonReporter: { fileName: "reports/mutation/mutation.json" },
+  // Honest baseline ratchet (Track C §5). `break` is set just below the first
+  // measured full-scope mutation score so `just mutation` passes today and any
+  // regression below the floor fails the check. `high`/`low` only color the
+  // report. Production code is intentionally NOT changed to kill mutants in this
+  // PR — raising the floor is follow-up work; the value here is the number plus
+  // the regression gate. See the architecture doc for the measured baseline and
+  // the per-module breakdown.
+  //
+  // Measured full-scope baseline: 39.89% (926 killed + 64 timeout of ~2483
+  // mutants). Note: the planner/checker/auditor modules report 0% in the
+  // full-scope run as a Stryker scoping artifact — when measured in isolation
+  // they score ~56% (planner 66 / checker 60 / auditor 39), so the true scope
+  // strength is higher than 39.89%. The floor is deliberately set against the
+  // number this exact command emits (39.89%) so the gate is reproducible.
+  thresholds: {
+    high: 80,
+    low: 60,
+    break: 38,
+  },
+  // Keep CI logs quiet; the html report carries the detail.
+  logLevel: "info",
+  // Drop generated reports under a single ignored dir.
+  tempDirName: "reports/mutation/.stryker-tmp",
+  concurrency: 4,
+  timeoutMS: 60000,
+};
+
+export default config;

@@ -47,6 +47,15 @@ fast-check: format-check lint types-lint architecture schema-drift state-drift e
 test:
   corepack pnpm run test
 
+# Stryker mutation testing — Track C §5 of
+# docs/architecture/portability-and-longevity.md. Turns test-strength into a
+# number on the workflow-critical + seam modules (planner/checker/auditor,
+# engine/credentials/**, and the Allocator/JobQueue/SecretStore seams). SLOW:
+# deliberately NOT part of `just ci` / `just fast-check`. Run on demand or
+# nightly. Scope + thresholds live in stryker.config.mjs.
+mutation:
+  corepack pnpm run check:mutation
+
 build:
   corepack pnpm run build
 

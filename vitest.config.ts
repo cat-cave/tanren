@@ -93,6 +93,10 @@ export default defineConfig({
     // `**/tests/e2e/**` excludes the dashboard's LOCAL-ONLY Playwright smoke
     // (P2B-0001): it imports `@playwright/test` (not a CI dependency) and is run
     // manually via `pnpm test:e2e`, never through the unit `vitest run` gate.
-    exclude: ["**/node_modules/**", "**/dist/**", "fixtures/**", ".claude/**", "**/tests/e2e/**"],
+    // `reports/**` excludes Stryker mutation-testing artifacts: Stryker copies
+    // the repo into `reports/mutation/.stryker-tmp/sandbox-*` to mutate it, and
+    // an interrupted run can leave those copies behind. Without this exclude the
+    // unit-test gate would discover and (fail to) run the sandboxed test files.
+    exclude: ["**/node_modules/**", "**/dist/**", "fixtures/**", ".claude/**", "**/tests/e2e/**", "reports/**"],
   },
 });
