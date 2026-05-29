@@ -75,8 +75,10 @@ export interface SettingsBodyProps {
   routing: RoutingTable;
   escapeHatches: EscapeHatches;
   orgId: string;
-  /** Org audit-gate flag. Phase 2 default is off (edits land in DB). */
+  /** Org audit-gate flag (P3-0017). On → Bucket-B writes route through a PR. */
   auditGate: boolean;
+  /** The configured tanren-config repo (`owner/name`), when the gate is set. */
+  auditGateRepo?: string;
   /** True after a successful save; renders the saved banner. */
   saved?: boolean;
   /** Org-scoped credential refs (P3-0002), used to populate the binding dropdowns. */
@@ -390,11 +392,26 @@ function AuditGatePanel(props: SettingsBodyProps) {
       <div class="panel-body" style="padding-top:0">
         {props.auditGate ? (
           <div class="audit-caption">
-            edits land as a pr in <code>{props.project.name}/tanren-config</code> · review before merge
+            edits land as a pr in <code>{props.auditGateRepo ?? "your tanren-config repo"}</code> · review before merge ·{" "}
+            <a href="/settings/config">view config gate ↗</a>
           </div>
         ) : (
-          <div class="audit-caption">edits land in the dashboard · no pr required (audit gate off · phase 2 default)</div>
+          <div class="audit-caption">edits land in the dashboard · no pr required (audit gate off)</div>
         )}
+        <form method="post" action="/settings/config/toggle" class="audit-toggle" style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <input type="hidden" name="enable" value={props.auditGate ? "0" : "1"} />
+          {!props.auditGate && (
+            <input
+              name="repo"
+              placeholder="owner/tanren-config"
+              value={props.auditGateRepo ?? ""}
+              style="font-family:var(--font-mono);font-size:12px;padding:5px 8px;border:1px solid var(--line-2);border-radius:6px;background:transparent;color:var(--fg-1)"
+            />
+          )}
+          <button class="btn primary notched" type="submit">
+            {props.auditGate ? "disable audit gate" : "enable audit gate ↗"}
+          </button>
+        </form>
       </div>
     </div>
   );

@@ -66,6 +66,22 @@ describe("OrgConfigV1 parser", () => {
     expect(cfg.auditGateEnabled).toBe(true);
   });
 
+  it("accepts a P3-0017 audit-gate target, defaulting branch/file", () => {
+    const cfg = migrateOrgConfig({
+      version: 1,
+      auditGateEnabled: true,
+      auditGate: { repo: "cat-cave/tanren-config" }
+    });
+    expect(cfg.auditGate?.repo).toBe("cat-cave/tanren-config");
+    expect(cfg.auditGate?.baseBranch).toBe("main");
+    expect(cfg.auditGate?.branchPrefix).toBe("forge");
+    expect(cfg.auditGate?.configFile).toBe("tanren.yaml");
+  });
+
+  it("rejects an audit-gate repo that is not owner/name", () => {
+    expect(() => migrateOrgConfig({ version: 1, auditGate: { repo: "no-slash" } })).toThrow(/.+/);
+  });
+
   it("rejects unknown top-level fields", () => {
     expect(() => migrateOrgConfig({ version: 1, extraKey: true })).toThrow(/.+/);
   });

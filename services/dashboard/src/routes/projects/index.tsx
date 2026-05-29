@@ -280,13 +280,16 @@ export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
       return renderShell(c, ctx, { title: "tanren · routing & limits" }, notFoundBody(projectId));
     }
     const client = clientFor(c, deps);
-    const [detail, orgCredentials] = await Promise.all([
+    const [detail, orgCredentials, org] = await Promise.all([
       client.getProject(ctx.org.id, projectId),
-      client.listOrgCredentials(ctx.org.id)
+      client.listOrgCredentials(ctx.org.id),
+      client.getOrg(ctx.org.id)
     ]);
     const { routing, escapeHatches } = resolveConfig(detail?.config);
     const boundCredentials = detail?.config?.credentials ?? {};
     const saved = c.req.query("saved") === "1";
+    // P3-0017: surface the org audit-gate state so the toggle reflects reality.
+    const auditGate = org?.config.auditGateEnabled === true;
     return renderShell(
       c,
       ctx,
@@ -296,7 +299,8 @@ export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
         routing={routing}
         escapeHatches={escapeHatches}
         orgId={ctx.org.id}
-        auditGate={false}
+        auditGate={auditGate}
+        auditGateRepo={org?.config.auditGate?.repo}
         saved={saved}
         orgCredentials={orgCredentials}
         boundCredentials={boundCredentials}

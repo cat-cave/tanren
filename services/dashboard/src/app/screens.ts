@@ -74,6 +74,11 @@ SCREEN_MOUNTS.push(mountDoraScreen);
 import { mountDiscoveryScreens } from "../routes/discovery/index.js";
 SCREEN_MOUNTS.push(mountDiscoveryScreens);
 
+// P3-0017: tanren-config audit-gate surface (config-as-code PR review) + the
+// Settings toggle. Overrides the /settings/config placeholder.
+import { mountConfigScreen } from "../routes/config/index.js";
+SCREEN_MOUNTS.push(mountConfigScreen);
+
 // P3-0022: candidate inbox (configurable issue sources → Forge triage →
 // accept→discovery / fold / dismiss / close-as-dup). Overrides the /inbox
 // placeholder.

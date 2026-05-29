@@ -49,6 +49,25 @@ export const OrgGithubAppInstallation = z
   .strict();
 export type OrgGithubAppInstallation = z.infer<typeof OrgGithubAppInstallation>;
 
+// P3-0017: tanren-config audit-gate target. When the gate is ON
+// (`auditGateEnabled`), Bucket-B config writes (routing/limits) do not apply
+// to the DB directly — they are rendered as a `configFile` diff and opened as a
+// PR in this separate `repo` (the DB stays source of truth; apply happens on
+// PR merge). The whole block lives in `organizations.config` JSONB — there is
+// NO dedicated table and NO migration (same pattern as `github_app`). The repo
+// is referenced as `owner/name`; `baseBranch` is the PR base, `branchPrefix`
+// names the head branch (`<branchPrefix>/<slug>`). `configFile` is the path the
+// diff is written to (default `tanren.yaml`).
+export const OrgAuditGateTarget = z
+  .object({
+    repo: z.string().regex(/^[^/\s]+\/[^/\s]+$/, "expected owner/name"),
+    baseBranch: z.string().min(1).default("main"),
+    branchPrefix: z.string().min(1).default("forge"),
+    configFile: z.string().min(1).default("tanren.yaml")
+  })
+  .strict();
+export type OrgAuditGateTarget = z.infer<typeof OrgAuditGateTarget>;
+
 export const OrgConfigV1 = z
   .object({
     version: z.literal(1),
@@ -58,6 +77,7 @@ export const OrgConfigV1 = z
     notificationTargets: z.array(NotificationTargetRef).default([]),
     forgePersona: ForgePersona.default(defaultForgePersona),
     auditGateEnabled: z.boolean().default(false),
+    auditGate: OrgAuditGateTarget.optional(),
     defaultCredentials: OrgDefaultCredentials.optional(),
     github_app: OrgGithubAppInstallation.optional()
   })
