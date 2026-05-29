@@ -1,119 +1,134 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  createDraftPrCommand,
-  createProjectCommand,
-  createSpecCommand,
-  importCodexCredentialCommand,
-  importGithubCredentialCommand,
-  pollCiCommand,
-  runSpecCommand,
-  status,
-} from "../src/main.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type * as MainModuleNs from "../src/main.js";
+import { captureStdout } from "./helpers/captureOutput.js";
+import { startStubServer, type StubServer } from "./helpers/stubServer.js";
+
+// These tests drive the real CLI handlers end-to-end against a real local HTTP
+// listener (the stub orchestrator), then assert on the OBSERVABLE outcome — the
+// JSON the command prints — and on the request the server actually received
+// (method / path / parsed body), by value. No `fetch` spy or `console.log`
+// call-count assertions: see docs/contracts/architecture-checks.md
+// (Behavior-based tests).
+
+// `httpClient.ts` reads TANREN_ORCHESTRATOR_URL at module load, so the env must
+// be set before the command module is imported. Each test imports the handlers
+// fresh after the stub URL is known via `loadMain()`.
+type MainModule = typeof MainModuleNs;
+
+let server: StubServer;
+let authDir = "";
+
+async function loadMain(): Promise<MainModule> {
+  // Re-import so the module-level `orchestratorUrl` is recomputed from the env
+  // pointed at this test's freshly-listening stub server.
+  vi.resetModules();
+  return import("../src/main.js");
+}
+
+beforeEach(async () => {
+  // Isolate from any developer auth file so no bearer header leaks into the
+  // recorded requests (keeps the request-contract assertions hermetic).
+  authDir = await mkdtemp(join(tmpdir(), "tanren-cli-auth-"));
+  process.env.TANREN_AUTH_FILE = join(authDir, "missing-auth.json");
+});
+
+afterEach(async () => {
+  await server?.close();
+  await rm(authDir, { recursive: true, force: true });
+  delete process.env.TANREN_ORCHESTRATOR_URL;
+  delete process.env.TANREN_AUTH_FILE;
+});
+
+async function withStub(responseBody: unknown): Promise<MainModule> {
+  server = await startStubServer(responseBody);
+  process.env.TANREN_ORCHESTRATOR_URL = server.url;
+  return loadMain();
+}
 
 describe("cli package", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-  });
-
   it("has a test harness", () => {
     expect(process.version.startsWith("v")).toBe(true);
   });
 
   it("prints run status with ordered tasks", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => {
-        return new Response(
-          JSON.stringify({
-            run: { run_id: "run_1", status: "done" },
-            tasks: [
-              { task_id: "task_plan", kind: "plan", status: "done" },
-              { task_id: "task_write", kind: "write", status: "done" },
-            ],
-            events: [],
-            costs: [],
-          }),
-          { status: 200 },
-        );
-      }),
-    );
-    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const runState = {
+      run: { run_id: "run_1", status: "done" },
+      tasks: [
+        { task_id: "task_plan", kind: "plan", status: "done" },
+        { task_id: "task_write", kind: "write", status: "done" },
+      ],
+      events: [],
+      costs: [],
+    };
+    const { status } = await withStub(runState);
 
-    await status("run_1");
+    const out = await captureStdout(() => status("run_1"));
 
-    expect(log).toHaveBeenCalledWith(
-      JSON.stringify(
-        {
-          run: { run_id: "run_1", status: "done" },
-          tasks: [
-            { task_id: "task_plan", kind: "plan", status: "done" },
-            { task_id: "task_write", kind: "write", status: "done" },
-          ],
-          events: [],
-          costs: [],
-        },
-        null,
-        2,
-      ),
-    );
+    // Observable outcome: the command renders the run state it fetched.
+    expect(out.json()).toEqual(runState);
+    // Request contract: it read the run by id over GET.
+    expect(server.lastRequest().method).toBe("GET");
+    expect(server.lastRequest().path).toBe("/runs/run_1");
   });
 
   it("creates projects with parsed optional config", async () => {
-    const fetch = stubJsonFetch({
+    const created = {
       projectId: "project_1",
       name: "Tanren",
       repoUrl: "https://github.com/cat-cave/tanren-fixture-easy",
       defaultBranch: "main",
-    });
-    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    };
+    const { createProjectCommand } = await withStub(created);
 
-    await createProjectCommand([
-      "--name",
-      "Tanren",
-      "--repo-url",
-      "https://github.com/cat-cave/tanren-fixture-easy",
-      "--config-json",
-      '{"budgetUsd":25}',
-    ]);
-
-    expect(fetch).toHaveBeenCalledWith(
-      "http://localhost:3100/projects",
-      expect.objectContaining({
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: "Tanren",
-          repoUrl: "https://github.com/cat-cave/tanren-fixture-easy",
-          config: { budgetUsd: 25 },
-        }),
-      }),
+    const out = await captureStdout(() =>
+      createProjectCommand([
+        "--name",
+        "Tanren",
+        "--repo-url",
+        "https://github.com/cat-cave/tanren-fixture-easy",
+        "--config-json",
+        '{"budgetUsd":25}',
+      ]),
     );
-    expect(log).toHaveBeenCalledWith(expect.stringContaining('"projectId": "project_1"'));
+
+    expect(out.json()).toEqual(created);
+    const sent = server.lastRequest();
+    expect(sent.method).toBe("POST");
+    expect(sent.path).toBe("/projects");
+    expect(sent.json).toMatchObject({
+      name: "Tanren",
+      repoUrl: "https://github.com/cat-cave/tanren-fixture-easy",
+      config: { budgetUsd: 25 },
+    });
   });
 
   it("creates specs with repeated acceptance criteria and dependencies", async () => {
-    const fetch = stubJsonFetch({ specId: "spec_1", projectId: "project_1" });
+    const { createSpecCommand } = await withStub({ specId: "spec_1", projectId: "project_1" });
 
-    await createSpecCommand([
-      "--project-id",
-      "project_1",
-      "--title",
-      "Add health check",
-      "--description",
-      "Add a health endpoint",
-      "--acceptance",
-      "GET /healthz returns ok",
-      "--acceptance",
-      "Tests pass",
-      "--depends-on",
-      "spec_0",
-    ]);
+    const out = await captureStdout(() =>
+      createSpecCommand([
+        "--project-id",
+        "project_1",
+        "--title",
+        "Add health check",
+        "--description",
+        "Add a health endpoint",
+        "--acceptance",
+        "GET /healthz returns ok",
+        "--acceptance",
+        "Tests pass",
+        "--depends-on",
+        "spec_0",
+      ]),
+    );
 
-    expect(JSON.parse(String(fetch.mock.calls[0]?.[1]?.body))).toEqual({
+    expect(out.json()).toEqual({ specId: "spec_1", projectId: "project_1" });
+    const sent = server.lastRequest();
+    expect(sent.path).toBe("/specs");
+    expect(sent.json).toEqual({
       projectId: "project_1",
       title: "Add health check",
       description: "Add a health endpoint",
@@ -123,108 +138,90 @@ describe("cli package", () => {
   });
 
   it("creates queued runs from a persisted spec", async () => {
-    const fetch = stubJsonFetch({ runId: "run_1", specId: "spec_1", status: "queued" });
+    const queued = { runId: "run_1", specId: "spec_1", status: "queued" };
+    const { runSpecCommand } = await withStub(queued);
 
-    await runSpecCommand(["--spec-id", "spec_1", "--branch", "tanren/custom"]);
+    const out = await captureStdout(() => runSpecCommand(["--spec-id", "spec_1", "--branch", "tanren/custom"]));
 
-    expect(fetch).toHaveBeenCalledWith(
-      "http://localhost:3100/specs/spec_1/runs",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({ trigger: "cli", branch: "tanren/custom" }),
-      }),
-    );
+    expect(out.json()).toEqual(queued);
+    const sent = server.lastRequest();
+    expect(sent.method).toBe("POST");
+    expect(sent.path).toBe("/specs/spec_1/runs");
+    expect(sent.json).toEqual({ trigger: "cli", branch: "tanren/custom" });
   });
 
   it("imports Codex credentials from an explicit file path", async () => {
     const dir = await mkdtemp(join(tmpdir(), "tanren-cli-"));
     const authPath = join(dir, "auth.json");
     const authJson = JSON.stringify({ tokens: { access_token: "secret-token" } });
-    const fetch = stubJsonFetch({
-      credentialKind: "codex_chatgpt_auth",
-      ref: "credential/codex/dev",
-      redacted: true,
-    });
+    const imported = { credentialKind: "codex_chatgpt_auth", ref: "credential/codex/dev", redacted: true };
+    const { importCodexCredentialCommand } = await withStub(imported);
 
     try {
       await writeFile(authPath, authJson, "utf8");
-      await importCodexCredentialCommand(["--ref", "credential/codex/dev", "--auth-json-file", authPath]);
+      const out = await captureStdout(() =>
+        importCodexCredentialCommand(["--ref", "credential/codex/dev", "--auth-json-file", authPath]),
+      );
+      expect(out.json()).toEqual(imported);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
 
-    expect(fetch).toHaveBeenCalledWith(
-      "http://localhost:3100/credentials/codex/import",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({ ref: "credential/codex/dev", authJson }),
-      }),
-    );
+    const sent = server.lastRequest();
+    expect(sent.method).toBe("POST");
+    expect(sent.path).toBe("/credentials/codex/import");
+    expect(sent.json).toEqual({ ref: "credential/codex/dev", authJson });
   });
 
   it("imports GitHub credentials from an explicit file path", async () => {
     const dir = await mkdtemp(join(tmpdir(), "tanren-cli-"));
     const tokenPath = join(dir, "github-token");
-    const fetch = stubJsonFetch({
-      credentialKind: "github_token",
-      ref: "credential/github/dev",
-      redacted: true,
-    });
+    const imported = { credentialKind: "github_token", ref: "credential/github/dev", redacted: true };
+    const { importGithubCredentialCommand } = await withStub(imported);
 
     try {
       await writeFile(tokenPath, "ghp_secretToken", "utf8");
-      await importGithubCredentialCommand(["--ref", "credential/github/dev", "--token-file", tokenPath]);
+      const out = await captureStdout(() =>
+        importGithubCredentialCommand(["--ref", "credential/github/dev", "--token-file", tokenPath]),
+      );
+      expect(out.json()).toEqual(imported);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
 
-    expect(fetch).toHaveBeenCalledWith(
-      "http://localhost:3100/credentials/github/import",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({ ref: "credential/github/dev", token: "ghp_secretToken" }),
-      }),
-    );
+    const sent = server.lastRequest();
+    expect(sent.method).toBe("POST");
+    expect(sent.path).toBe("/credentials/github/import");
+    expect(sent.json).toEqual({ ref: "credential/github/dev", token: "ghp_secretToken" });
   });
 
   it("requests draft PR creation for a run", async () => {
-    const fetch = stubJsonFetch({ prUrl: "https://github.com/cat-cave/repo/pull/1" });
+    const draftPr = { prUrl: "https://github.com/cat-cave/repo/pull/1" };
+    const { createDraftPrCommand } = await withStub(draftPr);
 
-    await createDraftPrCommand(["--run-id", "run_1", "--github-credential-ref", "credential/github/dev"]);
-
-    expect(fetch).toHaveBeenCalledWith(
-      "http://localhost:3100/runs/run_1/github/draft-pr",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({
-          githubCredentialRef: "credential/github/dev",
-        }),
-      }),
+    const out = await captureStdout(() =>
+      createDraftPrCommand(["--run-id", "run_1", "--github-credential-ref", "credential/github/dev"]),
     );
+
+    expect(out.json()).toEqual(draftPr);
+    const sent = server.lastRequest();
+    expect(sent.method).toBe("POST");
+    expect(sent.path).toBe("/runs/run_1/github/draft-pr");
+    expect(sent.json).toMatchObject({ githubCredentialRef: "credential/github/dev" });
   });
 
   it("requests CI polling for a run", async () => {
-    const fetch = stubJsonFetch({ runId: "run_1", status: "pending", reason: "no_checks" });
+    const ciStatus = { runId: "run_1", status: "pending", reason: "no_checks" };
+    const { pollCiCommand } = await withStub(ciStatus);
 
-    await pollCiCommand(["--run-id", "run_1", "--github-credential-ref", "credential/github/dev"]);
-
-    expect(fetch).toHaveBeenCalledWith(
-      "http://localhost:3100/runs/run_1/ci/poll",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({
-          githubCredentialRef: "credential/github/dev",
-        }),
-      }),
+    const out = await captureStdout(() =>
+      pollCiCommand(["--run-id", "run_1", "--github-credential-ref", "credential/github/dev"]),
     );
+
+    expect(out.json()).toEqual(ciStatus);
+    const sent = server.lastRequest();
+    expect(sent.method).toBe("POST");
+    expect(sent.path).toBe("/runs/run_1/ci/poll");
+    expect(sent.json).toMatchObject({ githubCredentialRef: "credential/github/dev" });
   });
 });
-
-function stubJsonFetch(body: unknown) {
-  const fetch = vi.fn<typeof globalThis.fetch>(
-    async (_url: string | URL | Request, _init?: RequestInit) => new Response(JSON.stringify(body), { status: 200 }),
-  );
-  vi.stubGlobal("fetch", fetch);
-  vi.spyOn(console, "log").mockImplementation(() => undefined);
-  return fetch;
-}

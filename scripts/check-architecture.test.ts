@@ -7,6 +7,7 @@ import {
   checkCrossPackageDeepImports,
   checkCyclomaticComplexity,
   checkMaxParams,
+  checkNoMockOnlyTests,
   COMPLEXITY_CAP,
   MAX_PARAMS_CAP,
 } from "./check-architecture-structure.mjs";
@@ -222,5 +223,51 @@ describe("structural architecture checks", () => {
       text: 'import { y } from "./engine/state/index.js";\n',
     };
     expect(checkCrossPackageDeepImports([publicEntry, intraPackage])).toEqual([]);
+  });
+
+  it("flags a test block whose only assertion is a mock-call check", () => {
+    const text = [
+      'it("calls the collaborator", () => {',
+      "  doThing();",
+      "  expect(spy).toHaveBeenCalledWith(1);",
+      "});",
+      "",
+    ].join("\n");
+    const flagged = checkNoMockOnlyTests([{ file: "pkg/foo.test.ts", text }]);
+    expect(flagged.map((item) => item.rule)).toEqual(["no-mock-only-tests"]);
+  });
+
+  it("passes a block that pairs a mock-call check with an outcome assertion", () => {
+    const text = [
+      'it("returns the computed value", () => {',
+      "  const result = doThing();",
+      "  expect(spy).toHaveBeenCalled();",
+      "  expect(result).toBe(42);",
+      "});",
+      "",
+    ].join("\n");
+    expect(checkNoMockOnlyTests([{ file: "pkg/foo.test.ts", text }])).toEqual([]);
+  });
+
+  it("treats async arrow and function-expression blocks the same", () => {
+    const arrow = 'it("a", async () => {\n  expect(spy).toHaveBeenCalled();\n});\n';
+    const fn = 'it("b", function () {\n  expect(spy.mock.calls).toHaveLength(1);\n});\n';
+    // The function-expression block pairs the mock check with toHaveLength (an
+    // outcome matcher), so only the arrow block is flagged.
+    const flagged = checkNoMockOnlyTests([{ file: "pkg/foo.test.ts", text: arrow + fn }]);
+    expect(flagged).toHaveLength(1);
+    expect(flagged[0]?.rule).toBe("no-mock-only-tests");
+  });
+
+  it("freezes module mocking: any vi.mock( is flagged", () => {
+    const text = 'vi.mock("../service.js");\nit("x", () => {\n  expect(1).toBe(1);\n});\n';
+    const flagged = checkNoMockOnlyTests([{ file: "pkg/foo.test.ts", text }]);
+    expect(flagged.map((item) => item.rule)).toEqual(["no-mock-only-tests"]);
+    expect(flagged[0]?.message).toContain("vi.mock");
+  });
+
+  it("ignores non-test files", () => {
+    const text = "export function f() {\n  expect(spy).toHaveBeenCalled();\n}\n";
+    expect(checkNoMockOnlyTests([{ file: "pkg/foo.ts", text }])).toEqual([]);
   });
 });

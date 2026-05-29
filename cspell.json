@@ -57,6 +57,7 @@
     "prettier",
     "cspell",
     "commitlint",
+    "implementationy",
     "nounset",
     "errexit",
     "pipefail",
