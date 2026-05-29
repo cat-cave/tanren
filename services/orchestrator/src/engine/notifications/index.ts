@@ -24,6 +24,18 @@ export {
   GithubChecksChannel,
   type GithubChecksChannelDeps
 } from "./channels/githubChecks.js";
+export { TeamsChannel, type TeamsChannelDeps } from "./channels/teams.js";
+export { DiscordChannel, type DiscordChannelDeps } from "./channels/discord.js";
+export { WebhookChannel, type WebhookChannelDeps } from "./channels/webhook.js";
+export {
+  EmailChannel,
+  HttpEmailTransport,
+  type EmailChannelDeps,
+  type EmailTransport,
+  type EmailMessage
+} from "./channels/email.js";
+export { TwilioChannel, type TwilioChannelDeps } from "./channels/twilio.js";
+export { PagerDutyChannel, type PagerDutyChannelDeps } from "./channels/pagerduty.js";
 export { StubChannel } from "./channels/stub.js";
 
 export {

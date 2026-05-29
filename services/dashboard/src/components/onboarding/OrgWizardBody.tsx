@@ -342,7 +342,7 @@ export function OrgWizardBody(props: OrgWizardBodyProps) {
             eyebrow="step 3 · notifications"
             title="where should"
             em="we tell you"
-            sub="multi-channel routing per event. set the org defaults; devs layer personal overrides. only ntfy delivers in v0."
+            sub="multi-channel routing per event. set the org defaults; devs layer personal overrides. all channels deliver once configured."
           />
           <NotificationsBody matrix={props.matrix} />
         </>

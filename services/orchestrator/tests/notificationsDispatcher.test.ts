@@ -214,6 +214,33 @@ describe("NotificationDispatcher", () => {
     expect(client.dispatches[0]?.channel).toBe("github_checks");
   });
 
+  it.each(["teams", "discord", "email", "twilio", "pagerduty", "webhook"] as const)(
+    "routes an event to the wired %s channel",
+    async (kind) => {
+      const client = new NotificationMemoryClient();
+      await seedOrgTarget(client, kind);
+      await seedRoute(client, {
+        id: `r_${kind}`,
+        targetId: `target_${kind}`,
+        eventName: "run.failed"
+      });
+
+      const channel = new CapturingChannel(kind);
+      const dispatcher = new NotificationDispatcher({
+        query: client as unknown as pg.Pool,
+        channels: baseRegistry({ [kind]: channel }),
+        now: () => new Date("2026-01-05T12:00:00Z")
+      });
+      await dispatcher.onEvent(
+        { eventType: "run.failed", payload: { status: "failed", message: "x" } },
+        { orgId: "org_1", actorUserId: null }
+      );
+      expect(channel.calls).toHaveLength(1);
+      expect(client.dispatches[0]?.status).toBe("sent");
+      expect(client.dispatches[0]?.channel).toBe(kind);
+    }
+  );
+
   it("records failed when a wired channel throws and does not propagate", async () => {
     const client = new NotificationMemoryClient();
     await seedOrgTarget(client, "ntfy");

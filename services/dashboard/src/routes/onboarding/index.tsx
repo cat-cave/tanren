@@ -156,7 +156,7 @@ export function mountOnboardingScreens(app: Hono, deps: ShellDeps): void {
               <div class="title">
                 where should <em>we tell you</em>
               </div>
-              <div class="sub">org defaults + dev overrides against the P2A-0017 schema · only ntfy delivers in v0 (other channels say so).</div>
+              <div class="sub">org defaults + dev overrides against the P2A-0017 schema · all channels deliver (configure each channel's credentials).</div>
             </div>
           </div>
           <NotificationsBody matrix={matrix} notice={noticeOf(c)} />
