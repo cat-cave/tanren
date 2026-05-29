@@ -27,7 +27,7 @@ export type HarnessRole = "write" | "answer";
 
 // The provider clis that are real harnesses (the WriterAdapter.cli union minus
 // "fake", which is wired directly in tests and never selected through routing).
-export type HarnessCli = "codex" | "claude" | "opencode";
+export type HarnessCli = "codex" | "claude" | "opencode" | "aider";
 
 // A typed capability record per harness cli. `structuredOutput` is the
 // load-bearing field: it is exactly equivalent to "answer" being present in
@@ -44,13 +44,16 @@ export interface HarnessCapability {
 
 // The capability table. Two capability classes today:
 //   - structured-capable (Writer + Answerer): codex, claude
-//   - writer-only:                            opencode
-// This MUST reproduce today's selection behavior (see the conformance test
-// asserting the derived sets equal the historical SELECTABLE_* arrays).
+//   - writer-only:                            opencode, aider
+// aider has no structured-JSON output channel, so it is writer-only (it can
+// edit files but cannot serve the `answer` role). This MUST reproduce today's
+// selection behavior (see the conformance test asserting the derived sets
+// equal the historical SELECTABLE_* arrays).
 export const HARNESS_CAPABILITIES: readonly HarnessCapability[] = [
   { cli: "codex", roles: ["write", "answer"], structuredOutput: true },
   { cli: "claude", roles: ["write", "answer"], structuredOutput: true },
-  { cli: "opencode", roles: ["write"], structuredOutput: false }
+  { cli: "opencode", roles: ["write"], structuredOutput: false },
+  { cli: "aider", roles: ["write"], structuredOutput: false }
 ] as const;
 
 function capabilitiesFor(role: HarnessRole): readonly HarnessCli[] {

@@ -259,7 +259,7 @@ interface FixtureCostInput {
   recorder: CostRecorder;
   context: Phase1FixtureRunContext;
   taskId: string;
-  cli: "codex" | "claude" | "opencode" | "fake";
+  cli: "codex" | "claude" | "opencode" | "aider" | "fake";
   model: string;
   authRef: string;
   tokenUsage: TokenUsage | undefined;
