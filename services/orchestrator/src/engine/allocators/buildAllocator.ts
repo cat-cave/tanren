@@ -1,16 +1,12 @@
 import type pg from "pg";
 import type { Allocator } from "../contracts/allocator.js";
 import { AllocatorRouter, type AllocatorRegistry } from "./allocatorRouter.js";
+import { DigitalOceanAllocator } from "./digitalOceanAllocator.js";
 import { HetznerAllocator } from "./hetznerAllocator.js";
 import { ManualSshAllocator, type ManualSshHost } from "./manualSshAllocator.js";
 import { AllocatorRoutingConfig, type AllocatorKind } from "./poolPolicy.js";
 import { PgRunnerStore, type RunnerStore } from "./runnerStore.js";
-import {
-  AwsEc2Allocator,
-  DigitalOceanAllocator,
-  KubernetesAllocator,
-  UnconfiguredAllocator
-} from "./scaffoldedAllocators.js";
+import { AwsEc2Allocator, KubernetesAllocator, UnconfiguredAllocator } from "./scaffoldedAllocators.js";
 import { SidecarHttpAllocator } from "./sidecarHttpAllocator.js";
 import { StaticRunnerAllocator } from "./staticRunnerAllocator.js";
 
@@ -71,6 +67,28 @@ function buildHetzner(runners: RunnerStore): HetznerAllocator {
   });
 }
 
+function buildDigitalOcean(runners: RunnerStore): DigitalOceanAllocator {
+  // The token is a resolved secret here. In production it is sourced from a
+  // Vault ref by the operator's secret tooling, never hardcoded.
+  const apiToken = env("TANREN_DO_API_TOKEN");
+  const hostKeyFingerprint = env("TANREN_DO_HOST_FINGERPRINT");
+  if (apiToken === undefined || hostKeyFingerprint === undefined) {
+    throw new Error(
+      "digitalocean allocator requires TANREN_DO_API_TOKEN and TANREN_DO_HOST_FINGERPRINT"
+    );
+  }
+  return new DigitalOceanAllocator({
+    apiToken,
+    hostKeyFingerprint,
+    region: env("TANREN_DO_REGION") ?? "nyc3",
+    size: env("TANREN_DO_SIZE") ?? "s-1vcpu-1gb",
+    image: env("TANREN_DO_IMAGE") ?? "docker-20-04",
+    sshKeys: env("TANREN_DO_SSH_KEYS")?.split(",").map((s) => s.trim()),
+    sshUsername: env("TANREN_DO_SSH_USER") ?? "root",
+    runners
+  });
+}
+
 /**
  * Builds the single allocator kind named by `kind`, or throws for the
  * scaffolded kinds (which only exist behind the router registry). This is the
@@ -84,6 +102,8 @@ function buildSingle(kind: string, runners: RunnerStore): Allocator {
       return buildManualSsh(runners);
     case "hetzner":
       return buildHetzner(runners);
+    case "digitalocean":
+      return buildDigitalOcean(runners);
     case "sidecar":
       return buildSidecar(runners);
     default:
@@ -116,7 +136,9 @@ function buildRegistry(runners: RunnerStore, config: AllocatorRoutingConfig): Al
       case "hetzner":
         return usedKinds.has("hetzner") ? buildHetzner(runners) : new UnconfiguredAllocator("hetzner");
       case "digitalocean":
-        return new DigitalOceanAllocator();
+        return usedKinds.has("digitalocean")
+          ? buildDigitalOcean(runners)
+          : new UnconfiguredAllocator("digitalocean");
       case "aws_ec2":
         return new AwsEc2Allocator();
       case "kubernetes":

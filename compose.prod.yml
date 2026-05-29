@@ -20,6 +20,9 @@
 ##   CLOUDFLARED_TUNNEL_TOKEN            Cloudflare Tunnel token. Required only when running the `tunnel` profile
 ##                                       (`docker compose -f compose.prod.yml --profile tunnel up`). Never commit it;
 ##                                       supply via env / secret manager. See docs/operator-guide/deploy.md.
+##   TANREN_OIDC_PRESET                  Turnkey claim-mapping preset (e.g. `authentik`). Fills Authentik's standard
+##                                       claim shape + scopes so you only supply issuer + client id/secret. Optional;
+##                                       explicit TANREN_OIDC_* envs override it. See docs/operator-guide/oidc-authentik.md.
 ##   TANREN_OIDC_ISSUER                  OIDC issuer URL (e.g. https://authentik.example.com/application/o/tanren).
 ##   TANREN_OIDC_CLIENT_ID               OIDC confidential-client id. Registers the `oidc` provider when set with the secret.
 ##   TANREN_OIDC_CLIENT_SECRET           OIDC confidential-client secret.
@@ -91,6 +94,7 @@ services:
       ## issuer + client id + client secret are set; absent values leave
       ## github_oauth behavior unchanged. Defaults to empty so the prod profile
       ## boots with GitHub OAuth only when these are not supplied.
+      TANREN_OIDC_PRESET: ${TANREN_OIDC_PRESET:-}
       TANREN_OIDC_ISSUER: ${TANREN_OIDC_ISSUER:-}
       TANREN_OIDC_CLIENT_ID: ${TANREN_OIDC_CLIENT_ID:-}
       TANREN_OIDC_CLIENT_SECRET: ${TANREN_OIDC_CLIENT_SECRET:-}
