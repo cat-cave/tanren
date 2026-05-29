@@ -76,7 +76,9 @@ export function ArrivalStep(props: ArrivalStepProps) {
 
         <div class="gf-panel" data-arrival-audits>
           <div class="ph">
-            scheduled <em>audits</em>
+            <a href="/audits" style="color:inherit;text-decoration:none">
+              scheduled <em>audits</em> ↗
+            </a>
           </div>
           {AUDITS.map((a) => (
             <div class={`gf-row${a.on ? " on" : ""}`}>

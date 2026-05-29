@@ -92,6 +92,12 @@ SCREEN_MOUNTS.push(mountInboxScreens);
 import { mountGreenfieldOnboarding } from "../routes/onboarding/new/index.js";
 SCREEN_MOUNTS.push(mountGreenfieldOnboarding);
 
+// P3-0021: scheduled audits — the recurring read-only Answerer-pass library
+// (job library + window-fill bar + forge-recommended coverage + composer).
+// Overrides the /audits placeholder; findings auto-route to the inbox.
+import { mountAuditScreens } from "../routes/audits/index.js";
+SCREEN_MOUNTS.push(mountAuditScreens);
+
 /** Run every registered screen mount. Called BEFORE `mountShell`. */
 export function mountScreens(app: Hono, deps: ShellDeps): void {
   for (const mount of SCREEN_MOUNTS) {
