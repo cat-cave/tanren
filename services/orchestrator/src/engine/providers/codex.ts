@@ -14,6 +14,10 @@ export interface CodexWriterDependencies {
   credentialRef: string;
   runId: string;
   codexHomeBaseDir?: string;
+  // SaaS Tier-B #5: optional managed-endpoint base URL. When set (managed run),
+  // codex is pointed at this OpenAI-compatible endpoint (the platform OpenRouter
+  // shell) via OPENAI_BASE_URL. Absent ⇒ BYOK: no override (unchanged).
+  endpointBaseUrl?: string;
 }
 
 export interface CodexEventTelemetry {
@@ -73,7 +77,11 @@ export function createCodexWriter(dependencies: CodexWriterDependencies): Writer
         opts.timeoutMs,
       );
       const codex = await dependencies.ssh.run(dependencies.target, {
-        command: buildCodexExecCommand({ codexHome: auth.CODEX_HOME, workspace: opts.workspace }),
+        command: buildCodexExecCommand({
+          codexHome: auth.CODEX_HOME,
+          workspace: opts.workspace,
+          endpointBaseUrl: dependencies.endpointBaseUrl,
+        }),
         stdin: opts.prompt,
         timeoutMs: opts.timeoutMs,
       });
@@ -148,6 +156,7 @@ export function createCodexAnswerer<TOutput>(dependencies: CodexAnswererDependen
           workspace,
           schemaPath,
           outputPath,
+          endpointBaseUrl: dependencies.endpointBaseUrl,
         }),
         stdin: opts.prompt,
         timeoutMs: opts.timeoutMs,
@@ -206,9 +215,14 @@ async function persistRefreshedCodexAuthBestEffort(input: {
   }
 }
 
-export function buildCodexExecCommand(input: { codexHome: string; workspace: string }): string {
+export function buildCodexExecCommand(input: {
+  codexHome: string;
+  workspace: string;
+  endpointBaseUrl?: string;
+}): string {
   return [
     `CODEX_HOME=${quoteSshShellArg(input.codexHome)}`,
+    ...codexEndpointEnv(input.endpointBaseUrl),
     "codex exec",
     "--sandbox workspace-write",
     "--json",
@@ -224,9 +238,11 @@ export function buildCodexAnswererExecCommand(input: {
   workspace: string;
   schemaPath: string;
   outputPath: string;
+  endpointBaseUrl?: string;
 }): string {
   return [
     `CODEX_HOME=${quoteSshShellArg(input.codexHome)}`,
+    ...codexEndpointEnv(input.endpointBaseUrl),
     "codex exec",
     "--sandbox read-only",
     "--json",
@@ -241,6 +257,13 @@ export function buildCodexAnswererExecCommand(input: {
     quoteSshShellArg(input.outputPath),
     "-",
   ].join(" ");
+}
+
+// SaaS Tier-B #5: the managed-endpoint env override codex reads. When a managed
+// run resolves the platform endpoint, we set OPENAI_BASE_URL so codex's API
+// calls go to the platform OpenRouter shell. BYOK ⇒ no override (unchanged).
+function codexEndpointEnv(endpointBaseUrl?: string): string[] {
+  return endpointBaseUrl === undefined ? [] : [`OPENAI_BASE_URL=${quoteSshShellArg(endpointBaseUrl)}`];
 }
 
 export function parseCodexJsonlTelemetry(stdout: string): CodexEventTelemetry {

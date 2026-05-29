@@ -45,6 +45,13 @@ export interface AdapterSelectorDependencies {
   ssh: SshSubstrate;
   target: SshTarget;
   runId: string;
+  // SaaS Tier-B #5: optional OpenAI-compatible base URL for a MANAGED run. When
+  // present (resolveCredentialsForRun returned `providerMode === "managed"`),
+  // every adapter this selector builds is pointed at this endpoint (the platform
+  // OpenRouter shell). Absent ⇒ BYOK: adapters use their native endpoints
+  // (unchanged). It is run-wide, not per-chain-entry, because the toggle lives
+  // at the org/project layer, not the routing chain.
+  endpointBaseUrl?: string;
 }
 
 export class UnsupportedProviderError extends Error {
@@ -67,6 +74,7 @@ export function buildWriterAdapter(deps: AdapterSelectorDependencies, entry: Rou
     target: deps.target,
     runId: deps.runId,
     credentialRef: entry.authRef,
+    endpointBaseUrl: deps.endpointBaseUrl,
   };
   // The harness capability table gates role-eligibility (harnessCapability.ts):
   // a cli the table does not mark "write"-capable is rejected before we try to
@@ -107,6 +115,7 @@ export function buildAnswererAdapter<TOutput>(
     target: deps.target,
     runId: deps.runId,
     credentialRef: entry.authRef,
+    endpointBaseUrl: deps.endpointBaseUrl,
   };
   // Answerer-eligibility is the harness's structured-output capability: a cli
   // not marked "answer"-capable in the table (e.g. opencode, writer-only) is

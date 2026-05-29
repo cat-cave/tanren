@@ -138,6 +138,48 @@ describe("aider writer adapter", () => {
     expect(command).toContain("--message 'do it'");
   });
 
+  // SaaS Tier-B #5: managed mode points aider at the OpenRouter endpoint with
+  // the platform key via OPENAI_API_KEY. Asserts the COMMAND outcome, not mocks.
+  it("points aider at the managed endpoint with the OpenAI key when an override is set", async () => {
+    const ssh = new ScriptedSsh([ok(`${baselineSha}\n`), ok(""), ok(""), ok(""), ok("")]);
+    const secrets = new InMemorySecretStore();
+    await secrets.put({ ref: "credential/openrouter/platform/default", value: "or-platform-key" });
+    const writer = createAiderWriter({
+      secrets,
+      ssh,
+      target,
+      credentialRef: "credential/openrouter/platform/default",
+      runId: "run_aider_managed",
+      endpointBaseUrl: "https://openrouter.ai/api/v1",
+    });
+    await writer.runWriter({ prompt: "edit", workspace: "/workspace/repo", timeoutMs: 1000 });
+    const aiderCommand = ssh.commands[1]?.command.command ?? "";
+    expect(aiderCommand).toContain("--openai-api-base 'https://openrouter.ai/api/v1'");
+    expect(aiderCommand).toContain("OPENAI_API_KEY='or-platform-key'");
+    expect(aiderCommand).not.toContain("ANTHROPIC_API_KEY=");
+  });
+
+  it("omits --openai-api-base for a BYOK run (no override)", () => {
+    const command = buildAiderWriterCommand({
+      apiKeyEnvVar: "ANTHROPIC_API_KEY",
+      apiKey: "k",
+      model: "anthropic/x",
+      prompt: "do it",
+    });
+    expect(command).not.toContain("--openai-api-base");
+  });
+
+  it("adds --openai-api-base when an endpoint is passed to the command builder", () => {
+    const command = buildAiderWriterCommand({
+      apiKeyEnvVar: "OPENAI_API_KEY",
+      apiKey: "k",
+      model: "anthropic/x",
+      prompt: "do it",
+      openaiApiBase: "https://openrouter.ai/api/v1",
+    });
+    expect(command).toContain("--openai-api-base 'https://openrouter.ai/api/v1'");
+  });
+
   it("scrapes aider's human-readable token summary into disjoint buckets", () => {
     const telemetry = parseAiderTelemetry("Applied edit\nTokens: 2,500 sent, 800 received\n");
     expect(telemetry.tokenUsage).toEqual({

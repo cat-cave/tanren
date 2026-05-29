@@ -131,6 +131,25 @@ describe("Claude writer adapter", () => {
     expect(command).toContain("--add-dir '/workspace/repo'");
   });
 
+  // SaaS Tier-B #5: managed mode points the Claude CLI at the platform endpoint
+  // via ANTHROPIC_BASE_URL. BYOK (no override) leaves it untouched.
+  it("sets ANTHROPIC_BASE_URL when a managed endpoint override is present", () => {
+    const command = buildClaudeWriterCommand({
+      configDir: "/home/tanren/claude",
+      workspace: "/workspace/repo",
+      endpointBaseUrl: "https://openrouter.ai/api/v1",
+    });
+    expect(command).toContain("ANTHROPIC_BASE_URL='https://openrouter.ai/api/v1'");
+  });
+
+  it("does not set ANTHROPIC_BASE_URL for a BYOK run", () => {
+    const command = buildClaudeWriterCommand({
+      configDir: "/home/tanren/claude",
+      workspace: "/workspace/repo",
+    });
+    expect(command).not.toContain("ANTHROPIC_BASE_URL");
+  });
+
   it("maps the Claude disjoint usage shape straight across with no de-overlap", () => {
     const line = JSON.stringify({
       type: "result",

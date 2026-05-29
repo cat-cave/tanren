@@ -23,6 +23,7 @@
     ".env.example"
   ],
   "words": [
+    "byok",
     "tanren",
     "orchestrator",
     "secretmanager",

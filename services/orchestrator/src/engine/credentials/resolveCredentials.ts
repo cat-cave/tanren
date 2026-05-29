@@ -13,7 +13,14 @@
 // executor calls this and threads the result into `PlannerRunContext`.
 
 import type pg from "pg";
-import { migrateOrgConfig, type OrgDefaultCredentials } from "../config/orgConfig.js";
+import {
+  type ManagedProviderConfig,
+  type ProviderMode,
+  defaultManagedProviderConfig,
+  resolveHarnessEndpointOverride,
+  type HarnessEndpointOverride,
+} from "../config/managedProvider.js";
+import { migrateOrgConfig, type OrgConfigV1, type OrgDefaultCredentials } from "../config/orgConfig.js";
 import type { ProjectConfigV1 } from "../config/projectConfig.js";
 
 type OrgConfigClient = Pick<pg.Pool | pg.PoolClient, "query">;
@@ -21,10 +28,24 @@ type OrgConfigClient = Pick<pg.Pool | pg.PoolClient, "query">;
 /** Which run-critical credential kinds the resolver covers. */
 export type RunCredentialKind = "codex_chatgpt_auth" | "github_token";
 
-/** The resolved refs a run needs. Both are guaranteed non-empty on success. */
+/**
+ * The resolved refs a run needs. Both are guaranteed non-empty on success.
+ *
+ * SaaS Tier-B #5: `providerMode` records WHICH source the LLM credential
+ * (`codexCredentialRef`) came from. Under `managed`, `codexCredentialRef` is the
+ * platform-owned ref (e.g. `credential/openrouter/platform/default`) instead of
+ * the tenant's imported credential, and `endpointOverride` carries the
+ * OpenAI-compatible base URL the harness must be pointed at. Under `byok`
+ * (default) `codexCredentialRef` is the tenant's own ref and `endpointOverride`
+ * is undefined (no override — behavior identical to before this seam). The
+ * GitHub credential is ALWAYS the tenant's; managed mode only swaps the LLM
+ * provider source.
+ */
 export interface ResolvedRunCredentials {
   codexCredentialRef: string;
   githubCredentialRef: string;
+  providerMode: ProviderMode;
+  endpointOverride?: HarnessEndpointOverride;
 }
 
 /** Per-kind explicit overrides (e.g. acceptance scripts / re-run with a pin). */
@@ -35,11 +56,21 @@ export interface RunCredentialOverride {
 
 export interface ResolveCredentialsInput {
   /** The project's typed config (already migrated to V1). */
-  projectConfig: Pick<ProjectConfigV1, "credentials">;
+  projectConfig: Pick<ProjectConfigV1, "credentials" | "providerMode" | "managedProvider">;
   /** Org id whose `config.defaultCredentials` provides the fallback layer. */
   orgId: string;
   /** Highest-priority refs; wins over project config + org default. */
   override?: RunCredentialOverride;
+}
+
+/**
+ * The org-config fields the provider-mode resolution reads. Pulled once
+ * alongside `defaultCredentials` so a managed run never makes a second org read.
+ */
+interface OrgProviderModeConfig {
+  defaults?: OrgDefaultCredentials;
+  providerMode: ProviderMode;
+  managedProvider?: ManagedProviderConfig;
 }
 
 /**
@@ -71,23 +102,51 @@ export async function resolveCredentialsForRun(
   pool: OrgConfigClient,
   input: ResolveCredentialsInput,
 ): Promise<ResolvedRunCredentials> {
-  const orgDefaults = await loadOrgDefaultCredentials(pool, input.orgId);
+  const orgConfig = await loadOrgProviderModeConfig(pool, input.orgId);
   const projectCredentials = input.projectConfig.credentials ?? {};
 
-  const codexCredentialRef = pickRef(
-    "codex_chatgpt_auth",
-    input.override?.codexCredentialRef,
-    projectCredentials.codexCredentialRef,
-    orgDefaults?.codex_chatgpt_auth,
-  );
+  // Effective provider mode: project override (when set) wins over the org's
+  // default. An explicit credential override forces BYOK — pinning a concrete
+  // tenant ref is incompatible with swapping in the platform credential.
+  const providerMode: ProviderMode =
+    input.override?.codexCredentialRef !== undefined && input.override.codexCredentialRef.trim() !== ""
+      ? "byok"
+      : (input.projectConfig.providerMode ?? orgConfig.providerMode);
+
+  // LLM credential + endpoint. Resolved BEFORE GitHub so a BYOK run with no
+  // resolvable LLM credential throws the codex MissingCredentialError first
+  // (preserving the original error ordering). Managed runs never throw here —
+  // they resolve the platform-owned ref.
+  let codexCredentialRef: string;
+  let endpointOverride: HarnessEndpointOverride | undefined;
+  if (providerMode === "managed") {
+    // Managed: resolve the PLATFORM-owned credential (project override of the
+    // managed block wins over the org's) and point the harness at the managed
+    // endpoint. The tenant's own LLM credential is intentionally NOT consulted.
+    const managed = input.projectConfig.managedProvider ?? orgConfig.managedProvider ?? defaultManagedProviderConfig();
+    codexCredentialRef = managed.credentialRef;
+    endpointOverride = resolveHarnessEndpointOverride("managed", managed);
+  } else {
+    // BYOK (default): unchanged resolution — the tenant's own credential, no
+    // endpoint override.
+    codexCredentialRef = pickRef(
+      "codex_chatgpt_auth",
+      input.override?.codexCredentialRef,
+      projectCredentials.codexCredentialRef,
+      orgConfig.defaults?.codex_chatgpt_auth,
+    );
+  }
+
+  // GitHub is ALWAYS the tenant's credential — managed mode only swaps the LLM
+  // provider source, never the repo identity used to publish PRs / poll CI.
   const githubCredentialRef = pickRef(
     "github_token",
     input.override?.githubCredentialRef,
     projectCredentials.githubCredentialRef,
-    orgDefaults?.github_token,
+    orgConfig.defaults?.github_token,
   );
 
-  return { codexCredentialRef, githubCredentialRef };
+  return { codexCredentialRef, githubCredentialRef, providerMode, ...(endpointOverride && { endpointOverride }) };
 }
 
 /** First non-empty layer wins; otherwise the kind is unresolved. */
@@ -101,19 +160,22 @@ function pickRef(kind: RunCredentialKind, ...layers: Array<string | undefined>):
 }
 
 /**
- * Read + validate the org's default credential refs. Returns `undefined` when
- * the org row is missing or carries no `defaultCredentials`. The org row is
- * normalized through `migrateOrgConfig` so a legacy `{}` config resolves to no
- * defaults rather than throwing.
+ * Read + validate the org's default credential refs AND its provider-mode block
+ * in a single read. A missing org row resolves to no defaults + the `byok`
+ * default (unchanged behavior). The org row is normalized through
+ * `migrateOrgConfig` so a legacy `{}` config resolves to `byok` with no
+ * `defaultCredentials` rather than throwing.
  */
-async function loadOrgDefaultCredentials(
-  pool: OrgConfigClient,
-  orgId: string,
-): Promise<OrgDefaultCredentials | undefined> {
+async function loadOrgProviderModeConfig(pool: OrgConfigClient, orgId: string): Promise<OrgProviderModeConfig> {
   const result = await pool.query<{ config: unknown }>("SELECT config FROM organizations WHERE id = $1", [orgId]);
   const row = result.rows[0];
   if (row === undefined) {
-    return undefined;
+    return { providerMode: "byok" };
   }
-  return migrateOrgConfig(row.config).defaultCredentials;
+  const config: OrgConfigV1 = migrateOrgConfig(row.config);
+  return {
+    defaults: config.defaultCredentials,
+    providerMode: config.providerMode,
+    managedProvider: config.managedProvider,
+  };
 }

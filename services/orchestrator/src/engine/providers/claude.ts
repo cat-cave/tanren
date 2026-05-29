@@ -25,6 +25,11 @@ export interface ClaudeWriterDependencies {
   // `model`). Defaults to the CLI's configured default when omitted.
   model?: string;
   claudeHomeBaseDir?: string;
+  // SaaS Tier-B #5: optional managed-endpoint base URL. When set (managed run),
+  // the CLI is pointed at this OpenAI/Anthropic-compatible endpoint (the
+  // platform OpenRouter shell) via ANTHROPIC_BASE_URL. Absent ⇒ BYOK: no
+  // override, the CLI hits Anthropic directly (unchanged).
+  endpointBaseUrl?: string;
 }
 
 export interface ClaudeAnswererDependencies extends ClaudeWriterDependencies {
@@ -76,6 +81,7 @@ export function createClaudeWriter(dependencies: ClaudeWriterDependencies): Writ
           configDir: auth.CLAUDE_CONFIG_DIR,
           workspace: opts.workspace,
           model: dependencies.model,
+          endpointBaseUrl: dependencies.endpointBaseUrl,
         }),
         stdin: opts.prompt,
         timeoutMs: opts.timeoutMs,
@@ -128,6 +134,7 @@ export function createClaudeAnswerer<TOutput>(dependencies: ClaudeAnswererDepend
           configDir: auth.CLAUDE_CONFIG_DIR,
           workspace,
           model: dependencies.model,
+          endpointBaseUrl: dependencies.endpointBaseUrl,
         }),
         stdin: buildAnswererPrompt(opts.prompt, opts.outputSchema.name, opts.outputSchema.jsonSchema),
         timeoutMs: opts.timeoutMs,
@@ -153,9 +160,15 @@ export function createClaudeAnswerer<TOutput>(dependencies: ClaudeAnswererDepend
 // The Claude CLI accepts the prompt on stdin and emits a stream of JSON events
 // on stdout. Writer mode runs with permission to edit the workspace; we pin the
 // working directory with --add-dir and read the prompt from stdin via `-p -`.
-export function buildClaudeWriterCommand(input: { configDir: string; workspace: string; model?: string }): string {
+export function buildClaudeWriterCommand(input: {
+  configDir: string;
+  workspace: string;
+  model?: string;
+  endpointBaseUrl?: string;
+}): string {
   return [
     `CLAUDE_CONFIG_DIR=${quoteSshShellArg(input.configDir)}`,
+    ...claudeEndpointEnv(input.endpointBaseUrl),
     "claude",
     "-p",
     "--output-format stream-json",
@@ -167,12 +180,26 @@ export function buildClaudeWriterCommand(input: { configDir: string; workspace: 
   ].join(" ");
 }
 
+// SaaS Tier-B #5: the managed-endpoint env override the Claude CLI reads. When
+// a managed run resolves the platform endpoint, we set ANTHROPIC_BASE_URL so the
+// CLI's API calls go to the platform OpenRouter shell with the platform key.
+// BYOK ⇒ no override (empty prefix), the CLI hits Anthropic directly.
+function claudeEndpointEnv(endpointBaseUrl?: string): string[] {
+  return endpointBaseUrl === undefined ? [] : [`ANTHROPIC_BASE_URL=${quoteSshShellArg(endpointBaseUrl)}`];
+}
+
 // Answerer mode is read-only: no edit permission, no workspace mutation. The
 // structured-output contract is enforced by us (prompt asks for JSON-only,
 // matching the schema) since the Claude CLI has no --output-schema flag.
-export function buildClaudeAnswererCommand(input: { configDir: string; workspace: string; model?: string }): string {
+export function buildClaudeAnswererCommand(input: {
+  configDir: string;
+  workspace: string;
+  model?: string;
+  endpointBaseUrl?: string;
+}): string {
   return [
     `CLAUDE_CONFIG_DIR=${quoteSshShellArg(input.configDir)}`,
+    ...claudeEndpointEnv(input.endpointBaseUrl),
     "claude",
     "-p",
     "--output-format stream-json",

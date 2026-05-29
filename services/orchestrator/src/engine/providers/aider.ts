@@ -53,6 +53,12 @@ export interface AiderWriterDependencies {
   // The aider model id this adapter pins (e.g. "anthropic/claude-opus-4-8",
   // "gpt-5", "openai/gpt-5"). Defaults to DEFAULT_AIDER_MODEL.
   model?: string;
+  // SaaS Tier-B #5: optional OpenAI-compatible base URL. When the run resolves
+  // a MANAGED credential (the platform OpenRouter key), this is the OpenRouter
+  // endpoint; aider is pointed at it via `--openai-api-base` and the key is
+  // injected as OPENAI_API_KEY (OpenRouter is OpenAI-API-compatible). Absent ⇒
+  // BYOK: no override, aider uses the provider's native endpoint (unchanged).
+  endpointBaseUrl?: string;
 }
 
 export interface AiderTelemetry {
@@ -77,10 +83,14 @@ export function createAiderWriter(dependencies: AiderWriterDependencies): Writer
       );
       const aider = await dependencies.ssh.run(dependencies.target, {
         command: buildAiderWriterCommand({
-          apiKeyEnvVar: apiKeyEnvVarForModel(model),
+          // Managed (endpoint override present) → the platform key is an
+          // OpenRouter (OpenAI-compatible) key, read from OPENAI_API_KEY. BYOK →
+          // the provider-specific var derived from the pinned model.
+          apiKeyEnvVar: dependencies.endpointBaseUrl === undefined ? apiKeyEnvVarForModel(model) : "OPENAI_API_KEY",
           apiKey,
           model,
           prompt: opts.prompt,
+          openaiApiBase: dependencies.endpointBaseUrl,
         }),
         cwd: opts.workspace,
         timeoutMs: opts.timeoutMs,
@@ -149,6 +159,10 @@ export function buildAiderWriterCommand(input: {
   apiKey: string;
   model: string;
   prompt: string;
+  // SaaS Tier-B #5: when set (managed mode), aider is pointed at this
+  // OpenAI-compatible base URL via `--openai-api-base` (OpenRouter endpoint).
+  // Absent ⇒ BYOK: no flag, aider hits the provider's native endpoint.
+  openaiApiBase?: string;
 }): string {
   return [
     `${input.apiKeyEnvVar}=${quoteSshShellArg(input.apiKey)}`,
@@ -159,6 +173,7 @@ export function buildAiderWriterCommand(input: {
     "--no-gui",
     "--model",
     quoteSshShellArg(input.model),
+    ...(input.openaiApiBase === undefined ? [] : ["--openai-api-base", quoteSshShellArg(input.openaiApiBase)]),
     "--message",
     quoteSshShellArg(input.prompt),
   ].join(" ");
