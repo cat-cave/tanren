@@ -230,6 +230,15 @@ export const jobQueue = pgTable(
     startedAt: timestamp("started_at", { withTimezone: true }),
     endedAt: timestamp("ended_at", { withTimezone: true }),
     attempts: integer("attempts").notNull().default(0),
+    // P3-0028 queue lease recovery. A claimed/running job holds a lease that the
+    // worker renews via a heartbeat while it executes. `leasedUntil` is the lease
+    // expiry; a reaper requeues any `running` job whose lease has lapsed (crashed
+    // worker). `heartbeatAt` records the last renewal for observability.
+    leasedUntil: timestamp("leased_until", { withTimezone: true }),
+    heartbeatAt: timestamp("heartbeat_at", { withTimezone: true }),
+    // P3-0028 retry budget: bounded re-claim ceiling. When `attempts` reaches it
+    // the reaper dead-letters the job instead of requeueing.
+    maxAttempts: integer("max_attempts").notNull().default(5),
     failureKind: text("failure_kind"),
     failureMessage: text("failure_message"),
     tenantId: text("tenant_id"),
@@ -237,6 +246,8 @@ export const jobQueue = pgTable(
   },
   (table) => [
     index("job_queue_queued").on(table.taskKind, table.enqueuedAt).where(sql`${table.status} = 'queued'`),
+    // P3-0028: reaper scans live (running) jobs by lease expiry.
+    index("job_queue_lease").on(table.leasedUntil).where(sql`${table.status} = 'running'`),
     enumCheck("job_queue_status_check", table.status, stateEnumLists.job_queue_status),
     enumCheck("job_queue_task_kind_check", table.taskKind, stateEnumLists.job_queue_task_kind)
   ]

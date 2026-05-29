@@ -73,21 +73,45 @@ describe("TaskStatus transitions", () => {
 });
 
 describe("JobStatus transitions", () => {
-  it("matches the task-status lifecycle", () => {
-    for (const from of JobStatus.options) {
-      const taskAllowed = listAllowedTaskTransitions(from);
-      const jobAllowed = listAllowedJobTransitions(from);
-      expect([...jobAllowed].sort()).toEqual([...taskAllowed].sort());
+  it("shares the core task lifecycle for states tasks also have", () => {
+    // P3-0028: the job lifecycle is a SUPERSET of the task lifecycle — it adds
+    // queue-recovery transitions (running/failed → queued for a reaper requeue,
+    // and → dead_letter for retry-budget exhaustion). For every transition the
+    // task lifecycle allows from a shared state, the job lifecycle must allow it
+    // too; jobs may additionally allow the recovery transitions.
+    const RECOVERY = new Set<string>(["queued", "dead_letter"]);
+    for (const from of TaskStatus.options) {
+      const taskAllowed = new Set<string>(listAllowedTaskTransitions(from));
+      const jobAllowed = new Set<string>(listAllowedJobTransitions(from));
+      // Every task transition is also a job transition.
+      const missingFromJob = [...taskAllowed].filter((to) => !jobAllowed.has(to));
+      expect(missingFromJob).toEqual([]);
+      // Any extra job transition must be a recovery transition.
+      const nonRecoveryExtras = [...jobAllowed].filter((to) => !taskAllowed.has(to) && !RECOVERY.has(to));
+      expect(nonRecoveryExtras).toEqual([]);
     }
+  });
+
+  it("allows the P3-0028 recovery transitions", () => {
+    // Reaper requeue of a crashed (still-running) or failed job.
+    expect(() => transitionJob("running", "queued")).not.toThrow();
+    expect(() => transitionJob("failed", "queued")).not.toThrow();
+    // Retry-budget exhaustion → terminal dead-letter.
+    expect(() => transitionJob("running", "dead_letter")).not.toThrow();
+    expect(() => transitionJob("failed", "dead_letter")).not.toThrow();
+    // dead_letter is terminal.
+    expect(listAllowedJobTransitions("dead_letter")).toEqual([]);
   });
 
   it("rejects illegal transitions", () => {
     expect(() => transitionJob("failed", "done")).toThrowError(IllegalJobTransitionError);
+    expect(() => transitionJob("dead_letter", "queued")).toThrowError(IllegalJobTransitionError);
   });
 
   it("isAllowedJobTransition agrees with the helper", () => {
     expect(isAllowedJobTransition("queued", "claimed")).toBe(true);
     expect(isAllowedJobTransition("done", "queued")).toBe(false);
+    expect(isAllowedJobTransition("running", "dead_letter")).toBe(true);
   });
 });
 
@@ -103,5 +127,7 @@ describe("enum membership", () => {
     expect(TaskKind.options).toContain("forge");
     expect(TaskStatus.options).toContain("claimed");
     expect(TaskOutcome.options).toContain("rejected_by_checker");
+    // P3-0028 dead-letter terminal state.
+    expect(JobStatus.options).toContain("dead_letter");
   });
 });

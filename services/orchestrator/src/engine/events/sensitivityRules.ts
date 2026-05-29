@@ -58,6 +58,16 @@ export const sensitivityRules: SensitivityRule[] = [
     ["reason", "public"]
   ]),
 
+  // P3-0028 dead-letter event — identifiers + a failure summary, all public.
+  ...rulesFor("job.dead_lettered", [
+    ["jobId", "public"],
+    ["taskKind", "public"],
+    ["attempts", "public"],
+    ["maxAttempts", "public"],
+    ["failureKind", "public"],
+    ["message", "public"]
+  ]),
+
   // planner role
   ...rulesFor("planner.started", [
     ["taskKind", "public"],

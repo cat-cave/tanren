@@ -155,6 +155,13 @@
       "when": 1780012565605,
       "tag": "0021_gifted_longshot",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1780013474444,
+      "tag": "0022_zippy_mikhail_rasputin",
+      "breakpoints": true
     }
   ]
 }

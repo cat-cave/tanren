@@ -32,17 +32,24 @@ export const JobStatus = z.enum([
   "running",
   "done",
   "failed",
-  "cancelled"
+  "cancelled",
+  // P3-0028: terminal state for a job whose bounded re-claim budget is
+  // exhausted. A dead-lettered job is never re-claimed; it surfaces a
+  // `job.dead_lettered` lifecycle event for operator triage.
+  "dead_letter"
 ]);
 export type JobStatus = z.infer<typeof JobStatus>;
 
 const allowedJobTransitions: Record<JobStatus, ReadonlyArray<JobStatus>> = {
+  // P3-0028 lease recovery: a reaper requeues an expired `running` job, so
+  // running → queued is a legal transition (crashed-worker recovery).
   queued: ["claimed", "cancelled", "running"],
   claimed: ["running", "cancelled"],
-  running: ["done", "failed", "cancelled"],
+  running: ["done", "failed", "cancelled", "queued", "dead_letter"],
   done: [],
-  failed: [],
-  cancelled: []
+  failed: ["queued", "dead_letter"],
+  cancelled: [],
+  dead_letter: []
 };
 
 export function isAllowedJobTransition(from: JobStatus, to: JobStatus): boolean {

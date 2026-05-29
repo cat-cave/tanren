@@ -156,7 +156,7 @@ export async function pollCiForRun(input: PollCiForRunInput): Promise<PollCiForR
 }
 
 export function evaluateCiObservation(checks: GitHubPullRequestChecks): CiObservation {
-  const failingChecks = [
+  const allFailing = [
     ...checks.checkRuns.filter(isFailedCheckRun).map((check) => ({
       kind: "check_run" as const,
       name: check.name,
@@ -170,7 +170,7 @@ export function evaluateCiObservation(checks: GitHubPullRequestChecks): CiObserv
       url: status.url
     }))
   ];
-  const pendingChecks = [
+  const allPending = [
     ...checks.checkRuns.filter(isPendingCheckRun).map((check) => ({
       kind: "check_run" as const,
       name: check.name,
@@ -185,17 +185,48 @@ export function evaluateCiObservation(checks: GitHubPullRequestChecks): CiObserv
     }))
   ];
 
+  // P3-0028 required-check awareness. When branch protection declares required
+  // contexts, the run is gated on THOSE only: an optional check failing/pending
+  // does not block, and a required context that has not reported yet keeps the
+  // run pending until it does.
+  const required = checks.requiredContexts;
+  const gated = required !== undefined && required.length > 0;
+  const failingChecks = gated ? allFailing.filter((check) => required.includes(check.name)) : allFailing;
+  const pendingChecks = gated ? allPending.filter((check) => required.includes(check.name)) : allPending;
+  const missingRequired = gated ? missingRequiredContexts(required, checks) : [];
+
   const observed = checks.checkRuns.length + checks.statuses.length;
-  const status: CiObservationStatus =
-    failingChecks.length > 0 ? "failed" : observed === 0 || pendingChecks.length > 0 ? "pending" : "passed";
-  const reason: CiObservationReason =
-    failingChecks.length > 0
-      ? "check_failed"
-      : observed === 0
-        ? "no_checks"
-        : pendingChecks.length > 0
-          ? "checks_pending"
-          : "all_checks_passed";
+  let status: CiObservationStatus;
+  let reason: CiObservationReason;
+  if (failingChecks.length > 0) {
+    status = "failed";
+    reason = "check_failed";
+  } else if (gated) {
+    // Required gating: pass only when every required context is present + green.
+    if (pendingChecks.length > 0 || missingRequired.length > 0) {
+      status = "pending";
+      reason = "checks_pending";
+    } else {
+      status = "passed";
+      reason = "all_checks_passed";
+    }
+  } else if (observed === 0) {
+    status = "pending";
+    reason = "no_checks";
+  } else if (pendingChecks.length > 0) {
+    status = "pending";
+    reason = "checks_pending";
+  } else {
+    status = "passed";
+    reason = "all_checks_passed";
+  }
+
+  // Surface still-unreported required contexts as pending so the timeline shows
+  // exactly what the run is waiting on.
+  const pendingWithMissing = [
+    ...pendingChecks,
+    ...missingRequired.map((name) => ({ kind: "commit_status" as const, name, state: "expected" }))
+  ];
 
   return {
     status,
@@ -204,8 +235,16 @@ export function evaluateCiObservation(checks: GitHubPullRequestChecks): CiObserv
     checkRuns: checks.checkRuns,
     statuses: checks.statuses,
     failingChecks,
-    pendingChecks
+    pendingChecks: pendingWithMissing
   };
+}
+
+function missingRequiredContexts(required: string[], checks: GitHubPullRequestChecks): string[] {
+  const present = new Set<string>([
+    ...checks.checkRuns.map((check) => check.name),
+    ...checks.statuses.map((status) => status.context)
+  ]);
+  return required.filter((name) => !present.has(name));
 }
 
 export function computeCiRetryDelayMs(attempt: number): number {

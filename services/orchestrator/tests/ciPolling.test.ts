@@ -47,6 +47,55 @@ describe("CI polling loop", () => {
     ).toMatchObject({ status: "failed", reason: "check_failed" });
   });
 
+  it("gates on required branch-protection checks only (P3-0028)", () => {
+    // A required check that hasn't reported yet keeps the run pending even
+    // though every OBSERVED check is green.
+    expect(
+      evaluateCiObservation({
+        head: { sha: "abc" },
+        checkRuns: [{ name: "build", status: "completed", conclusion: "success" }],
+        statuses: [],
+        requiredContexts: ["build", "e2e"]
+      })
+    ).toMatchObject({ status: "pending", reason: "checks_pending" });
+
+    // An OPTIONAL check failing does not block when it isn't required.
+    expect(
+      evaluateCiObservation({
+        head: { sha: "abc" },
+        checkRuns: [
+          { name: "build", status: "completed", conclusion: "success" },
+          { name: "lint-optional", status: "completed", conclusion: "failure" }
+        ],
+        statuses: [],
+        requiredContexts: ["build"]
+      })
+    ).toMatchObject({ status: "passed", reason: "all_checks_passed" });
+
+    // A REQUIRED check failing fails the run.
+    expect(
+      evaluateCiObservation({
+        head: { sha: "abc" },
+        checkRuns: [{ name: "build", status: "completed", conclusion: "failure" }],
+        statuses: [],
+        requiredContexts: ["build"]
+      })
+    ).toMatchObject({ status: "failed", reason: "check_failed" });
+
+    // All required contexts present + green → passed.
+    expect(
+      evaluateCiObservation({
+        head: { sha: "abc" },
+        checkRuns: [
+          { name: "build", status: "completed", conclusion: "success" },
+          { name: "e2e", status: "completed", conclusion: "success" }
+        ],
+        statuses: [],
+        requiredContexts: ["build", "e2e"]
+      })
+    ).toMatchObject({ status: "passed", reason: "all_checks_passed" });
+  });
+
   it("computes bounded retry backoff for pending CI observations", () => {
     expect(computeCiRetryDelayMs(1)).toBe(5_000);
     expect(computeCiRetryDelayMs(2)).toBe(10_000);

@@ -1,0 +1,55 @@
+// P3-0028 webhook-driven CI (option). GitHub posts `check_run`/`check_suite`/
+// `status` events here; we resolve the affected run(s) and advance their CI
+// state via an authoritative re-fetch. Polling remains the default fallback,
+// so a missed or unconfigured webhook never strands a run. Split out of main.ts
+// to keep that file under the 500-line cap.
+
+import { Hono } from "hono";
+import type pg from "pg";
+import type { ActorContextEnv } from "../../middleware/auth.js";
+import type { SecretStore } from "../../engine/contracts/index.js";
+import type { GitHubHttpClient } from "../../engine/providers/github.js";
+import type { GithubAppTokenMinter } from "../../engine/providers/githubAppTokenMinter.js";
+import { CiPullRequestNotFoundError, CiRunNotFoundError } from "../../engine/workflow/ciPolling.js";
+import { advanceCiFromWebhook, CiWebhookUnsupportedEventError } from "../../engine/workflow/ciWebhook.js";
+
+export interface GithubWebhookRouteDeps {
+  pool: pg.Pool;
+  secrets: SecretStore;
+  githubHttp: GitHubHttpClient;
+  githubAppMinter?: GithubAppTokenMinter;
+}
+
+export function createGithubWebhookRoutes(deps: GithubWebhookRouteDeps) {
+  const app = new Hono<ActorContextEnv>();
+
+  app.post("/github/webhooks/ci", async (c) => {
+    const event = c.req.header("x-github-event") ?? "";
+    const payload = await c.req.json().catch(() => undefined);
+    if (payload === undefined) {
+      return c.json({ error: "invalid_webhook", message: "request body was not JSON" }, 400);
+    }
+    try {
+      const result = await advanceCiFromWebhook({
+        pool: deps.pool,
+        secrets: deps.secrets,
+        githubHttp: deps.githubHttp,
+        githubAppMinter: deps.githubAppMinter,
+        event,
+        payload
+      });
+      return c.json(result, 200);
+    } catch (error) {
+      if (error instanceof CiWebhookUnsupportedEventError) {
+        return c.json({ error: "unsupported_event", message: error.message }, 202);
+      }
+      if (error instanceof CiRunNotFoundError || error instanceof CiPullRequestNotFoundError) {
+        // The webhook references a PR/run we can't advance; treat as a no-op.
+        return c.json({ event, matchedRunIds: [], results: [] }, 200);
+      }
+      return c.json({ error: "ci_webhook_failed", message: error instanceof Error ? error.message : String(error) }, 502);
+    }
+  });
+
+  return app;
+}

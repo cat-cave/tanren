@@ -83,3 +83,19 @@ export const TaskFailedPayload = z
     reason: z.string().optional()
   })
   .strict();
+
+// P3-0028 queue hardening. Emitted when a job's bounded re-claim budget is
+// exhausted and the job is moved to the terminal `dead_letter` state instead
+// of being retried forever. `attempts` is the final attempt count that tripped
+// the budget; `maxAttempts` is the configured ceiling. The failure kind/message
+// echo the last execution failure so operators can triage from the timeline.
+export const JobDeadLetteredPayload = z
+  .object({
+    jobId: z.string(),
+    taskKind: TaskKindLiteral,
+    attempts: z.number().int(),
+    maxAttempts: z.number().int(),
+    failureKind: z.string(),
+    message: z.string()
+  })
+  .strict();

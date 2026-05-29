@@ -10,7 +10,6 @@
 // workflow body, the job-complete, and terminal run/task state are all real.
 
 import { describe, expect, it } from "vitest";
-import type pg from "pg";
 import type { AuditAnswer, CheckAnswer, PlanAnswer } from "../src/engine/answerers/schemas/index.js";
 import type { AllocationRequest, Allocator, RunnerAllocation, SshTarget } from "../src/engine/contracts/allocator.js";
 import { FakeJobQueue } from "../src/engine/contracts/jobQueue.js";
@@ -31,6 +30,7 @@ import {
   passingAudit,
   passingCheck
 } from "./helpers/plannerLoopHelpers.js";
+import { WorkerPool } from "./helpers/workerPool.js";
 
 const target: SshTarget = {
   host: "runner",
@@ -163,6 +163,36 @@ describe("run worker (dequeue→execute seam)", () => {
     expect(await jobQueue.claim("plan")).toBeUndefined();
   });
 
+  it("heartbeats the claimed job's lease while the workflow runs (P3-0028)", async () => {
+    const { pool, secrets, run } = await setupSeededRun();
+    const jobQueue = new FakeJobQueue();
+    await jobQueue.enqueue({ runId: run.runId, taskId: run.plannerTaskId, taskKind: "plan", payload: {} });
+
+    let heartbeats = 0;
+    const original = jobQueue.heartbeat.bind(jobQueue);
+    jobQueue.heartbeat = async (id: string, leaseMs?: number) => {
+      heartbeats += 1;
+      return original(id, leaseMs);
+    };
+
+    const result = await executeNextPlanJob({
+      ...deps(pool, secrets, jobQueue, passingGitHub()),
+      // Fast heartbeat + a workflow that idles long enough to renew at least once.
+      heartbeatIntervalMs: 5,
+      leaseMs: 1_000,
+      runWorkflow: async (input) => {
+        await new Promise<void>((resolve) => setTimeout(resolve, 30));
+        return fakeWorkflowRunner(passingGitHub())(input);
+      }
+    });
+
+    expect(result.kind).toBe("completed");
+    expect(heartbeats).toBeGreaterThan(0);
+    // The heartbeat loop is stopped on completion — no lease left to reap.
+    const reaped = await jobQueue.reapExpiredLeases({ now: new Date(Date.now() + 10_000) });
+    expect(reaped).toEqual([]);
+  });
+
   it("is idle when no plan job is queued", async () => {
     const { pool, secrets } = await setupSeededRun();
     const jobQueue = new FakeJobQueue();
@@ -255,246 +285,3 @@ class ScriptedGitHubHttp implements GitHubHttpClient {
   }
 }
 
-// In-memory pg substitute covering exactly the SQL the seam emits:
-// createProject/createSpec/createQueuedRunFromSpec inserts + reads, the
-// worker's run⋈spec⋈project join, resolveCredentialsForRun's org read, and the
-// planner-loop workflow's run/spec state + task/cost/CI queries.
-interface ProjectRow {
-  project_id: string;
-  repo_url: string;
-  default_branch: string;
-  runner_image: string;
-  config: unknown;
-  org_id: string | null;
-}
-interface SpecRow {
-  spec_id: string;
-  project_id: string;
-  title: string;
-  description: string;
-  acceptance_criteria: unknown;
-  depends_on: string[];
-  status: string;
-}
-interface RunRow {
-  run_id: string;
-  spec_id: string;
-  project_id: string;
-  branch: string;
-}
-
-class WorkerPool {
-  runStatus: { status: string; outcome: string | null } = { status: "queued", outcome: null };
-  specStatus = "pending";
-  prUrl: string | null = null;
-  private readonly projects = new Map<string, ProjectRow>();
-  private readonly specs = new Map<string, SpecRow>();
-  private readonly runs = new Map<string, RunRow>();
-  private readonly costRows: Array<{ id: string; total_tokens: number }> = [];
-  private nextCostId = 1;
-  private ciTask: { taskId: string; attempt: number } | undefined;
-
-  async query(sql: string, params: unknown[] = []): Promise<{ rows: unknown[]; rowCount: number }> {
-    const trimmed = sql.trim();
-    if (["BEGIN", "COMMIT", "ROLLBACK"].includes(trimmed)) {
-      return { rows: [], rowCount: 0 };
-    }
-
-    if (trimmed.startsWith("INSERT INTO projects")) {
-      this.projects.set(String(params[0]), {
-        project_id: String(params[0]),
-        repo_url: String(params[2]),
-        default_branch: String(params[3]),
-        runner_image: String(params[4]),
-        config: JSON.parse(String(params[6])) as unknown,
-        org_id: params[7] === null ? null : String(params[7])
-      });
-      return { rows: [], rowCount: 1 };
-    }
-    if (trimmed.startsWith("SELECT project_id FROM projects")) {
-      return single(this.projects.has(String(params[0])) ? { project_id: String(params[0]) } : undefined);
-    }
-    if (trimmed.startsWith("INSERT INTO project_members")) {
-      return { rows: [], rowCount: 1 };
-    }
-    if (trimmed.startsWith("INSERT INTO specs")) {
-      this.specs.set(String(params[0]), {
-        spec_id: String(params[0]),
-        project_id: String(params[1]),
-        title: String(params[2]),
-        description: String(params[3]),
-        acceptance_criteria: JSON.parse(String(params[4])) as unknown,
-        depends_on: params[5] as string[],
-        status: String(params[6])
-      });
-      return { rows: [], rowCount: 1 };
-    }
-    // createQueuedRunFromSpec: spec⋈project load
-    if (/FROM specs s\s+JOIN projects p/.test(trimmed)) {
-      const spec = this.specs.get(String(params[0]));
-      if (spec === undefined) return { rows: [], rowCount: 0 };
-      const project = this.projects.get(spec.project_id)!;
-      return single({
-        project_id: project.project_id,
-        name: "p",
-        repo_url: project.repo_url,
-        default_branch: project.default_branch,
-        runner_image: project.runner_image,
-        allocator: "local-docker",
-        config: project.config,
-        spec_id: spec.spec_id,
-        title: spec.title,
-        description: spec.description,
-        acceptance_criteria: spec.acceptance_criteria,
-        depends_on: spec.depends_on,
-        status: spec.status
-      });
-    }
-    // worker loadRunExecutionContext: run⋈spec⋈project join
-    if (/FROM runs r\s+JOIN specs s/.test(trimmed)) {
-      const run = this.runs.get(String(params[0]));
-      if (run === undefined) return { rows: [], rowCount: 0 };
-      const spec = this.specs.get(run.spec_id)!;
-      const project = this.projects.get(run.project_id)!;
-      return single({
-        run_id: run.run_id,
-        spec_id: run.spec_id,
-        project_id: run.project_id,
-        branch: run.branch,
-        repo_url: project.repo_url,
-        default_branch: project.default_branch,
-        runner_image: project.runner_image,
-        config: project.config,
-        org_id: project.org_id,
-        title: spec.title,
-        description: spec.description,
-        acceptance_criteria: spec.acceptance_criteria
-      });
-    }
-    if (trimmed.startsWith("SELECT config FROM organizations")) {
-      return single({ config: {} });
-    }
-    if (trimmed.startsWith("INSERT INTO runs")) {
-      this.runs.set(String(params[0]), {
-        run_id: String(params[0]),
-        spec_id: String(params[1]),
-        project_id: String(params[2]),
-        branch: String(params[4])
-      });
-      return { rows: [], rowCount: 1 };
-    }
-    if (trimmed.startsWith("INSERT INTO job_queue")) {
-      return { rows: [{ id: "1" }], rowCount: 1 };
-    }
-    // Event-store inserts (PgEventStore writes through the real pool). Matched
-    // via regex rather than a string literal so the single-event-writer
-    // architecture check does not flag this in-memory fake pool router.
-    if (/^INSERT\s+INTO\s+events/.test(trimmed)) {
-      return { rows: [{ id: "1" }], rowCount: 1 };
-    }
-    // spec status transitions (claim 'active', finalize 'done')
-    if (trimmed.startsWith("UPDATE specs SET status = 'active'")) {
-      this.specStatus = "active";
-      return { rows: [{ spec_id: String(params[0]) }], rowCount: 1 };
-    }
-    if (trimmed.startsWith("UPDATE specs SET status = 'done'")) {
-      this.specStatus = "done";
-      return { rows: [], rowCount: 1 };
-    }
-    // P3-0008 merge stage marks the spec merged/done with a parameterized status.
-    if (trimmed.startsWith("UPDATE specs SET status = $2")) {
-      this.specStatus = String(params[1]);
-      return { rows: [], rowCount: 1 };
-    }
-    // cost_records reconcile path
-    if (trimmed.startsWith("SELECT id, total_tokens FROM cost_records")) {
-      return { rows: this.costRows.map((r) => ({ id: r.id, total_tokens: r.total_tokens })), rowCount: this.costRows.length };
-    }
-    if (trimmed.startsWith("UPDATE cost_records SET cost_usd")) {
-      return { rows: [], rowCount: 1 };
-    }
-    if (trimmed.startsWith("INSERT INTO cost_records")) {
-      this.costRows.push({ id: String(this.nextCostId++), total_tokens: Number(params[11] ?? 0) });
-      return { rows: [], rowCount: 1 };
-    }
-    if (trimmed.startsWith("INSERT INTO tasks")) {
-      if (trimmed.includes("'ci'")) {
-        this.ciTask = { taskId: String(params[0]), attempt: 1 };
-      }
-      return { rows: [], rowCount: 1 };
-    }
-    if (trimmed.startsWith("UPDATE tasks")) {
-      return { rows: [], rowCount: 1 };
-    }
-    // CI poll: run⋈project read for the github cred ref
-    if (trimmed.startsWith("SELECT r.run_id, r.spec_id, r.project_id, r.pr_url")) {
-      const runId = String(params[0]);
-      const run = this.runs.get(runId)!;
-      return single({
-        run_id: run.run_id,
-        spec_id: run.spec_id,
-        project_id: run.project_id,
-        pr_url: this.prUrl,
-        config: { githubCredentialRef },
-        // P3-0008 review/merge context columns (shares this SELECT prefix).
-        default_branch: "main",
-        org_config: null
-      });
-    }
-    if (trimmed.startsWith("SELECT task_id, attempt")) {
-      return this.ciTask === undefined
-        ? { rows: [], rowCount: 0 }
-        : { rows: [{ task_id: this.ciTask.taskId, attempt: this.ciTask.attempt }], rowCount: 1 };
-    }
-    if (trimmed.startsWith("UPDATE runs SET pr_url")) {
-      this.prUrl = String(params[1]);
-      return { rows: [], rowCount: 1 };
-    }
-    if (trimmed.startsWith("UPDATE runs SET status = 'running'")) {
-      this.runStatus = { status: "running", outcome: null };
-      return { rows: [], rowCount: 1 };
-    }
-    if (trimmed.startsWith("UPDATE runs SET status = 'done'")) {
-      this.runStatus = { status: "done", outcome: "ok" };
-      return { rows: [], rowCount: 1 };
-    }
-    if (trimmed.startsWith("UPDATE runs SET status = 'halted'")) {
-      // Worker recoverable-finalize is guarded by a status filter + RETURNING.
-      if (trimmed.includes("RETURNING")) {
-        if (["running", "queued", "failed"].includes(this.runStatus.status)) {
-          this.runStatus = { status: "halted", outcome: "halted" };
-          const run = this.runs.get(String(params[0]));
-          return {
-            rows: [{ run_id: String(params[0]), spec_id: run?.spec_id ?? "", project_id: run?.project_id ?? "" }],
-            rowCount: 1
-          };
-        }
-        return { rows: [], rowCount: 0 };
-      }
-      this.runStatus = { status: "halted", outcome: String(params[1]) };
-      return { rows: [], rowCount: 1 };
-    }
-    if (trimmed.startsWith("UPDATE runs SET status = 'failed'")) {
-      this.runStatus = { status: "failed", outcome: "failed" };
-      return { rows: [], rowCount: 1 };
-    }
-    if (trimmed.startsWith("UPDATE job_queue")) {
-      return { rows: [], rowCount: 1 };
-    }
-    return { rows: [], rowCount: 0 };
-  }
-
-  async connect(): Promise<WorkerPool> {
-    return this;
-  }
-
-  release(): void {}
-
-  asPgPool(): pg.Pool {
-    return this as unknown as pg.Pool;
-  }
-}
-
-function single<T>(row: T | undefined): { rows: unknown[]; rowCount: number } {
-  return row === undefined ? { rows: [], rowCount: 0 } : { rows: [row], rowCount: 1 };
-}

@@ -32,6 +32,7 @@ import { createCredentialRoutes, InMemoryCredentialRegistry, type CredentialRegi
 import { createDoctorRoutes } from "./routes/doctor/index.js";
 import { createDoraRoutes } from "./routes/dora/index.js";
 import { createForgeRoutes } from "./routes/forge/index.js";
+import { createGithubWebhookRoutes } from "./routes/githubWebhooks/index.js";
 import { createInsightRoutes } from "./routes/insights/index.js";
 import { createMilestoneRoutes } from "./routes/milestones/index.js";
 import { createNotificationRoutes } from "./routes/notifications/index.js";
@@ -232,6 +233,9 @@ export function buildApp(input: {
   // P3-0003: GitHub App install flow; mounts only when configured via env.
   mountGithubAppInstallFromEnv(app, { pool: input.pool, secrets, minter: githubAppMinter });
   app.route("/orgs", createForgeRoutes({ pool: input.pool, secrets, githubHttp }));
+  // P3-0028 webhook-driven CI (option). Mounted at root so GitHub posts to
+  // `/github/webhooks/ci`. Polling remains the default fallback.
+  app.route("/", createGithubWebhookRoutes({ pool: input.pool, secrets, githubHttp, githubAppMinter }));
   app.route("/orgs", createInsightRoutes({ pool: input.pool }));
   app.route("/orgs", createDoraRoutes({ pool: input.pool }));
   app.route("/orgs", createNotificationRoutes({ pool: input.pool }));

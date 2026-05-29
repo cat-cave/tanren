@@ -87,7 +87,8 @@ export const stateEnumLists = {
     "running",
     "done",
     "failed",
-    "cancelled"
+    "cancelled",
+    "dead_letter"
   ],
   job_queue_task_kind: [
     "hello",

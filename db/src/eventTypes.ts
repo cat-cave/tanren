@@ -37,6 +37,7 @@ export const eventTypeNames = [
   "hello.ssh_completed",
   "hello.ssh_started",
   "hello.started",
+  "job.dead_lettered",
   "merge.blocked",
   "merge.completed",
   "merge.conflict",
