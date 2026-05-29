@@ -125,3 +125,12 @@ smoke: compose-build compose-up wait-for-stack smoke-hello smoke-ssh-integration
 # (services/orchestrator/tests/phase2Acceptance{Easy,Medium}.test.ts) which
 # import scripts/acceptance/common.ts. Component-level live smokes
 # (live-codex-*, live-github-*, live-ci-poll, live-phase1-fixture) remain.
+
+# P3-0026: the final v0 acceptance HARD tier. Runs the DETERMINISTIC hard-tier
+# test — the real runPlannerLoopWorkflow through the worker's claim→execute seam
+# (executeNextPlanJob) with adapters/gate/review/merge probes scripted to force
+# a planner re-plan, an auditor rejection loop, and a conflict-resolution merge.
+# No live Codex/SSH/GitHub. The live fixture-hard scenario (triggered through the
+# dashboard with TANREN_RUN_WORKER=1) is documented in docs/operator-guide/acceptance.md.
+acceptance-hard:
+  corepack pnpm exec vitest run services/orchestrator/tests/acceptanceHardTier.test.ts

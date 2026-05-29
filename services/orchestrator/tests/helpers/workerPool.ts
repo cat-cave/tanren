@@ -175,16 +175,27 @@ export class WorkerPool {
     if (trimmed.startsWith("UPDATE tasks")) {
       return { rows: [], rowCount: 1 };
     }
-    // CI poll: run⋈project read for the github cred ref
+    // CI poll + P3-0008 review/merge context: run⋈project read. Both stages
+    // share this SELECT prefix. Return the project's STORED config so the merge
+    // context resolves the run's real mergeIntegration / governancePosture (the
+    // P3-0026 hard tier seeds direct_merge + open to exercise the conflict
+    // branch); the top-level githubCredentialRef is preserved for the CI-poll
+    // cred read. A run whose project carries no mergeIntegration migrates to the
+    // not_configured → external_reviewer hand-off as before.
     if (trimmed.startsWith("SELECT r.run_id, r.spec_id, r.project_id, r.pr_url")) {
       const runId = String(params[0]);
       const run = this.runs.get(runId)!;
+      const project = this.projects.get(run.project_id);
+      // The project's stored config already carries credentials.githubCredentialRef
+      // (CI poll takes its cred ref from the workflow's explicit override). Return
+      // it verbatim — a synthesized top-level key would trip the strict V1 parse.
+      const storedConfig = project?.config ?? { githubCredentialRef };
       return single({
         run_id: run.run_id,
         spec_id: run.spec_id,
         project_id: run.project_id,
         pr_url: this.prUrl,
-        config: { githubCredentialRef },
+        config: storedConfig,
         // P3-0008 review/merge context columns (shares this SELECT prefix).
         default_branch: "main",
         org_config: null
