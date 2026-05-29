@@ -27,6 +27,26 @@ These three live in the sibling module `scripts/check-architecture-structure.mjs
 - `max-params-cap`: per-function positional parameter count on the same critical directories. **Measured current max: 6** (a step helper in `engine/workflow/helloRun.ts`). **Cap: 6** (pinned at current max). New functions that would exceed it must thread an options object.
 - `cross-package-deep-import`: an import may only reach another workspace package through its public entry. Bare `@tanren/<pkg>/src/**` specifiers and relative specifiers that resolve into a _different_ package's tree are flagged. **Two historical violations** (orchestrator state tests importing `../../../db/src/stateEnums.js`) were fixed in this wave by re-exporting `stateEnumLists`/`StateEnumName` from the `@tanren/db` entry and importing via `@tanren/db`; the allowlist is empty.
 
+## Behavior-based tests (no implementationy tests)
+
+Tests assert on **observable outcomes**, not on how the implementation reached them. The user-facing result is the contract; the call sequence used to produce it is not. Prefer, in order:
+
+- the **HTTP response** (status + parsed body) for a route,
+- **persisted or returned state** after the operation (the row that was written, the value the function returned, the file it wrote),
+- **seam conformance** (a real or fake adapter that satisfies the seam's contract — see the conformance suites),
+- **rendered output** (what a CLI command prints, what a component renders).
+
+Mock-call assertions (`toHaveBeenCalledWith`, `.mock.calls`) are allowed only as **secondary corroboration of an external side-effect** that has no observable surface from the test (e.g. "a draft PR was opened against the config repo") — never as the _only_ assertion in a block. A block whose sole assertion is "the collaborator was called" pins the implementation, not the behavior, and breaks under harmless refactors.
+
+This is enforced by `no-mock-only-tests` (in `scripts/check-architecture-structure.mjs`, wired through `just architecture`):
+
+- **Mock-only block:** any `it(...)`/`test(...)` block that contains a mock-call assertion (`toHaveBeenCalled*` or `.mock.calls`) but **no** co-located outcome assertion (`toBe`/`toEqual`/`toMatch`/`toContain`/`toMatchObject`/`toThrow`/`.status`/`.json(`/`.resolves`/… in the same block) is flagged. Every block that checks a mock call must also assert an observable outcome.
+- **Module mocking frozen:** any `vi.mock(...)` is flagged. The allowlist is **empty** — module mocking replaces the real seam wholesale and is exactly the implementation-coupling this rule prevents. Adding an entry requires a matching note in the Exception Path below.
+
+The heuristic is a brace-matched line-scanner (no parser), so it is intentionally conservative: it only flags blocks that have a mock-call assertion and zero outcome assertions.
+
+**Templates for new tests:** point reasoning/route tests at the conformance suites under `services/orchestrator/tests/conformance/**` (seam-contract style) and `services/orchestrator/tests/runRoutes.contract.test.ts` (drive a Hono `app` and assert response status/body). For CLI commands, `cli/tests/commands.test.ts` and `cli/tests/productCommands.test.ts` drive the real handlers against a local stub orchestrator (`cli/tests/helpers/stubServer.ts`) and assert the printed JSON plus the recorded request fields by value.
+
 ## Exception Path
 
 Prefer refactoring over exceptions. A new exception requires a short entry in this file naming the rule, file path, why the invariant still holds, and the deletion condition. The checker should point at that exact allowlist.
