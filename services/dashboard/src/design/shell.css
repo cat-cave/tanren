@@ -282,6 +282,68 @@ a { color: inherit; text-decoration: none; }
   display: flex; align-items: center; gap: 12px;
   font-family: var(--font-mono); font-size: 10px; color: var(--fg-3);
 }
+.forge-modal .footer[hidden] { display: none; }
+
+/* P3-0010 thick-Forge chat morph. The modal grows taller in chat mode; the
+   thread scrolls while the composer (input-row) and footer stay pinned. */
+.forge-modal.chat-mode { max-height: 78vh; }
+.forge-modal .fc-back {
+  background: transparent; border: 1px solid var(--line-1); color: var(--fg-2);
+  font-family: var(--font-mono); font-size: 13px; line-height: 1;
+  width: 24px; height: 24px; border-radius: 2px; cursor: pointer;
+}
+.forge-modal .fc-back:hover { background: var(--accent-tint); color: var(--fg-1); }
+.forge-chat {
+  overflow-y: auto; flex: 1; padding: 16px 18px;
+  display: flex; flex-direction: column; gap: 18px;
+}
+.forge-chat[hidden] { display: none; }
+.fc-msg { display: flex; gap: 10px; align-items: flex-start; }
+.fc-msg.user { flex-direction: row-reverse; }
+.fc-msg .who {
+  flex: 0 0 auto; width: 26px; height: 26px; display: flex; align-items: center; justify-content: center;
+  font-family: var(--font-jp); font-size: 13px; color: var(--ember-08);
+  border: 1px solid var(--line-1); border-radius: 2px; background: var(--bg-sunken);
+}
+.fc-msg.user .who { font-family: var(--font-mono); font-size: 10px; font-weight: 700; color: var(--fg-2); }
+.fc-col { display: flex; flex-direction: column; gap: 8px; min-width: 0; max-width: 80%; }
+.fc-msg.user .fc-col { align-items: flex-end; }
+.fc-bubble {
+  font-family: var(--font-ui); font-size: 13px; line-height: 1.5; color: var(--fg-1);
+  background: var(--bg-sunken); border: 1px solid var(--line-1);
+  padding: 9px 12px; border-radius: 3px;
+}
+.fc-msg.user .fc-bubble { background: var(--accent-tint); border-color: var(--ember-08); }
+.fc-bubble code {
+  font-family: var(--font-mono); font-size: 11px; color: var(--ember-08);
+  background: var(--bg-canvas); padding: 1px 4px; border-radius: 2px;
+}
+.fc-card {
+  display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 4px;
+  padding: 9px 12px; cursor: pointer;
+  border: 1px solid var(--ember-08); border-radius: 3px; background: var(--bg-canvas);
+  clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 8px 100%, 0 calc(100% - 8px));
+}
+.fc-card .lbl {
+  grid-column: 1 / -1;
+  font-family: var(--font-mono); font-size: 9px; letter-spacing: 0.18em; text-transform: uppercase;
+  color: var(--ember-08); margin-bottom: 2px;
+}
+.fc-card .t { font-family: var(--font-ui); font-size: 13px; color: var(--fg-1); font-weight: 500; }
+.fc-card .go { font-family: var(--font-mono); font-size: 13px; color: var(--ember-08); }
+.fc-card:hover { background: var(--accent-tint); }
+/* Inert (deferred write-action) cards: visible, but non-interactive. */
+.fc-card.inert { cursor: default; border-color: var(--line-1); opacity: 0.7; }
+.fc-card.inert .lbl, .fc-card.inert .go { color: var(--fg-3); }
+.fc-card.inert:hover { background: var(--bg-canvas); }
+.fc-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.fc-chips .chip {
+  font-family: var(--font-mono); font-size: 10.5px; color: var(--fg-2);
+  border: 1px solid var(--line-1); border-radius: 2px; padding: 4px 8px; cursor: pointer;
+}
+.fc-chips .chip:hover { border-color: var(--ember-08); color: var(--fg-1); background: var(--accent-tint); }
+.fc-chips .chip .pre { color: var(--ember-08); margin-right: 3px; }
+.fc-msg.pending .fc-bubble { color: var(--fg-3); }
 
 [data-theme="dark"] body { background: var(--ink-12); color: var(--ash-00); }
 [data-theme="dark"] .sidenav { background: oklch(8% 0.012 60); }

@@ -31,6 +31,7 @@ import { registerAuthBundleImportRoutes } from "./routes/credentials/authBundleI
 import { createCredentialRoutes, InMemoryCredentialRegistry, type CredentialRegistry } from "./routes/credentials/index.js";
 import { createDoctorRoutes } from "./routes/doctor/index.js";
 import { createDoraRoutes } from "./routes/dora/index.js";
+import { createForgeAskRoutes } from "./routes/forge/ask.js";
 import { createForgeRoutes } from "./routes/forge/index.js";
 import { createGithubWebhookRoutes } from "./routes/githubWebhooks/index.js";
 import { createInsightRoutes } from "./routes/insights/index.js";
@@ -218,6 +219,10 @@ export function buildApp(input: {
   // P3-0003: GitHub App install flow; mounts only when configured via env.
   mountGithubAppInstallFromEnv(app, { pool: input.pool, secrets, minter: githubAppMinter });
   app.route("/orgs", createForgeRoutes({ pool: input.pool, secrets, githubHttp }));
+  // P3-0010: thick-Forge LLM conversation endpoint (⌘K chat morph). Mounted
+  // alongside the P2A-0019 Forge routes; the default deterministic answerer is
+  // grounded via the read-tool surface (provider Answerer is injectable).
+  app.route("/orgs", createForgeAskRoutes({ pool: input.pool, secrets, githubHttp }));
   // P3-0028 webhook-driven CI (option). Mounted at root so GitHub posts to
   // `/github/webhooks/ci`. Polling remains the default fallback.
   app.route("/", createGithubWebhookRoutes({ pool: input.pool, secrets, githubHttp, githubAppMinter }));

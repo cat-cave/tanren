@@ -19,6 +19,15 @@ const ForgeToolProxyBody = z.object({
   args: z.record(z.string(), z.unknown()).default({})
 });
 
+/** Body for the dashboard's thick-Forge chat proxy (P3-0010 ⌘K chat morph). */
+const ForgeAskProxyBody = z.object({
+  orgId: z.string().min(1),
+  question: z.string().min(1).max(4000),
+  projectId: z.string().min(1).optional(),
+  runId: z.string().min(1).optional(),
+  threadId: z.string().min(1).optional()
+});
+
 export interface CreateAppOptions {
   /** Pool override (tests pass a stub); defaults to the real DB pool. */
   pool?: ReturnType<typeof createDbPool>;
@@ -152,6 +161,27 @@ export async function createApp(options: CreateAppOptions = {}) {
     const result = await client.invokeForgeTool(parsed.data.orgId, parsed.data.tool, parsed.data.args);
     if (result === undefined) {
       return c.json({ error: "tool_invocation_failed" }, 502);
+    }
+    return c.json(result);
+  });
+
+  // P3-0010 thick-Forge chat proxy: the ⌘K chat morph POSTs the operator's
+  // question here, we forward the cookie to the orchestrator's LLM-backed
+  // conversation endpoint and return the forge turn's ForgeAnswer render.
+  app.post("/forge/ask", async (c) => {
+    const parsed = ForgeAskProxyBody.safeParse(await c.req.json().catch(() => undefined));
+    if (!parsed.success) {
+      return c.json({ error: "invalid_ask", issues: parsed.error.issues }, 400);
+    }
+    const client = new OrchestratorClient({ orchestratorUrl, cookieHeader: c.req.header("cookie") });
+    const result = await client.askForge(
+      parsed.data.orgId,
+      parsed.data.question,
+      { projectId: parsed.data.projectId, runId: parsed.data.runId },
+      parsed.data.threadId
+    );
+    if (result === undefined) {
+      return c.json({ error: "forge_ask_failed" }, 502);
     }
     return c.json(result);
   });
