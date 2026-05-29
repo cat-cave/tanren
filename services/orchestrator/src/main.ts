@@ -6,8 +6,7 @@ import type pg from "pg";
 import { z } from "zod";
 import type { ActorContext, IdentityProviderId } from "./auth/index.js";
 import { buildOidcProviderFromEnv, createDevLoginProvider, GitHubOAuthProvider, IdentityStore, type IdentityProvider } from "./auth/index.js";
-import { PgRunnerStore, SidecarHttpAllocator, StaticRunnerAllocator } from "./engine/allocators/index.js";
-import type { Allocator } from "./engine/contracts/allocator.js";
+import { buildAllocatorFromEnv } from "./engine/allocators/index.js";
 import { InMemorySecretStore, type SecretStore, VaultSecretStore } from "./engine/contracts/index.js";
 import { parseRawViewOptIn, redactEventRows } from "./routes/runs/redaction.js";
 import { storeGithubToken } from "./engine/credentials/githubToken.js";
@@ -112,32 +111,6 @@ export async function createApp() {
       ssh: new TimedSshSubstrate(new Ssh2Substrate(runnerSecrets)),
       identitySecretRef: runnerIdentitySecretRef
     }
-  });
-}
-
-function buildAllocatorFromEnv(pool: pg.Pool): Allocator {
-  const runners = new PgRunnerStore(pool);
-  const kind = (process.env.TANREN_ALLOCATOR_KIND ?? "sidecar").toLowerCase();
-  if (kind === "static") {
-    // Dev-only: route to the long-lived dev compose static runner. Preserves
-    // the P2A-0010 security boundary (no docker socket on orchestrator) while
-    // keeping `just smoke` working. See docs/operator-guide/runners.md.
-    return new StaticRunnerAllocator({
-      host: process.env.TANREN_RUNNER_SSH_HOST ?? "runner",
-      port: Number(process.env.TANREN_RUNNER_SSH_PORT ?? 22),
-      username: process.env.TANREN_RUNNER_SSH_USER ?? "tanren",
-      hostKeyFingerprint:
-        process.env.TANREN_RUNNER_SSH_HOST_FINGERPRINT === undefined ||
-        process.env.TANREN_RUNNER_SSH_HOST_FINGERPRINT === ""
-          ? undefined
-          : process.env.TANREN_RUNNER_SSH_HOST_FINGERPRINT,
-      runners
-    });
-  }
-  return new SidecarHttpAllocator({
-    baseUrl: process.env.TANREN_ALLOCATOR_URL ?? "http://allocator:3200",
-    authToken: process.env.TANREN_ALLOCATOR_TOKEN ?? "dev",
-    runners
   });
 }
 
