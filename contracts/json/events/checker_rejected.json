@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "behaviorIdsFailed": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "reason": {
+      "type": "string"
+    },
+    "runId": {
+      "type": "string"
+    },
+    "subtaskIndex": {
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+    },
+    "taskId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "runId",
+    "taskId",
+    "subtaskIndex",
+    "reason",
+    "behaviorIdsFailed"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.checker.rejected"
+}

@@ -15,6 +15,10 @@ db/migrations/**/*.sql
 # Generated answerer JSON schemas
 services/orchestrator/src/engine/answerers/schemas/generated/**
 
+# Generated unified contract JSON schemas (Track C §3) — owned by
+# scripts/contract-schema-export.mjs, pinned by the contract-schema-drift gate.
+contracts/json/**
+
 # Codegen-owned mirrors (format is produced by scripts/generate-*.mjs, checked
 # by the *-drift gates — Prettier must not reformat them or the gate drifts).
 db/src/stateEnums.ts

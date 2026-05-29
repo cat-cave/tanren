@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "integration": {
+      "enum": [
+        "mergify_queue",
+        "direct_merge",
+        "external_reviewer"
+      ],
+      "type": "string"
+    },
+    "prNumber": {
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+    },
+    "prUrl": {
+      "type": "string"
+    },
+    "queueLabel": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "prUrl",
+    "prNumber",
+    "integration"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.merge.queued"
+}

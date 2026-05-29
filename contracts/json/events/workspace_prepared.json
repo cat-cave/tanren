@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "repoUrl": {
+      "type": "string"
+    },
+    "runnerId": {
+      "type": "string"
+    },
+    "targetBranch": {
+      "type": "string"
+    },
+    "workspacePath": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "workspacePath"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.workspace.prepared"
+}

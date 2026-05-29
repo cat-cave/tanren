@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "exitCode": {
+      "anyOf": [
+        {
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "failedStep": {
+      "type": "string"
+    },
+    "steps": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "exitCode": {
+            "anyOf": [
+              {
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "outputTail": {
+            "type": "string"
+          },
+          "passed": {
+            "type": "boolean"
+          },
+          "run": {
+            "type": "string"
+          },
+          "timedOut": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "run",
+          "exitCode",
+          "passed",
+          "timedOut",
+          "outputTail"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "tier": {
+      "type": "string"
+    },
+    "when": {
+      "enum": [
+        "per_iteration",
+        "pre_audit",
+        "pre_merge"
+      ],
+      "type": "string"
+    }
+  },
+  "required": [
+    "tier",
+    "when",
+    "failedStep",
+    "exitCode",
+    "steps"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.gate.failed"
+}

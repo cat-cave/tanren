@@ -1,0 +1,158 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "checkRuns": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "conclusion": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "status"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "credentialRef": {
+      "type": "string"
+    },
+    "failingChecks": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "enum": [
+              "check_run",
+              "commit_status"
+            ],
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "name",
+          "state"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "headSha": {
+      "type": "string"
+    },
+    "pendingChecks": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "enum": [
+              "check_run",
+              "commit_status"
+            ],
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "name",
+          "state"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "prUrl": {
+      "type": "string"
+    },
+    "reason": {
+      "type": "string"
+    },
+    "redacted": {
+      "const": true,
+      "type": "boolean"
+    },
+    "status": {
+      "enum": [
+        "pending",
+        "passed",
+        "failed"
+      ],
+      "type": "string"
+    },
+    "statuses": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "context": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "context",
+          "state"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "prUrl",
+    "credentialRef",
+    "redacted",
+    "status",
+    "reason",
+    "headSha",
+    "checkRuns",
+    "statuses",
+    "failingChecks",
+    "pendingChecks"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.ci.failed"
+}

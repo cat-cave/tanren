@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "runnerId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "runnerId"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.runner.released"
+}

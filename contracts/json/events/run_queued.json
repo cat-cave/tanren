@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "branch": {
+      "type": "string"
+    },
+    "plannerJobId": {
+      "type": "string"
+    },
+    "plannerTaskId": {
+      "type": "string"
+    },
+    "project": {
+      "additionalProperties": false,
+      "properties": {
+        "allocator": {
+          "type": "string"
+        },
+        "defaultBranch": {
+          "type": "string"
+        },
+        "repoUrl": {
+          "type": "string"
+        },
+        "runnerImage": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "repoUrl",
+        "defaultBranch",
+        "runnerImage",
+        "allocator"
+      ],
+      "type": "object"
+    },
+    "spec": {
+      "additionalProperties": false,
+      "properties": {
+        "acceptanceCriteria": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "dependsOn": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "acceptanceCriteria",
+        "dependsOn"
+      ],
+      "type": "object"
+    },
+    "trigger": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "trigger",
+    "branch",
+    "plannerTaskId",
+    "plannerJobId",
+    "project",
+    "spec"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.run.queued"
+}

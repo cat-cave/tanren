@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "channel": {
+      "type": "string"
+    },
+    "eventName": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "channel"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.notification.enqueued"
+}

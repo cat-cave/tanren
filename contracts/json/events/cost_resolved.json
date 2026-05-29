@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "billingMode": {
+      "type": "string"
+    },
+    "cli": {
+      "type": "string"
+    },
+    "costBasis": {
+      "type": "string"
+    },
+    "costUsd": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "model": {
+      "type": "string"
+    },
+    "provider": {
+      "type": "string"
+    },
+    "taskId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "taskId",
+    "cli",
+    "provider",
+    "model",
+    "costUsd",
+    "billingMode",
+    "costBasis"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.cost.resolved"
+}

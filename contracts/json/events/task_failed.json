@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "failureKind": {
+      "type": "string"
+    },
+    "jobId": {
+      "type": "string"
+    },
+    "kind": {
+      "type": "string"
+    },
+    "message": {
+      "type": "string"
+    },
+    "reason": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string"
+    },
+    "taskKind": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "taskKind"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.task.failed"
+}

@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "enum": [
+    "queued",
+    "running",
+    "halted",
+    "completed",
+    "failed",
+    "cancelled",
+    "done"
+  ],
+  "type": "string",
+  "x-tanren-schema-id": "tanren.state.runs_status"
+}

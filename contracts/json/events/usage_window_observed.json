@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "capturedAt": {
+      "type": "string"
+    },
+    "creditsRemaining": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "provider": {
+      "type": "string"
+    },
+    "source": {
+      "type": "string"
+    },
+    "windows": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "resetDescription": {
+            "type": "string"
+          },
+          "resetsAt": {
+            "type": "string"
+          },
+          "slot": {
+            "enum": [
+              "primary",
+              "secondary",
+              "tertiary"
+            ],
+            "type": "string"
+          },
+          "usedPercent": {
+            "type": "number"
+          },
+          "windowMinutes": {
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "slot",
+          "usedPercent",
+          "resetsAt",
+          "windowMinutes",
+          "resetDescription"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "provider",
+    "windows",
+    "creditsRemaining",
+    "source",
+    "capturedAt"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.usage.window.observed"
+}

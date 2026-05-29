@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "repoUrl": {
+      "type": "string"
+    },
+    "targetBranch": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "repoUrl",
+    "targetBranch"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.phase1.fixture.started"
+}

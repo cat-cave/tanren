@@ -16,6 +16,7 @@
 - `github-actions-current-major`: CI must keep `actions/checkout@v6` and `actions/setup-node@v6`; older majors are blocked.
 - `schema-drift-check-wired`: root `package.json` must keep `check:schema-drift` wired to `scripts/check-schema-drift.sh`, and root `check` must run it.
 - `answerer-schema-drift-check-wired`: root `package.json` must keep `check:answerer-schema-drift` wired to `scripts/answerer-schema-export.mjs`, and root `check` must run it (directly or via `just ci`).
+- `contract-schema-drift-check-wired`: root `package.json` must keep `check:contract-schema-drift` wired to `scripts/contract-schema-export.mjs`, and root `check` must run it (directly or via `just ci`). This pins the unified JSON-Schema export (Track C §3) — `contracts/json/**` — against drift from its Zod sources.
 - `required-docs-present`: `AGENTS.md`, core playbooks, and this contract must exist.
 
 ## Structural ratchets (Track B wave 3)
@@ -33,5 +34,7 @@ Prefer refactoring over exceptions. A new exception requires a short entry in th
 Active exception: `db/migrations/meta/**` is Drizzle-generated migration metadata and may exceed 500 lines. Delete this exception if Drizzle supports split or compact metadata that preserves drift detection.
 
 Active exception: `services/orchestrator/src/engine/answerers/schemas/generated/**` is the JSON Schema mirror emitted by `scripts/answerer-schema-export.mjs` from the Zod sources in the same directory. The drift test at `services/orchestrator/tests/answererSchemaDrift.test.ts` keeps the mirror honest; the file size grows with the Forge tool-call discriminated union so the human-readable diff stays the source of review value. Delete this exception if the generator ever switches to a compact format that keeps PR diffs reviewable.
+
+Active exception: `contracts/json/**` is the unified JSON-Schema mirror emitted by `scripts/contract-schema-export.mjs` from the Zod contract sources (event payloads, state enums, answerer schemas, HTTP request/response, workflow insights) catalogued in `services/orchestrator/src/engine/schemaExport/catalog.ts`. The `contract-schema-drift-check-wired` rule plus the `check:contract-schema-drift` gate keep the mirror honest; individual files may exceed 500 lines (e.g. the Forge answer and run-detail response) so the human-readable diff stays the review surface. Delete this exception if the generator ever switches to a compact format that keeps PR diffs reviewable.
 
 Active exception: `compose.dev.yml` and `compose.prod.yml` mount `/var/run/docker.sock` into `orchestrator` for SPEC-0003 local runner lifecycle metadata. Workload execution still goes through `SshSubstrate`; allocator code may inspect/claim containers but must not run agent workloads through Docker. Delete this exception when P2A-0010 lands the dedicated allocator sidecar and local allocation no longer needs direct Docker Engine access from the orchestrator.

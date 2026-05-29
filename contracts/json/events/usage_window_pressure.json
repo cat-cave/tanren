@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "provider": {
+      "type": "string"
+    },
+    "resetsAt": {
+      "type": "string"
+    },
+    "slot": {
+      "enum": [
+        "primary",
+        "secondary",
+        "tertiary"
+      ],
+      "type": "string"
+    },
+    "usedPercent": {
+      "type": "number"
+    }
+  },
+  "required": [
+    "provider",
+    "slot",
+    "usedPercent",
+    "resetsAt"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.usage.window.pressure"
+}
