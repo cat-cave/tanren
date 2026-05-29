@@ -3,6 +3,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { runArchitectureChecks } from "./check-architecture.mjs";
+import {
+  checkCrossPackageDeepImports,
+  checkCyclomaticComplexity,
+  checkMaxParams,
+  COMPLEXITY_CAP,
+  MAX_PARAMS_CAP
+} from "./check-architecture-structure.mjs";
 
 async function createFixture(files: Record<string, string>) {
   const root = await mkdtemp(join(tmpdir(), "tanren-architecture-"));
@@ -138,5 +145,49 @@ describe("architecture checker", () => {
     expect(diagnostics.map((item) => item.rule)).toEqual(
       expect.arrayContaining(["docker-api-allocator-only", "no-host-bind-mounts"])
     );
+  });
+});
+
+describe("structural architecture checks", () => {
+  const workflowFile = "services/orchestrator/src/engine/workflow/sample.ts";
+
+  it("flags a function over the cyclomatic-complexity cap and passes a simple one", () => {
+    // One branch token over the cap. Each `if` adds 1 to the baseline of 1.
+    const branches = Array.from({ length: COMPLEXITY_CAP }, (_unused, index) => `  if (n === ${index}) return ${index};`).join("\n");
+    const overText = `export function tangled(n: number): number {\n${branches}\n  return -1;\n}\n`;
+    const over = checkCyclomaticComplexity([{ file: workflowFile, text: overText }]);
+    expect(over.map((item) => item.rule)).toEqual(["cyclomatic-complexity-cap"]);
+
+    const cleanText = "export function simple(n: number): number {\n  return n > 0 ? n : 0;\n}\n";
+    expect(checkCyclomaticComplexity([{ file: workflowFile, text: cleanText }])).toEqual([]);
+  });
+
+  it("only measures complexity inside the critical directories", () => {
+    const branches = Array.from({ length: COMPLEXITY_CAP }, (_unused, index) => `  if (n === ${index}) return ${index};`).join("\n");
+    const text = `export function tangled(n: number): number {\n${branches}\n  return -1;\n}\n`;
+    expect(checkCyclomaticComplexity([{ file: "services/orchestrator/src/routes/sample.ts", text }])).toEqual([]);
+  });
+
+  it("flags a function over the max-params cap and passes one at the cap", () => {
+    const params = Array.from({ length: MAX_PARAMS_CAP + 1 }, (_unused, index) => `arg${index}: number`).join(", ");
+    const overText = `export function wide(${params}): number {\n  return 0;\n}\n`;
+    const over = checkMaxParams([{ file: workflowFile, text: overText }]);
+    expect(over.map((item) => item.rule)).toEqual(["max-params-cap"]);
+
+    const atCapParams = Array.from({ length: MAX_PARAMS_CAP }, (_unused, index) => `arg${index}: number`).join(", ");
+    const atCapText = `export function fits(${atCapParams}): number {\n  return 0;\n}\n`;
+    expect(checkMaxParams([{ file: workflowFile, text: atCapText }])).toEqual([]);
+  });
+
+  it("flags deep cross-package imports and allows public-entry and intra-package imports", () => {
+    const bareDeep = { file: "services/orchestrator/src/main.ts", text: "import { x } from \"@tanren/db/src/stateEnums.js\";\n" };
+    const relativeDeep = { file: "services/orchestrator/tests/sample.test.ts", text: "import { x } from \"../../../db/src/stateEnums.js\";\n" };
+    const flagged = checkCrossPackageDeepImports([bareDeep, relativeDeep]);
+    expect(flagged).toHaveLength(2);
+    expect(flagged.every((item) => item.rule === "cross-package-deep-import")).toBe(true);
+
+    const publicEntry = { file: "services/orchestrator/src/main.ts", text: "import { stateEnumLists } from \"@tanren/db\";\n" };
+    const intraPackage = { file: "services/orchestrator/src/main.ts", text: "import { y } from \"./engine/state/index.js\";\n" };
+    expect(checkCrossPackageDeepImports([publicEntry, intraPackage])).toEqual([]);
   });
 });
