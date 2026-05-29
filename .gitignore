@@ -1,6 +1,8 @@
 node_modules/
 dist/
 coverage/
+# Stryker mutation-testing output (html report + temp dir); see stryker.config.mjs
+reports/
 .env
 .DS_Store
 *.log
