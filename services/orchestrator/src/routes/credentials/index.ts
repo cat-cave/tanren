@@ -1,9 +1,17 @@
 // P2A-0013: credential reference CRUD. Values live in Vault (or the in-memory
 // SecretStore in tests); the routes only manipulate references and never
 // return secret values. Credential refs are namespaced as
-// `credential/<kind>/<scope>/<name>`. Org-scoped credentials live under
-// `credential/<kind>/org/<orgId>/...`; personal credentials live under
-// `credential/<kind>/me/<userId>/...`.
+// `credential/<slug>/<scope>/<ownerId>/<name>`. Org-scoped credentials live
+// under `credential/<slug>/org/<orgId>/...`; personal credentials live under
+// `credential/<slug>/me/<userId>/...`.
+//
+// SaaS Tier-A #3: the Vault ref is DERIVED server-side from the authenticated
+// `{kind, scope, ownerId}` plus a caller-supplied name (see
+// `engine/credentials/refNamespace.ts`); the route never trusts an arbitrary
+// caller ref. A caller may still supply a full ref for back-compat, but it must
+// name the SAME tenant the route already authorized — a ref whose scope/owner
+// segment points at a different tenant is rejected with a 400, closing the
+// cross-tenant key-collision/overwrite hole.
 
 import { Hono } from "hono";
 import type pg from "pg";
@@ -15,6 +23,7 @@ import { storeCodexAuthBundle } from "../../engine/credentials/codexAuth.js";
 import { storeGithubAppCredential } from "../../engine/credentials/githubApp.js";
 import { storeGithubToken } from "../../engine/credentials/githubToken.js";
 import { storeOpencodeAuthBundle } from "../../engine/credentials/opencodeAuth.js";
+import { deriveImportRef } from "../../engine/credentials/refNamespace.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg } from "../orgs/index.js";
 
@@ -179,7 +188,8 @@ async function handleImport(
     }
     let stored;
     try {
-      stored = await storeCodexAuthBundle(options.secrets, parsed.data);
+      const ref = deriveImportRef({ supplied: parsed.data.ref, kind: "codex_chatgpt_auth", scope, ownerId });
+      stored = await storeCodexAuthBundle(options.secrets, { ...parsed.data, ref });
     } catch (error) {
       return c.json(
         {
@@ -205,7 +215,8 @@ async function handleImport(
     }
     let stored;
     try {
-      stored = await storeClaudeAuthBundle(options.secrets, parsed.data);
+      const ref = deriveImportRef({ supplied: parsed.data.ref, kind: "claude_cli_auth", scope, ownerId });
+      stored = await storeClaudeAuthBundle(options.secrets, { ...parsed.data, ref });
     } catch (error) {
       return c.json(
         {
@@ -231,7 +242,8 @@ async function handleImport(
     }
     let stored;
     try {
-      stored = await storeOpencodeAuthBundle(options.secrets, parsed.data);
+      const ref = deriveImportRef({ supplied: parsed.data.ref, kind: "opencode_cli_auth", scope, ownerId });
+      stored = await storeOpencodeAuthBundle(options.secrets, { ...parsed.data, ref });
     } catch (error) {
       return c.json(
         {
@@ -255,7 +267,19 @@ async function handleImport(
     if (!parsed.success) {
       return c.json({ error: "invalid_github_credential", issues: parsed.error.issues }, 400);
     }
-    const stored = await storeGithubToken(options.secrets, parsed.data);
+    let stored;
+    try {
+      const ref = deriveImportRef({ supplied: parsed.data.ref, kind: "github_token", scope, ownerId });
+      stored = await storeGithubToken(options.secrets, { ...parsed.data, ref });
+    } catch (error) {
+      return c.json(
+        {
+          error: "invalid_github_credential",
+          message: error instanceof Error ? error.message : String(error),
+        },
+        400,
+      );
+    }
     await registry.put({
       ref: stored.ref,
       kind: "github_token",
@@ -272,7 +296,8 @@ async function handleImport(
     }
     let stored;
     try {
-      stored = await storeGithubAppCredential(options.secrets, parsed.data);
+      const ref = deriveImportRef({ supplied: parsed.data.ref, kind: "github_app", scope, ownerId });
+      stored = await storeGithubAppCredential(options.secrets, { ...parsed.data, ref });
     } catch (error) {
       return c.json(
         {
@@ -295,15 +320,27 @@ async function handleImport(
   if (!parsed.success) {
     return c.json({ error: "invalid_credential", issues: parsed.error.issues }, 400);
   }
-  await options.secrets.put({ ref: parsed.data.ref, value: parsed.data.value });
+  let ref: string;
+  try {
+    ref = deriveImportRef({ supplied: parsed.data.ref, kind: "opaque", scope, ownerId });
+  } catch (error) {
+    return c.json(
+      {
+        error: "invalid_credential",
+        message: error instanceof Error ? error.message : String(error),
+      },
+      400,
+    );
+  }
+  await options.secrets.put({ ref, value: parsed.data.value });
   await registry.put({
-    ref: parsed.data.ref,
+    ref,
     kind: "opaque",
     scope,
     ownerId,
     createdAt: new Date().toISOString(),
   });
-  return c.json({ ref: parsed.data.ref, kind: "opaque", redacted: true }, 201);
+  return c.json({ ref, kind: "opaque", redacted: true }, 201);
 }
 
 function requireActor(c: { var: { actor?: ActorContext } }): ActorContext {
