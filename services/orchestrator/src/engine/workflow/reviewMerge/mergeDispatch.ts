@@ -425,7 +425,7 @@ function parseCommitLogins(body: unknown): string[] {
       continue;
     }
     const record = entry as Record<string, unknown>;
-    logins.push(loginFrom(record.author), loginFrom(record.committer));
+    logins.push(loginFrom(record["author"]), loginFrom(record["committer"]));
   }
   return logins;
 }
@@ -434,7 +434,7 @@ function loginFrom(user: unknown): string {
   if (typeof user !== "object" || user === null || Array.isArray(user)) {
     return "";
   }
-  const login = (user as Record<string, unknown>).login;
+  const login = (user as Record<string, unknown>)["login"];
   return typeof login === "string" ? login : "";
 }
 

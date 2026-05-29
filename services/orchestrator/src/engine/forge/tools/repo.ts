@@ -35,8 +35,8 @@ async function loadProjectRepo(
   const credentialRef =
     typeof row.config === "object" &&
     row.config !== null &&
-    typeof (row.config as Record<string, unknown>).githubCredentialRef === "string"
-      ? String((row.config as Record<string, unknown>).githubCredentialRef)
+    typeof (row.config as Record<string, unknown>)["githubCredentialRef"] === "string"
+      ? String((row.config as Record<string, unknown>)["githubCredentialRef"])
       : undefined;
   if (credentialRef === undefined || credentialRef === "") {
     throw new ToolAccessDeniedError(`project ${projectId} has no GitHub credential ref`);

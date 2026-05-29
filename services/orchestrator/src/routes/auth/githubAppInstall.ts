@@ -124,8 +124,8 @@ export function mountGithubAppInstallFromEnv(
   app: Hono<ActorContextEnv>,
   deps: { pool: pg.Pool; secrets: SecretStore; minter: GithubAppTokenMinter }
 ): void {
-  const installUrl = process.env.TANREN_GITHUB_APP_INSTALL_URL;
-  const appCredentialRef = process.env.TANREN_GITHUB_APP_CREDENTIAL_REF;
+  const installUrl = process.env["TANREN_GITHUB_APP_INSTALL_URL"];
+  const appCredentialRef = process.env["TANREN_GITHUB_APP_CREDENTIAL_REF"];
   if (installUrl === undefined || installUrl === "" || appCredentialRef === undefined || appCredentialRef === "") {
     return;
   }
@@ -137,7 +137,7 @@ export function mountGithubAppInstallFromEnv(
       appCredentialRef,
       installUrl,
       minter: deps.minter,
-      cookieSecure: process.env.TANREN_COOKIE_SECURE === "1"
+      cookieSecure: process.env["TANREN_COOKIE_SECURE"] === "1"
     })
   );
 }

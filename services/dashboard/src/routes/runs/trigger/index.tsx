@@ -64,7 +64,7 @@ export function mountTriggerScreens(app: Hono, deps: ShellDeps): void {
     }
 
     const form = await c.req.parseBody();
-    const branchRaw = String(form.branch ?? "").trim();
+    const branchRaw = String(form["branch"] ?? "").trim();
     const client = clientFor(c, deps);
     const result = await client.triggerRun(ctx.org.id, projectId, specId, {
       trigger: "dashboard",

@@ -321,7 +321,7 @@ async function persistCiObservation(pool: RunStateClient, taskId: string, observ
 }
 
 function githubCredentialRefFromInput(override: string | undefined, projectConfig: Record<string, unknown>): string {
-  const configured = override ?? projectConfig.githubCredentialRef;
+  const configured = override ?? projectConfig["githubCredentialRef"];
   if (typeof configured !== "string") {
     throw new Error("GitHub credential ref is required");
   }
@@ -329,7 +329,7 @@ function githubCredentialRefFromInput(override: string | undefined, projectConfi
 }
 
 function credentialRefOrUndefined(override: string | undefined, projectConfig: Record<string, unknown>): string | undefined {
-  const configured = override ?? projectConfig.githubCredentialRef;
+  const configured = override ?? projectConfig["githubCredentialRef"];
   return typeof configured === "string" ? validateGithubCredentialRef(configured) : undefined;
 }
 

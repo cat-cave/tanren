@@ -89,7 +89,8 @@ export async function assertNoCycle(
        // Array#toReversed (which needs a newer lib target).
       const existingChain: string[] = [];
       for (let i = backtrack.length - 1; i >= 0; i--) {
-        existingChain.push(backtrack[i]);
+        const entry = backtrack[i];
+        if (entry !== undefined) existingChain.push(entry);
       }
       const cyclePath = [fromSpecId, ...existingChain];
       throw new CyclicSpecDependencyError(cyclePath);

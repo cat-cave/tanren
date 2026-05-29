@@ -17,9 +17,7 @@ export {
 
 export { defaultSeverityFor, eventDefaultSeverity } from "./eventDefaultSeverity.js";
 
-export {
-  NotificationChannel
-} from "./channels/types.js";
+export type { NotificationChannel } from "./channels/types.js";
 export { NtfyChannel, type NtfyChannelDeps } from "./channels/ntfy.js";
 export { SlackChannel, type SlackChannelDeps } from "./channels/slack.js";
 export {

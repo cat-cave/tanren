@@ -14,9 +14,9 @@ export function initReviewHandoff(): void {
   const root = document.querySelector<HTMLElement>('[data-island="review"]');
   if (root === null) return;
 
-  const behaviorCount = Number(root.dataset.behaviorCount ?? "0");
-  const deferralCount = Number(root.dataset.deferralCount ?? "0");
-  const ciGreen = root.dataset.ciGreen === "1";
+  const behaviorCount = Number(root.dataset['behaviorCount'] ?? "0");
+  const deferralCount = Number(root.dataset['deferralCount'] ?? "0");
+  const ciGreen = root.dataset['ciGreen'] === "1";
 
   const verified = new Set<string>();
   const resolved = new Map<string, string>();
@@ -82,7 +82,7 @@ export function initReviewHandoff(): void {
   const deviceTabs = root.querySelectorAll<HTMLElement>('[data-review="device-tabs"] button');
   const selectDevice = (tab: HTMLElement): void => {
     for (const t of deviceTabs) t.classList.toggle("active", t === tab);
-    if (previewFrame !== null) previewFrame.style.maxWidth = tab.dataset.width ?? "none";
+    if (previewFrame !== null) previewFrame.style.maxWidth = tab.dataset['width'] ?? "none";
   };
 
   root.addEventListener("click", (event) => {
@@ -96,7 +96,7 @@ export function initReviewHandoff(): void {
 
     const behavior = target.closest<HTMLElement>("[data-review-behavior]");
     if (behavior !== null) {
-      const id = behavior.dataset.reviewBehavior ?? "";
+      const id = behavior.dataset['reviewBehavior'] ?? "";
       const nowDone = !verified.has(id);
       if (nowDone) verified.add(id);
       else verified.delete(id);
@@ -113,8 +113,8 @@ export function initReviewHandoff(): void {
     if (resolve !== null) {
       const card = resolve.closest<HTMLElement>("[data-review-deferral]");
       if (card === null) return;
-      const id = card.dataset.reviewDeferral ?? "";
-      const label = resolve.dataset.resolve ?? "resolved";
+      const id = card.dataset['reviewDeferral'] ?? "";
+      const label = resolve.dataset['resolve'] ?? "resolved";
       resolved.set(id, label);
       card.style.opacity = "0.6";
       const badge = card.querySelector<HTMLElement>("[data-review-resolved]");

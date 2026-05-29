@@ -132,11 +132,11 @@ function extractHeadSha(body: unknown): string | undefined {
   if (typeof body !== "object" || body === null || Array.isArray(body)) {
     return undefined;
   }
-  const head = (body as Record<string, unknown>).head;
+  const head = (body as Record<string, unknown>)["head"];
   if (typeof head !== "object" || head === null || Array.isArray(head)) {
     return undefined;
   }
-  const sha = (head as Record<string, unknown>).sha;
+  const sha = (head as Record<string, unknown>)["sha"];
   return typeof sha === "string" && sha !== "" ? sha : undefined;
 }
 

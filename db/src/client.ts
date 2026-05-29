@@ -1,8 +1,6 @@
-import pg from "pg";
+import { Pool } from "pg";
 
-const { Pool } = pg;
-
-export function createDbPool(connectionString = process.env.DATABASE_URL) {
+export function createDbPool(connectionString = process.env["DATABASE_URL"]) {
   if (!connectionString) {
     throw new Error("DATABASE_URL is required");
   }
@@ -10,4 +8,4 @@ export function createDbPool(connectionString = process.env.DATABASE_URL) {
   return new Pool({ connectionString });
 }
 
-export type DbPool = pg.Pool;
+export type DbPool = Pool;

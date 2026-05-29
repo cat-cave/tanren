@@ -36,8 +36,8 @@ export interface CreateAppOptions {
 }
 
 export async function createApp(options: CreateAppOptions = {}) {
-  const orchestratorUrl = process.env.ORCHESTRATOR_URL ?? "http://localhost:3100";
-  const requireAuth = process.env.TANREN_REQUIRE_AUTH === "1";
+  const orchestratorUrl = process.env["ORCHESTRATOR_URL"] ?? "http://localhost:3100";
+  const requireAuth = process.env["TANREN_REQUIRE_AUTH"] === "1";
   const pool = options.pool ?? createDbPool();
   if (options.skipMigrate !== true) {
     await migrate(pool);
@@ -198,7 +198,7 @@ export async function createApp(options: CreateAppOptions = {}) {
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const port = Number(process.env.DASHBOARD_PORT ?? 3000);
+  const port = Number(process.env["DASHBOARD_PORT"] ?? 3000);
   const app = await createApp();
   serve({ fetch: app.fetch, port });
   console.log(`dashboard listening on :${port}`);

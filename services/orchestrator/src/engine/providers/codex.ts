@@ -241,10 +241,10 @@ export function parseCodexJsonlTelemetry(stdout: string): CodexEventTelemetry {
 // Matched on the stable "usage limit" phrase rather than the event type so a
 // minor CLI wording change in the error envelope still surfaces it.
 function detectUsageLimit(event: Record<string, unknown>): UsageLimitSignal | undefined {
-  const candidates: unknown[] = [event.message];
-  const errorField = event.error;
+  const candidates: unknown[] = [event["message"]];
+  const errorField = event["error"];
   if (typeof errorField === "object" && errorField !== null && !Array.isArray(errorField)) {
-    candidates.push((errorField as Record<string, unknown>).message);
+    candidates.push((errorField as Record<string, unknown>)["message"]);
   } else {
     candidates.push(errorField);
   }

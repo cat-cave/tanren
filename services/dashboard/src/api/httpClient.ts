@@ -35,7 +35,7 @@ export abstract class OrchestratorHttpClient {
   protected headers(extra?: Record<string, string>): Record<string, string> {
     const base: Record<string, string> = { Accept: "application/json", ...extra };
     if (this.cookieHeader !== undefined && this.cookieHeader !== "") {
-      base.cookie = this.cookieHeader;
+      base["cookie"] = this.cookieHeader;
     }
     return base;
   }

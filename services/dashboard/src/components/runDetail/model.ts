@@ -255,27 +255,27 @@ export function reasoningForTask(detail: RunDetail, taskId: string | null): Mome
     const payload = asRecord(event.payload);
     if (payload === undefined) continue;
 
-    const eventIntent = asString(payload.intent) ?? asString(payload.summary);
+    const eventIntent = asString(payload["intent"]) ?? asString(payload["summary"]);
     if (eventIntent !== undefined && intent === null) intent = eventIntent;
 
-    const eventHeadline = asString(payload.headline) ?? asString(payload.title);
+    const eventHeadline = asString(payload["headline"]) ?? asString(payload["title"]);
     if (eventHeadline !== undefined && headline === null) headline = eventHeadline;
 
     // Tool calls: a `tool`/`name` field plus arg/output summaries.
-    const toolName = asString(payload.tool) ?? asString(payload.toolName);
+    const toolName = asString(payload["tool"]) ?? asString(payload["toolName"]);
     if (toolName !== undefined) {
       tools.push({
         name: toolName,
-        arg: asString(payload.arg) ?? asString(payload.args) ?? "",
-        output: asString(payload.output) ?? asString(payload.result) ?? ""
+        arg: asString(payload["arg"]) ?? asString(payload["args"]) ?? "",
+        output: asString(payload["output"]) ?? asString(payload["result"]) ?? ""
       });
     }
 
     // Decisions: either a single `decision` string or a `decisions` array.
-    const decision = asString(payload.decision);
+    const decision = asString(payload["decision"]);
     if (decision !== undefined) decisions.push(decision);
-    if (Array.isArray(payload.decisions)) {
-      for (const d of payload.decisions) {
+    if (Array.isArray(payload["decisions"])) {
+      for (const d of payload["decisions"]) {
         const ds = asString(d);
         if (ds !== undefined) decisions.push(ds);
       }
@@ -326,8 +326,8 @@ export function reviewMergeStateFromEvents(events: RunEventRow[]): ReviewMergeSt
   const state: ReviewMergeState = { phase: "none" };
   for (const event of events) {
     const payload = asRecord(event.payload) ?? {};
-    const message = asString(payload.message);
-    const integration = asString(payload.integration);
+    const message = asString(payload["message"]);
+    const integration = asString(payload["integration"]);
     switch (event.eventType) {
       case "github.pr.ready":
       case "review.requested":
@@ -357,7 +357,7 @@ export function reviewMergeStateFromEvents(events: RunEventRow[]): ReviewMergeSt
       case "merge.completed":
       case "github.pr.merged":
         state.phase = "merged";
-        state.mergeSha = asString(payload.mergeSha);
+        state.mergeSha = asString(payload["mergeSha"]);
         state.integration = integration ?? state.integration;
         break;
       default:
@@ -375,7 +375,7 @@ export function reviewMergeStateFromEvents(events: RunEventRow[]): ReviewMergeSt
 export function prNumberFrom(prUrl: string | null): string | null {
   if (prUrl === null) return null;
   const match = /\/pull\/(\d+)/.exec(prUrl);
-  return match ? match[1] : null;
+  return match?.[1] ?? null;
 }
 
 /**

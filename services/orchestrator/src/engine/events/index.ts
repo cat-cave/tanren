@@ -1,11 +1,10 @@
 // Single import surface for typed event payloads, the event registry, and
 // the sensitivity-tag layer that feeds P2A-0009 redaction.
 //
-// Importing this barrel registers every Sensitivity rule via the side-effect
-// import below, so downstream callers do not need to explicitly initialize
-// the rule table.
-
-import "./sensitivityRules.js";
+// Importing this barrel registers every Sensitivity rule: the
+// `./sensitivityRules.js` re-export below loads that module, whose top-level
+// `ensureSensitivityRulesRegistered()` call populates the rule table. Callers
+// therefore do not need to explicitly initialize it.
 
 export {
   EventRegistry,

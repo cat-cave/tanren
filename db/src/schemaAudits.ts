@@ -22,7 +22,7 @@
 
 import { sql } from "drizzle-orm";
 import { check, index, jsonb, pgTable, text, timestamp } from "drizzle-orm/pg-core";
-import { organizations, projects } from "./schema.js";
+import { organizations, projects } from "./schemaCore.js";
 
 // The audit kinds — mirror the hi-fi `AUDIT_KIND_GLYPH` keys plus the deferred
 // stale-specs sweep called out in PROJECT_BRIEF §2.2.

@@ -79,8 +79,8 @@ export function pullRequestUrlsFromPayload(payload: unknown): string[] {
     return [];
   }
   const object = payload as Record<string, unknown>;
-  const container = (object.check_run ?? object.check_suite) as Record<string, unknown> | undefined;
-  const pulls = container?.pull_requests ?? object.pull_requests;
+  const container = (object["check_run"] ?? object["check_suite"]) as Record<string, unknown> | undefined;
+  const pulls = container?.["pull_requests"] ?? object["pull_requests"];
   if (!Array.isArray(pulls)) {
     return [];
   }
@@ -89,7 +89,7 @@ export function pullRequestUrlsFromPayload(payload: unknown): string[] {
     if (typeof pull !== "object" || pull === null) {
       continue;
     }
-    const htmlUrl = (pull as Record<string, unknown>).html_url;
+    const htmlUrl = (pull as Record<string, unknown>)["html_url"];
     if (typeof htmlUrl === "string" && htmlUrl !== "") {
       urls.add(htmlUrl);
     }

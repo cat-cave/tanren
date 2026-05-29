@@ -143,12 +143,12 @@ function parseReview(value: unknown): GitHubReview {
     throw new Error("GitHub PR review was not an object");
   }
   const object = value as Record<string, unknown>;
-  const rawState = typeof object.state === "string" ? object.state.toLowerCase() : "pending";
+  const rawState = typeof object["state"] === "string" ? object["state"].toLowerCase() : "pending";
   return {
     state: normalizeReviewState(rawState),
-    reviewer: reviewerLogin(object.user),
-    body: typeof object.body === "string" && object.body !== "" ? object.body : undefined,
-    submittedAt: typeof object.submitted_at === "string" ? object.submitted_at : undefined
+    reviewer: reviewerLogin(object["user"]),
+    body: typeof object["body"] === "string" && object["body"] !== "" ? object["body"] : undefined,
+    submittedAt: typeof object["submitted_at"] === "string" ? object["submitted_at"] : undefined
   };
 }
 
@@ -171,7 +171,7 @@ function reviewerLogin(user: unknown): string | undefined {
   if (typeof user !== "object" || user === null || Array.isArray(user)) {
     return undefined;
   }
-  const login = (user as Record<string, unknown>).login;
+  const login = (user as Record<string, unknown>)["login"];
   return typeof login === "string" ? login : undefined;
 }
 
@@ -209,7 +209,7 @@ function parseMergeSha(value: unknown): string | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return undefined;
   }
-  const sha = (value as Record<string, unknown>).sha;
+  const sha = (value as Record<string, unknown>)["sha"];
   return typeof sha === "string" ? sha : undefined;
 }
 
@@ -217,6 +217,6 @@ function parseMessage(value: unknown): string | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return undefined;
   }
-  const message = (value as Record<string, unknown>).message;
+  const message = (value as Record<string, unknown>)["message"];
   return typeof message === "string" ? message : undefined;
 }

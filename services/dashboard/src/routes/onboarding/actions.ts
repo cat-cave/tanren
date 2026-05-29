@@ -34,10 +34,10 @@ export function mountOnboardingActions(app: Hono, deps: ShellDeps): void {
     const client = clientFor(c, deps);
     const orgId = await firstOrgId(client);
     const form = await c.req.parseBody();
-    const label = String(form.label ?? "").trim();
-    const value = String(form.value ?? "");
-    const schema = String(form.schema ?? "custom");
-    const baseUrl = String(form.baseUrl ?? "");
+    const label = String(form["label"] ?? "").trim();
+    const value = String(form["value"] ?? "");
+    const schema = String(form["schema"] ?? "custom");
+    const baseUrl = String(form["baseUrl"] ?? "");
     if (orgId === undefined || label === "" || value === "") {
       return redirectTo(c, "/onboarding/credentials", "missing label or key");
     }
@@ -55,8 +55,8 @@ export function mountOnboardingActions(app: Hono, deps: ShellDeps): void {
   app.post("/onboarding/credentials/dev/codex", async (c) => {
     const client = clientFor(c, deps);
     const form = await c.req.parseBody();
-    const ref = String(form.ref ?? "").trim();
-    const authJson = String(form.authJson ?? "");
+    const ref = String(form["ref"] ?? "").trim();
+    const authJson = String(form["authJson"] ?? "");
     if (ref === "" || authJson === "") {
       return redirectTo(c, "/onboarding/credentials", "missing ref or auth.json");
     }
@@ -76,8 +76,8 @@ export function mountOnboardingActions(app: Hono, deps: ShellDeps): void {
     const client = clientFor(c, deps);
     const orgId = await firstOrgId(client);
     const form = await c.req.parseBody();
-    const label = String(form.label ?? "").trim();
-    const token = String(form.token ?? "");
+    const label = String(form["label"] ?? "").trim();
+    const token = String(form["token"] ?? "");
     if (orgId === undefined || label === "" || token === "") {
       return redirectTo(c, "/onboarding/credentials", "missing label or token");
     }
@@ -95,7 +95,7 @@ export function mountOnboardingActions(app: Hono, deps: ShellDeps): void {
     const client = clientFor(c, deps);
     const orgId = await firstOrgId(client);
     const form = await c.req.parseBody();
-    const ref = String(form.ref ?? "");
+    const ref = String(form["ref"] ?? "");
     if (orgId !== undefined && ref !== "") await client.deleteOrgCredential(orgId, ref);
     return redirectTo(c, "/onboarding/credentials", "removed");
   });
@@ -105,9 +105,9 @@ export function mountOnboardingActions(app: Hono, deps: ShellDeps): void {
     const client = clientFor(c, deps);
     const orgId = await firstOrgId(client);
     const form = await c.req.parseBody();
-    const label = String(form.label ?? "").trim();
-    const destination = String(form.destination ?? "").trim();
-    const channelKind = String(form.channelKind ?? "ntfy");
+    const label = String(form["label"] ?? "").trim();
+    const destination = String(form["destination"] ?? "").trim();
+    const channelKind = String(form["channelKind"] ?? "ntfy");
     if (orgId === undefined || label === "" || destination === "") {
       return redirectTo(c, "/notifications", "missing label or destination");
     }
@@ -127,10 +127,10 @@ export function mountOnboardingActions(app: Hono, deps: ShellDeps): void {
     const client = clientFor(c, deps);
     const orgId = await firstOrgId(client);
     const form = await c.req.parseBody();
-    const targetId = String(form.targetId ?? "");
-    const eventName = String(form.eventName ?? "");
-    const minSeverity = String(form.minSeverity ?? "info");
-    const enabled = String(form.enabled ?? "true") !== "false";
+    const targetId = String(form["targetId"] ?? "");
+    const eventName = String(form["eventName"] ?? "");
+    const minSeverity = String(form["minSeverity"] ?? "info");
+    const enabled = String(form["enabled"] ?? "true") !== "false";
     if (orgId === undefined || targetId === "" || eventName === "") {
       return redirectTo(c, "/notifications", "missing target or event");
     }

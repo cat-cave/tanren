@@ -93,8 +93,7 @@ function block(lines: Line[], start: number, indent: number): { value: YamlValue
 function sequence(lines: Line[], start: number, indent: number): { value: YamlValue; next: number } {
   const items: YamlValue[] = [];
   let i = start;
-  while (i < lines.length && lines[i].indent === indent && (lines[i].content === "-" || lines[i].content.startsWith("- "))) {
-    const line = lines[i];
+  for (let line = lines[i]; line !== undefined && line.indent === indent && (line.content === "-" || line.content.startsWith("- ")); line = lines[i]) {
     const rest = line.content === "-" ? "" : line.content.slice(2).trim();
     if (rest.length === 0) {
       const result = block(lines, i + 1, indent + 2);
@@ -124,10 +123,14 @@ function inlineMappingItem(
   rest: string
 ): { value: YamlValue; next: number } {
   const keyIndent = indent + 2;
-  const synthesized: Line[] = [{ indent: keyIndent, content: rest, number: lines[start].number }];
+  const startLine = lines[start];
+  if (startLine === undefined) {
+    throw new CiYamlParseError("expected a sequence item line", 0);
+  }
+  const synthesized: Line[] = [{ indent: keyIndent, content: rest, number: startLine.number }];
   let i = start + 1;
-  while (i < lines.length && lines[i].indent >= keyIndent) {
-    synthesized.push(lines[i]);
+  for (let next = lines[i]; next !== undefined && next.indent >= keyIndent; next = lines[i]) {
+    synthesized.push(next);
     i += 1;
   }
   const result = mapping(synthesized, 0, keyIndent);
@@ -141,8 +144,7 @@ function isFlowQuotedColon(rest: string): boolean {
 function mapping(lines: Line[], start: number, indent: number): { value: YamlValue; next: number } {
   const obj: { [key: string]: YamlValue } = {};
   let i = start;
-  while (i < lines.length && lines[i].indent === indent) {
-    const line = lines[i];
+  for (let line = lines[i]; line !== undefined && line.indent === indent; line = lines[i]) {
     if (line.content.startsWith("- ") || line.content === "-") {
       break;
     }
@@ -153,7 +155,7 @@ function mapping(lines: Line[], start: number, indent: number): { value: YamlVal
       obj[key] = parseScalar(valueText, line.number);
       i += 1;
     } else {
-      const childIndent = i + 1 < lines.length ? lines[i + 1].indent : indent;
+      const childIndent = lines[i + 1]?.indent ?? indent;
       const result = block(lines, i + 1, childIndent > indent ? childIndent : indent + 2);
       obj[key] = result.value;
       i = result.next;
@@ -192,13 +194,13 @@ export function parseYaml(text: string): YamlValue {
   if (lines.length === 0) {
     return {};
   }
-  const baseIndent = lines[0].indent;
-  if (baseIndent !== 0) {
-    throw new CiYamlParseError("document must start at column 0", lines[0].number);
+  const firstLine = lines[0];
+  if (firstLine === undefined || firstLine.indent !== 0) {
+    throw new CiYamlParseError("document must start at column 0", firstLine?.number ?? 0);
   }
   const result = block(lines, 0, 0);
   if (result.next !== lines.length) {
-    throw new CiYamlParseError("inconsistent indentation", lines[result.next].number);
+    throw new CiYamlParseError("inconsistent indentation", lines[result.next]?.number ?? 0);
   }
   return result.value;
 }

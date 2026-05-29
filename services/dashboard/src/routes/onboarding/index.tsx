@@ -28,12 +28,12 @@ import { mountOnboardingActions } from "./actions.js";
 import { mountExistingBrownfield } from "./existing/index.js";
 
 /** The public GitHub App install URL (configurable; sensible default). */
-const GITHUB_APP_URL = process.env.TANREN_GITHUB_APP_URL ?? "https://github.com/apps/tanren/installations/new";
+const GITHUB_APP_URL = process.env["TANREN_GITHUB_APP_URL"] ?? "https://github.com/apps/tanren/installations/new";
 
 // P3-0003: when set, the org-setup wizard offers the orchestrator-driven App
 // install flow (`/auth/github-app/install?orgId=…`) which provisions an
 // auto-rotating installation token. Points at the orchestrator's public URL.
-const ORCHESTRATOR_PUBLIC_URL = process.env.TANREN_ORCHESTRATOR_PUBLIC_URL;
+const ORCHESTRATOR_PUBLIC_URL = process.env["TANREN_ORCHESTRATOR_PUBLIC_URL"];
 
 function appInstallHrefFor(orgId: string | undefined): string | undefined {
   if (ORCHESTRATOR_PUBLIC_URL === undefined || ORCHESTRATOR_PUBLIC_URL === "" || orgId === undefined) {

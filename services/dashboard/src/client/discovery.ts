@@ -19,8 +19,8 @@ export function initDiscovery(): void {
 
   const select = (opt: HTMLElement): void => {
     for (const o of options) o.classList.toggle("sel", o === opt);
-    const kind = opt.dataset.placementKind ?? "slot_after";
-    const label = opt.dataset.placementLabel ?? "";
+    const kind = opt.dataset['placementKind'] ?? "slot_after";
+    const label = opt.dataset['placementLabel'] ?? "";
     if (kindInput !== null) kindInput.value = kind;
     if (labelInput !== null) labelInput.value = label;
     if (chosen !== null) chosen.textContent = `placement · ${label}`;

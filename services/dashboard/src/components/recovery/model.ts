@@ -91,10 +91,10 @@ function rejectionReason(events: RunEventRow[]): { reason: string; detail: strin
         e.eventType === "checker.rejected"
     ) ?? findLast(events, (e) => e.eventType === "planner.rerequested");
   const payload = (rejection?.payload ?? {}) as Record<string, unknown>;
-  const reasonText = typeof payload.reason === "string" ? payload.reason
-    : typeof payload.rejectionReason === "string" ? payload.rejectionReason
+  const reasonText = typeof payload["reason"] === "string" ? payload["reason"]
+    : typeof payload["rejectionReason"] === "string" ? payload["rejectionReason"]
     : undefined;
-  const rerunCount = typeof payload.plannerRerunCount === "number" ? payload.plannerRerunCount : undefined;
+  const rerunCount = typeof payload["plannerRerunCount"] === "number" ? payload["plannerRerunCount"] : undefined;
   if (rejection?.eventType.startsWith("auditor")) {
     return {
       reason: `auditor disagrees with writer${rerunCount !== undefined ? ` · ${rerunCount}×` : ""}`,

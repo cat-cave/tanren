@@ -58,8 +58,8 @@ const READ_TOOLS = new Set([
 export function routeForAction(action: ForgeAction): string | undefined {
   const { tool, args = {} } = action.toolCall;
   if (!READ_TOOLS.has(tool)) return undefined;
-  if (tool === "tanren.read_run" && typeof args.runId === "string") return `/runs/${args.runId}`;
-  if (tool === "tanren.read_spec" && typeof args.specId === "string") return `/specs/${args.specId}`;
+  if (tool === "tanren.read_run" && typeof args["runId"] === "string") return `/runs/${args["runId"]}`;
+  if (tool === "tanren.read_spec" && typeof args["specId"] === "string") return `/specs/${args["specId"]}`;
   if (tool === "tanren.read_costs") return "/costs";
   if (tool === "tanren.read_insights" || tool === "tanren.read_milestones") return "/overview";
   return undefined;
@@ -173,8 +173,8 @@ export async function askForge(
 ): Promise<ForgeAskResponse | undefined> {
   if (orgId === "") return undefined;
   const body: Record<string, unknown> = { orgId, question };
-  if (scope.projectId !== undefined && scope.projectId !== "") body.projectId = scope.projectId;
-  if (scope.threadId !== undefined) body.threadId = scope.threadId;
+  if (scope["projectId"] !== undefined && scope["projectId"] !== "") body["projectId"] = scope["projectId"];
+  if (scope["threadId"] !== undefined) body["threadId"] = scope["threadId"];
   try {
     const response = await fetch("/forge/ask", {
       method: "POST",

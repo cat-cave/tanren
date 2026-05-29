@@ -73,7 +73,7 @@ export class IdentityStore {
        VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
       [id, provider, claims.providerSubject, claims.login, claims.email, claims.displayName]
     );
-    return rowToUser(inserted.rows[0]);
+    return rowToUser(firstRow(inserted.rows));
   }
 
   async upsertOrg(claim: IdentityOrgClaim): Promise<Org> {
@@ -82,7 +82,7 @@ export class IdentityStore {
       [claim.kind, claim.externalId]
     );
     if ((existing.rowCount ?? 0) > 0) {
-      const row = existing.rows[0];
+      const row = firstRow(existing.rows);
       await this.pool.query(
         "UPDATE organizations SET login = $1, display_name = $2, updated_at = now() WHERE id = $3",
         [claim.login, claim.displayName, row.id]
@@ -95,7 +95,7 @@ export class IdentityStore {
        VALUES ($1, $2, $3, $4, $5) RETURNING *`,
       [id, claim.kind, claim.externalId, claim.login, claim.displayName]
     );
-    return rowToOrg(inserted.rows[0]);
+    return rowToOrg(firstRow(inserted.rows));
   }
 
   async ensureOrgMembership(orgId: string, userId: string): Promise<OrgMemberRole> {
@@ -104,7 +104,7 @@ export class IdentityStore {
       [orgId, userId]
     );
     if ((existing.rowCount ?? 0) > 0) {
-      return existing.rows[0].role;
+      return firstRow(existing.rows).role;
     }
     const countResult = await this.pool.query<{ count: string }>(
       "SELECT count(*)::text AS count FROM org_members WHERE org_id = $1",
@@ -145,7 +145,7 @@ export class IdentityStore {
     if ((result.rowCount ?? 0) === 0) {
       return undefined;
     }
-    const row = result.rows[0];
+    const row = firstRow(result.rows);
     const session = rowToSession(row);
     if (session.expiresAt.getTime() <= this.now().getTime()) {
       await this.deleteSession(id);
@@ -188,7 +188,7 @@ export class IdentityStore {
     if ((result.rowCount ?? 0) === 0) {
       return undefined;
     }
-    const row = result.rows[0];
+    const row = firstRow(result.rows);
     if (row.expires_at !== null && new Date(row.expires_at).getTime() <= this.now().getTime()) {
       return undefined;
     }
@@ -221,7 +221,7 @@ export class IdentityStore {
         resolvedOrgId = null;
       } else {
         scopes.add("org:member");
-        if (orgRole.rows[0].role === "admin") {
+        if (firstRow(orgRole.rows).role === "admin") {
           scopes.add("org:admin");
         }
       }
@@ -249,7 +249,7 @@ export class IdentityStore {
         }
       } else {
         scopes.add("project:member");
-        if (projectRole.rows[0].role === "admin") {
+        if (firstRow(projectRole.rows).role === "admin") {
           scopes.add("project:admin");
         }
       }
@@ -266,6 +266,19 @@ export class IdentityStore {
 
 export function hashApiToken(raw: string): string {
   return createHash("sha256").update(raw).digest("hex");
+}
+
+/**
+ * Assert that a query that is known to return exactly one row (a `RETURNING *`
+ * insert, or a read guarded by a prior `rowCount` check) actually produced one.
+ * Centralises the `noUncheckedIndexedAccess` narrowing for `rows[0]`.
+ */
+function firstRow<T>(rows: readonly T[]): T {
+  const row = rows[0];
+  if (row === undefined) {
+    throw new Error("expected at least one row from query");
+  }
+  return row;
 }
 
 interface UserRow {

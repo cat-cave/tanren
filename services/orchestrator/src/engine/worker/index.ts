@@ -37,11 +37,11 @@ export {
 
 /** True when the in-process run worker is enabled (TANREN_RUN_WORKER=1). */
 export function runWorkerEnabled(): boolean {
-  return process.env.TANREN_RUN_WORKER === "1";
+  return process.env["TANREN_RUN_WORKER"] === "1";
 }
 
 function workerConcurrencyFromEnv(): number {
-  const raw = process.env.TANREN_RUN_WORKER_CONCURRENCY;
+  const raw = process.env["TANREN_RUN_WORKER_CONCURRENCY"];
   if (raw === undefined || raw === "") {
     return 2;
   }

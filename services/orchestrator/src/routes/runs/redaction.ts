@@ -25,13 +25,13 @@ export async function redactEventRows(input: RedactEventRowsInput): Promise<{
   const eventStoreForAudit = new PgEventStore(pool);
   const auditEmissions: Promise<void>[] = [];
   const serialized = rows.map((row) => {
-    const eventType = String(row.event_type);
+    const eventType = String(row["event_type"]);
     if (actor === undefined || !isEventName(eventType)) {
       return row;
     }
     const output = redactEventPayload({
       eventName: eventType,
-      payload: row.payload,
+      payload: row["payload"],
       actor,
       rawView
     });
@@ -40,11 +40,11 @@ export async function redactEventRows(input: RedactEventRowsInput): Promise<{
         emitRedactionAudit({
           store: eventStoreForAudit,
           actor,
-          runId: String(row.run_id ?? runId),
-          specId: String(row.spec_id ?? ""),
-          projectId: String(row.project_id ?? ""),
-          taskId: row.task_id !== null && row.task_id !== undefined ? String(row.task_id) : undefined,
-          eventReadId: String(row.id),
+          runId: String(row["run_id"] ?? runId),
+          specId: String(row["spec_id"] ?? ""),
+          projectId: String(row["project_id"] ?? ""),
+          taskId: row["task_id"] !== null && row["task_id"] !== undefined ? String(row["task_id"]) : undefined,
+          eventReadId: String(row["id"]),
           eventReadType: eventType,
           paths: output.rawAccessedPaths
         })

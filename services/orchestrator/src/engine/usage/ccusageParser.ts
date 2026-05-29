@@ -23,8 +23,8 @@ export function parseCcusageAccounting(stdout: string, cli: string): CcusageAcco
   if (!isObject(parsed)) {
     return null;
   }
-  const totalsRecord = isObject(parsed.totals) ? (parsed.totals as Record<string, unknown>) : undefined;
-  const dailyArray = Array.isArray(parsed.daily) ? parsed.daily : undefined;
+  const totalsRecord = isObject(parsed["totals"]) ? (parsed["totals"] as Record<string, unknown>) : undefined;
+  const dailyArray = Array.isArray(parsed["daily"]) ? parsed["daily"] : undefined;
   if (totalsRecord === undefined && dailyArray === undefined) {
     return null;
   }
@@ -32,7 +32,7 @@ export function parseCcusageAccounting(stdout: string, cli: string): CcusageAcco
   return {
     cli,
     totals,
-    costUsd: positiveCostOrNull(totalsRecord?.costUSD),
+    costUsd: positiveCostOrNull(totalsRecord?.["costUSD"]),
     perModel: collectPerModel(dailyArray ?? []),
     capturedAt: new Date().toISOString()
   };
@@ -43,10 +43,10 @@ export function parseCcusageAccounting(stdout: string, cli: string): CcusageAcco
 function collectPerModel(daily: unknown[]): CcusageModelUsage[] {
   const aggregate = new Map<string, TokenUsage>();
   for (const day of daily) {
-    if (!isObject(day) || !isObject(day.models)) {
+    if (!isObject(day) || !isObject(day["models"])) {
       continue;
     }
-    for (const [model, raw] of Object.entries(day.models as Record<string, unknown>)) {
+    for (const [model, raw] of Object.entries(day["models"] as Record<string, unknown>)) {
       if (!isObject(raw)) {
         continue;
       }
@@ -59,13 +59,13 @@ function collectPerModel(daily: unknown[]): CcusageModelUsage[] {
 }
 
 function tokenUsageFromRecord(record: Record<string, unknown>): TokenUsage {
-  const inputTokens = numberField(record.inputTokens) ?? 0;
-  const cachedInputTokens = numberField(record.cachedInputTokens) ?? 0;
-  const cacheCreationTokens = numberField(record.cacheCreationTokens) ?? 0; // Anthropic-only; 0 for codex
-  const outputTokens = numberField(record.outputTokens) ?? 0;
-  const reasoningOutputTokens = numberField(record.reasoningOutputTokens) ?? 0;
+  const inputTokens = numberField(record["inputTokens"]) ?? 0;
+  const cachedInputTokens = numberField(record["cachedInputTokens"]) ?? 0;
+  const cacheCreationTokens = numberField(record["cacheCreationTokens"]) ?? 0; // Anthropic-only; 0 for codex
+  const outputTokens = numberField(record["outputTokens"]) ?? 0;
+  const reasoningOutputTokens = numberField(record["reasoningOutputTokens"]) ?? 0;
   const totalTokens =
-    numberField(record.totalTokens) ??
+    numberField(record["totalTokens"]) ??
     inputTokens + cachedInputTokens + cacheCreationTokens + outputTokens + reasoningOutputTokens;
   return { inputTokens, cachedInputTokens, cacheCreationTokens, outputTokens, reasoningOutputTokens, totalTokens };
 }

@@ -99,7 +99,7 @@ export function mountHaltedRunScreens(app: Hono, deps: ShellDeps): void {
 
   app.post("/runs/:runId/recover/replan", async (c) => {
     const form = await c.req.parseBody().catch(() => ({}) as Record<string, unknown>);
-    const steeringNote = typeof form.steeringNote === "string" ? form.steeringNote.trim() : "";
+    const steeringNote = typeof form["steeringNote"] === "string" ? form["steeringNote"].trim() : "";
     if (steeringNote === "") {
       return handleActionError(c, deps, c.req.param("runId"), "a steering note is required to replan");
     }
@@ -110,8 +110,8 @@ export function mountHaltedRunScreens(app: Hono, deps: ShellDeps): void {
 
   app.post("/runs/:runId/recover/rollback", async (c) => {
     const form = await c.req.parseBody().catch(() => ({}) as Record<string, unknown>);
-    const commitSha = typeof form.commitSha === "string" ? form.commitSha : "";
-    const confirmed = form.confirmed === "true" || form.confirmed === "on";
+    const commitSha = typeof form["commitSha"] === "string" ? form["commitSha"] : "";
+    const confirmed = form["confirmed"] === "true" || form["confirmed"] === "on";
     if (!confirmed) {
       return handleActionError(c, deps, c.req.param("runId"), "rollback was not confirmed — workspace state preserved");
     }
@@ -294,9 +294,9 @@ function RecoveryAck(props: {
   message?: string;
   recoverHref: string;
 }) {
-  const editHref = typeof props.result?.editHref === "string" ? props.result.editHref : undefined;
-  const replanRunId = typeof props.result?.replanRunId === "string" ? props.result.replanRunId : undefined;
-  const threadId = typeof props.result?.threadId === "string" ? props.result.threadId : undefined;
+  const editHref = typeof props.result?.["editHref"] === "string" ? props.result["editHref"] : undefined;
+  const replanRunId = typeof props.result?.["replanRunId"] === "string" ? props.result["replanRunId"] : undefined;
+  const threadId = typeof props.result?.["threadId"] === "string" ? props.result["threadId"] : undefined;
   return (
     <>
       <style>{RECOVERY_CSS}</style>

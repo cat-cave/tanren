@@ -103,10 +103,11 @@ export function createSpecRoutes(options: SpecRoutesOptions) {
          FROM specs WHERE spec_id = $1`,
       [specId]
     );
-    if (result.rowCount === 0) {
+    const row = result.rows[0];
+    if (row === undefined) {
       return c.json({ error: "spec_not_found" }, 404);
     }
-    return c.json(toSpecContract(result.rows[0]));
+    return c.json(toSpecContract(row));
   });
 
   app.patch("/:orgId/projects/:projectId/specs/:specId", async (c) => {

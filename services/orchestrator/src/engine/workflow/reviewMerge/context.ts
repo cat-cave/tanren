@@ -108,8 +108,8 @@ function tanrenLoginsFor(installation: OrgGithubAppInstallation | undefined): Re
 
 function credentialRefFromConfig(config: unknown): string | undefined {
   const record = typeof config === "object" && config !== null && !Array.isArray(config) ? (config as Record<string, unknown>) : {};
-  const credentials = typeof record.credentials === "object" && record.credentials !== null ? (record.credentials as Record<string, unknown>) : {};
-  const ref = credentials.githubCredentialRef ?? record.githubCredentialRef;
+  const credentials = typeof record["credentials"] === "object" && record["credentials"] !== null ? (record["credentials"] as Record<string, unknown>) : {};
+  const ref = credentials["githubCredentialRef"] ?? record["githubCredentialRef"];
   return typeof ref === "string" ? validateGithubCredentialRef(ref) : undefined;
 }
 

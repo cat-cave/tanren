@@ -1,6 +1,6 @@
 // `tanren orgs ...` commands. Mirror the /orgs HTTP surface.
 
-import { request, jsonRequest } from "../../main.js";
+import { request, jsonRequest } from "../../httpClient.js";
 import { jsonOutput, optional, parseArgs, required } from "../args.js";
 
 export async function orgsList(argv: string[]): Promise<void> {

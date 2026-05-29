@@ -39,7 +39,7 @@ export interface BootstrapWorkspaceInput {
 // tail of the combined install output so the halting run outcome and the
 // P2B-0008 recovery surface have a concrete diagnostic to show.
 export class WorkspaceBootstrapError extends Error {
-  readonly name = "WorkspaceBootstrapError";
+  override readonly name = "WorkspaceBootstrapError";
 
   constructor(
     readonly workspacePath: string,

@@ -39,7 +39,7 @@ export async function useSession(
  * land authenticated without a registered GitHub OAuth app.
  */
 export function devLoginEnabled(): boolean {
-  return process.env.TANREN_DEV_LOGIN === "1";
+  return process.env["TANREN_DEV_LOGIN"] === "1";
 }
 
 export function loginUrl(orchestratorUrl: string, next: string = "/"): string {

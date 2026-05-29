@@ -51,7 +51,7 @@ export async function resolveGithubToken(input: GithubTokenResolverInput): Promi
     };
   }
 
-  const ref = input.staticRef ?? process.env.TANREN_GITHUB_APP_TOKEN_REF ?? STATIC_DEFAULT_REF;
+  const ref = input.staticRef ?? process.env["TANREN_GITHUB_APP_TOKEN_REF"] ?? STATIC_DEFAULT_REF;
   const readStatic = async (): Promise<string> => {
     const secret = await input.secrets.get(ref);
     if (secret === undefined) {
