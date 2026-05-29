@@ -7,6 +7,7 @@ import { PgJobQueue } from "../contracts/jobQueue.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { SshSubstrate } from "../contracts/sshSubstrate.js";
 import type { GitHubHttpClient } from "../providers/github.js";
+import type { QuotaPolicy } from "../quota/index.js";
 import { JobReaper } from "./jobReaper.js";
 import { RunWorker, type RunWorkerOptions } from "./runWorker.js";
 
@@ -34,6 +35,23 @@ export {
   RunExecutionContextNotFoundError,
   type RunExecutionContext,
 } from "./runExecutionContext.js";
+// SaaS Tier-B quota-admission-gate (OSS↔hosting seam): re-export the policy
+// surface + metering reads so the worker barrel is the single import site for
+// wiring a hosting policy.
+export {
+  type QuotaPolicy,
+  type AdmissionRequest,
+  type AdmissionDecision,
+  type RunUsage,
+  type UsageWindow,
+  type OrgUsage,
+  type BillableRun,
+  NoopQuotaPolicy,
+  DbQuotaPolicy,
+  getOrgUsage,
+  streamBillableRuns,
+  getRunUsage,
+} from "../quota/index.js";
 
 /** True when the in-process run worker is enabled (TANREN_RUN_WORKER=1). */
 export function runWorkerEnabled(): boolean {
@@ -56,6 +74,9 @@ export interface StartRunWorkerInput {
   secrets: SecretStore;
   githubHttp: GitHubHttpClient;
   identitySecretRef: string;
+  // SaaS Tier-B quota-admission-gate (OSS↔hosting seam). Omit for the unlimited
+  // default (self-host is unrestricted); a hosting layer passes its own policy.
+  quotaPolicy?: QuotaPolicy;
   options?: RunWorkerOptions;
 }
 
@@ -78,6 +99,7 @@ export function startRunWorker(input: StartRunWorkerInput): RunWorker {
       secrets: input.secrets,
       githubHttp: input.githubHttp,
       identitySecretRef: input.identitySecretRef,
+      ...(input.quotaPolicy === undefined ? {} : { quotaPolicy: input.quotaPolicy }),
     },
     { concurrency: workerConcurrencyFromEnv(), ...input.options },
   );

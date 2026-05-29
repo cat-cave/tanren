@@ -27,6 +27,7 @@ import { PgEventStore } from "../eventStore.js";
 import type { GitHubHttpClient } from "../providers/github.js";
 import { loadRunExecutionContext } from "./runExecutionContext.js";
 import { runPlannerLoopWorkflow, type PlannerRunResult, type RunPlannerLoopInput } from "../workflow/plannerRun.js";
+import { NoopQuotaPolicy, SINGLE_RUN_REQUEST, getRunUsage, type QuotaPolicy } from "../quota/index.js";
 
 /** Escape-hatch + CI-poll defaults mirroring scripts/acceptance/medium.ts. */
 export const DEFAULT_ESCAPE_HATCHES: Pick<
@@ -69,6 +70,11 @@ export interface RunExecutorDeps {
   // while the workflow runs.
   leaseMs?: number;
   heartbeatIntervalMs?: number;
+  // SaaS Tier-B quota-admission-gate (OSS↔hosting seam). Defaults to the
+  // unlimited NoopQuotaPolicy so self-hosters are unrestricted; a hosting layer
+  // wires its own policy (or the DbQuotaPolicy reading `org_quotas`). The
+  // executor calls `checkAdmission` pre-flight and `accrueUsage` on completion.
+  quotaPolicy?: QuotaPolicy;
   // Test seam: defaults to the real planner-loop workflow. Tests inject a
   // wrapper that calls the real workflow with fake adapters / usage probe so
   // the dequeue→execute seam is proven without real Codex/SSH.
@@ -78,6 +84,11 @@ export interface RunExecutorDeps {
 export type ExecuteJobResult =
   | { kind: "idle" }
   | { kind: "completed"; jobId: string; runId: string; outcome: string }
+  // SaaS Tier-B quota-admission-gate: the wired QuotaPolicy denied the run
+  // pre-flight. The run is finalized `quota_exceeded` (recoverable) and the job
+  // is completed (not failed/retried) — re-running is the operator's call once
+  // the hosting layer lifts the quota.
+  | { kind: "quota_denied"; jobId: string; runId: string; reason: string }
   | { kind: "failed"; jobId: string; runId?: string; failure: { kind: string; message: string } };
 
 /**
@@ -104,11 +115,28 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
   // while the (potentially long) workflow runs. The reaper only recovers a job
   // whose lease has lapsed — i.e. a crashed worker that stopped heartbeating.
   const stopHeartbeat = startHeartbeat(deps, job.id, leaseMs);
+  const quotaPolicy = deps.quotaPolicy ?? new NoopQuotaPolicy();
   try {
-    const { context } = await loadRunExecutionContext(deps.pool, {
+    const { context, orgId } = await loadRunExecutionContext(deps.pool, {
       runId,
       identitySecretRef: deps.identitySecretRef,
     });
+
+    // SaaS Tier-B quota-admission-gate: PRE-FLIGHT check before ANY runner /
+    // credential / workflow work. A legacy unscoped run (org_id NULL) is never
+    // gated — the unlimited default already admits, and there is no org to
+    // attribute usage to. A denied run lands `quota_exceeded` (recoverable) and
+    // the job is completed; we never start the workflow.
+    if (orgId !== null) {
+      const decision = await quotaPolicy.checkAdmission(orgId, SINGLE_RUN_REQUEST);
+      if (!decision.admit) {
+        const reason = decision.reason ?? "quota exceeded";
+        await finalizeRunQuotaExceeded(deps.pool, runId, reason, decision.windowKey);
+        await deps.jobQueue.complete(job.id);
+        return { kind: "quota_denied", jobId: job.id, runId, reason };
+      }
+    }
+
     const runWorkflow = deps.runWorkflow ?? runPlannerLoopWorkflow;
     const result = await runWorkflow({
       pool: deps.pool,
@@ -123,6 +151,12 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
       ciPollDelayMs: deps.ciPollDelayMs ?? DEFAULT_CI_POLL_DELAY_MS,
     });
     await deps.jobQueue.complete(job.id);
+    // POST-RUN accrual: feed the policy the run's REAL usage from cost_records
+    // (org_id). Best-effort — a metering/accrual blip must never mask a
+    // completed run, so failures are swallowed.
+    if (orgId !== null) {
+      await accrueRunUsage(deps.pool, quotaPolicy, orgId, runId);
+    }
     return { kind: "completed", jobId: job.id, runId, outcome: result.outcome.kind };
   } catch (error) {
     const failure = { kind: failureKind(error), message: messageOf(error) };
@@ -203,6 +237,51 @@ async function finalizeRunRecoverable(pool: pg.Pool, runId: string, message: str
         payload: { status: "halted", message },
       })
       .catch(() => undefined);
+  }
+}
+
+/**
+ * Finalize a denied run into the recoverable `quota_exceeded` terminal state
+ * and emit `run.quota_exceeded` so it surfaces on the P2B-0008 recovery surface
+ * + the hosting layer's billing/upgrade UX. Mirrors `finalizeRunRecoverable`'s
+ * best-effort event append (an event-write blip never masks the deny path).
+ */
+async function finalizeRunQuotaExceeded(
+  pool: pg.Pool,
+  runId: string,
+  reason: string,
+  windowKey: string | undefined,
+): Promise<void> {
+  const updated = await pool.query(
+    "UPDATE runs SET status = 'halted', outcome = 'quota_exceeded', ended_at = now() WHERE run_id = $1 AND status IN ('running', 'queued') RETURNING spec_id, project_id",
+    [runId],
+  );
+  const row = updated.rows[0] as { spec_id?: unknown; project_id?: unknown } | undefined;
+  if (row !== undefined) {
+    await new PgEventStore(pool)
+      .append({
+        runId,
+        specId: String(row.spec_id ?? ""),
+        projectId: String(row.project_id ?? ""),
+        eventType: "run.quota_exceeded",
+        payload: windowKey === undefined ? { reason } : { reason, windowKey },
+      })
+      .catch(() => undefined);
+  }
+}
+
+/**
+ * Accrue a completed run's real usage into the quota policy. Reads the run's
+ * cost_records (org_id) for the token + dollar totals — ground truth, not an
+ * estimate — and hands them to the policy. Best-effort: swallowed so a metering
+ * blip never masks a completed run.
+ */
+async function accrueRunUsage(pool: pg.Pool, policy: QuotaPolicy, orgId: string, runId: string): Promise<void> {
+  try {
+    const usage = await getRunUsage(pool, runId);
+    await policy.accrueUsage(orgId, { runs: 1, tokens: usage.tokens, costUsd: usage.costUsd });
+  } catch {
+    // Accrual is best-effort; never fail a completed run on a metering blip.
   }
 }
 

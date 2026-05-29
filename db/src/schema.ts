@@ -480,3 +480,4 @@ export { forgeThreads, forgeTurns } from "./schemaForge.js";
 export { workflowInsights } from "./schemaInsights.js";
 export { inboxSources, candidates } from "./schemaInbox.js";
 export { auditJobs } from "./schemaAudits.js";
+export { orgQuotas } from "./schemaQuotas.js";

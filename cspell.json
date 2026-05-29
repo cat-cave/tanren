@@ -158,6 +158,8 @@
     "codegen",
     "hotspot",
     "hotspots",
+    "hosters",
+    "hostable",
     "subopt",
     "unstub",
     "unwired",

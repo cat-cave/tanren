@@ -77,6 +77,7 @@ import {
   RunCompletedPayload,
   RunFailedPayload,
   RunQueuedPayload,
+  RunQuotaExceededPayload,
   RunStartedPayload,
   TaskCompletedPayload,
   TaskFailedPayload,
@@ -104,6 +105,8 @@ export const EventRegistry = {
   "run.started": RunStartedPayload,
   "run.completed": RunCompletedPayload,
   "run.failed": RunFailedPayload,
+  // SaaS Tier-B quota-admission-gate: the wired QuotaPolicy denied the run.
+  "run.quota_exceeded": RunQuotaExceededPayload,
 
   // Task lifecycle
   "task.queued": TaskQueuedPayload,
