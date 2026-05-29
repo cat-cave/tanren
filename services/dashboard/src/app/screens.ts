@@ -74,6 +74,12 @@ SCREEN_MOUNTS.push(mountDoraScreen);
 import { mountDiscoveryScreens } from "../routes/discovery/index.js";
 SCREEN_MOUNTS.push(mountDiscoveryScreens);
 
+// P3-0022: candidate inbox (configurable issue sources → Forge triage →
+// accept→discovery / fold / dismiss / close-as-dup). Overrides the /inbox
+// placeholder.
+import { mountInboxScreens } from "../routes/inbox/index.js";
+SCREEN_MOUNTS.push(mountInboxScreens);
+
 /** Run every registered screen mount. Called BEFORE `mountShell`. */
 export function mountScreens(app: Hono, deps: ShellDeps): void {
   for (const mount of SCREEN_MOUNTS) {

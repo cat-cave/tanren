@@ -490,11 +490,10 @@ export const specDependencies = pgTable(
 );
 
 // Sub-schema files are kept separate to respect the file-line-max-500
-// architecture rule. The migration generator and downstream `schema.*`
-// consumers see a single namespace via these re-exports.
-// - P2A-0017 notifications matrix → schemaNotifications.ts
-// - P2A-0019 Forge conversation substrate → schemaForge.ts
-// - P2A-0020 workflow insights cache → schemaInsights.ts
+// architecture rule; consumers + the migration generator see one `schema.*`
+// namespace via these re-exports. Owners: schemaNotifications (P2A-0017),
+// schemaForge (P2A-0019), schemaInsights (P2A-0020), schemaInbox (P3-0022).
 export { notificationTargets, notificationRoutes } from "./schemaNotifications.js";
 export { forgeThreads, forgeTurns } from "./schemaForge.js";
 export { workflowInsights } from "./schemaInsights.js";
+export { inboxSources, candidates } from "./schemaInbox.js";
