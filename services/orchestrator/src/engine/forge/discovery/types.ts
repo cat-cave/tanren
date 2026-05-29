@@ -29,7 +29,7 @@ export const DiscoveryInsight = z
     who: z.string().min(1).max(120),
     when: z.string().min(1).max(120),
     glyph: z.string().min(1).max(4),
-    body: z.string().min(1).max(8000)
+    body: z.string().min(1).max(8000),
   })
   .strict();
 export type DiscoveryInsight = z.infer<typeof DiscoveryInsight>;
@@ -46,7 +46,7 @@ export const ProposedSpec = z
     acceptanceCriteria: z.array(z.string().min(1)).min(1),
     dependsOn: z.array(z.string().min(1)).default([]),
     priority: z.enum(["P0", "P1", "P2", "tbd"]).default("tbd"),
-    estLabel: z.string().max(80).default("")
+    estLabel: z.string().max(80).default(""),
   })
   .strict();
 export type ProposedSpec = z.infer<typeof ProposedSpec>;
@@ -65,7 +65,7 @@ export const PlacementOption = z
     sideEffects: z.string().min(1).max(200),
     priority: z.string().min(1).max(40),
     recommended: z.boolean().default(false),
-    risk: z.boolean().default(false)
+    risk: z.boolean().default(false),
   })
   .strict();
 export type PlacementOption = z.infer<typeof PlacementOption>;
@@ -76,7 +76,7 @@ export const ImpactDelta = z
     title: z.string().min(1).max(40),
     kind: z.enum(["add", "mod", "impact"]),
     count: z.string().min(1).max(60),
-    deltas: z.array(z.string().min(1)).default([])
+    deltas: z.array(z.string().min(1)).default([]),
   })
   .strict();
 export type ImpactDelta = z.infer<typeof ImpactDelta>;
@@ -91,7 +91,7 @@ export const DiscoveryResult = z
     placements: z.array(PlacementOption).min(1),
     deltas: z.array(ImpactDelta).default([]),
     // Files/issues the answerer read while classifying (observability + render).
-    readSummary: z.string().max(200).default("")
+    readSummary: z.string().max(200).default(""),
   })
   .strict();
 export type DiscoveryResult = z.infer<typeof DiscoveryResult>;

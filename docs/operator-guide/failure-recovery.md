@@ -29,12 +29,12 @@ Each action enforces org + project + run access, persists a typed
 history shows the halt → recover chain), and — where it re-runs work — queues a
 fresh planner run that the P2A-0012 loop picks up.
 
-| Action | What it does | Guardrail |
-| --- | --- | --- |
-| **revise the spec** | Records the intent + opens the P2B-0003 spec-edit form. On submit you replan with the revised spec. | — |
-| **replan with instructions** | Appends your steering note to the spec and re-invokes the planner. | Empty note is rejected. |
-| **rollback the code** | Resets the workspace to a named known-good commit and re-queues from there. | Disabled when no prior commit exists; requires an explicit confirm checkbox before it submits. |
-| **resolve via conversation** | Opens a run-scoped Forge inspection thread with read access to the disagreement history. | Read-only — changes no state. |
+| Action                       | What it does                                                                                        | Guardrail                                                                                      |
+| ---------------------------- | --------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| **revise the spec**          | Records the intent + opens the P2B-0003 spec-edit form. On submit you replan with the revised spec. | —                                                                                              |
+| **replan with instructions** | Appends your steering note to the spec and re-invokes the planner.                                  | Empty note is rejected.                                                                        |
+| **rollback the code**        | Resets the workspace to a named known-good commit and re-queues from there.                         | Disabled when no prior commit exists; requires an explicit confirm checkbox before it submits. |
+| **resolve via conversation** | Opens a run-scoped Forge inspection thread with read access to the disagreement history.            | Read-only — changes no state.                                                                  |
 
 ## Lineage
 

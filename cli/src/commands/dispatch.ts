@@ -34,10 +34,13 @@ const HANDLERS: Record<string, (rest: string[]) => Promise<void>> = {
   "credentials list": credentialsList,
   "credentials create": credentialsCreate,
   "credentials get": credentialsGet,
-  "credentials delete": credentialsDelete
+  "credentials delete": credentialsDelete,
 };
 
-export function findProductHandler(command: string, subcommand: string | undefined): ((rest: string[]) => Promise<void>) | undefined {
+export function findProductHandler(
+  command: string,
+  subcommand: string | undefined,
+): ((rest: string[]) => Promise<void>) | undefined {
   if (subcommand === undefined) return undefined;
   return HANDLERS[`${command} ${subcommand}`];
 }

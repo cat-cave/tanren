@@ -16,14 +16,19 @@ class FakeRunnerStore implements RunnerStore {
 
 describe("SidecarHttpAllocator", () => {
   it("POSTs /allocate with the bearer token and mirrors the runner row", async () => {
-    let captured: { url: string; method?: string; body?: string; headers?: Record<string, string> } = { url: "" };
+    let captured: {
+      url: string;
+      method?: string;
+      body?: string;
+      headers?: Record<string, string>;
+    } = { url: "" };
     const fetchImpl = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
       const url = typeof input === "string" ? input : input.toString();
       captured = {
         url,
         method: init?.method,
         body: typeof init?.body === "string" ? init.body : undefined,
-        headers: (init?.headers ?? {}) as Record<string, string>
+        headers: (init?.headers ?? {}) as Record<string, string>,
       };
       return new Response(
         JSON.stringify({
@@ -31,9 +36,9 @@ describe("SidecarHttpAllocator", () => {
           sshHost: "tanren-runner-run_1",
           sshPort: 22,
           hostKeyFingerprint: "SHA256:test",
-          imageSha: "sha256:fake"
+          imageSha: "sha256:fake",
         }),
-        { status: 201, headers: { "Content-Type": "application/json" } }
+        { status: 201, headers: { "Content-Type": "application/json" } },
       );
     }) as typeof fetch;
 
@@ -42,7 +47,7 @@ describe("SidecarHttpAllocator", () => {
       baseUrl: "http://allocator:3200",
       authToken: "supersecret",
       runners,
-      fetchImpl
+      fetchImpl,
     });
 
     const result = await allocator.allocate({
@@ -50,7 +55,7 @@ describe("SidecarHttpAllocator", () => {
       projectId: "proj_a",
       runnerImage: "ghcr.io/cat-cave/tanren-runner:v0",
       identitySecretRef: "runner/identity",
-      vaultRefs: ["credential/codex"]
+      vaultRefs: ["credential/codex"],
     });
 
     expect(captured.url).toBe("http://allocator:3200/allocate");
@@ -73,7 +78,10 @@ describe("SidecarHttpAllocator", () => {
       const url = typeof input === "string" ? input : input.toString();
       if (url.endsWith("/release")) {
         releaseCalls += 1;
-        return new Response(JSON.stringify({ released: true }), { status: 200, headers: { "Content-Type": "application/json" } });
+        return new Response(JSON.stringify({ released: true }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
       }
       throw new Error(`unexpected call: ${url}`);
     }) as typeof fetch;
@@ -83,7 +91,7 @@ describe("SidecarHttpAllocator", () => {
       baseUrl: "http://allocator:3200/",
       authToken: "t",
       runners,
-      fetchImpl
+      fetchImpl,
     });
 
     await allocator.release("runner_run_2", "failed");
@@ -99,15 +107,15 @@ describe("SidecarHttpAllocator", () => {
       baseUrl: "http://allocator:3200",
       authToken: "t",
       runners: new FakeRunnerStore(),
-      fetchImpl
+      fetchImpl,
     });
     await expect(
       allocator.allocate({
         runId: "run_err",
         projectId: "p",
         runnerImage: "img",
-        identitySecretRef: "r"
-      })
+        identitySecretRef: "r",
+      }),
     ).rejects.toThrow(/allocate failed/);
   });
 });

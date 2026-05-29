@@ -69,11 +69,21 @@ export function createAiderWriter(dependencies: AiderWriterDependencies): Writer
     async runWriter(opts): Promise<WriterResult> {
       const model = dependencies.model ?? DEFAULT_AIDER_MODEL;
       const apiKey = await resolveAiderApiKey(dependencies.secrets, dependencies.credentialRef);
-      const baselineSha = await captureBaselineSha(dependencies.ssh, dependencies.target, opts.workspace, opts.timeoutMs);
+      const baselineSha = await captureBaselineSha(
+        dependencies.ssh,
+        dependencies.target,
+        opts.workspace,
+        opts.timeoutMs,
+      );
       const aider = await dependencies.ssh.run(dependencies.target, {
-        command: buildAiderWriterCommand({ apiKeyEnvVar: apiKeyEnvVarForModel(model), apiKey, model, prompt: opts.prompt }),
+        command: buildAiderWriterCommand({
+          apiKeyEnvVar: apiKeyEnvVarForModel(model),
+          apiKey,
+          model,
+          prompt: opts.prompt,
+        }),
         cwd: opts.workspace,
-        timeoutMs: opts.timeoutMs
+        timeoutMs: opts.timeoutMs,
       });
       const telemetry = parseAiderTelemetry(aider.stdout + "\n" + aider.stderr);
       const gitState = await captureGitStateAfterWriter(
@@ -82,7 +92,7 @@ export function createAiderWriter(dependencies: AiderWriterDependencies): Writer
         opts.workspace,
         baselineSha,
         "aider writer",
-        opts.timeoutMs
+        opts.timeoutMs,
       );
       if (aider.timedOut) {
         return failedResult("timeout", telemetry, gitState);
@@ -94,7 +104,7 @@ export function createAiderWriter(dependencies: AiderWriterDependencies): Writer
         return failedResult("crashed", telemetry, gitState);
       }
       return { ...gitState, exitReason: "completed", tokenUsage: telemetry.tokenUsage, telemetry };
-    }
+    },
   };
 }
 
@@ -150,7 +160,7 @@ export function buildAiderWriterCommand(input: {
     "--model",
     quoteSshShellArg(input.model),
     "--message",
-    quoteSshShellArg(input.prompt)
+    quoteSshShellArg(input.prompt),
   ].join(" ");
 }
 
@@ -191,7 +201,7 @@ function parseAiderTokenUsage(output: string): TokenUsage | undefined {
     cacheCreationTokens: 0,
     outputTokens,
     reasoningOutputTokens: 0,
-    totalTokens: inputTokens + outputTokens
+    totalTokens: inputTokens + outputTokens,
   };
 }
 
@@ -206,7 +216,7 @@ function parseCount(raw: string | undefined): number | undefined {
 function failedResult(
   exitReason: "timeout" | "crashed" | "window_exhausted",
   telemetry: AiderTelemetry,
-  gitState: Pick<WriterResult, "diff" | "commits">
+  gitState: Pick<WriterResult, "diff" | "commits">,
 ): WriterResult {
   return { ...gitState, exitReason, tokenUsage: telemetry.tokenUsage, telemetry };
 }

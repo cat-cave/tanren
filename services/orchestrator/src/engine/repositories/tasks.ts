@@ -21,7 +21,7 @@ export const TaskRow = z.object({
   model: z.string().nullable(),
   attempt: z.number(),
   tenantId: z.string().nullable(),
-  userId: z.string().nullable()
+  userId: z.string().nullable(),
 });
 export type TaskRow = z.infer<typeof TaskRow>;
 
@@ -80,7 +80,7 @@ function decodeTaskRow(raw: RawTaskRow): TaskRow {
     model: raw.model,
     attempt: typeof raw.attempt === "number" ? raw.attempt : Number(raw.attempt),
     tenantId: raw.tenant_id,
-    userId: raw.user_id
+    userId: raw.user_id,
   });
 }
 
@@ -97,7 +97,7 @@ export const TaskStore = {
   async list(
     client: QueryClient,
     filter: { runId?: string; kind?: z.infer<typeof TaskKind>; status?: z.infer<typeof TaskStatus> } | undefined,
-    _actor: ActorRef
+    _actor: ActorRef,
   ): Promise<TaskRow[]> {
     const clauses: string[] = [];
     const params: unknown[] = [];
@@ -129,7 +129,7 @@ export const TaskStore = {
       setEndedAt?: boolean;
       setStartedAt?: boolean;
     },
-    _actor: ActorRef
+    _actor: ActorRef,
   ): Promise<TaskRow> {
     transitionTask(next.from, next.to);
     const sets: string[] = ["status = $2"];
@@ -150,11 +150,11 @@ export const TaskStore = {
     }
     const result = await client.query(
       `UPDATE tasks SET ${sets.join(", ")} WHERE task_id = $1 RETURNING ${SELECT_TASK_COLUMNS}`,
-      params
+      params,
     );
     if (result.rows.length === 0) {
       throw new Error(`task not found: ${taskId}`);
     }
     return decodeTaskRow(result.rows[0] as RawTaskRow);
-  }
+  },
 } as const;

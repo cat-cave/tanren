@@ -1,9 +1,4 @@
-import type {
-  AllocationRequest,
-  Allocator,
-  ReleaseReason,
-  RunnerAllocation
-} from "../contracts/allocator.js";
+import type { AllocationRequest, Allocator, ReleaseReason, RunnerAllocation } from "../contracts/allocator.js";
 import type { RunnerStore } from "./runnerStore.js";
 
 const allocatorName = "hetzner";
@@ -110,7 +105,7 @@ export class HetznerAllocator implements Allocator {
       location: this.options.location,
       sshKeys: this.options.sshKeys,
       userData: this.options.userData,
-      labels: { tanren_run: request.runId, tanren_project: request.projectId }
+      labels: { tanren_run: request.runId, tanren_project: request.projectId },
     });
 
     let server = created;
@@ -141,8 +136,8 @@ export class HetznerAllocator implements Allocator {
         port,
         username,
         hostKeyFingerprint: this.options.hostKeyFingerprint,
-        identitySecretRef: request.identitySecretRef
-      }
+        identitySecretRef: request.identitySecretRef,
+      },
     };
 
     try {
@@ -155,7 +150,7 @@ export class HetznerAllocator implements Allocator {
         sshPort: port,
         hostKeyFingerprint: this.options.hostKeyFingerprint,
         imageSha: allocation.imageSha,
-        containerId: String(server.id)
+        containerId: String(server.id),
       });
     } catch (error) {
       await this.client.deleteServer(server.id).catch(() => undefined);
@@ -188,7 +183,7 @@ export class HetznerAllocator implements Allocator {
       }
       if (Date.now() >= deadline) {
         throw new Error(
-          `hetzner server ${serverId} did not become running within ${readyTimeoutMs}ms (last status: ${server.status})`
+          `hetzner server ${serverId} did not become running within ${readyTimeoutMs}ms (last status: ${server.status})`,
         );
       }
       await this.sleep(pollIntervalMs);
@@ -209,7 +204,7 @@ function toServer(body: HetznerServerResponse): HetznerServer {
   return {
     id: body.server.id,
     status: body.server.status,
-    publicIpv4: ipv4 === null ? undefined : ipv4
+    publicIpv4: ipv4 === null ? undefined : ipv4,
   };
 }
 
@@ -221,7 +216,7 @@ function toServer(body: HetznerServerResponse): HetznerServer {
 export function fetchHetznerClient(apiToken: string, fetchImpl: typeof fetch = fetch): HetznerClient {
   const authHeaders = {
     authorization: `Bearer ${apiToken}`,
-    "Content-Type": "application/json"
+    "Content-Type": "application/json",
   } as const;
 
   return {
@@ -237,8 +232,8 @@ export function fetchHetznerClient(apiToken: string, fetchImpl: typeof fetch = f
           ssh_keys: input.sshKeys,
           user_data: input.userData,
           labels: input.labels,
-          start_after_create: true
-        })
+          start_after_create: true,
+        }),
       });
       if (!response.ok) {
         throw new Error(`hetzner createServer failed: ${response.status} ${await response.text()}`);
@@ -249,7 +244,7 @@ export function fetchHetznerClient(apiToken: string, fetchImpl: typeof fetch = f
     async getServer(serverId: number): Promise<HetznerServer> {
       const response = await fetchImpl(`${hetznerApiBase}/servers/${serverId}`, {
         method: "GET",
-        headers: authHeaders
+        headers: authHeaders,
       });
       if (!response.ok) {
         throw new Error(`hetzner getServer failed: ${response.status} ${await response.text()}`);
@@ -260,12 +255,12 @@ export function fetchHetznerClient(apiToken: string, fetchImpl: typeof fetch = f
     async deleteServer(serverId: number): Promise<void> {
       const response = await fetchImpl(`${hetznerApiBase}/servers/${serverId}`, {
         method: "DELETE",
-        headers: authHeaders
+        headers: authHeaders,
       });
       // 404 means already gone — treat as success (idempotent destroy).
       if (!response.ok && response.status !== 404) {
         throw new Error(`hetzner deleteServer failed: ${response.status} ${await response.text()}`);
       }
-    }
+    },
   };
 }

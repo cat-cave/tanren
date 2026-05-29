@@ -9,13 +9,15 @@ describe("structured Answerer task helpers", () => {
     const checkAnswer: CheckAnswer = {
       done: true,
       reason: "Diff satisfies the spec.",
-      suggested_fixes: null
+      suggested_fixes: null,
     };
     const checkAdapter = new RecordingAnswerer(checkAnswer);
     const auditAdapter = new RecordingAnswerer({
       verified: true,
-      criteria_status: { criteria: [{ criterion: "Adds ok", satisfied: true, reason: "The check and diff agree." }] },
-      reason: "The check and diff agree."
+      criteria_status: {
+        criteria: [{ criterion: "Adds ok", satisfied: true, reason: "The check and diff agree." }],
+      },
+      reason: "The check and diff agree.",
     });
 
     const check = await executeStructuredCheckTask(checkAdapter, {
@@ -23,14 +25,14 @@ describe("structured Answerer task helpers", () => {
       specDescription: "Add ok",
       acceptanceCriteria: ["Adds ok"],
       writerDiff: "diff\n+ok\n",
-      timeoutMs: 100
+      timeoutMs: 100,
     });
     const audit = await executeStructuredAuditTask(auditAdapter, {
       specTitle: "Fixture",
       acceptanceCriteria: ["Adds ok"],
       checkAnswer: check,
       writerDiff: "diff\n+ok\n",
-      timeoutMs: 100
+      timeoutMs: 100,
     });
 
     expect(check.done).toBe(true);
@@ -46,7 +48,7 @@ describe("structured Answerer task helpers", () => {
       authRef: "credential/codex/answerer-tasks-test",
       async runAnswerer(opts) {
         return parseStructuredAnswererOutput("not-json", opts.outputSchema);
-      }
+      },
     };
 
     await expect(
@@ -55,8 +57,8 @@ describe("structured Answerer task helpers", () => {
         specDescription: "Add ok",
         acceptanceCriteria: ["Adds ok"],
         writerDiff: "diff\n+ok\n",
-        timeoutMs: 100
-      })
+        timeoutMs: 100,
+      }),
     ).rejects.toThrow(AnswererSchemaValidationError);
   });
 });

@@ -14,7 +14,7 @@ export {
   classifyAuthRef,
   computeCostUsd,
   providerRate,
-  resolveCostSource
+  resolveCostSource,
 } from "./sources.js";
 
 export { CostRecorder, type CostRecordContext, type RecordedCost } from "./recorder.js";

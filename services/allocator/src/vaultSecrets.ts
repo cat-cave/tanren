@@ -18,7 +18,7 @@ export class VaultSecretsClient implements RunnerSecretsClient {
 
   async get(ref: string): Promise<string | undefined> {
     const response = await this.fetchImpl(this.url(ref), {
-      headers: { "X-Vault-Token": this.options.token }
+      headers: { "X-Vault-Token": this.options.token },
     });
     if (response.status === 404) {
       return undefined;

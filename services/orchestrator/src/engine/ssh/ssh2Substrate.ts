@@ -30,7 +30,7 @@ export class Ssh2Substrate implements SshSubstrate {
 
   constructor(
     private readonly secrets: SecretStore,
-    private readonly options: Ssh2SubstrateOptions = {}
+    private readonly options: Ssh2SubstrateOptions = {},
   ) {
     this.clientFactory = options.clientFactory ?? (() => new Client());
   }
@@ -51,7 +51,12 @@ export class Ssh2Substrate implements SshSubstrate {
     return await this.runClient(target, command, identity.value, execCommand);
   }
 
-  private async runClient(target: SshTarget, command: SshCommand, privateKey: string, execCommand: string): Promise<SshCommandResult> {
+  private async runClient(
+    target: SshTarget,
+    command: SshCommand,
+    privateKey: string,
+    execCommand: string,
+  ): Promise<SshCommandResult> {
     return await new Promise<SshCommandResult>((resolve) => {
       const client = this.clientFactory();
       const state: RunState = { stdout: "", stderr: "", exitCode: null, settled: false };
@@ -74,10 +79,21 @@ export class Ssh2Substrate implements SshSubstrate {
       };
 
       const fail = (message: string, timedOut = false): void => {
-        settle({ ...this.failureResult(target, message), stdout: state.stdout, stderr: state.stderr, timedOut }, "destroy");
+        settle(
+          {
+            ...this.failureResult(target, message),
+            stdout: state.stdout,
+            stderr: state.stderr,
+            timedOut,
+          },
+          "destroy",
+        );
       };
 
-      state.timer = setTimeout(() => fail(`SSH command timed out after ${command.timeoutMs}ms`, true), command.timeoutMs);
+      state.timer = setTimeout(
+        () => fail(`SSH command timed out after ${command.timeoutMs}ms`, true),
+        command.timeoutMs,
+      );
       client.once("ready", () => {
         client.exec(execCommand, (error, stream) => {
           if (error !== undefined) {
@@ -93,7 +109,7 @@ export class Ssh2Substrate implements SshSubstrate {
               stdout: state.stdout,
               stderr: state.stderr,
               signal: state.signal,
-              timedOut: false
+              timedOut: false,
             });
           });
         });
@@ -117,7 +133,9 @@ export class Ssh2Substrate implements SshSubstrate {
         readyTimeout: this.options.connectTimeoutMs ?? command.timeoutMs,
         timeout: this.options.connectTimeoutMs ?? command.timeoutMs,
         algorithms:
-          this.options.serverHostKeyAlgorithms === undefined ? undefined : { serverHostKey: this.options.serverHostKeyAlgorithms }
+          this.options.serverHostKeyAlgorithms === undefined
+            ? undefined
+            : { serverHostKey: this.options.serverHostKeyAlgorithms },
       });
     });
   }
@@ -142,7 +160,7 @@ export class Ssh2Substrate implements SshSubstrate {
       stdout: "",
       stderr: "",
       timedOut: false,
-      failure: defineFailure({ kind: "ssh_failed", target: formatTarget(target), message })
+      failure: defineFailure({ kind: "ssh_failed", target: formatTarget(target), message }),
     };
   }
 }

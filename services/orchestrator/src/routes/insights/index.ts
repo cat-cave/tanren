@@ -13,10 +13,7 @@ import { Hono } from "hono";
 import type pg from "pg";
 import type { ActorContext } from "../../auth/schemas.js";
 import { assertProjectAccess, ToolAccessDeniedError } from "../../engine/forge/tools/authz.js";
-import {
-  acknowledgeInsight,
-  loadInsightsForProject
-} from "../../engine/insights/index.js";
+import { acknowledgeInsight, loadInsightsForProject } from "../../engine/insights/index.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg } from "../orgs/index.js";
 
@@ -47,8 +44,11 @@ export function createInsightRoutes(options: InsightRoutesOptions) {
       return c.json({ insights });
     } catch (error) {
       return c.json(
-        { error: "insights_read_failed", message: error instanceof Error ? error.message : String(error) },
-        500
+        {
+          error: "insights_read_failed",
+          message: error instanceof Error ? error.message : String(error),
+        },
+        500,
       );
     }
   });

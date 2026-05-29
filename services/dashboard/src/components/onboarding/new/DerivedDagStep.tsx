@@ -41,9 +41,7 @@ export function DerivedDagStep(props: DerivedDagStepProps) {
 
       <div class="gf-dag-frame" data-derived-dag>
         {dag.nodes.length === 0 ? (
-          <div class="gf-dag-empty">
-            no specs derived yet — finish the interview to seed the dag.
-          </div>
+          <div class="gf-dag-empty">no specs derived yet — finish the interview to seed the dag.</div>
         ) : (
           <DagCanvas dag={dag} projectId={props.projectId} />
         )}
@@ -54,8 +52,8 @@ export function DerivedDagStep(props: DerivedDagStepProps) {
         <input type="hidden" name="phase" value="advance" />
         <div class="gf-foot">
           <span class="hint">
-            ↑ {dag.counts.behaviors} behaviors covered · {dag.counts.criticalPath} on the critical path ·{" "}
-            {ready} leaf specs ready
+            ↑ {dag.counts.behaviors} behaviors covered · {dag.counts.criticalPath} on the critical path · {ready} leaf
+            specs ready
           </span>
           <span class="spacer">
             <button type="submit" class="btn primary">

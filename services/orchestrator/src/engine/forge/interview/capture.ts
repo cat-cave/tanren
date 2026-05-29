@@ -5,12 +5,7 @@
 // Splitting this out keeps the engine and the default answerer small and lets
 // the merge be unit-tested in isolation.
 
-import {
-  type CaptureBehavior,
-  type CaptureInterface,
-  type CapturePersona,
-  type InterviewCapture
-} from "./types.js";
+import { type CaptureBehavior, type CaptureInterface, type CapturePersona, type InterviewCapture } from "./types.js";
 
 function lower(value: string): string {
   return value.trim().toLowerCase();
@@ -38,10 +33,7 @@ function mergeByKey<T>(existing: readonly T[], delta: readonly T[], key: (item: 
 // Merge a partial delta into the running capture. Identity + designDna are
 // last-write-wins (a later round can refine them); lists union by natural key;
 // rulesets union as a string set preserving order.
-export function mergeCapture(
-  current: InterviewCapture,
-  delta: Partial<InterviewCapture>
-): InterviewCapture {
+export function mergeCapture(current: InterviewCapture, delta: Partial<InterviewCapture>): InterviewCapture {
   const rulesets = [...new Set([...current.rulesets, ...(delta.rulesets ?? [])])];
   return {
     identity: delta.identity ?? current.identity,
@@ -50,9 +42,7 @@ export function mergeCapture(
     interfaces: mergeByKey(current.interfaces, delta.interfaces ?? [], interfaceKey),
     designDna: delta.designDna !== undefined && delta.designDna !== "" ? delta.designDna : current.designDna,
     architecture:
-      delta.architecture !== undefined && delta.architecture.length > 0
-        ? delta.architecture
-        : current.architecture,
-    rulesets
+      delta.architecture !== undefined && delta.architecture.length > 0 ? delta.architecture : current.architecture,
+    rulesets,
   };
 }

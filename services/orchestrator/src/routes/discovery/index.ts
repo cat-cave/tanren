@@ -25,12 +25,12 @@ import {
   DiscoveryInsight,
   PlacementKind,
   ProposedSpec,
-  type DiscoveryAnswerer
+  type DiscoveryAnswerer,
 } from "../../engine/forge/discovery/index.js";
 import {
   ProjectAccessDeniedError,
   ProjectNotFoundError,
-  SpecNotFoundError
+  SpecNotFoundError,
 } from "../../engine/workflow/projectSpec.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg } from "../orgs/index.js";
@@ -49,7 +49,7 @@ const AcceptBody = z
     insight: DiscoveryInsight,
     proposals: z.array(ProposedSpec).min(1),
     placementKind: PlacementKind,
-    placementLabel: z.string().min(1).max(120)
+    placementLabel: z.string().min(1).max(120),
   })
   .strict();
 
@@ -70,7 +70,7 @@ export function createDiscoveryRoutes(options: DiscoveryRoutesOptions) {
     try {
       const result = await classifyInsight(
         { pool: options.pool, ...(answerer !== undefined ? { answerer } : {}) },
-        { projectId: c.req.param("projectId"), insight: parsed.data, actor }
+        { projectId: c.req.param("projectId"), insight: parsed.data, actor },
       );
       return c.json(result, 200);
     } catch (error) {
@@ -97,14 +97,17 @@ export function createDiscoveryRoutes(options: DiscoveryRoutesOptions) {
           proposals: parsed.data.proposals,
           placementKind: parsed.data.placementKind,
           placementLabel: parsed.data.placementLabel,
-          actor: { ...actor, orgId }
-        }
+          actor: { ...actor, orgId },
+        },
       );
       return c.json(
         {
-          accepted: result.accepted.map((entry) => ({ proposalId: entry.proposalId, spec: entry.spec }))
+          accepted: result.accepted.map((entry) => ({
+            proposalId: entry.proposalId,
+            spec: entry.spec,
+          })),
         },
-        201
+        201,
       );
     } catch (error) {
       if (error instanceof ProjectNotFoundError) {

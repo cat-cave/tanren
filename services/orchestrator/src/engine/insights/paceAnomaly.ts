@@ -31,10 +31,7 @@ interface ClassAverageRow {
   samples: string;
 }
 
-export async function computePaceAnomaly(
-  pool: Pick<pg.Pool, "query">,
-  context: ComputeContext
-): Promise<Insight[]> {
+export async function computePaceAnomaly(pool: Pick<pg.Pool, "query">, context: ComputeContext): Promise<Insight[]> {
   const t: InsightThresholds = { ...DEFAULT_THRESHOLDS, ...context.thresholds };
   const now = context.now ?? new Date();
   const windowSince = new Date(now.getTime() - t.paceAnomalyWindowDays * 24 * 60 * 60 * 1000);
@@ -61,7 +58,7 @@ export async function computePaceAnomaly(
          AND t.agent_kind = 'writer'
          AND t.status = 'running'
          AND t.started_at IS NOT NULL`,
-    [context.projectId]
+    [context.projectId],
   );
   if (inFlightResult.rows.length === 0) return [];
 
@@ -85,7 +82,7 @@ export async function computePaceAnomaly(
          AND COALESCE(m.label, 'unclassified') = ANY($3::text[])
        GROUP BY COALESCE(m.label, 'unclassified')
        HAVING COUNT(*) >= $4`,
-    [context.projectId, windowSince, classes, t.paceAnomalyMinSamples]
+    [context.projectId, windowSince, classes, t.paceAnomalyMinSamples],
   );
 
   const averages = new Map<string, number>();
@@ -109,7 +106,7 @@ export async function computePaceAnomaly(
       elapsedSeconds: Math.round(elapsed),
       classAverageSeconds: Math.round(classAverage),
       multiplier: Math.round(multiplier * 100) / 100,
-      specClass: row.spec_class
+      specClass: row.spec_class,
     };
     const insightId = `insight_pace_${row.task_id}_${randomUUID()}`;
     insights.push({
@@ -123,16 +120,16 @@ export async function computePaceAnomaly(
       actions: [
         {
           label: "Open run",
-          toolCall: { tool: "tanren.read_run", args: { runId: row.run_id } }
+          toolCall: { tool: "tanren.read_run", args: { runId: row.run_id } },
         },
         {
           label: "Acknowledge",
-          toolCall: { tool: "tanren.acknowledge_insight", args: { insightId } }
-        }
+          toolCall: { tool: "tanren.acknowledge_insight", args: { insightId } },
+        },
       ],
       computedAt: now,
       acknowledgedAt: null,
-      acknowledgedBy: null
+      acknowledgedBy: null,
     });
   }
   return insights;
@@ -147,7 +144,7 @@ async function readSubtaskIndex(pool: Pick<pg.Pool, "query">, taskId: string): P
        FROM events
        WHERE task_id = $1 AND event_type = 'writer.subtask.started'
        ORDER BY ts DESC LIMIT 1`,
-    [taskId]
+    [taskId],
   );
   return result.rows[0]?.index ?? 0;
 }

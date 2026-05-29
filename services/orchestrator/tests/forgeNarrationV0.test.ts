@@ -7,7 +7,7 @@ import {
   generateProjectViewNarration,
   generateRunDetailNarration,
   type NarrationInput,
-  type RunDetailNarrationInput
+  type RunDetailNarrationInput,
 } from "../src/engine/forge/index.js";
 
 const actor: ActorContext = {
@@ -15,7 +15,7 @@ const actor: ActorContext = {
   orgId: "org_a",
   projectId: "project_a",
   scopes: ["org:member", "project:member"],
-  source: "session"
+  source: "session",
 };
 
 const baseInput: NarrationInput = {
@@ -28,7 +28,7 @@ const baseInput: NarrationInput = {
       outcome: "merged",
       prUrl: "https://github.com/example/repo/pull/141",
       startedAt: new Date("2026-05-20T10:00:00Z"),
-      endedAt: new Date("2026-05-20T11:00:00Z")
+      endedAt: new Date("2026-05-20T11:00:00Z"),
     },
     {
       runId: "run_2",
@@ -38,7 +38,7 @@ const baseInput: NarrationInput = {
       prUrl: "https://github.com/example/repo/pull/142",
       startedAt: new Date("2026-05-21T09:00:00Z"),
       endedAt: new Date("2026-05-21T10:30:00Z"),
-      title: "supplier scorecard"
+      title: "supplier scorecard",
     },
     {
       runId: "run_3",
@@ -47,8 +47,8 @@ const baseInput: NarrationInput = {
       outcome: null,
       prUrl: null,
       startedAt: new Date("2026-05-26T12:00:00Z"),
-      endedAt: null
-    }
+      endedAt: null,
+    },
   ],
   pendingReviews: [
     {
@@ -59,8 +59,8 @@ const baseInput: NarrationInput = {
       prUrl: "https://github.com/example/repo/pull/142",
       startedAt: new Date("2026-05-21T09:00:00Z"),
       endedAt: new Date("2026-05-21T10:30:00Z"),
-      title: "supplier scorecard"
-    }
+      title: "supplier scorecard",
+    },
   ],
   weekToDateCostUsd: 42.5,
   velocity: { specsLast14Days: 6, aheadDays: 1 },
@@ -73,12 +73,12 @@ const baseInput: NarrationInput = {
       actions: [
         {
           label: "Acknowledge",
-          toolCall: { tool: "tanren.acknowledge_insight", args: { insightId: "insight_1" } }
-        }
-      ]
-    }
+          toolCall: { tool: "tanren.acknowledge_insight", args: { insightId: "insight_1" } },
+        },
+      ],
+    },
   ],
-  actor
+  actor,
 };
 
 describe("generateProjectViewNarration", () => {
@@ -125,7 +125,7 @@ describe("generateProjectViewNarration", () => {
     const answer = generateProjectViewNarration({
       ...baseInput,
       recentRuns: [],
-      pendingReviews: []
+      pendingReviews: [],
     });
     expect(answer.body).toMatch(/idle/);
     expect(answer.attentionItems.filter((entry) => entry.priority === "review")).toHaveLength(0);
@@ -142,10 +142,10 @@ describe("generateProjectViewNarration", () => {
           outcome: "failed",
           prUrl: null,
           startedAt: new Date(),
-          endedAt: new Date()
-        }
+          endedAt: new Date(),
+        },
       ],
-      pendingReviews: []
+      pendingReviews: [],
     });
     const blocked = answer.attentionItems.find((entry) => entry.priority === "blocked");
     expect(blocked).toBeDefined();
@@ -163,13 +163,13 @@ describe("generateRunDetailNarration", () => {
       prUrl: "https://github.com/example/repo/pull/142",
       startedAt: new Date("2026-05-21T09:00:00Z"),
       endedAt: new Date("2026-05-21T10:30:00Z"),
-      title: "supplier scorecard"
+      title: "supplier scorecard",
     },
     taskCount: 5,
     failedTaskCount: 0,
     costUsd: 4.25,
     insights: [],
-    actor
+    actor,
   };
 
   it("emits a review-ready attention item when a non-merged PR is present", () => {

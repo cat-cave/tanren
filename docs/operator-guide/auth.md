@@ -60,6 +60,7 @@ For local UI testing you usually do **not** want to register a real GitHub OAuth
    ```
 
    (Or, without a `.env` file: `export TANREN_DEV_LOGIN=1 TANREN_REQUIRE_AUTH=1` before `just up-dev`.)
+
 2. `just up-dev`
 3. Open http://localhost:3000 — you are redirected to `/signin`. (If host `:3000` is already taken, set `DASHBOARD_HOST_PORT` in `.env` to remap the published port — e.g. `DASHBOARD_HOST_PORT=3003`, then open http://localhost:3003. The in-container port stays 3000.)
 4. Click **"sign in (dev)"** — a single URL. The dashboard completes the handshake server-side and lands you authenticated at `next` against the synthetic `tanren-dev` org (no cross-origin redirect, no JSON dead-end).

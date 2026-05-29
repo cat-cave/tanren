@@ -13,7 +13,7 @@ export const AuditAnswer = z
     passed: z.boolean(),
     reasoning: z.string().min(1),
     outstandingBehaviorIds: z.array(z.string().min(1)),
-    recommendedAction: AuditRecommendedAction
+    recommendedAction: AuditRecommendedAction,
   })
   .strict();
 

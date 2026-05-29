@@ -10,7 +10,7 @@ export class IdentityProviderError extends Error {
   constructor(
     readonly providerId: IdentityProviderId,
     message: string,
-    readonly statusCode: number = 502
+    readonly statusCode: number = 502,
   ) {
     super(`[${providerId}] ${message}`);
   }

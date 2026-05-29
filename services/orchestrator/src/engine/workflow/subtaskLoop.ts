@@ -18,13 +18,14 @@ import type pg from "pg";
 import type { AuditAnswer, CheckAnswer, PlanAnswer, PlanSubtask } from "../answerers/schemas/index.js";
 import type { CiWhen } from "../ci/index.js";
 import type { EscapeHatches } from "../config/shared.js";
-import { type CostRecorder, DEFAULT_CREDIT_USD_RATE } from "../costs/index.js";
+import type { CostRecorder } from "../costs/index.js";
 import type { EventName, EventPayload } from "../events/index.js";
 import type { EventStore } from "../eventStore.js";
 import type { AnswererAdapter, WriterAdapter, WriterResult } from "../providers/types.js";
 import type { UsageProbe } from "../usage/index.js";
 import type { GateOutcome } from "./gate/index.js";
 import type { PlannerRejectionFeedback, PlannerSpecContext } from "./planner/planner.js";
+import { checkWindowPreflight, type CreditState, observeRunAccounting } from "./subtaskAccounting.js";
 import { gateRejection, handleRejection } from "./subtaskRework.js";
 import { type SubtaskCostContext } from "./subtaskCost.js";
 import { insertPlannerTask, markTaskDone } from "./subtaskTasks.js";
@@ -41,8 +42,17 @@ export interface SubtaskLoopAdapters {
 
 export interface SubtaskLoopCostHooks {
   buildPlannerUsage?: (input: { plannerTaskId: string; attempt: number }) => Record<string, unknown>;
-  buildWriterUsage?: (input: { subtaskTaskId: string; subtaskIndex: number; attempt: number; writer: WriterResult }) => Record<string, unknown>;
-  buildCheckerUsage?: (input: { checkerTaskId: string; subtaskIndex: number; verdict: CheckAnswer }) => Record<string, unknown>;
+  buildWriterUsage?: (input: {
+    subtaskTaskId: string;
+    subtaskIndex: number;
+    attempt: number;
+    writer: WriterResult;
+  }) => Record<string, unknown>;
+  buildCheckerUsage?: (input: {
+    checkerTaskId: string;
+    subtaskIndex: number;
+    verdict: CheckAnswer;
+  }) => Record<string, unknown>;
   buildAuditorUsage?: (input: { auditorTaskId: string; verdict: AuditAnswer }) => Record<string, unknown>;
 }
 
@@ -57,7 +67,10 @@ export interface SubtaskLoopInput {
     projectId: string;
     workspacePath: string;
   };
-  escapeHatches: Pick<EscapeHatches, "maxPlannerRerunsPerSpec" | "maxWriterIterPerSubtask" | "maxRetriesPerTransientFailure">;
+  escapeHatches: Pick<
+    EscapeHatches,
+    "maxPlannerRerunsPerSpec" | "maxWriterIterPerSubtask" | "maxRetriesPerTransientFailure"
+  >;
   timeoutMs: number;
   onEvent?: (event: { eventType: EventName; taskId?: string }) => void;
   costHooks?: SubtaskLoopCostHooks;
@@ -87,12 +100,28 @@ export interface SubtaskLoopInput {
 }
 
 export type SubtaskLoopOutcome =
-  | { kind: "passed"; plannerTaskId: string; subtasks: ReadonlyArray<PlanSubtask>; plannerRerunCount: number }
-  | { kind: "retry_budget_exhausted"; plannerRerunCount: number; lastRejection: PlannerRejectionFeedback }
+  | {
+      kind: "passed";
+      plannerTaskId: string;
+      subtasks: ReadonlyArray<PlanSubtask>;
+      plannerRerunCount: number;
+    }
+  | {
+      kind: "retry_budget_exhausted";
+      plannerRerunCount: number;
+      lastRejection: PlannerRejectionFeedback;
+    }
   | { kind: "halted"; plannerRerunCount: number; reason: string }
-  | { kind: "window_exhausted"; plannerRerunCount: number; provider: string; slot: string; usedPercent: number; resetsAt: string };
+  | {
+      kind: "window_exhausted";
+      plannerRerunCount: number;
+      provider: string;
+      slot: string;
+      usedPercent: number;
+      resetsAt: string;
+    };
 
-interface AppendEvent {
+export interface AppendEvent {
   <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string): Promise<void>;
 }
 
@@ -104,7 +133,7 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
       projectId: input.context.projectId,
       taskId,
       eventType,
-      payload
+      payload,
     });
     input.onEvent?.({ eventType, taskId });
   };
@@ -112,7 +141,7 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
     recorder: input.recorder,
     runId: input.context.runId,
     specId: input.context.specId,
-    projectId: input.context.projectId
+    projectId: input.context.projectId,
   };
 
   const plannerTaskId = `task_${randomUUID()}`;
@@ -154,24 +183,35 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
       attempt: plannerRerunCount + 1,
       rejectionHistory,
       timeoutMs: input.timeoutMs,
-      buildUsage: input.costHooks?.buildPlannerUsage
+      buildUsage: input.costHooks?.buildPlannerUsage,
     });
 
     const writerResults: { subtask: PlanSubtask; writer: WriterResult }[] = [];
     const checkerRejection = await runSubtaskSequence({
-      input, costCtx, appendEvent, plan, plannerTaskId, writerResults
+      input,
+      costCtx,
+      appendEvent,
+      plan,
+      plannerTaskId,
+      writerResults,
     });
 
     if (checkerRejection !== undefined) {
       const exhausted = await handleRejection({
-        appendEvent, plannerTaskId, runId: input.context.runId,
+        appendEvent,
+        plannerTaskId,
+        runId: input.context.runId,
         max: input.escapeHatches.maxPlannerRerunsPerSpec,
         rejection: checkerRejection,
         plannerRerunCount,
-        history: rejectionHistory
+        history: rejectionHistory,
       });
       if (exhausted) {
-        return await finalize({ kind: "retry_budget_exhausted", plannerRerunCount: plannerRerunCount + 1, lastRejection: checkerRejection });
+        return await finalize({
+          kind: "retry_budget_exhausted",
+          plannerRerunCount: plannerRerunCount + 1,
+          lastRejection: checkerRejection,
+        });
       }
       plannerRerunCount += 1;
       continue;
@@ -185,14 +225,20 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
       if (!preAuditGate.passed) {
         const gateReject = gateRejection(preAuditGate, plan.subtasks);
         const exhausted = await handleRejection({
-          appendEvent, plannerTaskId, runId: input.context.runId,
+          appendEvent,
+          plannerTaskId,
+          runId: input.context.runId,
           max: input.escapeHatches.maxPlannerRerunsPerSpec,
           rejection: gateReject,
           plannerRerunCount,
-          history: rejectionHistory
+          history: rejectionHistory,
         });
         if (exhausted) {
-          return await finalize({ kind: "retry_budget_exhausted", plannerRerunCount: plannerRerunCount + 1, lastRejection: gateReject });
+          return await finalize({
+            kind: "retry_budget_exhausted",
+            plannerRerunCount: plannerRerunCount + 1,
+            lastRejection: gateReject,
+          });
         }
         plannerRerunCount += 1;
         continue;
@@ -213,11 +259,16 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
       acceptanceCriteria: input.context.acceptanceCriteria,
       timeoutMs: input.timeoutMs,
       appendEvent,
-      buildUsage: input.costHooks?.buildAuditorUsage
+      buildUsage: input.costHooks?.buildAuditorUsage,
     });
     if (audit.decision.kind === "pass") {
       await markTaskDone(input.pool, plannerTaskId, "passed");
-      return await finalize({ kind: "passed", plannerTaskId, subtasks: plan.subtasks, plannerRerunCount });
+      return await finalize({
+        kind: "passed",
+        plannerTaskId,
+        subtasks: plan.subtasks,
+        plannerRerunCount,
+      });
     }
     if (audit.decision.action === "halt") {
       await markTaskDone(input.pool, plannerTaskId, "rejected_by_auditor");
@@ -227,164 +278,26 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
       producer: "auditor",
       rejectionReason: audit.decision.reason,
       behaviorIdsFailed: [...audit.decision.outstandingBehaviorIds],
-      previousSubtasks: plan.subtasks
+      previousSubtasks: plan.subtasks,
     };
     const exhausted = await handleRejection({
-      appendEvent, plannerTaskId, runId: input.context.runId,
+      appendEvent,
+      plannerTaskId,
+      runId: input.context.runId,
       max: input.escapeHatches.maxPlannerRerunsPerSpec,
       rejection: auditorRejection,
       plannerRerunCount,
-      history: rejectionHistory
+      history: rejectionHistory,
     });
     if (exhausted) {
-      return await finalize({ kind: "retry_budget_exhausted", plannerRerunCount: plannerRerunCount + 1, lastRejection: auditorRejection });
+      return await finalize({
+        kind: "retry_budget_exhausted",
+        plannerRerunCount: plannerRerunCount + 1,
+        lastRejection: auditorRejection,
+      });
     }
     plannerRerunCount += 1;
   }
-}
-
-// checkWindowPreflight reads the live subscription-window state (codexbar) for
-// the run's credential and escalates PROJECT_BRIEF §4.3 window pressure. It
-// emits usage.window.observed for the live state and, when a window is at/over
-// the pressure threshold, usage.window.pressure plus a window_exhausted
-// outcome so the loop halts BEFORE dispatching a doomed planner call. No probe
-// (or no data) → returns null (proceed normally).
-interface CreditState {
-  atStart: number | null;
-}
-
-async function checkWindowPreflight(
-  input: SubtaskLoopInput,
-  appendEvent: AppendEvent,
-  plannerTaskId: string,
-  plannerRerunCount: number,
-  creditState: CreditState
-): Promise<Extract<SubtaskLoopOutcome, { kind: "window_exhausted" }> | null> {
-  if (input.usageProbe === undefined) {
-    return null;
-  }
-  const { usage, pressure } = await input.usageProbe.observeWindow();
-  // Capture the credit balance at the first observation that reports one; the
-  // run-end drawdown against this baseline is the run's marginal dollar cost.
-  if (creditState.atStart === null && usage !== null && usage.creditsRemaining !== null) {
-    creditState.atStart = usage.creditsRemaining;
-  }
-  if (usage !== null) {
-    await appendEvent(
-      "usage.window.observed",
-      {
-        provider: usage.provider,
-        windows: usage.windows.map((window) => ({
-          slot: window.slot,
-          usedPercent: window.usedPercent,
-          resetsAt: window.resetsAt,
-          windowMinutes: window.windowMinutes,
-          resetDescription: window.resetDescription
-        })),
-        creditsRemaining: usage.creditsRemaining,
-        source: usage.source,
-        capturedAt: usage.capturedAt
-      },
-      plannerTaskId
-    );
-  }
-  if (pressure === null) {
-    return null;
-  }
-  const provider = usage?.provider ?? "unknown";
-  await appendEvent(
-    "usage.window.pressure",
-    { provider, slot: pressure.slot, usedPercent: pressure.usedPercent, resetsAt: pressure.resetsAt },
-    plannerTaskId
-  );
-  return {
-    kind: "window_exhausted",
-    plannerRerunCount,
-    provider,
-    slot: pressure.slot,
-    usedPercent: pressure.usedPercent,
-    resetsAt: pressure.resetsAt
-  };
-}
-
-// observeRunAccounting captures the run's real cost at the end. It reads:
-//   1. ccusage token accounting (emits usage.accounting.observed), and
-//   2. a final window observation (emits usage.window.observed) to read the
-//      ending credit balance.
-// Reconcile precedence: a positive credit drawdown is the true marginal spend
-// for subscription-overage usage, so it wins; otherwise a positive ccusage
-// cost applies; otherwise the per-call rows keep their honest provider_pricing
-// / NULL basis. Either reconcile apportions the run total by token share.
-async function observeRunAccounting(
-  input: SubtaskLoopInput,
-  appendEvent: AppendEvent,
-  plannerTaskId: string,
-  creditState: CreditState
-): Promise<void> {
-  if (input.usageProbe === undefined) {
-    return;
-  }
-  const accounting = await input.usageProbe.observeAccounting();
-  if (accounting !== null) {
-    await appendEvent(
-      "usage.accounting.observed",
-      { cli: accounting.cli, totals: accounting.totals, costUsd: accounting.costUsd, capturedAt: accounting.capturedAt },
-      plannerTaskId
-    );
-  }
-
-  const creditsConsumed = await readEndingCreditDrawdown(input, appendEvent, plannerTaskId, creditState);
-  if (creditsConsumed !== null && creditsConsumed > 0) {
-    await input.recorder.reconcileRunCostFromCredits(
-      input.context.runId,
-      creditsConsumed,
-      input.creditUsdRate ?? DEFAULT_CREDIT_USD_RATE
-    );
-    return;
-  }
-  if (accounting !== null && accounting.costUsd !== null) {
-    await input.recorder.reconcileRunCostFromCcusage(input.context.runId, accounting.costUsd);
-  }
-}
-
-// readEndingCreditDrawdown does a final window observation, emits it, and
-// returns (creditsAtStart - creditsAtEnd) when both are known, else null.
-// Credit balances update asynchronously provider-side, so this is best-effort
-// and may undercount a just-completed call's drawdown.
-async function readEndingCreditDrawdown(
-  input: SubtaskLoopInput,
-  appendEvent: AppendEvent,
-  plannerTaskId: string,
-  creditState: CreditState
-): Promise<number | null> {
-  if (input.usageProbe === undefined || creditState.atStart === null) {
-    return null;
-  }
-  const { usage } = await input.usageProbe.observeWindow();
-  if (usage === null) {
-    return null;
-  }
-  await appendEvent(
-    "usage.window.observed",
-    {
-      provider: usage.provider,
-      windows: usage.windows.map((window) => ({
-        slot: window.slot,
-        usedPercent: window.usedPercent,
-        resetsAt: window.resetsAt,
-        windowMinutes: window.windowMinutes,
-        resetDescription: window.resetDescription
-      })),
-      creditsRemaining: usage.creditsRemaining,
-      source: usage.source,
-      capturedAt: usage.capturedAt
-    },
-    plannerTaskId
-  );
-  if (usage.creditsRemaining === null) {
-    return null;
-  }
-  return creditState.atStart - usage.creditsRemaining;
 }
 
 // runSubtaskSequence walks the plan in order, executing each subtask's
@@ -413,7 +326,7 @@ async function runSubtaskSequence(args: {
       prompt: writerPromptFor(input, subtask),
       timeoutMs: input.timeoutMs,
       appendEvent,
-      buildUsage: input.costHooks?.buildWriterUsage
+      buildUsage: input.costHooks?.buildWriterUsage,
     });
     // P3-0005: deterministic per-iteration gate. The fast tier runs over the
     // bootstrapped workspace right after the writer edits. A nonzero exit means
@@ -442,14 +355,14 @@ async function runSubtaskSequence(args: {
       acceptanceCriteria: input.context.acceptanceCriteria,
       timeoutMs: input.timeoutMs,
       appendEvent,
-      buildUsage: input.costHooks?.buildCheckerUsage
+      buildUsage: input.costHooks?.buildCheckerUsage,
     });
     if (decision.kind === "reject") {
       return {
         producer: "checker",
         rejectionReason: decision.reason,
         behaviorIdsFailed: [...decision.behaviorIdsFailed],
-        previousSubtasks: plan.subtasks
+        previousSubtasks: plan.subtasks,
       };
     }
     writerResults.push({ subtask, writer: writerResult });
@@ -464,10 +377,13 @@ function writerPromptFor(input: SubtaskLoopInput, subtask: PlanSubtask): string 
     `Behaviors: ${subtask.behaviorIds.join(", ") || "(none)"}`,
     "",
     `Spec: ${input.context.specTitle}`,
-    input.context.specDescription
+    input.context.specDescription,
   ].join("\n");
 }
 
 function combineDiffs(results: ReadonlyArray<WriterResult>): string {
-  return results.map((result) => result.diff).filter((diff) => diff.length > 0).join("\n");
+  return results
+    .map((result) => result.diff)
+    .filter((diff) => diff.length > 0)
+    .join("\n");
 }

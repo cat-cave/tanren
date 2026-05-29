@@ -5,13 +5,9 @@
 // import cycle.
 import { authHeaders } from "./auth/index.js";
 
-export const orchestratorUrl =
-  process.env["TANREN_ORCHESTRATOR_URL"] ?? "http://localhost:3100";
+export const orchestratorUrl = process.env["TANREN_ORCHESTRATOR_URL"] ?? "http://localhost:3100";
 
-function mergeAuthHeaders(
-  init: RequestInit | undefined,
-  auth: Record<string, string>
-): RequestInit | undefined {
+function mergeAuthHeaders(init: RequestInit | undefined, auth: Record<string, string>): RequestInit | undefined {
   if (Object.keys(auth).length === 0) {
     return init;
   }
@@ -37,11 +33,11 @@ export async function request(path: string, init?: RequestInit) {
 export async function jsonRequest(
   path: string,
   body: unknown,
-  options: { method?: "POST" | "PATCH" | "PUT" | "DELETE" } = {}
+  options: { method?: "POST" | "PATCH" | "PUT" | "DELETE" } = {},
 ) {
   return await request(path, {
     method: options.method ?? "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body)
+    body: JSON.stringify(body),
   });
 }

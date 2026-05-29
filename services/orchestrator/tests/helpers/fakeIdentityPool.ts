@@ -78,7 +78,7 @@ export function createFakeIdentityPool(): FakeIdentityPool {
     sessions: new Map(),
     apiTokens: new Map(),
     query: async (sql, params = []) => handleQuery(state, sql, params),
-    asPgPool: () => state as unknown as pg.Pool
+    asPgPool: () => state as unknown as pg.Pool,
   };
   return state;
 }
@@ -86,14 +86,14 @@ export function createFakeIdentityPool(): FakeIdentityPool {
 async function handleQuery(
   state: FakeIdentityPool,
   sql: string,
-  params: unknown[]
+  params: unknown[],
 ): Promise<{ rows: unknown[]; rowCount: number }> {
   const trimmed = sql.trim();
 
   // users
   if (trimmed.startsWith("SELECT * FROM users WHERE provider = $1 AND provider_subject = $2")) {
     const rows = [...state.users.values()].filter(
-      (u) => u.provider === String(params[0]) && u.provider_subject === String(params[1])
+      (u) => u.provider === String(params[0]) && u.provider_subject === String(params[1]),
     );
     return { rows, rowCount: rows.length };
   }
@@ -116,7 +116,7 @@ async function handleQuery(
       email: (params[4] as string | null) ?? null,
       display_name: (params[5] as string | null) ?? null,
       created_at: new Date(),
-      updated_at: new Date()
+      updated_at: new Date(),
     };
     state.users.set(row.id, row);
     return { rows: [row], rowCount: 1 };
@@ -125,7 +125,7 @@ async function handleQuery(
   // organizations
   if (trimmed.startsWith("SELECT * FROM organizations WHERE kind = $1 AND external_id = $2")) {
     const rows = [...state.orgs.values()].filter(
-      (o) => o.kind === String(params[0]) && o.external_id === String(params[1])
+      (o) => o.kind === String(params[0]) && o.external_id === String(params[1]),
     );
     return { rows, rowCount: rows.length };
   }
@@ -146,7 +146,7 @@ async function handleQuery(
       login: String(params[3]),
       display_name: String(params[4]),
       created_at: new Date(),
-      updated_at: new Date()
+      updated_at: new Date(),
     };
     state.orgs.set(row.id, row);
     return { rows: [row], rowCount: 1 };
@@ -156,7 +156,10 @@ async function handleQuery(
   if (trimmed.startsWith("SELECT role FROM org_members WHERE org_id = $1 AND user_id = $2")) {
     const key = `${String(params[0])}:${String(params[1])}`;
     const row = state.orgMembers.get(key);
-    return { rows: row === undefined ? [] : [{ role: row.role }], rowCount: row === undefined ? 0 : 1 };
+    return {
+      rows: row === undefined ? [] : [{ role: row.role }],
+      rowCount: row === undefined ? 0 : 1,
+    };
   }
   if (trimmed.startsWith("SELECT count(*)::text AS count FROM org_members WHERE org_id = $1")) {
     const orgId = String(params[0]);
@@ -168,7 +171,7 @@ async function handleQuery(
       org_id: String(params[0]),
       user_id: String(params[1]),
       role: String(params[2]),
-      joined_at: new Date()
+      joined_at: new Date(),
     };
     state.orgMembers.set(`${row.org_id}:${row.user_id}`, row);
     return { rows: [], rowCount: 1 };
@@ -178,14 +181,17 @@ async function handleQuery(
   if (trimmed.startsWith("SELECT role FROM project_members WHERE project_id = $1 AND user_id = $2")) {
     const key = `${String(params[0])}:${String(params[1])}`;
     const row = state.projectMembers.get(key);
-    return { rows: row === undefined ? [] : [{ role: row.role }], rowCount: row === undefined ? 0 : 1 };
+    return {
+      rows: row === undefined ? [] : [{ role: row.role }],
+      rowCount: row === undefined ? 0 : 1,
+    };
   }
   if (trimmed.startsWith("INSERT INTO project_members")) {
     const row: ProjectMemberRow = {
       project_id: String(params[0]),
       user_id: String(params[1]),
       role: String(params[2]),
-      joined_at: new Date()
+      joined_at: new Date(),
     };
     state.projectMembers.set(`${row.project_id}:${row.user_id}`, row);
     return { rows: [], rowCount: 1 };
@@ -196,7 +202,7 @@ async function handleQuery(
     const project = state.projects.get(String(params[0]));
     return {
       rows: project === undefined ? [] : [{ org_id: project.orgId }],
-      rowCount: project === undefined ? 0 : 1
+      rowCount: project === undefined ? 0 : 1,
     };
   }
 
@@ -209,7 +215,7 @@ async function handleQuery(
       expires_at: params[3] as Date,
       created_at: new Date(),
       ip: (params[4] as string | null) ?? null,
-      user_agent: (params[5] as string | null) ?? null
+      user_agent: (params[5] as string | null) ?? null,
     };
     state.sessions.set(row.id, row);
     return { rows: [], rowCount: 1 };
@@ -233,7 +239,7 @@ async function handleQuery(
       scopes: params[4] as string[],
       expires_at: (params[5] as Date | null) ?? null,
       last_used_at: null,
-      created_at: new Date()
+      created_at: new Date(),
     };
     state.apiTokens.set(row.id, row);
     return { rows: [], rowCount: 1 };

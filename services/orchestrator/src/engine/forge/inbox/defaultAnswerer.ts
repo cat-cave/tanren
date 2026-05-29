@@ -18,8 +18,27 @@
 import type { CandidateTriage, TriageAnswerer, TriageAnswererContext } from "./types.js";
 
 const STOPWORDS = new Set([
-  "the", "a", "an", "to", "for", "of", "on", "in", "and", "or", "with", "fix",
-  "bug", "feature", "add", "issue", "new", "is", "are", "by", "from"
+  "the",
+  "a",
+  "an",
+  "to",
+  "for",
+  "of",
+  "on",
+  "in",
+  "and",
+  "or",
+  "with",
+  "fix",
+  "bug",
+  "feature",
+  "add",
+  "issue",
+  "new",
+  "is",
+  "are",
+  "by",
+  "from",
 ]);
 
 function tokens(text: string): Set<string> {
@@ -28,7 +47,7 @@ function tokens(text: string): Set<string> {
       .toLowerCase()
       .replace(/[^a-z0-9\s]/g, " ")
       .split(/\s+/)
-      .filter((t) => t.length > 2 && !STOPWORDS.has(t))
+      .filter((t) => t.length > 2 && !STOPWORDS.has(t)),
   );
 }
 
@@ -48,10 +67,7 @@ interface Match {
   score: number;
 }
 
-function bestMatch(
-  candidateTokens: Set<string>,
-  specs: TriageAnswererContext["existingSpecs"]
-): Match | undefined {
+function bestMatch(candidateTokens: Set<string>, specs: TriageAnswererContext["existingSpecs"]): Match | undefined {
   let best: Match | undefined;
   for (const spec of specs) {
     const score = overlap(candidateTokens, tokens(spec.title));
@@ -79,7 +95,7 @@ export function createDeterministicTriageAnswerer(): TriageAnswerer {
           placement: `auto → ${candidate.projectId ?? "project"} · queued`,
           verdict: "auto_routable",
           duplicateOfSpecId: null,
-          discoveryVariant: variantFor(candidate.severity)
+          discoveryVariant: variantFor(candidate.severity),
         });
       }
 
@@ -96,7 +112,7 @@ export function createDeterministicTriageAnswerer(): TriageAnswerer {
           placement: "forge recommends closing as done",
           verdict: "dedupe_close",
           duplicateOfSpecId: match.specId,
-          discoveryVariant: variantFor(candidate.severity)
+          discoveryVariant: variantFor(candidate.severity),
         });
       }
 
@@ -108,7 +124,7 @@ export function createDeterministicTriageAnswerer(): TriageAnswerer {
           placement: "forge suggests folding into the live run",
           verdict: "needs_call",
           duplicateOfSpecId: null,
-          discoveryVariant: candidate.severity === "fail" ? "bug" : "feature"
+          discoveryVariant: candidate.severity === "fail" ? "bug" : "feature",
         });
       }
 
@@ -119,9 +135,9 @@ export function createDeterministicTriageAnswerer(): TriageAnswerer {
         placement: "forge proposes a new spec · P1 · placement is your call",
         verdict: "needs_call",
         duplicateOfSpecId: null,
-        discoveryVariant: variantFor(candidate.severity)
+        discoveryVariant: variantFor(candidate.severity),
       });
-    }
+    },
   };
 }
 

@@ -26,11 +26,7 @@ import type { EscapeHatches } from "../config/index.js";
 import { PgEventStore } from "../eventStore.js";
 import type { GitHubHttpClient } from "../providers/github.js";
 import { loadRunExecutionContext } from "./runExecutionContext.js";
-import {
-  runPlannerLoopWorkflow,
-  type PlannerRunResult,
-  type RunPlannerLoopInput
-} from "../workflow/plannerRun.js";
+import { runPlannerLoopWorkflow, type PlannerRunResult, type RunPlannerLoopInput } from "../workflow/plannerRun.js";
 
 /** Escape-hatch + CI-poll defaults mirroring scripts/acceptance/medium.ts. */
 export const DEFAULT_ESCAPE_HATCHES: Pick<
@@ -39,7 +35,7 @@ export const DEFAULT_ESCAPE_HATCHES: Pick<
 > = {
   maxPlannerRerunsPerSpec: 5,
   maxWriterIterPerSubtask: 5,
-  maxRetriesPerTransientFailure: 3
+  maxRetriesPerTransientFailure: 3,
 };
 
 export const DEFAULT_TIMEOUT_MS = 300_000;
@@ -111,7 +107,7 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
   try {
     const { context } = await loadRunExecutionContext(deps.pool, {
       runId,
-      identitySecretRef: deps.identitySecretRef
+      identitySecretRef: deps.identitySecretRef,
     });
     const runWorkflow = deps.runWorkflow ?? runPlannerLoopWorkflow;
     const result = await runWorkflow({
@@ -124,7 +120,7 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
       escapeHatches: deps.escapeHatches ?? DEFAULT_ESCAPE_HATCHES,
       timeoutMs: deps.timeoutMs ?? DEFAULT_TIMEOUT_MS,
       maxCiPolls: deps.maxCiPolls ?? DEFAULT_MAX_CI_POLLS,
-      ciPollDelayMs: deps.ciPollDelayMs ?? DEFAULT_CI_POLL_DELAY_MS
+      ciPollDelayMs: deps.ciPollDelayMs ?? DEFAULT_CI_POLL_DELAY_MS,
     });
     await deps.jobQueue.complete(job.id);
     return { kind: "completed", jobId: job.id, runId, outcome: result.outcome.kind };
@@ -147,7 +143,11 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
  */
 function startHeartbeat(deps: RunExecutorDeps, jobId: string, leaseMs: number): () => Promise<void> {
   const intervalMs = Math.max(1, deps.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS);
-  const control = { running: true, inFlight: Promise.resolve(), timer: undefined as ReturnType<typeof setTimeout> | undefined };
+  const control = {
+    running: true,
+    inFlight: Promise.resolve(),
+    timer: undefined as ReturnType<typeof setTimeout> | undefined,
+  };
 
   const schedule = (): void => {
     if (!control.running) {
@@ -187,7 +187,7 @@ function startHeartbeat(deps: RunExecutorDeps, jobId: string, leaseMs: number): 
 async function finalizeRunRecoverable(pool: pg.Pool, runId: string, message: string): Promise<void> {
   const updated = await pool.query(
     "UPDATE runs SET status = 'halted', outcome = 'halted', ended_at = now() WHERE run_id = $1 AND status IN ('running', 'queued', 'failed') RETURNING run_id, spec_id, project_id",
-    [runId]
+    [runId],
   );
   const row = updated.rows[0] as { spec_id?: unknown; project_id?: unknown } | undefined;
   if (row !== undefined) {
@@ -200,7 +200,7 @@ async function finalizeRunRecoverable(pool: pg.Pool, runId: string, message: str
         specId: String(row.spec_id ?? ""),
         projectId: String(row.project_id ?? ""),
         eventType: "run.failed",
-        payload: { status: "halted", message }
+        payload: { status: "halted", message },
       })
       .catch(() => undefined);
   }

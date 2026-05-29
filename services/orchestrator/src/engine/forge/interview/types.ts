@@ -24,7 +24,7 @@ export const CaptureIdentity = z
   .object({
     slug: z.string().min(1).max(80),
     pitch: z.string().min(1).max(400),
-    repoHint: z.string().max(200).default("")
+    repoHint: z.string().max(200).default(""),
   })
   .strict();
 export type CaptureIdentity = z.infer<typeof CaptureIdentity>;
@@ -35,7 +35,7 @@ export const CapturePersona = z
   .object({
     name: z.string().min(1).max(80),
     description: z.string().min(1).max(280),
-    surface: z.string().max(80).default("")
+    surface: z.string().max(80).default(""),
   })
   .strict();
 export type CapturePersona = z.infer<typeof CapturePersona>;
@@ -49,7 +49,7 @@ export const CaptureBehavior = z
     title: z.string().min(1).max(160),
     given: z.string().max(280).default(""),
     when: z.string().max(280).default(""),
-    then: z.string().max(280).default("")
+    then: z.string().max(280).default(""),
   })
   .strict();
 /* eslint-enable unicorn/no-thenable */
@@ -59,7 +59,7 @@ export type CaptureBehavior = z.infer<typeof CaptureBehavior>;
 export const CaptureInterface = z
   .object({
     name: z.string().min(1).max(120),
-    note: z.string().max(200).default("")
+    note: z.string().max(200).default(""),
   })
   .strict();
 export type CaptureInterface = z.infer<typeof CaptureInterface>;
@@ -68,7 +68,7 @@ export type CaptureInterface = z.infer<typeof CaptureInterface>;
 export const CaptureArchitectureLine = z
   .object({
     layer: z.string().min(1).max(40),
-    choice: z.string().min(1).max(160)
+    choice: z.string().min(1).max(160),
   })
   .strict();
 export type CaptureArchitectureLine = z.infer<typeof CaptureArchitectureLine>;
@@ -83,7 +83,7 @@ export const InterviewCapture = z
     interfaces: z.array(CaptureInterface).default([]),
     designDna: z.string().max(80).default(""),
     architecture: z.array(CaptureArchitectureLine).default([]),
-    rulesets: z.array(z.string().min(1)).default([])
+    rulesets: z.array(z.string().min(1)).default([]),
   })
   .strict();
 export type InterviewCapture = z.infer<typeof InterviewCapture>;
@@ -96,7 +96,7 @@ export function emptyCapture(): InterviewCapture {
     interfaces: [],
     designDna: "",
     architecture: [],
-    rulesets: []
+    rulesets: [],
   };
 }
 
@@ -106,7 +106,7 @@ export function emptyCapture(): InterviewCapture {
 export const InterviewSuggestion = z
   .object({
     label: z.string().min(1).max(80),
-    value: z.string().min(1).max(200)
+    value: z.string().min(1).max(200),
   })
   .strict();
 export type InterviewSuggestion = z.infer<typeof InterviewSuggestion>;
@@ -123,7 +123,7 @@ export const InterviewRoundOutput = z
     // capture (monotonic) — the answerer need only return the new items.
     captureDelta: InterviewCapture.partial().default({}),
     suggestions: z.array(InterviewSuggestion).max(4).default([]),
-    complete: z.boolean().default(false)
+    complete: z.boolean().default(false),
   })
   .strict();
 export type InterviewRoundOutput = z.infer<typeof InterviewRoundOutput>;

@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import { FakeEventStore } from "../src/engine/eventStore.js";
-import type { GovernancePosture, MergeIntegration } from "../src/engine/config/shared.js";
 import { reduceReviewVerdict } from "../src/engine/providers/githubReviewMerge.js";
 import {
   assessExternalChange,
@@ -12,18 +11,18 @@ import {
   reviewerRejection,
   tanrenIdentity,
   type ContributorProbe,
-  type MergeProbe,
-  type ReviewProbe
+  type ReviewProbe,
 } from "../src/engine/workflow/reviewMerge/index.js";
 import { pollReviewForRun } from "../src/engine/workflow/reviewMerge/reviewPolling.js";
+import { approvingReviewProbe, recordingMergeProbe, ReviewMergePool, unusedHttp } from "./reviewMerge.fixtures.js";
 
 describe("review verdict reduction", () => {
   it("changes_requested blocks even when a later approval exists from another reviewer", () => {
     expect(
       reduceReviewVerdict([
         { state: "approved", reviewer: "alice" },
-        { state: "changes_requested", reviewer: "bob" }
-      ]).verdict
+        { state: "changes_requested", reviewer: "bob" },
+      ]).verdict,
     ).toBe("changes_requested");
   });
 
@@ -32,8 +31,8 @@ describe("review verdict reduction", () => {
       reduceReviewVerdict([
         { state: "changes_requested", reviewer: "bob" },
         { state: "approved", reviewer: "bob" },
-        { state: "approved", reviewer: "alice" }
-      ]).verdict
+        { state: "approved", reviewer: "alice" },
+      ]).verdict,
     ).toBe("approved");
   });
 
@@ -64,7 +63,7 @@ describe("review polling stage", () => {
       secrets: new FakeSecretStore(),
       githubHttp: unusedHttp(),
       runId: "run_1",
-      reviewProbe: probe
+      reviewProbe: probe,
     });
 
     expect(result.verdict).toBe("approved");
@@ -81,7 +80,10 @@ describe("review polling stage", () => {
     const events = new FakeEventStore();
     const probe: ReviewProbe = {
       markReady: async () => undefined,
-      fetchVerdict: async () => ({ verdict: "changes_requested", latest: { state: "changes_requested", reviewer: "carol", body: "fix the edge case" } })
+      fetchVerdict: async () => ({
+        verdict: "changes_requested",
+        latest: { state: "changes_requested", reviewer: "carol", body: "fix the edge case" },
+      }),
     };
 
     const result = await pollReviewForRun({
@@ -90,7 +92,7 @@ describe("review polling stage", () => {
       secrets: new FakeSecretStore(),
       githubHttp: unusedHttp(),
       runId: "run_1",
-      reviewProbe: probe
+      reviewProbe: probe,
     });
 
     expect(result.verdict).toBe("changes_requested");
@@ -110,7 +112,13 @@ describe("merge dispatch stage", () => {
   it("direct_merge → GitHub merge → merge.completed", async () => {
     const pool = new ReviewMergePool("direct_merge");
     const events = new FakeEventStore();
-    const probe = recordingMergeProbe({ merged: true, mergeSha: "deadbeef", conflict: false, status: 200, message: "merged" });
+    const probe = recordingMergeProbe({
+      merged: true,
+      mergeSha: "deadbeef",
+      conflict: false,
+      status: 200,
+      message: "merged",
+    });
 
     const result = await mergeForRun({
       pool: pool.asPgPool(),
@@ -118,7 +126,7 @@ describe("merge dispatch stage", () => {
       secrets: new FakeSecretStore(),
       githubHttp: unusedHttp(),
       runId: "run_1",
-      mergeProbe: probe
+      mergeProbe: probe,
     });
 
     expect(result.outcome).toBe("merged");
@@ -142,14 +150,17 @@ describe("merge dispatch stage", () => {
       githubHttp: unusedHttp(),
       runId: "run_1",
       mergeProbe: probe,
-      mergifyQueueLabel: "tanren:merge"
+      mergifyQueueLabel: "tanren:merge",
     });
 
     expect(result.outcome).toBe("queued");
     expect(probe.labels).toEqual(["tanren:merge"]);
     expect(probe.mergeCalls).toBe(0);
     const queued = events.events.find((e) => e.eventType === "merge.queued");
-    expect(queued?.payload).toMatchObject({ integration: "mergify_queue", queueLabel: "tanren:merge" });
+    expect(queued?.payload).toMatchObject({
+      integration: "mergify_queue",
+      queueLabel: "tanren:merge",
+    });
   });
 
   it("external_reviewer → hand-off, no merge call", async () => {
@@ -163,19 +174,26 @@ describe("merge dispatch stage", () => {
       secrets: new FakeSecretStore(),
       githubHttp: unusedHttp(),
       runId: "run_1",
-      mergeProbe: probe
+      mergeProbe: probe,
     });
 
     expect(result.outcome).toBe("handed_off");
     expect(probe.mergeCalls).toBe(0);
     expect(probe.labels).toEqual([]);
-    expect(events.events.find((e) => e.eventType === "merge.queued")?.payload).toMatchObject({ integration: "external_reviewer" });
+    expect(events.events.find((e) => e.eventType === "merge.queued")?.payload).toMatchObject({
+      integration: "external_reviewer",
+    });
   });
 
   it("merge conflict → merge.conflict + recoverable (running) task, resolver hook invoked", async () => {
     const pool = new ReviewMergePool("direct_merge");
     const events = new FakeEventStore();
-    const probe = recordingMergeProbe({ merged: false, conflict: true, status: 409, message: "merge conflict" });
+    const probe = recordingMergeProbe({
+      merged: false,
+      conflict: true,
+      status: 409,
+      message: "merge conflict",
+    });
     let hookCalls = 0;
 
     const result = await mergeForRun({
@@ -189,7 +207,7 @@ describe("merge dispatch stage", () => {
         hookCalls += 1;
         expect(ctx.baseBranch).toBe("main");
         return { resolved: false };
-      }
+      },
     });
 
     expect(result.outcome).toBe("conflict");
@@ -201,8 +219,16 @@ describe("merge dispatch stage", () => {
   });
 
   it("noopConflictResolver does not resolve", async () => {
-    expect(await noopConflictResolver({ runId: "r", prUrl: "u", prNumber: 1, baseBranch: "main", message: "x" })).toEqual({
-      resolved: false
+    expect(
+      await noopConflictResolver({
+        runId: "r",
+        prUrl: "u",
+        prNumber: 1,
+        baseBranch: "main",
+        message: "x",
+      }),
+    ).toEqual({
+      resolved: false,
     });
   });
 });
@@ -255,13 +281,23 @@ describe("posture decision", () => {
 });
 
 describe("governance posture gate at the merge decision", () => {
-  const externalProbe: ContributorProbe = { listContributors: async () => ({ logins: ["tanren[bot]", "mallory"] }) };
-  const internalProbe: ContributorProbe = { listContributors: async () => ({ logins: ["tanren[bot]"] }) };
+  const externalProbe: ContributorProbe = {
+    listContributors: async () => ({ logins: ["tanren[bot]", "mallory"] }),
+  };
+  const internalProbe: ContributorProbe = {
+    listContributors: async () => ({ logins: ["tanren[bot]"] }),
+  };
 
   it("strict + external change → merge.blocked (operator_approval), no merge call, task left running", async () => {
     const pool = new ReviewMergePool("direct_merge", "strict");
     const events = new FakeEventStore();
-    const probe = recordingMergeProbe({ merged: true, mergeSha: "x", conflict: false, status: 200, message: "merged" });
+    const probe = recordingMergeProbe({
+      merged: true,
+      mergeSha: "x",
+      conflict: false,
+      status: 200,
+      message: "merged",
+    });
 
     const result = await mergeForRun({
       pool: pool.asPgPool(),
@@ -270,20 +306,29 @@ describe("governance posture gate at the merge decision", () => {
       githubHttp: unusedHttp(),
       runId: "run_1",
       mergeProbe: probe,
-      contributorProbe: externalProbe
+      contributorProbe: externalProbe,
     });
 
     expect(result.outcome).toBe("blocked");
     expect(probe.mergeCalls).toBe(0);
     const blocked = events.events.find((e) => e.eventType === "merge.blocked");
-    expect(blocked?.payload).toMatchObject({ posture: "strict", mode: "operator_approval", externalLogins: ["mallory"] });
+    expect(blocked?.payload).toMatchObject({
+      posture: "strict",
+      mode: "operator_approval",
+      externalLogins: ["mallory"],
+    });
     expect(pool.tasks.find((t) => t.kind === "merge")?.status).toBe("running");
   });
 
   it("audit_only + external change → merge.blocked (audit_only), no merge call", async () => {
     const pool = new ReviewMergePool("direct_merge", "audit_only");
     const events = new FakeEventStore();
-    const probe = recordingMergeProbe({ merged: true, conflict: false, status: 200, message: "merged" });
+    const probe = recordingMergeProbe({
+      merged: true,
+      conflict: false,
+      status: 200,
+      message: "merged",
+    });
 
     const result = await mergeForRun({
       pool: pool.asPgPool(),
@@ -292,18 +337,27 @@ describe("governance posture gate at the merge decision", () => {
       githubHttp: unusedHttp(),
       runId: "run_1",
       mergeProbe: probe,
-      contributorProbe: externalProbe
+      contributorProbe: externalProbe,
     });
 
     expect(result.outcome).toBe("blocked");
     expect(probe.mergeCalls).toBe(0);
-    expect(events.events.find((e) => e.eventType === "merge.blocked")?.payload).toMatchObject({ posture: "audit_only", mode: "audit_only" });
+    expect(events.events.find((e) => e.eventType === "merge.blocked")?.payload).toMatchObject({
+      posture: "audit_only",
+      mode: "audit_only",
+    });
   });
 
   it("strict + Tanren-only change → proceeds to a real merge", async () => {
     const pool = new ReviewMergePool("direct_merge", "strict");
     const events = new FakeEventStore();
-    const probe = recordingMergeProbe({ merged: true, mergeSha: "deadbeef", conflict: false, status: 200, message: "merged" });
+    const probe = recordingMergeProbe({
+      merged: true,
+      mergeSha: "deadbeef",
+      conflict: false,
+      status: 200,
+      message: "merged",
+    });
 
     const result = await mergeForRun({
       pool: pool.asPgPool(),
@@ -312,7 +366,7 @@ describe("governance posture gate at the merge decision", () => {
       githubHttp: unusedHttp(),
       runId: "run_1",
       mergeProbe: probe,
-      contributorProbe: internalProbe
+      contributorProbe: internalProbe,
     });
 
     expect(result.outcome).toBe("merged");
@@ -323,7 +377,13 @@ describe("governance posture gate at the merge decision", () => {
   it("open + external change → proceeds (coexists), merge happens", async () => {
     const pool = new ReviewMergePool("direct_merge", "open");
     const events = new FakeEventStore();
-    const probe = recordingMergeProbe({ merged: true, mergeSha: "abc", conflict: false, status: 200, message: "merged" });
+    const probe = recordingMergeProbe({
+      merged: true,
+      mergeSha: "abc",
+      conflict: false,
+      status: 200,
+      message: "merged",
+    });
 
     const result = await mergeForRun({
       pool: pool.asPgPool(),
@@ -332,123 +392,10 @@ describe("governance posture gate at the merge decision", () => {
       githubHttp: unusedHttp(),
       runId: "run_1",
       mergeProbe: probe,
-      contributorProbe: externalProbe
+      contributorProbe: externalProbe,
     });
 
     expect(result.outcome).toBe("merged");
     expect(probe.mergeCalls).toBe(1);
   });
 });
-
-// --- harness -------------------------------------------------------------
-
-function unusedHttp() {
-  return { request: async () => { throw new Error("HTTP should not be called when a probe is injected"); } };
-}
-
-function approvingReviewProbe(): ReviewProbe & { markedReady: boolean } {
-  const probe = {
-    markedReady: false,
-    markReady: async () => {
-      probe.markedReady = true;
-    },
-    fetchVerdict: async () => ({ verdict: "approved" as const, latest: { state: "approved" as const, reviewer: "alice" } })
-  };
-  return probe;
-}
-
-function recordingMergeProbe(result: { merged: boolean; mergeSha?: string; conflict: boolean; status: number; message: string }) {
-  return {
-    labels: [] as string[],
-    mergeCalls: 0,
-    async applyQueueLabel(label: string) {
-      this.labels.push(label);
-    },
-    async merge() {
-      this.mergeCalls += 1;
-      return result;
-    }
-  } satisfies MergeProbe & { labels: string[]; mergeCalls: number };
-}
-
-const eventsTableName = ["events"].join("");
-
-class ReviewMergePool {
-  readonly tasks: Array<Record<string, unknown>> = [];
-  readonly events: Array<Record<string, unknown>> = [];
-  readonly runs = [{ run_id: "run_1", spec_id: "spec_1", project_id: "project_1", pr_url: "https://github.com/cat-cave/fix/pull/7" }];
-
-  constructor(
-    private readonly mergeIntegration: MergeIntegration,
-    private readonly governancePosture: GovernancePosture = "open"
-  ) {}
-
-  async query(sql: string, params: unknown[]): Promise<{ rows: unknown[]; rowCount: number }> {
-    if (sql.includes("FROM runs r") && sql.includes("default_branch")) {
-      const run = this.runs.find((r) => r.run_id === params[0]);
-      return {
-        rows:
-          run === undefined
-            ? []
-            : [
-                {
-                  run_id: run.run_id,
-                  spec_id: run.spec_id,
-                  project_id: run.project_id,
-                  pr_url: run.pr_url,
-                  config: {
-                    version: 1,
-                    mergeIntegration: this.mergeIntegration,
-                    governancePosture: this.governancePosture,
-                    credentials: { githubCredentialRef: "credential/github/dev" }
-                  },
-                  default_branch: "main",
-                  org_config: null
-                }
-              ],
-        rowCount: run === undefined ? 0 : 1
-      };
-    }
-    if (sql.includes("FROM tasks") && sql.includes("LIMIT 1")) {
-      const kind = sql.includes("kind = 'review'") ? "review" : "merge";
-      const task = this.tasks.find((t) => t.run_id === params[0] && t.kind === kind);
-      return { rows: task === undefined ? [] : [task], rowCount: task === undefined ? 0 : 1 };
-    }
-    if (sql.startsWith("INSERT INTO tasks")) {
-      const kind = String(sql.includes("'review'") ? "review" : "merge");
-      this.tasks.push({ task_id: params[0], run_id: params[1], kind, status: "running" });
-      return { rows: [], rowCount: 1 };
-    }
-    if (sql.startsWith("UPDATE tasks SET status = 'done'")) {
-      Object.assign(this.findTask(params[0]), { status: "done", outcome: "ok" });
-      return { rows: [], rowCount: 1 };
-    }
-    if (sql.startsWith("UPDATE tasks SET status = 'failed'")) {
-      Object.assign(this.findTask(params[0]), { status: "failed", outcome: "failed" });
-      return { rows: [], rowCount: 1 };
-    }
-    if (sql.startsWith("UPDATE tasks SET status = 'running', outcome = 'pending'")) {
-      Object.assign(this.findTask(params[0]), { status: "running", outcome: "pending" });
-      return { rows: [], rowCount: 1 };
-    }
-    if (sql.startsWith("UPDATE tasks SET status = 'running'")) {
-      Object.assign(this.findTask(params[0]), { status: "running" });
-      return { rows: [], rowCount: 1 };
-    }
-    if (sql.startsWith(`INSERT INTO ${eventsTableName}`)) {
-      this.events.push({ event_type: params[4], payload: JSON.parse(String(params[5])) });
-      return { rows: [], rowCount: 1 };
-    }
-    throw new Error(`unexpected SQL: ${sql}`);
-  }
-
-  asPgPool() {
-    return this as never;
-  }
-
-  private findTask(taskId: unknown): Record<string, unknown> {
-    const task = this.tasks.find((t) => t.task_id === taskId);
-    if (task === undefined) throw new Error(`missing task: ${String(taskId)}`);
-    return task;
-  }
-}

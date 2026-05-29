@@ -3,18 +3,14 @@
 // - factories for in-memory planner / checker / auditor / writer adapters;
 // - canned PlanAnswer / CheckAnswer / AuditAnswer fixtures;
 // - defaultInput that wires the loop with a runnable single-subtask plan.
-import type {
-  AuditAnswer,
-  CheckAnswer,
-  PlanAnswer
-} from "../../src/engine/answerers/schemas/index.js";
+import type { AuditAnswer, CheckAnswer, PlanAnswer } from "../../src/engine/answerers/schemas/index.js";
 import { CostRecorder } from "../../src/engine/costs/index.js";
 import { FakeEventStore } from "../../src/engine/eventStore.js";
 import type {
   AnswererAdapter,
   AnswererRunOptions,
   WriterAdapter,
-  WriterResult
+  WriterResult,
 } from "../../src/engine/providers/types.js";
 import type { SubtaskLoopInput } from "../../src/engine/workflow/subtaskLoop.js";
 
@@ -38,13 +34,23 @@ export class FakePool {
   readonly costUpdates: Array<{ id: string; costUsd: string; basis: string | null }> = [];
   private nextCostId = 1;
 
-  async query(sql: string, params: ReadonlyArray<unknown> = []): Promise<{ rows: ReadonlyArray<Record<string, unknown>>; rowCount: number }> {
+  async query(
+    sql: string,
+    params: ReadonlyArray<unknown> = [],
+  ): Promise<{ rows: ReadonlyArray<Record<string, unknown>>; rowCount: number }> {
     const trimmed = sql.trim();
     if (trimmed.startsWith("SELECT id, total_tokens FROM cost_records")) {
-      return { rows: this.costRows.map((row) => ({ id: row.id, total_tokens: row.totalTokens })), rowCount: this.costRows.length };
+      return {
+        rows: this.costRows.map((row) => ({ id: row.id, total_tokens: row.totalTokens })),
+        rowCount: this.costRows.length,
+      };
     }
     if (trimmed.startsWith("UPDATE cost_records SET cost_usd")) {
-      this.costUpdates.push({ id: String(params[0]), costUsd: String(params[1]), basis: params[2] === undefined ? null : String(params[2]) });
+      this.costUpdates.push({
+        id: String(params[0]),
+        costUsd: String(params[1]),
+        basis: params[2] === undefined ? null : String(params[2]),
+      });
       return { rows: [], rowCount: 1 };
     }
     if (trimmed.startsWith("INSERT INTO tasks")) {
@@ -57,7 +63,7 @@ export class FakePool {
           parentTaskId: params[4] === null ? null : String(params[4]),
           status: "running",
           outcome: null,
-          cli: String(params[6])
+          cli: String(params[6]),
         });
       } else {
         this.tasks.push({
@@ -68,7 +74,7 @@ export class FakePool {
           parentTaskId: null,
           status: "running",
           outcome: null,
-          cli: String(params[2])
+          cli: String(params[2]),
         });
       }
       return { rows: [], rowCount: 1 };
@@ -94,53 +100,73 @@ export class FakePool {
 
 export const fakeAuthRef = "credential/self-hosted/tanren-fake";
 
-export function makePlanner(plans: ReadonlyArray<PlanAnswer>): AnswererAdapter<PlanAnswer> & { calls: AnswererRunOptions<PlanAnswer>[] } {
+export function makePlanner(
+  plans: ReadonlyArray<PlanAnswer>,
+): AnswererAdapter<PlanAnswer> & { calls: AnswererRunOptions<PlanAnswer>[] } {
   let index = 0;
   const calls: AnswererRunOptions<PlanAnswer>[] = [];
   return {
-    kind: "answerer", cli: "fake", authRef: fakeAuthRef, calls,
+    kind: "answerer",
+    cli: "fake",
+    authRef: fakeAuthRef,
+    calls,
     async runAnswerer(opts) {
       calls.push(opts);
       const plan = plans[index] ?? plans[plans.length - 1];
       index += 1;
       return plan;
-    }
+    },
   };
 }
 
-export function makeChecker(verdicts: ReadonlyArray<CheckAnswer>): AnswererAdapter<CheckAnswer> & { calls: AnswererRunOptions<CheckAnswer>[] } {
+export function makeChecker(
+  verdicts: ReadonlyArray<CheckAnswer>,
+): AnswererAdapter<CheckAnswer> & { calls: AnswererRunOptions<CheckAnswer>[] } {
   let index = 0;
   const calls: AnswererRunOptions<CheckAnswer>[] = [];
   return {
-    kind: "answerer", cli: "fake", authRef: fakeAuthRef, calls,
+    kind: "answerer",
+    cli: "fake",
+    authRef: fakeAuthRef,
+    calls,
     async runAnswerer(opts) {
       calls.push(opts);
       const verdict = verdicts[index] ?? verdicts[verdicts.length - 1];
       index += 1;
       return verdict;
-    }
+    },
   };
 }
 
-export function makeAuditor(verdicts: ReadonlyArray<AuditAnswer>): AnswererAdapter<AuditAnswer> & { calls: AnswererRunOptions<AuditAnswer>[] } {
+export function makeAuditor(
+  verdicts: ReadonlyArray<AuditAnswer>,
+): AnswererAdapter<AuditAnswer> & { calls: AnswererRunOptions<AuditAnswer>[] } {
   let index = 0;
   const calls: AnswererRunOptions<AuditAnswer>[] = [];
   return {
-    kind: "answerer", cli: "fake", authRef: fakeAuthRef, calls,
+    kind: "answerer",
+    cli: "fake",
+    authRef: fakeAuthRef,
+    calls,
     async runAnswerer(opts) {
       calls.push(opts);
       const verdict = verdicts[index] ?? verdicts[verdicts.length - 1];
       index += 1;
       return verdict;
-    }
+    },
   };
 }
 
-export function makeWriter(diffs: ReadonlyArray<string>): WriterAdapter & { calls: Array<{ prompt: string; workspace: string }> } {
+export function makeWriter(
+  diffs: ReadonlyArray<string>,
+): WriterAdapter & { calls: Array<{ prompt: string; workspace: string }> } {
   let index = 0;
   const calls: Array<{ prompt: string; workspace: string }> = [];
   return {
-    kind: "writer", cli: "fake", authRef: fakeAuthRef, calls,
+    kind: "writer",
+    cli: "fake",
+    authRef: fakeAuthRef,
+    calls,
     async runWriter(opts): Promise<WriterResult> {
       calls.push({ prompt: opts.prompt, workspace: opts.workspace });
       const diff = diffs[index] ?? diffs[diffs.length - 1];
@@ -149,14 +175,23 @@ export function makeWriter(diffs: ReadonlyArray<string>): WriterAdapter & { call
         diff,
         commits: diff.length === 0 ? [] : [{ sha: `sha_${index}`, message: `subtask ${index}` }],
         exitReason: "completed",
-        tokenUsage: { inputTokens: 1, cachedInputTokens: 0, cacheCreationTokens: 0, outputTokens: 1, reasoningOutputTokens: 0, totalTokens: 2 },
-        telemetry: { rawEventCount: 1 }
+        tokenUsage: {
+          inputTokens: 1,
+          cachedInputTokens: 0,
+          cacheCreationTokens: 0,
+          outputTokens: 1,
+          reasoningOutputTokens: 0,
+          totalTokens: 2,
+        },
+        telemetry: { rawEventCount: 1 },
       };
-    }
+    },
   };
 }
 
-export function buildPlan(subtasks: ReadonlyArray<{ title: string; intent: string; behaviorIds?: string[] }>): PlanAnswer {
+export function buildPlan(
+  subtasks: ReadonlyArray<{ title: string; intent: string; behaviorIds?: string[] }>,
+): PlanAnswer {
   return {
     rationale: "decompose by behavior",
     subtasks: subtasks.map((s, index) => ({
@@ -164,8 +199,8 @@ export function buildPlan(subtasks: ReadonlyArray<{ title: string; intent: strin
       title: s.title,
       intent: s.intent,
       behaviorIds: s.behaviorIds ?? [],
-      estimatedTokens: null
-    }))
+      estimatedTokens: null,
+    })),
   };
 }
 
@@ -173,38 +208,42 @@ export const passingCheck: CheckAnswer = {
   passed: true,
   reasoning: "diff satisfies the subtask intent",
   behaviorIdsPassed: ["B1"],
-  behaviorIdsFailed: []
+  behaviorIdsFailed: [],
 };
 
 export const failingCheck: CheckAnswer = {
   passed: false,
   reasoning: "diff does not touch the required file",
   behaviorIdsPassed: [],
-  behaviorIdsFailed: ["B1"]
+  behaviorIdsFailed: ["B1"],
 };
 
 export const passingAudit: AuditAnswer = {
   passed: true,
   reasoning: "every acceptance criterion is met",
   outstandingBehaviorIds: [],
-  recommendedAction: "pass"
+  recommendedAction: "pass",
 };
 
 export const loopAudit: AuditAnswer = {
   passed: false,
   reasoning: "integrated result missed a behavior",
   outstandingBehaviorIds: ["B2"],
-  recommendedAction: "loop_to_planner"
+  recommendedAction: "loop_to_planner",
 };
 
 export const haltAudit: AuditAnswer = {
   passed: false,
   reasoning: "unrecoverable conflict between subtasks",
   outstandingBehaviorIds: ["B3"],
-  recommendedAction: "halt"
+  recommendedAction: "halt",
 };
 
-export function defaultLoopInput(overrides: Partial<SubtaskLoopInput> = {}): { input: SubtaskLoopInput; pool: FakePool; events: FakeEventStore } {
+export function defaultLoopInput(overrides: Partial<SubtaskLoopInput> = {}): {
+  input: SubtaskLoopInput;
+  pool: FakePool;
+  events: FakeEventStore;
+} {
   const pool = new FakePool();
   const events = new FakeEventStore();
   const recorder = new CostRecorder(pool, events);
@@ -216,7 +255,7 @@ export function defaultLoopInput(overrides: Partial<SubtaskLoopInput> = {}): { i
       planner: makePlanner([buildPlan([{ title: "T1", intent: "Touch README", behaviorIds: ["B1"] }])]),
       writer: makeWriter(["diff --git README\n+ok\n"]),
       checker: makeChecker([passingCheck]),
-      auditor: makeAuditor([passingAudit])
+      auditor: makeAuditor([passingAudit]),
     },
     context: {
       runId: "run_test",
@@ -227,15 +266,15 @@ export function defaultLoopInput(overrides: Partial<SubtaskLoopInput> = {}): { i
       acceptanceCriteria: ["README mentions ok"],
       behaviorIds: ["B1"],
       behaviorContext: [{ id: "B1", title: "README mentions ok", description: "the README contains the string ok" }],
-      workspacePath: "/workspace/runs/run_test/repo"
+      workspacePath: "/workspace/runs/run_test/repo",
     },
     escapeHatches: {
       maxPlannerRerunsPerSpec: 3,
       maxWriterIterPerSubtask: 5,
-      maxRetriesPerTransientFailure: 3
+      maxRetriesPerTransientFailure: 3,
     },
     timeoutMs: 1_000,
-    ...overrides
+    ...overrides,
   };
   return { input, pool, events };
 }

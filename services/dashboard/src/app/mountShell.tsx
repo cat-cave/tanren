@@ -59,18 +59,16 @@ export interface LoadShellContextArgs {
 export async function loadShellContext(
   c: Context,
   deps: ShellDeps,
-  args: LoadShellContextArgs = {}
+  args: LoadShellContextArgs = {},
 ): Promise<ShellContext> {
   const client = new OrchestratorClient({
     orchestratorUrl: deps.orchestratorUrl,
-    cookieHeader: c.req.header("cookie")
+    cookieHeader: c.req.header("cookie"),
   });
   const orgs = await client.listOrgs();
   const org: OrgSummary | undefined = orgs[0];
   const projects: ProjectSummary[] = org ? await client.listProjects(org.id) : [];
-  const project = args.projectId
-    ? projects.find((p) => p.projectId === args.projectId)
-    : undefined;
+  const project = args.projectId ? projects.find((p) => p.projectId === args.projectId) : undefined;
   return {
     org,
     projects,
@@ -78,7 +76,7 @@ export async function loadShellContext(
     activeNavId: args.activeNavId,
     paletteGroups: buildPaletteGroups({ orgLogin: org?.login ?? "", projects }),
     surface: surfaceFromCookie(c.req.header("cookie")),
-    operator: org?.login ?? "operator"
+    operator: org?.login ?? "operator",
   };
 }
 
@@ -90,12 +88,12 @@ export function renderShell(
   c: Context,
   ctx: ShellContext,
   opts: { title: string },
-  body: unknown
+  body: unknown,
 ): Response | Promise<Response> {
   return c.html(
     <ShellLayout title={opts.title} ctx={ctx}>
       {body}
-    </ShellLayout>
+    </ShellLayout>,
   );
 }
 
@@ -150,7 +148,7 @@ export function mountShell(app: Hono, deps: ShellDeps): void {
         c,
         ctx,
         { title: `tanren · ${ctx.project?.name ?? projectId}` },
-        <ProjectPlaceholderBody projectId={projectId} found={ctx.project !== undefined} />
+        <ProjectPlaceholderBody projectId={projectId} found={ctx.project !== undefined} />,
       );
     });
   }

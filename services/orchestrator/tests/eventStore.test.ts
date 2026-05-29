@@ -15,7 +15,7 @@ describe("event store (legacy shim)", () => {
       specId: "spec_1",
       projectId: "project_1",
       eventType: "hello.started",
-      payload: {}
+      payload: {},
     });
 
     expect(store.events).toHaveLength(1);
@@ -31,8 +31,8 @@ describe("event store (legacy shim)", () => {
         projectId: "project_1",
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         eventType: "made_up.event" as never,
-        payload: {} as never
-      })
+        payload: {} as never,
+      }),
     ).rejects.toThrow("undeclared event name");
   });
 });

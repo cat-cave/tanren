@@ -25,21 +25,21 @@ export const PersonaRow = z
     description: z.string(),
     metadata: PersonaMetadata,
     createdAt: z.date(),
-    updatedAt: z.date()
+    updatedAt: z.date(),
   })
   .superRefine((row, ctx) => {
     if (row.scope === "org" && row.projectId !== null) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["projectId"],
-        message: "org-scoped persona must have a null projectId"
+        message: "org-scoped persona must have a null projectId",
       });
     }
     if (row.scope === "project" && row.projectId === null) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["projectId"],
-        message: "project-scoped persona must have a non-null projectId"
+        message: "project-scoped persona must have a non-null projectId",
       });
     }
   });
@@ -79,7 +79,7 @@ function decodePersonaRow(raw: RawPersonaRow): PersonaRow {
     description: raw.description,
     metadata: raw.metadata ?? {},
     createdAt: raw.created_at,
-    updatedAt: raw.updated_at
+    updatedAt: raw.updated_at,
   });
 }
 
@@ -91,21 +91,21 @@ export const PersonaCreateInput = z
     projectId: z.string().min(1).nullable().default(null),
     name: z.string().min(1),
     description: z.string().default(""),
-    metadata: PersonaMetadata.default({})
+    metadata: PersonaMetadata.default({}),
   })
   .superRefine((input, ctx) => {
     if (input.scope === "org" && input.projectId !== null) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["projectId"],
-        message: "org-scoped persona must have a null projectId"
+        message: "org-scoped persona must have a null projectId",
       });
     }
     if (input.scope === "project" && input.projectId === null) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["projectId"],
-        message: "project-scoped persona must have a projectId"
+        message: "project-scoped persona must have a projectId",
       });
     }
   });
@@ -142,17 +142,14 @@ export const PersonaStore = {
         parsed.projectId,
         parsed.name,
         parsed.description,
-        JSON.stringify(parsed.metadata)
-      ]
+        JSON.stringify(parsed.metadata),
+      ],
     );
     return decodePersonaRow(result.rows[0] as RawPersonaRow);
   },
 
   async get(client: QueryClient, id: string, actor: ActorContext): Promise<PersonaRow | undefined> {
-    const result = await client.query(
-      `SELECT ${SELECT_PERSONA_COLUMNS} FROM personas WHERE id = $1`,
-      [id]
-    );
+    const result = await client.query(`SELECT ${SELECT_PERSONA_COLUMNS} FROM personas WHERE id = $1`, [id]);
     const row = result.rows[0];
     if (row === undefined) return undefined;
     const persona = decodePersonaRow(row as RawPersonaRow);
@@ -168,14 +165,14 @@ export const PersonaStore = {
   async listForProject(
     client: QueryClient,
     args: { orgId: string; projectId: string },
-    actor: ActorContext
+    actor: ActorContext,
   ): Promise<PersonaRow[]> {
     assertActorMatchesOrg(actor, args.orgId);
     const result = await client.query(
       `SELECT ${SELECT_PERSONA_COLUMNS} FROM personas
        WHERE org_id = $1 AND (scope = 'org' OR project_id = $2)
        ORDER BY name`,
-      [args.orgId, args.projectId]
+      [args.orgId, args.projectId],
     );
     return result.rows.map((row) => decodePersonaRow(row as RawPersonaRow));
   },
@@ -184,8 +181,8 @@ export const PersonaStore = {
     assertActorMatchesOrg(actor, orgId);
     const result = await client.query(
       `SELECT ${SELECT_PERSONA_COLUMNS} FROM personas WHERE org_id = $1 ORDER BY name`,
-      [orgId]
+      [orgId],
     );
     return result.rows.map((row) => decodePersonaRow(row as RawPersonaRow));
-  }
+  },
 } as const;

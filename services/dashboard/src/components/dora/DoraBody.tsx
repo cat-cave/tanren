@@ -46,29 +46,29 @@ function cards(m: DoraMetrics | undefined): MetricCard[] {
       value: doraDuration(lead),
       empty: lead === null,
       sub: "median spec created → merged",
-      sample: m?.leadTimeSeconds.sample ?? 0
+      sample: m?.leadTimeSeconds.sample ?? 0,
     },
     {
       label: "deploy frequency",
       value: doraFrequency(deploy),
       empty: deploy === null,
       sub: "merges per day, this window",
-      sample: m?.deployFrequencyPerDay.sample ?? 0
+      sample: m?.deployFrequencyPerDay.sample ?? 0,
     },
     {
       label: "change-failure rate",
       value: doraPercent(cfr),
       empty: cfr === null,
       sub: "finished runs that halted / failed",
-      sample: m?.changeFailureRate.sample ?? 0
+      sample: m?.changeFailureRate.sample ?? 0,
     },
     {
       label: "time to restore",
       value: doraDuration(mttr),
       empty: mttr === null,
       sub: "median halt → recovery merge",
-      sample: m?.meanTimeToRestoreSeconds.sample ?? 0
-    }
+      sample: m?.meanTimeToRestoreSeconds.sample ?? 0,
+    },
   ];
 }
 
@@ -95,8 +95,8 @@ export function DoraBody(props: DoraBodyProps) {
           {noProject ? (
             <section class="panel">
               <div class="empty">
-                No project visible yet. Onboard one to start forging — once runs land and specs merge,
-                the four DORA metrics compute here from the run/event history already on record.
+                No project visible yet. Onboard one to start forging — once runs land and specs merge, the four DORA
+                metrics compute here from the run/event history already on record.
               </div>
             </section>
           ) : (
@@ -116,9 +116,9 @@ export function DoraBody(props: DoraBodyProps) {
                   ))}
                 </div>
                 <div class="note">
-                  <b>↑ reported, not targeted.</b> These are a steady-state baseline derived from the
-                  run/event history you already have — no new data collection. Set targets only once a
-                  stable baseline is established (≥ 60d of merges).
+                  <b>↑ reported, not targeted.</b> These are a steady-state baseline derived from the run/event history
+                  you already have — no new data collection. Set targets only once a stable baseline is established (≥
+                  60d of merges).
                 </div>
               </div>
             </section>

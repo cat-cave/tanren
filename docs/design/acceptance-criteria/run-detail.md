@@ -15,7 +15,7 @@
   - **Tokens in/out**: numerals plus cached count.
   - **Spend rate (60s)**: sparkline of recent cost burn.
   - **Run meta cell**: cli, attempt N of N, elapsed, retries.
-  All cost figures wire to P2A-0011 cost records and respect the four cost-source colors from the design tokens. No unknown-source placeholders.
+    All cost figures wire to P2A-0011 cost records and respect the four cost-source colors from the design tokens. No unknown-source placeholders.
 - [ ] **Trajectory spine** (left): ordered list of moments (plan, write subtask N, check, audit, pr, ci, merge). Each row is clickable and shows phase, duration, status dot, title, optional IO summary. Selected row populates the reasoning pane on the right. Spine fills (color gradient) as the run progresses; queued rows are visually distinct.
 - [ ] **Writer reasoning pane** (right): when a writer or planner moment is selected, the pane renders:
   - **Moment header**: eyebrow + writer-stated headline (e.g. "wire localStorage persistence").

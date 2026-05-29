@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest";
 import type { SubscriptionWindow } from "../src/engine/usage/contracts.js";
 import { DEFAULT_WINDOW_PRESSURE_THRESHOLD, evaluateWindowPressure } from "../src/engine/usage/pressure.js";
 
-function window(slot: SubscriptionWindow["slot"], usedPercent: number, resetsAt = "2026-05-30T20:19:33Z"): SubscriptionWindow {
+function window(
+  slot: SubscriptionWindow["slot"],
+  usedPercent: number,
+  resetsAt = "2026-05-30T20:19:33Z",
+): SubscriptionWindow {
   return { slot, usedPercent, resetsAt, windowMinutes: 300, resetDescription: "" };
 }
 
@@ -34,7 +38,7 @@ describe("evaluateWindowPressure", () => {
   it("picks the highest-pressure window, breaking ties by soonest reset", () => {
     const worst = evaluateWindowPressure(
       [window("primary", 100, "2026-06-01T00:00:00Z"), window("secondary", 100, "2026-05-28T00:00:00Z")],
-      100
+      100,
     );
     expect(worst?.slot).toBe("secondary");
   });

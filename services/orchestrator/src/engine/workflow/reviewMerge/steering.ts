@@ -17,6 +17,6 @@ export function reviewerRejection(review: PollReviewForRunResult, branch: string
     producer: "reviewer",
     rejectionReason: `PR #${review.prNumber} (${branch}) had changes requested by ${reviewer}: ${feedback}`,
     behaviorIdsFailed: [],
-    previousSubtasks: []
+    previousSubtasks: [],
   };
 }

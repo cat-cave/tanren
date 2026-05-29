@@ -19,7 +19,7 @@ export const fontFamilies = {
   /** JetBrains Mono — code, numbers, eyebrow labels, terminal output. */
   mono: '"JetBrains Mono", "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace',
   /** Reggae One / Noto Serif JP — for the 鍛 / 鍛錬 kanji moments. */
-  jp: '"Reggae One", "Noto Serif JP", "Hiragino Mincho ProN", "Yu Mincho", serif'
+  jp: '"Reggae One", "Noto Serif JP", "Hiragino Mincho ProN", "Yu Mincho", serif',
 } as const;
 
 /** Type-scale tokens (rem). Pair with `fontFamilies` per surface. */
@@ -35,7 +35,7 @@ export const typeScale = {
   bodyL: "1.125rem",
   body: "0.9375rem",
   bodyS: "0.8125rem",
-  caption: "0.6875rem"
+  caption: "0.6875rem",
 } as const;
 
 /** Spacing scale — 4px base. */
@@ -52,7 +52,7 @@ export const spacing = {
   s9: "56px",
   s10: "72px",
   s11: "96px",
-  s12: "128px"
+  s12: "128px",
 } as const;
 
 /** Corner radius scale. Tanren stays tight — never round to generic 8/12/16. */
@@ -62,7 +62,7 @@ export const radius = {
   r2: "4px",
   r3: "6px",
   r4: "10px",
-  full: "999px"
+  full: "999px",
 } as const;
 
 /** Motion durations. Sharp, intentional, never bouncy. */
@@ -70,14 +70,14 @@ export const duration = {
   fast: "120ms",
   base: "200ms",
   slow: "380ms",
-  page: "600ms"
+  page: "600ms",
 } as const;
 
 /** Easing curves. */
 export const ease = {
   out: "cubic-bezier(0.16, 1, 0.3, 1)",
   inOut: "cubic-bezier(0.65, 0, 0.35, 1)",
-  in: "cubic-bezier(0.7, 0, 0.84, 0)"
+  in: "cubic-bezier(0.7, 0, 0.84, 0)",
 } as const;
 
 /** Box-shadow tokens. We prefer hairlines to shadows; reserve these for elevation moments. */
@@ -87,7 +87,7 @@ export const shadow = {
   s2: "0 1px 2px 0 oklch(8% 0.012 60 / 0.06), 0 1px 0 0 oklch(8% 0.012 60 / 0.04)",
   s3: "0 6px 24px -8px oklch(8% 0.012 60 / 0.18), 0 1px 0 0 oklch(8% 0.012 60 / 0.06)",
   s4: "0 20px 60px -20px oklch(8% 0.012 60 / 0.30)",
-  ember: "0 0 0 1px var(--ember-08), 0 6px 20px -8px oklch(66% 0.18 42 / 0.35)"
+  ember: "0 0 0 1px var(--ember-08), 0 6px 20px -8px oklch(66% 0.18 42 / 0.35)",
 } as const;
 
 export type FontFamilyToken = keyof typeof fontFamilies;

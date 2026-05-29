@@ -10,7 +10,7 @@ export const TaskKind = z.enum([
   "review",
   "merge",
   "demo",
-  "forge"
+  "forge",
 ]);
 export type TaskKind = z.infer<typeof TaskKind>;
 
@@ -21,7 +21,7 @@ export const TaskStatus = z.enum([
   "done",
   "failed",
   // Phase 2 canonical "cancelled" value kept alongside legacy "done"
-  "cancelled"
+  "cancelled",
 ]);
 export type TaskStatus = z.infer<typeof TaskStatus>;
 
@@ -36,7 +36,7 @@ export const TaskOutcome = z.enum([
   "cancelled",
   // Phase 0/1 historical outcomes still present in the database
   "ok",
-  "pending"
+  "pending",
 ]);
 export type TaskOutcome = z.infer<typeof TaskOutcome>;
 
@@ -46,7 +46,7 @@ const allowedTaskTransitions: Record<TaskStatus, ReadonlyArray<TaskStatus>> = {
   running: ["done", "failed", "cancelled"],
   done: [],
   failed: [],
-  cancelled: []
+  cancelled: [],
 };
 
 export function isAllowedTaskTransition(from: TaskStatus, to: TaskStatus): boolean {
@@ -54,7 +54,10 @@ export function isAllowedTaskTransition(from: TaskStatus, to: TaskStatus): boole
 }
 
 export class IllegalTaskTransitionError extends Error {
-  constructor(readonly from: TaskStatus, readonly to: TaskStatus) {
+  constructor(
+    readonly from: TaskStatus,
+    readonly to: TaskStatus,
+  ) {
     super(`illegal task transition: ${from} -> ${to}`);
   }
 }

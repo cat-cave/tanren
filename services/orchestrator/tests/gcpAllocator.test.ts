@@ -6,7 +6,7 @@ import {
   type GcpComputeClient,
   type GcpInsertInstanceInput,
   type GcpInstance,
-  type GcpOperation
+  type GcpOperation,
 } from "../src/engine/allocators/gcpAllocator.js";
 import type { ClaimRunnerInput, RunnerStore } from "../src/engine/allocators/runnerStore.js";
 
@@ -29,9 +29,7 @@ class FakeGcpComputeClient implements GcpComputeClient {
   readonly inserted: GcpInsertInstanceInput[] = [];
   readonly deleted: string[] = [];
   private getCalls = 0;
-  constructor(
-    private readonly opts: { opError?: string; neverRunning?: boolean; noIp?: boolean } = {}
-  ) {}
+  constructor(private readonly opts: { opError?: string; neverRunning?: boolean; noIp?: boolean } = {}) {}
 
   async insertInstance(input: GcpInsertInstanceInput): Promise<GcpOperation> {
     this.inserted.push(input);
@@ -54,7 +52,7 @@ class FakeGcpComputeClient implements GcpComputeClient {
     return {
       name: instanceName,
       status: "RUNNING",
-      externalIp: this.opts.noIp ? undefined : "203.0.113.50"
+      externalIp: this.opts.noIp ? undefined : "203.0.113.50",
     };
   }
   async deleteInstance(instanceName: string): Promise<void> {
@@ -73,7 +71,7 @@ const baseOpts = (client: GcpComputeClient, runners: RunnerStore) => ({
   hostKeyFingerprint: "SHA256:gcp",
   runners,
   client,
-  sleep: async () => undefined
+  sleep: async () => undefined,
 });
 
 function req(runId: string) {
@@ -81,7 +79,7 @@ function req(runId: string) {
     runId,
     projectId: "proj_gcp",
     runnerImage: "ghcr.io/cat-cave/tanren-runner:v0",
-    identitySecretRef: "runner/identity"
+    identitySecretRef: "runner/identity",
   };
 }
 
@@ -135,7 +133,11 @@ describe("GcpAllocator", () => {
   it("surfaces a typed error and deletes the instance if the op reports an error", async () => {
     const client = new FakeGcpComputeClient({ opError: "QUOTA_EXCEEDED" });
     const runners = new FakeRunnerStore();
-    const allocator = new GcpAllocator({ ...baseOpts(client, runners), readyTimeoutMs: 5, pollIntervalMs: 1 });
+    const allocator = new GcpAllocator({
+      ...baseOpts(client, runners),
+      readyTimeoutMs: 5,
+      pollIntervalMs: 1,
+    });
     await expect(allocator.allocate(req("run_e"))).rejects.toBeInstanceOf(GcpAllocatorError);
     expect(client.deleted).toContain("tanren-run-e");
   });
@@ -143,7 +145,11 @@ describe("GcpAllocator", () => {
   it("surfaces a typed error and deletes the instance if it never becomes RUNNING", async () => {
     const client = new FakeGcpComputeClient({ neverRunning: true });
     const runners = new FakeRunnerStore();
-    const allocator = new GcpAllocator({ ...baseOpts(client, runners), readyTimeoutMs: 5, pollIntervalMs: 1 });
+    const allocator = new GcpAllocator({
+      ...baseOpts(client, runners),
+      readyTimeoutMs: 5,
+      pollIntervalMs: 1,
+    });
     await expect(allocator.allocate(req("run_3"))).rejects.toThrow(/did not become RUNNING/);
     expect(client.deleted).toContain("tanren-run-3");
   });
@@ -151,7 +157,11 @@ describe("GcpAllocator", () => {
   it("surfaces a typed error and deletes the instance if it has no external IP", async () => {
     const client = new FakeGcpComputeClient({ noIp: true });
     const runners = new FakeRunnerStore();
-    const allocator = new GcpAllocator({ ...baseOpts(client, runners), readyTimeoutMs: 5, pollIntervalMs: 1 });
+    const allocator = new GcpAllocator({
+      ...baseOpts(client, runners),
+      readyTimeoutMs: 5,
+      pollIntervalMs: 1,
+    });
     await expect(allocator.allocate(req("run_4"))).rejects.toBeInstanceOf(GcpAllocatorError);
     expect(client.deleted).toContain("tanren-run-4");
   });
@@ -159,13 +169,17 @@ describe("GcpAllocator", () => {
   it("requires a token, ssh public key, and pinned fingerprint", () => {
     const runners = new FakeRunnerStore();
     expect(() => new GcpAllocator({ ...baseOpts(new FakeGcpComputeClient(), runners), accessToken: "" })).toThrow(
-      /non-empty accessToken/
+      /non-empty accessToken/,
     );
     expect(() => new GcpAllocator({ ...baseOpts(new FakeGcpComputeClient(), runners), sshPublicKey: "" })).toThrow(
-      /non-empty sshPublicKey/
+      /non-empty sshPublicKey/,
     );
     expect(
-      () => new GcpAllocator({ ...baseOpts(new FakeGcpComputeClient(), runners), hostKeyFingerprint: "" })
+      () =>
+        new GcpAllocator({
+          ...baseOpts(new FakeGcpComputeClient(), runners),
+          hostKeyFingerprint: "",
+        }),
     ).toThrow(/pinned hostKeyFingerprint/);
   });
 
@@ -176,23 +190,21 @@ describe("GcpAllocator", () => {
       captured = {
         url,
         method: init?.method,
-        auth: (init?.headers as Record<string, string> | undefined)?.authorization
+        auth: (init?.headers as Record<string, string> | undefined)?.authorization,
       };
       return new Response(
         JSON.stringify({
           name: "tanren-x",
           status: "RUNNING",
-          networkInterfaces: [
-            { accessConfigs: [{ type: "ONE_TO_ONE_NAT", natIP: "198.51.100.42" }] }
-          ]
+          networkInterfaces: [{ accessConfigs: [{ type: "ONE_TO_ONE_NAT", natIP: "198.51.100.42" }] }],
         }),
-        { status: 200, headers: { "Content-Type": "application/json" } }
+        { status: 200, headers: { "Content-Type": "application/json" } },
       );
     }) as typeof fetch;
 
     const client = fetchGcpComputeClient(
       { accessToken: "secret-token", project: "p", zone: "us-central1-a" },
-      fetchImpl
+      fetchImpl,
     );
     const instance = await client.getInstance("tanren-x");
     expect(captured.url).toMatch(/\/projects\/p\/zones\/us-central1-a\/instances\/tanren-x$/);
@@ -207,9 +219,9 @@ describe("GcpAllocator", () => {
         JSON.stringify({
           name: "op-9",
           status: "DONE",
-          error: { errors: [{ message: "ZONE_RESOURCE_POOL_EXHAUSTED" }] }
+          error: { errors: [{ message: "ZONE_RESOURCE_POOL_EXHAUSTED" }] },
         }),
-        { status: 200, headers: { "Content-Type": "application/json" } }
+        { status: 200, headers: { "Content-Type": "application/json" } },
       )) as typeof fetch;
     const client = fetchGcpComputeClient({ accessToken: "t", project: "p", zone: "z" }, fetchImpl);
     const op = await client.insertInstance({
@@ -217,7 +229,7 @@ describe("GcpAllocator", () => {
       machineType: "e2-small",
       sourceImage: "img",
       sshUsername: "tanren",
-      sshPublicKey: "ssh-ed25519 AAAA"
+      sshPublicKey: "ssh-ed25519 AAAA",
     });
     expect(op.error).toBe("ZONE_RESOURCE_POOL_EXHAUSTED");
   });

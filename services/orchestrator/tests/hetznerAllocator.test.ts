@@ -4,7 +4,7 @@ import {
   HetznerAllocator,
   type HetznerClient,
   type HetznerCreateServerInput,
-  type HetznerServer
+  type HetznerServer,
 } from "../src/engine/allocators/hetznerAllocator.js";
 import type { ClaimRunnerInput, RunnerStore } from "../src/engine/allocators/runnerStore.js";
 
@@ -42,7 +42,7 @@ class FakeHetznerClient implements HetznerClient {
     return {
       id: serverId,
       status: "running",
-      publicIpv4: this.opts.noIp ? undefined : "203.0.113.10"
+      publicIpv4: this.opts.noIp ? undefined : "203.0.113.10",
     };
   }
   async deleteServer(serverId: number): Promise<void> {
@@ -58,7 +58,7 @@ const baseOpts = (client: HetznerClient, runners: RunnerStore) => ({
   location: "nbg1",
   runners,
   client,
-  sleep: async () => undefined
+  sleep: async () => undefined,
 });
 
 function req(runId: string) {
@@ -66,7 +66,7 @@ function req(runId: string) {
     runId,
     projectId: "proj_h",
     runnerImage: "ghcr.io/cat-cave/tanren-runner:v0",
-    identitySecretRef: "runner/identity"
+    identitySecretRef: "runner/identity",
   };
 }
 
@@ -103,7 +103,7 @@ describe("HetznerAllocator", () => {
     const allocator = new HetznerAllocator({
       ...baseOpts(client, runners),
       readyTimeoutMs: 5,
-      pollIntervalMs: 1
+      pollIntervalMs: 1,
     });
     await expect(allocator.allocate(req("run_3"))).rejects.toThrow(/did not become running/);
     expect(client.deleted).toEqual([42]);
@@ -119,15 +119,15 @@ describe("HetznerAllocator", () => {
 
   it("requires a token and pinned fingerprint", () => {
     const runners = new FakeRunnerStore();
-    expect(
-      () => new HetznerAllocator({ ...baseOpts(new FakeHetznerClient(), runners), apiToken: "" })
-    ).toThrow(/non-empty apiToken/);
+    expect(() => new HetznerAllocator({ ...baseOpts(new FakeHetznerClient(), runners), apiToken: "" })).toThrow(
+      /non-empty apiToken/,
+    );
     expect(
       () =>
         new HetznerAllocator({
           ...baseOpts(new FakeHetznerClient(), runners),
-          hostKeyFingerprint: ""
-        })
+          hostKeyFingerprint: "",
+        }),
     ).toThrow(/pinned hostKeyFingerprint/);
   });
 
@@ -138,11 +138,13 @@ describe("HetznerAllocator", () => {
       captured = {
         url,
         method: init?.method,
-        auth: (init?.headers as Record<string, string> | undefined)?.authorization
+        auth: (init?.headers as Record<string, string> | undefined)?.authorization,
       };
       return new Response(
-        JSON.stringify({ server: { id: 7, status: "running", public_net: { ipv4: { ip: "198.51.100.5" } } } }),
-        { status: 201, headers: { "Content-Type": "application/json" } }
+        JSON.stringify({
+          server: { id: 7, status: "running", public_net: { ipv4: { ip: "198.51.100.5" } } },
+        }),
+        { status: 201, headers: { "Content-Type": "application/json" } },
       );
     }) as typeof fetch;
 

@@ -41,7 +41,8 @@ function postureLine(posture: GovernancePosture): string {
 }
 
 function projectSnapshot(input: ProposeFilesInput): string {
-  const personas = input.report.personas.map((p) => `- **${p.name}** — ${p.description}`).join("\n") || "- (none inferred)";
+  const personas =
+    input.report.personas.map((p) => `- **${p.name}** — ${p.description}`).join("\n") || "- (none inferred)";
   const behaviors = input.report.behaviors.map((b) => `- ${b.persona} · ${b.title}`).join("\n") || "- (none inferred)";
   const architecture =
     input.report.architecture.map((a) => `- **${a.layer}** · ${a.detail}`).join("\n") || "- (unknown)";
@@ -134,20 +135,29 @@ export function proposeConfigFiles(input: ProposeFilesInput, excludePaths: Reado
   const team = input.operatorsTeam ?? `${input.orgLogin}/tanren-operators`;
   const snapshot = projectSnapshot(input);
   const all: ProposedFile[] = [
-    { path: ".tanren/PROJECT.md", content: snapshot, addedLines: countLines(snapshot), snapshot: true },
-    { path: ".github/workflows/tanren-ci.yml", content: TANREN_CI_YAML, addedLines: countLines(TANREN_CI_YAML) },
+    {
+      path: ".tanren/PROJECT.md",
+      content: snapshot,
+      addedLines: countLines(snapshot),
+      snapshot: true,
+    },
+    {
+      path: ".github/workflows/tanren-ci.yml",
+      content: TANREN_CI_YAML,
+      addedLines: countLines(TANREN_CI_YAML),
+    },
     { path: ".mergify.yml", content: MERGIFY_YAML, addedLines: countLines(MERGIFY_YAML) },
     { path: "CODEOWNERS", content: codeowners(team), addedLines: countLines(codeowners(team)) },
     {
       path: ".gitignore",
       content: "\n# tanren\n.tanren/cache/\n",
-      addedLines: 3
+      addedLines: 3,
     },
     {
       path: ".github/PULL_REQUEST_TEMPLATE.md",
       content: "## summary\n\n## spec\n\n<!-- tanren spec link -->\n",
-      addedLines: 4
-    }
+      addedLines: 4,
+    },
   ];
   const excluded = new Set(excludePaths);
   return all.filter((file) => !excluded.has(file.path));
@@ -202,7 +212,7 @@ export async function openConfigInjectionPr(input: OpenConfigInjectionInput): Pr
     "**No runs happen until this PR is merged.** Comment, edit, or close like any other PR.",
     "",
     "Files:",
-    fileList
+    fileList,
   ].join("\n");
   return input.github.openConfigInjectionPr({
     repoUrl: input.repoUrl,
@@ -210,6 +220,6 @@ export async function openConfigInjectionPr(input: OpenConfigInjectionInput): Pr
     headBranch,
     title: "tanren · integration config",
     body,
-    files: input.files.map((f) => ({ path: f.path, content: f.content }))
+    files: input.files.map((f) => ({ path: f.path, content: f.content })),
   });
 }

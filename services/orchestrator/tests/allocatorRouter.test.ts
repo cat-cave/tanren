@@ -3,7 +3,7 @@ import { AllocatorRouter, type AllocatorRegistry } from "../src/engine/allocator
 import {
   AllocatorRoutingConfig,
   PoolCapacityExceededError,
-  selectAllocatorKind
+  selectAllocatorKind,
 } from "../src/engine/allocators/poolPolicy.js";
 import { UnconfiguredAllocator } from "../src/engine/allocators/scaffoldedAllocators.js";
 import type { AllocationRequest, Allocator, RunnerAllocation } from "../src/engine/contracts/allocator.js";
@@ -18,7 +18,13 @@ class RecordingAllocator implements Allocator {
     return {
       runnerId: `runner_${this.name}_${request.runId}`,
       imageSha: "sha256:x",
-      target: { host: this.name, port: 22, username: "tanren", hostKeyFingerprint: "SHA256:x", identitySecretRef: "r" }
+      target: {
+        host: this.name,
+        port: 22,
+        username: "tanren",
+        hostKeyFingerprint: "SHA256:x",
+        identitySecretRef: "r",
+      },
     };
   }
   async release(runnerId: string): Promise<void> {
@@ -38,7 +44,7 @@ function registry(overrides: Partial<AllocatorRegistry> = {}): {
     digitalocean: new RecordingAllocator("digitalocean"),
     gcp: new RecordingAllocator("gcp"),
     aws_ec2: new RecordingAllocator("aws_ec2"),
-    kubernetes: new RecordingAllocator("kubernetes")
+    kubernetes: new RecordingAllocator("kubernetes"),
   };
   const reg: AllocatorRegistry = {
     static: recorders.static,
@@ -49,7 +55,7 @@ function registry(overrides: Partial<AllocatorRegistry> = {}): {
     gcp: recorders.gcp,
     aws_ec2: recorders.aws_ec2,
     kubernetes: recorders.kubernetes,
-    ...overrides
+    ...overrides,
   };
   return { reg, recorders };
 }
@@ -63,8 +69,8 @@ describe("selectAllocatorKind", () => {
     defaultAllocator: "sidecar",
     rules: [
       { matchLabels: { tier: "gpu" }, allocator: "hetzner" },
-      { matchLabels: { env: "staging", tier: "cpu" }, allocator: "manual_ssh" }
-    ]
+      { matchLabels: { env: "staging", tier: "cpu" }, allocator: "manual_ssh" },
+    ],
   });
 
   it("returns the default when no rule matches", () => {
@@ -86,7 +92,7 @@ describe("AllocatorRouter", () => {
   it("routes by label to the right backing allocator", async () => {
     const config = AllocatorRoutingConfig.parse({
       defaultAllocator: "sidecar",
-      rules: [{ matchLabels: { tier: "gpu" }, allocator: "hetzner" }]
+      rules: [{ matchLabels: { tier: "gpu" }, allocator: "hetzner" }],
     });
     const { reg, recorders } = registry();
     const router = new AllocatorRouter(reg, config);
@@ -101,7 +107,7 @@ describe("AllocatorRouter", () => {
   it("routes by label/config to the digitalocean allocator", async () => {
     const config = AllocatorRoutingConfig.parse({
       defaultAllocator: "sidecar",
-      rules: [{ matchLabels: { cloud: "do" }, allocator: "digitalocean" }]
+      rules: [{ matchLabels: { cloud: "do" }, allocator: "digitalocean" }],
     });
     const { reg, recorders } = registry();
     const router = new AllocatorRouter(reg, config);
@@ -115,7 +121,7 @@ describe("AllocatorRouter", () => {
   it("routes by label/config to the gcp allocator", async () => {
     const config = AllocatorRoutingConfig.parse({
       defaultAllocator: "sidecar",
-      rules: [{ matchLabels: { cloud: "gcp" }, allocator: "gcp" }]
+      rules: [{ matchLabels: { cloud: "gcp" }, allocator: "gcp" }],
     });
     const { reg, recorders } = registry();
     const router = new AllocatorRouter(reg, config);
@@ -129,7 +135,7 @@ describe("AllocatorRouter", () => {
   it("routes by label/config to the aws_ec2 allocator", async () => {
     const config = AllocatorRoutingConfig.parse({
       defaultAllocator: "sidecar",
-      rules: [{ matchLabels: { cloud: "aws" }, allocator: "aws_ec2" }]
+      rules: [{ matchLabels: { cloud: "aws" }, allocator: "aws_ec2" }],
     });
     const { reg, recorders } = registry();
     const router = new AllocatorRouter(reg, config);
@@ -143,7 +149,7 @@ describe("AllocatorRouter", () => {
   it("routes by label/config to the kubernetes allocator", async () => {
     const config = AllocatorRoutingConfig.parse({
       defaultAllocator: "sidecar",
-      rules: [{ matchLabels: { cloud: "k8s" }, allocator: "kubernetes" }]
+      rules: [{ matchLabels: { cloud: "k8s" }, allocator: "kubernetes" }],
     });
     const { reg, recorders } = registry();
     const router = new AllocatorRouter(reg, config);
@@ -157,7 +163,7 @@ describe("AllocatorRouter", () => {
   it("release routes back to the allocator that served the runner", async () => {
     const config = AllocatorRoutingConfig.parse({
       defaultAllocator: "sidecar",
-      rules: [{ matchLabels: { tier: "gpu" }, allocator: "hetzner" }]
+      rules: [{ matchLabels: { tier: "gpu" }, allocator: "hetzner" }],
     });
     const { reg, recorders } = registry();
     const router = new AllocatorRouter(reg, config);
@@ -171,7 +177,7 @@ describe("AllocatorRouter", () => {
   it("enforces the pool-policy maxConcurrent cap", async () => {
     const config = AllocatorRoutingConfig.parse({
       defaultAllocator: "manual_ssh",
-      pools: { manual_ssh: { maxConcurrent: 2 } }
+      pools: { manual_ssh: { maxConcurrent: 2 } },
     });
     const { reg } = registry();
     const router = new AllocatorRouter(reg, config);
@@ -191,7 +197,7 @@ describe("AllocatorRouter", () => {
   it("does not consume a slot when the backing allocator throws", async () => {
     const config = AllocatorRoutingConfig.parse({
       defaultAllocator: "manual_ssh",
-      pools: { manual_ssh: { maxConcurrent: 1 } }
+      pools: { manual_ssh: { maxConcurrent: 1 } },
     });
     const failing = new RecordingAllocator("manual_ssh");
     failing.allocate = async () => {
@@ -206,7 +212,7 @@ describe("AllocatorRouter", () => {
 
   it("routing to an unconfigured kind throws the clear not-configured error", async () => {
     const config = AllocatorRoutingConfig.parse({
-      defaultAllocator: "kubernetes"
+      defaultAllocator: "kubernetes",
     });
     // Registry where kubernetes was never wired with credentials.
     const { reg } = registry({ kubernetes: new UnconfiguredAllocator("kubernetes") });

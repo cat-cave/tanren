@@ -41,7 +41,7 @@ import {
   ReconReport,
   type ConfigInjectionGitHub,
   type ReconAnswerer,
-  type RepoReader
+  type RepoReader,
 } from "../../engine/forge/brownfield/index.js";
 import { createGitHubIssuesConnector } from "../../engine/forge/inbox/githubConnector.js";
 import type { IngestedItem } from "../../engine/forge/inbox/types.js";
@@ -74,7 +74,7 @@ const ConfigInjectionBody = z
     baseBranch: z.string().min(1).max(200).default("main"),
     report: ReconReport,
     posture: GovernancePosture.default("strict"),
-    excludePaths: z.array(z.string().min(1).max(400)).default([])
+    excludePaths: z.array(z.string().min(1).max(400)).default([]),
   })
   .strict();
 
@@ -82,7 +82,7 @@ const SeedDagBody = z
   .object({
     repoUrl: z.string().min(1).max(400),
     report: ReconReport,
-    includeIssues: z.boolean().default(true)
+    includeIssues: z.boolean().default(true),
   })
   .strict();
 
@@ -100,10 +100,17 @@ export function createBrownfieldFullTrackRoutes(options: BrownfieldFullTrackOpti
       const resolved = await resolveTokenFor(options, guard.orgId);
       const reader =
         options.repoReaderFor?.(parsed.data.repoUrl, guard.defaultBranch, resolved) ??
-        new GithubRepoReader({ http: options.githubHttp, resolved, defaultBranch: guard.defaultBranch });
+        new GithubRepoReader({
+          http: options.githubHttp,
+          resolved,
+          defaultBranch: guard.defaultBranch,
+        });
       const { index, report } = await runRecon(
-        { reader, ...(options.reconAnswererFactory !== undefined ? { answerer: options.reconAnswererFactory() } : {}) },
-        parsed.data.repoUrl
+        {
+          reader,
+          ...(options.reconAnswererFactory !== undefined ? { answerer: options.reconAnswererFactory() } : {}),
+        },
+        parsed.data.repoUrl,
       );
       return c.json({ repoUrl: parsed.data.repoUrl, filesIndexed: index.filesIndexed, report }, 200);
     } catch (error) {
@@ -124,22 +131,33 @@ export function createBrownfieldFullTrackRoutes(options: BrownfieldFullTrackOpti
         repoUrl: parsed.data.repoUrl,
         report: parsed.data.report,
         posture: parsed.data.posture,
-        generatedAt: new Date().toISOString()
+        generatedAt: new Date().toISOString(),
       },
-      parsed.data.excludePaths
+      parsed.data.excludePaths,
     );
     try {
       const resolved = await resolveTokenFor(options, guard.orgId);
       const github =
         options.configInjectionGithubFor?.(resolved) ??
-        new FetchConfigInjectionGitHub({ http: options.githubHttp, token: resolved.token, refreshToken: resolved.refresh });
+        new FetchConfigInjectionGitHub({
+          http: options.githubHttp,
+          token: resolved.token,
+          refreshToken: resolved.refresh,
+        });
       const pr = await openConfigInjectionPr({
         github,
         repoUrl: parsed.data.repoUrl,
         baseBranch: parsed.data.baseBranch,
-        files
+        files,
       });
-      return c.json({ pullRequest: pr, files: files.map((f) => ({ path: f.path, addedLines: f.addedLines })), noRunsUntilMerged: true }, 201);
+      return c.json(
+        {
+          pullRequest: pr,
+          files: files.map((f) => ({ path: f.path, addedLines: f.addedLines })),
+          noRunsUntilMerged: true,
+        },
+        201,
+      );
     } catch (error) {
       return c.json({ error: "config_injection_failed", message: messageOf(error) }, 502);
     }
@@ -159,7 +177,7 @@ export function createBrownfieldFullTrackRoutes(options: BrownfieldFullTrackOpti
         orgId: guard.orgId,
         report: parsed.data.report,
         issues,
-        actor: { ...guard.actor, orgId: guard.orgId, projectId: guard.projectId }
+        actor: { ...guard.actor, orgId: guard.orgId, projectId: guard.projectId },
       });
       return c.json(result, 201);
     } catch (error) {
@@ -174,7 +192,15 @@ export function createBrownfieldFullTrackRoutes(options: BrownfieldFullTrackOpti
     if (!parsed.success) return c.json({ error: "invalid_governance", issues: parsed.error.issues }, 400);
     const posture = parsed.data.posture;
     const next = await persistPosture(options.pool, guard.projectId, posture);
-    return c.json({ projectId: guard.projectId, governancePosture: posture, externalPushPolicy: externalPushPolicy(posture), config: next }, 200);
+    return c.json(
+      {
+        projectId: guard.projectId,
+        governancePosture: posture,
+        externalPushPolicy: externalPushPolicy(posture),
+        config: next,
+      },
+      200,
+    );
   });
 
   return app;
@@ -189,19 +215,29 @@ interface OrgGuard {
   status: 403 | 404;
 }
 
-async function guardOrg(c: { req: { param(name: string): string }; var: { actor?: ActorContext } }, pool: pg.Pool): Promise<OrgGuard> {
+async function guardOrg(
+  c: { req: { param(name: string): string }; var: { actor?: ActorContext } },
+  pool: pg.Pool,
+): Promise<OrgGuard> {
   const actor = c.var.actor;
   const orgId = c.req.param("orgId");
   const projectId = c.req.param("projectId");
-  const base: OrgGuard = { orgId, projectId, defaultBranch: "main", actor: actor as ActorContext, status: 403 };
+  const base: OrgGuard = {
+    orgId,
+    projectId,
+    defaultBranch: "main",
+    actor: actor as ActorContext,
+    status: 403,
+  };
   if (actor === undefined) return { ...base, error: "actor_missing" };
   if (!actorCanAccessOrg(actor, orgId)) return { ...base, error: "org_access_denied", status: 403 };
   const row = await pool.query<{ org_id: string | null; default_branch: string | null }>(
     "SELECT org_id, default_branch FROM projects WHERE project_id = $1",
-    [projectId]
+    [projectId],
   );
   if (row.rowCount === 0) return { ...base, error: "project_not_found", status: 404 };
-  if (row.rows[0]?.org_id !== null && row.rows[0]?.org_id !== orgId) return { ...base, error: "project_access_denied", status: 403 };
+  if (row.rows[0]?.org_id !== null && row.rows[0]?.org_id !== orgId)
+    return { ...base, error: "project_access_denied", status: 403 };
   return { ...base, defaultBranch: row.rows[0]?.default_branch ?? "main" };
 }
 
@@ -210,7 +246,7 @@ async function resolveTokenFor(options: BrownfieldFullTrackOptions, orgId: strin
   return resolveGithubToken({
     secrets: options.secrets,
     ...(installation !== undefined ? { installation } : {}),
-    ...(options.githubAppMinter !== undefined ? { minter: options.githubAppMinter } : {})
+    ...(options.githubAppMinter !== undefined ? { minter: options.githubAppMinter } : {}),
   });
 }
 
@@ -218,7 +254,7 @@ async function fetchIssuesFor(
   options: BrownfieldFullTrackOptions,
   orgId: string,
   projectId: string,
-  repoUrl: string
+  repoUrl: string,
 ): Promise<IngestedItem[]> {
   if (options.fetchIssues !== undefined) return options.fetchIssues(repoUrl, projectId);
   const repo = parseGitHubRepository(repoUrl);
@@ -227,7 +263,7 @@ async function fetchIssuesFor(
     secrets: options.secrets,
     githubHttp: options.githubHttp,
     ...(installation !== undefined ? { installation } : {}),
-    ...(options.githubAppMinter !== undefined ? { minter: options.githubAppMinter } : {})
+    ...(options.githubAppMinter !== undefined ? { minter: options.githubAppMinter } : {}),
   });
   return connector.fetch({
     id: "brownfield-recon",
@@ -238,7 +274,7 @@ async function fetchIssuesFor(
     detail: "",
     config: { owner: repo.owner, repo: repo.name, labels: [] },
     enabled: true,
-    autoRoute: false
+    autoRoute: false,
   });
 }
 

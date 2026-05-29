@@ -26,7 +26,7 @@ import {
   runFailed,
   spineProgress,
   summarizeCosts,
-  type TrajectoryMoment
+  type TrajectoryMoment,
 } from "./model.js";
 import { RUN_DETAIL_CSS } from "./runDetail.css.js";
 
@@ -72,8 +72,12 @@ function CostBar(props: { detail: RunDetail }) {
       <div class="cost-cell">
         <div class="row1">
           <span class="swatch" style="background: var(--cost-token)"></span>
-          <span class="l" style="color: var(--cost-token)">per-token</span>
-          <span class="v" data-rd="cost-per-token">{formatUsd(totals.perTokenUsd)}</span>
+          <span class="l" style="color: var(--cost-token)">
+            per-token
+          </span>
+          <span class="v" data-rd="cost-per-token">
+            {formatUsd(totals.perTokenUsd)}
+          </span>
         </div>
         <div class="bar">
           <i style={`width: ${Math.min(100, totals.perTokenUsd * 100).toFixed(1)}%; background: var(--cost-token)`}></i>
@@ -84,7 +88,9 @@ function CostBar(props: { detail: RunDetail }) {
       <div class="cost-cell">
         <div class="row1">
           <span class="swatch" style="background: var(--cost-window)"></span>
-          <span class="l" style="color: var(--cost-window)">window</span>
+          <span class="l" style="color: var(--cost-window)">
+            window
+          </span>
           <span class="v">{formatTokens(totals.bySource.get("subscription")?.tokens ?? 0)}</span>
         </div>
         <div class="source-rows" data-rd="cost-sources">
@@ -92,7 +98,9 @@ function CostBar(props: { detail: RunDetail }) {
             <div class="source-row">
               <span class="sw" style={`background: ${costSourceVar(mode)}`}></span>
               <span>{costSourceLabel(mode)}</span>
-              <span class="amt">{formatTokens(agg.tokens)} tok{agg.usd > 0 ? ` · ${formatUsd(agg.usd)}` : ""}</span>
+              <span class="amt">
+                {formatTokens(agg.tokens)} tok{agg.usd > 0 ? ` · ${formatUsd(agg.usd)}` : ""}
+              </span>
             </div>
           ))}
         </div>
@@ -100,7 +108,9 @@ function CostBar(props: { detail: RunDetail }) {
       {/* tokens in / out */}
       <div class="cost-cell">
         <div class="row1">
-          <span class="l" style="color: var(--fg-3)">tokens · in / out</span>
+          <span class="l" style="color: var(--fg-3)">
+            tokens · in / out
+          </span>
           <span class="v" data-rd="cost-tokens">
             {formatTokens(totals.inputTokens)} / {formatTokens(totals.outputTokens)}
           </span>
@@ -109,16 +119,22 @@ function CostBar(props: { detail: RunDetail }) {
           <i style={`width:${inPct.toFixed(1)}%; background: var(--line-2)`}></i>
           <i style={`width:${(100 - inPct).toFixed(1)}%; background: var(--cost-token)`}></i>
         </div>
-        <div class="k">cached {formatTokens(totals.cachedInputTokens)} · total {formatTokens(totals.totalTokens)}</div>
+        <div class="k">
+          cached {formatTokens(totals.cachedInputTokens)} · total {formatTokens(totals.totalTokens)}
+        </div>
       </div>
       {/* per-model breakdown (spend rate cell repurposed to real model attribution) */}
       <div class="cost-cell">
         <div class="row1">
-          <span class="l" style="color: var(--fg-3)">by model</span>
+          <span class="l" style="color: var(--fg-3)">
+            by model
+          </span>
         </div>
         <div class="source-rows">
           {totals.byModel.size === 0 ? (
-            <div class="source-row"><span>no cost records yet</span></div>
+            <div class="source-row">
+              <span>no cost records yet</span>
+            </div>
           ) : (
             [...totals.byModel.entries()].map(([model, agg]) => (
               <div class="source-row">
@@ -159,8 +175,16 @@ function TrajectoryRow(props: { moment: TrajectoryMoment; index: number; selecte
           {moment.duration !== "" ? ` · ${moment.duration}` : ""}
         </div>
         <div class="t">{moment.title}</div>
-        {moment.model !== null ? <div class="io">{moment.cli} · {moment.model}</div> : null}
-        {moment.failureKind !== null ? <div class="io" style="color: var(--status-fail)">{moment.failureKind}</div> : null}
+        {moment.model !== null ? (
+          <div class="io">
+            {moment.cli} · {moment.model}
+          </div>
+        ) : null}
+        {moment.failureKind !== null ? (
+          <div class="io" style="color: var(--status-fail)">
+            {moment.failureKind}
+          </div>
+        ) : null}
       </div>
     </div>
   );
@@ -174,7 +198,9 @@ function Trajectory(props: { detail: RunDetail; selectedTaskId: string | null })
     <div class="rd-panel trajectory" data-rd="trajectory">
       <div class="rd-panel-head">
         <h3>trajectory</h3>
-        <span class="live" data-rd="live-flag">↻ live</span>
+        <span class="live" data-rd="live-flag">
+          ↻ live
+        </span>
       </div>
       <div class="rd-panel-body">
         <div class="spine" data-rd="spine" style={spineStyle}></div>
@@ -214,7 +240,10 @@ function Reasoning(props: RunDetailBodyProps & { selectedTaskId: string | null }
     <div class="rd-panel" data-rd="reasoning">
       <div class="rd-panel-head">
         <h3>writer's reasoning</h3>
-        <span class="pill run" style="margin-left:auto"><span class="d"></span>{task?.cli ?? "agent"} · live</span>
+        <span class="pill run" style="margin-left:auto">
+          <span class="d"></span>
+          {task?.cli ?? "agent"} · live
+        </span>
       </div>
       <div class="reason" data-rd="reason-body">
         <div>
@@ -228,7 +257,9 @@ function Reasoning(props: RunDetailBodyProps & { selectedTaskId: string | null }
           <div class="subopt">
             <span class="tag">workflow insight · {String(insightForTask["kind"])}</span>
             <span class="t">
-              {typeof insightForTask["specTitle"] === "string" ? String(insightForTask["specTitle"]) : "a suboptimal pattern was detected on this run"}
+              {typeof insightForTask["specTitle"] === "string"
+                ? String(insightForTask["specTitle"])
+                : "a suboptimal pattern was detected on this run"}
             </span>
           </div>
         ) : null}
@@ -247,7 +278,9 @@ function Reasoning(props: RunDetailBodyProps & { selectedTaskId: string | null }
                 <div>no behaviors tagged on this spec</div>
               ) : (
                 detail.spec.behaviorIds.map((b) => (
-                  <div><span class="kw">behavior</span> · <code>{b}</code></div>
+                  <div>
+                    <span class="kw">behavior</span> · <code>{b}</code>
+                  </div>
                 ))
               )}
             </div>
@@ -264,7 +297,9 @@ function Reasoning(props: RunDetailBodyProps & { selectedTaskId: string | null }
                 <div class="tool-row">
                   <span class="g">↗</span>
                   <div>
-                    <div class="name"><b>{tool.name}</b> <span class="arg">{tool.arg}</span></div>
+                    <div class="name">
+                      <b>{tool.name}</b> <span class="arg">{tool.arg}</span>
+                    </div>
                     {tool.output !== "" ? <div class="out">↑ {tool.output}</div> : null}
                   </div>
                 </div>
@@ -297,7 +332,9 @@ function Reasoning(props: RunDetailBodyProps & { selectedTaskId: string | null }
           </h4>
           <div class="events-list" data-rd="events-list">
             {reasoning.events.length === 0 ? (
-              <div style="font-size:11px; color: var(--fg-3); font-family: var(--font-mono)">no events bound to this moment</div>
+              <div style="font-size:11px; color: var(--fg-3); font-family: var(--font-mono)">
+                no events bound to this moment
+              </div>
             ) : (
               reasoning.events.map((event) => (
                 <div class="event-row">
@@ -326,19 +363,38 @@ function Reasoning(props: RunDetailBodyProps & { selectedTaskId: string | null }
 function StatusChips(props: { detail: RunDetail }) {
   const { detail } = props;
   const ciTask = detail.tasks.find((t) => t.kind === "ci");
-  const ciState = ciTask === undefined ? "warn" : ciTask.outcome === "passed" ? "ok" : ciTask.status === "running" ? "warn" : "bad";
-  const ciLabel = ciTask === undefined ? "ci pending" : ciTask.outcome === "passed" ? "ci green" : ciTask.status === "running" ? "ci running" : `ci ${ciTask.outcome ?? ciTask.status}`;
+  const ciState =
+    ciTask === undefined ? "warn" : ciTask.outcome === "passed" ? "ok" : ciTask.status === "running" ? "warn" : "bad";
+  const ciLabel =
+    ciTask === undefined
+      ? "ci pending"
+      : ciTask.outcome === "passed"
+        ? "ci green"
+        : ciTask.status === "running"
+          ? "ci running"
+          : `ci ${ciTask.outcome ?? ciTask.status}`;
   const statusClass = detail.run.status === "completed" ? "ok" : runFailed(detail) ? "bad" : "warn";
   return (
     <div class="rd-chips" data-rd="chips">
       <span class={`rd-chip ${statusClass}`} data-rd="run-status">
-        <span class="d"></span>run · {detail.run.status}{detail.run.outcome !== null ? ` · ${detail.run.outcome}` : ""}
+        <span class="d"></span>run · {detail.run.status}
+        {detail.run.outcome !== null ? ` · ${detail.run.outcome}` : ""}
       </span>
-      <span class={`rd-chip ${ciState}`}><span class="d"></span>{ciLabel}</span>
+      <span class={`rd-chip ${ciState}`}>
+        <span class="d"></span>
+        {ciLabel}
+      </span>
       {detail.run.prUrl !== null ? (
-        <span class="rd-chip"><span class="d"></span>pr · <a href={detail.run.prUrl} target="_blank" rel="noreferrer">{detail.run.prUrl} ↗</a></span>
+        <span class="rd-chip">
+          <span class="d"></span>pr ·{" "}
+          <a href={detail.run.prUrl} target="_blank" rel="noreferrer">
+            {detail.run.prUrl} ↗
+          </a>
+        </span>
       ) : (
-        <span class="rd-chip"><span class="d"></span>no pr yet</span>
+        <span class="rd-chip">
+          <span class="d"></span>no pr yet
+        </span>
       )}
     </div>
   );
@@ -356,12 +412,16 @@ function FailureDiagnostics(props: { detail: RunDetail }) {
           <div>
             · {t.kind} <b>{t.taskId}</b> — {t.outcome ?? t.status}
             {t.failureKind !== null ? ` (${t.failureKind})` : ""}
-            {" · attempt "}{t.attempt + 1}
+            {" · attempt "}
+            {t.attempt + 1}
           </div>
         ))}
         {props.detail.run.status === "halted" ? (
           <div style="margin-top:6px;">
-            this run hit an escape hatch · <a href="/runs/halted" style="color: var(--ember-08)">recover it ↗</a>
+            this run hit an escape hatch ·{" "}
+            <a href="/runs/halted" style="color: var(--ember-08)">
+              recover it ↗
+            </a>
           </div>
         ) : null}
       </div>
@@ -389,14 +449,24 @@ export function RunDetailBody(props: RunDetailBodyProps) {
             <div class="eyebrow">▮ trajectory · scrub through everything</div>
             <div class="page-title">the agent's thinking</div>
             <div class="sub">
-              {detail.run.runId} · {detail.spec.title} · started {relativeAgo(detail.run.startedAt)} · branch <code>{detail.run.branch}</code>
+              {detail.run.runId} · {detail.spec.title} · started {relativeAgo(detail.run.startedAt)} · branch{" "}
+              <code>{detail.run.branch}</code>
             </div>
           </div>
           <div class="rd-actions">
-            <span class="pill run" data-rd="header-status"><span class="d"></span>{detail.run.status}</span>
-            <a class="btn ghost" href={`/projects/${detail.run.projectId}`}>← back to project</a>
-            <a class="btn" href={`${props.reviewHref}?ask=1`} style="color: var(--ember-08)">鍛 ask why</a>
-            <a class="btn" href={props.reviewHref}>review handoff</a>
+            <span class="pill run" data-rd="header-status">
+              <span class="d"></span>
+              {detail.run.status}
+            </span>
+            <a class="btn ghost" href={`/projects/${detail.run.projectId}`}>
+              ← back to project
+            </a>
+            <a class="btn" href={`${props.reviewHref}?ask=1`} style="color: var(--ember-08)">
+              鍛 ask why
+            </a>
+            <a class="btn" href={props.reviewHref}>
+              review handoff
+            </a>
           </div>
         </div>
 

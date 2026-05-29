@@ -28,7 +28,7 @@ const RANGES: { id: string; label: string }[] = [
   { id: "7d", label: "7d" },
   { id: "30d", label: "30d" },
   { id: "90d", label: "90d" },
-  { id: "all", label: "all" }
+  { id: "all", label: "all" },
 ];
 
 export function CostsBody(props: CostsBodyProps) {
@@ -58,9 +58,8 @@ export function CostsBody(props: CostsBodyProps) {
           {empty ? (
             <section class="panel">
               <div class="empty">
-                No cost records yet. Once a run forges with a wired credential, every call lands a
-                cost record here — priced when the basis is known, token-only when it is honestly
-                unknown.
+                No cost records yet. Once a run forges with a wired credential, every call lands a cost record here —
+                priced when the basis is known, token-only when it is honestly unknown.
               </div>
             </section>
           ) : (
@@ -231,9 +230,8 @@ function HeadroomPanel(props: { summary: CostSummary }) {
           </span>
         </div>
         <div class="note hairline-top">
-          Subscription + self-hosted capacity you've already paid for. Token volume here is
-          use-it-or-lose-it headroom — routing more work to filled windows raises throughput without
-          raising the per-token bill.
+          Subscription + self-hosted capacity you've already paid for. Token volume here is use-it-or-lose-it headroom —
+          routing more work to filled windows raises throughput without raising the per-token bill.
         </div>
       </div>
     </section>
@@ -257,8 +255,7 @@ function ObservedPanel(props: { metrics: ObservedMetrics }) {
           <span>{metrics.totalRuns}</span>
         </div>
         <div class="note hairline-top">
-          ↑ reported, not targeted · steady-state first. Full DORA panel is Phase 3; this is the v0
-          stub.
+          ↑ reported, not targeted · steady-state first. Full DORA panel is Phase 3; this is the v0 stub.
         </div>
       </div>
     </section>

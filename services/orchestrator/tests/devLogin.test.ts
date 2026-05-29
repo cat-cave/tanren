@@ -17,7 +17,7 @@ const SAVED = {
   devLogin: process.env.TANREN_DEV_LOGIN,
   clientId: process.env.TANREN_GITHUB_OAUTH_CLIENT_ID,
   clientSecret: process.env.TANREN_GITHUB_OAUTH_CLIENT_SECRET,
-  cookieSecure: process.env.TANREN_COOKIE_SECURE
+  cookieSecure: process.env.TANREN_COOKIE_SECURE,
 };
 
 function restore(key: keyof typeof SAVED, envName: string): void {
@@ -84,8 +84,8 @@ describe("dev-login escape hatch (buildAuthFromEnv)", () => {
         providers: auth.providers,
         store: auth.store,
         publicBaseUrl: auth.publicBaseUrl,
-        cookieSecure: auth.cookieSecure
-      })
+        cookieSecure: auth.cookieSecure,
+      }),
     );
     app.use("*", createAuthMiddleware({ store: auth.store }));
     app.get("/runs/:runId", (c) => c.json({ actor: c.var.actor }));
@@ -98,15 +98,14 @@ describe("dev-login escape hatch (buildAuthFromEnv)", () => {
     const login = await app.request("/auth/login?provider=local_dev");
     expect(login.status).toBe(302);
     const state = decodeURIComponent(
-      /tanren_oauth_state=([^;]+)/.exec(login.headers.get("set-cookie") ?? "")?.[1] ?? ""
+      /tanren_oauth_state=([^;]+)/.exec(login.headers.get("set-cookie") ?? "")?.[1] ?? "",
     );
     expect(state).not.toBe("");
 
     // callback mints the session + creates org/admin (P2A-0003 path).
-    const callback = await app.request(
-      `/auth/callback?provider=local_dev&code=local-dev&state=${state}`,
-      { headers: { cookie: `tanren_oauth_state=${state}` } }
-    );
+    const callback = await app.request(`/auth/callback?provider=local_dev&code=local-dev&state=${state}`, {
+      headers: { cookie: `tanren_oauth_state=${state}` },
+    });
     expect(callback.status).toBe(200);
     const callbackJson = (await callback.json()) as {
       ok: boolean;
@@ -118,13 +117,13 @@ describe("dev-login escape hatch (buildAuthFromEnv)", () => {
     expect(callbackJson.primaryOrgId).not.toBe("");
 
     const sessionId = decodeURIComponent(
-      /tanren_session=([^;]+)/.exec(callback.headers.get("set-cookie") ?? "")?.[1] ?? ""
+      /tanren_session=([^;]+)/.exec(callback.headers.get("set-cookie") ?? "")?.[1] ?? "",
     );
     expect(sessionId).not.toBe("");
 
     // Session resolves an actor on a protected route.
     const after = await app.request("/runs/run_x", {
-      headers: { cookie: `tanren_session=${sessionId}` }
+      headers: { cookie: `tanren_session=${sessionId}` },
     });
     expect(after.status).toBe(200);
     const afterJson = (await after.json()) as { actor: { source: string; orgId: string | null } };

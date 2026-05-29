@@ -10,7 +10,7 @@ Phase 3 splits into two tiers:
 - **Tier 1 — Foundational vertical slice (P3-0001…0009).** The minimum that makes
   **one real operator-driven run genuinely execute → go green → merge**, entirely
   from the dashboard, with no acceptance-script harness and no staging. This tier
-  is the unit that makes Phase 2B's claimed capability *real* (see "Reconciling
+  is the unit that makes Phase 2B's claimed capability _real_ (see "Reconciling
   Phase 2B" below). Build this first.
 - **Tier 2 — Expansion (P3-0010…0030).** Product breadth beyond the core loop —
   thick Forge, DAG canvas, discovery, full onboarding, observability, provider
@@ -46,7 +46,7 @@ that no plan named. Tier 1 names it (P3-0001) and the connectivity/credential/
 gate/merge work around it. **Phase 2B's exit criteria are met when Tier 1 lands
 and the P2B-0007 demo (re-homed here as P3-0009) runs for real.** Until then,
 2B is "surfaces complete, loop not closed." This doc does not delete the 2B
-claims; it supersedes their *validation* with P3-0009.
+claims; it supersedes their _validation_ with P3-0009.
 
 ## Tier 1 dependency graph (foundational slice)
 
@@ -218,27 +218,27 @@ These turn the remaining `phase-3.md` buckets into specs. Each is summarized
 scheduled. Several are **design-blocked** on hi-fi prerequisites (below) and
 must not start before those are locked.
 
-- **P3-0010 thick-forge-llm-backend** — LLM-backed Forge conversation reading `forge_turns` (P2A-0019), replacing templated v0 narration; pure swap, no schema change. *Depends:* hi-fi thick-Forge interaction model.
-- **P3-0011 demo-role-llm-wiring** — replace templated demo narration with a real Answerer call (schema P2A-0008 ships). *Depends:* P3-0012 or existing Codex.
-- **P3-0012 provider-expansion** — Claude Writer/Answerer, opencode Writer (Zai GLM 5.1 only; no Wafer). Slots into P2A-0006 fallback-chain, no migration. *Ops:* provider API keys.
-- **P3-0013 spec-dag-canvas** — full SVG DAG + DAG-primary project view over P2A-0018 entities/edges. *Depends:* hi-fi DAG-primary view.
-- **P3-0014 spec-discovery-flow** — Forge classifies an insight → proposes specs with DAG placement + provenance (feature/bug/strategic). *Depends:* P3-0010 + P3-0013 + hi-fi spec-discovery.
-- **P3-0015 greenfield-onboarding-full** — multi-round Forge vision interview → derived spec DAG → sources/scheduled-audits/arrival. Supersedes the P2B-0009 thin stretch form. *Depends:* P3-0010 + P3-0013 + hi-fi greenfield interview.
-- **P3-0016 brownfield-onboarding-full** — recon agent (read-only repo index → personas/behaviors/architecture/risks) + **config-injection PR** (adds `tanren-ci.yml`/`.mergify.yml`/`CODEOWNERS`/`.tanren/PROJECT.md`) + DAG seed + governance picker. *Depends:* P3-0003 + P3-0004.
-- **P3-0017 tanren-config-audit-gate** — optional org toggle routing Bucket-B config writes through a PR in a separate `tanren-config` repo. *Depends:* hi-fi audit-gate. *Ops:* a `tanren-config` repo.
+- **P3-0010 thick-forge-llm-backend** — LLM-backed Forge conversation reading `forge_turns` (P2A-0019), replacing templated v0 narration; pure swap, no schema change. _Depends:_ hi-fi thick-Forge interaction model.
+- **P3-0011 demo-role-llm-wiring** — replace templated demo narration with a real Answerer call (schema P2A-0008 ships). _Depends:_ P3-0012 or existing Codex.
+- **P3-0012 provider-expansion** — Claude Writer/Answerer, opencode Writer (Zai GLM 5.1 only; no Wafer). Slots into P2A-0006 fallback-chain, no migration. _Ops:_ provider API keys.
+- **P3-0013 spec-dag-canvas** — full SVG DAG + DAG-primary project view over P2A-0018 entities/edges. _Depends:_ hi-fi DAG-primary view.
+- **P3-0014 spec-discovery-flow** — Forge classifies an insight → proposes specs with DAG placement + provenance (feature/bug/strategic). _Depends:_ P3-0010 + P3-0013 + hi-fi spec-discovery.
+- **P3-0015 greenfield-onboarding-full** — multi-round Forge vision interview → derived spec DAG → sources/scheduled-audits/arrival. Supersedes the P2B-0009 thin stretch form. _Depends:_ P3-0010 + P3-0013 + hi-fi greenfield interview.
+- **P3-0016 brownfield-onboarding-full** — recon agent (read-only repo index → personas/behaviors/architecture/risks) + **config-injection PR** (adds `tanren-ci.yml`/`.mergify.yml`/`CODEOWNERS`/`.tanren/PROJECT.md`) + DAG seed + governance picker. _Depends:_ P3-0003 + P3-0004.
+- **P3-0017 tanren-config-audit-gate** — optional org toggle routing Bucket-B config writes through a PR in a separate `tanren-config` repo. _Depends:_ hi-fi audit-gate. _Ops:_ a `tanren-config` repo.
 - **P3-0018 subscription-window-heatmap** — 30-day × 5-window heatmap + avg-fill + overnight-audit prompt on the costs page.
 - **P3-0019 dora-metrics-panel** — lead time, deploy frequency, change-failure rate, MTTR (reported, not targeted).
-- **P3-0020 additional-workflow-insights** — `stuck` (P2A-0018 dependency-chain analysis) + `review_stall` (P3-0008 review polling). *Depends:* P3-0008.
-- **P3-0021 scheduled-audits-library** — cron background scans (security/mutation/perf/deps/type-coverage/a11y/license/stale-specs) → auto-generated specs. *Depends:* P3-0001 (executor) + P3-0014.
-- **P3-0022 issue-source-ingestion** — GitHub Issues → candidate specs via label classification (Linear/Jira/webhooks defer). *Depends:* P3-0014.
-- **P3-0023 external-push-governance** — strict/open/audit-only modes for coexistence with non-Tanren contributors. *Depends:* P3-0008.
-- **P3-0024 notification-channels-rollout** — Slack + GitHub Checks next, then teams/discord/email/twilio/pagerduty/webhook (matrix already accommodates, P2A-0017). *Ops:* channel credentials.
-- **P3-0025 live-preview-deploys** — device-tab iframe → per-PR preview URL in Review. *Depends:* P3-0008.
-- **P3-0026 acceptance-hard-tier** — fixture-hard (re-plans, auditor-rejection loops, conflict resolution); final v0 acceptance gate. *Depends:* P3-0001…0008.
-- **P3-0027 allocator-expansion** — remote allocators (manual-SSH, Hetzner, DigitalOcean, AWS EC2, Kubernetes pool), pool policies, label→allocator routing. *Ops:* cloud credentials.
-- **P3-0028 ci-queue-hardening** — required-check awareness, webhook-driven CI, rate-limit handling, queue lease recovery (heartbeats, retry budgets, dead-letter events). *Strengthens:* P3-0001/0008.
+- **P3-0020 additional-workflow-insights** — `stuck` (P2A-0018 dependency-chain analysis) + `review_stall` (P3-0008 review polling). _Depends:_ P3-0008.
+- **P3-0021 scheduled-audits-library** — cron background scans (security/mutation/perf/deps/type-coverage/a11y/license/stale-specs) → auto-generated specs. _Depends:_ P3-0001 (executor) + P3-0014.
+- **P3-0022 issue-source-ingestion** — GitHub Issues → candidate specs via label classification (Linear/Jira/webhooks defer). _Depends:_ P3-0014.
+- **P3-0023 external-push-governance** — strict/open/audit-only modes for coexistence with non-Tanren contributors. _Depends:_ P3-0008.
+- **P3-0024 notification-channels-rollout** — Slack + GitHub Checks next, then teams/discord/email/twilio/pagerduty/webhook (matrix already accommodates, P2A-0017). _Ops:_ channel credentials.
+- **P3-0025 live-preview-deploys** — device-tab iframe → per-PR preview URL in Review. _Depends:_ P3-0008.
+- **P3-0026 acceptance-hard-tier** — fixture-hard (re-plans, auditor-rejection loops, conflict resolution); final v0 acceptance gate. _Depends:_ P3-0001…0008.
+- **P3-0027 allocator-expansion** — remote allocators (manual-SSH, Hetzner, DigitalOcean, AWS EC2, Kubernetes pool), pool policies, label→allocator routing. _Ops:_ cloud credentials.
+- **P3-0028 ci-queue-hardening** — required-check awareness, webhook-driven CI, rate-limit handling, queue lease recovery (heartbeats, retry budgets, dead-letter events). _Strengthens:_ P3-0001/0008.
 - **P3-0029 observability** — latency/rate-limit/queue-wait/provider/SSH/GitHub timings; coverage thresholds for workflow-critical modules; regression corpus from Phase 2 audit findings.
-- **P3-0030 deployment-hardening** — cloudflared exposure profile, TLS termination, Vault enterprise rotation, Authentik OIDC as a second identity provider on P2A-0003. *Ops:* infra/OIDC setup.
+- **P3-0030 deployment-hardening** — cloudflared exposure profile, TLS termination, Vault enterprise rotation, Authentik OIDC as a second identity provider on P2A-0003. _Ops:_ infra/OIDC setup.
 
 ## Hi-fi prerequisites (design-blocking; lock before building the dependent specs)
 

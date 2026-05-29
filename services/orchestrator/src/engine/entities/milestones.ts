@@ -18,7 +18,7 @@ export const MilestoneRow = z.object({
   eta: z.date().nullable(),
   status: MilestoneStatus,
   createdAt: z.date(),
-  updatedAt: z.date()
+  updatedAt: z.date(),
 });
 export type MilestoneRow = z.infer<typeof MilestoneRow>;
 
@@ -59,7 +59,7 @@ function decodeMilestoneRow(raw: RawMilestoneRow): MilestoneRow {
     eta: raw.eta,
     status: raw.status,
     createdAt: raw.created_at,
-    updatedAt: raw.updated_at
+    updatedAt: raw.updated_at,
   });
 }
 
@@ -71,7 +71,7 @@ export const MilestoneCreateInput = z.object({
   description: z.string().nullable().default(null),
   orderIndex: z.number().int(),
   eta: z.date().nullable().default(null),
-  status: MilestoneStatus.default("planned")
+  status: MilestoneStatus.default("planned"),
 });
 export type MilestoneCreateInput = z.infer<typeof MilestoneCreateInput>;
 
@@ -99,17 +99,14 @@ export const MilestoneStore = {
         parsed.description,
         parsed.orderIndex,
         parsed.eta,
-        parsed.status
-      ]
+        parsed.status,
+      ],
     );
     return decodeMilestoneRow(result.rows[0] as RawMilestoneRow);
   },
 
   async get(client: QueryClient, id: string, actor: ActorContext): Promise<MilestoneRow | undefined> {
-    const result = await client.query(
-      `SELECT ${SELECT_MILESTONE_COLUMNS} FROM milestones WHERE id = $1`,
-      [id]
-    );
+    const result = await client.query(`SELECT ${SELECT_MILESTONE_COLUMNS} FROM milestones WHERE id = $1`, [id]);
     const row = result.rows[0];
     if (row === undefined) return undefined;
     const milestone = decodeMilestoneRow(row as RawMilestoneRow);
@@ -123,7 +120,7 @@ export const MilestoneStore = {
       `SELECT ${SELECT_MILESTONE_COLUMNS} FROM milestones
        WHERE project_id = $1
        ORDER BY order_index`,
-      [projectId]
+      [projectId],
     );
     return result.rows.map((row) => decodeMilestoneRow(row as RawMilestoneRow));
   },
@@ -131,20 +128,20 @@ export const MilestoneStore = {
   async linkSpec(
     client: QueryClient,
     args: { specId: string; milestoneId: string },
-    _actor: ActorContext
+    _actor: ActorContext,
   ): Promise<void> {
     await client.query(
       `INSERT INTO spec_milestones (spec_id, milestone_id)
        VALUES ($1, $2)
        ON CONFLICT (spec_id, milestone_id) DO NOTHING`,
-      [args.specId, args.milestoneId]
+      [args.specId, args.milestoneId],
     );
   },
 
   async setSpecMilestone(
     client: QueryClient,
     args: { specId: string; milestoneId: string },
-    _actor: ActorContext
+    _actor: ActorContext,
   ): Promise<void> {
     // Enforces the one-milestone-per-spec product rule by clearing prior
     // assignments before linking. The unique index on spec_id is the backstop.
@@ -152,25 +149,21 @@ export const MilestoneStore = {
     await client.query(
       `INSERT INTO spec_milestones (spec_id, milestone_id)
        VALUES ($1, $2)`,
-      [args.specId, args.milestoneId]
+      [args.specId, args.milestoneId],
     );
   },
 
-  async getSpecMilestone(
-    client: QueryClient,
-    specId: string,
-    _actor: ActorContext
-  ): Promise<MilestoneRow | undefined> {
+  async getSpecMilestone(client: QueryClient, specId: string, _actor: ActorContext): Promise<MilestoneRow | undefined> {
     const result = await client.query(
       `SELECT m.id, m.project_id, m.label, m.name, m.description, m.order_index,
               m.eta, m.status, m.created_at, m.updated_at
        FROM milestones m
        INNER JOIN spec_milestones sm ON sm.milestone_id = m.id
        WHERE sm.spec_id = $1`,
-      [specId]
+      [specId],
     );
     const row = result.rows[0];
     if (row === undefined) return undefined;
     return decodeMilestoneRow(row as RawMilestoneRow);
-  }
+  },
 } as const;

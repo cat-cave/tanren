@@ -11,7 +11,7 @@ import {
   rateLimitBackoffMs,
   type GitHubHttpClient,
   type GitHubHttpRequest,
-  type GitHubHttpResponse
+  type GitHubHttpResponse,
 } from "../src/engine/providers/github.js";
 
 function headers(map: Record<string, string>): Headers {
@@ -22,7 +22,10 @@ function headers(map: Record<string, string>): Headers {
   return h;
 }
 
-const get = (map: Record<string, string>) => (name: string): string | null => map[name] ?? null;
+const get =
+  (map: Record<string, string>) =>
+  (name: string): string | null =>
+    map[name] ?? null;
 
 describe("github rate-limit backoff (P3-0028)", () => {
   it("derives a clamped wait from Retry-After and X-RateLimit-Reset", () => {
@@ -32,7 +35,7 @@ describe("github rate-limit backoff (P3-0028)", () => {
     expect(rateLimitBackoffMs(403, get({ "retry-after": "999999" }), now)).toBe(MAX_RATE_LIMIT_BACKOFF_MS);
     // Reset epoch used when remaining is exhausted; floored to the minimum.
     expect(
-      rateLimitBackoffMs(403, get({ "x-ratelimit-remaining": "0", "x-ratelimit-reset": String(now / 1_000) }), now)
+      rateLimitBackoffMs(403, get({ "x-ratelimit-remaining": "0", "x-ratelimit-reset": String(now / 1_000) }), now),
     ).toBe(MIN_RATE_LIMIT_BACKOFF_MS);
     // Not rate-limited → undefined.
     expect(rateLimitBackoffMs(200, get({}), now)).toBeUndefined();
@@ -50,7 +53,10 @@ describe("github rate-limit backoff (P3-0028)", () => {
       return new Response(JSON.stringify({ ok: true }), { status: 200 });
     }) as unknown as typeof fetch;
 
-    const client = new FetchGitHubHttpClient({ fetchImpl, sleep: async (ms) => void slept.push(ms) });
+    const client = new FetchGitHubHttpClient({
+      fetchImpl,
+      sleep: async (ms) => void slept.push(ms),
+    });
     const response = await client.request({ method: "GET", path: "/rate", token: "t" });
 
     expect(slept).toEqual([3_000]);
@@ -60,8 +66,15 @@ describe("github rate-limit backoff (P3-0028)", () => {
   it("gives up after the retry ceiling instead of looping forever", async () => {
     const slept: number[] = [];
     const fetchImpl = (async () =>
-      new Response("", { status: 429, headers: headers({ "retry-after": "2" }) })) as unknown as typeof fetch;
-    const client = new FetchGitHubHttpClient({ fetchImpl, sleep: async (ms) => void slept.push(ms), maxRateLimitRetries: 2 });
+      new Response("", {
+        status: 429,
+        headers: headers({ "retry-after": "2" }),
+      })) as unknown as typeof fetch;
+    const client = new FetchGitHubHttpClient({
+      fetchImpl,
+      sleep: async (ms) => void slept.push(ms),
+      maxRateLimitRetries: 2,
+    });
 
     const response = await client.request({ method: "GET", path: "/rate", token: "t" });
     expect(slept).toEqual([2_000, 2_000]);
@@ -71,13 +84,11 @@ describe("github rate-limit backoff (P3-0028)", () => {
 
 describe("github required-context awareness (P3-0028)", () => {
   it("reads required status check contexts from branch protection", async () => {
-    const http = new ScriptedHttp([
-      { status: 200, body: { checks: [{ context: "build" }, { context: "e2e" }] } }
-    ]);
+    const http = new ScriptedHttp([{ status: 200, body: { checks: [{ context: "build" }, { context: "e2e" }] } }]);
     const required = await new GitHubStatusService(http).fetchRequiredContexts({
       repo: { owner: "o", name: "r" },
       token: "t",
-      baseBranch: "main"
+      baseBranch: "main",
     });
     expect(required).toEqual(["build", "e2e"]);
   });
@@ -87,7 +98,7 @@ describe("github required-context awareness (P3-0028)", () => {
     const required = await new GitHubStatusService(http).fetchRequiredContexts({
       repo: { owner: "o", name: "r" },
       token: "t",
-      baseBranch: "main"
+      baseBranch: "main",
     });
     expect(required).toBeUndefined();
   });
@@ -95,14 +106,17 @@ describe("github required-context awareness (P3-0028)", () => {
   it("includes requiredContexts in fetchPullRequestChecks when the base branch is protected", async () => {
     const http = new ScriptedHttp([
       { status: 200, body: { head: { sha: "deadbeef", ref: "feat" }, base: { ref: "main" } } },
-      { status: 200, body: { check_runs: [{ name: "build", status: "completed", conclusion: "success" }] } },
+      {
+        status: 200,
+        body: { check_runs: [{ name: "build", status: "completed", conclusion: "success" }] },
+      },
       { status: 200, body: { statuses: [] } },
-      { status: 200, body: { contexts: ["build"] } }
+      { status: 200, body: { contexts: ["build"] } },
     ]);
     const checks = await new GitHubStatusService(http).fetchPullRequestChecks({
       repo: { owner: "o", name: "r" },
       token: "t",
-      pullNumber: 7
+      pullNumber: 7,
     });
     expect(checks.requiredContexts).toEqual(["build"]);
     expect(checks.head.sha).toBe("deadbeef");

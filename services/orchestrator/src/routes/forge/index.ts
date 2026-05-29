@@ -33,7 +33,7 @@ import {
   tanrenRerunTask,
   tanrenTriggerRun,
   ToolAccessDeniedError,
-  WriteToolAccessDeniedError
+  WriteToolAccessDeniedError,
 } from "../../engine/forge/index.js";
 import type { GitHubHttpClient } from "../../engine/providers/github.js";
 import type { SecretStore } from "../../engine/contracts/secretStore.js";
@@ -53,18 +53,18 @@ const ThreadCreateBody = z.object({
   scope: z.enum(["org", "project", "run"]),
   projectId: z.string().min(1).nullable().optional(),
   runId: z.string().min(1).nullable().optional(),
-  title: z.string().nullable().optional()
+  title: z.string().nullable().optional(),
 });
 
 const GenerateProjectViewBody = z.object({
   projectId: z.string().min(1),
   audience: z.enum(["project:member", "project:admin", "org:admin", "platform:admin"]).optional(),
-  budgetUsdPerWeek: z.number().nonnegative().optional()
+  budgetUsdPerWeek: z.number().nonnegative().optional(),
 });
 
 const GenerateRunDetailBody = z.object({
   runId: z.string().min(1),
-  audience: z.enum(["project:member", "project:admin", "org:admin", "platform:admin"]).optional()
+  audience: z.enum(["project:member", "project:admin", "org:admin", "platform:admin"]).optional(),
 });
 
 const ToolInvocationBody = ForgeToolCall;
@@ -90,9 +90,9 @@ export function createForgeRoutes(options: ForgeRoutesOptions) {
           scope: parsed.data.scope,
           projectId: parsed.data.projectId ?? null,
           runId: parsed.data.runId ?? null,
-          title: parsed.data.title ?? null
+          title: parsed.data.title ?? null,
         },
-        actor
+        actor,
       );
       return c.json(thread, 201);
     } catch (error) {
@@ -135,9 +135,9 @@ export function createForgeRoutes(options: ForgeRoutesOptions) {
         {
           threadId: c.req.param("threadId"),
           limit: Number.isFinite(limit) ? Math.min(limit, 200) : 100,
-          sinceIndex: sinceIndex === undefined ? undefined : Number(sinceIndex)
+          sinceIndex: sinceIndex === undefined ? undefined : Number(sinceIndex),
         },
-        actor
+        actor,
       );
       return c.json({ turns });
     } catch (error) {
@@ -165,7 +165,7 @@ export function createForgeRoutes(options: ForgeRoutesOptions) {
         projectId: parsed.data.projectId,
         audience: parsed.data.audience ?? "project:member",
         budgetUsdPerWeek: parsed.data.budgetUsdPerWeek,
-        actor
+        actor,
       });
       return c.json(turn, 201);
     } catch (error) {
@@ -192,7 +192,7 @@ export function createForgeRoutes(options: ForgeRoutesOptions) {
         threadId: c.req.param("threadId"),
         runId: parsed.data.runId,
         audience: parsed.data.audience ?? "project:member",
-        actor
+        actor,
       });
       return c.json(turn, 201);
     } catch (error) {
@@ -219,7 +219,7 @@ export function createForgeRoutes(options: ForgeRoutesOptions) {
         secrets: options.secrets,
         githubHttp: options.githubHttp,
         actor,
-        call: parsed.data
+        call: parsed.data,
       });
       return c.json({ tool: parsed.data.tool, result });
     } catch (error) {
@@ -302,10 +302,9 @@ async function generateProjectViewTurn(args: GenerateProjectViewArgs) {
   if (thread === undefined) {
     throw new Error(`forge thread not found: ${args.threadId}`);
   }
-  const projectResult = await args.pool.query<{ name: string }>(
-    "SELECT name FROM projects WHERE project_id = $1",
-    [args.projectId]
-  );
+  const projectResult = await args.pool.query<{ name: string }>("SELECT name FROM projects WHERE project_id = $1", [
+    args.projectId,
+  ]);
   const projectName = projectResult.rows[0]?.name ?? args.projectId;
 
   const recentRuns = await args.pool.query<{
@@ -320,18 +319,18 @@ async function generateProjectViewTurn(args: GenerateProjectViewArgs) {
     `SELECT run_id, spec_id, status, outcome, pr_url, started_at, ended_at
      FROM runs WHERE project_id = $1
      ORDER BY started_at DESC LIMIT 20`,
-    [args.projectId]
+    [args.projectId],
   );
 
   const pendingReviews = recentRuns.rows.filter(
-    (row) => row.outcome !== null && row.outcome !== "merged" && row.pr_url !== null
+    (row) => row.outcome !== null && row.outcome !== "merged" && row.pr_url !== null,
   );
 
   const costResult = await args.pool.query<{ total: string | null }>(
     `SELECT COALESCE(SUM(cost_usd::numeric), 0)::text AS total
      FROM cost_records
      WHERE project_id = $1 AND recorded_at >= NOW() - INTERVAL '7 days'`,
-    [args.projectId]
+    [args.projectId],
   );
   const weekToDateCostUsd = Number(costResult.rows[0]?.total ?? "0");
 
@@ -344,7 +343,7 @@ async function generateProjectViewTurn(args: GenerateProjectViewArgs) {
       outcome: row.outcome,
       prUrl: row.pr_url,
       startedAt: row.started_at,
-      endedAt: row.ended_at
+      endedAt: row.ended_at,
     })),
     pendingReviews: pendingReviews.map((row) => ({
       runId: row.run_id,
@@ -353,12 +352,12 @@ async function generateProjectViewTurn(args: GenerateProjectViewArgs) {
       outcome: row.outcome,
       prUrl: row.pr_url,
       startedAt: row.started_at,
-      endedAt: row.ended_at
+      endedAt: row.ended_at,
     })),
     weekToDateCostUsd,
     budgetUsdPerWeek: args.budgetUsdPerWeek,
     insights: await loadNarrationInsights(args.pool, args.projectId),
-    actor: args.actor
+    actor: args.actor,
   });
 
   return ForgeTurnStore.append(
@@ -368,9 +367,9 @@ async function generateProjectViewTurn(args: GenerateProjectViewArgs) {
       source: { kind: "operator", userId: args.actor.userId },
       audience: args.audience,
       authorKind: "forge_template",
-      render: answer
+      render: answer,
     },
-    args.actor
+    args.actor,
   );
 }
 
@@ -399,7 +398,7 @@ async function generateRunDetailTurn(args: GenerateRunDetailArgs) {
   }>(
     `SELECT run_id, spec_id, project_id, status, outcome, pr_url, started_at, ended_at
      FROM runs WHERE run_id = $1`,
-    [args.runId]
+    [args.runId],
   );
   const runRow = runResult.rows[0];
   if (runRow === undefined) {
@@ -409,14 +408,14 @@ async function generateRunDetailTurn(args: GenerateRunDetailArgs) {
     `SELECT COUNT(*)::text AS count,
             COUNT(*) FILTER (WHERE outcome = 'failed')::text AS failed
      FROM tasks WHERE run_id = $1`,
-    [args.runId]
+    [args.runId],
   );
   const taskCount = Number(taskResult.rows[0]?.count ?? "0");
   const failedTaskCount = Number(taskResult.rows[0]?.failed ?? "0");
   const costResult = await args.pool.query<{ total: string | null }>(
     `SELECT COALESCE(SUM(cost_usd::numeric), 0)::text AS total
      FROM cost_records WHERE run_id = $1`,
-    [args.runId]
+    [args.runId],
   );
   const projectName =
     (await args.pool.query<{ name: string }>("SELECT name FROM projects WHERE project_id = $1", [runRow.project_id]))
@@ -430,13 +429,13 @@ async function generateRunDetailTurn(args: GenerateRunDetailArgs) {
       outcome: runRow.outcome,
       prUrl: runRow.pr_url,
       startedAt: runRow.started_at,
-      endedAt: runRow.ended_at
+      endedAt: runRow.ended_at,
     },
     taskCount,
     failedTaskCount,
     costUsd: Number(costResult.rows[0]?.total ?? "0"),
     insights: await loadNarrationInsights(args.pool, runRow.project_id),
-    actor: args.actor
+    actor: args.actor,
   });
   return ForgeTurnStore.append(
     args.pool,
@@ -445,9 +444,9 @@ async function generateRunDetailTurn(args: GenerateRunDetailArgs) {
       source: { kind: "operator", userId: args.actor.userId },
       audience: args.audience,
       authorKind: "forge_template",
-      render: answer
+      render: answer,
     },
-    args.actor
+    args.actor,
   );
 }
 
@@ -455,14 +454,11 @@ async function generateRunDetailTurn(args: GenerateRunDetailArgs) {
 // v0 narration generator. Actions whose `toolCall` doesn't parse as a known
 // ForgeToolCall (e.g. a future variant added before the schema is updated)
 // are dropped so the narration stays renderable.
-async function loadNarrationInsights(
-  pool: pg.Pool,
-  projectId: string
-): Promise<NarrationInsight[]> {
+async function loadNarrationInsights(pool: pg.Pool, projectId: string): Promise<NarrationInsight[]> {
   const insights = await loadInsightsForProject(pool, { projectId });
-  return insights.map((insight) => toNarrationInsight(insight)).filter(
-    (entry): entry is NarrationInsight => entry !== undefined
-  );
+  return insights
+    .map((insight) => toNarrationInsight(insight))
+    .filter((entry): entry is NarrationInsight => entry !== undefined);
 }
 
 function toNarrationInsight(insight: Insight): NarrationInsight | undefined {
@@ -476,12 +472,12 @@ function toNarrationInsight(insight: Insight): NarrationInsight | undefined {
     kind: kindParse.data,
     title: insight.title,
     body: insight.body,
-    actions
+    actions,
   };
 }
 
 function normalizeInsightAction(
-  action: InsightAction
+  action: InsightAction,
 ): { label: string; toolCall: z.infer<typeof ForgeToolCall> } | undefined {
   const parsed = ForgeToolCall.safeParse(action.toolCall);
   if (!parsed.success) return undefined;

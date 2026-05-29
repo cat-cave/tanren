@@ -12,7 +12,13 @@ import type pg from "pg";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/main.js";
 
-const ORG = { id: "org_acme", kind: "github_org", login: "cat-cave", displayName: "Cat Cave", role: "org:admin" };
+const ORG = {
+  id: "org_acme",
+  kind: "github_org",
+  login: "cat-cave",
+  displayName: "Cat Cave",
+  role: "org:admin",
+};
 const PROJECTS = [
   {
     projectId: "project_easy",
@@ -20,8 +26,8 @@ const PROJECTS = [
     repoUrl: "https://github.com/cat-cave/tanren-fixture-easy",
     defaultBranch: "main",
     runnerImage: null,
-    allocator: "local_docker"
-  }
+    allocator: "local_docker",
+  },
 ];
 
 let gateEnabled = false;
@@ -35,18 +41,25 @@ function orgConfig(): unknown {
       check: { chain: [] },
       audit: { chain: [{ cli: "claude", model: "opus-4.7", authRef: "credential/x" }] },
       demo: { chain: [] },
-      forge: { chain: [] }
+      forge: { chain: [] },
     },
     escapeHatches: {
       maxWriterIterPerSubtask: 5,
       maxPlannerRerunsPerSpec: 3,
       maxRetriesPerTransientFailure: 3,
-      maxSpecDiscoveryRoundsWithForge: 20
+      maxSpecDiscoveryRoundsWithForge: 20,
     },
     auditGateEnabled: gateEnabled,
     ...(gateEnabled
-      ? { auditGate: { repo: "cat-cave/tanren-config", baseBranch: "main", branchPrefix: "forge", configFile: "tanren.yaml" } }
-      : {})
+      ? {
+          auditGate: {
+            repo: "cat-cave/tanren-config",
+            baseBranch: "main",
+            branchPrefix: "forge",
+            configFile: "tanren.yaml",
+          },
+        }
+      : {}),
   };
 }
 
@@ -65,8 +78,13 @@ function mockOrchestrator(): void {
     }
     if (url.endsWith("/orgs/org_acme")) {
       return new Response(
-        JSON.stringify({ id: ORG.id, login: ORG.login, displayName: ORG.displayName, config: orgConfig() }),
-        { status: 200 }
+        JSON.stringify({
+          id: ORG.id,
+          login: ORG.login,
+          displayName: ORG.displayName,
+          config: orgConfig(),
+        }),
+        { status: 200 },
       );
     }
     if (url.includes("/projects")) {
@@ -110,7 +128,11 @@ describe("tanren-config audit-gate surface (/settings/config)", () => {
   it("gate ON → renders the merge gate + tanren.yaml + checks", async () => {
     gateEnabled = true;
     const app = await build();
-    const html = await (await app.request("/settings/config?pr=7&prUrl=https://github.com/cat-cave/tanren-config/pull/7&branch=forge/route")).text();
+    const html = await (
+      await app.request(
+        "/settings/config?pr=7&prUrl=https://github.com/cat-cave/tanren-config/pull/7&branch=forge/route",
+      )
+    ).text();
     expect(html).toContain("review the config change");
     expect(html).toContain("tanren.yaml");
     expect(html).toContain("schema valid");

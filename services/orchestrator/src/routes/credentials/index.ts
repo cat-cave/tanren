@@ -45,7 +45,7 @@ export class InMemoryCredentialRegistry implements CredentialRegistry {
 
   async list(args: { scope: "org" | "me"; ownerId: string }): Promise<CredentialRecord[]> {
     return [...this.records.values()].filter(
-      (record) => record.scope === args.scope && record.ownerId === args.ownerId
+      (record) => record.scope === args.scope && record.ownerId === args.ownerId,
     );
   }
 
@@ -66,23 +66,23 @@ export class InMemoryCredentialRegistry implements CredentialRegistry {
 // the bundle's own validator (in the credentials module) enforces its shape.
 const AuthBundleImportBody = z.object({
   ref: z.string().min(1),
-  authJson: z.string().min(1)
+  authJson: z.string().min(1),
 });
 
 const GithubImportBody = z.object({
   ref: z.string().min(1),
-  token: z.string().min(1)
+  token: z.string().min(1),
 });
 
 const GithubAppImportBody = z.object({
   ref: z.string().min(1),
   appId: z.string().min(1),
-  privateKeyPem: z.string().min(1)
+  privateKeyPem: z.string().min(1),
 });
 
 const OpaqueImportBody = z.object({
   ref: z.string().min(1),
-  value: z.string().min(1)
+  value: z.string().min(1),
 });
 
 export function createCredentialRoutes(options: CredentialRoutesOptions) {
@@ -161,12 +161,15 @@ export function createCredentialRoutes(options: CredentialRoutesOptions) {
 }
 
 async function handleImport(
-  c: { req: { json: () => Promise<unknown>; query: (k: string) => string | undefined }; json: (body: unknown, status?: 200 | 201 | 400) => Response },
+  c: {
+    req: { json: () => Promise<unknown>; query: (k: string) => string | undefined };
+    json: (body: unknown, status?: 200 | 201 | 400) => Response;
+  },
   options: CredentialRoutesOptions,
   registry: CredentialRegistry,
   scope: "org" | "me",
   ownerId: string,
-  kind: string
+  kind: string,
 ): Promise<Response> {
   const raw = await c.req.json().catch(() => undefined);
   if (kind === "codex_chatgpt_auth") {
@@ -178,9 +181,21 @@ async function handleImport(
     try {
       stored = await storeCodexAuthBundle(options.secrets, parsed.data);
     } catch (error) {
-      return c.json({ error: "invalid_codex_credential", message: error instanceof Error ? error.message : String(error) }, 400);
+      return c.json(
+        {
+          error: "invalid_codex_credential",
+          message: error instanceof Error ? error.message : String(error),
+        },
+        400,
+      );
     }
-    await registry.put({ ref: stored.ref, kind: "codex_chatgpt_auth", scope, ownerId, createdAt: new Date().toISOString() });
+    await registry.put({
+      ref: stored.ref,
+      kind: "codex_chatgpt_auth",
+      scope,
+      ownerId,
+      createdAt: new Date().toISOString(),
+    });
     return c.json(stored, 201);
   }
   if (kind === "claude_cli_auth") {
@@ -192,9 +207,21 @@ async function handleImport(
     try {
       stored = await storeClaudeAuthBundle(options.secrets, parsed.data);
     } catch (error) {
-      return c.json({ error: "invalid_claude_credential", message: error instanceof Error ? error.message : String(error) }, 400);
+      return c.json(
+        {
+          error: "invalid_claude_credential",
+          message: error instanceof Error ? error.message : String(error),
+        },
+        400,
+      );
     }
-    await registry.put({ ref: stored.ref, kind: "claude_cli_auth", scope, ownerId, createdAt: new Date().toISOString() });
+    await registry.put({
+      ref: stored.ref,
+      kind: "claude_cli_auth",
+      scope,
+      ownerId,
+      createdAt: new Date().toISOString(),
+    });
     return c.json(stored, 201);
   }
   if (kind === "opencode_cli_auth") {
@@ -206,9 +233,21 @@ async function handleImport(
     try {
       stored = await storeOpencodeAuthBundle(options.secrets, parsed.data);
     } catch (error) {
-      return c.json({ error: "invalid_opencode_credential", message: error instanceof Error ? error.message : String(error) }, 400);
+      return c.json(
+        {
+          error: "invalid_opencode_credential",
+          message: error instanceof Error ? error.message : String(error),
+        },
+        400,
+      );
     }
-    await registry.put({ ref: stored.ref, kind: "opencode_cli_auth", scope, ownerId, createdAt: new Date().toISOString() });
+    await registry.put({
+      ref: stored.ref,
+      kind: "opencode_cli_auth",
+      scope,
+      ownerId,
+      createdAt: new Date().toISOString(),
+    });
     return c.json(stored, 201);
   }
   if (kind === "github_token") {
@@ -217,7 +256,13 @@ async function handleImport(
       return c.json({ error: "invalid_github_credential", issues: parsed.error.issues }, 400);
     }
     const stored = await storeGithubToken(options.secrets, parsed.data);
-    await registry.put({ ref: stored.ref, kind: "github_token", scope, ownerId, createdAt: new Date().toISOString() });
+    await registry.put({
+      ref: stored.ref,
+      kind: "github_token",
+      scope,
+      ownerId,
+      createdAt: new Date().toISOString(),
+    });
     return c.json(stored, 201);
   }
   if (kind === "github_app") {
@@ -229,9 +274,21 @@ async function handleImport(
     try {
       stored = await storeGithubAppCredential(options.secrets, parsed.data);
     } catch (error) {
-      return c.json({ error: "invalid_github_app_credential", message: error instanceof Error ? error.message : String(error) }, 400);
+      return c.json(
+        {
+          error: "invalid_github_app_credential",
+          message: error instanceof Error ? error.message : String(error),
+        },
+        400,
+      );
     }
-    await registry.put({ ref: stored.ref, kind: "github_app", scope, ownerId, createdAt: new Date().toISOString() });
+    await registry.put({
+      ref: stored.ref,
+      kind: "github_app",
+      scope,
+      ownerId,
+      createdAt: new Date().toISOString(),
+    });
     return c.json(stored, 201);
   }
   const parsed = OpaqueImportBody.safeParse(raw);
@@ -239,7 +296,13 @@ async function handleImport(
     return c.json({ error: "invalid_credential", issues: parsed.error.issues }, 400);
   }
   await options.secrets.put({ ref: parsed.data.ref, value: parsed.data.value });
-  await registry.put({ ref: parsed.data.ref, kind: "opaque", scope, ownerId, createdAt: new Date().toISOString() });
+  await registry.put({
+    ref: parsed.data.ref,
+    kind: "opaque",
+    scope,
+    ownerId,
+    createdAt: new Date().toISOString(),
+  });
   return c.json({ ref: parsed.data.ref, kind: "opaque", redacted: true }, 201);
 }
 

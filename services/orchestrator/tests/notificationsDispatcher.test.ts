@@ -8,7 +8,7 @@ import {
   type ChannelKind,
   type NotificationChannel,
   type NotificationPayload,
-  type NotificationTargetRow
+  type NotificationTargetRow,
 } from "../src/engine/notifications/index.js";
 import { effectiveSeverityFor } from "../src/engine/notifications/dispatcher.js";
 import { NotificationMemoryClient } from "./helpers/notificationMemoryClient.js";
@@ -46,20 +46,25 @@ function seedOrgTarget(client: NotificationMemoryClient, kind: ChannelKind, id =
     destination: kind === "ntfy" ? "tanren-runs" : `${kind}-dest`,
     label: `${kind} default`,
     enabled: true,
-    weekendMute: false
+    weekendMute: false,
   });
 }
 
 async function seedRoute(
   client: NotificationMemoryClient,
-  args: { id: string; targetId: string; eventName: string; minSeverity?: "ok" | "info" | "warn" | "fail" }
+  args: {
+    id: string;
+    targetId: string;
+    eventName: string;
+    minSeverity?: "ok" | "info" | "warn" | "fail";
+  },
 ) {
   return NotificationRouteStore.create(client, {
     id: args.id,
     targetId: args.targetId,
     eventName: args.eventName,
     enabled: true,
-    minSeverity: args.minSeverity ?? "info"
+    minSeverity: args.minSeverity ?? "info",
   });
 }
 
@@ -74,12 +79,12 @@ describe("NotificationDispatcher", () => {
     const dispatcher = new NotificationDispatcher({
       query: client as unknown as pg.Pool,
       channels,
-      now: () => new Date("2026-01-05T12:00:00Z") // Monday
+      now: () => new Date("2026-01-05T12:00:00Z"), // Monday
     });
 
     const event: TypedEvent = {
       eventType: "run.failed",
-      payload: { status: "failed", message: "broken" }
+      payload: { status: "failed", message: "broken" },
     };
 
     await dispatcher.onEvent(event, {
@@ -87,7 +92,7 @@ describe("NotificationDispatcher", () => {
       actorUserId: null,
       projectId: "project_1",
       runId: "run_1",
-      specId: "spec_1"
+      specId: "spec_1",
     });
 
     expect(ntfy.calls).toHaveLength(1);
@@ -105,19 +110,19 @@ describe("NotificationDispatcher", () => {
       id: "r_ntfy",
       targetId: "target_ntfy",
       eventName: "run.started",
-      minSeverity: "warn"
+      minSeverity: "warn",
     });
 
     const ntfy = new CapturingChannel("ntfy");
     const dispatcher = new NotificationDispatcher({
       query: client as unknown as pg.Pool,
       channels: baseRegistry({ ntfy }),
-      now: () => new Date("2026-01-05T12:00:00Z")
+      now: () => new Date("2026-01-05T12:00:00Z"),
     });
 
     await dispatcher.onEvent(
       { eventType: "run.started", payload: { status: "running" } },
-      { orgId: "org_1", actorUserId: null }
+      { orgId: "org_1", actorUserId: null },
     );
     expect(ntfy.calls).toHaveLength(0);
     expect(client.dispatches).toHaveLength(0);
@@ -136,11 +141,11 @@ describe("NotificationDispatcher", () => {
     const dispatcher = new NotificationDispatcher({
       query: client as unknown as pg.Pool,
       channels: baseRegistry({ ntfy }),
-      now: () => new Date("2026-01-03T12:00:00Z") // Saturday
+      now: () => new Date("2026-01-03T12:00:00Z"), // Saturday
     });
     await dispatcher.onEvent(
       { eventType: "run.failed", payload: { status: "failed", message: "x" } },
-      { orgId: "org_1", actorUserId: null }
+      { orgId: "org_1", actorUserId: null },
     );
     expect(ntfy.calls).toHaveLength(0);
     const log = client.dispatches[0];
@@ -160,11 +165,11 @@ describe("NotificationDispatcher", () => {
     const dispatcher = new NotificationDispatcher({
       query: client as unknown as pg.Pool,
       channels,
-      now: () => new Date("2026-01-05T12:00:00Z")
+      now: () => new Date("2026-01-05T12:00:00Z"),
     });
     await dispatcher.onEvent(
       { eventType: "run.failed", payload: { status: "failed", message: "x" } },
-      { orgId: "org_1", actorUserId: null }
+      { orgId: "org_1", actorUserId: null },
     );
     expect(client.dispatches[0]?.status).toBe("stubbed");
     expect(client.dispatches[0]?.channel).toBe("teams");
@@ -179,11 +184,11 @@ describe("NotificationDispatcher", () => {
     const dispatcher = new NotificationDispatcher({
       query: client as unknown as pg.Pool,
       channels: baseRegistry({ slack }),
-      now: () => new Date("2026-01-05T12:00:00Z")
+      now: () => new Date("2026-01-05T12:00:00Z"),
     });
     await dispatcher.onEvent(
       { eventType: "run.failed", payload: { status: "failed", message: "x" } },
-      { orgId: "org_1", actorUserId: null }
+      { orgId: "org_1", actorUserId: null },
     );
     expect(slack.calls).toHaveLength(1);
     expect(client.dispatches[0]?.status).toBe("sent");
@@ -196,18 +201,18 @@ describe("NotificationDispatcher", () => {
     await seedRoute(client, {
       id: "r_gh",
       targetId: "target_github_checks",
-      eventName: "run.failed"
+      eventName: "run.failed",
     });
 
     const github = new CapturingChannel("github_checks");
     const dispatcher = new NotificationDispatcher({
       query: client as unknown as pg.Pool,
       channels: baseRegistry({ github_checks: github }),
-      now: () => new Date("2026-01-05T12:00:00Z")
+      now: () => new Date("2026-01-05T12:00:00Z"),
     });
     await dispatcher.onEvent(
       { eventType: "run.failed", payload: { status: "failed", message: "x" } },
-      { orgId: "org_1", actorUserId: null }
+      { orgId: "org_1", actorUserId: null },
     );
     expect(github.calls).toHaveLength(1);
     expect(client.dispatches[0]?.status).toBe("sent");
@@ -222,23 +227,23 @@ describe("NotificationDispatcher", () => {
       await seedRoute(client, {
         id: `r_${kind}`,
         targetId: `target_${kind}`,
-        eventName: "run.failed"
+        eventName: "run.failed",
       });
 
       const channel = new CapturingChannel(kind);
       const dispatcher = new NotificationDispatcher({
         query: client as unknown as pg.Pool,
         channels: baseRegistry({ [kind]: channel }),
-        now: () => new Date("2026-01-05T12:00:00Z")
+        now: () => new Date("2026-01-05T12:00:00Z"),
       });
       await dispatcher.onEvent(
         { eventType: "run.failed", payload: { status: "failed", message: "x" } },
-        { orgId: "org_1", actorUserId: null }
+        { orgId: "org_1", actorUserId: null },
       );
       expect(channel.calls).toHaveLength(1);
       expect(client.dispatches[0]?.status).toBe("sent");
       expect(client.dispatches[0]?.channel).toBe(kind);
-    }
+    },
   );
 
   it("records failed when a wired channel throws and does not propagate", async () => {
@@ -251,13 +256,13 @@ describe("NotificationDispatcher", () => {
       query: client as unknown as pg.Pool,
       channels: baseRegistry({ ntfy: failing }),
       now: () => new Date("2026-01-05T12:00:00Z"),
-      log: () => undefined
+      log: () => undefined,
     });
     await expect(
       dispatcher.onEvent(
         { eventType: "run.failed", payload: { status: "failed", message: "x" } },
-        { orgId: "org_1", actorUserId: null }
-      )
+        { orgId: "org_1", actorUserId: null },
+      ),
     ).resolves.toBeUndefined();
     expect(client.dispatches[0]?.status).toBe("failed");
   });
@@ -265,13 +270,17 @@ describe("NotificationDispatcher", () => {
   it("redacts payload fields before handing them to the channel", async () => {
     const client = new NotificationMemoryClient();
     await seedOrgTarget(client, "ntfy");
-    await seedRoute(client, { id: "r_ntfy", targetId: "target_ntfy", eventName: "writer.completed" });
+    await seedRoute(client, {
+      id: "r_ntfy",
+      targetId: "target_ntfy",
+      eventName: "writer.completed",
+    });
 
     const ntfy = new CapturingChannel("ntfy");
     const dispatcher = new NotificationDispatcher({
       query: client as unknown as pg.Pool,
       channels: baseRegistry({ ntfy }),
-      now: () => new Date("2026-01-05T12:00:00Z")
+      now: () => new Date("2026-01-05T12:00:00Z"),
     });
 
     const event: TypedEvent = {
@@ -281,22 +290,36 @@ describe("NotificationDispatcher", () => {
         intent: "happy intent",
         commits: [],
         exitReason: "ok",
-        tokenUsage: { inputTokens: 1, cachedInputTokens: 0, cacheCreationTokens: 0, outputTokens: 1, reasoningOutputTokens: 0, totalTokens: 2 },
+        tokenUsage: {
+          inputTokens: 1,
+          cachedInputTokens: 0,
+          cacheCreationTokens: 0,
+          outputTokens: 1,
+          reasoningOutputTokens: 0,
+          totalTokens: 2,
+        },
         telemetry: {
           rawEventCount: 0,
-          tokenUsage: { inputTokens: 1, cachedInputTokens: 0, cacheCreationTokens: 0, outputTokens: 1, reasoningOutputTokens: 0, totalTokens: 2 }
+          tokenUsage: {
+            inputTokens: 1,
+            cachedInputTokens: 0,
+            cacheCreationTokens: 0,
+            outputTokens: 1,
+            reasoningOutputTokens: 0,
+            totalTokens: 2,
+          },
         },
         decisions: [],
         toolCalls: [
           {
             name: "shell",
             args: { command: "echo $SECRET" },
-            outputSummary: "ran"
-          }
+            outputSummary: "ran",
+          },
         ],
         diffBytes: 12,
-        commitSha: "abc"
-      }
+        commitSha: "abc",
+      },
     };
 
     await dispatcher.onEvent(event, { orgId: "org_1", actorUserId: null });
@@ -316,11 +339,11 @@ describe("NotificationDispatcher", () => {
     const dispatcher = new NotificationDispatcher({
       query: client as unknown as pg.Pool,
       channels: baseRegistry({ ntfy }),
-      now: () => new Date("2026-01-05T12:00:00Z")
+      now: () => new Date("2026-01-05T12:00:00Z"),
     });
     await dispatcher.onEvent(
       { eventType: "run.failed", payload: { status: "failed", message: "x" } },
-      { orgId: "org_1", actorUserId: null }
+      { orgId: "org_1", actorUserId: null },
     );
     expect(ntfy.calls).toHaveLength(0);
     expect(client.dispatches).toHaveLength(0);
@@ -331,7 +354,7 @@ describe("effectiveSeverityFor", () => {
   it("promotes checker.verdict to warn when passed=false", () => {
     const sev = effectiveSeverityFor({
       eventType: "checker.verdict",
-      payload: { runId: "r", taskId: "t", subtaskIndex: 0, passed: false, reasoning: "no" }
+      payload: { runId: "r", taskId: "t", subtaskIndex: 0, passed: false, reasoning: "no" },
     });
     expect(sev).toBe("warn");
   });
@@ -339,26 +362,24 @@ describe("effectiveSeverityFor", () => {
   it("renders checker.verdict as ok when passed=true", () => {
     const sev = effectiveSeverityFor({
       eventType: "checker.verdict",
-      payload: { runId: "r", taskId: "t", subtaskIndex: 0, passed: true, reasoning: "yes" }
+      payload: { runId: "r", taskId: "t", subtaskIndex: 0, passed: true, reasoning: "yes" },
     });
     expect(sev).toBe("ok");
   });
 
   it("uses the registry default for non-verdict events", () => {
-    expect(
-      effectiveSeverityFor({ eventType: "run.completed", payload: { status: "succeeded" } })
-    ).toBe("ok");
+    expect(effectiveSeverityFor({ eventType: "run.completed", payload: { status: "succeeded" } })).toBe("ok");
     expect(
       effectiveSeverityFor({
         eventType: "cost.unattributable",
-        payload: { taskId: "t", cli: "codex", authRef: "x", reason: "x" }
-      })
+        payload: { taskId: "t", cli: "codex", authRef: "x", reason: "x" },
+      }),
     ).toBe("fail");
   });
 });
 
 function baseRegistry(
-  overrides: Partial<Record<ChannelKind, NotificationChannel>> = {}
+  overrides: Partial<Record<ChannelKind, NotificationChannel>> = {},
 ): Record<ChannelKind, NotificationChannel> {
   const base = buildChannelRegistry({} satisfies ChannelRegistryDeps);
   // Default: replace the real NtfyChannel with a stubbed-but-wired
@@ -366,7 +387,7 @@ function baseRegistry(
   // that exercise stub behavior supply a `slack` override etc.
   const baseWithSafeNtfy: Record<ChannelKind, NotificationChannel> = {
     ...base,
-    ntfy: overrides.ntfy ?? new CapturingChannel("ntfy")
+    ntfy: overrides.ntfy ?? new CapturingChannel("ntfy"),
   };
   return { ...baseWithSafeNtfy, ...overrides };
 }

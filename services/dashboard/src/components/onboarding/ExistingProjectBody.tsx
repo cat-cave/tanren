@@ -19,9 +19,12 @@ function GithubScopeCard() {
     "clone & push from runner workspaces",
     "open draft PRs from tanren/spec_* branches",
     "poll ci check status",
-    "read org members for review-gate routing"
+    "read org members for review-gate routing",
   ];
-  const cannot = ["never push to main · never bypass protection · never force-push", "no access to org billing, secrets, settings"];
+  const cannot = [
+    "never push to main · never bypass protection · never force-push",
+    "no access to org billing, secrets, settings",
+  ];
   return (
     <div class="col-card" style="gap:8px">
       <div class="h">
@@ -57,7 +60,7 @@ function WhatHappensNext() {
     "tanren reads any existing .github/workflows/, .mergify.yml, and CODEOWNERS — for display only",
     "tanren does NOT write to the target repo (no config-injection PR in v0)",
     "tanren does NOT run a recon agent (no repo indexing / persona inference in v0)",
-    "the project row is created and you land on the project view"
+    "the project row is created and you land on the project view",
   ];
   return (
     <div class="col-card live" style="gap:8px">
@@ -132,7 +135,8 @@ export function ExistingProjectBody(props: ExistingProjectBodyProps) {
       {props.linked ? (
         <>
           <div class="alert ok">
-            Linked <b>{props.linked.repoUrl}</b> as project <b>{props.linked.projectId}</b> · 0 writes to the target repo.
+            Linked <b>{props.linked.repoUrl}</b> as project <b>{props.linked.projectId}</b> · 0 writes to the target
+            repo.
           </div>
           <DetectedFiles files={props.linked.files} />
           <div class="foot">
@@ -196,9 +200,17 @@ export function ExistingProjectBody(props: ExistingProjectBodyProps) {
                   ))}
                 </div>
               )}
-              <div class="mono-dim" style="padding:10px 14px;border-top:1px solid var(--line-1);background:var(--bg-sunken)">
+              <div
+                class="mono-dim"
+                style="padding:10px 14px;border-top:1px solid var(--line-1);background:var(--bg-sunken)"
+              >
                 can't see your repo?{" "}
-                <a href={props.githubAppUrl} target="_blank" rel="noreferrer" style="color:var(--ember-08);text-decoration:underline">
+                <a
+                  href={props.githubAppUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  style="color:var(--ember-08);text-decoration:underline"
+                >
                   add it to the tanren github app ↗
                 </a>
               </div>
@@ -226,7 +238,8 @@ export function ExistingProjectBody(props: ExistingProjectBodyProps) {
               <Field name="runnerImage" label="runner image (org default)" value="tanren-runner" />
             </div>
             <div class="mono-dim">
-              credential refs + per-role provider routing prefill from org defaults · editable later in /settings/routing
+              credential refs + per-role provider routing prefill from org defaults · editable later in
+              /settings/routing
             </div>
             <div class="foot">
               <div class="hint">↑ submitting reads the target repo for display only and writes nothing to it</div>

@@ -28,7 +28,7 @@ process.stdout.write(JSON.stringify(listEventNames()));
 function dumpEventNamesViaTsx() {
   const result = spawnSync("corepack", ["pnpm", "exec", "tsx", "--eval", dumper], {
     cwd: repoRoot,
-    encoding: "utf8"
+    encoding: "utf8",
   });
   if (result.status !== 0) {
     process.stderr.write(result.stderr || "tsx eval failed\n");
@@ -43,7 +43,7 @@ function renderEventTypesTs(names) {
     "// Regenerate via `corepack pnpm run codegen:events` (or `node scripts/generate-event-type-check.mjs`).",
     "// Source of truth: services/orchestrator/src/engine/events/registry.ts (Zod EventRegistry).",
     "",
-    "export const eventTypeNames = ["
+    "export const eventTypeNames = [",
   ];
   names.forEach((name, index) => {
     const trailing = index === names.length - 1 ? "" : ",";

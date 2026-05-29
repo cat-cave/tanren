@@ -28,7 +28,7 @@ export const GitHubIssuesConfig = z
     owner: z.string().min(1),
     repo: z.string().min(1),
     labels: z.array(z.string().min(1)).default([]),
-    staticRef: z.string().min(1).optional()
+    staticRef: z.string().min(1).optional(),
   })
   .strict();
 export type GitHubIssuesConfig = z.infer<typeof GitHubIssuesConfig>;
@@ -78,7 +78,7 @@ export function createGitHubIssuesConnector(deps: GitHubConnectorDeps): SourceCo
         secrets: deps.secrets,
         ...(deps.installation !== undefined ? { installation: deps.installation } : {}),
         ...(config.staticRef !== undefined ? { staticRef: config.staticRef } : {}),
-        minter: deps.minter ?? new GithubAppTokenMinter({ secrets: deps.secrets })
+        minter: deps.minter ?? new GithubAppTokenMinter({ secrets: deps.secrets }),
       });
 
       const labelQuery = config.labels.length > 0 ? `&labels=${encodeURIComponent(config.labels.join(","))}` : "";
@@ -90,7 +90,7 @@ export function createGitHubIssuesConnector(deps: GitHubConnectorDeps): SourceCo
         method: "GET",
         path,
         token: resolved.token,
-        refreshToken: resolved.refresh
+        refreshToken: resolved.refresh,
       });
       if (response.status !== 200 || !Array.isArray(response.body)) {
         return [];
@@ -108,10 +108,10 @@ export function createGitHubIssuesConnector(deps: GitHubConnectorDeps): SourceCo
           title: issue.title,
           body: typeof issue.body === "string" ? issue.body.slice(0, 8000) : "",
           severity: severityFromLabels(labels),
-          projectId: source.projectId
+          projectId: source.projectId,
         });
       }
       return items;
-    }
+    },
   };
 }

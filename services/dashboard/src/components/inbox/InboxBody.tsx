@@ -23,13 +23,13 @@ const SOURCE_GLYPH: Record<string, string> = {
   errors: "×",
   system: "⟳",
   scheduled_audit: "⟳",
-  manual: "✎"
+  manual: "✎",
 };
 
 const VERDICT_META: Record<TriageVerdict, { cls: string; label: string }> = {
   auto_routable: { cls: "auto", label: "auto-routed" },
   needs_call: { cls: "decide", label: "needs you" },
-  dedupe_close: { cls: "dupe", label: "duplicate" }
+  dedupe_close: { cls: "dupe", label: "duplicate" },
 };
 
 const RESOLVED_LABEL: Record<string, string> = {
@@ -37,7 +37,7 @@ const RESOLVED_LABEL: Record<string, string> = {
   accepted: "accepted · in discovery",
   folded: "folded into live run",
   dismissed: "dismissed",
-  closed_duplicate: "closed · duplicate"
+  closed_duplicate: "closed · duplicate",
 };
 
 function isResolved(c: Candidate): boolean {
@@ -66,9 +66,18 @@ function TriageReadout(props: { candidate: Candidate }) {
   if (t === null) return <></>;
   return (
     <div class="triage" data-triage>
-      <div class="trow"><span class="tk">dedupe</span><span class="tv">{t.dedupe}</span></div>
-      <div class="trow"><span class="tk">match</span><span class="tv">{t.match}</span></div>
-      <div class="trow"><span class="tk">placement</span><span class="tv accent">{t.placement}</span></div>
+      <div class="trow">
+        <span class="tk">dedupe</span>
+        <span class="tv">{t.dedupe}</span>
+      </div>
+      <div class="trow">
+        <span class="tk">match</span>
+        <span class="tv">{t.match}</span>
+      </div>
+      <div class="trow">
+        <span class="tk">placement</span>
+        <span class="tv accent">{t.placement}</span>
+      </div>
     </div>
   );
 }
@@ -101,11 +110,21 @@ function CandidateActions(props: { orgId: string; candidate: Candidate }) {
   if (verdict === "dedupe_close") {
     return (
       <div class="cand-actions">
-        {actionForm(orgId, candidate.id, "close-duplicate",
-          <button class="btn primary notched" style="font-size:11px" type="submit">close as done</button>
+        {actionForm(
+          orgId,
+          candidate.id,
+          "close-duplicate",
+          <button class="btn primary notched" style="font-size:11px" type="submit">
+            close as done
+          </button>,
         )}
-        {actionForm(orgId, candidate.id, "dismiss",
-          <button class="btn ghost" style="font-size:11px" type="submit">keep open</button>
+        {actionForm(
+          orgId,
+          candidate.id,
+          "dismiss",
+          <button class="btn ghost" style="font-size:11px" type="submit">
+            keep open
+          </button>,
         )}
       </div>
     );
@@ -117,11 +136,21 @@ function CandidateActions(props: { orgId: string; candidate: Candidate }) {
       <a class="btn primary notched" style="font-size:11px" href={discoveryHref} data-action="accept">
         accept · open in discovery ↗
       </a>
-      {actionForm(orgId, candidate.id, "fold",
-        <button class="btn" style="font-size:11px" type="submit" data-action="fold">fold into live run</button>
+      {actionForm(
+        orgId,
+        candidate.id,
+        "fold",
+        <button class="btn" style="font-size:11px" type="submit" data-action="fold">
+          fold into live run
+        </button>,
       )}
-      {actionForm(orgId, candidate.id, "dismiss",
-        <button class="btn ghost" style="font-size:11px" type="submit" data-action="dismiss">dismiss</button>
+      {actionForm(
+        orgId,
+        candidate.id,
+        "dismiss",
+        <button class="btn ghost" style="font-size:11px" type="submit" data-action="dismiss">
+          dismiss
+        </button>,
       )}
     </div>
   );
@@ -137,7 +166,9 @@ function CandidateCard(props: { orgId: string; candidate: Candidate }) {
           {SOURCE_GLYPH[candidate.sourceKind] ?? "▮"} {candidate.sourceName}
         </span>
         <span class="cand-proj">{candidate.projectId ?? "org-wide"}</span>
-        <span class={`cand-verdict ${vm.cls}`}>{isResolved(candidate) ? (RESOLVED_LABEL[candidate.status] ?? vm.label) : vm.label}</span>
+        <span class={`cand-verdict ${vm.cls}`}>
+          {isResolved(candidate) ? (RESOLVED_LABEL[candidate.status] ?? vm.label) : vm.label}
+        </span>
       </div>
       <div class="cand-title">{candidate.title}</div>
       {candidate.body !== "" && <div class="cand-body">{candidate.body.slice(0, 400)}</div>}
@@ -159,7 +190,7 @@ export function InboxBody(props: InboxBodyProps) {
   const counts = {
     auto: candidates.filter((c) => c.status === "auto_routed").length,
     decide: candidates.filter((c) => c.triage?.verdict === "needs_call" && !isResolved(c)).length,
-    dupe: candidates.filter((c) => c.triage?.verdict === "dedupe_close").length
+    dupe: candidates.filter((c) => c.triage?.verdict === "dedupe_close").length,
   };
   return (
     <div class="p2b">
@@ -167,9 +198,17 @@ export function InboxBody(props: InboxBodyProps) {
       <InboxStyles />
       <PageHead
         eyebrow="▮ intake · candidate inbox"
-        title={<>where work <em>comes from</em></>}
+        title={
+          <>
+            where work <em>comes from</em>
+          </>
+        }
         sub={<>configurable issue sources · forge triages each into the dag · you decide placement</>}
-        actions={<a class="btn ghost" href="/discovery">discover manually ↗</a>}
+        actions={
+          <a class="btn ghost" href="/discovery">
+            discover manually ↗
+          </a>
+        }
       />
       <div class="page-body">
         <KpiStrip
@@ -178,21 +217,31 @@ export function InboxBody(props: InboxBodyProps) {
             { k: "auto-routed", v: String(counts.auto) },
             { k: "needs you", v: String(counts.decide), tone: "hot" },
             { k: "duplicates", v: String(counts.dupe) },
-            { k: "sources", v: String(enabledSources.length) }
+            { k: "sources", v: String(enabledSources.length) },
           ]}
         />
-        {props.error !== undefined && <div class="placeholder-card" style="border-left:2px solid var(--ember-08)">{props.error}</div>}
+        {props.error !== undefined && (
+          <div class="placeholder-card" style="border-left:2px solid var(--ember-08)">
+            {props.error}
+          </div>
+        )}
         <div class="inbox-split">
           <div>
-            <div class="sect-label" style="margin-bottom:8px">sources · configurable</div>
+            <div class="sect-label" style="margin-bottom:8px">
+              sources · configurable
+            </div>
             <div class="source-list">
               {sources.length === 0 && (
                 <div class="source-note">
                   <div class="nlabel">no sources yet</div>
-                  <div class="nbody">Connect a GitHub Issues feed (or any polled endpoint) to start ingesting candidates.</div>
+                  <div class="nbody">
+                    Connect a GitHub Issues feed (or any polled endpoint) to start ingesting candidates.
+                  </div>
                 </div>
               )}
-              {sources.map((source) => <SourceRow source={source} />)}
+              {sources.map((source) => (
+                <SourceRow source={source} />
+              ))}
               <div class="source-note">
                 <div class="nlabel">no hardcoded sources</div>
                 <div class="nbody">
@@ -206,7 +255,9 @@ export function InboxBody(props: InboxBodyProps) {
             {candidates.length === 0 && (
               <div class="placeholder-card">No candidates yet — ingest a source to populate the inbox.</div>
             )}
-            {candidates.map((candidate) => <CandidateCard orgId={props.orgId} candidate={candidate} />)}
+            {candidates.map((candidate) => (
+              <CandidateCard orgId={props.orgId} candidate={candidate} />
+            ))}
           </div>
         </div>
       </div>

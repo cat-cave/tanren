@@ -10,7 +10,7 @@ import type {
   ProjectMemberRole,
   Session,
   TokenScope,
-  User
+  User,
 } from "./schemas.js";
 
 const DEFAULT_SESSION_TTL_MS = 12 * 60 * 60 * 1000;
@@ -36,7 +36,7 @@ export interface CreateApiTokenResult {
 export class IdentityStore {
   constructor(
     private readonly pool: pg.Pool,
-    private readonly now: () => Date = () => new Date()
+    private readonly now: () => Date = () => new Date(),
   ) {}
 
   async upsertIdentity(provider: User["provider"], claims: IdentityClaims): Promise<UpsertIdentityResult> {
@@ -55,37 +55,42 @@ export class IdentityStore {
   }
 
   async upsertUser(provider: User["provider"], claims: IdentityClaims): Promise<User> {
-    const existing = await this.pool.query(
-      "SELECT * FROM users WHERE provider = $1 AND provider_subject = $2",
-      [provider, claims.providerSubject]
-    );
+    const existing = await this.pool.query("SELECT * FROM users WHERE provider = $1 AND provider_subject = $2", [
+      provider,
+      claims.providerSubject,
+    ]);
     if ((existing.rowCount ?? 0) > 0) {
       const row = existing.rows[0] as UserRow;
       await this.pool.query(
         "UPDATE users SET login = $1, email = $2, display_name = $3, updated_at = now() WHERE id = $4",
-        [claims.login, claims.email, claims.displayName, row.id]
+        [claims.login, claims.email, claims.displayName, row.id],
       );
-      return rowToUser({ ...row, login: claims.login, email: claims.email, display_name: claims.displayName });
+      return rowToUser({
+        ...row,
+        login: claims.login,
+        email: claims.email,
+        display_name: claims.displayName,
+      });
     }
     const id = `user_${randomUUID()}`;
     const inserted = await this.pool.query<UserRow>(
       `INSERT INTO users (id, provider, provider_subject, login, email, display_name)
        VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-      [id, provider, claims.providerSubject, claims.login, claims.email, claims.displayName]
+      [id, provider, claims.providerSubject, claims.login, claims.email, claims.displayName],
     );
     return rowToUser(firstRow(inserted.rows));
   }
 
   async upsertOrg(claim: IdentityOrgClaim): Promise<Org> {
-    const existing = await this.pool.query<OrgRow>(
-      "SELECT * FROM organizations WHERE kind = $1 AND external_id = $2",
-      [claim.kind, claim.externalId]
-    );
+    const existing = await this.pool.query<OrgRow>("SELECT * FROM organizations WHERE kind = $1 AND external_id = $2", [
+      claim.kind,
+      claim.externalId,
+    ]);
     if ((existing.rowCount ?? 0) > 0) {
       const row = firstRow(existing.rows);
       await this.pool.query(
         "UPDATE organizations SET login = $1, display_name = $2, updated_at = now() WHERE id = $3",
-        [claim.login, claim.displayName, row.id]
+        [claim.login, claim.displayName, row.id],
       );
       return rowToOrg({ ...row, login: claim.login, display_name: claim.displayName });
     }
@@ -93,7 +98,7 @@ export class IdentityStore {
     const inserted = await this.pool.query<OrgRow>(
       `INSERT INTO organizations (id, kind, external_id, login, display_name)
        VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-      [id, claim.kind, claim.externalId, claim.login, claim.displayName]
+      [id, claim.kind, claim.externalId, claim.login, claim.displayName],
     );
     return rowToOrg(firstRow(inserted.rows));
   }
@@ -101,21 +106,18 @@ export class IdentityStore {
   async ensureOrgMembership(orgId: string, userId: string): Promise<OrgMemberRole> {
     const existing = await this.pool.query<{ role: OrgMemberRole }>(
       "SELECT role FROM org_members WHERE org_id = $1 AND user_id = $2",
-      [orgId, userId]
+      [orgId, userId],
     );
     if ((existing.rowCount ?? 0) > 0) {
       return firstRow(existing.rows).role;
     }
     const countResult = await this.pool.query<{ count: string }>(
       "SELECT count(*)::text AS count FROM org_members WHERE org_id = $1",
-      [orgId]
+      [orgId],
     );
     const isFirst = countResult.rows[0]?.count === "0";
     const role: OrgMemberRole = isFirst ? "admin" : "member";
-    await this.pool.query(
-      "INSERT INTO org_members (org_id, user_id, role) VALUES ($1, $2, $3)",
-      [orgId, userId, role]
-    );
+    await this.pool.query("INSERT INTO org_members (org_id, user_id, role) VALUES ($1, $2, $3)", [orgId, userId, role]);
     return role;
   }
 
@@ -127,7 +129,7 @@ export class IdentityStore {
     await this.pool.query(
       `INSERT INTO sessions (id, user_id, csrf_token, expires_at, ip, user_agent)
        VALUES ($1, $2, $3, $4, $5, $6)`,
-      [id, userId, csrfToken, expiresAt, options.ip ?? null, options.userAgent ?? null]
+      [id, userId, csrfToken, expiresAt, options.ip ?? null, options.userAgent ?? null],
     );
     return {
       id,
@@ -136,7 +138,7 @@ export class IdentityStore {
       expiresAt,
       createdAt: this.now(),
       ip: options.ip ?? null,
-      userAgent: options.userAgent ?? null
+      userAgent: options.userAgent ?? null,
     };
   }
 
@@ -170,21 +172,21 @@ export class IdentityStore {
     await this.pool.query(
       `INSERT INTO api_tokens (id, user_id, name, token_hash, scopes, expires_at)
        VALUES ($1, $2, $3, $4, $5, $6)`,
-      [id, input.userId, input.name, tokenHash, input.scopes, input.expiresAt ?? null]
+      [id, input.userId, input.name, tokenHash, input.scopes, input.expiresAt ?? null],
     );
     return { id, rawToken, tokenHash };
   }
 
-  async findApiTokenByRaw(rawToken: string): Promise<{
-    userId: string;
-    scopes: TokenScope[];
-    expiresAt: Date | null;
-  } | undefined> {
+  async findApiTokenByRaw(rawToken: string): Promise<
+    | {
+        userId: string;
+        scopes: TokenScope[];
+        expiresAt: Date | null;
+      }
+    | undefined
+  > {
     const tokenHash = hashApiToken(rawToken);
-    const result = await this.pool.query<ApiTokenRow>(
-      "SELECT * FROM api_tokens WHERE token_hash = $1",
-      [tokenHash]
-    );
+    const result = await this.pool.query<ApiTokenRow>("SELECT * FROM api_tokens WHERE token_hash = $1", [tokenHash]);
     if ((result.rowCount ?? 0) === 0) {
       return undefined;
     }
@@ -196,7 +198,7 @@ export class IdentityStore {
     return {
       userId: row.user_id,
       scopes: (row.scopes ?? []) as TokenScope[],
-      expiresAt: row.expires_at === null ? null : new Date(row.expires_at)
+      expiresAt: row.expires_at === null ? null : new Date(row.expires_at),
     };
   }
 
@@ -215,7 +217,7 @@ export class IdentityStore {
     if (resolvedOrgId !== null) {
       const orgRole = await this.pool.query<{ role: OrgMemberRole }>(
         "SELECT role FROM org_members WHERE org_id = $1 AND user_id = $2",
-        [resolvedOrgId, input.userId]
+        [resolvedOrgId, input.userId],
       );
       if ((orgRole.rowCount ?? 0) === 0) {
         resolvedOrgId = null;
@@ -230,13 +232,13 @@ export class IdentityStore {
     if (resolvedProjectId !== null) {
       const projectRole = await this.pool.query<{ role: ProjectMemberRole }>(
         "SELECT role FROM project_members WHERE project_id = $1 AND user_id = $2",
-        [resolvedProjectId, input.userId]
+        [resolvedProjectId, input.userId],
       );
       if ((projectRole.rowCount ?? 0) === 0) {
         // Project membership not declared; try org-scoped fallback if project is owned by user's org.
         const orgOwner = await this.pool.query<{ org_id: string | null }>(
           "SELECT org_id FROM projects WHERE project_id = $1",
-          [resolvedProjectId]
+          [resolvedProjectId],
         );
         const projectOrg = orgOwner.rows[0]?.org_id ?? null;
         if (projectOrg !== null && projectOrg === resolvedOrgId && scopes.has("org:member")) {
@@ -259,7 +261,7 @@ export class IdentityStore {
       orgId: resolvedOrgId,
       projectId: resolvedProjectId,
       scopes: [...scopes],
-      source: input.source
+      source: input.source,
     };
   }
 }
@@ -332,7 +334,7 @@ function rowToUser(row: UserRow): User {
     email: row.email,
     displayName: row.display_name,
     createdAt: new Date(row.created_at),
-    updatedAt: new Date(row.updated_at)
+    updatedAt: new Date(row.updated_at),
   };
 }
 
@@ -344,7 +346,7 @@ function rowToOrg(row: OrgRow): Org {
     login: row.login,
     displayName: row.display_name,
     createdAt: new Date(row.created_at),
-    updatedAt: new Date(row.updated_at)
+    updatedAt: new Date(row.updated_at),
   };
 }
 
@@ -356,6 +358,6 @@ function rowToSession(row: SessionRow): Session {
     expiresAt: new Date(row.expires_at),
     createdAt: new Date(row.created_at),
     ip: row.ip,
-    userAgent: row.user_agent
+    userAgent: row.user_agent,
   };
 }

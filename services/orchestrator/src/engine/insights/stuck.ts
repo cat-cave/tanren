@@ -31,10 +31,7 @@ interface EdgeRow {
   to_status: string;
 }
 
-export async function computeStuck(
-  pool: Pick<pg.Pool, "query">,
-  context: ComputeContext
-): Promise<Insight[]> {
+export async function computeStuck(pool: Pick<pg.Pool, "query">, context: ComputeContext): Promise<Insight[]> {
   const now = context.now ?? new Date();
 
   // Pull every dependency edge in the project, carrying both endpoints'
@@ -50,7 +47,7 @@ export async function computeStuck(
        INNER JOIN specs fs ON fs.spec_id = d.from_spec_id
        INNER JOIN specs ts ON ts.spec_id = d.to_spec_id
        WHERE fs.project_id = $1`,
-    [context.projectId]
+    [context.projectId],
   );
   if (edgesResult.rows.length === 0) return [];
 
@@ -76,7 +73,7 @@ export async function computeStuck(
       .map((dep) => ({
         specId: dep,
         title: title.get(dep) ?? dep,
-        status: status.get(dep) ?? "unknown"
+        status: status.get(dep) ?? "unknown",
       }));
     if (blocking.length === 0) continue;
 
@@ -86,7 +83,7 @@ export async function computeStuck(
       blockedSpecId: specId,
       blockedSpecTitle: title.get(specId) ?? specId,
       blockingSpecs: blocking,
-      chainDepth
+      chainDepth,
     };
     const insightId = `insight_stuck_${specId}_${randomUUID()}`;
     const blockerNames = blocking.map((b) => b.title).join(", ");
@@ -101,16 +98,16 @@ export async function computeStuck(
       actions: [
         {
           label: "Open blocked spec",
-          toolCall: { tool: "tanren.read_run", args: { specId } }
+          toolCall: { tool: "tanren.read_run", args: { specId } },
         },
         {
           label: "Acknowledge",
-          toolCall: { tool: "tanren.acknowledge_insight", args: { insightId } }
-        }
+          toolCall: { tool: "tanren.acknowledge_insight", args: { insightId } },
+        },
       ],
       computedAt: now,
       acknowledgedAt: null,
-      acknowledgedBy: null
+      acknowledgedBy: null,
     });
   }
   return insights;
@@ -119,11 +116,7 @@ export async function computeStuck(
 // Count distinct unfinished specs reachable from `start` through dependency
 // edges, including `start` itself. Cycle-safe via a visited set; the
 // no-self-loop CHECK plus the visited guard keep this bounded.
-function countUnfinishedChain(
-  start: string,
-  deps: Map<string, string[]>,
-  status: Map<string, string>
-): number {
+function countUnfinishedChain(start: string, deps: Map<string, string[]>, status: Map<string, string>): number {
   const visited = new Set<string>();
   const stack = [start];
   let count = 0;

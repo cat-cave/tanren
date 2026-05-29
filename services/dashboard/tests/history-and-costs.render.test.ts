@@ -16,7 +16,13 @@ import type pg from "pg";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/main.js";
 
-const ORG = { id: "org_acme", kind: "github_org", login: "cat-cave", displayName: "Cat Cave", role: "org:admin" };
+const ORG = {
+  id: "org_acme",
+  kind: "github_org",
+  login: "cat-cave",
+  displayName: "Cat Cave",
+  role: "org:admin",
+};
 const PROJECTS = [
   {
     projectId: "project_easy",
@@ -24,8 +30,8 @@ const PROJECTS = [
     repoUrl: "https://github.com/cat-cave/tanren-fixture-easy",
     defaultBranch: "main",
     runnerImage: null,
-    allocator: "local_docker"
-  }
+    allocator: "local_docker",
+  },
 ];
 
 const RUNS = [
@@ -43,7 +49,7 @@ const RUNS = [
     specTitle: "add health endpoint",
     costTotalUsd: "12.34",
     lastEventAt: "2026-05-28T10:21:00.000Z",
-    needsReview: false
+    needsReview: false,
   },
   {
     runId: "run_b2",
@@ -59,48 +65,92 @@ const RUNS = [
     specTitle: "refactor auth",
     costTotalUsd: "3.20",
     lastEventAt: "2026-05-27T09:40:00.000Z",
-    needsReview: false
-  }
+    needsReview: false,
+  },
 ];
 
 // Per-run cost records spanning all THREE pricing models + all real cost bases.
 const COSTS: Record<string, unknown[]> = {
   run_a1: [
     {
-      id: 1, runId: "run_a1", taskId: "t1", projectId: "project_easy",
-      cli: "claude", provider: "anthropic", model: "opus-4.7",
-      inputTokens: 200000, cachedInputTokens: 0, cacheCreationTokens: 0,
-      outputTokens: 80000, reasoningOutputTokens: 0, totalTokens: 280000,
-      costUsd: "10.00", billingMode: "per_token", costBasis: "provider_pricing",
-      recordedAt: "2026-05-28T10:05:00.000Z"
+      id: 1,
+      runId: "run_a1",
+      taskId: "t1",
+      projectId: "project_easy",
+      cli: "claude",
+      provider: "anthropic",
+      model: "opus-4.7",
+      inputTokens: 200000,
+      cachedInputTokens: 0,
+      cacheCreationTokens: 0,
+      outputTokens: 80000,
+      reasoningOutputTokens: 0,
+      totalTokens: 280000,
+      costUsd: "10.00",
+      billingMode: "per_token",
+      costBasis: "provider_pricing",
+      recordedAt: "2026-05-28T10:05:00.000Z",
     },
     {
-      id: 2, runId: "run_a1", taskId: "t2", projectId: "project_easy",
-      cli: "codex", provider: "openai", model: "gpt-5.5",
-      inputTokens: 300000, cachedInputTokens: 0, cacheCreationTokens: 0,
-      outputTokens: 120000, reasoningOutputTokens: 0, totalTokens: 420000,
-      costUsd: null, billingMode: "subscription", costBasis: "unknown",
-      recordedAt: "2026-05-28T10:10:00.000Z"
-    }
+      id: 2,
+      runId: "run_a1",
+      taskId: "t2",
+      projectId: "project_easy",
+      cli: "codex",
+      provider: "openai",
+      model: "gpt-5.5",
+      inputTokens: 300000,
+      cachedInputTokens: 0,
+      cacheCreationTokens: 0,
+      outputTokens: 120000,
+      reasoningOutputTokens: 0,
+      totalTokens: 420000,
+      costUsd: null,
+      billingMode: "subscription",
+      costBasis: "unknown",
+      recordedAt: "2026-05-28T10:10:00.000Z",
+    },
   ],
   run_b2: [
     {
-      id: 3, runId: "run_b2", taskId: "t3", projectId: "project_easy",
-      cli: "opencode", provider: "qwen", model: "qwen-coder",
-      inputTokens: 150000, cachedInputTokens: 0, cacheCreationTokens: 0,
-      outputTokens: 60000, reasoningOutputTokens: 0, totalTokens: 210000,
-      costUsd: null, billingMode: "self_hosted", costBasis: "unknown",
-      recordedAt: "2026-05-27T09:10:00.000Z"
+      id: 3,
+      runId: "run_b2",
+      taskId: "t3",
+      projectId: "project_easy",
+      cli: "opencode",
+      provider: "qwen",
+      model: "qwen-coder",
+      inputTokens: 150000,
+      cachedInputTokens: 0,
+      cacheCreationTokens: 0,
+      outputTokens: 60000,
+      reasoningOutputTokens: 0,
+      totalTokens: 210000,
+      costUsd: null,
+      billingMode: "self_hosted",
+      costBasis: "unknown",
+      recordedAt: "2026-05-27T09:10:00.000Z",
     },
     {
-      id: 4, runId: "run_b2", taskId: "t4", projectId: "project_easy",
-      cli: "claude", provider: "anthropic", model: "sonnet-4.6",
-      inputTokens: 40000, cachedInputTokens: 0, cacheCreationTokens: 0,
-      outputTokens: 20000, reasoningOutputTokens: 0, totalTokens: 60000,
-      costUsd: "3.00", billingMode: "per_token", costBasis: "ccusage",
-      recordedAt: "2026-05-27T09:20:00.000Z"
-    }
-  ]
+      id: 4,
+      runId: "run_b2",
+      taskId: "t4",
+      projectId: "project_easy",
+      cli: "claude",
+      provider: "anthropic",
+      model: "sonnet-4.6",
+      inputTokens: 40000,
+      cachedInputTokens: 0,
+      cacheCreationTokens: 0,
+      outputTokens: 20000,
+      reasoningOutputTokens: 0,
+      totalTokens: 60000,
+      costUsd: "3.00",
+      billingMode: "per_token",
+      costBasis: "ccusage",
+      recordedAt: "2026-05-27T09:20:00.000Z",
+    },
+  ],
 };
 
 function stubPool(): pg.Pool {

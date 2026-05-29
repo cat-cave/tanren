@@ -21,9 +21,12 @@ export function buildOidcProviderFromEnv(): OidcProvider | undefined {
   const clientId = process.env["TANREN_OIDC_CLIENT_ID"];
   const clientSecret = process.env["TANREN_OIDC_CLIENT_SECRET"];
   if (
-    issuer === undefined || issuer === "" ||
-    clientId === undefined || clientId === "" ||
-    clientSecret === undefined || clientSecret === ""
+    issuer === undefined ||
+    issuer === "" ||
+    clientId === undefined ||
+    clientId === "" ||
+    clientSecret === undefined ||
+    clientSecret === ""
   ) {
     return undefined;
   }
@@ -39,14 +42,11 @@ export function buildOidcProviderFromEnv(): OidcProvider | undefined {
     subjectClaim: emptyToUndefined(process.env["TANREN_OIDC_SUBJECT_CLAIM"]) ?? preset.subjectClaim,
     loginClaim: emptyToUndefined(process.env["TANREN_OIDC_LOGIN_CLAIM"]) ?? preset.loginClaim,
     nameClaim: emptyToUndefined(process.env["TANREN_OIDC_NAME_CLAIM"]) ?? preset.nameClaim,
-    groupsClaim: emptyToUndefined(process.env["TANREN_OIDC_GROUPS_CLAIM"]) ?? preset.groupsClaim
+    groupsClaim: emptyToUndefined(process.env["TANREN_OIDC_GROUPS_CLAIM"]) ?? preset.groupsClaim,
   });
 }
 
-type PresetDefaults = Pick<
-  OidcProviderConfig,
-  "scopes" | "subjectClaim" | "loginClaim" | "nameClaim" | "groupsClaim"
->;
+type PresetDefaults = Pick<OidcProviderConfig, "scopes" | "subjectClaim" | "loginClaim" | "nameClaim" | "groupsClaim">;
 
 /**
  * Resolve the named preset to a partial config. Unknown/empty presets resolve

@@ -61,7 +61,7 @@ const DEV_COMPOSE_DEFAULTS: StackConfig = {
   ssh_key_path: "/tmp/tanren_runner_key",
   timeout_ms: 300_000,
   max_ci_polls: 18,
-  ci_poll_delay_ms: 10_000
+  ci_poll_delay_ms: 10_000,
 };
 
 // -- combined acceptance config -------------------------------------------
@@ -92,7 +92,7 @@ export async function loadAcceptanceConfig(): Promise<AcceptanceConfig> {
     github_base_branch: operator.github_base_branch ?? "main",
     ...stack,
     ssh_host_fingerprint,
-    source: operator.source
+    source: operator.source,
   } as AcceptanceConfig;
 }
 
@@ -112,14 +112,14 @@ async function loadOperatorConfig(): Promise<LoadedOperatorConfig> {
   if (fromEnv !== undefined) {
     process.stderr.write(
       "tanren acceptance: legacy TANREN_* env vars detected. Move credentials into tanren.acceptance.json " +
-        "(see tanren.acceptance.example.json). Env-var support will be removed in a future spec.\n"
+        "(see tanren.acceptance.example.json). Env-var support will be removed in a future spec.\n",
     );
     return { ...fromEnv, source: "env" };
   }
   throw new AcceptanceConfigError(
     `no acceptance config found. Checked:\n${candidatePaths.map((p) => `  - ${p}`).join("\n")}\n` +
       "Copy tanren.acceptance.example.json to tanren.acceptance.json and fill in your credentials. " +
-      "See docs/operator-guide/acceptance.md."
+      "See docs/operator-guide/acceptance.md.",
   );
 }
 
@@ -157,8 +157,7 @@ async function readOperatorConfigFile(path: string): Promise<OperatorConfig> {
   const missing = requiredKeys.filter((key) => typeof obj[key] !== "string" || (obj[key] as string).trim() === "");
   if (missing.length > 0) {
     throw new AcceptanceConfigError(
-      `${path} is missing required keys: ${missing.join(", ")}. ` +
-        "Compare against tanren.acceptance.example.json."
+      `${path} is missing required keys: ${missing.join(", ")}. Compare against tanren.acceptance.example.json.`,
     );
   }
   return {
@@ -168,7 +167,7 @@ async function readOperatorConfigFile(path: string): Promise<OperatorConfig> {
     github_base_branch:
       typeof obj.github_base_branch === "string" && obj.github_base_branch.trim() !== ""
         ? obj.github_base_branch.trim()
-        : undefined
+        : undefined,
   };
 }
 
@@ -183,7 +182,7 @@ function loadOperatorConfigFromEnv(): OperatorConfig | undefined {
     codex_auth_file: codex,
     github_token_file: github,
     github_repo_url: repo,
-    github_base_branch: process.env.TANREN_GITHUB_BASE_BRANCH
+    github_base_branch: process.env.TANREN_GITHUB_BASE_BRANCH,
   };
 }
 
@@ -202,7 +201,7 @@ function loadStackConfig(): StackConfig {
         : undefined,
     timeout_ms: numberFromEnv("TANREN_ACCEPTANCE_TIMEOUT_MS", DEV_COMPOSE_DEFAULTS.timeout_ms),
     max_ci_polls: numberFromEnv("TANREN_ACCEPTANCE_MAX_CI_POLLS", DEV_COMPOSE_DEFAULTS.max_ci_polls),
-    ci_poll_delay_ms: numberFromEnv("TANREN_ACCEPTANCE_CI_POLL_DELAY_MS", DEV_COMPOSE_DEFAULTS.ci_poll_delay_ms)
+    ci_poll_delay_ms: numberFromEnv("TANREN_ACCEPTANCE_CI_POLL_DELAY_MS", DEV_COMPOSE_DEFAULTS.ci_poll_delay_ms),
   };
 }
 
@@ -225,19 +224,19 @@ function numberFromEnv(name: string, fallback: number): number {
 async function discoverSshHostFingerprint(host: string, port: number): Promise<string> {
   const keyscan = spawnSync("ssh-keyscan", ["-p", String(port), "-t", "ed25519", host], {
     encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"]
+    stdio: ["ignore", "pipe", "pipe"],
   });
   if (keyscan.status !== 0 || keyscan.stdout.trim() === "") {
     const stderr = keyscan.stderr?.trim() ?? "";
     throw new AcceptanceConfigError(
       `ssh-keyscan ${host}:${port} failed (is the stack up? \`just up-dev\` or \`docker compose -f compose.dev.yml up -d\`). ` +
-        (stderr !== "" ? `stderr: ${stderr}` : "")
+        (stderr !== "" ? `stderr: ${stderr}` : ""),
     );
   }
   const keygen = spawnSync("ssh-keygen", ["-lf", "-", "-E", "sha256"], {
     encoding: "utf8",
     input: keyscan.stdout,
-    stdio: ["pipe", "pipe", "pipe"]
+    stdio: ["pipe", "pipe", "pipe"],
   });
   if (keygen.status !== 0) {
     throw new AcceptanceConfigError(`ssh-keygen failed to read keyscan output: ${keygen.stderr?.trim() ?? ""}`);

@@ -14,6 +14,6 @@ export async function executeWriteTask(input: {
   return await fakeWriter.runWriter({
     prompt: input.prompt,
     workspace: input.workspacePath,
-    timeoutMs: input.timeoutMs
+    timeoutMs: input.timeoutMs,
   });
 }

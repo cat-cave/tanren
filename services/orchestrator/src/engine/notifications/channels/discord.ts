@@ -28,7 +28,7 @@ const DISCORD_COLOR_BY_SEVERITY: Record<NotificationPayload["severity"], number>
   ok: 0x2eb67d,
   info: 0x1264a3,
   warn: 0xecb22e,
-  fail: 0xe01e5a
+  fail: 0xe01e5a,
 };
 
 export class DiscordChannel implements NotificationChannel {
@@ -48,13 +48,11 @@ export class DiscordChannel implements NotificationChannel {
     const response = await this.fetchImpl(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body
+      body,
     });
     if (!response.ok) {
       const detail = await safeReadText(response);
-      throw new Error(
-        `discord publish failed: ${response.status} ${response.statusText} ${detail}`.trim()
-      );
+      throw new Error(`discord publish failed: ${response.status} ${response.statusText} ${detail}`.trim());
     }
   }
 }
@@ -75,7 +73,7 @@ interface DiscordMessage {
 function buildDiscordMessage(payload: NotificationPayload): DiscordMessage {
   const fields: DiscordEmbed["fields"] = [
     { name: "event", value: payload.eventName, inline: true },
-    { name: "severity", value: payload.severity, inline: true }
+    { name: "severity", value: payload.severity, inline: true },
   ];
   if (payload.tags !== undefined && payload.tags.length > 0) {
     fields.push({ name: "tags", value: payload.tags.join(", "), inline: false });
@@ -85,7 +83,7 @@ function buildDiscordMessage(payload: NotificationPayload): DiscordMessage {
     // Discord embed descriptions cap at 4096 chars.
     description: truncate(payload.body, 4096),
     color: DISCORD_COLOR_BY_SEVERITY[payload.severity],
-    fields
+    fields,
   };
   if (payload.url !== undefined) {
     embed.url = payload.url;

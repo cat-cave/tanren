@@ -8,11 +8,7 @@ import type pg from "pg";
 import { z } from "zod";
 import type { ActorContext } from "../../auth/schemas.js";
 import { migrateProjectConfig } from "../../engine/config/projectConfig.js";
-import {
-  createProject,
-  ProjectAccessDeniedError,
-  ProjectNotFoundError
-} from "../../engine/workflow/projectSpec.js";
+import { createProject, ProjectAccessDeniedError, ProjectNotFoundError } from "../../engine/workflow/projectSpec.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg } from "../orgs/index.js";
 
@@ -26,11 +22,11 @@ const ProjectCreateSchema = z.object({
   defaultBranch: z.string().min(1).optional(),
   runnerImage: z.string().min(1).optional(),
   allocator: z.string().min(1).optional(),
-  config: z.record(z.string(), z.unknown()).optional()
+  config: z.record(z.string(), z.unknown()).optional(),
 });
 
 const ProjectPatchSchema = z.object({
-  config: z.record(z.string(), z.unknown())
+  config: z.record(z.string(), z.unknown()),
 });
 
 export function createProjectRoutes(options: ProjectRoutesOptions) {
@@ -47,7 +43,7 @@ export function createProjectRoutes(options: ProjectRoutesOptions) {
          FROM projects
         WHERE org_id = $1
         ORDER BY name`,
-      [orgId]
+      [orgId],
     );
     return c.json({ projects: rows.rows.map(toProjectContract) });
   });
@@ -107,33 +103,28 @@ export function createProjectRoutes(options: ProjectRoutesOptions) {
     }
     const existing = await options.pool.query<{ org_id: string | null }>(
       "SELECT org_id FROM projects WHERE project_id = $1",
-      [projectId]
+      [projectId],
     );
     const projectOrg = existing.rows[0]?.org_id ?? null;
     if (existing.rowCount === 0 || (projectOrg !== null && projectOrg !== orgId)) {
       return c.json({ error: "project_not_found" }, 404);
     }
-    await options.pool.query(
-      "UPDATE projects SET config = $1::jsonb WHERE project_id = $2",
-      [JSON.stringify(nextConfig), projectId]
-    );
+    await options.pool.query("UPDATE projects SET config = $1::jsonb WHERE project_id = $2", [
+      JSON.stringify(nextConfig),
+      projectId,
+    ]);
     return c.json({ projectId, config: nextConfig });
   });
 
   return app;
 }
 
-export async function readProject(
-  pool: pg.Pool,
-  orgId: string,
-  projectId: string,
-  _actor: ActorContext
-) {
+export async function readProject(pool: pg.Pool, orgId: string, projectId: string, _actor: ActorContext) {
   const result = await pool.query<ProjectRow & { org_id: string | null }>(
     `SELECT project_id, name, repo_url, default_branch, runner_image, allocator, config, org_id
        FROM projects
       WHERE project_id = $1`,
-    [projectId]
+    [projectId],
   );
   const row = result.rows[0];
   if (row === undefined) {
@@ -153,7 +144,7 @@ function toProjectContract(row: ProjectRow) {
     defaultBranch: row.default_branch,
     runnerImage: row.runner_image,
     allocator: row.allocator,
-    config: migrateProjectConfig(row.config)
+    config: migrateProjectConfig(row.config),
   };
 }
 

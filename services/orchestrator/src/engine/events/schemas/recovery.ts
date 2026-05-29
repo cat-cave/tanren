@@ -13,7 +13,7 @@ export const RecoveryAction = z.enum([
   "revise_spec",
   "replan_with_steering",
   "rollback_to_commit",
-  "open_inspection_thread"
+  "open_inspection_thread",
 ]);
 export type RecoveryAction = z.infer<typeof RecoveryAction>;
 
@@ -25,7 +25,7 @@ export const RecoveryReviseRoutedPayload = z
     runId: z.string(),
     specId: z.string(),
     action: z.literal("revise_spec"),
-    editHref: z.string()
+    editHref: z.string(),
   })
   .strict();
 
@@ -38,7 +38,7 @@ export const RecoveryReplanQueuedPayload = z
     action: z.literal("replan_with_steering"),
     steeringNote: z.string(),
     replanRunId: z.string(),
-    plannerTaskId: z.string()
+    plannerTaskId: z.string(),
   })
   .strict();
 
@@ -52,7 +52,7 @@ export const RecoveryRollbackQueuedPayload = z
     action: z.literal("rollback_to_commit"),
     commitSha: z.string(),
     confirmed: z.literal(true),
-    replanRunId: z.string()
+    replanRunId: z.string(),
   })
   .strict();
 
@@ -64,6 +64,6 @@ export const RecoveryInspectionOpenedPayload = z
     runId: z.string(),
     specId: z.string(),
     action: z.literal("open_inspection_thread"),
-    threadId: z.string()
+    threadId: z.string(),
   })
   .strict();

@@ -19,7 +19,7 @@ const admin: ActorContext = {
   orgId: "org_acme",
   projectId: null,
   scopes: ["org:member", "org:admin"],
-  source: "session"
+  source: "session",
 };
 
 function buildHarness(github: ConfigGateGitHub) {
@@ -30,9 +30,15 @@ function buildHarness(github: ConfigGateGitHub) {
   app.use(
     "*",
     createAuthMiddleware({
-      store: { async findApiTokenByRaw() {}, async loadSession() {}, async resolveActorContext() { return admin; } } as never,
-      localDevActor: admin
-    })
+      store: {
+        async findApiTokenByRaw() {},
+        async loadSession() {},
+        async resolveActorContext() {
+          return admin;
+        },
+      } as never,
+      localDevActor: admin,
+    }),
   );
   app.route("/orgs", createOrgRoutes({ pool: pool.asPgPool(), configGateGithub }));
   return { app, pool, openConfigPr };
@@ -41,8 +47,12 @@ function buildHarness(github: ConfigGateGitHub) {
 function fakeGithub(): ConfigGateGitHub {
   return {
     async openConfigPr() {
-      return { number: 7, url: "https://github.com/cat-cave/tanren-config/pull/7", branch: "forge/route-x" };
-    }
+      return {
+        number: 7,
+        url: "https://github.com/cat-cave/tanren-config/pull/7",
+        branch: "forge/route-x",
+      };
+    },
   };
 }
 
@@ -52,7 +62,9 @@ function gatedBucketBPatch(): unknown {
     version: 1,
     auditGateEnabled: true,
     auditGate: { repo: "cat-cave/tanren-config" },
-    routing: { audit: { chain: [{ cli: "claude", model: "opus-4.7", authRef: "credential/claude" }] } }
+    routing: {
+      audit: { chain: [{ cli: "claude", model: "opus-4.7", authRef: "credential/claude" }] },
+    },
   };
 }
 
@@ -60,7 +72,7 @@ function seedGateOn(pool: RoutesPool): void {
   pool.seedOrg({
     id: "org_acme",
     login: "acme",
-    config: { version: 1, auditGateEnabled: true, auditGate: { repo: "cat-cave/tanren-config" } }
+    config: { version: 1, auditGateEnabled: true, auditGate: { repo: "cat-cave/tanren-config" } },
   });
 }
 
@@ -73,7 +85,7 @@ describe("audit-gate org-config PATCH route", () => {
     const response = await app.request("/orgs/org_acme", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ config: gatedBucketBPatch() })
+      body: JSON.stringify({ config: gatedBucketBPatch() }),
     });
 
     expect(response.status).toBe(202);
@@ -89,12 +101,22 @@ describe("audit-gate org-config PATCH route", () => {
   it("gate ON + toggle-only change → applies directly, no PR", async () => {
     const github = fakeGithub();
     const { app, pool, openConfigPr } = buildHarness(github);
-    pool.seedOrg({ id: "org_acme", login: "acme", config: { version: 1, auditGateEnabled: false } });
+    pool.seedOrg({
+      id: "org_acme",
+      login: "acme",
+      config: { version: 1, auditGateEnabled: false },
+    });
 
     const response = await app.request("/orgs/org_acme", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ config: { version: 1, auditGateEnabled: true, auditGate: { repo: "cat-cave/tanren-config" } } })
+      body: JSON.stringify({
+        config: {
+          version: 1,
+          auditGateEnabled: true,
+          auditGate: { repo: "cat-cave/tanren-config" },
+        },
+      }),
     });
 
     expect(response.status).toBe(200);
@@ -106,14 +128,23 @@ describe("audit-gate org-config PATCH route", () => {
   it("gate OFF → applies a Bucket-B write directly", async () => {
     const github = fakeGithub();
     const { app, pool, openConfigPr } = buildHarness(github);
-    pool.seedOrg({ id: "org_acme", login: "acme", config: { version: 1, auditGateEnabled: false } });
+    pool.seedOrg({
+      id: "org_acme",
+      login: "acme",
+      config: { version: 1, auditGateEnabled: false },
+    });
 
     const response = await app.request("/orgs/org_acme", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        config: { version: 1, routing: { audit: { chain: [{ cli: "claude", model: "opus-4.7", authRef: "credential/claude" }] } } }
-      })
+        config: {
+          version: 1,
+          routing: {
+            audit: { chain: [{ cli: "claude", model: "opus-4.7", authRef: "credential/claude" }] },
+          },
+        },
+      }),
     });
 
     expect(response.status).toBe(200);

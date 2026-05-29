@@ -78,7 +78,7 @@ export interface ProviderRate {
 const providerRateTable: Record<string, ProviderRate> = {
   openai: { inputCostPerMillion: 2.5, outputCostPerMillion: 10, cachedInputCostPerMillion: 1.25 },
   anthropic: { inputCostPerMillion: 3, outputCostPerMillion: 15, cachedInputCostPerMillion: 0.3 },
-  openrouter: { inputCostPerMillion: 5, outputCostPerMillion: 15, cachedInputCostPerMillion: null }
+  openrouter: { inputCostPerMillion: 5, outputCostPerMillion: 15, cachedInputCostPerMillion: null },
 };
 
 export function providerRate(provider: string): ProviderRate | undefined {
@@ -141,9 +141,17 @@ export function resolveCostSource(input: AttributionInput): CostSource {
     typeof input.ccusageCostUsd === "number" && Number.isFinite(input.ccusageCostUsd) && input.ccusageCostUsd > 0
       ? input.ccusageCostUsd
       : null;
-  const billingMode: BillingMode = classification.billingMode === "unknown" ? "self_hosted" : classification.billingMode;
+  const billingMode: BillingMode =
+    classification.billingMode === "unknown" ? "self_hosted" : classification.billingMode;
   if (ccusageCostUsd !== null) {
-    return { billingMode, costBasis: "ccusage", provider: classification.provider, rate: null, ccusageCostUsd, rawUsage: input.rawUsage };
+    return {
+      billingMode,
+      costBasis: "ccusage",
+      provider: classification.provider,
+      rate: null,
+      ccusageCostUsd,
+      rawUsage: input.rawUsage,
+    };
   }
   if (classification.billingMode === "per_token") {
     const rate = providerRate(classification.provider) ?? null;
@@ -154,7 +162,7 @@ export function resolveCostSource(input: AttributionInput): CostSource {
       provider: classification.provider,
       rate,
       ccusageCostUsd: null,
-      rawUsage: input.rawUsage
+      rawUsage: input.rawUsage,
     };
   }
   // subscription, self_hosted, or unknown → no reliable per-call dollar basis.
@@ -164,7 +172,7 @@ export function resolveCostSource(input: AttributionInput): CostSource {
     provider: classification.provider,
     rate: null,
     ccusageCostUsd: null,
-    rawUsage: input.rawUsage
+    rawUsage: input.rawUsage,
   };
 }
 

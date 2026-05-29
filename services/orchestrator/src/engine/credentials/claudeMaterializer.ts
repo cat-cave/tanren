@@ -33,7 +33,11 @@ export async function materializeClaudeAuthBundle(input: MaterializeClaudeAuthIn
   const bundle = validateClaudeAuthBundle(secret.value);
   const configDir = claudeConfigDirForRun(input.runId, input.baseDir);
   const command = buildClaudeAuthMaterializationCommand(configDir);
-  const result = await input.ssh.run(input.target, { command, stdin: bundle.authJson, timeoutMs: input.timeoutMs ?? 30_000 });
+  const result = await input.ssh.run(input.target, {
+    command,
+    stdin: bundle.authJson,
+    timeoutMs: input.timeoutMs ?? 30_000,
+  });
   if (result.failure !== undefined) {
     throw new Error(`Claude credential materialization failed: ${failureMessage(result.failure)}`);
   }
@@ -60,6 +64,6 @@ export function buildClaudeAuthMaterializationCommand(configDir: string): string
     "umask 077",
     `mkdir -p ${quoteSshShellArg(configDir)}`,
     `cat > ${quoteSshShellArg(credentialsPath)}`,
-    `chmod 600 ${quoteSshShellArg(credentialsPath)}`
+    `chmod 600 ${quoteSshShellArg(credentialsPath)}`,
   ].join(" && ");
 }

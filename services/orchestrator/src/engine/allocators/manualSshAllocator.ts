@@ -1,9 +1,4 @@
-import type {
-  AllocationRequest,
-  Allocator,
-  ReleaseReason,
-  RunnerAllocation
-} from "../contracts/allocator.js";
+import type { AllocationRequest, Allocator, ReleaseReason, RunnerAllocation } from "../contracts/allocator.js";
 import type { RunnerStore } from "./runnerStore.js";
 
 const allocatorName = "manual-ssh";
@@ -61,9 +56,7 @@ export class ManualSshAllocator implements Allocator {
   async allocate(request: AllocationRequest): Promise<RunnerAllocation> {
     const host = this.hosts.find((candidate) => !this.busy.has(candidate.id));
     if (host === undefined) {
-      throw new Error(
-        `manual-ssh pool exhausted: all ${this.hosts.length} hosts are leased (run ${request.runId})`
-      );
+      throw new Error(`manual-ssh pool exhausted: all ${this.hosts.length} hosts are leased (run ${request.runId})`);
     }
 
     const port = host.port ?? 22;
@@ -82,8 +75,8 @@ export class ManualSshAllocator implements Allocator {
         port,
         username,
         hostKeyFingerprint: host.hostKeyFingerprint,
-        identitySecretRef
-      }
+        identitySecretRef,
+      },
     };
 
     try {
@@ -96,7 +89,7 @@ export class ManualSshAllocator implements Allocator {
         sshPort: port,
         hostKeyFingerprint: host.hostKeyFingerprint,
         imageSha: allocation.imageSha,
-        containerId: host.id
+        containerId: host.id,
       });
     } catch (error) {
       // Don't leak the lease if the mirror write fails.

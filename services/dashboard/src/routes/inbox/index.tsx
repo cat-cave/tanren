@@ -27,7 +27,7 @@ const EMPTY: InboxSnapshot = { sources: [], candidates: [] };
 function clientFor(c: Context, deps: ShellDeps): InboxClient {
   return new InboxClient({
     orchestratorUrl: deps.orchestratorUrl,
-    cookieHeader: c.req.header("cookie")
+    cookieHeader: c.req.header("cookie"),
   });
 }
 
@@ -39,11 +39,16 @@ export function mountInboxScreens(app: Hono, deps: ShellDeps): void {
         c,
         ctx,
         { title: "tanren · candidate inbox" },
-        <InboxBody orgId="" snapshot={EMPTY} error="link an org to ingest issue sources." />
+        <InboxBody orgId="" snapshot={EMPTY} error="link an org to ingest issue sources." />,
       );
     }
     const snapshot = (await clientFor(c, deps).snapshot(ctx.org.id)) ?? EMPTY;
-    return renderShell(c, ctx, { title: "tanren · candidate inbox" }, <InboxBody orgId={ctx.org.id} snapshot={snapshot} />);
+    return renderShell(
+      c,
+      ctx,
+      { title: "tanren · candidate inbox" },
+      <InboxBody orgId={ctx.org.id} snapshot={snapshot} />,
+    );
   });
 
   for (const verb of ["fold", "dismiss", "close-duplicate"] as const) {

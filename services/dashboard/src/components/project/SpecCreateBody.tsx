@@ -11,12 +11,7 @@
  * the project's repo (rendered read-only).
  */
 
-import type {
-  BehaviorSummary,
-  MilestoneSummary,
-  ProjectSummary,
-  SpecSummary
-} from "../../api/types.js";
+import type { BehaviorSummary, MilestoneSummary, ProjectSummary, SpecSummary } from "../../api/types.js";
 import { ScreenStyles } from "./screenStyles.js";
 import { PageHead } from "./shared.js";
 
@@ -38,9 +33,8 @@ export interface SpecCreateBodyProps {
 
 export function SpecCreateBody(props: SpecCreateBodyProps) {
   const values = props.values ?? {};
-  const acRows = values.acceptanceCriteria && values.acceptanceCriteria.length > 0
-    ? values.acceptanceCriteria
-    : ["", "", ""];
+  const acRows =
+    values.acceptanceCriteria && values.acceptanceCriteria.length > 0 ? values.acceptanceCriteria : ["", "", ""];
   return (
     <div class="p2b">
       <ScreenStyles />
@@ -73,7 +67,14 @@ export function SpecCreateBody(props: SpecCreateBodyProps) {
                 <label for="title">
                   title <span class="req">*</span>
                 </label>
-                <input type="text" id="title" name="title" required value={values.title ?? ""} placeholder="e.g. supplier scorecard export" />
+                <input
+                  type="text"
+                  id="title"
+                  name="title"
+                  required
+                  value={values.title ?? ""}
+                  placeholder="e.g. supplier scorecard export"
+                />
               </div>
 
               <div class="form-field">
@@ -135,7 +136,9 @@ export function SpecCreateBody(props: SpecCreateBodyProps) {
                         <input type="checkbox" name="behaviorIds" value={behavior.id} />
                         <span>
                           {behavior.title}
-                          {behavior.description !== null && behavior.description !== "" ? ` · ${behavior.description}` : ""}
+                          {behavior.description !== null && behavior.description !== ""
+                            ? ` · ${behavior.description}`
+                            : ""}
                         </span>
                       </label>
                     ))}
@@ -217,9 +220,10 @@ export function SpecListBody(props: {
             ) : (
               props.specs.map((spec) => {
                 const runId = props.runBySpec[spec.specId];
-                const href = runId !== undefined
-                  ? `/projects/${props.project.projectId}/runs/${runId}`
-                  : `/projects/${props.project.projectId}/specs/new`;
+                const href =
+                  runId !== undefined
+                    ? `/projects/${props.project.projectId}/runs/${runId}`
+                    : `/projects/${props.project.projectId}/specs/new`;
                 const showError = props.error !== undefined && props.errorSpecId === spec.specId;
                 return (
                   <>
@@ -229,10 +233,14 @@ export function SpecListBody(props: {
                         <span class={`status st-${spec.status}`}>{spec.status}</span>
                         <div>
                           <div class="t">{spec.title}</div>
-                          <div class="d">{spec.acceptanceCriteria.length} criteria · {spec.dependsOn.length} deps</div>
+                          <div class="d">
+                            {spec.acceptanceCriteria.length} criteria · {spec.dependsOn.length} deps
+                          </div>
                         </div>
                         <span class="d">{runId !== undefined ? "run ↗" : "no runs"}</span>
-                        <span class="arrow" style="color:var(--ember-08)">↗</span>
+                        <span class="arrow" style="color:var(--ember-08)">
+                          ↗
+                        </span>
                       </a>
                       <form
                         class="run-trigger"

@@ -17,7 +17,7 @@ import {
   makePlanner,
   makeWriter,
   passingAudit,
-  passingCheck
+  passingCheck,
 } from "./helpers/plannerLoopHelpers.js";
 
 describe("subtask loop — positive path", () => {
@@ -61,13 +61,13 @@ describe("subtask loop — positive path", () => {
           buildPlan([
             { title: "T1", intent: "Touch A", behaviorIds: ["B1"] },
             { title: "T2", intent: "Touch B", behaviorIds: ["B2"] },
-            { title: "T3", intent: "Touch C", behaviorIds: ["B3"] }
-          ])
+            { title: "T3", intent: "Touch C", behaviorIds: ["B3"] },
+          ]),
         ]),
         writer: makeWriter(["diff a\n", "diff b\n", "diff c\n"]),
         checker: makeChecker([passingCheck, passingCheck, passingCheck]),
-        auditor: makeAuditor([passingAudit])
-      }
+        auditor: makeAuditor([passingAudit]),
+      },
     });
     const outcome = await runSubtaskLoop(input);
     expect(outcome.kind).toBe("passed");
@@ -92,8 +92,8 @@ describe("subtask loop — checker rejection loop", () => {
         planner,
         writer: makeWriter(["diff first attempt\n", "diff second attempt\n"]),
         checker: makeChecker([failingCheck, passingCheck]),
-        auditor: makeAuditor([passingAudit])
-      }
+        auditor: makeAuditor([passingAudit]),
+      },
     });
     const outcome = await runSubtaskLoop(input);
     expect(outcome.kind).toBe("passed");
@@ -101,21 +101,24 @@ describe("subtask loop — checker rejection loop", () => {
     expect(outcome.plannerRerunCount).toBe(1);
 
     const rejected = events.events.find((event) => event.eventType === "checker.rejected");
-    expect(rejected?.payload).toMatchObject({ reason: failingCheck.reasoning, behaviorIdsFailed: ["B1"] });
+    expect(rejected?.payload).toMatchObject({
+      reason: failingCheck.reasoning,
+      behaviorIdsFailed: ["B1"],
+    });
     const rerequested = events.events.find((event) => event.eventType === "planner.rerequested");
     expect(rerequested?.payload).toMatchObject({
       producer: "checker",
       rejectionReason: failingCheck.reasoning,
       plannerRerunCount: 1,
-      maxPlannerRerunsPerSpec: 3
+      maxPlannerRerunsPerSpec: 3,
     });
 
     expect(planner.calls).toHaveLength(2);
     expect(planner.calls[1]!.prompt).toContain("Prior rejections");
     expect(planner.calls[1]!.prompt).toContain(failingCheck.reasoning);
 
-    const plannerCosts = pool.costInserts.filter((insert) =>
-      pool.tasks.find((task) => task.taskId === insert.taskId)?.kind === "plan"
+    const plannerCosts = pool.costInserts.filter(
+      (insert) => pool.tasks.find((task) => task.taskId === insert.taskId)?.kind === "plan",
     );
     expect(plannerCosts).toHaveLength(2);
     const costResolved = events.events.filter((event) => event.eventType === "cost.resolved");
@@ -127,15 +130,15 @@ describe("subtask loop — auditor rejection loop", () => {
   it("loops back to the planner when the auditor recommends loop_to_planner", async () => {
     const planner = makePlanner([
       buildPlan([{ title: "T1", intent: "first attempt", behaviorIds: ["B1"] }]),
-      buildPlan([{ title: "T1b", intent: "second attempt", behaviorIds: ["B1", "B2"] }])
+      buildPlan([{ title: "T1b", intent: "second attempt", behaviorIds: ["B1", "B2"] }]),
     ]);
     const { input, events } = defaultLoopInput({
       adapters: {
         planner,
         writer: makeWriter(["diff a\n", "diff b\n"]),
         checker: makeChecker([passingCheck, passingCheck]),
-        auditor: makeAuditor([loopAudit, passingAudit])
-      }
+        auditor: makeAuditor([loopAudit, passingAudit]),
+      },
     });
     const outcome = await runSubtaskLoop(input);
     expect(outcome.kind).toBe("passed");
@@ -143,7 +146,10 @@ describe("subtask loop — auditor rejection loop", () => {
     expect(outcome.plannerRerunCount).toBe(1);
 
     const rejected = events.events.find((event) => event.eventType === "auditor.rejected");
-    expect(rejected?.payload).toMatchObject({ recommendedAction: "loop_to_planner", reason: loopAudit.reasoning });
+    expect(rejected?.payload).toMatchObject({
+      recommendedAction: "loop_to_planner",
+      reason: loopAudit.reasoning,
+    });
     const rerequested = events.events.find((event) => event.eventType === "planner.rerequested");
     expect(rerequested?.payload).toMatchObject({ producer: "auditor", plannerRerunCount: 1 });
 
@@ -158,8 +164,8 @@ describe("subtask loop — auditor rejection loop", () => {
         planner: makePlanner([buildPlan([{ title: "T1", intent: "doomed", behaviorIds: ["B1"] }])]),
         writer: makeWriter(["diff a\n"]),
         checker: makeChecker([passingCheck]),
-        auditor: makeAuditor([haltAudit])
-      }
+        auditor: makeAuditor([haltAudit]),
+      },
     });
     const outcome = await runSubtaskLoop(input);
     expect(outcome.kind).toBe("halted");
@@ -179,17 +185,17 @@ describe("subtask loop — budget exhaustion", () => {
         planner: makePlanner([
           buildPlan([{ title: "T1", intent: "first", behaviorIds: ["B1"] }]),
           buildPlan([{ title: "T2", intent: "second", behaviorIds: ["B1"] }]),
-          buildPlan([{ title: "T3", intent: "third", behaviorIds: ["B1"] }])
+          buildPlan([{ title: "T3", intent: "third", behaviorIds: ["B1"] }]),
         ]),
         writer: makeWriter(["diff 1\n", "diff 2\n", "diff 3\n"]),
         checker: makeChecker([failingCheck, failingCheck, failingCheck]),
-        auditor: makeAuditor([passingAudit])
+        auditor: makeAuditor([passingAudit]),
       },
       escapeHatches: {
         maxPlannerRerunsPerSpec: 2,
         maxWriterIterPerSubtask: 5,
-        maxRetriesPerTransientFailure: 3
-      }
+        maxRetriesPerTransientFailure: 3,
+      },
     });
     const outcome = await runSubtaskLoop(input);
     expect(outcome.kind).toBe("retry_budget_exhausted");
@@ -216,7 +222,7 @@ describe("planner prompt + verdict decisions (pure)", () => {
         specDescription: "do thing",
         acceptanceCriteria: ["criterion one"],
         behaviorIds: ["B1"],
-        behaviorContext: [{ id: "B1", title: "B1 title", description: "B1 desc" }]
+        behaviorContext: [{ id: "B1", title: "B1 title", description: "B1 desc" }],
       },
       timeoutMs: 1_000,
       rejectionHistory: [
@@ -225,10 +231,16 @@ describe("planner prompt + verdict decisions (pure)", () => {
           rejectionReason: "missing file",
           behaviorIdsFailed: ["B1"],
           previousSubtasks: [
-            { index: 0, title: "old", intent: "old intent", behaviorIds: ["B1"], estimatedTokens: null }
-          ]
-        }
-      ]
+            {
+              index: 0,
+              title: "old",
+              intent: "old intent",
+              behaviorIds: ["B1"],
+              estimatedTokens: null,
+            },
+          ],
+        },
+      ],
     });
     expect(prompt).toContain("ABC");
     expect(prompt).toContain("criterion one");
@@ -243,7 +255,7 @@ describe("planner prompt + verdict decisions (pure)", () => {
     expect(decideCheckerOutcome(failingCheck)).toEqual({
       kind: "reject",
       reason: failingCheck.reasoning,
-      behaviorIdsFailed: failingCheck.behaviorIdsFailed
+      behaviorIdsFailed: failingCheck.behaviorIdsFailed,
     });
   });
 
@@ -261,9 +273,9 @@ describe("planner prompt + verdict decisions (pure)", () => {
         title: "T1",
         intent: "wire the behavior",
         behaviorIds: ["B1"],
-        estimatedTokens: null
+        estimatedTokens: null,
       },
-      writerDiff: "diff --git a/x b/x\n"
+      writerDiff: "diff --git a/x b/x\n",
     });
     // Intent-only framing + explicit criteria are present.
     expect(prompt).toContain("intent");
@@ -288,12 +300,12 @@ describe("planner prompt + verdict decisions (pure)", () => {
       passed: false,
       reasoning: "AC2 intent not satisfied: behavior B1 was never wired.",
       behaviorIdsPassed: [],
-      behaviorIdsFailed: ["B1"]
+      behaviorIdsFailed: ["B1"],
     };
     expect(decideCheckerOutcome(unmet)).toEqual({
       kind: "reject",
       reason: unmet.reasoning,
-      behaviorIdsFailed: ["B1"]
+      behaviorIdsFailed: ["B1"],
     });
   });
 
@@ -304,14 +316,14 @@ describe("planner prompt + verdict decisions (pure)", () => {
       kind: "reject",
       action: "loop_to_planner",
       reason: loopAudit.reasoning,
-      outstandingBehaviorIds: loopAudit.outstandingBehaviorIds
+      outstandingBehaviorIds: loopAudit.outstandingBehaviorIds,
     });
     const halted = decideAuditorOutcome(haltAudit);
     expect(halted).toEqual({
       kind: "reject",
       action: "halt",
       reason: haltAudit.reasoning,
-      outstandingBehaviorIds: haltAudit.outstandingBehaviorIds
+      outstandingBehaviorIds: haltAudit.outstandingBehaviorIds,
     });
   });
 });

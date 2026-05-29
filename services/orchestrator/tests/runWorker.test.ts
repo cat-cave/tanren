@@ -28,7 +28,7 @@ import {
   makePlanner,
   makeWriter,
   passingAudit,
-  passingCheck
+  passingCheck,
 } from "./helpers/plannerLoopHelpers.js";
 import { WorkerPool } from "./helpers/workerPool.js";
 
@@ -37,7 +37,7 @@ const target: SshTarget = {
   port: 22,
   username: "tanren",
   hostKeyFingerprint: "SHA256:runner-host",
-  identitySecretRef: "runner/test/identity"
+  identitySecretRef: "runner/test/identity",
 };
 
 const codexCredentialRef = "credential/codex/dev";
@@ -47,23 +47,38 @@ function healthyWindow(): WindowObservation {
   return {
     usage: {
       provider: "openai",
-      windows: [{ slot: "primary", usedPercent: 5, resetsAt: "2026-06-01T00:00:00Z", windowMinutes: 300, resetDescription: "soon" }],
+      windows: [
+        {
+          slot: "primary",
+          usedPercent: 5,
+          resetsAt: "2026-06-01T00:00:00Z",
+          windowMinutes: 300,
+          resetDescription: "soon",
+        },
+      ],
       creditsRemaining: null,
       accountEmail: null,
       source: "codex-cli",
-      capturedAt: "2026-05-28T00:00:00Z"
+      capturedAt: "2026-05-28T00:00:00Z",
     },
-    pressure: null
+    pressure: null,
   };
 }
 
 function accounting(): CcusageAccounting {
   return {
     cli: "codex",
-    totals: { inputTokens: 8, cachedInputTokens: 0, cacheCreationTokens: 0, outputTokens: 4, reasoningOutputTokens: 0, totalTokens: 12 },
+    totals: {
+      inputTokens: 8,
+      cachedInputTokens: 0,
+      cacheCreationTokens: 0,
+      outputTokens: 4,
+      reasoningOutputTokens: 0,
+      totalTokens: 12,
+    },
     costUsd: 0.25,
     perModel: [],
-    capturedAt: "2026-05-28T00:00:00Z"
+    capturedAt: "2026-05-28T00:00:00Z",
   };
 }
 
@@ -74,16 +89,18 @@ function fakeProbe(): UsageProbe {
     },
     async observeAccounting() {
       return accounting();
-    }
+    },
   };
 }
 
 function passingAdapters() {
   return {
-    planner: makePlanner([buildPlan([{ title: "T1", intent: "implement it", behaviorIds: [] }])]) as AnswererAdapter<PlanAnswer>,
+    planner: makePlanner([
+      buildPlan([{ title: "T1", intent: "implement it", behaviorIds: [] }]),
+    ]) as AnswererAdapter<PlanAnswer>,
     writer: makeWriter(["diff\n"]),
     checker: makeChecker([passingCheck]) as AnswererAdapter<CheckAnswer>,
-    auditor: makeAuditor([passingAudit]) as AnswererAdapter<AuditAnswer>
+    auditor: makeAuditor([passingAudit]) as AnswererAdapter<AuditAnswer>,
   };
 }
 
@@ -104,12 +121,21 @@ function fakeWorkflowRunner(github: GitHubHttpClient) {
       // dequeue→execute seam runs end-to-end without real GitHub review/merge.
       reviewProbe: {
         markReady: async () => undefined,
-        fetchVerdict: async () => ({ verdict: "approved" as const, latest: { state: "approved" as const, reviewer: "reviewer-bot" } })
+        fetchVerdict: async () => ({
+          verdict: "approved" as const,
+          latest: { state: "approved" as const, reviewer: "reviewer-bot" },
+        }),
       },
       mergeProbe: {
         applyQueueLabel: async () => undefined,
-        merge: async () => ({ merged: true, mergeSha: "merge-sha", conflict: false, status: 200, message: "merged" })
-      }
+        merge: async () => ({
+          merged: true,
+          mergeSha: "merge-sha",
+          conflict: false,
+          status: 200,
+          message: "merged",
+        }),
+      },
     });
 }
 
@@ -121,15 +147,18 @@ async function setupSeededRun() {
     name: "worker-test",
     repoUrl: "https://github.com/cat-cave/tanren-fixture-easy",
     defaultBranch: "main",
-    config: { version: 1, credentials: { codexCredentialRef, githubCredentialRef } }
+    config: { version: 1, credentials: { codexCredentialRef, githubCredentialRef } },
   });
   const spec = await createSpec(pool.asPgPool(), {
     projectId: project.projectId,
     title: "Add a marker file",
     description: "Create the marker.",
-    acceptanceCriteria: ["marker exists"]
+    acceptanceCriteria: ["marker exists"],
   });
-  const run = await createQueuedRunFromSpec(pool.asPgPool(), { specId: spec.specId, branch: "tanren/worker-test" });
+  const run = await createQueuedRunFromSpec(pool.asPgPool(), {
+    specId: spec.specId,
+    branch: "tanren/worker-test",
+  });
   return { pool, secrets, run };
 }
 
@@ -142,7 +171,7 @@ function deps(pool: WorkerPool, secrets: FakeSecretStore, jobQueue: FakeJobQueue
     secrets,
     githubHttp: github,
     identitySecretRef: "runner/test/identity",
-    runWorkflow: fakeWorkflowRunner(github)
+    runWorkflow: fakeWorkflowRunner(github),
   };
 }
 
@@ -150,7 +179,12 @@ describe("run worker (dequeue→execute seam)", () => {
   it("claims the queued plan job, runs the workflow, completes the job, and lands a terminal run", async () => {
     const { pool, secrets, run } = await setupSeededRun();
     const jobQueue = new FakeJobQueue();
-    await jobQueue.enqueue({ runId: run.runId, taskId: run.plannerTaskId, taskKind: "plan", payload: {} });
+    await jobQueue.enqueue({
+      runId: run.runId,
+      taskId: run.plannerTaskId,
+      taskKind: "plan",
+      payload: {},
+    });
 
     const github = passingGitHub();
     const result = await executeNextPlanJob(deps(pool, secrets, jobQueue, github));
@@ -166,7 +200,12 @@ describe("run worker (dequeue→execute seam)", () => {
   it("heartbeats the claimed job's lease while the workflow runs (P3-0028)", async () => {
     const { pool, secrets, run } = await setupSeededRun();
     const jobQueue = new FakeJobQueue();
-    await jobQueue.enqueue({ runId: run.runId, taskId: run.plannerTaskId, taskKind: "plan", payload: {} });
+    await jobQueue.enqueue({
+      runId: run.runId,
+      taskId: run.plannerTaskId,
+      taskKind: "plan",
+      payload: {},
+    });
 
     let heartbeats = 0;
     const original = jobQueue.heartbeat.bind(jobQueue);
@@ -183,7 +222,7 @@ describe("run worker (dequeue→execute seam)", () => {
       runWorkflow: async (input) => {
         await new Promise<void>((resolve) => setTimeout(resolve, 30));
         return fakeWorkflowRunner(passingGitHub())(input);
-      }
+      },
     });
 
     expect(result.kind).toBe("completed");
@@ -203,16 +242,23 @@ describe("run worker (dequeue→execute seam)", () => {
   it("fails the job and lands the run in a recoverable state when the workflow throws", async () => {
     const { pool, secrets, run } = await setupSeededRun();
     const jobQueue = new FakeJobQueue();
-    await jobQueue.enqueue({ runId: run.runId, taskId: run.plannerTaskId, taskKind: "plan", payload: {} });
+    await jobQueue.enqueue({
+      runId: run.runId,
+      taskId: run.plannerTaskId,
+      taskKind: "plan",
+      payload: {},
+    });
 
     const throwingDeps = {
       ...deps(pool, secrets, jobQueue, passingGitHub()),
       // A generic throw the workflow surfaces as failed/failed; the worker must
       // re-finalize it into a recoverable halted state.
       runWorkflow: async () => {
-        await pool.query("UPDATE runs SET status = 'failed', outcome = 'failed', ended_at = now() WHERE run_id = $1", [run.runId]);
+        await pool.query("UPDATE runs SET status = 'failed', outcome = 'failed', ended_at = now() WHERE run_id = $1", [
+          run.runId,
+        ]);
         throw new Error("boom");
-      }
+      },
     };
     const result = await executeNextPlanJob(throwingDeps);
 
@@ -224,7 +270,12 @@ describe("run worker (dequeue→execute seam)", () => {
   it("drains in-flight work on stop and stops claiming", async () => {
     const { pool, secrets, run } = await setupSeededRun();
     const jobQueue = new FakeJobQueue();
-    await jobQueue.enqueue({ runId: run.runId, taskId: run.plannerTaskId, taskKind: "plan", payload: {} });
+    await jobQueue.enqueue({
+      runId: run.runId,
+      taskId: run.plannerTaskId,
+      taskKind: "plan",
+      payload: {},
+    });
 
     const results: string[] = [];
     const worker = new RunWorker(deps(pool, secrets, jobQueue, passingGitHub()), {
@@ -236,7 +287,7 @@ describe("run worker (dequeue→execute seam)", () => {
         if (r.kind !== "idle") {
           results.push(r.kind);
         }
-      }
+      },
     });
     worker.start();
     // Let the slot claim+execute the single job, then drain.
@@ -266,10 +317,30 @@ class RecordingSsh implements SshSubstrate {
 function passingGitHub(): ScriptedGitHubHttp {
   return new ScriptedGitHubHttp([
     { status: 200, body: [] },
-    { status: 201, body: { number: 11, html_url: "https://github.com/cat-cave/tanren-fixture-easy/pull/11", draft: true, base: { ref: "main" } } },
+    {
+      status: 201,
+      body: {
+        number: 11,
+        html_url: "https://github.com/cat-cave/tanren-fixture-easy/pull/11",
+        draft: true,
+        base: { ref: "main" },
+      },
+    },
     { status: 200, body: { head: { sha: "b".repeat(40), ref: "tanren/worker-test" } } },
-    { status: 200, body: { check_runs: [{ name: "check", status: "completed", conclusion: "success", html_url: "https://ci.example/c" }] } },
-    { status: 200, body: { statuses: [] } }
+    {
+      status: 200,
+      body: {
+        check_runs: [
+          {
+            name: "check",
+            status: "completed",
+            conclusion: "success",
+            html_url: "https://ci.example/c",
+          },
+        ],
+      },
+    },
+    { status: 200, body: { statuses: [] } },
   ]);
 }
 
@@ -284,4 +355,3 @@ class ScriptedGitHubHttp implements GitHubHttpClient {
     return response;
   }
 }
-

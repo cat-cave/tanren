@@ -4,20 +4,30 @@ import { DEFAULT_MAX_ATTEMPTS, FakeJobQueue, PgJobQueue } from "../src/engine/co
 describe("job queue", () => {
   it("enqueues, claims, completes, fails, and does not double-claim fake jobs", async () => {
     const queue = new FakeJobQueue<{ ok: boolean }>();
-    const first = await queue.enqueue({ runId: "run_1", taskId: "task_1", taskKind: "plan", payload: { ok: true } });
-    const second = await queue.enqueue({ runId: "run_1", taskId: "task_2", taskKind: "plan", payload: { ok: true } });
+    const first = await queue.enqueue({
+      runId: "run_1",
+      taskId: "task_1",
+      taskKind: "plan",
+      payload: { ok: true },
+    });
+    const second = await queue.enqueue({
+      runId: "run_1",
+      taskId: "task_2",
+      taskKind: "plan",
+      payload: { ok: true },
+    });
 
     expect(first).toMatchObject({ id: "job_1", attempts: 0 });
     expect(await queue.claim("plan", { runId: "other" })).toBeUndefined();
     await expect(queue.claim("plan", { runId: "run_1" })).resolves.toMatchObject({
       id: "job_1",
       taskId: "task_1",
-      attempts: 1
+      attempts: 1,
     });
     await expect(queue.claim("plan", { runId: "run_1" })).resolves.toMatchObject({
       id: "job_2",
       taskId: "task_2",
-      attempts: 1
+      attempts: 1,
     });
     expect(await queue.claim("plan", { runId: "run_1" })).toBeUndefined();
 
@@ -30,10 +40,19 @@ describe("job queue", () => {
     const client = new RecordingClient([
       { rows: [], rowCount: 0 },
       {
-        rows: [{ id: "7", run_id: "run_1", task_id: "task_1", task_kind: "write", payload: { ok: true }, attempts: 1 }],
-        rowCount: 1
+        rows: [
+          {
+            id: "7",
+            run_id: "run_1",
+            task_id: "task_1",
+            task_kind: "write",
+            payload: { ok: true },
+            attempts: 1,
+          },
+        ],
+        rowCount: 1,
       },
-      { rows: [], rowCount: 0 }
+      { rows: [], rowCount: 0 },
     ]);
     const pool = new RecordingPool(client);
     const queue = new PgJobQueue<{ ok: boolean }>(pool.asPgPool());
@@ -47,7 +66,7 @@ describe("job queue", () => {
       taskKind: "write",
       payload: { ok: true },
       attempts: 1,
-      maxAttempts: DEFAULT_MAX_ATTEMPTS
+      maxAttempts: DEFAULT_MAX_ATTEMPTS,
     });
     expect(client.sql).toContain("BEGIN");
     expect(client.sql[1]).toContain("FOR UPDATE SKIP LOCKED");
@@ -77,14 +96,26 @@ describe("job queue", () => {
 describe("job queue lease recovery (P3-0028)", () => {
   it("requeues a job whose lease expired while it still has retry budget", async () => {
     const queue = new FakeJobQueue<{ ok: boolean }>();
-    await queue.enqueue({ runId: "run_1", taskKind: "plan", payload: { ok: true }, maxAttempts: 3 });
+    await queue.enqueue({
+      runId: "run_1",
+      taskKind: "plan",
+      payload: { ok: true },
+      maxAttempts: 3,
+    });
     const claimed = await queue.claim("plan", { leaseMs: 10 });
     expect(claimed).toMatchObject({ attempts: 1, maxAttempts: 3 });
 
     // Lease has lapsed (now is past leased_until) and a worker can't be holding it.
     const reaped = await queue.reapExpiredLeases({ now: new Date(Date.now() + 1_000) });
     expect(reaped).toEqual([
-      { id: claimed!.id, runId: "run_1", taskKind: "plan", attempts: 1, maxAttempts: 3, outcome: "requeued" }
+      {
+        id: claimed!.id,
+        runId: "run_1",
+        taskKind: "plan",
+        attempts: 1,
+        maxAttempts: 3,
+        outcome: "requeued",
+      },
     ]);
     // Requeued → re-claimable, and the attempt count keeps climbing.
     const reclaimed = await queue.claim("plan", { leaseMs: 10 });
@@ -93,7 +124,12 @@ describe("job queue lease recovery (P3-0028)", () => {
 
   it("dead-letters a job once its retry budget is exhausted instead of requeueing", async () => {
     const queue = new FakeJobQueue<{ ok: boolean }>();
-    await queue.enqueue({ runId: "run_1", taskKind: "plan", payload: { ok: true }, maxAttempts: 2 });
+    await queue.enqueue({
+      runId: "run_1",
+      taskKind: "plan",
+      payload: { ok: true },
+      maxAttempts: 2,
+    });
 
     // Burn the budget: claim → lease expire → reap, twice.
     await queue.claim("plan", { leaseMs: 10 });
@@ -102,7 +138,14 @@ describe("job queue lease recovery (P3-0028)", () => {
     const final = await queue.reapExpiredLeases({ now: new Date(Date.now() + 1_000) });
 
     expect(final).toEqual([
-      { id: "job_1", runId: "run_1", taskKind: "plan", attempts: 2, maxAttempts: 2, outcome: "dead_lettered" }
+      {
+        id: "job_1",
+        runId: "run_1",
+        taskKind: "plan",
+        attempts: 2,
+        maxAttempts: 2,
+        outcome: "dead_lettered",
+      },
     ]);
     // Dead-lettered → terminal, never re-claimed.
     expect(await queue.claim("plan")).toBeUndefined();
@@ -126,8 +169,8 @@ describe("job queue lease recovery (P3-0028)", () => {
       new RecordingClient([
         { rows: [], rowCount: 0 },
         { rows: [], rowCount: 0 },
-        { rows: [], rowCount: 0 }
-      ])
+        { rows: [], rowCount: 0 },
+      ]),
     );
     const queue = new PgJobQueue(pool.asPgPool());
 

@@ -3,11 +3,7 @@
 // Answerer adapter. The Answerer abstraction lets unit tests drive the loop
 // without an SSH-backed Codex CLI; the production wiring uses the Codex
 // adapter (see services/orchestrator/src/engine/providers/codex.ts).
-import {
-  answererOutputSchemaFor,
-  PlanAnswer,
-  type PlanSubtask
-} from "../../answerers/schemas/index.js";
+import { answererOutputSchemaFor, PlanAnswer, type PlanSubtask } from "../../answerers/schemas/index.js";
 import type { AnswererAdapter } from "../../providers/types.js";
 
 // Compact spec context the planner consumes. Behaviors are passed in
@@ -64,7 +60,7 @@ export interface PlannerInvocationResult {
 // both the real workflow and the unit tests.
 export async function invokePlanner(
   planner: AnswererAdapter<PlanAnswer>,
-  input: PlannerInvokeInput
+  input: PlannerInvokeInput,
 ): Promise<PlannerInvocationResult> {
   const outputSchema = answererOutputSchemaFor("plan", PlanAnswer);
   const prompt = buildPlannerPrompt(input);
@@ -72,7 +68,7 @@ export async function invokePlanner(
     prompt,
     timeoutMs: input.timeoutMs,
     workspace: input.workspace,
-    outputSchema
+    outputSchema,
   });
   return { plan, schemaId: outputSchema.name };
 }
@@ -90,17 +86,16 @@ export function buildPlannerPrompt(input: PlannerInvokeInput): string {
     `Spec description: ${input.spec.specDescription}`,
     "Acceptance criteria:",
     ...input.spec.acceptanceCriteria.map((criterion) => `- ${criterion}`),
-    ""
+    "",
   ];
-  const behaviors = input.spec.behaviorContext.length === 0
-    ? ["Behaviors: none declared.", ""]
-    : [
-        "Declared behaviors (refer to these by id in subtasks.behaviorIds):",
-        ...input.spec.behaviorContext.map(
-          (entry) => `- ${entry.id}: ${entry.title} — ${entry.description}`
-        ),
-        ""
-      ];
+  const behaviors =
+    input.spec.behaviorContext.length === 0
+      ? ["Behaviors: none declared.", ""]
+      : [
+          "Declared behaviors (refer to these by id in subtasks.behaviorIds):",
+          ...input.spec.behaviorContext.map((entry) => `- ${entry.id}: ${entry.title} — ${entry.description}`),
+          "",
+        ];
   const rejectionBlocks = renderRejectionHistory(input.rejectionHistory);
   const footer = [
     "Emit at least one subtask. Each subtask must declare:",
@@ -109,7 +104,7 @@ export function buildPlannerPrompt(input: PlannerInvokeInput): string {
     "- intent: declared rationale for this subtask",
     "- behaviorIds: subset of declared behavior ids this subtask satisfies",
     "- estimatedTokens: integer estimate or null when unknown",
-    "Provide a top-level rationale explaining the decomposition."
+    "Provide a top-level rationale explaining the decomposition.",
   ];
   return [...header, ...behaviors, ...rejectionBlocks, ...footer].join("\n");
 }

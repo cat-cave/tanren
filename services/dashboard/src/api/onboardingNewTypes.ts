@@ -76,6 +76,6 @@ export function emptyCapture(): InterviewCapture {
     interfaces: [],
     designDna: "",
     architecture: [],
-    rulesets: []
+    rulesets: [],
   };
 }

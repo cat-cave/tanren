@@ -41,7 +41,7 @@ export abstract class OrchestratorForgeConversationClient extends OrchestratorRe
     orgId: string,
     question: string,
     scope: ForgeAskScope = {},
-    threadId?: string
+    threadId?: string,
   ): Promise<ForgeAskResponse | undefined> {
     const resolvedThreadId = threadId ?? (await this.ensureThread(orgId, scope));
     if (resolvedThreadId === undefined) {
@@ -50,7 +50,7 @@ export abstract class OrchestratorForgeConversationClient extends OrchestratorRe
     const result = await this.sendJson<{ forgeTurn?: TurnPayload; toolsUsed?: string[] }>(
       "POST",
       `/orgs/${encodeURIComponent(orgId)}/forge/threads/${encodeURIComponent(resolvedThreadId)}/ask`,
-      { question }
+      { question },
     );
     const render = result.body?.forgeTurn?.render;
     if (!result.ok || render === undefined) {
@@ -70,7 +70,7 @@ export abstract class OrchestratorForgeConversationClient extends OrchestratorRe
     const thread = await this.sendJson<{ id?: string }>(
       "POST",
       `/orgs/${encodeURIComponent(orgId)}/forge/threads`,
-      body
+      body,
     );
     return thread.ok ? thread.body?.id : undefined;
   }

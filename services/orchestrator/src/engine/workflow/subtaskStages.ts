@@ -13,19 +13,15 @@ import {
   decideAuditorOutcome,
   invokeAuditor,
   type AuditorDecision,
-  type AuditorSpecContext
+  type AuditorSpecContext,
 } from "./auditor/auditor.js";
 import {
   decideCheckerOutcome,
   invokeChecker,
   type CheckerDecision,
-  type CheckerSubtaskContext
+  type CheckerSubtaskContext,
 } from "./checker/checker.js";
-import {
-  invokePlanner,
-  type PlannerRejectionFeedback,
-  type PlannerSpecContext
-} from "./planner/planner.js";
+import { invokePlanner, type PlannerRejectionFeedback, type PlannerSpecContext } from "./planner/planner.js";
 import { recordAnswererCost, recordWriterCost, secondsSince, type SubtaskCostContext } from "./subtaskCost.js";
 import { insertChildTask, markTaskDone } from "./subtaskTasks.js";
 
@@ -56,7 +52,7 @@ export async function runPlannerStage(args: PlannerStageInput): Promise<PlanAnsw
     spec: args.spec,
     timeoutMs: args.timeoutMs,
     workspace: args.workspacePath,
-    rejectionHistory: args.rejectionHistory
+    rejectionHistory: args.rejectionHistory,
   });
   const runtimeSeconds = secondsSince(startedAt);
   // P3-0029: stage-transition latency as a structured timing log (no schema).
@@ -71,11 +67,11 @@ export async function runPlannerStage(args: PlannerStageInput): Promise<PlanAnsw
         title: subtask.title,
         intent: subtask.intent,
         estimatedTokens: subtask.estimatedTokens,
-        behaviorIds: [...subtask.behaviorIds]
+        behaviorIds: [...subtask.behaviorIds],
       })),
-      rationale: result.plan.rationale
+      rationale: result.plan.rationale,
     },
-    args.plannerTaskId
+    args.plannerTaskId,
   );
   await recordAnswererCost({
     ctx: args.costCtx,
@@ -83,7 +79,10 @@ export async function runPlannerStage(args: PlannerStageInput): Promise<PlanAnsw
     taskId: args.plannerTaskId,
     model: "tanren-planner",
     runtimeSeconds,
-    rawUsage: args.buildUsage?.({ plannerTaskId: args.plannerTaskId, attempt: args.attempt }) ?? { role: "planner", attempt: args.attempt }
+    rawUsage: args.buildUsage?.({ plannerTaskId: args.plannerTaskId, attempt: args.attempt }) ?? {
+      role: "planner",
+      attempt: args.attempt,
+    },
   });
   return result.plan;
 }
@@ -100,7 +99,12 @@ export interface WriterStageInput {
   prompt: string;
   timeoutMs: number;
   appendEvent: StageAppendEvent;
-  buildUsage?: (input: { subtaskTaskId: string; subtaskIndex: number; attempt: number; writer: WriterResult }) => Record<string, unknown>;
+  buildUsage?: (input: {
+    subtaskTaskId: string;
+    subtaskIndex: number;
+    attempt: number;
+    writer: WriterResult;
+  }) => Record<string, unknown>;
 }
 
 export async function runWriterStage(args: WriterStageInput): Promise<WriterResult> {
@@ -112,7 +116,7 @@ export async function runWriterStage(args: WriterStageInput): Promise<WriterResu
     parentTaskId: args.plannerTaskId,
     agentKind: "writer",
     cli: args.adapter.cli,
-    model: null
+    model: null,
   });
   await args.appendEvent("task.started", { taskKind: "write" }, args.writeTaskId);
   await args.appendEvent(
@@ -122,18 +126,21 @@ export async function runWriterStage(args: WriterStageInput): Promise<WriterResu
       taskId: args.writeTaskId,
       subtaskIndex: args.subtask.index,
       intent: args.subtask.intent,
-      behaviorIds: [...args.subtask.behaviorIds]
+      behaviorIds: [...args.subtask.behaviorIds],
     },
-    args.writeTaskId
+    args.writeTaskId,
   );
   const startedAt = Date.now();
   const writerResult = await args.adapter.runWriter({
     prompt: args.prompt,
     workspace: args.workspacePath,
-    timeoutMs: args.timeoutMs
+    timeoutMs: args.timeoutMs,
   });
   const runtimeSeconds = secondsSince(startedAt);
-  emitStageTiming("write", Date.now() - startedAt, { runId: args.runId, subtaskIndex: args.subtask.index });
+  emitStageTiming("write", Date.now() - startedAt, {
+    runId: args.runId,
+    subtaskIndex: args.subtask.index,
+  });
   await args.appendEvent(
     "writer.subtask.completed",
     {
@@ -144,9 +151,9 @@ export async function runWriterStage(args: WriterStageInput): Promise<WriterResu
       decisions: [],
       toolCalls: [],
       diffBytes: Buffer.byteLength(writerResult.diff, "utf8"),
-      commitSha: writerResult.commits[0]?.sha ?? null
+      commitSha: writerResult.commits[0]?.sha ?? null,
     },
-    args.writeTaskId
+    args.writeTaskId,
   );
   await recordWriterCost({
     ctx: args.costCtx,
@@ -154,8 +161,12 @@ export async function runWriterStage(args: WriterStageInput): Promise<WriterResu
     taskId: args.writeTaskId,
     runtimeSeconds,
     tokenUsage: writerResult.tokenUsage,
-    rawUsage: args.buildUsage?.({ subtaskTaskId: args.writeTaskId, subtaskIndex: args.subtask.index, attempt: 1, writer: writerResult })
-      ?? { role: "writer", attempt: 1, subtaskIndex: args.subtask.index }
+    rawUsage: args.buildUsage?.({
+      subtaskTaskId: args.writeTaskId,
+      subtaskIndex: args.subtask.index,
+      attempt: 1,
+      writer: writerResult,
+    }) ?? { role: "writer", attempt: 1, subtaskIndex: args.subtask.index },
   });
   await markTaskDone(args.pool, args.writeTaskId, "passed");
   await args.appendEvent("task.completed", { taskKind: "write" }, args.writeTaskId);
@@ -177,7 +188,11 @@ export interface CheckerStageInput {
   acceptanceCriteria: ReadonlyArray<string>;
   timeoutMs: number;
   appendEvent: StageAppendEvent;
-  buildUsage?: (input: { checkerTaskId: string; subtaskIndex: number; verdict: CheckAnswer }) => Record<string, unknown>;
+  buildUsage?: (input: {
+    checkerTaskId: string;
+    subtaskIndex: number;
+    verdict: CheckAnswer;
+  }) => Record<string, unknown>;
 }
 
 export async function runCheckerStage(args: CheckerStageInput): Promise<CheckerDecision> {
@@ -189,7 +204,7 @@ export async function runCheckerStage(args: CheckerStageInput): Promise<CheckerD
     parentTaskId: args.writeTaskId,
     agentKind: "answerer",
     cli: args.adapter.cli,
-    model: null
+    model: null,
   });
   await args.appendEvent("task.started", { taskKind: "check" }, args.checkerTaskId);
   await args.appendEvent("checker.started", { taskKind: "check" }, args.checkerTaskId);
@@ -198,16 +213,19 @@ export async function runCheckerStage(args: CheckerStageInput): Promise<CheckerD
     specDescription: args.specDescription,
     acceptanceCriteria: args.acceptanceCriteria,
     subtask: args.subtask,
-    writerDiff: args.writerResult.diff
+    writerDiff: args.writerResult.diff,
   };
   const startedAt = Date.now();
   const result = await invokeChecker(args.adapter, {
     context: checkerContext,
     timeoutMs: args.timeoutMs,
-    workspace: args.workspacePath
+    workspace: args.workspacePath,
   });
   const runtimeSeconds = secondsSince(startedAt);
-  emitStageTiming("check", Date.now() - startedAt, { runId: args.runId, subtaskIndex: args.subtask.index });
+  emitStageTiming("check", Date.now() - startedAt, {
+    runId: args.runId,
+    subtaskIndex: args.subtask.index,
+  });
   await args.appendEvent(
     "checker.verdict",
     {
@@ -217,9 +235,9 @@ export async function runCheckerStage(args: CheckerStageInput): Promise<CheckerD
       passed: result.verdict.passed,
       reasoning: result.verdict.reasoning,
       behaviorIdsPassed: [...result.verdict.behaviorIdsPassed],
-      behaviorIdsFailed: [...result.verdict.behaviorIdsFailed]
+      behaviorIdsFailed: [...result.verdict.behaviorIdsFailed],
     },
-    args.checkerTaskId
+    args.checkerTaskId,
   );
   await recordAnswererCost({
     ctx: args.costCtx,
@@ -227,8 +245,11 @@ export async function runCheckerStage(args: CheckerStageInput): Promise<CheckerD
     taskId: args.checkerTaskId,
     model: "tanren-checker",
     runtimeSeconds,
-    rawUsage: args.buildUsage?.({ checkerTaskId: args.checkerTaskId, subtaskIndex: args.subtask.index, verdict: result.verdict })
-      ?? { role: "checker", subtaskIndex: args.subtask.index }
+    rawUsage: args.buildUsage?.({
+      checkerTaskId: args.checkerTaskId,
+      subtaskIndex: args.subtask.index,
+      verdict: result.verdict,
+    }) ?? { role: "checker", subtaskIndex: args.subtask.index },
   });
   const decision = decideCheckerOutcome(result.verdict);
   if (decision.kind === "reject") {
@@ -240,9 +261,9 @@ export async function runCheckerStage(args: CheckerStageInput): Promise<CheckerD
         taskId: args.checkerTaskId,
         subtaskIndex: args.subtask.index,
         reason: decision.reason,
-        behaviorIdsFailed: [...decision.behaviorIdsFailed]
+        behaviorIdsFailed: [...decision.behaviorIdsFailed],
       },
-      args.checkerTaskId
+      args.checkerTaskId,
     );
     await args.appendEvent("task.completed", { taskKind: "check" }, args.checkerTaskId);
     return decision;
@@ -269,7 +290,9 @@ export interface AuditorStageInput {
   buildUsage?: (input: { auditorTaskId: string; verdict: AuditAnswer }) => Record<string, unknown>;
 }
 
-export async function runAuditorStage(args: AuditorStageInput): Promise<{ decision: AuditorDecision; auditorTaskId: string }> {
+export async function runAuditorStage(
+  args: AuditorStageInput,
+): Promise<{ decision: AuditorDecision; auditorTaskId: string }> {
   const auditorTaskId = `task_${randomUUID()}`;
   await insertChildTask(args.pool, {
     taskId: auditorTaskId,
@@ -279,7 +302,7 @@ export async function runAuditorStage(args: AuditorStageInput): Promise<{ decisi
     parentTaskId: args.plannerTaskId,
     agentKind: "answerer",
     cli: args.adapter.cli,
-    model: null
+    model: null,
   });
   await args.appendEvent("task.started", { taskKind: "audit" }, auditorTaskId);
   await args.appendEvent("auditor.started", { taskKind: "audit" }, auditorTaskId);
@@ -288,13 +311,13 @@ export async function runAuditorStage(args: AuditorStageInput): Promise<{ decisi
     specDescription: args.specDescription,
     acceptanceCriteria: args.acceptanceCriteria,
     subtasks: args.plan.subtasks,
-    combinedDiff: args.combinedDiff
+    combinedDiff: args.combinedDiff,
   };
   const startedAt = Date.now();
   const result = await invokeAuditor(args.adapter, {
     context: auditorContext,
     timeoutMs: args.timeoutMs,
-    workspace: args.workspacePath
+    workspace: args.workspacePath,
   });
   const runtimeSeconds = secondsSince(startedAt);
   emitStageTiming("audit", Date.now() - startedAt, { runId: args.runId });
@@ -305,9 +328,9 @@ export async function runAuditorStage(args: AuditorStageInput): Promise<{ decisi
       passed: result.verdict.passed,
       reasoning: result.verdict.reasoning,
       outstandingBehaviorIds: [...result.verdict.outstandingBehaviorIds],
-      recommendedAction: result.verdict.recommendedAction
+      recommendedAction: result.verdict.recommendedAction,
     },
-    auditorTaskId
+    auditorTaskId,
   );
   await recordAnswererCost({
     ctx: args.costCtx,
@@ -315,7 +338,7 @@ export async function runAuditorStage(args: AuditorStageInput): Promise<{ decisi
     taskId: auditorTaskId,
     model: "tanren-auditor",
     runtimeSeconds,
-    rawUsage: args.buildUsage?.({ auditorTaskId, verdict: result.verdict }) ?? { role: "auditor" }
+    rawUsage: args.buildUsage?.({ auditorTaskId, verdict: result.verdict }) ?? { role: "auditor" },
   });
   const decision = decideAuditorOutcome(result.verdict);
   if (decision.kind === "pass") {
@@ -331,9 +354,9 @@ export async function runAuditorStage(args: AuditorStageInput): Promise<{ decisi
       auditTaskId: auditorTaskId,
       reason: decision.reason,
       outstandingBehaviorIds: [...decision.outstandingBehaviorIds],
-      recommendedAction: decision.action
+      recommendedAction: decision.action,
     },
-    auditorTaskId
+    auditorTaskId,
   );
   await args.appendEvent("task.completed", { taskKind: "audit" }, auditorTaskId);
   return { decision, auditorTaskId };

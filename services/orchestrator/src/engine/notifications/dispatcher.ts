@@ -10,14 +10,14 @@ import {
   NotificationRouteStore,
   NotificationTargetStore,
   type DispatchLogInput,
-  type DispatchStatus
+  type DispatchStatus,
 } from "./store.js";
 import {
   type ChannelKind,
   type NotificationPayload,
   NotificationPayload as NotificationPayloadSchema,
   type NotificationTargetRow,
-  type Severity
+  type Severity,
 } from "./schemas.js";
 
 // P2A-0017 dispatcher.
@@ -80,7 +80,7 @@ const SYSTEM_ACTOR: ActorContext = {
   orgId: null,
   projectId: null,
   scopes: ["project:member"],
-  source: "local_dev"
+  source: "local_dev",
 };
 
 export class NotificationDispatcher {
@@ -106,13 +106,13 @@ export class NotificationDispatcher {
     const matrix = await this.loadMatrixContext({
       orgId: context.orgId,
       eventName: event.eventType,
-      actorUserId: context.actorUserId
+      actorUserId: context.actorUserId,
     });
 
     const matches = evaluateMatrix({
       ...matrix,
       eventName: event.eventType,
-      effectiveSeverity: severity
+      effectiveSeverity: severity,
     });
 
     if (matches.length === 0) return;
@@ -128,11 +128,11 @@ export class NotificationDispatcher {
             payload: {
               eventName: event.eventType,
               targetId: match.target.id,
-              reason: "weekend_mute"
+              reason: "weekend_mute",
             },
             status: "skipped",
             attempts: 0,
-            sentAt: null
+            sentAt: null,
           });
           continue;
         }
@@ -147,10 +147,14 @@ export class NotificationDispatcher {
         if (channel === undefined) {
           await this.recordDispatch({
             channel: match.target.channelKind,
-            payload: { eventName: event.eventType, targetId: match.target.id, reason: "no_adapter" },
+            payload: {
+              eventName: event.eventType,
+              targetId: match.target.id,
+              reason: "no_adapter",
+            },
             status: "skipped",
             attempts: 0,
-            sentAt: null
+            sentAt: null,
           });
           continue;
         }
@@ -163,11 +167,11 @@ export class NotificationDispatcher {
             targetId: match.target.id,
             layering: match.layering,
             severity,
-            title: payload.title
+            title: payload.title,
           },
           status,
           attempts: 1,
-          sentAt: status === "sent" ? now : null
+          sentAt: status === "sent" ? now : null,
         });
       } catch (caught) {
         // We never propagate dispatcher failures. The catch is the outer
@@ -175,7 +179,7 @@ export class NotificationDispatcher {
         this.log("error", "notification dispatcher swallowed unexpected error", {
           eventName: event.eventType,
           targetId: match.target.id,
-          error: errorMessage(caught)
+          error: errorMessage(caught),
         });
       }
     }
@@ -190,8 +194,8 @@ export class NotificationDispatcher {
       NotificationTargetStore.listForOrg(this.query, args.orgId),
       NotificationRouteStore.listForOrgEvent(this.query, {
         orgId: args.orgId,
-        eventName: args.eventName
-      })
+        eventName: args.eventName,
+      }),
     ]);
     return { targets, routes, actorUserId: args.actorUserId };
   }
@@ -199,7 +203,7 @@ export class NotificationDispatcher {
   private async invokeChannel(
     channel: NotificationChannel,
     target: NotificationTargetRow,
-    payload: NotificationPayload
+    payload: NotificationPayload,
   ): Promise<DispatchStatus> {
     if (!channel.wired) {
       try {
@@ -210,7 +214,7 @@ export class NotificationDispatcher {
         // stub regresses.
         this.log("warn", "stub channel threw", {
           channel: channel.kind,
-          error: errorMessage(caught)
+          error: errorMessage(caught),
         });
       }
       return "stubbed";
@@ -222,21 +226,17 @@ export class NotificationDispatcher {
       this.log("warn", "channel publish failed", {
         channel: channel.kind,
         targetId: target.id,
-        error: errorMessage(caught)
+        error: errorMessage(caught),
       });
       return "failed";
     }
   }
 
-  private buildPayload(
-    event: TypedEvent,
-    context: EventContext,
-    severity: Severity
-  ): NotificationPayload {
+  private buildPayload(event: TypedEvent, context: EventContext, severity: Severity): NotificationPayload {
     const redacted = redactEventPayload({
       eventName: event.eventType as EventName,
       payload: event.payload,
-      actor: SYSTEM_ACTOR
+      actor: SYSTEM_ACTOR,
     });
     const title = titleFor(event.eventType, severity);
     const body = bodyFor(event.eventType, context, redacted.payload);
@@ -247,7 +247,7 @@ export class NotificationDispatcher {
       severity,
       eventName: event.eventType,
       ...(url !== undefined ? { url } : {}),
-      tags: ["tanren", `severity:${severity}`]
+      tags: ["tanren", `severity:${severity}`],
     });
   }
 
@@ -259,7 +259,7 @@ export class NotificationDispatcher {
       // mean Postgres is unreachable; nothing the dispatcher can do but
       // surface a log line.
       this.log("error", "failed to write notification dispatch log row", {
-        error: errorMessage(caught)
+        error: errorMessage(caught),
       });
     }
   }
@@ -333,11 +333,7 @@ function errorMessage(error: unknown): string {
   return String(error);
 }
 
-function defaultLog(
-  level: "info" | "warn" | "error",
-  message: string,
-  meta?: Record<string, unknown>
-): void {
+function defaultLog(level: "info" | "warn" | "error", message: string, meta?: Record<string, unknown>): void {
   // Lightweight console emission; the orchestrator's structured logger is
   // not in scope for this spec. The dispatcher's invariant is
   // "notifications never block workflow progress" — log shape can evolve

@@ -25,7 +25,7 @@ export const BehaviorRow = z.object({
   description: z.string().nullable(),
   metadata: BehaviorMetadata,
   createdAt: z.date(),
-  updatedAt: z.date()
+  updatedAt: z.date(),
 });
 /* eslint-enable unicorn/no-thenable */
 export type BehaviorRow = z.infer<typeof BehaviorRow>;
@@ -68,7 +68,7 @@ function decodeBehaviorRow(raw: RawBehaviorRow): BehaviorRow {
     description: raw.description,
     metadata: raw.metadata ?? {},
     createdAt: raw.created_at,
-    updatedAt: raw.updated_at
+    updatedAt: raw.updated_at,
   });
   /* eslint-enable unicorn/no-thenable */
 }
@@ -82,7 +82,7 @@ export const BehaviorCreateInput = z.object({
   when: z.string(),
   then: z.string(),
   description: z.string().nullable().default(null),
-  metadata: BehaviorMetadata.default({})
+  metadata: BehaviorMetadata.default({}),
 });
 /* eslint-enable unicorn/no-thenable */
 export type BehaviorCreateInput = z.infer<typeof BehaviorCreateInput>;
@@ -108,17 +108,14 @@ export const BehaviorStore = {
         parsed.when,
         parsed.then,
         parsed.description,
-        JSON.stringify(parsed.metadata)
-      ]
+        JSON.stringify(parsed.metadata),
+      ],
     );
     return decodeBehaviorRow(result.rows[0] as RawBehaviorRow);
   },
 
   async get(client: QueryClient, id: string, actor: ActorContext): Promise<BehaviorRow | undefined> {
-    const result = await client.query(
-      `SELECT ${SELECT_BEHAVIOR_COLUMNS} FROM behaviors WHERE id = $1`,
-      [id]
-    );
+    const result = await client.query(`SELECT ${SELECT_BEHAVIOR_COLUMNS} FROM behaviors WHERE id = $1`, [id]);
     const row = result.rows[0];
     if (row === undefined) return undefined;
     const behavior = decodeBehaviorRow(row as RawBehaviorRow);
@@ -137,7 +134,7 @@ export const BehaviorStore = {
     }
     const result = await client.query(
       `SELECT ${SELECT_BEHAVIOR_COLUMNS} FROM behaviors WHERE persona_id = $1 ORDER BY title`,
-      [personaId]
+      [personaId],
     );
     return result.rows.map((row) => decodeBehaviorRow(row as RawBehaviorRow));
   },
@@ -150,7 +147,7 @@ export const BehaviorStore = {
        INNER JOIN spec_behaviors sb ON sb.behavior_id = b.id
        WHERE sb.spec_id = $1
        ORDER BY b.title`,
-      [specId]
+      [specId],
     );
     return result.rows.map((row) => decodeBehaviorRow(row as RawBehaviorRow));
   },
@@ -158,24 +155,24 @@ export const BehaviorStore = {
   async linkToSpec(
     client: QueryClient,
     args: { specId: string; behaviorId: string },
-    _actor: ActorContext
+    _actor: ActorContext,
   ): Promise<void> {
     await client.query(
       `INSERT INTO spec_behaviors (spec_id, behavior_id)
        VALUES ($1, $2)
        ON CONFLICT (spec_id, behavior_id) DO NOTHING`,
-      [args.specId, args.behaviorId]
+      [args.specId, args.behaviorId],
     );
   },
 
   async unlinkFromSpec(
     client: QueryClient,
     args: { specId: string; behaviorId: string },
-    _actor: ActorContext
+    _actor: ActorContext,
   ): Promise<void> {
-    await client.query(
-      `DELETE FROM spec_behaviors WHERE spec_id = $1 AND behavior_id = $2`,
-      [args.specId, args.behaviorId]
-    );
-  }
+    await client.query(`DELETE FROM spec_behaviors WHERE spec_id = $1 AND behavior_id = $2`, [
+      args.specId,
+      args.behaviorId,
+    ]);
+  },
 } as const;

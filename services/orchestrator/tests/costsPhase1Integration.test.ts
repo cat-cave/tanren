@@ -28,7 +28,7 @@ describe("phase 1 fixture cost-record persistence", () => {
       acceptanceCriteria: ["PHASE1_FIXTURE.md contains tanren phase 1 ok"],
       runnerImage: "ghcr.io/cat-cave/tanren-runner:test",
       identitySecretRef: "runner/test/identity",
-      githubCredentialRef: "credential/github/dev"
+      githubCredentialRef: "credential/github/dev",
     };
     const pool = new FixturePool(context);
     const events = new FakeEventStore();
@@ -43,10 +43,38 @@ describe("phase 1 fixture cost-record persistence", () => {
       secrets,
       githubHttp: new ScriptedGitHubHttp([
         { status: 200, body: [] },
-        { status: 201, body: { number: 7, html_url: "https://github.com/cat-cave/tanren-fixture-easy/pull/7", draft: true, base: { ref: "main" } } },
-        { status: 200, body: { head: { sha: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", ref: "tanren/p2a-0011-phase1" } } },
-        { status: 200, body: { check_runs: [{ name: "check", status: "completed", conclusion: "success", html_url: "https://ci.example/check" }] } },
-        { status: 200, body: { statuses: [] } }
+        {
+          status: 201,
+          body: {
+            number: 7,
+            html_url: "https://github.com/cat-cave/tanren-fixture-easy/pull/7",
+            draft: true,
+            base: { ref: "main" },
+          },
+        },
+        {
+          status: 200,
+          body: {
+            head: {
+              sha: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+              ref: "tanren/p2a-0011-phase1",
+            },
+          },
+        },
+        {
+          status: 200,
+          body: {
+            check_runs: [
+              {
+                name: "check",
+                status: "completed",
+                conclusion: "success",
+                html_url: "https://ci.example/check",
+              },
+            ],
+          },
+        },
+        { status: 200, body: { statuses: [] } },
       ]),
       context,
       createWriter: () => fakeWriter,
@@ -54,7 +82,7 @@ describe("phase 1 fixture cost-record persistence", () => {
       createAuditor: () => fakeAuditor,
       timeoutMs: 100,
       maxCiPolls: 1,
-      sleep: async () => undefined
+      sleep: async () => undefined,
     });
 
     expect(result.ci.status).toBe("passed");
@@ -68,7 +96,9 @@ describe("phase 1 fixture cost-record persistence", () => {
     expect(pool.costInserts.map((row) => row.params[12])).toEqual([null, null, null]);
     const costRecorded = events.events.filter((event) => event.eventType === "cost.resolved");
     expect(costRecorded).toHaveLength(3);
-    expect(costRecorded.every((event) => event.payload && (event.payload as { costBasis: string }).costBasis !== "")).toBe(true);
+    expect(
+      costRecorded.every((event) => event.payload && (event.payload as { costBasis: string }).costBasis !== ""),
+    ).toBe(true);
     const allInsertText = JSON.stringify(pool.costInserts);
     expect(allInsertText).not.toContain("unknown_source");
     const forbiddenPlaceholder = ["legacy", "unknown"].join("_");
@@ -88,7 +118,7 @@ describe("phase 1 fixture cost-record persistence", () => {
       acceptanceCriteria: ["PHASE1_FIXTURE.md contains tanren phase 1 ok"],
       runnerImage: "ghcr.io/cat-cave/tanren-runner:test",
       identitySecretRef: "runner/test/identity",
-      githubCredentialRef: "credential/github/dev"
+      githubCredentialRef: "credential/github/dev",
     };
     const pool = new FixturePool(context);
     const events = new FakeEventStore();
@@ -102,7 +132,7 @@ describe("phase 1 fixture cost-record persistence", () => {
       authRef: "vault/secret/legacy/something",
       async runWriter() {
         return fakeWriterResult;
-      }
+      },
     };
     const result = await runPhase1FixtureWorkflow({
       pool: pool.asPgPool(),
@@ -112,10 +142,38 @@ describe("phase 1 fixture cost-record persistence", () => {
       secrets,
       githubHttp: new ScriptedGitHubHttp([
         { status: 200, body: [] },
-        { status: 201, body: { number: 9, html_url: "https://github.com/cat-cave/tanren-fixture-easy/pull/9", draft: true, base: { ref: "main" } } },
-        { status: 200, body: { head: { sha: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", ref: "tanren/cost-unknown-ok" } } },
-        { status: 200, body: { check_runs: [{ name: "check", status: "completed", conclusion: "success", html_url: "https://ci.example/check" }] } },
-        { status: 200, body: { statuses: [] } }
+        {
+          status: 201,
+          body: {
+            number: 9,
+            html_url: "https://github.com/cat-cave/tanren-fixture-easy/pull/9",
+            draft: true,
+            base: { ref: "main" },
+          },
+        },
+        {
+          status: 200,
+          body: {
+            head: {
+              sha: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+              ref: "tanren/cost-unknown-ok",
+            },
+          },
+        },
+        {
+          status: 200,
+          body: {
+            check_runs: [
+              {
+                name: "check",
+                status: "completed",
+                conclusion: "success",
+                html_url: "https://ci.example/check",
+              },
+            ],
+          },
+        },
+        { status: 200, body: { statuses: [] } },
       ]),
       context,
       createWriter: () => unattributableWriter,
@@ -123,7 +181,7 @@ describe("phase 1 fixture cost-record persistence", () => {
       createAuditor: () => fakeAuditor,
       timeoutMs: 100,
       maxCiPolls: 1,
-      sleep: async () => undefined
+      sleep: async () => undefined,
     });
     expect(result.ci.status).toBe("passed");
     expect(events.events.some((event) => event.eventType === "phase1.fixture.failed")).toBe(false);
@@ -139,14 +197,21 @@ const target: SshTarget = {
   port: 22,
   username: "tanren",
   hostKeyFingerprint: "SHA256:runner-host",
-  identitySecretRef: "runner/test/identity"
+  identitySecretRef: "runner/test/identity",
 };
 
 const fakeWriterResult: WriterResult = {
   diff: "diff --git a/PHASE1_FIXTURE.md b/PHASE1_FIXTURE.md\n+tanren phase 1 ok\n",
   commits: [{ sha: "ffffffffffffffffffffffffffffffffffffffff", message: "phase 1 fixture" }],
   exitReason: "completed",
-  tokenUsage: { inputTokens: 4, cachedInputTokens: 0, cacheCreationTokens: 0, outputTokens: 2, reasoningOutputTokens: 0, totalTokens: 6 }
+  tokenUsage: {
+    inputTokens: 4,
+    cachedInputTokens: 0,
+    cacheCreationTokens: 0,
+    outputTokens: 2,
+    reasoningOutputTokens: 0,
+    totalTokens: 6,
+  },
 };
 
 const fakeWriter: WriterAdapter = {
@@ -155,7 +220,7 @@ const fakeWriter: WriterAdapter = {
   authRef: "credential/self-hosted/p2a-0011-test",
   async runWriter() {
     return fakeWriterResult;
-  }
+  },
 };
 
 class RecordingAllocator implements Allocator {
@@ -218,14 +283,17 @@ class FixturePool {
             spec_id: this.context.specId,
             project_id: this.context.projectId,
             pr_url: this.prUrl,
-            config: { githubCredentialRef: this.context.githubCredentialRef }
-          }
+            config: { githubCredentialRef: this.context.githubCredentialRef },
+          },
         ],
-        rowCount: 1
+        rowCount: 1,
       };
     }
     if (sql.startsWith("SELECT task_id, attempt")) {
-      return { rows: this.ciTask === undefined ? [] : [{ task_id: this.ciTask.taskId, attempt: this.ciTask.attempt }], rowCount: this.ciTask === undefined ? 0 : 1 };
+      return {
+        rows: this.ciTask === undefined ? [] : [{ task_id: this.ciTask.taskId, attempt: this.ciTask.attempt }],
+        rowCount: this.ciTask === undefined ? 0 : 1,
+      };
     }
     if (sql.startsWith("INSERT INTO tasks") && sql.includes("'ci'")) {
       this.ciTask = { taskId: String(params[0]), attempt: 1 };

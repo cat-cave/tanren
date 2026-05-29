@@ -1,9 +1,4 @@
-import type {
-  AllocationRequest,
-  Allocator,
-  ReleaseReason,
-  RunnerAllocation
-} from "../contracts/allocator.js";
+import type { AllocationRequest, Allocator, ReleaseReason, RunnerAllocation } from "../contracts/allocator.js";
 
 /**
  * Placeholder for a *real* allocator kind that the router registers but the
@@ -23,7 +18,7 @@ export class UnconfiguredAllocator implements Allocator {
     throw new Error(
       `allocator kind '${this.kind}' was selected but is not configured ` +
         `(no routing rule references it, so its credentials were not loaded). ` +
-        `Add it to TANREN_ALLOCATOR_ROUTING and supply its env to enable it.`
+        `Add it to TANREN_ALLOCATOR_ROUTING and supply its env to enable it.`,
     );
   }
 

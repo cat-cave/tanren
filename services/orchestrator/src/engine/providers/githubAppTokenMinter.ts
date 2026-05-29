@@ -100,9 +100,9 @@ export class GithubAppTokenMinter {
         headers: {
           Accept: "application/vnd.github+json",
           Authorization: `Bearer ${jwt}`,
-          "X-GitHub-Api-Version": "2022-11-28"
-        }
-      }
+          "X-GitHub-Api-Version": "2022-11-28",
+        },
+      },
     );
     if (response.status !== 201) {
       throw new Error(`GitHub App installation token mint failed: HTTP ${response.status}`);
@@ -127,8 +127,8 @@ export function signAppJwt(appId: string, privateKeyPem: string, nowSeconds: num
     JSON.stringify({
       iat: nowSeconds - 30,
       exp: nowSeconds + APP_JWT_TTL_SECONDS,
-      iss: appId
-    })
+      iss: appId,
+    }),
   );
   const signingInput = `${header}.${payload}`;
   const signer = createSign("RSA-SHA256");

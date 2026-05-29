@@ -11,15 +11,15 @@ import {
   isBucketBChange,
   renderTanrenYaml,
   renderTanrenYamlDiff,
-  type ConfigGateGitHub
+  type ConfigGateGitHub,
 } from "../src/engine/config/tanrenConfigGate.js";
 
 function baseConfig(): OrgConfigV1 {
   return migrateOrgConfig({
     version: 1,
     routing: {
-      audit: { chain: [{ cli: "codex", model: "gpt-5.5", authRef: "credential/openai" }] }
-    }
+      audit: { chain: [{ cli: "codex", model: "gpt-5.5", authRef: "credential/openai" }] },
+    },
   });
 }
 
@@ -29,12 +29,17 @@ function withAuditPrimary(model: string): OrgConfigV1 {
     auditGateEnabled: true,
     auditGate: { repo: "cat-cave/tanren-config" },
     routing: {
-      audit: { chain: [{ cli: "claude", model, authRef: "credential/claude" }] }
-    }
+      audit: { chain: [{ cli: "claude", model, authRef: "credential/claude" }] },
+    },
   });
 }
 
-const TARGET = { repo: "cat-cave/tanren-config", baseBranch: "main", branchPrefix: "forge", configFile: "tanren.yaml" };
+const TARGET = {
+  repo: "cat-cave/tanren-config",
+  baseBranch: "main",
+  branchPrefix: "forge",
+  configFile: "tanren.yaml",
+};
 
 describe("isBucketBChange", () => {
   it("is true when a routing chain changes", () => {
@@ -75,14 +80,14 @@ describe("gatedConfigWrite", () => {
     const openConfigPr = vi.fn<ConfigGateGitHub["openConfigPr"]>(async () => ({
       number: 7,
       url: "https://github.com/cat-cave/tanren-config/pull/7",
-      branch: "forge/route-x"
+      branch: "forge/route-x",
     }));
     const github: ConfigGateGitHub = { openConfigPr };
     const result = await gatedConfigWrite({
       prev: baseConfig(),
       next: withAuditPrimary("opus-4.7"),
       target: TARGET,
-      github
+      github,
     });
     expect(result.kind).toBe("gated");
     if (result.kind !== "gated") throw new Error("expected gated");
@@ -100,7 +105,12 @@ describe("gatedConfigWrite", () => {
     const openConfigPr = vi.fn<ConfigGateGitHub["openConfigPr"]>();
     const next = baseConfig();
     next.routing.audit.chain = [{ cli: "claude", model: "opus-4.7", authRef: "credential/claude" }];
-    const result = await gatedConfigWrite({ prev: baseConfig(), next, target: TARGET, github: { openConfigPr } });
+    const result = await gatedConfigWrite({
+      prev: baseConfig(),
+      next,
+      target: TARGET,
+      github: { openConfigPr },
+    });
     expect(result.kind).toBe("apply-directly");
     expect(openConfigPr).not.toHaveBeenCalled();
   });
@@ -116,7 +126,7 @@ describe("gatedConfigWrite", () => {
 
   it("gate ON + Bucket-B but no client → throws (never silently applies)", async () => {
     await expect(
-      gatedConfigWrite({ prev: baseConfig(), next: withAuditPrimary("opus-4.7"), target: TARGET })
+      gatedConfigWrite({ prev: baseConfig(), next: withAuditPrimary("opus-4.7"), target: TARGET }),
     ).rejects.toThrow(/no tanren-config/);
   });
 });
@@ -127,7 +137,7 @@ describe("applyOnMerge", () => {
     const applied = await applyOnMerge({
       current: withAuditPrimary("opus-4.7"),
       merged: withAuditPrimary("opus-4.7"),
-      persist
+      persist,
     });
     expect(applied).toBe(true);
     expect(persist).toHaveBeenCalledOnce();
@@ -135,7 +145,11 @@ describe("applyOnMerge", () => {
 
   it("is a no-op when the gate is OFF (a stray merge never rewrites config)", async () => {
     const persist = vi.fn<(c: OrgConfigV1) => Promise<void>>(async () => {});
-    const applied = await applyOnMerge({ current: baseConfig(), merged: withAuditPrimary("opus-4.7"), persist });
+    const applied = await applyOnMerge({
+      current: baseConfig(),
+      merged: withAuditPrimary("opus-4.7"),
+      persist,
+    });
     expect(applied).toBe(false);
     expect(persist).not.toHaveBeenCalled();
   });

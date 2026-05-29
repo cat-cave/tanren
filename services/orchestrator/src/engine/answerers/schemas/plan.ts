@@ -13,14 +13,14 @@ export const PlanSubtask = z
     title: z.string().min(1),
     intent: z.string().min(1),
     behaviorIds: z.array(z.string().min(1)),
-    estimatedTokens: z.number().int().nullable()
+    estimatedTokens: z.number().int().nullable(),
   })
   .strict();
 
 export const PlanAnswer = z
   .object({
     subtasks: z.array(PlanSubtask).min(1),
-    rationale: z.string().min(1)
+    rationale: z.string().min(1),
   })
   .strict();
 

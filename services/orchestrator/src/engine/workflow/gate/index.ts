@@ -6,7 +6,7 @@ export {
   type GateAppendEvent,
   type GateStepOutcome,
   type GateTierResult,
-  type RunGateTierInput
+  type RunGateTierInput,
 } from "./runGateTier.js";
 export { runGateForWhen, type GateOutcome, type RunGateForWhenInput } from "./runGateForWhen.js";
 export { resolveGateConfig, type ResolveGateConfigInput } from "./resolveGateConfig.js";

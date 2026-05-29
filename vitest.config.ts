@@ -4,8 +4,8 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   resolve: {
     alias: {
-      "@tanren/db": new URL("./db/src/index.ts", import.meta.url).pathname
-    }
+      "@tanren/db": new URL("./db/src/index.ts", import.meta.url).pathname,
+    },
   },
   test: {
     reporters: ["default", new MergifyReporter()],
@@ -29,11 +29,7 @@ export default defineConfig({
       // Instrument every package's source so the repo-wide floor below is
       // computed against the whole codebase; per-glob thresholds still apply
       // to their (narrower) subsets of this set.
-      include: [
-        "cli/src/**",
-        "db/src/**",
-        "services/*/src/**"
-      ],
+      include: ["cli/src/**", "db/src/**", "services/*/src/**"],
       thresholds: {
         // Strictness wave 2 — REPO-WIDE floor. Measured baseline at authoring
         // time (corepack pnpm vitest run --coverage over all src):
@@ -49,33 +45,33 @@ export default defineConfig({
           statements: 90,
           branches: 90,
           functions: 90,
-          lines: 90
+          lines: 90,
         },
         "services/orchestrator/src/engine/workflow/checker/**": {
           statements: 90,
           branches: 90,
           functions: 90,
-          lines: 90
+          lines: 90,
         },
         "services/orchestrator/src/engine/workflow/planner/**": {
           statements: 90,
           branches: 90,
           functions: 90,
-          lines: 90
+          lines: 90,
         },
         // Loop stages — observed stmts/lines 100, branches 73.9, funcs 100.
         "services/orchestrator/src/engine/workflow/subtaskStages.ts": {
           statements: 90,
           branches: 60,
           functions: 90,
-          lines: 90
+          lines: 90,
         },
         // Cost-recording path — observed stmts/lines 100, branches 83.3.
         "services/orchestrator/src/engine/workflow/subtaskCost.ts": {
           statements: 90,
           branches: 70,
           functions: 90,
-          lines: 90
+          lines: 90,
         },
         // Credential-resolution path — observed (dir aggregate) stmts/lines
         // 88.7, branches 83.2, funcs 91.6. Floors below the weakest member.
@@ -83,9 +79,9 @@ export default defineConfig({
           statements: 65,
           branches: 45,
           functions: 70,
-          lines: 65
-        }
-      }
+          lines: 65,
+        },
+      },
     },
     // P2A-0015: the fixture content under fixtures/acceptance-medium/ is
     // pushed verbatim to the operator-pre-created GitHub repo by the
@@ -97,6 +93,6 @@ export default defineConfig({
     // `**/tests/e2e/**` excludes the dashboard's LOCAL-ONLY Playwright smoke
     // (P2B-0001): it imports `@playwright/test` (not a CI dependency) and is run
     // manually via `pnpm test:e2e`, never through the unit `vitest run` gate.
-    exclude: ["**/node_modules/**", "**/dist/**", "fixtures/**", ".claude/**", "**/tests/e2e/**"]
-  }
+    exclude: ["**/node_modules/**", "**/dist/**", "fixtures/**", ".claude/**", "**/tests/e2e/**"],
+  },
 });

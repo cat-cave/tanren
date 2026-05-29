@@ -20,14 +20,14 @@ export const RoutingChainEntry = z
     cli: z.string().min(1),
     model: z.string().min(1),
     authRef: z.string().min(1),
-    healthHint: HealthHint.optional()
+    healthHint: HealthHint.optional(),
   })
   .strict();
 export type RoutingChainEntry = z.infer<typeof RoutingChainEntry>;
 
 export const RoutingChain = z
   .object({
-    chain: z.array(RoutingChainEntry).default([])
+    chain: z.array(RoutingChainEntry).default([]),
   })
   .strict();
 export type RoutingChain = z.infer<typeof RoutingChain>;
@@ -43,7 +43,7 @@ export const RoutingTable = z
     check: RoutingChain.default({ chain: [] }),
     audit: RoutingChain.default({ chain: [] }),
     demo: RoutingChain.default({ chain: [] }),
-    forge: RoutingChain.default({ chain: [] })
+    forge: RoutingChain.default({ chain: [] }),
   })
   .strict();
 export type RoutingTable = z.infer<typeof RoutingTable>;
@@ -62,7 +62,7 @@ export const EscapeHatches = z
     maxWriterIterPerSubtask: z.number().int().min(1).default(5),
     maxPlannerRerunsPerSpec: z.number().int().min(1).default(3),
     maxRetriesPerTransientFailure: z.number().int().min(0).default(3),
-    maxSpecDiscoveryRoundsWithForge: z.number().int().min(1).default(20)
+    maxSpecDiscoveryRoundsWithForge: z.number().int().min(1).default(20),
   })
   .strict();
 export type EscapeHatches = z.infer<typeof EscapeHatches>;
@@ -78,7 +78,7 @@ export const PartialEscapeHatches = z
     maxWriterIterPerSubtask: z.number().int().min(1).optional(),
     maxPlannerRerunsPerSpec: z.number().int().min(1).optional(),
     maxRetriesPerTransientFailure: z.number().int().min(0).optional(),
-    maxSpecDiscoveryRoundsWithForge: z.number().int().min(1).optional()
+    maxSpecDiscoveryRoundsWithForge: z.number().int().min(1).optional(),
   })
   .strict();
 export type PartialEscapeHatches = z.infer<typeof PartialEscapeHatches>;
@@ -94,7 +94,7 @@ export const AllocatorConfig = z
     concurrency: z.number().int().min(1).default(3),
     memoryMb: z.number().int().min(256).default(4096),
     cpus: z.number().int().min(1).default(2),
-    runnerImage: z.string().min(1).default("ghcr.io/cat-cave/tanren-runner:v0")
+    runnerImage: z.string().min(1).default("ghcr.io/cat-cave/tanren-runner:v0"),
   })
   .strict();
 export type AllocatorConfig = z.infer<typeof AllocatorConfig>;
@@ -106,7 +106,7 @@ export const PartialAllocatorConfig = z
     concurrency: z.number().int().min(1).optional(),
     memoryMb: z.number().int().min(256).optional(),
     cpus: z.number().int().min(1).optional(),
-    runnerImage: z.string().min(1).optional()
+    runnerImage: z.string().min(1).optional(),
   })
   .strict();
 export type PartialAllocatorConfig = z.infer<typeof PartialAllocatorConfig>;
@@ -124,7 +124,7 @@ export type NotificationTargetRef = z.infer<typeof NotificationTargetRef>;
 export const ForgePersona = z
   .object({
     systemPromptOverride: z.string().nullable().default(null),
-    enableTools: z.array(z.string().min(1)).default([])
+    enableTools: z.array(z.string().min(1)).default([]),
   })
   .strict();
 export type ForgePersona = z.infer<typeof ForgePersona>;
@@ -133,7 +133,7 @@ export type ForgePersona = z.infer<typeof ForgePersona>;
 export const PartialForgePersona = z
   .object({
     systemPromptOverride: z.string().nullable().optional(),
-    enableTools: z.array(z.string().min(1)).optional()
+    enableTools: z.array(z.string().min(1)).optional(),
   })
   .strict();
 export type PartialForgePersona = z.infer<typeof PartialForgePersona>;
@@ -143,12 +143,7 @@ export type PartialForgePersona = z.infer<typeof PartialForgePersona>;
 export const GovernancePosture = z.enum(["strict", "open", "audit_only"]);
 export type GovernancePosture = z.infer<typeof GovernancePosture>;
 
-export const MergeIntegration = z.enum([
-  "mergify_queue",
-  "direct_merge",
-  "external_reviewer",
-  "not_configured"
-]);
+export const MergeIntegration = z.enum(["mergify_queue", "direct_merge", "external_reviewer", "not_configured"]);
 export type MergeIntegration = z.infer<typeof MergeIntegration>;
 
 // ---- Errors --------------------------------------------------------------
@@ -161,9 +156,7 @@ export class UnknownConfigVersionError extends Error {
   readonly observedVersion: unknown;
   readonly supportedVersions: ReadonlyArray<number>;
   constructor(observedVersion: unknown, supportedVersions: ReadonlyArray<number>) {
-    super(
-      `unknown config version: observed=${String(observedVersion)} supported=[${supportedVersions.join(",")}]`
-    );
+    super(`unknown config version: observed=${String(observedVersion)} supported=[${supportedVersions.join(",")}]`);
     this.observedVersion = observedVersion;
     this.supportedVersions = supportedVersions;
   }

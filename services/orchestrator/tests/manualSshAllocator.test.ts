@@ -18,7 +18,7 @@ function req(runId: string) {
     runId,
     projectId: "proj_a",
     runnerImage: "ghcr.io/cat-cave/tanren-runner:v0",
-    identitySecretRef: "runner/identity"
+    identitySecretRef: "runner/identity",
   };
 }
 
@@ -33,10 +33,10 @@ describe("ManualSshAllocator", () => {
           port: 2200,
           username: "tanren",
           hostKeyFingerprint: "SHA256:abc",
-          identitySecretRef: "runner/host-1/key"
-        }
+          identitySecretRef: "runner/host-1/key",
+        },
       ],
-      runners
+      runners,
     });
 
     const allocation = await allocator.allocate(req("run_1"));
@@ -53,7 +53,7 @@ describe("ManualSshAllocator", () => {
     const runners = new FakeRunnerStore();
     const allocator = new ManualSshAllocator({
       hosts: [{ id: "h", host: "h.example", hostKeyFingerprint: "SHA256:x" }],
-      runners
+      runners,
     });
     const allocation = await allocator.allocate(req("run_2"));
     expect(allocation.target.port).toBe(22);
@@ -66,9 +66,9 @@ describe("ManualSshAllocator", () => {
     const allocator = new ManualSshAllocator({
       hosts: [
         { id: "a", host: "a", hostKeyFingerprint: "SHA256:a" },
-        { id: "b", host: "b", hostKeyFingerprint: "SHA256:b" }
+        { id: "b", host: "b", hostKeyFingerprint: "SHA256:b" },
       ],
-      runners
+      runners,
     });
     const first = await allocator.allocate(req("run_a"));
     const second = await allocator.allocate(req("run_b"));
@@ -81,7 +81,7 @@ describe("ManualSshAllocator", () => {
     const runners = new FakeRunnerStore();
     const allocator = new ManualSshAllocator({
       hosts: [{ id: "only", host: "only", hostKeyFingerprint: "SHA256:o" }],
-      runners
+      runners,
     });
     const a = await allocator.allocate(req("run_x"));
     await allocator.release(a.runnerId, "completed");
@@ -95,7 +95,7 @@ describe("ManualSshAllocator", () => {
     const runners = new FakeRunnerStore();
     const allocator = new ManualSshAllocator({
       hosts: [{ id: "only", host: "only", hostKeyFingerprint: "SHA256:o" }],
-      runners
+      runners,
     });
     await allocator.release("runner_never_allocated");
     expect(runners.releases).toEqual([]);
@@ -103,7 +103,7 @@ describe("ManualSshAllocator", () => {
 
   it("throws when constructed with an empty host pool", () => {
     expect(() => new ManualSshAllocator({ hosts: [], runners: new FakeRunnerStore() })).toThrow(
-      /at least one configured host/
+      /at least one configured host/,
     );
   });
 });

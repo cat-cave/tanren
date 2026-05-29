@@ -17,26 +17,26 @@ const tokenResponseSchema = z.object({
   token_type: z.string().optional(),
   scope: z.string().optional(),
   error: z.string().optional(),
-  error_description: z.string().optional()
+  error_description: z.string().optional(),
 });
 
 const githubUserSchema = z.object({
   id: z.union([z.number().int(), z.string()]),
   login: z.string().min(1),
   name: z.string().nullable().optional(),
-  email: z.string().nullable().optional()
+  email: z.string().nullable().optional(),
 });
 
 const githubEmailSchema = z.object({
   email: z.string().min(1),
   primary: z.boolean().optional(),
-  verified: z.boolean().optional()
+  verified: z.boolean().optional(),
 });
 
 const githubOrgSchema = z.object({
   id: z.union([z.number().int(), z.string()]),
   login: z.string().min(1),
-  description: z.string().nullable().optional()
+  description: z.string().nullable().optional(),
 });
 
 export class GitHubOAuthProvider implements IdentityProvider {
@@ -61,7 +61,7 @@ export class GitHubOAuthProvider implements IdentityProvider {
       redirect_uri: redirectUri,
       state,
       scope: this.scopes.join(" "),
-      allow_signup: "false"
+      allow_signup: "false",
     });
     return `${this.authorizeUrl}?${params.toString()}`;
   }
@@ -71,14 +71,14 @@ export class GitHubOAuthProvider implements IdentityProvider {
     const [user, email, orgs] = await Promise.all([
       this.fetchUser(token),
       this.fetchPrimaryEmail(token),
-      this.fetchOrgs(token)
+      this.fetchOrgs(token),
     ]);
     return {
       providerSubject: String(user.id),
       login: user.login,
       email: email ?? user.email ?? null,
       displayName: user.name ?? user.login,
-      orgs
+      orgs,
     };
   }
 
@@ -90,8 +90,8 @@ export class GitHubOAuthProvider implements IdentityProvider {
         client_id: this.config.clientId,
         client_secret: this.config.clientSecret,
         code,
-        redirect_uri: redirectUri
-      })
+        redirect_uri: redirectUri,
+      }),
     });
     if (!response.ok) {
       throw new IdentityProviderError(this.id, `token endpoint returned ${response.status}`);
@@ -111,7 +111,7 @@ export class GitHubOAuthProvider implements IdentityProvider {
 
   private async fetchUser(token: string): Promise<z.infer<typeof githubUserSchema>> {
     const response = await this.fetchImpl(`${this.apiBaseUrl}/user`, {
-      headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" }
+      headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" },
     });
     if (!response.ok) {
       throw new IdentityProviderError(this.id, `user endpoint returned ${response.status}`);
@@ -125,7 +125,7 @@ export class GitHubOAuthProvider implements IdentityProvider {
 
   private async fetchPrimaryEmail(token: string): Promise<string | null> {
     const response = await this.fetchImpl(`${this.apiBaseUrl}/user/emails`, {
-      headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" }
+      headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" },
     });
     if (!response.ok) {
       return null;
@@ -140,7 +140,7 @@ export class GitHubOAuthProvider implements IdentityProvider {
 
   private async fetchOrgs(token: string): Promise<IdentityOrgClaim[]> {
     const response = await this.fetchImpl(`${this.apiBaseUrl}/user/orgs`, {
-      headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" }
+      headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" },
     });
     if (!response.ok) {
       throw new IdentityProviderError(this.id, `orgs endpoint returned ${response.status}`);
@@ -153,7 +153,7 @@ export class GitHubOAuthProvider implements IdentityProvider {
       externalId: String(entry.id),
       login: entry.login.toLowerCase(),
       displayName: entry.description ?? entry.login,
-      kind: "github_org" as const
+      kind: "github_org" as const,
     }));
   }
 }

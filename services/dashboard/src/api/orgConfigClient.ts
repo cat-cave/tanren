@@ -32,8 +32,13 @@ export abstract class OrchestratorOrgConfigClient extends OrchestratorForgeConve
     const result = await this.sendJson<{ gated?: boolean; pr?: { number: number; url: string } }>(
       "PATCH",
       `/orgs/${encodeURIComponent(orgId)}`,
-      { config }
+      { config },
     );
-    return { ok: result.ok, status: result.status, gated: result.body?.gated === true, pr: result.body?.pr };
+    return {
+      ok: result.ok,
+      status: result.status,
+      gated: result.body?.gated === true,
+      pr: result.body?.pr,
+    };
   }
 }

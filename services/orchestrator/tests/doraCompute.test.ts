@@ -4,11 +4,7 @@
 // the honest-absence (`null`) and genuine-zero shapes.
 
 import { describe, expect, it } from "vitest";
-import {
-  deriveDoraMetrics,
-  type DoraInputs,
-  type DeriveOptions
-} from "../src/engine/insights/dora/index.js";
+import { deriveDoraMetrics, type DoraInputs, type DeriveOptions } from "../src/engine/insights/dora/index.js";
 
 const WINDOW_END = new Date("2026-05-28T00:00:00.000Z");
 const WINDOW_DAYS = 30;
@@ -18,7 +14,7 @@ const OPTIONS: DeriveOptions = {
   projectId: "project_a",
   windowStart: WINDOW_START,
   windowEnd: WINDOW_END,
-  windowDays: WINDOW_DAYS
+  windowDays: WINDOW_DAYS,
 };
 
 /** ISO offset helper: `hoursBefore(WINDOW_END, 21)` etc. */
@@ -34,10 +30,22 @@ describe("deriveDoraMetrics — lead time", () => {
       ...EMPTY,
       merges: [
         // 1h, 3h, 5h lead times → median 3h = 10800s.
-        { specId: "s1", specCreatedAt: at("2026-05-20T00:00:00Z"), mergedAt: at("2026-05-20T01:00:00Z") },
-        { specId: "s2", specCreatedAt: at("2026-05-21T00:00:00Z"), mergedAt: at("2026-05-21T03:00:00Z") },
-        { specId: "s3", specCreatedAt: at("2026-05-22T00:00:00Z"), mergedAt: at("2026-05-22T05:00:00Z") }
-      ]
+        {
+          specId: "s1",
+          specCreatedAt: at("2026-05-20T00:00:00Z"),
+          mergedAt: at("2026-05-20T01:00:00Z"),
+        },
+        {
+          specId: "s2",
+          specCreatedAt: at("2026-05-21T00:00:00Z"),
+          mergedAt: at("2026-05-21T03:00:00Z"),
+        },
+        {
+          specId: "s3",
+          specCreatedAt: at("2026-05-22T00:00:00Z"),
+          mergedAt: at("2026-05-22T05:00:00Z"),
+        },
+      ],
     };
     const m = deriveDoraMetrics(inputs, OPTIONS);
     expect(m.leadTimeSeconds.value).toBe(3 * 3600);
@@ -48,9 +56,17 @@ describe("deriveDoraMetrics — lead time", () => {
     const inputs: DoraInputs = {
       ...EMPTY,
       merges: [
-        { specId: "s1", specCreatedAt: at("2026-05-20T02:00:00Z"), mergedAt: at("2026-05-20T01:00:00Z") }, // negative
-        { specId: "s2", specCreatedAt: at("2026-05-21T00:00:00Z"), mergedAt: at("2026-05-21T02:00:00Z") } // 2h
-      ]
+        {
+          specId: "s1",
+          specCreatedAt: at("2026-05-20T02:00:00Z"),
+          mergedAt: at("2026-05-20T01:00:00Z"),
+        }, // negative
+        {
+          specId: "s2",
+          specCreatedAt: at("2026-05-21T00:00:00Z"),
+          mergedAt: at("2026-05-21T02:00:00Z"),
+        }, // 2h
+      ],
     };
     const m = deriveDoraMetrics(inputs, OPTIONS);
     expect(m.leadTimeSeconds.value).toBe(2 * 3600);
@@ -69,7 +85,7 @@ describe("deriveDoraMetrics — deploy frequency", () => {
     const merges = Array.from({ length: 6 }, (_, i) => ({
       specId: `s${i}`,
       specCreatedAt: at("2026-05-10T00:00:00Z"),
-      mergedAt: at("2026-05-10T01:00:00Z")
+      mergedAt: at("2026-05-10T01:00:00Z"),
     }));
     const m = deriveDoraMetrics({ ...EMPTY, merges }, OPTIONS);
     expect(m.deployFrequencyPerDay.value).toBeCloseTo(6 / 30, 6);
@@ -90,8 +106,8 @@ describe("deriveDoraMetrics — change-failure rate", () => {
         { runId: "r1", status: "completed", endedAt: WINDOW_END },
         { runId: "r2", status: "done", endedAt: WINDOW_END },
         { runId: "r3", status: "halted", endedAt: WINDOW_END },
-        { runId: "r4", status: "failed", endedAt: WINDOW_END }
-      ]
+        { runId: "r4", status: "failed", endedAt: WINDOW_END },
+      ],
     };
     const m = deriveDoraMetrics(inputs, OPTIONS);
     expect(m.changeFailureRate.value).toBe(0.5);
@@ -102,7 +118,7 @@ describe("deriveDoraMetrics — change-failure rate", () => {
   it("is a genuine numeric zero when every finished run succeeded", () => {
     const inputs: DoraInputs = {
       ...EMPTY,
-      finishedRuns: [{ runId: "r1", status: "completed", endedAt: WINDOW_END }]
+      finishedRuns: [{ runId: "r1", status: "completed", endedAt: WINDOW_END }],
     };
     const m = deriveDoraMetrics(inputs, OPTIONS);
     expect(m.changeFailureRate.value).toBe(0);
@@ -120,9 +136,17 @@ describe("deriveDoraMetrics — mean time to restore", () => {
       ...EMPTY,
       recoveries: [
         // 2h and 4h → median 3h.
-        { specId: "s1", haltedAt: at("2026-05-15T00:00:00Z"), recoveredAt: at("2026-05-15T02:00:00Z") },
-        { specId: "s2", haltedAt: at("2026-05-16T00:00:00Z"), recoveredAt: at("2026-05-16T04:00:00Z") }
-      ]
+        {
+          specId: "s1",
+          haltedAt: at("2026-05-15T00:00:00Z"),
+          recoveredAt: at("2026-05-15T02:00:00Z"),
+        },
+        {
+          specId: "s2",
+          haltedAt: at("2026-05-16T00:00:00Z"),
+          recoveredAt: at("2026-05-16T04:00:00Z"),
+        },
+      ],
     };
     const m = deriveDoraMetrics(inputs, OPTIONS);
     expect(m.meanTimeToRestoreSeconds.value).toBe(3 * 3600);

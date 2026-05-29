@@ -1,10 +1,5 @@
 import { Client } from "ssh2";
-import type {
-  AllocationRequest,
-  Allocator,
-  ReleaseReason,
-  RunnerAllocation
-} from "../contracts/allocator.js";
+import type { AllocationRequest, Allocator, ReleaseReason, RunnerAllocation } from "../contracts/allocator.js";
 import { normalizeHostKeyFingerprint } from "../ssh/fingerprint.js";
 import type { RunnerStore } from "./runnerStore.js";
 
@@ -54,8 +49,7 @@ export class StaticRunnerAllocator implements Allocator {
     const host = this.options.host;
     const port = this.options.port;
     const username = this.options.username ?? "tanren";
-    const fingerprint =
-      this.options.hostKeyFingerprint ?? (await this.discoverHostKeyFingerprint(host, port));
+    const fingerprint = this.options.hostKeyFingerprint ?? (await this.discoverHostKeyFingerprint(host, port));
     const runnerId = `runner_${request.runId}`;
     const allocation: RunnerAllocation = {
       runnerId,
@@ -65,8 +59,8 @@ export class StaticRunnerAllocator implements Allocator {
         port,
         username,
         hostKeyFingerprint: fingerprint,
-        identitySecretRef: request.identitySecretRef
-      }
+        identitySecretRef: request.identitySecretRef,
+      },
     };
 
     await this.options.runners.claim({
@@ -78,7 +72,7 @@ export class StaticRunnerAllocator implements Allocator {
       sshPort: port,
       hostKeyFingerprint: fingerprint,
       imageSha: allocation.imageSha,
-      containerId: runnerId
+      containerId: runnerId,
     });
 
     return allocation;
@@ -125,7 +119,7 @@ export class StaticRunnerAllocator implements Allocator {
       };
       const timer = setTimeout(
         () => settle(() => reject(new Error(`static runner host key discovery timed out after ${timeoutMs}ms`))),
-        timeoutMs
+        timeoutMs,
       );
       client.once("error", (error: Error) => {
         // The discovery handshake intentionally aborts after the host key is
@@ -151,7 +145,7 @@ export class StaticRunnerAllocator implements Allocator {
           return false;
         },
         readyTimeout: timeoutMs,
-        timeout: timeoutMs
+        timeout: timeoutMs,
       });
     });
   }

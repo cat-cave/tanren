@@ -28,7 +28,7 @@ import { SpecListBody } from "../../../components/project/SpecCreateBody.js";
 function clientFor(c: Context, deps: ShellDeps): OrchestratorClient {
   return new OrchestratorClient({
     orchestratorUrl: deps.orchestratorUrl,
-    cookieHeader: c.req.header("cookie")
+    cookieHeader: c.req.header("cookie"),
   });
 }
 
@@ -68,7 +68,7 @@ export function mountTriggerScreens(app: Hono, deps: ShellDeps): void {
     const client = clientFor(c, deps);
     const result = await client.triggerRun(ctx.org.id, projectId, specId, {
       trigger: "dashboard",
-      ...(branchRaw !== "" ? { branch: branchRaw } : {})
+      ...(branchRaw !== "" ? { branch: branchRaw } : {}),
     });
 
     if (result.ok && result.body !== undefined) {
@@ -90,7 +90,7 @@ async function renderSpecListWithError(
   ctx: Awaited<ReturnType<typeof loadShellContext>>,
   projectId: string,
   specId: string,
-  error: string
+  error: string,
 ) {
   if (ctx.org === undefined || ctx.project === undefined) {
     return renderShell(
@@ -106,13 +106,13 @@ async function renderSpecListWithError(
             </p>
           </section>
         </div>
-      </div>
+      </div>,
     );
   }
   const client = clientFor(c, deps);
   const [specs, runs] = await Promise.all([
     client.listSpecs(ctx.org.id, projectId),
-    client.listRuns(ctx.org.id, projectId)
+    client.listRuns(ctx.org.id, projectId),
   ]);
   const runBySpec: Record<string, string | undefined> = {};
   for (const run of runs) {
@@ -122,12 +122,6 @@ async function renderSpecListWithError(
     c,
     ctx,
     { title: `tanren · ${ctx.project.name} specs` },
-    <SpecListBody
-      project={ctx.project}
-      specs={specs}
-      runBySpec={runBySpec}
-      error={error}
-      errorSpecId={specId}
-    />
+    <SpecListBody project={ctx.project} specs={specs} runBySpec={runBySpec} error={error} errorSpecId={specId} />,
   );
 }

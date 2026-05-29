@@ -33,7 +33,7 @@ export async function redactEventRows(input: RedactEventRowsInput): Promise<{
       eventName: eventType,
       payload: row["payload"],
       actor,
-      rawView
+      rawView,
     });
     if (rawView && output.rawAccessedPaths.length > 0 && hasElevatedScope(actor)) {
       auditEmissions.push(
@@ -46,14 +46,14 @@ export async function redactEventRows(input: RedactEventRowsInput): Promise<{
           taskId: row["task_id"] !== null && row["task_id"] !== undefined ? String(row["task_id"]) : undefined,
           eventReadId: String(row["id"]),
           eventReadType: eventType,
-          paths: output.rawAccessedPaths
-        })
+          paths: output.rawAccessedPaths,
+        }),
       );
     }
     return {
       ...row,
       payload: output.payload,
-      redactedPaths: output.redactedPaths
+      redactedPaths: output.redactedPaths,
     };
   });
   if (auditEmissions.length > 0) {
@@ -68,7 +68,10 @@ export async function redactEventRows(input: RedactEventRowsInput): Promise<{
 // the actor explicitly stating "I want the raw values" — the audit emitter
 // rows-this so the operator trail captures the decision.
 export function parseRawViewOptIn(c: {
-  req: { header: (name: string) => string | undefined; query: (name: string) => string | undefined };
+  req: {
+    header: (name: string) => string | undefined;
+    query: (name: string) => string | undefined;
+  };
 }): boolean {
   const header = c.req.header("x-view-raw");
   if (header !== undefined && /^(1|true|yes)$/i.test(header.trim())) {

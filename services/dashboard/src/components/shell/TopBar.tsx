@@ -70,8 +70,12 @@ export function TopBar(props: TopBarProps) {
       )}
       <div class="right">
         <div class="surface-toggle" data-island="theme-toggle">
-          <button type="button" data-theme-value="ink">ink</button>
-          <button type="button" data-theme-value="ash">ash</button>
+          <button type="button" data-theme-value="ink">
+            ink
+          </button>
+          <button type="button" data-theme-value="ash">
+            ash
+          </button>
         </div>
         <button class="forge-key" type="button" data-island-trigger="palette">
           <span class="stamp">鍛</span>

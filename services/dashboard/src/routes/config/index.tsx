@@ -22,15 +22,33 @@ import { ConfigView, type ConfigDiffLine, type ConfigHistoryEntry } from "../../
 function clientFor(c: Context, deps: ShellDeps): OrchestratorClient {
   return new OrchestratorClient({
     orchestratorUrl: deps.orchestratorUrl,
-    cookieHeader: c.req.header("cookie")
+    cookieHeader: c.req.header("cookie"),
   });
 }
 
 /** Static history shown until a config-PR event store lands (documented punt). */
 const PLACEHOLDER_HISTORY: ConfigHistoryEntry[] = [
-  { ref: "#6", summary: "raise max writer iter 5 → 8", who: "forge", when: "3d ago", state: "merged" },
-  { ref: "#5", summary: "add gemini-2.5-pro as write fallback", who: "forge", when: "8d ago", state: "merged" },
-  { ref: "#4", summary: "rotate openai org key reference", who: "operator", when: "12d ago", state: "merged" }
+  {
+    ref: "#6",
+    summary: "raise max writer iter 5 → 8",
+    who: "forge",
+    when: "3d ago",
+    state: "merged",
+  },
+  {
+    ref: "#5",
+    summary: "add gemini-2.5-pro as write fallback",
+    who: "forge",
+    when: "8d ago",
+    state: "merged",
+  },
+  {
+    ref: "#4",
+    summary: "rotate openai org key reference",
+    who: "operator",
+    when: "12d ago",
+    state: "merged",
+  },
 ];
 
 export function mountConfigScreen(app: Hono, deps: ShellDeps): void {
@@ -51,7 +69,11 @@ export function mountConfigScreen(app: Hono, deps: ShellDeps): void {
     const prNumber = Number(c.req.query("pr") ?? "");
     const pr =
       Number.isFinite(prNumber) && prNumber > 0
-        ? { number: prNumber, url: c.req.query("prUrl") ?? "#", branch: c.req.query("branch") ?? "" }
+        ? {
+            number: prNumber,
+            url: c.req.query("prUrl") ?? "#",
+            branch: c.req.query("branch") ?? "",
+          }
         : undefined;
 
     return renderShell(
@@ -70,10 +92,10 @@ export function mountConfigScreen(app: Hono, deps: ShellDeps): void {
         checks={["schema valid", "no dangling cred refs", "fallback chain ≥ 1"]}
         impact={[
           { l: "scope", v: "config only", k: "applies on merge" },
-          { l: "source of truth", v: "the db", k: "pr is the write gate" }
+          { l: "source of truth", v: "the db", k: "pr is the write gate" },
         ]}
         history={PLACEHOLDER_HISTORY}
-      />
+      />,
     );
   });
 
@@ -93,11 +115,16 @@ export function mountConfigScreen(app: Hono, deps: ShellDeps): void {
         routing: current?.config.routing ?? emptyRouting(),
         escapeHatches: current?.config.escapeHatches ?? defaultHatches(),
         ...current?.config,
-        auditGateEnabled: enable
+        auditGateEnabled: enable,
       };
       // Enabling needs a target repo; carry it through (default branch/file).
       if (enable && repo !== "") {
-        config.auditGate = { repo, baseBranch: "main", branchPrefix: "forge", configFile: "tanren.yaml" };
+        config.auditGate = {
+          repo,
+          baseBranch: "main",
+          branchPrefix: "forge",
+          configFile: "tanren.yaml",
+        };
       } else if (!enable) {
         delete config.auditGate;
       }
@@ -125,7 +152,7 @@ function emptyRouting(): OrgConfig["routing"] {
     check: { chain: [] },
     audit: { chain: [] },
     demo: { chain: [] },
-    forge: { chain: [] }
+    forge: { chain: [] },
   };
 }
 
@@ -134,6 +161,6 @@ function defaultHatches(): OrgConfig["escapeHatches"] {
     maxWriterIterPerSubtask: 5,
     maxPlannerRerunsPerSpec: 3,
     maxRetriesPerTransientFailure: 3,
-    maxSpecDiscoveryRoundsWithForge: 20
+    maxSpecDiscoveryRoundsWithForge: 20,
   };
 }

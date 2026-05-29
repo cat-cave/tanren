@@ -19,18 +19,16 @@ import type { Sensitivity } from "../events/sensitivity.js";
 const SCOPES_VIEWING_REDACTED: ReadonlySet<ActorScope> = new Set<ActorScope>([
   "platform:admin",
   "org:admin",
-  "project:admin"
+  "project:admin",
 ]);
 
-const SCOPES_VIEWING_SECRET: ReadonlySet<ActorScope> = new Set<ActorScope>([
-  "platform:admin"
-]);
+const SCOPES_VIEWING_SECRET: ReadonlySet<ActorScope> = new Set<ActorScope>(["platform:admin"]);
 
 export const sensitivityToRequiredScopes: Record<Sensitivity, ReadonlySet<ActorScope> | null> = {
   // public has no required scope — any authenticated actor sees raw.
   public: null,
   redacted: SCOPES_VIEWING_REDACTED,
-  secret: SCOPES_VIEWING_SECRET
+  secret: SCOPES_VIEWING_SECRET,
 };
 
 // AccessScopeOrder is exported so callers and tests can reason about the
@@ -43,7 +41,7 @@ export const AccessScopeOrder: readonly ActorScope[] = [
   "org:member",
   "project:admin",
   "org:admin",
-  "platform:admin"
+  "platform:admin",
 ];
 
 // canViewRaw returns true when the actor holds at least one of the scopes

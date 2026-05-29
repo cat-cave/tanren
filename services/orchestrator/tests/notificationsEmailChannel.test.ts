@@ -3,7 +3,7 @@ import {
   EmailChannel,
   HttpEmailTransport,
   type EmailMessage,
-  type EmailTransport
+  type EmailTransport,
 } from "../src/engine/notifications/channels/email.js";
 import type { SecretStore, SecretValue } from "../src/engine/contracts/secretStore.js";
 import type { NotificationTargetRow } from "../src/engine/notifications/index.js";
@@ -24,12 +24,11 @@ function target(overrides: Partial<NotificationTargetRow> = {}): NotificationTar
     weekendMute: false,
     createdAt: new Date(),
     updatedAt: new Date(),
-    ...overrides
+    ...overrides,
   };
 }
 
-const failingFetch: typeof fetch = async () =>
-  new Response("bad", { status: 502, statusText: "Bad Gateway" });
+const failingFetch: typeof fetch = async () => new Response("bad", { status: 502, statusText: "Bad Gateway" });
 
 class MemorySecrets implements SecretStore {
   constructor(private readonly map: Record<string, string>) {}
@@ -63,7 +62,7 @@ describe("EmailChannel", () => {
       severity: "fail",
       eventName: "run.failed",
       url: "https://tanren.example/runs/run_1",
-      tags: ["tanren"]
+      tags: ["tanren"],
     });
     expect(transport.sent).toHaveLength(1);
     const message = transport.sent[0]!;
@@ -83,8 +82,8 @@ describe("EmailChannel", () => {
         title: "t",
         body: "b",
         severity: "info",
-        eventName: "run.started"
-      })
+        eventName: "run.started",
+      }),
     ).rejects.toThrow(/transport down/);
   });
 });
@@ -98,7 +97,7 @@ describe("HttpEmailTransport (default)", () => {
     };
     const secrets = new MemorySecrets({
       "credential/email/api-endpoint": "https://email.example.com/send",
-      "credential/email/api-key": "key_123"
+      "credential/email/api-key": "key_123",
     });
     const transport = new HttpEmailTransport({ fetch: fakeFetch, secrets, from: "alerts@tanren" });
     await transport.send({ to: "oncall@example.com", subject: "s", text: "b" });
@@ -110,25 +109,25 @@ describe("HttpEmailTransport (default)", () => {
       from: "alerts@tanren",
       to: "oncall@example.com",
       subject: "s",
-      text: "b"
+      text: "b",
     });
   });
 
   it("throws when the email API returns a non-2xx status", async () => {
     const secrets = new MemorySecrets({
       "credential/email/api-endpoint": "https://email.example.com/send",
-      "credential/email/api-key": "key_123"
+      "credential/email/api-key": "key_123",
     });
     const transport = new HttpEmailTransport({ fetch: failingFetch, secrets });
     await expect(transport.send({ to: "x@example.com", subject: "s", text: "b" })).rejects.toThrow(
-      /email publish failed: 502/
+      /email publish failed: 502/,
     );
   });
 
   it("throws when credential refs are missing", async () => {
     const transport = new HttpEmailTransport({ secrets: new MemorySecrets({}) });
     await expect(transport.send({ to: "x@example.com", subject: "s", text: "b" })).rejects.toThrow(
-      /missing email API endpoint credential ref/
+      /missing email API endpoint credential ref/,
     );
   });
 });

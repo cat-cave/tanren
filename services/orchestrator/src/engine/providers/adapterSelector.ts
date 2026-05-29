@@ -50,7 +50,7 @@ export interface AdapterSelectorDependencies {
 export class UnsupportedProviderError extends Error {
   constructor(
     readonly cli: string,
-    readonly role: "writer" | "answerer"
+    readonly role: "writer" | "answerer",
   ) {
     super(`unsupported ${role} provider cli: ${cli}`);
     this.name = "UnsupportedProviderError";
@@ -61,7 +61,13 @@ export class UnsupportedProviderError extends Error {
 // the per-provider credential ref the adapter materializes at call time, and
 // `model` (when present) pins the model the CLI runs.
 export function buildWriterAdapter(deps: AdapterSelectorDependencies, entry: RoutingChainEntry): WriterAdapter {
-  const base = { secrets: deps.secrets, ssh: deps.ssh, target: deps.target, runId: deps.runId, credentialRef: entry.authRef };
+  const base = {
+    secrets: deps.secrets,
+    ssh: deps.ssh,
+    target: deps.target,
+    runId: deps.runId,
+    credentialRef: entry.authRef,
+  };
   // The harness capability table gates role-eligibility (harnessCapability.ts):
   // a cli the table does not mark "write"-capable is rejected before we try to
   // build an adapter for it.
@@ -93,9 +99,15 @@ export function buildAnswererAdapter<TOutput>(
   // P3-0029: the loop role (plan/check/audit/demo) the resolved Answerer
   // serves, threaded into the boundary timing record. Defaults to the generic
   // "answerer" dimension when a caller does not pin a role.
-  role = "answerer"
+  role = "answerer",
 ): AnswererAdapter<TOutput> {
-  const base = { secrets: deps.secrets, ssh: deps.ssh, target: deps.target, runId: deps.runId, credentialRef: entry.authRef };
+  const base = {
+    secrets: deps.secrets,
+    ssh: deps.ssh,
+    target: deps.target,
+    runId: deps.runId,
+    credentialRef: entry.authRef,
+  };
   // Answerer-eligibility is the harness's structured-output capability: a cli
   // not marked "answer"-capable in the table (e.g. opencode, writer-only) is
   // rejected here — the same UnsupportedProviderError surfaced for an unknown
@@ -137,12 +149,15 @@ export class EmptyRoutingChainError extends Error {
 // selectable: a project whose `write` chain heads with
 // { cli: "opencode", model: "zai/glm-5.1", authRef } now runs the opencode
 // Writer, with NO schema or DB migration (the chain shape is unchanged).
-export function buildAdaptersFromRouting(deps: AdapterSelectorDependencies, routing: RoutingTable): RoutingDrivenAdapters {
+export function buildAdaptersFromRouting(
+  deps: AdapterSelectorDependencies,
+  routing: RoutingTable,
+): RoutingDrivenAdapters {
   return {
     planner: buildAnswererAdapter<PlanAnswer>(deps, chainHead(routing, "plan"), "planner"),
     writer: buildWriterAdapter(deps, chainHead(routing, "write")),
     checker: buildAnswererAdapter<CheckAnswer>(deps, chainHead(routing, "check"), "checker"),
-    auditor: buildAnswererAdapter<AuditAnswer>(deps, chainHead(routing, "audit"), "auditor")
+    auditor: buildAnswererAdapter<AuditAnswer>(deps, chainHead(routing, "audit"), "auditor"),
   };
 }
 
@@ -164,7 +179,7 @@ function chainHead(routing: RoutingTable, role: "plan" | "write" | "check" | "au
 // the demo role shares the exact provider seam every other Answerer uses.
 export function buildDemoAnswererOrNull(
   deps: AdapterSelectorDependencies,
-  routing: RoutingTable
+  routing: RoutingTable,
 ): AnswererAdapter<DemoAnswer> | null {
   const head = routing.demo.chain[0];
   if (head === undefined) {

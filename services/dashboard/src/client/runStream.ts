@@ -56,12 +56,12 @@ interface CostTotalsState {
 const COST_SOURCE_VAR: Record<CostRecordFrame["billingMode"], string> = {
   per_token: "var(--cost-token)",
   subscription: "var(--cost-window)",
-  self_hosted: "var(--cost-opportunity)"
+  self_hosted: "var(--cost-opportunity)",
 };
 const COST_SOURCE_LABEL: Record<CostRecordFrame["billingMode"], string> = {
   per_token: "per-token",
   subscription: "window",
-  self_hosted: "self-hosted"
+  self_hosted: "self-hosted",
 };
 
 function formatTokens(count: number): string {
@@ -80,7 +80,7 @@ function emptyTotals(): CostTotalsState {
     outputTokens: 0,
     cachedInputTokens: 0,
     totalTokens: 0,
-    bySource: new Map()
+    bySource: new Map(),
   };
 }
 
@@ -130,7 +130,9 @@ function applyStatus(root: HTMLElement, status: string, outcome: string | null):
   const chip = root.querySelector<HTMLElement>('[data-rd="run-status"]');
   if (chip !== null) {
     chip.classList.remove("ok", "warn", "bad");
-    chip.classList.add(status === "completed" ? "ok" : ["failed", "halted", "cancelled"].includes(status) ? "bad" : "warn");
+    chip.classList.add(
+      status === "completed" ? "ok" : ["failed", "halted", "cancelled"].includes(status) ? "bad" : "warn",
+    );
     const dot = chip.querySelector(".d");
     chip.textContent = "";
     if (dot !== null) chip.appendChild(dot);
@@ -151,7 +153,14 @@ function applyTask(root: HTMLElement, task: TaskFrame): void {
   let state: "done" | "live" | "queued" | "failed" = "done";
   if (task.status === "running" || task.status === "claimed") state = "live";
   else if (task.status === "queued") state = "queued";
-  else if (task.status === "failed" || task.outcome === "rejected_by_checker" || task.outcome === "rejected_by_auditor" || task.outcome === "crashed" || task.outcome === "timed_out") state = "failed";
+  else if (
+    task.status === "failed" ||
+    task.outcome === "rejected_by_checker" ||
+    task.outcome === "rejected_by_auditor" ||
+    task.outcome === "crashed" ||
+    task.outcome === "timed_out"
+  )
+    state = "failed";
   if (dot !== null) {
     dot.className = `dot ${state}`;
     dot.textContent = state === "done" ? "✓" : state === "live" ? "↻" : state === "failed" ? "×" : "";
@@ -167,7 +176,7 @@ function applyTask(root: HTMLElement, task: TaskFrame): void {
 export function initRunStream(): void {
   const root = document.querySelector<HTMLElement>('[data-island="run-stream"]');
   if (root === null) return;
-  const url = root.dataset['streamUrl'];
+  const url = root.dataset["streamUrl"];
   if (url === undefined || url === "") return;
   if (typeof EventSource === "undefined") return;
 
@@ -176,7 +185,10 @@ export function initRunStream(): void {
 
   source.addEventListener("snapshot", (event) => {
     try {
-      const data = JSON.parse((event as MessageEvent).data) as { costs?: CostRecordFrame[]; run?: { status: string; outcome: string | null } };
+      const data = JSON.parse((event as MessageEvent).data) as {
+        costs?: CostRecordFrame[];
+        run?: { status: string; outcome: string | null };
+      };
       totals.perTokenUsd = 0;
       totals.inputTokens = 0;
       totals.outputTokens = 0;
@@ -203,7 +215,10 @@ export function initRunStream(): void {
 
   source.addEventListener("status", (event) => {
     try {
-      const data = JSON.parse((event as MessageEvent).data) as { status: string; outcome: string | null };
+      const data = JSON.parse((event as MessageEvent).data) as {
+        status: string;
+        outcome: string | null;
+      };
       applyStatus(root, data.status, data.outcome);
       if (["completed", "failed", "halted", "cancelled", "done"].includes(data.status)) {
         source.close();
@@ -231,7 +246,7 @@ export function initRunStream(): void {
   root.addEventListener("click", (clickEvent) => {
     const moment = (clickEvent.target as HTMLElement).closest<HTMLElement>("[data-rd-moment]");
     if (moment === null) return;
-    const taskId = moment.dataset['rdMoment'];
+    const taskId = moment.dataset["rdMoment"];
     if (taskId === undefined) return;
     const params = new URLSearchParams(window.location.search);
     params.set("moment", taskId);

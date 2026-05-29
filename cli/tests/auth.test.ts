@@ -29,7 +29,7 @@ describe("CLI auth flow", () => {
     const result = await login({
       orchestratorUrl: "http://localhost:3100",
       token: "tnt_real_token",
-      name: "test"
+      name: "test",
     });
     expect(result.auth.token).toBe("tnt_real_token");
     const persisted = await readAuth();
@@ -45,16 +45,16 @@ describe("CLI auth flow", () => {
           JSON.stringify({
             authorizeUrl: "https://github.example/oauth/authorize?state=abc",
             completeUrl: "http://localhost:3100/auth/cli/complete",
-            state: "abc"
+            state: "abc",
           }),
-          { headers: { "Content-Type": "application/json" } }
-        )
+          { headers: { "Content-Type": "application/json" } },
+        ),
     );
     await expect(
       login({
         orchestratorUrl: "http://localhost:3100",
-        fetchImpl: fetchImpl as unknown as typeof fetch
-      })
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      }),
     ).rejects.toBeInstanceOf(CliLoginIncomplete);
   });
 
@@ -62,7 +62,7 @@ describe("CLI auth flow", () => {
     await writeAuth({
       orchestratorUrl: "http://localhost:3100",
       token: "tnt_hdr",
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
     });
     const { authHeaders } = await import("../src/auth/index.js");
     const headers = await authHeaders();

@@ -409,28 +409,28 @@ Locked in P2A-0002 against the hi-fi vision. Phase 2B may not ship a screen whos
 
 Detailed Owns / Consumes / Produces / What / Why / How / Test plan / Quality bar / Real-functionality validation / Worktree-isolation safety entries for each P2A spec are in [`docs/roadmap/phase-2a-specs.md`](docs/roadmap/phase-2a-specs.md).
 
-| Spec | Title | Notes |
-|---|---|---|
-| P2A-0001 | phase1-closeout-docs | Operator-readable Phase 1 closeout. |
-| P2A-0002 | phase2-workflow-inventory | Lock low-fi wireframes + acceptance criteria per surface. |
-| P2A-0003 | operator-auth-control-plane | Orgs + users + GitHub OAuth + OIDC interface. |
-| P2A-0004 | dev-prod-compose-split | `compose.dev.yml` and `compose.prod.yml` profiles. |
-| P2A-0005 | typed-workflow-state-contract | Zod discriminated unions for run/spec/task/job/actor state. |
-| P2A-0006 | versioned-project-config | 6-role × fallback-chain routing; org + project config. |
-| P2A-0007 | event-payload-schemas | Semantic-rich event payloads for Forge narration. |
-| P2A-0008 | answerer-schema-single-source | Zod source for all 5 Answerer roles (plan/check/audit/demo/forge). |
-| P2A-0009 | redaction-access-scope | Raw-stored, redact-on-read by actor scope. |
-| P2A-0010 | runner-allocator-isolation | Allocator sidecar; ephemeral runners; workspace + auth cleanup. |
-| P2A-0011 | cost-record-persistence | Mandatory attribution; no unknown-source rows. |
-| P2A-0012 | planner-feedback-loops | Real Planner subtasks; checker + auditor rejection loops. |
-| P2A-0013 | project-spec-cli-api | Orgs/projects/specs/behaviors/milestones/credentials CRUD + `/doctor`. |
-| P2A-0014 | run-detail-api-contract | Read API the dashboard consumes; SSE, pagination, redaction. |
-| P2A-0015 | executable-acceptance-gate | `just acceptance-easy` and `just acceptance-medium`. |
-| P2A-0016 | design-system-import | Tokens land at the 2A→2B boundary; no restyle. |
-| P2A-0017 | notifications-contract | Full event×channel×severity matrix schema; ntfy-only impl. |
-| P2A-0018 | product-entities-contract | Personas / behaviors / milestones / spec-dependency edges. |
+| Spec     | Title                            | Notes                                                                            |
+| -------- | -------------------------------- | -------------------------------------------------------------------------------- |
+| P2A-0001 | phase1-closeout-docs             | Operator-readable Phase 1 closeout.                                              |
+| P2A-0002 | phase2-workflow-inventory        | Lock low-fi wireframes + acceptance criteria per surface.                        |
+| P2A-0003 | operator-auth-control-plane      | Orgs + users + GitHub OAuth + OIDC interface.                                    |
+| P2A-0004 | dev-prod-compose-split           | `compose.dev.yml` and `compose.prod.yml` profiles.                               |
+| P2A-0005 | typed-workflow-state-contract    | Zod discriminated unions for run/spec/task/job/actor state.                      |
+| P2A-0006 | versioned-project-config         | 6-role × fallback-chain routing; org + project config.                           |
+| P2A-0007 | event-payload-schemas            | Semantic-rich event payloads for Forge narration.                                |
+| P2A-0008 | answerer-schema-single-source    | Zod source for all 5 Answerer roles (plan/check/audit/demo/forge).               |
+| P2A-0009 | redaction-access-scope           | Raw-stored, redact-on-read by actor scope.                                       |
+| P2A-0010 | runner-allocator-isolation       | Allocator sidecar; ephemeral runners; workspace + auth cleanup.                  |
+| P2A-0011 | cost-record-persistence          | Mandatory attribution; no unknown-source rows.                                   |
+| P2A-0012 | planner-feedback-loops           | Real Planner subtasks; checker + auditor rejection loops.                        |
+| P2A-0013 | project-spec-cli-api             | Orgs/projects/specs/behaviors/milestones/credentials CRUD + `/doctor`.           |
+| P2A-0014 | run-detail-api-contract          | Read API the dashboard consumes; SSE, pagination, redaction.                     |
+| P2A-0015 | executable-acceptance-gate       | `just acceptance-easy` and `just acceptance-medium`.                             |
+| P2A-0016 | design-system-import             | Tokens land at the 2A→2B boundary; no restyle.                                   |
+| P2A-0017 | notifications-contract           | Full event×channel×severity matrix schema; ntfy-only impl.                       |
+| P2A-0018 | product-entities-contract        | Personas / behaviors / milestones / spec-dependency edges.                       |
 | P2A-0019 | forge-narration-and-tool-surface | Threads + turns + tool schema + read-only stubs + operator-button write actions. |
-| P2A-0020 | workflow-insights-contract | `retry_hotspot`, `model_mismatch`, `pace_anomaly` insights. |
+| P2A-0020 | workflow-insights-contract       | `retry_hotspot`, `model_mismatch`, `pace_anomaly` insights.                      |
 
 ### P2A Parallelization Plan
 
@@ -448,17 +448,17 @@ Phase 1's closeout note that manual stack merging did not work cleanly applies h
 
 Detailed entries for each P2B spec are in [`docs/roadmap/phase-2b-specs.md`](docs/roadmap/phase-2b-specs.md).
 
-| Spec | Title | Notes |
-|---|---|---|
-| P2B-0001 | dashboard-shell-and-auth-flow | Shell + GitHub OAuth + ⌘K Forge palette. |
-| P2B-0002 | dashboard-onboarding-and-credentials | Org-setup full track + minimal existing-project track. |
-| P2B-0003 | dashboard-project-and-spec | Chat-primary project view + spec form + routing settings UI. |
-| P2B-0004 | dashboard-run-detail-view | Cost bar + trajectory spine + writer reasoning. |
-| P2B-0005 | dashboard-history-and-costs | Stacked spend, breakdown table, projections (no heatmap/DORA). |
-| P2B-0006 | operator-triggered-live-workflow | End-to-end live wiring incl. forced-halt recovery exercise. |
-| P2B-0007 | phase2-end-to-end-demo | Recorded Phase 2 closeout evidence. |
-| P2B-0008 | dashboard-failure-recovery | Revise / replan / rollback / inspect recovery cards. |
-| P2B-0009 | dashboard-greenfield-new-project | Thin greenfield form. **STRETCH** — Phase 3 if not done. |
+| Spec     | Title                                | Notes                                                          |
+| -------- | ------------------------------------ | -------------------------------------------------------------- |
+| P2B-0001 | dashboard-shell-and-auth-flow        | Shell + GitHub OAuth + ⌘K Forge palette.                       |
+| P2B-0002 | dashboard-onboarding-and-credentials | Org-setup full track + minimal existing-project track.         |
+| P2B-0003 | dashboard-project-and-spec           | Chat-primary project view + spec form + routing settings UI.   |
+| P2B-0004 | dashboard-run-detail-view            | Cost bar + trajectory spine + writer reasoning.                |
+| P2B-0005 | dashboard-history-and-costs          | Stacked spend, breakdown table, projections (no heatmap/DORA). |
+| P2B-0006 | operator-triggered-live-workflow     | End-to-end live wiring incl. forced-halt recovery exercise.    |
+| P2B-0007 | phase2-end-to-end-demo               | Recorded Phase 2 closeout evidence.                            |
+| P2B-0008 | dashboard-failure-recovery           | Revise / replan / rollback / inspect recovery cards.           |
+| P2B-0009 | dashboard-greenfield-new-project     | Thin greenfield form. **STRETCH** — Phase 3 if not done.       |
 
 ### Phase 2 Exit Criteria
 
@@ -478,7 +478,7 @@ Phase 2 is complete when, on merged `main`:
 - `just acceptance-easy` and `just acceptance-medium` pass end-to-end against live fixture repos.
 - The Phase 2 demo evidence (run IDs, PR URL, recovery-action lineage) is committed under this section.
 
-> **Note (2026-05-28):** the two criteria above that require a run to *complete through the dashboard* (end-to-end operator run; failure-recovery re-plan completing) depend on the run executor, which was deferred and is built in Phase 3 (P3-0001). Their real validation is **P3-0009**, not the 2B merges. The `acceptance-easy`/`-medium` scripts that currently prove the workflow are direct-execution harnesses and are **removed once P3-0001 lands** (real-system testing only).
+> **Note (2026-05-28):** the two criteria above that require a run to _complete through the dashboard_ (end-to-end operator run; failure-recovery re-plan completing) depend on the run executor, which was deferred and is built in Phase 3 (P3-0001). Their real validation is **P3-0009**, not the 2B merges. The `acceptance-easy`/`-medium` scripts that currently prove the workflow are direct-execution harnesses and are **removed once P3-0001 lands** (real-system testing only).
 
 ### Phase 2A live proof
 
@@ -490,7 +490,7 @@ Phase 2 is complete when, on merged `main`:
 
 Status: **in progress** — spec'd and building. Scope buckets in [`docs/roadmap/phase-3.md`](docs/roadmap/phase-3.md); the **spec-by-spec plan (P3-0001…0030)** is in [`docs/roadmap/phase-3-specs.md`](docs/roadmap/phase-3-specs.md), split into a **Tier 1 foundational vertical slice** (the loop machinery that makes one real operator-driven run execute→green→merge) and **Tier 2 expansion**.
 
-**Reconciliation with Phase 2B (recorded in phase-3-specs.md):** Phase 2B shipped the operator dashboard *surfaces*, but the orchestrator has **no run executor** — `createQueuedRunFromSpec` enqueues a `plan` job that nothing in the service dequeues (`runPlannerLoopWorkflow` is invoked only by the `scripts/acceptance/*` harness). So the "completes successfully" / "runs end-to-end" validation claims in P2B-0006, P2B-0008, and the Phase 2 Exit Criteria below shipped as UI/contract wiring and are **superseded by P3-0009** (the live demo on the real loop). The run executor (P3-0001) was the implicit, un-specced prerequisite; Tier 1 names and builds it. Once P3-0001 lands, the direct-execution acceptance scripts are removed so the system is only ever tested through the real dequeue+execute path.
+**Reconciliation with Phase 2B (recorded in phase-3-specs.md):** Phase 2B shipped the operator dashboard _surfaces_, but the orchestrator has **no run executor** — `createQueuedRunFromSpec` enqueues a `plan` job that nothing in the service dequeues (`runPlannerLoopWorkflow` is invoked only by the `scripts/acceptance/*` harness). So the "completes successfully" / "runs end-to-end" validation claims in P2B-0006, P2B-0008, and the Phase 2 Exit Criteria below shipped as UI/contract wiring and are **superseded by P3-0009** (the live demo on the real loop). The run executor (P3-0001) was the implicit, un-specced prerequisite; Tier 1 names and builds it. Once P3-0001 lands, the direct-execution acceptance scripts are removed so the system is only ever tested through the real dequeue+execute path.
 
 Phase 3 closes the v0 workflow above the Phase 2 operator-control baseline, adds the remaining providers, brings the hi-fi's deferred surfaces online, hardens deployment, and clears the audit's remaining medium-priority items.
 

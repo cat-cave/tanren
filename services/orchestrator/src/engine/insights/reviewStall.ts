@@ -20,7 +20,7 @@ const REVIEW_EVENT_TYPES = [
   "review.requested",
   "review.changes_requested",
   "review.approved",
-  "merge.completed"
+  "merge.completed",
 ] as const;
 
 interface ReviewEventRow {
@@ -32,10 +32,7 @@ interface ReviewEventRow {
   pr_url: string | null;
 }
 
-export async function computeReviewStall(
-  pool: Pick<pg.Pool, "query">,
-  context: ComputeContext
-): Promise<Insight[]> {
+export async function computeReviewStall(pool: Pick<pg.Pool, "query">, context: ComputeContext): Promise<Insight[]> {
   const t: InsightThresholds = { ...DEFAULT_THRESHOLDS, ...context.thresholds };
   const now = context.now ?? new Date();
 
@@ -54,7 +51,7 @@ export async function computeReviewStall(
          AND e.spec_id IS NOT NULL
          AND e.event_type = ANY($2::text[])
        ORDER BY e.ts DESC`,
-    [context.projectId, REVIEW_EVENT_TYPES]
+    [context.projectId, REVIEW_EVENT_TYPES],
   );
   if (result.rows.length === 0) return [];
 
@@ -85,7 +82,7 @@ export async function computeReviewStall(
       prUrl: row.pr_url ?? "",
       phase,
       stalledHours: Math.round(stalledHours * 10) / 10,
-      thresholdHours: t.reviewStallHours
+      thresholdHours: t.reviewStallHours,
     };
     const insightId = `insight_review_${row.spec_id}_${randomUUID()}`;
     const phaseLabel = phase === "awaiting_review" ? "awaiting review" : "changes requested";
@@ -101,16 +98,16 @@ export async function computeReviewStall(
       actions: [
         {
           label: "Open PR",
-          toolCall: { tool: "tanren.read_run", args: { specId: row.spec_id } }
+          toolCall: { tool: "tanren.read_run", args: { specId: row.spec_id } },
         },
         {
           label: "Acknowledge",
-          toolCall: { tool: "tanren.acknowledge_insight", args: { insightId } }
-        }
+          toolCall: { tool: "tanren.acknowledge_insight", args: { insightId } },
+        },
       ],
       computedAt: now,
       acknowledgedAt: null,
-      acknowledgedBy: null
+      acknowledgedBy: null,
     });
   }
   return insights;

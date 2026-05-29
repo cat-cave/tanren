@@ -8,5 +8,5 @@ export {
   type DemoNarrationInput,
   type DemoNarrationResult,
   type DemoNarrationProvenance,
-  type DemoBehaviorContext
+  type DemoBehaviorContext,
 } from "./narration.js";

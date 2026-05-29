@@ -35,7 +35,7 @@ export const AUTHENTIK_CLAIM_DEFAULTS: Readonly<{
   subjectClaim: "sub",
   loginClaim: "preferred_username",
   nameClaim: "name",
-  groupsClaim: "groups"
+  groupsClaim: "groups",
 };
 
 /**
@@ -52,6 +52,6 @@ export function authentikPresetDefaults(): Pick<
     subjectClaim: AUTHENTIK_CLAIM_DEFAULTS.subjectClaim,
     loginClaim: AUTHENTIK_CLAIM_DEFAULTS.loginClaim,
     nameClaim: AUTHENTIK_CLAIM_DEFAULTS.nameClaim,
-    groupsClaim: AUTHENTIK_CLAIM_DEFAULTS.groupsClaim
+    groupsClaim: AUTHENTIK_CLAIM_DEFAULTS.groupsClaim,
   };
 }

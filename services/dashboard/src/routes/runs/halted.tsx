@@ -33,7 +33,12 @@ export function mountHaltedRunScreens(app: Hono, deps: ShellDeps): void {
   app.get("/runs/halted", async (c) => {
     const client = clientFor(c, deps);
     const orgs = await client.listOrgs();
-    const halted: Array<{ runId: string; specTitle: string; outcome: string | null; projectName: string }> = [];
+    const halted: Array<{
+      runId: string;
+      specTitle: string;
+      outcome: string | null;
+      projectName: string;
+    }> = [];
     for (const org of orgs) {
       const projects = await client.listProjects(org.id);
       for (const project of projects) {
@@ -44,7 +49,7 @@ export function mountHaltedRunScreens(app: Hono, deps: ShellDeps): void {
               runId: run.runId,
               specTitle: run.specTitle,
               outcome: run.outcome,
-              projectName: project.name
+              projectName: project.name,
             });
           }
         }
@@ -73,7 +78,10 @@ export function mountHaltedRunScreens(app: Hono, deps: ShellDeps): void {
     }
     const recovery = await client.getRecoveryContext(loc, runId);
     const specs = await client.listSpecs(loc.orgId, loc.projectId);
-    const ctx = await loadShellContext(c, deps, { activeNavId: "failure", projectId: loc.projectId });
+    const ctx = await loadShellContext(c, deps, {
+      activeNavId: "failure",
+      projectId: loc.projectId,
+    });
     const base = `/runs/${encodeURIComponent(runId)}`;
     return renderShell(
       c,
@@ -86,7 +94,7 @@ export function mountHaltedRunScreens(app: Hono, deps: ShellDeps): void {
         actionBase={`${base}/recover`}
         projectHref={`/projects/${encodeURIComponent(loc.projectId)}`}
         runHref={base}
-      />
+      />,
     );
   });
 
@@ -94,7 +102,7 @@ export function mountHaltedRunScreens(app: Hono, deps: ShellDeps): void {
   // POST recovery actions — same-origin proxies to the orchestrator routes.
   // -------------------------------------------------------------------------
   app.post("/runs/:runId/recover/revise", async (c) =>
-    handleAction(c, deps, "revise_spec", async (client, loc, runId) => client.recoveryRevise(loc, runId))
+    handleAction(c, deps, "revise_spec", async (client, loc, runId) => client.recoveryRevise(loc, runId)),
   );
 
   app.post("/runs/:runId/recover/replan", async (c) => {
@@ -104,7 +112,7 @@ export function mountHaltedRunScreens(app: Hono, deps: ShellDeps): void {
       return handleActionError(c, deps, c.req.param("runId"), "a steering note is required to replan");
     }
     return handleAction(c, deps, "replan_with_steering", async (client, loc, runId) =>
-      client.recoveryReplan(loc, runId, steeringNote)
+      client.recoveryReplan(loc, runId, steeringNote),
     );
   });
 
@@ -116,29 +124,20 @@ export function mountHaltedRunScreens(app: Hono, deps: ShellDeps): void {
       return handleActionError(c, deps, c.req.param("runId"), "rollback was not confirmed — workspace state preserved");
     }
     return handleAction(c, deps, "rollback_to_commit", async (client, loc, runId) =>
-      client.recoveryRollback(loc, runId, { commitSha, confirmed })
+      client.recoveryRollback(loc, runId, { commitSha, confirmed }),
     );
   });
 
   app.post("/runs/:runId/recover/inspection-thread", async (c) =>
     handleAction(c, deps, "open_inspection_thread", async (client, loc, runId) =>
-      client.recoveryInspectionThread(loc, runId)
-    )
+      client.recoveryInspectionThread(loc, runId),
+    ),
   );
 }
 
-type ActionCall = (
-  client: OrchestratorClient,
-  loc: RunLocation,
-  runId: string
-) => Promise<RecoveryActionResult>;
+type ActionCall = (client: OrchestratorClient, loc: RunLocation, runId: string) => Promise<RecoveryActionResult>;
 
-async function handleAction(
-  c: Context,
-  deps: ShellDeps,
-  action: string,
-  call: ActionCall
-): Promise<Response> {
+async function handleAction(c: Context, deps: ShellDeps, action: string, call: ActionCall): Promise<Response> {
   const runId = c.req.param("runId") ?? "";
   const client = clientFor(c, deps);
   const loc = await client.findRunLocation(runId);
@@ -158,7 +157,7 @@ async function handleAction(
         ok={false}
         message={result.message ?? result.error ?? "the recovery action could not be completed"}
         recoverHref={`/runs/${encodeURIComponent(runId)}/recover`}
-      />
+      />,
     );
   }
   return renderShell(
@@ -171,7 +170,7 @@ async function handleAction(
       ok={true}
       result={result.result}
       recoverHref={`/runs/${encodeURIComponent(runId)}/recover`}
-    />
+    />,
   );
 }
 
@@ -187,27 +186,32 @@ function handleActionError(c: Context, deps: ShellDeps, runId: string, message: 
         ok={false}
         message={message}
         recoverHref={`/runs/${encodeURIComponent(runId)}/recover`}
-      />
-    )
+      />,
+    ),
   );
 }
 
 function clientFor(c: Context, deps: ShellDeps): OrchestratorClient {
   return new OrchestratorClient({
     orchestratorUrl: deps.orchestratorUrl,
-    cookieHeader: c.req.header("cookie")
+    cookieHeader: c.req.header("cookie"),
   });
 }
 
 function renderNotFound(c: Context, deps: ShellDeps, runId: string) {
   return loadShellContext(c, deps, { activeNavId: "failure" }).then((ctx) =>
-    renderShell(c, ctx, { title: "tanren · run not found" }, <RecoverNotFoundBody runId={runId} kind="not_found" />)
+    renderShell(c, ctx, { title: "tanren · run not found" }, <RecoverNotFoundBody runId={runId} kind="not_found" />),
   );
 }
 
 function renderNotRecoverable(c: Context, deps: ShellDeps, runId: string) {
   return loadShellContext(c, deps, { activeNavId: "failure" }).then((ctx) =>
-    renderShell(c, ctx, { title: "tanren · nothing to recover" }, <RecoverNotFoundBody runId={runId} kind="not_recoverable" />)
+    renderShell(
+      c,
+      ctx,
+      { title: "tanren · nothing to recover" },
+      <RecoverNotFoundBody runId={runId} kind="not_recoverable" />,
+    ),
   );
 }
 
@@ -219,7 +223,9 @@ function HaltedListBody(props: {
       <style>{RECOVERY_CSS}</style>
       <div class="page-head">
         <div>
-          <div class="eyebrow" style="color: var(--status-fail)">▮ halted runs · need a recovery</div>
+          <div class="eyebrow" style="color: var(--status-fail)">
+            ▮ halted runs · need a recovery
+          </div>
           <div class="page-title">halted runs</div>
           <div class="sub">{props.runs.length} run(s) waiting on an operator recovery</div>
         </div>
@@ -242,8 +248,8 @@ function HaltedListBody(props: {
                   {run.projectName} · {run.runId}
                 </div>
                 <div class="det">
-                  halted · <b style="color: var(--status-fail)">{run.outcome ?? "halted"}</b> — open the recovery surface
-                  to revise, replan, rollback, or inspect.
+                  halted · <b style="color: var(--status-fail)">{run.outcome ?? "halted"}</b> — open the recovery
+                  surface to revise, replan, rollback, or inspect.
                 </div>
               </a>
             ))}
@@ -317,8 +323,8 @@ function RecoveryAck(props: {
               <div class="b">
                 {props.action === "revise_spec" && editHref !== undefined && (
                   <>
-                    The revision intent is recorded in the run lineage. <a href={editHref}>open the spec-edit form ↗</a> —
-                    on submit, the planner is re-invoked with the revised spec.
+                    The revision intent is recorded in the run lineage. <a href={editHref}>open the spec-edit form ↗</a>{" "}
+                    — on submit, the planner is re-invoked with the revised spec.
                   </>
                 )}
                 {props.action === "replan_with_steering" && (

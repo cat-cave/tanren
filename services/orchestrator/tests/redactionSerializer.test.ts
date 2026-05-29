@@ -6,7 +6,7 @@ import {
   emitRedactionAudit,
   hasElevatedScope,
   isRedactionMarker,
-  redactEventPayload
+  redactEventPayload,
 } from "../src/engine/redaction/index.js";
 
 // These tests pin the P2A-0009 contract: redact by default, opt-in raw for
@@ -18,7 +18,7 @@ function actor(scopes: ActorContext["scopes"], overrides: Partial<ActorContext> 
     orgId: overrides.orgId ?? "org_test",
     projectId: overrides.projectId ?? "project_test",
     scopes,
-    source: overrides.source ?? "session"
+    source: overrides.source ?? "session",
   };
 }
 
@@ -65,18 +65,18 @@ describe("redaction serializer (by scope)", () => {
         host: "10.0.0.1",
         port: 22,
         username: "tanren",
-        hostKeyFingerprint: "SHA256:xxx"
+        hostKeyFingerprint: "SHA256:xxx",
       },
       command: "echo hi",
       exitCode: 0,
       stdout: "tanren ok",
       stderr: "",
-      timedOut: false
+      timedOut: false,
     };
     const out = redactEventPayload({
       eventName: "hello.ssh_completed",
       payload,
-      actor: member
+      actor: member,
     });
     const view = out.payload as typeof payload;
     expect(view.runnerId).toBe("runner_1");
@@ -94,8 +94,8 @@ describe("redaction serializer (by scope)", () => {
         "target.hostKeyFingerprint",
         "command",
         "stdout",
-        "stderr"
-      ])
+        "stderr",
+      ]),
     );
     expect(out.rawAccessedPaths).toEqual([]);
   });
@@ -109,19 +109,19 @@ describe("redaction serializer (by scope)", () => {
         host: "10.0.0.1",
         port: 22,
         username: "tanren",
-        hostKeyFingerprint: "SHA256:xxx"
+        hostKeyFingerprint: "SHA256:xxx",
       },
       command: "echo hi",
       exitCode: 0,
       stdout: "tanren ok",
       stderr: "",
-      timedOut: false
+      timedOut: false,
     };
     // Without rawView, admin still sees redacted markers (safe default).
     const defaultView = redactEventPayload({
       eventName: "hello.ssh_completed",
       payload,
-      actor: admin
+      actor: admin,
     });
     expect(isRedactionMarker((defaultView.payload as typeof payload).target.host)).toBe(true);
     expect(defaultView.rawAccessedPaths).toEqual([]);
@@ -132,14 +132,14 @@ describe("redaction serializer (by scope)", () => {
       eventName: "hello.ssh_completed",
       payload,
       actor: admin,
-      rawView: true
+      rawView: true,
     });
     const raw = rawAdmin.payload as typeof payload;
     expect(raw.target.host).toBe("10.0.0.1");
     expect(raw.command).toBe("echo hi");
     expect(isRedactionMarker(raw.stdout)).toBe(true);
     expect(rawAdmin.rawAccessedPaths).toEqual(
-      expect.arrayContaining(["target.host", "target.port", "target.hostKeyFingerprint", "command"])
+      expect.arrayContaining(["target.host", "target.port", "target.hostKeyFingerprint", "command"]),
     );
     expect(rawAdmin.redactedPaths).toEqual(expect.arrayContaining(["stdout", "stderr"]));
   });
@@ -153,19 +153,19 @@ describe("redaction serializer (by scope)", () => {
         host: "10.0.0.1",
         port: 22,
         username: "tanren",
-        hostKeyFingerprint: "SHA256:xxx"
+        hostKeyFingerprint: "SHA256:xxx",
       },
       command: "echo hi",
       exitCode: 0,
       stdout: "tanren ok",
       stderr: "(error log here)",
-      timedOut: false
+      timedOut: false,
     };
     const out = redactEventPayload({
       eventName: "hello.ssh_completed",
       payload,
       actor: admin,
-      rawView: true
+      rawView: true,
     });
     const view = out.payload as typeof payload;
     expect(view.stdout).toBe("tanren ok");
@@ -173,7 +173,14 @@ describe("redaction serializer (by scope)", () => {
     expect(view.target.host).toBe("10.0.0.1");
     expect(out.redactedPaths).toEqual([]);
     expect(out.rawAccessedPaths).toEqual(
-      expect.arrayContaining(["stdout", "stderr", "target.host", "target.port", "target.hostKeyFingerprint", "command"])
+      expect.arrayContaining([
+        "stdout",
+        "stderr",
+        "target.host",
+        "target.port",
+        "target.hostKeyFingerprint",
+        "command",
+      ]),
     );
   });
 
@@ -186,25 +193,23 @@ describe("redaction serializer (by scope)", () => {
       intent: "edit",
       decisions: [
         { summary: "added marker", code: "+ tanren ok", rationale: "AC1" },
-        { summary: "added another", code: "+ tanren too", rationale: "AC2" }
+        { summary: "added another", code: "+ tanren too", rationale: "AC2" },
       ],
       toolCalls: [{ name: "apply_diff", args: { path: "FILE.md" }, outputSummary: "ok" }],
       diffBytes: 12,
-      commitSha: "abc"
+      commitSha: "abc",
     };
     const out = redactEventPayload({
       eventName: "writer.subtask.completed",
       payload,
-      actor: member
+      actor: member,
     });
     const view = out.payload as typeof payload;
     expect(view.decisions[0]?.summary).toBe("added marker");
     expect(isRedactionMarker(view.decisions[0]?.code)).toBe(true);
     expect(isRedactionMarker(view.decisions[1]?.code)).toBe(true);
     expect(isRedactionMarker(view.toolCalls[0]?.args)).toBe(true);
-    expect(out.redactedPaths).toEqual(
-      expect.arrayContaining(["decisions[].code", "toolCalls[].args"])
-    );
+    expect(out.redactedPaths).toEqual(expect.arrayContaining(["decisions[].code", "toolCalls[].args"]));
   });
 
   it("clones the payload (does not mutate the input)", () => {
@@ -217,7 +222,7 @@ describe("redaction serializer (by scope)", () => {
       exitCode: 0,
       stdout: "tanren ok",
       stderr: "",
-      timedOut: false
+      timedOut: false,
     };
     redactEventPayload({ eventName: "hello.ssh_completed", payload: original, actor: member });
     expect(original.target.host).toBe("10.0.0.1");
@@ -240,18 +245,18 @@ describe("redaction high-entropy heuristic", () => {
         repoUrl: "https://example.com/repo",
         defaultBranch: "main",
         runnerImage: "img",
-        allocator: "local"
+        allocator: "local",
       },
       spec: {
         title: "do thing",
         acceptanceCriteria: ["AC1"],
-        dependsOn: []
-      }
+        dependsOn: [],
+      },
     };
     const out = redactEventPayload({
       eventName: "run.queued",
       payload,
-      actor: member
+      actor: member,
     });
     const view = out.payload as typeof payload;
     expect(isRedactionMarker(view.trigger)).toBe(true);
@@ -267,12 +272,12 @@ describe("redaction high-entropy heuristic", () => {
     const payload = {
       taskKind: "plan",
       intent: prose,
-      rationale: prose
+      rationale: prose,
     };
     const out = redactEventPayload({
       eventName: "planner.started",
       payload,
-      actor: member
+      actor: member,
     });
     const view = out.payload as typeof payload;
     expect(view.intent).toBe(prose);
@@ -295,7 +300,7 @@ describe("redaction audit emitter", () => {
       eventReadId: "42",
       eventReadType: "hello.ssh_completed",
       paths: ["stdout", "stderr", "target.host"],
-      now: () => new Date("2026-01-01T00:00:00Z")
+      now: () => new Date("2026-01-01T00:00:00Z"),
     });
     expect(store.events).toHaveLength(1);
     const audit = store.events[0]!;
@@ -306,7 +311,7 @@ describe("redaction audit emitter", () => {
       eventReadId: "42",
       eventReadType: "hello.ssh_completed",
       paths: ["stdout", "stderr", "target.host"],
-      at: "2026-01-01T00:00:00.000Z"
+      at: "2026-01-01T00:00:00.000Z",
     });
   });
 
@@ -321,7 +326,7 @@ describe("redaction audit emitter", () => {
       projectId: "project_1",
       eventReadId: "1",
       eventReadType: "run.started",
-      paths: []
+      paths: [],
     });
     expect(store.events).toHaveLength(0);
   });
@@ -340,9 +345,9 @@ describe("redaction round-trip against Phase 1-shaped events", () => {
         repoUrl: "https://github.com/cat-cave/tanren-fixture-easy",
         branch: "feat/phase1",
         credentialRef: "secrets/github/token",
-        redacted: true
+        redacted: true,
       },
-      actor: member
+      actor: member,
     });
     const view = out.payload as { credentialRef: unknown; repoUrl: string };
     expect(isRedactionMarker(view.credentialRef)).toBe(true);
@@ -363,16 +368,16 @@ describe("redaction round-trip against Phase 1-shaped events", () => {
             host: "10.0.0.1",
             port: 22,
             username: "tanren",
-            hostKeyFingerprint: "SHA256:xxx"
+            hostKeyFingerprint: "SHA256:xxx",
           },
           command: "tanren-hello",
           exitCode: 0,
           stdout: "tanren ok",
           stderr: "",
-          timedOut: false
-        }
+          timedOut: false,
+        },
       },
-      actor: member
+      actor: member,
     });
     const view = out.payload as {
       outcome: string;
@@ -393,9 +398,9 @@ describe("redaction round-trip against Phase 1-shaped events", () => {
         targetBranch: "main",
         prUrl: "https://github.com/cat-cave/tanren-fixture-easy/pull/12",
         prNumber: 12,
-        reused: false
+        reused: false,
       },
-      actor: member
+      actor: member,
     });
     expect(out.redactedPaths).toEqual([]);
     const view = out.payload as { prUrl: string };

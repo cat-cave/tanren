@@ -30,13 +30,13 @@ export async function login(options: LoginOptions): Promise<LoginResult> {
       orchestratorUrl: options.orchestratorUrl,
       token: options.token,
       name: options.name,
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
     };
     await writeAuth(auth, options.authFile);
     return { auth };
   }
   const startResponse = await fetchImpl(`${options.orchestratorUrl}/auth/cli/start`, {
-    headers: { Accept: "application/json" }
+    headers: { Accept: "application/json" },
   });
   if (!startResponse.ok) {
     throw new Error(`failed to start CLI auth: ${startResponse.status}`);
@@ -47,9 +47,12 @@ export async function login(options: LoginOptions): Promise<LoginResult> {
 }
 
 export class CliLoginIncomplete extends Error {
-  constructor(readonly authorizeUrl: string, readonly completeUrl: string) {
+  constructor(
+    readonly authorizeUrl: string,
+    readonly completeUrl: string,
+  ) {
     super(
-      `Open ${authorizeUrl} in your browser to sign in, then call POST ${completeUrl} with your session cookie to mint a token. Paste the returned token with --token.`
+      `Open ${authorizeUrl} in your browser to sign in, then call POST ${completeUrl} with your session cookie to mint a token. Paste the returned token with --token.`,
     );
   }
 }

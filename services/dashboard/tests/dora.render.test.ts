@@ -13,7 +13,13 @@ import type pg from "pg";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/main.js";
 
-const ORG = { id: "org_acme", kind: "github_org", login: "cat-cave", displayName: "Cat Cave", role: "org:admin" };
+const ORG = {
+  id: "org_acme",
+  kind: "github_org",
+  login: "cat-cave",
+  displayName: "Cat Cave",
+  role: "org:admin",
+};
 const PROJECTS = [
   {
     projectId: "project_easy",
@@ -21,8 +27,8 @@ const PROJECTS = [
     repoUrl: "https://github.com/cat-cave/tanren-fixture-easy",
     defaultBranch: "main",
     runnerImage: null,
-    allocator: "local_docker"
-  }
+    allocator: "local_docker",
+  },
 ];
 
 // A full payload: lead 21h, deploy 2.1/d, CFR 4.8%, MTTR present.
@@ -36,7 +42,7 @@ const DORA_FULL = {
   changeFailureRate: { value: 0.048, sample: 84 },
   meanTimeToRestoreSeconds: { value: 90 * 60, sample: 4 },
   totals: { merges: 63, finishedRuns: 84, failedRuns: 4, recoveries: 4 },
-  computedAt: "2026-05-28T00:00:00.000Z"
+  computedAt: "2026-05-28T00:00:00.000Z",
 };
 
 // A sparse payload: nothing has merged / halted yet → null metrics.
@@ -46,7 +52,7 @@ const DORA_EMPTY = {
   deployFrequencyPerDay: { value: null, sample: 0 },
   changeFailureRate: { value: null, sample: 0 },
   meanTimeToRestoreSeconds: { value: null, sample: 0 },
-  totals: { merges: 0, finishedRuns: 0, failedRuns: 0, recoveries: 0 }
+  totals: { merges: 0, finishedRuns: 0, failedRuns: 0, recoveries: 0 },
 };
 
 function stubPool(): pg.Pool {

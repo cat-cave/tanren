@@ -12,13 +12,13 @@ export async function captureBaselineSha(
   ssh: SshSubstrate,
   target: SshTarget,
   workspace: string,
-  timeoutMs: number
+  timeoutMs: number,
 ): Promise<string> {
   const result = await runWorkspaceSshCommand(ssh, target, {
     label: "capture baseline git sha",
     cwd: workspace,
     command: "git rev-parse HEAD",
-    timeoutMs
+    timeoutMs,
   });
   const sha = result.stdout.trim();
   if (!/^[0-9a-f]{40}$/.test(sha)) {
@@ -33,20 +33,20 @@ export async function captureGitStateAfterWriter(
   workspace: string,
   baselineSha: string,
   commitMessage: string,
-  timeoutMs: number
+  timeoutMs: number,
 ): Promise<Pick<WriterResult, "diff" | "commits">> {
   await commitWorkspaceChanges(ssh, target, workspace, commitMessage, timeoutMs);
   const diff = await runWorkspaceSshCommand(ssh, target, {
     label: "capture writer git diff",
     cwd: workspace,
     command: `git diff --no-color ${baselineSha}`,
-    timeoutMs
+    timeoutMs,
   });
   const log = await runWorkspaceSshCommand(ssh, target, {
     label: "capture writer git commits",
     cwd: workspace,
     command: `git log --format='%H%x09%s' --reverse ${baselineSha}..HEAD`,
-    timeoutMs
+    timeoutMs,
   });
   return { diff: diff.stdout, commits: parseGitLogCommits(log.stdout) };
 }
@@ -56,7 +56,7 @@ async function commitWorkspaceChanges(
   target: SshTarget,
   workspace: string,
   commitMessage: string,
-  timeoutMs: number
+  timeoutMs: number,
 ): Promise<void> {
   await runWorkspaceSshCommand(ssh, target, {
     label: "commit writer workspace changes",
@@ -66,9 +66,9 @@ async function commitWorkspaceChanges(
       "git add -A",
       "if ! git diff --cached --quiet --exit-code; then",
       `GIT_AUTHOR_DATE='2026-01-01T00:00:00Z' GIT_COMMITTER_DATE='2026-01-01T00:00:00Z' git commit -m ${shellSingleQuote(commitMessage)}`,
-      "fi"
+      "fi",
     ].join("\n"),
-    timeoutMs
+    timeoutMs,
   });
 }
 

@@ -38,14 +38,14 @@ schema. New ids minted by the stores are prefixed (`persona_<uuid>`,
 `behavior_<uuid>`, `milestone_<uuid>`), but inbound ids only need to be
 stable opaque strings.
 
-| Table | Purpose | Key constraints |
-|---|---|---|
-| `personas` | org- or project-scoped role | `personas_scope_check`, `personas_scope_project_check` (scope=`org` → `project_id IS NULL`; scope=`project` → not null) |
-| `behaviors` | BDD scenario owned by persona | FK to `personas`; indexed on `persona_id` |
-| `milestones` | project-scoped, ordered, optional ETA, status enum | `UNIQUE (project_id, label)`, `UNIQUE (project_id, order_index)`, status `planned|in_flight|done|abandoned` |
-| `spec_behaviors` | spec ↔ behavior join | composite PK; indexed on `behavior_id` |
-| `spec_milestones` | spec → milestone join | composite PK plus `UNIQUE (spec_id)` enforcing one-milestone-per-spec |
-| `spec_dependencies` | directed edges with no self-loop | composite PK, `from <> to` CHECK; cycle detection in application code |
+| Table               | Purpose                                            | Key constraints                                                                                                         |
+| ------------------- | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | --------- | ---- | ---------- |
+| `personas`          | org- or project-scoped role                        | `personas_scope_check`, `personas_scope_project_check` (scope=`org` → `project_id IS NULL`; scope=`project` → not null) |
+| `behaviors`         | BDD scenario owned by persona                      | FK to `personas`; indexed on `persona_id`                                                                               |
+| `milestones`        | project-scoped, ordered, optional ETA, status enum | `UNIQUE (project_id, label)`, `UNIQUE (project_id, order_index)`, status `planned                                       | in_flight | done | abandoned` |
+| `spec_behaviors`    | spec ↔ behavior join                               | composite PK; indexed on `behavior_id`                                                                                  |
+| `spec_milestones`   | spec → milestone join                              | composite PK plus `UNIQUE (spec_id)` enforcing one-milestone-per-spec                                                   |
+| `spec_dependencies` | directed edges with no self-loop                   | composite PK, `from <> to` CHECK; cycle detection in application code                                                   |
 
 ## Visibility rules
 
@@ -84,8 +84,8 @@ per-project default:
   `planned`.
 - Persona: project-scoped, `name = "Developer · fixture operator"`.
 - Behavior: title `"runs the fixture"`, Given `"operator on a fresh
-  stack"`, When `"they invoke the fixture flow"`, Then `"the run
-  completes end-to-end"`.
+stack"`, When `"they invoke the fixture flow"`, Then `"the run
+completes end-to-end"`.
 
 A project whose `org_id` is still null inherits the sentinel
 organization `org_default_p2a_0018`. The block ends with a guard that

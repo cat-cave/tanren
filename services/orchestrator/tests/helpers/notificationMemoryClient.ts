@@ -59,7 +59,7 @@ export class NotificationMemoryClient {
         payload: JSON.parse(String(params[1])),
         status: params[2],
         attempts: params[3],
-        sent_at: params[4]
+        sent_at: params[4],
       });
       return { rowCount: 1, rows: [] };
     }
@@ -79,7 +79,7 @@ export class NotificationMemoryClient {
       enabled: params[7],
       weekend_mute: params[8],
       created_at: this.now,
-      updated_at: this.now
+      updated_at: this.now,
     };
     this.targets.set(String(row.id), row);
     return { rowCount: 1, rows: [row] };
@@ -93,7 +93,7 @@ export class NotificationMemoryClient {
       enabled: params[3],
       min_severity: params[4],
       created_at: this.now,
-      updated_at: this.now
+      updated_at: this.now,
     };
     this.routes.set(String(row.id), row);
     return { rowCount: 1, rows: [row] };

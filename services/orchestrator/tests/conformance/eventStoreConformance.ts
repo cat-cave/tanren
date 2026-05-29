@@ -61,8 +61,8 @@ export function describeEventStoreConformance(label: string, harness: EventStore
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           eventType: "totally.madeup" as never,
           payload: {} as never,
-          ...base
-        })
+          ...base,
+        }),
       ).rejects.toThrow(Error);
       // A rejected append must not have been recorded.
       await expect(readBack()).resolves.toHaveLength(0);

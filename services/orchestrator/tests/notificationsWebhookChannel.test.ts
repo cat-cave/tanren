@@ -18,12 +18,11 @@ function target(overrides: Partial<NotificationTargetRow> = {}): NotificationTar
     weekendMute: false,
     createdAt: new Date(),
     updatedAt: new Date(),
-    ...overrides
+    ...overrides,
   };
 }
 
-const failingFetch: typeof fetch = async () =>
-  new Response("bad", { status: 500, statusText: "Server Error" });
+const failingFetch: typeof fetch = async () => new Response("bad", { status: 500, statusText: "Server Error" });
 
 class MemorySecrets implements SecretStore {
   constructor(private readonly map: Record<string, string>) {}
@@ -43,7 +42,7 @@ describe("WebhookChannel", () => {
       return new Response("ok", { status: 200 });
     };
     const secrets = new MemorySecrets({
-      "credential/webhook/alerts": "https://hooks.example.com/ingest"
+      "credential/webhook/alerts": "https://hooks.example.com/ingest",
     });
     const channel = new WebhookChannel({ fetch: fakeFetch, secrets });
     await channel.publish(target(), {
@@ -52,7 +51,7 @@ describe("WebhookChannel", () => {
       severity: "fail",
       eventName: "run.failed",
       url: "https://tanren.example/runs/run_1",
-      tags: ["tanren"]
+      tags: ["tanren"],
     });
     expect(captured!.url).toBe("https://hooks.example.com/ingest");
     const body = JSON.parse(captured!.init.body as string) as Record<string, unknown>;
@@ -62,7 +61,7 @@ describe("WebhookChannel", () => {
       severity: "fail",
       eventName: "run.failed",
       url: "https://tanren.example/runs/run_1",
-      tags: ["tanren"]
+      tags: ["tanren"],
     });
   });
 
@@ -77,7 +76,7 @@ describe("WebhookChannel", () => {
       title: "t",
       body: "b",
       severity: "info",
-      eventName: "run.started"
+      eventName: "run.started",
     });
     expect(captured!.url).toBe("https://hooks.example.com/x");
     const body = JSON.parse(captured!.init.body as string) as Record<string, unknown>;
@@ -92,8 +91,8 @@ describe("WebhookChannel", () => {
         title: "t",
         body: "b",
         severity: "info",
-        eventName: "run.started"
-      })
+        eventName: "run.started",
+      }),
     ).rejects.toThrow(/webhook publish failed: 500/);
   });
 });

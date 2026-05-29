@@ -38,7 +38,7 @@ const allowedFailureKinds = new Set<FailureKind>([
   "budget_exhausted",
   "cancelled",
   "credential_failed",
-  "unknown_failed"
+  "unknown_failed",
 ]);
 
 export function assertFailureKind(kind: string): asserts kind is FailureKind {

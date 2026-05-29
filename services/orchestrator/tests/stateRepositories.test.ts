@@ -1,13 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { IllegalRunTransitionError } from "../src/engine/state/index.js";
 import { systemActor } from "../src/engine/state/actor.js";
-import {
-  ActorStore,
-  JobStore,
-  RunStore,
-  SpecStore,
-  TaskStore
-} from "../src/engine/repositories/index.js";
+import { ActorStore, JobStore, RunStore, SpecStore, TaskStore } from "../src/engine/repositories/index.js";
 
 interface StubResult {
   rowCount: number;
@@ -50,10 +44,10 @@ describe("RunStore", () => {
             started_at: new Date("2026-01-01T00:00:00Z"),
             ended_at: new Date("2026-01-01T00:01:00Z"),
             tenant_id: null,
-            user_id: null
-          }
-        ]
-      }
+            user_id: null,
+          },
+        ],
+      },
     ]);
     const run = await RunStore.get(client, "run_1", systemActor);
     expect(run?.status).toBe("completed");
@@ -77,10 +71,10 @@ describe("RunStore", () => {
             started_at: new Date(),
             ended_at: null,
             tenant_id: null,
-            user_id: null
-          }
-        ]
-      }
+            user_id: null,
+          },
+        ],
+      },
     ]);
     await expect(RunStore.get(client, "run_1", systemActor)).rejects.toThrow(/status/i);
   });
@@ -102,10 +96,10 @@ describe("RunStore", () => {
             started_at: new Date(),
             ended_at: null,
             tenant_id: null,
-            user_id: null
-          }
-        ]
-      }
+            user_id: null,
+          },
+        ],
+      },
     ]);
     const run = await RunStore.updateStatus(client, "run_1", { from: "queued", to: "running" }, systemActor);
     expect(run.status).toBe("running");
@@ -116,7 +110,7 @@ describe("RunStore", () => {
   it("refuses illegal transitions before querying the database", async () => {
     const client = new StubClient([]);
     await expect(
-      RunStore.updateStatus(client, "run_1", { from: "queued", to: "completed" }, systemActor)
+      RunStore.updateStatus(client, "run_1", { from: "queued", to: "completed" }, systemActor),
     ).rejects.toThrowError(IllegalRunTransitionError);
     expect(client.queries).toHaveLength(0);
   });
@@ -136,10 +130,10 @@ describe("SpecStore", () => {
             acceptance_criteria: ["one"],
             depends_on: [],
             status: "in_flight",
-            tenant_id: null
-          }
-        ]
-      }
+            tenant_id: null,
+          },
+        ],
+      },
     ]);
     const spec = await SpecStore.get(client, "spec_1", systemActor);
     expect(spec?.status).toBe("in_flight");
@@ -169,10 +163,10 @@ describe("TaskStore", () => {
             model: null,
             attempt: 1,
             tenant_id: null,
-            user_id: null
-          }
-        ]
-      }
+            user_id: null,
+          },
+        ],
+      },
     ]);
     const task = await TaskStore.get(client, "task_1", systemActor);
     expect(task?.kind).toBe("forge");
@@ -200,10 +194,10 @@ describe("TaskStore", () => {
             model: null,
             attempt: 1,
             tenant_id: null,
-            user_id: null
-          }
-        ]
-      }
+            user_id: null,
+          },
+        ],
+      },
     ]);
     await expect(TaskStore.get(client, "task_1", systemActor)).rejects.toThrow(/agentKind|agent_kind|invalid/i);
   });
@@ -225,10 +219,10 @@ describe("JobStore", () => {
             failure_kind: null,
             failure_message: null,
             tenant_id: null,
-            user_id: null
-          }
-        ]
-      }
+            user_id: null,
+          },
+        ],
+      },
     ]);
     const job = await JobStore.get(client, "42", systemActor);
     expect(job?.taskKind).toBe("ci_poll");
@@ -240,8 +234,8 @@ describe("ActorStore", () => {
     const client = new StubClient([
       {
         rowCount: 1,
-        rows: [{ task_id: "task_1", agent_kind: "writer_codex", cli: "codex", model: "gpt-5" }]
-      }
+        rows: [{ task_id: "task_1", agent_kind: "writer_codex", cli: "codex", model: "gpt-5" }],
+      },
     ]);
     const actor = await ActorStore.getForTask(client, "task_1", systemActor);
     expect(actor?.agentKind).toBe("writer_codex");

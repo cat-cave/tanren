@@ -28,7 +28,7 @@ import {
   RollbackNotConfirmedError,
   RunNotRecoverableError,
   UnknownCommitError,
-  type HaltedRunContext
+  type HaltedRunContext,
 } from "../../engine/recovery/index.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg } from "../orgs/index.js";
@@ -38,12 +38,12 @@ interface RecoveryRoutesOptions {
 }
 
 const ReplanSchema = z.object({
-  steeringNote: z.string().min(1)
+  steeringNote: z.string().min(1),
 });
 
 const RollbackSchema = z.object({
   commitSha: z.string().min(1),
-  confirmed: z.boolean()
+  confirmed: z.boolean(),
 });
 
 export function createRecoveryRoutes(options: RecoveryRoutesOptions) {
@@ -60,7 +60,7 @@ export function createRecoveryRoutes(options: RecoveryRoutesOptions) {
       projectId: gate.ctx.projectId,
       status: gate.ctx.status,
       outcome: gate.ctx.outcome,
-      lastGoodCommit: gate.ctx.lastGoodCommit
+      lastGoodCommit: gate.ctx.lastGoodCommit,
     });
   });
 
@@ -78,7 +78,7 @@ export function createRecoveryRoutes(options: RecoveryRoutesOptions) {
       return c.json({ error: "invalid_replan", issues: parsed.error.issues }, 400);
     }
     return runAction(c, () =>
-      replanWithSteering(options.pool, gate.ctx, gate.orgId, parsed.data.steeringNote, gate.actor)
+      replanWithSteering(options.pool, gate.ctx, gate.orgId, parsed.data.steeringNote, gate.actor),
     );
   });
 
@@ -95,8 +95,8 @@ export function createRecoveryRoutes(options: RecoveryRoutesOptions) {
         gate.ctx,
         gate.orgId,
         { commitSha: parsed.data.commitSha, confirmed: parsed.data.confirmed },
-        gate.actor
-      )
+        gate.actor,
+      ),
     );
   });
 
@@ -132,7 +132,7 @@ async function gateRun(pool: pg.Pool, c: Context<ActorContextEnv>): Promise<RunG
     projectId,
     status: "",
     outcome: null,
-    lastGoodCommit: null
+    lastGoodCommit: null,
   };
   if (!actorCanAccessOrg(actor, orgId)) {
     return { actor, orgId, ctx: empty, denial: c.json({ error: "org_access_denied" }, 403) };
@@ -156,10 +156,7 @@ async function gateRun(pool: pg.Pool, c: Context<ActorContextEnv>): Promise<RunG
 }
 
 /** Run a recovery action, mapping its typed errors to HTTP statuses. */
-async function runAction<T>(
-  c: Context<ActorContextEnv>,
-  action: () => Promise<T>
-): Promise<Response> {
+async function runAction<T>(c: Context<ActorContextEnv>, action: () => Promise<T>): Promise<Response> {
   try {
     return c.json({ ok: true, result: await action() } as Record<string, unknown>, 200);
   } catch (error) {

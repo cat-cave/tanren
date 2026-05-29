@@ -22,38 +22,41 @@ const SESSION_COOKIE = "tanren_session=sess-xyz; Path=/; HttpOnly; SameSite=Lax"
  * Build a fetch mock for the two-step handshake. Records the requests it saw so
  * tests can assert the dashboard forwarded the state cookie to the callback.
  */
-function makeFetchMock(overrides: {
-  loginStatus?: number;
-  loginLocation?: string | null;
-  loginStateCookie?: string | null;
-  callbackStatus?: number;
-  callbackSessionCookie?: string | null;
-} = {}) {
+function makeFetchMock(
+  overrides: {
+    loginStatus?: number;
+    loginLocation?: string | null;
+    loginStateCookie?: string | null;
+    callbackStatus?: number;
+    callbackSessionCookie?: string | null;
+  } = {},
+) {
   const calls: Array<{ url: string; init?: RequestInit }> = [];
   const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input.toString();
     calls.push({ url, init });
     if (url.includes("/auth/login")) {
       const headers = new Headers();
-      const loc = overrides.loginLocation === undefined
-        ? `${ORCH}/auth/callback?provider=local_dev&state=${STATE}&code=local-dev`
-        : overrides.loginLocation;
+      const loc =
+        overrides.loginLocation === undefined
+          ? `${ORCH}/auth/callback?provider=local_dev&state=${STATE}&code=local-dev`
+          : overrides.loginLocation;
       if (loc !== null) headers.set("location", loc);
-      const stateCookie = overrides.loginStateCookie === undefined
-        ? `tanren_oauth_state=${STATE}; Path=/; HttpOnly; SameSite=Lax; Max-Age=600`
-        : overrides.loginStateCookie;
+      const stateCookie =
+        overrides.loginStateCookie === undefined
+          ? `tanren_oauth_state=${STATE}; Path=/; HttpOnly; SameSite=Lax; Max-Age=600`
+          : overrides.loginStateCookie;
       if (stateCookie !== null) headers.append("set-cookie", stateCookie);
       return new Response(null, { status: overrides.loginStatus ?? 302, headers });
     }
     if (url.includes("/auth/callback")) {
       const headers = new Headers();
-      const sessionCookie = overrides.callbackSessionCookie === undefined
-        ? SESSION_COOKIE
-        : overrides.callbackSessionCookie;
+      const sessionCookie =
+        overrides.callbackSessionCookie === undefined ? SESSION_COOKIE : overrides.callbackSessionCookie;
       if (sessionCookie !== null) headers.append("set-cookie", sessionCookie);
       return new Response(JSON.stringify({ ok: true }), {
         status: overrides.callbackStatus ?? 200,
-        headers
+        headers,
       });
     }
     return new Response("not found", { status: 404 });
@@ -115,7 +118,7 @@ describe("devLoginHandshake", () => {
 
   it("resolves a relative Location against the orchestrator base", async () => {
     const { fetchImpl, calls } = makeFetchMock({
-      loginLocation: "/auth/callback?provider=local_dev&state=" + STATE + "&code=local-dev"
+      loginLocation: "/auth/callback?provider=local_dev&state=" + STATE + "&code=local-dev",
     });
     const result = await devLoginHandshake(ORCH, "/", fetchImpl);
     expect(result.sessionSetCookie).toBe(SESSION_COOKIE);

@@ -21,7 +21,10 @@ import { buildSpecDetail, type SpecDetail } from "../../components/project/specD
 import { SpecDrawerBody, SpecPageBody } from "../../components/project/SpecDrawer.js";
 
 function clientFor(c: Context, deps: ShellDeps): OrchestratorClient {
-  return new OrchestratorClient({ orchestratorUrl: deps.orchestratorUrl, cookieHeader: c.req.header("cookie") });
+  return new OrchestratorClient({
+    orchestratorUrl: deps.orchestratorUrl,
+    cookieHeader: c.req.header("cookie"),
+  });
 }
 
 export function notFoundBody(projectId: string) {
@@ -78,7 +81,7 @@ export function mountSpecDetailRoutes(app: Hono, deps: ShellDeps): void {
         <ScreenStyles />
         <DagStyles />
         <SpecPageBody spec={detail} projectName={ctx.project.name} />
-      </>
+      </>,
     );
   });
 }
@@ -107,13 +110,13 @@ async function loadSpecDetail(
   deps: ShellDeps,
   orgId: string,
   projectId: string,
-  specId: string
+  specId: string,
 ): Promise<SpecDetail | undefined> {
   const client = clientFor(c, deps);
   const [allSpecs, specRuns, allRuns] = await Promise.all([
     client.listSpecs(orgId, projectId),
     client.listRuns(orgId, projectId, { specId }),
-    client.listRuns(orgId, projectId)
+    client.listRuns(orgId, projectId),
   ]);
   const spec = allSpecs.find((s) => s.specId === specId);
   if (spec === undefined) return undefined;
@@ -135,7 +138,7 @@ const HALTED_OUTCOMES = new Set(["halted", "escape_hatch_hit", "retry_budget_exh
 /** Latest-run → DagStatus for a dependency chip (mirrors the DAG model). */
 function depStatus(
   spec: SpecSummary,
-  run: { needsReview: boolean; status: string; outcome: string | null } | undefined
+  run: { needsReview: boolean; status: string; outcome: string | null } | undefined,
 ): DagStatus {
   if (run !== undefined) {
     if (run.needsReview) return "review";

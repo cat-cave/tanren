@@ -10,38 +10,68 @@ function healthyWindow(): WindowObservation {
   return {
     usage: {
       provider: "openai",
-      windows: [{ slot: "primary", usedPercent: 20, resetsAt: "2026-06-01T00:00:00Z", windowMinutes: 300, resetDescription: "soon" }],
+      windows: [
+        {
+          slot: "primary",
+          usedPercent: 20,
+          resetsAt: "2026-06-01T00:00:00Z",
+          windowMinutes: 300,
+          resetDescription: "soon",
+        },
+      ],
       creditsRemaining: null,
       accountEmail: null,
       source: "codex-cli",
-      capturedAt: "2026-05-28T00:00:00Z"
+      capturedAt: "2026-05-28T00:00:00Z",
     },
-    pressure: null
+    pressure: null,
   };
 }
 
 function exhaustedWindow(): WindowObservation {
-  const slot = { slot: "secondary" as const, usedPercent: 100, resetsAt: "2026-05-30T20:19:33Z", windowMinutes: 10080, resetDescription: "May 30" };
+  const slot = {
+    slot: "secondary" as const,
+    usedPercent: 100,
+    resetsAt: "2026-05-30T20:19:33Z",
+    windowMinutes: 10080,
+    resetDescription: "May 30",
+  };
   return {
     usage: {
       provider: "openai",
-      windows: [{ slot: "primary", usedPercent: 5, resetsAt: "2026-06-01T00:00:00Z", windowMinutes: 300, resetDescription: "soon" }, slot],
+      windows: [
+        {
+          slot: "primary",
+          usedPercent: 5,
+          resetsAt: "2026-06-01T00:00:00Z",
+          windowMinutes: 300,
+          resetDescription: "soon",
+        },
+        slot,
+      ],
       creditsRemaining: 0,
       accountEmail: null,
       source: "codex-cli",
-      capturedAt: "2026-05-28T00:00:00Z"
+      capturedAt: "2026-05-28T00:00:00Z",
     },
-    pressure: slot
+    pressure: slot,
   };
 }
 
 function accounting(costUsd: number | null): CcusageAccounting {
   return {
     cli: "codex",
-    totals: { inputTokens: 8, cachedInputTokens: 0, cacheCreationTokens: 0, outputTokens: 4, reasoningOutputTokens: 0, totalTokens: 12 },
+    totals: {
+      inputTokens: 8,
+      cachedInputTokens: 0,
+      cacheCreationTokens: 0,
+      outputTokens: 4,
+      reasoningOutputTokens: 0,
+      totalTokens: 12,
+    },
     costUsd,
     perModel: [],
-    capturedAt: "2026-05-28T00:00:00Z"
+    capturedAt: "2026-05-28T00:00:00Z",
   };
 }
 
@@ -52,13 +82,15 @@ function fakeProbe(window: WindowObservation, acct: CcusageAccounting | null): U
     },
     async observeAccounting() {
       return acct;
-    }
+    },
   };
 }
 
 describe("subtask loop — usage probe wiring", () => {
   it("emits the window-observed + accounting events and reconciles ccusage cost on a healthy run", async () => {
-    const { input, pool, events } = defaultLoopInput({ usageProbe: fakeProbe(healthyWindow(), accounting(0.6)) });
+    const { input, pool, events } = defaultLoopInput({
+      usageProbe: fakeProbe(healthyWindow(), accounting(0.6)),
+    });
     const outcome = await runSubtaskLoop(input);
 
     expect(outcome.kind).toBe("passed");
@@ -74,7 +106,9 @@ describe("subtask loop — usage probe wiring", () => {
   });
 
   it("escalates window pressure and halts BEFORE dispatching the planner", async () => {
-    const { input, pool, events } = defaultLoopInput({ usageProbe: fakeProbe(exhaustedWindow(), accounting(null)) });
+    const { input, pool, events } = defaultLoopInput({
+      usageProbe: fakeProbe(exhaustedWindow(), accounting(null)),
+    });
     const outcome = await runSubtaskLoop(input);
 
     expect(outcome.kind).toBe("window_exhausted");
@@ -94,7 +128,9 @@ describe("subtask loop — usage probe wiring", () => {
   });
 
   it("emits accounting but does NOT reconcile when ccusage reports no cost (honest NULL)", async () => {
-    const { input, pool, events } = defaultLoopInput({ usageProbe: fakeProbe(healthyWindow(), accounting(null)) });
+    const { input, pool, events } = defaultLoopInput({
+      usageProbe: fakeProbe(healthyWindow(), accounting(null)),
+    });
     const outcome = await runSubtaskLoop(input);
 
     expect(outcome.kind).toBe("passed");
@@ -114,18 +150,26 @@ describe("subtask loop — usage probe wiring", () => {
         return {
           usage: {
             provider: "openai",
-            windows: [{ slot: "primary", usedPercent: 30, resetsAt: "2026-06-01T00:00:00Z", windowMinutes: 300, resetDescription: "soon" }],
+            windows: [
+              {
+                slot: "primary",
+                usedPercent: 30,
+                resetsAt: "2026-06-01T00:00:00Z",
+                windowMinutes: 300,
+                resetDescription: "soon",
+              },
+            ],
             creditsRemaining: remaining,
             accountEmail: null,
             source: "codex-cli",
-            capturedAt: "2026-05-28T00:00:00Z"
+            capturedAt: "2026-05-28T00:00:00Z",
           },
-          pressure: null
+          pressure: null,
         };
       },
       async observeAccounting() {
         return accounting(5);
-      }
+      },
     };
 
     const { input, pool } = defaultLoopInput({ usageProbe: probe, creditUsdRate: 0.04 });

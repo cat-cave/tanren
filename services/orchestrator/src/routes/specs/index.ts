@@ -12,7 +12,7 @@ import {
   ProjectNotFoundError,
   SpecDependenciesBlockedError,
   SpecNotRunnableError,
-  SpecNotFoundError
+  SpecNotFoundError,
 } from "../../engine/workflow/projectSpec.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg } from "../orgs/index.js";
@@ -25,18 +25,18 @@ const SpecCreateSchema = z.object({
   title: z.string().min(1),
   description: z.string().min(1),
   acceptanceCriteria: z.array(z.string().min(1)).min(1),
-  dependsOn: z.array(z.string().min(1)).optional()
+  dependsOn: z.array(z.string().min(1)).optional(),
 });
 
 const SpecPatchSchema = z.object({
   title: z.string().min(1).optional(),
   description: z.string().min(1).optional(),
-  acceptanceCriteria: z.array(z.string().min(1)).min(1).optional()
+  acceptanceCriteria: z.array(z.string().min(1)).min(1).optional(),
 });
 
 const RunInputSchema = z.object({
   trigger: z.enum(["cli", "dashboard", "api", "webhook"]).optional(),
-  branch: z.string().min(1).optional()
+  branch: z.string().min(1).optional(),
 });
 
 export function createSpecRoutes(options: SpecRoutesOptions) {
@@ -54,7 +54,7 @@ export function createSpecRoutes(options: SpecRoutesOptions) {
          FROM specs
         WHERE project_id = $1
         ORDER BY title`,
-      [projectId]
+      [projectId],
     );
     return c.json({ specs: rows.rows.map(toSpecContract) });
   });
@@ -71,11 +71,7 @@ export function createSpecRoutes(options: SpecRoutesOptions) {
       return c.json({ error: "invalid_spec", issues: parsed.error.issues }, 400);
     }
     try {
-      const spec = await createSpec(
-        options.pool,
-        { projectId, ...parsed.data },
-        { ...actor, orgId }
-      );
+      const spec = await createSpec(options.pool, { projectId, ...parsed.data }, { ...actor, orgId });
       return c.json(spec, 201);
     } catch (error) {
       if (error instanceof ProjectNotFoundError) {
@@ -101,7 +97,7 @@ export function createSpecRoutes(options: SpecRoutesOptions) {
     const result = await options.pool.query<SpecRow>(
       `SELECT spec_id, project_id, title, description, acceptance_criteria, depends_on, status
          FROM specs WHERE spec_id = $1`,
-      [specId]
+      [specId],
     );
     const row = result.rows[0];
     if (row === undefined) {
@@ -142,7 +138,7 @@ export function createSpecRoutes(options: SpecRoutesOptions) {
     params.push(specId);
     const updated = await options.pool.query(
       `UPDATE specs SET ${fragments.join(", ")} WHERE spec_id = $${params.length} RETURNING spec_id`,
-      params
+      params,
     );
     if (updated.rowCount === 0) {
       return c.json({ error: "spec_not_found" }, 404);
@@ -162,11 +158,7 @@ export function createSpecRoutes(options: SpecRoutesOptions) {
       return c.json({ error: "invalid_run", issues: parsed.error.issues }, 400);
     }
     try {
-      const run = await createQueuedRunFromSpec(
-        options.pool,
-        { specId, ...parsed.data },
-        { ...actor, orgId }
-      );
+      const run = await createQueuedRunFromSpec(options.pool, { specId, ...parsed.data }, { ...actor, orgId });
       return c.json(run, 201);
     } catch (error) {
       if (error instanceof SpecNotFoundError) {
@@ -196,7 +188,7 @@ function toSpecContract(row: SpecRow) {
     description: row.description,
     acceptanceCriteria: parseStringArray(row.acceptance_criteria),
     dependsOn: parseStringArray(row.depends_on),
-    status: row.status
+    status: row.status,
   };
 }
 

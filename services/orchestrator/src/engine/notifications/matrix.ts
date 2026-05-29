@@ -1,9 +1,4 @@
-import {
-  type NotificationRouteRow,
-  type NotificationTargetRow,
-  type Severity,
-  severityMeetsFloor
-} from "./schemas.js";
+import { type NotificationRouteRow, type NotificationTargetRow, type Severity, severityMeetsFloor } from "./schemas.js";
 
 // P2A-0017 matrix evaluation.
 //
@@ -84,7 +79,7 @@ export function evaluateMatrix(input: MatrixEvaluationInput): MatrixMatch[] {
 
 function indexRoutesByTarget(
   routes: ReadonlyArray<NotificationRouteRow>,
-  eventName: string
+  eventName: string,
 ): Map<string, NotificationRouteRow> {
   const map = new Map<string, NotificationRouteRow>();
   for (const route of routes) {
@@ -94,11 +89,7 @@ function indexRoutesByTarget(
   return map;
 }
 
-function isLive(
-  target: NotificationTargetRow,
-  route: NotificationRouteRow,
-  effectiveSeverity: Severity
-): boolean {
+function isLive(target: NotificationTargetRow, route: NotificationRouteRow, effectiveSeverity: Severity): boolean {
   if (!target.enabled) return false;
   if (!route.enabled) return false;
   if (!severityMeetsFloor(effectiveSeverity, route.minSeverity)) return false;

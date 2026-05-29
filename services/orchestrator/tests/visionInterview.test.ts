@@ -20,7 +20,7 @@ import {
   mergeCapture,
   runRound,
   type InterviewAnswerer,
-  type InterviewCapture
+  type InterviewCapture,
 } from "../src/engine/forge/interview/index.js";
 
 const actor: ActorContext = {
@@ -28,7 +28,7 @@ const actor: ActorContext = {
   orgId: "org_a",
   projectId: null,
   scopes: ["platform:admin"],
-  source: "session"
+  source: "session",
 };
 
 // In-memory pool tracking inserts so the derive path's create calls are
@@ -51,7 +51,7 @@ function stubPool(): { pool: pg.Pool; state: StubState } {
     behaviors: 0,
     milestones: 0,
     specMilestones: 0,
-    specBehaviors: 0
+    specBehaviors: 0,
   };
   const personaIds = new Set<string>();
   const query = async (text: string, params: unknown[] = []): Promise<{ rows: unknown[]; rowCount: number }> => {
@@ -94,10 +94,10 @@ function stubPool(): { pool: pg.Pool; state: StubState } {
             description: params[5],
             metadata: {},
             created_at: new Date(),
-            updated_at: new Date()
-          }
+            updated_at: new Date(),
+          },
         ],
-        rowCount: 1
+        rowCount: 1,
       };
     }
     // PersonaStore.get (authz for behavior create) → return the persona row.
@@ -113,10 +113,10 @@ function stubPool(): { pool: pg.Pool; state: StubState } {
             description: "d",
             metadata: {},
             created_at: new Date(),
-            updated_at: new Date()
-          }
+            updated_at: new Date(),
+          },
         ],
-        rowCount: 1
+        rowCount: 1,
       };
     }
     if (sql.startsWith("INSERT INTO behaviors")) {
@@ -133,10 +133,10 @@ function stubPool(): { pool: pg.Pool; state: StubState } {
             description: params[6],
             metadata: {},
             created_at: new Date(),
-            updated_at: new Date()
-          }
+            updated_at: new Date(),
+          },
         ],
-        rowCount: 1
+        rowCount: 1,
       };
     }
     if (sql.startsWith("INSERT INTO milestones")) {
@@ -153,10 +153,10 @@ function stubPool(): { pool: pg.Pool; state: StubState } {
             eta: params[6],
             status: params[7],
             created_at: new Date(),
-            updated_at: new Date()
-          }
+            updated_at: new Date(),
+          },
         ],
-        rowCount: 1
+        rowCount: 1,
       };
     }
     if (sql.startsWith("DELETE FROM spec_milestones")) return { rows: [], rowCount: 0 };
@@ -170,7 +170,10 @@ function stubPool(): { pool: pg.Pool; state: StubState } {
     }
     return { rows: [], rowCount: 0 };
   };
-  return { pool: { query, connect: async () => ({ query, release() {} }) } as unknown as pg.Pool, state };
+  return {
+    pool: { query, connect: async () => ({ query, release() {} }) } as unknown as pg.Pool,
+    state,
+  };
 }
 
 describe("runRound · interview round loop", () => {
@@ -182,13 +185,18 @@ describe("runRound · interview round loop", () => {
         seenRound = ctx.round;
         return {
           say: "who uses this?",
-          captureDelta: { personas: [{ name: "ops manager", description: "runs orders", surface: "desktop" }] },
+          captureDelta: {
+            personas: [{ name: "ops manager", description: "runs orders", surface: "desktop" }],
+          },
           suggestions: [],
-          complete: false
+          complete: false,
         };
-      }
+      },
     };
-    const result = await runRound({ pool, answerer }, { round: 2, answer: "a supply chain tool", capture: emptyCapture() });
+    const result = await runRound(
+      { pool, answerer },
+      { round: 2, answer: "a supply chain tool", capture: emptyCapture() },
+    );
     expect(seenRound).toBe(2);
     expect(result.say).toBe("who uses this?");
     expect(result.capture.personas).toHaveLength(1);
@@ -221,11 +229,14 @@ describe("mergeCapture · monotonic union", () => {
   it("de-dupes personas/behaviors by key and last-write-wins on identity", () => {
     const base = mergeCapture(emptyCapture(), {
       identity: { slug: "a", pitch: "first", repoHint: "" },
-      personas: [{ name: "ops", description: "x", surface: "" }]
+      personas: [{ name: "ops", description: "x", surface: "" }],
     });
     const merged = mergeCapture(base, {
       identity: { slug: "a", pitch: "refined", repoHint: "" },
-      personas: [{ name: "ops", description: "y", surface: "desktop" }, { name: "cfo", description: "z", surface: "" }]
+      personas: [
+        { name: "ops", description: "y", surface: "desktop" },
+        { name: "cfo", description: "z", surface: "" },
+      ],
     });
     expect(merged.identity?.pitch).toBe("refined");
     expect(merged.personas).toHaveLength(2);

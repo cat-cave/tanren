@@ -10,13 +10,7 @@
  */
 
 import type { KpiItem } from "./shared.js";
-import type {
-  ForgeAnswer,
-  InsightSummary,
-  MilestoneSummary,
-  ProjectFeedItem,
-  RunListItem
-} from "../../api/types.js";
+import type { ForgeAnswer, InsightSummary, MilestoneSummary, ProjectFeedItem, RunListItem } from "../../api/types.js";
 
 const OPEN_RUN_STATUSES = new Set(["queued", "running"]);
 
@@ -110,7 +104,7 @@ function buildAttention(input: BuildProjectViewInput): AttentionEntry[] {
         title: `${run.specTitle} is review-ready`,
         sub: run.prUrl !== null ? prHandle(run.prUrl) : `run ${run.runId}`,
         href: runHref(input.projectId, run.runId),
-        tone: "hot"
+        tone: "hot",
       });
     }
   }
@@ -123,7 +117,7 @@ function buildAttention(input: BuildProjectViewInput): AttentionEntry[] {
         title: `${run.specTitle} is ${run.status}`,
         sub: `run ${run.runId}`,
         href: runHref(input.projectId, run.runId),
-        tone: ""
+        tone: "",
       });
     }
   }
@@ -149,9 +143,7 @@ function buildDagNodes(input: BuildProjectViewInput): DagNode[] {
       milestone: input.milestones.length > 0 ? milestoneFor(index) : "—",
       title: run.specTitle,
       status,
-      href: status === "live" || status === "done" || status === "review"
-        ? runHref(input.projectId, run.runId)
-        : null
+      href: status === "live" || status === "done" || status === "review" ? runHref(input.projectId, run.runId) : null,
     };
   });
 }
@@ -178,15 +170,14 @@ function buildVelocity(input: BuildProjectViewInput): VelocityModel | null {
   if (target === undefined) return null;
   // Sparkline: completed-run counts bucketed over recent runs. With no cost/run
   // history the sparkline is flat-minimal rather than fabricated.
-  const completed = input.runs.filter(
-    (run) => dagStatusForRun(run) === "done"
-  ).length;
+  const completed = input.runs.filter((run) => dagStatusForRun(run) === "done").length;
   const spark = buildSparkline(completed, input.runs.length);
   const now = input.now ?? new Date();
   const eta = target.eta !== null ? new Date(target.eta) : null;
-  const etaLabel = eta !== null && !Number.isNaN(eta.getTime())
-    ? eta.toLocaleDateString("en-US", { month: "short", day: "numeric" })
-    : "unscheduled";
+  const etaLabel =
+    eta !== null && !Number.isNaN(eta.getTime())
+      ? eta.toLocaleDateString("en-US", { month: "short", day: "numeric" })
+      : "unscheduled";
   const onTrack = eta === null ? true : eta.getTime() >= now.getTime();
   return {
     spark,
@@ -194,7 +185,7 @@ function buildVelocity(input: BuildProjectViewInput): VelocityModel | null {
     milestoneLabel: `${target.label.toLowerCase()} ${target.name.toLowerCase()} · eta`,
     etaLabel,
     statusLabel: onTrack ? "on track" : "behind",
-    trendLabel: `${completed} merged · ${input.runs.length} runs`
+    trendLabel: `${completed} merged · ${input.runs.length} runs`,
   };
 }
 
@@ -219,7 +210,7 @@ function buildActivity(input: BuildProjectViewInput): ActivityRow[] {
     kind: activityKind(item.eventType),
     event: humanizeEvent(item.eventType),
     detail: item.specId !== null ? `spec ${item.specId}` : `run ${item.runId}`,
-    href: runHref(input.projectId, item.runId)
+    href: runHref(input.projectId, item.runId),
   }));
 }
 
@@ -229,8 +220,7 @@ function humanizeEvent(eventType: string): string {
 
 export function buildProjectViewModel(input: BuildProjectViewInput): ProjectViewModel {
   const inFlight = input.runs.filter((run) => OPEN_RUN_STATUSES.has(run.status)).length;
-  const needsYou =
-    input.runs.filter((run) => run.needsReview).length + input.insights.length;
+  const needsYou = input.runs.filter((run) => run.needsReview).length + input.insights.length;
   const blocked = input.runs.filter((run) => dagStatusForRun(run) === "blocked").length;
   const velocity = buildVelocity(input);
 
@@ -239,21 +229,20 @@ export function buildProjectViewModel(input: BuildProjectViewInput): ProjectView
     { k: "needs you", v: String(needsYou), tone: needsYou > 0 ? "warn" : undefined },
     {
       k: "week spend",
-      v: input.weekCapUsd !== undefined
-        ? `${formatUsd(input.weekSpendUsd)} / ${formatUsd(input.weekCapUsd)}`
-        : formatUsd(input.weekSpendUsd)
+      v:
+        input.weekCapUsd !== undefined
+          ? `${formatUsd(input.weekSpendUsd)} / ${formatUsd(input.weekCapUsd)}`
+          : formatUsd(input.weekSpendUsd),
     },
     { k: "velocity", v: velocity?.trendLabel ?? "—" },
-    { k: "blocked", v: String(blocked), tone: blocked > 0 ? "warn" : undefined }
+    { k: "blocked", v: String(blocked), tone: blocked > 0 ? "warn" : undefined },
   ];
 
   const pulseHeadline =
-    input.narration?.body ??
-    defaultPulse(input.projectName, inFlight, needsYou, input.weekSpendUsd);
+    input.narration?.body ?? defaultPulse(input.projectName, inFlight, needsYou, input.weekSpendUsd);
   const recentEvent = input.feed[0];
-  const pulseSub = recentEvent !== undefined
-    ? `most recent · ${humanizeEvent(recentEvent.eventType)}`
-    : "no recent activity";
+  const pulseSub =
+    recentEvent !== undefined ? `most recent · ${humanizeEvent(recentEvent.eventType)}` : "no recent activity";
 
   return {
     pulseHeadline,
@@ -264,20 +253,14 @@ export function buildProjectViewModel(input: BuildProjectViewInput): ProjectView
     dagNodes: buildDagNodes(input),
     velocity,
     activity: buildActivity(input),
-    prompts:
-      input.narration?.prompts ?? [
-        "What's the next spec I should run?",
-        "How is this week's spend distributed?"
-      ]
+    prompts: input.narration?.prompts ?? [
+      "What's the next spec I should run?",
+      "How is this week's spend distributed?",
+    ],
   };
 }
 
-function defaultPulse(
-  name: string,
-  inFlight: number,
-  needsYou: number,
-  spend: number
-): string {
+function defaultPulse(name: string, inFlight: number, needsYou: number, spend: number): string {
   const parts: string[] = [];
   if (inFlight > 0) parts.push(`${inFlight} run(s) in flight`);
   if (needsYou > 0) parts.push(`${needsYou} item(s) need you`);

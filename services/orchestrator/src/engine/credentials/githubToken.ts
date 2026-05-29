@@ -11,7 +11,7 @@ export interface GithubTokenImportResult {
 
 export async function storeGithubToken(
   secrets: SecretStore,
-  input: { ref: string; token: string }
+  input: { ref: string; token: string },
 ): Promise<GithubTokenImportResult> {
   const ref = validateGithubCredentialRef(input.ref);
   const token = validateGithubToken(input.token);

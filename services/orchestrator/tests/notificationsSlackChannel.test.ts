@@ -19,7 +19,7 @@ function target(overrides: Partial<NotificationTargetRow> = {}): NotificationTar
     weekendMute: false,
     createdAt: new Date(),
     updatedAt: new Date(),
-    ...overrides
+    ...overrides,
   };
 }
 
@@ -42,7 +42,7 @@ describe("SlackChannel", () => {
       return new Response("ok", { status: 200 });
     };
     const secrets = new MemorySecrets({
-      "credential/slack/alerts": "https://hooks.slack.com/services/T/B/secret"
+      "credential/slack/alerts": "https://hooks.slack.com/services/T/B/secret",
     });
     const channel = new SlackChannel({ fetch: fakeFetch, secrets });
     await channel.publish(target(), {
@@ -50,7 +50,7 @@ describe("SlackChannel", () => {
       body: "run failed details",
       severity: "fail",
       eventName: "run.failed",
-      tags: ["tanren", "severity:fail"]
+      tags: ["tanren", "severity:fail"],
     });
     expect(captured).not.toBeNull();
     expect(captured!.url).toBe("https://hooks.slack.com/services/T/B/secret");
@@ -77,7 +77,7 @@ describe("SlackChannel", () => {
       title: "t",
       body: "b",
       severity: "info",
-      eventName: "run.started"
+      eventName: "run.started",
     });
     expect(capturedUrl).toBe("https://hooks.slack.com/services/X");
   });
@@ -94,7 +94,7 @@ describe("SlackChannel", () => {
       body: "b",
       severity: "info",
       eventName: "run.completed",
-      url: "https://tanren.example/runs/run_1"
+      url: "https://tanren.example/runs/run_1",
     });
     const body = JSON.parse(captured!.body as string) as { blocks: unknown[] };
     expect(JSON.stringify(body.blocks)).toContain("https://tanren.example/runs/run_1");
@@ -107,8 +107,8 @@ describe("SlackChannel", () => {
         title: "t",
         body: "b",
         severity: "info",
-        eventName: "run.started"
-      })
+        eventName: "run.started",
+      }),
     ).rejects.toThrow(/slack publish failed: 400/);
   });
 
@@ -119,8 +119,8 @@ describe("SlackChannel", () => {
         title: "t",
         body: "b",
         severity: "info",
-        eventName: "run.started"
-      })
+        eventName: "run.started",
+      }),
     ).rejects.toThrow(/missing Slack webhook credential ref/);
   });
 });

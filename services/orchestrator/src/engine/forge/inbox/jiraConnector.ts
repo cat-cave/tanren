@@ -34,7 +34,7 @@ export const JiraConfig = z
     tokenRef: z.string().min(1),
     jql: z.string().min(1).optional(),
     project: z.string().min(1).optional(),
-    status: z.string().min(1).optional()
+    status: z.string().min(1).optional(),
   })
   .strict();
 export type JiraConfig = z.infer<typeof JiraConfig>;
@@ -74,9 +74,9 @@ export class FetchJiraHttpClient implements JiraHttpClient {
       headers: {
         Authorization: input.authorization,
         "Content-Type": "application/json",
-        Accept: "application/json"
+        Accept: "application/json",
       },
-      body: JSON.stringify(input.body)
+      body: JSON.stringify(input.body),
     });
     const text = await response.text();
     return { status: response.status, body: text === "" ? undefined : JSON.parse(text) };
@@ -197,8 +197,8 @@ export function createJiraConnector(deps: JiraConnectorDeps): SourceConnector {
         body: {
           jql: buildJql(config),
           maxResults: 50,
-          fields: ["summary", "description", "priority"]
-        }
+          fields: ["summary", "description", "priority"],
+        },
       });
       if (response.status !== 200) return [];
 
@@ -219,10 +219,10 @@ export function createJiraConnector(deps: JiraConnectorDeps): SourceConnector {
           title: title.slice(0, 300),
           body: bodyFor(fields, url),
           severity: severityFor(fields),
-          projectId: source.projectId
+          projectId: source.projectId,
         });
       }
       return items;
-    }
+    },
   };
 }

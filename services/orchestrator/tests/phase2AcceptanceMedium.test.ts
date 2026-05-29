@@ -16,7 +16,7 @@ import { describe, expect, it } from "vitest";
 import {
   AcceptanceAssertionError,
   assertAcceptanceCriteria,
-  type PersistedRunSnapshot
+  type PersistedRunSnapshot,
 } from "../../../scripts/acceptance/common.js";
 
 function mediumSnapshot(overrides: Partial<PersistedRunSnapshot> = {}): PersistedRunSnapshot {
@@ -33,7 +33,7 @@ function mediumSnapshot(overrides: Partial<PersistedRunSnapshot> = {}): Persiste
       { taskKind: "check", basis: "unknown", billingMode: "subscription" },
       { taskKind: "write", basis: "unknown", billingMode: "subscription" },
       { taskKind: "check", basis: "unknown", billingMode: "subscription" },
-      { taskKind: "audit", basis: "unknown", billingMode: "subscription" }
+      { taskKind: "audit", basis: "unknown", billingMode: "subscription" },
     ],
     events: [
       "planner.started",
@@ -46,12 +46,12 @@ function mediumSnapshot(overrides: Partial<PersistedRunSnapshot> = {}): Persiste
       "checker.verdict",
       "auditor.verdict",
       "github.pr.created",
-      "ci.passed"
+      "ci.passed",
     ],
     plannerRerequestedCount: 1,
     workspacePathHints: ["runner.allocated", "workspace.prepared"],
     ciStatus: "passed",
-    ...overrides
+    ...overrides,
   };
 }
 
@@ -61,8 +61,8 @@ describe("phase2 acceptance — medium tier dry-run smoke", () => {
       assertAcceptanceCriteria({
         tier: "medium",
         expectedOutcome: "phase2_medium_complete",
-        snapshot: mediumSnapshot()
-      })
+        snapshot: mediumSnapshot(),
+      }),
     ).not.toThrow();
   });
 
@@ -73,9 +73,9 @@ describe("phase2 acceptance — medium tier dry-run smoke", () => {
         expectedOutcome: "phase2_medium_complete",
         snapshot: mediumSnapshot({
           taskKinds: ["plan", "write", "check", "audit", "ci"],
-          taskCounts: { plan: 1, write: 1, check: 1, audit: 1, ci: 1 }
-        })
-      })
+          taskCounts: { plan: 1, write: 1, check: 1, audit: 1, ci: 1 },
+        }),
+      }),
     ).toThrow(/≥ 2 write tasks/);
   });
 
@@ -90,9 +90,9 @@ describe("phase2 acceptance — medium tier dry-run smoke", () => {
         expectedOutcome: "phase2_medium_complete",
         snapshot: mediumSnapshot({
           plannerRerequestedCount: 0,
-          events: mediumSnapshot().events.filter((name) => name !== "planner.rerequested")
-        })
-      })
+          events: mediumSnapshot().events.filter((name) => name !== "planner.rerequested"),
+        }),
+      }),
     ).not.toThrow();
   });
 
@@ -105,10 +105,10 @@ describe("phase2 acceptance — medium tier dry-run smoke", () => {
           costBases: [
             { taskKind: "write", basis: "unknown", billingMode: "subscription" },
             { taskKind: "check", basis: "unknown", billingMode: "subscription" },
-            { taskKind: "audit", basis: "unknown", billingMode: "subscription" }
-          ]
-        })
-      })
+            { taskKind: "audit", basis: "unknown", billingMode: "subscription" },
+          ],
+        }),
+      }),
     ).toThrow(/missing cost_records.*plan/);
   });
 
@@ -117,8 +117,8 @@ describe("phase2 acceptance — medium tier dry-run smoke", () => {
       assertAcceptanceCriteria({
         tier: "medium",
         expectedOutcome: "phase2_medium_complete",
-        snapshot: mediumSnapshot({ outcome: "retry_budget_exhausted" })
-      })
+        snapshot: mediumSnapshot({ outcome: "retry_budget_exhausted" }),
+      }),
     ).toThrow(AcceptanceAssertionError);
   });
 });

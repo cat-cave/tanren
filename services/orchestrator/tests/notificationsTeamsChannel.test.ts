@@ -19,12 +19,11 @@ function target(overrides: Partial<NotificationTargetRow> = {}): NotificationTar
     weekendMute: false,
     createdAt: new Date(),
     updatedAt: new Date(),
-    ...overrides
+    ...overrides,
   };
 }
 
-const failingFetch: typeof fetch = async () =>
-  new Response("nope", { status: 400, statusText: "Bad Request" });
+const failingFetch: typeof fetch = async () => new Response("nope", { status: 400, statusText: "Bad Request" });
 
 class MemorySecrets implements SecretStore {
   constructor(private readonly map: Record<string, string>) {}
@@ -44,7 +43,7 @@ describe("TeamsChannel", () => {
       return new Response("1", { status: 200 });
     };
     const secrets = new MemorySecrets({
-      "credential/teams/alerts": "https://outlook.office.com/webhook/abc"
+      "credential/teams/alerts": "https://outlook.office.com/webhook/abc",
     });
     const channel = new TeamsChannel({ fetch: fakeFetch, secrets });
     await channel.publish(target(), {
@@ -53,7 +52,7 @@ describe("TeamsChannel", () => {
       severity: "fail",
       eventName: "run.failed",
       url: "https://tanren.example/runs/run_1",
-      tags: ["tanren"]
+      tags: ["tanren"],
     });
     expect(captured).not.toBeNull();
     expect(captured!.url).toBe("https://outlook.office.com/webhook/abc");
@@ -81,7 +80,7 @@ describe("TeamsChannel", () => {
       title: "t",
       body: "b",
       severity: "info",
-      eventName: "run.started"
+      eventName: "run.started",
     });
     expect(capturedUrl).toBe("https://outlook.office.com/webhook/x");
   });
@@ -93,8 +92,8 @@ describe("TeamsChannel", () => {
         title: "t",
         body: "b",
         severity: "info",
-        eventName: "run.started"
-      })
+        eventName: "run.started",
+      }),
     ).rejects.toThrow(/teams publish failed: 400/);
   });
 
@@ -105,8 +104,8 @@ describe("TeamsChannel", () => {
         title: "t",
         body: "b",
         severity: "info",
-        eventName: "run.started"
-      })
+        eventName: "run.started",
+      }),
     ).rejects.toThrow(/missing teams webhook credential ref/);
   });
 });

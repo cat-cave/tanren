@@ -58,7 +58,19 @@ export interface ForgeThreadRow {
 export class RecoveryMemoryPool {
   runs = new Map<string, RunRow>();
   specs = new Map<string, SpecRow>();
-  projects = new Map<string, { project_id: string; org_id: string | null; name: string; repo_url: string; default_branch: string; runner_image: string; allocator: string; config: unknown }>();
+  projects = new Map<
+    string,
+    {
+      project_id: string;
+      org_id: string | null;
+      name: string;
+      repo_url: string;
+      default_branch: string;
+      runner_image: string;
+      allocator: string;
+      config: unknown;
+    }
+  >();
   projectMembers = new Set<string>();
   events: EventRow[] = [];
   tasks: Array<{ task_id: string; run_id: string; kind: string; status: string }> = [];
@@ -77,7 +89,7 @@ export class RecoveryMemoryPool {
       default_branch: "main",
       runner_image: "ghcr.io/cat-cave/tanren-runner:v0",
       allocator: "local-docker",
-      config: {}
+      config: {},
     });
   }
 
@@ -93,7 +105,7 @@ export class RecoveryMemoryPool {
       description: input.description ?? "behavior 5 — no SSR theme flash",
       acceptance_criteria: input.acceptance_criteria ?? ["no flash on first paint"],
       depends_on: input.depends_on ?? [],
-      status: input.status ?? "active"
+      status: input.status ?? "active",
     };
     this.specs.set(row.spec_id, row);
     return row;
@@ -107,7 +119,7 @@ export class RecoveryMemoryPool {
       trigger: input.trigger ?? "dashboard",
       branch: input.branch ?? "main",
       status: input.status ?? "halted",
-      outcome: input.outcome ?? "retry_budget_exhausted"
+      outcome: input.outcome ?? "retry_budget_exhausted",
     };
     this.runs.set(row.run_id, row);
     return row;
@@ -121,8 +133,12 @@ export class RecoveryMemoryPool {
       spec_id: null,
       project_id: null,
       event_type: "workspace.git_captured",
-      payload: { workspacePath: "/w", commits: shas.map((sha) => ({ sha, message: "m" })), diffBytes: 1 },
-      ts: new Date(this.now.getTime() + this.eventSeq * 1000)
+      payload: {
+        workspacePath: "/w",
+        commits: shas.map((sha) => ({ sha, message: "m" })),
+        diffBytes: 1,
+      },
+      ts: new Date(this.now.getTime() + this.eventSeq * 1000),
     });
   }
 
@@ -134,7 +150,9 @@ export class RecoveryMemoryPool {
     // assertRunAccess: project_id + spec_id from runs
     if (t.startsWith("SELECT project_id, spec_id FROM runs WHERE run_id = $1")) {
       const run = this.runs.get(String(params[0]));
-      return run ? { rows: [{ project_id: run.project_id, spec_id: run.spec_id }], rowCount: 1 } : { rows: [], rowCount: 0 };
+      return run
+        ? { rows: [{ project_id: run.project_id, spec_id: run.spec_id }], rowCount: 1 }
+        : { rows: [], rowCount: 0 };
     }
     // assertProjectAccess: org_id from projects
     if (t.startsWith("SELECT org_id FROM projects WHERE project_id = $1")) {
@@ -149,7 +167,17 @@ export class RecoveryMemoryPool {
     if (t.startsWith("SELECT spec_id, project_id, status, outcome FROM runs WHERE run_id = $1")) {
       const run = this.runs.get(String(params[0]));
       return run
-        ? { rows: [{ spec_id: run.spec_id, project_id: run.project_id, status: run.status, outcome: run.outcome }], rowCount: 1 }
+        ? {
+            rows: [
+              {
+                spec_id: run.spec_id,
+                project_id: run.project_id,
+                status: run.status,
+                outcome: run.outcome,
+              },
+            ],
+            rowCount: 1,
+          }
         : { rows: [], rowCount: 0 };
     }
     // last good commit / captured commits scan
@@ -202,10 +230,10 @@ export class RecoveryMemoryPool {
             description: spec.description,
             acceptance_criteria: spec.acceptance_criteria,
             depends_on: spec.depends_on,
-            status: spec.status
-          }
+            status: spec.status,
+          },
         ],
-        rowCount: 1
+        rowCount: 1,
       };
     }
     // ensureSpecDependenciesDone (done deps lookup)
@@ -221,13 +249,18 @@ export class RecoveryMemoryPool {
         trigger: String(params[3]),
         branch: String(params[4]),
         status: "queued",
-        outcome: null
+        outcome: null,
       });
       return { rows: [], rowCount: 1 };
     }
     // INSERT tasks
     if (t.startsWith("INSERT INTO tasks")) {
-      this.tasks.push({ task_id: String(params[0]), run_id: String(params[1]), kind: "plan", status: "queued" });
+      this.tasks.push({
+        task_id: String(params[0]),
+        run_id: String(params[1]),
+        kind: "plan",
+        status: "queued",
+      });
       return { rows: [], rowCount: 1 };
     }
     // INSERT job_queue ... RETURNING id. The task_kind is a SQL literal
@@ -239,7 +272,7 @@ export class RecoveryMemoryPool {
         id,
         run_id: String(params[0]),
         task_id: String(params[1]),
-        task_kind: kindMatch?.[1] ?? "plan"
+        task_kind: kindMatch?.[1] ?? "plan",
       });
       return { rows: [{ id: String(id) }], rowCount: 1 };
     }
@@ -256,7 +289,7 @@ export class RecoveryMemoryPool {
         project_id: params[3] === null ? null : String(params[3]),
         event_type: String(params[4]),
         payload: JSON.parse(String(params[5])),
-        ts: new Date(this.now.getTime() + this.eventSeq * 1000)
+        ts: new Date(this.now.getTime() + this.eventSeq * 1000),
       });
       return { rows: [], rowCount: 1 };
     }
@@ -271,7 +304,7 @@ export class RecoveryMemoryPool {
         title: params[5] === null || params[5] === undefined ? null : String(params[5]),
         created_at: this.now,
         updated_at: this.now,
-        closed_at: null
+        closed_at: null,
       };
       this.threads.set(row.id, row);
       return { rows: [row], rowCount: 1 };

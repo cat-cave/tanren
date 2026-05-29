@@ -18,7 +18,7 @@ export const GateStepResult = z
     exitCode: z.number().int().nullable(),
     passed: z.boolean(),
     timedOut: z.boolean(),
-    outputTail: z.string()
+    outputTail: z.string(),
   })
   .strict();
 export type GateStepResult = z.infer<typeof GateStepResult>;
@@ -35,7 +35,7 @@ export const GateStartedPayload = z
   .object({
     tier: z.string(),
     when: GateWhen,
-    stepNames: z.array(z.string())
+    stepNames: z.array(z.string()),
   })
   .strict();
 
@@ -45,7 +45,7 @@ export const GatePassedPayload = z
   .object({
     tier: z.string(),
     when: GateWhen,
-    steps: z.array(GateStepResult)
+    steps: z.array(GateStepResult),
   })
   .strict();
 
@@ -58,6 +58,6 @@ export const GateFailedPayload = z
     when: GateWhen,
     failedStep: z.string(),
     exitCode: z.number().int().nullable(),
-    steps: z.array(GateStepResult)
+    steps: z.array(GateStepResult),
   })
   .strict();

@@ -24,7 +24,7 @@ export const ChannelKind = z.enum([
   "email",
   "twilio",
   "pagerduty",
-  "webhook"
+  "webhook",
 ]);
 export type ChannelKind = z.infer<typeof ChannelKind>;
 
@@ -59,21 +59,21 @@ export const NotificationTargetRow = z
     enabled: z.boolean(),
     weekendMute: z.boolean(),
     createdAt: z.date(),
-    updatedAt: z.date()
+    updatedAt: z.date(),
   })
   .superRefine((row, ctx) => {
     if (row.scope === "org" && row.userId !== null) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["userId"],
-        message: "org-scoped target must have a null userId"
+        message: "org-scoped target must have a null userId",
       });
     }
     if (row.scope === "user" && row.userId === null) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["userId"],
-        message: "user-scoped target must have a non-null userId"
+        message: "user-scoped target must have a non-null userId",
       });
     }
   });
@@ -89,21 +89,21 @@ export const NotificationTargetCreateInput = z
     destination: z.string().min(1),
     label: z.string().min(1),
     enabled: z.boolean().default(true),
-    weekendMute: z.boolean().default(false)
+    weekendMute: z.boolean().default(false),
   })
   .superRefine((input, ctx) => {
     if (input.scope === "org" && input.userId !== null) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["userId"],
-        message: "org-scoped target must have a null userId"
+        message: "org-scoped target must have a null userId",
       });
     }
     if (input.scope === "user" && input.userId === null) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["userId"],
-        message: "user-scoped target must have a userId"
+        message: "user-scoped target must have a userId",
       });
     }
   });
@@ -116,7 +116,7 @@ export const NotificationRouteRow = z.object({
   enabled: z.boolean(),
   minSeverity: Severity,
   createdAt: z.date(),
-  updatedAt: z.date()
+  updatedAt: z.date(),
 });
 export type NotificationRouteRow = z.infer<typeof NotificationRouteRow>;
 
@@ -125,7 +125,7 @@ export const NotificationRouteCreateInput = z.object({
   targetId: z.string().min(1),
   eventName: z.string().min(1),
   enabled: z.boolean().default(true),
-  minSeverity: Severity.default("info")
+  minSeverity: Severity.default("info"),
 });
 export type NotificationRouteCreateInput = z.infer<typeof NotificationRouteCreateInput>;
 
@@ -137,6 +137,6 @@ export const NotificationPayload = z.object({
   severity: Severity,
   eventName: z.string().min(1),
   url: z.string().optional(),
-  tags: z.array(z.string()).optional()
+  tags: z.array(z.string()).optional(),
 });
 export type NotificationPayload = z.infer<typeof NotificationPayload>;

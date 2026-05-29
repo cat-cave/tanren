@@ -6,11 +6,7 @@
 import { randomUUID } from "node:crypto";
 import type pg from "pg";
 import type { ActorContext } from "../../auth/schemas.js";
-import {
-  ForgeThreadCreateInput,
-  type ForgeThreadRow,
-  type ForgeThreadScope
-} from "./schemas.js";
+import { ForgeThreadCreateInput, type ForgeThreadRow, type ForgeThreadScope } from "./schemas.js";
 
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
@@ -48,7 +44,7 @@ function decodeThreadRow(raw: RawThreadRow): ForgeThreadRow {
     title: raw.title === null || raw.title === undefined ? null : String(raw.title),
     createdAt: raw.created_at as Date,
     updatedAt: raw.updated_at as Date,
-    closedAt: raw.closed_at === null || raw.closed_at === undefined ? null : (raw.closed_at as Date)
+    closedAt: raw.closed_at === null || raw.closed_at === undefined ? null : (raw.closed_at as Date),
   };
 }
 
@@ -58,11 +54,7 @@ export class ForgeThreadAccessDeniedError extends Error {
   }
 }
 
-function assertActorReachesScope(
-  actor: ActorContext,
-  orgId: string,
-  projectId: string | null
-): void {
+function assertActorReachesScope(actor: ActorContext, orgId: string, projectId: string | null): void {
   if (actor.scopes.includes("platform:admin")) return;
   if (actor.orgId === orgId && (actor.scopes.includes("org:admin") || actor.scopes.includes("org:member"))) {
     return;
@@ -74,11 +66,7 @@ function assertActorReachesScope(
 }
 
 export const ForgeThreadStore = {
-  async create(
-    client: QueryClient,
-    input: ForgeThreadCreateInput,
-    actor: ActorContext
-  ): Promise<ForgeThreadRow> {
+  async create(client: QueryClient, input: ForgeThreadCreateInput, actor: ActorContext): Promise<ForgeThreadRow> {
     const parsed = ForgeThreadCreateInput.parse(input);
     assertActorReachesScope(actor, parsed.orgId, parsed.projectId);
     const id = parsed.id ?? `forge_thread_${randomUUID()}`;
@@ -86,20 +74,13 @@ export const ForgeThreadStore = {
       `INSERT INTO forge_threads (id, org_id, project_id, run_id, scope, title)
        VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING ${SELECT_THREAD_COLUMNS}`,
-      [id, parsed.orgId, parsed.projectId, parsed.runId, parsed.scope, parsed.title]
+      [id, parsed.orgId, parsed.projectId, parsed.runId, parsed.scope, parsed.title],
     );
     return decodeThreadRow(result.rows[0] as RawThreadRow);
   },
 
-  async get(
-    client: QueryClient,
-    threadId: string,
-    actor: ActorContext
-  ): Promise<ForgeThreadRow | undefined> {
-    const result = await client.query(
-      `SELECT ${SELECT_THREAD_COLUMNS} FROM forge_threads WHERE id = $1`,
-      [threadId]
-    );
+  async get(client: QueryClient, threadId: string, actor: ActorContext): Promise<ForgeThreadRow | undefined> {
+    const result = await client.query(`SELECT ${SELECT_THREAD_COLUMNS} FROM forge_threads WHERE id = $1`, [threadId]);
     const row = result.rows[0];
     if (row === undefined) return undefined;
     const thread = decodeThreadRow(row as RawThreadRow);
@@ -114,14 +95,14 @@ export const ForgeThreadStore = {
   async listForProject(
     client: QueryClient,
     args: { orgId: string; projectId: string },
-    actor: ActorContext
+    actor: ActorContext,
   ): Promise<ForgeThreadRow[]> {
     assertActorReachesScope(actor, args.orgId, args.projectId);
     const result = await client.query(
       `SELECT ${SELECT_THREAD_COLUMNS} FROM forge_threads
        WHERE org_id = $1 AND project_id = $2
        ORDER BY updated_at DESC`,
-      [args.orgId, args.projectId]
+      [args.orgId, args.projectId],
     );
     return result.rows.map((row) => decodeThreadRow(row as RawThreadRow));
   },
@@ -129,23 +110,20 @@ export const ForgeThreadStore = {
   async listForRun(
     client: QueryClient,
     args: { orgId: string; projectId: string; runId: string },
-    actor: ActorContext
+    actor: ActorContext,
   ): Promise<ForgeThreadRow[]> {
     assertActorReachesScope(actor, args.orgId, args.projectId);
     const result = await client.query(
       `SELECT ${SELECT_THREAD_COLUMNS} FROM forge_threads
        WHERE org_id = $1 AND project_id = $2 AND run_id = $3
        ORDER BY updated_at DESC`,
-      [args.orgId, args.projectId, args.runId]
+      [args.orgId, args.projectId, args.runId],
     );
     return result.rows.map((row) => decodeThreadRow(row as RawThreadRow));
   },
 
   async touch(client: QueryClient, threadId: string): Promise<void> {
-    await client.query(
-      `UPDATE forge_threads SET updated_at = NOW() WHERE id = $1`,
-      [threadId]
-    );
+    await client.query(`UPDATE forge_threads SET updated_at = NOW() WHERE id = $1`, [threadId]);
   },
 
   async close(client: QueryClient, threadId: string, actor: ActorContext): Promise<ForgeThreadRow> {
@@ -157,8 +135,8 @@ export const ForgeThreadStore = {
       `UPDATE forge_threads SET closed_at = NOW(), updated_at = NOW()
        WHERE id = $1
        RETURNING ${SELECT_THREAD_COLUMNS}`,
-      [threadId]
+      [threadId],
     );
     return decodeThreadRow(result.rows[0] as RawThreadRow);
-  }
+  },
 } as const;

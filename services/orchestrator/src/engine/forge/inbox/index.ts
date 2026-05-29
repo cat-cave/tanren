@@ -11,16 +11,12 @@ export {
   type IngestedItem,
   type SourceConnector,
   type TriageAnswerer,
-  type TriageAnswererContext
+  type TriageAnswererContext,
 } from "./types.js";
 
 export { createDeterministicTriageAnswerer } from "./defaultAnswerer.js";
 
-export {
-  GitHubIssuesConfig,
-  createGitHubIssuesConnector,
-  type GitHubConnectorDeps
-} from "./githubConnector.js";
+export { GitHubIssuesConfig, createGitHubIssuesConnector, type GitHubConnectorDeps } from "./githubConnector.js";
 
 export {
   SentryConfig,
@@ -29,7 +25,7 @@ export {
   type SentryConnectorDeps,
   type SentryHttpClient,
   type SentryHttpRequest,
-  type SentryHttpResponse
+  type SentryHttpResponse,
 } from "./sentryConnector.js";
 
 export {
@@ -39,7 +35,7 @@ export {
   type LinearConnectorDeps,
   type LinearHttpClient,
   type LinearHttpRequest,
-  type LinearHttpResponse
+  type LinearHttpResponse,
 } from "./linearConnector.js";
 
 export {
@@ -49,13 +45,10 @@ export {
   type JiraConnectorDeps,
   type JiraHttpClient,
   type JiraHttpRequest,
-  type JiraHttpResponse
+  type JiraHttpResponse,
 } from "./jiraConnector.js";
 
-export {
-  createIssuesConnector,
-  type IssuesConnectorDeps
-} from "./issuesConnector.js";
+export { createIssuesConnector, type IssuesConnectorDeps } from "./issuesConnector.js";
 
 export {
   createSource,
@@ -65,7 +58,7 @@ export {
   getCandidate,
   upsertCandidate,
   resolveCandidate,
-  type CreateSourceInput
+  type CreateSourceInput,
 } from "./store.js";
 
 export {
@@ -79,5 +72,5 @@ export {
   type InboxEngineDeps,
   type IngestResult,
   type AcceptCandidateInput,
-  type AcceptCandidateResult
+  type AcceptCandidateResult,
 } from "./engine.js";

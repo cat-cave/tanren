@@ -9,7 +9,7 @@ export const GithubBranchPushedPayload = z
     repoUrl: z.string(),
     branch: z.string(),
     credentialRef: z.string(),
-    redacted: z.literal(true)
+    redacted: z.literal(true),
   })
   .strict();
 
@@ -20,14 +20,14 @@ export const GithubPrCreatedPayload = z
     targetBranch: z.string(),
     prUrl: z.string(),
     prNumber: z.number().int(),
-    reused: z.boolean()
+    reused: z.boolean(),
   })
   .strict();
 
 export const GithubPrReadyPayload = z
   .object({
     prUrl: z.string(),
-    prNumber: z.number().int()
+    prNumber: z.number().int(),
   })
   .strict();
 
@@ -35,7 +35,7 @@ export const GithubPrMergedPayload = z
   .object({
     prUrl: z.string(),
     prNumber: z.number().int(),
-    mergeSha: z.string().optional()
+    mergeSha: z.string().optional(),
   })
   .strict();
 
@@ -43,7 +43,7 @@ export const GithubFailedPayload = z
   .object({
     operation: z.string(),
     branch: z.string().optional(),
-    message: z.string()
+    message: z.string(),
   })
   .strict();
 
@@ -52,7 +52,7 @@ const CheckRunSummary = z
     name: z.string(),
     status: z.string(),
     conclusion: z.string().nullable().optional(),
-    url: z.string().optional()
+    url: z.string().optional(),
   })
   .strict();
 
@@ -60,7 +60,7 @@ const CommitStatusSummary = z
   .object({
     context: z.string(),
     state: z.string(),
-    url: z.string().optional()
+    url: z.string().optional(),
   })
   .strict();
 
@@ -69,7 +69,7 @@ const CiCheckRef = z
     kind: z.enum(["check_run", "commit_status"]),
     name: z.string(),
     state: z.string(),
-    url: z.string().optional()
+    url: z.string().optional(),
   })
   .strict();
 
@@ -84,7 +84,7 @@ const CiObservationPayload = z
     checkRuns: z.array(CheckRunSummary),
     statuses: z.array(CommitStatusSummary),
     failingChecks: z.array(CiCheckRef),
-    pendingChecks: z.array(CiCheckRef)
+    pendingChecks: z.array(CiCheckRef),
   })
   .strict();
 
@@ -95,27 +95,27 @@ export const CiFailedPayload = CiObservationPayload;
 export const Phase1FixtureStartedPayload = z
   .object({
     repoUrl: z.string(),
-    targetBranch: z.string()
+    targetBranch: z.string(),
   })
   .strict();
 
 export const Phase1FixtureCiPendingPayload = z
   .object({
     attempt: z.number().int(),
-    nextPollAfterMs: z.number().int()
+    nextPollAfterMs: z.number().int(),
   })
   .strict();
 
 export const Phase1FixtureCompletedPayload = z
   .object({
     prUrl: z.string(),
-    ciStatus: z.string()
+    ciStatus: z.string(),
   })
   .strict();
 
 export const Phase1FixtureFailedPayload = z
   .object({
-    message: z.string()
+    message: z.string(),
   })
   .strict();
 
@@ -123,7 +123,7 @@ export const ReviewRequestedPayload = z
   .object({
     prUrl: z.string(),
     prNumber: z.number().int(),
-    reviewers: z.array(z.string()).optional()
+    reviewers: z.array(z.string()).optional(),
   })
   .strict();
 
@@ -131,7 +131,7 @@ export const ReviewApprovedPayload = z
   .object({
     prUrl: z.string(),
     prNumber: z.number().int(),
-    reviewer: z.string().optional()
+    reviewer: z.string().optional(),
   })
   .strict();
 
@@ -140,7 +140,7 @@ export const ReviewChangesRequestedPayload = z
     prUrl: z.string(),
     prNumber: z.number().int(),
     reviewer: z.string().optional(),
-    message: z.string().optional()
+    message: z.string().optional(),
   })
   .strict();
 
@@ -159,7 +159,7 @@ export const MergeQueuedPayload = z
     prNumber: z.number().int(),
     integration: MergeIntegrationMode,
     /** Label applied for the mergify_queue path; absent for other modes. */
-    queueLabel: z.string().optional()
+    queueLabel: z.string().optional(),
   })
   .strict();
 
@@ -168,7 +168,7 @@ export const MergeCompletedPayload = z
     prUrl: z.string(),
     prNumber: z.number().int(),
     integration: MergeIntegrationMode,
-    mergeSha: z.string().optional()
+    mergeSha: z.string().optional(),
   })
   .strict();
 
@@ -177,7 +177,7 @@ export const MergeFailedPayload = z
     prUrl: z.string(),
     prNumber: z.number().int(),
     integration: MergeIntegrationMode,
-    message: z.string()
+    message: z.string(),
   })
   .strict();
 
@@ -188,7 +188,7 @@ export const MergeConflictPayload = z
     integration: MergeIntegrationMode,
     baseBranch: z.string(),
     headBranch: z.string().optional(),
-    message: z.string()
+    message: z.string(),
   })
   .strict();
 
@@ -208,28 +208,28 @@ export const MergeBlockedPayload = z
     posture: GovernancePostureMode,
     mode: MergeBlockMode,
     externalLogins: z.array(z.string()),
-    reason: z.string()
+    reason: z.string(),
   })
   .strict();
 
 export const NotificationEnqueuedPayload = z
   .object({
     channel: z.string(),
-    eventName: z.string().optional()
+    eventName: z.string().optional(),
   })
   .strict();
 
 export const NotificationSentPayload = z
   .object({
     channel: z.string(),
-    attempts: z.number().int().optional()
+    attempts: z.number().int().optional(),
   })
   .strict();
 
 export const NotificationFailedPayload = z
   .object({
     channel: z.string(),
-    message: z.string()
+    message: z.string(),
   })
   .strict();
 
@@ -242,14 +242,14 @@ const RunnerProofPayload = z
         host: z.string(),
         port: z.number().int(),
         username: z.string(),
-        hostKeyFingerprint: z.string()
+        hostKeyFingerprint: z.string(),
       })
       .strict(),
     command: z.string(),
     exitCode: z.number().int().nullable(),
     stdout: z.string(),
     stderr: z.string(),
-    timedOut: z.boolean()
+    timedOut: z.boolean(),
   })
   .strict();
 
@@ -264,9 +264,9 @@ export const HelloSshStartedPayload = z
         host: z.string(),
         port: z.number().int(),
         username: z.string(),
-        hostKeyFingerprint: z.string()
+        hostKeyFingerprint: z.string(),
       })
-      .strict()
+      .strict(),
   })
   .strict();
 
@@ -276,6 +276,6 @@ export const HelloCompletedPayload = z
   .object({
     outcome: z.string(),
     runnerProof: RunnerProofPayload,
-    workspacePath: z.string()
+    workspacePath: z.string(),
   })
   .strict();

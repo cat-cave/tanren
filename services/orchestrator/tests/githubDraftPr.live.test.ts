@@ -14,62 +14,72 @@ const runLive = process.env.TANREN_GITHUB_LIVE === "1";
 const describeLive = runLive ? describe : describe.skip;
 
 describeLive("live GitHub draft PR contract", () => {
-  it("pushes a runner workspace branch and opens or reuses a draft PR", async () => {
-    const timeoutMs = Number(process.env.TANREN_GITHUB_LIVE_TIMEOUT_MS ?? "60000");
-    const repoUrl = requireEnv("TANREN_GITHUB_REPO_URL");
-    const baseBranch = process.env.TANREN_GITHUB_BASE_BRANCH ?? "main";
-    const runId = `run_github_live_${Date.now()}`;
-    const branch = `tanren/live-${runId.replace(/^run_/, "")}`;
-    const workspace = workspaceRepoPathForRun(runId);
-    const secrets = new FakeSecretStore();
-    await storeGithubToken(secrets, { ref: "credential/github/live", token: await readFile(requireEnv("TANREN_GITHUB_TOKEN_FILE"), "utf8") });
-    await secrets.put({ ref: "runner/live/identity", value: await readFile(requireEnv("TANREN_SSH_KEY_PATH"), "utf8") });
-    const ssh = new Ssh2Substrate(secrets, {
-      serverHostKeyAlgorithms: parseHostKeyAlgorithms(process.env.TANREN_SSH_HOST_KEY_ALGORITHMS)
-    });
-    const target = liveTarget();
+  it(
+    "pushes a runner workspace branch and opens or reuses a draft PR",
+    async () => {
+      const timeoutMs = Number(process.env.TANREN_GITHUB_LIVE_TIMEOUT_MS ?? "60000");
+      const repoUrl = requireEnv("TANREN_GITHUB_REPO_URL");
+      const baseBranch = process.env.TANREN_GITHUB_BASE_BRANCH ?? "main";
+      const runId = `run_github_live_${Date.now()}`;
+      const branch = `tanren/live-${runId.replace(/^run_/, "")}`;
+      const workspace = workspaceRepoPathForRun(runId);
+      const secrets = new FakeSecretStore();
+      await storeGithubToken(secrets, {
+        ref: "credential/github/live",
+        token: await readFile(requireEnv("TANREN_GITHUB_TOKEN_FILE"), "utf8"),
+      });
+      await secrets.put({
+        ref: "runner/live/identity",
+        value: await readFile(requireEnv("TANREN_SSH_KEY_PATH"), "utf8"),
+      });
+      const ssh = new Ssh2Substrate(secrets, {
+        serverHostKeyAlgorithms: parseHostKeyAlgorithms(process.env.TANREN_SSH_HOST_KEY_ALGORITHMS),
+      });
+      const target = liveTarget();
 
-    await runWorkspaceSshCommand(ssh, target, {
-      label: "prepare live GitHub workspace",
-      timeoutMs,
-      command: [
-        "set -eu",
-        `rm -rf ${shellQuote(workspace)}`,
-        `git clone --depth 1 --branch ${shellQuote(baseBranch)} ${shellQuote(repoUrl)} ${shellQuote(workspace)}`,
-        `cd ${shellQuote(workspace)}`,
-        "git config user.name 'Tanren Live Smoke'",
-        "git config user.email 'tanren-live@tanren.invalid'",
-        `printf '%s\\n' ${shellQuote(`tanren github draft pr ok ${runId}`)} > TANREN_GITHUB_LIVE.md`,
-        "git add TANREN_GITHUB_LIVE.md",
-        `git commit -m ${shellQuote("tanren github draft pr smoke")}`
-      ].join(" && ")
-    });
+      await runWorkspaceSshCommand(ssh, target, {
+        label: "prepare live GitHub workspace",
+        timeoutMs,
+        command: [
+          "set -eu",
+          `rm -rf ${shellQuote(workspace)}`,
+          `git clone --depth 1 --branch ${shellQuote(baseBranch)} ${shellQuote(repoUrl)} ${shellQuote(workspace)}`,
+          `cd ${shellQuote(workspace)}`,
+          "git config user.name 'Tanren Live Smoke'",
+          "git config user.email 'tanren-live@tanren.invalid'",
+          `printf '%s\\n' ${shellQuote(`tanren github draft pr ok ${runId}`)} > TANREN_GITHUB_LIVE.md`,
+          "git add TANREN_GITHUB_LIVE.md",
+          `git commit -m ${shellQuote("tanren github draft pr smoke")}`,
+        ].join(" && "),
+      });
 
-    const events = new FakeEventStore();
-    const result = await publishDraftPullRequest({
-      pool: new RecordingPool().asPgPool(),
-      eventStore: events,
-      secrets,
-      githubHttp: new FetchGitHubHttpClient(),
-      ssh,
-      target,
-      runId,
-      specId: "spec_github_live",
-      projectId: "project_github_live",
-      workspacePath: workspace,
-      repoUrl,
-      targetBranch: baseBranch,
-      runBranch: branch,
-      title: `Tanren live draft PR smoke ${runId}`,
-      body: "Created by Tanren's opt-in live GitHub draft PR smoke.",
-      githubCredentialRef: "credential/github/live",
-      timeoutMs
-    });
+      const events = new FakeEventStore();
+      const result = await publishDraftPullRequest({
+        pool: new RecordingPool().asPgPool(),
+        eventStore: events,
+        secrets,
+        githubHttp: new FetchGitHubHttpClient(),
+        ssh,
+        target,
+        runId,
+        specId: "spec_github_live",
+        projectId: "project_github_live",
+        workspacePath: workspace,
+        repoUrl,
+        targetBranch: baseBranch,
+        runBranch: branch,
+        title: `Tanren live draft PR smoke ${runId}`,
+        body: "Created by Tanren's opt-in live GitHub draft PR smoke.",
+        githubCredentialRef: "credential/github/live",
+        timeoutMs,
+      });
 
-    expect(result.prUrl).toMatch(/^https:\/\/github\.com\/.+\/pull\/\d+$/);
-    expect(result.branch).toBe(branch);
-    expect(events.events.map((event) => event.eventType)).toContain("github.pr.created");
-  }, Number(process.env.TANREN_GITHUB_LIVE_TIMEOUT_MS ?? "60000") + 10_000);
+      expect(result.prUrl).toMatch(/^https:\/\/github\.com\/.+\/pull\/\d+$/);
+      expect(result.branch).toBe(branch);
+      expect(events.events.map((event) => event.eventType)).toContain("github.pr.created");
+    },
+    Number(process.env.TANREN_GITHUB_LIVE_TIMEOUT_MS ?? "60000") + 10_000,
+  );
 });
 
 class RecordingPool {
@@ -88,7 +98,7 @@ function liveTarget(): SshTarget {
     port: Number(process.env.TANREN_SSH_PORT ?? "2222"),
     username: process.env.TANREN_SSH_USER ?? "tanren",
     hostKeyFingerprint: requireEnv("TANREN_SSH_HOST_FINGERPRINT"),
-    identitySecretRef: "runner/live/identity"
+    identitySecretRef: "runner/live/identity",
   };
 }
 
@@ -101,7 +111,10 @@ function requireEnv(name: string): string {
 }
 
 function parseHostKeyAlgorithms(value: string | undefined): ServerHostKeyAlgorithm[] | undefined {
-  return value?.split(",").map((item) => item.trim()).filter((item) => item !== "") as ServerHostKeyAlgorithm[] | undefined;
+  return value
+    ?.split(",")
+    .map((item) => item.trim())
+    .filter((item) => item !== "") as ServerHostKeyAlgorithm[] | undefined;
 }
 
 function shellQuote(value: string): string {

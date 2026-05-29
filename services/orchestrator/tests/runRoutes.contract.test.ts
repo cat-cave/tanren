@@ -16,7 +16,7 @@ import {
   RunListItem,
   RunCostRecord,
   decodeCursor,
-  encodeCursor
+  encodeCursor,
 } from "../src/routes/runs/contract.js";
 import { createRunRoutes } from "../src/routes/runs/index.js";
 import { RunRoutesPool } from "./helpers/runRoutesPool.js";
@@ -26,7 +26,7 @@ const alice: ActorContext = {
   orgId: "org_acme",
   projectId: null,
   scopes: ["org:member"],
-  source: "session"
+  source: "session",
 };
 
 function buildHarness(actor: ActorContext | undefined = alice) {
@@ -44,16 +44,19 @@ function buildHarness(actor: ActorContext | undefined = alice) {
         },
         async resolveActorContext() {
           return actor as ActorContext;
-        }
+        },
       } as never,
-      localDevActor: actor
-    })
+      localDevActor: actor,
+    }),
   );
   app.route("/orgs", createRunRoutes({ pool: pool.asPgPool() }));
   return { app, pool };
 }
 
-function seedRunFixture(pool: RunRoutesPool, overrides: { runId?: string; status?: string } = {}): {
+function seedRunFixture(
+  pool: RunRoutesPool,
+  overrides: { runId?: string; status?: string } = {},
+): {
   runId: string;
   projectId: string;
   specId: string;
@@ -72,7 +75,7 @@ function seedRunFixture(pool: RunRoutesPool, overrides: { runId?: string; status
     status: overrides.status ?? "completed",
     outcome: "phase1_fixture_complete",
     pr_url: "https://github.com/cat-cave/tanren-fixture-easy/pull/42",
-    branch: "tanren/phase1-fixture"
+    branch: "tanren/phase1-fixture",
   });
   // Tasks: planner, writer, checker, auditor, ci — full Phase 1 chain.
   for (const [i, kind] of ["plan", "write", "check", "audit", "ci"].entries()) {
@@ -85,16 +88,52 @@ function seedRunFixture(pool: RunRoutesPool, overrides: { runId?: string; status
       started_at: new Date(2026, 4, 1, 0, 0, i),
       ended_at: new Date(2026, 4, 1, 0, 0, i + 1),
       cli: "codex",
-      model: "gpt-x"
+      model: "gpt-x",
     });
   }
   // Events: at least one per planner/writer/checker/auditor.
-  pool.seedEvent({ id: 1, run_id: runId, project_id: projectId, event_type: "planner.completed", payload: { taskId: "task_plan_0" } });
-  pool.seedEvent({ id: 2, run_id: runId, project_id: projectId, event_type: "writer.completed", payload: { taskId: "task_write_1" } });
-  pool.seedEvent({ id: 3, run_id: runId, project_id: projectId, event_type: "checker.completed", payload: { taskId: "task_check_2", verdict: "pass" } });
-  pool.seedEvent({ id: 4, run_id: runId, project_id: projectId, event_type: "auditor.completed", payload: { taskId: "task_audit_3", verdict: "pass" } });
-  pool.seedCost({ id: 1, run_id: runId, task_id: "task_write_1", project_id: projectId, cost_usd: "0.005" });
-  pool.seedCost({ id: 2, run_id: runId, task_id: "task_check_2", project_id: projectId, cost_usd: "0.002" });
+  pool.seedEvent({
+    id: 1,
+    run_id: runId,
+    project_id: projectId,
+    event_type: "planner.completed",
+    payload: { taskId: "task_plan_0" },
+  });
+  pool.seedEvent({
+    id: 2,
+    run_id: runId,
+    project_id: projectId,
+    event_type: "writer.completed",
+    payload: { taskId: "task_write_1" },
+  });
+  pool.seedEvent({
+    id: 3,
+    run_id: runId,
+    project_id: projectId,
+    event_type: "checker.completed",
+    payload: { taskId: "task_check_2", verdict: "pass" },
+  });
+  pool.seedEvent({
+    id: 4,
+    run_id: runId,
+    project_id: projectId,
+    event_type: "auditor.completed",
+    payload: { taskId: "task_audit_3", verdict: "pass" },
+  });
+  pool.seedCost({
+    id: 1,
+    run_id: runId,
+    task_id: "task_write_1",
+    project_id: projectId,
+    cost_usd: "0.005",
+  });
+  pool.seedCost({
+    id: 2,
+    run_id: runId,
+    task_id: "task_check_2",
+    project_id: projectId,
+    cost_usd: "0.002",
+  });
   return { runId, projectId, specId };
 }
 
@@ -136,10 +175,10 @@ describe("P2A-0014 run-detail API — run list", () => {
           },
           async resolveActorContext() {
             return alice;
-          }
-        } as never
+          },
+        } as never,
         // no localDevActor — middleware should reject as 401.
-      })
+      }),
     );
     app.route("/orgs", createRunRoutes({ pool: pool.asPgPool() }));
     const response = await app.request("/orgs/org_acme/projects/project_phase1/runs");
@@ -161,7 +200,7 @@ describe("P2A-0014 run-detail API — run detail", () => {
     expect(detail.tasks.map((t) => t.kind)).toEqual(["plan", "write", "check", "audit", "ci"]);
     const eventTypes = detail.recentEvents.map((e) => e.eventType);
     expect(eventTypes).toEqual(
-      expect.arrayContaining(["planner.completed", "writer.completed", "checker.completed", "auditor.completed"])
+      expect.arrayContaining(["planner.completed", "writer.completed", "checker.completed", "auditor.completed"]),
     );
     expect(detail.costs.length).toBe(2);
     expect(detail.insights).toEqual([]);
@@ -195,22 +234,26 @@ describe("P2A-0014 run-detail API — events pagination", () => {
   it("paginates with cursor + pageSize and yields nextCursor only when more pages exist", async () => {
     const { app, pool } = buildHarness();
     const { runId, projectId } = seedRunFixture(pool);
-    const firstResponse = await app.request(
-      `/orgs/org_acme/projects/${projectId}/runs/${runId}/events?pageSize=2`
-    );
+    const firstResponse = await app.request(`/orgs/org_acme/projects/${projectId}/runs/${runId}/events?pageSize=2`);
     expect(firstResponse.status).toBe(200);
-    const firstBody = (await firstResponse.json()) as { items: unknown[]; nextCursor: string | null };
+    const firstBody = (await firstResponse.json()) as {
+      items: unknown[];
+      nextCursor: string | null;
+    };
     expect(firstBody.items.length).toBe(2);
     expect(firstBody.nextCursor).not.toBeNull();
     expect(RunEventRow.parse(firstBody.items[0]).eventType).toBe("planner.completed");
 
     const secondResponse = await app.request(
       `/orgs/org_acme/projects/${projectId}/runs/${runId}/events?pageSize=2&cursor=${encodeURIComponent(
-        firstBody.nextCursor as string
-      )}`
+        firstBody.nextCursor as string,
+      )}`,
     );
     expect(secondResponse.status).toBe(200);
-    const secondBody = (await secondResponse.json()) as { items: unknown[]; nextCursor: string | null };
+    const secondBody = (await secondResponse.json()) as {
+      items: unknown[];
+      nextCursor: string | null;
+    };
     expect(secondBody.items.length).toBe(2);
     expect(secondBody.nextCursor).toBeNull();
     expect(RunEventRow.parse(secondBody.items[1]).eventType).toBe("auditor.completed");
@@ -220,7 +263,7 @@ describe("P2A-0014 run-detail API — events pagination", () => {
     const { app, pool } = buildHarness();
     const { runId, projectId } = seedRunFixture(pool);
     const response = await app.request(
-      `/orgs/org_acme/projects/${projectId}/runs/${runId}/events?cursor=not-base64-or-anything-valid`
+      `/orgs/org_acme/projects/${projectId}/runs/${runId}/events?cursor=not-base64-or-anything-valid`,
     );
     expect(response.status).toBe(400);
     const body = (await response.json()) as { error: string };
@@ -257,7 +300,10 @@ describe("P2A-0014 run-detail API — activity feed", () => {
     const { projectId } = seedRunFixture(pool);
     const response = await app.request(`/orgs/org_acme/projects/${projectId}/feed`);
     expect(response.status).toBe(200);
-    const body = (await response.json()) as { items: Array<{ eventType: string; ts: string }>; nextCursor: string | null };
+    const body = (await response.json()) as {
+      items: Array<{ eventType: string; ts: string }>;
+      nextCursor: string | null;
+    };
     expect(body.items.length).toBe(4);
     // Newest first.
     expect(body.items[0].eventType).toBe("auditor.completed");
@@ -276,11 +322,13 @@ describe("P2A-0014 run-detail API — redaction scope", () => {
       run_id: runId,
       project_id: projectId,
       event_type: "credential.loaded",
-      payload: { ref: "credential/codex/dev", source: "vault", durationMs: 12 }
+      payload: { ref: "credential/codex/dev", source: "vault", durationMs: 12 },
     });
     const response = await app.request(`/orgs/org_acme/projects/${projectId}/runs/${runId}/events`);
     expect(response.status).toBe(200);
-    const body = (await response.json()) as { items: Array<{ eventType: string; redactedPaths: string[] }> };
+    const body = (await response.json()) as {
+      items: Array<{ eventType: string; redactedPaths: string[] }>;
+    };
     const credEvent = body.items.find((e) => e.eventType === "credential.loaded");
     expect(credEvent).toBeDefined();
     // redactedPaths is well-typed; verify it's an array even when nothing

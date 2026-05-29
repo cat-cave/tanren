@@ -1,0 +1,27 @@
+# Dependencies & build output
+node_modules/
+**/dist/**
+coverage/
+.pnpm-store/
+.turbo/
+
+# Lockfile
+pnpm-lock.yaml
+
+# Generated Drizzle migration metadata + SQL migrations
+db/migrations/meta/**
+db/migrations/**/*.sql
+
+# Generated answerer JSON schemas
+services/orchestrator/src/engine/answerers/schemas/generated/**
+
+# Codegen-owned mirrors (format is produced by scripts/generate-*.mjs, checked
+# by the *-drift gates — Prettier must not reformat them or the gate drifts).
+db/src/stateEnums.ts
+db/src/eventTypes.ts
+
+# Hi-fidelity design reference (vendored)
+tanren-hi-fidelity/**
+
+# Claude Code agent worktrees
+.claude/

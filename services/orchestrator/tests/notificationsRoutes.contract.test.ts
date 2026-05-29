@@ -16,7 +16,7 @@ const actor: ActorContext = {
   orgId: "org_acme",
   projectId: null,
   scopes: ["org:member"],
-  source: "session"
+  source: "session",
 };
 
 function harness(who: ActorContext | undefined = actor) {
@@ -34,10 +34,10 @@ function harness(who: ActorContext | undefined = actor) {
         },
         async resolveActorContext() {
           return who as ActorContext;
-        }
+        },
       } as never,
-      localDevActor: who
-    })
+      localDevActor: who,
+    }),
   );
   app.route("/orgs", createNotificationRoutes({ pool: pool as never }));
   return { app, pool };
@@ -48,7 +48,11 @@ describe("notifications routes (P2B-0002 over P2A-0017)", () => {
     const { app } = harness();
     const res = await app.request("/orgs/org_acme/notifications/matrix");
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { targets: unknown[]; routes: unknown[]; events: Array<{ eventName: string; defaultSeverity: string }> };
+    const body = (await res.json()) as {
+      targets: unknown[];
+      routes: unknown[];
+      events: Array<{ eventName: string; defaultSeverity: string }>;
+    };
     expect(body.targets).toEqual([]);
     expect(body.routes).toEqual([]);
     expect(body.events.length).toBeGreaterThan(0);
@@ -63,7 +67,11 @@ describe("notifications routes (P2B-0002 over P2A-0017)", () => {
     const create = await app.request("/orgs/org_acme/notifications/targets", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ channelKind: "ntfy", destination: "https://ntfy.sh/cat-cave", label: "alerts" })
+      body: JSON.stringify({
+        channelKind: "ntfy",
+        destination: "https://ntfy.sh/cat-cave",
+        label: "alerts",
+      }),
     });
     expect(create.status).toBe(201);
     const target = (await create.json()) as { id: string; channelKind: string; scope: string };
@@ -80,14 +88,19 @@ describe("notifications routes (P2B-0002 over P2A-0017)", () => {
       await app.request("/orgs/org_acme/notifications/targets", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ channelKind: "ntfy", destination: "https://ntfy.sh/x", label: "x" })
+        body: JSON.stringify({ channelKind: "ntfy", destination: "https://ntfy.sh/x", label: "x" }),
       })
     ).json()) as { id: string };
 
     const route = await app.request("/orgs/org_acme/notifications/routes", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ targetId: target.id, eventName: "run.failed", minSeverity: "fail", enabled: true })
+      body: JSON.stringify({
+        targetId: target.id,
+        eventName: "run.failed",
+        minSeverity: "fail",
+        enabled: true,
+      }),
     });
     expect(route.status).toBe(201);
     const body = (await route.json()) as { eventName: string; enabled: boolean };
@@ -109,12 +122,12 @@ describe("notifications routes (P2B-0002 over P2A-0017)", () => {
       enabled: 1,
       weekend_mute: 0,
       created_at: pool.now,
-      updated_at: pool.now
+      updated_at: pool.now,
     });
     const res = await app.request("/orgs/org_acme/notifications/routes", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ targetId: "notif_target_other", eventName: "run.failed" })
+      body: JSON.stringify({ targetId: "notif_target_other", eventName: "run.failed" }),
     });
     expect(res.status).toBe(404);
   });

@@ -11,7 +11,7 @@ import {
   ForgeAnswer,
   PLAN_ANSWER_SCHEMA_ID,
   PlanAnswer,
-  AUDIT_ANSWER_SCHEMA_ID
+  AUDIT_ANSWER_SCHEMA_ID,
 } from "../src/engine/answerers/schemas/index.js";
 
 // Adapter tests confirm the AnswererOutputSchema bridge surfaces the
@@ -26,7 +26,7 @@ describe("answererOutputSchemaFor", () => {
     expect(schema.jsonSchema.type).toBe("object");
     const parsed = schema.parse({
       subtasks: [{ index: 0, title: "t", intent: "i", behaviorIds: [], estimatedTokens: null }],
-      rationale: "r"
+      rationale: "r",
     });
     expect(parsed.rationale).toBe("r");
   });
@@ -34,13 +34,20 @@ describe("answererOutputSchemaFor", () => {
   it("bridges check, audit, demo, and forge schemas with their committed JSON Schema", () => {
     const check = answererOutputSchemaFor("check", CheckAnswer);
     expect(check.name).toBe(CHECK_ANSWER_SCHEMA_ID);
-    expect(check.parse({ passed: true, reasoning: "ok", behaviorIdsPassed: [], behaviorIdsFailed: [] }).passed).toBe(true);
+    expect(check.parse({ passed: true, reasoning: "ok", behaviorIdsPassed: [], behaviorIdsFailed: [] }).passed).toBe(
+      true,
+    );
 
     const audit = answererOutputSchemaFor("audit", AuditAnswer);
     expect(audit.name).toBe(AUDIT_ANSWER_SCHEMA_ID);
-    expect(audit.parse({ passed: true, reasoning: "ok", outstandingBehaviorIds: [], recommendedAction: "pass" }).recommendedAction).toBe(
-      "pass"
-    );
+    expect(
+      audit.parse({
+        passed: true,
+        reasoning: "ok",
+        outstandingBehaviorIds: [],
+        recommendedAction: "pass",
+      }).recommendedAction,
+    ).toBe("pass");
 
     const demo = answererOutputSchemaFor("demo", DemoAnswer);
     expect(demo.name).toBe(DEMO_ANSWER_SCHEMA_ID);

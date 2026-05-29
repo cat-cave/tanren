@@ -11,7 +11,7 @@ import {
   primaryKey,
   text,
   timestamp,
-  uniqueIndex
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { eventTypeNames } from "./eventTypes.js";
 import { stateEnumLists } from "./stateEnums.js";
@@ -41,17 +41,17 @@ export const runs = pgTable(
     outcome: text("outcome"),
     prUrl: text("pr_url"),
     tenantId: text("tenant_id"),
-    userId: text("user_id")
+    userId: text("user_id"),
   },
   (table) => [
     enumCheck("runs_status_check", table.status, stateEnumLists.runs_status),
     check(
       "runs_outcome_check",
       sql`${table.outcome} IS NULL OR ${table.outcome} IN (${sql.raw(
-        stateEnumLists.runs_outcome.map((value) => `'${value.replace(/'/g, "''")}'`).join(",")
-      )})`
-    )
-  ]
+        stateEnumLists.runs_outcome.map((value) => `'${value.replace(/'/g, "''")}'`).join(","),
+      )})`,
+    ),
+  ],
 );
 
 export const tasks = pgTable(
@@ -74,7 +74,7 @@ export const tasks = pgTable(
     model: text("model"),
     attempt: integer("attempt").notNull().default(1),
     tenantId: text("tenant_id"),
-    userId: text("user_id")
+    userId: text("user_id"),
   },
   (table) => [
     enumCheck("tasks_kind_check", table.kind, stateEnumLists.tasks_kind),
@@ -83,10 +83,10 @@ export const tasks = pgTable(
     check(
       "tasks_outcome_check",
       sql`${table.outcome} IS NULL OR ${table.outcome} IN (${sql.raw(
-        stateEnumLists.tasks_outcome.map((value) => `'${value.replace(/'/g, "''")}'`).join(",")
-      )})`
-    )
-  ]
+        stateEnumLists.tasks_outcome.map((value) => `'${value.replace(/'/g, "''")}'`).join(","),
+      )})`,
+    ),
+  ],
 );
 
 export const costRecords = pgTable(
@@ -114,15 +114,20 @@ export const costRecords = pgTable(
     costUsd: numeric("cost_usd", { precision: 14, scale: 6 }),
     billingMode: text("billing_mode").notNull(),
     costBasis: text("cost_basis").notNull(),
-    costSourceRaw: jsonb("cost_source_raw").notNull().default(sql`'{}'::jsonb`),
+    costSourceRaw: jsonb("cost_source_raw")
+      .notNull()
+      .default(sql`'{}'::jsonb`),
     recordedAt: timestamp("recorded_at", { withTimezone: true }).notNull().defaultNow(),
     tenantId: text("tenant_id"),
-    userId: text("user_id")
+    userId: text("user_id"),
   },
   (table) => [
     check("cost_records_billing_mode_check", sql`${table.billingMode} IN ('per_token','subscription','self_hosted')`),
-    check("cost_records_cost_basis_check", sql`${table.costBasis} IN ('ccusage','provider_pricing','credits','unknown')`)
-  ]
+    check(
+      "cost_records_cost_basis_check",
+      sql`${table.costBasis} IN ('ccusage','provider_pricing','credits','unknown')`,
+    ),
+  ],
 );
 
 export const events = pgTable(
@@ -135,15 +140,17 @@ export const events = pgTable(
     specId: text("spec_id"),
     projectId: text("project_id"),
     eventType: text("event_type").notNull(),
-    payload: jsonb("payload").notNull().default(sql`'{}'::jsonb`),
+    payload: jsonb("payload")
+      .notNull()
+      .default(sql`'{}'::jsonb`),
     tenantId: text("tenant_id"),
-    userId: text("user_id")
+    userId: text("user_id"),
   },
   (table) => [
     index("events_run_id_ts").on(table.runId, table.ts),
     index("events_event_type").on(table.eventType),
-    enumCheck("events_event_type_check", table.eventType, eventTypeNames)
-  ]
+    enumCheck("events_event_type_check", table.eventType, eventTypeNames),
+  ],
 );
 
 export const runners = pgTable("runners", {
@@ -160,7 +167,7 @@ export const runners = pgTable("runners", {
   hcloudServerId: text("hcloud_server_id"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   releasedAt: timestamp("released_at", { withTimezone: true }),
-  tenantId: text("tenant_id")
+  tenantId: text("tenant_id"),
 });
 
 export const rateLimitObservations = pgTable("rate_limit_observations", {
@@ -170,22 +177,26 @@ export const rateLimitObservations = pgTable("rate_limit_observations", {
   callSite: text("call_site").notNull(),
   provider: text("provider").notNull(),
   observation: text("observation").notNull(),
-  detail: jsonb("detail").notNull().default(sql`'{}'::jsonb`),
+  detail: jsonb("detail")
+    .notNull()
+    .default(sql`'{}'::jsonb`),
   retryAfterS: integer("retry_after_s"),
   tenantId: text("tenant_id"),
-  userId: text("user_id")
+  userId: text("user_id"),
 });
 
 export const notifications = pgTable("notifications", {
   id: bigserial("id", { mode: "number" }).primaryKey(),
   channel: text("channel").notNull(),
-  payload: jsonb("payload").notNull().default(sql`'{}'::jsonb`),
+  payload: jsonb("payload")
+    .notNull()
+    .default(sql`'{}'::jsonb`),
   status: text("status").notNull(),
   enqueuedAt: timestamp("enqueued_at", { withTimezone: true }).notNull().defaultNow(),
   sentAt: timestamp("sent_at", { withTimezone: true }),
   attempts: integer("attempts").notNull().default(0),
   tenantId: text("tenant_id"),
-  userId: text("user_id")
+  userId: text("user_id"),
 });
 
 export const jobQueue = pgTable(
@@ -195,7 +206,9 @@ export const jobQueue = pgTable(
     runId: text("run_id"),
     taskId: text("task_id").references(() => tasks.taskId),
     taskKind: text("task_kind").notNull(),
-    payload: jsonb("payload").notNull().default(sql`'{}'::jsonb`),
+    payload: jsonb("payload")
+      .notNull()
+      .default(sql`'{}'::jsonb`),
     status: text("status").notNull().default("queued"),
     enqueuedAt: timestamp("enqueued_at", { withTimezone: true }).notNull().defaultNow(),
     startedAt: timestamp("started_at", { withTimezone: true }),
@@ -213,15 +226,19 @@ export const jobQueue = pgTable(
     failureKind: text("failure_kind"),
     failureMessage: text("failure_message"),
     tenantId: text("tenant_id"),
-    userId: text("user_id")
+    userId: text("user_id"),
   },
   (table) => [
-    index("job_queue_queued").on(table.taskKind, table.enqueuedAt).where(sql`${table.status} = 'queued'`),
+    index("job_queue_queued")
+      .on(table.taskKind, table.enqueuedAt)
+      .where(sql`${table.status} = 'queued'`),
     // P3-0028: reaper scans live (running) jobs by lease expiry.
-    index("job_queue_lease").on(table.leasedUntil).where(sql`${table.status} = 'running'`),
+    index("job_queue_lease")
+      .on(table.leasedUntil)
+      .where(sql`${table.status} = 'running'`),
     enumCheck("job_queue_status_check", table.status, stateEnumLists.job_queue_status),
-    enumCheck("job_queue_task_kind_check", table.taskKind, stateEnumLists.job_queue_task_kind)
-  ]
+    enumCheck("job_queue_task_kind_check", table.taskKind, stateEnumLists.job_queue_task_kind),
+  ],
 );
 
 export const orgMembers = pgTable(
@@ -234,12 +251,12 @@ export const orgMembers = pgTable(
       .notNull()
       .references(() => users.id),
     role: text("role").notNull().default("member"),
-    joinedAt: timestamp("joined_at", { withTimezone: true }).notNull().defaultNow()
+    joinedAt: timestamp("joined_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
     primaryKey({ columns: [table.orgId, table.userId] }),
-    check("org_members_role_check", sql`${table.role} IN ('admin','member')`)
-  ]
+    check("org_members_role_check", sql`${table.role} IN ('admin','member')`),
+  ],
 );
 
 export const projectMembers = pgTable(
@@ -252,12 +269,12 @@ export const projectMembers = pgTable(
       .notNull()
       .references(() => users.id),
     role: text("role").notNull().default("member"),
-    joinedAt: timestamp("joined_at", { withTimezone: true }).notNull().defaultNow()
+    joinedAt: timestamp("joined_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
     primaryKey({ columns: [table.projectId, table.userId] }),
-    check("project_members_role_check", sql`${table.role} IN ('admin','member')`)
-  ]
+    check("project_members_role_check", sql`${table.role} IN ('admin','member')`),
+  ],
 );
 
 export const sessions = pgTable(
@@ -271,9 +288,9 @@ export const sessions = pgTable(
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     ip: text("ip"),
-    userAgent: text("user_agent")
+    userAgent: text("user_agent"),
   },
-  (table) => [index("sessions_user_id").on(table.userId), index("sessions_expires_at").on(table.expiresAt)]
+  (table) => [index("sessions_user_id").on(table.userId), index("sessions_expires_at").on(table.expiresAt)],
 );
 
 export const apiTokens = pgTable(
@@ -285,12 +302,15 @@ export const apiTokens = pgTable(
       .references(() => users.id),
     name: text("name").notNull(),
     tokenHash: text("token_hash").notNull(),
-    scopes: text("scopes").array().notNull().default(sql`'{}'::text[]`),
+    scopes: text("scopes")
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
     expiresAt: timestamp("expires_at", { withTimezone: true }),
     lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow()
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => [index("api_tokens_user_id").on(table.userId), uniqueIndex("api_tokens_hash_unique").on(table.tokenHash)]
+  (table) => [index("api_tokens_user_id").on(table.userId), uniqueIndex("api_tokens_hash_unique").on(table.tokenHash)],
 );
 
 // ---------------------------------------------------------------------------
@@ -309,19 +329,21 @@ export const personas = pgTable(
     projectId: text("project_id").references(() => projects.projectId),
     name: text("name").notNull(),
     description: text("description").notNull(),
-    metadata: jsonb("metadata").notNull().default(sql`'{}'::jsonb`),
+    metadata: jsonb("metadata")
+      .notNull()
+      .default(sql`'{}'::jsonb`),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
     check("personas_scope_check", sql`${table.scope} IN ('org','project')`),
     check(
       "personas_scope_project_check",
-      sql`(${table.scope} = 'org' AND ${table.projectId} IS NULL) OR (${table.scope} = 'project' AND ${table.projectId} IS NOT NULL)`
+      sql`(${table.scope} = 'org' AND ${table.projectId} IS NULL) OR (${table.scope} = 'project' AND ${table.projectId} IS NOT NULL)`,
     ),
     index("personas_org_id").on(table.orgId),
-    index("personas_project_id").on(table.projectId)
-  ]
+    index("personas_project_id").on(table.projectId),
+  ],
 );
 
 export const behaviors = pgTable(
@@ -337,11 +359,13 @@ export const behaviors = pgTable(
     // eslint-disable-next-line unicorn/no-thenable
     then: text("then").notNull(),
     description: text("description"),
-    metadata: jsonb("metadata").notNull().default(sql`'{}'::jsonb`),
+    metadata: jsonb("metadata")
+      .notNull()
+      .default(sql`'{}'::jsonb`),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => [index("behaviors_persona_id").on(table.personaId)]
+  (table) => [index("behaviors_persona_id").on(table.personaId)],
 );
 
 export const milestones = pgTable(
@@ -358,13 +382,13 @@ export const milestones = pgTable(
     eta: timestamp("eta", { withTimezone: true }),
     status: text("status").notNull().default("planned"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
     check("milestones_status_check", sql`${table.status} IN ('planned','in_flight','done','abandoned')`),
     uniqueIndex("milestones_project_label_unique").on(table.projectId, table.label),
-    uniqueIndex("milestones_project_order_unique").on(table.projectId, table.orderIndex)
-  ]
+    uniqueIndex("milestones_project_order_unique").on(table.projectId, table.orderIndex),
+  ],
 );
 
 export const specBehaviors = pgTable(
@@ -376,12 +400,12 @@ export const specBehaviors = pgTable(
     behaviorId: text("behavior_id")
       .notNull()
       .references(() => behaviors.id),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow()
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
     primaryKey({ columns: [table.specId, table.behaviorId] }),
-    index("spec_behaviors_behavior_id").on(table.behaviorId)
-  ]
+    index("spec_behaviors_behavior_id").on(table.behaviorId),
+  ],
 );
 
 // spec_milestones is modeled as a join table to keep the schema additive for
@@ -396,13 +420,13 @@ export const specMilestones = pgTable(
     milestoneId: text("milestone_id")
       .notNull()
       .references(() => milestones.id),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow()
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
     primaryKey({ columns: [table.specId, table.milestoneId] }),
     uniqueIndex("spec_milestones_spec_unique").on(table.specId),
-    index("spec_milestones_milestone_id").on(table.milestoneId)
-  ]
+    index("spec_milestones_milestone_id").on(table.milestoneId),
+  ],
 );
 
 export const specDependencies = pgTable(
@@ -414,13 +438,13 @@ export const specDependencies = pgTable(
     toSpecId: text("to_spec_id")
       .notNull()
       .references(() => specs.specId),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow()
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
     primaryKey({ columns: [table.fromSpecId, table.toSpecId] }),
     check("spec_dependencies_no_self_loop", sql`${table.fromSpecId} <> ${table.toSpecId}`),
-    index("spec_dependencies_to_spec_id").on(table.toSpecId)
-  ]
+    index("spec_dependencies_to_spec_id").on(table.toSpecId),
+  ],
 );
 
 // Sub-schema files are kept separate to respect the file-line-max-500

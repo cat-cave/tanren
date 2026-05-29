@@ -13,7 +13,7 @@ const ISSUE_SOURCES: Array<{ n: string; on: boolean; route: string; glyph: strin
   { n: "github issues", on: true, route: "label:bug→p1 · feature→backlog", glyph: "⌥" },
   { n: "linear", on: false, route: "oauth + workspace pick → labels", glyph: "▱" },
   { n: "jira", on: false, route: "api token + project key → issue type", glyph: "◇" },
-  { n: "custom webhook", on: false, route: "any json · tanren classifies", glyph: "↗" }
+  { n: "custom webhook", on: false, route: "any json · tanren classifies", glyph: "↗" },
 ];
 
 const AUDITS: Array<{ n: string; agent: string; on: boolean }> = [
@@ -22,14 +22,14 @@ const AUDITS: Array<{ n: string; agent: string; on: boolean }> = [
   { n: "dependency updates", agent: "renovate · auto-spec · daily", on: true },
   { n: "stale specs", agent: "forge · review > 30d · weekly", on: true },
   { n: "perf benchmark", agent: "lighthouse + k6 · monthly", on: false },
-  { n: "a11y", agent: "axe + pa11y · weekly", on: false }
+  { n: "a11y", agent: "axe + pa11y · weekly", on: false },
 ];
 
 const DORA: Array<[string, string]> = [
   ["lead time", "no runs yet"],
   ["deploy frequency", "first deploy sets baseline"],
   ["change failure rate", "—"],
-  ["mttr", "—"]
+  ["mttr", "—"],
 ];
 
 export interface ArrivalStepProps {

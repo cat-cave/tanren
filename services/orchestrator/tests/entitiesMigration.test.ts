@@ -5,9 +5,7 @@ import { describe, expect, it } from "vitest";
 // Verifies the 0005 migration ships the P2A-0018 product entity tables with
 // the constraints and default seed block the spec requires.
 
-const migrationPath = fileURLToPath(
-  new URL("../../../db/migrations/0005_wise_molly_hayes.sql", import.meta.url)
-);
+const migrationPath = fileURLToPath(new URL("../../../db/migrations/0005_wise_molly_hayes.sql", import.meta.url));
 
 async function readMigration(): Promise<string> {
   return readFile(migrationPath, "utf8");

@@ -33,22 +33,22 @@ interface StoredGithubAppEnvelope {
 
 export async function storeGithubAppCredential(
   secrets: SecretStore,
-  input: { ref: string; appId: string; privateKeyPem: string }
+  input: { ref: string; appId: string; privateKeyPem: string },
 ): Promise<GithubAppImportResult> {
   const ref = validateGithubAppCredentialRef(input.ref);
-  const credential = validateGithubAppCredential({ appId: input.appId, privateKeyPem: input.privateKeyPem });
+  const credential = validateGithubAppCredential({
+    appId: input.appId,
+    privateKeyPem: input.privateKeyPem,
+  });
   const envelope: StoredGithubAppEnvelope = {
     appId: credential.appId,
-    privateKeyPem: credential.privateKeyPem
+    privateKeyPem: credential.privateKeyPem,
   };
   await secrets.put({ ref, value: JSON.stringify(envelope) });
   return { credentialKind: githubAppKind, ref, appId: credential.appId, redacted: true };
 }
 
-export async function loadGithubAppCredential(
-  secrets: SecretStore,
-  ref: string
-): Promise<GithubAppCredential> {
+export async function loadGithubAppCredential(secrets: SecretStore, ref: string): Promise<GithubAppCredential> {
   const validated = validateGithubAppCredentialRef(ref);
   const secret = await secrets.get(validated);
   if (secret === undefined) {

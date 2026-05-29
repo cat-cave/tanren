@@ -21,20 +21,20 @@ const POSTURES: PostureOption[] = [
     value: "strict",
     name: "strict — you describe, we forge",
     body: "Every change goes through a spec. External pushes get warned + auto-spec'd for tracking. Tanren never reviews human PRs.",
-    best: "for teams committing to the spec discipline"
+    best: "for teams committing to the spec discipline",
   },
   {
     value: "open",
     name: "open — humans + tanren both push",
     body: "Tanren coexists. Direct pushes are normal. Tanren tracks but doesn't block them. Picks up issues + audits + operator specs.",
-    best: "for established teams retrofitting tanren"
+    best: "for established teams retrofitting tanren",
   },
   {
     value: "audit_only",
     name: "audit-only — tanren just watches",
     body: "Tanren reads everything, opens no PRs. Surfaces patterns, regressions, drift. Operator promotes findings into specs by hand.",
-    best: "for a trial without code-modification risk"
-  }
+    best: "for a trial without code-modification risk",
+  },
 ];
 
 export function GovernanceStep(props: {
@@ -49,8 +49,13 @@ export function GovernanceStep(props: {
       <div class="step-heading">
         <div>
           <div class="eyebrow">step 5 · governance posture</div>
-          <div class="title">who gets to <em>commit · how</em></div>
-          <div class="sub">tanren needs a stance on how it coexists with contributors. pick a posture · override anytime from /settings/governance.</div>
+          <div class="title">
+            who gets to <em>commit · how</em>
+          </div>
+          <div class="sub">
+            tanren needs a stance on how it coexists with contributors. pick a posture · override anytime from
+            /settings/governance.
+          </div>
         </div>
       </div>
 
@@ -77,7 +82,9 @@ export function GovernanceStep(props: {
           <div class="foot">
             <div class="hint">↑ external-push behavior is derived from the posture (P3-0023)</div>
             <div class="grow"></div>
-            <button type="submit" class="btn primary">save posture ↗</button>
+            <button type="submit" class="btn primary">
+              save posture ↗
+            </button>
           </div>
         </form>
 
@@ -88,29 +95,43 @@ export function GovernanceStep(props: {
                 Posture saved · <b>{props.saved.governancePosture}</b>.
               </div>
               <div class="col-card" style="gap:8px">
-                <div class="h"><span>external-push policy</span></div>
+                <div class="h">
+                  <span>external-push policy</span>
+                </div>
                 <div class="ex-policy-row">
                   <span class="t">on external push</span>
                   <span class="a">{props.saved.externalPushPolicy}</span>
                 </div>
               </div>
               <div class="col-card live" style="gap:8px">
-                <div class="h"><span>repo <em>integrated</em></span></div>
+                <div class="h">
+                  <span>
+                    repo <em>integrated</em>
+                  </span>
+                </div>
                 <div style="font-family:var(--font-ui);font-size:12.5px;color:var(--fg-2);line-height:1.45">
                   the integration PR is the one-time gate · once merged, seed specs become runnable.
                 </div>
                 <div class="foot">
                   <div class="grow"></div>
-                  <a class="btn primary" href={`/projects/${props.projectId}`}>open project ↗</a>
+                  <a class="btn primary" href={`/projects/${props.projectId}`}>
+                    open project ↗
+                  </a>
                 </div>
               </div>
             </>
           ) : (
             <div class="col-card" style="gap:8px">
-              <div class="h"><span>external-push policy <em>· per posture</em></span></div>
+              <div class="h">
+                <span>
+                  external-push policy <em>· per posture</em>
+                </span>
+              </div>
               <div class="mono-dim" style="line-height:1.6">
-                strict → external pushes warned + auto-spec'd · force-push blocked<br />
-                open → external pushes coexist · tracked, never blocked<br />
+                strict → external pushes warned + auto-spec'd · force-push blocked
+                <br />
+                open → external pushes coexist · tracked, never blocked
+                <br />
                 audit-only → external pushes observed · tanren opens no PRs
               </div>
             </div>

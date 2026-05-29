@@ -128,7 +128,7 @@ const SEVERITY_OVERRIDES: Partial<Record<EventName, Severity>> = {
   "recovery.revise_routed": "info",
   "recovery.replan_queued": "info",
   "recovery.rollback_queued": "info",
-  "recovery.inspection_opened": "info"
+  "recovery.inspection_opened": "info",
 };
 
 // Sealed: every EventName must have a default severity. Missing keys would

@@ -28,7 +28,7 @@ const NTFY_PRIORITY_BY_SEVERITY: Record<NotificationPayload["severity"], string>
   ok: "low",
   info: "default",
   warn: "high",
-  fail: "urgent"
+  fail: "urgent",
 };
 
 export class NtfyChannel implements NotificationChannel {
@@ -48,7 +48,7 @@ export class NtfyChannel implements NotificationChannel {
       "Content-Type": "application/json",
       Title: payload.title,
       Priority: NTFY_PRIORITY_BY_SEVERITY[payload.severity],
-      Tags: tagsFor(payload).join(",")
+      Tags: tagsFor(payload).join(","),
     };
     if (payload.url !== undefined) {
       headers["Click"] = payload.url;
@@ -57,7 +57,7 @@ export class NtfyChannel implements NotificationChannel {
       message: payload.body,
       severity: payload.severity,
       event: payload.eventName,
-      ...(payload.url !== undefined ? { url: payload.url } : {})
+      ...(payload.url !== undefined ? { url: payload.url } : {}),
     });
     const response = await this.fetchImpl(url, { method: "POST", headers, body });
     if (!response.ok) {

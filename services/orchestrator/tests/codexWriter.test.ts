@@ -9,15 +9,15 @@ const target: SshTarget = {
   port: 22,
   username: "tanren",
   hostKeyFingerprint: "SHA256:runner-host",
-  identitySecretRef: "runner/test/identity"
+  identitySecretRef: "runner/test/identity",
 };
 
 const authJson = JSON.stringify({
   auth_mode: "chatgpt",
   tokens: {
     access_token: "secret-access-token",
-    refresh_token: "secret-refresh-token"
-  }
+    refresh_token: "secret-refresh-token",
+  },
 });
 
 describe("Codex writer adapter", () => {
@@ -25,22 +25,32 @@ describe("Codex writer adapter", () => {
     const ssh = new ScriptedSsh([
       ok(""),
       ok("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n"),
-      ok("{\"type\":\"usage\",\"usage\":{\"input_tokens\":12,\"output_tokens\":5,\"cached_input_tokens\":3}}\n"),
+      ok('{"type":"usage","usage":{"input_tokens":12,"output_tokens":5,"cached_input_tokens":3}}\n'),
       ok(refreshedAuthJson()),
       ok(""),
       ok("diff --git a/LIVE.md b/LIVE.md\n+done\n"),
-      ok("")
+      ok(""),
     ]);
     const secrets = new InMemorySecretStore();
     await secrets.put({ ref: "credential/codex/dev", value: authJson });
 
-    const writer = createCodexWriter({ secrets, ssh, target, credentialRef: "credential/codex/dev", runId: "run_codex_1" });
-    const result = await writer.runWriter({ prompt: "make a tiny edit", workspace: "/workspace/repo", timeoutMs: 1000 });
+    const writer = createCodexWriter({
+      secrets,
+      ssh,
+      target,
+      credentialRef: "credential/codex/dev",
+      runId: "run_codex_1",
+    });
+    const result = await writer.runWriter({
+      prompt: "make a tiny edit",
+      workspace: "/workspace/repo",
+      timeoutMs: 1000,
+    });
 
     expect(ssh.commands[0]?.command.command).toContain("/run_codex_1/codex-home");
     expect(ssh.commands[0]?.command.stdin).toBe(authJson);
     expect(ssh.commands[2]?.command.command).toBe(
-      "CODEX_HOME='/home/tanren/.tanren/runs/run_codex_1/codex-home' codex exec --sandbox workspace-write --json --ignore-user-config --cd '/workspace/repo' -"
+      "CODEX_HOME='/home/tanren/.tanren/runs/run_codex_1/codex-home' codex exec --sandbox workspace-write --json --ignore-user-config --cd '/workspace/repo' -",
     );
     expect(ssh.commands[2]?.command.stdin).toBe("make a tiny edit");
     expect(ssh.commands[4]?.command.command).toContain("git commit -m 'codex writer'");
@@ -48,35 +58,62 @@ describe("Codex writer adapter", () => {
       diff: "diff --git a/LIVE.md b/LIVE.md\n+done\n",
       commits: [],
       exitReason: "completed",
-      tokenUsage: { inputTokens: 9, cachedInputTokens: 3, cacheCreationTokens: 0, outputTokens: 5, reasoningOutputTokens: 0, totalTokens: 17 },
+      tokenUsage: {
+        inputTokens: 9,
+        cachedInputTokens: 3,
+        cacheCreationTokens: 0,
+        outputTokens: 5,
+        reasoningOutputTokens: 0,
+        totalTokens: 17,
+      },
       telemetry: {
         rawEventCount: 1,
-        tokenUsage: { inputTokens: 9, cachedInputTokens: 3, cacheCreationTokens: 0, outputTokens: 5, reasoningOutputTokens: 0, totalTokens: 17 }
-      }
+        tokenUsage: {
+          inputTokens: 9,
+          cachedInputTokens: 3,
+          cacheCreationTokens: 0,
+          outputTokens: 5,
+          reasoningOutputTokens: 0,
+          totalTokens: 17,
+        },
+      },
     });
   });
 
   it("returns timeout and crashed results without treating stdout as completion", async () => {
     const timeout = await runWithCodexResult(
-      { exitCode: null, stdout: "{\"type\":\"done\"}\n", stderr: "", timedOut: true },
-      { diff: "diff --git a/PARTIAL.md b/PARTIAL.md\n+partial\n", log: `${commitSha("d")}\tcodex writer\n` }
+      { exitCode: null, stdout: '{"type":"done"}\n', stderr: "", timedOut: true },
+      {
+        diff: "diff --git a/PARTIAL.md b/PARTIAL.md\n+partial\n",
+        log: `${commitSha("d")}\tcodex writer\n`,
+      },
     );
-    const nonzero = await runWithCodexResult({ exitCode: 2, stdout: "{\"type\":\"done\"}\n", stderr: "bad", timedOut: false });
+    const nonzero = await runWithCodexResult({
+      exitCode: 2,
+      stdout: '{"type":"done"}\n',
+      stderr: "bad",
+      timedOut: false,
+    });
 
     expect(timeout).toMatchObject({
       diff: "diff --git a/PARTIAL.md b/PARTIAL.md\n+partial\n",
       commits: [{ sha: commitSha("d"), message: "codex writer" }],
       exitReason: "timeout",
-      telemetry: { rawEventCount: 1 }
+      telemetry: { rawEventCount: 1 },
     });
-    expect(nonzero).toMatchObject({ diff: "", commits: [], exitReason: "crashed", telemetry: { rawEventCount: 1 } });
+    expect(nonzero).toMatchObject({
+      diff: "",
+      commits: [],
+      exitReason: "crashed",
+      telemetry: { rawEventCount: 1 },
+    });
   });
 
   it("judges successful completion from git state after Codex exits", async () => {
     const completedCommitSha = "cccccccccccccccccccccccccccccccccccccccc";
     const result = await runWithCodexResult(ok("{}\n"), {
       diff: "diff --git a/CODEX.md b/CODEX.md\n+codex\n",
-      log: `${completedCommitSha}\tcodex change\n`
+      log: `${completedCommitSha}\tcodex change\n`,
     });
 
     expect(result.diff).toContain("+codex");
@@ -85,12 +122,30 @@ describe("Codex writer adapter", () => {
   });
 
   it("does not leak auth secrets through commands or writer results", async () => {
-    const ssh = new ScriptedSsh([ok(""), ok("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n"), ok("{}\n"), ok(authJson), ok(""), ok("diff\n"), ok("")]);
+    const ssh = new ScriptedSsh([
+      ok(""),
+      ok("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n"),
+      ok("{}\n"),
+      ok(authJson),
+      ok(""),
+      ok("diff\n"),
+      ok(""),
+    ]);
     const secrets = new InMemorySecretStore();
     await secrets.put({ ref: "credential/codex/dev", value: authJson });
 
-    const writer = createCodexWriter({ secrets, ssh, target, credentialRef: "credential/codex/dev", runId: "run_secret" });
-    const result = await writer.runWriter({ prompt: "do work", workspace: "/workspace/repo", timeoutMs: 1000 });
+    const writer = createCodexWriter({
+      secrets,
+      ssh,
+      target,
+      credentialRef: "credential/codex/dev",
+      runId: "run_secret",
+    });
+    const result = await writer.runWriter({
+      prompt: "do work",
+      workspace: "/workspace/repo",
+      timeoutMs: 1000,
+    });
     const commandText = ssh.commands.map((item) => item.command.command).join("\n");
 
     expect(commandText).not.toContain("secret-access-token");
@@ -107,22 +162,39 @@ describe("Codex writer adapter", () => {
       ok("not-json"),
       ok(""),
       ok("diff --git a/CODEX.md b/CODEX.md\n+codex\n"),
-      ok(`${commitSha("e")}\tcodex writer\n`)
+      ok(`${commitSha("e")}\tcodex writer\n`),
     ]);
     const secrets = new InMemorySecretStore();
     await secrets.put({ ref: "credential/codex/dev", value: authJson });
 
-    const writer = createCodexWriter({ secrets, ssh, target, credentialRef: "credential/codex/dev", runId: "run_refresh" });
-    const result = await writer.runWriter({ prompt: "do work", workspace: "/workspace/repo", timeoutMs: 1000 });
+    const writer = createCodexWriter({
+      secrets,
+      ssh,
+      target,
+      credentialRef: "credential/codex/dev",
+      runId: "run_refresh",
+    });
+    const result = await writer.runWriter({
+      prompt: "do work",
+      workspace: "/workspace/repo",
+      timeoutMs: 1000,
+    });
 
     expect(result.exitReason).toBe("completed");
     await expect(secrets.get("credential/codex/dev")).resolves.toMatchObject({ value: authJson });
   });
 
   it("parses raw Codex JSONL count and optional token usage", () => {
-    expect(parseCodexJsonlTelemetry("{}\nnot-json\n{\"usage\":{\"promptTokens\":7,\"completionTokens\":4}}\n")).toEqual({
+    expect(parseCodexJsonlTelemetry('{}\nnot-json\n{"usage":{"promptTokens":7,"completionTokens":4}}\n')).toEqual({
       rawEventCount: 3,
-      tokenUsage: { inputTokens: 7, cachedInputTokens: 0, cacheCreationTokens: 0, outputTokens: 4, reasoningOutputTokens: 0, totalTokens: 11 }
+      tokenUsage: {
+        inputTokens: 7,
+        cachedInputTokens: 0,
+        cacheCreationTokens: 0,
+        outputTokens: 4,
+        reasoningOutputTokens: 0,
+        totalTokens: 11,
+      },
     });
   });
 
@@ -132,7 +204,13 @@ describe("Codex writer adapter", () => {
     // overlap to keep the buckets mutually exclusive.
     const line = JSON.stringify({
       type: "usage",
-      usage: { input_tokens: 11460, cached_input_tokens: 4480, output_tokens: 461, reasoning_output_tokens: 316, total_tokens: 11921 }
+      usage: {
+        input_tokens: 11460,
+        cached_input_tokens: 4480,
+        output_tokens: 461,
+        reasoning_output_tokens: 316,
+        total_tokens: 11921,
+      },
     });
     expect(parseCodexJsonlTelemetry(`${line}\n`).tokenUsage).toEqual({
       inputTokens: 6980,
@@ -140,7 +218,7 @@ describe("Codex writer adapter", () => {
       cacheCreationTokens: 0,
       outputTokens: 145,
       reasoningOutputTokens: 316,
-      totalTokens: 11921
+      totalTokens: 11921,
     });
   });
 
@@ -149,7 +227,7 @@ describe("Codex writer adapter", () => {
       '{"type":"thread.started","thread_id":"t1"}',
       '{"type":"turn.started"}',
       '{"type":"error","message":"You\'ve hit your usage limit. Visit ... or try again at May 30th, 2026 8:19 PM."}',
-      '{"type":"turn.failed","error":{"message":"You\'ve hit your usage limit. ... try again at May 30th, 2026 8:19 PM."}}'
+      '{"type":"turn.failed","error":{"message":"You\'ve hit your usage limit. ... try again at May 30th, 2026 8:19 PM."}}',
     ].join("\n");
     const telemetry = parseCodexJsonlTelemetry(stdout);
     expect(telemetry.usageLimit?.message).toContain("usage limit");
@@ -160,11 +238,16 @@ describe("Codex writer adapter", () => {
     const usageLimitStdout = [
       '{"type":"thread.started","thread_id":"t1"}',
       '{"type":"turn.started"}',
-      '{"type":"turn.failed","error":{"message":"You\'ve hit your usage limit. try again at May 30th, 2026 8:19 PM."}}'
+      '{"type":"turn.failed","error":{"message":"You\'ve hit your usage limit. try again at May 30th, 2026 8:19 PM."}}',
     ].join("\n");
     // exitCode 0 here proves the distinction is driven by the parsed signal,
     // not the process exit code: codex can exit 0 yet still report the limit.
-    const result = await runWithCodexResult({ exitCode: 0, stdout: usageLimitStdout, stderr: "", timedOut: false });
+    const result = await runWithCodexResult({
+      exitCode: 0,
+      stdout: usageLimitStdout,
+      stderr: "",
+      timedOut: false,
+    });
     expect(result.exitReason).toBe("window_exhausted");
     expect(result.telemetry?.usageLimit?.message).toContain("usage limit");
   });
@@ -184,7 +267,7 @@ function refreshedAuthJson(): string {
 
 async function runWithCodexResult(
   codexResult: SshCommandResult,
-  gitState: { diff: string; log: string } = { diff: "", log: "" }
+  gitState: { diff: string; log: string } = { diff: "", log: "" },
 ) {
   const ssh = new ScriptedSsh([
     ok(""),
@@ -193,11 +276,17 @@ async function runWithCodexResult(
     ok(refreshedAuthJson()),
     ok(""),
     ok(gitState.diff),
-    ok(gitState.log)
+    ok(gitState.log),
   ]);
   const secrets = new InMemorySecretStore();
   await secrets.put({ ref: "credential/codex/dev", value: authJson });
-  const writer = createCodexWriter({ secrets, ssh, target, credentialRef: "credential/codex/dev", runId: "run_codex_2" });
+  const writer = createCodexWriter({
+    secrets,
+    ssh,
+    target,
+    credentialRef: "credential/codex/dev",
+    runId: "run_codex_2",
+  });
   return await writer.runWriter({ prompt: "write", workspace: "/workspace/repo", timeoutMs: 1000 });
 }
 

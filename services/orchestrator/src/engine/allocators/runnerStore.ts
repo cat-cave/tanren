@@ -36,12 +36,14 @@ export class PgRunnerStore implements RunnerStore {
         input.sshPort,
         input.hostKeyFingerprint,
         input.imageSha,
-        input.containerId
-      ]
+        input.containerId,
+      ],
     );
   }
 
   async release(runnerId: string): Promise<void> {
-    await this.pool.query("UPDATE runners SET status = 'released', released_at = now() WHERE runner_id = $1", [runnerId]);
+    await this.pool.query("UPDATE runners SET status = 'released', released_at = now() WHERE runner_id = $1", [
+      runnerId,
+    ]);
   }
 }

@@ -15,7 +15,7 @@ import { consoleTimingSink, timed, type TimingSink } from "./timing.js";
 export class TimedSshSubstrate implements SshSubstrate {
   constructor(
     private readonly inner: SshSubstrate,
-    private readonly sink: TimingSink = consoleTimingSink
+    private readonly sink: TimingSink = consoleTimingSink,
   ) {}
 
   async run(target: SshTarget, command: SshCommand): Promise<SshCommandResult> {
@@ -24,7 +24,7 @@ export class TimedSshSubstrate implements SshSubstrate {
         boundary: "ssh",
         operation: "ssh.run",
         sink: this.sink,
-        attributes: { host: target.host, port: target.port, username: target.username }
+        attributes: { host: target.host, port: target.port, username: target.username },
       },
       async () => {
         const result = await this.inner.run(target, command);
@@ -39,11 +39,11 @@ export class TimedSshSubstrate implements SshSubstrate {
             durationMs: 0,
             outcome: "error",
             attributes: { host: target.host, port: target.port, timedOut: result.timedOut },
-            timestamp: new Date().toISOString()
+            timestamp: new Date().toISOString(),
           });
         }
         return result;
-      }
+      },
     );
   }
 }

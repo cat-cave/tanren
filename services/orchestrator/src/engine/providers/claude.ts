@@ -43,7 +43,7 @@ export interface ClaudeEventTelemetry {
 export class ClaudeUsageLimitError extends Error {
   constructor(
     readonly schemaName: string,
-    readonly providerMessage: string
+    readonly providerMessage: string,
   ) {
     super(`Claude usage limit reached for schema ${schemaName}: ${providerMessage}`);
     this.name = "ClaudeUsageLimitError";
@@ -63,17 +63,22 @@ export function createClaudeWriter(dependencies: ClaudeWriterDependencies): Writ
         ref: dependencies.credentialRef,
         runId: dependencies.runId,
         baseDir: dependencies.claudeHomeBaseDir,
-        timeoutMs: Math.min(opts.timeoutMs, 30_000)
+        timeoutMs: Math.min(opts.timeoutMs, 30_000),
       });
-      const baselineSha = await captureBaselineSha(dependencies.ssh, dependencies.target, opts.workspace, opts.timeoutMs);
+      const baselineSha = await captureBaselineSha(
+        dependencies.ssh,
+        dependencies.target,
+        opts.workspace,
+        opts.timeoutMs,
+      );
       const claude = await dependencies.ssh.run(dependencies.target, {
         command: buildClaudeWriterCommand({
           configDir: auth.CLAUDE_CONFIG_DIR,
           workspace: opts.workspace,
-          model: dependencies.model
+          model: dependencies.model,
         }),
         stdin: opts.prompt,
-        timeoutMs: opts.timeoutMs
+        timeoutMs: opts.timeoutMs,
       });
       const telemetry = parseClaudeStreamTelemetry(claude.stdout);
       const gitState = await captureGitStateAfterWriter(
@@ -82,7 +87,7 @@ export function createClaudeWriter(dependencies: ClaudeWriterDependencies): Writ
         opts.workspace,
         baselineSha,
         "claude writer",
-        opts.timeoutMs
+        opts.timeoutMs,
       );
       if (claude.timedOut) {
         return failedResult("timeout", telemetry, gitState);
@@ -94,7 +99,7 @@ export function createClaudeWriter(dependencies: ClaudeWriterDependencies): Writ
         return failedResult("crashed", telemetry, gitState);
       }
       return { ...gitState, exitReason: "completed", tokenUsage: telemetry.tokenUsage, telemetry };
-    }
+    },
   };
 }
 
@@ -111,21 +116,21 @@ export function createClaudeAnswerer<TOutput>(dependencies: ClaudeAnswererDepend
         ref: dependencies.credentialRef,
         runId: dependencies.runId,
         baseDir: dependencies.claudeHomeBaseDir,
-        timeoutMs: Math.min(opts.timeoutMs, 30_000)
+        timeoutMs: Math.min(opts.timeoutMs, 30_000),
       });
       const workspace = opts.workspace ?? answererWorkspacePath(dependencies, opts.outputSchema.name);
       await dependencies.ssh.run(dependencies.target, {
         command: `mkdir -p ${quoteSshShellArg(workspace)}`,
-        timeoutMs: Math.min(opts.timeoutMs, 30_000)
+        timeoutMs: Math.min(opts.timeoutMs, 30_000),
       });
       const result = await dependencies.ssh.run(dependencies.target, {
         command: buildClaudeAnswererCommand({
           configDir: auth.CLAUDE_CONFIG_DIR,
           workspace,
-          model: dependencies.model
+          model: dependencies.model,
         }),
         stdin: buildAnswererPrompt(opts.prompt, opts.outputSchema.name, opts.outputSchema.jsonSchema),
-        timeoutMs: opts.timeoutMs
+        timeoutMs: opts.timeoutMs,
       });
       const telemetry = parseClaudeStreamTelemetry(result.stdout);
       if (result.timedOut) {
@@ -135,11 +140,13 @@ export function createClaudeAnswerer<TOutput>(dependencies: ClaudeAnswererDepend
         throw new ClaudeUsageLimitError(opts.outputSchema.name, telemetry.usageLimit.message);
       }
       if (result.failure !== undefined || result.exitCode !== 0) {
-        throw new Error(`Claude Answerer failed for schema ${opts.outputSchema.name}: exit ${result.exitCode ?? "unknown"}`);
+        throw new Error(
+          `Claude Answerer failed for schema ${opts.outputSchema.name}: exit ${result.exitCode ?? "unknown"}`,
+        );
       }
       const text = extractClaudeFinalText(result.stdout);
       return parseClaudeAnswererOutput(text, opts.outputSchema);
-    }
+    },
   };
 }
 
@@ -156,7 +163,7 @@ export function buildClaudeWriterCommand(input: { configDir: string; workspace: 
     "--permission-mode acceptEdits",
     "--add-dir",
     quoteSshShellArg(input.workspace),
-    ...modelFlag(input.model)
+    ...modelFlag(input.model),
   ].join(" ");
 }
 
@@ -173,7 +180,7 @@ export function buildClaudeAnswererCommand(input: { configDir: string; workspace
     "--permission-mode plan",
     "--add-dir",
     quoteSshShellArg(input.workspace),
-    ...modelFlag(input.model)
+    ...modelFlag(input.model),
   ].join(" ");
 }
 
@@ -188,7 +195,7 @@ export function buildAnswererPrompt(prompt: string, schemaName: string, jsonSche
     `Respond with ONLY a single JSON object that validates against the "${schemaName}" JSON Schema below.`,
     "Do not wrap it in markdown fences or add any prose before or after the JSON.",
     "JSON Schema:",
-    JSON.stringify(jsonSchema)
+    JSON.stringify(jsonSchema),
   ].join("\n");
 }
 
@@ -246,7 +253,9 @@ function assistantTextFromEvent(event: Record<string, unknown>): string | undefi
     return undefined;
   }
   const text = content
-    .map((block) => (typeof block === "object" && block !== null ? (block as Record<string, unknown>)["text"] : undefined))
+    .map((block) =>
+      typeof block === "object" && block !== null ? (block as Record<string, unknown>)["text"] : undefined,
+    )
     .filter((value): value is string => typeof value === "string")
     .join("");
   return text === "" ? undefined : text;
@@ -254,7 +263,7 @@ function assistantTextFromEvent(event: Record<string, unknown>): string | undefi
 
 export function parseClaudeAnswererOutput<TOutput>(
   text: string,
-  schema: { name: string; parse(value: unknown): TOutput }
+  schema: { name: string; parse(value: unknown): TOutput },
 ): TOutput {
   const trimmed = stripJsonFences(text).trim();
   let parsed: unknown;
@@ -326,7 +335,14 @@ function tokenUsageFromRecord(record: Record<string, unknown>): TokenUsage | und
   const totalTokens =
     numberField(record, ["total_tokens", "totalTokens"]) ??
     inputTokens + cachedInputTokens + cacheCreationTokens + outputTokens + reasoningOutputTokens;
-  return { inputTokens, cachedInputTokens, cacheCreationTokens, outputTokens, reasoningOutputTokens, totalTokens };
+  return {
+    inputTokens,
+    cachedInputTokens,
+    cacheCreationTokens,
+    outputTokens,
+    reasoningOutputTokens,
+    totalTokens,
+  };
 }
 
 function numberField(record: Record<string, unknown>, keys: string[]): number | undefined {
@@ -342,7 +358,9 @@ function numberField(record: Record<string, unknown>, keys: string[]): number | 
 function parseJsonObject(line: string): Record<string, unknown> | undefined {
   try {
     const value = JSON.parse(line) as unknown;
-    return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+    return typeof value === "object" && value !== null && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : undefined;
   } catch {
     return undefined;
   }
@@ -364,7 +382,7 @@ function messageFromUnknown(error: unknown): string {
 function failedResult(
   exitReason: "timeout" | "crashed" | "window_exhausted",
   telemetry: ClaudeEventTelemetry,
-  gitState: Pick<WriterResult, "diff" | "commits">
+  gitState: Pick<WriterResult, "diff" | "commits">,
 ): WriterResult {
   return { ...gitState, exitReason, tokenUsage: telemetry.tokenUsage, telemetry };
 }

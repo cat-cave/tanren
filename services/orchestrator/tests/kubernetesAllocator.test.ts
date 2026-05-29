@@ -6,7 +6,7 @@ import {
   type KubernetesClient,
   type KubernetesPod,
   type KubernetesPodInput,
-  type KubernetesSecretInput
+  type KubernetesSecretInput,
 } from "../src/engine/allocators/kubernetesAllocator.js";
 import type { ClaimRunnerInput, RunnerStore } from "../src/engine/allocators/runnerStore.js";
 
@@ -31,9 +31,7 @@ class FakeKubernetesClient implements KubernetesClient {
   readonly deletedPods: string[] = [];
   readonly deletedSecrets: string[] = [];
   private getCalls = 0;
-  constructor(
-    private readonly opts: { neverRunning?: boolean; noIp?: boolean; terminal?: boolean } = {}
-  ) {}
+  constructor(private readonly opts: { neverRunning?: boolean; noIp?: boolean; terminal?: boolean } = {}) {}
 
   async createSecret(input: KubernetesSecretInput): Promise<void> {
     this.secrets.push(input);
@@ -73,7 +71,7 @@ const baseOpts = (client: KubernetesClient, runners: RunnerStore) => ({
   hostKeyFingerprint: "SHA256:k8s",
   runners,
   client,
-  sleep: async () => undefined
+  sleep: async () => undefined,
 });
 
 function req(runId: string) {
@@ -81,7 +79,7 @@ function req(runId: string) {
     runId,
     projectId: "proj_k8s",
     runnerImage: "ghcr.io/cat-cave/tanren-runner:v0",
-    identitySecretRef: "runner/identity"
+    identitySecretRef: "runner/identity",
   };
 }
 
@@ -146,7 +144,7 @@ describe("KubernetesAllocator", () => {
     const allocator = new KubernetesAllocator({
       ...baseOpts(client, runners),
       readyTimeoutMs: 5,
-      pollIntervalMs: 1
+      pollIntervalMs: 1,
     });
     await expect(allocator.allocate(req("run_3"))).rejects.toThrow(/did not become Running/);
     expect(client.deletedPods).toContain("tanren-run-3");
@@ -167,7 +165,7 @@ describe("KubernetesAllocator", () => {
     const allocator = new KubernetesAllocator({
       ...baseOpts(client, runners),
       readyTimeoutMs: 5,
-      pollIntervalMs: 1
+      pollIntervalMs: 1,
     });
     await expect(allocator.allocate(req("run_4"))).rejects.toBeInstanceOf(KubernetesAllocatorError);
     expect(client.deletedPods).toContain("tanren-run-4");
@@ -177,19 +175,17 @@ describe("KubernetesAllocator", () => {
     const runners = new FakeRunnerStore();
     const c = new FakeKubernetesClient();
     expect(() => new KubernetesAllocator({ ...baseOpts(c, runners), apiServer: "" })).toThrow(
-      /non-empty apiServer and token/
+      /non-empty apiServer and token/,
     );
     expect(() => new KubernetesAllocator({ ...baseOpts(c, runners), token: "" })).toThrow(
-      /non-empty apiServer and token/
+      /non-empty apiServer and token/,
     );
-    expect(() => new KubernetesAllocator({ ...baseOpts(c, runners), namespace: "" })).toThrow(
-      /non-empty namespace/
-    );
+    expect(() => new KubernetesAllocator({ ...baseOpts(c, runners), namespace: "" })).toThrow(/non-empty namespace/);
     expect(() => new KubernetesAllocator({ ...baseOpts(c, runners), sshPublicKey: "" })).toThrow(
-      /non-empty sshPublicKey/
+      /non-empty sshPublicKey/,
     );
     expect(() => new KubernetesAllocator({ ...baseOpts(c, runners), hostKeyFingerprint: "" })).toThrow(
-      /pinned hostKeyFingerprint/
+      /pinned hostKeyFingerprint/,
     );
   });
 
@@ -209,7 +205,7 @@ describe("KubernetesAllocator", () => {
 describe("fetchKubernetesClient", () => {
   const runningPod = JSON.stringify({
     metadata: { name: "tanren-run_1" },
-    status: { phase: "Running", podIP: "10.1.2.3" }
+    status: { phase: "Running", podIP: "10.1.2.3" },
   });
 
   it("POSTs the pod manifest with a bearer token and maps the response", async () => {
@@ -217,19 +213,27 @@ describe("fetchKubernetesClient", () => {
     const fetchImpl = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
       const url = typeof input === "string" ? input : input.toString();
       const headers = init?.headers as Record<string, string> | undefined;
-      captured = { url, method: init?.method, auth: headers?.authorization, body: init?.body as string };
-      return new Response(runningPod, { status: 201, headers: { "Content-Type": "application/json" } });
+      captured = {
+        url,
+        method: init?.method,
+        auth: headers?.authorization,
+        body: init?.body as string,
+      };
+      return new Response(runningPod, {
+        status: 201,
+        headers: { "Content-Type": "application/json" },
+      });
     }) as typeof fetch;
 
     const client = fetchKubernetesClient(
       { apiServer: "https://10.0.0.1:6443", token: "sa-token", namespace: "tanren-runners" },
-      fetchImpl
+      fetchImpl,
     );
     const pod = await client.createPod({
       name: "tanren-run_1",
       image: "img",
       sshKeySecretName: "tanren-run_1-ssh",
-      labels: { "tanren-run": "run_1" }
+      labels: { "tanren-run": "run_1" },
     });
 
     expect(captured.url).toBe("https://10.0.0.1:6443/api/v1/namespaces/tanren-runners/pods");
@@ -244,11 +248,14 @@ describe("fetchKubernetesClient", () => {
     let url = "";
     const fetchImpl = (async (input: string | URL | Request): Promise<Response> => {
       url = typeof input === "string" ? input : input.toString();
-      return new Response(runningPod, { status: 200, headers: { "Content-Type": "application/json" } });
+      return new Response(runningPod, {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
     }) as typeof fetch;
     const client = fetchKubernetesClient(
       { apiServer: "https://10.0.0.1:6443", token: "t", namespace: "ns" },
-      fetchImpl
+      fetchImpl,
     );
     const pod = await client.getPod("tanren-run_1");
     expect(url).toBe("https://10.0.0.1:6443/api/v1/namespaces/ns/pods/tanren-run_1");
@@ -258,32 +265,22 @@ describe("fetchKubernetesClient", () => {
 
   it("treats a 404 on delete as success (idempotent destroy)", async () => {
     const fetchImpl = (async (): Promise<Response> => new Response("gone", { status: 404 })) as typeof fetch;
-    const client = fetchKubernetesClient(
-      { apiServer: "https://h:6443", token: "t", namespace: "ns" },
-      fetchImpl
-    );
+    const client = fetchKubernetesClient({ apiServer: "https://h:6443", token: "t", namespace: "ns" }, fetchImpl);
     await expect(client.deletePod("p")).resolves.toBeUndefined();
     await expect(client.deleteSecret("s")).resolves.toBeUndefined();
   });
 
   it("throws a typed error on a non-404 delete failure", async () => {
     const fetchImpl = (async (): Promise<Response> => new Response("boom", { status: 500 })) as typeof fetch;
-    const client = fetchKubernetesClient(
-      { apiServer: "https://h:6443", token: "t", namespace: "ns" },
-      fetchImpl
-    );
+    const client = fetchKubernetesClient({ apiServer: "https://h:6443", token: "t", namespace: "ns" }, fetchImpl);
     await expect(client.deletePod("p")).rejects.toBeInstanceOf(KubernetesAllocatorError);
   });
 
   it("throws a typed error when createPod fails", async () => {
-    const fetchImpl = (async (): Promise<Response> =>
-      new Response("forbidden", { status: 403 })) as typeof fetch;
-    const client = fetchKubernetesClient(
-      { apiServer: "https://h:6443", token: "t", namespace: "ns" },
-      fetchImpl
-    );
+    const fetchImpl = (async (): Promise<Response> => new Response("forbidden", { status: 403 })) as typeof fetch;
+    const client = fetchKubernetesClient({ apiServer: "https://h:6443", token: "t", namespace: "ns" }, fetchImpl);
     await expect(
-      client.createPod({ name: "p", image: "img", sshKeySecretName: "s", labels: {} })
+      client.createPod({ name: "p", image: "img", sshKeySecretName: "s", labels: {} }),
     ).rejects.toBeInstanceOf(KubernetesAllocatorError);
   });
 
@@ -293,10 +290,7 @@ describe("fetchKubernetesClient", () => {
       body = init?.body as string;
       return new Response("{}", { status: 201, headers: { "Content-Type": "application/json" } });
     }) as typeof fetch;
-    const client = fetchKubernetesClient(
-      { apiServer: "https://h:6443", token: "t", namespace: "ns" },
-      fetchImpl
-    );
+    const client = fetchKubernetesClient({ apiServer: "https://h:6443", token: "t", namespace: "ns" }, fetchImpl);
     await client.createSecret({ name: "s", sshPublicKey: "ssh-ed25519 KEY", labels: {} });
     expect(body).toContain("ssh-authorized-key");
     expect(body).toContain("ssh-ed25519 KEY");

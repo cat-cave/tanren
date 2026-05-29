@@ -16,7 +16,7 @@ import {
   setAuditJobEnabled,
   summarizeFindings,
   type AuditJob,
-  type AuditPassRunner
+  type AuditPassRunner,
 } from "../src/engine/forge/audits/index.js";
 
 // In-memory pool tracking audit_jobs + inbox_sources + candidates so the
@@ -40,11 +40,22 @@ function stubPool(): {
 
     // ---- audit_jobs ----
     if (sql.startsWith("INSERT INTO audit_jobs")) {
-      const [id, orgId, projectId, kind, name, cadence, targetWindow, answererCli, enabled] = params as (string | null)[];
+      const [id, orgId, projectId, kind, name, cadence, targetWindow, answererCli, enabled] = params as (
+        | string
+        | null
+      )[];
       jobs.set(String(id), {
-        id, org_id: orgId, project_id: projectId, kind, name, cadence,
-        target_window: targetWindow, answerer_cli: answererCli, enabled,
-        last_run: null, findings: { count: 0, severity: "ok", note: "" }
+        id,
+        org_id: orgId,
+        project_id: projectId,
+        kind,
+        name,
+        cadence,
+        target_window: targetWindow,
+        answerer_cli: answererCli,
+        enabled,
+        last_run: null,
+        findings: { count: 0, severity: "ok", note: "" },
       });
       return { rows: [jobRow(String(id))], rowCount: 1 };
     }
@@ -78,8 +89,15 @@ function stubPool(): {
     if (sql.startsWith("INSERT INTO inbox_sources")) {
       const [id, orgId, projectId, kind, name, detail, , enabled, autoRoute] = params as (string | null)[];
       sources.set(String(id), {
-        id, org_id: orgId, project_id: projectId, kind, name, detail,
-        config: {}, enabled, auto_route: autoRoute
+        id,
+        org_id: orgId,
+        project_id: projectId,
+        kind,
+        name,
+        detail,
+        config: {},
+        enabled,
+        auto_route: autoRoute,
       });
       return { rows: [sourceRow(String(id))], rowCount: 1 };
     }
@@ -89,14 +107,36 @@ function stubPool(): {
       return { rows: [], rowCount: 0 };
     }
     if (sql.startsWith("INSERT INTO candidates")) {
-      const [id, sourceId, orgId, projectId, externalId, title, body, severity, status, triage, sourceName, sourceKind] =
-        params as (string | null)[];
+      const [
+        id,
+        sourceId,
+        orgId,
+        projectId,
+        externalId,
+        title,
+        body,
+        severity,
+        status,
+        triage,
+        sourceName,
+        sourceKind,
+      ] = params as (string | null)[];
       const key = `${sourceId}::${externalId}`;
       const cid = byExternal.get(key) ?? String(id);
       candidates.set(cid, {
-        id: cid, source_id: sourceId, org_id: orgId, project_id: projectId, external_id: externalId,
-        title, body, severity, status, triage: JSON.parse(String(triage)), resolved_spec_id: null,
-        source_name: sourceName, source_kind: sourceKind
+        id: cid,
+        source_id: sourceId,
+        org_id: orgId,
+        project_id: projectId,
+        external_id: externalId,
+        title,
+        body,
+        severity,
+        status,
+        triage: JSON.parse(String(triage)),
+        resolved_spec_id: null,
+        source_name: sourceName,
+        source_kind: sourceKind,
       });
       byExternal.set(key, cid);
       return { rows: [candidates.get(cid)!], rowCount: 1 };
@@ -106,16 +146,28 @@ function stubPool(): {
   return { pool: { query } as unknown as pg.Pool, jobs, sources, candidates };
 }
 
-const fakeRunner = (findings: { externalId: string; title: string; body: string; severity: "info" | "warn" | "fail" }[]): AuditPassRunner => ({
-  run: async () => ({ findings })
+const fakeRunner = (
+  findings: {
+    externalId: string;
+    title: string;
+    body: string;
+    severity: "info" | "warn" | "fail";
+  }[],
+): AuditPassRunner => ({
+  run: async () => ({ findings }),
 });
 
 describe("audit job store", () => {
   it("creates and lists jobs with the enable toggle", async () => {
     const { pool } = stubPool();
     const job = await createAuditJob(pool, {
-      orgId: "org_a", projectId: null, kind: "security", name: "security scan",
-      cadence: "nightly", targetWindow: "night (00–05)", answererCli: "claude · haiku-4.5"
+      orgId: "org_a",
+      projectId: null,
+      kind: "security",
+      name: "security scan",
+      cadence: "nightly",
+      targetWindow: "night (00–05)",
+      answererCli: "claude · haiku-4.5",
     });
     expect(job.id).toMatch(/^audit_/);
     expect(job.enabled).toBe(true);
@@ -131,10 +183,19 @@ describe("runAuditJob → candidate inbox auto-route", () => {
   it("runs the pass, emits each finding as an auto_routed candidate, and records the run", async () => {
     const { pool, sources, candidates } = stubPool();
     const job = await createAuditJob(pool, {
-      orgId: "org_a", projectId: "project_a", kind: "a11y", name: "a11y", cadence: "weekly"
+      orgId: "org_a",
+      projectId: "project_a",
+      kind: "a11y",
+      name: "a11y",
+      cadence: "weekly",
     });
     const runner = fakeRunner([
-      { externalId: "a11y-1", title: "contrast failure on nav", body: "3.1:1 below WCAG AA", severity: "warn" }
+      {
+        externalId: "a11y-1",
+        title: "contrast failure on nav",
+        body: "3.1:1 below WCAG AA",
+        severity: "warn",
+      },
     ]);
 
     const result = await runAuditJob({ pool, passRunner: runner, now: () => new Date("2026-05-28T03:00:00Z") }, job);
@@ -158,7 +219,13 @@ describe("runAuditJob → candidate inbox auto-route", () => {
 
   it("re-running the same job updates rather than duplicates the candidate", async () => {
     const { pool, candidates } = stubPool();
-    const job = await createAuditJob(pool, { orgId: "org_a", projectId: "project_a", kind: "deps", name: "deps", cadence: "nightly" });
+    const job = await createAuditJob(pool, {
+      orgId: "org_a",
+      projectId: "project_a",
+      kind: "deps",
+      name: "deps",
+      cadence: "nightly",
+    });
     const runner = fakeRunner([{ externalId: "dep-1", title: "lodash outdated", body: "v1", severity: "info" }]);
     const deps = { pool, passRunner: runner };
     await runAuditJob(deps, job);
@@ -168,7 +235,13 @@ describe("runAuditJob → candidate inbox auto-route", () => {
 
   it("a disabled job is a no-op (no findings emitted, no run recorded)", async () => {
     const { pool, candidates } = stubPool();
-    const job = await createAuditJob(pool, { orgId: "org_a", projectId: null, kind: "perf", name: "perf", cadence: "monthly" });
+    const job = await createAuditJob(pool, {
+      orgId: "org_a",
+      projectId: null,
+      kind: "perf",
+      name: "perf",
+      cadence: "monthly",
+    });
     const paused: AuditJob = { ...job, enabled: false };
     const runner = fakeRunner([{ externalId: "p-1", title: "regression", body: "", severity: "warn" }]);
     const result = await runAuditJob({ pool, passRunner: runner }, paused);
@@ -178,7 +251,13 @@ describe("runAuditJob → candidate inbox auto-route", () => {
 
   it("a clean pass (no findings) records a clean run with no candidates", async () => {
     const { pool, candidates } = stubPool();
-    const job = await createAuditJob(pool, { orgId: "org_a", projectId: null, kind: "security", name: "sec", cadence: "nightly" });
+    const job = await createAuditJob(pool, {
+      orgId: "org_a",
+      projectId: null,
+      kind: "security",
+      name: "sec",
+      cadence: "nightly",
+    });
     const result = await runAuditJob({ pool, passRunner: fakeRunner([]) }, job);
     expect(result.candidates).toHaveLength(0);
     expect(candidates.size).toBe(0);
@@ -191,7 +270,7 @@ describe("summarizeFindings", () => {
   it("rolls up to the worst severity", () => {
     const s = summarizeFindings([
       { externalId: "1", title: "a", body: "", severity: "info" },
-      { externalId: "2", title: "b", body: "", severity: "fail" }
+      { externalId: "2", title: "b", body: "", severity: "fail" },
     ]);
     expect(s.count).toBe(2);
     expect(s.severity).toBe("fail");
@@ -202,10 +281,18 @@ describe("recommendCoverage", () => {
   it("recommends only kinds the org has no enabled job for", () => {
     const jobs: AuditJob[] = [
       {
-        id: "audit_1", orgId: "org_a", projectId: null, kind: "security", name: "sec",
-        cadence: "nightly", targetWindow: "", answererCli: "", enabled: true, lastRun: null,
-        findings: { count: 0, severity: "ok", note: "" }
-      }
+        id: "audit_1",
+        orgId: "org_a",
+        projectId: null,
+        kind: "security",
+        name: "sec",
+        cadence: "nightly",
+        targetWindow: "",
+        answererCli: "",
+        enabled: true,
+        lastRun: null,
+        findings: { count: 0, severity: "ok", note: "" },
+      },
     ];
     const recs = recommendCoverage(jobs);
     expect(recs.some((r) => r.kind === "security")).toBe(false);

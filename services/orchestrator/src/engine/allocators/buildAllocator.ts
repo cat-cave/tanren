@@ -27,7 +27,7 @@ function buildStatic(runners: RunnerStore): StaticRunnerAllocator {
     port: Number(env("TANREN_RUNNER_SSH_PORT") ?? 22),
     username: env("TANREN_RUNNER_SSH_USER") ?? "tanren",
     hostKeyFingerprint: env("TANREN_RUNNER_SSH_HOST_FINGERPRINT"),
-    runners
+    runners,
   });
 }
 
@@ -35,7 +35,7 @@ function buildSidecar(runners: RunnerStore): SidecarHttpAllocator {
   return new SidecarHttpAllocator({
     baseUrl: env("TANREN_ALLOCATOR_URL") ?? "http://allocator:3200",
     authToken: env("TANREN_ALLOCATOR_TOKEN") ?? "dev",
-    runners
+    runners,
   });
 }
 
@@ -54,9 +54,7 @@ function buildHetzner(runners: RunnerStore): HetznerAllocator {
   const apiToken = env("TANREN_HETZNER_API_TOKEN");
   const hostKeyFingerprint = env("TANREN_HETZNER_HOST_FINGERPRINT");
   if (apiToken === undefined || hostKeyFingerprint === undefined) {
-    throw new Error(
-      "hetzner allocator requires TANREN_HETZNER_API_TOKEN and TANREN_HETZNER_HOST_FINGERPRINT"
-    );
+    throw new Error("hetzner allocator requires TANREN_HETZNER_API_TOKEN and TANREN_HETZNER_HOST_FINGERPRINT");
   }
   return new HetznerAllocator({
     apiToken,
@@ -64,9 +62,11 @@ function buildHetzner(runners: RunnerStore): HetznerAllocator {
     serverType: env("TANREN_HETZNER_SERVER_TYPE") ?? "cx22",
     image: env("TANREN_HETZNER_IMAGE") ?? "docker-ce",
     location: env("TANREN_HETZNER_LOCATION"),
-    sshKeys: env("TANREN_HETZNER_SSH_KEYS")?.split(",").map((s) => s.trim()),
+    sshKeys: env("TANREN_HETZNER_SSH_KEYS")
+      ?.split(",")
+      .map((s) => s.trim()),
     sshUsername: env("TANREN_HETZNER_SSH_USER") ?? "root",
-    runners
+    runners,
   });
 }
 
@@ -76,9 +76,7 @@ function buildDigitalOcean(runners: RunnerStore): DigitalOceanAllocator {
   const apiToken = env("TANREN_DO_API_TOKEN");
   const hostKeyFingerprint = env("TANREN_DO_HOST_FINGERPRINT");
   if (apiToken === undefined || hostKeyFingerprint === undefined) {
-    throw new Error(
-      "digitalocean allocator requires TANREN_DO_API_TOKEN and TANREN_DO_HOST_FINGERPRINT"
-    );
+    throw new Error("digitalocean allocator requires TANREN_DO_API_TOKEN and TANREN_DO_HOST_FINGERPRINT");
   }
   return new DigitalOceanAllocator({
     apiToken,
@@ -86,9 +84,11 @@ function buildDigitalOcean(runners: RunnerStore): DigitalOceanAllocator {
     region: env("TANREN_DO_REGION") ?? "nyc3",
     size: env("TANREN_DO_SIZE") ?? "s-1vcpu-1gb",
     image: env("TANREN_DO_IMAGE") ?? "docker-20-04",
-    sshKeys: env("TANREN_DO_SSH_KEYS")?.split(",").map((s) => s.trim()),
+    sshKeys: env("TANREN_DO_SSH_KEYS")
+      ?.split(",")
+      .map((s) => s.trim()),
     sshUsername: env("TANREN_DO_SSH_USER") ?? "root",
-    runners
+    runners,
   });
 }
 
@@ -110,7 +110,7 @@ function buildGcp(runners: RunnerStore): GcpAllocator {
   ) {
     throw new Error(
       "gcp allocator requires TANREN_GCP_ACCESS_TOKEN, TANREN_GCP_PROJECT, TANREN_GCP_ZONE, " +
-        "TANREN_GCP_SSH_PUBLIC_KEY, and TANREN_GCP_HOST_FINGERPRINT"
+        "TANREN_GCP_SSH_PUBLIC_KEY, and TANREN_GCP_HOST_FINGERPRINT",
     );
   }
   return new GcpAllocator({
@@ -122,7 +122,7 @@ function buildGcp(runners: RunnerStore): GcpAllocator {
     machineType: env("TANREN_GCP_MACHINE_TYPE") ?? "e2-small",
     sourceImage: env("TANREN_GCP_IMAGE") ?? "projects/cos-cloud/global/images/family/cos-stable",
     sshUsername: env("TANREN_GCP_SSH_USER") ?? "tanren",
-    runners
+    runners,
   });
 }
 
@@ -143,7 +143,7 @@ function buildAwsEc2(runners: RunnerStore): AwsEc2Allocator {
   ) {
     throw new Error(
       "aws_ec2 allocator requires TANREN_AWS_ACCESS_KEY_ID, TANREN_AWS_SECRET_ACCESS_KEY, " +
-        "TANREN_AWS_REGION, TANREN_AWS_IMAGE_ID, and TANREN_AWS_HOST_FINGERPRINT"
+        "TANREN_AWS_REGION, TANREN_AWS_IMAGE_ID, and TANREN_AWS_HOST_FINGERPRINT",
     );
   }
   return new AwsEc2Allocator({
@@ -156,10 +156,12 @@ function buildAwsEc2(runners: RunnerStore): AwsEc2Allocator {
     instanceType: env("TANREN_AWS_INSTANCE_TYPE") ?? "t3.small",
     keyName: env("TANREN_AWS_KEY_NAME"),
     subnetId: env("TANREN_AWS_SUBNET_ID"),
-    securityGroupIds: env("TANREN_AWS_SECURITY_GROUP_IDS")?.split(",").map((s) => s.trim()),
+    securityGroupIds: env("TANREN_AWS_SECURITY_GROUP_IDS")
+      ?.split(",")
+      .map((s) => s.trim()),
     userData: env("TANREN_AWS_USER_DATA"),
     sshUsername: env("TANREN_AWS_SSH_USER") ?? "ec2-user",
-    runners
+    runners,
   });
 }
 
@@ -184,7 +186,7 @@ function buildKubernetes(runners: RunnerStore): KubernetesAllocator {
     throw new Error(
       "kubernetes allocator requires TANREN_K8S_API_SERVER, TANREN_K8S_TOKEN_REF, " +
         "TANREN_K8S_NAMESPACE, TANREN_K8S_RUNNER_IMAGE, TANREN_K8S_SSH_PUBLIC_KEY, " +
-        "and TANREN_K8S_HOST_FINGERPRINT"
+        "and TANREN_K8S_HOST_FINGERPRINT",
     );
   }
   return new KubernetesAllocator({
@@ -196,7 +198,7 @@ function buildKubernetes(runners: RunnerStore): KubernetesAllocator {
     hostKeyFingerprint,
     caPem: env("TANREN_K8S_CA_PEM"),
     sshUsername: env("TANREN_K8S_SSH_USER") ?? "tanren",
-    runners
+    runners,
   });
 }
 
@@ -253,17 +255,13 @@ function buildRegistry(runners: RunnerStore, config: AllocatorRoutingConfig): Al
       case "hetzner":
         return usedKinds.has("hetzner") ? buildHetzner(runners) : new UnconfiguredAllocator("hetzner");
       case "digitalocean":
-        return usedKinds.has("digitalocean")
-          ? buildDigitalOcean(runners)
-          : new UnconfiguredAllocator("digitalocean");
+        return usedKinds.has("digitalocean") ? buildDigitalOcean(runners) : new UnconfiguredAllocator("digitalocean");
       case "gcp":
         return usedKinds.has("gcp") ? buildGcp(runners) : new UnconfiguredAllocator("gcp");
       case "aws_ec2":
         return usedKinds.has("aws_ec2") ? buildAwsEc2(runners) : new UnconfiguredAllocator("aws_ec2");
       case "kubernetes":
-        return usedKinds.has("kubernetes")
-          ? buildKubernetes(runners)
-          : new UnconfiguredAllocator("kubernetes");
+        return usedKinds.has("kubernetes") ? buildKubernetes(runners) : new UnconfiguredAllocator("kubernetes");
     }
   };
 
@@ -275,7 +273,7 @@ function buildRegistry(runners: RunnerStore, config: AllocatorRoutingConfig): Al
     digitalocean: build("digitalocean"),
     gcp: build("gcp"),
     aws_ec2: build("aws_ec2"),
-    kubernetes: build("kubernetes")
+    kubernetes: build("kubernetes"),
   };
 }
 

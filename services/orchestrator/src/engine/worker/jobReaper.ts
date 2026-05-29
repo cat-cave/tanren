@@ -66,12 +66,15 @@ async function emitDeadLetterEvent(pool: pg.Pool, eventStore: EventStore, job: R
       attempts: job.attempts,
       maxAttempts: job.maxAttempts,
       failureKind: "lease_expired",
-      message: "retry budget exhausted after lease expiry"
-    }
+      message: "retry budget exhausted after lease expiry",
+    },
   });
 }
 
-async function loadRunLineage(pool: pg.Pool, runId: string): Promise<{ specId: string; projectId: string } | undefined> {
+async function loadRunLineage(
+  pool: pg.Pool,
+  runId: string,
+): Promise<{ specId: string; projectId: string } | undefined> {
   const result = await pool.query("SELECT spec_id, project_id FROM runs WHERE run_id = $1", [runId]);
   const row = result.rows[0] as { spec_id?: unknown; project_id?: unknown } | undefined;
   if (row === undefined) {
@@ -105,7 +108,7 @@ export class JobReaper {
 
   constructor(
     private readonly deps: { pool: pg.Pool; jobQueue: JobQueue; eventStore?: EventStore },
-    options: JobReaperOptions = {}
+    options: JobReaperOptions = {},
   ) {
     this.intervalMs = Math.max(0, options.intervalMs ?? DEFAULT_REAP_INTERVAL_MS);
     this.sleep = options.sleep ?? ((ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)));

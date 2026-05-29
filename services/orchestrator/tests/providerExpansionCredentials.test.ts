@@ -5,19 +5,16 @@ import type { SshCommand, SshCommandResult, SshSubstrate } from "../src/engine/c
 import {
   storeClaudeAuthBundle,
   validateClaudeAuthBundle,
-  validateClaudeCredentialRef
+  validateClaudeCredentialRef,
 } from "../src/engine/credentials/claudeAuth.js";
 import {
   buildClaudeAuthMaterializationCommand,
-  materializeClaudeAuthBundle
+  materializeClaudeAuthBundle,
 } from "../src/engine/credentials/claudeMaterializer.js";
-import {
-  validateOpencodeAuthBundle,
-  validateOpencodeCredentialRef
-} from "../src/engine/credentials/opencodeAuth.js";
+import { validateOpencodeAuthBundle, validateOpencodeCredentialRef } from "../src/engine/credentials/opencodeAuth.js";
 import {
   buildOpencodeAuthMaterializationCommand,
-  materializeOpencodeAuthBundle
+  materializeOpencodeAuthBundle,
 } from "../src/engine/credentials/opencodeMaterializer.js";
 import { buildApp } from "../src/main.js";
 
@@ -26,22 +23,33 @@ const target: SshTarget = {
   port: 22,
   username: "tanren",
   hostKeyFingerprint: "SHA256:47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU",
-  identitySecretRef: "runner/local/identity"
+  identitySecretRef: "runner/local/identity",
 };
 
-const claudeJson = JSON.stringify({ claudeAiOauth: { accessToken: "secret-token", refreshToken: "refresh" } });
+const claudeJson = JSON.stringify({
+  claudeAiOauth: { accessToken: "secret-token", refreshToken: "refresh" },
+});
 const opencodeJson = JSON.stringify({ zai: { key: "secret-zai-key" } });
 
 describe("Claude credential contracts", () => {
   it("validates the OAuth bundle and returns only a redacted import result", async () => {
     const secrets = new FakeSecretStore();
-    const result = await storeClaudeAuthBundle(secrets, { ref: "credential/claude/dev", authJson: claudeJson });
-    expect(result).toEqual({ credentialKind: "claude_cli_auth", ref: "credential/claude/dev", redacted: true });
+    const result = await storeClaudeAuthBundle(secrets, {
+      ref: "credential/claude/dev",
+      authJson: claudeJson,
+    });
+    expect(result).toEqual({
+      credentialKind: "claude_cli_auth",
+      ref: "credential/claude/dev",
+      redacted: true,
+    });
     expect(JSON.stringify(result)).not.toContain("secret-token");
   });
 
   it("accepts a raw API key bundle and rejects non-Claude JSON and namespaces", () => {
-    expect(validateClaudeAuthBundle(JSON.stringify({ ANTHROPIC_API_KEY: "sk-ant" })).authJson).toContain("ANTHROPIC_API_KEY");
+    expect(validateClaudeAuthBundle(JSON.stringify({ ANTHROPIC_API_KEY: "sk-ant" })).authJson).toContain(
+      "ANTHROPIC_API_KEY",
+    );
     expect(() => validateClaudeAuthBundle("{}")).toThrow("must not be empty");
     expect(() => validateClaudeAuthBundle(JSON.stringify({ ok: true }))).toThrow("Claude CLI token fields");
     expect(() => validateClaudeCredentialRef("credential/codex/dev")).toThrow("credential/claude/");
@@ -51,11 +59,17 @@ describe("Claude credential contracts", () => {
     const secrets = new FakeSecretStore();
     await secrets.put({ ref: "credential/claude/dev", value: claudeJson });
     const ssh = new CapturingSsh();
-    const result = await materializeClaudeAuthBundle({ secrets, ssh, target, ref: "credential/claude/dev", runId: "run_123" });
+    const result = await materializeClaudeAuthBundle({
+      secrets,
+      ssh,
+      target,
+      ref: "credential/claude/dev",
+      runId: "run_123",
+    });
     expect(result).toEqual({
       CLAUDE_CONFIG_DIR: "/home/tanren/.tanren/runs/run_123/claude-home",
       ref: "credential/claude/dev",
-      redacted: true
+      redacted: true,
     });
     expect(ssh.command).toContain(".credentials.json");
     expect(ssh.command).not.toContain("secret-token");
@@ -81,11 +95,17 @@ describe("opencode credential contracts", () => {
     const secrets = new FakeSecretStore();
     await secrets.put({ ref: "credential/opencode/dev", value: opencodeJson });
     const ssh = new CapturingSsh();
-    const result = await materializeOpencodeAuthBundle({ secrets, ssh, target, ref: "credential/opencode/dev", runId: "run_123" });
+    const result = await materializeOpencodeAuthBundle({
+      secrets,
+      ssh,
+      target,
+      ref: "credential/opencode/dev",
+      runId: "run_123",
+    });
     expect(result).toEqual({
       XDG_DATA_HOME: "/home/tanren/.tanren/runs/run_123/opencode-home",
       ref: "credential/opencode/dev",
-      redacted: true
+      redacted: true,
     });
     expect(ssh.command).toContain("opencode/auth.json");
     expect(ssh.command).not.toContain("secret-zai-key");
@@ -106,29 +126,40 @@ describe("provider expansion HTTP import", () => {
       pool: {} as never,
       helloDependencies: {} as never,
       secrets,
-      vaultHealthCheck: async () => ({ ok: true, status: 200 })
+      vaultHealthCheck: async () => ({ ok: true, status: 200 }),
     });
 
     const claude = await app.request("/credentials/claude/import", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ref: "credential/claude/http", authJson: claudeJson })
+      body: JSON.stringify({ ref: "credential/claude/http", authJson: claudeJson }),
     });
     expect(claude.status).toBe(201);
-    expect(await claude.json()).toEqual({ credentialKind: "claude_cli_auth", ref: "credential/claude/http", redacted: true });
+    expect(await claude.json()).toEqual({
+      credentialKind: "claude_cli_auth",
+      ref: "credential/claude/http",
+      redacted: true,
+    });
 
     const opencode = await app.request("/credentials/opencode/import", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ref: "credential/opencode/http", authJson: opencodeJson })
+      body: JSON.stringify({ ref: "credential/opencode/http", authJson: opencodeJson }),
     });
     expect(opencode.status).toBe(201);
-    expect(await opencode.json()).toEqual({ credentialKind: "opencode_cli_auth", ref: "credential/opencode/http", redacted: true });
+    expect(await opencode.json()).toEqual({
+      credentialKind: "opencode_cli_auth",
+      ref: "credential/opencode/http",
+      redacted: true,
+    });
 
     const rejected = await app.request("/credentials/opencode/import", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ref: "credential/opencode/bad", authJson: JSON.stringify({ wafer: { key: "x" } }) })
+      body: JSON.stringify({
+        ref: "credential/opencode/bad",
+        authJson: JSON.stringify({ wafer: { key: "x" } }),
+      }),
     });
     expect(rejected.status).toBe(400);
   });

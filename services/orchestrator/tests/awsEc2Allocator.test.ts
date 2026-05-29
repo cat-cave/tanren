@@ -5,7 +5,7 @@ import {
   fetchAwsEc2Client,
   type AwsEc2Client,
   type AwsEc2Instance,
-  type AwsRunInstancesInput
+  type AwsRunInstancesInput,
 } from "../src/engine/allocators/awsEc2Allocator.js";
 import type { ClaimRunnerInput, RunnerStore } from "../src/engine/allocators/runnerStore.js";
 
@@ -29,9 +29,7 @@ class FakeAwsEc2Client implements AwsEc2Client {
   readonly terminated: string[] = [];
   private getCalls = 0;
   private instanceCounter = 0;
-  constructor(
-    private readonly opts: { neverRunning?: boolean; noIp?: boolean; terminal?: boolean } = {}
-  ) {}
+  constructor(private readonly opts: { neverRunning?: boolean; noIp?: boolean; terminal?: boolean } = {}) {}
 
   async runInstances(input: AwsRunInstancesInput): Promise<AwsEc2Instance> {
     this.run.push(input);
@@ -52,7 +50,7 @@ class FakeAwsEc2Client implements AwsEc2Client {
     return {
       instanceId,
       state: "running",
-      publicIp: this.opts.noIp ? undefined : "203.0.113.7"
+      publicIp: this.opts.noIp ? undefined : "203.0.113.7",
     };
   }
   async terminateInstance(instanceId: string): Promise<void> {
@@ -73,7 +71,7 @@ const baseOpts = (client: AwsEc2Client, runners: RunnerStore) => ({
   hostKeyFingerprint: "SHA256:aws",
   runners,
   client,
-  sleep: async () => undefined
+  sleep: async () => undefined,
 });
 
 function req(runId: string) {
@@ -81,7 +79,7 @@ function req(runId: string) {
     runId,
     projectId: "proj_aws",
     runnerImage: "ghcr.io/cat-cave/tanren-runner:v0",
-    identitySecretRef: "runner/identity"
+    identitySecretRef: "runner/identity",
   };
 }
 
@@ -137,7 +135,11 @@ describe("AwsEc2Allocator", () => {
   it("surfaces a typed error and terminates if the instance never runs", async () => {
     const client = new FakeAwsEc2Client({ neverRunning: true });
     const runners = new FakeRunnerStore();
-    const allocator = new AwsEc2Allocator({ ...baseOpts(client, runners), readyTimeoutMs: 5, pollIntervalMs: 1 });
+    const allocator = new AwsEc2Allocator({
+      ...baseOpts(client, runners),
+      readyTimeoutMs: 5,
+      pollIntervalMs: 1,
+    });
     await expect(allocator.allocate(req("run_3"))).rejects.toThrow(/did not become running/);
     expect(client.terminated).toContain("i-1");
   });
@@ -153,21 +155,29 @@ describe("AwsEc2Allocator", () => {
   it("surfaces a typed error and terminates if it has no public IP", async () => {
     const client = new FakeAwsEc2Client({ noIp: true });
     const runners = new FakeRunnerStore();
-    const allocator = new AwsEc2Allocator({ ...baseOpts(client, runners), readyTimeoutMs: 5, pollIntervalMs: 1 });
+    const allocator = new AwsEc2Allocator({
+      ...baseOpts(client, runners),
+      readyTimeoutMs: 5,
+      pollIntervalMs: 1,
+    });
     await expect(allocator.allocate(req("run_4"))).rejects.toBeInstanceOf(AwsEc2AllocatorError);
     expect(client.terminated).toContain("i-1");
   });
 
   it("requires credentials and a pinned fingerprint", () => {
     const runners = new FakeRunnerStore();
+    expect(() => new AwsEc2Allocator({ ...baseOpts(new FakeAwsEc2Client(), runners), accessKeyId: "" })).toThrow(
+      /non-empty AWS credentials/,
+    );
+    expect(() => new AwsEc2Allocator({ ...baseOpts(new FakeAwsEc2Client(), runners), secretAccessKey: "" })).toThrow(
+      /non-empty AWS credentials/,
+    );
     expect(
-      () => new AwsEc2Allocator({ ...baseOpts(new FakeAwsEc2Client(), runners), accessKeyId: "" })
-    ).toThrow(/non-empty AWS credentials/);
-    expect(
-      () => new AwsEc2Allocator({ ...baseOpts(new FakeAwsEc2Client(), runners), secretAccessKey: "" })
-    ).toThrow(/non-empty AWS credentials/);
-    expect(
-      () => new AwsEc2Allocator({ ...baseOpts(new FakeAwsEc2Client(), runners), hostKeyFingerprint: "" })
+      () =>
+        new AwsEc2Allocator({
+          ...baseOpts(new FakeAwsEc2Client(), runners),
+          hostKeyFingerprint: "",
+        }),
     ).toThrow(/pinned hostKeyFingerprint/);
   });
 
@@ -198,13 +208,18 @@ describe("fetchAwsEc2Client", () => {
     const fetchImpl = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
       const url = typeof input === "string" ? input : input.toString();
       const headers = init?.headers as Record<string, string> | undefined;
-      captured = { url, method: init?.method, auth: headers?.authorization, date: headers?.["x-amz-date"] };
+      captured = {
+        url,
+        method: init?.method,
+        auth: headers?.authorization,
+        date: headers?.["x-amz-date"],
+      };
       return new Response(runningXml, { status: 200, headers: { "Content-Type": "text/xml" } });
     }) as typeof fetch;
 
     const client = fetchAwsEc2Client(
       { accessKeyId: "AKIAEXAMPLE", secretAccessKey: "secret", region: "us-east-1" },
-      fetchImpl
+      fetchImpl,
     );
     const instance = await client.describeInstance("i-abc123");
     expect(captured.url).toMatch(/^https:\/\/ec2\.us-east-1\.amazonaws\.com\/\?/);
@@ -214,7 +229,11 @@ describe("fetchAwsEc2Client", () => {
     expect(captured.auth).toMatch(/SignedHeaders=host;x-amz-date/);
     expect(captured.auth).toMatch(/Signature=[0-9a-f]{64}/);
     expect(captured.date).toMatch(/^\d{8}T\d{6}Z$/);
-    expect(instance).toEqual({ instanceId: "i-abc123", state: "running", publicIp: "198.51.100.9" });
+    expect(instance).toEqual({
+      instanceId: "i-abc123",
+      state: "running",
+      publicIp: "198.51.100.9",
+    });
   });
 
   it("sends RunInstances with the launch params and parses the new instance id", async () => {
@@ -224,19 +243,16 @@ describe("fetchAwsEc2Client", () => {
       return new Response(
         `<RunInstancesResponse><instancesSet><item><instanceId>i-new</instanceId>` +
           `<instanceState><name>pending</name></instanceState></item></instancesSet></RunInstancesResponse>`,
-        { status: 200, headers: { "Content-Type": "text/xml" } }
+        { status: 200, headers: { "Content-Type": "text/xml" } },
       );
     }) as typeof fetch;
-    const client = fetchAwsEc2Client(
-      { accessKeyId: "k", secretAccessKey: "s", region: "eu-west-1" },
-      fetchImpl
-    );
+    const client = fetchAwsEc2Client({ accessKeyId: "k", secretAccessKey: "s", region: "eu-west-1" }, fetchImpl);
     const instance = await client.runInstances({
       imageId: "ami-1",
       instanceType: "t3.micro",
       keyName: "kp",
       securityGroupIds: ["sg-9"],
-      tags: { Name: "tanren-x" }
+      tags: { Name: "tanren-x" },
     });
     expect(url).toMatch(/Action=RunInstances/);
     expect(url).toMatch(/ImageId=ami-1/);
@@ -252,7 +268,7 @@ describe("fetchAwsEc2Client", () => {
     }) as typeof fetch;
     const client = fetchAwsEc2Client(
       { accessKeyId: "k", secretAccessKey: "s", region: "us-east-1", sessionToken: "tok-123" },
-      fetchImpl
+      fetchImpl,
     );
     await client.describeInstance("i-abc123");
     expect(tokenHeader).toBe("tok-123");
@@ -260,10 +276,9 @@ describe("fetchAwsEc2Client", () => {
 
   it("treats InvalidInstanceID.NotFound on terminate as success (idempotent)", async () => {
     const fetchImpl = (async (): Promise<Response> =>
-      new Response(
-        `<Response><Errors><Error><Code>InvalidInstanceID.NotFound</Code></Error></Errors></Response>`,
-        { status: 400 }
-      )) as typeof fetch;
+      new Response(`<Response><Errors><Error><Code>InvalidInstanceID.NotFound</Code></Error></Errors></Response>`, {
+        status: 400,
+      })) as typeof fetch;
     const client = fetchAwsEc2Client({ accessKeyId: "k", secretAccessKey: "s", region: "us-east-1" }, fetchImpl);
     await expect(client.terminateInstance("i-gone")).resolves.toBeUndefined();
   });
@@ -278,7 +293,7 @@ describe("fetchAwsEc2Client", () => {
     const fetchImpl = (async (): Promise<Response> =>
       new Response(`<DescribeInstancesResponse></DescribeInstancesResponse>`, {
         status: 200,
-        headers: { "Content-Type": "text/xml" }
+        headers: { "Content-Type": "text/xml" },
       })) as typeof fetch;
     const client = fetchAwsEc2Client({ accessKeyId: "k", secretAccessKey: "s", region: "us-east-1" }, fetchImpl);
     await expect(client.describeInstance("i-1")).rejects.toBeInstanceOf(AwsEc2AllocatorError);

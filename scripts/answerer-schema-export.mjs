@@ -19,14 +19,8 @@ import { fileURLToPath } from "node:url";
 import { argv, exit } from "node:process";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const generatedDir = resolve(
-  repoRoot,
-  "services/orchestrator/src/engine/answerers/schemas/generated"
-);
-const catalogEntry = resolve(
-  repoRoot,
-  "services/orchestrator/src/engine/answerers/schemas/index.ts"
-);
+const generatedDir = resolve(repoRoot, "services/orchestrator/src/engine/answerers/schemas/generated");
+const catalogEntry = resolve(repoRoot, "services/orchestrator/src/engine/answerers/schemas/index.ts");
 
 const dumper = `
 import { answererSchemaCatalog, renderAnswererJsonSchema } from ${JSON.stringify(catalogEntry)};
@@ -44,7 +38,7 @@ process.stdout.write(JSON.stringify(out));
 function dumpSchemasViaTsx() {
   const result = spawnSync("corepack", ["pnpm", "exec", "tsx", "--eval", dumper], {
     cwd: repoRoot,
-    encoding: "utf8"
+    encoding: "utf8",
   });
   if (result.status !== 0) {
     process.stderr.write(result.stderr || "tsx eval failed\n");
@@ -116,7 +110,7 @@ function main() {
   if (check && drifted.length > 0) {
     process.stderr.write(
       `answerer JSON Schema drift detected for: ${drifted.join(", ")}.\n` +
-        "Regenerate with `corepack pnpm run codegen:answerer-schemas`.\n"
+        "Regenerate with `corepack pnpm run codegen:answerer-schemas`.\n",
     );
     exit(1);
   }

@@ -34,7 +34,7 @@ export const DiscoveryProvenance = z
     placementKind: PlacementKind,
     placementLabel: z.string(),
     // When the spec was forged from this insight (ISO-8601).
-    discoveredAt: z.string()
+    discoveredAt: z.string(),
   })
   .strict();
 export type DiscoveryProvenance = z.infer<typeof DiscoveryProvenance>;
@@ -43,7 +43,7 @@ export type DiscoveryProvenance = z.infer<typeof DiscoveryProvenance>;
 // preserving any pre-existing metadata fields.
 export function withDiscoveryProvenance(
   existing: Record<string, unknown> | null | undefined,
-  provenance: DiscoveryProvenance
+  provenance: DiscoveryProvenance,
 ): Record<string, unknown> {
   const base = existing !== null && typeof existing === "object" ? existing : {};
   return { ...base, [DISCOVERY_METADATA_KEY]: provenance };
@@ -65,34 +65,25 @@ export function parseDiscoveryProvenance(metadata: unknown): DiscoveryProvenance
 export async function writeProvenance(
   client: QueryClient,
   specId: string,
-  provenance: DiscoveryProvenance
+  provenance: DiscoveryProvenance,
 ): Promise<boolean> {
-  const current = await client.query<{ metadata: unknown }>(
-    "SELECT metadata FROM specs WHERE spec_id = $1",
-    [specId]
-  );
+  const current = await client.query<{ metadata: unknown }>("SELECT metadata FROM specs WHERE spec_id = $1", [specId]);
   if ((current.rowCount ?? 0) === 0) {
     return false;
   }
   const existing = current.rows[0]?.metadata;
   const next = withDiscoveryProvenance(existing as Record<string, unknown> | null, provenance);
-  const updated = await client.query(
-    "UPDATE specs SET metadata = $2::jsonb WHERE spec_id = $1 RETURNING spec_id",
-    [specId, JSON.stringify(next)]
-  );
+  const updated = await client.query("UPDATE specs SET metadata = $2::jsonb WHERE spec_id = $1 RETURNING spec_id", [
+    specId,
+    JSON.stringify(next),
+  ]);
   return (updated.rowCount ?? 0) > 0;
 }
 
 // Read the discovery provenance for a spec. Returns undefined when the spec has
 // none (or does not exist).
-export async function readProvenance(
-  client: QueryClient,
-  specId: string
-): Promise<DiscoveryProvenance | undefined> {
-  const result = await client.query<{ metadata: unknown }>(
-    "SELECT metadata FROM specs WHERE spec_id = $1",
-    [specId]
-  );
+export async function readProvenance(client: QueryClient, specId: string): Promise<DiscoveryProvenance | undefined> {
+  const result = await client.query<{ metadata: unknown }>("SELECT metadata FROM specs WHERE spec_id = $1", [specId]);
   if ((result.rowCount ?? 0) === 0) {
     return undefined;
   }

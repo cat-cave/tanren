@@ -10,7 +10,7 @@ import {
   readCookie,
   setSessionCookie,
   SESSION_COOKIE,
-  type ActorContextEnv
+  type ActorContextEnv,
 } from "../../middleware/auth.js";
 
 const STATE_COOKIE = "tanren_oauth_state";
@@ -27,23 +27,23 @@ export interface AuthRoutesOptions {
 
 const loginQuerySchema = z.object({
   provider: z.enum(["github_oauth", "oidc", "local_dev"]).default("github_oauth"),
-  next: z.string().optional()
+  next: z.string().optional(),
 });
 
 const callbackQuerySchema = z.object({
   code: z.string().min(1),
   state: z.string().min(1),
-  provider: z.enum(["github_oauth", "oidc", "local_dev"]).default("github_oauth")
+  provider: z.enum(["github_oauth", "oidc", "local_dev"]).default("github_oauth"),
 });
 
 const cliStartQuerySchema = z.object({
   provider: z.enum(["github_oauth", "oidc", "local_dev"]).default("github_oauth"),
-  name: z.string().min(1).optional()
+  name: z.string().min(1).optional(),
 });
 
 const cliCompleteBodySchema = z.object({
   name: z.string().min(1).default("cli"),
-  scopes: z.array(z.enum(["read", "write", "admin"])).default(["read", "write"])
+  scopes: z.array(z.enum(["read", "write", "admin"])).default(["read", "write"]),
 });
 
 export function createAuthRoutes(options: AuthRoutesOptions) {
@@ -51,14 +51,14 @@ export function createAuthRoutes(options: AuthRoutesOptions) {
 
   app.get("/providers", (c) => {
     return c.json({
-      providers: [...options.providers.keys()].map((id) => ({ id }))
+      providers: [...options.providers.keys()].map((id) => ({ id })),
     });
   });
 
   app.get("/login", (c) => {
     const parsed = loginQuerySchema.safeParse({
       provider: c.req.query("provider"),
-      next: c.req.query("next")
+      next: c.req.query("next"),
     });
     if (!parsed.success) {
       return c.json({ error: "invalid_login", issues: parsed.error.issues }, 400);
@@ -78,7 +78,7 @@ export function createAuthRoutes(options: AuthRoutesOptions) {
     const parsed = callbackQuerySchema.safeParse({
       code: c.req.query("code"),
       state: c.req.query("state"),
-      provider: c.req.query("provider")
+      provider: c.req.query("provider"),
     });
     if (!parsed.success) {
       return c.json({ error: "invalid_callback", issues: parsed.error.issues }, 400);
@@ -97,10 +97,10 @@ export function createAuthRoutes(options: AuthRoutesOptions) {
       const { user, orgs, primaryOrgId } = await options.store.upsertIdentity(provider.id, claims);
       const session = await options.store.createSession(user.id, {
         ip: c.req.header("x-forwarded-for") ?? null,
-        userAgent: c.req.header("user-agent") ?? null
+        userAgent: c.req.header("user-agent") ?? null,
       });
       c.header("Set-Cookie", setSessionCookie(session.id, { secure: options.cookieSecure }), {
-        append: true
+        append: true,
       });
       c.header("Set-Cookie", clearStateCookie(STATE_COOKIE), { append: true });
       return c.json({
@@ -108,7 +108,7 @@ export function createAuthRoutes(options: AuthRoutesOptions) {
         user: { id: user.id, login: user.login, email: user.email, displayName: user.displayName },
         orgs: orgs.map((org) => ({ id: org.id, login: org.login, displayName: org.displayName })),
         primaryOrgId,
-        csrfToken: session.csrfToken
+        csrfToken: session.csrfToken,
       });
     } catch (error) {
       if (error instanceof IdentityProviderError) {
@@ -131,7 +131,7 @@ export function createAuthRoutes(options: AuthRoutesOptions) {
     return c.json({
       userId: session.userId,
       csrfToken: session.csrfToken,
-      expiresAt: session.expiresAt.toISOString()
+      expiresAt: session.expiresAt.toISOString(),
     });
   });
 
@@ -147,7 +147,7 @@ export function createAuthRoutes(options: AuthRoutesOptions) {
   app.get("/cli/start", (c) => {
     const parsed = cliStartQuerySchema.safeParse({
       provider: c.req.query("provider"),
-      name: c.req.query("name")
+      name: c.req.query("name"),
     });
     if (!parsed.success) {
       return c.json({ error: "invalid_cli_start", issues: parsed.error.issues }, 400);
@@ -162,7 +162,7 @@ export function createAuthRoutes(options: AuthRoutesOptions) {
     return c.json({
       authorizeUrl: provider.buildAuthorizeUrl(state, redirectUri),
       completeUrl: `${options.publicBaseUrl}/auth/cli/complete`,
-      state
+      state,
     });
   });
 
@@ -182,7 +182,7 @@ export function createAuthRoutes(options: AuthRoutesOptions) {
     const token = await options.store.createApiToken({
       userId: session.userId,
       name: parsed.data.name,
-      scopes: parsed.data.scopes as TokenScope[]
+      scopes: parsed.data.scopes as TokenScope[],
     });
     c.header("Set-Cookie", clearStateCookie(CLI_STATE_COOKIE));
     return c.json({ id: token.id, token: token.rawToken, name: parsed.data.name, scopes: parsed.data.scopes }, 201);

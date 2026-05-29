@@ -59,7 +59,7 @@ export interface ExternalChangeAssessment {
  */
 export function assessExternalChange(
   contributors: PullRequestContributors,
-  identity: TanrenIdentity
+  identity: TanrenIdentity,
 ): ExternalChangeAssessment {
   const external: string[] = [];
   const seen = new Set<string>();
@@ -115,26 +115,27 @@ export interface PostureDecision {
  *   audit_only + no external      → proceed
  *   audit_only + external change  → observe (report, do not auto-merge)
  */
-export function decidePosture(
-  posture: GovernancePosture,
-  assessment: ExternalChangeAssessment
-): PostureDecision {
+export function decidePosture(posture: GovernancePosture, assessment: ExternalChangeAssessment): PostureDecision {
   const externalLogins = assessment.externalLogins;
   const base = { posture, external: assessment.hasExternalChange, externalLogins };
   if (posture === "open" || !assessment.hasExternalChange) {
-    return { ...base, kind: "proceed", reason: proceedReason(posture, assessment.hasExternalChange) };
+    return {
+      ...base,
+      kind: "proceed",
+      reason: proceedReason(posture, assessment.hasExternalChange),
+    };
   }
   if (posture === "audit_only") {
     return {
       ...base,
       kind: "observe",
-      reason: `audit_only posture: external change from ${formatLogins(externalLogins)} observed; not auto-merging`
+      reason: `audit_only posture: external change from ${formatLogins(externalLogins)} observed; not auto-merging`,
     };
   }
   return {
     ...base,
     kind: "block",
-    reason: `strict posture: external change from ${formatLogins(externalLogins)} blocks auto-merge; operator approval required`
+    reason: `strict posture: external change from ${formatLogins(externalLogins)} blocks auto-merge; operator approval required`,
   };
 }
 

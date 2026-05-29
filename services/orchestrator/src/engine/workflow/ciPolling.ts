@@ -12,7 +12,7 @@ import {
   type GitHubCheckRun,
   type GitHubCommitStatus,
   type GitHubHttpClient,
-  type GitHubPullRequestChecks
+  type GitHubPullRequestChecks,
 } from "../providers/github.js";
 
 type RunStateClient = Pick<pg.Pool | pg.PoolClient, "query">;
@@ -26,8 +26,18 @@ export interface CiObservation {
   headSha: string;
   checkRuns: GitHubCheckRun[];
   statuses: GitHubCommitStatus[];
-  failingChecks: Array<{ kind: "check_run" | "commit_status"; name: string; state: string; url?: string }>;
-  pendingChecks: Array<{ kind: "check_run" | "commit_status"; name: string; state: string; url?: string }>;
+  failingChecks: Array<{
+    kind: "check_run" | "commit_status";
+    name: string;
+    state: string;
+    url?: string;
+  }>;
+  pendingChecks: Array<{
+    kind: "check_run" | "commit_status";
+    name: string;
+    state: string;
+    url?: string;
+  }>;
 }
 
 export interface PollCiForRunInput {
@@ -86,18 +96,19 @@ export async function pollCiForRun(input: PollCiForRunInput): Promise<PollCiForR
       specId: context.specId,
       projectId: context.projectId,
       eventType: "task.started",
-      payload: { taskKind: "ci" }
+      payload: { taskKind: "ci" },
     });
   }
-  const staticRef = context.installation === undefined
-    ? githubCredentialRefFromInput(input.githubCredentialRef, context.projectConfig)
-    : credentialRefOrUndefined(input.githubCredentialRef, context.projectConfig);
+  const staticRef =
+    context.installation === undefined
+      ? githubCredentialRefFromInput(input.githubCredentialRef, context.projectConfig)
+      : credentialRefOrUndefined(input.githubCredentialRef, context.projectConfig);
   const ledgerRef = context.installation?.credentialRef ?? staticRef ?? "github_app";
   const resolved = await resolveGithubToken({
     secrets: input.secrets,
     installation: context.installation,
     staticRef,
-    minter: input.githubAppMinter
+    minter: input.githubAppMinter,
   });
   const credentialRef = ledgerRef;
   const pr = parseGitHubPullRequestUrl(context.prUrl);
@@ -105,7 +116,7 @@ export async function pollCiForRun(input: PollCiForRunInput): Promise<PollCiForR
     repo: pr.repo,
     token: resolved.token,
     refreshToken: resolved.refresh,
-    pullNumber: pr.pullNumber
+    pullNumber: pr.pullNumber,
   });
   const observation = evaluateCiObservation(checks);
   await persistCiObservation(input.pool, task.taskId, observation);
@@ -117,7 +128,7 @@ export async function pollCiForRun(input: PollCiForRunInput): Promise<PollCiForR
     specId: context.specId,
     projectId: context.projectId,
     eventType: eventTypeForObservation(observation),
-    payload
+    payload,
   });
   if (observation.status === "passed") {
     await eventStore.append({
@@ -126,7 +137,7 @@ export async function pollCiForRun(input: PollCiForRunInput): Promise<PollCiForR
       specId: context.specId,
       projectId: context.projectId,
       eventType: "task.completed",
-      payload: { taskKind: "ci", status: observation.status, reason: observation.reason }
+      payload: { taskKind: "ci", status: observation.status, reason: observation.reason },
     });
   } else if (observation.status === "failed") {
     await eventStore.append({
@@ -135,7 +146,12 @@ export async function pollCiForRun(input: PollCiForRunInput): Promise<PollCiForR
       specId: context.specId,
       projectId: context.projectId,
       eventType: "task.failed",
-      payload: { taskKind: "ci", failureKind: "ci_failed", status: observation.status, reason: observation.reason }
+      payload: {
+        taskKind: "ci",
+        failureKind: "ci_failed",
+        status: observation.status,
+        reason: observation.reason,
+      },
     });
   }
 
@@ -150,8 +166,8 @@ export async function pollCiForRun(input: PollCiForRunInput): Promise<PollCiForR
       checkRuns: observation.checkRuns.length,
       statuses: observation.statuses.length,
       failing: observation.failingChecks.length,
-      pending: observation.pendingChecks.length
-    }
+      pending: observation.pendingChecks.length,
+    },
   };
 }
 
@@ -161,28 +177,28 @@ export function evaluateCiObservation(checks: GitHubPullRequestChecks): CiObserv
       kind: "check_run" as const,
       name: check.name,
       state: check.conclusion ?? check.status,
-      url: check.url
+      url: check.url,
     })),
     ...checks.statuses.filter(isFailedStatus).map((status) => ({
       kind: "commit_status" as const,
       name: status.context,
       state: status.state,
-      url: status.url
-    }))
+      url: status.url,
+    })),
   ];
   const allPending = [
     ...checks.checkRuns.filter(isPendingCheckRun).map((check) => ({
       kind: "check_run" as const,
       name: check.name,
       state: check.status,
-      url: check.url
+      url: check.url,
     })),
     ...checks.statuses.filter(isPendingStatus).map((status) => ({
       kind: "commit_status" as const,
       name: status.context,
       state: status.state,
-      url: status.url
-    }))
+      url: status.url,
+    })),
   ];
 
   // P3-0028 required-check awareness. When branch protection declares required
@@ -225,7 +241,7 @@ export function evaluateCiObservation(checks: GitHubPullRequestChecks): CiObserv
   // exactly what the run is waiting on.
   const pendingWithMissing = [
     ...pendingChecks,
-    ...missingRequired.map((name) => ({ kind: "commit_status" as const, name, state: "expected" }))
+    ...missingRequired.map((name) => ({ kind: "commit_status" as const, name, state: "expected" })),
   ];
 
   return {
@@ -235,14 +251,14 @@ export function evaluateCiObservation(checks: GitHubPullRequestChecks): CiObserv
     checkRuns: checks.checkRuns,
     statuses: checks.statuses,
     failingChecks,
-    pendingChecks: pendingWithMissing
+    pendingChecks: pendingWithMissing,
   };
 }
 
 function missingRequiredContexts(required: string[], checks: GitHubPullRequestChecks): string[] {
   const present = new Set<string>([
     ...checks.checkRuns.map((check) => check.name),
-    ...checks.statuses.map((status) => status.context)
+    ...checks.statuses.map((status) => status.context),
   ]);
   return required.filter((name) => !present.has(name));
 }
@@ -259,7 +275,7 @@ async function loadCiRunContext(pool: RunStateClient, runId: string): Promise<Ci
      JOIN projects p ON p.project_id = r.project_id
      LEFT JOIN organizations o ON o.id = p.org_id
      WHERE r.run_id = $1`,
-    [runId]
+    [runId],
   );
   const row = result.rows[0] as CiRunRow | undefined;
   if (row === undefined) {
@@ -271,26 +287,29 @@ async function loadCiRunContext(pool: RunStateClient, runId: string): Promise<Ci
     projectId: row.project_id,
     prUrl: row.pr_url,
     projectConfig: asRecord(row.config),
-    installation: installationFromOrgConfig(row.org_config)
+    installation: installationFromOrgConfig(row.org_config),
   };
 }
 
-async function ensureCiTask(pool: RunStateClient, context: CiRunContext): Promise<{ taskId: string; attempt: number; created: boolean }> {
+async function ensureCiTask(
+  pool: RunStateClient,
+  context: CiRunContext,
+): Promise<{ taskId: string; attempt: number; created: boolean }> {
   const existing = await pool.query(
     `SELECT task_id, attempt
      FROM tasks
      WHERE run_id = $1 AND kind = 'ci'
      ORDER BY started_at DESC NULLS LAST, task_id ASC
      LIMIT 1`,
-    [context.runId]
+    [context.runId],
   );
   const existingTask = existing.rows[0] as { task_id: string; attempt: number } | undefined;
   if (existingTask !== undefined) {
     const attempt = Number(existingTask.attempt) + 1;
-    await pool.query("UPDATE tasks SET status = 'running', started_at = COALESCE(started_at, now()), attempt = $2 WHERE task_id = $1", [
-      existingTask.task_id,
-      attempt
-    ]);
+    await pool.query(
+      "UPDATE tasks SET status = 'running', started_at = COALESCE(started_at, now()), attempt = $2 WHERE task_id = $1",
+      [existingTask.task_id, attempt],
+    );
     return { taskId: existingTask.task_id, attempt, created: false };
   }
 
@@ -298,7 +317,7 @@ async function ensureCiTask(pool: RunStateClient, context: CiRunContext): Promis
   await pool.query(
     `INSERT INTO tasks (task_id, run_id, kind, title, status, started_at, agent_kind, cli, model, attempt)
      VALUES ($1, $2, 'ci', 'Poll pull request CI', 'running', now(), 'system', 'github', NULL, 1)`,
-    [taskId, context.runId]
+    [taskId, context.runId],
   );
   return { taskId, attempt: 1, created: true };
 }
@@ -311,13 +330,14 @@ async function persistCiObservation(pool: RunStateClient, taskId: string, observ
   if (observation.status === "failed") {
     await pool.query(
       "UPDATE tasks SET status = 'failed', outcome = 'failed', failure_kind = 'ci_failed', ended_at = now() WHERE task_id = $1",
-      [taskId]
+      [taskId],
     );
     return;
   }
-  await pool.query("UPDATE tasks SET status = 'running', outcome = 'pending', ended_at = NULL, failure_kind = NULL WHERE task_id = $1", [
-    taskId
-  ]);
+  await pool.query(
+    "UPDATE tasks SET status = 'running', outcome = 'pending', ended_at = NULL, failure_kind = NULL WHERE task_id = $1",
+    [taskId],
+  );
 }
 
 function githubCredentialRefFromInput(override: string | undefined, projectConfig: Record<string, unknown>): string {
@@ -328,7 +348,10 @@ function githubCredentialRefFromInput(override: string | undefined, projectConfi
   return validateGithubCredentialRef(configured);
 }
 
-function credentialRefOrUndefined(override: string | undefined, projectConfig: Record<string, unknown>): string | undefined {
+function credentialRefOrUndefined(
+  override: string | undefined,
+  projectConfig: Record<string, unknown>,
+): string | undefined {
   const configured = override ?? projectConfig["githubCredentialRef"];
   return typeof configured === "string" ? validateGithubCredentialRef(configured) : undefined;
 }
@@ -366,15 +389,15 @@ function ciEventPayload(prUrl: string, credentialRef: string, observation: CiObs
       name: check.name,
       status: check.status,
       conclusion: check.conclusion,
-      url: check.url
+      url: check.url,
     })),
     statuses: observation.statuses.map((status) => ({
       context: status.context,
       state: status.state,
-      url: status.url
+      url: status.url,
     })),
     failingChecks: observation.failingChecks,
-    pendingChecks: observation.pendingChecks
+    pendingChecks: observation.pendingChecks,
   };
 }
 

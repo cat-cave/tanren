@@ -13,12 +13,22 @@ import {
   runFailed,
   spineProgress,
   summarizeCosts,
-  taskState
+  taskState,
 } from "../src/components/runDetail/model.js";
 import type { RunCostRecord, RunDetail, RunEventRow, TaskTimelineEntry } from "../src/api/types.js";
 
 function ev(eventType: string, payload: unknown = {}): RunEventRow {
-  return { id: 1, ts: "2026-05-28T10:00:00.000Z", runId: "run_1", taskId: null, specId: null, projectId: null, eventType, payload, redactedPaths: [] };
+  return {
+    id: 1,
+    ts: "2026-05-28T10:00:00.000Z",
+    runId: "run_1",
+    taskId: null,
+    specId: null,
+    projectId: null,
+    eventType,
+    payload,
+    redactedPaths: [],
+  };
 }
 
 function task(over: Partial<TaskTimelineEntry>): TaskTimelineEntry {
@@ -36,7 +46,7 @@ function task(over: Partial<TaskTimelineEntry>): TaskTimelineEntry {
     model: "gpt-x",
     startedAt: "2026-05-28T10:00:00.000Z",
     endedAt: "2026-05-28T10:01:00.000Z",
-    ...over
+    ...over,
   };
 }
 
@@ -59,7 +69,7 @@ function cost(over: Partial<RunCostRecord>): RunCostRecord {
     billingMode: "per_token",
     costBasis: "provider_pricing",
     recordedAt: "2026-05-28T10:00:30.000Z",
-    ...over
+    ...over,
   };
 }
 
@@ -74,7 +84,12 @@ describe("reviewMergeStateFromEvents — P3-0008 review/merge phase", () => {
       ev("review.requested", { prUrl: "u", prNumber: 7 }),
       ev("review.approved", { prUrl: "u", prNumber: 7 }),
       ev("merge.queued", { prUrl: "u", prNumber: 7, integration: "direct_merge" }),
-      ev("merge.completed", { prUrl: "u", prNumber: 7, integration: "direct_merge", mergeSha: "abc123" })
+      ev("merge.completed", {
+        prUrl: "u",
+        prNumber: 7,
+        integration: "direct_merge",
+        mergeSha: "abc123",
+      }),
     ]);
     expect(state.phase).toBe("merged");
     expect(state.mergeSha).toBe("abc123");
@@ -84,7 +99,7 @@ describe("reviewMergeStateFromEvents — P3-0008 review/merge phase", () => {
   it("surfaces changes_requested with the reviewer message", () => {
     const state = reviewMergeStateFromEvents([
       ev("review.requested", { prUrl: "u", prNumber: 7 }),
-      ev("review.changes_requested", { prUrl: "u", prNumber: 7, message: "fix it" })
+      ev("review.changes_requested", { prUrl: "u", prNumber: 7, message: "fix it" }),
     ]);
     expect(state.phase).toBe("changes_requested");
     expect(state.message).toBe("fix it");
@@ -93,7 +108,13 @@ describe("reviewMergeStateFromEvents — P3-0008 review/merge phase", () => {
   it("surfaces a merge conflict as a recoverable phase", () => {
     const state = reviewMergeStateFromEvents([
       ev("merge.queued", { prUrl: "u", prNumber: 7, integration: "direct_merge" }),
-      ev("merge.conflict", { prUrl: "u", prNumber: 7, integration: "direct_merge", baseBranch: "main", message: "conflict" })
+      ev("merge.conflict", {
+        prUrl: "u",
+        prNumber: 7,
+        integration: "direct_merge",
+        baseBranch: "main",
+        message: "conflict",
+      }),
     ]);
     expect(state.phase).toBe("merge_conflict");
     expect(state.message).toBe("conflict");
@@ -103,9 +124,28 @@ describe("reviewMergeStateFromEvents — P3-0008 review/merge phase", () => {
 describe("summarizeCosts — cost bar across all sources", () => {
   it("aggregates real dollars, tokens, and per-source/per-model totals", () => {
     const totals = summarizeCosts([
-      cost({ id: 1, billingMode: "per_token", costUsd: "0.0200", totalTokens: 150, model: "gpt-x" }),
-      cost({ id: 2, billingMode: "subscription", costUsd: null, totalTokens: 300, model: "claude-y", provider: "anthropic" }),
-      cost({ id: 3, billingMode: "self_hosted", costUsd: "0.0000", totalTokens: 80, model: "local-z" })
+      cost({
+        id: 1,
+        billingMode: "per_token",
+        costUsd: "0.0200",
+        totalTokens: 150,
+        model: "gpt-x",
+      }),
+      cost({
+        id: 2,
+        billingMode: "subscription",
+        costUsd: null,
+        totalTokens: 300,
+        model: "claude-y",
+        provider: "anthropic",
+      }),
+      cost({
+        id: 3,
+        billingMode: "self_hosted",
+        costUsd: "0.0000",
+        totalTokens: 80,
+        model: "local-z",
+      }),
     ]);
     expect(totals.perTokenUsd).toBeCloseTo(0.02, 5);
     expect(totals.totalTokens).toBe(530);
@@ -129,8 +169,22 @@ describe("trajectory spine", () => {
     const moments = buildTrajectory([
       task({ taskId: "plan", kind: "plan", title: "plan", startedAt: "2026-05-28T10:00:00.000Z" }),
       task({ taskId: "w1", kind: "write", startedAt: "2026-05-28T10:01:00.000Z", status: "done" }),
-      task({ taskId: "w2", kind: "write", startedAt: "2026-05-28T10:02:00.000Z", status: "running", outcome: null, endedAt: null }),
-      task({ taskId: "audit", kind: "audit", status: "queued", outcome: null, startedAt: null, endedAt: null })
+      task({
+        taskId: "w2",
+        kind: "write",
+        startedAt: "2026-05-28T10:02:00.000Z",
+        status: "running",
+        outcome: null,
+        endedAt: null,
+      }),
+      task({
+        taskId: "audit",
+        kind: "audit",
+        status: "queued",
+        outcome: null,
+        startedAt: null,
+        endedAt: null,
+      }),
     ]);
     expect(moments.map((m) => m.taskId)).toEqual(["plan", "w1", "w2", "audit"]);
     expect(moments[1].phase).toBe("write subtask 1");
@@ -147,8 +201,14 @@ describe("trajectory spine", () => {
   it("derives a gradient where done < live", () => {
     const moments = buildTrajectory([
       task({ taskId: "a", status: "done", startedAt: "2026-05-28T10:00:00.000Z" }),
-      task({ taskId: "b", status: "running", outcome: null, endedAt: null, startedAt: "2026-05-28T10:01:00.000Z" }),
-      task({ taskId: "c", status: "queued", outcome: null, startedAt: null, endedAt: null })
+      task({
+        taskId: "b",
+        status: "running",
+        outcome: null,
+        endedAt: null,
+        startedAt: "2026-05-28T10:01:00.000Z",
+      }),
+      task({ taskId: "c", status: "queued", outcome: null, startedAt: null, endedAt: null }),
     ]);
     const { donePct, livePct } = spineProgress(moments);
     expect(donePct).toBeLessThan(livePct);
@@ -168,11 +228,51 @@ describe("reasoningForTask — structured fields from typed events (not stdout)"
     const detail = {
       tasks: [task({ taskId: "w2" })],
       recentEvents: [
-        { id: 1, ts: "", runId: "run_1", taskId: "w2", specId: null, projectId: null, eventType: "writer.intent", payload: { intent: "wire localStorage persistence" }, redactedPaths: [] },
-        { id: 2, ts: "", runId: "run_1", taskId: "w2", specId: null, projectId: null, eventType: "tool.call", payload: { tool: "edit_file", arg: "settings.tsx", output: "+12 -3" }, redactedPaths: [] },
-        { id: 3, ts: "", runId: "run_1", taskId: "w2", specId: null, projectId: null, eventType: "writer.decision", payload: { decisions: ["use useEffect", "defer profile sync"] }, redactedPaths: [] },
-        { id: 4, ts: "", runId: "run_1", taskId: "other", specId: null, projectId: null, eventType: "noise", payload: { intent: "ignore me" }, redactedPaths: [] }
-      ]
+        {
+          id: 1,
+          ts: "",
+          runId: "run_1",
+          taskId: "w2",
+          specId: null,
+          projectId: null,
+          eventType: "writer.intent",
+          payload: { intent: "wire localStorage persistence" },
+          redactedPaths: [],
+        },
+        {
+          id: 2,
+          ts: "",
+          runId: "run_1",
+          taskId: "w2",
+          specId: null,
+          projectId: null,
+          eventType: "tool.call",
+          payload: { tool: "edit_file", arg: "settings.tsx", output: "+12 -3" },
+          redactedPaths: [],
+        },
+        {
+          id: 3,
+          ts: "",
+          runId: "run_1",
+          taskId: "w2",
+          specId: null,
+          projectId: null,
+          eventType: "writer.decision",
+          payload: { decisions: ["use useEffect", "defer profile sync"] },
+          redactedPaths: [],
+        },
+        {
+          id: 4,
+          ts: "",
+          runId: "run_1",
+          taskId: "other",
+          specId: null,
+          projectId: null,
+          eventType: "noise",
+          payload: { intent: "ignore me" },
+          redactedPaths: [],
+        },
+      ],
     } as unknown as RunDetail;
     const reasoning = reasoningForTask(detail, "w2");
     expect(reasoning.intent).toBe("wire localStorage persistence");
@@ -190,18 +290,26 @@ describe("failure detection (rejection loop inspection)", () => {
       run: { status: "halted", outcome: "halted" },
       tasks: [
         task({ taskId: "ok", status: "done", outcome: "passed" }),
-        task({ taskId: "bad", status: "done", outcome: "rejected_by_auditor", failureKind: "auditor_disagreement" })
-      ]
+        task({
+          taskId: "bad",
+          status: "done",
+          outcome: "rejected_by_auditor",
+          failureKind: "auditor_disagreement",
+        }),
+      ],
     } as unknown as RunDetail;
     expect(runFailed(detail)).toBe(true);
     expect(failedTasks(detail).map((t) => t.taskId)).toEqual(["bad"]);
   });
 });
 
-function previewRun(over: { branch?: string; prUrl?: string | null } = {}): { branch: string; prUrl: string | null } {
+function previewRun(over: { branch?: string; prUrl?: string | null } = {}): {
+  branch: string;
+  prUrl: string | null;
+} {
   return {
     branch: over.branch ?? "tanren/spec_settings",
-    prUrl: over.prUrl === undefined ? "https://github.com/cat-cave/repo/pull/142" : over.prUrl
+    prUrl: over.prUrl === undefined ? "https://github.com/cat-cave/repo/pull/142" : over.prUrl,
   };
 }
 
@@ -214,14 +322,12 @@ describe("derivePreviewUrl — P3-0025 per-PR preview-deploy URL", () => {
   });
 
   it("fills the {pr} placeholder from the PR url", () => {
-    expect(derivePreviewUrl("https://pr-{pr}.preview.fly.dev", run())).toBe(
-      "https://pr-142.preview.fly.dev"
-    );
+    expect(derivePreviewUrl("https://pr-{pr}.preview.fly.dev", run())).toBe("https://pr-142.preview.fly.dev");
   });
 
   it("fills the {branch} placeholder (url-encoded)", () => {
     expect(derivePreviewUrl("https://preview.example.com/{branch}", run())).toBe(
-      "https://preview.example.com/tanren%2Fspec_settings"
+      "https://preview.example.com/tanren%2Fspec_settings",
     );
   });
 
@@ -231,7 +337,7 @@ describe("derivePreviewUrl — P3-0025 per-PR preview-deploy URL", () => {
 
   it("still derives a branch-only URL when there is no PR", () => {
     expect(derivePreviewUrl("https://preview.example.com/{branch}", run({ prUrl: null }))).toBe(
-      "https://preview.example.com/tanren%2Fspec_settings"
+      "https://preview.example.com/tanren%2Fspec_settings",
     );
   });
 

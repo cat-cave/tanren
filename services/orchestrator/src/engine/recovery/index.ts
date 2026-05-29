@@ -34,7 +34,7 @@ export const RECOVERABLE_OUTCOMES = new Set([
   "halted",
   "escape_hatch_hit",
   "retry_budget_exhausted",
-  "window_exhausted"
+  "window_exhausted",
 ]);
 
 export class RunNotRecoverableError extends Error {
@@ -68,10 +68,7 @@ type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
  * exist; the route turns that into a 404. The last-good commit is read from the
  * most recent `workspace.git_captured` event for the run.
  */
-export async function loadHaltedRunContext(
-  pool: QueryClient,
-  runId: string
-): Promise<HaltedRunContext | undefined> {
+export async function loadHaltedRunContext(pool: QueryClient, runId: string): Promise<HaltedRunContext | undefined> {
   const run = await pool.query<{
     spec_id: string;
     project_id: string;
@@ -86,7 +83,7 @@ export async function loadHaltedRunContext(
     projectId: row.project_id,
     status: row.status,
     outcome: row.outcome,
-    lastGoodCommit: await loadLastGoodCommit(pool, runId)
+    lastGoodCommit: await loadLastGoodCommit(pool, runId),
   };
 }
 
@@ -97,11 +94,9 @@ export async function loadLastGoodCommit(pool: QueryClient, runId: string): Prom
        WHERE run_id = $1 AND event_type = 'workspace.git_captured'
        ORDER BY ts DESC, id DESC
        LIMIT 1`,
-    [runId]
+    [runId],
   );
-  const payload = result.rows[0]?.payload as
-    | { commits?: Array<{ sha?: unknown }> }
-    | undefined;
+  const payload = result.rows[0]?.payload as { commits?: Array<{ sha?: unknown }> } | undefined;
   const sha = payload?.commits?.[0]?.sha;
   return typeof sha === "string" && sha.length > 0 ? sha : null;
 }
@@ -112,7 +107,7 @@ export async function loadCapturedCommits(pool: QueryClient, runId: string): Pro
     `SELECT payload FROM events
        WHERE run_id = $1 AND event_type = 'workspace.git_captured'
        ORDER BY ts DESC, id DESC`,
-    [runId]
+    [runId],
   );
   const shas: string[] = [];
   for (const r of result.rows) {
@@ -143,10 +138,7 @@ export interface ReviseSpecResult {
  * operator triggers a replan. This keeps the gesture observable without forking
  * the spec-edit write path.
  */
-export async function reviseSpec(
-  pool: pg.Pool,
-  ctx: HaltedRunContext
-): Promise<ReviseSpecResult> {
+export async function reviseSpec(pool: pg.Pool, ctx: HaltedRunContext): Promise<ReviseSpecResult> {
   assertRecoverable(ctx);
   const editHref = `/projects/${ctx.projectId}/specs/${ctx.specId}/edit?recoverRunId=${ctx.runId}`;
   await new PgEventStore(pool).append({
@@ -154,7 +146,7 @@ export async function reviseSpec(
     specId: ctx.specId,
     projectId: ctx.projectId,
     eventType: "recovery.revise_routed",
-    payload: { runId: ctx.runId, specId: ctx.specId, action: "revise_spec", editHref }
+    payload: { runId: ctx.runId, specId: ctx.specId, action: "revise_spec", editHref },
   });
   return { action: "revise_spec", runId: ctx.runId, specId: ctx.specId, editHref };
 }
@@ -178,16 +170,12 @@ export async function replanWithSteering(
   ctx: HaltedRunContext,
   orgId: string,
   steeringNote: string,
-  actor: ActorContext
+  actor: ActorContext,
 ): Promise<ReplanResult> {
   assertRecoverable(ctx);
   await appendSteeringToSpec(pool, ctx.specId, steeringNote);
   await reopenSpecForReplan(pool, ctx.specId);
-  const run = await createQueuedRunFromSpec(
-    pool,
-    { specId: ctx.specId, trigger: "dashboard" },
-    { ...actor, orgId }
-  );
+  const run = await createQueuedRunFromSpec(pool, { specId: ctx.specId, trigger: "dashboard" }, { ...actor, orgId });
   await new PgEventStore(pool).append({
     runId: ctx.runId,
     specId: ctx.specId,
@@ -199,15 +187,15 @@ export async function replanWithSteering(
       action: "replan_with_steering",
       steeringNote,
       replanRunId: run.runId,
-      plannerTaskId: run.plannerTaskId
-    }
+      plannerTaskId: run.plannerTaskId,
+    },
   });
   return {
     action: "replan_with_steering",
     runId: ctx.runId,
     specId: ctx.specId,
     replanRunId: run.runId,
-    plannerTaskId: run.plannerTaskId
+    plannerTaskId: run.plannerTaskId,
   };
 }
 
@@ -231,7 +219,7 @@ export async function rollbackToCommit(
   ctx: HaltedRunContext,
   orgId: string,
   args: { commitSha: string; confirmed: boolean },
-  actor: ActorContext
+  actor: ActorContext,
 ): Promise<RollbackResult> {
   assertRecoverable(ctx);
   if (args.confirmed !== true) {
@@ -245,11 +233,7 @@ export async function rollbackToCommit(
     throw new UnknownCommitError(args.commitSha);
   }
   await reopenSpecForReplan(pool, ctx.specId);
-  const run = await createQueuedRunFromSpec(
-    pool,
-    { specId: ctx.specId, trigger: "dashboard" },
-    { ...actor, orgId }
-  );
+  const run = await createQueuedRunFromSpec(pool, { specId: ctx.specId, trigger: "dashboard" }, { ...actor, orgId });
   await new PgEventStore(pool).append({
     runId: ctx.runId,
     specId: ctx.specId,
@@ -261,15 +245,15 @@ export async function rollbackToCommit(
       action: "rollback_to_commit",
       commitSha: args.commitSha,
       confirmed: true,
-      replanRunId: run.runId
-    }
+      replanRunId: run.runId,
+    },
   });
   return {
     action: "rollback_to_commit",
     runId: ctx.runId,
     specId: ctx.specId,
     commitSha: args.commitSha,
-    replanRunId: run.runId
+    replanRunId: run.runId,
   };
 }
 
@@ -290,7 +274,7 @@ export async function openInspectionThread(
   pool: pg.Pool,
   ctx: HaltedRunContext,
   orgId: string,
-  actor: ActorContext
+  actor: ActorContext,
 ): Promise<InspectionThreadResult> {
   assertRecoverable(ctx);
   const thread = await ForgeThreadStore.create(
@@ -300,9 +284,9 @@ export async function openInspectionThread(
       projectId: ctx.projectId,
       runId: ctx.runId,
       scope: "run",
-      title: `recovery · run ${ctx.runId}`
+      title: `recovery · run ${ctx.runId}`,
     },
-    actor
+    actor,
   );
   await new PgEventStore(pool).append({
     runId: ctx.runId,
@@ -313,10 +297,15 @@ export async function openInspectionThread(
       runId: ctx.runId,
       specId: ctx.specId,
       action: "open_inspection_thread",
-      threadId: thread.id
-    }
+      threadId: thread.id,
+    },
   });
-  return { action: "open_inspection_thread", runId: ctx.runId, specId: ctx.specId, threadId: thread.id };
+  return {
+    action: "open_inspection_thread",
+    runId: ctx.runId,
+    specId: ctx.specId,
+    threadId: thread.id,
+  };
 }
 
 /** Append the operator's steering note to the spec description (idempotent-ish). */
@@ -325,7 +314,7 @@ async function appendSteeringToSpec(pool: QueryClient, specId: string, steeringN
     `UPDATE specs
         SET description = description || E'\n\n[operator steering] ' || $2
       WHERE spec_id = $1`,
-    [specId, steeringNote]
+    [specId, steeringNote],
   );
 }
 
@@ -335,8 +324,7 @@ async function appendSteeringToSpec(pool: QueryClient, specId: string, steeringN
  * to `pending` lets the recovery replan re-claim it.
  */
 async function reopenSpecForReplan(pool: QueryClient, specId: string): Promise<void> {
-  await pool.query(
-    `UPDATE specs SET status = 'pending' WHERE spec_id = $1 AND status NOT IN ('done', 'merged')`,
-    [specId]
-  );
+  await pool.query(`UPDATE specs SET status = 'pending' WHERE spec_id = $1 AND status NOT IN ('done', 'merged')`, [
+    specId,
+  ]);
 }

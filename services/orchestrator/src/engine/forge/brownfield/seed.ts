@@ -44,7 +44,10 @@ export interface SeedDagResult {
 }
 
 function normalizeTitle(title: string): string {
-  return title.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  return title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
 }
 
 function gapSpecTitle(gap: ReconGap): string {
@@ -78,11 +81,16 @@ export async function seedDagFromReconAndIssues(pool: pg.Pool, input: SeedDagInp
         projectId: input.projectId,
         title: issue.title,
         description: issue.body !== "" ? issue.body : `Seeded from GitHub issue ${issue.externalId}.`,
-        acceptanceCriteria: [`given ${issue.externalId}, when addressed, then the issue is resolved`]
+        acceptanceCriteria: [`given ${issue.externalId}, when addressed, then the issue is resolved`],
       },
-      input.actor
+      input.actor,
     );
-    seeded.push({ specId: spec.specId, title: issue.title, source: "github_issue", origin: issue.externalId });
+    seeded.push({
+      specId: spec.specId,
+      title: issue.title,
+      source: "github_issue",
+      origin: issue.externalId,
+    });
     fromIssues += 1;
   }
 
@@ -100,9 +108,9 @@ export async function seedDagFromReconAndIssues(pool: pg.Pool, input: SeedDagInp
         projectId: input.projectId,
         title,
         description: `Recon gap (${gap.chapter}): ${gap.question}`,
-        acceptanceCriteria: [`given the recon gap "${gap.id}", when resolved, then the chapter is complete`]
+        acceptanceCriteria: [`given the recon gap "${gap.id}", when resolved, then the chapter is complete`],
       },
-      input.actor
+      input.actor,
     );
     seeded.push({ specId: spec.specId, title, source: "agent_gap", origin: gap.id });
     fromGaps += 1;

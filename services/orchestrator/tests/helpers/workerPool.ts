@@ -56,7 +56,7 @@ export class WorkerPool {
         default_branch: String(params[3]),
         runner_image: String(params[4]),
         config: JSON.parse(String(params[6])) as unknown,
-        org_id: params[7] === null ? null : String(params[7])
+        org_id: params[7] === null ? null : String(params[7]),
       });
       return { rows: [], rowCount: 1 };
     }
@@ -74,7 +74,7 @@ export class WorkerPool {
         description: String(params[3]),
         acceptance_criteria: JSON.parse(String(params[4])) as unknown,
         depends_on: params[5] as string[],
-        status: String(params[6])
+        status: String(params[6]),
       });
       return { rows: [], rowCount: 1 };
     }
@@ -96,7 +96,7 @@ export class WorkerPool {
         description: spec.description,
         acceptance_criteria: spec.acceptance_criteria,
         depends_on: spec.depends_on,
-        status: spec.status
+        status: spec.status,
       });
     }
     // worker loadRunExecutionContext: run⋈spec⋈project join
@@ -117,7 +117,7 @@ export class WorkerPool {
         org_id: project.org_id,
         title: spec.title,
         description: spec.description,
-        acceptance_criteria: spec.acceptance_criteria
+        acceptance_criteria: spec.acceptance_criteria,
       });
     }
     if (trimmed.startsWith("SELECT config FROM organizations")) {
@@ -128,7 +128,7 @@ export class WorkerPool {
         run_id: String(params[0]),
         spec_id: String(params[1]),
         project_id: String(params[2]),
-        branch: String(params[4])
+        branch: String(params[4]),
       });
       return { rows: [], rowCount: 1 };
     }
@@ -157,7 +157,10 @@ export class WorkerPool {
     }
     // cost_records reconcile path
     if (trimmed.startsWith("SELECT id, total_tokens FROM cost_records")) {
-      return { rows: this.costRows.map((r) => ({ id: r.id, total_tokens: r.total_tokens })), rowCount: this.costRows.length };
+      return {
+        rows: this.costRows.map((r) => ({ id: r.id, total_tokens: r.total_tokens })),
+        rowCount: this.costRows.length,
+      };
     }
     if (trimmed.startsWith("UPDATE cost_records SET cost_usd")) {
       return { rows: [], rowCount: 1 };
@@ -198,7 +201,7 @@ export class WorkerPool {
         config: storedConfig,
         // P3-0008 review/merge context columns (shares this SELECT prefix).
         default_branch: "main",
-        org_config: null
+        org_config: null,
       });
     }
     if (trimmed.startsWith("SELECT task_id, attempt")) {
@@ -225,8 +228,14 @@ export class WorkerPool {
           this.runStatus = { status: "halted", outcome: "halted" };
           const run = this.runs.get(String(params[0]));
           return {
-            rows: [{ run_id: String(params[0]), spec_id: run?.spec_id ?? "", project_id: run?.project_id ?? "" }],
-            rowCount: 1
+            rows: [
+              {
+                run_id: String(params[0]),
+                spec_id: run?.spec_id ?? "",
+                project_id: run?.project_id ?? "",
+              },
+            ],
+            rowCount: 1,
           };
         }
         return { rows: [], rowCount: 0 };

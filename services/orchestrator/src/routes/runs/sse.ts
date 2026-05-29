@@ -19,14 +19,9 @@ import {
   type RunCostRecord,
   type RunEventRow,
   type SseEventName,
-  type TaskTimelineEntry
+  type TaskTimelineEntry,
 } from "./contract.js";
-import {
-  fetchRunCostsForSnapshot,
-  fetchRunEventsForSnapshot,
-  fetchRunSummary,
-  fetchRunTasks
-} from "./list.js";
+import { fetchRunCostsForSnapshot, fetchRunEventsForSnapshot, fetchRunSummary, fetchRunTasks } from "./list.js";
 
 interface SseStreamArgs {
   pool: pg.Pool;
@@ -68,7 +63,7 @@ export class SseDriver {
 
   constructor(
     private readonly args: SseStreamArgs,
-    private readonly write: (frame: string) => Promise<void> | void
+    private readonly write: (frame: string) => Promise<void> | void,
   ) {
     this.lastEmitAt = this.nowMs();
   }
@@ -89,7 +84,7 @@ export class SseDriver {
       runId: this.args.runId,
       limit: RECENT_EVENT_CAP,
       actor: this.args.actor,
-      rawView: this.args.rawView
+      rawView: this.args.rawView,
     });
     const costs = await fetchRunCostsForSnapshot(this.args.pool, this.args.runId);
     await this.emit("snapshot", { run, tasks, recentEvents, costs });
@@ -172,7 +167,7 @@ export class SseDriver {
         WHERE run_id = $1 AND id > $2
         ORDER BY ts ASC, id ASC
         LIMIT 200`,
-      [this.args.runId, this.lastEventId]
+      [this.args.runId, this.lastEventId],
     );
     if (rows.length === 0) return [];
     // Re-use the redaction path through fetchRunEventsForSnapshot by giving
@@ -185,7 +180,12 @@ export class SseDriver {
       let payload: unknown = row["payload"];
       let redactedPaths: string[] = [];
       if (isEventName(eventType)) {
-        const r = redactEventPayload({ eventName: eventType, payload: row["payload"], actor: this.args.actor, rawView: this.args.rawView });
+        const r = redactEventPayload({
+          eventName: eventType,
+          payload: row["payload"],
+          actor: this.args.actor,
+          rawView: this.args.rawView,
+        });
         payload = r.payload;
         redactedPaths = r.redactedPaths;
       }
@@ -198,7 +198,7 @@ export class SseDriver {
         projectId: row["project_id"] === null || row["project_id"] === undefined ? null : String(row["project_id"]),
         eventType,
         payload,
-        redactedPaths
+        redactedPaths,
       });
     }
     return out;
@@ -214,7 +214,7 @@ export class SseDriver {
         WHERE run_id = $1 AND id > $2
         ORDER BY recorded_at ASC, id ASC
         LIMIT 200`,
-      [this.args.runId, this.lastCostId]
+      [this.args.runId, this.lastCostId],
     );
     return rows.map((row) => ({
       id: row["id"] as number | string,
@@ -233,7 +233,7 @@ export class SseDriver {
       costUsd: row["cost_usd"] === null || row["cost_usd"] === undefined ? null : String(row["cost_usd"]),
       billingMode: row["billing_mode"] as RunCostRecord["billingMode"],
       costBasis: row["cost_basis"] as RunCostRecord["costBasis"],
-      recordedAt: row["recorded_at"] as Date
+      recordedAt: row["recorded_at"] as Date,
     }));
   }
 
@@ -255,7 +255,7 @@ function fingerprintTask(task: TaskTimelineEntry): string {
     task.outcome ?? "",
     task.failureKind ?? "",
     task.startedAt?.toISOString() ?? "",
-    task.endedAt?.toISOString() ?? ""
+    task.endedAt?.toISOString() ?? "",
   ].join("|");
 }
 

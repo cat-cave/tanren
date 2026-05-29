@@ -33,13 +33,12 @@ export interface TanrenReadSpecResult {
 export async function tanrenReadSpec(
   deps: ToolDeps,
   args: { specId: string },
-  actor: ActorContext
+  actor: ActorContext,
 ): Promise<TanrenReadSpecResult> {
   await assertSpecAccess(deps.pool, args.specId, actor);
-  const specResult = await deps.pool.query<Record<string, unknown>>(
-    "SELECT * FROM specs WHERE spec_id = $1",
-    [args.specId]
-  );
+  const specResult = await deps.pool.query<Record<string, unknown>>("SELECT * FROM specs WHERE spec_id = $1", [
+    args.specId,
+  ]);
   const spec = specResult.rows[0];
   if (spec === undefined) {
     throw new ToolAccessDeniedError(`spec not found: ${args.specId}`);
@@ -49,7 +48,7 @@ export async function tanrenReadSpec(
   return {
     spec,
     behaviors: behaviors as unknown as ReadonlyArray<Record<string, unknown>>,
-    milestone: milestone as unknown as Record<string, unknown> | undefined
+    milestone: milestone as unknown as Record<string, unknown> | undefined,
   };
 }
 
@@ -65,13 +64,12 @@ export interface TanrenReadRunResult {
 export async function tanrenReadRun(
   deps: ToolDeps,
   args: { runId: string },
-  actor: ActorContext
+  actor: ActorContext,
 ): Promise<TanrenReadRunResult> {
   await assertRunAccess(deps.pool, args.runId, actor);
-  const runResult = await deps.pool.query<Record<string, unknown>>(
-    "SELECT * FROM runs WHERE run_id = $1",
-    [args.runId]
-  );
+  const runResult = await deps.pool.query<Record<string, unknown>>("SELECT * FROM runs WHERE run_id = $1", [
+    args.runId,
+  ]);
   const run = runResult.rows[0];
   if (run === undefined) {
     throw new ToolAccessDeniedError(`run not found: ${args.runId}`);
@@ -79,7 +77,7 @@ export async function tanrenReadRun(
   const tasks = await deps.pool.query<Record<string, unknown>>(
     `SELECT * FROM tasks WHERE run_id = $1
      ORDER BY started_at ASC NULLS FIRST, task_id ASC`,
-    [args.runId]
+    [args.runId],
   );
   return { run, tasks: tasks.rows };
 }
@@ -110,7 +108,7 @@ export interface RedactedEventRow {
 export async function tanrenReadEvents(
   deps: ToolDeps,
   args: TanrenReadEventsArgs,
-  actor: ActorContext
+  actor: ActorContext,
 ): Promise<{ events: RedactedEventRow[] }> {
   if (args.runId === undefined && args.specId === undefined) {
     throw new ToolAccessDeniedError("read_events requires runId or specId");
@@ -144,7 +142,7 @@ export async function tanrenReadEvents(
      ${where}
      ORDER BY ts ASC, id ASC
      LIMIT $${limitIdx}`,
-    params
+    params,
   );
   const events: RedactedEventRow[] = result.rows.map((row: Record<string, unknown>) => {
     const eventType = String(row["event_type"]);
@@ -158,10 +156,15 @@ export async function tanrenReadEvents(
         projectId: row["project_id"] === null || row["project_id"] === undefined ? null : String(row["project_id"]),
         eventType,
         payload: row["payload"],
-        redactedPaths: []
+        redactedPaths: [],
       };
     }
-    const output = redactEventPayload({ eventName: eventType, payload: row["payload"], actor, rawView: false });
+    const output = redactEventPayload({
+      eventName: eventType,
+      payload: row["payload"],
+      actor,
+      rawView: false,
+    });
     return {
       id: row["id"] as number | string,
       ts: row["ts"] as Date,
@@ -171,7 +174,7 @@ export async function tanrenReadEvents(
       projectId: row["project_id"] === null || row["project_id"] === undefined ? null : String(row["project_id"]),
       eventType,
       payload: output.payload,
-      redactedPaths: output.redactedPaths
+      redactedPaths: output.redactedPaths,
     };
   });
   return { events };
@@ -190,7 +193,7 @@ export interface TanrenReadCostsArgs {
 export async function tanrenReadCosts(
   deps: ToolDeps,
   args: TanrenReadCostsArgs,
-  actor: ActorContext
+  actor: ActorContext,
 ): Promise<{ costs: ReadonlyArray<Record<string, unknown>>; totalUsd: string }> {
   if (args.runId === undefined && args.projectId === undefined) {
     throw new ToolAccessDeniedError("read_costs requires runId or projectId");
@@ -224,7 +227,7 @@ export async function tanrenReadCosts(
      FROM cost_records
      ${where}
      ORDER BY recorded_at ASC, id ASC`,
-    params
+    params,
   );
   // cost_usd is best-effort and may be NULL; null rows contribute nothing to
   // the dollar total but are still returned with their token breakdown.
@@ -234,7 +237,7 @@ export async function tanrenReadCosts(
   }, 0);
   return {
     costs: result.rows as ReadonlyArray<Record<string, unknown>>,
-    totalUsd: totalUsd.toFixed(6)
+    totalUsd: totalUsd.toFixed(6),
   };
 }
 
@@ -245,7 +248,7 @@ export async function tanrenReadCosts(
 export async function tanrenReadBehaviors(
   deps: ToolDeps,
   args: { projectId: string },
-  actor: ActorContext
+  actor: ActorContext,
 ): Promise<{ behaviors: ReadonlyArray<Record<string, unknown>> }> {
   await assertProjectAccess(deps.pool, args.projectId, actor);
   // Behaviors are persona-scoped; we list every persona reachable from the
@@ -255,7 +258,7 @@ export async function tanrenReadBehaviors(
     `SELECT id FROM personas WHERE org_id = (
        SELECT org_id FROM projects WHERE project_id = $1
      ) AND (scope = 'org' OR project_id = $1)`,
-    [args.projectId]
+    [args.projectId],
   );
   const personaIds = personaResult.rows.map((row) => row.id);
   if (personaIds.length === 0) return { behaviors: [] };
@@ -264,7 +267,7 @@ export async function tanrenReadBehaviors(
      FROM behaviors
      WHERE persona_id = ANY($1::text[])
      ORDER BY title`,
-    [personaIds]
+    [personaIds],
   );
   return { behaviors: result.rows as ReadonlyArray<Record<string, unknown>> };
 }
@@ -272,7 +275,7 @@ export async function tanrenReadBehaviors(
 export async function tanrenReadMilestones(
   deps: ToolDeps,
   args: { projectId: string },
-  actor: ActorContext
+  actor: ActorContext,
 ): Promise<{ milestones: ReadonlyArray<Record<string, unknown>> }> {
   const rows = await MilestoneStore.listForProject(deps.pool, args.projectId, actor);
   return { milestones: rows as unknown as ReadonlyArray<Record<string, unknown>> };
@@ -289,7 +292,7 @@ import { loadInsightsForProject } from "../../insights/index.js";
 export async function tanrenReadInsights(
   deps: ToolDeps,
   args: { projectId: string },
-  actor: ActorContext
+  actor: ActorContext,
 ): Promise<{ insights: ReadonlyArray<Record<string, unknown>> }> {
   await assertProjectAccess(deps.pool, args.projectId, actor);
   const insights = await loadInsightsForProject(deps.pool, { projectId: args.projectId });

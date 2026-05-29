@@ -22,7 +22,7 @@ export const JobKind = z.enum([
   "audit",
   "ci",
   "demo",
-  "forge"
+  "forge",
 ]);
 export type JobKind = z.infer<typeof JobKind>;
 
@@ -36,7 +36,7 @@ export const JobStatus = z.enum([
   // P3-0028: terminal state for a job whose bounded re-claim budget is
   // exhausted. A dead-lettered job is never re-claimed; it surfaces a
   // `job.dead_lettered` lifecycle event for operator triage.
-  "dead_letter"
+  "dead_letter",
 ]);
 export type JobStatus = z.infer<typeof JobStatus>;
 
@@ -49,7 +49,7 @@ const allowedJobTransitions: Record<JobStatus, ReadonlyArray<JobStatus>> = {
   done: [],
   failed: ["queued", "dead_letter"],
   cancelled: [],
-  dead_letter: []
+  dead_letter: [],
 };
 
 export function isAllowedJobTransition(from: JobStatus, to: JobStatus): boolean {
@@ -57,7 +57,10 @@ export function isAllowedJobTransition(from: JobStatus, to: JobStatus): boolean 
 }
 
 export class IllegalJobTransitionError extends Error {
-  constructor(readonly from: JobStatus, readonly to: JobStatus) {
+  constructor(
+    readonly from: JobStatus,
+    readonly to: JobStatus,
+  ) {
     super(`illegal job transition: ${from} -> ${to}`);
   }
 }

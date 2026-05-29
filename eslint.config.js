@@ -43,11 +43,7 @@ export default tseslint.config(
   {
     // Server / library source: typed via the nearest per-workspace
     // tsconfig.json, discovered automatically by the project service.
-    files: [
-      "services/*/src/**/*.{ts,tsx}",
-      "db/src/**/*.ts",
-      "cli/src/**/*.ts",
-    ],
+    files: ["services/*/src/**/*.{ts,tsx}", "db/src/**/*.ts", "cli/src/**/*.ts"],
     // The dashboard browser client has its own tsconfig (tsconfig.client.json)
     // and is handled by the dedicated block below.
     ignores: ["services/dashboard/src/client/**"],

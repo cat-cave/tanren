@@ -35,14 +35,7 @@ export class PgEventStore implements EventStore {
     await this.pool.query(
       `INSERT INTO events (run_id, task_id, spec_id, project_id, event_type, payload)
        VALUES ($1, $2, $3, $4, $5, $6::jsonb)`,
-      [
-        input.runId,
-        input.taskId ?? null,
-        input.specId,
-        input.projectId,
-        input.eventType,
-        JSON.stringify(parsed)
-      ]
+      [input.runId, input.taskId ?? null, input.specId, input.projectId, input.eventType, JSON.stringify(parsed)],
     );
   }
 }
@@ -68,7 +61,7 @@ export class FakeEventStore implements EventStore {
       specId: input.specId,
       projectId: input.projectId,
       eventType: input.eventType,
-      payload: parsed
+      payload: parsed,
     } as RecordedEvent<N>);
   }
 }

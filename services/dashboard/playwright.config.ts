@@ -14,6 +14,6 @@ export default defineConfig({
   reporter: "list",
   use: {
     baseURL: process.env.DASHBOARD_E2E_URL ?? "http://localhost:3000",
-    headless: true
-  }
+    headless: true,
+  },
 });

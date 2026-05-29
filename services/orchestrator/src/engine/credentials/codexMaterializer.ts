@@ -29,7 +29,11 @@ export async function materializeCodexAuthBundle(input: MaterializeCodexAuthInpu
   const bundle = validateCodexAuthBundle(secret.value);
   const codexHome = codexHomeForRun(input.runId, input.baseDir);
   const command = buildCodexAuthMaterializationCommand(codexHome);
-  const result = await input.ssh.run(input.target, { command, stdin: bundle.authJson, timeoutMs: input.timeoutMs ?? 30_000 });
+  const result = await input.ssh.run(input.target, {
+    command,
+    stdin: bundle.authJson,
+    timeoutMs: input.timeoutMs ?? 30_000,
+  });
   if (result.failure !== undefined) {
     throw new Error(`Codex credential materialization failed: ${failureMessage(result.failure)}`);
   }
@@ -56,6 +60,6 @@ export function buildCodexAuthMaterializationCommand(codexHome: string): string 
     "umask 077",
     `mkdir -p ${quoteSshShellArg(codexHome)}`,
     `cat > ${quoteSshShellArg(authPath)}`,
-    `chmod 600 ${quoteSshShellArg(authPath)}`
+    `chmod 600 ${quoteSshShellArg(authPath)}`,
   ].join(" && ");
 }

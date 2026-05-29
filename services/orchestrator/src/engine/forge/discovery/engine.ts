@@ -31,7 +31,7 @@ import {
   type DiscoveryAnswerer,
   type DiscoveryResult,
   type PlacementKind,
-  type ProposedSpec
+  type ProposedSpec,
 } from "./types.js";
 
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
@@ -52,19 +52,16 @@ export interface ClassifyInput {
 // Loads the project's existing specs (id/title/status) to ground the answerer.
 async function loadExistingSpecs(
   client: QueryClient,
-  projectId: string
+  projectId: string,
 ): Promise<Array<{ specId: string; title: string; status: string }>> {
   const result = await client.query<{ spec_id: string; title: string; status: string }>(
     "SELECT spec_id, title, status FROM specs WHERE project_id = $1 ORDER BY title",
-    [projectId]
+    [projectId],
   );
   return result.rows.map((row) => ({ specId: row.spec_id, title: row.title, status: row.status }));
 }
 
-export async function classifyInsight(
-  deps: DiscoveryEngineDeps,
-  input: ClassifyInput
-): Promise<DiscoveryResult> {
+export async function classifyInsight(deps: DiscoveryEngineDeps, input: ClassifyInput): Promise<DiscoveryResult> {
   // Validate the insight at the engine boundary (defence in depth; the route
   // also validates) so a malformed body never reaches the answerer.
   const insight = DiscoveryInsight.parse(input.insight);
@@ -106,7 +103,7 @@ function provenanceFor(insight: DiscoveryInsight, input: AcceptInput): Discovery
     insightExcerpt: insight.body.slice(0, EXCERPT_MAX),
     placementKind: input.placementKind,
     placementLabel: input.placementLabel,
-    discoveredAt: new Date().toISOString()
+    discoveredAt: new Date().toISOString(),
   };
 }
 
@@ -115,10 +112,7 @@ function provenanceFor(insight: DiscoveryInsight, input: AcceptInput): Discovery
 // a `dependsOn` referencing an earlier proposal in the same batch could be
 // honored by id-substitution in a future iteration; v0 only wires `dependsOn`
 // that already references existing specs.
-export async function acceptProposals(
-  deps: DiscoveryEngineDeps,
-  input: AcceptInput
-): Promise<AcceptResult> {
+export async function acceptProposals(deps: DiscoveryEngineDeps, input: AcceptInput): Promise<AcceptResult> {
   const insight = DiscoveryInsight.parse(input.insight);
   const provenance = provenanceFor(insight, input);
   const accepted: AcceptedSpec[] = [];
@@ -131,9 +125,9 @@ export async function acceptProposals(
         title: proposal.title,
         description: proposal.description,
         acceptanceCriteria: proposal.acceptanceCriteria,
-        ...(proposal.dependsOn.length > 0 ? { dependsOn: proposal.dependsOn } : {})
+        ...(proposal.dependsOn.length > 0 ? { dependsOn: proposal.dependsOn } : {}),
       },
-      input.actor
+      input.actor,
     );
     await writeProvenance(deps.pool, spec.specId, provenance);
     accepted.push({ spec, proposalId: proposal.proposalId });

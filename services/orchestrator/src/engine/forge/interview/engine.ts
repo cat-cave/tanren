@@ -30,7 +30,7 @@ import {
   emptyCapture,
   type InterviewAnswerer,
   type InterviewRoundOutput as InterviewRoundOutputType,
-  type InterviewSuggestion
+  type InterviewSuggestion,
 } from "./types.js";
 
 export interface InterviewEngineDeps {
@@ -69,7 +69,7 @@ export async function runRound(deps: InterviewEngineDeps, input: RunRoundInput):
     round: input.round,
     totalRounds,
     answer: input.answer,
-    capture: priorCapture
+    capture: priorCapture,
   });
   // Validate the answerer output at the engine boundary (defence in depth; a
   // provider that drifts from the schema is normalized/rejected here).
@@ -82,7 +82,7 @@ export async function runRound(deps: InterviewEngineDeps, input: RunRoundInput):
     say: output.say,
     suggestions: output.suggestions,
     capture: nextCapture,
-    complete: output.complete
+    complete: output.complete,
   };
 }
 
@@ -95,13 +95,13 @@ export interface DeriveFromCaptureInput {
 
 export async function deriveFromCapture(
   deps: InterviewEngineDeps,
-  input: DeriveFromCaptureInput
+  input: DeriveFromCaptureInput,
 ): Promise<DeriveResult> {
   return deriveProductGraph(deps.pool, {
     orgId: input.orgId,
     capture: InterviewCapture.parse(input.capture),
     actor: input.actor,
-    ...(input.repoUrl !== undefined ? { repoUrl: input.repoUrl } : {})
+    ...(input.repoUrl !== undefined ? { repoUrl: input.repoUrl } : {}),
   });
 }
 

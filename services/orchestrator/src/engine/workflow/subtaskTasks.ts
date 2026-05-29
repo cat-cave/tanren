@@ -26,12 +26,12 @@ export async function insertPlannerTask(
   pool: LoopQueryClient,
   runId: string,
   taskId: string,
-  planner: AnswererAdapter<PlanAnswer>
+  planner: AnswererAdapter<PlanAnswer>,
 ): Promise<void> {
   await pool.query(
     `INSERT INTO tasks (task_id, run_id, kind, title, status, started_at, agent_kind, cli, model)
      VALUES ($1, $2, 'plan', 'plan spec', 'running', now(), 'answerer', $3, NULL)`,
-    [taskId, runId, planner.cli]
+    [taskId, runId, planner.cli],
   );
 }
 
@@ -39,19 +39,19 @@ export async function insertChildTask(pool: LoopQueryClient, task: ChildTaskInse
   await pool.query(
     `INSERT INTO tasks (task_id, run_id, kind, title, parent_task_id, status, started_at, agent_kind, cli, model)
      VALUES ($1, $2, $3, $4, $5, 'running', now(), $6, $7, $8)`,
-    [task.taskId, task.runId, task.kind, task.title, task.parentTaskId, task.agentKind, task.cli, task.model]
+    [task.taskId, task.runId, task.kind, task.title, task.parentTaskId, task.agentKind, task.cli, task.model],
   );
 }
 
 export async function markTaskDone(
   pool: LoopQueryClient,
   taskId: string,
-  outcome: "passed" | "rejected_by_checker" | "rejected_by_auditor" | "window_exhausted"
+  outcome: "passed" | "rejected_by_checker" | "rejected_by_auditor" | "window_exhausted",
 ): Promise<void> {
-  await pool.query(
-    `UPDATE tasks SET status = 'done', outcome = $2, ended_at = now() WHERE task_id = $1`,
-    [taskId, outcome]
-  );
+  await pool.query(`UPDATE tasks SET status = 'done', outcome = $2, ended_at = now() WHERE task_id = $1`, [
+    taskId,
+    outcome,
+  ]);
 }
 
 export function writerAdapterRowMeta(writer: WriterAdapter): { cli: string; agentKind: "writer" } {

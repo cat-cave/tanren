@@ -8,7 +8,7 @@ export async function milestonesList(argv: string[]): Promise<void> {
   const orgId = required(args, "org-id");
   const projectId = required(args, "project-id");
   const result = await request(
-    `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/milestones`
+    `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/milestones`,
   );
   jsonOutput(args, result);
 }
@@ -25,8 +25,8 @@ export async function milestonesCreate(argv: string[]): Promise<void> {
       description: optional(args, "description") ?? null,
       orderIndex: Number.parseInt(required(args, "order-index"), 10),
       eta: optional(args, "eta") ?? null,
-      status: optional(args, "status")
-    }
+      status: optional(args, "status"),
+    },
   );
   jsonOutput(args, result);
 }
@@ -37,7 +37,7 @@ export async function milestonesGet(argv: string[]): Promise<void> {
   const projectId = required(args, "project-id");
   const milestoneId = required(args, "milestone-id");
   const result = await request(
-    `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/milestones/${encodeURIComponent(milestoneId)}`
+    `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/milestones/${encodeURIComponent(milestoneId)}`,
   );
   jsonOutput(args, result);
 }

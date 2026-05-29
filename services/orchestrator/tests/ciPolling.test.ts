@@ -7,7 +7,7 @@ import {
   type GitHubHttpClient,
   type GitHubHttpRequest,
   type GitHubHttpResponse,
-  parseGitHubPullRequestUrl
+  parseGitHubPullRequestUrl,
 } from "../src/engine/providers/github.js";
 import { computeCiRetryDelayMs, evaluateCiObservation, pollCiForRun } from "../src/engine/workflow/ciPolling.js";
 import { buildApp } from "../src/main.js";
@@ -16,34 +16,34 @@ describe("CI polling loop", () => {
   it("parses GitHub PR URLs and classifies pending, passing, and failing checks", () => {
     expect(parseGitHubPullRequestUrl("https://github.com/cat-cave/tanren-fixture-easy/pull/1")).toEqual({
       repo: { owner: "cat-cave", name: "tanren-fixture-easy" },
-      pullNumber: 1
+      pullNumber: 1,
     });
     expect(() => parseGitHubPullRequestUrl("https://example.com/cat-cave/repo/pull/1")).toThrow("unsupported GitHub");
 
     expect(evaluateCiObservation({ head: { sha: "abc" }, checkRuns: [], statuses: [] })).toMatchObject({
       status: "pending",
-      reason: "no_checks"
+      reason: "no_checks",
     });
     expect(
       evaluateCiObservation({
         head: { sha: "abc" },
         checkRuns: [{ name: "build", status: "completed", conclusion: "success" }],
-        statuses: [{ context: "legacy", state: "success" }]
-      })
+        statuses: [{ context: "legacy", state: "success" }],
+      }),
     ).toMatchObject({ status: "passed", reason: "all_checks_passed" });
     expect(
       evaluateCiObservation({
         head: { sha: "abc" },
         checkRuns: [{ name: "build", status: "in_progress" }],
-        statuses: []
-      })
+        statuses: [],
+      }),
     ).toMatchObject({ status: "pending", reason: "checks_pending" });
     expect(
       evaluateCiObservation({
         head: { sha: "abc" },
         checkRuns: [{ name: "build", status: "completed", conclusion: "timed_out" }],
-        statuses: [{ context: "legacy", state: "success" }]
-      })
+        statuses: [{ context: "legacy", state: "success" }],
+      }),
     ).toMatchObject({ status: "failed", reason: "check_failed" });
   });
 
@@ -55,8 +55,8 @@ describe("CI polling loop", () => {
         head: { sha: "abc" },
         checkRuns: [{ name: "build", status: "completed", conclusion: "success" }],
         statuses: [],
-        requiredContexts: ["build", "e2e"]
-      })
+        requiredContexts: ["build", "e2e"],
+      }),
     ).toMatchObject({ status: "pending", reason: "checks_pending" });
 
     // An OPTIONAL check failing does not block when it isn't required.
@@ -65,11 +65,11 @@ describe("CI polling loop", () => {
         head: { sha: "abc" },
         checkRuns: [
           { name: "build", status: "completed", conclusion: "success" },
-          { name: "lint-optional", status: "completed", conclusion: "failure" }
+          { name: "lint-optional", status: "completed", conclusion: "failure" },
         ],
         statuses: [],
-        requiredContexts: ["build"]
-      })
+        requiredContexts: ["build"],
+      }),
     ).toMatchObject({ status: "passed", reason: "all_checks_passed" });
 
     // A REQUIRED check failing fails the run.
@@ -78,8 +78,8 @@ describe("CI polling loop", () => {
         head: { sha: "abc" },
         checkRuns: [{ name: "build", status: "completed", conclusion: "failure" }],
         statuses: [],
-        requiredContexts: ["build"]
-      })
+        requiredContexts: ["build"],
+      }),
     ).toMatchObject({ status: "failed", reason: "check_failed" });
 
     // All required contexts present + green → passed.
@@ -88,11 +88,11 @@ describe("CI polling loop", () => {
         head: { sha: "abc" },
         checkRuns: [
           { name: "build", status: "completed", conclusion: "success" },
-          { name: "e2e", status: "completed", conclusion: "success" }
+          { name: "e2e", status: "completed", conclusion: "success" },
         ],
         statuses: [],
-        requiredContexts: ["build", "e2e"]
-      })
+        requiredContexts: ["build", "e2e"],
+      }),
     ).toMatchObject({ status: "passed", reason: "all_checks_passed" });
   });
 
@@ -111,7 +111,7 @@ describe("CI polling loop", () => {
     const http = new ScriptedGitHubHttp([
       { status: 200, body: { head: { sha: "abc123", ref: "tanren/run_1" } } },
       { status: 200, body: { check_runs: [] } },
-      { status: 200, body: { statuses: [] } }
+      { status: 200, body: { statuses: [] } },
     ]);
 
     const result = await pollCiForRun({
@@ -119,7 +119,7 @@ describe("CI polling loop", () => {
       eventStore: events,
       secrets,
       githubHttp: http,
-      runId: "run_1"
+      runId: "run_1",
     });
 
     expect(result).toMatchObject({
@@ -128,9 +128,15 @@ describe("CI polling loop", () => {
       reason: "no_checks",
       headSha: "abc123",
       nextPollAfterMs: 5_000,
-      summary: { checkRuns: 0, statuses: 0, failing: 0, pending: 0 }
+      summary: { checkRuns: 0, statuses: 0, failing: 0, pending: 0 },
     });
-    expect(pool.tasks[0]).toMatchObject({ run_id: "run_1", kind: "ci", status: "running", outcome: "pending", attempt: 1 });
+    expect(pool.tasks[0]).toMatchObject({
+      run_id: "run_1",
+      kind: "ci",
+      status: "running",
+      outcome: "pending",
+      attempt: 1,
+    });
     expect(events.events.map((event) => event.eventType)).toEqual(["task.started", "ci.started"]);
     expect(JSON.stringify(events.events)).not.toContain("ghp_secretToken");
     expect(JSON.stringify(http.requests)).not.toContain("ghp_secretToken");
@@ -148,10 +154,13 @@ describe("CI polling loop", () => {
       secrets,
       githubHttp: new ScriptedGitHubHttp([
         { status: 200, body: { head: { sha: "pass123" } } },
-        { status: 200, body: { check_runs: [{ name: "build", status: "completed", conclusion: "success" }] } },
-        { status: 200, body: { statuses: [{ context: "legacy", state: "success" }] } }
+        {
+          status: 200,
+          body: { check_runs: [{ name: "build", status: "completed", conclusion: "success" }] },
+        },
+        { status: 200, body: { statuses: [{ context: "legacy", state: "success" }] } },
       ]),
-      runId: "run_1"
+      runId: "run_1",
     });
 
     expect(passPool.tasks[0]).toMatchObject({ kind: "ci", status: "done", outcome: "ok" });
@@ -165,13 +174,21 @@ describe("CI polling loop", () => {
       secrets,
       githubHttp: new ScriptedGitHubHttp([
         { status: 200, body: { head: { sha: "fail123" } } },
-        { status: 200, body: { check_runs: [{ name: "test", status: "completed", conclusion: "failure" }] } },
-        { status: 200, body: { statuses: [] } }
+        {
+          status: 200,
+          body: { check_runs: [{ name: "test", status: "completed", conclusion: "failure" }] },
+        },
+        { status: 200, body: { statuses: [] } },
       ]),
-      runId: "run_1"
+      runId: "run_1",
     });
 
-    expect(failPool.tasks[0]).toMatchObject({ kind: "ci", status: "failed", outcome: "failed", failure_kind: "ci_failed" });
+    expect(failPool.tasks[0]).toMatchObject({
+      kind: "ci",
+      status: "failed",
+      outcome: "failed",
+      failure_kind: "ci_failed",
+    });
     expect(failEvents.events.map((event) => event.eventType)).toEqual(["task.started", "ci.failed", "task.failed"]);
   });
 
@@ -186,21 +203,24 @@ describe("CI polling loop", () => {
       githubHttp: new ScriptedGitHubHttp([
         { status: 200, body: { head: { sha: "abc123" } } },
         { status: 200, body: { check_runs: [] } },
-        { status: 200, body: { statuses: [] } }
+        { status: 200, body: { statuses: [] } },
       ]),
-      vaultHealthCheck: async () => ({ ok: true, status: 200 })
+      vaultHealthCheck: async () => ({ ok: true, status: 200 }),
     });
 
     const pollResponse = await app.request("/runs/run_1/ci/poll", { method: "POST" });
     expect(pollResponse.status).toBe(200);
-    await expect(pollResponse.json()).resolves.toMatchObject({ status: "pending", reason: "no_checks" });
+    await expect(pollResponse.json()).resolves.toMatchObject({
+      status: "pending",
+      reason: "no_checks",
+    });
 
     const statusResponse = await app.request("/runs/run_1");
     const status = await statusResponse.json();
     expect(status.tasks).toEqual([expect.objectContaining({ kind: "ci", status: "running", outcome: "pending" })]);
     expect(status.events).toEqual([
       expect.objectContaining({ event_type: "task.started" }),
-      expect.objectContaining({ event_type: "ci.started" })
+      expect.objectContaining({ event_type: "ci.started" }),
     ]);
     expect(JSON.stringify(status)).not.toContain("ghp_secretToken");
   });
@@ -216,14 +236,17 @@ describe("live CI polling fixture", () => {
     expect.hasAssertions();
     const pool = new CiMemoryPool();
     const secrets = new FakeSecretStore();
-    await secrets.put({ ref: "credential/github/dev", value: await readFile(liveGithubTokenFile, "utf8") });
+    await secrets.put({
+      ref: "credential/github/dev",
+      value: await readFile(liveGithubTokenFile, "utf8"),
+    });
 
     const result = await pollCiForRun({
       pool: pool.asPgPool(),
       eventStore: new FakeEventStore(),
       secrets,
       githubHttp: new FetchGitHubHttpClient(),
-      runId: "run_1"
+      runId: "run_1",
     });
 
     expect(["pending", "passed", "failed"]).toContain(result.status);
@@ -257,8 +280,8 @@ class CiMemoryPool {
       spec_id: "spec_1",
       project_id: "project_1",
       pr_url: "https://github.com/cat-cave/tanren-fixture-easy/pull/1",
-      status: "running"
-    }
+      status: "running",
+    },
   ];
   readonly projects = [{ project_id: "project_1", config: { githubCredentialRef: "credential/github/dev" } }];
 
@@ -276,10 +299,10 @@ class CiMemoryPool {
                   spec_id: run.spec_id,
                   project_id: run.project_id,
                   pr_url: run.pr_url,
-                  config: project.config
-                }
+                  config: project.config,
+                },
               ],
-        rowCount: run === undefined || project === undefined ? 0 : 1
+        rowCount: run === undefined || project === undefined ? 0 : 1,
       };
     }
     if (sql.includes("FROM tasks") && sql.includes("kind = 'ci'") && sql.includes("LIMIT 1")) {
@@ -296,7 +319,7 @@ class CiMemoryPool {
         agent_kind: "system",
         cli: "github",
         model: null,
-        attempt: 1
+        attempt: 1,
       });
       return { rows: [], rowCount: 1 };
     }
@@ -311,11 +334,19 @@ class CiMemoryPool {
       return { rows: [], rowCount: 1 };
     }
     if (sql.startsWith("UPDATE tasks SET status = 'failed'")) {
-      Object.assign(this.findTask(params[0]), { status: "failed", outcome: "failed", failure_kind: "ci_failed" });
+      Object.assign(this.findTask(params[0]), {
+        status: "failed",
+        outcome: "failed",
+        failure_kind: "ci_failed",
+      });
       return { rows: [], rowCount: 1 };
     }
     if (sql.startsWith("UPDATE tasks SET status = 'running', outcome = 'pending'")) {
-      Object.assign(this.findTask(params[0]), { status: "running", outcome: "pending", failure_kind: null });
+      Object.assign(this.findTask(params[0]), {
+        status: "running",
+        outcome: "pending",
+        failure_kind: null,
+      });
       return { rows: [], rowCount: 1 };
     }
     if (sql.startsWith(`INSERT INTO ${eventsTableName}`)) {
@@ -325,7 +356,7 @@ class CiMemoryPool {
         spec_id: params[2],
         project_id: params[3],
         event_type: params[4],
-        payload: JSON.parse(String(params[5]))
+        payload: JSON.parse(String(params[5])),
       });
       return { rows: [], rowCount: 1 };
     }
@@ -334,10 +365,16 @@ class CiMemoryPool {
       return { rows: run === undefined ? [] : [run], rowCount: run === undefined ? 0 : 1 };
     }
     if (sql.includes("SELECT * FROM tasks")) {
-      return { rows: this.tasks.filter((task) => task.run_id === params[0]), rowCount: this.tasks.length };
+      return {
+        rows: this.tasks.filter((task) => task.run_id === params[0]),
+        rowCount: this.tasks.length,
+      };
     }
     if (sql.startsWith("SELECT * FROM events")) {
-      return { rows: this.events.filter((event) => event.run_id === params[0]), rowCount: this.events.length };
+      return {
+        rows: this.events.filter((event) => event.run_id === params[0]),
+        rowCount: this.events.length,
+      };
     }
     if (sql.startsWith("SELECT * FROM cost_records")) {
       return { rows: this.costs, rowCount: 0 };

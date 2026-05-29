@@ -129,7 +129,7 @@ Detail entries for the 9 Phase 2B specs (one is a stretch goal). Phase 2B is the
 **Produces**: a **thin greenfield new-project flow** — a project-create form covering identity (name, description, repo target), a behaviors list (free-text, no Forge interview), and a milestone seed.
 
 **What**: A single-step form for creating a project that does not yet have a repo or a derived spec DAG. The operator fills in title, description, intended GitHub repo (created empty or selected from existing org repos), and a free-text behaviors list that creates persona+behavior rows in P2A-0018. No Forge interview, no derived DAG, no sources/audits/arrival page. The "open project" button takes them to P2B-0003.
-**Why**: The hi-fi has a full greenfield onboarding track (multi-round Forge interview → 71-spec DAG → arrival), but that's a Phase 3 surface (thick Forge + DAG canvas). A thin form ships as a stretch in Phase 2 so operators have *some* greenfield path. If 2B is otherwise on schedule, this lands; if not, greenfield waits for Phase 3.
+**Why**: The hi-fi has a full greenfield onboarding track (multi-round Forge interview → 71-spec DAG → arrival), but that's a Phase 3 surface (thick Forge + DAG canvas). A thin form ships as a stretch in Phase 2 so operators have _some_ greenfield path. If 2B is otherwise on schedule, this lands; if not, greenfield waits for Phase 3.
 **How**: Single Zod-form against P2A-0013 + P2A-0018 routes; no special backend beyond what those specs already provide.
 
 **Test plan**: form unit tests, integration test against P2A-0013/0018, `corepack pnpm run check`.

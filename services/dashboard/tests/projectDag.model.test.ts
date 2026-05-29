@@ -26,7 +26,7 @@ function run(over: Partial<RunListItem>): RunListItem {
     costTotalUsd: "1.0",
     lastEventAt: "2026-05-28T10:01:00.000Z",
     needsReview: false,
-    ...over
+    ...over,
   };
 }
 
@@ -35,12 +35,12 @@ const SPECS = [
   { specId: "s_live", title: "orders schema", dependsOn: ["s_done"], status: "in_flight" },
   { specId: "s_review", title: "supplier scorecard", dependsOn: ["s_live"], status: "review" },
   { specId: "s_blocked", title: "edi mapping ui", dependsOn: ["s_review"], status: "blocked" },
-  { specId: "s_queued", title: "perf budget", dependsOn: [], status: "open" }
+  { specId: "s_queued", title: "perf budget", dependsOn: [], status: "open" },
 ];
 
 const MILESTONES = [
   { id: "m1", label: "M1", name: "scaffold", status: "done" },
-  { id: "m4", label: "M4", name: "manifold", status: "in_flight" }
+  { id: "m4", label: "M4", name: "manifold", status: "in_flight" },
 ];
 
 describe("buildProjectDag", () => {
@@ -50,8 +50,8 @@ describe("buildProjectDag", () => {
     runs: [
       run({ runId: "r_live", specId: "s_live", status: "running" }),
       run({ runId: "r_review", specId: "s_review", status: "completed", needsReview: true }),
-      run({ runId: "r_blocked", specId: "s_blocked", status: "completed", outcome: "halted" })
-    ]
+      run({ runId: "r_blocked", specId: "s_blocked", status: "completed", outcome: "halted" }),
+    ],
   });
 
   it("maps run state + spec status to the five node statuses", () => {
@@ -92,7 +92,14 @@ describe("buildProjectDag", () => {
   });
 
   it("counts statuses for the spec-count strip", () => {
-    expect(dag.counts).toMatchObject({ total: 5, done: 1, live: 1, review: 1, blocked: 1, queued: 1 });
+    expect(dag.counts).toMatchObject({
+      total: 5,
+      done: 1,
+      live: 1,
+      review: 1,
+      blocked: 1,
+      queued: 1,
+    });
   });
 });
 
@@ -127,14 +134,14 @@ describe("buildSpecDetail", () => {
     description: `desc ${s.title}`,
     acceptanceCriteria: ["renders", "exports"],
     dependsOn: s.dependsOn,
-    status: s.status
+    status: s.status,
   }));
   const statusBySpecId = new Map<string, "done" | "live" | "review" | "blocked" | "queued">([
     ["s_done", "done"],
     ["s_live", "live"],
     ["s_review", "review"],
     ["s_blocked", "blocked"],
-    ["s_queued", "queued"]
+    ["s_queued", "queued"],
   ]);
 
   it("derives status, deps, blocks, latest run, and the blocked reason", () => {
@@ -142,8 +149,16 @@ describe("buildSpecDetail", () => {
     const detail = buildSpecDetail({
       spec: blocked,
       allSpecs,
-      runs: [run({ runId: "r_b", specId: "s_blocked", status: "completed", outcome: "halted", costTotalUsd: "3.5" })],
-      statusBySpecId
+      runs: [
+        run({
+          runId: "r_b",
+          specId: "s_blocked",
+          status: "completed",
+          outcome: "halted",
+          costTotalUsd: "3.5",
+        }),
+      ],
+      statusBySpecId,
     });
     expect(detail.status).toBe("blocked");
     expect(detail.statusLabel).toBe("blocked");
@@ -159,7 +174,7 @@ describe("buildSpecDetail", () => {
       spec: review,
       allSpecs,
       runs: [run({ runId: "r_r", specId: "s_review", status: "completed", needsReview: true })],
-      statusBySpecId
+      statusBySpecId,
     });
     expect(detail.status).toBe("review");
     expect(detail.primaryAction?.href).toBe("/runs/r_r/review");

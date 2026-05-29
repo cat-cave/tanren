@@ -29,7 +29,7 @@ import {
   type ReconAnswerer,
   type ReconIndex,
   type ReconReport,
-  type RepoReader
+  type RepoReader,
 } from "../src/engine/forge/brownfield/index.js";
 import type { IngestedItem } from "../src/engine/forge/inbox/types.js";
 
@@ -38,11 +38,15 @@ const actor: ActorContext = {
   orgId: "org_a",
   projectId: null,
   scopes: ["platform:admin"],
-  source: "session"
+  source: "session",
 };
 
 function fakeReader(index: ReconIndex): RepoReader {
-  return { async index() { return index; } };
+  return {
+    async index() {
+      return index;
+    },
+  };
 }
 
 const SAMPLE_INDEX: ReconIndex = {
@@ -51,8 +55,8 @@ const SAMPLE_INDEX: ReconIndex = {
   files: [
     { path: "README.md", size: 100, preview: "# fixture" },
     { path: "package.json", size: 200, preview: "{}" },
-    { path: ".github/workflows/ci.yml", size: 50, preview: "name: ci" }
-  ]
+    { path: ".github/workflows/ci.yml", size: 50, preview: "name: ci" },
+  ],
 };
 
 const SAMPLE_REPORT: ReconReport = {
@@ -62,9 +66,14 @@ const SAMPLE_REPORT: ReconReport = {
   architecture: [{ layer: "ci", detail: "github actions" }],
   risks: [{ severity: "warn", note: "no codeowners" }],
   gaps: [
-    { id: "design-dna", chapter: "design dna", question: "default to industrial?", options: ["use industrial"] },
-    { id: "coverage", chapter: "tests", question: "add coverage specs?", options: ["yes"] }
-  ]
+    {
+      id: "design-dna",
+      chapter: "design dna",
+      question: "default to industrial?",
+      options: ["use industrial"],
+    },
+    { id: "coverage", chapter: "tests", question: "add coverage specs?", options: ["yes"] },
+  ],
 };
 
 describe("runRecon · read-only recon pre-fills chapters", () => {
@@ -74,7 +83,7 @@ describe("runRecon · read-only recon pre-fills chapters", () => {
       async read(index) {
         sawIndex = index;
         return SAMPLE_REPORT;
-      }
+      },
     };
     const { index, report } = await runRecon({ reader: fakeReader(SAMPLE_INDEX), answerer }, SAMPLE_INDEX.repoUrl);
     expect(sawIndex?.filesIndexed).toBe(3);
@@ -106,7 +115,7 @@ describe("config-injection · 6 files + per-file exclude + open PR", () => {
     repoUrl: SAMPLE_INDEX.repoUrl,
     report: SAMPLE_REPORT,
     posture: "strict" as const,
-    generatedAt: "2026-05-28T00:00:00.000Z"
+    generatedAt: "2026-05-28T00:00:00.000Z",
   };
 
   it("proposes the 6 integration files including the PROJECT.md snapshot", () => {
@@ -135,11 +144,21 @@ describe("config-injection · 6 files + per-file exclude + open PR", () => {
       async openConfigInjectionPr(input): Promise<InjectedConfigPullRequest> {
         committed.push(...input.files.map((f) => f.path));
         expect(input.body).toContain("No runs happen until this PR is merged");
-        return { number: 48, url: "https://github.com/cat-cave/tanren-fixture-easy/pull/48", branch: input.headBranch, filesCommitted: input.files.map((f) => f.path) };
-      }
+        return {
+          number: 48,
+          url: "https://github.com/cat-cave/tanren-fixture-easy/pull/48",
+          branch: input.headBranch,
+          filesCommitted: input.files.map((f) => f.path),
+        };
+      },
     };
     const files = proposeConfigFiles(proposeInput, [".gitignore"]);
-    const pr = await openConfigInjectionPr({ github, repoUrl: SAMPLE_INDEX.repoUrl, baseBranch: "main", files });
+    const pr = await openConfigInjectionPr({
+      github,
+      repoUrl: SAMPLE_INDEX.repoUrl,
+      baseBranch: "main",
+      files,
+    });
     expect(pr.number).toBe(48);
     expect(pr.branch).toBe("tanren/integrate");
     expect(committed).toHaveLength(5);
@@ -150,9 +169,16 @@ describe("config-injection · 6 files + per-file exclude + open PR", () => {
     const github: ConfigInjectionGitHub = {
       async openConfigInjectionPr(): Promise<InjectedConfigPullRequest> {
         throw new Error("should not be called");
-      }
+      },
     };
-    await expect(openConfigInjectionPr({ github, repoUrl: SAMPLE_INDEX.repoUrl, baseBranch: "main", files: [] })).rejects.toThrow(/at least one file/);
+    await expect(
+      openConfigInjectionPr({
+        github,
+        repoUrl: SAMPLE_INDEX.repoUrl,
+        baseBranch: "main",
+        files: [],
+      }),
+    ).rejects.toThrow(/at least one file/);
   });
 });
 
@@ -160,15 +186,27 @@ describe("seed-dag · recon gaps + GitHub issues become specs", () => {
   it("creates one spec per issue + per gap, de-duped by title, through createSpec", async () => {
     const { pool, specs } = seedStubPool();
     const issues: IngestedItem[] = [
-      { externalId: "gh-cat-cave/tanren-fixture-easy#142", title: "writer hangs on long writes", body: "bug", severity: "fail", projectId: "p" },
-      { externalId: "gh-cat-cave/tanren-fixture-easy#138", title: "support claude as answerer", body: "", severity: "info", projectId: "p" }
+      {
+        externalId: "gh-cat-cave/tanren-fixture-easy#142",
+        title: "writer hangs on long writes",
+        body: "bug",
+        severity: "fail",
+        projectId: "p",
+      },
+      {
+        externalId: "gh-cat-cave/tanren-fixture-easy#138",
+        title: "support claude as answerer",
+        body: "",
+        severity: "info",
+        projectId: "p",
+      },
     ];
     const result = await seedDagFromReconAndIssues(pool, {
       projectId: "p",
       orgId: "org_a",
       report: SAMPLE_REPORT,
       issues,
-      actor
+      actor,
     });
     expect(result.fromIssues).toBe(2);
     expect(result.fromGaps).toBe(2);
@@ -183,12 +221,24 @@ describe("seed-dag · recon gaps + GitHub issues become specs", () => {
     const { pool } = seedStubPool();
     const report: ReconReport = {
       ...SAMPLE_REPORT,
-      gaps: [{ id: "dup", chapter: "x", question: "writer hangs on long writes", options: [] }]
+      gaps: [{ id: "dup", chapter: "x", question: "writer hangs on long writes", options: [] }],
     };
     const issues: IngestedItem[] = [
-      { externalId: "gh#142", title: "writer hangs on long writes", body: "", severity: "fail", projectId: "p" }
+      {
+        externalId: "gh#142",
+        title: "writer hangs on long writes",
+        body: "",
+        severity: "fail",
+        projectId: "p",
+      },
     ];
-    const result = await seedDagFromReconAndIssues(pool, { projectId: "p", orgId: "org_a", report, issues, actor });
+    const result = await seedDagFromReconAndIssues(pool, {
+      projectId: "p",
+      orgId: "org_a",
+      report,
+      issues,
+      actor,
+    });
     expect(result.fromIssues).toBe(1);
     expect(result.fromGaps).toBe(0);
     expect(result.duplicatesDropped).toBe(1);
@@ -214,5 +264,8 @@ function seedStubPool(): { pool: pg.Pool; specs: Map<string, unknown> } {
     }
     return { rows: [], rowCount: 0 };
   };
-  return { pool: { query, connect: async () => ({ query, release() {} }) } as unknown as pg.Pool, specs };
+  return {
+    pool: { query, connect: async () => ({ query, release() {} }) } as unknown as pg.Pool,
+    specs,
+  };
 }

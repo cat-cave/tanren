@@ -20,7 +20,7 @@ import {
   WriterStartedPayload,
   WriterSubtaskCompletedPayload,
   WriterSubtaskFailedPayload,
-  WriterSubtaskStartedPayload
+  WriterSubtaskStartedPayload,
 } from "./schemas/answerer.js";
 import {
   AllocatorAllocatedPayload,
@@ -40,7 +40,7 @@ import {
   UsageWindowPressurePayload,
   WorkspaceFailedPayload,
   WorkspaceGitCapturedPayload,
-  WorkspacePreparedPayload
+  WorkspacePreparedPayload,
 } from "./schemas/infra.js";
 import {
   CiFailedPayload,
@@ -69,13 +69,9 @@ import {
   Phase1FixtureStartedPayload,
   ReviewApprovedPayload,
   ReviewChangesRequestedPayload,
-  ReviewRequestedPayload
+  ReviewRequestedPayload,
 } from "./schemas/integrations.js";
-import {
-  GateFailedPayload,
-  GatePassedPayload,
-  GateStartedPayload
-} from "./schemas/gate.js";
+import { GateFailedPayload, GatePassedPayload, GateStartedPayload } from "./schemas/gate.js";
 import {
   JobDeadLetteredPayload,
   RunCompletedPayload,
@@ -85,13 +81,13 @@ import {
   TaskCompletedPayload,
   TaskFailedPayload,
   TaskQueuedPayload,
-  TaskStartedPayload
+  TaskStartedPayload,
 } from "./schemas/lifecycle.js";
 import {
   RecoveryInspectionOpenedPayload,
   RecoveryReplanQueuedPayload,
   RecoveryReviseRoutedPayload,
-  RecoveryRollbackQueuedPayload
+  RecoveryRollbackQueuedPayload,
 } from "./schemas/recovery.js";
 import { RedactionRawAccessPayload } from "./schemas/redaction.js";
 
@@ -233,7 +229,7 @@ export const EventRegistry = {
   "recovery.revise_routed": RecoveryReviseRoutedPayload,
   "recovery.replan_queued": RecoveryReplanQueuedPayload,
   "recovery.rollback_queued": RecoveryRollbackQueuedPayload,
-  "recovery.inspection_opened": RecoveryInspectionOpenedPayload
+  "recovery.inspection_opened": RecoveryInspectionOpenedPayload,
 } as const satisfies Record<string, z.ZodTypeAny>;
 
 export type EventRegistry = typeof EventRegistry;

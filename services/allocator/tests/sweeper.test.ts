@@ -1,14 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type {
-  ContainerInspectResult,
-  CreateContainerSpec,
-  DockerEngineClient
-} from "../src/dockerEngine.js";
+import type { ContainerInspectResult, CreateContainerSpec, DockerEngineClient } from "../src/dockerEngine.js";
 import {
   RunnerLifecycle,
   type RunnerRecord,
   type RunnerSecretsClient,
-  type RunnerStore
+  type RunnerStore,
 } from "../src/runnerLifecycle.js";
 import { AbandonedRunSweeper } from "../src/sweeper.js";
 
@@ -71,14 +67,14 @@ describe("AbandonedRunSweeper", () => {
       sleep: () => Promise.resolve(),
       hostKeyReadAttempts: 1,
       hostKeyReadDelayMs: 0,
-      now: () => new Date(nowMs)
+      now: () => new Date(nowMs),
     });
 
     await lifecycle.allocate({
       runId: "run_a",
       projectId: "proj_a",
       runnerImage: "img",
-      vaultRefs: []
+      vaultRefs: [],
     });
 
     nowMs += 7 * 60 * 60 * 1000;
@@ -89,13 +85,15 @@ describe("AbandonedRunSweeper", () => {
       maxRunHours: 6,
       onReclaim: (record) => {
         reclaimed.push(record);
-      }
+      },
     });
 
     const result = await sweeper.sweep();
     expect(result.map((r) => r.runnerId)).toEqual(["runner_run_a"]);
     expect(reclaimed.map((r) => r.runnerId)).toEqual(["runner_run_a"]);
-    expect(docker.removed).toEqual(expect.arrayContaining(["tanren-runner-run_a-workspace", "tanren-runner-run_a-codex-home"]));
+    expect(docker.removed).toEqual(
+      expect.arrayContaining(["tanren-runner-run_a-workspace", "tanren-runner-run_a-codex-home"]),
+    );
   });
 
   it("is safe to call repeatedly with no stale runners", async () => {
@@ -109,7 +107,7 @@ describe("AbandonedRunSweeper", () => {
       sshHostnameForOrchestrator: (container) => container,
       sleep: () => Promise.resolve(),
       hostKeyReadAttempts: 1,
-      hostKeyReadDelayMs: 0
+      hostKeyReadDelayMs: 0,
     });
     const sweeper = new AbandonedRunSweeper({ lifecycle, maxRunHours: 6 });
 

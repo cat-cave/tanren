@@ -9,7 +9,7 @@ export async function behaviorsList(argv: string[]): Promise<void> {
   const projectId = required(args, "project-id");
   const personaId = required(args, "persona-id");
   const result = await request(
-    `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/behaviors?personaId=${encodeURIComponent(personaId)}`
+    `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/behaviors?personaId=${encodeURIComponent(personaId)}`,
   );
   jsonOutput(args, result);
 }
@@ -29,8 +29,8 @@ export async function behaviorsCreate(argv: string[]): Promise<void> {
       given: optional(args, "given") ?? "",
       when: optional(args, "when") ?? "",
       then: optional(args, "then") ?? "",
-      description: optional(args, "description") ?? null
-    }
+      description: optional(args, "description") ?? null,
+    },
   );
   /* eslint-enable unicorn/no-thenable */
   jsonOutput(args, result);
@@ -42,7 +42,7 @@ export async function behaviorsGet(argv: string[]): Promise<void> {
   const projectId = required(args, "project-id");
   const behaviorId = required(args, "behavior-id");
   const result = await request(
-    `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/behaviors/${encodeURIComponent(behaviorId)}`
+    `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/behaviors/${encodeURIComponent(behaviorId)}`,
   );
   jsonOutput(args, result);
 }

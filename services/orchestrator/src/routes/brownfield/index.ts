@@ -11,10 +11,7 @@ import type pg from "pg";
 import { z } from "zod";
 import type { ActorContext } from "../../auth/schemas.js";
 import type { SecretStore } from "../../engine/contracts/secretStore.js";
-import {
-  resolveGithubToken,
-  type ResolvedGithubToken
-} from "../../engine/credentials/githubTokenResolver.js";
+import { resolveGithubToken, type ResolvedGithubToken } from "../../engine/credentials/githubTokenResolver.js";
 import type { GitHubHttpClient } from "../../engine/providers/github.js";
 import { parseGitHubRepository } from "../../engine/providers/github.js";
 import type { GithubAppTokenMinter } from "../../engine/providers/githubAppTokenMinter.js";
@@ -32,7 +29,7 @@ interface BrownfieldRoutesOptions {
 
 const BrownfieldLinkSchema = z.object({
   repoUrl: z.string().min(1),
-  githubCredentialRef: z.string().min(1).optional()
+  githubCredentialRef: z.string().min(1).optional(),
 });
 
 const DETECTED_FILES = [
@@ -40,7 +37,7 @@ const DETECTED_FILES = [
   ".github/workflows/ci.yml",
   ".mergify.yml",
   "CODEOWNERS",
-  ".github/CODEOWNERS"
+  ".github/CODEOWNERS",
 ] as const;
 
 export interface BrownfieldDetectedFile {
@@ -68,7 +65,7 @@ export function createBrownfieldRoutes(options: BrownfieldRoutesOptions) {
 
     const projectRow = await options.pool.query<{ org_id: string | null }>(
       "SELECT org_id FROM projects WHERE project_id = $1",
-      [projectId]
+      [projectId],
     );
     if (projectRow.rowCount === 0) {
       return c.json({ error: "project_not_found" }, 404);
@@ -85,7 +82,7 @@ export function createBrownfieldRoutes(options: BrownfieldRoutesOptions) {
         secrets: options.secrets,
         installation,
         staticRef: parsed.data.githubCredentialRef,
-        minter: options.githubAppMinter
+        minter: options.githubAppMinter,
       });
     } catch {
       return c.json({ error: "github_credential_missing" }, 400);
@@ -95,7 +92,7 @@ export function createBrownfieldRoutes(options: BrownfieldRoutesOptions) {
       method: "GET",
       path: `/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}`,
       token: resolved.token,
-      refreshToken: resolved.refresh
+      refreshToken: resolved.refresh,
     });
     if (repoCheck.status === 404) {
       return c.json({ error: "repo_not_reachable", message: "GitHub App cannot see this repository" }, 404);
@@ -104,9 +101,9 @@ export function createBrownfieldRoutes(options: BrownfieldRoutesOptions) {
       return c.json(
         {
           error: "repo_check_failed",
-          message: `GitHub returned HTTP ${repoCheck.status} when verifying repo access`
+          message: `GitHub returned HTTP ${repoCheck.status} when verifying repo access`,
         },
-        502
+        502,
       );
     }
 
@@ -115,17 +112,17 @@ export function createBrownfieldRoutes(options: BrownfieldRoutesOptions) {
       detected.push(await readRepoFile(options.githubHttp, repo, path, resolved));
     }
 
-    await options.pool.query(
-      `UPDATE projects SET repo_url = $1 WHERE project_id = $2`,
-      [parsed.data.repoUrl, projectId]
-    );
+    await options.pool.query(`UPDATE projects SET repo_url = $1 WHERE project_id = $2`, [
+      parsed.data.repoUrl,
+      projectId,
+    ]);
 
     return c.json({
       projectId,
       repoUrl: parsed.data.repoUrl,
       orgId,
       detectedFiles: detected,
-      writesPerformed: 0
+      writesPerformed: 0,
     });
   });
 
@@ -136,13 +133,13 @@ async function readRepoFile(
   http: GitHubHttpClient,
   repo: { owner: string; name: string },
   path: string,
-  resolved: ResolvedGithubToken
+  resolved: ResolvedGithubToken,
 ): Promise<BrownfieldDetectedFile> {
   const response = await http.request({
     method: "GET",
     path: `/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}/contents/${encodeRepoPath(path)}`,
     token: resolved.token,
-    refreshToken: resolved.refresh
+    refreshToken: resolved.refresh,
   });
   if (response.status === 404) {
     return { path, present: false };
@@ -159,7 +156,7 @@ async function readRepoFile(
     path,
     present: true,
     size: typeof body.size === "number" ? body.size : content.length,
-    preview: content.slice(0, 8 * 1024)
+    preview: content.slice(0, 8 * 1024),
   };
 }
 

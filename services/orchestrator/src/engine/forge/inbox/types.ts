@@ -27,7 +27,7 @@ export const InboxSource = z
     config: z.record(z.string(), z.unknown()).default({}),
     enabled: z.boolean().default(true),
     // System sources whose findings skip manual triage (verdict auto-routable).
-    autoRoute: z.boolean().default(false)
+    autoRoute: z.boolean().default(false),
   })
   .strict();
 export type InboxSource = z.infer<typeof InboxSource>;
@@ -49,7 +49,7 @@ export const CandidateTriage = z
     // When dedupe found an existing spec, its id (so close-as-dup links to it).
     duplicateOfSpecId: z.string().min(1).nullable().default(null),
     // The discovery variant the accept→discovery hand-off should open with.
-    discoveryVariant: z.enum(["feature", "bug", "strategic"]).default("feature")
+    discoveryVariant: z.enum(["feature", "bug", "strategic"]).default("feature"),
   })
   .strict();
 export type CandidateTriage = z.infer<typeof CandidateTriage>;
@@ -63,7 +63,7 @@ export const CandidateStatus = z.enum([
   "accepted",
   "folded",
   "dismissed",
-  "closed_duplicate"
+  "closed_duplicate",
 ]);
 export type CandidateStatus = z.infer<typeof CandidateStatus>;
 
@@ -82,7 +82,7 @@ export const Candidate = z
     resolvedSpecId: z.string().min(1).nullable().default(null),
     // Display label of the source (denormalised for the surface readout).
     sourceName: z.string().max(120).default(""),
-    sourceKind: SourceKind.default("manual")
+    sourceKind: SourceKind.default("manual"),
   })
   .strict();
 export type Candidate = z.infer<typeof Candidate>;

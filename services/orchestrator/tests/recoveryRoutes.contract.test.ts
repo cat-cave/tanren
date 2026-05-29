@@ -23,7 +23,7 @@ const actor: ActorContext = {
   orgId: ORG,
   projectId: null,
   scopes: ["org:member"],
-  source: "session"
+  source: "session",
 };
 
 function harness(who: ActorContext | undefined = actor, seedCommit = true) {
@@ -31,7 +31,13 @@ function harness(who: ActorContext | undefined = actor, seedCommit = true) {
   pool.seedProject({ project_id: PROJECT, org_id: ORG });
   pool.seedProjectMember(PROJECT, actor.userId);
   pool.seedSpec({ spec_id: SPEC, project_id: PROJECT, status: "active" });
-  pool.seedRun({ run_id: RUN, spec_id: SPEC, project_id: PROJECT, status: "halted", outcome: "retry_budget_exhausted" });
+  pool.seedRun({
+    run_id: RUN,
+    spec_id: SPEC,
+    project_id: PROJECT,
+    status: "halted",
+    outcome: "retry_budget_exhausted",
+  });
   if (seedCommit) pool.seedGitCaptured(RUN, ["9f3a2b4"]);
   const app = new Hono<ActorContextEnv>();
   app.use(
@@ -46,10 +52,10 @@ function harness(who: ActorContext | undefined = actor, seedCommit = true) {
         },
         async resolveActorContext() {
           return who as ActorContext;
-        }
+        },
       } as never,
-      localDevActor: who
-    })
+      localDevActor: who,
+    }),
   );
   app.route("/orgs", createRecoveryRoutes({ pool: pool.asPgPool() }));
   return { app, pool };
@@ -61,7 +67,7 @@ function post(app: Hono<ActorContextEnv>, path: string, body?: unknown) {
   return app.request(path, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: body === undefined ? undefined : JSON.stringify(body)
+    body: body === undefined ? undefined : JSON.stringify(body),
   });
 }
 
@@ -74,7 +80,11 @@ describe("P2B-0008 recovery context", () => {
   it("returns the run's recovery context incl. last-good commit", async () => {
     const res = await h.app.request(base);
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { specId: string; outcome: string; lastGoodCommit: string | null };
+    const body = (await res.json()) as {
+      specId: string;
+      outcome: string;
+      lastGoodCommit: string | null;
+    };
     expect(body.specId).toBe(SPEC);
     expect(body.outcome).toBe("retry_budget_exhausted");
     expect(body.lastGoodCommit).toBe("9f3a2b4");
@@ -82,7 +92,9 @@ describe("P2B-0008 recovery context", () => {
 
   it("reports no last-good commit when none was captured", async () => {
     const noCommit = harness(actor, false);
-    const body = (await (await noCommit.app.request(base)).json()) as { lastGoodCommit: string | null };
+    const body = (await (await noCommit.app.request(base)).json()) as {
+      lastGoodCommit: string | null;
+    };
     expect(body.lastGoodCommit).toBeNull();
   });
 });
@@ -91,7 +103,10 @@ describe("P2B-0008 revise_spec", () => {
   it("routes to the spec-edit form and records lineage", async () => {
     const res = await post(h.app, `${base}/revise`);
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { ok: boolean; result: { editHref: string; action: string } };
+    const body = (await res.json()) as {
+      ok: boolean;
+      result: { editHref: string; action: string };
+    };
     expect(body.ok).toBe(true);
     expect(body.result.action).toBe("revise_spec");
     expect(body.result.editHref).toContain(`/specs/${SPEC}/edit`);
@@ -105,7 +120,10 @@ describe("P2B-0008 replan_with_steering", () => {
     const note = "use a server-side cookie for first paint instead of inline script";
     const res = await post(h.app, `${base}/replan`, { steeringNote: note });
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { ok: boolean; result: { replanRunId: string; plannerTaskId: string } };
+    const body = (await res.json()) as {
+      ok: boolean;
+      result: { replanRunId: string; plannerTaskId: string };
+    };
     expect(body.ok).toBe(true);
     expect(body.result.replanRunId).toMatch(/^run_/);
     expect(body.result.plannerTaskId).toMatch(/^task_/);
@@ -148,15 +166,18 @@ describe("P2B-0008 rollback_to_commit", () => {
 
   it("refuses rollback when no prior commit exists (409)", async () => {
     const noCommit = harness(actor, false);
-    const res = await post(noCommit.app, `${base}/rollback`, { commitSha: "9f3a2b4", confirmed: true });
+    const res = await post(noCommit.app, `${base}/rollback`, {
+      commitSha: "9f3a2b4",
+      confirmed: true,
+    });
     expect(res.status).toBe(409);
-    expect((await res.json() as { error: string }).error).toBe("no_prior_commit");
+    expect(((await res.json()) as { error: string }).error).toBe("no_prior_commit");
   });
 
   it("rejects an uncaptured commit (400)", async () => {
     const res = await post(h.app, `${base}/rollback`, { commitSha: "deadbeef", confirmed: true });
     expect(res.status).toBe(400);
-    expect((await res.json() as { error: string }).error).toBe("unknown_commit");
+    expect(((await res.json()) as { error: string }).error).toBe("unknown_commit");
   });
 });
 

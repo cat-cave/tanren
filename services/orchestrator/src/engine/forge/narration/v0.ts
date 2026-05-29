@@ -22,7 +22,7 @@ import type {
   ForgeAnswer,
   ForgeAttentionItem,
   ForgeInsight,
-  ForgeSuggestedAction
+  ForgeSuggestedAction,
 } from "../../answerers/schemas/forge.js";
 
 export interface NarrationProject {
@@ -129,8 +129,8 @@ function buildReviewAttentionItems(input: NarrationInput): ForgeAttentionItem[] 
       sub,
       action: {
         label: "Open run",
-        toolCall: { tool: "tanren.read_run" as const, args: { runId: run.runId } }
-      }
+        toolCall: { tool: "tanren.read_run" as const, args: { runId: run.runId } },
+      },
     };
   });
 }
@@ -147,9 +147,9 @@ function buildBudgetAttentionItem(input: NarrationInput): ForgeAttentionItem | u
       label: "View costs",
       toolCall: {
         tool: "tanren.read_costs",
-        args: {}
-      }
-    }
+        args: {},
+      },
+    },
   };
 }
 
@@ -164,8 +164,8 @@ function buildBlockedAttentionItems(input: NarrationInput): ForgeAttentionItem[]
       sub: `Spec ${run.specId} needs attention`,
       action: {
         label: "Rerun task",
-        toolCall: { tool: "tanren.rerun_task" as const, args: { taskId: run.runId } }
-      }
+        toolCall: { tool: "tanren.rerun_task" as const, args: { taskId: run.runId } },
+      },
     }));
 }
 
@@ -176,7 +176,7 @@ function mapInsight(insight: NarrationInsight): ForgeInsight {
     kind: insight.kind,
     title: insight.title,
     body: insight.body,
-    actions: insight.actions
+    actions: insight.actions,
   };
 }
 
@@ -215,7 +215,7 @@ export function generateProjectViewNarration(input: NarrationInput): ForgeAnswer
     body,
     attentionItems,
     insights: input.insights.map(mapInsight),
-    prompts
+    prompts,
   };
 }
 
@@ -236,11 +236,7 @@ export interface RunDetailNarrationInput {
 export function generateRunDetailNarration(input: RunDetailNarrationInput): ForgeAnswer {
   const handle = describeRunHandle(input.run);
   const statusPhrase =
-    input.run.outcome === "merged"
-      ? "merged"
-      : input.run.outcome === "failed"
-        ? "failed"
-        : input.run.status;
+    input.run.outcome === "merged" ? "merged" : input.run.outcome === "failed" ? "failed" : input.run.status;
   const body = `${handle} (${statusPhrase}) — ${input.taskCount} tasks, ${formatCost(input.costUsd)} attributed.`;
   const attentionItems: ForgeAttentionItem[] = [];
   if (input.failedTaskCount > 0) {
@@ -250,8 +246,8 @@ export function generateRunDetailNarration(input: RunDetailNarrationInput): Forg
       sub: `Run ${input.run.runId} on spec ${input.run.specId}`,
       action: {
         label: "Read run",
-        toolCall: { tool: "tanren.read_run" as const, args: { runId: input.run.runId } }
-      }
+        toolCall: { tool: "tanren.read_run" as const, args: { runId: input.run.runId } },
+      },
     });
   }
   if (input.run.prUrl !== null && input.run.prUrl !== "" && input.run.outcome !== "merged") {
@@ -261,8 +257,8 @@ export function generateRunDetailNarration(input: RunDetailNarrationInput): Forg
       sub: input.run.prUrl,
       action: {
         label: "Open PR",
-        toolCall: { tool: "tanren.read_run" as const, args: { runId: input.run.runId } }
-      }
+        toolCall: { tool: "tanren.read_run" as const, args: { runId: input.run.runId } },
+      },
     });
   }
   return {
@@ -272,7 +268,7 @@ export function generateRunDetailNarration(input: RunDetailNarrationInput): Forg
     prompts: [
       "Walk me through the writer's reasoning.",
       "Show me the auditor's verdict.",
-      "What's the next step for this PR?"
-    ]
+      "What's the next step for this PR?",
+    ],
   };
 }

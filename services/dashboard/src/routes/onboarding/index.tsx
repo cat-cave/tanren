@@ -11,11 +11,7 @@
 
 import type { Context, Hono } from "hono";
 import { OrchestratorClient } from "../../api/orchestrator.js";
-import type {
-  CredentialRecord,
-  DoctorReport,
-  NotificationMatrix
-} from "../../api/types.js";
+import type { CredentialRecord, DoctorReport, NotificationMatrix } from "../../api/types.js";
 import { loadShellContext, renderShell, type ShellDeps } from "../../app/mountShell.js";
 import { CredentialsBody } from "../../components/onboarding/CredentialsBody.js";
 import { NotificationsBody } from "../../components/onboarding/NotificationsBody.js";
@@ -43,7 +39,10 @@ function appInstallHrefFor(orgId: string | undefined): string | undefined {
 }
 
 function clientFor(c: Context, deps: ShellDeps): OrchestratorClient {
-  return new OrchestratorClient({ orchestratorUrl: deps.orchestratorUrl, cookieHeader: c.req.header("cookie") });
+  return new OrchestratorClient({
+    orchestratorUrl: deps.orchestratorUrl,
+    cookieHeader: c.req.header("cookie"),
+  });
 }
 
 function noticeOf(c: Context): string | undefined {
@@ -74,7 +73,7 @@ export function mountOnboardingScreens(app: Hono, deps: ShellDeps): void {
     if (step === 2 && orgId !== undefined) {
       [orgCredentials, myCredentials] = await Promise.all([
         client.listOrgCredentials(orgId),
-        client.listMyCredentials()
+        client.listMyCredentials(),
       ]);
     }
     if (step === 3 && orgId !== undefined) matrix = await client.notificationMatrix(orgId);
@@ -96,7 +95,7 @@ export function mountOnboardingScreens(app: Hono, deps: ShellDeps): void {
           matrix={matrix}
           operator={ctx.operator}
         />
-      </>
+      </>,
     );
   });
 
@@ -107,7 +106,7 @@ export function mountOnboardingScreens(app: Hono, deps: ShellDeps): void {
     const orgId = ctx.org?.id;
     const [orgCredentials, myCredentials] = await Promise.all([
       orgId !== undefined ? client.listOrgCredentials(orgId) : Promise.resolve<CredentialRecord[]>([]),
-      client.listMyCredentials()
+      client.listMyCredentials(),
     ]);
     return renderShell(
       c,
@@ -122,7 +121,9 @@ export function mountOnboardingScreens(app: Hono, deps: ShellDeps): void {
               <div class="title">
                 api keys and <em>bundles</em>
               </div>
-              <div class="sub">secrets are write-only · no credential value is ever rendered after entry (P2A-0009 redaction).</div>
+              <div class="sub">
+                secrets are write-only · no credential value is ever rendered after entry (P2A-0009 redaction).
+              </div>
             </div>
           </div>
           <CredentialsBody
@@ -132,7 +133,7 @@ export function mountOnboardingScreens(app: Hono, deps: ShellDeps): void {
             notice={noticeOf(c)}
           />
         </div>
-      </>
+      </>,
     );
   });
 
@@ -140,9 +141,8 @@ export function mountOnboardingScreens(app: Hono, deps: ShellDeps): void {
   app.get("/notifications", async (c) => {
     const ctx = await loadShellContext(c, deps, { activeNavId: "notifications" });
     const client = clientFor(c, deps);
-    const matrix = ctx.org?.id !== undefined
-      ? await client.notificationMatrix(ctx.org.id)
-      : { targets: [], routes: [], events: [] };
+    const matrix =
+      ctx.org?.id !== undefined ? await client.notificationMatrix(ctx.org.id) : { targets: [], routes: [], events: [] };
     return renderShell(
       c,
       ctx,
@@ -156,12 +156,15 @@ export function mountOnboardingScreens(app: Hono, deps: ShellDeps): void {
               <div class="title">
                 where should <em>we tell you</em>
               </div>
-              <div class="sub">org defaults + dev overrides against the P2A-0017 schema · all channels deliver (configure each channel's credentials).</div>
+              <div class="sub">
+                org defaults + dev overrides against the P2A-0017 schema · all channels deliver (configure each
+                channel's credentials).
+              </div>
             </div>
           </div>
           <NotificationsBody matrix={matrix} notice={noticeOf(c)} />
         </div>
-      </>
+      </>,
     );
   });
 

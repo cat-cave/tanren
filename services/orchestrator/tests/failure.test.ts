@@ -6,7 +6,7 @@ describe("failure contract", () => {
     expect(defineFailure({ kind: "provider_failed", provider: "fake", message: "failed" })).toEqual({
       kind: "provider_failed",
       provider: "fake",
-      message: "failed"
+      message: "failed",
     });
   });
 

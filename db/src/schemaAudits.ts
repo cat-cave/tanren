@@ -53,20 +53,22 @@ export const auditJobs = pgTable(
     // Last successful pass; null until the job has run once.
     lastRun: timestamp("last_run", { withTimezone: true }),
     // Last-pass findings summary: { count, severity, note }. Default = clean.
-    findings: jsonb("findings").notNull().default(sql`'{"count":0,"severity":"ok","note":""}'::jsonb`),
+    findings: jsonb("findings")
+      .notNull()
+      .default(sql`'{"count":0,"severity":"ok","note":""}'::jsonb`),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
     check(
       "audit_jobs_kind_check",
-      sql`${table.kind} IN ('security','deps','a11y','mutation','perf','license','stale_specs')`
+      sql`${table.kind} IN ('security','deps','a11y','mutation','perf','license','stale_specs')`,
     ),
     check("audit_jobs_cadence_check", sql`${table.cadence} IN ('nightly','weekly','monthly')`),
     check("audit_jobs_enabled_check", sql`${table.enabled} IN ('true','false')`),
     index("audit_jobs_org_id").on(table.orgId),
-    index("audit_jobs_project_id").on(table.projectId)
-  ]
+    index("audit_jobs_project_id").on(table.projectId),
+  ],
 );
 
 // Runtime literal lists, exported for the orchestrator engine to validate

@@ -1,9 +1,4 @@
-import type {
-  AllocationRequest,
-  Allocator,
-  ReleaseReason,
-  RunnerAllocation
-} from "../contracts/allocator.js";
+import type { AllocationRequest, Allocator, ReleaseReason, RunnerAllocation } from "../contracts/allocator.js";
 import type { RunnerStore } from "./runnerStore.js";
 
 const allocatorName = "gcp";
@@ -138,7 +133,10 @@ export class GcpAllocator implements Allocator {
   }
 
   async allocate(request: AllocationRequest): Promise<RunnerAllocation> {
-    const name = `tanren-${request.runId}`.toLowerCase().replace(/[^a-z0-9-]/g, "-").slice(0, 62);
+    const name = `tanren-${request.runId}`
+      .toLowerCase()
+      .replace(/[^a-z0-9-]/g, "-")
+      .slice(0, 62);
     const operation = await this.client.insertInstance({
       name,
       machineType: this.options.machineType,
@@ -147,8 +145,8 @@ export class GcpAllocator implements Allocator {
       sshPublicKey: this.options.sshPublicKey,
       labels: {
         "tanren-run": labelValue(request.runId),
-        "tanren-project": labelValue(request.projectId)
-      }
+        "tanren-project": labelValue(request.projectId),
+      },
     });
 
     let instance: GcpInstance;
@@ -179,8 +177,8 @@ export class GcpAllocator implements Allocator {
         port,
         username: this.options.sshUsername,
         hostKeyFingerprint: this.options.hostKeyFingerprint,
-        identitySecretRef: request.identitySecretRef
-      }
+        identitySecretRef: request.identitySecretRef,
+      },
     };
 
     try {
@@ -193,7 +191,7 @@ export class GcpAllocator implements Allocator {
         sshPort: port,
         hostKeyFingerprint: this.options.hostKeyFingerprint,
         imageSha: allocation.imageSha,
-        containerId: name
+        containerId: name,
       });
     } catch (error) {
       await this.client.deleteInstance(name).catch(() => undefined);
@@ -230,7 +228,7 @@ export class GcpAllocator implements Allocator {
       if (Date.now() >= deadline) {
         throw new GcpAllocatorError(
           `gcp insert operation ${current.name} did not complete within ${readyTimeoutMs}ms ` +
-            `(last status: ${current.status})`
+            `(last status: ${current.status})`,
         );
       }
       await this.sleep(pollIntervalMs);
@@ -250,7 +248,7 @@ export class GcpAllocator implements Allocator {
       if (Date.now() >= deadline) {
         throw new GcpAllocatorError(
           `gcp instance ${instanceName} did not become RUNNING within ${readyTimeoutMs}ms ` +
-            `(last status: ${instance.status})`
+            `(last status: ${instance.status})`,
         );
       }
       await this.sleep(pollIntervalMs);
@@ -260,7 +258,10 @@ export class GcpAllocator implements Allocator {
 
 /** GCE labels must be lowercase, <=63 chars, [a-z0-9_-]. */
 function labelValue(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9_-]/g, "-").slice(0, 63);
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]/g, "-")
+    .slice(0, 63);
 }
 
 interface GcpOperationResponse {
@@ -298,9 +299,7 @@ function toOperation(body: GcpOperationResponse): GcpOperation {
   return { name: body.name, status: body.status, error: operationErrorOf(body.error) };
 }
 
-function externalIpOf(
-  interfaces: ReadonlyArray<GcpNetworkInterfaceResponse> | null | undefined
-): string | undefined {
+function externalIpOf(interfaces: ReadonlyArray<GcpNetworkInterfaceResponse> | null | undefined): string | undefined {
   if (interfaces === null || interfaces === undefined) {
     return undefined;
   }
@@ -318,7 +317,7 @@ function toInstance(body: GcpInstanceResponse): GcpInstance {
   return {
     name: body.name,
     status: body.status,
-    externalIp: externalIpOf(body.networkInterfaces)
+    externalIp: externalIpOf(body.networkInterfaces),
   };
 }
 
@@ -329,12 +328,12 @@ function toInstance(body: GcpInstanceResponse): GcpInstance {
  */
 export function fetchGcpComputeClient(
   options: Pick<GcpAllocatorOptions, "accessToken" | "project" | "zone">,
-  fetchImpl: typeof fetch = fetch
+  fetchImpl: typeof fetch = fetch,
 ): GcpComputeClient {
   const { accessToken, project, zone } = options;
   const authHeaders = {
     authorization: `Bearer ${accessToken}`,
-    "Content-Type": "application/json"
+    "Content-Type": "application/json",
   } as const;
   const zoneBase = `${gcpComputeApiBase}/projects/${project}/zones/${zone}`;
 
@@ -351,19 +350,17 @@ export function fetchGcpComputeClient(
             {
               boot: true,
               autoDelete: true,
-              initializeParams: { sourceImage: input.sourceImage }
-            }
+              initializeParams: { sourceImage: input.sourceImage },
+            },
           ],
           networkInterfaces: [{ accessConfigs: [{ type: "ONE_TO_ONE_NAT", name: "External NAT" }] }],
           metadata: {
-            items: [{ key: "ssh-keys", value: `${input.sshUsername}:${input.sshPublicKey}` }]
-          }
-        })
+            items: [{ key: "ssh-keys", value: `${input.sshUsername}:${input.sshPublicKey}` }],
+          },
+        }),
       });
       if (!response.ok) {
-        throw new GcpAllocatorError(
-          `gcp insertInstance failed: ${response.status} ${await response.text()}`
-        );
+        throw new GcpAllocatorError(`gcp insertInstance failed: ${response.status} ${await response.text()}`);
       }
       return toOperation((await response.json()) as GcpOperationResponse);
     },
@@ -371,12 +368,10 @@ export function fetchGcpComputeClient(
     async getZoneOperation(operationName: string): Promise<GcpOperation> {
       const response = await fetchImpl(`${zoneBase}/operations/${operationName}`, {
         method: "GET",
-        headers: authHeaders
+        headers: authHeaders,
       });
       if (!response.ok) {
-        throw new GcpAllocatorError(
-          `gcp getZoneOperation failed: ${response.status} ${await response.text()}`
-        );
+        throw new GcpAllocatorError(`gcp getZoneOperation failed: ${response.status} ${await response.text()}`);
       }
       return toOperation((await response.json()) as GcpOperationResponse);
     },
@@ -384,12 +379,10 @@ export function fetchGcpComputeClient(
     async getInstance(instanceName: string): Promise<GcpInstance> {
       const response = await fetchImpl(`${zoneBase}/instances/${instanceName}`, {
         method: "GET",
-        headers: authHeaders
+        headers: authHeaders,
       });
       if (!response.ok) {
-        throw new GcpAllocatorError(
-          `gcp getInstance failed: ${response.status} ${await response.text()}`
-        );
+        throw new GcpAllocatorError(`gcp getInstance failed: ${response.status} ${await response.text()}`);
       }
       return toInstance((await response.json()) as GcpInstanceResponse);
     },
@@ -397,14 +390,12 @@ export function fetchGcpComputeClient(
     async deleteInstance(instanceName: string): Promise<void> {
       const response = await fetchImpl(`${zoneBase}/instances/${instanceName}`, {
         method: "DELETE",
-        headers: authHeaders
+        headers: authHeaders,
       });
       // 404 means already gone — treat as success (idempotent destroy).
       if (!response.ok && response.status !== 404) {
-        throw new GcpAllocatorError(
-          `gcp deleteInstance failed: ${response.status} ${await response.text()}`
-        );
+        throw new GcpAllocatorError(`gcp deleteInstance failed: ${response.status} ${await response.text()}`);
       }
-    }
+    },
   };
 }

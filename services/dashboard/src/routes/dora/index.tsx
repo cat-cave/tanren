@@ -37,7 +37,7 @@ export function mountDoraScreen(app: Hono, deps: ShellDeps): void {
     if (ctx.org !== undefined && project !== undefined) {
       const client = new OrchestratorClient({
         orchestratorUrl: deps.orchestratorUrl,
-        cookieHeader: c.req.header("cookie")
+        cookieHeader: c.req.header("cookie"),
       });
       metrics = await client.getDora(ctx.org.id, project.projectId, windowDays);
     }
@@ -51,7 +51,7 @@ export function mountDoraScreen(app: Hono, deps: ShellDeps): void {
         windowDays={windowDays}
         projectName={project?.name ?? ""}
         noProject={project === undefined}
-      />
+      />,
     );
   });
 }

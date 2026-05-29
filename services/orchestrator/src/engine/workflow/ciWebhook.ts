@@ -60,8 +60,8 @@ export async function advanceCiFromWebhook(input: AdvanceCiFromWebhookInput): Pr
         githubHttp: input.githubHttp,
         runId,
         githubCredentialRef: input.githubCredentialRef,
-        githubAppMinter: input.githubAppMinter
-      })
+        githubAppMinter: input.githubAppMinter,
+      }),
     );
   }
   return { event: input.event, matchedRunIds: runIds, results };
@@ -103,7 +103,7 @@ async function resolveRunIds(pool: pg.Pool, prUrls: string[]): Promise<string[]>
   }
   const result = await pool.query(
     "SELECT run_id FROM runs WHERE pr_url = ANY($1::text[]) ORDER BY started_at DESC NULLS LAST, run_id ASC",
-    [prUrls]
+    [prUrls],
   );
   return result.rows.map((row: { run_id: string }) => row.run_id);
 }

@@ -33,10 +33,13 @@ answerer-schema-drift:
 knip:
   corepack pnpm run check:knip
 
+spelling:
+  corepack pnpm run check:spelling
+
 typecheck:
   corepack pnpm run typecheck
 
-fast-check: format-check lint types-lint architecture schema-drift state-drift event-drift answerer-schema-drift knip typecheck test compose-config
+fast-check: format-check lint types-lint architecture schema-drift state-drift event-drift answerer-schema-drift knip spelling typecheck test compose-config
 
 test:
   corepack pnpm run test
@@ -47,7 +50,7 @@ build:
 compose-config:
   corepack pnpm run compose:config
 
-ci: format-check lint types-lint architecture schema-drift state-drift event-drift answerer-schema-drift knip typecheck test build compose-config
+ci: format-check lint types-lint architecture schema-drift state-drift event-drift answerer-schema-drift knip spelling typecheck test build compose-config
 
 compose-build:
   docker compose -f compose.dev.yml build orchestrator allocator dashboard runner

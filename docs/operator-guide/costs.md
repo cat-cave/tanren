@@ -33,17 +33,17 @@ de-overlaps these into the disjoint buckets so totals never double-count.
 
 Two orthogonal axes describe each row:
 
-| `billing_mode` | When                              | Credential prefix            |
-| -------------- | --------------------------------- | ---------------------------- |
-| `per_token`    | token-billed API key              | `credential/openai-api/...`, `credential/anthropic/...`, `credential/openrouter/...` |
-| `subscription` | server-enforced rolling window    | `credential/codex/...`       |
-| `self_hosted`  | local GPU / fixed-fee endpoint    | `credential/self-hosted/...` |
+| `billing_mode` | When                           | Credential prefix                                                                    |
+| -------------- | ------------------------------ | ------------------------------------------------------------------------------------ |
+| `per_token`    | token-billed API key           | `credential/openai-api/...`, `credential/anthropic/...`, `credential/openrouter/...` |
+| `subscription` | server-enforced rolling window | `credential/codex/...`                                                               |
+| `self_hosted`  | local GPU / fixed-fee endpoint | `credential/self-hosted/...`                                                         |
 
-| `cost_basis`       | Meaning                                          |
-| ------------------ | ------------------------------------------------ |
-| `provider_pricing` | dollar figure computed from a per-token rate table |
+| `cost_basis`       | Meaning                                                                              |
+| ------------------ | ------------------------------------------------------------------------------------ |
+| `provider_pricing` | dollar figure computed from a per-token rate table                                   |
 | `ccusage`          | dollar figure from the ccusage tool (only when ccusage reports a positive `costUSD`) |
-| `unknown`          | no reliable basis → `cost_usd IS NULL`           |
+| `unknown`          | no reliable basis → `cost_usd IS NULL`                                               |
 
 `provider_pricing` is computed from the disjoint buckets:
 `input` at the input rate, `cached_input` at the cache rate, `cache_creation`
@@ -95,14 +95,14 @@ services/orchestrator/src/engine/usage/; the planner/writer loop consumes them
 
 ## Operational checks
 
-* `SELECT cost_basis, COUNT(*) FROM cost_records GROUP BY cost_basis`. Every
+- `SELECT cost_basis, COUNT(*) FROM cost_records GROUP BY cost_basis`. Every
   value must be one of `ccusage`, `provider_pricing`, `unknown`.
-* `SELECT billing_mode, COUNT(*) FROM cost_records GROUP BY billing_mode`. Every
+- `SELECT billing_mode, COUNT(*) FROM cost_records GROUP BY billing_mode`. Every
   value must be one of `per_token`, `subscription`, `self_hosted`.
-* `SELECT t.task_id FROM tasks t LEFT JOIN cost_records c ON c.task_id = t.task_id
-  WHERE t.status = 'done' AND c.id IS NULL`. A successful task without a cost row
+- `SELECT t.task_id FROM tasks t LEFT JOIN cost_records c ON c.task_id = t.task_id
+WHERE t.status = 'done' AND c.id IS NULL`. A successful task without a cost row
   is an invariant violation (token accounting is mandatory).
-* `cost_usd IS NULL` rows are expected and fine for subscription/self-hosted
+- `cost_usd IS NULL` rows are expected and fine for subscription/self-hosted
   calls.
 
 ## Rate-table updates

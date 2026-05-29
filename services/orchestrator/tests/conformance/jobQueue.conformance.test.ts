@@ -32,7 +32,7 @@ function envelopeRow(row: JobRow): Record<string, unknown> {
     task_kind: row.task_kind,
     payload: row.payload,
     attempts: row.attempts,
-    max_attempts: row.max_attempts
+    max_attempts: row.max_attempts,
   };
 }
 
@@ -88,7 +88,7 @@ class MemoryJobQueuePool {
       payload: JSON.parse(params[3] as string),
       attempts: (params[4] as number) ?? 0,
       max_attempts: (params[5] as number) ?? DEFAULT_MAX_ATTEMPTS,
-      status: "queued"
+      status: "queued",
     };
     this.jobs.push(row);
     return { rows: [envelopeRow(row)], rowCount: 1 };
@@ -101,7 +101,7 @@ class MemoryJobQueuePool {
       (candidate) =>
         candidate.status === "queued" &&
         candidate.task_kind === taskKind &&
-        (runId === null || candidate.run_id === runId)
+        (runId === null || candidate.run_id === runId),
     );
     if (job === undefined) {
       return { rows: [], rowCount: 0 };
@@ -133,10 +133,10 @@ class MemoryJobQueuePool {
 
 // --- FakeJobQueue -----------------------------------------------------------
 describeJobQueueConformance("FakeJobQueue", {
-  make: (): JobQueue<{ n: number }> => new FakeJobQueue<{ n: number }>()
+  make: (): JobQueue<{ n: number }> => new FakeJobQueue<{ n: number }>(),
 });
 
 // --- PgJobQueue (in-memory pool) --------------------------------------------
 describeJobQueueConformance("PgJobQueue", {
-  make: (): JobQueue<{ n: number }> => new PgJobQueue<{ n: number }>(new MemoryJobQueuePool().asPgPool())
+  make: (): JobQueue<{ n: number }> => new PgJobQueue<{ n: number }>(new MemoryJobQueuePool().asPgPool()),
 });

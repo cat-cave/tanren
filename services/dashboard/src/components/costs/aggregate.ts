@@ -46,22 +46,22 @@ export const PRICING_MODEL_META: Record<BillingMode, PricingModelMeta> = {
     label: "per-token · llm api",
     model: "model 1 · real dollars",
     colorVar: "var(--cost-token)",
-    hint: "token-billed api keys · priced from rate tables"
+    hint: "token-billed api keys · priced from rate tables",
   },
   subscription: {
     mode: "subscription",
     label: "subscription window",
     model: "model 3 · window-equiv",
     colorVar: "var(--cost-window)",
-    hint: "chatgpt / claude subscription · window-capped"
+    hint: "chatgpt / claude subscription · window-capped",
   },
   self_hosted: {
     mode: "self_hosted",
     label: "self-hosted · opportunity",
     model: "model 2 · use-it-or-lose-it",
     colorVar: "var(--cost-opportunity)",
-    hint: "flat-fee / local gpu · utilization, not a cap"
-  }
+    hint: "flat-fee / local gpu · utilization, not a cap",
+  },
 };
 
 /** Provenance label + dot color for a `costBasis`, surfaced per row. */
@@ -73,7 +73,7 @@ export interface CostBasisMeta {
 export const COST_BASIS_META: Record<CostBasis, CostBasisMeta> = {
   ccusage: { basis: "ccusage", label: "ccusage · real billed" },
   provider_pricing: { basis: "provider_pricing", label: "provider pricing · rate table" },
-  unknown: { basis: "unknown", label: "no priced basis · tokens only" }
+  unknown: { basis: "unknown", label: "no priced basis · tokens only" },
 };
 
 /** Parse a nullable dollar string into a number; null/unparseable → 0. */
@@ -145,7 +145,7 @@ export function summarizeCosts(records: readonly CostRecord[]): CostSummary {
       totalTokens: inMode.reduce((sum, r) => sum + r.totalTokens, 0),
       records: inMode.length,
       runs: new Set(inMode.map((r) => r.runId)).size,
-      share: totalUsd > 0 ? costUsd / totalUsd : 0
+      share: totalUsd > 0 ? costUsd / totalUsd : 0,
     } satisfies ModelRollup;
   });
 
@@ -158,7 +158,7 @@ export function summarizeCosts(records: readonly CostRecord[]): CostSummary {
     totalRuns: runIds.size,
     models,
     providers,
-    unpricedRecords: records.filter((r) => r.costUsd === null).length
+    unpricedRecords: records.filter((r) => r.costUsd === null).length,
   };
 }
 
@@ -171,7 +171,14 @@ export function summarizeCosts(records: readonly CostRecord[]): CostSummary {
 function groupProviders(records: readonly CostRecord[], totalUsd: number): ProviderRow[] {
   const byKey = new Map<
     string,
-    { sample: CostRecord; runs: Set<string>; tokens: number; usd: number; pricedCount: number; count: number }
+    {
+      sample: CostRecord;
+      runs: Set<string>;
+      tokens: number;
+      usd: number;
+      pricedCount: number;
+      count: number;
+    }
   >();
   for (const r of records) {
     const key = `${r.cli}|${r.model}|${r.provider}|${r.billingMode}|${r.costBasis}`;
@@ -186,18 +193,20 @@ function groupProviders(records: readonly CostRecord[], totalUsd: number): Provi
     entry.count += 1;
     if (r.costUsd !== null) entry.pricedCount += 1;
   }
-  const rows = [...byKey.values()].map((e): ProviderRow => ({
-    cli: e.sample.cli,
-    model: e.sample.model,
-    provider: e.sample.provider,
-    billingMode: e.sample.billingMode,
-    costBasis: e.sample.costBasis,
-    runs: e.runs.size,
-    totalTokens: e.tokens,
-    costUsd: e.usd,
-    priced: e.pricedCount === e.count && e.count > 0,
-    share: totalUsd > 0 ? e.usd / totalUsd : 0
-  }));
+  const rows = [...byKey.values()].map(
+    (e): ProviderRow => ({
+      cli: e.sample.cli,
+      model: e.sample.model,
+      provider: e.sample.provider,
+      billingMode: e.sample.billingMode,
+      costBasis: e.sample.costBasis,
+      runs: e.runs.size,
+      totalTokens: e.tokens,
+      costUsd: e.usd,
+      priced: e.pricedCount === e.count && e.count > 0,
+      share: totalUsd > 0 ? e.usd / totalUsd : 0,
+    }),
+  );
   rows.sort((a, b) => b.costUsd - a.costUsd || b.totalTokens - a.totalTokens);
   return rows;
 }
@@ -234,7 +243,7 @@ function dayKey(iso: string): string {
  */
 export function projectBurn(
   records: readonly CostRecord[],
-  opts: { now?: Date; windowDays?: number } = {}
+  opts: { now?: Date; windowDays?: number } = {},
 ): BurnProjection {
   const now = opts.now ?? new Date();
   const windowDays = opts.windowDays ?? 14;
@@ -267,7 +276,7 @@ export function projectBurn(
     dailyAvgUsd,
     monthToDateUsd,
     projected30dUsd: Math.round(dailyAvgUsd * 30 * 100) / 100,
-    activeDays: activeDaySet.size
+    activeDays: activeDaySet.size,
   };
 }
 
@@ -282,11 +291,7 @@ export interface ObservedMetrics {
   totalRuns: number;
 }
 
-const MERGED_OUTCOMES = new Set([
-  "phase1_fixture_complete",
-  "phase2_easy_complete",
-  "phase2_medium_complete"
-]);
+const MERGED_OUTCOMES = new Set(["phase1_fixture_complete", "phase2_easy_complete", "phase2_medium_complete"]);
 const HALTED_OUTCOMES = new Set(["halted", "escape_hatch_hit", "retry_budget_exhausted"]);
 
 /**
@@ -294,16 +299,13 @@ const HALTED_OUTCOMES = new Set(["halted", "escape_hatch_hit", "retry_budget_exh
  * on the Phase-1/2 completion outcomes; halt-rate on the escape-hatch family.
  * Cost-per-merged divides total priced spend by the merged-run count.
  */
-export function observeMetrics(
-  runs: readonly { outcome: string | null }[],
-  totalPricedUsd: number
-): ObservedMetrics {
+export function observeMetrics(runs: readonly { outcome: string | null }[], totalPricedUsd: number): ObservedMetrics {
   const specsMerged = runs.filter((r) => r.outcome !== null && MERGED_OUTCOMES.has(r.outcome)).length;
   const halted = runs.filter((r) => r.outcome !== null && HALTED_OUTCOMES.has(r.outcome)).length;
   return {
     specsMerged,
     avgCostPerMergedUsd: specsMerged > 0 ? totalPricedUsd / specsMerged : null,
     haltRate: runs.length > 0 ? halted / runs.length : 0,
-    totalRuns: runs.length
+    totalRuns: runs.length,
   };
 }

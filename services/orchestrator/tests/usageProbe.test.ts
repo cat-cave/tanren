@@ -6,7 +6,7 @@ import {
   type SubscriptionWindow,
   type UsageAccountant,
   type UsageMonitor,
-  type WindowUsage
+  type WindowUsage,
 } from "../src/engine/usage/index.js";
 
 const target: SshTarget = {
@@ -14,15 +14,29 @@ const target: SshTarget = {
   port: 22,
   username: "tanren",
   hostKeyFingerprint: "SHA256:runner-host",
-  identitySecretRef: "runner/test/identity"
+  identitySecretRef: "runner/test/identity",
 };
 
 function window(partial: Partial<SubscriptionWindow>): SubscriptionWindow {
-  return { slot: "primary", usedPercent: 0, resetsAt: "2026-06-01T00:00:00Z", windowMinutes: 300, resetDescription: "soon", ...partial };
+  return {
+    slot: "primary",
+    usedPercent: 0,
+    resetsAt: "2026-06-01T00:00:00Z",
+    windowMinutes: 300,
+    resetDescription: "soon",
+    ...partial,
+  };
 }
 
 function windowUsage(windows: SubscriptionWindow[], creditsRemaining: number | null = null): WindowUsage {
-  return { provider: "codex", windows, creditsRemaining, accountEmail: null, source: "codex-cli", capturedAt: "2026-05-28T00:00:00Z" };
+  return {
+    provider: "codex",
+    windows,
+    creditsRemaining,
+    accountEmail: null,
+    source: "codex-cli",
+    capturedAt: "2026-05-28T00:00:00Z",
+  };
 }
 
 class FakeMonitor implements UsageMonitor {
@@ -48,13 +62,16 @@ function probe(monitor: UsageMonitor, accountant: UsageAccountant, thresholdPerc
     codexHome: "/home/tanren/.tanren/runs/run_x/codex-home",
     target,
     timeoutMs: 1000,
-    pressureThresholdPercent: thresholdPercent
+    pressureThresholdPercent: thresholdPercent,
   });
 }
 
 describe("SshUsageProbe.observeWindow", () => {
   it("flags the worst window at/over the threshold as pressure", async () => {
-    const usage = windowUsage([window({ slot: "primary", usedPercent: 12 }), window({ slot: "secondary", usedPercent: 100 })]);
+    const usage = windowUsage([
+      window({ slot: "primary", usedPercent: 12 }),
+      window({ slot: "secondary", usedPercent: 100 }),
+    ]);
     const result = await probe(new FakeMonitor(usage), new FakeAccountant(null)).observeWindow();
     expect(result.usage).toBe(usage);
     expect(result.pressure?.slot).toBe("secondary");
@@ -92,10 +109,17 @@ describe("SshUsageProbe.observeAccounting", () => {
   it("passes ccusage accounting through unchanged", async () => {
     const accounting: CcusageAccounting = {
       cli: "codex",
-      totals: { inputTokens: 10, cachedInputTokens: 0, cacheCreationTokens: 0, outputTokens: 5, reasoningOutputTokens: 2, totalTokens: 17 },
+      totals: {
+        inputTokens: 10,
+        cachedInputTokens: 0,
+        cacheCreationTokens: 0,
+        outputTokens: 5,
+        reasoningOutputTokens: 2,
+        totalTokens: 17,
+      },
       costUsd: 0.5,
       perModel: [],
-      capturedAt: "2026-05-28T00:00:00Z"
+      capturedAt: "2026-05-28T00:00:00Z",
     };
     expect(await probe(new FakeMonitor(null), new FakeAccountant(accounting)).observeAccounting()).toBe(accounting);
   });

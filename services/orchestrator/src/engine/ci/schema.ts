@@ -25,7 +25,7 @@ export const CI_WHEN_VALUES: ReadonlyArray<CiWhen> = CiWhen.options;
 export const CiStep = z
   .object({
     name: z.string().min(1),
-    run: z.string().min(1)
+    run: z.string().min(1),
   })
   .strict();
 export type CiStep = z.infer<typeof CiStep>;
@@ -36,7 +36,7 @@ export type CiStep = z.infer<typeof CiStep>;
 // bootstrap reads this to provision dependencies (e.g. `pnpm install`).
 export const CiBootstrap = z
   .object({
-    run: z.string().min(1)
+    run: z.string().min(1),
   })
   .strict();
 export type CiBootstrap = z.infer<typeof CiBootstrap>;
@@ -49,7 +49,7 @@ export type CiBootstrap = z.infer<typeof CiBootstrap>;
 export const CiTiers = z
   .object({
     fast: z.array(CiStep).min(1),
-    slow: z.array(CiStep).min(1)
+    slow: z.array(CiStep).min(1),
   })
   .catchall(z.array(CiStep).min(1));
 export type CiTiers = z.infer<typeof CiTiers>;
@@ -70,7 +70,7 @@ export const CiConfigV1 = z
     version: z.literal(1),
     bootstrap: CiBootstrap.optional(),
     tiers: CiTiers,
-    when: CiWhenPolicy
+    when: CiWhenPolicy,
   })
   .strict()
   .superRefine((cfg, ctx) => {
@@ -81,7 +81,7 @@ export const CiConfigV1 = z
         ctx.addIssue({
           code: "custom",
           path: ["when", tierName],
-          message: `when policy references unknown tier "${tierName}"`
+          message: `when policy references unknown tier "${tierName}"`,
         });
       }
     }
@@ -92,7 +92,7 @@ export const CiConfigV1 = z
         ctx.addIssue({
           code: "custom",
           path: ["when", tierName],
-          message: `tier "${tierName}" has no when policy entry`
+          message: `tier "${tierName}" has no when policy entry`,
         });
       }
     }

@@ -12,7 +12,7 @@ import { consoleTimingSink, timed, type TimingSink } from "./timing.js";
 export function timedAnswererAdapter<TOutput>(
   inner: AnswererAdapter<TOutput>,
   role: string,
-  sink: TimingSink = consoleTimingSink
+  sink: TimingSink = consoleTimingSink,
 ): AnswererAdapter<TOutput> {
   return {
     kind: inner.kind,
@@ -20,8 +20,13 @@ export function timedAnswererAdapter<TOutput>(
     authRef: inner.authRef,
     runAnswerer: (opts: AnswererRunOptions<TOutput>) =>
       timed<TOutput>(
-        { boundary: "provider", operation: "provider.answer", sink, attributes: { cli: inner.cli, role } },
-        () => inner.runAnswerer(opts)
-      )
+        {
+          boundary: "provider",
+          operation: "provider.answer",
+          sink,
+          attributes: { cli: inner.cli, role },
+        },
+        () => inner.runAnswerer(opts),
+      ),
   };
 }

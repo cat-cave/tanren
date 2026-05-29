@@ -10,13 +10,13 @@ import {
   EmptyRoutingChainError,
   SELECTABLE_ANSWERER_CLIS,
   SELECTABLE_WRITER_CLIS,
-  UnsupportedProviderError
+  UnsupportedProviderError,
 } from "../src/engine/providers/adapterSelector.js";
 import type { CheckAnswer } from "../src/engine/providers/answererSchemas.js";
 import {
   HARNESS_CAPABILITIES,
   HARNESS_PROTOCOL_VERSION,
-  harnessSupportsRole
+  harnessSupportsRole,
 } from "../src/engine/providers/harnessCapability.js";
 
 const target: SshTarget = {
@@ -24,7 +24,7 @@ const target: SshTarget = {
   port: 22,
   username: "tanren",
   hostKeyFingerprint: "SHA256:runner-host",
-  identitySecretRef: "runner/test/identity"
+  identitySecretRef: "runner/test/identity",
 };
 
 function deps() {
@@ -39,35 +39,45 @@ describe("adapter selector (P3-0012 fallback-chain resolution)", () => {
   it("resolves codex, claude, opencode, and aider writer chain entries to the right cli", () => {
     expect(buildWriterAdapter(deps(), entry("codex", "gpt-5", "credential/codex/dev")).cli).toBe("codex");
     expect(buildWriterAdapter(deps(), entry("claude", "claude-opus-4-8", "credential/claude/dev")).cli).toBe("claude");
-    expect(buildWriterAdapter(deps(), entry("opencode", "zai/glm-5.1", "credential/opencode/dev")).cli).toBe("opencode");
-    expect(buildWriterAdapter(deps(), entry("aider", "anthropic/claude-opus-4-8", "credential/aider/dev")).cli).toBe("aider");
+    expect(buildWriterAdapter(deps(), entry("opencode", "zai/glm-5.1", "credential/opencode/dev")).cli).toBe(
+      "opencode",
+    );
+    expect(buildWriterAdapter(deps(), entry("aider", "anthropic/claude-opus-4-8", "credential/aider/dev")).cli).toBe(
+      "aider",
+    );
   });
 
   it("treats aider as Writer-only — it routes for write but is not a selectable Answerer", () => {
     expect(SELECTABLE_WRITER_CLIS).toContain("aider");
     expect(SELECTABLE_ANSWERER_CLIS).not.toContain("aider");
     expect(() => buildAnswererAdapter<CheckAnswer>(deps(), entry("aider", "gpt-5", "credential/aider/dev"))).toThrow(
-      UnsupportedProviderError
+      UnsupportedProviderError,
     );
   });
 
   it("resolves codex and claude answerer chain entries to the right cli", () => {
-    expect(buildAnswererAdapter<CheckAnswer>(deps(), entry("codex", "gpt-5", "credential/codex/dev")).cli).toBe("codex");
-    expect(buildAnswererAdapter<CheckAnswer>(deps(), entry("claude", "claude-opus-4-8", "credential/claude/dev")).cli).toBe("claude");
+    expect(buildAnswererAdapter<CheckAnswer>(deps(), entry("codex", "gpt-5", "credential/codex/dev")).cli).toBe(
+      "codex",
+    );
+    expect(
+      buildAnswererAdapter<CheckAnswer>(deps(), entry("claude", "claude-opus-4-8", "credential/claude/dev")).cli,
+    ).toBe("claude");
   });
 
   it("treats opencode as Writer-only — it is not a selectable Answerer", () => {
     expect(SELECTABLE_WRITER_CLIS).toContain("opencode");
     expect(SELECTABLE_ANSWERER_CLIS).not.toContain("opencode");
-    expect(() => buildAnswererAdapter<CheckAnswer>(deps(), entry("opencode", "zai/glm-5.1", "credential/opencode/dev"))).toThrow(
-      UnsupportedProviderError
-    );
+    expect(() =>
+      buildAnswererAdapter<CheckAnswer>(deps(), entry("opencode", "zai/glm-5.1", "credential/opencode/dev")),
+    ).toThrow(UnsupportedProviderError);
   });
 
   it("rejects an unknown provider cli for both roles", () => {
-    expect(() => buildWriterAdapter(deps(), entry("wafer", "wafer-1", "credential/wafer/dev"))).toThrow(UnsupportedProviderError);
+    expect(() => buildWriterAdapter(deps(), entry("wafer", "wafer-1", "credential/wafer/dev"))).toThrow(
+      UnsupportedProviderError,
+    );
     expect(() => buildAnswererAdapter<CheckAnswer>(deps(), entry("wafer", "wafer-1", "credential/wafer/dev"))).toThrow(
-      UnsupportedProviderError
+      UnsupportedProviderError,
     );
   });
 
@@ -80,10 +90,12 @@ describe("adapter selector (P3-0012 fallback-chain resolution)", () => {
         chain: [
           { cli: "claude", model: "claude-opus-4-8", authRef: "credential/claude/dev" },
           { cli: "opencode", model: "zai/glm-5.1", authRef: "credential/opencode/dev" },
-          { cli: "codex", model: "gpt-5", authRef: "credential/codex/dev" }
-        ]
+          { cli: "codex", model: "gpt-5", authRef: "credential/codex/dev" },
+        ],
       },
-      check: { chain: [{ cli: "claude", model: "claude-opus-4-8", authRef: "credential/claude/dev" }] }
+      check: {
+        chain: [{ cli: "claude", model: "claude-opus-4-8", authRef: "credential/claude/dev" }],
+      },
     });
     expect(parsed.write.chain).toHaveLength(3);
     expect(parsed.write.chain.map((c) => c.cli)).toEqual(["claude", "opencode", "codex"]);
@@ -99,10 +111,16 @@ describe("adapter selector (P3-0012 fallback-chain resolution)", () => {
 describe("buildAdaptersFromRouting (the buildAdapters seam)", () => {
   it("resolves the head of each role's chain into the loop's four adapters", () => {
     const routing = RoutingTable.parse({
-      plan: { chain: [{ cli: "claude", model: "claude-opus-4-8", authRef: "credential/claude/dev" }] },
-      write: { chain: [{ cli: "opencode", model: "zai/glm-5.1", authRef: "credential/opencode/dev" }] },
+      plan: {
+        chain: [{ cli: "claude", model: "claude-opus-4-8", authRef: "credential/claude/dev" }],
+      },
+      write: {
+        chain: [{ cli: "opencode", model: "zai/glm-5.1", authRef: "credential/opencode/dev" }],
+      },
       check: { chain: [{ cli: "codex", model: "gpt-5", authRef: "credential/codex/dev" }] },
-      audit: { chain: [{ cli: "claude", model: "claude-opus-4-8", authRef: "credential/claude/dev" }] }
+      audit: {
+        chain: [{ cli: "claude", model: "claude-opus-4-8", authRef: "credential/claude/dev" }],
+      },
     });
     const adapters = buildAdaptersFromRouting(deps(), routing);
     expect(adapters.planner.cli).toBe("claude");

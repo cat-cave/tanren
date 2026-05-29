@@ -41,7 +41,7 @@ export class HttpDockerEngineClient implements DockerEngineClient {
     await this.requestJson("POST", "/volumes/create", {
       Name: name,
       Labels: labels,
-      Driver: "local"
+      Driver: "local",
     });
   }
 
@@ -61,17 +61,17 @@ export class HttpDockerEngineClient implements DockerEngineClient {
       Env: Object.entries(spec.env).map(([k, v]) => `${k}=${v}`),
       Labels: spec.labels,
       HostConfig: hostConfigFor(spec),
-      ExposedPorts: { "22/tcp": {} }
+      ExposedPorts: { "22/tcp": {} },
     };
     if (spec.networkName !== undefined) {
       body["NetworkingConfig"] = {
-        EndpointsConfig: { [spec.networkName]: {} }
+        EndpointsConfig: { [spec.networkName]: {} },
       };
     }
     const created = await this.requestJson<{ Id: string }>(
       "POST",
       `/containers/create?name=${encodeURIComponent(spec.name)}`,
-      body
+      body,
     );
     return created.Id;
   }
@@ -81,20 +81,24 @@ export class HttpDockerEngineClient implements DockerEngineClient {
   }
 
   async inspectContainer(id: string): Promise<ContainerInspectResult> {
-    const inspected = await this.requestJson<{ Id: string; Image: string; State?: { Running?: boolean } }>(
-      "GET",
-      `/containers/${encodeURIComponent(id)}/json`
-    );
+    const inspected = await this.requestJson<{
+      Id: string;
+      Image: string;
+      State?: { Running?: boolean };
+    }>("GET", `/containers/${encodeURIComponent(id)}/json`);
     return {
       id: inspected.Id,
       imageSha: inspected.Image,
-      running: inspected.State?.Running === true
+      running: inspected.State?.Running === true,
     };
   }
 
   async readContainerFile(id: string, path: string): Promise<Buffer> {
     const search = new URLSearchParams({ path });
-    const archive = await this.requestBuffer("GET", `/containers/${encodeURIComponent(id)}/archive?${search.toString()}`);
+    const archive = await this.requestBuffer(
+      "GET",
+      `/containers/${encodeURIComponent(id)}/archive?${search.toString()}`,
+    );
     return extractSingleTarFile(archive);
   }
 
@@ -133,7 +137,8 @@ export class HttpDockerEngineClient implements DockerEngineClient {
         method,
         path,
         socketPath: this.options.socketPath ?? defaultSocketPath,
-        headers: payload === undefined ? {} : { "Content-Type": "application/json", "Content-Length": String(payload.length) }
+        headers:
+          payload === undefined ? {} : { "Content-Type": "application/json", "Content-Length": String(payload.length) },
       };
       const req = request(requestOptions, (response) => {
         const chunks: Buffer[] = [];
@@ -142,7 +147,9 @@ export class HttpDockerEngineClient implements DockerEngineClient {
           const responseBody = Buffer.concat(chunks);
           const status = response.statusCode ?? 0;
           if (status < 200 || status >= 300) {
-            const error = new Error(`Docker API ${method} ${path} failed with status ${status}: ${responseBody.toString("utf8")}`) as Error & { statusCode: number };
+            const error = new Error(
+              `Docker API ${method} ${path} failed with status ${status}: ${responseBody.toString("utf8")}`,
+            ) as Error & { statusCode: number };
             error.statusCode = status;
             reject(error);
             return;
@@ -165,15 +172,15 @@ function hostConfigFor(spec: CreateContainerSpec): Record<string, unknown> {
     Mounts: spec.volumes.map((volume) => ({
       Target: volume.containerPath,
       Source: volume.volumeName,
-      Type: "volume"
+      Type: "volume",
     })),
     NetworkMode: spec.networkName ?? "bridge",
     CapAdd: spec.capAdd ?? [],
-    SecurityOpt: spec.securityOpt ?? []
+    SecurityOpt: spec.securityOpt ?? [],
   };
   if (spec.hostSshPort !== undefined) {
     config["PortBindings"] = {
-      "22/tcp": [{ HostIp: "0.0.0.0", HostPort: String(spec.hostSshPort) }]
+      "22/tcp": [{ HostIp: "0.0.0.0", HostPort: String(spec.hostSshPort) }],
     };
   }
   return config;

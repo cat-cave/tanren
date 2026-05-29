@@ -45,18 +45,16 @@ export class WebhookChannel implements NotificationChannel {
       severity: payload.severity,
       eventName: payload.eventName,
       ...(payload.url !== undefined ? { url: payload.url } : {}),
-      ...(payload.tags !== undefined ? { tags: payload.tags } : {})
+      ...(payload.tags !== undefined ? { tags: payload.tags } : {}),
     });
     const response = await this.fetchImpl(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body
+      body,
     });
     if (!response.ok) {
       const detail = await safeReadText(response);
-      throw new Error(
-        `webhook publish failed: ${response.status} ${response.statusText} ${detail}`.trim()
-      );
+      throw new Error(`webhook publish failed: ${response.status} ${response.statusText} ${detail}`.trim());
     }
   }
 }

@@ -18,7 +18,7 @@ const PersonaCreateBody = z.object({
   scope: z.enum(["org", "project"]).default("org"),
   name: z.string().min(1),
   description: z.string().default(""),
-  metadata: z.record(z.string(), z.unknown()).optional()
+  metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
 export function createPersonaRoutes(options: PersonaRoutesOptions) {
@@ -49,7 +49,13 @@ export function createPersonaRoutes(options: PersonaRoutesOptions) {
       return c.json({ error: "invalid_persona", issues: parsed.error.issues }, 400);
     }
     if (parsed.data.scope === "project") {
-      return c.json({ error: "invalid_persona", message: "project-scoped personas must be created under /projects/:projectId/personas" }, 400);
+      return c.json(
+        {
+          error: "invalid_persona",
+          message: "project-scoped personas must be created under /projects/:projectId/personas",
+        },
+        400,
+      );
     }
     try {
       const persona = await PersonaStore.create(
@@ -60,9 +66,9 @@ export function createPersonaRoutes(options: PersonaRoutesOptions) {
           projectId: null,
           name: parsed.data.name,
           description: parsed.data.description,
-          metadata: parsed.data.metadata ?? {}
+          metadata: parsed.data.metadata ?? {},
         },
-        { ...actor, orgId }
+        { ...actor, orgId },
       );
       return c.json(persona, 201);
     } catch (error) {
@@ -81,7 +87,7 @@ export function createPersonaRoutes(options: PersonaRoutesOptions) {
       const rows = await PersonaStore.listForProject(
         options.pool,
         { orgId, projectId },
-        { ...actor, orgId, projectId }
+        { ...actor, orgId, projectId },
       );
       return c.json({ personas: rows });
     } catch (error) {
@@ -109,9 +115,9 @@ export function createPersonaRoutes(options: PersonaRoutesOptions) {
           projectId,
           name: parsed.data.name,
           description: parsed.data.description,
-          metadata: parsed.data.metadata ?? {}
+          metadata: parsed.data.metadata ?? {},
         },
-        { ...actor, orgId, projectId }
+        { ...actor, orgId, projectId },
       );
       return c.json(persona, 201);
     } catch (error) {

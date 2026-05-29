@@ -19,7 +19,7 @@ describe("design tokens drift check", () => {
   it("passes when the dashboard copy matches the source of truth byte-for-byte", async () => {
     const root = await createFixture({
       "docs/design/tokens/colors_and_type.css": sampleTokens,
-      "services/dashboard/src/design/tokens.css": sampleTokens
+      "services/dashboard/src/design/tokens.css": sampleTokens,
     });
 
     await expect(checkDesignTokensDrift({ root })).resolves.toEqual([]);
@@ -28,7 +28,7 @@ describe("design tokens drift check", () => {
   it("flags drift when the dashboard copy diverges from the source", async () => {
     const root = await createFixture({
       "docs/design/tokens/colors_and_type.css": sampleTokens,
-      "services/dashboard/src/design/tokens.css": sampleTokens.replace("--ember-08", "--ember-09")
+      "services/dashboard/src/design/tokens.css": sampleTokens.replace("--ember-08", "--ember-09"),
     });
 
     const diagnostics = await checkDesignTokensDrift({ root });
@@ -39,7 +39,7 @@ describe("design tokens drift check", () => {
 
   it("flags a missing dashboard copy", async () => {
     const root = await createFixture({
-      "docs/design/tokens/colors_and_type.css": sampleTokens
+      "docs/design/tokens/colors_and_type.css": sampleTokens,
     });
 
     const diagnostics = await checkDesignTokensDrift({ root });

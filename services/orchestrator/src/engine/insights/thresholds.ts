@@ -33,5 +33,5 @@ export const DEFAULT_THRESHOLDS: InsightThresholds = {
   paceAnomalyWindowDays: 30,
   paceAnomalyMinSamples: 3,
   reviewStallHours: 48,
-  cacheFreshnessMs: 60 * 60 * 1000
+  cacheFreshnessMs: 60 * 60 * 1000,
 };

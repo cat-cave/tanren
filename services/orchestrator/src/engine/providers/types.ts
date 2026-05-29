@@ -19,7 +19,7 @@ export const emptyTokenUsage: TokenUsage = {
   cacheCreationTokens: 0,
   outputTokens: 0,
   reasoningOutputTokens: 0,
-  totalTokens: 0
+  totalTokens: 0,
 };
 
 export interface Commit {

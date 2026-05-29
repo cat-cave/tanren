@@ -19,7 +19,7 @@ describe("hello workflow", () => {
       { exitCode: 0, stdout: "", stderr: "", timedOut: false },
       { exitCode: 0, stdout: "", stderr: "", timedOut: false },
       { exitCode: 0, stdout: diff, stderr: "", timedOut: false },
-      { exitCode: 0, stdout: `${sha}\thello world\n`, stderr: "", timedOut: false }
+      { exitCode: 0, stdout: `${sha}\thello world\n`, stderr: "", timedOut: false },
     ]);
     const eventStore = new FakeEventStore();
     const jobQueue = new RecordingJobQueue();
@@ -31,7 +31,7 @@ describe("hello workflow", () => {
       jobQueue,
       identitySecretRef: "runner/test/identity",
       runnerImage: "ghcr.io/cat-cave/tanren-runner:test",
-      sshTimeoutMs: 250
+      sshTimeoutMs: 250,
     });
 
     expect(allocator.requests).toEqual([
@@ -39,14 +39,20 @@ describe("hello workflow", () => {
         runId: summary.runId,
         projectId: summary.projectId,
         runnerImage: "ghcr.io/cat-cave/tanren-runner:test",
-        identitySecretRef: "runner/test/identity"
-      }
+        identitySecretRef: "runner/test/identity",
+      },
     ]);
     const workspacePath = `/workspace/runs/${summary.runId}/repo`;
-    expect(ssh.runs.map((run) => run.command.cwd)).toEqual([undefined, undefined, workspacePath, workspacePath, workspacePath]);
+    expect(ssh.runs.map((run) => run.command.cwd)).toEqual([
+      undefined,
+      undefined,
+      workspacePath,
+      workspacePath,
+      workspacePath,
+    ]);
     expect(ssh.runs[0]).toEqual({
       target: allocator.allocation.target,
-      command: { command: "printf 'tanren-hello-over-ssh\\n'", timeoutMs: 250 }
+      command: { command: "printf 'tanren-hello-over-ssh\\n'", timeoutMs: 250 },
     });
     expect(ssh.runs[1]?.command.command).toContain(`mkdir -p '${workspacePath}'`);
     expect(ssh.runs[1]?.command.command).toContain("git init -b main");
@@ -89,18 +95,18 @@ describe("hello workflow", () => {
       "task.completed",
       "runner.released",
       "run.completed",
-      "hello.completed"
+      "hello.completed",
     ]);
     expect(jobQueue.enqueues.map((job) => job.taskKind)).toEqual(["plan", "write", "check", "audit"]);
     expect(jobQueue.claims.map((claim) => claim.taskKind)).toEqual(["plan", "write", "check", "audit"]);
     expect(jobQueue.completions).toHaveLength(4);
     expect(eventStore.events.find((event) => event.eventType === "workspace.prepared")?.payload).toEqual({
       runnerId: "runner_test",
-      workspacePath
+      workspacePath,
     });
     expect(eventStore.events.find((event) => event.eventType === "writer.completed")?.payload).toMatchObject({
       diff,
-      commits: [{ sha, message: "hello world" }]
+      commits: [{ sha, message: "hello world" }],
     });
     expect(pool.sql.filter((sql) => sql.includes("INSERT INTO tasks"))).toHaveLength(4);
     expect(pool.sql.filter((sql) => sql.includes("UPDATE tasks SET status = 'running'"))).toHaveLength(4);
@@ -108,10 +114,12 @@ describe("hello workflow", () => {
     expect(summary.runnerProof).toMatchObject({
       runnerId: "runner_test",
       stdout: "tanren-hello-over-ssh\n",
-      exitCode: 0
+      exitCode: 0,
     });
     expect(summary.events).toBe(eventStore.events.length);
-    expect(pool.sql).toContain("UPDATE runs SET status = 'done', outcome = 'hello_world_complete', ended_at = now() WHERE run_id = $1");
+    expect(pool.sql).toContain(
+      "UPDATE runs SET status = 'done', outcome = 'hello_world_complete', ended_at = now() WHERE run_id = $1",
+    );
   });
 
   it("releases the runner and records failure when SSH proof fails", async () => {
@@ -122,7 +130,13 @@ describe("hello workflow", () => {
     const jobQueue = new RecordingJobQueue();
 
     await expect(
-      runHelloWorkflow(pool.asPgPool(), { allocator, ssh, eventStore, jobQueue, identitySecretRef: "runner/test/identity" })
+      runHelloWorkflow(pool.asPgPool(), {
+        allocator,
+        ssh,
+        eventStore,
+        jobQueue,
+        identitySecretRef: "runner/test/identity",
+      }),
     ).rejects.toThrow("hello SSH proof failed for runner_test: exit 7");
 
     expect(allocator.releases).toEqual(["runner_test"]);
@@ -139,15 +153,20 @@ describe("hello workflow", () => {
       "hello.ssh_started",
       "runner.failed",
       "runner.released",
-      "run.failed"
+      "run.failed",
     ]);
     expect(jobQueue.claims).toEqual([]);
     expect(jobQueue.queuedRunFailures).toEqual([
-      { runId: expect.stringMatching(/^run_/) as string, failure: { kind: "run_failed", message: "hello SSH proof failed for runner_test: exit 7" } }
+      {
+        runId: expect.stringMatching(/^run_/) as string,
+        failure: { kind: "run_failed", message: "hello SSH proof failed for runner_test: exit 7" },
+      },
     ]);
-    expect(pool.sql).toContain("UPDATE runs SET status = 'failed', outcome = 'failed', ended_at = now() WHERE run_id = $1");
     expect(pool.sql).toContain(
-      "UPDATE tasks\n     SET status = 'failed', outcome = 'failed', failure_kind = $2, ended_at = now()\n     WHERE run_id = $1 AND status = 'queued'\n     RETURNING task_id, kind"
+      "UPDATE runs SET status = 'failed', outcome = 'failed', ended_at = now() WHERE run_id = $1",
+    );
+    expect(pool.sql).toContain(
+      "UPDATE tasks\n     SET status = 'failed', outcome = 'failed', failure_kind = $2, ended_at = now()\n     WHERE run_id = $1 AND status = 'queued'\n     RETURNING task_id, kind",
     );
   });
 
@@ -159,7 +178,13 @@ describe("hello workflow", () => {
     const jobQueue = new RecordingJobQueue();
 
     await expect(
-      runHelloWorkflow(pool.asPgPool(), { allocator, ssh, eventStore, jobQueue, identitySecretRef: "runner/test/identity" })
+      runHelloWorkflow(pool.asPgPool(), {
+        allocator,
+        ssh,
+        eventStore,
+        jobQueue,
+        identitySecretRef: "runner/test/identity",
+      }),
     ).rejects.toThrow('hello SSH proof failed for runner_test: unexpected stdout "wrong\\n"');
 
     expect(allocator.releases).toEqual(["runner_test"]);
@@ -176,14 +201,17 @@ describe("hello workflow", () => {
       "hello.ssh_started",
       "runner.failed",
       "runner.released",
-      "run.failed"
+      "run.failed",
     ]);
     expect(jobQueue.claims).toEqual([]);
     expect(jobQueue.queuedRunFailures).toEqual([
       {
         runId: expect.stringMatching(/^run_/) as string,
-        failure: { kind: "run_failed", message: 'hello SSH proof failed for runner_test: unexpected stdout "wrong\\n"' }
-      }
+        failure: {
+          kind: "run_failed",
+          message: 'hello SSH proof failed for runner_test: unexpected stdout "wrong\\n"',
+        },
+      },
     ]);
   });
 
@@ -193,13 +221,19 @@ describe("hello workflow", () => {
     const ssh = new RecordingSsh([
       { exitCode: 0, stdout: "tanren-hello-over-ssh\n", stderr: "", timedOut: false },
       { exitCode: 0, stdout: "", stderr: "", timedOut: false },
-      { exitCode: 9, stdout: "", stderr: "cannot write", timedOut: false }
+      { exitCode: 9, stdout: "", stderr: "cannot write", timedOut: false },
     ]);
     const eventStore = new FakeEventStore();
     const jobQueue = new RecordingJobQueue();
 
     await expect(
-      runHelloWorkflow(pool.asPgPool(), { allocator, ssh, eventStore, jobQueue, identitySecretRef: "runner/test/identity" })
+      runHelloWorkflow(pool.asPgPool(), {
+        allocator,
+        ssh,
+        eventStore,
+        jobQueue,
+        identitySecretRef: "runner/test/identity",
+      }),
     ).rejects.toThrow("fake writer mutation failed: exit 9");
 
     expect(allocator.releases).toEqual(["runner_test"]);
@@ -226,14 +260,22 @@ describe("hello workflow", () => {
       "writer.failed",
       "task.failed",
       "runner.released",
-      "run.failed"
+      "run.failed",
     ]);
-    expect(jobQueue.failures).toEqual([{ id: "job_2", failure: { kind: "write_failed", message: "fake writer mutation failed: exit 9" } }]);
+    expect(jobQueue.failures).toEqual([
+      {
+        id: "job_2",
+        failure: { kind: "write_failed", message: "fake writer mutation failed: exit 9" },
+      },
+    ]);
     expect(jobQueue.queuedRunFailures).toEqual([
-      { runId: expect.stringMatching(/^run_/) as string, failure: { kind: "run_failed", message: "fake writer mutation failed: exit 9" } }
+      {
+        runId: expect.stringMatching(/^run_/) as string,
+        failure: { kind: "run_failed", message: "fake writer mutation failed: exit 9" },
+      },
     ]);
     expect(pool.sql).toContain(
-      "UPDATE tasks SET status = 'failed', outcome = 'failed', failure_kind = $2, ended_at = now() WHERE task_id = $1"
+      "UPDATE tasks SET status = 'failed', outcome = 'failed', failure_kind = $2, ended_at = now() WHERE task_id = $1",
     );
   });
 
@@ -245,8 +287,13 @@ describe("hello workflow", () => {
       { exitCode: 0, stdout: "tanren-hello-over-ssh\n", stderr: "", timedOut: false },
       { exitCode: 0, stdout: "", stderr: "", timedOut: false },
       { exitCode: 0, stdout: "", stderr: "", timedOut: false },
-      { exitCode: 0, stdout: "diff --git a/HELLO.md b/HELLO.md\n+hello world\n", stderr: "", timedOut: false },
-      { exitCode: 0, stdout: `${sha}\thello world\n`, stderr: "", timedOut: false }
+      {
+        exitCode: 0,
+        stdout: "diff --git a/HELLO.md b/HELLO.md\n+hello world\n",
+        stderr: "",
+        timedOut: false,
+      },
+      { exitCode: 0, stdout: `${sha}\thello world\n`, stderr: "", timedOut: false },
     ]);
     const eventStore = new FakeEventStore();
     const jobQueue = new RecordingJobQueue();
@@ -256,7 +303,7 @@ describe("hello workflow", () => {
       authRef: "credential/codex/hello-workflow-test",
       async runAnswerer(opts) {
         return parseStructuredAnswererOutput("not-json", opts.outputSchema);
-      }
+      },
     };
 
     await expect(
@@ -266,8 +313,8 @@ describe("hello workflow", () => {
         eventStore,
         jobQueue,
         identitySecretRef: "runner/test/identity",
-        checkAnswerer: badChecker
-      })
+        checkAnswerer: badChecker,
+      }),
     ).rejects.toThrow("Answerer response failed tanren.check_answer.v1 validation");
 
     expect(jobQueue.failures).toEqual([
@@ -275,12 +322,12 @@ describe("hello workflow", () => {
         id: "job_3",
         failure: {
           kind: "schema_validation_failed",
-          message: expect.stringContaining("Answerer response failed tanren.check_answer.v1 validation") as string
-        }
-      }
+          message: expect.stringContaining("Answerer response failed tanren.check_answer.v1 validation") as string,
+        },
+      },
     ]);
     expect(eventStore.events.find((event) => event.eventType === "checker.failed")?.payload).toMatchObject({
-      kind: "schema_validation_failed"
+      kind: "schema_validation_failed",
     });
   });
 });
@@ -309,13 +356,16 @@ class RecordingAllocator implements Allocator {
       port: 22,
       username: "tanren",
       hostKeyFingerprint: "SHA256:runner-host",
-      identitySecretRef: "runner/test/identity"
-    }
+      identitySecretRef: "runner/test/identity",
+    },
   };
 
   async allocate(request: AllocationRequest): Promise<RunnerAllocation> {
     this.requests.push(request);
-    return { ...this.allocation, target: { ...this.allocation.target, identitySecretRef: request.identitySecretRef } };
+    return {
+      ...this.allocation,
+      target: { ...this.allocation.target, identitySecretRef: request.identitySecretRef },
+    };
   }
 
   async release(runnerId: string): Promise<void> {
@@ -346,9 +396,16 @@ class RecordingJobQueue<TPayload = { taskId: string; kind: string }> implements 
   readonly queuedRunFailures: Array<{ runId: string; failure: { kind: string; message: string } }> = [];
   private readonly jobs: Array<JobEnvelope<TPayload> & { status: "queued" | "running" | "done" | "failed" }> = [];
 
-  async enqueue(job: Omit<JobEnvelope<TPayload>, "id" | "attempts"> & { attempts?: number }): Promise<JobEnvelope<TPayload>> {
+  async enqueue(
+    job: Omit<JobEnvelope<TPayload>, "id" | "attempts"> & { attempts?: number },
+  ): Promise<JobEnvelope<TPayload>> {
     this.enqueues.push(job);
-    const envelope = { ...job, id: `job_${this.jobs.length + 1}`, attempts: job.attempts ?? 0, status: "queued" as const };
+    const envelope = {
+      ...job,
+      id: `job_${this.jobs.length + 1}`,
+      attempts: job.attempts ?? 0,
+      status: "queued" as const,
+    };
     this.jobs.push(envelope);
     return envelope;
   }
@@ -356,7 +413,8 @@ class RecordingJobQueue<TPayload = { taskId: string; kind: string }> implements 
   async claim(taskKind: string, options?: { runId?: string }): Promise<JobEnvelope<TPayload> | undefined> {
     this.claims.push({ taskKind, runId: options?.runId });
     const job = this.jobs.find(
-      (candidate) => candidate.status === "queued" && candidate.taskKind === taskKind && matchesRun(candidate.runId, options?.runId)
+      (candidate) =>
+        candidate.status === "queued" && candidate.taskKind === taskKind && matchesRun(candidate.runId, options?.runId),
     );
     if (job === undefined) {
       return undefined;

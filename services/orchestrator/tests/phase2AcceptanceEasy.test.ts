@@ -14,7 +14,7 @@ import { describe, expect, it } from "vitest";
 import {
   AcceptanceAssertionError,
   assertAcceptanceCriteria,
-  type PersistedRunSnapshot
+  type PersistedRunSnapshot,
 } from "../../../scripts/acceptance/common.js";
 
 function easySnapshot(overrides: Partial<PersistedRunSnapshot> = {}): PersistedRunSnapshot {
@@ -28,7 +28,7 @@ function easySnapshot(overrides: Partial<PersistedRunSnapshot> = {}): PersistedR
     costBases: [
       { taskKind: "write", basis: "unknown", billingMode: "subscription" },
       { taskKind: "check", basis: "unknown", billingMode: "subscription" },
-      { taskKind: "audit", basis: "unknown", billingMode: "subscription" }
+      { taskKind: "audit", basis: "unknown", billingMode: "subscription" },
     ],
     events: [
       "phase1.fixture.started",
@@ -39,12 +39,12 @@ function easySnapshot(overrides: Partial<PersistedRunSnapshot> = {}): PersistedR
       "auditor.completed",
       "github.pr.created",
       "ci.passed",
-      "phase1.fixture.completed"
+      "phase1.fixture.completed",
     ],
     plannerRerequestedCount: 0,
     workspacePathHints: ["runner.allocated", "workspace.prepared"],
     ciStatus: "passed",
-    ...overrides
+    ...overrides,
   };
 }
 
@@ -54,8 +54,8 @@ describe("phase2 acceptance — easy tier dry-run smoke", () => {
       assertAcceptanceCriteria({
         tier: "easy",
         expectedOutcome: "phase2_easy_complete",
-        snapshot: easySnapshot()
-      })
+        snapshot: easySnapshot(),
+      }),
     ).not.toThrow();
   });
 
@@ -64,8 +64,8 @@ describe("phase2 acceptance — easy tier dry-run smoke", () => {
       assertAcceptanceCriteria({
         tier: "easy",
         expectedOutcome: "phase2_easy_complete",
-        snapshot: easySnapshot({ outcome: "phase1_fixture_complete" })
-      })
+        snapshot: easySnapshot({ outcome: "phase1_fixture_complete" }),
+      }),
     ).toThrow(AcceptanceAssertionError);
   });
 
@@ -74,16 +74,16 @@ describe("phase2 acceptance — easy tier dry-run smoke", () => {
       assertAcceptanceCriteria({
         tier: "easy",
         expectedOutcome: "phase2_easy_complete",
-        snapshot: easySnapshot({ prUrl: null })
-      })
+        snapshot: easySnapshot({ prUrl: null }),
+      }),
     ).toThrow(/pr_url/);
 
     expect(() =>
       assertAcceptanceCriteria({
         tier: "easy",
         expectedOutcome: "phase2_easy_complete",
-        snapshot: easySnapshot({ prUrl: "not-a-url" })
-      })
+        snapshot: easySnapshot({ prUrl: "not-a-url" }),
+      }),
     ).toThrow(/pr_url/);
   });
 
@@ -92,8 +92,8 @@ describe("phase2 acceptance — easy tier dry-run smoke", () => {
       assertAcceptanceCriteria({
         tier: "easy",
         expectedOutcome: "phase2_easy_complete",
-        snapshot: easySnapshot({ ciStatus: "failed" })
-      })
+        snapshot: easySnapshot({ ciStatus: "failed" }),
+      }),
     ).toThrow(/ci\.passed/);
   });
 
@@ -102,8 +102,10 @@ describe("phase2 acceptance — easy tier dry-run smoke", () => {
       assertAcceptanceCriteria({
         tier: "easy",
         expectedOutcome: "phase2_easy_complete",
-        snapshot: easySnapshot({ costBases: [{ taskKind: "write", basis: "unknown", billingMode: "subscription" }] })
-      })
+        snapshot: easySnapshot({
+          costBases: [{ taskKind: "write", basis: "unknown", billingMode: "subscription" }],
+        }),
+      }),
     ).toThrow(/cost_records/);
   });
 
@@ -116,10 +118,10 @@ describe("phase2 acceptance — easy tier dry-run smoke", () => {
           costBases: [
             { taskKind: "write", basis: "provider_pricing", billingMode: "per_token" },
             { taskKind: "check", basis: "unknown", billingMode: "subscription" },
-            { taskKind: "audit", basis: "unknown", billingMode: "self_hosted" }
-          ]
-        })
-      })
+            { taskKind: "audit", basis: "unknown", billingMode: "self_hosted" },
+          ],
+        }),
+      }),
     ).not.toThrow();
   });
 
@@ -132,10 +134,10 @@ describe("phase2 acceptance — easy tier dry-run smoke", () => {
           costBases: [
             { taskKind: "write", basis: "unknown", billingMode: "subscription" },
             { taskKind: "check", basis: "unknown", billingMode: "subscription" },
-            { taskKind: "audit", basis: "unknown", billingMode: "" }
-          ]
-        })
-      })
+            { taskKind: "audit", basis: "unknown", billingMode: "" },
+          ],
+        }),
+      }),
     ).toThrow(/billing_mode/);
   });
 });

@@ -25,9 +25,9 @@ export const DEV_LOGIN_IDENTITY: IdentityClaims = {
       externalId: "tanren-dev-org",
       login: "tanren-dev",
       displayName: "Tanren Dev",
-      kind: "github_org"
-    }
-  ]
+      kind: "github_org",
+    },
+  ],
 };
 
 /** Construct the dev-login identity provider with the synthetic dev identity. */

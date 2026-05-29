@@ -10,7 +10,7 @@ import {
   ClaudeUsageLimitError,
   createClaudeAnswerer,
   extractClaudeFinalText,
-  parseClaudeAnswererOutput
+  parseClaudeAnswererOutput,
 } from "../src/engine/providers/claude.js";
 
 const target: SshTarget = {
@@ -18,12 +18,16 @@ const target: SshTarget = {
   port: 22,
   username: "tanren",
   hostKeyFingerprint: "SHA256:runner-host",
-  identitySecretRef: "runner/test/identity"
+  identitySecretRef: "runner/test/identity",
 };
 
 const authJson = JSON.stringify({ claudeAiOauth: { accessToken: "secret-access-token" } });
 
-const answer = JSON.stringify({ done: true, reason: "The diff satisfies the criteria.", suggested_fixes: null });
+const answer = JSON.stringify({
+  done: true,
+  reason: "The diff satisfies the criteria.",
+  suggested_fixes: null,
+});
 
 describe("Claude Answerer adapter", () => {
   it("runs read-only (plan mode), seeds the schema into the prompt, and parses the result text", async () => {
@@ -37,9 +41,13 @@ describe("Claude Answerer adapter", () => {
       ssh,
       target,
       credentialRef: "credential/claude/dev",
-      runId: "run_claude_answerer_1"
+      runId: "run_claude_answerer_1",
     });
-    const result = await answerer.runAnswerer({ prompt: "judge this diff", timeoutMs: 1000, outputSchema: checkAnswerSchema });
+    const result = await answerer.runAnswerer({
+      prompt: "judge this diff",
+      timeoutMs: 1000,
+      outputSchema: checkAnswerSchema,
+    });
 
     expect(ssh.commands[0]?.command.command).toContain("/run_claude_answerer_1/claude-home");
     expect(ssh.commands[2]?.command.command).toContain("--permission-mode plan");
@@ -50,7 +58,10 @@ describe("Claude Answerer adapter", () => {
   });
 
   it("raises ClaudeUsageLimitError when the account hits its usage limit", async () => {
-    const limit = JSON.stringify({ type: "result", result: "You hit your usage limit. Try again at 8 PM." });
+    const limit = JSON.stringify({
+      type: "result",
+      result: "You hit your usage limit. Try again at 8 PM.",
+    });
     const ssh = new ScriptedSsh([ok(""), ok(""), ok(`${limit}\n`)]);
     const secrets = new InMemorySecretStore();
     await secrets.put({ ref: "credential/claude/dev", value: authJson });
@@ -60,15 +71,18 @@ describe("Claude Answerer adapter", () => {
       ssh,
       target,
       credentialRef: "credential/claude/dev",
-      runId: "run_claude_answerer_limit"
+      runId: "run_claude_answerer_limit",
     });
     await expect(
-      answerer.runAnswerer({ prompt: "judge", timeoutMs: 1000, outputSchema: checkAnswerSchema })
+      answerer.runAnswerer({ prompt: "judge", timeoutMs: 1000, outputSchema: checkAnswerSchema }),
     ).rejects.toBeInstanceOf(ClaudeUsageLimitError);
   });
 
   it("keeps answerer command read-only and parses fenced JSON", () => {
-    const command = buildClaudeAnswererCommand({ configDir: "/home/tanren/claude", workspace: "/tmp/answerer" });
+    const command = buildClaudeAnswererCommand({
+      configDir: "/home/tanren/claude",
+      workspace: "/tmp/answerer",
+    });
     expect(command).toContain("--permission-mode plan");
     expect(command).not.toContain("acceptEdits");
 
@@ -78,13 +92,21 @@ describe("Claude Answerer adapter", () => {
 
   it("turns invalid JSON and nonconforming output into hard schema failures", () => {
     expect(() => parseClaudeAnswererOutput("{", checkAnswerSchema)).toThrow(AnswererSchemaValidationError);
-    expect(() => parseClaudeAnswererOutput(JSON.stringify({ done: true }), checkAnswerSchema)).toThrow(AnswererSchemaValidationError);
+    expect(() => parseClaudeAnswererOutput(JSON.stringify({ done: true }), checkAnswerSchema)).toThrow(
+      AnswererSchemaValidationError,
+    );
   });
 
   it("extracts the final result text, falling back to the last assistant block", () => {
     const stream = [
-      JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "first" }] } }),
-      JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "second" }] } })
+      JSON.stringify({
+        type: "assistant",
+        message: { content: [{ type: "text", text: "first" }] },
+      }),
+      JSON.stringify({
+        type: "assistant",
+        message: { content: [{ type: "text", text: "second" }] },
+      }),
     ].join("\n");
     expect(extractClaudeFinalText(stream)).toBe("second");
     expect(extractClaudeFinalText(JSON.stringify({ type: "result", result: "final" }))).toBe("final");

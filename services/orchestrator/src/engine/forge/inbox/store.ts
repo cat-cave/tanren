@@ -11,7 +11,7 @@ import {
   InboxSource,
   type CandidateStatus,
   type IngestedItem,
-  type SourceKind
+  type SourceKind,
 } from "./types.js";
 
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
@@ -54,7 +54,7 @@ function mapSource(row: SourceRow): InboxSource {
     detail: row.detail,
     config: row.config ?? {},
     enabled: row.enabled === "true",
-    autoRoute: row.auto_route === "true"
+    autoRoute: row.auto_route === "true",
   });
 }
 
@@ -74,7 +74,7 @@ function mapCandidate(row: CandidateRow): Candidate {
     triage: hasTriage ? CandidateTriage.parse(triageRaw) : null,
     resolvedSpecId: row.resolved_spec_id,
     sourceName: row.source_name ?? "",
-    sourceKind: (row.source_kind ?? "manual") as SourceKind
+    sourceKind: (row.source_kind ?? "manual") as SourceKind,
   });
 }
 
@@ -104,8 +104,8 @@ export async function createSource(client: QueryClient, input: CreateSourceInput
       input.detail ?? "",
       JSON.stringify(input.config ?? {}),
       input.enabled === false ? "false" : "true",
-      input.autoRoute === true ? "true" : "false"
-    ]
+      input.autoRoute === true ? "true" : "false",
+    ],
   );
   return mapSource(result.rows[0]!);
 }
@@ -114,7 +114,7 @@ export async function listSources(client: QueryClient, orgId: string): Promise<I
   const result = await client.query<SourceRow>(
     `SELECT id, org_id, project_id, kind, name, detail, config, enabled, auto_route
      FROM inbox_sources WHERE org_id = $1 ORDER BY created_at`,
-    [orgId]
+    [orgId],
   );
   return result.rows.map(mapSource);
 }
@@ -123,7 +123,7 @@ export async function getSource(client: QueryClient, sourceId: string): Promise<
   const result = await client.query<SourceRow>(
     `SELECT id, org_id, project_id, kind, name, detail, config, enabled, auto_route
      FROM inbox_sources WHERE id = $1`,
-    [sourceId]
+    [sourceId],
   );
   const row = result.rows[0];
   return row === undefined ? undefined : mapSource(row);
@@ -138,7 +138,7 @@ export async function upsertCandidate(
   source: InboxSource,
   item: IngestedItem,
   triage: CandidateTriage | null,
-  status: CandidateStatus
+  status: CandidateStatus,
 ): Promise<Candidate> {
   const id = `cand_${randomUUID()}`;
   const result = await client.query<CandidateRow>(
@@ -168,8 +168,8 @@ export async function upsertCandidate(
       status,
       triage === null ? "{}" : JSON.stringify(triage),
       source.name,
-      source.kind
-    ]
+      source.kind,
+    ],
   );
   return mapCandidate(result.rows[0]!);
 }
@@ -181,7 +181,7 @@ export async function listCandidates(client: QueryClient, orgId: string): Promis
             s.name AS source_name, s.kind AS source_kind
      FROM candidates c JOIN inbox_sources s ON s.id = c.source_id
      WHERE c.org_id = $1 ORDER BY c.created_at DESC`,
-    [orgId]
+    [orgId],
   );
   return result.rows.map(mapCandidate);
 }
@@ -193,7 +193,7 @@ export async function getCandidate(client: QueryClient, candidateId: string): Pr
             s.name AS source_name, s.kind AS source_kind
      FROM candidates c JOIN inbox_sources s ON s.id = c.source_id
      WHERE c.id = $1`,
-    [candidateId]
+    [candidateId],
   );
   const row = result.rows[0];
   return row === undefined ? undefined : mapCandidate(row);
@@ -204,7 +204,7 @@ export async function resolveCandidate(
   client: QueryClient,
   candidateId: string,
   status: CandidateStatus,
-  resolvedSpecId: string | null
+  resolvedSpecId: string | null,
 ): Promise<Candidate | undefined> {
   const result = await client.query<CandidateRow>(
     `UPDATE candidates c SET status = $2, resolved_spec_id = $3, updated_at = now()
@@ -212,7 +212,7 @@ export async function resolveCandidate(
      RETURNING c.id, c.source_id, c.org_id, c.project_id, c.external_id, c.title, c.body,
                c.severity, c.status, c.triage, c.resolved_spec_id,
                s.name AS source_name, s.kind AS source_kind`,
-    [candidateId, status, resolvedSpecId]
+    [candidateId, status, resolvedSpecId],
   );
   const row = result.rows[0];
   return row === undefined ? undefined : mapCandidate(row);

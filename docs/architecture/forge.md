@@ -118,7 +118,7 @@ structured project context (`NarrationInput`) into a `ForgeAnswer`. It
 composes four blocks:
 
 - **body** — single-sentence pulse (`"Supplier Tools: 1 run in flight,
-  1 PR review-ready; $42 spent this week."`)
+1 PR review-ready; $42 spent this week."`)
 - **attentionItems** — pending reviews, budget warnings, blocked runs,
   ranked by priority
 - **insights** — passed through from `NarrationInput.insights` (P2A-0020

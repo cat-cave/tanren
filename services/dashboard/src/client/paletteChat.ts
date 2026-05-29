@@ -49,7 +49,7 @@ const READ_TOOLS = new Set([
   "tanren.read_insights",
   "repo.read_file",
   "repo.grep",
-  "repo.read_issue"
+  "repo.read_issue",
 ]);
 
 // Maps a READ-tool action to an in-shell route so an action card can auto-
@@ -68,7 +68,7 @@ export function routeForAction(action: ForgeAction): string | undefined {
 function el<K extends keyof HTMLElementTagNameMap>(
   tag: K,
   className?: string,
-  text?: string
+  text?: string,
 ): HTMLElementTagNameMap[K] {
   const node = document.createElement(tag);
   if (className !== undefined) node.className = className;
@@ -169,7 +169,7 @@ export function appendPending(chat: HTMLElement): HTMLElement {
 export async function askForge(
   orgId: string,
   question: string,
-  scope: { projectId?: string; threadId?: string }
+  scope: { projectId?: string; threadId?: string },
 ): Promise<ForgeAskResponse | undefined> {
   if (orgId === "") return undefined;
   const body: Record<string, unknown> = { orgId, question };
@@ -179,7 +179,7 @@ export async function askForge(
     const response = await fetch("/forge/ask", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(body)
+      body: JSON.stringify(body),
     });
     if (!response.ok) return undefined;
     return (await response.json()) as ForgeAskResponse;

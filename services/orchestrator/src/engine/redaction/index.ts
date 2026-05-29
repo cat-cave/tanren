@@ -9,7 +9,7 @@ export {
   canViewRaw,
   describeRequiredScope,
   hasElevatedScope,
-  sensitivityToRequiredScopes
+  sensitivityToRequiredScopes,
 } from "./scopes.js";
 
 export {
@@ -17,14 +17,14 @@ export {
   isRedactionMarker,
   type RedactionInput,
   type RedactionMarker,
-  type RedactionOutput
+  type RedactionOutput,
 } from "./serializer.js";
 
 export {
   containsCredentialSubstring,
   looksLikeCredential,
   shannonEntropyBitsPerChar,
-  type HighEntropyOptions
+  type HighEntropyOptions,
 } from "./highEntropy.js";
 
 export { emitRedactionAudit, type RedactionAuditInput } from "./audit.js";

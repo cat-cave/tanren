@@ -5,7 +5,7 @@ import {
   SshCcusageAccountant,
   SshCodexbarUsageMonitor,
   buildCcusageCommand,
-  buildCodexbarUsageCommand
+  buildCodexbarUsageCommand,
 } from "../src/engine/usage/sshMonitors.js";
 
 const target: SshTarget = {
@@ -13,7 +13,7 @@ const target: SshTarget = {
   port: 22,
   username: "tanren",
   hostKeyFingerprint: "SHA256:runner-host",
-  identitySecretRef: "runner/test/identity"
+  identitySecretRef: "runner/test/identity",
 };
 
 const codexHome = "/home/tanren/.tanren/runs/run_usage_1/codex-home";
@@ -24,18 +24,35 @@ const codexbarJson = JSON.stringify([
     source: "codex-cli",
     usage: {
       accountEmail: "operator@example.com",
-      primary: { usedPercent: 0, resetsAt: "2026-05-28T08:37:21Z", windowMinutes: 300, resetDescription: "tomorrow" },
-      secondary: { usedPercent: 100, resetsAt: "2026-05-30T20:19:33Z", windowMinutes: 10080, resetDescription: "May 30" },
+      primary: {
+        usedPercent: 0,
+        resetsAt: "2026-05-28T08:37:21Z",
+        windowMinutes: 300,
+        resetDescription: "tomorrow",
+      },
+      secondary: {
+        usedPercent: 100,
+        resetsAt: "2026-05-30T20:19:33Z",
+        windowMinutes: 10080,
+        resetDescription: "May 30",
+      },
       tertiary: null,
-      updatedAt: "2026-05-28T03:41:23Z"
+      updatedAt: "2026-05-28T03:41:23Z",
     },
-    credits: { events: [], remaining: 0, updatedAt: "2026-05-28T03:41:23Z" }
-  }
+    credits: { events: [], remaining: 0, updatedAt: "2026-05-28T03:41:23Z" },
+  },
 ]);
 
 const ccusageJson = JSON.stringify({
   daily: [],
-  totals: { inputTokens: 10, outputTokens: 2, cachedInputTokens: 1, reasoningOutputTokens: 0, totalTokens: 13, costUSD: 0 }
+  totals: {
+    inputTokens: 10,
+    outputTokens: 2,
+    cachedInputTokens: 1,
+    reasoningOutputTokens: 0,
+    totalTokens: 13,
+    costUSD: 0,
+  },
 });
 
 class ScriptedSsh implements SshSubstrate {
@@ -54,7 +71,7 @@ function ok(stdout: string): SshCommandResult {
 describe("command builders", () => {
   it("builds the codexbar command with quoted CODEX_HOME and provider", () => {
     expect(buildCodexbarUsageCommand({ provider: "codex", codexHome })).toBe(
-      `CODEX_HOME='${codexHome}' codexbar usage --provider 'codex' --source cli --format json`
+      `CODEX_HOME='${codexHome}' codexbar usage --provider 'codex' --source cli --format json`,
     );
   });
 
@@ -67,7 +84,12 @@ describe("SshCodexbarUsageMonitor", () => {
   it("runs codexbar over SSH and parses the window state", async () => {
     const ssh = new ScriptedSsh(ok(codexbarJson));
     const monitor = new SshCodexbarUsageMonitor(ssh);
-    const usage = await monitor.readWindowState({ provider: "codex", codexHome, target, timeoutMs: 5000 });
+    const usage = await monitor.readWindowState({
+      provider: "codex",
+      codexHome,
+      target,
+      timeoutMs: 5000,
+    });
     expect(ssh.commands[0]?.command).toContain("codexbar usage --provider 'codex'");
     expect(ssh.commands[0]?.command).toContain(`CODEX_HOME='${codexHome}'`);
     expect(usage?.windows.map((window) => window.slot)).toEqual(["primary", "secondary"]);
@@ -78,14 +100,18 @@ describe("SshCodexbarUsageMonitor", () => {
     const notes: string[] = [];
     const ssh = new ScriptedSsh({ exitCode: 1, stdout: "", stderr: "boom", timedOut: false });
     const monitor = new SshCodexbarUsageMonitor(ssh, (message) => notes.push(message));
-    await expect(monitor.readWindowState({ provider: "codex", codexHome, target, timeoutMs: 5000 })).resolves.toBeNull();
+    await expect(
+      monitor.readWindowState({ provider: "codex", codexHome, target, timeoutMs: 5000 }),
+    ).resolves.toBeNull();
     expect(notes[0]).toContain("codexbar exited 1");
   });
 
   it("returns null on timeout", async () => {
     const ssh = new ScriptedSsh({ exitCode: null, stdout: "", stderr: "", timedOut: true });
     const monitor = new SshCodexbarUsageMonitor(ssh, () => {});
-    await expect(monitor.readWindowState({ provider: "codex", codexHome, target, timeoutMs: 5000 })).resolves.toBeNull();
+    await expect(
+      monitor.readWindowState({ provider: "codex", codexHome, target, timeoutMs: 5000 }),
+    ).resolves.toBeNull();
   });
 });
 
@@ -93,7 +119,12 @@ describe("SshCcusageAccountant", () => {
   it("runs ccusage over SSH and parses the accounting", async () => {
     const ssh = new ScriptedSsh(ok(ccusageJson));
     const accountant = new SshCcusageAccountant(ssh);
-    const accounting = await accountant.readAccounting({ cli: "codex", codexHome, target, timeoutMs: 5000 });
+    const accounting = await accountant.readAccounting({
+      cli: "codex",
+      codexHome,
+      target,
+      timeoutMs: 5000,
+    });
     expect(ssh.commands[0]?.command).toContain("ccusage 'codex' --json");
     expect(accounting?.cli).toBe("codex");
     expect(accounting?.costUsd).toBeNull();
@@ -101,7 +132,13 @@ describe("SshCcusageAccountant", () => {
   });
 
   it("returns null on an ssh failure (never throws)", async () => {
-    const ssh = new ScriptedSsh({ exitCode: 0, stdout: "", stderr: "", timedOut: false, failure: { kind: "ssh_failed", target: "runner", message: "down" } });
+    const ssh = new ScriptedSsh({
+      exitCode: 0,
+      stdout: "",
+      stderr: "",
+      timedOut: false,
+      failure: { kind: "ssh_failed", target: "runner", message: "down" },
+    });
     const accountant = new SshCcusageAccountant(ssh, () => {});
     await expect(accountant.readAccounting({ cli: "codex", codexHome, target, timeoutMs: 5000 })).resolves.toBeNull();
   });

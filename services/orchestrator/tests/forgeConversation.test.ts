@@ -14,7 +14,7 @@ import {
   createFakeForgeAnswerer,
   type ForgeConversationContext,
   type ForgeReadToolCall,
-  type ForgeReadToolDispatcher
+  type ForgeReadToolDispatcher,
 } from "../src/engine/forge/index.js";
 import { ForgeThreadStore } from "../src/engine/forge/threads.js";
 import { createDeterministicForgeAnswerer } from "../src/routes/forge/deterministicAnswerer.js";
@@ -25,14 +25,14 @@ const actor: ActorContext = {
   orgId: "org_a",
   projectId: "project_a",
   scopes: ["org:member", "project:member"],
-  source: "session"
+  source: "session",
 };
 
 async function seedProjectThread(client: ForgeMemoryClient): Promise<string> {
   const thread = await ForgeThreadStore.create(
     client as never,
     { orgId: "org_a", scope: "project", projectId: "project_a", runId: null, title: null },
-    actor
+    actor,
   );
   return thread.id;
 }
@@ -48,7 +48,7 @@ describe("askForge (thick-Forge conversation engine)", () => {
       script: [
         {
           kind: "tools",
-          toolCalls: [{ tool: "tanren.read_insights", args: { projectId: "project_a" } }]
+          toolCalls: [{ tool: "tanren.read_insights", args: { projectId: "project_a" } }],
         },
         {
           kind: "final",
@@ -56,10 +56,10 @@ describe("askForge (thick-Forge conversation engine)", () => {
             body: "Two specs are stuck behind a budget call.",
             attentionItems: [],
             insights: [],
-            prompts: ["raise the budget", "show the dependency chain"]
-          }
-        }
-      ]
+            prompts: ["raise the budget", "show the dependency chain"],
+          },
+        },
+      ],
     });
 
     const dispatched: ForgeReadToolCall[] = [];
@@ -70,7 +70,7 @@ describe("askForge (thick-Forge conversation engine)", () => {
 
     const result = await askForge(
       { client: client as never, answerer, dispatchReadTool },
-      { threadId, question: "what's blocking my milestones?", audience: "project:member", actor }
+      { threadId, question: "what's blocking my milestones?", audience: "project:member", actor },
     );
 
     // The read tool ran exactly once with the requested args.
@@ -104,14 +104,22 @@ describe("askForge (thick-Forge conversation engine)", () => {
         {
           kind: "tools",
           toolCalls: [
-            { tool: "tanren.create_spec", args: { projectId: "project_a", title: "x", description: "y" } }
-          ]
+            {
+              tool: "tanren.create_spec",
+              args: { projectId: "project_a", title: "x", description: "y" },
+            },
+          ],
         },
         {
           kind: "final",
-          answer: { body: "Here's what I found.", attentionItems: [], insights: [], prompts: ["next?"] }
-        }
-      ]
+          answer: {
+            body: "Here's what I found.",
+            attentionItems: [],
+            insights: [],
+            prompts: ["next?"],
+          },
+        },
+      ],
     });
 
     const calls: string[] = [];
@@ -121,7 +129,7 @@ describe("askForge (thick-Forge conversation engine)", () => {
     };
     await askForge(
       { client: client as never, answerer, dispatchReadTool: dispatch },
-      { threadId, question: "draft a spec", audience: "project:member", actor }
+      { threadId, question: "draft a spec", audience: "project:member", actor },
     );
 
     // The write tool was filtered out before any dispatch.
@@ -134,16 +142,21 @@ describe("askForge (thick-Forge conversation engine)", () => {
 
     // Always asks for the same read tool, never finalizes.
     const answerer = createFakeForgeAnswerer({
-      script: [{ kind: "tools", toolCalls: [{ tool: "tanren.read_insights", args: { projectId: "project_a" } }] }]
+      script: [
+        {
+          kind: "tools",
+          toolCalls: [{ tool: "tanren.read_insights", args: { projectId: "project_a" } }],
+        },
+      ],
     });
     const result = await askForge(
       {
         client: client as never,
         answerer,
         dispatchReadTool: (): Promise<unknown> => Promise.resolve({ insights: [] }),
-        maxToolRounds: 2
+        maxToolRounds: 2,
       },
-      { threadId, question: "loop forever", audience: "project:member", actor }
+      { threadId, question: "loop forever", audience: "project:member", actor },
     );
 
     const answer = ForgeAnswer.parse(result.forgeTurn.render);
@@ -162,7 +175,12 @@ describe("askForge (thick-Forge conversation engine)", () => {
 
     const result = await askForge(
       { client: client as never, answerer: createDeterministicForgeAnswerer(), dispatchReadTool },
-      { threadId, question: "any open insights I should clear?", audience: "project:member", actor }
+      {
+        threadId,
+        question: "any open insights I should clear?",
+        audience: "project:member",
+        actor,
+      },
     );
 
     // It read a grounding tool and returned a parseable answer with follow-ups.

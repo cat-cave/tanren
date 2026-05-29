@@ -5,16 +5,7 @@
 // migration. See docs/architecture/forge.md.
 
 import { sql } from "drizzle-orm";
-import {
-  check,
-  index,
-  integer,
-  jsonb,
-  pgTable,
-  text,
-  timestamp,
-  uniqueIndex
-} from "drizzle-orm/pg-core";
+import { check, index, integer, jsonb, pgTable, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
 import { organizations, projects } from "./schemaCore.js";
 
 export const forgeThreads = pgTable(
@@ -30,7 +21,7 @@ export const forgeThreads = pgTable(
     title: text("title"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-    closedAt: timestamp("closed_at", { withTimezone: true })
+    closedAt: timestamp("closed_at", { withTimezone: true }),
   },
   (table) => [
     check("forge_threads_scope_check", sql`${table.scope} IN ('org','project','run')`),
@@ -38,12 +29,12 @@ export const forgeThreads = pgTable(
       "forge_threads_scope_consistency_check",
       sql`(${table.scope} = 'org' AND ${table.projectId} IS NULL AND ${table.runId} IS NULL)
         OR (${table.scope} = 'project' AND ${table.projectId} IS NOT NULL AND ${table.runId} IS NULL)
-        OR (${table.scope} = 'run' AND ${table.projectId} IS NOT NULL AND ${table.runId} IS NOT NULL)`
+        OR (${table.scope} = 'run' AND ${table.projectId} IS NOT NULL AND ${table.runId} IS NOT NULL)`,
     ),
     index("forge_threads_org_id").on(table.orgId),
     index("forge_threads_project_id").on(table.projectId),
-    index("forge_threads_run_id").on(table.runId)
-  ]
+    index("forge_threads_run_id").on(table.runId),
+  ],
 );
 
 export const forgeTurns = pgTable(
@@ -58,18 +49,15 @@ export const forgeTurns = pgTable(
     audience: text("audience").notNull(),
     authorKind: text("author_kind").notNull(),
     render: jsonb("render").notNull(),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow()
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
     check(
       "forge_turns_audience_check",
-      sql`${table.audience} IN ('project:member','project:admin','org:admin','platform:admin')`
+      sql`${table.audience} IN ('project:member','project:admin','org:admin','platform:admin')`,
     ),
-    check(
-      "forge_turns_author_kind_check",
-      sql`${table.authorKind} IN ('forge_template','forge_llm','operator')`
-    ),
+    check("forge_turns_author_kind_check", sql`${table.authorKind} IN ('forge_template','forge_llm','operator')`),
     uniqueIndex("forge_turns_thread_index_unique").on(table.threadId, table.turnIndex),
-    index("forge_turns_thread_id").on(table.threadId)
-  ]
+    index("forge_turns_thread_id").on(table.threadId),
+  ],
 );

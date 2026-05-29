@@ -26,7 +26,7 @@ import type {
   ForgeConversationAnswerer,
   ForgeConversationContext,
   ForgeReadToolCall,
-  ForgeToolResult
+  ForgeToolResult,
 } from "./types.js";
 
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
@@ -34,10 +34,7 @@ type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 // Dispatches a single READ tool. Injected so the engine has no hard dependency
 // on the HTTP route's tool wiring (pool/secrets/githubHttp) — the route passes
 // a dispatcher closed over those deps; tests pass a deterministic stub.
-export type ForgeReadToolDispatcher = (
-  call: ForgeReadToolCall,
-  actor: ActorContext
-) => Promise<unknown>;
+export type ForgeReadToolDispatcher = (call: ForgeReadToolCall, actor: ActorContext) => Promise<unknown>;
 
 export interface ForgeConversationDeps {
   client: QueryClient;
@@ -82,9 +79,9 @@ export async function askForge(deps: ForgeConversationDeps, input: ForgeAskInput
       source: { kind: "operator", userId: input.actor.userId },
       audience: input.audience,
       authorKind: "operator",
-      render: { body: input.question, attentionItems: [], insights: [], prompts: [] }
+      render: { body: input.question, attentionItems: [], insights: [], prompts: [] },
     },
-    input.actor
+    input.actor,
   );
 
   const history = await ForgeTurnStore.list(deps.client, { threadId: input.threadId, limit: 50 }, input.actor);
@@ -94,7 +91,7 @@ export async function askForge(deps: ForgeConversationDeps, input: ForgeAskInput
     history,
     projectId: thread.projectId,
     runId: thread.runId,
-    actor: input.actor
+    actor: input.actor,
   });
 
   const forgeTurn = await ForgeTurnStore.append(
@@ -104,9 +101,9 @@ export async function askForge(deps: ForgeConversationDeps, input: ForgeAskInput
       source: { kind: "operator", userId: input.actor.userId },
       audience: input.audience,
       authorKind: "forge_llm",
-      render: answer.answer
+      render: answer.answer,
     },
-    input.actor
+    input.actor,
   );
 
   return { operatorTurn, forgeTurn, toolResults: answer.toolResults };
@@ -139,7 +136,7 @@ async function runAnswererLoop(deps: ForgeConversationDeps, input: AnswererLoopI
       history: input.history,
       projectId: input.projectId,
       runId: input.runId,
-      toolResults
+      toolResults,
     };
     const step = await deps.answerer.respond(context);
     if (step.kind === "final") {
@@ -167,7 +164,7 @@ async function runAnswererLoop(deps: ForgeConversationDeps, input: AnswererLoopI
     history: input.history,
     projectId: input.projectId,
     runId: input.runId,
-    toolResults
+    toolResults,
   });
   if (finalStep.kind === "final") {
     return { answer: finalStep.answer, toolResults };
@@ -179,16 +176,16 @@ async function runAnswererLoop(deps: ForgeConversationDeps, input: AnswererLoopI
       body: "I could not complete that just now — try rephrasing or narrowing the question.",
       attentionItems: [],
       insights: [],
-      prompts: []
+      prompts: [],
     },
-    toolResults
+    toolResults,
   };
 }
 
 async function runTool(
   deps: ForgeConversationDeps,
   call: ForgeReadToolCall,
-  actor: ActorContext
+  actor: ActorContext,
 ): Promise<ForgeToolResult> {
   try {
     const result = await deps.dispatchReadTool(call, actor);

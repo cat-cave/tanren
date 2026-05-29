@@ -14,7 +14,7 @@ Phase 2 stores config in the database only:
   carries `OrgConfigV1`.
 - `projects.config` (jsonb, existed from Phase 1) carries `ProjectConfigV1`.
 
-Other operator surfaces that *look* like config are intentionally kept out
+Other operator surfaces that _look_ like config are intentionally kept out
 of the DB:
 
 - `.github/workflows/tanren-ci.yml`, `.mergify.yml`, and `CODEOWNERS` live
@@ -61,9 +61,7 @@ Example with a single Codex entry for the writer:
   "version": 1,
   "routing": {
     "write": {
-      "chain": [
-        { "cli": "codex", "model": "gpt-5", "authRef": "vault://codex/prod" }
-      ]
+      "chain": [{ "cli": "codex", "model": "gpt-5", "authRef": "vault://codex/prod" }]
     }
   }
 }
@@ -88,11 +86,7 @@ schemas themselves are intentionally stateless.
 ## Migration helpers
 
 ```ts
-import {
-  migrateOrgConfig,
-  migrateProjectConfig,
-  UnknownConfigVersionError
-} from "@tanren/orchestrator/engine/config";
+import { migrateOrgConfig, migrateProjectConfig, UnknownConfigVersionError } from "@tanren/orchestrator/engine/config";
 
 const cfg = migrateProjectConfig(row.config);
 // cfg.version === 1, every field defaulted.

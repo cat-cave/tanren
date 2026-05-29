@@ -13,7 +13,7 @@ export class WorkspaceCommandError extends Error {
   constructor(
     message: string,
     readonly label: string,
-    readonly result: SshCommandResult
+    readonly result: SshCommandResult,
   ) {
     super(message);
     this.name = "WorkspaceCommandError";
@@ -23,7 +23,7 @@ export class WorkspaceCommandError extends Error {
 export async function runWorkspaceSshCommand(
   ssh: SshSubstrate,
   target: SshTarget,
-  command: WorkspaceSshCommand
+  command: WorkspaceSshCommand,
 ): Promise<SshCommandResult> {
   const result = await ssh.run(target, command);
   if (result.failure !== undefined || result.timedOut || result.exitCode !== 0) {

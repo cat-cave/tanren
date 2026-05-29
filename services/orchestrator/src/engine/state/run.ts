@@ -13,7 +13,7 @@ export const RunStatus = z.enum([
   "failed",
   "cancelled",
   // Phase 0/1 historical values still present in the database
-  "done"
+  "done",
 ]);
 export type RunStatus = z.infer<typeof RunStatus>;
 
@@ -32,7 +32,7 @@ export const RunOutcome = z.enum([
   "hello_world_complete",
   "ok",
   "failed",
-  "pending"
+  "pending",
 ]);
 export type RunOutcome = z.infer<typeof RunOutcome>;
 
@@ -45,7 +45,7 @@ const allowedRunTransitions: Record<RunStatus, ReadonlyArray<RunStatus>> = {
   completed: [],
   done: [],
   failed: [],
-  cancelled: []
+  cancelled: [],
 };
 
 export type RunTransition = { from: RunStatus; to: RunStatus };
@@ -55,7 +55,10 @@ export function isAllowedRunTransition(from: RunStatus, to: RunStatus): boolean 
 }
 
 export class IllegalRunTransitionError extends Error {
-  constructor(readonly from: RunStatus, readonly to: RunStatus) {
+  constructor(
+    readonly from: RunStatus,
+    readonly to: RunStatus,
+  ) {
     super(`illegal run transition: ${from} -> ${to}`);
   }
 }

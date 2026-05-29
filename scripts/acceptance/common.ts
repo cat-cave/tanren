@@ -74,7 +74,7 @@ export async function loadAcceptanceEnv(): Promise<AcceptanceEnvShape> {
     timeoutMs: config.timeout_ms,
     maxCiPolls: config.max_ci_polls,
     ciPollDelayMs: config.ci_poll_delay_ms,
-    configSource: config.source
+    configSource: config.source,
   };
 }
 
@@ -91,7 +91,7 @@ export interface AcceptanceContext {
 
 export async function bootstrapAcceptanceContext(
   env: AcceptanceEnv,
-  tier: "easy" | "medium"
+  tier: "easy" | "medium",
 ): Promise<AcceptanceContext> {
   const pool = createDbPool(env.databaseUrl);
   await migrate(pool);
@@ -103,11 +103,11 @@ export async function bootstrapAcceptanceContext(
 
   await storeCodexAuthBundle(secrets, {
     ref: codexCredentialRef,
-    authJson: await readFile(env.codexAuthJsonFile, "utf8")
+    authJson: await readFile(env.codexAuthJsonFile, "utf8"),
   });
   await storeGithubToken(secrets, {
     ref: githubCredentialRef,
-    token: (await readFile(env.githubTokenFile, "utf8")).trim()
+    token: (await readFile(env.githubTokenFile, "utf8")).trim(),
   });
   await secrets.put({ ref: identitySecretRef, value: await readFile(env.sshKeyPath, "utf8") });
 
@@ -117,7 +117,7 @@ export async function bootstrapAcceptanceContext(
     codexCredentialRef,
     githubCredentialRef,
     identitySecretRef,
-    env
+    env,
   };
 }
 
@@ -143,17 +143,18 @@ export interface PersistedRunSnapshot {
 // keep the SQL here rather than in the orchestrator engine so the gate's
 // observation surface is independent of internal code paths.
 export async function loadRunSnapshot(pool: pg.Pool, runId: string): Promise<PersistedRunSnapshot> {
-  const runRow = await pool.query<{ status: string; outcome: string | null; pr_url: string | null }>(
-    "SELECT status, outcome, pr_url FROM runs WHERE run_id = $1",
-    [runId]
-  );
+  const runRow = await pool.query<{
+    status: string;
+    outcome: string | null;
+    pr_url: string | null;
+  }>("SELECT status, outcome, pr_url FROM runs WHERE run_id = $1", [runId]);
   if (runRow.rowCount === 0) {
     throw new AcceptanceAssertionError(`run not found: ${runId}`);
   }
 
   const taskRows = await pool.query<{ kind: string }>(
     "SELECT kind FROM tasks WHERE run_id = $1 ORDER BY started_at ASC NULLS LAST, task_id ASC",
-    [runId]
+    [runId],
   );
   const taskKinds = taskRows.rows.map((row) => row.kind);
   const counts = { plan: 0, write: 0, check: 0, audit: 0, ci: 0 };
@@ -163,26 +164,26 @@ export async function loadRunSnapshot(pool: pg.Pool, runId: string): Promise<Per
     }
   }
 
-  const costRows = await pool.query<{ task_kind: string; cost_basis: string; billing_mode: string }>(
+  const costRows = await pool.query<{
+    task_kind: string;
+    cost_basis: string;
+    billing_mode: string;
+  }>(
     `SELECT t.kind AS task_kind, cr.cost_basis, cr.billing_mode
        FROM cost_records cr
        JOIN tasks t ON t.task_id = cr.task_id
       WHERE cr.run_id = $1
       ORDER BY cr.recorded_at ASC, cr.id ASC`,
-    [runId]
+    [runId],
   );
 
   const eventRows = await pool.query<{ event_type: string }>(
     "SELECT event_type FROM events WHERE run_id = $1 ORDER BY ts ASC, id ASC",
-    [runId]
+    [runId],
   );
   const events = eventRows.rows.map((row) => row.event_type);
   const plannerRerequestedCount = events.filter((name) => name === "planner.rerequested").length;
-  const ciStatus = events.includes("ci.passed")
-    ? "passed"
-    : events.includes("ci.failed")
-      ? "failed"
-      : "unknown";
+  const ciStatus = events.includes("ci.passed") ? "passed" : events.includes("ci.failed") ? "failed" : "unknown";
   const workspacePathHints = events.filter((name) => name.startsWith("workspace.") || name === "runner.allocated");
 
   return {
@@ -192,16 +193,23 @@ export async function loadRunSnapshot(pool: pg.Pool, runId: string): Promise<Per
     prUrl: runRow.rows[0]?.pr_url ?? null,
     taskKinds,
     taskCounts: counts,
-    costBases: costRows.rows.map((row) => ({ taskKind: row.task_kind, basis: row.cost_basis, billingMode: row.billing_mode })),
+    costBases: costRows.rows.map((row) => ({
+      taskKind: row.task_kind,
+      basis: row.cost_basis,
+      billingMode: row.billing_mode,
+    })),
     events,
     plannerRerequestedCount,
     workspacePathHints,
-    ciStatus
+    ciStatus,
   };
 }
 
 export class AcceptanceAssertionError extends Error {
-  constructor(message: string, readonly runId?: string) {
+  constructor(
+    message: string,
+    readonly runId?: string,
+  ) {
     super(message);
   }
 }
@@ -266,7 +274,7 @@ export function assertAcceptanceCriteria(input: AcceptanceCriteriaInput): void {
   if (failures.length > 0) {
     throw new AcceptanceAssertionError(
       `acceptance criteria failed for ${tier} tier:\n  - ${failures.join("\n  - ")}`,
-      snapshot.runId
+      snapshot.runId,
     );
   }
 }
@@ -303,7 +311,7 @@ export function printProofBlock(input: {
     `events_total    : ${snapshot.events.length}`,
     "==========================================",
     "Paste this block into ROADMAP.md under the Phase 2A live proof section.",
-    ""
+    "",
   ].join("\n");
   process.stdout.write(`${block}\n`);
 }

@@ -30,7 +30,7 @@ const SYSTEM_PREAMBLE = [
   "  insights        (array)   workflow insights with their own actions.",
   "  prompts         (array)   2-4 short follow-up suggestions the operator might ask next (rendered as chips).",
   "",
-  "Keep answers concise and operator-focused. Always include 2-4 follow-up prompts."
+  "Keep answers concise and operator-focused. Always include 2-4 follow-up prompts.",
 ].join("\n");
 
 function renderTurn(turn: ForgeTurnRow): string {

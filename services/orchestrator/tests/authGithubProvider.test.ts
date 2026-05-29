@@ -16,7 +16,7 @@ function buildProvider(handler: (call: FetchCall) => Response | Promise<Response
   const provider = new GitHubOAuthProvider({
     clientId: "client_id_value",
     clientSecret: "client_secret_value",
-    fetchImpl
+    fetchImpl,
   });
   return { provider, calls };
 }
@@ -34,29 +34,27 @@ describe("GitHubOAuthProvider", () => {
     const { provider, calls } = buildProvider((call) => {
       if (call.url.includes("login/oauth/access_token")) {
         return new Response(JSON.stringify({ access_token: "ghs_token", token_type: "bearer" }), {
-          headers: { "Content-Type": "application/json" }
+          headers: { "Content-Type": "application/json" },
         });
       }
       if (call.url.endsWith("/user")) {
-        return new Response(
-          JSON.stringify({ id: 42, login: "OctoCat", name: "Octo Cat", email: null }),
-          { headers: { "Content-Type": "application/json" } }
-        );
+        return new Response(JSON.stringify({ id: 42, login: "OctoCat", name: "Octo Cat", email: null }), {
+          headers: { "Content-Type": "application/json" },
+        });
       }
       if (call.url.endsWith("/user/emails")) {
         return new Response(
           JSON.stringify([
             { email: "secondary@example.com", primary: false, verified: true },
-            { email: "octo@example.com", primary: true, verified: true }
+            { email: "octo@example.com", primary: true, verified: true },
           ]),
-          { headers: { "Content-Type": "application/json" } }
+          { headers: { "Content-Type": "application/json" } },
         );
       }
       if (call.url.endsWith("/user/orgs")) {
-        return new Response(
-          JSON.stringify([{ id: 7, login: "Cat-Cave", description: "the cat cave" }]),
-          { headers: { "Content-Type": "application/json" } }
-        );
+        return new Response(JSON.stringify([{ id: 7, login: "Cat-Cave", description: "the cat cave" }]), {
+          headers: { "Content-Type": "application/json" },
+        });
       }
       return new Response("not found", { status: 404 });
     });
@@ -65,10 +63,10 @@ describe("GitHubOAuthProvider", () => {
       providerSubject: "42",
       login: "OctoCat",
       email: "octo@example.com",
-      displayName: "Octo Cat"
+      displayName: "Octo Cat",
     });
     expect(claims.orgs).toEqual([
-      { externalId: "7", login: "cat-cave", displayName: "the cat cave", kind: "github_org" }
+      { externalId: "7", login: "cat-cave", displayName: "the cat cave", kind: "github_org" },
     ]);
     expect(calls.some((c) => c.url.includes("login/oauth/access_token"))).toBe(true);
   });
@@ -77,16 +75,18 @@ describe("GitHubOAuthProvider", () => {
     const { provider, calls } = buildProvider((call) => {
       if (call.url.includes("login/oauth/access_token")) {
         return new Response(JSON.stringify({ access_token: "ghs_token" }), {
-          headers: { "Content-Type": "application/json" }
+          headers: { "Content-Type": "application/json" },
         });
       }
       if (call.url.endsWith("/user")) {
         return new Response(JSON.stringify({ id: 1, login: "x", name: "X", email: null }), {
-          headers: { "Content-Type": "application/json" }
+          headers: { "Content-Type": "application/json" },
         });
       }
       if (call.url.endsWith("/user/emails")) {
-        return new Response(JSON.stringify([]), { headers: { "Content-Type": "application/json" } });
+        return new Response(JSON.stringify([]), {
+          headers: { "Content-Type": "application/json" },
+        });
       }
       return new Response(JSON.stringify([]), { headers: { "Content-Type": "application/json" } });
     });
@@ -103,15 +103,14 @@ describe("GitHubOAuthProvider", () => {
   it("raises IdentityProviderError when GitHub returns an error payload", async () => {
     const { provider } = buildProvider((call) => {
       if (call.url.includes("login/oauth/access_token")) {
-        return new Response(
-          JSON.stringify({ error: "bad_verification_code", error_description: "code is invalid" }),
-          { headers: { "Content-Type": "application/json" } }
-        );
+        return new Response(JSON.stringify({ error: "bad_verification_code", error_description: "code is invalid" }), {
+          headers: { "Content-Type": "application/json" },
+        });
       }
       return new Response("nope", { status: 500 });
     });
     await expect(provider.exchangeCode("bad", "https://app.example.com/cb")).rejects.toBeInstanceOf(
-      IdentityProviderError
+      IdentityProviderError,
     );
   });
 });

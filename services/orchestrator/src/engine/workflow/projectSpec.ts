@@ -83,13 +83,19 @@ export class SpecNotFoundError extends Error {
 }
 
 export class SpecDependenciesBlockedError extends Error {
-  constructor(specId: string, readonly blockedSpecIds: string[]) {
+  constructor(
+    specId: string,
+    readonly blockedSpecIds: string[],
+  ) {
     super(`spec dependencies are not done for ${specId}: ${blockedSpecIds.join(", ")}`);
   }
 }
 
 export class SpecNotRunnableError extends Error {
-  constructor(specId: string, readonly status: string) {
+  constructor(
+    specId: string,
+    readonly status: string,
+  ) {
     super(`spec ${specId} cannot be queued from status ${status}`);
   }
 }
@@ -103,7 +109,7 @@ export class ProjectAccessDeniedError extends Error {
 export async function createProject(
   pool: pg.Pool,
   input: CreateProjectInput,
-  _actor?: ActorContext
+  _actor?: ActorContext,
 ): Promise<ProjectContract> {
   const projectId = `project_${randomUUID()}`;
   const project: ProjectContract = {
@@ -116,7 +122,7 @@ export async function createProject(
     // migrateProjectConfig normalizes legacy versionless blobs (Phase 1
     // `{}`-shaped rows or arbitrary maps from API callers) into a
     // fully-defaulted V1. A V1-shaped input with unknown keys is rejected.
-    config: migrateProjectConfig(input.config ?? {})
+    config: migrateProjectConfig(input.config ?? {}),
   };
 
   await pool.query(
@@ -130,24 +136,20 @@ export async function createProject(
       project.runnerImage,
       project.allocator,
       JSON.stringify(project.config),
-      _actor?.orgId ?? null
-    ]
+      _actor?.orgId ?? null,
+    ],
   );
   if (_actor !== undefined) {
     await pool.query(
       `INSERT INTO project_members (project_id, user_id, role) VALUES ($1, $2, 'admin')
        ON CONFLICT (project_id, user_id) DO NOTHING`,
-      [project.projectId, _actor.userId]
+      [project.projectId, _actor.userId],
     );
   }
   return project;
 }
 
-export async function createSpec(
-  pool: pg.Pool,
-  input: CreateSpecInput,
-  actor?: ActorContext
-): Promise<SpecContract> {
+export async function createSpec(pool: pg.Pool, input: CreateSpecInput, actor?: ActorContext): Promise<SpecContract> {
   await ensureProjectExists(pool, input.projectId);
   await ensureProjectAccess(pool, input.projectId, actor);
   await ensureSpecDependenciesExist(pool, input.projectId, input.dependsOn ?? []);
@@ -158,7 +160,7 @@ export async function createSpec(
     description: input.description,
     acceptanceCriteria: input.acceptanceCriteria,
     dependsOn: input.dependsOn ?? [],
-    status: "pending"
+    status: "pending",
   };
 
   await pool.query(
@@ -171,8 +173,8 @@ export async function createSpec(
       spec.description,
       JSON.stringify(spec.acceptanceCriteria),
       spec.dependsOn,
-      spec.status
-    ]
+      spec.status,
+    ],
   );
   return spec;
 }
@@ -180,7 +182,7 @@ export async function createSpec(
 export async function createQueuedRunFromSpec(
   pool: pg.Pool,
   input: CreateSpecRunInput,
-  actor?: ActorContext
+  actor?: ActorContext,
 ): Promise<SpecRunContract> {
   const client = await pool.connect();
   try {
@@ -200,10 +202,9 @@ async function ensureProjectAccess(pool: pg.Pool, projectId: string, actor?: Act
   if (actor === undefined || actor.scopes.includes("platform:admin")) {
     return;
   }
-  const result = await pool.query<{ org_id: string | null }>(
-    "SELECT org_id FROM projects WHERE project_id = $1",
-    [projectId]
-  );
+  const result = await pool.query<{ org_id: string | null }>("SELECT org_id FROM projects WHERE project_id = $1", [
+    projectId,
+  ]);
   const projectOrg = result.rows[0]?.org_id ?? null;
   if (projectOrg === null) {
     // Legacy / unscoped projects bypass org-scoping for backwards compatibility with existing rows.
@@ -211,7 +212,7 @@ async function ensureProjectAccess(pool: pg.Pool, projectId: string, actor?: Act
   }
   const memberResult = await pool.query<{ role: string }>(
     "SELECT role FROM project_members WHERE project_id = $1 AND user_id = $2",
-    [projectId, actor.userId]
+    [projectId, actor.userId],
   );
   if ((memberResult.rowCount ?? 0) > 0) {
     return;
@@ -245,7 +246,7 @@ async function ensureSpecDependenciesExist(pool: pg.Pool, projectId: string, dep
   }
   const result = await pool.query("SELECT spec_id FROM specs WHERE project_id = $1 AND spec_id = ANY($2::text[])", [
     projectId,
-    uniqueDependsOn
+    uniqueDependsOn,
   ]);
   const found = new Set(result.rows.map((row) => String(row.spec_id)));
   const missing = uniqueDependsOn.filter((specId) => !found.has(specId));
@@ -257,7 +258,7 @@ async function ensureSpecDependenciesExist(pool: pg.Pool, projectId: string, dep
 async function createQueuedRunFromSpecOnClient(
   client: pg.PoolClient,
   input: CreateSpecRunInput,
-  actor?: ActorContext
+  actor?: ActorContext,
 ): Promise<SpecRunContract> {
   const loaded = await loadSpecWithProject(client, input.specId);
   await ensureClientProjectAccess(client, loaded.project.projectId, actor);
@@ -273,25 +274,25 @@ async function createQueuedRunFromSpecOnClient(
     plannerTaskId,
     plannerJobId: "",
     project: loaded.project,
-    spec: { ...loaded.spec, status: "active" }
+    spec: { ...loaded.spec, status: "active" },
   };
 
   await client.query(
     `INSERT INTO runs (run_id, spec_id, project_id, trigger, branch, status)
      VALUES ($1, $2, $3, $4, $5, 'queued')`,
-    [run.runId, run.specId, run.projectId, run.trigger, run.branch]
+    [run.runId, run.specId, run.projectId, run.trigger, run.branch],
   );
   await claimPendingSpec(client, loaded.spec);
   await client.query(
     `INSERT INTO tasks (task_id, run_id, kind, title, status, agent_kind, cli, model)
      VALUES ($1, $2, 'plan', 'Plan spec implementation', 'queued', 'answerer', 'fake', $3)`,
-    [plannerTaskId, run.runId, initialPlannerModel]
+    [plannerTaskId, run.runId, initialPlannerModel],
   );
   const job = await client.query(
     `INSERT INTO job_queue (run_id, task_id, task_kind, payload)
      VALUES ($1, $2, 'plan', $3::jsonb)
      RETURNING id::text`,
-    [run.runId, plannerTaskId, JSON.stringify({ specId: run.specId, projectId: run.projectId, branch: run.branch })]
+    [run.runId, plannerTaskId, JSON.stringify({ specId: run.specId, projectId: run.projectId, branch: run.branch })],
   );
   run.plannerJobId = String(job.rows[0]?.id);
   const eventStore = new PgEventStore(client);
@@ -309,14 +310,14 @@ async function createQueuedRunFromSpecOnClient(
         repoUrl: run.project.repoUrl,
         defaultBranch: run.project.defaultBranch,
         runnerImage: run.project.runnerImage,
-        allocator: run.project.allocator
+        allocator: run.project.allocator,
       },
       spec: {
         title: run.spec.title,
         acceptanceCriteria: run.spec.acceptanceCriteria,
-        dependsOn: run.spec.dependsOn
-      }
-    }
+        dependsOn: run.spec.dependsOn,
+      },
+    },
   });
   await eventStore.append({
     runId: run.runId,
@@ -324,15 +325,16 @@ async function createQueuedRunFromSpecOnClient(
     specId: run.specId,
     projectId: run.projectId,
     eventType: "task.queued",
-    payload: { taskKind: "plan", jobId: run.plannerJobId }
+    payload: { taskKind: "plan", jobId: run.plannerJobId },
   });
   return run;
 }
 
 async function claimPendingSpec(client: pg.PoolClient, spec: SpecContract): Promise<void> {
-  const result = await client.query("UPDATE specs SET status = 'active' WHERE spec_id = $1 AND status = 'pending' RETURNING spec_id", [
-    spec.specId
-  ]);
+  const result = await client.query(
+    "UPDATE specs SET status = 'active' WHERE spec_id = $1 AND status = 'pending' RETURNING spec_id",
+    [spec.specId],
+  );
   if (result.rowCount === 0) {
     throw new SpecNotRunnableError(spec.specId, spec.status);
   }
@@ -342,10 +344,10 @@ async function ensureSpecDependenciesDone(client: pg.PoolClient, spec: SpecContr
   if (spec.dependsOn.length === 0) {
     return;
   }
-  const result = await client.query("SELECT spec_id FROM specs WHERE project_id = $1 AND status = 'done' AND spec_id = ANY($2::text[])", [
-    spec.projectId,
-    spec.dependsOn
-  ]);
+  const result = await client.query(
+    "SELECT spec_id FROM specs WHERE project_id = $1 AND status = 'done' AND spec_id = ANY($2::text[])",
+    [spec.projectId, spec.dependsOn],
+  );
   const done = new Set(result.rows.map((row) => String(row.spec_id)));
   const blocked = spec.dependsOn.filter((specId) => !done.has(specId));
   if (blocked.length > 0) {
@@ -355,7 +357,7 @@ async function ensureSpecDependenciesDone(client: pg.PoolClient, spec: SpecContr
 
 async function loadSpecWithProject(
   pool: Pick<pg.Pool | pg.PoolClient, "query">,
-  specId: string
+  specId: string,
 ): Promise<{ project: ProjectContract; spec: SpecContract }> {
   const result = await pool.query(
     `SELECT
@@ -375,7 +377,7 @@ async function loadSpecWithProject(
      FROM specs s
      JOIN projects p ON p.project_id = s.project_id
      WHERE s.spec_id = $1`,
-    [specId]
+    [specId],
   );
   const row = result.rows[0];
   if (row === undefined) {
@@ -393,7 +395,7 @@ async function loadSpecWithProject(
       // Read-path parser: a Phase 1 fixture project stored as `{}` jsonb
       // returns a fully-defaulted V1; future versions raise a typed
       // UnknownConfigVersionError out of migrateProjectConfig.
-      config: migrateProjectConfig(decoded.config)
+      config: migrateProjectConfig(decoded.config),
     },
     spec: {
       specId: decoded.spec_id,
@@ -402,15 +404,15 @@ async function loadSpecWithProject(
       description: decoded.description,
       acceptanceCriteria: decoded.acceptance_criteria,
       dependsOn: decoded.depends_on,
-      status: decoded.status
-    }
+      status: decoded.status,
+    },
   };
 }
 
 const RecordOrEmpty = z
   .unknown()
   .transform((value) =>
-    typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : {}
+    typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : {},
   );
 
 const StringArrayOrEmpty = z
@@ -430,20 +432,20 @@ const SpecProjectRowSchema = z.object({
   description: z.string(),
   acceptance_criteria: StringArrayOrEmpty,
   depends_on: StringArrayOrEmpty,
-  status: z.string()
+  status: z.string(),
 });
 
 async function ensureClientProjectAccess(
   client: pg.PoolClient,
   projectId: string,
-  actor?: ActorContext
+  actor?: ActorContext,
 ): Promise<void> {
   if (actor === undefined || actor.scopes.includes("platform:admin")) {
     return;
   }
   const projectRow = await client.query<{ org_id: string | null }>(
     "SELECT org_id FROM projects WHERE project_id = $1",
-    [projectId]
+    [projectId],
   );
   const projectOrg = projectRow.rows[0]?.org_id ?? null;
   if (projectOrg === null) {
@@ -451,7 +453,7 @@ async function ensureClientProjectAccess(
   }
   const memberResult = await client.query<{ role: string }>(
     "SELECT role FROM project_members WHERE project_id = $1 AND user_id = $2",
-    [projectId, actor.userId]
+    [projectId, actor.userId],
   );
   if ((memberResult.rowCount ?? 0) > 0) {
     return;

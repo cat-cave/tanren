@@ -17,7 +17,11 @@ import type { SpecDepChip, SpecDetail, SpecRunRow } from "./specDetail.js";
 
 function DepChips(props: { chips: SpecDepChip[]; dir: "up" | "down"; projectId: string }) {
   if (props.chips.length === 0) {
-    return <span class="dep-none">{props.dir === "up" ? "no upstream deps · can start anytime" : "nothing waits on this"}</span>;
+    return (
+      <span class="dep-none">
+        {props.dir === "up" ? "no upstream deps · can start anytime" : "nothing waits on this"}
+      </span>
+    );
   }
   return (
     <div class="dep-chips">

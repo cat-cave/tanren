@@ -8,7 +8,7 @@ import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "..
 import {
   advanceCiFromWebhook,
   CiWebhookUnsupportedEventError,
-  pullRequestUrlsFromPayload
+  pullRequestUrlsFromPayload,
 } from "../src/engine/workflow/ciWebhook.js";
 
 const PR_URL = "https://github.com/cat-cave/tanren-fixture-easy/pull/1";
@@ -16,7 +16,9 @@ const PR_URL = "https://github.com/cat-cave/tanren-fixture-easy/pull/1";
 describe("CI webhook (P3-0028)", () => {
   it("extracts PR URLs from a check_run payload", () => {
     expect(
-      pullRequestUrlsFromPayload({ check_run: { pull_requests: [{ html_url: PR_URL }, { html_url: PR_URL }] } })
+      pullRequestUrlsFromPayload({
+        check_run: { pull_requests: [{ html_url: PR_URL }, { html_url: PR_URL }] },
+      }),
     ).toEqual([PR_URL]);
     expect(pullRequestUrlsFromPayload({ check_suite: { pull_requests: [{ html_url: PR_URL }] } })).toEqual([PR_URL]);
     expect(pullRequestUrlsFromPayload({ status: "success" })).toEqual([]);
@@ -29,8 +31,8 @@ describe("CI webhook (P3-0028)", () => {
         secrets: new FakeSecretStore(),
         githubHttp: new ScriptedGitHubHttp([]),
         event: "push",
-        payload: {}
-      })
+        payload: {},
+      }),
     ).rejects.toBeInstanceOf(CiWebhookUnsupportedEventError);
   });
 
@@ -46,12 +48,15 @@ describe("CI webhook (P3-0028)", () => {
       secrets,
       githubHttp: new ScriptedGitHubHttp([
         { status: 200, body: { head: { sha: "abc123" }, base: { ref: "main" } } },
-        { status: 200, body: { check_runs: [{ name: "build", status: "completed", conclusion: "success" }] } },
+        {
+          status: 200,
+          body: { check_runs: [{ name: "build", status: "completed", conclusion: "success" }] },
+        },
         { status: 200, body: { statuses: [] } },
-        { status: 404, body: { message: "Branch not protected" } }
+        { status: 404, body: { message: "Branch not protected" } },
       ]),
       event: "check_run",
-      payload: { check_run: { pull_requests: [{ html_url: PR_URL }] } }
+      payload: { check_run: { pull_requests: [{ html_url: PR_URL }] } },
     });
 
     expect(result.matchedRunIds).toEqual(["run_1"]);
@@ -65,7 +70,7 @@ describe("CI webhook (P3-0028)", () => {
       secrets: new FakeSecretStore(),
       githubHttp: new ScriptedGitHubHttp([]),
       event: "check_suite",
-      payload: { check_suite: { pull_requests: [{ html_url: "https://github.com/x/y/pull/99" }] } }
+      payload: { check_suite: { pull_requests: [{ html_url: "https://github.com/x/y/pull/99" }] } },
     });
     expect(result).toMatchObject({ matchedRunIds: [], results: [] });
   });
@@ -100,10 +105,10 @@ class WebhookPool {
             project_id: "project_1",
             pr_url: PR_URL,
             config: { githubCredentialRef: "credential/github/dev" },
-            org_config: null
-          }
+            org_config: null,
+          },
         ],
-        rowCount: 1
+        rowCount: 1,
       };
     }
     if (sql.includes("FROM tasks") && sql.includes("kind = 'ci'") && sql.includes("LIMIT 1")) {

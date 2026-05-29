@@ -37,7 +37,7 @@ import type {
   RunListItem,
   RunLocation,
   RunSummary,
-  SpecSummary
+  SpecSummary,
 } from "./types.js";
 
 export type { OrchestratorClientDeps } from "./httpClient.js";
@@ -46,7 +46,7 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
   /** Resolve the current session via `/auth/me`. `undefined` when unauthenticated. */
   async session(): Promise<DashboardSession | undefined> {
     const response = await this.fetchImpl(`${this.orchestratorUrl}/auth/me`, {
-      headers: this.headers()
+      headers: this.headers(),
     }).catch(() => undefined);
     if (response === undefined || !response.ok) {
       return undefined;
@@ -57,7 +57,7 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
   /** Orgs the operator is a member of. Empty array when unauthenticated. */
   async listOrgs(): Promise<OrgSummary[]> {
     const response = await this.fetchImpl(`${this.orchestratorUrl}/orgs`, {
-      headers: this.headers()
+      headers: this.headers(),
     }).catch(() => undefined);
     if (response === undefined || !response.ok) {
       return [];
@@ -68,10 +68,9 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
 
   /** Projects in an org the operator can access. Empty array on failure. */
   async listProjects(orgId: string): Promise<ProjectSummary[]> {
-    const response = await this.fetchImpl(
-      `${this.orchestratorUrl}/orgs/${encodeURIComponent(orgId)}/projects`,
-      { headers: this.headers() }
-    ).catch(() => undefined);
+    const response = await this.fetchImpl(`${this.orchestratorUrl}/orgs/${encodeURIComponent(orgId)}/projects`, {
+      headers: this.headers(),
+    }).catch(() => undefined);
     if (response === undefined || !response.ok) {
       return [];
     }
@@ -88,11 +87,11 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
     orgId: string,
     projectId: string,
     runId: string,
-    opts: { maxPages?: number } = {}
+    opts: { maxPages?: number } = {},
   ): Promise<CostRecord[]> {
     const maxPages = opts.maxPages ?? 20;
     const base = `${this.orchestratorUrl}/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(
-      projectId
+      projectId,
     )}/runs/${encodeURIComponent(runId)}/costs`;
     const all: CostRecord[] = [];
     let cursor: string | null = null;
@@ -119,19 +118,12 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
    * `POST /orgs/:orgId/forge/tools`. Returns the raw `{ tool, result }` body or
    * `undefined` on failure (the caller decides how to surface it).
    */
-  async invokeForgeTool(
-    orgId: string,
-    tool: string,
-    args: Record<string, unknown>
-  ): Promise<unknown> {
-    const response = await this.fetchImpl(
-      `${this.orchestratorUrl}/orgs/${encodeURIComponent(orgId)}/forge/tools`,
-      {
-        method: "POST",
-        headers: this.headers({ "content-type": "application/json" }),
-        body: JSON.stringify({ tool, args })
-      }
-    ).catch(() => undefined);
+  async invokeForgeTool(orgId: string, tool: string, args: Record<string, unknown>): Promise<unknown> {
+    const response = await this.fetchImpl(`${this.orchestratorUrl}/orgs/${encodeURIComponent(orgId)}/forge/tools`, {
+      method: "POST",
+      headers: this.headers({ "content-type": "application/json" }),
+      body: JSON.stringify({ tool, args }),
+    }).catch(() => undefined);
     if (response === undefined || !response.ok) {
       return undefined;
     }
@@ -146,14 +138,14 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
   async listRuns(
     orgId: string,
     projectId: string,
-    query: { status?: string; specId?: string } = {}
+    query: { status?: string; specId?: string } = {},
   ): Promise<RunListItem[]> {
     const params = new URLSearchParams();
     if (query.status !== undefined && query.status !== "") params.set("status", query.status);
     if (query.specId !== undefined && query.specId !== "") params.set("specId", query.specId);
     const qs = params.toString();
     const json = await this.getJson<{ items?: RunListItem[] }>(
-      `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/runs${qs ? `?${qs}` : ""}`
+      `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/runs${qs ? `?${qs}` : ""}`,
     );
     return json?.items ?? [];
   }
@@ -161,7 +153,7 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
   /** Project activity feed (P2A-0014). */
   async listFeed(orgId: string, projectId: string): Promise<ProjectFeedItem[]> {
     const json = await this.getJson<{ items?: ProjectFeedItem[] }>(
-      `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/feed`
+      `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/feed`,
     );
     return json?.items ?? [];
   }
@@ -172,7 +164,7 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
    */
   async listInsights(orgId: string, projectId: string): Promise<InsightSummary[]> {
     const json = await this.getJson<{ insights?: InsightSummary[] }>(
-      `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/insights`
+      `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/insights`,
     );
     const all = json?.insights ?? [];
     const supported = new Set(["retry_hotspot", "model_mismatch", "pace_anomaly", "stuck", "review_stall"]);
@@ -184,14 +176,10 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
    * not targeted; derived from existing run/event data. `undefined` on failure
    * so the panel degrades to an empty state instead of 500-ing.
    */
-  async getDora(
-    orgId: string,
-    projectId: string,
-    windowDays?: number
-  ): Promise<DoraMetrics | undefined> {
+  async getDora(orgId: string, projectId: string, windowDays?: number): Promise<DoraMetrics | undefined> {
     const qs = windowDays === undefined ? "" : `?windowDays=${windowDays}`;
     const json = await this.getJson<{ metrics?: DoraMetrics }>(
-      `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/dora${qs}`
+      `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/dora${qs}`,
     );
     return json?.metrics;
   }
@@ -199,7 +187,7 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
   /** Project milestones for the velocity card + spec form (P2A-0018). */
   async listMilestones(orgId: string, projectId: string): Promise<MilestoneSummary[]> {
     const json = await this.getJson<{ milestones?: MilestoneSummary[] }>(
-      `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/milestones`
+      `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/milestones`,
     );
     return json?.milestones ?? [];
   }
@@ -207,7 +195,7 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
   /** Project specs (spec list + dependency picker, P2A-0013). */
   async listSpecs(orgId: string, projectId: string): Promise<SpecSummary[]> {
     const json = await this.getJson<{ specs?: SpecSummary[] }>(
-      `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/specs`
+      `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/specs`,
     );
     return json?.specs ?? [];
   }
@@ -215,19 +203,15 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
   /** Project personas — needed to enumerate behaviors (P2A-0018). */
   async listPersonas(orgId: string, projectId: string): Promise<PersonaSummary[]> {
     const json = await this.getJson<{ personas?: PersonaSummary[] }>(
-      `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/personas`
+      `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/personas`,
     );
     return json?.personas ?? [];
   }
 
   /** Behaviors for a persona (the spec-form behavior picker, P2A-0018). */
-  async listBehaviors(
-    orgId: string,
-    projectId: string,
-    personaId: string
-  ): Promise<BehaviorSummary[]> {
+  async listBehaviors(orgId: string, projectId: string, personaId: string): Promise<BehaviorSummary[]> {
     const json = await this.getJson<{ behaviors?: BehaviorSummary[] }>(
-      `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/behaviors?personaId=${encodeURIComponent(personaId)}`
+      `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/behaviors?personaId=${encodeURIComponent(personaId)}`,
     );
     return json?.behaviors ?? [];
   }
@@ -235,29 +219,25 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
   /** All project behaviors, gathered across personas (spec-form picker). */
   async listAllBehaviors(orgId: string, projectId: string): Promise<BehaviorSummary[]> {
     const personas = await this.listPersonas(orgId, projectId);
-    const lists = await Promise.all(
-      personas.map((persona) => this.listBehaviors(orgId, projectId, persona.id))
-    );
+    const lists = await Promise.all(personas.map((persona) => this.listBehaviors(orgId, projectId, persona.id)));
     return lists.flat();
   }
 
   /** Full project incl. merged config (routing + escape hatches, P2A-0013). */
   async getProject(orgId: string, projectId: string): Promise<ProjectDetail | undefined> {
-    return this.getJson<ProjectDetail>(
-      `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}`
-    );
+    return this.getJson<ProjectDetail>(`/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}`);
   }
 
   /** Persist project config (routing/escape-hatches save flow, P2A-0013). */
   async patchProjectConfig(
     orgId: string,
     projectId: string,
-    config: ProjectConfig
+    config: ProjectConfig,
   ): Promise<{ ok: boolean; status: number }> {
     const result = await this.sendJson<unknown>(
       "PATCH",
       `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}`,
-      { config }
+      { config },
     );
     return { ok: result.ok, status: result.status };
   }
@@ -271,12 +251,12 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
       description: string;
       acceptanceCriteria: string[];
       dependsOn?: string[];
-    }
+    },
   ): Promise<{ ok: boolean; status: number; body: SpecSummary | undefined }> {
     return this.sendJson<SpecSummary>(
       "POST",
       `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/specs`,
-      input
+      input,
     );
   }
 
@@ -291,12 +271,15 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
     orgId: string,
     projectId: string,
     specId: string,
-    input: { trigger?: string; branch?: string } = {}
+    input: { trigger?: string; branch?: string } = {},
   ): Promise<{ ok: boolean; status: number; body: RunSummary | undefined }> {
     return this.sendJson<RunSummary>(
       "POST",
       `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/specs/${encodeURIComponent(specId)}/runs`,
-      { trigger: input.trigger ?? "dashboard", ...(input.branch !== undefined ? { branch: input.branch } : {}) }
+      {
+        trigger: input.trigger ?? "dashboard",
+        ...(input.branch !== undefined ? { branch: input.branch } : {}),
+      },
     );
   }
 
@@ -309,13 +292,12 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
   async generateProjectNarration(
     orgId: string,
     projectId: string,
-    budgetUsdPerWeek?: number
+    budgetUsdPerWeek?: number,
   ): Promise<ForgeAnswer | undefined> {
-    const thread = await this.sendJson<{ id?: string }>(
-      "POST",
-      `/orgs/${encodeURIComponent(orgId)}/forge/threads`,
-      { scope: "project", projectId }
-    );
+    const thread = await this.sendJson<{ id?: string }>("POST", `/orgs/${encodeURIComponent(orgId)}/forge/threads`, {
+      scope: "project",
+      projectId,
+    });
     const threadId = thread.body?.id;
     if (!thread.ok || threadId === undefined) {
       return undefined;
@@ -323,7 +305,7 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
     const turn = await this.sendJson<{ render?: ForgeAnswer }>(
       "POST",
       `/orgs/${encodeURIComponent(orgId)}/forge/threads/${encodeURIComponent(threadId)}/turns/generate-project-view`,
-      budgetUsdPerWeek === undefined ? { projectId } : { projectId, budgetUsdPerWeek }
+      budgetUsdPerWeek === undefined ? { projectId } : { projectId, budgetUsdPerWeek },
     );
     return turn.body?.render;
   }
@@ -338,7 +320,7 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
   /** Org-scoped credential references (P2A-0013). Never returns values. */
   async listOrgCredentials(orgId: string): Promise<CredentialRecord[]> {
     const json = await this.getJson<{ credentials?: CredentialRecord[] }>(
-      `/orgs/${encodeURIComponent(orgId)}/credentials`
+      `/orgs/${encodeURIComponent(orgId)}/credentials`,
     );
     return json?.credentials ?? [];
   }
@@ -357,9 +339,7 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
     body: Record<string, unknown>;
   }): Promise<{ ok: boolean; status: number; body: unknown }> {
     const base =
-      input.scope === "org"
-        ? `/orgs/${encodeURIComponent(input.orgId ?? "")}/credentials`
-        : "/credentials/me";
+      input.scope === "org" ? `/orgs/${encodeURIComponent(input.orgId ?? "")}/credentials` : "/credentials/me";
     return this.sendJson("POST", `${base}?kind=${encodeURIComponent(input.kind)}`, input.body);
   }
 
@@ -367,16 +347,13 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
   async deleteOrgCredential(orgId: string, ref: string): Promise<boolean> {
     const result = await this.sendJson(
       "DELETE",
-      `/orgs/${encodeURIComponent(orgId)}/credentials/${encodeURIComponent(ref)}`
+      `/orgs/${encodeURIComponent(orgId)}/credentials/${encodeURIComponent(ref)}`,
     );
     return result.ok;
   }
 
   /** Create a project row (P2A-0013, non-brownfield create path). */
-  async createProject(
-    orgId: string,
-    body: Record<string, unknown>
-  ): Promise<CreatedProject | undefined> {
+  async createProject(orgId: string, body: Record<string, unknown>): Promise<CreatedProject | undefined> {
     const result = await this.sendJson("POST", `/orgs/${encodeURIComponent(orgId)}/projects`, body);
     if (!result.ok) return undefined;
     return result.body as CreatedProject;
@@ -389,12 +366,12 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
   async brownfieldLink(
     orgId: string,
     projectId: string,
-    body: Record<string, unknown>
+    body: Record<string, unknown>,
   ): Promise<{ ok: boolean; status: number; result?: BrownfieldLinkResult; error?: string }> {
     const result = await this.sendJson(
       "POST",
       `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/link`,
-      body
+      body,
     );
     if (!result.ok) {
       const errBody = result.body as { error?: string; message?: string } | undefined;
@@ -405,36 +382,23 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
 
   /** The full notifications matrix for an org (P2A-0017). Empty on failure. */
   async notificationMatrix(orgId: string): Promise<NotificationMatrix> {
-    const json = await this.getJson<NotificationMatrix>(
-      `/orgs/${encodeURIComponent(orgId)}/notifications/matrix`
-    );
+    const json = await this.getJson<NotificationMatrix>(`/orgs/${encodeURIComponent(orgId)}/notifications/matrix`);
     return json ?? { targets: [], routes: [], events: [] };
   }
 
   /** Create a notification target (P2A-0017). */
   async createNotificationTarget(
     orgId: string,
-    body: Record<string, unknown>
+    body: Record<string, unknown>,
   ): Promise<NotificationTarget | undefined> {
-    const result = await this.sendJson(
-      "POST",
-      `/orgs/${encodeURIComponent(orgId)}/notifications/targets`,
-      body
-    );
+    const result = await this.sendJson("POST", `/orgs/${encodeURIComponent(orgId)}/notifications/targets`, body);
     if (!result.ok) return undefined;
     return result.body as NotificationTarget;
   }
 
   /** Create/replace a notification route opt-in (P2A-0017). */
-  async createNotificationRoute(
-    orgId: string,
-    body: Record<string, unknown>
-  ): Promise<NotificationRoute | undefined> {
-    const result = await this.sendJson(
-      "POST",
-      `/orgs/${encodeURIComponent(orgId)}/notifications/routes`,
-      body
-    );
+  async createNotificationRoute(orgId: string, body: Record<string, unknown>): Promise<NotificationRoute | undefined> {
+    const result = await this.sendJson("POST", `/orgs/${encodeURIComponent(orgId)}/notifications/routes`, body);
     if (!result.ok) return undefined;
     return result.body as NotificationRoute;
   }
@@ -474,12 +438,12 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
   async getRunDetail(
     loc: RunLocation,
     runId: string,
-    opts: { rawView?: boolean } = {}
+    opts: { rawView?: boolean } = {},
   ): Promise<RunDetail | undefined> {
     const query = opts.rawView === true ? "?raw=true" : "";
     const response = await this.fetchImpl(
       `${this.orchestratorUrl}/orgs/${encodeURIComponent(loc.orgId)}/projects/${encodeURIComponent(loc.projectId)}/runs/${encodeURIComponent(runId)}${query}`,
-      { headers: this.headers(opts.rawView === true ? { "x-view-raw": "true" } : undefined) }
+      { headers: this.headers(opts.rawView === true ? { "x-view-raw": "true" } : undefined) },
     ).catch(() => undefined);
     if (response === undefined || !response.ok) {
       return undefined;
@@ -492,5 +456,4 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
     const query = opts.rawView === true ? "?raw=true" : "";
     return `${this.orchestratorUrl}/orgs/${encodeURIComponent(loc.orgId)}/projects/${encodeURIComponent(loc.projectId)}/runs/${encodeURIComponent(runId)}/stream${query}`;
   }
-
 }

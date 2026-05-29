@@ -11,14 +11,7 @@
  * node colour matches its run state across both modes.
  */
 
-import type {
-  DagAttentionItem,
-  DagEdge,
-  DagMilestone,
-  DagNode,
-  DagStatus,
-  ProjectDag
-} from "./dagTypes.js";
+import type { DagAttentionItem, DagEdge, DagMilestone, DagNode, DagStatus, ProjectDag } from "./dagTypes.js";
 import type { OrchestratorClient } from "./orchestrator.js";
 import type { RunListItem } from "./types.js";
 
@@ -92,7 +85,7 @@ export function buildProjectDag(input: BuildDagInput): ProjectDag {
     const run = runsBySpec.get(spec.specId);
     const status = statusForSpec(spec.status, run);
     const mId = input.milestoneBySpec?.get(spec.specId) ?? null;
-    const milestone = mId !== null ? milestoneById.get(mId)?.label ?? "—" : "—";
+    const milestone = mId !== null ? (milestoneById.get(mId)?.label ?? "—") : "—";
     return {
       id: spec.specId,
       title: spec.title,
@@ -103,7 +96,7 @@ export function buildProjectDag(input: BuildDagInput): ProjectDag {
       priority: priorityFor(status),
       latestRunId: run?.runId ?? null,
       onCriticalPath: dependedOn.has(spec.specId),
-      attention: null
+      attention: null,
     };
   });
 
@@ -112,8 +105,7 @@ export function buildProjectDag(input: BuildDagInput): ProjectDag {
   for (const spec of input.specs) {
     for (const dep of spec.dependsOn) {
       if (!specIds.has(dep)) continue;
-      const hot =
-        isActionStatus(statusById.get(dep)) || isActionStatus(statusById.get(spec.specId));
+      const hot = isActionStatus(statusById.get(dep)) || isActionStatus(statusById.get(spec.specId));
       edges.push({ from: dep, to: spec.specId, hot });
     }
   }
@@ -133,7 +125,7 @@ export function buildProjectDag(input: BuildDagInput): ProjectDag {
         kind: kind as "review" | "blocked" | "live",
         nodeId: node.id,
         title: node.title,
-        sub: attentionSub(kind, node)
+        sub: attentionSub(kind, node),
       });
     }
   }
@@ -143,7 +135,7 @@ export function buildProjectDag(input: BuildDagInput): ProjectDag {
     label: m.label,
     name: m.name,
     status: m.status,
-    attention: null
+    attention: null,
   }));
 
   const behaviorTitles = new Set<string>();
@@ -162,8 +154,8 @@ export function buildProjectDag(input: BuildDagInput): ProjectDag {
       blocked: nodes.filter((nd) => nd.status === "blocked").length,
       queued: nodes.filter((nd) => nd.status === "queued").length,
       criticalPath: dependedOn.size,
-      behaviors: behaviorTitles.size
-    }
+      behaviors: behaviorTitles.size,
+    },
   };
 }
 
@@ -183,16 +175,12 @@ function attentionSub(kind: DagStatus, node: DagNode): string {
  * a source is unreachable — the view renders a "fresh DAG" empty state rather
  * than 500-ing.
  */
-export async function getProjectDag(
-  client: OrchestratorClient,
-  orgId: string,
-  projectId: string
-): Promise<ProjectDag> {
+export async function getProjectDag(client: OrchestratorClient, orgId: string, projectId: string): Promise<ProjectDag> {
   const [specs, milestones, runs, behaviors] = await Promise.all([
     client.listSpecs(orgId, projectId),
     client.listMilestones(orgId, projectId),
     client.listRuns(orgId, projectId),
-    client.listAllBehaviors(orgId, projectId)
+    client.listAllBehaviors(orgId, projectId),
   ]);
 
   // Behaviour linkage is not yet exposed per-spec by the read API, so we leave
@@ -205,14 +193,14 @@ export async function getProjectDag(
       specId: s.specId,
       title: s.title,
       dependsOn: s.dependsOn,
-      status: s.status
+      status: s.status,
     })),
     milestones: milestones.map((m) => ({
       id: m.id,
       label: m.label,
       name: m.name,
-      status: m.status
+      status: m.status,
     })),
-    runs
+    runs,
   });
 }

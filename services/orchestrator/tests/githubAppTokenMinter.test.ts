@@ -14,7 +14,7 @@ async function seededSecrets(privateKeyPem: string): Promise<InMemorySecretStore
   await storeGithubAppCredential(secrets, {
     ref: "credential/github_app/org/o1/default",
     appId: "123456",
-    privateKeyPem
+    privateKeyPem,
   });
   return secrets;
 }
@@ -25,8 +25,14 @@ describe("signAppJwt", () => {
     const jwt = signAppJwt("123456", privateKeyPem, 1_700_000_000);
     const parts = jwt.split(".");
     expect(parts).toHaveLength(3);
-    const header = JSON.parse(Buffer.from(parts[0]!, "base64url").toString("utf8")) as { alg: string };
-    const payload = JSON.parse(Buffer.from(parts[1]!, "base64url").toString("utf8")) as { iss: string; iat: number; exp: number };
+    const header = JSON.parse(Buffer.from(parts[0]!, "base64url").toString("utf8")) as {
+      alg: string;
+    };
+    const payload = JSON.parse(Buffer.from(parts[1]!, "base64url").toString("utf8")) as {
+      iss: string;
+      iat: number;
+      exp: number;
+    };
     expect(header.alg).toBe("RS256");
     expect(payload.iss).toBe("123456");
     expect(payload.iat).toBeLessThan(payload.exp);
@@ -40,13 +46,22 @@ describe("GithubAppTokenMinter", () => {
     let calls = 0;
     const fetchImpl = (async () => {
       calls += 1;
-      return new Response(JSON.stringify({ token: "ghs_installation", expires_at: new Date(Date.now() + 3_600_000).toISOString() }), {
-        status: 201
-      });
+      return new Response(
+        JSON.stringify({
+          token: "ghs_installation",
+          expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+        }),
+        {
+          status: 201,
+        },
+      );
     }) as unknown as typeof fetch;
 
     const minter = new GithubAppTokenMinter({ secrets, fetchImpl });
-    const request = { installationId: "999", credentialRef: "credential/github_app/org/o1/default" };
+    const request = {
+      installationId: "999",
+      credentialRef: "credential/github_app/org/o1/default",
+    };
 
     const first = await minter.getInstallationToken(request);
     const second = await minter.getInstallationToken(request);
@@ -63,13 +78,22 @@ describe("GithubAppTokenMinter", () => {
     let calls = 0;
     const fetchImpl = (async () => {
       calls += 1;
-      return new Response(JSON.stringify({ token: `ghs_${calls}`, expires_at: new Date(now + 3_600_000).toISOString() }), {
-        status: 201
-      });
+      return new Response(
+        JSON.stringify({
+          token: `ghs_${calls}`,
+          expires_at: new Date(now + 3_600_000).toISOString(),
+        }),
+        {
+          status: 201,
+        },
+      );
     }) as unknown as typeof fetch;
 
     const minter = new GithubAppTokenMinter({ secrets, fetchImpl, now: () => now });
-    const request = { installationId: "999", credentialRef: "credential/github_app/org/o1/default" };
+    const request = {
+      installationId: "999",
+      credentialRef: "credential/github_app/org/o1/default",
+    };
 
     expect(await minter.getInstallationToken(request)).toBe("ghs_1");
     // advance close to expiry → cache miss, re-mint
@@ -86,7 +110,10 @@ describe("GithubAppTokenMinter", () => {
     const fetchImpl = (async () => new Response("nope", { status: 403 })) as unknown as typeof fetch;
     const minter = new GithubAppTokenMinter({ secrets, fetchImpl });
     await expect(
-      minter.getInstallationToken({ installationId: "999", credentialRef: "credential/github_app/org/o1/default" })
+      minter.getInstallationToken({
+        installationId: "999",
+        credentialRef: "credential/github_app/org/o1/default",
+      }),
     ).rejects.toThrow(/HTTP 403/);
   });
 });

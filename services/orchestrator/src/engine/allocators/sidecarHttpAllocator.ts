@@ -1,9 +1,4 @@
-import type {
-  AllocationRequest,
-  Allocator,
-  ReleaseReason,
-  RunnerAllocation
-} from "../contracts/allocator.js";
+import type { AllocationRequest, Allocator, ReleaseReason, RunnerAllocation } from "../contracts/allocator.js";
 import type { RunnerStore } from "./runnerStore.js";
 
 const allocatorName = "sidecar-docker";
@@ -54,8 +49,8 @@ export class SidecarHttpAllocator implements Allocator {
         runId: request.runId,
         projectId: request.projectId,
         runnerImage: request.runnerImage,
-        vaultRefs
-      })
+        vaultRefs,
+      }),
     });
     if (!response.ok) {
       throw new Error(`allocator sidecar /allocate failed: ${response.status} ${await response.text()}`);
@@ -69,8 +64,8 @@ export class SidecarHttpAllocator implements Allocator {
         port: body.sshPort,
         username: this.options.sshUsername ?? "tanren",
         hostKeyFingerprint: body.hostKeyFingerprint,
-        identitySecretRef: request.identitySecretRef
-      }
+        identitySecretRef: request.identitySecretRef,
+      },
     };
 
     // Sidecar already persisted its own row for ownership; the orchestrator
@@ -85,7 +80,7 @@ export class SidecarHttpAllocator implements Allocator {
       sshPort: allocation.target.port,
       hostKeyFingerprint: allocation.target.hostKeyFingerprint,
       imageSha: allocation.imageSha,
-      containerId: allocation.runnerId
+      containerId: allocation.runnerId,
     });
 
     return allocation;
@@ -95,7 +90,7 @@ export class SidecarHttpAllocator implements Allocator {
     const response = await this.fetchImpl(`${this.options.baseUrl.replace(/\/$/, "")}/release`, {
       method: "POST",
       headers: this.authHeaders(),
-      body: JSON.stringify({ runnerId, reason })
+      body: JSON.stringify({ runnerId, reason }),
     });
     if (!response.ok) {
       throw new Error(`allocator sidecar /release failed: ${response.status} ${await response.text()}`);
@@ -109,7 +104,7 @@ export class SidecarHttpAllocator implements Allocator {
   private authHeaders(): Record<string, string> {
     return {
       "Content-Type": "application/json",
-      authorization: `Bearer ${this.options.authToken}`
+      authorization: `Bearer ${this.options.authToken}`,
     };
   }
 }

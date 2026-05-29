@@ -29,7 +29,7 @@ export const SentryConfig = z
     tokenRef: z.string().min(1),
     baseUrl: z.string().url().default("https://sentry.io"),
     query: z.string().min(1).optional(),
-    level: z.enum(["debug", "info", "warning", "error", "fatal", "sample"]).optional()
+    level: z.enum(["debug", "info", "warning", "error", "fatal", "sample"]).optional(),
   })
   .strict();
 export type SentryConfig = z.infer<typeof SentryConfig>;
@@ -68,8 +68,8 @@ export class FetchSentryHttpClient implements SentryHttpClient {
       method: input.method,
       headers: {
         Authorization: `Bearer ${input.token}`,
-        Accept: "application/json"
-      }
+        Accept: "application/json",
+      },
     });
     const text = await response.text();
     return { status: response.status, body: text === "" ? undefined : JSON.parse(text) };
@@ -116,12 +116,7 @@ function asString(value: unknown): string | undefined {
 // The candidate title prefers the issue title, then the human culprit, then the
 // metadata value — whichever first carries signal.
 function titleFor(issue: RawSentryIssue): string | undefined {
-  return (
-    asString(issue.title) ??
-    asString(issue.culprit) ??
-    asString(issue.metadata?.value) ??
-    asString(issue.shortId)
-  );
+  return asString(issue.title) ?? asString(issue.culprit) ?? asString(issue.metadata?.value) ?? asString(issue.shortId);
 }
 
 // The candidate body is the permalink plus the metadata Sentry already
@@ -175,7 +170,7 @@ export function createSentryConnector(deps: SentryConnectorDeps): SourceConnecto
         method: "GET",
         path: buildPath(config),
         token: secret.value,
-        baseUrl: config.baseUrl
+        baseUrl: config.baseUrl,
       });
       if (response.status !== 200 || !Array.isArray(response.body)) {
         return [];
@@ -194,10 +189,10 @@ export function createSentryConnector(deps: SentryConnectorDeps): SourceConnecto
           title: title.slice(0, 300),
           body: bodyFor(issue),
           severity: severityFromLevel(asString(issue.level)),
-          projectId: source.projectId
+          projectId: source.projectId,
         });
       }
       return items;
-    }
+    },
   };
 }

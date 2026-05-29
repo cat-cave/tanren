@@ -79,31 +79,37 @@ export async function publishDraftPullRequest(input: PublishDraftPullRequestInpu
   const branch = draftPrBranchName({ runId: input.runId, requestedBranch: input.runBranch });
   // With an App installation the static ref is optional; the ledger label is
   // the App credential ref in that case.
-  const staticRef = input.installation === undefined ? githubCredentialRefFromInput(input) : credentialRefOrUndefined(input);
+  const staticRef =
+    input.installation === undefined ? githubCredentialRefFromInput(input) : credentialRefOrUndefined(input);
   const ledgerRef = input.installation?.credentialRef ?? staticRef ?? "github_app";
 
   try {
     await eventStore.append({
       ...context,
       eventType: "credential.requested",
-      payload: redactedGithubTokenResult(ledgerRef)
+      payload: redactedGithubTokenResult(ledgerRef),
     });
     const resolved = await resolveGithubToken({
       secrets: input.secrets,
       installation: input.installation,
       staticRef,
-      minter: input.githubAppMinter
+      minter: input.githubAppMinter,
     });
     await eventStore.append({
       ...context,
       eventType: "credential.loaded",
-      payload: redactedGithubTokenResult(ledgerRef)
+      payload: redactedGithubTokenResult(ledgerRef),
     });
-    await pushWorkspaceBranchToGitHub({ ...input, branch, credentialRef: ledgerRef, token: resolved.token });
+    await pushWorkspaceBranchToGitHub({
+      ...input,
+      branch,
+      credentialRef: ledgerRef,
+      token: resolved.token,
+    });
     await eventStore.append({
       ...context,
       eventType: "github.branch.pushed",
-      payload: { repoUrl: input.repoUrl, branch, credentialRef: ledgerRef, redacted: true }
+      payload: { repoUrl: input.repoUrl, branch, credentialRef: ledgerRef, redacted: true },
     });
 
     const service = new GitHubPullRequestService(input.githubHttp);
@@ -114,26 +120,39 @@ export async function publishDraftPullRequest(input: PublishDraftPullRequestInpu
       headBranch: branch,
       baseBranch: input.targetBranch,
       title: input.title,
-      body: input.body
+      body: input.body,
     });
     await input.pool.query("UPDATE runs SET pr_url = $2 WHERE run_id = $1", [input.runId, pr.url]);
     await eventStore.append({
       ...context,
       eventType: "github.pr.created",
-      payload: { repoUrl: input.repoUrl, branch, targetBranch: input.targetBranch, prUrl: pr.url, prNumber: pr.number, reused: pr.reused }
+      payload: {
+        repoUrl: input.repoUrl,
+        branch,
+        targetBranch: input.targetBranch,
+        prUrl: pr.url,
+        prNumber: pr.number,
+        reused: pr.reused,
+      },
     });
     return { branch, prUrl: pr.url, prNumber: pr.number, reused: pr.reused };
   } catch (error) {
     await eventStore.append({
       ...context,
       eventType: "github.failed",
-      payload: { operation: "publish_draft_pull_request", branch, message: messageFromError(error) }
+      payload: {
+        operation: "publish_draft_pull_request",
+        branch,
+        message: messageFromError(error),
+      },
     });
     throw error;
   }
 }
 
-export async function publishDraftPullRequestForRun(input: PublishDraftPullRequestForRunInput): Promise<PublishedDraftPullRequest> {
+export async function publishDraftPullRequestForRun(
+  input: PublishDraftPullRequestForRunInput,
+): Promise<PublishedDraftPullRequest> {
   const context = await loadDraftPrRunContext(input.pool, input.runId);
   if (context === undefined) {
     throw new DraftPrRunNotFoundError(input.runId);
@@ -153,7 +172,7 @@ export async function publishDraftPullRequestForRun(input: PublishDraftPullReque
       port: context.runner.sshPort,
       username: "tanren",
       hostKeyFingerprint: context.runner.hostKeyFingerprint,
-      identitySecretRef: input.identitySecretRef
+      identitySecretRef: input.identitySecretRef,
     },
     runId: context.runId,
     specId: context.specId,
@@ -168,7 +187,7 @@ export async function publishDraftPullRequestForRun(input: PublishDraftPullReque
     projectConfig: context.projectConfig,
     timeoutMs: input.timeoutMs,
     installation: context.installation,
-    githubAppMinter: input.githubAppMinter
+    githubAppMinter: input.githubAppMinter,
   });
 }
 
@@ -200,7 +219,7 @@ async function loadDraftPrRunContext(pool: RunStateClient, runId: string): Promi
        LIMIT 1
      ) runner ON true
      WHERE r.run_id = $1`,
-    [runId]
+    [runId],
   );
   const row = result.rows[0] as DraftPrRunRow | undefined;
   if (row === undefined) {
@@ -223,8 +242,8 @@ async function loadDraftPrRunContext(pool: RunStateClient, runId: string): Promi
         : {
             sshHost: row.ssh_host,
             sshPort: Number(row.ssh_port),
-            hostKeyFingerprint: row.host_key_fingerprint
-          }
+            hostKeyFingerprint: row.host_key_fingerprint,
+          },
   };
 }
 

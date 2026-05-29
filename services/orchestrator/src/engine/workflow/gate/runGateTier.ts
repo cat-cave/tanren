@@ -30,7 +30,14 @@ export interface GateStepOutcome {
 // when `passed` is false (the first step that did not exit 0).
 export type GateTierResult =
   | { passed: true; tier: string; when: CiWhen; steps: GateStepOutcome[] }
-  | { passed: false; tier: string; when: CiWhen; failedStep: string; exitCode: number | null; steps: GateStepOutcome[] };
+  | {
+      passed: false;
+      tier: string;
+      when: CiWhen;
+      failedStep: string;
+      exitCode: number | null;
+      steps: GateStepOutcome[];
+    };
 
 // The event-append seam, identical to the one runSubtaskLoop uses, so the gate
 // emits through the same store.
@@ -61,7 +68,7 @@ export async function runGateTier(input: RunGateTierInput): Promise<GateTierResu
   await input.appendEvent(
     "gate.started",
     { tier: input.tier, when: input.when, stepNames: input.steps.map((step) => step.name) },
-    input.taskId
+    input.taskId,
   );
 
   const outcomes: GateStepOutcome[] = [];
@@ -69,7 +76,7 @@ export async function runGateTier(input: RunGateTierInput): Promise<GateTierResu
     const result = await input.ssh.run(input.target, {
       command: step.run,
       cwd: input.workspacePath,
-      timeoutMs: input.timeoutMs
+      timeoutMs: input.timeoutMs,
     });
     const passed = result.failure === undefined && !result.timedOut && result.exitCode === 0;
     const outcome: GateStepOutcome = {
@@ -78,7 +85,7 @@ export async function runGateTier(input: RunGateTierInput): Promise<GateTierResu
       exitCode: result.exitCode,
       passed,
       timedOut: result.timedOut,
-      outputTail: tailOf(combinedOutput(result))
+      outputTail: tailOf(combinedOutput(result)),
     };
     outcomes.push(outcome);
     if (!passed) {
@@ -88,12 +95,18 @@ export async function runGateTier(input: RunGateTierInput): Promise<GateTierResu
         when: input.when,
         failedStep: step.name,
         exitCode: result.exitCode,
-        steps: outcomes
+        steps: outcomes,
       };
       await input.appendEvent(
         "gate.failed",
-        { tier: input.tier, when: input.when, failedStep: step.name, exitCode: result.exitCode, steps: outcomes },
-        input.taskId
+        {
+          tier: input.tier,
+          when: input.when,
+          failedStep: step.name,
+          exitCode: result.exitCode,
+          steps: outcomes,
+        },
+        input.taskId,
       );
       return failed;
     }

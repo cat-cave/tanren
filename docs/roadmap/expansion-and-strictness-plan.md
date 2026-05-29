@@ -9,16 +9,17 @@ deferred. Seam inventory + strictness baseline were mapped 2026-05-29.
 Each item is a new implementation behind an existing interface (new file +
 register in the selector/registry + mocked-API tests) — **no core refactor**.
 
-| Seam (interface) | Backlog | Notes |
-|---|---|---|
-| **Allocators** — `engine/allocators` (`Allocator`, `AllocatorRouter`, `buildAllocator`, `AllocatorKind`) | DigitalOcean, AWS-EC2, Kubernetes (enum-scaffolded stubs → implement); **GCP** (new kind) | Hetzner + manual-SSH done. Shared `buildAllocator.ts`/`poolPolicy.ts` → serialize. Live-validate needs cloud creds. |
-| **Inbox source connectors** — `engine/forge/inbox` (`SourceConnector`) | **Sentry** (errors), Linear, Jira | GitHub Issues done. Each = config schema + `fetch()` + triage. |
-| **Agent-harness adapters** — `engine/providers/adapterSelector` (`cli` switch) | **agy** (antigravity CLI; replaces deprecated gemini CLI), aider, pi, reasonix, … | Unit is the coding-agent CLI/harness (each auths to its own LLM backend), not the raw model. Codex/Claude/opencode done. **Structured-output gate:** harnesses without structured JSON (agy, opencode) are WRITER-ONLY; answerer roles (plan/check/audit/discovery/forge) require structured output. Each = CLI invocation + auth-to-LLM + a structured-output capability flag. |
-| **Notification channels** — `engine/notifications` (`NotificationChannel`, registry) | Teams, Discord, Email, Twilio, PagerDuty, Webhook | ntfy/slack/github-checks done; rest are `StubChannel`. |
-| **Identity providers** — `auth/**` (`IdentityProvider`) | **Authentik turnkey preset** (homelab self-hosting), Okta, Auth0, Keycloak | Generic `OidcProvider` already ships (P3-0030) + works with Authentik via `TANREN_OIDC_ISSUER`. Add an Authentik claim-mapping preset + self-hosting doc/compose so it's zero-fiddle. |
-| **Secret stores / cost resolvers** — `contracts/{secretStore,costResolver}` | AWS Secrets Manager, K8s secrets; custom pricing | Clean ifaces; lower priority. |
+| Seam (interface)                                                                                         | Backlog                                                                                   | Notes                                                                                                                                                                                                                                                                                                                                                                           |
+| -------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Allocators** — `engine/allocators` (`Allocator`, `AllocatorRouter`, `buildAllocator`, `AllocatorKind`) | DigitalOcean, AWS-EC2, Kubernetes (enum-scaffolded stubs → implement); **GCP** (new kind) | Hetzner + manual-SSH done. Shared `buildAllocator.ts`/`poolPolicy.ts` → serialize. Live-validate needs cloud creds.                                                                                                                                                                                                                                                             |
+| **Inbox source connectors** — `engine/forge/inbox` (`SourceConnector`)                                   | **Sentry** (errors), Linear, Jira                                                         | GitHub Issues done. Each = config schema + `fetch()` + triage.                                                                                                                                                                                                                                                                                                                  |
+| **Agent-harness adapters** — `engine/providers/adapterSelector` (`cli` switch)                           | **agy** (antigravity CLI; replaces deprecated gemini CLI), aider, pi, reasonix, …         | Unit is the coding-agent CLI/harness (each auths to its own LLM backend), not the raw model. Codex/Claude/opencode done. **Structured-output gate:** harnesses without structured JSON (agy, opencode) are WRITER-ONLY; answerer roles (plan/check/audit/discovery/forge) require structured output. Each = CLI invocation + auth-to-LLM + a structured-output capability flag. |
+| **Notification channels** — `engine/notifications` (`NotificationChannel`, registry)                     | Teams, Discord, Email, Twilio, PagerDuty, Webhook                                         | ntfy/slack/github-checks done; rest are `StubChannel`.                                                                                                                                                                                                                                                                                                                          |
+| **Identity providers** — `auth/**` (`IdentityProvider`)                                                  | **Authentik turnkey preset** (homelab self-hosting), Okta, Auth0, Keycloak                | Generic `OidcProvider` already ships (P3-0030) + works with Authentik via `TANREN_OIDC_ISSUER`. Add an Authentik claim-mapping preset + self-hosting doc/compose so it's zero-fiddle.                                                                                                                                                                                           |
+| **Secret stores / cost resolvers** — `contracts/{secretStore,costResolver}`                              | AWS Secrets Manager, K8s secrets; custom pricing                                          | Clean ifaces; lower priority.                                                                                                                                                                                                                                                                                                                                                   |
 
 ### Deferred (NOT a clean adapter) — GitLab / VCS-provider abstraction
+
 GitHub is hardcoded across ~18 files (PR lifecycle, CI status, merge, clone/push
 auth, App tokens, webhooks, repo-read), **and** the merge-integration (Mergify —
 GitHub-org-only) and CI (GitHub Actions executing `tanren-ci.yml`) layers are
@@ -39,12 +40,14 @@ Serialize the shared-config-file edits (`tsconfig.base.json`, `oxlintrc.json`,
 6. **Later:** Stryker mutation testing (nightly job), `exactOptionalPropertyTypes` (staged), contract tests.
 
 ## Baseline (what exists today)
+
 TS `strict: true` only (the above flags off); oxlint correctness/suspicious/perf
 (no pedantic/import/typed-lint); coverage thresholds on 6 workflow-critical paths
 only (no repo-wide/mutation); no dead-code tool; format-check is newline/
 whitespace only; architecture checks per `scripts/check-architecture.mjs`.
 
 ## Execution
+
 Track B leads (hardens the gate so subsequent autonomous work stays safe), then
 Track A clean-seam adapters fan out under the stricter rules. Per-PR through the
 CI gate; migrations + shared-registry edits serialized one-per-wave.

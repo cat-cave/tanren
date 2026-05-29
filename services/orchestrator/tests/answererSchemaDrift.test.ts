@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import {
   answererSchemaCatalog,
   type AnswererRole,
-  renderAnswererJsonSchema
+  renderAnswererJsonSchema,
 } from "../src/engine/answerers/schemas/index.js";
 
 // Walks up from the orchestrator package to the repo root so the drift test
@@ -17,7 +17,7 @@ function generatedFilePath(role: AnswererRole): string {
   return resolve(
     repoRoot,
     "services/orchestrator/src/engine/answerers/schemas/generated",
-    answererSchemaCatalog[role].generatedFile
+    answererSchemaCatalog[role].generatedFile,
   );
 }
 
@@ -39,7 +39,7 @@ function expectedJson(role: AnswererRole): string {
   const descriptor = answererSchemaCatalog[role];
   const annotated = {
     ...renderAnswererJsonSchema(descriptor.zod),
-    "x-tanren-schema-id": descriptor.schemaId
+    "x-tanren-schema-id": descriptor.schemaId,
   };
   return `${JSON.stringify(sortKeys(annotated), null, 2)}\n`;
 }
@@ -57,7 +57,7 @@ describe("answerer JSON Schema drift", () => {
       const committed = readFileSync(path, "utf8");
       expect(
         committed,
-        `${role}.json drifted from the Zod source; rerun \`corepack pnpm run codegen:answerer-schemas\``
+        `${role}.json drifted from the Zod source; rerun \`corepack pnpm run codegen:answerer-schemas\``,
       ).toEqual(expectedJson(role));
     }
   });

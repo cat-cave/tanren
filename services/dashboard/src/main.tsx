@@ -16,7 +16,7 @@ const PUBLIC_PATHS = new Set(["/healthz", "/auth/login", "/signin"]);
 const ForgeToolProxyBody = z.object({
   orgId: z.string().min(1),
   tool: z.string().min(1),
-  args: z.record(z.string(), z.unknown()).default({})
+  args: z.record(z.string(), z.unknown()).default({}),
 });
 
 /** Body for the dashboard's thick-Forge chat proxy (P3-0010 ⌘K chat morph). */
@@ -25,7 +25,7 @@ const ForgeAskProxyBody = z.object({
   question: z.string().min(1).max(4000),
   projectId: z.string().min(1).optional(),
   runId: z.string().min(1).optional(),
-  threadId: z.string().min(1).optional()
+  threadId: z.string().min(1).optional(),
 });
 
 export interface CreateAppOptions {
@@ -47,7 +47,9 @@ export async function createApp(options: CreateAppOptions = {}) {
 
   app.get("/healthz", async (c) => {
     const dbResult = await pool.query("SELECT 1 AS ok");
-    const orchestrator = await fetch(`${orchestratorUrl}/healthz`).then((r) => r.ok).catch(() => false);
+    const orchestrator = await fetch(`${orchestratorUrl}/healthz`)
+      .then((r) => r.ok)
+      .catch(() => false);
     return c.json({ service: "dashboard", ok: dbResult.rows[0]?.ok === 1, orchestrator });
   });
 
@@ -145,7 +147,7 @@ export async function createApp(options: CreateAppOptions = {}) {
             </section>
           </main>
         </body>
-      </html>
+      </html>,
     );
   });
 
@@ -157,7 +159,10 @@ export async function createApp(options: CreateAppOptions = {}) {
     if (!parsed.success) {
       return c.json({ error: "invalid_tool_call", issues: parsed.error.issues }, 400);
     }
-    const client = new OrchestratorClient({ orchestratorUrl, cookieHeader: c.req.header("cookie") });
+    const client = new OrchestratorClient({
+      orchestratorUrl,
+      cookieHeader: c.req.header("cookie"),
+    });
     const result = await client.invokeForgeTool(parsed.data.orgId, parsed.data.tool, parsed.data.args);
     if (result === undefined) {
       return c.json({ error: "tool_invocation_failed" }, 502);
@@ -173,12 +178,15 @@ export async function createApp(options: CreateAppOptions = {}) {
     if (!parsed.success) {
       return c.json({ error: "invalid_ask", issues: parsed.error.issues }, 400);
     }
-    const client = new OrchestratorClient({ orchestratorUrl, cookieHeader: c.req.header("cookie") });
+    const client = new OrchestratorClient({
+      orchestratorUrl,
+      cookieHeader: c.req.header("cookie"),
+    });
     const result = await client.askForge(
       parsed.data.orgId,
       parsed.data.question,
       { projectId: parsed.data.projectId, runId: parsed.data.runId },
-      parsed.data.threadId
+      parsed.data.threadId,
     );
     if (result === undefined) {
       return c.json({ error: "forge_ask_failed" }, 502);

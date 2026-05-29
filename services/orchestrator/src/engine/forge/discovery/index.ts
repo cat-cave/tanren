@@ -10,7 +10,7 @@ export {
   ImpactDelta,
   DiscoveryResult,
   type DiscoveryAnswerer,
-  type DiscoveryAnswererContext
+  type DiscoveryAnswererContext,
 } from "./types.js";
 
 export {
@@ -20,7 +20,7 @@ export {
   type ClassifyInput,
   type AcceptInput,
   type AcceptResult,
-  type AcceptedSpec
+  type AcceptedSpec,
 } from "./engine.js";
 
 export {
@@ -29,7 +29,7 @@ export {
   withDiscoveryProvenance,
   parseDiscoveryProvenance,
   writeProvenance,
-  readProvenance
+  readProvenance,
 } from "./provenance.js";
 
 export { createDeterministicDiscoveryAnswerer } from "./defaultAnswerer.js";

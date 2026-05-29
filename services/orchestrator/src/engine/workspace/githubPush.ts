@@ -37,7 +37,7 @@ export async function pushWorkspaceBranchToGitHub(input: GitHubWorkspacePushInpu
     cwd: input.workspacePath,
     timeoutMs: input.timeoutMs,
     command: buildGitHubPushCommand({ repoUrl: input.repoUrl, branch: input.branch }),
-    stdin: token
+    stdin: token,
   });
 }
 
@@ -92,32 +92,32 @@ export function buildGitHubPushCommand(input: { repoUrl: string; branch: string 
   const remote = githubHttpsRemote(parseGitHubRepository(input.repoUrl));
   const askpassScript = [
     "#!/bin/sh",
-    "case \"$1\" in",
+    'case "$1" in',
     "*Username*) printf '%s\\n' 'x-access-token' ;;",
-    "*) cat \"$GITHUB_TOKEN_FILE\" ;;",
+    '*) cat "$GITHUB_TOKEN_FILE" ;;',
     "esac",
-    ""
+    "",
   ].join("\n");
 
   return [
     "set -eu",
     "tmpdir=$(mktemp -d)",
-    "cleanup() { rm -rf \"$tmpdir\"; }",
+    'cleanup() { rm -rf "$tmpdir"; }',
     "trap cleanup EXIT",
     "umask 077",
-    "token_file=\"$tmpdir/github-token\"",
-    "askpass=\"$tmpdir/git-askpass.sh\"",
-    "cat > \"$token_file\"",
+    'token_file="$tmpdir/github-token"',
+    'askpass="$tmpdir/git-askpass.sh"',
+    'cat > "$token_file"',
     `printf %s ${quoteSshShellArg(askpassScript)} > "$askpass"`,
-    "chmod 700 \"$askpass\"",
+    'chmod 700 "$askpass"',
     [
       "GIT_TERMINAL_PROMPT=0",
-      "GIT_ASKPASS=\"$askpass\"",
-      "GITHUB_TOKEN_FILE=\"$token_file\"",
+      'GIT_ASKPASS="$askpass"',
+      'GITHUB_TOKEN_FILE="$token_file"',
       "git",
       "push",
       quoteSshShellArg(remote),
-      quoteSshShellArg(`HEAD:refs/heads/${branch}`)
-    ].join(" ")
+      quoteSshShellArg(`HEAD:refs/heads/${branch}`),
+    ].join(" "),
   ].join(" && ");
 }

@@ -35,7 +35,7 @@ export class RunWorker {
 
   constructor(
     private readonly deps: RunExecutorDeps,
-    options: RunWorkerOptions = {}
+    options: RunWorkerOptions = {},
   ) {
     this.concurrency = Math.max(1, options.concurrency ?? DEFAULT_CONCURRENCY);
     this.pollIntervalMs = Math.max(0, options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS);
@@ -80,7 +80,10 @@ export class RunWorker {
         result = {
           kind: "failed",
           jobId: "<unclaimed>",
-          failure: { kind: "worker_infra_error", message: error instanceof Error ? error.message : String(error) }
+          failure: {
+            kind: "worker_infra_error",
+            message: error instanceof Error ? error.message : String(error),
+          },
         };
       }
       this.onResult(result);
@@ -98,8 +101,6 @@ function defaultOnResult(result: ExecuteJobResult): void {
   if (result.kind === "completed") {
     console.log(`[run-worker] job ${result.jobId} completed run ${result.runId} (outcome=${result.outcome})`);
   } else if (result.kind === "failed") {
-    console.warn(
-      `[run-worker] job ${result.jobId} failed (${result.failure.kind}): ${result.failure.message}`
-    );
+    console.warn(`[run-worker] job ${result.jobId} failed (${result.failure.kind}): ${result.failure.message}`);
   }
 }

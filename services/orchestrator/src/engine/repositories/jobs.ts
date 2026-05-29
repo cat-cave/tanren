@@ -15,7 +15,7 @@ export const JobRow = z.object({
   failureKind: z.string().nullable(),
   failureMessage: z.string().nullable(),
   tenantId: z.string().nullable(),
-  userId: z.string().nullable()
+  userId: z.string().nullable(),
 });
 export type JobRow = z.infer<typeof JobRow>;
 
@@ -56,7 +56,7 @@ function decodeJobRow(raw: RawJobRow): JobRow {
     failureKind: raw.failure_kind,
     failureMessage: raw.failure_message,
     tenantId: raw.tenant_id,
-    userId: raw.user_id
+    userId: raw.user_id,
   });
 }
 
@@ -73,7 +73,7 @@ export const JobStore = {
   async list(
     client: QueryClient,
     filter: { runId?: string; taskKind?: z.infer<typeof JobKind>; status?: z.infer<typeof JobStatus> } | undefined,
-    _actor: ActorRef
+    _actor: ActorRef,
   ): Promise<JobRow[]> {
     const clauses: string[] = [];
     const params: unknown[] = [];
@@ -90,15 +90,24 @@ export const JobStore = {
       clauses.push(`status = $${params.length}`);
     }
     const where = clauses.length === 0 ? "" : ` WHERE ${clauses.join(" AND ")}`;
-    const result = await client.query(`SELECT ${SELECT_JOB_COLUMNS} FROM job_queue${where} ORDER BY enqueued_at`, params);
+    const result = await client.query(
+      `SELECT ${SELECT_JOB_COLUMNS} FROM job_queue${where} ORDER BY enqueued_at`,
+      params,
+    );
     return result.rows.map((row) => decodeJobRow(row as RawJobRow));
   },
 
   async updateStatus(
     client: QueryClient,
     id: string,
-    next: { from: z.infer<typeof JobStatus>; to: z.infer<typeof JobStatus>; failureKind?: string; failureMessage?: string; setEndedAt?: boolean },
-    _actor: ActorRef
+    next: {
+      from: z.infer<typeof JobStatus>;
+      to: z.infer<typeof JobStatus>;
+      failureKind?: string;
+      failureMessage?: string;
+      setEndedAt?: boolean;
+    },
+    _actor: ActorRef,
   ): Promise<JobRow> {
     transitionJob(next.from, next.to);
     const sets: string[] = ["status = $2"];
@@ -116,11 +125,11 @@ export const JobStore = {
     }
     const result = await client.query(
       `UPDATE job_queue SET ${sets.join(", ")} WHERE id = $1 RETURNING ${SELECT_JOB_COLUMNS}`,
-      params
+      params,
     );
     if (result.rows.length === 0) {
       throw new Error(`job not found: ${id}`);
     }
     return decodeJobRow(result.rows[0] as RawJobRow);
-  }
+  },
 } as const;

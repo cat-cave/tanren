@@ -27,11 +27,11 @@ The allocator exposes three HTTP endpoints. Only the orchestrator container
 reaches them (internal docker network). The endpoints are authenticated with
 the shared bearer token `TANREN_ALLOCATOR_TOKEN`.
 
-| Method | Path        | Body                                                                                 | Response                                                                                       |
-| ------ | ----------- | ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------- |
-| POST   | `/allocate` | `{ runId, projectId, runnerImage, vaultRefs: string[] }`                             | `{ runnerId, sshHost, sshPort, hostKeyFingerprint, imageSha }`                                 |
-| POST   | `/release`  | `{ runnerId, reason: "completed" \| "failed" \| "abandoned" }`                       | `{ released: boolean }`                                                                        |
-| GET    | `/healthz`  | _none_                                                                               | `{ service: "allocator", ok }` — `ok` flips to `false` when the docker socket is unreachable. |
+| Method | Path        | Body                                                           | Response                                                                                      |
+| ------ | ----------- | -------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| POST   | `/allocate` | `{ runId, projectId, runnerImage, vaultRefs: string[] }`       | `{ runnerId, sshHost, sshPort, hostKeyFingerprint, imageSha }`                                |
+| POST   | `/release`  | `{ runnerId, reason: "completed" \| "failed" \| "abandoned" }` | `{ released: boolean }`                                                                       |
+| GET    | `/healthz`  | _none_                                                         | `{ service: "allocator", ok }` — `ok` flips to `false` when the docker socket is unreachable. |
 
 `/release` is idempotent: releasing an already-released runner returns
 `{ released: false }`.
@@ -74,12 +74,12 @@ still wiped.
 
 ## Dev vs prod profile
 
-| Concern                          | `compose.dev.yml`                                                                | `compose.prod.yml`                                                |
-| -------------------------------- | -------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
-| Allocator host port              | `3200` exposed for opt-in host-side live tests                                   | not exposed                                                       |
-| Static `runner` service          | Yes, on host port `2222` (backward-compat for `just smoke`'s direct SSH proof) | Removed entirely; runners are ephemeral and have no host port    |
-| Per-run runners published        | No (internal-only; orchestrator reaches them via docker DNS)                     | No (internal-only)                                                |
-| Allocator bearer token           | Hard-coded `dev`                                                                 | Required via `TANREN_ALLOCATOR_TOKEN` env                         |
+| Concern                   | `compose.dev.yml`                                                              | `compose.prod.yml`                                            |
+| ------------------------- | ------------------------------------------------------------------------------ | ------------------------------------------------------------- |
+| Allocator host port       | `3200` exposed for opt-in host-side live tests                                 | not exposed                                                   |
+| Static `runner` service   | Yes, on host port `2222` (backward-compat for `just smoke`'s direct SSH proof) | Removed entirely; runners are ephemeral and have no host port |
+| Per-run runners published | No (internal-only; orchestrator reaches them via docker DNS)                   | No (internal-only)                                            |
+| Allocator bearer token    | Hard-coded `dev`                                                               | Required via `TANREN_ALLOCATOR_TOKEN` env                     |
 
 In dev, opt-in live tests that run on the host (`just live-phase1-fixture`,
 `just smoke-ssh-integration`, etc.) continue to target the static `runner`
@@ -88,14 +88,14 @@ go through the sidecar and use ephemeral runners on the internal network.
 
 ## Required env
 
-| Env var                             | Default       | Required in prod | Notes                                                                  |
-| ----------------------------------- | ------------- | ---------------- | ---------------------------------------------------------------------- |
-| `TANREN_ALLOCATOR_TOKEN`            | `"dev"`       | Yes              | Shared bearer token between orchestrator and allocator                  |
-| `TANREN_MAX_RUN_HOURS`              | `6`           | No               | Max wall-clock hours before the sweeper reclaims an active runner row   |
-| `TANREN_RUNNER_IMAGE`               | `ghcr.io/cat-cave/tanren-runner:v0` | No | Image the allocator pulls / uses for per-run runner containers |
-| `TANREN_ALLOCATOR_URL`              | `http://allocator:3200` | No   | Orchestrator-side allocator base URL                                    |
-| `TANREN_ALLOCATOR_NETWORK`          | derived       | No               | Docker network name the per-run containers attach to                    |
-| `TANREN_ALLOCATOR_SWEEPER_INTERVAL_MS` | `60000`    | No               | How often the sweeper polls                                             |
+| Env var                                | Default                             | Required in prod | Notes                                                                 |
+| -------------------------------------- | ----------------------------------- | ---------------- | --------------------------------------------------------------------- |
+| `TANREN_ALLOCATOR_TOKEN`               | `"dev"`                             | Yes              | Shared bearer token between orchestrator and allocator                |
+| `TANREN_MAX_RUN_HOURS`                 | `6`                                 | No               | Max wall-clock hours before the sweeper reclaims an active runner row |
+| `TANREN_RUNNER_IMAGE`                  | `ghcr.io/cat-cave/tanren-runner:v0` | No               | Image the allocator pulls / uses for per-run runner containers        |
+| `TANREN_ALLOCATOR_URL`                 | `http://allocator:3200`             | No               | Orchestrator-side allocator base URL                                  |
+| `TANREN_ALLOCATOR_NETWORK`             | derived                             | No               | Docker network name the per-run containers attach to                  |
+| `TANREN_ALLOCATOR_SWEEPER_INTERVAL_MS` | `60000`                             | No               | How often the sweeper polls                                           |
 
 ## Architecture-check invariants
 
@@ -119,16 +119,16 @@ today, and can live in the existing `projects.config` JSONB later).
 
 ### Allocator kinds
 
-| Kind            | Status        | What it does                                                                 |
-| --------------- | ------------- | ---------------------------------------------------------------------------- |
-| `static`        | implemented   | Dev compose static runner (TOFU host key). Existing behavior.                |
-| `sidecar`       | implemented   | Ephemeral per-run container via the allocator sidecar. Existing behavior.    |
-| `manual_ssh`    | implemented   | Leases a pre-provisioned SSH host from a configured pool. No cloud API.      |
-| `hetzner`       | implemented   | Provisions a Hetzner Cloud server on demand; destroys it on release.         |
-| `digitalocean`  | implemented   | Provisions a DigitalOcean droplet on demand; destroys it on release.         |
-| `gcp`           | implemented   | Provisions a GCE instance on demand; deletes it on release.                  |
-| `aws_ec2`       | implemented   | Runs an EC2 instance on demand; terminates it on release.                    |
-| `kubernetes`    | implemented   | Schedules a runner Pod on demand; deletes the Pod + SSH-key Secret on release. |
+| Kind           | Status      | What it does                                                                   |
+| -------------- | ----------- | ------------------------------------------------------------------------------ |
+| `static`       | implemented | Dev compose static runner (TOFU host key). Existing behavior.                  |
+| `sidecar`      | implemented | Ephemeral per-run container via the allocator sidecar. Existing behavior.      |
+| `manual_ssh`   | implemented | Leases a pre-provisioned SSH host from a configured pool. No cloud API.        |
+| `hetzner`      | implemented | Provisions a Hetzner Cloud server on demand; destroys it on release.           |
+| `digitalocean` | implemented | Provisions a DigitalOcean droplet on demand; destroys it on release.           |
+| `gcp`          | implemented | Provisions a GCE instance on demand; deletes it on release.                    |
+| `aws_ec2`      | implemented | Runs an EC2 instance on demand; terminates it on release.                      |
+| `kubernetes`   | implemented | Schedules a runner Pod on demand; deletes the Pod + SSH-key Secret on release. |
 
 Every kind now has a real implementation. An unrouted real kind that is never
 selected resolves to a stub that throws a clear "not configured" error if it is
@@ -159,17 +159,17 @@ JSON document:
   "defaultAllocator": "sidecar",
   "rules": [
     { "matchLabels": { "tier": "gpu" }, "allocator": "hetzner" },
-    { "matchLabels": { "env": "staging" }, "allocator": "manual_ssh" }
+    { "matchLabels": { "env": "staging" }, "allocator": "manual_ssh" },
   ],
   "pools": {
-    "hetzner":    { "maxConcurrent": 5, "reuse": false },
-    "manual_ssh": { "maxConcurrent": 3, "reuse": true }
-  }
+    "hetzner": { "maxConcurrent": 5, "reuse": false },
+    "manual_ssh": { "maxConcurrent": 3, "reuse": true },
+  },
 }
 ```
 
 - **Routing**: a run's labels are matched against `rules` in order; the first
-  rule whose `matchLabels` are *all* present (exact value match) wins. If no
+  rule whose `matchLabels` are _all_ present (exact value match) wins. If no
   rule matches, `defaultAllocator` is used.
 - **Pool policy**: `maxConcurrent` caps in-flight runners per kind — the router
   rejects an `allocate` past the cap with `PoolCapacityExceededError` (release
@@ -188,18 +188,18 @@ two pre-existing kinds.
 
 ### Env for the new allocators
 
-| Env var                          | Used by      | Notes                                                                 |
-| -------------------------------- | ------------ | --------------------------------------------------------------------- |
-| `TANREN_ALLOCATOR_KIND=router`   | router       | Enables label routing + pool policy                                   |
-| `TANREN_ALLOCATOR_ROUTING`       | router       | JSON routing config (see above)                                       |
-| `TANREN_MANUAL_SSH_HOSTS`        | `manual_ssh` | JSON array `[{ id, host, port?, username?, hostKeyFingerprint, identitySecretRef? }]` |
-| `TANREN_HETZNER_API_TOKEN`       | `hetzner`    | API token. Sourced from a Vault ref by operator tooling; never hardcode |
-| `TANREN_HETZNER_HOST_FINGERPRINT`| `hetzner`    | Pinned SHA256 host key fingerprint (baked into the image / cloud-init) |
-| `TANREN_HETZNER_SERVER_TYPE`     | `hetzner`    | e.g. `cx22` (default)                                                  |
-| `TANREN_HETZNER_IMAGE`           | `hetzner`    | e.g. `docker-ce` (default)                                             |
-| `TANREN_HETZNER_LOCATION`        | `hetzner`    | e.g. `nbg1`                                                            |
-| `TANREN_HETZNER_SSH_KEYS`        | `hetzner`    | Comma-separated Hetzner SSH key ids/names to authorize                 |
-| `TANREN_HETZNER_SSH_USER`        | `hetzner`    | SSH username (default `root`)                                          |
+| Env var                           | Used by      | Notes                                                                                 |
+| --------------------------------- | ------------ | ------------------------------------------------------------------------------------- |
+| `TANREN_ALLOCATOR_KIND=router`    | router       | Enables label routing + pool policy                                                   |
+| `TANREN_ALLOCATOR_ROUTING`        | router       | JSON routing config (see above)                                                       |
+| `TANREN_MANUAL_SSH_HOSTS`         | `manual_ssh` | JSON array `[{ id, host, port?, username?, hostKeyFingerprint, identitySecretRef? }]` |
+| `TANREN_HETZNER_API_TOKEN`        | `hetzner`    | API token. Sourced from a Vault ref by operator tooling; never hardcode               |
+| `TANREN_HETZNER_HOST_FINGERPRINT` | `hetzner`    | Pinned SHA256 host key fingerprint (baked into the image / cloud-init)                |
+| `TANREN_HETZNER_SERVER_TYPE`      | `hetzner`    | e.g. `cx22` (default)                                                                 |
+| `TANREN_HETZNER_IMAGE`            | `hetzner`    | e.g. `docker-ce` (default)                                                            |
+| `TANREN_HETZNER_LOCATION`         | `hetzner`    | e.g. `nbg1`                                                                           |
+| `TANREN_HETZNER_SSH_KEYS`         | `hetzner`    | Comma-separated Hetzner SSH key ids/names to authorize                                |
+| `TANREN_HETZNER_SSH_USER`         | `hetzner`    | SSH username (default `root`)                                                         |
 
 Cloud allocators take credentials via config/Vault refs only; the Hetzner API
 calls go through an injectable HTTP client and are unit-tested against a mocked

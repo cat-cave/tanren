@@ -5,9 +5,7 @@ import { describe, expect, it } from "vitest";
 // Verifies the 0009 migration ships the P2A-0017 notifications matrix
 // tables with the constraints and indexes the dispatcher relies on.
 
-const migrationPath = fileURLToPath(
-  new URL("../../../db/migrations/0009_lonely_krista_starr.sql", import.meta.url)
-);
+const migrationPath = fileURLToPath(new URL("../../../db/migrations/0009_lonely_krista_starr.sql", import.meta.url));
 
 async function readMigration(): Promise<string> {
   return readFile(migrationPath, "utf8");
@@ -19,7 +17,7 @@ describe("0009 notifications-matrix migration", () => {
     expect(sql).toContain('CREATE TABLE "notification_targets"');
     expect(sql).toContain("notification_targets_channel_kind_check");
     expect(sql).toMatch(
-      /channel_kind.*IN \('ntfy','slack','github_checks','teams','discord','email','twilio','pagerduty','webhook'\)/
+      /channel_kind.*IN \('ntfy','slack','github_checks','teams','discord','email','twilio','pagerduty','webhook'\)/,
     );
     expect(sql).toContain("notification_targets_scope_check");
     expect(sql).toMatch(/scope.*IN \('org','user'\)/);

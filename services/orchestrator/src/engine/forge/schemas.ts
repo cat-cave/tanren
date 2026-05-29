@@ -26,16 +26,11 @@ export const ForgeTurnSource = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("cost"), costRecordId: z.number().int() }).strict(),
   z.object({ kind: z.literal("insight"), insightId: z.string().min(1) }).strict(),
   z.object({ kind: z.literal("prior_turn"), priorTurnId: z.string().min(1) }).strict(),
-  z.object({ kind: z.literal("operator"), userId: z.string().min(1) }).strict()
+  z.object({ kind: z.literal("operator"), userId: z.string().min(1) }).strict(),
 ]);
 export type ForgeTurnSource = z.infer<typeof ForgeTurnSource>;
 
-export const ForgeTurnAudience = z.enum([
-  "project:member",
-  "project:admin",
-  "org:admin",
-  "platform:admin"
-]);
+export const ForgeTurnAudience = z.enum(["project:member", "project:admin", "org:admin", "platform:admin"]);
 export type ForgeTurnAudience = z.infer<typeof ForgeTurnAudience>;
 
 export const ForgeAuthorKind = z.enum(["forge_template", "forge_llm", "operator"]);
@@ -51,7 +46,7 @@ export const ForgeThreadRow = z
     title: z.string().nullable(),
     createdAt: z.date(),
     updatedAt: z.date(),
-    closedAt: z.date().nullable()
+    closedAt: z.date().nullable(),
   })
   .superRefine((row, ctx) => {
     // Scope-consistency mirrors the CHECK constraint in db/src/schema.ts so
@@ -60,21 +55,21 @@ export const ForgeThreadRow = z
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["scope"],
-        message: "org-scoped thread must have null projectId and runId"
+        message: "org-scoped thread must have null projectId and runId",
       });
     }
     if (row.scope === "project" && (row.projectId === null || row.runId !== null)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["scope"],
-        message: "project-scoped thread must have a projectId and null runId"
+        message: "project-scoped thread must have a projectId and null runId",
       });
     }
     if (row.scope === "run" && (row.projectId === null || row.runId === null)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["scope"],
-        message: "run-scoped thread must have both projectId and runId"
+        message: "run-scoped thread must have both projectId and runId",
       });
     }
   });
@@ -93,7 +88,7 @@ export const ForgeTurnRow = z
     // append path is the bottleneck; readers re-parse only if they need
     // typed access.
     render: z.unknown(),
-    createdAt: z.date()
+    createdAt: z.date(),
   })
   .strict();
 export type ForgeTurnRow = z.infer<typeof ForgeTurnRow>;
@@ -105,28 +100,28 @@ export const ForgeThreadCreateInput = z
     projectId: z.string().min(1).nullable().default(null),
     runId: z.string().min(1).nullable().default(null),
     scope: ForgeThreadScope,
-    title: z.string().nullable().default(null)
+    title: z.string().nullable().default(null),
   })
   .superRefine((row, ctx) => {
     if (row.scope === "org" && (row.projectId !== null || row.runId !== null)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["scope"],
-        message: "org-scoped thread must have null projectId and runId"
+        message: "org-scoped thread must have null projectId and runId",
       });
     }
     if (row.scope === "project" && (row.projectId === null || row.runId !== null)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["scope"],
-        message: "project-scoped thread must have a projectId and null runId"
+        message: "project-scoped thread must have a projectId and null runId",
       });
     }
     if (row.scope === "run" && (row.projectId === null || row.runId === null)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["scope"],
-        message: "run-scoped thread must have both projectId and runId"
+        message: "run-scoped thread must have both projectId and runId",
       });
     }
   });
@@ -140,7 +135,7 @@ export const ForgeTurnAppendInput = z
     audience: ForgeTurnAudience,
     authorKind: ForgeAuthorKind,
     // Validated against the P2A-0008 ForgeAnswer schema in the store.
-    render: ForgeAnswer
+    render: ForgeAnswer,
   })
   .strict();
 export type ForgeTurnAppendInput = z.infer<typeof ForgeTurnAppendInput>;

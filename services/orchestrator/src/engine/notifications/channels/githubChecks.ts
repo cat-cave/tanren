@@ -4,13 +4,10 @@ import {
   FetchGitHubHttpClient,
   parseGitHubPullRequestUrl,
   type GitHubHttpClient,
-  type GitHubRepository
+  type GitHubRepository,
 } from "../../providers/github.js";
 import { GithubAppTokenMinter } from "../../providers/githubAppTokenMinter.js";
-import {
-  resolveGithubToken,
-  type ResolvedGithubToken
-} from "../../credentials/githubTokenResolver.js";
+import { resolveGithubToken, type ResolvedGithubToken } from "../../credentials/githubTokenResolver.js";
 import type { NotificationPayload, NotificationTargetRow } from "../schemas.js";
 import type { NotificationChannel } from "./types.js";
 
@@ -55,7 +52,7 @@ const STATE_BY_SEVERITY: Record<NotificationPayload["severity"], string> = {
   ok: "success",
   info: "success",
   warn: "failure",
-  fail: "error"
+  fail: "error",
 };
 
 export class GithubChecksChannel implements NotificationChannel {
@@ -89,8 +86,8 @@ export class GithubChecksChannel implements NotificationChannel {
         state,
         context: STATUS_CONTEXT,
         description: truncate(payload.title, 140),
-        ...(payload.url !== undefined ? { target_url: payload.url } : {})
-      }
+        ...(payload.url !== undefined ? { target_url: payload.url } : {}),
+      },
     });
     if (response.status !== 201) {
       throw new Error(`github_checks publish failed: HTTP ${response.status}`);
@@ -102,20 +99,20 @@ export class GithubChecksChannel implements NotificationChannel {
       secrets: this.secrets,
       minter: this.minter,
       ...(this.installation !== undefined ? { installation: this.installation } : {}),
-      ...(this.staticRef !== undefined ? { staticRef: this.staticRef } : {})
+      ...(this.staticRef !== undefined ? { staticRef: this.staticRef } : {}),
     });
   }
 
   private async fetchHeadSha(
     repo: GitHubRepository,
     pullNumber: number,
-    resolved: ResolvedGithubToken
+    resolved: ResolvedGithubToken,
   ): Promise<string> {
     const response = await this.http.request({
       method: "GET",
       path: `/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}/pulls/${pullNumber}`,
       token: resolved.token,
-      refreshToken: resolved.refresh
+      refreshToken: resolved.refresh,
     });
     if (response.status !== 200) {
       throw new Error(`github_checks PR fetch failed: HTTP ${response.status}`);

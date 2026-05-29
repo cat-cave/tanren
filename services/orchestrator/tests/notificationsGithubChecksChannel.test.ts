@@ -2,11 +2,7 @@ import { generateKeyPairSync } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { GithubChecksChannel } from "../src/engine/notifications/channels/githubChecks.js";
 import { GithubAppTokenMinter } from "../src/engine/providers/githubAppTokenMinter.js";
-import type {
-  GitHubHttpClient,
-  GitHubHttpRequest,
-  GitHubHttpResponse
-} from "../src/engine/providers/github.js";
+import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "../src/engine/providers/github.js";
 import type { SecretStore, SecretValue } from "../src/engine/contracts/secretStore.js";
 import type { OrgGithubAppInstallation } from "../src/engine/config/orgConfig.js";
 import type { NotificationPayload, NotificationTargetRow } from "../src/engine/notifications/index.js";
@@ -29,7 +25,7 @@ function target(overrides: Partial<NotificationTargetRow> = {}): NotificationTar
     weekendMute: false,
     createdAt: new Date(),
     updatedAt: new Date(),
-    ...overrides
+    ...overrides,
   };
 }
 
@@ -38,7 +34,7 @@ const payload: NotificationPayload = {
   body: "run failed",
   severity: "fail",
   eventName: "run.failed",
-  url: "https://tanren.example/runs/run_1"
+  url: "https://tanren.example/runs/run_1",
 };
 
 class MemorySecrets implements SecretStore {
@@ -99,13 +95,13 @@ describe("GithubChecksChannel", () => {
       ["ok", "success"],
       ["info", "success"],
       ["warn", "failure"],
-      ["fail", "error"]
+      ["fail", "error"],
     ];
     for (const [severity, expected] of cases) {
       const http = new FakeGitHubHttp(prAndStatusResponder("sha1"));
       const channel = new GithubChecksChannel({
         secrets: new MemorySecrets({ "credential/github/default": "tok" }),
-        http
+        http,
       });
       await channel.publish(target(), { ...payload, severity });
       const post = http.requests.find((r) => r.method === "POST")!;
@@ -119,22 +115,21 @@ describe("GithubChecksChannel", () => {
     const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
     const pem = privateKey.export({ type: "pkcs8", format: "pem" }).toString();
     const secrets = new MemorySecrets({
-      "credential/github_app/cat-cave": JSON.stringify({ appId: "123456", privateKeyPem: pem })
+      "credential/github_app/cat-cave": JSON.stringify({ appId: "123456", privateKeyPem: pem }),
     });
     let mintCalls = 0;
     const mintFetch: typeof fetch = async () => {
       mintCalls += 1;
-      return new Response(
-        JSON.stringify({ token: "ghs_installation_token", expires_at: "2999-01-01T00:00:00Z" }),
-        { status: 201 }
-      );
+      return new Response(JSON.stringify({ token: "ghs_installation_token", expires_at: "2999-01-01T00:00:00Z" }), {
+        status: 201,
+      });
     };
     const minter = new GithubAppTokenMinter({ secrets, fetchImpl: mintFetch });
     const installation: OrgGithubAppInstallation = {
       installationId: "987",
       appId: "123456",
       credentialRef: "credential/github_app/cat-cave",
-      installedAt: "2026-01-01T00:00:00Z"
+      installedAt: "2026-01-01T00:00:00Z",
     };
     const http = new FakeGitHubHttp(prAndStatusResponder("appsha"));
     const channel = new GithubChecksChannel({ secrets, installation, minter, http });
@@ -154,10 +149,8 @@ describe("GithubChecksChannel", () => {
     });
     const channel = new GithubChecksChannel({
       secrets: new MemorySecrets({ "credential/github/default": "tok" }),
-      http
+      http,
     });
-    await expect(channel.publish(target(), payload)).rejects.toThrow(
-      /github_checks publish failed: HTTP 403/
-    );
+    await expect(channel.publish(target(), payload)).rejects.toThrow(/github_checks publish failed: HTTP 403/);
   });
 });

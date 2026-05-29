@@ -14,7 +14,10 @@ import { OrchestratorClient } from "../../api/orchestrator.js";
 import type { ShellDeps } from "../../app/mountShell.js";
 
 function clientFor(c: Context, deps: ShellDeps): OrchestratorClient {
-  return new OrchestratorClient({ orchestratorUrl: deps.orchestratorUrl, cookieHeader: c.req.header("cookie") });
+  return new OrchestratorClient({
+    orchestratorUrl: deps.orchestratorUrl,
+    cookieHeader: c.req.header("cookie"),
+  });
 }
 
 /** Resolve the operator's first org id (the onboarding scope). */
@@ -24,7 +27,8 @@ async function firstOrgId(client: OrchestratorClient): Promise<string | undefine
 }
 
 function redirectTo(c: Context, path: string, notice?: string): Response {
-  const url = notice === undefined ? path : `${path}${path.includes("?") ? "&" : "?"}notice=${encodeURIComponent(notice)}`;
+  const url =
+    notice === undefined ? path : `${path}${path.includes("?") ? "&" : "?"}notice=${encodeURIComponent(notice)}`;
   return c.redirect(url, 303);
 }
 
@@ -47,7 +51,7 @@ export function mountOnboardingActions(app: Hono, deps: ShellDeps): void {
       scope: "org",
       orgId,
       kind: "opaque",
-      body: { ref, value, schema, baseUrl }
+      body: { ref, value, schema, baseUrl },
     });
     return redirectTo(c, "/onboarding/credentials", result.ok ? `saved ${label}` : "save failed");
   });
@@ -63,7 +67,7 @@ export function mountOnboardingActions(app: Hono, deps: ShellDeps): void {
     const result = await client.importCredential({
       scope: "me",
       kind: "codex_chatgpt_auth",
-      body: { ref, authJson }
+      body: { ref, authJson },
     });
     return redirectTo(c, "/onboarding/credentials", result.ok ? "codex bundle imported" : "import failed");
   });
@@ -86,7 +90,7 @@ export function mountOnboardingActions(app: Hono, deps: ShellDeps): void {
       scope: "org",
       orgId,
       kind: "github_token",
-      body: { ref, token }
+      body: { ref, token },
     });
     return redirectTo(c, "/onboarding/credentials", result.ok ? `saved ${label}` : "save failed");
   });
@@ -116,7 +120,7 @@ export function mountOnboardingActions(app: Hono, deps: ShellDeps): void {
       destination,
       channelKind,
       scope: "org",
-      enabled: true
+      enabled: true,
     });
     return redirectTo(c, "/notifications", created ? `added ${label}` : "add failed");
   });

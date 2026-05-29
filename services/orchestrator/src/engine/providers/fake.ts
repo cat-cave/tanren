@@ -24,11 +24,11 @@ export const fakePlanner: AnswererAdapter<PlanAnswer> = {
       subtasks: [
         {
           title: "Return hello-world status",
-          acceptanceCriteria: ["The orchestrator persists a completed synthetic run"]
-        }
-      ]
+          acceptanceCriteria: ["The orchestrator persists a completed synthetic run"],
+        },
+      ],
     };
-  }
+  },
 };
 
 export const fakeWriter: WriterAdapter = {
@@ -37,7 +37,7 @@ export const fakeWriter: WriterAdapter = {
   authRef: fakeSelfHostedAuthRef,
   async runWriter(): Promise<WriterResult> {
     throw new Error("fake writer requires a runner SSH target; use createFakeWriter");
-  }
+  },
 };
 
 export function createFakeWriter(dependencies: FakeWriterDependencies): WriterAdapter {
@@ -50,11 +50,11 @@ export function createFakeWriter(dependencies: FakeWriterDependencies): WriterAd
         ssh: dependencies.ssh,
         target: dependencies.target,
         workspacePath: opts.workspace,
-        timeoutMs: opts.timeoutMs
+        timeoutMs: opts.timeoutMs,
       };
       await runFakeWriterMutation(input);
       return await captureGitMutation(input);
-    }
+    },
   };
 }
 
@@ -63,8 +63,12 @@ export const fakeChecker: AnswererAdapter<CheckAnswer> = {
   cli: "fake",
   authRef: fakeSelfHostedAuthRef,
   async runAnswerer() {
-    return { done: true, reason: "Synthetic writer output satisfies the hello-world criteria.", suggested_fixes: null };
-  }
+    return {
+      done: true,
+      reason: "Synthetic writer output satisfies the hello-world criteria.",
+      suggested_fixes: null,
+    };
+  },
 };
 
 export const fakeAuditor: AnswererAdapter<AuditAnswer> = {
@@ -79,11 +83,11 @@ export const fakeAuditor: AnswererAdapter<AuditAnswer> = {
           {
             criterion: "The orchestrator persists a completed synthetic run",
             satisfied: true,
-            reason: "The structured checker accepted the writer output."
-          }
-        ]
+            reason: "The structured checker accepted the writer output.",
+          },
+        ],
       },
-      reason: "All hello-world checks completed."
+      reason: "All hello-world checks completed.",
     };
-  }
+  },
 };

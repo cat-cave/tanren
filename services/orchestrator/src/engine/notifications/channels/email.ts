@@ -58,7 +58,7 @@ export class EmailChannel implements NotificationChannel {
         fetch: deps.fetch,
         apiEndpointRef: deps.apiEndpointRef,
         apiKeyRef: deps.apiKeyRef,
-        from: deps.from
+        from: deps.from,
       });
   }
 
@@ -66,7 +66,7 @@ export class EmailChannel implements NotificationChannel {
     await this.transport.send({
       to: target.destination,
       subject: payload.title,
-      text: buildEmailBody(payload)
+      text: buildEmailBody(payload),
     });
   }
 }
@@ -124,20 +124,18 @@ export class HttpEmailTransport implements EmailTransport {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey.value}`
+        Authorization: `Bearer ${apiKey.value}`,
       },
       body: JSON.stringify({
         from: this.from,
         to: message.to,
         subject: message.subject,
-        text: message.text
-      })
+        text: message.text,
+      }),
     });
     if (!response.ok) {
       const detail = await safeReadText(response);
-      throw new Error(
-        `email publish failed: ${response.status} ${response.statusText} ${detail}`.trim()
-      );
+      throw new Error(`email publish failed: ${response.status} ${response.statusText} ${detail}`.trim());
     }
   }
 }

@@ -10,12 +10,7 @@
  * requested back into the API.
  */
 
-import type {
-  RunCostRecord,
-  RunDetail,
-  RunEventRow,
-  TaskTimelineEntry
-} from "../../api/types.js";
+import type { RunCostRecord, RunDetail, RunEventRow, TaskTimelineEntry } from "../../api/types.js";
 
 /** A cost-source semantic color key (matches the design tokens). */
 export type CostSource = "per_token" | "subscription" | "self_hosted";
@@ -88,7 +83,15 @@ export function summarizeCosts(costs: RunCostRecord[]): CostTotals {
     byModel.set(cost.model, model);
   }
 
-  return { perTokenUsd, inputTokens, outputTokens, cachedInputTokens, totalTokens, bySource, byModel };
+  return {
+    perTokenUsd,
+    inputTokens,
+    outputTokens,
+    cachedInputTokens,
+    totalTokens,
+    bySource,
+    byModel,
+  };
 }
 
 /** Format a USD amount with a leading `$` and four decimals (sub-cent precision). */
@@ -189,7 +192,7 @@ export function buildTrajectory(tasks: TaskTimelineEntry[]): TrajectoryMoment[] 
       model: task.model,
       duration: formatDuration(task.startedAt, task.endedAt),
       startedAt: task.startedAt,
-      endedAt: task.endedAt
+      endedAt: task.endedAt,
     } satisfies TrajectoryMoment;
   });
 }
@@ -267,7 +270,7 @@ export function reasoningForTask(detail: RunDetail, taskId: string | null): Mome
       tools.push({
         name: toolName,
         arg: asString(payload["arg"]) ?? asString(payload["args"]) ?? "",
-        output: asString(payload["output"]) ?? asString(payload["result"]) ?? ""
+        output: asString(payload["output"]) ?? asString(payload["result"]) ?? "",
       });
     }
 
@@ -288,7 +291,7 @@ export function reasoningForTask(detail: RunDetail, taskId: string | null): Mome
     intent,
     tools,
     decisions,
-    events
+    events,
   };
 }
 
@@ -389,14 +392,12 @@ export function prNumberFrom(prUrl: string | null): string | null {
  */
 export function derivePreviewUrl(
   previewUrlPattern: string | undefined,
-  run: { branch: string; prUrl: string | null }
+  run: { branch: string; prUrl: string | null },
 ): string | null {
   if (previewUrlPattern === undefined || previewUrlPattern === "") return null;
   const pr = prNumberFrom(run.prUrl);
   if (previewUrlPattern.includes("{pr}") && pr === null) return null;
-  const url = previewUrlPattern
-    .replaceAll("{pr}", pr ?? "")
-    .replaceAll("{branch}", encodeURIComponent(run.branch));
+  const url = previewUrlPattern.replaceAll("{pr}", pr ?? "").replaceAll("{branch}", encodeURIComponent(run.branch));
   // Only surface an http(s) origin into an iframe `src` (no `javascript:` etc).
   return /^https?:\/\//i.test(url) ? url : null;
 }
@@ -415,6 +416,6 @@ export function failedTasks(detail: RunDetail): TaskTimelineEntry[] {
       t.outcome === "rejected_by_checker" ||
       t.outcome === "rejected_by_auditor" ||
       t.outcome === "crashed" ||
-      t.outcome === "timed_out"
+      t.outcome === "timed_out",
   );
 }

@@ -60,12 +60,7 @@ export function ShellLayout(props: ShellLayoutProps) {
       </head>
       <body>
         <div class="app">
-          <TopBar
-            org={ctx.org}
-            project={ctx.project}
-            projects={ctx.projects}
-            operatorInitials={ctx.operator}
-          />
+          <TopBar org={ctx.org} project={ctx.project} projects={ctx.projects} operatorInitials={ctx.operator} />
           <SideNav activeId={ctx.activeNavId} activeProjectId={ctx.project?.projectId} />
           <main class="main">{props.children}</main>
         </div>

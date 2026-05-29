@@ -32,7 +32,7 @@ export const AuditFindingsSummary = z
   .object({
     count: z.number().int().min(0).default(0),
     severity: AuditFindingSeverity.default("ok"),
-    note: z.string().max(300).default("")
+    note: z.string().max(300).default(""),
   })
   .strict();
 export type AuditFindingsSummary = z.infer<typeof AuditFindingsSummary>;
@@ -51,7 +51,7 @@ export const AuditJob = z
     enabled: z.boolean().default(true),
     // ISO timestamp of the last successful pass, or null until first run.
     lastRun: z.string().nullable().default(null),
-    findings: AuditFindingsSummary.default({ count: 0, severity: "ok", note: "" })
+    findings: AuditFindingsSummary.default({ count: 0, severity: "ok", note: "" }),
   })
   .strict();
 export type AuditJob = z.infer<typeof AuditJob>;

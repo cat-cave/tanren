@@ -54,7 +54,7 @@ const DIFF_CLASS: Record<ConfigDiffLine["t"], string> = {
   add: "ln-add",
   rem: "ln-rem",
   comment: "ln-comment",
-  ctx: ""
+  ctx: "",
 };
 
 function HistoryPanel(props: { entries: ConfigHistoryEntry[]; metaLabel: string }) {
@@ -85,7 +85,9 @@ function GateOff(props: ConfigViewProps) {
         <div>
           <div class="eyebrow">▮ tanren-config · audit gate</div>
           <div class="title">config as code</div>
-          <div class="sub">routing &amp; limits currently live in the dashboard · changes apply immediately, no review</div>
+          <div class="sub">
+            routing &amp; limits currently live in the dashboard · changes apply immediately, no review
+          </div>
         </div>
       </div>
       <div class="panel gate-card">
@@ -122,7 +124,13 @@ function GateOn(props: ConfigViewProps) {
           </div>
           <div class="title">review the config change</div>
           <div class="sub">
-            {props.configFile} · proposed by forge{hasPr ? <> · branch <b>{props.pr?.branch}</b></> : null}
+            {props.configFile} · proposed by forge
+            {hasPr ? (
+              <>
+                {" "}
+                · branch <b>{props.pr?.branch}</b>
+              </>
+            ) : null}
           </div>
         </div>
         <div class="head-actions">

@@ -54,7 +54,12 @@ function routingLines(routing: RoutingTable): string[] {
     const rendered = chain.map((e) => `${e.cli}/${e.model}`);
     lines.push(`  ${role}.primary = "${rendered[0]}"`);
     if (rendered.length > 1) {
-      lines.push(`  ${role}.fallback = [${rendered.slice(1).map((r) => `"${r}"`).join(", ")}]`);
+      lines.push(
+        `  ${role}.fallback = [${rendered
+          .slice(1)
+          .map((r) => `"${r}"`)
+          .join(", ")}]`,
+      );
     }
   }
   return lines;
@@ -65,7 +70,7 @@ function limitLines(hatches: OrgConfigV1["escapeHatches"]): string[] {
     "[limits]",
     `  max_writer_iter = ${hatches.maxWriterIterPerSubtask}`,
     `  max_planner_reruns = ${hatches.maxPlannerRerunsPerSpec}`,
-    `  max_transient_retries = ${hatches.maxRetriesPerTransientFailure}`
+    `  max_transient_retries = ${hatches.maxRetriesPerTransientFailure}`,
   ];
 }
 
@@ -77,7 +82,7 @@ export function renderTanrenYaml(config: OrgConfigV1): string {
     ...routingLines(config.routing),
     "",
     ...limitLines(config.escapeHatches),
-    ""
+    "",
   ].join("\n");
 }
 
@@ -170,8 +175,7 @@ export function buildConfigPrTitle(prev: OrgConfigV1, next: OrgConfigV1): string
 
 /** Slugify a head-branch suffix from the change (stable, lowercase, ascii). */
 function changeSlug(prev: OrgConfigV1, next: OrgConfigV1): string {
-  const base =
-    JSON.stringify(next.routing) !== JSON.stringify(prev.routing) ? "route" : "limits";
+  const base = JSON.stringify(next.routing) !== JSON.stringify(prev.routing) ? "route" : "limits";
   return `${base}-${Date.now().toString(36)}`;
 }
 
@@ -210,9 +214,7 @@ export type GatedConfigWriteResult =
  * `tanren.yaml` diff and opens a PR via the injected GitHub port, returning
  * `gated` WITHOUT touching the DB (apply-on-merge takes over later).
  */
-export async function gatedConfigWrite(
-  input: GatedConfigWriteInput
-): Promise<GatedConfigWriteResult> {
+export async function gatedConfigWrite(input: GatedConfigWriteInput): Promise<GatedConfigWriteResult> {
   const gateOn = input.next.auditGateEnabled === true;
   if (!gateOn || !isBucketBChange(input.prev, input.next)) {
     return { kind: "apply-directly", config: input.next };
@@ -229,7 +231,7 @@ export async function gatedConfigWrite(
     configFile: input.target.configFile,
     yaml: renderTanrenYaml(input.next),
     title: buildConfigPrTitle(input.prev, input.next),
-    body: configPrBody(diff)
+    body: configPrBody(diff),
   });
   return { kind: "gated", pr, diff };
 }
@@ -242,7 +244,7 @@ function configPrBody(diff: ConfigYamlDiffLine[]): string {
     "",
     `${added} added · ${removed} removed.`,
     "",
-    "Merging applies the routing change to every new run."
+    "Merging applies the routing change to every new run.",
   ].join("\n");
 }
 

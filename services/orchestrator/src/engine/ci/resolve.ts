@@ -15,9 +15,7 @@ import { CiYamlParseError, parseYaml } from "./yaml.js";
 export class CiConfigValidationError extends Error {
   readonly issues: ReadonlyArray<z.core.$ZodIssue>;
   constructor(issues: ReadonlyArray<z.core.$ZodIssue>) {
-    const summary = issues
-      .map((issue) => `${issue.path.join(".") || "<root>"}: ${issue.message}`)
-      .join("; ");
+    const summary = issues.map((issue) => `${issue.path.join(".") || "<root>"}: ${issue.message}`).join("; ");
     super(`invalid tanren-ci.yml: ${summary}`);
     this.name = "CiConfigValidationError";
     this.issues = issues;
@@ -37,18 +35,18 @@ export const DEFAULT_CI_CONFIG: CiConfigV1 = Object.freeze(
       fast: [
         { name: "lint", run: "pnpm lint" },
         { name: "typecheck", run: "pnpm typecheck" },
-        { name: "unit", run: "pnpm test" }
+        { name: "unit", run: "pnpm test" },
       ],
       slow: [
         { name: "build", run: "pnpm build" },
-        { name: "test", run: "pnpm test" }
-      ]
+        { name: "test", run: "pnpm test" },
+      ],
     },
     when: {
       fast: ["per_iteration"],
-      slow: ["pre_audit", "pre_merge"]
-    }
-  })
+      slow: ["pre_audit", "pre_merge"],
+    },
+  }),
 );
 
 // Parse + validate raw YAML text into a typed config. `undefined` (no file in

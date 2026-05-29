@@ -14,7 +14,7 @@ export {
   type ProposeFilesInput,
   type ConfigInjectionGitHub,
   type InjectedConfigPullRequest,
-  type OpenConfigInjectionInput
+  type OpenConfigInjectionInput,
 } from "./configInjection.js";
 export { FetchConfigInjectionGitHub, type FetchConfigInjectionGitHubInput } from "./githubConfigInjection.js";
 export {
@@ -22,5 +22,5 @@ export {
   type SeedDagInput,
   type SeedDagResult,
   type SeededSpec,
-  type SeedSource
+  type SeedSource,
 } from "./seed.js";

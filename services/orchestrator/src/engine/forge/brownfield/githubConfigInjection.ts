@@ -12,7 +12,7 @@ import {
   GitHubPullRequestService,
   parseGitHubRepository,
   type GitHubHttpClient,
-  type GitHubRepository
+  type GitHubRepository,
 } from "../../providers/github.js";
 import type { ConfigInjectionGitHub, InjectedConfigPullRequest } from "./configInjection.js";
 
@@ -60,9 +60,14 @@ export class FetchConfigInjectionGitHub implements ConfigInjectionGitHub {
       headBranch: input.headBranch,
       baseBranch: input.baseBranch,
       title: input.title,
-      body: input.body
+      body: input.body,
     });
-    return { number: pr.number, url: pr.url, branch: input.headBranch, filesCommitted: input.files.map((f) => f.path) };
+    return {
+      number: pr.number,
+      url: pr.url,
+      branch: input.headBranch,
+      filesCommitted: input.files.map((f) => f.path),
+    };
   }
 
   /** Create `headBranch` at `baseBranch`'s head SHA; tolerate an existing ref. */
@@ -71,7 +76,7 @@ export class FetchConfigInjectionGitHub implements ConfigInjectionGitHub {
       method: "GET",
       path: repoApi(repo, `/git/ref/${encodeRepoPath(`heads/${baseBranch}`)}`),
       token: this.deps.token,
-      refreshToken: this.deps.refreshToken
+      refreshToken: this.deps.refreshToken,
     });
     if (ref.status !== 200) {
       throw new Error(`could not read base branch ${baseBranch}: HTTP ${ref.status}`);
@@ -82,7 +87,7 @@ export class FetchConfigInjectionGitHub implements ConfigInjectionGitHub {
       path: repoApi(repo, "/git/refs"),
       token: this.deps.token,
       refreshToken: this.deps.refreshToken,
-      body: { ref: `refs/heads/${headBranch}`, sha }
+      body: { ref: `refs/heads/${headBranch}`, sha },
     });
     if (create.status !== 201 && create.status !== 422) {
       throw new Error(`could not create branch ${headBranch}: HTTP ${create.status}`);
@@ -95,13 +100,13 @@ export class FetchConfigInjectionGitHub implements ConfigInjectionGitHub {
     headBranch: string,
     path: string,
     content: string,
-    message: string
+    message: string,
   ): Promise<void> {
     const existing = await this.deps.http.request({
       method: "GET",
       path: repoApi(repo, `/contents/${encodeRepoPath(path)}?ref=${encodeURIComponent(headBranch)}`),
       token: this.deps.token,
-      refreshToken: this.deps.refreshToken
+      refreshToken: this.deps.refreshToken,
     });
     const sha = existing.status === 200 ? contentSha(existing.body) : undefined;
     const put = await this.deps.http.request({
@@ -113,8 +118,8 @@ export class FetchConfigInjectionGitHub implements ConfigInjectionGitHub {
         message: `${message}: ${path}`,
         branch: headBranch,
         content: Buffer.from(content, "utf8").toString("base64"),
-        ...(sha !== undefined ? { sha } : {})
-      }
+        ...(sha !== undefined ? { sha } : {}),
+      },
     });
     if (put.status !== 200 && put.status !== 201) {
       throw new Error(`could not commit ${path}: HTTP ${put.status}`);

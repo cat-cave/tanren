@@ -1,20 +1,22 @@
 import { describe, expect, it } from "vitest";
-import type {
-  ContainerInspectResult,
-  CreateContainerSpec,
-  DockerEngineClient
-} from "../src/dockerEngine.js";
+import type { ContainerInspectResult, CreateContainerSpec, DockerEngineClient } from "../src/dockerEngine.js";
 import {
   RunnerLifecycle,
   type RunnerRecord,
   type RunnerSecretsClient,
-  type RunnerStore
+  type RunnerStore,
 } from "../src/runnerLifecycle.js";
 
 class FakeDocker implements DockerEngineClient {
   readonly volumeCreates: string[] = [];
   readonly volumeRemoves: string[] = [];
-  readonly containers: Array<{ id: string; spec: CreateContainerSpec; started: boolean; removed: boolean; stopped: boolean }> = [];
+  readonly containers: Array<{
+    id: string;
+    spec: CreateContainerSpec;
+    started: boolean;
+    removed: boolean;
+    stopped: boolean;
+  }> = [];
   hostKeyContent: Buffer = Buffer.from("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIRunnerHostKey runner\n");
   failingHostKeyReads = 0;
   private hostKeyReads = 0;
@@ -42,7 +44,11 @@ class FakeDocker implements DockerEngineClient {
 
   async inspectContainer(id: string): Promise<ContainerInspectResult> {
     const entry = this.containers.find((c) => c.id === id);
-    return { id, imageSha: `sha256:${entry?.spec.image ?? "unknown"}`, running: entry?.started === true };
+    return {
+      id,
+      imageSha: `sha256:${entry?.spec.image ?? "unknown"}`,
+      running: entry?.started === true,
+    };
   }
 
   async readContainerFile(): Promise<Buffer> {
@@ -100,7 +106,12 @@ class StaticSecrets implements RunnerSecretsClient {
   }
 }
 
-const baseLifecycle = (docker: FakeDocker, store: InMemoryRunnerStore, secrets: RunnerSecretsClient = new StaticSecrets({}), now?: () => Date) =>
+const baseLifecycle = (
+  docker: FakeDocker,
+  store: InMemoryRunnerStore,
+  secrets: RunnerSecretsClient = new StaticSecrets({}),
+  now?: () => Date,
+) =>
   new RunnerLifecycle({
     docker,
     store,
@@ -110,7 +121,7 @@ const baseLifecycle = (docker: FakeDocker, store: InMemoryRunnerStore, secrets: 
     hostKeyReadAttempts: 4,
     hostKeyReadDelayMs: 1,
     sleep: () => Promise.resolve(),
-    now
+    now,
   });
 
 describe("RunnerLifecycle.allocate", () => {
@@ -123,7 +134,7 @@ describe("RunnerLifecycle.allocate", () => {
       runId: "run_42",
       projectId: "proj_a",
       runnerImage: "ghcr.io/cat-cave/tanren-runner:v0",
-      vaultRefs: []
+      vaultRefs: [],
     });
 
     expect(result.runnerId).toBe("runner_run_42");
@@ -140,20 +151,23 @@ describe("RunnerLifecycle.allocate", () => {
   it("materializes vault refs into the codex-home env bundle", async () => {
     const docker = new FakeDocker();
     const store = new InMemoryRunnerStore();
-    const secrets = new StaticSecrets({ "credential/codex/test": "{\"openai\":{}}" });
+    const secrets = new StaticSecrets({ "credential/codex/test": '{"openai":{}}' });
     const lifecycle = baseLifecycle(docker, store, secrets);
 
     await lifecycle.allocate({
       runId: "run_codex",
       projectId: "proj_a",
       runnerImage: "ghcr.io/cat-cave/tanren-runner:v0",
-      vaultRefs: ["credential/codex/test"]
+      vaultRefs: ["credential/codex/test"],
     });
 
     const bundle = docker.containers[0]?.spec.env.TANREN_CODEX_HOME_BUNDLE ?? "";
     expect(bundle).not.toBe("");
-    const decoded = JSON.parse(Buffer.from(bundle, "base64").toString("utf8")) as Array<{ ref: string; value: string }>;
-    expect(decoded).toEqual([{ ref: "credential/codex/test", value: "{\"openai\":{}}" }]);
+    const decoded = JSON.parse(Buffer.from(bundle, "base64").toString("utf8")) as Array<{
+      ref: string;
+      value: string;
+    }>;
+    expect(decoded).toEqual([{ ref: "credential/codex/test", value: '{"openai":{}}' }]);
   });
 
   it("fails when a vault ref is missing", async () => {
@@ -166,8 +180,8 @@ describe("RunnerLifecycle.allocate", () => {
         runId: "run_missing",
         projectId: "proj_a",
         runnerImage: "ghcr.io/cat-cave/tanren-runner:v0",
-        vaultRefs: ["credential/missing"]
-      })
+        vaultRefs: ["credential/missing"],
+      }),
     ).rejects.toThrow(/credential\/missing/);
   });
 
@@ -181,7 +195,7 @@ describe("RunnerLifecycle.allocate", () => {
       runId: "run_slow",
       projectId: "proj_a",
       runnerImage: "ghcr.io/cat-cave/tanren-runner:v0",
-      vaultRefs: []
+      vaultRefs: [],
     });
 
     expect(result.hostKeyFingerprint.startsWith("SHA256:")).toBe(true);
@@ -198,7 +212,7 @@ describe("RunnerLifecycle.release", () => {
       runId: "run_release",
       projectId: "proj_a",
       runnerImage: "ghcr.io/cat-cave/tanren-runner:v0",
-      vaultRefs: []
+      vaultRefs: [],
     });
 
     const result = await lifecycle.release(allocated.runnerId, "completed");
@@ -207,7 +221,7 @@ describe("RunnerLifecycle.release", () => {
     expect(docker.containers[0]?.stopped).toBe(true);
     expect(docker.containers[0]?.removed).toBe(true);
     expect(docker.volumeRemoves).toEqual(
-      expect.arrayContaining(["tanren-runner-run_release-workspace", "tanren-runner-run_release-codex-home"])
+      expect.arrayContaining(["tanren-runner-run_release-workspace", "tanren-runner-run_release-codex-home"]),
     );
     expect(store.records[0]?.released).toBe(true);
   });
@@ -221,7 +235,7 @@ describe("RunnerLifecycle.release", () => {
       runId: "run_idemp",
       projectId: "proj_a",
       runnerImage: "ghcr.io/cat-cave/tanren-runner:v0",
-      vaultRefs: []
+      vaultRefs: [],
     });
     await lifecycle.release(allocated.runnerId, "completed");
     const removeCallsAfterFirst = docker.volumeRemoves.length;
@@ -239,13 +253,13 @@ describe("RunnerLifecycle.release", () => {
       runId: "run_failed",
       projectId: "proj_a",
       runnerImage: "ghcr.io/cat-cave/tanren-runner:v0",
-      vaultRefs: []
+      vaultRefs: [],
     });
     const result = await lifecycle.release(allocated.runnerId, "failed");
 
     expect(result.released).toBe(true);
     expect(docker.volumeRemoves).toEqual(
-      expect.arrayContaining(["tanren-runner-run_failed-workspace", "tanren-runner-run_failed-codex-home"])
+      expect.arrayContaining(["tanren-runner-run_failed-workspace", "tanren-runner-run_failed-codex-home"]),
     );
   });
 });
@@ -261,7 +275,7 @@ describe("RunnerLifecycle.sweepAbandoned", () => {
       runId: "run_stale",
       projectId: "proj_a",
       runnerImage: "ghcr.io/cat-cave/tanren-runner:v0",
-      vaultRefs: []
+      vaultRefs: [],
     });
 
     // Advance the simulated clock by 7 hours; TTL is 6h.
@@ -272,7 +286,7 @@ describe("RunnerLifecycle.sweepAbandoned", () => {
     expect(reclaimed.map((r) => r.runnerId)).toEqual(["runner_run_stale"]);
     expect(docker.containers[0]?.removed).toBe(true);
     expect(docker.volumeRemoves).toEqual(
-      expect.arrayContaining(["tanren-runner-run_stale-workspace", "tanren-runner-run_stale-codex-home"])
+      expect.arrayContaining(["tanren-runner-run_stale-workspace", "tanren-runner-run_stale-codex-home"]),
     );
   });
 
@@ -286,7 +300,7 @@ describe("RunnerLifecycle.sweepAbandoned", () => {
       runId: "run_fresh",
       projectId: "proj_a",
       runnerImage: "ghcr.io/cat-cave/tanren-runner:v0",
-      vaultRefs: []
+      vaultRefs: [],
     });
 
     nowMs += 60 * 60 * 1000; // 1h
@@ -307,7 +321,7 @@ describe("RunnerLifecycle finalizer under simulated crash", () => {
       runId: "run_crash",
       projectId: "proj_a",
       runnerImage: "ghcr.io/cat-cave/tanren-runner:v0",
-      vaultRefs: []
+      vaultRefs: [],
     });
 
     // Simulate the container crashing: mark it stopped from the outside.
@@ -319,7 +333,7 @@ describe("RunnerLifecycle finalizer under simulated crash", () => {
     const result = await lifecycle.release(allocated.runnerId, "failed");
     expect(result.released).toBe(true);
     expect(docker.volumeRemoves).toEqual(
-      expect.arrayContaining(["tanren-runner-run_crash-workspace", "tanren-runner-run_crash-codex-home"])
+      expect.arrayContaining(["tanren-runner-run_crash-workspace", "tanren-runner-run_crash-codex-home"]),
     );
   });
 });

@@ -11,10 +11,7 @@ import { fileURLToPath } from "node:url";
 
 import type { ZodType } from "zod";
 
-import {
-  answererSchemaCatalog,
-  type AnswererRole
-} from "./catalog.js";
+import { answererSchemaCatalog, type AnswererRole } from "./catalog.js";
 
 export interface AnswererOutputSchema<TOutput> {
   name: string;
@@ -22,10 +19,7 @@ export interface AnswererOutputSchema<TOutput> {
   parse(value: unknown): TOutput;
 }
 
-const generatedDir = resolve(
-  dirname(fileURLToPath(import.meta.url)),
-  "generated"
-);
+const generatedDir = resolve(dirname(fileURLToPath(import.meta.url)), "generated");
 
 function loadGeneratedJsonSchema(role: AnswererRole): Record<string, unknown> {
   const descriptor = answererSchemaCatalog[role];
@@ -40,7 +34,7 @@ function loadGeneratedJsonSchema(role: AnswererRole): Record<string, unknown> {
 // test keeps them aligned.
 export function answererOutputSchemaFor<TOutput>(
   role: AnswererRole,
-  zodSchema: ZodType<TOutput>
+  zodSchema: ZodType<TOutput>,
 ): AnswererOutputSchema<TOutput> {
   const descriptor = answererSchemaCatalog[role];
   return {
@@ -48,6 +42,6 @@ export function answererOutputSchemaFor<TOutput>(
     jsonSchema: loadGeneratedJsonSchema(role),
     parse(value): TOutput {
       return zodSchema.parse(value);
-    }
+    },
   };
 }

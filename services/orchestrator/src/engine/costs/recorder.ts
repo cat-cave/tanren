@@ -47,18 +47,22 @@ export interface RecordedCost {
 export class CostRecorder {
   constructor(
     private readonly pool: RecorderClient,
-    private readonly eventStore: EventStore
+    private readonly eventStore: EventStore,
   ) {}
 
   // record persists a single cost_records row with the full typed token
   // breakdown and a possibly-null dollar figure. It never throws for an
   // unattributable ref — cost-unknown is an allowed state.
-  async record(context: CostRecordContext, tokens: TokenUsage, rawUsage: Record<string, unknown>): Promise<RecordedCost> {
+  async record(
+    context: CostRecordContext,
+    tokens: TokenUsage,
+    rawUsage: Record<string, unknown>,
+  ): Promise<RecordedCost> {
     const attribution: AttributionInput = {
       cli: context.cli,
       authRef: context.authRef,
       ccusageCostUsd: context.ccusageCostUsd ?? null,
-      rawUsage
+      rawUsage,
     };
     const source = resolveCostSource(attribution);
     const costUsd = computeCostUsd(source, tokens);
@@ -90,11 +94,11 @@ export class CostRecorder {
           billingMode: source.billingMode,
           costBasis: source.costBasis,
           provider: source.provider,
-          rawUsage
+          rawUsage,
         }),
         context.tenantId ?? null,
-        context.userId ?? null
-      ]
+        context.userId ?? null,
+      ],
     );
     await this.eventStore.append({
       runId: context.runId,
@@ -109,15 +113,15 @@ export class CostRecorder {
         model: context.model,
         costUsd,
         billingMode: source.billingMode,
-        costBasis: source.costBasis
-      }
+        costBasis: source.costBasis,
+      },
     });
     return {
       billingMode: source.billingMode,
       costBasis: source.costBasis,
       costUsd,
       tokens,
-      provider: source.provider
+      provider: source.provider,
     };
   }
 
@@ -137,8 +141,14 @@ export class CostRecorder {
   // spend (PROJECT_BRIEF §4) — it takes precedence over notional ccusage
   // token-pricing for subscription overage. dollars = creditsConsumed × rate,
   // apportioned across the run's rows by token share (cost_basis='credits').
-  async reconcileRunCostFromCredits(runId: string, creditsConsumed: number, creditUsdRate: number): Promise<{ updated: number }> {
-    if (!(Number.isFinite(creditsConsumed) && creditsConsumed > 0 && Number.isFinite(creditUsdRate) && creditUsdRate > 0)) {
+  async reconcileRunCostFromCredits(
+    runId: string,
+    creditsConsumed: number,
+    creditUsdRate: number,
+  ): Promise<{ updated: number }> {
+    if (
+      !(Number.isFinite(creditsConsumed) && creditsConsumed > 0 && Number.isFinite(creditUsdRate) && creditUsdRate > 0)
+    ) {
       return { updated: 0 };
     }
     return this.apportionRunCost(runId, creditsConsumed * creditUsdRate, "credits");
@@ -146,13 +156,17 @@ export class CostRecorder {
 
   // Apportions a run-level dollar total across the run's cost_records rows by
   // total-token share so the rows sum to the total, stamping each with `basis`.
-  private async apportionRunCost(runId: string, totalCostUsd: number, basis: "ccusage" | "credits"): Promise<{ updated: number }> {
+  private async apportionRunCost(
+    runId: string,
+    totalCostUsd: number,
+    basis: "ccusage" | "credits",
+  ): Promise<{ updated: number }> {
     if (!(Number.isFinite(totalCostUsd) && totalCostUsd > 0)) {
       return { updated: 0 };
     }
     const rows = await this.pool.query<{ id: string; total_tokens: number }>(
       "SELECT id, total_tokens FROM cost_records WHERE run_id = $1",
-      [runId]
+      [runId],
     );
     const totalTokens = rows.rows.reduce((sum, row) => sum + Number(row.total_tokens), 0);
     if (totalTokens <= 0) {
@@ -162,7 +176,11 @@ export class CostRecorder {
     for (const row of rows.rows) {
       const share = Number(row.total_tokens) / totalTokens;
       const costUsd = (totalCostUsd * share).toFixed(6);
-      await this.pool.query("UPDATE cost_records SET cost_usd = $2, cost_basis = $3 WHERE id = $1", [row.id, costUsd, basis]);
+      await this.pool.query("UPDATE cost_records SET cost_usd = $2, cost_basis = $3 WHERE id = $1", [
+        row.id,
+        costUsd,
+        basis,
+      ]);
       updated += 1;
     }
     return { updated };

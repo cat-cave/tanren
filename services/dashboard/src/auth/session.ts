@@ -16,14 +16,14 @@ export interface DashboardSessionDeps {
  */
 export async function useSession(
   cookieHeader: string | undefined,
-  deps: DashboardSessionDeps
+  deps: DashboardSessionDeps,
 ): Promise<DashboardSession | undefined> {
   if (cookieHeader === undefined || cookieHeader === "") {
     return undefined;
   }
   const fetchImpl = deps.fetchImpl ?? fetch;
   const response = await fetchImpl(`${deps.orchestratorUrl}/auth/me`, {
-    headers: { cookie: cookieHeader, Accept: "application/json" }
+    headers: { cookie: cookieHeader, Accept: "application/json" },
   });
   if (!response.ok) {
     return undefined;
@@ -127,14 +127,14 @@ function readSetCookies(headers: Headers): string[] {
 export async function devLoginHandshake(
   orchestratorUrl: string,
   next: string = "/",
-  fetchImpl: typeof fetch = fetch
+  fetchImpl: typeof fetch = fetch,
 ): Promise<DevLoginHandshakeResult> {
   // Step 1 — drive the orchestrator login. local_dev 302s straight to the callback
   // URL (carrying state+code) and sets the oauth-state cookie.
   const loginParams = new URLSearchParams({ provider: "local_dev", next });
   const loginResponse = await fetchImpl(`${orchestratorUrl}/auth/login?${loginParams.toString()}`, {
     redirect: "manual",
-    headers: { Accept: "application/json" }
+    headers: { Accept: "application/json" },
   });
   if (loginResponse.status !== 302 && loginResponse.status !== 303) {
     throw new DevLoginHandshakeError(`login step returned ${loginResponse.status}`);
@@ -171,8 +171,8 @@ export async function devLoginHandshake(
     redirect: "manual",
     headers: {
       Accept: "application/json",
-      Cookie: `${STATE_COOKIE}=${stateValue}`
-    }
+      Cookie: `${STATE_COOKIE}=${stateValue}`,
+    },
   });
   if (!callbackResponse.ok) {
     throw new DevLoginHandshakeError(`callback step returned ${callbackResponse.status}`);

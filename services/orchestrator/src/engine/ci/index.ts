@@ -10,7 +10,7 @@ export {
   CiTiers,
   CiWhen,
   CiWhenPolicy,
-  SUPPORTED_CI_CONFIG_VERSIONS
+  SUPPORTED_CI_CONFIG_VERSIONS,
 } from "./schema.js";
 
 export {
@@ -20,7 +20,7 @@ export {
   bootstrapCommand,
   resolveCiConfig,
   stepsFor,
-  tiersFor
+  tiersFor,
 } from "./resolve.js";
 
 export { parseYaml } from "./yaml.js";

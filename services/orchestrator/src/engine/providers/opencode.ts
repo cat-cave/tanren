@@ -55,17 +55,22 @@ export function createOpencodeWriter(dependencies: OpencodeWriterDependencies): 
         ref: dependencies.credentialRef,
         runId: dependencies.runId,
         baseDir: dependencies.opencodeDataBaseDir,
-        timeoutMs: Math.min(opts.timeoutMs, 30_000)
+        timeoutMs: Math.min(opts.timeoutMs, 30_000),
       });
-      const baselineSha = await captureBaselineSha(dependencies.ssh, dependencies.target, opts.workspace, opts.timeoutMs);
+      const baselineSha = await captureBaselineSha(
+        dependencies.ssh,
+        dependencies.target,
+        opts.workspace,
+        opts.timeoutMs,
+      );
       const opencode = await dependencies.ssh.run(dependencies.target, {
         command: buildOpencodeWriterCommand({
           dataHome: auth.XDG_DATA_HOME,
           workspace: opts.workspace,
-          model: dependencies.model ?? ZAI_GLM_MODEL
+          model: dependencies.model ?? ZAI_GLM_MODEL,
         }),
         stdin: opts.prompt,
-        timeoutMs: opts.timeoutMs
+        timeoutMs: opts.timeoutMs,
       });
       const telemetry = parseOpencodeStreamTelemetry(opencode.stdout);
       const gitState = await captureGitStateAfterWriter(
@@ -74,7 +79,7 @@ export function createOpencodeWriter(dependencies: OpencodeWriterDependencies): 
         opts.workspace,
         baselineSha,
         "opencode writer",
-        opts.timeoutMs
+        opts.timeoutMs,
       );
       if (opencode.timedOut) {
         return failedResult("timeout", telemetry, gitState);
@@ -86,7 +91,7 @@ export function createOpencodeWriter(dependencies: OpencodeWriterDependencies): 
         return failedResult("crashed", telemetry, gitState);
       }
       return { ...gitState, exitReason: "completed", tokenUsage: telemetry.tokenUsage, telemetry };
-    }
+    },
   };
 }
 
@@ -104,7 +109,7 @@ export function buildOpencodeWriterCommand(input: { dataHome: string; workspace:
     quoteSshShellArg(input.model),
     "--cwd",
     quoteSshShellArg(input.workspace),
-    "-"
+    "-",
   ].join(" ");
 }
 
@@ -170,12 +175,21 @@ function tokenUsageFromRecord(record: Record<string, unknown>): TokenUsage | und
     return undefined;
   }
   const cachedInputTokens = numberField(record, ["cache_read_input_tokens", "cache_read", "cachedInputTokens"]) ?? 0;
-  const cacheCreationTokens = numberField(record, ["cache_write_input_tokens", "cache_write", "cacheCreationTokens"]) ?? 0;
-  const reasoningOutputTokens = numberField(record, ["reasoning_output_tokens", "reasoning", "reasoningOutputTokens"]) ?? 0;
+  const cacheCreationTokens =
+    numberField(record, ["cache_write_input_tokens", "cache_write", "cacheCreationTokens"]) ?? 0;
+  const reasoningOutputTokens =
+    numberField(record, ["reasoning_output_tokens", "reasoning", "reasoningOutputTokens"]) ?? 0;
   const totalTokens =
     numberField(record, ["total_tokens", "totalTokens"]) ??
     inputTokens + cachedInputTokens + cacheCreationTokens + outputTokens + reasoningOutputTokens;
-  return { inputTokens, cachedInputTokens, cacheCreationTokens, outputTokens, reasoningOutputTokens, totalTokens };
+  return {
+    inputTokens,
+    cachedInputTokens,
+    cacheCreationTokens,
+    outputTokens,
+    reasoningOutputTokens,
+    totalTokens,
+  };
 }
 
 function numberField(record: Record<string, unknown>, keys: string[]): number | undefined {
@@ -191,7 +205,9 @@ function numberField(record: Record<string, unknown>, keys: string[]): number | 
 function parseJsonObject(line: string): Record<string, unknown> | undefined {
   try {
     const value = JSON.parse(line) as unknown;
-    return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+    return typeof value === "object" && value !== null && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : undefined;
   } catch {
     return undefined;
   }
@@ -200,7 +216,7 @@ function parseJsonObject(line: string): Record<string, unknown> | undefined {
 function failedResult(
   exitReason: "timeout" | "crashed" | "window_exhausted",
   telemetry: OpencodeEventTelemetry,
-  gitState: Pick<WriterResult, "diff" | "commits">
+  gitState: Pick<WriterResult, "diff" | "commits">,
 ): WriterResult {
   return { ...gitState, exitReason, tokenUsage: telemetry.tokenUsage, telemetry };
 }

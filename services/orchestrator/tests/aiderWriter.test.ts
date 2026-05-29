@@ -6,7 +6,7 @@ import {
   apiKeyEnvVarForModel,
   buildAiderWriterCommand,
   createAiderWriter,
-  parseAiderTelemetry
+  parseAiderTelemetry,
 } from "../src/engine/providers/aider.js";
 
 const target: SshTarget = {
@@ -14,7 +14,7 @@ const target: SshTarget = {
   port: 22,
   username: "tanren",
   hostKeyFingerprint: "SHA256:runner-host",
-  identitySecretRef: "runner/test/identity"
+  identitySecretRef: "runner/test/identity",
 };
 
 const apiKey = "sk-aider-secret-key";
@@ -27,13 +27,23 @@ describe("aider writer adapter", () => {
       ok("Applied edit to Y.md\nTokens: 1,200 sent, 340 received\n"), // aider run
       ok(""), // commit
       ok("diff --git a/Y.md b/Y.md\n+done\n"), // diff
-      ok(`aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\taider writer\n`) // log
+      ok(`aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\taider writer\n`), // log
     ]);
     const secrets = new InMemorySecretStore();
     await secrets.put({ ref: "credential/aider/dev", value: apiKey });
 
-    const writer = createAiderWriter({ secrets, ssh, target, credentialRef: "credential/aider/dev", runId: "run_aider_1" });
-    const result = await writer.runWriter({ prompt: "make a tiny edit", workspace: "/workspace/repo", timeoutMs: 1000 });
+    const writer = createAiderWriter({
+      secrets,
+      ssh,
+      target,
+      credentialRef: "credential/aider/dev",
+      runId: "run_aider_1",
+    });
+    const result = await writer.runWriter({
+      prompt: "make a tiny edit",
+      workspace: "/workspace/repo",
+      timeoutMs: 1000,
+    });
 
     const aiderCommand = ssh.commands[1]?.command;
     expect(aiderCommand?.command).toContain("aider");
@@ -48,7 +58,14 @@ describe("aider writer adapter", () => {
       diff: "diff --git a/Y.md b/Y.md\n+done\n",
       exitReason: "completed",
       commits: [{ sha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", message: "aider writer" }],
-      tokenUsage: { inputTokens: 1200, outputTokens: 340, totalTokens: 1540, cachedInputTokens: 0, cacheCreationTokens: 0, reasoningOutputTokens: 0 }
+      tokenUsage: {
+        inputTokens: 1200,
+        outputTokens: 340,
+        totalTokens: 1540,
+        cachedInputTokens: 0,
+        cacheCreationTokens: 0,
+        reasoningOutputTokens: 0,
+      },
     });
   });
 
@@ -56,7 +73,13 @@ describe("aider writer adapter", () => {
     const ssh = new ScriptedSsh([ok(`${baselineSha}\n`), ok(""), ok(""), ok(""), ok("")]);
     const secrets = new InMemorySecretStore();
     await secrets.put({ ref: "credential/aider/dev", value: apiKey });
-    const writer = createAiderWriter({ secrets, ssh, target, credentialRef: "credential/aider/dev", runId: "run_aider_2" });
+    const writer = createAiderWriter({
+      secrets,
+      ssh,
+      target,
+      credentialRef: "credential/aider/dev",
+      runId: "run_aider_2",
+    });
     await writer.runWriter({ prompt: "edit", workspace: "/workspace/repo", timeoutMs: 1000 });
     expect(ssh.commands[1]?.command.command).toContain(`ANTHROPIC_API_KEY='${apiKey}'`);
   });
@@ -68,17 +91,22 @@ describe("aider writer adapter", () => {
       ssh,
       target,
       credentialRef: "credential/aider/absent",
-      runId: "run_aider_3"
+      runId: "run_aider_3",
     });
     await expect(writer.runWriter({ prompt: "edit", workspace: "/workspace/repo", timeoutMs: 1000 })).rejects.toThrow(
-      /missing aider credential ref/
+      /missing aider credential ref/,
     );
   });
 
   it("returns timeout, crashed, and window_exhausted distinctly", async () => {
     const timeout = await runWith({ exitCode: null, stdout: "", stderr: "", timedOut: true });
     const crashed = await runWith({ exitCode: 2, stdout: "", stderr: "boom", timedOut: false });
-    const limit = await runWith({ exitCode: 0, stdout: "Error: You have hit your rate limit, try again later.", stderr: "", timedOut: false });
+    const limit = await runWith({
+      exitCode: 0,
+      stdout: "Error: You have hit your rate limit, try again later.",
+      stderr: "",
+      timedOut: false,
+    });
     expect(timeout.exitReason).toBe("timeout");
     expect(crashed.exitReason).toBe("crashed");
     expect(limit.exitReason).toBe("window_exhausted");
@@ -99,7 +127,12 @@ describe("aider writer adapter", () => {
   });
 
   it("builds a non-interactive batch command with the documented flags", () => {
-    const command = buildAiderWriterCommand({ apiKeyEnvVar: "ANTHROPIC_API_KEY", apiKey: "k", model: "anthropic/x", prompt: "do it" });
+    const command = buildAiderWriterCommand({
+      apiKeyEnvVar: "ANTHROPIC_API_KEY",
+      apiKey: "k",
+      model: "anthropic/x",
+      prompt: "do it",
+    });
     expect(command).toContain("--yes-always");
     expect(command).toContain("--no-stream");
     expect(command).toContain("--message 'do it'");
@@ -113,7 +146,7 @@ describe("aider writer adapter", () => {
       cacheCreationTokens: 0,
       outputTokens: 800,
       reasoningOutputTokens: 0,
-      totalTokens: 3300
+      totalTokens: 3300,
     });
   });
 
@@ -130,7 +163,13 @@ async function runWith(aiderResult: SshCommandResult) {
   const ssh = new ScriptedSsh([ok(`${baselineSha}\n`), aiderResult, ok(""), ok(""), ok("")]);
   const secrets = new InMemorySecretStore();
   await secrets.put({ ref: "credential/aider/dev", value: apiKey });
-  const writer = createAiderWriter({ secrets, ssh, target, credentialRef: "credential/aider/dev", runId: "run_aider_x" });
+  const writer = createAiderWriter({
+    secrets,
+    ssh,
+    target,
+    credentialRef: "credential/aider/dev",
+    runId: "run_aider_x",
+  });
   return await writer.runWriter({ prompt: "write", workspace: "/workspace/repo", timeoutMs: 1000 });
 }
 

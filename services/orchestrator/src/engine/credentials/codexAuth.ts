@@ -14,7 +14,7 @@ export interface CodexAuthImportResult {
 
 export async function storeCodexAuthBundle(
   secrets: SecretStore,
-  input: { ref: string; authJson: string }
+  input: { ref: string; authJson: string },
 ): Promise<CodexAuthImportResult> {
   const ref = validateCodexCredentialRef(input.ref);
   const bundle = validateCodexAuthBundle(input.authJson);
@@ -69,7 +69,9 @@ function looksLikeCodexAuthJson(value: Record<string, unknown>): boolean {
   if (typeof value["auth_mode"] === "string" && tokensObjectHasAnyToken(tokens)) {
     return true;
   }
-  return tokensObjectHasAnyToken(tokens) || typeof value["OPENAI_API_KEY"] === "string" && value["OPENAI_API_KEY"] !== "";
+  return (
+    tokensObjectHasAnyToken(tokens) || (typeof value["OPENAI_API_KEY"] === "string" && value["OPENAI_API_KEY"] !== "")
+  );
 }
 
 function tokensObjectHasAnyToken(value: unknown): boolean {
@@ -77,5 +79,7 @@ function tokensObjectHasAnyToken(value: unknown): boolean {
     return false;
   }
   const tokens = value as Record<string, unknown>;
-  return ["access_token", "refresh_token", "id_token"].some((key) => typeof tokens[key] === "string" && tokens[key] !== "");
+  return ["access_token", "refresh_token", "id_token"].some(
+    (key) => typeof tokens[key] === "string" && tokens[key] !== "",
+  );
 }

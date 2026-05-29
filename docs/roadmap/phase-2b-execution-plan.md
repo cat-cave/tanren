@@ -31,7 +31,7 @@ this doc carries the **how** (streams, subagents, verification) and the
    - **Deterministic gate-checks** (lint/typecheck/test/build/mutation/perf): direct automation on the runner workspace over SSH, exit-code-driven, **no agent**.
    - **Non-deterministic reasoning checks** (intent satisfaction, code review, P0/P1 security, stub detection): read-only **Answerer agents**.
    - Live evidence (3 `acceptance-medium` runs): the checker Answerer cannot run tests and must not be asked to ("`vitest: not found`" because the workspace was cloned but never `npm install`'d). It flip-flopped and never converged. Fixes required for full-green: per-repo **workspace bootstrap**, a **deterministic install+test gate**, and a checker prompt that **forbids running tests** (intent-only).
-4. **Hi-fi = phase-agnostic full-product vision** (per design chat3). It builds out every surface with no "coming soon"/phase tags. **2B ships the acceptance-criteria subset** and stubs the rest (roadmap/personas/DORA/overview) as documented placeholders. Build to the *acceptance criteria* for scope, the *hi-fi* for the look of in-scope surfaces.
+4. **Hi-fi = phase-agnostic full-product vision** (per design chat3). It builds out every surface with no "coming soon"/phase tags. **2B ships the acceptance-criteria subset** and stubs the rest (roadmap/personas/DORA/overview) as documented placeholders. Build to the _acceptance criteria_ for scope, the _hi-fi_ for the look of in-scope surfaces.
 5. **Dashboard architecture: Hono SSR + a bundled client-"islands" layer** (esbuild step in `services/dashboard`) for genuine interactivity (⌘K palette, ink/ash toggle, project switcher, later SSE on run-detail). Theme persists via `data-theme` + `localStorage`. NOT a client SPA. _Pending explicit user confirmation; proceeding with islands unless they object._
 6. **Window-pressure pre-flight is credit-aware**: a maxed subscription window is not a doomed call when credits cover overage; only escalate `window_exhausted` when `creditsRemaining` is null/0.
 
@@ -57,6 +57,7 @@ Per-surface spec detail: `docs/roadmap/phase-2b-specs.md`. Per-surface acceptanc
 ## Execution strategy (streams, subagents, verification)
 
 **Step 1 — P2B-0001 (solo/focused, NOT parallel).** Build the shell + the conventions every screen depends on:
+
 - Shell components (`components/shell/**`): `TopBar`, `SideNav` (4 groups; roadmap/personas/DORA/overview → placeholder routes per criteria), `ForgePalette` (`components/palette/**`).
 - The **client-islands build** (esbuild) + the shared client runtime (palette open/keyboard, ink/ash toggle, project switcher).
 - A small **API client** to the orchestrator product APIs (P2A-0013/0014) + session.
@@ -65,11 +66,13 @@ Per-surface spec detail: `docs/roadmap/phase-2b-specs.md`. Per-surface acceptanc
 - GitHub OAuth sign-in lands into the shell (first sign-in creates org + admin per P2A-0003).
 
 **Step 2 — fan out screen-streams as worktree-isolated subagents.** After P2B-0001 merges, dispatch parallel subagents (one per spec: 0002, 0003, 0004, 0005, 0008; 0009 stretch). Each:
+
 - Owns a **distinct route subtree** (see each spec's `Owns` in phase-2b-specs.md) — no shared-file overlap.
 - Is briefed with its acceptance-criteria doc + the matching `view-*.jsx` + screenshot.
 - Ships as its own PR through the CI gatekeeper.
 
 **Subagent coordination rules** (hard-won from earlier collisions):
+
 - **Shell-first**: do NOT fan out until P2B-0001 is merged; the shell + client-islands + API client are shared hotspots that must be frozen first.
 - **One migration in flight at a time** — if a screen needs a DB migration, serialize it (parallel subagents generate colliding migration numbers).
 - Each subagent works in `isolation: "worktree"`; only its owned dirs.
@@ -84,6 +87,7 @@ Spec in → real PR out, entirely through the UI: GitHub-OAuth sign-in, org-as-t
 ## Phase 3 opener — the gate-check cluster
 
 First Phase 3 work (well-specified, evidence-backed by decision 3):
+
 - **Repo-sourced tiered `tanren-ci.yml`** (config-bucketing: CI artifacts live in the target repo): named tiers (`fast` = lint/typecheck/unit; `slow` = integration/e2e/build/mutation/perf) with a `when` policy (`per_iteration` / `pre_audit` / `pre_merge`). One source of truth that BOTH GitHub Actions and the in-loop gate invoke.
 - **In-loop gate-check stage** on the runner workspace (new `gate` task kind + `gate.*` events), exit-code-driven; fast tier per writer iteration, slow tier before audit.
 - **Per-repo workspace bootstrap** (run the project's install command after clone).

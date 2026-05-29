@@ -13,7 +13,7 @@ import {
   AUTHENTIK_SCOPES,
   OidcProvider,
   authentikPresetDefaults,
-  buildOidcProviderFromEnv
+  buildOidcProviderFromEnv,
 } from "../src/auth/index.js";
 import { buildAuthFromEnv } from "../src/main.js";
 import { createFakeIdentityPool } from "./helpers/fakeIdentityPool.js";
@@ -23,7 +23,7 @@ const DISCOVERY = {
   issuer: ISSUER,
   authorization_endpoint: `${ISSUER}/application/o/authorize/`,
   token_endpoint: `${ISSUER}/application/o/token/`,
-  userinfo_endpoint: `${ISSUER}/application/o/userinfo/`
+  userinfo_endpoint: `${ISSUER}/application/o/userinfo/`,
 };
 
 interface FetchCall {
@@ -44,13 +44,15 @@ function presetProvider(handler: (call: FetchCall) => Response | Promise<Respons
     clientId: "cid",
     clientSecret: "secret",
     fetchImpl,
-    ...authentikPresetDefaults()
+    ...authentikPresetDefaults(),
   });
   return { provider, calls };
 }
 
 function discoveryResponse(): Response {
-  return new Response(JSON.stringify(DISCOVERY), { headers: { "Content-Type": "application/json" } });
+  return new Response(JSON.stringify(DISCOVERY), {
+    headers: { "Content-Type": "application/json" },
+  });
 }
 
 describe("authentik preset defaults", () => {
@@ -79,7 +81,7 @@ describe("authentik preset defaults", () => {
       if (call.url.endsWith("/.well-known/openid-configuration")) return discoveryResponse();
       if (call.url === DISCOVERY.token_endpoint) {
         return new Response(JSON.stringify({ access_token: "tok", token_type: "Bearer" }), {
-          headers: { "Content-Type": "application/json" }
+          headers: { "Content-Type": "application/json" },
         });
       }
       if (call.url === DISCOVERY.userinfo_endpoint) {
@@ -89,9 +91,9 @@ describe("authentik preset defaults", () => {
             preferred_username: "homelab.admin",
             name: "Homelab Admin",
             email: "admin@home.lan",
-            groups: ["Platform-Admins", "tanren-users"]
+            groups: ["Platform-Admins", "tanren-users"],
           }),
-          { headers: { "Content-Type": "application/json" } }
+          { headers: { "Content-Type": "application/json" } },
         );
       }
       return new Response("not found", { status: 404 });
@@ -102,11 +104,21 @@ describe("authentik preset defaults", () => {
       providerSubject: "ak-uuid-42",
       login: "homelab.admin",
       email: "admin@home.lan",
-      displayName: "Homelab Admin"
+      displayName: "Homelab Admin",
     });
     expect(claims.orgs).toEqual([
-      { externalId: "Platform-Admins", login: "platform-admins", displayName: "Platform-Admins", kind: "oidc" },
-      { externalId: "tanren-users", login: "tanren-users", displayName: "tanren-users", kind: "oidc" }
+      {
+        externalId: "Platform-Admins",
+        login: "platform-admins",
+        displayName: "Platform-Admins",
+        kind: "oidc",
+      },
+      {
+        externalId: "tanren-users",
+        login: "tanren-users",
+        displayName: "tanren-users",
+        kind: "oidc",
+      },
     ]);
   });
 
@@ -127,7 +139,7 @@ describe("buildOidcProviderFromEnv with TANREN_OIDC_PRESET=authentik", () => {
     "TANREN_OIDC_SUBJECT_CLAIM",
     "TANREN_OIDC_LOGIN_CLAIM",
     "TANREN_OIDC_NAME_CLAIM",
-    "TANREN_OIDC_GROUPS_CLAIM"
+    "TANREN_OIDC_GROUPS_CLAIM",
   ] as const;
   const SAVED: Record<string, string | undefined> = {};
 
@@ -191,7 +203,7 @@ describe("buildOidcProviderFromEnv with TANREN_OIDC_PRESET=authentik", () => {
       if (url.endsWith("/.well-known/openid-configuration")) return discoveryResponse();
       if (url === DISCOVERY.token_endpoint) {
         return new Response(JSON.stringify({ access_token: "tok" }), {
-          headers: { "Content-Type": "application/json" }
+          headers: { "Content-Type": "application/json" },
         });
       }
       return new Response(
@@ -202,9 +214,9 @@ describe("buildOidcProviderFromEnv with TANREN_OIDC_PRESET=authentik", () => {
           email: "alice@home.lan",
           // preset would read `groups`, but the override points at `teams`:
           groups: ["ignored"],
-          teams: ["engineering"]
+          teams: ["engineering"],
         }),
-        { headers: { "Content-Type": "application/json" } }
+        { headers: { "Content-Type": "application/json" } },
       );
     }) as typeof fetch;
     const overridden = new OidcProvider({
@@ -213,13 +225,13 @@ describe("buildOidcProviderFromEnv with TANREN_OIDC_PRESET=authentik", () => {
       clientSecret: "secret",
       fetchImpl,
       ...authentikPresetDefaults(),
-      groupsClaim: "teams"
+      groupsClaim: "teams",
     });
     const claims = await overridden.exchangeCode("c", `${ISSUER}/auth/callback?provider=oidc`);
     expect(claims.login).toBe("alice");
     expect(claims.displayName).toBe("Alice");
     expect(claims.orgs).toEqual([
-      { externalId: "engineering", login: "engineering", displayName: "engineering", kind: "oidc" }
+      { externalId: "engineering", login: "engineering", displayName: "engineering", kind: "oidc" },
     ]);
   });
 

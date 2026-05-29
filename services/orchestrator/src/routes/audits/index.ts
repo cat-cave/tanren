@@ -28,7 +28,7 @@ import {
   runAuditJob,
   setAuditJobEnabled,
   type AuditPassRunner,
-  type AuditSchedulerDeps
+  type AuditSchedulerDeps,
 } from "../../engine/forge/audits/index.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg } from "../orgs/index.js";
@@ -48,7 +48,7 @@ const CreateJobBody = z
     projectId: z.string().min(1).nullable().default(null),
     targetWindow: z.string().max(120).default(""),
     answererCli: z.string().max(120).default(""),
-    enabled: z.boolean().default(true)
+    enabled: z.boolean().default(true),
   })
   .strict();
 
@@ -56,7 +56,7 @@ export function createAuditRoutes(options: AuditRoutesOptions) {
   const app = new Hono<ActorContextEnv>();
   const schedulerDeps: AuditSchedulerDeps = {
     pool: options.pool,
-    passRunner: options.passRunner ?? createNoopPassRunner()
+    passRunner: options.passRunner ?? createNoopPassRunner(),
   };
 
   app.get("/:orgId/audits", async (c) => {

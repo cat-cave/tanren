@@ -9,7 +9,7 @@ export const DEMO_ANSWER_SCHEMA_ID = "tanren.demo_answer.v1" as const;
 export const DemoLink = z
   .object({
     label: z.string().min(1),
-    url: z.string().url()
+    url: z.string().url(),
   })
   .strict();
 
@@ -19,7 +19,7 @@ export const DemoAnswer = z
     body: z.string().min(1),
     highlightBehaviorIds: z.array(z.string().min(1)),
     showStopperRisks: z.array(z.string().min(1)).default([]),
-    links: z.array(DemoLink).default([])
+    links: z.array(DemoLink).default([]),
   })
   .strict();
 

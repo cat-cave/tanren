@@ -17,7 +17,7 @@ export {
   type TanrenReadRunResult,
   type TanrenReadEventsArgs,
   type TanrenReadCostsArgs,
-  type RedactedEventRow
+  type RedactedEventRow,
 } from "./read.js";
 
 export {
@@ -26,7 +26,7 @@ export {
   repoReadIssue,
   type RepoReadFileResult,
   type RepoGrepResult,
-  type RepoIssueResult
+  type RepoIssueResult,
 } from "./repo.js";
 
 export {
@@ -36,5 +36,5 @@ export {
   tanrenRerunTask,
   tanrenAcknowledgeInsight,
   type TanrenCreateSpecArgs,
-  peekAcknowledgedInsightForTests
+  peekAcknowledgedInsightForTests,
 } from "./write.js";

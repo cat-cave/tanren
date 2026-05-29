@@ -31,22 +31,34 @@ export const sensitivityRules: SensitivityRule[] = [
     ["project.allocator", "public"],
     ["spec.title", "public"],
     ["spec.acceptanceCriteria[]", "public"],
-    ["spec.dependsOn[]", "public"]
+    ["spec.dependsOn[]", "public"],
   ]),
 
   // run.started / run.completed / run.failed
   ...rulesFor("run.started", [["status", "public"]]),
-  ...rulesFor("run.completed", [["status", "public"], ["outcome", "public"]]),
-  ...rulesFor("run.failed", [["status", "public"], ["message", "public"]]),
+  ...rulesFor("run.completed", [
+    ["status", "public"],
+    ["outcome", "public"],
+  ]),
+  ...rulesFor("run.failed", [
+    ["status", "public"],
+    ["message", "public"],
+  ]),
 
   // task lifecycle
-  ...rulesFor("task.queued", [["taskKind", "public"], ["jobId", "public"]]),
-  ...rulesFor("task.started", [["taskKind", "public"], ["jobId", "public"]]),
+  ...rulesFor("task.queued", [
+    ["taskKind", "public"],
+    ["jobId", "public"],
+  ]),
+  ...rulesFor("task.started", [
+    ["taskKind", "public"],
+    ["jobId", "public"],
+  ]),
   ...rulesFor("task.completed", [
     ["taskKind", "public"],
     ["jobId", "public"],
     ["status", "public"],
-    ["reason", "public"]
+    ["reason", "public"],
   ]),
   ...rulesFor("task.failed", [
     ["taskKind", "public"],
@@ -55,7 +67,7 @@ export const sensitivityRules: SensitivityRule[] = [
     ["failureKind", "public"],
     ["message", "public"],
     ["status", "public"],
-    ["reason", "public"]
+    ["reason", "public"],
   ]),
 
   // P3-0028 dead-letter event — identifiers + a failure summary, all public.
@@ -65,14 +77,14 @@ export const sensitivityRules: SensitivityRule[] = [
     ["attempts", "public"],
     ["maxAttempts", "public"],
     ["failureKind", "public"],
-    ["message", "public"]
+    ["message", "public"],
   ]),
 
   // planner role
   ...rulesFor("planner.started", [
     ["taskKind", "public"],
     ["intent", "public"],
-    ["rationale", "public"]
+    ["rationale", "public"],
   ]),
   ...rulesFor("planner.completed", [
     ["subtasks[].title", "public"],
@@ -83,9 +95,13 @@ export const sensitivityRules: SensitivityRule[] = [
     ["subtasks[].estimatedTokens", "public"],
     ["subtasks[].behaviorIds", "public"],
     ["subtasks[].behaviorIds[]", "public"],
-    ["rationale", "public"]
+    ["rationale", "public"],
   ]),
-  ...rulesFor("planner.failed", [["kind", "public"], ["message", "public"], ["reason", "public"]]),
+  ...rulesFor("planner.failed", [
+    ["kind", "public"],
+    ["message", "public"],
+    ["reason", "public"],
+  ]),
   ...rulesFor("planner.subtasks.emitted", [
     ["runId", "public"],
     ["taskId", "public"],
@@ -95,7 +111,7 @@ export const sensitivityRules: SensitivityRule[] = [
     ["subtasks[].estimatedTokens", "public"],
     ["subtasks[].behaviorIds", "public"],
     ["subtasks[].behaviorIds[]", "public"],
-    ["rationale", "public"]
+    ["rationale", "public"],
   ]),
 
   // writer role — note: tool-call args and decision code snippets are
@@ -105,7 +121,7 @@ export const sensitivityRules: SensitivityRule[] = [
     ["taskKind", "public"],
     ["intent", "public"],
     ["behaviorIds", "public"],
-    ["behaviorIds[]", "public"]
+    ["behaviorIds[]", "public"],
   ]),
   ...rulesFor("writer.completed", [
     ["diff", "redacted"],
@@ -135,16 +151,19 @@ export const sensitivityRules: SensitivityRule[] = [
     ["toolCalls[].args", "redacted"],
     ["toolCalls[].outputSummary", "public"],
     ["diffBytes", "public"],
-    ["commitSha", "public"]
+    ["commitSha", "public"],
   ]),
-  ...rulesFor("writer.failed", [["kind", "public"], ["message", "public"]]),
+  ...rulesFor("writer.failed", [
+    ["kind", "public"],
+    ["message", "public"],
+  ]),
   ...rulesFor("writer.subtask.started", [
     ["runId", "public"],
     ["taskId", "public"],
     ["subtaskIndex", "public"],
     ["intent", "public"],
     ["behaviorIds", "public"],
-    ["behaviorIds[]", "public"]
+    ["behaviorIds[]", "public"],
   ]),
   ...rulesFor("writer.subtask.completed", [
     ["runId", "public"],
@@ -158,7 +177,7 @@ export const sensitivityRules: SensitivityRule[] = [
     ["toolCalls[].args", "redacted"],
     ["toolCalls[].outputSummary", "public"],
     ["diffBytes", "public"],
-    ["commitSha", "public"]
+    ["commitSha", "public"],
   ]),
   ...rulesFor("writer.subtask.failed", [
     ["runId", "public"],
@@ -166,7 +185,7 @@ export const sensitivityRules: SensitivityRule[] = [
     ["subtaskIndex", "public"],
     ["intent", "public"],
     ["failureKind", "public"],
-    ["message", "public"]
+    ["message", "public"],
   ]),
 
   // P2A-0012 planner rejection-loop event
@@ -178,7 +197,7 @@ export const sensitivityRules: SensitivityRule[] = [
     ["behaviorIdsFailed", "public"],
     ["behaviorIdsFailed[]", "public"],
     ["plannerRerunCount", "public"],
-    ["maxPlannerRerunsPerSpec", "public"]
+    ["maxPlannerRerunsPerSpec", "public"],
   ]),
 
   // checker role
@@ -193,9 +212,12 @@ export const sensitivityRules: SensitivityRule[] = [
     ["behaviorIdsPassed", "public"],
     ["behaviorIdsPassed[]", "public"],
     ["behaviorIdsFailed", "public"],
-    ["behaviorIdsFailed[]", "public"]
+    ["behaviorIdsFailed[]", "public"],
   ]),
-  ...rulesFor("checker.failed", [["kind", "public"], ["message", "public"]]),
+  ...rulesFor("checker.failed", [
+    ["kind", "public"],
+    ["message", "public"],
+  ]),
   ...rulesFor("checker.verdict", [
     ["runId", "public"],
     ["taskId", "public"],
@@ -205,7 +227,7 @@ export const sensitivityRules: SensitivityRule[] = [
     ["behaviorIdsPassed", "public"],
     ["behaviorIdsPassed[]", "public"],
     ["behaviorIdsFailed", "public"],
-    ["behaviorIdsFailed[]", "public"]
+    ["behaviorIdsFailed[]", "public"],
   ]),
   // P2A-0012 rejection event emitted by the checker rejection-loop branch
   ...rulesFor("checker.rejected", [
@@ -214,7 +236,7 @@ export const sensitivityRules: SensitivityRule[] = [
     ["subtaskIndex", "public"],
     ["reason", "public"],
     ["behaviorIdsFailed", "public"],
-    ["behaviorIdsFailed[]", "public"]
+    ["behaviorIdsFailed[]", "public"],
   ]),
 
   // auditor role
@@ -229,16 +251,19 @@ export const sensitivityRules: SensitivityRule[] = [
     ["reasoning", "public"],
     ["outstandingBehaviorIds", "public"],
     ["outstandingBehaviorIds[]", "public"],
-    ["recommendedAction", "public"]
+    ["recommendedAction", "public"],
   ]),
-  ...rulesFor("auditor.failed", [["kind", "public"], ["message", "public"]]),
+  ...rulesFor("auditor.failed", [
+    ["kind", "public"],
+    ["message", "public"],
+  ]),
   ...rulesFor("auditor.verdict", [
     ["runId", "public"],
     ["passed", "public"],
     ["reasoning", "public"],
     ["outstandingBehaviorIds", "public"],
     ["outstandingBehaviorIds[]", "public"],
-    ["recommendedAction", "public"]
+    ["recommendedAction", "public"],
   ]),
   // P2A-0012 rejection event emitted by the auditor rejection-loop branch
   ...rulesFor("auditor.rejected", [
@@ -247,7 +272,7 @@ export const sensitivityRules: SensitivityRule[] = [
     ["reason", "public"],
     ["outstandingBehaviorIds", "public"],
     ["outstandingBehaviorIds[]", "public"],
-    ["recommendedAction", "public"]
+    ["recommendedAction", "public"],
   ]),
 
   // P3-0005 in-loop gate-check stage. Tier/step names + exit codes are public
@@ -257,7 +282,7 @@ export const sensitivityRules: SensitivityRule[] = [
     ["tier", "public"],
     ["when", "public"],
     ["stepNames", "public"],
-    ["stepNames[]", "public"]
+    ["stepNames[]", "public"],
   ]),
   ...rulesFor("gate.passed", [
     ["tier", "public"],
@@ -267,7 +292,7 @@ export const sensitivityRules: SensitivityRule[] = [
     ["steps[].exitCode", "public"],
     ["steps[].passed", "public"],
     ["steps[].timedOut", "public"],
-    ["steps[].outputTail", "secret"]
+    ["steps[].outputTail", "secret"],
   ]),
   ...rulesFor("gate.failed", [
     ["tier", "public"],
@@ -279,7 +304,7 @@ export const sensitivityRules: SensitivityRule[] = [
     ["steps[].exitCode", "public"],
     ["steps[].passed", "public"],
     ["steps[].timedOut", "public"],
-    ["steps[].outputTail", "secret"]
+    ["steps[].outputTail", "secret"],
   ]),
 
   // P2B-0008 recovery lineage — operator-authored prose + identifiers, public.
@@ -287,7 +312,7 @@ export const sensitivityRules: SensitivityRule[] = [
     ["runId", "public"],
     ["specId", "public"],
     ["action", "public"],
-    ["editHref", "public"]
+    ["editHref", "public"],
   ]),
   ...rulesFor("recovery.replan_queued", [
     ["runId", "public"],
@@ -295,7 +320,7 @@ export const sensitivityRules: SensitivityRule[] = [
     ["action", "public"],
     ["steeringNote", "public"],
     ["replanRunId", "public"],
-    ["plannerTaskId", "public"]
+    ["plannerTaskId", "public"],
   ]),
   ...rulesFor("recovery.rollback_queued", [
     ["runId", "public"],
@@ -303,20 +328,20 @@ export const sensitivityRules: SensitivityRule[] = [
     ["action", "public"],
     ["commitSha", "public"],
     ["confirmed", "public"],
-    ["replanRunId", "public"]
+    ["replanRunId", "public"],
   ]),
   ...rulesFor("recovery.inspection_opened", [
     ["runId", "public"],
     ["specId", "public"],
     ["action", "public"],
-    ["threadId", "public"]
+    ["threadId", "public"],
   ]),
 
   // Infrastructure + integration rules (runner/allocator/workspace/credential,
   // cost + usage telemetry, github/ci/phase1/reviews/notifications/hello/
   // redaction) live in sensitivityRules.infra.ts to keep this file under the
   // 500-line cap.
-  ...infraSensitivityRules
+  ...infraSensitivityRules,
 ];
 
 function rulesFor(eventName: string, entries: ReadonlyArray<[string, SensitivityRule["tag"]]>): SensitivityRule[] {

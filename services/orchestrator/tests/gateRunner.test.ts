@@ -19,7 +19,13 @@ class RecordingSsh implements SshSubstrate {
   constructor(private readonly script: (command: string) => Partial<SshCommandResult> = () => ({})) {}
   async run(_target: SshTarget, command: SshCommand): Promise<SshCommandResult> {
     this.commands.push(command);
-    return { exitCode: 0, stdout: "", stderr: "", timedOut: false, ...this.script(command.command) };
+    return {
+      exitCode: 0,
+      stdout: "",
+      stderr: "",
+      timedOut: false,
+      ...this.script(command.command),
+    };
   }
 }
 
@@ -36,9 +42,18 @@ describe("runGateTier", () => {
     const ssh = new RecordingSsh();
     const { events, appendEvent } = recordingEvents();
     const result = await runGateTier({
-      ssh, target, workspacePath: "/ws", tier: "fast", when: "per_iteration",
-      steps: [{ name: "lint", run: "pnpm lint" }, { name: "test", run: "pnpm test" }],
-      timeoutMs: 1000, appendEvent, taskId: "task_w"
+      ssh,
+      target,
+      workspacePath: "/ws",
+      tier: "fast",
+      when: "per_iteration",
+      steps: [
+        { name: "lint", run: "pnpm lint" },
+        { name: "test", run: "pnpm test" },
+      ],
+      timeoutMs: 1000,
+      appendEvent,
+      taskId: "task_w",
     });
 
     expect(result.passed).toBe(true);
@@ -53,9 +68,17 @@ describe("runGateTier", () => {
     const ssh = new RecordingSsh((c) => (c === "pnpm lint" ? { exitCode: 2, stderr: "boom" } : {}));
     const { events, appendEvent } = recordingEvents();
     const result = await runGateTier({
-      ssh, target, workspacePath: "/ws", tier: "fast", when: "per_iteration",
-      steps: [{ name: "lint", run: "pnpm lint" }, { name: "test", run: "pnpm test" }],
-      timeoutMs: 1000, appendEvent
+      ssh,
+      target,
+      workspacePath: "/ws",
+      tier: "fast",
+      when: "per_iteration",
+      steps: [
+        { name: "lint", run: "pnpm lint" },
+        { name: "test", run: "pnpm test" },
+      ],
+      timeoutMs: 1000,
+      appendEvent,
     });
 
     expect(result.passed).toBe(false);
@@ -72,8 +95,14 @@ describe("runGateTier", () => {
     const ssh = new RecordingSsh(() => ({ exitCode: null, timedOut: true }));
     const { appendEvent } = recordingEvents();
     const result = await runGateTier({
-      ssh, target, workspacePath: "/ws", tier: "slow", when: "pre_audit",
-      steps: [{ name: "build", run: "pnpm build" }], timeoutMs: 1000, appendEvent
+      ssh,
+      target,
+      workspacePath: "/ws",
+      tier: "slow",
+      when: "pre_audit",
+      steps: [{ name: "build", run: "pnpm build" }],
+      timeoutMs: 1000,
+      appendEvent,
     });
     expect(result.passed).toBe(false);
     if (result.passed) return;
@@ -85,8 +114,14 @@ describe("runGateTier", () => {
     const ssh = new RecordingSsh(() => ({ exitCode: 1, stdout: big }));
     const { appendEvent } = recordingEvents();
     const result = await runGateTier({
-      ssh, target, workspacePath: "/ws", tier: "fast", when: "per_iteration",
-      steps: [{ name: "lint", run: "pnpm lint" }], timeoutMs: 1000, appendEvent
+      ssh,
+      target,
+      workspacePath: "/ws",
+      tier: "fast",
+      when: "per_iteration",
+      steps: [{ name: "lint", run: "pnpm lint" }],
+      timeoutMs: 1000,
+      appendEvent,
     });
     expect(result.steps[0]!.outputTail.length).toBeLessThanOrEqual(4000);
   });
@@ -97,8 +132,13 @@ describe("runGateForWhen", () => {
     const ssh = new RecordingSsh();
     const { events, appendEvent } = recordingEvents();
     const outcome = await runGateForWhen({
-      ssh, target, workspacePath: "/ws", config: DEFAULT_CI_CONFIG,
-      when: "per_iteration", timeoutMs: 1000, appendEvent
+      ssh,
+      target,
+      workspacePath: "/ws",
+      config: DEFAULT_CI_CONFIG,
+      when: "per_iteration",
+      timeoutMs: 1000,
+      appendEvent,
     });
     expect(outcome.passed).toBe(true);
     // Default per_iteration maps only the fast tier.
@@ -110,8 +150,13 @@ describe("runGateForWhen", () => {
     const ssh = new RecordingSsh((c) => (c === "pnpm build" ? { exitCode: 1 } : {}));
     const { appendEvent } = recordingEvents();
     const outcome = await runGateForWhen({
-      ssh, target, workspacePath: "/ws", config: DEFAULT_CI_CONFIG,
-      when: "pre_audit", timeoutMs: 1000, appendEvent
+      ssh,
+      target,
+      workspacePath: "/ws",
+      config: DEFAULT_CI_CONFIG,
+      when: "pre_audit",
+      timeoutMs: 1000,
+      appendEvent,
     });
     expect(outcome.passed).toBe(false);
     if (outcome.passed) return;
@@ -125,9 +170,13 @@ describe("runGateForWhen", () => {
     // A config whose tiers map to nothing for pre_merge.
     const config = resolveCiConfig(undefined);
     const outcome = await runGateForWhen({
-      ssh, target, workspacePath: "/ws",
+      ssh,
+      target,
+      workspacePath: "/ws",
       config: { ...config, when: { fast: ["per_iteration"], slow: ["pre_audit"] } },
-      when: "pre_merge", timeoutMs: 1000, appendEvent
+      when: "pre_merge",
+      timeoutMs: 1000,
+      appendEvent,
     });
     expect(outcome.passed).toBe(true);
     expect(outcome.results).toHaveLength(0);
@@ -158,7 +207,7 @@ describe("resolveGateConfig", () => {
       "  fast:",
       "    - per_iteration",
       "  slow:",
-      "    - pre_audit"
+      "    - pre_audit",
     ].join("\n");
     const ssh = new RecordingSsh(() => ({ exitCode: 0, stdout: yaml }));
     const config = await resolveGateConfig({ ssh, target, workspacePath: "/ws", timeoutMs: 1000 });

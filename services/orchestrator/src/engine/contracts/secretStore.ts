@@ -48,7 +48,7 @@ export class VaultSecretStore implements SecretStore {
     const response = await this.fetchImpl(this.url(secret.ref), {
       method: "POST",
       headers: this.headers(),
-      body: JSON.stringify({ data: { value: secret.value } })
+      body: JSON.stringify({ data: { value: secret.value } }),
     });
     await assertVaultOk(response, `store secret ${secret.ref}`);
   }
@@ -70,7 +70,7 @@ export class VaultSecretStore implements SecretStore {
   async delete(ref: string): Promise<void> {
     const response = await this.fetchImpl(this.url(ref), {
       method: "DELETE",
-      headers: this.headers()
+      headers: this.headers(),
     });
     if (response.status !== 404) {
       await assertVaultOk(response, `delete secret ${ref}`);
@@ -80,7 +80,7 @@ export class VaultSecretStore implements SecretStore {
   private headers(): Record<string, string> {
     return {
       "Content-Type": "application/json",
-      "X-Vault-Token": this.options.token
+      "X-Vault-Token": this.options.token,
     };
   }
 

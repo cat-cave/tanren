@@ -28,7 +28,7 @@ const TEAMS_THEME_BY_SEVERITY: Record<NotificationPayload["severity"], string> =
   ok: "2EB67D",
   info: "1264A3",
   warn: "ECB22E",
-  fail: "E01E5A"
+  fail: "E01E5A",
 };
 
 export class TeamsChannel implements NotificationChannel {
@@ -48,13 +48,11 @@ export class TeamsChannel implements NotificationChannel {
     const response = await this.fetchImpl(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body
+      body,
     });
     if (!response.ok) {
       const detail = await safeReadText(response);
-      throw new Error(
-        `teams publish failed: ${response.status} ${response.statusText} ${detail}`.trim()
-      );
+      throw new Error(`teams publish failed: ${response.status} ${response.statusText} ${detail}`.trim());
     }
   }
 }
@@ -77,7 +75,7 @@ interface TeamsMessageCard {
 function buildTeamsCard(payload: NotificationPayload): TeamsMessageCard {
   const facts: Array<{ name: string; value: string }> = [
     { name: "event", value: payload.eventName },
-    { name: "severity", value: payload.severity }
+    { name: "severity", value: payload.severity },
   ];
   if (payload.tags !== undefined && payload.tags.length > 0) {
     facts.push({ name: "tags", value: payload.tags.join(", ") });
@@ -89,15 +87,15 @@ function buildTeamsCard(payload: NotificationPayload): TeamsMessageCard {
     summary: payload.title,
     title: payload.title,
     text: payload.body,
-    sections: [{ facts }]
+    sections: [{ facts }],
   };
   if (payload.url !== undefined) {
     card.potentialAction = [
       {
         "@type": "OpenUri",
         name: "view run",
-        targets: [{ os: "default", uri: payload.url }]
-      }
+        targets: [{ os: "default", uri: payload.url }],
+      },
     ];
   }
   return card;
@@ -109,15 +107,13 @@ function buildTeamsCard(payload: NotificationPayload): TeamsMessageCard {
 export async function resolveWebhookUrl(
   channel: string,
   secrets: SecretStore | undefined,
-  destination: string
+  destination: string,
 ): Promise<string> {
   if (destination.startsWith("https://") || destination.startsWith("http://")) {
     return destination;
   }
   if (secrets === undefined) {
-    throw new Error(
-      `${channel} channel needs a secret store to resolve credential ref: ${destination}`
-    );
+    throw new Error(`${channel} channel needs a secret store to resolve credential ref: ${destination}`);
   }
   const secret = await secrets.get(destination);
   if (secret === undefined) {

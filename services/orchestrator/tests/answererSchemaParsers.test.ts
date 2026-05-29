@@ -5,7 +5,7 @@ import {
   CheckAnswer,
   DemoAnswer,
   ForgeAnswer,
-  PlanAnswer
+  PlanAnswer,
 } from "../src/engine/answerers/schemas/index.js";
 
 // Parser tests for the five Phase 2 Answerer schemas. Each role has a
@@ -19,10 +19,22 @@ describe("PlanAnswer", () => {
   it("accepts a multi-subtask plan with rationale", () => {
     const value = {
       subtasks: [
-        { index: 0, title: "Add fixture marker file", intent: "Make Tanren-fixture-easy visibly mutated", behaviorIds: ["beh_marker"], estimatedTokens: 800 },
-        { index: 1, title: "Update README", intent: "Document the marker", behaviorIds: [], estimatedTokens: null }
+        {
+          index: 0,
+          title: "Add fixture marker file",
+          intent: "Make Tanren-fixture-easy visibly mutated",
+          behaviorIds: ["beh_marker"],
+          estimatedTokens: 800,
+        },
+        {
+          index: 1,
+          title: "Update README",
+          intent: "Document the marker",
+          behaviorIds: [],
+          estimatedTokens: null,
+        },
       ],
-      rationale: "Splitting the spec keeps each diff small enough for a single writer pass."
+      rationale: "Splitting the spec keeps each diff small enough for a single writer pass.",
     };
     expect(PlanAnswer.parse(value)).toEqual(value);
   });
@@ -32,8 +44,8 @@ describe("PlanAnswer", () => {
     expect(() =>
       PlanAnswer.parse({
         subtasks: [{ index: 0, title: "t", intent: "i", behaviorIds: [], estimatedTokens: null, extra: 1 }],
-        rationale: "ok"
-      })
+        rationale: "ok",
+      }),
     ).toThrow(/Unrecognized key/);
   });
 });
@@ -47,7 +59,7 @@ describe("CheckAnswer", () => {
       passed: true,
       reasoning: "Diff adds PHASE1_FIXTURE.md with the required marker line.",
       behaviorIdsPassed: [],
-      behaviorIdsFailed: []
+      behaviorIdsFailed: [],
     };
     expect(CheckAnswer.parse(value)).toEqual(value);
   });
@@ -57,7 +69,7 @@ describe("CheckAnswer", () => {
       passed: false,
       reasoning: "Diff covers beh_marker but the README behavior was not touched.",
       behaviorIdsPassed: ["beh_marker"],
-      behaviorIdsFailed: ["beh_readme_summary"]
+      behaviorIdsFailed: ["beh_readme_summary"],
     };
     expect(CheckAnswer.parse(value)).toEqual(value);
   });
@@ -70,8 +82,8 @@ describe("CheckAnswer", () => {
         reasoning: "ok",
         behaviorIdsPassed: [],
         behaviorIdsFailed: [],
-        extra: "stop"
-      })
+        extra: "stop",
+      }),
     ).toThrow(/Unrecognized key/);
   });
 });
@@ -82,7 +94,7 @@ describe("AuditAnswer", () => {
       passed: true,
       reasoning: "Checker accepted the diff and the marker file matches the spec.",
       outstandingBehaviorIds: [],
-      recommendedAction: "pass"
+      recommendedAction: "pass",
     };
     expect(AuditAnswer.parse(value)).toEqual(value);
   });
@@ -92,7 +104,7 @@ describe("AuditAnswer", () => {
       passed: false,
       reasoning: "beh_readme_summary still uncovered after one writer pass; planner should split the spec.",
       outstandingBehaviorIds: ["beh_readme_summary"],
-      recommendedAction: "loop_to_planner"
+      recommendedAction: "loop_to_planner",
     };
     expect(AuditAnswer.parse(value)).toEqual(value);
   });
@@ -103,8 +115,8 @@ describe("AuditAnswer", () => {
         passed: false,
         reasoning: "x",
         outstandingBehaviorIds: [],
-        recommendedAction: "retry"
-      })
+        recommendedAction: "retry",
+      }),
     ).toThrow(/Invalid (?:input|option)/);
   });
 });
@@ -114,7 +126,7 @@ describe("DemoAnswer", () => {
     const parsed = DemoAnswer.parse({
       headline: "Phase 1 fixture marker shipped",
       body: "Tanren added PHASE1_FIXTURE.md with the deterministic marker line and updated CI.",
-      highlightBehaviorIds: ["beh_marker"]
+      highlightBehaviorIds: ["beh_marker"],
     });
     expect(parsed.showStopperRisks).toEqual([]);
     expect(parsed.links).toEqual([]);
@@ -126,8 +138,8 @@ describe("DemoAnswer", () => {
         headline: "h",
         body: "b",
         highlightBehaviorIds: [],
-        links: [{ label: "broken", url: "not a url" }]
-      })
+        links: [{ label: "broken", url: "not a url" }],
+      }),
     ).toThrow(/Invalid/);
   });
 });
@@ -150,10 +162,10 @@ describe("ForgeAnswer", () => {
           sub: "draft PR open for 18m",
           action: {
             label: "trigger rerun",
-            toolCall: { tool: "tanren.trigger_run", args: { specId: "spec_42" } }
-          }
-        }
-      ]
+            toolCall: { tool: "tanren.trigger_run", args: { specId: "spec_42" } },
+          },
+        },
+      ],
     });
     expect(parsed.attentionItems[0]?.action?.toolCall.tool).toBe("tanren.trigger_run");
   });
@@ -169,11 +181,11 @@ describe("ForgeAnswer", () => {
           actions: [
             {
               label: "rerun task_77 with the cheaper writer",
-              toolCall: { tool: "tanren.rerun_task", args: { taskId: "task_77" } }
-            }
-          ]
-        }
-      ]
+              toolCall: { tool: "tanren.rerun_task", args: { taskId: "task_77" } },
+            },
+          ],
+        },
+      ],
     });
     expect(parsed.insights[0]?.kind).toBe("retry_hotspot");
   });
@@ -189,11 +201,11 @@ describe("ForgeAnswer", () => {
             sub: "s",
             action: {
               label: "do something",
-              toolCall: { tool: "tanren.launch_missiles", args: {} }
-            }
-          }
-        ]
-      })
+              toolCall: { tool: "tanren.launch_missiles", args: {} },
+            },
+          },
+        ],
+      }),
     ).toThrow(/Invalid (?:input|option|discriminator)/);
   });
 });
