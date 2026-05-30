@@ -54,7 +54,7 @@ export interface DeriveRefInput {
 }
 
 /** A single Vault ref path segment: letters/digits plus `._-`, never empty. */
-const SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+const SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u;
 
 /**
  * Build the tenant-namespaced Vault ref for a credential the route has already

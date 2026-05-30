@@ -103,7 +103,7 @@ describe("event registry", () => {
 
   it("decodeEvent rejects payloads that violate the schema", () => {
     expect(() => decodeEvent({ event_type: "run.started", payload: { status: 42 } })).toThrow(
-      /invalid|expected|string/i,
+      /invalid|expected|string/iu,
     );
   });
 

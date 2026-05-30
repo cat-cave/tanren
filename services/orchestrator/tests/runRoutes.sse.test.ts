@@ -49,8 +49,8 @@ function setup() {
 }
 
 function parseFrame(frame: string): { event: string; data: unknown } | undefined {
-  const eventMatch = /event:\s*(\S+)/.exec(frame);
-  const dataMatch = /data:\s*(.*)/.exec(frame);
+  const eventMatch = /event:\s*(\S+)/u.exec(frame);
+  const dataMatch = /data:\s*(.*)/u.exec(frame);
   if (eventMatch === null || dataMatch === null) return undefined;
   return { event: eventMatch[1], data: JSON.parse(dataMatch[1]) };
 }

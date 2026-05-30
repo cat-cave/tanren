@@ -21,7 +21,7 @@ describeLive("live GitHub draft PR contract", () => {
       const repoUrl = requireEnv("TANREN_GITHUB_REPO_URL");
       const baseBranch = process.env.TANREN_GITHUB_BASE_BRANCH ?? "main";
       const runId = `run_github_live_${Date.now()}`;
-      const branch = `tanren/live-${runId.replace(/^run_/, "")}`;
+      const branch = `tanren/live-${runId.replace(/^run_/u, "")}`;
       const workspace = workspaceRepoPathForRun(runId);
       const secrets = new FakeSecretStore();
       await storeGithubToken(secrets, {
@@ -74,7 +74,7 @@ describeLive("live GitHub draft PR contract", () => {
         timeoutMs,
       });
 
-      expect(result.prUrl).toMatch(/^https:\/\/github\.com\/.+\/pull\/\d+$/);
+      expect(result.prUrl).toMatch(/^https:\/\/github\.com\/.+\/pull\/\d+$/u);
       expect(result.branch).toBe(branch);
       expect(events.events.map((event) => event.eventType)).toContain("github.pr.created");
     },

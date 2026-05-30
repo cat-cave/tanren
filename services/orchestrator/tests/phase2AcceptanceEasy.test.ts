@@ -76,7 +76,7 @@ describe("phase2 acceptance — easy tier dry-run smoke", () => {
         expectedOutcome: "phase2_easy_complete",
         snapshot: easySnapshot({ prUrl: null }),
       }),
-    ).toThrow(/pr_url/);
+    ).toThrow(/pr_url/u);
 
     expect(() =>
       assertAcceptanceCriteria({
@@ -84,7 +84,7 @@ describe("phase2 acceptance — easy tier dry-run smoke", () => {
         expectedOutcome: "phase2_easy_complete",
         snapshot: easySnapshot({ prUrl: "not-a-url" }),
       }),
-    ).toThrow(/pr_url/);
+    ).toThrow(/pr_url/u);
   });
 
   it("fails when CI did not pass", () => {
@@ -94,7 +94,7 @@ describe("phase2 acceptance — easy tier dry-run smoke", () => {
         expectedOutcome: "phase2_easy_complete",
         snapshot: easySnapshot({ ciStatus: "failed" }),
       }),
-    ).toThrow(/ci\.passed/);
+    ).toThrow(/ci\.passed/u);
   });
 
   it("fails when writer/checker/auditor cost records are missing", () => {
@@ -106,7 +106,7 @@ describe("phase2 acceptance — easy tier dry-run smoke", () => {
           costBases: [{ taskKind: "write", basis: "unknown", billingMode: "subscription" }],
         }),
       }),
-    ).toThrow(/cost_records/);
+    ).toThrow(/cost_records/u);
   });
 
   it("accepts 'unknown' cost basis (cost is best-effort)", () => {
@@ -138,6 +138,6 @@ describe("phase2 acceptance — easy tier dry-run smoke", () => {
           ],
         }),
       }),
-    ).toThrow(/billing_mode/);
+    ).toThrow(/billing_mode/u);
   });
 });

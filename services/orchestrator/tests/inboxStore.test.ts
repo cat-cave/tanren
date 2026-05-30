@@ -37,7 +37,7 @@ function recorder(handlers: Array<{ match: string; rows: (params: unknown[]) => 
   const calls: Call[] = [];
   const client = {
     async query(text: string, params: unknown[] = []) {
-      const sql = text.replaceAll(/\s+/g, " ").trim();
+      const sql = text.replaceAll(/\s+/gu, " ").trim();
       calls.push({ sql, params });
       for (const h of handlers) {
         if (sql.includes(h.match)) {
@@ -85,7 +85,7 @@ describe("createSource — insert wire shape + mapping", () => {
     const call = calls[0]!;
     expect(call.sql).toContain("INSERT INTO inbox_sources");
     // id is generated with a src_ prefix; org/project/kind/name flow through in order.
-    expect(String(call.params[0])).toMatch(/^src_/);
+    expect(String(call.params[0])).toMatch(/^src_/u);
     expect(call.params.slice(1, 6)).toEqual([
       "org_a",
       "project_a",
@@ -97,7 +97,7 @@ describe("createSource — insert wire shape + mapping", () => {
     // enabled/autoRoute are persisted as the string booleans the row mapper reads.
     expect(call.params[7]).toBe("true");
     expect(call.params[8]).toBe("false");
-    expect(source.id).toMatch(/^src_/);
+    expect(source.id).toMatch(/^src_/u);
     expect(source.enabled).toBe(true);
     expect(source.autoRoute).toBe(false);
   });
@@ -313,7 +313,7 @@ describe("upsertCandidate — insert/conflict wire shape + mapping", () => {
     const candidate = await upsertCandidate(client, source, item, triage, "triaged");
     const call = calls[0]!;
     expect(call.sql).toContain("ON CONFLICT (source_id, external_id) DO UPDATE");
-    expect(String(call.params[0])).toMatch(/^cand_/);
+    expect(String(call.params[0])).toMatch(/^cand_/u);
     expect(call.params[1]).toBe("src_gh"); // source.id
     expect(call.params[2]).toBe("org_a"); // source.orgId
     expect(call.params[3]).toBe("project_a"); // item.projectId
@@ -326,7 +326,7 @@ describe("upsertCandidate — insert/conflict wire shape + mapping", () => {
     expect(call.params[10]).toBe("github · cat-cave"); // source.name → source_name
     expect(call.params[11]).toBe("issues"); // source.kind → source_kind
     // mapped back
-    expect(candidate.id).toMatch(/^cand_/);
+    expect(candidate.id).toMatch(/^cand_/u);
     expect(candidate.severity).toBe("warn");
     expect(candidate.status).toBe("triaged");
     expect(candidate.triage?.verdict).toBe("needs_call");

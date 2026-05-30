@@ -125,7 +125,7 @@ function buildAttention(input: BuildProjectViewInput): AttentionEntry[] {
 }
 
 function prHandle(prUrl: string): string {
-  const match = /\/pull\/(\d+)/.exec(prUrl);
+  const match = /\/pull\/(\d+)/u.exec(prUrl);
   return match !== null ? `PR #${match[1]}` : prUrl;
 }
 
@@ -198,9 +198,9 @@ function buildSparkline(completed: number, total: number): number[] {
 }
 
 function activityKind(eventType: string): ActivityRow["kind"] {
-  if (/fail|error|halt|reject/.test(eventType)) return "warn";
-  if (/complete|merged|succeed|pass|done/.test(eventType)) return "ok";
-  if (/start|run|task|queue/.test(eventType)) return "run";
+  if (/fail|error|halt|reject/u.test(eventType)) return "warn";
+  if (/complete|merged|succeed|pass|done/u.test(eventType)) return "ok";
+  if (/start|run|task|queue/u.test(eventType)) return "run";
   return "info";
 }
 
@@ -215,7 +215,7 @@ function buildActivity(input: BuildProjectViewInput): ActivityRow[] {
 }
 
 function humanizeEvent(eventType: string): string {
-  return eventType.replaceAll(/[._]/g, " ");
+  return eventType.replaceAll(/[._]/gu, " ");
 }
 
 export function buildProjectViewModel(input: BuildProjectViewInput): ProjectViewModel {

@@ -51,7 +51,7 @@ export class GitHubOAuthProvider implements IdentityProvider {
     this.fetchImpl = config.fetchImpl ?? fetch;
     this.authorizeUrl = config.authorizeUrl ?? "https://github.com/login/oauth/authorize";
     this.tokenUrl = config.tokenUrl ?? "https://github.com/login/oauth/access_token";
-    this.apiBaseUrl = (config.apiBaseUrl ?? "https://api.github.com").replace(/\/$/, "");
+    this.apiBaseUrl = (config.apiBaseUrl ?? "https://api.github.com").replace(/\/$/u, "");
     this.scopes = config.scopes ?? ["read:user", "user:email", "read:org"];
   }
 

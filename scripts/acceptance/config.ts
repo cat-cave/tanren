@@ -241,7 +241,7 @@ async function discoverSshHostFingerprint(host: string, port: number): Promise<s
   if (keygen.status !== 0) {
     throw new AcceptanceConfigError(`ssh-keygen failed to read keyscan output: ${keygen.stderr?.trim() ?? ""}`);
   }
-  const tokens = keygen.stdout.trim().split(/\s+/);
+  const tokens = keygen.stdout.trim().split(/\s+/u);
   const fingerprint = tokens[1];
   if (fingerprint === undefined || !fingerprint.startsWith("SHA256:")) {
     throw new AcceptanceConfigError(`unexpected ssh-keygen output: ${keygen.stdout}`);

@@ -77,7 +77,7 @@ describe("regression: GitHub URL parsing (audit High — review/merge + repo sco
   });
 
   it("throws on an unsupported repository URL instead of guessing", () => {
-    expect(() => parseGitHubRepository("https://gitlab.com/acme/widget")).toThrow(/unsupported GitHub repository URL/);
+    expect(() => parseGitHubRepository("https://gitlab.com/acme/widget")).toThrow(/unsupported GitHub repository URL/u);
   });
 });
 

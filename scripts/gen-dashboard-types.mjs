@@ -84,7 +84,7 @@ export function tsType(node) {
       const item = node.items === undefined ? {} : node.items;
       const inner = tsType(item);
       // Wrap union element types in Array<...> so `A | B[]` is not ambiguous.
-      return /[| ]/.test(inner) ? `Array<${inner}>` : `${inner}[]`;
+      return /[| ]/u.test(inner) ? `Array<${inner}>` : `${inner}[]`;
     }
     case "object":
       return objectType(node);
@@ -124,7 +124,7 @@ function objectType(node) {
 
 // Quote keys that are not plain identifiers (none today, but keep it safe).
 function propName(key) {
-  return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(key) ? key : JSON.stringify(key);
+  return /^[A-Za-z_$][A-Za-z0-9_$]*$/u.test(key) ? key : JSON.stringify(key);
 }
 
 // Derive the exported TS name from the schema id (`tanren.http.RunDetail` →
@@ -135,7 +135,7 @@ function typeName(schema, file) {
     const parts = id.split(".");
     return parts.at(-1);
   }
-  return file.replace(/\.json$/, "");
+  return file.replace(/\.json$/u, "");
 }
 
 function renderFile() {

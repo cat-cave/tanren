@@ -57,10 +57,10 @@ export function templatizePath(path: string): string {
       if (segment === "") {
         return segment;
       }
-      if (/^[0-9]+$/.test(segment)) {
+      if (/^[0-9]+$/u.test(segment)) {
         return ":id";
       }
-      if (/^[0-9a-f]{7,40}$/i.test(segment)) {
+      if (/^[0-9a-f]{7,40}$/iu.test(segment)) {
         return ":sha";
       }
       return segment;

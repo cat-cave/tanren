@@ -24,7 +24,7 @@ describe("0011 forge substrate migration", () => {
     expect(sql).toContain('CREATE TABLE "forge_threads"');
     expect(sql).toContain("forge_threads_scope_check");
     expect(sql).toContain("forge_threads_scope_consistency_check");
-    expect(sql).toMatch(/scope.*IN \('org','project','run'\)/);
+    expect(sql).toMatch(/scope.*IN \('org','project','run'\)/u);
   });
 
   it("creates the forge_turns table with audience and author CHECKs", async () => {
@@ -32,8 +32,8 @@ describe("0011 forge substrate migration", () => {
     expect(sql).toContain('CREATE TABLE "forge_turns"');
     expect(sql).toContain("forge_turns_audience_check");
     expect(sql).toContain("forge_turns_author_kind_check");
-    expect(sql).toMatch(/audience.*IN \('project:member','project:admin','org:admin','platform:admin'\)/);
-    expect(sql).toMatch(/author_kind.*IN \('forge_template','forge_llm','operator'\)/);
+    expect(sql).toMatch(/audience.*IN \('project:member','project:admin','org:admin','platform:admin'\)/u);
+    expect(sql).toMatch(/author_kind.*IN \('forge_template','forge_llm','operator'\)/u);
   });
 
   it("creates a unique index enforcing one turn per (thread_id, turn_index)", async () => {
@@ -60,14 +60,14 @@ describe("0028 forge_action_proposals migration (P3-0010 write-action approval)"
     expect(sql).toContain("forge_action_proposals_tool_check");
     expect(sql).toContain("forge_action_proposals_status_check");
     expect(sql).toMatch(
-      /tool_name.*IN \('tanren\.create_spec','tanren\.trigger_run','tanren\.rerun_task','tanren\.acknowledge_insight'\)/,
+      /tool_name.*IN \('tanren\.create_spec','tanren\.trigger_run','tanren\.rerun_task','tanren\.acknowledge_insight'\)/u,
     );
-    expect(sql).toMatch(/status.*IN \('pending','approved','rejected','executed','failed'\)/);
+    expect(sql).toMatch(/status.*IN \('pending','approved','rejected','executed','failed'\)/u);
   });
 
   it("makes org_id NOT NULL + indexed (the migration-0026 tenancy pattern)", async () => {
     const sql = await readProposalsMigration();
-    expect(sql).toMatch(/"org_id" text NOT NULL/);
+    expect(sql).toMatch(/"org_id" text NOT NULL/u);
     expect(sql).toContain("forge_action_proposals_org_id_organizations_id_fk");
     expect(sql).toContain('CREATE INDEX "forge_action_proposals_org_id"');
   });

@@ -70,7 +70,7 @@ function mockOrchestrator(): void {
     if (url.endsWith("/orgs")) {
       return new Response(JSON.stringify({ orgs: [ORG] }), { status: 200 });
     }
-    if (/\/dora(\?|$)/.test(url)) {
+    if (/\/dora(\?|$)/u.test(url)) {
       return new Response(JSON.stringify({ metrics: doraPayload }), { status: 200 });
     }
     if (url.includes("/projects")) {

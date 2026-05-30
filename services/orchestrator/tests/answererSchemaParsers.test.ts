@@ -40,13 +40,13 @@ describe("PlanAnswer", () => {
   });
 
   it("rejects empty subtask lists and unknown keys", () => {
-    expect(() => PlanAnswer.parse({ subtasks: [], rationale: "nope" })).toThrow(/Too small/);
+    expect(() => PlanAnswer.parse({ subtasks: [], rationale: "nope" })).toThrow(/Too small/u);
     expect(() =>
       PlanAnswer.parse({
         subtasks: [{ index: 0, title: "t", intent: "i", behaviorIds: [], estimatedTokens: null, extra: 1 }],
         rationale: "ok",
       }),
-    ).toThrow(/Unrecognized key/);
+    ).toThrow(/Unrecognized key/u);
   });
 });
 
@@ -75,7 +75,7 @@ describe("CheckAnswer", () => {
   });
 
   it("rejects missing fields and stray keys", () => {
-    expect(() => CheckAnswer.parse({ passed: true })).toThrow(/Invalid input/);
+    expect(() => CheckAnswer.parse({ passed: true })).toThrow(/Invalid input/u);
     expect(() =>
       CheckAnswer.parse({
         passed: true,
@@ -84,7 +84,7 @@ describe("CheckAnswer", () => {
         behaviorIdsFailed: [],
         extra: "stop",
       }),
-    ).toThrow(/Unrecognized key/);
+    ).toThrow(/Unrecognized key/u);
   });
 });
 
@@ -117,7 +117,7 @@ describe("AuditAnswer", () => {
         outstandingBehaviorIds: [],
         recommendedAction: "retry",
       }),
-    ).toThrow(/Invalid (?:input|option)/);
+    ).toThrow(/Invalid (?:input|option)/u);
   });
 });
 
@@ -140,7 +140,7 @@ describe("DemoAnswer", () => {
         highlightBehaviorIds: [],
         links: [{ label: "broken", url: "not a url" }],
       }),
-    ).toThrow(/Invalid/);
+    ).toThrow(/Invalid/u);
   });
 });
 
@@ -206,6 +206,6 @@ describe("ForgeAnswer", () => {
           },
         ],
       }),
-    ).toThrow(/Invalid (?:input|option|discriminator)/);
+    ).toThrow(/Invalid (?:input|option|discriminator)/u);
   });
 });

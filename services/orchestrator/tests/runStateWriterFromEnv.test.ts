@@ -82,7 +82,7 @@ describe("buildRunStateWriterFromEnv (plane-split P3 write seam)", () => {
   it("throws (never silently writes direct) when the flag is on but no endpoint is configured", () => {
     process.env["TANREN_DATA_PLANE_REMOTE_WRITES"] = "1";
     setCertEnv();
-    expect(() => buildRunStateWriterFromEnv()).toThrow(/write endpoint/);
+    expect(() => buildRunStateWriterFromEnv()).toThrow(/write endpoint/u);
   });
 
   it("throws when the flag is on but the cert env is incomplete", () => {
@@ -91,6 +91,6 @@ describe("buildRunStateWriterFromEnv (plane-split P3 write seam)", () => {
     process.env["TANREN_DATA_PLANE_TLS_CERT"] = join(certDir, "cert.pem");
     process.env["TANREN_DATA_PLANE_TLS_KEY"] = join(certDir, "key.pem");
     // CA missing → loud failure, not an unauthenticated channel.
-    expect(() => buildRunStateWriterFromEnv()).toThrow(/mTLS cert env/);
+    expect(() => buildRunStateWriterFromEnv()).toThrow(/mTLS cert env/u);
   });
 });

@@ -268,7 +268,7 @@ export class KubernetesAllocator implements Allocator {
 function resourceName(runId: string): string {
   return `tanren-${runId}`
     .toLowerCase()
-    .replaceAll(/[^a-z0-9-]/g, "-")
+    .replaceAll(/[^a-z0-9-]/gu, "-")
     .slice(0, 58);
 }
 
@@ -276,7 +276,7 @@ function resourceName(runId: string): string {
 function labelValue(value: string): string {
   return value
     .toLowerCase()
-    .replaceAll(/[^a-z0-9_.-]/g, "-")
+    .replaceAll(/[^a-z0-9_.-]/gu, "-")
     .slice(0, 63);
 }
 
@@ -356,7 +356,7 @@ export function fetchKubernetesClient(
   options: Pick<KubernetesAllocatorOptions, "apiServer" | "token" | "namespace" | "caPem">,
   fetchImpl: typeof fetch = fetch,
 ): KubernetesClient {
-  const base = `${options.apiServer.replace(/\/+$/, "")}/api/v1/namespaces/${options.namespace}`;
+  const base = `${options.apiServer.replace(/\/+$/u, "")}/api/v1/namespaces/${options.namespace}`;
   const authHeaders = {
     authorization: `Bearer ${options.token}`,
     "Content-Type": "application/json",

@@ -60,6 +60,6 @@ describe("answererOutputSchemaFor", () => {
 
   it("rejects invalid output by surfacing the Zod parse error", () => {
     const schema = answererOutputSchemaFor("check", CheckAnswer);
-    expect(() => schema.parse({ passed: "maybe" })).toThrow(/Invalid/);
+    expect(() => schema.parse({ passed: "maybe" })).toThrow(/Invalid/u);
   });
 });

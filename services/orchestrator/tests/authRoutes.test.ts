@@ -46,7 +46,7 @@ describe("auth routes and middleware", () => {
     expect(login.status).toBe(302);
     const setCookie = login.headers.get("set-cookie") ?? "";
     expect(setCookie).toContain("tanren_oauth_state=");
-    const stateMatch = /tanren_oauth_state=([^;]+)/.exec(setCookie);
+    const stateMatch = /tanren_oauth_state=([^;]+)/u.exec(setCookie);
     expect(stateMatch).not.toBeNull();
     const state = decodeURIComponent(stateMatch?.[1] ?? "");
     const callback = await app.request(`/auth/callback?provider=local_dev&code=anything&state=${state}`, {
@@ -55,11 +55,11 @@ describe("auth routes and middleware", () => {
     expect(callback.status).toBe(200);
     const callbackCookie = callback.headers.get("set-cookie") ?? "";
     expect(callbackCookie).toContain("tanren_session=");
-    const sessionMatch = /tanren_session=([^;]+)/.exec(callbackCookie);
+    const sessionMatch = /tanren_session=([^;]+)/u.exec(callbackCookie);
     const sessionId = decodeURIComponent(sessionMatch?.[1] ?? "");
     expect(sessionId).not.toBe("");
     const json = (await callback.json()) as { csrfToken: string };
-    expect(json.csrfToken).toMatch(/^[a-f0-9]+$/);
+    expect(json.csrfToken).toMatch(/^[a-f0-9]+$/u);
 
     const runResponse = await app.request("/runs/run_x", {
       headers: { cookie: `tanren_session=${sessionId}` },
@@ -81,13 +81,13 @@ describe("auth routes and middleware", () => {
     const { app } = buildHarness(aliceIdentity);
     const login = await app.request("/auth/login?provider=local_dev");
     const stateCookie = login.headers.get("set-cookie") ?? "";
-    const state = decodeURIComponent(/tanren_oauth_state=([^;]+)/.exec(stateCookie)?.[1] ?? "");
+    const state = decodeURIComponent(/tanren_oauth_state=([^;]+)/u.exec(stateCookie)?.[1] ?? "");
     const callback = await app.request(`/auth/callback?provider=local_dev&code=any&state=${state}`, {
       headers: { cookie: `tanren_oauth_state=${state}` },
     });
     const callbackJson = (await callback.json()) as { csrfToken: string };
     const sessionCookie = decodeURIComponent(
-      /tanren_session=([^;]+)/.exec(callback.headers.get("set-cookie") ?? "")?.[1] ?? "",
+      /tanren_session=([^;]+)/u.exec(callback.headers.get("set-cookie") ?? "")?.[1] ?? "",
     );
 
     const missingCsrf = await app.request("/projects", {

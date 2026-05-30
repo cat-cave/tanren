@@ -177,7 +177,7 @@ describe("OnePasswordStore wire contract", () => {
       });
     }) as typeof fetch;
     const store = new OnePasswordStore({ ...opts, fetchImpl });
-    await expect(store.get("credential/token")).rejects.toThrow(/did not contain a 'password' field/);
+    await expect(store.get("credential/token")).rejects.toThrow(/did not contain a 'password' field/u);
   });
 
   it("throws when the resolved item lacks the configured field", async () => {
@@ -194,7 +194,7 @@ describe("OnePasswordStore wire contract", () => {
       });
     }) as typeof fetch;
     const store = new OnePasswordStore({ ...opts, fetchImpl });
-    await expect(store.get("credential/token")).rejects.toThrow(/did not contain a 'password' field/);
+    await expect(store.get("credential/token")).rejects.toThrow(/did not contain a 'password' field/u);
     expect(phase).toBe(1);
   });
 
@@ -219,7 +219,7 @@ describe("OnePasswordStore wire contract", () => {
     const fetchImpl = (async () => new Response("denied", { status: 403 })) as typeof fetch;
     const store = new OnePasswordStore({ ...opts, fetchImpl });
     await expect(store.get("credential/x")).rejects.toThrow(
-      /1Password list items for credential\/x failed: 403 denied/,
+      /1Password list items for credential\/x failed: 403 denied/u,
     );
   });
 
@@ -234,7 +234,7 @@ describe("OnePasswordStore wire contract", () => {
     }) as typeof fetch;
     const store = new OnePasswordStore({ ...opts, fetchImpl });
     await expect(store.delete("credential/token")).rejects.toThrow(
-      /1Password delete secret credential\/token failed: 500 boom/,
+      /1Password delete secret credential\/token failed: 500 boom/u,
     );
   });
 });

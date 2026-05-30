@@ -284,11 +284,11 @@ describe("planner prompt + verdict decisions (pure)", () => {
     expect(prompt).toContain("AC2: behavior wired");
     // Forbids running, simulating, or asserting tests/build/lint, and defers
     // correctness to a separate deterministic gate.
-    expect(prompt).toMatch(/Do NOT run, simulate, invoke, or shell out to tests/);
-    expect(prompt).toMatch(/Do NOT assert, claim, predict, or report whether tests/);
-    expect(prompt).toMatch(/separate .*deterministic gate/i);
+    expect(prompt).toMatch(/Do NOT run, simulate, invoke, or shell out to tests/u);
+    expect(prompt).toMatch(/Do NOT assert, claim, predict, or report whether tests/u);
+    expect(prompt).toMatch(/separate .*deterministic gate/iu);
     // Requires citing each criterion in the rationale.
-    expect(prompt).toMatch(/cite each acceptance criterion/i);
+    expect(prompt).toMatch(/cite each acceptance criterion/iu);
     // Still forbids workspace mutation.
     expect(prompt).toContain("Do NOT edit files");
   });

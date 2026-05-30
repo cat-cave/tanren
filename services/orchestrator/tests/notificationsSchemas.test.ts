@@ -39,7 +39,7 @@ describe("NotificationTargetRow refinement", () => {
     const result = NotificationTargetRow.safeParse(baseTarget({ scope: "org", userId: "user_1" }));
     expect(result.success).toBe(false);
     expect(result.success === false && result.error.issues[0]?.path).toEqual(["userId"]);
-    expect(result.success === false && result.error.issues[0]?.message).toMatch(/null userId/);
+    expect(result.success === false && result.error.issues[0]?.message).toMatch(/null userId/u);
   });
 
   it("accepts a user-scoped row with a non-null userId", () => {
@@ -50,7 +50,7 @@ describe("NotificationTargetRow refinement", () => {
     const result = NotificationTargetRow.safeParse(baseTarget({ scope: "user", userId: null }));
     expect(result.success).toBe(false);
     expect(result.success === false && result.error.issues[0]?.path).toEqual(["userId"]);
-    expect(result.success === false && result.error.issues[0]?.message).toMatch(/non-null userId/);
+    expect(result.success === false && result.error.issues[0]?.message).toMatch(/non-null userId/u);
   });
 
   it("rejects an empty id / orgId / destination / label", () => {

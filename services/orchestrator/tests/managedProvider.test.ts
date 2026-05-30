@@ -20,13 +20,13 @@ describe("managed provider config", () => {
   });
 
   it("is strict — rejects unknown keys (no silent JSONB drift)", () => {
-    expect(() => ManagedProviderConfig.parse({ credentialRef: "x", endpoint: "y", extra: 1 })).toThrow(/.+/);
+    expect(() => ManagedProviderConfig.parse({ credentialRef: "x", endpoint: "y", extra: 1 })).toThrow(/.+/u);
   });
 
   it("only allows byok | managed for ProviderMode", () => {
     expect(ProviderMode.parse("byok")).toBe("byok");
     expect(ProviderMode.parse("managed")).toBe("managed");
-    expect(() => ProviderMode.parse("hosted")).toThrow(/.+/);
+    expect(() => ProviderMode.parse("hosted")).toThrow(/.+/u);
   });
 
   describe("resolveHarnessEndpointOverride", () => {
@@ -78,6 +78,6 @@ describe("providerMode in versioned config", () => {
   });
 
   it("rejects an unknown providerMode value on a row", () => {
-    expect(() => migrateOrgConfig({ version: 1, providerMode: "hosted" })).toThrow(/.+/);
+    expect(() => migrateOrgConfig({ version: 1, providerMode: "hosted" })).toThrow(/.+/u);
   });
 });

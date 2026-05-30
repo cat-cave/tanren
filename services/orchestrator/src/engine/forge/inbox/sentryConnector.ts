@@ -64,7 +64,7 @@ export class FetchSentryHttpClient implements SentryHttpClient {
   }
 
   async request(input: SentryHttpRequest): Promise<SentryHttpResponse> {
-    const response = await this.fetchImpl(`${input.baseUrl.replace(/\/$/, "")}${input.path}`, {
+    const response = await this.fetchImpl(`${input.baseUrl.replace(/\/$/u, "")}${input.path}`, {
       method: input.method,
       headers: {
         Authorization: `Bearer ${input.token}`,

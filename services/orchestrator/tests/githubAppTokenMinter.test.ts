@@ -114,6 +114,6 @@ describe("GithubAppTokenMinter", () => {
         installationId: "999",
         credentialRef: "credential/github_app/org/o1/default",
       }),
-    ).rejects.toThrow(/HTTP 403/);
+    ).rejects.toThrow(/HTTP 403/u);
   });
 });

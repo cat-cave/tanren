@@ -267,7 +267,7 @@ function codexEndpointEnv(endpointBaseUrl?: string): string[] {
 }
 
 export function parseCodexJsonlTelemetry(stdout: string): CodexEventTelemetry {
-  const lines = stdout.split(/\r?\n/).filter((line) => line.trim() !== "");
+  const lines = stdout.split(/\r?\n/u).filter((line) => line.trim() !== "");
   let tokenUsage: TokenUsage | undefined;
   let usageLimit: UsageLimitSignal | undefined;
   for (const line of lines) {
@@ -296,7 +296,7 @@ function detectUsageLimit(event: Record<string, unknown>): UsageLimitSignal | un
     candidates.push(errorField);
   }
   for (const candidate of candidates) {
-    if (typeof candidate === "string" && /usage limit/i.test(candidate)) {
+    if (typeof candidate === "string" && /usage limit/iu.test(candidate)) {
       return { message: candidate };
     }
   }
@@ -345,7 +345,7 @@ function answererWorkspacePath(dependencies: CodexAnswererDependencies, schemaNa
 }
 
 function safeSchemaFileName(schemaName: string): string {
-  return schemaName.replaceAll(/[^a-zA-Z0-9._-]/g, "_");
+  return schemaName.replaceAll(/[^a-zA-Z0-9._-]/gu, "_");
 }
 
 function messageFromUnknown(error: unknown): string {

@@ -59,7 +59,7 @@ describe("jsonSchema → TS type mapping", () => {
   });
 
   it("throws on a construct outside the closed dialect (fail loud, never `any`)", () => {
-    expect(() => tsType({ type: "tuple" })).toThrow(/unsupported schema type/);
+    expect(() => tsType({ type: "tuple" })).toThrow(/unsupported schema type/u);
   });
 });
 

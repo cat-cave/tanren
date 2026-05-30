@@ -48,7 +48,7 @@ describe("IdentityStore", () => {
       name: "cli",
       scopes: ["read", "write"],
     });
-    expect(token.rawToken).toMatch(/^tnt_/);
+    expect(token.rawToken).toMatch(/^tnt_/u);
     expect(token.tokenHash).toBe(hashApiToken(token.rawToken));
     const lookup = await store.findApiTokenByRaw(token.rawToken);
     expect(lookup).toMatchObject({ userId: "user_a", scopes: ["read", "write"] });

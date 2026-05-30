@@ -39,7 +39,7 @@ export class VaultSecretsClient implements RunnerSecretsClient {
       .split("/")
       .map((segment) => encodeURIComponent(segment))
       .join("/");
-    return `${this.options.addr.replace(/\/$/, "")}/v1/${encodeURIComponent(this.mount)}/data/${encoded}`;
+    return `${this.options.addr.replace(/\/$/u, "")}/v1/${encodeURIComponent(this.mount)}/data/${encoded}`;
   }
 }
 

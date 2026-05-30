@@ -118,7 +118,7 @@ describe("PagerDutyChannel", () => {
         severity: "info",
         eventName: "run.started",
       }),
-    ).rejects.toThrow(/pagerduty publish failed: 400/);
+    ).rejects.toThrow(/pagerduty publish failed: 400/u);
   });
 
   it("throws when a credential ref cannot be resolved", async () => {
@@ -130,7 +130,7 @@ describe("PagerDutyChannel", () => {
         severity: "info",
         eventName: "run.started",
       }),
-    ).rejects.toThrow(/missing pagerduty routing-key credential ref/);
+    ).rejects.toThrow(/missing pagerduty routing-key credential ref/u);
   });
 
   interface Event {
@@ -234,6 +234,6 @@ describe("PagerDutyChannel", () => {
         severity: "info",
         eventName: "run.started",
       }),
-    ).rejects.toThrow(/pagerduty channel needs a secret store/);
+    ).rejects.toThrow(/pagerduty channel needs a secret store/u);
   });
 });

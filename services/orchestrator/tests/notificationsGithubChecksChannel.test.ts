@@ -151,7 +151,7 @@ describe("GithubChecksChannel", () => {
       secrets: new MemorySecrets({ "credential/github/default": "tok" }),
       http,
     });
-    await expect(channel.publish(target(), payload)).rejects.toThrow(/github_checks publish failed: HTTP 403/);
+    await expect(channel.publish(target(), payload)).rejects.toThrow(/github_checks publish failed: HTTP 403/u);
   });
 
   it("sets the status description to the (truncated) payload title and context to tanren", async () => {
@@ -197,7 +197,7 @@ describe("GithubChecksChannel", () => {
       secrets: new MemorySecrets({ "credential/github/default": "tok" }),
       http,
     });
-    await expect(channel.publish(target(), payload)).rejects.toThrow(/github_checks PR fetch failed: HTTP 404/);
+    await expect(channel.publish(target(), payload)).rejects.toThrow(/github_checks PR fetch failed: HTTP 404/u);
   });
 
   it("throws when the PR response carries no head sha", async () => {
@@ -218,7 +218,7 @@ describe("GithubChecksChannel", () => {
         secrets: new MemorySecrets({ "credential/github/default": "tok" }),
         http,
       });
-      await expect(channel.publish(target(), payload)).rejects.toThrow(/github_checks PR response missing head sha/);
+      await expect(channel.publish(target(), payload)).rejects.toThrow(/github_checks PR response missing head sha/u);
       // The status POST must NOT fire when the head sha is unresolved.
       expect(http.requests.some((r) => r.method === "POST")).toBe(false);
     }

@@ -23,7 +23,7 @@ describe("project/spec workflow contract", () => {
 
     expect(projectResponse.status).toBe(201);
     expect(project).toMatchObject({
-      projectId: expect.stringMatching(/^project_/),
+      projectId: expect.stringMatching(/^project_/u),
       defaultBranch: "main",
       runnerImage: "ghcr.io/cat-cave/tanren-runner:v0",
       allocator: "local-docker",
@@ -57,7 +57,7 @@ describe("project/spec workflow contract", () => {
 
     expect(specResponse.status).toBe(201);
     expect(spec).toMatchObject({
-      specId: expect.stringMatching(/^spec_/),
+      specId: expect.stringMatching(/^spec_/u),
       projectId: project.projectId,
       status: "pending",
       dependsOn: [foundation.specId],
@@ -68,19 +68,19 @@ describe("project/spec workflow contract", () => {
 
     expect(runResponse.status).toBe(201);
     expect(run).toMatchObject({
-      runId: expect.stringMatching(/^run_/),
+      runId: expect.stringMatching(/^run_/u),
       specId: spec.specId,
       projectId: project.projectId,
       trigger: "cli",
-      branch: expect.stringMatching(/^tanren\/add-health-check-/),
+      branch: expect.stringMatching(/^tanren\/add-health-check-/u),
       status: "queued",
       project: {
         repoUrl: "https://github.com/cat-cave/tanren-fixture-easy",
         defaultBranch: "main",
       },
       spec: { acceptanceCriteria: ["GET /healthz returns ok"], status: "active" },
-      plannerTaskId: expect.stringMatching(/^task_/),
-      plannerJobId: expect.stringMatching(/^\d+$/),
+      plannerTaskId: expect.stringMatching(/^task_/u),
+      plannerJobId: expect.stringMatching(/^\d+$/u),
     });
     expect(pool.runs[0]).toMatchObject({
       specId: spec.specId,

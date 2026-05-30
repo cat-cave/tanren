@@ -126,7 +126,7 @@ function stubPool(existingSpecs: Array<{ spec_id: string; title: string; status:
   };
 
   const query = async (text: string, params: unknown[] = []): Promise<{ rows: unknown[]; rowCount: number }> => {
-    const sql = text.replaceAll(/\s+/g, " ").trim();
+    const sql = text.replaceAll(/\s+/gu, " ").trim();
     if (sql.startsWith("SELECT spec_id, title, status FROM specs")) {
       return { rows: existingSpecs, rowCount: existingSpecs.length };
     }
@@ -370,7 +370,7 @@ describe("accept → discovery hand-off", () => {
       actor,
     });
     expect(result.candidate.status).toBe("accepted");
-    expect(result.specId).toMatch(/^spec_/);
+    expect(result.specId).toMatch(/^spec_/u);
     expect(result.candidate.resolvedSpecId).toBe(result.specId);
     // a spec was actually created through the discovery accept path.
     expect(specs.size).toBe(1);

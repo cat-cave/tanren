@@ -35,7 +35,7 @@ function appInstallHrefFor(orgId: string | undefined): string | undefined {
   if (ORCHESTRATOR_PUBLIC_URL === undefined || ORCHESTRATOR_PUBLIC_URL === "" || orgId === undefined) {
     return undefined;
   }
-  return `${ORCHESTRATOR_PUBLIC_URL.replace(/\/$/, "")}/auth/github-app/install?orgId=${encodeURIComponent(orgId)}`;
+  return `${ORCHESTRATOR_PUBLIC_URL.replace(/\/$/u, "")}/auth/github-app/install?orgId=${encodeURIComponent(orgId)}`;
 }
 
 function clientFor(c: Context, deps: ShellDeps): OrchestratorClient {

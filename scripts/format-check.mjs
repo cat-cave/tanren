@@ -45,7 +45,7 @@ for (const file of [...files].toSorted()) {
   }
 
   for (const [index, line] of lines.entries()) {
-    if (/[ \t]$/.test(line)) {
+    if (/[ \t]$/u.test(line)) {
       console.error(`${relative(".", file)}:${index + 1}: trailing whitespace`);
       failed = true;
     }

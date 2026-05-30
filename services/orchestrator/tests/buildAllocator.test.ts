@@ -156,34 +156,34 @@ describe("buildAllocatorFromEnv — single-kind selection", () => {
 describe("buildAllocatorFromEnv — fail-fast on missing credentials", () => {
   it("throws naming the hosts env when manual_ssh hosts are absent", () => {
     process.env.TANREN_ALLOCATOR_KIND = "manual_ssh";
-    expect(() => buildAllocatorFromEnv(fakePool)).toThrow(/TANREN_MANUAL_SSH_HOSTS/);
+    expect(() => buildAllocatorFromEnv(fakePool)).toThrow(/TANREN_MANUAL_SSH_HOSTS/u);
   });
 
   it("throws naming hetzner env vars when they are absent", () => {
     process.env.TANREN_ALLOCATOR_KIND = "hetzner";
     expect(() => buildAllocatorFromEnv(fakePool)).toThrow(
-      /TANREN_HETZNER_API_TOKEN and TANREN_HETZNER_HOST_FINGERPRINT/,
+      /TANREN_HETZNER_API_TOKEN and TANREN_HETZNER_HOST_FINGERPRINT/u,
     );
   });
 
   it("throws naming digitalocean env vars when they are absent", () => {
     process.env.TANREN_ALLOCATOR_KIND = "digitalocean";
-    expect(() => buildAllocatorFromEnv(fakePool)).toThrow(/digitalocean allocator requires/);
+    expect(() => buildAllocatorFromEnv(fakePool)).toThrow(/digitalocean allocator requires/u);
   });
 
   it("throws naming gcp env vars when they are absent", () => {
     process.env.TANREN_ALLOCATOR_KIND = "gcp";
-    expect(() => buildAllocatorFromEnv(fakePool)).toThrow(/TANREN_GCP_ACCESS_TOKEN/);
+    expect(() => buildAllocatorFromEnv(fakePool)).toThrow(/TANREN_GCP_ACCESS_TOKEN/u);
   });
 
   it("throws naming aws env vars when they are absent", () => {
     process.env.TANREN_ALLOCATOR_KIND = "aws_ec2";
-    expect(() => buildAllocatorFromEnv(fakePool)).toThrow(/TANREN_AWS_ACCESS_KEY_ID/);
+    expect(() => buildAllocatorFromEnv(fakePool)).toThrow(/TANREN_AWS_ACCESS_KEY_ID/u);
   });
 
   it("throws naming kubernetes env vars when they are absent", () => {
     process.env.TANREN_ALLOCATOR_KIND = "kubernetes";
-    expect(() => buildAllocatorFromEnv(fakePool)).toThrow(/TANREN_K8S_API_SERVER/);
+    expect(() => buildAllocatorFromEnv(fakePool)).toThrow(/TANREN_K8S_API_SERVER/u);
   });
 });
 
@@ -236,7 +236,7 @@ describe("buildAllocatorFromEnv — every required cloud var is individually man
           }
         }
         // Each builder throws "<kind> allocator requires ..." naming its env.
-        expect(() => buildAllocatorFromEnv(fakePool)).toThrow(/allocator requires/);
+        expect(() => buildAllocatorFromEnv(fakePool)).toThrow(/allocator requires/u);
       });
     }
 
@@ -251,7 +251,7 @@ describe("buildAllocatorFromEnv — every required cloud var is individually man
 describe("buildAllocatorFromEnv — router assembly", () => {
   it("requires the routing config env for kind=router", () => {
     process.env.TANREN_ALLOCATOR_KIND = "router";
-    expect(() => buildAllocatorFromEnv(fakePool)).toThrow(/TANREN_ALLOCATOR_ROUTING/);
+    expect(() => buildAllocatorFromEnv(fakePool)).toThrow(/TANREN_ALLOCATOR_ROUTING/u);
   });
 
   it("builds an AllocatorRouter from a valid routing config", () => {
@@ -290,6 +290,6 @@ describe("buildAllocatorFromEnv — router assembly", () => {
     process.env.TANREN_ALLOCATOR_ROUTING = JSON.stringify({
       defaultAllocator: "hetzner",
     });
-    expect(() => buildAllocatorFromEnv(fakePool)).toThrow(/TANREN_HETZNER_API_TOKEN/);
+    expect(() => buildAllocatorFromEnv(fakePool)).toThrow(/TANREN_HETZNER_API_TOKEN/u);
   });
 });

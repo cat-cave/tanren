@@ -179,13 +179,13 @@ export function mockOrchestrator(): void {
     if (url.endsWith("/orgs")) {
       return new Response(JSON.stringify({ orgs: [ORG] }), { status: 200 });
     }
-    if (/\/orgs\/[^/]+\/projects$/.test(url)) {
+    if (/\/orgs\/[^/]+\/projects$/u.test(url)) {
       return new Response(JSON.stringify({ projects: [PROJECT] }), { status: 200 });
     }
     if (url.endsWith("/projects/project_easy") && method === "GET") {
       return new Response(JSON.stringify(PROJECT_DETAIL), { status: 200 });
     }
-    if (/\/orgs\/[^/]+\/credentials$/.test(url) && method === "GET") {
+    if (/\/orgs\/[^/]+\/credentials$/u.test(url) && method === "GET") {
       return new Response(
         JSON.stringify({
           credentials: [

@@ -101,7 +101,7 @@ function mockOrchestrator(): void {
     if (url.endsWith("/auth/me"))
       return new Response(JSON.stringify({ userId: "u1", csrfToken: "c", expiresAt: "2030-01-01" }), { status: 200 });
     if (url.endsWith("/orgs")) return new Response(JSON.stringify({ orgs: [ORG] }), { status: 200 });
-    if (/\/orgs\/[^/]+\/projects$/.test(url))
+    if (/\/orgs\/[^/]+\/projects$/u.test(url))
       return new Response(JSON.stringify({ projects: [PROJECT] }), { status: 200 });
     if (url.endsWith("/onboarding/interview/round") && method === "POST")
       return new Response(JSON.stringify(ROUND_RESULT), { status: 200 });

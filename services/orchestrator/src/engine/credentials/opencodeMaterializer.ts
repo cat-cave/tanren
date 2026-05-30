@@ -54,10 +54,10 @@ function failureMessage(failure: { message?: string; reason?: string }): string 
 }
 
 export function opencodeDataHomeForRun(runId: string, baseDir = "/home/tanren/.tanren/runs"): string {
-  if (!/^[A-Za-z0-9._-]+$/.test(runId)) {
+  if (!/^[A-Za-z0-9._-]+$/u.test(runId)) {
     throw new Error("run id is not safe for a runner path");
   }
-  return `${baseDir.replace(/\/$/, "")}/${runId}/opencode-home`;
+  return `${baseDir.replace(/\/$/u, "")}/${runId}/opencode-home`;
 }
 
 export function buildOpencodeAuthMaterializationCommand(dataHome: string): string {

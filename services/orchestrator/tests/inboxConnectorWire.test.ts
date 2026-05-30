@@ -245,7 +245,7 @@ describe("sentry connector — request wire shape", () => {
         ...sentrySource,
         config: { ...sentrySource.config, tokenRef: "credential/sentry/missing" },
       }),
-    ).rejects.toThrow(/no secret at ref credential\/sentry\/missing/);
+    ).rejects.toThrow(/no secret at ref credential\/sentry\/missing/u);
   });
 });
 

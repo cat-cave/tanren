@@ -40,7 +40,7 @@ export interface ShellDeps {
 /** Read the operator's preferred surface from the `tanren_surface` cookie. */
 function surfaceFromCookie(cookieHeader: string | undefined): Surface {
   if (cookieHeader === undefined) return "ink";
-  const match = /(?:^|;\s*)tanren_surface=(ink|ash)/.exec(cookieHeader);
+  const match = /(?:^|;\s*)tanren_surface=(ink|ash)/u.exec(cookieHeader);
   return match?.[1] === "ash" ? "ash" : "ink";
 }
 

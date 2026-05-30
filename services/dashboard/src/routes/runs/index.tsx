@@ -230,7 +230,7 @@ function clientFor(c: Context, deps: ShellDeps): OrchestratorClient {
 
 function parseRaw(c: Context): boolean {
   const raw = c.req.query("raw");
-  return raw !== undefined && /^(1|true|yes)$/i.test(raw);
+  return raw !== undefined && /^(1|true|yes)$/iu.test(raw);
 }
 
 /** The operator is an org admin when their first org's role is an admin role. */

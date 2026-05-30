@@ -85,7 +85,7 @@ describe("ProjectConfigV1 parser", () => {
   });
 
   it("rejects unknown top-level fields with a typed parse error", () => {
-    expect(() => migrateProjectConfig({ version: 1, somethingElse: 42 })).toThrow(/.+/);
+    expect(() => migrateProjectConfig({ version: 1, somethingElse: 42 })).toThrow(/.+/u);
   });
 
   it("rejects unknown fields inside a routing chain entry", () => {
@@ -96,7 +96,7 @@ describe("ProjectConfigV1 parser", () => {
           write: { chain: [{ cli: "codex", model: "gpt-5", authRef: "x", extra: true }] },
         },
       }),
-    ).toThrow(/.+/);
+    ).toThrow(/.+/u);
   });
 
   it("accepts partial escape hatches that override only one budget", () => {
@@ -111,7 +111,7 @@ describe("ProjectConfigV1 parser", () => {
   });
 
   it("rejects negative numeric escape hatches", () => {
-    expect(() => migrateProjectConfig({ version: 1, escapeHatches: { maxWriterIterPerSubtask: 0 } })).toThrow(/.+/);
+    expect(() => migrateProjectConfig({ version: 1, escapeHatches: { maxWriterIterPerSubtask: 0 } })).toThrow(/.+/u);
   });
 
   it("accepts a governance posture and merge integration override", () => {
@@ -134,7 +134,7 @@ describe("ProjectConfigV1 parser", () => {
   });
 
   it("rejects non-uuid notification target refs", () => {
-    expect(() => migrateProjectConfig({ version: 1, notificationTargets: ["not-a-uuid"] })).toThrow(/.+/);
+    expect(() => migrateProjectConfig({ version: 1, notificationTargets: ["not-a-uuid"] })).toThrow(/.+/u);
   });
 
   it("omits the credentials field on a legacy row (backward compatible)", () => {
@@ -166,11 +166,11 @@ describe("ProjectConfigV1 parser", () => {
   });
 
   it("rejects unknown keys inside the credentials object", () => {
-    expect(() => migrateProjectConfig({ version: 1, credentials: { somethingElse: "x" } })).toThrow(/.+/);
+    expect(() => migrateProjectConfig({ version: 1, credentials: { somethingElse: "x" } })).toThrow(/.+/u);
   });
 
   it("rejects an empty-string credential ref", () => {
-    expect(() => migrateProjectConfig({ version: 1, credentials: { codexCredentialRef: "" } })).toThrow(/.+/);
+    expect(() => migrateProjectConfig({ version: 1, credentials: { codexCredentialRef: "" } })).toThrow(/.+/u);
   });
 
   it("is idempotent on a V1-shaped input (V1 -> V1)", () => {

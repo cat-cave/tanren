@@ -157,7 +157,7 @@ describe("GcpSecretManagerStore wire contract", () => {
     const fetchImpl = (async () =>
       new Response(JSON.stringify({ payload: { data: 123 } }), { status: 200 })) as typeof fetch;
     const store = new GcpSecretManagerStore({ project: "p", accessToken: "tok", fetchImpl });
-    await expect(store.get("credential/x")).rejects.toThrow(/did not contain payload data/);
+    await expect(store.get("credential/x")).rejects.toThrow(/did not contain payload data/u);
   });
 
   it("throws the contract error (not a TypeError) when the access body omits payload", async () => {
@@ -165,7 +165,7 @@ describe("GcpSecretManagerStore wire contract", () => {
     // store must raise its own "did not contain payload data" message.
     const fetchImpl = (async () => new Response(JSON.stringify({}), { status: 200 })) as typeof fetch;
     const store = new GcpSecretManagerStore({ project: "p", accessToken: "tok", fetchImpl });
-    await expect(store.get("credential/x")).rejects.toThrow(/did not contain payload data/);
+    await expect(store.get("credential/x")).rejects.toThrow(/did not contain payload data/u);
   });
 
   it("throws on a non-404 create failure", async () => {
@@ -173,7 +173,7 @@ describe("GcpSecretManagerStore wire contract", () => {
     const fetchImpl = (async () => new Response("nope", { status: 500 })) as typeof fetch;
     const store = new GcpSecretManagerStore({ project: "p", accessToken: "tok", fetchImpl });
     await expect(store.put({ ref: "credential/x", value: "v" })).rejects.toThrow(
-      /GCP Secret Manager create secret credential\/x failed: 500 nope/,
+      /GCP Secret Manager create secret credential\/x failed: 500 nope/u,
     );
   });
 
@@ -181,7 +181,7 @@ describe("GcpSecretManagerStore wire contract", () => {
     const fetchImpl = (async () => new Response("nope", { status: 500 })) as typeof fetch;
     const store = new GcpSecretManagerStore({ project: "p", accessToken: "tok", fetchImpl });
     await expect(store.delete("credential/x")).rejects.toThrow(
-      /GCP Secret Manager delete secret credential\/x failed: 500 nope/,
+      /GCP Secret Manager delete secret credential\/x failed: 500 nope/u,
     );
   });
 
@@ -189,7 +189,7 @@ describe("GcpSecretManagerStore wire contract", () => {
     const fetchImpl = (async () => new Response("boom", { status: 500 })) as typeof fetch;
     const store = new GcpSecretManagerStore({ project: "p", accessToken: "tok", fetchImpl });
     await expect(store.get("credential/x")).rejects.toThrow(
-      /GCP Secret Manager access secret credential\/x failed: 500 boom/,
+      /GCP Secret Manager access secret credential\/x failed: 500 boom/u,
     );
   });
 });

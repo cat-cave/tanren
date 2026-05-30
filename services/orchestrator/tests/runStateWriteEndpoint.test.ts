@@ -105,6 +105,6 @@ describe("plane-split P3 — HttpRunStateWriter transport faults", () => {
         eventType: "run.started",
         payload: { status: "running" },
       }),
-    ).rejects.toThrow(/per-job org-id/);
+    ).rejects.toThrow(/per-job org-id/u);
   });
 });

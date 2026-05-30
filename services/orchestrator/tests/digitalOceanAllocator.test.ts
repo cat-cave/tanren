@@ -118,7 +118,7 @@ describe("DigitalOceanAllocator", () => {
       pollIntervalMs: 1,
     });
     await expect(allocator.allocate(req("run_3"))).rejects.toBeInstanceOf(DigitalOceanAllocatorError);
-    await expect(allocator.allocate(req("run_3"))).rejects.toThrow(/did not become active/);
+    await expect(allocator.allocate(req("run_3"))).rejects.toThrow(/did not become active/u);
     expect(client.deleted).toContain(99);
   });
 
@@ -150,14 +150,14 @@ describe("DigitalOceanAllocator", () => {
           ...baseOpts(new FakeDigitalOceanClient(), runners),
           apiToken: "",
         }),
-    ).toThrow(/non-empty apiToken/);
+    ).toThrow(/non-empty apiToken/u);
     expect(
       () =>
         new DigitalOceanAllocator({
           ...baseOpts(new FakeDigitalOceanClient(), runners),
           hostKeyFingerprint: "",
         }),
-    ).toThrow(/pinned hostKeyFingerprint/);
+    ).toThrow(/pinned hostKeyFingerprint/u);
   });
 
   // waitForActive requires "active" AND a non-empty IPv4. An empty-string IPv4
@@ -172,7 +172,7 @@ describe("DigitalOceanAllocator", () => {
       readyTimeoutMs: 5,
       pollIntervalMs: 1,
     });
-    await expect(allocator.allocate(req("run_empty"))).rejects.toThrow(/did not become active/);
+    await expect(allocator.allocate(req("run_empty"))).rejects.toThrow(/did not become active/u);
     expect(client.deleted).toContain(99);
     expect(runners.claims).toEqual([]);
   });
@@ -231,7 +231,7 @@ describe("DigitalOceanAllocator", () => {
       size: "s-1vcpu-1gb",
       image: "docker-20-04",
     });
-    expect(captured.url).toMatch(/\/droplets$/);
+    expect(captured.url).toMatch(/\/droplets$/u);
     expect(captured.method).toBe("POST");
     expect(captured.auth).toBe("Bearer secret-token");
     expect(droplet).toEqual({ id: 7, status: "active", publicIpv4: "198.51.100.9" });
@@ -310,7 +310,7 @@ describe("DigitalOceanAllocator", () => {
       image: "docker-20-04",
       tags: ["tanren-run-run-1"],
     });
-    expect(captured.url).toMatch(/\/droplets$/);
+    expect(captured.url).toMatch(/\/droplets$/u);
     expect(captured.method).toBe("POST");
     expect(captured.body.region).toBe("sfo3");
     expect(captured.body.size).toBe("s-2vcpu-2gb");
@@ -326,7 +326,7 @@ describe("DigitalOceanAllocator", () => {
     }) as typeof fetch;
     const client = fetchDigitalOceanClient("tok", fetchImpl);
     await client.deleteDroplet(777);
-    expect(captured.url).toMatch(/\/droplets\/777$/);
+    expect(captured.url).toMatch(/\/droplets\/777$/u);
     expect(captured.method).toBe("DELETE");
   });
 });

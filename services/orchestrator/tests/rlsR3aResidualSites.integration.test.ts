@@ -120,13 +120,15 @@ describeDb("RLS R3a — residual forge-tool + recovery sites through the org-sco
     );
     expect(scopedSpec.spec["spec_id"]).toBe(SPEC_A);
     // No ambient scope (empty GUC) → the dispatcher's reads see nothing.
-    await expect(tanrenReadSpec({ pool: runtimePool }, { specId: SPEC_A }, ACTOR)).rejects.toThrow(/not found|denied/i);
+    await expect(tanrenReadSpec({ pool: runtimePool }, { specId: SPEC_A }, ACTOR)).rejects.toThrow(
+      /not found|denied/iu,
+    );
 
     const scopedRun = await runWithOrgScope(runtimePool, ORG_A, () =>
       tanrenReadRun({ pool: runtimePool }, { runId: RUN_A }, ACTOR),
     );
     expect(scopedRun.run["run_id"]).toBe(RUN_A);
-    await expect(tanrenReadRun({ pool: runtimePool }, { runId: RUN_A }, ACTOR)).rejects.toThrow(/not found|denied/i);
+    await expect(tanrenReadRun({ pool: runtimePool }, { runId: RUN_A }, ACTOR)).rejects.toThrow(/not found|denied/iu);
   });
 
   // (b) read_events / read_costs run on the ambient scoped client: a row WRITTEN
@@ -200,7 +202,7 @@ describeDb("RLS R3a — residual forge-tool + recovery sites through the org-sco
   it("(d) is ENFORCED: org A's scope cannot read org B's run (cross-tenant denied)", async () => {
     await expect(
       runWithOrgScope(runtimePool, ORG_A, () => tanrenReadRun({ pool: runtimePool }, { runId: RUN_B }, ACTOR)),
-    ).rejects.toThrow(/not found|denied/i);
+    ).rejects.toThrow(/not found|denied/iu);
   });
 });
 

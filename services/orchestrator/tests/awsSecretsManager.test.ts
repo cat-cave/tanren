@@ -82,9 +82,9 @@ function parseAuthorization(value: string): {
   signedHeaders: string;
   signature: string;
 } {
-  const credential = /Credential=([^,]+)/.exec(value)?.[1] ?? "";
-  const signedHeaders = /SignedHeaders=([^,]+)/.exec(value)?.[1] ?? "";
-  const signature = /Signature=([0-9a-f]+)/.exec(value)?.[1] ?? "";
+  const credential = /Credential=([^,]+)/u.exec(value)?.[1] ?? "";
+  const signedHeaders = /SignedHeaders=([^,]+)/u.exec(value)?.[1] ?? "";
+  const signature = /Signature=([0-9a-f]+)/u.exec(value)?.[1] ?? "";
   return { credential, signedHeaders, signature };
 }
 
@@ -138,7 +138,7 @@ describe("AwsSecretsManagerStore wire contract", () => {
     });
 
     const auth = parseAuthorization(putCall.headers["authorization"] ?? "");
-    expect(auth.credential).toMatch(/^AKIAEXAMPLE\/\d{8}\/us-east-1\/secretsmanager\/aws4_request$/);
+    expect(auth.credential).toMatch(/^AKIAEXAMPLE\/\d{8}\/us-east-1\/secretsmanager\/aws4_request$/u);
     expect(auth.signedHeaders).toBe("content-type;host;x-amz-date;x-amz-target");
     expect(auth.signature).toBe(
       expectedSignature({
@@ -170,7 +170,7 @@ describe("AwsSecretsManagerStore wire contract", () => {
     const amzDate = calls[0]!.headers["x-amz-date"] ?? "";
     // Compact ISO8601 basic format (8-digit date, T, 6-digit time, Z) — no
     // colons, dashes, or milliseconds.
-    expect(amzDate).toMatch(/^\d{8}T\d{6}Z$/);
+    expect(amzDate).toMatch(/^\d{8}T\d{6}Z$/u);
     const credential = parseAuthorization(calls[0]!.headers["authorization"] ?? "").credential;
     // Scope date stamp is the first 8 chars of the amzDate (date only).
     expect(credential).toContain(`/${amzDate.slice(0, 8)}/`);
@@ -296,20 +296,20 @@ describe("AwsSecretsManagerStore wire contract", () => {
       })) as typeof fetch;
     const store = new AwsSecretsManagerStore({ ...baseOptions, fetchImpl: failing });
     await expect(store.get("credential/x")).rejects.toThrow(
-      /AWS Secrets Manager get secret credential\/x failed: 403 .*AccessDeniedException/,
+      /AWS Secrets Manager get secret credential\/x failed: 403 .*AccessDeniedException/u,
     );
     await expect(store.put({ ref: "credential/x", value: "v" })).rejects.toThrow(
-      /AWS Secrets Manager put secret credential\/x failed: 403/,
+      /AWS Secrets Manager put secret credential\/x failed: 403/u,
     );
     await expect(store.delete("credential/x")).rejects.toThrow(
-      /AWS Secrets Manager delete secret credential\/x failed: 403/,
+      /AWS Secrets Manager delete secret credential\/x failed: 403/u,
     );
   });
 
   it("throws when a successful GetSecretValue response has no string SecretString", async () => {
     const fetchImpl = (async () => new Response(JSON.stringify({ SecretString: 42 }), { status: 200 })) as typeof fetch;
     const store = new AwsSecretsManagerStore({ ...baseOptions, fetchImpl });
-    await expect(store.get("credential/x")).rejects.toThrow(/did not contain a SecretString/);
+    await expect(store.get("credential/x")).rejects.toThrow(/did not contain a SecretString/u);
   });
 
   it("throws when the CreateSecret fallback itself fails", async () => {
@@ -324,7 +324,7 @@ describe("AwsSecretsManagerStore wire contract", () => {
     }) as typeof fetch;
     const store = new AwsSecretsManagerStore({ ...baseOptions, fetchImpl });
     await expect(store.put({ ref: "credential/x", value: "v" })).rejects.toThrow(
-      /AWS Secrets Manager create secret credential\/x failed: 500 quota exceeded/,
+      /AWS Secrets Manager create secret credential\/x failed: 500 quota exceeded/u,
     );
   });
 
@@ -336,6 +336,8 @@ describe("AwsSecretsManagerStore wire contract", () => {
         status: 500,
       })) as typeof fetch;
     const store = new AwsSecretsManagerStore({ ...baseOptions, fetchImpl });
-    await expect(store.get("credential/x")).rejects.toThrow(/AWS Secrets Manager get secret credential\/x failed: 500/);
+    await expect(store.get("credential/x")).rejects.toThrow(
+      /AWS Secrets Manager get secret credential\/x failed: 500/u,
+    );
   });
 });

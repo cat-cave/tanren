@@ -97,7 +97,7 @@ describe("ManualSshAllocator", () => {
     const second = await allocator.allocate(req("run_b"));
     expect(first.target.host).toBe("a");
     expect(second.target.host).toBe("b");
-    await expect(allocator.allocate(req("run_c"))).rejects.toThrow(/pool exhausted/);
+    await expect(allocator.allocate(req("run_c"))).rejects.toThrow(/pool exhausted/u);
   });
 
   it("frees the host on release so it can be reused", async () => {
@@ -126,7 +126,7 @@ describe("ManualSshAllocator", () => {
 
   it("throws when constructed with an empty host pool", () => {
     expect(() => new ManualSshAllocator({ hosts: [], runners: new FakeRunnerStore() })).toThrow(
-      /at least one configured host/,
+      /at least one configured host/u,
     );
   });
 });

@@ -71,8 +71,8 @@ function matchBrace(text, openIndex) {
 // and the index of the opening brace of the body.
 function findFunctions(text) {
   const heads = [];
-  const arrowPattern = /\(([^()]*)\)\s*(?::\s*[^=>{;]+)?=>\s*\{/g;
-  const funcPattern = /\bfunction\b\s*[A-Za-z0-9_$]*\s*\(([^()]*)\)\s*(?::\s*[^{]+)?\{/g;
+  const arrowPattern = /\(([^()]*)\)\s*(?::\s*[^=>{;]+)?=>\s*\{/gu;
+  const funcPattern = /\bfunction\b\s*[A-Za-z0-9_$]*\s*\(([^()]*)\)\s*(?::\s*[^{]+)?\{/gu;
   for (const pattern of [arrowPattern, funcPattern]) {
     let match;
     while ((match = pattern.exec(text)) !== null) {
@@ -94,14 +94,14 @@ function findFunctions(text) {
 function complexityOf(body) {
   let score = 1;
   for (const pattern of [
-    /\bif\b/g,
-    /\bcase\b/g,
-    /\bcatch\b/g,
-    /\bfor\b/g,
-    /\bwhile\b/g,
-    /&&/g,
-    /\|\|/g,
-    /\?(?![?.:])/g,
+    /\bif\b/gu,
+    /\bcase\b/gu,
+    /\bcatch\b/gu,
+    /\bfor\b/gu,
+    /\bwhile\b/gu,
+    /&&/gu,
+    /\|\|/gu,
+    /\?(?![?.:])/gu,
   ]) {
     score += (body.match(pattern) ?? []).length;
   }
@@ -111,7 +111,7 @@ function complexityOf(body) {
 // Count top-level parameters in a parameter-list string by splitting on commas
 // at bracket depth zero (so object/array/generic params count once).
 function paramCount(params) {
-  const trimmed = params.trim().replace(/,\s*$/, "");
+  const trimmed = params.trim().replace(/,\s*$/u, "");
   if (trimmed === "") {
     return 0;
   }
@@ -189,34 +189,34 @@ export function checkMaxParams(projectFiles) {
 // the opposite of a spy-call assertion. Match the matcher token broadly so new
 // outcome matchers don't need to be enumerated one-by-one.
 const outcomeAssertionPatterns = [
-  /\.toBe\b/,
-  /\.toEqual\b/,
-  /\.toStrictEqual\b/,
-  /\.toMatch\b/,
-  /\.toMatchObject\b/,
-  /\.toMatchInlineSnapshot\b/,
-  /\.toMatchSnapshot\b/,
-  /\.toContain\b/,
-  /\.toContainEqual\b/,
-  /\.toThrow\b/,
-  /\.toBeDefined\b/,
-  /\.toBeUndefined\b/,
-  /\.toBeNull\b/,
-  /\.toBeTruthy\b/,
-  /\.toBeFalsy\b/,
-  /\.toBeGreaterThan/,
-  /\.toBeLessThan/,
-  /\.toBeInstanceOf\b/,
-  /\.toHaveProperty\b/,
-  /\.toHaveLength\b/,
-  /\.resolves\b/,
-  /\.rejects\b/,
-  /\.status\b/,
-  /\.json\(/,
+  /\.toBe\b/u,
+  /\.toEqual\b/u,
+  /\.toStrictEqual\b/u,
+  /\.toMatch\b/u,
+  /\.toMatchObject\b/u,
+  /\.toMatchInlineSnapshot\b/u,
+  /\.toMatchSnapshot\b/u,
+  /\.toContain\b/u,
+  /\.toContainEqual\b/u,
+  /\.toThrow\b/u,
+  /\.toBeDefined\b/u,
+  /\.toBeUndefined\b/u,
+  /\.toBeNull\b/u,
+  /\.toBeTruthy\b/u,
+  /\.toBeFalsy\b/u,
+  /\.toBeGreaterThan/u,
+  /\.toBeLessThan/u,
+  /\.toBeInstanceOf\b/u,
+  /\.toHaveProperty\b/u,
+  /\.toHaveLength\b/u,
+  /\.resolves\b/u,
+  /\.rejects\b/u,
+  /\.status\b/u,
+  /\.json\(/u,
 ];
 
 // Spy-call ("implementationy") assertions: how a collaborator was invoked.
-const mockCallAssertionPatterns = [/\.toHaveBeenCalled/, /\.mock\.calls\b/];
+const mockCallAssertionPatterns = [/\.toHaveBeenCalled/u, /\.mock\.calls\b/u];
 
 // Files permitted to use `vi.mock(` module mocking. Currently empty — module
 // mocking is frozen. Adding an entry requires a matching note in the
@@ -228,11 +228,11 @@ const moduleMockAllowlist = new Set();
 // match it. Returns the head index (for line reporting) and body text.
 function findTestBlocks(text) {
   const blocks = [];
-  const blockStart = /\b(?:it|test)\s*(?:\.\s*(?:each|skip|only|todo|concurrent|fails)\b[^(]*)?\(/g;
+  const blockStart = /\b(?:it|test)\s*(?:\.\s*(?:each|skip|only|todo|concurrent|fails)\b[^(]*)?\(/gu;
   let match;
   while ((match = blockStart.exec(text)) !== null) {
     const bodyOpen = text.indexOf("=> {", match.index);
-    const funcOpen = text.slice(match.index).search(/function\b[^(]*\([^)]*\)\s*\{/);
+    const funcOpen = text.slice(match.index).search(/function\b[^(]*\([^)]*\)\s*\{/u);
     let open = -1;
     if (bodyOpen !== -1) {
       open = text.indexOf("{", bodyOpen);
@@ -263,7 +263,7 @@ export function checkNoMockOnlyTests(projectFiles) {
       continue;
     }
     if (!moduleMockAllowlist.has(file)) {
-      const viMock = /\bvi\s*\.\s*mock\s*\(/g;
+      const viMock = /\bvi\s*\.\s*mock\s*\(/gu;
       let mockMatch;
       while ((mockMatch = viMock.exec(text)) !== null) {
         diagnostics.push(
@@ -306,7 +306,7 @@ function packageOf(file) {
 // specifiers that resolve into a DIFFERENT package's tree.
 export function checkCrossPackageDeepImports(projectFiles) {
   const diagnostics = [];
-  const importPattern = /(?:from|import|require)\s*\(?\s*["']([^"']+)["']/g;
+  const importPattern = /(?:from|import|require)\s*\(?\s*["']([^"']+)["']/gu;
   for (const { file, text } of projectFiles) {
     if (!(file.endsWith(".ts") || file.endsWith(".tsx")) || file.includes("/dist/")) {
       continue;
@@ -325,7 +325,7 @@ export function checkCrossPackageDeepImports(projectFiles) {
       if (deepImportAllowlist.has(`${file} -> ${specifier}`)) {
         continue;
       }
-      if (/^@tanren\/[a-z-]+\/src\//.test(specifier)) {
+      if (/^@tanren\/[a-z-]+\/src\//u.test(specifier)) {
         diagnostics.push(
           diagnostic(
             "cross-package-deep-import",

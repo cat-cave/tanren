@@ -22,7 +22,7 @@ export async function captureBaselineSha(
     timeoutMs,
   });
   const sha = result.stdout.trim();
-  if (!/^[0-9a-f]{40}$/.test(sha)) {
+  if (!/^[0-9a-f]{40}$/u.test(sha)) {
     throw new Error(`baseline git capture returned invalid sha: ${sha}`);
   }
   return sha;
@@ -93,7 +93,7 @@ function parseGitLogCommits(stdout: string): Commit[] {
       }
       const sha = line.slice(0, separator);
       const message = line.slice(separator + 1);
-      if (!/^[0-9a-f]{40}$/.test(sha)) {
+      if (!/^[0-9a-f]{40}$/u.test(sha)) {
         throw new Error(`git commit capture returned invalid sha: ${sha}`);
       }
       if (message === "") {

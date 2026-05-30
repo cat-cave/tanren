@@ -32,7 +32,7 @@ export function validateGithubToken(token: string): string {
   if (trimmed === "") {
     throw new Error("GitHub token must not be empty");
   }
-  if (/\s/.test(trimmed)) {
+  if (/\s/u.test(trimmed)) {
     throw new Error("GitHub token must not contain whitespace");
   }
   return trimmed;

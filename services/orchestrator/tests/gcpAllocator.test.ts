@@ -152,7 +152,7 @@ describe("GcpAllocator", () => {
       readyTimeoutMs: 5,
       pollIntervalMs: 1,
     });
-    await expect(allocator.allocate(req("run_3"))).rejects.toThrow(/did not become RUNNING/);
+    await expect(allocator.allocate(req("run_3"))).rejects.toThrow(/did not become RUNNING/u);
     expect(client.deleted).toContain("tanren-run-3");
   });
 
@@ -175,9 +175,9 @@ describe("GcpAllocator", () => {
     await allocator.allocate(req(longRunId));
     const name = client.inserted[0]!.name;
     expect(name.length).toBe(62);
-    expect(name).toMatch(/^tanren-run-x+$/);
+    expect(name).toMatch(/^tanren-run-x+$/u);
     // Uppercase + underscore are normalized to lowercase + hyphen.
-    expect(name).not.toMatch(/[^a-z0-9-]/);
+    expect(name).not.toMatch(/[^a-z0-9-]/u);
   });
 
   it("sanitizes label values to the gcp-allowed charset", async () => {
@@ -201,10 +201,10 @@ describe("GcpAllocator", () => {
   it("requires a token, ssh public key, and pinned fingerprint", () => {
     const runners = new FakeRunnerStore();
     expect(() => new GcpAllocator({ ...baseOpts(new FakeGcpComputeClient(), runners), accessToken: "" })).toThrow(
-      /non-empty accessToken/,
+      /non-empty accessToken/u,
     );
     expect(() => new GcpAllocator({ ...baseOpts(new FakeGcpComputeClient(), runners), sshPublicKey: "" })).toThrow(
-      /non-empty sshPublicKey/,
+      /non-empty sshPublicKey/u,
     );
     expect(
       () =>
@@ -212,7 +212,7 @@ describe("GcpAllocator", () => {
           ...baseOpts(new FakeGcpComputeClient(), runners),
           hostKeyFingerprint: "",
         }),
-    ).toThrow(/pinned hostKeyFingerprint/);
+    ).toThrow(/pinned hostKeyFingerprint/u);
   });
 
   // waitForRunning requires RUNNING AND a non-empty external IP. An empty-string
@@ -227,7 +227,7 @@ describe("GcpAllocator", () => {
       readyTimeoutMs: 5,
       pollIntervalMs: 1,
     });
-    await expect(allocator.allocate(req("run_empty"))).rejects.toThrow(/did not become RUNNING/);
+    await expect(allocator.allocate(req("run_empty"))).rejects.toThrow(/did not become RUNNING/u);
     expect(client.deleted).toContain("tanren-run-empty");
     expect(runners.claims).toEqual([]);
   });
@@ -264,7 +264,7 @@ describe("GcpAllocator", () => {
       fetchImpl,
     );
     const instance = await client.getInstance("tanren-x");
-    expect(captured.url).toMatch(/\/projects\/p\/zones\/us-central1-a\/instances\/tanren-x$/);
+    expect(captured.url).toMatch(/\/projects\/p\/zones\/us-central1-a\/instances\/tanren-x$/u);
     expect(captured.method).toBe("GET");
     expect(captured.auth).toBe("Bearer secret-token");
     expect(instance).toEqual({ name: "tanren-x", status: "RUNNING", externalIp: "198.51.100.42" });
@@ -294,7 +294,7 @@ describe("GcpAllocator", () => {
       labels: { "tanren-run": "run-1" },
     });
 
-    expect(captured.url).toMatch(/\/projects\/proj-x\/zones\/europe-west1-b\/instances$/);
+    expect(captured.url).toMatch(/\/projects\/proj-x\/zones\/europe-west1-b\/instances$/u);
     expect(captured.method).toBe("POST");
     // machineType is rendered as a zone-qualified path.
     expect(captured.body.machineType).toBe("zones/europe-west1-b/machineTypes/e2-medium");
@@ -428,7 +428,7 @@ describe("GcpAllocator", () => {
     }) as typeof fetch;
     const client = fetchGcpComputeClient({ accessToken: "t", project: "p", zone: "europe-west1-b" }, fetchImpl);
     await client.getZoneOperation("op-1");
-    expect(captured.url).toMatch(/\/projects\/p\/zones\/europe-west1-b\/operations\/op-1$/);
+    expect(captured.url).toMatch(/\/projects\/p\/zones\/europe-west1-b\/operations\/op-1$/u);
     expect(captured.method).toBe("GET");
   });
 
@@ -440,7 +440,7 @@ describe("GcpAllocator", () => {
     }) as typeof fetch;
     const client = fetchGcpComputeClient({ accessToken: "t", project: "proj-d", zone: "us-central1-a" }, fetchImpl);
     await client.deleteInstance("tanren-run-x");
-    expect(captured.url).toMatch(/\/projects\/proj-d\/zones\/us-central1-a\/instances\/tanren-run-x$/);
+    expect(captured.url).toMatch(/\/projects\/proj-d\/zones\/us-central1-a\/instances\/tanren-run-x$/u);
     expect(captured.method).toBe("DELETE");
   });
 });

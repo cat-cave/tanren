@@ -78,7 +78,7 @@ function formatCost(usd: number): string {
 
 function describeRunHandle(run: NarrationRun): string {
   if (run.prUrl !== null && run.prUrl !== "") {
-    const match = run.prUrl.match(/\/pull\/(\d+)/);
+    const match = run.prUrl.match(/\/pull\/(\d+)/u);
     if (match !== null) {
       return `PR #${match[1]}`;
     }

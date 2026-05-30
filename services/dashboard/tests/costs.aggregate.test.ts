@@ -115,7 +115,7 @@ describe("summarizeCosts — every row shows its REAL source", () => {
     expect(unknownRow?.priced).toBe(false);
     expect(unknownRow?.costUsd).toBe(0);
     // The unknown basis is honestly labelled, not a fabricated placeholder.
-    expect(COST_BASIS_META.unknown.label).toMatch(/tokens only/);
+    expect(COST_BASIS_META.unknown.label).toMatch(/tokens only/u);
   });
 
   it("counts unpriced records honestly", () => {

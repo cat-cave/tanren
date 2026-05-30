@@ -79,15 +79,15 @@ describe("OrgConfigV1 parser", () => {
   });
 
   it("rejects an audit-gate repo that is not owner/name", () => {
-    expect(() => migrateOrgConfig({ version: 1, auditGate: { repo: "no-slash" } })).toThrow(/.+/);
+    expect(() => migrateOrgConfig({ version: 1, auditGate: { repo: "no-slash" } })).toThrow(/.+/u);
   });
 
   it("rejects unknown top-level fields", () => {
-    expect(() => migrateOrgConfig({ version: 1, extraKey: true })).toThrow(/.+/);
+    expect(() => migrateOrgConfig({ version: 1, extraKey: true })).toThrow(/.+/u);
   });
 
   it("rejects an invalid allocator kind", () => {
-    expect(() => migrateOrgConfig({ version: 1, allocator: { kind: "hetzner" } })).toThrow(/.+/);
+    expect(() => migrateOrgConfig({ version: 1, allocator: { kind: "hetzner" } })).toThrow(/.+/u);
   });
 
   it("omits defaultCredentials on a legacy row (backward compatible)", () => {
@@ -110,7 +110,7 @@ describe("OrgConfigV1 parser", () => {
   });
 
   it("rejects unknown keys inside defaultCredentials", () => {
-    expect(() => migrateOrgConfig({ version: 1, defaultCredentials: { gitlab_token: "x" } })).toThrow(/.+/);
+    expect(() => migrateOrgConfig({ version: 1, defaultCredentials: { gitlab_token: "x" } })).toThrow(/.+/u);
   });
 
   it("is idempotent on a V1-shaped input", () => {

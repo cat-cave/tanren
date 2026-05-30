@@ -16,28 +16,28 @@ async function readAllMigrations(): Promise<string> {
 describe("cost-records token-type + nullable-cost migration", () => {
   it("drops the fake subscription_window_denominators table", async () => {
     const sql = await readAllMigrations();
-    expect(sql).toMatch(/DROP TABLE "subscription_window_denominators"/);
+    expect(sql).toMatch(/DROP TABLE "subscription_window_denominators"/u);
   });
 
   it("constrains cost_basis to the three accepted values", async () => {
     const sql = await readAllMigrations();
-    expect(sql).toMatch(/cost_basis.*IN.*'ccusage'/);
-    expect(sql).toMatch(/'provider_pricing'/);
-    expect(sql).toMatch(/cost_basis.*'unknown'/s);
+    expect(sql).toMatch(/cost_basis.*IN.*'ccusage'/u);
+    expect(sql).toMatch(/'provider_pricing'/u);
+    expect(sql).toMatch(/cost_basis.*'unknown'/su);
     expect(sql).not.toContain(`${"legacy"}_${"unknown"}`);
     expect(sql).not.toContain("unknown_source");
   });
 
   it("constrains billing_mode to the three accepted values", async () => {
     const sql = await readAllMigrations();
-    expect(sql).toMatch(/billing_mode.*IN.*'per_token'/);
-    expect(sql).toMatch(/'subscription'/);
-    expect(sql).toMatch(/'self_hosted'/);
+    expect(sql).toMatch(/billing_mode.*IN.*'per_token'/u);
+    expect(sql).toMatch(/'subscription'/u);
+    expect(sql).toMatch(/'self_hosted'/u);
   });
 
   it("makes cost_usd nullable (cost-unknown is an allowed state)", async () => {
     const sql = await readAllMigrations();
-    expect(sql).toMatch(/ALTER COLUMN "cost_usd" DROP NOT NULL/);
+    expect(sql).toMatch(/ALTER COLUMN "cost_usd" DROP NOT NULL/u);
   });
 
   it("adds the disjoint token-type columns", async () => {
@@ -49,10 +49,10 @@ describe("cost-records token-type + nullable-cost migration", () => {
 
   it("converts existing rows' pricing_mode and cost_source into billing_mode and cost_basis", async () => {
     const sql = await readAllMigrations();
-    expect(sql).toMatch(/UPDATE "cost_records" SET "billing_mode"/);
-    expect(sql).toMatch(/UPDATE "cost_records" SET "cost_basis"/);
+    expect(sql).toMatch(/UPDATE "cost_records" SET "billing_mode"/u);
+    expect(sql).toMatch(/UPDATE "cost_records" SET "cost_basis"/u);
     // codexbar was the fake estimate — it drops to 'unknown'.
-    expect(sql).toMatch(/'codexbar' THEN 'unknown'/);
+    expect(sql).toMatch(/'codexbar' THEN 'unknown'/u);
   });
 
   it("keeps the cost.unattributable event name in the events_event_type CHECK", async () => {

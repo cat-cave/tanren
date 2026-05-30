@@ -144,6 +144,6 @@ describe("WebhookChannel", () => {
         severity: "info",
         eventName: "run.started",
       }),
-    ).rejects.toThrow(/webhook publish failed: 500/);
+    ).rejects.toThrow(/webhook publish failed: 500/u);
   });
 });

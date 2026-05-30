@@ -96,7 +96,7 @@ describe("reasonix writer adapter", () => {
       runId: "run_reasonix_3",
     });
     await expect(writer.runWriter({ prompt: "edit", workspace: "/workspace/repo", timeoutMs: 1000 })).rejects.toThrow(
-      /missing reasonix credential ref/,
+      /missing reasonix credential ref/u,
     );
   });
 

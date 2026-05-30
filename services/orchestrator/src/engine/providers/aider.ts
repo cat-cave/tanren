@@ -186,10 +186,10 @@ export function buildAiderWriterCommand(input: {
 //   * a token-usage summary from aider's human-readable "Tokens: <in> sent,
 //     <out> received" line, when present.
 export function parseAiderTelemetry(output: string): AiderTelemetry {
-  const lines = output.split(/\r?\n/).filter((line) => line.trim() !== "");
+  const lines = output.split(/\r?\n/u).filter((line) => line.trim() !== "");
   let usageLimit: UsageLimitSignal | undefined;
   for (const line of lines) {
-    if (/usage limit|rate limit/i.test(line)) {
+    if (/usage limit|rate limit/iu.test(line)) {
       usageLimit = { message: line.trim() };
     }
   }
@@ -201,7 +201,7 @@ export function parseAiderTelemetry(output: string): AiderTelemetry {
 // or reasoning tokens, so those stay 0. Returns undefined when no such line is
 // present.
 function parseAiderTokenUsage(output: string): TokenUsage | undefined {
-  const match = /Tokens:\s*([\d,]+)\s*sent,\s*([\d,]+)\s*received/i.exec(output);
+  const match = /Tokens:\s*([\d,]+)\s*sent,\s*([\d,]+)\s*received/iu.exec(output);
   if (match === null) {
     return undefined;
   }

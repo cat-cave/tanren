@@ -182,7 +182,7 @@ describe("RunnerLifecycle.allocate", () => {
         runnerImage: "ghcr.io/cat-cave/tanren-runner:v0",
         vaultRefs: ["credential/missing"],
       }),
-    ).rejects.toThrow(/credential\/missing/);
+    ).rejects.toThrow(/credential\/missing/u);
   });
 
   it("retries host-key reads while sshd is still generating keys", async () => {

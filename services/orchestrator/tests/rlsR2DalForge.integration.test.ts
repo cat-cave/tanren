@@ -201,7 +201,7 @@ describeDb("RLS R2 cohort-4 — forge threads/turns/proposals through the org-sc
         },
         ACTOR,
       ),
-    ).rejects.toThrow(/row-level security|policy|thread not found/i);
+    ).rejects.toThrow(/row-level security|policy|thread not found/iu);
 
     // A second scoped append advances off the committed first turn.
     const secondTurn = await runWithOrgScope(runtimePool, ORG_A, (client) =>
@@ -302,7 +302,7 @@ describeDb("RLS R2 cohort-4 — forge threads/turns/proposals through the org-sc
       runWithOrgScope(runtimePool, ORG_A, (client) =>
         ForgeProposalStore.claimForDecision(client, created.id, "rejected", ACTOR),
       ),
-    ).rejects.toThrow(/already decided/);
+    ).rejects.toThrow(/already decided/u);
   });
 
   // (d) app-layer org scoping: org A's run-thread list never surfaces org B's

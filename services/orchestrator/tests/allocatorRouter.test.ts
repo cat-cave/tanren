@@ -208,7 +208,7 @@ describe("AllocatorRouter", () => {
     const { reg } = registry({ manual_ssh: failing });
     const router = new AllocatorRouter(reg, config);
 
-    await expect(router.allocate(req("run_1"))).rejects.toThrow(/boom/);
+    await expect(router.allocate(req("run_1"))).rejects.toThrow(/boom/u);
     expect(router.inFlightCount("manual_ssh")).toBe(0);
   });
 
@@ -219,7 +219,7 @@ describe("AllocatorRouter", () => {
     // Registry where kubernetes was never wired with credentials.
     const { reg } = registry({ kubernetes: new UnconfiguredAllocator("kubernetes") });
     const router = new AllocatorRouter(reg, config);
-    await expect(router.allocate(req("run_k8s"))).rejects.toThrow(/not configured/);
+    await expect(router.allocate(req("run_k8s"))).rejects.toThrow(/not configured/u);
     // And the failed allocation did not leak a slot.
     expect(router.inFlightCount("kubernetes")).toBe(0);
   });
@@ -246,8 +246,8 @@ describe("AllocatorRouter", () => {
 describe("UnconfiguredAllocator", () => {
   it("throws a clear not-configured error on allocate and release", async () => {
     const allocator = new UnconfiguredAllocator("kubernetes");
-    await expect(allocator.allocate(req("r"))).rejects.toThrow(/not configured/);
-    await expect(allocator.release("r")).rejects.toThrow(/not configured/);
+    await expect(allocator.allocate(req("r"))).rejects.toThrow(/not configured/u);
+    await expect(allocator.release("r")).rejects.toThrow(/not configured/u);
   });
 
   it("names the offending kind and the remediation env in its error", async () => {
@@ -255,9 +255,9 @@ describe("UnconfiguredAllocator", () => {
     // The two string fragments are distinct mutation survivors; pin both the
     // kind interpolation and the "no routing rule references it" explanation so
     // a blanked-out message string is caught.
-    await expect(allocator.allocate(req("r"))).rejects.toThrow(/allocator kind 'gcp' was selected/);
-    await expect(allocator.allocate(req("r"))).rejects.toThrow(/no routing rule references it/);
-    await expect(allocator.allocate(req("r"))).rejects.toThrow(/TANREN_ALLOCATOR_ROUTING/);
+    await expect(allocator.allocate(req("r"))).rejects.toThrow(/allocator kind 'gcp' was selected/u);
+    await expect(allocator.allocate(req("r"))).rejects.toThrow(/no routing rule references it/u);
+    await expect(allocator.allocate(req("r"))).rejects.toThrow(/TANREN_ALLOCATOR_ROUTING/u);
   });
 });
 
@@ -310,6 +310,6 @@ describe("PoolCapacityExceededError", () => {
     expect(error.name).toBe("PoolCapacityExceededError");
     expect(error.message).toContain("hetzner");
     expect(error.message).toContain("3");
-    expect(error.message).toMatch(/at capacity/);
+    expect(error.message).toMatch(/at capacity/u);
   });
 });

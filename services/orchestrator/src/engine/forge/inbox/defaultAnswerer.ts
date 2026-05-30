@@ -45,8 +45,8 @@ function tokens(text: string): Set<string> {
   return new Set(
     text
       .toLowerCase()
-      .replaceAll(/[^a-z0-9\s]/g, " ")
-      .split(/\s+/)
+      .replaceAll(/[^a-z0-9\s]/gu, " ")
+      .split(/\s+/u)
       .filter((t) => t.length > 2 && !STOPWORDS.has(t)),
   );
 }

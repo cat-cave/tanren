@@ -54,7 +54,7 @@ export function draftPrBranchName(input: DraftPrBranchInput): string {
   if (input.requestedBranch !== undefined && input.requestedBranch !== "") {
     return validateGitBranchName(input.requestedBranch);
   }
-  if (!/^run_[A-Za-z0-9._-]+$/.test(input.runId)) {
+  if (!/^run_[A-Za-z0-9._-]+$/u.test(input.runId)) {
     throw new Error(`unsafe run id for draft PR branch: ${input.runId}`);
   }
   return validateGitBranchName(`tanren/${input.runId}`);
@@ -68,8 +68,8 @@ export function validateGitBranchName(branch: string): string {
     branch.includes("..") ||
     branch.includes("@{") ||
     branch.endsWith(".lock") ||
-    /(^|\/)\./.test(branch) ||
-    /[\s~^:?*[\\]/.test(branch) ||
+    /(^|\/)\./u.test(branch) ||
+    /[\s~^:?*[\\]/u.test(branch) ||
     hasGitRefControlCharacter(branch)
   ) {
     throw new Error(`unsafe git branch name: ${branch}`);

@@ -132,7 +132,7 @@ describeLive("live phase 1 fixture workflow", () => {
       expect(result.writer.diff).toContain(markerFile);
       expect(result.check.done).toBe(true);
       expect(result.audit.verified).toBe(true);
-      expect(result.pullRequest.prUrl).toMatch(/^https:\/\/github\.com\/.+\/pull\/\d+$/);
+      expect(result.pullRequest.prUrl).toMatch(/^https:\/\/github\.com\/.+\/pull\/\d+$/u);
       expect(result.ci.status).toBe("passed");
       expect(runRow.rows[0]).toMatchObject({
         status: "done",

@@ -131,11 +131,11 @@ function mockOrchestrator(snapshot: unknown = SNAPSHOT): void {
     if (url.endsWith("/auth/me"))
       return new Response(JSON.stringify({ userId: "u1", csrfToken: "c", expiresAt: "2030-01-01" }), { status: 200 });
     if (url.endsWith("/orgs")) return new Response(JSON.stringify({ orgs: [ORG] }), { status: 200 });
-    if (/\/orgs\/[^/]+\/projects$/.test(url))
+    if (/\/orgs\/[^/]+\/projects$/u.test(url))
       return new Response(JSON.stringify({ projects: [PROJECT] }), { status: 200 });
-    if (/\/orgs\/[^/]+\/inbox$/.test(url) && method === "GET")
+    if (/\/orgs\/[^/]+\/inbox$/u.test(url) && method === "GET")
       return new Response(JSON.stringify(snapshot), { status: 200 });
-    if (/\/inbox\/candidates\/[^/]+\/(fold|dismiss|close-duplicate)$/.test(url) && method === "POST") {
+    if (/\/inbox\/candidates\/[^/]+\/(fold|dismiss|close-duplicate)$/u.test(url) && method === "POST") {
       return new Response(JSON.stringify({ candidate: {} }), { status: 200 });
     }
     if (url.endsWith("/healthz")) return new Response("ok", { status: 200 });

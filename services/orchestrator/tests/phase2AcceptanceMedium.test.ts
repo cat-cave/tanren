@@ -76,7 +76,7 @@ describe("phase2 acceptance — medium tier dry-run smoke", () => {
           taskCounts: { plan: 1, write: 1, check: 1, audit: 1, ci: 1 },
         }),
       }),
-    ).toThrow(/≥ 2 write tasks/);
+    ).toThrow(/≥ 2 write tasks/u);
   });
 
   it("passes when the loop converged on the first plan (rejection loop is opportunistic, not required)", () => {
@@ -109,7 +109,7 @@ describe("phase2 acceptance — medium tier dry-run smoke", () => {
           ],
         }),
       }),
-    ).toThrow(/missing cost_records.*plan/);
+    ).toThrow(/missing cost_records.*plan/u);
   });
 
   it("fails when run.outcome is not phase2_medium_complete", () => {

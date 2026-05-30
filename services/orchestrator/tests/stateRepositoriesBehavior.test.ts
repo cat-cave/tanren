@@ -213,7 +213,7 @@ describe("JobStore SQL + coercion", () => {
   it("throws when updating a job that no longer exists", async () => {
     const client = new StubClient([{ rowCount: 0, rows: [] }]);
     await expect(JobStore.updateStatus(client, "7", { from: "claimed", to: "running" }, systemActor)).rejects.toThrow(
-      /job not found: 7/,
+      /job not found: 7/u,
     );
   });
 });
@@ -292,7 +292,7 @@ describe("TaskStore SQL + coercion", () => {
     const client = new StubClient([{ rowCount: 0, rows: [] }]);
     await expect(
       TaskStore.updateStatus(client, "task_1", { from: "queued", to: "running" }, systemActor),
-    ).rejects.toThrow(/task not found: task_1/);
+    ).rejects.toThrow(/task not found: task_1/u);
   });
 });
 
@@ -361,7 +361,7 @@ describe("RunStore SQL", () => {
     const client = new StubClient([{ rowCount: 0, rows: [] }]);
     await expect(
       RunStore.updateStatus(client, "run_1", { from: "queued", to: "running" }, systemActor),
-    ).rejects.toThrow(/run not found: run_1/);
+    ).rejects.toThrow(/run not found: run_1/u);
   });
 });
 
@@ -434,7 +434,7 @@ describe("SpecStore SQL + array decoding", () => {
     const client = new StubClient([{ rowCount: 0, rows: [] }]);
     await expect(
       SpecStore.updateStatus(client, "spec_1", { from: "open", to: "in_flight" }, systemActor),
-    ).rejects.toThrow(/spec not found: spec_1/);
+    ).rejects.toThrow(/spec not found: spec_1/u);
   });
 });
 

@@ -27,7 +27,7 @@ export interface ResolveGateConfigInput {
 // timeout, nonzero exit) also yields `undefined` so a transient stat hiccup
 // degrades to the default rather than crashing the loop.
 async function readCiConfigText(input: ResolveGateConfigInput): Promise<string | undefined> {
-  const path = `${input.workspacePath.replace(/\/+$/, "")}/${CI_CONFIG_FILENAME}`;
+  const path = `${input.workspacePath.replace(/\/+$/u, "")}/${CI_CONFIG_FILENAME}`;
   const result = await input.ssh.run(input.target, {
     command: `if [ -f ${quoteSshShellArg(path)} ]; then cat ${quoteSshShellArg(path)}; fi`,
     timeoutMs: input.timeoutMs,

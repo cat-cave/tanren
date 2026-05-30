@@ -34,7 +34,7 @@ describe("design tokens drift check", () => {
     const diagnostics = await checkDesignTokensDrift({ root });
     expect(diagnostics).toHaveLength(1);
     expect(diagnostics[0]?.copy).toBe("services/dashboard/src/design/tokens.css");
-    expect(diagnostics[0]?.message).toMatch(/drift detected/);
+    expect(diagnostics[0]?.message).toMatch(/drift detected/u);
   });
 
   it("flags a missing dashboard copy", async () => {
@@ -44,6 +44,6 @@ describe("design tokens drift check", () => {
 
     const diagnostics = await checkDesignTokensDrift({ root });
     expect(diagnostics).toHaveLength(1);
-    expect(diagnostics[0]?.message).toMatch(/unable to read/);
+    expect(diagnostics[0]?.message).toMatch(/unable to read/u);
   });
 });

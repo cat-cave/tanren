@@ -94,7 +94,7 @@ describe("computeRetryHotspot", () => {
     expect(retryPayload.retryCount).toBe(2);
     expect(retryPayload.rejectionSummaries[0]).toContain("checker rejected");
     expect(insight.actions).toHaveLength(2);
-    expect(insight.actions[0]!.label).toMatch(/Open BDD/);
+    expect(insight.actions[0]!.label).toMatch(/Open BDD/u);
   });
 
   it("does not emit when attempts predate the window", async () => {

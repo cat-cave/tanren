@@ -98,7 +98,7 @@ export class WorkerPool {
       return { rows: [], rowCount: 1 };
     }
     // createQueuedRunFromSpec: spec⋈project load
-    if (/FROM specs s\s+JOIN projects p/.test(trimmed)) {
+    if (/FROM specs s\s+JOIN projects p/u.test(trimmed)) {
       const spec = this.specs.get(String(params[0]));
       if (spec === undefined) return { rows: [], rowCount: 0 };
       const project = this.projects.get(spec.project_id)!;
@@ -119,7 +119,7 @@ export class WorkerPool {
       });
     }
     // worker loadRunExecutionContext: run⋈spec⋈project join
-    if (/FROM runs r\s+JOIN specs s/.test(trimmed)) {
+    if (/FROM runs r\s+JOIN specs s/u.test(trimmed)) {
       const run = this.runs.get(String(params[0]));
       if (run === undefined) return { rows: [], rowCount: 0 };
       const spec = this.specs.get(run.spec_id)!;
@@ -172,7 +172,7 @@ export class WorkerPool {
     // architecture check does not flag this in-memory fake pool router. The
     // event_type ($5 → params[4]) is recorded so finalize-path emission is
     // observable without a real DB.
-    if (/^INSERT\s+INTO\s+events/.test(trimmed)) {
+    if (/^INSERT\s+INTO\s+events/u.test(trimmed)) {
       this.eventTypes.push(String(params[4] ?? ""));
       return { rows: [{ id: "1" }], rowCount: 1 };
     }
@@ -193,7 +193,7 @@ export class WorkerPool {
     // Post-run accrual: getRunUsage SUMs the run's cost_records. The accrual
     // path (`accrueRunUsage`) feeds these totals to the quota policy, so a test
     // that seeds a cost row can assert the policy accrued the run's real usage.
-    if (/SUM\(total_tokens\)[\s\S]*FROM cost_records/.test(trimmed)) {
+    if (/SUM\(total_tokens\)[\s\S]*FROM cost_records/u.test(trimmed)) {
       const tokens = this.costRows.reduce((sum, r) => sum + r.total_tokens, 0);
       return single({ runs: tokens, tokens, cost_usd: tokens === 0 ? 0 : 1.5 });
     }
@@ -271,9 +271,9 @@ export class WorkerPool {
       // each finalizer's effect is observed distinctly (else a mutant that
       // swaps the literal would survive).
       if (trimmed.includes("RETURNING")) {
-        const outcomeMatch = /outcome = '([a-z_]+)'/.exec(trimmed);
+        const outcomeMatch = /outcome = '([a-z_]+)'/u.exec(trimmed);
         const finalizeOutcome = outcomeMatch?.[1] ?? "halted";
-        const allowed = [...trimmed.matchAll(/'(running|queued|failed)'/g)].map((m) => m[1]);
+        const allowed = [...trimmed.matchAll(/'(running|queued|failed)'/gu)].map((m) => m[1]);
         if (allowed.includes(this.runStatus.status)) {
           this.runStatus = { status: "halted", outcome: finalizeOutcome };
           const run = this.runs.get(String(params[0]));

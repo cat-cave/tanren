@@ -97,7 +97,7 @@ export class RunnerLifecycle {
 
   async allocate(input: AllocateInput): Promise<AllocateResult> {
     const runnerId = `runner_${input.runId}`;
-    const slug = `tanren-runner-${input.runId}`.replaceAll(/[^A-Za-z0-9_.-]/g, "-");
+    const slug = `tanren-runner-${input.runId}`.replaceAll(/[^A-Za-z0-9_.-]/gu, "-");
     const containerName = slug;
     const workspaceVolume = volumeNamesFor(input.runId).workspace;
     const codexHomeVolume = volumeNamesFor(input.runId).codexHome;
@@ -222,7 +222,7 @@ export class RunnerLifecycle {
 }
 
 export function volumeNamesFor(runId: string): { workspace: string; codexHome: string } {
-  const slug = `tanren-runner-${runId}`.replaceAll(/[^A-Za-z0-9_.-]/g, "-");
+  const slug = `tanren-runner-${runId}`.replaceAll(/[^A-Za-z0-9_.-]/gu, "-");
   return {
     workspace: `${slug}-workspace`,
     codexHome: `${slug}-codex-home`,
@@ -242,5 +242,5 @@ export function fingerprintOpenSshPublicKey(publicKey: Buffer): string | undefin
     return undefined;
   }
   const keyBuffer = Buffer.from(encodedKey, "base64");
-  return `SHA256:${createHash("sha256").update(keyBuffer).digest("base64").replace(/=+$/, "")}`;
+  return `SHA256:${createHash("sha256").update(keyBuffer).digest("base64").replace(/=+$/u, "")}`;
 }

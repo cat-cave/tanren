@@ -69,7 +69,7 @@ function stubPool(): {
     return { ...c, source_name: src.name, source_kind: src.kind };
   };
   const query = async (text: string, params: unknown[] = []): Promise<{ rows: unknown[]; rowCount: number }> => {
-    const sql = text.replaceAll(/\s+/g, " ").trim();
+    const sql = text.replaceAll(/\s+/gu, " ").trim();
     if (sql.startsWith("SELECT spec_id, title, status FROM specs")) return { rows: [], rowCount: 0 };
     if (sql.startsWith("INSERT INTO candidates")) {
       const [id, sourceId, orgId, projectId, externalId, title, body, severity, status, triage] = params as string[];
@@ -211,7 +211,7 @@ describe("accept -> discovery hand-off", () => {
     const candidateId = await ingestOne(deps);
     const result = await acceptCandidate(deps, acceptInput(candidateId));
     expect(result.candidate.status).toBe("accepted");
-    expect(result.specId).toMatch(/^spec_/);
+    expect(result.specId).toMatch(/^spec_/u);
     expect(result.candidate.resolvedSpecId).toBe(result.specId);
     expect(specs.size).toBe(1);
   });

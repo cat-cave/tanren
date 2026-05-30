@@ -55,7 +55,7 @@ describe("PersonaStore", () => {
         { scope: "org", orgId: "org_1", projectId: "project_1", name: "X", description: "" },
         orgAdmin,
       ),
-    ).rejects.toThrow(/projectId/);
+    ).rejects.toThrow(/projectId/u);
   });
 
   it("rejects a project-scoped persona with a null projectId at create time", async () => {
@@ -66,7 +66,7 @@ describe("PersonaStore", () => {
         { scope: "project", orgId: "org_1", projectId: null, name: "X", description: "" },
         orgAdmin,
       ),
-    ).rejects.toThrow(/projectId/);
+    ).rejects.toThrow(/projectId/u);
   });
 
   it("lists org-scoped personas alongside project-scoped personas for a project", async () => {
@@ -118,7 +118,7 @@ describe("PersonaStore", () => {
         { scope: "org", orgId: "org_1", projectId: null, name: "X", description: "" },
         otherOrg,
       ),
-    ).rejects.toThrow(/not scoped to org/);
+    ).rejects.toThrow(/not scoped to org/u);
   });
 
   it("allows a platform admin to bypass org scoping", async () => {
@@ -206,7 +206,7 @@ describe("MilestoneStore", () => {
         { projectId: "project_1", label: "M1", name: "Duplicate", orderIndex: 1 },
         orgAdmin,
       ),
-    ).rejects.toThrow(/duplicate milestone label/);
+    ).rejects.toThrow(/duplicate milestone label/u);
   });
 
   it("rejects duplicate order_index in the same project", async () => {
@@ -218,7 +218,7 @@ describe("MilestoneStore", () => {
     );
     await expect(
       MilestoneStore.create(client, { projectId: "project_1", label: "M2", name: "Two", orderIndex: 0 }, orgAdmin),
-    ).rejects.toThrow(/order_index/);
+    ).rejects.toThrow(/order_index/u);
   });
 
   it("setSpecMilestone enforces one-milestone-per-spec by replacing prior assignment", async () => {

@@ -80,7 +80,7 @@ describe("project view (chat-primary)", () => {
     const html = await (await app.request("/projects/project_easy")).text();
     expect(html).toContain("velocity");
     // milestone ETA renders the target date (exact day is timezone-local).
-    expect(html).toMatch(/Jun 1[78]/);
+    expect(html).toMatch(/Jun 1[78]/u);
     expect(html).toContain("dag · live");
     expect(html).toContain("dag-primary mode");
   });
@@ -123,7 +123,7 @@ describe("spec creation + list", () => {
     // repo locked to the project repo.
     expect(html).toContain("https://github.com/cat-cave/tanren-fixture-easy");
     // no free-text JSON editor.
-    expect(html).not.toMatch(/JSON\s*editor/i);
+    expect(html).not.toMatch(/JSON\s*editor/iu);
   });
 
   it("creates a spec via P2A-0013 and redirects to the spec list", async () => {
@@ -193,7 +193,7 @@ describe("routing & limits settings", () => {
   it("handles a 1-entry chain (add fallback control present for every role)", async () => {
     const app = await build();
     const html = await (await app.request("/settings/routing/project_easy")).text();
-    expect((html.match(/\+ add fallback/g) ?? []).length).toBe(6);
+    expect((html.match(/\+ add fallback/gu) ?? []).length).toBe(6);
   });
 
   it("adds a fallback entry and PATCHes the full config back", async () => {

@@ -151,13 +151,13 @@ function mockOrchestrator(): void {
     if (url.endsWith("/auth/me"))
       return new Response(JSON.stringify({ userId: "u1", csrfToken: "c", expiresAt: "2030-01-01" }), { status: 200 });
     if (url.endsWith("/orgs")) return new Response(JSON.stringify({ orgs: [ORG] }), { status: 200 });
-    if (/\/orgs\/[^/]+\/projects$/.test(url))
+    if (/\/orgs\/[^/]+\/projects$/u.test(url))
       return new Response(JSON.stringify({ projects: [PROJECT] }), { status: 200 });
     if (url.endsWith("/projects/project_easy") && method === "GET")
       return new Response(JSON.stringify(PROJECT), { status: 200 });
     if (url.includes("/runs")) {
       // /runs?specId=… filters to that spec; otherwise all runs.
-      const specMatch = /[?&]specId=([^&]+)/.exec(url);
+      const specMatch = /[?&]specId=([^&]+)/u.exec(url);
       const items = specMatch !== null ? RUNS.filter((r) => r.specId === decodeURIComponent(specMatch[1])) : RUNS;
       return new Response(JSON.stringify({ items }), { status: 200 });
     }

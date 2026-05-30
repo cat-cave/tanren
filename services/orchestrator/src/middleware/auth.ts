@@ -116,7 +116,7 @@ function extractBearer(c: Context): string | undefined {
   if (header === undefined) {
     return undefined;
   }
-  const match = /^Bearer\s+(.+)$/i.exec(header.trim());
+  const match = /^Bearer\s+(.+)$/iu.exec(header.trim());
   return match?.[1];
 }
 
@@ -125,7 +125,7 @@ export function readCookie(c: Context, name: string): string | undefined {
   if (header === undefined) {
     return undefined;
   }
-  for (const piece of header.split(/;\s*/)) {
+  for (const piece of header.split(/;\s*/u)) {
     const eq = piece.indexOf("=");
     if (eq <= 0) continue;
     if (piece.slice(0, eq) === name) {

@@ -96,7 +96,7 @@ export function resolveProjectMode(c: Context): "chat" | "dag" {
   const q = c.req.query("mode");
   if (q === "dag" || q === "chat") return q;
   const cookie = c.req.header("cookie") ?? "";
-  const match = /(?:^|;\s*)tanren_project_mode=(dag|chat)/.exec(cookie);
+  const match = /(?:^|;\s*)tanren_project_mode=(dag|chat)/u.exec(cookie);
   return match !== null && match[1] === "dag" ? "dag" : "chat";
 }
 

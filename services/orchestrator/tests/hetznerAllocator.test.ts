@@ -105,7 +105,7 @@ describe("HetznerAllocator", () => {
       readyTimeoutMs: 5,
       pollIntervalMs: 1,
     });
-    await expect(allocator.allocate(req("run_3"))).rejects.toThrow(/did not become running/);
+    await expect(allocator.allocate(req("run_3"))).rejects.toThrow(/did not become running/u);
     expect(client.deleted).toEqual([42]);
   });
 
@@ -120,7 +120,7 @@ describe("HetznerAllocator", () => {
   it("requires a token and pinned fingerprint", () => {
     const runners = new FakeRunnerStore();
     expect(() => new HetznerAllocator({ ...baseOpts(new FakeHetznerClient(), runners), apiToken: "" })).toThrow(
-      /non-empty apiToken/,
+      /non-empty apiToken/u,
     );
     expect(
       () =>
@@ -128,7 +128,7 @@ describe("HetznerAllocator", () => {
           ...baseOpts(new FakeHetznerClient(), runners),
           hostKeyFingerprint: "",
         }),
-    ).toThrow(/pinned hostKeyFingerprint/);
+    ).toThrow(/pinned hostKeyFingerprint/u);
   });
 
   it("sanitizes the run id into a lowercase, hyphen-only server name", async () => {
@@ -150,7 +150,7 @@ describe("HetznerAllocator", () => {
     });
     // status reaches "running" but publicIpv4 stays undefined: the ready
     // condition requires BOTH, so it never returns and the deadline trips.
-    await expect(allocator.allocate(req("run_no_ip"))).rejects.toThrow(/did not become running/);
+    await expect(allocator.allocate(req("run_no_ip"))).rejects.toThrow(/did not become running/u);
     expect(client.deleted).toEqual([42]);
     expect(runners.claims).toEqual([]);
   });
@@ -166,7 +166,7 @@ describe("HetznerAllocator", () => {
       readyTimeoutMs: 5,
       pollIntervalMs: 1,
     });
-    await expect(allocator.allocate(req("run_empty"))).rejects.toThrow(/did not become running/);
+    await expect(allocator.allocate(req("run_empty"))).rejects.toThrow(/did not become running/u);
     expect(client.deleted).toEqual([42]);
     expect(runners.claims).toEqual([]);
   });
@@ -225,9 +225,9 @@ describe("HetznerAllocator", () => {
     await client.getServer(3);
     await expect(client.deleteServer(3)).resolves.toBeUndefined();
     expect(calls[0]).toMatchObject({ method: "GET" });
-    expect(calls[0]?.url).toMatch(/\/servers\/3$/);
+    expect(calls[0]?.url).toMatch(/\/servers\/3$/u);
     expect(calls[1]).toMatchObject({ method: "DELETE" });
-    expect(calls[1]?.url).toMatch(/\/servers\/3$/);
+    expect(calls[1]?.url).toMatch(/\/servers\/3$/u);
   });
 
   it("toServer treats a null public_net as no IP (via fetchHetznerClient)", async () => {
@@ -260,7 +260,7 @@ describe("HetznerAllocator", () => {
 
     const client = fetchHetznerClient("secret-token", fetchImpl);
     const server = await client.createServer({ name: "n", serverType: "cx22", image: "docker-ce" });
-    expect(captured.url).toMatch(/\/servers$/);
+    expect(captured.url).toMatch(/\/servers$/u);
     expect(captured.method).toBe("POST");
     expect(captured.auth).toBe("Bearer secret-token");
     expect(server).toEqual({ id: 7, status: "running", publicIpv4: "198.51.100.5" });

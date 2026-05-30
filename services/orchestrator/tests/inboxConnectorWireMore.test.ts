@@ -113,7 +113,7 @@ describe("linear connector — request wire shape", () => {
         ...linearSource,
         config: { ...linearSource.config, tokenRef: "credential/linear/missing" },
       }),
-    ).rejects.toThrow(/no secret at ref/);
+    ).rejects.toThrow(/no secret at ref/u);
   });
 });
 
@@ -358,6 +358,6 @@ describe("jira connector — normalization", () => {
         ...jiraSource,
         config: { ...jiraSource.config, tokenRef: "credential/jira/missing" },
       }),
-    ).rejects.toThrow(/no secret at ref/);
+    ).rejects.toThrow(/no secret at ref/u);
   });
 });

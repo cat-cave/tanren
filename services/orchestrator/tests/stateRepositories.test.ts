@@ -76,7 +76,7 @@ describe("RunStore", () => {
         ],
       },
     ]);
-    await expect(RunStore.get(client, "run_1", systemActor)).rejects.toThrow(/status/i);
+    await expect(RunStore.get(client, "run_1", systemActor)).rejects.toThrow(/status/iu);
   });
 
   it("updates status through the typed transition helper", async () => {
@@ -199,7 +199,7 @@ describe("TaskStore", () => {
         ],
       },
     ]);
-    await expect(TaskStore.get(client, "task_1", systemActor)).rejects.toThrow(/agentKind|agent_kind|invalid/i);
+    await expect(TaskStore.get(client, "task_1", systemActor)).rejects.toThrow(/agentKind|agent_kind|invalid/iu);
   });
 });
 

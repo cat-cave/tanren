@@ -17,8 +17,8 @@ describe("structured Answerer schemas", () => {
     };
 
     expect(checkAnswerSchema.parse(valid)).toEqual(valid);
-    expect(() => checkAnswerSchema.parse({ ...valid, extra: "nope" })).toThrow(/Unrecognized key/);
-    expect(() => checkAnswerSchema.parse({ ...valid, done: "maybe" })).toThrow(/Invalid input/);
+    expect(() => checkAnswerSchema.parse({ ...valid, extra: "nope" })).toThrow(/Unrecognized key/u);
+    expect(() => checkAnswerSchema.parse({ ...valid, done: "maybe" })).toThrow(/Invalid input/u);
   });
 
   it("validates audit answers strictly", () => {
@@ -31,13 +31,13 @@ describe("structured Answerer schemas", () => {
     };
 
     expect(auditAnswerSchema.parse(valid)).toEqual(valid);
-    expect(() => auditAnswerSchema.parse({ ...valid, unknown: true })).toThrow(/Unrecognized key/);
+    expect(() => auditAnswerSchema.parse({ ...valid, unknown: true })).toThrow(/Unrecognized key/u);
     expect(() =>
       auditAnswerSchema.parse({
         ...valid,
         criteria_status: { criteria: [{ criterion: "", satisfied: true, reason: "ok" }] },
       }),
-    ).toThrow(/Too small/);
+    ).toThrow(/Too small/u);
   });
 
   it("validates plan answers with acceptance criteria", () => {
@@ -46,7 +46,7 @@ describe("structured Answerer schemas", () => {
     };
 
     expect(planAnswerSchema.parse(valid)).toEqual(valid);
-    expect(() => planAnswerSchema.parse({ subtasks: [] })).toThrow(/Too small/);
+    expect(() => planAnswerSchema.parse({ subtasks: [] })).toThrow(/Too small/u);
   });
 
   it("builds check and audit prompts that reject mutation duties", () => {

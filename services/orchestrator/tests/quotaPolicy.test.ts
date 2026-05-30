@@ -60,7 +60,7 @@ class QuotaPool {
       row.credits_used += Number(params[4]);
       return { rows: [], rowCount: 1 };
     }
-    if (/FROM cost_records/.test(trimmed)) {
+    if (/FROM cost_records/u.test(trimmed)) {
       return this.aggregateCosts(trimmed, params);
     }
     return { rows: [], rowCount: 0 };

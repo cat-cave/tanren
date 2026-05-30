@@ -158,10 +158,10 @@ export function buildPiWriterCommand(input: {
 //   * a token-usage summary from a human-readable "Tokens: <in> sent,
 //     <out> received" line, when present.
 export function parsePiTelemetry(output: string): PiTelemetry {
-  const lines = output.split(/\r?\n/).filter((line) => line.trim() !== "");
+  const lines = output.split(/\r?\n/u).filter((line) => line.trim() !== "");
   let usageLimit: UsageLimitSignal | undefined;
   for (const line of lines) {
-    if (/usage limit|rate limit/i.test(line)) {
+    if (/usage limit|rate limit/iu.test(line)) {
       usageLimit = { message: line.trim() };
     }
   }
@@ -173,7 +173,7 @@ export function parsePiTelemetry(output: string): PiTelemetry {
 // reasoning tokens, so those stay 0. Returns undefined when no such line is
 // present.
 function parsePiTokenUsage(output: string): TokenUsage | undefined {
-  const match = /Tokens:\s*([\d,]+)\s*sent,\s*([\d,]+)\s*received/i.exec(output);
+  const match = /Tokens:\s*([\d,]+)\s*sent,\s*([\d,]+)\s*received/iu.exec(output);
   if (match === null) {
     return undefined;
   }

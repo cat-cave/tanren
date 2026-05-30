@@ -125,7 +125,7 @@ describe("EmailChannel", () => {
         severity: "info",
         eventName: "run.started",
       }),
-    ).rejects.toThrow(/transport down/);
+    ).rejects.toThrow(/transport down/u);
   });
 });
 
@@ -178,14 +178,14 @@ describe("HttpEmailTransport (default)", () => {
     const secrets = new MemorySecrets({ "credential/email/api-endpoint": "https://email.example.com/send" });
     const transport = new HttpEmailTransport({ secrets });
     await expect(transport.send({ to: "x@example.com", subject: "s", text: "b" })).rejects.toThrow(
-      /missing email API key credential ref/,
+      /missing email API key credential ref/u,
     );
   });
 
   it("throws when no secret store is supplied", async () => {
     const transport = new HttpEmailTransport({});
     await expect(transport.send({ to: "x@example.com", subject: "s", text: "b" })).rejects.toThrow(
-      /needs a secret store/,
+      /needs a secret store/u,
     );
   });
 
@@ -196,14 +196,14 @@ describe("HttpEmailTransport (default)", () => {
     });
     const transport = new HttpEmailTransport({ fetch: failingFetch, secrets });
     await expect(transport.send({ to: "x@example.com", subject: "s", text: "b" })).rejects.toThrow(
-      /email publish failed: 502/,
+      /email publish failed: 502/u,
     );
   });
 
   it("throws when credential refs are missing", async () => {
     const transport = new HttpEmailTransport({ secrets: new MemorySecrets({}) });
     await expect(transport.send({ to: "x@example.com", subject: "s", text: "b" })).rejects.toThrow(
-      /missing email API endpoint credential ref/,
+      /missing email API endpoint credential ref/u,
     );
   });
 });
