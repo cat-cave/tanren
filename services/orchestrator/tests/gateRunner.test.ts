@@ -168,7 +168,7 @@ describe("runGateForWhen", () => {
     const ssh = new RecordingSsh();
     const { events, appendEvent } = recordingEvents();
     // A config whose tiers map to nothing for pre_merge.
-    const config = resolveCiConfig(undefined);
+    const config = resolveCiConfig();
     const outcome = await runGateForWhen({
       ssh,
       target,

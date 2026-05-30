@@ -58,8 +58,8 @@ function fakeClientFactory(opts: FakeClientOptions, captured?: CapturedConnect) 
         });
         return emitter;
       },
-      destroy: () => undefined,
-      end: () => undefined,
+      destroy: () => {},
+      end: () => {},
     };
   };
 }

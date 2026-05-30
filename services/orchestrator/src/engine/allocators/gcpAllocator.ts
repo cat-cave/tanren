@@ -155,13 +155,13 @@ export class GcpAllocator implements Allocator {
       instance = await this.waitForRunning(name);
     } catch (error) {
       // Best-effort delete so a stuck instance doesn't leak.
-      await this.client.deleteInstance(name).catch(() => undefined);
+      await this.client.deleteInstance(name).catch(() => {});
       throw error;
     }
 
     const ip = instance.externalIp;
     if (ip === undefined || ip === "") {
-      await this.client.deleteInstance(name).catch(() => undefined);
+      await this.client.deleteInstance(name).catch(() => {});
       throw new GcpAllocatorError(`gcp instance ${name} became RUNNING without an external IP`);
     }
 
@@ -194,7 +194,7 @@ export class GcpAllocator implements Allocator {
         containerId: name,
       });
     } catch (error) {
-      await this.client.deleteInstance(name).catch(() => undefined);
+      await this.client.deleteInstance(name).catch(() => {});
       this.instances.delete(runnerId);
       throw error;
     }

@@ -35,7 +35,7 @@ function fakePool(match: (sql: string) => boolean): FakePool {
       if (match(sql)) onClient.push(sql);
       return { rows: [], rowCount: 0 };
     },
-    release: () => undefined,
+    release: () => {},
   };
   const pool = {
     query: async (sql: string) => {

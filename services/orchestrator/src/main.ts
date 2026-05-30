@@ -233,7 +233,7 @@ export function buildApp(input: {
   );
 
   app.post("/projects", async (c) => {
-    const parsed = projectInputSchema.safeParse(await c.req.json().catch(() => undefined));
+    const parsed = projectInputSchema.safeParse(await c.req.json().catch(() => {}));
     if (!parsed.success) {
       return c.json({ error: "invalid_project", issues: parsed.error.issues }, 400);
     }
@@ -241,7 +241,7 @@ export function buildApp(input: {
   });
 
   app.post("/specs", async (c) => {
-    const parsed = specInputSchema.safeParse(await c.req.json().catch(() => undefined));
+    const parsed = specInputSchema.safeParse(await c.req.json().catch(() => {}));
     if (!parsed.success) {
       return c.json({ error: "invalid_spec", issues: parsed.error.issues }, 400);
     }
@@ -292,7 +292,7 @@ export function buildApp(input: {
   registerAuthBundleImportRoutes(app, secrets);
 
   app.post("/credentials/github/import", async (c) => {
-    const parsed = githubCredentialImportSchema.safeParse(await c.req.json().catch(() => undefined));
+    const parsed = githubCredentialImportSchema.safeParse(await c.req.json().catch(() => {}));
     if (!parsed.success) {
       return c.json({ error: "invalid_github_credential", issues: parsed.error.issues }, 400);
     }
@@ -397,7 +397,7 @@ export function buildApp(input: {
     const payload = await runWithOrgScope(input.pool, orgId, async (client) => {
       const run = await client.query("SELECT * FROM runs WHERE run_id = $1", [runId]);
       if (run.rowCount === 0) {
-        return undefined;
+        return;
       }
       const tasks = await client.query(
         `SELECT * FROM tasks

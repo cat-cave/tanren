@@ -51,7 +51,7 @@ describe("runPlannerLoopWorkflow", () => {
       },
       timeoutMs: 100,
       maxCiPolls: 1,
-      sleep: async () => undefined,
+      sleep: async () => {},
       buildAdapters: () => twoSubtaskAdapters([passingCheck, passingCheck]),
       buildUsageProbe: () => fakeProbe(healthyWindow(), accounting(0.5)),
       reviewProbe: approvingReview(),
@@ -109,7 +109,7 @@ describe("runPlannerLoopWorkflow", () => {
       },
       timeoutMs: 100,
       maxCiPolls: 1,
-      sleep: async () => undefined,
+      sleep: async () => {},
       buildAdapters: () => adapters,
       buildUsageProbe: () => fakeProbe(healthyWindow(), accounting(null)),
       reviewProbe: approvingReview(),
@@ -169,7 +169,7 @@ describe("runPlannerLoopWorkflow", () => {
       },
       timeoutMs: 100,
       maxCiPolls: 1,
-      sleep: async () => undefined,
+      sleep: async () => {},
       bootstrapCommand: "pnpm install --frozen-lockfile",
       runBootstrap: async (input) => {
         bootstrapCalls.push(input.command ?? "<default>");
@@ -222,7 +222,7 @@ describe("runPlannerLoopWorkflow", () => {
       escapeHatches: { maxPlannerRerunsPerSpec: 3, maxWriterIterPerSubtask: 5, maxRetriesPerTransientFailure: 3 },
       timeoutMs: 100,
       maxCiPolls: 1,
-      sleep: async () => undefined,
+      sleep: async () => {},
       runBootstrap: async (input) => {
         bootstrapCalls.push(input.command);
       },
@@ -254,7 +254,7 @@ describe("runPlannerLoopWorkflow", () => {
       escapeHatches: { maxPlannerRerunsPerSpec: 3, maxWriterIterPerSubtask: 5, maxRetriesPerTransientFailure: 3 },
       timeoutMs: 100,
       maxCiPolls: 1,
-      sleep: async () => undefined,
+      sleep: async () => {},
       runBootstrap: async (input) => {
         bootstrapCalls.push(input.command);
       },

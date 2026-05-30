@@ -212,7 +212,7 @@ export function initPalette(): void {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ orgId: refs.orgId, tool, args }),
-      }).catch(() => undefined);
+      }).catch(() => {});
       close();
       return;
     }

@@ -68,7 +68,7 @@ export function createForgeAskRoutes(options: ForgeAskRoutesOptions) {
     if (!actorCanAccessOrg(actor, orgId)) {
       return c.json({ error: "org_access_denied" }, 403);
     }
-    const parsed = AskBody.safeParse(await c.req.json().catch(() => undefined));
+    const parsed = AskBody.safeParse(await c.req.json().catch(() => {}));
     if (!parsed.success) {
       return c.json({ error: "invalid_ask", issues: parsed.error.issues }, 400);
     }

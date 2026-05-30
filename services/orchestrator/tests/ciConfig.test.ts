@@ -44,7 +44,7 @@ function expectValidationError(yamlText: string): CiConfigValidationError {
 
 describe("resolveCiConfig — missing", () => {
   it("returns the frozen default when no file is present", () => {
-    const cfg = resolveCiConfig(undefined);
+    const cfg = resolveCiConfig();
     expect(cfg).toBe(DEFAULT_CI_CONFIG);
     expect(Object.keys(cfg.tiers)).toEqual(["fast", "slow"]);
     expect(cfg.tiers.fast.map((s) => s.name)).toEqual(["lint", "typecheck", "unit"]);

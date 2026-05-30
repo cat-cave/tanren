@@ -121,10 +121,10 @@ function buildCredHarness() {
     createAuthMiddleware({
       store: {
         async findApiTokenByRaw() {
-          return undefined;
+          return;
         },
         async loadSession() {
-          return undefined;
+          return;
         },
         async resolveActorContext() {
           return alice;

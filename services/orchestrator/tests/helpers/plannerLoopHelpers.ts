@@ -112,7 +112,7 @@ export function makePlanner(
     calls,
     async runAnswerer(opts) {
       calls.push(opts);
-      const plan = plans[index] ?? plans[plans.length - 1];
+      const plan = plans[index] ?? plans.at(-1);
       index += 1;
       return plan;
     },
@@ -131,7 +131,7 @@ export function makeChecker(
     calls,
     async runAnswerer(opts) {
       calls.push(opts);
-      const verdict = verdicts[index] ?? verdicts[verdicts.length - 1];
+      const verdict = verdicts[index] ?? verdicts.at(-1);
       index += 1;
       return verdict;
     },
@@ -150,7 +150,7 @@ export function makeAuditor(
     calls,
     async runAnswerer(opts) {
       calls.push(opts);
-      const verdict = verdicts[index] ?? verdicts[verdicts.length - 1];
+      const verdict = verdicts[index] ?? verdicts.at(-1);
       index += 1;
       return verdict;
     },
@@ -169,7 +169,7 @@ export function makeWriter(
     calls,
     async runWriter(opts): Promise<WriterResult> {
       calls.push({ prompt: opts.prompt, workspace: opts.workspace });
-      const diff = diffs[index] ?? diffs[diffs.length - 1];
+      const diff = diffs[index] ?? diffs.at(-1);
       index += 1;
       return {
         diff,

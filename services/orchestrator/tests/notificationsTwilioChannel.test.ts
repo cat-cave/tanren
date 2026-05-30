@@ -88,7 +88,7 @@ describe("TwilioChannel", () => {
     const empty: SecretStore = {
       async put() {},
       async get() {
-        return undefined;
+        return;
       },
       async delete() {},
     };

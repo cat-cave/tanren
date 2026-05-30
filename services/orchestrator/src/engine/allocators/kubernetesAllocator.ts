@@ -236,8 +236,8 @@ export class KubernetesAllocator implements Allocator {
 
   /** Best-effort delete of a Pod + Secret so a stuck allocation doesn't leak. */
   private async cleanup(podName: string, secretName: string): Promise<void> {
-    await this.client.deletePod(podName).catch(() => undefined);
-    await this.client.deleteSecret(secretName).catch(() => undefined);
+    await this.client.deletePod(podName).catch(() => {});
+    await this.client.deleteSecret(secretName).catch(() => {});
   }
 
   private async waitForRunning(name: string): Promise<KubernetesPod> {

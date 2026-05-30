@@ -36,7 +36,7 @@ function scriptedGate(outcomes: ReadonlyArray<GateOutcome>) {
   let index = 0;
   const runGate = async (input: { when: CiWhen; taskId?: string }): Promise<GateOutcome> => {
     calls.push(input);
-    const outcome = outcomes[index] ?? outcomes[outcomes.length - 1] ?? passGate;
+    const outcome = outcomes[index] ?? outcomes.at(-1) ?? passGate;
     index += 1;
     return outcome;
   };

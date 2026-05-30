@@ -135,7 +135,7 @@ function applyStatus(root: HTMLElement, status: string, outcome: string | null):
     );
     const dot = chip.querySelector(".d");
     chip.textContent = "";
-    if (dot !== null) chip.appendChild(dot);
+    if (dot !== null) chip.append(dot);
     chip.append(`run · ${status}${outcome !== null ? ` · ${outcome}` : ""}`);
   }
   setText(root, "header-status", status);

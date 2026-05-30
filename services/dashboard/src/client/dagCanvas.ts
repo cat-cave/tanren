@@ -142,7 +142,7 @@ async function openDrawer(root: HTMLElement, projectId: string, specId: string):
   const host = document.createElement("div");
   host.dataset["dagDrawerHost"] = "1";
   host.innerHTML = html;
-  document.body.appendChild(host);
+  document.body.append(host);
 
   const scrim = host.querySelector<HTMLElement>("[data-spec-scrim]");
   const drawer = host.querySelector<HTMLElement>("[data-spec-drawer]");

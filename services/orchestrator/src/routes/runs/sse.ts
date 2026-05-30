@@ -84,7 +84,7 @@ export class SseDriver {
     // as the pool path — and RLS-correct in R3.
     const snapshot = await runWithOrgScope(this.args.pool, this.args.orgId, async (client) => {
       const run = await fetchRunSummary(client, this.args.runId, this.args.orgId);
-      if (run === undefined) return undefined;
+      if (run === undefined) return;
       const tasks = await fetchRunTasks(client, this.args.runId, this.args.orgId);
       const recentEvents = await fetchRunEventsForSnapshot(client, {
         runId: this.args.runId,
@@ -130,7 +130,7 @@ export class SseDriver {
     // transaction. Inert in R1; same rows as the pool path.
     const polled = await runWithOrgScope(this.args.pool, this.args.orgId, async (client) => {
       const run = await fetchRunSummary(client, this.args.runId, this.args.orgId);
-      if (run === undefined) return undefined;
+      if (run === undefined) return;
       const tasks = await fetchRunTasks(client, this.args.runId, this.args.orgId);
       const newEvents = await this.pollNewEvents(client);
       const newCosts = await this.pollNewCosts(client);

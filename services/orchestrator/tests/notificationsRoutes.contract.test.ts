@@ -27,10 +27,10 @@ function harness(who: ActorContext | undefined = actor) {
     createAuthMiddleware({
       store: {
         async findApiTokenByRaw() {
-          return undefined;
+          return;
         },
         async loadSession() {
-          return undefined;
+          return;
         },
         async resolveActorContext() {
           return who as ActorContext;

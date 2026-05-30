@@ -298,7 +298,7 @@ class CiMemoryPool {
         }
         return this.query(sql, params);
       }) as CiMemoryPool["query"],
-      release: () => undefined,
+      release: () => {},
     };
   }
 

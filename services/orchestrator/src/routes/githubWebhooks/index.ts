@@ -25,7 +25,7 @@ export function createGithubWebhookRoutes(deps: GithubWebhookRouteDeps) {
 
   app.post("/github/webhooks/ci", async (c) => {
     const event = c.req.header("x-github-event") ?? "";
-    const payload = await c.req.json().catch(() => undefined);
+    const payload = await c.req.json().catch(() => {});
     if (payload === undefined) {
       return c.json({ error: "invalid_webhook", message: "request body was not JSON" }, 400);
     }

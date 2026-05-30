@@ -121,7 +121,7 @@ export function classifyAuthRef(authRef: string): RefClassification {
 
 function refTailSegment(ref: string): string | undefined {
   const parts = ref.split("/").filter((part) => part !== "");
-  return parts[parts.length - 1];
+  return parts.at(-1);
 }
 
 // resolveCostSource maps an auth ref to a billing mode and a cost basis.

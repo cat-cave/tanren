@@ -54,7 +54,7 @@ export async function finalizeRunRecoverable(
             eventType: "run.failed",
             payload: { status: "halted", message },
           })
-          .catch(() => undefined),
+          .catch(() => {}),
       );
     }
     return;
@@ -85,7 +85,7 @@ export async function finalizeRunRecoverable(
           eventType: "run.failed",
           payload: { status: "halted", message },
         })
-        .catch(() => undefined);
+        .catch(() => {});
     }
   });
 }
@@ -125,7 +125,7 @@ export async function finalizeRunQuotaExceeded(
             eventType: "run.quota_exceeded",
             payload: windowKey === undefined ? { reason } : { reason, windowKey },
           })
-          .catch(() => undefined),
+          .catch(() => {}),
       );
     }
     return;
@@ -149,7 +149,7 @@ export async function finalizeRunQuotaExceeded(
           eventType: "run.quota_exceeded",
           payload: windowKey === undefined ? { reason } : { reason, windowKey },
         })
-        .catch(() => undefined);
+        .catch(() => {});
     }
   });
 }

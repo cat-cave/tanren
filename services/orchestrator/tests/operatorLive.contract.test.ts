@@ -41,10 +41,10 @@ function buildHarness(actor: ActorContext | undefined = alice) {
     createAuthMiddleware({
       store: {
         async findApiTokenByRaw() {
-          return undefined;
+          return;
         },
         async loadSession() {
-          return undefined;
+          return;
         },
         async resolveActorContext() {
           return actor as ActorContext;

@@ -63,7 +63,7 @@ export function createDiscoveryRoutes(options: DiscoveryRoutesOptions) {
     if (!actorCanAccessOrg(actor, orgId)) {
       return c.json({ error: "org_access_denied" }, 403);
     }
-    const parsed = ClassifyBody.safeParse(await c.req.json().catch(() => undefined));
+    const parsed = ClassifyBody.safeParse(await c.req.json().catch(() => {}));
     if (!parsed.success) {
       return c.json({ error: "invalid_insight", issues: parsed.error.issues }, 400);
     }
@@ -84,7 +84,7 @@ export function createDiscoveryRoutes(options: DiscoveryRoutesOptions) {
     if (!actorCanAccessOrg(actor, orgId)) {
       return c.json({ error: "org_access_denied" }, 403);
     }
-    const parsed = AcceptBody.safeParse(await c.req.json().catch(() => undefined));
+    const parsed = AcceptBody.safeParse(await c.req.json().catch(() => {}));
     if (!parsed.success) {
       return c.json({ error: "invalid_accept", issues: parsed.error.issues }, 400);
     }

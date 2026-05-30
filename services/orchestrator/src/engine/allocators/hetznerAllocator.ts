@@ -113,13 +113,13 @@ export class HetznerAllocator implements Allocator {
       server = await this.waitForRunning(created.id);
     } catch (error) {
       // Best-effort destroy so a stuck server doesn't leak.
-      await this.client.deleteServer(created.id).catch(() => undefined);
+      await this.client.deleteServer(created.id).catch(() => {});
       throw error;
     }
 
     const ip = server.publicIpv4;
     if (ip === undefined || ip === "") {
-      await this.client.deleteServer(server.id).catch(() => undefined);
+      await this.client.deleteServer(server.id).catch(() => {});
       throw new Error(`hetzner server ${server.id} became running without a public IPv4`);
     }
 
@@ -153,7 +153,7 @@ export class HetznerAllocator implements Allocator {
         containerId: String(server.id),
       });
     } catch (error) {
-      await this.client.deleteServer(server.id).catch(() => undefined);
+      await this.client.deleteServer(server.id).catch(() => {});
       this.servers.delete(runnerId);
       throw error;
     }

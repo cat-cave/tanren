@@ -89,7 +89,7 @@ export function createInternalRunStateWriteRoutes(deps: RunStateWriteRouteDeps):
     if (!authnPeer(c)) {
       return c.json({ error: "untrusted_peer" }, 401);
     }
-    const parsed = appendEventSchema.safeParse(await c.req.json().catch(() => undefined));
+    const parsed = appendEventSchema.safeParse(await c.req.json().catch(() => {}));
     if (!parsed.success) {
       return c.json({ error: "invalid_append_event", issues: parsed.error.issues }, 400);
     }
@@ -114,7 +114,7 @@ export function createInternalRunStateWriteRoutes(deps: RunStateWriteRouteDeps):
     if (!authnPeer(c)) {
       return c.json({ error: "untrusted_peer" }, 401);
     }
-    const parsed = recordCostSchema.safeParse(await c.req.json().catch(() => undefined));
+    const parsed = recordCostSchema.safeParse(await c.req.json().catch(() => {}));
     if (!parsed.success) {
       return c.json({ error: "invalid_record_cost", issues: parsed.error.issues }, 400);
     }
@@ -132,7 +132,7 @@ export function createInternalRunStateWriteRoutes(deps: RunStateWriteRouteDeps):
     if (!authnPeer(c)) {
       return c.json({ error: "untrusted_peer" }, 401);
     }
-    const parsed = finalizeRunSchema.safeParse(await c.req.json().catch(() => undefined));
+    const parsed = finalizeRunSchema.safeParse(await c.req.json().catch(() => {}));
     if (!parsed.success) {
       return c.json({ error: "invalid_finalize_run", issues: parsed.error.issues }, 400);
     }

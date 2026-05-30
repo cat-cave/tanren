@@ -434,7 +434,7 @@ describe("RunWorker lifecycle (slots, concurrency, drain)", () => {
       if (calls === 1) {
         throw new Error("connection reset");
       }
-      return undefined;
+      return;
     };
 
     const results: string[] = [];

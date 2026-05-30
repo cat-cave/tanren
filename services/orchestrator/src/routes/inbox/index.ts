@@ -145,7 +145,7 @@ export function createInboxRoutes(options: InboxRoutesOptions) {
   app.post("/:orgId/inbox/sources", async (c) => {
     const orgId = c.req.param("orgId");
     if (!guard(c, orgId)) return c.json({ error: "org_access_denied" }, 403);
-    const parsed = CreateSourceBody.safeParse(await c.req.json().catch(() => undefined));
+    const parsed = CreateSourceBody.safeParse(await c.req.json().catch(() => {}));
     if (!parsed.success) return c.json({ error: "invalid_source", issues: parsed.error.issues }, 400);
     const source = await createSource(options.pool, { orgId, ...parsed.data });
     return c.json({ source }, 201);
@@ -170,7 +170,7 @@ export function createInboxRoutes(options: InboxRoutesOptions) {
     const orgId = c.req.param("orgId");
     const actor = requireActor(c);
     if (!actorCanAccessOrg(actor, orgId)) return c.json({ error: "org_access_denied" }, 403);
-    const parsed = AcceptBody.safeParse(await c.req.json().catch(() => undefined));
+    const parsed = AcceptBody.safeParse(await c.req.json().catch(() => {}));
     if (!parsed.success) return c.json({ error: "invalid_accept", issues: parsed.error.issues }, 400);
     try {
       const result = await acceptCandidate(deps, {

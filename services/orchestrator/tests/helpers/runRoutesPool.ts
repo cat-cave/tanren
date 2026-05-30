@@ -330,7 +330,7 @@ export class RunRoutesPool {
       trimmed.includes("ORDER BY ts ASC")
     ) {
       const orgId = String(params[1]);
-      const limit = Number(params[params.length - 1]);
+      const limit = Number(params.at(-1));
       let cursorTs: Date | undefined;
       let cursorId: number | undefined;
       if (params.length === 5) {
@@ -364,7 +364,7 @@ export class RunRoutesPool {
     // Activity feed (project_id = $1 AND org_id = $2 AND run_id IS NOT NULL)
     if (/FROM events\s+WHERE project_id = \$1 AND org_id = \$2 AND run_id IS NOT NULL/.test(trimmed)) {
       const orgId = String(params[1]);
-      const limit = Number(params[params.length - 1]);
+      const limit = Number(params.at(-1));
       let cursorTs: Date | undefined;
       let cursorId: number | undefined;
       if (params.length === 5) {
@@ -399,7 +399,7 @@ export class RunRoutesPool {
       /FROM cost_records\s+WHERE run_id = \$1 AND org_id = \$2 AND \(recorded_at, id\)/.test(trimmed)
     ) {
       const orgId = String(params[1]);
-      const limit = Number(params[params.length - 1]);
+      const limit = Number(params.at(-1));
       let cursorTs: Date | undefined;
       let cursorId: number | undefined;
       if (params.length === 5) {

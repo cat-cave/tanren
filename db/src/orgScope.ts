@@ -104,7 +104,7 @@ export async function runWithOrgScope<T>(
     await client.query("COMMIT");
     return result;
   } catch (error) {
-    await client.query("ROLLBACK").catch(() => undefined);
+    await client.query("ROLLBACK").catch(() => {});
     throw error;
   } finally {
     client.release();
@@ -170,7 +170,7 @@ export async function runWithSystemScope<T>(pool: Pool, work: (client: PoolClien
     await client.query("COMMIT");
     return result;
   } catch (error) {
-    await client.query("ROLLBACK").catch(() => undefined);
+    await client.query("ROLLBACK").catch(() => {});
     throw error;
   } finally {
     client.release();

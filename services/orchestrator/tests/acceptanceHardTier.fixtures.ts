@@ -169,20 +169,20 @@ export function hardTierWorkflowRunner(github: GitHubHttpClient, trace: HardTier
       githubHttp: github,
       maxCiPolls: 1,
       ciPollDelayMs: 0,
-      sleep: async () => undefined,
-      runBootstrap: async () => undefined,
+      sleep: async () => {},
+      runBootstrap: async () => {},
       runGate,
       buildAdapters: () => ({ planner, writer, checker, auditor }),
       buildUsageProbe: () => fakeProbe(),
       reviewProbe: {
-        markReady: async () => undefined,
+        markReady: async () => {},
         fetchVerdict: async () => ({
           verdict: "approved" as const,
           latest: { state: "approved" as const, reviewer: "reviewer-bot" },
         }),
       },
       mergeProbe: {
-        applyQueueLabel: async () => undefined,
+        applyQueueLabel: async () => {},
         merge: async () => {
           mergeCall += 1;
           trace.mergeAttempts = mergeCall;

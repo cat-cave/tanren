@@ -58,7 +58,7 @@ const baseOpts = (client: HetznerClient, runners: RunnerStore) => ({
   location: "nbg1",
   runners,
   client,
-  sleep: async () => undefined,
+  sleep: async () => {},
 });
 
 function req(runId: string) {
