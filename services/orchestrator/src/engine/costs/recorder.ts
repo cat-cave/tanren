@@ -20,7 +20,7 @@ export interface CostRecordContext {
   taskId: string;
   specId: string;
   projectId: string;
-  cli: "codex" | "claude" | "opencode" | "aider" | "fake";
+  cli: "codex" | "claude" | "opencode" | "aider" | "pi" | "reasonix" | "fake";
   model: string;
   authRef: string;
   // Wall-clock runtime of the underlying call — recorded in cost_source_raw
