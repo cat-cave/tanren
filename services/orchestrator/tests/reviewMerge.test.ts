@@ -79,7 +79,7 @@ describe("review polling stage", () => {
     const pool = new ReviewMergePool("direct_merge");
     const events = new FakeEventStore();
     const probe: ReviewProbe = {
-      markReady: async () => undefined,
+      markReady: async () => {},
       fetchVerdict: async () => ({
         verdict: "changes_requested",
         latest: { state: "changes_requested", reviewer: "carol", body: "fix the edge case" },

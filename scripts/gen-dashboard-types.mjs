@@ -134,7 +134,7 @@ function typeName(schema, file) {
   const id = schema["x-tanren-schema-id"];
   if (typeof id === "string") {
     const parts = id.split(".");
-    return parts[parts.length - 1];
+    return parts.at(-1);
   }
   return file.replace(/\.json$/, "");
 }
@@ -187,7 +187,7 @@ function readCurrent() {
   try {
     return readFileSync(outFile, "utf8");
   } catch {
-    return undefined;
+    return;
   }
 }
 

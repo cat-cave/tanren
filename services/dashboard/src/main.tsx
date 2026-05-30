@@ -161,7 +161,7 @@ export async function createApp(options: CreateAppOptions = {}) {
   // cookie to the orchestrator Forge tool surface (keeps the orchestrator URL
   // server-side and reuses the session cookie).
   app.post("/forge/tools", async (c) => {
-    const parsed = ForgeToolProxyBody.safeParse(await c.req.json().catch(() => undefined));
+    const parsed = ForgeToolProxyBody.safeParse(await c.req.json().catch(() => {}));
     if (!parsed.success) {
       return c.json({ error: "invalid_tool_call", issues: parsed.error.issues }, 400);
     }
@@ -180,7 +180,7 @@ export async function createApp(options: CreateAppOptions = {}) {
   // question here, we forward the cookie to the orchestrator's LLM-backed
   // conversation endpoint and return the forge turn's ForgeAnswer render.
   app.post("/forge/ask", async (c) => {
-    const parsed = ForgeAskProxyBody.safeParse(await c.req.json().catch(() => undefined));
+    const parsed = ForgeAskProxyBody.safeParse(await c.req.json().catch(() => {}));
     if (!parsed.success) {
       return c.json({ error: "invalid_ask", issues: parsed.error.issues }, 400);
     }
@@ -206,7 +206,7 @@ export async function createApp(options: CreateAppOptions = {}) {
   // an already-decided proposal surfaces as `already_decided`, never a re-run.
   for (const decision of ["approve", "reject"] as const) {
     app.post(`/forge/proposals/${decision}`, async (c) => {
-      const parsed = ForgeProposalDecisionBody.safeParse(await c.req.json().catch(() => undefined));
+      const parsed = ForgeProposalDecisionBody.safeParse(await c.req.json().catch(() => {}));
       if (!parsed.success) {
         return c.json({ error: "invalid_decision", issues: parsed.error.issues }, 400);
       }

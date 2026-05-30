@@ -216,7 +216,7 @@ export async function runPlannerLoopWorkflow(input: RunPlannerLoopInput): Promis
         workspacePath,
         timeoutMs: input.timeoutMs,
       }));
-    const runBootstrap = input.runBootstrap ?? ((stepInput) => bootstrapWorkspace(stepInput).then(() => undefined));
+    const runBootstrap = input.runBootstrap ?? ((stepInput) => bootstrapWorkspace(stepInput).then(() => {}));
     await runBootstrap({
       ssh: input.ssh,
       target: allocation.target,

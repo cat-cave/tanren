@@ -279,7 +279,7 @@ describe("JobReaper loop lifecycle", () => {
       }
       return original(opts);
     };
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     let passes = 0;
     const gate = gatedSleep();
@@ -309,7 +309,7 @@ describe("JobReaper loop lifecycle", () => {
     // Ensure the 1ms lease is unambiguously expired before the reaper's first
     // pass, so the dead-letter (and thus the default log) is deterministic.
     await new Promise<void>((resolve) => setTimeout(resolve, 10));
-    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
 
     // No onPass override → exercise the DEFAULT onPass. Pass 1 dead-letters the
     // job and the default logs the count; then the loop parks in the gated sleep.

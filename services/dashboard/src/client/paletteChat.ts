@@ -97,11 +97,11 @@ export interface ChatHandlers {
 // Appends a user turn (the operator's question) to the chat container.
 export function appendUserTurn(chat: HTMLElement, text: string): void {
   const row = el("div", "fc-msg user");
-  row.appendChild(el("div", "who", "TW"));
+  row.append(el("div", "who", "TW"));
   const col = el("div", "fc-col");
-  col.appendChild(el("div", "fc-bubble", text));
-  row.appendChild(col);
-  chat.appendChild(row);
+  col.append(el("div", "fc-bubble", text));
+  row.append(col);
+  chat.append(row);
   chat.scrollTop = chat.scrollHeight;
 }
 
@@ -109,32 +109,32 @@ export function appendUserTurn(chat: HTMLElement, text: string): void {
 // action card (auto-navigate / inert), and follow-up chips.
 export function appendForgeTurn(chat: HTMLElement, answer: ForgeAnswer, handlers: ChatHandlers): void {
   const row = el("div", "fc-msg forge");
-  row.appendChild(el("div", "who", "鍛"));
+  row.append(el("div", "who", "鍛"));
   const col = el("div", "fc-col");
 
   const bubble = el("div", "fc-bubble");
   bubble.innerHTML = answer.body;
-  col.appendChild(bubble);
+  col.append(bubble);
 
   const card = firstActionCard(answer);
   if (card !== undefined) {
-    col.appendChild(buildCard(card, handlers));
+    col.append(buildCard(card, handlers));
   }
 
   if (answer.prompts.length > 0) {
     const chips = el("div", "fc-chips");
     for (const prompt of answer.prompts) {
       const chip = el("span", "chip");
-      chip.appendChild(el("span", "pre", "↑"));
-      chip.appendChild(document.createTextNode(` ${prompt}`));
+      chip.append(el("span", "pre", "↑"));
+      chip.append(document.createTextNode(` ${prompt}`));
       chip.addEventListener("click", () => handlers.onChip(prompt));
-      chips.appendChild(chip);
+      chips.append(chip);
     }
-    col.appendChild(chips);
+    col.append(chips);
   }
 
-  row.appendChild(col);
-  chat.appendChild(row);
+  row.append(col);
+  chat.append(row);
   chat.scrollTop = chat.scrollHeight;
 }
 
@@ -154,22 +154,22 @@ export function appendProposals(chat: HTMLElement, orgId: string, proposals: For
   const pending = proposals.filter((p) => p.status === "pending");
   if (pending.length === 0) return;
   const row = el("div", "fc-msg forge");
-  row.appendChild(el("div", "who", "鍛"));
+  row.append(el("div", "who", "鍛"));
   const col = el("div", "fc-col");
   for (const proposal of pending) {
-    col.appendChild(buildProposalCard(orgId, proposal));
+    col.append(buildProposalCard(orgId, proposal));
   }
-  row.appendChild(col);
-  chat.appendChild(row);
+  row.append(col);
+  chat.append(row);
   chat.scrollTop = chat.scrollHeight;
 }
 
 function buildProposalCard(orgId: string, proposal: ForgeProposal): HTMLElement {
   const node = el("div", "fc-card proposal");
   node.dataset["proposalId"] = proposal.id;
-  node.appendChild(el("div", "lbl", "▸ proposed action"));
-  node.appendChild(el("div", "t", proposal.toolName));
-  node.appendChild(el("div", "d", proposal.rationale));
+  node.append(el("div", "lbl", "▸ proposed action"));
+  node.append(el("div", "t", proposal.toolName));
+  node.append(el("div", "d", proposal.rationale));
   const status = el("div", "fc-proposal-status", STATUS_LABEL[proposal.status] ?? proposal.status);
   const actions = el("div", "fc-proposal-actions");
   const approve = el("button", "btn primary", "approve");
@@ -186,10 +186,10 @@ function buildProposalCard(orgId: string, proposal: ForgeProposal): HTMLElement 
   };
   approve.addEventListener("click", () => decide("approve"));
   reject.addEventListener("click", () => decide("reject"));
-  actions.appendChild(approve);
-  actions.appendChild(reject);
-  node.appendChild(actions);
-  node.appendChild(status);
+  actions.append(approve);
+  actions.append(reject);
+  node.append(actions);
+  node.append(status);
   return node;
 }
 
@@ -233,9 +233,9 @@ function firstActionCard(answer: ForgeAnswer): { title: string; action: ForgeAct
 function buildCard(card: { title: string; action: ForgeAction }, handlers: ChatHandlers): HTMLElement {
   const route = routeForAction(card.action);
   const node = el("div", route !== undefined ? "fc-card" : "fc-card inert");
-  node.appendChild(el("div", "lbl", route !== undefined ? "▸ auto-navigate" : "▸ action (coming soon)"));
-  node.appendChild(el("div", "t", card.title));
-  node.appendChild(el("div", "go", route !== undefined ? "↗" : "·"));
+  node.append(el("div", "lbl", route !== undefined ? "▸ auto-navigate" : "▸ action (coming soon)"));
+  node.append(el("div", "t", card.title));
+  node.append(el("div", "go", route !== undefined ? "↗" : "·"));
   if (route !== undefined) {
     node.addEventListener("click", () => handlers.onNavigate(route));
   }
@@ -245,11 +245,11 @@ function buildCard(card: { title: string; action: ForgeAction }, handlers: ChatH
 
 export function appendPending(chat: HTMLElement): HTMLElement {
   const row = el("div", "fc-msg forge pending");
-  row.appendChild(el("div", "who", "鍛"));
+  row.append(el("div", "who", "鍛"));
   const col = el("div", "fc-col");
-  col.appendChild(el("div", "fc-bubble", "…"));
-  row.appendChild(col);
-  chat.appendChild(row);
+  col.append(el("div", "fc-bubble", "…"));
+  row.append(col);
+  chat.append(row);
   chat.scrollTop = chat.scrollHeight;
   return row;
 }

@@ -49,7 +49,7 @@ export async function reapExpiredJobs(deps: ReapJobsDeps): Promise<ReapJobsResul
       continue;
     }
     deadLettered += 1;
-    await emitDeadLetterEvent(deps.pool, eventStore, job).catch(() => undefined);
+    await emitDeadLetterEvent(deps.pool, eventStore, job).catch(() => {});
   }
   return { requeued, deadLettered, jobs: reaped };
 }

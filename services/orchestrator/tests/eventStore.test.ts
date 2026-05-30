@@ -60,7 +60,7 @@ describe("PgEventStore — RLS R2 org-scope routing (inert)", () => {
         if (isEventInsert(sql)) insertsOnClient.push(sql);
         return { rows: [], rowCount: 0 };
       },
-      release: () => undefined,
+      release: () => {},
     };
     const pool = {
       query: async (sql: string) => {

@@ -206,7 +206,7 @@ export function createDeterministicInterviewAnswerer(): InterviewAnswerer {
   return {
     async ask(context: InterviewAnswererContext): Promise<InterviewRoundOutput> {
       const index = Math.max(0, context.round - 1);
-      const last = SCRIPT[SCRIPT.length - 1];
+      const last = SCRIPT.at(-1);
       const entry = index < SCRIPT.length ? SCRIPT[index] : last;
       return entry ?? { say: "(interview complete)", captureDelta: {}, suggestions: [], complete: true };
     },

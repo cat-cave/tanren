@@ -74,7 +74,7 @@ export function createForgeRoutes(options: ForgeRoutesOptions) {
     if (!actorCanAccessOrg(actor, orgId)) {
       return c.json({ error: "org_access_denied" }, 403);
     }
-    const parsed = ThreadCreateBody.safeParse(await c.req.json().catch(() => undefined));
+    const parsed = ThreadCreateBody.safeParse(await c.req.json().catch(() => {}));
     if (!parsed.success) {
       return c.json({ error: "invalid_thread", issues: parsed.error.issues }, 400);
     }
@@ -111,7 +111,7 @@ export function createForgeRoutes(options: ForgeRoutesOptions) {
       // RLS R2 cohort-4 (forge): thread + turns reads in one org-scoped txn.
       const bundle = await runWithOrgScope(options.pool, orgId, async (client) => {
         const thread = await ForgeThreadStore.get(client, c.req.param("threadId"), actor);
-        if (thread === undefined) return undefined;
+        if (thread === undefined) return;
         const turns = await ForgeTurnStore.list(client, { threadId: thread.id, limit: 50 }, actor);
         return { thread, turns };
       });
@@ -163,7 +163,7 @@ export function createForgeRoutes(options: ForgeRoutesOptions) {
     if (!actorCanAccessOrg(actor, orgId)) {
       return c.json({ error: "org_access_denied" }, 403);
     }
-    const parsed = GenerateProjectViewBody.safeParse(await c.req.json().catch(() => undefined));
+    const parsed = GenerateProjectViewBody.safeParse(await c.req.json().catch(() => {}));
     if (!parsed.success) {
       return c.json({ error: "invalid_generate", issues: parsed.error.issues }, 400);
     }
@@ -196,7 +196,7 @@ export function createForgeRoutes(options: ForgeRoutesOptions) {
     if (!actorCanAccessOrg(actor, orgId)) {
       return c.json({ error: "org_access_denied" }, 403);
     }
-    const parsed = GenerateRunDetailBody.safeParse(await c.req.json().catch(() => undefined));
+    const parsed = GenerateRunDetailBody.safeParse(await c.req.json().catch(() => {}));
     if (!parsed.success) {
       return c.json({ error: "invalid_generate", issues: parsed.error.issues }, 400);
     }
@@ -227,7 +227,7 @@ export function createForgeRoutes(options: ForgeRoutesOptions) {
     if (!actorCanAccessOrg(actor, orgId)) {
       return c.json({ error: "org_access_denied" }, 403);
     }
-    const parsed = ToolInvocationBody.safeParse(await c.req.json().catch(() => undefined));
+    const parsed = ToolInvocationBody.safeParse(await c.req.json().catch(() => {}));
     if (!parsed.success) {
       return c.json({ error: "invalid_tool_call", issues: parsed.error.issues }, 400);
     }

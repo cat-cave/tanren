@@ -107,9 +107,7 @@ export class GithubAppTokenMinter {
     if (response.status !== 201) {
       throw new Error(`GitHub App installation token mint failed: HTTP ${response.status}`);
     }
-    const body = (await response.json().catch(() => undefined)) as
-      | { token?: unknown; expires_at?: unknown }
-      | undefined;
+    const body = (await response.json().catch(() => {})) as { token?: unknown; expires_at?: unknown } | undefined;
     if (body === undefined || typeof body.token !== "string" || typeof body.expires_at !== "string") {
       throw new Error("GitHub App installation token response malformed");
     }

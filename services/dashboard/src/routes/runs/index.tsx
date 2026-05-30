@@ -48,7 +48,7 @@ function mergeIntegrationFromConfig(mode: unknown): MergeIntegration {
 }
 
 async function resolveMergeIntegration(client: OrchestratorClient, loc: RunLocation): Promise<MergeIntegration> {
-  const project = await client.getProject(loc.orgId, loc.projectId).catch(() => undefined);
+  const project = await client.getProject(loc.orgId, loc.projectId).catch(() => {});
   return mergeIntegrationFromConfig(project?.config.mergeIntegration);
 }
 
@@ -108,7 +108,7 @@ export function mountRunDetailScreens(app: Hono, deps: ShellDeps): void {
         Accept: "text/event-stream",
         ...(c.req.header("cookie") !== undefined ? { cookie: c.req.header("cookie") as string } : {}),
       },
-    }).catch(() => undefined);
+    }).catch(() => {});
     if (upstream === undefined || upstream.body === null) {
       return c.text("stream unavailable", 502);
     }
@@ -143,7 +143,7 @@ export function mountRunDetailScreens(app: Hono, deps: ShellDeps): void {
     const base = `/runs/${encodeURIComponent(runId)}`;
     // P3-0008 + P3-0025: read the project once and derive both the merge
     // integration and the per-PR preview-deploy URL from its config.
-    const project = await client.getProject(loc.orgId, loc.projectId).catch(() => undefined);
+    const project = await client.getProject(loc.orgId, loc.projectId).catch(() => {});
     const previewUrl = derivePreviewUrl(project?.config.previewUrlPattern, detail.run);
     return renderShell(
       c,

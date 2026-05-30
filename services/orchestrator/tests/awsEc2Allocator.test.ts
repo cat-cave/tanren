@@ -79,7 +79,7 @@ const baseOpts = (client: AwsEc2Client, runners: RunnerStore) => ({
   hostKeyFingerprint: "SHA256:aws",
   runners,
   client,
-  sleep: async () => undefined,
+  sleep: async () => {},
 });
 
 function req(runId: string) {

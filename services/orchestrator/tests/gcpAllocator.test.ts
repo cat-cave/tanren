@@ -73,7 +73,7 @@ const baseOpts = (client: GcpComputeClient, runners: RunnerStore) => ({
   hostKeyFingerprint: "SHA256:gcp",
   runners,
   client,
-  sleep: async () => undefined,
+  sleep: async () => {},
 });
 
 function req(runId: string) {

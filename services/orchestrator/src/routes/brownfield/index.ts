@@ -58,7 +58,7 @@ export function createBrownfieldRoutes(options: BrownfieldRoutesOptions) {
     if (!actorCanAccessOrg(actor, orgId)) {
       return c.json({ error: "org_access_denied" }, 403);
     }
-    const parsed = BrownfieldLinkSchema.safeParse(await c.req.json().catch(() => undefined));
+    const parsed = BrownfieldLinkSchema.safeParse(await c.req.json().catch(() => {}));
     if (!parsed.success) {
       return c.json({ error: "invalid_brownfield_link", issues: parsed.error.issues }, 400);
     }

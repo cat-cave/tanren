@@ -145,13 +145,13 @@ export class AwsEc2Allocator implements Allocator {
       instance = await this.waitForRunning(created.instanceId);
     } catch (error) {
       // Best-effort terminate so a stuck instance doesn't leak.
-      await this.client.terminateInstance(created.instanceId).catch(() => undefined);
+      await this.client.terminateInstance(created.instanceId).catch(() => {});
       throw error;
     }
 
     const ip = instance.publicIp;
     if (ip === undefined || ip === "") {
-      await this.client.terminateInstance(instance.instanceId).catch(() => undefined);
+      await this.client.terminateInstance(instance.instanceId).catch(() => {});
       throw new AwsEc2AllocatorError(`aws ec2 instance ${instance.instanceId} became running without a public IP`);
     }
 
@@ -189,7 +189,7 @@ export class AwsEc2Allocator implements Allocator {
         containerId: instanceId,
       });
     } catch (error) {
-      await this.client.terminateInstance(instanceId).catch(() => undefined);
+      await this.client.terminateInstance(instanceId).catch(() => {});
       this.instances.delete(runnerId);
       throw error;
     }

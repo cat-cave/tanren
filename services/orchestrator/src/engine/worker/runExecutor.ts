@@ -231,7 +231,7 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
             eventStore: remoteWriter,
             recorder: new CostRecorder(deps.pool, remoteWriter, (cost) => remoteWriter.recordCost(cost)),
             finalizeRun: (f: { runId: string; status: string; outcome: string; fromStatuses: string[] }) =>
-              remoteWriter.finalizeRun({ ...f, orgId }).then(() => undefined),
+              remoteWriter.finalizeRun({ ...f, orgId }).then(() => {}),
           };
     const result = await withJobOrg(orgId, () =>
       runWorkflow({
@@ -342,7 +342,7 @@ function startHeartbeat(deps: RunExecutorDeps, jobId: string, leaseMs: number): 
       // job; a truly crashed worker stops beating and the reaper recovers it.
       control.inFlight = deps.jobQueue
         .heartbeat(jobId, leaseMs)
-        .catch(() => undefined)
+        .catch(() => {})
         .then(schedule);
     }, intervalMs);
     if (typeof control.timer.unref === "function") {

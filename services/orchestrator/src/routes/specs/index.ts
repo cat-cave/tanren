@@ -73,7 +73,7 @@ export function createSpecRoutes(options: SpecRoutesOptions) {
     if (!actorCanAccessOrg(actor, orgId)) {
       return c.json({ error: "org_access_denied" }, 403);
     }
-    const parsed = SpecCreateSchema.safeParse(await c.req.json().catch(() => undefined));
+    const parsed = SpecCreateSchema.safeParse(await c.req.json().catch(() => {}));
     if (!parsed.success) {
       return c.json({ error: "invalid_spec", issues: parsed.error.issues }, 400);
     }
@@ -124,7 +124,7 @@ export function createSpecRoutes(options: SpecRoutesOptions) {
     if (!actorCanAccessOrg(actor, orgId)) {
       return c.json({ error: "org_access_denied" }, 403);
     }
-    const parsed = SpecPatchSchema.safeParse(await c.req.json().catch(() => undefined));
+    const parsed = SpecPatchSchema.safeParse(await c.req.json().catch(() => {}));
     if (!parsed.success) {
       return c.json({ error: "invalid_spec_patch", issues: parsed.error.issues }, 400);
     }

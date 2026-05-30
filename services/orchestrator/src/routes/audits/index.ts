@@ -69,7 +69,7 @@ export function createAuditRoutes(options: AuditRoutesOptions) {
   app.post("/:orgId/audits", async (c) => {
     const orgId = c.req.param("orgId");
     if (!guard(c, orgId)) return c.json({ error: "org_access_denied" }, 403);
-    const parsed = CreateJobBody.safeParse(await c.req.json().catch(() => undefined));
+    const parsed = CreateJobBody.safeParse(await c.req.json().catch(() => {}));
     if (!parsed.success) return c.json({ error: "invalid_audit_job", issues: parsed.error.issues }, 400);
     const job = await createAuditJob(options.pool, { orgId, ...parsed.data });
     return c.json({ job }, 201);

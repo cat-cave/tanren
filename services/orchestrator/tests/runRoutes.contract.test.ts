@@ -37,10 +37,10 @@ function buildHarness(actor: ActorContext | undefined = alice) {
     createAuthMiddleware({
       store: {
         async findApiTokenByRaw() {
-          return undefined;
+          return;
         },
         async loadSession() {
-          return undefined;
+          return;
         },
         async resolveActorContext() {
           return actor as ActorContext;
@@ -168,10 +168,10 @@ describe("P2A-0014 run-detail API — run list", () => {
       createAuthMiddleware({
         store: {
           async findApiTokenByRaw() {
-            return undefined;
+            return;
           },
           async loadSession() {
-            return undefined;
+            return;
           },
           async resolveActorContext() {
             return alice;
@@ -307,7 +307,7 @@ describe("P2A-0014 run-detail API — activity feed", () => {
     expect(body.items.length).toBe(4);
     // Newest first.
     expect(body.items[0].eventType).toBe("auditor.completed");
-    expect(body.items[body.items.length - 1].eventType).toBe("planner.completed");
+    expect(body.items.at(-1).eventType).toBe("planner.completed");
   });
 });
 

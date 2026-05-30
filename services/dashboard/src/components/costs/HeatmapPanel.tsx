@@ -100,7 +100,7 @@ export function HeatmapPanel(props: HeatmapPanelProps) {
           </div>
           <div class="heatmap-axis">
             <span>{shortDay(matrix.dayKeys[0])}</span>
-            <span>{shortDay(matrix.dayKeys[matrix.dayKeys.length - 1])}</span>
+            <span>{shortDay(matrix.dayKeys.at(-1))}</span>
           </div>
         </div>
         <div class="heatmap-avg">

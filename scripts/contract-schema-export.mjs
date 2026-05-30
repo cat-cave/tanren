@@ -76,7 +76,7 @@ function readCurrent(filePath) {
   try {
     return readFileSync(filePath, "utf8");
   } catch {
-    return undefined;
+    return;
   }
 }
 
