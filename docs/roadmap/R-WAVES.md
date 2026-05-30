@@ -180,18 +180,61 @@ smoke-rls-r2-cohort2`) + `tests/rlsR2WriteRouting.test.ts` routing/fallback
       observable behavior changed; the `ForgeMemoryClient`/fake pools are returned
       verbatim by the resolver since no ambient scope is open in those tests).
 
-**Every REQUEST-reachable tenant-table query now carries org context by
-construction.** The one surface still on the raw pool is the **worker per-job
-WORKFLOW execution** — see the audit table below — which is its own cohort
-(R3a-worker) because it CANNOT be wrapped in a single `runWithOrgScope`: the
-workflow interleaves DB writes with minutes of external I/O (allocate, clone,
-bootstrap, CI polling), so one transaction would hold a connection idle across
-that whole span. It needs per-step short scopes (orgId is already resolved in
-the worker as `resolvedOrgId`), and the workflow stores
-(`PgEventStore`/`CostRecorder`/task helpers) already self-route via
-`resolveWritableClient` — they only need an ambient scope established around each
-DB-touching step. **R3b (policy enable + role flip) is gated on BOTH this PR
-(request paths) AND the R3a-worker cohort** — see the fork note at the end.
+### R3a-worker — per-step org scoping in the worker run-execution path (inert, FINAL conversion)
+
+- [x] **R3a-worker — the per-job WORKFLOW execution now carries org context on
+      EVERY tenant-table op.** The worker run path (`engine/worker/runExecutor.ts` + `runExecutionContext.ts` + `jobReaper.ts` and the `engine/workflow/**`
+      stages it drives) wrote most tenant rows (tasks/events/cost_records/runs/
+      specs/runners) with NO ambient org scope. It CANNOT be one `runWithOrgScope`
+      — the loop interleaves DB writes with minutes of external I/O (allocate,
+      clone, bootstrap, CI polling), so a single transaction would hold a
+      connection idle across that whole span. Mechanism: - **Per-job ambient org-id** (`runWithJobOrgId` / `getJobOrgId`,
+      `db/src/orgScope.ts`): a lightweight `AsyncLocalStorage<string>` holding
+      ONLY the run's `orgId` — NOT a connection — set once around the workflow
+      execution (`withJobOrg(orgId, () => runWorkflow(...))`). Safe to keep open
+      across the run's I/O because it holds no connection. - **Per-op short transactions** (`orgScopingPool` / `withJobOrgScope`,
+      `engine/data/orgScopedDb.ts`): the worker hands the workflow an
+      `orgScopingPool(deps.pool)` as `input.pool`. Its `.query()` resolves, per
+      op: (1) ambient connection scope open → that scoped client; (2) else a
+      per-job org-id present → a SHORT `runWithOrgScope(pool, jobOrgId, op)`;
+      (3) else → the bare pool (inert). So every workflow tenant-table op —
+      direct `input.pool.query` AND the self-routing stores
+      (`PgEventStore`/`CostRecorder`/`subtaskTasks`) constructed with that pool —
+      opens its own short org-scoped txn; a connection is held only for the
+      duration of ONE DB op, never across external I/O. `CostRecorder`'s
+      reconcile (a tight SELECT+UPDATEs batch with no I/O between) runs through
+      `withJobOrgScope` so it shares ONE short txn. - **Bootstrap reads stay system-scoped**: `loadRunExecutionContext` (the
+      run⋈spec⋈project read that RESOLVES which org owns the job) and the
+      reaper's `loadRunLineage` (a cross-org sweep) run under
+      `runWithSystemScope` — they legitimately precede / span org context. Under
+      R3b these two need the bypass-role / policy-carve-out decision (the locked
+      item in the RLS plan); they are the only worker tenant reads that do. - The worker's failure-path finalizers + quota gate + post-run accrual
+      already open explicit `runWithOrgScope` from the resolved org (R2
+      cohort-3) — unchanged. The reaper's dead-letter event append now runs
+      under the reaped run's per-job org-id so its `events` INSERT is scoped.
+
+      Proof: `tests/rlsR3aWorkerScoping.integration.test.ts` (real PG, run via
+      `just smoke-rls-r3a-worker`). It installs a TEMPORARY throwaway GUC-keyed
+      policy on tasks/events/cost_records under the restricted `tanren_app` role
+      (a stand-in for R3b), then drives the worker's ACTUAL store helpers handed
+      `orgScopingPool` under `runWithJobOrgId`: every write LANDS (each op set the
+      GUC → was org-scoped per-op), while the same helpers on the bare pool with
+      NO job-org-id are REJECTED (empty GUC → the no-job-org fallback IS the
+      unscoped pool path). The hardened run-loop (#107) and subtask-stage (#149)
+      tests + all worker/workflow unit tests (`runWorker`, `jobReaper`,
+      `subtaskStages`, `rlsR2WriteRouting`, `costsRecorder`, `plannerRun*`,
+      `ciPolling`, `reviewMerge`) stayed behavior-identical — only the `jobReaper`
+      test FAKE adapted (its lineage SELECT gained `org_id` + the path became
+      transactional, so the fake gained `connect`/BEGIN-COMMIT handling); no
+      observable assertion changed.
+
+**Every REQUEST-reachable AND worker-reachable tenant-table query now carries
+org context by construction.** No tenant-table op remains unscoped in any
+request OR worker path — the only worker tenant reads not under an org GUC are
+the two legitimately cross-org BOOTSTRAP reads (`loadRunExecutionContext`,
+reaper `loadRunLineage`), which run under `runWithSystemScope` and need the R3b
+bypass-role/carve-out decision. **R3b (enable policies + flip the runtime role +
+two-org isolation test) is now fully unblocked.**
 
 ### Full R3a audit — every tenant-table query site → its scope
 
@@ -203,33 +246,35 @@ list also covers FK-scoped tables with no own `org_id` —
 `organizations, users, behaviors, milestones, spec_*, project_members,
 workflow_insights, notification_routes` — scoped via their parent's `org_id`.)
 
-| Site                                                                                                                          | Tenant table(s)                                                       | Scope / disposition                                                                                                                                                             |
-| ----------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `routes/runs/{index,list,sse}.ts`                                                                                             | runs, tasks, events, cost_records, specs                              | **request** — wrapped in `runWithOrgScope` (R2 cohort-1/2/4)                                                                                                                    |
-| `routes/specs/index.ts`                                                                                                       | specs                                                                 | **request** — `runWithOrgScope` (R2 cohort-3)                                                                                                                                   |
-| `engine/eventStore.ts`                                                                                                        | events                                                                | **request/per-job** — `resolveWritableClient` (R2 cohort-1)                                                                                                                     |
-| `engine/workflow/subtaskTasks.ts`                                                                                             | tasks                                                                 | **per-job** — `resolveWritableClient` (R2 cohort-2)                                                                                                                             |
-| `engine/costs/recorder.ts`                                                                                                    | cost_records                                                          | **per-job** — `resolveWritableClient` (R2 cohort-2)                                                                                                                             |
-| `engine/repositories/{runs,tasks,specs,actors}.ts`                                                                            | runs, tasks, specs                                                    | DAL-shaped (`QueryClient` param); scoped by caller (R2)                                                                                                                         |
-| `engine/allocators/runnerStore.ts`                                                                                            | runners                                                               | **per-job** — `resolveWritableClient` (R2 cohort-3)                                                                                                                             |
-| `engine/quota/dbPolicy.ts`                                                                                                    | org_quotas                                                            | **per-job** — `resolveWritableClient` + worker scope (R2 cohort-3)                                                                                                              |
-| `engine/worker/runExecutor.ts` (finalizers + `establishJobOrgContext`)                                                        | runs, events                                                          | **per-job** — `runWithOrgScope` (R2 cohort-3)                                                                                                                                   |
-| `engine/forge/{threads,turns,proposals}.ts`                                                                                   | forge_threads/turns/proposals                                         | **request** — `resolveWritableClient` (R2 cohort-4)                                                                                                                             |
-| `routes/forge/narration.ts`                                                                                                   | runs, tasks, cost_records, projects                                   | **request** — scoped `client` (R2 cohort-4); insights-cache now on `client` (**R3a**)                                                                                           |
-| `engine/forge/tools/{read,authz,repo}.ts`                                                                                     | specs, runs, tasks, events, cost_records, personas, projects          | **request** — `resolveQueryClient`; `/forge/tools` + ask scope (**R3a**)                                                                                                        |
-| `engine/forge/tools/write.ts`                                                                                                 | runs, tasks (+ behavior/milestone links)                              | **request** — `resolveQueryClient`/`resolveWritableClient`; create paths self-scope (**R3a**)                                                                                   |
-| `engine/recovery/index.ts`                                                                                                    | runs, events, specs, forge_threads                                    | **request** — `runWithOrgScope` per step (**R3a**)                                                                                                                              |
-| `engine/insights/{computer,retryHotspot,modelMismatch,paceAnomaly,stuck,reviewStall,dora/compute}.ts`                         | runs, events, specs, tasks                                            | DAL-shaped (`QueryClient`); scoped when reached via the narration / forge-read path (**R3a**); the `routes/insights` + `routes/dora` entry is still pool — **R3+ route cohort** |
-| `engine/workflow/{helloRun,helloRunSteps,plannerRun,ciPolling,ciWebhook,githubDraftPr,reviewMerge/*}.ts`                      | runs, tasks, specs, projects                                          | **per-job WORKFLOW** — still pool — **R3a-worker cohort** (fork; cannot be one txn)                                                                                             |
-| `engine/worker/{runExecutionContext,jobReaper}.ts`                                                                            | runs, projects, specs                                                 | **per-job** read/sweep — still pool — **R3a-worker cohort**                                                                                                                     |
-| `engine/workflow/projectSpec.ts` `createProject` + `ensureProject*` helpers                                                   | projects, specs                                                       | `createProject` is cross-org admin **system** seeding; the `ensure*` read helpers run inside the self-scoped create txn — R3+ tidy                                              |
-| `engine/workflow/phase1Fixture.ts`                                                                                            | runs, specs, tasks                                                    | **system** — Phase-1 seed fixture (cross-org dev seeding), `runWithSystemScope` when wired                                                                                      |
-| `engine/quota/meteringExport.ts`                                                                                              | cost_records                                                          | DAL-shaped (`QueryClient`); no live caller yet — R3+ when the hosting-export call site lands                                                                                    |
-| `engine/forge/inbox/store.ts`, `engine/forge/audits/store.ts`, `engine/entities/personas.ts`, `engine/notifications/store.ts` | inbox_sources, candidates, audit_jobs, personas, notification_targets | DAL-shaped (`client` param); their **routes** (`inbox`/`audits`/`personas`/`notifications`) are still pool — **R3+ route cohort**                                               |
-| `routes/{projects,brownfield,orgs}.ts`                                                                                        | projects, org_members                                                 | **request** reads — still pool — **R3+ route cohort** (listed in R3+)                                                                                                           |
-| `auth/identityStore.ts`                                                                                                       | org_members, projects                                                 | **identity/login** — resolves a user's org BEFORE any org context exists; **system / pre-org** by nature — R3+ auth surface                                                     |
-| `main.ts` `GET /runs/:runId` (legacy internal)                                                                                | runs, tasks, events, cost_records                                     | legacy un-org'd debug route (no `:orgId`); **R3+** (needs an org lookup to scope)                                                                                               |
-| `engine/contracts/jobQueue.ts`, `engine/repositories/jobs.ts`                                                                 | job_queue                                                             | **system** — `job_queue` stays OUTSIDE RLS (locked decision); claim runs under `runWithSystemScope`                                                                             |
+| Site                                                                                                                          | Tenant table(s)                                                       | Scope / disposition                                                                                                                                                                  |
+| ----------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `routes/runs/{index,list,sse}.ts`                                                                                             | runs, tasks, events, cost_records, specs                              | **request** — wrapped in `runWithOrgScope` (R2 cohort-1/2/4)                                                                                                                         |
+| `routes/specs/index.ts`                                                                                                       | specs                                                                 | **request** — `runWithOrgScope` (R2 cohort-3)                                                                                                                                        |
+| `engine/eventStore.ts`                                                                                                        | events                                                                | **request/per-job** — `resolveWritableClient` (R2 cohort-1)                                                                                                                          |
+| `engine/workflow/subtaskTasks.ts`                                                                                             | tasks                                                                 | **per-job** — `resolveWritableClient` (R2 cohort-2)                                                                                                                                  |
+| `engine/costs/recorder.ts`                                                                                                    | cost_records                                                          | **per-job** — `resolveWritableClient` (R2 cohort-2)                                                                                                                                  |
+| `engine/repositories/{runs,tasks,specs,actors}.ts`                                                                            | runs, tasks, specs                                                    | DAL-shaped (`QueryClient` param); scoped by caller (R2)                                                                                                                              |
+| `engine/allocators/runnerStore.ts`                                                                                            | runners                                                               | **per-job** — `resolveWritableClient` (R2 cohort-3)                                                                                                                                  |
+| `engine/quota/dbPolicy.ts`                                                                                                    | org_quotas                                                            | **per-job** — `resolveWritableClient` + worker scope (R2 cohort-3)                                                                                                                   |
+| `engine/worker/runExecutor.ts` (finalizers + `establishJobOrgContext`)                                                        | runs, events                                                          | **per-job** — `runWithOrgScope` (R2 cohort-3)                                                                                                                                        |
+| `engine/forge/{threads,turns,proposals}.ts`                                                                                   | forge_threads/turns/proposals                                         | **request** — `resolveWritableClient` (R2 cohort-4)                                                                                                                                  |
+| `routes/forge/narration.ts`                                                                                                   | runs, tasks, cost_records, projects                                   | **request** — scoped `client` (R2 cohort-4); insights-cache now on `client` (**R3a**)                                                                                                |
+| `engine/forge/tools/{read,authz,repo}.ts`                                                                                     | specs, runs, tasks, events, cost_records, personas, projects          | **request** — `resolveQueryClient`; `/forge/tools` + ask scope (**R3a**)                                                                                                             |
+| `engine/forge/tools/write.ts`                                                                                                 | runs, tasks (+ behavior/milestone links)                              | **request** — `resolveQueryClient`/`resolveWritableClient`; create paths self-scope (**R3a**)                                                                                        |
+| `engine/recovery/index.ts`                                                                                                    | runs, events, specs, forge_threads                                    | **request** — `runWithOrgScope` per step (**R3a**)                                                                                                                                   |
+| `engine/insights/{computer,retryHotspot,modelMismatch,paceAnomaly,stuck,reviewStall,dora/compute}.ts`                         | runs, events, specs, tasks                                            | DAL-shaped (`QueryClient`); scoped when reached via the narration / forge-read path (**R3a**); the `routes/insights` + `routes/dora` entry is still pool — **R3+ route cohort**      |
+| `engine/workflow/{plannerRun,subtaskLoop,subtaskStages,ciPolling,githubDraftPr,reviewMerge/*}.ts` (planner run path)          | runs, tasks, specs, projects, events, cost_records                    | **per-job WORKFLOW** — `orgScopingPool` + `runWithJobOrgId` (per-op short transactions) (**R3a-worker**)                                                                             |
+| `engine/worker/runExecutor.ts` (finalizers + `establishJobOrgContext` + job-org-id wrap)                                      | runs, events                                                          | **per-job** — `runWithOrgScope` (finalizers, cohort-3) + `runWithJobOrgId` around the workflow (**R3a-worker**); `loadRunExecutionContext` bootstrap read under `runWithSystemScope` |
+| `engine/worker/jobReaper.ts`                                                                                                  | runs (lineage), events                                                | **per-job sweep** — `loadRunLineage` under `runWithSystemScope` (cross-org); dead-letter event append under the run's `runWithJobOrgId` (**R3a-worker**)                             |
+| `engine/workflow/{helloRun,helloRunSteps,phase1Fixture}.ts` (non-worker fixture paths)                                        | runs, tasks, specs                                                    | **system / dev fixture** — not on the per-job worker run path; `runWithSystemScope` when wired — R3+ tidy                                                                            |
+| `engine/workflow/projectSpec.ts` `createProject` + `ensureProject*` helpers                                                   | projects, specs                                                       | `createProject` is cross-org admin **system** seeding; the `ensure*` read helpers run inside the self-scoped create txn — R3+ tidy                                                   |
+| `engine/workflow/phase1Fixture.ts`                                                                                            | runs, specs, tasks                                                    | **system** — Phase-1 seed fixture (cross-org dev seeding), `runWithSystemScope` when wired                                                                                           |
+| `engine/quota/meteringExport.ts`                                                                                              | cost_records                                                          | DAL-shaped (`QueryClient`); no live caller yet — R3+ when the hosting-export call site lands                                                                                         |
+| `engine/forge/inbox/store.ts`, `engine/forge/audits/store.ts`, `engine/entities/personas.ts`, `engine/notifications/store.ts` | inbox_sources, candidates, audit_jobs, personas, notification_targets | DAL-shaped (`client` param); their **routes** (`inbox`/`audits`/`personas`/`notifications`) are still pool — **R3+ route cohort**                                                    |
+| `routes/{projects,brownfield,orgs}.ts`                                                                                        | projects, org_members                                                 | **request** reads — still pool — **R3+ route cohort** (listed in R3+)                                                                                                                |
+| `auth/identityStore.ts`                                                                                                       | org_members, projects                                                 | **identity/login** — resolves a user's org BEFORE any org context exists; **system / pre-org** by nature — R3+ auth surface                                                          |
+| `main.ts` `GET /runs/:runId` (legacy internal)                                                                                | runs, tasks, events, cost_records                                     | legacy un-org'd debug route (no `:orgId`); **R3+** (needs an org lookup to scope)                                                                                                    |
+| `engine/contracts/jobQueue.ts`, `engine/repositories/jobs.ts`                                                                 | job_queue                                                             | **system** — `job_queue` stays OUTSIDE RLS (locked decision); claim runs under `runWithSystemScope`                                                                                  |
 
 The only remaining R2 strand is **R3b** below (enable RLS policies + flip the
 runtime role to `tanren_app` + the two-org isolation test).
@@ -244,18 +289,23 @@ The app-layer `WHERE org_id = $n` filters stay (belt-and-suspenders) regardless.
 
 ### R3b — policy enablement + role flip (after the DAL conversion)
 
-**Fork / precondition.** R3b enables policies on the runtime role (`tanren_app`,
-non-bypass-RLS). Once a policy bites, a tenant query that runs on the raw pool
-(empty `app.current_org_id` GUC) returns ZERO rows / is denied. So R3b is safe
-**only after BOTH** (1) this PR — every request-reachable tenant query carries
-context — **and** (2) the **R3a-worker cohort**: the per-job WORKFLOW execution
-(`engine/workflow/**` + `engine/worker/{runExecutionContext,jobReaper}.ts`) still
-runs on the raw pool, and the worker writes most tenant rows (runs/tasks/specs/
-events status transitions). Enabling policies before that cohort would break the
-worker. The worker already resolves `resolvedOrgId` per job; the conversion is to
-establish a short org scope around each DB-touching workflow step (NOT one
-transaction spanning the run's external I/O). Until R3a-worker lands, R3b must
-stay off.
+**Fork / precondition — NOW UNBLOCKED.** R3b enables policies on the runtime
+role (`tanren_app`, non-bypass-RLS). Once a policy bites, a tenant query that
+runs on the raw pool (empty `app.current_org_id` GUC) returns ZERO rows / is
+denied. So R3b is safe **only after BOTH** (1) the request paths (R3a, done) —
+every request-reachable tenant query carries context — **and** (2) the
+**R3a-worker cohort** (done): the per-job WORKFLOW execution now carries org
+context on every tenant-table op via `runWithJobOrgId` + `orgScopingPool` (per-op
+short transactions). Both are now complete: **NO tenant-table op remains unscoped in any
+request OR worker path.** The only worker tenant reads not under an org GUC are
+the two legitimately cross-org BOOTSTRAP reads (`loadRunExecutionContext` resolves
+which org owns a claimed job; reaper `loadRunLineage` sweeps all orgs), which run
+under `runWithSystemScope`. **R3b ACTION ITEM:** these two reads (like the
+`job_queue` claim) need the bypass-role / policy-carve-out decision before the
+role flip — under enforced policies a system-scope read with an empty GUC also
+returns zero rows, so the org-resolution bootstrap must either run as a bypass
+role or the policy must admit it. That is the one open R3b decision; everything
+else is unblocked.
 
 - [ ] `ALTER TABLE … ENABLE ROW LEVEL SECURITY` + `CREATE POLICY` on the tenant
       tables, keyed off `current_setting('app.current_org_id', true)`:
