@@ -82,11 +82,11 @@ function main() {
     return;
   }
 
-  if (current.trimEnd() !== expected.trimEnd()) {
+  if (current.trimEnd() === expected.trimEnd()) {
+    process.stdout.write("event type mirror up to date\n");
+  } else {
     writeFileSync(eventTypesFile, expected);
     process.stdout.write(`updated ${eventTypesFile}\n`);
-  } else {
-    process.stdout.write("event type mirror up to date\n");
   }
 }
 

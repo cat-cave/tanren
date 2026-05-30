@@ -39,39 +39,39 @@ export function buildSecretStore(env: SecretStoreEnv = process.env): SecretStore
       return new VaultSecretStore({
         addr: env["VAULT_ADDR"] ?? "http://localhost:8200",
         token: env["VAULT_TOKEN"] ?? "dev-root-token",
-        ...(optional(env, "VAULT_KV_MOUNT") !== undefined ? { mount: required(env, "VAULT_KV_MOUNT") } : {}),
+        ...(optional(env, "VAULT_KV_MOUNT") === undefined ? {} : { mount: required(env, "VAULT_KV_MOUNT") }),
       });
     case "gcp_sm":
       return new GcpSecretManagerStore({
         project: required(env, "TANREN_GCP_SM_PROJECT"),
         accessToken: required(env, "TANREN_GCP_SM_ACCESS_TOKEN"),
-        ...(optional(env, "TANREN_GCP_SM_API_BASE") !== undefined
-          ? { apiBase: required(env, "TANREN_GCP_SM_API_BASE") }
-          : {}),
+        ...(optional(env, "TANREN_GCP_SM_API_BASE") === undefined
+          ? {}
+          : { apiBase: required(env, "TANREN_GCP_SM_API_BASE") }),
       });
     case "aws_sm":
       return new AwsSecretsManagerStore({
         accessKeyId: required(env, "TANREN_AWS_SM_ACCESS_KEY_ID"),
         secretAccessKey: required(env, "TANREN_AWS_SM_SECRET_ACCESS_KEY"),
         region: required(env, "TANREN_AWS_SM_REGION"),
-        ...(optional(env, "TANREN_AWS_SM_SESSION_TOKEN") !== undefined
-          ? { sessionToken: required(env, "TANREN_AWS_SM_SESSION_TOKEN") }
-          : {}),
-        ...(optional(env, "TANREN_AWS_SM_NAME_PREFIX") !== undefined
-          ? { namePrefix: required(env, "TANREN_AWS_SM_NAME_PREFIX") }
-          : {}),
-        ...(optional(env, "TANREN_AWS_SM_ENDPOINT") !== undefined
-          ? { endpoint: required(env, "TANREN_AWS_SM_ENDPOINT") }
-          : {}),
+        ...(optional(env, "TANREN_AWS_SM_SESSION_TOKEN") === undefined
+          ? {}
+          : { sessionToken: required(env, "TANREN_AWS_SM_SESSION_TOKEN") }),
+        ...(optional(env, "TANREN_AWS_SM_NAME_PREFIX") === undefined
+          ? {}
+          : { namePrefix: required(env, "TANREN_AWS_SM_NAME_PREFIX") }),
+        ...(optional(env, "TANREN_AWS_SM_ENDPOINT") === undefined
+          ? {}
+          : { endpoint: required(env, "TANREN_AWS_SM_ENDPOINT") }),
       });
     case "onepassword":
       return new OnePasswordStore({
         connectUrl: required(env, "TANREN_OP_CONNECT_URL"),
         token: required(env, "TANREN_OP_CONNECT_TOKEN"),
         vaultId: required(env, "TANREN_OP_VAULT_ID"),
-        ...(optional(env, "TANREN_OP_FIELD_LABEL") !== undefined
-          ? { fieldLabel: required(env, "TANREN_OP_FIELD_LABEL") }
-          : {}),
+        ...(optional(env, "TANREN_OP_FIELD_LABEL") === undefined
+          ? {}
+          : { fieldLabel: required(env, "TANREN_OP_FIELD_LABEL") }),
       });
     default:
       throw new Error(`unknown TANREN_SECRET_STORE='${kind}' (expected vault|gcp_sm|aws_sm|onepassword|memory)`);

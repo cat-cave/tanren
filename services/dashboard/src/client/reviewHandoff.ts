@@ -55,10 +55,10 @@ export function initReviewHandoff(): void {
       const left = behaviorCount - verified.size;
       if (left > 0) {
         nudge.textContent = `${left} behavior(s) left to eyeball. Tick each one as you verify it.`;
-      } else if (!allResolved) {
-        nudge.textContent = "All behaviors verified ✓. Settle the deferrals to unlock sign-off.";
-      } else {
+      } else if (allResolved) {
         nudge.textContent = "All behaviors verified ✓. Deferrals settled. Ready to sign off.";
+      } else {
+        nudge.textContent = "All behaviors verified ✓. Settle the deferrals to unlock sign-off.";
       }
     }
     // Sign-off stays disabled in v0 regardless (merge integration is Phase 3),

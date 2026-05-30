@@ -113,7 +113,7 @@ export class FetchConfigGateGitHub implements ConfigGateGitHub {
         message,
         branch: headBranch,
         content: Buffer.from(yaml, "utf8").toString("base64"),
-        ...(sha !== undefined ? { sha } : {}),
+        ...(sha === undefined ? {} : { sha }),
       },
     });
     if (put.status !== 200 && put.status !== 201) {

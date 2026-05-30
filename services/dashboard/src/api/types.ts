@@ -257,7 +257,8 @@ export interface ProjectConfig {
   escapeHatches: Partial<EscapeHatches>;
   governancePosture?: string;
   mergeIntegration?: string;
-  previewUrlPattern?: string; // P3-0025: preview-deploy URL pattern ({branch}/{pr})
+  // P3-0025: preview-deploy URL pattern ({branch}/{pr})
+  previewUrlPattern?: string;
   /** Project-bound credential refs (P3-0002); org default fills any omitted kind. */
   credentials?: { codexCredentialRef?: string; githubCredentialRef?: string };
   [key: string]: unknown;

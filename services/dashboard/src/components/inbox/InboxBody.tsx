@@ -130,7 +130,7 @@ function CandidateActions(props: { orgId: string; candidate: Candidate }) {
     );
   }
   // needs_call → the three external-issue actions; accept opens discovery.
-  const discoveryHref = candidate.projectId !== null ? `/projects/${candidate.projectId}/discovery` : "/discovery";
+  const discoveryHref = candidate.projectId === null ? "/discovery" : `/projects/${candidate.projectId}/discovery`;
   return (
     <div class="cand-actions" data-actions="needs-call">
       <a class="btn primary notched" style="font-size:11px" href={discoveryHref} data-action="accept">

@@ -146,7 +146,8 @@ const linearIssues = [
     title: "checkout crashes on empty cart",
     description: "repro: clear cart then submit",
     url: "https://linear.app/cat-cave/issue/CAT-12",
-    priority: 1, // Urgent
+    // Urgent
+    priority: 1,
     labels: { nodes: [{ name: "Bug" }] },
   },
   {
@@ -155,7 +156,8 @@ const linearIssues = [
     title: "CSV export for reports",
     description: "cfo wants csv",
     url: "https://linear.app/cat-cave/issue/CAT-13",
-    priority: 2, // High
+    // High
+    priority: 2,
     labels: { nodes: [{ name: "feature" }] },
   },
   {
@@ -164,7 +166,8 @@ const linearIssues = [
     title: "tidy up settings copy",
     description: "",
     url: "https://linear.app/cat-cave/issue/CAT-14",
-    priority: 0, // No priority
+    // No priority
+    priority: 0,
     labels: { nodes: [] },
   },
   // A degenerate node with neither id nor title — must be dropped.
@@ -193,9 +196,12 @@ describe("linear connector (mocked)", () => {
   it("maps linear priority/labels to severity (urgent/bug→fail, high→warn, else→info)", async () => {
     const { client } = fakeLinear(linearIssues);
     const items = await createLinearConnector({ secrets, linearHttp: client }).fetch(linearSource);
-    expect(items[0]?.severity).toBe("fail"); // priority 1 (urgent) + bug label
-    expect(items[1]?.severity).toBe("warn"); // priority 2 (high)
-    expect(items[2]?.severity).toBe("info"); // no priority, no label
+    // priority 1 (urgent) + bug label
+    expect(items[0]?.severity).toBe("fail");
+    // priority 2 (high)
+    expect(items[1]?.severity).toBe("warn");
+    // no priority, no label
+    expect(items[2]?.severity).toBe("info");
   });
 
   it("filters issues by a configured label", async () => {

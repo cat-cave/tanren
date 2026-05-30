@@ -48,7 +48,7 @@ export class InboxClient extends OrchestratorHttpClient {
     );
     return {
       ok: r.ok,
-      ...(r.body?.candidate !== undefined ? { candidate: r.body.candidate } : {}),
+      ...(r.body?.candidate === undefined ? {} : { candidate: r.body.candidate }),
     };
   }
 
@@ -64,7 +64,7 @@ export class InboxClient extends OrchestratorHttpClient {
     );
     return {
       ok: r.ok,
-      ...(r.body?.candidate !== undefined ? { candidate: r.body.candidate } : {}),
+      ...(r.body?.candidate === undefined ? {} : { candidate: r.body.candidate }),
     };
   }
 }

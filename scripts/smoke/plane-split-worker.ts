@@ -466,7 +466,9 @@ async function main(): Promise<void> {
             `(last job_queue status=${String(job.status)}). Is the \`worker\` service up?`,
         );
       }
-      await new Promise((resolve) => setTimeout(resolve, POLL_MS));
+      await new Promise((resolve) => {
+        setTimeout(resolve, POLL_MS);
+      });
     }
   } finally {
     await owner.end();

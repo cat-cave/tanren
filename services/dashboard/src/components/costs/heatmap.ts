@@ -119,7 +119,8 @@ export function buildHeatmap(records: readonly CostRecord[], opts: { now?: Date 
     if (r.billingMode !== "subscription") continue;
     const key = dayKey(r.recordedAt);
     const col = columnOf.get(key);
-    if (col === undefined) continue; // outside the 30-day window
+    // outside the 30-day window
+    if (col === undefined) continue;
     const cellRow = tokenGrid[windowIndex(new Date(r.recordedAt).getUTCHours())];
     if (cellRow === undefined) continue;
     const tokens = Number.isFinite(r.totalTokens) && r.totalTokens > 0 ? r.totalTokens : 0;

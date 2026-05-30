@@ -62,7 +62,9 @@ describe("run worker (dequeue→execute seam)", () => {
       heartbeatIntervalMs: 5,
       leaseMs: 1_000,
       runWorkflow: async (input) => {
-        await new Promise<void>((resolve) => setTimeout(resolve, 30));
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 30);
+        });
         return deps(pool, secrets, jobQueue, passingGitHub()).runWorkflow(input);
       },
     });
@@ -133,7 +135,9 @@ describe("run worker (dequeue→execute seam)", () => {
     });
     worker.start();
     // Let the slot claim+execute the single job, then drain.
-    await new Promise<void>((resolve) => setTimeout(resolve, 30));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 30);
+    });
     await worker.stop();
 
     expect(worker.isDraining).toBe(true);

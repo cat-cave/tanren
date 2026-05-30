@@ -12,7 +12,8 @@ export class NotificationMemoryClient {
   readonly targets: Map<string, Record<string, unknown>> = new Map();
   readonly routes: Map<string, Record<string, unknown>> = new Map();
   readonly dispatches: Array<Record<string, unknown>> = [];
-  now: Date = new Date("2026-01-05T12:00:00Z"); // Monday
+  // Monday
+  now: Date = new Date("2026-01-05T12:00:00Z");
 
   async query(sql: string, params: ReadonlyArray<unknown> = []): Promise<StubResult> {
     this.queries.push({ sql, params });

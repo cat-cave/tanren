@@ -69,7 +69,8 @@ export async function computeReviewStall(pool: Pick<pg.Pool, "query">, context: 
         : row.event_type === "review.changes_requested"
           ? "changes_requested"
           : null;
-    if (phase === null) continue; // latest signal is approved/merged — moving.
+    // latest signal is approved/merged — moving.
+    if (phase === null) continue;
 
     const stalledHours = (now.getTime() - row.ts.getTime()) / (60 * 60 * 1000);
     if (stalledHours < t.reviewStallHours) continue;

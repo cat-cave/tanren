@@ -136,7 +136,7 @@ function applyStatus(root: HTMLElement, status: string, outcome: string | null):
     const dot = chip.querySelector(".d");
     chip.textContent = "";
     if (dot !== null) chip.append(dot);
-    chip.append(`run · ${status}${outcome !== null ? ` · ${outcome}` : ""}`);
+    chip.append(`run · ${status}${outcome === null ? "" : ` · ${outcome}`}`);
   }
   setText(root, "header-status", status);
   if (["completed", "failed", "halted", "cancelled", "done"].includes(status)) {

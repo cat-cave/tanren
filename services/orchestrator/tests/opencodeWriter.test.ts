@@ -28,12 +28,18 @@ describe("opencode writer adapter", () => {
       usage: { input_tokens: 20, output_tokens: 8, cache_read: 4 },
     });
     const ssh = new ScriptedSsh([
-      ok(""), // materialize auth
-      ok(`${baselineSha}\n`), // baseline sha
-      ok(`${usageLine}\n`), // opencode run
-      ok(""), // commit
-      ok("diff --git a/Y.md b/Y.md\n+done\n"), // diff
-      ok(""), // log
+      // materialize auth
+      ok(""),
+      // baseline sha
+      ok(`${baselineSha}\n`),
+      // opencode run
+      ok(`${usageLine}\n`),
+      // commit
+      ok(""),
+      // diff
+      ok("diff --git a/Y.md b/Y.md\n+done\n"),
+      // log
+      ok(""),
     ]);
     const secrets = new InMemorySecretStore();
     await secrets.put({ ref: "credential/opencode/dev", value: authJson });

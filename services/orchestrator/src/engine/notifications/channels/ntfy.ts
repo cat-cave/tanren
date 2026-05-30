@@ -57,7 +57,7 @@ export class NtfyChannel implements NotificationChannel {
       message: payload.body,
       severity: payload.severity,
       event: payload.eventName,
-      ...(payload.url !== undefined ? { url: payload.url } : {}),
+      ...(payload.url === undefined ? {} : { url: payload.url }),
     });
     const response = await this.fetchImpl(url, { method: "POST", headers, body });
     if (!response.ok) {

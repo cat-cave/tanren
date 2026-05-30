@@ -138,7 +138,12 @@ export class KubernetesAllocator implements Allocator {
       throw new KubernetesAllocatorError("KubernetesAllocator requires a pinned hostKeyFingerprint");
     }
     this.client = options.client ?? fetchKubernetesClient(options);
-    this.sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+    this.sleep =
+      options.sleep ??
+      ((ms) =>
+        new Promise((resolve) => {
+          setTimeout(resolve, ms);
+        }));
   }
 
   async allocate(request: AllocationRequest): Promise<RunnerAllocation> {

@@ -23,7 +23,8 @@ describe("P2B-0004 run-detail screen", () => {
     mockOrchestrator();
     const app = await build();
     const html = await (await app.request(`/runs/${RUN_ID}`)).text();
-    expect(html).toContain("the agent"); // "the agent's thinking" (apostrophe HTML-escaped)
+    // "the agent's thinking" (apostrophe HTML-escaped)
+    expect(html).toContain("the agent");
     expect(html).toContain("thinking");
     expect(html).toContain(RUN_ID);
     expect(html).toContain("persist theme to localStorage");
@@ -36,8 +37,10 @@ describe("P2B-0004 run-detail screen", () => {
     const html = await (await app.request(`/runs/${RUN_ID}`)).text();
     expect(html).toContain("per-token");
     expect(html).toContain("window");
-    expect(html).toContain("self-hosted"); // label exists even if 0
-    expect(html).toContain("$0.0240"); // real per-token dollars
+    // label exists even if 0
+    expect(html).toContain("self-hosted");
+    // real per-token dollars
+    expect(html).toContain("$0.0240");
     expect(html).toContain("by model");
     expect(html).toContain("gpt-5");
     expect(html).toContain("claude-sonnet");
@@ -50,21 +53,30 @@ describe("P2B-0004 run-detail screen", () => {
     const html = await (await app.request(`/runs/${RUN_ID}`)).text();
     expect(html).toContain("trajectory");
     expect(html).toContain("write subtask 1");
-    expect(html).toContain("write subtask 2"); // rejected attempt
-    expect(html).toContain("write subtask 3"); // retry
-    expect(html).toContain("auditor_disagreement"); // the rejection is visible
-    expect(html).toContain('class="dot failed"'); // rejected dot styled as failed
+    // rejected attempt
+    expect(html).toContain("write subtask 2");
+    // retry
+    expect(html).toContain("write subtask 3");
+    // the rejection is visible
+    expect(html).toContain("auditor_disagreement");
+    // rejected dot styled as failed
+    expect(html).toContain('class="dot failed"');
   });
 
   it("renders the writer reasoning pane from typed events (intent, tools, redaction)", async () => {
     mockOrchestrator();
     const app = await build();
     const html = await (await app.request(`/runs/${RUN_ID}`)).text();
-    expect(html).toContain("reasoning"); // "writer's reasoning" (apostrophe HTML-escaped)
-    expect(html).toContain("wire the profile-sync hook behind a feature flag"); // intent
-    expect(html).toContain("edit_file"); // tool call
-    expect(html).toContain("hidden by redaction"); // redactedPaths surfaced
-    expect(html).toContain("ask forge"); // ask-forge CTA
+    // "writer's reasoning" (apostrophe HTML-escaped)
+    expect(html).toContain("reasoning");
+    // intent
+    expect(html).toContain("wire the profile-sync hook behind a feature flag");
+    // tool call
+    expect(html).toContain("edit_file");
+    // redactedPaths surfaced
+    expect(html).toContain("hidden by redaction");
+    // ask-forge CTA
+    expect(html).toContain("ask forge");
   });
 
   it("surfaces the pace_anomaly workflow insight", async () => {
@@ -181,7 +193,8 @@ describe("P3-0025 live preview-deploy pane", () => {
   });
 
   it("renders the graceful empty state when no preview URL is configured", async () => {
-    mockOrchestratorWithProject(); // project has no previewUrlPattern
+    // project has no previewUrlPattern
+    mockOrchestratorWithProject();
     const app = await build();
     const html = await (await app.request(`/runs/${RUN_ID}/review`)).text();
     expect(html).toContain("no preview url configured");

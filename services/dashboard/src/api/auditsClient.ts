@@ -29,7 +29,7 @@ export class AuditsClient extends OrchestratorHttpClient {
   /** Create an audit job (the composer / a recommended-gap one-click schedule). */
   async create(orgId: string, input: CreateAuditJobInput): Promise<{ ok: boolean; job?: AuditJob }> {
     const r = await this.sendJson<{ job?: AuditJob }>("POST", this.base(orgId), input);
-    return { ok: r.ok, ...(r.body?.job !== undefined ? { job: r.body.job } : {}) };
+    return { ok: r.ok, ...(r.body?.job === undefined ? {} : { job: r.body.job }) };
   }
 
   /** Enable / disable — the per-job toggle. */
@@ -39,7 +39,7 @@ export class AuditsClient extends OrchestratorHttpClient {
       "POST",
       `${this.base(orgId)}/${encodeURIComponent(jobId)}/${verb}`,
     );
-    return { ok: r.ok, ...(r.body?.job !== undefined ? { job: r.body.job } : {}) };
+    return { ok: r.ok, ...(r.body?.job === undefined ? {} : { job: r.body.job }) };
   }
 
   /** Run the read-only pass now → findings auto-route into the candidate inbox. */

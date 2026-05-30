@@ -137,7 +137,8 @@ describe("linear connector — normalization", () => {
     const items = await createLinearConnector({ secrets, linearHttp: client }).fetch(linearSource);
     expect(items[0]!.externalId).toBe("linear-lin_1");
     expect(items[0]!.body).toBe("repro steps\n\nhttps://linear.app/x");
-    expect(items[0]!.severity).toBe("info"); // priority 3 (medium), no label
+    // priority 3 (medium), no label
+    expect(items[0]!.severity).toBe("info");
   });
 
   it("includes only the present body lines (description-only, url-only, and a missing-priority issue defaults to info)", async () => {
@@ -153,9 +154,12 @@ describe("linear connector — normalization", () => {
       },
     });
     const items = await createLinearConnector({ secrets, linearHttp: client }).fetch(linearSource);
-    expect(items[0]!.body).toBe("just a description"); // url line omitted
-    expect(items[1]!.body).toBe("https://linear.app/b"); // description line omitted
-    expect(items[2]!.body).toBe(""); // both omitted
+    // url line omitted
+    expect(items[0]!.body).toBe("just a description");
+    // description line omitted
+    expect(items[1]!.body).toBe("https://linear.app/b");
+    // both omitted
+    expect(items[2]!.body).toBe("");
     // priority absent → defaults to 0 (no priority) → info severity.
     expect(items[2]!.severity).toBe("info");
   });
@@ -176,12 +180,18 @@ describe("linear connector — normalization", () => {
       },
     });
     const items = await createLinearConnector({ secrets, linearHttp: client }).fetch(linearSource);
-    expect(items[0]!.severity).toBe("fail"); // bug label wins over low priority
-    expect(items[1]!.severity).toBe("fail"); // urgent
-    expect(items[2]!.severity).toBe("warn"); // high
-    expect(items[3]!.severity).toBe("warn"); // perf label
-    expect(items[4]!.severity).toBe("warn"); // "warn" substring label arm
-    expect(items[5]!.severity).toBe("fail"); // regression label
+    // bug label wins over low priority
+    expect(items[0]!.severity).toBe("fail");
+    // urgent
+    expect(items[1]!.severity).toBe("fail");
+    // high
+    expect(items[2]!.severity).toBe("warn");
+    // perf label
+    expect(items[3]!.severity).toBe("warn");
+    // "warn" substring label arm
+    expect(items[4]!.severity).toBe("warn");
+    // regression label
+    expect(items[5]!.severity).toBe("fail");
   });
 
   it("keeps only label-matching issues when a label filter is configured (case-insensitive)", async () => {
@@ -327,7 +337,8 @@ describe("jira connector — normalization", () => {
         { key: "C", fields: { summary: "c", priority: { name: "Blocker" } } },
         { key: "D", fields: { summary: "d", priority: { name: "Medium" } } },
         { key: "E", fields: { summary: "e", priority: { name: "Low" } } },
-        { key: "F", fields: { summary: "f" } }, // no priority → info
+        // no priority → info
+        { key: "F", fields: { summary: "f" } },
       ],
     });
     const items = await createJiraConnector({ secrets, jiraHttp: client }).fetch(jiraSource);
@@ -338,7 +349,8 @@ describe("jira connector — normalization", () => {
     const { client } = recordJira({
       issues: [
         { fields: { summary: "no key" } },
-        { key: "CAT-9", fields: {} }, // no summary
+        // no summary
+        { key: "CAT-9", fields: {} },
         { key: "CAT-10", fields: { summary: "kept" } },
       ],
     });

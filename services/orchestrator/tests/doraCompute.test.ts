@@ -60,12 +60,14 @@ describe("deriveDoraMetrics — lead time", () => {
           specId: "s1",
           specCreatedAt: at("2026-05-20T02:00:00Z"),
           mergedAt: at("2026-05-20T01:00:00Z"),
-        }, // negative
+          // negative
+        },
         {
           specId: "s2",
           specCreatedAt: at("2026-05-21T00:00:00Z"),
           mergedAt: at("2026-05-21T02:00:00Z"),
-        }, // 2h
+          // 2h
+        },
       ],
     };
     const m = deriveDoraMetrics(inputs, OPTIONS);

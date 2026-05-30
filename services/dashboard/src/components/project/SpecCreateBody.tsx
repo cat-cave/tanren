@@ -221,9 +221,9 @@ export function SpecListBody(props: {
               props.specs.map((spec) => {
                 const runId = props.runBySpec[spec.specId];
                 const href =
-                  runId !== undefined
-                    ? `/projects/${props.project.projectId}/runs/${runId}`
-                    : `/projects/${props.project.projectId}/specs/new`;
+                  runId === undefined
+                    ? `/projects/${props.project.projectId}/specs/new`
+                    : `/projects/${props.project.projectId}/runs/${runId}`;
                 const showError = props.error !== undefined && props.errorSpecId === spec.specId;
                 return (
                   <>
@@ -237,7 +237,7 @@ export function SpecListBody(props: {
                             {spec.acceptanceCriteria.length} criteria · {spec.dependsOn.length} deps
                           </div>
                         </div>
-                        <span class="d">{runId !== undefined ? "run ↗" : "no runs"}</span>
+                        <span class="d">{runId === undefined ? "no runs" : "run ↗"}</span>
                         <span class="arrow" style="color:var(--ember-08)">
                           ↗
                         </span>

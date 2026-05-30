@@ -15,6 +15,7 @@ import {
 } from "../src/engine/worker/runExecutor.js";
 import type { AdmissionDecision, AdmissionRequest, QuotaPolicy, RunUsage } from "../src/engine/quota/index.js";
 import {
+  delay,
   deps,
   fakeWorkflowRunner,
   passingGitHub,
@@ -24,8 +25,7 @@ import {
 } from "./helpers/workerExec.js";
 import { WorkerPool } from "./helpers/workerPool.js";
 
-// A recording quota policy: returns a scripted admission decision and captures
-// the accrued usage, so the gate + post-run accrual are asserted on values.
+// A recording quota policy: scripts an admission decision + captures accrued usage.
 const DEFAULT_ADMISSION_DECISION: AdmissionDecision = { admit: true };
 
 class RecordingQuotaPolicy implements QuotaPolicy {
@@ -274,7 +274,7 @@ describe("run worker — failure classification + heartbeat (runExecutor)", () =
       heartbeatIntervalMs: 3,
       leaseMs: 777,
       runWorkflow: async (input) => {
-        await new Promise<void>((resolve) => setTimeout(resolve, 25));
+        await delay(25);
         return fakeWorkflowRunner(passingGitHub())(input);
       },
     });
@@ -445,7 +445,7 @@ describe("RunWorker lifecycle (slots, concurrency, drain)", () => {
       onResult: (r) => results.push(r.kind === "failed" ? `failed:${r.failure.kind}` : r.kind),
     });
     worker.start();
-    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    await delay(20);
     await worker.stop();
 
     // The infra throw became a worker_infra_error result and the slot kept polling.
@@ -469,7 +469,7 @@ describe("RunWorker lifecycle (slots, concurrency, drain)", () => {
       },
     });
     worker.start();
-    await new Promise<void>((resolve) => setTimeout(resolve, 30));
+    await delay(30);
     await worker.stop();
 
     expect(results).toContain("completed");
@@ -489,8 +489,8 @@ describe("RunWorker lifecycle (slots, concurrency, drain)", () => {
       },
     });
     worker.start();
-    worker.start(); // no-op
-    await new Promise<void>((resolve) => setTimeout(resolve, 30));
+    worker.start();
+    await delay(30);
     await worker.stop();
 
     // Only one slot existed, so the single queued job is completed exactly once.

@@ -171,7 +171,7 @@ export function mockOrchestrator(): void {
   vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input.toString();
     const method = init?.method ?? "GET";
-    const body = init?.body !== undefined ? JSON.parse(String(init.body)) : undefined;
+    const body = init?.body === undefined ? undefined : JSON.parse(String(init.body));
 
     if (url.endsWith("/auth/me")) {
       return new Response(JSON.stringify({ userId: "u1", csrfToken: "c", expiresAt: "2030-01-01" }), { status: 200 });

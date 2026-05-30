@@ -278,7 +278,7 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
       `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/specs/${encodeURIComponent(specId)}/runs`,
       {
         trigger: input.trigger ?? "dashboard",
-        ...(input.branch !== undefined ? { branch: input.branch } : {}),
+        ...(input.branch === undefined ? {} : { branch: input.branch }),
       },
     );
   }

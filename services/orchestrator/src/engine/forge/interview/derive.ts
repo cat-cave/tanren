@@ -84,9 +84,9 @@ function interfaceForBehavior(
 
 // Build the BDD acceptance criteria for a behavior spec from its given/when/then.
 function acceptanceFor(behavior: CaptureBehavior): string[] {
-  const given = behavior.given !== "" ? behavior.given : "the persona in context";
-  const when = behavior.when !== "" ? behavior.when : `they ${behavior.title}`;
-  const then = behavior.then !== "" ? behavior.then : "the behavior is demonstrated";
+  const given = behavior.given === "" ? "the persona in context" : behavior.given;
+  const when = behavior.when === "" ? `they ${behavior.title}` : behavior.when;
+  const then = behavior.then === "" ? "the behavior is demonstrated" : behavior.then;
   return [`given ${given}, when ${when}, then ${then}`];
 }
 
@@ -159,7 +159,8 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
   const interfaces = capture.interfaces.length > 0 ? capture.interfaces : [{ name: "app", note: "" }];
   const behaviorIds: string[] = [];
   for (const [index, iface] of interfaces.entries()) {
-    const order = index + 1; // M1 is the scaffold milestone; interfaces start at M2.
+    // M1 is the scaffold milestone; interfaces start at M2.
+    const order = index + 1;
     const milestone = await MilestoneStore.create(
       pool,
       MilestoneCreateInput.parse({

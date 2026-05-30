@@ -73,9 +73,9 @@ function renderSvg(layout: DagLayout): string {
     .map((h) => {
       const color = headerColor(h.status, h.attention);
       const badge =
-        h.attention !== null
-          ? `<g transform="translate(${h.cx + 44}, 18)"><circle r="10" fill="var(--status-warn, oklch(70% 0.16 75))" stroke="var(--bg-canvas)" stroke-width="2"/><text x="0" y="3.5" fill="var(--accent-on)" font-family="var(--font-mono)" font-size="10" font-weight="700" text-anchor="middle">${h.attention}</text></g>`
-          : "";
+        h.attention === null
+          ? ""
+          : `<g transform="translate(${h.cx + 44}, 18)"><circle r="10" fill="var(--status-warn, oklch(70% 0.16 75))" stroke="var(--bg-canvas)" stroke-width="2"/><text x="0" y="3.5" fill="var(--accent-on)" font-family="var(--font-mono)" font-size="10" font-weight="700" text-anchor="middle">${h.attention}</text></g>`;
       return `${badge}<text x="${h.cx}" y="40" fill="${color}" font-family="var(--font-mono)" font-size="10" text-anchor="middle" letter-spacing="0.18em" font-weight="700">${esc(trunc(h.label, 16))}</text>`;
     })
     .join("");
@@ -93,15 +93,15 @@ function renderSvg(layout: DagLayout): string {
       const n = p.node;
       const pulse = PULSE[n.status];
       const pulseRect =
-        pulse !== undefined
-          ? `<rect class="dag-pulse" x="-2" y="-2" width="${p.w + 4}" height="${p.h + 4}" rx="3" fill="none" stroke="${pulse}" stroke-width="1.5" opacity="0.6"><animate attributeName="opacity" values="0.6;0;0.6" dur="1.6s" repeatCount="indefinite"/><animate attributeName="stroke-width" values="1.5;3;1.5" dur="1.6s" repeatCount="indefinite"/></rect>`
-          : "";
+        pulse === undefined
+          ? ""
+          : `<rect class="dag-pulse" x="-2" y="-2" width="${p.w + 4}" height="${p.h + 4}" rx="3" fill="none" stroke="${pulse}" stroke-width="1.5" opacity="0.6"><animate attributeName="opacity" values="0.6;0;0.6" dur="1.6s" repeatCount="indefinite"/><animate attributeName="stroke-width" values="1.5;3;1.5" dur="1.6s" repeatCount="indefinite"/></rect>`;
       const crit = n.onCriticalPath ? `<rect x="0" y="0" width="3" height="${p.h}" fill="var(--ember-08)"/>` : "";
       const attn =
-        n.attention !== null
-          ? `<g transform="translate(${p.w - 5}, -3)"><circle r="9" fill="var(--ember-08)" stroke="var(--bg-canvas)" stroke-width="2"/><text x="0" y="3.5" fill="var(--accent-on)" font-family="var(--font-mono)" font-size="10" font-weight="700" text-anchor="middle">${n.attention}</text></g>`
-          : "";
-      return `<g class="dag-node" data-spec-id="${esc(n.id)}" data-status="${n.status}" transform="translate(${p.x}, ${p.y})" role="button" tabindex="0" aria-label="${esc(n.status)} spec ${esc(n.title)}">${pulseRect}<rect width="${p.w}" height="${p.h}" rx="2" fill="${STATUS_FILL[n.status]}" stroke="${STATUS_STROKE[n.status]}" stroke-width="${pulse !== undefined ? 1.5 : 1}"/>${crit}<text x="9" y="17" fill="${STATUS_TEXT[n.status]}" font-family="var(--font-mono)" font-size="10">${esc(`${STATUS_GLYPH[n.status]} ${trunc(n.title, 16)}`)}</text>${attn}</g>`;
+        n.attention === null
+          ? ""
+          : `<g transform="translate(${p.w - 5}, -3)"><circle r="9" fill="var(--ember-08)" stroke="var(--bg-canvas)" stroke-width="2"/><text x="0" y="3.5" fill="var(--accent-on)" font-family="var(--font-mono)" font-size="10" font-weight="700" text-anchor="middle">${n.attention}</text></g>`;
+      return `<g class="dag-node" data-spec-id="${esc(n.id)}" data-status="${n.status}" transform="translate(${p.x}, ${p.y})" role="button" tabindex="0" aria-label="${esc(n.status)} spec ${esc(n.title)}">${pulseRect}<rect width="${p.w}" height="${p.h}" rx="2" fill="${STATUS_FILL[n.status]}" stroke="${STATUS_STROKE[n.status]}" stroke-width="${pulse === undefined ? 1 : 1.5}"/>${crit}<text x="9" y="17" fill="${STATUS_TEXT[n.status]}" font-family="var(--font-mono)" font-size="10">${esc(`${STATUS_GLYPH[n.status]} ${trunc(n.title, 16)}`)}</text>${attn}</g>`;
     })
     .join("");
 
@@ -245,8 +245,8 @@ export function initDagCanvas(): void {
   const pan = svg?.querySelector<SVGGElement>("[data-dag-pan]") ?? null;
   const setZoom = (next: number): void => {
     view.zoom = Math.min(2.5, Math.max(0.4, next));
-    if (pan !== null) applyTransform(pan, view);
-    else relayout();
+    if (pan === null) relayout();
+    else applyTransform(pan, view);
   };
   for (const btn of root.querySelectorAll<HTMLButtonElement>("[data-zoom]")) {
     btn.addEventListener("click", () => {

@@ -158,7 +158,7 @@ function mockOrchestrator(): void {
     if (url.includes("/runs")) {
       // /runs?specId=… filters to that spec; otherwise all runs.
       const specMatch = /[?&]specId=([^&]+)/u.exec(url);
-      const items = specMatch !== null ? RUNS.filter((r) => r.specId === decodeURIComponent(specMatch[1])) : RUNS;
+      const items = specMatch === null ? RUNS : RUNS.filter((r) => r.specId === decodeURIComponent(specMatch[1]));
       return new Response(JSON.stringify({ items }), { status: 200 });
     }
     if (url.includes("/insights")) return new Response(JSON.stringify({ insights: [] }), { status: 200 });

@@ -73,7 +73,7 @@ export function createOnboardingRoutes(options: OnboardingRoutesOptions) {
     }
     try {
       const result = await runRound(
-        { pool: options.pool, ...(answerer !== undefined ? { answerer } : {}) },
+        { pool: options.pool, ...(answerer === undefined ? {} : { answerer }) },
         parsed.data,
       );
       return c.json(result, 200);
@@ -94,12 +94,12 @@ export function createOnboardingRoutes(options: OnboardingRoutesOptions) {
     }
     try {
       const result = await deriveFromCapture(
-        { pool: options.pool, ...(answerer !== undefined ? { answerer } : {}) },
+        { pool: options.pool, ...(answerer === undefined ? {} : { answerer }) },
         {
           orgId,
           capture: parsed.data.capture,
           actor: { ...actor, orgId },
-          ...(parsed.data.repoUrl !== undefined ? { repoUrl: parsed.data.repoUrl } : {}),
+          ...(parsed.data.repoUrl === undefined ? {} : { repoUrl: parsed.data.repoUrl }),
         },
       );
       return c.json(result, 201);

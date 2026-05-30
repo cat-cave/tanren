@@ -98,7 +98,7 @@ function rejectionReason(events: RunEventRow[]): { reason: string; detail: strin
   const rerunCount = typeof payload["plannerRerunCount"] === "number" ? payload["plannerRerunCount"] : undefined;
   if (rejection?.eventType.startsWith("auditor")) {
     return {
-      reason: `auditor disagrees with writer${rerunCount !== undefined ? ` · ${rerunCount}×` : ""}`,
+      reason: `auditor disagrees with writer${rerunCount === undefined ? "" : ` · ${rerunCount}×`}`,
       detail: reasonText ?? "writer says behavior demonstrates · auditor disagrees",
     };
   }

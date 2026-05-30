@@ -105,7 +105,7 @@ export function mountOnboardingScreens(app: Hono, deps: ShellDeps): void {
     const client = clientFor(c, deps);
     const orgId = ctx.org?.id;
     const [orgCredentials, myCredentials] = await Promise.all([
-      orgId !== undefined ? client.listOrgCredentials(orgId) : Promise.resolve<CredentialRecord[]>([]),
+      orgId === undefined ? Promise.resolve<CredentialRecord[]>([]) : client.listOrgCredentials(orgId),
       client.listMyCredentials(),
     ]);
     return renderShell(
@@ -142,7 +142,7 @@ export function mountOnboardingScreens(app: Hono, deps: ShellDeps): void {
     const ctx = await loadShellContext(c, deps, { activeNavId: "notifications" });
     const client = clientFor(c, deps);
     const matrix =
-      ctx.org?.id !== undefined ? await client.notificationMatrix(ctx.org.id) : { targets: [], routes: [], events: [] };
+      ctx.org?.id === undefined ? { targets: [], routes: [], events: [] } : await client.notificationMatrix(ctx.org.id);
     return renderShell(
       c,
       ctx,

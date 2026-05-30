@@ -57,7 +57,8 @@ describe("buildClaimClientFromEnv (plane-split P2 claim seam)", () => {
   it("returns undefined (direct DB-CAS) when no endpoint is configured", () => {
     // The single-process dev path: no endpoint → fall back to the in-process
     // DirectJobClaimClient (undefined signals that to the caller).
-    setCertEnv(); // even with certs, no endpoint stays on the direct path
+    // even with certs, no endpoint stays on the direct path
+    setCertEnv();
     expect(buildClaimClientFromEnv()).toBeUndefined();
   });
 

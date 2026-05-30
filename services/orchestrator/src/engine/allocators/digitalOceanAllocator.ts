@@ -104,7 +104,12 @@ export class DigitalOceanAllocator implements Allocator {
       throw new DigitalOceanAllocatorError("DigitalOceanAllocator requires a pinned hostKeyFingerprint");
     }
     this.client = options.client ?? fetchDigitalOceanClient(options.apiToken);
-    this.sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+    this.sleep =
+      options.sleep ??
+      ((ms) =>
+        new Promise((resolve) => {
+          setTimeout(resolve, ms);
+        }));
   }
 
   async allocate(request: AllocationRequest): Promise<RunnerAllocation> {

@@ -246,7 +246,7 @@ export class NotificationDispatcher {
       body,
       severity,
       eventName: event.eventType,
-      ...(url !== undefined ? { url } : {}),
+      ...(url === undefined ? {} : { url }),
       tags: ["tanren", `severity:${severity}`],
     });
   }

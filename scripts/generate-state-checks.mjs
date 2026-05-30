@@ -104,11 +104,11 @@ function main() {
     return;
   }
 
-  if (currentTs.trimEnd() !== expectedTs.trimEnd()) {
+  if (currentTs.trimEnd() === expectedTs.trimEnd()) {
+    process.stdout.write("state enum mirror up to date\n");
+  } else {
     writeFileSync(stateEnumsFile, expectedTs);
     process.stdout.write(`updated ${stateEnumsFile}\n`);
-  } else {
-    process.stdout.write("state enum mirror up to date\n");
   }
 }
 

@@ -86,7 +86,7 @@ export class GithubChecksChannel implements NotificationChannel {
         state,
         context: STATUS_CONTEXT,
         description: truncate(payload.title, 140),
-        ...(payload.url !== undefined ? { target_url: payload.url } : {}),
+        ...(payload.url === undefined ? {} : { target_url: payload.url }),
       },
     });
     if (response.status !== 201) {
@@ -98,8 +98,8 @@ export class GithubChecksChannel implements NotificationChannel {
     return resolveGithubToken({
       secrets: this.secrets,
       minter: this.minter,
-      ...(this.installation !== undefined ? { installation: this.installation } : {}),
-      ...(this.staticRef !== undefined ? { staticRef: this.staticRef } : {}),
+      ...(this.installation === undefined ? {} : { installation: this.installation }),
+      ...(this.staticRef === undefined ? {} : { staticRef: this.staticRef }),
     });
   }
 

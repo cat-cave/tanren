@@ -70,7 +70,7 @@ function finalize(topic: Topic, context: ForgeConversationContext): ForgeAnswer 
 }
 
 function bodyFor(topic: Topic, grounded: boolean, context: ForgeConversationContext): string {
-  const scope = context.projectId !== null ? `project <code>${context.projectId}</code>` : "your portfolio";
+  const scope = context.projectId === null ? "your portfolio" : `project <code>${context.projectId}</code>`;
   const groundedNote = grounded ? " I pulled the latest data to ground this." : "";
   switch (topic) {
     case "costs":

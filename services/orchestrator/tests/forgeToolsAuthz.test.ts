@@ -203,7 +203,8 @@ describe("assertSpecAccess", () => {
 describe("tanrenRerunTask", () => {
   // A pg substitute that answers the task→spec join the rerun tool issues.
   class RerunPool {
-    tasks = new Map<string, string>(); // task_id -> spec_id
+    // task_id -> spec_id
+    tasks = new Map<string, string>();
     async query(sql: string, params: ReadonlyArray<unknown> = []): Promise<{ rows: unknown[]; rowCount: number }> {
       if (sql.includes("FROM tasks t") && sql.includes("INNER JOIN runs r")) {
         const specId = this.tasks.get(String(params[0]));

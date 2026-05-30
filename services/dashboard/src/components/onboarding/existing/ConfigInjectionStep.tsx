@@ -68,7 +68,7 @@ export function ConfigInjectionStep(props: {
           </span>
         </div>
       </div>
-      {props.error !== undefined ? <div class="alert fail">{props.error}</div> : null}
+      {props.error === undefined ? null : <div class="alert fail">{props.error}</div>}
 
       <form method="post" action={props.baseAction}>
         <input type="hidden" name="phase" value="open-pr" />

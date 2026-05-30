@@ -206,7 +206,8 @@ describe("org-setup wizard", () => {
     const html = await (await app.request("/onboarding/org?step=3")).text();
     expect(html).toContain("run.failed");
     expect(html).toContain("all channel kinds dispatch");
-    expect(html).toContain("phase-v0"); // ntfy is a wired channel
+    // ntfy is a wired channel
+    expect(html).toContain("phase-v0");
   });
 
   it("step 4 shows local-docker active + cloud allocators as phase-badged stubs", async () => {

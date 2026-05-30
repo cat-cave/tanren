@@ -110,7 +110,8 @@ describe("triage answerer — dedupe / in-flight / fresh ladder", () => {
       expect(t.match).toBe("touches in-flight spec_if");
       expect(t.placement).toBe("forge suggests folding into the live run");
       expect(t.duplicateOfSpecId).toBeNull();
-      expect(t.discoveryVariant).toBe("bug"); // fail severity → bug
+      // fail severity → bug
+      expect(t.discoveryVariant).toBe("bug");
     }
   });
 
@@ -122,7 +123,8 @@ describe("triage answerer — dedupe / in-flight / fresh ladder", () => {
       }),
     );
     expect(t.match).toBe("touches in-flight spec_if");
-    expect(t.discoveryVariant).toBe("feature"); // non-fail → feature
+    // non-fail → feature
+    expect(t.discoveryVariant).toBe("feature");
   });
 
   it("requires a token overlap of at least 2 — a single shared non-stop-word does not match", async () => {

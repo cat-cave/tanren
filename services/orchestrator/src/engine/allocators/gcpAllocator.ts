@@ -129,7 +129,12 @@ export class GcpAllocator implements Allocator {
       throw new GcpAllocatorError("GcpAllocator requires a pinned hostKeyFingerprint");
     }
     this.client = options.client ?? fetchGcpComputeClient(options);
-    this.sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+    this.sleep =
+      options.sleep ??
+      ((ms) =>
+        new Promise((resolve) => {
+          setTimeout(resolve, ms);
+        }));
   }
 
   async allocate(request: AllocationRequest): Promise<RunnerAllocation> {

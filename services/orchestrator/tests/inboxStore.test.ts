@@ -122,10 +122,10 @@ describe("createSource — insert wire shape + mapping", () => {
       },
     ]);
     const source = await createSource(client, { orgId: "o", projectId: null, kind: "manual", name: "n" });
-    expect(calls[0]!.params[5]).toBe(""); // detail default
-    expect(calls[0]!.params[6]).toBe("{}"); // config default
-    expect(calls[0]!.params[7]).toBe("true"); // enabled default
-    expect(calls[0]!.params[8]).toBe("false"); // autoRoute default
+    expect(calls[0]!.params[5]).toBe("");
+    expect(calls[0]!.params[6]).toBe("{}");
+    expect(calls[0]!.params[7]).toBe("true");
+    expect(calls[0]!.params[8]).toBe("false");
     expect(source.detail).toBe("");
     expect(source.projectId).toBeNull();
   });
@@ -186,9 +186,9 @@ describe("mapSource — string-boolean + null-config normalization", () => {
     ]);
     const source = await getSource(client, "src_1");
     expect(source).toBeDefined();
-    expect(source!.enabled).toBe(false); // "false" → false
-    expect(source!.autoRoute).toBe(true); // "true" → true
-    expect(source!.config).toEqual({}); // null config → {}
+    expect(source!.enabled).toBe(false);
+    expect(source!.autoRoute).toBe(true);
+    expect(source!.config).toEqual({});
     expect(source!.projectId).toBeNull();
   });
 
@@ -205,7 +205,8 @@ describe("mapSource — string-boolean + null-config normalization", () => {
             name: "n",
             detail: "",
             config: {},
-            enabled: "t", // not the literal "true"
+            // "t" is not the literal "true", so it must map to false.
+            enabled: "t",
             auto_route: "false",
           },
         ],
@@ -314,18 +315,17 @@ describe("upsertCandidate — insert/conflict wire shape + mapping", () => {
     const call = calls[0]!;
     expect(call.sql).toContain("ON CONFLICT (source_id, external_id) DO UPDATE");
     expect(String(call.params[0])).toMatch(/^cand_/u);
-    expect(call.params[1]).toBe("src_gh"); // source.id
-    expect(call.params[2]).toBe("org_a"); // source.orgId
-    expect(call.params[3]).toBe("project_a"); // item.projectId
-    expect(call.params[4]).toBe("gh-cat-cave/app#7"); // item.externalId
-    expect(call.params[5]).toBe("csv export"); // item.title
-    expect(call.params[6]).toBe("cfo wants csv"); // item.body
-    expect(call.params[7]).toBe("warn"); // item.severity
-    expect(call.params[8]).toBe("triaged"); // status
+    expect(call.params[1]).toBe("src_gh");
+    expect(call.params[2]).toBe("org_a");
+    expect(call.params[3]).toBe("project_a");
+    expect(call.params[4]).toBe("gh-cat-cave/app#7");
+    expect(call.params[5]).toBe("csv export");
+    expect(call.params[6]).toBe("cfo wants csv");
+    expect(call.params[7]).toBe("warn");
+    expect(call.params[8]).toBe("triaged");
     expect(JSON.parse(call.params[9] as string)).toMatchObject({ verdict: "needs_call" });
-    expect(call.params[10]).toBe("github · cat-cave"); // source.name → source_name
-    expect(call.params[11]).toBe("issues"); // source.kind → source_kind
-    // mapped back
+    expect(call.params[10]).toBe("github · cat-cave");
+    expect(call.params[11]).toBe("issues");
     expect(candidate.id).toMatch(/^cand_/u);
     expect(candidate.severity).toBe("warn");
     expect(candidate.status).toBe("triaged");
@@ -391,9 +391,9 @@ describe("mapCandidate — defaults + join-column normalization", () => {
     ]);
     const candidate = await getCandidate(client, "cand_1");
     expect(candidate).toBeDefined();
-    expect(candidate!.sourceName).toBe(""); // null → "" default
-    expect(candidate!.sourceKind).toBe("manual"); // null → "manual" default
-    expect(candidate!.triage).toBeNull(); // null triage stays null
+    expect(candidate!.sourceName).toBe("");
+    expect(candidate!.sourceKind).toBe("manual");
+    expect(candidate!.triage).toBeNull();
     expect(candidate!.resolvedSpecId).toBeNull();
   });
 
@@ -423,8 +423,8 @@ describe("mapCandidate — defaults + join-column normalization", () => {
     ]);
     const candidate = await getCandidate(client, "cand_2");
     expect(candidate!.triage).not.toBeNull();
-    expect(candidate!.triage!.duplicateOfSpecId).toBeNull(); // default
-    expect(candidate!.triage!.discoveryVariant).toBe("feature"); // default
+    expect(candidate!.triage!.duplicateOfSpecId).toBeNull();
+    expect(candidate!.triage!.discoveryVariant).toBe("feature");
     expect(candidate!.severity).toBe("fail");
   });
 

@@ -89,7 +89,12 @@ export class RunnerLifecycle {
     this.hostnameForOrchestrator = config.sshHostnameForOrchestrator;
     this.hostKeyReadAttempts = config.hostKeyReadAttempts ?? 30;
     this.hostKeyReadDelayMs = config.hostKeyReadDelayMs ?? 500;
-    this.sleep = config.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+    this.sleep =
+      config.sleep ??
+      ((ms) =>
+        new Promise((resolve) => {
+          setTimeout(resolve, ms);
+        }));
     this.capAdd = config.capAdd ?? [];
     this.securityOpt = config.securityOpt ?? [];
     this.clock = config.now ?? (() => new Date());

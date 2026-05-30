@@ -108,9 +108,9 @@ export class SseDriver {
       this.lastTaskFingerprint.set(task.taskId, fingerprintTask(task));
     }
     const lastEvent = recentEvents.at(-1);
-    this.lastEventId = lastEvent !== undefined ? Number(lastEvent.id) : 0;
+    this.lastEventId = lastEvent === undefined ? 0 : Number(lastEvent.id);
     const lastCost = costs.at(-1);
-    this.lastCostId = lastCost !== undefined ? Number(lastCost.id) : 0;
+    this.lastCostId = lastCost === undefined ? 0 : Number(lastCost.id);
 
     if (TERMINAL_STATUSES.has(run.status)) {
       this.terminalPollsRemaining = TERMINAL_GRACE_POLLS;
@@ -270,7 +270,9 @@ export class SseDriver {
 
   private async sleep(ms: number): Promise<void> {
     if (ms <= 0) return;
-    await new Promise((resolve) => setTimeout(resolve, ms));
+    await new Promise((resolve) => {
+      setTimeout(resolve, ms);
+    });
   }
 }
 

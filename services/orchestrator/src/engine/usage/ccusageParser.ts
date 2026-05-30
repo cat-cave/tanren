@@ -28,7 +28,7 @@ export function parseCcusageAccounting(stdout: string, cli: string): CcusageAcco
   if (totalsRecord === undefined && dailyArray === undefined) {
     return null;
   }
-  const totals = totalsRecord !== undefined ? tokenUsageFromRecord(totalsRecord) : emptyUsage();
+  const totals = totalsRecord === undefined ? emptyUsage() : tokenUsageFromRecord(totalsRecord);
   return {
     cli,
     totals,
@@ -61,7 +61,8 @@ function collectPerModel(daily: unknown[]): CcusageModelUsage[] {
 function tokenUsageFromRecord(record: Record<string, unknown>): TokenUsage {
   const inputTokens = numberField(record["inputTokens"]) ?? 0;
   const cachedInputTokens = numberField(record["cachedInputTokens"]) ?? 0;
-  const cacheCreationTokens = numberField(record["cacheCreationTokens"]) ?? 0; // Anthropic-only; 0 for codex
+  // Anthropic-only; 0 for codex
+  const cacheCreationTokens = numberField(record["cacheCreationTokens"]) ?? 0;
   const outputTokens = numberField(record["outputTokens"]) ?? 0;
   const reasoningOutputTokens = numberField(record["reasoningOutputTokens"]) ?? 0;
   const totalTokens =

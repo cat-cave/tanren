@@ -62,7 +62,8 @@ export const specs = pgTable(
     status: text("status").notNull().default("pending"),
     metadata: jsonb("metadata")
       .notNull()
-      .default(sql`'{}'::jsonb`), // P3-0014: discovery provenance under `discovery` key
+      // P3-0014: discovery provenance under `discovery` key
+      .default(sql`'{}'::jsonb`),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [

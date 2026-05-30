@@ -223,7 +223,7 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
     // through it (the control-plane endpoints). Otherwise inject nothing: the
     // workflow uses its own in-process org-scoped stores over `orgScopingPool`,
     // BYTE-IDENTICAL to the pre-P3 direct path (and its mutation suite).
-    const remoteWriter = orgId !== null ? deps.runStateWriter : undefined;
+    const remoteWriter = orgId === null ? undefined : deps.runStateWriter;
     const remoteWorkflowSeams =
       remoteWriter === undefined || orgId === null
         ? {}
@@ -235,7 +235,7 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
           };
     const result = await withJobOrg(orgId, () =>
       runWorkflow({
-        pool: orgId !== null ? orgScopingPool(deps.pool) : deps.pool,
+        pool: orgId === null ? deps.pool : orgScopingPool(deps.pool),
         ...remoteWorkflowSeams,
         allocator: deps.allocator,
         ssh: deps.ssh,

@@ -23,11 +23,16 @@ const baselineSha = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 describe("aider writer adapter", () => {
   it("runs aider non-interactively in the workspace, parses git state into a WriterResult", async () => {
     const ssh = new ScriptedSsh([
-      ok(`${baselineSha}\n`), // baseline sha
-      ok("Applied edit to Y.md\nTokens: 1,200 sent, 340 received\n"), // aider run
-      ok(""), // commit
-      ok("diff --git a/Y.md b/Y.md\n+done\n"), // diff
-      ok(`aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\taider writer\n`), // log
+      // baseline sha
+      ok(`${baselineSha}\n`),
+      // aider run
+      ok("Applied edit to Y.md\nTokens: 1,200 sent, 340 received\n"),
+      // commit
+      ok(""),
+      // diff
+      ok("diff --git a/Y.md b/Y.md\n+done\n"),
+      // log
+      ok(`aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\taider writer\n`),
     ]);
     const secrets = new InMemorySecretStore();
     await secrets.put({ ref: "credential/aider/dev", value: apiKey });

@@ -106,7 +106,7 @@ export function mountRunDetailScreens(app: Hono, deps: ShellDeps): void {
     const upstream = await fetch(client.streamUrl(loc, runId, { rawView }), {
       headers: {
         Accept: "text/event-stream",
-        ...(c.req.header("cookie") !== undefined ? { cookie: c.req.header("cookie") as string } : {}),
+        ...(c.req.header("cookie") === undefined ? {} : { cookie: c.req.header("cookie") as string }),
       },
     }).catch(() => {});
     if (upstream === undefined || upstream.body === null) {

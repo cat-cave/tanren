@@ -122,7 +122,12 @@ export class AwsEc2Allocator implements Allocator {
       throw new AwsEc2AllocatorError("AwsEc2Allocator requires a pinned hostKeyFingerprint");
     }
     this.client = options.client ?? fetchAwsEc2Client(options);
-    this.sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+    this.sleep =
+      options.sleep ??
+      ((ms) =>
+        new Promise((resolve) => {
+          setTimeout(resolve, ms);
+        }));
   }
 
   async allocate(request: AllocationRequest): Promise<RunnerAllocation> {

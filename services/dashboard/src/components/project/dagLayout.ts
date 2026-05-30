@@ -66,11 +66,11 @@ function groupKey(node: DagNode, group: GroupBy): { key: string; label: string }
   if (group === "priority") return { key: node.priority, label: node.priority };
   if (group === "behavior") {
     const b = node.behaviors[0];
-    return b !== undefined ? { key: `b:${b}`, label: b } : { key: "b:—", label: "no behavior" };
+    return b === undefined ? { key: "b:—", label: "no behavior" } : { key: `b:${b}`, label: b };
   }
-  return node.milestoneId !== null
-    ? { key: node.milestoneId, label: node.milestone }
-    : { key: "m:—", label: "unlinked" };
+  return node.milestoneId === null
+    ? { key: "m:—", label: "unlinked" }
+    : { key: node.milestoneId, label: node.milestone };
 }
 
 /** Order columns: priority by severity, milestone/behavior by first appearance. */

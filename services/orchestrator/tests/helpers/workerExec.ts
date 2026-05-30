@@ -37,6 +37,12 @@ import {
 } from "./plannerLoopHelpers.js";
 import { WorkerPool } from "./workerPool.js";
 
+// Resolve after `ms` without leaking an executor return (no-promise-executor-return).
+export const delay = (ms: number): Promise<void> =>
+  new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+
 export const target: SshTarget = {
   host: "runner",
   port: 22,
