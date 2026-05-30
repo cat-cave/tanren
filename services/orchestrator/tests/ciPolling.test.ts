@@ -279,13 +279,34 @@ class CiMemoryPool {
       run_id: "run_1",
       spec_id: "spec_1",
       project_id: "project_1",
+      org_id: "org_1",
       pr_url: "https://github.com/cat-cave/tanren-fixture-easy/pull/1",
       status: "running",
     },
   ];
   readonly projects = [{ project_id: "project_1", config: { githubCredentialRef: "credential/github/dev" } }];
 
+  // RLS R3b: the GET /runs/:runId route now resolves the run's org under
+  // runWithSystemScope, then reads under runWithOrgScope — both call `connect()`.
+  // This fake returns a client that no-ops txn/GUC statements and delegates real
+  // queries to `query`, so the route's org-scoped reads work without a real DB.
+  async connect(): Promise<{ query: CiMemoryPool["query"]; release: () => void }> {
+    return {
+      query: (async (sql: string, params: unknown[]) => {
+        if (/^(BEGIN|COMMIT|ROLLBACK|SET LOCAL)/u.test(sql.trim())) {
+          return { rows: [], rowCount: 0 };
+        }
+        return this.query(sql, params);
+      }) as CiMemoryPool["query"],
+      release: () => undefined,
+    };
+  }
+
   async query(sql: string, params: unknown[]): Promise<{ rows: unknown[]; rowCount: number }> {
+    if (sql.includes("SELECT org_id FROM runs WHERE run_id = $1")) {
+      const run = this.runs.find((candidate) => candidate.run_id === params[0]);
+      return { rows: run === undefined ? [] : [{ org_id: run.org_id }], rowCount: run === undefined ? 0 : 1 };
+    }
     if (sql.includes("FROM runs r") && sql.includes("JOIN projects p") && sql.includes("r.pr_url")) {
       const run = this.runs.find((candidate) => candidate.run_id === params[0]);
       const project = this.projects.find((candidate) => candidate.project_id === run?.project_id);

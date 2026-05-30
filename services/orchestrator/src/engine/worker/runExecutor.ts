@@ -27,7 +27,7 @@ import type { SshSubstrate } from "../contracts/sshSubstrate.js";
 import type { EscapeHatches } from "../config/index.js";
 import { PgEventStore } from "../eventStore.js";
 import type { GitHubHttpClient } from "../providers/github.js";
-import { loadRunExecutionContext } from "./runExecutionContext.js";
+import { loadRunExecutionContext, type RunExecutionContext } from "./runExecutionContext.js";
 import { runPlannerLoopWorkflow, type PlannerRunResult, type RunPlannerLoopInput } from "../workflow/plannerRun.js";
 import { NoopQuotaPolicy, SINGLE_RUN_REQUEST, getRunUsage, type QuotaPolicy } from "../quota/index.js";
 
@@ -124,18 +124,16 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
   // falls back to the pool, the pre-cohort-3 behavior).
   let resolvedOrgId: string | null = null;
   try {
-    // RLS R3a-worker: the run⋈spec⋈project read that RESOLVES which org owns this
-    // claimed job is a legitimately cross-org BOOTSTRAP read — it runs before any
-    // org context can exist (its result IS the org). It mirrors the job-queue
-    // claim's system context, so it runs under `runWithSystemScope` (no org GUC).
-    // (R3b fork: under enforced policies this read needs a bypass-role / policy
-    // carve-out — the locked-decision item in the RLS plan; see R-WAVES.)
-    const { context, orgId } = await runWithSystemScope(deps.pool, (client) =>
-      loadRunExecutionContext(client, {
-        runId,
-        identitySecretRef: deps.identitySecretRef,
-      }),
-    );
+    // RLS R3b: the claimed job carries its owning run's org_id on the queue row
+    // (job_queue stays OUTSIDE RLS — the claim above resolved it cross-org). That
+    // is the worker's tenant BOOTSTRAP source: instead of an RLS-protected `runs`
+    // read to discover the org, we read it from the job envelope and scope the
+    // run⋈spec⋈project hydration to it. A job with an org runs `loadRunExecutionContext`
+    // under `runWithOrgScope` (so every read carries `app.current_org_id` and the
+    // policy admits the run's own rows); a legacy/unscoped job (org_id NULL) keeps
+    // the system-scope read (BYPASSRLS pool) — its rows have no policy to satisfy.
+    const jobOrgId = job.orgId ?? null;
+    const { context, orgId } = await loadRunContextScoped(deps, runId, jobOrgId);
     resolvedOrgId = orgId;
 
     // RLS wave R1: the claim above ran under the worker's SYSTEM context — the
@@ -212,6 +210,31 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
   } finally {
     await stopHeartbeat();
   }
+}
+
+/**
+ * RLS R3b: hydrate the claimed job's run⋈spec⋈project context under the right
+ * scope. When the job carries an org (the common case post-R3b), run the read
+ * under `runWithOrgScope(jobOrgId)` so every SELECT carries `app.current_org_id`
+ * and the enforced policy admits the run's own rows. When the job has no org
+ * (a legacy/unscoped run), fall back to `runWithSystemScope` — its BYPASSRLS
+ * pool resolves the rows cross-org exactly as before R3b.
+ *
+ * Cross-check: if the job's org and the run's actual `org_id` ever disagree, the
+ * scoped read returns no row → `RunExecutionContextNotFoundError`, which fails
+ * the job loudly rather than silently executing under the wrong tenant.
+ */
+async function loadRunContextScoped(
+  deps: RunExecutorDeps,
+  runId: string,
+  jobOrgId: string | null,
+): Promise<RunExecutionContext> {
+  const load = (client: pg.Pool | pg.PoolClient): Promise<RunExecutionContext> =>
+    loadRunExecutionContext(client, { runId, identitySecretRef: deps.identitySecretRef });
+  if (jobOrgId === null) {
+    return runWithSystemScope(deps.pool, load);
+  }
+  return runWithOrgScope(deps.pool, jobOrgId, load);
 }
 
 /**

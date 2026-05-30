@@ -229,6 +229,14 @@ export const jobQueue = pgTable(
     id: bigserial("id", { mode: "number" }).primaryKey(),
     runId: text("run_id"),
     taskId: text("task_id").references(() => tasks.taskId),
+    // RLS R3b: the owning run's org, stamped on enqueue. `job_queue` is a SYSTEM
+    // table that stays OUTSIDE RLS (the claim is intentionally cross-org), so
+    // this column is the worker's tenant BOOTSTRAP source: the claimed row's
+    // `org_id` tells the worker which org owns the job WITHOUT an RLS-protected
+    // `runs` read. Nullable: a legacy/unscoped job (or a system fixture job) has
+    // no org. Not FK-constrained on purpose — the queue must never block a claim
+    // on a tenant-table lookup.
+    orgId: text("org_id"),
     taskKind: text("task_kind").notNull(),
     payload: jsonb("payload")
       .notNull()

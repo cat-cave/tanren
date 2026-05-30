@@ -207,6 +207,7 @@
     "NOCREATEDB",
     "NOCREATEROLE",
     "NOBYPASSRLS",
+    "BYPASSRLS",
     "datname",
     "rolsuper",
     "rolbypassrls",

@@ -17,8 +17,14 @@ const sweeperIntervalMs = Number(process.env["TANREN_ALLOCATOR_SWEEPER_INTERVAL_
 
 async function main(): Promise<void> {
   const docker = new HttpDockerEngineClient();
-  const pool = createDbPool();
-  await migrate(pool);
+  // RLS R3b: migrations run as the OWNER (MIGRATION_DATABASE_URL when set, else
+  // the runtime URL for single-role dev). The allocator is a genuinely cross-org
+  // SYSTEM service — it manages runners across ALL tenants — so its runtime pool
+  // connects via TANREN_SYSTEM_DATABASE_URL (the BYPASSRLS `tanren_system` role)
+  // when configured, so its `runners` reads/writes are not filtered by per-tenant
+  // policy. Both fall back to DATABASE_URL when their dedicated env is unset.
+  await runAllocatorMigrations();
+  const pool = createDbPool(process.env["TANREN_SYSTEM_DATABASE_URL"] || process.env["DATABASE_URL"]);
   const store = new PgRunnerStore(pool);
   const secrets = new VaultSecretsClient({
     addr: process.env["VAULT_ADDR"] ?? "http://vault:8200",
@@ -61,6 +67,23 @@ async function main(): Promise<void> {
 
   serve({ fetch: app.fetch, port });
   console.log(`allocator listening on :${port}`);
+}
+
+/** Run migrations as the owner (MIGRATION_DATABASE_URL), closing the pool after. */
+async function runAllocatorMigrations(): Promise<void> {
+  const ownerUrl = process.env["MIGRATION_DATABASE_URL"];
+  if (ownerUrl === undefined || ownerUrl === "") {
+    const pool = createDbPool();
+    await migrate(pool);
+    await pool.end();
+    return;
+  }
+  const ownerPool = createDbPool(ownerUrl);
+  try {
+    await migrate(ownerPool);
+  } finally {
+    await ownerPool.end();
+  }
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

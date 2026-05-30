@@ -5,9 +5,12 @@ export {
   getJobOrgId,
   getOrgScope,
   getOrgScopedClient,
+  getSystemPool,
+  resetSystemPool,
   runWithJobOrgId,
   runWithOrgScope,
   runWithSystemScope,
+  setSystemPool,
 } from "./orgScope.js";
 export type { OrgScope } from "./orgScope.js";
 export * as schema from "./schema.js";

@@ -131,25 +131,28 @@ describeDb("RLS R2 cohort-2 — tasks + cost_records through the org-scoped clie
       expect(done.rows[0]?.outcome).toBe("passed");
     });
 
-    // Out-of-scope: the same helper handed the pool falls back to the pool — the
-    // row still commits (inert), proving identical behavior without a scope.
-    await insertChildTask(runtimePool, {
-      taskId: "task_write_pool",
-      runId: RUN_A,
-      kind: "write",
-      title: "write subtask 1",
-      parentTaskId: PLANNER_TASK,
-      agentKind: "writer",
-      cli: "fake",
-      model: null,
-    });
-    const committed = await countTasks(runtimePool, "task_write_pool");
-    expect(committed).toBe(1);
+    // Out-of-scope: the same helper handed the pool falls back to the raw pool
+    // (empty GUC); under R3b's enforced policy the WITH CHECK rejects the INSERT
+    // — an unscoped tenant write can no longer silently land.
+    await expect(
+      insertChildTask(runtimePool, {
+        taskId: "task_write_pool",
+        runId: RUN_A,
+        kind: "write",
+        title: "write subtask 1",
+        parentTaskId: PLANNER_TASK,
+        agentKind: "writer",
+        cli: "fake",
+        model: null,
+      }),
+    ).rejects.toThrow(/row-level security|policy/i);
+    const committed = await countTasks(ownerPool, "task_write_pool");
+    expect(committed).toBe(0);
 
-    // The INSERT metadata is behavior-identical to subtaskStages' contract:
-    // agent_kind/cli/model carried through unchanged.
-    const meta = await runtimePool.query<{ agent_kind: string; cli: string; model: string | null }>(
-      "SELECT agent_kind, cli, model FROM tasks WHERE task_id = 'task_write_pool'",
+    // The in-scope INSERT's metadata is behavior-identical to subtaskStages'
+    // contract: agent_kind/cli/model carried through unchanged (owner = ground truth).
+    const meta = await ownerPool.query<{ agent_kind: string; cli: string; model: string | null }>(
+      "SELECT agent_kind, cli, model FROM tasks WHERE task_id = 'task_write_scoped'",
     );
     expect(meta.rows[0]).toEqual({ agent_kind: "writer", cli: "fake", model: null });
   });
@@ -176,7 +179,7 @@ describeDb("RLS R2 cohort-2 — tasks + cost_records through the org-scoped clie
       authRef: "fake:local",
     };
 
-    const before = await countCosts(runtimePool, RUN_A);
+    const before = await countCosts(ownerPool, RUN_A);
 
     await runWithOrgScope(runtimePool, ORG_A, async (client) => {
       await recorder.record(ctx, tokens, { role: "scoped" });
@@ -187,31 +190,37 @@ describeDb("RLS R2 cohort-2 — tasks + cost_records through the org-scoped clie
       expect(Number(within.rows[0]?.n)).toBe(before + 1);
     });
 
-    await recorder.record(ctx, tokens, { role: "pool" });
+    // Out-of-scope: the recorder's pool fallback (empty GUC) is denied by the
+    // policy under R3b — only the in-scope record landed.
+    await expect(recorder.record(ctx, tokens, { role: "pool" })).rejects.toThrow(/row-level security|policy/i);
 
-    const after = await countCosts(runtimePool, RUN_A);
-    expect(after - before).toBe(2);
+    const after = await countCosts(ownerPool, RUN_A);
+    expect(after - before).toBe(1);
   });
 
-  // (c) cost_records READ loaders, through the org-scoped client, equal the pool.
-  it("(c) cost reads via the org-scoped client match the pool, scoped to the org", async () => {
+  // (c) cost_records READ loaders, through the org-scoped client, equal the
+  //     OWNER (RLS-exempt) baseline. Under R3b the raw runtime pool is denied.
+  it("(c) cost reads via the org-scoped client match the owner baseline, scoped to the org", async () => {
     const scopedSnap = await runWithOrgScope(runtimePool, ORG_A, (client) =>
       fetchRunCostsForSnapshot(client, RUN_A, ORG_A),
     );
-    const poolSnap = await fetchRunCostsForSnapshot(runtimePool, RUN_A, ORG_A);
-    expect(scopedSnap.map((c) => c.id)).toEqual(poolSnap.map((c) => c.id));
+    const ownerSnap = await fetchRunCostsForSnapshot(ownerPool, RUN_A, ORG_A);
+    expect(scopedSnap.map((c) => c.id)).toEqual(ownerSnap.map((c) => c.id));
     expect(scopedSnap.length).toBeGreaterThan(0);
+    // The raw runtime pool (empty GUC) now returns zero cost rows (R3b).
+    const poolSnap = await fetchRunCostsForSnapshot(runtimePool, RUN_A, ORG_A);
+    expect(poolSnap).toHaveLength(0);
 
     const scopedPage = await runWithOrgScope(runtimePool, ORG_A, (client) =>
       fetchCostsPage(client, { runId: RUN_A, orgId: ORG_A, cursor: undefined, pageSize: undefined }),
     );
-    const poolPage = await fetchCostsPage(runtimePool, {
+    const ownerPage = await fetchCostsPage(ownerPool, {
       runId: RUN_A,
       orgId: ORG_A,
       cursor: undefined,
       pageSize: undefined,
     });
-    expect(scopedPage.items.map((c) => c.id)).toEqual(poolPage.items.map((c) => c.id));
+    expect(scopedPage.items.map((c) => c.id)).toEqual(ownerPage.items.map((c) => c.id));
 
     // App-layer org predicate still scopes results: org A's id over org B's run
     // returns nothing (belt-and-suspenders), and tasks reads stay scoped too.
@@ -221,17 +230,20 @@ describeDb("RLS R2 cohort-2 — tasks + cost_records through the org-scoped clie
     expect(crossOrg).toHaveLength(0);
 
     const scopedTasks = await runWithOrgScope(runtimePool, ORG_A, (client) => fetchRunTasks(client, RUN_A, ORG_A));
-    const poolTasks = await fetchRunTasks(runtimePool, RUN_A, ORG_A);
-    expect(scopedTasks.map((t) => t.taskId)).toEqual(poolTasks.map((t) => t.taskId));
+    const ownerTasks = await fetchRunTasks(ownerPool, RUN_A, ORG_A);
+    expect(scopedTasks.map((t) => t.taskId)).toEqual(ownerTasks.map((t) => t.taskId));
   });
 
   // (d) the metering read returns the run's totals on the scoped client, equal to
-  //     the pool path (the post-run accrual reads cost_records this way).
-  it("(d) getRunUsage via the org-scoped client matches the pool", async () => {
+  //     the OWNER baseline (the post-run accrual reads cost_records this way).
+  it("(d) getRunUsage via the org-scoped client matches the owner baseline", async () => {
     const scoped = await runWithOrgScope(runtimePool, ORG_A, (client) => getRunUsage(client, RUN_A));
-    const pooled = await getRunUsage(runtimePool, RUN_A);
-    expect(scoped).toEqual(pooled);
+    const owned = await getRunUsage(ownerPool, RUN_A);
+    expect(scoped).toEqual(owned);
     expect(scoped.tokens).toBeGreaterThan(0);
+    // The raw runtime pool (empty GUC) sees no cost rows, so it meters zero (R3b).
+    const pooled = await getRunUsage(runtimePool, RUN_A);
+    expect(pooled.tokens).toBe(0);
   });
 });
 

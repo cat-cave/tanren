@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { runWithOrgScope } from "@tanren/db";
+import { getSystemPool, runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
 import { z } from "zod";
 import type { ActorContext } from "../../auth/schemas.js";
@@ -123,41 +123,45 @@ export async function createProject(
     defaultBranch: input.defaultBranch ?? defaultBranch,
     runnerImage: input.runnerImage ?? defaultRunnerImage,
     allocator: input.allocator ?? defaultAllocator,
-    // migrateProjectConfig normalizes legacy versionless blobs (Phase 1
-    // `{}`-shaped rows or arbitrary maps from API callers) into a
-    // fully-defaulted V1. A V1-shaped input with unknown keys is rejected.
+    // migrateProjectConfig normalizes legacy versionless blobs into a defaulted
+    // V1; a V1-shaped input with unknown keys is rejected.
     config: migrateProjectConfig(input.config ?? {}),
   };
 
-  await pool.query(
-    `INSERT INTO projects (project_id, name, repo_url, default_branch, runner_image, allocator, config, org_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)`,
-    [
-      project.projectId,
-      project.name,
-      project.repoUrl,
-      project.defaultBranch,
-      project.runnerImage,
-      project.allocator,
-      JSON.stringify(project.config),
-      _actor?.orgId ?? null,
-    ],
-  );
-  if (_actor !== undefined) {
-    await pool.query(
-      `INSERT INTO project_members (project_id, user_id, role) VALUES ($1, $2, 'admin')
-       ON CONFLICT (project_id, user_id) DO NOTHING`,
-      [project.projectId, _actor.userId],
+  // RLS R3b: an org-carrying operator persists under `runWithOrgScope`; a
+  // null-org caller is cross-org system seeding → the BYPASSRLS `tanren_system`
+  // pool (else the passed pool, inert).
+  const orgId = _actor?.orgId ?? null;
+  const persist = async (client: QueryClient): Promise<void> => {
+    await client.query(
+      `INSERT INTO projects (project_id, name, repo_url, default_branch, runner_image, allocator, config, org_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)`,
+      [
+        project.projectId,
+        project.name,
+        project.repoUrl,
+        project.defaultBranch,
+        project.runnerImage,
+        project.allocator,
+        JSON.stringify(project.config),
+        orgId,
+      ],
     );
-  }
+    if (_actor !== undefined) {
+      await client.query(
+        `INSERT INTO project_members (project_id, user_id, role) VALUES ($1, $2, 'admin')
+         ON CONFLICT (project_id, user_id) DO NOTHING`,
+        [project.projectId, _actor.userId],
+      );
+    }
+  };
+  await (orgId !== null ? runWithOrgScope(pool, orgId, persist) : persist(getSystemPool() ?? pool));
   return project;
 }
 
 export async function createSpec(pool: pg.Pool, input: CreateSpecInput, actor?: ActorContext): Promise<SpecContract> {
-  // RLS R2 cohort-3 (specs write): when the actor carries an org, the spec
-  // pre-checks + INSERT run through the org-scoped client (`SET LOCAL
-  // app.current_org_id`), mirroring `createQueuedRunFromSpec`. Inert in R1; a
-  // legacy/unscoped actor (no org) keeps the original pool path.
+  // RLS (specs write): an org-carrying actor runs the spec pre-checks + INSERT
+  // through the org-scoped client; a legacy/unscoped actor keeps the pool path.
   const orgId = actor?.orgId ?? null;
   if (orgId !== null) {
     return runWithOrgScope(pool, orgId, (client) => createSpecOnClient(client, input, actor));
@@ -205,12 +209,9 @@ export async function createQueuedRunFromSpec(
   input: CreateSpecRunInput,
   actor?: ActorContext,
 ): Promise<SpecRunContract> {
-  // RLS wave R1 reference conversion (write path): when the actor carries an
-  // org, the run-create transaction runs through the org-scoped client so its
-  // INSERTs execute under `SET LOCAL app.current_org_id`. Behaviorally inert
-  // in R1 (no policies); R2's policy will read that GUC. A legacy/unscoped
-  // actor (org_id null — e.g. a CLI caller with no org) keeps the original
-  // manual-transaction path so nothing regresses while the GUC has no row.
+  // RLS (write path): an org-carrying actor runs the run-create transaction
+  // through the org-scoped client (`SET LOCAL app.current_org_id`); a legacy/
+  // unscoped actor (no org — e.g. a CLI caller) keeps the manual-transaction path.
   const orgId = actor?.orgId ?? null;
   if (orgId !== null) {
     return runWithOrgScope(pool, orgId, (client) => createQueuedRunFromSpecOnClient(client, input, actor));
@@ -237,8 +238,8 @@ async function ensureProjectAccess(pool: QueryClient, projectId: string, actor?:
     projectId,
   ]);
   const projectOrg = result.rows[0]?.org_id ?? null;
-  // org_id is mandatory (tanren tenancy hardening): no null-org bypass. A
-  // project with no resolvable org is denied, never granted.
+  // org_id is mandatory (no null-org bypass): a project with no resolvable org
+  // is denied, never granted.
   if (projectOrg === null) {
     throw new ProjectAccessDeniedError(projectId);
   }
@@ -310,21 +311,21 @@ async function createQueuedRunFromSpecOnClient(
   };
 
   await client.query(
-    // org_id is mandatory; derive it from the parent project (tanren tenancy).
+    // org_id derived in-statement from the parent project (tanren tenancy).
     `INSERT INTO runs (run_id, spec_id, project_id, org_id, trigger, branch, status)
      VALUES ($1, $2, $3, (SELECT org_id FROM projects WHERE project_id = $3), $4, $5, 'queued')`,
     [run.runId, run.specId, run.projectId, run.trigger, run.branch],
   );
   await claimPendingSpec(client, loaded.spec);
   await client.query(
-    // org_id derived from the parent run so the task carries its tenant directly.
     `INSERT INTO tasks (task_id, run_id, org_id, kind, title, status, agent_kind, cli, model)
      VALUES ($1, $2, (SELECT org_id FROM runs WHERE run_id = $2), 'plan', 'Plan spec implementation', 'queued', 'answerer', 'fake', $3)`,
     [plannerTaskId, run.runId, initialPlannerModel],
   );
   const job = await client.query(
-    `INSERT INTO job_queue (run_id, task_id, task_kind, payload)
-     VALUES ($1, $2, 'plan', $3::jsonb)
+    // RLS R3b: stamp the run's org_id on the queue row (job_queue is OUTSIDE RLS).
+    `INSERT INTO job_queue (run_id, task_id, task_kind, payload, org_id)
+     VALUES ($1, $2, 'plan', $3::jsonb, (SELECT org_id FROM runs WHERE run_id = $1))
      RETURNING id::text`,
     [run.runId, plannerTaskId, JSON.stringify({ specId: run.specId, projectId: run.projectId, branch: run.branch })],
   );
@@ -482,7 +483,6 @@ async function ensureClientProjectAccess(
     [projectId],
   );
   const projectOrg = projectRow.rows[0]?.org_id ?? null;
-  // org_id is mandatory (tanren tenancy hardening): no null-org bypass.
   if (projectOrg === null) {
     throw new ProjectAccessDeniedError(projectId);
   }

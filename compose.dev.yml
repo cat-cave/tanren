@@ -37,16 +37,19 @@ services:
       context: .
       dockerfile: services/orchestrator/Dockerfile
     environment:
-      # DATABASE_URL is the MIGRATION/OWNER connection: it runs CREATE/ALTER
-      # TABLE and is the owner of every table. RLS wave R1 adds a restricted
-      # runtime role (`tanren_app`, migration 0029) that the request/worker query
-      # paths will connect as once the control-plane/data-plane split lands (R2+);
-      # the owner/superuser BYPASSES RLS, so that split is mandatory for any
-      # future policy to bite. R1 is INERT (no policies) so both services still
-      # connect as the owner here and behavior is unchanged. The intended runtime
-      # URL is `postgres://tanren_app:<pw>@postgres:5432/tanren` — see
-      # docs/roadmap/saas-rls-and-plane-split-plan.md for the split + rollout.
-      DATABASE_URL: postgres://tanren:tanren@postgres:5432/tanren
+      # RLS R3b (enforcement flip). DATABASE_URL is now the RUNTIME connection as
+      # the restricted `tanren_app` role (NOBYPASSRLS, migration 0029): every
+      # request/worker tenant query runs under it, and the policies enabled in
+      # migration 0030 enforce org isolation at the DATABASE. MIGRATION_DATABASE_URL
+      # is the OWNER (`tanren`) connection used ONLY for the migrate step
+      # (CREATE/ALTER TABLE + CREATE POLICY stay owner-driven; the owner bypasses
+      # RLS as table owner). TANREN_SYSTEM_DATABASE_URL is the narrow BYPASSRLS
+      # `tanren_system` role (migration 0030) that `runWithSystemScope` connects
+      # as for genuinely cross-org system reads (the reaper's lineage sweep, the
+      # hello fixture's cross-org seeding). See docs/roadmap/saas-rls-and-plane-split-plan.md.
+      DATABASE_URL: postgres://tanren_app:tanren_app@postgres:5432/tanren
+      MIGRATION_DATABASE_URL: postgres://tanren:tanren@postgres:5432/tanren
+      TANREN_SYSTEM_DATABASE_URL: postgres://tanren_system:tanren_system@postgres:5432/tanren
       VAULT_ADDR: http://vault:8200
       VAULT_TOKEN: dev-root-token
       ORCHESTRATOR_PORT: "3100"
@@ -95,7 +98,13 @@ services:
       context: .
       dockerfile: services/allocator/Dockerfile
     environment:
+      # RLS R3b: the allocator is a cross-org SYSTEM service (manages runners for
+      # all tenants). Migrations run as owner (MIGRATION_DATABASE_URL); its runtime
+      # pool uses the BYPASSRLS `tanren_system` role (TANREN_SYSTEM_DATABASE_URL)
+      # so its `runners` reads/writes are not filtered by per-tenant policy.
       DATABASE_URL: postgres://tanren:tanren@postgres:5432/tanren
+      MIGRATION_DATABASE_URL: postgres://tanren:tanren@postgres:5432/tanren
+      TANREN_SYSTEM_DATABASE_URL: postgres://tanren_system:tanren_system@postgres:5432/tanren
       VAULT_ADDR: http://vault:8200
       VAULT_TOKEN: dev-root-token
       ALLOCATOR_PORT: "3200"

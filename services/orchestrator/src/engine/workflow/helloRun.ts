@@ -173,6 +173,8 @@ async function queueHelloTasks(
       taskId: task.taskId,
       taskKind: task.kind,
       payload: { taskId: task.taskId, kind: task.kind },
+      // RLS R3b: stamp the fixture org so the queue row carries its tenant.
+      orgId: HELLO_FIXTURE_ORG_ID,
     });
     await context.appendEvent({
       taskId: task.taskId,

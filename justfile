@@ -202,7 +202,18 @@ smoke-rls-r3a:
 smoke-rls-r3a-worker:
   DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/rlsR3aWorkerScoping.integration.test.ts
 
-smoke: compose-build compose-up wait-for-stack smoke-hello smoke-ssh-integration smoke-rls-r1 smoke-rls-r2 smoke-rls-r2-cohort2 smoke-rls-r2-cohort3 smoke-rls-r2-cohort4 smoke-rls-r3a smoke-rls-r3a-worker
+# RLS wave R3b ENFORCEMENT proof: runs the REAL migration (which enables RLS +
+# policies on every tenant table and creates the tanren_app / tanren_system
+# roles), then connects as the restricted `tanren_app` role and proves DB-level
+# two-org isolation — org A sees zero of org B's rows, an unset GUC returns zero
+# (deny-by-default), a WITH CHECK write for the wrong org is rejected, a
+# correctly-scoped read/write is unchanged, and the BYPASSRLS `tanren_system`
+# role reads across orgs (the documented carve-out). Same ephemeral-DB harness
+# as R1 / R2 / R3a. DATABASE_URL is the OWNER/superuser connection.
+smoke-rls-r3b:
+  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/rlsR3bEnforcement.integration.test.ts
+
+smoke: compose-build compose-up wait-for-stack smoke-hello smoke-ssh-integration smoke-rls-r1 smoke-rls-r2 smoke-rls-r2-cohort2 smoke-rls-r2-cohort3 smoke-rls-r2-cohort4 smoke-rls-r3a smoke-rls-r3a-worker smoke-rls-r3b
 
 # P3-0001: the Phase 2A direct-execution acceptance gate (`just acceptance`,
 # scripts/acceptance/easy.ts + medium.ts) was removed once the run executor

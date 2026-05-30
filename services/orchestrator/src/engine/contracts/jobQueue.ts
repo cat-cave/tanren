@@ -9,6 +9,12 @@ export interface JobEnvelope<TPayload = unknown> {
   attempts: number;
   /** P3-0028: configured re-claim ceiling for this job. */
   maxAttempts: number;
+  // RLS R3b: the owning run's org, stamped on enqueue (job_queue.org_id). The
+  // queue stays OUTSIDE RLS, so this is the worker's tenant BOOTSTRAP source —
+  // the claim reads it to scope `loadRunExecutionContext` to the job's org
+  // instead of doing an RLS-protected `runs` read. Undefined for a
+  // legacy/unscoped job (e.g. the hello fixture, a CLI caller with no org).
+  orgId?: string;
 }
 
 export type EnqueueJob<TPayload = unknown> = Omit<JobEnvelope<TPayload>, "id" | "attempts" | "maxAttempts"> & {
@@ -146,10 +152,18 @@ export class PgJobQueue<TPayload = unknown> implements JobQueue<TPayload> {
   constructor(private readonly pool: pg.Pool) {}
 
   async enqueue(job: EnqueueJob<TPayload>): Promise<JobEnvelope<TPayload>> {
+    // RLS R3b: stamp the owning run's org_id on the queue row. When the caller
+    // does not pass one explicitly we derive it from the run (COALESCE), so a
+    // run-bound job always carries its tenant even if the enqueue site predates
+    // the org thread. job_queue stays OUTSIDE RLS, so this INSERT is unaffected
+    // by policies — it is the worker's bootstrap source, not a tenant read.
     const result = await this.pool.query(
-      `INSERT INTO job_queue (run_id, task_id, task_kind, payload, attempts, max_attempts)
-       VALUES ($1, $2, $3, $4::jsonb, $5, $6)
-       RETURNING id::text, run_id, task_id, task_kind, payload, attempts, max_attempts`,
+      `INSERT INTO job_queue (run_id, task_id, task_kind, payload, attempts, max_attempts, org_id)
+       VALUES (
+         $1, $2, $3, $4::jsonb, $5, $6,
+         COALESCE($7, (SELECT org_id FROM runs WHERE run_id = $1))
+       )
+       RETURNING id::text, run_id, task_id, task_kind, payload, attempts, max_attempts, org_id`,
       [
         job.runId ?? null,
         job.taskId ?? null,
@@ -157,6 +171,7 @@ export class PgJobQueue<TPayload = unknown> implements JobQueue<TPayload> {
         JSON.stringify(job.payload),
         job.attempts ?? 0,
         job.maxAttempts ?? DEFAULT_MAX_ATTEMPTS,
+        job.orgId ?? null,
       ],
     );
     return envelopeFromRow(result.rows[0]);
@@ -188,7 +203,7 @@ export class PgJobQueue<TPayload = unknown> implements JobQueue<TPayload> {
              heartbeat_at = now(),
              leased_until = now() + ($3 * interval '1 millisecond')
          WHERE id IN (SELECT id FROM next_job)
-         RETURNING id::text, run_id, task_id, task_kind, payload, attempts, max_attempts`,
+         RETURNING id::text, run_id, task_id, task_kind, payload, attempts, max_attempts, org_id`,
         [taskKind, options?.runId ?? null, leaseMs],
       );
       await client.query("COMMIT");
@@ -306,7 +321,10 @@ function envelopeFromRow<TPayload>(row: {
   attempts?: number;
   max_attempts?: number;
   maxAttempts?: number;
+  org_id?: string | null;
+  orgId?: string | null;
 }): JobEnvelope<TPayload> {
+  const orgId = row.org_id ?? row.orgId ?? undefined;
   return {
     id: String(row.id),
     runId: row.run_id ?? row.runId ?? undefined,
@@ -315,5 +333,6 @@ function envelopeFromRow<TPayload>(row: {
     payload: row.payload,
     attempts: row.attempts ?? 0,
     maxAttempts: row.max_attempts ?? row.maxAttempts ?? DEFAULT_MAX_ATTEMPTS,
+    ...(orgId === undefined || orgId === null ? {} : { orgId }),
   };
 }
