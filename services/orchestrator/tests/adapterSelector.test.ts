@@ -45,6 +45,20 @@ describe("adapter selector (P3-0012 fallback-chain resolution)", () => {
     expect(buildWriterAdapter(deps(), entry("aider", "anthropic/claude-opus-4-8", "credential/aider/dev")).cli).toBe(
       "aider",
     );
+    expect(buildWriterAdapter(deps(), entry("pi", "anthropic/claude-opus-4-8", "credential/pi/dev")).cli).toBe("pi");
+    expect(buildWriterAdapter(deps(), entry("reasonix", "deepseek-reasoner", "credential/reasonix/dev")).cli).toBe(
+      "reasonix",
+    );
+  });
+
+  it("treats pi and reasonix as Writer-only — they route for write but are not selectable Answerers", () => {
+    for (const cli of ["pi", "reasonix"] as const) {
+      expect(SELECTABLE_WRITER_CLIS).toContain(cli);
+      expect(SELECTABLE_ANSWERER_CLIS).not.toContain(cli);
+      expect(() => buildAnswererAdapter<CheckAnswer>(deps(), entry(cli, "model", `credential/${cli}/dev`))).toThrow(
+        UnsupportedProviderError,
+      );
+    }
   });
 
   it("treats aider as Writer-only — it routes for write but is not a selectable Answerer", () => {
@@ -145,8 +159,8 @@ describe("harness capability model (Track C §4 protocol contract)", () => {
     expect(HARNESS_PROTOCOL_VERSION).toBe("v1");
   });
 
-  it("derives SELECTABLE_WRITER_CLIS to exactly today's writers (codex, claude, opencode, aider)", () => {
-    expect([...SELECTABLE_WRITER_CLIS].toSorted()).toEqual(["aider", "claude", "codex", "opencode"]);
+  it("derives SELECTABLE_WRITER_CLIS to exactly today's writers (codex, claude, opencode, aider, pi, reasonix)", () => {
+    expect([...SELECTABLE_WRITER_CLIS].toSorted()).toEqual(["aider", "claude", "codex", "opencode", "pi", "reasonix"]);
   });
 
   it("derives SELECTABLE_ANSWERER_CLIS to exactly today's answerers (codex, claude)", () => {
@@ -166,6 +180,11 @@ describe("harness capability model (Track C §4 protocol contract)", () => {
     expect(harnessSupportsRole("opencode", "write")).toBe(true);
     expect(harnessSupportsRole("aider", "answer")).toBe(false);
     expect(harnessSupportsRole("aider", "write")).toBe(true);
+    expect(harnessSupportsRole("pi", "answer")).toBe(false);
+    expect(harnessSupportsRole("pi", "write")).toBe(true);
+    expect(harnessSupportsRole("reasonix", "answer")).toBe(false);
+    expect(harnessSupportsRole("reasonix", "write")).toBe(true);
+    expect(harnessSupportsRole("agy", "write")).toBe(false);
     expect(harnessSupportsRole("wafer", "write")).toBe(false);
   });
 });

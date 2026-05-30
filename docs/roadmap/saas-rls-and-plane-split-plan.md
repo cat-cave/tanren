@@ -1,126 +1,160 @@
-# SaaS RLS + control-plane/data-plane split — plan
+# SaaS multi-tenancy: RLS + control-plane/data-plane split — plan
 
-Status: **R1 building** (this PR). Postgres Row-Level Security multi-tenancy,
-delivered in inert waves so each step is provably behavior-neutral before the
-policy that bites.
+**Status: PLAN ONLY (held for explicit approval).** No code lands from this doc
+until the open decisions below are settled. These are the two big multi-tenant
+refactors deliberately deferred from the expansion work — written up here so the
+approach is reviewable before any build.
 
-## Locked decisions
+This follows the **open-source / hosting-available** model: the isolation and
+plane primitives that make a hosted product _deployable_ live in this repo; the
+commercial layer (billing, pricing, plan tiers, marketing) does **not**. This
+plan covers only the former.
 
-These are the approved, locked decisions the build follows:
+## Where we already are (build on these, don't duplicate)
 
-- **App-managed per-request connection checkout + `SET LOCAL app.current_org_id`
-  inside a transaction** (NOT pgBouncer). The app checks out a `pg` client,
-  opens a transaction, stamps the org GUC, runs the request's queries, commits.
-  `SET LOCAL` scopes the GUC to the transaction so it never leaks to a later
-  checkout of the same pooled connection.
-- **Restricted runtime role.** Migrations run as the table **owner**; the runtime
-  connects as a **non-owner, non-superuser** role. The owner and any superuser
-  **BYPASS RLS**, so this split is mandatory for RLS to ever bite. R1 creates the
-  role (`tanren_app`); the runtime DATABASE_URL points at it once the plane split
-  lands (R2+).
-- **`job_queue` and other genuinely cross-org system tables stay OUTSIDE RLS.**
-  The worker claims under a narrow **system/bypass context** (no org GUC — the
-  claim spans tenants), then sets the **claimed job's org** before any tenant
-  work.
-- **One Postgres + RLS.** No second database; tenancy is enforced in-engine by
-  RLS, not by physical separation.
+- **`org_id` is mandatory** on the core tables (migration `0026`: runs, tasks,
+  events, cost_records, specs, runners — NOT NULL + FK + composite indexes).
+- **`ActorContext`** (userId, orgId, projectId, scopes) is fully typed; scope
+  checks (`platform:admin` / `org:admin` / `org:member` / `project:*`) exist.
+- **Isolation is enforced app-layer only.** ~269 query sites filter by `org_id`
+  in application code; there is **no database-level enforcement**. A query that
+  forgets `WHERE org_id = $n` returns cross-tenant rows silently. This is the
+  gap RLS closes.
+- **Seams already in place:** `QuotaPolicy` (noop default / DB-backed) + metering
+  export; tenant-namespaced credential refs (`credential/<slug>/<scope>/<owner>/<name>`);
+  `providerMode: byok|managed`; pluggable secret-store factory.
+- **Already-separate processes:** the allocator is its own service (static bearer
+  token); the dashboard is a BFF with **no direct DB access**; the run worker is
+  flag-gated (`TANREN_RUN_WORKER=1`) but runs **in-process** in the orchestrator,
+  sharing its `pg.Pool` and in-process caches (e.g. `GithubAppTokenMinter`).
+- **Job queue** is Postgres-native (`FOR UPDATE SKIP LOCKED` atomic claim).
 
-## Mechanism (R1, this PR)
+## The two refactors and why
 
-The mechanism module is `db/src/orgScope.ts`, exported from `@tanren/db`:
+1. **RLS (Row-Level Security)** — _defense in depth._ Today a single forgotten
+   filter leaks tenants. RLS makes Postgres itself enforce `org_id` isolation, so
+   a query bug can't cross tenants. The app-layer filters stay (belt **and**
+   suspenders); RLS is the backstop.
+2. **Control-plane / data-plane split** — _blast radius + scaling._ The data
+   plane executes agent CLIs against workspaces (semi-trusted code). Today that
+   worker shares the orchestrator's superuser DB pool and Vault access. Splitting
+   it means a compromised runner can't reach the control DB or root secrets, and
+   the two halves scale independently.
 
-- `runWithOrgScope(pool, orgId, work)` — checks out a client, `BEGIN`,
-  `SET LOCAL app.current_org_id = '<orgId>'`, runs `work(client)` on an
-  `AsyncLocalStorage` scope, `COMMIT` (or `ROLLBACK` on throw), always releases.
-  The org id is validated against `^[A-Za-z0-9_:.-]+$` before interpolation (a
-  GUC cannot be parameterized).
-- `runWithSystemScope(pool, work)` — the cross-org variant: a transaction with
-  **no** org GUC, for genuinely cross-tenant system work (the `job_queue` claim).
-- `getOrgScopedClient()` / `getOrgScope()` — the ambient scoped client/org for
-  handlers that have adopted the path, reached without prop-drilling.
+---
 
-**Inertness:** with **no policies** (R1), the only observable effect of the above
-is the GUC being set inside a transaction that nothing reads. Every query returns
-exactly what it did against the pool.
+## Refactor 1 — RLS
 
-### Restricted role (migration 0029)
+**Blockers (from the terrain map):** one shared `pg.Pool` with no per-request
+context (setting a session var on a pooled connection bleeds across concurrent
+requests); ~269 scattered query sites with no central data-access layer; runtime
+connects as a privileged role (superuser **bypasses** RLS).
 
-`db/migrations/0029_rls_r1_restricted_role.sql` (generated via the Drizzle custom
-migration workflow — `drizzle-kit generate --custom`) creates `tanren_app`:
+**Approach**
 
-- `LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS`, dev/CI default
-  password `tanren_app` (prod rotates it out-of-band and supplies the secret via
-  the runtime DATABASE_URL — the literal is not a prod credential).
-- `GRANT USAGE ON SCHEMA public` (no `CREATE` — DDL stays owner-only).
-- `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES` + `USAGE, SELECT ON ALL
-SEQUENCES` so nothing is lost relative to the owner path.
-- `ALTER DEFAULT PRIVILEGES FOR ROLE tanren` so future owner-created tables are
-  auto-granted (no per-R-wave GRANT bookkeeping).
+- **Per-request org context.** Check out a connection per request, run the
+  request's queries inside a transaction with `SET LOCAL app.current_org_id =
+$org` (transaction-scoped → no bleed), release on completion. Alternative:
+  pgBouncer in transaction mode + `SET LOCAL`. (Decision below.)
+- **Restricted runtime role.** Migrations run as the table owner; the runtime
+  connects as a non-owner role that RLS actually applies to. Superuser/owner
+  bypasses policies, so this separation is mandatory for RLS to mean anything.
+- **Policies** on every tenant-scoped table (the `0026` six + projects,
+  forge_threads/turns, org_quotas, credentials metadata, …):
+  `USING (org_id = current_setting('app.current_org_id')::text)`.
+- **Keep app-layer filters.** RLS is the backstop, not a license to drop the
+  explicit `WHERE org_id`. Both layers stay.
+- **Worker / cross-org operations.** The job-queue claim and other system-level
+  operations are intentionally cross-org; they run under a **system context**
+  (bypass role or queue tables left outside RLS), then the worker derives the
+  claimed job's `org_id` and sets the per-job context for that run's queries.
 
-Idempotent: re-running the full migration set on an existing DB does not error.
+**Waves** (each flag-gated, independently shippable, reversible)
 
-### Runtime DATABASE_URL selection
+- **R1 — plumbing, no policies.** Add the restricted runtime role + per-request
+  transaction/session-context. Behavior unchanged (no policies yet); this is the
+  riskiest infra change, landed in isolation so it can be proven inert.
+- **R2 — policies, table-by-table, behind a flag.** Enable RLS + policy per
+  table with a **two-org isolation test** (org A's session sees zero of org B's
+  rows at the DB level) gating each.
+- **R3 — worker/job context + enforce.** Wire the per-job context in the worker,
+  flip enforcement on everywhere, keep app filters.
 
-R1 is inert, so both the orchestrator and worker still connect as the **owner**
-(`DATABASE_URL`) — they `migrate()` and serve on one pool. The runtime split is
-documented in `compose.dev.yml`: the intended runtime URL is
-`postgres://tanren_app:<pw>@postgres:5432/tanren`. Flipping the runtime pool to
-`tanren_app` (with migrations still on the owner URL) is the **R2 plane-split**
-step, taken together with `ENABLE ROW LEVEL SECURITY` + policies so the change is
-verified by the policy that bites.
+**Risks:** connection-checkout latency under load; pool sizing; the worker's
+legitimately-cross-org reads; getting the migrations-as-owner vs runtime-role
+split right; `current_setting` typing/escaping.
 
-## Reference conversions (R1, this PR)
+---
 
-The proven reference pattern, wired end-to-end:
+## Refactor 2 — control-plane / data-plane split
 
-- **Request middleware** (`services/orchestrator/src/middleware/auth.ts`):
-  `bindActor` sets `requestOrgId` from the resolved `ActorContext` on every
-  authenticated path, so the org the scoped client stamps always matches the
-  authenticated actor. `getRequestOrgId(c)` exposes it.
-- **`runs` read path** (`routes/runs/index.ts` GET run detail): the run / spec /
-  tasks / events / costs loaders run through `runWithOrgScope` on the path org
-  (already validated against the actor). Loader signatures widened to a
-  `QueryClient` (`Pick<Pool|PoolClient,"query">`) so both the pool and the scoped
-  client satisfy them.
-- **`runs` write path** (`engine/workflow/projectSpec.ts`
-  `createQueuedRunFromSpec`): when the actor carries an org, the run-create
-  transaction runs through `runWithOrgScope`; a legacy/unscoped actor keeps the
-  original manual-transaction path.
-- **Worker per-job context** (`engine/worker/runExecutor.ts`): the `job_queue`
-  claim is cross-org (system context). After the claimed job's org is resolved,
-  `establishJobOrgContext` opens the per-job org scope and confirms the run is
-  reachable under it.
+**Current:** monolith. Worker in-process (the `TANREN_RUN_WORKER` flag already
+marks the seam) sharing the pool + caches; allocator already separate; dashboard
+already a DB-less BFF. So the seam to formalize is **orchestrator API (control)
+↔ run executor + runner substrate (data)**.
 
-## What R2 / R3 still must do
+**Target planes**
 
-R1 converts **one** reference read+write path. The remaining ~268 query sites
-(~208 in `services/orchestrator/src` across ~53 files, plus the dashboard/CLI
-read surfaces) are **NOT** yet org-scoped. The honest, explicit remaining work:
+- **Control plane** — HTTP API, auth, all state mutations, job enqueue, quota
+  admission, review/merge orchestration, credential-resolution _policy_, token
+  minting. Trusted; holds Postgres + Vault access.
+- **Data plane** — the run executor + runner substrate. Executes agent CLIs on
+  workspaces. Should hold **no** broad DB credentials and **no** Vault root —
+  only short-lived, per-run, scoped material.
 
-**R2 — enable policies + flip the runtime role**
+**Approach**
 
-- `ALTER TABLE … ENABLE ROW LEVEL SECURITY` + `CREATE POLICY` on the tenant
-  tables (`organizations`, `projects`, `specs`, `runs`, `tasks`, `events`,
-  `cost_records`, `runners`, `personas`, `behaviors`, `milestones`,
-  `spec_behaviors`, `spec_milestones`, `spec_dependencies`, `org_members`,
-  `project_members`, `forge_threads`, `forge_turns`, `forge_action_proposals`,
-  `workflow_insights`, `notification_targets`, `notification_routes`,
-  `inbox_sources`, `candidates`, `audit_jobs`, `org_quotas`) keyed off
-  `current_setting('app.current_org_id', true)`.
-- Keep `job_queue`, `notifications`, `sessions`, `api_tokens`, `users`,
-  `rate_limit_observations` OUTSIDE RLS (cross-org / identity / system tables).
-- Flip the runtime DATABASE_URL to `tanren_app` (migrations stay on the owner).
+- **Extract the worker** into its own deployable (the flag already isolates it).
+  Instead of claiming from `job_queue` with a superuser connection, it pulls work
+  from the control plane and reports events/results **back over an authenticated
+  channel** (mTLS or signed service JWT) — shrinking the data plane's direct DB
+  surface toward zero.
+- **Scoped credentials.** The control plane mints short-lived per-run credentials
+  for the data plane (it already mints GitHub App installation tokens — extend
+  that model) rather than handing over Vault refs/root.
+- **Move in-process caches** (`GithubAppTokenMinter`) to the control plane; the
+  data plane receives already-minted tokens.
 
-**R3+ — convert the remaining query sites to the org-scoped client**, wave by
-wave, so that once policies are on, every tenant query runs under the GUC:
+**Waves**
 
-- All other `routes/**` read paths (specs, projects, personas, behaviors,
-  milestones, insights, dora, costs, notifications, recovery, inbox, audits,
-  discovery, onboarding, forge, brownfield).
-- The remaining `engine/**` write paths (event store, task/cost recording,
-  workflow finalize, credential resolution reads, quota reads/accrual).
-- The dashboard + CLI read surfaces that query Postgres directly.
+- **P1 — process boundary.** Make the worker a standalone deployable (still same
+  DB, same claim mechanism). Pure deployment-topology change, no trust change.
+- **P2 — service identity + shrink DB surface.** Add mTLS/JWT between control and
+  data; route the worker's writes (events/results) through a control-plane API so
+  the data plane stops writing to Postgres directly. Job-claim moves from DB-CAS
+  to a control-plane endpoint.
+- **P3 — de-privilege the data plane.** Per-run scoped credentials; remove broad
+  DB + Vault access from the data plane entirely.
 
-Each R-wave is a mechanical `pool → getOrgScopedClient()/runWithOrgScope`
-conversion plus a behavior test; none changes SQL. See `R-WAVES.md` for the live
-checklist.
+**Risks:** moving job-claim atomicity from DB `SKIP LOCKED` to an API (need to
+preserve exactly-once claim); event throughput/latency vs the current direct
+writes; backpressure; the allocator's place in the new topology.
+
+---
+
+## Sequencing
+
+**RLS first (R1–R3), then the plane split (P1–P3).** RLS delivers the
+per-request org-context plumbing and the restricted runtime role that the plane
+split's de-privileged data plane builds on. Every wave is flag-gated,
+independently shippable, reversible, and goes per-PR-through-CI. RLS infra (R1)
+is the single highest-risk change and is deliberately landed inert and first.
+
+## Open decisions (need your call before R1/P1)
+
+1. **RLS session-var mechanism:** app-managed per-request connection checkout vs
+   **pgBouncer in transaction mode**. (Affects deploy topology + perf.)
+2. **Cross-org system ops:** a dedicated bypass role vs leaving `job_queue` (and
+   other system tables) outside RLS.
+3. **Control↔data transport:** mTLS vs signed service JWT.
+4. **Data-plane de-privileging depth now:** stop at "separate process, same DB"
+   (P1) for this round, or push through to per-run scoped credentials (P3)?
+5. **Hosting topology:** one Postgres with RLS (cheaper, simpler) vs separate
+   databases per plane/tenant tier (stronger isolation, more ops).
+
+## Non-goals / out of repo
+
+Billing, metering-to-invoice, pricing, plan tiers, entitlement marketing — all
+out. This plan covers only the isolation + plane primitives that make a hosted
+deployment possible; the `QuotaPolicy` + metering-export seams are the boundary
+where an out-of-repo commercial layer plugs in.
