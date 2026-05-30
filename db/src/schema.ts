@@ -476,7 +476,7 @@ export const specDependencies = pgTable(
 // namespace via these re-exports. Owners: schemaNotifications (P2A-0017),
 // schemaForge (P2A-0019), schemaInsights (P2A-0020), schemaInbox (P3-0022), schemaAudits (P3-0021).
 export { notificationTargets, notificationRoutes } from "./schemaNotifications.js";
-export { forgeThreads, forgeTurns } from "./schemaForge.js";
+export { forgeThreads, forgeTurns, forgeActionProposals } from "./schemaForge.js";
 export { workflowInsights } from "./schemaInsights.js";
 export { inboxSources, candidates } from "./schemaInbox.js";
 export { auditJobs } from "./schemaAudits.js";

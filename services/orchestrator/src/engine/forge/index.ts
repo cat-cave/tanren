@@ -17,6 +17,23 @@ export {
 export { ForgeThreadStore, ForgeThreadAccessDeniedError } from "./threads.js";
 export { ForgeTurnStore, actorCanViewAudience } from "./turns.js";
 
+export {
+  ForgeProposalStore,
+  ForgeProposalStatus,
+  ForgeActionProposalRow,
+  ProposalNotFoundError,
+  ProposalAlreadyDecidedError,
+  toolCallForProposal,
+  type CreateProposalInput,
+} from "./proposals.js";
+
+export {
+  decideForgeProposal,
+  type ForgeProposalDecisionDeps,
+  type ForgeProposalDecisionResult,
+  type ForgeWriteToolDispatcher,
+} from "./proposalDecision.js";
+
 export * from "./tools/index.js";
 
 // P3-0010: thick-Forge LLM conversation backend (the Phase 3 swap-in for the

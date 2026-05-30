@@ -90,6 +90,10 @@ export function createForgeAskRoutes(options: ForgeAskRoutesOptions) {
           operatorTurn: result.operatorTurn,
           forgeTurn: result.forgeTurn,
           toolsUsed: result.toolResults.map((entry) => entry.call.tool),
+          // Pending write proposals the answerer raised this turn (P3-0010
+          // write-action approval). The dashboard renders these as live
+          // approve/reject cards; the engine never executed them.
+          proposals: result.proposals,
         },
         201,
       );

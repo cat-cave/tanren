@@ -8,10 +8,12 @@
  * cookie to the orchestrator's LLM-backed conversation endpoint).
  *
  * Action cards: a card whose toolCall is a READ tool maps to an in-shell route
- * and navigates on click (auto-navigate). A card whose toolCall is a WRITE tool
- * (create_spec / trigger_run / rerun_task / acknowledge_insight) renders but is
- * INERT — write-action approval is deferred.
- *   // TODO: Forge write-action approval (deferred — design pending)
+ * and navigates on click (auto-navigate). WRITE actions the answerer PROPOSES
+ * (create_spec / trigger_run / rerun_task / acknowledge_insight) are now LIVE
+ * (P3-0010 write-action approval): each pending proposal renders an
+ * approve/reject card that POSTs to the dashboard's same-origin proposal proxy.
+ * The model proposed; a human decides; the orchestrator executes under the
+ * approving operator's authz.
  */
 
 interface ForgeAction {
@@ -33,10 +35,19 @@ interface ForgeAnswer {
   prompts: string[];
 }
 
+export interface ForgeProposal {
+  id: string;
+  toolName: string;
+  rationale: string;
+  status: string;
+  error?: string | null;
+}
+
 interface ForgeAskResponse {
   threadId: string;
   answer: ForgeAnswer;
   toolsUsed: string[];
+  proposals: ForgeProposal[];
 }
 
 const READ_TOOLS = new Set([
@@ -125,6 +136,85 @@ export function appendForgeTurn(chat: HTMLElement, answer: ForgeAnswer, handlers
   row.appendChild(col);
   chat.appendChild(row);
   chat.scrollTop = chat.scrollHeight;
+}
+
+// Renders the pending write proposals the answerer raised as LIVE approve/
+// reject cards (P3-0010 write-action approval). Each decision POSTs to the
+// dashboard's same-origin proxy; the card updates in place to the resulting
+// status (executed / rejected / failed / already-decided) without re-asking.
+const STATUS_LABEL: Record<string, string> = {
+  pending: "awaiting your approval",
+  approved: "approved",
+  executed: "✓ approved · executed",
+  rejected: "✕ rejected",
+  failed: "⚠ failed",
+};
+
+export function appendProposals(chat: HTMLElement, orgId: string, proposals: ForgeProposal[]): void {
+  const pending = proposals.filter((p) => p.status === "pending");
+  if (pending.length === 0) return;
+  const row = el("div", "fc-msg forge");
+  row.appendChild(el("div", "who", "鍛"));
+  const col = el("div", "fc-col");
+  for (const proposal of pending) {
+    col.appendChild(buildProposalCard(orgId, proposal));
+  }
+  row.appendChild(col);
+  chat.appendChild(row);
+  chat.scrollTop = chat.scrollHeight;
+}
+
+function buildProposalCard(orgId: string, proposal: ForgeProposal): HTMLElement {
+  const node = el("div", "fc-card proposal");
+  node.dataset["proposalId"] = proposal.id;
+  node.appendChild(el("div", "lbl", "▸ proposed action"));
+  node.appendChild(el("div", "t", proposal.toolName));
+  node.appendChild(el("div", "d", proposal.rationale));
+  const status = el("div", "fc-proposal-status", STATUS_LABEL[proposal.status] ?? proposal.status);
+  const actions = el("div", "fc-proposal-actions");
+  const approve = el("button", "btn primary", "approve");
+  const reject = el("button", "btn ghost", "reject");
+  approve.type = "button";
+  reject.type = "button";
+  const decide = (decision: "approve" | "reject"): void => {
+    approve.disabled = true;
+    reject.disabled = true;
+    void decideProposal(orgId, proposal.id, decision).then((outcome) => {
+      status.textContent = STATUS_LABEL[outcome] ?? outcome;
+      node.classList.add("decided");
+    });
+  };
+  approve.addEventListener("click", () => decide("approve"));
+  reject.addEventListener("click", () => decide("reject"));
+  actions.appendChild(approve);
+  actions.appendChild(reject);
+  node.appendChild(actions);
+  node.appendChild(status);
+  return node;
+}
+
+// POSTs the decision to the dashboard proxy and resolves to the resulting
+// status string for the card. 409 (already decided) and 403 (denied) are
+// surfaced honestly so the operator sees the terminal state, never a re-run.
+async function decideProposal(orgId: string, proposalId: string, decision: "approve" | "reject"): Promise<string> {
+  try {
+    const response = await fetch(`/forge/proposals/${decision}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ orgId, proposalId }),
+    });
+    const body = (await response.json().catch(() => ({}))) as {
+      proposal?: { status?: string };
+      outcome?: string;
+      currentStatus?: string;
+    };
+    if (response.ok) return body.proposal?.status ?? (decision === "approve" ? "executed" : "rejected");
+    if (response.status === 409) return body.currentStatus ?? "already decided";
+    if (response.status === 403) return "denied";
+    return "failed";
+  } catch {
+    return "failed";
+  }
 }
 
 // The card the design surfaces: the first attention item (or insight) that
