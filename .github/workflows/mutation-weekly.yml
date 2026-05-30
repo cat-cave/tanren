@@ -1,0 +1,88 @@
+name: mutation-weekly
+
+# Scheduled WHOLE-REPO mutation testing. This is the slow, full-coverage trend
+# tracker — it runs `just mutation-full` (services/orchestrator/src/**) plus the
+# refactor-target backend clusters, OFF the per-PR critical path. It never gates
+# a PR (it is not in the `check` job of ci.yml); it records the global mutation
+# trend and the backend-baseline scores over time. See
+# docs/contracts/mutation-testing.md for the cluster map + baselines.
+
+on:
+  schedule:
+    # Weekly, Monday 07:00 UTC.
+    - cron: "0 7 * * 1"
+  workflow_dispatch:
+
+# Never let two long runs stack up; a newer run supersedes an in-flight one.
+concurrency:
+  group: mutation-weekly
+  cancel-in-progress: false
+
+jobs:
+  full:
+    runs-on: ubuntu-latest
+    # Whole-repo mutation is expensive; give it a generous ceiling.
+    timeout-minutes: 360
+    permissions:
+      contents: read
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - run: sudo apt-get update && sudo apt-get install -y just
+      - run: corepack enable
+      - run: corepack prepare pnpm@11.1.0 --activate
+      - run: pnpm install --frozen-lockfile
+      # Whole-repo mutation trend. `continue-on-error` so a single regressing
+      # cluster floor does not abort the report upload — the artifact is the
+      # point of the weekly job.
+      - name: mutation-full
+        id: mutation_full
+        continue-on-error: true
+        run: just mutation-full
+        env:
+          MERGIFY_TOKEN: ${{ secrets.MERGIFY_TOKEN }}
+      - name: upload mutation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutation-full-report
+          path: |
+            reports/mutation/full/index.html
+            reports/mutation/full/mutation.json
+          if-no-files-found: warn
+          retention-days: 30
+
+  # Refactor-target backend clusters, measured individually so each carries its
+  # own ratcheted `break` floor (these are the modules we want full confidence in
+  # BEFORE the RLS / control-plane-data-plane rearchitecture). Runs in parallel
+  # with the whole-repo job above.
+  backend-clusters:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        cluster: [repos, worker, dal]
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - run: sudo apt-get update && sudo apt-get install -y just
+      - run: corepack enable
+      - run: corepack prepare pnpm@11.1.0 --activate
+      - run: pnpm install --frozen-lockfile
+      - name: mutation cluster ${{ matrix.cluster }}
+        run: just mutation-cluster ${{ matrix.cluster }}
+        env:
+          MERGIFY_TOKEN: ${{ secrets.MERGIFY_TOKEN }}
