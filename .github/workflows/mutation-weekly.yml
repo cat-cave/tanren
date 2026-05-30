@@ -57,10 +57,13 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
-  # Refactor-target backend clusters, measured individually so each carries its
-  # own ratcheted `break` floor (these are the modules we want full confidence in
-  # BEFORE the RLS / control-plane-data-plane rearchitecture). Runs in parallel
-  # with the whole-repo job above.
+  # Per-cluster mutation, measured individually so each carries its own ratcheted
+  # `break` floor. Two kinds live here: the refactor-target backend clusters
+  # (repos/worker/dal — the modules we want full confidence in BEFORE the RLS /
+  # control-plane-data-plane rearchitecture, so their floors guard "did not
+  # weaken") and the strengthened seam clusters (e.g. `inbox` — the candidate
+  # source-connector seam, ratcheted to its post-strengthening score). Runs in
+  # parallel with the whole-repo job above.
   backend-clusters:
     runs-on: ubuntu-latest
     timeout-minutes: 120
@@ -69,7 +72,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        cluster: [repos, worker, dal]
+        cluster: [repos, worker, dal, inbox]
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
     steps:
