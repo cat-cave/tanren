@@ -63,6 +63,20 @@ test:
 mutation:
   corepack pnpm run check:mutation
 
+# WHOLE-REPO mutation (services/orchestrator/src/**) via stryker.full.mjs.
+# EXPENSIVE — NOT for per-PR CI. Driven on demand and by the WEEKLY scheduled
+# job (.github/workflows/mutation-weekly.yml). Per-cluster `break` floors gate
+# regressions; this run tracks the global trend. See
+# docs/contracts/mutation-testing.md.
+mutation-full:
+  corepack pnpm exec stryker run stryker.full.mjs
+
+# Run one named mutation cluster, e.g. `just mutation-cluster repos` →
+# stryker.repos.mjs. Clusters: runloop alloc wf forge notify secrets repos
+# worker dal. Each carries its own ratcheted `break` floor.
+mutation-cluster cluster:
+  corepack pnpm exec stryker run stryker.{{cluster}}.mjs
+
 build:
   corepack pnpm run build
 
