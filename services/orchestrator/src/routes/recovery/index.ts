@@ -12,6 +12,7 @@
 // Every action persists a typed `recovery.*` lineage event (the events table is
 // the lineage home). The heavy lifting lives in `engine/recovery`.
 
+import { runWithOrgScope } from "@tanren/db";
 import type { Context } from "hono";
 import { Hono } from "hono";
 import type pg from "pg";
@@ -67,7 +68,7 @@ export function createRecoveryRoutes(options: RecoveryRoutesOptions) {
   app.post("/:orgId/projects/:projectId/runs/:runId/recovery/revise", async (c) => {
     const gate = await gateRun(options.pool, c);
     if (gate.denial !== undefined) return gate.denial;
-    return runAction(c, () => reviseSpec(options.pool, gate.ctx));
+    return runAction(c, () => reviseSpec(options.pool, gate.ctx, gate.orgId));
   });
 
   app.post("/:orgId/projects/:projectId/runs/:runId/recovery/replan", async (c) => {
@@ -137,22 +138,27 @@ async function gateRun(pool: pg.Pool, c: Context<ActorContextEnv>): Promise<RunG
   if (!actorCanAccessOrg(actor, orgId)) {
     return { actor, orgId, ctx: empty, denial: c.json({ error: "org_access_denied" }, 403) };
   }
+  // RLS R3a: run the gate reads (the `runs`/`projects`/`project_members` access
+  // check + the run/events context load) inside one org-scoped txn so they carry
+  // org context. `orgId` is the path org, validated above. Inert in R1.
   try {
-    const access = await assertRunAccess(pool, runId, actor);
-    if (access.projectId !== projectId) {
+    const ctx = await runWithOrgScope(pool, orgId, async (client) => {
+      const access = await assertRunAccess(client, runId, actor);
+      if (access.projectId !== projectId) {
+        return undefined;
+      }
+      return loadHaltedRunContext(client, runId);
+    });
+    if (ctx === undefined || ctx.projectId !== projectId) {
       return { actor, orgId, ctx: empty, denial: c.json({ error: "run_not_found" }, 404) };
     }
+    return { actor, orgId, ctx };
   } catch (error) {
     if (error instanceof ToolAccessDeniedError) {
       return { actor, orgId, ctx: empty, denial: c.json({ error: "run_not_found" }, 404) };
     }
     throw error;
   }
-  const ctx = await loadHaltedRunContext(pool, runId);
-  if (ctx === undefined || ctx.projectId !== projectId) {
-    return { actor, orgId, ctx: empty, denial: c.json({ error: "run_not_found" }, 404) };
-  }
-  return { actor, orgId, ctx };
 }
 
 /** Run a recovery action, mapping its typed errors to HTTP statuses. */

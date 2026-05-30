@@ -174,7 +174,6 @@ export function createForgeRoutes(options: ForgeRoutesOptions) {
       const turn = await runWithOrgScope(options.pool, orgId, (client) =>
         generateProjectViewTurn({
           client,
-          pool: options.pool,
           threadId: c.req.param("threadId"),
           projectId: parsed.data.projectId,
           audience: parsed.data.audience ?? "project:member",
@@ -207,7 +206,6 @@ export function createForgeRoutes(options: ForgeRoutesOptions) {
       const turn = await runWithOrgScope(options.pool, orgId, (client) =>
         generateRunDetailTurn({
           client,
-          pool: options.pool,
           threadId: c.req.param("threadId"),
           runId: parsed.data.runId,
           audience: parsed.data.audience ?? "project:member",
@@ -234,13 +232,21 @@ export function createForgeRoutes(options: ForgeRoutesOptions) {
       return c.json({ error: "invalid_tool_call", issues: parsed.error.issues }, 400);
     }
     try {
-      const result = await dispatchTool({
-        pool: options.pool,
-        secrets: options.secrets,
-        githubHttp: options.githubHttp,
-        actor,
-        call: parsed.data,
-      });
+      // RLS R3a: open an org scope (org = path org, validated above) around the
+      // whole tool dispatch so the read/write tools' tenant-table queries carry
+      // org context via `resolveQueryClient`/`resolveWritableClient`. Write tools
+      // that open their own org-scoped txn (`tanren.create_spec` /
+      // `tanren.trigger_run` / `tanren.rerun_task`) keep doing so — they read
+      // already-committed rows, so the nested scope is safe. Inert in R1.
+      const result = await runWithOrgScope(options.pool, orgId, () =>
+        dispatchTool({
+          pool: options.pool,
+          secrets: options.secrets,
+          githubHttp: options.githubHttp,
+          actor,
+          call: parsed.data,
+        }),
+      );
       return c.json({ tool: parsed.data.tool, result });
     } catch (error) {
       if (error instanceof ToolAccessDeniedError || error instanceof WriteToolAccessDeniedError) {

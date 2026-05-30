@@ -2,13 +2,18 @@
 // used by P2A-0013 routes so every tool enforces the same gate. Tools call
 // into these before reading or writing.
 
-import type pg from "pg";
 import type { ActorContext } from "../../../auth/schemas.js";
+import type { QueryClient } from "../../data/orgScopedDb.js";
 
 export class ToolAccessDeniedError extends Error {}
 
+// RLS R3a: these gates read tenant tables (projects/runs/specs/project_members)
+// and run inside the forge-tool dispatch. They take a `QueryClient` — the
+// caller passes the ambient org-scoped client (via `resolveQueryClient`) so the
+// gate read carries org context; a raw pool still satisfies the type (the
+// recovery route + any unscoped caller fall back to pool, inert in R1).
 export async function assertProjectAccess(
-  pool: pg.Pool,
+  pool: QueryClient,
   projectId: string,
   actor: ActorContext,
 ): Promise<{ orgId: string }> {
@@ -38,7 +43,7 @@ export async function assertProjectAccess(
 }
 
 export async function assertRunAccess(
-  pool: pg.Pool,
+  pool: QueryClient,
   runId: string,
   actor: ActorContext,
 ): Promise<{ projectId: string; specId: string }> {
@@ -55,7 +60,7 @@ export async function assertRunAccess(
 }
 
 export async function assertSpecAccess(
-  pool: pg.Pool,
+  pool: QueryClient,
   specId: string,
   actor: ActorContext,
 ): Promise<{ projectId: string }> {

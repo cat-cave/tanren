@@ -10,6 +10,7 @@
 
 import type pg from "pg";
 import type { ActorContext } from "../../../auth/schemas.js";
+import { resolveQueryClient, resolveWritableClient } from "../../data/orgScopedDb.js";
 import { BehaviorStore } from "../../entities/behaviors.js";
 import { MilestoneStore } from "../../entities/milestones.js";
 import {
@@ -18,6 +19,14 @@ import {
   type SpecContract,
   type SpecRunContract,
 } from "../../workflow/projectSpec.js";
+
+// RLS R3a: the forge WRITE-tool dispatcher runs inside an ambient
+// `runWithOrgScope` (the `/forge/tools` route + the proposal-decide path both
+// open one). `createSpec` / `createQueuedRunFromSpec` keep the raw pool — they
+// open their OWN org-scoped transaction from the actor's org (R1/cohort-3) — but
+// the entity-store links + the rerun lookup route through the ambient scope so
+// they carry org context too. With no scope open everything falls back to the
+// pool, behavior-identical to before (inert in R1).
 
 interface WriteToolDeps {
   pool: pg.Pool;
@@ -63,15 +72,16 @@ export async function tanrenCreateSpec(
     },
     actor,
   );
+  const db = resolveWritableClient(deps.pool);
   const behaviorLinks: Array<{ specId: string; behaviorId: string }> = [];
   if (args.behaviorIds !== undefined) {
     for (const behaviorId of args.behaviorIds) {
-      await BehaviorStore.linkToSpec(deps.pool, { specId: spec.specId, behaviorId }, actor);
+      await BehaviorStore.linkToSpec(db, { specId: spec.specId, behaviorId }, actor);
       behaviorLinks.push({ specId: spec.specId, behaviorId });
     }
   }
   if (args.milestoneId !== undefined) {
-    await MilestoneStore.setSpecMilestone(deps.pool, { specId: spec.specId, milestoneId: args.milestoneId }, actor);
+    await MilestoneStore.setSpecMilestone(db, { specId: spec.specId, milestoneId: args.milestoneId }, actor);
   }
   return { ...spec, behaviors: behaviorLinks, milestoneId: args.milestoneId };
 }
@@ -101,7 +111,7 @@ export async function tanrenRerunTask(
   args: { taskId: string },
   actor: ActorContext,
 ): Promise<{ taskId: string; rerunRun: SpecRunContract }> {
-  const result = await deps.pool.query<{ spec_id: string }>(
+  const result = await resolveQueryClient(deps.pool).query<{ spec_id: string }>(
     `SELECT r.spec_id FROM tasks t
      INNER JOIN runs r ON r.run_id = t.run_id
      WHERE t.task_id = $1`,
@@ -139,7 +149,7 @@ export async function tanrenAcknowledgeInsight(
   persisted: boolean;
 }> {
   const now = new Date();
-  const persisted = await acknowledgeInsight(deps.pool, args.insightId, actor.userId, now);
+  const persisted = await acknowledgeInsight(resolveWritableClient(deps.pool), args.insightId, actor.userId, now);
   const entry = { acknowledgedBy: actor.userId, acknowledgedAt: now };
   ACKED_INSIGHTS.set(args.insightId, entry);
   return { insightId: args.insightId, ...entry, persisted };

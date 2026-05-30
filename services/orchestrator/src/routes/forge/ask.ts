@@ -76,9 +76,10 @@ export function createForgeAskRoutes(options: ForgeAskRoutesOptions) {
       // RLS R2 cohort-4 (forge): the conversation engine appends operator +
       // forge turns and persists proposals across several statements — run them
       // all in ONE org-scoped txn (org = path org, validated above) so every
-      // forge-table write carries org context. The read-tool dispatcher closes
-      // over the pool (its spec/run/etc. reads are an R3+ surface) and is left
-      // on the pool, unchanged. Inert in R1; behavior-identical to the pool.
+      // forge-table write carries org context. RLS R3a: the read-tool dispatcher
+      // (invoked from inside `askForge`, i.e. within this scope) now routes its
+      // spec/run/etc. reads through the ambient scope via `resolveQueryClient`.
+      // Inert in R1; behavior-identical to the pool.
       const result = await runWithOrgScope(options.pool, orgId, (client) =>
         askForge(
           {

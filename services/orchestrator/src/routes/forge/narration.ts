@@ -6,9 +6,12 @@
 // then template the narration in `engine/forge/narration/v0.ts`.
 //
 // RLS R2 cohort-4: `client` is the ambient org-scoped client — it carries the
-// forge_turn append + the project/run/cost context reads. `pool` is kept ONLY
-// for the insights-cache read (`loadNarrationInsights` → engine/insights, an
-// R3+ surface) so that path stays behavior-identical until its own cohort.
+// forge_turn append + the project/run/cost context reads.
+//
+// RLS R3a: the insights-cache read (`loadNarrationInsights` → engine/insights)
+// now runs on the same org-scoped `client`, so the insights compute reads
+// (runs/events/specs/tasks/cost_records) AND the workflow_insights cache
+// read/write carry org context too. The generators no longer take `pool`.
 
 import type pg from "pg";
 import type { z } from "zod";
@@ -29,7 +32,6 @@ type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
 export interface GenerateProjectViewArgs {
   client: QueryClient;
-  pool: pg.Pool;
   threadId: string;
   projectId: string;
   audience: "project:member" | "project:admin" | "org:admin" | "platform:admin";
@@ -98,7 +100,7 @@ export async function generateProjectViewTurn(args: GenerateProjectViewArgs) {
     })),
     weekToDateCostUsd,
     budgetUsdPerWeek: args.budgetUsdPerWeek,
-    insights: await loadNarrationInsights(args.pool, args.projectId),
+    insights: await loadNarrationInsights(args.client, args.projectId),
     actor: args.actor,
   });
 
@@ -117,7 +119,6 @@ export async function generateProjectViewTurn(args: GenerateProjectViewArgs) {
 
 export interface GenerateRunDetailArgs {
   client: QueryClient;
-  pool: pg.Pool;
   threadId: string;
   runId: string;
   audience: "project:member" | "project:admin" | "org:admin" | "platform:admin";
@@ -177,7 +178,7 @@ export async function generateRunDetailTurn(args: GenerateRunDetailArgs) {
     taskCount,
     failedTaskCount,
     costUsd: Number(costResult.rows[0]?.total ?? "0"),
-    insights: await loadNarrationInsights(args.pool, runRow.project_id),
+    insights: await loadNarrationInsights(args.client, runRow.project_id),
     actor: args.actor,
   });
   return ForgeTurnStore.append(
@@ -197,8 +198,8 @@ export async function generateRunDetailTurn(args: GenerateRunDetailArgs) {
 // v0 narration generator. Actions whose `toolCall` doesn't parse as a known
 // ForgeToolCall (e.g. a future variant added before the schema is updated)
 // are dropped so the narration stays renderable.
-async function loadNarrationInsights(pool: pg.Pool, projectId: string): Promise<NarrationInsight[]> {
-  const insights = await loadInsightsForProject(pool, { projectId });
+async function loadNarrationInsights(client: QueryClient, projectId: string): Promise<NarrationInsight[]> {
+  const insights = await loadInsightsForProject(client, { projectId });
   return insights
     .map((insight) => toNarrationInsight(insight))
     .filter((entry): entry is NarrationInsight => entry !== undefined);

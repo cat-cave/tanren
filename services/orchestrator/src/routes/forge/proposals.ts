@@ -74,8 +74,10 @@ export function createForgeProposalRoutes(options: ForgeProposalRoutesOptions) {
         // RLS R2 cohort-4 (forge): the decide engine claims the proposal,
         // records the outcome, and appends a forge turn across several
         // statements — run them in ONE org-scoped txn so each forge-table write
-        // carries org context. `executeWrite` closes over the pool (its
-        // underlying write tools are an R3+ surface) and is left on the pool.
+        // carries org context. RLS R3a: `executeWrite`'s underlying write tools
+        // now route their tenant reads/writes through this ambient scope too
+        // (`resolveWritableClient`); `createSpec`/`createQueuedRunFromSpec` keep
+        // opening their own org-scoped txn from the actor's org.
         const result = await runWithOrgScope(options.pool, orgId, (client) =>
           decideForgeProposal(
             { client, executeWrite },
