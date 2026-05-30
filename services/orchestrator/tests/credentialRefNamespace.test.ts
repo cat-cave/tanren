@@ -43,18 +43,18 @@ describe("deriveCredentialRef", () => {
   it("rejects a name carrying extra path segments (no tenant climb)", () => {
     expect(() =>
       deriveCredentialRef({ kind: "opaque", scope: "org", ownerId: "org_acme", name: "../org_evil/key" }),
-    ).toThrow(/single safe path segment/);
+    ).toThrow(/single safe path segment/u);
     expect(() => deriveCredentialRef({ kind: "opaque", scope: "org", ownerId: "org_acme", name: "a/b" })).toThrow(
-      /single safe path segment/,
+      /single safe path segment/u,
     );
   });
 
   it("rejects an empty name and an unsafe owner id", () => {
     expect(() => deriveCredentialRef({ kind: "opaque", scope: "org", ownerId: "org_acme", name: "" })).toThrow(
-      /single safe path segment/,
+      /single safe path segment/u,
     );
     expect(() => deriveCredentialRef({ kind: "opaque", scope: "org", ownerId: "../evil", name: "k" })).toThrow(
-      /owner id is not a safe ref segment/,
+      /owner id is not a safe ref segment/u,
     );
   });
 });
@@ -88,7 +88,7 @@ describe("resolveCredentialName", () => {
         scope: "org",
         ownerId: "org_acme",
       }),
-    ).toThrow(/does not belong to the authenticated owner/);
+    ).toThrow(/does not belong to the authenticated owner/u);
   });
 
   it("rejects a full ref whose scope segment is wrong for the route", () => {
@@ -99,7 +99,7 @@ describe("resolveCredentialName", () => {
         scope: "org",
         ownerId: "org_acme",
       }),
-    ).toThrow(/does not belong to the authenticated owner/);
+    ).toThrow(/does not belong to the authenticated owner/u);
   });
 
   it("rejects a full ref whose kind slug is wrong for the route", () => {
@@ -110,7 +110,7 @@ describe("resolveCredentialName", () => {
         scope: "org",
         ownerId: "org_acme",
       }),
-    ).toThrow(/does not belong to the authenticated owner/);
+    ).toThrow(/does not belong to the authenticated owner/u);
   });
 
   it("rejects a full ref that has extra trailing segments", () => {
@@ -121,12 +121,12 @@ describe("resolveCredentialName", () => {
         scope: "org",
         ownerId: "org_acme",
       }),
-    ).toThrow(/single name segment/);
+    ).toThrow(/single name segment/u);
   });
 
   it("rejects an empty supplied value", () => {
     expect(() => resolveCredentialName({ supplied: "   ", kind: "opaque", scope: "me", ownerId: "user_bob" })).toThrow(
-      /must not be empty/,
+      /must not be empty/u,
     );
   });
 });

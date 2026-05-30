@@ -181,12 +181,12 @@ export class RecoveryMemoryPool {
         : { rows: [], rowCount: 0 };
     }
     // last good commit / captured commits scan
-    if (/FROM events\s+WHERE run_id = \$1 AND event_type = 'workspace.git_captured'/.test(t)) {
+    if (/FROM events\s+WHERE run_id = \$1 AND event_type = 'workspace.git_captured'/u.test(t)) {
       const rows = this.events
         .filter((e) => e.run_id === String(params[0]) && e.event_type === "workspace.git_captured")
         .sort((a, b) => b.ts.getTime() - a.ts.getTime() || b.id - a.id)
         .map((e) => ({ payload: e.payload }));
-      const limited = /LIMIT 1/.test(t) ? rows.slice(0, 1) : rows;
+      const limited = /LIMIT 1/u.test(t) ? rows.slice(0, 1) : rows;
       return { rows: limited, rowCount: limited.length };
     }
     // append steering to spec
@@ -211,7 +211,7 @@ export class RecoveryMemoryPool {
       return { rows: [], rowCount: 0 };
     }
     // loadSpecWithProject JOIN
-    if (/FROM specs s\s+JOIN projects p/.test(t)) {
+    if (/FROM specs s\s+JOIN projects p/u.test(t)) {
       const spec = this.specs.get(String(params[0]));
       if (spec === undefined) return { rows: [], rowCount: 0 };
       const project = this.projects.get(spec.project_id)!;
@@ -237,7 +237,7 @@ export class RecoveryMemoryPool {
       };
     }
     // ensureSpecDependenciesDone (done deps lookup)
-    if (/FROM specs WHERE project_id = \$1 AND status = 'done'/.test(t)) {
+    if (/FROM specs WHERE project_id = \$1 AND status = 'done'/u.test(t)) {
       return { rows: [], rowCount: 0 };
     }
     // INSERT runs
@@ -267,7 +267,7 @@ export class RecoveryMemoryPool {
     // ('plan') in the VALUES clause, not a bound param — read it from the SQL.
     if (t.startsWith("INSERT INTO job_queue")) {
       const id = ++this.jobSeq;
-      const kindMatch = /VALUES\s*\(\$1,\s*\$2,\s*'([^']+)'/.exec(t);
+      const kindMatch = /VALUES\s*\(\$1,\s*\$2,\s*'([^']+)'/u.exec(t);
       this.jobs.push({
         id,
         run_id: String(params[0]),
@@ -280,7 +280,7 @@ export class RecoveryMemoryPool {
     // not literal spaces) so this test pool does not trip the
     // single-event-writer architecture guard, which scans for the bare
     // table-write literal outside eventStore.ts.
-    if (/INSERT\s+INTO\s+events\b/i.test(t)) {
+    if (/INSERT\s+INTO\s+events\b/iu.test(t)) {
       this.events.push({
         id: ++this.eventSeq,
         run_id: params[0] === null ? null : String(params[0]),

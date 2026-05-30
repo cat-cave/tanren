@@ -83,14 +83,14 @@ describe("VaultSecretStore", () => {
       async () => new Response(JSON.stringify({ data: { value: "shallow" } }), { status: 200 }),
     );
     const store = new VaultSecretStore({ addr: "http://vault:8200", token: "t", fetchImpl });
-    await expect(store.get("credential/token")).rejects.toThrow(/did not contain a string value/);
+    await expect(store.get("credential/token")).rejects.toThrow(/did not contain a string value/u);
   });
 
   it("treats a 404 on delete as a no-op but surfaces other delete failures", async () => {
     const okThen500 = vi.fn<typeof fetch>(async () => new Response("boom", { status: 500 }));
     const store = new VaultSecretStore({ addr: "http://vault:8200", token: "t", fetchImpl: okThen500 });
     await expect(store.delete("credential/token")).rejects.toThrow(
-      /Vault delete secret credential\/token failed: 500 boom/,
+      /Vault delete secret credential\/token failed: 500 boom/u,
     );
 
     const missing = vi.fn<typeof fetch>(async () => new Response("absent", { status: 404 }));
@@ -102,7 +102,7 @@ describe("VaultSecretStore", () => {
     const fetchImpl = vi.fn<typeof fetch>(async () => new Response("denied", { status: 403 }));
     const store = new VaultSecretStore({ addr: "http://vault:8200", token: "t", fetchImpl });
     await expect(store.get("credential/token")).rejects.toThrow(
-      /Vault read secret credential\/token failed: 403 denied/,
+      /Vault read secret credential\/token failed: 403 denied/u,
     );
   });
 
@@ -110,7 +110,7 @@ describe("VaultSecretStore", () => {
     const fetchImpl = vi.fn<typeof fetch>(async () => new Response("forbidden", { status: 403 }));
     const store = new VaultSecretStore({ addr: "http://vault:8200", token: "t", fetchImpl });
     await expect(store.put({ ref: "credential/token", value: "v" })).rejects.toThrow(
-      /Vault store secret credential\/token failed: 403 forbidden/,
+      /Vault store secret credential\/token failed: 403 forbidden/u,
     );
   });
 
@@ -119,6 +119,6 @@ describe("VaultSecretStore", () => {
     // raises its own "did not contain a string value" message.
     const fetchImpl = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({}), { status: 200 }));
     const store = new VaultSecretStore({ addr: "http://vault:8200", token: "t", fetchImpl });
-    await expect(store.get("credential/token")).rejects.toThrow(/did not contain a string value/);
+    await expect(store.get("credential/token")).rejects.toThrow(/did not contain a string value/u);
   });
 });

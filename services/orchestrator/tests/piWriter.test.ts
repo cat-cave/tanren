@@ -87,7 +87,7 @@ describe("pi writer adapter", () => {
       runId: "run_pi_3",
     });
     await expect(writer.runWriter({ prompt: "edit", workspace: "/workspace/repo", timeoutMs: 1000 })).rejects.toThrow(
-      /missing pi credential ref/,
+      /missing pi credential ref/u,
     );
   });
 

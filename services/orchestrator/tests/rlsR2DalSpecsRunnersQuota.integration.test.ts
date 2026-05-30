@@ -174,7 +174,7 @@ describeDb("RLS R2 cohort-3 — specs + runners + quota + finalizers through the
     // can neither read nor mutate a tenant row.
     await expect(
       SpecStore.updateStatus(runtimePool, created.specId, { from: "active", to: "done" }, ACTOR_A),
-    ).rejects.toThrow(/spec not found/);
+    ).rejects.toThrow(/spec not found/u);
     // The spec is still 'active' (the denied UPDATE changed nothing) per owner.
     const stillActive = await SpecStore.get(ownerPool, created.specId, ACTOR_A);
     expect(stillActive?.status).toBe("active");
@@ -216,7 +216,9 @@ describeDb("RLS R2 cohort-3 — specs + runners + quota + finalizers through the
     // Out-of-scope: the same store handed the pool falls back to the raw pool
     // (empty GUC); under R3b's enforced policy the runners WITH CHECK rejects the
     // INSERT — an unscoped tenant write can no longer silently land.
-    await expect(store.claim({ ...claimInput, runnerId: "runner_pool" })).rejects.toThrow(/row-level security|policy/i);
+    await expect(store.claim({ ...claimInput, runnerId: "runner_pool" })).rejects.toThrow(
+      /row-level security|policy/iu,
+    );
     const committed = await ownerPool.query("SELECT 1 FROM runners WHERE runner_id = 'runner_pool'");
     expect(committed.rowCount).toBe(0);
   });

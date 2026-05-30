@@ -57,7 +57,7 @@ describe("ForgeThreadStore", () => {
       { orgId: "org_a", scope: "org", projectId: null, runId: null, title: null },
       orgAdmin,
     );
-    expect(thread.id).toMatch(/^forge_thread_/);
+    expect(thread.id).toMatch(/^forge_thread_/u);
     expect(thread.scope).toBe("org");
     expect(thread.projectId).toBeNull();
   });
@@ -70,7 +70,7 @@ describe("ForgeThreadStore", () => {
         { orgId: "org_a", scope: "project", projectId: null, runId: null, title: null },
         orgAdmin,
       ),
-    ).rejects.toThrow(/projectId/);
+    ).rejects.toThrow(/projectId/u);
   });
 
   it("rejects a run-scoped thread missing runId", async () => {
@@ -81,7 +81,7 @@ describe("ForgeThreadStore", () => {
         { orgId: "org_a", scope: "run", projectId: "project_a", runId: null, title: null },
         orgAdmin,
       ),
-    ).rejects.toThrow(/runId/);
+    ).rejects.toThrow(/runId/u);
   });
 
   it("rejects creating a thread for an org the actor cannot reach", async () => {
@@ -99,7 +99,7 @@ describe("ForgeThreadStore", () => {
         { orgId: "org_a", scope: "org", projectId: null, runId: null, title: null },
         stranger,
       ),
-    ).rejects.toThrow(/cannot reach/);
+    ).rejects.toThrow(/cannot reach/u);
   });
 
   it("platform:admin can create threads in any org", async () => {
@@ -172,7 +172,7 @@ describe("ForgeTurnStore", () => {
         },
         orgAdmin,
       ),
-    ).rejects.toThrow(/body/);
+    ).rejects.toThrow(/body/u);
   });
 
   it("filters turns the actor's scope cannot view", async () => {

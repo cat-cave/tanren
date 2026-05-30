@@ -47,7 +47,7 @@ export function redactedCodexAuthResult(ref: string): CodexAuthImportResult {
 }
 
 export function validateCredentialRef(ref: string): string {
-  if (!/^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/.test(ref) || ref.includes("//")) {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/u.test(ref) || ref.includes("//")) {
     throw new Error("credential ref must be an explicit managed ref");
   }
   if (ref.split("/").some((segment) => segment === "." || segment === "..")) {

@@ -136,7 +136,7 @@ export function buildReasonixWriterCommand(input: { apiKey: string; task: string
 // on the phrase, not the event type, so a minor CLI wording change still
 // surfaces it). Mirrors opencode's stream parser.
 export function parseReasonixStreamTelemetry(stdout: string): ReasonixEventTelemetry {
-  const lines = stdout.split(/\r?\n/).filter((line) => line.trim() !== "");
+  const lines = stdout.split(/\r?\n/u).filter((line) => line.trim() !== "");
   let tokenUsage: TokenUsage | undefined;
   let usageLimit: UsageLimitSignal | undefined;
   for (const line of lines) {
@@ -157,7 +157,7 @@ function detectUsageLimit(event: Record<string, unknown>): UsageLimitSignal | un
     candidates.push((errorField as Record<string, unknown>)["message"]);
   }
   for (const candidate of candidates) {
-    if (typeof candidate === "string" && /usage limit|rate limit/i.test(candidate)) {
+    if (typeof candidate === "string" && /usage limit|rate limit/iu.test(candidate)) {
       return { message: candidate };
     }
   }

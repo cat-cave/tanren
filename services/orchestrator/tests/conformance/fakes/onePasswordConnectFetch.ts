@@ -26,7 +26,7 @@ export function onePasswordConnectFetch(vaultId: string): typeof fetch {
 
     if (method === "GET" && url.startsWith(`${base}?filter=`)) {
       const filter = decodeURIComponent(url.slice(`${base}?filter=`.length));
-      const title = /title eq "(.*)"/.exec(filter)?.[1] ?? "";
+      const title = /title eq "(.*)"/u.exec(filter)?.[1] ?? "";
       const found = [...items.values()].filter((item) => item.title === title);
       return new Response(JSON.stringify(found.map((item) => ({ id: item.id }))), { status: 200 });
     }

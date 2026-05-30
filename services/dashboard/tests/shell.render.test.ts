@@ -102,8 +102,8 @@ describe("dashboard shell rendering", () => {
     // overview/roadmap/personas are phase 3+ (DORA shipped in P3-0019,
     // discovery in P3-0014).
     expect(html).toContain("roadmap");
-    expect(html).toMatch(/roadmap[\s\S]*?phase 3\+/);
-    expect((html.match(/phase 3\+/g) ?? []).length).toBeGreaterThanOrEqual(3);
+    expect(html).toMatch(/roadmap[\s\S]*?phase 3\+/u);
+    expect((html.match(/phase 3\+/gu) ?? []).length).toBeGreaterThanOrEqual(3);
   });
 
   it("renders the TopBar chrome elements", async () => {

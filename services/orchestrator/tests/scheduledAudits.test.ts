@@ -36,7 +36,7 @@ function stubPool(): {
   const sourceRow = (id: string) => ({ ...sources.get(id)! });
 
   const query = async (text: string, params: unknown[] = []): Promise<{ rows: unknown[]; rowCount: number }> => {
-    const sql = text.replaceAll(/\s+/g, " ").trim();
+    const sql = text.replaceAll(/\s+/gu, " ").trim();
 
     // ---- audit_jobs ----
     if (sql.startsWith("INSERT INTO audit_jobs")) {
@@ -169,7 +169,7 @@ describe("audit job store", () => {
       targetWindow: "night (00–05)",
       answererCli: "claude · haiku-4.5",
     });
-    expect(job.id).toMatch(/^audit_/);
+    expect(job.id).toMatch(/^audit_/u);
     expect(job.enabled).toBe(true);
     const listed = await listAuditJobs(pool, "org_a");
     expect(listed).toHaveLength(1);

@@ -98,7 +98,7 @@ describe("dev-login escape hatch (buildAuthFromEnv)", () => {
     const login = await app.request("/auth/login?provider=local_dev");
     expect(login.status).toBe(302);
     const state = decodeURIComponent(
-      /tanren_oauth_state=([^;]+)/.exec(login.headers.get("set-cookie") ?? "")?.[1] ?? "",
+      /tanren_oauth_state=([^;]+)/u.exec(login.headers.get("set-cookie") ?? "")?.[1] ?? "",
     );
     expect(state).not.toBe("");
 
@@ -117,7 +117,7 @@ describe("dev-login escape hatch (buildAuthFromEnv)", () => {
     expect(callbackJson.primaryOrgId).not.toBe("");
 
     const sessionId = decodeURIComponent(
-      /tanren_session=([^;]+)/.exec(callback.headers.get("set-cookie") ?? "")?.[1] ?? "",
+      /tanren_session=([^;]+)/u.exec(callback.headers.get("set-cookie") ?? "")?.[1] ?? "",
     );
     expect(sessionId).not.toBe("");
 

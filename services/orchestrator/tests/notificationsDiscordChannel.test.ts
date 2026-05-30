@@ -89,7 +89,7 @@ describe("DiscordChannel", () => {
         severity: "info",
         eventName: "run.started",
       }),
-    ).rejects.toThrow(/discord publish failed: 400/);
+    ).rejects.toThrow(/discord publish failed: 400/u);
   });
 
   interface Embed {
@@ -199,6 +199,6 @@ describe("DiscordChannel", () => {
         severity: "info",
         eventName: "run.started",
       }),
-    ).rejects.toThrow(/discord channel needs a secret store/);
+    ).rejects.toThrow(/discord channel needs a secret store/u);
   });
 });

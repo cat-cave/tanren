@@ -38,7 +38,7 @@ export function buildOidcProviderFromEnv(): OidcProvider | undefined {
     clientSecret,
     // Explicit env overrides win over preset defaults (which in turn fill in for
     // the generic provider's own built-in defaults when no preset is selected).
-    scopes: scopesEnv !== undefined ? scopesEnv.split(/\s+/).filter(Boolean) : preset.scopes,
+    scopes: scopesEnv !== undefined ? scopesEnv.split(/\s+/u).filter(Boolean) : preset.scopes,
     subjectClaim: emptyToUndefined(process.env["TANREN_OIDC_SUBJECT_CLAIM"]) ?? preset.subjectClaim,
     loginClaim: emptyToUndefined(process.env["TANREN_OIDC_LOGIN_CLAIM"]) ?? preset.loginClaim,
     nameClaim: emptyToUndefined(process.env["TANREN_OIDC_NAME_CLAIM"]) ?? preset.nameClaim,

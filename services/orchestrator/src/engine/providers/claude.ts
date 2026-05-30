@@ -231,7 +231,7 @@ export function buildAnswererPrompt(prompt: string, schemaName: string, jsonSche
 // usage-limit error surfaces as an `error`/`result` event carrying the stable
 // "usage limit" phrase (matched on the phrase, not the event type).
 export function parseClaudeStreamTelemetry(stdout: string): ClaudeEventTelemetry {
-  const lines = stdout.split(/\r?\n/).filter((line) => line.trim() !== "");
+  const lines = stdout.split(/\r?\n/u).filter((line) => line.trim() !== "");
   let tokenUsage: TokenUsage | undefined;
   let usageLimit: UsageLimitSignal | undefined;
   for (const line of lines) {
@@ -249,7 +249,7 @@ export function parseClaudeStreamTelemetry(stdout: string): ClaudeEventTelemetry
 // emits a terminal `{"type":"result","result":"<text>"}`; we fall back to the
 // last assistant text block if the result envelope is absent.
 export function extractClaudeFinalText(stdout: string): string {
-  const lines = stdout.split(/\r?\n/).filter((line) => line.trim() !== "");
+  const lines = stdout.split(/\r?\n/u).filter((line) => line.trim() !== "");
   let lastAssistantText: string | undefined;
   for (const line of lines) {
     const parsed = parseJsonObject(line);
@@ -307,7 +307,7 @@ export function parseClaudeAnswererOutput<TOutput>(
 }
 
 function stripJsonFences(text: string): string {
-  const fence = /^```(?:json)?\s*([\s\S]*?)\s*```$/m.exec(text.trim());
+  const fence = /^```(?:json)?\s*([\s\S]*?)\s*```$/mu.exec(text.trim());
   return fence?.[1] ?? text;
 }
 
@@ -321,7 +321,7 @@ function detectUsageLimit(event: Record<string, unknown>): UsageLimitSignal | un
     candidates.push((errorField as Record<string, unknown>)["message"]);
   }
   for (const candidate of candidates) {
-    if (typeof candidate === "string" && /usage limit/i.test(candidate)) {
+    if (typeof candidate === "string" && /usage limit/iu.test(candidate)) {
       return { message: candidate };
     }
   }
@@ -399,7 +399,7 @@ function answererWorkspacePath(dependencies: ClaudeAnswererDependencies, schemaN
 }
 
 function safeSchemaFileName(schemaName: string): string {
-  return schemaName.replaceAll(/[^a-zA-Z0-9._-]/g, "_");
+  return schemaName.replaceAll(/[^a-zA-Z0-9._-]/gu, "_");
 }
 
 function messageFromUnknown(error: unknown): string {

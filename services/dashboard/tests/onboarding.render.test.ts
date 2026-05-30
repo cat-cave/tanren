@@ -100,7 +100,7 @@ function mockOrchestrator(opts: { doctor?: unknown; matrix?: unknown } = {}): Mo
       });
     }
     if (url.includes("/credentials")) return json({ credentials: [] });
-    if (url.match(/\/projects$/) && method === "POST") {
+    if (url.match(/\/projects$/u) && method === "POST") {
       const body = JSON.parse(String(init?.body ?? "{}"));
       state.projectCreates.push(body);
       return json({ projectId: "project_easy", ...body }, 201);

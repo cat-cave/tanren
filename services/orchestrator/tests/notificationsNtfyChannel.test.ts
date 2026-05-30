@@ -95,7 +95,7 @@ describe("NtfyChannel", () => {
         severity: "info",
         eventName: "run.started",
       }),
-    ).rejects.toThrow(/ntfy publish failed: 503/);
+    ).rejects.toThrow(/ntfy publish failed: 503/u);
   });
 
   it("adds a Click header and url field when payload.url is set", async () => {

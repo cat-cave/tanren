@@ -16,7 +16,7 @@ function lineFor(text, index) {
 
 export function checkNoHostProcessSpawn(projectFiles) {
   const diagnostics = [];
-  const importPattern = /(?:from\s+|import\s*\(|require\s*\()\s*["'](?:node:)?child_process["']/g;
+  const importPattern = /(?:from\s+|import\s*\(|require\s*\()\s*["'](?:node:)?child_process["']/gu;
   for (const { file, text } of projectFiles) {
     if (
       invariantDocExclusions.has(file) ||
@@ -41,7 +41,7 @@ export function checkNoHostProcessSpawn(projectFiles) {
 
 export function checkNoDockerExec(projectFiles) {
   const diagnostics = [];
-  const execPatterns = [/container\.exec\s*\(/g, /\bdocker\s+exec\b/g];
+  const execPatterns = [/container\.exec\s*\(/gu, /\bdocker\s+exec\b/gu];
   for (const { file, text } of projectFiles) {
     if (
       invariantDocExclusions.has(file) ||
@@ -67,12 +67,12 @@ export function checkNoDockerExec(projectFiles) {
 }
 
 function isHostPath(source) {
-  return /^(\/|\.{1,2}\/|~\/|\$\{?(?:PWD|HOME)\}?|[A-Za-z]:[\\/])/.test(source);
+  return /^(\/|\.{1,2}\/|~\/|\$\{?(?:PWD|HOME)\}?|[A-Za-z]:[\\/])/u.test(source);
 }
 
 export function checkNoHostBindMounts(projectFiles) {
   const diagnostics = [];
-  const apiPatterns = [/\bBinds\b\s*:/g, /\bMounts\b\s*:/g, /\btype\s*[:=]\s*["']?bind["']?/g];
+  const apiPatterns = [/\bBinds\b\s*:/gu, /\bMounts\b\s*:/gu, /\btype\s*[:=]\s*["']?bind["']?/gu];
   for (const { file, text } of projectFiles) {
     if (
       invariantDocExclusions.has(file) ||
@@ -89,7 +89,7 @@ export function checkNoHostBindMounts(projectFiles) {
       }
     }
     text.split("\n").forEach((line, index) => {
-      const match = line.match(/^\s*-\s*["']?([^"'\s:]+):\/[^"']*["']?\s*$/);
+      const match = line.match(/^\s*-\s*["']?([^"'\s:]+):\/[^"']*["']?\s*$/u);
       if (match && isAllowedAllocatorDockerSocketMount(file, text, index + 1)) {
         return;
       }
@@ -119,7 +119,7 @@ function isAllowedDockerSocketMount(file, line) {
 // Plane-split P2: a read-only mount of the dev mTLS cert dir into the control /
 // data plane at /etc/tanren/mtls. Allowed as config (not workload substrate).
 function isAllowedMtlsCertMount(file, line) {
-  return isComposeFile(file) && /^\s*-\s*\/tmp\/tanren-mtls:\/etc\/tanren\/mtls:ro\s*$/.test(line);
+  return isComposeFile(file) && /^\s*-\s*\/tmp\/tanren-mtls:\/etc\/tanren\/mtls:ro\s*$/u.test(line);
 }
 
 function isAllowedAllocatorDockerSocketMount(file, text, lineNumber) {
@@ -132,17 +132,17 @@ function isAllowedAllocatorDockerSocketMount(file, text, lineNumber) {
   const lines = text.split("\n");
   for (let index = 0; index < lineNumber; index += 1) {
     const line = lines[index] ?? "";
-    const serviceMatch = line.match(/^  ([a-zA-Z0-9_-]+):\s*$/);
+    const serviceMatch = line.match(/^  ([a-zA-Z0-9_-]+):\s*$/u);
     if (serviceMatch) {
       currentService = serviceMatch[1];
       inVolumes = false;
       continue;
     }
-    if (/^    volumes:\s*$/.test(line)) {
+    if (/^    volumes:\s*$/u.test(line)) {
       inVolumes = currentService === "allocator";
       continue;
     }
-    if (/^    [a-zA-Z0-9_-]+:/.test(line)) {
+    if (/^    [a-zA-Z0-9_-]+:/u.test(line)) {
       inVolumes = false;
     }
   }
@@ -152,7 +152,11 @@ function isAllowedAllocatorDockerSocketMount(file, text, lineNumber) {
 
 export function checkDockerApiAllocatorOnly(projectFiles) {
   const diagnostics = [];
-  const dockerApiPatterns = [/\/var\/run\/docker\.sock/g, /\/containers\/(?:json|[^"']*\/json)/g, /\bsocketPath\s*:/g];
+  const dockerApiPatterns = [
+    /\/var\/run\/docker\.sock/gu,
+    /\/containers\/(?:json|[^"']*\/json)/gu,
+    /\bsocketPath\s*:/gu,
+  ];
   for (const { file, text } of projectFiles) {
     if (
       invariantDocExclusions.has(file) ||

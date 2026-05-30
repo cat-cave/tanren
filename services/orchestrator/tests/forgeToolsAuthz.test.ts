@@ -219,7 +219,7 @@ describe("tanrenRerunTask", () => {
   it("throws WriteToolAccessDeniedError naming the task when the task is unknown", async () => {
     const p = new RerunPool();
     await expect(tanrenRerunTask({ pool: p.asPool() }, { taskId: "task_missing" }, projectMember)).rejects.toThrowError(
-      /task not found: task_missing/,
+      /task not found: task_missing/u,
     );
     await expect(
       tanrenRerunTask({ pool: p.asPool() }, { taskId: "task_missing" }, projectMember),

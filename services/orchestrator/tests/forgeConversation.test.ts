@@ -202,7 +202,7 @@ describe("askForge (thick-Forge conversation engine)", () => {
         { client: client as never, answerer, dispatchReadTool: () => Promise.resolve({}) },
         { threadId: "thread_missing", question: "hi", audience: "project:member", actor },
       ),
-    ).rejects.toThrowError(/forge thread not found: thread_missing/);
+    ).rejects.toThrowError(/forge thread not found: thread_missing/u);
     // No turns were appended for the nonexistent thread.
     expect(client.turns).toHaveLength(0);
   });

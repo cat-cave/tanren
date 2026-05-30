@@ -121,8 +121,8 @@ describe("P2B-0008 replan_with_steering", () => {
       result: { replanRunId: string; plannerTaskId: string };
     };
     expect(body.ok).toBe(true);
-    expect(body.result.replanRunId).toMatch(/^run_/);
-    expect(body.result.plannerTaskId).toMatch(/^task_/);
+    expect(body.result.replanRunId).toMatch(/^run_/u);
+    expect(body.result.plannerTaskId).toMatch(/^task_/u);
 
     // steering carried into the next planner invocation via the spec text
     expect(h.pool.specs.get(SPEC)?.description).toContain(note);
@@ -182,7 +182,7 @@ describe("P2B-0008 open_inspection_thread", () => {
     const res = await post(h.app, `${base}/inspection-thread`);
     expect(res.status).toBe(200);
     const body = (await res.json()) as { result: { threadId: string } };
-    expect(body.result.threadId).toMatch(/^forge_thread_/);
+    expect(body.result.threadId).toMatch(/^forge_thread_/u);
     const thread = h.pool.threads.get(body.result.threadId);
     expect(thread?.scope).toBe("run");
     expect(thread?.run_id).toBe(RUN);

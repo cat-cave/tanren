@@ -74,9 +74,9 @@ export function parseRawViewOptIn(c: {
   };
 }): boolean {
   const header = c.req.header("x-view-raw");
-  if (header !== undefined && /^(1|true|yes)$/i.test(header.trim())) {
+  if (header !== undefined && /^(1|true|yes)$/iu.test(header.trim())) {
     return true;
   }
   const query = c.req.query("raw");
-  return query !== undefined && /^(1|true|yes)$/i.test(query.trim());
+  return query !== undefined && /^(1|true|yes)$/iu.test(query.trim());
 }

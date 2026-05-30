@@ -16,14 +16,14 @@ describe("0012 workflow_insights migration", () => {
     expect(sql).toContain('CREATE TABLE "workflow_insights"');
     expect(sql).toContain("workflow_insights_kind_check");
     expect(sql).toContain("workflow_insights_severity_check");
-    expect(sql).toMatch(/kind.*IN \('retry_hotspot','model_mismatch','pace_anomaly'\)/);
-    expect(sql).toMatch(/severity.*IN \('info','warn','fail'\)/);
+    expect(sql).toMatch(/kind.*IN \('retry_hotspot','model_mismatch','pace_anomaly'\)/u);
+    expect(sql).toMatch(/severity.*IN \('info','warn','fail'\)/u);
   });
 
   it("creates a (project_id, kind, computed_at desc) read index", async () => {
     const sql = await readMigration();
     expect(sql).toContain('CREATE INDEX "workflow_insights_project_kind"');
-    expect(sql).toMatch(/computed_at"?\s+desc/i);
+    expect(sql).toMatch(/computed_at"?\s+desc/iu);
   });
 
   it("foreign-keys project_id and acknowledged_by", async () => {
@@ -44,6 +44,6 @@ describe("0020 workflow_insights kind widening migration", () => {
     const sql = await readFile(p3MigrationPath, "utf8");
     expect(sql).toContain('DROP CONSTRAINT "workflow_insights_kind_check"');
     expect(sql).toContain("workflow_insights_kind_check");
-    expect(sql).toMatch(/IN \('retry_hotspot','model_mismatch','pace_anomaly','stuck','review_stall'\)/);
+    expect(sql).toMatch(/IN \('retry_hotspot','model_mismatch','pace_anomaly','stuck','review_stall'\)/u);
   });
 });

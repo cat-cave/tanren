@@ -91,7 +91,7 @@ export class HttpJobClaimClient<TPayload = unknown> implements JobClaimClient<TP
   ) {}
 
   async claimJob(options: ClaimJobOptions): Promise<JobEnvelope<TPayload> | undefined> {
-    const response = await this.mtlsFetch(`${this.baseUrl.replace(/\/$/, "")}/internal/claim-job`, {
+    const response = await this.mtlsFetch(`${this.baseUrl.replace(/\/$/u, "")}/internal/claim-job`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(options),

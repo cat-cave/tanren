@@ -369,11 +369,11 @@ function parseRequiredContexts(value: unknown): string[] | undefined {
 }
 
 export function parseGitHubRepository(repoUrl: string): GitHubRepository {
-  const httpsMatch = /^https:\/\/github\.com\/([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/.exec(repoUrl);
+  const httpsMatch = /^https:\/\/github\.com\/([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/u.exec(repoUrl);
   if (httpsMatch !== null) {
     return { owner: httpsMatch[1] ?? "", name: httpsMatch[2] ?? "" };
   }
-  const sshMatch = /^git@github\.com:([^/\s]+)\/([^/\s]+?)(?:\.git)?$/.exec(repoUrl);
+  const sshMatch = /^git@github\.com:([^/\s]+)\/([^/\s]+?)(?:\.git)?$/u.exec(repoUrl);
   if (sshMatch !== null) {
     return { owner: sshMatch[1] ?? "", name: sshMatch[2] ?? "" };
   }
@@ -384,7 +384,7 @@ export function parseGitHubPullRequestUrl(prUrl: string): {
   repo: GitHubRepository;
   pullNumber: number;
 } {
-  const match = /^https:\/\/github\.com\/([^/\s]+)\/([^/\s]+)\/pull\/([1-9][0-9]*)\/?$/.exec(prUrl);
+  const match = /^https:\/\/github\.com\/([^/\s]+)\/([^/\s]+)\/pull\/([1-9][0-9]*)\/?$/u.exec(prUrl);
   if (match === null) {
     throw new Error(`unsupported GitHub pull request URL: ${prUrl}`);
   }

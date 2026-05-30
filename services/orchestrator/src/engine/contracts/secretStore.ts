@@ -85,7 +85,7 @@ export class VaultSecretStore implements SecretStore {
   }
 
   private url(ref: string): string {
-    return `${this.options.addr.replace(/\/$/, "")}/v1/${encodePath(this.mount)}/data/${encodePath(ref)}`;
+    return `${this.options.addr.replace(/\/$/u, "")}/v1/${encodePath(this.mount)}/data/${encodePath(ref)}`;
   }
 }
 

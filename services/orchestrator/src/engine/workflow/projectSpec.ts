@@ -259,10 +259,10 @@ async function ensureProjectAccess(pool: QueryClient, projectId: string, actor?:
 function defaultRunBranch(spec: SpecContract): string {
   const slug = spec.title
     .toLowerCase()
-    .replaceAll(/[^a-z0-9]+/g, "-")
-    .replaceAll(/^-|-$/g, "")
+    .replaceAll(/[^a-z0-9]+/gu, "-")
+    .replaceAll(/^-|-$/gu, "")
     .slice(0, 48);
-  return `tanren/${slug || "spec"}-${spec.specId.replace(/^spec_/, "").slice(0, 8)}`;
+  return `tanren/${slug || "spec"}-${spec.specId.replace(/^spec_/u, "").slice(0, 8)}`;
 }
 
 async function ensureProjectExists(pool: QueryClient, projectId: string): Promise<void> {

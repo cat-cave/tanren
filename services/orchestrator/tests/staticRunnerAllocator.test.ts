@@ -116,9 +116,9 @@ describe("StaticRunnerAllocator", () => {
     // The captured hex fingerprint is normalized to SHA256:<base64-no-pad>.
     // Pin the exact value so the hex->base64 conversion + "=" padding strip
     // are behavior-asserted, not just the prefix.
-    const expected = "SHA256:" + Buffer.from("a".repeat(64), "hex").toString("base64").replace(/=+$/, "");
+    const expected = "SHA256:" + Buffer.from("a".repeat(64), "hex").toString("base64").replace(/=+$/u, "");
     expect(allocation.target.hostKeyFingerprint).toBe(expected);
-    expect(expected).not.toMatch(/=$/);
+    expect(expected).not.toMatch(/=$/u);
     expect(allocation.imageSha).toBe("ghcr.io/cat-cave/tanren-runner:v0@sha256:static");
     expect(runners.claims).toHaveLength(1);
     expect(runners.claims[0]?.hostKeyFingerprint).toBe(expected);
@@ -175,7 +175,7 @@ describe("StaticRunnerAllocator", () => {
         runnerImage: "img",
         identitySecretRef: "runner/dev/identity",
       }),
-    ).rejects.toThrow(/timed out/);
+    ).rejects.toThrow(/timed out/u);
     expect(runners.claims).toEqual([]);
   });
 
@@ -195,7 +195,7 @@ describe("StaticRunnerAllocator", () => {
         runnerImage: "img",
         identitySecretRef: "runner/dev/identity",
       }),
-    ).rejects.toThrow(/host key discovery failed/);
+    ).rejects.toThrow(/host key discovery failed/u);
   });
 
   it("rejects when the captured host key cannot be parsed into a fingerprint", async () => {
@@ -217,7 +217,7 @@ describe("StaticRunnerAllocator", () => {
         runnerImage: "img",
         identitySecretRef: "runner/dev/identity",
       }),
-    ).rejects.toThrow(/unparseable fingerprint/);
+    ).rejects.toThrow(/unparseable fingerprint/u);
     expect(runners.claims).toEqual([]);
   });
 

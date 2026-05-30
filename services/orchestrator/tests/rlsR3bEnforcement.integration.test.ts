@@ -146,7 +146,7 @@ describeDb("RLS R3b — DB-level tenant isolation under the flipped tanren_app r
           [`run_${ORG_B}`, ORG_B],
         );
       }),
-    ).rejects.toThrow(/row-level security|policy/i);
+    ).rejects.toThrow(/row-level security|policy/iu);
 
     // The wrong-org write landed nothing (owner pool = RLS-exempt ground truth).
     const orphan = await ownerPool.query("SELECT 1 FROM tasks WHERE task_id = 'task_wrong_org'");

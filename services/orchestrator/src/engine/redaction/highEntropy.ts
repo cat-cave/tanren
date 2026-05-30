@@ -38,14 +38,14 @@
 // json-pointer paths contain those, and we don't want to flag them as
 // credential-like. Real credentials (base64, hex, JWT segments, gh
 // personal-access tokens) live happily inside this restricted alphabet.
-const CREDENTIAL_CHAR_CLASS = /^[A-Za-z0-9+=_\-.]+$/;
+const CREDENTIAL_CHAR_CLASS = /^[A-Za-z0-9+=_\-.]+$/u;
 const MIN_LENGTH = 24;
 const MIN_ENTROPY_BITS_PER_CHAR = 3.5;
 
 // URL_LIKE catches scheme-bearing URLs even if they happen to satisfy the
 // length+entropy gates after splitting on punctuation. We reject the whole
 // string up front so a redaction marker doesn't replace a public PR url.
-const URL_LIKE = /:\/\//;
+const URL_LIKE = /:\/\//u;
 
 export interface HighEntropyOptions {
   minLength?: number;
@@ -61,7 +61,7 @@ export function looksLikeCredential(value: string, options: HighEntropyOptions =
   if (value.length < minLength) {
     return false;
   }
-  if (/\s/.test(value)) {
+  if (/\s/u.test(value)) {
     return false;
   }
   if (URL_LIKE.test(value)) {
@@ -79,9 +79,9 @@ export function looksLikeCredential(value: string, options: HighEntropyOptions =
   // and an all-lowercase 30-char latin word has high entropy. Without this
   // gate "supercalifragilisticexpialidocious" looks like a credential.
   let classes = 0;
-  if (/[A-Z]/.test(value)) classes += 1;
-  if (/[a-z]/.test(value)) classes += 1;
-  if (/[0-9]/.test(value)) classes += 1;
+  if (/[A-Z]/u.test(value)) classes += 1;
+  if (/[a-z]/u.test(value)) classes += 1;
+  if (/[0-9]/u.test(value)) classes += 1;
   return classes >= 2;
 }
 
@@ -122,7 +122,7 @@ export function containsCredentialSubstring(value: string, options: HighEntropyO
   // matches log lines like `auth=eyJh...` and `token: ghp_abc...`. Tokens
   // bearing a URL scheme are skipped — we don't want a PR URL to flip the
   // whole string to redacted just because it's long.
-  const tokens = value.split(/[\s,;"'<>(){}[\]]+/);
+  const tokens = value.split(/[\s,;"'<>(){}[\]]+/u);
   for (const token of tokens) {
     if (URL_LIKE.test(token)) {
       continue;
@@ -132,7 +132,7 @@ export function containsCredentialSubstring(value: string, options: HighEntropyO
     // alphabet check passes for the joined form, but the entropy of a
     // short key prefix dilutes the per-char entropy. Splitting matches
     // operator intent.
-    const candidates = token.split(/[=:]/);
+    const candidates = token.split(/[=:]/u);
     for (const candidate of candidates) {
       if (looksLikeCredential(candidate, options)) {
         return true;

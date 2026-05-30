@@ -209,7 +209,7 @@ describeDb("RLS R3a-worker — per-job WORKFLOW tenant writes carry org context"
         cli: "fake",
         model: null,
       }),
-    ).rejects.toThrow(/row-level security|policy/i);
+    ).rejects.toThrow(/row-level security|policy/iu);
 
     // And nothing was written.
     const orphan = await ownerPool.query("SELECT 1 FROM tasks WHERE task_id = $1", [`task_unscoped_${ORG}`]);

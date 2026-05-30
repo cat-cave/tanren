@@ -17,7 +17,7 @@ describe("0005 product-entities migration", () => {
     expect(sql).toContain('CREATE TABLE "personas"');
     expect(sql).toContain("personas_scope_check");
     expect(sql).toContain("personas_scope_project_check");
-    expect(sql).toMatch(/scope.*IN \('org','project'\)/);
+    expect(sql).toMatch(/scope.*IN \('org','project'\)/u);
   });
 
   it("creates the behaviors table with given/when/then columns", async () => {
@@ -32,7 +32,7 @@ describe("0005 product-entities migration", () => {
     const sql = await readMigration();
     expect(sql).toContain('CREATE TABLE "milestones"');
     expect(sql).toContain("milestones_status_check");
-    expect(sql).toMatch(/status.*IN \('planned','in_flight','done','abandoned'\)/);
+    expect(sql).toMatch(/status.*IN \('planned','in_flight','done','abandoned'\)/u);
     expect(sql).toContain('CREATE UNIQUE INDEX "milestones_project_label_unique"');
     expect(sql).toContain('CREATE UNIQUE INDEX "milestones_project_order_unique"');
   });

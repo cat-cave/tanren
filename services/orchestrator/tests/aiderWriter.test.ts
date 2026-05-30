@@ -94,7 +94,7 @@ describe("aider writer adapter", () => {
       runId: "run_aider_3",
     });
     await expect(writer.runWriter({ prompt: "edit", workspace: "/workspace/repo", timeoutMs: 1000 })).rejects.toThrow(
-      /missing aider credential ref/,
+      /missing aider credential ref/u,
     );
   });
 

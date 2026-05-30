@@ -158,7 +158,7 @@ describe("hello workflow", () => {
     expect(jobQueue.claims).toEqual([]);
     expect(jobQueue.queuedRunFailures).toEqual([
       {
-        runId: expect.stringMatching(/^run_/) as string,
+        runId: expect.stringMatching(/^run_/u) as string,
         failure: { kind: "run_failed", message: "hello SSH proof failed for runner_test: exit 7" },
       },
     ]);
@@ -206,7 +206,7 @@ describe("hello workflow", () => {
     expect(jobQueue.claims).toEqual([]);
     expect(jobQueue.queuedRunFailures).toEqual([
       {
-        runId: expect.stringMatching(/^run_/) as string,
+        runId: expect.stringMatching(/^run_/u) as string,
         failure: {
           kind: "run_failed",
           message: 'hello SSH proof failed for runner_test: unexpected stdout "wrong\\n"',
@@ -270,7 +270,7 @@ describe("hello workflow", () => {
     ]);
     expect(jobQueue.queuedRunFailures).toEqual([
       {
-        runId: expect.stringMatching(/^run_/) as string,
+        runId: expect.stringMatching(/^run_/u) as string,
         failure: { kind: "run_failed", message: "fake writer mutation failed: exit 9" },
       },
     ]);

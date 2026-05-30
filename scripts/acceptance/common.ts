@@ -240,7 +240,7 @@ export function assertAcceptanceCriteria(input: AcceptanceCriteriaInput): void {
   if (snapshot.outcome !== expectedOutcome) {
     failures.push(`expected run.outcome=${expectedOutcome}, got ${String(snapshot.outcome)}`);
   }
-  if (snapshot.prUrl === null || !/^https:\/\/github\.com\/.+\/pull\/\d+$/.test(snapshot.prUrl)) {
+  if (snapshot.prUrl === null || !/^https:\/\/github\.com\/.+\/pull\/\d+$/u.test(snapshot.prUrl)) {
     failures.push(`expected persisted pr_url to look like a GitHub PR URL, got ${String(snapshot.prUrl)}`);
   }
   if (snapshot.ciStatus !== "passed") {

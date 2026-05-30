@@ -178,7 +178,7 @@ export function mountCostsScreen(app: Hono, deps: ShellDeps): void {
 }
 
 function csv(value: string): string {
-  if (/[",\n]/.test(value)) return `"${value.replaceAll('"', '""')}"`;
+  if (/[",\n]/u.test(value)) return `"${value.replaceAll('"', '""')}"`;
   return value;
 }
 

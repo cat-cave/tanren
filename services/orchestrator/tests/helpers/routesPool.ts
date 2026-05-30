@@ -227,7 +227,7 @@ export class RoutesPool {
     }
     if (trimmed.startsWith("UPDATE specs")) {
       const idx = trimmed.lastIndexOf("$");
-      const last = Number(trimmed.slice(idx + 1).match(/^\d+/)?.[0] ?? params.length);
+      const last = Number(trimmed.slice(idx + 1).match(/^\d+/u)?.[0] ?? params.length);
       const specId = String(params[last - 1]);
       const spec = this.specs.get(specId);
       if (spec === undefined) return { rows: [], rowCount: 0 };

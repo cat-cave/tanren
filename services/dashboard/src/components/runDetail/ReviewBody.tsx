@@ -114,13 +114,13 @@ export function deferralsFromEvents(events: RunEventRow[]): ReviewDeferral[] {
 
 function prNumberFromUrl(url: string | null): string {
   if (url === null) return "pr";
-  const match = /\/pull\/(\d+)/.exec(url);
+  const match = /\/pull\/(\d+)/u.exec(url);
   return match?.[1] !== undefined ? `pr #${match[1]}` : "pr";
 }
 
 function repoFromUrl(url: string | null): string {
   if (url === null) return "repo";
-  const match = /github\.com\/([^/]+\/[^/]+)/.exec(url);
+  const match = /github\.com\/([^/]+\/[^/]+)/u.exec(url);
   return match?.[1] ?? "repo";
 }
 

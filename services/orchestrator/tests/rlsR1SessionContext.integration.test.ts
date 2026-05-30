@@ -119,7 +119,7 @@ describeDb("RLS wave R1 — restricted role + org session context", () => {
 
   it("(a) rejects an unsafe org id rather than interpolating it", async () => {
     await expect(runWithOrgScope(runtimePool, "org'; DROP TABLE runs; --", async () => {})).rejects.toThrow(
-      /unsafe org id/,
+      /unsafe org id/u,
     );
   });
 
@@ -207,7 +207,7 @@ describeDb("RLS wave R1 — restricted role + org session context", () => {
 
   // (d) The restricted role cannot bypass owner-only DDL.
   it("(d) the restricted role cannot create tables (DDL stays owner-only)", async () => {
-    await expect(runtimePool.query("CREATE TABLE rls_should_fail (x int)")).rejects.toThrow(/permission denied/);
+    await expect(runtimePool.query("CREATE TABLE rls_should_fail (x int)")).rejects.toThrow(/permission denied/u);
   });
 });
 

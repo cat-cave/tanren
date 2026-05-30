@@ -97,7 +97,7 @@ export class HetznerAllocator implements Allocator {
   }
 
   async allocate(request: AllocationRequest): Promise<RunnerAllocation> {
-    const name = `tanren-${request.runId}`.toLowerCase().replaceAll(/[^a-z0-9-]/g, "-");
+    const name = `tanren-${request.runId}`.toLowerCase().replaceAll(/[^a-z0-9-]/gu, "-");
     const created = await this.client.createServer({
       name,
       serverType: this.options.serverType,

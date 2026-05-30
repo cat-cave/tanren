@@ -72,13 +72,13 @@ describe("buildSecretStore selector", () => {
   });
 
   it("throws a helpful error for an unknown backend", () => {
-    expect(() => buildSecretStore({ TANREN_SECRET_STORE: "bogus" })).toThrow(/unknown TANREN_SECRET_STORE/);
+    expect(() => buildSecretStore({ TANREN_SECRET_STORE: "bogus" })).toThrow(/unknown TANREN_SECRET_STORE/u);
   });
 
   it("throws when a selected backend is missing required credentials", () => {
-    expect(() => buildSecretStore({ TANREN_SECRET_STORE: "gcp_sm" })).toThrow(/TANREN_GCP_SM_PROJECT/);
-    expect(() => buildSecretStore({ TANREN_SECRET_STORE: "aws_sm" })).toThrow(/TANREN_AWS_SM_/);
-    expect(() => buildSecretStore({ TANREN_SECRET_STORE: "onepassword" })).toThrow(/TANREN_OP_/);
+    expect(() => buildSecretStore({ TANREN_SECRET_STORE: "gcp_sm" })).toThrow(/TANREN_GCP_SM_PROJECT/u);
+    expect(() => buildSecretStore({ TANREN_SECRET_STORE: "aws_sm" })).toThrow(/TANREN_AWS_SM_/u);
+    expect(() => buildSecretStore({ TANREN_SECRET_STORE: "onepassword" })).toThrow(/TANREN_OP_/u);
   });
 });
 
@@ -104,7 +104,7 @@ describe("buildSecretStore env-driven config resolution", () => {
   it("treats an empty-string required credential as missing", () => {
     expect(() =>
       buildSecretStore({ TANREN_SECRET_STORE: "gcp_sm", TANREN_GCP_SM_PROJECT: "", TANREN_GCP_SM_ACCESS_TOKEN: "t" }),
-    ).toThrow(/TANREN_GCP_SM_PROJECT/);
+    ).toThrow(/TANREN_GCP_SM_PROJECT/u);
   });
 
   it("defaults Vault addr/token and the KV mount when the env omits them", async () => {

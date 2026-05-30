@@ -134,7 +134,7 @@ export class AwsEc2Allocator implements Allocator {
       securityGroupIds: this.options.securityGroupIds,
       userData: this.options.userData,
       tags: {
-        Name: `tanren-${request.runId}`.toLowerCase().replaceAll(/[^a-z0-9-]/g, "-"),
+        Name: `tanren-${request.runId}`.toLowerCase().replaceAll(/[^a-z0-9-]/gu, "-"),
         "tanren-run": request.runId,
         "tanren-project": request.projectId,
       },
@@ -237,7 +237,7 @@ export class AwsEc2Allocator implements Allocator {
 
 /** Pulls the first capture of `tag` out of EC2's XML response, if present. */
 function xmlValue(xml: string, tag: string): string | undefined {
-  const match = new RegExp(`<${tag}>([^<]*)</${tag}>`).exec(xml);
+  const match = new RegExp(`<${tag}>([^<]*)</${tag}>`, "u").exec(xml);
   return match?.[1];
 }
 
@@ -273,7 +273,7 @@ function signingKey(secretKey: string, date: string, region: string, service: st
 /** RFC-3986 encode for canonical query strings (encodeURIComponent + extras). */
 function rfc3986(value: string): string {
   return encodeURIComponent(value).replaceAll(
-    /[!'()*]/g,
+    /[!'()*]/gu,
     (c) => `%${(c.codePointAt(0) ?? 0).toString(16).toUpperCase()}`,
   );
 }
@@ -358,7 +358,7 @@ export function fetchAwsEc2Client(
 
   async function send(params: Record<string, string>): Promise<string> {
     const now = new Date();
-    const amzDate = now.toISOString().replaceAll(/[:-]|\.\d{3}/g, "");
+    const amzDate = now.toISOString().replaceAll(/[:-]|\.\d{3}/gu, "");
     const dateStamp = amzDate.slice(0, 8);
     const allParams: Record<string, string> = { ...params, Version: ec2ApiVersion };
     if (options.sessionToken !== undefined) {
@@ -403,7 +403,7 @@ export function fetchAwsEc2Client(
       try {
         await send({ Action: "TerminateInstances", "InstanceId.1": instanceId });
       } catch (error) {
-        if (error instanceof AwsEc2AllocatorError && /InvalidInstanceID\.NotFound/.test(error.message)) {
+        if (error instanceof AwsEc2AllocatorError && /InvalidInstanceID\.NotFound/u.test(error.message)) {
           return;
         }
         throw error;

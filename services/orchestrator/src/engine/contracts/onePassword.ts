@@ -59,7 +59,7 @@ export class OnePasswordStore implements SecretStore {
 
   constructor(private readonly options: OnePasswordOptions) {
     this.fetchImpl = options.fetchImpl ?? fetch;
-    this.base = options.connectUrl.replace(/\/$/, "");
+    this.base = options.connectUrl.replace(/\/$/u, "");
     this.fieldLabel = options.fieldLabel ?? "password";
   }
 

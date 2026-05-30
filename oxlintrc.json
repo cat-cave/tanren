@@ -18,6 +18,7 @@
     "no-loop-func": "error",
     "no-useless-return": "error",
     "no-warning-comments": "error",
+    "require-unicode-regexp": "error",
     "unicorn/no-array-sort": "off",
     "unicorn/prefer-node-protocol": "error",
     "unicorn/no-useless-undefined": "error",

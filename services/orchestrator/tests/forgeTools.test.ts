@@ -97,6 +97,6 @@ describe("tanrenTriggerRun authz", () => {
     const p = new RoutesPool();
     seedProject(p, "project_a", "org_a");
     p.seedSpec({ spec_id: "spec_a", project_id: "project_a", status: "pending" });
-    await expect(tanrenTriggerRun({ pool: pool(p) }, { specId: "spec_a" }, stranger)).rejects.toThrow(/spec|access/i);
+    await expect(tanrenTriggerRun({ pool: pool(p) }, { specId: "spec_a" }, stranger)).rejects.toThrow(/spec|access/iu);
   });
 });

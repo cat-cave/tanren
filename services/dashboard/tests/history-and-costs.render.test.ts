@@ -167,13 +167,13 @@ function mockOrchestrator(): void {
       return new Response(JSON.stringify({ orgs: [ORG] }), { status: 200 });
     }
     // run costs: .../runs/:runId/costs (check before the run-list match)
-    const costsMatch = /\/runs\/([^/?]+)\/costs/.exec(url);
+    const costsMatch = /\/runs\/([^/?]+)\/costs/u.exec(url);
     if (costsMatch !== null) {
       const items = COSTS[costsMatch[1] ?? ""] ?? [];
       return new Response(JSON.stringify({ items, nextCursor: null }), { status: 200 });
     }
     // run list: .../runs  (optionally with ?status=)
-    if (/\/runs(\?|$)/.test(url)) {
+    if (/\/runs(\?|$)/u.test(url)) {
       const status = new URL(url, "http://x").searchParams.get("status");
       const items = status === null || status === "" ? RUNS : RUNS.filter((r) => r.status === status);
       return new Response(JSON.stringify({ items }), { status: 200 });

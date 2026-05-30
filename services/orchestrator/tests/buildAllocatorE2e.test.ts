@@ -208,7 +208,7 @@ describe("buildAllocatorFromEnv — env defaults flow through allocate() (stubbe
     expect(allocation.target.host).toBe("10.2.3.4");
     expect(allocation.target.username).toBe("tanren");
     // The namespaced path is assembled from the env api server + namespace.
-    expect(calls[0]?.url).toMatch(/^https:\/\/k8s:6443\/api\/v1\/namespaces\/tanren-ns\//);
+    expect(calls[0]?.url).toMatch(/^https:\/\/k8s:6443\/api\/v1\/namespaces\/tanren-ns\//u);
   });
 
   it("aws_ec2: default ec2-user + region endpoint from env flow into the request + target", async () => {
@@ -235,7 +235,7 @@ describe("buildAllocatorFromEnv — env defaults flow through allocate() (stubbe
 
     const allocation = await buildAllocatorFromEnv(queryPool).allocate(allocReq);
     // The region-derived endpoint host comes from the env region.
-    expect(calls[0]?.url).toMatch(/^https:\/\/ec2\.eu-central-1\.amazonaws\.com\//);
+    expect(calls[0]?.url).toMatch(/^https:\/\/ec2\.eu-central-1\.amazonaws\.com\//u);
     expect(allocation.target.host).toBe("203.0.113.5");
     // Default ssh user is ec2-user.
     expect(allocation.target.username).toBe("ec2-user");
@@ -280,14 +280,14 @@ describe("buildAllocatorFromEnv — env defaults flow through allocate() (stubbe
 
     const allocation = await buildAllocatorFromEnv(queryPool).allocate(allocReq);
     const runUrl = runInUrls[0] ?? "";
-    expect(runUrl).toMatch(/InstanceType=m6i.large/);
-    expect(runUrl).toMatch(/KeyName=tanren-kp/);
-    expect(runUrl).toMatch(/SubnetId=subnet-abc/);
-    expect(runUrl).toMatch(/SecurityGroupId\.1=sg-1/);
-    expect(runUrl).toMatch(/SecurityGroupId\.2=sg-2/);
-    expect(runUrl).toMatch(/UserData=/);
+    expect(runUrl).toMatch(/InstanceType=m6i.large/u);
+    expect(runUrl).toMatch(/KeyName=tanren-kp/u);
+    expect(runUrl).toMatch(/SubnetId=subnet-abc/u);
+    expect(runUrl).toMatch(/SecurityGroupId\.1=sg-1/u);
+    expect(runUrl).toMatch(/SecurityGroupId\.2=sg-2/u);
+    expect(runUrl).toMatch(/UserData=/u);
     // The session token rides as a signed query param + a header.
-    expect(runUrl).toMatch(/X-Amz-Security-Token=sess-tok/);
+    expect(runUrl).toMatch(/X-Amz-Security-Token=sess-tok/u);
     expect(sawSecurityHeader).toBe(true);
     expect(allocation.target.username).toBe("ubuntu");
   });

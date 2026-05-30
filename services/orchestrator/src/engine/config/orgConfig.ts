@@ -61,7 +61,7 @@ export type OrgGithubAppInstallation = z.infer<typeof OrgGithubAppInstallation>;
 // diff is written to (default `tanren.yaml`).
 export const OrgAuditGateTarget = z
   .object({
-    repo: z.string().regex(/^[^/\s]+\/[^/\s]+$/, "expected owner/name"),
+    repo: z.string().regex(/^[^/\s]+\/[^/\s]+$/u, "expected owner/name"),
     baseBranch: z.string().min(1).default("main"),
     branchPrefix: z.string().min(1).default("forge"),
     configFile: z.string().min(1).default("tanren.yaml"),

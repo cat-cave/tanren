@@ -60,7 +60,7 @@ async function main(): Promise<void> {
         return true;
       } catch (error) {
         // Any HTTP response — even 404 — proves the daemon is reachable.
-        return error instanceof Error && /status (?:404|400|500)/.test(error.message);
+        return error instanceof Error && /status (?:404|400|500)/u.test(error.message);
       }
     },
   });

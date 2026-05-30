@@ -248,6 +248,6 @@ describe("toolCallForProposal (re-validation before execute)", () => {
     // Corrupt the persisted tool name so re-validation must fail loudly rather
     // than silently executing an unknown write.
     const corrupted = { ...row, toolName: "tanren.not_a_real_tool" };
-    expect(() => toolCallForProposal(corrupted)).toThrow(/invalid|discriminator|tool/i);
+    expect(() => toolCallForProposal(corrupted)).toThrow(/invalid|discriminator|tool/iu);
   });
 });

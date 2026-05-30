@@ -423,7 +423,7 @@ describe("runAuditorStage", () => {
 
     expect(decision.kind).toBe("pass");
     // The auditor task id is a generated `task_<uuid>` (not an empty string).
-    expect(auditorTaskId).toMatch(/^task_[0-9a-f-]{36}$/);
+    expect(auditorTaskId).toMatch(/^task_[0-9a-f-]{36}$/u);
     const verdict = h.find("auditor.verdict")!;
     expect(verdict.payload.passed).toBe(true);
     expect(verdict.payload.recommendedAction).toBe("pass");

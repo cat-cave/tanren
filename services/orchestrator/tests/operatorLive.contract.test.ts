@@ -91,7 +91,7 @@ describe("P2B-0006 operator-triggered live run — contract", () => {
       status: string;
     };
     expect(run).toMatchObject({
-      runId: expect.stringMatching(/^run_/),
+      runId: expect.stringMatching(/^run_/u),
       specId: spec.specId,
       projectId: PROJECT,
       trigger: "dashboard",

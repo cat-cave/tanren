@@ -17,10 +17,10 @@ describe("0009 notifications-matrix migration", () => {
     expect(sql).toContain('CREATE TABLE "notification_targets"');
     expect(sql).toContain("notification_targets_channel_kind_check");
     expect(sql).toMatch(
-      /channel_kind.*IN \('ntfy','slack','github_checks','teams','discord','email','twilio','pagerduty','webhook'\)/,
+      /channel_kind.*IN \('ntfy','slack','github_checks','teams','discord','email','twilio','pagerduty','webhook'\)/u,
     );
     expect(sql).toContain("notification_targets_scope_check");
-    expect(sql).toMatch(/scope.*IN \('org','user'\)/);
+    expect(sql).toMatch(/scope.*IN \('org','user'\)/u);
     expect(sql).toContain("notification_targets_scope_user_check");
   });
 
@@ -28,7 +28,7 @@ describe("0009 notifications-matrix migration", () => {
     const sql = await readMigration();
     expect(sql).toContain('CREATE TABLE "notification_routes"');
     expect(sql).toContain("notification_routes_min_severity_check");
-    expect(sql).toMatch(/min_severity.*IN \('ok','info','warn','fail'\)/);
+    expect(sql).toMatch(/min_severity.*IN \('ok','info','warn','fail'\)/u);
     expect(sql).toContain("notification_routes_event_name_check");
     // event_name CHECK reuses the events.event_type enum: at least one
     // canonical event from each lifecycle band must appear.

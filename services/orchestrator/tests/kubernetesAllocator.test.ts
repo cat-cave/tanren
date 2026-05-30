@@ -137,7 +137,7 @@ describe("KubernetesAllocator", () => {
     await allocator.allocate(req("Run_ABC/9"));
     const podName = client.pods[0]!.name;
     expect(podName).toBe("tanren-run-abc-9");
-    expect(podName).not.toMatch(/[^a-z0-9-]/);
+    expect(podName).not.toMatch(/[^a-z0-9-]/u);
     // The secret name is always the pod name plus the "-ssh" suffix.
     expect(client.secrets[0]!.name).toBe(`${podName}-ssh`);
     expect(client.pods[0]!.sshKeySecretName).toBe(`${podName}-ssh`);
@@ -190,7 +190,7 @@ describe("KubernetesAllocator", () => {
       readyTimeoutMs: 5,
       pollIntervalMs: 1,
     });
-    await expect(allocator.allocate(req("run_3"))).rejects.toThrow(/did not become Running/);
+    await expect(allocator.allocate(req("run_3"))).rejects.toThrow(/did not become Running/u);
     expect(client.deletedPods).toContain("tanren-run-3");
     expect(client.deletedSecrets).toContain("tanren-run-3-ssh");
   });
@@ -219,17 +219,17 @@ describe("KubernetesAllocator", () => {
     const runners = new FakeRunnerStore();
     const c = new FakeKubernetesClient();
     expect(() => new KubernetesAllocator({ ...baseOpts(c, runners), apiServer: "" })).toThrow(
-      /non-empty apiServer and token/,
+      /non-empty apiServer and token/u,
     );
     expect(() => new KubernetesAllocator({ ...baseOpts(c, runners), token: "" })).toThrow(
-      /non-empty apiServer and token/,
+      /non-empty apiServer and token/u,
     );
-    expect(() => new KubernetesAllocator({ ...baseOpts(c, runners), namespace: "" })).toThrow(/non-empty namespace/);
+    expect(() => new KubernetesAllocator({ ...baseOpts(c, runners), namespace: "" })).toThrow(/non-empty namespace/u);
     expect(() => new KubernetesAllocator({ ...baseOpts(c, runners), sshPublicKey: "" })).toThrow(
-      /non-empty sshPublicKey/,
+      /non-empty sshPublicKey/u,
     );
     expect(() => new KubernetesAllocator({ ...baseOpts(c, runners), hostKeyFingerprint: "" })).toThrow(
-      /pinned hostKeyFingerprint/,
+      /pinned hostKeyFingerprint/u,
     );
   });
 
@@ -240,7 +240,7 @@ describe("KubernetesAllocator", () => {
       throw new Error("claim conflict");
     };
     const allocator = new KubernetesAllocator(baseOpts(client, runners));
-    await expect(allocator.allocate(req("run_c"))).rejects.toThrow(/claim conflict/);
+    await expect(allocator.allocate(req("run_c"))).rejects.toThrow(/claim conflict/u);
     expect(client.deletedPods).toContain("tanren-run-c");
     expect(client.deletedSecrets).toContain("tanren-run-c-ssh");
   });
@@ -257,7 +257,7 @@ describe("KubernetesAllocator", () => {
       readyTimeoutMs: 5,
       pollIntervalMs: 1,
     });
-    await expect(allocator.allocate(req("run_empty"))).rejects.toThrow(/did not become Running/);
+    await expect(allocator.allocate(req("run_empty"))).rejects.toThrow(/did not become Running/u);
     expect(client.deletedPods).toContain("tanren-run-empty");
     expect(client.deletedSecrets).toContain("tanren-run-empty-ssh");
     expect(runners.claims).toEqual([]);
@@ -270,7 +270,7 @@ describe("KubernetesAllocator", () => {
     const client = new FakeKubernetesClient({ terminal: true, terminalPhase: "Succeeded" });
     const runners = new FakeRunnerStore();
     const allocator = new KubernetesAllocator(baseOpts(client, runners));
-    await expect(allocator.allocate(req("run_succ"))).rejects.toThrow(/terminal phase 'Succeeded'/);
+    await expect(allocator.allocate(req("run_succ"))).rejects.toThrow(/terminal phase 'Succeeded'/u);
     expect(client.deletedPods).toContain("tanren-run-succ");
   });
 

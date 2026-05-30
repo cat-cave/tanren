@@ -164,7 +164,7 @@ describe("AwsEc2Allocator", () => {
       readyTimeoutMs: 5,
       pollIntervalMs: 1,
     });
-    await expect(allocator.allocate(req("run_3"))).rejects.toThrow(/did not become running/);
+    await expect(allocator.allocate(req("run_3"))).rejects.toThrow(/did not become running/u);
     expect(client.terminated).toContain("i-1");
   });
 
@@ -191,10 +191,10 @@ describe("AwsEc2Allocator", () => {
   it("requires credentials and a pinned fingerprint", () => {
     const runners = new FakeRunnerStore();
     expect(() => new AwsEc2Allocator({ ...baseOpts(new FakeAwsEc2Client(), runners), accessKeyId: "" })).toThrow(
-      /non-empty AWS credentials/,
+      /non-empty AWS credentials/u,
     );
     expect(() => new AwsEc2Allocator({ ...baseOpts(new FakeAwsEc2Client(), runners), secretAccessKey: "" })).toThrow(
-      /non-empty AWS credentials/,
+      /non-empty AWS credentials/u,
     );
     expect(
       () =>
@@ -202,7 +202,7 @@ describe("AwsEc2Allocator", () => {
           ...baseOpts(new FakeAwsEc2Client(), runners),
           hostKeyFingerprint: "",
         }),
-    ).toThrow(/pinned hostKeyFingerprint/);
+    ).toThrow(/pinned hostKeyFingerprint/u);
   });
 
   it("terminates the instance if the runner store claim fails", async () => {
@@ -212,7 +212,7 @@ describe("AwsEc2Allocator", () => {
       throw new Error("claim conflict");
     };
     const allocator = new AwsEc2Allocator(baseOpts(client, runners));
-    await expect(allocator.allocate(req("run_c"))).rejects.toThrow(/claim conflict/);
+    await expect(allocator.allocate(req("run_c"))).rejects.toThrow(/claim conflict/u);
     expect(client.terminated).toContain("i-1");
   });
 
@@ -228,7 +228,7 @@ describe("AwsEc2Allocator", () => {
       readyTimeoutMs: 5,
       pollIntervalMs: 1,
     });
-    await expect(allocator.allocate(req("run_empty"))).rejects.toThrow(/did not become running/);
+    await expect(allocator.allocate(req("run_empty"))).rejects.toThrow(/did not become running/u);
     expect(client.terminated).toContain("i-1");
     expect(runners.claims).toEqual([]);
   });
@@ -241,7 +241,7 @@ describe("AwsEc2Allocator", () => {
     const client = new FakeAwsEc2Client({ terminal: true, terminalState: "shutting-down" });
     const runners = new FakeRunnerStore();
     const allocator = new AwsEc2Allocator(baseOpts(client, runners));
-    await expect(allocator.allocate(req("run_sd"))).rejects.toThrow(/terminal state 'shutting-down'/);
+    await expect(allocator.allocate(req("run_sd"))).rejects.toThrow(/terminal state 'shutting-down'/u);
     expect(client.terminated).toContain("i-1");
   });
 
@@ -295,13 +295,13 @@ describe("fetchAwsEc2Client", () => {
       fetchImpl,
     );
     const instance = await client.describeInstance("i-abc123");
-    expect(captured.url).toMatch(/^https:\/\/ec2\.us-east-1\.amazonaws\.com\/\?/);
-    expect(captured.url).toMatch(/Action=DescribeInstances/);
+    expect(captured.url).toMatch(/^https:\/\/ec2\.us-east-1\.amazonaws\.com\/\?/u);
+    expect(captured.url).toMatch(/Action=DescribeInstances/u);
     expect(captured.method).toBe("GET");
-    expect(captured.auth).toMatch(/^AWS4-HMAC-SHA256 Credential=AKIAEXAMPLE\/\d{8}\/us-east-1\/ec2\/aws4_request/);
-    expect(captured.auth).toMatch(/SignedHeaders=host;x-amz-date/);
-    expect(captured.auth).toMatch(/Signature=[0-9a-f]{64}/);
-    expect(captured.date).toMatch(/^\d{8}T\d{6}Z$/);
+    expect(captured.auth).toMatch(/^AWS4-HMAC-SHA256 Credential=AKIAEXAMPLE\/\d{8}\/us-east-1\/ec2\/aws4_request/u);
+    expect(captured.auth).toMatch(/SignedHeaders=host;x-amz-date/u);
+    expect(captured.auth).toMatch(/Signature=[0-9a-f]{64}/u);
+    expect(captured.date).toMatch(/^\d{8}T\d{6}Z$/u);
     expect(instance).toEqual({
       instanceId: "i-abc123",
       state: "running",
@@ -327,22 +327,22 @@ describe("fetchAwsEc2Client", () => {
       securityGroupIds: ["sg-9"],
       tags: { Name: "tanren-x" },
     });
-    expect(url).toMatch(/Action=RunInstances/);
-    expect(url).toMatch(/ImageId=ami-1/);
-    expect(url).toMatch(/InstanceType=t3.micro/);
+    expect(url).toMatch(/Action=RunInstances/u);
+    expect(url).toMatch(/ImageId=ami-1/u);
+    expect(url).toMatch(/InstanceType=t3.micro/u);
     // MinCount/MaxCount are fixed at 1 each (single runner per allocation).
-    expect(url).toMatch(/MinCount=1/);
-    expect(url).toMatch(/MaxCount=1/);
+    expect(url).toMatch(/MinCount=1/u);
+    expect(url).toMatch(/MaxCount=1/u);
     // Optional params present in the input must appear in the query...
-    expect(url).toMatch(/KeyName=kp/);
-    expect(url).toMatch(/SecurityGroupId\.1=sg-9/);
-    expect(url).toMatch(/TagSpecification\.1\.ResourceType=instance/);
-    expect(url).toMatch(/TagSpecification\.1\.Tag\.1\.Key=Name/);
-    expect(url).toMatch(/TagSpecification\.1\.Tag\.1\.Value=tanren-x/);
+    expect(url).toMatch(/KeyName=kp/u);
+    expect(url).toMatch(/SecurityGroupId\.1=sg-9/u);
+    expect(url).toMatch(/TagSpecification\.1\.ResourceType=instance/u);
+    expect(url).toMatch(/TagSpecification\.1\.Tag\.1\.Key=Name/u);
+    expect(url).toMatch(/TagSpecification\.1\.Tag\.1\.Value=tanren-x/u);
     // ...and ones that were not supplied must be absent.
-    expect(url).not.toMatch(/SubnetId=/);
-    expect(url).not.toMatch(/UserData=/);
-    expect(url).not.toMatch(/SecurityGroupId\.2=/);
+    expect(url).not.toMatch(/SubnetId=/u);
+    expect(url).not.toMatch(/UserData=/u);
+    expect(url).not.toMatch(/SecurityGroupId\.2=/u);
     expect(instance).toEqual({ instanceId: "i-new", state: "pending", publicIp: undefined });
   });
 
@@ -358,11 +358,11 @@ describe("fetchAwsEc2Client", () => {
     }) as typeof fetch;
     const client = fetchAwsEc2Client({ accessKeyId: "k", secretAccessKey: "s", region: "us-east-1" }, fetchImpl);
     await client.runInstances({ imageId: "ami-1", instanceType: "t3.micro" });
-    expect(url).not.toMatch(/KeyName=/);
-    expect(url).not.toMatch(/SubnetId=/);
-    expect(url).not.toMatch(/SecurityGroupId\./);
-    expect(url).not.toMatch(/UserData=/);
-    expect(url).not.toMatch(/TagSpecification/);
+    expect(url).not.toMatch(/KeyName=/u);
+    expect(url).not.toMatch(/SubnetId=/u);
+    expect(url).not.toMatch(/SecurityGroupId\./u);
+    expect(url).not.toMatch(/UserData=/u);
+    expect(url).not.toMatch(/TagSpecification/u);
   });
 
   it("includes the session token header when temporary credentials are used", async () => {
@@ -425,8 +425,8 @@ describe("fetchAwsEc2Client", () => {
       subnetId: "subnet-xyz",
       userData: "cloud-init-blob",
     });
-    expect(url).toMatch(/SubnetId=subnet-xyz/);
-    expect(url).toMatch(/UserData=cloud-init-blob/);
+    expect(url).toMatch(/SubnetId=subnet-xyz/u);
+    expect(url).toMatch(/UserData=cloud-init-blob/u);
   });
 
   // A temporary-credential session token is sent BOTH as the `X-Amz-Security-Token`
@@ -446,7 +446,7 @@ describe("fetchAwsEc2Client", () => {
       { accessKeyId: "k", secretAccessKey: "s", region: "us-east-1", sessionToken: "sess-789" },
       withTokenFetch,
     ).describeInstance("i-abc123");
-    expect(withTokenUrl).toMatch(/X-Amz-Security-Token=sess-789/);
+    expect(withTokenUrl).toMatch(/X-Amz-Security-Token=sess-789/u);
     expect(withTokenHeader).toBe("sess-789");
 
     let plainUrl = "";
@@ -460,7 +460,7 @@ describe("fetchAwsEc2Client", () => {
       { accessKeyId: "k", secretAccessKey: "s", region: "us-east-1" },
       plainFetch,
     ).describeInstance("i-abc123");
-    expect(plainUrl).not.toMatch(/X-Amz-Security-Token=/);
+    expect(plainUrl).not.toMatch(/X-Amz-Security-Token=/u);
     expect(plainHeader).toBeUndefined();
   });
 
@@ -477,7 +477,7 @@ describe("fetchAwsEc2Client", () => {
       { accessKeyId: "k", secretAccessKey: "s", region: "ap-southeast-2" },
       fetchImpl,
     ).describeInstance("i-abc123");
-    expect(url).toMatch(/^https:\/\/ec2\.ap-southeast-2\.amazonaws\.com\//);
-    expect(url).toMatch(/Version=2016-11-15/);
+    expect(url).toMatch(/^https:\/\/ec2\.ap-southeast-2\.amazonaws\.com\//u);
+    expect(url).toMatch(/Version=2016-11-15/u);
   });
 });

@@ -90,16 +90,16 @@ describe("generateProjectViewNarration", () => {
   it("renders the project pulse with active and review-ready counts", () => {
     const answer = generateProjectViewNarration(baseInput);
     expect(answer.body).toContain("Supplier Tools");
-    expect(answer.body).toMatch(/1 run in flight/);
-    expect(answer.body).toMatch(/1 PR review-ready/);
-    expect(answer.body).toMatch(/\$42/);
+    expect(answer.body).toMatch(/1 run in flight/u);
+    expect(answer.body).toMatch(/1 PR review-ready/u);
+    expect(answer.body).toMatch(/\$42/u);
   });
 
   it("emits a review-priority attention item that points at PR #142", () => {
     const answer = generateProjectViewNarration(baseInput);
     const reviewItem = answer.attentionItems.find((entry) => entry.priority === "review");
     expect(reviewItem).toBeDefined();
-    expect(reviewItem?.title).toMatch(/PR #142/);
+    expect(reviewItem?.title).toMatch(/PR #142/u);
     const toolCall = reviewItem?.action?.toolCall;
     expect(toolCall?.tool).toBe("tanren.read_run");
     // Cast is safe — we asserted the tool literal above; the discriminator
@@ -127,7 +127,7 @@ describe("generateProjectViewNarration", () => {
       recentRuns: [],
       pendingReviews: [],
     });
-    expect(answer.body).toMatch(/idle/);
+    expect(answer.body).toMatch(/idle/u);
     expect(answer.attentionItems.filter((entry) => entry.priority === "review")).toHaveLength(0);
   });
 

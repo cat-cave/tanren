@@ -11,7 +11,7 @@ import type { SecretStore, SecretValue } from "./secretStore.js";
  * never logged.
  */
 export function awsSecretNameFromRef(ref: string, prefix?: string): string {
-  return prefix === undefined || prefix === "" ? ref : `${prefix.replace(/\/$/, "")}/${ref}`;
+  return prefix === undefined || prefix === "" ? ref : `${prefix.replace(/\/$/u, "")}/${ref}`;
 }
 
 export interface AwsSecretsManagerOptions {
@@ -57,7 +57,7 @@ export class AwsSecretsManagerStore implements SecretStore {
   constructor(private readonly options: AwsSecretsManagerOptions) {
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.host = `secretsmanager.${options.region}.amazonaws.com`;
-    this.endpoint = (options.endpoint ?? `https://${this.host}/`).replace(/\/$/, "") + "/";
+    this.endpoint = (options.endpoint ?? `https://${this.host}/`).replace(/\/$/u, "") + "/";
   }
 
   async put(secret: SecretValue): Promise<void> {
@@ -114,7 +114,7 @@ export class AwsSecretsManagerStore implements SecretStore {
   private async call(action: string, payload: Record<string, unknown>): Promise<Response> {
     const body = JSON.stringify(payload);
     const now = new Date();
-    const amzDate = now.toISOString().replaceAll(/[:-]|\.\d{3}/g, "");
+    const amzDate = now.toISOString().replaceAll(/[:-]|\.\d{3}/gu, "");
     const dateStamp = amzDate.slice(0, 8);
     const target = apiVersion.replace("GetSecretValue", action);
     const headers: Record<string, string> = {
@@ -149,7 +149,7 @@ export class AwsSecretsManagerStore implements SecretStore {
 }
 
 function isNotFound(status: number, body: string): boolean {
-  return status === 400 || status === 404 ? /ResourceNotFoundException/.test(body) : false;
+  return status === 400 || status === 404 ? /ResourceNotFoundException/u.test(body) : false;
 }
 
 function sha256Hex(value: string): string {

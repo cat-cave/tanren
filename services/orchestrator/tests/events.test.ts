@@ -42,7 +42,7 @@ describe("typed event store", () => {
         // Missing fields — Zod must reject.
         payload: { passed: true } as never,
       }),
-    ).rejects.toThrow(/invalid|required|expected/i);
+    ).rejects.toThrow(/invalid|required|expected/iu);
   });
 
   it("rejects undeclared event names", async () => {
@@ -76,6 +76,6 @@ describe("typed event store", () => {
         eventType: "run.started",
         payload: { status: "running", extra: "no" } as never,
       }),
-    ).rejects.toThrow(/unrecognized|extra|strict/i);
+    ).rejects.toThrow(/unrecognized|extra|strict/iu);
   });
 });

@@ -67,7 +67,7 @@ export class OidcProvider implements IdentityProvider {
 
   constructor(private readonly config: OidcProviderConfig) {
     this.fetchImpl = config.fetchImpl ?? fetch;
-    this.issuer = config.issuer.replace(/\/$/, "");
+    this.issuer = config.issuer.replace(/\/$/u, "");
     this.scopes = config.scopes ?? ["openid", "profile", "email", "groups"];
     this.subjectClaim = config.subjectClaim ?? "sub";
     this.loginClaim = config.loginClaim ?? "preferred_username";

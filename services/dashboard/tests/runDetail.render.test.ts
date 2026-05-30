@@ -41,7 +41,7 @@ describe("P2B-0004 run-detail screen", () => {
     expect(html).toContain("by model");
     expect(html).toContain("gpt-5");
     expect(html).toContain("claude-sonnet");
-    expect(html).not.toMatch(/unknown[- ]source/i);
+    expect(html).not.toMatch(/unknown[- ]source/iu);
   });
 
   it("renders the trajectory spine including the rejection loop", async () => {

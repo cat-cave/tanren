@@ -138,7 +138,7 @@ function opencodeEndpointEnv(endpointBaseUrl?: string): string[] {
 // limit" phrase (matched on the phrase, not the event type, so a minor CLI
 // wording change still surfaces it).
 export function parseOpencodeStreamTelemetry(stdout: string): OpencodeEventTelemetry {
-  const lines = stdout.split(/\r?\n/).filter((line) => line.trim() !== "");
+  const lines = stdout.split(/\r?\n/u).filter((line) => line.trim() !== "");
   let tokenUsage: TokenUsage | undefined;
   let usageLimit: UsageLimitSignal | undefined;
   for (const line of lines) {
@@ -159,7 +159,7 @@ function detectUsageLimit(event: Record<string, unknown>): UsageLimitSignal | un
     candidates.push((errorField as Record<string, unknown>)["message"]);
   }
   for (const candidate of candidates) {
-    if (typeof candidate === "string" && /usage limit|rate limit/i.test(candidate)) {
+    if (typeof candidate === "string" && /usage limit|rate limit/iu.test(candidate)) {
       return { message: candidate };
     }
   }

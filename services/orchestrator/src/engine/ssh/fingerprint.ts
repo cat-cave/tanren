@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
 
-const hexSha256Pattern = /^[a-f0-9]{64}$/;
-const colonHexSha256Pattern = /^([a-f0-9]{2}:){31}[a-f0-9]{2}$/;
+const hexSha256Pattern = /^[a-f0-9]{64}$/u;
+const colonHexSha256Pattern = /^([a-f0-9]{2}:){31}[a-f0-9]{2}$/u;
 
 export function sshSha256Fingerprint(key: Buffer): string {
-  return `SHA256:${createHash("sha256").update(key).digest("base64").replace(/=+$/, "")}`;
+  return `SHA256:${createHash("sha256").update(key).digest("base64").replace(/=+$/u, "")}`;
 }
 
 export function normalizeHostKeyFingerprint(fingerprint: string): string | undefined {

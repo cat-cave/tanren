@@ -377,7 +377,7 @@ export function reviewMergeStateFromEvents(events: RunEventRow[]): ReviewMergeSt
 /** Pull the PR number out of a GitHub PR URL (`.../pull/142` → `142`), or null. */
 export function prNumberFrom(prUrl: string | null): string | null {
   if (prUrl === null) return null;
-  const match = /\/pull\/(\d+)/.exec(prUrl);
+  const match = /\/pull\/(\d+)/u.exec(prUrl);
   return match?.[1] ?? null;
 }
 
@@ -399,7 +399,7 @@ export function derivePreviewUrl(
   if (previewUrlPattern.includes("{pr}") && pr === null) return null;
   const url = previewUrlPattern.replaceAll("{pr}", pr ?? "").replaceAll("{branch}", encodeURIComponent(run.branch));
   // Only surface an http(s) origin into an iframe `src` (no `javascript:` etc).
-  return /^https?:\/\//i.test(url) ? url : null;
+  return /^https?:\/\//iu.test(url) ? url : null;
 }
 
 /** Did the run fail / halt? Drives the failure-diagnostics banner. */

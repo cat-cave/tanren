@@ -78,7 +78,7 @@ describe("GitHub OAuth callback integration (recorded fixture)", () => {
 
     const login = await app.request("/auth/login?provider=github_oauth");
     const stateCookie = decodeURIComponent(
-      /tanren_oauth_state=([^;]+)/.exec(login.headers.get("set-cookie") ?? "")?.[1] ?? "",
+      /tanren_oauth_state=([^;]+)/u.exec(login.headers.get("set-cookie") ?? "")?.[1] ?? "",
     );
     const callback = await app.request(`/auth/callback?provider=github_oauth&code=fixturecode&state=${stateCookie}`, {
       headers: { cookie: `tanren_oauth_state=${stateCookie}` },

@@ -127,7 +127,7 @@ describe("gatedConfigWrite", () => {
   it("gate ON + Bucket-B but no client → throws (never silently applies)", async () => {
     await expect(
       gatedConfigWrite({ prev: baseConfig(), next: withAuditPrimary("opus-4.7"), target: TARGET }),
-    ).rejects.toThrow(/no tanren-config/);
+    ).rejects.toThrow(/no tanren-config/u);
   });
 });
 

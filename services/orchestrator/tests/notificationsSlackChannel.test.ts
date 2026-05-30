@@ -109,7 +109,7 @@ describe("SlackChannel", () => {
         severity: "info",
         eventName: "run.started",
       }),
-    ).rejects.toThrow(/slack publish failed: 400/);
+    ).rejects.toThrow(/slack publish failed: 400/u);
   });
 
   it("throws when a credential ref cannot be resolved", async () => {
@@ -121,7 +121,7 @@ describe("SlackChannel", () => {
         severity: "info",
         eventName: "run.started",
       }),
-    ).rejects.toThrow(/missing Slack webhook credential ref/);
+    ).rejects.toThrow(/missing Slack webhook credential ref/u);
   });
 
   async function capture(payload: Parameters<SlackChannel["publish"]>[1]): Promise<{

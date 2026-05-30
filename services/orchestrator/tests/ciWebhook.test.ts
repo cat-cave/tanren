@@ -122,7 +122,7 @@ class WebhookPool {
     if (sql.startsWith("UPDATE tasks")) {
       return { rows: [], rowCount: 1 };
     }
-    if (/^INSERT\s+INTO\s+events/.test(sql)) {
+    if (/^INSERT\s+INTO\s+events/u.test(sql)) {
       return { rows: [{ id: "1" }], rowCount: 1 };
     }
     return { rows: [], rowCount: 0 };

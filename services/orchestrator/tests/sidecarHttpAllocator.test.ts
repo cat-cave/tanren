@@ -130,7 +130,7 @@ describe("SidecarHttpAllocator", () => {
         runnerImage: "img",
         identitySecretRef: "r",
       }),
-    ).rejects.toThrow(/allocate failed/);
+    ).rejects.toThrow(/allocate failed/u);
   });
 
   it("strips a trailing slash from baseUrl so the path is single-slashed", async () => {
@@ -302,6 +302,6 @@ describe("SidecarHttpAllocator", () => {
         runners: new FakeRunnerStore(),
         fetchImpl,
       }).release("runner_x"),
-    ).rejects.toThrow(/release failed/);
+    ).rejects.toThrow(/release failed/u);
   });
 });

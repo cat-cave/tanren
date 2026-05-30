@@ -81,7 +81,7 @@ describe("TwilioChannel", () => {
         severity: "info",
         eventName: "run.started",
       }),
-    ).rejects.toThrow(/twilio publish failed: 401/);
+    ).rejects.toThrow(/twilio publish failed: 401/u);
   });
 
   it("throws when credentials are missing", async () => {
@@ -98,7 +98,7 @@ describe("TwilioChannel", () => {
         severity: "info",
         eventName: "run.started",
       }),
-    ).rejects.toThrow(/missing twilio credential ref/);
+    ).rejects.toThrow(/missing twilio credential ref/u);
   });
 
   it("strips a trailing slash from the api base before appending the Messages path", async () => {
@@ -160,6 +160,6 @@ describe("TwilioChannel", () => {
         severity: "info",
         eventName: "run.started",
       }),
-    ).rejects.toThrow(/needs a secret store/);
+    ).rejects.toThrow(/needs a secret store/u);
   });
 });

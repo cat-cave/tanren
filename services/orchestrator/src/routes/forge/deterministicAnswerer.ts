@@ -19,10 +19,10 @@ type Topic = "costs" | "run" | "insights" | "milestones" | "generic";
 
 function classify(question: string): Topic {
   const q = question.toLowerCase();
-  if (/(cost|spend|budget|\$)/.test(q)) return "costs";
-  if (/(run|pr|review|fail|task)/.test(q)) return "run";
-  if (/(insight|stuck|retry|callout|suboptimal)/.test(q)) return "insights";
-  if (/(milestone|roadmap|eta|ship|when)/.test(q)) return "milestones";
+  if (/(cost|spend|budget|\$)/u.test(q)) return "costs";
+  if (/(run|pr|review|fail|task)/u.test(q)) return "run";
+  if (/(insight|stuck|retry|callout|suboptimal)/u.test(q)) return "insights";
+  if (/(milestone|roadmap|eta|ship|when)/u.test(q)) return "milestones";
   return "generic";
 }
 

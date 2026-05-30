@@ -178,7 +178,7 @@ describe("config-injection · 6 files + per-file exclude + open PR", () => {
         baseBranch: "main",
         files: [],
       }),
-    ).rejects.toThrow(/at least one file/);
+    ).rejects.toThrow(/at least one file/u);
   });
 });
 
@@ -250,7 +250,7 @@ describe("seed-dag · recon gaps + GitHub issues become specs", () => {
 function seedStubPool(): { pool: pg.Pool; specs: Map<string, unknown> } {
   const specs = new Map<string, unknown>();
   const query = async (text: string, params: unknown[] = []): Promise<{ rows: unknown[]; rowCount: number }> => {
-    const sql = text.replaceAll(/\s+/g, " ").trim();
+    const sql = text.replaceAll(/\s+/gu, " ").trim();
     if (sql.startsWith("SELECT project_id FROM projects")) return { rows: [{ project_id: params[0] }], rowCount: 1 };
     if (sql.includes("FROM project_members")) return { rows: [{ role: "admin" }], rowCount: 1 };
     if (sql.startsWith("SELECT spec_id FROM specs WHERE project_id")) {

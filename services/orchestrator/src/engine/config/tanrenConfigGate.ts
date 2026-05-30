@@ -131,7 +131,7 @@ export function renderTanrenYamlDiff(prev: OrgConfigV1, next: OrgConfigV1): Conf
 }
 
 function leadingKey(line: string): string | undefined {
-  const match = /^\s*([A-Za-z0-9_.]+)\s*=/.exec(line);
+  const match = /^\s*([A-Za-z0-9_.]+)\s*=/u.exec(line);
   return match?.[1];
 }
 

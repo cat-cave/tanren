@@ -77,7 +77,7 @@ export function validateGithubAppCredential(value: unknown): GithubAppCredential
   }
   const object = value as Record<string, unknown>;
   const appId = typeof object["appId"] === "string" ? object["appId"].trim() : "";
-  if (!/^[0-9]+$/.test(appId)) {
+  if (!/^[0-9]+$/u.test(appId)) {
     throw new Error("GitHub App id must be a numeric string");
   }
   const privateKeyPem = typeof object["privateKeyPem"] === "string" ? object["privateKeyPem"] : "";

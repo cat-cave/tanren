@@ -249,7 +249,7 @@ function RecoveryCards(props: { actionBase: string; ctx: FailureContext }) {
           <a
             class="btn ghost"
             style="color: var(--status-fail)"
-            href={`${actionBase.replace(/\/recover$/, "")}/review`}
+            href={`${actionBase.replace(/\/recover$/u, "")}/review`}
           >
             cancel run ↗
           </a>

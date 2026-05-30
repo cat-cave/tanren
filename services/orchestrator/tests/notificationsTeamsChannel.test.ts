@@ -94,7 +94,7 @@ describe("TeamsChannel", () => {
         severity: "info",
         eventName: "run.started",
       }),
-    ).rejects.toThrow(/teams publish failed: 400/);
+    ).rejects.toThrow(/teams publish failed: 400/u);
   });
 
   it("throws when a credential ref cannot be resolved", async () => {
@@ -106,7 +106,7 @@ describe("TeamsChannel", () => {
         severity: "info",
         eventName: "run.started",
       }),
-    ).rejects.toThrow(/missing teams webhook credential ref/);
+    ).rejects.toThrow(/missing teams webhook credential ref/u);
   });
 
   interface Card {
@@ -232,6 +232,6 @@ describe("TeamsChannel", () => {
         severity: "info",
         eventName: "run.started",
       }),
-    ).rejects.toThrow(/teams channel needs a secret store/);
+    ).rejects.toThrow(/teams channel needs a secret store/u);
   });
 });

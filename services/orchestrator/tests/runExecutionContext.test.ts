@@ -106,7 +106,7 @@ describe("loadRunExecutionContext", () => {
       RunExecutionContextNotFoundError,
     );
     await expect(loadRunExecutionContext(rowPool(), { runId: "run_missing", identitySecretRef: "id" })).rejects.toThrow(
-      /run_missing/,
+      /run_missing/u,
     );
   });
 });

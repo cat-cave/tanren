@@ -42,7 +42,7 @@ export class SidecarHttpAllocator implements Allocator {
 
   async allocate(request: AllocationRequest): Promise<RunnerAllocation> {
     const vaultRefs = uniqueRefs([request.identitySecretRef, ...(request.vaultRefs ?? [])]);
-    const response = await this.fetchImpl(`${this.options.baseUrl.replace(/\/$/, "")}/allocate`, {
+    const response = await this.fetchImpl(`${this.options.baseUrl.replace(/\/$/u, "")}/allocate`, {
       method: "POST",
       headers: this.authHeaders(),
       body: JSON.stringify({
@@ -87,7 +87,7 @@ export class SidecarHttpAllocator implements Allocator {
   }
 
   async release(runnerId: string, reason: ReleaseReason = "completed"): Promise<void> {
-    const response = await this.fetchImpl(`${this.options.baseUrl.replace(/\/$/, "")}/release`, {
+    const response = await this.fetchImpl(`${this.options.baseUrl.replace(/\/$/u, "")}/release`, {
       method: "POST",
       headers: this.authHeaders(),
       body: JSON.stringify({ runnerId, reason }),

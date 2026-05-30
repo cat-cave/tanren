@@ -79,7 +79,7 @@ describe("buildClaimClientFromEnv (plane-split P2 claim seam)", () => {
     // Only cert + key, no CA → partial config must fail loudly.
     process.env["TANREN_DATA_PLANE_TLS_CERT"] = join(certDir, "cert.pem");
     process.env["TANREN_DATA_PLANE_TLS_KEY"] = join(certDir, "key.pem");
-    expect(() => buildClaimClientFromEnv()).toThrow(/mTLS cert env/);
+    expect(() => buildClaimClientFromEnv()).toThrow(/mTLS cert env/u);
   });
 });
 

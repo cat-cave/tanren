@@ -46,7 +46,7 @@ export interface SeedDagResult {
 function normalizeTitle(title: string): string {
   return title
     .toLowerCase()
-    .replaceAll(/[^a-z0-9]+/g, " ")
+    .replaceAll(/[^a-z0-9]+/gu, " ")
     .trim();
 }
 

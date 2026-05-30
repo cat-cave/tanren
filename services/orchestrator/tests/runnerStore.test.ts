@@ -45,8 +45,8 @@ describe("PgRunnerStore.claim", () => {
 
     expect(pool.queries).toHaveLength(1);
     const { text } = pool.queries[0]!;
-    expect(text).toMatch(/INSERT INTO runners/);
-    expect(text).toMatch(/'claimed'/);
+    expect(text).toMatch(/INSERT INTO runners/u);
+    expect(text).toMatch(/'claimed'/u);
   });
 
   it("derives org_id from the run via a subquery (tenancy hardening)", async () => {
@@ -54,8 +54,8 @@ describe("PgRunnerStore.claim", () => {
     await new PgRunnerStore(poolAs(pool)).claim(claimInput);
 
     const { text } = pool.queries[0]!;
-    expect(text).toMatch(/org_id/);
-    expect(text).toMatch(/SELECT org_id FROM runs WHERE run_id = \$2/);
+    expect(text).toMatch(/org_id/u);
+    expect(text).toMatch(/SELECT org_id FROM runs WHERE run_id = \$2/u);
   });
 
   it("binds the claim fields in the documented parameter order", async () => {
@@ -83,9 +83,9 @@ describe("PgRunnerStore.release", () => {
 
     expect(pool.queries).toHaveLength(1);
     const { text, params } = pool.queries[0]!;
-    expect(text).toMatch(/UPDATE runners SET status = 'released'/);
-    expect(text).toMatch(/released_at = now\(\)/);
-    expect(text).toMatch(/WHERE runner_id = \$1/);
+    expect(text).toMatch(/UPDATE runners SET status = 'released'/u);
+    expect(text).toMatch(/released_at = now\(\)/u);
+    expect(text).toMatch(/WHERE runner_id = \$1/u);
     expect(params).toEqual(["runner_run_1"]);
   });
 });

@@ -45,7 +45,7 @@ function stubPool(existingSpecs: Array<{ spec_id: string; title: string; status:
 } {
   const specs = new Map<string, { metadata: unknown }>();
   const query = async (text: string, params: unknown[] = []): Promise<{ rows: unknown[]; rowCount: number }> => {
-    const sql = text.replaceAll(/\s+/g, " ").trim();
+    const sql = text.replaceAll(/\s+/gu, " ").trim();
     if (sql.startsWith("SELECT spec_id, title, status FROM specs")) {
       return { rows: existingSpecs, rowCount: existingSpecs.length };
     }
@@ -194,7 +194,7 @@ describe("acceptProposals · creates specs + stamps provenance", () => {
 
     expect(result.accepted).toHaveLength(1);
     const created = result.accepted[0];
-    expect(created?.spec.specId).toMatch(/^spec_/);
+    expect(created?.spec.specId).toMatch(/^spec_/u);
     expect(created?.proposalId).toBe("p1");
 
     // Provenance landed on the spec's metadata under the discovery key.

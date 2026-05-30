@@ -80,7 +80,7 @@ export class HttpRunStateWriter implements RunStateWriter {
   }
 
   private async post<T>(endpoint: string, body: unknown): Promise<T> {
-    const response = await this.mtlsFetch(`${this.baseUrl.replace(/\/$/, "")}${endpoint}`, {
+    const response = await this.mtlsFetch(`${this.baseUrl.replace(/\/$/u, "")}${endpoint}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),

@@ -53,7 +53,7 @@ describe("SSH substrate contract", () => {
     const key = Buffer.from("tanren-runner-host-key");
     const hex = createHash("sha256").update(key).digest("hex");
     const openssh = sshSha256Fingerprint(key);
-    const colonHex = hex.match(/.{2}/g)?.join(":") ?? "";
+    const colonHex = hex.match(/.{2}/gu)?.join(":") ?? "";
 
     expect(normalizeHostKeyFingerprint(openssh)).toBe(hex);
     expect(normalizeHostKeyFingerprint(hex.toUpperCase())).toBe(hex);

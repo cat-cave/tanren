@@ -56,7 +56,7 @@ export class GithubAppTokenMinter {
 
   constructor(options: GithubAppTokenMinterOptions) {
     this.secrets = options.secrets;
-    this.apiBaseUrl = (options.apiBaseUrl ?? "https://api.github.com").replace(/\/$/, "");
+    this.apiBaseUrl = (options.apiBaseUrl ?? "https://api.github.com").replace(/\/$/u, "");
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.now = options.now ?? Date.now;
   }

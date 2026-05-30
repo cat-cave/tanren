@@ -114,7 +114,7 @@ export class StaticRunnerAllocator implements Allocator {
           settle(() => reject(new Error(`static runner returned unparseable fingerprint: ${captured}`)));
           return;
         }
-        const sha256Base64 = Buffer.from(normalized, "hex").toString("base64").replace(/=+$/, "");
+        const sha256Base64 = Buffer.from(normalized, "hex").toString("base64").replace(/=+$/u, "");
         settle(() => resolve(`SHA256:${sha256Base64}`));
       };
       const timer = setTimeout(

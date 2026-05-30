@@ -34,7 +34,7 @@ export interface AllocatorFailureHarness {
   makeFailing(): { allocator: Allocator; request: AllocationRequest };
 }
 
-const SHA256_FINGERPRINT = /^SHA256:.+/;
+const SHA256_FINGERPRINT = /^SHA256:.+/u;
 
 function expectWellFormedAllocation(
   allocation: Awaited<ReturnType<Allocator["allocate"]>>,

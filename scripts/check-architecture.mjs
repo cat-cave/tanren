@@ -97,8 +97,8 @@ function checkLineMax(projectFiles) {
 
 function checkSingleEventWriter(projectFiles) {
   const diagnostics = [];
-  const sqlInsert = new RegExp("INSERT\\s+INTO\\s+events", "gi");
-  const drizzleInsert = /db\.insert\s*\(\s*events\s*\)/g;
+  const sqlInsert = new RegExp("INSERT\\s+INTO\\s+events", "giu");
+  const drizzleInsert = /db\.insert\s*\(\s*events\s*\)/gu;
   for (const { file, text } of projectFiles) {
     if (
       invariantDocExclusions.has(file) ||
@@ -125,7 +125,7 @@ function checkSingleEventWriter(projectFiles) {
 
 function checkFailureVariants(projectFiles) {
   const diagnostics = [];
-  const failurePatterns = [/kind\s*:\s*["']host_[^"']+["']/g, /\|\s*["']host_[^"']+["']/g];
+  const failurePatterns = [/kind\s*:\s*["']host_[^"']+["']/gu, /\|\s*["']host_[^"']+["']/gu];
   for (const { file, text } of projectFiles) {
     if (invariantDocExclusions.has(file)) {
       continue;
@@ -174,16 +174,16 @@ function checkWriterAnswererSeparation(projectFiles) {
 
 function checkCostSources(projectFiles) {
   const diagnostics = [];
-  const legacy = new RegExp(`${"legacy"}_${"unknown"}`, "g");
+  const legacy = new RegExp(`${"legacy"}_${"unknown"}`, "gu");
   // Each column's SQL CHECK must exactly match its accepted value set.
   const enumChecks = [
     {
-      pattern: /cost_basis\s+IN\s*\(([^)]*)\)/gi,
+      pattern: /cost_basis\s+IN\s*\(([^)]*)\)/giu,
       allowed: costBases,
       label: "cost_basis (ccusage, provider_pricing, unknown)",
     },
     {
-      pattern: /billing_mode\s+IN\s*\(([^)]*)\)/gi,
+      pattern: /billing_mode\s+IN\s*\(([^)]*)\)/giu,
       allowed: billingModes,
       label: "billing_mode (per_token, subscription, self_hosted)",
     },
@@ -204,7 +204,7 @@ function checkCostSources(projectFiles) {
     }
     for (const { pattern, allowed, label } of enumChecks) {
       for (const match of text.matchAll(pattern)) {
-        const values = [...match[1].matchAll(/'([^']+)'/g)].map((value) => value[1]);
+        const values = [...match[1].matchAll(/'([^']+)'/gu)].map((value) => value[1]);
         if (values.some((value) => !allowed.has(value)) || values.length !== allowed.size) {
           diagnostics.push(
             diagnostic(
@@ -228,7 +228,7 @@ function checkGitHubActions(projectFiles) {
       continue;
     }
     for (const action of ["actions/checkout", "actions/setup-node"]) {
-      const pattern = new RegExp(`${action}@v(\\d+)`, "g");
+      const pattern = new RegExp(`${action}@v(\\d+)`, "gu");
       for (const match of text.matchAll(pattern)) {
         if (match[1] !== "6") {
           diagnostics.push(
@@ -259,7 +259,7 @@ function checkNoRowCastsInWorkflow(projectFiles) {
   // Detect `... as Something` where the cast immediately follows .rows[N] or
   // a variable named `row`/`rows`. Allow `as const` casts (they're not row
   // shape casts) and exempt the explicit allowlist above.
-  const rowCastPatterns = [/\.rows\[[^\]]*\]\s+as\s+(?!const\b)[A-Za-z_$]/g, /\brow\s+as\s+(?!const\b)[A-Za-z_$]/g];
+  const rowCastPatterns = [/\.rows\[[^\]]*\]\s+as\s+(?!const\b)[A-Za-z_$]/gu, /\brow\s+as\s+(?!const\b)[A-Za-z_$]/gu];
   for (const { file, text } of projectFiles) {
     if (!file.startsWith("services/orchestrator/src/engine/workflow/")) {
       continue;

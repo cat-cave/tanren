@@ -11,8 +11,8 @@ import type { ReconAnswerer, ReconArchitectureLine, ReconIndex, ReconReport, Rec
 
 function slugFromRepoUrl(repoUrl: string): string {
   const tail = repoUrl
-    .replace(/\.git$/, "")
-    .replace(/\/$/, "")
+    .replace(/\.git$/u, "")
+    .replace(/\/$/u, "")
     .split("/")
     .pop();
   return tail !== undefined && tail !== "" ? tail : "linked-repo";

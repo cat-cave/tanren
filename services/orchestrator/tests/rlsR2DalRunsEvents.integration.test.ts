@@ -240,7 +240,7 @@ describeDb("RLS R2 cohort-1 — runs + events through the org-scoped client", ()
         eventType: "run.completed",
         payload: { status: "completed", outcome: "pool" },
       }),
-    ).rejects.toThrow(/row-level security|policy/i);
+    ).rejects.toThrow(/row-level security|policy/iu);
 
     // Only the in-scope append landed (owner pool = RLS-exempt ground truth).
     const after = await countEvents(ownerPool, RUN_A);

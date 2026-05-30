@@ -52,7 +52,7 @@ class GatePool {
       const ok = params[0] === RUN_ID && params[1] === ORG_ID;
       return ok ? { rows: [{ ok: 1 }], rowCount: 1 } : { rows: [], rowCount: 0 };
     }
-    if (/FROM runs r\s+JOIN specs s/.test(trimmed)) {
+    if (/FROM runs r\s+JOIN specs s/u.test(trimmed)) {
       return {
         rows: [
           {
@@ -89,7 +89,7 @@ class GatePool {
       this.events.push({ eventType: String(params[4]), payload: JSON.parse(String(params[5])) });
       return { rows: [], rowCount: 1 };
     }
-    if (/FROM cost_records/.test(trimmed)) {
+    if (/FROM cost_records/u.test(trimmed)) {
       return {
         rows: [{ runs: this.costTokens, tokens: this.costTokens, cost_usd: this.costUsd }],
         rowCount: 1,

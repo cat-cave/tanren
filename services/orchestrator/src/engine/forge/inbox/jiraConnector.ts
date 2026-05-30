@@ -190,7 +190,7 @@ export function createJiraConnector(deps: JiraConnectorDeps): SourceConnector {
         throw new Error(`jira connector: no secret at ref ${config.tokenRef}`);
       }
 
-      const baseUrl = config.baseUrl.replace(/\/+$/, "");
+      const baseUrl = config.baseUrl.replace(/\/+$/u, "");
       const response = await deps.jiraHttp.request({
         url: `${baseUrl}/rest/api/3/search`,
         authorization: basicAuth(config.email, secret.value),

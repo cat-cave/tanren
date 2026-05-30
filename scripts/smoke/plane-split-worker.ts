@@ -244,7 +244,7 @@ function postOverMtls(path: string, payload: unknown, withClientCert: boolean): 
       // A handshake rejection (no/invalid client cert) surfaces as a socket/TLS
       // error, NOT an HTTP status — that IS the authn-closed proof.
       const message = String((error as { code?: string }).code ?? error);
-      if (/ALERT|HANDSHAKE|ECONNRESET|EPROTO|SSL|TLS/i.test(message)) {
+      if (/ALERT|HANDSHAKE|ECONNRESET|EPROTO|SSL|TLS/iu.test(message)) {
         resolve({ status: "tls_rejected", body: message });
       } else {
         reject(error);

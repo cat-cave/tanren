@@ -249,11 +249,11 @@ export class RunRoutesPool {
     }
 
     // Run snapshot loaders. org_id is the second predicate (defense-in-depth).
-    if (trimmed.startsWith("SELECT") && /FROM runs WHERE run_id = \$1 AND org_id = \$2/.test(trimmed)) {
+    if (trimmed.startsWith("SELECT") && /FROM runs WHERE run_id = \$1 AND org_id = \$2/u.test(trimmed)) {
       const run = this.runs.find((r) => r.run_id === String(params[0]) && r.org_id === String(params[1]));
       return run === undefined ? { rows: [], rowCount: 0 } : { rows: [run], rowCount: 1 };
     }
-    if (trimmed.startsWith("SELECT") && /FROM runs/.test(trimmed) && /WHERE/.test(trimmed)) {
+    if (trimmed.startsWith("SELECT") && /FROM runs/u.test(trimmed) && /WHERE/u.test(trimmed)) {
       // list loader: params are [projectId, orgId, ...status/spec filters].
       const projectId = String(params[0]);
       const orgId = String(params[1]);
@@ -277,7 +277,7 @@ export class RunRoutesPool {
     }
 
     // Tasks list (run_id = $1 AND org_id = $2)
-    if (/FROM tasks\s+WHERE run_id = \$1 AND org_id = \$2/.test(trimmed)) {
+    if (/FROM tasks\s+WHERE run_id = \$1 AND org_id = \$2/u.test(trimmed)) {
       const rows = this.tasks
         .filter((t) => t.run_id === String(params[0]) && t.org_id === String(params[1]))
         .sort((a, b) => {
@@ -310,7 +310,7 @@ export class RunRoutesPool {
 
     // Events: snapshot (run_id = $1 AND org_id = $3; params [runId, limit, orgId])
     if (
-      /FROM \(\s*SELECT id, ts, run_id, task_id, spec_id, project_id, event_type, payload\s+FROM events\s+WHERE run_id = \$1 AND org_id = \$3/.test(
+      /FROM \(\s*SELECT id, ts, run_id, task_id, spec_id, project_id, event_type, payload\s+FROM events\s+WHERE run_id = \$1 AND org_id = \$3/u.test(
         trimmed,
       )
     ) {
@@ -326,7 +326,7 @@ export class RunRoutesPool {
 
     // Events: paginated (run_id = $1 AND org_id = $2; params [runId, orgId, ...cursor, limit])
     if (
-      /FROM events\s+WHERE run_id = \$1 AND org_id = \$2(\s+AND \(ts, id\) >|\s+ORDER)/.test(trimmed) &&
+      /FROM events\s+WHERE run_id = \$1 AND org_id = \$2(\s+AND \(ts, id\) >|\s+ORDER)/u.test(trimmed) &&
       trimmed.includes("ORDER BY ts ASC")
     ) {
       const orgId = String(params[1]);
@@ -351,7 +351,7 @@ export class RunRoutesPool {
     }
 
     // Events: SSE polling (run_id = $1 AND org_id = $3 AND id > $2)
-    if (/FROM events\s+WHERE run_id = \$1 AND org_id = \$3 AND id > \$2/.test(trimmed)) {
+    if (/FROM events\s+WHERE run_id = \$1 AND org_id = \$3 AND id > \$2/u.test(trimmed)) {
       const lastId = Number(params[1]);
       const orgId = String(params[2]);
       const rows = this.events
@@ -362,7 +362,7 @@ export class RunRoutesPool {
     }
 
     // Activity feed (project_id = $1 AND org_id = $2 AND run_id IS NOT NULL)
-    if (/FROM events\s+WHERE project_id = \$1 AND org_id = \$2 AND run_id IS NOT NULL/.test(trimmed)) {
+    if (/FROM events\s+WHERE project_id = \$1 AND org_id = \$2 AND run_id IS NOT NULL/u.test(trimmed)) {
       const orgId = String(params[1]);
       const limit = Number(params.at(-1));
       let cursorTs: Date | undefined;
@@ -385,7 +385,7 @@ export class RunRoutesPool {
     }
 
     // Costs: snapshot (run_id = $1 AND org_id = $2)
-    if (/FROM cost_records\s+WHERE run_id = \$1 AND org_id = \$2\s+ORDER BY recorded_at ASC/.test(trimmed)) {
+    if (/FROM cost_records\s+WHERE run_id = \$1 AND org_id = \$2\s+ORDER BY recorded_at ASC/u.test(trimmed)) {
       const orgId = String(params[1]);
       const rows = this.costs
         .filter((c) => c.run_id === String(params[0]) && c.org_id === orgId)
@@ -395,8 +395,8 @@ export class RunRoutesPool {
 
     // Costs: paginated (run_id = $1 AND org_id = $2; params [runId, orgId, ...cursor, limit])
     if (
-      /FROM cost_records\s+WHERE run_id = \$1 AND org_id = \$2.*ORDER BY recorded_at ASC/.test(trimmed) ||
-      /FROM cost_records\s+WHERE run_id = \$1 AND org_id = \$2 AND \(recorded_at, id\)/.test(trimmed)
+      /FROM cost_records\s+WHERE run_id = \$1 AND org_id = \$2.*ORDER BY recorded_at ASC/u.test(trimmed) ||
+      /FROM cost_records\s+WHERE run_id = \$1 AND org_id = \$2 AND \(recorded_at, id\)/u.test(trimmed)
     ) {
       const orgId = String(params[1]);
       const limit = Number(params.at(-1));
@@ -420,7 +420,7 @@ export class RunRoutesPool {
     }
 
     // Costs: SSE polling (run_id = $1 AND org_id = $3 AND id > $2)
-    if (/FROM cost_records\s+WHERE run_id = \$1 AND org_id = \$3 AND id > \$2/.test(trimmed)) {
+    if (/FROM cost_records\s+WHERE run_id = \$1 AND org_id = \$3 AND id > \$2/u.test(trimmed)) {
       const lastId = Number(params[1]);
       const orgId = String(params[2]);
       const rows = this.costs
@@ -431,17 +431,17 @@ export class RunRoutesPool {
     }
 
     // Forge threads list by run
-    if (/FROM forge_threads\s+WHERE org_id = \$1 AND project_id = \$2 AND run_id = \$3/.test(trimmed)) {
+    if (/FROM forge_threads\s+WHERE org_id = \$1 AND project_id = \$2 AND run_id = \$3/u.test(trimmed)) {
       const rows = this.forgeThreads.filter(
         (t) => t.org_id === String(params[0]) && t.project_id === String(params[1]) && t.run_id === String(params[2]),
       );
       return { rows, rowCount: rows.length };
     }
-    if (/FROM forge_threads WHERE id = \$1/.test(trimmed)) {
+    if (/FROM forge_threads WHERE id = \$1/u.test(trimmed)) {
       const thread = this.forgeThreads.find((t) => t.id === String(params[0]));
       return thread === undefined ? { rows: [], rowCount: 0 } : { rows: [thread], rowCount: 1 };
     }
-    if (/FROM forge_turns\s+WHERE thread_id = \$1 AND turn_index > \$2/.test(trimmed)) {
+    if (/FROM forge_turns\s+WHERE thread_id = \$1 AND turn_index > \$2/u.test(trimmed)) {
       const sinceIndex = Number(params[1]);
       const limit = Number(params[2]);
       const rows = this.forgeTurns
@@ -453,10 +453,10 @@ export class RunRoutesPool {
 
     // workflow_insights table (P2A-0020). Return empty rows so the cache
     // walks to the compute path which itself walks our other tables.
-    if (/FROM workflow_insights/.test(trimmed)) {
+    if (/FROM workflow_insights/u.test(trimmed)) {
       return { rows: [], rowCount: 0 };
     }
-    if (/INSERT INTO workflow_insights/.test(trimmed) || /UPDATE workflow_insights/.test(trimmed)) {
+    if (/INSERT INTO workflow_insights/u.test(trimmed) || /UPDATE workflow_insights/u.test(trimmed)) {
       return { rows: [], rowCount: 0 };
     }
 

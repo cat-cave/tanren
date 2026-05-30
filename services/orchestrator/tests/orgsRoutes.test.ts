@@ -127,6 +127,6 @@ describe("org routes", () => {
     });
     expect(response.status).toBe(201);
     const body = (await response.json()) as { projectId: string };
-    expect(body.projectId).toMatch(/^project_/);
+    expect(body.projectId).toMatch(/^project_/u);
   });
 });

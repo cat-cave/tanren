@@ -145,7 +145,7 @@ describeDb("RLS R2 cohort-2 — tasks + cost_records through the org-scoped clie
         cli: "fake",
         model: null,
       }),
-    ).rejects.toThrow(/row-level security|policy/i);
+    ).rejects.toThrow(/row-level security|policy/iu);
     const committed = await countTasks(ownerPool, "task_write_pool");
     expect(committed).toBe(0);
 
@@ -192,7 +192,7 @@ describeDb("RLS R2 cohort-2 — tasks + cost_records through the org-scoped clie
 
     // Out-of-scope: the recorder's pool fallback (empty GUC) is denied by the
     // policy under R3b — only the in-scope record landed.
-    await expect(recorder.record(ctx, tokens, { role: "pool" })).rejects.toThrow(/row-level security|policy/i);
+    await expect(recorder.record(ctx, tokens, { role: "pool" })).rejects.toThrow(/row-level security|policy/iu);
 
     const after = await countCosts(ownerPool, RUN_A);
     expect(after - before).toBe(1);

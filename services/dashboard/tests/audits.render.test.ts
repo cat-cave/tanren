@@ -96,16 +96,16 @@ function mockOrchestrator(snapshot: unknown = SNAPSHOT): void {
     if (url.endsWith("/auth/me"))
       return new Response(JSON.stringify({ userId: "u1", csrfToken: "c", expiresAt: "2030-01-01" }), { status: 200 });
     if (url.endsWith("/orgs")) return new Response(JSON.stringify({ orgs: [ORG] }), { status: 200 });
-    if (/\/orgs\/[^/]+\/projects$/.test(url))
+    if (/\/orgs\/[^/]+\/projects$/u.test(url))
       return new Response(JSON.stringify({ projects: [PROJECT] }), { status: 200 });
-    if (/\/orgs\/[^/]+\/audits$/.test(url) && method === "GET")
+    if (/\/orgs\/[^/]+\/audits$/u.test(url) && method === "GET")
       return new Response(JSON.stringify(snapshot), { status: 200 });
-    if (/\/orgs\/[^/]+\/audits$/.test(url) && method === "POST")
+    if (/\/orgs\/[^/]+\/audits$/u.test(url) && method === "POST")
       return new Response(JSON.stringify({ job: {} }), { status: 201 });
-    if (/\/audits\/[^/]+\/(enable|disable|run)$/.test(url) && method === "POST")
+    if (/\/audits\/[^/]+\/(enable|disable|run)$/u.test(url) && method === "POST")
       return new Response(JSON.stringify({ job: {} }), { status: 200 });
     // Costs gather → no runs, so the heatmap (window-fill) is empty.
-    if (/\/runs(\?|$)/.test(url)) return new Response(JSON.stringify({ runs: [] }), { status: 200 });
+    if (/\/runs(\?|$)/u.test(url)) return new Response(JSON.stringify({ runs: [] }), { status: 200 });
     if (url.endsWith("/healthz")) return new Response("ok", { status: 200 });
     return new Response("not found", { status: 404 });
   });
