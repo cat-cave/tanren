@@ -95,7 +95,7 @@ export async function repoReadFile(
   if (typeof body.content === "string") {
     if (body.encoding === "base64") {
       try {
-        content = Buffer.from(body.content.replace(/\n/g, ""), "base64").toString("utf8");
+        content = Buffer.from(body.content.replaceAll("\n", ""), "base64").toString("utf8");
       } catch {
         content = "";
       }

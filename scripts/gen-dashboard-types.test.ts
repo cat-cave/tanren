@@ -1,11 +1,10 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { tsType } from "./gen-dashboard-types.mjs";
 
-const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const repoRoot = resolve(import.meta.dirname, "..");
 const script = resolve(repoRoot, "scripts/gen-dashboard-types.mjs");
 const generatedFile = resolve(repoRoot, "services/dashboard/src/api/http.gen.ts");
 

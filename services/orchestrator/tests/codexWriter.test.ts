@@ -281,9 +281,11 @@ function refreshedAuthJson(): string {
   return JSON.stringify({ auth_mode: "chatgpt", tokens: { access_token: "new-token" } });
 }
 
+const EMPTY_GIT_STATE: { diff: string; log: string } = { diff: "", log: "" };
+
 async function runWithCodexResult(
   codexResult: SshCommandResult,
-  gitState: { diff: string; log: string } = { diff: "", log: "" },
+  gitState: { diff: string; log: string } = EMPTY_GIT_STATE,
 ) {
   const ssh = new ScriptedSsh([
     ok(""),

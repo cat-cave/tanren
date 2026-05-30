@@ -86,7 +86,7 @@ export class AwsSecretsManagerStore implements SecretStore {
     }
     const parsed = (await response.json()) as GetSecretValueResponse;
     if (typeof parsed.SecretString !== "string") {
-      throw new Error(`AWS Secrets Manager secret ${ref} did not contain a SecretString`);
+      throw new TypeError(`AWS Secrets Manager secret ${ref} did not contain a SecretString`);
     }
     return { ref, value: parsed.SecretString };
   }
@@ -114,7 +114,7 @@ export class AwsSecretsManagerStore implements SecretStore {
   private async call(action: string, payload: Record<string, unknown>): Promise<Response> {
     const body = JSON.stringify(payload);
     const now = new Date();
-    const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, "");
+    const amzDate = now.toISOString().replaceAll(/[:-]|\.\d{3}/g, "");
     const dateStamp = amzDate.slice(0, 8);
     const target = apiVersion.replace("GetSecretValue", action);
     const headers: Record<string, string> = {

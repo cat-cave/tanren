@@ -48,8 +48,8 @@ export function createNotificationRoutes(options: NotificationRoutesOptions) {
       routes.push(...(await NotificationRouteStore.listForTarget(options.pool, target.id)));
     }
     return c.json({
-      targets: targets.map(toTargetContract),
-      routes: routes.map(toRouteContract),
+      targets: targets.map((target) => toTargetContract(target)),
+      routes: routes.map((route) => toRouteContract(route)),
       events: eventCatalog(),
     });
   });

@@ -87,9 +87,7 @@ describe("TwilioChannel", () => {
   it("throws when credentials are missing", async () => {
     const empty: SecretStore = {
       async put() {},
-      async get() {
-        return;
-      },
+      async get() {},
       async delete() {},
     };
     const channel = new TwilioChannel({ secrets: empty });

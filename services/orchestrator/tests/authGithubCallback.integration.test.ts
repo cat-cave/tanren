@@ -70,8 +70,7 @@ describe("GitHub OAuth callback integration (recorded fixture)", () => {
       clientSecret: "ghub_client_secret",
       fetchImpl,
     });
-    const providers = new Map<IdentityProviderId, IdentityProvider>();
-    providers.set("github_oauth", provider);
+    const providers = new Map<IdentityProviderId, IdentityProvider>([["github_oauth", provider]]);
     const app = new Hono<ActorContextEnv>();
     app.route("/auth", createAuthRoutes({ providers, store, publicBaseUrl: "http://localhost:3100" }));
     app.use("*", createAuthMiddleware({ store }));

@@ -123,5 +123,5 @@ export function emitStageTiming(
 
 function roundMs(value: number): number {
   const rounded = Math.round(value * 1000) / 1000;
-  return rounded > 0 ? rounded : 0;
+  return Math.max(rounded, 0);
 }

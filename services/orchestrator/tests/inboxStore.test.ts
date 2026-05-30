@@ -37,7 +37,7 @@ function recorder(handlers: Array<{ match: string; rows: (params: unknown[]) => 
   const calls: Call[] = [];
   const client = {
     async query(text: string, params: unknown[] = []) {
-      const sql = text.replace(/\s+/g, " ").trim();
+      const sql = text.replaceAll(/\s+/g, " ").trim();
       calls.push({ sql, params });
       for (const h of handlers) {
         if (sql.includes(h.match)) {

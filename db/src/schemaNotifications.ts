@@ -10,7 +10,7 @@ import { organizations, users } from "./schemaCore.js";
 // the dispatch ledger. See docs/operator-guide/notifications.md.
 
 function enumCheck(name: string, column: AnyPgColumn, values: ReadonlyArray<string>) {
-  const literals = sql.raw(values.map((value) => `'${value.replace(/'/g, "''")}'`).join(","));
+  const literals = sql.raw(values.map((value) => `'${value.replaceAll("'", "''")}'`).join(","));
   return check(name, sql`${column} IN (${literals})`);
 }
 

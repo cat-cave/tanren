@@ -32,12 +32,8 @@ function buildHarness(actor: ActorContext, http: GitHubHttpClient) {
     "*",
     createAuthMiddleware({
       store: {
-        async findApiTokenByRaw() {
-          return;
-        },
-        async loadSession() {
-          return;
-        },
+        async findApiTokenByRaw() {},
+        async loadSession() {},
         async resolveActorContext() {
           return actor;
         },

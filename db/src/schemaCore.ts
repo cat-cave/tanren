@@ -10,7 +10,7 @@ import { stateEnumLists } from "./stateEnums.js";
 // so consumers + the migration generator still see one `schema.*` namespace.
 
 export function enumCheck(name: string, column: AnyPgColumn, values: ReadonlyArray<string>) {
-  const literals = sql.raw(values.map((value) => `'${value.replace(/'/g, "''")}'`).join(","));
+  const literals = sql.raw(values.map((value) => `'${value.replaceAll("'", "''")}'`).join(","));
   return check(name, sql`${column} IN (${literals})`);
 }
 

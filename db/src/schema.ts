@@ -50,7 +50,7 @@ export const runs = pgTable(
     check(
       "runs_outcome_check",
       sql`${table.outcome} IS NULL OR ${table.outcome} IN (${sql.raw(
-        stateEnumLists.runs_outcome.map((value) => `'${value.replace(/'/g, "''")}'`).join(","),
+        stateEnumLists.runs_outcome.map((value) => `'${value.replaceAll("'", "''")}'`).join(","),
       )})`,
     ),
     index("runs_org_id").on(table.orgId),
@@ -90,7 +90,7 @@ export const tasks = pgTable(
     check(
       "tasks_outcome_check",
       sql`${table.outcome} IS NULL OR ${table.outcome} IN (${sql.raw(
-        stateEnumLists.tasks_outcome.map((value) => `'${value.replace(/'/g, "''")}'`).join(","),
+        stateEnumLists.tasks_outcome.map((value) => `'${value.replaceAll("'", "''")}'`).join(","),
       )})`,
     ),
     index("tasks_org_id").on(table.orgId),

@@ -170,7 +170,7 @@ function SuboptCallout(props: { insight: InsightSummary; orgId: string | undefin
   const { insight } = props;
   return (
     <div class="subopt">
-      <div class="kind">{insight.kind.replace(/_/g, " ")}</div>
+      <div class="kind">{insight.kind.replaceAll("_", " ")}</div>
       <div class="t">{insight.title}</div>
       <div class="b">{insight.body}</div>
       {insight.actions.length > 0 && props.orgId !== undefined && (

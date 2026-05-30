@@ -44,12 +44,12 @@ for (const file of [...files].toSorted()) {
     failed = true;
   }
 
-  lines.forEach((line, index) => {
+  for (const [index, line] of lines.entries()) {
     if (/[ \t]$/.test(line)) {
       console.error(`${relative(".", file)}:${index + 1}: trailing whitespace`);
       failed = true;
     }
-  });
+  }
 }
 
 if (argv.includes("--quiet") && failed) {

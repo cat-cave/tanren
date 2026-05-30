@@ -205,7 +205,7 @@ function extractSingleTarFile(archive: Buffer): Buffer {
   }
   const size = Number.parseInt(tarHeaderString(header.subarray(124, 136)).trim(), 8);
   if (Number.isNaN(size)) {
-    throw new Error("Docker archive contained a file with an invalid tar size");
+    throw new TypeError("Docker archive contained a file with an invalid tar size");
   }
   const contentStart = 512;
   const contentEnd = contentStart + size;

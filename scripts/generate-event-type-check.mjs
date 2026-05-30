@@ -12,11 +12,10 @@
 
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
 import { exit, argv } from "node:process";
 
-const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const repoRoot = resolve(import.meta.dirname, "..");
 const eventTypesFile = resolve(repoRoot, "db/src/eventTypes.ts");
 const registryFile = resolve(repoRoot, "services/orchestrator/src/engine/events/registry.ts");
 
@@ -54,7 +53,7 @@ function renderEventTypesTs(names) {
 }
 
 function renderSqlClause(names) {
-  const values = names.map((name) => `'${name.replace(/'/g, "''")}'`).join(",");
+  const values = names.map((name) => `'${name.replaceAll("'", "''")}'`).join(",");
   return `ALTER TABLE "events" ADD CONSTRAINT "events_event_type_check" CHECK ("events"."event_type" IN (${values}));`;
 }
 

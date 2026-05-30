@@ -1,6 +1,5 @@
 import { readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -11,7 +10,7 @@ import {
 
 // Walks up from the orchestrator package to the repo root so the drift test
 // stays correct no matter where vitest is launched from.
-const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
+const repoRoot = resolve(import.meta.dirname, "../../..");
 
 function generatedFilePath(role: AnswererRole): string {
   return resolve(

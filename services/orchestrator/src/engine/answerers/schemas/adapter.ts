@@ -6,8 +6,7 @@
 // at runtime so a future cutover from Phase 1 schemas (P2A-0012, P2A-0019)
 // can swap callers over without re-stating the JSON Schema in code.
 import { readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
 
 import type { ZodType } from "zod";
 
@@ -19,7 +18,7 @@ export interface AnswererOutputSchema<TOutput> {
   parse(value: unknown): TOutput;
 }
 
-const generatedDir = resolve(dirname(fileURLToPath(import.meta.url)), "generated");
+const generatedDir = resolve(import.meta.dirname, "generated");
 
 function loadGeneratedJsonSchema(role: AnswererRole): Record<string, unknown> {
   const descriptor = answererSchemaCatalog[role];
