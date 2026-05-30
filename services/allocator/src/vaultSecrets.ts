@@ -29,13 +29,16 @@ export class VaultSecretsClient implements RunnerSecretsClient {
     const body = (await response.json()) as { data?: { data?: { value?: unknown } } };
     const value = body.data?.data?.value;
     if (typeof value !== "string") {
-      throw new Error(`Vault secret ${ref} did not contain a string value`);
+      throw new TypeError(`Vault secret ${ref} did not contain a string value`);
     }
     return value;
   }
 
   private url(ref: string): string {
-    const encoded = ref.split("/").map(encodeURIComponent).join("/");
+    const encoded = ref
+      .split("/")
+      .map((segment) => encodeURIComponent(segment))
+      .join("/");
     return `${this.options.addr.replace(/\/$/, "")}/v1/${encodeURIComponent(this.mount)}/data/${encoded}`;
   }
 }

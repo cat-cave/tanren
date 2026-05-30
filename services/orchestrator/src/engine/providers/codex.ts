@@ -211,7 +211,7 @@ async function persistRefreshedCodexAuthBestEffort(input: {
   try {
     await storeCodexAuthBundle(input.secrets, { ref: input.ref, authJson: result.stdout });
   } catch {
-    return;
+    // best-effort: a failed auth-bundle store is non-fatal to the run
   }
 }
 

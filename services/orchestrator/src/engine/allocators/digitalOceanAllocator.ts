@@ -108,7 +108,7 @@ export class DigitalOceanAllocator implements Allocator {
   }
 
   async allocate(request: AllocationRequest): Promise<RunnerAllocation> {
-    const name = `tanren-${request.runId}`.toLowerCase().replace(/[^a-z0-9-]/g, "-");
+    const name = `tanren-${request.runId}`.toLowerCase().replaceAll(/[^a-z0-9-]/g, "-");
     const created = await this.client.createDroplet({
       name,
       region: this.options.region,
@@ -117,7 +117,7 @@ export class DigitalOceanAllocator implements Allocator {
       sshKeys: this.options.sshKeys,
       userData: this.options.userData,
       tags: [`tanren-run-${request.runId}`, `tanren-project-${request.projectId}`].map((t) =>
-        t.toLowerCase().replace(/[^a-z0-9:_-]/g, "-"),
+        t.toLowerCase().replaceAll(/[^a-z0-9:_-]/g, "-"),
       ),
     });
 

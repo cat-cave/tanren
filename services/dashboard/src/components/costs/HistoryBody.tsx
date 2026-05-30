@@ -35,10 +35,10 @@ function outcomeBadge(run: RunListItem): { cls: string; label: string } {
   const o = run.outcome;
   if (o === null) return { cls: "", label: run.status };
   if (o === "halted" || o === "escape_hatch_hit" || o === "retry_budget_exhausted") {
-    return { cls: "halted", label: o.replace(/_/g, " ") };
+    return { cls: "halted", label: o.replaceAll("_", " ") };
   }
   if (o.endsWith("_complete")) return { cls: "ok", label: "merged-ready" };
-  return { cls: "", label: o.replace(/_/g, " ") };
+  return { cls: "", label: o.replaceAll("_", " ") };
 }
 
 export function HistoryBody(props: HistoryBodyProps) {

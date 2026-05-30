@@ -13,11 +13,10 @@
 
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
 import { exit, argv } from "node:process";
 
-const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const repoRoot = resolve(import.meta.dirname, "..");
 const stateEnumsFile = resolve(repoRoot, "db/src/stateEnums.ts");
 const stateIndexFile = resolve(repoRoot, "services/orchestrator/src/engine/state/index.ts");
 
@@ -68,7 +67,7 @@ function renderStateEnumsTs(enums) {
 function renderSqlClauses(enums) {
   const lines = [];
   for (const [name, descriptor] of Object.entries(enums)) {
-    const values = descriptor.values.map((value) => `'${value.replace(/'/g, "''")}'`).join(",");
+    const values = descriptor.values.map((value) => `'${value.replaceAll("'", "''")}'`).join(",");
     // Outcome columns are nullable in the schema; render IS NULL OR ... for them.
     const nullable = descriptor.column === "outcome";
     const expression = nullable

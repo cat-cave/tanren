@@ -16,8 +16,7 @@ function buildHarness(identity: IdentityClaims) {
   const pool = createFakeIdentityPool();
   const store = new IdentityStore(pool.asPgPool());
   const provider = new LocalDevProvider({ identity });
-  const providers = new Map<IdentityProviderId, IdentityProvider>();
-  providers.set("local_dev", provider);
+  const providers = new Map<IdentityProviderId, IdentityProvider>([["local_dev", provider]]);
   const app = new Hono<ActorContextEnv>();
   app.route("/auth", createAuthRoutes({ providers, store, publicBaseUrl: "http://localhost:3100" }));
   app.use("*", createAuthMiddleware({ store }));

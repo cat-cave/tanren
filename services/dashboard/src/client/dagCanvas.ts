@@ -53,7 +53,7 @@ const PULSE: Record<string, string> = {
 };
 
 function esc(value: string): string {
-  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
 }
 
 function trunc(value: string, max: number): string {
@@ -230,14 +230,15 @@ export function initDagCanvas(): void {
   }
 
   // Group-by controls.
+  const onGroupClick = (btn: HTMLButtonElement): void => {
+    group = (btn.dataset["group"] as GroupBy) ?? "milestone";
+    for (const other of root.querySelectorAll<HTMLButtonElement>("[data-group]")) {
+      other.classList.toggle("active", other === btn);
+    }
+    relayout();
+  };
   for (const btn of root.querySelectorAll<HTMLButtonElement>("[data-group]")) {
-    btn.addEventListener("click", () => {
-      group = (btn.dataset["group"] as GroupBy) ?? "milestone";
-      for (const other of root.querySelectorAll<HTMLButtonElement>("[data-group]")) {
-        other.classList.toggle("active", other === btn);
-      }
-      relayout();
-    });
+    btn.addEventListener("click", () => onGroupClick(btn));
   }
 
   // Zoom + fit controls.

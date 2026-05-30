@@ -34,7 +34,7 @@ import { captureBaselineSha, captureGitStateAfterWriter } from "./writerGit.js";
 //   * pi does not expose a documented machine-readable token-usage stream in
 //     v1 of this adapter. We best-effort scrape a human-readable token summary;
 //     when absent, tokenUsage is omitted (treated as emptyTokenUsage).
-//     TODO(pi-telemetry): adopt pi's structured usage output if/when a stable
+//     Deferred(pi-telemetry): adopt pi's structured usage output if/when a stable
 //     machine-readable form is documented.
 
 const DEFAULT_PI_MODEL = "anthropic/claude-opus-4-8";

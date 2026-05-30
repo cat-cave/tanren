@@ -259,8 +259,8 @@ async function ensureProjectAccess(pool: QueryClient, projectId: string, actor?:
 function defaultRunBranch(spec: SpecContract): string {
   const slug = spec.title
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-|-$/g, "")
+    .replaceAll(/[^a-z0-9]+/g, "-")
+    .replaceAll(/^-|-$/g, "")
     .slice(0, 48);
   return `tanren/${slug || "spec"}-${spec.specId.replace(/^spec_/, "").slice(0, 8)}`;
 }

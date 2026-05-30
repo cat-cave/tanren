@@ -134,7 +134,7 @@ export class AwsEc2Allocator implements Allocator {
       securityGroupIds: this.options.securityGroupIds,
       userData: this.options.userData,
       tags: {
-        Name: `tanren-${request.runId}`.toLowerCase().replace(/[^a-z0-9-]/g, "-"),
+        Name: `tanren-${request.runId}`.toLowerCase().replaceAll(/[^a-z0-9-]/g, "-"),
         "tanren-run": request.runId,
         "tanren-project": request.projectId,
       },
@@ -272,7 +272,10 @@ function signingKey(secretKey: string, date: string, region: string, service: st
 
 /** RFC-3986 encode for canonical query strings (encodeURIComponent + extras). */
 function rfc3986(value: string): string {
-  return encodeURIComponent(value).replace(/[!'()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+  return encodeURIComponent(value).replaceAll(
+    /[!'()*]/g,
+    (c) => `%${(c.codePointAt(0) ?? 0).toString(16).toUpperCase()}`,
+  );
 }
 
 function canonicalQuery(params: Record<string, string>): string {
@@ -355,7 +358,7 @@ export function fetchAwsEc2Client(
 
   async function send(params: Record<string, string>): Promise<string> {
     const now = new Date();
-    const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, "");
+    const amzDate = now.toISOString().replaceAll(/[:-]|\.\d{3}/g, "");
     const dateStamp = amzDate.slice(0, 8);
     const allParams: Record<string, string> = { ...params, Version: ec2ApiVersion };
     if (options.sessionToken !== undefined) {

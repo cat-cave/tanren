@@ -174,7 +174,7 @@ function decodeContent(body: RepoContent): string {
   const encoding = body.encoding === "base64" ? "base64" : undefined;
   if (encoding === "base64") {
     try {
-      return Buffer.from(body.content.replace(/\n/g, ""), "base64").toString("utf8");
+      return Buffer.from(body.content.replaceAll("\n", ""), "base64").toString("utf8");
     } catch {
       return "";
     }

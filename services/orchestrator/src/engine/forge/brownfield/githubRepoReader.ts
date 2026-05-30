@@ -109,7 +109,7 @@ export class GithubRepoReader implements RepoReader {
     if (typeof body.content !== "string") return "";
     const decoded =
       body.encoding === "base64"
-        ? Buffer.from(body.content.replace(/\n/g, ""), "base64").toString("utf8")
+        ? Buffer.from(body.content.replaceAll("\n", ""), "base64").toString("utf8")
         : body.content;
     return decoded.slice(0, PREVIEW_BYTES);
   }

@@ -138,11 +138,11 @@ function isAllowedAllocatorDockerSocketMount(file, text, lineNumber) {
       inVolumes = false;
       continue;
     }
-    if (line.match(/^    volumes:\s*$/)) {
+    if (/^    volumes:\s*$/.test(line)) {
       inVolumes = currentService === "allocator";
       continue;
     }
-    if (line.match(/^    [a-zA-Z0-9_-]+:/)) {
+    if (/^    [a-zA-Z0-9_-]+:/.test(line)) {
       inVolumes = false;
     }
   }

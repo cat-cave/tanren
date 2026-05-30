@@ -54,8 +54,10 @@ export interface MtlsPeerVerifier {
  * service identity wires the Node verifier. Returns a fixed identity so the
  * endpoint's "is there a trusted peer?" gate passes.
  */
+const DEFAULT_IN_PROCESS_IDENTITY: MtlsPeerIdentity = { commonName: "in-process" };
+
 export class AllowAllPeerVerifier implements MtlsPeerVerifier {
-  constructor(private readonly identity: MtlsPeerIdentity = { commonName: "in-process" }) {}
+  constructor(private readonly identity: MtlsPeerIdentity = DEFAULT_IN_PROCESS_IDENTITY) {}
 
   verify(): MtlsPeerIdentity {
     return this.identity;

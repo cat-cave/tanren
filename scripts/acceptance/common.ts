@@ -265,10 +265,8 @@ export function assertAcceptanceCriteria(input: AcceptanceCriteriaInput): void {
     failures.push(`cost_records missing billing_mode: ${missingBillingMode.length}`);
   }
 
-  if (tier === "medium") {
-    if (snapshot.taskCounts.write < 2) {
-      failures.push(`medium tier expects ≥ 2 write tasks (subtasks), got ${snapshot.taskCounts.write}`);
-    }
+  if (tier === "medium" && snapshot.taskCounts.write < 2) {
+    failures.push(`medium tier expects ≥ 2 write tasks (subtasks), got ${snapshot.taskCounts.write}`);
   }
 
   if (failures.length > 0) {

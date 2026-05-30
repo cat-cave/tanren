@@ -75,7 +75,6 @@ function requireBearer(token: string) {
       return c.json({ error: "unauthorized" }, 401);
     }
     await next();
-    return;
   };
 }
 

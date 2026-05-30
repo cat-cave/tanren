@@ -26,10 +26,12 @@ import { WorkerPool } from "./helpers/workerPool.js";
 
 // A recording quota policy: returns a scripted admission decision and captures
 // the accrued usage, so the gate + post-run accrual are asserted on values.
+const DEFAULT_ADMISSION_DECISION: AdmissionDecision = { admit: true };
+
 class RecordingQuotaPolicy implements QuotaPolicy {
   readonly admissionCalls: Array<{ orgId: string; requested: AdmissionRequest }> = [];
   readonly accrued: Array<{ orgId: string; usage: RunUsage }> = [];
-  constructor(private readonly decision: AdmissionDecision = { admit: true }) {}
+  constructor(private readonly decision: AdmissionDecision = DEFAULT_ADMISSION_DECISION) {}
 
   async checkAdmission(orgId: string, requested: AdmissionRequest): Promise<AdmissionDecision> {
     this.admissionCalls.push({ orgId, requested });
@@ -434,7 +436,6 @@ describe("RunWorker lifecycle (slots, concurrency, drain)", () => {
       if (calls === 1) {
         throw new Error("connection reset");
       }
-      return;
     };
 
     const results: string[] = [];

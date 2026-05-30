@@ -268,7 +268,7 @@ export class KubernetesAllocator implements Allocator {
 function resourceName(runId: string): string {
   return `tanren-${runId}`
     .toLowerCase()
-    .replace(/[^a-z0-9-]/g, "-")
+    .replaceAll(/[^a-z0-9-]/g, "-")
     .slice(0, 58);
 }
 
@@ -276,7 +276,7 @@ function resourceName(runId: string): string {
 function labelValue(value: string): string {
   return value
     .toLowerCase()
-    .replace(/[^a-z0-9_.-]/g, "-")
+    .replaceAll(/[^a-z0-9_.-]/g, "-")
     .slice(0, 63);
 }
 

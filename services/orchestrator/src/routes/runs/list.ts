@@ -390,7 +390,7 @@ export async function fetchCostsPage(
     params,
   );
   const rows = result.rows.slice(0, limit);
-  const items = rows.map(decodeCostRow);
+  const items = rows.map((row) => decodeCostRow(row));
   const nextCursor =
     result.rows.length > limit
       ? encodeCursor({

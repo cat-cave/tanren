@@ -135,7 +135,7 @@ export class GcpAllocator implements Allocator {
   async allocate(request: AllocationRequest): Promise<RunnerAllocation> {
     const name = `tanren-${request.runId}`
       .toLowerCase()
-      .replace(/[^a-z0-9-]/g, "-")
+      .replaceAll(/[^a-z0-9-]/g, "-")
       .slice(0, 62);
     const operation = await this.client.insertInstance({
       name,
@@ -260,7 +260,7 @@ export class GcpAllocator implements Allocator {
 function labelValue(value: string): string {
   return value
     .toLowerCase()
-    .replace(/[^a-z0-9_-]/g, "-")
+    .replaceAll(/[^a-z0-9_-]/g, "-")
     .slice(0, 63);
 }
 

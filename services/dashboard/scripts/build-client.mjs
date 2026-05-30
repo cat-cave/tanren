@@ -11,11 +11,10 @@
  */
 
 import { cp, mkdir } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
 import { build } from "esbuild";
 
-const here = dirname(fileURLToPath(import.meta.url));
+const here = import.meta.dirname;
 const root = resolve(here, "..");
 const outDir = resolve(root, "dist/static");
 

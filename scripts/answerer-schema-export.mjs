@@ -14,11 +14,10 @@
 
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
 import { argv, exit } from "node:process";
 
-const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const repoRoot = resolve(import.meta.dirname, "..");
 const generatedDir = resolve(repoRoot, "services/orchestrator/src/engine/answerers/schemas/generated");
 const catalogEntry = resolve(repoRoot, "services/orchestrator/src/engine/answerers/schemas/index.ts");
 
@@ -51,7 +50,7 @@ function dumpSchemasViaTsx() {
 // regardless of the order Zod's generator emits properties.
 function sortKeys(value) {
   if (Array.isArray(value)) {
-    return value.map(sortKeys);
+    return value.map((item) => sortKeys(item));
   }
   if (value !== null && typeof value === "object") {
     const out = {};
@@ -64,11 +63,10 @@ function sortKeys(value) {
 }
 
 function renderJson(jsonSchema, schemaId) {
-  const annotated = { ...jsonSchema };
   // Embed the Tanren schema id (e.g. "tanren.check_answer.v2") alongside the
   // generated JSON Schema so downstream tooling can identify the role
   // without a path lookup.
-  annotated["x-tanren-schema-id"] = schemaId;
+  const annotated = { ...jsonSchema, "x-tanren-schema-id": schemaId };
   return `${JSON.stringify(sortKeys(annotated), null, 2)}\n`;
 }
 
@@ -76,7 +74,7 @@ function readCurrent(filePath) {
   try {
     return readFileSync(filePath, "utf8");
   } catch {
-    return;
+    // missing file → treat as no current content
   }
 }
 

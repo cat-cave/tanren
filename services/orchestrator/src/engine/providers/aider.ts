@@ -34,7 +34,7 @@ import { captureBaselineSha, captureGitStateAfterWriter } from "./writerGit.js";
 //   * aider does not emit a machine-readable token-usage stream in v1 of this
 //     adapter. We best-effort scrape its human-readable "Tokens: …" summary
 //     line; when absent, tokenUsage is omitted (the orchestrator treats this
-//     as emptyTokenUsage). TODO(aider-telemetry): adopt aider's structured
+//     as emptyTokenUsage). Deferred(aider-telemetry): adopt aider's structured
 //     usage output if/when a stable machine-readable form is documented.
 
 // The env var aider reads the underlying-LLM API key from depends on the

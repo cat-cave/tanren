@@ -57,7 +57,7 @@ function LatestRun(props: { run: SpecRunRow }) {
         <span class="d"></span>
         {props.run.runId}
       </span>
-      <span class="t">{props.run.outcome.replace(/_/g, " ")}</span>
+      <span class="t">{props.run.outcome.replaceAll("_", " ")}</span>
       <span class="go">↗</span>
     </>
   );
@@ -149,7 +149,7 @@ function RunHistory(props: { runs: SpecRunRow[] }) {
           <>
             <div class="top">
               <span class="rid">{run.runId}</span>
-              <span class={`oc oc-${run.outcome}`}>{run.outcome.replace(/_/g, " ")}</span>
+              <span class={`oc oc-${run.outcome}`}>{run.outcome.replaceAll("_", " ")}</span>
             </div>
             <div class="cost">
               {run.costUsd === "0" ? "—" : `$${run.costUsd}`}

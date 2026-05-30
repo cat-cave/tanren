@@ -165,7 +165,7 @@ export function initPalette(): void {
     for (const group of refs.results.querySelectorAll<HTMLElement>("[data-group]")) {
       let next = group.nextElementSibling as HTMLElement | null;
       let anyVisible = false;
-      while (next !== null && next.hasAttribute("data-palette-item")) {
+      while (next !== null && next.dataset["paletteItem"] !== undefined) {
         if (!next.hidden) anyVisible = true;
         next = next.nextElementSibling as HTMLElement | null;
       }
