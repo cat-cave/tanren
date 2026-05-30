@@ -30,6 +30,11 @@ export interface AuthMiddlewareOptions {
 export interface ActorContextEnv {
   Variables: {
     actor?: ActorContext;
+    // RLS wave R1: the request's org session-context root, derived from the
+    // resolved ActorContext. `null` for a legacy/unscoped actor (no org). The
+    // org-scoped DB path (`runWithOrgScope`) keys off this so the per-request
+    // `SET LOCAL app.current_org_id` always matches the authenticated actor.
+    requestOrgId?: string | null;
   };
 }
 
@@ -53,7 +58,7 @@ export function createAuthMiddleware(options: AuthMiddlewareOptions): Middleware
         source: "api_token",
         platformAdminUserIds: options.platformAdminUserIds,
       });
-      c.set("actor", actor);
+      bindActor(c, actor);
       return next();
     }
 
@@ -74,18 +79,36 @@ export function createAuthMiddleware(options: AuthMiddlewareOptions): Middleware
           source: "session",
           platformAdminUserIds: options.platformAdminUserIds,
         });
-        c.set("actor", actor);
+        bindActor(c, actor);
         return next();
       }
     }
 
     if (options.localDevActor !== undefined) {
-      c.set("actor", options.localDevActor);
+      bindActor(c, options.localDevActor);
       return next();
     }
 
     return c.json({ error: "unauthorized", message: "authentication required" }, 401);
   };
+}
+
+// RLS wave R1: bind the resolved actor AND its org session-context root onto
+// the request. Every authenticated path funnels through here so the org the
+// org-scoped DB client stamps (`SET LOCAL app.current_org_id`) is always the
+// actor's org — never a route param the handler could get wrong.
+function bindActor(c: Context<ActorContextEnv>, actor: ActorContext): void {
+  c.set("actor", actor);
+  c.set("requestOrgId", actor.orgId);
+}
+
+/**
+ * The authenticated request's org (the session-context root), or `null` when
+ * the actor has no org (legacy/unscoped). Handlers adopting the org-scoped DB
+ * path read this rather than re-deriving the org from a route param.
+ */
+export function getRequestOrgId(c: Context<ActorContextEnv>): string | null {
+  return c.get("requestOrgId") ?? null;
 }
 
 function extractBearer(c: Context): string | undefined {

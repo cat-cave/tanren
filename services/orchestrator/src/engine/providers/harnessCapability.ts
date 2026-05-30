@@ -10,10 +10,11 @@
 // Writer-only.
 //
 // This descriptor is the SINGLE SOURCE OF TRUTH the selector consults. Adding a
-// future harness (agy/aider/pi/reasonix, or the native Rust harness) is one
-// capability entry here + its adapter — the selectable-cli sets and the
-// role-eligibility checks all derive from this table, so there is no second
-// place to keep in sync.
+// future harness (agy or the native Rust harness) is one capability entry here +
+// its adapter — the selectable-cli sets and the role-eligibility checks all
+// derive from this table, so there is no second place to keep in sync. (aider,
+// pi, and reasonix are already wired writer-only; agy is deferred — its headless
+// `-p` mode is broken in non-TTY and it has no usable structured output.)
 
 // The protocol version this capability model targets. Bumped only on a
 // breaking change to the harness invocation/result contract (see
@@ -27,7 +28,7 @@ export type HarnessRole = "write" | "answer";
 
 // The provider clis that are real harnesses (the WriterAdapter.cli union minus
 // "fake", which is wired directly in tests and never selected through routing).
-export type HarnessCli = "codex" | "claude" | "opencode" | "aider";
+export type HarnessCli = "codex" | "claude" | "opencode" | "aider" | "pi" | "reasonix";
 
 // A typed capability record per harness cli. `structuredOutput` is the
 // load-bearing field: it is exactly equivalent to "answer" being present in
@@ -44,16 +45,24 @@ export interface HarnessCapability {
 
 // The capability table. Two capability classes today:
 //   - structured-capable (Writer + Answerer): codex, claude
-//   - writer-only:                            opencode, aider
-// aider has no structured-JSON output channel, so it is writer-only (it can
-// edit files but cannot serve the `answer` role). This MUST reproduce today's
-// selection behavior (see the conformance test asserting the derived sets
-// equal the historical SELECTABLE_* arrays).
+//   - writer-only:                            opencode, aider, pi, reasonix
+// aider/pi/reasonix have no schema-constrained answer output channel, so each is
+// writer-only (it can edit files but cannot serve the `answer` role). pi
+// (`@earendil-works/pi-coding-agent`, per-provider env-key auth) and reasonix
+// (DeepSeek-native, DEEPSEEK_API_KEY) join the writer-only class on a spec-based
+// contract (live CLI validation deferred, like aider). This MUST reproduce
+// today's selection behavior (see the conformance test asserting the derived
+// sets equal the historical SELECTABLE_* arrays).
+//
+// agy is intentionally NOT wired: its headless `-p` mode is broken in non-TTY
+// and it exposes no usable structured output — deferred until those are fixed.
 export const HARNESS_CAPABILITIES: readonly HarnessCapability[] = [
   { cli: "codex", roles: ["write", "answer"], structuredOutput: true },
   { cli: "claude", roles: ["write", "answer"], structuredOutput: true },
   { cli: "opencode", roles: ["write"], structuredOutput: false },
   { cli: "aider", roles: ["write"], structuredOutput: false },
+  { cli: "pi", roles: ["write"], structuredOutput: false },
+  { cli: "reasonix", roles: ["write"], structuredOutput: false },
 ] as const;
 
 function capabilitiesFor(role: HarnessRole): readonly HarnessCli[] {

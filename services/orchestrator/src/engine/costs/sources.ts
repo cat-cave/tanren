@@ -56,7 +56,7 @@ export interface CostSource {
 }
 
 export interface AttributionInput {
-  cli: "codex" | "claude" | "opencode" | "aider" | "fake";
+  cli: "codex" | "claude" | "opencode" | "aider" | "pi" | "reasonix" | "fake";
   authRef: string;
   // Real dollar figure for THIS call, derived from ccusage (apportioned by
   // token share against the run-level ccusage total — see CostRecorder

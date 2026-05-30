@@ -30,7 +30,7 @@ export interface FixtureCostInput {
   recorder: CostRecorder;
   context: Phase1FixtureRunContext;
   taskId: string;
-  cli: "codex" | "claude" | "opencode" | "aider" | "fake";
+  cli: "codex" | "claude" | "opencode" | "aider" | "pi" | "reasonix" | "fake";
   model: string;
   authRef: string;
   tokenUsage: TokenUsage | undefined;

@@ -139,7 +139,15 @@ live-phase1-fixture:
   test -n "${TANREN_GITHUB_REPO_URL:-}"
   fingerprint="$(ssh-keyscan -p 2222 -t ed25519 localhost 2>/dev/null | ssh-keygen -lf - -E sha256 | awk 'NR == 1 { print $2 }')"; test -n "$fingerprint"; DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_PHASE1_FIXTURE_LIVE=1 TANREN_CODEX_AUTH_JSON_FILE="${TANREN_CODEX_AUTH_JSON_FILE}" TANREN_GITHUB_TOKEN_FILE="${TANREN_GITHUB_TOKEN_FILE}" TANREN_GITHUB_REPO_URL="${TANREN_GITHUB_REPO_URL}" TANREN_GITHUB_BASE_BRANCH="${TANREN_GITHUB_BASE_BRANCH:-main}" TANREN_SSH_KEY_PATH=/tmp/tanren_runner_key TANREN_SSH_HOST=127.0.0.1 TANREN_SSH_PORT=2222 TANREN_SSH_USER=tanren TANREN_SSH_HOST_FINGERPRINT="$fingerprint" TANREN_SSH_HOST_KEY_ALGORITHMS=ssh-ed25519 corepack pnpm exec vitest run services/orchestrator/tests/phase1Fixture.live.test.ts
 
-smoke: compose-build compose-up wait-for-stack smoke-hello smoke-ssh-integration
+# RLS wave R1 behavior proof against the real Postgres the smoke stack runs.
+# Provisions an ephemeral DB on the server, migrates it as owner, then connects
+# as the restricted `tanren_app` role to prove the org session context + that
+# the role can do every existing operation while no policies are present.
+# DATABASE_URL is the OWNER/superuser connection (the migration role).
+smoke-rls-r1:
+  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/rlsR1SessionContext.integration.test.ts
+
+smoke: compose-build compose-up wait-for-stack smoke-hello smoke-ssh-integration smoke-rls-r1
 
 # P3-0001: the Phase 2A direct-execution acceptance gate (`just acceptance`,
 # scripts/acceptance/easy.ts + medium.ts) was removed once the run executor
