@@ -25,7 +25,7 @@ class FakeDigitalOceanClient implements DigitalOceanClient {
   readonly created: DigitalOceanCreateDropletInput[] = [];
   readonly deleted: number[] = [];
   private getCalls = 0;
-  constructor(private readonly opts: { neverActive?: boolean; noIp?: boolean } = {}) {}
+  constructor(private readonly opts: { neverActive?: boolean; noIp?: boolean; emptyIp?: boolean } = {}) {}
 
   async createDroplet(input: DigitalOceanCreateDropletInput): Promise<DigitalOceanDroplet> {
     this.created.push(input);
@@ -42,7 +42,7 @@ class FakeDigitalOceanClient implements DigitalOceanClient {
     return {
       id: dropletId,
       status: "active",
-      publicIpv4: this.opts.noIp ? undefined : "203.0.113.20",
+      publicIpv4: this.opts.noIp ? undefined : this.opts.emptyIp ? "" : "203.0.113.20",
     };
   }
   async deleteDroplet(dropletId: number): Promise<void> {
@@ -160,6 +160,44 @@ describe("DigitalOceanAllocator", () => {
     ).toThrow(/pinned hostKeyFingerprint/);
   });
 
+  // waitForActive requires "active" AND a non-empty IPv4. An empty-string IPv4
+  // must NOT satisfy the ready condition: a mutant dropping the `ip === ""` arm
+  // would return immediately with a bogus empty host. Here it keeps polling to
+  // the deadline and the droplet is destroyed.
+  it("treats an empty-string IPv4 as not-yet-active and destroys on timeout", async () => {
+    const client = new FakeDigitalOceanClient({ emptyIp: true });
+    const runners = new FakeRunnerStore();
+    const allocator = new DigitalOceanAllocator({
+      ...baseOpts(client, runners),
+      readyTimeoutMs: 5,
+      pollIntervalMs: 1,
+    });
+    await expect(allocator.allocate(req("run_empty"))).rejects.toThrow(/did not become active/);
+    expect(client.deleted).toContain(99);
+    expect(runners.claims).toEqual([]);
+  });
+
+  it("DigitalOceanAllocatorError carries the DigitalOceanAllocatorError name", () => {
+    const error = new DigitalOceanAllocatorError("boom");
+    expect(error.name).toBe("DigitalOceanAllocatorError");
+    expect(error).toBeInstanceOf(Error);
+  });
+
+  // The droplet tags are the run/project ids, lowercased with disallowed chars
+  // replaced. Pin the exact sanitized tag values so the toLowerCase/replace on
+  // the tag template is behavior-asserted.
+  it("sanitizes run/project ids into lowercase droplet tags", async () => {
+    const client = new FakeDigitalOceanClient();
+    const allocator = new DigitalOceanAllocator(baseOpts(client, new FakeRunnerStore()));
+    await allocator.allocate({
+      runId: "Run/AB",
+      projectId: "Proj X",
+      runnerImage: "img",
+      identitySecretRef: "r",
+    });
+    expect(client.created[0]?.tags).toEqual(["tanren-run-run-ab", "tanren-project-proj-x"]);
+  });
+
   it("fetchDigitalOceanClient maps the API response and sends the bearer token", async () => {
     let captured: { url: string; method?: string; auth?: string } = { url: "" };
     const fetchImpl = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
@@ -231,5 +269,64 @@ describe("DigitalOceanAllocator", () => {
     const client = fetchDigitalOceanClient("secret-token", fetchImpl);
     const droplet = await client.createDroplet({ name: "n", region: "nyc3", size: "s", image: "i" });
     expect(droplet.publicIpv4).toBeUndefined();
+  });
+
+  // publicIpv4Of only accepts a v4 entry whose `type === "public"` AND whose
+  // ip_address is non-empty. A private-only address must be ignored. Pin that a
+  // private v4 entry yields no IP so the type/empty filter cannot be loosened.
+  it("fetchDigitalOceanClient ignores a private-only v4 address", async () => {
+    const fetchImpl = (async (): Promise<Response> =>
+      new Response(
+        JSON.stringify({
+          droplet: { id: 8, status: "active", networks: { v4: [{ ip_address: "10.0.0.2", type: "private" }] } },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      )) as typeof fetch;
+    const client = fetchDigitalOceanClient("secret-token", fetchImpl);
+    const droplet = await client.getDroplet(8);
+    expect(droplet.publicIpv4).toBeUndefined();
+  });
+
+  // The create body carries the droplet spec (region/size/image) and the run
+  // tags. Pin the POSTed body so the JSON.stringify field mapping is asserted.
+  it("fetchDigitalOceanClient POSTs the droplet spec and tags in the create body", async () => {
+    let captured: { url: string; method?: string; body: Record<string, unknown> } = { url: "", body: {} };
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      captured = {
+        url: typeof input === "string" ? input : input.toString(),
+        method: init?.method,
+        body: JSON.parse(String(init?.body)) as Record<string, unknown>,
+      };
+      return new Response(JSON.stringify({ droplet: { id: 5, status: "new" } }), {
+        status: 202,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
+    const client = fetchDigitalOceanClient("tok", fetchImpl);
+    await client.createDroplet({
+      name: "tanren-run-1",
+      region: "sfo3",
+      size: "s-2vcpu-2gb",
+      image: "docker-20-04",
+      tags: ["tanren-run-run-1"],
+    });
+    expect(captured.url).toMatch(/\/droplets$/);
+    expect(captured.method).toBe("POST");
+    expect(captured.body.region).toBe("sfo3");
+    expect(captured.body.size).toBe("s-2vcpu-2gb");
+    expect(captured.body.image).toBe("docker-20-04");
+    expect(captured.body.tags).toEqual(["tanren-run-run-1"]);
+  });
+
+  it("fetchDigitalOceanClient DELETEs the droplet at the droplets path", async () => {
+    let captured: { url: string; method?: string } = { url: "" };
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      captured = { url: typeof input === "string" ? input : input.toString(), method: init?.method };
+      return new Response("", { status: 200 });
+    }) as typeof fetch;
+    const client = fetchDigitalOceanClient("tok", fetchImpl);
+    await client.deleteDroplet(777);
+    expect(captured.url).toMatch(/\/droplets\/777$/);
+    expect(captured.method).toBe("DELETE");
   });
 });

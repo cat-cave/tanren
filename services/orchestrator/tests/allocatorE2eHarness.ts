@@ -1,0 +1,127 @@
+import { afterEach, beforeEach } from "vitest";
+import type pg from "pg";
+
+// Shared harness for the buildAllocatorFromEnv end-to-end tests. These cases
+// build the allocator straight from env and drive allocate() against a stubbed
+// global fetch, so the env-derived configuration is observed flowing into the
+// real HTTP request + returned target. Factored out so the two e2e spec files
+// stay under the per-file line cap.
+
+// A pg.Pool stand-in: buildAllocatorFromEnv constructs a PgRunnerStore around
+// it; allocate() persists the mirror row via .query, which this no-op handles.
+export const queryPool = { query: async () => ({ rows: [] }) } as unknown as pg.Pool;
+
+export const HETZNER_ENV = {
+  TANREN_HETZNER_API_TOKEN: "tok",
+  TANREN_HETZNER_HOST_FINGERPRINT: "SHA256:hz",
+};
+
+export const allocReq = {
+  runId: "run_E2E",
+  projectId: "proj_e2e",
+  runnerImage: "ghcr.io/cat-cave/tanren-runner:v0",
+  identitySecretRef: "runner/identity",
+};
+
+export type CapturedCall = { url: string; method?: string; body?: Record<string, unknown> };
+
+// Every env key the e2e suites touch; cleared before each case and restored
+// after so one test's config never leaks into the next.
+const ALLOC_ENV_KEYS = [
+  "TANREN_ALLOCATOR_KIND",
+  "TANREN_ALLOCATOR_ROUTING",
+  "TANREN_ALLOCATOR_URL",
+  "TANREN_ALLOCATOR_TOKEN",
+  "TANREN_MANUAL_SSH_HOSTS",
+  "TANREN_HETZNER_API_TOKEN",
+  "TANREN_HETZNER_HOST_FINGERPRINT",
+  "TANREN_HETZNER_SERVER_TYPE",
+  "TANREN_HETZNER_IMAGE",
+  "TANREN_HETZNER_LOCATION",
+  "TANREN_HETZNER_SSH_KEYS",
+  "TANREN_HETZNER_SSH_USER",
+  "TANREN_DO_API_TOKEN",
+  "TANREN_DO_HOST_FINGERPRINT",
+  "TANREN_DO_REGION",
+  "TANREN_DO_SIZE",
+  "TANREN_DO_IMAGE",
+  "TANREN_DO_SSH_KEYS",
+  "TANREN_DO_SSH_USER",
+  "TANREN_GCP_ACCESS_TOKEN",
+  "TANREN_GCP_PROJECT",
+  "TANREN_GCP_ZONE",
+  "TANREN_GCP_SSH_PUBLIC_KEY",
+  "TANREN_GCP_HOST_FINGERPRINT",
+  "TANREN_GCP_MACHINE_TYPE",
+  "TANREN_GCP_IMAGE",
+  "TANREN_GCP_SSH_USER",
+  "TANREN_AWS_ACCESS_KEY_ID",
+  "TANREN_AWS_SECRET_ACCESS_KEY",
+  "TANREN_AWS_REGION",
+  "TANREN_AWS_IMAGE_ID",
+  "TANREN_AWS_HOST_FINGERPRINT",
+  "TANREN_AWS_INSTANCE_TYPE",
+  "TANREN_AWS_KEY_NAME",
+  "TANREN_AWS_SUBNET_ID",
+  "TANREN_AWS_SECURITY_GROUP_IDS",
+  "TANREN_AWS_SESSION_TOKEN",
+  "TANREN_AWS_USER_DATA",
+  "TANREN_AWS_SSH_USER",
+  "TANREN_K8S_API_SERVER",
+  "TANREN_K8S_TOKEN_REF",
+  "TANREN_K8S_NAMESPACE",
+  "TANREN_K8S_RUNNER_IMAGE",
+  "TANREN_K8S_SSH_PUBLIC_KEY",
+  "TANREN_K8S_HOST_FINGERPRINT",
+  "TANREN_K8S_CA_PEM",
+  "TANREN_K8S_SSH_USER",
+  "TANREN_RUNNER_SSH_HOST",
+  "TANREN_RUNNER_SSH_PORT",
+  "TANREN_RUNNER_SSH_USER",
+  "TANREN_RUNNER_SSH_HOST_FINGERPRINT",
+] as const;
+
+const realFetch = globalThis.fetch;
+let savedEnv: Record<string, string | undefined> = {};
+
+/** Installs the env save/restore + fetch restore lifecycle for an e2e suite. */
+export function installAllocatorE2eLifecycle(): void {
+  beforeEach(() => {
+    savedEnv = {};
+    for (const key of ALLOC_ENV_KEYS) {
+      savedEnv[key] = process.env[key];
+      delete process.env[key];
+    }
+  });
+
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    for (const key of ALLOC_ENV_KEYS) {
+      if (savedEnv[key] === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = savedEnv[key];
+      }
+    }
+  });
+}
+
+/** Stubs the global fetch, recording each call, and returns the recording. */
+export function stubFetch(handler: (url: string, init?: RequestInit) => Response): CapturedCall[] {
+  const calls: CapturedCall[] = [];
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const url = typeof input === "string" ? input : input.toString();
+    let body: Record<string, unknown> | undefined;
+    try {
+      body = init?.body === undefined ? undefined : (JSON.parse(String(init.body)) as Record<string, unknown>);
+    } catch {
+      body = undefined;
+    }
+    calls.push({ url, method: init?.method, body });
+    return handler(url, init);
+  }) as typeof fetch;
+  return calls;
+}
+
+export const json = (value: unknown, status = 200): Response =>
+  new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });

@@ -227,6 +227,59 @@ describe("SidecarHttpAllocator", () => {
     expect(sentRefs).toEqual(["runner/identity", "credential/a", "credential/b"]);
   });
 
+  // /release is a POST to the release path carrying { runnerId, reason } as the
+  // JSON body and the bearer + content-type headers. Pin all of these so the
+  // method, path, body fields, and the propagated reason are behavior-asserted.
+  it("POSTs /release with the runnerId + reason body and auth/content-type headers", async () => {
+    let captured: { url: string; method?: string; body: Record<string, unknown>; headers: Record<string, string> } = {
+      url: "",
+      body: {},
+      headers: {},
+    };
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      captured = {
+        url: typeof input === "string" ? input : input.toString(),
+        method: init?.method,
+        body: JSON.parse(String(init?.body)) as Record<string, unknown>,
+        headers: (init?.headers ?? {}) as Record<string, string>,
+      };
+      return new Response(JSON.stringify({ released: true }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
+    const runners = new FakeRunnerStore();
+    await new SidecarHttpAllocator({ baseUrl: "http://allocator:3200", authToken: "sek", runners, fetchImpl }).release(
+      "runner_rel",
+      "abandoned",
+    );
+    expect(captured.url).toBe("http://allocator:3200/release");
+    expect(captured.method).toBe("POST");
+    expect(captured.body).toEqual({ runnerId: "runner_rel", reason: "abandoned" });
+    expect(captured.headers.authorization).toBe("Bearer sek");
+    expect(captured.headers["Content-Type"]).toBe("application/json");
+    expect(runners.releases).toEqual(["runner_rel"]);
+  });
+
+  // release defaults the reason to "completed" when the caller omits it.
+  it("defaults the release reason to completed when omitted", async () => {
+    let reason: unknown;
+    const fetchImpl = (async (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      reason = (JSON.parse(String(init?.body)) as { reason: string }).reason;
+      return new Response(JSON.stringify({ released: true }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
+    await new SidecarHttpAllocator({
+      baseUrl: "http://a:1",
+      authToken: "t",
+      runners: new FakeRunnerStore(),
+      fetchImpl,
+    }).release("runner_def");
+    expect(reason).toBe("completed");
+  });
+
   it("does not clear the mirror row when the sidecar reports released=false", async () => {
     const fetchImpl = (async (): Promise<Response> =>
       new Response(JSON.stringify({ released: false }), {

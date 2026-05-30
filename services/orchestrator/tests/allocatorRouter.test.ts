@@ -223,6 +223,24 @@ describe("AllocatorRouter", () => {
     // And the failed allocation did not leak a slot.
     expect(router.inFlightCount("kubernetes")).toBe(0);
   });
+
+  it("release of a runner unknown to this router instance is a safe no-op", async () => {
+    const config = AllocatorRoutingConfig.parse({
+      defaultAllocator: "sidecar",
+      rules: [{ matchLabels: { tier: "gpu" }, allocator: "hetzner" }],
+    });
+    const { reg, recorders } = registry();
+    const router = new AllocatorRouter(reg, config);
+    // Never allocated through this router, so runnerKinds has no entry. The
+    // `kind === undefined` guard must short-circuit to a no-op rather than
+    // dispatching to a backing allocator or touching the in-flight counters.
+    await router.release("runner_never_seen", "completed");
+    for (const recorder of Object.values(recorders)) {
+      expect(recorder.released).toEqual([]);
+    }
+    expect(router.inFlightCount("sidecar")).toBe(0);
+    expect(router.inFlightCount("hetzner")).toBe(0);
+  });
 });
 
 describe("UnconfiguredAllocator", () => {
@@ -252,6 +270,13 @@ describe("AllocatorKind enum", () => {
 
   it("rejects an unknown kind", () => {
     expect(AllocatorKind.safeParse("fly_io").success).toBe(false);
+  });
+
+  it("accepts manual_ssh as a parseable kind", () => {
+    // Pins the exact `manual_ssh` enum member: a mutant that blanks that string
+    // literal would make this exact value unparseable.
+    expect(AllocatorKind.parse("manual_ssh")).toBe("manual_ssh");
+    expect(AllocatorKind.safeParse("manual_ssh").success).toBe(true);
   });
 });
 

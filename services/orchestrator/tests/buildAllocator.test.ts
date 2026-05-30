@@ -193,6 +193,14 @@ describe("buildAllocatorFromEnv — fail-fast on missing credentials", () => {
 // still trips the guard. These tables drive one "drop exactly one var" case
 // per required var, per kind.
 const CLOUD_REQUIRED: Record<string, Record<string, string>> = {
+  hetzner: {
+    TANREN_HETZNER_API_TOKEN: "tok",
+    TANREN_HETZNER_HOST_FINGERPRINT: "SHA256:hz",
+  },
+  digitalocean: {
+    TANREN_DO_API_TOKEN: "tok",
+    TANREN_DO_HOST_FINGERPRINT: "SHA256:do",
+  },
   gcp: {
     TANREN_GCP_ACCESS_TOKEN: "tok",
     TANREN_GCP_PROJECT: "proj",

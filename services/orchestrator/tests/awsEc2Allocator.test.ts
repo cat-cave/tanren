@@ -29,7 +29,15 @@ class FakeAwsEc2Client implements AwsEc2Client {
   readonly terminated: string[] = [];
   private getCalls = 0;
   private instanceCounter = 0;
-  constructor(private readonly opts: { neverRunning?: boolean; noIp?: boolean; terminal?: boolean } = {}) {}
+  constructor(
+    private readonly opts: {
+      neverRunning?: boolean;
+      noIp?: boolean;
+      emptyIp?: boolean;
+      terminal?: boolean;
+      terminalState?: string;
+    } = {},
+  ) {}
 
   async runInstances(input: AwsRunInstancesInput): Promise<AwsEc2Instance> {
     this.run.push(input);
@@ -39,7 +47,7 @@ class FakeAwsEc2Client implements AwsEc2Client {
   async describeInstance(instanceId: string): Promise<AwsEc2Instance> {
     this.getCalls += 1;
     if (this.opts.terminal) {
-      return { instanceId, state: "terminated" };
+      return { instanceId, state: this.opts.terminalState ?? "terminated" };
     }
     if (this.opts.neverRunning) {
       return { instanceId, state: "pending" };
@@ -50,7 +58,7 @@ class FakeAwsEc2Client implements AwsEc2Client {
     return {
       instanceId,
       state: "running",
-      publicIp: this.opts.noIp ? undefined : "203.0.113.7",
+      publicIp: this.opts.noIp ? undefined : this.opts.emptyIp ? "" : "203.0.113.7",
     };
   }
   async terminateInstance(instanceId: string): Promise<void> {
@@ -207,6 +215,55 @@ describe("AwsEc2Allocator", () => {
     await expect(allocator.allocate(req("run_c"))).rejects.toThrow(/claim conflict/);
     expect(client.terminated).toContain("i-1");
   });
+
+  // waitForRunning requires `running` AND a non-empty public IP. An empty-string
+  // IP must NOT satisfy the ready condition: a mutant dropping the `ip === ""`
+  // arm would return immediately with a bogus empty host. Here the empty IP
+  // keeps the wait polling to the deadline, and the instance is terminated.
+  it("treats an empty-string public IP as not-yet-ready and terminates on timeout", async () => {
+    const client = new FakeAwsEc2Client({ emptyIp: true });
+    const runners = new FakeRunnerStore();
+    const allocator = new AwsEc2Allocator({
+      ...baseOpts(client, runners),
+      readyTimeoutMs: 5,
+      pollIntervalMs: 1,
+    });
+    await expect(allocator.allocate(req("run_empty"))).rejects.toThrow(/did not become running/);
+    expect(client.terminated).toContain("i-1");
+    expect(runners.claims).toEqual([]);
+  });
+
+  // waitForRunning treats BOTH "terminated" and "shutting-down" as terminal.
+  // The terminal-state test above only exercises "terminated"; pin
+  // "shutting-down" so the second arm of the `||` cannot be dropped, and assert
+  // the error message names the actual terminal state it observed.
+  it("fails fast with the observed terminal state when the instance is shutting-down", async () => {
+    const client = new FakeAwsEc2Client({ terminal: true, terminalState: "shutting-down" });
+    const runners = new FakeRunnerStore();
+    const allocator = new AwsEc2Allocator(baseOpts(client, runners));
+    await expect(allocator.allocate(req("run_sd"))).rejects.toThrow(/terminal state 'shutting-down'/);
+    expect(client.terminated).toContain("i-1");
+  });
+
+  // The error subclass sets a distinct `.name`; a mutant blanking the name
+  // string survives a bare `instanceof` check. Pin the name explicitly.
+  it("AwsEc2AllocatorError carries the AwsEc2AllocatorError name", () => {
+    const error = new AwsEc2AllocatorError("boom");
+    expect(error.name).toBe("AwsEc2AllocatorError");
+    expect(error).toBeInstanceOf(Error);
+  });
+
+  // The instance Name tag is the run id sanitized to lowercase + hyphens. Pin
+  // the exact sanitized value so the toLowerCase / replace-regex mutants on
+  // that template are caught (the raw run id is preserved on the tanren-run tag
+  // for traceability, so both transformed + raw forms are asserted).
+  it("sanitizes the run id into the instance Name tag while preserving the raw tanren-run tag", async () => {
+    const client = new FakeAwsEc2Client();
+    const allocator = new AwsEc2Allocator(baseOpts(client, new FakeRunnerStore()));
+    await allocator.allocate(req("Run_ABC/9"));
+    expect(client.run[0]?.tags?.Name).toBe("tanren-run-abc-9");
+    expect(client.run[0]?.tags?.["tanren-run"]).toBe("Run_ABC/9");
+  });
 });
 
 describe("fetchAwsEc2Client", () => {
@@ -345,5 +402,82 @@ describe("fetchAwsEc2Client", () => {
       })) as typeof fetch;
     const client = fetchAwsEc2Client({ accessKeyId: "k", secretAccessKey: "s", region: "us-east-1" }, fetchImpl);
     await expect(client.describeInstance("i-1")).rejects.toBeInstanceOf(AwsEc2AllocatorError);
+  });
+
+  // The optional `subnetId` / `userData` params are conditionally appended to
+  // the signed query. A mutant that flips those `!== undefined` guards (or
+  // empties the param name) drops the value from the request; assert both land
+  // in the query verbatim when supplied.
+  it("includes subnetId and userData in the signed query when supplied", async () => {
+    let url = "";
+    const fetchImpl = (async (input: string | URL | Request): Promise<Response> => {
+      url = typeof input === "string" ? input : input.toString();
+      return new Response(
+        `<RunInstancesResponse><instancesSet><item><instanceId>i-z</instanceId>` +
+          `<instanceState><name>pending</name></instanceState></item></instancesSet></RunInstancesResponse>`,
+        { status: 200, headers: { "Content-Type": "text/xml" } },
+      );
+    }) as typeof fetch;
+    const client = fetchAwsEc2Client({ accessKeyId: "k", secretAccessKey: "s", region: "us-east-1" }, fetchImpl);
+    await client.runInstances({
+      imageId: "ami-1",
+      instanceType: "t3.micro",
+      subnetId: "subnet-xyz",
+      userData: "cloud-init-blob",
+    });
+    expect(url).toMatch(/SubnetId=subnet-xyz/);
+    expect(url).toMatch(/UserData=cloud-init-blob/);
+  });
+
+  // A temporary-credential session token is sent BOTH as the `X-Amz-Security-Token`
+  // query param (so it is covered by the signature) AND the `x-amz-security-token`
+  // header. The existing test only checks the header; pin the query param too so
+  // the param-injection guard cannot be dropped, and confirm it is absent when no
+  // token is configured.
+  it("adds the session token as a signed query param and a header, and omits both without one", async () => {
+    let withTokenUrl = "";
+    let withTokenHeader: string | undefined;
+    const withTokenFetch = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      withTokenUrl = typeof input === "string" ? input : input.toString();
+      withTokenHeader = (init?.headers as Record<string, string> | undefined)?.["x-amz-security-token"];
+      return new Response(runningXml, { status: 200, headers: { "Content-Type": "text/xml" } });
+    }) as typeof fetch;
+    await fetchAwsEc2Client(
+      { accessKeyId: "k", secretAccessKey: "s", region: "us-east-1", sessionToken: "sess-789" },
+      withTokenFetch,
+    ).describeInstance("i-abc123");
+    expect(withTokenUrl).toMatch(/X-Amz-Security-Token=sess-789/);
+    expect(withTokenHeader).toBe("sess-789");
+
+    let plainUrl = "";
+    let plainHeader: string | undefined = "set";
+    const plainFetch = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      plainUrl = typeof input === "string" ? input : input.toString();
+      plainHeader = (init?.headers as Record<string, string> | undefined)?.["x-amz-security-token"];
+      return new Response(runningXml, { status: 200, headers: { "Content-Type": "text/xml" } });
+    }) as typeof fetch;
+    await fetchAwsEc2Client(
+      { accessKeyId: "k", secretAccessKey: "s", region: "us-east-1" },
+      plainFetch,
+    ).describeInstance("i-abc123");
+    expect(plainUrl).not.toMatch(/X-Amz-Security-Token=/);
+    expect(plainHeader).toBeUndefined();
+  });
+
+  // The endpoint host is region-derived (`ec2.<region>.amazonaws.com`) and the
+  // request carries the pinned API Version. A mutant changing the host template
+  // or the version literal would mis-route / mis-version the call.
+  it("targets the region endpoint and sends the pinned EC2 API version", async () => {
+    let url = "";
+    const fetchImpl = (async (input: string | URL | Request): Promise<Response> => {
+      url = typeof input === "string" ? input : input.toString();
+      return new Response(runningXml, { status: 200, headers: { "Content-Type": "text/xml" } });
+    }) as typeof fetch;
+    await fetchAwsEc2Client(
+      { accessKeyId: "k", secretAccessKey: "s", region: "ap-southeast-2" },
+      fetchImpl,
+    ).describeInstance("i-abc123");
+    expect(url).toMatch(/^https:\/\/ec2\.ap-southeast-2\.amazonaws\.com\//);
+    expect(url).toMatch(/Version=2016-11-15/);
   });
 });
