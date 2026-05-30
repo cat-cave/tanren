@@ -14,6 +14,9 @@
 // any claim completes. TANREN_SECRET_STORE=memory avoids Vault.
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { resetSystemPool } from "@tanren/db";
 import { bootRunWorker, runWorkerEnabled, RunWorker } from "../src/engine/worker/index.js";
 
@@ -83,5 +86,90 @@ describe("plane-split P1 — standalone worker boot", () => {
     expect(runWorkerEnabled()).toBe(false);
     process.env["TANREN_RUN_WORKER"] = "1";
     expect(runWorkerEnabled()).toBe(true);
+  });
+
+  it("starts a co-located reaper alongside the worker (both drain on stop)", async () => {
+    process.env["TANREN_RUN_WORKER_CONCURRENCY"] = "1";
+    const booted = await bootRunWorker();
+    try {
+      // The boot wires BOTH the worker and the lease reaper — the data plane's
+      // crash-recovery side. `stop` must drain both without throwing.
+      expect(booted.reaper).toBeDefined();
+    } finally {
+      await booted.stop();
+    }
+    expect(booted.worker.isDraining).toBe(true);
+  });
+
+  it("seeds the runner identity secret from an inline private key under the default ref", async () => {
+    // The standalone worker is self-contained: with an inline key set it seeds
+    // the identity into the (shared) secret store at the default ref so the
+    // workflow's SSH substrate can resolve it.
+    process.env["TANREN_RUN_WORKER_CONCURRENCY"] = "1";
+    delete process.env["TANREN_RUNNER_IDENTITY_SECRET_REF"];
+    process.env["TANREN_RUNNER_IDENTITY_PRIVATE_KEY"] = "INLINE-PRIVATE-KEY";
+    const booted = await bootRunWorker();
+    try {
+      const seeded = await booted.secrets.get("runner/local-docker/identity");
+      expect(seeded?.value).toBe("INLINE-PRIVATE-KEY");
+    } finally {
+      await booted.stop();
+    }
+  });
+
+  it("seeds the runner identity secret under a custom ref when TANREN_RUNNER_IDENTITY_SECRET_REF is set", async () => {
+    process.env["TANREN_RUN_WORKER_CONCURRENCY"] = "1";
+    process.env["TANREN_RUNNER_IDENTITY_SECRET_REF"] = "runner/custom/key";
+    process.env["TANREN_RUNNER_IDENTITY_PRIVATE_KEY"] = "CUSTOM-KEY";
+    const booted = await bootRunWorker();
+    try {
+      // The custom ref is honored; the default ref is NOT seeded.
+      expect((await booted.secrets.get("runner/custom/key"))?.value).toBe("CUSTOM-KEY");
+      expect(await booted.secrets.get("runner/local-docker/identity")).toBeUndefined();
+    } finally {
+      await booted.stop();
+    }
+    delete process.env["TANREN_RUNNER_IDENTITY_SECRET_REF"];
+  });
+
+  it("seeds the runner identity secret from a key FILE when TANREN_RUNNER_IDENTITY_KEY_PATH is set", async () => {
+    process.env["TANREN_RUN_WORKER_CONCURRENCY"] = "1";
+    delete process.env["TANREN_RUNNER_IDENTITY_PRIVATE_KEY"];
+    const keyFile = join(mkdtempSync(join(tmpdir(), "tanren-runner-key-")), "id_ed25519");
+    writeFileSync(keyFile, "FILE-PRIVATE-KEY");
+    process.env["TANREN_RUNNER_IDENTITY_KEY_PATH"] = keyFile;
+    const booted = await bootRunWorker();
+    try {
+      expect((await booted.secrets.get("runner/local-docker/identity"))?.value).toBe("FILE-PRIVATE-KEY");
+    } finally {
+      await booted.stop();
+    }
+    rmSync(keyFile, { force: true });
+  });
+
+  it("does not seed any identity secret when neither inline key nor key path is set", async () => {
+    process.env["TANREN_RUN_WORKER_CONCURRENCY"] = "1";
+    delete process.env["TANREN_RUNNER_IDENTITY_PRIVATE_KEY"];
+    delete process.env["TANREN_RUNNER_IDENTITY_KEY_PATH"];
+    const booted = await bootRunWorker();
+    try {
+      // No key configured → the seed step is a no-op (the API may seed the
+      // shared store instead); nothing is written under the default ref.
+      expect(await booted.secrets.get("runner/local-docker/identity")).toBeUndefined();
+    } finally {
+      await booted.stop();
+    }
+  });
+
+  it("does not seed when the inline private key is the empty string", async () => {
+    process.env["TANREN_RUN_WORKER_CONCURRENCY"] = "1";
+    process.env["TANREN_RUNNER_IDENTITY_PRIVATE_KEY"] = "";
+    delete process.env["TANREN_RUNNER_IDENTITY_KEY_PATH"];
+    const booted = await bootRunWorker();
+    try {
+      expect(await booted.secrets.get("runner/local-docker/identity")).toBeUndefined();
+    } finally {
+      await booted.stop();
+    }
   });
 });
