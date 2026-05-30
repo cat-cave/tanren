@@ -74,6 +74,47 @@ describe("EmailChannel", () => {
     expect(message.text).toContain("url: https://tanren.example/runs/run_1");
   });
 
+  it("renders the body as message then blank line then event/severity, omitting tags/url when absent", async () => {
+    const transport = new MockTransport();
+    const channel = new EmailChannel({ transport });
+    await channel.publish(target(), {
+      title: "subj",
+      body: "the message body",
+      severity: "warn",
+      eventName: "ci.failed",
+    });
+    expect(transport.sent[0]!.text).toBe("the message body\n\nevent: ci.failed\nseverity: warn");
+  });
+
+  it("appends tags then url lines when both are present", async () => {
+    const transport = new MockTransport();
+    const channel = new EmailChannel({ transport });
+    await channel.publish(target(), {
+      title: "subj",
+      body: "b",
+      severity: "ok",
+      eventName: "run.completed",
+      tags: ["tanren", "x"],
+      url: "https://tanren.example/runs/run_1",
+    });
+    expect(transport.sent[0]!.text).toBe(
+      "b\n\nevent: run.completed\nseverity: ok\ntags: tanren, x\nurl: https://tanren.example/runs/run_1",
+    );
+  });
+
+  it("omits the tags line when payload.tags is empty", async () => {
+    const transport = new MockTransport();
+    const channel = new EmailChannel({ transport });
+    await channel.publish(target(), {
+      title: "subj",
+      body: "b",
+      severity: "ok",
+      eventName: "run.completed",
+      tags: [],
+    });
+    expect(transport.sent[0]!.text).toBe("b\n\nevent: run.completed\nseverity: ok");
+  });
+
   it("propagates transport failures", async () => {
     const transport = new MockTransport({ throws: true });
     const channel = new EmailChannel({ transport });
@@ -111,6 +152,41 @@ describe("HttpEmailTransport (default)", () => {
       subject: "s",
       text: "b",
     });
+  });
+
+  it("resolves the default credential refs and stamps the default From", async () => {
+    let captured: { url: string; init: RequestInit } | null = null;
+    const fakeFetch: typeof fetch = async (url, init) => {
+      captured = { url: String(url), init: init as RequestInit };
+      return new Response("ok", { status: 200 });
+    };
+    const secrets = new MemorySecrets({
+      "credential/email/api-endpoint": "https://default.example/send",
+      "credential/email/api-key": "default_key",
+    });
+    const transport = new HttpEmailTransport({ fetch: fakeFetch, secrets });
+    await transport.send({ to: "x@example.com", subject: "s", text: "b" });
+    expect(captured!.url).toBe("https://default.example/send");
+    const headers = captured!.init.headers as Record<string, string>;
+    expect(headers["Content-Type"]).toBe("application/json");
+    expect(headers["Authorization"]).toBe("Bearer default_key");
+    const body = JSON.parse(captured!.init.body as string) as { from: string };
+    expect(body.from).toBe("tanren@localhost");
+  });
+
+  it("throws when only the API key ref is missing", async () => {
+    const secrets = new MemorySecrets({ "credential/email/api-endpoint": "https://email.example.com/send" });
+    const transport = new HttpEmailTransport({ secrets });
+    await expect(transport.send({ to: "x@example.com", subject: "s", text: "b" })).rejects.toThrow(
+      /missing email API key credential ref/,
+    );
+  });
+
+  it("throws when no secret store is supplied", async () => {
+    const transport = new HttpEmailTransport({});
+    await expect(transport.send({ to: "x@example.com", subject: "s", text: "b" })).rejects.toThrow(
+      /needs a secret store/,
+    );
   });
 
   it("throws when the email API returns a non-2xx status", async () => {

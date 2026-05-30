@@ -153,4 +153,74 @@ describe("GithubChecksChannel", () => {
     });
     await expect(channel.publish(target(), payload)).rejects.toThrow(/github_checks publish failed: HTTP 403/);
   });
+
+  it("sets the status description to the (truncated) payload title and context to tanren", async () => {
+    const http = new FakeGitHubHttp(prAndStatusResponder("sha"));
+    const channel = new GithubChecksChannel({
+      secrets: new MemorySecrets({ "credential/github/default": "tok" }),
+      http,
+    });
+    await channel.publish(target(), { ...payload, title: "x".repeat(200) });
+    const post = http.requests.find((r) => r.method === "POST")!;
+    const body = post.body as Record<string, unknown>;
+    expect(body.context).toBe("tanren");
+    expect((body.description as string).length).toBe(140);
+    expect((body.description as string).endsWith("...")).toBe(true);
+  });
+
+  it("omits target_url when payload.url is unset", async () => {
+    const http = new FakeGitHubHttp(prAndStatusResponder("sha"));
+    const channel = new GithubChecksChannel({
+      secrets: new MemorySecrets({ "credential/github/default": "tok" }),
+      http,
+    });
+    const { url: _url, ...noUrl } = payload;
+    await channel.publish(target(), noUrl);
+    const post = http.requests.find((r) => r.method === "POST")!;
+    expect(post.body as Record<string, unknown>).not.toHaveProperty("target_url");
+  });
+
+  it("uses the GET pull endpoint then the POST statuses endpoint on the resolved head sha", async () => {
+    const http = new FakeGitHubHttp(prAndStatusResponder("deadbeef"));
+    const channel = new GithubChecksChannel({
+      secrets: new MemorySecrets({ "credential/github/default": "tok" }),
+      http,
+    });
+    await channel.publish(target({ destination: "https://github.com/org/repo/pull/7" }), payload);
+    expect(http.requests[0]!.path).toBe("/repos/org/repo/pulls/7");
+    expect(http.requests[1]!.path).toBe("/repos/org/repo/statuses/deadbeef");
+  });
+
+  it("throws when the PR lookup does not return 200", async () => {
+    const http = new FakeGitHubHttp(() => ({ status: 404, body: { message: "not found" } }));
+    const channel = new GithubChecksChannel({
+      secrets: new MemorySecrets({ "credential/github/default": "tok" }),
+      http,
+    });
+    await expect(channel.publish(target(), payload)).rejects.toThrow(/github_checks PR fetch failed: HTTP 404/);
+  });
+
+  it("throws when the PR response carries no head sha", async () => {
+    const cases: Array<unknown> = [
+      { head: { sha: "" } }, // empty sha rejected
+      { head: {} }, // missing sha
+      { head: null }, // null head
+      {}, // missing head
+      [1, 2, 3], // array body
+      "not-an-object", // primitive body
+    ];
+    for (const prBody of cases) {
+      const http = new FakeGitHubHttp((req) => {
+        if (req.method === "GET") return { status: 200, body: prBody };
+        return { status: 201, body: {} };
+      });
+      const channel = new GithubChecksChannel({
+        secrets: new MemorySecrets({ "credential/github/default": "tok" }),
+        http,
+      });
+      await expect(channel.publish(target(), payload)).rejects.toThrow(/github_checks PR response missing head sha/);
+      // The status POST must NOT fire when the head sha is unresolved.
+      expect(http.requests.some((r) => r.method === "POST")).toBe(false);
+    }
+  });
 });

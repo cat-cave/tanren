@@ -117,4 +117,106 @@ describe("NtfyChannel", () => {
     const body = JSON.parse(captured!.init.body as string) as { url: string };
     expect(body.url).toBe("https://tanren.example/runs/run_1");
   });
+
+  it("omits the Click header and url field when payload.url is unset", async () => {
+    let captured: RequestInit | null = null;
+    const fakeFetch: typeof fetch = async (_url, init) => {
+      captured = init as RequestInit;
+      return new Response("ok", { status: 200 });
+    };
+    const channel = new NtfyChannel({ fetch: fakeFetch, baseUrl: "http://ntfy" });
+    await channel.publish(target(), { title: "t", body: "b", severity: "info", eventName: "run.started" });
+    const headers = captured!.headers as Record<string, string>;
+    expect(headers["Click"]).toBeUndefined();
+    const body = JSON.parse(captured!.body as string) as Record<string, unknown>;
+    expect(body).not.toHaveProperty("url");
+  });
+
+  it("sends a JSON Content-Type and the canonical body fields", async () => {
+    let captured: RequestInit | null = null;
+    const fakeFetch: typeof fetch = async (_url, init) => {
+      captured = init as RequestInit;
+      return new Response("ok", { status: 200 });
+    };
+    const channel = new NtfyChannel({ fetch: fakeFetch, baseUrl: "http://ntfy" });
+    await channel.publish(target(), {
+      title: "t",
+      body: "the message body",
+      severity: "warn",
+      eventName: "ci.failed",
+    });
+    const headers = captured!.headers as Record<string, string>;
+    expect(headers["Content-Type"]).toBe("application/json");
+    const body = JSON.parse(captured!.body as string) as { message: string; severity: string; event: string };
+    expect(body.message).toBe("the message body");
+    expect(body.severity).toBe("warn");
+    expect(body.event).toBe("ci.failed");
+  });
+
+  it("builds the Tags header in [severity, event, ...payload.tags] order", async () => {
+    let captured: Record<string, string> | null = null;
+    const fakeFetch: typeof fetch = async (_url, init) => {
+      captured = (init as RequestInit).headers as Record<string, string>;
+      return new Response("ok", { status: 200 });
+    };
+    const channel = new NtfyChannel({ fetch: fakeFetch, baseUrl: "http://ntfy" });
+    await channel.publish(target(), {
+      title: "t",
+      body: "b",
+      severity: "warn",
+      eventName: "ci.failed",
+      tags: ["tanren", "extra"],
+    });
+    expect(captured!["Tags"]).toBe("severity:warn,event:ci.failed,tanren,extra");
+  });
+
+  it("emits only the base tags when payload.tags is absent", async () => {
+    let captured: Record<string, string> | null = null;
+    const fakeFetch: typeof fetch = async (_url, init) => {
+      captured = (init as RequestInit).headers as Record<string, string>;
+      return new Response("ok", { status: 200 });
+    };
+    const channel = new NtfyChannel({ fetch: fakeFetch, baseUrl: "http://ntfy" });
+    await channel.publish(target(), { title: "t", body: "b", severity: "ok", eventName: "run.completed" });
+    expect(captured!["Tags"]).toBe("severity:ok,event:run.completed");
+  });
+
+  it("strips a trailing slash from baseUrl and a leading slash from a bare topic", async () => {
+    let capturedUrl: string | null = null;
+    const fakeFetch: typeof fetch = async (url) => {
+      capturedUrl = String(url);
+      return new Response("ok", { status: 200 });
+    };
+    const channel = new NtfyChannel({ fetch: fakeFetch, baseUrl: "http://ntfy.local/" });
+    await channel.publish(target({ destination: "/topic" }), {
+      title: "t",
+      body: "b",
+      severity: "info",
+      eventName: "run.started",
+    });
+    // base trailing slash stripped + leading slash stripped => exactly one slash.
+    expect(capturedUrl).toBe("http://ntfy.local/topic");
+  });
+
+  it("falls back to the env/default base URL when none is injected", async () => {
+    let capturedUrl: string | null = null;
+    const fakeFetch: typeof fetch = async (url) => {
+      capturedUrl = String(url);
+      return new Response("ok", { status: 200 });
+    };
+    const prev = process.env["TANREN_NTFY_BASE_URL"];
+    delete process.env["TANREN_NTFY_BASE_URL"];
+    try {
+      const channel = new NtfyChannel({ fetch: fakeFetch });
+      await channel.publish(target({ destination: "topic" }), {
+        title: "t",
+        body: "b",
+        severity: "info",
+        eventName: "run.started",
+      });
+      expect(capturedUrl).toBe("http://ntfy:80/topic");
+    } finally {
+      if (prev !== undefined) process.env["TANREN_NTFY_BASE_URL"] = prev;
+    }
+  });
 });

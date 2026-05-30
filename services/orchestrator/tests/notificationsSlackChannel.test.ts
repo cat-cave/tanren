@@ -123,4 +123,137 @@ describe("SlackChannel", () => {
       }),
     ).rejects.toThrow(/missing Slack webhook credential ref/);
   });
+
+  async function capture(payload: Parameters<SlackChannel["publish"]>[1]): Promise<{
+    headers: Record<string, string>;
+    body: {
+      text: string;
+      blocks: Array<{ type: string; text?: { type: string; text: string }; elements?: unknown[] }>;
+    };
+  }> {
+    let init: RequestInit | null = null;
+    const fakeFetch: typeof fetch = async (_url, i) => {
+      init = i as RequestInit;
+      return new Response("ok", { status: 200 });
+    };
+    const channel = new SlackChannel({ fetch: fakeFetch });
+    await channel.publish(target({ destination: "https://hooks.slack.com/x" }), payload);
+    return {
+      headers: init!.headers as Record<string, string>,
+      body: JSON.parse(init!.body as string),
+    };
+  }
+
+  it("sends a JSON Content-Type header", async () => {
+    const { headers } = await capture({ title: "t", body: "b", severity: "info", eventName: "run.started" });
+    expect(headers["Content-Type"]).toBe("application/json");
+  });
+
+  it("builds header/section/context blocks with the severity emoji and code-fenced body", async () => {
+    const { body } = await capture({
+      title: "run failed",
+      body: "the body text",
+      severity: "warn",
+      eventName: "ci.failed",
+    });
+    expect(body.blocks[0]?.type).toBe("header");
+    expect(body.blocks[0]?.text?.type).toBe("plain_text");
+    expect(body.blocks[0]?.text?.text).toBe(":warning: run failed");
+    expect(body.text).toBe(":warning: run failed");
+    expect(body.blocks[1]?.type).toBe("section");
+    expect(body.blocks[1]?.text?.type).toBe("mrkdwn");
+    expect(body.blocks[1]?.text?.text).toBe("```the body text```");
+    const context = body.blocks[2]!;
+    expect(context.type).toBe("context");
+    const contextText = (context.elements as Array<{ type: string; text: string }>)[0]!;
+    expect(contextText.type).toBe("mrkdwn");
+    expect(contextText.text).toBe("*event* ci.failed  |  *severity* warn");
+  });
+
+  it("appends a joined tags element to the context block when tags are present", async () => {
+    const { body } = await capture({
+      title: "t",
+      body: "b",
+      severity: "ok",
+      eventName: "run.completed",
+      tags: ["tanren", "severity:ok"],
+    });
+    const context = body.blocks.find((b) => b.type === "context")!;
+    const text = (context.elements as Array<{ text: string }>)[0]!.text;
+    expect(text).toBe("*event* run.completed  |  *severity* ok  |  tanren · severity:ok");
+  });
+
+  it("omits the tags element when payload.tags is empty", async () => {
+    const { body } = await capture({
+      title: "t",
+      body: "b",
+      severity: "ok",
+      eventName: "run.completed",
+      tags: [],
+    });
+    const context = body.blocks.find((b) => b.type === "context")!;
+    const text = (context.elements as Array<{ text: string }>)[0]!.text;
+    expect(text).toBe("*event* run.completed  |  *severity* ok");
+  });
+
+  it("omits the actions block when payload.url is unset", async () => {
+    const { body } = await capture({ title: "t", body: "b", severity: "info", eventName: "run.started" });
+    expect(body.blocks.find((b) => b.type === "actions")).toBeUndefined();
+  });
+
+  it("renders a view-run button block with the url when payload.url is set", async () => {
+    const { body } = await capture({
+      title: "t",
+      body: "b",
+      severity: "info",
+      eventName: "run.completed",
+      url: "https://tanren.example/runs/run_1",
+    });
+    const actions = body.blocks.find((b) => b.type === "actions")!;
+    const button = (actions.elements as Array<{ type: string; text: { text: string }; url: string }>)[0]!;
+    expect(button.type).toBe("button");
+    expect(button.text.text).toBe("view run");
+    expect(button.url).toBe("https://tanren.example/runs/run_1");
+  });
+
+  it("maps each severity to its Slack emoji", async () => {
+    const cases: Array<[Parameters<SlackChannel["publish"]>[1]["severity"], string]> = [
+      ["ok", ":white_check_mark:"],
+      ["info", ":information_source:"],
+      ["warn", ":warning:"],
+      ["fail", ":rotating_light:"],
+    ];
+    for (const [severity, emoji] of cases) {
+      const { body } = await capture({ title: "t", body: "b", severity, eventName: "run.failed" });
+      expect(body.blocks[0]?.text?.text).toBe(`${emoji} t`);
+    }
+  });
+
+  it("truncates an over-long header to 150 chars with an ellipsis", async () => {
+    const { body } = await capture({
+      title: "x".repeat(200),
+      body: "b",
+      severity: "info",
+      eventName: "run.started",
+    });
+    const header = body.blocks[0]!.text!.text;
+    expect(header.length).toBe(150);
+    expect(header.endsWith("...")).toBe(true);
+  });
+
+  it("does not treat a verbatim http:// URL as a credential ref", async () => {
+    let capturedUrl: string | null = null;
+    const fakeFetch: typeof fetch = async (url) => {
+      capturedUrl = String(url);
+      return new Response("ok", { status: 200 });
+    };
+    const channel = new SlackChannel({ fetch: fakeFetch });
+    await channel.publish(target({ destination: "http://hooks.internal/x" }), {
+      title: "t",
+      body: "b",
+      severity: "info",
+      eventName: "run.started",
+    });
+    expect(capturedUrl).toBe("http://hooks.internal/x");
+  });
 });

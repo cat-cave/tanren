@@ -132,4 +132,108 @@ describe("PagerDutyChannel", () => {
       }),
     ).rejects.toThrow(/missing pagerduty routing-key credential ref/);
   });
+
+  interface Event {
+    routing_key: string;
+    event_action: string;
+    payload: {
+      summary: string;
+      source: string;
+      severity: string;
+      custom_details: { body: string; tags?: string[] };
+    };
+    client?: string;
+    client_url?: string;
+  }
+
+  async function capture(
+    payload: Parameters<PagerDutyChannel["publish"]>[1],
+    destination = "BAREKEY",
+  ): Promise<{ url: string; headers: Record<string, string>; event: Event }> {
+    let init: { url: string; req: RequestInit } | null = null;
+    const fakeFetch: typeof fetch = async (url, req) => {
+      init = { url: String(url), req: req as RequestInit };
+      return new Response("{}", { status: 202 });
+    };
+    const channel = new PagerDutyChannel({ fetch: fakeFetch, apiBaseUrl: "https://events.pagerduty.test" });
+    await channel.publish(target({ destination }), payload);
+    return {
+      url: init!.url,
+      headers: init!.req.headers as Record<string, string>,
+      event: JSON.parse(init!.req.body as string),
+    };
+  }
+
+  it("strips a trailing slash from the api base before appending /v2/enqueue", async () => {
+    let capturedUrl: string | null = null;
+    const fakeFetch: typeof fetch = async (url) => {
+      capturedUrl = String(url);
+      return new Response("{}", { status: 202 });
+    };
+    const channel = new PagerDutyChannel({ fetch: fakeFetch, apiBaseUrl: "https://events.pagerduty.test/" });
+    await channel.publish(target({ destination: "BAREKEY" }), {
+      title: "t",
+      body: "b",
+      severity: "info",
+      eventName: "run.started",
+    });
+    expect(capturedUrl).toBe("https://events.pagerduty.test/v2/enqueue");
+  });
+
+  it("sends a JSON content-type and the custom_details body", async () => {
+    const { headers, event } = await capture({
+      title: "t",
+      body: "the detail body",
+      severity: "info",
+      eventName: "run.started",
+    });
+    expect(headers["Content-Type"]).toBe("application/json");
+    expect(event.payload.custom_details.body).toBe("the detail body");
+  });
+
+  it("includes custom_details.tags only when payload.tags is present and non-empty", async () => {
+    const withTags = await capture({
+      title: "t",
+      body: "b",
+      severity: "info",
+      eventName: "run.started",
+      tags: ["tanren", "x"],
+    });
+    expect(withTags.event.payload.custom_details.tags).toEqual(["tanren", "x"]);
+    const without = await capture({ title: "t", body: "b", severity: "info", eventName: "run.started" });
+    expect(without.event.payload.custom_details).not.toHaveProperty("tags");
+  });
+
+  it("omits client/client_url when payload.url is unset and sets them when present", async () => {
+    const without = await capture({ title: "t", body: "b", severity: "info", eventName: "run.started" });
+    expect(without.event).not.toHaveProperty("client");
+    expect(without.event).not.toHaveProperty("client_url");
+    const withUrl = await capture({
+      title: "t",
+      body: "b",
+      severity: "info",
+      eventName: "run.completed",
+      url: "https://tanren.example/runs/run_1",
+    });
+    expect(withUrl.event.client).toBe("tanren");
+    expect(withUrl.event.client_url).toBe("https://tanren.example/runs/run_1");
+  });
+
+  it("treats a destination without a slash as a verbatim routing key, not a ref", async () => {
+    // No secret store wired; a slash-free key must be used as-is (not resolved).
+    const { event } = await capture({ title: "t", body: "b", severity: "info", eventName: "run.started" }, "BAREKEY");
+    expect(event.routing_key).toBe("BAREKEY");
+  });
+
+  it("throws when a credential ref is given but no secret store is wired", async () => {
+    const channel = new PagerDutyChannel({});
+    await expect(
+      channel.publish(target({ destination: "credential/pd/key" }), {
+        title: "t",
+        body: "b",
+        severity: "info",
+        eventName: "run.started",
+      }),
+    ).rejects.toThrow(/pagerduty channel needs a secret store/);
+  });
 });

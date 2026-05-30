@@ -24,6 +24,7 @@ function target(overrides: Partial<NotificationTargetRow> = {}): NotificationTar
 }
 
 const failingFetch: typeof fetch = async () => new Response("bad", { status: 401, statusText: "Unauthorized" });
+const okFetch: typeof fetch = async () => new Response("{}", { status: 201 });
 
 function secrets(): SecretStore {
   const map: Record<string, string> = {
@@ -100,6 +101,56 @@ describe("TwilioChannel", () => {
         eventName: "run.started",
       }),
     ).rejects.toThrow(/missing twilio credential ref/);
+  });
+
+  it("strips a trailing slash from the api base before appending the Messages path", async () => {
+    let capturedUrl: string | null = null;
+    const fakeFetch: typeof fetch = async (url) => {
+      capturedUrl = String(url);
+      return new Response("{}", { status: 201 });
+    };
+    const channel = new TwilioChannel({
+      fetch: fakeFetch,
+      secrets: secrets(),
+      apiBaseUrl: "https://api.twilio.test/",
+    });
+    await channel.publish(target(), { title: "t", body: "b", severity: "info", eventName: "run.started" });
+    expect(capturedUrl).toBe("https://api.twilio.test/2010-04-01/Accounts/ACxxx/Messages.json");
+  });
+
+  it("builds the SMS body as [SEVERITY] title, then body, then url on separate lines", async () => {
+    let body: string | null = null;
+    const fakeFetch: typeof fetch = async (_url, init) => {
+      body = new URLSearchParams((init as RequestInit).body as string).get("Body");
+      return new Response("{}", { status: 201 });
+    };
+    const channel = new TwilioChannel({ fetch: fakeFetch, secrets: secrets() });
+    await channel.publish(target(), {
+      title: "run failed",
+      body: "the detail",
+      severity: "fail",
+      eventName: "run.failed",
+      url: "https://tanren.example/runs/run_1",
+    });
+    expect(body).toBe("[FAIL] run failed\nthe detail\nhttps://tanren.example/runs/run_1");
+  });
+
+  it("omits the body and url lines when those fields are empty/absent", async () => {
+    let body: string | null = null;
+    const fakeFetch: typeof fetch = async (_url, init) => {
+      body = new URLSearchParams((init as RequestInit).body as string).get("Body");
+      return new Response("{}", { status: 201 });
+    };
+    const channel = new TwilioChannel({ fetch: fakeFetch, secrets: secrets() });
+    await channel.publish(target(), { title: "ping", body: "", severity: "info", eventName: "run.started" });
+    expect(body).toBe("[INFO] ping");
+  });
+
+  it("returns 201 as success (no throw on the queued response)", async () => {
+    const channel = new TwilioChannel({ fetch: okFetch, secrets: secrets() });
+    await expect(
+      channel.publish(target(), { title: "t", body: "b", severity: "info", eventName: "run.started" }),
+    ).resolves.toBeUndefined();
   });
 
   it("throws when no secret store is supplied", async () => {

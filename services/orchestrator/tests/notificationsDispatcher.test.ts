@@ -376,6 +376,33 @@ describe("effectiveSeverityFor", () => {
       }),
     ).toBe("fail");
   });
+
+  it("promotes auditor.verdict to warn when passed=false and ok when passed=true", () => {
+    expect(
+      effectiveSeverityFor({
+        eventType: "auditor.verdict",
+        payload: { runId: "r", taskId: "t", subtaskIndex: 0, passed: false, reasoning: "no" },
+      }),
+    ).toBe("warn");
+    expect(
+      effectiveSeverityFor({
+        eventType: "auditor.verdict",
+        payload: { runId: "r", taskId: "t", subtaskIndex: 0, passed: true, reasoning: "ok" },
+      }),
+    ).toBe("ok");
+  });
+
+  it("does not promote run.completed when the outcome lacks 'fail'", () => {
+    expect(
+      effectiveSeverityFor({ eventType: "run.completed", payload: { status: "succeeded", outcome: "merged" } }),
+    ).toBe("ok");
+  });
+
+  it("promotes run.completed (ok base) one tier to info when the outcome contains 'fail'", () => {
+    expect(
+      effectiveSeverityFor({ eventType: "run.completed", payload: { status: "succeeded", outcome: "ci-fail" } }),
+    ).toBe("info");
+  });
 });
 
 function baseRegistry(
