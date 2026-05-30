@@ -14,7 +14,7 @@ import {
 } from "./inputSchemas.js";
 import { buildAuthFromEnv, type BuildAppAuthOptions } from "./mainAuth.js";
 import { buildAllocatorFromEnv } from "./engine/allocators/index.js";
-import { buildSecretStore, InMemorySecretStore, type SecretStore } from "./engine/contracts/index.js";
+import { buildSecretStore, FakeJobQueue, InMemorySecretStore, type SecretStore } from "./engine/contracts/index.js";
 import { parseRawViewOptIn, redactEventRows } from "./routes/runs/redaction.js";
 import { storeGithubToken } from "./engine/credentials/githubToken.js";
 import { FetchGitHubHttpClient, type GitHubHttpClient } from "./engine/providers/github.js";
@@ -306,7 +306,17 @@ export function buildApp(input: {
     // RLS R3b: the hello fixture is cross-org system seeding (its own throwaway
     // fixture org), so it runs on the BYPASSRLS `tanren_system` pool when one is
     // configured, else the runtime pool (inert dev fallback).
-    const summary = await runHelloWorkflow(getSystemPool() ?? input.pool, input.helloDependencies);
+    //
+    // Plane-split P1: the hello fixture enqueues its own tasks and DRAINS THEM
+    // ITSELF in-request, so it runs on a fresh isolated in-process queue —
+    // otherwise the standalone run-executor worker (now always polling
+    // `job_queue` for `plan` jobs globally) would race it and steal the fixture's
+    // `plan` job, breaking `drainHelloQueue`. The durable `job_queue` is proven
+    // by the real run path (`smoke-plane-split-worker`). See helloRun.ts.
+    const summary = await runHelloWorkflow(getSystemPool() ?? input.pool, {
+      ...input.helloDependencies,
+      jobQueue: new FakeJobQueue(),
+    });
     return c.json(summary, 201);
   });
 
