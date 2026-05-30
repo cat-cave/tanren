@@ -11,7 +11,7 @@
 import type pg from "pg";
 import type { TokenUsage } from "../providers/types.js";
 import type { EventStore } from "../eventStore.js";
-import { resolveWritableClient } from "../data/orgScopedDb.js";
+import { isPool, resolveWritableClient, withJobOrgScope, type QueryClient } from "../data/orgScopedDb.js";
 import { type AttributionInput, type CostSource, computeCostUsd, resolveCostSource } from "./sources.js";
 
 type RecorderClient = Pick<pg.Pool | pg.PoolClient, "query">;
@@ -171,11 +171,25 @@ export class CostRecorder {
     if (!(Number.isFinite(totalCostUsd) && totalCostUsd > 0)) {
       return { updated: 0 };
     }
-    // RLS R2 cohort-2 (cost_records read+write): the reconcile SELECT and its
-    // apportioning UPDATEs share one resolved client so they see a consistent
-    // snapshot — the ambient org-scoped client when one is open, else the pool
-    // (inert fallback). Same query text and params as before.
-    const client = resolveWritableClient(this.pool);
+    // RLS R2 cohort-2 + R3a-worker (cost_records read+write): the reconcile
+    // SELECT and its apportioning UPDATEs are a TIGHT batch with no I/O between
+    // them, so they share ONE transaction/snapshot. When the recorder holds the
+    // shared pool, run the whole batch through `withJobOrgScope`: an open
+    // connection scope is reused, else a per-job org-id opens ONE short
+    // `runWithOrgScope` for the batch, else it falls back to the pool (inert).
+    // A recorder handed a specific in-transaction client uses it verbatim — the
+    // caller owns that transaction. Same query text and params as before.
+    const runBatch = (client: QueryClient): Promise<{ updated: number }> =>
+      this.apportionOnClient(client, runId, totalCostUsd, basis);
+    return isPool(this.pool) ? withJobOrgScope(this.pool, runBatch) : runBatch(this.pool);
+  }
+
+  private async apportionOnClient(
+    client: QueryClient,
+    runId: string,
+    totalCostUsd: number,
+    basis: "ccusage" | "credits",
+  ): Promise<{ updated: number }> {
     const rows = await client.query<{ id: string; total_tokens: number }>(
       "SELECT id, total_tokens FROM cost_records WHERE run_id = $1",
       [runId],

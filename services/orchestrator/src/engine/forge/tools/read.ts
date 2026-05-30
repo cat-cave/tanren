@@ -10,6 +10,7 @@
 
 import type pg from "pg";
 import type { ActorContext } from "../../../auth/schemas.js";
+import { resolveQueryClient } from "../../data/orgScopedDb.js";
 import { BehaviorStore } from "../../entities/behaviors.js";
 import { MilestoneStore } from "../../entities/milestones.js";
 import { isEventName } from "../../events/index.js";
@@ -19,6 +20,12 @@ import { assertProjectAccess, assertRunAccess, assertSpecAccess, ToolAccessDenie
 interface ToolDeps {
   pool: pg.Pool;
 }
+
+// RLS R3a: the forge READ-tool dispatcher runs inside an ambient
+// `runWithOrgScope` (the `/forge/tools` route + the ask engine both open one).
+// Each tool reads on `resolveQueryClient(deps.pool)` — the ambient org-scoped
+// client when a scope is open, else the pool (inert in R1). Entity-store reads
+// (behaviors/milestones/insights) take a `QueryClient` and get the same client.
 
 // ---------------------------------------------------------------------------
 // `tanren.read_spec`
@@ -35,16 +42,15 @@ export async function tanrenReadSpec(
   args: { specId: string },
   actor: ActorContext,
 ): Promise<TanrenReadSpecResult> {
-  await assertSpecAccess(deps.pool, args.specId, actor);
-  const specResult = await deps.pool.query<Record<string, unknown>>("SELECT * FROM specs WHERE spec_id = $1", [
-    args.specId,
-  ]);
+  const db = resolveQueryClient(deps.pool);
+  await assertSpecAccess(db, args.specId, actor);
+  const specResult = await db.query<Record<string, unknown>>("SELECT * FROM specs WHERE spec_id = $1", [args.specId]);
   const spec = specResult.rows[0];
   if (spec === undefined) {
     throw new ToolAccessDeniedError(`spec not found: ${args.specId}`);
   }
-  const behaviors = await BehaviorStore.listForSpec(deps.pool, args.specId, actor);
-  const milestone = await MilestoneStore.getSpecMilestone(deps.pool, args.specId, actor);
+  const behaviors = await BehaviorStore.listForSpec(db, args.specId, actor);
+  const milestone = await MilestoneStore.getSpecMilestone(db, args.specId, actor);
   return {
     spec,
     behaviors: behaviors as unknown as ReadonlyArray<Record<string, unknown>>,
@@ -66,15 +72,14 @@ export async function tanrenReadRun(
   args: { runId: string },
   actor: ActorContext,
 ): Promise<TanrenReadRunResult> {
-  await assertRunAccess(deps.pool, args.runId, actor);
-  const runResult = await deps.pool.query<Record<string, unknown>>("SELECT * FROM runs WHERE run_id = $1", [
-    args.runId,
-  ]);
+  const db = resolveQueryClient(deps.pool);
+  await assertRunAccess(db, args.runId, actor);
+  const runResult = await db.query<Record<string, unknown>>("SELECT * FROM runs WHERE run_id = $1", [args.runId]);
   const run = runResult.rows[0];
   if (run === undefined) {
     throw new ToolAccessDeniedError(`run not found: ${args.runId}`);
   }
-  const tasks = await deps.pool.query<Record<string, unknown>>(
+  const tasks = await db.query<Record<string, unknown>>(
     `SELECT * FROM tasks WHERE run_id = $1
      ORDER BY started_at ASC NULLS FIRST, task_id ASC`,
     [args.runId],
@@ -113,11 +118,12 @@ export async function tanrenReadEvents(
   if (args.runId === undefined && args.specId === undefined) {
     throw new ToolAccessDeniedError("read_events requires runId or specId");
   }
+  const db = resolveQueryClient(deps.pool);
   if (args.runId !== undefined) {
-    await assertRunAccess(deps.pool, args.runId, actor);
+    await assertRunAccess(db, args.runId, actor);
   }
   if (args.specId !== undefined) {
-    await assertSpecAccess(deps.pool, args.specId, actor);
+    await assertSpecAccess(db, args.specId, actor);
   }
   const clauses: string[] = [];
   const params: unknown[] = [];
@@ -136,7 +142,7 @@ export async function tanrenReadEvents(
   const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
   params.push(Math.min(args.limit ?? 500, 1000));
   const limitIdx = params.length;
-  const result = await deps.pool.query(
+  const result = await db.query(
     `SELECT id, ts, run_id, task_id, spec_id, project_id, event_type, payload
      FROM events
      ${where}
@@ -198,12 +204,13 @@ export async function tanrenReadCosts(
   if (args.runId === undefined && args.projectId === undefined) {
     throw new ToolAccessDeniedError("read_costs requires runId or projectId");
   }
+  const db = resolveQueryClient(deps.pool);
   let projectId = args.projectId;
   if (args.runId !== undefined) {
-    const access = await assertRunAccess(deps.pool, args.runId, actor);
+    const access = await assertRunAccess(db, args.runId, actor);
     projectId = projectId ?? access.projectId;
   } else if (projectId !== undefined) {
-    await assertProjectAccess(deps.pool, projectId, actor);
+    await assertProjectAccess(db, projectId, actor);
   }
   const clauses: string[] = [];
   const params: unknown[] = [];
@@ -219,7 +226,7 @@ export async function tanrenReadCosts(
     clauses.push(`recorded_at >= $${params.length}`);
   }
   const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
-  const result = await deps.pool.query(
+  const result = await db.query(
     `SELECT id, task_id, run_id, project_id, cli, provider, model,
             input_tokens, cached_input_tokens, cache_creation_tokens,
             output_tokens, reasoning_output_tokens, total_tokens, cost_usd,
@@ -250,11 +257,12 @@ export async function tanrenReadBehaviors(
   args: { projectId: string },
   actor: ActorContext,
 ): Promise<{ behaviors: ReadonlyArray<Record<string, unknown>> }> {
-  await assertProjectAccess(deps.pool, args.projectId, actor);
+  const db = resolveQueryClient(deps.pool);
+  await assertProjectAccess(db, args.projectId, actor);
   // Behaviors are persona-scoped; we list every persona reachable from the
   // project's org and union the behaviors. Matches what the dashboard
   // (P2B-0003) needs: "all behaviors my project can reference".
-  const personaResult = await deps.pool.query<{ id: string }>(
+  const personaResult = await db.query<{ id: string }>(
     `SELECT id FROM personas WHERE org_id = (
        SELECT org_id FROM projects WHERE project_id = $1
      ) AND (scope = 'org' OR project_id = $1)`,
@@ -262,7 +270,7 @@ export async function tanrenReadBehaviors(
   );
   const personaIds = personaResult.rows.map((row) => row.id);
   if (personaIds.length === 0) return { behaviors: [] };
-  const result = await deps.pool.query(
+  const result = await db.query(
     `SELECT id, persona_id, title, given, "when", "then", description, metadata, created_at, updated_at
      FROM behaviors
      WHERE persona_id = ANY($1::text[])
@@ -277,7 +285,8 @@ export async function tanrenReadMilestones(
   args: { projectId: string },
   actor: ActorContext,
 ): Promise<{ milestones: ReadonlyArray<Record<string, unknown>> }> {
-  const rows = await MilestoneStore.listForProject(deps.pool, args.projectId, actor);
+  const db = resolveQueryClient(deps.pool);
+  const rows = await MilestoneStore.listForProject(db, args.projectId, actor);
   return { milestones: rows as unknown as ReadonlyArray<Record<string, unknown>> };
 }
 
@@ -294,7 +303,8 @@ export async function tanrenReadInsights(
   args: { projectId: string },
   actor: ActorContext,
 ): Promise<{ insights: ReadonlyArray<Record<string, unknown>> }> {
-  await assertProjectAccess(deps.pool, args.projectId, actor);
-  const insights = await loadInsightsForProject(deps.pool, { projectId: args.projectId });
+  const db = resolveQueryClient(deps.pool);
+  await assertProjectAccess(db, args.projectId, actor);
+  const insights = await loadInsightsForProject(db, { projectId: args.projectId });
   return { insights: insights as unknown as ReadonlyArray<Record<string, unknown>> };
 }

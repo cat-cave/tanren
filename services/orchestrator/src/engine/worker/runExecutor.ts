@@ -17,8 +17,9 @@
 // and finalize leaves the job `running`; the recovery surface + a future
 // reaper own re-queueing — the worker never double-executes a claimed job.
 
-import { runWithOrgScope } from "@tanren/db";
+import { runWithJobOrgId, runWithOrgScope, runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
+import { orgScopingPool } from "../data/orgScopedDb.js";
 import type { Allocator } from "../contracts/allocator.js";
 import type { JobQueue } from "../contracts/jobQueue.js";
 import type { SecretStore } from "../contracts/secretStore.js";
@@ -123,10 +124,18 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
   // falls back to the pool, the pre-cohort-3 behavior).
   let resolvedOrgId: string | null = null;
   try {
-    const { context, orgId } = await loadRunExecutionContext(deps.pool, {
-      runId,
-      identitySecretRef: deps.identitySecretRef,
-    });
+    // RLS R3a-worker: the run⋈spec⋈project read that RESOLVES which org owns this
+    // claimed job is a legitimately cross-org BOOTSTRAP read — it runs before any
+    // org context can exist (its result IS the org). It mirrors the job-queue
+    // claim's system context, so it runs under `runWithSystemScope` (no org GUC).
+    // (R3b fork: under enforced policies this read needs a bypass-role / policy
+    // carve-out — the locked-decision item in the RLS plan; see R-WAVES.)
+    const { context, orgId } = await runWithSystemScope(deps.pool, (client) =>
+      loadRunExecutionContext(client, {
+        runId,
+        identitySecretRef: deps.identitySecretRef,
+      }),
+    );
     resolvedOrgId = orgId;
 
     // RLS wave R1: the claim above ran under the worker's SYSTEM context — the
@@ -163,18 +172,30 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
     }
 
     const runWorkflow = deps.runWorkflow ?? runPlannerLoopWorkflow;
-    const result = await runWorkflow({
-      pool: deps.pool,
-      allocator: deps.allocator,
-      ssh: deps.ssh,
-      secrets: deps.secrets,
-      githubHttp: deps.githubHttp,
-      context,
-      escapeHatches: deps.escapeHatches ?? DEFAULT_ESCAPE_HATCHES,
-      timeoutMs: deps.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-      maxCiPolls: deps.maxCiPolls ?? DEFAULT_MAX_CI_POLLS,
-      ciPollDelayMs: deps.ciPollDelayMs ?? DEFAULT_CI_POLL_DELAY_MS,
-    });
+    // RLS R3a-worker: the per-job WORKFLOW execution interleaves DB writes with
+    // minutes of external I/O (allocate, clone, bootstrap, CI polling), so it
+    // CANNOT be one `runWithOrgScope` (a connection idle across that span is
+    // unacceptable). Instead, set the run's org as the lightweight per-job
+    // org-id (holds NO connection) and hand the workflow an `orgScopingPool`:
+    // every tenant-table op the workflow drives — direct `input.pool.query` AND
+    // the self-routing stores (PgEventStore/CostRecorder/task helpers) — opens
+    // its OWN short org-scoped txn from that org-id, so a connection is held only
+    // for one DB op, never across I/O. A legacy/unscoped run (org_id NULL) sets
+    // no org-id and the proxy is behavior-identical to the bare pool (inert).
+    const result = await withJobOrg(orgId, () =>
+      runWorkflow({
+        pool: orgId !== null ? orgScopingPool(deps.pool) : deps.pool,
+        allocator: deps.allocator,
+        ssh: deps.ssh,
+        secrets: deps.secrets,
+        githubHttp: deps.githubHttp,
+        context,
+        escapeHatches: deps.escapeHatches ?? DEFAULT_ESCAPE_HATCHES,
+        timeoutMs: deps.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+        maxCiPolls: deps.maxCiPolls ?? DEFAULT_MAX_CI_POLLS,
+        ciPollDelayMs: deps.ciPollDelayMs ?? DEFAULT_CI_POLL_DELAY_MS,
+      }),
+    );
     await deps.jobQueue.complete(job.id);
     // POST-RUN accrual: feed the policy the run's REAL usage from cost_records
     // (org_id). Best-effort — a metering/accrual blip must never mask a
@@ -385,6 +406,16 @@ async function accrueRunUsage(pool: pg.Pool, policy: QuotaPolicy, orgId: string,
   } catch {
     // Accrual is best-effort; never fail a completed run on a metering blip.
   }
+}
+
+/**
+ * Run `work` with the run's org as the per-job ambient org-id (R3a-worker) when
+ * the org is known, else run it as-is. A legacy/unscoped run (org_id NULL) has
+ * no org to set, so its workflow stays on the bare-pool path — inert, identical
+ * to before this cohort.
+ */
+function withJobOrg<T>(orgId: string | null, work: () => Promise<T>): Promise<T> {
+  return orgId === null ? work() : runWithJobOrgId(orgId, work);
 }
 
 function failureKind(error: unknown): string {

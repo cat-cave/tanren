@@ -9,7 +9,9 @@
 // event emission); the worker heartbeat that keeps a live job's lease fresh
 // lives alongside the executor. P3-0029 observability stays OUT of here.
 
+import { runWithJobOrgId, runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
+import { orgScopingPool } from "../data/orgScopedDb.js";
 import type { JobQueue, ReapedJob } from "../contracts/jobQueue.js";
 import { type EventStore, PgEventStore } from "../eventStore.js";
 
@@ -33,7 +35,12 @@ export interface ReapJobsResult {
  */
 export async function reapExpiredJobs(deps: ReapJobsDeps): Promise<ReapJobsResult> {
   const reaped = await deps.jobQueue.reapExpiredLeases(deps.now === undefined ? undefined : { now: deps.now });
-  const eventStore = deps.eventStore ?? new PgEventStore(deps.pool);
+  // RLS R3a-worker: the default event store is constructed over an
+  // `orgScopingPool`, so when the dead-letter append runs under a reaped run's
+  // per-job org-id (set below), its `events` INSERT opens a short org-scoped txn;
+  // with no org-id (legacy/unscoped run) it falls back to the pool (inert). An
+  // injected event store (tests) is used verbatim.
+  const eventStore = deps.eventStore ?? new PgEventStore(orgScopingPool(deps.pool));
   let requeued = 0;
   let deadLettered = 0;
   for (const job of reaped) {
@@ -55,32 +62,50 @@ async function emitDeadLetterEvent(pool: pg.Pool, eventStore: EventStore, job: R
   if (context === undefined) {
     return;
   }
-  await eventStore.append({
-    runId: job.runId,
-    specId: context.specId,
-    projectId: context.projectId,
-    eventType: "job.dead_lettered",
-    payload: {
-      jobId: job.id,
-      taskKind: job.taskKind,
-      attempts: job.attempts,
-      maxAttempts: job.maxAttempts,
-      failureKind: "lease_expired",
-      message: "retry budget exhausted after lease expiry",
-    },
-  });
+  const append = (): Promise<void> =>
+    eventStore.append({
+      runId: job.runId!,
+      specId: context.specId,
+      projectId: context.projectId,
+      eventType: "job.dead_lettered",
+      payload: {
+        jobId: job.id,
+        taskKind: job.taskKind,
+        attempts: job.attempts,
+        maxAttempts: job.maxAttempts,
+        failureKind: "lease_expired",
+        message: "retry budget exhausted after lease expiry",
+      },
+    });
+  // RLS R3a-worker: scope the dead-letter event to the reaped run's org via the
+  // per-job org-id (the default PgEventStore then opens a short org-scoped txn
+  // for the INSERT). A legacy/unscoped run (org_id NULL) appends on the pool —
+  // inert, identical to before this cohort.
+  await (context.orgId === null ? append() : runWithJobOrgId(context.orgId, append));
 }
 
 async function loadRunLineage(
   pool: pg.Pool,
   runId: string,
-): Promise<{ specId: string; projectId: string } | undefined> {
-  const result = await pool.query("SELECT spec_id, project_id FROM runs WHERE run_id = $1", [runId]);
-  const row = result.rows[0] as { spec_id?: unknown; project_id?: unknown } | undefined;
+): Promise<{ specId: string; projectId: string; orgId: string | null } | undefined> {
+  // The reaper sweeps lapsed leases across ALL orgs in one pass, so resolving a
+  // reaped run's lineage (incl. its org_id, to scope the dead-letter event) is a
+  // legitimately cross-org BOOTSTRAP read — it runs under the worker's system
+  // context (no org GUC), mirroring the job-queue claim. (R3b fork: under
+  // enforced policies this read needs a bypass-role / policy carve-out — the
+  // locked-decision item in the RLS plan; see R-WAVES.)
+  const result = await runWithSystemScope(pool, (client) =>
+    client.query("SELECT spec_id, project_id, org_id FROM runs WHERE run_id = $1", [runId]),
+  );
+  const row = result.rows[0] as { spec_id?: unknown; project_id?: unknown; org_id?: unknown } | undefined;
   if (row === undefined) {
     return undefined;
   }
-  return { specId: String(row.spec_id ?? ""), projectId: String(row.project_id ?? "") };
+  return {
+    specId: String(row.spec_id ?? ""),
+    projectId: String(row.project_id ?? ""),
+    orgId: row.org_id === null || row.org_id === undefined ? null : String(row.org_id),
+  };
 }
 
 export interface JobReaperOptions {

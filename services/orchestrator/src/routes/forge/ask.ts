@@ -15,6 +15,7 @@
 // deterministic grounded answerer so the endpoint always responds without
 // provider infra. Tests inject a fake answerer.
 
+import { runWithOrgScope } from "@tanren/db";
 import { Hono } from "hono";
 import type pg from "pg";
 import { z } from "zod";
@@ -72,18 +73,27 @@ export function createForgeAskRoutes(options: ForgeAskRoutesOptions) {
       return c.json({ error: "invalid_ask", issues: parsed.error.issues }, 400);
     }
     try {
-      const result = await askForge(
-        {
-          client: options.pool,
-          answerer: answererFactory(),
-          dispatchReadTool: buildReadToolDispatcher(options),
-        },
-        {
-          threadId: c.req.param("threadId"),
-          question: parsed.data.question,
-          audience: parsed.data.audience ?? "project:member",
-          actor,
-        },
+      // RLS R2 cohort-4 (forge): the conversation engine appends operator +
+      // forge turns and persists proposals across several statements — run them
+      // all in ONE org-scoped txn (org = path org, validated above) so every
+      // forge-table write carries org context. RLS R3a: the read-tool dispatcher
+      // (invoked from inside `askForge`, i.e. within this scope) now routes its
+      // spec/run/etc. reads through the ambient scope via `resolveQueryClient`.
+      // Inert in R1; behavior-identical to the pool.
+      const result = await runWithOrgScope(options.pool, orgId, (client) =>
+        askForge(
+          {
+            client,
+            answerer: answererFactory(),
+            dispatchReadTool: buildReadToolDispatcher(options),
+          },
+          {
+            threadId: c.req.param("threadId"),
+            question: parsed.data.question,
+            audience: parsed.data.audience ?? "project:member",
+            actor,
+          },
+        ),
       );
       return c.json(
         {

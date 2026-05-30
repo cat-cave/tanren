@@ -6,6 +6,7 @@
 import { randomUUID } from "node:crypto";
 import type pg from "pg";
 import type { ActorContext } from "../../auth/schemas.js";
+import { resolveWritableClient } from "../data/orgScopedDb.js";
 import { ForgeThreadCreateInput, type ForgeThreadRow, type ForgeThreadScope } from "./schemas.js";
 
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
@@ -65,12 +66,20 @@ function assertActorReachesScope(actor: ActorContext, orgId: string, projectId: 
   throw new Error(`actor ${actor.userId} cannot reach org ${orgId} project ${projectId ?? "<none>"}`);
 }
 
+// RLS R2 cohort-4 (forge): every store method routes its query through
+// `resolveWritableClient` so a tenant-table read/write joins the ambient
+// org-scoped transaction when a `runWithOrgScope` scope is open (the forge
+// routes/bundle open one), and falls back to the handed pool when none is —
+// inert in R1 (no policies read `app.current_org_id`), behavior-identical to
+// the pre-cohort pool path. A handed-in client (a caller that already owns a
+// transaction, or a unit-test memory client) is used verbatim.
 export const ForgeThreadStore = {
   async create(client: QueryClient, input: ForgeThreadCreateInput, actor: ActorContext): Promise<ForgeThreadRow> {
     const parsed = ForgeThreadCreateInput.parse(input);
     assertActorReachesScope(actor, parsed.orgId, parsed.projectId);
     const id = parsed.id ?? `forge_thread_${randomUUID()}`;
-    const result = await client.query(
+    const db = resolveWritableClient(client);
+    const result = await db.query(
       `INSERT INTO forge_threads (id, org_id, project_id, run_id, scope, title)
        VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING ${SELECT_THREAD_COLUMNS}`,
@@ -80,7 +89,8 @@ export const ForgeThreadStore = {
   },
 
   async get(client: QueryClient, threadId: string, actor: ActorContext): Promise<ForgeThreadRow | undefined> {
-    const result = await client.query(`SELECT ${SELECT_THREAD_COLUMNS} FROM forge_threads WHERE id = $1`, [threadId]);
+    const db = resolveWritableClient(client);
+    const result = await db.query(`SELECT ${SELECT_THREAD_COLUMNS} FROM forge_threads WHERE id = $1`, [threadId]);
     const row = result.rows[0];
     if (row === undefined) return undefined;
     const thread = decodeThreadRow(row as RawThreadRow);
@@ -98,7 +108,8 @@ export const ForgeThreadStore = {
     actor: ActorContext,
   ): Promise<ForgeThreadRow[]> {
     assertActorReachesScope(actor, args.orgId, args.projectId);
-    const result = await client.query(
+    const db = resolveWritableClient(client);
+    const result = await db.query(
       `SELECT ${SELECT_THREAD_COLUMNS} FROM forge_threads
        WHERE org_id = $1 AND project_id = $2
        ORDER BY updated_at DESC`,
@@ -113,7 +124,8 @@ export const ForgeThreadStore = {
     actor: ActorContext,
   ): Promise<ForgeThreadRow[]> {
     assertActorReachesScope(actor, args.orgId, args.projectId);
-    const result = await client.query(
+    const db = resolveWritableClient(client);
+    const result = await db.query(
       `SELECT ${SELECT_THREAD_COLUMNS} FROM forge_threads
        WHERE org_id = $1 AND project_id = $2 AND run_id = $3
        ORDER BY updated_at DESC`,
@@ -123,7 +135,8 @@ export const ForgeThreadStore = {
   },
 
   async touch(client: QueryClient, threadId: string): Promise<void> {
-    await client.query(`UPDATE forge_threads SET updated_at = NOW() WHERE id = $1`, [threadId]);
+    const db = resolveWritableClient(client);
+    await db.query(`UPDATE forge_threads SET updated_at = NOW() WHERE id = $1`, [threadId]);
   },
 
   async close(client: QueryClient, threadId: string, actor: ActorContext): Promise<ForgeThreadRow> {
@@ -131,7 +144,8 @@ export const ForgeThreadStore = {
     if (thread === undefined) {
       throw new Error(`forge thread not found: ${threadId}`);
     }
-    const result = await client.query(
+    const db = resolveWritableClient(client);
+    const result = await db.query(
       `UPDATE forge_threads SET closed_at = NOW(), updated_at = NOW()
        WHERE id = $1
        RETURNING ${SELECT_THREAD_COLUMNS}`,
