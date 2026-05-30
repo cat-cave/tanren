@@ -9,15 +9,18 @@
 //      maxToolRounds so a misbehaving answerer can't loop forever).
 //   4. Append the finalized ForgeAnswer as a turn (authorKind "forge_llm").
 //
-// WRITE actions are deferred (P3-0010 scope): the answerer is constrained to
-// the READ family, and any write-tool request is dropped with a recorded
-// error rather than executed. The dashboard renders write-action cards as
-// visual-only navigation seams (see the dashboard island).
-//   // TODO: Forge write-action approval (deferred — design pending)
+// WRITE actions follow the propose→approve→execute pattern (P3-0010 write-
+// action approval): the answerer is still constrained to the READ family for
+// tool DISPATCH (a write-tool request mid-loop is dropped, never executed), but
+// its final answer may carry `proposedActions` — write tools it wants a human
+// to approve. The engine persists each as a `pending` forge_action_proposals
+// row and never executes it; an operator approves it through the approve route,
+// which runs the write under the approving operator's authz.
 
 import type pg from "pg";
 import type { ActorContext } from "../../../auth/schemas.js";
 import type { ForgeAnswer } from "../../answerers/schemas/forge.js";
+import { ForgeProposalStore, type ForgeActionProposalRow } from "../proposals.js";
 import { ForgeThreadStore } from "../threads.js";
 import { ForgeTurnStore } from "../turns.js";
 import type { ForgeTurnAudience, ForgeTurnRow } from "../schemas.js";
@@ -57,6 +60,9 @@ export interface ForgeAskResult {
   forgeTurn: ForgeTurnRow;
   // The read tools that actually ran this exchange (for observability/tests).
   toolResults: ReadonlyArray<ForgeToolResult>;
+  // Pending write proposals persisted from the answer's `proposedActions`. The
+  // engine never executes these — a human approves them via the approve route.
+  proposals: ReadonlyArray<ForgeActionProposalRow>;
 }
 
 const DEFAULT_MAX_TOOL_ROUNDS = 3;
@@ -106,7 +112,24 @@ export async function askForge(deps: ForgeConversationDeps, input: ForgeAskInput
     input.actor,
   );
 
-  return { operatorTurn, forgeTurn, toolResults: answer.toolResults };
+  // Capture any write actions the answer proposed as PENDING proposals. The
+  // engine never executes them — a human approves them through the approve
+  // route under their own authz. We persist after the forge turn so each
+  // proposal references the turn that proposed it.
+  const proposals: ForgeActionProposalRow[] = [];
+  for (const proposed of answer.answer.proposedActions ?? []) {
+    proposals.push(
+      await ForgeProposalStore.create(deps.client, {
+        orgId: thread.orgId,
+        threadId: input.threadId,
+        proposingTurnId: forgeTurn.id,
+        toolCall: proposed.toolCall,
+        rationale: proposed.rationale,
+      }),
+    );
+  }
+
+  return { operatorTurn, forgeTurn, toolResults: answer.toolResults, proposals };
 }
 
 interface AnswererLoopInput {

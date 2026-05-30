@@ -336,6 +336,19 @@ a { color: inherit; text-decoration: none; }
 .fc-card.inert { cursor: default; border-color: var(--line-1); opacity: 0.7; }
 .fc-card.inert .lbl, .fc-card.inert .go { color: var(--fg-3); }
 .fc-card.inert:hover { background: var(--bg-canvas); }
+/* P3-0010 live proposal cards: the model proposed a write; a human decides. */
+.fc-card.proposal { grid-template-columns: 1fr; cursor: default; }
+.fc-card.proposal:hover { background: var(--bg-canvas); }
+.fc-card.proposal .d {
+  grid-column: 1 / -1; font-family: var(--font-ui); font-size: 11.5px; color: var(--fg-2); margin-top: 2px;
+}
+.fc-card.proposal .fc-proposal-actions { grid-column: 1 / -1; display: flex; gap: 8px; margin-top: 8px; }
+.fc-card.proposal .fc-proposal-status {
+  grid-column: 1 / -1; font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--fg-3); margin-top: 6px;
+}
+.fc-card.proposal.decided { opacity: 0.75; }
+.fc-card.proposal.decided .fc-proposal-actions { display: none; }
 .fc-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .fc-chips .chip {
   font-family: var(--font-mono); font-size: 10.5px; color: var(--fg-2);

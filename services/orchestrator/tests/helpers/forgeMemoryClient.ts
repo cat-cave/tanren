@@ -30,9 +30,26 @@ interface TurnRow {
   created_at: Date;
 }
 
+interface ProposalRow {
+  id: string;
+  org_id: string;
+  thread_id: string;
+  proposing_turn_id: string;
+  tool_name: string;
+  args: unknown;
+  rationale: string;
+  status: string;
+  proposed_at: Date;
+  decided_by: string | null;
+  decided_at: Date | null;
+  result: unknown;
+  error: string | null;
+}
+
 export class ForgeMemoryClient {
   readonly threads = new Map<string, ThreadRow>();
   readonly turns: TurnRow[] = [];
+  readonly proposals: ProposalRow[] = [];
   readonly queries: Array<{ sql: string; params: ReadonlyArray<unknown> }> = [];
   now: Date = new Date("2026-01-01T00:00:00Z");
 
@@ -119,6 +136,58 @@ export class ForgeMemoryClient {
     }
     if (trimmed.startsWith("SELECT") && trimmed.includes("FROM forge_turns WHERE id = $1")) {
       const row = this.turns.find((t) => t.id === String(params[0]));
+      return single(row);
+    }
+    // ---- P3-0010 forge_action_proposals ----
+    if (trimmed.startsWith("INSERT INTO forge_action_proposals")) {
+      const row: ProposalRow = {
+        id: String(params[0]),
+        org_id: String(params[1]),
+        thread_id: String(params[2]),
+        proposing_turn_id: String(params[3]),
+        tool_name: String(params[4]),
+        args: JSON.parse(String(params[5])),
+        rationale: String(params[6]),
+        status: "pending",
+        proposed_at: this.now,
+        decided_by: null,
+        decided_at: null,
+        result: null,
+        error: null,
+      };
+      this.proposals.push(row);
+      return single(row);
+    }
+    if (trimmed.startsWith("SELECT") && trimmed.includes("FROM forge_action_proposals WHERE id = $1")) {
+      const row = this.proposals.find((p) => p.id === String(params[0]));
+      return single(row);
+    }
+    if (
+      trimmed.startsWith("SELECT") &&
+      trimmed.includes("FROM forge_action_proposals") &&
+      trimmed.includes("WHERE thread_id = $1")
+    ) {
+      const rows = this.proposals
+        .filter((p) => p.thread_id === String(params[0]))
+        .sort((a, b) => b.proposed_at.getTime() - a.proposed_at.getTime());
+      return { rows, rowCount: rows.length };
+    }
+    if (trimmed.startsWith("UPDATE forge_action_proposals") && trimmed.includes("status = 'pending'")) {
+      // The idempotent decision claim: only transitions a still-pending row.
+      const row = this.proposals.find((p) => p.id === String(params[0]) && p.status === "pending");
+      if (row === undefined) return { rows: [], rowCount: 0 };
+      row.status = String(params[1]);
+      row.decided_by = String(params[2]);
+      row.decided_at = this.now;
+      return single(row);
+    }
+    if (trimmed.startsWith("UPDATE forge_action_proposals")) {
+      // recordOutcome: set executed/failed + result/error.
+      const row = this.proposals.find((p) => p.id === String(params[0]));
+      if (row === undefined) return { rows: [], rowCount: 0 };
+      row.status = String(params[1]);
+      row.result = params[2] === null || params[2] === undefined ? null : JSON.parse(String(params[2]));
+      row.error = params[3] === null || params[3] === undefined ? null : String(params[3]);
       return single(row);
     }
     return { rows: [], rowCount: 0 };

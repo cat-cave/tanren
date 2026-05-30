@@ -15,8 +15,10 @@
  * The server renders the palette item list + the (empty, hidden) chat scaffold;
  * the island (`client/palette.ts`) owns open/close, filter, navigation, the
  * morph to chat-mode, and the fetch/render of turns. Read/navigation actions
- * work; write-action cards render but are INERT (deferred — see the island).
- *   // TODO: Forge write-action approval (deferred — design pending)
+ * auto-navigate; proposed WRITE actions render as LIVE approve/reject cards
+ * (P3-0010 write-action approval) — the island POSTs the decision to the
+ * dashboard's `/forge/proposals/{approve,reject}` proxy, and the orchestrator
+ * executes the write under the approving operator's authz.
  */
 
 import type { PaletteGroup } from "../../api/types.js";

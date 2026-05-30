@@ -19,7 +19,7 @@
  * the browser).
  */
 
-import { appendForgeTurn, appendPending, appendUserTurn, askForge } from "./paletteChat.js";
+import { appendForgeTurn, appendPending, appendProposals, appendUserTurn, askForge } from "./paletteChat.js";
 
 interface PaletteRefs {
   root: HTMLElement;
@@ -135,6 +135,9 @@ export function initPalette(): void {
       onChip: (text) => void send(text),
       onNavigate: (route) => navigate(route),
     });
+    // P3-0010 write-action approval: render any proposed writes as live
+    // approve/reject cards. The model proposed; the operator decides here.
+    appendProposals(refs.chat, refs.orgId, response.proposals);
   };
 
   const setActive = (index: number): void => {

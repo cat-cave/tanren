@@ -28,6 +28,12 @@ const ForgeAskProxyBody = z.object({
   threadId: z.string().min(1).optional(),
 });
 
+/** Body for the proposal approve/reject proxy (P3-0010 write-action approval). */
+const ForgeProposalDecisionBody = z.object({
+  orgId: z.string().min(1),
+  proposalId: z.string().min(1),
+});
+
 export interface CreateAppOptions {
   /** Pool override (tests pass a stub); defaults to the real DB pool. */
   pool?: ReturnType<typeof createDbPool>;
@@ -193,6 +199,32 @@ export async function createApp(options: CreateAppOptions = {}) {
     }
     return c.json(result);
   });
+
+  // P3-0010 write-action approval: approve/reject a proposed write. The palette
+  // island POSTs here; we forward the cookie to the orchestrator's decision
+  // route (which authz's + executes under the approving operator). Idempotent —
+  // an already-decided proposal surfaces as `already_decided`, never a re-run.
+  for (const decision of ["approve", "reject"] as const) {
+    app.post(`/forge/proposals/${decision}`, async (c) => {
+      const parsed = ForgeProposalDecisionBody.safeParse(await c.req.json().catch(() => undefined));
+      if (!parsed.success) {
+        return c.json({ error: "invalid_decision", issues: parsed.error.issues }, 400);
+      }
+      const client = new OrchestratorClient({ orchestratorUrl, cookieHeader: c.req.header("cookie") });
+      const result = await client.decideForgeProposal(parsed.data.orgId, parsed.data.proposalId, decision);
+      const httpStatus =
+        result.outcome === "decided"
+          ? 200
+          : result.outcome === "already_decided"
+            ? 409
+            : result.outcome === "denied"
+              ? 403
+              : result.outcome === "not_found"
+                ? 404
+                : 502;
+      return c.json(result, httpStatus);
+    });
+  }
 
   // Child screens (P2B-0002…0009) FIRST, via the append-only screen registry,
   // so their real routes claim their paths before the shell fills the gaps.

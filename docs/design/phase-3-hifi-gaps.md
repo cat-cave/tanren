@@ -219,25 +219,37 @@ is therefore **superseded**; do not treat its items as open work.
 
 Real surfaces/flows the hi-fi specifies that the code does not yet (fully) build.
 
-### 2.1 Forge **in-conversation write-action approval** — deferred (the single biggest gap)
+### 2.1 Forge **in-conversation write-action approval** — RESOLVED / IN-REVIEW (was the single biggest gap)
 
 - **Hi-fi**: `shared.jsx` `ForgePalette` chat mode renders **action cards** that
   act mid-conversation; the design intent (chat1/chat4) is Forge that can _propose
   → operator confirms → execute_ inside the thread. The hi-fi also shows write
   affordances throughout (create spec, trigger run, etc.).
-- **Code state — STUBBED/INERT**: the thick-Forge **conversation engine** is
-  constrained to **read + propose only**. `engine/forge/conversation/engine.ts`
-  filters to `isReadToolName` and drops write-tool requests
-  (`// TODO: Forge write-action approval (deferred — design pending)`). The
-  dashboard palette renders write-action cards but they are **INERT**
-  (`components/palette/ForgePalette.tsx` header comment + same TODO). Write tools
-  exist (`engine/forge/tools/write.ts`) but are **operator-button-driven only**,
-  not callable from a thread.
-- **Gap**: the inline "propose action → operator confirm → execute" UX within a
-  Forge thread, and lifting the conversation engine's read-only constraint behind
-  an approval gate.
-- **Size/priority: large / high.** This is the one genuinely unresolved design +
-  build item and is the only open item the previous doc still got right.
+- **Resolved (in PR review — `feat/forge-write-action-approval`)**: implemented the
+  safe **propose → approve → execute** pattern. The model never executes a write;
+  a human approves it and the write runs under the **approving operator's** authz.
+  - The Forge answerer's final `ForgeAnswer` may carry optional `proposedActions`
+    (`engine/answerers/schemas/forge.ts`); the conversation engine
+    (`engine/forge/conversation/engine.ts`) no longer drops these — it persists
+    each as a **pending** `forge_action_proposals` row (new migration
+    `0028_massive_callisto.sql`, `db/src/schemaForge.ts`; org*id NOT NULL +
+    indexed per the 0026 tenancy pattern). Read-tool behavior is unchanged; mid-
+    loop write-tool \_dispatch* is still dropped.
+  - Approve/reject routes (`routes/forge/proposals.ts`) re-validate + authz the
+    deciding operator against the underlying write (reusing
+    `engine/forge/tools/write.ts`), execute it, append a forge turn, and advance
+    the proposal to `executed`/`failed`/`rejected`. Decisions are **idempotent** —
+    an already-decided proposal returns a typed **409**, never double-executing.
+  - The dashboard palette write-action cards are now **LIVE**
+    (`client/paletteChat.ts` + `client/palette.ts`): pending proposals render
+    approve/reject controls that POST to a same-origin BFF proxy
+    (`/forge/proposals/{approve,reject}` in `main.tsx`) and show
+    executed/rejected/failed states. (The old INERT-card path is removed.)
+  - **Tools the model may propose**: the existing four write tools
+    (`tanren.create_spec`, `tanren.trigger_run`, `tanren.rerun_task`,
+    `tanren.acknowledge_insight`).
+- **Remaining (for the human reviewer to confirm)**: that proposed-tool set
+  starts at exactly those four; broadening it is a follow-up.
 - **Confidence: high.**
 
 ### 2.2 Overview (org command deck) — placeholder only
