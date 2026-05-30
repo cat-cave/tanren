@@ -43,6 +43,15 @@ class GatePool {
     params: ReadonlyArray<unknown> = [],
   ): Promise<{ rows: ReadonlyArray<Record<string, unknown>>; rowCount: number }> {
     const trimmed = sql.trim();
+    if (trimmed === "BEGIN" || trimmed === "COMMIT" || trimmed === "ROLLBACK" || trimmed.startsWith("SET LOCAL")) {
+      return { rows: [], rowCount: 0 };
+    }
+    // RLS R1: the worker's establishJobOrgContext confirms the claimed run is
+    // reachable under its org GUC before the workflow runs.
+    if (trimmed.startsWith("SELECT 1 FROM runs WHERE run_id = $1 AND org_id = $2")) {
+      const ok = params[0] === RUN_ID && params[1] === ORG_ID;
+      return ok ? { rows: [{ ok: 1 }], rowCount: 1 } : { rows: [], rowCount: 0 };
+    }
     if (/FROM runs r\s+JOIN specs s/.test(trimmed)) {
       return {
         rows: [
@@ -88,6 +97,13 @@ class GatePool {
     }
     return { rows: [], rowCount: 0 };
   }
+
+  // RLS R1: runWithOrgScope checks out a client; the pool returns itself.
+  async connect(): Promise<GatePool> {
+    return this;
+  }
+
+  release(): void {}
 }
 
 class StubAllocator implements Allocator {

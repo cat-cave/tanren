@@ -123,6 +123,12 @@ export class WorkerPool {
     if (trimmed.startsWith("SELECT config FROM organizations")) {
       return single({ config: {} });
     }
+    // RLS wave R1: the worker's establishJobOrgContext confirms the claimed run
+    // is reachable under its org GUC. Visible when the run exists with that org.
+    if (trimmed.startsWith("SELECT 1 FROM runs WHERE run_id = $1 AND org_id = $2")) {
+      const run = this.runs.get(String(params[0]));
+      return single(run !== undefined ? { ok: 1 } : undefined);
+    }
     if (trimmed.startsWith("INSERT INTO runs")) {
       this.runs.set(String(params[0]), {
         run_id: String(params[0]),

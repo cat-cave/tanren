@@ -17,6 +17,7 @@
 // and finalize leaves the job `running`; the recovery surface + a future
 // reaper own re-queueing — the worker never double-executes a claimed job.
 
+import { runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
 import type { Allocator } from "../contracts/allocator.js";
 import type { JobQueue } from "../contracts/jobQueue.js";
@@ -122,6 +123,17 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
       identitySecretRef: deps.identitySecretRef,
     });
 
+    // RLS wave R1: the claim above ran under the worker's SYSTEM context — the
+    // `job_queue` claim spans tenants (job_queue stays OUTSIDE RLS in R2), so it
+    // must NOT carry an org. Now that the claimed job's org is resolved, the
+    // worker establishes the PER-JOB org session context and confirms the run is
+    // reachable under it. Inert in R1 (no policies read the GUC); R2's policy
+    // will key off this `SET LOCAL app.current_org_id`. A legacy/unscoped run
+    // (org_id NULL) has no org to set — the per-job context is skipped.
+    if (orgId !== null) {
+      await establishJobOrgContext(deps.pool, orgId, runId);
+    }
+
     // SaaS Tier-B quota-admission-gate: PRE-FLIGHT check before ANY runner /
     // credential / workflow work. A legacy unscoped run (org_id NULL) is never
     // gated — the unlimited default already admits, and there is no org to
@@ -165,6 +177,33 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
     return { kind: "failed", jobId: job.id, runId, failure };
   } finally {
     await stopHeartbeat();
+  }
+}
+
+/**
+ * RLS wave R1: establish the claimed job's PER-JOB org session context. Opens
+ * an org-scoped transaction (`SET LOCAL app.current_org_id = <orgId>`) and
+ * confirms the run row is reachable under it — the inert proof that the worker,
+ * having claimed cross-org under the system context, then narrows to the job's
+ * org before doing tenant work. Throws `JobOrgContextLostError` if the run is
+ * not visible under the org GUC (in R1 that can only mean the org/run pairing is
+ * wrong; in R2 it would mean a policy filtered it out).
+ */
+export async function establishJobOrgContext(pool: pg.Pool, orgId: string, runId: string): Promise<void> {
+  const visible = await runWithOrgScope(pool, orgId, async (client) => {
+    const result = await client.query("SELECT 1 FROM runs WHERE run_id = $1 AND org_id = $2", [runId, orgId]);
+    return (result.rowCount ?? 0) > 0;
+  });
+  if (!visible) {
+    throw new JobOrgContextLostError(runId, orgId);
+  }
+}
+
+/** Thrown when a claimed job's run is not reachable under its own org context. */
+export class JobOrgContextLostError extends Error {
+  constructor(runId: string, orgId: string) {
+    super(`run ${runId} not reachable under org context ${orgId}`);
+    this.name = "JobOrgContextLostError";
   }
 }
 
