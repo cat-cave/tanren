@@ -77,6 +77,12 @@ compose-build:
 runner-key:
   test -f /tmp/tanren_runner_key || ssh-keygen -t ed25519 -N "" -f /tmp/tanren_runner_key
 
+# Plane-split P2: generate the dev control↔data-plane mTLS material (CA + server
+# + worker certs) into /tmp/tanren-mtls, bind-mounted into the orchestrator +
+# worker by compose.dev.yml. Idempotent. Prod supplies real certs via the same env.
+gen-mtls-certs:
+  ./scripts/dev/gen-mtls-certs.sh
+
 # Host-side sanity-check for the usage tools (codexbar live windows + ccusage
 # token accounting) against a real CODEX_HOME. In a real run these execute
 # runner-side over SSH; this recipe just lets an operator eyeball the tools.
@@ -85,7 +91,7 @@ usage provider="codex" cli="codex" codex_home="":
 
 # Dev profile: developer ergonomics. Static Vault root token, exposed
 # Postgres/runner SSH/orchestrator/dashboard/ntfy host ports, no required env.
-up-dev: runner-key
+up-dev: runner-key gen-mtls-certs
   TANREN_RUNNER_AUTHORIZED_KEY="$(cat /tmp/tanren_runner_key.pub)" TANREN_RUNNER_IDENTITY_PRIVATE_KEY="$(cat /tmp/tanren_runner_key)" docker compose -f compose.dev.yml up -d postgres vault orchestrator worker allocator dashboard runner ntfy
 
 down-dev:
