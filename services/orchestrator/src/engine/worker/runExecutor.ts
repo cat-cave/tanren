@@ -317,7 +317,11 @@ async function finalizeRunQuotaExceeded(
  */
 async function accrueRunUsage(pool: pg.Pool, policy: QuotaPolicy, orgId: string, runId: string): Promise<void> {
   try {
-    const usage = await getRunUsage(pool, runId);
+    // RLS R2 cohort-2 (cost_records read): the post-run metering read runs in its
+    // own short org-scoped transaction (`SET LOCAL app.current_org_id = <orgId>`)
+    // so the `cost_records` SELECT carries org context. Inert in R1 — same totals
+    // as the pool path — and RLS-correct in R3.
+    const usage = await runWithOrgScope(pool, orgId, (client) => getRunUsage(client, runId));
     await policy.accrueUsage(orgId, { runs: 1, tokens: usage.tokens, costUsd: usage.costUsd });
   } catch {
     // Accrual is best-effort; never fail a completed run on a metering blip.

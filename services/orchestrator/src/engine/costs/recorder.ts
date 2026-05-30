@@ -11,6 +11,7 @@
 import type pg from "pg";
 import type { TokenUsage } from "../providers/types.js";
 import type { EventStore } from "../eventStore.js";
+import { resolveWritableClient } from "../data/orgScopedDb.js";
 import { type AttributionInput, type CostSource, computeCostUsd, resolveCostSource } from "./sources.js";
 
 type RecorderClient = Pick<pg.Pool | pg.PoolClient, "query">;
@@ -65,7 +66,12 @@ export class CostRecorder {
     };
     const source = resolveCostSource(attribution);
     const costUsd = computeCostUsd(source, tokens);
-    await this.pool.query(
+    // RLS R2 cohort-2 (cost_records write path): route the INSERT through the
+    // ambient org-scoped client when this recorder was handed the shared pool and
+    // a `runWithOrgScope` scope is open; fall back to the pool when none (inert,
+    // R1-equivalent). Handed a specific client, it is used verbatim. Columns,
+    // values, and the in-statement org_id derivation are unchanged.
+    await resolveWritableClient(this.pool).query(
       // org_id is the mandatory tenant-isolation key (tanren tenancy hardening).
       // It is derived in-statement from the parent run so every cost row carries
       // its org directly rather than via a project_id → projects.org_id hop.
@@ -165,7 +171,12 @@ export class CostRecorder {
     if (!(Number.isFinite(totalCostUsd) && totalCostUsd > 0)) {
       return { updated: 0 };
     }
-    const rows = await this.pool.query<{ id: string; total_tokens: number }>(
+    // RLS R2 cohort-2 (cost_records read+write): the reconcile SELECT and its
+    // apportioning UPDATEs share one resolved client so they see a consistent
+    // snapshot — the ambient org-scoped client when one is open, else the pool
+    // (inert fallback). Same query text and params as before.
+    const client = resolveWritableClient(this.pool);
+    const rows = await client.query<{ id: string; total_tokens: number }>(
       "SELECT id, total_tokens FROM cost_records WHERE run_id = $1",
       [runId],
     );
@@ -177,7 +188,7 @@ export class CostRecorder {
     for (const row of rows.rows) {
       const share = Number(row.total_tokens) / totalTokens;
       const costUsd = (totalCostUsd * share).toFixed(6);
-      await this.pool.query("UPDATE cost_records SET cost_usd = $2, cost_basis = $3 WHERE id = $1", [
+      await client.query("UPDATE cost_records SET cost_usd = $2, cost_basis = $3 WHERE id = $1", [
         row.id,
         costUsd,
         basis,

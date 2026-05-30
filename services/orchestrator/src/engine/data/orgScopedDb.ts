@@ -55,3 +55,28 @@ export function resolveQueryClient(pool: pg.Pool): QueryClient {
 export function hasOrgScope(): boolean {
   return getOrgScope() !== undefined;
 }
+
+/**
+ * A `pg.Pool` exposes `connect`; a checked-out `PoolClient` does not. Write-path
+ * stores (event store, cost recorder, task helpers) are constructed with EITHER
+ * the shared pool OR a specific in-transaction client, and need to tell them
+ * apart: a pool should route its write through the ambient org-scoped client when
+ * a scope is open (RLS R2), while a handed-in client is used verbatim (the caller
+ * already owns that transaction, e.g. `createQueuedRunFromSpec`).
+ */
+export function isPool(client: QueryClient): client is pg.Pool {
+  return typeof (client as { connect?: unknown }).connect === "function";
+}
+
+/**
+ * Resolve the client a write should run on given the client a store was
+ * constructed with. When that is the shared pool, route through the ambient
+ * org-scoped client if a scope is open, else the pool (inert fallback). When it
+ * is a specific in-transaction client, use it as-is — the caller owns that
+ * transaction. This is the write-path companion to {@link resolveQueryClient}
+ * (which always starts from the pool); it centralizes the `isPool` discriminator
+ * the event store, cost recorder, and task helpers all share.
+ */
+export function resolveWritableClient(client: QueryClient): QueryClient {
+  return isPool(client) ? resolveQueryClient(client) : client;
+}

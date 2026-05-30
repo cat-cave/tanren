@@ -6,8 +6,17 @@
 import type pg from "pg";
 import type { AnswererAdapter, WriterAdapter } from "../providers/types.js";
 import type { PlanAnswer } from "../answerers/schemas/index.js";
+import { resolveWritableClient } from "../data/orgScopedDb.js";
 
 type LoopQueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
+
+// RLS R2 cohort-2 (tasks write path): these helpers are handed EITHER the shared
+// pool (from `runPlannerLoopWorkflow`) or a specific in-transaction client. When
+// it is the pool, route the INSERT/UPDATE through the ambient org-scoped client
+// if a `runWithOrgScope` scope is open, falling back to the pool when none
+// (inert, R1-equivalent). When it is a specific client, use it verbatim. The
+// SQL/columns/params are unchanged so behavior is identical — `subtaskStages`
+// tests (which hand a bare query-only stub, not a pool) stay green.
 
 export type ChildTaskKind = "write" | "check" | "audit";
 
@@ -28,7 +37,7 @@ export async function insertPlannerTask(
   taskId: string,
   planner: AnswererAdapter<PlanAnswer>,
 ): Promise<void> {
-  await pool.query(
+  await resolveWritableClient(pool).query(
     `INSERT INTO tasks (task_id, run_id, org_id, kind, title, status, started_at, agent_kind, cli, model)
      VALUES ($1, $2, (SELECT org_id FROM runs WHERE run_id = $2), 'plan', 'plan spec', 'running', now(), 'answerer', $3, NULL)`,
     [taskId, runId, planner.cli],
@@ -36,7 +45,7 @@ export async function insertPlannerTask(
 }
 
 export async function insertChildTask(pool: LoopQueryClient, task: ChildTaskInsert): Promise<void> {
-  await pool.query(
+  await resolveWritableClient(pool).query(
     `INSERT INTO tasks (task_id, run_id, org_id, kind, title, parent_task_id, status, started_at, agent_kind, cli, model)
      VALUES ($1, $2, (SELECT org_id FROM runs WHERE run_id = $2), $3, $4, $5, 'running', now(), $6, $7, $8)`,
     [task.taskId, task.runId, task.kind, task.title, task.parentTaskId, task.agentKind, task.cli, task.model],
@@ -48,10 +57,10 @@ export async function markTaskDone(
   taskId: string,
   outcome: "passed" | "rejected_by_checker" | "rejected_by_auditor" | "window_exhausted",
 ): Promise<void> {
-  await pool.query(`UPDATE tasks SET status = 'done', outcome = $2, ended_at = now() WHERE task_id = $1`, [
-    taskId,
-    outcome,
-  ]);
+  await resolveWritableClient(pool).query(
+    `UPDATE tasks SET status = 'done', outcome = $2, ended_at = now() WHERE task_id = $1`,
+    [taskId, outcome],
+  );
 }
 
 export function writerAdapterRowMeta(writer: WriterAdapter): { cli: string; agentKind: "writer" } {

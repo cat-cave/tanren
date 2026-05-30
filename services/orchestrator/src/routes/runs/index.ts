@@ -204,12 +204,16 @@ export function createRunRoutes(options: RunRoutesOptions) {
       throw error;
     }
     try {
-      const page = await fetchCostsPage(options.pool, {
-        runId,
-        orgId,
-        cursor: c.req.query("cursor"),
-        pageSize: c.req.query("pageSize"),
-      });
+      // RLS R2 cohort-2 (cost_records read): the paginated costs query runs
+      // through the org-scoped client (inert in R1; same rows as the pool path).
+      const page = await runWithOrgScope(options.pool, orgId, (client) =>
+        fetchCostsPage(client, {
+          runId,
+          orgId,
+          cursor: c.req.query("cursor"),
+          pageSize: c.req.query("pageSize"),
+        }),
+      );
       return c.json(page);
     } catch (error) {
       if (error instanceof Error && error.message.startsWith("invalid_cursor")) {
