@@ -192,7 +192,17 @@ smoke-rls-r2-cohort4:
 smoke-rls-r3a:
   DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/rlsR3aResidualSites.integration.test.ts
 
-smoke: compose-build compose-up wait-for-stack smoke-hello smoke-ssh-integration smoke-rls-r1 smoke-rls-r2 smoke-rls-r2-cohort2 smoke-rls-r2-cohort3 smoke-rls-r2-cohort4 smoke-rls-r3a
+# RLS wave R3a-worker behavior proof: the per-job WORKFLOW execution carries org
+# context on EVERY tenant-table op (tasks / events / cost_records). Installs a
+# temporary GUC-keyed policy on the restricted `tanren_app` role and proves the
+# worker's actual store helpers, run under `runWithJobOrgId` + `orgScopingPool`,
+# write rows the policy admits (every op set the GUC), while the bare-pool
+# no-job-org fallback is rejected (empty GUC). Final conversion gating R3b. Same
+# ephemeral-DB + restricted-role harness as R1 / R2 cohorts / R3a.
+smoke-rls-r3a-worker:
+  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/rlsR3aWorkerScoping.integration.test.ts
+
+smoke: compose-build compose-up wait-for-stack smoke-hello smoke-ssh-integration smoke-rls-r1 smoke-rls-r2 smoke-rls-r2-cohort2 smoke-rls-r2-cohort3 smoke-rls-r2-cohort4 smoke-rls-r3a smoke-rls-r3a-worker
 
 # P3-0001: the Phase 2A direct-execution acceptance gate (`just acceptance`,
 # scripts/acceptance/easy.ts + medium.ts) was removed once the run executor

@@ -6,16 +6,31 @@ import { FakeJobQueue } from "../src/engine/contracts/jobQueue.js";
 import { FakeEventStore } from "../src/engine/eventStore.js";
 import { reapExpiredJobs } from "../src/engine/worker/jobReaper.js";
 
+// RLS R3a-worker: the reaper now resolves a reaped run's lineage (incl. org_id,
+// to scope the dead-letter event) under `runWithSystemScope`, so this fake gains
+// `connect()` + transaction-control handling. The SELECT also carries `org_id`
+// (returned NULL here — the dead-letter event then appends on the pool, the
+// inert path the FakeEventStore observes unchanged).
 class ReaperPool {
   async query(sql: string, params: unknown[]): Promise<{ rows: unknown[]; rowCount: number }> {
-    if (sql.startsWith("SELECT spec_id, project_id FROM runs")) {
+    const trimmed = sql.trim();
+    if (["BEGIN", "COMMIT", "ROLLBACK"].includes(trimmed)) {
+      return { rows: [], rowCount: 0 };
+    }
+    if (trimmed.startsWith("SELECT spec_id, project_id, org_id FROM runs")) {
       return {
-        rows: [{ spec_id: `spec_for_${String(params[0])}`, project_id: "project_1" }],
+        rows: [{ spec_id: `spec_for_${String(params[0])}`, project_id: "project_1", org_id: null }],
         rowCount: 1,
       };
     }
     return { rows: [], rowCount: 0 };
   }
+
+  async connect() {
+    return this;
+  }
+
+  release(): void {}
 
   asPgPool() {
     return this as never;

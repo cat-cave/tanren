@@ -28,6 +28,16 @@ export interface OrgScope {
 
 const storage = new AsyncLocalStorage<OrgScope>();
 
+// RLS wave R3a-worker: a SEPARATE, lightweight ambient store holding ONLY the
+// run's org id — NOT a checked-out connection. The worker's per-job workflow
+// execution interleaves DB writes with minutes of external I/O (allocate,
+// clone, bootstrap, CI polling), so it CANNOT hold one `runWithOrgScope`
+// connection across the whole job. Instead it sets this org-id once around the
+// job (`runWithJobOrgId`) and each tenant-table DB op opens its OWN short
+// `runWithOrgScope` transaction from it — a connection is held only for the
+// duration of one DB operation, never across external I/O.
+const jobOrgStorage = new AsyncLocalStorage<string>();
+
 /**
  * The ambient org-scoped client, or `undefined` outside any scope. Handlers
  * that have adopted the org-scoped path call `getOrgScopedClient()` and run
@@ -35,6 +45,21 @@ const storage = new AsyncLocalStorage<OrgScope>();
  */
 export function getOrgScope(): OrgScope | undefined {
   return storage.getStore();
+}
+
+/**
+ * Run `work` with the job's org id on the lightweight ambient store. This holds
+ * NO connection — only the org id — so it is safe to keep open across the whole
+ * job, including its minutes of external I/O. Code that needs a scoped DB op
+ * reads it with `getJobOrgId()` and opens a SHORT `runWithOrgScope` per op.
+ */
+export function runWithJobOrgId<T>(orgId: string, work: () => Promise<T>): Promise<T> {
+  return jobOrgStorage.run(orgId, work);
+}
+
+/** The ambient per-job org id, or `undefined` when no job org context is set. */
+export function getJobOrgId(): string | undefined {
+  return jobOrgStorage.getStore();
 }
 
 /** The ambient scoped client, or `undefined` outside a scope. */
