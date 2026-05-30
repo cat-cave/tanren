@@ -6,6 +6,7 @@
 // thin — every check lives in the store/tool layer so the HTTP shape is
 // uniform.
 
+import { runWithOrgScope } from "@tanren/db";
 import { Hono } from "hono";
 import type pg from "pg";
 import { z } from "zod";
@@ -15,9 +16,6 @@ import {
   ForgeThreadAccessDeniedError,
   ForgeThreadStore,
   ForgeTurnStore,
-  generateProjectViewNarration,
-  generateRunDetailNarration,
-  type NarrationInsight,
   repoGrep,
   repoReadFile,
   repoReadIssue,
@@ -37,11 +35,9 @@ import {
 } from "../../engine/forge/index.js";
 import type { GitHubHttpClient } from "../../engine/providers/github.js";
 import type { SecretStore } from "../../engine/contracts/secretStore.js";
-import { loadInsightsForProject } from "../../engine/insights/index.js";
-import type { Insight, InsightAction } from "../../engine/insights/index.js";
-import { ForgeInsightKind } from "../../engine/answerers/schemas/forge.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg } from "../orgs/index.js";
+import { generateProjectViewTurn, generateRunDetailTurn } from "./narration.js";
 
 interface ForgeRoutesOptions {
   pool: pg.Pool;
@@ -83,16 +79,21 @@ export function createForgeRoutes(options: ForgeRoutesOptions) {
       return c.json({ error: "invalid_thread", issues: parsed.error.issues }, 400);
     }
     try {
-      const thread = await ForgeThreadStore.create(
-        options.pool,
-        {
-          orgId,
-          scope: parsed.data.scope,
-          projectId: parsed.data.projectId ?? null,
-          runId: parsed.data.runId ?? null,
-          title: parsed.data.title ?? null,
-        },
-        actor,
+      // RLS R2 cohort-4 (forge): run the forge_threads write inside an
+      // org-scoped txn (org = path org, validated above). Inert in R1; the
+      // store resolves the same ambient client. Behavior-identical to the pool.
+      const thread = await runWithOrgScope(options.pool, orgId, (client) =>
+        ForgeThreadStore.create(
+          client,
+          {
+            orgId,
+            scope: parsed.data.scope,
+            projectId: parsed.data.projectId ?? null,
+            runId: parsed.data.runId ?? null,
+            title: parsed.data.title ?? null,
+          },
+          actor,
+        ),
       );
       return c.json(thread, 201);
     } catch (error) {
@@ -107,12 +108,17 @@ export function createForgeRoutes(options: ForgeRoutesOptions) {
       return c.json({ error: "org_access_denied" }, 403);
     }
     try {
-      const thread = await ForgeThreadStore.get(options.pool, c.req.param("threadId"), actor);
-      if (thread === undefined) {
+      // RLS R2 cohort-4 (forge): thread + turns reads in one org-scoped txn.
+      const bundle = await runWithOrgScope(options.pool, orgId, async (client) => {
+        const thread = await ForgeThreadStore.get(client, c.req.param("threadId"), actor);
+        if (thread === undefined) return undefined;
+        const turns = await ForgeTurnStore.list(client, { threadId: thread.id, limit: 50 }, actor);
+        return { thread, turns };
+      });
+      if (bundle === undefined) {
         return c.json({ error: "forge_thread_not_found" }, 404);
       }
-      const turns = await ForgeTurnStore.list(options.pool, { threadId: thread.id, limit: 50 }, actor);
-      return c.json({ thread, turns });
+      return c.json(bundle);
     } catch (error) {
       if (error instanceof ForgeThreadAccessDeniedError) {
         return c.json({ error: "forge_thread_access_denied" }, 403);
@@ -130,14 +136,17 @@ export function createForgeRoutes(options: ForgeRoutesOptions) {
     const limit = Number(c.req.query("limit") ?? "100");
     const sinceIndex = c.req.query("sinceIndex");
     try {
-      const turns = await ForgeTurnStore.list(
-        options.pool,
-        {
-          threadId: c.req.param("threadId"),
-          limit: Number.isFinite(limit) ? Math.min(limit, 200) : 100,
-          sinceIndex: sinceIndex === undefined ? undefined : Number(sinceIndex),
-        },
-        actor,
+      // RLS R2 cohort-4 (forge): forge_turns read on the org-scoped client.
+      const turns = await runWithOrgScope(options.pool, orgId, (client) =>
+        ForgeTurnStore.list(
+          client,
+          {
+            threadId: c.req.param("threadId"),
+            limit: Number.isFinite(limit) ? Math.min(limit, 200) : 100,
+            sinceIndex: sinceIndex === undefined ? undefined : Number(sinceIndex),
+          },
+          actor,
+        ),
       );
       return c.json({ turns });
     } catch (error) {
@@ -159,14 +168,20 @@ export function createForgeRoutes(options: ForgeRoutesOptions) {
       return c.json({ error: "invalid_generate", issues: parsed.error.issues }, 400);
     }
     try {
-      const turn = await generateProjectViewTurn({
-        pool: options.pool,
-        threadId: c.req.param("threadId"),
-        projectId: parsed.data.projectId,
-        audience: parsed.data.audience ?? "project:member",
-        budgetUsdPerWeek: parsed.data.budgetUsdPerWeek,
-        actor,
-      });
+      // RLS R2 cohort-4 (forge): the narration generator reads project/run/cost
+      // context AND appends a forge_turn — run the whole thing in one org-scoped
+      // txn so every read/write carries org context.
+      const turn = await runWithOrgScope(options.pool, orgId, (client) =>
+        generateProjectViewTurn({
+          client,
+          pool: options.pool,
+          threadId: c.req.param("threadId"),
+          projectId: parsed.data.projectId,
+          audience: parsed.data.audience ?? "project:member",
+          budgetUsdPerWeek: parsed.data.budgetUsdPerWeek,
+          actor,
+        }),
+      );
       return c.json(turn, 201);
     } catch (error) {
       if (error instanceof ForgeThreadAccessDeniedError) {
@@ -187,13 +202,18 @@ export function createForgeRoutes(options: ForgeRoutesOptions) {
       return c.json({ error: "invalid_generate", issues: parsed.error.issues }, 400);
     }
     try {
-      const turn = await generateRunDetailTurn({
-        pool: options.pool,
-        threadId: c.req.param("threadId"),
-        runId: parsed.data.runId,
-        audience: parsed.data.audience ?? "project:member",
-        actor,
-      });
+      // RLS R2 cohort-4 (forge): run-detail narration read context + forge_turn
+      // append in one org-scoped txn.
+      const turn = await runWithOrgScope(options.pool, orgId, (client) =>
+        generateRunDetailTurn({
+          client,
+          pool: options.pool,
+          threadId: c.req.param("threadId"),
+          runId: parsed.data.runId,
+          audience: parsed.data.audience ?? "project:member",
+          actor,
+        }),
+      );
       return c.json(turn, 201);
     } catch (error) {
       if (error instanceof ForgeThreadAccessDeniedError) {
@@ -279,209 +299,6 @@ async function dispatchTool(input: DispatchInput): Promise<unknown> {
     case "tanren.acknowledge_insight":
       return tanrenAcknowledgeInsight({ pool }, call.args, actor);
   }
-}
-
-// ---------------------------------------------------------------------------
-// Generators — load typed context from existing stores and pass it to the
-// templated narration in `engine/forge/narration/v0.ts`.
-// ---------------------------------------------------------------------------
-
-interface GenerateProjectViewArgs {
-  pool: pg.Pool;
-  threadId: string;
-  projectId: string;
-  audience: "project:member" | "project:admin" | "org:admin" | "platform:admin";
-  budgetUsdPerWeek?: number;
-  actor: ActorContext;
-}
-
-async function generateProjectViewTurn(args: GenerateProjectViewArgs) {
-  // Verify the thread exists and the actor can reach it. We do not need the
-  // thread row beyond that — the narration generator reads project context.
-  const thread = await ForgeThreadStore.get(args.pool, args.threadId, args.actor);
-  if (thread === undefined) {
-    throw new Error(`forge thread not found: ${args.threadId}`);
-  }
-  const projectResult = await args.pool.query<{ name: string }>("SELECT name FROM projects WHERE project_id = $1", [
-    args.projectId,
-  ]);
-  const projectName = projectResult.rows[0]?.name ?? args.projectId;
-
-  const recentRuns = await args.pool.query<{
-    run_id: string;
-    spec_id: string;
-    status: string;
-    outcome: string | null;
-    pr_url: string | null;
-    started_at: Date;
-    ended_at: Date | null;
-  }>(
-    `SELECT run_id, spec_id, status, outcome, pr_url, started_at, ended_at
-     FROM runs WHERE project_id = $1
-     ORDER BY started_at DESC LIMIT 20`,
-    [args.projectId],
-  );
-
-  const pendingReviews = recentRuns.rows.filter(
-    (row) => row.outcome !== null && row.outcome !== "merged" && row.pr_url !== null,
-  );
-
-  const costResult = await args.pool.query<{ total: string | null }>(
-    `SELECT COALESCE(SUM(cost_usd::numeric), 0)::text AS total
-     FROM cost_records
-     WHERE project_id = $1 AND recorded_at >= NOW() - INTERVAL '7 days'`,
-    [args.projectId],
-  );
-  const weekToDateCostUsd = Number(costResult.rows[0]?.total ?? "0");
-
-  const answer = generateProjectViewNarration({
-    project: { projectId: args.projectId, name: projectName },
-    recentRuns: recentRuns.rows.map((row) => ({
-      runId: row.run_id,
-      specId: row.spec_id,
-      status: row.status,
-      outcome: row.outcome,
-      prUrl: row.pr_url,
-      startedAt: row.started_at,
-      endedAt: row.ended_at,
-    })),
-    pendingReviews: pendingReviews.map((row) => ({
-      runId: row.run_id,
-      specId: row.spec_id,
-      status: row.status,
-      outcome: row.outcome,
-      prUrl: row.pr_url,
-      startedAt: row.started_at,
-      endedAt: row.ended_at,
-    })),
-    weekToDateCostUsd,
-    budgetUsdPerWeek: args.budgetUsdPerWeek,
-    insights: await loadNarrationInsights(args.pool, args.projectId),
-    actor: args.actor,
-  });
-
-  return ForgeTurnStore.append(
-    args.pool,
-    {
-      threadId: args.threadId,
-      source: { kind: "operator", userId: args.actor.userId },
-      audience: args.audience,
-      authorKind: "forge_template",
-      render: answer,
-    },
-    args.actor,
-  );
-}
-
-interface GenerateRunDetailArgs {
-  pool: pg.Pool;
-  threadId: string;
-  runId: string;
-  audience: "project:member" | "project:admin" | "org:admin" | "platform:admin";
-  actor: ActorContext;
-}
-
-async function generateRunDetailTurn(args: GenerateRunDetailArgs) {
-  const thread = await ForgeThreadStore.get(args.pool, args.threadId, args.actor);
-  if (thread === undefined) {
-    throw new Error(`forge thread not found: ${args.threadId}`);
-  }
-  const runResult = await args.pool.query<{
-    run_id: string;
-    spec_id: string;
-    project_id: string;
-    status: string;
-    outcome: string | null;
-    pr_url: string | null;
-    started_at: Date;
-    ended_at: Date | null;
-  }>(
-    `SELECT run_id, spec_id, project_id, status, outcome, pr_url, started_at, ended_at
-     FROM runs WHERE run_id = $1`,
-    [args.runId],
-  );
-  const runRow = runResult.rows[0];
-  if (runRow === undefined) {
-    throw new Error(`run not found: ${args.runId}`);
-  }
-  const taskResult = await args.pool.query<{ count: string; failed: string }>(
-    `SELECT COUNT(*)::text AS count,
-            COUNT(*) FILTER (WHERE outcome = 'failed')::text AS failed
-     FROM tasks WHERE run_id = $1`,
-    [args.runId],
-  );
-  const taskCount = Number(taskResult.rows[0]?.count ?? "0");
-  const failedTaskCount = Number(taskResult.rows[0]?.failed ?? "0");
-  const costResult = await args.pool.query<{ total: string | null }>(
-    `SELECT COALESCE(SUM(cost_usd::numeric), 0)::text AS total
-     FROM cost_records WHERE run_id = $1`,
-    [args.runId],
-  );
-  const projectName =
-    (await args.pool.query<{ name: string }>("SELECT name FROM projects WHERE project_id = $1", [runRow.project_id]))
-      .rows[0]?.name ?? runRow.project_id;
-  const answer = generateRunDetailNarration({
-    project: { projectId: runRow.project_id, name: projectName },
-    run: {
-      runId: runRow.run_id,
-      specId: runRow.spec_id,
-      status: runRow.status,
-      outcome: runRow.outcome,
-      prUrl: runRow.pr_url,
-      startedAt: runRow.started_at,
-      endedAt: runRow.ended_at,
-    },
-    taskCount,
-    failedTaskCount,
-    costUsd: Number(costResult.rows[0]?.total ?? "0"),
-    insights: await loadNarrationInsights(args.pool, runRow.project_id),
-    actor: args.actor,
-  });
-  return ForgeTurnStore.append(
-    args.pool,
-    {
-      threadId: args.threadId,
-      source: { kind: "operator", userId: args.actor.userId },
-      audience: args.audience,
-      authorKind: "forge_template",
-      render: answer,
-    },
-    args.actor,
-  );
-}
-
-// Convert P2A-0020 insights into the NarrationInsight shape expected by the
-// v0 narration generator. Actions whose `toolCall` doesn't parse as a known
-// ForgeToolCall (e.g. a future variant added before the schema is updated)
-// are dropped so the narration stays renderable.
-async function loadNarrationInsights(pool: pg.Pool, projectId: string): Promise<NarrationInsight[]> {
-  const insights = await loadInsightsForProject(pool, { projectId });
-  return insights
-    .map((insight) => toNarrationInsight(insight))
-    .filter((entry): entry is NarrationInsight => entry !== undefined);
-}
-
-function toNarrationInsight(insight: Insight): NarrationInsight | undefined {
-  const kindParse = ForgeInsightKind.safeParse(insight.kind);
-  if (!kindParse.success) return undefined;
-  const actions = insight.actions
-    .map((action) => normalizeInsightAction(action))
-    .filter((action): action is { label: string; toolCall: z.infer<typeof ForgeToolCall> } => action !== undefined);
-  return {
-    id: insight.id,
-    kind: kindParse.data,
-    title: insight.title,
-    body: insight.body,
-    actions,
-  };
-}
-
-function normalizeInsightAction(
-  action: InsightAction,
-): { label: string; toolCall: z.infer<typeof ForgeToolCall> } | undefined {
-  const parsed = ForgeToolCall.safeParse(action.toolCall);
-  if (!parsed.success) return undefined;
-  return { label: action.label, toolCall: parsed.data };
 }
 
 function requireActor(c: { var: { actor?: ActorContext } }): ActorContext {

@@ -109,10 +109,38 @@ smoke-rls-r2-cohort2`) + `tests/rlsR2WriteRouting.test.ts` routing/fallback
       `just smoke-rls-r2-cohort3`); the existing `quotaPolicy` /
       `quotaAdmissionGate` / `runnerStore` / `runWorker` / `projectSpecWorkflow`
       tests stayed unchanged.
-- [ ] **Cohort-4 — forge** (`routes/forge` + ask/proposals; the run-detail Forge
-      bundle's cross-store reads) and the remaining route + engine read paths
-      (see the R3+ list below), plus the hosting-export reads' eventual call site.
-      This is the last cohort before R3 (policies + role flip).
+- [x] **Cohort-4 (FINAL) — forge.** The three forge tenant tables —
+      `forge_threads`, `forge_turns`, `forge_action_proposals` — now route
+      through the org-scoped client. The stores (`ForgeThreadStore`,
+      `ForgeTurnStore`, `ForgeProposalStore`) resolve every read/write through
+      `resolveWritableClient` (handed the pool → ambient scope when one is open,
+      else the pool; handed a specific client → verbatim), so EVERY caller —
+      including `engine/recovery`'s pool-handed `create`, an R3+ surface — gets
+      the inert fallback. The forge routes establish the scope: `routes/forge`
+      (thread create/get, turns list, the two narration generators —
+      `generateProjectViewTurn`/`generateRunDetailTurn`, whose project/run/cost
+      reads + forge_turn append now run in one org-scoped txn; the insights-cache
+      read stays on the pool, an R3+ surface), `routes/forge/ask` (`askForge` —
+      operator+forge turns + proposal persistence in one scoped txn; the
+      read-tool dispatcher stays pool-bound, R3+), and `routes/forge/proposals`
+      (`listForThread` + `decideForgeProposal` — claim/recordOutcome/turn append
+      in one scoped txn; the write-tool dispatcher stays pool-bound, R3+). The
+      run-detail **Forge bundle** (`routes/runs/index.ts` `fetchForgeBundle`),
+      left cross-store on the pool by cohort-1, now opens its own org-scoped txn
+      for the `listForRun` + turns read. The `POST /forge/tools` dispatch stays
+      on the pool (its spec/run/etc. tool reads + writes are an R3+ surface).
+      Test-fake note: the unit tests pass a `ForgeMemoryClient` (no `connect()`)
+      verbatim to the stores — `resolveWritableClient` returns it as-is (no
+      ambient scope), so no test fake needed adapting and no observable behavior
+      changed. Proof: `tests/rlsR2DalForge.integration.test.ts` (real PG, run via
+      `just smoke-rls-r2-cohort4`); the forge unit tests (`forgeThreadsAndTurns`,
+      `forgeWriteActionApproval`, `forgeConversation`, `forgeProposalStore`) and
+      the specDiscovery/candidateInbox tests stayed unchanged.
+
+**All conversion cohorts are now complete.** Every tenant table carries org
+context by construction. The only remaining R2 strand is **R3** below (enable
+RLS policies + flip the runtime role to `tanren_app` + the two-org isolation
+test) — it is now UNBLOCKED.
 
 Fallback semantics (all cohorts): with no ambient scope (startup, cross-org
 system ops) the resolver falls back to the pool so behavior is unchanged. The
@@ -154,12 +182,15 @@ changes), each with a behavior test. Grouped by surface:
       the run-scoped costs page — converted in R2 cohort-2)
 - [ ] `routes/recovery`, `routes/inbox`, `routes/audits`, `routes/discovery`,
       `routes/onboarding`
-- [ ] `routes/forge` (+ ask/proposals), `routes/brownfield`, `routes/orgs`
+- [x] `routes/forge` (+ ask/proposals) — the forge-table reads/writes converted
+      (R2 cohort-4); the `POST /forge/tools` dispatch + the ask/decide tool
+      dispatchers (spec/run/etc. reads + writes) remain pool-bound, R3+. Still
+      pending: `routes/brownfield`, `routes/orgs`
 - [ ] `routes/runs` remaining surfaces — R2 cohort-1 converted the detail
       snapshot (R1), the run list, the events page, the activity feed, and the
       SSE run/task/event reads; cohort-2 converted the **costs page** + the
-      **SSE cost deltas** (`cost_records`). Still on the pool: the **Forge bundle**
-      (cross-store, cohort-4).
+      **SSE cost deltas** (`cost_records`); cohort-4 converted the **Forge
+      bundle** (`fetchForgeBundle`, cross-store).
 
 ### Orchestrator engine (write + read paths)
 

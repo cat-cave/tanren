@@ -12,6 +12,7 @@
 // returns 409 and never re-executes (the store's conditional claim is the
 // backstop). Mounted alongside the ask route on the same `/orgs` base.
 
+import { runWithOrgScope } from "@tanren/db";
 import { Hono } from "hono";
 import type pg from "pg";
 import type { ActorContext } from "../../auth/schemas.js";
@@ -48,7 +49,11 @@ export function createForgeProposalRoutes(options: ForgeProposalRoutesOptions) {
       return c.json({ error: "org_access_denied" }, 403);
     }
     try {
-      const proposals = await ForgeProposalStore.listForThread(options.pool, c.req.param("threadId"), actor);
+      // RLS R2 cohort-4 (forge): forge_action_proposals read on the org-scoped
+      // client (org = path org, validated above). Inert in R1.
+      const proposals = await runWithOrgScope(options.pool, orgId, (client) =>
+        ForgeProposalStore.listForThread(client, c.req.param("threadId"), actor),
+      );
       return c.json({ proposals });
     } catch (error) {
       if (error instanceof ForgeThreadAccessDeniedError) {
@@ -66,13 +71,20 @@ export function createForgeProposalRoutes(options: ForgeProposalRoutesOptions) {
         return c.json({ error: "org_access_denied" }, 403);
       }
       try {
-        const result = await decideForgeProposal(
-          { client: options.pool, executeWrite },
-          {
-            proposalId: c.req.param("proposalId"),
-            decision: decision === "approve" ? "approved" : "rejected",
-            actor,
-          },
+        // RLS R2 cohort-4 (forge): the decide engine claims the proposal,
+        // records the outcome, and appends a forge turn across several
+        // statements — run them in ONE org-scoped txn so each forge-table write
+        // carries org context. `executeWrite` closes over the pool (its
+        // underlying write tools are an R3+ surface) and is left on the pool.
+        const result = await runWithOrgScope(options.pool, orgId, (client) =>
+          decideForgeProposal(
+            { client, executeWrite },
+            {
+              proposalId: c.req.param("proposalId"),
+              decision: decision === "approve" ? "approved" : "rejected",
+              actor,
+            },
+          ),
         );
         return c.json({ proposal: result.proposal, turn: result.turn }, 201);
       } catch (error) {

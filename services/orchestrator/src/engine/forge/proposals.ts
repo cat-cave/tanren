@@ -20,6 +20,7 @@ import { randomUUID } from "node:crypto";
 import type pg from "pg";
 import { z } from "zod";
 import type { ActorContext } from "../../auth/schemas.js";
+import { resolveWritableClient } from "../data/orgScopedDb.js";
 import { ForgeProposedAction, type ForgeWriteToolCall } from "../answerers/schemas/forge.js";
 import { ForgeThreadStore } from "./threads.js";
 
@@ -134,12 +135,17 @@ export interface CreateProposalInput {
   rationale: string;
 }
 
+// RLS R2 cohort-4 (forge): proposal reads/writes route through
+// `resolveWritableClient`, same seam as the thread/turn stores. Thread-store
+// authz calls below receive the ORIGINAL client and resolve the seam
+// themselves, reaching the same ambient scoped client when one is open.
 export const ForgeProposalStore = {
   // Persist a proposed action as `pending`. The conversation engine calls this
   // per proposed action on the final answer; it never executes the write.
   async create(client: QueryClient, input: CreateProposalInput): Promise<ForgeActionProposalRow> {
     const id = `forge_proposal_${randomUUID()}`;
-    const result = await client.query(
+    const db = resolveWritableClient(client);
+    const result = await db.query(
       `INSERT INTO forge_action_proposals
          (id, org_id, thread_id, proposing_turn_id, tool_name, args, rationale, status)
        VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, 'pending')
@@ -160,9 +166,8 @@ export const ForgeProposalStore = {
   // Fetch a proposal, gating on the parent thread's authz (throws when the
   // actor cannot reach the thread). Returns undefined for an unknown id.
   async get(client: QueryClient, proposalId: string, actor: ActorContext): Promise<ForgeActionProposalRow | undefined> {
-    const result = await client.query(`SELECT ${SELECT_COLUMNS} FROM forge_action_proposals WHERE id = $1`, [
-      proposalId,
-    ]);
+    const db = resolveWritableClient(client);
+    const result = await db.query(`SELECT ${SELECT_COLUMNS} FROM forge_action_proposals WHERE id = $1`, [proposalId]);
     const raw = result.rows[0];
     if (raw === undefined) return undefined;
     const row = decodeRow(raw as RawProposalRow);
@@ -174,7 +179,8 @@ export const ForgeProposalStore = {
   // The proposals attached to a thread, newest-first. Gated on thread authz.
   async listForThread(client: QueryClient, threadId: string, actor: ActorContext): Promise<ForgeActionProposalRow[]> {
     await ForgeThreadStore.get(client, threadId, actor);
-    const result = await client.query(
+    const db = resolveWritableClient(client);
+    const result = await db.query(
       `SELECT ${SELECT_COLUMNS} FROM forge_action_proposals
        WHERE thread_id = $1
        ORDER BY proposed_at DESC`,
@@ -202,7 +208,8 @@ export const ForgeProposalStore = {
     if (existing.status !== "pending") {
       throw new ProposalAlreadyDecidedError(proposalId, existing.status);
     }
-    const result = await client.query(
+    const db = resolveWritableClient(client);
+    const result = await db.query(
       `UPDATE forge_action_proposals
          SET status = $2, decided_by = $3, decided_at = NOW()
        WHERE id = $1 AND status = 'pending'
@@ -226,7 +233,8 @@ export const ForgeProposalStore = {
     proposalId: string,
     outcome: { status: "executed"; result: unknown } | { status: "failed"; error: string },
   ): Promise<ForgeActionProposalRow> {
-    const result = await client.query(
+    const db = resolveWritableClient(client);
+    const result = await db.query(
       `UPDATE forge_action_proposals
          SET status = $2, result = $3::jsonb, error = $4
        WHERE id = $1

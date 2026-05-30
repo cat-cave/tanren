@@ -98,8 +98,9 @@ export function createRunRoutes(options: RunRoutesOptions) {
     // inside a `SET LOCAL app.current_org_id = <orgId>` transaction (the org is
     // the path org, already validated against the actor above). Inert in R1 —
     // no policies read the GUC yet — and behavior-identical to the pool path.
-    // Insights (touches the workflow_insights cache) and the Forge bundle
-    // (cross-store) stay on the pool; they convert in a later R-wave.
+    // Insights (touches the workflow_insights cache) stays on the pool; it
+    // converts in a later R-wave. The Forge bundle (cross-store) converted in
+    // R2 cohort-4 — `fetchForgeBundle` now opens its own org-scoped txn.
     const summary = await runWithOrgScope(options.pool, orgId, (client) => fetchRunSummary(client, runId, orgId));
     if (summary === undefined) {
       return c.json({ error: "run_not_found" }, 404);
@@ -361,15 +362,21 @@ interface ForgeBundleArgs {
 
 async function fetchForgeBundle(pool: pg.Pool, args: ForgeBundleArgs): Promise<RunDetail["forgeThread"]> {
   try {
-    const threads = await ForgeThreadStore.listForRun(
-      pool,
-      { orgId: args.orgId, projectId: args.projectId, runId: args.runId },
-      args.actor,
-    );
-    const head = threads[0];
-    if (head === undefined) return null;
-    const turns = await ForgeTurnStore.list(pool, { threadId: head.id, limit: 50 }, args.actor);
-    return { threadId: head.id, recentTurns: turns };
+    // RLS R2 cohort-4 (forge): the run-detail Forge bundle's cross-store reads
+    // (listForRun + turns) run in one org-scoped txn (org = args.orgId, already
+    // validated against the actor at the route). Cohort-1 left this on the pool
+    // as a cross-store read; this is its conversion. Inert in R1.
+    return await runWithOrgScope(pool, args.orgId, async (client) => {
+      const threads = await ForgeThreadStore.listForRun(
+        client,
+        { orgId: args.orgId, projectId: args.projectId, runId: args.runId },
+        args.actor,
+      );
+      const head = threads[0];
+      if (head === undefined) return null;
+      const turns = await ForgeTurnStore.list(client, { threadId: head.id, limit: 50 }, args.actor);
+      return { threadId: head.id, recentTurns: turns };
+    });
   } catch {
     // ForgeThreadStore throws when the actor cannot reach the thread's
     // scope. Treat that as "no bundle" so the rest of the run detail still

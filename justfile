@@ -173,7 +173,15 @@ smoke-rls-r2-cohort2:
 smoke-rls-r2-cohort3:
   DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/rlsR2DalSpecsRunnersQuota.integration.test.ts
 
-smoke: compose-build compose-up wait-for-stack smoke-hello smoke-ssh-integration smoke-rls-r1 smoke-rls-r2 smoke-rls-r2-cohort2 smoke-rls-r2-cohort3
+# RLS wave R2 cohort-4 (FINAL) behavior proof: the forge stores —
+# forge_threads / forge_turns / forge_action_proposals reads + writes — run
+# through the org-scoped client (inert — no policies), identical to the pool.
+# Same ephemeral-DB + restricted-role harness as R1 / cohort-1/2/3. After this
+# all conversion cohorts are complete; only R3 (policies + role flip) remains.
+smoke-rls-r2-cohort4:
+  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/rlsR2DalForge.integration.test.ts
+
+smoke: compose-build compose-up wait-for-stack smoke-hello smoke-ssh-integration smoke-rls-r1 smoke-rls-r2 smoke-rls-r2-cohort2 smoke-rls-r2-cohort3 smoke-rls-r2-cohort4
 
 # P3-0001: the Phase 2A direct-execution acceptance gate (`just acceptance`,
 # scripts/acceptance/easy.ts + medium.ts) was removed once the run executor

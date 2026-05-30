@@ -12,6 +12,7 @@
 import { randomUUID } from "node:crypto";
 import type pg from "pg";
 import type { ActorContext } from "../../auth/schemas.js";
+import { resolveWritableClient } from "../data/orgScopedDb.js";
 import { ForgeAnswer } from "../answerers/schemas/forge.js";
 import { ForgeThreadStore } from "./threads.js";
 import { ForgeTurnAppendInput, type ForgeTurnAudience, type ForgeTurnRow, type ForgeTurnSource } from "./schemas.js";
@@ -79,9 +80,14 @@ export function actorCanViewAudience(actor: ActorContext, audience: ForgeTurnAud
   return actorAudienceTier(actor) >= AUDIENCE_ORDER[audience];
 }
 
+// RLS R2 cohort-4 (forge): turn reads/writes route through
+// `resolveWritableClient`, same seam as `ForgeThreadStore`. The thread-store
+// calls below are handed the ORIGINAL client — they resolve the seam
+// themselves, so they reach the same ambient scoped client when one is open.
 export const ForgeTurnStore = {
   async append(client: QueryClient, input: ForgeTurnAppendInput, actor: ActorContext): Promise<ForgeTurnRow> {
     const parsed = ForgeTurnAppendInput.parse(input);
+    const db = resolveWritableClient(client);
     // Touch the parent thread for authz — this throws if the actor can't
     // reach the thread's scope.
     const thread = await ForgeThreadStore.get(client, parsed.threadId, actor);
@@ -98,14 +104,14 @@ export const ForgeTurnStore = {
     // Compute the next index atomically. Postgres unique constraint on
     // (thread_id, turn_index) is the backstop; if two writers race the
     // second one's INSERT will fail and the caller can retry.
-    const nextIndexResult = await client.query<{ next_index: number | string | null }>(
+    const nextIndexResult = await db.query<{ next_index: number | string | null }>(
       `SELECT COALESCE(MAX(turn_index), -1) + 1 AS next_index
        FROM forge_turns WHERE thread_id = $1`,
       [parsed.threadId],
     );
     const nextIndex = Number(nextIndexResult.rows[0]?.next_index ?? 0);
 
-    const result = await client.query(
+    const result = await db.query(
       `INSERT INTO forge_turns
          (id, thread_id, turn_index, source, audience, author_kind, render)
        VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7::jsonb)
@@ -135,7 +141,8 @@ export const ForgeTurnStore = {
     }
     const limit = args.limit ?? 100;
     const sinceIndex = args.sinceIndex ?? -1;
-    const result = await client.query(
+    const db = resolveWritableClient(client);
+    const result = await db.query(
       `SELECT ${SELECT_TURN_COLUMNS} FROM forge_turns
        WHERE thread_id = $1 AND turn_index > $2
        ORDER BY turn_index ASC
@@ -147,7 +154,8 @@ export const ForgeTurnStore = {
   },
 
   async get(client: QueryClient, turnId: string, actor: ActorContext): Promise<ForgeTurnRow | undefined> {
-    const result = await client.query(`SELECT ${SELECT_TURN_COLUMNS} FROM forge_turns WHERE id = $1`, [turnId]);
+    const db = resolveWritableClient(client);
+    const result = await db.query(`SELECT ${SELECT_TURN_COLUMNS} FROM forge_turns WHERE id = $1`, [turnId]);
     const row = result.rows[0];
     if (row === undefined) return undefined;
     const turn = decodeTurnRow(row as RawTurnRow);
