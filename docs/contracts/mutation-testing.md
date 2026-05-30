@@ -33,9 +33,9 @@ The clusters are disjoint so they can be measured and ratcheted independently.
 | notify     | `stryker.notify.mjs`  | `engine/notifications/**` channels + dispatch                    | 87.04%      | 85      |
 | secrets    | `stryker.secrets.mjs` | SecretStore seam + GCP/AWS/1Password/Vault backends              | 95.96%      | 95      |
 | inbox      | `stryker.inbox.mjs`   | `engine/forge/inbox/**` source connectors + dispatcher + triage  | 83.57%      | 83      |
-| **repos**  | `stryker.repos.mjs`   | `engine/repositories/**` state stores                            | **51.28%**  | 50      |
-| **worker** | `stryker.worker.mjs`  | `engine/worker/**` run executor + reaper + boot                  | **38.25%**  | 36      |
-| **dal**    | `stryker.dal.mjs`     | `engine/data/**` + `db/src/orgScope.ts` org-scope seam           | **38.89%³** | 36      |
+| **repos**  | `stryker.repos.mjs`   | `engine/repositories/**` state stores                            | **84.62%**  | 84      |
+| **worker** | `stryker.worker.mjs`  | `engine/worker/**` run executor + reaper + boot                  | **70.95%**  | 69      |
+| **dal**    | `stryker.dal.mjs`     | `engine/data/**` + `db/src/orgScope.ts` org-scope seam           | **97.78%³** | 97      |
 
 ¹ Core's full-scope number is a Stryker scoping artifact (planner/checker/auditor
 read 0% in the aggregate run); measured in isolation via `runloop` they score
@@ -46,7 +46,9 @@ The **bold** clusters (repos / worker / dal) are the **refactor-target backend**
 the DAL / repositories / run-executor layer slated for the RLS +
 control-plane/data-plane split and the eventual native/Rust harness. Their
 baselines were captured **before** that rearchitecture so the refactor can be
-held to "did not weaken the tests."
+held to "did not weaken the tests." They were then ratcheted to current strength
+(repos 84.62%, worker 70.95%, dal 97.78% DB-free) in #166/#167/#168 — the
+"first measurement" numbers below are the historical pre-ratchet baseline.
 
 ## Backend refactor-target baselines (first measurement)
 
