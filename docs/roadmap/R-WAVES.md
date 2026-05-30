@@ -59,12 +59,34 @@ client) and needed no change.
       ambient scoped client when a scope is open, falling back to the pool when
       none; handed a specific in-transaction client it uses it verbatim. Proof:
       `tests/rlsR2DalRunsEvents.integration.test.ts` (real PG, `just smoke-rls-r2`) + `tests/eventStore.test.ts` routing/fallback cases.
-- [ ] **Cohort-2 — tasks + cost_records.** `tasks` writes (`subtaskStages.ts`,
-      just hardened by #147/#149) + `cost_records` read/write
-      (`fetchCostsPage`, `fetchRunCostsForSnapshot`, SSE `pollNewCosts`, the
-      usage/metering recorder).
+- [x] **Cohort-2 — tasks + cost_records.** `tasks` **writes**
+      (`subtaskTasks.ts`: `insertPlannerTask` / `insertChildTask` /
+      `markTaskDone`, the INSERT path `subtaskStages.ts` drives) now route through
+      the org-scoped client when handed the pool, falling back to it when no scope
+      is open; handed a specific client they use it verbatim — so the
+      mutation-hardened `subtaskStages.test.ts` stays behavior-identical (its bare
+      query-only stub is used verbatim). `cost_records` **reads**: the costs page
+      (`fetchCostsPage`, widened to `QueryClient`, handler wrapped in
+      `runWithOrgScope`), the snapshot (`fetchRunCostsForSnapshot`, already a
+      `QueryClient` — wrapped by cohort-1), and the SSE cost deltas
+      (`pollNewCosts`, already on cohort-1's per-tick org-scoped txn).
+      `cost_records` **writes**: `CostRecorder.record` + `reconcile*`/
+      `apportionRunCost` route through the same pool-or-scope seam. Metering read:
+      the post-run accrual `getRunUsage` runs in its own short org-scoped txn; the
+      hosting-export reads (`getOrgUsage` / `streamBillableRuns`) already accept a
+      `QueryClient` (no live caller yet to wrap). The shared write-path
+      discriminator now lives in `engine/data/orgScopedDb.ts` as
+      `resolveWritableClient` (pool → ambient/fallback; specific client → verbatim;
+      `eventStore` refactored onto it). Proof:
+      `tests/rlsR2DalTasksCosts.integration.test.ts` (real PG, `just
+smoke-rls-r2-cohort2`) + `tests/rlsR2WriteRouting.test.ts` routing/fallback
+      cases. Excluded (cohort-3 / R3): the worker **failure-path finalizers**
+      (`finalizeRunRecoverable` / `finalizeRunQuotaExceeded`) — no ambient scope
+      there yet.
 - [ ] **Cohort-3 — specs / runners / forge / quota** and the remaining route +
-      engine read paths (see the R3+ list below).
+      engine read paths (see the R3+ list below). Still includes the worker
+      failure-path finalizers (establish a scope there) and the hosting-export
+      reads' eventual call site.
 
 Fallback semantics (all cohorts): with no ambient scope (startup, cross-org
 system ops, the worker's failure-path finalizers) the resolver falls back to the
@@ -98,14 +120,15 @@ changes), each with a behavior test. Grouped by surface:
 
 - [ ] `routes/specs`, `routes/projects`, `routes/personas`, `routes/behaviors`,
       `routes/milestones`
-- [ ] `routes/insights`, `routes/dora`, `routes/costs`, `routes/notifications`
+- [ ] `routes/insights`, `routes/dora`, `routes/notifications` (`routes/costs` —
+      the run-scoped costs page — converted in R2 cohort-2)
 - [ ] `routes/recovery`, `routes/inbox`, `routes/audits`, `routes/discovery`,
       `routes/onboarding`
 - [ ] `routes/forge` (+ ask/proposals), `routes/brownfield`, `routes/orgs`
 - [ ] `routes/runs` remaining surfaces — R2 cohort-1 converted the detail
       snapshot (R1), the run list, the events page, the activity feed, and the
-      SSE run/task/event reads. Still on the pool: the **costs page** +
-      **SSE cost deltas** (cohort-2, `cost_records`) and the **Forge bundle**
+      SSE run/task/event reads; cohort-2 converted the **costs page** + the
+      **SSE cost deltas** (`cost_records`). Still on the pool: the **Forge bundle**
       (cross-store, cohort-3).
 
 ### Orchestrator engine (write + read paths)
@@ -115,7 +138,11 @@ changes), each with a behavior test. Grouped by surface:
       updates** (`runExecutor.ts` `finalizeRunRecoverable` /
       `finalizeRunQuotaExceeded`) still use the pool fallback — they run with no
       ambient scope; R3 establishes one there.
-- [ ] Task/cost recording (`engine/workflow/subtask*`, usage/metering)
+- [x] Task/cost recording (`engine/workflow/subtaskTasks.ts` task INSERT/UPDATE,
+      `engine/costs/recorder.ts` cost INSERT + reconcile, post-run metering
+      `getRunUsage`) — route through the pool-or-scope seam (R2 cohort-2). The
+      hosting-export reads (`getOrgUsage` / `streamBillableRuns`) already take a
+      `QueryClient`; their live call site lands later.
 - [ ] Credential-resolution reads (`engine/credentials/**`)
 - [ ] Quota reads/accrual (`engine/quota/**`)
 - [ ] Insights compute/cache (`engine/insights/**`)

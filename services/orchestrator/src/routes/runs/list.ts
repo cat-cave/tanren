@@ -363,8 +363,11 @@ interface CostsPageArgs {
   pageSize: string | undefined;
 }
 
+// RLS R2 cohort-2 (cost_records read): widened from pg.Pool to QueryClient so the
+// costs page can run on the ambient org-scoped client (the handler wraps it in
+// `runWithOrgScope`). Same SQL/params; inert — same rows as the pool path.
 export async function fetchCostsPage(
-  pool: pg.Pool,
+  pool: QueryClient,
   args: CostsPageArgs,
 ): Promise<{ items: RunCostRecord[]; nextCursor: string | null }> {
   const limit = parsePageSize(args.pageSize);

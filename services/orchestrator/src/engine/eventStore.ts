@@ -1,17 +1,8 @@
 import type pg from "pg";
-import { resolveQueryClient } from "./data/orgScopedDb.js";
+import { resolveWritableClient } from "./data/orgScopedDb.js";
 import { assertEventName, EventRegistry, type EventName, type EventPayload } from "./events/index.js";
 
 type EventStoreClient = Pick<pg.Pool | pg.PoolClient, "query">;
-
-// A `pg.Pool` exposes `connect`; a checked-out `PoolClient` does not. The event
-// store uses this to tell "I was handed the shared pool" (route the write through
-// the ambient org-scoped client when one is open — RLS R2 cohort-1) from "I was
-// handed a specific in-transaction client" (use exactly that client; the caller
-// is already inside its own transaction, e.g. createQueuedRunFromSpec).
-function isPool(client: EventStoreClient): client is pg.Pool {
-  return typeof (client as { connect?: unknown }).connect === "function";
-}
 
 // AppendEventInput is generic over the event name so the compiler enforces
 // that the payload matches the registered Zod schema for that event. The
@@ -47,7 +38,7 @@ export class PgEventStore implements EventStore {
     // open (so the write joins the request/job org transaction); fall back to the
     // pool when there is none (inert, R1-equivalent). When handed a specific
     // in-transaction client, use it as-is — the caller owns that transaction.
-    const client = isPool(this.pool) ? resolveQueryClient(this.pool) : this.pool;
+    const client = resolveWritableClient(this.pool);
     await client.query(
       // org_id is the mandatory tenant-isolation key (tanren tenancy hardening),
       // derived in-statement from the event's project so every event row carries
