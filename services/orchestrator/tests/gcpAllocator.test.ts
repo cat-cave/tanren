@@ -29,7 +29,9 @@ class FakeGcpComputeClient implements GcpComputeClient {
   readonly inserted: GcpInsertInstanceInput[] = [];
   readonly deleted: string[] = [];
   private getCalls = 0;
-  constructor(private readonly opts: { opError?: string; neverRunning?: boolean; noIp?: boolean } = {}) {}
+  constructor(
+    private readonly opts: { opError?: string; neverRunning?: boolean; noIp?: boolean; emptyIp?: boolean } = {},
+  ) {}
 
   async insertInstance(input: GcpInsertInstanceInput): Promise<GcpOperation> {
     this.inserted.push(input);
@@ -52,7 +54,7 @@ class FakeGcpComputeClient implements GcpComputeClient {
     return {
       name: instanceName,
       status: "RUNNING",
-      externalIp: this.opts.noIp ? undefined : "203.0.113.50",
+      externalIp: this.opts.noIp ? undefined : this.opts.emptyIp ? "" : "203.0.113.50",
     };
   }
   async deleteInstance(instanceName: string): Promise<void> {
@@ -213,6 +215,31 @@ describe("GcpAllocator", () => {
     ).toThrow(/pinned hostKeyFingerprint/);
   });
 
+  // waitForRunning requires RUNNING AND a non-empty external IP. An empty-string
+  // IP must NOT satisfy the ready condition: a mutant dropping the `ip === ""`
+  // arm would return immediately with a bogus empty host. Here the empty IP
+  // keeps the wait polling to the deadline, and the instance is deleted.
+  it("treats an empty-string external IP as not-yet-ready and deletes on timeout", async () => {
+    const client = new FakeGcpComputeClient({ emptyIp: true });
+    const runners = new FakeRunnerStore();
+    const allocator = new GcpAllocator({
+      ...baseOpts(client, runners),
+      readyTimeoutMs: 5,
+      pollIntervalMs: 1,
+    });
+    await expect(allocator.allocate(req("run_empty"))).rejects.toThrow(/did not become RUNNING/);
+    expect(client.deleted).toContain("tanren-run-empty");
+    expect(runners.claims).toEqual([]);
+  });
+
+  // The error subclass sets a distinct `.name`; pin it so a blanked-name mutant
+  // (which survives a bare instanceof check) is caught.
+  it("GcpAllocatorError carries the GcpAllocatorError name", () => {
+    const error = new GcpAllocatorError("boom");
+    expect(error.name).toBe("GcpAllocatorError");
+    expect(error).toBeInstanceOf(Error);
+  });
+
   it("fetchGcpComputeClient maps the instance response and sends the bearer token", async () => {
     let captured: { url: string; method?: string; auth?: string } = { url: "" };
     const fetchImpl = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
@@ -321,5 +348,99 @@ describe("GcpAllocator", () => {
     const fetchImpl = (async (): Promise<Response> => new Response("boom", { status: 500 })) as typeof fetch;
     const client = fetchGcpComputeClient({ accessToken: "t", project: "p", zone: "z" }, fetchImpl);
     await expect(client.deleteInstance("tanren-x")).rejects.toBeInstanceOf(GcpAllocatorError);
+  });
+
+  // operationErrorOf joins every error message with "; " and falls back to
+  // "unknown error" for an error entry that has no message. Pin both so the
+  // join separator and the per-entry default are behavior-asserted.
+  it("fetchGcpComputeClient joins multiple operation errors and defaults a missing message", async () => {
+    const fetchImpl = (async (): Promise<Response> =>
+      new Response(
+        JSON.stringify({
+          name: "op-multi",
+          status: "DONE",
+          error: { errors: [{ message: "QUOTA_EXCEEDED" }, {}] },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      )) as typeof fetch;
+    const client = fetchGcpComputeClient({ accessToken: "t", project: "p", zone: "z" }, fetchImpl);
+    const op = await client.getZoneOperation("op-multi");
+    expect(op.error).toBe("QUOTA_EXCEEDED; unknown error");
+  });
+
+  // An operation with an empty `errors` array has no error at all (the length
+  // guard returns undefined). A mutant flipping that guard would surface a
+  // spurious error string.
+  it("fetchGcpComputeClient reports no error for an empty errors array", async () => {
+    const fetchImpl = (async (): Promise<Response> =>
+      new Response(JSON.stringify({ name: "op-ok", status: "DONE", error: { errors: [] } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })) as typeof fetch;
+    const client = fetchGcpComputeClient({ accessToken: "t", project: "p", zone: "z" }, fetchImpl);
+    const op = await client.getZoneOperation("op-ok");
+    expect(op.error).toBeUndefined();
+  });
+
+  // externalIpOf scans interfaces in order and skips access-configs whose natIP
+  // is empty/absent, returning the first non-empty one. Pin: an empty natIP on
+  // the first interface is skipped and the second interface's IP wins.
+  it("fetchGcpComputeClient skips an empty natIP and finds the IP on a later interface", async () => {
+    const fetchImpl = (async (): Promise<Response> =>
+      new Response(
+        JSON.stringify({
+          name: "tanren-x",
+          status: "RUNNING",
+          networkInterfaces: [
+            { accessConfigs: [{ type: "ONE_TO_ONE_NAT", natIP: "" }] },
+            { accessConfigs: [{ type: "ONE_TO_ONE_NAT", natIP: "198.51.100.77" }] },
+          ],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      )) as typeof fetch;
+    const client = fetchGcpComputeClient({ accessToken: "t", project: "p", zone: "z" }, fetchImpl);
+    const instance = await client.getInstance("tanren-x");
+    expect(instance.externalIp).toBe("198.51.100.77");
+  });
+
+  it("fetchGcpComputeClient yields no external IP when the instance has no network interfaces", async () => {
+    const fetchImpl = (async (): Promise<Response> =>
+      new Response(JSON.stringify({ name: "tanren-x", status: "PROVISIONING" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })) as typeof fetch;
+    const client = fetchGcpComputeClient({ accessToken: "t", project: "p", zone: "z" }, fetchImpl);
+    const instance = await client.getInstance("tanren-x");
+    expect(instance.externalIp).toBeUndefined();
+  });
+
+  // getZoneOperation and deleteInstance must hit the zone-scoped operations /
+  // instances paths with the right HTTP verb. Pin the URL + method so the path
+  // template and the GET/DELETE literals are behavior-asserted.
+  it("fetchGcpComputeClient GETs the zone operation at the operations path", async () => {
+    let captured: { url: string; method?: string } = { url: "" };
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      captured = { url: typeof input === "string" ? input : input.toString(), method: init?.method };
+      return new Response(JSON.stringify({ name: "op-1", status: "DONE" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
+    const client = fetchGcpComputeClient({ accessToken: "t", project: "p", zone: "europe-west1-b" }, fetchImpl);
+    await client.getZoneOperation("op-1");
+    expect(captured.url).toMatch(/\/projects\/p\/zones\/europe-west1-b\/operations\/op-1$/);
+    expect(captured.method).toBe("GET");
+  });
+
+  it("fetchGcpComputeClient DELETEs the instance at the instances path", async () => {
+    let captured: { url: string; method?: string } = { url: "" };
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      captured = { url: typeof input === "string" ? input : input.toString(), method: init?.method };
+      return new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } });
+    }) as typeof fetch;
+    const client = fetchGcpComputeClient({ accessToken: "t", project: "proj-d", zone: "us-central1-a" }, fetchImpl);
+    await client.deleteInstance("tanren-run-x");
+    expect(captured.url).toMatch(/\/projects\/proj-d\/zones\/us-central1-a\/instances\/tanren-run-x$/);
+    expect(captured.method).toBe("DELETE");
   });
 });

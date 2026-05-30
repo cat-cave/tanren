@@ -198,6 +198,29 @@ describe("StaticRunnerAllocator", () => {
     ).rejects.toThrow(/host key discovery failed/);
   });
 
+  it("rejects when the captured host key cannot be parsed into a fingerprint", async () => {
+    const runners = new FakeRunnerStore();
+    const allocator = new StaticRunnerAllocator({
+      host: "runner",
+      port: 22,
+      runners,
+      // ssh2 hands back a value the fingerprint normalizer cannot decode (not
+      // 64-hex, not a valid SHA256:<base64>); discovery must reject with the
+      // "unparseable fingerprint" error rather than claim a runner.
+      clientFactory: fakeClientFactory({ fingerprint: "not-a-real-fingerprint" }),
+    });
+
+    await expect(
+      allocator.allocate({
+        runId: "run_bad_fp",
+        projectId: "p",
+        runnerImage: "img",
+        identitySecretRef: "runner/dev/identity",
+      }),
+    ).rejects.toThrow(/unparseable fingerprint/);
+    expect(runners.claims).toEqual([]);
+  });
+
   it("releases by clearing the orchestrator mirror row only", async () => {
     const runners = new FakeRunnerStore();
     const allocator = new StaticRunnerAllocator({

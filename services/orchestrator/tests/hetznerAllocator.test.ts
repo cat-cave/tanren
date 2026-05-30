@@ -24,7 +24,7 @@ class FakeHetznerClient implements HetznerClient {
   readonly created: HetznerCreateServerInput[] = [];
   readonly deleted: number[] = [];
   private getCalls = 0;
-  constructor(private readonly opts: { neverRuns?: boolean; noIp?: boolean } = {}) {}
+  constructor(private readonly opts: { neverRuns?: boolean; noIp?: boolean; emptyIp?: boolean } = {}) {}
 
   async createServer(input: HetznerCreateServerInput): Promise<HetznerServer> {
     this.created.push(input);
@@ -42,7 +42,7 @@ class FakeHetznerClient implements HetznerClient {
     return {
       id: serverId,
       status: "running",
-      publicIpv4: this.opts.noIp ? undefined : "203.0.113.10",
+      publicIpv4: this.opts.noIp ? undefined : this.opts.emptyIp ? "" : "203.0.113.10",
     };
   }
   async deleteServer(serverId: number): Promise<void> {
@@ -153,6 +153,81 @@ describe("HetznerAllocator", () => {
     await expect(allocator.allocate(req("run_no_ip"))).rejects.toThrow(/did not become running/);
     expect(client.deleted).toEqual([42]);
     expect(runners.claims).toEqual([]);
+  });
+
+  // waitForRunning requires the server to be "running" AND hold a non-empty
+  // IPv4. An empty-string IPv4 must NOT satisfy the ready condition, so the
+  // wait keeps polling until the deadline and the server is destroyed.
+  it("treats an empty-string IPv4 as not-yet-ready and destroys on timeout", async () => {
+    const client = new FakeHetznerClient({ emptyIp: true });
+    const runners = new FakeRunnerStore();
+    const allocator = new HetznerAllocator({
+      ...baseOpts(client, runners),
+      readyTimeoutMs: 5,
+      pollIntervalMs: 1,
+    });
+    await expect(allocator.allocate(req("run_empty"))).rejects.toThrow(/did not become running/);
+    expect(client.deleted).toEqual([42]);
+    expect(runners.claims).toEqual([]);
+  });
+
+  // The create body carries the Hetzner server spec plus the always-on
+  // start_after_create flag and the snake_cased field names. Pin the POSTed
+  // body so the JSON.stringify field mapping is behavior-asserted.
+  it("fetchHetznerClient POSTs the server spec with start_after_create and snake_case fields", async () => {
+    let body: Record<string, unknown> = {};
+    const fetchImpl = (async (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return new Response(JSON.stringify({ server: { id: 7, status: "initializing", public_net: null } }), {
+        status: 201,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
+    const client = fetchHetznerClient("tok", fetchImpl);
+    await client.createServer({
+      name: "tanren-run-1",
+      serverType: "cx32",
+      image: "docker-ce",
+      location: "fsn1",
+    });
+    expect(body.name).toBe("tanren-run-1");
+    expect(body.server_type).toBe("cx32");
+    expect(body.image).toBe("docker-ce");
+    expect(body.location).toBe("fsn1");
+    expect(body.start_after_create).toBe(true);
+  });
+
+  // toServer maps a present ipv4.ip into publicIpv4 (not just null -> undefined).
+  it("fetchHetznerClient maps a present public_net ipv4 into publicIpv4", async () => {
+    const fetchImpl = (async (): Promise<Response> =>
+      new Response(
+        JSON.stringify({ server: { id: 9, status: "running", public_net: { ipv4: { ip: "203.0.113.99" } } } }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      )) as typeof fetch;
+    const client = fetchHetznerClient("tok", fetchImpl);
+    const server = await client.getServer(9);
+    expect(server).toEqual({ id: 9, status: "running", publicIpv4: "203.0.113.99" });
+  });
+
+  it("fetchHetznerClient GETs the server and DELETEs it (404 delete is idempotent)", async () => {
+    const calls: Array<{ url: string; method?: string }> = [];
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      calls.push({ url: typeof input === "string" ? input : input.toString(), method: init?.method });
+      if (init?.method === "DELETE") {
+        return new Response("gone", { status: 404 });
+      }
+      return new Response(JSON.stringify({ server: { id: 3, status: "running", public_net: null } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
+    const client = fetchHetznerClient("tok", fetchImpl);
+    await client.getServer(3);
+    await expect(client.deleteServer(3)).resolves.toBeUndefined();
+    expect(calls[0]).toMatchObject({ method: "GET" });
+    expect(calls[0]?.url).toMatch(/\/servers\/3$/);
+    expect(calls[1]).toMatchObject({ method: "DELETE" });
+    expect(calls[1]?.url).toMatch(/\/servers\/3$/);
   });
 
   it("toServer treats a null public_net as no IP (via fetchHetznerClient)", async () => {
