@@ -1,9 +1,10 @@
 // P3-0010: thick-Forge chat island — action-card routing logic.
 //
 // `routeForAction` is the seam that decides whether a ForgeAnswer action
-// renders as an AUTO-NAVIGATE card (read tools → in-shell route) or an INERT
-// card (write tools → deferred). This is the deferred-write boundary on the
-// client, so it is unit-tested directly (no DOM required).
+// renders as an AUTO-NAVIGATE card (read tools → in-shell route). Write tools
+// return undefined: they are NOT navigation actions — proposed writes render as
+// live approve/reject proposal cards instead (P3-0010 write-action approval,
+// covered by forgeProposalClient.test.ts). Unit-tested directly (no DOM).
 
 import { describe, expect, it } from "vitest";
 import { routeForAction } from "../src/client/paletteChat.js";
@@ -45,7 +46,7 @@ describe("routeForAction (Forge chat action cards)", () => {
     ).toBe("/overview");
   });
 
-  it("returns undefined for WRITE tools (deferred → inert card)", () => {
+  it("returns undefined for WRITE tools (rendered as proposal cards, not nav)", () => {
     expect(
       routeForAction({
         label: "Create spec",

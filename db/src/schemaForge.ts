@@ -61,3 +61,54 @@ export const forgeTurns = pgTable(
     index("forge_turns_thread_id").on(table.threadId),
   ],
 );
+
+// P3-0010 (write-action approval): a write the Forge answerer PROPOSED on a
+// final turn, awaiting a human decision. The model never executes a write;
+// the engine persists each proposed action here as `pending`. An operator
+// approves/rejects via the approve/reject routes, which re-validate + authz
+// the APPROVING operator against the underlying write, execute it, and update
+// the row's status. Status transitions are in-place updates (append-friendly:
+// a row is only ever advanced through pending → approved/rejected →
+// executed/failed, never rewritten). org_id is mandatory + indexed (the
+// migration-0026 tenancy pattern).
+export const forgeActionProposals = pgTable(
+  "forge_action_proposals",
+  {
+    id: text("id").primaryKey(),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organizations.id),
+    threadId: text("thread_id")
+      .notNull()
+      .references(() => forgeThreads.id),
+    // The forge turn whose final answer carried this proposal.
+    proposingTurnId: text("proposing_turn_id")
+      .notNull()
+      .references(() => forgeTurns.id),
+    toolName: text("tool_name").notNull(),
+    // The validated ForgeWriteToolCall args (jsonb) the write executes with.
+    args: jsonb("args").notNull(),
+    rationale: text("rationale").notNull(),
+    status: text("status").notNull().default("pending"),
+    proposedAt: timestamp("proposed_at", { withTimezone: true }).notNull().defaultNow(),
+    // Set when an operator approves/rejects. decided_by is the operator userId.
+    decidedBy: text("decided_by"),
+    decidedAt: timestamp("decided_at", { withTimezone: true }),
+    // The write's return value on success, or the error message on failure.
+    result: jsonb("result"),
+    error: text("error"),
+  },
+  (table) => [
+    check(
+      "forge_action_proposals_tool_check",
+      sql`${table.toolName} IN ('tanren.create_spec','tanren.trigger_run','tanren.rerun_task','tanren.acknowledge_insight')`,
+    ),
+    check(
+      "forge_action_proposals_status_check",
+      sql`${table.status} IN ('pending','approved','rejected','executed','failed')`,
+    ),
+    index("forge_action_proposals_org_id").on(table.orgId),
+    index("forge_action_proposals_thread_id").on(table.threadId),
+    index("forge_action_proposals_status").on(table.status),
+  ],
+);

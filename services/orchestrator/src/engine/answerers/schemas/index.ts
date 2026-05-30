@@ -14,6 +14,8 @@ export { DemoAnswer, DemoLink, DEMO_ANSWER_SCHEMA_ID } from "./demo.js";
 export {
   ForgeAnswer,
   ForgeToolCall,
+  ForgeWriteToolCall,
+  ForgeProposedAction,
   ForgeSuggestedAction,
   ForgeAttentionItem,
   ForgeInsight,

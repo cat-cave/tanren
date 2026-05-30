@@ -15,6 +15,28 @@
 import { OrchestratorRecoveryClient } from "./recoveryClient.js";
 import type { ForgeAnswer } from "./types.js";
 
+/**
+ * P3-0010 (write-action approval): a write the Forge answerer proposed, awaiting
+ * a human decision. The dashboard renders pending proposals as live
+ * approve/reject cards; executed/rejected/failed are terminal states.
+ */
+export type ForgeProposalStatus = "pending" | "approved" | "rejected" | "executed" | "failed";
+export interface ForgeActionProposal {
+  id: string;
+  orgId: string;
+  threadId: string;
+  proposingTurnId: string;
+  toolName: string;
+  args: Record<string, unknown>;
+  rationale: string;
+  status: ForgeProposalStatus;
+  proposedAt: string;
+  decidedBy: string | null;
+  decidedAt: string | null;
+  result: unknown;
+  error: string | null;
+}
+
 export interface ForgeAskScope {
   /** project-scoped thread when set; otherwise an org-wide thread. */
   projectId?: string;
@@ -25,6 +47,18 @@ export interface ForgeAskResponse {
   threadId: string;
   answer: ForgeAnswer;
   toolsUsed: string[];
+  /** P3-0010: pending write proposals the answerer raised this turn. */
+  proposals: ForgeActionProposal[];
+}
+
+/** The outcome of an approve/reject decision (P3-0010 write-action approval). */
+export interface ForgeProposalDecisionResponse {
+  /** The proposal in its post-decision state, when the orchestrator returned it. */
+  proposal?: ForgeActionProposal;
+  // `already_decided` is the idempotent 409 (carries currentStatus); `denied`
+  // is an authz refusal; both keep a double-approve from re-executing.
+  outcome: "decided" | "already_decided" | "denied" | "not_found" | "failed";
+  currentStatus?: string;
 }
 
 interface TurnPayload {
@@ -47,16 +81,54 @@ export abstract class OrchestratorForgeConversationClient extends OrchestratorRe
     if (resolvedThreadId === undefined) {
       return undefined;
     }
-    const result = await this.sendJson<{ forgeTurn?: TurnPayload; toolsUsed?: string[] }>(
-      "POST",
-      `/orgs/${encodeURIComponent(orgId)}/forge/threads/${encodeURIComponent(resolvedThreadId)}/ask`,
-      { question },
-    );
+    const result = await this.sendJson<{
+      forgeTurn?: TurnPayload;
+      toolsUsed?: string[];
+      proposals?: ForgeActionProposal[];
+    }>("POST", `/orgs/${encodeURIComponent(orgId)}/forge/threads/${encodeURIComponent(resolvedThreadId)}/ask`, {
+      question,
+    });
     const render = result.body?.forgeTurn?.render;
     if (!result.ok || render === undefined) {
       return undefined;
     }
-    return { threadId: resolvedThreadId, answer: render, toolsUsed: result.body?.toolsUsed ?? [] };
+    return {
+      threadId: resolvedThreadId,
+      answer: render,
+      toolsUsed: result.body?.toolsUsed ?? [],
+      proposals: result.body?.proposals ?? [],
+    };
+  }
+
+  /**
+   * Approve or reject a proposed write action (P3-0010 write-action approval).
+   * On approve the orchestrator re-validates + authz's the APPROVING operator
+   * and executes the write; the response carries the post-decision proposal.
+   * An already-decided proposal returns `already_decided` (the idempotent 409)
+   * so the caller never double-applies; an authz refusal returns `denied`.
+   */
+  async decideForgeProposal(
+    orgId: string,
+    proposalId: string,
+    decision: "approve" | "reject",
+  ): Promise<ForgeProposalDecisionResponse> {
+    const result = await this.sendJson<{ proposal?: ForgeActionProposal; status?: string }>(
+      "POST",
+      `/orgs/${encodeURIComponent(orgId)}/forge/proposals/${encodeURIComponent(proposalId)}/${decision}`,
+    );
+    if (result.ok) {
+      return { proposal: result.body?.proposal, outcome: "decided" };
+    }
+    if (result.status === 409) {
+      return { outcome: "already_decided", currentStatus: result.body?.status };
+    }
+    if (result.status === 403) {
+      return { outcome: "denied" };
+    }
+    if (result.status === 404) {
+      return { outcome: "not_found" };
+    }
+    return { outcome: "failed" };
   }
 
   /** Create a Forge thread for the requested scope. `undefined` on failure. */

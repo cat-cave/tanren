@@ -18,11 +18,11 @@ const OUTPUT_TAIL_LIMIT = 4_000;
 // but fall back to npm when there is no pnpm lockfile, so a plain-npm repo
 // still bootstraps. The detection runs runner-side as part of the command.
 //
-// TODO: wire the install command from the repo's tanren-ci.yml `bootstrap.run`
-// step (P3-0004 landed the schema + `bootstrapCommand(config)` resolver) rather
-// than this heuristic default. The run path does not yet feed the resolved
-// command into the bootstrap step, so for now the command is a parameter with
-// this sensible default.
+// This is the fallback used only when the repo declares no install command: the
+// run path resolves the repo's tanren-ci.yml `bootstrap.run` (P3-0004's
+// bootstrapCommand resolver, via resolveBootstrapCommand) and passes it as
+// `command`; when the repo ships no tanren-ci.yml the resolver yields undefined
+// and this heuristic default applies.
 export const DEFAULT_BOOTSTRAP_COMMAND =
   "if [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile; elif [ -f package-lock.json ]; then npm ci; else pnpm install; fi";
 

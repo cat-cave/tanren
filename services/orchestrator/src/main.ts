@@ -58,6 +58,7 @@ import { createDiscoveryRoutes } from "./routes/discovery/index.js";
 import { createDoctorRoutes } from "./routes/doctor/index.js";
 import { createDoraRoutes } from "./routes/dora/index.js";
 import { createForgeAskRoutes } from "./routes/forge/ask.js";
+import { createForgeProposalRoutes } from "./routes/forge/proposals.js";
 import { createInboxRoutes } from "./routes/inbox/index.js";
 import { createAuditRoutes } from "./routes/audits/index.js";
 import { createForgeRoutes } from "./routes/forge/index.js";
@@ -178,6 +179,8 @@ export function buildApp(input: {
   app.route("/orgs", createForgeRoutes({ pool: input.pool, secrets, githubHttp }));
   // P3-0010: thick-Forge LLM conversation endpoint (⌘K chat morph); answerer injectable.
   app.route("/orgs", createForgeAskRoutes({ pool: input.pool, secrets, githubHttp }));
+  // P3-0010 (write-action approval): approve/reject proposed write actions.
+  app.route("/orgs", createForgeProposalRoutes({ pool: input.pool }));
   // P3-0028 webhook-driven CI (option). Mounted at root so GitHub posts to
   // `/github/webhooks/ci`. Polling remains the default fallback.
   app.route("/", createGithubWebhookRoutes({ pool: input.pool, secrets, githubHttp, githubAppMinter }));

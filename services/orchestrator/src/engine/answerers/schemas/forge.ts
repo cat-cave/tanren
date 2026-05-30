@@ -137,6 +137,56 @@ export const ForgeSuggestedAction = z
   })
   .strict();
 
+// P3-0010 follow-up (write-action approval): the four write tools the answerer
+// may PROPOSE on a final answer. The model never executes these — the engine
+// persists each as a pending proposal that a human approves before the write
+// runs under the approving operator's authz. Mirrors the write family already
+// in `engine/forge/tools/write.ts`.
+export const ForgeWriteToolCall = z.discriminatedUnion("tool", [
+  z
+    .object({
+      tool: z.literal("tanren.create_spec"),
+      args: z
+        .object({
+          projectId: z.string().min(1),
+          title: z.string().min(1),
+          description: z.string().min(1),
+          behaviorIds: z.array(z.string().min(1)).optional(),
+          milestoneId: z.string().min(1).optional(),
+        })
+        .strict(),
+    })
+    .strict(),
+  z
+    .object({
+      tool: z.literal("tanren.trigger_run"),
+      args: z.object({ specId: z.string().min(1) }).strict(),
+    })
+    .strict(),
+  z
+    .object({
+      tool: z.literal("tanren.rerun_task"),
+      args: z.object({ taskId: z.string().min(1) }).strict(),
+    })
+    .strict(),
+  z
+    .object({
+      tool: z.literal("tanren.acknowledge_insight"),
+      args: z.object({ insightId: z.string().min(1) }).strict(),
+    })
+    .strict(),
+]);
+
+// A proposed write the answerer wants a human to approve. Carried on the final
+// ForgeAnswer; the engine persists it pending and never executes it directly.
+export const ForgeProposedAction = z
+  .object({
+    toolCall: ForgeWriteToolCall,
+    // A short, human-readable justification the reviewer sees before approving.
+    rationale: z.string().min(1).max(1000),
+  })
+  .strict();
+
 export const ForgeAttentionPriority = z.enum(["review", "decide", "budget", "blocked", "info"]);
 
 export const ForgeAttentionItem = z
@@ -165,11 +215,19 @@ export const ForgeAnswer = z
     attentionItems: z.array(ForgeAttentionItem).default([]),
     insights: z.array(ForgeInsight).default([]),
     prompts: z.array(z.string().min(1)).default([]),
+    // Write actions the answerer PROPOSES this turn. The conversation engine
+    // persists each as a pending `forge_action_proposals` row and never
+    // executes it — a human approves it through the approve endpoint, which
+    // runs the write under the approving operator's authz. Optional so the
+    // common (read-only) answer omits it; absent === no proposals.
+    proposedActions: z.array(ForgeProposedAction).optional(),
   })
   .strict();
 
 export type ForgeAnswer = z.infer<typeof ForgeAnswer>;
 export type ForgeToolCall = z.infer<typeof ForgeToolCall>;
+export type ForgeWriteToolCall = z.infer<typeof ForgeWriteToolCall>;
+export type ForgeProposedAction = z.infer<typeof ForgeProposedAction>;
 export type ForgeSuggestedAction = z.infer<typeof ForgeSuggestedAction>;
 export type ForgeAttentionItem = z.infer<typeof ForgeAttentionItem>;
 export type ForgeInsight = z.infer<typeof ForgeInsight>;

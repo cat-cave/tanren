@@ -978,6 +978,157 @@
         "type": "string"
       },
       "type": "array"
+    },
+    "proposedActions": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "rationale": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "toolCall": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "behaviorIds": {
+                        "items": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "type": "array"
+                      },
+                      "description": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "milestoneId": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "projectId": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "title": {
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "projectId",
+                      "title",
+                      "description"
+                    ],
+                    "type": "object"
+                  },
+                  "tool": {
+                    "const": "tanren.create_spec",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "tool",
+                  "args"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "specId": {
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "specId"
+                    ],
+                    "type": "object"
+                  },
+                  "tool": {
+                    "const": "tanren.trigger_run",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "tool",
+                  "args"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "taskId": {
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "taskId"
+                    ],
+                    "type": "object"
+                  },
+                  "tool": {
+                    "const": "tanren.rerun_task",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "tool",
+                  "args"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "insightId": {
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "insightId"
+                    ],
+                    "type": "object"
+                  },
+                  "tool": {
+                    "const": "tanren.acknowledge_insight",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "tool",
+                  "args"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "toolCall",
+          "rationale"
+        ],
+        "type": "object"
+      },
+      "type": "array"
     }
   },
   "required": [
