@@ -8,9 +8,9 @@ import {
 
 /**
  * A registry mapping every allocator kind to a concrete {@link Allocator}.
- * Scaffolded kinds map to stub allocators that throw on use; this keeps the
- * router total over the {@link AllocatorKind} enum so routing can never pick a
- * kind with no backing implementation.
+ * Kinds the operator never routes to map to UnconfiguredAllocator stubs that
+ * throw on use; this keeps the router total over the {@link AllocatorKind} enum
+ * so routing can never pick a kind with no backing entry.
  */
 export type AllocatorRegistry = Record<AllocatorKind, Allocator>;
 

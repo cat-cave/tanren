@@ -1,16 +1,17 @@
 // P3-0002: credential→project→run resolution.
 //
 // A run needs a Codex credential ref (to build the four Codex roles) and a
-// GitHub credential ref (to publish the draft PR + poll CI). Today the
-// acceptance scripts pass both explicitly. This resolver lets a
-// dashboard-created project resolve them from project config or org defaults,
-// so a run can be triggered without the caller threading the refs by hand.
+// GitHub credential ref (to publish the draft PR + poll CI). A caller may pass
+// both explicitly, but this resolver lets a dashboard-created project resolve
+// them from project config or org defaults, so a run can be triggered without
+// the caller threading the refs by hand.
 //
 // Priority, per kind: explicit override → project config → org default →
 // `MissingCredentialError`. The resolver is PURE w.r.t. the orchestrator
 // workflow — it only reads `organizations.config` for the org defaults; it does
-// NOT mutate state and does NOT itself touch the workflow. The future run
-// executor calls this and threads the result into `PlannerRunContext`.
+// NOT mutate state and does NOT itself touch the workflow. The run executor's
+// context loader (runExecutionContext) calls this and threads the result into
+// `PlannerRunContext`.
 
 import type pg from "pg";
 import {
@@ -48,7 +49,7 @@ export interface ResolvedRunCredentials {
   endpointOverride?: HarnessEndpointOverride;
 }
 
-/** Per-kind explicit overrides (e.g. acceptance scripts / re-run with a pin). */
+/** Per-kind explicit overrides (e.g. a re-run with a pinned credential ref). */
 export interface RunCredentialOverride {
   codexCredentialRef?: string;
   githubCredentialRef?: string;

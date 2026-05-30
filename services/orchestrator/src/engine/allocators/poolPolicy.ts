@@ -2,10 +2,10 @@ import { z } from "zod";
 
 /**
  * Allocator kinds the selector understands. `static` / `sidecar` are the
- * existing dev/prod allocators; `manual_ssh` / `hetzner` are P3-0027
- * implementations; the rest are scaffolded stubs that throw until a follow-up
- * lands. Stored in project config (JSONB) and/or supplied via env — no schema
- * migration is required because we reuse the existing `projects.config` column.
+ * existing dev/prod allocators; `manual_ssh` / `hetzner` / `digitalocean` /
+ * `gcp` / `aws_ec2` / `kubernetes` are all real cloud implementations. Stored in
+ * project config (JSONB) and/or supplied via env — no schema migration is
+ * required because we reuse the existing `projects.config` column.
  */
 export const AllocatorKind = z.enum([
   "static",

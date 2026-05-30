@@ -73,7 +73,7 @@ export function resolveCiConfig(yamlText: string | undefined): CiConfigV1 {
 }
 
 // ---- Consumer surface ------------------------------------------------------
-// Small helpers the future in-loop gate and CI poller call. They operate on a
+// Small helpers the in-loop gate and CI poller call. They operate on a
 // resolved config so callers never re-derive policy from raw shapes.
 
 // All tier names whose `when` policy includes the given lifecycle point, in a
