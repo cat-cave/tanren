@@ -20,6 +20,7 @@
 
 import type pg from "pg";
 import { z } from "zod";
+import { resolveWritableClient } from "../data/orgScopedDb.js";
 import type { AdmissionDecision, AdmissionRequest, QuotaPolicy, RunUsage } from "./contracts.js";
 
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
@@ -59,7 +60,13 @@ export class DbQuotaPolicy implements QuotaPolicy {
   async accrueUsage(orgId: string, usage: RunUsage): Promise<void> {
     // Advance consumed counters for the active window. A missing row is a no-op
     // (UPDATE matches nothing) — an org with no quota accrues nowhere.
-    await this.pool.query(
+    //
+    // RLS R2 cohort-3 (org_quotas write): route the UPDATE through the seam so
+    // that, when the policy was constructed with the pool AND an ambient org
+    // scope is open (the worker's accrual runs inside one), the write executes
+    // under `SET LOCAL app.current_org_id`. A policy handed a specific client
+    // uses it verbatim; with no scope it falls back to the pool (inert in R1).
+    await resolveWritableClient(this.pool).query(
       `UPDATE org_quotas
          SET runs_used = runs_used + $3,
              tokens_used = tokens_used + $4,
@@ -71,7 +78,9 @@ export class DbQuotaPolicy implements QuotaPolicy {
   }
 
   private async loadRow(orgId: string): Promise<QuotaRow | undefined> {
-    const result = await this.pool.query(
+    // RLS R2 cohort-3 (org_quotas read): same pool-or-scope seam as accrual so
+    // the admission-gate SELECT carries org context when a scope is open.
+    const result = await resolveWritableClient(this.pool).query(
       `SELECT window_key, run_limit, token_limit, credit_limit, runs_used, tokens_used, credits_used
        FROM org_quotas
        WHERE org_id = $1 AND window_key = $2`,

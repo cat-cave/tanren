@@ -6,6 +6,9 @@ import type { ActorContext } from "../../auth/schemas.js";
 import { type ProjectConfigV1, migrateProjectConfig } from "../config/index.js";
 import { PgEventStore } from "../eventStore.js";
 
+/** The pool or a checked-out client — anything that can run a query. */
+type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
+
 const defaultBranch = "main";
 const defaultRunnerImage = "ghcr.io/cat-cave/tanren-runner:v0";
 const defaultAllocator = "local-docker";
@@ -151,9 +154,25 @@ export async function createProject(
 }
 
 export async function createSpec(pool: pg.Pool, input: CreateSpecInput, actor?: ActorContext): Promise<SpecContract> {
-  await ensureProjectExists(pool, input.projectId);
-  await ensureProjectAccess(pool, input.projectId, actor);
-  await ensureSpecDependenciesExist(pool, input.projectId, input.dependsOn ?? []);
+  // RLS R2 cohort-3 (specs write): when the actor carries an org, the spec
+  // pre-checks + INSERT run through the org-scoped client (`SET LOCAL
+  // app.current_org_id`), mirroring `createQueuedRunFromSpec`. Inert in R1; a
+  // legacy/unscoped actor (no org) keeps the original pool path.
+  const orgId = actor?.orgId ?? null;
+  if (orgId !== null) {
+    return runWithOrgScope(pool, orgId, (client) => createSpecOnClient(client, input, actor));
+  }
+  return createSpecOnClient(pool, input, actor);
+}
+
+async function createSpecOnClient(
+  client: QueryClient,
+  input: CreateSpecInput,
+  actor?: ActorContext,
+): Promise<SpecContract> {
+  await ensureProjectExists(client, input.projectId);
+  await ensureProjectAccess(client, input.projectId, actor);
+  await ensureSpecDependenciesExist(client, input.projectId, input.dependsOn ?? []);
   const spec: SpecContract = {
     specId: `spec_${randomUUID()}`,
     projectId: input.projectId,
@@ -164,9 +183,8 @@ export async function createSpec(pool: pg.Pool, input: CreateSpecInput, actor?: 
     status: "pending",
   };
 
-  await pool.query(
-    // org_id is mandatory; derive it in-statement from the parent project so
-    // every spec carries its tenant directly (tanren tenancy hardening).
+  await client.query(
+    // org_id derived in-statement from the parent project (tanren tenancy).
     `INSERT INTO specs (spec_id, project_id, org_id, title, description, acceptance_criteria, depends_on, status)
      VALUES ($1, $2, (SELECT org_id FROM projects WHERE project_id = $2), $3, $4, $5::jsonb, $6::text[], $7)`,
     [
@@ -211,7 +229,7 @@ export async function createQueuedRunFromSpec(
   }
 }
 
-async function ensureProjectAccess(pool: pg.Pool, projectId: string, actor?: ActorContext): Promise<void> {
+async function ensureProjectAccess(pool: QueryClient, projectId: string, actor?: ActorContext): Promise<void> {
   if (actor === undefined || actor.scopes.includes("platform:admin")) {
     return;
   }
@@ -246,14 +264,14 @@ function defaultRunBranch(spec: SpecContract): string {
   return `tanren/${slug || "spec"}-${spec.specId.replace(/^spec_/, "").slice(0, 8)}`;
 }
 
-async function ensureProjectExists(pool: pg.Pool, projectId: string): Promise<void> {
+async function ensureProjectExists(pool: QueryClient, projectId: string): Promise<void> {
   const result = await pool.query("SELECT project_id FROM projects WHERE project_id = $1", [projectId]);
   if (result.rowCount === 0) {
     throw new ProjectNotFoundError(projectId);
   }
 }
 
-async function ensureSpecDependenciesExist(pool: pg.Pool, projectId: string, dependsOn: string[]): Promise<void> {
+async function ensureSpecDependenciesExist(pool: QueryClient, projectId: string, dependsOn: string[]): Promise<void> {
   const uniqueDependsOn = [...new Set(dependsOn)];
   if (uniqueDependsOn.length === 0) {
     return;
@@ -372,7 +390,7 @@ async function ensureSpecDependenciesDone(client: pg.PoolClient, spec: SpecContr
 }
 
 async function loadSpecWithProject(
-  pool: Pick<pg.Pool | pg.PoolClient, "query">,
+  pool: QueryClient,
   specId: string,
 ): Promise<{ project: ProjectContract; spec: SpecContract }> {
   const result = await pool.query(
