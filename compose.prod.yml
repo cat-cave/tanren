@@ -120,6 +120,47 @@ services:
       allocator:
         condition: service_started
 
+  worker:
+    # Plane-split P1: the run-executor worker as a STANDALONE deployable (the
+    # DATA PLANE). Same image as the orchestrator, booting ONLY the worker loop
+    # (`worker-main.ts`) — no HTTP server, publishes no host port. The
+    # orchestrator API no longer runs the worker in-process; this container
+    # claims jobs from `job_queue` (unchanged DB-CAS) and drives the
+    # plan→write→check→audit loop via the sidecar allocator's ephemeral runners.
+    # P1 is a process-boundary change only — NO trust change yet (it holds the
+    # same DB/Vault access the in-process worker did). P2 adds mTLS + routes the
+    # claim/writes through a control-plane API; P3 de-privileges to per-run
+    # scoped credentials. See docs/roadmap/saas-rls-and-plane-split-plan.md.
+    build:
+      context: .
+      dockerfile: services/orchestrator/Dockerfile
+    command: ["pnpm", "--filter", "@tanren/orchestrator", "start:worker"]
+    environment:
+      # Same runtime/system roles as the orchestrator (RLS R3b): the runtime pool
+      # is the restricted `tanren_app` role; `runWithSystemScope`/the reaper use
+      # the BYPASSRLS `tanren_system` role. The worker does NOT migrate (the
+      # orchestrator owns the migrate step — `depends_on` it below), so it carries
+      # no MIGRATION_DATABASE_URL.
+      DATABASE_URL: postgres://tanren_app:${TANREN_APP_DB_PASSWORD:?TANREN_APP_DB_PASSWORD must be set for the prod profile}@postgres:5432/tanren
+      TANREN_SYSTEM_DATABASE_URL: postgres://tanren_system:${TANREN_SYSTEM_DB_PASSWORD:?TANREN_SYSTEM_DB_PASSWORD must be set for the prod profile}@postgres:5432/tanren
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: ${VAULT_ROOT_TOKEN:?VAULT_ROOT_TOKEN must be set for the prod profile}
+      TANREN_RUNNER_IDENTITY_PRIVATE_KEY: ${TANREN_RUNNER_IDENTITY_PRIVATE_KEY:?TANREN_RUNNER_IDENTITY_PRIVATE_KEY must be set for the prod profile}
+      TANREN_RUN_WORKER_CONCURRENCY: ${TANREN_RUN_WORKER_CONCURRENCY:-2}
+      # Same sidecar allocator the orchestrator uses (ephemeral runners on demand).
+      TANREN_ALLOCATOR_URL: http://allocator:3200
+      TANREN_ALLOCATOR_TOKEN: ${TANREN_ALLOCATOR_TOKEN:?TANREN_ALLOCATOR_TOKEN must be set for the prod profile}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      vault:
+        condition: service_healthy
+      allocator:
+        condition: service_started
+      # The orchestrator owns the migrate step; wait for it before claiming jobs.
+      orchestrator:
+        condition: service_started
+
   allocator:
     build:
       context: .

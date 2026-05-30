@@ -423,3 +423,67 @@ changes), each with a behavior test. Grouped by surface:
 
 Each item is DONE when its queries run through the org-scoped client AND a
 behavior test proves the rows it returns match the scope.
+
+---
+
+# Plane-split P-waves — control-plane / data-plane checklist
+
+Companion checklist for Refactor 2 in
+`docs/roadmap/saas-rls-and-plane-split-plan.md` (the plane-split section +
+locked decisions: mTLS transport, push de-privileging to P3). Builds on the RLS
+runtime-role split (R3b): the data plane connects as the restricted `tanren_app`
+role, the BYPASSRLS `tanren_system` role serves cross-org bootstrap reads.
+
+**Status: P1 DONE — the run-executor worker is a STANDALONE deployable. P2
+(service identity + shrink the data plane's DB surface) and P3 (de-privilege to
+per-run scoped credentials) are OUTSTANDING.**
+
+## P1 — process boundary (DONE)
+
+The worker is its own process + compose service, still sharing the same Postgres
+and the same `job_queue` DB-CAS claim. **Process-boundary change only — NO trust
+change** (the data plane still holds the same broad DB + Vault access the
+in-process worker did; that is what P2/P3 shrink).
+
+- [x] **Standalone worker entrypoint** — `services/orchestrator/src/worker-main.ts`
+      boots ONLY the worker loop (no HTTP server) via the shared
+      `bootRunWorker()` (`engine/worker/boot.ts`): builds the runtime
+      (`tanren_app` / `DATABASE_URL`) pool exactly like the API, with the
+      BYPASSRLS `tanren_system` pool resolved lazily by `runWithSystemScope`/the
+      reaper from `TANREN_SYSTEM_DATABASE_URL`. Reuses the existing `RunWorker`
+      (not rewritten) through `startRunWorker` (moved to
+      `engine/worker/lifecycle.ts` to break the barrel↔boot import cycle).
+- [x] **`worker` compose service** (`compose.dev.yml` + `compose.prod.yml`) — the
+      same image as the orchestrator, command `start:worker`, with the same
+      DB/Vault/allocator/runner env it needs. It does NOT migrate (the
+      orchestrator owns the migrate step; the worker `depends_on` it).
+- [x] **API no longer runs the worker in-process by default** — `main.ts` starts
+      the in-process worker ONLY when `TANREN_RUN_WORKER=1` (kept for
+      single-process dev/test convenience); the data plane is now the `worker`
+      container. Both paths share `bootRunWorker`, so they can't drift.
+- [x] **No claim-mechanism / API change, no migration** — the worker still claims
+      directly from `job_queue` (`FOR UPDATE SKIP LOCKED` DB-CAS). The
+      control-plane claim API is P2.
+- [x] **Behavior tests** — `tests/workerBoot.test.ts`: `bootRunWorker` builds the
+      runtime pool from `DATABASE_URL` and starts a worker loop that drains; the
+      API does not enable the in-process worker unless `TANREN_RUN_WORKER=1`.
+- [x] **Cross-process smoke proof** (`just smoke-plane-split-worker`, wired into
+      `just smoke`): a run enqueued against the shared Postgres (the same
+      `job_queue` insert the control-plane API does) is CLAIMED + executed +
+      finalized by the SEPARATE `worker` container across the API↔worker process
+      boundary, read back under the RLS-enforced `tanren_app` role.
+
+## P2 — service identity + shrink the data plane's DB surface (OUTSTANDING)
+
+- [ ] mTLS (locked decision) between control and data planes.
+- [ ] Route the worker's writes (events/results) through a control-plane API so
+      the data plane stops writing to Postgres directly.
+- [ ] Move job-claim from DB-CAS to a control-plane endpoint, preserving
+      exactly-once claim.
+
+## P3 — de-privilege the data plane (OUTSTANDING)
+
+- [ ] Per-run scoped credentials (extend the GitHub-App installation-token
+      minting model); remove broad DB + Vault access from the data plane.
+- [ ] Move the in-process caches (`GithubAppTokenMinter`) to the control plane;
+      the data plane receives already-minted tokens.

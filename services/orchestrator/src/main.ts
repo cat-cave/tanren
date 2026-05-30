@@ -26,7 +26,7 @@ import { resolveGithubToken } from "./engine/credentials/githubTokenResolver.js"
 import type { ConfigGateGithubFactory } from "./routes/orgs/index.js";
 import { TimedGitHubHttpClient, TimedSshSubstrate } from "./engine/observability/index.js";
 import { Ssh2Substrate } from "./engine/ssh/index.js";
-import { runWorkerEnabled, startRunWorker } from "./engine/worker/index.js";
+import { bootRunWorker, runWorkerEnabled } from "./engine/worker/index.js";
 import { CiPullRequestNotFoundError, CiRunNotFoundError, pollCiForRun } from "./engine/workflow/ciPolling.js";
 import {
   DraftPrRunnerNotFoundError,
@@ -474,24 +474,15 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const app = await createApp();
   serve({ fetch: app.fetch, port });
   console.log(`orchestrator listening on :${port}`);
-  // P3-0001: the run worker dequeues queued `plan` jobs and runs the real
-  // planner-loop workflow. OFF by default (opt in with TANREN_RUN_WORKER=1). It
-  // reuses the same pool/secrets/allocator/SSH/github construction as the HTTP
-  // server (migrate + identity-secret seeding already ran in createApp).
+  // P3-0001 / plane-split P1: the run worker dequeues queued `plan` jobs and
+  // runs the real planner-loop workflow. The worker is now a STANDALONE
+  // deployable (`worker-main.ts`, the `worker` compose service) and the API does
+  // NOT run it by default. The in-process path stays as a single-process
+  // dev/test convenience, OFF by default — opt in with TANREN_RUN_WORKER=1. It
+  // shares the same `bootRunWorker` construction as the standalone entrypoint
+  // (migrate + identity-secret seeding already ran in createApp).
   if (runWorkerEnabled()) {
-    const workerPool = getProductionPool();
-    const workerSecrets = buildSecretStore();
-    startRunWorker({
-      pool: workerPool,
-      allocator: buildAllocatorFromEnv(workerPool),
-      // P3-0029: same boundary timing wrappers as the HTTP server path. The
-      // worker internals (P3-0028) are untouched — only its injected SSH /
-      // GitHub clients are decorated here at the construction site.
-      ssh: new TimedSshSubstrate(new Ssh2Substrate(workerSecrets)),
-      secrets: workerSecrets,
-      githubHttp: new TimedGitHubHttpClient(new FetchGitHubHttpClient()),
-      identitySecretRef: runnerIdentitySecretRef,
-    });
-    console.log("run worker started");
+    await bootRunWorker();
+    console.log("run worker started (in-process)");
   }
 }
