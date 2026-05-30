@@ -1,10 +1,13 @@
 # SaaS multi-tenancy: RLS + control-plane/data-plane split — plan
 
 **Status: IN PROGRESS.** Refactor 1 (RLS) is **DONE and FULLY ENFORCED** (waves
-R1 → R3b; migration `0030`). Refactor 2 (plane split) is **at P1: the
-run-executor worker is a STANDALONE deployable** (process-boundary change only,
-no trust change yet); **P2 (mTLS + control-plane claim API) and P3 (de-privilege
-to per-run creds) are OUTSTANDING.** The live conversion checklist is
+R1 → R3b; migration `0030`). Refactor 2 (plane split) is **at P2: the
+run-executor worker is a STANDALONE deployable (P1) that now claims over an
+authenticated mTLS control-plane endpoint (P2 — service identity + the job-claim
+moved off direct DB-CAS to `POST /internal/claim-job`, claim semantics
+unchanged)**; **P3 (route the worker's event/result WRITES through the control
+plane + de-privilege its broad DB/Vault access to per-run creds) is
+OUTSTANDING.** The live conversion checklist is
 `docs/roadmap/R-WAVES.md` (RLS R-waves + plane-split P-waves). These are the two
 big multi-tenant refactors deliberately deferred from the expansion work.
 
@@ -127,12 +130,24 @@ already a DB-less BFF. So the seam to formalize is **orchestrator API (control)
   longer runs the worker in-process by default (`TANREN_RUN_WORKER=1` kept for
   single-process dev/test). Pure deployment-topology change, **no trust change**.
   Proven cross-process by `just smoke-plane-split-worker`.
-- **P2 — service identity + shrink DB surface. OUTSTANDING.** Add mTLS (locked
-  decision) between control and data; route the worker's writes (events/results)
-  through a control-plane API so the data plane stops writing to Postgres
-  directly. Job-claim moves from DB-CAS to a control-plane endpoint.
-- **P3 — de-privilege the data plane. OUTSTANDING.** Per-run scoped credentials;
-  remove broad DB + Vault access from the data plane entirely.
+- **P2 — service identity + control-plane CLAIM endpoint. DONE.** A mutual-TLS
+  (locked decision #3) internal channel between control and data planes — a
+  contract-shaped transport seam (`MtlsFetch` / `MtlsPeerVerifier`), dev certs by
+  `just gen-mtls-certs` + env, prod cert paths via the same env. The job-claim
+  moved off direct DB-CAS to an authenticated `POST /internal/claim-job` endpoint
+  on a separate internal mTLS listener: it authn's the mTLS peer FIRST, then runs
+  the SAME atomic claim (`FOR UPDATE SKIP LOCKED`) and returns the job + its
+  `org_id`. The cross-process `worker` claims over the endpoint (the in-process
+  dev path keeps the direct DB-CAS). **Exactly-once preserved** — the endpoint
+  wraps the same `claim()`; no migration. The data plane no longer needs direct
+  `job_queue` write access to claim in the cross-process topology (full
+  de-privilege is P3). Proven by `tests/internalClaimEndpoint.test.ts` (authn
+  reject + claim-once-under-contention) + the mTLS-extended
+  `smoke-plane-split-worker`.
+- **P3 — de-privilege the data plane. OUTSTANDING.** Route the worker's
+  event/result WRITES through the control plane (P2 moved only the CLAIM);
+  per-run scoped credentials; remove broad DB + Vault access from the data plane
+  entirely.
 
 **Risks:** moving job-claim atomicity from DB `SKIP LOCKED` to an API (need to
 preserve exactly-once claim); event throughput/latency vs the current direct
@@ -155,9 +170,10 @@ is the single highest-risk change and is deliberately landed inert and first.
 2. **Cross-org system ops:** a dedicated bypass role vs leaving `job_queue` (and
    other system tables) outside RLS.
 3. **Control↔data transport:** mTLS vs signed service JWT.
-4. **Data-plane de-privileging depth now:** RESOLVED — stop at "separate
-   process, same DB" (P1) for this round; P2 (mTLS + control-plane claim) then P3
-   (per-run scoped credentials) land as later waves.
+4. **Data-plane de-privileging depth now:** RESOLVED — P1 (separate process,
+   same DB) + P2 (mTLS + control-plane claim endpoint) are DONE; P3 (route the
+   worker's WRITES through the control plane + per-run scoped credentials) lands
+   as a later wave.
 5. **Hosting topology:** one Postgres with RLS (cheaper, simpler) vs separate
    databases per plane/tenant tier (stronger isolation, more ops).
 

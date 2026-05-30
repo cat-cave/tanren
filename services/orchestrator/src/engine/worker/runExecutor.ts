@@ -21,6 +21,7 @@ import { runWithJobOrgId, runWithOrgScope, runWithSystemScope } from "@tanren/db
 import type pg from "pg";
 import { orgScopingPool } from "../data/orgScopedDb.js";
 import type { Allocator } from "../contracts/allocator.js";
+import { DirectJobClaimClient, type JobClaimClient } from "../contracts/jobClaim.js";
 import type { JobQueue } from "../contracts/jobQueue.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { SshSubstrate } from "../contracts/sshSubstrate.js";
@@ -55,6 +56,14 @@ export const DEFAULT_LEASE_MS = 60_000;
 export interface RunExecutorDeps {
   pool: pg.Pool;
   jobQueue: JobQueue;
+  // Plane-split P2: how this worker CLAIMS a job. Defaults to a
+  // `DirectJobClaimClient` over `jobQueue` (the unchanged DB-CAS) so the
+  // in-process / single-process path is behavior-identical. The cross-process
+  // `worker` container injects an `HttpJobClaimClient` that claims over the mTLS
+  // control-plane endpoint instead of touching `job_queue` directly. The rest of
+  // the queue surface (fail/complete/heartbeat) still uses `jobQueue` — P2 moves
+  // only the CLAIM; routing the WRITES through the control plane is P3.
+  claimClient?: JobClaimClient;
   allocator: Allocator;
   ssh: SshSubstrate;
   secrets: SecretStore;
@@ -102,7 +111,12 @@ export type ExecuteJobResult =
  */
 export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<ExecuteJobResult> {
   const leaseMs = deps.leaseMs ?? DEFAULT_LEASE_MS;
-  const job = await deps.jobQueue.claim("plan", { leaseMs });
+  // Plane-split P2: claim through the claim CLIENT (direct DB-CAS in-process, or
+  // the mTLS control-plane endpoint cross-process). Same exactly-once claim — the
+  // endpoint wraps the same `JobQueue.claim`. Default keeps the direct path so an
+  // un-wired worker is unchanged.
+  const claimClient = deps.claimClient ?? new DirectJobClaimClient(deps.jobQueue);
+  const job = await claimClient.claimJob({ taskKind: "plan", leaseMs });
   if (job === undefined) {
     return { kind: "idle" };
   }
