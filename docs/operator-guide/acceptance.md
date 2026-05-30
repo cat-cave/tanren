@@ -138,6 +138,13 @@ the conflict manually on the PR.
 
 # Phase 2A Acceptance Gate (historical)
 
+> **Note:** every `just acceptance` / `acceptance-easy` / `acceptance-medium`
+> recipe and the `scripts/acceptance/{easy,medium}.ts` drivers described in this
+> section were **deleted in P3-0001** (see the banner at the top of this file).
+> The text below is preserved only as the record of how the Phase 2A gate worked;
+> the recipes no longer exist. Use a worker-backed dashboard/API-triggered run to
+> exercise a full workflow today.
+
 `just acceptance` was the **executable Phase 2A release gate** owned by
 P2A-0015. It ran the easy and medium fixture repos through the real
 Tanren workflow end-to-end and asserted persisted outcome, PR URL, CI

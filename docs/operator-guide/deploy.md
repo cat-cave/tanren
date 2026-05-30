@@ -145,6 +145,26 @@ Service AppRoles created by the init script have 1-hour token TTLs (24-hour max)
 
 `.github/workflows/ci.yml` runs `just ci` (which calls `corepack pnpm run compose:config` against `compose.dev.yml`) followed by `just smoke` (which uses the dev profile). The prod compose file is validated by the architecture-checks script for the docker-socket and host-bind-mount invariants.
 
+## Secret-store backend selection
+
+Vault is the default secret store, but the backend is **pluggable**
+(`buildSecretStore`, selected by env): `vault`, `gcp_sm` (GCP Secret Manager),
+`aws_sm` (AWS Secrets Manager), `onepassword` (1Password), or `memory` (tests).
+A SaaS / cloud-native deployment can point Tanren at a managed secret manager
+instead of running Vault; credential refs and tenant namespacing
+(`credential/<slug>/<scope>/<ownerId>/<name>`) are uniform across backends. See
+[`credentials.md`](credentials.md).
+
+## Quota / admission gate + managed-provider toggle
+
+For multi-tenant / SaaS-priming deployments, the orchestrator carries a
+**quota/admission-gate** seam (`engine/quota/`, DB-backed policy + a
+**metering-export** hook) and a **BYOK-vs-managed provider toggle**
+(`engine/config/managedProvider.ts`, `providerMode: "byok" | "managed"`,
+default `byok`). Both default off / pass-through, so a single-tenant self-hosted
+deployment is unaffected unless it opts in. Tenancy is DB-enforced (mandatory
+`org_id`).
+
 ## Principled config bucketing
 
 This deploy doc covers the secrets and host-port surface only. The broader principled config bucketing — which fields live in DB project/org config vs. `tanren-config` repo vs. compose env — is owned by P2A-0006 (`docs/operator-guide/project-config.md`) when that spec lands.

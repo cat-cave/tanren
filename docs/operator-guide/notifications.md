@@ -1,11 +1,13 @@
 # Notifications
 
-Tanren delivers run, CI, and cost events to operator channels (ntfy in v0;
-slack, github_checks, teams, discord, email, twilio, pagerduty, webhook
-in later phases). The notification surface is the **per-event × per-channel
-× severity matrix** described in the hi-fi onboarding flow. P2A-0017 ships
-the full schema and dispatcher; only the ntfy channel performs real
-delivery in Phase 2.
+Tanren delivers run, CI, and cost events to operator channels. **All nine
+channels are now real adapters** — ntfy, slack, github_checks, teams, discord,
+email, twilio, pagerduty, webhook (P3-0024 completed the rollout). The
+notification surface is the **per-event × per-channel × severity matrix**
+described in the hi-fi onboarding flow. P2A-0017 shipped the full schema and
+dispatcher; each channel performs real delivery **when its deps/credentials are
+supplied** in the registry, and falls back to a no-op `StubChannel` only when
+left unconfigured.
 
 ## Mental model
 
@@ -54,25 +56,25 @@ The dispatcher computes the **effective severity** and compares it to
 each matching route's `minSeverity` floor. If the floor exceeds the
 effective severity, the route is skipped (no dispatch, no log row).
 
-## Channels in v0
+## Channels
 
-- **ntfy**: real delivery. POSTs the JSON body to the topic URL with
-  `Title`, `Priority`, `Tags` headers ntfy understands. The base URL is
-  `TANREN_NTFY_BASE_URL` (defaults to `http://ntfy:80` for the compose
-  dev profile). The target's `destination` is either a bare topic name
-  or a fully-qualified URL.
-- **slack / github_checks / teams / discord / email / twilio /
-  pagerduty / webhook**: registered as `StubChannel` adapters. The
-  dispatcher invokes their `publish()` exactly like a real channel; the
-  call is a no-op and the dispatch ledger records `status='stubbed'`.
-  The matrix UI in P2B-0002 renders the row as "configured but not yet
-  wired" so operators see what they have set up without seeing a silent
-  failure.
+- **ntfy**: POSTs the JSON body to the topic URL with `Title`, `Priority`,
+  `Tags` headers ntfy understands. The base URL is `TANREN_NTFY_BASE_URL`
+  (defaults to `http://ntfy:80` for the compose dev profile). The target's
+  `destination` is either a bare topic name or a fully-qualified URL.
+- **slack / github_checks / teams / discord / email / twilio / pagerduty /
+  webhook**: real adapters (`engine/notifications/channels/*.ts`). Each delivers
+  via its provider's API/webhook (e.g. Slack incoming-webhook JSON, a webhook
+  POST, an email send) and surfaces failures as a thrown error the dispatcher
+  records as `status='failed'`. Secret material (webhook URLs, tokens) is stored
+  as a write-only **credential ref** on the target row and resolved through the
+  secret store at send time, not stored in the clear.
 
-This separation lets matrix configuration evolve in parallel with
-channel adapters. Adding slack in Phase 3 is a pure additive change:
-swap `StubChannel("slack")` for `SlackChannel(...)` in the
-`buildChannelRegistry` call.
+A channel is wired when its deps are supplied to `buildChannelRegistry`; a kind
+with no deps falls back to a no-op `StubChannel` (dispatch ledger records
+`status='stubbed'`) so the matrix can still be configured ahead of supplying
+credentials. The matrix UI surfaces the per-channel "last delivery" status so an
+unconfigured channel reads as stubbed rather than failing silently.
 
 ## Weekend mute
 
@@ -119,15 +121,11 @@ The serialized body the channel receives includes:
   hook (defaults to absent in v0).
 - `tags`: includes `tanren` and `severity:<level>` for routing.
 
-## Future channels
+## Adding more channels
 
-Other channels mentioned in the hi-fi (slack, github_checks, teams,
-discord, email, twilio, pagerduty, webhook) live as schema rows and
-stub adapters today. They do not deliver. Operators can configure them
-in the matrix UI (P2B-0002); the dashboard renders their rows as
-"configured but not yet wired" so the expectation is honest.
-
-The full set of channel kinds is enumerated in
-`services/orchestrator/src/engine/notifications/schemas.ts` (`ChannelKind`).
-Adding a kind is two changes: extend the Zod enum and the SQL CHECK; the
-matrix data shape itself is uniform.
+All nine hi-fi channels now have real adapters. The full set of channel kinds is
+enumerated in `services/orchestrator/src/engine/notifications/schemas.ts`
+(`ChannelKind`); the registry wiring lives in `engine/notifications/registry.ts`. Adding a
+new kind is: extend the Zod enum + the SQL CHECK, add an adapter under
+`channels/`, and register it in `buildChannelRegistry`. The matrix data shape
+itself is uniform, so configuration evolves independently of the adapter set.

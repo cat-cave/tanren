@@ -1,22 +1,27 @@
 # Expansion & Strictness Plan
 
-Two standing tracks pursued autonomously after the Phase 3 build. Both build to
-**code + mocked-tests + CI-green**; live validation (real cloud / SaaS creds) is
-deferred. Seam inventory + strictness baseline were mapped 2026-05-29.
+Two standing tracks pursued autonomously after the Phase 3 build. Both built to
+**code + mocked-tests + CI-green**; live validation (real cloud / SaaS creds)
+remains deferred. Seam inventory + strictness baseline were mapped 2026-05-29.
+
+**Status:** both tracks are **merged on `main`**, except the explicitly deferred
+GitLab/VCS abstraction and the agy/pi/reasonix harnesses (await CLI specs). The
+"Backlog" column below is retained as the original plan; the "Status" column
+records what shipped.
 
 ## Track A — capability / connectivity expansion (clean adapter seams)
 
 Each item is a new implementation behind an existing interface (new file +
 register in the selector/registry + mocked-API tests) — **no core refactor**.
 
-| Seam (interface)                                                                                         | Backlog                                                                                   | Notes                                                                                                                                                                                                                                                                                                                                                                           |
-| -------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Allocators** — `engine/allocators` (`Allocator`, `AllocatorRouter`, `buildAllocator`, `AllocatorKind`) | DigitalOcean, AWS-EC2, Kubernetes (enum-scaffolded stubs → implement); **GCP** (new kind) | Hetzner + manual-SSH done. Shared `buildAllocator.ts`/`poolPolicy.ts` → serialize. Live-validate needs cloud creds.                                                                                                                                                                                                                                                             |
-| **Inbox source connectors** — `engine/forge/inbox` (`SourceConnector`)                                   | **Sentry** (errors), Linear, Jira                                                         | GitHub Issues done. Each = config schema + `fetch()` + triage.                                                                                                                                                                                                                                                                                                                  |
-| **Agent-harness adapters** — `engine/providers/adapterSelector` (`cli` switch)                           | **agy** (antigravity CLI; replaces deprecated gemini CLI), aider, pi, reasonix, …         | Unit is the coding-agent CLI/harness (each auths to its own LLM backend), not the raw model. Codex/Claude/opencode done. **Structured-output gate:** harnesses without structured JSON (agy, opencode) are WRITER-ONLY; answerer roles (plan/check/audit/discovery/forge) require structured output. Each = CLI invocation + auth-to-LLM + a structured-output capability flag. |
-| **Notification channels** — `engine/notifications` (`NotificationChannel`, registry)                     | Teams, Discord, Email, Twilio, PagerDuty, Webhook                                         | ntfy/slack/github-checks done; rest are `StubChannel`.                                                                                                                                                                                                                                                                                                                          |
-| **Identity providers** — `auth/**` (`IdentityProvider`)                                                  | **Authentik turnkey preset** (homelab self-hosting), Okta, Auth0, Keycloak                | Generic `OidcProvider` already ships (P3-0030) + works with Authentik via `TANREN_OIDC_ISSUER`. Add an Authentik claim-mapping preset + self-hosting doc/compose so it's zero-fiddle.                                                                                                                                                                                           |
-| **Secret stores / cost resolvers** — `contracts/{secretStore,costResolver}`                              | AWS Secrets Manager, K8s secrets; custom pricing                                          | Clean ifaces; lower priority.                                                                                                                                                                                                                                                                                                                                                   |
+| Seam (interface)                                                                                         | Backlog (original)                                                                        | Status                                                                                                                                                                                                                                                                                                           |
+| -------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Allocators** — `engine/allocators` (`Allocator`, `AllocatorRouter`, `buildAllocator`, `AllocatorKind`) | DigitalOcean, AWS-EC2, Kubernetes (enum-scaffolded stubs → implement); **GCP** (new kind) | **DONE.** static/sidecar/manual-ssh/Hetzner/DigitalOcean/GCP/AWS-EC2/Kubernetes all implemented; enum-scaffold stubs are gone. Live-validate still needs cloud creds.                                                                                                                                            |
+| **Inbox source connectors** — `engine/forge/inbox` (`SourceConnector`)                                   | **Sentry** (errors), Linear, Jira                                                         | **DONE.** GitHub Issues + Sentry + Linear + Jira connectors all present.                                                                                                                                                                                                                                         |
+| **Agent-harness adapters** — `engine/providers/adapterSelector` (`cli` switch)                           | **agy** (antigravity CLI; replaces deprecated gemini CLI), aider, pi, reasonix, …         | **Partial.** Codex/Claude/opencode/**aider** done behind a versioned harness protocol. **agy / pi / reasonix still pending CLI specs.** Structured-output gate enforced: harnesses without structured JSON are WRITER-ONLY; answerer roles (plan/check/audit/discovery/forge) require structured output.         |
+| **Notification channels** — `engine/notifications` (`NotificationChannel`, registry)                     | Teams, Discord, Email, Twilio, PagerDuty, Webhook                                         | **DONE.** All 9 channels (ntfy/slack/github-checks/teams/discord/email/twilio/pagerduty/webhook) have real adapters; each wires up when its deps/creds are supplied and falls back to `StubChannel` otherwise.                                                                                                   |
+| **Identity providers** — `auth/**` (`IdentityProvider`)                                                  | **Authentik turnkey preset** (homelab self-hosting), Okta, Auth0, Keycloak                | **DONE (Authentik preset).** github_oauth + generic `OidcProvider` (P3-0030) + the **Authentik claim-mapping preset** (`TANREN_OIDC_PRESET=authentik`) + local_dev all ship; see `docs/operator-guide/oidc-authentik.md`. Okta/Auth0/Keycloak work via the generic OIDC env today; dedicated presets are future. |
+| **Secret stores / cost resolvers** — `contracts/{secretStore,costResolver}`                              | AWS Secrets Manager, K8s secrets; custom pricing                                          | **DONE (secret stores).** Pluggable backends: Vault (default) / GCP Secret Manager / AWS Secrets Manager / 1Password via `buildSecretStore`. Custom cost-pricing resolvers remain lower-priority.                                                                                                                |
 
 ### Deferred (NOT a clean adapter) — GitLab / VCS-provider abstraction
 
@@ -29,25 +34,28 @@ decision (2026-05-29) for later deliberate design.** Do not build blind.
 
 ## Track B — strictness & testing ladder (CI-self-validating)
 
-Serialize the shared-config-file edits (`tsconfig.base.json`, `oxlintrc.json`,
-`package.json`, `vitest.config.ts`, `scripts/check-architecture.mjs`).
+**Status: DONE (waves 1–5).** The shared-config edits (`tsconfig.base.json`,
+`oxlintrc.json`, `package.json`, `vitest.config.ts`,
+`scripts/check-architecture.mjs`) all landed. The gate is now a 14-step
+`just fast-check` (format-check, lint, types-lint, architecture, schema/state/
+event/answerer/contract drift, knip, spelling, typecheck, test, compose-config).
 
-1. **Wave 1 (in progress):** tsconfig `noUncheckedIndexedAccess` / `noImplicitOverride` / `noPropertyAccessFromIndexSignature` / `verbatimModuleSyntax`; oxlint `pedantic` + `import` plugin (`no-cycle`). Fix all fallout.
-2. **Wave 2:** `knip` dead-code (ratchet); repo-wide coverage ratchet at measured baseline; per-package typecheck (`db/`, `cli/`).
-3. **Wave 3:** new architecture checks — cyclomatic-complexity cap, cross-package deep-import ban, max-params.
-4. **Wave 4:** typed-lint — typescript-eslint `no-floating-promises` / `no-misused-promises` / `await-thenable` (the type-aware gap oxlint can't cover).
-5. **Wave 5:** prettier + commitlint + cspell.
-6. **Later:** Stryker mutation testing (nightly job), `exactOptionalPropertyTypes` (staged), contract tests.
+1. **Wave 1 — DONE:** tsconfig `noUncheckedIndexedAccess` / `noImplicitOverride` / `noPropertyAccessFromIndexSignature` / `verbatimModuleSyntax` all on; oxlint `pedantic` + `import` plugin (`import/no-cycle`, `import/no-self-import`).
+2. **Wave 2 — DONE:** `knip` dead-code check; coverage ratchet/floors; per-package typecheck.
+3. **Wave 3 — DONE:** structural architecture ratchets (complexity/deep-import/params) in `scripts/check-architecture.mjs`.
+4. **Wave 4 — DONE:** typed-lint (`just types-lint` → typescript-eslint `no-floating-promises` / `no-misused-promises` / `await-thenable`).
+5. **Wave 5 — DONE:** prettier + commitlint + cspell, plus contract-schema-drift.
+6. **Later (on-demand / nightly):** Stryker mutation testing (`just mutation`, deliberately not in `fast-check`); `exactOptionalPropertyTypes` (staged).
 
-## Baseline (what exists today)
+## Baseline (original, pre-expansion)
 
-TS `strict: true` only (the above flags off); oxlint correctness/suspicious/perf
-(no pedantic/import/typed-lint); coverage thresholds on 6 workflow-critical paths
-only (no repo-wide/mutation); no dead-code tool; format-check is newline/
-whitespace only; architecture checks per `scripts/check-architecture.mjs`.
+For the record, the starting point was: TS `strict: true` only (the above flags
+off); oxlint correctness/suspicious/perf (no pedantic/import/typed-lint);
+coverage thresholds on 6 workflow-critical paths only (no repo-wide/mutation); no
+dead-code tool; format-check newline/whitespace only.
 
-## Execution
+## Execution (as run)
 
-Track B leads (hardens the gate so subsequent autonomous work stays safe), then
-Track A clean-seam adapters fan out under the stricter rules. Per-PR through the
-CI gate; migrations + shared-registry edits serialized one-per-wave.
+Track B led (hardened the gate so subsequent autonomous work stayed safe), then
+Track A clean-seam adapters fanned out under the stricter rules. Per-PR through
+the CI gate; migrations + shared-registry edits serialized one-per-wave.

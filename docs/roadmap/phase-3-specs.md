@@ -3,7 +3,12 @@
 Detail entries for Phase 3 — **v0 completion above the Phase 2 operator-control baseline**.
 Scope-bucket prose is in `phase-3.md`; this doc turns the buckets into specs with
 `Owns` / `Consumes` / `Produces` and acceptance criteria, in the format of
-`phase-2a-specs.md` / `phase-2b-specs.md`. Status: **scoped, not started.**
+`phase-2a-specs.md` / `phase-2b-specs.md`. Status: **merged.** Tier 1
+(P3-0001…0009) and the bulk of Tier 2 (P3-0010…0030) are on `main`. The honest
+remaining items are the P3-0009 live demo + cross-seam live validation (need real
+credentials), the agy/pi/reasonix harnesses (await CLI specs; aider is done),
+the deferred GitLab/VCS abstraction, and one open Forge write-action design item
+(see [`../design/phase-3-hifi-gaps.md`](../design/phase-3-hifi-gaps.md)).
 
 Phase 3 splits into two tiers:
 
@@ -18,35 +23,42 @@ Phase 3 splits into two tiers:
   several are gated on hi-fi prerequisites that must be locked first (see
   "Hi-fi prerequisites").
 
-## Reconciling Phase 2B (why this doc exists)
+## Reconciling Phase 2B (why this doc exists) — RESOLVED
 
 Phase 2B shipped the operator **dashboard surfaces** (shell, onboarding,
-project/spec, run-detail, history/costs, failure-recovery, trigger). But the
-surfaces sit on top of a workflow engine the dashboard **cannot yet drive**:
+project/spec, run-detail, history/costs, failure-recovery, trigger). At the time
+those surfaces sat on top of a workflow engine the dashboard could not yet drive.
+Tier 1 closed that gap; the items below are recorded as the history of what was
+fixed:
 
-- **There is no run executor.** `createQueuedRunFromSpec` enqueues a `plan` job
-  (`job_queue`), but nothing in the running orchestrator service dequeues and
-  executes it. `runPlannerLoopWorkflow` / `runPhase1FixtureWorkflow` are invoked
-  **only** by `scripts/acceptance/{easy,medium}.ts` and tests — never by service
-  code. A dashboard-triggered run sits at `queued` forever.
-- Several 2B real-functionality-validation claims therefore cannot be exercised
-  today and were effectively shipped as **UI + contract wiring**:
+- **The run executor was missing.** `createQueuedRunFromSpec` enqueued a `plan`
+  job (`job_queue`) that nothing in the running orchestrator service dequeued.
+  **P3-0001 fixed this**: a background run worker
+  (`services/orchestrator/src/engine/worker/`, `TANREN_RUN_WORKER=1`) now claims
+  and executes `plan` jobs, so a dashboard-triggered run runs end-to-end. The
+  direct-execution `scripts/acceptance/{easy,medium}.ts` harnesses were then
+  **deleted** — the system is exercised only through the real dequeue→execute
+  path.
+- The 2B real-functionality-validation claims are therefore now exercisable:
   - P2B-0006: "operator completes a fixture-medium run fully through the
     dashboard … with persisted cost, PR, CI, and subtask state."
   - P2B-0008: "the resulting re-plan run **completes successfully**."
   - ROADMAP Phase 2 exit: "the dashboard runs end-to-end … run trigger, run
     detail … AND failure recovery on a forced-halt run."
-- Credential→run resolution is unwired (project config carries no credential
-  refs; the workflow requires `codexCredentialRef`/`githubCredentialRef` passed
-  explicitly), and repo connectivity is a static-token stub rather than the
-  intended GitHub App.
 
-**Correction of record:** the run executor was an implicit Phase-3 prerequisite
-that no plan named. Tier 1 names it (P3-0001) and the connectivity/credential/
-gate/merge work around it. **Phase 2B's exit criteria are met when Tier 1 lands
-and the P2B-0007 demo (re-homed here as P3-0009) runs for real.** Until then,
-2B is "surfaces complete, loop not closed." This doc does not delete the 2B
-claims; it supersedes their _validation_ with P3-0009.
+    Their **final** validation is the P3-0009 live demo, which still needs real
+    credentials to record (the one honest gap remaining).
+
+- Credential→run resolution is wired (P3-0002: project/org credential refs +
+  `resolveCredentialsForRun`), and repo connectivity is the GitHub App model
+  (P3-0003: per-org installation tokens), with the static-token path retained
+  only as a dev/back-compat fallback.
+
+**Correction of record (now resolved):** the run executor was an implicit
+Phase-3 prerequisite that no plan named. Tier 1 named it (P3-0001) and built the
+connectivity/credential/gate/merge work around it. **Phase 2B's exit criteria are
+met now that Tier 1 has landed**; the P2B-0007 demo (re-homed here as P3-0009) is
+the recorded live proof, pending real credentials to execute.
 
 ## Tier 1 dependency graph (foundational slice)
 
@@ -211,12 +223,17 @@ and P3-0009 are serial at the end.
 
 ---
 
-## Tier 2 — Expansion (not scheduled until Tier 1 + hi-fi prerequisites land)
+## Tier 2 — Expansion (merged)
 
-These turn the remaining `phase-3.md` buckets into specs. Each is summarized
-(Produces · Depends · note); they get full `Owns/Consumes/Produces` detail when
-scheduled. Several are **design-blocked** on hi-fi prerequisites (below) and
-must not start before those are locked.
+These turned the remaining `phase-3.md` buckets into specs. **The bulk are now
+built and merged on `main`** (provider expansion incl. aider, notification
+channels — all 9, allocator expansion, DAG canvas, discovery, full
+greenfield/brownfield onboarding, `tanren-config` audit-gate, scheduled audits,
+issue/inbox ingestion, governance, DORA, observability, deployment hardening).
+The honest exceptions are agy/pi/reasonix harnesses (await CLI specs) and live
+cloud/SaaS validation (needs real credentials). The thick-product surfaces are
+built; their one open _design_ item (Forge in-conversation write-action approval)
+is tracked in [`../design/phase-3-hifi-gaps.md`](../design/phase-3-hifi-gaps.md).
 
 - **P3-0010 thick-forge-llm-backend** — LLM-backed Forge conversation reading `forge_turns` (P2A-0019), replacing templated v0 narration; pure swap, no schema change. _Depends:_ hi-fi thick-Forge interaction model.
 - **P3-0011 demo-role-llm-wiring** — replace templated demo narration with a real Answerer call (schema P2A-0008 ships). _Depends:_ P3-0012 or existing Codex.

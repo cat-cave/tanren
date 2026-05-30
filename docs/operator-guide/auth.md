@@ -1,13 +1,15 @@
 # Operator authentication and authorization
 
-Phase 2A introduces a multi-user authentication and authorization substrate for the Tanren orchestrator, the dashboard, and the CLI. This page is the operator's reference for how identity, sessions, and API tokens are managed in v0.
+Phase 2A introduced a multi-user authentication and authorization substrate for the Tanren orchestrator, the dashboard, and the CLI. This page is the operator's reference for how identity, sessions, and API tokens are managed.
+
+> **Updated.** The OIDC provider that Phase 2A shipped as an interface stub is now a **real, wired implementation** (P3-0030), and there is a turnkey **Authentik preset**. The four identity providers today are `github_oauth`, `oidc` (generic, with the Authentik preset), and `local_dev` (dev-only). Per-org **GitHub App installation** also ships (P3-0003). The historical "only OAuth in v0" notes below have been corrected.
 
 ## Identity model
 
 Tanren models identity in five tables (see `db/src/schema.ts`):
 
 - `organizations` — the top-level tenant. v0 supports one `kind`, `github_org`. The `external_id` is the GitHub org id; the `login` is the GitHub org login lowercased.
-- `users` — one row per real human, keyed by `(provider, provider_subject)`. v0 providers: `github_oauth`, `oidc` (interface stub, not wired), `local_dev` (tests only).
+- `users` — one row per real human, keyed by `(provider, provider_subject)`. Providers: `github_oauth`, `oidc` (generic OIDC; wired, with an Authentik preset), `local_dev` (dev/tests only).
 - `org_members` — `(org_id, user_id, role)`. Role is `admin` or `member`. The first user to sign in to a given org becomes `admin`; subsequent users are added as `member`.
 - `project_members` — `(project_id, user_id, role)`. Project-level membership lets you scope below the org granularity.
 - `sessions` — server-side session records keyed by an HTTP-only cookie. Each session carries a CSRF token.
@@ -25,10 +27,10 @@ interface IdentityProvider {
 }
 ```
 
-v0 ships three implementations:
+Three implementations ship:
 
-- `GitHubOAuthProvider` — the production identity provider. Calls `https://github.com/login/oauth/access_token`, then `/user`, `/user/emails`, and `/user/orgs` on `api.github.com` to assemble identity claims. Org claims become `organizations` rows; user claims become a `users` row.
-- `OidcProvider` — stub. Wires through `IdentityProvider.id === "oidc"` and exists so the interface is exercised. The production OIDC provider (Authentik first) is not wired in v0.
+- `GitHubOAuthProvider` — the GitHub identity provider. Calls `https://github.com/login/oauth/access_token`, then `/user`, `/user/emails`, and `/user/orgs` on `api.github.com` to assemble identity claims. Org claims become `organizations` rows; user claims become a `users` row.
+- `OidcProvider` — a **real, wired** generic OIDC provider (P3-0030). Performs standard discovery (`<issuer>/.well-known/openid-configuration`), authorization-code exchange (confidential client), and userinfo claim mapping. Registered when `TANREN_OIDC_ISSUER` + `TANREN_OIDC_CLIENT_ID` + `TANREN_OIDC_CLIENT_SECRET` are set. A turnkey **Authentik preset** (`TANREN_OIDC_PRESET=authentik`) fills Authentik's standard claim shape so a self-hoster only supplies issuer + client id/secret; the generic env tuning still works for Okta/Auth0/Keycloak. See [`deploy.md`](deploy.md) and [`oidc-authentik.md`](oidc-authentik.md).
 - `LocalDevProvider` — returns a fixed identity. Used in tests and the opt-in dev-login escape hatch (`TANREN_DEV_LOGIN=1`, see below). Never enabled by default and never in prod.
 
 ## Browser flow
@@ -116,9 +118,12 @@ In dev, the orchestrator reads GitHub OAuth credentials from env:
 
 In prod, P2A-0004 lands the dev/prod compose split. The prod profile reads OAuth client id/secret from Vault under `org/github/oauth/<orgId>`; the env-var fallback is documented as a dev-only convenience.
 
-## What is not in Phase 2A
+## Beyond Phase 2A (now shipped)
 
-- The OIDC production provider (Authentik) — interface only, blocked behind a "not wired" error.
-- A dashboard sign-in UI — the dashboard relies on a redirect to the orchestrator's `/auth/login` endpoint. The hi-fi sign-in screen ships in Phase 2B.
-- Per-org GitHub App installation — only OAuth in v0.
-- Token rotation, key rotation, audit-log surface for raw-token access — P2A-0009 and later operate on the same access-scope vocabulary.
+The items Phase 2A deferred have since landed:
+
+- **The OIDC production provider** is wired (P3-0030), with the **Authentik preset**. See [`oidc-authentik.md`](oidc-authentik.md).
+- **The dashboard sign-in UI** shipped in Phase 2B; the dashboard no longer only redirects to the orchestrator `/auth/login` endpoint.
+- **Per-org GitHub App installation** ships (P3-0003): a `github_app` credential kind + per-org installation tokens with auto-rotation, replacing the static-PAT path for clone/PR/CI (static token retained only as a dev/back-compat fallback). See [`github-app.md`](github-app.md).
+
+Still operating on the same access-scope vocabulary: token rotation, key rotation, and the audit-log surface for raw-token access (P2A-0009 and later).

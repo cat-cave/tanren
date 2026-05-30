@@ -182,9 +182,10 @@ so a misconfigured token never silently provisions.
 
 ### Single-kind selection (no router)
 
-For a single backend, keep `TANREN_ALLOCATOR_KIND` set to `static`, `sidecar`,
-`manual_ssh`, or `hetzner` (default `sidecar`). Behavior is unchanged for the
-two pre-existing kinds.
+For a single backend, set `TANREN_ALLOCATOR_KIND` to any implemented kind —
+`static`, `sidecar`, `manual_ssh`, `hetzner`, `digitalocean`, `gcp`, `aws_ec2`,
+or `kubernetes` (default `sidecar`). Behavior is unchanged for the two
+pre-existing kinds (`static`, `sidecar`).
 
 ### Env for the new allocators
 
@@ -201,15 +202,21 @@ two pre-existing kinds.
 | `TANREN_HETZNER_SSH_KEYS`         | `hetzner`    | Comma-separated Hetzner SSH key ids/names to authorize                                |
 | `TANREN_HETZNER_SSH_USER`         | `hetzner`    | SSH username (default `root`)                                                         |
 
-Cloud allocators take credentials via config/Vault refs only; the Hetzner API
-calls go through an injectable HTTP client and are unit-tested against a mocked
-API with no live credentials.
+The DigitalOcean, GCP, and AWS EC2 allocators take an analogous set of env vars —
+`TANREN_DO_*` (API token, region, size, image, host fingerprint),
+`TANREN_GCP_*` (project, zone, machine type, image, access token, host
+fingerprint), and `TANREN_AWS_*` (region, access key id/secret, instance type,
+AMI id, host fingerprint) — while Kubernetes uses the `TANREN_K8S_*` vars listed
+earlier. All cloud allocators take credentials via config/Vault refs only and go
+through an injectable HTTP client, unit-tested against mocked APIs with no live
+credentials.
 
-## What is not in this spec
+## What is not in this guide
 
-- The DigitalOcean / AWS EC2 / Kubernetes allocators are scaffolded stubs; their
-  provisioning logic is a P3-0027 follow-up.
-- The allocator-side workflow / job queue split (currently the
-  orchestrator-side mirror in `runners` is best-effort consistent) lands when
-  the post-Phase-2A operator workflow story does.
-- Per-org runner image overrides are a later P2A spec.
+- **Live cloud validation.** The DigitalOcean / GCP / AWS EC2 / Kubernetes
+  allocators are fully **implemented** (see the table above — the scaffold stubs
+  are gone) and unit-tested against mocked cloud APIs, but provisioning against
+  real cloud accounts has not been live-validated (needs cloud credentials).
+- The allocator-side workflow / job queue split (the orchestrator-side mirror in
+  `runners` is best-effort consistent) remains a hardening follow-up.
+- Per-org runner image overrides remain a later addition.
