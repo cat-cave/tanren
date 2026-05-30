@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   AwsSecretsManagerStore,
   awsSecretNameFromRef,
@@ -12,6 +12,30 @@ import {
 } from "../src/engine/contracts/index.js";
 
 const agnosticRef = "credential/github_token/org/acme/default";
+
+// The factory does not inject a transport, so the stores it builds fall back to
+// the global `fetch`. Stubbing it lets the tests observe the resolved config
+// (addr/mount/region/endpoint/prefix/session-token/field-label) on the wire —
+// a real observable outcome of the env-driven construction, not a spy-only
+// assertion. Each call records the request and returns a benign response.
+function stubFetch(): { calls: { url: string; body: string; headers: Headers }[] } {
+  const calls: { url: string; body: string; headers: Headers }[] = [];
+  vi.stubGlobal("fetch", (async (input: string | URL | Request, init?: RequestInit) => {
+    calls.push({
+      url: typeof input === "string" ? input : input.toString(),
+      body: typeof init?.body === "string" ? init.body : "",
+      headers: new Headers(init?.headers),
+    });
+    // 404 keeps the 1Password lookup short and Vault get undefined; the
+    // AWS not-found marker keeps AwsSecretsManagerStore.get resolving undefined.
+    return new Response(JSON.stringify({ __type: "ResourceNotFoundException" }), { status: 404 });
+  }) as typeof fetch);
+  return { calls };
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe("buildSecretStore selector", () => {
   it("defaults to Vault for back-compat when TANREN_SECRET_STORE is unset", () => {
@@ -73,5 +97,130 @@ describe("ref -> backend key mapping", () => {
 
   it("1Password uses the ref as the item title", () => {
     expect(onePasswordTitleFromRef(agnosticRef)).toBe(agnosticRef);
+  });
+});
+
+describe("buildSecretStore env-driven config resolution", () => {
+  it("treats an empty-string required credential as missing", () => {
+    expect(() =>
+      buildSecretStore({ TANREN_SECRET_STORE: "gcp_sm", TANREN_GCP_SM_PROJECT: "", TANREN_GCP_SM_ACCESS_TOKEN: "t" }),
+    ).toThrow(/TANREN_GCP_SM_PROJECT/);
+  });
+
+  it("defaults Vault addr/token and the KV mount when the env omits them", async () => {
+    const { calls } = stubFetch();
+    const store = buildSecretStore({ TANREN_SECRET_STORE: "vault" });
+    await store.get("credential/token");
+    // Default addr (http://localhost:8200), default mount (secret), default token header.
+    expect(calls[0]!.url).toBe("http://localhost:8200/v1/secret/data/credential/token");
+    expect(calls[0]!.headers.get("X-Vault-Token")).toBe("dev-root-token");
+  });
+
+  it("honours explicit Vault addr/token/mount from the env", async () => {
+    const { calls } = stubFetch();
+    const store = buildSecretStore({
+      TANREN_SECRET_STORE: "vault",
+      VAULT_ADDR: "http://vault.internal:8200",
+      VAULT_TOKEN: "live-token",
+      VAULT_KV_MOUNT: "kv-prod",
+    });
+    await store.get("credential/token");
+    expect(calls[0]!.url).toBe("http://vault.internal:8200/v1/kv-prod/data/credential/token");
+    expect(calls[0]!.headers.get("X-Vault-Token")).toBe("live-token");
+  });
+
+  it("treats an empty VAULT_KV_MOUNT as unset (default mount)", async () => {
+    const { calls } = stubFetch();
+    const store = buildSecretStore({ TANREN_SECRET_STORE: "vault", VAULT_KV_MOUNT: "" });
+    await store.get("credential/token");
+    expect(calls[0]!.url).toContain("/v1/secret/data/");
+  });
+
+  it("resolves the GCP project and apiBase override into the request url", async () => {
+    const { calls } = stubFetch();
+    const store = buildSecretStore({
+      TANREN_SECRET_STORE: "gcp_sm",
+      TANREN_GCP_SM_PROJECT: "my-proj",
+      TANREN_GCP_SM_ACCESS_TOKEN: "tok",
+      TANREN_GCP_SM_API_BASE: "https://gcp.stub/v1",
+    });
+    await store.get("credential/token");
+    expect(calls[0]!.url).toBe("https://gcp.stub/v1/projects/my-proj/secrets/credential_token/versions/latest:access");
+    expect(calls[0]!.headers.get("Authorization")).toBe("Bearer tok");
+  });
+
+  it("resolves the AWS region, endpoint, session token and name prefix", async () => {
+    const { calls } = stubFetch();
+    const store = buildSecretStore({
+      TANREN_SECRET_STORE: "aws_sm",
+      TANREN_AWS_SM_ACCESS_KEY_ID: "AKIA",
+      TANREN_AWS_SM_SECRET_ACCESS_KEY: "sk",
+      TANREN_AWS_SM_REGION: "ap-south-1",
+      TANREN_AWS_SM_SESSION_TOKEN: "sess",
+      TANREN_AWS_SM_NAME_PREFIX: "tanren",
+      TANREN_AWS_SM_ENDPOINT: "http://localstack:4566/",
+    });
+    await store.get("credential/token");
+    // Endpoint override (trailing slash normalized), session token header, prefixed name.
+    expect(calls[0]!.url).toBe("http://localstack:4566/");
+    expect(calls[0]!.headers.get("x-amz-security-token")).toBe("sess");
+    expect(JSON.parse(calls[0]!.body)).toEqual({ SecretId: "tanren/credential/token" });
+    // Region appears in the SigV4 credential scope.
+    expect(calls[0]!.headers.get("authorization")).toContain("/ap-south-1/secretsmanager/aws4_request");
+  });
+
+  it("defaults the AWS endpoint to the region host when no endpoint is configured", async () => {
+    const { calls } = stubFetch();
+    const store = buildSecretStore({
+      TANREN_SECRET_STORE: "aws_sm",
+      TANREN_AWS_SM_ACCESS_KEY_ID: "AKIA",
+      TANREN_AWS_SM_SECRET_ACCESS_KEY: "sk",
+      TANREN_AWS_SM_REGION: "eu-central-1",
+    });
+    await store.get("credential/token");
+    expect(calls[0]!.url).toBe("https://secretsmanager.eu-central-1.amazonaws.com/");
+    expect(calls[0]!.headers.get("x-amz-security-token")).toBeNull();
+    expect(JSON.parse(calls[0]!.body)).toEqual({ SecretId: "credential/token" });
+  });
+
+  it("resolves the 1Password connect url, vault id and field label", async () => {
+    const { calls } = stubFetch();
+    const store = buildSecretStore({
+      TANREN_SECRET_STORE: "onepassword",
+      TANREN_OP_CONNECT_URL: "https://op.internal",
+      TANREN_OP_CONNECT_TOKEN: "op-tok",
+      TANREN_OP_VAULT_ID: "vault-123",
+      TANREN_OP_FIELD_LABEL: "api_key",
+    });
+    // 404 on the lookup -> get resolves undefined.
+    await expect(store.get("credential/token")).resolves.toBeUndefined();
+    expect(calls[0]!.url).toBe(
+      `https://op.internal/v1/vaults/vault-123/items?filter=${encodeURIComponent('title eq "credential/token"')}`,
+    );
+    expect(calls[0]!.headers.get("Authorization")).toBe("Bearer op-tok");
+  });
+
+  it("passes a configured 1Password field label through to the stored item", async () => {
+    // A tailored stub: empty lookup (200 []) then capture the create-item body so
+    // the resolved field label is observable on the wire.
+    const bodies: string[] = [];
+    vi.stubGlobal("fetch", (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if ((init?.method ?? "GET") === "GET" && url.includes("?filter=")) {
+        return new Response(JSON.stringify([]), { status: 200 });
+      }
+      bodies.push(typeof init?.body === "string" ? init.body : "");
+      return new Response(JSON.stringify({ id: "item-1" }), { status: 200 });
+    }) as typeof fetch);
+    const store = buildSecretStore({
+      TANREN_SECRET_STORE: "onepassword",
+      TANREN_OP_CONNECT_URL: "https://op.internal",
+      TANREN_OP_CONNECT_TOKEN: "op-tok",
+      TANREN_OP_VAULT_ID: "vault-123",
+      TANREN_OP_FIELD_LABEL: "api_key",
+    });
+    await store.put({ ref: "credential/token", value: "v" });
+    const created = JSON.parse(bodies[0]!) as { fields: { label: string }[] };
+    expect(created.fields[0]!.label).toBe("api_key");
   });
 });
