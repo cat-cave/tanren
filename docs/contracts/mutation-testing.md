@@ -32,6 +32,7 @@ The clusters are disjoint so they can be measured and ratcheted independently.
 | forge      | `stryker.forge.mjs`   | `engine/forge/**` conversation + write-approval                  | 82.28%      | 80      |
 | notify     | `stryker.notify.mjs`  | `engine/notifications/**` channels + dispatch                    | 87.04%      | 85      |
 | secrets    | `stryker.secrets.mjs` | SecretStore seam + GCP/AWS/1Password/Vault backends              | 95.96%      | 95      |
+| inbox      | `stryker.inbox.mjs`   | `engine/forge/inbox/**` source connectors + dispatcher + triage  | 83.57%      | 83      |
 | **repos**  | `stryker.repos.mjs`   | `engine/repositories/**` state stores                            | **51.28%**  | 50      |
 | **worker** | `stryker.worker.mjs`  | `engine/worker/**` run executor + reaper + boot                  | **38.25%**  | 36      |
 | **dal**    | `stryker.dal.mjs`     | `engine/data/**` + `db/src/orgScope.ts` org-scope seam           | **38.89%³** | 36      |
@@ -80,7 +81,7 @@ Measured on branch `ci/scheduled-mutation-and-backend-baseline`, DB-free
 
 ```sh
 just mutation                 # original high-value scope (stryker.config.mjs)
-just mutation-cluster repos   # one cluster (repos|worker|dal|alloc|wf|forge|notify|secrets|runloop)
+just mutation-cluster repos   # one cluster (repos|worker|dal|alloc|wf|forge|notify|secrets|inbox|runloop)
 just mutation-full            # WHOLE orchestrator backend — slow; weekly job
 ```
 
