@@ -66,12 +66,18 @@ export function createRunRoutes(options: RunRoutesOptions) {
     const denial = await gateProjectAccess(options.pool, projectId, actor, c);
     if (denial !== undefined) return denial;
 
-    const items = await fetchRunListItems(options.pool, {
-      projectId,
-      orgId,
-      status: c.req.query("status"),
-      specId: c.req.query("specId"),
-    });
+    // RLS R2 cohort-1 (runs read): the run-list query runs through the org-scoped
+    // client so it executes inside `SET LOCAL app.current_org_id = <orgId>` (org
+    // validated against the actor above). Inert in R1 — no policies read the GUC
+    // — and behavior-identical to the pool path.
+    const items = await runWithOrgScope(options.pool, orgId, (client) =>
+      fetchRunListItems(client, {
+        projectId,
+        orgId,
+        status: c.req.query("status"),
+        specId: c.req.query("specId"),
+      }),
+    );
     return c.json({ items });
   });
 
@@ -154,14 +160,18 @@ export function createRunRoutes(options: RunRoutesOptions) {
     }
 
     try {
-      const page = await fetchEventsPage(options.pool, {
-        runId,
-        orgId,
-        cursor: c.req.query("cursor"),
-        pageSize: c.req.query("pageSize"),
-        actor,
-        rawView: parseRawViewOptIn(c),
-      });
+      // RLS R2 cohort-1 (events read): the paginated events query runs through
+      // the org-scoped client (inert in R1; same rows as the pool path).
+      const page = await runWithOrgScope(options.pool, orgId, (client) =>
+        fetchEventsPage(client, {
+          runId,
+          orgId,
+          cursor: c.req.query("cursor"),
+          pageSize: c.req.query("pageSize"),
+          actor,
+          rawView: parseRawViewOptIn(c),
+        }),
+      );
       return c.json(page);
     } catch (error) {
       if (error instanceof Error && error.message.startsWith("invalid_cursor")) {
@@ -277,14 +287,18 @@ export function createRunRoutes(options: RunRoutesOptions) {
     const denial = await gateProjectAccess(options.pool, projectId, actor, c);
     if (denial !== undefined) return denial;
     try {
-      const page = await fetchFeedPage(options.pool, {
-        projectId,
-        orgId,
-        cursor: c.req.query("cursor"),
-        pageSize: c.req.query("pageSize"),
-        actor,
-        rawView: parseRawViewOptIn(c),
-      });
+      // RLS R2 cohort-1 (events read): the project activity feed reads `events`
+      // through the org-scoped client (inert in R1; same rows as the pool path).
+      const page = await runWithOrgScope(options.pool, orgId, (client) =>
+        fetchFeedPage(client, {
+          projectId,
+          orgId,
+          cursor: c.req.query("cursor"),
+          pageSize: c.req.query("pageSize"),
+          actor,
+          rawView: parseRawViewOptIn(c),
+        }),
+      );
       return c.json(page);
     } catch (error) {
       if (error instanceof Error && error.message.startsWith("invalid_cursor")) {

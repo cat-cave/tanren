@@ -232,7 +232,7 @@ interface EventsPageArgs {
 }
 
 export async function fetchEventsPage(
-  pool: pg.Pool,
+  pool: QueryClient,
   args: EventsPageArgs,
 ): Promise<{ items: RunEventRow[]; nextCursor: string | null }> {
   const limit = parsePageSize(args.pageSize);
@@ -275,7 +275,7 @@ interface FeedPageArgs {
 }
 
 export async function fetchFeedPage(
-  pool: pg.Pool,
+  pool: QueryClient,
   args: FeedPageArgs,
 ): Promise<{ items: ProjectFeedItemType[]; nextCursor: string | null }> {
   const limit = parsePageSize(args.pageSize);
@@ -440,7 +440,7 @@ interface RawRunListRow extends RawRunRow {
   last_event_at: Date | null;
 }
 
-export async function fetchRunListItems(pool: pg.Pool, args: RunListArgs): Promise<RunListItem[]> {
+export async function fetchRunListItems(pool: QueryClient, args: RunListArgs): Promise<RunListItem[]> {
   const params: unknown[] = [args.projectId, args.orgId];
   const clauses: string[] = ["r.project_id = $1", "r.org_id = $2"];
   if (args.status !== undefined && args.status !== "") {

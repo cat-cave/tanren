@@ -1,0 +1,256 @@
+// RLS wave R2 cohort-1 — runs + events DAL conversion, proven against a REAL
+// Postgres (no SQL mocks).
+//
+// R2 cohort-1 routes the runs + events read/write query sites through R1's
+// org-scoped client (`runWithOrgScope` → `getOrgScopedClient()`), so each tenant
+// query executes inside a `SET LOCAL app.current_org_id = <org>` transaction. It
+// is INERT: still the restricted role, NO policies, so behavior is identical to
+// the pool path. These tests prove that end-to-end:
+//   (a) the runs read loaders return the org's rows when run on the org-scoped
+//       client, identical to the raw pool;
+//   (b) the events read loaders (snapshot / page / feed) do the same;
+//   (c) the events WRITE recorder (`PgEventStore` handed the pool) routes the
+//       INSERT through the ambient org-scoped client when a scope is open, AND
+//       falls back to the pool — same committed row — when none is (the inert
+//       fallback the DAL seam promises);
+//   (d) the DAL seam `resolveQueryClient` returns the ambient scoped client
+//       inside a scope and the pool outside one.
+//
+// Gated behind TANREN_RLS_DB_TEST=1 + a superuser DATABASE_URL (the migration
+// owner), exactly like the R1 test. Wired into `just smoke` via the same gate.
+
+import { Pool } from "pg";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { migrate, runWithOrgScope } from "@tanren/db";
+import type { ActorContext } from "../src/auth/schemas.js";
+import { resolveQueryClient } from "../src/engine/data/orgScopedDb.js";
+import { PgEventStore } from "../src/engine/eventStore.js";
+import {
+  fetchEventsPage,
+  fetchFeedPage,
+  fetchRunEventsForSnapshot,
+  fetchRunListItems,
+  fetchRunSummary,
+} from "../src/routes/runs/list.js";
+
+const enabled = process.env["TANREN_RLS_DB_TEST"] === "1";
+const describeDb = enabled ? describe : describe.skip;
+
+const ADMIN_URL = process.env["DATABASE_URL"] ?? "postgres://tanren:tanren@localhost:5432/tanren";
+const RUNTIME_ROLE = "tanren_app";
+const RUNTIME_PASSWORD = process.env["TANREN_APP_DB_PASSWORD"] ?? "tanren_app";
+
+function dbName(): string {
+  return `tanren_rls_r2_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
+}
+
+function withDatabase(url: string, database: string): string {
+  const parsed = new URL(url);
+  parsed.pathname = `/${database}`;
+  return parsed.toString();
+}
+
+function runtimeUrl(adminUrl: string, database: string): string {
+  const parsed = new URL(adminUrl);
+  parsed.username = RUNTIME_ROLE;
+  parsed.password = RUNTIME_PASSWORD;
+  parsed.pathname = `/${database}`;
+  return parsed.toString();
+}
+
+const ORG_A = "org_rls_a";
+const ORG_B = "org_rls_b";
+const PROJECT_A = `proj_${ORG_A}`;
+const SPEC_A = `spec_${ORG_A}`;
+const RUN_A = "run_a";
+
+// An org-A actor for the read loaders that take an ActorContext (redaction).
+const actorA: ActorContext = {
+  userId: "user_a",
+  orgId: ORG_A,
+  projectId: null,
+  scopes: ["org:member"],
+  source: "session",
+};
+
+describeDb("RLS R2 cohort-1 — runs + events through the org-scoped client", () => {
+  const database = dbName();
+  let ownerPool: Pool;
+  let runtimePool: Pool;
+
+  beforeAll(async () => {
+    const adminPool = new Pool({ connectionString: ADMIN_URL });
+    await adminPool.query(`CREATE DATABASE ${database}`);
+    await adminPool.end();
+
+    ownerPool = new Pool({ connectionString: withDatabase(ADMIN_URL, database) });
+    await migrate(ownerPool);
+
+    runtimePool = new Pool({ connectionString: runtimeUrl(ADMIN_URL, database) });
+
+    // Seed two orgs; only org A gets a run + a seeded event so the loaders have
+    // rows to return. (Org B exists to prove the app-layer org predicate still
+    // scopes results — the belt-and-suspenders filter we kept.)
+    await seedTenant(ownerPool, ORG_A, PROJECT_A, SPEC_A, RUN_A);
+    await seedTenant(ownerPool, ORG_B, `proj_${ORG_B}`, `spec_${ORG_B}`, "run_b");
+    // One run.started event for org A's run, written by the owner via the
+    // event store (project → org_id derivation), so the read loaders see it.
+    await new PgEventStore(ownerPool).append({
+      runId: RUN_A,
+      specId: SPEC_A,
+      projectId: PROJECT_A,
+      eventType: "run.started",
+      payload: { status: "running" },
+    });
+  }, 60_000);
+
+  afterAll(async () => {
+    await runtimePool?.end();
+    await ownerPool?.end();
+    const adminPool = new Pool({ connectionString: ADMIN_URL });
+    await adminPool.query(
+      "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()",
+      [database],
+    );
+    await adminPool.query(`DROP DATABASE IF EXISTS ${database}`);
+    await adminPool.end();
+  }, 30_000);
+
+  // (d) The DAL seam: ambient scoped client inside a scope, pool outside.
+  it("(d) resolveQueryClient returns the scoped client in-scope, the pool out", async () => {
+    const outside = resolveQueryClient(runtimePool);
+    expect(outside).toBe(runtimePool);
+
+    await runWithOrgScope(runtimePool, ORG_A, async (client) => {
+      expect(resolveQueryClient(runtimePool)).toBe(client);
+      // And the scoped client carries the org GUC the loaders will run under.
+      const { rows } = await client.query<{ org: string }>("SELECT current_setting('app.current_org_id', true) AS org");
+      expect(rows[0]?.org).toBe(ORG_A);
+    });
+  });
+
+  // (a) runs read loaders, through the org-scoped client, equal the pool path.
+  it("(a) runs reads via the org-scoped client match the pool, scoped to the org", async () => {
+    const scopedSummary = await runWithOrgScope(runtimePool, ORG_A, (client) => fetchRunSummary(client, RUN_A, ORG_A));
+    const poolSummary = await fetchRunSummary(runtimePool, RUN_A, ORG_A);
+    expect(scopedSummary).toEqual(poolSummary);
+    expect(scopedSummary?.runId).toBe(RUN_A);
+
+    const scopedList = await runWithOrgScope(runtimePool, ORG_A, (client) =>
+      fetchRunListItems(client, { projectId: PROJECT_A, orgId: ORG_A, status: undefined, specId: undefined }),
+    );
+    expect(scopedList.map((r) => r.runId)).toEqual([RUN_A]);
+
+    // The app-layer org predicate still scopes results: org A's actor querying
+    // org B's run via the scoped client gets nothing (belt-and-suspenders).
+    const crossOrg = await runWithOrgScope(runtimePool, ORG_A, (client) => fetchRunSummary(client, "run_b", ORG_A));
+    expect(crossOrg).toBeUndefined();
+  });
+
+  // (b) events read loaders, through the org-scoped client, equal the pool path.
+  it("(b) events reads via the org-scoped client match the pool", async () => {
+    const scopedSnap = await runWithOrgScope(runtimePool, ORG_A, (client) =>
+      fetchRunEventsForSnapshot(client, { runId: RUN_A, orgId: ORG_A, limit: 50, actor: actorA, rawView: false }),
+    );
+    const poolSnap = await fetchRunEventsForSnapshot(runtimePool, {
+      runId: RUN_A,
+      orgId: ORG_A,
+      limit: 50,
+      actor: actorA,
+      rawView: false,
+    });
+    expect(scopedSnap.map((e) => e.eventType)).toEqual(poolSnap.map((e) => e.eventType));
+    expect(scopedSnap.some((e) => e.eventType === "run.started")).toBe(true);
+
+    const scopedPage = await runWithOrgScope(runtimePool, ORG_A, (client) =>
+      fetchEventsPage(client, {
+        runId: RUN_A,
+        orgId: ORG_A,
+        cursor: undefined,
+        pageSize: undefined,
+        actor: actorA,
+        rawView: false,
+      }),
+    );
+    expect(scopedPage.items.some((e) => e.eventType === "run.started")).toBe(true);
+
+    const scopedFeed = await runWithOrgScope(runtimePool, ORG_A, (client) =>
+      fetchFeedPage(client, {
+        projectId: PROJECT_A,
+        orgId: ORG_A,
+        cursor: undefined,
+        pageSize: undefined,
+        actor: actorA,
+        rawView: false,
+      }),
+    );
+    expect(scopedFeed.items.some((e) => e.eventType === "run.started")).toBe(true);
+  });
+
+  // (c) events WRITE recorder routes through the ambient scope, and falls back
+  //     to the pool when there is none — same committed row either way.
+  it("(c) PgEventStore(pool) writes through the ambient scope and via the pool fallback", async () => {
+    const before = await countEvents(runtimePool, RUN_A);
+
+    // In-scope: the append runs on the ambient org-scoped client. We prove that
+    // by appending inside the scope and observing the new row inside the SAME
+    // transaction (only visible if the INSERT used that client).
+    await runWithOrgScope(runtimePool, ORG_A, async (client) => {
+      await new PgEventStore(runtimePool).append({
+        runId: RUN_A,
+        specId: SPEC_A,
+        projectId: PROJECT_A,
+        eventType: "run.completed",
+        payload: { status: "completed", outcome: "scoped" },
+      });
+      const within = await client.query<{ n: string }>(
+        "SELECT count(*)::text AS n FROM events WHERE run_id = $1 AND event_type = 'run.completed'",
+        [RUN_A],
+      );
+      expect(Number(within.rows[0]?.n)).toBe(1);
+    });
+
+    // Out-of-scope: the same store handed the pool falls back to the pool — the
+    // row still commits (inert), proving identical behavior without a scope.
+    await new PgEventStore(runtimePool).append({
+      runId: RUN_A,
+      specId: SPEC_A,
+      projectId: PROJECT_A,
+      eventType: "run.completed",
+      payload: { status: "completed", outcome: "pool" },
+    });
+
+    const after = await countEvents(runtimePool, RUN_A);
+    expect(after - before).toBe(2);
+  });
+});
+
+async function countEvents(pool: Pool, runId: string): Promise<number> {
+  const { rows } = await pool.query<{ n: string }>("SELECT count(*)::text AS n FROM events WHERE run_id = $1", [runId]);
+  return Number(rows[0]?.n ?? 0);
+}
+
+// Seed an org + project + spec + run for a tenant, as the owner pool. Mirrors
+// the R1 test's seeder; kept local so the two cohorts stay independent.
+async function seedTenant(owner: Pool, orgId: string, projectId: string, specId: string, runId: string): Promise<void> {
+  await owner.query(
+    `INSERT INTO organizations (id, kind, external_id, login, display_name)
+     VALUES ($1, 'oidc', $1, $1, $1)`,
+    [orgId],
+  );
+  await owner.query(
+    `INSERT INTO projects (project_id, name, repo_url, org_id)
+     VALUES ($1, 'p', 'https://example.com/r.git', $2)`,
+    [projectId, orgId],
+  );
+  await owner.query(
+    `INSERT INTO specs (spec_id, project_id, org_id, title, description)
+     VALUES ($1, $2, $3, 't', 'd')`,
+    [specId, projectId, orgId],
+  );
+  await owner.query(
+    `INSERT INTO runs (run_id, spec_id, project_id, org_id, trigger, branch, status)
+     VALUES ($1, $2, $3, $4, 'cli', 'main', 'running')`,
+    [runId, specId, projectId, orgId],
+  );
+}
