@@ -18,15 +18,33 @@ const config = {
   // number (see docs/contracts/mutation-testing.md).
   mutate: ["services/orchestrator/src/engine/data/**/*.ts", "db/src/orgScope.ts"],
   reporters: ["clear-text"],
-  // Baseline (FIRST MEASUREMENT — refactor-target, DB-free). Measured on this
-  // branch: 38.89% (35 killed of 90 mutants; orgScope.ts 44.64%, orgScopedDb.ts
-  // 29.41%). `break` is set just below the measured DB-FREE score so the run
-  // passes today and any regression below the floor fails. This is a baseline,
-  // not a strengthening pass: production source is unchanged here. The survivors
-  // concentrate in the SET LOCAL transaction body + policy-scoped read/write
-  // routing that only the RLS_DB-gated integration suite exercises — run the
-  // RLS DB harness (TANREN_RLS_DB_TEST=1) for the true, higher score.
-  thresholds: { high: 80, low: 60, break: 36 },
+  // STRENGTHENED (DB-free behavior tests for the org-scope resolver logic).
+  // Measured on this branch after adding tests/orgScopeResolvers.test.ts: 97.78%
+  // (88 killed of 90 mutants; orgScopedDb.ts 100.00%, orgScope.ts 96.43%) — up
+  // from the 38.89% first-measurement baseline. The new DB-free tests pin the
+  // resolver routing Stryker CAN reach (real AsyncLocalStorage + a recording fake
+  // pool/client): resolveQueryClient / resolveWritableClient (ambient connection
+  // scope → per-job-org short txn → bare pool, and handed-client-verbatim), the
+  // isPool / hasOrgScope discriminators, withJobOrgScope + orgScopingPool (one
+  // short txn per op, the proxy's bind/delegate trap), runWithJobOrgId /
+  // getJobOrgId (ALS get/set), runWithOrgScope / runWithSystemScope (BEGIN /
+  // SET LOCAL / COMMIT vs ROLLBACK ordering + client release), the assertSafeOrgId
+  // injection guard, and the getSystemPool env-driven memo.
+  //
+  // The 2 residual survivors cannot be killed DB-free:
+  //   - orgScope.ts:137 `new Pool({ connectionString: url })` → `new Pool({})`:
+  //     only a REAL connection distinguishes the connection string; this is
+  //     proven by the TANREN_SYSTEM_DATABASE_URL path in the RLS_DB-gated
+  //     integration suite (rlsR3b*), which Stryker SKIPS without
+  //     TANREN_RLS_DB_TEST=1 + a superuser Postgres.
+  //   - orgScope.ts:125 `let systemPoolResolved = false` → `true`: a module-level
+  //     INITIAL-STATE literal that is equivalent to the resetSystemPool() path
+  //     (which sets it false) — unobservable in-process once the memo is touched.
+  // `break` is set just below the measured DB-free score so the run passes today
+  // and any regression below the floor fails. The RLS_DB harness
+  // (TANREN_RLS_DB_TEST=1) raises the number further on the SET LOCAL txn body +
+  // policy-scoped read/write routing (see docs/contracts/mutation-testing.md).
+  thresholds: { high: 80, low: 60, break: 97 },
   logLevel: "warn",
   tempDirName: "reports/mutation/.stryker-tmp-dal",
   concurrency: 4,
