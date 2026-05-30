@@ -10,10 +10,12 @@
 // when the run reaches a terminal status AND one final post-terminal poll
 // has flushed any remaining events/costs/tasks.
 
+import { runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
 import type { Context } from "hono";
 import { stream as honoStream } from "hono/streaming";
 import type { ActorContext } from "../../auth/schemas.js";
+import type { QueryClient } from "../../engine/data/orgScopedDb.js";
 import {
   RECENT_EVENT_CAP,
   type RunCostRecord,
@@ -76,21 +78,29 @@ export class SseDriver {
   }
 
   async run(): Promise<void> {
-    // Initial snapshot frame.
-    const run = await fetchRunSummary(this.args.pool, this.args.runId, this.args.orgId);
-    if (run === undefined) {
+    // Initial snapshot frame. RLS R2 cohort-1: each SSE read batch runs in its
+    // own short org-scoped transaction (`SET LOCAL app.current_org_id`), never a
+    // long-lived one held across the poll loop's sleeps. Inert in R1 — same rows
+    // as the pool path — and RLS-correct in R3.
+    const snapshot = await runWithOrgScope(this.args.pool, this.args.orgId, async (client) => {
+      const run = await fetchRunSummary(client, this.args.runId, this.args.orgId);
+      if (run === undefined) return undefined;
+      const tasks = await fetchRunTasks(client, this.args.runId, this.args.orgId);
+      const recentEvents = await fetchRunEventsForSnapshot(client, {
+        runId: this.args.runId,
+        orgId: this.args.orgId,
+        limit: RECENT_EVENT_CAP,
+        actor: this.args.actor,
+        rawView: this.args.rawView,
+      });
+      const costs = await fetchRunCostsForSnapshot(client, this.args.runId, this.args.orgId);
+      return { run, tasks, recentEvents, costs };
+    });
+    if (snapshot === undefined) {
       await this.emit("status", { runId: this.args.runId, status: "failed", outcome: null });
       return;
     }
-    const tasks = await fetchRunTasks(this.args.pool, this.args.runId, this.args.orgId);
-    const recentEvents = await fetchRunEventsForSnapshot(this.args.pool, {
-      runId: this.args.runId,
-      orgId: this.args.orgId,
-      limit: RECENT_EVENT_CAP,
-      actor: this.args.actor,
-      rawView: this.args.rawView,
-    });
-    const costs = await fetchRunCostsForSnapshot(this.args.pool, this.args.runId, this.args.orgId);
+    const { run, tasks, recentEvents, costs } = snapshot;
     await this.emit("snapshot", { run, tasks, recentEvents, costs });
 
     this.lastStatusFingerprint = `${run.status}:${run.outcome ?? ""}`;
@@ -115,14 +125,24 @@ export class SseDriver {
 
   // tick polls for deltas; returns true when the loop should terminate.
   async tick(): Promise<boolean> {
-    const run = await fetchRunSummary(this.args.pool, this.args.runId, this.args.orgId);
-    if (run === undefined) return true;
+    // RLS R2 cohort-1: each poll batches its reads (runs + tasks + events deltas,
+    // plus the still-pool-cohort cost deltas) into one short org-scoped
+    // transaction. Inert in R1; same rows as the pool path.
+    const polled = await runWithOrgScope(this.args.pool, this.args.orgId, async (client) => {
+      const run = await fetchRunSummary(client, this.args.runId, this.args.orgId);
+      if (run === undefined) return undefined;
+      const tasks = await fetchRunTasks(client, this.args.runId, this.args.orgId);
+      const newEvents = await this.pollNewEvents(client);
+      const newCosts = await this.pollNewCosts(client);
+      return { run, tasks, newEvents, newCosts };
+    });
+    if (polled === undefined) return true;
+    const { run, tasks, newEvents, newCosts } = polled;
     const fp = `${run.status}:${run.outcome ?? ""}`;
     if (fp !== this.lastStatusFingerprint) {
       await this.emit("status", { runId: run.runId, status: run.status, outcome: run.outcome });
       this.lastStatusFingerprint = fp;
     }
-    const tasks = await fetchRunTasks(this.args.pool, this.args.runId, this.args.orgId);
     const changed: TaskTimelineEntry[] = [];
     for (const task of tasks) {
       const fpTask = fingerprintTask(task);
@@ -134,13 +154,11 @@ export class SseDriver {
     for (const task of changed) {
       await this.emit("task", task);
     }
-    const newEvents = await this.pollNewEvents();
     const lastNewEvent = newEvents.at(-1);
     if (lastNewEvent !== undefined) {
       await this.emit("events", { events: newEvents });
       this.lastEventId = Number(lastNewEvent.id);
     }
-    const newCosts = await this.pollNewCosts();
     const lastNewCost = newCosts.at(-1);
     if (lastNewCost !== undefined) {
       await this.emit("costs", { costs: newCosts });
@@ -161,11 +179,12 @@ export class SseDriver {
     return false;
   }
 
-  private async pollNewEvents(): Promise<RunEventRow[]> {
+  private async pollNewEvents(client: QueryClient): Promise<RunEventRow[]> {
     // Read new event rows by id > lastEventId. The redaction pass mirrors
     // the snapshot loader to keep payload shapes identical between the
-    // initial frame and subsequent delta frames.
-    const { rows } = await this.args.pool.query<Record<string, unknown>>(
+    // initial frame and subsequent delta frames. RLS R2 cohort-1: runs on the
+    // tick's ambient org-scoped client (events table).
+    const { rows } = await client.query<Record<string, unknown>>(
       `SELECT id, ts, run_id, task_id, spec_id, project_id, event_type, payload
          FROM events
         WHERE run_id = $1 AND org_id = $3 AND id > $2
@@ -208,8 +227,10 @@ export class SseDriver {
     return out;
   }
 
-  private async pollNewCosts(): Promise<RunCostRecord[]> {
-    const { rows } = await this.args.pool.query<Record<string, unknown>>(
+  private async pollNewCosts(client: QueryClient): Promise<RunCostRecord[]> {
+    // cost_records is a later cohort; it rides the same org-scoped client here
+    // (inert) purely so the per-tick reads share one transaction.
+    const { rows } = await client.query<Record<string, unknown>>(
       `SELECT id, task_id, run_id, project_id, cli, provider, model,
               input_tokens, cached_input_tokens, cache_creation_tokens,
               output_tokens, reasoning_output_tokens, total_tokens, cost_usd,
