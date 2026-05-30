@@ -1,16 +1,18 @@
 # Phase 2B Execution Plan & Session Checkpoint
 
-_Last updated 2026-05-28. This is the working execution plan + decision log for
-getting through Phase 2B. ROADMAP.md carries the canonical phase/spec table;
-this doc carries the **how** (streams, subagents, verification) and the
-**session decisions** that aren't obvious from the code._
+_Working execution plan + decision log from the Phase 2B build. **Phase 2B is
+complete and Phase 3 has since shipped** (the run executor that closes the loop
+landed as P3-0001) — this doc is retained for the **how** (streams, subagents,
+verification) and the **session decisions** that aren't obvious from the code.
+For current phase status see [`../../ROADMAP.md`](../../ROADMAP.md) and
+[`phase-3-specs.md`](phase-3-specs.md)._
 
 ## Phase 2B progress (updated 2026-05-28, session 2)
 
 - **P2B-0001 shell: MERGED** (PR #59) — TopBar/SideNav/ForgePalette, client-islands esbuild build, typed orchestrator client, GitHub-OAuth landing, `app.request` test harness. Child screens mount via the **append-only `services/dashboard/src/app/screens.ts` registry** + reuse `renderShell`/`loadShellContext`; `mountShell` gap-fills placeholders only (order-robust). Playwright e2e is local-only, NOT in the CI gate.
 - **Wave 1: MERGED** via integration PR **#65** — P2B-0002 (onboarding + credentials + notifications, incl. a new orchestrator notifications route), P2B-0003 (chat-primary project view + spec creation + routing settings), P2B-0004 (run-detail + review + live SSE), P2B-0005 (history + costs). Built in parallel (#62/#60/#63 + #61); #61 merged solo, the other three reconciled in #65.
 - **Wave 2: MERGED** (PR #66) — P2B-0008 failure recovery: halted-run page + four recovery actions (revise/replan-with-steering/rollback/open-inspection-thread) as authz'd orchestrator routes; lineage persisted via new `recovery.*` **events** (migration 0017 + event-type/sensitivity additions), not a bespoke table.
-- **Remaining:** P2B-0009 greenfield (STRETCH — deferred, likely Phase 3); **P2B-0006 operator-triggered live workflow (NEXT — serial, wave 3)**; P2B-0007 phase-2 demo (serial, wave 4, closes Phase 2).
+- **Remaining (at the time of this checkpoint):** P2B-0009 greenfield (STRETCH — migrated to Phase 3 as P3-0015 full greenfield, which has since shipped); P2B-0006 operator-triggered live workflow; P2B-0007 phase-2 demo. **All since resolved:** the trigger/live-workflow wiring shipped, and the real run executor (the implicit prerequisite) landed in Phase 3 as **P3-0001**; the live closeout demo is re-homed as **P3-0009** (pending real credentials to record).
 - **Load-bearing lesson:** parallel agents must NOT all extend the same `OrchestratorClient` — divergent private `getJson`/`sendJson` + duplicate `listRuns` forced the #65 integration pass. Client is now split into `api/{httpClient,orchestrator,palette,types}.ts`; P2B-0008 correctly used its own `api/recoveryClient.ts`. Give future parallel client-touching screens their own api modules up front.
 
 ## Current state (2026-05-28)
@@ -97,13 +99,15 @@ First Phase 3 work (well-specified, evidence-backed by decision 3):
 
 Phase 3 hi-fi prerequisites (must be locked before building those surfaces): thick-Forge interaction model + spec discovery, DAG-primary project view, review→merge flow, greenfield Forge interview, `tanren-config` audit gate.
 
-## Pick up here
+## Status (resolved)
 
-_Shell + all five screens (P2B-0001/0002/0003/0004/0005/0008) are MERGED on `main`. Repo is clean — no open PRs, no stray worktrees/branches. Next is the serial back half._
+_Phase 2B is complete and Phase 3 has shipped on top of it. The "pick up here"
+back-half below has been done; it is retained as the record of what was outstanding
+at this checkpoint and how it resolved._
 
-1. **Build P2B-0006 — operator-triggered live workflow (wave 3, serial).** Thread the merged screens into one real operator-driven run: GitHub-OAuth sign-in → org/existing-project onboarding → spec creation → trigger a real Codex run (plan→write→check→audit→draft PR→CI) → inspect run detail (4-source cost bar incl. credits, trajectory, SSE) → recover a forced failure → see it in history/costs — all through the UI, no CLI. Owns `services/dashboard/src/routes/runs/trigger/**`, the end-to-end wiring, `services/orchestrator/tests/**operatorLive**`, `docs/operator-guide/operator-driven-run.md`. Consumes P2B-0002/0003/0004/0008 + P2A-0015. This is where the **operator needs eyes on the live browser flow** (the model can't natively see the browser) — run the Playwright e2e smoke + manual golden-flow QA.
-2. **Then P2B-0007 — phase-2 demo (wave 4, serial, closes Phase 2):** exercise the whole product on a fixture repo end-to-end as the v0 milestone artifact.
-3. P2B-0009 greenfield (thin new-project form) is the deferred STRETCH — land it as a small solo PR if time allows before closing 2B, else it migrates to Phase 3.
-4. Local acceptance config (`tanren.acceptance.json`, gitignored) currently points `github_repo_url` at `cat-cave/tanren-fixture-medium`; both fixture repos exist (easy + medium, public). GitHub token file at `~/.config/tanren/acceptance-github-token`.
+1. **P2B-0006 — operator-triggered live workflow:** the trigger + end-to-end wiring shipped (`services/dashboard/src/routes/runs/trigger/**`, the orchestrator live tests, `docs/operator-guide/operator-driven-run.md`). The implicit prerequisite — a service-side run executor that actually dequeues the `plan` job — was **not** part of 2B; it landed in Phase 3 as **P3-0001** (`TANREN_RUN_WORKER=1`). With P3-0001, a dashboard-triggered run runs autonomously through plan→write→check→audit→gate→draft-PR→CI.
+2. **P2B-0007 — phase-2 demo:** re-homed as **P3-0009** (the closeout demo can only run for real on the Tier-1 loop). It is the recorded live proof, pending real credentials to execute.
+3. **P2B-0009 greenfield (thin stretch form):** superseded by the full greenfield track **P3-0015** (multi-round Forge interview → derived spec DAG), which has shipped.
+4. The direct-execution `scripts/acceptance/{easy,medium}.ts` recipes referenced earlier were **removed** when P3-0001 landed; the system is now exercised only through the real dequeue→execute path.
 
-> **Note for P2B-0006 (live run):** full-green of an autonomous run depends on the Phase-3 gate-check cluster (per-repo workspace bootstrap + deterministic install/test gate + intent-only checker), per [[verification-architecture-split]]. The operator-driven demo can route around this with operator-in-the-loop steering, but a fully-autonomous green run is still Phase-3-gated — don't treat a hand-held demo as proof the gate-check work is done.
+> **Historical note on the gate-check cluster:** full-green of an autonomous run depended on the Phase-3 gate-check cluster (per-repo workspace bootstrap + deterministic install/test gate + intent-only checker), per [[verification-architecture-split]]. That cluster shipped as P3-0004/0005/0006/0007, so a fully-autonomous green run is no longer gated on unbuilt work — only on real credentials for the live demo.

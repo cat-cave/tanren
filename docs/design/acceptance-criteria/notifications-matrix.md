@@ -1,5 +1,11 @@
 # Notifications matrix UI
 
+> **Currency note.** This is the Phase-2 build checklist for P2B-0002. Since then,
+> Phase 3 (P3-0024) wired **all nine channels** as real adapters — the "only ntfy
+> delivers in Phase 2" / "no dispatch wiring" lines below are historical. See
+> [`../../operator-guide/notifications.md`](../../operator-guide/notifications.md)
+> for current behavior.
+
 **Surface**: the per-event × per-channel × severity matrix operators configure during org setup and edit from settings.
 
 **Owning spec**: P2B-0002 (`docs/roadmap/phase-2b-specs.md`).

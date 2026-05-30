@@ -1,7 +1,24 @@
 # Managed Credentials
 
-Tanren credentials are imported explicitly and stored in Vault. The orchestrator does not discover host `~/.codex`,
+Tanren credentials are imported explicitly and stored in a secret store. The orchestrator does not discover host `~/.codex`,
 `~/.config`, or environment-provider credentials, and runner containers do not receive host credential bind mounts.
+
+## Credential kinds
+
+The credential registry supports these kinds (`engine/credentials/`):
+
+- `codex_chatgpt_auth` — a Codex CLI `auth.json` bundle (Writer/Answerer).
+- `claude_cli_auth` — a Claude CLI auth bundle (Writer/Answerer; P3-0012).
+- `opencode_cli_auth` — an opencode CLI auth bundle (Writer; P3-0012).
+- `github_token` — a GitHub PAT / install token for clone, push, draft PR, and CI status.
+- `github_app` — a GitHub **App installation** (App id + private-key PEM); per-org installation tokens auto-mint and rotate (P3-0003). This is the preferred repo-connectivity model; `github_token` is the dev/back-compat fallback.
+- `opaque` — an arbitrary write-only secret blob.
+
+## Secret-store backends + tenant namespacing
+
+The secret store is **pluggable** (`buildSecretStore`): **Vault** (default), **GCP Secret Manager**, **AWS Secrets Manager**, or **1Password**, selected by env. See [`deploy.md`](deploy.md).
+
+Vault refs are **tenant-namespaced**: the import route derives the ref server-side from the authenticated actor as `credential/<slug>/<scope>/<ownerId>/<name>` (`<scope>` is `org` or `me`), so an org admin cannot write to another tenant's key. The read side enforces the same scope/owner on any caller-supplied full ref. Legacy short refs (`credential/<slug>/<name>`) resolve unchanged only through the legacy import endpoints.
 
 ## Codex ChatGPT Auth
 
@@ -38,8 +55,8 @@ TANREN_ORCHESTRATOR_URL=http://127.0.0.1:3100 \
 
 Do not use a host default path. The auth file path must be provided intentionally for each import.
 
-## GitHub Token
+## GitHub connectivity
 
-The Phase 1 live workflow also needs a managed GitHub credential that can push a branch and open a draft PR in the target fixture repository. The current live harness accepts a token file through `TANREN_GITHUB_TOKEN_FILE` and stores the value in Vault for the run.
+A run needs GitHub access to push a branch, open a draft PR, and read CI status in the target repo. The **preferred** path is a per-org **GitHub App installation** (`github_app` kind, P3-0003): install the App on the org from the dashboard onboarding step, and the orchestrator mints + auto-rotates short-lived installation tokens — no PAT to manage. See [`github-app.md`](github-app.md).
 
-Treat the token file as a bootstrap input, not runtime state. Create it with restrictive permissions, pass the path explicitly, and remove it after the live run. Workflow events should record only the credential ref and redacted metadata, never the token value.
+A managed **`github_token`** (PAT or install token) is retained as the dev/back-compat fallback and is what the (now-removed) Phase 1/2 acceptance harnesses used via `TANREN_GITHUB_TOKEN_FILE`. When importing a token, treat the token file as a bootstrap input, not runtime state: create it with restrictive permissions, pass the path explicitly, and remove it after import. Workflow events record only the credential ref and redacted metadata, never the token value.

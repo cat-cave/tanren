@@ -1,18 +1,30 @@
-# Phase 3 Hi-Fi Design Gaps
+# Phase 3 Hi-Fi Design Gaps — RESOLVED (built)
 
-**Purpose.** Eight Phase 3 specs are **design-blocked** — their backend foundations are
-either built or well-understood, but their _interaction model / surface design_ is not
-locked in the hi-fi. This document is the input to that hi-fi/design work: for each
-blocked surface it states **what the backend already provides** (the contracts and
-affordances the design must build on), **what needs to be designed**, and the **open
-decisions to lock** before engineering can build it.
+**Status (updated).** The eight thick-product surfaces this document tracked
+(thick Forge, DAG canvas, spec discovery, full greenfield + brownfield
+onboarding, `tanren-config` audit-gate, scheduled-audits library, issue-source
+ingestion) are now **built and merged on `main`** — their interaction models were
+locked and the surfaces shipped. **All of Phase 3 (Tier 1 loop + Tier 2
+expansion) is merged.**
 
-Everything else in Phase 3 is already merged (Tier 1 loop + Tier 2 expansion, PRs
-#71–#93). These eight are what's left, and they wait on design — not on more code.
+**One open item remains:** the **Forge in-conversation write-action approval
+model** is still deferred. The thick-Forge conversation engine and its LLM
+backend ship and the tool surface exists, but the conversation engine is
+constrained to **read + propose** — write actions remain operator-button-driven
+(P2A-0019), and the inline "propose action → operator confirm → execute" approval
+UX within a Forge thread is design-pending (see
+`services/orchestrator/src/engine/forge/conversation/engine.ts`). Each section
+below is retained as the original design brief; what shipped resolved the
+"Needs design" / "Decisions to lock" items except where it touches that write-action
+model.
 
-Cross-reference: spec stubs in [`phase-3-specs.md`](../roadmap/phase-3-specs.md) (P3-0010,
+**Purpose (original).** This document was the input to the hi-fi/design work for
+the then-design-blocked surfaces: for each it states **what the backend already
+provides**, **what needs to be designed**, and the **decisions to lock**.
+
+Cross-reference: spec entries in [`phase-3-specs.md`](../roadmap/phase-3-specs.md) (P3-0010,
 0013, 0014, 0015, 0016, 0017, 0021, 0022); bucket prose in
-[`phase-3.md`](../roadmap/phase-3.md); existing prototypes in `tanren-hi-fidelity/`.
+[`phase-3.md`](../roadmap/phase-3.md); prototypes in `tanren-hi-fidelity/`.
 
 ---
 
@@ -25,6 +37,13 @@ Cross-reference: spec stubs in [`phase-3-specs.md`](../roadmap/phase-3-specs.md)
 ---
 
 ## 1. P3-0010 — Thick Forge (LLM-backed conversation)
+
+> **Built — with one open item.** The LLM-backed Forge conversation engine
+> (`engine/forge/conversation/`) ships and reads/writes `forge_turns`; the
+> read tool surface and narration are live. **Open:** the conversation engine is
+> constrained to read + propose — **in-conversation write-action approval is
+> still deferred** (write actions remain operator-button-driven). This is the
+> single remaining design gap in this document.
 
 Replace the templated v0 Forge narration with a real LLM author that reads the
 conversation and invokes the tool surface.
@@ -53,6 +72,10 @@ conversation and invokes the tool surface.
 
 ## 2. P3-0013 — Spec DAG canvas + DAG-primary project view
 
+> **Built.** The SVG DAG canvas + DAG-primary project view shipped
+> (`services/dashboard/src/components/project/DagCanvas.tsx`, `DagNodes`,
+> `DagEdges`, `client/dagCanvas.ts`). The brief below is retained for context.
+
 The full SVG canvas of milestones/behaviors/specs with attention badges and
 click-routing — and making it the _primary_ project view.
 
@@ -78,6 +101,9 @@ click-routing — and making it the _primary_ project view.
 ---
 
 ## 3. P3-0014 — Spec discovery flow
+
+> **Built.** The discovery flow shipped (`engine/forge/discovery/` with
+> provenance + the dashboard discovery route). The brief below is retained.
 
 Forge classifies an insight (sales note, GitHub issue, exec memo) → proposes specs
 with DAG-placement options → persists provenance.
@@ -107,6 +133,10 @@ with DAG-placement options → persists provenance.
 
 ## 4. P3-0015 — Greenfield onboarding (full track)
 
+> **Built.** The multi-round Forge interview → derived spec DAG shipped
+> (`engine/forge/interview/` with `derive.ts` + `providerAnswerer.ts`),
+> superseding the thin P2B-0009 form. The brief below is retained.
+
 The multi-round Forge vision interview → derived spec DAG (the hi-fi references a
 ~71-spec DAG) → sources / scheduled-audits / arrival surfaces.
 
@@ -132,6 +162,10 @@ The multi-round Forge vision interview → derived spec DAG (the hi-fi reference
 ---
 
 ## 5. P3-0016 — Brownfield onboarding (full track)
+
+> **Built.** The recon agent + config-injection PR + DAG seed + governance picker
+> shipped (`engine/forge/brownfield/` with `recon.ts`, `configInjection.ts`,
+> `seed.ts`, plus the dashboard `GovernanceStep`). The brief below is retained.
 
 The read-only recon agent + config-injection PR + DAG seed + governance picker —
 the remaining hi-fi 01c steps beyond the minimal link flow already shipped.
@@ -161,6 +195,9 @@ the remaining hi-fi 01c steps beyond the minimal link flow already shipped.
 
 ## 6. P3-0017 — `tanren-config` audit-gate repo pattern
 
+> **Built.** The optional org-level audit-gate toggle + gated-write-via-PR flow
+> shipped. The brief below is retained.
+
 An optional org toggle routing Bucket-B config writes through a PR in a separate
 `tanren-config` repo before applying to the DB.
 
@@ -185,6 +222,10 @@ An optional org toggle routing Bucket-B config writes through a PR in a separate
 ---
 
 ## 7. P3-0021 — Scheduled-audits library
+
+> **Built.** The scheduled-audits library shipped (`engine/forge/audits/` with
+> `scheduler.ts`, `recommended.ts`, `store.ts`, plus the dashboard audits route).
+> The brief below is retained.
 
 Cron-driven background scans (security, mutation, perf, deps, type-coverage, a11y,
 license, stale-specs) producing auto-generated specs.
@@ -211,6 +252,10 @@ license, stale-specs) producing auto-generated specs.
 
 ## 8. P3-0022 — Issue-source ingestion
 
+> **Built.** Issue-source ingestion shipped (`engine/forge/inbox/` with
+> `issuesConnector.ts` + GitHub/Sentry/Linear/Jira connectors and the dashboard
+> inbox/candidate route). The brief below is retained.
+
 GitHub Issues → candidate specs via label-driven classification (Linear/Jira/webhooks
 deferred further).
 
@@ -231,9 +276,12 @@ deferred further).
 
 ---
 
-## Cross-cutting decisions to lock first
+## Cross-cutting decisions (resolved)
 
-These gate multiple surfaces; locking them unblocks the most:
+These gated multiple surfaces; they were locked and the surfaces built. The only
+one not fully resolved is the **Forge in-conversation write-action approval model**
+(#1), which remains deferred. The original sequencing is retained below for the
+record.
 
 1. **Thick-Forge interaction model (#1)** — gates discovery (#3), greenfield (#4), and the recon framing of brownfield (#5). **Lock this first.**
 2. **DAG canvas visual language + DAG-primary vs. chat-primary (#2)** — gates discovery placement (#3), greenfield DAG derivation (#4), brownfield DAG-seed (#5). **Lock second.**

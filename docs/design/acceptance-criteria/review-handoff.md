@@ -1,5 +1,12 @@
 # Review handoff
 
+> **Currency note.** This is the Phase-2 build checklist for P2B-0004, which
+> shipped the review screen as a state-display surface. Phase 3 has since wired the
+> action side: the real merge contract / per-repo merge integration (Mergify queue ·
+> direct merge · external-reviewer handoff) and live preview-deploy iframes are
+> **built**. The "renders disabled in v0 — Phase 3" and "live preview iframes are
+> Phase 3" lines below are therefore historical.
+
 **Surface**: the per-PR review screen — a behavior checklist, deferral resolutions, preview pane, and readiness gate that displays state (but does not act on merge in Phase 2).
 
 **Owning spec**: P2B-0004 (`docs/roadmap/phase-2b-specs.md`).

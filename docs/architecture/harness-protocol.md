@@ -1,8 +1,8 @@
 # Harness↔Orchestrator Protocol (v1)
 
 This document is the **versioned, documented contract** between the orchestrator
-and any _harness_ — the thing that runs an agentic CLI (codex/claude/opencode
-today; agy/aider/pi/reasonix and a future native Rust harness later). It is
+and any _harness_ — the thing that runs an agentic CLI (codex/claude/opencode/aider
+today; agy/pi/reasonix and a future native Rust harness later). It is
 Track C §4 of [`portability-and-longevity.md`](./portability-and-longevity.md):
 
 > Define the harness protocol as a versioned, documented contract (a task
@@ -43,10 +43,12 @@ This yields exactly two capability classes:
 | Class              | Roles              | `structuredOutput` | Harnesses today |
 | ------------------ | ------------------ | ------------------ | --------------- |
 | Structured-capable | `write` + `answer` | `true`             | codex, claude   |
-| Writer-only        | `write`            | `false`            | opencode, agy\* |
+| Writer-only        | `write`            | `false`            | opencode, aider |
 
-\* agy is an incoming writer-only harness; it is documented here as the second
-member of the writer-only class but is **not** wired in this change.
+opencode and aider are wired writer-only harnesses (each can edit files but
+exposes no structured-JSON channel, so neither can serve the `answer` role).
+agy/pi/reasonix are named throughout this doc as future members of these classes
+but are **not** wired yet (they await CLI specs).
 
 The capability table is the **single source of truth** in the providers layer:
 [`harnessCapability.ts`](../../services/orchestrator/src/engine/providers/harnessCapability.ts).
@@ -54,7 +56,7 @@ Each entry is a typed record:
 
 ```ts
 interface HarnessCapability {
-  readonly cli: HarnessCli; // "codex" | "claude" | "opencode"
+  readonly cli: HarnessCli; // "codex" | "claude" | "opencode" | "aider"
   readonly roles: readonly HarnessRole[]; // ("write" | "answer")[]
   readonly structuredOutput: boolean; // true ⟺ "answer" ∈ roles
 }
@@ -193,7 +195,7 @@ role)` **before** constructing an adapter. A cli the table does not mark
 
 Net effect: **adding a harness = one capability entry + its adapter.** Selection
 behavior is fully determined by the table; the conformance test pins that the
-v1 table reproduces today's selection (codex/claude both roles, opencode
+v1 table reproduces today's selection (codex/claude both roles, opencode/aider
 writer-only).
 
 ## 7. Versioning
@@ -220,5 +222,6 @@ contract + conformance tests, and gets the orchestrator integration for free.
 - **A full event-stream schema.** v1 only requires token usage + usage-limit be
   recoverable from the stream (§4.4); a first-class event contract is future
   work.
-- **New harnesses.** agy/aider/pi/reasonix and the Rust harness are named here
-  for context but are not wired in this change.
+- **New harnesses.** aider is now wired (writer-only). agy/pi/reasonix and the
+  Rust harness are named here for context but are not wired yet (they await CLI
+  specs).
