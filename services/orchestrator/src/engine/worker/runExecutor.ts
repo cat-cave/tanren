@@ -118,11 +118,21 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
   // whose lease has lapsed — i.e. a crashed worker that stopped heartbeating.
   const stopHeartbeat = startHeartbeat(deps, job.id, leaseMs);
   const quotaPolicy = deps.quotaPolicy ?? new NoopQuotaPolicy();
-  // RLS R2 cohort-3: hoisted so the catch-path recoverable finalize can org-scope
-  // its writes. Resolved once the run's execution context loads; stays null for a
-  // legacy/unscoped run, or if the context load itself threw (the finalize then
-  // falls back to the pool, the pre-cohort-3 behavior).
-  let resolvedOrgId: string | null = null;
+  // RLS: the catch-path recoverable finalize must org-scope its UPDATE runs, or
+  // the enforced `tanren_app` policy denies the unscoped write and the run sticks
+  // `queued` forever. The owning run's org is KNOWN from the claim itself — the
+  // queue carries it (job_queue stays OUTSIDE RLS; P1 threaded org_id onto the
+  // row, P2 returns it from the claim). So we seed the finalize scope from the
+  // CLAIMED org immediately, BEFORE any work that can throw (credential
+  // resolution / context hydration). An EARLY failure — e.g. misconfigured
+  // credentials throwing in `loadRunContextScoped` before `resolvedOrgId` could
+  // be reassigned — then still finalizes org-scoped, so the policy admits the
+  // write and the run cleanly reaches `halted` instead of being stuck `queued`.
+  // The later context load reassigns this to the run's actual org; the two agree
+  // (the scoped hydration cross-checks them), so this is a no-op narrowing in the
+  // common case. A legacy/unscoped job (org_id NULL) stays null — the finalize
+  // falls back to the pool, behavior-identical to before RLS.
+  let resolvedOrgId: string | null = job.orgId ?? null;
   try {
     // RLS R3b: the claimed job carries its owning run's org_id on the queue row
     // (job_queue stays OUTSIDE RLS — the claim above resolved it cross-org). That

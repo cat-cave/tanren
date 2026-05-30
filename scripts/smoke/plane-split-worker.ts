@@ -14,11 +14,15 @@
 // the job. The deterministic, durable cross-process signal is the `job_queue`
 // row: the SEPARATE worker process claims it out of `queued` and writes a
 // terminal queue state (`failed`, with the org stamped + a `failure_kind`) — a
-// row only the OTHER process could have written. (The run row itself stays
-// `queued`: the credential throws BEFORE the worker resolves the run's org, so
-// its recoverable-finalize UPDATE has no org scope and RLS denies it by default
-// — a correct R3b interaction, not a P1 regression. The proof is the boundary
-// crossing, not a green run.)
+// row only the OTHER process could have written. The run row ALSO finalizes to a
+// terminal `halted` state: the worker's early-failure finalize org-scopes its
+// `UPDATE runs` from the CLAIMED org (carried on the queue row, known the moment
+// the job is claimed), so the enforced RLS policy admits the write even though
+// the credential threw BEFORE the run's context (and thus its resolved org) was
+// loaded. Before fix/rls-early-failure-finalize-scope this finalize ran unscoped
+// and RLS denied it, leaving the run stuck `queued` forever — worse than a
+// cleanly-failed run. The proof here is the boundary crossing AND that the run
+// reaches a terminal state under enforced RLS, not a green run.
 //
 // We ALSO confirm the data plane is RLS-gated: the run row is readable under the
 // run's org scope on the `tanren_app` role but DENIED under an empty scope
@@ -111,26 +115,29 @@ async function observeJob(owner: ReturnType<typeof createDbPool>): Promise<JobOb
   };
 }
 
-// Prove the data plane is RLS-gated: as the `tanren_app` runtime role (the role
-// the worker container connects as), the run row is visible under the run's org
-// scope but DENIED under an EMPTY scope (deny-by-default). Returns [scopedRows,
-// emptyScopeRows].
-async function rlsVisibility(): Promise<[number, number]> {
+// Prove the data plane is RLS-gated AND that the worker finalized the run: as the
+// `tanren_app` runtime role (the role the worker container connects as), read the
+// run under the run's org scope (admitted) and under an EMPTY scope (denied,
+// deny-by-default). Returns [scopedRows, emptyScopeRows, scopedStatus] where
+// scopedStatus is the run's terminal status seen under its own org scope.
+async function rlsVisibility(): Promise<[number, number, string | undefined]> {
   const app = createDbPool(APP_URL);
   try {
-    const read = async (org: string | null): Promise<number> => {
+    const read = async (org: string | null): Promise<{ rows: number; status: string | undefined }> => {
       const client = await app.connect();
       try {
         await client.query("BEGIN");
         await client.query("SELECT set_config('app.current_org_id', $1, true)", [org ?? ""]);
-        const result = await client.query("SELECT 1 FROM runs WHERE run_id = $1", [runId]);
+        const result = await client.query<{ status: string }>("SELECT status FROM runs WHERE run_id = $1", [runId]);
         await client.query("COMMIT");
-        return result.rowCount ?? 0;
+        return { rows: result.rowCount ?? 0, status: result.rows[0]?.status };
       } finally {
         client.release();
       }
     };
-    return [await read(orgId), await read(null)];
+    const scoped = await read(orgId);
+    const empty = await read(null);
+    return [scoped.rows, empty.rows, scoped.status];
   } finally {
     await app.end();
   }
@@ -161,18 +168,28 @@ async function main(): Promise<void> {
         if (job.jobOrgId !== orgId) {
           throw new Error(`job org mismatch: expected ${orgId}, got ${String(job.jobOrgId)}`);
         }
-        const [scopedRows, emptyScopeRows] = await rlsVisibility();
+        const [scopedRows, emptyScopeRows, runStatus] = await rlsVisibility();
         if (scopedRows < 1) {
           throw new Error("run not visible under its own org scope on the tanren_app role (RLS misconfigured)");
         }
         if (emptyScopeRows !== 0) {
           throw new Error("run visible under an EMPTY scope on tanren_app — RLS deny-by-default not enforced");
         }
+        // The worker's early-failure finalize must have moved the run OUT of
+        // `queued` (org-scoped from the claimed org). A run stuck `queued` is the
+        // exact bug fix/rls-early-failure-finalize-scope eliminates.
+        if (runStatus === "queued" || runStatus === undefined) {
+          throw new Error(
+            `run stuck in non-terminal state (status=${String(runStatus)}) — the worker's early-failure ` +
+              `finalize did not org-scope its UPDATE (RLS denied it). This is the stuck-queued regression.`,
+          );
+        }
         process.stdout.write(
           `[plane-split-smoke] PROOF: the standalone worker container claimed + finished the job across the ` +
             `API↔worker process boundary — job_queue status=${job.status} attempts=${job.attempts} ` +
-            `failureKind=${String(job.failureKind)} org=${String(job.jobOrgId)}; the run is org-scoped under the ` +
-            `tanren_app role (scoped=${scopedRows} row, empty-scope=${emptyScopeRows} rows / deny-by-default)\n`,
+            `failureKind=${String(job.failureKind)} org=${String(job.jobOrgId)}; the run finalized to a terminal ` +
+            `state (status=${String(runStatus)}) and is org-scoped under the tanren_app role ` +
+            `(scoped=${scopedRows} row, empty-scope=${emptyScopeRows} rows / deny-by-default)\n`,
         );
         return;
       }
