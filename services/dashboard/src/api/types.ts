@@ -5,7 +5,30 @@
  * depends on (orgs, projects, forge tools). They are intentionally local and
  * minimal — the shell only reads the fields it renders. Where the orchestrator
  * contract widens, widen these alongside it (they are not auto-derived).
+ *
+ * The run-detail HTTP response types (`RunSummary`, `TaskTimelineEntry`,
+ * `RunEventRow`, `RunCostRecord`, `RunListItem`, `ProjectFeedItem`,
+ * `RunSpecSummary`, `RunDetail`) are NO LONGER hand-mirrored: they are
+ * GENERATED from the orchestrator's neutral JSON-Schema export
+ * (`contracts/json/http/**`) into `./http.gen.ts` and re-exported below, so the
+ * BFF↔orchestrator contract cannot silently drift. See move #3 of
+ * docs/architecture/future-refactor-and-scale.md. Regenerate via
+ * `corepack pnpm run codegen:dashboard-types`; the `dashboard-types-drift` gate
+ * fails on divergence.
  */
+
+// Generated-from-JSON-Schema run-detail HTTP types (single source of truth:
+// the orchestrator's Zod contracts → contracts/json/http/** → http.gen.ts).
+export type {
+  RunSummary,
+  TaskTimelineEntry,
+  RunEventRow,
+  RunCostRecord,
+  RunListItem,
+  ProjectFeedItem,
+  RunSpecSummary,
+  RunDetail,
+} from "./http.gen.js";
 
 /** An organization the operator is a member of (`GET /orgs`). */
 export interface OrgSummary {
@@ -114,106 +137,9 @@ export interface CostRecord {
 // Widen these alongside the orchestrator contract when it widens.
 // ---------------------------------------------------------------------------
 
-/** `GET .../runs/:runId` → `run`. */
-export interface RunSummary {
-  runId: string;
-  specId: string;
-  projectId: string;
-  branch: string;
-  trigger: string;
-  status: string;
-  outcome: string | null;
-  startedAt: string;
-  endedAt: string | null;
-  prUrl: string | null;
-}
-
-/** A planner/write/check/audit/ci task in the run timeline. */
-export interface TaskTimelineEntry {
-  taskId: string;
-  runId: string;
-  kind: string;
-  parentTaskId: string | null;
-  title: string;
-  status: string;
-  outcome: string | null;
-  failureKind: string | null;
-  attempt: number;
-  cli: string;
-  model: string | null;
-  startedAt: string | null;
-  endedAt: string | null;
-}
-
-/** A redacted-by-default event row. `payload` is opaque; `redactedPaths` lists dropped fields. */
-export interface RunEventRow {
-  id: number | string;
-  ts: string;
-  runId: string | null;
-  taskId: string | null;
-  specId: string | null;
-  projectId: string | null;
-  eventType: string;
-  payload: unknown;
-  redactedPaths: string[];
-}
-
-/** A typed cost record (P2A-0011) attributed to a source + model. */
-export interface RunCostRecord {
-  id: number | string;
-  runId: string;
-  taskId: string;
-  projectId: string;
-  cli: string;
-  provider: string;
-  model: string;
-  inputTokens: number;
-  cachedInputTokens: number;
-  cacheCreationTokens: number;
-  outputTokens: number;
-  reasoningOutputTokens: number;
-  totalTokens: number;
-  costUsd: string | null;
-  billingMode: "per_token" | "subscription" | "self_hosted";
-  costBasis: "ccusage" | "provider_pricing" | "unknown";
-  recordedAt: string;
-}
-
-/**
- * A run summary row for the history list (`GET .../runs` items). Extends the
- * base run summary with the spec title, an aggregated run-level cost total, the
- * last event timestamp, and the review-needed flag.
- */
-export interface RunListItem {
-  runId: string;
-  specId: string;
-  projectId: string;
-  branch: string;
-  trigger: string;
-  status: string;
-  outcome: string | null;
-  startedAt: string;
-  endedAt: string | null;
-  prUrl: string | null;
-  specTitle: string;
-  /** Run-level SUM(cost_usd) as a dollar string ("0" when nothing priced). */
-  costTotalUsd: string;
-  lastEventAt: string | null;
-  /** True when the run is in a review state with an open PR. */
-  needsReview: boolean;
-}
-
-/** A project activity-feed event (`GET .../feed`, P2A-0014). */
-export interface ProjectFeedItem {
-  id: number | string;
-  ts: string;
-  runId: string;
-  taskId: string | null;
-  specId: string | null;
-  projectId: string | null;
-  eventType: string;
-  redactedPaths: string[];
-}
+// RunSummary, TaskTimelineEntry, RunEventRow, RunCostRecord, RunListItem, and
+// ProjectFeedItem are generated from contracts/json/http/** and re-exported at
+// the top of this file (no longer hand-mirrored here).
 
 /** A spec row (`GET .../specs`, P2A-0013). */
 export interface SpecSummary {
@@ -458,31 +384,10 @@ export interface CursorPage<T> {
   nextCursor: string | null;
 }
 
-/** The spec embedded in a run detail. */
-export interface RunSpecSummary {
-  specId: string;
-  title: string;
-  description: string;
-  behaviorIds: string[];
-  milestoneId: string | null;
-}
-
-/** Forge thread bound to the run, with recent turns (rendered opaque). */
-export interface RunForgeBundle {
-  threadId: string;
-  recentTurns: unknown[];
-}
-
-/** Full `GET .../runs/:runId` response. */
-export interface RunDetail {
-  run: RunSummary;
-  spec: RunSpecSummary;
-  tasks: TaskTimelineEntry[];
-  recentEvents: RunEventRow[];
-  costs: RunCostRecord[];
-  insights: unknown[];
-  forgeThread: RunForgeBundle | null;
-}
+// RunSpecSummary and RunDetail are generated from contracts/json/http/** and
+// re-exported at the top of this file. The forge-thread bundle embedded in
+// RunDetail (`{ threadId, recentTurns }`) is inlined by the generated type, so
+// the previously hand-written `RunForgeBundle` alias is no longer needed.
 
 /** The org+project a run lives in, resolved from the run-list endpoints. */
 export interface RunLocation {

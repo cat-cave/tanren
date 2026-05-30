@@ -174,7 +174,7 @@ export function buildTrajectory(tasks: TaskTimelineEntry[]): TrajectoryMoment[] 
   });
   let writeIndex = 0;
   return sorted.map((task) => {
-    let phase = task.kind;
+    let phase: string = task.kind;
     if (task.kind === "write") {
       writeIndex += 1;
       phase = `write subtask ${writeIndex}`;

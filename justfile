@@ -33,6 +33,13 @@ answerer-schema-drift:
 contract-schema-drift:
   corepack pnpm run check:contract-schema-drift
 
+# Drift gate for the dashboard's client-side run-detail HTTP types: regenerates
+# services/dashboard/src/api/http.gen.ts from contracts/json/http/** and fails
+# if the committed file diverges. Same mechanism as contract-schema-drift; this
+# is the durable guarantee the BFF↔orchestrator contract can't silently drift.
+dashboard-types-drift:
+  corepack pnpm run check:dashboard-types-drift
+
 knip:
   corepack pnpm run check:knip
 
@@ -42,7 +49,7 @@ spelling:
 typecheck:
   corepack pnpm run typecheck
 
-fast-check: format-check lint types-lint architecture schema-drift state-drift event-drift answerer-schema-drift contract-schema-drift knip spelling typecheck test compose-config
+fast-check: format-check lint types-lint architecture schema-drift state-drift event-drift answerer-schema-drift contract-schema-drift dashboard-types-drift knip spelling typecheck test compose-config
 
 test:
   corepack pnpm run test
@@ -62,7 +69,7 @@ build:
 compose-config:
   corepack pnpm run compose:config
 
-ci: format-check lint types-lint architecture schema-drift state-drift event-drift answerer-schema-drift contract-schema-drift knip spelling typecheck test build compose-config
+ci: format-check lint types-lint architecture schema-drift state-drift event-drift answerer-schema-drift contract-schema-drift dashboard-types-drift knip spelling typecheck test build compose-config
 
 compose-build:
   docker compose -f compose.dev.yml build orchestrator allocator dashboard runner

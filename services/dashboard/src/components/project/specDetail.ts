@@ -60,7 +60,7 @@ function statusForSpec(specStatus: string, latest: RunListItem | undefined): Dag
     if (latest.needsReview) return "review";
     if (latest.status === "running") return "live";
     if (latest.outcome !== null && HALTED.has(latest.outcome)) return "blocked";
-    if (latest.status === "completed" || latest.status === "succeeded") return "done";
+    if (latest.status === "completed" || latest.status === "done") return "done";
     if (latest.status === "queued") return "queued";
   }
   const s = specStatus.toLowerCase();
