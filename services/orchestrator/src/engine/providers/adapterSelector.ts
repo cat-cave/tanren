@@ -9,6 +9,8 @@ import { createClaudeAnswerer, createClaudeWriter } from "./claude.js";
 import { createCodexAnswerer, createCodexWriter } from "./codex.js";
 import { ANSWERER_CAPABLE_CLIS, harnessSupportsRole, WRITER_CAPABLE_CLIS } from "./harnessCapability.js";
 import { createOpencodeWriter } from "./opencode.js";
+import { createPiWriter } from "./pi.js";
+import { createReasonixWriter } from "./reasonix.js";
 import type { AnswererAdapter, WriterAdapter } from "./types.js";
 
 // P3-0012: resolves a routing-table fallback-chain entry (P2A-0006:
@@ -27,6 +29,10 @@ import type { AnswererAdapter, WriterAdapter } from "./types.js";
 //                 AnswererAdapter.cli union which excludes opencode)
 //   - "aider":    Writer only (no structured output → no Answerer; rejected as
 //                 an answerer by the capability table)
+//   - "pi":       Writer only (@earendil-works/pi-coding-agent; per-provider
+//                 env-key auth; no structured answer → no Answerer)
+//   - "reasonix": Writer only (DeepSeek-native; DEEPSEEK_API_KEY auth;
+//                 NDJSON telemetry but no structured answer → no Answerer)
 
 // The provider CLIs this selector can resolve, DERIVED from the harness
 // capability table (harnessCapability.ts) — the single source of truth for
@@ -93,6 +99,10 @@ export function buildWriterAdapter(deps: AdapterSelectorDependencies, entry: Rou
       return timedWriterAdapter(createOpencodeWriter({ ...base, model: entry.model }));
     case "aider":
       return timedWriterAdapter(createAiderWriter({ ...base, model: entry.model }));
+    case "pi":
+      return timedWriterAdapter(createPiWriter({ ...base, model: entry.model }));
+    case "reasonix":
+      return timedWriterAdapter(createReasonixWriter({ ...base, model: entry.model }));
     default:
       throw new UnsupportedProviderError(entry.cli, "writer");
   }

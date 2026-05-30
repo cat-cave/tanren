@@ -53,7 +53,7 @@ export interface UsageLimitSignal {
 
 export interface WriterAdapter {
   readonly kind: "writer";
-  readonly cli: "claude" | "codex" | "opencode" | "aider" | "fake";
+  readonly cli: "claude" | "codex" | "opencode" | "aider" | "pi" | "reasonix" | "fake";
   // authRef is the credential reference that this adapter will use at call
   // time. The orchestrator reads it at task completion to attribute the
   // resulting cost record to one of the three v0 cost models (P2A-0011).

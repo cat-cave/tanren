@@ -59,6 +59,8 @@
     "tsup",
     "tsx",
     "aider",
+    "earendil",
+    "deepseek",
     "prettier",
     "cspell",
     "commitlint",
