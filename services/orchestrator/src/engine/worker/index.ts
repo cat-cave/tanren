@@ -1,15 +1,8 @@
-// P3-0001: public worker surface + the env-gated in-process lifecycle helper
-// the orchestrator server-start path calls.
-
-import type pg from "pg";
-import type { Allocator } from "../contracts/allocator.js";
-import { PgJobQueue } from "../contracts/jobQueue.js";
-import type { SecretStore } from "../contracts/secretStore.js";
-import type { SshSubstrate } from "../contracts/sshSubstrate.js";
-import type { GitHubHttpClient } from "../providers/github.js";
-import type { QuotaPolicy } from "../quota/index.js";
-import { JobReaper } from "./jobReaper.js";
-import { RunWorker, type RunWorkerOptions } from "./runWorker.js";
+// P3-0001: public worker surface. The env-gated in-process lifecycle helpers
+// (`startRunWorker` / `runWorkerEnabled`) live in `lifecycle.ts`; the standalone
+// boot (`bootRunWorker`) lives in `boot.ts`. This barrel re-exports both so the
+// public surface is one import site — and so `boot.ts` can import the lifecycle
+// helpers from `lifecycle.ts` directly (no barrel↔boot import cycle).
 
 export {
   executeNextPlanJob,
@@ -23,6 +16,11 @@ export {
   type ExecuteJobResult,
 } from "./runExecutor.js";
 export { RunWorker, type RunWorkerOptions } from "./runWorker.js";
+// P3-0001 / plane-split P1: the in-process lifecycle helpers (split out to break
+// the barrel↔boot cycle) + the shared standalone boot the `worker-main.ts`
+// entrypoint and the in-process flag path (main.ts) both call.
+export { runWorkerEnabled, startRunWorker, type StartRunWorkerInput, type StartedRunWorker } from "./lifecycle.js";
+export { bootRunWorker, type BootedRunWorker } from "./boot.js";
 export {
   reapExpiredJobs,
   JobReaper,
@@ -52,79 +50,3 @@ export {
   streamBillableRuns,
   getRunUsage,
 } from "../quota/index.js";
-
-/** True when the in-process run worker is enabled (TANREN_RUN_WORKER=1). */
-export function runWorkerEnabled(): boolean {
-  return process.env["TANREN_RUN_WORKER"] === "1";
-}
-
-function workerConcurrencyFromEnv(): number {
-  const raw = process.env["TANREN_RUN_WORKER_CONCURRENCY"];
-  if (raw === undefined || raw === "") {
-    return 2;
-  }
-  const parsed = Number(raw);
-  return Number.isFinite(parsed) && parsed >= 1 ? Math.floor(parsed) : 2;
-}
-
-export interface StartRunWorkerInput {
-  pool: pg.Pool;
-  allocator: Allocator;
-  ssh: SshSubstrate;
-  secrets: SecretStore;
-  githubHttp: GitHubHttpClient;
-  identitySecretRef: string;
-  // SaaS Tier-B quota-admission-gate (OSS↔hosting seam). Omit for the unlimited
-  // default (self-host is unrestricted); a hosting layer passes its own policy.
-  quotaPolicy?: QuotaPolicy;
-  options?: RunWorkerOptions;
-}
-
-/**
- * Build + start a {@link RunWorker} bound to a real {@link PgJobQueue} and
- * install SIGTERM/SIGINT graceful-drain handlers. Returns the worker so the
- * caller can `await worker.stop()` in its own shutdown path if it owns one.
- *
- * Flag-gating is the CALLER's responsibility (`runWorkerEnabled()`); this
- * function always starts so it stays trivially testable.
- */
-export function startRunWorker(input: StartRunWorkerInput): RunWorker {
-  const jobQueue = new PgJobQueue(input.pool);
-  const worker = new RunWorker(
-    {
-      pool: input.pool,
-      jobQueue,
-      allocator: input.allocator,
-      ssh: input.ssh,
-      secrets: input.secrets,
-      githubHttp: input.githubHttp,
-      identitySecretRef: input.identitySecretRef,
-      ...(input.quotaPolicy === undefined ? {} : { quotaPolicy: input.quotaPolicy }),
-    },
-    { concurrency: workerConcurrencyFromEnv(), ...input.options },
-  );
-  worker.start();
-  // P3-0028: a co-located reaper recovers leases dropped by crashed workers.
-  const reaper = new JobReaper({ pool: input.pool, jobQueue });
-  reaper.start();
-  installSignalHandlers(worker, reaper);
-  return worker;
-}
-
-let signalHandlersInstalled = false;
-
-/** Wire SIGTERM/SIGINT to drain the worker + reaper, then exit. Installed once. */
-function installSignalHandlers(worker: RunWorker, reaper: JobReaper): void {
-  if (signalHandlersInstalled) {
-    return;
-  }
-  signalHandlersInstalled = true;
-  const drain = (signal: NodeJS.Signals) => {
-    console.log(`[run-worker] ${signal} received — draining in-flight jobs`);
-    Promise.all([worker.stop(), reaper.stop()])
-      .catch((error) => console.error(`[run-worker] drain error: ${String(error)}`))
-      .finally(() => process.exit(0));
-  };
-  process.once("SIGTERM", () => drain("SIGTERM"));
-  process.once("SIGINT", () => drain("SIGINT"));
-}

@@ -72,7 +72,7 @@ compose-config:
 ci: format-check lint types-lint architecture schema-drift state-drift event-drift answerer-schema-drift contract-schema-drift dashboard-types-drift knip spelling typecheck test build compose-config
 
 compose-build:
-  docker compose -f compose.dev.yml build orchestrator allocator dashboard runner
+  docker compose -f compose.dev.yml build orchestrator worker allocator dashboard runner
 
 runner-key:
   test -f /tmp/tanren_runner_key || ssh-keygen -t ed25519 -N "" -f /tmp/tanren_runner_key
@@ -86,7 +86,7 @@ usage provider="codex" cli="codex" codex_home="":
 # Dev profile: developer ergonomics. Static Vault root token, exposed
 # Postgres/runner SSH/orchestrator/dashboard/ntfy host ports, no required env.
 up-dev: runner-key
-  TANREN_RUNNER_AUTHORIZED_KEY="$(cat /tmp/tanren_runner_key.pub)" TANREN_RUNNER_IDENTITY_PRIVATE_KEY="$(cat /tmp/tanren_runner_key)" docker compose -f compose.dev.yml up -d postgres vault orchestrator allocator dashboard runner ntfy
+  TANREN_RUNNER_AUTHORIZED_KEY="$(cat /tmp/tanren_runner_key.pub)" TANREN_RUNNER_IDENTITY_PRIVATE_KEY="$(cat /tmp/tanren_runner_key)" docker compose -f compose.dev.yml up -d postgres vault orchestrator worker allocator dashboard runner ntfy
 
 down-dev:
   docker compose -f compose.dev.yml down -v
@@ -213,7 +213,20 @@ smoke-rls-r3a-worker:
 smoke-rls-r3b:
   DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/rlsR3bEnforcement.integration.test.ts
 
-smoke: compose-build compose-up wait-for-stack smoke-hello smoke-ssh-integration smoke-rls-r1 smoke-rls-r2 smoke-rls-r2-cohort2 smoke-rls-r2-cohort3 smoke-rls-r2-cohort4 smoke-rls-r3a smoke-rls-r3a-worker smoke-rls-r3b
+# Plane-split P1 cross-process proof: the run-executor worker is a STANDALONE
+# deployable. Seeds a queued plan job against the shared Postgres (the same
+# job_queue insert the control-plane API does), then waits for the SEPARATE
+# `worker` compose container to claim + execute + finalize it across the
+# API↔worker process boundary — read back under the RLS-enforced `tanren_app`
+# runtime role. No worker runs in-process here; if the `worker` service were
+# down the job would stay queued and this smoke would time out. Credential-free,
+# so the worker lands the run in a recoverable `halted` state — the proof is the
+# boundary crossing + the worker-written terminal state, not a green run. See
+# docs/roadmap/saas-rls-and-plane-split-plan.md (P1).
+smoke-plane-split-worker:
+  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" corepack pnpm exec tsx scripts/smoke/plane-split-worker.ts
+
+smoke: compose-build compose-up wait-for-stack smoke-hello smoke-ssh-integration smoke-plane-split-worker smoke-rls-r1 smoke-rls-r2 smoke-rls-r2-cohort2 smoke-rls-r2-cohort3 smoke-rls-r2-cohort4 smoke-rls-r3a smoke-rls-r3a-worker smoke-rls-r3b
 
 # P3-0001: the Phase 2A direct-execution acceptance gate (`just acceptance`,
 # scripts/acceptance/easy.ts + medium.ts) was removed once the run executor

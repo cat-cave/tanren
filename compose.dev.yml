@@ -65,10 +65,13 @@ services:
       # authenticated against the synthetic `tanren-dev` org. compose.prod.yml
       # MUST never set this flag. See docs/operator-guide/auth.md.
       TANREN_DEV_LOGIN: ${TANREN_DEV_LOGIN:-}
-      # Run-executor worker (P3-0001). OPT-IN via host env, default OFF (so CI
-      # smoke/tests are unaffected). Set TANREN_RUN_WORKER=1 (in .env) to have the
-      # orchestrator dequeue queued runs and drive them end-to-end — required for
-      # real-loop manual validation. TANREN_RUN_WORKER_CONCURRENCY bounds in-flight runs.
+      # IN-PROCESS run-executor worker (P3-0001). Plane-split P1 moved the data
+      # plane into the standalone `worker` service (above), so the API no longer
+      # runs the worker by default. This flag is the single-process dev/test
+      # convenience: OPT-IN via host env, default OFF. Set TANREN_RUN_WORKER=1 (in
+      # .env) to have the ORCHESTRATOR also dequeue runs in-process — handy for a
+      # one-container loop without the separate `worker` service.
+      # TANREN_RUN_WORKER_CONCURRENCY bounds in-flight runs.
       TANREN_RUN_WORKER: ${TANREN_RUN_WORKER:-}
       TANREN_RUN_WORKER_CONCURRENCY: ${TANREN_RUN_WORKER_CONCURRENCY:-2}
       # Dev profile: orchestrator routes /hello/run to the long-lived static
@@ -92,6 +95,53 @@ services:
         condition: service_started
       runner:
         condition: service_healthy
+
+  worker:
+    # Plane-split P1: the run-executor worker as a STANDALONE deployable (the
+    # DATA PLANE). Same image as the orchestrator, but it boots ONLY the worker
+    # loop (`worker-main.ts`) — no HTTP server. The orchestrator API no longer
+    # runs the worker in-process by default; this container claims jobs from
+    # `job_queue` (unchanged DB-CAS) and drives plan→write→check→audit. It shares
+    # the SAME DB/Vault/allocator/runner access the in-process worker had — P1 is
+    # a process-boundary change only, NO trust change (P2 adds mTLS + shrinks the
+    # DB surface, P3 de-privileges to per-run creds). See
+    # docs/roadmap/saas-rls-and-plane-split-plan.md.
+    build:
+      context: .
+      dockerfile: services/orchestrator/Dockerfile
+    command: ["pnpm", "--filter", "@tanren/orchestrator", "start:worker"]
+    environment:
+      # Same runtime/system roles as the orchestrator (RLS R3b): the runtime pool
+      # is the restricted `tanren_app` role; `runWithSystemScope`/the reaper use
+      # the BYPASSRLS `tanren_system` role. The worker does NOT migrate (the
+      # orchestrator owns the migrate step — `depends_on` it below), so it carries
+      # no MIGRATION_DATABASE_URL.
+      DATABASE_URL: postgres://tanren_app:tanren_app@postgres:5432/tanren
+      TANREN_SYSTEM_DATABASE_URL: postgres://tanren_system:tanren_system@postgres:5432/tanren
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: dev-root-token
+      TANREN_RUNNER_IDENTITY_PRIVATE_KEY: ${TANREN_RUNNER_IDENTITY_PRIVATE_KEY:-}
+      # Bounds in-flight runs (same knob the in-process worker honored).
+      TANREN_RUN_WORKER_CONCURRENCY: ${TANREN_RUN_WORKER_CONCURRENCY:-2}
+      # Same allocator + static-runner reach the orchestrator's worker path had.
+      TANREN_ALLOCATOR_KIND: static
+      TANREN_RUNNER_SSH_HOST: runner
+      TANREN_RUNNER_SSH_PORT: "22"
+      TANREN_RUNNER_SSH_USER: tanren
+      TANREN_ALLOCATOR_URL: http://allocator:3200
+      TANREN_ALLOCATOR_TOKEN: dev
+    depends_on:
+      postgres:
+        condition: service_healthy
+      vault:
+        condition: service_healthy
+      allocator:
+        condition: service_started
+      runner:
+        condition: service_healthy
+      # The orchestrator owns the migrate step; wait for it before claiming jobs.
+      orchestrator:
+        condition: service_started
 
   allocator:
     build:

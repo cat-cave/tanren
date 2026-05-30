@@ -1,9 +1,12 @@
 # SaaS multi-tenancy: RLS + control-plane/data-plane split — plan
 
-**Status: PLAN ONLY (held for explicit approval).** No code lands from this doc
-until the open decisions below are settled. These are the two big multi-tenant
-refactors deliberately deferred from the expansion work — written up here so the
-approach is reviewable before any build.
+**Status: IN PROGRESS.** Refactor 1 (RLS) is **DONE and FULLY ENFORCED** (waves
+R1 → R3b; migration `0030`). Refactor 2 (plane split) is **at P1: the
+run-executor worker is a STANDALONE deployable** (process-boundary change only,
+no trust change yet); **P2 (mTLS + control-plane claim API) and P3 (de-privilege
+to per-run creds) are OUTSTANDING.** The live conversion checklist is
+`docs/roadmap/R-WAVES.md` (RLS R-waves + plane-split P-waves). These are the two
+big multi-tenant refactors deliberately deferred from the expansion work.
 
 This follows the **open-source / hosting-available** model: the isolation and
 plane primitives that make a hosted product _deployable_ live in this repo; the
@@ -115,16 +118,21 @@ already a DB-less BFF. So the seam to formalize is **orchestrator API (control)
 - **Move in-process caches** (`GithubAppTokenMinter`) to the control plane; the
   data plane receives already-minted tokens.
 
-**Waves**
+**Waves** (tracked in `docs/roadmap/R-WAVES.md` → "Plane-split P-waves")
 
-- **P1 — process boundary.** Make the worker a standalone deployable (still same
-  DB, same claim mechanism). Pure deployment-topology change, no trust change.
-- **P2 — service identity + shrink DB surface.** Add mTLS/JWT between control and
-  data; route the worker's writes (events/results) through a control-plane API so
-  the data plane stops writing to Postgres directly. Job-claim moves from DB-CAS
-  to a control-plane endpoint.
-- **P3 — de-privilege the data plane.** Per-run scoped credentials; remove broad
-  DB + Vault access from the data plane entirely.
+- **P1 — process boundary. DONE.** The worker is a standalone deployable: a
+  dedicated entrypoint (`services/orchestrator/src/worker-main.ts` →
+  `bootRunWorker`, reusing the existing `RunWorker`) and a `worker` compose
+  service (dev + prod), still same DB + same `job_queue` DB-CAS claim. The API no
+  longer runs the worker in-process by default (`TANREN_RUN_WORKER=1` kept for
+  single-process dev/test). Pure deployment-topology change, **no trust change**.
+  Proven cross-process by `just smoke-plane-split-worker`.
+- **P2 — service identity + shrink DB surface. OUTSTANDING.** Add mTLS (locked
+  decision) between control and data; route the worker's writes (events/results)
+  through a control-plane API so the data plane stops writing to Postgres
+  directly. Job-claim moves from DB-CAS to a control-plane endpoint.
+- **P3 — de-privilege the data plane. OUTSTANDING.** Per-run scoped credentials;
+  remove broad DB + Vault access from the data plane entirely.
 
 **Risks:** moving job-claim atomicity from DB `SKIP LOCKED` to an API (need to
 preserve exactly-once claim); event throughput/latency vs the current direct
@@ -147,8 +155,9 @@ is the single highest-risk change and is deliberately landed inert and first.
 2. **Cross-org system ops:** a dedicated bypass role vs leaving `job_queue` (and
    other system tables) outside RLS.
 3. **Control↔data transport:** mTLS vs signed service JWT.
-4. **Data-plane de-privileging depth now:** stop at "separate process, same DB"
-   (P1) for this round, or push through to per-run scoped credentials (P3)?
+4. **Data-plane de-privileging depth now:** RESOLVED — stop at "separate
+   process, same DB" (P1) for this round; P2 (mTLS + control-plane claim) then P3
+   (per-run scoped credentials) land as later waves.
 5. **Hosting topology:** one Postgres with RLS (cheaper, simpler) vs separate
    databases per plane/tenant tier (stronger isolation, more ops).
 
