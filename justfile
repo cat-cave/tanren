@@ -91,6 +91,12 @@ compose-build:
 runner-key:
   test -f /tmp/tanren_runner_key || ssh-keygen -t ed25519 -N "" -f /tmp/tanren_runner_key
 
+# Plane-split P2: generate the dev control↔data-plane mTLS material (CA + server
+# + worker certs) into /tmp/tanren-mtls, bind-mounted into the orchestrator +
+# worker by compose.dev.yml. Idempotent. Prod supplies real certs via the same env.
+gen-mtls-certs:
+  ./scripts/dev/gen-mtls-certs.sh
+
 # Host-side sanity-check for the usage tools (codexbar live windows + ccusage
 # token accounting) against a real CODEX_HOME. In a real run these execute
 # runner-side over SSH; this recipe just lets an operator eyeball the tools.
@@ -99,7 +105,7 @@ usage provider="codex" cli="codex" codex_home="":
 
 # Dev profile: developer ergonomics. Static Vault root token, exposed
 # Postgres/runner SSH/orchestrator/dashboard/ntfy host ports, no required env.
-up-dev: runner-key
+up-dev: runner-key gen-mtls-certs
   TANREN_RUNNER_AUTHORIZED_KEY="$(cat /tmp/tanren_runner_key.pub)" TANREN_RUNNER_IDENTITY_PRIVATE_KEY="$(cat /tmp/tanren_runner_key)" docker compose -f compose.dev.yml up -d postgres vault orchestrator worker allocator dashboard runner ntfy
 
 down-dev:
@@ -227,6 +233,17 @@ smoke-rls-r3a-worker:
 smoke-rls-r3b:
   DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/rlsR3bEnforcement.integration.test.ts
 
+# RLS early-failure finalize proof: a run that throws BEFORE the per-job org
+# scope is established (a credential-free run → MissingCredential during context
+# hydration) must still reach a terminal FINALIZED state, not get stuck `queued`.
+# Runs the REAL migration (RLS enabled), drives the worker's real claim→execute
+# path on the restricted `tanren_app` pool, and asserts the run lands `halted` —
+# the early-failure finalize now org-scopes from the CLAIMED org so the policy
+# admits its UPDATE. Same ephemeral-DB + restricted-role harness as the R-wave
+# cohorts. Regression lock for fix/rls-early-failure-finalize-scope.
+smoke-rls-early-finalize:
+  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/rlsEarlyFailureFinalize.integration.test.ts
+
 # Plane-split P1 cross-process proof: the run-executor worker is a STANDALONE
 # deployable. Seeds a queued plan job against the shared Postgres (the same
 # job_queue insert the control-plane API does), then waits for the SEPARATE
@@ -240,7 +257,7 @@ smoke-rls-r3b:
 smoke-plane-split-worker:
   DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" corepack pnpm exec tsx scripts/smoke/plane-split-worker.ts
 
-smoke: compose-build compose-up wait-for-stack smoke-hello smoke-ssh-integration smoke-plane-split-worker smoke-rls-r1 smoke-rls-r2 smoke-rls-r2-cohort2 smoke-rls-r2-cohort3 smoke-rls-r2-cohort4 smoke-rls-r3a smoke-rls-r3a-worker smoke-rls-r3b
+smoke: compose-build compose-up wait-for-stack smoke-hello smoke-ssh-integration smoke-plane-split-worker smoke-rls-r1 smoke-rls-r2 smoke-rls-r2-cohort2 smoke-rls-r2-cohort3 smoke-rls-r2-cohort4 smoke-rls-r3a smoke-rls-r3a-worker smoke-rls-r3b smoke-rls-early-finalize
 
 # P3-0001: the Phase 2A direct-execution acceptance gate (`just acceptance`,
 # scripts/acceptance/easy.ts + medium.ts) was removed once the run executor

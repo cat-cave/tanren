@@ -27,6 +27,7 @@ import type { ConfigGateGithubFactory } from "./routes/orgs/index.js";
 import { TimedGitHubHttpClient, TimedSshSubstrate } from "./engine/observability/index.js";
 import { Ssh2Substrate } from "./engine/ssh/index.js";
 import { bootRunWorker, runWorkerEnabled } from "./engine/worker/index.js";
+import { startInternalMtlsServer } from "./internalServer.js";
 import { CiPullRequestNotFoundError, CiRunNotFoundError, pollCiForRun } from "./engine/workflow/ciPolling.js";
 import {
   DraftPrRunnerNotFoundError,
@@ -484,13 +485,14 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const app = await createApp();
   serve({ fetch: app.fetch, port });
   console.log(`orchestrator listening on :${port}`);
-  // P3-0001 / plane-split P1: the run worker dequeues queued `plan` jobs and
-  // runs the real planner-loop workflow. The worker is now a STANDALONE
-  // deployable (`worker-main.ts`, the `worker` compose service) and the API does
-  // NOT run it by default. The in-process path stays as a single-process
-  // dev/test convenience, OFF by default — opt in with TANREN_RUN_WORKER=1. It
-  // shares the same `bootRunWorker` construction as the standalone entrypoint
-  // (migrate + identity-secret seeding already ran in createApp).
+  // Plane-split P2: the control-plane INTERNAL mTLS listener (separate HTTPS
+  // server) serving `/internal/claim-job` — the same atomic CAS, transport
+  // behind mTLS. Starts only when TANREN_INTERNAL_TLS_* are set (see internalServer.ts).
+  startInternalMtlsServer({ pool: getProductionPool() });
+  // P3-0001 / plane-split P1: the run worker dequeues `plan` jobs. It is now a
+  // STANDALONE deployable (`worker-main.ts`, the `worker` service); the API runs
+  // it in-process ONLY as a single-process dev convenience (TANREN_RUN_WORKER=1),
+  // sharing the same `bootRunWorker` construction as the standalone entrypoint.
   if (runWorkerEnabled()) {
     await bootRunWorker();
     console.log("run worker started (in-process)");

@@ -9,6 +9,7 @@
 
 import type pg from "pg";
 import type { Allocator } from "../contracts/allocator.js";
+import type { JobClaimClient } from "../contracts/jobClaim.js";
 import { PgJobQueue } from "../contracts/jobQueue.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { SshSubstrate } from "../contracts/sshSubstrate.js";
@@ -41,6 +42,11 @@ export interface StartRunWorkerInput {
   // SaaS Tier-B quota-admission-gate (OSS↔hosting seam). Omit for the unlimited
   // default (self-host is unrestricted); a hosting layer passes its own policy.
   quotaPolicy?: QuotaPolicy;
+  // Plane-split P2: how the worker CLAIMS. Omit for the direct DB-CAS over a
+  // `PgJobQueue` (the in-process / single-process path); the cross-process
+  // `worker` container passes an `HttpJobClaimClient` that claims over the mTLS
+  // control-plane endpoint.
+  claimClient?: JobClaimClient;
   options?: RunWorkerOptions;
 }
 
@@ -72,6 +78,7 @@ export function startRunWorker(input: StartRunWorkerInput): StartedRunWorker {
       githubHttp: input.githubHttp,
       identitySecretRef: input.identitySecretRef,
       ...(input.quotaPolicy === undefined ? {} : { quotaPolicy: input.quotaPolicy }),
+      ...(input.claimClient === undefined ? {} : { claimClient: input.claimClient }),
     },
     { concurrency: workerConcurrencyFromEnv(), ...input.options },
   );

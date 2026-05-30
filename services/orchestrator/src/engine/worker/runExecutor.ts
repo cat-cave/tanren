@@ -21,6 +21,7 @@ import { runWithJobOrgId, runWithOrgScope, runWithSystemScope } from "@tanren/db
 import type pg from "pg";
 import { orgScopingPool } from "../data/orgScopedDb.js";
 import type { Allocator } from "../contracts/allocator.js";
+import { DirectJobClaimClient, type JobClaimClient } from "../contracts/jobClaim.js";
 import type { JobQueue } from "../contracts/jobQueue.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { SshSubstrate } from "../contracts/sshSubstrate.js";
@@ -55,6 +56,14 @@ export const DEFAULT_LEASE_MS = 60_000;
 export interface RunExecutorDeps {
   pool: pg.Pool;
   jobQueue: JobQueue;
+  // Plane-split P2: how this worker CLAIMS a job. Defaults to a
+  // `DirectJobClaimClient` over `jobQueue` (the unchanged DB-CAS) so the
+  // in-process / single-process path is behavior-identical. The cross-process
+  // `worker` container injects an `HttpJobClaimClient` that claims over the mTLS
+  // control-plane endpoint instead of touching `job_queue` directly. The rest of
+  // the queue surface (fail/complete/heartbeat) still uses `jobQueue` — P2 moves
+  // only the CLAIM; routing the WRITES through the control plane is P3.
+  claimClient?: JobClaimClient;
   allocator: Allocator;
   ssh: SshSubstrate;
   secrets: SecretStore;
@@ -102,7 +111,12 @@ export type ExecuteJobResult =
  */
 export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<ExecuteJobResult> {
   const leaseMs = deps.leaseMs ?? DEFAULT_LEASE_MS;
-  const job = await deps.jobQueue.claim("plan", { leaseMs });
+  // Plane-split P2: claim through the claim CLIENT (direct DB-CAS in-process, or
+  // the mTLS control-plane endpoint cross-process). Same exactly-once claim — the
+  // endpoint wraps the same `JobQueue.claim`. Default keeps the direct path so an
+  // un-wired worker is unchanged.
+  const claimClient = deps.claimClient ?? new DirectJobClaimClient(deps.jobQueue);
+  const job = await claimClient.claimJob({ taskKind: "plan", leaseMs });
   if (job === undefined) {
     return { kind: "idle" };
   }
@@ -118,11 +132,21 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
   // whose lease has lapsed — i.e. a crashed worker that stopped heartbeating.
   const stopHeartbeat = startHeartbeat(deps, job.id, leaseMs);
   const quotaPolicy = deps.quotaPolicy ?? new NoopQuotaPolicy();
-  // RLS R2 cohort-3: hoisted so the catch-path recoverable finalize can org-scope
-  // its writes. Resolved once the run's execution context loads; stays null for a
-  // legacy/unscoped run, or if the context load itself threw (the finalize then
-  // falls back to the pool, the pre-cohort-3 behavior).
-  let resolvedOrgId: string | null = null;
+  // RLS: the catch-path recoverable finalize must org-scope its UPDATE runs, or
+  // the enforced `tanren_app` policy denies the unscoped write and the run sticks
+  // `queued` forever. The owning run's org is KNOWN from the claim itself — the
+  // queue carries it (job_queue stays OUTSIDE RLS; P1 threaded org_id onto the
+  // row, P2 returns it from the claim). So we seed the finalize scope from the
+  // CLAIMED org immediately, BEFORE any work that can throw (credential
+  // resolution / context hydration). An EARLY failure — e.g. misconfigured
+  // credentials throwing in `loadRunContextScoped` before `resolvedOrgId` could
+  // be reassigned — then still finalizes org-scoped, so the policy admits the
+  // write and the run cleanly reaches `halted` instead of being stuck `queued`.
+  // The later context load reassigns this to the run's actual org; the two agree
+  // (the scoped hydration cross-checks them), so this is a no-op narrowing in the
+  // common case. A legacy/unscoped job (org_id NULL) stays null — the finalize
+  // falls back to the pool, behavior-identical to before RLS.
+  let resolvedOrgId: string | null = job.orgId ?? null;
   try {
     // RLS R3b: the claimed job carries its owning run's org_id on the queue row
     // (job_queue stays OUTSIDE RLS — the claim above resolved it cross-org). That

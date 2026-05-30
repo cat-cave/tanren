@@ -84,8 +84,25 @@ services:
       TANREN_RUNNER_SSH_USER: tanren
       TANREN_ALLOCATOR_URL: http://allocator:3200
       TANREN_ALLOCATOR_TOKEN: dev
+      # Plane-split P2: the control-plane INTERNAL mTLS listener serving
+      # `/internal/claim-job` (the endpoint the worker claims through). Certs are
+      # the dev self-signed material `just gen-mtls-certs` writes to
+      # /tmp/tanren-mtls (bind-mounted below). When unset the listener does not
+      # start (single-process dev); here we always wire it so the worker can claim
+      # over mTLS. See docs/roadmap/saas-rls-and-plane-split-plan.md (P2).
+      TANREN_INTERNAL_MTLS_PORT: "3110"
+      TANREN_INTERNAL_TLS_CERT: /etc/tanren/mtls/server.crt
+      TANREN_INTERNAL_TLS_KEY: /etc/tanren/mtls/server.key
+      TANREN_INTERNAL_TLS_CA: /etc/tanren/mtls/ca.crt
+    volumes:
+      - /tmp/tanren-mtls:/etc/tanren/mtls:ro
     ports:
       - "3100:3100"
+      # Plane-split P2: publish the internal mTLS claim listener so the
+      # cross-process smoke can act as a data-plane client against it from the
+      # host. In a real deployment this stays on the private control↔data network
+      # (not host-published); it is exposed here only for the smoke.
+      - "3110:3110"
     depends_on:
       postgres:
         condition: service_healthy
@@ -130,6 +147,17 @@ services:
       TANREN_RUNNER_SSH_USER: tanren
       TANREN_ALLOCATOR_URL: http://allocator:3200
       TANREN_ALLOCATOR_TOKEN: dev
+      # Plane-split P2: the data plane claims over the control-plane mTLS endpoint
+      # (NOT direct DB-CAS). TANREN_CLAIM_ENDPOINT_URL + the data-plane client
+      # cert (signed by the same CA as the orchestrator's server cert) make
+      # bootRunWorker build an HttpJobClaimClient on the mTLS channel. The claim
+      # is the SAME atomic CAS — only the transport moved behind mTLS.
+      TANREN_CLAIM_ENDPOINT_URL: https://orchestrator:3110
+      TANREN_DATA_PLANE_TLS_CERT: /etc/tanren/mtls/worker.crt
+      TANREN_DATA_PLANE_TLS_KEY: /etc/tanren/mtls/worker.key
+      TANREN_DATA_PLANE_TLS_CA: /etc/tanren/mtls/ca.crt
+    volumes:
+      - /tmp/tanren-mtls:/etc/tanren/mtls:ro
     depends_on:
       postgres:
         condition: service_healthy
