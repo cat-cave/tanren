@@ -1,294 +1,326 @@
-# Phase 3 Hi-Fi Design Gaps — RESOLVED (built)
+# Hi-fi ↔ Implementation Audit
 
-**Status (updated).** The eight thick-product surfaces this document tracked
-(thick Forge, DAG canvas, spec discovery, full greenfield + brownfield
-onboarding, `tanren-config` audit-gate, scheduled-audits library, issue-source
-ingestion) are now **built and merged on `main`** — their interaction models were
-locked and the surfaces shipped. **All of Phase 3 (Tier 1 loop + Tier 2
-expansion) is merged.**
+**Dated 2026-05-29.** This is a from-scratch, evidence-grounded audit of the
+locally-installed hi-fidelity design bundle (`tanren-hi-fidelity/`) against the
+current codebase on `main`. It **replaces** the previous "Phase 3 Hi-Fi Design
+Gaps" content and folds in the stale `hifi-vision-changes.md` notes (whose "open"
+deltas were all already applied to the hi-fi — see chat3 transcript).
 
-**One open item remains:** the **Forge in-conversation write-action approval
-model** is still deferred. The thick-Forge conversation engine and its LLM
-backend ship and the tool surface exists, but the conversation engine is
-constrained to **read + propose** — write actions remain operator-button-driven
-(P2A-0019), and the inline "propose action → operator confirm → execute" approval
-UX within a Forge thread is design-pending (see
-`services/orchestrator/src/engine/forge/conversation/engine.ts`). Each section
-below is retained as the original design brief; what shipped resolved the
-"Needs design" / "Decisions to lock" items except where it touches that write-action
-model.
+It contains two sets:
 
-**Purpose (original).** This document was the input to the hi-fi/design work for
-the then-design-blocked surfaces: for each it states **what the backend already
-provides**, **what needs to be designed**, and the **decisions to lock**.
+- **Set 1 — Hi-fi is BEHIND the implementation.** The built product moved past or
+  intentionally diverged from the hi-fi. These are edits the **user** will make to
+  the hi-fi to bring it current.
+- **Set 2 — Implementation is BEHIND the hi-fi.** We are still code-behind the
+  design. These become build work.
 
-Cross-reference: spec entries in [`phase-3-specs.md`](../roadmap/phase-3-specs.md) (P3-0010,
-0013, 0014, 0015, 0016, 0017, 0021, 0022); bucket prose in
-[`phase-3.md`](../roadmap/phase-3.md); prototypes in `tanren-hi-fidelity/`.
+Every item cites the hi-fi source and the code path, and is marked
+high/medium/low confidence. The hi-fi is explicitly a **phase-agnostic vision**
+(chat4: "this hifi … a vision of what we want the product to be, NOT … tied to
+any specific phase") — so "behind"/"ahead" here means _content/shape_
+divergence, not roadmap phasing.
 
----
+## Inventory: what the hi-fi specifies
 
-## How to read each section
+From the bundle's `project/*.jsx` (router in `app.jsx`, nav in `shared.jsx`),
+the hi-fi envisions these surfaces:
 
-- **Backend in place** — what exists on `main` today that the design must target. Engineering will wire the surface to these; the design must respect their shapes.
-- **Needs design** — the surfaces, flows, and interaction models to produce in the hi-fi.
-- **Decisions to lock** — specific questions whose answers change the build. These are the blockers.
+- **Project view** — chat-primary (Forge narrates) and DAG-primary (SVG canvas
+  with legend, attention badges, pulsing live/review/blocked nodes), toggleable.
+- **Spec surface** — a minimal slide-in **drawer** off every DAG node that
+  escalates to a **full spec page** (BDD acceptance, deps, run history, economics,
+  blocked-reason, "ask forge" actions). `view-spec.jsx`.
+- **Run detail** — unified cost/window/spend bar + trajectory spine + reasoning
+  pane. `view-run.jsx`.
+- **Review handoff** — Forge-run inline review; readiness gate with per-repo
+  merge-integration CTAs. `view-review.jsx`.
+- **Spec discovery** — insight → classification → proposed specs → DAG placement →
+  accept (feature/bug/strategic variants). `view-discovery.jsx`.
+- **Candidate inbox** — configurable issue sources → dedupe/match/placement
+  triage → accept-to-discovery. `view-inbox.jsx`.
+- **Scheduled audits** — recurring Answerer-pass library + window-fill +
+  forge-recommended coverage + composer. `view-audits.jsx`.
+- **tanren-config** — config-as-code PR review (gate on/off). `view-config.jsx`.
+- **Failure recovery** — halted run with recovery cards + DAG impact.
+  `view-failure.jsx`.
+- **Settings** — routing role→fallback chains, vault per-cred policy, escape
+  hatches. `view-settings.jsx`.
+- **History & costs** — all-source spend + 30-day utilization heatmap.
+  `view-costs.jsx`.
+- **Org surfaces** (`view-org.jsx`): **Overview** (org command deck),
+  **Notifications** (channels + per-event matrix + delivery history + quiet
+  hours), **Roadmap** (cross-project Gantt), **Personas** (cross-project
+  people-models), **DORA** (4 tiles + lead-time chart).
+- **Onboarding** (designer-only, pulled out of standing nav): org setup (4
+  steps), greenfield new project (3 steps), brownfield existing (5 steps).
+- **Forge** — the unified ⌘K palette that **morphs into a chat thread** (answers,
+  follow-up chips, auto-navigate action cards). `shared.jsx` `ForgePalette`.
 
----
+## Inventory: what the code actually mounts
 
-## 1. P3-0010 — Thick Forge (LLM-backed conversation)
+Dashboard screen registry (`services/dashboard/src/app/screens.ts`) mounts:
+projects (chat-primary + DAG + spec drawer/page + routing settings), onboarding
+(org/credentials/notifications + brownfield + greenfield), costs, run-detail +
+review, halted-runs, run-trigger, DORA, discovery, config, inbox, greenfield,
+audits. The ⌘K Forge palette + thick-Forge chat morph ships
+(`components/palette/ForgePalette.tsx`, `client/palette.ts`,
+`api/forgeConversationClient.ts`). DAG canvas is real
+(`components/project/DagCanvas.tsx`, `DagNodes/DagEdges/DagLegend/dagLayout.ts`).
 
-> **Built — with one open item.** The LLM-backed Forge conversation engine
-> (`engine/forge/conversation/`) ships and reads/writes `forge_turns`; the
-> read tool surface and narration are live. **Open:** the conversation engine is
-> constrained to read + propose — **in-conversation write-action approval is
-> still deferred** (write actions remain operator-button-driven). This is the
-> single remaining design gap in this document.
-
-Replace the templated v0 Forge narration with a real LLM author that reads the
-conversation and invokes the tool surface.
-
-**Backend in place**
-
-- `forge_threads` + `forge_turns` persistence and the **Forge tool surface** (P2A-0019) — read-only stubs + operator-button write actions already exist; the ⌘K palette (P2B-0001) already sources items from the tool surface.
-- The dashboard already proxies tool calls (`POST /forge/tools`) with the session cookie.
-- Provider adapters now exist (P3-0012: Claude/Codex Answerers) — the LLM backend can call one. The spec note says this is a **pure swap** of the narration generator, no schema change.
-
-**Needs design**
-
-- The **conversation UI** itself: how a thick Forge thread looks and behaves on the project view (message layout, streaming, tool-call rendering, operator approvals inline vs. modal).
-- How **tool invocations** surface in the conversation (proposed action → operator confirm → result), and how read vs. write actions differ visually.
-- Where the conversation lives relative to the chat-primary project view (P2B-0003 already ships a chat-primary shell — does thick Forge replace its narration pane, expand it, or open a dedicated thread view?).
-- Forge "personas"/voice and how much initiative it takes (suggest vs. act).
-
-**Decisions to lock**
-
-- Is thick Forge a **replacement** for the P2B-0003 narration pane or an **additional** thread surface? (This determines whether it's a swap or a new screen.)
-- Tool-call confirmation model: inline approve, modal, or operator-button (P2A-0013) reuse?
-- Streaming token display vs. turn-at-a-time.
-- Which provider/model is the default Forge author, and is it operator-configurable?
-
----
-
-## 2. P3-0013 — Spec DAG canvas + DAG-primary project view
-
-> **Built.** The SVG DAG canvas + DAG-primary project view shipped
-> (`services/dashboard/src/components/project/DagCanvas.tsx`, `DagNodes`,
-> `DagEdges`, `client/dagCanvas.ts`). The brief below is retained for context.
-
-The full SVG canvas of milestones/behaviors/specs with attention badges and
-click-routing — and making it the _primary_ project view.
-
-**Backend in place**
-
-- P2A-0018 product-entity model: `specs`, `spec_dependencies` (the directed edges), `milestones`, `behaviors`, `personas` — the graph data exists and is queryable. P3-0020's `stuck` insight already walks `spec_dependencies` (cycle-safe), so the dependency-chain traversal is proven.
-- Run/spec status (live/done/review/blocked) is derivable from runs + the new `review.*`/`merge.*` events.
-- The current project view (P2B-0003) is **chat-primary**, not DAG-primary.
-
-**Needs design**
-
-- The **SVG canvas layout**: node shapes per entity type (milestone/behavior/spec), edge rendering, auto-layout algorithm (the hi-fi shows a specific arrangement — lock it), zoom/pan, the legend overlay, and the "attention-numbered badges" + pulsing animations for live/review/blocked nodes.
-- **Click-routing**: what each node type routes to (spec → run/detail; milestone → ?; behavior → ?).
-- The **DAG-primary vs. chat-primary** switch: does the project view default to DAG with chat secondary, a toggle, or split? This is a significant reframe of P2B-0003's shipped layout.
-- Empty/large-graph states (a 71-spec DAG from greenfield needs a scalable layout).
-
-**Decisions to lock**
-
-- DAG-primary as default, or a view toggle alongside the existing chat-primary view?
-- The layout algorithm + node/edge visual language (this is the core artifact to lock).
-- Interaction for dependency editing — view-only in v0, or can the operator re-wire edges on the canvas?
+**Not mounted** (render as `phase 3+` placeholders): `/overview`, `/roadmap`,
+`/personas` — they remain `phase: "3+"` in `services/dashboard/src/app/routes.ts`
+and are absent from `SCREEN_MOUNTS`.
 
 ---
 
-## 3. P3-0014 — Spec discovery flow
+# Set 1 — Hi-fi is BEHIND the implementation
 
-> **Built.** The discovery flow shipped (`engine/forge/discovery/` with
-> provenance + the dashboard discovery route). The brief below is retained.
+These are real, mostly **purposeful** divergences where engineering built broader
+adapter/configuration surfaces than the hi-fi depicts. Suggested hi-fi edits
+follow each.
 
-Forge classifies an insight (sales note, GitHub issue, exec memo) → proposes specs
-with DAG-placement options → persists provenance.
+### 1.1 Secret-store backends — hi-fi shows only `vault://`
 
-**Backend in place**
+- **Hi-fi**: `view-settings.jsx` vault cards and `view-onboard-org.jsx` creds all
+  use `vault://…` paths exclusively; the secret store is implicitly HashiCorp
+  Vault.
+- **Implementation**: `engine/contracts/secretStoreFactory.ts` selects among
+  **vault · gcp_sm · aws_sm · onepassword · memory** via `TANREN_SECRET_STORE`
+  (impls: `gcpSecretManager.ts`, `awsSecretsManager.ts`, `onePassword.ts`,
+  `secretStore.ts`).
+- **Why diverged**: purposeful — pluggable secret backends are an expansion seam.
+- **Suggested hi-fi edit**: in org-setup step 2 (or settings vault panel), add a
+  **secret-store backend selector** (Vault / GCP Secret Manager / AWS Secrets
+  Manager / 1Password), and render vault refs as backend-neutral
+  `secret://…` rather than always `vault://`.
+- **Confidence: high.**
 
-- The product-entity model (P2A-0018) the proposed specs would slot into.
-- Forge thread/turn + tool surface (P2A-0019) — discovery is a Forge-driven flow.
-- Thick Forge (P3-0010) is its LLM engine → **depends on #1 being designed first**.
-- The DAG (P3-0013) is where placement options render → **depends on #2**.
+### 1.2 Allocators — hi-fi lists hetzner/DO/aws/k8s; impl adds GCP
 
-**Needs design**
+- **Hi-fi**: `view-onboard-org.jsx` step 4 cloud allocators = **hetzner cloud,
+  digitalocean, aws ec2, kubernetes pool** (+ local-docker default).
+- **Implementation**: `engine/allocators/` ships `hetznerAllocator`,
+  `digitalOceanAllocator`, `awsEc2Allocator`, `kubernetesAllocator`,
+  `manualSshAllocator`, **`gcpAllocator`**, plus `staticRunnerAllocator` /
+  `sidecarHttpAllocator` / `scaffoldedAllocators`.
+- **Why diverged**: purposeful — GCP and manual-SSH are real allocator kinds.
+- **Suggested hi-fi edit**: add **GCP Compute** to the cloud-allocator list, and a
+  **manual SSH** entry (a bring-your-own host allocator) alongside local-docker.
+- **Confidence: high.**
 
-- The **discovery interaction**: input (paste/import an insight) → Forge classification → proposed-spec cards → DAG-placement choices → accept/persist.
-- The **three variants** (feature / bug / strategic) and how they differ in the UI.
-- How **provenance** is shown (this spec came from X insight on Y date).
-- The classification confidence / operator-override affordance.
+### 1.3 Provider BYOK-vs-managed toggle — absent from hi-fi
 
-**Decisions to lock**
+- **Hi-fi**: credentials step (`view-onboard-org.jsx` step 2) only models
+  bring-your-own credentials (org API keys + dev bundles). No platform-managed
+  provider concept.
+- **Implementation**: `engine/config/managedProvider.ts` is an explicit
+  `providerMode: "byok" | "managed"` seam — a managed OpenRouter-shell mode where
+  every tenant runs against the platform's key and the platform meters/bills.
+- **Why diverged**: purposeful (SaaS Tier-B seam). The OSS side is the toggle +
+  endpoint plumbing; hosting owns the key/billing.
+- **Suggested hi-fi edit**: add a credentials-step (or a hosting/settings)
+  **provider-mode** control: "use my own keys (BYOK)" vs "use the managed
+  provider", with a note that managed usage is metered/billed by the platform.
+- **Confidence: high** (clearly a SaaS/hosting concern; **medium** on whether it
+  belongs in the self-host hi-fi at all — flag for the user).
 
-- The shape of a "proposed spec" card and the placement-choice UX (depends on the DAG design, #2).
-- How much the operator edits before persisting vs. accept-as-proposed.
-- Where discovery is entered from (a dedicated surface? the Forge palette? the insight feed?).
-- **Hard dependency:** lock #1 (thick Forge) and #2 (DAG) first — discovery composes them.
+### 1.4 IdP — hi-fi is GitHub-only; impl adds OIDC/Authentik
 
----
+- **Hi-fi**: `view-onboard-org.jsx` step 1 frames auth purely as the GitHub App
+  install ("your github org is your tanren org").
+- **Implementation**: `auth/oidcProvider.ts`, `auth/oidcEnv.ts`,
+  `auth/authentikEnv.ts` alongside `auth/githubProvider.ts` — a generic OIDC /
+  Authentik identity-provider path exists.
+- **Why diverged**: purposeful — IdP abstraction is an expansion seam (memory:
+  "clean adapter seams … IdPs").
+- **Suggested hi-fi edit**: in org-setup auth, note that sign-in is GitHub **or**
+  an OIDC IdP (Authentik), even if GitHub remains the recommended default.
+- **Confidence: high** (code exists); **medium** on placement in the hi-fi.
 
-## 4. P3-0015 — Greenfield onboarding (full track)
+### 1.5 GitHub App **install flow** — hi-fi shows the App but not the orchestrator-driven install
 
-> **Built.** The multi-round Forge interview → derived spec DAG shipped
-> (`engine/forge/interview/` with `derive.ts` + `providerAnswerer.ts`),
-> superseding the thin P2B-0009 form. The brief below is retained.
+- **Hi-fi**: step 1 links to `github.com/apps/tanren/installations` (a static
+  link).
+- **Implementation**: `routes/auth/githubAppInstall.ts` +
+  `engine/credentials/orgGithubApp.ts` / `githubAppTokenMinter.ts` provide an
+  orchestrator-driven install that provisions an **auto-rotating installation
+  token**; the dashboard wires `appInstallHref` when
+  `TANREN_ORCHESTRATOR_PUBLIC_URL` is set
+  (`routes/onboarding/index.tsx`).
+- **Why diverged**: purposeful — the App is the long-term connectivity model
+  (memory: "GitHub App preferred connectivity").
+- **Suggested hi-fi edit**: show the **two-path** auth (orchestrator-driven App
+  install that mints rotating tokens, vs. the manual install link) and reflect the
+  auto-rotating installation-token vault entry that already appears in settings.
+- **Confidence: high.**
 
-The multi-round Forge vision interview → derived spec DAG (the hi-fi references a
-~71-spec DAG) → sources / scheduled-audits / arrival surfaces.
+### 1.6 Tenancy / quota surface — exists in code, absent from hi-fi
 
-**Backend in place**
+- **Hi-fi**: budgets are modeled as a monthly **cost cap** only
+  (`view-onboard-org.jsx` step 4, `view-costs.jsx`). No tenant-quota concept.
+- **Implementation**: `engine/quota/` (`dbPolicy.ts`, `noopPolicy.ts`,
+  `meteringExport.ts`, `contracts.ts`) is a per-tenant quota/metering policy
+  layer.
+- **Why diverged**: purposeful (SaaS multi-tenant seam).
+- **Suggested hi-fi edit**: if the hi-fi is to cover hosted/multi-tenant, add a
+  **quota/metering** surface (per-org limits + metering export) distinct from the
+  monthly cost cap. **Flag for the user** whether the vision hi-fi should depict
+  hosting-tier concerns at all.
+- **Confidence: medium** (clearly built; placement in a self-host vision is a
+  judgment call).
 
-- P2B-0009 shipped (or specced) a **thin** greenfield form; this full track supersedes it.
-- Product-entity model to persist the derived personas/behaviors/specs.
-- Thick Forge (P3-0010) drives the interview → **depends on #1**; the derived DAG renders via #2.
+### 1.7 Notification channels — hi-fi and impl are ALIGNED (no change)
 
-**Needs design**
+- Recorded to prevent a false gap: hi-fi channels (slack, github checks, ntfy,
+  teams, discord, email, sms·twilio, pagerduty, webhook) match
+  `engine/notifications/channels/` 1:1. **No edit needed.**
+- **Confidence: high.**
 
-- The **multi-round vision interview** flow: how many rounds, what Forge asks, how answers accumulate, how the operator revises.
-- The **interview → DAG derivation** UX: how a conversation becomes a 71-spec DAG the operator can inspect/trust/edit.
-- The **arrival** surface (post-onboarding landing) + the **sources** and **scheduled-audits** panels referenced in hi-fi 01b.
+### 1.8 Merge integration — hi-fi and impl are ALIGNED (no change)
 
-**Decisions to lock**
+- The hi-fi review gate's four CTAs (mergify queue / direct merge / external
+  reviewer / not configured) map exactly to
+  `engine/workflow/reviewMerge/mergeDispatch.ts`
+  (`mergify_queue | direct_merge | external_reviewer | not_configured`). The
+  per-repo `mergeIntegration` tweak (chat3) is already in the hi-fi. **No edit
+  needed**, and the stale `hifi-vision-changes.md` "make merge CTAs conditional"
+  item is **DONE** (chat3).
+- **Confidence: high.**
 
-- Interview structure (rounds, branching, when it terminates).
-- How much of the derived DAG is auto-generated vs. operator-curated before it's "real."
-- Relationship to the thin P2B-0009 form (replace entirely, or thin form remains a shortcut?).
-- **Hard dependency:** #1 + #2.
+### 1.9 Governance posture — hi-fi brownfield has a picker; impl has the behavior
 
----
+- **Hi-fi**: brownfield onboarding includes a governance picker (chat2/chat3
+  references; `view-onboard-existing.jsx`).
+- **Implementation**: `engine/workflow/reviewMerge/governancePosture.ts`
+  implements `strict | open | audit_only` as real merge-time behavior (external
+  commits block / coexist / observe). The enum + behavior are richer than the
+  hi-fi copy.
+- **Why diverged**: purposeful — posture is wired into the merge decision.
+- **Suggested hi-fi edit**: make the brownfield governance picker's three modes
+  read **strict / open / audit-only** with the implemented semantics (external
+  commit → block / coexist / observe), so the copy matches the shipped behavior.
+- **Confidence: medium** (behavior is clearly built; exact hi-fi copy delta is a
+  wording change).
 
-## 5. P3-0016 — Brownfield onboarding (full track)
+### 1.10 Stale `hifi-vision-changes.md` — all "open" deltas already applied
 
-> **Built.** The recon agent + config-injection PR + DAG seed + governance picker
-> shipped (`engine/forge/brownfield/` with `recon.ts`, `configInjection.ts`,
-> `seed.ts`, plus the dashboard `GovernanceStep`). The brief below is retained.
-
-The read-only recon agent + config-injection PR + DAG seed + governance picker —
-the remaining hi-fi 01c steps beyond the minimal link flow already shipped.
-
-**Backend in place**
-
-- **Minimal existing-project link** already ships (P2B-0002): repo link via brownfield endpoint that reads `.github/workflows/`, `.mergify.yml`, `CODEOWNERS` and writes nothing.
-- **GitHub App connectivity** (P3-0003) — needed for the config-injection PR to write to the target repo.
-- **Governance posture** (P3-0023) — the strict/open/audit-only modes are built; this surface needs the _picker_ UI.
-- Answerer infrastructure for a read-only recon agent (reuse the Answerer pattern).
-- Repo-sourced `tanren-ci.yml` (P3-0004) — the config-injection PR adds this + `.mergify.yml` + `CODEOWNERS` + a `.tanren/PROJECT.md` snapshot.
-
-**Needs design**
-
-- The **recon-agent step** UX: indexing progress, then the pre-filled personas/behaviors/architecture/risks for operator review/edit.
-- The **config-injection PR** flow: preview of the files to be added, operator approval, the opened-PR confirmation.
-- The **DAG-seed step** (agent gaps + GitHub issues → seed specs) — depends on #2/#3.
-- The **governance-posture picker** placement + copy (wiring to P3-0023's modes).
-
-**Decisions to lock**
-
-- How much recon output the operator reviews/edits before it's persisted.
-- Config-injection: always a PR (never direct write)? Which files are mandatory vs. opt-in?
-- Where the governance picker lives in the flow and its default.
-
----
-
-## 6. P3-0017 — `tanren-config` audit-gate repo pattern
-
-> **Built.** The optional org-level audit-gate toggle + gated-write-via-PR flow
-> shipped. The brief below is retained.
-
-An optional org toggle routing Bucket-B config writes through a PR in a separate
-`tanren-config` repo before applying to the DB.
-
-**Backend in place**
-
-- The config write paths (P2A-0013 project/org config PATCH) the gate would intercept.
-- GitHub App connectivity (P3-0003) to open PRs in the `tanren-config` repo.
-- DB remains source of truth; the PR is a write gate (architectural decision already stated).
-
-**Needs design**
-
-- The **toggle** UI (org settings): enable/disable the audit gate, point at the `tanren-config` repo.
-- The **gated-write UX**: when an operator changes config under the gate, what they see (the change is queued as a PR, not applied; a link to the PR; status when merged → applied).
-- The **apply-on-merge** flow visualization.
-
-**Decisions to lock**
-
-- Which config categories are "Bucket-B" (gated) vs. applied directly.
-- What happens to a config change while its PR is open (pending state, conflict handling).
-- The `tanren-config` repo bootstrapping (operator creates it? Tanren scaffolds it?).
-
----
-
-## 7. P3-0021 — Scheduled-audits library
-
-> **Built.** The scheduled-audits library shipped (`engine/forge/audits/` with
-> `scheduler.ts`, `recommended.ts`, `store.ts`, plus the dashboard audits route).
-> The brief below is retained.
-
-Cron-driven background scans (security, mutation, perf, deps, type-coverage, a11y,
-license, stale-specs) producing auto-generated specs.
-
-**Backend in place**
-
-- The **run executor** (P3-0001) can execute scheduled work; the **gate-check tiers** (P3-0004/0005) define scan commands.
-- Spec creation (P2A-0013) to persist auto-generated specs — but turning a scan finding into a spec depends on **discovery (#3)**.
-- The hi-fi references this as "01b step 3 right panel."
-
-**Needs design**
-
-- The **audits library** surface: list of scheduled scans, their cadence, last-run results, enable/disable.
-- How a scan **finding becomes a proposed spec** (the bridge to discovery, #3).
-- Scheduling UX (cron-like; "scheduled overnight audits" — P3-0018's heatmap already has a Forge-prompt CTA pointing here).
-
-**Decisions to lock**
-
-- The catalog of v0 scan types and their cadences.
-- Finding → spec: auto-create, or propose-via-discovery (#3)?
-- **Dependency:** the spec-generation half depends on #3 (discovery); the scheduling+scan-execution half could be designed independently.
+For the record (folding the old doc in): every "open vision change" listed in the
+former `hifi-vision-changes.md` — drop Wafer from routing/vault, per-repo merge
+CTAs, brownfield `config.yaml` → `PROJECT.md` one-time snapshot, settings audit-
+gate-conditional caption + subtitle — was **already applied to the hi-fi** in the
+chat3 session (see `tanren-hi-fidelity/chats/chat3.md` and the current
+`view-settings.jsx` / `view-onboard-existing.jsx` / `view-review.jsx`). That doc
+is therefore **superseded**; do not treat its items as open work.
+**Confidence: high.**
 
 ---
 
-## 8. P3-0022 — Issue-source ingestion
+# Set 2 — Implementation is BEHIND the hi-fi
 
-> **Built.** Issue-source ingestion shipped (`engine/forge/inbox/` with
-> `issuesConnector.ts` + GitHub/Sentry/Linear/Jira connectors and the dashboard
-> inbox/candidate route). The brief below is retained.
+Real surfaces/flows the hi-fi specifies that the code does not yet (fully) build.
 
-GitHub Issues → candidate specs via label-driven classification (Linear/Jira/webhooks
-deferred further).
+### 2.1 Forge **in-conversation write-action approval** — deferred (the single biggest gap)
 
-**Backend in place**
+- **Hi-fi**: `shared.jsx` `ForgePalette` chat mode renders **action cards** that
+  act mid-conversation; the design intent (chat1/chat4) is Forge that can _propose
+  → operator confirms → execute_ inside the thread. The hi-fi also shows write
+  affordances throughout (create spec, trigger run, etc.).
+- **Code state — STUBBED/INERT**: the thick-Forge **conversation engine** is
+  constrained to **read + propose only**. `engine/forge/conversation/engine.ts`
+  filters to `isReadToolName` and drops write-tool requests
+  (`// TODO: Forge write-action approval (deferred — design pending)`). The
+  dashboard palette renders write-action cards but they are **INERT**
+  (`components/palette/ForgePalette.tsx` header comment + same TODO). Write tools
+  exist (`engine/forge/tools/write.ts`) but are **operator-button-driven only**,
+  not callable from a thread.
+- **Gap**: the inline "propose action → operator confirm → execute" UX within a
+  Forge thread, and lifting the conversation engine's read-only constraint behind
+  an approval gate.
+- **Size/priority: large / high.** This is the one genuinely unresolved design +
+  build item and is the only open item the previous doc still got right.
+- **Confidence: high.**
 
-- GitHub App connectivity (P3-0003) to read issues.
-- Discovery (#3) is the classification + proposal engine → **depends on #3**.
+### 2.2 Overview (org command deck) — placeholder only
 
-**Needs design**
+- **Hi-fi**: `view-org.jsx` `OverviewView` — projects grid, budget MTD, forge-org
+  card, activity feed.
+- **Code state — MISSING**: `/overview` is `phase: "3+"` in
+  `app/routes.ts` and absent from `SCREEN_MOUNTS`; it renders the documented
+  placeholder.
+- **Size/priority: medium / medium.**
+- **Confidence: high.**
 
-- The **issue → candidate-spec** flow: which labels trigger ingestion, the classification result, the proposed-spec review (this is largely discovery, #3, with GitHub Issues as the input source).
-- Where ingested candidates surface (the discovery surface? a dedicated inbox?).
+### 2.3 Roadmap (cross-project Gantt) — placeholder only
 
-**Decisions to lock**
+- **Hi-fi**: `view-org.jsx` `RoadmapView` — cross-project Gantt-style timeline +
+  upcoming-30d.
+- **Code state — MISSING**: `/roadmap` is `phase: "3+"`, not in `SCREEN_MOUNTS`.
+- **Size/priority: medium / low.**
+- **Confidence: high.**
 
-- The label → classification mapping.
-- **Hard dependency:** #3 (discovery) — this is discovery with an issue-source adapter.
+### 2.4 Personas (cross-project people-models) — placeholder only
+
+- **Hi-fi**: `view-org.jsx` `PersonasView` — cross-project persona models with
+  behaviors.
+- **Code state — MISSING**: `/personas` is `phase: "3+"`, not in `SCREEN_MOUNTS`.
+  (The persona _entity_ exists in the engine entity model, but no org-level
+  surface.)
+- **Size/priority: medium / low.**
+- **Confidence: high.**
+
+### 2.5 Nav model not cleaned up to the hi-fi's realistic-product nav
+
+- **Hi-fi**: chat4 deliberately split nav into **org / projects / system** and
+  **pulled onboarding OUT of standing nav** (onboarding is a once-per-org first-
+  run flow, reachable only from Tweaks "all flows" / Overview buttons — see
+  `app.jsx` `ONBOARDING_ROUTES` comment and `shared.jsx` `SideNav`).
+- **Code state — DIVERGENT**: the dashboard nav (`app/routes.ts` `NAV_GROUPS`,
+  `components/shell/SideNav.tsx`) still has **four groups org / projects / set up /
+  onboarding** with **onboarding as standing nav**. Group label is "set up" not
+  "system".
+- **Gap**: pull the onboarding group out of the product sidebar (keep the routes,
+  reach them from onboarding entry points), and reconcile the "set up"→"system"
+  grouping. Note this is a deliberate _later_ hi-fi decision; the dashboard nav
+  predates it.
+- **Size/priority: small / medium.**
+- **Confidence: high.**
+
+### 2.6 Spec full-page depth — verify against the hi-fi's run-history/economics
+
+- **Hi-fi**: `view-spec.jsx` full page shows run history, dependency chains,
+  economics, BDD acceptance, blocked-reason, contextual "ask forge".
+- **Code state — PARTIAL (verify)**: `routes/projects/specRoutes.tsx` ships both
+  `/specs/:id/drawer` and `/specs/:id` full page (156 lines), but is noticeably
+  thinner than the hi-fi (few references to economics/run-history in the file).
+  The drawer + full-page **escalation exists**; the depth of run-history /
+  economics panels may be partial.
+- **Gap**: confirm and, if needed, fill run-history + economics panels on the full
+  spec page.
+- **Size/priority: small / low.**
+- **Confidence: medium** (route exists; panel completeness not fully verified).
+
+### 2.7 Notifications — delivery history + quiet hours (verify)
+
+- **Hi-fi**: `view-org.jsx` `NotificationsView` shows the channel list + per-event
+  matrix **plus delivery history and pause/quiet-hours**.
+- **Code state — PARTIAL**: `/notifications` is mounted
+  (`routes/onboarding/index.tsx`) and renders the channels + per-event × severity
+  matrix (`components/onboarding/NotificationsBody`), but **delivery history** and
+  **quiet-hours/pause** are not evidently present.
+- **Gap**: add the delivery-history list and quiet-hours/pause controls.
+- **Size/priority: small / low.**
+- **Confidence: medium.**
 
 ---
 
-## Cross-cutting decisions (resolved)
+## Ambiguities / could not fully resolve
 
-These gated multiple surfaces; they were locked and the surfaces built. The only
-one not fully resolved is the **Forge in-conversation write-action approval model**
-(#1), which remains deferred. The original sequencing is retained below for the
-record.
-
-1. **Thick-Forge interaction model (#1)** — gates discovery (#3), greenfield (#4), and the recon framing of brownfield (#5). **Lock this first.**
-2. **DAG canvas visual language + DAG-primary vs. chat-primary (#2)** — gates discovery placement (#3), greenfield DAG derivation (#4), brownfield DAG-seed (#5). **Lock second.**
-3. **Discovery flow (#3)** — gates scheduled-audits' spec-generation (#7) and issue-ingestion (#8). **Lock third.**
-
-Recommended design order: **#1 → #2 → #3 → {#4, #5, #6} → {#7, #8}**. #6 (brownfield) and #17 (tanren-config gate) have the most backend already in place and the least dependency on the others, so they can be designed in parallel once #1/#2 are locked.
-
-## What engineering needs from the design
-
-For each surface, to start building we need: the **locked screen(s)** (layout + states), the **interaction flow** (click-by-click), and the **data each view reads/writes** mapped to the existing contracts named under "Backend in place." Where a surface composes another (e.g. discovery uses the DAG), the composed design must be locked first.
+- **1.3 / 1.6 (managed provider, quota)** — clearly built as **hosting/SaaS-tier**
+  seams. Whether the _vision_ hi-fi (explicitly a self-host-leaning product
+  vision) should depict hosting-tier surfaces at all is a product call for the
+  user, not a code fact. Flagged rather than asserted.
+- **2.6 / 2.7** — the routes exist; I confirmed the _files_ but not every rendered
+  panel pixel-for-pixel against the hi-fi. Marked medium and called "verify".
+- **DORA** — `/dora` is mounted (P3-0019, `routes/dora/index.tsx`) and the hi-fi
+  `DoraView` exists; I did not diff tile-by-tile but both sides are present, so no
+  Set-2 item is raised for it.
