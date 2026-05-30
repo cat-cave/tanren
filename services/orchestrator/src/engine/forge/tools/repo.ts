@@ -6,6 +6,7 @@
 import type pg from "pg";
 import type { ActorContext } from "../../../auth/schemas.js";
 import type { SecretStore } from "../../contracts/secretStore.js";
+import { resolveQueryClient } from "../../data/orgScopedDb.js";
 import type { GitHubHttpClient } from "../../providers/github.js";
 import { parseGitHubRepository } from "../../providers/github.js";
 import { assertProjectAccess, ToolAccessDeniedError } from "./authz.js";
@@ -22,8 +23,11 @@ async function loadProjectRepo(
   projectId: string,
   actor: ActorContext,
 ): Promise<{ repo: { owner: string; name: string }; token: string }> {
-  await assertProjectAccess(pool, projectId, actor);
-  const result = await pool.query<{ repo_url: string; config: Record<string, unknown> | null }>(
+  // RLS R3a: the projects read carries org context when the forge-tool dispatch
+  // has an ambient scope open; falls back to the pool otherwise (inert in R1).
+  const db = resolveQueryClient(pool);
+  await assertProjectAccess(db, projectId, actor);
+  const result = await db.query<{ repo_url: string; config: Record<string, unknown> | null }>(
     "SELECT repo_url, config FROM projects WHERE project_id = $1",
     [projectId],
   );

@@ -173,7 +173,26 @@ smoke-rls-r2-cohort2:
 smoke-rls-r2-cohort3:
   DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/rlsR2DalSpecsRunnersQuota.integration.test.ts
 
-smoke: compose-build compose-up wait-for-stack smoke-hello smoke-ssh-integration smoke-rls-r1 smoke-rls-r2 smoke-rls-r2-cohort2 smoke-rls-r2-cohort3
+# RLS wave R2 cohort-4 (FINAL) behavior proof: the forge stores —
+# forge_threads / forge_turns / forge_action_proposals reads + writes — run
+# through the org-scoped client (inert — no policies), identical to the pool.
+# Same ephemeral-DB + restricted-role harness as R1 / cohort-1/2/3. After this
+# all conversion cohorts are complete; only R3 (policies + role flip) remains.
+smoke-rls-r2-cohort4:
+  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/rlsR2DalForge.integration.test.ts
+
+# RLS wave R3a behavior proof: the residual cohort-4-flagged tenant-table sites
+# — the forge read/write tool dispatchers + `engine/recovery`'s
+# openInspectionThread + the narration insights-cache read — now run through the
+# org-scoped client (inert — no policies), identical to the pool, and
+# openInspectionThread stamps forge_threads.org_id. Same ephemeral-DB +
+# restricted-role harness as R1 / R2 cohorts. After this every REQUEST-reachable
+# tenant query carries context; the worker per-job WORKFLOW execution is the one
+# remaining surface to scope before R3b (see docs/roadmap/R-WAVES.md).
+smoke-rls-r3a:
+  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/rlsR3aResidualSites.integration.test.ts
+
+smoke: compose-build compose-up wait-for-stack smoke-hello smoke-ssh-integration smoke-rls-r1 smoke-rls-r2 smoke-rls-r2-cohort2 smoke-rls-r2-cohort3 smoke-rls-r2-cohort4 smoke-rls-r3a
 
 # P3-0001: the Phase 2A direct-execution acceptance gate (`just acceptance`,
 # scripts/acceptance/easy.ts + medium.ts) was removed once the run executor

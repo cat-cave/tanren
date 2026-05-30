@@ -12,6 +12,7 @@
 // `ForgeThreadStore`; the HTTP shape, Zod validation, and authz live in the
 // route (routes/recovery/index.ts), mirroring the notifications route split.
 
+import { runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
 import type { ActorContext } from "../../auth/schemas.js";
 import { PgEventStore } from "../eventStore.js";
@@ -140,15 +141,20 @@ export interface ReviseSpecResult {
  * operator triggers a replan. This keeps the gesture observable without forking
  * the spec-edit write path.
  */
-export async function reviseSpec(pool: pg.Pool, ctx: HaltedRunContext): Promise<ReviseSpecResult> {
+export async function reviseSpec(pool: pg.Pool, ctx: HaltedRunContext, orgId: string): Promise<ReviseSpecResult> {
   assertRecoverable(ctx);
   const editHref = `/projects/${ctx.projectId}/specs/${ctx.specId}/edit?recoverRunId=${ctx.runId}`;
-  await new PgEventStore(pool).append({
-    runId: ctx.runId,
-    specId: ctx.specId,
-    projectId: ctx.projectId,
-    eventType: "recovery.revise_routed",
-    payload: { runId: ctx.runId, specId: ctx.specId, action: "revise_spec", editHref },
+  // RLS R3a: the only write is the lineage event — run it in one org-scoped txn
+  // so the `events` INSERT carries org context (PgEventStore.append routes
+  // through the ambient scope). Inert in R1.
+  await runWithOrgScope(pool, orgId, async (client) => {
+    await new PgEventStore(client).append({
+      runId: ctx.runId,
+      specId: ctx.specId,
+      projectId: ctx.projectId,
+      eventType: "recovery.revise_routed",
+      payload: { runId: ctx.runId, specId: ctx.specId, action: "revise_spec", editHref },
+    });
   });
   return { action: "revise_spec", runId: ctx.runId, specId: ctx.specId, editHref };
 }
@@ -175,22 +181,32 @@ export async function replanWithSteering(
   actor: ActorContext,
 ): Promise<ReplanResult> {
   assertRecoverable(ctx);
-  await appendSteeringToSpec(pool, ctx.specId, steeringNote);
-  await reopenSpecForReplan(pool, ctx.specId);
+  // RLS R3a: the spec-prep UPDATEs run in their OWN short org-scoped txn so they
+  // COMMIT before `createQueuedRunFromSpec` (which opens its own org-scoped txn
+  // on a separate connection and claims the now-`pending` spec) reads them. This
+  // mirrors the prior autocommit-per-statement ordering — wrapping the whole
+  // action in one outer txn would hide the UPDATE from the nested claim and
+  // break replan. Inert in R1.
+  await runWithOrgScope(pool, orgId, async (client) => {
+    await appendSteeringToSpec(client, ctx.specId, steeringNote);
+    await reopenSpecForReplan(client, ctx.specId);
+  });
   const run = await createQueuedRunFromSpec(pool, { specId: ctx.specId, trigger: "dashboard" }, { ...actor, orgId });
-  await new PgEventStore(pool).append({
-    runId: ctx.runId,
-    specId: ctx.specId,
-    projectId: ctx.projectId,
-    eventType: "recovery.replan_queued",
-    payload: {
+  await runWithOrgScope(pool, orgId, async (client) => {
+    await new PgEventStore(client).append({
       runId: ctx.runId,
       specId: ctx.specId,
-      action: "replan_with_steering",
-      steeringNote,
-      replanRunId: run.runId,
-      plannerTaskId: run.plannerTaskId,
-    },
+      projectId: ctx.projectId,
+      eventType: "recovery.replan_queued",
+      payload: {
+        runId: ctx.runId,
+        specId: ctx.specId,
+        action: "replan_with_steering",
+        steeringNote,
+        replanRunId: run.runId,
+        plannerTaskId: run.plannerTaskId,
+      },
+    });
   });
   return {
     action: "replan_with_steering",
@@ -230,25 +246,32 @@ export async function rollbackToCommit(
   if (ctx.lastGoodCommit === null) {
     throw new NoPriorCommitError(ctx.runId);
   }
-  const captured = await loadCapturedCommits(pool, ctx.runId);
-  if (!captured.includes(args.commitSha)) {
-    throw new UnknownCommitError(args.commitSha);
-  }
-  await reopenSpecForReplan(pool, ctx.specId);
+  // RLS R3a: the captured-commit read + the spec-reopen UPDATE run in one short
+  // org-scoped txn (commits before the nested `createQueuedRunFromSpec` claims
+  // the spec — see replanWithSteering for the ordering rationale). Inert in R1.
+  await runWithOrgScope(pool, orgId, async (client) => {
+    const captured = await loadCapturedCommits(client, ctx.runId);
+    if (!captured.includes(args.commitSha)) {
+      throw new UnknownCommitError(args.commitSha);
+    }
+    await reopenSpecForReplan(client, ctx.specId);
+  });
   const run = await createQueuedRunFromSpec(pool, { specId: ctx.specId, trigger: "dashboard" }, { ...actor, orgId });
-  await new PgEventStore(pool).append({
-    runId: ctx.runId,
-    specId: ctx.specId,
-    projectId: ctx.projectId,
-    eventType: "recovery.rollback_queued",
-    payload: {
+  await runWithOrgScope(pool, orgId, async (client) => {
+    await new PgEventStore(client).append({
       runId: ctx.runId,
       specId: ctx.specId,
-      action: "rollback_to_commit",
-      commitSha: args.commitSha,
-      confirmed: true,
-      replanRunId: run.runId,
-    },
+      projectId: ctx.projectId,
+      eventType: "recovery.rollback_queued",
+      payload: {
+        runId: ctx.runId,
+        specId: ctx.specId,
+        action: "rollback_to_commit",
+        commitSha: args.commitSha,
+        confirmed: true,
+        replanRunId: run.runId,
+      },
+    });
   });
   return {
     action: "rollback_to_commit",
@@ -279,28 +302,35 @@ export async function openInspectionThread(
   actor: ActorContext,
 ): Promise<InspectionThreadResult> {
   assertRecoverable(ctx);
-  const thread = await ForgeThreadStore.create(
-    pool,
-    {
-      orgId,
-      projectId: ctx.projectId,
-      runId: ctx.runId,
-      scope: "run",
-      title: `recovery · run ${ctx.runId}`,
-    },
-    actor,
-  );
-  await new PgEventStore(pool).append({
-    runId: ctx.runId,
-    specId: ctx.specId,
-    projectId: ctx.projectId,
-    eventType: "recovery.inspection_opened",
-    payload: {
+  // RLS R3a: this was the flagged residual — `ForgeThreadStore.create` wrote a
+  // `forge_threads` row with NO org context. Run the thread create + the lineage
+  // event append in ONE org-scoped txn so both carry org context. No nested
+  // run-create here, so a single outer scope is safe. Inert in R1.
+  const thread = await runWithOrgScope(pool, orgId, async (client) => {
+    const created = await ForgeThreadStore.create(
+      client,
+      {
+        orgId,
+        projectId: ctx.projectId,
+        runId: ctx.runId,
+        scope: "run",
+        title: `recovery · run ${ctx.runId}`,
+      },
+      actor,
+    );
+    await new PgEventStore(client).append({
       runId: ctx.runId,
       specId: ctx.specId,
-      action: "open_inspection_thread",
-      threadId: thread.id,
-    },
+      projectId: ctx.projectId,
+      eventType: "recovery.inspection_opened",
+      payload: {
+        runId: ctx.runId,
+        specId: ctx.specId,
+        action: "open_inspection_thread",
+        threadId: created.id,
+      },
+    });
+    return created;
   });
   return {
     action: "open_inspection_thread",
