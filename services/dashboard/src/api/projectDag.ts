@@ -25,7 +25,7 @@ function statusForSpec(specStatus: string, run: RunListItem | undefined): DagSta
     if (run.needsReview) return "review";
     if (run.status === "running") return "live";
     if (run.outcome !== null && HALTED.has(run.outcome)) return "blocked";
-    if (run.status === "completed" || run.status === "succeeded") return "done";
+    if (run.status === "completed" || run.status === "done") return "done";
     if (run.status === "queued") return "queued";
   }
   // No run yet — fall back to the spec's own lifecycle status.
