@@ -72,8 +72,8 @@ mutation-full:
   corepack pnpm exec stryker run stryker.full.mjs
 
 # Run one named mutation cluster, e.g. `just mutation-cluster repos` →
-# stryker.repos.mjs. Clusters: runloop alloc wf forge notify secrets repos
-# worker dal. Each carries its own ratcheted `break` floor.
+# stryker.repos.mjs. Clusters: runloop alloc wf forge notify secrets inbox
+# repos worker dal. Each carries its own ratcheted `break` floor.
 mutation-cluster cluster:
   corepack pnpm exec stryker run stryker.{{cluster}}.mjs
 
