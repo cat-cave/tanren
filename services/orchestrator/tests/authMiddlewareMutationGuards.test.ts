@@ -259,7 +259,7 @@ describe("cookie helpers", () => {
   });
 
   it("returns undefined when the cookie header is absent or the name is missing", () => {
-    expect(readCookie(ctx(undefined), SESSION_COOKIE)).toBeUndefined();
+    expect(readCookie(ctx(), SESSION_COOKIE)).toBeUndefined();
     expect(readCookie(ctx("other=1"), SESSION_COOKIE)).toBeUndefined();
   });
 
