@@ -12,14 +12,20 @@ const config = {
   // mutation score reflects real, DB-free behavior pinning.
   mutate: ["services/orchestrator/src/engine/repositories/**/*.ts"],
   reporters: ["clear-text"],
-  // Baseline (FIRST MEASUREMENT — refactor-target). Measured on this branch:
-  // 51.28% (20 killed of 39 mutants; per-file: actors 100, runs 75, specs 66.67,
-  // tasks 37.50, jobs 25.00). `break` is set just below the measured score so the
-  // run passes today and any regression below the floor fails. This is a baseline,
-  // not a strengthening pass: production source is unchanged here. The dominant
-  // survivors are the SELECT_*_COLUMNS SQL-column StringLiterals and ORDER BY /
-  // LIMIT clause text the DB-free stub suite does not assert against a live query.
-  thresholds: { high: 80, low: 60, break: 50 },
+  // Strengthened (mutation ratchet). The stateRepositories suite was extended
+  // with behavior-pinning tests asserting each store's emitted SQL (full column
+  // projection, WHERE/ORDER BY, dynamic SET fragments, RETURNING, params), the
+  // row->entity coercions (string<->number for id/attempts/attempt), the spec
+  // array-field filtering, status transitions, and not-found handling. Score
+  // rose 51.28% -> 84.62% (33 killed of 39; per-file: actors 100, runs 100,
+  // specs 100, tasks 75, jobs 66.67). The remaining 6 survivors are GENUINE
+  // EQUIVALENTS: the decoder guards `typeof raw.x === "string"/"number" ? raw.x
+  // : String/Number(raw.x)` collapse to the else branch under the conditional-
+  // false and `=== ""` mutants, and String(s)===s / Number(n)===n for every
+  // in-domain input, so no behavioral test can distinguish them. `break` is set
+  // just below the measured score so any regression below the floor fails.
+  // Production source is unchanged.
+  thresholds: { high: 90, low: 70, break: 84 },
   logLevel: "warn",
   tempDirName: "reports/mutation/.stryker-tmp-repos",
   concurrency: 4,
