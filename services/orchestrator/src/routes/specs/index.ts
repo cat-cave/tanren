@@ -1,6 +1,7 @@
 // P2A-0013: spec CRUD routes scoped by org+project. Run trigger and spec
 // dependency wiring delegate to `engine/workflow/projectSpec.ts`.
 
+import { runWithOrgScope } from "@tanren/db";
 import { Hono } from "hono";
 import type pg from "pg";
 import { z } from "zod";
@@ -49,12 +50,18 @@ export function createSpecRoutes(options: SpecRoutesOptions) {
     if (!actorCanAccessOrg(actor, orgId)) {
       return c.json({ error: "org_access_denied" }, 403);
     }
-    const rows = await options.pool.query<SpecRow>(
-      `SELECT spec_id, project_id, title, description, acceptance_criteria, depends_on, status
-         FROM specs
-        WHERE project_id = $1
-        ORDER BY title`,
-      [projectId],
+    // RLS R2 cohort-3 (specs read): the spec-list query runs through the
+    // org-scoped client so it executes inside `SET LOCAL app.current_org_id =
+    // <orgId>` (org validated against the actor above). Inert in R1 — no
+    // policies read the GUC — and behavior-identical to the pool path.
+    const rows = await runWithOrgScope(options.pool, orgId, (client) =>
+      client.query<SpecRow>(
+        `SELECT spec_id, project_id, title, description, acceptance_criteria, depends_on, status
+           FROM specs
+          WHERE project_id = $1
+          ORDER BY title`,
+        [projectId],
+      ),
     );
     return c.json({ specs: rows.rows.map(toSpecContract) });
   });
@@ -94,10 +101,14 @@ export function createSpecRoutes(options: SpecRoutesOptions) {
     if (!actorCanAccessOrg(actor, orgId)) {
       return c.json({ error: "org_access_denied" }, 403);
     }
-    const result = await options.pool.query<SpecRow>(
-      `SELECT spec_id, project_id, title, description, acceptance_criteria, depends_on, status
-         FROM specs WHERE spec_id = $1`,
-      [specId],
+    // RLS R2 cohort-3 (specs read): the spec-detail query runs through the
+    // org-scoped client (inert in R1; same row as the pool path).
+    const result = await runWithOrgScope(options.pool, orgId, (client) =>
+      client.query<SpecRow>(
+        `SELECT spec_id, project_id, title, description, acceptance_criteria, depends_on, status
+           FROM specs WHERE spec_id = $1`,
+        [specId],
+      ),
     );
     const row = result.rows[0];
     if (row === undefined) {
@@ -136,9 +147,14 @@ export function createSpecRoutes(options: SpecRoutesOptions) {
       return c.json({ error: "invalid_spec_patch", message: "no updatable fields supplied" }, 400);
     }
     params.push(specId);
-    const updated = await options.pool.query(
-      `UPDATE specs SET ${fragments.join(", ")} WHERE spec_id = $${params.length} RETURNING spec_id`,
-      params,
+    // RLS R2 cohort-3 (specs write): the spec PATCH runs through the org-scoped
+    // client so the UPDATE executes inside `SET LOCAL app.current_org_id =
+    // <orgId>` (inert in R1; same committed row as the pool path).
+    const updated = await runWithOrgScope(options.pool, orgId, (client) =>
+      client.query(
+        `UPDATE specs SET ${fragments.join(", ")} WHERE spec_id = $${params.length} RETURNING spec_id`,
+        params,
+      ),
     );
     if (updated.rowCount === 0) {
       return c.json({ error: "spec_not_found" }, 404);

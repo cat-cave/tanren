@@ -70,7 +70,15 @@ function stubPool(existingSpecs: Array<{ spec_id: string; title: string; status:
     }
     return { rows: [], rowCount: 0 };
   };
-  return { pool: { query } as unknown as pg.Pool, specs };
+  // RLS R2 cohort-3: the accept path's `createSpec` is called with an
+  // org-carrying actor, so it now runs through `runWithOrgScope` (which checks
+  // out a client + opens a `SET LOCAL app.current_org_id` transaction) instead
+  // of a bare `pool.query`. The stub therefore exposes `connect` (returning
+  // itself) + tolerates BEGIN/COMMIT/SET LOCAL (they fall through to the no-op
+  // branch above). The observable round-trip — inserted specs + stamped
+  // provenance — is unchanged; only the transaction plumbing is added.
+  const pool = { query, connect: async () => ({ query, release() {} }) };
+  return { pool: pool as unknown as pg.Pool, specs };
 }
 
 describe("classifyInsight (mocked answerer)", () => {

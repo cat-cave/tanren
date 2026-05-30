@@ -83,14 +83,42 @@ smoke-rls-r2-cohort2`) + `tests/rlsR2WriteRouting.test.ts` routing/fallback
       cases. Excluded (cohort-3 / R3): the worker **failure-path finalizers**
       (`finalizeRunRecoverable` / `finalizeRunQuotaExceeded`) — no ambient scope
       there yet.
-- [ ] **Cohort-3 — specs / runners / forge / quota** and the remaining route +
-      engine read paths (see the R3+ list below). Still includes the worker
-      failure-path finalizers (establish a scope there) and the hosting-export
-      reads' eventual call site.
+- [x] **Cohort-3 — specs + runners + quota + the worker failure-path
+      finalizers.** specs **reads** (`routes/specs/index.ts` list/detail wrapped
+      in `runWithOrgScope`; `SpecStore.get/list` already `QueryClient`-shaped) +
+      **writes** (`routes/specs/index.ts` PATCH UPDATE wrapped; the engine
+      `createSpec` runs its pre-checks + INSERT through the org-scoped client when
+      the actor carries an org, else the pool — mirroring
+      `createQueuedRunFromSpec`; its `ensureProject*` helpers widened to
+      `QueryClient`). runner-metadata **writes** (`PgRunnerStore.claim` /
+      `.release`, handed the pool) route through the ambient org-scoped client via
+      `resolveWritableClient`, falling back to the pool when no scope is open.
+      `org_quotas` **read + write** (`DbQuotaPolicy.checkAdmission`'s `loadRow`
+      SELECT + `accrueUsage`'s UPDATE) route through `resolveWritableClient`; the
+      worker now runs the admission gate AND the post-run accrual (the
+      `cost_records` read + `accrueUsage` together) inside short org-scoped
+      transactions so both carry org context. The worker **failure-path
+      finalizers** (`runExecutor.ts`: `finalizeRunRecoverable` /
+      `finalizeRunQuotaExceeded`), flagged deferred in cohort-1/2, now establish a
+      scope: each takes the run's org (resolved from its execution context — the
+      success path's `orgId`, hoisted so the catch path has it) and runs its
+      finalize UPDATE + best-effort event append in ONE `runWithOrgScope`
+      transaction; a legacy/unscoped run (org_id NULL) — or a context load that
+      itself threw — falls back to the pool (the pre-cohort-3 behavior). Proof:
+      `tests/rlsR2DalSpecsRunnersQuota.integration.test.ts` (real PG, run via
+      `just smoke-rls-r2-cohort3`); the existing `quotaPolicy` /
+      `quotaAdmissionGate` / `runnerStore` / `runWorker` / `projectSpecWorkflow`
+      tests stayed unchanged.
+- [ ] **Cohort-4 — forge** (`routes/forge` + ask/proposals; the run-detail Forge
+      bundle's cross-store reads) and the remaining route + engine read paths
+      (see the R3+ list below), plus the hosting-export reads' eventual call site.
+      This is the last cohort before R3 (policies + role flip).
 
 Fallback semantics (all cohorts): with no ambient scope (startup, cross-org
-system ops, the worker's failure-path finalizers) the resolver falls back to the
-pool so behavior is unchanged. **R3 will tighten this** — once policies are on,
+system ops) the resolver falls back to the pool so behavior is unchanged. The
+worker's failure-path finalizers no longer rely on that fallback when the run's
+org is known (cohort-3 establishes a scope there); they fall back to the pool
+only for a legacy/unscoped run. **R3 will tighten this** — once policies are on,
 the fallback for tenant tables must become an error, not a silent pool query.
 The app-layer `WHERE org_id = $n` filters stay (belt-and-suspenders) regardless.
 
@@ -118,7 +146,9 @@ changes), each with a behavior test. Grouped by surface:
 
 ### Orchestrator routes (read paths)
 
-- [ ] `routes/specs`, `routes/projects`, `routes/personas`, `routes/behaviors`,
+- [x] `routes/specs` — list/detail reads + the PATCH write + the engine
+      `createSpec` path converted (R2 cohort-3). Still pending:
+      `routes/projects`, `routes/personas`, `routes/behaviors`,
       `routes/milestones`
 - [ ] `routes/insights`, `routes/dora`, `routes/notifications` (`routes/costs` —
       the run-scoped costs page — converted in R2 cohort-2)
@@ -129,22 +159,29 @@ changes), each with a behavior test. Grouped by surface:
       snapshot (R1), the run list, the events page, the activity feed, and the
       SSE run/task/event reads; cohort-2 converted the **costs page** + the
       **SSE cost deltas** (`cost_records`). Still on the pool: the **Forge bundle**
-      (cross-store, cohort-3).
+      (cross-store, cohort-4).
 
 ### Orchestrator engine (write + read paths)
 
 - [x] Event store (`engine/eventStore.ts`) — append routes through the ambient
       org-scoped client (R2 cohort-1). The worker failure-path **finalize
       updates** (`runExecutor.ts` `finalizeRunRecoverable` /
-      `finalizeRunQuotaExceeded`) still use the pool fallback — they run with no
-      ambient scope; R3 establishes one there.
+      `finalizeRunQuotaExceeded`) now establish an org scope from the run's org
+      (R2 cohort-3) — they fall back to the pool only for a legacy/unscoped run.
 - [x] Task/cost recording (`engine/workflow/subtaskTasks.ts` task INSERT/UPDATE,
       `engine/costs/recorder.ts` cost INSERT + reconcile, post-run metering
       `getRunUsage`) — route through the pool-or-scope seam (R2 cohort-2). The
       hosting-export reads (`getOrgUsage` / `streamBillableRuns`) already take a
       `QueryClient`; their live call site lands later.
+- [x] Runner-metadata writes (`engine/allocators/runnerStore.ts`
+      `PgRunnerStore.claim` / `.release`) — route through the pool-or-scope seam
+      (R2 cohort-3); the allocator HTTP logic is untouched, only the DB writes.
+- [x] Quota reads/accrual (`engine/quota/**`) — `DbQuotaPolicy.checkAdmission` +
+      `accrueUsage` route through the pool-or-scope seam, and the worker runs the
+      admission gate + post-run accrual inside org-scoped transactions (R2
+      cohort-3). The metering-export reads (`getOrgUsage` / `streamBillableRuns`)
+      already take a `QueryClient`; their live call site lands later.
 - [ ] Credential-resolution reads (`engine/credentials/**`)
-- [ ] Quota reads/accrual (`engine/quota/**`)
 - [ ] Insights compute/cache (`engine/insights/**`)
 
 ### Dashboard + CLI

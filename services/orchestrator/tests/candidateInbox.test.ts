@@ -184,7 +184,14 @@ function stubPool(existingSpecs: Array<{ spec_id: string; title: string; status:
     }
     return { rows: [], rowCount: 0 };
   };
-  return { pool: { query } as unknown as pg.Pool, candidates, specs };
+  // RLS R2 cohort-3: the accept → discovery hand-off's `createSpec` is now
+  // called with an org-carrying actor, so it runs through `runWithOrgScope`
+  // (checks out a client + opens a `SET LOCAL app.current_org_id` transaction)
+  // rather than a bare `pool.query`. The stub exposes `connect` (returning
+  // itself) + tolerates BEGIN/COMMIT/SET LOCAL (they hit the no-op branch). The
+  // observable round-trip — created spec + resolved candidate — is unchanged.
+  const pool = { query, connect: async () => ({ query, release() {} }) };
+  return { pool: pool as unknown as pg.Pool, candidates, specs };
 }
 
 function depsFor(connectors: ReadonlyMap<string, SourceConnector>, pool: pg.Pool): InboxEngineDeps {

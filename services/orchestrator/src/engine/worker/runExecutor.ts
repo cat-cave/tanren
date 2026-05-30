@@ -117,11 +117,17 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
   // whose lease has lapsed — i.e. a crashed worker that stopped heartbeating.
   const stopHeartbeat = startHeartbeat(deps, job.id, leaseMs);
   const quotaPolicy = deps.quotaPolicy ?? new NoopQuotaPolicy();
+  // RLS R2 cohort-3: hoisted so the catch-path recoverable finalize can org-scope
+  // its writes. Resolved once the run's execution context loads; stays null for a
+  // legacy/unscoped run, or if the context load itself threw (the finalize then
+  // falls back to the pool, the pre-cohort-3 behavior).
+  let resolvedOrgId: string | null = null;
   try {
     const { context, orgId } = await loadRunExecutionContext(deps.pool, {
       runId,
       identitySecretRef: deps.identitySecretRef,
     });
+    resolvedOrgId = orgId;
 
     // RLS wave R1: the claim above ran under the worker's SYSTEM context — the
     // `job_queue` claim spans tenants (job_queue stays OUTSIDE RLS in R2), so it
@@ -140,10 +146,17 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
     // attribute usage to. A denied run lands `quota_exceeded` (recoverable) and
     // the job is completed; we never start the workflow.
     if (orgId !== null) {
-      const decision = await quotaPolicy.checkAdmission(orgId, SINGLE_RUN_REQUEST);
+      // RLS R2 cohort-3 (org_quotas read): run the admission gate inside a short
+      // org-scoped transaction so the DbQuotaPolicy's `org_quotas` SELECT carries
+      // org context (`SET LOCAL app.current_org_id = <orgId>`). Inert in R1 — the
+      // NoopQuotaPolicy default ignores the scope and a pool/scoped read return
+      // the same decision.
+      const decision = await runWithOrgScope(deps.pool, orgId, () =>
+        quotaPolicy.checkAdmission(orgId, SINGLE_RUN_REQUEST),
+      );
       if (!decision.admit) {
         const reason = decision.reason ?? "quota exceeded";
-        await finalizeRunQuotaExceeded(deps.pool, runId, reason, decision.windowKey);
+        await finalizeRunQuotaExceeded(deps.pool, runId, reason, decision.windowKey, orgId);
         await deps.jobQueue.complete(job.id);
         return { kind: "quota_denied", jobId: job.id, runId, reason };
       }
@@ -173,7 +186,7 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
   } catch (error) {
     const failure = { kind: failureKind(error), message: messageOf(error) };
     await deps.jobQueue.fail(job.id, failure);
-    await finalizeRunRecoverable(deps.pool, runId, failure.message);
+    await finalizeRunRecoverable(deps.pool, runId, failure.message, resolvedOrgId);
     return { kind: "failed", jobId: job.id, runId, failure };
   } finally {
     await stopHeartbeat();
@@ -257,26 +270,41 @@ function startHeartbeat(deps: RunExecutorDeps, jobId: string, leaseMs: number): 
  * already finalized as recoverable (halted / window_exhausted /
  * retry_budget_exhausted) or terminal-good (`done`) is left untouched.
  */
-async function finalizeRunRecoverable(pool: pg.Pool, runId: string, message: string): Promise<void> {
-  const updated = await pool.query(
-    "UPDATE runs SET status = 'halted', outcome = 'halted', ended_at = now() WHERE run_id = $1 AND status IN ('running', 'queued', 'failed') RETURNING run_id, spec_id, project_id",
-    [runId],
-  );
-  const row = updated.rows[0] as { spec_id?: unknown; project_id?: unknown } | undefined;
-  if (row !== undefined) {
-    // Mirror the workflow's recoverable-finalize: emit run.failed so the
-    // timeline/notifications surface the worker-level failure. Best-effort —
-    // never let an event write mask the original error path.
-    await new PgEventStore(pool)
-      .append({
-        runId,
-        specId: String(row.spec_id ?? ""),
-        projectId: String(row.project_id ?? ""),
-        eventType: "run.failed",
-        payload: { status: "halted", message },
-      })
-      .catch(() => undefined);
-  }
+async function finalizeRunRecoverable(
+  pool: pg.Pool,
+  runId: string,
+  message: string,
+  orgId: string | null,
+): Promise<void> {
+  // RLS R2 cohort-3 (worker failure-path finalizer): when the run's org is known
+  // (resolved from its execution context), run the finalize UPDATE + the
+  // run.failed event in ONE org-scoped transaction so both writes carry org
+  // context (`SET LOCAL app.current_org_id = <orgId>`). The catch path previously
+  // ran with NO ambient scope; this establishes one. A legacy/unscoped run
+  // (org_id NULL) — or a context load that itself failed — falls back to the pool,
+  // the pre-cohort-3 behavior. Inert in R1; RLS-correct in R3.
+  await withRunFinalizeScope(pool, orgId, async (client) => {
+    const updated = await client.query(
+      "UPDATE runs SET status = 'halted', outcome = 'halted', ended_at = now() WHERE run_id = $1 AND status IN ('running', 'queued', 'failed') RETURNING run_id, spec_id, project_id",
+      [runId],
+    );
+    const row = updated.rows[0] as { spec_id?: unknown; project_id?: unknown } | undefined;
+    if (row !== undefined) {
+      // Mirror the workflow's recoverable-finalize: emit run.failed so the
+      // timeline/notifications surface the worker-level failure. Best-effort —
+      // never let an event write mask the original error path. PgEventStore is
+      // handed the in-scope client so its INSERT joins this transaction.
+      await new PgEventStore(client)
+        .append({
+          runId,
+          specId: String(row.spec_id ?? ""),
+          projectId: String(row.project_id ?? ""),
+          eventType: "run.failed",
+          payload: { status: "halted", message },
+        })
+        .catch(() => undefined);
+    }
+  });
 }
 
 /**
@@ -290,23 +318,50 @@ async function finalizeRunQuotaExceeded(
   runId: string,
   reason: string,
   windowKey: string | undefined,
+  orgId: string | null,
 ): Promise<void> {
-  const updated = await pool.query(
-    "UPDATE runs SET status = 'halted', outcome = 'quota_exceeded', ended_at = now() WHERE run_id = $1 AND status IN ('running', 'queued') RETURNING spec_id, project_id",
-    [runId],
-  );
-  const row = updated.rows[0] as { spec_id?: unknown; project_id?: unknown } | undefined;
-  if (row !== undefined) {
-    await new PgEventStore(pool)
-      .append({
-        runId,
-        specId: String(row.spec_id ?? ""),
-        projectId: String(row.project_id ?? ""),
-        eventType: "run.quota_exceeded",
-        payload: windowKey === undefined ? { reason } : { reason, windowKey },
-      })
-      .catch(() => undefined);
+  // RLS R2 cohort-3 (worker failure-path finalizer): the deny path's finalize
+  // UPDATE + run.quota_exceeded event run in one org-scoped transaction when the
+  // org is known (the gate's call site always has it). Mirrors
+  // `finalizeRunRecoverable`'s scoping + best-effort event append.
+  await withRunFinalizeScope(pool, orgId, async (client) => {
+    const updated = await client.query(
+      "UPDATE runs SET status = 'halted', outcome = 'quota_exceeded', ended_at = now() WHERE run_id = $1 AND status IN ('running', 'queued') RETURNING spec_id, project_id",
+      [runId],
+    );
+    const row = updated.rows[0] as { spec_id?: unknown; project_id?: unknown } | undefined;
+    if (row !== undefined) {
+      await new PgEventStore(client)
+        .append({
+          runId,
+          specId: String(row.spec_id ?? ""),
+          projectId: String(row.project_id ?? ""),
+          eventType: "run.quota_exceeded",
+          payload: windowKey === undefined ? { reason } : { reason, windowKey },
+        })
+        .catch(() => undefined);
+    }
+  });
+}
+
+/**
+ * Run a run-finalize body (UPDATE + best-effort event append) under the run's
+ * org scope when the org is known, else on the pool (the pre-cohort-3 fallback).
+ * Centralizes the org-scoping the two worker failure-path finalizers share: a
+ * known org opens a `SET LOCAL app.current_org_id = <org>` transaction and hands
+ * the body the scoped client; a null org hands it the pool verbatim so behavior
+ * is identical to before the cohort.
+ */
+async function withRunFinalizeScope(
+  pool: pg.Pool,
+  orgId: string | null,
+  body: (client: pg.Pool | pg.PoolClient) => Promise<void>,
+): Promise<void> {
+  if (orgId === null) {
+    await body(pool);
+    return;
   }
+  await runWithOrgScope(pool, orgId, (client) => body(client));
 }
 
 /**
@@ -317,12 +372,16 @@ async function finalizeRunQuotaExceeded(
  */
 async function accrueRunUsage(pool: pg.Pool, policy: QuotaPolicy, orgId: string, runId: string): Promise<void> {
   try {
-    // RLS R2 cohort-2 (cost_records read): the post-run metering read runs in its
-    // own short org-scoped transaction (`SET LOCAL app.current_org_id = <orgId>`)
-    // so the `cost_records` SELECT carries org context. Inert in R1 — same totals
-    // as the pool path — and RLS-correct in R3.
-    const usage = await runWithOrgScope(pool, orgId, (client) => getRunUsage(client, runId));
-    await policy.accrueUsage(orgId, { runs: 1, tokens: usage.tokens, costUsd: usage.costUsd });
+    // RLS R2 cohort-2 (cost_records read) + cohort-3 (org_quotas write): both the
+    // post-run metering read AND the policy's accrual UPDATE run inside ONE short
+    // org-scoped transaction (`SET LOCAL app.current_org_id = <orgId>`), so the
+    // `cost_records` SELECT and the `org_quotas` write both carry org context.
+    // Inert in R1 — same totals + same accrued counters as the pool path — and
+    // RLS-correct in R3.
+    await runWithOrgScope(pool, orgId, async (client) => {
+      const usage = await getRunUsage(client, runId);
+      await policy.accrueUsage(orgId, { runs: 1, tokens: usage.tokens, costUsd: usage.costUsd });
+    });
   } catch {
     // Accrual is best-effort; never fail a completed run on a metering blip.
   }
