@@ -24,6 +24,13 @@ means the API is still starting). If host `:3000` is already in use, set
 published port and open <http://localhost:3003> instead — the in-container port
 stays 3000.
 
+> **Fresh-DB caveat.** Migration `0026` makes `org_id` NOT NULL on the core
+> tables (runs/tasks/events/cost_records/specs/runners). A dev volume created
+> before that migration cannot be backfilled in place, so a live run needs a
+> **fresh or reset dev DB**: `just down-dev` (which removes volumes) then
+> `just up-dev`, or otherwise drop the orchestrator volume before bringing the
+> stack up.
+
 ## 2. Sign in
 
 Open <http://localhost:3000> (or your remapped `DASHBOARD_HOST_PORT`). With the
