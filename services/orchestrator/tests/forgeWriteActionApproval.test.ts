@@ -153,6 +153,8 @@ describe("forge write-action approval (propose → approve → execute)", () => 
     expect(decided.proposal.decidedBy).toBe("user_op");
     const turnAnswer = ForgeAnswer.parse(decided.turn.render);
     expect(turnAnswer.body).toContain("Rejected");
+    // A decision narration never itself proposes further write actions.
+    expect(turnAnswer.proposedActions).toEqual([]);
   });
 
   it("is idempotent: a second approve returns already-decided and never double-executes", async () => {

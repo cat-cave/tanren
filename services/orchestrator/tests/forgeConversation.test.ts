@@ -12,6 +12,7 @@ import { ForgeAnswer } from "../src/engine/answerers/schemas/forge.js";
 import {
   askForge,
   createFakeForgeAnswerer,
+  type ForgeConversationAnswerer,
   type ForgeConversationContext,
   type ForgeReadToolCall,
   type ForgeReadToolDispatcher,
@@ -187,5 +188,163 @@ describe("askForge (thick-Forge conversation engine)", () => {
     expect(dispatched.some((call) => call.tool === "tanren.read_insights")).toBe(true);
     const answer = ForgeAnswer.parse(result.forgeTurn.render);
     expect(answer.prompts.length).toBeGreaterThan(0);
+  });
+
+  // --- mutation ratchet (test/mutation-ratchet-forge): engine edge behaviors ---
+
+  it("throws a not-found error (never persists a turn) when the thread is missing", async () => {
+    const client = new ForgeMemoryClient();
+    const answerer = createFakeForgeAnswerer({
+      script: [{ kind: "final", answer: { body: "x", attentionItems: [], insights: [], prompts: [] } }],
+    });
+    await expect(
+      askForge(
+        { client: client as never, answerer, dispatchReadTool: () => Promise.resolve({}) },
+        { threadId: "thread_missing", question: "hi", audience: "project:member", actor },
+      ),
+    ).rejects.toThrowError(/forge thread not found: thread_missing/);
+    // No turns were appended for the nonexistent thread.
+    expect(client.turns).toHaveLength(0);
+  });
+
+  it("captures a throwing read tool as an error result (not a thrown ask) fed back to the answerer", async () => {
+    const client = new ForgeMemoryClient();
+    const threadId = await seedProjectThread(client);
+
+    const seen: ForgeConversationContext[] = [];
+    const answerer = createFakeForgeAnswerer({
+      onRespond: (ctx) => seen.push(ctx),
+      script: [
+        { kind: "tools", toolCalls: [{ tool: "tanren.read_run", args: { runId: "run_x" } }] },
+        { kind: "final", answer: { body: "handled the failure", attentionItems: [], insights: [], prompts: [] } },
+      ],
+    });
+
+    const result = await askForge(
+      {
+        client: client as never,
+        answerer,
+        dispatchReadTool: () => Promise.reject(new Error("run not found: run_x")),
+      },
+      { threadId, question: "why did run_x fail?", audience: "project:member", actor },
+    );
+
+    // The ask did NOT throw; the tool failure became a ForgeToolResult.error.
+    expect(result.toolResults).toHaveLength(1);
+    expect(result.toolResults[0]?.error).toBe("run not found: run_x");
+    expect(result.toolResults[0]?.result).toBeUndefined();
+    // The answerer's finalizing pass saw the error result.
+    expect(seen[1]?.toolResults[0]?.error).toBe("run not found: run_x");
+  });
+
+  it("with maxToolRounds=0 the answerer's first step is its only honored chance to finalize", async () => {
+    const client = new ForgeMemoryClient();
+    const threadId = await seedProjectThread(client);
+
+    const dispatched: string[] = [];
+    // First step requests a tool; with a 0-round budget no tool may be dispatched
+    // (round===maxRounds breaks immediately), then one terminal respond finalizes.
+    const answerer = createFakeForgeAnswerer({
+      script: [
+        { kind: "tools", toolCalls: [{ tool: "tanren.read_insights", args: { projectId: "project_a" } }] },
+        { kind: "final", answer: { body: "committed", attentionItems: [], insights: [], prompts: [] } },
+      ],
+    });
+
+    const result = await askForge(
+      {
+        client: client as never,
+        answerer,
+        dispatchReadTool: (call) => {
+          dispatched.push(call.tool);
+          return Promise.resolve({});
+        },
+        maxToolRounds: 0,
+      },
+      { threadId, question: "no budget", audience: "project:member", actor },
+    );
+
+    // No read tool ran (budget was zero); the terminal respond produced the answer.
+    expect(dispatched).toHaveLength(0);
+    const answer = ForgeAnswer.parse(result.forgeTurn.render);
+    expect(answer.body).toBe("committed");
+  });
+
+  it("continues past an empty (no valid read tools) request and still finalizes", async () => {
+    const client = new ForgeMemoryClient();
+    const threadId = await seedProjectThread(client);
+
+    const dispatched: string[] = [];
+    const answerer = createFakeForgeAnswerer({
+      script: [
+        // A write-only tools step normalizes to zero read tools -> the loop must
+        // `continue` to the terminal pass rather than dispatch or spin.
+        {
+          kind: "tools",
+          toolCalls: [
+            { tool: "tanren.create_spec", args: { projectId: "project_a", title: "x", description: "y" } },
+          ] as never,
+        },
+        { kind: "final", answer: { body: "moved on", attentionItems: [], insights: [], prompts: [] } },
+      ],
+    });
+
+    const result = await askForge(
+      {
+        client: client as never,
+        answerer,
+        dispatchReadTool: (call) => {
+          dispatched.push(call.tool);
+          return Promise.resolve({});
+        },
+        maxToolRounds: 3,
+      },
+      { threadId, question: "empty request", audience: "project:member", actor },
+    );
+
+    expect(dispatched).toHaveLength(0);
+    const answer = ForgeAnswer.parse(result.forgeTurn.render);
+    expect(answer.body).toBe("moved on");
+  });
+
+  it("honors a final returned on the terminal post-budget respond (not the fallback)", async () => {
+    const client = new ForgeMemoryClient();
+    const threadId = await seedProjectThread(client);
+
+    // Requests a read tool on every budgeted round, then finalizes on the extra
+    // terminal respond the loop makes after the budget is spent. The returned
+    // answer must be this one, NOT the synthesized "could not complete" fallback.
+    let calls = 0;
+    const answerer: ForgeConversationAnswerer = {
+      respond: () => {
+        calls += 1;
+        // maxToolRounds=1 -> rounds 0,1 are budgeted; the loop then makes ONE
+        // terminal respond. Finalize only on that terminal (3rd) call.
+        if (calls >= 3) {
+          return Promise.resolve({
+            kind: "final",
+            answer: { body: "committed at the buzzer", attentionItems: [], insights: [], prompts: [] },
+          });
+        }
+        return Promise.resolve({
+          kind: "tools",
+          toolCalls: [{ tool: "tanren.read_insights", args: { projectId: "project_a" } }],
+        });
+      },
+    };
+
+    const result = await askForge(
+      {
+        client: client as never,
+        answerer,
+        dispatchReadTool: () => Promise.resolve({ insights: [] }),
+        maxToolRounds: 1,
+      },
+      { threadId, question: "buzzer beater", audience: "project:member", actor },
+    );
+
+    const answer = ForgeAnswer.parse(result.forgeTurn.render);
+    expect(answer.body).toBe("committed at the buzzer");
+    expect(answer.body).not.toContain("could not complete");
   });
 });
