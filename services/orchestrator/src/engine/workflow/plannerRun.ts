@@ -35,7 +35,7 @@ import {
   workspaceRepoPathForRun,
 } from "../workspace/index.js";
 import { pollCiForRun, type PollCiForRunResult } from "./ciPolling.js";
-import type { GateOutcome } from "./gate/index.js";
+import { resolveBootstrapCommand, type GateOutcome } from "./gate/index.js";
 import { buildDefaultGate, defaultCodexAdapters, defaultUsageProbe } from "./plannerRunAdapters.js";
 import { publishDraftPullRequest, type PublishedDraftPullRequest } from "./githubDraftPr.js";
 import type { PlannerRejectionFeedback } from "./planner/planner.js";
@@ -101,10 +101,11 @@ export interface RunPlannerLoopInput {
   sleep?: (ms: number) => Promise<void>;
   pressureThresholdPercent?: number;
   // P3-0006: the install command run over SSH in the workspace after clone and
-  // before the writer loop, so gating + intent-checking see a built tree.
-  // Omitted → the default pnpm/npm-detecting command (DEFAULT_BOOTSTRAP_COMMAND).
-  // TODO: feed this from the repo's tanren-ci.yml `bootstrap.run` (P3-0004's
-  // bootstrapCommand resolver) — the run path does not source it yet.
+  // before the writer loop, so gating + intent-checking see a built tree. This
+  // is an explicit override (operator/test). When omitted, the run resolves the
+  // repo's tanren-ci.yml `bootstrap.run` (P3-0004) and uses that; when the repo
+  // ships no tanren-ci.yml it falls back to the pnpm/npm-detecting
+  // DEFAULT_BOOTSTRAP_COMMAND heuristic.
   bootstrapCommand?: string;
   // Test seam: when omitted, the real bootstrapWorkspace runs over SSH. Tests
   // that drive the loop with a RecordingSsh fake inject a no-op (or scripted
@@ -186,12 +187,25 @@ export async function runPlannerLoopWorkflow(input: RunPlannerLoopInput): Promis
 
     // P3-0006: install the target repo's deps in the freshly-cloned workspace
     // before the writer loop, so the checker/auditor gate a built tree.
+    //
+    // Command precedence: an explicit input.bootstrapCommand override wins;
+    // otherwise resolve the repo's tanren-ci.yml `bootstrap.run` (P3-0004); when
+    // the repo ships no tanren-ci.yml the resolver yields undefined and the
+    // bootstrap step falls back to its pnpm/npm-detecting DEFAULT_BOOTSTRAP_COMMAND.
+    const resolvedBootstrapCommand =
+      input.bootstrapCommand ??
+      (await resolveBootstrapCommand({
+        ssh: input.ssh,
+        target: allocation.target,
+        workspacePath,
+        timeoutMs: input.timeoutMs,
+      }));
     const runBootstrap = input.runBootstrap ?? ((stepInput) => bootstrapWorkspace(stepInput).then(() => undefined));
     await runBootstrap({
       ssh: input.ssh,
       target: allocation.target,
       workspacePath,
-      command: input.bootstrapCommand,
+      command: resolvedBootstrapCommand,
       timeoutMs: input.timeoutMs,
     });
 

@@ -5,6 +5,8 @@
 // escalation path. Allocator release always runs (finally). Shared fakes +
 // builders live in plannerRun.fixtures.ts (500-line cap split).
 import { describe, expect, it } from "vitest";
+import type { SshTarget } from "../src/engine/contracts/allocator.js";
+import type { SshCommand, SshCommandResult, SshSubstrate } from "../src/engine/contracts/sshSubstrate.js";
 import { CodexUsageLimitError } from "../src/engine/providers/codex.js";
 import { runPlannerLoopWorkflow } from "../src/engine/workflow/plannerRun.js";
 import { WorkspaceBootstrapError } from "../src/engine/workspace/index.js";
@@ -183,6 +185,89 @@ describe("runPlannerLoopWorkflow", () => {
     expect(names.indexOf("workspace.prepared")).toBeLessThan(names.indexOf("writer.subtask.started"));
   });
 
+  it("resolves the repo's tanren-ci.yml bootstrap.run and feeds it to the bootstrap step", async () => {
+    const { ctx, pool, events, secrets, allocator } = await setup();
+    // SSH that returns a repo tanren-ci.yml on the config read; everything else
+    // (clone, etc.) succeeds with empty output. No explicit bootstrapCommand is
+    // passed, so the resolver must source the command from this file.
+    const ssh = new ConfigReadingSsh(
+      [
+        "version: 1",
+        "bootstrap:",
+        "  run: make deps",
+        "tiers:",
+        "  fast:",
+        "    - name: lint",
+        "      run: make lint",
+        "  slow:",
+        "    - name: build",
+        "      run: make build",
+        "when:",
+        "  fast:",
+        "    - per_iteration",
+        "  slow:",
+        "    - pre_merge",
+      ].join("\n"),
+    );
+    const bootstrapCalls: Array<string | undefined> = [];
+
+    await runPlannerLoopWorkflow({
+      pool: pool.asPgPool(),
+      eventStore: events,
+      allocator,
+      ssh,
+      secrets,
+      githubHttp: passingGitHub(),
+      context: ctx,
+      escapeHatches: { maxPlannerRerunsPerSpec: 3, maxWriterIterPerSubtask: 5, maxRetriesPerTransientFailure: 3 },
+      timeoutMs: 100,
+      maxCiPolls: 1,
+      sleep: async () => undefined,
+      runBootstrap: async (input) => {
+        bootstrapCalls.push(input.command);
+      },
+      buildAdapters: () => twoSubtaskAdapters([passingCheck, passingCheck]),
+      buildUsageProbe: () => fakeProbe(healthyWindow(), accounting(0.5)),
+      reviewProbe: approvingReview(),
+      mergeProbe: noopMerge(),
+    });
+
+    expect(bootstrapCalls).toEqual(["make deps"]);
+  });
+
+  it("falls back to the default bootstrap command when the repo ships no tanren-ci.yml", async () => {
+    const { ctx, pool, events, secrets, allocator } = await setup();
+    // Default fixture SSH returns empty output for every command, so the config
+    // read yields no tanren-ci.yml → the resolver returns undefined → the
+    // bootstrap step applies DEFAULT_BOOTSTRAP_COMMAND (command left undefined).
+    const ssh = new ConfigReadingSsh(""); // no config file present
+    const bootstrapCalls: Array<string | undefined> = [];
+
+    await runPlannerLoopWorkflow({
+      pool: pool.asPgPool(),
+      eventStore: events,
+      allocator,
+      ssh,
+      secrets,
+      githubHttp: passingGitHub(),
+      context: ctx,
+      escapeHatches: { maxPlannerRerunsPerSpec: 3, maxWriterIterPerSubtask: 5, maxRetriesPerTransientFailure: 3 },
+      timeoutMs: 100,
+      maxCiPolls: 1,
+      sleep: async () => undefined,
+      runBootstrap: async (input) => {
+        bootstrapCalls.push(input.command);
+      },
+      buildAdapters: () => twoSubtaskAdapters([passingCheck, passingCheck]),
+      buildUsageProbe: () => fakeProbe(healthyWindow(), accounting(0.5)),
+      reviewProbe: approvingReview(),
+      mergeProbe: noopMerge(),
+    });
+
+    // command undefined → bootstrapWorkspace would apply DEFAULT_BOOTSTRAP_COMMAND.
+    expect(bootstrapCalls).toEqual([undefined]);
+  });
+
   it("halts on a workspace bootstrap failure and surfaces it as a recoverable run", async () => {
     const { ctx, pool, events, secrets, allocator, ssh } = await setup();
 
@@ -257,3 +342,16 @@ describe("runPlannerLoopWorkflow", () => {
     expect(allocator.releases).toEqual(["runner_planner"]);
   });
 });
+
+// SSH fake that returns the given tanren-ci.yml text when the bootstrap-command
+// resolver cats the repo config, and an empty success for every other command
+// (clone, etc.). An empty `configYaml` models a repo with no tanren-ci.yml — the
+// `cat`-if-present command simply prints nothing.
+class ConfigReadingSsh implements SshSubstrate {
+  constructor(private readonly configYaml: string) {}
+
+  async run(_target: SshTarget, command: SshCommand): Promise<SshCommandResult> {
+    const stdout = command.command.includes("tanren-ci.yml") ? this.configYaml : "";
+    return { exitCode: 0, stdout, stderr: "", timedOut: false };
+  }
+}

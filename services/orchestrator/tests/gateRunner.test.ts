@@ -7,7 +7,7 @@ import { DEFAULT_CI_CONFIG, resolveCiConfig, tiersFor } from "../src/engine/ci/i
 import type { SshTarget } from "../src/engine/contracts/allocator.js";
 import type { SshCommand, SshCommandResult, SshSubstrate } from "../src/engine/contracts/sshSubstrate.js";
 import type { EventName, EventPayload } from "../src/engine/events/index.js";
-import { resolveGateConfig } from "../src/engine/workflow/gate/resolveGateConfig.js";
+import { resolveBootstrapCommand, resolveGateConfig } from "../src/engine/workflow/gate/resolveGateConfig.js";
 import { runGateForWhen } from "../src/engine/workflow/gate/runGateForWhen.js";
 import { runGateTier } from "../src/engine/workflow/gate/runGateTier.js";
 
@@ -219,5 +219,65 @@ describe("resolveGateConfig", () => {
     const ssh = new RecordingSsh(() => ({ exitCode: 1 }));
     const config = await resolveGateConfig({ ssh, target, workspacePath: "/ws", timeoutMs: 1000 });
     expect(config).toEqual(DEFAULT_CI_CONFIG);
+  });
+});
+
+describe("resolveBootstrapCommand", () => {
+  it("uses the repo-declared bootstrap.run when tanren-ci.yml ships one", async () => {
+    const yaml = [
+      "version: 1",
+      "bootstrap:",
+      "  run: just install",
+      "tiers:",
+      "  fast:",
+      "    - name: lint",
+      "      run: just lint",
+      "  slow:",
+      "    - name: build",
+      "      run: just build",
+      "when:",
+      "  fast:",
+      "    - per_iteration",
+      "  slow:",
+      "    - pre_merge",
+    ].join("\n");
+    const ssh = new RecordingSsh(() => ({ exitCode: 0, stdout: yaml }));
+    const command = await resolveBootstrapCommand({ ssh, target, workspacePath: "/ws", timeoutMs: 1000 });
+    expect(command).toBe("just install");
+    // It read the repo-root config path over SSH (no live install).
+    expect(ssh.commands[0]!.command).toContain("/ws/tanren-ci.yml");
+  });
+
+  it("returns undefined when the repo ships no tanren-ci.yml (so the default heuristic applies)", async () => {
+    const ssh = new RecordingSsh(() => ({ exitCode: 0, stdout: "" }));
+    const command = await resolveBootstrapCommand({ ssh, target, workspacePath: "/ws", timeoutMs: 1000 });
+    expect(command).toBeUndefined();
+  });
+
+  it("returns undefined when the config read fails (degrades to the default heuristic)", async () => {
+    const ssh = new RecordingSsh(() => ({ exitCode: 1 }));
+    const command = await resolveBootstrapCommand({ ssh, target, workspacePath: "/ws", timeoutMs: 1000 });
+    expect(command).toBeUndefined();
+  });
+
+  it("returns undefined when a present config omits the bootstrap section", async () => {
+    const yaml = [
+      "version: 1",
+      "tiers:",
+      "  fast:",
+      "    - name: lint",
+      "      run: just lint",
+      "  slow:",
+      "    - name: build",
+      "      run: just build",
+      "when:",
+      "  fast:",
+      "    - per_iteration",
+      "  slow:",
+      "    - pre_merge",
+    ].join("\n");
+    const ssh = new RecordingSsh(() => ({ exitCode: 0, stdout: yaml }));
+    const command = await resolveBootstrapCommand({ ssh, target, workspacePath: "/ws", timeoutMs: 1000 });
+    expect(command).toBeUndefined();
   });
 });
