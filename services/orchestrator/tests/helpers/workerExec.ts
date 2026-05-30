@@ -119,20 +119,20 @@ export function fakeWorkflowRunner(github: GitHubHttpClient) {
       githubHttp: github,
       maxCiPolls: 1,
       ciPollDelayMs: 0,
-      sleep: async () => undefined,
+      sleep: async () => {},
       buildAdapters: () => passingAdapters(),
       buildUsageProbe: () => fakeProbe(),
       // P3-0008 review→merge tail: approve the review and no-op the merge so the
       // dequeue→execute seam runs end-to-end without real GitHub review/merge.
       reviewProbe: {
-        markReady: async () => undefined,
+        markReady: async () => {},
         fetchVerdict: async () => ({
           verdict: "approved" as const,
           latest: { state: "approved" as const, reviewer: "reviewer-bot" },
         }),
       },
       mergeProbe: {
-        applyQueueLabel: async () => undefined,
+        applyQueueLabel: async () => {},
         merge: async () => ({
           merged: true,
           mergeSha: "merge-sha",

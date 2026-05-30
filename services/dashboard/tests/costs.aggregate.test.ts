@@ -135,7 +135,7 @@ describe("summarizeCosts — every row shows its REAL source", () => {
     ];
     const summary = summarizeCosts(records);
     expect(summary.providers[0]?.model).toBe("opus");
-    expect(summary.providers[summary.providers.length - 1]?.model).toBe("haiku");
+    expect(summary.providers.at(-1)?.model).toBe("haiku");
   });
 });
 

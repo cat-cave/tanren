@@ -215,7 +215,7 @@ function buildActivity(input: BuildProjectViewInput): ActivityRow[] {
 }
 
 function humanizeEvent(eventType: string): string {
-  return eventType.replace(/[._]/g, " ");
+  return eventType.replaceAll(/[._]/g, " ");
 }
 
 export function buildProjectViewModel(input: BuildProjectViewInput): ProjectViewModel {

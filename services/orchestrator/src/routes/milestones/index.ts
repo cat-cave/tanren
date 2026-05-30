@@ -50,7 +50,7 @@ export function createMilestoneRoutes(options: MilestoneRoutesOptions) {
     if (!actorCanAccessOrg(actor, orgId)) {
       return c.json({ error: "org_access_denied" }, 403);
     }
-    const parsed = MilestoneCreateBody.safeParse(await c.req.json().catch(() => undefined));
+    const parsed = MilestoneCreateBody.safeParse(await c.req.json().catch(() => {}));
     if (!parsed.success) {
       return c.json({ error: "invalid_milestone", issues: parsed.error.issues }, 400);
     }

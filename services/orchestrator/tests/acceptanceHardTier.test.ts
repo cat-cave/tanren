@@ -151,8 +151,8 @@ describe("acceptance hard tier (dequeue→execute, all hard paths)", () => {
           githubHttp: github,
           maxCiPolls: 1,
           ciPollDelayMs: 0,
-          sleep: async () => undefined,
-          runBootstrap: async () => undefined,
+          sleep: async () => {},
+          runBootstrap: async () => {},
           runGate: async () => {
             gateCall += 1;
             return gateCall === 1 ? failingGate() : passingGate;
@@ -160,14 +160,14 @@ describe("acceptance hard tier (dequeue→execute, all hard paths)", () => {
           buildAdapters: () => ({ planner, writer, checker, auditor }),
           buildUsageProbe: () => fakeProbe(),
           reviewProbe: {
-            markReady: async () => undefined,
+            markReady: async () => {},
             fetchVerdict: async () => ({
               verdict: "approved" as const,
               latest: { state: "approved" as const, reviewer: "reviewer-bot" },
             }),
           },
           mergeProbe: {
-            applyQueueLabel: async () => undefined,
+            applyQueueLabel: async () => {},
             merge: async () => ({
               merged: true,
               mergeSha: "merge-sha",
@@ -228,8 +228,8 @@ describe("acceptance hard tier (dequeue→execute, all hard paths)", () => {
           githubHttp: hardTierGitHub(),
           maxCiPolls: 1,
           ciPollDelayMs: 0,
-          sleep: async () => undefined,
-          runBootstrap: async () => undefined,
+          sleep: async () => {},
+          runBootstrap: async () => {},
           runGate: async () => passingGate,
           buildAdapters: () => ({ planner, writer, checker, auditor }),
           buildUsageProbe: () => fakeProbe(),

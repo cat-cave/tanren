@@ -257,8 +257,8 @@ export async function fetchEventsPage(
   const nextCursor =
     result.rows.length > limit
       ? encodeCursor({
-          ts: rows[rows.length - 1]?.ts as Date,
-          id: rows[rows.length - 1]?.id as number,
+          ts: rows.at(-1)?.ts as Date,
+          id: rows.at(-1)?.id as number,
         })
       : null;
   return CursorPage(RunEventRow).parse({ items, nextCursor });
@@ -304,8 +304,8 @@ export async function fetchFeedPage(
   const nextCursor =
     result.rows.length > limit
       ? encodeCursor({
-          ts: rows[rows.length - 1]?.ts as Date,
-          id: rows[rows.length - 1]?.id as number,
+          ts: rows.at(-1)?.ts as Date,
+          id: rows.at(-1)?.id as number,
         })
       : null;
   return { items, nextCursor };
@@ -390,12 +390,12 @@ export async function fetchCostsPage(
     params,
   );
   const rows = result.rows.slice(0, limit);
-  const items = rows.map(decodeCostRow);
+  const items = rows.map((row) => decodeCostRow(row));
   const nextCursor =
     result.rows.length > limit
       ? encodeCursor({
-          ts: rows[rows.length - 1]?.["recorded_at"] as Date,
-          id: rows[rows.length - 1]?.["id"] as number,
+          ts: rows.at(-1)?.["recorded_at"] as Date,
+          id: rows.at(-1)?.["id"] as number,
         })
       : null;
   return CursorPage(RunCostRecord).parse({ items, nextCursor });

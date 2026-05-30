@@ -147,9 +147,9 @@ export class GitHubReviewMergeService {
 
 function parseReviews(value: unknown): GitHubReview[] {
   if (!Array.isArray(value)) {
-    throw new Error("GitHub PR reviews response was not an array");
+    throw new TypeError("GitHub PR reviews response was not an array");
   }
-  return value.map(parseReview);
+  return value.map((review) => parseReview(review));
 }
 
 function parseReview(value: unknown): GitHubReview {

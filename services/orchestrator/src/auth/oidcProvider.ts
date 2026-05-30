@@ -119,7 +119,7 @@ export class OidcProvider implements IdentityProvider {
     if (!response.ok) {
       throw new IdentityProviderError(this.id, `discovery endpoint returned ${response.status}`);
     }
-    const parsed = discoverySchema.safeParse(await response.json().catch(() => undefined));
+    const parsed = discoverySchema.safeParse(await response.json().catch(() => {}));
     if (!parsed.success) {
       throw new IdentityProviderError(this.id, "discovery document malformed");
     }
@@ -142,7 +142,7 @@ export class OidcProvider implements IdentityProvider {
     if (!response.ok) {
       throw new IdentityProviderError(this.id, `token endpoint returned ${response.status}`);
     }
-    const parsed = tokenResponseSchema.safeParse(await response.json().catch(() => undefined));
+    const parsed = tokenResponseSchema.safeParse(await response.json().catch(() => {}));
     if (!parsed.success) {
       throw new IdentityProviderError(this.id, "token response malformed");
     }
@@ -162,7 +162,7 @@ export class OidcProvider implements IdentityProvider {
     if (!response.ok) {
       throw new IdentityProviderError(this.id, `userinfo endpoint returned ${response.status}`);
     }
-    const parsed = userinfoSchema.safeParse(await response.json().catch(() => undefined));
+    const parsed = userinfoSchema.safeParse(await response.json().catch(() => {}));
     if (!parsed.success) {
       throw new IdentityProviderError(this.id, "userinfo response malformed");
     }

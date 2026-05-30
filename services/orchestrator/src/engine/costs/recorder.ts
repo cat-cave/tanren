@@ -44,10 +44,29 @@ export interface RecordedCost {
   provider: string;
 }
 
+/**
+ * Plane-split P3: a persistence override for {@link CostRecorder.record}. When
+ * supplied, `record` delegates the cost_records INSERT (+ its `cost.resolved`
+ * event) to this function instead of writing in-process — so the run worker can
+ * route the cost write through the control-plane endpoint (`HttpRunStateWriter`)
+ * while keeping ONE record shape. The default `DirectRunStateWriter` delegate
+ * calls a plain (override-free) recorder, so the persisted row is identical.
+ */
+export type CostPersist = (input: {
+  context: CostRecordContext;
+  tokens: TokenUsage;
+  rawUsage: Record<string, unknown>;
+}) => Promise<RecordedCost>;
+
 export class CostRecorder {
   constructor(
     private readonly pool: RecorderClient,
     private readonly eventStore: EventStore,
+    // Plane-split P3: optional remote-write delegate. When set, `record` routes
+    // the persist through it (the control-plane endpoint) rather than the
+    // in-process INSERT below; reconcile/apportion always stay in-process (they
+    // re-price already-written rows, an R3+ surface, not a worker write).
+    private readonly persist?: CostPersist,
   ) {}
 
   // record persists a single cost_records row with the full typed token
@@ -58,6 +77,12 @@ export class CostRecorder {
     tokens: TokenUsage,
     rawUsage: Record<string, unknown>,
   ): Promise<RecordedCost> {
+    // Plane-split P3: when a remote-write delegate is wired, the cost_records
+    // INSERT + its cost.resolved event run server-side (control plane), so the
+    // data plane writes no tenant rows directly. Same shape, same return value.
+    if (this.persist !== undefined) {
+      return this.persist({ context, tokens, rawUsage });
+    }
     const attribution: AttributionInput = {
       cli: context.cli,
       authRef: context.authRef,

@@ -20,6 +20,7 @@ import { Hono } from "hono";
 import type pg from "pg";
 import { type MtlsCertPaths, NodeMtlsPeerVerifier, nodeMtlsServerOptions } from "./engine/contracts/mtlsChannelNode.js";
 import { createInternalClaimRoutes } from "./routes/internal/claimJob.js";
+import { createInternalRunStateWriteRoutes } from "./routes/internal/runStateWrites.js";
 
 export const DEFAULT_INTERNAL_MTLS_PORT = 3110;
 
@@ -40,7 +41,11 @@ export function buildInternalApp(deps: { pool: pg.Pool }): Hono {
   // The Node verifier reads the TLS-validated client cert off the inbound
   // socket; the mTLS server below already rejected an untrusted cert at the
   // handshake, so this is defense-in-depth + the peer-identity surface.
-  app.route("/", createInternalClaimRoutes({ pool: deps.pool, verifier: new NodeMtlsPeerVerifier() }));
+  const verifier = new NodeMtlsPeerVerifier();
+  app.route("/", createInternalClaimRoutes({ pool: deps.pool, verifier }));
+  // Plane-split P3: the run-state WRITE endpoints (append-event / record-cost /
+  // finalize-run) the remote-writes worker posts its tenant writes to.
+  app.route("/", createInternalRunStateWriteRoutes({ pool: deps.pool, verifier }));
   return app;
 }
 
@@ -65,6 +70,6 @@ export function startInternalMtlsServer(deps: { pool: pg.Pool }): boolean {
     createServer,
     serverOptions: tlsOptions,
   });
-  console.log(`internal mTLS control-plane listening on :${port} (claim endpoint)`);
+  console.log(`internal mTLS control-plane listening on :${port} (claim + run-state-write endpoints)`);
   return true;
 }

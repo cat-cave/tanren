@@ -82,7 +82,7 @@ describe("phase 1 fixture cost-record persistence", () => {
       createAuditor: () => fakeAuditor,
       timeoutMs: 100,
       maxCiPolls: 1,
-      sleep: async () => undefined,
+      sleep: async () => {},
     });
 
     expect(result.ci.status).toBe("passed");
@@ -181,7 +181,7 @@ describe("phase 1 fixture cost-record persistence", () => {
       createAuditor: () => fakeAuditor,
       timeoutMs: 100,
       maxCiPolls: 1,
-      sleep: async () => undefined,
+      sleep: async () => {},
     });
     expect(result.ci.status).toBe("passed");
     expect(events.events.some((event) => event.eventType === "phase1.fixture.failed")).toBe(false);

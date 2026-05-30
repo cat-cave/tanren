@@ -39,11 +39,9 @@ function collectZodPaths(schema: unknown, prefix = ""): string[] {
     paths.push(...collectZodPaths(def.element, `${prefix}[]`));
     return paths;
   }
-  if (type === "optional" || type === "nullable" || type === "default") {
-    if (def.innerType !== undefined) {
-      paths.push(...collectZodPaths(def.innerType, prefix));
-      return paths;
-    }
+  if ((type === "optional" || type === "nullable" || type === "default") && def.innerType !== undefined) {
+    paths.push(...collectZodPaths(def.innerType, prefix));
+    return paths;
   }
   if (type === "union" && Array.isArray(def.options)) {
     // Use the first non-null option for path discovery; sensitivity rules

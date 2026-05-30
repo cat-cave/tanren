@@ -135,7 +135,7 @@ export class GcpAllocator implements Allocator {
   async allocate(request: AllocationRequest): Promise<RunnerAllocation> {
     const name = `tanren-${request.runId}`
       .toLowerCase()
-      .replace(/[^a-z0-9-]/g, "-")
+      .replaceAll(/[^a-z0-9-]/g, "-")
       .slice(0, 62);
     const operation = await this.client.insertInstance({
       name,
@@ -155,13 +155,13 @@ export class GcpAllocator implements Allocator {
       instance = await this.waitForRunning(name);
     } catch (error) {
       // Best-effort delete so a stuck instance doesn't leak.
-      await this.client.deleteInstance(name).catch(() => undefined);
+      await this.client.deleteInstance(name).catch(() => {});
       throw error;
     }
 
     const ip = instance.externalIp;
     if (ip === undefined || ip === "") {
-      await this.client.deleteInstance(name).catch(() => undefined);
+      await this.client.deleteInstance(name).catch(() => {});
       throw new GcpAllocatorError(`gcp instance ${name} became RUNNING without an external IP`);
     }
 
@@ -194,7 +194,7 @@ export class GcpAllocator implements Allocator {
         containerId: name,
       });
     } catch (error) {
-      await this.client.deleteInstance(name).catch(() => undefined);
+      await this.client.deleteInstance(name).catch(() => {});
       this.instances.delete(runnerId);
       throw error;
     }
@@ -260,7 +260,7 @@ export class GcpAllocator implements Allocator {
 function labelValue(value: string): string {
   return value
     .toLowerCase()
-    .replace(/[^a-z0-9_-]/g, "-")
+    .replaceAll(/[^a-z0-9_-]/g, "-")
     .slice(0, 63);
 }
 

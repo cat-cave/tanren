@@ -61,7 +61,7 @@ export function createInternalClaimRoutes(deps: ClaimJobRouteDeps): Hono {
       return c.json({ error: "untrusted_peer" }, 401);
     }
 
-    const parsed = claimJobSchema.safeParse(await c.req.json().catch(() => undefined));
+    const parsed = claimJobSchema.safeParse(await c.req.json().catch(() => {}));
     if (!parsed.success) {
       return c.json({ error: "invalid_claim_request", issues: parsed.error.issues }, 400);
     }

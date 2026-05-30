@@ -5,12 +5,12 @@ The live checklist for the Postgres RLS rollout. Companion to
 
 **Status: R1 → R2 (cohorts 1–4) → R3a → R3a-worker → R3b are all DONE. RLS is
 FULLY ENFORCED** at the database — the runtime connects as the restricted
-`tanren_app` role and Postgres policies enforce org isolation (migration `0030`).
-See the **R3b** section for the enforcement flip + the bypass call sites.
+`tanren_app` role and Postgres policies enforce org isolation (migration `0030`;
+see **R3b** for the enforcement flip + bypass call sites).
 
 RLS was delivered inert-first: R1 established the mechanism with **no policies**;
-later waves enabled policies and converted the remaining query sites so every
-tenant query runs under `SET LOCAL app.current_org_id` before the policy bites.
+later waves enabled policies + converted the query sites so every tenant query
+runs under `SET LOCAL app.current_org_id` before the policy bites.
 
 ## R1 — mechanism + restricted role (DONE, inert)
 
@@ -76,18 +76,14 @@ client) and needed no change.
       `QueryClient` — wrapped by cohort-1), and the SSE cost deltas
       (`pollNewCosts`, already on cohort-1's per-tick org-scoped txn).
       `cost_records` **writes**: `CostRecorder.record` + `reconcile*`/
-      `apportionRunCost` route through the same pool-or-scope seam. Metering read:
-      the post-run accrual `getRunUsage` runs in its own short org-scoped txn; the
-      hosting-export reads (`getOrgUsage` / `streamBillableRuns`) already accept a
-      `QueryClient` (no live caller yet to wrap). The shared write-path
-      discriminator now lives in `engine/data/orgScopedDb.ts` as
+      `apportionRunCost` route through the same pool-or-scope seam; the post-run
+      accrual `getRunUsage` runs in its own short org-scoped txn. The shared
+      write-path discriminator now lives in `engine/data/orgScopedDb.ts` as
       `resolveWritableClient` (pool → ambient/fallback; specific client → verbatim;
       `eventStore` refactored onto it). Proof:
       `tests/rlsR2DalTasksCosts.integration.test.ts` (real PG, `just
 smoke-rls-r2-cohort2`) + `tests/rlsR2WriteRouting.test.ts` routing/fallback
-      cases. Excluded (cohort-3 / R3): the worker **failure-path finalizers**
-      (`finalizeRunRecoverable` / `finalizeRunQuotaExceeded`) — no ambient scope
-      there yet.
+      cases. (The worker failure-path finalizers were deferred to cohort-3.)
 - [x] **Cohort-3 — specs + runners + quota + the worker failure-path
       finalizers.** specs **reads** (`routes/specs/index.ts` list/detail wrapped
       in `runWithOrgScope`; `SpecStore.get/list` already `QueryClient`-shaped) +
@@ -371,55 +367,27 @@ so it never hits the enforced policies; left as-is.)
 ## R3+ — convert the remaining ~268 query sites
 
 Mechanical `pool → getOrgScopedClient()/runWithOrgScope` conversions (no SQL
-changes), each with a behavior test. Grouped by surface:
+changes), each with a behavior test, grouped by surface.
 
 ### Orchestrator routes (read paths)
 
-- [x] `routes/specs` — list/detail reads + the PATCH write + the engine
-      `createSpec` path converted (R2 cohort-3). Still pending:
-      `routes/projects`, `routes/personas`, `routes/behaviors`,
-      `routes/milestones`
-- [ ] `routes/insights`, `routes/dora`, `routes/notifications` (`routes/costs` —
-      the run-scoped costs page — converted in R2 cohort-2)
-- [ ] `routes/recovery`, `routes/inbox`, `routes/audits`, `routes/discovery`,
-      `routes/onboarding`
-- [x] `routes/forge` (+ ask/proposals) — the forge-table reads/writes converted
-      (R2 cohort-4); the `POST /forge/tools` dispatch + the ask/decide tool
-      dispatchers (spec/run/etc. reads + writes) remain pool-bound, R3+. Still
-      pending: `routes/brownfield`, `routes/orgs`
-- [ ] `routes/runs` remaining surfaces — R2 cohort-1 converted the detail
-      snapshot (R1), the run list, the events page, the activity feed, and the
-      SSE run/task/event reads; cohort-2 converted the **costs page** + the
-      **SSE cost deltas** (`cost_records`); cohort-4 converted the **Forge
-      bundle** (`fetchForgeBundle`, cross-store).
+- [x] `routes/specs`, `routes/forge` (+ ask/proposals), and `routes/runs`
+      surfaces (detail snapshot, list, events page, feed, SSE, costs page, Forge
+      bundle) converted (R2 cohorts 1–4; see those sections).
+- [ ] Still pending: `routes/{projects,personas,behaviors,milestones,insights,
+dora,notifications,recovery,inbox,audits,discovery,onboarding,brownfield,
+orgs}` + the `POST /forge/tools` dispatch.
 
 ### Orchestrator engine (write + read paths)
 
-- [x] Event store (`engine/eventStore.ts`) — append routes through the ambient
-      org-scoped client (R2 cohort-1). The worker failure-path **finalize
-      updates** (`runExecutor.ts` `finalizeRunRecoverable` /
-      `finalizeRunQuotaExceeded`) now establish an org scope from the run's org
-      (R2 cohort-3) — they fall back to the pool only for a legacy/unscoped run.
-- [x] Task/cost recording (`engine/workflow/subtaskTasks.ts` task INSERT/UPDATE,
-      `engine/costs/recorder.ts` cost INSERT + reconcile, post-run metering
-      `getRunUsage`) — route through the pool-or-scope seam (R2 cohort-2). The
-      hosting-export reads (`getOrgUsage` / `streamBillableRuns`) already take a
-      `QueryClient`; their live call site lands later.
-- [x] Runner-metadata writes (`engine/allocators/runnerStore.ts`
-      `PgRunnerStore.claim` / `.release`) — route through the pool-or-scope seam
-      (R2 cohort-3); the allocator HTTP logic is untouched, only the DB writes.
-- [x] Quota reads/accrual (`engine/quota/**`) — `DbQuotaPolicy.checkAdmission` +
-      `accrueUsage` route through the pool-or-scope seam, and the worker runs the
-      admission gate + post-run accrual inside org-scoped transactions (R2
-      cohort-3). The metering-export reads (`getOrgUsage` / `streamBillableRuns`)
-      already take a `QueryClient`; their live call site lands later.
-- [ ] Credential-resolution reads (`engine/credentials/**`)
-- [ ] Insights compute/cache (`engine/insights/**`)
-
-### Dashboard + CLI
-
-- [ ] Dashboard server read surfaces that query Postgres directly
-- [ ] CLI paths that read Postgres directly
+- [x] Event store, task/cost recording, runner-metadata writes, quota
+      reads/accrual + worker failure-path finalizers — all route through the
+      pool-or-scope seam (R2 cohorts 1–3; see those sections). Hosting-export reads
+      (`getOrgUsage` / `streamBillableRuns`) already take a `QueryClient`; their
+      live call site lands later.
+- [ ] Credential-resolution reads (`engine/credentials/**`), insights
+      compute/cache (`engine/insights/**`), and dashboard/CLI surfaces that query
+      Postgres directly.
 
 Each item is DONE when its queries run through the org-scoped client AND a
 behavior test proves the rows it returns match the scope.
@@ -435,8 +403,10 @@ runtime-role split (data plane = restricted `tanren_app`; `tanren_system` BYPASS
 serves cross-org bootstrap reads).
 
 **Status: P1 DONE (standalone deployable) + P2 DONE (mTLS service identity +
-control-plane CLAIM endpoint). P3 (route the worker's event/result WRITES through
-the control plane + strip its broad DB/Vault access) is OUTSTANDING.**
+control-plane CLAIM endpoint) + P3a DONE (control-plane WRITE endpoints + the
+`RunStateWriter` seam, flagged, default-direct/reversible). P3b (flip the default,
+drop the data-plane tenant-table write grants, per-run scoped creds / Vault
+de-privilege) is OUTSTANDING.**
 
 ## P1 — process boundary (DONE)
 
@@ -447,9 +417,8 @@ it).
 
 - [x] **Standalone worker entrypoint** — `services/orchestrator/src/worker-main.ts`
       boots ONLY the worker loop (no HTTP server) via the shared `bootRunWorker()`
-      (`engine/worker/boot.ts`): the runtime (`tanren_app`) + lazy BYPASSRLS
-      `tanren_system` pools exactly like the API. Reuses the existing `RunWorker`
-      via `startRunWorker` (in `lifecycle.ts`, breaking the barrel↔boot cycle).
+      (`engine/worker/boot.ts`): same `tanren_app` + lazy BYPASSRLS `tanren_system`
+      pools as the API; reuses `RunWorker` via `startRunWorker` (`lifecycle.ts`).
 - [x] **`worker` compose service** (`compose.dev.yml` + `compose.prod.yml`) — the
       orchestrator image, command `start:worker`, same DB/Vault/allocator/runner
       env. Does NOT migrate (the orchestrator owns it; the worker `depends_on` it).
@@ -492,9 +461,40 @@ migration).
       mTLS-extended `smoke-plane-split-worker` (no-cert claim rejected at TLS; the
       `worker` container claims + executes a `plan` job over mTLS across the boundary).
 
-## P3 — de-privilege the data plane (OUTSTANDING)
+## P3a — control-plane WRITE endpoints + the `RunStateWriter` seam (DONE, flagged)
 
-- [ ] Route the worker's event/result WRITES through a control-plane API (P2 moved
-      only the CLAIM), so the data plane stops writing to Postgres directly.
-- [ ] Per-run scoped credentials (extend the GitHub-App token-minting model; move
-      the `GithubAppTokenMinter` cache to the control plane); drop broad DB+Vault.
+The worker's run-state WRITES (event-append, cost-record insert, run finalize)
+can route through the control plane over the SAME P2 mTLS channel, so a
+compromised runner can't write the control DB. **DIRECT stays the DEFAULT**
+(nothing changes unless `TANREN_DATA_PLANE_REMOTE_WRITES=1` → REVERSIBLE),
+behavior-identical (same rows + org-scoping), exactly-once (the finalize endpoint
+applies the same `status IN (...)` guard → a retry is a no-op).
+
+- [x] **Write endpoints** (`routes/internal/runStateWrites.ts`, internal mTLS
+      listener): `POST /internal/{append-event,record-cost,finalize-run}` — authn
+      the peer FIRST (401 pre-DB), then the SAME write server-side under
+      `runWithOrgScope` REUSING `PgEventStore`/`CostRecorder` (byte-for-byte the
+      direct rows).
+- [x] **`RunStateWriter` seam** (`contracts/runStateWriter.ts`):
+      `DirectRunStateWriter` (in-process, DEFAULT) vs `HttpRunStateWriter` (over
+      the mTLS `MtlsFetch`); `bootRunWorker` picks via `buildRunStateWriterFromEnv`.
+      `runExecutor.ts` routes its catch-path finalizers (`runFinalize.ts`) + the
+      planner workflow's events / cost_records / terminal finalize through the
+      writer when remote (`plannerRun.ts` `eventStore`/`recorder`/`finalizeRun`
+      seams); the DEFAULT injects nothing → unchanged (#168 passes unchanged).
+- [x] **Proof** — `tests/planeSplitP3RemoteWrites.integration.test.ts` (real PG,
+      enforced RLS: endpoints persist the same rows org-scoped, authn-reject, the
+      writer drives events+finalize, exactly-once, the direct writer byte-identical) + `runStateWriteEndpoint` / `runStateWriterFromEnv` unit tests + `just
+smoke-plane-split-p3`. `smoke-plane-split-worker` gained a write-endpoint
+      mTLS probe; `smoke-plane-split-worker-remote-writes` re-runs it with the
+      worker `TANREN_DATA_PLANE_REMOTE_WRITES=1` (finalize via the control plane,
+      end-to-end under enforced RLS).
+
+## P3b — flip the default + drop the data-plane write grants / Vault (OUTSTANDING)
+
+- [ ] Flip remote-writes ON by default + DROP the tenant-table write grants from a
+      write-NONE data-plane DB role (future migration; keeps only the `job_queue`
+      read). Safe once remote-writes is on — the data plane writes no tenant tables.
+- [ ] Per-run scoped credentials (extend GitHub-App minting; move the
+      `GithubAppTokenMinter` cache to the control plane); drop Vault root / broad
+      secret access from the data plane.

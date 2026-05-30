@@ -1,0 +1,94 @@
+// Plane-split P3: the REMOTE run-state writer. Routes each of the worker's
+// tenant run-state writes — event-append, cost-record insert, run finalize — to
+// the control plane's `/internal/*` write endpoints over the mTLS {@link
+// MtlsFetch} channel (the SAME mutually-authenticated transport P2 built for the
+// claim endpoint). The control plane then runs the EXACT SAME org-scoped write
+// server-side, under ITS DB access — so the data plane needs no broad tenant
+// write grants. Enabled by `TANREN_DATA_PLANE_REMOTE_WRITES=1`.
+//
+// WHAT GETS WRITTEN IS IDENTICAL to the direct path: the endpoints reuse the
+// worker's own store logic, only server-side. Exactly-once is preserved — the
+// finalize endpoint applies the same `fromStatuses` guard, so a retried finalize
+// matches no row the second time (no duplicate finalize/event); event/cost
+// inserts are the same single INSERT the direct path runs.
+
+import { getJobOrgId } from "@tanren/db";
+import type { MtlsFetch } from "../contracts/mtlsChannel.js";
+import type {
+  FinalizeRunInput,
+  FinalizeRunResult,
+  RecordCostInput,
+  RunStateWriter,
+} from "../contracts/runStateWriter.js";
+import type { RecordedCost } from "../costs/recorder.js";
+import type { EventName } from "../events/index.js";
+import type { AppendEventInput } from "../eventStore.js";
+
+/** Thrown when a control-plane write endpoint returns a non-2xx status. */
+export class RunStateWriteTransportError extends Error {
+  constructor(
+    readonly status: number,
+    readonly endpoint: string,
+    body: string,
+  ) {
+    super(`control-plane write endpoint ${endpoint} returned ${status}: ${body.slice(0, 200)}`);
+    this.name = "RunStateWriteTransportError";
+  }
+}
+
+/**
+ * The remote run-state writer. POSTs each write to the control plane over mTLS.
+ * A 401 (untrusted peer) or any non-2xx surfaces as {@link
+ * RunStateWriteTransportError}, which the worker treats as an infra fault — the
+ * write did NOT land, so the worker never assumes a phantom success.
+ */
+export class HttpRunStateWriter implements RunStateWriter {
+  constructor(
+    private readonly baseUrl: string,
+    private readonly mtlsFetch: MtlsFetch,
+  ) {}
+
+  async append<N extends EventName>(input: AppendEventInput<N>): Promise<void> {
+    // The server scopes the INSERT to the run's org (`runWithOrgScope`), so the
+    // body carries it. The org is the run's per-job org-id the worker set around
+    // the workflow (`runWithJobOrgId`) — the same scope the in-process write used.
+    await this.post<void>("/internal/append-event", { ...input, orgId: this.requireOrgId() });
+  }
+
+  async recordCost(input: RecordCostInput): Promise<RecordedCost> {
+    return this.post<RecordedCost>("/internal/record-cost", { ...input, orgId: this.requireOrgId() });
+  }
+
+  async finalizeRun(input: FinalizeRunInput): Promise<FinalizeRunResult> {
+    // finalizeRun carries the org explicitly (the worker resolves it from the
+    // claimed job), so no ambient lookup is needed.
+    return this.post<FinalizeRunResult>("/internal/finalize-run", input);
+  }
+
+  /**
+   * The run's org for an event/cost write — the ambient per-job org-id the worker
+   * set with `runWithJobOrgId` around the workflow. A remote write outside that
+   * scope (no per-job org) is a wiring bug: throw loudly rather than post an
+   * unscoped write the server would deny under enforced RLS.
+   */
+  private requireOrgId(): string {
+    const orgId = getJobOrgId();
+    if (orgId === undefined) {
+      throw new Error("HttpRunStateWriter: no per-job org-id in scope — a remote write must run under runWithJobOrgId");
+    }
+    return orgId;
+  }
+
+  private async post<T>(endpoint: string, body: unknown): Promise<T> {
+    const response = await this.mtlsFetch(`${this.baseUrl.replace(/\/$/, "")}${endpoint}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) {
+      throw new RunStateWriteTransportError(response.status, endpoint, await response.text().catch(() => ""));
+    }
+    const text = await response.text();
+    return (text === "" ? undefined : JSON.parse(text)) as T;
+  }
+}

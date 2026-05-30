@@ -7,6 +7,10 @@ export * from "./jobQueue.js";
 // (`mtlsChannelNode.ts`) carries the `node:https`/`node:tls` surface and is
 // imported directly by the server/boot, not re-exported here.
 export * from "./mtlsChannel.js";
+// Plane-split P3: the run-state WRITE seam contract (transport-light). The
+// Direct/Http impls live under `engine/worker/**` (they carry the store / Node
+// surface), imported directly by the worker/boot — not re-exported here.
+export * from "./runStateWriter.js";
 export * from "./notificationOutbox.js";
 export * from "./secretStore.js";
 export * from "./gcpSecretManager.js";

@@ -44,12 +44,8 @@ function harness(who: ActorContext | undefined = actor, seedCommit = true) {
     "*",
     createAuthMiddleware({
       store: {
-        async findApiTokenByRaw() {
-          return undefined;
-        },
-        async loadSession() {
-          return undefined;
-        },
+        async findApiTokenByRaw() {},
+        async loadSession() {},
         async resolveActorContext() {
           return who as ActorContext;
         },

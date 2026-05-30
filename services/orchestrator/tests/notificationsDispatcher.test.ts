@@ -256,7 +256,7 @@ describe("NotificationDispatcher", () => {
       query: client as unknown as pg.Pool,
       channels: baseRegistry({ ntfy: failing }),
       now: () => new Date("2026-01-05T12:00:00Z"),
-      log: () => undefined,
+      log: () => {},
     });
     await expect(
       dispatcher.onEvent(

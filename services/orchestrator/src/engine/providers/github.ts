@@ -256,7 +256,9 @@ export class GitHubPullRequestService {
       throw new Error(`GitHub PR lookup failed: HTTP ${response.status}`);
     }
     const pulls = asPullArray(response.body);
-    return pulls.map(parsePullRequest).find((pull) => pull.draft && pull.baseBranch === input.baseBranch);
+    return pulls
+      .map((pull) => parsePullRequest(pull))
+      .find((pull) => pull.draft && pull.baseBranch === input.baseBranch);
   }
 }
 
@@ -403,7 +405,7 @@ function parsePullRequest(value: unknown): GitHubPullRequest {
   }
   const object = value as Record<string, unknown>;
   if (typeof object["number"] !== "number" || typeof object["html_url"] !== "string") {
-    throw new Error("GitHub PR response missing number or html_url");
+    throw new TypeError("GitHub PR response missing number or html_url");
   }
   return {
     number: object["number"],
@@ -415,7 +417,7 @@ function parsePullRequest(value: unknown): GitHubPullRequest {
 
 function asPullArray(value: unknown): unknown[] {
   if (!Array.isArray(value)) {
-    throw new Error("GitHub PR lookup response was not an array");
+    throw new TypeError("GitHub PR lookup response was not an array");
   }
   return value;
 }
@@ -449,9 +451,9 @@ function parseCheckRuns(value: unknown): GitHubCheckRun[] {
   }
   const checkRuns = (value as Record<string, unknown>)["check_runs"];
   if (!Array.isArray(checkRuns)) {
-    throw new Error("GitHub check-runs response missing check_runs");
+    throw new TypeError("GitHub check-runs response missing check_runs");
   }
-  return checkRuns.map(parseCheckRun);
+  return checkRuns.map((checkRun) => parseCheckRun(checkRun));
 }
 
 function parseCheckRun(value: unknown): GitHubCheckRun {
@@ -460,7 +462,7 @@ function parseCheckRun(value: unknown): GitHubCheckRun {
   }
   const object = value as Record<string, unknown>;
   if (typeof object["name"] !== "string" || typeof object["status"] !== "string") {
-    throw new Error("GitHub check run missing name or status");
+    throw new TypeError("GitHub check run missing name or status");
   }
   return {
     name: object["name"],
@@ -476,9 +478,9 @@ function parseCommitStatuses(value: unknown): GitHubCommitStatus[] {
   }
   const statuses = (value as Record<string, unknown>)["statuses"];
   if (!Array.isArray(statuses)) {
-    throw new Error("GitHub commit status response missing statuses");
+    throw new TypeError("GitHub commit status response missing statuses");
   }
-  return statuses.map(parseCommitStatus);
+  return statuses.map((status) => parseCommitStatus(status));
 }
 
 function parseCommitStatus(value: unknown): GitHubCommitStatus {
@@ -487,7 +489,7 @@ function parseCommitStatus(value: unknown): GitHubCommitStatus {
   }
   const object = value as Record<string, unknown>;
   if (typeof object["context"] !== "string" || typeof object["state"] !== "string") {
-    throw new Error("GitHub commit status missing context or state");
+    throw new TypeError("GitHub commit status missing context or state");
   }
   return {
     context: object["context"],

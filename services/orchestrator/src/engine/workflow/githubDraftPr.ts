@@ -250,7 +250,7 @@ async function loadDraftPrRunContext(pool: RunStateClient, runId: string): Promi
 function githubCredentialRefFromInput(input: PublishDraftPullRequestInput): string {
   const configured = input.githubCredentialRef ?? input.projectConfig?.["githubCredentialRef"];
   if (typeof configured !== "string") {
-    throw new Error("GitHub credential ref is required");
+    throw new TypeError("GitHub credential ref is required");
   }
   return validateGithubCredentialRef(configured);
 }

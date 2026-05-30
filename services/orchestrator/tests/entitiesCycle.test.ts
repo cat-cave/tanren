@@ -35,13 +35,13 @@ describe("SpecDependencyStore cycle detection", () => {
     await SpecDependencyStore.insert(client, { fromSpecId: "spec_a", toSpecId: "spec_b" }, actor);
     await SpecDependencyStore.insert(client, { fromSpecId: "spec_b", toSpecId: "spec_c" }, actor);
     const error = await SpecDependencyStore.insert(client, { fromSpecId: "spec_c", toSpecId: "spec_a" }, actor).then(
-      () => undefined,
+      () => {},
       (err: unknown) => err,
     );
     expect(error).toBeInstanceOf(CyclicSpecDependencyError);
     const cycle = (error as CyclicSpecDependencyError).cycle;
     expect(cycle[0]).toBe("spec_c");
-    expect(cycle[cycle.length - 1]).toBe("spec_c");
+    expect(cycle.at(-1)).toBe("spec_c");
     expect(cycle).toContain("spec_a");
     expect(cycle).toContain("spec_b");
     expect((error as Error).message).toContain("spec_c");

@@ -58,7 +58,7 @@ export function createBrownfieldRoutes(options: BrownfieldRoutesOptions) {
     if (!actorCanAccessOrg(actor, orgId)) {
       return c.json({ error: "org_access_denied" }, 403);
     }
-    const parsed = BrownfieldLinkSchema.safeParse(await c.req.json().catch(() => undefined));
+    const parsed = BrownfieldLinkSchema.safeParse(await c.req.json().catch(() => {}));
     if (!parsed.success) {
       return c.json({ error: "invalid_brownfield_link", issues: parsed.error.issues }, 400);
     }
@@ -174,7 +174,7 @@ function decodeContent(body: RepoContent): string {
   const encoding = body.encoding === "base64" ? "base64" : undefined;
   if (encoding === "base64") {
     try {
-      return Buffer.from(body.content.replace(/\n/g, ""), "base64").toString("utf8");
+      return Buffer.from(body.content.replaceAll("\n", ""), "base64").toString("utf8");
     } catch {
       return "";
     }

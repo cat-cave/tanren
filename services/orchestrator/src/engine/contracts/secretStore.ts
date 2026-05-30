@@ -62,7 +62,7 @@ export class VaultSecretStore implements SecretStore {
     const body = (await response.json()) as VaultKvResponse;
     const value = body.data?.data?.value;
     if (typeof value !== "string") {
-      throw new Error(`Vault secret ${ref} did not contain a string value`);
+      throw new TypeError(`Vault secret ${ref} did not contain a string value`);
     }
     return { ref, value };
   }
@@ -104,5 +104,8 @@ async function assertVaultOk(response: Response, operation: string): Promise<voi
 }
 
 function encodePath(path: string): string {
-  return path.split("/").map(encodeURIComponent).join("/");
+  return path
+    .split("/")
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
 }

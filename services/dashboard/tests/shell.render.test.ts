@@ -45,8 +45,10 @@ function stubPool(): pg.Pool {
   } as unknown as pg.Pool;
 }
 
+const DEFAULT_MOCK_OPTS: { authed: boolean } = { authed: true };
+
 /** Install a global fetch mock emulating the orchestrator product APIs. */
-function mockOrchestrator(opts: { authed: boolean } = { authed: true }): void {
+function mockOrchestrator(opts: { authed: boolean } = DEFAULT_MOCK_OPTS): void {
   vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
     const url = typeof input === "string" ? input : input.toString();
     if (url.endsWith("/auth/me")) {
@@ -281,7 +283,7 @@ describe("screen-router mounting convention (fan-out extension point)", () => {
   // route, so without this reset the real screen would shadow the fake one.
   let savedMounts: typeof SCREEN_MOUNTS = [];
   beforeEach(() => {
-    savedMounts = SCREEN_MOUNTS.splice(0, SCREEN_MOUNTS.length);
+    savedMounts = SCREEN_MOUNTS.splice(0);
   });
   afterEach(() => {
     SCREEN_MOUNTS.length = 0;

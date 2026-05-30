@@ -203,8 +203,7 @@ function buildPrompts(input: NarrationInput): string[] {
 
 export function generateProjectViewNarration(input: NarrationInput): ForgeAnswer {
   const body = buildPulse(input);
-  const attentionItems: ForgeAttentionItem[] = [];
-  attentionItems.push(...buildReviewAttentionItems(input));
+  const attentionItems: ForgeAttentionItem[] = [...buildReviewAttentionItems(input)];
   const budgetItem = buildBudgetAttentionItem(input);
   if (budgetItem !== undefined) {
     attentionItems.push(budgetItem);

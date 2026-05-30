@@ -34,7 +34,7 @@ export function createAllocatorApi(options: AllocatorApiOptions): Hono {
   app.use("/release", requireBearer(options.authToken));
 
   app.post("/allocate", async (c) => {
-    const parsed = allocateSchema.safeParse(await c.req.json().catch(() => undefined));
+    const parsed = allocateSchema.safeParse(await c.req.json().catch(() => {}));
     if (!parsed.success) {
       return c.json({ error: "invalid_allocate_request", issues: parsed.error.issues }, 400);
     }
@@ -47,7 +47,7 @@ export function createAllocatorApi(options: AllocatorApiOptions): Hono {
   });
 
   app.post("/release", async (c) => {
-    const parsed = releaseSchema.safeParse(await c.req.json().catch(() => undefined));
+    const parsed = releaseSchema.safeParse(await c.req.json().catch(() => {}));
     if (!parsed.success) {
       return c.json({ error: "invalid_release_request", issues: parsed.error.issues }, 400);
     }
@@ -75,7 +75,6 @@ function requireBearer(token: string) {
       return c.json({ error: "unauthorized" }, 401);
     }
     await next();
-    return undefined;
   };
 }
 

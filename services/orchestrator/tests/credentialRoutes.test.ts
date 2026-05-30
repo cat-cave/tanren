@@ -23,12 +23,8 @@ function buildHarness(actor: ActorContext) {
     "*",
     createAuthMiddleware({
       store: {
-        async findApiTokenByRaw() {
-          return undefined;
-        },
-        async loadSession() {
-          return undefined;
-        },
+        async findApiTokenByRaw() {},
+        async loadSession() {},
         async resolveActorContext() {
           return actor;
         },

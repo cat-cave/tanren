@@ -24,12 +24,11 @@
 // the TypeScript arm of that single-neutral-source pipeline.
 
 import { readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
 import { argv, exit } from "node:process";
 import { format, resolveConfig } from "prettier";
 
-const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const repoRoot = resolve(import.meta.dirname, "..");
 const httpSchemaDir = resolve(repoRoot, "contracts/json/http");
 const outFile = resolve(repoRoot, "services/dashboard/src/api/http.gen.ts");
 const outFileRel = "services/dashboard/src/api/http.gen.ts";
@@ -95,7 +94,7 @@ export function tsType(node) {
 }
 
 function unionOf(variants) {
-  const parts = variants.map(tsType);
+  const parts = variants.map((variant) => tsType(variant));
   // De-dupe (e.g. anyOf of identical refined strings) while preserving order.
   const seen = new Set();
   const unique = [];
@@ -134,7 +133,7 @@ function typeName(schema, file) {
   const id = schema["x-tanren-schema-id"];
   if (typeof id === "string") {
     const parts = id.split(".");
-    return parts[parts.length - 1];
+    return parts.at(-1);
   }
   return file.replace(/\.json$/, "");
 }
@@ -187,7 +186,7 @@ function readCurrent() {
   try {
     return readFileSync(outFile, "utf8");
   } catch {
-    return undefined;
+    // missing file → treat as no current content
   }
 }
 
@@ -217,6 +216,6 @@ async function main() {
 }
 
 // Only run the CLI when invoked directly (not when imported by the test).
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+if (process.argv[1] === import.meta.filename) {
   await main();
 }

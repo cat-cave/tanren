@@ -1,6 +1,5 @@
 import { readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { contractSchemaCatalog, renderContractJsonSchema } from "../src/engine/schemaExport/catalog.js";
@@ -8,7 +7,7 @@ import { contractSchemaCatalog, renderContractJsonSchema } from "../src/engine/s
 // Walks up from the orchestrator package to the repo root so the drift test
 // stays correct no matter where vitest is launched from. The committed mirror
 // lives at contracts/json/** (the unified JSON-Schema export, Track C §3).
-const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
+const repoRoot = resolve(import.meta.dirname, "../../..");
 
 function sortKeys<T>(value: T): T {
   if (Array.isArray(value)) {

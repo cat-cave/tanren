@@ -257,7 +257,27 @@ smoke-rls-early-finalize:
 smoke-plane-split-worker:
   DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" corepack pnpm exec tsx scripts/smoke/plane-split-worker.ts
 
-smoke: compose-build compose-up wait-for-stack smoke-hello smoke-ssh-integration smoke-plane-split-worker smoke-rls-r1 smoke-rls-r2 smoke-rls-r2-cohort2 smoke-rls-r2-cohort3 smoke-rls-r2-cohort4 smoke-rls-r3a smoke-rls-r3a-worker smoke-rls-r3b smoke-rls-early-finalize
+# Plane-split P3 (real PG, enforced RLS): the control-plane run-state WRITE
+# endpoints + the writers. Proves authn-reject, that append-event / record-cost /
+# finalize-run persist the SAME rows server-side under the run's org scope, that
+# finalize is exactly-once (a retried finalize is a no-op), and that the DEFAULT
+# DirectRunStateWriter persists byte-identical rows in-process. Same ephemeral-DB
+# + restricted-role harness as the R-wave cohorts. DATABASE_URL is the owner.
+smoke-plane-split-p3:
+  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/planeSplitP3RemoteWrites.integration.test.ts
+
+# Plane-split P3 cross-process REMOTE-WRITES proof: recreate the `worker` data
+# plane with TANREN_DATA_PLANE_REMOTE_WRITES=1, then re-run the cross-process
+# smoke. The worker now finalizes its run THROUGH the control-plane `/internal/*`
+# write endpoints over mTLS (writing NO tenant tables directly); the smoke's
+# terminal-state assertion proves the remote-write path end-to-end under enforced
+# RLS. Recreates the worker WITHOUT the flag afterward so the stack is restored.
+smoke-plane-split-worker-remote-writes: gen-mtls-certs
+  TANREN_RUNNER_AUTHORIZED_KEY="$(cat /tmp/tanren_runner_key.pub)" TANREN_RUNNER_IDENTITY_PRIVATE_KEY="$(cat /tmp/tanren_runner_key)" TANREN_DATA_PLANE_REMOTE_WRITES=1 docker compose -f compose.dev.yml up -d --no-deps --force-recreate worker
+  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" corepack pnpm exec tsx scripts/smoke/plane-split-worker.ts
+  TANREN_RUNNER_AUTHORIZED_KEY="$(cat /tmp/tanren_runner_key.pub)" TANREN_RUNNER_IDENTITY_PRIVATE_KEY="$(cat /tmp/tanren_runner_key)" docker compose -f compose.dev.yml up -d --no-deps --force-recreate worker
+
+smoke: compose-build compose-up wait-for-stack smoke-hello smoke-ssh-integration smoke-plane-split-worker smoke-plane-split-worker-remote-writes smoke-plane-split-p3 smoke-rls-r1 smoke-rls-r2 smoke-rls-r2-cohort2 smoke-rls-r2-cohort3 smoke-rls-r2-cohort4 smoke-rls-r3a smoke-rls-r3a-worker smoke-rls-r3b smoke-rls-early-finalize
 
 # P3-0001: the Phase 2A direct-execution acceptance gate (`just acceptance`,
 # scripts/acceptance/easy.ts + medium.ts) was removed once the run executor

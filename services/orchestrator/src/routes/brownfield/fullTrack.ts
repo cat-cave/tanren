@@ -94,7 +94,7 @@ export function createBrownfieldFullTrackRoutes(options: BrownfieldFullTrackOpti
   app.post("/:orgId/projects/:projectId/recon", async (c) => {
     const guard = await guardOrg(c, options.pool);
     if (guard.error !== undefined) return c.json({ error: guard.error }, guard.status);
-    const parsed = ReconBody.safeParse(await c.req.json().catch(() => undefined));
+    const parsed = ReconBody.safeParse(await c.req.json().catch(() => {}));
     if (!parsed.success) return c.json({ error: "invalid_recon", issues: parsed.error.issues }, 400);
     try {
       const resolved = await resolveTokenFor(options, guard.orgId);
@@ -121,7 +121,7 @@ export function createBrownfieldFullTrackRoutes(options: BrownfieldFullTrackOpti
   app.post("/:orgId/projects/:projectId/config-injection", async (c) => {
     const guard = await guardOrg(c, options.pool);
     if (guard.error !== undefined) return c.json({ error: guard.error }, guard.status);
-    const parsed = ConfigInjectionBody.safeParse(await c.req.json().catch(() => undefined));
+    const parsed = ConfigInjectionBody.safeParse(await c.req.json().catch(() => {}));
     if (!parsed.success) return c.json({ error: "invalid_config_injection", issues: parsed.error.issues }, 400);
     const repo = parseGitHubRepository(parsed.data.repoUrl);
     const files = proposeConfigFiles(
@@ -166,7 +166,7 @@ export function createBrownfieldFullTrackRoutes(options: BrownfieldFullTrackOpti
   app.post("/:orgId/projects/:projectId/seed-dag", async (c) => {
     const guard = await guardOrg(c, options.pool);
     if (guard.error !== undefined) return c.json({ error: guard.error }, guard.status);
-    const parsed = SeedDagBody.safeParse(await c.req.json().catch(() => undefined));
+    const parsed = SeedDagBody.safeParse(await c.req.json().catch(() => {}));
     if (!parsed.success) return c.json({ error: "invalid_seed_dag", issues: parsed.error.issues }, 400);
     try {
       const issues = parsed.data.includeIssues
@@ -188,7 +188,7 @@ export function createBrownfieldFullTrackRoutes(options: BrownfieldFullTrackOpti
   app.post("/:orgId/projects/:projectId/governance", async (c) => {
     const guard = await guardOrg(c, options.pool);
     if (guard.error !== undefined) return c.json({ error: guard.error }, guard.status);
-    const parsed = GovernanceBody.safeParse(await c.req.json().catch(() => undefined));
+    const parsed = GovernanceBody.safeParse(await c.req.json().catch(() => {}));
     if (!parsed.success) return c.json({ error: "invalid_governance", issues: parsed.error.issues }, 400);
     const posture = parsed.data.posture;
     const next = await persistPosture(options.pool, guard.projectId, posture);

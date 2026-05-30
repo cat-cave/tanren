@@ -55,7 +55,7 @@ function stubPool(): { pool: pg.Pool; state: StubState } {
   };
   const personaIds = new Set<string>();
   const query = async (text: string, params: unknown[] = []): Promise<{ rows: unknown[]; rowCount: number }> => {
-    const sql = text.replace(/\s+/g, " ").trim();
+    const sql = text.replaceAll(/\s+/g, " ").trim();
     if (sql.startsWith("INSERT INTO projects")) {
       state.projects.add(String(params[0]));
       return { rows: [], rowCount: 1 };

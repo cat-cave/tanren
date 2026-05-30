@@ -14,7 +14,6 @@
 import { readFile } from "node:fs/promises";
 import { relative, resolve } from "node:path";
 import { exit } from "node:process";
-import { fileURLToPath } from "node:url";
 
 const SOURCE_OF_TRUTH = "docs/design/tokens/colors_and_type.css";
 const TOKEN_COPIES = ["services/dashboard/src/design/tokens.css"];
@@ -49,7 +48,7 @@ function formatDiagnostics(diagnostics, root) {
   return diagnostics.map((item) => `${relative(root, resolve(root, item.copy))}: ${item.message}`).join("\n");
 }
 
-const invokedDirectly = process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1]);
+const invokedDirectly = process.argv[1] && import.meta.filename === resolve(process.argv[1]);
 if (invokedDirectly) {
   const diagnostics = await checkDesignTokensDrift();
   if (diagnostics.length > 0) {

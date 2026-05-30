@@ -96,7 +96,7 @@ export class GitHubOAuthProvider implements IdentityProvider {
     if (!response.ok) {
       throw new IdentityProviderError(this.id, `token endpoint returned ${response.status}`);
     }
-    const parsed = tokenResponseSchema.safeParse(await response.json().catch(() => undefined));
+    const parsed = tokenResponseSchema.safeParse(await response.json().catch(() => {}));
     if (!parsed.success) {
       throw new IdentityProviderError(this.id, "token response malformed");
     }
@@ -116,7 +116,7 @@ export class GitHubOAuthProvider implements IdentityProvider {
     if (!response.ok) {
       throw new IdentityProviderError(this.id, `user endpoint returned ${response.status}`);
     }
-    const parsed = githubUserSchema.safeParse(await response.json().catch(() => undefined));
+    const parsed = githubUserSchema.safeParse(await response.json().catch(() => {}));
     if (!parsed.success) {
       throw new IdentityProviderError(this.id, "user response malformed");
     }
@@ -130,7 +130,7 @@ export class GitHubOAuthProvider implements IdentityProvider {
     if (!response.ok) {
       return null;
     }
-    const list = z.array(githubEmailSchema).safeParse(await response.json().catch(() => undefined));
+    const list = z.array(githubEmailSchema).safeParse(await response.json().catch(() => {}));
     if (!list.success) {
       return null;
     }
@@ -145,7 +145,7 @@ export class GitHubOAuthProvider implements IdentityProvider {
     if (!response.ok) {
       throw new IdentityProviderError(this.id, `orgs endpoint returned ${response.status}`);
     }
-    const list = z.array(githubOrgSchema).safeParse(await response.json().catch(() => undefined));
+    const list = z.array(githubOrgSchema).safeParse(await response.json().catch(() => {}));
     if (!list.success) {
       throw new IdentityProviderError(this.id, "orgs response malformed");
     }

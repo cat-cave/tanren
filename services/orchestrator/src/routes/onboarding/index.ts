@@ -67,7 +67,7 @@ export function createOnboardingRoutes(options: OnboardingRoutesOptions) {
     if (!actorCanAccessOrg(actor, orgId)) {
       return c.json({ error: "org_access_denied" }, 403);
     }
-    const parsed = RoundBody.safeParse(await c.req.json().catch(() => undefined));
+    const parsed = RoundBody.safeParse(await c.req.json().catch(() => {}));
     if (!parsed.success) {
       return c.json({ error: "invalid_round", issues: parsed.error.issues }, 400);
     }
@@ -88,7 +88,7 @@ export function createOnboardingRoutes(options: OnboardingRoutesOptions) {
     if (!actorCanAccessOrg(actor, orgId)) {
       return c.json({ error: "org_access_denied" }, 403);
     }
-    const parsed = DeriveBody.safeParse(await c.req.json().catch(() => undefined));
+    const parsed = DeriveBody.safeParse(await c.req.json().catch(() => {}));
     if (!parsed.success) {
       return c.json({ error: "invalid_derive", issues: parsed.error.issues }, 400);
     }

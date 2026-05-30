@@ -236,8 +236,8 @@ export class KubernetesAllocator implements Allocator {
 
   /** Best-effort delete of a Pod + Secret so a stuck allocation doesn't leak. */
   private async cleanup(podName: string, secretName: string): Promise<void> {
-    await this.client.deletePod(podName).catch(() => undefined);
-    await this.client.deleteSecret(secretName).catch(() => undefined);
+    await this.client.deletePod(podName).catch(() => {});
+    await this.client.deleteSecret(secretName).catch(() => {});
   }
 
   private async waitForRunning(name: string): Promise<KubernetesPod> {
@@ -268,7 +268,7 @@ export class KubernetesAllocator implements Allocator {
 function resourceName(runId: string): string {
   return `tanren-${runId}`
     .toLowerCase()
-    .replace(/[^a-z0-9-]/g, "-")
+    .replaceAll(/[^a-z0-9-]/g, "-")
     .slice(0, 58);
 }
 
@@ -276,7 +276,7 @@ function resourceName(runId: string): string {
 function labelValue(value: string): string {
   return value
     .toLowerCase()
-    .replace(/[^a-z0-9_.-]/g, "-")
+    .replaceAll(/[^a-z0-9_.-]/g, "-")
     .slice(0, 63);
 }
 

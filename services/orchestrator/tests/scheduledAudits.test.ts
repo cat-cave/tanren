@@ -36,7 +36,7 @@ function stubPool(): {
   const sourceRow = (id: string) => ({ ...sources.get(id)! });
 
   const query = async (text: string, params: unknown[] = []): Promise<{ rows: unknown[]; rowCount: number }> => {
-    const sql = text.replace(/\s+/g, " ").trim();
+    const sql = text.replaceAll(/\s+/g, " ").trim();
 
     // ---- audit_jobs ----
     if (sql.startsWith("INSERT INTO audit_jobs")) {

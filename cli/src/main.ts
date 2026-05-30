@@ -318,7 +318,7 @@ function addArg(args: ParsedArgs, key: string, value: string): void {
 function required(args: ParsedArgs, key: string): string {
   const value = args[key];
   if (typeof value !== "string") {
-    throw new Error(`missing --${key}`);
+    throw new TypeError(`missing --${key}`);
   }
   return value;
 }
@@ -326,7 +326,7 @@ function required(args: ParsedArgs, key: string): string {
 function optional(args: ParsedArgs, key: string): string | undefined {
   const value = args[key];
   if (Array.isArray(value)) {
-    throw new Error(`--${key} can only be provided once`);
+    throw new TypeError(`--${key} can only be provided once`);
   }
   return value;
 }

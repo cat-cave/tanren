@@ -69,7 +69,7 @@ function stubPool(): {
     return { ...c, source_name: src.name, source_kind: src.kind };
   };
   const query = async (text: string, params: unknown[] = []): Promise<{ rows: unknown[]; rowCount: number }> => {
-    const sql = text.replace(/\s+/g, " ").trim();
+    const sql = text.replaceAll(/\s+/g, " ").trim();
     if (sql.startsWith("SELECT spec_id, title, status FROM specs")) return { rows: [], rowCount: 0 };
     if (sql.startsWith("INSERT INTO candidates")) {
       const [id, sourceId, orgId, projectId, externalId, title, body, severity, status, triage] = params as string[];

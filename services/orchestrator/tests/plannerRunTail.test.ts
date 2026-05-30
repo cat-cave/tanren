@@ -71,7 +71,7 @@ const baseInput = (over: Record<string, unknown>) => ({
   escapeHatches,
   timeoutMs: 100,
   maxCiPolls: 1,
-  sleep: async () => undefined,
+  sleep: async () => {},
   buildUsageProbe: () => fakeProbe(healthyWindow(), accounting(null)),
   ...over,
 });

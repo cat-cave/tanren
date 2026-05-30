@@ -118,7 +118,7 @@ describeDb("RLS wave R1 — restricted role + org session context", () => {
   });
 
   it("(a) rejects an unsafe org id rather than interpolating it", async () => {
-    await expect(runWithOrgScope(runtimePool, "org'; DROP TABLE runs; --", async () => undefined)).rejects.toThrow(
+    await expect(runWithOrgScope(runtimePool, "org'; DROP TABLE runs; --", async () => {})).rejects.toThrow(
       /unsafe org id/,
     );
   });

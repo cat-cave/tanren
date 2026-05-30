@@ -102,11 +102,11 @@ describe("loadRunExecutionContext", () => {
   });
 
   it("throws RunExecutionContextNotFoundError (with the run id) when no row is found", async () => {
-    await expect(
-      loadRunExecutionContext(rowPool(undefined), { runId: "run_missing", identitySecretRef: "id" }),
-    ).rejects.toThrow(RunExecutionContextNotFoundError);
-    await expect(
-      loadRunExecutionContext(rowPool(undefined), { runId: "run_missing", identitySecretRef: "id" }),
-    ).rejects.toThrow(/run_missing/);
+    await expect(loadRunExecutionContext(rowPool(), { runId: "run_missing", identitySecretRef: "id" })).rejects.toThrow(
+      RunExecutionContextNotFoundError,
+    );
+    await expect(loadRunExecutionContext(rowPool(), { runId: "run_missing", identitySecretRef: "id" })).rejects.toThrow(
+      /run_missing/,
+    );
   });
 });

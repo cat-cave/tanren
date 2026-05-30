@@ -17,10 +17,9 @@
 import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { argv, exit } from "node:process";
 
-const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const repoRoot = resolve(import.meta.dirname, "..");
 const outDir = resolve(repoRoot, "contracts/json");
 const catalogEntry = resolve(repoRoot, "services/orchestrator/src/engine/schemaExport/catalog.ts");
 
@@ -55,7 +54,7 @@ function dumpSchemasViaTsx() {
 // regardless of the order Zod's generator emits properties.
 function sortKeys(value) {
   if (Array.isArray(value)) {
-    return value.map(sortKeys);
+    return value.map((item) => sortKeys(item));
   }
   if (value !== null && typeof value === "object") {
     const out = {};
@@ -76,7 +75,7 @@ function readCurrent(filePath) {
   try {
     return readFileSync(filePath, "utf8");
   } catch {
-    return undefined;
+    // missing file → treat as no current content
   }
 }
 

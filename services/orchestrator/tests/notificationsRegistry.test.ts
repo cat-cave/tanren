@@ -47,9 +47,7 @@ describe("buildChannelRegistry", () => {
 
   it("wires github_checks only when its github deps key is supplied", () => {
     const fakeSecrets = {
-      async get() {
-        return undefined;
-      },
+      async get() {},
     };
     const wired = buildChannelRegistry({ github: { secrets: fakeSecrets } });
     expect(wired.github_checks.wired).toBe(true);

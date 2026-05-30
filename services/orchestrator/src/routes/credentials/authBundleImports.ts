@@ -29,7 +29,7 @@ const authBundleImporters: ReadonlyArray<{
 export function registerAuthBundleImportRoutes<E extends Env>(app: Hono<E>, secrets: SecretStore): void {
   for (const provider of authBundleImporters) {
     app.post(`/credentials/${provider.slug}/import`, async (c) => {
-      const parsed = authBundleImportSchema.safeParse(await c.req.json().catch(() => undefined));
+      const parsed = authBundleImportSchema.safeParse(await c.req.json().catch(() => {}));
       if (!parsed.success) {
         return c.json({ error: provider.error, issues: parsed.error.issues }, 400);
       }

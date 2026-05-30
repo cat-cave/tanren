@@ -214,7 +214,7 @@ describe("NotificationDispatcher payload + ledger", () => {
       query: client as unknown as pg.Pool,
       channels: baseRegistry({ ntfy: failing }),
       now: () => new Date("2026-01-05T12:00:00Z"),
-      log: () => undefined,
+      log: () => {},
     });
     await dispatcher.onEvent(
       { eventType: "run.failed", payload: { status: "failed", message: "x" } },
@@ -260,7 +260,7 @@ describe("NotificationDispatcher payload + ledger", () => {
       query: client as unknown as pg.Pool,
       channels: baseRegistry({ teams: throwingStub }),
       now: () => new Date("2026-01-05T12:00:00Z"),
-      log: () => undefined,
+      log: () => {},
     });
     await expect(
       dispatcher.onEvent(

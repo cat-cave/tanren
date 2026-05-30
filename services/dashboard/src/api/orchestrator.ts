@@ -47,7 +47,7 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
   async session(): Promise<DashboardSession | undefined> {
     const response = await this.fetchImpl(`${this.orchestratorUrl}/auth/me`, {
       headers: this.headers(),
-    }).catch(() => undefined);
+    }).catch(() => {});
     if (response === undefined || !response.ok) {
       return undefined;
     }
@@ -58,7 +58,7 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
   async listOrgs(): Promise<OrgSummary[]> {
     const response = await this.fetchImpl(`${this.orchestratorUrl}/orgs`, {
       headers: this.headers(),
-    }).catch(() => undefined);
+    }).catch(() => {});
     if (response === undefined || !response.ok) {
       return [];
     }
@@ -70,7 +70,7 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
   async listProjects(orgId: string): Promise<ProjectSummary[]> {
     const response = await this.fetchImpl(`${this.orchestratorUrl}/orgs/${encodeURIComponent(orgId)}/projects`, {
       headers: this.headers(),
-    }).catch(() => undefined);
+    }).catch(() => {});
     if (response === undefined || !response.ok) {
       return [];
     }
@@ -97,7 +97,7 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
     let cursor: string | null = null;
     for (let page = 0; page < maxPages; page += 1) {
       const url = cursor === null ? base : `${base}?cursor=${encodeURIComponent(cursor)}`;
-      const response = await this.fetchImpl(url, { headers: this.headers() }).catch(() => undefined);
+      const response = await this.fetchImpl(url, { headers: this.headers() }).catch(() => {});
       if (response === undefined || !response.ok) {
         break;
       }
@@ -123,7 +123,7 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
       method: "POST",
       headers: this.headers({ "content-type": "application/json" }),
       body: JSON.stringify({ tool, args }),
-    }).catch(() => undefined);
+    }).catch(() => {});
     if (response === undefined || !response.ok) {
       return undefined;
     }
@@ -444,7 +444,7 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
     const response = await this.fetchImpl(
       `${this.orchestratorUrl}/orgs/${encodeURIComponent(loc.orgId)}/projects/${encodeURIComponent(loc.projectId)}/runs/${encodeURIComponent(runId)}${query}`,
       { headers: this.headers(opts.rawView === true ? { "x-view-raw": "true" } : undefined) },
-    ).catch(() => undefined);
+    ).catch(() => {});
     if (response === undefined || !response.ok) {
       return undefined;
     }

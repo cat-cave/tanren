@@ -454,7 +454,7 @@ function buildContributorProbe(
 /** Collect the distinct author + committer logins from a PR commits response. */
 function parseCommitLogins(body: unknown): string[] {
   if (!Array.isArray(body)) {
-    throw new Error("GitHub PR commits response was not an array");
+    throw new TypeError("GitHub PR commits response was not an array");
   }
   const logins: string[] = [];
   for (const entry of body) {

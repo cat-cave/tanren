@@ -10,7 +10,7 @@ import type { SecretStore, SecretValue } from "./secretStore.js";
  * SecretStore conformance suite for the contract this must satisfy.
  */
 export function gcpSecretIdFromRef(ref: string): string {
-  const sanitized = ref.replace(/[^a-zA-Z0-9_-]/g, "_");
+  const sanitized = ref.replaceAll(/[^a-zA-Z0-9_-]/g, "_");
   // Secret ids cannot be empty and are capped at 255 chars.
   const trimmed = sanitized.slice(0, 255);
   return trimmed === "" ? "_" : trimmed;
@@ -80,7 +80,7 @@ export class GcpSecretManagerStore implements SecretStore {
     const body = (await response.json()) as GcpAccessResponse;
     const data = body.payload?.data;
     if (typeof data !== "string") {
-      throw new Error(`GCP Secret Manager secret ${ref} did not contain payload data`);
+      throw new TypeError(`GCP Secret Manager secret ${ref} did not contain payload data`);
     }
     return { ref, value: Buffer.from(data, "base64").toString("utf8") };
   }

@@ -74,7 +74,7 @@ export function createRecoveryRoutes(options: RecoveryRoutesOptions) {
   app.post("/:orgId/projects/:projectId/runs/:runId/recovery/replan", async (c) => {
     const gate = await gateRun(options.pool, c);
     if (gate.denial !== undefined) return gate.denial;
-    const parsed = ReplanSchema.safeParse(await c.req.json().catch(() => undefined));
+    const parsed = ReplanSchema.safeParse(await c.req.json().catch(() => {}));
     if (!parsed.success) {
       return c.json({ error: "invalid_replan", issues: parsed.error.issues }, 400);
     }
@@ -86,7 +86,7 @@ export function createRecoveryRoutes(options: RecoveryRoutesOptions) {
   app.post("/:orgId/projects/:projectId/runs/:runId/recovery/rollback", async (c) => {
     const gate = await gateRun(options.pool, c);
     if (gate.denial !== undefined) return gate.denial;
-    const parsed = RollbackSchema.safeParse(await c.req.json().catch(() => undefined));
+    const parsed = RollbackSchema.safeParse(await c.req.json().catch(() => {}));
     if (!parsed.success) {
       return c.json({ error: "invalid_rollback", issues: parsed.error.issues }, 400);
     }
@@ -145,7 +145,7 @@ async function gateRun(pool: pg.Pool, c: Context<ActorContextEnv>): Promise<RunG
     const ctx = await runWithOrgScope(pool, orgId, async (client) => {
       const access = await assertRunAccess(client, runId, actor);
       if (access.projectId !== projectId) {
-        return undefined;
+        return;
       }
       return loadHaltedRunContext(client, runId);
     });

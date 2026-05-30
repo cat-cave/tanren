@@ -85,7 +85,7 @@ export function createOrgRoutes(options: OrgRoutesOptions) {
     if (!actorIsOrgAdmin(actor, orgId)) {
       return c.json({ error: "org_admin_required" }, 403);
     }
-    const parsed = OrgConfigPatchSchema.safeParse(await c.req.json().catch(() => undefined));
+    const parsed = OrgConfigPatchSchema.safeParse(await c.req.json().catch(() => {}));
     if (!parsed.success) {
       return c.json({ error: "invalid_org_config", issues: parsed.error.issues }, 400);
     }

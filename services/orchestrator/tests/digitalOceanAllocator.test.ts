@@ -58,7 +58,7 @@ const baseOpts = (client: DigitalOceanClient, runners: RunnerStore) => ({
   image: "docker-20-04",
   runners,
   client,
-  sleep: async () => undefined,
+  sleep: async () => {},
 });
 
 function req(runId: string) {

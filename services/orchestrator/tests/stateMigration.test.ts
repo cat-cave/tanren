@@ -20,7 +20,7 @@ async function readAllMigrations(): Promise<string> {
 }
 
 function literalList(values: ReadonlyArray<string>): string {
-  return values.map((value) => `'${value.replace(/'/g, "''")}'`).join(",");
+  return values.map((value) => `'${value.replaceAll("'", "''")}'`).join(",");
 }
 
 describe("typed-state-constraints migration history", () => {

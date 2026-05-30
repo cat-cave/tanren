@@ -55,7 +55,7 @@ export function createBehaviorRoutes(options: BehaviorRoutesOptions) {
     if (!actorCanAccessOrg(actor, orgId)) {
       return c.json({ error: "org_access_denied" }, 403);
     }
-    const parsed = BehaviorCreateBody.safeParse(await c.req.json().catch(() => undefined));
+    const parsed = BehaviorCreateBody.safeParse(await c.req.json().catch(() => {}));
     if (!parsed.success) {
       return c.json({ error: "invalid_behavior", issues: parsed.error.issues }, 400);
     }

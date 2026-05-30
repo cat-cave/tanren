@@ -180,7 +180,7 @@ async function handleImport(
   ownerId: string,
   kind: string,
 ): Promise<Response> {
-  const raw = await c.req.json().catch(() => undefined);
+  const raw = await c.req.json().catch(() => {});
   if (kind === "codex_chatgpt_auth") {
     const parsed = AuthBundleImportBody.safeParse(raw);
     if (!parsed.success) {

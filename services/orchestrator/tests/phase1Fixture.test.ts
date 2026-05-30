@@ -77,7 +77,7 @@ describe("phase 1 end-to-end fixture workflow", () => {
       createAuditor: () => fakeAuditor,
       timeoutMs: 100,
       maxCiPolls: 1,
-      sleep: async () => undefined,
+      sleep: async () => {},
     });
 
     expect(result.pullRequest.prNumber).toBe(42);

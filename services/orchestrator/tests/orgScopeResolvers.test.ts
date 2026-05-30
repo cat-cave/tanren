@@ -339,7 +339,7 @@ describe("runWithOrgScope — transaction lifecycle + ambient store", () => {
 
   it("interpolates a DIFFERENT org id into its own SET LOCAL (not a constant)", async () => {
     const fp = fakePool();
-    await runWithOrgScope(fp.pool, "org_zeta", async () => undefined);
+    await runWithOrgScope(fp.pool, "org_zeta", async () => {});
     expect(fp.clientSql).toContain("SET LOCAL app.current_org_id = 'org_zeta'");
   });
 
@@ -377,7 +377,7 @@ describe("runWithOrgScope — transaction lifecycle + ambient store", () => {
 describe("assertSafeOrgId injection guard (via runWithOrgScope)", () => {
   it("rejects an org id with a quote BEFORE checking out a connection", async () => {
     const fp = fakePool();
-    await expect(runWithOrgScope(fp.pool, "org'; DROP", async () => undefined)).rejects.toThrow(/unsafe org id/u);
+    await expect(runWithOrgScope(fp.pool, "org'; DROP", async () => {})).rejects.toThrow(/unsafe org id/u);
     // The guard runs first: no connection was ever taken, so nothing to leak.
     expect(fp.connects).toBe(0);
     expect(fp.clientSql).toHaveLength(0);
@@ -386,7 +386,7 @@ describe("assertSafeOrgId injection guard (via runWithOrgScope)", () => {
   it("rejects an empty id, whitespace, and SQL metacharacters", async () => {
     const fp = fakePool();
     for (const bad of ["", "org acme", "org;drop", "org(1)", "org*", "org\n"]) {
-      await expect(runWithOrgScope(fp.pool, bad, async () => undefined)).rejects.toThrow(/unsafe org id/u);
+      await expect(runWithOrgScope(fp.pool, bad, async () => {})).rejects.toThrow(/unsafe org id/u);
     }
     expect(fp.connects).toBe(0);
   });
@@ -397,7 +397,7 @@ describe("assertSafeOrgId injection guard (via runWithOrgScope)", () => {
     // throw — each allowed class must instead pass through to a txn.
     const ok = ["org_acme", "ORG1", "org:tenant.sub-1", "a", "0"];
     for (const id of ok) {
-      await runWithOrgScope(fp.pool, id, async () => undefined);
+      await runWithOrgScope(fp.pool, id, async () => {});
     }
     expect(fp.connects).toBe(ok.length);
   });
@@ -423,7 +423,7 @@ describe("runWithSystemScope — cross-org txn (no org GUC)", () => {
     const system = fakePool();
     setSystemPool(system.pool);
     try {
-      await runWithSystemScope(passed.pool, async () => undefined);
+      await runWithSystemScope(passed.pool, async () => {});
       // The connection must come from the system pool, leaving the passed pool
       // untouched — the BYPASSRLS data-plane split.
       expect(system.connects).toBe(1);

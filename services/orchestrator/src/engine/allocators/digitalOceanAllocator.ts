@@ -108,7 +108,7 @@ export class DigitalOceanAllocator implements Allocator {
   }
 
   async allocate(request: AllocationRequest): Promise<RunnerAllocation> {
-    const name = `tanren-${request.runId}`.toLowerCase().replace(/[^a-z0-9-]/g, "-");
+    const name = `tanren-${request.runId}`.toLowerCase().replaceAll(/[^a-z0-9-]/g, "-");
     const created = await this.client.createDroplet({
       name,
       region: this.options.region,
@@ -117,7 +117,7 @@ export class DigitalOceanAllocator implements Allocator {
       sshKeys: this.options.sshKeys,
       userData: this.options.userData,
       tags: [`tanren-run-${request.runId}`, `tanren-project-${request.projectId}`].map((t) =>
-        t.toLowerCase().replace(/[^a-z0-9:_-]/g, "-"),
+        t.toLowerCase().replaceAll(/[^a-z0-9:_-]/g, "-"),
       ),
     });
 
@@ -126,13 +126,13 @@ export class DigitalOceanAllocator implements Allocator {
       droplet = await this.waitForActive(created.id);
     } catch (error) {
       // Best-effort destroy so a stuck droplet doesn't leak.
-      await this.client.deleteDroplet(created.id).catch(() => undefined);
+      await this.client.deleteDroplet(created.id).catch(() => {});
       throw error;
     }
 
     const ip = droplet.publicIpv4;
     if (ip === undefined || ip === "") {
-      await this.client.deleteDroplet(droplet.id).catch(() => undefined);
+      await this.client.deleteDroplet(droplet.id).catch(() => {});
       throw new DigitalOceanAllocatorError(`digitalocean droplet ${droplet.id} became active without a public IPv4`);
     }
 
@@ -166,7 +166,7 @@ export class DigitalOceanAllocator implements Allocator {
         containerId: String(droplet.id),
       });
     } catch (error) {
-      await this.client.deleteDroplet(droplet.id).catch(() => undefined);
+      await this.client.deleteDroplet(droplet.id).catch(() => {});
       this.droplets.delete(runnerId);
       throw error;
     }

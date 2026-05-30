@@ -134,7 +134,7 @@ export class AwsEc2Allocator implements Allocator {
       securityGroupIds: this.options.securityGroupIds,
       userData: this.options.userData,
       tags: {
-        Name: `tanren-${request.runId}`.toLowerCase().replace(/[^a-z0-9-]/g, "-"),
+        Name: `tanren-${request.runId}`.toLowerCase().replaceAll(/[^a-z0-9-]/g, "-"),
         "tanren-run": request.runId,
         "tanren-project": request.projectId,
       },
@@ -145,13 +145,13 @@ export class AwsEc2Allocator implements Allocator {
       instance = await this.waitForRunning(created.instanceId);
     } catch (error) {
       // Best-effort terminate so a stuck instance doesn't leak.
-      await this.client.terminateInstance(created.instanceId).catch(() => undefined);
+      await this.client.terminateInstance(created.instanceId).catch(() => {});
       throw error;
     }
 
     const ip = instance.publicIp;
     if (ip === undefined || ip === "") {
-      await this.client.terminateInstance(instance.instanceId).catch(() => undefined);
+      await this.client.terminateInstance(instance.instanceId).catch(() => {});
       throw new AwsEc2AllocatorError(`aws ec2 instance ${instance.instanceId} became running without a public IP`);
     }
 
@@ -189,7 +189,7 @@ export class AwsEc2Allocator implements Allocator {
         containerId: instanceId,
       });
     } catch (error) {
-      await this.client.terminateInstance(instanceId).catch(() => undefined);
+      await this.client.terminateInstance(instanceId).catch(() => {});
       this.instances.delete(runnerId);
       throw error;
     }
@@ -272,7 +272,10 @@ function signingKey(secretKey: string, date: string, region: string, service: st
 
 /** RFC-3986 encode for canonical query strings (encodeURIComponent + extras). */
 function rfc3986(value: string): string {
-  return encodeURIComponent(value).replace(/[!'()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+  return encodeURIComponent(value).replaceAll(
+    /[!'()*]/g,
+    (c) => `%${(c.codePointAt(0) ?? 0).toString(16).toUpperCase()}`,
+  );
 }
 
 function canonicalQuery(params: Record<string, string>): string {
@@ -355,7 +358,7 @@ export function fetchAwsEc2Client(
 
   async function send(params: Record<string, string>): Promise<string> {
     const now = new Date();
-    const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, "");
+    const amzDate = now.toISOString().replaceAll(/[:-]|\.\d{3}/g, "");
     const dateStamp = amzDate.slice(0, 8);
     const allParams: Record<string, string> = { ...params, Version: ec2ApiVersion };
     if (options.sessionToken !== undefined) {

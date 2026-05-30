@@ -38,16 +38,14 @@ export const DoctorReport = z.object({
 export type DoctorReport = z.infer<typeof DoctorReport>;
 
 export async function runDoctor(options: DoctorRoutesOptions): Promise<DoctorReport> {
-  const checks: DoctorCheck[] = [];
-
-  checks.push(
+  const checks: DoctorCheck[] = [
     await timedCheck("postgres", async () => {
       const result = await options.pool.query<{ ok: number }>("SELECT 1 AS ok");
       return result.rows[0]?.ok === 1
         ? { status: "ok", detail: "SELECT 1 returned" }
         : { status: "fail", detail: "SELECT 1 did not return 1" };
     }),
-  );
+  ];
 
   if (options.vaultHealthCheck !== undefined) {
     checks.push(

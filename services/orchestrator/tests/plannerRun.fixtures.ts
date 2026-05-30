@@ -174,7 +174,7 @@ export function directMergeConfig(): Record<string, unknown> {
 export function changesThenApproveReview() {
   let calls = 0;
   return {
-    markReady: async () => undefined,
+    markReady: async () => {},
     fetchVerdict: async () => {
       calls += 1;
       if (calls === 1) {
@@ -192,7 +192,7 @@ export function changesThenApproveReview() {
 // drive the rework-budget-exhausted halt.
 export function alwaysChangesReview() {
   return {
-    markReady: async () => undefined,
+    markReady: async () => {},
     fetchVerdict: async () => ({
       verdict: "changes_requested" as const,
       latest: { state: "changes_requested" as const, reviewer: "reviewer-bot", body: "still wrong" },
@@ -204,7 +204,7 @@ export function alwaysChangesReview() {
 // pending-after-budget halt branch.
 export function pendingReview() {
   return {
-    markReady: async () => undefined,
+    markReady: async () => {},
     fetchVerdict: async () => ({ verdict: "pending" as const }),
   };
 }
@@ -212,7 +212,7 @@ export function pendingReview() {
 // Direct-merge probe whose merge() reports a GitHub-detected conflict (405/409).
 export function conflictMerge() {
   return {
-    applyQueueLabel: async () => undefined,
+    applyQueueLabel: async () => {},
     merge: async () => ({ merged: false, conflict: true, status: 409, message: "merge conflict" }),
   };
 }
@@ -220,7 +220,7 @@ export function conflictMerge() {
 // Direct-merge probe whose merge() neither merges nor conflicts → failed.
 export function failedMerge() {
   return {
-    applyQueueLabel: async () => undefined,
+    applyQueueLabel: async () => {},
     merge: async () => ({ merged: false, conflict: false, status: 500, message: "merge api error" }),
   };
 }
@@ -228,7 +228,7 @@ export function failedMerge() {
 // Direct-merge probe whose merge() succeeds.
 export function mergedMerge() {
   return {
-    applyQueueLabel: async () => undefined,
+    applyQueueLabel: async () => {},
     merge: async () => ({ merged: true, mergeSha: "merge-sha", conflict: false, status: 200, message: "merged" }),
   };
 }
@@ -239,7 +239,7 @@ export function mergedMerge() {
 // the merge stage hands off (no merge call), so the merge probe is never used.
 export function approvingReview() {
   return {
-    markReady: async () => undefined,
+    markReady: async () => {},
     fetchVerdict: async () => ({
       verdict: "approved" as const,
       latest: { state: "approved" as const, reviewer: "reviewer-bot" },
@@ -249,7 +249,7 @@ export function approvingReview() {
 
 export function noopMerge() {
   return {
-    applyQueueLabel: async () => undefined,
+    applyQueueLabel: async () => {},
     merge: async () => ({
       merged: true,
       mergeSha: "merge-sha",
