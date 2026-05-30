@@ -24,19 +24,20 @@ import { CostRecorder } from "../costs/index.js";
 import { codexHomeForRun } from "../credentials/codexMaterializer.js";
 import { type EventName, type EventPayload } from "../events/index.js";
 import { type EventStore, PgEventStore } from "../eventStore.js";
-import { CodexUsageLimitError } from "../providers/codex.js";
 import type { GitHubHttpClient } from "../providers/github.js";
 import { quoteSshShellArg } from "../ssh/command.js";
 import type { UsageProbe } from "../usage/index.js";
-import {
-  bootstrapWorkspace,
-  WorkspaceBootstrapError,
-  runWorkspaceSshCommand,
-  workspaceRepoPathForRun,
-} from "../workspace/index.js";
+import { bootstrapWorkspace, runWorkspaceSshCommand, workspaceRepoPathForRun } from "../workspace/index.js";
 import { pollCiForRun, type PollCiForRunResult } from "./ciPolling.js";
 import { resolveBootstrapCommand, type GateOutcome } from "./gate/index.js";
 import { buildDefaultGate, defaultCodexAdapters, defaultUsageProbe } from "./plannerRunAdapters.js";
+import {
+  buildFinalizeRunState,
+  finalizeMergeOutcome,
+  finalizeNonPass,
+  finalizeWorkflowError,
+  runOutcomeFor,
+} from "./plannerRunFinalize.js";
 import { publishDraftPullRequest, type PublishedDraftPullRequest } from "./githubDraftPr.js";
 import type { PlannerRejectionFeedback } from "./planner/planner.js";
 import {
@@ -85,6 +86,17 @@ export interface PlannerRunAdapterContext {
 export interface RunPlannerLoopInput {
   pool: RunStateClient;
   eventStore?: EventStore;
+  // Plane-split P3: the cost recorder the loop persists cost_records through.
+  // Defaults to an in-process `CostRecorder` over `pool` + `eventStore` (today's
+  // direct DB write). The run worker injects a writer-backed recorder so the cost
+  // INSERT routes through the control-plane endpoint when remote-writes is on.
+  recorder?: CostRecorder;
+  // Plane-split P3: how the workflow finalizes the run (the terminal `UPDATE
+  // runs`). Defaults to the in-process org-scoped UPDATE on `pool`; the worker
+  // injects a writer-backed finalizer so the finalize routes through the
+  // control-plane endpoint when remote-writes is on. Returns nothing — the
+  // workflow does not branch on the finalize result.
+  finalizeRun?: (input: { runId: string; status: string; outcome: string; fromStatuses: string[] }) => Promise<void>;
   allocator: Allocator;
   ssh: SshSubstrate;
   secrets: SecretStore;
@@ -155,7 +167,7 @@ export async function runPlannerLoopWorkflow(input: RunPlannerLoopInput): Promis
   const eventStore = input.eventStore ?? new PgEventStore(input.pool);
   const context = input.context;
   const workspacePath = input.workspacePath ?? workspaceRepoPathForRun(context.runId);
-  const recorder = new CostRecorder(input.pool, eventStore);
+  const recorder = input.recorder ?? new CostRecorder(input.pool, eventStore);
   const appendEvent = async <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string) => {
     await eventStore.append({
       runId: context.runId,
@@ -166,6 +178,10 @@ export async function runPlannerLoopWorkflow(input: RunPlannerLoopInput): Promis
       payload,
     });
   };
+  // Plane-split P3: how the run's terminal status is finalized (remote via the
+  // control-plane endpoint, or the byte-identical in-process UPDATE) — see
+  // {@link buildFinalizeRunState}.
+  const finalizeRunState = buildFinalizeRunState(input, context.runId);
 
   await input.pool.query("UPDATE runs SET status = 'running', started_at = now() WHERE run_id = $1", [context.runId]);
   await supersedeQueuedPlannerTask(input.pool, context.runId);
@@ -259,7 +275,7 @@ export async function runPlannerLoopWorkflow(input: RunPlannerLoopInput): Promis
       });
 
       if (outcome.kind !== "passed") {
-        await finalizeNonPass(input.pool, context.runId, runOutcomeFor(outcome));
+        await finalizeNonPass(finalizeRunState, context.runId, runOutcomeFor(outcome));
         return { runId: context.runId, workspacePath, outcome };
       }
 
@@ -310,7 +326,7 @@ export async function runPlannerLoopWorkflow(input: RunPlannerLoopInput): Promis
       // Pending after the budget, or changes-requested with the rework budget
       // exhausted: halt for operator action (surfaces on the review sub-surface
       // + the recovery surface). No merge.
-      await finalizeNonPass(input.pool, context.runId, "halted");
+      await finalizeNonPass(finalizeRunState, context.runId, "halted");
       return { runId: context.runId, workspacePath, outcome, pullRequest, ci, review };
     }
 
@@ -324,84 +340,20 @@ export async function runPlannerLoopWorkflow(input: RunPlannerLoopInput): Promis
       resolveConflict: input.resolveConflict,
     });
 
-    if (merge.outcome === "conflict") {
-      // A merge conflict is recoverable: halt the run with the conflict surfaced
-      // (merge.conflict already emitted) for the P2B-0008 recovery surface /
-      // future conflict resolver. The spec is not marked done.
-      await finalizeNonPass(input.pool, context.runId, "halted");
-      return { runId: context.runId, workspacePath, outcome, pullRequest, ci, review, merge };
-    }
-    if (merge.outcome === "failed") {
-      await input.pool.query(
-        "UPDATE runs SET status = 'failed', outcome = 'failed', ended_at = now() WHERE run_id = $1",
-        [context.runId],
-      );
-      return { runId: context.runId, workspacePath, outcome, pullRequest, ci, review, merge };
-    }
-
-    // merged / queued / handed_off: the run's job is done. A direct merge marks
-    // the spec merged; a queue/hand-off leaves the merge to Mergify/an operator,
-    // so the spec is review-complete (done) and the merge event records the rest.
-    const specStatus = merge.outcome === "merged" ? "merged" : "done";
-    await input.pool.query("UPDATE specs SET status = $2 WHERE spec_id = $1", [context.specId, specStatus]);
-    await input.pool.query("UPDATE runs SET status = 'done', outcome = 'ok', ended_at = now() WHERE run_id = $1", [
-      context.runId,
-    ]);
+    // Finalize the run for the merge stage's outcome (conflict → recoverable
+    // halt; failed → failed; merged/queued/handed_off → done + spec status).
+    await finalizeMergeOutcome(input, finalizeRunState, context, merge.outcome);
     return { runId: context.runId, workspacePath, outcome, pullRequest, ci, review, merge };
   } catch (error) {
-    if (error instanceof WorkspaceBootstrapError) {
-      // Dependency install failed: the workspace can't build/test, so the run
-      // can't be gated. Surface it as a halting, recoverable outcome (lands on
-      // the P2B-0008 recovery surface) rather than a crash, reusing the
-      // workspace.failed event + the halted run state.
-      await appendEvent("workspace.failed", { workspacePath, message: error.message });
-      await finalizeNonPass(input.pool, context.runId, "halted");
-      throw error;
-    }
-    if (error instanceof CodexUsageLimitError) {
-      // Authenticated but out of quota mid-loop: a recoverable window state,
-      // not a crash (PROJECT_BRIEF §4.3). Record it as such.
-      await finalizeNonPass(input.pool, context.runId, "window_exhausted");
-      await appendEvent("usage.window.pressure", {
-        provider: "openai",
-        slot: "primary",
-        usedPercent: 100,
-        resetsAt: new Date().toISOString(),
-      });
-      throw error;
-    }
-    await input.pool.query(
-      "UPDATE runs SET status = 'failed', outcome = 'failed', ended_at = now() WHERE run_id = $1",
-      [context.runId],
-    );
+    // Finalize the run for the thrown error (recoverable halt for a known
+    // bootstrap/usage-limit fault, else a generic `failed`) + emit its event,
+    // then re-throw so the worker's catch path still fails the job.
+    await finalizeWorkflowError(error, { finalizeRunState, appendEvent, runId: context.runId, workspacePath });
     throw error;
   } finally {
     await input.allocator.release(allocation.runnerId);
     await appendEvent("runner.released", { runnerId: allocation.runnerId });
   }
-}
-
-// Maps a non-pass loop outcome to the persisted run.outcome value. All map to a
-// halted run (no PR); the distinct outcome value preserves WHY it stopped.
-function runOutcomeFor(outcome: SubtaskLoopOutcome): "window_exhausted" | "retry_budget_exhausted" | "halted" {
-  if (outcome.kind === "window_exhausted") {
-    return "window_exhausted";
-  }
-  if (outcome.kind === "retry_budget_exhausted") {
-    return "retry_budget_exhausted";
-  }
-  return "halted";
-}
-
-async function finalizeNonPass(
-  pool: RunStateClient,
-  runId: string,
-  outcome: "window_exhausted" | "retry_budget_exhausted" | "halted",
-): Promise<void> {
-  await pool.query("UPDATE runs SET status = 'halted', outcome = $2, ended_at = now() WHERE run_id = $1", [
-    runId,
-    outcome,
-  ]);
 }
 
 // The spec-run trigger pre-creates a queued 'plan' task + job_queue row for the

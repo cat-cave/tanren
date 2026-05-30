@@ -1,0 +1,151 @@
+// The planner-loop workflow's run-FINALIZE helpers, extracted from
+// `plannerRun.ts` (file-size + complexity caps). All terminal `UPDATE runs`
+// transitions the workflow drives go through {@link FinalizeRunState}.
+//
+// Plane-split P3: `buildFinalizeRunState` returns a closure that — when the
+// worker injects a remote finalizer (`input.finalizeRun`, remote-writes on) —
+// routes the terminal UPDATE through the control-plane endpoint; otherwise it
+// runs the SAME in-process UPDATE the workflow always has (the
+// `directSql`/`directParams` are byte-identical to the prior write, so the
+// default path + its mutation suite are unchanged). The `fromStatuses` guard is
+// what the remote endpoint applies for exactly-once.
+
+import { CodexUsageLimitError } from "../providers/codex.js";
+import type { EventName, EventPayload } from "../events/index.js";
+import { WorkspaceBootstrapError } from "../workspace/index.js";
+import type { MergeForRunResult } from "./reviewMerge/index.js";
+import type { PlannerRunContext, RunPlannerLoopInput } from "./plannerRun.js";
+import type { SubtaskLoopOutcome } from "./subtaskLoop.js";
+
+/** Finalize the run's terminal state, direct (in-process) or remote (control plane). */
+export type FinalizeRunState = (
+  status: string,
+  outcome: string,
+  fromStatuses: string[],
+  directSql: string,
+  directParams: unknown[],
+) => Promise<void>;
+
+/** Build the run's terminal-finalize closure (remote when wired, else in-process). */
+export function buildFinalizeRunState(input: RunPlannerLoopInput, runId: string): FinalizeRunState {
+  return async (status, outcome, fromStatuses, directSql, directParams) => {
+    if (input.finalizeRun !== undefined) {
+      await input.finalizeRun({ runId, status, outcome, fromStatuses });
+      return;
+    }
+    await input.pool.query(directSql, directParams);
+  };
+}
+
+/** Maps a non-pass loop outcome to the persisted run.outcome value (all → halted). */
+export function runOutcomeFor(outcome: SubtaskLoopOutcome): "window_exhausted" | "retry_budget_exhausted" | "halted" {
+  if (outcome.kind === "window_exhausted") {
+    return "window_exhausted";
+  }
+  if (outcome.kind === "retry_budget_exhausted") {
+    return "retry_budget_exhausted";
+  }
+  return "halted";
+}
+
+/** Finalize a non-pass loop outcome to a halted run (distinct outcome preserves WHY). */
+export async function finalizeNonPass(
+  finalizeRunState: FinalizeRunState,
+  runId: string,
+  outcome: "window_exhausted" | "retry_budget_exhausted" | "halted",
+): Promise<void> {
+  await finalizeRunState(
+    "halted",
+    outcome,
+    // A non-pass finalize moves a still-running/queued run to halted; the direct
+    // SQL is byte-identical to the prior unguarded UPDATE (the guard only bites
+    // server-side on the remote path, for exactly-once).
+    ["running", "queued"],
+    "UPDATE runs SET status = 'halted', outcome = $2, ended_at = now() WHERE run_id = $1",
+    [runId, outcome],
+  );
+}
+
+/**
+ * Finalize the run + spec for the merge stage's terminal outcome:
+ *   - conflict → recoverable halt (the conflict event already emitted), spec NOT done;
+ *   - failed → run failed;
+ *   - merged/queued/handed_off → run done/ok; spec `merged` on a direct merge,
+ *     else `done` (the merge is left to Mergify / an operator).
+ * Byte-identical to the inline branches it replaces.
+ */
+export async function finalizeMergeOutcome(
+  input: RunPlannerLoopInput,
+  finalizeRunState: FinalizeRunState,
+  context: PlannerRunContext,
+  outcome: MergeForRunResult["outcome"],
+): Promise<void> {
+  if (outcome === "conflict") {
+    await finalizeNonPass(finalizeRunState, context.runId, "halted");
+    return;
+  }
+  if (outcome === "failed") {
+    await finalizeRunState(
+      "failed",
+      "failed",
+      ["running", "queued"],
+      "UPDATE runs SET status = 'failed', outcome = 'failed', ended_at = now() WHERE run_id = $1",
+      [context.runId],
+    );
+    return;
+  }
+  const specStatus = outcome === "merged" ? "merged" : "done";
+  await input.pool.query("UPDATE specs SET status = $2 WHERE spec_id = $1", [context.specId, specStatus]);
+  await finalizeRunState(
+    "done",
+    "ok",
+    ["running", "queued"],
+    "UPDATE runs SET status = 'done', outcome = 'ok', ended_at = now() WHERE run_id = $1",
+    [context.runId],
+  );
+}
+
+/** The bits the workflow's catch-path error finalizer needs from the run. */
+export interface WorkflowErrorContext {
+  finalizeRunState: FinalizeRunState;
+  appendEvent: <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string) => Promise<void>;
+  runId: string;
+  workspacePath: string;
+}
+
+/**
+ * Finalize the run for a workflow throw + emit its event. A WorkspaceBootstrap
+ * failure or a Codex usage-limit are RECOVERABLE (a halt with a distinct
+ * outcome), not a crash; anything else lands the run `failed`. The caller
+ * re-throws after this so the worker still fails the job.
+ */
+export async function finalizeWorkflowError(error: unknown, ctx: WorkflowErrorContext): Promise<void> {
+  if (error instanceof WorkspaceBootstrapError) {
+    // Dependency install failed: the workspace can't build/test, so the run can't
+    // be gated. Surface it as a halting, recoverable outcome (lands on the
+    // P2B-0008 recovery surface) rather than a crash, reusing the
+    // workspace.failed event + the halted run state.
+    await ctx.appendEvent("workspace.failed", { workspacePath: ctx.workspacePath, message: error.message });
+    await finalizeNonPass(ctx.finalizeRunState, ctx.runId, "halted");
+    return;
+  }
+  if (error instanceof CodexUsageLimitError) {
+    // Authenticated but out of quota mid-loop: a recoverable window state, not a
+    // crash (PROJECT_BRIEF §4.3). Record it as such.
+    await finalizeNonPass(ctx.finalizeRunState, ctx.runId, "window_exhausted");
+    await ctx.appendEvent("usage.window.pressure", {
+      provider: "openai",
+      slot: "primary",
+      usedPercent: 100,
+      resetsAt: new Date().toISOString(),
+    });
+    return;
+  }
+  await ctx.finalizeRunState(
+    "failed",
+    "failed",
+    ["running", "queued"],
+    "UPDATE runs SET status = 'failed', outcome = 'failed', ended_at = now() WHERE run_id = $1",
+    [ctx.runId],
+  );
+}

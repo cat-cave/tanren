@@ -1,13 +1,15 @@
 # SaaS multi-tenancy: RLS + control-plane/data-plane split — plan
 
 **Status: IN PROGRESS.** Refactor 1 (RLS) is **DONE and FULLY ENFORCED** (waves
-R1 → R3b; migration `0030`). Refactor 2 (plane split) is **at P2: the
-run-executor worker is a STANDALONE deployable (P1) that now claims over an
-authenticated mTLS control-plane endpoint (P2 — service identity + the job-claim
-moved off direct DB-CAS to `POST /internal/claim-job`, claim semantics
-unchanged)**; **P3 (route the worker's event/result WRITES through the control
-plane + de-privilege its broad DB/Vault access to per-run creds) is
-OUTSTANDING.** The live conversion checklist is
+R1 → R3b; migration `0030`). Refactor 2 (plane split) is **at P3a: the
+run-executor worker is a STANDALONE deployable (P1) that claims over an
+authenticated mTLS control-plane endpoint (P2 — `POST /internal/claim-job`), and
+can now route its run-state WRITES (event-append, cost-record insert, run
+finalize) through control-plane `/internal/*` write endpoints over the same mTLS
+channel (P3a — the `RunStateWriter` seam behind `TANREN_DATA_PLANE_REMOTE_WRITES=1`,
+default-direct + reversible, exactly-once preserved)**; **P3b (flip the default +
+DROP the data-plane tenant-table write grants + per-run scoped creds / Vault
+de-privilege) is OUTSTANDING.** The live conversion checklist is
 `docs/roadmap/R-WAVES.md` (RLS R-waves + plane-split P-waves). These are the two
 big multi-tenant refactors deliberately deferred from the expansion work.
 
@@ -144,10 +146,25 @@ already a DB-less BFF. So the seam to formalize is **orchestrator API (control)
   de-privilege is P3). Proven by `tests/internalClaimEndpoint.test.ts` (authn
   reject + claim-once-under-contention) + the mTLS-extended
   `smoke-plane-split-worker`.
-- **P3 — de-privilege the data plane. OUTSTANDING.** Route the worker's
-  event/result WRITES through the control plane (P2 moved only the CLAIM);
-  per-run scoped credentials; remove broad DB + Vault access from the data plane
-  entirely.
+- **P3a — control-plane WRITE endpoints + the `RunStateWriter` seam. DONE
+  (flagged).** The worker's run-state WRITES — event-append, cost-record insert,
+  run finalize (`failed`/`halted`/`done`) — can now route through control-plane
+  `/internal/{append-event,record-cost,finalize-run}` endpoints over the SAME P2
+  mTLS channel: each authn's the peer FIRST, then performs the SAME org-scoped
+  write server-side (reusing `PgEventStore`/`CostRecorder` under
+  `runWithOrgScope`), so a compromised runner can't write the control DB. A
+  `RunStateWriter` seam (`DirectRunStateWriter` in-process — the DEFAULT — vs
+  `HttpRunStateWriter` remote) picks via `TANREN_DATA_PLANE_REMOTE_WRITES=1`;
+  **DIRECT stays the default so P3a is REVERSIBLE** and behavior-identical
+  (exactly-once preserved — the finalize endpoint applies the same guard). Proven
+  by `tests/planeSplitP3RemoteWrites.integration.test.ts` (real PG, enforced RLS)
+  - the remote-writes-extended `smoke-plane-split-worker`.
+- **P3b — flip the default + DROP the data-plane write grants / Vault.
+  OUTSTANDING.** Flip remote-writes on by default + drop the tenant-table
+  `INSERT`/`UPDATE` grants from a write-NONE data-plane DB role (a future
+  migration); per-run scoped credentials (move the `GithubAppTokenMinter` cache
+  to the control plane); remove Vault root / broad secret access from the data
+  plane entirely.
 
 **Risks:** moving job-claim atomicity from DB `SKIP LOCKED` to an API (need to
 preserve exactly-once claim); event throughput/latency vs the current direct
