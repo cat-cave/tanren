@@ -36,12 +36,31 @@ export class WorkerPool {
   runStatus: { status: string; outcome: string | null } = { status: "queued", outcome: null };
   specStatus = "pending";
   prUrl: string | null = null;
+  // Test-support for the org-scoping mutants (runExecutor org-scope establishment
+  // + finalize): when set, the run⋈spec⋈project read echoes this org on the
+  // project row, so a job carrying the same org drives the real
+  // `runWithOrgScope` / `runWithJobOrgId` / `orgScopingPool` code paths. When
+  // `orgVisibleRunIds` is non-null, the `establishJobOrgContext` reachability
+  // SELECT (`... AND org_id = $2`) only returns a row for a listed run — so a
+  // run absent from it surfaces the JobOrgContextLostError branch.
+  forcedProjectOrgId: string | null = null;
+  orgVisibleRunIds: Set<string> | null = null;
+  // Records the eventType (params[3]) of every event PgEventStore writes through
+  // the pool, so the finalize-path event emission is observable without a real
+  // DB. The single-event-writer architecture check ignores this router (the
+  // INSERT is matched via regex, not a literal).
+  readonly eventTypes: string[] = [];
   private readonly projects = new Map<string, ProjectRow>();
   private readonly specs = new Map<string, SpecRow>();
   private readonly runs = new Map<string, RunRow>();
   private readonly costRows: Array<{ id: string; total_tokens: number }> = [];
   private nextCostId = 1;
   private ciTask: { taskId: string; attempt: number } | undefined;
+
+  /** Seed a cost row so the post-run accrual read (`getRunUsage`) returns usage. */
+  seedCostRow(totalTokens: number): void {
+    this.costRows.push({ id: String(this.nextCostId++), total_tokens: totalTokens });
+  }
 
   async query(sql: string, params: unknown[] = []): Promise<{ rows: unknown[]; rowCount: number }> {
     const trimmed = sql.trim();
@@ -114,7 +133,9 @@ export class WorkerPool {
         default_branch: project.default_branch,
         runner_image: project.runner_image,
         config: project.config,
-        org_id: project.org_id,
+        // A test that forces an org echoes it here, so the claimed job's org
+        // matches the run's resolved org and the org-scoped paths engage.
+        org_id: this.forcedProjectOrgId ?? project.org_id,
         title: spec.title,
         description: spec.description,
         acceptance_criteria: spec.acceptance_criteria,
@@ -124,10 +145,15 @@ export class WorkerPool {
       return single({ config: {} });
     }
     // RLS wave R1: the worker's establishJobOrgContext confirms the claimed run
-    // is reachable under its org GUC. Visible when the run exists with that org.
+    // is reachable under its org GUC. Visible when the run exists with that org;
+    // when `orgVisibleRunIds` is set a test can hide a run to force the
+    // JobOrgContextLostError branch (the run is not reachable under its org).
     if (trimmed.startsWith("SELECT 1 FROM runs WHERE run_id = $1 AND org_id = $2")) {
-      const run = this.runs.get(String(params[0]));
-      return single(run !== undefined ? { ok: 1 } : undefined);
+      const runId = String(params[0]);
+      if (this.orgVisibleRunIds !== null) {
+        return single(this.orgVisibleRunIds.has(runId) ? { ok: 1 } : undefined);
+      }
+      return single(this.runs.get(runId) !== undefined ? { ok: 1 } : undefined);
     }
     if (trimmed.startsWith("INSERT INTO runs")) {
       this.runs.set(String(params[0]), {
@@ -143,8 +169,11 @@ export class WorkerPool {
     }
     // Event-store inserts (PgEventStore writes through the real pool). Matched
     // via regex rather than a string literal so the single-event-writer
-    // architecture check does not flag this in-memory fake pool router.
+    // architecture check does not flag this in-memory fake pool router. The
+    // event_type ($5 → params[4]) is recorded so finalize-path emission is
+    // observable without a real DB.
     if (/^INSERT\s+INTO\s+events/.test(trimmed)) {
+      this.eventTypes.push(String(params[4] ?? ""));
       return { rows: [{ id: "1" }], rowCount: 1 };
     }
     // spec status transitions (claim 'active', finalize 'done')
@@ -160,6 +189,13 @@ export class WorkerPool {
     if (trimmed.startsWith("UPDATE specs SET status = $2")) {
       this.specStatus = String(params[1]);
       return { rows: [], rowCount: 1 };
+    }
+    // Post-run accrual: getRunUsage SUMs the run's cost_records. The accrual
+    // path (`accrueRunUsage`) feeds these totals to the quota policy, so a test
+    // that seeds a cost row can assert the policy accrued the run's real usage.
+    if (/SUM\(total_tokens\)[\s\S]*FROM cost_records/.test(trimmed)) {
+      const tokens = this.costRows.reduce((sum, r) => sum + r.total_tokens, 0);
+      return single({ runs: tokens, tokens, cost_usd: tokens === 0 ? 0 : 1.5 });
     }
     // cost_records reconcile path
     if (trimmed.startsWith("SELECT id, total_tokens FROM cost_records")) {
@@ -228,10 +264,18 @@ export class WorkerPool {
       return { rows: [], rowCount: 1 };
     }
     if (trimmed.startsWith("UPDATE runs SET status = 'halted'")) {
-      // Worker recoverable-finalize is guarded by a status filter + RETURNING.
+      // The worker's two failure-path finalizers both start here + carry a
+      // RETURNING clause. They differ in (a) the `outcome` literal they set
+      // (`halted` for the recoverable finalize, `quota_exceeded` for the deny
+      // path) and (b) their `status IN (...)` guard. Honor BOTH from the SQL so
+      // each finalizer's effect is observed distinctly (else a mutant that
+      // swaps the literal would survive).
       if (trimmed.includes("RETURNING")) {
-        if (["running", "queued", "failed"].includes(this.runStatus.status)) {
-          this.runStatus = { status: "halted", outcome: "halted" };
+        const outcomeMatch = /outcome = '([a-z_]+)'/.exec(trimmed);
+        const finalizeOutcome = outcomeMatch?.[1] ?? "halted";
+        const allowed = [...trimmed.matchAll(/'(running|queued|failed)'/g)].map((m) => m[1]);
+        if (allowed.includes(this.runStatus.status)) {
+          this.runStatus = { status: "halted", outcome: finalizeOutcome };
           const run = this.runs.get(String(params[0]));
           return {
             rows: [

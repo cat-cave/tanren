@@ -3,26 +3,31 @@ const config = {
   plugins: ["@stryker-mutator/vitest-runner"],
   vitest: { configFile: "vitest.stryker.config.ts", related: false },
   coverageAnalysis: "all",
-  // Run executor / worker cluster — REFACTOR-TARGET baseline. This is the
-  // run-execution data plane (the worker that claims a queued run job, builds
+  // Run executor / worker cluster — REFACTOR-TARGET, now STRENGTHENED. This is
+  // the run-execution data plane (the worker that claims a queued run job, builds
   // the execution context, drives the workflow loop, and reaps expired leases),
   // slated for the control-plane/data-plane split + the eventual native/Rust
-  // harness, so a baseline is captured BEFORE refactoring. Disjoint from the
-  // run-loop cluster (stryker.runloop.mjs covers engine/workflow/**, not
-  // engine/worker/**). DB-free coverage comes from workerBoot.test.ts (boot /
-  // RunWorker lifecycle against a stub pool), jobReaper.test.ts (lease requeue /
-  // dead-letter), and acceptanceHardTier.test.ts (executeNextPlanJob end-to-end).
+  // harness, so full mutation confidence is captured BEFORE refactoring. Disjoint
+  // from the run-loop cluster (stryker.runloop.mjs covers engine/workflow/**, not
+  // engine/worker/**). Behavior coverage: workerBoot.test.ts (boot / identity
+  // seeding / RunWorker drain), workerLifecycle.test.ts (startRunWorker concurrency
+  // + dep wiring), claimClientFromEnv.test.ts (the P2 claim seam), jobReaper.test.ts
+  // (requeue / dead-letter / loop), runExecutionContext.test.ts (context hydration),
+  // and runExecutor.test.ts + runWorker.test.ts (claim→execute, org-scope, quota
+  // gate/accrual, finalize, exit-reason classification, slot lifecycle).
   mutate: ["services/orchestrator/src/engine/worker/**/*.ts"],
   reporters: ["clear-text"],
-  // Baseline (FIRST MEASUREMENT — refactor-target). Measured on this branch:
-  // 38.25% (159 killed + 7 timeout of 434 mutants; per-file: runExecutor 44.71,
-  // runExecutionContext 41.67, jobReaper 40.86, runWorker 38.46, boot 25.00,
-  // lifecycle 18.00). `break` is set just below the measured score so the run
-  // passes today and any regression below the floor fails. This is a baseline,
-  // not a strengthening pass: production source is unchanged here. Many survivors
-  // are in DB-bound branches (claim/lease/lineage SQL, pool wiring) only the
-  // RLS_DB-gated integration suite drives; the weekly run surfaces the rest.
-  thresholds: { high: 80, low: 60, break: 36 },
+  // Strengthening pass (behavior-based tests only; production source unchanged).
+  // Baseline was 38.25% (first measurement); re-measured on this branch's tip at
+  // 36.00% before the pass. After: 70.95% (324 killed + 13 timeout of 475; per
+  // file: claimClientFromEnv 96.15, runExecutionContext 87.50, runWorker 81.54,
+  // boot 73.17, jobReaper 68.82, runExecutor 68.02, lifecycle 50.00). `break` is
+  // set just below the measured score so the run passes today and any regression
+  // below the floor fails. Remaining survivors are genuine equivalents (the
+  // SIGTERM/SIGINT signal-handler wiring calls process.exit, untestable without
+  // killing the runner) or DB-bound SQL branches only the RLS_DB-gated suite
+  // drives; the weekly full run surfaces the rest.
+  thresholds: { high: 80, low: 60, break: 69 },
   logLevel: "warn",
   tempDirName: "reports/mutation/.stryker-tmp-worker",
   concurrency: 4,
