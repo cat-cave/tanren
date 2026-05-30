@@ -72,7 +72,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        cluster: [repos, worker, dal, inbox]
+        cluster: [repos, worker, dal, inbox, auth]
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
     steps:
