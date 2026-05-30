@@ -11,6 +11,7 @@ import type pg from "pg";
 import type { Allocator } from "../contracts/allocator.js";
 import type { JobClaimClient } from "../contracts/jobClaim.js";
 import { PgJobQueue } from "../contracts/jobQueue.js";
+import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { SshSubstrate } from "../contracts/sshSubstrate.js";
 import type { GitHubHttpClient } from "../providers/github.js";
@@ -47,6 +48,12 @@ export interface StartRunWorkerInput {
   // `worker` container passes an `HttpJobClaimClient` that claims over the mTLS
   // control-plane endpoint.
   claimClient?: JobClaimClient;
+  // Plane-split P3: how the worker WRITES the run's tenant state. Omit (the
+  // DEFAULT) for today's in-process org-scoped DB writes; the cross-process
+  // `worker` container passes an `HttpRunStateWriter` (under
+  // TANREN_DATA_PLANE_REMOTE_WRITES=1) that routes writes through the
+  // control-plane endpoints over mTLS.
+  runStateWriter?: RunStateWriter;
   options?: RunWorkerOptions;
 }
 
@@ -79,6 +86,7 @@ export function startRunWorker(input: StartRunWorkerInput): StartedRunWorker {
       identitySecretRef: input.identitySecretRef,
       ...(input.quotaPolicy === undefined ? {} : { quotaPolicy: input.quotaPolicy }),
       ...(input.claimClient === undefined ? {} : { claimClient: input.claimClient }),
+      ...(input.runStateWriter === undefined ? {} : { runStateWriter: input.runStateWriter }),
     },
     { concurrency: workerConcurrencyFromEnv(), ...input.options },
   );

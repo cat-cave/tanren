@@ -15,6 +15,7 @@ import { TimedGitHubHttpClient, TimedSshSubstrate } from "../observability/index
 import { FetchGitHubHttpClient } from "../providers/github.js";
 import { Ssh2Substrate } from "../ssh/index.js";
 import { buildClaimClientFromEnv } from "./claimClientFromEnv.js";
+import { buildRunStateWriterFromEnv } from "./runStateWriterFromEnv.js";
 import type { JobReaper } from "./jobReaper.js";
 import type { RunWorker } from "./runWorker.js";
 import { startRunWorker } from "./lifecycle.js";
@@ -61,6 +62,15 @@ export async function bootRunWorker(): Promise<BootedRunWorker> {
       ? "[run-worker] claiming via direct DB-CAS (no control-plane endpoint configured)"
       : "[run-worker] claiming via the mTLS control-plane endpoint (plane-split P2)",
   );
+  // Plane-split P3: when TANREN_DATA_PLANE_REMOTE_WRITES=1 (+ endpoint + certs),
+  // route the worker's run-state WRITES through the control plane over mTLS; else
+  // the worker writes the tenant tables directly (the default, reversible).
+  const runStateWriter = buildRunStateWriterFromEnv();
+  console.log(
+    runStateWriter === undefined
+      ? "[run-worker] writing run state via direct in-process DB writes (remote-writes off)"
+      : "[run-worker] writing run state via the mTLS control-plane endpoints (plane-split P3)",
+  );
   const { worker, reaper } = startRunWorker({
     pool,
     allocator: buildAllocatorFromEnv(pool),
@@ -71,6 +81,7 @@ export async function bootRunWorker(): Promise<BootedRunWorker> {
     githubHttp: new TimedGitHubHttpClient(new FetchGitHubHttpClient()),
     identitySecretRef,
     ...(claimClient === undefined ? {} : { claimClient }),
+    ...(runStateWriter === undefined ? {} : { runStateWriter }),
   });
   const stop = async (): Promise<void> => {
     await Promise.all([worker.stop(), reaper.stop()]);

@@ -37,6 +37,17 @@
 // We ALSO confirm the data plane is RLS-gated: the run row is readable under the
 // run's org scope on the `tanren_app` role but DENIED under an empty scope
 // (deny-by-default) — proving the worker container runs under enforced RLS.
+//
+// Plane-split P3 adds a DIRECT proof of the control-plane WRITE endpoints
+// (`proveMtlsWriteEndpoints`): the smoke acts as a data-plane client and (a)
+// without a cert is rejected at TLS on a write endpoint, and (b) with the worker
+// cert finalizes a seeded run + appends its event over mTLS — the rows landing
+// server-side under enforced RLS, with a retried finalize a no-op (exactly-once).
+// When the `worker` container is run with TANREN_DATA_PLANE_REMOTE_WRITES=1, the
+// cross-process run below ALSO finalizes via these endpoints (the worker writes
+// no tenant tables directly); its terminal-state assertion then proves the
+// remote-write path end-to-end. See docs/roadmap/saas-rls-and-plane-split-plan.md
+// (plane-split P3).
 
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -201,13 +212,13 @@ interface ClaimAttempt {
   body: string;
 }
 
-// POST /internal/claim-job over mTLS. `withClientCert=false` presents NO client
+// POST an internal endpoint over mTLS. `withClientCert=false` presents NO client
 // cert, so the server's rejectUnauthorized tears down the handshake (authn
 // closed). Returns the HTTP status + body, or `tls_rejected` on a handshake error.
-function claimOverMtls(claimRunId: string, withClientCert: boolean): Promise<ClaimAttempt> {
+function postOverMtls(path: string, payload: unknown, withClientCert: boolean): Promise<ClaimAttempt> {
   const ca = readFileSync(`${MTLS_DIR}/ca.crt`);
-  const target = new URL("/internal/claim-job", CLAIM_ENDPOINT);
-  const body = JSON.stringify({ taskKind: MTLS_PROBE_KIND, runId: claimRunId });
+  const target = new URL(path, CLAIM_ENDPOINT);
+  const body = JSON.stringify(payload);
   return new Promise<ClaimAttempt>((resolve, reject) => {
     const req = httpsRequest(
       {
@@ -244,6 +255,10 @@ function claimOverMtls(claimRunId: string, withClientCert: boolean): Promise<Cla
   });
 }
 
+function claimOverMtls(claimRunId: string, withClientCert: boolean): Promise<ClaimAttempt> {
+  return postOverMtls("/internal/claim-job", { taskKind: MTLS_PROBE_KIND, runId: claimRunId }, withClientCert);
+}
+
 // Prove the control-plane mTLS claim endpoint directly: (1) a NO-cert caller is
 // rejected at TLS, (2) the worker's client cert claims the seeded job + gets its
 // org_id back. The claim is the SAME atomic CAS, only over mTLS.
@@ -274,6 +289,115 @@ async function proveMtlsClaimEndpoint(): Promise<void> {
   );
 }
 
+// Plane-split P3: a run the smoke finalizes DIRECTLY over the mTLS write
+// endpoints (distinct run_id so it never races the worker container).
+const writeRunId = `run_${randomUUID()}`;
+
+async function seedWriteProbeRun(): Promise<void> {
+  const owner = createDbPool(OWNER_URL);
+  try {
+    await owner.query(
+      `INSERT INTO runs (run_id, spec_id, project_id, org_id, trigger, branch, status)
+       VALUES ($1, $2, $3, $4, 'cli', 'tanren/planesplit-p3-write', 'running')`,
+      [writeRunId, specId, projectId, orgId],
+    );
+  } finally {
+    await owner.end();
+  }
+}
+
+// Read the write-probe run's terminal status + the run.failed event count via the
+// OWNER connection (job_queue/owner reads bypass RLS), to confirm the endpoint's
+// server-side org-scoped write landed.
+async function readWriteProbeRun(): Promise<{ status: string | undefined; events: number }> {
+  const owner = createDbPool(OWNER_URL);
+  try {
+    const run = await owner.query<{ status: string }>("SELECT status FROM runs WHERE run_id = $1", [writeRunId]);
+    const ev = await owner.query<{ n: string }>(
+      "SELECT count(*)::text AS n FROM events WHERE run_id = $1 AND event_type = 'run.failed'",
+      [writeRunId],
+    );
+    return { status: run.rows[0]?.status, events: Number(ev.rows[0]?.n ?? "0") };
+  } finally {
+    await owner.end();
+  }
+}
+
+// Prove the control-plane mTLS WRITE endpoints directly (P3): (1) a NO-cert caller
+// is rejected at TLS on a write endpoint; (2) the worker's client cert finalizes a
+// seeded run + appends its run.failed event over mTLS, and the rows LAND under the
+// control plane's enforced-RLS org scope — server-side, so the data plane wrote
+// nothing directly. A retried finalize is a no-op (exactly-once).
+async function proveMtlsWriteEndpoints(): Promise<void> {
+  await seedWriteProbeRun();
+  process.stdout.write(`[plane-split-smoke] seeded write-probe run ${writeRunId}; probing /internal/finalize-run…\n`);
+
+  const noCert = await postOverMtls(
+    "/internal/finalize-run",
+    { runId: writeRunId, orgId, status: "halted", outcome: "halted", fromStatuses: ["running", "queued"] },
+    false,
+  );
+  if (noCert.status !== "tls_rejected" && noCert.status !== 401) {
+    throw new Error(`P3 write authn NOT enforced: no-cert finalize got ${String(noCert.status)} (expected reject)`);
+  }
+  process.stdout.write(`[plane-split-smoke] authn closed: no-cert write rejected (${String(noCert.status)})\n`);
+
+  const finalize = await postOverMtls(
+    "/internal/finalize-run",
+    { runId: writeRunId, orgId, status: "halted", outcome: "halted", fromStatuses: ["running", "queued"] },
+    true,
+  );
+  if (finalize.status !== 200) {
+    throw new Error(`P3 finalize-run failed: trusted caller got ${String(finalize.status)} — ${finalize.body}`);
+  }
+  const finalized = JSON.parse(finalize.body) as { updated: boolean; specId?: string };
+  if (!finalized.updated || finalized.specId !== specId) {
+    throw new Error(`P3 finalize-run did not move the run: ${finalize.body}`);
+  }
+
+  const event = await postOverMtls(
+    "/internal/append-event",
+    {
+      runId: writeRunId,
+      specId,
+      projectId,
+      orgId,
+      eventType: "run.failed",
+      payload: { status: "halted", message: "plane-split P3 write-endpoint proof" },
+    },
+    true,
+  );
+  if (event.status !== 204) {
+    throw new Error(`P3 append-event failed: trusted caller got ${String(event.status)} — ${event.body}`);
+  }
+
+  // Exactly-once: a retried finalize matches no row now (the run is halted), so
+  // it is a no-op — proving a retry never double-finalizes.
+  const retry = await postOverMtls(
+    "/internal/finalize-run",
+    { runId: writeRunId, orgId, status: "halted", outcome: "halted", fromStatuses: ["running", "queued"] },
+    true,
+  );
+  const retryResult = JSON.parse(retry.body) as { updated: boolean };
+  if (retry.status !== 200 || retryResult.updated !== false) {
+    throw new Error(`P3 finalize-run is NOT exactly-once: a retry re-finalized (${retry.body})`);
+  }
+
+  const persisted = await readWriteProbeRun();
+  if (persisted.status !== "halted") {
+    throw new Error(`P3 write did not land: run ${writeRunId} status=${String(persisted.status)} (expected halted)`);
+  }
+  if (persisted.events < 1) {
+    throw new Error(`P3 append-event did not land: 0 run.failed events for ${writeRunId}`);
+  }
+  process.stdout.write(
+    `[plane-split-smoke] PROOF (P3): the trusted worker cert finalized ${writeRunId} + appended its event over ` +
+      `mTLS via /internal/finalize-run + /internal/append-event — rows landed server-side under enforced RLS ` +
+      `(status=${persisted.status}, run.failed events=${persisted.events}); a retried finalize was a no-op ` +
+      `(exactly-once). The data plane wrote NO tenant tables directly.\n`,
+  );
+}
+
 // The worker has finished with the job once it leaves `queued`/`claimed`/`running`.
 const QUEUE_TERMINAL = new Set(["done", "failed", "cancelled", "dead_letter"]);
 
@@ -289,6 +413,11 @@ async function main(): Promise<void> {
   // (authn-closed + a trusted claim that threads org_id) on its OWN seeded job,
   // claimed by run_id so it never races the worker container's job above.
   await proveMtlsClaimEndpoint();
+
+  // Plane-split P3: prove the control-plane mTLS WRITE endpoints directly
+  // (authn-closed + a trusted finalize/append that lands rows server-side under
+  // enforced RLS, exactly-once) on its OWN seeded run.
+  await proveMtlsWriteEndpoints();
 
   const owner = createDbPool(OWNER_URL);
   const deadline = Date.now() + TIMEOUT_MS;

@@ -168,6 +168,13 @@ services:
       TANREN_DATA_PLANE_TLS_CERT: ${TANREN_DATA_PLANE_TLS_CERT:-}
       TANREN_DATA_PLANE_TLS_KEY: ${TANREN_DATA_PLANE_TLS_KEY:-}
       TANREN_DATA_PLANE_TLS_CA: ${TANREN_DATA_PLANE_TLS_CA:-}
+      # Plane-split P3a: route the worker's run-state WRITES (event-append,
+      # cost-record insert, run finalize) through the control-plane `/internal/*`
+      # write endpoints over the same mTLS channel, so the data plane writes no
+      # tenant tables directly. Default OFF (in-process direct writes) — set to 1
+      # to enable. P3b flips this on by default + drops the data-plane DB write
+      # grants. See docs/roadmap/saas-rls-and-plane-split-plan.md (P3a/P3b).
+      TANREN_DATA_PLANE_REMOTE_WRITES: ${TANREN_DATA_PLANE_REMOTE_WRITES:-}
     depends_on:
       postgres:
         condition: service_healthy

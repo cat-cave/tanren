@@ -23,11 +23,13 @@ import { orgScopingPool } from "../data/orgScopedDb.js";
 import type { Allocator } from "../contracts/allocator.js";
 import { DirectJobClaimClient, type JobClaimClient } from "../contracts/jobClaim.js";
 import type { JobQueue } from "../contracts/jobQueue.js";
+import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { SshSubstrate } from "../contracts/sshSubstrate.js";
 import type { EscapeHatches } from "../config/index.js";
-import { PgEventStore } from "../eventStore.js";
+import { CostRecorder } from "../costs/recorder.js";
 import type { GitHubHttpClient } from "../providers/github.js";
+import { finalizeRunQuotaExceeded, finalizeRunRecoverable } from "./runFinalize.js";
 import { loadRunExecutionContext, type RunExecutionContext } from "./runExecutionContext.js";
 import { runPlannerLoopWorkflow, type PlannerRunResult, type RunPlannerLoopInput } from "../workflow/plannerRun.js";
 import { NoopQuotaPolicy, SINGLE_RUN_REQUEST, getRunUsage, type QuotaPolicy } from "../quota/index.js";
@@ -64,6 +66,17 @@ export interface RunExecutorDeps {
   // the queue surface (fail/complete/heartbeat) still uses `jobQueue` — P2 moves
   // only the CLAIM; routing the WRITES through the control plane is P3.
   claimClient?: JobClaimClient;
+  // Plane-split P3: how this worker WRITES the run's tenant state — event-append,
+  // cost-record insert, and run finalize. Omit (the DEFAULT) → the worker does
+  // today's in-process org-scoped DB writes directly (the `DirectRunStateWriter`
+  // path, lower risk, behavior-identical). Set to an `HttpRunStateWriter` (when
+  // TANREN_DATA_PLANE_REMOTE_WRITES=1) → those writes route through the
+  // control-plane `/internal/*` write endpoints over mTLS, so the data plane
+  // writes no tenant tables directly. Keeping DIRECT the default makes P3
+  // REVERSIBLE: nothing changes unless the flag is set. A legacy/unscoped run
+  // (org_id NULL) ALWAYS uses the direct path — it has no org to scope a remote
+  // write to.
+  runStateWriter?: RunStateWriter;
   allocator: Allocator;
   ssh: SshSubstrate;
   secrets: SecretStore;
@@ -187,7 +200,7 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
       );
       if (!decision.admit) {
         const reason = decision.reason ?? "quota exceeded";
-        await finalizeRunQuotaExceeded(deps.pool, runId, reason, decision.windowKey, orgId);
+        await finalizeRunQuotaExceeded(deps.pool, deps.runStateWriter, runId, reason, decision.windowKey, orgId);
         await deps.jobQueue.complete(job.id);
         return { kind: "quota_denied", jobId: job.id, runId, reason };
       }
@@ -204,9 +217,26 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
     // its OWN short org-scoped txn from that org-id, so a connection is held only
     // for one DB op, never across I/O. A legacy/unscoped run (org_id NULL) sets
     // no org-id and the proxy is behavior-identical to the bare pool (inert).
+    // Plane-split P3: when a remote run-state writer is wired AND the run has an
+    // org (so server-side scoping is possible), route the workflow's tenant
+    // run-state writes — events, cost_records, the terminal run finalize —
+    // through it (the control-plane endpoints). Otherwise inject nothing: the
+    // workflow uses its own in-process org-scoped stores over `orgScopingPool`,
+    // BYTE-IDENTICAL to the pre-P3 direct path (and its mutation suite).
+    const remoteWriter = orgId !== null ? deps.runStateWriter : undefined;
+    const remoteWorkflowSeams =
+      remoteWriter === undefined || orgId === null
+        ? {}
+        : {
+            eventStore: remoteWriter,
+            recorder: new CostRecorder(deps.pool, remoteWriter, (cost) => remoteWriter.recordCost(cost)),
+            finalizeRun: (f: { runId: string; status: string; outcome: string; fromStatuses: string[] }) =>
+              remoteWriter.finalizeRun({ ...f, orgId }).then(() => undefined),
+          };
     const result = await withJobOrg(orgId, () =>
       runWorkflow({
         pool: orgId !== null ? orgScopingPool(deps.pool) : deps.pool,
+        ...remoteWorkflowSeams,
         allocator: deps.allocator,
         ssh: deps.ssh,
         secrets: deps.secrets,
@@ -229,7 +259,7 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
   } catch (error) {
     const failure = { kind: failureKind(error), message: messageOf(error) };
     await deps.jobQueue.fail(job.id, failure);
-    await finalizeRunRecoverable(deps.pool, runId, failure.message, resolvedOrgId);
+    await finalizeRunRecoverable(deps.pool, deps.runStateWriter, runId, failure.message, resolvedOrgId);
     return { kind: "failed", jobId: job.id, runId, failure };
   } finally {
     await stopHeartbeat();
@@ -329,107 +359,6 @@ function startHeartbeat(deps: RunExecutorDeps, jobId: string, leaseMs: number): 
     }
     await control.inFlight;
   };
-}
-
-/**
- * Force a run that a failed workflow left in a non-recoverable terminal state
- * (`failed`) or still `running` (crash) into a recoverable `halted` outcome so
- * it lands on the recovery surface (`RECOVERABLE_OUTCOMES`). A run the workflow
- * already finalized as recoverable (halted / window_exhausted /
- * retry_budget_exhausted) or terminal-good (`done`) is left untouched.
- */
-async function finalizeRunRecoverable(
-  pool: pg.Pool,
-  runId: string,
-  message: string,
-  orgId: string | null,
-): Promise<void> {
-  // RLS R2 cohort-3 (worker failure-path finalizer): when the run's org is known
-  // (resolved from its execution context), run the finalize UPDATE + the
-  // run.failed event in ONE org-scoped transaction so both writes carry org
-  // context (`SET LOCAL app.current_org_id = <orgId>`). The catch path previously
-  // ran with NO ambient scope; this establishes one. A legacy/unscoped run
-  // (org_id NULL) — or a context load that itself failed — falls back to the pool,
-  // the pre-cohort-3 behavior. Inert in R1; RLS-correct in R3.
-  await withRunFinalizeScope(pool, orgId, async (client) => {
-    const updated = await client.query(
-      "UPDATE runs SET status = 'halted', outcome = 'halted', ended_at = now() WHERE run_id = $1 AND status IN ('running', 'queued', 'failed') RETURNING run_id, spec_id, project_id",
-      [runId],
-    );
-    const row = updated.rows[0] as { spec_id?: unknown; project_id?: unknown } | undefined;
-    if (row !== undefined) {
-      // Mirror the workflow's recoverable-finalize: emit run.failed so the
-      // timeline/notifications surface the worker-level failure. Best-effort —
-      // never let an event write mask the original error path. PgEventStore is
-      // handed the in-scope client so its INSERT joins this transaction.
-      await new PgEventStore(client)
-        .append({
-          runId,
-          specId: String(row.spec_id ?? ""),
-          projectId: String(row.project_id ?? ""),
-          eventType: "run.failed",
-          payload: { status: "halted", message },
-        })
-        .catch(() => undefined);
-    }
-  });
-}
-
-/**
- * Finalize a denied run into the recoverable `quota_exceeded` terminal state
- * and emit `run.quota_exceeded` so it surfaces on the P2B-0008 recovery surface
- * + the hosting layer's billing/upgrade UX. Mirrors `finalizeRunRecoverable`'s
- * best-effort event append (an event-write blip never masks the deny path).
- */
-async function finalizeRunQuotaExceeded(
-  pool: pg.Pool,
-  runId: string,
-  reason: string,
-  windowKey: string | undefined,
-  orgId: string | null,
-): Promise<void> {
-  // RLS R2 cohort-3 (worker failure-path finalizer): the deny path's finalize
-  // UPDATE + run.quota_exceeded event run in one org-scoped transaction when the
-  // org is known (the gate's call site always has it). Mirrors
-  // `finalizeRunRecoverable`'s scoping + best-effort event append.
-  await withRunFinalizeScope(pool, orgId, async (client) => {
-    const updated = await client.query(
-      "UPDATE runs SET status = 'halted', outcome = 'quota_exceeded', ended_at = now() WHERE run_id = $1 AND status IN ('running', 'queued') RETURNING spec_id, project_id",
-      [runId],
-    );
-    const row = updated.rows[0] as { spec_id?: unknown; project_id?: unknown } | undefined;
-    if (row !== undefined) {
-      await new PgEventStore(client)
-        .append({
-          runId,
-          specId: String(row.spec_id ?? ""),
-          projectId: String(row.project_id ?? ""),
-          eventType: "run.quota_exceeded",
-          payload: windowKey === undefined ? { reason } : { reason, windowKey },
-        })
-        .catch(() => undefined);
-    }
-  });
-}
-
-/**
- * Run a run-finalize body (UPDATE + best-effort event append) under the run's
- * org scope when the org is known, else on the pool (the pre-cohort-3 fallback).
- * Centralizes the org-scoping the two worker failure-path finalizers share: a
- * known org opens a `SET LOCAL app.current_org_id = <org>` transaction and hands
- * the body the scoped client; a null org hands it the pool verbatim so behavior
- * is identical to before the cohort.
- */
-async function withRunFinalizeScope(
-  pool: pg.Pool,
-  orgId: string | null,
-  body: (client: pg.Pool | pg.PoolClient) => Promise<void>,
-): Promise<void> {
-  if (orgId === null) {
-    await body(pool);
-    return;
-  }
-  await runWithOrgScope(pool, orgId, (client) => body(client));
 }
 
 /**

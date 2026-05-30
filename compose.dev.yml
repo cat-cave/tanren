@@ -156,6 +156,15 @@ services:
       TANREN_DATA_PLANE_TLS_CERT: /etc/tanren/mtls/worker.crt
       TANREN_DATA_PLANE_TLS_KEY: /etc/tanren/mtls/worker.key
       TANREN_DATA_PLANE_TLS_CA: /etc/tanren/mtls/ca.crt
+      # Plane-split P3: opt-in (default OFF) routing of the worker's run-state
+      # WRITES — event-append, cost-record insert, run finalize — through the
+      # control-plane `/internal/*` write endpoints over the SAME mTLS channel,
+      # so the data plane writes NO tenant tables directly. The write endpoint
+      # shares the claim host (TANREN_CLAIM_ENDPOINT_URL) by default. The smoke
+      # sets TANREN_DATA_PLANE_REMOTE_WRITES=1 to prove the remote-write path
+      # end-to-end under enforced RLS; leaving it unset keeps direct writes
+      # (reversible). See docs/roadmap/saas-rls-and-plane-split-plan.md (P3).
+      TANREN_DATA_PLANE_REMOTE_WRITES: ${TANREN_DATA_PLANE_REMOTE_WRITES:-}
     volumes:
       - /tmp/tanren-mtls:/etc/tanren/mtls:ro
     depends_on:

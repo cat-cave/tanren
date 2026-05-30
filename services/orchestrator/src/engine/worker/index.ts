@@ -21,6 +21,11 @@ export { RunWorker, type RunWorkerOptions } from "./runWorker.js";
 // entrypoint and the in-process flag path (main.ts) both call.
 export { runWorkerEnabled, startRunWorker, type StartRunWorkerInput, type StartedRunWorker } from "./lifecycle.js";
 export { bootRunWorker, type BootedRunWorker } from "./boot.js";
+// Plane-split P3: the run-state WRITER impls + env resolver (the DEFAULT direct
+// in-process writer vs the remote control-plane writer over mTLS).
+export { DirectRunStateWriter } from "./directRunStateWriter.js";
+export { HttpRunStateWriter, RunStateWriteTransportError } from "./httpRunStateWriter.js";
+export { buildRunStateWriterFromEnv, remoteWritesEnabled } from "./runStateWriterFromEnv.js";
 export {
   reapExpiredJobs,
   JobReaper,
