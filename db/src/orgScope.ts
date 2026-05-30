@@ -16,7 +16,7 @@
 // claimed job's per-org work, mirroring the data-plane split.
 
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { Pool, PoolClient } from "pg";
+import { Pool, type PoolClient } from "pg";
 
 /** What a scoped section can read off the ambient store. */
 export interface OrgScope {
@@ -111,15 +111,59 @@ export async function runWithOrgScope<T>(
   }
 }
 
+// RLS R3b: the BYPASSRLS system pool. Under enforced policies, the default
+// runtime role (`tanren_app`, NOBYPASSRLS) running with an empty GUC sees ZERO
+// rows — so a genuinely cross-org SYSTEM read (the reaper's lineage sweep, the
+// worker's job bootstrap, cross-org dev seeding) cannot run on the app role.
+// `runWithSystemScope` therefore connects via a SEPARATE pool as the narrow
+// `tanren_system` BYPASSRLS role (migration 0030), whose URL is
+// TANREN_SYSTEM_DATABASE_URL. When that env is unset (single-role dev, CI inert
+// paths, tests) the passed pool is used verbatim — behavior-identical to before
+// the flip, since without policies the app role's own connection already reads
+// every row.
+let systemPool: Pool | undefined;
+let systemPoolResolved = false;
+
+/**
+ * Lazily resolve the BYPASSRLS system pool from TANREN_SYSTEM_DATABASE_URL. A
+ * single process-wide pool (created once) — or `undefined` when the env is unset
+ * (then {@link runWithSystemScope} uses the caller's pool). Exposed so wiring /
+ * tests can override; {@link resetSystemPool} clears the memo.
+ */
+export function getSystemPool(): Pool | undefined {
+  if (!systemPoolResolved) {
+    systemPoolResolved = true;
+    const url = process.env["TANREN_SYSTEM_DATABASE_URL"];
+    systemPool = url === undefined || url === "" ? undefined : new Pool({ connectionString: url });
+  }
+  return systemPool;
+}
+
+/** Inject a system pool explicitly (tests / wiring). Pass `undefined` to clear. */
+export function setSystemPool(pool: Pool | undefined): void {
+  systemPool = pool;
+  systemPoolResolved = true;
+}
+
+/** Reset the memoized system pool so the next {@link getSystemPool} re-reads env. */
+export function resetSystemPool(): void {
+  systemPool = undefined;
+  systemPoolResolved = false;
+}
+
 /**
  * System/cross-org scope: check out a client and open a transaction WITHOUT an
  * org GUC, for genuinely cross-tenant system work (the worker's `job_queue`
- * claim). A future R2 policy keys off `app.current_org_id`; leaving it unset
- * here is the explicit "no tenant row filter" signal. The claim must set the
- * claimed job's org via `runWithOrgScope` before doing any tenant work.
+ * claim, the reaper's lineage sweep, cross-org dev seeding). The connection is
+ * taken from the BYPASSRLS {@link getSystemPool} when one is configured (R3b),
+ * so an empty-GUC read still returns rows across tenants under enforced
+ * policies; otherwise it uses the passed `pool` (inert/dev fallback). Leaving
+ * the GUC unset is the explicit "no per-tenant row filter" signal; any tenant
+ * work must establish an org via `runWithOrgScope` first.
  */
 export async function runWithSystemScope<T>(pool: Pool, work: (client: PoolClient) => Promise<T>): Promise<T> {
-  const client = await pool.connect();
+  const effectivePool = getSystemPool() ?? pool;
+  const client = await effectivePool.connect();
   try {
     await client.query("BEGIN");
     const result = await storage.run({ client, orgId: null }, () => work(client));

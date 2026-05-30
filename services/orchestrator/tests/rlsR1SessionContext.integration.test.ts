@@ -1,15 +1,14 @@
-// RLS wave R1 — behavior proof against a REAL Postgres.
-//
-// R1 is the inert RLS foundation: a restricted runtime role + a per-request /
-// per-job org session context (`SET LOCAL app.current_org_id`), with NO policies
-// yet. These tests prove the four R1 guarantees end-to-end on a real database —
-// no SQL mocks:
+// RLS wave R1 — restricted role + org session context, proven against a REAL
+// Postgres. (Updated for R3b: the migration now ENABLES the policies, so the
+// once-"inert" assertions that compared the raw pool to the scoped client are
+// reframed as the enforcement reality — the scoped client still works, the raw
+// pool is now deny-by-default.) These tests prove, end-to-end, no SQL mocks:
 //   (a) the per-request org-scoped client sets `app.current_org_id` to the org;
 //   (b) the worker establishes the claimed job's per-org context;
-//   (c) the `runs` read+write reference path behaves identically through the
-//       org-scoped client as it did against the pool;
-//   (d) the RESTRICTED role can perform every existing operation (nothing lost)
-//       while no policies are present — and it is provably non-bypassing.
+//   (c) the `runs` read+write reference path works through the org-scoped client
+//       (and the raw pool is now denied by the policy);
+//   (d) the RESTRICTED role can perform every operation under its own scope, is
+//       provably non-bypassing, and a cross-org read on the raw pool is denied.
 //
 // Gated behind TANREN_RLS_DB_TEST=1 + a superuser DATABASE_URL (the migration
 // owner). The test provisions an EPHEMERAL database on that server, migrates it
@@ -142,10 +141,13 @@ describeDb("RLS wave R1 — restricted role + org session context", () => {
     await expect(establishJobOrgContext(runtimePool, ORG_B, "run_a")).rejects.toBeInstanceOf(JobOrgContextLostError);
   });
 
-  // (c) The runs read+write reference path behaves identically through the
-  //     org-scoped client (no policies => same rows as the raw pool).
-  it("(c) runs read+write is unchanged through the org-scoped client", async () => {
-    // Read: the scoped client sees the org's run, exactly as the pool does.
+  // (c) The runs read+write reference path works through the org-scoped client.
+  //     Under R3b the policies are now ENABLED, so the scoped client sees the
+  //     org's run while the RAW pool (empty GUC) sees zero — the enforcement that
+  //     R3b adds. (Pre-R3b this asserted pool == scoped INERTNESS; that premise
+  //     is exactly what the enforcement flip ends.)
+  it("(c) runs read+write works through the org-scoped client (policies enforced)", async () => {
+    // Read: the scoped client sees the org's run.
     const scoped = await runWithOrgScope(runtimePool, ORG_A, async (client) => {
       const { rows } = await client.query<{ run_id: string }>(
         "SELECT run_id FROM runs WHERE run_id = $1 AND org_id = $2",
@@ -153,28 +155,31 @@ describeDb("RLS wave R1 — restricted role + org session context", () => {
       );
       return rows.map((r) => r.run_id);
     });
+    expect(scoped).toEqual(["run_a"]);
+    // The SAME read on the raw pool (no SET LOCAL) is now denied by the policy.
     const direct = await runtimePool.query<{ run_id: string }>(
       "SELECT run_id FROM runs WHERE run_id = $1 AND org_id = $2",
       ["run_a", ORG_A],
     );
-    expect(scoped).toEqual(direct.rows.map((r) => r.run_id));
-    expect(scoped).toEqual(["run_a"]);
+    expect(direct.rowCount).toBe(0);
 
-    // Write: an UPDATE through the scoped client commits and is visible after.
+    // Write: an UPDATE through the scoped client commits and is visible after
+    // (confirmed via the OWNER pool, which is RLS-exempt as table owner).
     await runWithOrgScope(runtimePool, ORG_A, async (client) => {
       await client.query("UPDATE runs SET branch = $1 WHERE run_id = $2", ["scoped-branch", "run_a"]);
     });
-    const updated = await runtimePool.query<{ branch: string }>("SELECT branch FROM runs WHERE run_id = $1", ["run_a"]);
+    const updated = await ownerPool.query<{ branch: string }>("SELECT branch FROM runs WHERE run_id = $1", ["run_a"]);
     expect(updated.rows[0]?.branch).toBe("scoped-branch");
   });
 
-  // (d) The restricted role can perform EVERY existing operation while no
-  //     policies are present — nothing is lost relative to the owner path.
-  it("(d) the restricted role can SELECT/INSERT/UPDATE/DELETE with no policies", async () => {
+  // (d) The restricted role can perform EVERY existing operation under its own
+  //     org scope — nothing is lost. Under R3b the policies are ENABLED, so a
+  //     cross-org read on the raw pool is now DENIED (the enforcement flip).
+  it("(d) the restricted role can SELECT/INSERT/UPDATE/DELETE under its scope", async () => {
     await runWithOrgScope(runtimePool, ORG_A, async (client) => {
       // INSERT into a bigserial table, exercising the sequence grant. Uses
-      // `notifications` (a cross-org system table) so this proof never writes
-      // `events` outside the event store (single-event-writer architecture rule).
+      // `notifications` (a cross-org system table OUTSIDE RLS) so this proof never
+      // writes `events` outside the event store (single-event-writer rule).
       const inserted = await client.query<{ id: string }>(
         "INSERT INTO notifications (channel, payload, status) VALUES ('ntfy', '{}'::jsonb, 'queued') RETURNING id",
       );
@@ -189,10 +194,15 @@ describeDb("RLS wave R1 — restricted role + org session context", () => {
       expect(deleted.rowCount).toBe(1);
     });
 
-    // With NO policies, the runtime role sees BOTH orgs' rows — proof the
-    // mechanism is inert (R2 adds the policy that would scope this down).
-    const both = await runtimePool.query<{ org_id: string }>("SELECT DISTINCT org_id FROM runs ORDER BY org_id");
-    expect(both.rows.map((r) => r.org_id)).toEqual([ORG_A, ORG_B]);
+    // R3b enforcement: with policies ENABLED, the raw runtime pool (empty GUC)
+    // sees ZERO of EITHER org's runs — deny-by-default. A scope is required.
+    const denied = await runtimePool.query<{ org_id: string }>("SELECT DISTINCT org_id FROM runs ORDER BY org_id");
+    expect(denied.rowCount).toBe(0);
+    // Under a scope, the role sees ONLY its own org's run.
+    const scopedDistinct = await runWithOrgScope(runtimePool, ORG_A, (client) =>
+      client.query<{ org_id: string }>("SELECT DISTINCT org_id FROM runs"),
+    );
+    expect(scopedDistinct.rows.map((r) => r.org_id)).toEqual([ORG_A]);
   });
 
   // (d) The restricted role cannot bypass owner-only DDL.

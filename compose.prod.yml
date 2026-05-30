@@ -78,7 +78,16 @@ services:
       context: .
       dockerfile: services/orchestrator/Dockerfile
     environment:
-      DATABASE_URL: postgres://tanren:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set for the prod profile}@postgres:5432/tanren
+      # RLS R3b (enforcement flip). The RUNTIME connects as the restricted
+      # `tanren_app` role (NOBYPASSRLS) so the policies enabled in migration 0030
+      # enforce org isolation at the DB. Migrations run as the OWNER
+      # (MIGRATION_DATABASE_URL = `tanren`). `runWithSystemScope` uses the narrow
+      # BYPASSRLS `tanren_system` role (TANREN_SYSTEM_DATABASE_URL). The operator
+      # rotates the app/system role passwords out-of-band
+      # (`ALTER ROLE tanren_app PASSWORD …`) and supplies them here.
+      DATABASE_URL: postgres://tanren_app:${TANREN_APP_DB_PASSWORD:?TANREN_APP_DB_PASSWORD must be set for the prod profile}@postgres:5432/tanren
+      MIGRATION_DATABASE_URL: postgres://tanren:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set for the prod profile}@postgres:5432/tanren
+      TANREN_SYSTEM_DATABASE_URL: postgres://tanren_system:${TANREN_SYSTEM_DB_PASSWORD:?TANREN_SYSTEM_DB_PASSWORD must be set for the prod profile}@postgres:5432/tanren
       VAULT_ADDR: http://vault:8200
       VAULT_TOKEN: ${VAULT_ROOT_TOKEN:?VAULT_ROOT_TOKEN must be set for the prod profile}
       ORCHESTRATOR_PORT: "3100"
@@ -116,7 +125,13 @@ services:
       context: .
       dockerfile: services/allocator/Dockerfile
     environment:
+      # RLS R3b: the allocator is a cross-org SYSTEM service. Migrations run as
+      # owner (MIGRATION_DATABASE_URL); its runtime pool uses the BYPASSRLS
+      # `tanren_system` role (TANREN_SYSTEM_DATABASE_URL) so its cross-tenant
+      # `runners` management is not filtered by per-tenant policy.
       DATABASE_URL: postgres://tanren:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set for the prod profile}@postgres:5432/tanren
+      MIGRATION_DATABASE_URL: postgres://tanren:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set for the prod profile}@postgres:5432/tanren
+      TANREN_SYSTEM_DATABASE_URL: postgres://tanren_system:${TANREN_SYSTEM_DB_PASSWORD:?TANREN_SYSTEM_DB_PASSWORD must be set for the prod profile}@postgres:5432/tanren
       VAULT_ADDR: http://vault:8200
       VAULT_TOKEN: ${VAULT_ROOT_TOKEN:?VAULT_ROOT_TOKEN must be set for the prod profile}
       ALLOCATOR_PORT: "3200"

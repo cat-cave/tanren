@@ -18,12 +18,13 @@
 //   runs on the scoped client (`loadInsightsForProject` reads runs/events/specs/
 //   tasks/cost_records under org context and writes the workflow_insights cache).
 //
-// It is INERT: still the restricted `tanren_app` role, NO policies, so behavior
-// is identical to the pool path. These tests prove that end-to-end: the scoped
-// dispatch returns the org's rows identical to the pool, the in-scope writes are
-// visible inside the SAME transaction (proving the ambient client was used), the
-// pool fallback still works with no scope, and `openInspectionThread` stamps
-// `forge_threads.org_id`.
+// (Updated for R3b: the migration now ENABLES the policies — the scoped dispatch
+// returns the org's rows while the SAME dispatch on the raw pool is denied, and
+// case (d) is now the ENFORCEMENT proof that a cross-org read returns zero at the
+// DB.) These tests prove end-to-end: the scoped dispatch returns the org's rows,
+// the in-scope writes are visible inside the SAME transaction (proving the
+// ambient client was used), `openInspectionThread` stamps `forge_threads.org_id`,
+// and the cross-tenant read is now DENIED.
 //
 // Gated behind TANREN_RLS_DB_TEST=1 + a superuser DATABASE_URL (the migration
 // owner), exactly like the R1 / R2 cohort tests. Wired into `just smoke` via
@@ -111,21 +112,21 @@ describeDb("RLS R3a — residual forge-tool + recovery sites through the org-sco
   }, 30_000);
 
   // (a) the forge read-spec / read-run dispatchers, run inside an org scope,
-  //     return the org's rows identical to the pool path.
-  it("(a) forge read_spec/read_run via the org scope match the pool", async () => {
+  //     return the org's rows. Under R3b the SAME dispatch on the raw pool (no
+  //     scope) is denied — its authz/read sees zero rows → "not found".
+  it("(a) forge read_spec/read_run via the org scope return the org's rows; the raw pool is denied", async () => {
     const scopedSpec = await runWithOrgScope(runtimePool, ORG_A, () =>
       tanrenReadSpec({ pool: runtimePool }, { specId: SPEC_A }, ACTOR),
     );
-    const pooledSpec = await tanrenReadSpec({ pool: runtimePool }, { specId: SPEC_A }, ACTOR);
     expect(scopedSpec.spec["spec_id"]).toBe(SPEC_A);
-    expect(scopedSpec.spec["spec_id"]).toEqual(pooledSpec.spec["spec_id"]);
+    // No ambient scope (empty GUC) → the dispatcher's reads see nothing.
+    await expect(tanrenReadSpec({ pool: runtimePool }, { specId: SPEC_A }, ACTOR)).rejects.toThrow(/not found|denied/i);
 
     const scopedRun = await runWithOrgScope(runtimePool, ORG_A, () =>
       tanrenReadRun({ pool: runtimePool }, { runId: RUN_A }, ACTOR),
     );
-    const pooledRun = await tanrenReadRun({ pool: runtimePool }, { runId: RUN_A }, ACTOR);
     expect(scopedRun.run["run_id"]).toBe(RUN_A);
-    expect(scopedRun.run["run_id"]).toEqual(pooledRun.run["run_id"]);
+    await expect(tanrenReadRun({ pool: runtimePool }, { runId: RUN_A }, ACTOR)).rejects.toThrow(/not found|denied/i);
   });
 
   // (b) read_events / read_costs run on the ambient scoped client: a row WRITTEN
@@ -192,18 +193,14 @@ describeDb("RLS R3a — residual forge-tool + recovery sites through the org-sco
     expect(ev.rows[0]?.org_id).toBe(ORG_A);
   });
 
-  // (d) INERT proof: with NO policies (R3a), a read on org A's scope still
-  //     returns org B's run — exactly the pool's pre-R3a behavior — confirming
-  //     the conversion is behavior-preserving and the GUC alone changes nothing
-  //     yet. (R3b is where the policy makes this cross-org read return zero rows;
-  //     that negative test lands with the policy enable.)
-  it("(d) is INERT: org A's scope reads org B's run identically to the pool (no policies yet)", async () => {
-    const scoped = await runWithOrgScope(runtimePool, ORG_A, () =>
-      tanrenReadRun({ pool: runtimePool }, { runId: RUN_B }, ACTOR),
-    );
-    const pooled = await tanrenReadRun({ pool: runtimePool }, { runId: RUN_B }, ACTOR);
-    expect(scoped.run["run_id"]).toBe(RUN_B);
-    expect(scoped.run["org_id"]).toEqual(pooled.run["org_id"]);
+  // (d) ENFORCEMENT proof (R3b): with the policies now ENABLED, org A's scope
+  //     reading org B's run returns ZERO rows AT THE DATABASE — the cross-tenant
+  //     leak that was inert under R3a is now impossible. (Pre-R3b this asserted
+  //     the cross-org read still succeeded; the enforcement flip ends that.)
+  it("(d) is ENFORCED: org A's scope cannot read org B's run (cross-tenant denied)", async () => {
+    await expect(
+      runWithOrgScope(runtimePool, ORG_A, () => tanrenReadRun({ pool: runtimePool }, { runId: RUN_B }, ACTOR)),
+    ).rejects.toThrow(/not found|denied/i);
   });
 });
 

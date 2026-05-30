@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { serve } from "@hono/node-server";
-import { createDbPool, migrate } from "@tanren/db";
+import { createDbPool, getSystemPool, migrate, runWithOrgScope, runWithSystemScope } from "@tanren/db";
 import { Hono } from "hono";
 import type pg from "pg";
 import type { ActorContext } from "./auth/index.js";
@@ -94,7 +94,7 @@ async function vaultHealth() {
 
 export async function createApp() {
   const pool = getProductionPool();
-  await migrate(pool);
+  await runMigrationsAsOwner();
   // P2B: the secret-store backend is selected by TANREN_SECRET_STORE
   // (default `vault`, so existing deployments are unchanged). See
   // engine/contracts/secretStoreFactory.ts.
@@ -105,7 +105,10 @@ export async function createApp() {
     secrets: runnerSecrets,
     auth: buildAuthFromEnv(pool, port),
     helloDependencies: {
-      allocator: buildAllocatorFromEnv(pool),
+      // RLS R3b: the hello fixture is cross-org system seeding, so its allocator's
+      // runner writes go through the BYPASSRLS `tanren_system` pool (matching the
+      // fixture pool `/hello/run` hands runHelloWorkflow); else the runtime pool.
+      allocator: buildAllocatorFromEnv(getSystemPool() ?? pool),
       // P3-0029: wrap the SSH substrate so every runner command emits a
       // boundary timing record. Behavior is unchanged; this only measures.
       ssh: new TimedSshSubstrate(new Ssh2Substrate(runnerSecrets)),
@@ -300,7 +303,10 @@ export function buildApp(input: {
   });
 
   app.post("/hello/run", async (c) => {
-    const summary = await runHelloWorkflow(input.pool, input.helloDependencies);
+    // RLS R3b: the hello fixture is cross-org system seeding (its own throwaway
+    // fixture org), so it runs on the BYPASSRLS `tanren_system` pool when one is
+    // configured, else the runtime pool (inert dev fallback).
+    const summary = await runHelloWorkflow(getSystemPool() ?? input.pool, input.helloDependencies);
     return c.json(summary, 201);
   });
 
@@ -365,37 +371,51 @@ export function buildApp(input: {
 
   app.get("/runs/:runId", async (c) => {
     const runId = c.req.param("runId");
-    const run = await input.pool.query("SELECT * FROM runs WHERE run_id = $1", [runId]);
-    if (run.rowCount === 0) {
+    // RLS R3b: this legacy debug route has no `:orgId` path param, so resolve the
+    // run's org via the BYPASSRLS system scope FIRST (a cross-org bootstrap read),
+    // then run every tenant read under that org's scope so the enforced policies
+    // admit them. A run with no resolvable org (gone / legacy null) is 404.
+    const orgRow = await runWithSystemScope(input.pool, (client) =>
+      client.query<{ org_id: string | null }>("SELECT org_id FROM runs WHERE run_id = $1", [runId]),
+    );
+    const orgId = orgRow.rows[0]?.org_id ?? null;
+    if (orgId === null) {
       return c.json({ error: "run_not_found" }, 404);
     }
 
-    const tasks = await input.pool.query(
-      `SELECT * FROM tasks
-       WHERE run_id = $1
-       ORDER BY CASE kind WHEN 'plan' THEN 1 WHEN 'write' THEN 2 WHEN 'check' THEN 3 WHEN 'audit' THEN 4 WHEN 'ci' THEN 5 ELSE 99 END,
-                started_at ASC NULLS FIRST,
-                task_id ASC`,
-      [runId],
-    );
-    const events = await input.pool.query("SELECT * FROM events WHERE run_id = $1 ORDER BY ts ASC, id ASC", [runId]);
-    const costs = await input.pool.query(
-      "SELECT * FROM cost_records WHERE run_id = $1 ORDER BY recorded_at ASC, id ASC",
-      [runId],
-    );
-    const { events: serializedEvents } = await redactEventRows({
-      pool: input.pool,
-      rows: events.rows,
-      runId,
-      actor: actorOf(c),
-      rawView: parseRawViewOptIn(c),
+    const payload = await runWithOrgScope(input.pool, orgId, async (client) => {
+      const run = await client.query("SELECT * FROM runs WHERE run_id = $1", [runId]);
+      if (run.rowCount === 0) {
+        return undefined;
+      }
+      const tasks = await client.query(
+        `SELECT * FROM tasks
+         WHERE run_id = $1
+         ORDER BY CASE kind WHEN 'plan' THEN 1 WHEN 'write' THEN 2 WHEN 'check' THEN 3 WHEN 'audit' THEN 4 WHEN 'ci' THEN 5 ELSE 99 END,
+                  started_at ASC NULLS FIRST,
+                  task_id ASC`,
+        [runId],
+      );
+      const events = await client.query("SELECT * FROM events WHERE run_id = $1 ORDER BY ts ASC, id ASC", [runId]);
+      const costs = await client.query(
+        "SELECT * FROM cost_records WHERE run_id = $1 ORDER BY recorded_at ASC, id ASC",
+        [runId],
+      );
+      const { events: serializedEvents } = await redactEventRows({
+        // The shared pool — but we are inside this run's `runWithOrgScope`, so the
+        // audit event store self-routes through the ambient org-scoped client.
+        pool: input.pool,
+        rows: events.rows,
+        runId,
+        actor: actorOf(c),
+        rawView: parseRawViewOptIn(c),
+      });
+      return { run: run.rows[0], tasks: tasks.rows, events: serializedEvents, costs: costs.rows };
     });
-    return c.json({
-      run: run.rows[0],
-      tasks: tasks.rows,
-      events: serializedEvents,
-      costs: costs.rows,
-    });
+    if (payload === undefined) {
+      return c.json({ error: "run_not_found" }, 404);
+    }
+    return c.json(payload);
   });
 
   return app;
@@ -404,6 +424,29 @@ export function buildApp(input: {
 function getProductionPool(): pg.Pool {
   productionPool ??= createDbPool();
   return productionPool;
+}
+
+/**
+ * RLS R3b: run migrations as the OWNER, not the runtime role. After the
+ * enforcement flip the runtime `DATABASE_URL` connects as the restricted
+ * `tanren_app` role (NOBYPASSRLS, no DDL grants), so it CANNOT run CREATE/ALTER
+ * TABLE. Migrations therefore use a dedicated owner connection
+ * (MIGRATION_DATABASE_URL), opened only for the migrate step and closed
+ * immediately. When MIGRATION_DATABASE_URL is unset (single-role dev / no flip)
+ * we fall back to the runtime pool — behavior-identical to before R3b.
+ */
+async function runMigrationsAsOwner(): Promise<void> {
+  const ownerUrl = process.env["MIGRATION_DATABASE_URL"];
+  if (ownerUrl === undefined || ownerUrl === "") {
+    await migrate(getProductionPool());
+    return;
+  }
+  const ownerPool = createDbPool(ownerUrl);
+  try {
+    await migrate(ownerPool);
+  } finally {
+    await ownerPool.end();
+  }
 }
 
 async function seedRunnerIdentitySecret(secrets: SecretStore): Promise<void> {

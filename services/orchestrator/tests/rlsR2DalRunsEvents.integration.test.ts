@@ -3,9 +3,11 @@
 //
 // R2 cohort-1 routes the runs + events read/write query sites through R1's
 // org-scoped client (`runWithOrgScope` → `getOrgScopedClient()`), so each tenant
-// query executes inside a `SET LOCAL app.current_org_id = <org>` transaction. It
-// is INERT: still the restricted role, NO policies, so behavior is identical to
-// the pool path. These tests prove that end-to-end:
+// query executes inside a `SET LOCAL app.current_org_id = <org>` transaction.
+// (Updated for R3b: the migration now ENABLES the policies, so the org-scoped
+// client returns the org's rows while the raw runtime pool is deny-by-default;
+// the baselines below compare against the OWNER pool, which is RLS-exempt.)
+// These tests prove that end-to-end:
 //   (a) the runs read loaders return the org's rows when run on the org-scoped
 //       client, identical to the raw pool;
 //   (b) the events read loaders (snapshot / page / feed) do the same;
@@ -129,12 +131,18 @@ describeDb("RLS R2 cohort-1 — runs + events through the org-scoped client", ()
     });
   });
 
-  // (a) runs read loaders, through the org-scoped client, equal the pool path.
-  it("(a) runs reads via the org-scoped client match the pool, scoped to the org", async () => {
+  // (a) runs read loaders, through the org-scoped client, return the org's rows
+  //     — equal to the OWNER (RLS-exempt) ground truth. Under R3b the policies
+  //     are enabled, so the baseline is the owner pool, not the raw runtime pool
+  //     (which is now deny-by-default).
+  it("(a) runs reads via the org-scoped client match the owner baseline, scoped to the org", async () => {
     const scopedSummary = await runWithOrgScope(runtimePool, ORG_A, (client) => fetchRunSummary(client, RUN_A, ORG_A));
-    const poolSummary = await fetchRunSummary(runtimePool, RUN_A, ORG_A);
-    expect(scopedSummary).toEqual(poolSummary);
+    const ownerSummary = await fetchRunSummary(ownerPool, RUN_A, ORG_A);
+    expect(scopedSummary).toEqual(ownerSummary);
     expect(scopedSummary?.runId).toBe(RUN_A);
+    // The SAME read on the raw runtime pool (empty GUC) is now denied (R3b).
+    const poolSummary = await fetchRunSummary(runtimePool, RUN_A, ORG_A);
+    expect(poolSummary).toBeUndefined();
 
     const scopedList = await runWithOrgScope(runtimePool, ORG_A, (client) =>
       fetchRunListItems(client, { projectId: PROJECT_A, orgId: ORG_A, status: undefined, specId: undefined }),
@@ -147,11 +155,22 @@ describeDb("RLS R2 cohort-1 — runs + events through the org-scoped client", ()
     expect(crossOrg).toBeUndefined();
   });
 
-  // (b) events read loaders, through the org-scoped client, equal the pool path.
-  it("(b) events reads via the org-scoped client match the pool", async () => {
+  // (b) events read loaders, through the org-scoped client, equal the OWNER
+  //     (RLS-exempt) baseline. Under R3b the raw runtime pool is deny-by-default.
+  it("(b) events reads via the org-scoped client match the owner baseline", async () => {
     const scopedSnap = await runWithOrgScope(runtimePool, ORG_A, (client) =>
       fetchRunEventsForSnapshot(client, { runId: RUN_A, orgId: ORG_A, limit: 50, actor: actorA, rawView: false }),
     );
+    const ownerSnap = await fetchRunEventsForSnapshot(ownerPool, {
+      runId: RUN_A,
+      orgId: ORG_A,
+      limit: 50,
+      actor: actorA,
+      rawView: false,
+    });
+    expect(scopedSnap.map((e) => e.eventType)).toEqual(ownerSnap.map((e) => e.eventType));
+    expect(scopedSnap.some((e) => e.eventType === "run.started")).toBe(true);
+    // The raw runtime pool (empty GUC) now returns zero events (R3b enforcement).
     const poolSnap = await fetchRunEventsForSnapshot(runtimePool, {
       runId: RUN_A,
       orgId: ORG_A,
@@ -159,8 +178,7 @@ describeDb("RLS R2 cohort-1 — runs + events through the org-scoped client", ()
       actor: actorA,
       rawView: false,
     });
-    expect(scopedSnap.map((e) => e.eventType)).toEqual(poolSnap.map((e) => e.eventType));
-    expect(scopedSnap.some((e) => e.eventType === "run.started")).toBe(true);
+    expect(poolSnap).toHaveLength(0);
 
     const scopedPage = await runWithOrgScope(runtimePool, ORG_A, (client) =>
       fetchEventsPage(client, {
@@ -187,10 +205,12 @@ describeDb("RLS R2 cohort-1 — runs + events through the org-scoped client", ()
     expect(scopedFeed.items.some((e) => e.eventType === "run.started")).toBe(true);
   });
 
-  // (c) events WRITE recorder routes through the ambient scope, and falls back
-  //     to the pool when there is none — same committed row either way.
-  it("(c) PgEventStore(pool) writes through the ambient scope and via the pool fallback", async () => {
-    const before = await countEvents(runtimePool, RUN_A);
+  // (c) events WRITE recorder routes through the ambient scope. Under R3b the
+  //     out-of-scope pool fallback is now DENIED by the policy (deny-by-default
+  //     for writes too) — exactly the enforcement R3b adds: an unscoped tenant
+  //     write can no longer silently land.
+  it("(c) PgEventStore(pool) writes through the ambient scope; the pool fallback is denied", async () => {
+    const before = await countEvents(ownerPool, RUN_A);
 
     // In-scope: the append runs on the ambient org-scoped client. We prove that
     // by appending inside the scope and observing the new row inside the SAME
@@ -210,18 +230,21 @@ describeDb("RLS R2 cohort-1 — runs + events through the org-scoped client", ()
       expect(Number(within.rows[0]?.n)).toBe(1);
     });
 
-    // Out-of-scope: the same store handed the pool falls back to the pool — the
-    // row still commits (inert), proving identical behavior without a scope.
-    await new PgEventStore(runtimePool).append({
-      runId: RUN_A,
-      specId: SPEC_A,
-      projectId: PROJECT_A,
-      eventType: "run.completed",
-      payload: { status: "completed", outcome: "pool" },
-    });
+    // Out-of-scope: the same store handed the pool falls back to the raw pool
+    // (empty GUC); under enforced policies the WITH CHECK rejects the INSERT.
+    await expect(
+      new PgEventStore(runtimePool).append({
+        runId: RUN_A,
+        specId: SPEC_A,
+        projectId: PROJECT_A,
+        eventType: "run.completed",
+        payload: { status: "completed", outcome: "pool" },
+      }),
+    ).rejects.toThrow(/row-level security|policy/i);
 
-    const after = await countEvents(runtimePool, RUN_A);
-    expect(after - before).toBe(2);
+    // Only the in-scope append landed (owner pool = RLS-exempt ground truth).
+    const after = await countEvents(ownerPool, RUN_A);
+    expect(after - before).toBe(1);
   });
 });
 

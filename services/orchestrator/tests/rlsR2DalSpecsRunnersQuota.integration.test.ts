@@ -5,8 +5,10 @@
 // `org_quotas` admission read + accrual write, and the worker's failure-path
 // finalize writes through R1's org-scoped client (`runWithOrgScope` →
 // `getOrgScopedClient()`), so each tenant query executes inside a `SET LOCAL
-// app.current_org_id = <org>` transaction. It is INERT: still the restricted
-// role, NO policies, so behavior is identical to the pool path. These tests
+// app.current_org_id = <org>` transaction. (Updated for R3b: the migration now
+// ENABLES the policies — the org-scoped client returns/writes the org's rows
+// while the raw runtime pool is deny-by-default; baselines compare against the
+// OWNER pool, and the unscoped pool-fallback writes are now denied.) These tests
 // prove that end-to-end:
 //   (a) the specs READ loaders (SpecStore.get/list) return the org's rows on the
 //       org-scoped client, identical to the raw pool;
@@ -114,18 +116,22 @@ describeDb("RLS R2 cohort-3 — specs + runners + quota + finalizers through the
     await adminPool.end();
   }, 30_000);
 
-  // (a) specs READ loaders, through the org-scoped client, equal the pool.
-  it("(a) spec reads via the org-scoped client match the pool, scoped to the org", async () => {
+  // (a) specs READ loaders, through the org-scoped client, equal the OWNER
+  //     (RLS-exempt) baseline. Under R3b the raw runtime pool is deny-by-default.
+  it("(a) spec reads via the org-scoped client match the owner baseline, scoped to the org", async () => {
     const scoped = await runWithOrgScope(runtimePool, ORG_A, (client) => SpecStore.get(client, SPEC_A, ACTOR_A));
-    const pooled = await SpecStore.get(runtimePool, SPEC_A, ACTOR_A);
+    const owned = await SpecStore.get(ownerPool, SPEC_A, ACTOR_A);
     expect(scoped?.specId).toBe(SPEC_A);
-    expect(scoped).toEqual(pooled);
+    expect(scoped).toEqual(owned);
+    // The raw runtime pool (empty GUC) now returns nothing (R3b enforcement).
+    const pooled = await SpecStore.get(runtimePool, SPEC_A, ACTOR_A);
+    expect(pooled).toBeUndefined();
 
     const scopedList = await runWithOrgScope(runtimePool, ORG_A, (client) =>
       SpecStore.list(client, { projectId: PROJECT_A }, ACTOR_A),
     );
-    const pooledList = await SpecStore.list(runtimePool, { projectId: PROJECT_A }, ACTOR_A);
-    expect(scopedList.map((s) => s.specId)).toEqual(pooledList.map((s) => s.specId));
+    const ownedList = await SpecStore.list(ownerPool, { projectId: PROJECT_A }, ACTOR_A);
+    expect(scopedList.map((s) => s.specId)).toEqual(ownedList.map((s) => s.specId));
     expect(scopedList.length).toBeGreaterThan(0);
 
     // App-layer scoping: org A's project does not surface org B's spec.
@@ -147,7 +153,9 @@ describeDb("RLS R2 cohort-3 — specs + runners + quota + finalizers through the
       },
       ACTOR_A as never,
     );
-    const reread = await SpecStore.get(runtimePool, created.specId, ACTOR_A);
+    // Re-read via the OWNER pool (RLS-exempt): the scoped INSERT landed, stamped
+    // org A. The raw runtime pool would now see nothing (R3b deny-by-default).
+    const reread = await SpecStore.get(ownerPool, created.specId, ACTOR_A);
     expect(reread?.specId).toBe(created.specId);
     expect(reread?.orgId).toBe(ORG_A);
 
@@ -161,14 +169,15 @@ describeDb("RLS R2 cohort-3 — specs + runners + quota + finalizers through the
       expect(within.rows[0]?.status).toBe("active");
     });
 
-    // Status UPDATE via the pool (no scope) still commits — inert fallback.
-    const pooledUpdate = await SpecStore.updateStatus(
-      runtimePool,
-      created.specId,
-      { from: "active", to: "done" },
-      ACTOR_A,
-    );
-    expect(pooledUpdate.status).toBe("done");
+    // Status UPDATE via the raw pool (no scope) now matches ZERO rows under the
+    // policy → the store raises "spec not found". Under R3b an unscoped write
+    // can neither read nor mutate a tenant row.
+    await expect(
+      SpecStore.updateStatus(runtimePool, created.specId, { from: "active", to: "done" }, ACTOR_A),
+    ).rejects.toThrow(/spec not found/);
+    // The spec is still 'active' (the denied UPDATE changed nothing) per owner.
+    const stillActive = await SpecStore.get(ownerPool, created.specId, ACTOR_A);
+    expect(stillActive?.status).toBe("active");
   });
 
   // (c) runner-metadata WRITES route through the ambient scope, and fall back to
@@ -204,31 +213,29 @@ describeDb("RLS R2 cohort-3 — specs + runners + quota + finalizers through the
       expect(released.rows[0]?.status).toBe("released");
     });
 
-    // Out-of-scope: the same store handed the pool falls back to the pool — the
-    // row still commits (inert), proving identical behavior without a scope.
-    await store.claim({ ...claimInput, runnerId: "runner_pool" });
-    const committed = await runtimePool.query<{ status: string }>(
-      "SELECT status FROM runners WHERE runner_id = 'runner_pool'",
-    );
-    expect(committed.rows[0]?.status).toBe("claimed");
-    await store.release("runner_pool");
-    const releasedPool = await runtimePool.query<{ status: string }>(
-      "SELECT status FROM runners WHERE runner_id = 'runner_pool'",
-    );
-    expect(releasedPool.rows[0]?.status).toBe("released");
+    // Out-of-scope: the same store handed the pool falls back to the raw pool
+    // (empty GUC); under R3b's enforced policy the runners WITH CHECK rejects the
+    // INSERT — an unscoped tenant write can no longer silently land.
+    await expect(store.claim({ ...claimInput, runnerId: "runner_pool" })).rejects.toThrow(/row-level security|policy/i);
+    const committed = await ownerPool.query("SELECT 1 FROM runners WHERE runner_id = 'runner_pool'");
+    expect(committed.rowCount).toBe(0);
   });
 
   // (d) org_quotas READ (admission) + WRITE (accrual) carry org context inside a
-  //     scope and fall back to the pool — same decision + counters either way.
-  it("(d) DbQuotaPolicy admission read + accrual write match scope vs pool", async () => {
+  //     scope. Under R3b the policies are enforced: the scoped admission reads the
+  //     org's quota row (windowKey 'default'), while on the raw pool the row is
+  //     invisible → the "no row = unlimited" default (admit, no windowKey).
+  it("(d) DbQuotaPolicy admission read + accrual write are org-scoped", async () => {
     const policy = new DbQuotaPolicy(runtimePool);
 
-    // Admission read on the pool (no scope) and inside an org scope return the
-    // same decision — the run_limit has headroom (runs_used 2 / 10).
-    const pooled = await policy.checkAdmission(ORG_A, { runs: 1 });
+    // Scoped admission sees the quota row (headroom: runs_used 2 / 10).
     const scoped = await runWithOrgScope(runtimePool, ORG_A, () => policy.checkAdmission(ORG_A, { runs: 1 }));
-    expect(scoped).toEqual(pooled);
     expect(scoped.admit).toBe(true);
+    expect(scoped.windowKey).toBe("default");
+    // Raw pool (empty GUC): the quota row is invisible → unlimited default admit.
+    const pooled = await policy.checkAdmission(ORG_A, { runs: 1 });
+    expect(pooled.admit).toBe(true);
+    expect(pooled.windowKey).toBeUndefined();
 
     // Accrual inside a scope advances the counter; the change is visible inside
     // the SAME transaction (only if the UPDATE used the ambient client).
@@ -242,13 +249,14 @@ describeDb("RLS R2 cohort-3 — specs + runners + quota + finalizers through the
       expect(Number(within.rows[0]?.tokens_used)).toBe(150);
     });
 
-    // Accrual via the pool (no scope) still commits — inert fallback.
+    // Accrual via the raw pool (no scope) matches ZERO rows under the policy, so
+    // its UPDATE is a no-op — the counter does NOT advance past the scoped value.
     await policy.accrueUsage(ORG_A, { runs: 1, tokens: 50, costUsd: 1.5 });
-    const after = await runtimePool.query<{ runs_used: string }>(
+    const after = await ownerPool.query<{ runs_used: string }>(
       "SELECT runs_used::text FROM org_quotas WHERE org_id = $1 AND window_key = 'default'",
       [ORG_A],
     );
-    expect(Number(after.rows[0]?.runs_used)).toBe(4);
+    expect(Number(after.rows[0]?.runs_used)).toBe(3);
   });
 
   // (e) the worker failure-path finalize UPDATE (runs → halted) commits the same
@@ -277,9 +285,10 @@ describeDb("RLS R2 cohort-3 — specs + runners + quota + finalizers through the
       expect(within.rows[0]).toEqual({ status: "halted", outcome: "halted" });
     });
 
-    // The finalize committed: a fresh pool read sees the halted terminal state,
-    // identical to the pool-fallback path the legacy/unscoped run would take.
-    const committed = await runtimePool.query<{ status: string; outcome: string }>(
+    // The finalize committed: a fresh OWNER read (RLS-exempt ground truth) sees
+    // the halted terminal state. (The raw runtime pool would now see nothing —
+    // deny-by-default — so the worker's finalizer scopes its UPDATE, which it does.)
+    const committed = await ownerPool.query<{ status: string; outcome: string }>(
       "SELECT status, outcome FROM runs WHERE run_id = 'run_finalize'",
     );
     expect(committed.rows[0]).toEqual({ status: "halted", outcome: "halted" });

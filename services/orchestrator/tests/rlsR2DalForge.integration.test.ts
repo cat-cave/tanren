@@ -7,9 +7,12 @@
 // inside a `SET LOCAL app.current_org_id = <org>` transaction. The stores call
 // `resolveWritableClient` internally (handed the pool → ambient scope when one
 // is open, else the pool; handed a specific client → verbatim), and the forge
-// routes + the run-detail Forge bundle open a `runWithOrgScope` scope. It is
-// INERT: still the restricted role, NO policies, so behavior is identical to
-// the pool path. These tests prove that end-to-end:
+// routes + the run-detail Forge bundle open a `runWithOrgScope` scope.
+// (Updated for R3b: the migration now ENABLES the policies — the org-scoped
+// client returns/writes the org's rows while the raw runtime pool is denied;
+// baselines compare against the OWNER pool and unscoped writes are now rejected.
+// forge_turns/proposals are FK-scoped via forge_threads.) These tests prove
+// that end-to-end:
 //   (a) ForgeThreadStore.create/get/listForRun return the org's rows on the
 //       org-scoped client, identical to the raw pool, and the in-scope write is
 //       visible inside the SAME transaction (proving the ambient client was used);
@@ -128,33 +131,39 @@ describeDb("RLS R2 cohort-4 — forge threads/turns/proposals through the org-sc
     });
     expect(created.orgId).toBe(ORG_A);
 
-    // get via the scope and via the pool return the same committed row.
+    // get via the scope equals the OWNER (RLS-exempt) baseline; the raw pool is
+    // now denied (R3b deny-by-default).
     const scoped = await runWithOrgScope(runtimePool, ORG_A, (client) =>
       ForgeThreadStore.get(client, created.id, ACTOR),
     );
-    const pooled = await ForgeThreadStore.get(runtimePool, created.id, ACTOR);
-    expect(scoped).toEqual(pooled);
+    const owned = await ForgeThreadStore.get(ownerPool, created.id, ACTOR);
+    expect(scoped).toEqual(owned);
     expect(scoped?.id).toBe(created.id);
+    expect(await ForgeThreadStore.get(runtimePool, created.id, ACTOR)).toBeUndefined();
 
-    // listForRun via the scope equals the pool, and scopes to org A only.
+    // listForRun via the scope equals the OWNER baseline, and scopes to org A only.
     const scopedList = await runWithOrgScope(runtimePool, ORG_A, (client) =>
       ForgeThreadStore.listForRun(client, { orgId: ORG_A, projectId: PROJECT_A, runId: RUN_A }, ACTOR),
     );
-    const pooledList = await ForgeThreadStore.listForRun(
-      runtimePool,
+    const ownedList = await ForgeThreadStore.listForRun(
+      ownerPool,
       { orgId: ORG_A, projectId: PROJECT_A, runId: RUN_A },
       ACTOR,
     );
-    expect(scopedList.map((t) => t.id)).toEqual(pooledList.map((t) => t.id));
+    expect(scopedList.map((t) => t.id)).toEqual(ownedList.map((t) => t.id));
     expect(scopedList.map((t) => t.id)).toContain(created.id);
   });
 
-  // (b) turn append + list write/read through the scope AND via the pool fallback.
-  it("(b) turn append/list write through the scope and read identically via the pool", async () => {
-    const thread = await ForgeThreadStore.create(
-      runtimePool,
-      { orgId: ORG_A, projectId: PROJECT_A, runId: RUN_A, scope: "run", title: "turns" },
-      ACTOR,
+  // (b) turn append + list write/read through the scope. Under R3b the unscoped
+  //     pool-fallback append is denied (forge_turns via its thread's policy).
+  it("(b) turn append/list write through the scope; the pool fallback is denied", async () => {
+    // The thread create itself must be scoped now (the unscoped pool is denied).
+    const thread = await runWithOrgScope(runtimePool, ORG_A, (client) =>
+      ForgeThreadStore.create(
+        client,
+        { orgId: ORG_A, projectId: PROJECT_A, runId: RUN_A, scope: "run", title: "turns" },
+        ACTOR,
+      ),
     );
 
     // Append inside a scope: the turn is visible inside the SAME transaction
@@ -177,49 +186,71 @@ describeDb("RLS R2 cohort-4 — forge threads/turns/proposals through the org-sc
     });
     expect(scopedTurn.index).toBe(0);
 
-    // Append via the pool (no scope) still commits — inert fallback. The index
-    // advances off the committed first turn (proves the same connection's view).
-    const pooledTurn = await ForgeTurnStore.append(
-      runtimePool,
-      {
-        threadId: thread.id,
-        source: { kind: "operator", userId: ACTOR.userId },
-        audience: "org:admin",
-        authorKind: "operator",
-        render: RENDER,
-      },
-      ACTOR,
-    );
-    expect(pooledTurn.index).toBe(1);
+    // Append via the raw pool (no scope) is denied: under the empty GUC the
+    // parent forge_thread is invisible, so the append's index-read raises "thread
+    // not found" before any INSERT — an unscoped tenant write cannot proceed.
+    await expect(
+      ForgeTurnStore.append(
+        runtimePool,
+        {
+          threadId: thread.id,
+          source: { kind: "operator", userId: ACTOR.userId },
+          audience: "org:admin",
+          authorKind: "operator",
+          render: RENDER,
+        },
+        ACTOR,
+      ),
+    ).rejects.toThrow(/row-level security|policy|thread not found/i);
 
-    // list via the scope equals the pool — both see both committed turns.
+    // A second scoped append advances off the committed first turn.
+    const secondTurn = await runWithOrgScope(runtimePool, ORG_A, (client) =>
+      ForgeTurnStore.append(
+        client,
+        {
+          threadId: thread.id,
+          source: { kind: "operator", userId: ACTOR.userId },
+          audience: "org:admin",
+          authorKind: "operator",
+          render: RENDER,
+        },
+        ACTOR,
+      ),
+    );
+    expect(secondTurn.index).toBe(1);
+
+    // list via the scope equals the OWNER baseline — both see both committed turns.
     const scopedList = await runWithOrgScope(runtimePool, ORG_A, (client) =>
       ForgeTurnStore.list(client, { threadId: thread.id, limit: 50 }, ACTOR),
     );
-    const pooledList = await ForgeTurnStore.list(runtimePool, { threadId: thread.id, limit: 50 }, ACTOR);
-    expect(scopedList.map((t) => t.id)).toEqual(pooledList.map((t) => t.id));
-    expect(scopedList.map((t) => t.id)).toEqual([scopedTurn.id, pooledTurn.id]);
+    const ownedList = await ForgeTurnStore.list(ownerPool, { threadId: thread.id, limit: 50 }, ACTOR);
+    expect(scopedList.map((t) => t.id)).toEqual(ownedList.map((t) => t.id));
+    expect(scopedList.map((t) => t.id)).toEqual([scopedTurn.id, secondTurn.id]);
   });
 
   // (c) proposal create + list + claim + recordOutcome carry org context inside a
   //     scope and fall back to the pool — same persisted row + idempotent lifecycle.
   it("(c) proposal create/list/claim/recordOutcome write through the scope and via the pool fallback", async () => {
-    const thread = await ForgeThreadStore.create(
-      runtimePool,
-      { orgId: ORG_A, projectId: PROJECT_A, runId: RUN_A, scope: "run", title: "proposals" },
-      ACTOR,
-    );
-    const proposingTurn = await ForgeTurnStore.append(
-      runtimePool,
-      {
-        threadId: thread.id,
-        source: { kind: "operator", userId: ACTOR.userId },
-        audience: "org:admin",
-        authorKind: "forge_llm",
-        render: RENDER,
-      },
-      ACTOR,
-    );
+    // Setup writes must be scoped now (the unscoped pool is denied under R3b).
+    const { thread, proposingTurn } = await runWithOrgScope(runtimePool, ORG_A, async (client) => {
+      const t = await ForgeThreadStore.create(
+        client,
+        { orgId: ORG_A, projectId: PROJECT_A, runId: RUN_A, scope: "run", title: "proposals" },
+        ACTOR,
+      );
+      const turn = await ForgeTurnStore.append(
+        client,
+        {
+          threadId: t.id,
+          source: { kind: "operator", userId: ACTOR.userId },
+          audience: "org:admin",
+          authorKind: "forge_llm",
+          render: RENDER,
+        },
+        ACTOR,
+      );
+      return { thread: t, proposingTurn: turn };
+    });
     const toolCall = { tool: "tanren.trigger_run", args: { specId: SPEC_A } } as const;
 
     // create inside a scope: the row is visible inside the SAME transaction.
@@ -240,12 +271,12 @@ describeDb("RLS R2 cohort-4 — forge threads/turns/proposals through the org-sc
     });
     expect(created.status).toBe("pending");
 
-    // listForThread via the scope equals the pool.
+    // listForThread via the scope equals the OWNER baseline.
     const scopedList = await runWithOrgScope(runtimePool, ORG_A, (client) =>
       ForgeProposalStore.listForThread(client, thread.id, ACTOR),
     );
-    const pooledList = await ForgeProposalStore.listForThread(runtimePool, thread.id, ACTOR);
-    expect(scopedList.map((p) => p.id)).toEqual(pooledList.map((p) => p.id));
+    const ownedList = await ForgeProposalStore.listForThread(ownerPool, thread.id, ACTOR);
+    expect(scopedList.map((p) => p.id)).toEqual(ownedList.map((p) => p.id));
     expect(scopedList.map((p) => p.id)).toContain(created.id);
 
     // claim + recordOutcome through the scope drive the full lifecycle; a second
@@ -261,24 +292,29 @@ describeDb("RLS R2 cohort-4 — forge threads/turns/proposals through the org-sc
       expect(outcome.status).toBe("executed");
     });
 
-    const committed = await ForgeProposalStore.get(runtimePool, created.id, ACTOR);
+    // Committed terminal state via the OWNER pool (RLS-exempt ground truth).
+    const committed = await ForgeProposalStore.get(ownerPool, created.id, ACTOR);
     expect(committed?.status).toBe("executed");
     expect(committed?.result).toEqual({ ok: true });
 
-    // A pool-path claim on the already-decided proposal is idempotently rejected
-    // — same behavior as on the scope.
-    await expect(ForgeProposalStore.claimForDecision(runtimePool, created.id, "rejected", ACTOR)).rejects.toThrow(
-      /already decided/,
-    );
+    // A scoped claim on the already-decided proposal is idempotently rejected.
+    await expect(
+      runWithOrgScope(runtimePool, ORG_A, (client) =>
+        ForgeProposalStore.claimForDecision(client, created.id, "rejected", ACTOR),
+      ),
+    ).rejects.toThrow(/already decided/);
   });
 
   // (d) app-layer org scoping: org A's run-thread list never surfaces org B's
   //     thread, even though both share the run-scoped query shape.
   it("(d) org A's thread/turn reads never surface org B's rows", async () => {
-    const threadB = await ForgeThreadStore.create(
-      runtimePool,
-      { orgId: ORG_B, projectId: PROJECT_B, runId: "run_b", scope: "run", title: "b" },
-      ACTOR,
+    // Create org B's thread under org B's scope (the unscoped pool is denied).
+    const threadB = await runWithOrgScope(runtimePool, ORG_B, (client) =>
+      ForgeThreadStore.create(
+        client,
+        { orgId: ORG_B, projectId: PROJECT_B, runId: "run_b", scope: "run", title: "b" },
+        ACTOR,
+      ),
     );
     const listA = await runWithOrgScope(runtimePool, ORG_A, (client) =>
       ForgeThreadStore.listForRun(client, { orgId: ORG_A, projectId: PROJECT_A, runId: RUN_A }, ACTOR),
