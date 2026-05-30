@@ -146,6 +146,50 @@ describe("evaluateMatrix", () => {
     expect(matches).toEqual([]);
   });
 
+  it("a user route below the severity floor fires nothing but still suppresses the org default", () => {
+    // The user has explicitly taken control of this (channelKind) pair, so the
+    // org default must not fire — but the user route itself is not live because
+    // its minSeverity floor exceeds the event severity.
+    const orgTarget = target({ id: "t_org", scope: "org" });
+    const userTarget = target({ id: "t_user", scope: "user", userId: "user_1" });
+    const orgRoute = route({ id: "r_org", targetId: "t_org", minSeverity: "info" });
+    const userRoute = route({ id: "r_user", targetId: "t_user", minSeverity: "fail" });
+    const matches = evaluateMatrix({
+      targets: [orgTarget, userTarget],
+      routes: [orgRoute, userRoute],
+      actorUserId: "user_1",
+      eventName: "run.failed",
+      effectiveSeverity: "warn", // below the user route's fail floor, above org's info floor
+    });
+    expect(matches).toEqual([]);
+  });
+
+  it("does not fire when the route itself is disabled even though the target is enabled", () => {
+    const orgTarget = target({ id: "t_org", enabled: true });
+    const orgRoute = route({ targetId: "t_org", enabled: false });
+    const matches = evaluateMatrix({
+      targets: [orgTarget],
+      routes: [orgRoute],
+      actorUserId: null,
+      eventName: "run.failed",
+      effectiveSeverity: "fail",
+    });
+    expect(matches).toEqual([]);
+  });
+
+  it("fires when both target and route are enabled and the floor is met", () => {
+    const orgTarget = target({ id: "t_org", enabled: true });
+    const orgRoute = route({ targetId: "t_org", enabled: true, minSeverity: "warn" });
+    const matches = evaluateMatrix({
+      targets: [orgTarget],
+      routes: [orgRoute],
+      actorUserId: null,
+      eventName: "run.failed",
+      effectiveSeverity: "fail",
+    });
+    expect(matches).toHaveLength(1);
+  });
+
   it("does not fire when the target is disabled", () => {
     const orgTarget = target({ id: "t_org", enabled: false });
     const orgRoute = route({ targetId: "t_org" });

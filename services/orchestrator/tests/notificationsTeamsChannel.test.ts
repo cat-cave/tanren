@@ -108,4 +108,130 @@ describe("TeamsChannel", () => {
       }),
     ).rejects.toThrow(/missing teams webhook credential ref/);
   });
+
+  interface Card {
+    "@type": string;
+    "@context": string;
+    themeColor: string;
+    summary: string;
+    title: string;
+    text: string;
+    sections: Array<{ facts: Array<{ name: string; value: string }> }>;
+    potentialAction?: Array<{ "@type": string; name: string; targets: Array<{ os: string; uri: string }> }>;
+  }
+
+  async function capture(payload: Parameters<TeamsChannel["publish"]>[1]): Promise<{
+    headers: Record<string, string>;
+    card: Card;
+  }> {
+    let init: RequestInit | null = null;
+    const fakeFetch: typeof fetch = async (_url, i) => {
+      init = i as RequestInit;
+      return new Response("1", { status: 200 });
+    };
+    const channel = new TeamsChannel({ fetch: fakeFetch });
+    await channel.publish(target({ destination: "https://outlook.office.com/webhook/x" }), payload);
+    return { headers: init!.headers as Record<string, string>, card: JSON.parse(init!.body as string) };
+  }
+
+  it("stamps the MessageCard envelope, JSON content-type, summary, title, and body text", async () => {
+    const { headers, card } = await capture({
+      title: "the title",
+      body: "the body",
+      severity: "info",
+      eventName: "run.started",
+    });
+    expect(headers["Content-Type"]).toBe("application/json");
+    expect(card["@type"]).toBe("MessageCard");
+    expect(card["@context"]).toBe("http://schema.org/extensions");
+    expect(card.summary).toBe("the title");
+    expect(card.title).toBe("the title");
+    expect(card.text).toBe("the body");
+  });
+
+  it("lists event then severity facts in order, then tags when present", async () => {
+    const { card } = await capture({
+      title: "t",
+      body: "b",
+      severity: "warn",
+      eventName: "ci.failed",
+      tags: ["tanren", "x"],
+    });
+    expect(card.sections[0]?.facts).toEqual([
+      { name: "event", value: "ci.failed" },
+      { name: "severity", value: "warn" },
+      { name: "tags", value: "tanren, x" },
+    ]);
+  });
+
+  it("omits the tags fact when payload.tags is empty", async () => {
+    const { card } = await capture({
+      title: "t",
+      body: "b",
+      severity: "warn",
+      eventName: "ci.failed",
+      tags: [],
+    });
+    expect(card.sections[0]?.facts).toEqual([
+      { name: "event", value: "ci.failed" },
+      { name: "severity", value: "warn" },
+    ]);
+  });
+
+  it("maps each severity to its theme color", async () => {
+    const cases: Array<[Parameters<TeamsChannel["publish"]>[1]["severity"], string]> = [
+      ["ok", "2EB67D"],
+      ["info", "1264A3"],
+      ["warn", "ECB22E"],
+      ["fail", "E01E5A"],
+    ];
+    for (const [severity, color] of cases) {
+      const { card } = await capture({ title: "t", body: "b", severity, eventName: "run.failed" });
+      expect(card.themeColor).toBe(color);
+    }
+  });
+
+  it("omits potentialAction when payload.url is unset and includes it when set", async () => {
+    const without = await capture({ title: "t", body: "b", severity: "info", eventName: "run.started" });
+    expect(without.card.potentialAction).toBeUndefined();
+    const withUrl = await capture({
+      title: "t",
+      body: "b",
+      severity: "info",
+      eventName: "run.completed",
+      url: "https://tanren.example/runs/run_1",
+    });
+    const action = withUrl.card.potentialAction![0]!;
+    expect(action["@type"]).toBe("OpenUri");
+    expect(action.name).toBe("view run");
+    expect(action.targets[0]).toEqual({ os: "default", uri: "https://tanren.example/runs/run_1" });
+  });
+
+  it("uses an http:// destination verbatim", async () => {
+    let capturedUrl: string | null = null;
+    const fakeFetch: typeof fetch = async (url) => {
+      capturedUrl = String(url);
+      return new Response("1", { status: 200 });
+    };
+    const channel = new TeamsChannel({ fetch: fakeFetch });
+    await channel.publish(target({ destination: "http://outlook.internal/x" }), {
+      title: "t",
+      body: "b",
+      severity: "info",
+      eventName: "run.started",
+    });
+    expect(capturedUrl).toBe("http://outlook.internal/x");
+  });
+
+  it("throws when a credential ref is given but no secret store is wired", async () => {
+    const channel = new TeamsChannel({});
+    await expect(
+      channel.publish(target({ destination: "credential/teams/alerts" }), {
+        title: "t",
+        body: "b",
+        severity: "info",
+        eventName: "run.started",
+      }),
+    ).rejects.toThrow(/teams channel needs a secret store/);
+  });
 });

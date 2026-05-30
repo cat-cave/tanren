@@ -84,6 +84,57 @@ describe("WebhookChannel", () => {
     expect(body).not.toHaveProperty("tags");
   });
 
+  it("POSTs with a JSON content-type header", async () => {
+    let captured: RequestInit | null = null;
+    const fakeFetch: typeof fetch = async (_url, init) => {
+      captured = init as RequestInit;
+      return new Response("ok", { status: 200 });
+    };
+    const channel = new WebhookChannel({ fetch: fakeFetch });
+    await channel.publish(target({ destination: "https://hooks.example.com/x" }), {
+      title: "t",
+      body: "b",
+      severity: "info",
+      eventName: "run.started",
+    });
+    expect(captured!.method).toBe("POST");
+    expect((captured!.headers as Record<string, string>)["Content-Type"]).toBe("application/json");
+  });
+
+  it("forwards the severity and eventName verbatim", async () => {
+    let captured: RequestInit | null = null;
+    const fakeFetch: typeof fetch = async (_url, init) => {
+      captured = init as RequestInit;
+      return new Response("ok", { status: 200 });
+    };
+    const channel = new WebhookChannel({ fetch: fakeFetch });
+    await channel.publish(target({ destination: "https://hooks.example.com/x" }), {
+      title: "t",
+      body: "b",
+      severity: "warn",
+      eventName: "ci.failed",
+    });
+    const body = JSON.parse(captured!.body as string) as Record<string, unknown>;
+    expect(body.severity).toBe("warn");
+    expect(body.eventName).toBe("ci.failed");
+  });
+
+  it("uses an http:// destination verbatim", async () => {
+    let capturedUrl: string | null = null;
+    const fakeFetch: typeof fetch = async (url) => {
+      capturedUrl = String(url);
+      return new Response("ok", { status: 200 });
+    };
+    const channel = new WebhookChannel({ fetch: fakeFetch });
+    await channel.publish(target({ destination: "http://hooks.internal/x" }), {
+      title: "t",
+      body: "b",
+      severity: "info",
+      eventName: "run.started",
+    });
+    expect(capturedUrl).toBe("http://hooks.internal/x");
+  });
+
   it("throws when the endpoint returns a non-2xx status", async () => {
     const channel = new WebhookChannel({ fetch: failingFetch });
     await expect(

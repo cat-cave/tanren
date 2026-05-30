@@ -44,4 +44,35 @@ describe("buildChannelRegistry", () => {
       expect(registry[kind].kind).toBe(kind);
     }
   });
+
+  it("wires github_checks only when its github deps key is supplied", () => {
+    const fakeSecrets = {
+      async get() {
+        return undefined;
+      },
+    };
+    const wired = buildChannelRegistry({ github: { secrets: fakeSecrets } });
+    expect(wired.github_checks.wired).toBe(true);
+    expect(wired.github_checks.kind).toBe("github_checks");
+    // Supplying an unrelated dep must NOT wire github_checks.
+    const unrelated = buildChannelRegistry({ teams: {} });
+    expect(unrelated.github_checks.wired).toBe(false);
+  });
+
+  it("wires ntfy and slack to their real adapters (kind preserved) even with explicit deps", () => {
+    const registry = buildChannelRegistry({ ntfy: { baseUrl: "http://x" }, slack: {} });
+    expect(registry.ntfy.kind).toBe("ntfy");
+    expect(registry.ntfy.wired).toBe(true);
+    expect(registry.slack.kind).toBe("slack");
+    expect(registry.slack.wired).toBe(true);
+  });
+
+  it("keeps each unwired batch channel reporting its own kind via the stub", () => {
+    const registry = buildChannelRegistry({ teams: {} });
+    // teams is wired; the others fall to stubs but still carry their kind.
+    for (const kind of ["discord", "email", "twilio", "pagerduty", "webhook"] as const) {
+      expect(registry[kind].kind).toBe(kind);
+      expect(registry[kind].wired).toBe(false);
+    }
+  });
 });
