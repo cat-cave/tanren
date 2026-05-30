@@ -14,7 +14,7 @@ of work per-PR through real CI. **v0 (Phases 0–3) is built and merged on `main
 
 - **Live demo + live validation (P3-0009)** — blocked on real credentials. See `docs/operator-guide/operator-driven-run.md`; note migration `0026` makes `org_id` NOT NULL, so a live run needs a **fresh/reset dev DB**.
 - **agy / pi / reasonix harness adapters** — await each tool's CLI invocation spec; don't guess.
-- **RLS + control-plane/data-plane split** — plan written (`docs/roadmap/saas-rls-and-plane-split-plan.md`); held on 5 open decisions before building.
+- **RLS + control-plane/data-plane split** — plan approved (`docs/roadmap/saas-rls-and-plane-split-plan.md`); **R1 (inert mechanism + restricted role) built**; R2 enables policies + flips the runtime role, R3+ convert the remaining query sites (`docs/roadmap/R-WAVES.md`).
 - **GitLab / VCS abstraction** and the **Rust rewrite / native harness** — deliberately deferred / long-horizon.
 
 ## Working rules

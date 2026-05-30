@@ -24,6 +24,8 @@ import {
 } from "./contract.js";
 import type { ProjectFeedItem as ProjectFeedItemType, RunDetail } from "./contract.js";
 
+// RLS R1: loaders accept the pool OR an org-scoped client (both expose `.query`).
+type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 interface RawRunRow {
   run_id: unknown;
   spec_id: unknown;
@@ -56,21 +58,21 @@ const SELECT_RUN_COLUMNS = `
   run_id, spec_id, project_id, trigger, branch, status, outcome, pr_url, started_at, ended_at
 `;
 
-// ---------------------------------------------------------------------------
-// Run summary + tasks
-// ---------------------------------------------------------------------------
-
-// orgId is a defense-in-depth tenant predicate (tanren tenancy hardening): the
-// loaders filter by the actor's resolved org so a missing/buggy route gate can
-// never leak cross-tenant rows. Callers pass the path org after validating it
-// against the actor (actorCanAccessOrg).
-export async function fetchRunSummary(pool: pg.Pool, runId: string, orgId: string): Promise<RunSummary | undefined> {
+// --- Run summary + tasks ---------------------------------------------------
+// orgId is a defense-in-depth tenant predicate: the loaders filter by the
+// actor's resolved org (validated route-side via actorCanAccessOrg) so a
+// missing/buggy route gate can never leak cross-tenant rows.
+export async function fetchRunSummary(
+  pool: QueryClient,
+  runId: string,
+  orgId: string,
+): Promise<RunSummary | undefined> {
   const q = `SELECT ${SELECT_RUN_COLUMNS} FROM runs WHERE run_id = $1 AND org_id = $2`;
   const result = await pool.query<RawRunRow>(q, [runId, orgId]);
   return result.rows[0] === undefined ? undefined : decodeRunSummary(result.rows[0]);
 }
 
-export async function fetchRunTasks(pool: pg.Pool, runId: string, orgId: string): Promise<TaskTimelineEntry[]> {
+export async function fetchRunTasks(pool: QueryClient, runId: string, orgId: string): Promise<TaskTimelineEntry[]> {
   const result = await pool.query<Record<string, unknown>>(
     `SELECT task_id, run_id, kind, title, parent_task_id, status, outcome, failure_kind,
             attempt, cli, model, started_at, ended_at
@@ -105,11 +107,8 @@ export async function fetchRunTasks(pool: pg.Pool, runId: string, orgId: string)
   );
 }
 
-// ---------------------------------------------------------------------------
-// Spec summary (with milestone + behaviors)
-// ---------------------------------------------------------------------------
-
-export async function fetchRunSpecSummary(pool: pg.Pool, specId: string): Promise<RunSpecSummary | undefined> {
+// --- Spec summary (with milestone + behaviors) -----------------------------
+export async function fetchRunSpecSummary(pool: QueryClient, specId: string): Promise<RunSpecSummary | undefined> {
   const specResult = await pool.query<{ spec_id: string; title: string; description: string }>(
     "SELECT spec_id, title, description FROM specs WHERE spec_id = $1",
     [specId],
@@ -127,7 +126,7 @@ export async function fetchRunSpecSummary(pool: pg.Pool, specId: string): Promis
   });
 }
 
-async function fetchBehaviorIds(pool: pg.Pool, specId: string): Promise<string[]> {
+async function fetchBehaviorIds(pool: QueryClient, specId: string): Promise<string[]> {
   // spec_behaviors table arrived with P2A-0018; older deployments without
   // the table degrade to an empty list rather than 500ing.
   try {
@@ -141,7 +140,7 @@ async function fetchBehaviorIds(pool: pg.Pool, specId: string): Promise<string[]
   }
 }
 
-async function fetchSpecMilestone(pool: pg.Pool, specId: string): Promise<string | null> {
+async function fetchSpecMilestone(pool: QueryClient, specId: string): Promise<string | null> {
   try {
     const result = await pool.query<{ milestone_id: string }>(
       "SELECT milestone_id FROM spec_milestones WHERE spec_id = $1 LIMIT 1",
@@ -153,10 +152,7 @@ async function fetchSpecMilestone(pool: pg.Pool, specId: string): Promise<string
   }
 }
 
-// ---------------------------------------------------------------------------
-// Events (recent for snapshot + paginated)
-// ---------------------------------------------------------------------------
-
+// --- Events (recent for snapshot + paginated) ------------------------------
 interface EventQueryRow {
   id: unknown;
   ts: unknown;
@@ -209,7 +205,7 @@ interface SnapshotEventsArgs {
   rawView: boolean;
 }
 
-export async function fetchRunEventsForSnapshot(pool: pg.Pool, args: SnapshotEventsArgs): Promise<RunEventRow[]> {
+export async function fetchRunEventsForSnapshot(pool: QueryClient, args: SnapshotEventsArgs): Promise<RunEventRow[]> {
   // Most recent N events rendered chronologically; org_id filters by tenant.
   const result = await pool.query<EventQueryRow>(
     `SELECT id, ts, run_id, task_id, spec_id, project_id, event_type, payload
@@ -268,10 +264,7 @@ export async function fetchEventsPage(
   return CursorPage(RunEventRow).parse({ items, nextCursor });
 }
 
-// ---------------------------------------------------------------------------
-// Activity feed (paginated, project-wide)
-// ---------------------------------------------------------------------------
-
+// --- Activity feed (paginated, project-wide) -------------------------------
 interface FeedPageArgs {
   projectId: string;
   orgId: string;
@@ -346,7 +339,11 @@ function decodeCostRow(raw: CostQueryRow): RunCostRecord {
   });
 }
 
-export async function fetchRunCostsForSnapshot(pool: pg.Pool, runId: string, orgId: string): Promise<RunCostRecord[]> {
+export async function fetchRunCostsForSnapshot(
+  pool: QueryClient,
+  runId: string,
+  orgId: string,
+): Promise<RunCostRecord[]> {
   const result = await pool.query<CostQueryRow>(
     `SELECT id, task_id, run_id, project_id, cli, provider, model,
             input_tokens, cached_input_tokens, cache_creation_tokens, output_tokens, reasoning_output_tokens, total_tokens,
@@ -482,11 +479,10 @@ export async function fetchRunListItems(pool: pg.Pool, args: RunListArgs): Promi
 }
 
 function needsReviewFromOutcome(outcome: RunListItem["outcome"]): boolean {
-  // A run "needs review" when it has an open PR (truthy prUrl) and the
-  // outcome indicates a state where the operator must look at it. The
-  // canonical Phase 2 outcomes use `phase2_*_complete` for merge-ready;
-  // legacy `pending` / null outcomes also count as needing review when a PR
-  // is present.
+  // A run "needs review" when it has an open PR (truthy prUrl) and the outcome
+  // indicates the operator must look at it. The canonical Phase 2 outcomes use
+  // `phase2_*_complete` for merge-ready; legacy `pending` / null outcomes also
+  // count as needing review when a PR is present.
   if (outcome === null) return true;
   return (
     outcome === "halted" ||

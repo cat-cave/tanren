@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
 import { z } from "zod";
 import type { ActorContext } from "../../auth/schemas.js";
@@ -186,6 +187,16 @@ export async function createQueuedRunFromSpec(
   input: CreateSpecRunInput,
   actor?: ActorContext,
 ): Promise<SpecRunContract> {
+  // RLS wave R1 reference conversion (write path): when the actor carries an
+  // org, the run-create transaction runs through the org-scoped client so its
+  // INSERTs execute under `SET LOCAL app.current_org_id`. Behaviorally inert
+  // in R1 (no policies); R2's policy will read that GUC. A legacy/unscoped
+  // actor (org_id null — e.g. a CLI caller with no org) keeps the original
+  // manual-transaction path so nothing regresses while the GUC has no row.
+  const orgId = actor?.orgId ?? null;
+  if (orgId !== null) {
+    return runWithOrgScope(pool, orgId, (client) => createQueuedRunFromSpecOnClient(client, input, actor));
+  }
   const client = await pool.connect();
   try {
     await client.query("BEGIN");

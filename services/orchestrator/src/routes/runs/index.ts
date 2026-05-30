@@ -16,6 +16,7 @@
 //   /orgs/:orgId/projects/:projectId/runs/:runId/stream          — SSE
 //   /orgs/:orgId/projects/:projectId/feed                        — activity feed
 
+import { runWithOrgScope } from "@tanren/db";
 import type { Context } from "hono";
 import { Hono } from "hono";
 import type pg from "pg";
@@ -86,7 +87,14 @@ export function createRunRoutes(options: RunRoutesOptions) {
     const runId = c.req.param("runId");
     const projectId = c.req.param("projectId");
 
-    const summary = await fetchRunSummary(options.pool, runId, orgId);
+    // RLS wave R1 reference conversion (read path): the run/spec/tasks/events/
+    // costs loaders run through the org-scoped client so their SELECTs execute
+    // inside a `SET LOCAL app.current_org_id = <orgId>` transaction (the org is
+    // the path org, already validated against the actor above). Inert in R1 —
+    // no policies read the GUC yet — and behavior-identical to the pool path.
+    // Insights (touches the workflow_insights cache) and the Forge bundle
+    // (cross-store) stay on the pool; they convert in a later R-wave.
+    const summary = await runWithOrgScope(options.pool, orgId, (client) => fetchRunSummary(client, runId, orgId));
     if (summary === undefined) {
       return c.json({ error: "run_not_found" }, 404);
     }
@@ -97,11 +105,15 @@ export function createRunRoutes(options: RunRoutesOptions) {
     if (denial !== undefined) return denial;
 
     const rawView = parseRawViewOptIn(c);
-    const [spec, tasks, recentEvents, costs, insights, forgeThread] = await Promise.all([
-      fetchRunSpecSummary(options.pool, summary.specId),
-      fetchRunTasks(options.pool, runId, orgId),
-      fetchRunEventsForSnapshot(options.pool, { runId, orgId, limit: RECENT_EVENT_CAP, actor, rawView }),
-      fetchRunCostsForSnapshot(options.pool, runId, orgId),
+    const [spec, tasks, recentEvents, costs] = await runWithOrgScope(options.pool, orgId, (client) =>
+      Promise.all([
+        fetchRunSpecSummary(client, summary.specId),
+        fetchRunTasks(client, runId, orgId),
+        fetchRunEventsForSnapshot(client, { runId, orgId, limit: RECENT_EVENT_CAP, actor, rawView }),
+        fetchRunCostsForSnapshot(client, runId, orgId),
+      ]),
+    );
+    const [insights, forgeThread] = await Promise.all([
       fetchRunInsights(options.pool, summary.projectId, summary.specId, runId),
       fetchForgeBundle(options.pool, { orgId, projectId, runId, actor }),
     ]);
