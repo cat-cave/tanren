@@ -112,6 +112,15 @@ services:
       TANREN_OIDC_LOGIN_CLAIM: ${TANREN_OIDC_LOGIN_CLAIM:-}
       TANREN_OIDC_NAME_CLAIM: ${TANREN_OIDC_NAME_CLAIM:-}
       TANREN_OIDC_GROUPS_CLAIM: ${TANREN_OIDC_GROUPS_CLAIM:-}
+      # Plane-split P2: the control-plane internal mTLS CLAIM listener
+      # (`/internal/claim-job`). Supply the server cert/key + CA paths
+      # (operator-mounted) to start it; leave unset to disable (the worker then
+      # claims via direct DB-CAS). Keep this listener on the private control↔data
+      # network — never publish its port.
+      TANREN_INTERNAL_MTLS_PORT: ${TANREN_INTERNAL_MTLS_PORT:-3110}
+      TANREN_INTERNAL_TLS_CERT: ${TANREN_INTERNAL_TLS_CERT:-}
+      TANREN_INTERNAL_TLS_KEY: ${TANREN_INTERNAL_TLS_KEY:-}
+      TANREN_INTERNAL_TLS_CA: ${TANREN_INTERNAL_TLS_CA:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -127,10 +136,11 @@ services:
     # orchestrator API no longer runs the worker in-process; this container
     # claims jobs from `job_queue` (unchanged DB-CAS) and drives the
     # plan→write→check→audit loop via the sidecar allocator's ephemeral runners.
-    # P1 is a process-boundary change only — NO trust change yet (it holds the
-    # same DB/Vault access the in-process worker did). P2 adds mTLS + routes the
-    # claim/writes through a control-plane API; P3 de-privileges to per-run
-    # scoped credentials. See docs/roadmap/saas-rls-and-plane-split-plan.md.
+    # P1 is a process-boundary change only. P2 (DONE): the worker now CLAIMS over
+    # the orchestrator's mTLS `/internal/claim-job` endpoint when
+    # TANREN_CLAIM_ENDPOINT_URL + the data-plane cert paths below are supplied
+    # (else it falls back to the direct DB-CAS). P3 routes the WRITES + de-privileges
+    # to per-run creds. See docs/roadmap/saas-rls-and-plane-split-plan.md.
     build:
       context: .
       dockerfile: services/orchestrator/Dockerfile
@@ -150,6 +160,14 @@ services:
       # Same sidecar allocator the orchestrator uses (ephemeral runners on demand).
       TANREN_ALLOCATOR_URL: http://allocator:3200
       TANREN_ALLOCATOR_TOKEN: ${TANREN_ALLOCATOR_TOKEN:?TANREN_ALLOCATOR_TOKEN must be set for the prod profile}
+      # Plane-split P2: claim over the control-plane mTLS endpoint. Supply the
+      # endpoint URL + the data-plane client cert paths (operator-mounted, e.g. via
+      # a secrets volume or the platform's cert manager) to route the claim over
+      # mTLS; leave unset to keep the direct DB-CAS (P1 behavior).
+      TANREN_CLAIM_ENDPOINT_URL: ${TANREN_CLAIM_ENDPOINT_URL:-}
+      TANREN_DATA_PLANE_TLS_CERT: ${TANREN_DATA_PLANE_TLS_CERT:-}
+      TANREN_DATA_PLANE_TLS_KEY: ${TANREN_DATA_PLANE_TLS_KEY:-}
+      TANREN_DATA_PLANE_TLS_CA: ${TANREN_DATA_PLANE_TLS_CA:-}
     depends_on:
       postgres:
         condition: service_healthy

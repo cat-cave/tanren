@@ -1,8 +1,18 @@
-// Plane-split P1 cross-process smoke. Proves the run-executor worker is a
-// STANDALONE deployable: a run enqueued against the shared Postgres (the same
-// `job_queue` insert the control-plane API does) is CLAIMED and EXECUTED by the
-// separate `worker` compose container — across the API↔worker process boundary —
-// and finalized, all under the RLS-enforced `tanren_app` runtime role.
+// Plane-split P1+P2 cross-process smoke. Proves the run-executor worker is a
+// STANDALONE deployable that claims over the mTLS CONTROL-PLANE endpoint (P2): a
+// run enqueued against the shared Postgres (the same `job_queue` insert the
+// control-plane API does) is CLAIMED and EXECUTED by the separate `worker`
+// compose container — across the API↔worker process boundary — and finalized,
+// all under the RLS-enforced `tanren_app` runtime role.
+//
+// Plane-split P2 adds a DIRECT proof of the control-plane claim channel: the
+// smoke itself acts as a data-plane client and hits the live orchestrator's
+// `/internal/claim-job` endpoint (a) over mTLS with the worker's client cert →
+// it claims a seeded job + returns its org_id, and (b) without a client cert →
+// the TLS handshake is rejected (authn closed). The worker container is itself
+// configured to claim over this endpoint (TANREN_CLAIM_ENDPOINT_URL), so the
+// cross-process boundary crossing below ALSO exercises the mTLS claim path — if
+// mTLS were broken the worker could not claim and the smoke would time out.
 //
 // This script does NOT run any worker in-process. It only seeds + enqueues, then
 // observes the live DB until the OTHER process (the `worker` container) claims
@@ -25,7 +35,18 @@
 // (deny-by-default) — proving the worker container runs under enforced RLS.
 
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { request as httpsRequest } from "node:https";
 import { createDbPool } from "../../db/src/index.js";
+
+// The dev mTLS material `just gen-mtls-certs` writes to /tmp/tanren-mtls (the
+// host dir compose bind-mounts into the orchestrator + worker). The smoke reads
+// it from the HOST to act as a data-plane client against the live endpoint.
+const MTLS_DIR = process.env["TANREN_MTLS_DIR"] ?? "/tmp/tanren-mtls";
+// The orchestrator's internal mTLS listener, reachable on the host (compose maps
+// no host port for :3110, so the smoke talks to it via the published API host —
+// override with TANREN_CLAIM_ENDPOINT_HOST when the listener is host-exposed).
+const CLAIM_ENDPOINT = process.env["TANREN_CLAIM_ENDPOINT_SMOKE_URL"] ?? "https://localhost:3110";
 
 const OWNER_URL = process.env["DATABASE_URL"] ?? "postgres://tanren:tanren@localhost:5432/tanren";
 // The restricted runtime role the worker container actually connects as — we
@@ -136,14 +157,131 @@ async function rlsVisibility(): Promise<[number, number]> {
   }
 }
 
+// Plane-split P2: seed a SECOND queued run whose job the smoke claims DIRECTLY
+// over the mTLS endpoint. It uses a DISTINCT task_kind (`demo`, an existing
+// allowed kind) so the worker container — which claims only `plan` — never
+// steals it; the smoke's mTLS claim is the only consumer, making the
+// direct-claim proof deterministic.
+const mtlsRunId = `run_${randomUUID()}`;
+const mtlsTaskId = `task_${randomUUID()}`;
+const MTLS_PROBE_KIND = "demo";
+
+async function seedMtlsClaimRun(): Promise<void> {
+  const owner = createDbPool(OWNER_URL);
+  try {
+    await owner.query(
+      `INSERT INTO runs (run_id, spec_id, project_id, org_id, trigger, branch, status)
+       VALUES ($1, $2, $3, $4, 'cli', 'tanren/planesplit-mtls', 'queued')`,
+      [mtlsRunId, specId, projectId, orgId],
+    );
+    await owner.query(
+      `INSERT INTO tasks (task_id, run_id, org_id, kind, title, status, agent_kind, cli, model)
+       VALUES ($1, $2, $3, 'plan', 'Plan (mTLS claim proof)', 'queued', 'answerer', 'fake', 'gpt-5-codex')`,
+      [mtlsTaskId, mtlsRunId, orgId],
+    );
+    await owner.query(
+      `INSERT INTO job_queue (run_id, task_id, task_kind, payload, org_id)
+       VALUES ($1, $2, $3, $4::jsonb, $5)`,
+      [mtlsRunId, mtlsTaskId, MTLS_PROBE_KIND, JSON.stringify({ specId, projectId }), orgId],
+    );
+  } finally {
+    await owner.end();
+  }
+}
+
+interface ClaimAttempt {
+  status: number | "tls_rejected";
+  body: string;
+}
+
+// POST /internal/claim-job over mTLS. `withClientCert=false` presents NO client
+// cert, so the server's rejectUnauthorized tears down the handshake (authn
+// closed). Returns the HTTP status + body, or `tls_rejected` on a handshake error.
+function claimOverMtls(claimRunId: string, withClientCert: boolean): Promise<ClaimAttempt> {
+  const ca = readFileSync(`${MTLS_DIR}/ca.crt`);
+  const target = new URL("/internal/claim-job", CLAIM_ENDPOINT);
+  const body = JSON.stringify({ taskKind: MTLS_PROBE_KIND, runId: claimRunId });
+  return new Promise<ClaimAttempt>((resolve, reject) => {
+    const req = httpsRequest(
+      {
+        protocol: target.protocol,
+        hostname: target.hostname,
+        port: target.port,
+        path: target.pathname,
+        method: "POST",
+        headers: { "content-type": "application/json", "content-length": Buffer.byteLength(body) },
+        ca,
+        rejectUnauthorized: true,
+        ...(withClientCert
+          ? { cert: readFileSync(`${MTLS_DIR}/worker.crt`), key: readFileSync(`${MTLS_DIR}/worker.key`) }
+          : {}),
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (chunk: Buffer) => chunks.push(chunk));
+        res.on("end", () => resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString("utf8") }));
+      },
+    );
+    req.on("error", (error) => {
+      // A handshake rejection (no/invalid client cert) surfaces as a socket/TLS
+      // error, NOT an HTTP status — that IS the authn-closed proof.
+      const message = String((error as { code?: string }).code ?? error);
+      if (/ALERT|HANDSHAKE|ECONNRESET|EPROTO|SSL|TLS/i.test(message)) {
+        resolve({ status: "tls_rejected", body: message });
+      } else {
+        reject(error);
+      }
+    });
+    req.write(body);
+    req.end();
+  });
+}
+
+// Prove the control-plane mTLS claim endpoint directly: (1) a NO-cert caller is
+// rejected at TLS, (2) the worker's client cert claims the seeded job + gets its
+// org_id back. The claim is the SAME atomic CAS, only over mTLS.
+async function proveMtlsClaimEndpoint(): Promise<void> {
+  await seedMtlsClaimRun();
+  process.stdout.write(`[plane-split-smoke] seeded mTLS-claim run ${mtlsRunId}; probing /internal/claim-job…\n`);
+
+  const noCert = await claimOverMtls(mtlsRunId, false);
+  if (noCert.status !== "tls_rejected" && noCert.status !== 401) {
+    throw new Error(`mTLS authn NOT enforced: a no-cert caller got status ${String(noCert.status)} (expected reject)`);
+  }
+  process.stdout.write(`[plane-split-smoke] authn closed: no-cert claim rejected (${String(noCert.status)})\n`);
+
+  const withCert = await claimOverMtls(mtlsRunId, true);
+  if (withCert.status !== 200) {
+    throw new Error(`mTLS claim failed: trusted caller got status ${String(withCert.status)} — ${withCert.body}`);
+  }
+  const parsed = JSON.parse(withCert.body) as { job: { runId?: string; orgId?: string } | null };
+  if (parsed.job?.runId !== mtlsRunId) {
+    throw new Error(`mTLS claim returned the wrong job: ${JSON.stringify(parsed.job)}`);
+  }
+  if (parsed.job.orgId !== orgId) {
+    throw new Error(`mTLS claim dropped the org thread: expected ${orgId}, got ${String(parsed.job.orgId)}`);
+  }
+  process.stdout.write(
+    `[plane-split-smoke] PROOF (P2): the trusted worker cert claimed ${mtlsRunId} over mTLS via ` +
+      `/internal/claim-job — org=${String(parsed.job.orgId)} (same atomic CAS, transport behind mutual TLS)\n`,
+  );
+}
+
 // The worker has finished with the job once it leaves `queued`/`claimed`/`running`.
 const QUEUE_TERMINAL = new Set(["done", "failed", "cancelled", "dead_letter"]);
 
 async function main(): Promise<void> {
+  // Seed the org/project/spec + the worker's queued run FIRST (this creates the
+  // org/project/spec the mTLS-claim run below reuses), then enqueue.
   await seedQueuedRun();
   process.stdout.write(
     `[plane-split-smoke] seeded queued run ${runId} (org ${orgId}); waiting for the worker container…\n`,
   );
+
+  // Plane-split P2: prove the control-plane mTLS claim endpoint directly
+  // (authn-closed + a trusted claim that threads org_id) on its OWN seeded job,
+  // claimed by run_id so it never races the worker container's job above.
+  await proveMtlsClaimEndpoint();
 
   const owner = createDbPool(OWNER_URL);
   const deadline = Date.now() + TIMEOUT_MS;

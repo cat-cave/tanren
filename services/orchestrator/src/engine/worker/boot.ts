@@ -14,6 +14,7 @@ import { buildSecretStore, type SecretStore } from "../contracts/index.js";
 import { TimedGitHubHttpClient, TimedSshSubstrate } from "../observability/index.js";
 import { FetchGitHubHttpClient } from "../providers/github.js";
 import { Ssh2Substrate } from "../ssh/index.js";
+import { buildClaimClientFromEnv } from "./claimClientFromEnv.js";
 import type { JobReaper } from "./jobReaper.js";
 import type { RunWorker } from "./runWorker.js";
 import { startRunWorker } from "./lifecycle.js";
@@ -49,6 +50,17 @@ export async function bootRunWorker(): Promise<BootedRunWorker> {
   const pool = createDbPool();
   const secrets = buildSecretStore();
   await seedRunnerIdentitySecret(secrets, identitySecretRef);
+  // Plane-split P2: when the control-plane claim endpoint + the data-plane mTLS
+  // certs are configured, claim over the mTLS endpoint (so this container never
+  // touches `job_queue` to claim); else fall back to the direct DB-CAS. The
+  // standalone `worker` container sets the endpoint env; the single-process dev
+  // path leaves it unset and claims directly.
+  const claimClient = buildClaimClientFromEnv();
+  console.log(
+    claimClient === undefined
+      ? "[run-worker] claiming via direct DB-CAS (no control-plane endpoint configured)"
+      : "[run-worker] claiming via the mTLS control-plane endpoint (plane-split P2)",
+  );
   const { worker, reaper } = startRunWorker({
     pool,
     allocator: buildAllocatorFromEnv(pool),
@@ -58,6 +70,7 @@ export async function bootRunWorker(): Promise<BootedRunWorker> {
     secrets,
     githubHttp: new TimedGitHubHttpClient(new FetchGitHubHttpClient()),
     identitySecretRef,
+    ...(claimClient === undefined ? {} : { claimClient }),
   });
   const stop = async (): Promise<void> => {
     await Promise.all([worker.stop(), reaper.stop()]);
