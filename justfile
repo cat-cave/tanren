@@ -233,6 +233,17 @@ smoke-rls-r3a-worker:
 smoke-rls-r3b:
   DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/rlsR3bEnforcement.integration.test.ts
 
+# RLS early-failure finalize proof: a run that throws BEFORE the per-job org
+# scope is established (a credential-free run → MissingCredential during context
+# hydration) must still reach a terminal FINALIZED state, not get stuck `queued`.
+# Runs the REAL migration (RLS enabled), drives the worker's real claim→execute
+# path on the restricted `tanren_app` pool, and asserts the run lands `halted` —
+# the early-failure finalize now org-scopes from the CLAIMED org so the policy
+# admits its UPDATE. Same ephemeral-DB + restricted-role harness as the R-wave
+# cohorts. Regression lock for fix/rls-early-failure-finalize-scope.
+smoke-rls-early-finalize:
+  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/rlsEarlyFailureFinalize.integration.test.ts
+
 # Plane-split P1 cross-process proof: the run-executor worker is a STANDALONE
 # deployable. Seeds a queued plan job against the shared Postgres (the same
 # job_queue insert the control-plane API does), then waits for the SEPARATE
@@ -246,7 +257,7 @@ smoke-rls-r3b:
 smoke-plane-split-worker:
   DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" corepack pnpm exec tsx scripts/smoke/plane-split-worker.ts
 
-smoke: compose-build compose-up wait-for-stack smoke-hello smoke-ssh-integration smoke-plane-split-worker smoke-rls-r1 smoke-rls-r2 smoke-rls-r2-cohort2 smoke-rls-r2-cohort3 smoke-rls-r2-cohort4 smoke-rls-r3a smoke-rls-r3a-worker smoke-rls-r3b
+smoke: compose-build compose-up wait-for-stack smoke-hello smoke-ssh-integration smoke-plane-split-worker smoke-rls-r1 smoke-rls-r2 smoke-rls-r2-cohort2 smoke-rls-r2-cohort3 smoke-rls-r2-cohort4 smoke-rls-r3a smoke-rls-r3a-worker smoke-rls-r3b smoke-rls-early-finalize
 
 # P3-0001: the Phase 2A direct-execution acceptance gate (`just acceptance`,
 # scripts/acceptance/easy.ts + medium.ts) was removed once the run executor
