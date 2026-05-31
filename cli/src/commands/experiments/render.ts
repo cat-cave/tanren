@@ -52,7 +52,13 @@ function row(cells: readonly string[], widths: readonly number[]): string {
 
 function table(headers: readonly string[], rows: readonly (readonly string[])[]): string {
   const widths = headers.map((h, i) => Math.max(h.length, ...rows.map((r) => (r[i] ?? "").length)));
-  const lines = [row(headers, widths), row(headers.map((_, i) => "-".repeat(widths[i] ?? 0)), widths)];
+  const lines = [
+    row(headers, widths),
+    row(
+      headers.map((_, i) => "-".repeat(widths[i] ?? 0)),
+      widths,
+    ),
+  ];
   for (const r of rows) lines.push(row(r, widths));
   return lines.join("\n");
 }

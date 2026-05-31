@@ -47,7 +47,7 @@ class FakeClient {
   async query(sql: string, params: unknown[] = []): Promise<Result> {
     const text = sql.trim();
     if (text === "BEGIN" || text === "COMMIT" || text.startsWith("ROLLBACK")) return empty();
-    const setLocal = /^SET LOCAL app\.current_org_id = '([^']*)'$/.exec(text);
+    const setLocal = /^SET LOCAL app\.current_org_id = '([^']*)'$/u.exec(text);
     if (setLocal !== null) {
       this.scopedOrg = setLocal[1] ?? null;
       return empty();
@@ -121,9 +121,7 @@ export class BenchmarkRoutesPool {
       return rec === undefined ? empty() : single({ org_id: rec.org_id });
     }
     if (text.startsWith("SELECT 1 FROM experiments WHERE experiment_id")) {
-      const rec = this.experiments.find(
-        (e) => e.experiment_id === params[0] && this.visible(e.org_id, scopedOrg),
-      );
+      const rec = this.experiments.find((e) => e.experiment_id === params[0] && this.visible(e.org_id, scopedOrg));
       return rec === undefined ? empty() : single({ "?column?": 1 });
     }
     if (text.startsWith("SELECT experiment_id, org_id, title") && text.includes("ORDER BY created_at DESC")) {
@@ -134,9 +132,7 @@ export class BenchmarkRoutesPool {
       return { rows: rows as unknown as Record<string, unknown>[], rowCount: rows.length };
     }
     if (text.startsWith("SELECT experiment_id, org_id, title")) {
-      const rec = this.experiments.find(
-        (e) => e.experiment_id === params[0] && this.visible(e.org_id, scopedOrg),
-      );
+      const rec = this.experiments.find((e) => e.experiment_id === params[0] && this.visible(e.org_id, scopedOrg));
       return rec === undefined ? empty() : single(rec);
     }
 

@@ -7,12 +7,7 @@
 
 import { jsonRequest, request } from "../../httpClient.js";
 import { jsonOutput, optional, parseArgs, required, type ParsedArgs } from "../args.js";
-import {
-  renderCellComparison,
-  renderCellScorecard,
-  type CellComparison,
-  type CellScorecard,
-} from "./render.js";
+import { renderCellComparison, renderCellScorecard, type CellComparison, type CellScorecard } from "./render.js";
 
 function orgPath(args: ParsedArgs): string {
   return `/orgs/${encodeURIComponent(required(args, "org-id"))}`;
@@ -51,9 +46,9 @@ export async function experimentsRun(argv: string[]): Promise<void> {
     throw new Error("usage: tanren experiments run --experiment-id <id> | --cell-id <id>");
   }
   const path =
-    cellId !== undefined
-      ? `${orgPath(args)}/cells/${encodeURIComponent(cellId)}/run`
-      : `${orgPath(args)}/experiments/${encodeURIComponent(experimentId as string)}/run`;
+    cellId === undefined
+      ? `${orgPath(args)}/experiments/${encodeURIComponent(experimentId as string)}/run`
+      : `${orgPath(args)}/cells/${encodeURIComponent(cellId)}/run`;
   jsonOutput(args, await jsonRequest(path, {}));
 }
 

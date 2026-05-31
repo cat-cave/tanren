@@ -12,9 +12,11 @@ import { captureStdout } from "./helpers/captureOutput.js";
 import { startStubServer, type StubServer } from "./helpers/stubServer.js";
 
 let server: StubServer;
+let serverStarted = false;
 
 async function withStub(responseBody: unknown): Promise<typeof ExperimentsNs> {
   server = await startStubServer(responseBody);
+  serverStarted = true;
   process.env.TANREN_ORCHESTRATOR_URL = server.url;
   process.env.TANREN_AUTH_FILE = "/nonexistent/tanren-experiments-cli-auth.json";
   vi.resetModules();
@@ -22,7 +24,8 @@ async function withStub(responseBody: unknown): Promise<typeof ExperimentsNs> {
 }
 
 afterEach(async () => {
-  await server?.close();
+  if (serverStarted) await server.close();
+  serverStarted = false;
   delete process.env.TANREN_ORCHESTRATOR_URL;
   delete process.env.TANREN_AUTH_FILE;
 });
@@ -172,7 +175,6 @@ describe("benchmark CLI dispatch", () => {
     expect(out.stdout).toContain("A wins");
     expect(out.stdout).toContain("leadTimeSeconds");
   });
-
 });
 
 describe("benchmark render helpers", () => {
@@ -194,7 +196,15 @@ describe("benchmark render helpers", () => {
         nA: 2,
         nB: 2,
         metrics: {
-          costUsd: { diffOfMedians: 1, medianA: 5, medianB: 4, pValue: 0.5, effectSize: 0.1, lowerIsBetter: true, verdict: "no_call" },
+          costUsd: {
+            diffOfMedians: 1,
+            medianA: 5,
+            medianB: 4,
+            pValue: 0.5,
+            effectSize: 0.1,
+            lowerIsBetter: true,
+            verdict: "no_call",
+          },
         },
       },
       "cell_a",

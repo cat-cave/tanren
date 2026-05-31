@@ -142,10 +142,9 @@ export async function getExperiment(pool: pg.Pool, orgId: string, experimentId: 
  */
 export async function loadExperimentOrgId(pool: pg.Pool, experimentId: string): Promise<string | null> {
   return runWithSystemScope(pool, async (client) => {
-    const result = await client.query<{ org_id: string }>(
-      `SELECT org_id FROM experiments WHERE experiment_id = $1`,
-      [experimentId],
-    );
+    const result = await client.query<{ org_id: string }>(`SELECT org_id FROM experiments WHERE experiment_id = $1`, [
+      experimentId,
+    ]);
     return result.rows[0]?.org_id ?? null;
   });
 }
@@ -177,7 +176,13 @@ export async function createCell(
       `INSERT INTO experiment_cells (cell_id, experiment_id, label, frozen_config, trials_target)
        VALUES ($1, $2, $3, $4::jsonb, $5)
        RETURNING cell_id, experiment_id, label, frozen_config, trials_target`,
-      [input.cellId, experimentId, input.label, JSON.stringify(FrozenConfig.parse(input.frozenConfig)), input.trialsTarget],
+      [
+        input.cellId,
+        experimentId,
+        input.label,
+        JSON.stringify(FrozenConfig.parse(input.frozenConfig)),
+        input.trialsTarget,
+      ],
     );
     return decodeCell(result.rows[0]);
   });
@@ -231,11 +236,7 @@ export async function loadCellOrgId(pool: pg.Pool, cellId: string): Promise<stri
  * Throws `CellNotFoundError` when the cell is invisible so a mis-scoped read
  * fails loudly rather than silently reducing an empty sample.
  */
-export async function loadCellTrialScorecards(
-  pool: pg.Pool,
-  orgId: string,
-  cellId: string,
-): Promise<TrialScorecard[]> {
+export async function loadCellTrialScorecards(pool: pg.Pool, orgId: string, cellId: string): Promise<TrialScorecard[]> {
   return runWithOrgScope(pool, orgId, async (client) => {
     const cell = await client.query(`SELECT 1 FROM experiment_cells WHERE cell_id = $1`, [cellId]);
     if (cell.rows[0] === undefined) throw new CellNotFoundError(cellId);

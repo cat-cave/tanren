@@ -29,7 +29,7 @@ const alice: ActorContext = {
   source: "session",
 };
 
-function frozen(model: string, governance: "strict" | "lenient" = "strict"): FrozenConfig {
+function frozen(model: string, governance: "strict" | "open" | "audit_only" = "strict"): FrozenConfig {
   return FrozenConfig.parse({
     routing: { write: { chain: [{ cli: "codex", model, authRef: "credential/codex/org/x" }] } },
     escapeHatches: {},
@@ -64,11 +64,13 @@ function scorecard(runId: string, leadTimeSeconds: number): TrialScorecard {
   };
 }
 
-function buildHarness(opts: {
-  actor?: ActorContext;
-  runExperiment?: (pool: never, id: string) => Promise<never>;
-  runExperimentCell?: (pool: never, id: string) => Promise<never>;
-} = {}) {
+function buildHarness(
+  opts: {
+    actor?: ActorContext;
+    runExperiment?: (pool: never, id: string) => Promise<never>;
+    runExperimentCell?: (pool: never, id: string) => Promise<never>;
+  } = {},
+) {
   const actor = opts.actor ?? alice;
   const pool = new BenchmarkRoutesPool();
   setSystemPool(pool.asPgPool());
@@ -135,7 +137,12 @@ describe("benchmark experiment routes", () => {
 
   it("rejects an invalid experiment body with 400", async () => {
     const { app } = buildHarness();
-    const res = await post(app, `/orgs/${ORG}/experiments`, { title: "", knob: "k", hypothesis: "h", seedTaskRef: SEED });
+    const res = await post(app, `/orgs/${ORG}/experiments`, {
+      title: "",
+      knob: "k",
+      hypothesis: "h",
+      seedTaskRef: SEED,
+    });
     expect(res.status).toBe(400);
   });
 
@@ -221,7 +228,8 @@ describe("benchmark experiment routes", () => {
       scorecard: { trials: number; metrics: Record<string, { point: number | null }> };
     };
     expect(sc.trials).toBe(3);
-    expect(sc.metrics["leadTimeSeconds"]?.point).toBe(200); // median of 100/200/300
+    // median of 100/200/300
+    expect(sc.metrics["leadTimeSeconds"]?.point).toBe(200);
   });
 
   it("compares two cells and returns a verdict", async () => {
@@ -238,12 +246,27 @@ describe("benchmark experiment routes", () => {
       cell_id: "cell_b",
       experiment_id: "experiment_1",
       label: "b",
-      frozen_config: frozen("premium", "lenient"), // differs in exactly ONE knob (governance)
+      // differs in exactly ONE knob (governance)
+      frozen_config: frozen("premium", "open"),
       trials_target: 3,
     });
     for (const [i, lt] of [100, 110, 120].entries()) {
-      pool.seedTrial({ trial_id: `a${i}`, cell_id: "cell_a", run_id: `ra${i}`, trial_index: i, accept_result: null, scorecard: scorecard(`ra${i}`, lt) });
-      pool.seedTrial({ trial_id: `b${i}`, cell_id: "cell_b", run_id: `rb${i}`, trial_index: i, accept_result: null, scorecard: scorecard(`rb${i}`, lt + 500) });
+      pool.seedTrial({
+        trial_id: `a${i}`,
+        cell_id: "cell_a",
+        run_id: `ra${i}`,
+        trial_index: i,
+        accept_result: null,
+        scorecard: scorecard(`ra${i}`, lt),
+      });
+      pool.seedTrial({
+        trial_id: `b${i}`,
+        cell_id: "cell_b",
+        run_id: `rb${i}`,
+        trial_index: i,
+        accept_result: null,
+        scorecard: scorecard(`rb${i}`, lt + 500),
+      });
     }
     const res = await app.request(`/orgs/${ORG}/experiments/experiment_1/compare?cellA=cell_a&cellB=cell_b`);
     expect(res.status).toBe(200);
@@ -255,8 +278,20 @@ describe("benchmark experiment routes", () => {
     const { app, pool } = buildHarness();
     pool.seedExperiment({ experiment_id: "experiment_1", org_id: ORG });
     // cell_b differs in BOTH model (routing) and governance → >1 knob.
-    pool.seedCell({ cell_id: "cell_a", experiment_id: "experiment_1", label: "a", frozen_config: frozen("premium", "strict"), trials_target: 1 });
-    pool.seedCell({ cell_id: "cell_b", experiment_id: "experiment_1", label: "b", frozen_config: frozen("budget", "lenient"), trials_target: 1 });
+    pool.seedCell({
+      cell_id: "cell_a",
+      experiment_id: "experiment_1",
+      label: "a",
+      frozen_config: frozen("premium", "strict"),
+      trials_target: 1,
+    });
+    pool.seedCell({
+      cell_id: "cell_b",
+      experiment_id: "experiment_1",
+      label: "b",
+      frozen_config: frozen("budget", "open"),
+      trials_target: 1,
+    });
     const res = await app.request(`/orgs/${ORG}/experiments/experiment_1/compare?cellA=cell_a&cellB=cell_b`);
     expect(res.status).toBe(422);
     const body = (await res.json()) as { error: string; differingKeys: string[] };

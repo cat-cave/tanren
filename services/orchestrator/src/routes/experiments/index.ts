@@ -11,13 +11,8 @@ import { randomUUID } from "node:crypto";
 import { type Context, Hono } from "hono";
 import type pg from "pg";
 import { z } from "zod";
-import type { ActorContext } from "../../auth/schemas.js";
 import { FrozenConfig, SeedTaskRef } from "../../engine/benchmark/entities.js";
-import {
-  compareCells,
-  deriveCellScorecard,
-  OneKnobViolationError,
-} from "../../engine/benchmark/reducers.js";
+import { compareCells, deriveCellScorecard, OneKnobViolationError } from "../../engine/benchmark/reducers.js";
 import {
   runExperiment as defaultRunExperiment,
   runExperimentCell as defaultRunExperimentCell,
@@ -72,7 +67,7 @@ export function createExperimentRoutes(options: ExperimentRoutesOptions) {
   app.post("/:orgId/experiments", async (c) => {
     const { orgId, denied } = gate(c);
     if (denied) return denied;
-    const parsed = CreateExperimentBody.safeParse(await c.req.json().catch(() => undefined));
+    const parsed = CreateExperimentBody.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.json({ error: "invalid_experiment", issues: parsed.error.issues }, 400);
     try {
       const experiment = await createExperiment(pool, orgId, {
@@ -108,7 +103,7 @@ export function createExperimentRoutes(options: ExperimentRoutesOptions) {
     const { orgId, denied } = gate(c);
     if (denied) return denied;
     const experimentId = c.req.param("experimentId");
-    const parsed = CreateCellBody.safeParse(await c.req.json().catch(() => undefined));
+    const parsed = CreateCellBody.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.json({ error: "invalid_cell", issues: parsed.error.issues }, 400);
     try {
       const cell = await createCell(pool, orgId, experimentId, { cellId: `cell_${randomUUID()}`, ...parsed.data });
