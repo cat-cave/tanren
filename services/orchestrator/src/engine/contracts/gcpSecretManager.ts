@@ -35,7 +35,47 @@ interface GcpAccessResponse {
   payload?: { data?: unknown };
 }
 
+interface GcpListResponse {
+  secrets?: { labels?: Record<string, string> }[];
+  nextPageToken?: string;
+}
+
 const defaultApiBase = "https://secretmanager.googleapis.com/v1";
+
+// The secret id is a LOSSY sanitization of the ref (`/`→`_`, case-folded? no, but
+// `/` collisions are possible), so `list` cannot reconstruct the ref from the id.
+// Instead the original ref is preserved LOSSLESSLY as hex split across `ref0..N`
+// labels at create time (label values are limited to `[a-z0-9_-]{0,63}`, which
+// hex satisfies); `list` reads those labels back and reassembles the ref.
+const REF_LABEL_PREFIX = "ref";
+const LABEL_CHUNK = 63;
+
+function encodeRefLabels(ref: string): Record<string, string> {
+  const hex = Buffer.from(ref, "utf8").toString("hex");
+  const labels: Record<string, string> = {};
+  for (let i = 0, n = 0; i < hex.length; i += LABEL_CHUNK, n += 1) {
+    labels[`${REF_LABEL_PREFIX}${n}`] = hex.slice(i, i + LABEL_CHUNK);
+  }
+  return labels;
+}
+
+function decodeRefLabels(labels: Record<string, string> | undefined): string | undefined {
+  if (labels === undefined) {
+    return undefined;
+  }
+  const parts: string[] = [];
+  for (let n = 0; ; n += 1) {
+    const chunk = labels[`${REF_LABEL_PREFIX}${n}`];
+    if (chunk === undefined) {
+      break;
+    }
+    parts.push(chunk);
+  }
+  if (parts.length === 0) {
+    return undefined;
+  }
+  return Buffer.from(parts.join(""), "hex").toString("utf8");
+}
 
 /**
  * {@link SecretStore} backed by Google Secret Manager. Each agnostic ref maps to
@@ -96,6 +136,29 @@ export class GcpSecretManagerStore implements SecretStore {
     }
   }
 
+  async list(prefix: string): Promise<string[]> {
+    const refs: string[] = [];
+    let pageToken: string | undefined;
+    do {
+      const url = new URL(`${this.apiBase}/projects/${enc(this.options.project)}/secrets`);
+      url.searchParams.set("pageSize", "100");
+      if (pageToken !== undefined) {
+        url.searchParams.set("pageToken", pageToken);
+      }
+      const response = await this.fetchImpl(url.toString(), { headers: this.headers() });
+      await assertOk(response, `list secrets under ${prefix}`);
+      const body = (await response.json()) as GcpListResponse;
+      for (const entry of body.secrets ?? []) {
+        const ref = decodeRefLabels(entry.labels);
+        if (ref !== undefined && ref.startsWith(prefix)) {
+          refs.push(ref);
+        }
+      }
+      pageToken = body.nextPageToken;
+    } while (pageToken !== undefined && pageToken !== "");
+    return refs;
+  }
+
   /** Creates the secret container if it does not already exist (409 = exists). */
   private async ensureSecret(id: string, ref: string): Promise<void> {
     const response = await this.fetchImpl(
@@ -103,7 +166,7 @@ export class GcpSecretManagerStore implements SecretStore {
       {
         method: "POST",
         headers: this.headers(),
-        body: JSON.stringify({ replication: { automatic: {} } }),
+        body: JSON.stringify({ replication: { automatic: {} }, labels: encodeRefLabels(ref) }),
       },
     );
     if (response.status === 409) {

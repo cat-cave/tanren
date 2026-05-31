@@ -31,6 +31,13 @@ export function onePasswordConnectFetch(vaultId: string): typeof fetch {
       return new Response(JSON.stringify(found.map((item) => ({ id: item.id }))), { status: 200 });
     }
 
+    if (method === "GET" && url === base) {
+      // List all items as id+title summaries (the SecretStore.list path).
+      return new Response(JSON.stringify([...items.values()].map((item) => ({ id: item.id, title: item.title }))), {
+        status: 200,
+      });
+    }
+
     if (method === "POST" && url === base) {
       const id = `item-${nextId++}`;
       items.set(id, { id, title: body.title ?? "", fields: body.fields ?? [] });

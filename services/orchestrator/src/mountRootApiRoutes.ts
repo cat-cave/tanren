@@ -14,7 +14,6 @@ import { orgScopingPool } from "./engine/data/orgScopedDb.js";
 import {
   ciPollInputSchema,
   draftPrInputSchema,
-  githubCredentialImportSchema,
   projectInputSchema,
   runInputSchema,
   specInputSchema,
@@ -22,7 +21,6 @@ import {
 import type { SecretStore } from "./engine/contracts/index.js";
 import { FakeJobQueue } from "./engine/contracts/index.js";
 import { parseRawViewOptIn, redactEventRows } from "./routes/runs/redaction.js";
-import { storeGithubToken } from "./engine/credentials/githubToken.js";
 import type { GitHubHttpClient } from "./engine/providers/github.js";
 import type { GithubAppTokenMinter } from "./engine/providers/githubAppTokenMinter.js";
 import { CiPullRequestNotFoundError, CiRunNotFoundError, pollCiForRun } from "./engine/workflow/ciPolling.js";
@@ -42,7 +40,6 @@ import {
   SpecNotRunnableError,
   SpecNotFoundError,
 } from "./engine/workflow/projectSpec.js";
-import { registerAuthBundleImportRoutes } from "./routes/credentials/authBundleImports.js";
 import type { ActorContextEnv } from "./middleware/auth.js";
 
 export interface RootApiDeps {
@@ -137,20 +134,10 @@ export function mountRootApiRoutes(app: Hono<ActorContextEnv>, deps: RootApiDeps
     }
   });
 
-  // Codex (Phase 1) + Claude/opencode (P3-0012) auth-bundle import routes.
-  registerAuthBundleImportRoutes(app, secrets);
-
-  app.post("/credentials/github/import", async (c) => {
-    const parsed = githubCredentialImportSchema.safeParse(await c.req.json().catch(() => {}));
-    if (!parsed.success) {
-      return c.json({ error: "invalid_github_credential", issues: parsed.error.issues }, 400);
-    }
-    try {
-      return c.json(await storeGithubToken(secrets, parsed.data), 201);
-    } catch (error) {
-      return c.json({ error: "invalid_github_credential", message: messageFromError(error) }, 400);
-    }
-  });
+  // Credential import is ONLY the org-scoped surface (`/orgs/:orgId/credentials`,
+  // `/credentials/me` in `createCredentialRoutes`): each import derives a
+  // tenant-namespaced ref AND records a durable registry entry. There are no
+  // unscoped top-level `/credentials/<slug>/import` routes.
 
   app.post("/hello/run", async (c) => {
     // RLS R3b: the hello fixture is cross-org system seeding (its own throwaway
