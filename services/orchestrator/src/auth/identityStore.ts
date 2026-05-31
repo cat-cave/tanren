@@ -1,6 +1,7 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
+import { defaultOrgConfigV1 } from "../engine/config/index.js";
 import type {
   ActorContext,
   ActorScope,
@@ -110,10 +111,15 @@ export class IdentityStore {
         return rowToOrg({ ...row, login: claim.login, display_name: claim.displayName });
       }
       const id = `org_${randomUUID()}`;
+      // Persist a fully-defaulted VERSIONED config (`{ version: 1, ... }`), not
+      // the DB column default (`{}`): config parsing is fail-hard on unversioned
+      // rows (the migration shim is deleted), so a bootstrap org must carry an
+      // explicit version or `GET /orgs/:orgId` (and every config read) would
+      // throw. Mirrors `createProject` defaulting to `defaultProjectConfigV1()`.
       const inserted = await client.query<OrgRow>(
-        `INSERT INTO organizations (id, kind, external_id, login, display_name)
-         VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-        [id, claim.kind, claim.externalId, claim.login, claim.displayName],
+        `INSERT INTO organizations (id, kind, external_id, login, display_name, config)
+         VALUES ($1, $2, $3, $4, $5, $6::jsonb) RETURNING *`,
+        [id, claim.kind, claim.externalId, claim.login, claim.displayName, JSON.stringify(defaultOrgConfigV1())],
       );
       return rowToOrg(firstRow(inserted.rows));
     });
