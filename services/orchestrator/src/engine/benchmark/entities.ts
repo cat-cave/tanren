@@ -8,7 +8,7 @@
 
 import { z } from "zod";
 import { EscapeHatches, GovernancePosture, MergeIntegration, RoutingTable } from "../config/shared.js";
-import { CiTiers, CiWhenPolicy } from "../ci/schema.js";
+import { CiStep, CiWhenPolicy } from "../ci/schema.js";
 
 // ---- Seed task reference --------------------------------------------------
 
@@ -37,10 +37,26 @@ export type SeedTaskRef = z.infer<typeof SeedTaskRef>;
 // trial is reproducible from the row alone. Exactly ONE of these dimensions is
 // the knob the experiment varies (the §3.3 one-knob invariant, enforced by
 // `compareCells`).
+// The tier set, defined INLINE here rather than reusing the imported `CiTiers`
+// reference. Reusing that shared catchall schema as a nested property under a
+// `.strict()` parent drops its catchall keys (a Zod schema-identity quirk), which
+// would silently strip the hidden `accept` tier from a frozen cell on parse — and
+// the accept tier is the whole point of the freeze (the post-merge oracle). A
+// fresh catchall built at this site preserves `accept` (and any other named tier)
+// through `FrozenConfig.parse`, so the stored cell round-trips its oracle intact.
+// Shape is otherwise identical to `CiTiers`: `fast`/`slow` required, extra named
+// tiers (e.g. `accept`) admitted via the catchall.
+const FrozenCiTiers = z
+  .object({
+    fast: z.array(CiStep).min(1),
+    slow: z.array(CiStep).min(1),
+  })
+  .catchall(z.array(CiStep).min(1));
+
 export const CiTierSnapshot = z
   .object({
     /** The seed repo's `fast`/`slow` (+ optional `accept`) tier definitions. */
-    tiers: CiTiers,
+    tiers: FrozenCiTiers,
     /** The `when` policy: which tiers run at which workflow phase. */
     when: CiWhenPolicy,
   })

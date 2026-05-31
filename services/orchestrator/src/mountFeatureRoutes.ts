@@ -19,6 +19,7 @@ import { createCredentialRoutes, type CredentialRegistry } from "./routes/creden
 import { createDiscoveryRoutes } from "./routes/discovery/index.js";
 import { createDoctorRoutes } from "./routes/doctor/index.js";
 import { mountReportRoutes } from "./routes/experiments/mount.js";
+import type { LiveBenchmarkInfra } from "./engine/benchmark/liveScheduler.js";
 import { createForgeAskRoutes } from "./routes/forge/ask.js";
 import { createForgeProposalRoutes } from "./routes/forge/proposals.js";
 import { createInboxRoutes } from "./routes/inbox/index.js";
@@ -37,6 +38,9 @@ import { createRunRoutes } from "./routes/runs/index.js";
 import { createSpecRoutes } from "./routes/specs/index.js";
 import type { ActorContextEnv } from "./middleware/auth.js";
 
+/** The benchmark scheduler's live infra (the route supplies the pool itself). */
+export type BenchmarkRouteInfra = Omit<LiveBenchmarkInfra, "pool">;
+
 export interface FeatureRouteDeps {
   pool: pg.Pool;
   secrets: SecretStore;
@@ -45,6 +49,12 @@ export interface FeatureRouteDeps {
   credentialRegistry: CredentialRegistry;
   configGateGithub: ConfigGateGithubFactory;
   vaultHealthCheck: () => Promise<{ ok: boolean; status: number }>;
+  // Live benchmark infra (allocator + SSH + runner identity + the shared LISTEN
+  // connection) so the benchmark scheduler runs REAL trials — the post-merge
+  // accept tier and the LISTEN/NOTIFY terminal await. Omitted (the default) →
+  // the runner's own defaults apply (no-op accept, poll await): the route still
+  // schedules + persists trials, but the live verdict/await are not wired.
+  benchmark?: BenchmarkRouteInfra;
 }
 
 /**
@@ -53,6 +63,7 @@ export interface FeatureRouteDeps {
  */
 export function mountFeatureRoutes(app: Hono<ActorContextEnv>, deps: FeatureRouteDeps): void {
   const { pool, secrets, githubHttp, githubAppMinter, credentialRegistry, configGateGithub, vaultHealthCheck } = deps;
+  const benchmarkInfra = deps.benchmark;
   // RLS R3b: every `/orgs/:orgId/*` (+ `/orgs/:orgId/credentials`) operator route
   // handler runs its tenant-table reads/writes on this org-scoping pool. Combined
   // with the per-request `runWithJobOrgId` org scope the auth middleware
@@ -99,7 +110,9 @@ export function mountFeatureRoutes(app: Hono<ActorContextEnv>, deps: FeatureRout
   // injectable (defaults to a safe no-op until an SSH-backed runner is wired).
   app.route("/orgs", createAuditRoutes({ pool: scopedPool }));
   // DORA delivery metrics + the benchmark experiment/cell report+CRUD surface.
-  mountReportRoutes(app, { pool: scopedPool });
+  // The benchmark scheduler runs on the scoped pool; its live accept/await seams
+  // carry their own infra (allocator/ssh/identity/notify) when the boot wired it.
+  mountReportRoutes(app, { pool: scopedPool, ...(benchmarkInfra === undefined ? {} : { benchmark: benchmarkInfra }) });
   app.route("/orgs", createNotificationRoutes({ pool: scopedPool }));
   app.route("/orgs", createRunRoutes({ pool: scopedPool }));
   app.route("/orgs", createRecoveryRoutes({ pool: scopedPool }));
