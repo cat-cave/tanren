@@ -7,6 +7,7 @@
 // barrel↔boot import cycle is what this module breaks. The barrel re-exports
 // everything here so the public surface is unchanged.
 
+import { PgNotifyListener } from "@tanren/db";
 import type pg from "pg";
 import type { Allocator } from "../contracts/allocator.js";
 import type { JobClaimClient } from "../contracts/jobClaim.js";
@@ -75,6 +76,13 @@ export interface StartedRunWorker {
  */
 export function startRunWorker(input: StartRunWorkerInput): StartedRunWorker {
   const jobQueue = new PgJobQueue(input.pool);
+  // LISTEN/NOTIFY: a dedicated long-lived LISTEN connection (held off the
+  // worker's runtime pool) so an idle slot wakes the instant a job is enqueued
+  // instead of polling. The `tanren_job_queue` channel is a payload-free
+  // cross-tenant pulse, so LISTENing on the app-role pool leaks nothing. A
+  // caller-supplied `notifyListener` (tests) overrides this; otherwise we build
+  // one from the pool.
+  const notifyListener = input.options?.notifyListener ?? new PgNotifyListener(input.pool);
   const worker = new RunWorker(
     {
       pool: input.pool,
@@ -88,7 +96,7 @@ export function startRunWorker(input: StartRunWorkerInput): StartedRunWorker {
       ...(input.claimClient === undefined ? {} : { claimClient: input.claimClient }),
       ...(input.runStateWriter === undefined ? {} : { runStateWriter: input.runStateWriter }),
     },
-    { concurrency: workerConcurrencyFromEnv(), ...input.options },
+    { concurrency: workerConcurrencyFromEnv(), notifyListener, ...input.options },
   );
   worker.start();
   // P3-0028: a co-located reaper recovers leases dropped by crashed workers.

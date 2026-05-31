@@ -23,6 +23,9 @@
     ".env.example"
   ],
   "words": [
+    "unlisten",
+    "misconfig",
+    "unsub",
     "prepwork",
     "adapterization",
     "byok",
