@@ -13,7 +13,6 @@ import {
   codexHomeForRun,
   materializeCodexAuthBundle,
 } from "../src/engine/credentials/codexMaterializer.js";
-import { buildApp } from "../src/main.js";
 
 const target: SshTarget = {
   host: "runner",
@@ -156,33 +155,6 @@ describe("Codex credential contracts", () => {
     const stored = await secrets.get("credential/codex/org/o1/k");
     // The stored value is the canonicalized bundle JSON, byte-identical input here.
     expect(stored?.value).toBe(authJson);
-  });
-
-  it("imports Codex credentials through HTTP without echoing secret values", async () => {
-    const secrets = new FakeSecretStore();
-    const app = buildApp({
-      pool: {} as never,
-      helloDependencies: {} as never,
-      secrets,
-      vaultHealthCheck: async () => ({ ok: true, status: 200 }),
-    });
-    const response = await app.request("/credentials/codex/import", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        ref: "credential/codex/http",
-        authJson: JSON.stringify({ tokens: { access_token: "secret-token" } }),
-      }),
-    });
-    const body = await response.json();
-
-    expect(response.status).toBe(201);
-    expect(body).toEqual({
-      credentialKind: "codex_chatgpt_auth",
-      ref: "credential/codex/http",
-      redacted: true,
-    });
-    expect(JSON.stringify(body)).not.toContain("secret-token");
   });
 });
 

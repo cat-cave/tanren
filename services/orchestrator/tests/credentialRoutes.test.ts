@@ -3,7 +3,8 @@ import { describe, expect, it } from "vitest";
 import type { ActorContext } from "../src/auth/schemas.js";
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
 import { createAuthMiddleware, type ActorContextEnv } from "../src/middleware/auth.js";
-import { createCredentialRoutes, InMemoryCredentialRegistry } from "../src/routes/credentials/index.js";
+import { createCredentialRoutes, SecretStoreCredentialRegistry } from "../src/routes/credentials/index.js";
+import { InMemoryCredentialRegistry } from "./helpers/inMemoryCredentialRegistry.js";
 import { RoutesPool } from "./helpers/routesPool.js";
 
 const alice: ActorContext = {
@@ -178,5 +179,70 @@ describe("credential routes", () => {
     expect(body.credentials.length).toBe(1);
     expect(body.credentials[0]?.scope).toBe("me");
     expect(body.credentials[0]?.ownerId).toBe("user_alice");
+  });
+});
+
+describe("SecretStoreCredentialRegistry (durability)", () => {
+  it("survives an orchestrator restart — a fresh registry over the same store recovers the list", async () => {
+    const store = new InMemorySecretStore();
+    const first = new SecretStoreCredentialRegistry(store);
+    await first.put({
+      ref: "credential/opaque/org/org_acme/api-key",
+      kind: "opaque",
+      scope: "org",
+      ownerId: "org_acme",
+      createdAt: new Date().toISOString(),
+    });
+    await first.put({
+      ref: "credential/opaque/me/user_alice/dev",
+      kind: "opaque",
+      scope: "me",
+      ownerId: "user_alice",
+      createdAt: new Date().toISOString(),
+    });
+
+    // A brand-new registry instance (simulating a restarted process) reading the
+    // SAME backing store still sees every record — proving durability.
+    const afterRestart = new SecretStoreCredentialRegistry(store);
+    const orgList = await afterRestart.list({ scope: "org", ownerId: "org_acme" });
+    expect(orgList.map((r) => r.ref)).toEqual(["credential/opaque/org/org_acme/api-key"]);
+    const meList = await afterRestart.list({ scope: "me", ownerId: "user_alice" });
+    expect(meList.map((r) => r.ref)).toEqual(["credential/opaque/me/user_alice/dev"]);
+    await expect(afterRestart.get("credential/opaque/org/org_acme/api-key")).resolves.toMatchObject({
+      kind: "opaque",
+      scope: "org",
+      ownerId: "org_acme",
+    });
+  });
+
+  it("delete removes the durable record so it no longer lists", async () => {
+    const store = new InMemorySecretStore();
+    const registry = new SecretStoreCredentialRegistry(store);
+    await registry.put({
+      ref: "credential/opaque/org/org_acme/k",
+      kind: "opaque",
+      scope: "org",
+      ownerId: "org_acme",
+      createdAt: new Date().toISOString(),
+    });
+    await registry.delete("credential/opaque/org/org_acme/k");
+    await expect(registry.get("credential/opaque/org/org_acme/k")).resolves.toBeUndefined();
+    await expect(registry.list({ scope: "org", ownerId: "org_acme" })).resolves.toEqual([]);
+    // The underlying registry-record key is gone from the store too.
+    expect(await store.list("credregistry/")).toEqual([]);
+  });
+
+  it("does not leak the registry namespace into another scope/owner's list", async () => {
+    const store = new InMemorySecretStore();
+    const registry = new SecretStoreCredentialRegistry(store);
+    await registry.put({
+      ref: "credential/opaque/org/org_acme/k",
+      kind: "opaque",
+      scope: "org",
+      ownerId: "org_acme",
+      createdAt: new Date().toISOString(),
+    });
+    await expect(registry.list({ scope: "org", ownerId: "org_other" })).resolves.toEqual([]);
+    await expect(registry.list({ scope: "me", ownerId: "org_acme" })).resolves.toEqual([]);
   });
 });

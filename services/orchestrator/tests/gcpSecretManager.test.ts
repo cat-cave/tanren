@@ -66,7 +66,14 @@ describe("GcpSecretManagerStore wire contract", () => {
     expect(create.url).toBe(`${base}/secrets?secretId=credential_token`);
     expect(create.headers["content-type"]).toBe("application/json");
     expect(create.headers["authorization"]).toBe("Bearer tok");
-    expect(JSON.parse(create.body)).toEqual({ replication: { automatic: {} } });
+    // The original ref is preserved losslessly as hex `ref0..N` labels so
+    // `list()` can recover it despite the lossy secret-id sanitization.
+    const createBody = JSON.parse(create.body) as {
+      replication: unknown;
+      labels: Record<string, string>;
+    };
+    expect(createBody.replication).toEqual({ automatic: {} });
+    expect(Buffer.from(Object.values(createBody.labels).join(""), "hex").toString("utf8")).toBe("credential/token");
 
     const addVersion = calls[1]!;
     expect(addVersion.method).toBe("POST");

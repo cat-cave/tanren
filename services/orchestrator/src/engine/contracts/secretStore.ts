@@ -7,6 +7,14 @@ export interface SecretStore {
   put(secret: SecretValue): Promise<void>;
   get(ref: string): Promise<SecretValue | undefined>;
   delete(ref: string): Promise<void>;
+  /**
+   * Enumerate the agnostic refs currently stored whose ref starts with
+   * `prefix`. Returns the refs only (never the secret values), in no guaranteed
+   * order; a prefix that matches nothing returns `[]`. This is the durability
+   * seam the credential registry stands on: a restarted process recovers its
+   * credential LIST by re-listing the registry-record prefix from the store.
+   */
+  list(prefix: string): Promise<string[]>;
 }
 
 export interface VaultSecretStoreOptions {
@@ -30,6 +38,10 @@ export class InMemorySecretStore implements SecretStore {
 
   async delete(ref: string): Promise<void> {
     this.values.delete(ref);
+  }
+
+  async list(prefix: string): Promise<string[]> {
+    return [...this.values.keys()].filter((ref) => ref.startsWith(prefix));
   }
 }
 
@@ -77,6 +89,48 @@ export class VaultSecretStore implements SecretStore {
     }
   }
 
+  /**
+   * Walk the KV v2 metadata tree under `prefix` and return every leaf ref. Vault
+   * stores secrets as a path tree, so `LIST /metadata/<path>` yields immediate
+   * children (sub-trees carry a trailing `/`); we descend into sub-trees and
+   * collect leaves. The `prefix` need not align to a path boundary — we list the
+   * containing directory and keep only refs that string-match `prefix`.
+   */
+  async list(prefix: string): Promise<string[]> {
+    const slash = prefix.lastIndexOf("/");
+    const dir = slash === -1 ? "" : prefix.slice(0, slash);
+    const refs = await this.listTree(dir);
+    return refs.filter((ref) => ref.startsWith(prefix));
+  }
+
+  private async listTree(path: string): Promise<string[]> {
+    const response = await this.fetchImpl(this.metadataUrl(path), {
+      method: "LIST",
+      headers: this.headers(),
+    });
+    if (response.status === 404) {
+      return [];
+    }
+    await assertVaultOk(response, `list secrets under ${path}`);
+    const body = (await response.json()) as VaultListResponse;
+    const keys = body.data?.keys ?? [];
+    const out: string[] = [];
+    for (const key of keys) {
+      const child = path === "" ? key : `${path}/${key}`;
+      if (key.endsWith("/")) {
+        out.push(...(await this.listTree(child.replace(/\/$/u, ""))));
+      } else {
+        out.push(child);
+      }
+    }
+    return out;
+  }
+
+  private metadataUrl(path: string): string {
+    const base = `${this.options.addr.replace(/\/$/u, "")}/v1/${encodePath(this.mount)}/metadata`;
+    return path === "" ? base : `${base}/${encodePath(path)}`;
+  }
+
   private headers(): Record<string, string> {
     return {
       "Content-Type": "application/json",
@@ -94,6 +148,12 @@ interface VaultKvResponse {
     data?: {
       value?: unknown;
     };
+  };
+}
+
+interface VaultListResponse {
+  data?: {
+    keys?: string[];
   };
 }
 

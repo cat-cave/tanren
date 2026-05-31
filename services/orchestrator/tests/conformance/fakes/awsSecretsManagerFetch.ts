@@ -51,6 +51,11 @@ export function awsSecretsManagerFetch(): typeof fetch {
         }
         return new Response(JSON.stringify({ Name: id }), { status: 200 });
       }
+      case "ListSecrets": {
+        // Single page; the store keys ARE the secret names.
+        const SecretList = [...store.keys()].map((name) => ({ Name: name }));
+        return new Response(JSON.stringify({ SecretList }), { status: 200 });
+      }
       default:
         return new Response(JSON.stringify({ __type: "UnknownOperationException" }), { status: 400 });
     }

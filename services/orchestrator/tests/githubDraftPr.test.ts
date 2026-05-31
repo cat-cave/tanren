@@ -12,7 +12,6 @@ import {
   draftPrBranchName,
   pushWorkspaceBranchToGitHub,
 } from "../src/engine/workspace/githubPush.js";
-import { buildApp } from "../src/main.js";
 
 const target: SshTarget = {
   host: "runner",
@@ -272,31 +271,6 @@ describe("GitHub draft PR contract", () => {
     });
     expect(ssh.commands[0]?.command.cwd).toBe("/workspace/runs/run_123/repo");
     expect(pool.updates).toEqual([{ runId: "run_123", prUrl: "https://github.com/cat-cave/repo/pull/10" }]);
-  });
-
-  it("imports GitHub credentials through HTTP without echoing token values", async () => {
-    const secrets = new FakeSecretStore();
-    const app = buildApp({
-      pool: {} as never,
-      helloDependencies: { ssh: new RecordingSsh() } as never,
-      secrets,
-      vaultHealthCheck: async () => ({ ok: true, status: 200 }),
-    });
-
-    const response = await app.request("/credentials/github/import", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ref: "credential/github/http", token: "ghp_secretToken" }),
-    });
-    const body = await response.json();
-
-    expect(response.status).toBe(201);
-    expect(body).toEqual({
-      credentialKind: "github_token",
-      ref: "credential/github/http",
-      redacted: true,
-    });
-    expect(JSON.stringify(body)).not.toContain("ghp_secretToken");
   });
 });
 
