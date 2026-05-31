@@ -3,6 +3,7 @@
 // addressed org (or `platform:admin`). Org config uses the typed
 // `OrgConfigV1` shape from P2A-0006.
 
+import { runWithSystemScope } from "@tanren/db";
 import { Hono } from "hono";
 import type pg from "pg";
 import { z } from "zod";
@@ -37,13 +38,28 @@ export function createOrgRoutes(options: OrgRoutesOptions) {
 
   app.get("/", async (c) => {
     const actor = requireActor(c);
-    const rows = await options.pool.query<OrgListRow>(
-      `SELECT o.id, o.kind, o.login, o.display_name, m.role
-         FROM organizations o
-         INNER JOIN org_members m ON m.org_id = o.id
-        WHERE m.user_id = $1
-        ORDER BY o.login`,
-      [actor.userId],
+    // RLS R3b: "which orgs does this user belong to" is a user-scoped tenant
+    // BOOTSTRAP read that PRECEDES any org scope — it is how a user DISCOVERS
+    // their orgs (the org-switcher / dashboard shell backing query), the
+    // chicken-and-egg before an `app.current_org_id` can be selected. On the
+    // runtime `tanren_app` role (NOBYPASSRLS) with an empty GUC, the
+    // deny-by-default policies on `organizations` + `org_members`
+    // (`USING ... = current_setting('app.current_org_id', true)`) return ZERO
+    // rows, so the list comes back empty under enforced RLS. So — mirroring
+    // `identityStore`'s already-system-scoped membership resolution — this read
+    // runs on the BYPASSRLS `tanren_system` pool via `runWithSystemScope`,
+    // filtered by `user_id`. The result is still correctly scoped (the user's
+    // OWN memberships), just not subject to the org-GUC RLS filter that cannot
+    // apply pre-scope. IN-ORG reads (the `/:orgId` routes below) stay under RLS.
+    const rows = await runWithSystemScope(options.pool, (client) =>
+      client.query<OrgListRow>(
+        `SELECT o.id, o.kind, o.login, o.display_name, m.role
+           FROM organizations o
+           INNER JOIN org_members m ON m.org_id = o.id
+          WHERE m.user_id = $1
+          ORDER BY o.login`,
+        [actor.userId],
+      ),
     );
     return c.json({
       orgs: rows.rows.map((row) => ({
