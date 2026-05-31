@@ -22,7 +22,13 @@ import { type EventStore, PgEventStore } from "../../eventStore.js";
 import type { GithubAppTokenMinter } from "../../providers/githubAppTokenMinter.js";
 import { parseGitHubPullRequestUrl, type GitHubHttpClient, type GitHubRepository } from "../../providers/github.js";
 import { GitHubReviewMergeService, type MergePullRequestResult } from "../../providers/githubReviewMerge.js";
-import { loadReviewMergeRunContext, type ReviewMergeRunContext, type RunStateClient } from "./context.js";
+import { parseCommitLogins } from "./commitLogins.js";
+import {
+  contextOptionsFor,
+  loadReviewMergeRunContext,
+  type ReviewMergeRunContext,
+  type RunStateClient,
+} from "./context.js";
 import {
   assessExternalChange,
   decidePosture,
@@ -60,6 +66,8 @@ export interface MergeForRunInput {
   githubHttp: GitHubHttpClient;
   runId: string;
   githubAppMinter?: GithubAppTokenMinter;
+  /** Run-resolved GitHub credential ref; see PollReviewForRunInput. */
+  resolvedGithubCredentialRef?: string;
   /** Label applied for the mergify_queue path; defaults to `tanren:merge`. */
   mergifyQueueLabel?: string;
   /** GitHub merge method for direct_merge; defaults to `squash`. */
@@ -114,7 +122,7 @@ export function dispatchedIntegrationFor(mode: MergeIntegration): DispatchedInte
 }
 
 export async function mergeForRun(input: MergeForRunInput): Promise<MergeForRunResult> {
-  const context = await loadReviewMergeRunContext(input.pool, input.runId);
+  const context = await loadReviewMergeRunContext(input.pool, input.runId, contextOptionsFor(input));
   const eventStore = input.eventStore ?? new PgEventStore(input.pool);
   const pr = parseGitHubPullRequestUrl(context.prUrl);
   const integration = dispatchedIntegrationFor(context.mergeIntegration);
@@ -449,30 +457,6 @@ function buildContributorProbe(
       return { logins: parseCommitLogins(response.body) };
     },
   };
-}
-
-/** Collect the distinct author + committer logins from a PR commits response. */
-function parseCommitLogins(body: unknown): string[] {
-  if (!Array.isArray(body)) {
-    throw new TypeError("GitHub PR commits response was not an array");
-  }
-  const logins: string[] = [];
-  for (const entry of body) {
-    if (typeof entry !== "object" || entry === null) {
-      continue;
-    }
-    const record = entry as Record<string, unknown>;
-    logins.push(loginFrom(record["author"]), loginFrom(record["committer"]));
-  }
-  return logins;
-}
-
-function loginFrom(user: unknown): string {
-  if (typeof user !== "object" || user === null || Array.isArray(user)) {
-    return "";
-  }
-  const login = (user as Record<string, unknown>)["login"];
-  return typeof login === "string" ? login : "";
 }
 
 async function ensureMergeTask(pool: RunStateClient, context: ReviewMergeRunContext): Promise<string> {

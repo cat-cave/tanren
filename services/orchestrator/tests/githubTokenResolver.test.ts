@@ -31,7 +31,7 @@ describe("resolveGithubToken", () => {
     );
   });
 
-  it("falls back to TANREN_GITHUB_APP_TOKEN_REF then the built-in default ref", async () => {
+  it("falls back to TANREN_GITHUB_APP_TOKEN_REF when no staticRef is supplied", async () => {
     const secrets = new InMemorySecretStore();
     await secrets.put({ ref: "credential/github/env-ref", value: "ghp_from_env" });
     const prior = process.env["TANREN_GITHUB_APP_TOKEN_REF"];
@@ -46,11 +46,21 @@ describe("resolveGithubToken", () => {
         process.env["TANREN_GITHUB_APP_TOKEN_REF"] = prior;
       }
     }
-    // With neither staticRef nor env set, the built-in default ref is used.
+  });
+
+  it("throws a clear config error when no installation, staticRef, or env ref is configured", async () => {
+    const secrets = new InMemorySecretStore();
+    const prior = process.env["TANREN_GITHUB_APP_TOKEN_REF"];
     delete process.env["TANREN_GITHUB_APP_TOKEN_REF"];
-    await secrets.put({ ref: "credential/github/default", value: "ghp_default" });
-    const viaDefault = await resolveGithubToken({ secrets });
-    expect(viaDefault.token).toBe("ghp_default");
+    try {
+      // No hardcoded default ref: an unconfigured run is a hard config error,
+      // NOT a silent fall-through to `credential/github/default`.
+      await expect(resolveGithubToken({ secrets })).rejects.toThrow(/No GitHub credential configured for this run/u);
+    } finally {
+      if (prior !== undefined) {
+        process.env["TANREN_GITHUB_APP_TOKEN_REF"] = prior;
+      }
+    }
   });
 
   it("re-reads the static secret on refresh, observing a rotated value", async () => {

@@ -5,9 +5,11 @@
 //   1. App installation token — when the org's `organizations.config.github_app`
 //      block is present, mint (or reuse a cached) auto-rotating installation
 //      token via `GithubAppTokenMinter`. This is the preferred long-term model.
-//   2. Static token fallback — read the secret at the configured/legacy ref
-//      (`credential/github/...`). Keeps dev + Phase-2 back-compat working when
-//      no App is installed.
+//   2. Static token — read the secret at the configured ref. The ref comes from
+//      the caller's `staticRef` (the run's resolved project/org GitHub
+//      credential) or `TANREN_GITHUB_APP_TOKEN_REF`. There is NO hardcoded
+//      default ref: when no App is installed and neither source supplies a ref,
+//      that is a hard configuration error, not a silent default.
 //
 // The returned object also carries a `refresh()` supplier so callers (notably
 // `FetchGitHubHttpClient`) can re-mint once on a 401 without re-resolving the
@@ -34,7 +36,21 @@ export interface GithubTokenResolverInput {
   minter?: GithubAppTokenMinter;
 }
 
-const STATIC_DEFAULT_REF = "credential/github/default";
+/**
+ * Thrown when the static path has no credential ref to read: no App
+ * installation, no caller `staticRef`, and no `TANREN_GITHUB_APP_TOKEN_REF`.
+ * Per the no-fallback directive there is no hardcoded default ref — this is a
+ * configuration error the operator must fix (link a project/org GitHub
+ * credential, install the App, or set the env ref).
+ */
+export class NoGithubCredentialConfiguredError extends Error {
+  constructor() {
+    super(
+      "No GitHub credential configured for this run: no App installation, no resolved project/org credential ref, and TANREN_GITHUB_APP_TOKEN_REF is unset",
+    );
+    this.name = "NoGithubCredentialConfiguredError";
+  }
+}
 
 export async function resolveGithubToken(input: GithubTokenResolverInput): Promise<ResolvedGithubToken> {
   if (input.installation !== undefined) {
@@ -51,7 +67,10 @@ export async function resolveGithubToken(input: GithubTokenResolverInput): Promi
     };
   }
 
-  const ref = input.staticRef ?? process.env["TANREN_GITHUB_APP_TOKEN_REF"] ?? STATIC_DEFAULT_REF;
+  const ref = input.staticRef ?? process.env["TANREN_GITHUB_APP_TOKEN_REF"];
+  if (ref === undefined || ref.trim() === "") {
+    throw new NoGithubCredentialConfiguredError();
+  }
   const readStatic = async (): Promise<string> => {
     const secret = await input.secrets.get(ref);
     if (secret === undefined) {

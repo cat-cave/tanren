@@ -29,6 +29,24 @@ export async function loadOrgGithubAppInstallation(
   });
 }
 
+/**
+ * Read the org's configured default GitHub credential ref
+ * (`organizations.config.defaultCredentials.github_token`). Pre-run connectivity
+ * paths (brownfield link/recon) that have no project-record ref and no App
+ * installation resolve their static token from this. Returns undefined when the
+ * org sets no default — the caller then has no GitHub credential and the token
+ * resolver raises a hard config error (no hardcoded default ref).
+ *
+ * RLS: same single-org scoping rationale as `loadOrgGithubAppInstallation`.
+ */
+export async function loadOrgDefaultGithubCredentialRef(pool: pg.Pool, orgId: string): Promise<string | undefined> {
+  return runWithOrgScope(pool, orgId, async (client) => {
+    const result = await client.query<{ config: unknown }>("SELECT config FROM organizations WHERE id = $1", [orgId]);
+    const row = result.rows[0];
+    return row === undefined ? undefined : migrateOrgConfig(row.config).defaultCredentials?.github_token;
+  });
+}
+
 export async function persistOrgGithubAppInstallation(
   pool: pg.Pool,
   orgId: string,

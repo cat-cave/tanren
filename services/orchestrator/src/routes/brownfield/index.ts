@@ -15,7 +15,10 @@ import { resolveGithubToken, type ResolvedGithubToken } from "../../engine/crede
 import type { GitHubHttpClient } from "../../engine/providers/github.js";
 import { parseGitHubRepository } from "../../engine/providers/github.js";
 import type { GithubAppTokenMinter } from "../../engine/providers/githubAppTokenMinter.js";
-import { loadOrgGithubAppInstallation } from "../../engine/credentials/orgGithubApp.js";
+import {
+  loadOrgDefaultGithubCredentialRef,
+  loadOrgGithubAppInstallation,
+} from "../../engine/credentials/orgGithubApp.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg } from "../orgs/index.js";
 
@@ -78,10 +81,16 @@ export function createBrownfieldRoutes(options: BrownfieldRoutesOptions) {
     let resolved: ResolvedGithubToken;
     try {
       const installation = await loadOrgGithubAppInstallation(options.pool, orgId);
+      // Static ref: the request body's explicit ref wins; otherwise fall back to
+      // the org's default GitHub credential ref. No hardcoded default — when
+      // neither is set and no App is installed, the resolver throws and we map
+      // it to `github_credential_missing`.
+      const staticRef =
+        parsed.data.githubCredentialRef ?? (await loadOrgDefaultGithubCredentialRef(options.pool, orgId));
       resolved = await resolveGithubToken({
         secrets: options.secrets,
         installation,
-        staticRef: parsed.data.githubCredentialRef,
+        ...(staticRef === undefined ? {} : { staticRef }),
         minter: options.githubAppMinter,
       });
     } catch {

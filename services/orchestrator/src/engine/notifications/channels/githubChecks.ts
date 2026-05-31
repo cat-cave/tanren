@@ -40,8 +40,9 @@ export interface GithubChecksChannelDeps {
   // HTTP client used to talk to the GitHub REST API. Injected so tests can
   // assert request shape without a real network. Defaults to the fetch client.
   http?: GitHubHttpClient;
-  // Static fallback credential ref (when no App is installed). Optional; the
-  // resolver has its own env/default fallback.
+  // Static credential ref (when no App is installed). The resolver also reads
+  // `TANREN_GITHUB_APP_TOKEN_REF` when this is omitted; with no installation,
+  // staticRef, and env ref it raises a hard config error (no hardcoded default).
   staticRef?: string;
 }
 
