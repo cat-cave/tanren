@@ -48,8 +48,8 @@ describe("managed provider config", () => {
 
 // The toggle round-trips through the versioned config JSONB with no migration.
 describe("providerMode in versioned config", () => {
-  it("defaults a legacy org row to byok with no managed block", () => {
-    const org = migrateOrgConfig({});
+  it("defaults an explicit V1 org row to byok with no managed block", () => {
+    const org = migrateOrgConfig({ version: 1 });
     expect(org.providerMode).toBe("byok");
     expect(org.managedProvider).toBeUndefined();
   });
@@ -67,8 +67,8 @@ describe("providerMode in versioned config", () => {
     expect(migrateOrgConfig(once)).toEqual(once);
   });
 
-  it("leaves a legacy project row's providerMode absent (inherits org)", () => {
-    expect(migrateProjectConfig({}).providerMode).toBeUndefined();
+  it("leaves an explicit V1 project row's providerMode absent (inherits org)", () => {
+    expect(migrateProjectConfig({ version: 1 }).providerMode).toBeUndefined();
   });
 
   it("round-trips a project-level managed override", () => {

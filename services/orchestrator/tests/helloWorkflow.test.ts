@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { AllocationRequest, Allocator, RunnerAllocation, SshTarget } from "../src/engine/contracts/allocator.js";
 import type { JobEnvelope, JobQueue } from "../src/engine/contracts/jobQueue.js";
 import type { SshCommand, SshCommandResult, SshSubstrate } from "../src/engine/contracts/sshSubstrate.js";
-import { FakeEventStore } from "../src/engine/eventStore.js";
+import { FakeEventStore } from "./helpers/fakeEventStore.js";
 import type { CheckAnswer } from "../src/engine/providers/answererSchemas.js";
 import { parseStructuredAnswererOutput } from "../src/engine/providers/codex.js";
 import type { AnswererAdapter } from "../src/engine/providers/types.js";

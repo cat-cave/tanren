@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  MissingConfigVersionError,
   OrgConfigV1,
   RoleId,
   SUPPORTED_ORG_CONFIG_VERSIONS,
@@ -21,9 +22,21 @@ function captureOrgMigrationError(raw: unknown): UnknownConfigVersionError {
   throw new Error("expected migrateOrgConfig to throw UnknownConfigVersionError");
 }
 
+function captureOrgMissingVersionError(raw: unknown): MissingConfigVersionError {
+  try {
+    migrateOrgConfig(raw);
+  } catch (error) {
+    if (error instanceof MissingConfigVersionError) {
+      return error;
+    }
+    throw error;
+  }
+  throw new Error("expected migrateOrgConfig to throw MissingConfigVersionError");
+}
+
 describe("OrgConfigV1 parser", () => {
-  it("fills defaults for an empty object", () => {
-    const cfg = migrateOrgConfig({});
+  it("fills defaults for an explicit V1 with no other fields", () => {
+    const cfg = migrateOrgConfig({ version: 1 });
     expect(cfg.version).toBe(1);
     expect(cfg.auditGateEnabled).toBe(false);
     expect(cfg.notificationTargets).toEqual([]);
@@ -44,7 +57,7 @@ describe("OrgConfigV1 parser", () => {
   });
 
   it("represents all six roles with empty chains by default", () => {
-    const cfg = migrateOrgConfig({});
+    const cfg = migrateOrgConfig({ version: 1 });
     for (const role of RoleId.options) {
       expect(cfg.routing[role]).toEqual({ chain: [] });
     }
@@ -90,8 +103,8 @@ describe("OrgConfigV1 parser", () => {
     expect(() => migrateOrgConfig({ version: 1, allocator: { kind: "hetzner" } })).toThrow(/.+/u);
   });
 
-  it("omits defaultCredentials on a legacy row (backward compatible)", () => {
-    expect(migrateOrgConfig({}).defaultCredentials).toBeUndefined();
+  it("omits defaultCredentials when none is set", () => {
+    expect(migrateOrgConfig({ version: 1 }).defaultCredentials).toBeUndefined();
   });
 
   it("parses per-kind default credential refs and round-trips them", () => {
@@ -114,7 +127,7 @@ describe("OrgConfigV1 parser", () => {
   });
 
   it("is idempotent on a V1-shaped input", () => {
-    const first = migrateOrgConfig({});
+    const first = migrateOrgConfig({ version: 1 });
     const second = migrateOrgConfig(first);
     expect(second).toEqual(first);
   });
@@ -126,9 +139,14 @@ describe("OrgConfigV1 parser", () => {
     expect(caught.supportedVersions).toEqual(SUPPORTED_ORG_CONFIG_VERSIONS);
   });
 
-  it("treats a missing version as legacy and yields V1 defaults", () => {
-    const cfg = migrateOrgConfig({ someLegacyKey: "ignored" });
-    expect(cfg).toEqual(defaultOrgConfigV1());
+  it("fails hard on a versionless row (no silent legacy migration)", () => {
+    expect(() => migrateOrgConfig({})).toThrow(MissingConfigVersionError);
+    expect(() => migrateOrgConfig({ someLegacyKey: "ignored" })).toThrow(MissingConfigVersionError);
+  });
+
+  it("MissingConfigVersionError reports the supported versions", () => {
+    const caught = captureOrgMissingVersionError({});
+    expect(caught.supportedVersions).toEqual(SUPPORTED_ORG_CONFIG_VERSIONS);
   });
 });
 

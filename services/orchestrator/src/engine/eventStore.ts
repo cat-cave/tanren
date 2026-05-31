@@ -51,6 +51,9 @@ export class PgEventStore implements EventStore {
   }
 }
 
+// Shape of a recorded event. Production only re-exports this as the read model
+// for the in-memory test store (tests/helpers/fakeEventStore.ts); PgEventStore
+// itself never materializes it.
 export interface RecordedEvent<N extends EventName = EventName> {
   runId: string;
   taskId?: string;
@@ -58,21 +61,4 @@ export interface RecordedEvent<N extends EventName = EventName> {
   projectId: string;
   eventType: N;
   payload: EventPayload<N>;
-}
-
-export class FakeEventStore implements EventStore {
-  readonly events: RecordedEvent[] = [];
-
-  async append<N extends EventName>(input: AppendEventInput<N>): Promise<void> {
-    assertEventName(input.eventType);
-    const parsed = parseEventPayload(input.eventType, input.payload);
-    this.events.push({
-      runId: input.runId,
-      taskId: input.taskId,
-      specId: input.specId,
-      projectId: input.projectId,
-      eventType: input.eventType,
-      payload: parsed,
-    } as RecordedEvent<N>);
-  }
 }

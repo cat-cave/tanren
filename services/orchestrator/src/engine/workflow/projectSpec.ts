@@ -3,7 +3,7 @@ import { getSystemPool, runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
 import { z } from "zod";
 import type { ActorContext } from "../../auth/schemas.js";
-import { type ProjectConfigV1, migrateProjectConfig } from "../config/index.js";
+import { type ProjectConfigV1, defaultProjectConfigV1, migrateProjectConfig } from "../config/index.js";
 import { PgEventStore } from "../eventStore.js";
 import {
   ProjectAccessDeniedError,
@@ -27,10 +27,10 @@ export interface CreateProjectInput {
   defaultBranch?: string;
   runnerImage?: string;
   allocator?: string;
-  // The HTTP/CLI surface still accepts an arbitrary jsonb-ish blob for
-  // backwards compatibility with Phase 1 callers; `createProject` normalizes
-  // it through `migrateProjectConfig` before persisting and never stores
-  // unknown fields in the typed V1 shape.
+  // The HTTP/CLI surface accepts a jsonb-ish blob; `createProject` parses it
+  // through `migrateProjectConfig` (which requires an explicit `version`) before
+  // persisting and never stores unknown fields in the typed V1 shape. Omit the
+  // field entirely to persist the fully-defaulted V1.
   config?: unknown;
 }
 
@@ -104,9 +104,10 @@ export async function createProject(
     defaultBranch: input.defaultBranch ?? defaultBranch,
     runnerImage: input.runnerImage ?? defaultRunnerImage,
     allocator: input.allocator ?? defaultAllocator,
-    // migrateProjectConfig normalizes legacy versionless blobs into a defaulted
-    // V1; a V1-shaped input with unknown keys is rejected.
-    config: migrateProjectConfig(input.config ?? {}),
+    // An omitted config defaults to a fully-defaulted V1; a supplied config
+    // must carry an explicit `version` (migrateProjectConfig fails hard on a
+    // versionless blob) and is rejected if it has unknown keys.
+    config: input.config === undefined ? defaultProjectConfigV1() : migrateProjectConfig(input.config),
   };
 
   // RLS R3b: an org-carrying operator persists under `runWithOrgScope`; a

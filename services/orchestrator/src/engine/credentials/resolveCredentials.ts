@@ -163,9 +163,9 @@ function pickRef(kind: RunCredentialKind, ...layers: Array<string | undefined>):
 /**
  * Read + validate the org's default credential refs AND its provider-mode block
  * in a single read. A missing org row resolves to no defaults + the `byok`
- * default (unchanged behavior). The org row is normalized through
- * `migrateOrgConfig` so a legacy `{}` config resolves to `byok` with no
- * `defaultCredentials` rather than throwing.
+ * default (unchanged behavior). A present org row is parsed through
+ * `migrateOrgConfig`, which now fails hard on a versionless `{}` config (no
+ * silent upgrade) — stored rows must carry an explicit `version`.
  */
 async function loadOrgProviderModeConfig(pool: OrgConfigClient, orgId: string): Promise<OrgProviderModeConfig> {
   const result = await pool.query<{ config: unknown }>("SELECT config FROM organizations WHERE id = $1", [orgId]);

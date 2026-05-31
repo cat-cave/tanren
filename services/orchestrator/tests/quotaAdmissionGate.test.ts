@@ -65,7 +65,7 @@ class GatePool {
     }
     if (trimmed.startsWith("SELECT config FROM organizations")) {
       // Project config already carries both refs, so org defaults are unused.
-      return { rows: [{ config: {} }], rowCount: 1 };
+      return { rows: [{ config: { version: 1 } }], rowCount: 1 };
     }
     if (trimmed.startsWith("UPDATE runs SET status = 'halted', outcome = 'quota_exceeded'")) {
       this.runStatus = { status: "halted", outcome: "quota_exceeded" };

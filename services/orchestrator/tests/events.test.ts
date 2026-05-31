@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { listEventNames } from "../src/engine/events/index.js";
-import { FakeEventStore } from "../src/engine/eventStore.js";
+import { FakeEventStore } from "./helpers/fakeEventStore.js";
 
 describe("typed event store", () => {
   it("accepts a payload whose shape matches the registered Zod schema", async () => {

@@ -8,7 +8,7 @@ import type { AllocationRequest, Allocator, RunnerAllocation, SshTarget } from "
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import type { SshCommand, SshCommandResult, SshSubstrate } from "../src/engine/contracts/sshSubstrate.js";
 import { storeGithubToken } from "../src/engine/credentials/githubToken.js";
-import { FakeEventStore } from "../src/engine/eventStore.js";
+import { FakeEventStore } from "./helpers/fakeEventStore.js";
 import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "../src/engine/providers/github.js";
 import type { AnswererAdapter, CcusageAccounting, UsageProbe, WindowObservation } from "../src/engine/usage/index.js";
 import type { PlannerRunContext } from "../src/engine/workflow/plannerRun.js";
@@ -351,7 +351,11 @@ export class PlannerRunPool {
     private readonly runContext: PlannerRunContext,
     projectConfig?: Record<string, unknown>,
   ) {
-    this.projectConfig = projectConfig ?? { githubCredentialRef: runContext.githubCredentialRef };
+    // Default to a bare valid V1 (the not_configured / strict hand-off). The
+    // old default carried a top-level `githubCredentialRef`, but that is not a
+    // ProjectConfigV1 field and was silently dropped by the legacy migrate
+    // shim — the strict parser now requires an explicit `version`.
+    this.projectConfig = projectConfig ?? { version: 1 };
   }
 
   async query(sql: string, params: unknown[] = []): Promise<{ rows: unknown[]; rowCount: number }> {

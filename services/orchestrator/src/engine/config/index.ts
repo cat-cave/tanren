@@ -7,6 +7,7 @@ export {
   GovernancePosture,
   HealthHint,
   MergeIntegration,
+  MissingConfigVersionError,
   NotificationTargetRef,
   PartialAllocatorConfig,
   PartialEscapeHatches,

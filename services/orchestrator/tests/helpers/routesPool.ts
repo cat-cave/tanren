@@ -63,7 +63,7 @@ export class RoutesPool {
       external_id: input.external_id ?? input.id,
       login: input.login ?? input.id,
       display_name: input.display_name ?? input.login ?? input.id,
-      config: input.config ?? {},
+      config: input.config ?? { version: 1 },
     };
     this.orgs.set(row.id, row);
     return row;
@@ -81,7 +81,7 @@ export class RoutesPool {
       default_branch: input.default_branch ?? "main",
       runner_image: input.runner_image ?? "ghcr.io/example/runner:v0",
       allocator: input.allocator ?? "local-docker",
-      config: input.config ?? {},
+      config: input.config ?? { version: 1 },
       org_id: input.org_id,
     };
     this.projects.set(row.project_id, row);

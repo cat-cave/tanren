@@ -89,7 +89,7 @@ export class RecoveryMemoryPool {
       default_branch: "main",
       runner_image: "ghcr.io/cat-cave/tanren-runner:v0",
       allocator: "local-docker",
-      config: {},
+      config: { version: 1 },
     });
   }
 

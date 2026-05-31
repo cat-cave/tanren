@@ -99,7 +99,9 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
 
   const project = await createProject(
     pool,
-    { name: slug, repoUrl, config: {} },
+    // Omit config so createProject persists the fully-defaulted V1 (the strict
+    // parser rejects a versionless `{}`).
+    { name: slug, repoUrl },
     { ...input.actor, orgId: input.orgId },
   );
   const projectId = project.projectId;

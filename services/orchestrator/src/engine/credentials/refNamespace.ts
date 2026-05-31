@@ -15,14 +15,11 @@
 // user id). This mirrors the `CredentialRecord` the registry already stamps —
 // derivation just aligns the Vault key with that owner.
 //
-// `enforceRefOwnership` is the read-side guard: when a caller supplies a full
-// ref (back-compat), it must resolve to the SAME scope/owner the route
-// authorized; a ref whose scope/owner segment names a different tenant is
-// rejected. Legacy short refs (`credential/<slug>/<name>`, no scope segment)
-// are NOT accepted by the namespaced import route — those only ever flowed in
-// through the unauthenticated legacy `/credentials/<slug>/import` endpoints and
-// keep resolving unchanged because resolution still uses the prefix-only
-// validators. New imports through the org/me routes always get a derived ref.
+// The Vault ref is ALWAYS derived server-side from `{kind, scope, ownerId}` plus
+// the caller's `name`. There is no back-compat path that accepts a bare
+// caller-supplied ref: if the caller supplies a full ref it must be byte-equal
+// to the server-derived ref (so the caller cannot anchor a key to a different
+// tenant). Anything else is a hard 400 — never silently accepted.
 
 /** The credential kinds the namespaced import route can derive a ref for. */
 export type NamespacedCredentialKind =
@@ -75,11 +72,13 @@ export function deriveCredentialRef(input: DeriveRefInput): string {
 }
 
 /**
- * Resolve the trailing `name` segment the caller intends. Accepts either a bare
- * name (`"default"`) or a full ref the caller supplied for back-compat
- * (`"credential/<slug>/<scope>/<ownerId>/<name>"`); in the full-ref case the
- * scope/owner MUST match the authorized actor or this throws. Returns the name
- * to feed into {@link deriveCredentialRef}.
+ * Resolve the trailing `name` segment the caller intends. The caller supplies a
+ * bare name (`"default"`). If the caller supplies a full ref instead, it MUST be
+ * byte-equal to the ref this route would derive for the authorized
+ * `{kind, scope, ownerId}` — i.e. it must name this exact tenant namespace AND
+ * end in a single safe name segment — otherwise this throws. There is no
+ * back-compat path that trusts a caller-supplied ref shape. Returns the name to
+ * feed into {@link deriveCredentialRef}.
  */
 export function resolveCredentialName(args: {
   supplied: string;
@@ -94,7 +93,8 @@ export function resolveCredentialName(args: {
   if (!supplied.includes("/")) {
     return supplied;
   }
-  // A full ref was supplied: it must name this exact tenant namespace.
+  // A full ref was supplied: accept it ONLY if it is exactly the ref we would
+  // derive server-side for this actor. Reject anything else (no silent accept).
   const expectedPrefix = `credential/${KIND_SLUG[args.kind]}/${args.scope}/${args.ownerId}/`;
   if (!supplied.startsWith(expectedPrefix)) {
     throw new Error("credential ref does not belong to the authenticated owner");
@@ -103,14 +103,22 @@ export function resolveCredentialName(args: {
   if (name === "" || name.includes("/")) {
     throw new Error("credential ref must end in a single name segment");
   }
+  // Round-trip guard: the derived ref must reproduce the supplied ref byte-for-
+  // byte, so a malformed (but prefix-matching) ref cannot slip through.
+  const derived = deriveCredentialRef({ kind: args.kind, scope: args.scope, ownerId: args.ownerId, name });
+  if (derived !== supplied) {
+    throw new Error("credential ref does not match the server-derived ref");
+  }
   return name;
 }
 
 /**
- * The single Tier-A #3 enforcement entrypoint the import route calls: resolve
- * the caller's `supplied` ref to a tenant-safe name and derive the Vault ref
- * under the authorized `{kind, scope, ownerId}`. Throws (caught by the route as
- * a 400) when the caller's ref names a different tenant or is malformed.
+ * The single Tier-A #3 enforcement entrypoint the import route calls: derive the
+ * Vault ref server-side under the authorized `{kind, scope, ownerId}`. A caller
+ * who supplies only a bare `name` gets the derived ref; a caller who supplies a
+ * full ref has it validated to be byte-equal to that derived ref. Throws (caught
+ * by the route as a 400) when the caller's ref names a different tenant or is
+ * malformed.
  */
 export function deriveImportRef(args: {
   supplied: string;

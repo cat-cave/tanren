@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  MissingConfigVersionError,
   ProjectConfigV1,
   RoleId,
   SUPPORTED_PROJECT_CONFIG_VERSIONS,
@@ -21,9 +22,21 @@ function captureProjectMigrationError(raw: unknown): UnknownConfigVersionError {
   throw new Error("expected migrateProjectConfig to throw UnknownConfigVersionError");
 }
 
+function captureProjectError(raw: unknown): MissingConfigVersionError {
+  try {
+    migrateProjectConfig(raw);
+  } catch (error) {
+    if (error instanceof MissingConfigVersionError) {
+      return error;
+    }
+    throw error;
+  }
+  throw new Error("expected migrateProjectConfig to throw MissingConfigVersionError");
+}
+
 describe("ProjectConfigV1 parser", () => {
-  it("fills defaults for an empty object (Phase 1 fixture round-trip)", () => {
-    const cfg = migrateProjectConfig({});
+  it("fills defaults for an explicit V1 with no other fields", () => {
+    const cfg = migrateProjectConfig({ version: 1 });
     expect(cfg.version).toBe(1);
     expect(cfg.governancePosture).toBe("strict");
     expect(cfg.mergeIntegration).toBe("not_configured");
@@ -34,7 +47,7 @@ describe("ProjectConfigV1 parser", () => {
   });
 
   it("represents all six roles in the routing table with empty chains by default", () => {
-    const cfg = migrateProjectConfig({});
+    const cfg = migrateProjectConfig({ version: 1 });
     for (const role of RoleId.options) {
       expect(cfg.routing[role]).toEqual({ chain: [] });
     }
@@ -137,8 +150,8 @@ describe("ProjectConfigV1 parser", () => {
     expect(() => migrateProjectConfig({ version: 1, notificationTargets: ["not-a-uuid"] })).toThrow(/.+/u);
   });
 
-  it("omits the credentials field on a legacy row (backward compatible)", () => {
-    const cfg = migrateProjectConfig({});
+  it("omits the credentials field when none is bound", () => {
+    const cfg = migrateProjectConfig({ version: 1 });
     expect(cfg.credentials).toBeUndefined();
   });
 
@@ -174,7 +187,7 @@ describe("ProjectConfigV1 parser", () => {
   });
 
   it("is idempotent on a V1-shaped input (V1 -> V1)", () => {
-    const first = migrateProjectConfig({});
+    const first = migrateProjectConfig({ version: 1 });
     const second = migrateProjectConfig(first);
     expect(second).toEqual(first);
   });
@@ -186,13 +199,16 @@ describe("ProjectConfigV1 parser", () => {
     expect(caught.supportedVersions).toEqual(SUPPORTED_PROJECT_CONFIG_VERSIONS);
   });
 
-  it("treats a missing version as legacy and yields V1 defaults", () => {
-    // Phase 1 rows that happen to carry random ad-hoc fields are normalized
-    // by dropping the unknown payload; the typed config never carries
-    // free-form data.
-    const cfg = migrateProjectConfig({ budgetUsd: 25 });
-    expect(cfg.version).toBe(1);
-    expect(cfg).toEqual(defaultProjectConfigV1());
+  it("fails hard on a versionless row (no silent legacy migration)", () => {
+    // A row with no `version` discriminator is a hard error: there is no shim
+    // that upgrades legacy `{}`/versionless blobs into V1 defaults.
+    expect(() => migrateProjectConfig({})).toThrow(MissingConfigVersionError);
+    expect(() => migrateProjectConfig({ budgetUsd: 25 })).toThrow(MissingConfigVersionError);
+  });
+
+  it("MissingConfigVersionError reports the supported versions", () => {
+    const caught = captureProjectError({});
+    expect(caught.supportedVersions).toEqual(SUPPORTED_PROJECT_CONFIG_VERSIONS);
   });
 });
 

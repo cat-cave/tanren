@@ -69,7 +69,7 @@ describe("resolveCredentialName", () => {
     );
   });
 
-  it("extracts the trailing name from a matching full ref (back-compat)", () => {
+  it("accepts a full ref ONLY when it is byte-equal to the server-derived ref", () => {
     expect(
       resolveCredentialName({
         supplied: "credential/github/org/org_acme/ci",
@@ -78,6 +78,19 @@ describe("resolveCredentialName", () => {
         ownerId: "org_acme",
       }),
     ).toBe("ci");
+  });
+
+  it("rejects a full ref whose name segment is not a safe single segment", () => {
+    // Prefix matches the authorized actor, but the name segment is not a valid
+    // single safe segment, so it can never equal the server-derived ref.
+    expect(() =>
+      resolveCredentialName({
+        supplied: "credential/github/org/org_acme/.hidden",
+        kind: "github_token",
+        scope: "org",
+        ownerId: "org_acme",
+      }),
+    ).toThrow(/single safe path segment/u);
   });
 
   it("rejects a full ref whose owner segment names a different tenant", () => {

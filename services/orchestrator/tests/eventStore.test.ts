@@ -1,7 +1,8 @@
 import type pg from "pg";
 import { describe, expect, it } from "vitest";
 import { runWithOrgScope } from "@tanren/db";
-import { FakeEventStore, PgEventStore } from "../src/engine/eventStore.js";
+import { PgEventStore } from "../src/engine/eventStore.js";
+import { FakeEventStore } from "./helpers/fakeEventStore.js";
 import { listEventNames } from "../src/engine/events.js";
 
 describe("event store (legacy shim)", () => {

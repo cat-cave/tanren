@@ -25,7 +25,7 @@ const alice: ActorContext = {
 
 async function buildHarness() {
   const pool = new RoutesPool();
-  pool.seedOrg({ id: "org_acme", login: "acme", config: {} });
+  pool.seedOrg({ id: "org_acme", login: "acme", config: { version: 1 } });
   const secrets = new InMemorySecretStore();
   await storeGithubAppCredential(secrets, {
     ref: "credential/github_app/org/org_acme/default",

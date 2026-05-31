@@ -96,8 +96,8 @@ describe("resolveCredentialsForRun", () => {
         defaultCredentials: { codex_chatgpt_auth: codexOrgRef, github_token: githubOrgRef },
       },
     });
-    // A Phase-1 fixture project: plain `{}` config, no credentials key.
-    const projectConfig = migrateProjectConfig({});
+    // A project with a bare V1 config and no credentials key.
+    const projectConfig = migrateProjectConfig({ version: 1 });
     const resolved = await resolveCredentialsForRun(pool, { projectConfig, orgId: "org_1" });
     expect(resolved).toEqual({
       codexCredentialRef: codexOrgRef,

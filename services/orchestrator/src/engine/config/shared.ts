@@ -162,9 +162,21 @@ export class UnknownConfigVersionError extends Error {
   }
 }
 
-// Helper used by both migration helpers: returns the observed version if
-// present as a number, or undefined if the input is a legacy versionless
-// object that should be migrated into V1 defaults.
+// Thrown by the config parsers when a persisted row carries no `version`
+// discriminator at all. Tanren keeps no migration shim for legacy versionless
+// (`{}`) rows: every stored config must declare its version explicitly. Reset
+// the dev DB rather than relying on a silent runtime upgrade.
+export class MissingConfigVersionError extends Error {
+  readonly supportedVersions: ReadonlyArray<number>;
+  constructor(supportedVersions: ReadonlyArray<number>) {
+    super(`config row is missing a version discriminator; supported=[${supportedVersions.join(",")}]`);
+    this.supportedVersions = supportedVersions;
+  }
+}
+
+// Helper used by both config parsers: returns the observed version if present
+// as a number, or undefined when the input carries no `version` field at all
+// (a legacy versionless row, now a hard error — see MissingConfigVersionError).
 export function readObservedVersion(raw: unknown): number | undefined {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
     return undefined;

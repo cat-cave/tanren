@@ -7,6 +7,7 @@ import {
   PartialAllocatorConfig,
   PartialEscapeHatches,
   PartialForgePersona,
+  MissingConfigVersionError,
   RoutingTable,
   UnknownConfigVersionError,
   emptyRoutingTable,
@@ -71,13 +72,14 @@ export type ProjectConfigVersioned = z.infer<typeof ProjectConfigVersioned>;
 
 export const SUPPORTED_PROJECT_CONFIG_VERSIONS: ReadonlyArray<number> = [1];
 
-// Parses a stored project config row into the typed V1 shape. Same rules as
-// `migrateOrgConfig`. Phase 1 fixture projects ship with `{}` JSONB so this
-// helper must yield a valid V1 with defaults for them.
+// Parses a stored project config row into the typed V1 shape. Strict,
+// fail-hard — same rules as `migrateOrgConfig`: a row missing the `version`
+// discriminator throws MissingConfigVersionError (no silent versionless→V1
+// upgrade). Callers must persist an explicit `version`.
 export function migrateProjectConfig(raw: unknown): ProjectConfigV1 {
   const observed = readObservedVersion(raw);
   if (observed === undefined) {
-    return ProjectConfigV1.parse({ version: 1 });
+    throw new MissingConfigVersionError(SUPPORTED_PROJECT_CONFIG_VERSIONS);
   }
   if (observed === 1) {
     return ProjectConfigV1.parse(raw);

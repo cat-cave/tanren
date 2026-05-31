@@ -25,7 +25,7 @@ import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { migrate, runWithOrgScope } from "@tanren/db";
 import { CostRecorder } from "../src/engine/costs/recorder.js";
-import { FakeEventStore } from "../src/engine/eventStore.js";
+import { FakeEventStore } from "./helpers/fakeEventStore.js";
 import { getRunUsage } from "../src/engine/quota/index.js";
 import { insertChildTask, markTaskDone } from "../src/engine/workflow/subtaskTasks.js";
 import { fetchCostsPage, fetchRunCostsForSnapshot, fetchRunTasks } from "../src/routes/runs/list.js";
