@@ -3,7 +3,7 @@ import { getSystemPool, notifyJobEnqueued, runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
 import { z } from "zod";
 import type { ActorContext } from "../../auth/schemas.js";
-import { type ProjectConfigV1, migrateProjectConfig } from "../config/index.js";
+import { type ProjectConfigV1, defaultProjectConfigV1, migrateProjectConfig } from "../config/index.js";
 import { PgEventStore } from "../eventStore.js";
 import {
   ProjectAccessDeniedError,
@@ -27,10 +27,12 @@ export interface CreateProjectInput {
   defaultBranch?: string;
   runnerImage?: string;
   allocator?: string;
-  // The HTTP/CLI surface still accepts an arbitrary jsonb-ish blob for
-  // backwards compatibility with Phase 1 callers; `createProject` normalizes
-  // it through `migrateProjectConfig` before persisting and never stores
-  // unknown fields in the typed V1 shape.
+  // The HTTP/CLI surface accepts a jsonb-ish blob; `createProject` parses it
+  // through `migrateProjectConfig` (fail-hard on missing/unknown `version`)
+  // before persisting and never stores unknown fields in the typed V1 shape.
+  // Optional. When omitted, the project is created with a fully-defaulted V1.
+  // When supplied it MUST be an explicit `version: 1` blob — an unversioned
+  // blob is rejected (no silent upgrade).
   config?: unknown;
 }
 
@@ -104,9 +106,10 @@ export async function createProject(
     defaultBranch: input.defaultBranch ?? defaultBranch,
     runnerImage: input.runnerImage ?? defaultRunnerImage,
     allocator: input.allocator ?? defaultAllocator,
-    // migrateProjectConfig normalizes legacy versionless blobs into a defaulted
-    // V1; a V1-shaped input with unknown keys is rejected.
-    config: migrateProjectConfig(input.config ?? {}),
+    // No config supplied ⇒ fully-defaulted V1. A supplied config must be an
+    // explicit `version: 1` blob; an unversioned blob or unknown keys is
+    // rejected (fail-hard, no silent upgrade).
+    config: input.config === undefined ? defaultProjectConfigV1() : migrateProjectConfig(input.config),
   };
 
   // RLS R3b: an org-carrying operator persists under `runWithOrgScope`; a
@@ -412,9 +415,9 @@ async function loadSpecWithProject(
       defaultBranch: decoded.default_branch,
       runnerImage: decoded.runner_image,
       allocator: decoded.allocator,
-      // Read-path parser: a Phase 1 fixture project stored as `{}` jsonb
-      // returns a fully-defaulted V1; future versions raise a typed
-      // UnknownConfigVersionError out of migrateProjectConfig.
+      // Read-path parser: a stored row missing `version` (or carrying an
+      // unknown version) raises a typed UnknownConfigVersionError out of
+      // migrateProjectConfig — no silent default.
       config: migrateProjectConfig(decoded.config),
     },
     spec: {

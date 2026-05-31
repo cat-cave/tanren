@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
-import { FakeEventStore } from "../src/engine/eventStore.js";
+import { FakeEventStore } from "./helpers/fakeEventStore.js";
 import {
   FetchGitHubHttpClient,
   type GitHubHttpClient,

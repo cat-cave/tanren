@@ -130,8 +130,8 @@ export async function loadRunExecutionContext(
     throw new RunExecutionContextNotFoundError(input.runId);
   }
   const decoded = RunSpecProjectRowSchema.parse(row);
-  // migrateProjectConfig normalizes a Phase 1 `{}` blob into a defaulted V1 and
-  // raises on an unknown version, mirroring the route read-path parser.
+  // migrateProjectConfig parses the stored V1 row and raises on a missing or
+  // unknown version (no silent default), mirroring the route read-path parser.
   const projectConfig = migrateProjectConfig(decoded.config);
 
   // resolveCredentialsForRun reads organizations.config for the org-default

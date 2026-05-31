@@ -301,8 +301,8 @@ describeDb("RLS R2 cohort-3 — specs + runners + quota + finalizers through the
 // cohort-1/2 tests' seeder; kept local so the cohorts stay independent.
 async function seedTenant(owner: Pool, orgId: string, projectId: string, specId: string, runId: string): Promise<void> {
   await owner.query(
-    `INSERT INTO organizations (id, kind, external_id, login, display_name)
-     VALUES ($1, 'oidc', $1, $1, $1)`,
+    `INSERT INTO organizations (id, kind, external_id, login, display_name, config)
+     VALUES ($1, 'oidc', $1, $1, $1, '{"version":1}'::jsonb)`,
     [orgId],
   );
   await owner.query(

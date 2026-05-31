@@ -3,7 +3,7 @@
 
 import { describe, expect, it } from "vitest";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
-import { FakeEventStore } from "../src/engine/eventStore.js";
+import { FakeEventStore } from "./helpers/fakeEventStore.js";
 import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "../src/engine/providers/github.js";
 import {
   advanceCiFromWebhook,

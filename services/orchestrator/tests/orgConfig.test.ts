@@ -22,8 +22,8 @@ function captureOrgMigrationError(raw: unknown): UnknownConfigVersionError {
 }
 
 describe("OrgConfigV1 parser", () => {
-  it("fills defaults for an empty object", () => {
-    const cfg = migrateOrgConfig({});
+  it("fills defaults for a bare version:1 object", () => {
+    const cfg = migrateOrgConfig({ version: 1 });
     expect(cfg.version).toBe(1);
     expect(cfg.auditGateEnabled).toBe(false);
     expect(cfg.notificationTargets).toEqual([]);
@@ -44,7 +44,7 @@ describe("OrgConfigV1 parser", () => {
   });
 
   it("represents all six roles with empty chains by default", () => {
-    const cfg = migrateOrgConfig({});
+    const cfg = migrateOrgConfig({ version: 1 });
     for (const role of RoleId.options) {
       expect(cfg.routing[role]).toEqual({ chain: [] });
     }
@@ -90,8 +90,8 @@ describe("OrgConfigV1 parser", () => {
     expect(() => migrateOrgConfig({ version: 1, allocator: { kind: "hetzner" } })).toThrow(/.+/u);
   });
 
-  it("omits defaultCredentials on a legacy row (backward compatible)", () => {
-    expect(migrateOrgConfig({}).defaultCredentials).toBeUndefined();
+  it("omits defaultCredentials when none is set", () => {
+    expect(migrateOrgConfig({ version: 1 }).defaultCredentials).toBeUndefined();
   });
 
   it("parses per-kind default credential refs and round-trips them", () => {
@@ -114,7 +114,7 @@ describe("OrgConfigV1 parser", () => {
   });
 
   it("is idempotent on a V1-shaped input", () => {
-    const first = migrateOrgConfig({});
+    const first = migrateOrgConfig({ version: 1 });
     const second = migrateOrgConfig(first);
     expect(second).toEqual(first);
   });
@@ -126,9 +126,21 @@ describe("OrgConfigV1 parser", () => {
     expect(caught.supportedVersions).toEqual(SUPPORTED_ORG_CONFIG_VERSIONS);
   });
 
-  it("treats a missing version as legacy and yields V1 defaults", () => {
-    const cfg = migrateOrgConfig({ someLegacyKey: "ignored" });
-    expect(cfg).toEqual(defaultOrgConfigV1());
+  it("fails hard on an unversioned row (no silent default)", () => {
+    // The migration shim that upgraded a versionless/`{}` row into V1 defaults
+    // is deleted: an unversioned config is now a hard error.
+    const caughtEmpty = captureOrgMigrationError({});
+    expect(caughtEmpty).toBeInstanceOf(UnknownConfigVersionError);
+    expect(caughtEmpty.observedVersion).toBeUndefined();
+    expect(caughtEmpty.supportedVersions).toEqual(SUPPORTED_ORG_CONFIG_VERSIONS);
+
+    const caughtAdHoc = captureOrgMigrationError({ someLegacyKey: "ignored" });
+    expect(caughtAdHoc).toBeInstanceOf(UnknownConfigVersionError);
+    expect(caughtAdHoc.observedVersion).toBeUndefined();
+  });
+
+  it("exposes a fully-defaulted V1 via defaultOrgConfigV1()", () => {
+    expect(defaultOrgConfigV1()).toEqual(migrateOrgConfig({ version: 1 }));
   });
 });
 

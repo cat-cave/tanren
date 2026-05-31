@@ -14,7 +14,7 @@ import type pg from "pg";
 import { describe, expect, it } from "vitest";
 import { runWithOrgScope } from "@tanren/db";
 import { CostRecorder } from "../src/engine/costs/recorder.js";
-import { FakeEventStore } from "../src/engine/eventStore.js";
+import { FakeEventStore } from "./helpers/fakeEventStore.js";
 import { insertChildTask, markTaskDone } from "../src/engine/workflow/subtaskTasks.js";
 
 interface FakePool {

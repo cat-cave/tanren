@@ -23,7 +23,7 @@ describe("project/spec workflow contract", () => {
       body: JSON.stringify({
         name: "Tanren",
         repoUrl: "https://github.com/cat-cave/tanren-fixture-easy",
-        config: { budgetUsd: 25 },
+        config: { version: 1 },
       }),
     });
     const project = await projectResponse.json();

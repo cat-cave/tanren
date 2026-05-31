@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { CostRecorder } from "../src/engine/costs/index.js";
-import { FakeEventStore } from "../src/engine/eventStore.js";
+import { FakeEventStore } from "./helpers/fakeEventStore.js";
 import type { TokenUsage } from "../src/engine/providers/types.js";
 
 interface InsertedRow {

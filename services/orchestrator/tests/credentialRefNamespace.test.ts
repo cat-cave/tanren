@@ -113,7 +113,7 @@ describe("resolveCredentialName", () => {
     ).toThrow(/does not belong to the authenticated owner/u);
   });
 
-  it("rejects a full ref that has extra trailing segments", () => {
+  it("rejects a full ref that has extra trailing segments (not byte-equal to the derived ref)", () => {
     expect(() =>
       resolveCredentialName({
         supplied: "credential/github/org/org_acme/a/b",
@@ -121,7 +121,20 @@ describe("resolveCredentialName", () => {
         scope: "org",
         ownerId: "org_acme",
       }),
-    ).toThrow(/single name segment/u);
+    ).toThrow(/does not belong to the authenticated owner/u);
+  });
+
+  it("rejects a full ref that is not byte-equal to the derived ref (no bare-ref trust)", () => {
+    // The trailing segment ("ci") would derive a valid ref, but the supplied
+    // string is not byte-equal to it — so it is rejected, never trusted as-is.
+    expect(() =>
+      resolveCredentialName({
+        supplied: "vault://credential/github/org/org_acme/ci",
+        kind: "github_token",
+        scope: "org",
+        ownerId: "org_acme",
+      }),
+    ).toThrow(/does not belong to the authenticated owner/u);
   });
 
   it("rejects an empty supplied value", () => {

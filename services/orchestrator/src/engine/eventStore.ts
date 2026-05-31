@@ -60,29 +60,3 @@ export class PgEventStore implements EventStore {
     await notifyRunActivity(client, input.runId);
   }
 }
-
-export interface RecordedEvent<N extends EventName = EventName> {
-  runId: string;
-  taskId?: string;
-  specId: string;
-  projectId: string;
-  eventType: N;
-  payload: EventPayload<N>;
-}
-
-export class FakeEventStore implements EventStore {
-  readonly events: RecordedEvent[] = [];
-
-  async append<N extends EventName>(input: AppendEventInput<N>): Promise<void> {
-    assertEventName(input.eventType);
-    const parsed = parseEventPayload(input.eventType, input.payload);
-    this.events.push({
-      runId: input.runId,
-      taskId: input.taskId,
-      specId: input.specId,
-      projectId: input.projectId,
-      eventType: input.eventType,
-      payload: parsed,
-    } as RecordedEvent<N>);
-  }
-}

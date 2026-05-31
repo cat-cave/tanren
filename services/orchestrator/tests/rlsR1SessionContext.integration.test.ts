@@ -214,8 +214,8 @@ describeDb("RLS wave R1 — restricted role + org session context", () => {
 // Seed an org + project + spec + run + task for a tenant, as the owner pool.
 async function seedTenant(owner: Pool, orgId: string, runId: string): Promise<void> {
   await owner.query(
-    `INSERT INTO organizations (id, kind, external_id, login, display_name)
-     VALUES ($1, 'oidc', $1, $1, $1)`,
+    `INSERT INTO organizations (id, kind, external_id, login, display_name, config)
+     VALUES ($1, 'oidc', $1, $1, $1, '{"version":1}'::jsonb)`,
     [orgId],
   );
   const projectId = `proj_${orgId}`;
