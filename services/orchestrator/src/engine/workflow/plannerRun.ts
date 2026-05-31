@@ -204,7 +204,11 @@ export async function runPlannerLoopWorkflow(input: RunPlannerLoopInput): Promis
   await appendEvent("runner.allocated", runnerPayload(allocation));
 
   try {
-    await prepareWorkspace(input, allocation.target, workspacePath);
+    // The run's BASE sha: HEAD immediately after the clone, captured ONCE here.
+    // Threaded into the subtask loop → writer so each subtask is judged against
+    // the CUMULATIVE diff vs this base (not the per-subtask HEAD), so replanned
+    // already-done work isn't false-rejected as an empty per-iteration delta.
+    const baseSha = await prepareWorkspace(input, allocation.target, workspacePath);
     await appendEvent("workspace.prepared", {
       workspacePath,
       repoUrl: context.repoUrl,
@@ -276,6 +280,7 @@ export async function runPlannerLoopWorkflow(input: RunPlannerLoopInput): Promis
           specId: context.specId,
           projectId: context.projectId,
           workspacePath,
+          baseSha,
         },
         escapeHatches: input.escapeHatches,
         timeoutMs: input.timeoutMs,
@@ -378,8 +383,15 @@ async function supersedeQueuedPlannerTask(pool: RunStateClient, runId: string): 
   await pool.query("UPDATE job_queue SET status = 'cancelled' WHERE run_id = $1 AND status = 'queued'", [runId]);
 }
 
-async function prepareWorkspace(input: RunPlannerLoopInput, target: SshTarget, workspacePath: string): Promise<void> {
-  await runWorkspaceSshCommand(input.ssh, target, {
+// prepareWorkspace clones the target branch and returns the run's BASE sha —
+// HEAD right after the clone (the base-branch tip). `git rev-parse HEAD` runs
+// LAST in the chain and is the only stdout-producing step, so the returned
+// stdout is the base sha. Threaded into the loop so each subtask is judged on
+// the CUMULATIVE diff vs this base. Returns "" only on a fake SSH that yields no
+// output (unit paths drive the loop with fake writers that ignore baseSha); the
+// real runner always returns a 40-hex sha.
+async function prepareWorkspace(input: RunPlannerLoopInput, target: SshTarget, workspacePath: string): Promise<string> {
+  const result = await runWorkspaceSshCommand(input.ssh, target, {
     label: "prepare planner-loop workspace",
     timeoutMs: input.timeoutMs,
     command: [
@@ -389,8 +401,10 @@ async function prepareWorkspace(input: RunPlannerLoopInput, target: SshTarget, w
       `cd ${quoteSshShellArg(workspacePath)}`,
       "git config user.name 'Tanren Planner'",
       "git config user.email 'planner@tanren.invalid'",
+      "git rev-parse HEAD",
     ].join(" && "),
   });
+  return result.stdout.trim();
 }
 
 async function pollCiUntilTerminal(input: RunPlannerLoopInput): Promise<PollCiForRunResult> {

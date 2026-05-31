@@ -267,6 +267,94 @@ describe("Codex writer adapter", () => {
     expect(result.exitReason).toBe("window_exhausted");
     expect(result.telemetry?.usageLimit?.message).toContain("usage limit");
   });
+
+  // The cumulative-diff fix: when a run base sha is threaded, the writer diffs
+  // the workspace against the RUN BASE — not a freshly-captured per-subtask
+  // HEAD. It must NOT issue a `git rev-parse HEAD` baseline capture, and the
+  // diff/log commands must target the provided base sha.
+  it("diffs against the threaded run-base sha and skips the per-subtask HEAD capture", async () => {
+    const baseSha = "a".repeat(40);
+    // Script order when baseSha is provided (no baseline capture step):
+    //   0 materialize-auth, 1 codex exec, 2 persist-auth cat, 3 commit,
+    //   4 diff, 5 log.
+    const ssh = new ScriptedSsh([
+      ok(""),
+      ok("{}\n"),
+      ok(refreshedAuthJson()),
+      ok(""),
+      ok("diff --git a/GREETING.md b/GREETING.md\n+hello\n"),
+      ok(`${commitSha("c")}\tcodex writer\n`),
+    ]);
+    const secrets = new InMemorySecretStore();
+    await secrets.put({ ref: "credential/codex/dev", value: authJson });
+
+    const writer = createCodexWriter({
+      secrets,
+      ssh,
+      target,
+      credentialRef: "credential/codex/dev",
+      runId: "run_base_sha",
+    });
+    const result = await writer.runWriter({
+      prompt: "create GREETING.md",
+      workspace: "/workspace/repo",
+      timeoutMs: 1000,
+      baseSha,
+    });
+
+    const commandText = ssh.commands.map((item) => item.command.command);
+    // No standalone baseline capture: the writer must not re-read HEAD when a
+    // run base is threaded (that is the per-subtask HEAD this fix removes).
+    expect(commandText).not.toContain("git rev-parse HEAD");
+    // The diff + log baseline is the threaded run base, not a captured HEAD.
+    expect(commandText).toContain(`git diff --no-color ${baseSha}`);
+    expect(commandText.some((c) => c.includes(`${baseSha}..HEAD`))).toBe(true);
+    expect(result.diff).toContain("GREETING.md");
+    expect(result.exitReason).toBe("completed");
+  });
+
+  // The bug this fix closes: a REPLANNED subtask whose work a prior subtask
+  // already committed. Codex no-ops (the file already exists) so there is no NEW
+  // delta this iteration — but because the diff is taken vs the RUN BASE, the
+  // already-created file still appears, so the checker would pass instead of
+  // false-rejecting an empty per-iteration diff.
+  it("still shows a prior-iteration-created file in the diff when this iteration no-ops (cumulative vs base)", async () => {
+    const baseSha = "b".repeat(40);
+    // codex no-ops (empty stdout event), `git add -A` finds nothing new so no
+    // new commit is made, but `git diff <base>` still surfaces the file a prior
+    // subtask committed on top of the base.
+    const cumulativeDiff = "diff --git a/GREETING.md b/GREETING.md\nnew file mode 100644\n+hello\n";
+    const ssh = new ScriptedSsh([
+      ok(""),
+      ok("{}\n"),
+      ok(refreshedAuthJson()),
+      ok(""),
+      ok(cumulativeDiff),
+      ok(`${commitSha("d")}\tcreate GREETING.md\n`),
+    ]);
+    const secrets = new InMemorySecretStore();
+    await secrets.put({ ref: "credential/codex/dev", value: authJson });
+
+    const writer = createCodexWriter({
+      secrets,
+      ssh,
+      target,
+      credentialRef: "credential/codex/dev",
+      runId: "run_replanned",
+    });
+    const result = await writer.runWriter({
+      prompt: "create GREETING.md",
+      workspace: "/workspace/repo",
+      timeoutMs: 1000,
+      baseSha,
+    });
+
+    // The diff handed to the checker is non-empty and shows the file, so a
+    // no-op-but-already-satisfied subtask is NOT rejected for an empty diff.
+    expect(result.diff).toContain("GREETING.md");
+    expect(result.diff.length).toBeGreaterThan(0);
+    expect(result.exitReason).toBe("completed");
+  });
 });
 
 function commitSha(char: string): string {

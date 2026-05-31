@@ -66,7 +66,15 @@ export interface WriterAdapter {
   // Adapters that do not consume an LLM (e.g. fake fixtures) still declare
   // an authRef so the CostRecorder can run uniformly.
   readonly authRef: string;
-  runWriter(opts: { prompt: string; workspace: string; timeoutMs: number }): Promise<WriterResult>;
+  // `baseSha` is the run's BASE commit (the clone point / base-branch tip),
+  // captured once after the workspace clone. When provided, the adapter diffs
+  // the workspace against it so each subtask is judged against the CUMULATIVE
+  // state vs the run base — not the per-subtask HEAD delta. This makes a
+  // no-op-but-already-satisfied subtask (e.g. a replanned "create FILE" whose
+  // work a prior subtask already committed) still show the file in its diff, so
+  // the checker passes instead of false-rejecting an empty per-iteration delta.
+  // The production run path always threads it; fake test adapters ignore it.
+  runWriter(opts: { prompt: string; workspace: string; timeoutMs: number; baseSha?: string }): Promise<WriterResult>;
 }
 
 export interface AnswererRunOptions<TOutput> {

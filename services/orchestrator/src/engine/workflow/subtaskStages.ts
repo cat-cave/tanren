@@ -98,6 +98,12 @@ export interface WriterStageInput {
   writeTaskId: string;
   prompt: string;
   timeoutMs: number;
+  // The run's BASE sha (clone point), captured once after the workspace clone.
+  // Threaded to the writer so it diffs the workspace against the run base —
+  // judging each subtask on the CUMULATIVE state, not the per-subtask HEAD
+  // delta (so replanned already-done work isn't false-rejected as an empty
+  // diff). Omitted by unit callers that drive the stage without a base sha.
+  baseSha?: string;
   appendEvent: StageAppendEvent;
   buildUsage?: (input: {
     subtaskTaskId: string;
@@ -135,6 +141,7 @@ export async function runWriterStage(args: WriterStageInput): Promise<WriterResu
     prompt: args.prompt,
     workspace: args.workspacePath,
     timeoutMs: args.timeoutMs,
+    baseSha: args.baseSha,
   });
   const runtimeSeconds = secondsSince(startedAt);
   emitStageTiming("write", Date.now() - startedAt, {
