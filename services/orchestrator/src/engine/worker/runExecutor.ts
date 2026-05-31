@@ -229,7 +229,15 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
         ? {}
         : {
             eventStore: remoteWriter,
-            recorder: new CostRecorder(deps.pool, remoteWriter, (cost) => remoteWriter.recordCost(cost)),
+            recorder: new CostRecorder(
+              deps.pool,
+              remoteWriter,
+              (cost) => remoteWriter.recordCost(cost),
+              // Plane-split P3c: route the run-end cost reconcile/apportion through
+              // the control plane too — the de-privileged data plane can no longer
+              // UPDATE cost_records directly (migration 0031).
+              (rec) => remoteWriter.reconcileCost({ ...rec, orgId }),
+            ),
             finalizeRun: (f: { runId: string; status: string; outcome: string; fromStatuses: string[] }) =>
               remoteWriter.finalizeRun({ ...f, orgId }).then(() => {}),
           };

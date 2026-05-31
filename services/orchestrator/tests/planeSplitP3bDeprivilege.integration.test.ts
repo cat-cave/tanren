@@ -174,6 +174,19 @@ describeDb("plane-split P3b — the de-privileged tanren_dataplane role (real PG
     ).rejects.toMatchObject({ code: "42501" });
   });
 
+  // (b2) Plane-split P3c — the run-end reconcile/apportion is an UPDATE of
+  // cost_records, and the data-plane role's UPDATE grant is ALSO gone (0031
+  // dropped INSERT/UPDATE/DELETE). This is the exact write that failed the live
+  // run at finalize before P3c routed it through the control plane; assert it is
+  // rejected for the PRIVILEGE (42501), so the reconcile MUST go remote.
+  it("(b2) REJECTS a direct UPDATE of cost_records by the data-plane role (reconcile path)", async () => {
+    await expect(
+      inOrgScope(dataPlanePool, (client) =>
+        client.query("UPDATE cost_records SET cost_usd = 1, cost_basis = 'ccusage' WHERE run_id = $1", [RUN]),
+      ),
+    ).rejects.toMatchObject({ code: "42501" });
+  });
+
   // (c) The role KEEPS the cost_records READ (post-run usage accrual reads it).
   it("(c) ALLOWS the data-plane role to SELECT cost_records (read kept)", async () => {
     await expect(

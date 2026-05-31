@@ -61,6 +61,25 @@ export interface RecordCostInput {
 }
 
 /**
+ * The run-end cost RECONCILE the worker drives (mirrors
+ * {@link CostRecorder.apportionRunCost}). The recorder has already resolved the
+ * run-level dollar total + its basis (credit-drawdown precedence over ccusage —
+ * PROJECT_BRIEF §4); this carries that resolved total so the apportioning
+ * SELECT + per-row UPDATEs run server-side (control plane) under the run's org
+ * scope, never as a direct `cost_records` UPDATE from the de-privileged data
+ * plane (migration 0031 dropped that grant).
+ */
+export interface ReconcileCostInput {
+  runId: string;
+  /** The owning run's org, so the reconcile batch is org-scoped server-side (or in-process). */
+  orgId: string;
+  /** The run-level dollar total to apportion across the run's rows by token share. */
+  totalCostUsd: number;
+  /** The cost basis to stamp each repriced row with. */
+  basis: "ccusage" | "credits";
+}
+
+/**
  * The worker's run-state write surface. The worker (and the workflow it drives)
  * route every tenant run-state write through this seam so a deployment can move
  * those writes behind the control plane (remote) or keep them in-process
@@ -76,6 +95,14 @@ export interface RunStateWriter extends EventStore {
 
   /** Insert one cost_records row (+ its `cost.resolved` event), as {@link CostRecorder.record}. */
   recordCost(input: RecordCostInput): Promise<RecordedCost>;
+
+  /**
+   * Apportion a run-level dollar total across the run's cost_records rows by
+   * token share under the run's org scope, returning rows repriced. This is the
+   * run-end reconcile/back-fill (credit-drawdown or ccusage); routing it through
+   * the seam keeps the data plane from UPDATEing cost_records directly.
+   */
+  reconcileCost(input: ReconcileCostInput): Promise<{ updated: number }>;
 
   /**
    * Finalize a run into a terminal state under its org scope, returning whether a

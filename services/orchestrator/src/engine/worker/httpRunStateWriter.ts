@@ -18,6 +18,7 @@ import type {
   FinalizeRunInput,
   FinalizeRunResult,
   RecordCostInput,
+  ReconcileCostInput,
   RunStateWriter,
 } from "../contracts/runStateWriter.js";
 import type { RecordedCost } from "../costs/recorder.js";
@@ -57,6 +58,13 @@ export class HttpRunStateWriter implements RunStateWriter {
 
   async recordCost(input: RecordCostInput): Promise<RecordedCost> {
     return this.post<RecordedCost>("/internal/record-cost", { ...input, orgId: this.requireOrgId() });
+  }
+
+  async reconcileCost(input: ReconcileCostInput): Promise<{ updated: number }> {
+    // reconcileCost carries the org explicitly (the worker resolves it from the
+    // claimed job and threads it into the recorder's reconcile delegate), so no
+    // ambient lookup is needed — mirroring finalizeRun.
+    return this.post<{ updated: number }>("/internal/reconcile-cost", input);
   }
 
   async finalizeRun(input: FinalizeRunInput): Promise<FinalizeRunResult> {

@@ -214,6 +214,58 @@ describeDb("plane-split P3 — control-plane run-state write endpoints (real PG,
     expect(ev.rowCount).toBe(1);
   });
 
+  it("(3b) reconcile-cost apportions the run's cost_records server-side, org-scoped", async () => {
+    // Plane-split P3c: the run-end reconcile/back-fill must ALSO route through the
+    // control plane — the de-privileged data plane can no longer UPDATE
+    // cost_records directly (0031). Seed two cost rows (token shares 3:1) via the
+    // record endpoint, then reconcile a $4 run total and assert the rows were
+    // repriced by token share (3.00 / 1.00) with cost_basis = 'ccusage'.
+    const runId = "run_p3_reconcile";
+    await seedRun(runId);
+    const app = createInternalRunStateWriteRoutes({ pool: runtimePool, verifier: new AllowAllPeerVerifier() });
+    const writer = new HttpRunStateWriter("https://control.internal:3110", fetchInto(app));
+
+    const recordCall = (totalTokens: number): Promise<unknown> =>
+      runWithJobOrgId(ORG, () =>
+        writer.recordCost({
+          context: {
+            runId,
+            taskId: PLAN_TASK,
+            specId: SPEC,
+            projectId: PROJECT,
+            cli: "fake",
+            model: "m",
+            authRef: "fake:local",
+          },
+          tokens: {
+            inputTokens: 0,
+            cachedInputTokens: 0,
+            cacheCreationTokens: 0,
+            outputTokens: 0,
+            reasoningOutputTokens: 0,
+            totalTokens,
+          },
+          rawUsage: {},
+        }),
+      );
+    await recordCall(30);
+    await recordCall(10);
+
+    const result = await writer.reconcileCost({ runId, orgId: ORG, totalCostUsd: 4, basis: "ccusage" });
+    expect(result).toEqual({ updated: 2 });
+
+    const rows = await ownerPool.query<{ total_tokens: number; cost_usd: string; cost_basis: string }>(
+      "SELECT total_tokens, cost_usd, cost_basis FROM cost_records WHERE run_id = $1 ORDER BY total_tokens DESC",
+      [runId],
+    );
+    expect(
+      rows.rows.map((r) => ({ tokens: Number(r.total_tokens), cost: Number(r.cost_usd), basis: r.cost_basis })),
+    ).toEqual([
+      { tokens: 30, cost: 3, basis: "ccusage" },
+      { tokens: 10, cost: 1, basis: "ccusage" },
+    ]);
+  });
+
   it("(4) finalize-run finalizes once + the retried finalize is a no-op (exactly-once)", async () => {
     const runId = "run_p3_finalize";
     await seedRun(runId, "running");

@@ -58,15 +58,38 @@ export type CostPersist = (input: {
   rawUsage: Record<string, unknown>;
 }) => Promise<RecordedCost>;
 
+/**
+ * Plane-split P3c: a reconcile override for the recorder's run-end
+ * apportion/back-fill. When supplied, `reconcileRunCostFromCcusage` /
+ * `reconcileRunCostFromCredits` delegate the apportioning `cost_records`
+ * SELECT+UPDATEs (which the data plane may no longer perform directly —
+ * migration 0031 dropped its `cost_records` write grant) to this function
+ * instead of writing in-process, so the worker routes them through the
+ * control-plane endpoint (`HttpRunStateWriter`). The recorder still resolves the
+ * dollar total + basis (the credit/ccusage precedence stays here); only the
+ * write moves. The default in-process path is byte-identical.
+ */
+export type CostReconcile = (input: {
+  runId: string;
+  totalCostUsd: number;
+  basis: "ccusage" | "credits";
+}) => Promise<{ updated: number }>;
+
 export class CostRecorder {
   constructor(
     private readonly pool: RecorderClient,
     private readonly eventStore: EventStore,
     // Plane-split P3: optional remote-write delegate. When set, `record` routes
     // the persist through it (the control-plane endpoint) rather than the
-    // in-process INSERT below; reconcile/apportion always stay in-process (they
-    // re-price already-written rows, an R3+ surface, not a worker write).
+    // in-process INSERT below.
     private readonly persist?: CostPersist,
+    // Plane-split P3c: optional remote-reconcile delegate. When set, the run-end
+    // apportion/back-fill (`reconcileRunCost*`) routes its cost_records
+    // SELECT+UPDATEs through the control-plane endpoint rather than this.pool —
+    // closing the de-privilege gap where the data plane can no longer UPDATE
+    // cost_records directly. Absent (in-process control plane / tests) it writes
+    // in-process, unchanged.
+    private readonly reconcile?: CostReconcile,
   ) {}
 
   // record persists a single cost_records row with the full typed token
@@ -186,6 +209,20 @@ export class CostRecorder {
     return this.apportionRunCost(runId, creditsConsumed * creditUsdRate, "credits");
   }
 
+  // applyReconcile is the SERVER-SIDE entry point for the control-plane
+  // reconcile endpoint (plane-split P3c): the worker has already resolved the
+  // run-level total + basis (the credit/ccusage precedence ran data-plane-side),
+  // so this just performs the in-process apportion under the run's org scope. It
+  // NEVER delegates (the endpoint constructs a delegate-free recorder), so it is
+  // the actual cost_records write — the same apportion the direct path runs.
+  async applyReconcile(
+    runId: string,
+    totalCostUsd: number,
+    basis: "ccusage" | "credits",
+  ): Promise<{ updated: number }> {
+    return this.apportionRunCost(runId, totalCostUsd, basis);
+  }
+
   // Apportions a run-level dollar total across the run's cost_records rows by
   // total-token share so the rows sum to the total, stamping each with `basis`.
   private async apportionRunCost(
@@ -195,6 +232,13 @@ export class CostRecorder {
   ): Promise<{ updated: number }> {
     if (!(Number.isFinite(totalCostUsd) && totalCostUsd > 0)) {
       return { updated: 0 };
+    }
+    // Plane-split P3c: when a remote-reconcile delegate is wired, the apportioning
+    // SELECT + per-row UPDATEs run server-side (control plane), so the
+    // de-privileged data plane never UPDATEs cost_records directly. The dollar
+    // total + basis are already resolved above; only the write moves.
+    if (this.reconcile !== undefined) {
+      return this.reconcile({ runId, totalCostUsd, basis });
     }
     // RLS R2 cohort-2 + R3a-worker (cost_records read+write): the reconcile
     // SELECT and its apportioning UPDATEs are a TIGHT batch with no I/O between
