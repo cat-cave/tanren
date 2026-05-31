@@ -38,14 +38,20 @@ afterEach(() => {
 });
 
 describe("buildSecretStore selector", () => {
-  it("defaults to Vault for back-compat when TANREN_SECRET_STORE is unset", () => {
-    const store = buildSecretStore({});
-    expect(store).toBeInstanceOf(VaultSecretStore);
+  it("requires TANREN_SECRET_STORE — an unset selector is a hard config error (no default)", () => {
+    expect(() => buildSecretStore({})).toThrow(/TANREN_SECRET_STORE/u);
+    expect(() => buildSecretStore({ TANREN_SECRET_STORE: "" })).toThrow(/TANREN_SECRET_STORE/u);
   });
 
   it("selects each backend by TANREN_SECRET_STORE", () => {
     expect(buildSecretStore({ TANREN_SECRET_STORE: "memory" })).toBeInstanceOf(InMemorySecretStore);
-    expect(buildSecretStore({ TANREN_SECRET_STORE: "vault" })).toBeInstanceOf(VaultSecretStore);
+    expect(
+      buildSecretStore({
+        TANREN_SECRET_STORE: "vault",
+        VAULT_ADDR: "http://vault.internal:8200",
+        VAULT_TOKEN: "live-token",
+      }),
+    ).toBeInstanceOf(VaultSecretStore);
     expect(
       buildSecretStore({
         TANREN_SECRET_STORE: "gcp_sm",
@@ -76,6 +82,11 @@ describe("buildSecretStore selector", () => {
   });
 
   it("throws when a selected backend is missing required credentials", () => {
+    // Vault no longer has localhost/dev-root-token defaults — addr + token are required.
+    expect(() => buildSecretStore({ TANREN_SECRET_STORE: "vault" })).toThrow(/VAULT_ADDR/u);
+    expect(() => buildSecretStore({ TANREN_SECRET_STORE: "vault", VAULT_ADDR: "http://vault:8200" })).toThrow(
+      /VAULT_TOKEN/u,
+    );
     expect(() => buildSecretStore({ TANREN_SECRET_STORE: "gcp_sm" })).toThrow(/TANREN_GCP_SM_PROJECT/u);
     expect(() => buildSecretStore({ TANREN_SECRET_STORE: "aws_sm" })).toThrow(/TANREN_AWS_SM_/u);
     expect(() => buildSecretStore({ TANREN_SECRET_STORE: "onepassword" })).toThrow(/TANREN_OP_/u);
@@ -107,13 +118,18 @@ describe("buildSecretStore env-driven config resolution", () => {
     ).toThrow(/TANREN_GCP_SM_PROJECT/u);
   });
 
-  it("defaults Vault addr/token and the KV mount when the env omits them", async () => {
+  it("defaults the Vault KV mount to `secret` while still requiring addr + token", async () => {
     const { calls } = stubFetch();
-    const store = buildSecretStore({ TANREN_SECRET_STORE: "vault" });
+    // addr/token are REQUIRED (no localhost:8200 / dev-root-token fallback); only
+    // the KV mount keeps its `secret` default when VAULT_KV_MOUNT is omitted.
+    const store = buildSecretStore({
+      TANREN_SECRET_STORE: "vault",
+      VAULT_ADDR: "http://vault.internal:8200",
+      VAULT_TOKEN: "live-token",
+    });
     await store.get("credential/token");
-    // Default addr (http://localhost:8200), default mount (secret), default token header.
-    expect(calls[0]!.url).toBe("http://localhost:8200/v1/secret/data/credential/token");
-    expect(calls[0]!.headers.get("X-Vault-Token")).toBe("dev-root-token");
+    expect(calls[0]!.url).toBe("http://vault.internal:8200/v1/secret/data/credential/token");
+    expect(calls[0]!.headers.get("X-Vault-Token")).toBe("live-token");
   });
 
   it("honours explicit Vault addr/token/mount from the env", async () => {
@@ -131,7 +147,12 @@ describe("buildSecretStore env-driven config resolution", () => {
 
   it("treats an empty VAULT_KV_MOUNT as unset (default mount)", async () => {
     const { calls } = stubFetch();
-    const store = buildSecretStore({ TANREN_SECRET_STORE: "vault", VAULT_KV_MOUNT: "" });
+    const store = buildSecretStore({
+      TANREN_SECRET_STORE: "vault",
+      VAULT_ADDR: "http://vault.internal:8200",
+      VAULT_TOKEN: "live-token",
+      VAULT_KV_MOUNT: "",
+    });
     await store.get("credential/token");
     expect(calls[0]!.url).toContain("/v1/secret/data/");
   });

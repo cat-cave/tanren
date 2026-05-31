@@ -63,11 +63,6 @@ export async function doctor() {
   console.log(JSON.stringify(health, null, 2));
 }
 
-export async function hello() {
-  const summary = await request("/hello/run", { method: "POST" });
-  console.log(JSON.stringify(summary, null, 2));
-}
-
 export async function status(runId: string | undefined) {
   if (!runId) {
     throw new Error("usage: tanren status <run_id>");
@@ -172,7 +167,6 @@ Commands:
   doctor             Check orchestrator, Postgres, and Vault connectivity
   credential codex import --ref <ref> --auth-json-file <path>
   credential github import --ref <ref> --token-file <path>
-  hello              Trigger a fake hello-world workflow run
   project create     Create a persisted project contract
   run draft-pr       Push a runner workspace branch and open/reuse a draft PR
   run poll-ci        Poll and persist pull request CI status for a run
@@ -220,9 +214,6 @@ export async function main(argv: string[]) {
       throw new Error("usage: tanren auth <login|status|logout|set-token>");
     case "doctor":
       await doctor();
-      break;
-    case "hello":
-      await hello();
       break;
     case "project":
       if (subcommand !== "create") {

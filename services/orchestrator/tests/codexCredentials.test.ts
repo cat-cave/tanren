@@ -162,7 +162,7 @@ describe("Codex credential contracts", () => {
     const secrets = new FakeSecretStore();
     const app = buildApp({
       pool: {} as never,
-      helloDependencies: {} as never,
+      ssh: {} as never,
       secrets,
       vaultHealthCheck: async () => ({ ok: true, status: 200 }),
     });

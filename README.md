@@ -25,7 +25,7 @@ A large multi-tenant + quality expansion has since merged on `main`:
   reads, and deny-by-default `USING`+`WITH CHECK` policies on every tenant table
   (migrations `0029`/`0030`; `db/src/orgScope.ts`). A live operator-driven run
   exercised it end-to-end (signup→CRUD→run→mTLS-claim→cred-resolution→runner-
-  allocation) and caught+fixed a class of RLS-completeness bugs the hello-fixture
+  allocation) and caught+fixed a class of RLS-completeness bugs an early synthetic
   smoke missed — each now regression-tested (`just smoke-rls-*`).
 - **Control-plane/data-plane split P1→P3b.** A standalone `worker` deployable
   claims jobs over an mTLS control-plane endpoint and routes its run-state writes
@@ -47,11 +47,14 @@ via Mergify/Actions); and the long-horizon Rust rewrite/native harness. The full
 forward plan across all four dimensions is `docs/roadmap/forward-roadmap.md`; see
 `ROADMAP.md` for the honest status.
 
-The baseline `hello` workflow remains a synthetic smoke path, and the component live
-smokes below still live-prove the real-agent loop: the orchestrator can load managed
-credentials, allocate a runner, prepare a fixture repository workspace over SSH, run
-Codex as Writer and structured Answerer, open a draft GitHub PR, poll CI, and persist
-the result as inspectable run/task/event state.
+The synthetic `hello`-world workflow and its fake agent adapters have been purged
+from the runtime — there is no fake-agent path in production source (the fakes now
+live only in `tests/` fixtures). Service connectivity is proven by `just
+smoke-connectivity` (orchestrator `/healthz` + runner SSH reachability), and the
+component live smokes below live-prove the real-agent loop: the orchestrator can
+load managed credentials, allocate a runner, prepare a fixture repository workspace
+over SSH, run Codex as Writer and structured Answerer, open a draft GitHub PR, poll
+CI, and persist the result as inspectable run/task/event state.
 
 ## Local Smoke
 
@@ -64,9 +67,7 @@ just smoke
 
 `just smoke` builds the orchestrator, dashboard, and runner images, starts Postgres, Vault, orchestrator, dashboard, runner, and ntfy, then verifies:
 
-- `tanren doctor`
-- `tanren hello`
-- `tanren status <run_id>`
+- `tanren doctor` (orchestrator `/healthz`: DB + Vault reachable)
 - direct runner SSH
 - the live SSH integration test
 

@@ -1,11 +1,10 @@
 import { readFile } from "node:fs/promises";
 import { serve } from "@hono/node-server";
-import { createDbPool, getSystemPool, migrate } from "@tanren/db";
+import { createDbPool, migrate } from "@tanren/db";
 import { Hono } from "hono";
 import type pg from "pg";
 import { buildAuthFromEnv, type BuildAppAuthOptions } from "./mainAuth.js";
-import { buildAllocatorFromEnv } from "./engine/allocators/index.js";
-import { buildSecretStore, InMemorySecretStore, type SecretStore } from "./engine/contracts/index.js";
+import { buildSecretStore, type SecretStore } from "./engine/contracts/index.js";
 import { FetchGitHubHttpClient, type GitHubHttpClient } from "./engine/providers/github.js";
 import { GithubAppTokenMinter } from "./engine/providers/githubAppTokenMinter.js";
 import { FetchConfigGateGitHub } from "./engine/config/configGateGithub.js";
@@ -16,7 +15,7 @@ import { TimedGitHubHttpClient, TimedSshSubstrate } from "./engine/observability
 import { Ssh2Substrate } from "./engine/ssh/index.js";
 import { bootRunWorker, runWorkerEnabled } from "./engine/worker/index.js";
 import { startInternalMtlsServer } from "./internalServer.js";
-import type { runHelloWorkflow } from "./engine/workflow/helloRun.js";
+import type { SshSubstrate } from "./engine/contracts/sshSubstrate.js";
 import { createAuthMiddleware, type ActorContextEnv } from "./middleware/auth.js";
 import { createAuthRoutes } from "./routes/auth/index.js";
 import { InMemoryCredentialRegistry, type CredentialRegistry } from "./routes/credentials/index.js";
@@ -44,32 +43,32 @@ async function vaultHealth() {
 export async function createApp() {
   const pool = getProductionPool();
   await runMigrationsAsOwner();
-  // P2B: the secret-store backend is selected by TANREN_SECRET_STORE
-  // (default `vault`, so existing deployments are unchanged). See
-  // engine/contracts/secretStoreFactory.ts.
+  // P2B: the secret-store backend is selected by the REQUIRED TANREN_SECRET_STORE
+  // env var — there is no default; an unset value is a hard configuration error.
+  // See engine/contracts/secretStoreFactory.ts.
   const runnerSecrets = buildSecretStore();
   await seedRunnerIdentitySecret(runnerSecrets);
   return buildApp({
     pool,
     secrets: runnerSecrets,
     auth: buildAuthFromEnv(pool, port),
-    helloDependencies: {
-      // RLS R3b: the hello fixture is cross-org system seeding, so its allocator's
-      // runner writes go through the BYPASSRLS `tanren_system` pool (matching the
-      // fixture pool `/hello/run` hands runHelloWorkflow); else the runtime pool.
-      allocator: buildAllocatorFromEnv(getSystemPool() ?? pool),
-      // P3-0029: wrap the SSH substrate so every runner command emits a
-      // boundary timing record. Behavior is unchanged; this only measures.
-      ssh: new TimedSshSubstrate(new Ssh2Substrate(runnerSecrets)),
-      identitySecretRef: runnerIdentitySecretRef,
-    },
+    // P3-0029: wrap the SSH substrate so every runner command emits a boundary
+    // timing record. Behavior is unchanged; this only measures. The per-run
+    // draft-PR route uses it to push the run branch.
+    ssh: new TimedSshSubstrate(new Ssh2Substrate(runnerSecrets)),
   });
 }
 
 export function buildApp(input: {
   pool: pg.Pool;
-  helloDependencies: Parameters<typeof runHelloWorkflow>[1];
-  secrets?: SecretStore;
+  // The runtime SSH substrate the per-run draft-PR route uses to push the run
+  // branch. Required: no fake/in-memory default — explicit injection only.
+  ssh: SshSubstrate;
+  // The SecretStore backend. Required: there is no in-memory default in
+  // production. `createApp` injects `buildSecretStore()` (env-selected); tests
+  // inject a fixture store explicitly. A missing store is a configuration error,
+  // not a silent fallback.
+  secrets: SecretStore;
   githubHttp?: GitHubHttpClient;
   runnerIdentitySecretRef?: string;
   vaultHealthCheck?: () => Promise<{ ok: boolean; status: number }>;
@@ -77,7 +76,10 @@ export function buildApp(input: {
   credentialRegistry?: CredentialRegistry;
 }) {
   const app = new Hono<ActorContextEnv>();
-  const secrets = input.secrets ?? new InMemorySecretStore();
+  if (input.secrets === undefined) {
+    throw new Error("buildApp requires an explicit `secrets` SecretStore (no in-memory default in production)");
+  }
+  const secrets = input.secrets;
   // P3-0029: wrap the GitHub HTTP client so every API round trip emits a
   // boundary timing record (with method, path template, status, 429 flag).
   const githubHttp = new TimedGitHubHttpClient(input.githubHttp ?? new FetchGitHubHttpClient());
@@ -152,15 +154,15 @@ export function buildApp(input: {
   );
 
   // The Phase-1 root API endpoints (project/spec creation, credential + auth-
-  // bundle imports, the hello trigger, per-run draft-PR / CI-poll, the legacy
-  // `/runs/:runId` read) live in `mountRootApiRoutes`. Behavior is identical.
+  // bundle imports, per-run draft-PR / CI-poll, the legacy `/runs/:runId` read)
+  // live in `mountRootApiRoutes`.
   mountRootApiRoutes(app, {
     pool: input.pool,
     secrets,
     githubHttp,
     githubAppMinter,
     identitySecretRef,
-    helloDependencies: input.helloDependencies,
+    ssh: input.ssh,
   });
 
   return app;

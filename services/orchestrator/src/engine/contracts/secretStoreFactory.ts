@@ -3,7 +3,7 @@ import { GcpSecretManagerStore } from "./gcpSecretManager.js";
 import { AwsSecretsManagerStore } from "./awsSecretsManager.js";
 import { OnePasswordStore } from "./onePassword.js";
 
-/** Selectable SecretStore backends. `vault` is the default for back-compat. */
+/** Selectable SecretStore backends. */
 export type SecretStoreKind = "vault" | "gcp_sm" | "aws_sm" | "onepassword" | "memory";
 
 /** Process-environment view; defaults to `process.env`, injectable in tests. */
@@ -23,22 +23,24 @@ function optional(env: SecretStoreEnv, name: string): string | undefined {
 }
 
 /**
- * Selects and constructs the SecretStore backend named by
- * `TANREN_SECRET_STORE` (default `vault`, so nothing changes unless configured).
- * Each backend reads its own resolved credentials from the environment. This is
- * the single construction point replacing direct `new VaultSecretStore(...)`
- * calls, so the whole app (HTTP server, run worker, allocators) uses the
- * selected backend. Per-backend ref→key mapping is documented on each impl.
+ * Selects and constructs the SecretStore backend named by the REQUIRED
+ * `TANREN_SECRET_STORE` env var (no default — an unset/blank value is a hard
+ * configuration error, never a silent fallback). Each backend reads its own
+ * resolved credentials from the environment; none has misconfiguration-masking
+ * defaults (no `localhost:8200` / `dev-root-token`). This is the single
+ * construction point replacing direct `new VaultSecretStore(...)` calls, so the
+ * whole app (HTTP server, run worker, allocators) uses the selected backend.
+ * Per-backend ref→key mapping is documented on each impl.
  */
 export function buildSecretStore(env: SecretStoreEnv = process.env): SecretStore {
-  const kind = (env["TANREN_SECRET_STORE"] ?? "vault").toLowerCase() as SecretStoreKind;
+  const kind = required(env, "TANREN_SECRET_STORE").toLowerCase() as SecretStoreKind;
   switch (kind) {
     case "memory":
       return new InMemorySecretStore();
     case "vault":
       return new VaultSecretStore({
-        addr: env["VAULT_ADDR"] ?? "http://localhost:8200",
-        token: env["VAULT_TOKEN"] ?? "dev-root-token",
+        addr: required(env, "VAULT_ADDR"),
+        token: required(env, "VAULT_TOKEN"),
         ...(optional(env, "VAULT_KV_MOUNT") === undefined ? {} : { mount: required(env, "VAULT_KV_MOUNT") }),
       });
     case "gcp_sm":

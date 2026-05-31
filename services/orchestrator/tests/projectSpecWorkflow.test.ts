@@ -1,12 +1,20 @@
 import { describe, expect, it } from "vitest";
+import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
+import type { SshSubstrate } from "../src/engine/contracts/sshSubstrate.js";
 import { buildApp } from "../src/main.js";
+
+// This suite exercises only the project/spec/run-create routes, so the SecretStore
+// and SSH substrate are never invoked — a fixture store + never-called stub satisfy
+// the now-required deps (no in-memory default in production).
+const unusedSsh = {} as unknown as SshSubstrate;
 
 describe("project/spec workflow contract", () => {
   it("creates a project, creates a spec, and queues a run from persisted rows", async () => {
     const pool = new ContractPool();
     const app = buildApp({
       pool: pool.asPgPool(),
-      helloDependencies: {} as never,
+      secrets: new FakeSecretStore(),
+      ssh: unusedSsh,
       vaultHealthCheck: async () => ({ ok: true, status: 200 }),
     });
 
@@ -131,7 +139,8 @@ describe("project/spec workflow contract", () => {
   it("returns not found when creating a spec for a missing project", async () => {
     const app = buildApp({
       pool: new ContractPool().asPgPool(),
-      helloDependencies: {} as never,
+      secrets: new FakeSecretStore(),
+      ssh: unusedSsh,
       vaultHealthCheck: async () => ({ ok: true, status: 200 }),
     });
 
@@ -154,7 +163,8 @@ describe("project/spec workflow contract", () => {
     const pool = new ContractPool();
     const app = buildApp({
       pool: pool.asPgPool(),
-      helloDependencies: {} as never,
+      secrets: new FakeSecretStore(),
+      ssh: unusedSsh,
       vaultHealthCheck: async () => ({ ok: true, status: 200 }),
     });
     const projectResponse = await app.request("/projects", {
@@ -184,7 +194,8 @@ describe("project/spec workflow contract", () => {
     const pool = new ContractPool();
     const app = buildApp({
       pool: pool.asPgPool(),
-      helloDependencies: {} as never,
+      secrets: new FakeSecretStore(),
+      ssh: unusedSsh,
       vaultHealthCheck: async () => ({ ok: true, status: 200 }),
     });
     const project = await (

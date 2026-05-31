@@ -2,17 +2,17 @@ import { describe, expect, it } from "vitest";
 import type { SshTarget } from "../src/engine/contracts/allocator.js";
 import type { SshCommand, SshCommandResult, SshSubstrate } from "../src/engine/contracts/sshSubstrate.js";
 import { defineFailure } from "../src/engine/failure.js";
-import { createFakeWriter } from "../src/engine/providers/fake.js";
 import {
   bootstrapWorkspace,
   DEFAULT_BOOTSTRAP_COMMAND,
-  parseGitLogCommit,
-  prepareGitWorkspace,
   runWorkspaceSshCommand,
   WorkspaceBootstrapError,
   WorkspaceCommandError,
   workspaceRepoPathForRun,
 } from "../src/engine/workspace/index.js";
+// The fake-writer git workspace helpers are test-only fixtures (purged from
+// runtime with the hello synthetic path).
+import { createFakeWriter, parseGitLogCommit, prepareGitWorkspace } from "./fakeAdapters.fixtures.js";
 
 const target: SshTarget = {
   host: "runner",

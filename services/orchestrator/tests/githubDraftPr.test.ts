@@ -278,7 +278,7 @@ describe("GitHub draft PR contract", () => {
     const secrets = new FakeSecretStore();
     const app = buildApp({
       pool: {} as never,
-      helloDependencies: { ssh: new RecordingSsh() } as never,
+      ssh: new RecordingSsh() as never,
       secrets,
       vaultHealthCheck: async () => ({ ok: true, status: 200 }),
     });

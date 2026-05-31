@@ -1,12 +1,11 @@
 // The Phase-1 root-level API handlers, extracted from `buildApp` in main.ts:
-// project/spec creation, the auth-bundle + GitHub credential imports, the hello
-// fixture trigger, the per-run draft-PR / CI-poll actions, and the legacy
-// `/runs/:runId` debug read. main.ts keeps app construction, auth wiring, and
-// the feature-route mount table; this module owns these root endpoints and the
-// schema/workflow/error deps they pull. Every handler is byte-for-byte the
-// prior inline registration, in the same order — behavior is identical.
+// project/spec creation, the auth-bundle + GitHub credential imports, the
+// per-run draft-PR / CI-poll actions, and the legacy `/runs/:runId` debug read.
+// main.ts keeps app construction, auth wiring, and the feature-route mount
+// table; this module owns these root endpoints and the schema/workflow/error
+// deps they pull.
 
-import { getSystemPool, runWithOrgScope, runWithSystemScope } from "@tanren/db";
+import { runWithOrgScope, runWithSystemScope } from "@tanren/db";
 import type { Hono } from "hono";
 import type pg from "pg";
 import type { ActorContext } from "./auth/index.js";
@@ -20,7 +19,7 @@ import {
   specInputSchema,
 } from "./inputSchemas.js";
 import type { SecretStore } from "./engine/contracts/index.js";
-import { FakeJobQueue } from "./engine/contracts/index.js";
+import type { SshSubstrate } from "./engine/contracts/sshSubstrate.js";
 import { parseRawViewOptIn, redactEventRows } from "./routes/runs/redaction.js";
 import { storeGithubToken } from "./engine/credentials/githubToken.js";
 import type { GitHubHttpClient } from "./engine/providers/github.js";
@@ -31,7 +30,6 @@ import {
   DraftPrRunNotFoundError,
   publishDraftPullRequestForRun,
 } from "./engine/workflow/githubDraftPr.js";
-import { runHelloWorkflow } from "./engine/workflow/helloRun.js";
 import {
   createProject,
   createQueuedRunFromSpec,
@@ -51,7 +49,8 @@ export interface RootApiDeps {
   githubHttp: GitHubHttpClient;
   githubAppMinter: GithubAppTokenMinter;
   identitySecretRef: string;
-  helloDependencies: Parameters<typeof runHelloWorkflow>[1];
+  // The SSH substrate the per-run draft-PR route uses to push the run branch.
+  ssh: SshSubstrate;
 }
 
 function messageFromError(error: unknown): string {
@@ -152,24 +151,6 @@ export function mountRootApiRoutes(app: Hono<ActorContextEnv>, deps: RootApiDeps
     }
   });
 
-  app.post("/hello/run", async (c) => {
-    // RLS R3b: the hello fixture is cross-org system seeding (its own throwaway
-    // fixture org), so it runs on the BYPASSRLS `tanren_system` pool when one is
-    // configured, else the runtime pool (inert dev fallback).
-    //
-    // Plane-split P1: the hello fixture enqueues its own tasks and DRAINS THEM
-    // ITSELF in-request, so it runs on a fresh isolated in-process queue —
-    // otherwise the standalone run-executor worker (now always polling
-    // `job_queue` for `plan` jobs globally) would race it and steal the fixture's
-    // `plan` job, breaking `drainHelloQueue`. The durable `job_queue` is proven
-    // by the real run path (`smoke-plane-split-worker`). See helloRun.ts.
-    const summary = await runHelloWorkflow(getSystemPool() ?? pool, {
-      ...deps.helloDependencies,
-      jobQueue: new FakeJobQueue(),
-    });
-    return c.json(summary, 201);
-  });
-
   app.post("/runs/:runId/github/draft-pr", async (c) => {
     const parsed = draftPrInputSchema.safeParse(await c.req.json().catch(() => ({})));
     if (!parsed.success) {
@@ -181,7 +162,7 @@ export function mountRootApiRoutes(app: Hono<ActorContextEnv>, deps: RootApiDeps
           pool: scopedPool,
           secrets,
           githubHttp,
-          ssh: deps.helloDependencies.ssh,
+          ssh: deps.ssh,
           runId: c.req.param("runId"),
           identitySecretRef,
           timeoutMs: parsed.data.timeoutMs ?? 30_000,

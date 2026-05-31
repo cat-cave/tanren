@@ -135,9 +135,15 @@ wait-for-stack:
   ./scripts/wait-for-url.sh http://localhost:3100/healthz
   ./scripts/wait-for-url.sh http://localhost:3000/healthz
 
-smoke-hello:
+# Service connectivity gate. The hello SYNTHETIC workflow (the fake-agent
+# `tanren hello` run) was purged from the runtime, so this no longer exercises a
+# fake agent in production source. It proves the real boundaries the stack
+# stands up: the orchestrator answers `/healthz` (DB + Vault reachable, via
+# `tanren doctor`) and the long-lived runner answers SSH on its published port.
+# The SSH BOUNDARY itself (the real Ssh2Substrate against a live sshd) is proven
+# by `smoke-ssh-integration`; this is the cheap reachability pre-check.
+smoke-connectivity:
   corepack pnpm --filter @tanren/cli tanren doctor
-  summary="$(corepack pnpm --filter @tanren/cli tanren hello)"; echo "$summary"; run_id="$(printf '%s' "$summary" | node -e 'let input = ""; process.stdin.on("data", chunk => input += chunk); process.stdin.on("end", () => console.log(JSON.parse(input).runId));')"; corepack pnpm --filter @tanren/cli tanren status "$run_id"
   ssh -i /tmp/tanren_runner_key -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/tmp/tanren_runner_known_hosts tanren@localhost 'echo tanren-runner-ok'
 
 smoke-ssh-integration:
@@ -336,7 +342,7 @@ smoke-plane-split-worker-remote-writes: gen-mtls-certs
   TANREN_RUNNER_AUTHORIZED_KEY="$(cat /tmp/tanren_runner_key.pub)" TANREN_RUNNER_IDENTITY_PRIVATE_KEY="$(cat /tmp/tanren_runner_key)" docker compose -f compose.dev.yml up -d --no-deps --force-recreate worker
   TANREN_PLANE_SPLIT_PROVE_DEPRIVILEGE=1 DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" corepack pnpm exec tsx scripts/smoke/plane-split-worker.ts
 
-smoke: compose-build compose-up wait-for-stack smoke-hello smoke-ssh-integration smoke-plane-split-worker smoke-plane-split-worker-remote-writes smoke-plane-split-p3 smoke-plane-split-p3b smoke-rls-r1 smoke-rls-r2 smoke-rls-r2-cohort2 smoke-rls-r2-cohort3 smoke-rls-r2-cohort4 smoke-rls-r3a smoke-rls-r3a-worker smoke-rls-r3b smoke-rls-early-finalize smoke-rls-org-bootstrap smoke-rls-operator-flow smoke-rls-http-route-scoping smoke-rls-run-lifecycle
+smoke: compose-build compose-up wait-for-stack smoke-connectivity smoke-ssh-integration smoke-plane-split-worker smoke-plane-split-worker-remote-writes smoke-plane-split-p3 smoke-plane-split-p3b smoke-rls-r1 smoke-rls-r2 smoke-rls-r2-cohort2 smoke-rls-r2-cohort3 smoke-rls-r2-cohort4 smoke-rls-r3a smoke-rls-r3a-worker smoke-rls-r3b smoke-rls-early-finalize smoke-rls-org-bootstrap smoke-rls-operator-flow smoke-rls-http-route-scoping smoke-rls-run-lifecycle
 
 # P3-0001: the Phase 2A direct-execution acceptance gate (`just acceptance`,
 # scripts/acceptance/easy.ts + medium.ts) was removed once the run executor

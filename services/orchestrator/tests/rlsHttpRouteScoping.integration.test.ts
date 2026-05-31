@@ -35,7 +35,7 @@ import { migrate, setSystemPool } from "@tanren/db";
 import { IdentityStore } from "../src/auth/identityStore.js";
 import type { IdentityClaims, IdentityProviderId } from "../src/auth/schemas.js";
 import { InMemorySecretStore } from "../src/engine/contracts/index.js";
-import type { HelloWorkflowDependencies } from "../src/engine/workflow/helloRun.js";
+import type { SshSubstrate } from "../src/engine/contracts/sshSubstrate.js";
 import { buildApp } from "../src/main.js";
 import { SESSION_COOKIE, CSRF_HEADER, type ActorContextEnv } from "../src/middleware/auth.js";
 
@@ -84,12 +84,9 @@ function signupIdentity(suffix: string): IdentityClaims {
   };
 }
 
-// `/hello/run` reads the allocator and the draft-pr route reads `ssh` — this
-// test exercises neither, so a never-invoked stub satisfies the dep shape.
-const helloDependencies = {
-  allocator: { allocate: async () => ({}), release: async () => {} },
-  ssh: { run: async () => ({}) },
-} as unknown as HelloWorkflowDependencies;
+// The per-run draft-PR route reads `ssh` — this test exercises neither it nor
+// the CI-poll route, so a never-invoked stub satisfies the dep shape.
+const ssh = { run: async () => ({}) } as unknown as SshSubstrate;
 
 // The REAL production app — `buildApp` wires the auth middleware (now resolving
 // the actor + establishing the per-request org scope INCLUDING the resource→org
@@ -108,7 +105,7 @@ function buildFlowApp(appPool: Pool, store: IdentityStore): Hono<ActorContextEnv
       providers: new Map<IdentityProviderId, never>(),
       publicBaseUrl: "http://localhost",
     },
-    helloDependencies,
+    ssh,
   }) as Hono<ActorContextEnv>;
 }
 
