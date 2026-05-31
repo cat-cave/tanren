@@ -122,6 +122,7 @@
     "creds",
     "credential",
     "credentials",
+    "credregistry",
     "approle",
     "approles",
     "webhook",

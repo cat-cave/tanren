@@ -43,22 +43,15 @@ export interface CredentialRecord {
 }
 
 // The credential LIST surface (`GET /orgs/:orgId/credentials`, `GET
-// /credentials/me`) reads this registry, NOT the secret store — values live in
-// Vault and are never listed; the registry only tracks the {ref, kind, scope,
-// owner} metadata an import records. The org-scoped import routes above
-// (`POST /orgs/:orgId/credentials`, `POST /credentials/me`) `put` into it, so an
-// import LISTS within the same process — proven by the RLS HTTP-route flow smoke.
-//
-// KNOWN LIMITATION (in-memory): the default `InMemoryCredentialRegistry` does
-// NOT survive an orchestrator restart, and the LEGACY top-level import endpoints
-// (`/credentials/<slug>/import`, `/credentials/github/import` in
-// `mountRootApiRoutes`) write only to the secret store WITHOUT a registry `put`
-// (they carry no org/me scope context), so a credential imported through THOSE
-// routes — or imported before a restart — does not appear in the list. Operators
-// who need the list populated must import through the org-scoped surface above
-// (the recommended P2A-0013 endpoints). A durable, Vault-backed registry would
-// require a SecretStore `list(prefix)` contract method (not yet defined) and is
-// tracked as a follow-up; it is NOT an RLS scoping bug.
+// /credentials/me`) reads this registry, NOT the secret value — credential
+// VALUES live in the SecretStore under `credential/...` and are never listed.
+// The registry tracks the {ref, kind, scope, owner, createdAt} METADATA an
+// import records, and is itself DURABLE: each record is persisted as a JSON
+// value in the SAME SecretStore under a parallel `credregistry/...` namespace,
+// so the list survives an orchestrator restart (recovered via
+// `SecretStore.list(prefix)`). The org-scoped import routes
+// (`POST /orgs/:orgId/credentials`, `POST /credentials/me`) `put` into it and
+// are the ONLY credential import path.
 export interface CredentialRegistry {
   list(args: { scope: "org" | "me"; ownerId: string }): Promise<CredentialRecord[]>;
   get(ref: string): Promise<CredentialRecord | undefined>;
@@ -66,25 +59,55 @@ export interface CredentialRegistry {
   delete(ref: string): Promise<void>;
 }
 
-export class InMemoryCredentialRegistry implements CredentialRegistry {
-  private readonly records = new Map<string, CredentialRecord>();
+/**
+ * The registry-record namespace, parallel to the `credential/...` value
+ * namespace. The credential ref is base64url-encoded into a SINGLE safe path
+ * segment so the record key round-trips losslessly through every SecretStore
+ * backend (the credential ref itself contains `/`, which would otherwise split
+ * into sub-trees that don't line up with one record).
+ */
+const REGISTRY_PREFIX = "credregistry/";
+
+function registryRef(credentialRef: string): string {
+  return `${REGISTRY_PREFIX}${Buffer.from(credentialRef, "utf8").toString("base64url")}`;
+}
+
+/**
+ * Durable, SecretStore-backed credential registry. Stores each
+ * {@link CredentialRecord} as a JSON value under `credregistry/<b64url(ref)>` in
+ * the SAME SecretStore that holds credential values, so the credential LIST
+ * survives a process restart. `list` enumerates the namespace via
+ * `SecretStore.list` and filters by scope/owner; `get` is a direct keyed read;
+ * its signature is unchanged (`get(ref): Promise<CredentialRecord | undefined>`)
+ * — the real-writer consumes it.
+ */
+export class SecretStoreCredentialRegistry implements CredentialRegistry {
+  constructor(private readonly secrets: SecretStore) {}
 
   async list(args: { scope: "org" | "me"; ownerId: string }): Promise<CredentialRecord[]> {
-    return [...this.records.values()].filter(
-      (record) => record.scope === args.scope && record.ownerId === args.ownerId,
+    const refs = await this.secrets.list(REGISTRY_PREFIX);
+    const records = await Promise.all(refs.map((ref) => this.readRecord(ref)));
+    return records.filter(
+      (record): record is CredentialRecord =>
+        record !== undefined && record.scope === args.scope && record.ownerId === args.ownerId,
     );
   }
 
   async get(ref: string): Promise<CredentialRecord | undefined> {
-    return this.records.get(ref);
+    return this.readRecord(registryRef(ref));
   }
 
   async put(record: CredentialRecord): Promise<void> {
-    this.records.set(record.ref, record);
+    await this.secrets.put({ ref: registryRef(record.ref), value: JSON.stringify(record) });
   }
 
   async delete(ref: string): Promise<void> {
-    this.records.delete(ref);
+    await this.secrets.delete(registryRef(ref));
+  }
+
+  private async readRecord(storeRef: string): Promise<CredentialRecord | undefined> {
+    const stored = await this.secrets.get(storeRef);
+    return stored === undefined ? undefined : (JSON.parse(stored.value) as CredentialRecord);
   }
 }
 
@@ -112,7 +135,7 @@ const OpaqueImportBody = z.object({
 });
 
 export function createCredentialRoutes(options: CredentialRoutesOptions) {
-  const registry = options.registry ?? new InMemoryCredentialRegistry();
+  const registry = options.registry ?? new SecretStoreCredentialRegistry(options.secrets);
   const app = new Hono<ActorContextEnv>();
 
   app.get("/orgs/:orgId/credentials", async (c) => {
@@ -176,12 +199,11 @@ export function createCredentialRoutes(options: CredentialRoutesOptions) {
     return await handleImport(c, options, registry, "me", actor.userId, kind);
   });
 
-  // The Phase 1 import endpoints `/credentials/codex/import` and
-  // `/credentials/github/import` remain mounted directly on the app in
-  // `src/main.ts` for backwards compatibility with operators and tests that
-  // hit them without going through the org-scoped endpoints. The new
-  // `/orgs/:orgId/credentials` and `/credentials/me` endpoints above are the
-  // recommended P2A-0013 surface.
+  // These org-scoped (`/orgs/:orgId/credentials`) and personal
+  // (`/credentials/me`) endpoints are the ONLY credential import surface: every
+  // import derives a tenant-namespaced ref AND records a durable registry entry,
+  // so an imported credential always appears in the list. There is no
+  // unscoped/legacy top-level import path.
 
   return app;
 }

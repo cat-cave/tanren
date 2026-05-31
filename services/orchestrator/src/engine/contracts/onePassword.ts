@@ -27,6 +27,7 @@ export interface OnePasswordOptions {
 
 interface OpItemSummary {
   id: string;
+  title?: string;
 }
 
 interface OpField {
@@ -113,6 +114,21 @@ export class OnePasswordStore implements SecretStore {
     if (response.status !== 404) {
       await assertOk(response, `delete secret ${ref}`);
     }
+  }
+
+  async list(prefix: string): Promise<string[]> {
+    // Item title == ref verbatim, so listing the vault's items and filtering
+    // titles by `prefix` recovers the matching refs. The Connect list endpoint
+    // returns id+title summaries; no per-item fetch is needed.
+    const response = await this.fetchImpl(this.itemsUrl(), { headers: this.headers() });
+    if (response.status === 404) {
+      return [];
+    }
+    await assertOk(response, `list items under ${prefix}`);
+    const items = (await response.json()) as OpItemSummary[];
+    return items
+      .map((item) => item.title)
+      .filter((title): title is string => typeof title === "string" && title.startsWith(prefix));
   }
 
   /** Resolves a unique item id by title within the vault, or undefined. */

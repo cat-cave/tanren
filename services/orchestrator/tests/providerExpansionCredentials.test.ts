@@ -18,7 +18,6 @@ import {
   materializeOpencodeAuthBundle,
   opencodeDataHomeForRun,
 } from "../src/engine/credentials/opencodeMaterializer.js";
-import { buildApp } from "../src/main.js";
 
 const target: SshTarget = {
   host: "runner",
@@ -190,52 +189,6 @@ describe("opencode credential contracts", () => {
     ).rejects.toThrow("missing opencode credential ref: credential/opencode/dev");
     expect(opencodeDataHomeForRun("run_2", "/base/")).toBe("/base/run_2/opencode-home");
     expect(() => opencodeDataHomeForRun("bad/id")).toThrow("run id is not safe");
-  });
-});
-
-describe("provider expansion HTTP import", () => {
-  it("imports Claude and opencode credentials through HTTP without echoing secrets", async () => {
-    const secrets = new FakeSecretStore();
-    const app = buildApp({
-      pool: {} as never,
-      helloDependencies: {} as never,
-      secrets,
-      vaultHealthCheck: async () => ({ ok: true, status: 200 }),
-    });
-
-    const claude = await app.request("/credentials/claude/import", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ref: "credential/claude/http", authJson: claudeJson }),
-    });
-    expect(claude.status).toBe(201);
-    expect(await claude.json()).toEqual({
-      credentialKind: "claude_cli_auth",
-      ref: "credential/claude/http",
-      redacted: true,
-    });
-
-    const opencode = await app.request("/credentials/opencode/import", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ref: "credential/opencode/http", authJson: opencodeJson }),
-    });
-    expect(opencode.status).toBe(201);
-    expect(await opencode.json()).toEqual({
-      credentialKind: "opencode_cli_auth",
-      ref: "credential/opencode/http",
-      redacted: true,
-    });
-
-    const rejected = await app.request("/credentials/opencode/import", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        ref: "credential/opencode/bad",
-        authJson: JSON.stringify({ wafer: { key: "x" } }),
-      }),
-    });
-    expect(rejected.status).toBe(400);
   });
 });
 
