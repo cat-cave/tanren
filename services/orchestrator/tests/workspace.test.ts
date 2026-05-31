@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { SshTarget } from "../src/engine/contracts/allocator.js";
 import type { SshCommand, SshCommandResult, SshSubstrate } from "../src/engine/contracts/sshSubstrate.js";
 import { defineFailure } from "../src/engine/failure.js";
-import { createFakeWriter } from "../src/engine/providers/fake.js";
+import { createFakeWriter } from "./fixtures/fakeWriter.js";
 import {
   bootstrapWorkspace,
   DEFAULT_BOOTSTRAP_COMMAND,
