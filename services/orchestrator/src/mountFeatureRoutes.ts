@@ -19,6 +19,7 @@ import { createCredentialRoutes, type CredentialRegistry } from "./routes/creden
 import { createDiscoveryRoutes } from "./routes/discovery/index.js";
 import { createDoctorRoutes } from "./routes/doctor/index.js";
 import { createDoraRoutes } from "./routes/dora/index.js";
+import { createExperimentRoutes } from "./routes/experiments/index.js";
 import { createForgeAskRoutes } from "./routes/forge/ask.js";
 import { createForgeProposalRoutes } from "./routes/forge/proposals.js";
 import { createInboxRoutes } from "./routes/inbox/index.js";
@@ -99,6 +100,9 @@ export function mountFeatureRoutes(app: Hono<ActorContextEnv>, deps: FeatureRout
   // injectable (defaults to a safe no-op until an SSH-backed runner is wired).
   app.route("/orgs", createAuditRoutes({ pool: scopedPool }));
   app.route("/orgs", createDoraRoutes({ pool: scopedPool }));
+  // Benchmark report/CRUD surface (tanren-method-benchmark §4.2.4): author
+  // experiments + cells, trigger the scheduler, read cell scorecards + compare.
+  app.route("/orgs", createExperimentRoutes({ pool: scopedPool }));
   app.route("/orgs", createNotificationRoutes({ pool: scopedPool }));
   app.route("/orgs", createRunRoutes({ pool: scopedPool }));
   app.route("/orgs", createRecoveryRoutes({ pool: scopedPool }));
