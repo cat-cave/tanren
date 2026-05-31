@@ -13,14 +13,39 @@ Hetzner/DigitalOcean/GCP/AWS-EC2/Kubernetes), multi-harness providers
 (codex/claude/opencode/aider behind a versioned harness protocol), pluggable secret
 stores (Vault/GCP-SM/AWS-SM/1Password), multi-provider identity
 (github_oauth/OIDC/Authentik/local_dev), per-org GitHub App connectivity, all nine
-notification channels, DB-enforced tenancy, a quota/admission + metering seam, a
-BYOK-vs-managed provider toggle, and a hardened 14-step strictness gate.
+notification channels, a quota/admission + metering seam, a BYOK-vs-managed provider
+toggle, and a hardened 15-step strictness gate.
 
-What is still genuinely pending/deferred: the live demo + live cloud/SaaS
-validation (need real credentials); the agy/pi/reasonix harnesses (await CLI
-specs); the GitLab/VCS abstraction (deferred — GitHub-coupled via Mergify/Actions);
-RLS + a control-plane/data-plane split (planned); and the long-horizon Rust rewrite/
-native harness. See `ROADMAP.md` for the honest status.
+A large multi-tenant + quality expansion has since merged on `main`:
+
+- **Multi-tenancy is fully DB-enforced and live-validated end-to-end through
+  runner allocation.** Postgres Row-Level
+  Security enforces `org_id` isolation — a restricted `tanren_app` runtime role
+  (NOBYPASSRLS), a narrow `tanren_system` BYPASSRLS pool for bootstrap/cross-org
+  reads, and deny-by-default `USING`+`WITH CHECK` policies on every tenant table
+  (migrations `0029`/`0030`; `db/src/orgScope.ts`). A live operator-driven run
+  exercised it end-to-end (signup→CRUD→run→mTLS-claim→cred-resolution→runner-
+  allocation) and caught+fixed a class of RLS-completeness bugs the hello-fixture
+  smoke missed — each now regression-tested (`just smoke-rls-*`).
+- **Control-plane/data-plane split P1→P3b.** A standalone `worker` deployable
+  claims jobs over an mTLS control-plane endpoint and routes its run-state writes
+  through control-plane `/internal/*` endpoints; it connects as the de-privileged
+  `tanren_dataplane` role (migration `0031`) whose `events`/`cost_records` write
+  grants are dropped (proven by a `42501` negative test).
+- **Quality bars.** ~13 Stryker mutation clusters (71–98%) + a weekly full-repo
+  mutation job (`mutation-weekly.yml`); oxlint warnings driven from ~3052 to ~5
+  with ~25 rules flipped warn→error.
+
+What is still genuinely pending/deferred: the **live demo close-out is paused at
+the harness-integration frontier** — workspace git-clone / worker→runner SSH auth,
+the real codex/claude/opencode write stage, and draft-PR → CI → Mergify merge (see
+`docs/operator-guide/live-validation-findings.md`); the durable credential
+registry; managed-hosting **P3c** + Vault per-run scoped credentials + allocator-
+service org threading; the agy/pi/reasonix **live** harness validation (pi/reasonix
+adapters built, agy deferred); the GitLab/VCS abstraction (deferred — GitHub-coupled
+via Mergify/Actions); and the long-horizon Rust rewrite/native harness. The full
+forward plan across all four dimensions is `docs/roadmap/forward-roadmap.md`; see
+`ROADMAP.md` for the honest status.
 
 The baseline `hello` workflow remains a synthetic smoke path, and the component live
 smokes below still live-prove the real-agent loop: the orchestrator can load managed
@@ -72,4 +97,4 @@ The single `compose.yml` was split into `compose.dev.yml` (the current local bas
 
 ## Roadmap
 
-`PROJECT_BRIEF.md` is the source of truth. `ROADMAP.md` records the completed Phase 0/1/2/3 work (and the merged SaaS-priming / strictness / longevity expansion) plus the honest list of what remains pending or deferred.
+`PROJECT_BRIEF.md` is the source of truth. `ROADMAP.md` records the completed Phase 0/1/2/3 work (and the merged multi-tenancy / plane-split / strictness / longevity expansion) plus the honest list of what remains pending or deferred. `docs/roadmap/forward-roadmap.md` is the single authoritative forward plan across all four dimensions (core run loop · pipeline experimentation · refactor/scale prepwork · managed-hosting).

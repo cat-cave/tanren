@@ -4,9 +4,23 @@ The live checklist for the Postgres RLS rollout. Companion to
 `docs/roadmap/saas-rls-and-plane-split-plan.md` (mechanism + locked decisions).
 
 **Status: R1 → R2 (cohorts 1–4) → R3a → R3a-worker → R3b are all DONE. RLS is
-FULLY ENFORCED** at the database — the runtime connects as the restricted
-`tanren_app` role and Postgres policies enforce org isolation (migration `0030`;
-see **R3b** for the enforcement flip + bypass call sites).
+FULLY ENFORCED and LIVE-VALIDATED** at the database — the runtime connects as the
+restricted `tanren_app` role and Postgres policies enforce org isolation
+(migration `0030`; see **R3b** for the enforcement flip + bypass call sites).
+
+A live operator-driven run (signup → CRUD → run → mTLS-claim → cred-resolution →
+runner-allocation) drove RLS end-to-end and **caught + fixed a class of
+completeness bugs the hello-fixture smoke missed** — org creation, the
+operator/resource HTTP routes, and the run-lifecycle allocator write — each now
+fixed + regression-tested (`just smoke-rls-org-bootstrap` / `-operator-flow` /
+`-http-route-scoping` / `-run-lifecycle`), including a full
+run-lifecycle-under-RLS test. See `docs/operator-guide/live-validation-findings.md`.
+
+Plane-split remaining (see the §P-waves below): **P3c** (route run/spec/task
+lifecycle writes through the control plane + drop those grants), **Vault per-run
+scoped creds** (the data plane still holds the broad `VAULT_TOKEN`), and
+**standalone allocator-service org threading** (`services/allocator` sets no
+`org_id` yet).
 
 RLS was delivered inert-first: R1 established the mechanism with **no policies**;
 later waves enabled policies + converted the query sites so every tenant query

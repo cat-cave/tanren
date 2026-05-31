@@ -1,10 +1,10 @@
 # Future-refactor & scale north-star (10 → 1M, zero-trust)
 
-**Status: analysis / scoping. No build is authorized by this doc.** A Rust rewrite
-is **HELD**; the control/data-plane split + RLS work is **plan-only**. This is the
-_map_ — it names the binding constraints in the **real current architecture** and
-the highest-leverage moves that make the eventual refactor feasible. Decisions are
-deferred.
+**Status: analysis / scoping. No build is authorized by this doc.** A Rust rewrite is **HELD**.
+(Update: the RLS + control/data-plane split this doc once called "plan-only" has since shipped —
+RLS fully enforced + live-validated, plane split at P3b; the structural prepwork below remains
+the live to-do.) This is the _map_ — the binding constraints in the **real current architecture**
+and the highest-leverage moves that make the eventual refactor feasible. Decisions are deferred.
 
 It builds on, and does **not** duplicate:
 

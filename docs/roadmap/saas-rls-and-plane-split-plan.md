@@ -1,8 +1,15 @@
 # SaaS multi-tenancy: RLS + control-plane/data-plane split — plan
 
-**Status: IN PROGRESS.** Refactor 1 (RLS) is **DONE and FULLY ENFORCED** (waves
-R1 → R3b; migration `0030`). Refactor 2 (plane split) is **at P3b: the
-run-executor worker is a STANDALONE deployable (P1) that claims over an
+**Status: IN PROGRESS.** Refactor 1 (RLS) is **DONE, FULLY ENFORCED, and
+LIVE-VALIDATED** (waves R1 → R3b; migration `0030`). A live operator-driven run
+exercised it end-to-end (signup → CRUD → run → mTLS-claim → cred-resolution →
+runner-allocation) and **caught + fixed a class of RLS-completeness bugs the
+hello-fixture smoke missed** — org creation, the operator/resource HTTP routes,
+and the run-lifecycle allocator write — each now regression-tested (`just
+smoke-rls-org-bootstrap` / `-operator-flow` / `-http-route-scoping` /
+`-run-lifecycle`), including a full run-lifecycle-under-RLS test. See
+`docs/operator-guide/live-validation-findings.md`. Refactor 2 (plane split) is
+**at P3b: the run-executor worker is a STANDALONE deployable (P1) that claims over an
 authenticated mTLS control-plane endpoint (P2 — `POST /internal/claim-job`),
 routes its run-state WRITES (event-append, cost-record insert, run finalize)
 through control-plane `/internal/*` write endpoints over the same mTLS channel
@@ -27,10 +34,12 @@ plan covers only the former.
   events, cost_records, specs, runners — NOT NULL + FK + composite indexes).
 - **`ActorContext`** (userId, orgId, projectId, scopes) is fully typed; scope
   checks (`platform:admin` / `org:admin` / `org:member` / `project:*`) exist.
-- **Isolation is enforced app-layer only.** ~269 query sites filter by `org_id`
-  in application code; there is **no database-level enforcement**. A query that
-  forgets `WHERE org_id = $n` returns cross-tenant rows silently. This is the
-  gap RLS closes.
+- **Isolation _was_ enforced app-layer only** (this is the terrain RLS started
+  from; now CLOSED). ~269 query sites filtered by `org_id` in application code
+  with **no database-level enforcement** — a query that forgot `WHERE org_id =
+$n` returned cross-tenant rows silently. RLS (waves R1 → R3b, below) closed
+  this gap: Postgres now denies by default and the app-layer filters stay as
+  belt-and-suspenders.
 - **Seams already in place:** `QuotaPolicy` (noop default / DB-backed) + metering
   export; tenant-namespaced credential refs (`credential/<slug>/<scope>/<owner>/<name>`);
   `providerMode: byok|managed`; pluggable secret-store factory.
