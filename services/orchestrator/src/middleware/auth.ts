@@ -1,4 +1,5 @@
-import type { Context, MiddlewareHandler } from "hono";
+import { runWithJobOrgId } from "@tanren/db";
+import type { Context, MiddlewareHandler, Next } from "hono";
 import type { ActorContext } from "../auth/schemas.js";
 import type { IdentityStore } from "../auth/identityStore.js";
 
@@ -59,7 +60,7 @@ export function createAuthMiddleware(options: AuthMiddlewareOptions): Middleware
         platformAdminUserIds: options.platformAdminUserIds,
       });
       bindActor(c, actor);
-      return next();
+      return runScoped(c, next);
     }
 
     const cookie = readCookie(c, SESSION_COOKIE);
@@ -80,13 +81,13 @@ export function createAuthMiddleware(options: AuthMiddlewareOptions): Middleware
           platformAdminUserIds: options.platformAdminUserIds,
         });
         bindActor(c, actor);
-        return next();
+        return runScoped(c, next);
       }
     }
 
     if (options.localDevActor !== undefined) {
       bindActor(c, options.localDevActor);
-      return next();
+      return runScoped(c, next);
     }
 
     return c.json({ error: "unauthorized", message: "authentication required" }, 401);
@@ -100,6 +101,25 @@ export function createAuthMiddleware(options: AuthMiddlewareOptions): Middleware
 function bindActor(c: Context<ActorContextEnv>, actor: ActorContext): void {
   c.set("actor", actor);
   c.set("requestOrgId", actor.orgId);
+}
+
+// RLS R3b: establish the request's per-org scope around the downstream handler.
+// The resolved actor's org (set on the context by `bindActor`) is published on
+// the lightweight `runWithJobOrgId` ambient store — which holds ONLY the org id,
+// no checked-out connection — so it is safe to keep open across the whole request
+// (including any external I/O a handler does). Operator/control-plane route
+// handlers run their tenant-table queries on an `orgScopingPool`, whose `.query`
+// opens a SHORT `runWithOrgScope` per statement from this ambient org id, so the
+// runtime `tanren_app` role's reads/writes carry `app.current_org_id` and the
+// deny-by-default RLS policies admit them. When the actor has NO org (a
+// bootstrap/unscoped request — e.g. `GET /orgs`, which lists the user's orgs via
+// `runWithSystemScope` itself), no scope is set and the handler runs as before.
+function runScoped(c: Context<ActorContextEnv>, next: Next): Promise<void> {
+  const orgId = c.get("requestOrgId");
+  if (orgId === undefined || orgId === null) {
+    return Promise.resolve(next());
+  }
+  return runWithJobOrgId(orgId, () => Promise.resolve(next()));
 }
 
 /**
@@ -150,10 +170,38 @@ export function clearSessionCookie(): string {
   return `${SESSION_COOKIE}=; Path=/; HttpOnly; Max-Age=0; SameSite=Lax`;
 }
 
+// The auth middleware runs as a top-level `app.use("*", …)`, BEFORE the matched
+// `/orgs/:orgId/*` sub-route resolves — so `c.req.param("orgId")` is NOT yet
+// populated here (Hono fills route params only in the matched handler's chain).
+// The dashboard BFF forwards only the session cookie (no `x-tanren-org-id`
+// header), so without parsing the path the actor would resolve with NO org →
+// `actorCanAccessOrg` would 403 every `/orgs/:orgId/*` request. We therefore
+// derive the addressed org/project from the request PATH as the fallback, so the
+// actor's org scope (and the per-request `runWithJobOrgId` RLS scope) is always
+// the org being addressed. Header/query still win when explicitly supplied.
+function pathSegmentAfter(path: string, marker: string): string | undefined {
+  const segments = path.split("/").filter((segment) => segment.length > 0);
+  const index = segments.indexOf(marker);
+  if (index === -1 || index + 1 >= segments.length) {
+    return undefined;
+  }
+  return decodeURIComponent(segments[index + 1]!);
+}
+
 function extractOrgId(c: Context): string | undefined {
-  return c.req.header("x-tanren-org-id") ?? c.req.query("orgId") ?? c.req.param("orgId");
+  return (
+    c.req.header("x-tanren-org-id") ??
+    c.req.query("orgId") ??
+    c.req.param("orgId") ??
+    pathSegmentAfter(c.req.path, "orgs")
+  );
 }
 
 function extractProjectId(c: Context): string | undefined {
-  return c.req.header("x-tanren-project-id") ?? c.req.query("projectId") ?? c.req.param("projectId");
+  return (
+    c.req.header("x-tanren-project-id") ??
+    c.req.query("projectId") ??
+    c.req.param("projectId") ??
+    pathSegmentAfter(c.req.path, "projects")
+  );
 }

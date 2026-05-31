@@ -236,11 +236,29 @@ export class IdentityStore {
     if (input.platformAdminUserIds?.has(input.userId) === true) {
       scopes.add("platform:admin");
     }
+    // RLS R3b: actor resolution is a user-scoped membership read that PRECEDES
+    // any org scope — the auth middleware runs it on every request to discover
+    // WHICH org the user belongs to and at what role, BEFORE an
+    // `app.current_org_id` can be established (it is what establishes it). On the
+    // runtime `tanren_app` role (NOBYPASSRLS) with an empty GUC, the
+    // deny-by-default policies on `org_members` / `project_members` / `projects`
+    // return ZERO rows, so the actor would resolve with NO org/project scopes —
+    // and every `/orgs/:orgId/*` route's in-memory `actorCanAccessOrg` check
+    // would then 403 even a legitimate org admin. So these membership-resolution
+    // reads run on the BYPASSRLS `tanren_system` pool via `runWithSystemScope`,
+    // each filtered by `user_id` (+ the addressed org/project id) — the same
+    // classification as `ensureOrgMembership` / `upsertOrg`. The result is still
+    // correctly scoped to the user's OWN memberships; it is not subject to the
+    // org-GUC RLS filter that cannot apply pre-scope. IN-ORG handler reads stay
+    // under RLS via the per-request `runWithJobOrgId` org scope.
     let resolvedOrgId: string | null = input.orgId ?? null;
     if (resolvedOrgId !== null) {
-      const orgRole = await this.pool.query<{ role: OrgMemberRole }>(
-        "SELECT role FROM org_members WHERE org_id = $1 AND user_id = $2",
-        [resolvedOrgId, input.userId],
+      const scopedOrgId = resolvedOrgId;
+      const orgRole = await runWithSystemScope(this.pool, (client) =>
+        client.query<{ role: OrgMemberRole }>("SELECT role FROM org_members WHERE org_id = $1 AND user_id = $2", [
+          scopedOrgId,
+          input.userId,
+        ]),
       );
       if ((orgRole.rowCount ?? 0) === 0) {
         resolvedOrgId = null;
@@ -253,15 +271,19 @@ export class IdentityStore {
     }
     let resolvedProjectId: string | null = input.projectId ?? null;
     if (resolvedProjectId !== null) {
-      const projectRole = await this.pool.query<{ role: ProjectMemberRole }>(
-        "SELECT role FROM project_members WHERE project_id = $1 AND user_id = $2",
-        [resolvedProjectId, input.userId],
+      const scopedProjectId = resolvedProjectId;
+      const projectRole = await runWithSystemScope(this.pool, (client) =>
+        client.query<{ role: ProjectMemberRole }>(
+          "SELECT role FROM project_members WHERE project_id = $1 AND user_id = $2",
+          [scopedProjectId, input.userId],
+        ),
       );
       if ((projectRole.rowCount ?? 0) === 0) {
         // Project membership not declared; try org-scoped fallback if project is owned by user's org.
-        const orgOwner = await this.pool.query<{ org_id: string | null }>(
-          "SELECT org_id FROM projects WHERE project_id = $1",
-          [resolvedProjectId],
+        const orgOwner = await runWithSystemScope(this.pool, (client) =>
+          client.query<{ org_id: string | null }>("SELECT org_id FROM projects WHERE project_id = $1", [
+            scopedProjectId,
+          ]),
         );
         const projectOrg = orgOwner.rows[0]?.org_id ?? null;
         if (projectOrg !== null && projectOrg === resolvedOrgId && scopes.has("org:member")) {
