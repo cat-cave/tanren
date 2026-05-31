@@ -19,7 +19,12 @@ import {
   type ReviewVerdict,
   type ReviewVerdictResult,
 } from "../../providers/githubReviewMerge.js";
-import { loadReviewMergeRunContext, type ReviewMergeRunContext, type RunStateClient } from "./context.js";
+import {
+  contextOptionsFor,
+  loadReviewMergeRunContext,
+  type ReviewMergeRunContext,
+  type RunStateClient,
+} from "./context.js";
 
 export interface PollReviewForRunInput {
   pool: RunStateClient;
@@ -28,6 +33,13 @@ export interface PollReviewForRunInput {
   githubHttp: GitHubHttpClient;
   runId: string;
   githubAppMinter?: GithubAppTokenMinter;
+  /**
+   * The GitHub credential ref the run already resolved for the PR-creation +
+   * CI-poll steps. Threaded through so the review stage resolves its token from
+   * the same source (project RECORD `githubCredentialRef` → org default) rather
+   * than the project-config JSONB alone.
+   */
+  resolvedGithubCredentialRef?: string;
   maxPolls?: number;
   pollDelayMs?: number;
   sleep?: (ms: number) => Promise<void>;
@@ -58,7 +70,7 @@ export interface PollReviewForRunResult {
 }
 
 export async function pollReviewForRun(input: PollReviewForRunInput): Promise<PollReviewForRunResult> {
-  const context = await loadReviewMergeRunContext(input.pool, input.runId);
+  const context = await loadReviewMergeRunContext(input.pool, input.runId, contextOptionsFor(input));
   const eventStore = input.eventStore ?? new PgEventStore(input.pool);
   const pr = parseGitHubPullRequestUrl(context.prUrl);
   const taskId = await ensureReviewTask(input.pool, context);

@@ -55,7 +55,39 @@ export class ReviewMergePullRequestNotFoundError extends Error {
   }
 }
 
-export async function loadReviewMergeRunContext(pool: RunStateClient, runId: string): Promise<ReviewMergeRunContext> {
+/**
+ * Options for {@link loadReviewMergeRunContext}.
+ *
+ * `resolvedGithubCredentialRef` is the GitHub credential ref the run already
+ * resolved for the PR-creation + CI-poll steps (`resolveCredentialsForRun` →
+ * project RECORD `githubCredentialRef` → org default). The review/merge stage
+ * MUST resolve its token from the SAME source as those steps, so the run path
+ * threads this in. When present it wins over the project-config-JSONB lookup;
+ * absent (e.g. an out-of-band caller with no pre-resolved ref) it falls back to
+ * the config-JSONB ref. `projects link --github-credential-ref` writes the
+ * project RECORD column, NOT the config JSONB, so the JSONB-only path returned
+ * undefined and the resolver fell back to a (removed) static default ref.
+ */
+export interface LoadReviewMergeRunContextOptions {
+  resolvedGithubCredentialRef?: string;
+}
+
+/**
+ * Build the context options from a stage input that carries an optional
+ * `resolvedGithubCredentialRef`. Shared by the review + merge stages so the
+ * exactOptionalPropertyTypes spread lives in one place.
+ */
+export function contextOptionsFor(input: { resolvedGithubCredentialRef?: string }): LoadReviewMergeRunContextOptions {
+  return input.resolvedGithubCredentialRef === undefined
+    ? {}
+    : { resolvedGithubCredentialRef: input.resolvedGithubCredentialRef };
+}
+
+export async function loadReviewMergeRunContext(
+  pool: RunStateClient,
+  runId: string,
+  options: LoadReviewMergeRunContextOptions = {},
+): Promise<ReviewMergeRunContext> {
   const result = await pool.query(
     `SELECT r.run_id, r.spec_id, r.project_id, r.pr_url, p.config, p.default_branch, o.config AS org_config
      FROM runs r
@@ -74,6 +106,7 @@ export async function loadReviewMergeRunContext(pool: RunStateClient, runId: str
   }
   const projectConfig = migrateProjectConfig(row.config);
   const installation = installationFromOrgConfig(row.org_config);
+  const staticCredentialRef = resolvedStaticCredentialRef(options.resolvedGithubCredentialRef, row.config);
   return {
     runId: row.run_id,
     specId: row.spec_id,
@@ -84,8 +117,21 @@ export async function loadReviewMergeRunContext(pool: RunStateClient, runId: str
     governancePosture: projectConfig.governancePosture,
     tanrenLogins: tanrenLoginsFor(installation),
     installation,
-    staticCredentialRef: credentialRefFromConfig(row.config),
+    ...(staticCredentialRef !== undefined && { staticCredentialRef }),
   };
+}
+
+/**
+ * Pick the static GitHub credential ref the review/merge stage resolves its
+ * token from. The run-resolved ref (the same one the PR-creation + CI-poll steps
+ * used) wins; otherwise fall back to the project-config-JSONB ref for out-of-band
+ * callers that did not pre-resolve.
+ */
+function resolvedStaticCredentialRef(resolvedRef: string | undefined, config: unknown): string | undefined {
+  if (typeof resolvedRef === "string" && resolvedRef.trim() !== "") {
+    return validateGithubCredentialRef(resolvedRef);
+  }
+  return credentialRefFromConfig(config);
 }
 
 /**

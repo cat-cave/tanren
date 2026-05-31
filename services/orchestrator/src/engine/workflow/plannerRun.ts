@@ -321,6 +321,10 @@ export async function runPlannerLoopWorkflow(input: RunPlannerLoopInput): Promis
         secrets: input.secrets,
         githubHttp: input.githubHttp,
         runId: context.runId,
+        // Resolve the review-stage GitHub token from the SAME ref the
+        // PR-creation + CI-poll steps used (project record → org default), not
+        // the project-config JSONB alone.
+        resolvedGithubCredentialRef: context.githubCredentialRef,
         maxPolls: input.maxCiPolls,
         pollDelayMs: input.ciPollDelayMs,
         sleep: input.sleep,
@@ -351,6 +355,8 @@ export async function runPlannerLoopWorkflow(input: RunPlannerLoopInput): Promis
       secrets: input.secrets,
       githubHttp: input.githubHttp,
       runId: context.runId,
+      // Same source as PR-creation + CI-poll (project record → org default).
+      resolvedGithubCredentialRef: context.githubCredentialRef,
       mergeProbe: input.mergeProbe,
       resolveConflict: input.resolveConflict,
     });

@@ -64,6 +64,10 @@ describe("brownfield link endpoint", () => {
       return { status: 404, body: undefined };
     });
     const { app, pool, secrets } = buildHarness(alice, http);
+    pool.seedOrg({
+      id: "org_acme",
+      config: { version: 1, defaultCredentials: { github_token: "credential/github/default" } },
+    });
     pool.seedProject({ project_id: "project_1", org_id: "org_acme" });
     await secrets.put({ ref: "credential/github/default", value: "ghp_test" });
 
@@ -88,6 +92,10 @@ describe("brownfield link endpoint", () => {
   it("returns 404 when the GitHub App cannot see the repository", async () => {
     const http = new RecordingGitHubClient(() => ({ status: 404, body: undefined }));
     const { app, pool, secrets } = buildHarness(alice, http);
+    pool.seedOrg({
+      id: "org_acme",
+      config: { version: 1, defaultCredentials: { github_token: "credential/github/default" } },
+    });
     pool.seedProject({ project_id: "project_1", org_id: "org_acme" });
     await secrets.put({ ref: "credential/github/default", value: "ghp_test" });
 

@@ -29,7 +29,10 @@ import type { ActorContext } from "../../auth/schemas.js";
 import { GovernancePosture, type GovernancePosture as GovernancePostureType } from "../../engine/config/shared.js";
 import { migrateProjectConfig } from "../../engine/config/projectConfig.js";
 import type { SecretStore } from "../../engine/contracts/secretStore.js";
-import { loadOrgGithubAppInstallation } from "../../engine/credentials/orgGithubApp.js";
+import {
+  loadOrgDefaultGithubCredentialRef,
+  loadOrgGithubAppInstallation,
+} from "../../engine/credentials/orgGithubApp.js";
 import { resolveGithubToken, type ResolvedGithubToken } from "../../engine/credentials/githubTokenResolver.js";
 import {
   FetchConfigInjectionGitHub,
@@ -243,9 +246,14 @@ async function guardOrg(
 
 async function resolveTokenFor(options: BrownfieldFullTrackOptions, orgId: string): Promise<ResolvedGithubToken> {
   const installation = await loadOrgGithubAppInstallation(options.pool, orgId);
+  // No App installation ⇒ resolve the org's default GitHub credential ref as the
+  // static token source (no hardcoded default ref).
+  const staticRef =
+    installation === undefined ? await loadOrgDefaultGithubCredentialRef(options.pool, orgId) : undefined;
   return resolveGithubToken({
     secrets: options.secrets,
     ...(installation === undefined ? {} : { installation }),
+    ...(staticRef === undefined ? {} : { staticRef }),
     ...(options.githubAppMinter === undefined ? {} : { minter: options.githubAppMinter }),
   });
 }
@@ -259,6 +267,11 @@ async function fetchIssuesFor(
   if (options.fetchIssues !== undefined) return options.fetchIssues(repoUrl, projectId);
   const repo = parseGitHubRepository(repoUrl);
   const installation = await loadOrgGithubAppInstallation(options.pool, orgId);
+  // No App installation ⇒ the connector resolves its static token from the org's
+  // default GitHub credential ref (carried on the source config; no hardcoded
+  // default ref).
+  const staticRef =
+    installation === undefined ? await loadOrgDefaultGithubCredentialRef(options.pool, orgId) : undefined;
   const connector = createGitHubIssuesConnector({
     secrets: options.secrets,
     githubHttp: options.githubHttp,
@@ -272,7 +285,7 @@ async function fetchIssuesFor(
     kind: "issues",
     name: "brownfield recon issues",
     detail: "",
-    config: { owner: repo.owner, repo: repo.name, labels: [] },
+    config: { owner: repo.owner, repo: repo.name, labels: [], ...(staticRef === undefined ? {} : { staticRef }) },
     enabled: true,
     autoRoute: false,
   });
