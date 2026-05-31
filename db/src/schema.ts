@@ -15,49 +15,13 @@ import {
 } from "drizzle-orm/pg-core";
 import { eventTypeNames } from "./eventTypes.js";
 import { stateEnumLists } from "./stateEnums.js";
-import { enumCheck, organizations, projects, specs, users } from "./schemaCore.js";
+import { enumCheck, organizations, projects, runs, specs, users } from "./schemaCore.js";
 
-// Core identity + project/spec tables live in schemaCore.ts so the split
+// Core identity + project/spec/run tables live in schemaCore.ts so the split
 // sub-schema files can reference them without importing schema.ts (see
 // schemaCore.ts for the cycle-avoidance rationale). Re-exported here so
 // consumers + the migration generator still see one `schema.*` namespace.
-export { enumCheck, organizations, projects, specs, users };
-
-export const runs = pgTable(
-  "runs",
-  {
-    runId: text("run_id").primaryKey(),
-    specId: text("spec_id")
-      .notNull()
-      .references(() => specs.specId),
-    projectId: text("project_id")
-      .notNull()
-      .references(() => projects.projectId),
-    orgId: text("org_id")
-      .notNull()
-      .references(() => organizations.id),
-    trigger: text("trigger").notNull(),
-    branch: text("branch").notNull(),
-    status: text("status").notNull().default("queued"),
-    startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
-    endedAt: timestamp("ended_at", { withTimezone: true }),
-    outcome: text("outcome"),
-    prUrl: text("pr_url"),
-    userId: text("user_id"),
-  },
-  (table) => [
-    enumCheck("runs_status_check", table.status, stateEnumLists.runs_status),
-    check(
-      "runs_outcome_check",
-      sql`${table.outcome} IS NULL OR ${table.outcome} IN (${sql.raw(
-        stateEnumLists.runs_outcome.map((value) => `'${value.replaceAll("'", "''")}'`).join(","),
-      )})`,
-    ),
-    index("runs_org_id").on(table.orgId),
-    index("runs_org_run").on(table.orgId, table.runId),
-    index("runs_org_project").on(table.orgId, table.projectId),
-  ],
-);
+export { enumCheck, organizations, projects, runs, specs, users };
 
 export const tasks = pgTable(
   "tasks",
@@ -482,10 +446,12 @@ export const specDependencies = pgTable(
 // Sub-schema files are kept separate to respect the file-line-max-500
 // architecture rule; consumers + the migration generator see one `schema.*`
 // namespace via these re-exports. Owners: schemaNotifications (P2A-0017),
-// schemaForge (P2A-0019), schemaInsights (P2A-0020), schemaInbox (P3-0022), schemaAudits (P3-0021).
+// schemaForge (P2A-0019), schemaInsights (P2A-0020), schemaInbox (P3-0022),
+// schemaAudits (P3-0021), schemaBenchmark (tanren-method benchmark).
 export { notificationTargets, notificationRoutes } from "./schemaNotifications.js";
 export { forgeThreads, forgeTurns, forgeActionProposals } from "./schemaForge.js";
 export { workflowInsights } from "./schemaInsights.js";
 export { inboxSources, candidates } from "./schemaInbox.js";
 export { auditJobs } from "./schemaAudits.js";
 export { orgQuotas } from "./schemaQuotas.js";
+export { experiments, experimentCells, experimentTrials } from "./schemaBenchmark.js";

@@ -2,6 +2,13 @@ import { sql } from "drizzle-orm";
 import { type AnyPgColumn, check, index, jsonb, pgTable, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
 import { stateEnumLists } from "./stateEnums.js";
 
+// `runs` lives here (not in schema.ts) so the benchmark sub-schema —
+// `experiment_trials.run_id` FK → runs — can reference it from a core module
+// WITHOUT importing schema.ts (schema.ts re-exports the sub-schemas, so a
+// sub-schema importing schema.ts closes an import cycle the lint `no-cycle`
+// rule rejects). It is part of the core run-execution chain anyway. schema.ts
+// re-exports it so `schema.runs` is unchanged for every consumer.
+
 // Core identity + project/spec tables. These are referenced by the split
 // sub-schema files (schemaForge, schemaInbox, …). Keeping them here — rather
 // than in schema.ts — lets those sub-schemas reference the base tables without
@@ -107,5 +114,41 @@ export const users = pgTable(
   (table) => [
     check("users_provider_check", sql`${table.provider} IN ('github_oauth','oidc','local_dev')`),
     uniqueIndex("users_provider_subject_unique").on(table.provider, table.providerSubject),
+  ],
+);
+
+export const runs = pgTable(
+  "runs",
+  {
+    runId: text("run_id").primaryKey(),
+    specId: text("spec_id")
+      .notNull()
+      .references(() => specs.specId),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.projectId),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organizations.id),
+    trigger: text("trigger").notNull(),
+    branch: text("branch").notNull(),
+    status: text("status").notNull().default("queued"),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+    endedAt: timestamp("ended_at", { withTimezone: true }),
+    outcome: text("outcome"),
+    prUrl: text("pr_url"),
+    userId: text("user_id"),
+  },
+  (table) => [
+    enumCheck("runs_status_check", table.status, stateEnumLists.runs_status),
+    check(
+      "runs_outcome_check",
+      sql`${table.outcome} IS NULL OR ${table.outcome} IN (${sql.raw(
+        stateEnumLists.runs_outcome.map((value) => `'${value.replaceAll("'", "''")}'`).join(","),
+      )})`,
+    ),
+    index("runs_org_id").on(table.orgId),
+    index("runs_org_run").on(table.orgId, table.runId),
+    index("runs_org_project").on(table.orgId, table.projectId),
   ],
 );
