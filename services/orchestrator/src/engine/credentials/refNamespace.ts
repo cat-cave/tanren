@@ -1,13 +1,8 @@
 // SaaS Tier-A #3: tenant-namespaced Vault refs.
 //
-// Historically the credential `ref` was fully caller-supplied and the per-kind
-// validators only enforced the `credential/<kind>/` prefix. That let an org
-// admin write to an arbitrary ref under the namespace — including one that
-// belongs to a different tenant (cross-tenant key collision / overwrite).
-//
-// The import route now DERIVES the Vault ref server-side from the authenticated
-// actor's `{kind, scope, ownerId}` plus a caller-supplied `name`, so the Vault
-// key is anchored to the tenant the route already authorized. Refs are shaped:
+// The Vault `ref` is ALWAYS derived server-side from the authenticated actor's
+// `{kind, scope, ownerId}` plus a caller-supplied `name`, so the Vault key is
+// anchored to the tenant the route already authorized. Refs are shaped:
 //
 //   credential/<slug>/<scope>/<ownerId>/<name>
 //
@@ -15,14 +10,12 @@
 // user id). This mirrors the `CredentialRecord` the registry already stamps —
 // derivation just aligns the Vault key with that owner.
 //
-// `enforceRefOwnership` is the read-side guard: when a caller supplies a full
-// ref (back-compat), it must resolve to the SAME scope/owner the route
-// authorized; a ref whose scope/owner segment names a different tenant is
-// rejected. Legacy short refs (`credential/<slug>/<name>`, no scope segment)
-// are NOT accepted by the namespaced import route — those only ever flowed in
-// through the unauthenticated legacy `/credentials/<slug>/import` endpoints and
-// keep resolving unchanged because resolution still uses the prefix-only
-// validators. New imports through the org/me routes always get a derived ref.
+// There is NO bare-ref backwards-compat path: a caller never gets to pick the
+// ref. When the caller supplies a full ref (a value containing `/`), the server
+// still derives the canonical ref from `{kind, scope, ownerId, <trailing name>}`
+// and accepts the supplied ref ONLY when it is byte-equal to that derivation.
+// Any mismatch — different tenant, scope, kind slug, or trailing shape — is a
+// hard error. A bare `name` (no `/`) derives the ref directly.
 
 /** The credential kinds the namespaced import route can derive a ref for. */
 export type NamespacedCredentialKind =
@@ -75,11 +68,12 @@ export function deriveCredentialRef(input: DeriveRefInput): string {
 }
 
 /**
- * Resolve the trailing `name` segment the caller intends. Accepts either a bare
- * name (`"default"`) or a full ref the caller supplied for back-compat
- * (`"credential/<slug>/<scope>/<ownerId>/<name>"`); in the full-ref case the
- * scope/owner MUST match the authorized actor or this throws. Returns the name
- * to feed into {@link deriveCredentialRef}.
+ * Resolve the trailing `name` segment from a caller's `supplied` value. A bare
+ * name (`"default"`, no `/`) is returned as-is (trimmed). A full ref
+ * (`"credential/<slug>/<scope>/<ownerId>/<name>"`) is split into its trailing
+ * segment — but the segment is only trusted insofar as re-deriving the ref from
+ * it reproduces the caller's exact bytes; {@link deriveImportRef} enforces that
+ * byte-equality. This function NEVER trusts a caller-supplied ref on its own.
  */
 export function resolveCredentialName(args: {
   supplied: string;
@@ -94,23 +88,22 @@ export function resolveCredentialName(args: {
   if (!supplied.includes("/")) {
     return supplied;
   }
-  // A full ref was supplied: it must name this exact tenant namespace.
-  const expectedPrefix = `credential/${KIND_SLUG[args.kind]}/${args.scope}/${args.ownerId}/`;
-  if (!supplied.startsWith(expectedPrefix)) {
+  // A full ref was supplied: the derived ref must reproduce it byte-for-byte.
+  const lastSlash = supplied.lastIndexOf("/");
+  const name = supplied.slice(lastSlash + 1);
+  const derived = deriveCredentialRef({ kind: args.kind, scope: args.scope, ownerId: args.ownerId, name });
+  if (derived !== supplied) {
     throw new Error("credential ref does not belong to the authenticated owner");
-  }
-  const name = supplied.slice(expectedPrefix.length);
-  if (name === "" || name.includes("/")) {
-    throw new Error("credential ref must end in a single name segment");
   }
   return name;
 }
 
 /**
- * The single Tier-A #3 enforcement entrypoint the import route calls: resolve
- * the caller's `supplied` ref to a tenant-safe name and derive the Vault ref
- * under the authorized `{kind, scope, ownerId}`. Throws (caught by the route as
- * a 400) when the caller's ref names a different tenant or is malformed.
+ * The single Tier-A #3 enforcement entrypoint the import route calls. Derives
+ * the canonical Vault ref under the authorized `{kind, scope, ownerId}`; a
+ * caller-supplied full ref is accepted only when byte-equal to that derivation,
+ * else this throws (caught by the route as a 400). There is no bare-ref
+ * back-compat: the caller never picks the ref.
  */
 export function deriveImportRef(args: {
   supplied: string;

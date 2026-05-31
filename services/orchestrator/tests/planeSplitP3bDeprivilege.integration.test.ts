@@ -102,8 +102,8 @@ describeDb("plane-split P3b — the de-privileged tanren_dataplane role (real PG
 
     // Seed one org's run/spec/task as the OWNER (bypasses RLS as table owner).
     await ownerPool.query(
-      `INSERT INTO organizations (id, kind, external_id, login, display_name)
-       VALUES ($1, 'oidc', $1, $1, $1) ON CONFLICT (id) DO NOTHING`,
+      `INSERT INTO organizations (id, kind, external_id, login, display_name, config)
+       VALUES ($1, 'oidc', $1, $1, $1, '{"version":1}'::jsonb) ON CONFLICT (id) DO NOTHING`,
       [ORG],
     );
     await ownerPool.query(

@@ -3,7 +3,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FakeJobQueue } from "../src/engine/contracts/jobQueue.js";
-import { FakeEventStore } from "../src/engine/eventStore.js";
+import { FakeEventStore } from "./helpers/fakeEventStore.js";
 import { JobReaper, reapExpiredJobs } from "../src/engine/worker/jobReaper.js";
 
 // RLS R3a-worker: the reaper now resolves a reaped run's lineage (incl. org_id,

@@ -94,8 +94,8 @@ describeDb("plane-split P3 — control-plane run-state write endpoints (real PG,
   // collide. Seeded as the OWNER (RLS does not apply to the table owner).
   async function seedRun(runId: string, status = "running"): Promise<void> {
     await ownerPool.query(
-      `INSERT INTO organizations (id, kind, external_id, login, display_name)
-       VALUES ($1, 'oidc', $1, $1, $1) ON CONFLICT (id) DO NOTHING`,
+      `INSERT INTO organizations (id, kind, external_id, login, display_name, config)
+       VALUES ($1, 'oidc', $1, $1, $1, '{"version":1}'::jsonb) ON CONFLICT (id) DO NOTHING`,
       [ORG],
     );
     await ownerPool.query(

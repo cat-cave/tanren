@@ -192,16 +192,17 @@ describeDb("RLS early-failure finalize — a pre-scope throw still finalizes the
 
 async function seedCredentialFreeRun(owner: Pool): Promise<void> {
   await owner.query(
-    `INSERT INTO organizations (id, kind, external_id, login, display_name)
-     VALUES ($1, 'oidc', $1, $1, $1)`,
+    `INSERT INTO organizations (id, kind, external_id, login, display_name, config)
+     VALUES ($1, 'oidc', $1, $1, $1, '{"version":1}'::jsonb)`,
     [ORG],
   );
-  // No credentials anywhere: project config is the defaulted V1 (`{}` → no
-  // credential refs) and the org has no defaults, so resolveCredentialsForRun
-  // throws MissingCredential during context hydration — the EARLY failure.
+  // No credentials anywhere: project config is a bare version:1 (no credential
+  // refs) and the org has no defaults, so resolveCredentialsForRun throws
+  // MissingCredential during context hydration — the EARLY failure. (Configs
+  // must be explicitly versioned: the migration shim is deleted.)
   await owner.query(
     `INSERT INTO projects (project_id, name, repo_url, default_branch, runner_image, org_id, config)
-     VALUES ($1, 'p', 'https://example.com/r.git', 'main', 'runner:v0', $2, '{}'::jsonb)`,
+     VALUES ($1, 'p', 'https://example.com/r.git', 'main', 'runner:v0', $2, '{"version":1}'::jsonb)`,
     [PROJECT, ORG],
   );
   await owner.query(

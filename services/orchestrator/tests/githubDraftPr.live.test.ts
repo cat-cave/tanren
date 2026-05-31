@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { SshTarget } from "../src/engine/contracts/allocator.js";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import { storeGithubToken } from "../src/engine/credentials/githubToken.js";
-import { FakeEventStore } from "../src/engine/eventStore.js";
+import { FakeEventStore } from "./helpers/fakeEventStore.js";
 import { FetchGitHubHttpClient } from "../src/engine/providers/github.js";
 import { Ssh2Substrate } from "../src/engine/ssh/index.js";
 import { publishDraftPullRequest } from "../src/engine/workflow/githubDraftPr.js";

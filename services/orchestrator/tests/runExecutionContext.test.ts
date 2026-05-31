@@ -20,7 +20,7 @@ function rowPool(row: Record<string, unknown> | undefined): pg.Pool {
     async query(sql: string) {
       const trimmed = sql.trim();
       if (trimmed.startsWith("SELECT config FROM organizations")) {
-        return { rows: [{ config: {} }], rowCount: 1 };
+        return { rows: [{ config: { version: 1 } }], rowCount: 1 };
       }
       // The run⋈spec⋈project join.
       return row === undefined ? { rows: [], rowCount: 0 } : { rows: [row], rowCount: 1 };

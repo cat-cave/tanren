@@ -5,7 +5,7 @@
 // - defaultInput that wires the loop with a runnable single-subtask plan.
 import type { AuditAnswer, CheckAnswer, PlanAnswer } from "../../src/engine/answerers/schemas/index.js";
 import { CostRecorder } from "../../src/engine/costs/index.js";
-import { FakeEventStore } from "../../src/engine/eventStore.js";
+import { FakeEventStore } from "./fakeEventStore.js";
 import type {
   AnswererAdapter,
   AnswererRunOptions,

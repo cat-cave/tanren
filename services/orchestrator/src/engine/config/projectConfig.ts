@@ -79,14 +79,13 @@ export type ProjectConfigVersioned = z.infer<typeof ProjectConfigVersioned>;
 
 export const SUPPORTED_PROJECT_CONFIG_VERSIONS: ReadonlyArray<number> = [1];
 
-// Parses a stored project config row into the typed V1 shape. Same rules as
-// `migrateOrgConfig`. Phase 1 fixture projects ship with `{}` JSONB so this
-// helper must yield a valid V1 with defaults for them.
+// Parses a stored project config row into the typed V1 shape. Fail-hard, no
+// shim — same rules as `migrateOrgConfig`: a row missing `version` is a hard
+// error (UnknownConfigVersionError), NOT a silent upgrade to V1 defaults. Every
+// persisted project config carries an explicit `version`. The name is retained
+// as the parse surface; the old "default the `{}` blob" shim is deleted.
 export function migrateProjectConfig(raw: unknown): ProjectConfigV1 {
   const observed = readObservedVersion(raw);
-  if (observed === undefined) {
-    return ProjectConfigV1.parse({ version: 1 });
-  }
   if (observed === 1) {
     return ProjectConfigV1.parse(raw);
   }

@@ -5,7 +5,8 @@
 // order so the spec's read-back observer sees the same ordering contract a
 // real `events` table provides.
 import { describe, expect, it } from "vitest";
-import { FakeEventStore, PgEventStore } from "../../src/engine/eventStore.js";
+import { PgEventStore } from "../../src/engine/eventStore.js";
+import { FakeEventStore } from "../helpers/fakeEventStore.js";
 import { describeEventStoreConformance, type ObservedEvent } from "./eventStoreConformance.js";
 
 /**

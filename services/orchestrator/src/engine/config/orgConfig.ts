@@ -103,18 +103,16 @@ export type OrgConfigVersioned = z.infer<typeof OrgConfigVersioned>;
 
 export const SUPPORTED_ORG_CONFIG_VERSIONS: ReadonlyArray<number> = [1];
 
-// Parses a stored org config row into the typed V1 shape. Rules:
-//   - missing `version` (legacy Phase 1 row, plain `{}` jsonb): treat as V1
-//     and let the schema defaults fill in every field;
+// Parses a stored org config row into the typed V1 shape. Fail-hard, no shim:
+//   - missing `version`: throw UnknownConfigVersionError — an unversioned row
+//     is a hard error, NOT a silent upgrade to V1 defaults (Tanren has no
+//     legacy rows; every persisted config carries an explicit `version`);
 //   - `version === 1`: parse as V1 directly;
-//   - any other observed version: throw UnknownConfigVersionError so callers
-//     can decide between refuse-start, warn-and-default, or out-of-process
-//     migration.
+//   - any other observed version: throw UnknownConfigVersionError.
+// The name is retained as the org-config parse surface; the old shim behavior
+// (defaulting unversioned/`{}` rows into V1) is deleted.
 export function migrateOrgConfig(raw: unknown): OrgConfigV1 {
   const observed = readObservedVersion(raw);
-  if (observed === undefined) {
-    return OrgConfigV1.parse({ version: 1 });
-  }
   if (observed === 1) {
     return OrgConfigV1.parse(raw);
   }

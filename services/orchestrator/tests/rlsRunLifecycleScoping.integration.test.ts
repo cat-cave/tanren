@@ -260,8 +260,8 @@ describeDb("RLS run lifecycle — a real org-scoped run writes every lifecycle t
 
 async function seedCredentialCompleteRun(owner: Pool): Promise<void> {
   await owner.query(
-    `INSERT INTO organizations (id, kind, external_id, login, display_name)
-     VALUES ($1, 'oidc', $1, $1, $1)`,
+    `INSERT INTO organizations (id, kind, external_id, login, display_name, config)
+     VALUES ($1, 'oidc', $1, $1, $1, '{"version":1}'::jsonb)`,
     [ORG],
   );
   // A version:1 project config carrying both credential refs, so

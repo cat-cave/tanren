@@ -3,7 +3,7 @@ import type { AllocationRequest, Allocator, RunnerAllocation, SshTarget } from "
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import type { SshCommand, SshCommandResult, SshSubstrate } from "../src/engine/contracts/sshSubstrate.js";
 import { storeGithubToken } from "../src/engine/credentials/githubToken.js";
-import { FakeEventStore } from "../src/engine/eventStore.js";
+import { FakeEventStore } from "./helpers/fakeEventStore.js";
 import { fakeAuditor, fakeChecker } from "../src/engine/providers/fake.js";
 import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "../src/engine/providers/github.js";
 import type { WriterAdapter, WriterResult } from "../src/engine/providers/types.js";

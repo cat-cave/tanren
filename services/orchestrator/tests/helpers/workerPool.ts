@@ -142,7 +142,7 @@ export class WorkerPool {
       });
     }
     if (trimmed.startsWith("SELECT config FROM organizations")) {
-      return single({ config: {} });
+      return single({ config: { version: 1 } });
     }
     // RLS wave R1: the worker's establishJobOrgContext confirms the claimed run
     // is reachable under its org GUC. Visible when the run exists with that org;

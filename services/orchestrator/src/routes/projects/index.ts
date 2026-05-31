@@ -58,6 +58,16 @@ export function createProjectRoutes(options: ProjectRoutesOptions) {
     if (!parsed.success) {
       return c.json({ error: "invalid_project", issues: parsed.error.issues }, 400);
     }
+    // Validate a supplied config up-front: it must be an explicit `version: 1`
+    // blob (an unversioned/malformed config fails hard — no migration shim).
+    // Mirrors the PATCH route's parse-then-400 contract.
+    if (parsed.data.config !== undefined) {
+      try {
+        migrateProjectConfig(parsed.data.config);
+      } catch (error) {
+        return c.json({ error: "invalid_project_config", message: messageOf(error) }, 400);
+      }
+    }
     const scopedActor: ActorContext = { ...actor, orgId };
     const project = await createProject(options.pool, parsed.data, scopedActor);
     return c.json(project, 201);

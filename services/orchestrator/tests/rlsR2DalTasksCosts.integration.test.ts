@@ -25,7 +25,7 @@ import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { migrate, runWithOrgScope } from "@tanren/db";
 import { CostRecorder } from "../src/engine/costs/recorder.js";
-import { FakeEventStore } from "../src/engine/eventStore.js";
+import { FakeEventStore } from "./helpers/fakeEventStore.js";
 import { getRunUsage } from "../src/engine/quota/index.js";
 import { insertChildTask, markTaskDone } from "../src/engine/workflow/subtaskTasks.js";
 import { fetchCostsPage, fetchRunCostsForSnapshot, fetchRunTasks } from "../src/routes/runs/list.js";
@@ -265,8 +265,8 @@ async function countCosts(pool: Pool, runId: string): Promise<number> {
 // cohort-1 test's seeder; kept local so the two cohorts stay independent.
 async function seedTenant(owner: Pool, orgId: string, projectId: string, specId: string, runId: string): Promise<void> {
   await owner.query(
-    `INSERT INTO organizations (id, kind, external_id, login, display_name)
-     VALUES ($1, 'oidc', $1, $1, $1)`,
+    `INSERT INTO organizations (id, kind, external_id, login, display_name, config)
+     VALUES ($1, 'oidc', $1, $1, $1, '{"version":1}'::jsonb)`,
     [orgId],
   );
   await owner.query(

@@ -8,7 +8,7 @@ import type { AllocationRequest, Allocator, RunnerAllocation, SshTarget } from "
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import type { SshCommand, SshCommandResult, SshSubstrate } from "../src/engine/contracts/sshSubstrate.js";
 import { storeGithubToken } from "../src/engine/credentials/githubToken.js";
-import { FakeEventStore } from "../src/engine/eventStore.js";
+import { FakeEventStore } from "./helpers/fakeEventStore.js";
 import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "../src/engine/providers/github.js";
 import type { AnswererAdapter, CcusageAccounting, UsageProbe, WindowObservation } from "../src/engine/usage/index.js";
 import type { PlannerRunContext } from "../src/engine/workflow/plannerRun.js";
@@ -159,9 +159,9 @@ export async function setup(projectConfig?: Record<string, unknown>) {
 // lookup). The merge probe then decides merged / conflict / failed.
 export function directMergeConfig(): Record<string, unknown> {
   return {
-    // version:1 so migrateProjectConfig reads it (an unversioned config is
-    // ignored → not_configured/strict defaults). Strict schema, so the static
-    // credential ref lives under `credentials`.
+    // version:1 is mandatory — migrateProjectConfig fails hard on an
+    // unversioned config. Strict schema, so the static credential ref lives
+    // under `credentials`.
     version: 1,
     mergeIntegration: "direct_merge",
     governancePosture: "open",
@@ -351,7 +351,15 @@ export class PlannerRunPool {
     private readonly runContext: PlannerRunContext,
     projectConfig?: Record<string, unknown>,
   ) {
-    this.projectConfig = projectConfig ?? { githubCredentialRef: runContext.githubCredentialRef };
+    // A valid version:1 project config — migrateProjectConfig now fails hard on
+    // an unversioned/`{}` row (the migration shim is deleted). The static
+    // GitHub credential ref lives under `credentials` (strict V1 schema).
+    this.projectConfig = projectConfig ?? {
+      version: 1,
+      ...(runContext.githubCredentialRef === undefined
+        ? {}
+        : { credentials: { githubCredentialRef: runContext.githubCredentialRef } }),
+    };
   }
 
   async query(sql: string, params: unknown[] = []): Promise<{ rows: unknown[]; rowCount: number }> {
