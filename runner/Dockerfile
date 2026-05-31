@@ -24,6 +24,7 @@ ARG CODEXBAR_VERSION=0.30.0
 ARG CCUSAGE_VERSION=
 
 RUN npm install -g @openai/codex@0.133.0 \
+  && npm install -g pnpm@10 \
   && if [ -n "${CCUSAGE_VERSION}" ]; then npm install -g "ccusage@${CCUSAGE_VERSION}"; else npm install -g ccusage; fi \
   && npm cache clean --force
 
