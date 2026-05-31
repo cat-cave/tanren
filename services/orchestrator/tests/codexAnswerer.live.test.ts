@@ -7,7 +7,8 @@ import { storeCodexAuthBundle } from "../src/engine/credentials/codexAuth.js";
 import type { AuditAnswer, CheckAnswer } from "../src/engine/providers/answererSchemas.js";
 import { createCodexAnswerer } from "../src/engine/providers/codex.js";
 import { Ssh2Substrate } from "../src/engine/ssh/index.js";
-import { prepareGitWorkspace, runWorkspaceSshCommand, workspaceRepoPathForRun } from "../src/engine/workspace/index.js";
+import { runWorkspaceSshCommand, workspaceRepoPathForRun } from "../src/engine/workspace/index.js";
+import { prepareGitWorkspace } from "./fixtures/workspaceGit.js";
 import { executeStructuredAuditTask, executeStructuredCheckTask } from "../src/engine/workflow/answererTasks.js";
 
 const runLive = process.env.TANREN_CODEX_ANSWERER_LIVE === "1";

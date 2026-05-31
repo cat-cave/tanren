@@ -1,14 +1,16 @@
-import type { AuditAnswer, CheckAnswer, PlanAnswer } from "./answererSchemas.js";
-import type { AnswererAdapter } from "./types.js";
-
-// Fake answerers used by the synthetic hello connectivity fixture are attributed
-// as self-hosted billing. PROJECT_BRIEF §4.2 treats fixed-fee local compute as a
-// self-hosted endpoint with no per-call dollar basis, so the recorder writes
-// cost_usd = NULL / cost_basis = 'unknown'. Token accounting still lands.
+// TEST FIXTURE ONLY. Fake planner/checker/auditor answerer adapters — synthetic
+// stand-ins that return fixed structured answers. They MUST NOT exist in any
+// production/runtime path: production code resolves real answerer adapters from
+// the project's role-routing config. These live under tests/ so they are
+// unreachable from src/.
 //
-// NOTE: there is intentionally NO fake WRITER adapter here. The fake writer is a
-// TEST FIXTURE ONLY (tests/fixtures/fakeWriter.ts) so production code can never
-// construct it; the real run path's writer is selected by role-routing config.
+// Self-hosted billing attribution: PROJECT_BRIEF §4.2 treats fixed-fee local
+// compute as a self-hosted endpoint with no per-call dollar basis, so cost
+// recording writes cost_usd = NULL / cost_basis = 'unknown'. Token accounting
+// still lands.
+import type { AuditAnswer, CheckAnswer, PlanAnswer } from "../../src/engine/providers/answererSchemas.js";
+import type { AnswererAdapter } from "../../src/engine/providers/types.js";
+
 export const fakeSelfHostedAuthRef = "credential/self-hosted/tanren-fake";
 
 export const fakePlanner: AnswererAdapter<PlanAnswer> = {

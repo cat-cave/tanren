@@ -1,11 +1,10 @@
 import { readFile } from "node:fs/promises";
 import { serve } from "@hono/node-server";
-import { createDbPool, getSystemPool, migrate } from "@tanren/db";
+import { createDbPool, migrate } from "@tanren/db";
 import { Hono } from "hono";
 import type pg from "pg";
 import { buildAuthFromEnv, type BuildAppAuthOptions } from "./mainAuth.js";
-import { buildAllocatorFromEnv } from "./engine/allocators/index.js";
-import { buildSecretStore, InMemorySecretStore, type SecretStore } from "./engine/contracts/index.js";
+import { buildSecretStore, type SecretStore, type SshSubstrate } from "./engine/contracts/index.js";
 import { FetchGitHubHttpClient, type GitHubHttpClient } from "./engine/providers/github.js";
 import { GithubAppTokenMinter } from "./engine/providers/githubAppTokenMinter.js";
 import { FetchConfigGateGitHub } from "./engine/config/configGateGithub.js";
@@ -16,7 +15,6 @@ import { TimedGitHubHttpClient, TimedSshSubstrate } from "./engine/observability
 import { Ssh2Substrate } from "./engine/ssh/index.js";
 import { bootRunWorker, runWorkerEnabled } from "./engine/worker/index.js";
 import { startInternalMtlsServer } from "./internalServer.js";
-import type { runHelloWorkflow } from "./engine/workflow/helloRun.js";
 import { createAuthMiddleware, type ActorContextEnv } from "./middleware/auth.js";
 import { createAuthRoutes } from "./routes/auth/index.js";
 import { SecretStoreCredentialRegistry, type CredentialRegistry } from "./routes/credentials/index.js";
@@ -53,22 +51,16 @@ export async function createApp() {
     pool,
     secrets: runnerSecrets,
     auth: buildAuthFromEnv(pool, port),
-    helloDependencies: {
-      // RLS R3b: the hello fixture is cross-org system seeding, so its allocator's
-      // runner writes go through the BYPASSRLS `tanren_system` pool (matching the
-      // fixture pool `/hello/run` hands runHelloWorkflow); else the runtime pool.
-      allocator: buildAllocatorFromEnv(getSystemPool() ?? pool),
-      // P3-0029: wrap the SSH substrate so every runner command emits a
-      // boundary timing record. Behavior is unchanged; this only measures.
-      ssh: new TimedSshSubstrate(new Ssh2Substrate(runnerSecrets)),
-      identitySecretRef: runnerIdentitySecretRef,
-    },
+    // P3-0029: wrap the SSH substrate so every runner command emits a boundary
+    // timing record. Behavior is unchanged; this only measures. The per-run
+    // draft-PR route pushes the runner workspace branch over this substrate.
+    ssh: new TimedSshSubstrate(new Ssh2Substrate(runnerSecrets)),
   });
 }
 
 export function buildApp(input: {
   pool: pg.Pool;
-  helloDependencies: Parameters<typeof runHelloWorkflow>[1];
+  ssh: SshSubstrate;
   secrets?: SecretStore;
   githubHttp?: GitHubHttpClient;
   runnerIdentitySecretRef?: string;
@@ -77,7 +69,14 @@ export function buildApp(input: {
   credentialRegistry?: CredentialRegistry;
 }) {
   const app = new Hono<ActorContextEnv>();
-  const secrets = input.secrets ?? new InMemorySecretStore();
+  // The SecretStore MUST be injected explicitly (createApp builds it from
+  // TANREN_SECRET_STORE; tests inject an explicit InMemorySecretStore fixture).
+  // There is NO silent in-memory default — a misconfigured deploy fails fast
+  // rather than running on an ephemeral store that loses credentials on restart.
+  if (input.secrets === undefined) {
+    throw new Error("buildApp requires an explicit SecretStore (set TANREN_SECRET_STORE; tests inject a memory store)");
+  }
+  const secrets = input.secrets;
   // P3-0029: wrap the GitHub HTTP client so every API round trip emits a
   // boundary timing record (with method, path template, status, 429 flag).
   const githubHttp = new TimedGitHubHttpClient(input.githubHttp ?? new FetchGitHubHttpClient());
@@ -155,15 +154,15 @@ export function buildApp(input: {
   );
 
   // The Phase-1 root API endpoints (project/spec creation, credential + auth-
-  // bundle imports, the hello trigger, per-run draft-PR / CI-poll, the legacy
-  // `/runs/:runId` read) live in `mountRootApiRoutes`. Behavior is identical.
+  // bundle imports, per-run draft-PR / CI-poll, the legacy `/runs/:runId` read)
+  // live in `mountRootApiRoutes`. Behavior is identical.
   mountRootApiRoutes(app, {
     pool: input.pool,
     secrets,
     githubHttp,
     githubAppMinter,
     identitySecretRef,
-    helloDependencies: input.helloDependencies,
+    ssh: input.ssh,
   });
 
   return app;

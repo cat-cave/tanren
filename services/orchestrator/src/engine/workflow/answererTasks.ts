@@ -3,46 +3,15 @@ import {
   buildAuditPrompt,
   buildCheckPrompt,
   checkAnswerSchema,
-  planAnswerSchema,
   type AuditAnswer,
   type CheckAnswer,
 } from "../providers/answererSchemas.js";
-import { fakeAuditor, fakeChecker, fakePlanner } from "../providers/fake.js";
 import type { AnswererAdapter } from "../providers/types.js";
 
-export async function executePlanTask(): Promise<string> {
-  const plan = await fakePlanner.runAnswerer({
-    prompt: "Plan hello world",
-    timeoutMs: 1_000,
-    outputSchema: planAnswerSchema,
-  });
-  return plan.subtasks[0]?.title ?? "Fake writer";
-}
-
-export async function executeCheckTask(diff: string | undefined) {
-  return await executeStructuredCheckTask(fakeChecker, {
-    specTitle: "Hello world",
-    specDescription: "Prove Tanren service connectivity",
-    acceptanceCriteria: ["The orchestrator persists a completed synthetic run"],
-    writerDiff: diff ?? "",
-    timeoutMs: 1_000,
-  });
-}
-
-export async function executeAuditTask(checkAnswer?: CheckAnswer, writerDiff = "") {
-  return await executeStructuredAuditTask(fakeAuditor, {
-    specTitle: "Hello world",
-    acceptanceCriteria: ["The orchestrator persists a completed synthetic run"],
-    checkAnswer: checkAnswer ?? {
-      done: false,
-      reason: "No checker answer was supplied.",
-      suggested_fixes: ["Run checker first."],
-    },
-    writerDiff,
-    timeoutMs: 1_000,
-  });
-}
-
+// Generic, adapter-injected check/audit execution helpers shared by the real
+// run path (subtaskStages) and the phase-1 fixture. There is NO fake adapter
+// constructed here — callers pass the answerer (the real path resolves it from
+// role-routing config; tests pass an explicit fixture).
 export async function executeStructuredCheckTask(
   answerer: AnswererAdapter<CheckAnswer>,
   input: {

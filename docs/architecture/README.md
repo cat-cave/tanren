@@ -5,7 +5,7 @@ Phase 0 is the Tanren kernel. It keeps behavior synthetic where agents are conce
 - Postgres schema is defined in `db/src/schema.ts`; committed Drizzle migrations are drift-checked.
 - The orchestrator reaches runner workloads through `SshSubstrate`.
 - The local Docker allocator records and releases runner allocations; workload commands still run over SSH.
-- The hello workflow prepares a git workspace inside the runner and the fake Writer mutates that workspace.
+- The real run path prepares a git workspace inside the runner and the role-routed Writer (Codex by default) mutates that workspace. (The synthetic fake-adapter workspace helpers are TEST FIXTURES ONLY — `services/orchestrator/tests/fixtures/` — never in runtime source.)
 - Writer output is captured from git state: diff bytes and commit metadata, not self-reported completion text.
 - Planner, Writer, Checker, and Auditor tasks are queued, claimed, completed, or failed through durable run/task/job state.
 - Events are appended only through `services/orchestrator/src/engine/eventStore.ts`.

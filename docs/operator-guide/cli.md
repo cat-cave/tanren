@@ -18,7 +18,6 @@ JSON document on stdout, suitable for piping into `jq`.
 
 ```sh
 tanren doctor                       # GET /doctor, returns the DoctorReport JSON
-tanren hello                        # POST /hello/run, Phase 1 fake workflow
 tanren status <run_id>              # GET /runs/<run_id>
 tanren dashboard                    # prints the dashboard URL
 ```

@@ -6,7 +6,7 @@ Phase 1 (real-agent PR loop) is complete and live-proven on `main`. The Phase 1 
 
 - The orchestrator and dashboard run from `docker compose up`; the orchestrator drives a runner container over a real SSH boundary; the local Docker allocator records and releases runner allocations.
 - A persisted spec for an owned fixture repository can be planned, written by a real Codex CLI writer in a runner workspace, judged by Codex `--output-schema` Answerers on checker and auditor verdicts, and shipped as a draft PR. CI status against the PR is polled and persisted.
-- The thin CLI (`tanren doctor`, `tanren hello`, `tanren status`) exists. Live Phase 1 proof: run `run_a347d451-3911-470d-b506-280b602343a9`, draft PR `https://github.com/cat-cave/tanren-fixture-easy/pull/6`.
+- The thin CLI (`tanren doctor`, `tanren status`) exists. Live Phase 1 proof: run `run_a347d451-3911-470d-b506-280b602343a9`, draft PR `https://github.com/cat-cave/tanren-fixture-easy/pull/6`.
 
 Phase 2 turns this baseline into an operator-controlled product surface. The end state is that an operator can register a GitHub org as a Tanren tenant, link a repo, configure credentials and routing, submit a spec, run the real workflow, recover from failure, and view the resulting PR — all through the dashboard with no CLI or DB access. Phase 2 spec entries are tracked in `ROADMAP.md` and `docs/roadmap/phase-2a-specs.md` / `docs/roadmap/phase-2b-specs.md`. The Phase 2 readiness audit (`docs/audits/phase2-readiness.md`) is the backlog input.
 
@@ -27,13 +27,12 @@ corepack pnpm install
 just smoke
 ```
 
-`just smoke` builds the images, starts the compose stack, runs `tanren doctor`, triggers `tanren hello`, prints `tanren status <run_id>`, verifies direct runner SSH, and runs the live SSH integration test.
+`just smoke` builds the images, starts the compose stack, runs `tanren doctor` (orchestrator / Postgres / Vault connectivity), verifies direct runner SSH, runs the live SSH integration test, then drives the real run path across the API↔worker process boundary (`smoke-plane-split-*`) and the RLS isolation proofs.
 
 To inspect manually while the stack is up:
 
 ```sh
 corepack pnpm --filter @tanren/cli tanren doctor
-corepack pnpm --filter @tanren/cli tanren hello
 corepack pnpm --filter @tanren/cli tanren status <run_id>
 ```
 
