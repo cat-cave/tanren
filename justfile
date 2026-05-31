@@ -244,6 +244,21 @@ smoke-rls-r3b:
 smoke-rls-early-finalize:
   DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/rlsEarlyFailureFinalize.integration.test.ts
 
+# RLS org-creation bootstrap proof: org creation is a tenant BOOTSTRAP that
+# precedes any org scope — signup / dev-login / onboarding call
+# IdentityStore.upsertIdentity (→ upsertOrg + ensureOrgMembership) with no
+# `app.current_org_id`, so under enforced RLS the deny-by-default policy rejected
+# the `organizations` / `org_members` INSERT with 42501 (signup 500'd). Runs the
+# REAL migration (RLS enabled), then under the restricted `tanren_app` role
+# proves: an org-creating signup on the bare app pool is REJECTED (42501), the
+# SAME signup SUCCEEDS via the BYPASSRLS `tanren_system` pool (the bootstrap
+# routes through runWithSystemScope), and READS stay under RLS — the new org is
+# visible only in its own org scope, not on the unset-GUC pool nor another org's
+# scope. Same ephemeral-DB + restricted-role harness as the R-wave cohorts.
+# Regression lock for fix/rls-org-creation-bootstrap-scope.
+smoke-rls-org-bootstrap:
+  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/rlsOrgCreationBootstrap.integration.test.ts
+
 # Plane-split P1 cross-process proof: the run-executor worker is a STANDALONE
 # deployable. Seeds a queued plan job against the shared Postgres (the same
 # job_queue insert the control-plane API does), then waits for the SEPARATE
@@ -286,7 +301,7 @@ smoke-plane-split-worker-remote-writes: gen-mtls-certs
   TANREN_RUNNER_AUTHORIZED_KEY="$(cat /tmp/tanren_runner_key.pub)" TANREN_RUNNER_IDENTITY_PRIVATE_KEY="$(cat /tmp/tanren_runner_key)" docker compose -f compose.dev.yml up -d --no-deps --force-recreate worker
   TANREN_PLANE_SPLIT_PROVE_DEPRIVILEGE=1 DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" corepack pnpm exec tsx scripts/smoke/plane-split-worker.ts
 
-smoke: compose-build compose-up wait-for-stack smoke-hello smoke-ssh-integration smoke-plane-split-worker smoke-plane-split-worker-remote-writes smoke-plane-split-p3 smoke-plane-split-p3b smoke-rls-r1 smoke-rls-r2 smoke-rls-r2-cohort2 smoke-rls-r2-cohort3 smoke-rls-r2-cohort4 smoke-rls-r3a smoke-rls-r3a-worker smoke-rls-r3b smoke-rls-early-finalize
+smoke: compose-build compose-up wait-for-stack smoke-hello smoke-ssh-integration smoke-plane-split-worker smoke-plane-split-worker-remote-writes smoke-plane-split-p3 smoke-plane-split-p3b smoke-rls-r1 smoke-rls-r2 smoke-rls-r2-cohort2 smoke-rls-r2-cohort3 smoke-rls-r2-cohort4 smoke-rls-r3a smoke-rls-r3a-worker smoke-rls-r3b smoke-rls-early-finalize smoke-rls-org-bootstrap
 
 # P3-0001: the Phase 2A direct-execution acceptance gate (`just acceptance`,
 # scripts/acceptance/easy.ts + medium.ts) was removed once the run executor
