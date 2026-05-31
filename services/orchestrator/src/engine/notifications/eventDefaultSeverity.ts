@@ -132,6 +132,12 @@ const SEVERITY_OVERRIDES: Partial<Record<EventName, Severity>> = {
   "recovery.replan_queued": "info",
   "recovery.rollback_queued": "info",
   "recovery.inspection_opened": "info",
+
+  // Tanren-method benchmark accept tier — passing the hidden oracle is a happy
+  // path (ok); failing it is a real post-merge change-failure that an operator
+  // running an experiment wants surfaced (warn).
+  "benchmark.accept.passed": "ok",
+  "benchmark.accept.failed": "warn",
 };
 
 // Sealed: every EventName must have a default severity. Missing keys would

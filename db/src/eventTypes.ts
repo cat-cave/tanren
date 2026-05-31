@@ -11,6 +11,8 @@ export const eventTypeNames = [
   "auditor.rejected",
   "auditor.started",
   "auditor.verdict",
+  "benchmark.accept.failed",
+  "benchmark.accept.passed",
   "checker.completed",
   "checker.failed",
   "checker.rejected",
