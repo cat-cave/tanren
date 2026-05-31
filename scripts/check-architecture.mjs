@@ -18,8 +18,20 @@ const patterns = [
   "justfile",
 ];
 const ignoredDirs = new Set(["node_modules", "dist", "coverage", ".git"]);
-const lineMaxExclusions = new Set(["PROJECT_BRIEF.md", "pnpm-lock.yaml"]);
+// PROJECT_BRIEF + R-WAVES are long-running narrative/checklist docs (R-WAVES
+// gains a section each wave); the 500-line code cap does not fit them.
+const lineMaxExclusions = new Set(["PROJECT_BRIEF.md", "pnpm-lock.yaml", "docs/roadmap/R-WAVES.md"]);
 const invariantDocExclusions = new Set(["PROJECT_BRIEF.md", "docs/contracts/architecture-checks.md"]);
+// Plane-split P3b: these files deliberately attempt (or document) a RAW event
+// insert by the de-privileged data-plane role to PROVE Postgres REJECTS it — not
+// a production write path, so they are exempt from the single-event-writer rule.
+const singleEventWriterExclusions = new Set([
+  "services/orchestrator/tests/planeSplitP3bDeprivilege.integration.test.ts",
+  "scripts/smoke/plane-split-deprivilege.ts",
+  "scripts/smoke/plane-split-worker.ts",
+  "docs/roadmap/R-WAVES.md",
+  "justfile",
+]);
 const requiredDocs = [
   "AGENTS.md",
   "docs/playbooks/spec-template.md",
@@ -102,6 +114,7 @@ function checkSingleEventWriter(projectFiles) {
   for (const { file, text } of projectFiles) {
     if (
       invariantDocExclusions.has(file) ||
+      singleEventWriterExclusions.has(file) ||
       file === "services/orchestrator/src/engine/eventStore.ts" ||
       file.startsWith("db/migrations/")
     ) {

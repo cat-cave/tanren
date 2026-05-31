@@ -92,7 +92,17 @@ export function startRunWorker(input: StartRunWorkerInput): StartedRunWorker {
   );
   worker.start();
   // P3-0028: a co-located reaper recovers leases dropped by crashed workers.
-  const reaper = new JobReaper({ pool: input.pool, jobQueue });
+  // Plane-split P3b: the reaper's dead-letter `events` append is the one worker
+  // event-write OUTSIDE the run executor, so when remote-writes is on it must
+  // ALSO route through the control plane — otherwise the de-privileged
+  // `tanren_dataplane` role (which has NO `events` grant) would be denied the
+  // INSERT. The `RunStateWriter` IS an `EventStore`, so inject it as the reaper's
+  // event store; left direct (the default) it keeps the in-process append.
+  const reaper = new JobReaper({
+    pool: input.pool,
+    jobQueue,
+    ...(input.runStateWriter === undefined ? {} : { eventStore: input.runStateWriter }),
+  });
   reaper.start();
   installSignalHandlers(worker, reaper);
   return { worker, reaper };

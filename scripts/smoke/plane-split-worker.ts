@@ -53,6 +53,7 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { request as httpsRequest } from "node:https";
 import { createDbPool } from "../../db/src/index.js";
+import { proveDataPlaneWriteDenied, proveDeprivilegeEnabled } from "./plane-split-deprivilege.js";
 
 // The dev mTLS material `just gen-mtls-certs` writes to /tmp/tanren-mtls (the
 // host dir compose bind-mounts into the orchestrator + worker). The smoke reads
@@ -418,6 +419,13 @@ async function main(): Promise<void> {
   // (authn-closed + a trusted finalize/append that lands rows server-side under
   // enforced RLS, exactly-once) on its OWN seeded run.
   await proveMtlsWriteEndpoints();
+
+  // Plane-split P3b (the CUTOVER): when proving the de-privilege, confirm a
+  // direct tenant write by the de-privileged data-plane role is denied by
+  // Postgres BEFORE waiting on the worker — a fast, deterministic negative proof.
+  if (proveDeprivilegeEnabled()) {
+    await proveDataPlaneWriteDenied({ orgId, runId, specId, projectId });
+  }
 
   const owner = createDbPool(OWNER_URL);
   const deadline = Date.now() + TIMEOUT_MS;

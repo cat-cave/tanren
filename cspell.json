@@ -210,6 +210,8 @@
     "NOCREATEROLE",
     "NOBYPASSRLS",
     "BYPASSRLS",
+    "deprivilege",
+    "SQLSTATE",
     "datname",
     "rolsuper",
     "rolbypassrls",

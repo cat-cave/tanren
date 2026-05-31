@@ -146,12 +146,14 @@ services:
       dockerfile: services/orchestrator/Dockerfile
     command: ["pnpm", "--filter", "@tanren/orchestrator", "start:worker"]
     environment:
-      # Same runtime/system roles as the orchestrator (RLS R3b): the runtime pool
-      # is the restricted `tanren_app` role; `runWithSystemScope`/the reaper use
-      # the BYPASSRLS `tanren_system` role. The worker does NOT migrate (the
-      # orchestrator owns the migrate step — `depends_on` it below), so it carries
-      # no MIGRATION_DATABASE_URL.
-      DATABASE_URL: postgres://tanren_app:${TANREN_APP_DB_PASSWORD:?TANREN_APP_DB_PASSWORD must be set for the prod profile}@postgres:5432/tanren
+      # Plane-split P3b (the de-privilege CUTOVER): the data plane connects as the
+      # DE-PRIVILEGED `tanren_dataplane` role (migration 0031) — NO write grant on
+      # `events`/`cost_records` (it writes those ONLY via the control plane once
+      # remote-writes is on, below). The reaper's cross-org lineage read still uses
+      # the BYPASSRLS `tanren_system` pool (a READ-only system concern). The worker
+      # does NOT migrate (the orchestrator owns it — `depends_on` below), so it
+      # carries no MIGRATION_DATABASE_URL.
+      DATABASE_URL: postgres://tanren_dataplane:${TANREN_DATAPLANE_DB_PASSWORD:?TANREN_DATAPLANE_DB_PASSWORD must be set for the prod profile}@postgres:5432/tanren
       TANREN_SYSTEM_DATABASE_URL: postgres://tanren_system:${TANREN_SYSTEM_DB_PASSWORD:?TANREN_SYSTEM_DB_PASSWORD must be set for the prod profile}@postgres:5432/tanren
       VAULT_ADDR: http://vault:8200
       VAULT_TOKEN: ${VAULT_ROOT_TOKEN:?VAULT_ROOT_TOKEN must be set for the prod profile}
@@ -168,13 +170,16 @@ services:
       TANREN_DATA_PLANE_TLS_CERT: ${TANREN_DATA_PLANE_TLS_CERT:-}
       TANREN_DATA_PLANE_TLS_KEY: ${TANREN_DATA_PLANE_TLS_KEY:-}
       TANREN_DATA_PLANE_TLS_CA: ${TANREN_DATA_PLANE_TLS_CA:-}
-      # Plane-split P3a: route the worker's run-state WRITES (event-append,
-      # cost-record insert, run finalize) through the control-plane `/internal/*`
-      # write endpoints over the same mTLS channel, so the data plane writes no
-      # tenant tables directly. Default OFF (in-process direct writes) — set to 1
-      # to enable. P3b flips this on by default + drops the data-plane DB write
-      # grants. See docs/roadmap/saas-rls-and-plane-split-plan.md (P3a/P3b).
-      TANREN_DATA_PLANE_REMOTE_WRITES: ${TANREN_DATA_PLANE_REMOTE_WRITES:-}
+      # Plane-split P3b (the CUTOVER): remote-writes is ON BY DEFAULT — the worker
+      # routes its run-state WRITES (event-append, cost-record insert, run finalize)
+      # AND the reaper's dead-letter event through the control-plane `/internal/*`
+      # endpoints over mTLS, so it writes `events`/`cost_records` only via the
+      # control plane (matching the de-privileged role above). The operator MUST
+      # supply the claim/write endpoint URL + the data-plane mTLS certs above —
+      # with remote-writes on but no endpoint/certs the worker refuses to start
+      # (buildRunStateWriterFromEnv throws) rather than silently writing directly.
+      # See docs/roadmap/saas-rls-and-plane-split-plan.md (P3b).
+      TANREN_DATA_PLANE_REMOTE_WRITES: ${TANREN_DATA_PLANE_REMOTE_WRITES:-1}
     depends_on:
       postgres:
         condition: service_healthy

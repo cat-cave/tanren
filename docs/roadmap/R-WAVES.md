@@ -404,9 +404,10 @@ serves cross-org bootstrap reads).
 
 **Status: P1 DONE (standalone deployable) + P2 DONE (mTLS service identity +
 control-plane CLAIM endpoint) + P3a DONE (control-plane WRITE endpoints + the
-`RunStateWriter` seam, flagged, default-direct/reversible). P3b (flip the default,
-drop the data-plane tenant-table write grants, per-run scoped creds / Vault
-de-privilege) is OUTSTANDING.**
+`RunStateWriter` seam, flagged, default-direct/reversible) + P3b DONE (the
+de-privilege CUTOVER: remote-writes ON by default + the `tanren_dataplane` role
+with the `events`/`cost_records` write grants DROPPED). P3c (Vault per-run scoped
+credentials) is DEFERRED — not started.**
 
 ## P1 — process boundary (DONE)
 
@@ -490,11 +491,40 @@ smoke-plane-split-p3`. `smoke-plane-split-worker` gained a write-endpoint
       worker `TANREN_DATA_PLANE_REMOTE_WRITES=1` (finalize via the control plane,
       end-to-end under enforced RLS).
 
-## P3b — flip the default + drop the data-plane write grants / Vault (OUTSTANDING)
+## P3b — the de-privilege CUTOVER: drop the data-plane DB write grants (DONE)
 
-- [ ] Flip remote-writes ON by default + DROP the tenant-table write grants from a
-      write-NONE data-plane DB role (future migration; keeps only the `job_queue`
-      read). Safe once remote-writes is on — the data plane writes no tenant tables.
-- [ ] Per-run scoped credentials (extend GitHub-App minting; move the
-      `GithubAppTokenMinter` cache to the control plane); drop Vault root / broad
-      secret access from the data plane.
+Remote-writes is ON BY DEFAULT for the standalone `worker`, which connects as a
+NEW de-privileged DB role with the `events` / `cost_records` write grants
+DROPPED — a compromised runner on that role can no longer forge those control-DB
+rows (Postgres rejects the INSERT).
+
+- [x] **Default flip** — `worker` compose (dev + prod) defaults
+      `TANREN_DATA_PLANE_REMOTE_WRITES=1`: run-state writes + the reaper's
+      dead-letter event route through the control-plane `/internal/*` endpoints
+      (reaper writer injected by `startRunWorker` when remote). The in-process
+      `TANREN_RUN_WORKER=1` dev path keeps direct writes on `tanren_app`.
+- [x] **De-privileged role** (`tanren_dataplane`, migration `0031`) — NOBYPASSRLS,
+      mirrors `tanren_app`'s base reach, then `REVOKE ALL ON events` +
+      `REVOKE INSERT/UPDATE/DELETE ON cost_records` (kept SELECT — usage accrual
+      reads it). The `worker` connects as this role; the API keeps `tanren_app`.
+- [x] **Remaining direct DB access (audited)** — the data plane STILL writes
+      `runs`/`specs`/`tasks` directly (not yet behind an endpoint — a larger
+      lifecycle sub-feature, deferred; the role keeps those grants), READS the
+      run context + `cost_records` org-scoped under RLS, and uses the BYPASSRLS
+      `tanren_system` pool for the reaper's cross-org lineage read (READ-only).
+- [x] **Negative-test PROOF** — `tests/planeSplitP3bDeprivilege.integration.test.ts`
+      (real PG): under `tanren_dataplane` a direct org-scoped event / cost-record
+      write is REJECTED (`permission denied`, SQLSTATE 42501 — the grant is gone,
+      not an RLS row-filter); the cost read + run/task writes are kept; the
+      `tanren_app` role can still write the same event (contrast). Run via
+      `just smoke-plane-split-p3b` + the cutover `smoke-plane-split-worker`.
+
+## P3c — Vault per-run scoped credentials (DEFERRED — not started)
+
+Out of P3b scope: the data plane still holds the broad `VAULT_TOKEN`. Scoping it
+to short-lived per-run material (extend the GitHub-App minting; move the
+`GithubAppTokenMinter` cache to the control plane) is a sizeable sub-feature,
+deferred so the DB de-privilege ships fully rather than half-building Vault.
+
+- [ ] Mint per-run scoped creds in the control plane; drop the data plane's Vault
+      root / broad secret access. Move the `GithubAppTokenMinter` cache too.

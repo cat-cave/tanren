@@ -1,15 +1,18 @@
 # SaaS multi-tenancy: RLS + control-plane/data-plane split — plan
 
 **Status: IN PROGRESS.** Refactor 1 (RLS) is **DONE and FULLY ENFORCED** (waves
-R1 → R3b; migration `0030`). Refactor 2 (plane split) is **at P3a: the
+R1 → R3b; migration `0030`). Refactor 2 (plane split) is **at P3b: the
 run-executor worker is a STANDALONE deployable (P1) that claims over an
-authenticated mTLS control-plane endpoint (P2 — `POST /internal/claim-job`), and
-can now route its run-state WRITES (event-append, cost-record insert, run
-finalize) through control-plane `/internal/*` write endpoints over the same mTLS
-channel (P3a — the `RunStateWriter` seam behind `TANREN_DATA_PLANE_REMOTE_WRITES=1`,
-default-direct + reversible, exactly-once preserved)**; **P3b (flip the default +
-DROP the data-plane tenant-table write grants + per-run scoped creds / Vault
-de-privilege) is OUTSTANDING.** The live conversion checklist is
+authenticated mTLS control-plane endpoint (P2 — `POST /internal/claim-job`),
+routes its run-state WRITES (event-append, cost-record insert, run finalize)
+through control-plane `/internal/*` write endpoints over the same mTLS channel
+(P3a — the `RunStateWriter` seam), and HAS NOW CUT OVER: remote-writes is ON by
+default for the `worker`, which connects as the de-privileged `tanren_dataplane`
+DB role (migration `0031`) whose `events` / `cost_records` write grants are
+DROPPED — a compromised runner can no longer forge those control-DB rows (P3b)**;
+**P3c (per-run scoped creds / Vault de-privilege) is DEFERRED — not started.** The
+data plane still writes `runs`/`specs`/`tasks` directly (deferred) and still holds
+the broad Vault token (P3c). The live conversion checklist is
 `docs/roadmap/R-WAVES.md` (RLS R-waves + plane-split P-waves). These are the two
 big multi-tenant refactors deliberately deferred from the expansion work.
 
@@ -159,12 +162,22 @@ already a DB-less BFF. So the seam to formalize is **orchestrator API (control)
   (exactly-once preserved — the finalize endpoint applies the same guard). Proven
   by `tests/planeSplitP3RemoteWrites.integration.test.ts` (real PG, enforced RLS)
   - the remote-writes-extended `smoke-plane-split-worker`.
-- **P3b — flip the default + DROP the data-plane write grants / Vault.
-  OUTSTANDING.** Flip remote-writes on by default + drop the tenant-table
-  `INSERT`/`UPDATE` grants from a write-NONE data-plane DB role (a future
-  migration); per-run scoped credentials (move the `GithubAppTokenMinter` cache
-  to the control plane); remove Vault root / broad secret access from the data
-  plane entirely.
+- **P3b — the de-privilege CUTOVER. DONE.** Remote-writes is ON by default for
+  the standalone `worker`, which connects as the de-privileged `tanren_dataplane`
+  DB role (migration `0031`): `REVOKE ALL ON events` + `REVOKE INSERT/UPDATE/
+DELETE ON cost_records` — the two tables the worker (incl. its reaper, now
+  writer-injected) writes ONLY via the control plane. A direct write by that role
+  is REJECTED by Postgres (`permission denied`, 42501 — the negative test). The
+  data plane STILL writes `runs`/`specs`/`tasks` directly (not yet behind an
+  endpoint — deferred) and keeps their grants. The control-plane API keeps
+  `tanren_app`. Proven by `tests/planeSplitP3bDeprivilege.integration.test.ts` +
+  the cutover-topology `smoke-plane-split-worker(-remote-writes)`.
+- **P3c — Vault per-run scoped credentials. DEFERRED (not started).** The data
+  plane still holds the broad Vault token. Mint short-lived per-run scoped
+  credentials in the control plane (extend the GitHub-App minting; move the
+  `GithubAppTokenMinter` cache to the control plane); remove Vault root / broad
+  secret access from the data plane. Held out of P3b so the DB de-privilege ships
+  fully rather than half-building the Vault side.
 
 **Risks:** moving job-claim atomicity from DB `SKIP LOCKED` to an API (need to
 preserve exactly-once claim); event throughput/latency vs the current direct
