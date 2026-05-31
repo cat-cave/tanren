@@ -1,11 +1,14 @@
 import { randomUUID } from "node:crypto";
 import type pg from "pg";
+import type { SshTarget } from "../contracts/allocator.js";
 import { type JobEnvelope, type JobQueue, PgJobQueue } from "../contracts/jobQueue.js";
+import type { SshSubstrate } from "../contracts/sshSubstrate.js";
 import { CostRecorder } from "../costs/index.js";
 import { type EventStore, PgEventStore } from "../eventStore.js";
 import { fakeSelfHostedAuthRef } from "../providers/fake.js";
 import { fakeAuditor, fakeChecker } from "../providers/fake.js";
-import { workspaceRepoPathForRun } from "../workspace/index.js";
+import type { WriterAdapter, WriterResult } from "../providers/types.js";
+import { captureGitMutation, runFakeWriterMutation, workspaceRepoPathForRun } from "../workspace/index.js";
 import { executePlanTask, executeStructuredAuditTask, executeStructuredCheckTask } from "./answererTasks.js";
 import { recordHelloTaskCost } from "./helloCost.js";
 import { executeWriteTask } from "./writerTasks.js";
@@ -275,9 +278,8 @@ async function executeHelloTask(
   }
   if (task.kind === "write") {
     state.writer = await executeWriteTask({
-      allocation: state.allocation,
+      writer: helloConnectivityWriter({ ssh: state.ssh, target: state.allocation.target }),
       prompt: state.planTitle ?? "Write hello world",
-      ssh: state.ssh,
       timeoutMs: state.timeoutMs,
       workspacePath: state.workspacePath,
     });
@@ -353,4 +355,27 @@ async function executeHelloTask(
     model: "fake-auditor",
     authRef: state.auditAnswerer.authRef,
   });
+}
+
+// The synthetic writer the hello CONNECTIVITY fixture runs: it writes a HELLO.md
+// mutation over SSH and captures the git diff, proving runner I/O end to end. It
+// is local to this fixture workflow ON PURPOSE — there is no reusable fake writer
+// adapter in production. The real run path resolves its writer from role-routing
+// config; the unit-test fake writer lives in tests/fixtures/fakeWriter.ts.
+function helloConnectivityWriter(deps: { ssh: SshSubstrate; target: SshTarget }): WriterAdapter {
+  return {
+    kind: "writer",
+    cli: "fake",
+    authRef: fakeSelfHostedAuthRef,
+    async runWriter(opts): Promise<WriterResult> {
+      const input = {
+        ssh: deps.ssh,
+        target: deps.target,
+        workspacePath: opts.workspace,
+        timeoutMs: opts.timeoutMs,
+      };
+      await runFakeWriterMutation(input);
+      return await captureGitMutation(input);
+    },
+  };
 }

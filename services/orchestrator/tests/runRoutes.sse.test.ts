@@ -3,6 +3,7 @@
 // handler wraps the same driver in hono's streaming helper; that wiring is
 // covered by the contract test.
 
+import { RUN_ACTIVITY_CHANNEL, type PgNotifyListener } from "@tanren/db";
 import { describe, expect, it } from "vitest";
 import type { ActorContext } from "../src/auth/schemas.js";
 import { SseDriver } from "../src/routes/runs/sse.js";
@@ -15,6 +16,28 @@ const actor: ActorContext = {
   scopes: ["org:member"],
   source: "session",
 };
+
+// A fake LISTEN/NOTIFY listener that captures the channel + handler so a test
+// can simulate an inbound `tanren_run` NOTIFY for a given run id.
+function fakeListener(): {
+  listener: PgNotifyListener;
+  channel: () => string | undefined;
+  fire: (payload: string) => void;
+} {
+  let subscribedChannel: string | undefined;
+  let handler: ((payload: string) => void) | undefined;
+  const listener = {
+    async subscribe(channel: string, h: (payload: string) => void) {
+      subscribedChannel = channel;
+      handler = h;
+      return () => {
+        handler = undefined;
+      };
+    },
+    async close() {},
+  } as unknown as PgNotifyListener;
+  return { listener, channel: () => subscribedChannel, fire: (payload) => handler?.(payload) };
+}
 
 function setup() {
   const pool = new RunRoutesPool();
@@ -166,5 +189,98 @@ describe("P2A-0014 SSE driver", () => {
     nowMs = 20_000;
     await driver.tick();
     expect(captured.some((f) => f.event === "heartbeat")).toBe(true);
+  });
+
+  it("subscribes to the run-activity channel and wakes the loop on this run's NOTIFY", async () => {
+    const pool = new RunRoutesPool();
+    pool.seedProject({ project_id: "project_n", org_id: "org_acme" });
+    pool.seedSpec({ spec_id: "spec_n", project_id: "project_n" });
+    pool.seedRun({ run_id: "run_n", spec_id: "spec_n", project_id: "project_n", status: "running" });
+    const { listener, channel, fire } = fakeListener();
+    const captured: Array<{ event: string; data: unknown }> = [];
+    const driver = new SseDriver(
+      {
+        pool: pool.asPgPool(),
+        runId: "run_n",
+        projectId: "project_n",
+        orgId: "org_acme",
+        actor,
+        rawView: false,
+        // LONG backstop: the loop must advance on the NOTIFY wake, not the poll.
+        intervalMs: 60_000,
+        notifyListener: listener,
+        now: () => new Date("2026-05-01T00:00:00.000Z"),
+      },
+      (frame) => {
+        const parsed = parseFrame(frame);
+        if (parsed !== undefined) captured.push(parsed);
+      },
+    );
+
+    const done = driver.run();
+    // Let run() emit the snapshot and park in waitForActivity().
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 20);
+    });
+    expect(captured[0]?.event).toBe("snapshot");
+    expect(channel()).toBe(RUN_ACTIVITY_CHANNEL);
+
+    // Move the run terminal, then fire THIS run's NOTIFY: the parked loop wakes,
+    // ticks, emits the status delta, and (terminal grace) ends — all without the
+    // 60s backstop elapsing.
+    pool.runs[0].status = "completed";
+    pool.runs[0].outcome = "phase2_easy_complete";
+    fire("run_n");
+
+    await done;
+    const status = captured.find((f) => f.event === "status")?.data as { status: string } | undefined;
+    expect(status?.status).toBe("completed");
+  });
+
+  it("ignores a NOTIFY for a DIFFERENT run (payload filter)", async () => {
+    const pool = new RunRoutesPool();
+    pool.seedProject({ project_id: "project_f", org_id: "org_acme" });
+    pool.seedSpec({ spec_id: "spec_f", project_id: "project_f" });
+    pool.seedRun({ run_id: "run_f", spec_id: "spec_f", project_id: "project_f", status: "running" });
+    const { listener, fire } = fakeListener();
+    const captured: Array<{ event: string; data: unknown }> = [];
+    const driver = new SseDriver(
+      {
+        pool: pool.asPgPool(),
+        runId: "run_f",
+        projectId: "project_f",
+        orgId: "org_acme",
+        actor,
+        rawView: false,
+        intervalMs: 60_000,
+        notifyListener: listener,
+        now: () => new Date("2026-05-01T00:00:00.000Z"),
+      },
+      (frame) => {
+        const parsed = parseFrame(frame);
+        if (parsed !== undefined) captured.push(parsed);
+      },
+    );
+
+    const done = driver.run();
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 20);
+    });
+
+    // A NOTIFY for a DIFFERENT run must NOT wake this loop: move run_f terminal,
+    // fire the wrong run's id — the loop should still be parked (no status delta)
+    // until we fire the right one.
+    pool.runs[0].status = "completed";
+    pool.runs[0].outcome = "phase2_easy_complete";
+    fire("run_other");
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 20);
+    });
+    expect(captured.some((f) => f.event === "status")).toBe(false);
+
+    // The correct run id wakes it and the loop ends.
+    fire("run_f");
+    await done;
+    expect(captured.some((f) => f.event === "status")).toBe(true);
   });
 });

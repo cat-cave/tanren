@@ -12,10 +12,28 @@
 // The reusable workflow/seed/deps helpers live in ./helpers/workerExec.ts so
 // the mutation-strengthening suite (runExecutor.test.ts) drives the same body.
 
+import type { PgNotifyListener } from "@tanren/db";
 import { describe, expect, it } from "vitest";
 import { FakeJobQueue } from "../src/engine/contracts/jobQueue.js";
 import { executeNextPlanJob, RunWorker } from "../src/engine/worker/index.js";
 import { deps, passingGitHub, setupSeededRun } from "./helpers/workerExec.js";
+
+// A fake LISTEN/NOTIFY listener that captures the subscribed handler so a test
+// can fire a "job enqueued" wake on demand. `fire()` simulates an inbound
+// NOTIFY on the job-queue channel.
+function fakeListener(): { listener: PgNotifyListener; fire: () => void } {
+  let handler: (() => void) | undefined;
+  const listener = {
+    async subscribe(_channel: string, h: () => void) {
+      handler = h;
+      return () => {
+        handler = undefined;
+      };
+    },
+    async close() {},
+  } as unknown as PgNotifyListener;
+  return { listener, fire: () => handler?.() };
+}
 
 describe("run worker (dequeue→execute seam)", () => {
   it("claims the queued plan job, runs the workflow, completes the job, and lands a terminal run", async () => {
@@ -143,5 +161,45 @@ describe("run worker (dequeue→execute seam)", () => {
     expect(worker.isDraining).toBe(true);
     expect(results).toContain("completed");
     expect(pool.runStatus.status).toBe("done");
+  });
+
+  it("wakes an idle slot on a job-enqueued NOTIFY instead of waiting out the backstop", async () => {
+    const { pool, secrets, run } = await setupSeededRun();
+    const jobQueue = new FakeJobQueue();
+    const { listener, fire } = fakeListener();
+
+    const results: string[] = [];
+    const worker = new RunWorker(deps(pool, secrets, jobQueue, passingGitHub()), {
+      concurrency: 1,
+      // A LONG backstop: if the slot only woke on the poll, this test would not
+      // finish in time. It must wake on the NOTIFY fire below instead.
+      pollIntervalMs: 60_000,
+      notifyListener: listener,
+      onResult: (r) => {
+        if (r.kind !== "idle") results.push(r.kind);
+      },
+    });
+    worker.start();
+    // Let the slot drain the (empty) queue and park in the idle wait.
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 20);
+    });
+    expect(results).toEqual([]);
+
+    // Enqueue a job, then fire the wake — the parked slot must re-claim WITHOUT
+    // waiting out the 60s backstop.
+    await jobQueue.enqueue({ runId: run.runId, taskId: run.plannerTaskId, taskKind: "plan", payload: {} });
+    fire();
+
+    // Poll for the woken execution (fast: the slot re-claimed on wake).
+    for (let i = 0; i < 100 && results.length === 0; i += 1) {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 10);
+      });
+    }
+    expect(results).toContain("completed");
+    expect(pool.runStatus.status).toBe("done");
+
+    await worker.stop();
   });
 });

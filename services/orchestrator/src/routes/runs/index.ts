@@ -16,7 +16,7 @@
 //   /orgs/:orgId/projects/:projectId/runs/:runId/stream          — SSE
 //   /orgs/:orgId/projects/:projectId/feed                        — activity feed
 
-import { runWithOrgScope } from "@tanren/db";
+import { PgNotifyListener, runWithOrgScope } from "@tanren/db";
 import type { Context } from "hono";
 import { Hono } from "hono";
 import type pg from "pg";
@@ -44,13 +44,24 @@ import { parseRawViewOptIn } from "./redaction.js";
 
 interface RunRoutesOptions {
   pool: pg.Pool;
-  // Override the SSE polling cadence in tests; defaults to 1s per spec v0.
+  // Safety-net backstop between SSE re-polls. With LISTEN/NOTIFY wired (the
+  // default below) the stream wakes on `tanren_run` NOTIFYs and this only bounds
+  // latency on a missed notification. Tests override it (often to 0).
   sseIntervalMs?: number;
   // Optional clock override for deterministic SSE heartbeats in tests.
   sseNow?: () => Date;
+  // LISTEN/NOTIFY wake source for SSE. Defaults to a single process-wide
+  // `PgNotifyListener` (one held connection shared across all run streams);
+  // tests can inject their own or rely on the backstop poll.
+  sseNotifyListener?: PgNotifyListener;
 }
 
 export function createRunRoutes(options: RunRoutesOptions) {
+  // LISTEN/NOTIFY: ONE shared listener per route module — a single held LISTEN
+  // connection that every concurrent run stream subscribes to (filtering by run
+  // id), NOT a connection per stream. Built lazily off the route pool; its
+  // `.connect()` delegates through the org-scoping proxy to the real pool.
+  const sseNotifyListener = options.sseNotifyListener ?? new PgNotifyListener(options.pool);
   const app = new Hono<ActorContextEnv>();
 
   // -------------------------------------------------------------------------
@@ -191,7 +202,11 @@ export function createRunRoutes(options: RunRoutesOptions) {
       orgId,
       actor,
       rawView: parseRawViewOptIn(c),
-      intervalMs: options.sseIntervalMs ?? 1_000,
+      // Backstop only: the stream wakes on `tanren_run` NOTIFYs for this run; the
+      // interval bounds latency if one is ever missed. 20s mirrors the worker's
+      // backstop.
+      intervalMs: options.sseIntervalMs ?? 20_000,
+      notifyListener: sseNotifyListener,
       now: options.sseNow,
     });
   });

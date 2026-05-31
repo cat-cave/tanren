@@ -23,6 +23,9 @@
     ".env.example"
   ],
   "words": [
+    "unlisten",
+    "misconfig",
+    "unsub",
     "prepwork",
     "adapterization",
     "byok",
@@ -122,6 +125,7 @@
     "creds",
     "credential",
     "credentials",
+    "credregistry",
     "approle",
     "approles",
     "webhook",

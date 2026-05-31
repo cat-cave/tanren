@@ -26,11 +26,6 @@ export const runInputSchema = z.object({
   branch: z.string().min(1).optional(),
 });
 
-export const githubCredentialImportSchema = z.object({
-  ref: z.string().min(1),
-  token: z.string().min(1),
-});
-
 export const draftPrInputSchema = z.object({
   githubCredentialRef: z.string().min(1).optional(),
   workspacePath: z.string().min(1).optional(),

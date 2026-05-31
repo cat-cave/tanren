@@ -1,3 +1,4 @@
+import { notifyJobEnqueued } from "@tanren/db";
 import type pg from "pg";
 
 export interface JobEnvelope<TPayload = unknown> {
@@ -174,6 +175,11 @@ export class PgJobQueue<TPayload = unknown> implements JobQueue<TPayload> {
         job.orgId ?? null,
       ],
     );
+    // LISTEN/NOTIFY: wake an idle worker slot the instant a job is enqueued,
+    // replacing its 1s poll as the primary driver. This INSERT is autocommit
+    // (the pool), so the NOTIFY fires immediately on the cross-tenant
+    // `tanren_job_queue` channel — a payload-free "work may be available" pulse.
+    await notifyJobEnqueued(this.pool);
     return envelopeFromRow(result.rows[0]);
   }
 

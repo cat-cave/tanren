@@ -10,7 +10,8 @@ import {
   validateGithubAppCredentialRef,
 } from "../src/engine/credentials/githubApp.js";
 import { createAuthMiddleware, type ActorContextEnv } from "../src/middleware/auth.js";
-import { createCredentialRoutes, InMemoryCredentialRegistry } from "../src/routes/credentials/index.js";
+import { createCredentialRoutes } from "../src/routes/credentials/index.js";
+import { InMemoryCredentialRegistry } from "./helpers/inMemoryCredentialRegistry.js";
 import { RoutesPool } from "./helpers/routesPool.js";
 
 function pem(): string {

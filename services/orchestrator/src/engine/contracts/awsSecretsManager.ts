@@ -38,6 +38,11 @@ interface GetSecretValueResponse {
   SecretString?: unknown;
 }
 
+interface ListSecretsResponse {
+  SecretList?: { Name?: unknown }[];
+  NextToken?: unknown;
+}
+
 /**
  * {@link SecretStore} backed by AWS Secrets Manager via a thin SigV4-signed
  * `fetch` client (mirrors the AWS EC2 allocator — no heavy `@aws-sdk` dependency
@@ -104,6 +109,33 @@ export class AwsSecretsManagerStore implements SecretStore {
       return;
     }
     throw new Error(`AWS Secrets Manager delete secret ${ref} failed: ${response.status} ${body}`);
+  }
+
+  async list(prefix: string): Promise<string[]> {
+    // Names are `<namePrefix>/<ref>` (verbatim ref when unprefixed), so the
+    // wire-level name prefix is the configured store prefix joined with the ref
+    // prefix; we page `ListSecrets`, keep names under that, then strip the store
+    // prefix to recover the agnostic ref.
+    const namePrefix = this.name(prefix);
+    const stripLen = namePrefix.length - prefix.length;
+    const refs: string[] = [];
+    let nextToken: string | undefined;
+    do {
+      const payload: Record<string, unknown> = { MaxResults: 100 };
+      if (nextToken !== undefined) {
+        payload["NextToken"] = nextToken;
+      }
+      const response = await this.call("ListSecrets", payload);
+      await assertOk(response, `list secrets under ${prefix}`);
+      const parsed = (await response.json()) as ListSecretsResponse;
+      for (const entry of parsed.SecretList ?? []) {
+        if (typeof entry.Name === "string" && entry.Name.startsWith(namePrefix)) {
+          refs.push(entry.Name.slice(stripLen));
+        }
+      }
+      nextToken = typeof parsed.NextToken === "string" ? parsed.NextToken : undefined;
+    } while (nextToken !== undefined);
+    return refs;
   }
 
   private name(ref: string): string {

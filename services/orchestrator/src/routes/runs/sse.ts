@@ -1,7 +1,20 @@
 // P2A-0014 SSE handler — emits status/task/event/cost frames as the run
-// progresses. v0 uses a poll-based source at 1s tick (acceptable per spec);
-// the contract surface is shaped so a Postgres LISTEN/NOTIFY swap-in lands
-// behind the same frame format.
+// progresses.
+//
+// LISTEN/NOTIFY (replaces the old fixed 1s tick): every run-state write — event
+// append, task transition, status/finalize — emits a NOTIFY on the `tanren_run`
+// channel with the run id as the payload (see db/src/notify.ts + eventStore.ts).
+// This driver LISTENs on that channel, FILTERS by its own run id, and re-polls
+// its deltas on wake — so the stream is event-driven and the loop interval is no
+// longer the primary latency driver. The `intervalMs` is now a long (default
+// 20s) SAFETY-NET backstop, NOT a fallback-masking-misconfig: it only bounds
+// latency if a NOTIFY is ever missed (e.g. the shared LISTEN connection dropped
+// mid-reconnect); the terminal-end / heartbeat logic is unchanged.
+//
+// The NOTIFY payload is ONLY the run id — never tenant data — so each wake still
+// re-queries every delta under this stream's own org scope (`runWithOrgScope`,
+// `SET LOCAL app.current_org_id`); the notification cannot leak cross-tenant
+// content.
 //
 // Frame format follows the SSE spec: `event: <name>\ndata: <json>\n\n`. The
 // initial frame is `snapshot` carrying a partial RunDetail (run + tasks +
@@ -10,7 +23,7 @@
 // when the run reaches a terminal status AND one final post-terminal poll
 // has flushed any remaining events/costs/tasks.
 
-import { runWithOrgScope } from "@tanren/db";
+import { RUN_ACTIVITY_CHANNEL, runWithOrgScope, type PgNotifyListener } from "@tanren/db";
 import type pg from "pg";
 import type { Context } from "hono";
 import { stream as honoStream } from "hono/streaming";
@@ -34,7 +47,17 @@ interface SseStreamArgs {
   orgId: string;
   actor: ActorContext;
   rawView: boolean;
+  // Safety-net backstop interval between forced re-polls. With a `notifyListener`
+  // wired this is NOT the primary driver — the stream wakes on `tanren_run`
+  // NOTIFYs filtered to this run; the interval only bounds latency if a NOTIFY is
+  // missed. Tests pass 0 to drive ticks manually.
   intervalMs: number;
+  // LISTEN/NOTIFY wake source. When provided, the driver subscribes to the
+  // `tanren_run` channel and wakes on this run's activity instead of waiting out
+  // the full backstop interval. Omitted in tests (and any caller without a shared
+  // LISTEN connection) — then the driver degrades to pure backstop polling,
+  // behavior-identical to the pre-NOTIFY loop.
+  notifyListener?: PgNotifyListener;
   now?: () => Date;
 }
 
@@ -45,6 +68,11 @@ const HEARTBEAT_INTERVAL_MS = 15_000;
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled", "halted", "done"]);
 
 const TERMINAL_GRACE_POLLS = 1;
+
+// LISTEN/NOTIFY: once a run is terminal, the grace flush poll(s) run on this
+// short delay (capped by `intervalMs`) instead of the long backstop, so the
+// stream ends promptly rather than dangling for a full backstop interval.
+const TERMINAL_FLUSH_DELAY_MS = 250;
 
 export async function handleSseStream(c: Context, args: SseStreamArgs): Promise<Response> {
   return honoStream(c, async (writer) => {
@@ -65,6 +93,10 @@ export class SseDriver {
   private lastStatusFingerprint = "";
   private lastEmitAt: number;
   private terminalPollsRemaining: number | undefined;
+  // LISTEN/NOTIFY wake gate: a NOTIFY for this run resolves the parked waiter so
+  // the loop re-polls immediately instead of waiting out the backstop interval.
+  private wakeWaiter: (() => void) | undefined;
+  private unsubscribe: (() => void) | undefined;
 
   constructor(
     private readonly args: SseStreamArgs,
@@ -116,10 +148,63 @@ export class SseDriver {
       this.terminalPollsRemaining = TERMINAL_GRACE_POLLS;
     }
 
-    while (true) {
+    // LISTEN/NOTIFY: subscribe AFTER the snapshot so any activity between the
+    // snapshot read and the subscribe is still caught by the first backstop
+    // poll, and any activity after it wakes the loop. Best-effort: a failed
+    // subscribe leaves the stream on backstop polling, never wedged.
+    await this.subscribeWake();
+    try {
+      while (true) {
+        await this.waitForActivity();
+        const stop = await this.tick();
+        if (stop) return;
+      }
+    } finally {
+      this.unsubscribe?.();
+      this.unsubscribe = undefined;
+    }
+  }
+
+  private async subscribeWake(): Promise<void> {
+    if (this.args.notifyListener === undefined) return;
+    try {
+      this.unsubscribe = await this.args.notifyListener.subscribe(RUN_ACTIVITY_CHANNEL, (payload) => {
+        // Filter on the payload (the run id) so a busy multi-run channel wakes
+        // ONLY the streams watching the run that actually changed.
+        if (payload === this.args.runId) {
+          this.wakeWaiter?.();
+        }
+      });
+    } catch {
+      // No LISTEN connection — degrade to backstop polling.
+    }
+  }
+
+  // Park until this run's NOTIFY wakes us OR the backstop interval elapses,
+  // whichever comes first. With no listener wired this is just the interval
+  // sleep (behavior-identical to the pre-NOTIFY loop).
+  private async waitForActivity(): Promise<void> {
+    // Terminal drain: the run already reached a terminal status and we owe the
+    // grace flush poll(s). Those are NOT activity-driven — no further NOTIFY is
+    // guaranteed — so flush them PROMPTLY (a short fixed delay, never the long
+    // backstop) rather than parking on the wake. This keeps the stream's end
+    // crisp instead of dangling for a full backstop interval, preserving the
+    // pre-NOTIFY terminal-end latency.
+    if (this.terminalPollsRemaining !== undefined) {
+      await this.sleep(Math.min(this.args.intervalMs, TERMINAL_FLUSH_DELAY_MS));
+      return;
+    }
+    if (this.args.notifyListener === undefined) {
       await this.sleep(this.args.intervalMs);
-      const stop = await this.tick();
-      if (stop) return;
+      return;
+    }
+    const woken = new Promise<void>((resolve) => {
+      this.wakeWaiter = resolve;
+    });
+    try {
+      await Promise.race([this.sleep(this.args.intervalMs), woken]);
+    } finally {
+      this.wakeWaiter = undefined;
     }
   }
 
