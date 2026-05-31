@@ -66,6 +66,11 @@ export interface SubtaskLoopInput {
     specId: string;
     projectId: string;
     workspacePath: string;
+    // The run's BASE sha (clone point), captured once after the workspace
+    // clone, threaded to the writer so each subtask is judged against the
+    // CUMULATIVE diff vs the run base rather than the per-subtask HEAD delta.
+    // The production run path always sets it; unit callers may omit it.
+    baseSha?: string;
   };
   escapeHatches: Pick<
     EscapeHatches,
@@ -325,6 +330,7 @@ async function runSubtaskSequence(args: {
       writeTaskId,
       prompt: writerPromptFor(input, subtask),
       timeoutMs: input.timeoutMs,
+      baseSha: input.context.baseSha,
       appendEvent,
       buildUsage: input.costHooks?.buildWriterUsage,
     });

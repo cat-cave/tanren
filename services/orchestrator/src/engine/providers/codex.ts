@@ -70,12 +70,17 @@ export function createCodexWriter(dependencies: CodexWriterDependencies): Writer
         baseDir: dependencies.codexHomeBaseDir,
         timeoutMs: Math.min(opts.timeoutMs, 30_000),
       });
-      const baselineSha = await captureBaselineSha(
-        dependencies.ssh,
-        dependencies.target,
-        opts.workspace,
-        opts.timeoutMs,
-      );
+      // The diff/log baseline. In a production run this is the run's BASE sha
+      // (the clone point), threaded via opts.baseSha and captured ONCE after the
+      // clone — so each subtask is judged against the CUMULATIVE workspace state
+      // vs the run base, not the per-subtask HEAD delta. That keeps a replanned,
+      // already-satisfied subtask's diff non-empty (the file a prior subtask
+      // committed still shows) so the checker passes instead of false-rejecting
+      // an empty per-iteration delta. When no baseSha is threaded (no production
+      // caller; only a non-threaded/unit caller) we fall back to HEAD-at-start.
+      const baselineSha =
+        opts.baseSha ??
+        (await captureBaselineSha(dependencies.ssh, dependencies.target, opts.workspace, opts.timeoutMs));
       const codex = await dependencies.ssh.run(dependencies.target, {
         command: buildCodexExecCommand({
           codexHome: auth.CODEX_HOME,
