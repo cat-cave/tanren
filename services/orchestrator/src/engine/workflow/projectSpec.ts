@@ -5,6 +5,13 @@ import { z } from "zod";
 import type { ActorContext } from "../../auth/schemas.js";
 import { type ProjectConfigV1, migrateProjectConfig } from "../config/index.js";
 import { PgEventStore } from "../eventStore.js";
+import {
+  ProjectAccessDeniedError,
+  ProjectNotFoundError,
+  SpecDependenciesBlockedError,
+  SpecNotFoundError,
+  SpecNotRunnableError,
+} from "./projectSpecErrors.js";
 
 /** The pool or a checked-out client — anything that can run a query. */
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
@@ -74,41 +81,15 @@ export interface SpecRunContract {
   spec: SpecContract;
 }
 
-export class ProjectNotFoundError extends Error {
-  constructor(projectId: string) {
-    super(`project not found: ${projectId}`);
-  }
-}
-
-export class SpecNotFoundError extends Error {
-  constructor(specId: string) {
-    super(`spec not found: ${specId}`);
-  }
-}
-
-export class SpecDependenciesBlockedError extends Error {
-  constructor(
-    specId: string,
-    readonly blockedSpecIds: string[],
-  ) {
-    super(`spec dependencies are not done for ${specId}: ${blockedSpecIds.join(", ")}`);
-  }
-}
-
-export class SpecNotRunnableError extends Error {
-  constructor(
-    specId: string,
-    readonly status: string,
-  ) {
-    super(`spec ${specId} cannot be queued from status ${status}`);
-  }
-}
-
-export class ProjectAccessDeniedError extends Error {
-  constructor(projectId: string) {
-    super(`actor cannot access project: ${projectId}`);
-  }
-}
+// Domain errors live in `./projectSpecErrors.js` (max-classes-per-file). Import
+// them for local `throw` sites and re-export so existing callers are unchanged.
+export {
+  ProjectAccessDeniedError,
+  ProjectNotFoundError,
+  SpecDependenciesBlockedError,
+  SpecNotFoundError,
+  SpecNotRunnableError,
+};
 
 export async function createProject(
   pool: pg.Pool,

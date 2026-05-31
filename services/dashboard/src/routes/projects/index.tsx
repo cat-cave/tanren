@@ -250,6 +250,19 @@ export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
     return c.redirect(`/projects/${projectId}`);
   });
 
+  // Routing & limits settings screens (+ their config-mutation POSTs) live in
+  // `mountRoutingSettingsScreens` below — same registrations, behavior-identical.
+  mountRoutingSettingsScreens(app, deps);
+}
+
+/**
+ * The routing & limits settings surface: the active-project shortcut, the
+ * explicit per-project view, and the add / remove / reorder / credentials /
+ * hatches config-mutation POSTs. Extracted from `mountProjectScreens` so each
+ * route builder stays focused; every registration is byte-for-byte the prior
+ * inline call.
+ */
+function mountRoutingSettingsScreens(app: Hono, deps: ShellDeps): void {
   // -------------------------------------------------------------------------
   // Routing & limits — active project shortcut + explicit project route.
   // -------------------------------------------------------------------------

@@ -1,25 +1,13 @@
 import { readFile } from "node:fs/promises";
 import { serve } from "@hono/node-server";
-import { createDbPool, getSystemPool, migrate, runWithOrgScope, runWithSystemScope } from "@tanren/db";
+import { createDbPool, getSystemPool, migrate } from "@tanren/db";
 import { Hono } from "hono";
 import type pg from "pg";
-import type { ActorContext } from "./auth/index.js";
-import {
-  ciPollInputSchema,
-  draftPrInputSchema,
-  githubCredentialImportSchema,
-  projectInputSchema,
-  runInputSchema,
-  specInputSchema,
-} from "./inputSchemas.js";
 import { buildAuthFromEnv, type BuildAppAuthOptions } from "./mainAuth.js";
 import { buildAllocatorFromEnv } from "./engine/allocators/index.js";
-import { buildSecretStore, FakeJobQueue, InMemorySecretStore, type SecretStore } from "./engine/contracts/index.js";
-import { parseRawViewOptIn, redactEventRows } from "./routes/runs/redaction.js";
-import { storeGithubToken } from "./engine/credentials/githubToken.js";
+import { buildSecretStore, InMemorySecretStore, type SecretStore } from "./engine/contracts/index.js";
 import { FetchGitHubHttpClient, type GitHubHttpClient } from "./engine/providers/github.js";
 import { GithubAppTokenMinter } from "./engine/providers/githubAppTokenMinter.js";
-import { mountGithubAppInstallFromEnv } from "./routes/auth/githubAppInstall.js";
 import { FetchConfigGateGitHub } from "./engine/config/configGateGithub.js";
 import { loadOrgGithubAppInstallation } from "./engine/credentials/orgGithubApp.js";
 import { resolveGithubToken } from "./engine/credentials/githubTokenResolver.js";
@@ -28,52 +16,12 @@ import { TimedGitHubHttpClient, TimedSshSubstrate } from "./engine/observability
 import { Ssh2Substrate } from "./engine/ssh/index.js";
 import { bootRunWorker, runWorkerEnabled } from "./engine/worker/index.js";
 import { startInternalMtlsServer } from "./internalServer.js";
-import { CiPullRequestNotFoundError, CiRunNotFoundError, pollCiForRun } from "./engine/workflow/ciPolling.js";
-import {
-  DraftPrRunnerNotFoundError,
-  DraftPrRunNotFoundError,
-  publishDraftPullRequestForRun,
-} from "./engine/workflow/githubDraftPr.js";
-import { runHelloWorkflow } from "./engine/workflow/helloRun.js";
-import {
-  createProject,
-  createQueuedRunFromSpec,
-  createSpec,
-  ProjectAccessDeniedError,
-  ProjectNotFoundError,
-  SpecDependenciesBlockedError,
-  SpecNotRunnableError,
-  SpecNotFoundError,
-} from "./engine/workflow/projectSpec.js";
+import type { runHelloWorkflow } from "./engine/workflow/helloRun.js";
 import { createAuthMiddleware, type ActorContextEnv } from "./middleware/auth.js";
 import { createAuthRoutes } from "./routes/auth/index.js";
-import { createBehaviorRoutes } from "./routes/behaviors/index.js";
-import { mountBrownfieldRoutes } from "./routes/brownfield/mount.js";
-import { registerAuthBundleImportRoutes } from "./routes/credentials/authBundleImports.js";
-import {
-  createCredentialRoutes,
-  InMemoryCredentialRegistry,
-  type CredentialRegistry,
-} from "./routes/credentials/index.js";
-import { createDiscoveryRoutes } from "./routes/discovery/index.js";
-import { createDoctorRoutes } from "./routes/doctor/index.js";
-import { createDoraRoutes } from "./routes/dora/index.js";
-import { createForgeAskRoutes } from "./routes/forge/ask.js";
-import { createForgeProposalRoutes } from "./routes/forge/proposals.js";
-import { createInboxRoutes } from "./routes/inbox/index.js";
-import { createAuditRoutes } from "./routes/audits/index.js";
-import { createForgeRoutes } from "./routes/forge/index.js";
-import { createGithubWebhookRoutes } from "./routes/githubWebhooks/index.js";
-import { createInsightRoutes } from "./routes/insights/index.js";
-import { createMilestoneRoutes } from "./routes/milestones/index.js";
-import { createNotificationRoutes } from "./routes/notifications/index.js";
-import { createOnboardingRoutes } from "./routes/onboarding/index.js";
-import { createOrgRoutes } from "./routes/orgs/index.js";
-import { createPersonaRoutes } from "./routes/personas/index.js";
-import { createProjectRoutes } from "./routes/projects/index.js";
-import { createRecoveryRoutes } from "./routes/recovery/index.js";
-import { createRunRoutes } from "./routes/runs/index.js";
-import { createSpecRoutes } from "./routes/specs/index.js";
+import { InMemoryCredentialRegistry, type CredentialRegistry } from "./routes/credentials/index.js";
+import { mountFeatureRoutes } from "./mountFeatureRoutes.js";
+import { mountRootApiRoutes } from "./mountRootApiRoutes.js";
 
 export { buildAuthFromEnv, type BuildAppAuthOptions } from "./mainAuth.js";
 
@@ -171,51 +119,18 @@ export function buildApp(input: {
       refreshToken: resolved.refresh,
     });
   };
-  app.route("/orgs", createOrgRoutes({ pool: input.pool, configGateGithub }));
-  app.route("/orgs", createProjectRoutes({ pool: input.pool }));
-  app.route("/orgs", createSpecRoutes({ pool: input.pool }));
-  app.route("/orgs", createPersonaRoutes({ pool: input.pool }));
-  app.route("/orgs", createBehaviorRoutes({ pool: input.pool }));
-  app.route("/orgs", createMilestoneRoutes({ pool: input.pool }));
-  mountBrownfieldRoutes(app, { pool: input.pool, secrets, githubHttp, githubAppMinter });
-  // P3-0003: GitHub App install flow; mounts only when configured via env.
-  mountGithubAppInstallFromEnv(app, { pool: input.pool, secrets, minter: githubAppMinter });
-  app.route("/orgs", createForgeRoutes({ pool: input.pool, secrets, githubHttp }));
-  // P3-0010: thick-Forge LLM conversation endpoint (⌘K chat morph); answerer injectable.
-  app.route("/orgs", createForgeAskRoutes({ pool: input.pool, secrets, githubHttp }));
-  // P3-0010 (write-action approval): approve/reject proposed write actions.
-  app.route("/orgs", createForgeProposalRoutes({ pool: input.pool }));
-  // P3-0028 webhook-driven CI (option). Mounted at root so GitHub posts to
-  // `/github/webhooks/ci`. Polling remains the default fallback.
-  app.route("/", createGithubWebhookRoutes({ pool: input.pool, secrets, githubHttp, githubAppMinter }));
-  app.route("/orgs", createInsightRoutes({ pool: input.pool }));
-  // P3-0014: spec discovery — classify an insight into proposed specs +
-  // DAG-placement options, accept → create specs with provenance.
-  app.route("/orgs", createDiscoveryRoutes({ pool: input.pool }));
-  // P3-0015: greenfield onboarding — Forge vision interview → derived product
-  // graph via the existing creation paths; interview answerer injectable.
-  app.route("/orgs", createOnboardingRoutes({ pool: input.pool }));
-  // P3-0022: candidate inbox — issue sources → Forge triage → discovery accept;
-  // connector reads via the App resolver, triage answerer injectable.
-  app.route("/orgs", createInboxRoutes({ pool: input.pool, secrets, githubHttp }));
-  // P3-0021: scheduled audits — recurring read-only Answerer passes (the audit
-  // job library). A run executes a read-only pass and emits findings into the
-  // candidate inbox as a system (auto-routing) source; the pass runner is
-  // injectable (defaults to a safe no-op until an SSH-backed runner is wired).
-  app.route("/orgs", createAuditRoutes({ pool: input.pool }));
-  app.route("/orgs", createDoraRoutes({ pool: input.pool }));
-  app.route("/orgs", createNotificationRoutes({ pool: input.pool }));
-  app.route("/orgs", createRunRoutes({ pool: input.pool }));
-  app.route("/orgs", createRecoveryRoutes({ pool: input.pool }));
-  app.route("/", createCredentialRoutes({ pool: input.pool, secrets, registry: credentialRegistry }));
-  app.route(
-    "/",
-    createDoctorRoutes({
-      pool: input.pool,
-      secrets,
-      vaultHealthCheck,
-    }),
-  );
+  // The full feature-route mount table lives in `mountFeatureRoutes` — the long
+  // declarative list of create*Routes registrations, in the same order, with the
+  // shared deps assembled above. Behavior is identical to the prior inline block.
+  mountFeatureRoutes(app, {
+    pool: input.pool,
+    secrets,
+    githubHttp,
+    githubAppMinter,
+    credentialRegistry,
+    configGateGithub,
+    vaultHealthCheck,
+  });
 
   app.get("/healthz", async (c) => {
     const dbResult = await input.pool.query("SELECT 1 AS ok");
@@ -232,201 +147,16 @@ export function buildApp(input: {
     c.json({ service: "orchestrator", version: process.env["npm_package_version"] ?? "0.0.0" }),
   );
 
-  app.post("/projects", async (c) => {
-    const parsed = projectInputSchema.safeParse(await c.req.json().catch(() => {}));
-    if (!parsed.success) {
-      return c.json({ error: "invalid_project", issues: parsed.error.issues }, 400);
-    }
-    return c.json(await createProject(input.pool, parsed.data, actorOf(c)), 201);
-  });
-
-  app.post("/specs", async (c) => {
-    const parsed = specInputSchema.safeParse(await c.req.json().catch(() => {}));
-    if (!parsed.success) {
-      return c.json({ error: "invalid_spec", issues: parsed.error.issues }, 400);
-    }
-    try {
-      return c.json(await createSpec(input.pool, parsed.data, actorOf(c)), 201);
-    } catch (error) {
-      if (error instanceof ProjectNotFoundError) {
-        return c.json({ error: "project_not_found", message: error.message }, 404);
-      }
-      if (error instanceof ProjectAccessDeniedError) {
-        return c.json({ error: "project_access_denied", message: error.message }, 403);
-      }
-      if (error instanceof SpecNotFoundError) {
-        return c.json({ error: "spec_dependency_not_found", message: error.message }, 404);
-      }
-      throw error;
-    }
-  });
-
-  app.post("/specs/:specId/runs", async (c) => {
-    const parsed = runInputSchema.safeParse(await c.req.json().catch(() => ({})));
-    if (!parsed.success) {
-      return c.json({ error: "invalid_run", issues: parsed.error.issues }, 400);
-    }
-    try {
-      return c.json(
-        await createQueuedRunFromSpec(input.pool, { specId: c.req.param("specId"), ...parsed.data }, actorOf(c)),
-        201,
-      );
-    } catch (error) {
-      if (error instanceof SpecNotFoundError) {
-        return c.json({ error: "spec_not_found", message: error.message }, 404);
-      }
-      if (error instanceof ProjectAccessDeniedError) {
-        return c.json({ error: "project_access_denied", message: error.message }, 403);
-      }
-      if (error instanceof SpecDependenciesBlockedError) {
-        return c.json({ error: "spec_dependencies_blocked", message: error.message }, 409);
-      }
-      if (error instanceof SpecNotRunnableError) {
-        return c.json({ error: "spec_not_runnable", message: error.message }, 409);
-      }
-      throw error;
-    }
-  });
-
-  // Codex (Phase 1) + Claude/opencode (P3-0012) auth-bundle import routes.
-  registerAuthBundleImportRoutes(app, secrets);
-
-  app.post("/credentials/github/import", async (c) => {
-    const parsed = githubCredentialImportSchema.safeParse(await c.req.json().catch(() => {}));
-    if (!parsed.success) {
-      return c.json({ error: "invalid_github_credential", issues: parsed.error.issues }, 400);
-    }
-    try {
-      return c.json(await storeGithubToken(secrets, parsed.data), 201);
-    } catch (error) {
-      return c.json({ error: "invalid_github_credential", message: messageFromError(error) }, 400);
-    }
-  });
-
-  app.post("/hello/run", async (c) => {
-    // RLS R3b: the hello fixture is cross-org system seeding (its own throwaway
-    // fixture org), so it runs on the BYPASSRLS `tanren_system` pool when one is
-    // configured, else the runtime pool (inert dev fallback).
-    //
-    // Plane-split P1: the hello fixture enqueues its own tasks and DRAINS THEM
-    // ITSELF in-request, so it runs on a fresh isolated in-process queue —
-    // otherwise the standalone run-executor worker (now always polling
-    // `job_queue` for `plan` jobs globally) would race it and steal the fixture's
-    // `plan` job, breaking `drainHelloQueue`. The durable `job_queue` is proven
-    // by the real run path (`smoke-plane-split-worker`). See helloRun.ts.
-    const summary = await runHelloWorkflow(getSystemPool() ?? input.pool, {
-      ...input.helloDependencies,
-      jobQueue: new FakeJobQueue(),
-    });
-    return c.json(summary, 201);
-  });
-
-  app.post("/runs/:runId/github/draft-pr", async (c) => {
-    const parsed = draftPrInputSchema.safeParse(await c.req.json().catch(() => ({})));
-    if (!parsed.success) {
-      return c.json({ error: "invalid_draft_pr", issues: parsed.error.issues }, 400);
-    }
-    try {
-      return c.json(
-        await publishDraftPullRequestForRun({
-          pool: input.pool,
-          secrets,
-          githubHttp,
-          ssh: input.helloDependencies.ssh,
-          runId: c.req.param("runId"),
-          identitySecretRef,
-          timeoutMs: parsed.data.timeoutMs ?? 30_000,
-          githubAppMinter,
-          ...parsed.data,
-        }),
-        201,
-      );
-    } catch (error) {
-      if (error instanceof DraftPrRunNotFoundError) {
-        return c.json({ error: "run_not_found", message: error.message }, 404);
-      }
-      if (error instanceof DraftPrRunnerNotFoundError) {
-        return c.json({ error: "runner_not_found", message: error.message }, 409);
-      }
-      return c.json({ error: "github_draft_pr_failed", message: messageFromError(error) }, 502);
-    }
-  });
-
-  app.post("/runs/:runId/ci/poll", async (c) => {
-    const parsed = ciPollInputSchema.safeParse(await c.req.json().catch(() => ({})));
-    if (!parsed.success) {
-      return c.json({ error: "invalid_ci_poll", issues: parsed.error.issues }, 400);
-    }
-    try {
-      return c.json(
-        await pollCiForRun({
-          pool: input.pool,
-          secrets,
-          githubHttp,
-          runId: c.req.param("runId"),
-          githubAppMinter,
-          ...parsed.data,
-        }),
-        200,
-      );
-    } catch (error) {
-      if (error instanceof CiRunNotFoundError) {
-        return c.json({ error: "run_not_found", message: error.message }, 404);
-      }
-      if (error instanceof CiPullRequestNotFoundError) {
-        return c.json({ error: "pull_request_not_found", message: error.message }, 409);
-      }
-      return c.json({ error: "ci_poll_failed", message: messageFromError(error) }, 502);
-    }
-  });
-
-  app.get("/runs/:runId", async (c) => {
-    const runId = c.req.param("runId");
-    // RLS R3b: this legacy debug route has no `:orgId` path param, so resolve the
-    // run's org via the BYPASSRLS system scope FIRST (a cross-org bootstrap read),
-    // then run every tenant read under that org's scope so the enforced policies
-    // admit them. A run with no resolvable org (gone / legacy null) is 404.
-    const orgRow = await runWithSystemScope(input.pool, (client) =>
-      client.query<{ org_id: string | null }>("SELECT org_id FROM runs WHERE run_id = $1", [runId]),
-    );
-    const orgId = orgRow.rows[0]?.org_id ?? null;
-    if (orgId === null) {
-      return c.json({ error: "run_not_found" }, 404);
-    }
-
-    const payload = await runWithOrgScope(input.pool, orgId, async (client) => {
-      const run = await client.query("SELECT * FROM runs WHERE run_id = $1", [runId]);
-      if (run.rowCount === 0) {
-        return;
-      }
-      const tasks = await client.query(
-        `SELECT * FROM tasks
-         WHERE run_id = $1
-         ORDER BY CASE kind WHEN 'plan' THEN 1 WHEN 'write' THEN 2 WHEN 'check' THEN 3 WHEN 'audit' THEN 4 WHEN 'ci' THEN 5 ELSE 99 END,
-                  started_at ASC NULLS FIRST,
-                  task_id ASC`,
-        [runId],
-      );
-      const events = await client.query("SELECT * FROM events WHERE run_id = $1 ORDER BY ts ASC, id ASC", [runId]);
-      const costs = await client.query(
-        "SELECT * FROM cost_records WHERE run_id = $1 ORDER BY recorded_at ASC, id ASC",
-        [runId],
-      );
-      const { events: serializedEvents } = await redactEventRows({
-        // The shared pool — but we are inside this run's `runWithOrgScope`, so the
-        // audit event store self-routes through the ambient org-scoped client.
-        pool: input.pool,
-        rows: events.rows,
-        runId,
-        actor: actorOf(c),
-        rawView: parseRawViewOptIn(c),
-      });
-      return { run: run.rows[0], tasks: tasks.rows, events: serializedEvents, costs: costs.rows };
-    });
-    if (payload === undefined) {
-      return c.json({ error: "run_not_found" }, 404);
-    }
-    return c.json(payload);
+  // The Phase-1 root API endpoints (project/spec creation, credential + auth-
+  // bundle imports, the hello trigger, per-run draft-PR / CI-poll, the legacy
+  // `/runs/:runId` read) live in `mountRootApiRoutes`. Behavior is identical.
+  mountRootApiRoutes(app, {
+    pool: input.pool,
+    secrets,
+    githubHttp,
+    githubAppMinter,
+    identitySecretRef,
+    helloDependencies: input.helloDependencies,
   });
 
   return app;
@@ -471,14 +201,6 @@ async function seedRunnerIdentitySecret(secrets: SecretStore): Promise<void> {
   if (keyPath !== undefined && keyPath !== "") {
     await secrets.put({ ref: runnerIdentitySecretRef, value: await readFile(keyPath, "utf8") });
   }
-}
-
-function messageFromError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function actorOf(c: { var: { actor?: ActorContext } }): ActorContext | undefined {
-  return c.var.actor;
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

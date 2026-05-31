@@ -137,92 +137,9 @@ export function createRunRoutes(options: RunRoutesOptions) {
     return c.json(detail);
   });
 
-  // -------------------------------------------------------------------------
-  // GET /orgs/:orgId/projects/:projectId/runs/:runId/events  (paginated)
-  // -------------------------------------------------------------------------
-  app.get("/:orgId/projects/:projectId/runs/:runId/events", async (c) => {
-    const actor = requireActor(c);
-    const orgId = c.req.param("orgId");
-    if (!actorCanAccessOrg(actor, orgId)) {
-      return c.json({ error: "org_access_denied" }, 403);
-    }
-    const runId = c.req.param("runId");
-    const projectId = c.req.param("projectId");
-    try {
-      const access = await assertRunAccess(options.pool, runId, actor);
-      if (access.projectId !== projectId) {
-        return c.json({ error: "run_not_found" }, 404);
-      }
-    } catch (error) {
-      if (error instanceof ToolAccessDeniedError) {
-        return c.json({ error: "run_not_found" }, 404);
-      }
-      throw error;
-    }
-
-    try {
-      // RLS R2 cohort-1 (events read): the paginated events query runs through
-      // the org-scoped client (inert in R1; same rows as the pool path).
-      const page = await runWithOrgScope(options.pool, orgId, (client) =>
-        fetchEventsPage(client, {
-          runId,
-          orgId,
-          cursor: c.req.query("cursor"),
-          pageSize: c.req.query("pageSize"),
-          actor,
-          rawView: parseRawViewOptIn(c),
-        }),
-      );
-      return c.json(page);
-    } catch (error) {
-      if (error instanceof Error && error.message.startsWith("invalid_cursor")) {
-        return c.json({ error: "invalid_cursor", message: error.message }, 400);
-      }
-      throw error;
-    }
-  });
-
-  // -------------------------------------------------------------------------
-  // GET /orgs/:orgId/projects/:projectId/runs/:runId/costs  (paginated)
-  // -------------------------------------------------------------------------
-  app.get("/:orgId/projects/:projectId/runs/:runId/costs", async (c) => {
-    const actor = requireActor(c);
-    const orgId = c.req.param("orgId");
-    if (!actorCanAccessOrg(actor, orgId)) {
-      return c.json({ error: "org_access_denied" }, 403);
-    }
-    const runId = c.req.param("runId");
-    const projectId = c.req.param("projectId");
-    try {
-      const access = await assertRunAccess(options.pool, runId, actor);
-      if (access.projectId !== projectId) {
-        return c.json({ error: "run_not_found" }, 404);
-      }
-    } catch (error) {
-      if (error instanceof ToolAccessDeniedError) {
-        return c.json({ error: "run_not_found" }, 404);
-      }
-      throw error;
-    }
-    try {
-      // RLS R2 cohort-2 (cost_records read): the paginated costs query runs
-      // through the org-scoped client (inert in R1; same rows as the pool path).
-      const page = await runWithOrgScope(options.pool, orgId, (client) =>
-        fetchCostsPage(client, {
-          runId,
-          orgId,
-          cursor: c.req.query("cursor"),
-          pageSize: c.req.query("pageSize"),
-        }),
-      );
-      return c.json(page);
-    } catch (error) {
-      if (error instanceof Error && error.message.startsWith("invalid_cursor")) {
-        return c.json({ error: "invalid_cursor", message: error.message }, 400);
-      }
-      throw error;
-    }
-  });
+  // The paginated events + costs reads share the same run-access gate and
+  // cursor-error mapping; registered together to keep this builder focused.
+  registerRunPaginationRoutes(app, options);
 
   // -------------------------------------------------------------------------
   // GET /orgs/:orgId/projects/:projectId/runs/:runId/forge
@@ -314,6 +231,96 @@ export function createRunRoutes(options: RunRoutesOptions) {
   });
 
   return app;
+}
+
+// ---------------------------------------------------------------------------
+// The two paginated reads (events + costs) under a run. Both gate on run
+// access, run their query through the org-scoped client, and map an
+// `invalid_cursor` into a 400 — extracted as a unit so `createRunRoutes` stays
+// a focused builder. Behavior is identical to the inline registrations.
+// ---------------------------------------------------------------------------
+
+function registerRunPaginationRoutes(app: Hono<ActorContextEnv>, options: RunRoutesOptions): void {
+  app.get("/:orgId/projects/:projectId/runs/:runId/events", async (c) => {
+    const actor = requireActor(c);
+    const orgId = c.req.param("orgId");
+    if (!actorCanAccessOrg(actor, orgId)) {
+      return c.json({ error: "org_access_denied" }, 403);
+    }
+    const runId = c.req.param("runId");
+    const projectId = c.req.param("projectId");
+    try {
+      const access = await assertRunAccess(options.pool, runId, actor);
+      if (access.projectId !== projectId) {
+        return c.json({ error: "run_not_found" }, 404);
+      }
+    } catch (error) {
+      if (error instanceof ToolAccessDeniedError) {
+        return c.json({ error: "run_not_found" }, 404);
+      }
+      throw error;
+    }
+
+    try {
+      // RLS R2 cohort-1 (events read): the paginated events query runs through
+      // the org-scoped client (inert in R1; same rows as the pool path).
+      const page = await runWithOrgScope(options.pool, orgId, (client) =>
+        fetchEventsPage(client, {
+          runId,
+          orgId,
+          cursor: c.req.query("cursor"),
+          pageSize: c.req.query("pageSize"),
+          actor,
+          rawView: parseRawViewOptIn(c),
+        }),
+      );
+      return c.json(page);
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith("invalid_cursor")) {
+        return c.json({ error: "invalid_cursor", message: error.message }, 400);
+      }
+      throw error;
+    }
+  });
+
+  app.get("/:orgId/projects/:projectId/runs/:runId/costs", async (c) => {
+    const actor = requireActor(c);
+    const orgId = c.req.param("orgId");
+    if (!actorCanAccessOrg(actor, orgId)) {
+      return c.json({ error: "org_access_denied" }, 403);
+    }
+    const runId = c.req.param("runId");
+    const projectId = c.req.param("projectId");
+    try {
+      const access = await assertRunAccess(options.pool, runId, actor);
+      if (access.projectId !== projectId) {
+        return c.json({ error: "run_not_found" }, 404);
+      }
+    } catch (error) {
+      if (error instanceof ToolAccessDeniedError) {
+        return c.json({ error: "run_not_found" }, 404);
+      }
+      throw error;
+    }
+    try {
+      // RLS R2 cohort-2 (cost_records read): the paginated costs query runs
+      // through the org-scoped client (inert in R1; same rows as the pool path).
+      const page = await runWithOrgScope(options.pool, orgId, (client) =>
+        fetchCostsPage(client, {
+          runId,
+          orgId,
+          cursor: c.req.query("cursor"),
+          pageSize: c.req.query("pageSize"),
+        }),
+      );
+      return c.json(page);
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith("invalid_cursor")) {
+        return c.json({ error: "invalid_cursor", message: error.message }, 400);
+      }
+      throw error;
+    }
+  });
 }
 
 // ---------------------------------------------------------------------------

@@ -22,6 +22,27 @@
     "no-inline-comments": "error",
     "no-negated-condition": "error",
     "require-unicode-regexp": "error",
+    // Structural max-* rules (wave 5). Thresholds are tuned to this codebase
+    // (Hono route-builders, JSX render trees, in-memory test fakes) so they
+    // catch genuine god-functions/files, not stylistic length. See PR wave 5.
+    //
+    // max-lines: aligned to the 500-line file cap that scripts/check-architecture.mjs
+    // already enforces — one source of truth for file size, no duplicate ceiling.
+    "max-lines": ["error", { "max": 500, "skipBlankLines": false, "skipComments": false }],
+    // max-lines-per-function: 220. The longest functions here are declarative
+    // route-registration aggregators and JSX render trees whose length is already
+    // bounded by the 500-line file cap; 220 flags only true god-aggregators.
+    // Comments are skipped so doc-heavy handlers are measured by code, not prose.
+    "max-lines-per-function": ["error", { "max": 220, "skipComments": true }],
+    // max-classes-per-file: 5. Default 1 is too strict — a domain-errors module
+    // legitimately groups a cluster of small Error subclasses, and a test file
+    // groups a few small stub/fake classes. 5 matches that natural ceiling while
+    // still flagging files that mix many substantial classes.
+    "max-classes-per-file": ["error", { "max": 5 }],
+    // max-dependencies: 12 runtime (value) imports; type-only imports are ignored
+    // because they create no runtime coupling. Catches genuinely-egregious import
+    // lists (e.g. composition roots) without penalizing type-rich modules.
+    "import/max-dependencies": ["error", { "max": 12, "ignoreTypeImports": true }],
     "unicorn/no-array-sort": "off",
     "unicorn/prefer-node-protocol": "error",
     "unicorn/no-useless-undefined": "error",
@@ -44,5 +65,30 @@
     "vitest/no-focused-tests": "error",
     "import/no-cycle": "error",
     "import/no-self-import": "error"
-  }
+  },
+  "overrides": [
+    {
+      // Test files + their helpers/fixtures are dominated by a single top-level
+      // describe() callback and by in-memory fake builders that return one large
+      // object literal. Per-function length there is redundant with the 500-line
+      // file cap (already enforced for tests too), so this rule only on test
+      // sources would produce "split your describe" noise with no behavior value.
+      "files": ["**/*.test.ts", "**/*.test.tsx", "**/*.spec.ts", "**/tests/**", "**/*.fixtures.ts"],
+      "rules": {
+        "max-lines-per-function": "off"
+      }
+    },
+    {
+      // Composition roots + route mount tables aggregate the whole service by
+      // design — main.ts assembles the app, and mountFeatureRoutes is the
+      // declarative create*Routes mount table. A leaf-module import ceiling does
+      // not apply to them; they are held to a higher bound (still capped so the
+      // list cannot grow without bound). max-dependencies counts runtime imports
+      // only — type-only imports are already ignored at the base config.
+      "files": ["services/orchestrator/src/main.ts", "services/orchestrator/src/mountFeatureRoutes.ts"],
+      "rules": {
+        "import/max-dependencies": ["error", { "max": 24, "ignoreTypeImports": true }]
+      }
+    }
+  ]
 }
