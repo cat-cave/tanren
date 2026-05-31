@@ -85,8 +85,7 @@ export interface AcceptanceConfig extends OperatorConfig, Required<StackConfig> 
 export async function loadAcceptanceConfig(): Promise<AcceptanceConfig> {
   const operator = await loadOperatorConfig();
   const stack = loadStackConfig();
-  const ssh_host_fingerprint =
-    stack.ssh_host_fingerprint ?? (await discoverSshHostFingerprint(stack.ssh_host, stack.ssh_port));
+  const ssh_host_fingerprint = stack.ssh_host_fingerprint ?? discoverSshHostFingerprint(stack.ssh_host, stack.ssh_port);
   return {
     ...operator,
     github_base_branch: operator.github_base_branch ?? "main",
@@ -221,7 +220,7 @@ function numberFromEnv(name: string, fallback: number): number {
 // the SHA256 host-key fingerprint. The Tanren runner image regenerates its
 // host keys on every container start (see runner/entrypoint.sh), so the
 // fingerprint is correct as long as the script runs against a live stack.
-async function discoverSshHostFingerprint(host: string, port: number): Promise<string> {
+function discoverSshHostFingerprint(host: string, port: number): string {
   const keyscan = spawnSync("ssh-keyscan", ["-p", String(port), "-t", "ed25519", host], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
