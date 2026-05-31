@@ -22,6 +22,23 @@
     "no-inline-comments": "error",
     "no-negated-condition": "error",
     "require-unicode-regexp": "error",
+    // require-await (wave 6): enforced as error everywhere a plain async function
+    // with a sync body is just a mistake. Scoped OFF for the adapter/port seam
+    // layers (see overrides) where async-with-sync-body is the intentional
+    // conformance pattern: a contract types its method `(): Promise<T>` so a sync
+    // in-memory impl and a real I/O impl are interchangeable behind one interface.
+    // Removing `async` there would change the awaited return type / break the
+    // contract. The genuinely-pointless standalone cases were fixed in code.
+    "require-await": "error",
+    // no-conditional-in-test (wave 6): OFF, by design — not a hidden-branch problem
+    // in this codebase. Every flagged `if`/ternary is one of two intentional
+    // patterns: (1) fetch-mock routers that dispatch a faked request to its canned
+    // response (`if (url.includes(...)) return ...`) — the backbone of every
+    // adapter-conformance test (OIDC/GitHub IdPs, allocators, secret stores), and
+    // (2) value normalizers / disjunction assertions (`x ?? null`,
+    // `expect(a === "" || a === null).toBe(true)`). None are a branch that should
+    // become two test cases, so the rule produces only un-actionable noise here.
+    "vitest/no-conditional-in-test": "off",
     // Structural max-* rules (wave 5). Thresholds are tuned to this codebase
     // (Hono route-builders, JSX render trees, in-memory test fakes) so they
     // catch genuine god-functions/files, not stylistic length. See PR wave 5.
@@ -88,6 +105,43 @@
       "files": ["services/orchestrator/src/main.ts", "services/orchestrator/src/mountFeatureRoutes.ts"],
       "rules": {
         "import/max-dependencies": ["error", { "max": 24, "ignoreTypeImports": true }]
+      }
+    },
+    {
+      // require-await OFF for the adapter/port seam layers (wave 6). These are the
+      // slottable-contract surfaces — providers, allocators, notification
+      // channels, the forge inbox/interview/discovery answerers, secret stores,
+      // identity providers, observability wrappers, the contracts/ port
+      // definitions, the Hono route handlers, and the dashboard RPC clients. They
+      // type their methods/callbacks `(): Promise<T>` so a synchronous in-memory
+      // impl (fakes, no-op policies, static stores) and a real-I/O impl satisfy
+      // ONE interface and are interchangeable behind it. Marking such a method
+      // `async` with a sync body is required conformance, not a mistake — removing
+      // `async` would change the awaited return type or break the contract the
+      // conformance suites (tests/conformance/**) pin. The rule stays `error`
+      // everywhere outside these directories.
+      "files": [
+        "**/engine/**",
+        "**/src/auth/**",
+        "**/src/routes/**",
+        "services/dashboard/src/api/**",
+        "services/allocator/src/**"
+      ],
+      "rules": {
+        "require-await": "off"
+      }
+    },
+    {
+      // require-await OFF for tests/helpers/fixtures (wave 6). Test suites are
+      // dominated by in-memory fakes and stubs that implement the same
+      // Promise-typed ports as production (fake allocators/providers/secret
+      // stores/notification channels, fetch-mock routers, fixture builders). Their
+      // bodies are synchronous but the method signatures must stay async to
+      // satisfy the interface under test, so the same conformance rationale as the
+      // seam-layer override applies here.
+      "files": ["**/*.test.ts", "**/*.test.tsx", "**/*.spec.ts", "**/tests/**", "**/*.fixtures.ts"],
+      "rules": {
+        "require-await": "off"
       }
     }
   ]
