@@ -14,11 +14,12 @@ Hetzner/DigitalOcean/GCP/AWS-EC2/Kubernetes), multi-harness providers
 stores (Vault/GCP-SM/AWS-SM/1Password), multi-provider identity
 (github_oauth/OIDC/Authentik/local_dev), per-org GitHub App connectivity, all nine
 notification channels, a quota/admission + metering seam, a BYOK-vs-managed provider
-toggle, and a hardened 14-step strictness gate.
+toggle, and a hardened 15-step strictness gate.
 
 A large multi-tenant + quality expansion has since merged on `main`:
 
-- **Multi-tenancy is fully DB-enforced AND live-validated.** Postgres Row-Level
+- **Multi-tenancy is fully DB-enforced and live-validated end-to-end through
+  runner allocation.** Postgres Row-Level
   Security enforces `org_id` isolation — a restricted `tanren_app` runtime role
   (NOBYPASSRLS), a narrow `tanren_system` BYPASSRLS pool for bootstrap/cross-org
   reads, and deny-by-default `USING`+`WITH CHECK` policies on every tenant table

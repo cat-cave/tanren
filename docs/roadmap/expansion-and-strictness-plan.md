@@ -40,7 +40,7 @@ decision (2026-05-29) for later deliberate design.** Do not build blind.
 
 **Status: DONE (waves 1–5).** The shared-config edits (`tsconfig.base.json`,
 `oxlintrc.json`, `package.json`, `vitest.config.ts`,
-`scripts/check-architecture.mjs`) all landed. The gate is now a 14-step
+`scripts/check-architecture.mjs`) all landed. The gate is now a 15-step
 `just fast-check` (format-check, lint, types-lint, architecture, schema/state/
 event/answerer/contract drift, knip, spelling, typecheck, test, compose-config).
 

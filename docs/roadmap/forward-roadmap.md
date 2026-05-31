@@ -151,8 +151,9 @@ live conversion checklist: `docs/roadmap/saas-rls-and-plane-split-plan.md` +
 - **RLS — fully DB-enforced (done, live-validated).** Restricted runtime role
   `tanren_app` (NOBYPASSRLS), narrow `tanren_system` BYPASSRLS pool for
   bootstrap / cross-org reads, deny-by-default `USING` + `WITH CHECK` policies on
-  every tenant table. Role: migration `0029`; policy enablement + role flip:
-  migration `0030`; seam: `db/src/orgScope.ts` (`runWithOrgScope` /
+  every tenant table. Roles: `tanren_app` (migration `0029`), `tanren_system`
+  (migration `0030`); policy enablement + role flip: migration `0030`;
+  seam: `db/src/orgScope.ts` (`runWithOrgScope` /
   `runWithSystemScope` / `runWithJobOrgId` / `orgScopingPool`). The live run
   drove signup → CRUD → run → mTLS-claim → cred-resolution → runner-allocation
   and **caught + fixed a class of RLS-completeness bugs the hello-fixture smoke
