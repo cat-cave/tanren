@@ -142,21 +142,7 @@ function GateOn(props: ConfigViewProps) {
         </div>
       </div>
 
-      {!hasPr ? (
-        <div class="panel gate-card">
-          <span class="gate-eyebrow">▮ gate · on</span>
-          <span class="gate-blurb">
-            The audit gate is on. The next routing or limit change Forge makes will open a PR in{" "}
-            <code>{props.repo ?? "your tanren-config repo"}</code> instead of applying directly — review and merge it
-            here to apply it to every new run.
-          </span>
-          <div class="gate-actions">
-            <a class="btn" href="/settings/routing">
-              propose a change ↗
-            </a>
-          </div>
-        </div>
-      ) : (
+      {hasPr ? (
         <>
           <div class="split-row">
             <div class="scroll-col">
@@ -235,6 +221,20 @@ function GateOn(props: ConfigViewProps) {
             </div>
           </div>
         </>
+      ) : (
+        <div class="panel gate-card">
+          <span class="gate-eyebrow">▮ gate · on</span>
+          <span class="gate-blurb">
+            The audit gate is on. The next routing or limit change Forge makes will open a PR in{" "}
+            <code>{props.repo ?? "your tanren-config repo"}</code> instead of applying directly — review and merge it
+            here to apply it to every new run.
+          </span>
+          <div class="gate-actions">
+            <a class="btn" href="/settings/routing">
+              propose a change ↗
+            </a>
+          </div>
+        </div>
       )}
     </div>
   );

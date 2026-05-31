@@ -146,7 +146,7 @@ function bodyFor(issue: RawSentryIssue): string {
 
 function buildPath(config: SentryConfig): string {
   const query = config.query ?? "is:unresolved";
-  const levelClause = config.level !== undefined ? ` level:${config.level}` : "";
+  const levelClause = config.level === undefined ? "" : ` level:${config.level}`;
   const search = new URLSearchParams({ query: `${query}${levelClause}`, statsPeriod: "14d" });
   return (
     `/api/0/projects/${encodeURIComponent(config.org)}/${encodeURIComponent(config.project)}` +

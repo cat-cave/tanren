@@ -127,7 +127,8 @@ describe("buildAllocatorFromEnv — env defaults flow through allocate() (stubbe
     process.env.TANREN_GCP_HOST_FINGERPRINT = "SHA256:gcp";
     const calls = stubFetch((url) => {
       if (url.endsWith("/instances") && !url.includes("/instances/")) {
-        return json({ name: "op-1", status: "DONE" }); // insert op (done immediately)
+        // insert op (done immediately)
+        return json({ name: "op-1", status: "DONE" });
       }
       if (url.includes("/operations/")) {
         return json({ name: "op-1", status: "DONE" });

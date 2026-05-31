@@ -118,7 +118,7 @@ export class FetchConfigInjectionGitHub implements ConfigInjectionGitHub {
         message: `${message}: ${path}`,
         branch: headBranch,
         content: Buffer.from(content, "utf8").toString("base64"),
-        ...(sha !== undefined ? { sha } : {}),
+        ...(sha === undefined ? {} : { sha }),
       },
     });
     if (put.status !== 200 && put.status !== 201) {

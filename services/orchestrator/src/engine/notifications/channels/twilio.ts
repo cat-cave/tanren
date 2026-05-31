@@ -95,7 +95,7 @@ function buildSmsBody(payload: NotificationPayload): string {
   // but cap to one logical message worth of context.
   const head = `[${payload.severity.toUpperCase()}] ${payload.title}`;
   const body = payload.body.length > 0 ? `\n${payload.body}` : "";
-  const link = payload.url !== undefined ? `\n${payload.url}` : "";
+  const link = payload.url === undefined ? "" : `\n${payload.url}`;
   return truncate(`${head}${body}${link}`, 1500);
 }
 

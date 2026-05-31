@@ -102,7 +102,7 @@ function buildAttention(input: BuildProjectViewInput): AttentionEntry[] {
         id: `review-${run.runId}`,
         priority: "review",
         title: `${run.specTitle} is review-ready`,
-        sub: run.prUrl !== null ? prHandle(run.prUrl) : `run ${run.runId}`,
+        sub: run.prUrl === null ? `run ${run.runId}` : prHandle(run.prUrl),
         href: runHref(input.projectId, run.runId),
         tone: "hot",
       });
@@ -126,7 +126,7 @@ function buildAttention(input: BuildProjectViewInput): AttentionEntry[] {
 
 function prHandle(prUrl: string): string {
   const match = /\/pull\/(\d+)/u.exec(prUrl);
-  return match !== null ? `PR #${match[1]}` : prUrl;
+  return match === null ? prUrl : `PR #${match[1]}`;
 }
 
 function buildDagNodes(input: BuildProjectViewInput): DagNode[] {
@@ -173,7 +173,7 @@ function buildVelocity(input: BuildProjectViewInput): VelocityModel | null {
   const completed = input.runs.filter((run) => dagStatusForRun(run) === "done").length;
   const spark = buildSparkline(completed, input.runs.length);
   const now = input.now ?? new Date();
-  const eta = target.eta !== null ? new Date(target.eta) : null;
+  const eta = target.eta === null ? null : new Date(target.eta);
   const etaLabel =
     eta !== null && !Number.isNaN(eta.getTime())
       ? eta.toLocaleDateString("en-US", { month: "short", day: "numeric" })
@@ -209,7 +209,7 @@ function buildActivity(input: BuildProjectViewInput): ActivityRow[] {
     ts: item.ts,
     kind: activityKind(item.eventType),
     event: humanizeEvent(item.eventType),
-    detail: item.specId !== null ? `spec ${item.specId}` : `run ${item.runId}`,
+    detail: item.specId === null ? `run ${item.runId}` : `spec ${item.specId}`,
     href: runHref(input.projectId, item.runId),
   }));
 }
@@ -230,9 +230,9 @@ export function buildProjectViewModel(input: BuildProjectViewInput): ProjectView
     {
       k: "week spend",
       v:
-        input.weekCapUsd !== undefined
-          ? `${formatUsd(input.weekSpendUsd)} / ${formatUsd(input.weekCapUsd)}`
-          : formatUsd(input.weekSpendUsd),
+        input.weekCapUsd === undefined
+          ? formatUsd(input.weekSpendUsd)
+          : `${formatUsd(input.weekSpendUsd)} / ${formatUsd(input.weekCapUsd)}`,
     },
     { k: "velocity", v: velocity?.trendLabel ?? "—" },
     { k: "blocked", v: String(blocked), tone: blocked > 0 ? "warn" : undefined },
@@ -242,7 +242,7 @@ export function buildProjectViewModel(input: BuildProjectViewInput): ProjectView
     input.narration?.body ?? defaultPulse(input.projectName, inFlight, needsYou, input.weekSpendUsd);
   const recentEvent = input.feed[0];
   const pulseSub =
-    recentEvent !== undefined ? `most recent · ${humanizeEvent(recentEvent.eventType)}` : "no recent activity";
+    recentEvent === undefined ? "no recent activity" : `most recent · ${humanizeEvent(recentEvent.eventType)}`;
 
   return {
     pulseHeadline,

@@ -386,7 +386,12 @@ async function prepareWorkspace(input: RunPlannerLoopInput, target: SshTarget, w
 async function pollCiUntilTerminal(input: RunPlannerLoopInput): Promise<PollCiForRunResult> {
   const maxPolls = input.maxCiPolls ?? 12;
   const delayMs = input.ciPollDelayMs ?? 10_000;
-  const sleep = input.sleep ?? ((ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const sleep =
+    input.sleep ??
+    ((ms) =>
+      new Promise<void>((resolve) => {
+        setTimeout(resolve, ms);
+      }));
   let last: PollCiForRunResult | undefined;
   for (let attempt = 0; attempt < maxPolls; attempt += 1) {
     last = await pollCiForRun({

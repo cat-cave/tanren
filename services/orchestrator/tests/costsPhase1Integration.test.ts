@@ -86,7 +86,8 @@ describe("phase 1 fixture cost-record persistence", () => {
     });
 
     expect(result.ci.status).toBe("passed");
-    expect(pool.costInserts).toHaveLength(3); // write, check, audit
+    // write, check, audit
+    expect(pool.costInserts).toHaveLength(3);
     // Insert columns: ...billing_mode($14), cost_basis($15) → 0-based 13, 14.
     const billingModes = pool.costInserts.map((row) => String(row.params[13]));
     const costBases = pool.costInserts.map((row) => String(row.params[14]));
@@ -187,8 +188,10 @@ describe("phase 1 fixture cost-record persistence", () => {
     expect(events.events.some((event) => event.eventType === "phase1.fixture.failed")).toBe(false);
     // The writer cost row still lands with cost unknown.
     const writerInsert = pool.costInserts[0];
-    expect(writerInsert?.params[12]).toBeNull(); // cost_usd
-    expect(String(writerInsert?.params[14])).toBe("unknown"); // cost_basis
+    // cost_usd
+    expect(writerInsert?.params[12]).toBeNull();
+    // cost_basis
+    expect(String(writerInsert?.params[14])).toBe("unknown");
   });
 });
 

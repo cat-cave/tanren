@@ -18,11 +18,16 @@ const baselineSha = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 describe("pi writer adapter", () => {
   it("runs pi non-interactively in the workspace, parses git state into a WriterResult", async () => {
     const ssh = new ScriptedSsh([
-      ok(`${baselineSha}\n`), // baseline sha
-      ok("Edited Y.md\nTokens: 1,200 sent, 340 received\n"), // pi run
-      ok(""), // commit
-      ok("diff --git a/Y.md b/Y.md\n+done\n"), // diff
-      ok(`aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\tpi writer\n`), // log
+      // baseline sha
+      ok(`${baselineSha}\n`),
+      // pi run
+      ok("Edited Y.md\nTokens: 1,200 sent, 340 received\n"),
+      // commit
+      ok(""),
+      // diff
+      ok("diff --git a/Y.md b/Y.md\n+done\n"),
+      // log
+      ok(`aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\tpi writer\n`),
     ]);
     const secrets = new InMemorySecretStore();
     await secrets.put({ ref: "credential/pi/dev", value: apiKey });

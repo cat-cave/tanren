@@ -1,3 +1,5 @@
+import { setTimeout as sleepFor } from "node:timers/promises";
+
 export interface GitHubRepository {
   owner: string;
   name: string;
@@ -111,12 +113,11 @@ export class FetchGitHubHttpClient implements GitHubHttpClient {
   private readonly now: () => number;
 
   constructor(options: FetchGitHubHttpClientOptions | string = {}, legacyFetch?: typeof fetch) {
-    // Back-compat: the prior signature was `(apiBaseUrl, fetchImpl)`.
     const opts: FetchGitHubHttpClientOptions =
       typeof options === "string" ? { apiBaseUrl: options, fetchImpl: legacyFetch } : options;
     this.apiBaseUrl = opts.apiBaseUrl ?? "https://api.github.com";
     this.fetchImpl = opts.fetchImpl ?? fetch;
-    this.sleep = opts.sleep ?? ((ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+    this.sleep = opts.sleep ?? ((ms) => sleepFor(ms));
     this.maxRateLimitRetries = opts.maxRateLimitRetries ?? DEFAULT_RATE_LIMIT_RETRIES;
     this.now = opts.now ?? (() => Date.now());
   }

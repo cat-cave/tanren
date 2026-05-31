@@ -69,7 +69,7 @@ export function createDiscoveryRoutes(options: DiscoveryRoutesOptions) {
     }
     try {
       const result = await classifyInsight(
-        { pool: options.pool, ...(answerer !== undefined ? { answerer } : {}) },
+        { pool: options.pool, ...(answerer === undefined ? {} : { answerer }) },
         { projectId: c.req.param("projectId"), insight: parsed.data, actor },
       );
       return c.json(result, 200);
@@ -90,7 +90,7 @@ export function createDiscoveryRoutes(options: DiscoveryRoutesOptions) {
     }
     try {
       const result = await acceptProposals(
-        { pool: options.pool, ...(answerer !== undefined ? { answerer } : {}) },
+        { pool: options.pool, ...(answerer === undefined ? {} : { answerer }) },
         {
           projectId: c.req.param("projectId"),
           insight: parsed.data.insight,

@@ -63,7 +63,7 @@ export function buildForgePrompt(context: ForgeConversationContext): string {
   if (context.toolResults.length > 0) {
     sections.push("", "Read-tool results gathered this exchange:");
     for (const entry of context.toolResults) {
-      const payload = entry.error !== undefined ? `ERROR: ${entry.error}` : JSON.stringify(entry.result);
+      const payload = entry.error === undefined ? JSON.stringify(entry.result) : `ERROR: ${entry.error}`;
       sections.push(`- ${entry.call.tool}(${JSON.stringify(entry.call.args)}) => ${truncate(payload)}`);
     }
     sections.push("", "Decide: request more read tools, or finalize with a ForgeAnswer.");

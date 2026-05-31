@@ -39,7 +39,12 @@ export class RunWorker {
   ) {
     this.concurrency = Math.max(1, options.concurrency ?? DEFAULT_CONCURRENCY);
     this.pollIntervalMs = Math.max(0, options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS);
-    this.sleep = options.sleep ?? ((ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+    this.sleep =
+      options.sleep ??
+      ((ms) =>
+        new Promise<void>((resolve) => {
+          setTimeout(resolve, ms);
+        }));
     this.onResult = options.onResult ?? defaultOnResult;
   }
 

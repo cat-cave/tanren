@@ -230,7 +230,7 @@ async function discoverSshHostFingerprint(host: string, port: number): Promise<s
     const stderr = keyscan.stderr?.trim() ?? "";
     throw new AcceptanceConfigError(
       `ssh-keyscan ${host}:${port} failed (is the stack up? \`just up-dev\` or \`docker compose -f compose.dev.yml up -d\`). ` +
-        (stderr !== "" ? `stderr: ${stderr}` : ""),
+        (stderr === "" ? "" : `stderr: ${stderr}`),
     );
   }
   const keygen = spawnSync("ssh-keygen", ["-lf", "-", "-E", "sha256"], {

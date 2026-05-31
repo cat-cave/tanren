@@ -173,9 +173,12 @@ describe("github issues connector — normalization", () => {
       { number: 3, title: "plain", labels: ["enhancement"] },
     ]);
     const items = await createGitHubIssuesConnector({ secrets, githubHttp: client }).fetch(githubSource);
-    expect(items[0]!.severity).toBe("warn"); // perf
-    expect(items[1]!.severity).toBe("warn"); // warn
-    expect(items[2]!.severity).toBe("info"); // no signal
+    // perf
+    expect(items[0]!.severity).toBe("warn");
+    // warn
+    expect(items[1]!.severity).toBe("warn");
+    // no signal
+    expect(items[2]!.severity).toBe("info");
     // no body field on the issue → normalized to an empty string, not undefined.
     expect(items[0]!.body).toBe("");
   });
@@ -194,9 +197,12 @@ describe("github issues connector — normalization", () => {
     const { client } = recordGitHub([
       { number: 1, title: "keep", labels: [] },
       { number: 2, title: "a PR", pull_request: { url: "x" }, labels: [] },
-      { number: 3, labels: [] }, // no title
-      { title: "no number", labels: [] }, // no number
-      { number: "4", title: "string number", labels: [] }, // number not numeric
+      // no title
+      { number: 3, labels: [] },
+      // no number
+      { title: "no number", labels: [] },
+      // number not numeric
+      { number: "4", title: "string number", labels: [] },
     ]);
     const items = await createGitHubIssuesConnector({ secrets, githubHttp: client }).fetch(githubSource);
     expect(items.map((i) => i.title)).toEqual(["keep"]);
@@ -320,17 +326,21 @@ describe("sentry connector — normalization", () => {
     ]);
     const items = await createSentryConnector({ secrets, sentryHttp: client }).fetch(sentrySource);
     expect(items[0]!.title).toBe("from culprit");
-    expect(items[0]!.severity).toBe("fail"); // fatal
+    // fatal
+    expect(items[0]!.severity).toBe("fail");
     expect(items[1]!.title).toBe("from metadata");
-    expect(items[1]!.severity).toBe("warn"); // warning
+    // warning
+    expect(items[1]!.severity).toBe("warn");
     expect(items[2]!.title).toBe("APP-3");
-    expect(items[2]!.severity).toBe("info"); // debug
+    // debug
+    expect(items[2]!.severity).toBe("info");
   });
 
   it("skips rows lacking a stable id or any title signal", async () => {
     const { client } = recordSentry([
       { title: "no id" },
-      { id: "5" }, // no title signal
+      // no title signal
+      { id: "5" },
       { id: "6", title: "kept" },
     ]);
     const items = await createSentryConnector({ secrets, sentryHttp: client }).fetch(sentrySource);

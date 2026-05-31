@@ -129,7 +129,7 @@ export function createInboxRoutes(options: InboxRoutesOptions) {
   const deps: InboxEngineDeps = {
     pool: options.pool,
     connectors,
-    ...(answerer !== undefined ? { answerer } : {}),
+    ...(answerer === undefined ? {} : { answerer }),
   };
 
   app.get("/:orgId/inbox", async (c) => {

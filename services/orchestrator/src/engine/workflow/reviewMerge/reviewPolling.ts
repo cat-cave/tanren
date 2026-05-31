@@ -94,7 +94,12 @@ export async function pollReviewForRun(input: PollReviewForRunInput): Promise<Po
 
   const maxPolls = input.maxPolls ?? 12;
   const delayMs = input.pollDelayMs ?? 10_000;
-  const sleep = input.sleep ?? ((ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const sleep =
+    input.sleep ??
+    ((ms) =>
+      new Promise<void>((resolve) => {
+        setTimeout(resolve, ms);
+      }));
 
   let last: ReviewVerdictResult = { verdict: "pending" };
   for (let attempt = 0; attempt < maxPolls; attempt += 1) {

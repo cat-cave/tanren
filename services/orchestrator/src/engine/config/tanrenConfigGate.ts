@@ -115,10 +115,10 @@ export function renderTanrenYamlDiff(prev: OrgConfigV1, next: OrgConfigV1): Conf
     }
     if (line.startsWith("#")) {
       out.push({ t: "comment", s: line });
-    } else if (!prevSet.has(line)) {
-      out.push({ t: "add", s: line });
-    } else {
+    } else if (prevSet.has(line)) {
       out.push({ t: "ctx", s: line });
+    } else {
+      out.push({ t: "add", s: line });
     }
   }
   // Trailing prev-only lines with no matching key in next (pure removals).
@@ -175,7 +175,7 @@ export function buildConfigPrTitle(prev: OrgConfigV1, next: OrgConfigV1): string
 
 /** Slugify a head-branch suffix from the change (stable, lowercase, ascii). */
 function changeSlug(prev: OrgConfigV1, next: OrgConfigV1): string {
-  const base = JSON.stringify(next.routing) !== JSON.stringify(prev.routing) ? "route" : "limits";
+  const base = JSON.stringify(next.routing) === JSON.stringify(prev.routing) ? "limits" : "route";
   return `${base}-${Date.now().toString(36)}`;
 }
 

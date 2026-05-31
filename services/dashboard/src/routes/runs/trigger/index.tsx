@@ -68,7 +68,7 @@ export function mountTriggerScreens(app: Hono, deps: ShellDeps): void {
     const client = clientFor(c, deps);
     const result = await client.triggerRun(ctx.org.id, projectId, specId, {
       trigger: "dashboard",
-      ...(branchRaw !== "" ? { branch: branchRaw } : {}),
+      ...(branchRaw === "" ? {} : { branch: branchRaw }),
     });
 
     if (result.ok && result.body !== undefined) {

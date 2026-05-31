@@ -220,14 +220,14 @@ function driveGithub(parts: {
     if (call.url.includes("login/oauth/access_token")) return jsonResponse({ access_token: "ghs_tok" });
     if (call.url.endsWith("/user")) return jsonResponse(parts.user ?? { id: 1, login: "u" });
     if (call.url.endsWith("/user/emails")) {
-      return parts.emailsStatus !== undefined
-        ? new Response("no", { status: parts.emailsStatus })
-        : jsonResponse(parts.emails ?? []);
+      return parts.emailsStatus === undefined
+        ? jsonResponse(parts.emails ?? [])
+        : new Response("no", { status: parts.emailsStatus });
     }
     if (call.url.endsWith("/user/orgs")) {
-      return parts.orgsStatus !== undefined
-        ? new Response("no", { status: parts.orgsStatus })
-        : jsonResponse(parts.orgs ?? []);
+      return parts.orgsStatus === undefined
+        ? jsonResponse(parts.orgs ?? [])
+        : new Response("no", { status: parts.orgsStatus });
     }
     return new Response("not found", { status: 404 });
   });

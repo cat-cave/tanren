@@ -303,7 +303,8 @@ describe("RunnerLifecycle.sweepAbandoned", () => {
       vaultRefs: [],
     });
 
-    nowMs += 60 * 60 * 1000; // 1h
+    // 1h
+    nowMs += 60 * 60 * 1000;
     const reclaimed = await lifecycle.sweepAbandoned(6 * 60 * 60 * 1000);
 
     expect(reclaimed).toEqual([]);

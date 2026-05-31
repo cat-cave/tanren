@@ -153,7 +153,7 @@ export class WorkerPool {
       if (this.orgVisibleRunIds !== null) {
         return single(this.orgVisibleRunIds.has(runId) ? { ok: 1 } : undefined);
       }
-      return single(this.runs.get(runId) !== undefined ? { ok: 1 } : undefined);
+      return single(this.runs.get(runId) === undefined ? undefined : { ok: 1 });
     }
     if (trimmed.startsWith("INSERT INTO runs")) {
       this.runs.set(String(params[0]), {

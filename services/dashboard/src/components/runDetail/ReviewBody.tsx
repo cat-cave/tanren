@@ -115,7 +115,7 @@ export function deferralsFromEvents(events: RunEventRow[]): ReviewDeferral[] {
 function prNumberFromUrl(url: string | null): string {
   if (url === null) return "pr";
   const match = /\/pull\/(\d+)/u.exec(url);
-  return match?.[1] !== undefined ? `pr #${match[1]}` : "pr";
+  return match?.[1] === undefined ? "pr" : `pr #${match[1]}`;
 }
 
 function repoFromUrl(url: string | null): string {
@@ -180,14 +180,31 @@ function PreviewPane(props: { detail: RunDetail; previewUrl: string | null; sett
             mobile
           </button>
         </div>
-        {previewUrl !== null ? (
+        {previewUrl === null ? null : (
           <a class="btn" href={previewUrl} target="_blank" rel="noreferrer" style="font-size:11px">
             open ↗
           </a>
-        ) : null}
+        )}
       </div>
       <div class="frame">
-        {previewUrl !== null ? (
+        {previewUrl === null ? (
+          <div class="placeholder-frame" data-review="preview-empty" style="max-width:none">
+            <div class="pl-title">no live preview for this run</div>
+            <div class="pl-note">
+              This project has no preview-deploy URL configured, or this run has no PR yet. Set a{" "}
+              <code>previewUrlPattern</code> (e.g. <code>https://pr-{"{pr}"}.preview.fly.dev</code>) in{" "}
+              <a href={props.settingsHref}>project settings ↗</a> to see the PR's deploy here.
+              {props.detail.run.prUrl === null ? null : (
+                <>
+                  <br />
+                  <a href={props.detail.run.prUrl} target="_blank" rel="noreferrer">
+                    open the PR on github ↗
+                  </a>
+                </>
+              )}
+            </div>
+          </div>
+        ) : (
           <iframe
             class="preview-iframe"
             data-review="preview-frame"
@@ -198,29 +215,12 @@ function PreviewPane(props: { detail: RunDetail; previewUrl: string | null; sett
             referrerpolicy="no-referrer"
             style="max-width:none"
           ></iframe>
-        ) : (
-          <div class="placeholder-frame" data-review="preview-empty" style="max-width:none">
-            <div class="pl-title">no live preview for this run</div>
-            <div class="pl-note">
-              This project has no preview-deploy URL configured, or this run has no PR yet. Set a{" "}
-              <code>previewUrlPattern</code> (e.g. <code>https://pr-{"{pr}"}.preview.fly.dev</code>) in{" "}
-              <a href={props.settingsHref}>project settings ↗</a> to see the PR's deploy here.
-              {props.detail.run.prUrl !== null ? (
-                <>
-                  <br />
-                  <a href={props.detail.run.prUrl} target="_blank" rel="noreferrer">
-                    open the PR on github ↗
-                  </a>
-                </>
-              ) : null}
-            </div>
-          </div>
         )}
       </div>
       <div class="rd-foot">
-        {previewUrl !== null
-          ? "3 device sizes · sandboxed live preview deploy"
-          : "live preview deploy · configure a preview url to enable"}
+        {previewUrl === null
+          ? "live preview deploy · configure a preview url to enable"
+          : "3 device sizes · sandboxed live preview deploy"}
       </div>
     </div>
   );
@@ -263,11 +263,11 @@ export function ReviewBody(props: ReviewBodyProps) {
             <a class="btn ghost" href={props.runHref}>
               ← back to run
             </a>
-            {detail.run.prUrl !== null ? (
+            {detail.run.prUrl === null ? null : (
               <a class="btn" href={detail.run.prUrl} target="_blank" rel="noreferrer">
                 open pr on github ↗
               </a>
-            ) : null}
+            )}
           </div>
         </div>
 

@@ -130,7 +130,7 @@ export function createDeterministicTriageAnswerer(): TriageAnswerer {
 
       // Otherwise: a fresh candidate awaiting an operator placement call.
       return CandidateTriageOk({
-        dedupe: match !== undefined ? `partial overlap with ${match.specId}` : "no match",
+        dedupe: match === undefined ? "no match" : `partial overlap with ${match.specId}`,
         match: candidate.severity === "fail" ? "new behavior · hardening" : "new behavior",
         placement: "forge proposes a new spec · P1 · placement is your call",
         verdict: "needs_call",

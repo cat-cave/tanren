@@ -65,9 +65,9 @@ export function DagColumnHeaders(props: { headers: ColumnHeader[] }) {
               ? "var(--status-warn, oklch(70% 0.16 75))"
               : h.status === "done"
                 ? "var(--status-ok, oklch(58% 0.18 155))"
-                : h.attention !== null
-                  ? "var(--status-warn, oklch(70% 0.16 75))"
-                  : "var(--fg-3)";
+                : h.attention === null
+                  ? "var(--fg-3)"
+                  : "var(--status-warn, oklch(70% 0.16 75))";
         return (
           <g>
             {h.attention !== null && (
@@ -142,7 +142,7 @@ export function DagNodeRect(props: { placed: PlacedNode }) {
           <animate attributeName="stroke-width" values="1.5;3;1.5" dur="1.6s" repeatCount="indefinite" />
         </rect>
       )}
-      <rect width={w} height={h} rx="2" fill={s.fill} stroke={s.stroke} stroke-width={pulse !== undefined ? 1.5 : 1} />
+      <rect width={w} height={h} rx="2" fill={s.fill} stroke={s.stroke} stroke-width={pulse === undefined ? 1 : 1.5} />
       {node.onCriticalPath && <rect x="0" y="0" width="3" height={h} fill="var(--ember-08)" />}
       <text x={9} y={17} fill={s.text} font-family="var(--font-mono)" font-size="10">
         {label}

@@ -155,7 +155,7 @@ export async function createProject(
       );
     }
   };
-  await (orgId !== null ? runWithOrgScope(pool, orgId, persist) : persist(getSystemPool() ?? pool));
+  await (orgId === null ? persist(getSystemPool() ?? pool) : runWithOrgScope(pool, orgId, persist));
   return project;
 }
 

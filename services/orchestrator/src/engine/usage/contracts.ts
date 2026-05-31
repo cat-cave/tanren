@@ -23,7 +23,8 @@ import type { TokenUsage } from "../providers/types.js";
 export interface SubscriptionWindow {
   slot: "primary" | "secondary" | "tertiary";
   usedPercent: number;
-  resetsAt: string; // ISO
+  // ISO
+  resetsAt: string;
   windowMinutes: number;
   resetDescription: string;
 }
@@ -31,10 +32,12 @@ export interface SubscriptionWindow {
 // The live subscription-window state for one provider/account.
 export interface WindowUsage {
   provider: string;
-  windows: SubscriptionWindow[]; // only non-null slots
+  // only non-null slots
+  windows: SubscriptionWindow[];
   creditsRemaining: number | null;
   accountEmail: string | null;
-  source: string; // e.g. "codex-cli"
+  // e.g. "codex-cli"
+  source: string;
   capturedAt: string;
 }
 
@@ -56,8 +59,10 @@ export interface CcusageModelUsage {
 
 export interface CcusageAccounting {
   cli: string;
-  totals: TokenUsage; // reuse the disjoint TokenUsage
-  costUsd: number | null; // ccusage costUSD; null if ccusage reports 0/none for a subscription
+  // reuse the disjoint TokenUsage
+  totals: TokenUsage;
+  // ccusage costUSD; null if ccusage reports 0/none for a subscription
+  costUsd: number | null;
   perModel: CcusageModelUsage[];
   capturedAt: string;
 }

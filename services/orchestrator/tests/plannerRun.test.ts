@@ -123,7 +123,8 @@ describe("runPlannerLoopWorkflow", () => {
 
   it("halts on window pressure without publishing a PR", async () => {
     const { ctx, pool, events, secrets, allocator, ssh } = await setup();
-    const github = new ScriptedGitHubHttp([]); // any request would throw
+    // any request would throw
+    const github = new ScriptedGitHubHttp([]);
 
     const result = await runPlannerLoopWorkflow({
       pool: pool.asPgPool(),
@@ -240,7 +241,8 @@ describe("runPlannerLoopWorkflow", () => {
     // Default fixture SSH returns empty output for every command, so the config
     // read yields no tanren-ci.yml → the resolver returns undefined → the
     // bootstrap step applies DEFAULT_BOOTSTRAP_COMMAND (command left undefined).
-    const ssh = new ConfigReadingSsh(""); // no config file present
+    // no config file present
+    const ssh = new ConfigReadingSsh("");
     const bootstrapCalls: Array<string | undefined> = [];
 
     await runPlannerLoopWorkflow({

@@ -136,7 +136,12 @@ export class JobReaper {
     options: JobReaperOptions = {},
   ) {
     this.intervalMs = Math.max(0, options.intervalMs ?? DEFAULT_REAP_INTERVAL_MS);
-    this.sleep = options.sleep ?? ((ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+    this.sleep =
+      options.sleep ??
+      ((ms) =>
+        new Promise<void>((resolve) => {
+          setTimeout(resolve, ms);
+        }));
     this.onPass = options.onPass ?? defaultOnPass;
   }
 

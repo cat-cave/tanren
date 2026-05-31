@@ -225,7 +225,9 @@ describe("JobReaper loop lifecycle", () => {
     await jobQueue.enqueue({ runId: "run_1", taskKind: "plan", payload: {}, maxAttempts: 1 });
     await jobQueue.claim("plan", { leaseMs: 1 });
     // Ensure the 1ms lease is expired before the reaper's first pass.
-    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 10);
+    });
 
     const passes: number[] = [];
     const gate = gatedSleep();
@@ -254,7 +256,8 @@ describe("JobReaper loop lifecycle", () => {
       { intervalMs: 0, sleep: gate.sleep, onPass: () => (passes += 1) },
     );
     reaper.start();
-    reaper.start(); // no-op: must not double the loop
+    // no-op: must not double the loop
+    reaper.start();
     // With a SINGLE loop, exactly one pass runs before parking. A doubled loop
     // would run two passes before either parked.
     await vi.waitFor(() => expect(gate.parked).toBe(true));
@@ -308,7 +311,9 @@ describe("JobReaper loop lifecycle", () => {
     await jobQueue.claim("plan", { leaseMs: 1 });
     // Ensure the 1ms lease is unambiguously expired before the reaper's first
     // pass, so the dead-letter (and thus the default log) is deterministic.
-    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 10);
+    });
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
 
     // No onPass override → exercise the DEFAULT onPass. Pass 1 dead-letters the

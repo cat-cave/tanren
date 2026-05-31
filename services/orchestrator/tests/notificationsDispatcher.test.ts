@@ -79,7 +79,8 @@ describe("NotificationDispatcher", () => {
     const dispatcher = new NotificationDispatcher({
       query: client as unknown as pg.Pool,
       channels,
-      now: () => new Date("2026-01-05T12:00:00Z"), // Monday
+      // Monday
+      now: () => new Date("2026-01-05T12:00:00Z"),
     });
 
     const event: TypedEvent = {
@@ -141,7 +142,8 @@ describe("NotificationDispatcher", () => {
     const dispatcher = new NotificationDispatcher({
       query: client as unknown as pg.Pool,
       channels: baseRegistry({ ntfy }),
-      now: () => new Date("2026-01-03T12:00:00Z"), // Saturday
+      // Saturday
+      now: () => new Date("2026-01-03T12:00:00Z"),
     });
     await dispatcher.onEvent(
       { eventType: "run.failed", payload: { status: "failed", message: "x" } },

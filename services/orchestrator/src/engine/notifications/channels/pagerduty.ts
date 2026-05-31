@@ -102,7 +102,7 @@ function buildEvent(routingKey: string, payload: NotificationPayload): PagerDuty
       severity: PD_SEVERITY_BY_SEVERITY[payload.severity],
       custom_details: {
         body: payload.body,
-        ...(payload.tags !== undefined ? { tags: payload.tags } : {}),
+        ...(payload.tags === undefined ? {} : { tags: payload.tags }),
       },
     },
   };

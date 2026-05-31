@@ -36,12 +36,18 @@ describe("Claude writer adapter", () => {
       },
     });
     const ssh = new ScriptedSsh([
-      ok(""), // materialize auth
-      ok(`${baselineSha}\n`), // capture baseline sha
-      ok(`${usageLine}\n`), // claude run
-      ok(""), // commit
-      ok("diff --git a/X.md b/X.md\n+done\n"), // diff
-      ok(""), // log
+      // materialize auth
+      ok(""),
+      // capture baseline sha
+      ok(`${baselineSha}\n`),
+      // claude run
+      ok(`${usageLine}\n`),
+      // commit
+      ok(""),
+      // diff
+      ok("diff --git a/X.md b/X.md\n+done\n"),
+      // log
+      ok(""),
     ]);
     const secrets = new InMemorySecretStore();
     await secrets.put({ ref: "credential/claude/dev", value: authJson });

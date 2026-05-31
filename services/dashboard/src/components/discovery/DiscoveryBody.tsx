@@ -243,8 +243,8 @@ export function DiscoveryBody(props: DiscoveryBodyProps) {
         }
       />
       <div class="page-body">
-        {props.error !== undefined ? <div class="form-error">{props.error}</div> : null}
-        {props.accepted !== undefined ? (
+        {props.error === undefined ? null : <div class="form-error">{props.error}</div>}
+        {props.accepted === undefined ? null : (
           <div class="insight-banner" style="border-left-color:var(--status-ok,oklch(58% 0.18 155));">
             <div class="glyph" style="color:var(--status-ok,oklch(58% 0.18 155));">
               ✓
@@ -254,7 +254,7 @@ export function DiscoveryBody(props: DiscoveryBodyProps) {
               · provenance stamped on each spec. <a href={`/projects/${project.projectId}?mode=dag`}>view the dag ↗</a>
             </div>
           </div>
-        ) : null}
+        )}
 
         <VariantTabs project={project} active={variant} />
         <InsightBanner insight={insight} variant={variant} />
@@ -284,7 +284,7 @@ export function DiscoveryBody(props: DiscoveryBodyProps) {
           </div>
         </form>
 
-        {props.result !== undefined ? <ClassificationPanel {...props} result={props.result} /> : null}
+        {props.result === undefined ? null : <ClassificationPanel {...props} result={props.result} />}
       </div>
     </div>
   );

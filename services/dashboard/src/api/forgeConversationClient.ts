@@ -136,9 +136,9 @@ export abstract class OrchestratorForgeConversationClient extends OrchestratorRe
     const body =
       scope.runId !== undefined && scope.projectId !== undefined
         ? { scope: "run", projectId: scope.projectId, runId: scope.runId }
-        : scope.projectId !== undefined
-          ? { scope: "project", projectId: scope.projectId }
-          : { scope: "org" };
+        : scope.projectId === undefined
+          ? { scope: "org" }
+          : { scope: "project", projectId: scope.projectId };
     const thread = await this.sendJson<{ id?: string }>(
       "POST",
       `/orgs/${encodeURIComponent(orgId)}/forge/threads`,

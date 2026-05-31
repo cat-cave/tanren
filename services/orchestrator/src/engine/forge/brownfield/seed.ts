@@ -80,7 +80,7 @@ export async function seedDagFromReconAndIssues(pool: pg.Pool, input: SeedDagInp
       {
         projectId: input.projectId,
         title: issue.title,
-        description: issue.body !== "" ? issue.body : `Seeded from GitHub issue ${issue.externalId}.`,
+        description: issue.body === "" ? `Seeded from GitHub issue ${issue.externalId}.` : issue.body,
         acceptanceCriteria: [`given ${issue.externalId}, when addressed, then the issue is resolved`],
       },
       input.actor,

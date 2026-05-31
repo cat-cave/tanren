@@ -53,13 +53,15 @@ const SEVERITY_OVERRIDES: Partial<Record<EventName, Severity>> = {
   "checker.started": "info",
   "checker.completed": "info",
   "checker.failed": "warn",
-  "checker.verdict": "info", // dispatcher promotes to warn when passed=false
+  // dispatcher promotes to warn when passed=false
+  "checker.verdict": "info",
 
   // Auditor
   "auditor.started": "info",
   "auditor.completed": "info",
   "auditor.failed": "warn",
-  "auditor.verdict": "info", // dispatcher promotes to warn when passed=false
+  // dispatcher promotes to warn when passed=false
+  "auditor.verdict": "info",
 
   // Runner / allocator
   "runner.allocated": "info",

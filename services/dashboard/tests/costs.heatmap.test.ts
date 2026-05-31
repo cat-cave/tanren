@@ -77,9 +77,12 @@ describe("buildHeatmap — only subscription records, bucketed by window", () =>
       { now: NOW },
     );
     const last = HEATMAP_DAYS - 1;
-    expect(matrix.rows[0]?.cells[last]?.tokens).toBe(100); // night
-    expect(matrix.rows[2]?.cells[last]?.tokens).toBe(400); // midday
-    expect(matrix.rows[4]?.cells[last]?.tokens).toBe(200); // evening
+    // night
+    expect(matrix.rows[0]?.cells[last]?.tokens).toBe(100);
+    // midday
+    expect(matrix.rows[2]?.cells[last]?.tokens).toBe(400);
+    // evening
+    expect(matrix.rows[4]?.cells[last]?.tokens).toBe(200);
     expect(matrix.records).toBe(3);
     expect(matrix.totalTokens).toBe(700);
   });
@@ -105,8 +108,10 @@ describe("buildHeatmap — fill normalization + avg-fill", () => {
   it("normalizes fill against the busiest cell (peak → 1.0)", () => {
     const matrix = buildHeatmap(
       [
-        rec({ recordedAt: "2026-05-28T12:00:00.000Z", totalTokens: 1000 }), // peak (midday)
-        rec({ recordedAt: "2026-05-28T02:00:00.000Z", totalTokens: 250 }), // night = 1/4 fill
+        // peak (midday)
+        rec({ recordedAt: "2026-05-28T12:00:00.000Z", totalTokens: 1000 }),
+        // night = 1/4 fill
+        rec({ recordedAt: "2026-05-28T02:00:00.000Z", totalTokens: 250 }),
       ],
       { now: NOW },
     );

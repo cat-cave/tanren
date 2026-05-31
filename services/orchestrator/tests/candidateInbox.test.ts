@@ -435,8 +435,10 @@ describe("sentry connector (mocked)", () => {
   it("maps sentry level to severity (error→fail, warning→warn, else→info)", async () => {
     const { client } = fakeSentry(sentryIssues);
     const items = await createSentryConnector({ secrets, sentryHttp: client }).fetch(sentrySource);
-    expect(items[0]?.severity).toBe("fail"); // error
-    expect(items[1]?.severity).toBe("warn"); // warning
+    // error
+    expect(items[0]?.severity).toBe("fail");
+    // warning
+    expect(items[1]?.severity).toBe("warn");
   });
 
   it("forwards an optional level filter into the query", async () => {

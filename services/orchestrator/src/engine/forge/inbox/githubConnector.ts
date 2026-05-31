@@ -76,8 +76,8 @@ export function createGitHubIssuesConnector(deps: GitHubConnectorDeps): SourceCo
       const config = GitHubIssuesConfig.parse(source.config);
       const resolved = await resolveGithubToken({
         secrets: deps.secrets,
-        ...(deps.installation !== undefined ? { installation: deps.installation } : {}),
-        ...(config.staticRef !== undefined ? { staticRef: config.staticRef } : {}),
+        ...(deps.installation === undefined ? {} : { installation: deps.installation }),
+        ...(config.staticRef === undefined ? {} : { staticRef: config.staticRef }),
         minter: deps.minter ?? new GithubAppTokenMinter({ secrets: deps.secrets }),
       });
 

@@ -85,7 +85,7 @@ export function buildProjectDag(input: BuildDagInput): ProjectDag {
     const run = runsBySpec.get(spec.specId);
     const status = statusForSpec(spec.status, run);
     const mId = input.milestoneBySpec?.get(spec.specId) ?? null;
-    const milestone = mId !== null ? (milestoneById.get(mId)?.label ?? "—") : "—";
+    const milestone = mId === null ? "—" : (milestoneById.get(mId)?.label ?? "—");
     return {
       id: spec.specId,
       title: spec.title,

@@ -190,6 +190,7 @@ describe("computeReviewStall", () => {
     expect(result).toHaveLength(1);
     const payload = result[0]!.payload as Extract<(typeof result)[0]["payload"], { kind: "review_stall" }>;
     expect(payload.phase).toBe("changes_requested");
-    expect(result[0]!.severity).toBe("warn"); // 96h >= 2 × 48h threshold.
+    // 96h >= 2 × 48h threshold.
+    expect(result[0]!.severity).toBe("warn");
   });
 });

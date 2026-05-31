@@ -192,7 +192,8 @@ describe("brownfield · config-injection PR (step 3)", () => {
       }),
     });
     const html = await res.text();
-    expect(html).toContain("add"); // "review what we'll add" (apostrophe HTML-escaped)
+    // "review what we'll add" (apostrophe HTML-escaped)
+    expect(html).toContain("add");
     expect(html).toContain(".tanren/PROJECT.md");
     expect(html).toContain(".github/workflows/tanren-ci.yml");
     expect(html).toContain('name="keep"');

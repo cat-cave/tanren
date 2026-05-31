@@ -184,7 +184,7 @@ export class RunRoutesPool {
       project_id: input.project_id ?? null,
       org_id:
         input.org_id ??
-        (input.project_id !== undefined ? this.projects.get(input.project_id)?.org_id : undefined) ??
+        (input.project_id === undefined ? undefined : this.projects.get(input.project_id)?.org_id) ??
         DEFAULT_ORG_ID,
       event_type: input.event_type,
       payload: input.payload ?? {},

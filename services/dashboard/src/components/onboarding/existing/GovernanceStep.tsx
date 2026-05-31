@@ -89,7 +89,22 @@ export function GovernanceStep(props: {
         </form>
 
         <div style="display:flex;flex-direction:column;gap:12px">
-          {props.saved !== undefined ? (
+          {props.saved === undefined ? (
+            <div class="col-card" style="gap:8px">
+              <div class="h">
+                <span>
+                  external-push policy <em>· per posture</em>
+                </span>
+              </div>
+              <div class="mono-dim" style="line-height:1.6">
+                strict → external pushes warned + auto-spec'd · force-push blocked
+                <br />
+                open → external pushes coexist · tracked, never blocked
+                <br />
+                audit-only → external pushes observed · tanren opens no PRs
+              </div>
+            </div>
+          ) : (
             <>
               <div class="alert ok">
                 Posture saved · <b>{props.saved.governancePosture}</b>.
@@ -120,21 +135,6 @@ export function GovernanceStep(props: {
                 </div>
               </div>
             </>
-          ) : (
-            <div class="col-card" style="gap:8px">
-              <div class="h">
-                <span>
-                  external-push policy <em>· per posture</em>
-                </span>
-              </div>
-              <div class="mono-dim" style="line-height:1.6">
-                strict → external pushes warned + auto-spec'd · force-push blocked
-                <br />
-                open → external pushes coexist · tracked, never blocked
-                <br />
-                audit-only → external pushes observed · tanren opens no PRs
-              </div>
-            </div>
           )}
         </div>
       </div>

@@ -68,7 +68,8 @@ describe("GithubAppTokenMinter", () => {
 
     expect(first).toBe("ghs_installation");
     expect(second).toBe("ghs_installation");
-    expect(calls).toBe(1); // second served from cache
+    // second served from cache
+    expect(calls).toBe(1);
   });
 
   it("re-mints on refresh and when the cached token is within the expiry window", async () => {

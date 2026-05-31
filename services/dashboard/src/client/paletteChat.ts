@@ -232,10 +232,10 @@ function firstActionCard(answer: ForgeAnswer): { title: string; action: ForgeAct
 
 function buildCard(card: { title: string; action: ForgeAction }, handlers: ChatHandlers): HTMLElement {
   const route = routeForAction(card.action);
-  const node = el("div", route !== undefined ? "fc-card" : "fc-card inert");
-  node.append(el("div", "lbl", route !== undefined ? "▸ auto-navigate" : "▸ action (coming soon)"));
+  const node = el("div", route === undefined ? "fc-card inert" : "fc-card");
+  node.append(el("div", "lbl", route === undefined ? "▸ action (coming soon)" : "▸ auto-navigate"));
   node.append(el("div", "t", card.title));
-  node.append(el("div", "go", route !== undefined ? "↗" : "·"));
+  node.append(el("div", "go", route === undefined ? "·" : "↗"));
   if (route !== undefined) {
     node.addEventListener("click", () => handlers.onNavigate(route));
   }

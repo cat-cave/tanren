@@ -26,7 +26,8 @@ function interfaceKey(i: CaptureInterface): string {
 function mergeByKey<T>(existing: readonly T[], delta: readonly T[], key: (item: T) => string): T[] {
   const seen = new Map<string, T>();
   for (const item of existing) seen.set(key(item), item);
-  for (const item of delta) seen.set(key(item), item); // delta overrides on key collision
+  // delta overrides on key collision
+  for (const item of delta) seen.set(key(item), item);
   return [...seen.values()];
 }
 

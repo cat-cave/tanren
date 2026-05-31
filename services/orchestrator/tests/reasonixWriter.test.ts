@@ -22,14 +22,19 @@ const baselineSha = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 describe("reasonix writer adapter", () => {
   it("runs reasonix non-interactively in the workspace, parses git state into a WriterResult", async () => {
     const ssh = new ScriptedSsh([
-      ok(`${baselineSha}\n`), // baseline sha
+      // baseline sha
+      ok(`${baselineSha}\n`),
       ok(
         '{"type":"start"}\n' +
           '{"type":"done","usage":{"prompt_tokens":1500,"prompt_cache_hit_tokens":300,"completion_tokens":340,"reasoning_tokens":60}}\n',
-      ), // reasonix run (NDJSON)
-      ok(""), // commit
-      ok("diff --git a/Y.md b/Y.md\n+done\n"), // diff
-      ok(`aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\treasonix writer\n`), // log
+        // reasonix run (NDJSON)
+      ),
+      // commit
+      ok(""),
+      // diff
+      ok("diff --git a/Y.md b/Y.md\n+done\n"),
+      // log
+      ok(`aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\treasonix writer\n`),
     ]);
     const secrets = new InMemorySecretStore();
     await secrets.put({ ref: "credential/reasonix/dev", value: apiKey });

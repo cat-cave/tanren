@@ -93,7 +93,12 @@ export class HetznerAllocator implements Allocator {
       throw new Error("HetznerAllocator requires a pinned hostKeyFingerprint");
     }
     this.client = options.client ?? fetchHetznerClient(options.apiToken);
-    this.sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+    this.sleep =
+      options.sleep ??
+      ((ms) =>
+        new Promise((resolve) => {
+          setTimeout(resolve, ms);
+        }));
   }
 
   async allocate(request: AllocationRequest): Promise<RunnerAllocation> {

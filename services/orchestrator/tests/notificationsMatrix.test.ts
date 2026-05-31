@@ -159,7 +159,8 @@ describe("evaluateMatrix", () => {
       routes: [orgRoute, userRoute],
       actorUserId: "user_1",
       eventName: "run.failed",
-      effectiveSeverity: "warn", // below the user route's fail floor, above org's info floor
+      // below the user route's fail floor, above org's info floor
+      effectiveSeverity: "warn",
     });
     expect(matches).toEqual([]);
   });

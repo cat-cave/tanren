@@ -67,7 +67,7 @@ function ChannelsColumn(props: { targets: NotificationTarget[] }) {
             <div>
               <div class="name">{channel.label}</div>
               <div class="desc">{configured ? target?.destination : "not configured"}</div>
-              {!channel.wired ? <div class="unwired">configured but not yet wired (v0)</div> : null}
+              {channel.wired ? null : <div class="unwired">configured but not yet wired (v0)</div>}
             </div>
             <PhaseBadge phase={channel.phase} />
             <span class="mono-dim">{configured && target?.weekendMute ? "wknd-mute" : ""}</span>

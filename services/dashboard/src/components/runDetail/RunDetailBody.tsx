@@ -172,19 +172,19 @@ function TrajectoryRow(props: { moment: TrajectoryMoment; index: number; selecte
       <div class="body-cell">
         <div class={`ph ${moment.state}`}>
           {moment.phase}
-          {moment.duration !== "" ? ` · ${moment.duration}` : ""}
+          {moment.duration === "" ? "" : ` · ${moment.duration}`}
         </div>
         <div class="t">{moment.title}</div>
-        {moment.model !== null ? (
+        {moment.model === null ? null : (
           <div class="io">
             {moment.cli} · {moment.model}
           </div>
-        ) : null}
-        {moment.failureKind !== null ? (
+        )}
+        {moment.failureKind === null ? null : (
           <div class="io" style="color: var(--status-fail)">
             {moment.failureKind}
           </div>
-        ) : null}
+        )}
       </div>
     </div>
   );
@@ -300,7 +300,7 @@ function Reasoning(props: RunDetailBodyProps & { selectedTaskId: string | null }
                     <div class="name">
                       <b>{tool.name}</b> <span class="arg">{tool.arg}</span>
                     </div>
-                    {tool.output !== "" ? <div class="out">↑ {tool.output}</div> : null}
+                    {tool.output === "" ? null : <div class="out">↑ {tool.output}</div>}
                   </div>
                 </div>
               ))
@@ -378,22 +378,22 @@ function StatusChips(props: { detail: RunDetail }) {
     <div class="rd-chips" data-rd="chips">
       <span class={`rd-chip ${statusClass}`} data-rd="run-status">
         <span class="d"></span>run · {detail.run.status}
-        {detail.run.outcome !== null ? ` · ${detail.run.outcome}` : ""}
+        {detail.run.outcome === null ? "" : ` · ${detail.run.outcome}`}
       </span>
       <span class={`rd-chip ${ciState}`}>
         <span class="d"></span>
         {ciLabel}
       </span>
-      {detail.run.prUrl !== null ? (
+      {detail.run.prUrl === null ? (
+        <span class="rd-chip">
+          <span class="d"></span>no pr yet
+        </span>
+      ) : (
         <span class="rd-chip">
           <span class="d"></span>pr ·{" "}
           <a href={detail.run.prUrl} target="_blank" rel="noreferrer">
             {detail.run.prUrl} ↗
           </a>
-        </span>
-      ) : (
-        <span class="rd-chip">
-          <span class="d"></span>no pr yet
         </span>
       )}
     </div>
@@ -411,7 +411,7 @@ function FailureDiagnostics(props: { detail: RunDetail }) {
         {failed.map((t) => (
           <div>
             · {t.kind} <b>{t.taskId}</b> — {t.outcome ?? t.status}
-            {t.failureKind !== null ? ` (${t.failureKind})` : ""}
+            {t.failureKind === null ? "" : ` (${t.failureKind})`}
             {" · attempt "}
             {t.attempt + 1}
           </div>

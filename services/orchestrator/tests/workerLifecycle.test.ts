@@ -87,7 +87,9 @@ async function peakSlotCount(): Promise<number> {
   // about the worker's slots here.
   const reaperStopped = reaper.stop();
   // Let the slots spin up and reach their first concurrent park.
-  await new Promise<void>((resolve) => setTimeout(resolve, 25));
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 25);
+  });
   await Promise.all([worker.stop(), reaperStopped]);
   return peak;
 }
@@ -237,7 +239,9 @@ describe("startRunWorker — dep wiring (lifecycle.ts)", () => {
     // its drain does not wait the default 30s inter-pass sleep.
     const reaperStopped = reaper.stop();
     // Wait for the one job to be claimed (via the injected client) + denied.
-    await new Promise<void>((resolve) => setTimeout(resolve, 30));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 30);
+    });
     await Promise.all([worker.stop(), reaperStopped]);
 
     // The injected claimClient was used (not the default direct DB-CAS).

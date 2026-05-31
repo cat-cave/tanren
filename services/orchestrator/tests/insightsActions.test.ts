@@ -212,6 +212,7 @@ describe("acknowledge action routing", () => {
     expect(result.insightId).toBe("insight_route_1");
     expect(result.persisted).toBe(true);
     const acked = await acknowledgeInsight(pool(client), "insight_route_1", ACTOR.userId, NOW);
-    expect(acked).toBe(false); // already acked
+    // already acked
+    expect(acked).toBe(false);
   });
 });

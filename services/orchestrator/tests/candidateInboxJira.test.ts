@@ -173,7 +173,8 @@ const jiraIssues = [
     key: "CAT-13",
     fields: {
       summary: "CSV export for reports",
-      description: "cfo wants csv", // plain-string description (older configs)
+      // plain-string description (older configs)
+      description: "cfo wants csv",
       priority: { name: "Medium" },
     },
   },
@@ -214,9 +215,12 @@ describe("jira connector (mocked)", () => {
   it("maps jira priority to severity (highest/high→fail, medium→warn, else→info)", async () => {
     const { client } = fakeJira(jiraIssues);
     const items = await createJiraConnector({ secrets, jiraHttp: client }).fetch(jiraSource);
-    expect(items[0]?.severity).toBe("fail"); // Highest
-    expect(items[1]?.severity).toBe("warn"); // Medium
-    expect(items[2]?.severity).toBe("info"); // Low
+    // Highest
+    expect(items[0]?.severity).toBe("fail");
+    // Medium
+    expect(items[1]?.severity).toBe("warn");
+    // Low
+    expect(items[2]?.severity).toBe("info");
   });
 
   it("uses an explicit jql when provided (overrides project/status)", async () => {

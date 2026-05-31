@@ -101,7 +101,7 @@ export async function deriveFromCapture(
     orgId: input.orgId,
     capture: InterviewCapture.parse(input.capture),
     actor: input.actor,
-    ...(input.repoUrl !== undefined ? { repoUrl: input.repoUrl } : {}),
+    ...(input.repoUrl === undefined ? {} : { repoUrl: input.repoUrl }),
   });
 }
 

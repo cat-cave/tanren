@@ -330,24 +330,24 @@ function RecoveryAck(props: {
                 {props.action === "replan_with_steering" && (
                   <>
                     Your steering note was appended to the spec and a fresh planner run was queued
-                    {replanRunId !== undefined ? (
+                    {replanRunId === undefined ? null : (
                       <>
                         {" "}
                         (<a href={`/runs/${encodeURIComponent(replanRunId)}`}>{replanRunId} ↗</a>)
                       </>
-                    ) : null}
+                    )}
                     . The re-plan runs the P2A-0012 loop to completion.
                   </>
                 )}
                 {props.action === "rollback_to_commit" && (
                   <>
                     The workspace was rolled back to the known-good commit and a fresh run was queued
-                    {replanRunId !== undefined ? (
+                    {replanRunId === undefined ? null : (
                       <>
                         {" "}
                         (<a href={`/runs/${encodeURIComponent(replanRunId)}`}>{replanRunId} ↗</a>)
                       </>
-                    ) : null}
+                    )}
                     .
                   </>
                 )}

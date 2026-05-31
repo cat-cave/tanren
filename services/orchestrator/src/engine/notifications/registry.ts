@@ -61,19 +61,19 @@ function buildChannel(kind: ChannelKind, deps: ChannelRegistryDeps): Notificatio
     case "github_checks":
       // github_checks needs a secret store to resolve tokens; without it we
       // cannot mint/read credentials, so fall back to a stub.
-      return deps.github !== undefined ? new GithubChecksChannel(deps.github) : new StubChannel(kind);
+      return deps.github === undefined ? new StubChannel(kind) : new GithubChecksChannel(deps.github);
     case "teams":
-      return deps.teams !== undefined ? new TeamsChannel(deps.teams) : new StubChannel(kind);
+      return deps.teams === undefined ? new StubChannel(kind) : new TeamsChannel(deps.teams);
     case "discord":
-      return deps.discord !== undefined ? new DiscordChannel(deps.discord) : new StubChannel(kind);
+      return deps.discord === undefined ? new StubChannel(kind) : new DiscordChannel(deps.discord);
     case "webhook":
-      return deps.webhook !== undefined ? new WebhookChannel(deps.webhook) : new StubChannel(kind);
+      return deps.webhook === undefined ? new StubChannel(kind) : new WebhookChannel(deps.webhook);
     case "email":
-      return deps.email !== undefined ? new EmailChannel(deps.email) : new StubChannel(kind);
+      return deps.email === undefined ? new StubChannel(kind) : new EmailChannel(deps.email);
     case "twilio":
-      return deps.twilio !== undefined ? new TwilioChannel(deps.twilio) : new StubChannel(kind);
+      return deps.twilio === undefined ? new StubChannel(kind) : new TwilioChannel(deps.twilio);
     case "pagerduty":
-      return deps.pagerduty !== undefined ? new PagerDutyChannel(deps.pagerduty) : new StubChannel(kind);
+      return deps.pagerduty === undefined ? new StubChannel(kind) : new PagerDutyChannel(deps.pagerduty);
     default:
       return new StubChannel(kind);
   }

@@ -108,7 +108,7 @@ export function createBrownfieldFullTrackRoutes(options: BrownfieldFullTrackOpti
       const { index, report } = await runRecon(
         {
           reader,
-          ...(options.reconAnswererFactory !== undefined ? { answerer: options.reconAnswererFactory() } : {}),
+          ...(options.reconAnswererFactory === undefined ? {} : { answerer: options.reconAnswererFactory() }),
         },
         parsed.data.repoUrl,
       );
@@ -245,8 +245,8 @@ async function resolveTokenFor(options: BrownfieldFullTrackOptions, orgId: strin
   const installation = await loadOrgGithubAppInstallation(options.pool, orgId);
   return resolveGithubToken({
     secrets: options.secrets,
-    ...(installation !== undefined ? { installation } : {}),
-    ...(options.githubAppMinter !== undefined ? { minter: options.githubAppMinter } : {}),
+    ...(installation === undefined ? {} : { installation }),
+    ...(options.githubAppMinter === undefined ? {} : { minter: options.githubAppMinter }),
   });
 }
 
@@ -262,8 +262,8 @@ async function fetchIssuesFor(
   const connector = createGitHubIssuesConnector({
     secrets: options.secrets,
     githubHttp: options.githubHttp,
-    ...(installation !== undefined ? { installation } : {}),
-    ...(options.githubAppMinter !== undefined ? { minter: options.githubAppMinter } : {}),
+    ...(installation === undefined ? {} : { installation }),
+    ...(options.githubAppMinter === undefined ? {} : { minter: options.githubAppMinter }),
   });
   return connector.fetch({
     id: "brownfield-recon",

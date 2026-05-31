@@ -44,8 +44,8 @@ export class WebhookChannel implements NotificationChannel {
       body: payload.body,
       severity: payload.severity,
       eventName: payload.eventName,
-      ...(payload.url !== undefined ? { url: payload.url } : {}),
-      ...(payload.tags !== undefined ? { tags: payload.tags } : {}),
+      ...(payload.url === undefined ? {} : { url: payload.url }),
+      ...(payload.tags === undefined ? {} : { tags: payload.tags }),
     });
     const response = await this.fetchImpl(url, {
       method: "POST",

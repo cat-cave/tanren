@@ -85,7 +85,8 @@ describe("GithubChecksChannel", () => {
     expect(post.path).toBe("/repos/cat-cave/tanren/statuses/deadbeef");
     expect(post.token).toBe("static-token-123");
     const body = post.body as Record<string, unknown>;
-    expect(body.state).toBe("error"); // fail -> error
+    // fail -> error
+    expect(body.state).toBe("error");
     expect(body.context).toBe("tanren");
     expect(body.target_url).toBe("https://tanren.example/runs/run_1");
   });
@@ -202,12 +203,18 @@ describe("GithubChecksChannel", () => {
 
   it("throws when the PR response carries no head sha", async () => {
     const cases: Array<unknown> = [
-      { head: { sha: "" } }, // empty sha rejected
-      { head: {} }, // missing sha
-      { head: null }, // null head
-      {}, // missing head
-      [1, 2, 3], // array body
-      "not-an-object", // primitive body
+      // empty sha rejected
+      { head: { sha: "" } },
+      // missing sha
+      { head: {} },
+      // null head
+      { head: null },
+      // missing head
+      {},
+      // array body
+      [1, 2, 3],
+      // primitive body
+      "not-an-object",
     ];
     for (const prBody of cases) {
       const http = new FakeGitHubHttp((req) => {

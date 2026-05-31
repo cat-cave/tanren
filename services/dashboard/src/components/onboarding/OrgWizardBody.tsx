@@ -70,7 +70,7 @@ function StackHealth(props: { report: DoctorReport | undefined }) {
               {check.status === "ok" ? "✓" : check.status === "warn" ? "!" : "×"}
             </span>
             {check.name} · {check.detail}
-            {check.latencyMs !== null ? ` · ${check.latencyMs}ms` : ""}
+            {check.latencyMs === null ? "" : ` · ${check.latencyMs}ms`}
           </div>
         ))}
       </div>
@@ -140,22 +140,22 @@ function Step1LinkOrg(props: {
             <div style="flex:1">
               authorize <b>tanren</b> on {props.orgLogin} · one-time · editable later
             </div>
-            {props.appInstallHref !== undefined ? (
-              <a class="btn primary" href={props.appInstallHref}>
-                install github app ↗
-              </a>
-            ) : (
+            {props.appInstallHref === undefined ? (
               <a class="btn primary" href={props.githubAppUrl} target="_blank" rel="noreferrer">
                 open github ↗
               </a>
+            ) : (
+              <a class="btn primary" href={props.appInstallHref}>
+                install github app ↗
+              </a>
             )}
           </div>
-          {props.appInstallHref !== undefined ? (
+          {props.appInstallHref === undefined ? null : (
             <div class="sub" style="margin-top:6px">
               installs the tanren github app on {props.orgLogin} · uses auto-rotating installation tokens (no static pat
               to manage).
             </div>
-          ) : null}
+          )}
           <div class="sunken">
             <div class="section-label" style="margin-bottom:6px">
               what tanren will ask for

@@ -396,8 +396,10 @@ function tokenUsageFromRecord(record: Record<string, unknown>): TokenUsage | und
   const cacheCreationTokens =
     numberField(record, ["cache_creation_input_tokens", "cacheCreationTokens", "cache_creation_tokens"]) ?? 0;
   const reasoningOutputTokens = numberField(record, ["reasoning_output_tokens", "reasoningOutputTokens"]) ?? 0;
-  const inputTokens = Math.max(0, rawInput - cachedInputTokens); // de-overlap: codex input includes cached
-  const outputTokens = Math.max(0, rawOutput - reasoningOutputTokens); // de-overlap: codex output includes reasoning
+  // de-overlap: codex input includes cached
+  const inputTokens = Math.max(0, rawInput - cachedInputTokens);
+  // de-overlap: codex output includes reasoning
+  const outputTokens = Math.max(0, rawOutput - reasoningOutputTokens);
   const totalTokens =
     numberField(record, ["total_tokens", "totalTokens"]) ??
     inputTokens + cachedInputTokens + cacheCreationTokens + outputTokens + reasoningOutputTokens;
