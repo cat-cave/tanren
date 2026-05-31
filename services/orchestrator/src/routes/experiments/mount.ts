@@ -7,13 +7,36 @@
 
 import type { Hono } from "hono";
 import type pg from "pg";
+import { buildLiveBenchmarkScheduler, type LiveBenchmarkInfra } from "../../engine/benchmark/liveScheduler.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { createDoraRoutes } from "../dora/index.js";
 import { createExperimentRoutes } from "./index.js";
 
-export function mountReportRoutes(app: Hono<ActorContextEnv>, deps: { pool: pg.Pool }): void {
+export interface MountReportRoutesDeps {
+  pool: pg.Pool;
+  // The live benchmark infra (allocator + ssh + identity ref + the shared LISTEN
+  // connection). Supplied by the API boot so the benchmark scheduler runs a real
+  // trial: the post-merge accept tier (allocate→clone@mergedSHA→bootstrap→accept)
+  // + a LISTEN/NOTIFY-driven terminal await. Omitted in tests — then the runner's
+  // own defaults apply (no-op accept, poll-based await), so route tests need no
+  // live runner.
+  benchmark?: Omit<LiveBenchmarkInfra, "pool">;
+}
+
+export function mountReportRoutes(app: Hono<ActorContextEnv>, deps: MountReportRoutesDeps): void {
   app.route("/orgs", createDoraRoutes({ pool: deps.pool }));
   // Benchmark report/CRUD surface (tanren-method-benchmark §4.2.4): author
   // experiments + cells, trigger the scheduler, read cell scorecards + compare.
-  app.route("/orgs", createExperimentRoutes({ pool: deps.pool }));
+  // With live infra wired, the scheduler runs real trials (real accept + await);
+  // without it, the runner's defaults keep the route testable in isolation.
+  const scheduler = deps.benchmark === undefined ? undefined : buildLiveBenchmarkScheduler(deps.benchmark);
+  app.route(
+    "/orgs",
+    createExperimentRoutes({
+      pool: deps.pool,
+      ...(scheduler === undefined
+        ? {}
+        : { runExperiment: scheduler.runExperiment, runExperimentCell: scheduler.runExperimentCell }),
+    }),
+  );
 }

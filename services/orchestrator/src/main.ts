@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { serve } from "@hono/node-server";
-import { createDbPool, migrate } from "@tanren/db";
+import { createDbPool, migrate, PgNotifyListener } from "@tanren/db";
 import { Hono } from "hono";
 import type pg from "pg";
 import { buildAuthFromEnv, type BuildAppAuthOptions } from "./mainAuth.js";
@@ -13,6 +13,7 @@ import { resolveGithubToken } from "./engine/credentials/githubTokenResolver.js"
 import type { ConfigGateGithubFactory } from "./routes/orgs/index.js";
 import { TimedGitHubHttpClient, TimedSshSubstrate } from "./engine/observability/index.js";
 import { Ssh2Substrate } from "./engine/ssh/index.js";
+import { buildAllocatorFromEnv } from "./engine/allocators/buildAllocator.js";
 import { bootRunWorker, runWorkerEnabled } from "./engine/worker/index.js";
 import { startInternalMtlsServer } from "./internalServer.js";
 import { createAuthMiddleware, type ActorContextEnv } from "./middleware/auth.js";
@@ -125,6 +126,19 @@ export function buildApp(input: {
       refreshToken: resolved.refresh,
     });
   };
+  // Live benchmark infra: the benchmark scheduler (the experiments `/run` route)
+  // runs in THIS API process, so its real accept + await seams need the same
+  // allocator/SSH the run path uses plus the shared LISTEN connection. The
+  // allocator is built from env (same factory as the worker boot); the SSH +
+  // identity ref come from the injected substrate. A single PgNotifyListener
+  // (held off `input.pool`, the SAME `tanren_run` channel the SSE source uses)
+  // drives the LISTEN/NOTIFY terminal await.
+  const benchmark = {
+    allocator: buildAllocatorFromEnv(input.pool),
+    ssh: input.ssh,
+    identitySecretRef,
+    notifyListener: new PgNotifyListener(input.pool),
+  };
   // The full feature-route mount table lives in `mountFeatureRoutes` — the long
   // declarative list of create*Routes registrations, in the same order, with the
   // shared deps assembled above. Behavior is identical to the prior inline block.
@@ -136,6 +150,7 @@ export function buildApp(input: {
     credentialRegistry,
     configGateGithub,
     vaultHealthCheck,
+    benchmark,
   });
 
   app.get("/healthz", async (c) => {
