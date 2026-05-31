@@ -92,6 +92,7 @@ import {
   RecoveryRollbackQueuedPayload,
 } from "./schemas/recovery.js";
 import { RedactionRawAccessPayload } from "./schemas/redaction.js";
+import { BenchmarkAcceptFailedPayload, BenchmarkAcceptPassedPayload } from "./schemas/benchmark.js";
 
 // The EventRegistry is the single source of truth mapping event names to
 // their typed Zod payload schemas. Adding a new event name requires:
@@ -235,6 +236,12 @@ export const EventRegistry = {
   "recovery.replan_queued": RecoveryReplanQueuedPayload,
   "recovery.rollback_queued": RecoveryRollbackQueuedPayload,
   "recovery.inspection_opened": RecoveryInspectionOpenedPayload,
+
+  // Tanren-method benchmark: the post-merge HIDDEN-ACCEPT-TIER outcome (§2.1).
+  // Emitted by the BenchmarkRunner's accept step after a trial's PR merges —
+  // the equivalence oracle the config under test never saw.
+  "benchmark.accept.passed": BenchmarkAcceptPassedPayload,
+  "benchmark.accept.failed": BenchmarkAcceptFailedPayload,
 } as const satisfies Record<string, z.ZodTypeAny>;
 
 export type EventRegistry = typeof EventRegistry;

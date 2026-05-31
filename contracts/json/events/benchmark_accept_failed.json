@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "acceptTierHash": {
+      "type": "string"
+    },
+    "cellId": {
+      "type": "string"
+    },
+    "exitCode": {
+      "anyOf": [
+        {
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "failedStep": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "reason": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "steps": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "exitCode": {
+            "anyOf": [
+              {
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "outputTail": {
+            "type": "string"
+          },
+          "passed": {
+            "type": "boolean"
+          },
+          "run": {
+            "type": "string"
+          },
+          "timedOut": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "run",
+          "exitCode",
+          "passed",
+          "timedOut",
+          "outputTail"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "tier": {
+      "type": "string"
+    },
+    "trialIndex": {
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "cellId",
+    "trialIndex",
+    "tier",
+    "acceptTierHash",
+    "failedStep",
+    "exitCode",
+    "reason",
+    "steps"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.benchmark.accept.failed"
+}

@@ -51,3 +51,36 @@ export {
   type MannWhitneyResult,
   type Rng,
 } from "./stats.js";
+
+// BenchmarkRunner scheduler + the post-merge accept step (the orchestration that
+// makes the toolkit runnable). The CLI/report surface (a follow-up) calls
+// `runExperimentCell` / `runExperiment`.
+export {
+  runExperiment,
+  runExperimentCell,
+  runCellTrials,
+  projectConfigFromFrozen,
+  CellNotFoundError,
+  type BenchmarkRunnerDeps,
+  type CellRunResult,
+  type ExperimentRunResult,
+  type ProvisionedTrial,
+  type TrialAcceptInput,
+  type TrialResult,
+} from "./runner.js";
+
+export { runAcceptStep, type AcceptAppendEvent, type AcceptStepOutcome, type RunAcceptStepInput } from "./accept.js";
+
+export {
+  loadCellOrgId,
+  loadCellWithExperiment,
+  loadExperimentCellIds,
+  loadExperimentOrgId,
+  readActiveRateLimitGate,
+  readRunStatus,
+  writeTrialRow,
+  isTerminalStatus,
+  type CellWithExperiment,
+  type RateLimitGate,
+  type RunStatusSnapshot,
+} from "./runnerDb.js";

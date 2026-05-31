@@ -341,6 +341,38 @@ export const sensitivityRules: SensitivityRule[] = [
     ["threadId", "public"],
   ]),
 
+  // Tanren-method benchmark accept tier (§2.1). Cell/trial/tier identifiers +
+  // the content-addressed accept-tier hash + exit codes are public; the captured
+  // command output tails carry stdout/stderr, which the taxonomy treats as
+  // secret (may surface env values or paths), exactly as the gate.* steps do.
+  ...rulesFor("benchmark.accept.passed", [
+    ["cellId", "public"],
+    ["trialIndex", "public"],
+    ["tier", "public"],
+    ["acceptTierHash", "public"],
+    ["steps[].name", "public"],
+    ["steps[].run", "public"],
+    ["steps[].exitCode", "public"],
+    ["steps[].passed", "public"],
+    ["steps[].timedOut", "public"],
+    ["steps[].outputTail", "secret"],
+  ]),
+  ...rulesFor("benchmark.accept.failed", [
+    ["cellId", "public"],
+    ["trialIndex", "public"],
+    ["tier", "public"],
+    ["acceptTierHash", "public"],
+    ["failedStep", "public"],
+    ["exitCode", "public"],
+    ["reason", "public"],
+    ["steps[].name", "public"],
+    ["steps[].run", "public"],
+    ["steps[].exitCode", "public"],
+    ["steps[].passed", "public"],
+    ["steps[].timedOut", "public"],
+    ["steps[].outputTail", "secret"],
+  ]),
+
   // Infrastructure + integration rules (runner/allocator/workspace/credential,
   // cost + usage telemetry, github/ci/phase1/reviews/notifications/hello/
   // redaction) live in sensitivityRules.infra.ts to keep this file under the
