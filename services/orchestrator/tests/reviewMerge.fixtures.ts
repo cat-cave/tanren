@@ -3,7 +3,7 @@
  * pool for the review→merge stage tests. Extracted from reviewMerge.test.ts to
  * keep that file under the 500-line architecture cap.
  */
-import type { GovernancePosture, MergeIntegration } from "../src/engine/config/shared.js";
+import type { GovernancePosture, MergeIntegration, ReviewPolicy } from "../src/engine/config/shared.js";
 import type { MergeProbe, ReviewProbe } from "../src/engine/workflow/reviewMerge/index.js";
 
 export function unusedHttp() {
@@ -65,6 +65,7 @@ export class ReviewMergePool {
   constructor(
     private readonly mergeIntegration: MergeIntegration,
     private readonly governancePosture: GovernancePosture = "open",
+    private readonly reviewPolicy: ReviewPolicy = "human",
   ) {}
 
   async query(sql: string, params: unknown[]): Promise<{ rows: unknown[]; rowCount: number }> {
@@ -84,6 +85,7 @@ export class ReviewMergePool {
                     version: 1,
                     mergeIntegration: this.mergeIntegration,
                     governancePosture: this.governancePosture,
+                    reviewPolicy: this.reviewPolicy,
                     credentials: { githubCredentialRef: "credential/github/dev" },
                   },
                   default_branch: "main",

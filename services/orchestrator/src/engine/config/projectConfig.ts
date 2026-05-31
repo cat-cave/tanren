@@ -7,6 +7,7 @@ import {
   PartialAllocatorConfig,
   PartialEscapeHatches,
   PartialForgePersona,
+  ReviewPolicy,
   RoutingTable,
   UnknownConfigVersionError,
   emptyRoutingTable,
@@ -42,6 +43,13 @@ export const ProjectConfigV1 = z
     forgePersona: PartialForgePersona.default({}),
     governancePosture: GovernancePosture.default("strict"),
     mergeIntegration: MergeIntegration.default("not_configured"),
+    // Whether the review stage requires a real human verdict before merge.
+    // Defaults to `"human"` (safe: never auto-merge without a review). When a
+    // project opts into `"auto"` (the no-review tier), the review stage
+    // short-circuits to an approved verdict so the merge dispatch proceeds.
+    // Additive + backward-compatible: legacy rows carry no key and parse to the
+    // `"human"` default (no migration), and `.strict()` round-trips it on save.
+    reviewPolicy: ReviewPolicy.default("human"),
     // P3-0025: optional per-project preview-deploy URL pattern. Drives the live
     // preview iframe in the Review surface. Supports `{branch}` and `{pr}`
     // placeholders (e.g. `https://pr-{pr}.preview.fly.dev`). Optional + additive:

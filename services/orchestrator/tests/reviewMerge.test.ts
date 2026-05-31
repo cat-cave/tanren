@@ -72,7 +72,76 @@ describe("review polling stage", () => {
     expect(types).toContain("github.pr.ready");
     expect(types).toContain("review.requested");
     expect(types).toContain("review.approved");
+    expect(types).not.toContain("review.auto_approved");
     expect(pool.tasks.find((t) => t.kind === "review")?.status).toBe("done");
+  });
+
+  it("reviewPolicy: auto short-circuits to approved without polling GitHub, emits review.auto_approved", async () => {
+    const pool = new ReviewMergePool("direct_merge", "open", "auto");
+    const events = new FakeEventStore();
+    let markedReady = false;
+    let fetched = false;
+    const probe: ReviewProbe = {
+      markReady: async () => {
+        markedReady = true;
+      },
+      fetchVerdict: async () => {
+        fetched = true;
+        throw new Error("fetchVerdict must NOT be called when reviewPolicy is auto");
+      },
+    };
+
+    const result = await pollReviewForRun({
+      pool: pool.asPgPool(),
+      eventStore: events,
+      secrets: new FakeSecretStore(),
+      githubHttp: unusedHttp(),
+      runId: "run_1",
+      reviewProbe: probe,
+    });
+
+    expect(result.verdict).toBe("approved");
+    // Still flips the PR out of draft for the merge, but never polls GitHub.
+    expect(markedReady).toBe(true);
+    expect(fetched).toBe(false);
+    const types = events.events.map((e) => e.eventType);
+    expect(types).toContain("github.pr.ready");
+    expect(types).toContain("review.requested");
+    // The distinct auto marker AND the standard approved event (so downstream
+    // consumers keyed on review.approved react unchanged).
+    expect(types).toContain("review.auto_approved");
+    expect(types).toContain("review.approved");
+    expect(pool.tasks.find((t) => t.kind === "review")?.status).toBe("done");
+  });
+
+  it("reviewPolicy: human (default) still polls GitHub for a verdict", async () => {
+    // Default reviewPolicy is human.
+    const pool = new ReviewMergePool("direct_merge");
+    const events = new FakeEventStore();
+    let fetched = false;
+    const probe: ReviewProbe = {
+      markReady: async () => {},
+      fetchVerdict: async () => {
+        fetched = true;
+        return { verdict: "approved", latest: { state: "approved", reviewer: "alice" } };
+      },
+    };
+
+    const result = await pollReviewForRun({
+      pool: pool.asPgPool(),
+      eventStore: events,
+      secrets: new FakeSecretStore(),
+      githubHttp: unusedHttp(),
+      runId: "run_1",
+      reviewProbe: probe,
+    });
+
+    expect(result.verdict).toBe("approved");
+    // The human path polls.
+    expect(fetched).toBe(true);
+    const types = events.events.map((e) => e.eventType);
+    expect(types).toContain("review.approved");
+    expect(types).not.toContain("review.auto_approved");
   });
 
   it("emits review.changes_requested carrying the reviewer feedback as steering", async () => {

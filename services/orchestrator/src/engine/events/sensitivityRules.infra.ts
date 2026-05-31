@@ -196,6 +196,10 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["prNumber", "public"],
     ["reviewer", "public"],
   ]),
+  ...rulesFor("review.auto_approved", [
+    ["prUrl", "public"],
+    ["prNumber", "public"],
+  ]),
   ...rulesFor("review.changes_requested", [
     ["prUrl", "public"],
     ["prNumber", "public"],

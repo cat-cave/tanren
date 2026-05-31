@@ -146,6 +146,18 @@ export type GovernancePosture = z.infer<typeof GovernancePosture>;
 export const MergeIntegration = z.enum(["mergify_queue", "direct_merge", "external_reviewer", "not_configured"]);
 export type MergeIntegration = z.infer<typeof MergeIntegration>;
 
+// ---- Review policy -------------------------------------------------------
+
+// Per-project gate on whether the review stage requires a real human verdict
+// before merge. `human` (the default) preserves today's behavior: the review
+// stage polls GitHub for an approval/changes-requested verdict and hands off to
+// an operator if none arrives. `auto` is the no-review tier (easy/medium): the
+// review stage short-circuits to an approved verdict immediately so the merge
+// dispatch proceeds. The default MUST be `human` — never auto-merge without a
+// review unless a project explicitly opts in.
+export const ReviewPolicy = z.enum(["human", "auto"]);
+export type ReviewPolicy = z.infer<typeof ReviewPolicy>;
+
 // ---- Errors --------------------------------------------------------------
 
 // Thrown by the migration helpers when the persisted `version` discriminator

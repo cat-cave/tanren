@@ -104,6 +104,33 @@ export async function pollReviewForRun(input: PollReviewForRunInput): Promise<Po
     payload: { prUrl: context.prUrl, prNumber: pr.pullNumber },
   });
 
+  // No-review tier (project reviewPolicy === "auto"): short-circuit to an
+  // approved verdict immediately — no GitHub poll. The PR was already flipped
+  // ready above (direct_merge refuses a draft), so the caller proceeds straight
+  // to mergeForRun. A distinct `review.auto_approved` event records that no
+  // human verdict gated the merge; `finalizeReviewTask` then emits the standard
+  // `review.approved` + `task.completed` so every downstream consumer (dashboard
+  // phase, review-stall insight, notification severity) reacts unchanged.
+  if (context.reviewPolicy === "auto") {
+    await eventStore.append({
+      runId: context.runId,
+      specId: context.specId,
+      projectId: context.projectId,
+      taskId,
+      eventType: "review.auto_approved",
+      payload: { prUrl: context.prUrl, prNumber: pr.pullNumber },
+    });
+    const autoResult: PollReviewForRunResult = {
+      runId: context.runId,
+      taskId,
+      verdict: "approved",
+      prUrl: context.prUrl,
+      prNumber: pr.pullNumber,
+    };
+    await finalizeReviewTask(input.pool, eventStore, context, autoResult);
+    return autoResult;
+  }
+
   const maxPolls = input.maxPolls ?? 12;
   const delayMs = input.pollDelayMs ?? 10_000;
   const sleep =

@@ -11,6 +11,7 @@ export {
   PartialAllocatorConfig,
   PartialEscapeHatches,
   PartialForgePersona,
+  ReviewPolicy,
   RoleId,
   RoutingChain,
   RoutingChainEntry,

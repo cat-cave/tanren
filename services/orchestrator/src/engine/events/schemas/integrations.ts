@@ -144,6 +144,16 @@ export const ReviewChangesRequestedPayload = z
   })
   .strict();
 
+// Emitted when a project's reviewPolicy is `auto`: the review stage approved the
+// PR without polling GitHub (the no-review tier). Distinct from `review.approved`
+// so the audit trail records that no human verdict gated the merge.
+export const ReviewAutoApprovedPayload = z
+  .object({
+    prUrl: z.string(),
+    prNumber: z.number().int(),
+  })
+  .strict();
+
 // P3-0008 merge stage. The integration is one of the per-repo MergeIntegration
 // modes (mergify_queue / direct_merge / external_reviewer). `merge.queued`
 // fires when the PR is handed to the integration (a Mergify label, a direct

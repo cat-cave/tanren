@@ -27,6 +27,7 @@ describe("ProjectConfigV1 parser", () => {
     expect(cfg.version).toBe(1);
     expect(cfg.governancePosture).toBe("strict");
     expect(cfg.mergeIntegration).toBe("not_configured");
+    expect(cfg.reviewPolicy).toBe("human");
     expect(cfg.notificationTargets).toEqual([]);
     expect(cfg.forgePersona).toEqual({});
     expect(cfg.escapeHatches).toEqual({});
@@ -122,6 +123,15 @@ describe("ProjectConfigV1 parser", () => {
     });
     expect(cfg.governancePosture).toBe("audit_only");
     expect(cfg.mergeIntegration).toBe("mergify_queue");
+  });
+
+  it("defaults reviewPolicy to human and accepts an auto override", () => {
+    expect(migrateProjectConfig({}).reviewPolicy).toBe("human");
+    expect(migrateProjectConfig({ version: 1, reviewPolicy: "auto" }).reviewPolicy).toBe("auto");
+  });
+
+  it("rejects an unknown reviewPolicy value", () => {
+    expect(() => migrateProjectConfig({ version: 1, reviewPolicy: "nobody" })).toThrow(/.+/u);
   });
 
   it("accepts notification target refs as uuids", () => {
