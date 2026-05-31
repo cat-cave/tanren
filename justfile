@@ -270,6 +270,19 @@ smoke-rls-org-bootstrap:
 smoke-rls-operator-flow:
   DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/rlsOperatorFlow.integration.test.ts
 
+# RLS HTTP-route scoping (real PG, enforced `tanren_app` role): drives the FULL
+# operator→run flow live validation walked, across ALL route shapes — including
+# the RESOURCE-keyed root routes #181 left unscoped. bootstrap (multi-org) →
+# list orgs → import + LIST credentials (non-empty) → create project → create
+# spec → trigger run via `POST /specs/:specId/runs` (the live `spec_not_found`
+# 404; MUST 201) → read run status `GET /runs/:runId` → read events → recovery
+# surface. The user is MULTI-org so the sole-org fallback cannot fire — the
+# resource→org middleware arm is what scopes the resource routes. Pre-fix the
+# resource-keyed steps 404 under enforcement. Regression lock for
+# fix/rls-http-route-scoping-complete.
+smoke-rls-http-route-scoping:
+  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/rlsHttpRouteScoping.integration.test.ts
+
 # Plane-split P1 cross-process proof: the run-executor worker is a STANDALONE
 # deployable. Seeds a queued plan job against the shared Postgres (the same
 # job_queue insert the control-plane API does), then waits for the SEPARATE
@@ -312,7 +325,7 @@ smoke-plane-split-worker-remote-writes: gen-mtls-certs
   TANREN_RUNNER_AUTHORIZED_KEY="$(cat /tmp/tanren_runner_key.pub)" TANREN_RUNNER_IDENTITY_PRIVATE_KEY="$(cat /tmp/tanren_runner_key)" docker compose -f compose.dev.yml up -d --no-deps --force-recreate worker
   TANREN_PLANE_SPLIT_PROVE_DEPRIVILEGE=1 DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" corepack pnpm exec tsx scripts/smoke/plane-split-worker.ts
 
-smoke: compose-build compose-up wait-for-stack smoke-hello smoke-ssh-integration smoke-plane-split-worker smoke-plane-split-worker-remote-writes smoke-plane-split-p3 smoke-plane-split-p3b smoke-rls-r1 smoke-rls-r2 smoke-rls-r2-cohort2 smoke-rls-r2-cohort3 smoke-rls-r2-cohort4 smoke-rls-r3a smoke-rls-r3a-worker smoke-rls-r3b smoke-rls-early-finalize smoke-rls-org-bootstrap smoke-rls-operator-flow
+smoke: compose-build compose-up wait-for-stack smoke-hello smoke-ssh-integration smoke-plane-split-worker smoke-plane-split-worker-remote-writes smoke-plane-split-p3 smoke-plane-split-p3b smoke-rls-r1 smoke-rls-r2 smoke-rls-r2-cohort2 smoke-rls-r2-cohort3 smoke-rls-r2-cohort4 smoke-rls-r3a smoke-rls-r3a-worker smoke-rls-r3b smoke-rls-early-finalize smoke-rls-org-bootstrap smoke-rls-operator-flow smoke-rls-http-route-scoping
 
 # P3-0001: the Phase 2A direct-execution acceptance gate (`just acceptance`,
 # scripts/acceptance/easy.ts + medium.ts) was removed once the run executor

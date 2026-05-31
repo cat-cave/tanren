@@ -225,6 +225,22 @@ export class IdentityStore {
     };
   }
 
+  // RLS HTTP-route scoping: the auth middleware's "actor's single org" fallback.
+  // When a request addresses no org (no `orgs` path segment, no resolvable
+  // resource id) the middleware scopes to the actor's org ONLY when the user
+  // belongs to exactly one — an unambiguous default that never widens access.
+  // This is a user-scoped membership read that PRECEDES any org scope (it is how
+  // the middleware discovers the org to scope to), so — like `resolveActorContext`
+  // and `ensureOrgMembership` — it runs on the BYPASSRLS `tanren_system` pool,
+  // filtered by `user_id`. Returns the sole org id, or `undefined` when the user
+  // has zero or more-than-one org (ambiguous → no implicit scope).
+  async resolveSoleOrgForUser(userId: string): Promise<string | undefined> {
+    const rows = await runWithSystemScope(this.pool, (client) =>
+      client.query<{ org_id: string }>("SELECT org_id FROM org_members WHERE user_id = $1 LIMIT 2", [userId]),
+    );
+    return rows.rowCount === 1 ? rows.rows[0]?.org_id : undefined;
+  }
+
   async resolveActorContext(input: {
     userId: string;
     orgId?: string | null;
