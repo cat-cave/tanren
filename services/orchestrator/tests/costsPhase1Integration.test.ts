@@ -4,7 +4,7 @@ import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import type { SshCommand, SshCommandResult, SshSubstrate } from "../src/engine/contracts/sshSubstrate.js";
 import { storeGithubToken } from "../src/engine/credentials/githubToken.js";
 import { FakeEventStore } from "./helpers/fakeEventStore.js";
-import { fakeAuditor, fakeChecker } from "../src/engine/providers/fake.js";
+import { fakeAuditor, fakeChecker } from "./fixtures/fakeAnswerers.js";
 import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "../src/engine/providers/github.js";
 import type { WriterAdapter, WriterResult } from "../src/engine/providers/types.js";
 import { runPhase1FixtureWorkflow, type Phase1FixtureRunContext } from "../src/engine/workflow/phase1Fixture.js";

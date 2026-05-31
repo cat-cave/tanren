@@ -64,11 +64,10 @@ just smoke
 
 `just smoke` builds the orchestrator, dashboard, and runner images, starts Postgres, Vault, orchestrator, dashboard, runner, and ntfy, then verifies:
 
-- `tanren doctor`
-- `tanren hello`
-- `tanren status <run_id>`
+- `tanren doctor` (orchestrator / Postgres / Vault connectivity)
 - direct runner SSH
-- the live SSH integration test
+- the live SSH integration test (the real SSH substrate)
+- the real run path across the API↔worker process boundary (`smoke-plane-split-*`) + the RLS isolation proofs
 
 The opt-in Phase 1 live proof requires a managed Codex auth bundle, a GitHub token file, and an owned fixture repository:
 

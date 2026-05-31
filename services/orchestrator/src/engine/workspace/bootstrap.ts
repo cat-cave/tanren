@@ -8,6 +8,13 @@
 import type { SshTarget } from "../contracts/allocator.js";
 import type { SshCommandResult, SshSubstrate } from "../contracts/sshSubstrate.js";
 import { quoteSshShellArg } from "../ssh/command.js";
+import { runWorkspaceSshCommand } from "./ssh.js";
+
+// The commit message used for the synthetic post-bootstrap commit. Install
+// artifacts (lockfiles, node_modules, etc.) created by the bootstrap step land
+// in THIS commit, off the writer's base, so the writer's diff and the pushed PR
+// branch carry only the writer's real changes — never bootstrap-generated files.
+export const BOOTSTRAP_COMMIT_MESSAGE = "tanren: bootstrap";
 
 // The install command tail surfaced on a bootstrap failure. Output can be
 // large; we keep only the last N characters so the typed error and the
@@ -82,6 +89,47 @@ export async function bootstrapWorkspace(input: BootstrapWorkspaceInput): Promis
     );
   }
   return result;
+}
+
+export interface CommitBootstrapStateInput {
+  ssh: SshSubstrate;
+  target: SshTarget;
+  workspacePath: string;
+  timeoutMs: number;
+}
+
+// Commits whatever the bootstrap step produced (lockfiles, node_modules, any
+// generated tree) as ONE synthetic commit on the workspace branch, and returns
+// its sha. This commit becomes the writer's diff base (run baseSha), so the
+// writer iterations — which diff vs this sha — see only their own changes, not
+// bootstrap artifacts.
+//
+// `--allow-empty` so the no-manifest / artifact-free case still yields a real
+// commit, keeping the run base a concrete sha and the later PR-branch cleanup
+// (drop-the-bootstrap-commit rebase) symmetric in every case.
+export async function commitBootstrapState(input: CommitBootstrapStateInput): Promise<string> {
+  const result = await runWorkspaceSshCommand(input.ssh, input.target, {
+    label: "commit bootstrap state",
+    cwd: input.workspacePath,
+    timeoutMs: input.timeoutMs,
+    command: [
+      "set -eu",
+      "git add -A",
+      // -q so the commit summary stays off stdout; git rev-parse is then the
+      // only stdout-producing step and its output is the bootstrap commit sha.
+      "GIT_AUTHOR_DATE='2026-01-01T00:00:00Z' GIT_COMMITTER_DATE='2026-01-01T00:00:00Z' " +
+        `git commit -q --allow-empty -m ${quoteSshShellArg(BOOTSTRAP_COMMIT_MESSAGE)}`,
+      "git rev-parse HEAD",
+    ].join(" && "),
+  });
+  const sha = result.stdout.trim();
+  // "" only on a fake SSH that yields no output (unit paths drive the loop with
+  // fake writers that ignore baseSha), mirroring prepareWorkspace. The real
+  // runner always returns a 40-hex sha.
+  if (sha !== "" && !/^[0-9a-f]{40}$/u.test(sha)) {
+    throw new Error(`bootstrap commit returned invalid sha: ${sha}`);
+  }
+  return sha;
 }
 
 function combinedOutput(result: SshCommandResult): string {

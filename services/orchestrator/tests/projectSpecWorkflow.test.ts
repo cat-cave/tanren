@@ -1,12 +1,19 @@
 import { describe, expect, it } from "vitest";
+import { InMemorySecretStore, type SshSubstrate } from "../src/engine/contracts/index.js";
 import { buildApp } from "../src/main.js";
+
+// These contract tests never reach the draft-PR route, so a never-invoked stub
+// satisfies the SSH dep shape; the explicit memory store satisfies the required
+// SecretStore injection.
+const ssh = {} as SshSubstrate;
 
 describe("project/spec workflow contract", () => {
   it("creates a project, creates a spec, and queues a run from persisted rows", async () => {
     const pool = new ContractPool();
     const app = buildApp({
       pool: pool.asPgPool(),
-      helloDependencies: {} as never,
+      ssh,
+      secrets: new InMemorySecretStore(),
       vaultHealthCheck: async () => ({ ok: true, status: 200 }),
     });
 
@@ -131,7 +138,8 @@ describe("project/spec workflow contract", () => {
   it("returns not found when creating a spec for a missing project", async () => {
     const app = buildApp({
       pool: new ContractPool().asPgPool(),
-      helloDependencies: {} as never,
+      ssh,
+      secrets: new InMemorySecretStore(),
       vaultHealthCheck: async () => ({ ok: true, status: 200 }),
     });
 
@@ -154,7 +162,8 @@ describe("project/spec workflow contract", () => {
     const pool = new ContractPool();
     const app = buildApp({
       pool: pool.asPgPool(),
-      helloDependencies: {} as never,
+      ssh,
+      secrets: new InMemorySecretStore(),
       vaultHealthCheck: async () => ({ ok: true, status: 200 }),
     });
     const projectResponse = await app.request("/projects", {
@@ -184,7 +193,8 @@ describe("project/spec workflow contract", () => {
     const pool = new ContractPool();
     const app = buildApp({
       pool: pool.asPgPool(),
-      helloDependencies: {} as never,
+      ssh,
+      secrets: new InMemorySecretStore(),
       vaultHealthCheck: async () => ({ ok: true, status: 200 }),
     });
     const project = await (

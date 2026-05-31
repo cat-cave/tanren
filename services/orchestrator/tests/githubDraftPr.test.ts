@@ -10,6 +10,7 @@ import { publishDraftPullRequest, publishDraftPullRequestForRun } from "../src/e
 import {
   buildGitHubPushCommand,
   draftPrBranchName,
+  PR_CLEAN_REF,
   pushWorkspaceBranchToGitHub,
 } from "../src/engine/workspace/githubPush.js";
 
@@ -94,6 +95,33 @@ describe("GitHub draft PR contract", () => {
     expect(() => buildGitHubPushCommand({ repoUrl: "https://example.com/repo.git", branch: "tanren/run_123" })).toThrow(
       "unsupported GitHub",
     );
+  });
+
+  it("pushes the working HEAD by default and the cleaned PR ref when asked", () => {
+    const head = buildGitHubPushCommand({
+      repoUrl: "https://github.com/cat-cave/tanren-fixture-easy",
+      branch: "tanren/run_123",
+    });
+    expect(head).toContain("HEAD:refs/heads/tanren/run_123");
+
+    const clean = buildGitHubPushCommand({
+      repoUrl: "https://github.com/cat-cave/tanren-fixture-easy",
+      branch: "tanren/run_123",
+      sourceRef: PR_CLEAN_REF,
+    });
+    expect(clean).toContain(`${PR_CLEAN_REF}:refs/heads/tanren/run_123`);
+    // The run's own branch is force-updated (the cleaned ref is rebuilt on each
+    // review-rework re-entry).
+    expect(clean).toContain("--force");
+
+    // Only the working HEAD or the cleaned ref are valid push sources.
+    expect(() =>
+      buildGitHubPushCommand({
+        repoUrl: "https://github.com/cat-cave/tanren-fixture-easy",
+        branch: "tanren/run_123",
+        sourceRef: "refs/heads/main",
+      }),
+    ).toThrow("unsafe push source ref");
   });
 
   it("reuses an existing open PR instead of creating duplicates", async () => {

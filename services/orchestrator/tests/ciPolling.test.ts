@@ -198,7 +198,7 @@ describe("CI polling loop", () => {
     await secrets.put({ ref: "credential/github/dev", value: "ghp_secretToken" });
     const app = buildApp({
       pool: pool.asPgPool(),
-      helloDependencies: {} as never,
+      ssh: {} as never,
       secrets,
       githubHttp: new ScriptedGitHubHttp([
         { status: 200, body: { head: { sha: "abc123" } } },

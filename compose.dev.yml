@@ -50,6 +50,8 @@ services:
       DATABASE_URL: postgres://tanren_app:tanren_app@postgres:5432/tanren
       MIGRATION_DATABASE_URL: postgres://tanren:tanren@postgres:5432/tanren
       TANREN_SYSTEM_DATABASE_URL: postgres://tanren_system:tanren_system@postgres:5432/tanren
+      # The secret-store backend is now REQUIRED (no implicit `vault` default).
+      TANREN_SECRET_STORE: vault
       VAULT_ADDR: http://vault:8200
       VAULT_TOKEN: dev-root-token
       ORCHESTRATOR_PORT: "3100"
@@ -142,6 +144,8 @@ services:
       # so it carries no MIGRATION_DATABASE_URL.
       DATABASE_URL: postgres://tanren_dataplane:tanren_dataplane@postgres:5432/tanren
       TANREN_SYSTEM_DATABASE_URL: postgres://tanren_system:tanren_system@postgres:5432/tanren
+      # The secret-store backend is now REQUIRED (no implicit `vault` default).
+      TANREN_SECRET_STORE: vault
       VAULT_ADDR: http://vault:8200
       VAULT_TOKEN: dev-root-token
       TANREN_RUNNER_IDENTITY_PRIVATE_KEY: ${TANREN_RUNNER_IDENTITY_PRIVATE_KEY:-}

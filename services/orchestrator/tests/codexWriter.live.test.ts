@@ -6,7 +6,8 @@ import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
 import { storeCodexAuthBundle } from "../src/engine/credentials/codexAuth.js";
 import { createCodexWriter } from "../src/engine/providers/codex.js";
 import { Ssh2Substrate } from "../src/engine/ssh/index.js";
-import { prepareGitWorkspace, runWorkspaceSshCommand, workspaceRepoPathForRun } from "../src/engine/workspace/index.js";
+import { runWorkspaceSshCommand, workspaceRepoPathForRun } from "../src/engine/workspace/index.js";
+import { prepareGitWorkspace } from "./fixtures/workspaceGit.js";
 
 const runLive = process.env.TANREN_CODEX_LIVE === "1";
 const describeLive = runLive ? describe : describe.skip;
