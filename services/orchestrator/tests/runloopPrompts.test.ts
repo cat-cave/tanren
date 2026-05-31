@@ -71,7 +71,9 @@ describe("buildPlannerPrompt — full rendered contract", () => {
     expect(prompt).toContain("This is the first plan for the spec — no prior rejections.");
     expect(prompt).not.toContain("Prior rejections");
     // The first-plan line is followed by a blank-line separator, then the footer.
-    expect(prompt).toContain("no prior rejections.\n\nEmit at least one subtask. Each subtask must declare:");
+    expect(prompt).toContain(
+      "no prior rejections.\n\nEvery subtask MUST be an actionable change that modifies the workspace and",
+    );
   });
 
   it("separates the header / behaviors / rejection blocks with blank lines (separator pins)", () => {
@@ -119,7 +121,9 @@ describe("buildPlannerPrompt — full rendered contract", () => {
     // rejection entry; and the rejection block ends with a blank-line separator
     // before the footer. Exact adjacency pins those separators.
     expect(prompt).toContain("the new plan:\n\nRejection #1 from auditor:");
-    expect(prompt).toContain("    [0] old — old intent\n\nEmit at least one subtask. Each subtask must declare:");
+    expect(prompt).toContain(
+      "    [0] old — old intent\n\nEvery subtask MUST be an actionable change that modifies the workspace and",
+    );
   });
 
   it("falls back to (none reported) when a rejection lists no failed behavior ids", () => {
@@ -162,6 +166,9 @@ describe("buildCheckerPrompt — full rendered contract", () => {
     expect(prompt).toContain("- Judge intent only. 'The code looks like it might fail to compile/test' is");
     expect(prompt).toContain("  out of scope: if the intent and criteria are addressed by the diff, that");
     expect(prompt).toContain("  satisfies you.");
+    expect(prompt).toContain("- An acceptance criterion that is INHERENTLY a test/build/lint OUTCOME (e.g.");
+    expect(prompt).toContain("  criterion as DEFERRED — note it in `reasoning` as gate-owned, and do NOT");
+    expect(prompt).toContain("  the diff implements the behavior such a test would exercise.");
     expect(prompt).toContain("Return only the structured JSON required by the provided schema.");
   });
 
@@ -180,10 +187,12 @@ describe("buildCheckerPrompt — full rendered contract", () => {
   it("renders the verdict-instruction lines and embeds the writer diff", () => {
     const prompt = buildCheckerPrompt(ctx);
     expect(prompt).toContain("In `reasoning`, cite each acceptance criterion / behavior by name and state");
-    expect(prompt).toContain("whether the diff satisfies its intent and why. Set passed=true only when the");
-    expect(prompt).toContain("subtask intent and every relevant acceptance criterion are satisfied by the");
-    expect(prompt).toContain("diff. Always populate behaviorIdsPassed and behaviorIdsFailed (use empty");
-    expect(prompt).toContain("arrays when none), reflecting intent satisfaction — not test/build outcomes.");
+    expect(prompt).toContain("whether the diff satisfies its intent and why (marking any test/build/lint-");
+    expect(prompt).toContain("outcome criterion as gate-deferred). Set passed=true when the subtask intent");
+    expect(prompt).toContain("and every diff-assessable acceptance criterion are satisfied by the diff;");
+    expect(prompt).toContain("gate-deferred outcome criteria must not block a pass. Always populate");
+    expect(prompt).toContain("behaviorIdsPassed and behaviorIdsFailed (use empty arrays when none),");
+    expect(prompt).toContain("reflecting intent satisfaction — not test/build outcomes.");
     expect(prompt).toContain("Writer diff:");
     expect(prompt).toContain("diff --git a/x b/x\n+ok\n");
   });
@@ -196,7 +205,9 @@ describe("buildCheckerPrompt — full rendered contract", () => {
   it("separates each block with a blank line (separator pins)", () => {
     const prompt = buildCheckerPrompt(ctx);
     expect(prompt).toContain("the spec — nothing else.\n\nHard boundaries");
-    expect(prompt).toContain("  satisfies you.\n\nReturn only the structured JSON required by the provided schema.");
+    expect(prompt).toContain(
+      "  the diff implements the behavior such a test would exercise.\n\nReturn only the structured JSON required by the provided schema.",
+    );
     expect(prompt).toContain("- AC2: wired\n\nSubtask [0]: Wire the helper");
     expect(prompt).toContain("Subtask behavior ids: B1, B2\n\nIn `reasoning`,");
     expect(prompt).toContain("not test/build outcomes.\n\nWriter diff:");

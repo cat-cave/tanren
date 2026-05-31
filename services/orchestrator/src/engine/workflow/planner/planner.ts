@@ -98,10 +98,18 @@ export function buildPlannerPrompt(input: PlannerInvokeInput): string {
         ];
   const rejectionBlocks = renderRejectionHistory(input.rejectionHistory);
   const footer = [
+    "Every subtask MUST be an actionable change that modifies the workspace and",
+    "produces a git diff advancing the acceptance criteria. Do NOT emit read-only",
+    "or inspection-only subtasks (e.g. 'inspect', 'investigate', 'understand',",
+    "'review the contract', 'confirm the location'): the Writer reads the",
+    "repository as needed before it implements, and a subtask whose intent is only",
+    "to read will be rejected because its diff cannot satisfy that intent. Emit the",
+    "fewest subtasks that fully implement the spec — frequently exactly one.",
+    "",
     "Emit at least one subtask. Each subtask must declare:",
     "- index: 0-based position in the execution order",
     "- title: short human-readable label",
-    "- intent: declared rationale for this subtask",
+    "- intent: declared rationale for this subtask (an action that changes code)",
     "- behaviorIds: subset of declared behavior ids this subtask satisfies",
     "- estimatedTokens: integer estimate or null when unknown",
     "Provide a top-level rationale explaining the decomposition.",
