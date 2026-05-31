@@ -65,6 +65,12 @@ export interface FakeIdentityPool {
   sessions: Map<string, SessionRow>;
   apiTokens: Map<string, ApiTokenRow>;
   query: (sql: string, params?: unknown[]) => Promise<{ rows: unknown[]; rowCount: number }>;
+  // `runWithSystemScope` (RLS R3b) checks out a client and opens a transaction
+  // around the org/membership bootstrap writes. With no system pool configured
+  // (unit tests) it falls back to THIS pool's `connect`, so the fake must hand
+  // back a client: BEGIN/COMMIT/ROLLBACK are no-ops, every other statement
+  // delegates to the same in-memory query handler.
+  connect: () => Promise<pg.PoolClient>;
   asPgPool: () => pg.Pool;
 }
 
@@ -78,9 +84,25 @@ export function createFakeIdentityPool(): FakeIdentityPool {
     sessions: new Map(),
     apiTokens: new Map(),
     query: async (sql, params = []) => handleQuery(state, sql, params),
+    connect: async () => makeFakeClient(state),
     asPgPool: () => state as unknown as pg.Pool,
   };
   return state;
+}
+
+// A minimal PoolClient over the in-memory store: transaction control is a no-op,
+// `release` is a no-op, and `query` runs the same handler. Lets the identity
+// bootstrap writes route through `runWithSystemScope` in unit tests without a
+// real Postgres.
+function makeFakeClient(state: FakeIdentityPool): pg.PoolClient {
+  const query = async (sql: string, params: unknown[] = []) => {
+    const trimmed = sql.trim().toUpperCase();
+    if (trimmed === "BEGIN" || trimmed === "COMMIT" || trimmed === "ROLLBACK" || trimmed.startsWith("SET LOCAL")) {
+      return { rows: [], rowCount: 0 };
+    }
+    return handleQuery(state, sql, params);
+  };
+  return { query, release: () => {} } as unknown as pg.PoolClient;
 }
 
 async function handleQuery(

@@ -1,4 +1,5 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
 import type {
   ActorContext,
@@ -81,44 +82,66 @@ export class IdentityStore {
     return rowToUser(firstRow(inserted.rows));
   }
 
+  // RLS R3b: org creation is a tenant BOOTSTRAP that precedes any org scope —
+  // signup/dev-login/onboarding mint an org before an `app.current_org_id` can
+  // exist. Under enforced policies the runtime `tanren_app` role (NOBYPASSRLS)
+  // with an empty GUC would have its `organizations` INSERT rejected by the
+  // deny-by-default WITH CHECK (42501), and even the existence SELECT would
+  // return zero rows. So this upsert runs on the BYPASSRLS `tanren_system` pool
+  // via `runWithSystemScope` (the same classification as `createProject` seeding
+  // and the worker's cross-org `job_queue` claim). When no system pool is
+  // configured (single-role dev/CI/tests) it falls back to the passed pool —
+  // behavior-identical, since without policies the app role already sees every
+  // row. READS of an existing org stay under RLS elsewhere; only this
+  // bootstrap-creation write bypasses.
   async upsertOrg(claim: IdentityOrgClaim): Promise<Org> {
-    const existing = await this.pool.query<OrgRow>("SELECT * FROM organizations WHERE kind = $1 AND external_id = $2", [
-      claim.kind,
-      claim.externalId,
-    ]);
-    if ((existing.rowCount ?? 0) > 0) {
-      const row = firstRow(existing.rows);
-      await this.pool.query(
-        "UPDATE organizations SET login = $1, display_name = $2, updated_at = now() WHERE id = $3",
-        [claim.login, claim.displayName, row.id],
+    return runWithSystemScope(this.pool, async (client) => {
+      const existing = await client.query<OrgRow>("SELECT * FROM organizations WHERE kind = $1 AND external_id = $2", [
+        claim.kind,
+        claim.externalId,
+      ]);
+      if ((existing.rowCount ?? 0) > 0) {
+        const row = firstRow(existing.rows);
+        await client.query("UPDATE organizations SET login = $1, display_name = $2, updated_at = now() WHERE id = $3", [
+          claim.login,
+          claim.displayName,
+          row.id,
+        ]);
+        return rowToOrg({ ...row, login: claim.login, display_name: claim.displayName });
+      }
+      const id = `org_${randomUUID()}`;
+      const inserted = await client.query<OrgRow>(
+        `INSERT INTO organizations (id, kind, external_id, login, display_name)
+         VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+        [id, claim.kind, claim.externalId, claim.login, claim.displayName],
       );
-      return rowToOrg({ ...row, login: claim.login, display_name: claim.displayName });
-    }
-    const id = `org_${randomUUID()}`;
-    const inserted = await this.pool.query<OrgRow>(
-      `INSERT INTO organizations (id, kind, external_id, login, display_name)
-       VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-      [id, claim.kind, claim.externalId, claim.login, claim.displayName],
-    );
-    return rowToOrg(firstRow(inserted.rows));
+      return rowToOrg(firstRow(inserted.rows));
+    });
   }
 
+  // RLS R3b: membership creation also precedes org scope — the first member is
+  // minted alongside the bootstrap org, before any `app.current_org_id`. The
+  // `org_members` table is RLS-enabled (deny-by-default), so this read+insert
+  // runs on the BYPASSRLS `tanren_system` pool for the same reason as
+  // `upsertOrg`. Falls back to the passed pool when no system pool is configured.
   async ensureOrgMembership(orgId: string, userId: string): Promise<OrgMemberRole> {
-    const existing = await this.pool.query<{ role: OrgMemberRole }>(
-      "SELECT role FROM org_members WHERE org_id = $1 AND user_id = $2",
-      [orgId, userId],
-    );
-    if ((existing.rowCount ?? 0) > 0) {
-      return firstRow(existing.rows).role;
-    }
-    const countResult = await this.pool.query<{ count: string }>(
-      "SELECT count(*)::text AS count FROM org_members WHERE org_id = $1",
-      [orgId],
-    );
-    const isFirst = countResult.rows[0]?.count === "0";
-    const role: OrgMemberRole = isFirst ? "admin" : "member";
-    await this.pool.query("INSERT INTO org_members (org_id, user_id, role) VALUES ($1, $2, $3)", [orgId, userId, role]);
-    return role;
+    return runWithSystemScope(this.pool, async (client) => {
+      const existing = await client.query<{ role: OrgMemberRole }>(
+        "SELECT role FROM org_members WHERE org_id = $1 AND user_id = $2",
+        [orgId, userId],
+      );
+      if ((existing.rowCount ?? 0) > 0) {
+        return firstRow(existing.rows).role;
+      }
+      const countResult = await client.query<{ count: string }>(
+        "SELECT count(*)::text AS count FROM org_members WHERE org_id = $1",
+        [orgId],
+      );
+      const isFirst = countResult.rows[0]?.count === "0";
+      const role: OrgMemberRole = isFirst ? "admin" : "member";
+      await client.query("INSERT INTO org_members (org_id, user_id, role) VALUES ($1, $2, $3)", [orgId, userId, role]);
+      return role;
+    });
   }
 
   async createSession(userId: string, options: CreateSessionOptions = {}): Promise<Session> {
