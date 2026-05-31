@@ -186,6 +186,114 @@ describe("runPlannerLoopWorkflow", () => {
     expect(names.indexOf("workspace.prepared")).toBeLessThan(names.indexOf("writer.subtask.started"));
   });
 
+  it("commits the bootstrap state after bootstrap and before the writer loop", async () => {
+    const { ctx, pool, events, secrets, allocator, ssh } = await setup();
+    const order: string[] = [];
+
+    await runPlannerLoopWorkflow({
+      pool: pool.asPgPool(),
+      eventStore: events,
+      allocator,
+      ssh,
+      secrets,
+      githubHttp: passingGitHub(),
+      context: ctx,
+      escapeHatches: {
+        maxPlannerRerunsPerSpec: 3,
+        maxWriterIterPerSubtask: 5,
+        maxRetriesPerTransientFailure: 3,
+      },
+      timeoutMs: 100,
+      maxCiPolls: 1,
+      sleep: async () => {},
+      runBootstrap: async () => {
+        order.push("bootstrap");
+      },
+      // The synthetic post-bootstrap commit; its sha is what the writer diffs
+      // against. The fake writers ignore baseSha, so we only assert ordering here.
+      commitBootstrap: async () => {
+        order.push("commit-bootstrap");
+        return "b".repeat(40);
+      },
+      buildAdapters: () => twoSubtaskAdapters([passingCheck, passingCheck]),
+      buildUsageProbe: () => fakeProbe(healthyWindow(), accounting(0.5)),
+      reviewProbe: approvingReview(),
+      mergeProbe: noopMerge(),
+    });
+
+    // Bootstrap install runs first, THEN its state is committed (the writer's
+    // diff base), THEN the writer loop runs.
+    expect(order).toEqual(["bootstrap", "commit-bootstrap"]);
+    const names = events.events.map((event) => event.eventType);
+    expect(names.indexOf("workspace.prepared")).toBeLessThan(names.indexOf("writer.subtask.started"));
+  });
+
+  it("threads the post-bootstrap commit as the writer's diff base and pushes the cleaned PR ref", async () => {
+    const { ctx, pool, events, secrets, allocator } = await setup();
+    const cloneHead = "1".repeat(40);
+    const bootstrapSha = "2".repeat(40);
+    // SSH that returns the clone HEAD on the workspace-prep rev-parse and records
+    // every command so the PR push refspec can be inspected.
+    const ssh = new CloneHeadSsh(cloneHead);
+    const writerBaseShas: Array<string | undefined> = [];
+    const recordingWriter = {
+      kind: "writer" as const,
+      cli: "fake",
+      authRef: "credential/codex/dev",
+      async runWriter(opts: { prompt: string; workspace: string; timeoutMs: number; baseSha?: string }) {
+        writerBaseShas.push(opts.baseSha);
+        return {
+          diff: "diff ok\n",
+          commits: [{ sha: "a".repeat(40), message: "writer" }],
+          exitReason: "completed" as const,
+          tokenUsage: {
+            inputTokens: 1,
+            cachedInputTokens: 0,
+            cacheCreationTokens: 0,
+            outputTokens: 1,
+            reasoningOutputTokens: 0,
+            totalTokens: 2,
+          },
+        };
+      },
+    };
+
+    await runPlannerLoopWorkflow({
+      pool: pool.asPgPool(),
+      eventStore: events,
+      allocator,
+      ssh,
+      secrets,
+      githubHttp: passingGitHub(),
+      context: ctx,
+      escapeHatches: { maxPlannerRerunsPerSpec: 3, maxWriterIterPerSubtask: 5, maxRetriesPerTransientFailure: 3 },
+      timeoutMs: 100,
+      maxCiPolls: 1,
+      sleep: async () => {},
+      runBootstrap: async () => {},
+      // The post-bootstrap commit sha — what the writer must diff against.
+      commitBootstrap: async () => bootstrapSha,
+      buildAdapters: () => ({
+        planner: makePlanner([buildPlan([{ title: "T1", intent: "ok", behaviorIds: [] }])]) as never,
+        writer: recordingWriter,
+        checker: makeChecker([passingCheck]) as never,
+        auditor: makeAuditor([passingAudit]) as never,
+      }),
+      buildUsageProbe: () => fakeProbe(healthyWindow(), accounting(0.5)),
+      reviewProbe: approvingReview(),
+      mergeProbe: noopMerge(),
+    });
+
+    // The writer diffs against the POST-BOOTSTRAP commit, not the clone HEAD.
+    expect(writerBaseShas).toEqual([bootstrapSha]);
+    // The PR branch is built by replaying the writer commit onto the clone HEAD
+    // (bootstrap commit dropped) and pushed from the cleaned ref.
+    const rebase = ssh.commands.find((c) => c.includes("git rebase --onto"));
+    expect(rebase).toContain(`git rebase --onto '${cloneHead}' '${bootstrapSha}'`);
+    const push = ssh.commands.find((c) => c.includes("git push"));
+    expect(push).toContain("refs/tanren/pr-clean:refs/heads/");
+  });
+
   it("resolves the repo's tanren-ci.yml bootstrap.run and feeds it to the bootstrap step", async () => {
     const { ctx, pool, events, secrets, allocator } = await setup();
     // SSH that returns a repo tanren-ci.yml on the config read; everything else
@@ -355,5 +463,20 @@ class ConfigReadingSsh implements SshSubstrate {
   async run(_target: SshTarget, command: SshCommand): Promise<SshCommandResult> {
     const stdout = command.command.includes("tanren-ci.yml") ? this.configYaml : "";
     return { exitCode: 0, stdout, stderr: "", timedOut: false };
+  }
+}
+
+// SSH fake that returns the clone HEAD sha on the workspace-prep `git rev-parse`
+// (so the run captures a real cloneHeadSha and the PR-branch cleanup actually
+// runs), empty for everything else, and records every command issued.
+class CloneHeadSsh implements SshSubstrate {
+  readonly commands: string[] = [];
+
+  constructor(private readonly cloneHead: string) {}
+
+  async run(_target: SshTarget, command: SshCommand): Promise<SshCommandResult> {
+    this.commands.push(command.command);
+    const isClonePrep = command.command.includes("git clone") && command.command.includes("git rev-parse HEAD");
+    return { exitCode: 0, stdout: isClonePrep ? `${this.cloneHead}\n` : "", stderr: "", timedOut: false };
   }
 }

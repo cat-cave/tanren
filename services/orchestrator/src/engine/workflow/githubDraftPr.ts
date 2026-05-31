@@ -35,6 +35,12 @@ export interface PublishDraftPullRequestInput {
   /** P3-0003: org App installation; when set, prefer minting an App token. */
   installation?: OrgGithubAppInstallation;
   githubAppMinter?: GithubAppTokenMinter;
+  /**
+   * The local gitref pushed as the PR branch (default "HEAD"). The planner run
+   * passes the cleaned PR ref (writer commits with the bootstrap commit dropped)
+   * so the PR excludes bootstrap-generated artifacts.
+   */
+  sourceRef?: string;
 }
 
 export interface PublishedDraftPullRequest {

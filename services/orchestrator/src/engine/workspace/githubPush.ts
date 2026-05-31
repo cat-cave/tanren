@@ -28,6 +28,67 @@ export interface GitHubWorkspacePushInput {
    * `git push` command below is unchanged. Omitted → legacy ref-based read.
    */
   token?: string;
+  /**
+   * The local gitref pushed as the PR branch. Defaults to "HEAD". The run path
+   * passes {@link PR_CLEAN_REF} — the writer commits replayed onto the clone HEAD
+   * with the bootstrap commit dropped — so the PR carries only the writer's
+   * changes (no lockfile / node_modules).
+   */
+  sourceRef?: string;
+}
+
+// The local ref the cleaned PR commits are staged onto before the push. Kept
+// off any user branch name so it never collides with a target-repo branch.
+export const PR_CLEAN_REF = "refs/tanren/pr-clean";
+
+export interface PrepareCleanPrBranchInput {
+  ssh: SshSubstrate;
+  target: SshTarget;
+  workspacePath: string;
+  // The clone HEAD (run-base before bootstrap) the writer commits replay onto.
+  cloneHeadSha: string;
+  // The synthetic bootstrap commit (the writer's diff base) to drop.
+  bootstrapSha: string;
+  timeoutMs: number;
+}
+
+// Builds a ref ({@link PR_CLEAN_REF}) holding the writer's commits replayed onto
+// the clone HEAD — i.e. with the synthetic bootstrap commit (and its install
+// artifacts: lockfiles, node_modules) dropped — and points the push branch at
+// it. Returns the gitref the caller pushes from instead of the working HEAD.
+//
+// This does NOT move the working HEAD: the writer's diff base (bootstrapSha)
+// stays an ancestor of HEAD so a review-rework re-entry can keep diffing/
+// committing vs it. We rebase a detached copy and capture its sha into
+// PR_CLEAN_REF.
+//
+// When cloneHeadSha/bootstrapSha are empty (fake-SSH unit paths) or equal (no
+// real bootstrap commit), there is nothing to drop and the working HEAD is
+// pushed unchanged.
+export async function prepareCleanPrBranch(input: PrepareCleanPrBranchInput): Promise<string> {
+  if (input.cloneHeadSha === "" || input.bootstrapSha === "" || input.cloneHeadSha === input.bootstrapSha) {
+    return "HEAD";
+  }
+  await runWorkspaceSshCommand(input.ssh, input.target, {
+    label: "prepare clean PR branch",
+    cwd: input.workspacePath,
+    timeoutMs: input.timeoutMs,
+    command: [
+      "set -eu",
+      // Remember where the working HEAD sits so we can restore it after rebasing
+      // a detached copy (the writer's base must stay reachable for reworks).
+      "orig_head=$(git rev-parse HEAD)",
+      // Detach at the writer tip, then replay the writer commits
+      // (bootstrapSha..HEAD) onto the clone HEAD — dropping the bootstrap commit.
+      // The working branch ref is untouched (we are detached).
+      'git checkout --quiet --detach "$orig_head"',
+      `GIT_AUTHOR_DATE='2026-01-01T00:00:00Z' GIT_COMMITTER_DATE='2026-01-01T00:00:00Z' git rebase --onto ${quoteSshShellArg(input.cloneHeadSha)} ${quoteSshShellArg(input.bootstrapSha)}`,
+      // Capture the cleaned tip into the push ref, then restore the working HEAD.
+      `git update-ref ${quoteSshShellArg(PR_CLEAN_REF)} HEAD`,
+      'git checkout --quiet --detach "$orig_head"',
+    ].join(" && "),
+  });
+  return PR_CLEAN_REF;
 }
 
 export async function pushWorkspaceBranchToGitHub(input: GitHubWorkspacePushInput): Promise<void> {
@@ -36,7 +97,7 @@ export async function pushWorkspaceBranchToGitHub(input: GitHubWorkspacePushInpu
     label: "push workspace branch to GitHub",
     cwd: input.workspacePath,
     timeoutMs: input.timeoutMs,
-    command: buildGitHubPushCommand({ repoUrl: input.repoUrl, branch: input.branch }),
+    command: buildGitHubPushCommand({ repoUrl: input.repoUrl, branch: input.branch, sourceRef: input.sourceRef }),
     stdin: token,
   });
 }
@@ -87,8 +148,9 @@ function hasGitRefControlCharacter(value: string): boolean {
   return false;
 }
 
-export function buildGitHubPushCommand(input: { repoUrl: string; branch: string }): string {
+export function buildGitHubPushCommand(input: { repoUrl: string; branch: string; sourceRef?: string }): string {
   const branch = validateGitBranchName(input.branch);
+  const sourceRef = validatePushSourceRef(input.sourceRef);
   const remote = githubHttpsRemote(parseGitHubRepository(input.repoUrl));
   const askpassScript = [
     "#!/bin/sh",
@@ -116,8 +178,22 @@ export function buildGitHubPushCommand(input: { repoUrl: string; branch: string 
       'GITHUB_TOKEN_FILE="$token_file"',
       "git",
       "push",
+      "--force",
       quoteSshShellArg(remote),
-      quoteSshShellArg(`HEAD:refs/heads/${branch}`),
+      quoteSshShellArg(`${sourceRef}:refs/heads/${branch}`),
     ].join(" "),
   ].join(" && ");
+}
+
+// The push source ref is operator/code-controlled, never user-derived: only the
+// working HEAD or the cleaned PR ref. Reject anything else so the push refspec
+// can never be smuggled into.
+function validatePushSourceRef(sourceRef: string | undefined): string {
+  if (sourceRef === undefined || sourceRef === "HEAD") {
+    return "HEAD";
+  }
+  if (sourceRef === PR_CLEAN_REF) {
+    return PR_CLEAN_REF;
+  }
+  throw new Error(`unsafe push source ref: ${sourceRef}`);
 }
