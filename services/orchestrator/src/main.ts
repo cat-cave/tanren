@@ -102,6 +102,10 @@ export function buildApp(input: {
         store: input.auth.store,
         platformAdminUserIds: input.auth.platformAdminUserIds,
         localDevActor: input.auth.localDevActor,
+        // RLS HTTP-route scoping: the resource→org resolver looks up the addressed
+        // spec/run/project's org on the BYPASSRLS system pool so the resource-keyed
+        // root shapes establish a per-request org scope.
+        pool: input.pool,
       }),
     );
   }

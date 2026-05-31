@@ -1,7 +1,9 @@
 import { runWithJobOrgId } from "@tanren/db";
 import type { Context, MiddlewareHandler, Next } from "hono";
+import type pg from "pg";
 import type { ActorContext } from "../auth/schemas.js";
 import type { IdentityStore } from "../auth/identityStore.js";
+import { resolveRequestOrgFromResource } from "./requestOrgResolver.js";
 
 export const SESSION_COOKIE = "tanren_session";
 export const CSRF_HEADER = "x-csrf-token";
@@ -26,6 +28,13 @@ export interface AuthMiddlewareOptions {
   localDevActor?: ActorContext | undefined;
   /** Paths that bypass authentication; defaults cover health, version, auth handshake. */
   publicPaths?: ReadonlySet<string>;
+  // RLS HTTP-route scoping: the pool used to resolve the request's org from the
+  // addressed RESOURCE id (specs/runs/projects in the path) when there is no
+  // `orgs` path segment — the resource-keyed root shapes (`/specs/:specId/runs`,
+  // `/runs/:runId/*`). Looked up on the BYPASSRLS system pool inside the
+  // resolver. When omitted (pure-auth unit tests), only the path-`orgs` /
+  // header / query / single-org arms apply; the resource arm is skipped.
+  pool?: pg.Pool;
 }
 
 export interface ActorContextEnv {
@@ -52,13 +61,7 @@ export function createAuthMiddleware(options: AuthMiddlewareOptions): Middleware
       if (record === undefined) {
         return c.json({ error: "unauthorized", message: "invalid api token" }, 401);
       }
-      const actor = await options.store.resolveActorContext({
-        userId: record.userId,
-        orgId: extractOrgId(c),
-        projectId: extractProjectId(c),
-        source: "api_token",
-        platformAdminUserIds: options.platformAdminUserIds,
-      });
+      const actor = await resolveActorForRequest(c, options, record.userId, "api_token");
       bindActor(c, actor);
       return runScoped(c, next);
     }
@@ -73,13 +76,7 @@ export function createAuthMiddleware(options: AuthMiddlewareOptions): Middleware
             return c.json({ error: "csrf_token_invalid" }, 403);
           }
         }
-        const actor = await options.store.resolveActorContext({
-          userId: session.userId,
-          orgId: extractOrgId(c),
-          projectId: extractProjectId(c),
-          source: "session",
-          platformAdminUserIds: options.platformAdminUserIds,
-        });
+        const actor = await resolveActorForRequest(c, options, session.userId, "session");
         bindActor(c, actor);
         return runScoped(c, next);
       }
@@ -92,6 +89,64 @@ export function createAuthMiddleware(options: AuthMiddlewareOptions): Middleware
 
     return c.json({ error: "unauthorized", message: "authentication required" }, 401);
   };
+}
+
+// RLS HTTP-route scoping: resolve the actor AND the org the request is scoped to
+// — the systematic middleware-level org resolution that covers EVERY route shape,
+// not just `/orgs/:orgId/*`. The org is resolved in this precedence (#181's
+// strategy, extended with the resource + single-org arms):
+//
+//   1. PATH `:orgId` / header / query — the explicitly addressed org (extractOrgId);
+//   2. else the addressed RESOURCE → its org — look up `specs.org_id` /
+//      `runs.org_id` / `projects.org_id` keyed by the id in the path, via a
+//      `runWithSystemScope` lookup (the resource-keyed root shapes:
+//      `/specs/:specId/runs`, `/runs/:runId/*`);
+//   3. else the actor's SOLE org — an unambiguous default when the user belongs
+//      to exactly one org (so a body-only root POST like `/projects` still scopes).
+//
+// Every candidate org is passed to `resolveActorContext`, which re-checks the
+// user's membership — so the resolution NEVER widens access: a non-member (or an
+// unknown/missing resource) resolves back to NO org, and the handler then 404s
+// under its own scope exactly as before. The result drives both the actor's
+// `orgId` (so self-scoping creators like `createQueuedRunFromSpec` open the right
+// `runWithOrgScope`) and the per-request `runWithJobOrgId` scope (so every
+// handler `.query` on the scoping pool self-scopes).
+async function resolveActorForRequest(
+  c: Context<ActorContextEnv>,
+  options: AuthMiddlewareOptions,
+  userId: string,
+  source: ActorContext["source"],
+): Promise<ActorContext> {
+  let orgId = extractOrgId(c);
+  // Arm 2: no explicitly addressed org → derive it from the addressed resource.
+  if (orgId === undefined && options.pool !== undefined) {
+    orgId = await resolveRequestOrgFromResource(options.pool, c.req.path);
+  }
+  const actor = await options.store.resolveActorContext({
+    userId,
+    orgId,
+    projectId: extractProjectId(c),
+    source,
+    platformAdminUserIds: options.platformAdminUserIds,
+  });
+  // Arm 3: the request addressed no org and none was resolved from a resource,
+  // and the actor carries none — fall back to the user's SOLE org when there is
+  // exactly one (re-resolving so the membership scopes are derived too). A user
+  // in zero or multiple orgs gets no implicit scope (the bootstrap routes that
+  // list-my-orgs are correctly system-scoped and need none).
+  if (orgId === undefined && actor.orgId === null) {
+    const soleOrgId = await options.store.resolveSoleOrgForUser(userId);
+    if (soleOrgId !== undefined) {
+      return options.store.resolveActorContext({
+        userId,
+        orgId: soleOrgId,
+        projectId: extractProjectId(c),
+        source,
+        platformAdminUserIds: options.platformAdminUserIds,
+      });
+    }
+  }
+  return actor;
 }
 
 // RLS wave R1: bind the resolved actor AND its org session-context root onto

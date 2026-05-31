@@ -42,6 +42,23 @@ export interface CredentialRecord {
   createdAt: string;
 }
 
+// The credential LIST surface (`GET /orgs/:orgId/credentials`, `GET
+// /credentials/me`) reads this registry, NOT the secret store — values live in
+// Vault and are never listed; the registry only tracks the {ref, kind, scope,
+// owner} metadata an import records. The org-scoped import routes above
+// (`POST /orgs/:orgId/credentials`, `POST /credentials/me`) `put` into it, so an
+// import LISTS within the same process — proven by the RLS HTTP-route flow smoke.
+//
+// KNOWN LIMITATION (in-memory): the default `InMemoryCredentialRegistry` does
+// NOT survive an orchestrator restart, and the LEGACY top-level import endpoints
+// (`/credentials/<slug>/import`, `/credentials/github/import` in
+// `mountRootApiRoutes`) write only to the secret store WITHOUT a registry `put`
+// (they carry no org/me scope context), so a credential imported through THOSE
+// routes — or imported before a restart — does not appear in the list. Operators
+// who need the list populated must import through the org-scoped surface above
+// (the recommended P2A-0013 endpoints). A durable, Vault-backed registry would
+// require a SecretStore `list(prefix)` contract method (not yet defined) and is
+// tracked as a follow-up; it is NOT an RLS scoping bug.
 export interface CredentialRegistry {
   list(args: { scope: "org" | "me"; ownerId: string }): Promise<CredentialRecord[]>;
   get(ref: string): Promise<CredentialRecord | undefined>;

@@ -10,6 +10,7 @@ import { getSystemPool, runWithOrgScope, runWithSystemScope } from "@tanren/db";
 import type { Hono } from "hono";
 import type pg from "pg";
 import type { ActorContext } from "./auth/index.js";
+import { orgScopingPool } from "./engine/data/orgScopedDb.js";
 import {
   ciPollInputSchema,
   draftPrInputSchema,
@@ -67,6 +68,18 @@ function actorOf(c: { var: { actor?: ActorContext } }): ActorContext | undefined
  */
 export function mountRootApiRoutes(app: Hono<ActorContextEnv>, deps: RootApiDeps): void {
   const { pool, secrets, githubHttp, githubAppMinter, identitySecretRef } = deps;
+  // RLS HTTP-route scoping: these root handlers are RESOURCE-keyed (no `:orgId`
+  // path segment), so the auth middleware resolves the request's org from the
+  // addressed spec/run/project and publishes it on the `runWithJobOrgId` ambient.
+  // The per-run workflow handlers (`draft-pr`, `ci/poll`) issue raw `pool.query`
+  // against tenant tables (`runs`/`runners`/`tasks`), so they run on this
+  // org-scoping pool: each `.query` opens a SHORT `runWithOrgScope` from the
+  // ambient org id, so the enforced `tanren_app` policies admit the rows. (The
+  // creation handlers — `createProject`/`createSpec`/`createQueuedRunFromSpec` —
+  // self-scope from the now-correctly-resolved `actor.orgId` via their own
+  // `runWithOrgScope`, so they keep the bare pool; `GET /runs/:runId` resolves
+  // its run's org via the system scope itself.)
+  const scopedPool = orgScopingPool(pool);
 
   app.post("/projects", async (c) => {
     const parsed = projectInputSchema.safeParse(await c.req.json().catch(() => {}));
@@ -165,7 +178,7 @@ export function mountRootApiRoutes(app: Hono<ActorContextEnv>, deps: RootApiDeps
     try {
       return c.json(
         await publishDraftPullRequestForRun({
-          pool,
+          pool: scopedPool,
           secrets,
           githubHttp,
           ssh: deps.helloDependencies.ssh,
@@ -196,7 +209,7 @@ export function mountRootApiRoutes(app: Hono<ActorContextEnv>, deps: RootApiDeps
     try {
       return c.json(
         await pollCiForRun({
-          pool,
+          pool: scopedPool,
           secrets,
           githubHttp,
           runId: c.req.param("runId"),
