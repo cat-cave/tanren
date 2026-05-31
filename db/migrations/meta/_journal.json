@@ -225,6 +225,13 @@
       "when": 1780191333723,
       "tag": "0031_dataplane_deprivilege",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1780256431815,
+      "tag": "0032_lovely_bushwacker",
+      "breakpoints": true
     }
   ]
 }

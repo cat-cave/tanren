@@ -107,6 +107,7 @@ const SEVERITY_OVERRIDES: Partial<Record<EventName, Severity>> = {
   // Review
   "review.requested": "info",
   "review.approved": "ok",
+  "review.auto_approved": "ok",
   "review.changes_requested": "warn",
 
   // Notification meta — opted off by default; severity floor will mask them

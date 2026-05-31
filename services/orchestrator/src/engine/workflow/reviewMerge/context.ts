@@ -7,7 +7,7 @@ import type pg from "pg";
 import { z } from "zod";
 import { migrateOrgConfig, type OrgGithubAppInstallation } from "../../config/orgConfig.js";
 import { migrateProjectConfig } from "../../config/projectConfig.js";
-import type { GovernancePosture, MergeIntegration } from "../../config/shared.js";
+import type { GovernancePosture, MergeIntegration, ReviewPolicy } from "../../config/shared.js";
 import { validateGithubCredentialRef } from "../../credentials/githubToken.js";
 
 export type RunStateClient = Pick<pg.Pool | pg.PoolClient, "query">;
@@ -31,6 +31,12 @@ export interface ReviewMergeRunContext {
   mergeIntegration: MergeIntegration;
   /** P3-0023: external-push governance posture (project config). */
   governancePosture: GovernancePosture;
+  /**
+   * Whether the review stage requires a human verdict before merge (project
+   * config). `auto` short-circuits the review poll to an approved verdict;
+   * `human` (the default) preserves the GitHub-polling behavior.
+   */
+  reviewPolicy: ReviewPolicy;
   /**
    * P3-0023: GitHub logins that represent Tanren's own pushes on this repo.
    * External-change detection treats any other contributor as non-Tanren. The
@@ -115,6 +121,7 @@ export async function loadReviewMergeRunContext(
     baseBranch: row.default_branch ?? "main",
     mergeIntegration: projectConfig.mergeIntegration,
     governancePosture: projectConfig.governancePosture,
+    reviewPolicy: projectConfig.reviewPolicy,
     tanrenLogins: tanrenLoginsFor(installation),
     installation,
     ...(staticCredentialRef !== undefined && { staticCredentialRef }),

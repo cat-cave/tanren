@@ -68,6 +68,7 @@ import {
   Phase1FixtureFailedPayload,
   Phase1FixtureStartedPayload,
   ReviewApprovedPayload,
+  ReviewAutoApprovedPayload,
   ReviewChangesRequestedPayload,
   ReviewRequestedPayload,
 } from "./schemas/integrations.js";
@@ -202,6 +203,7 @@ export const EventRegistry = {
   // Review lifecycle (schemas from Phase 2; P3-0008 wires the emitters)
   "review.requested": ReviewRequestedPayload,
   "review.approved": ReviewApprovedPayload,
+  "review.auto_approved": ReviewAutoApprovedPayload,
   "review.changes_requested": ReviewChangesRequestedPayload,
 
   // P3-0008 merge stage: per-repo integration dispatch + conflict scaffolding

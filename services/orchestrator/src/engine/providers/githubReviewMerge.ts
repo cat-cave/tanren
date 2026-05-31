@@ -56,21 +56,56 @@ export class GitHubReviewMergeService {
   constructor(private readonly http: GitHubHttpClient) {}
 
   /**
-   * Mark a draft PR ready for review. GitHub's "ready_for_review" is a GraphQL
-   * mutation, but the REST PATCH `{ draft: false }` is the supported flip and is
-   * idempotent — re-marking an already-ready PR is a no-op 200.
+   * Mark a draft PR ready for review (genuinely un-draft it). GitHub's REST API
+   * has NO supported way to un-draft a PR — a `PATCH /pulls/{n} { draft: false }`
+   * is silently ignored and the PR stays `draft: true`, which makes `direct_merge`
+   * fail (GitHub refuses to merge a draft). The ONLY supported flip is the
+   * GraphQL `markPullRequestReadyForReview` mutation, which takes the PR's global
+   * node id. So we first read the PR node id over REST, then issue the mutation.
+   * Idempotent: re-marking an already-ready PR returns a GraphQL error that we
+   * tolerate (the PR is already non-draft, which is the desired end state).
    */
   async markReadyForReview(input: { repo: GitHubRepository; pullNumber: number } & TokenInput): Promise<void> {
+    const nodeId = await this.fetchPullRequestNodeId(input);
     const response = await this.http.request({
-      method: "PATCH",
-      path: repoPath(input.repo, `/pulls/${input.pullNumber}`),
+      method: "POST",
+      path: "/graphql",
       token: input.token,
       refreshToken: input.refreshToken,
-      body: { draft: false },
+      body: {
+        query: MARK_READY_FOR_REVIEW_MUTATION,
+        variables: { pullRequestId: nodeId },
+      },
     });
     if (response.status !== 200) {
       throw new Error(`GitHub mark-ready failed: HTTP ${response.status}`);
     }
+    const error = firstGraphqlError(response.body);
+    // A PR that is already non-draft is the desired end state — GitHub returns a
+    // "not a draft pull request" error which we tolerate as idempotent success.
+    if (error !== undefined && !isAlreadyReadyError(error)) {
+      throw new Error(`GitHub mark-ready GraphQL error: ${error}`);
+    }
+  }
+
+  /** Read the PR's GraphQL global node id (required by the ready mutation). */
+  private async fetchPullRequestNodeId(
+    input: { repo: GitHubRepository; pullNumber: number } & TokenInput,
+  ): Promise<string> {
+    const response = await this.http.request({
+      method: "GET",
+      path: repoPath(input.repo, `/pulls/${input.pullNumber}`),
+      token: input.token,
+      refreshToken: input.refreshToken,
+    });
+    if (response.status !== 200) {
+      throw new Error(`GitHub mark-ready PR lookup failed: HTTP ${response.status}`);
+    }
+    const nodeId = parseNodeId(response.body);
+    if (nodeId === undefined) {
+      throw new Error("GitHub mark-ready: PR response carried no node_id");
+    }
+    return nodeId;
   }
 
   /** Fetch the PR reviews and reduce them to a single actionable verdict. */
@@ -233,4 +268,46 @@ function parseMessage(value: unknown): string | undefined {
   }
   const message = (value as Record<string, unknown>)["message"];
   return typeof message === "string" ? message : undefined;
+}
+
+/** The GraphQL mutation that genuinely un-drafts a PR (REST cannot do this). */
+const MARK_READY_FOR_REVIEW_MUTATION = `mutation MarkReady($pullRequestId: ID!) {
+  markPullRequestReadyForReview(input: { pullRequestId: $pullRequestId }) {
+    pullRequest { isDraft }
+  }
+}`;
+
+/** Lift the PR's GraphQL global node id from the REST PR payload. */
+function parseNodeId(value: unknown): string | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  const nodeId = (value as Record<string, unknown>)["node_id"];
+  return typeof nodeId === "string" && nodeId !== "" ? nodeId : undefined;
+}
+
+/** First GraphQL error message in a GraphQL response body, if any. */
+function firstGraphqlError(value: unknown): string | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  const errors = (value as Record<string, unknown>)["errors"];
+  if (!Array.isArray(errors) || errors.length === 0) {
+    return undefined;
+  }
+  const first = errors[0];
+  if (typeof first !== "object" || first === null || Array.isArray(first)) {
+    return "unknown GraphQL error";
+  }
+  const message = (first as Record<string, unknown>)["message"];
+  return typeof message === "string" ? message : "unknown GraphQL error";
+}
+
+/**
+ * Whether a GraphQL error means the PR is already non-draft. Re-marking a
+ * ready PR is an error in GitHub's API ("... is not a draft pull request"), but
+ * the desired end state (non-draft) already holds, so we tolerate it.
+ */
+function isAlreadyReadyError(message: string): boolean {
+  return /not a draft/iu.test(message);
 }

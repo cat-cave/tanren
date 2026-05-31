@@ -87,3 +87,18 @@ describe("loadReviewMergeRunContext credential resolution", () => {
     ).rejects.toThrow(/credential\/github\//u);
   });
 });
+
+describe("loadReviewMergeRunContext reviewPolicy threading", () => {
+  it("defaults reviewPolicy to human for a legacy config", async () => {
+    const context = await loadReviewMergeRunContext(poolReturning({ config: { version: 1 } }), "run_1");
+    expect(context.reviewPolicy).toBe("human");
+  });
+
+  it("threads an explicit auto reviewPolicy from the project config", async () => {
+    const context = await loadReviewMergeRunContext(
+      poolReturning({ config: { version: 1, reviewPolicy: "auto" } }),
+      "run_1",
+    );
+    expect(context.reviewPolicy).toBe("auto");
+  });
+});
