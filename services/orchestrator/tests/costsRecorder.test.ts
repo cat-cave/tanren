@@ -261,3 +261,48 @@ describe("CostRecorder.reconcileRunCostFromCredits", () => {
     expect(pool.updates).toHaveLength(0);
   });
 });
+
+// Plane-split P3c: with a remote-reconcile delegate wired (the worker's de-privileged
+// data-plane mode), the run-end reconcile/apportion must route the cost_records
+// SELECT+UPDATEs through the delegate (the control-plane endpoint) instead of
+// writing via this.pool — the data plane can no longer UPDATE cost_records (0031).
+describe("CostRecorder reconcile remote-delegate routing (plane-split P3c)", () => {
+  it("routes reconcileRunCostFromCcusage through the delegate and NEVER touches the pool", async () => {
+    const pool = new ReconcilePool([{ id: "1", total_tokens: 100 }]);
+    const calls: Array<{ runId: string; totalCostUsd: number; basis: string }> = [];
+    const recorder = new CostRecorder(pool as never, new FakeEventStore(), undefined, async (rec) => {
+      calls.push(rec);
+      return { updated: 7 };
+    });
+    const result = await recorder.reconcileRunCostFromCcusage("run_test", 4);
+    expect(result).toEqual({ updated: 7 });
+    expect(calls).toEqual([{ runId: "run_test", totalCostUsd: 4, basis: "ccusage" }]);
+    // The whole point: the de-privileged data plane issued NO direct cost_records write.
+    expect(pool.updates).toHaveLength(0);
+  });
+
+  it("routes reconcileRunCostFromCredits through the delegate with the priced total + 'credits' basis", async () => {
+    const pool = new ReconcilePool([{ id: "1", total_tokens: 100 }]);
+    const calls: Array<{ runId: string; totalCostUsd: number; basis: string }> = [];
+    const recorder = new CostRecorder(pool as never, new FakeEventStore(), undefined, async (rec) => {
+      calls.push(rec);
+      return { updated: 1 };
+    });
+    // 10 credits × $0.04 = $0.40 — the recorder resolves the dollar total before delegating.
+    await recorder.reconcileRunCostFromCredits("run_test", 10, 0.04);
+    expect(calls).toEqual([{ runId: "run_test", totalCostUsd: 0.4, basis: "credits" }]);
+    expect(pool.updates).toHaveLength(0);
+  });
+
+  it("does NOT delegate (and is a no-op) when the resolved total is zero", async () => {
+    const pool = new ReconcilePool([{ id: "1", total_tokens: 100 }]);
+    let delegated = false;
+    const recorder = new CostRecorder(pool as never, new FakeEventStore(), undefined, async () => {
+      delegated = true;
+      return { updated: 0 };
+    });
+    expect(await recorder.reconcileRunCostFromCcusage("run_test", 0)).toEqual({ updated: 0 });
+    expect(delegated).toBe(false);
+    expect(pool.updates).toHaveLength(0);
+  });
+});

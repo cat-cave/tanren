@@ -16,6 +16,7 @@ import type {
   FinalizeRunInput,
   FinalizeRunResult,
   RecordCostInput,
+  ReconcileCostInput,
   RunStateWriter,
 } from "../contracts/runStateWriter.js";
 import { CostRecorder, type RecordedCost } from "../costs/recorder.js";
@@ -44,6 +45,16 @@ export class DirectRunStateWriter implements RunStateWriter {
 
   async recordCost(input: RecordCostInput): Promise<RecordedCost> {
     return this.recorder.record(input.context, input.tokens, input.rawUsage);
+  }
+
+  async reconcileCost(input: ReconcileCostInput): Promise<{ updated: number }> {
+    // The apportioning SELECT + per-row UPDATEs run in ONE org-scoped transaction
+    // (the recorder handed an in-transaction client uses it verbatim), identical
+    // to the worker's prior in-process reconcile — only the explicit org opens
+    // the scope (no ambient per-job org-id is required on this path).
+    return runWithOrgScope(this.pool, input.orgId, async (client) =>
+      new CostRecorder(client, new PgEventStore(client)).applyReconcile(input.runId, input.totalCostUsd, input.basis),
+    );
   }
 
   async finalizeRun(input: FinalizeRunInput): Promise<FinalizeRunResult> {

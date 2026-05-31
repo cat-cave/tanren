@@ -2,9 +2,10 @@
 // worker POSTs its tenant run-state writes here over mTLS instead of writing the
 // control DB directly:
 //
-//   - POST /internal/append-event  — append one timeline event
-//   - POST /internal/record-cost   — insert one cost_records row (+ cost.resolved)
-//   - POST /internal/finalize-run  — finalize a run (UPDATE runs, guarded)
+//   - POST /internal/append-event   — append one timeline event
+//   - POST /internal/record-cost    — insert one cost_records row (+ cost.resolved)
+//   - POST /internal/reconcile-cost — apportion a run's cost_records (run-end back-fill)
+//   - POST /internal/finalize-run   — finalize a run (UPDATE runs, guarded)
 //
 // Each endpoint, like the claim endpoint, authenticates the mTLS peer FIRST (401
 // before any DB work), then performs the SAME org-scoped write the worker did
@@ -61,6 +62,13 @@ const recordCostSchema = z.object({
   orgId: z.string().min(1),
   tokens: z.record(z.string(), z.unknown()),
   rawUsage: z.record(z.string(), z.unknown()),
+});
+
+const reconcileCostSchema = z.object({
+  runId: z.string().min(1),
+  orgId: z.string().min(1),
+  totalCostUsd: z.number(),
+  basis: z.enum(["ccusage", "credits"]),
 });
 
 const finalizeRunSchema = z.object({
@@ -126,6 +134,25 @@ export function createInternalRunStateWriteRoutes(deps: RunStateWriteRouteDeps):
       return new CostRecorder(client, eventStore).record(context as never, tokens as never, rawUsage);
     });
     return c.json(recorded);
+  });
+
+  app.post("/internal/reconcile-cost", async (c) => {
+    if (!authnPeer(c)) {
+      return c.json({ error: "untrusted_peer" }, 401);
+    }
+    const parsed = reconcileCostSchema.safeParse(await c.req.json().catch(() => {}));
+    if (!parsed.success) {
+      return c.json({ error: "invalid_reconcile_cost", issues: parsed.error.issues }, 400);
+    }
+    const { runId, orgId, totalCostUsd, basis } = parsed.data;
+    const result = await runWithOrgScope(deps.pool, orgId, async (client) => {
+      // The SAME apportion the worker ran in-process — the run's cost_records
+      // SELECT + per-row UPDATEs, in this org scope, only now server-side under
+      // the control plane's DB access. The worker already resolved the dollar
+      // total + basis (credit/ccusage precedence), so this just applies it.
+      return new CostRecorder(client, new PgEventStore(client)).applyReconcile(runId, totalCostUsd, basis);
+    });
+    return c.json(result);
   });
 
   app.post("/internal/finalize-run", async (c) => {
