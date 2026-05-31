@@ -128,12 +128,19 @@ services:
       dockerfile: services/orchestrator/Dockerfile
     command: ["pnpm", "--filter", "@tanren/orchestrator", "start:worker"]
     environment:
-      # Same runtime/system roles as the orchestrator (RLS R3b): the runtime pool
-      # is the restricted `tanren_app` role; `runWithSystemScope`/the reaper use
-      # the BYPASSRLS `tanren_system` role. The worker does NOT migrate (the
-      # orchestrator owns the migrate step — `depends_on` it below), so it carries
-      # no MIGRATION_DATABASE_URL.
-      DATABASE_URL: postgres://tanren_app:tanren_app@postgres:5432/tanren
+      # Plane-split P3b (the de-privilege CUTOVER): the data plane's runtime pool
+      # now connects as the DE-PRIVILEGED `tanren_dataplane` role (migration 0031),
+      # NOT `tanren_app`. That role has NO INSERT/UPDATE/DELETE on `events` and no
+      # write on `cost_records` — the two tenant tables the worker no longer writes
+      # directly once remote-writes is ON (below). A compromised runner connecting
+      # as this role is rejected by Postgres if it tries to forge an event/cost row
+      # (the P3b negative test). It KEEPS run/spec/task write grants — the workflow
+      # still writes those directly (deferred to a later wave). The reaper's
+      # cross-org lineage read still uses the BYPASSRLS `tanren_system` pool (a
+      # READ-only system concern, orthogonal to the tenant-write de-privilege). The
+      # worker does NOT migrate (the orchestrator owns it — `depends_on` it below),
+      # so it carries no MIGRATION_DATABASE_URL.
+      DATABASE_URL: postgres://tanren_dataplane:tanren_dataplane@postgres:5432/tanren
       TANREN_SYSTEM_DATABASE_URL: postgres://tanren_system:tanren_system@postgres:5432/tanren
       VAULT_ADDR: http://vault:8200
       VAULT_TOKEN: dev-root-token
@@ -156,15 +163,19 @@ services:
       TANREN_DATA_PLANE_TLS_CERT: /etc/tanren/mtls/worker.crt
       TANREN_DATA_PLANE_TLS_KEY: /etc/tanren/mtls/worker.key
       TANREN_DATA_PLANE_TLS_CA: /etc/tanren/mtls/ca.crt
-      # Plane-split P3: opt-in (default OFF) routing of the worker's run-state
-      # WRITES — event-append, cost-record insert, run finalize — through the
-      # control-plane `/internal/*` write endpoints over the SAME mTLS channel,
-      # so the data plane writes NO tenant tables directly. The write endpoint
-      # shares the claim host (TANREN_CLAIM_ENDPOINT_URL) by default. The smoke
-      # sets TANREN_DATA_PLANE_REMOTE_WRITES=1 to prove the remote-write path
-      # end-to-end under enforced RLS; leaving it unset keeps direct writes
-      # (reversible). See docs/roadmap/saas-rls-and-plane-split-plan.md (P3).
-      TANREN_DATA_PLANE_REMOTE_WRITES: ${TANREN_DATA_PLANE_REMOTE_WRITES:-}
+      # Plane-split P3b (the CUTOVER): remote-writes is now ON BY DEFAULT for the
+      # standalone worker — it routes its run-state WRITES (event-append,
+      # cost-record insert, run finalize) AND the reaper's dead-letter event
+      # through the control-plane `/internal/*` endpoints over the SAME mTLS
+      # channel, so the data plane writes `events`/`cost_records` ONLY via the
+      # control plane (matching the de-privileged role above). The write endpoint
+      # shares the claim host (TANREN_CLAIM_ENDPOINT_URL). A host override
+      # (TANREN_DATA_PLANE_REMOTE_WRITES=0) can fall back to direct writes — but
+      # then the worker MUST also use a write-capable role, so the default flip
+      # pairs the role + the flag. The in-process TANREN_RUN_WORKER=1 dev path
+      # keeps direct writes (single process, no isolation gain — see boot.ts). See
+      # docs/roadmap/saas-rls-and-plane-split-plan.md (P3b).
+      TANREN_DATA_PLANE_REMOTE_WRITES: ${TANREN_DATA_PLANE_REMOTE_WRITES:-1}
     volumes:
       - /tmp/tanren-mtls:/etc/tanren/mtls:ro
     depends_on:

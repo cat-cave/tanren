@@ -218,6 +218,13 @@
       "when": 1780147549682,
       "tag": "0030_damp_shinko_yamashiro",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1780191333723,
+      "tag": "0031_dataplane_deprivilege",
+      "breakpoints": true
     }
   ]
 }
