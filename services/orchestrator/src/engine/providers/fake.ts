@@ -1,18 +1,14 @@
-import type { SshTarget } from "../contracts/allocator.js";
-import type { SshSubstrate } from "../contracts/sshSubstrate.js";
-import { captureGitMutation, runFakeWriterMutation } from "../workspace/index.js";
 import type { AuditAnswer, CheckAnswer, PlanAnswer } from "./answererSchemas.js";
-import type { AnswererAdapter, WriterAdapter, WriterResult } from "./types.js";
+import type { AnswererAdapter } from "./types.js";
 
-export interface FakeWriterDependencies {
-  ssh: SshSubstrate;
-  target: SshTarget;
-}
-
-// Fake adapters used by hello and Phase 1 fixture tests are attributed as
-// self-hosted billing. PROJECT_BRIEF §4.2 treats fixed-fee local compute as a
+// Fake answerers used by the synthetic hello connectivity fixture are attributed
+// as self-hosted billing. PROJECT_BRIEF §4.2 treats fixed-fee local compute as a
 // self-hosted endpoint with no per-call dollar basis, so the recorder writes
 // cost_usd = NULL / cost_basis = 'unknown'. Token accounting still lands.
+//
+// NOTE: there is intentionally NO fake WRITER adapter here. The fake writer is a
+// TEST FIXTURE ONLY (tests/fixtures/fakeWriter.ts) so production code can never
+// construct it; the real run path's writer is selected by role-routing config.
 export const fakeSelfHostedAuthRef = "credential/self-hosted/tanren-fake";
 
 export const fakePlanner: AnswererAdapter<PlanAnswer> = {
@@ -30,33 +26,6 @@ export const fakePlanner: AnswererAdapter<PlanAnswer> = {
     };
   },
 };
-
-export const fakeWriter: WriterAdapter = {
-  kind: "writer",
-  cli: "fake",
-  authRef: fakeSelfHostedAuthRef,
-  async runWriter(): Promise<WriterResult> {
-    throw new Error("fake writer requires a runner SSH target; use createFakeWriter");
-  },
-};
-
-export function createFakeWriter(dependencies: FakeWriterDependencies): WriterAdapter {
-  return {
-    kind: "writer",
-    cli: "fake",
-    authRef: fakeSelfHostedAuthRef,
-    async runWriter(opts): Promise<WriterResult> {
-      const input = {
-        ssh: dependencies.ssh,
-        target: dependencies.target,
-        workspacePath: opts.workspace,
-        timeoutMs: opts.timeoutMs,
-      };
-      await runFakeWriterMutation(input);
-      return await captureGitMutation(input);
-    },
-  };
-}
 
 export const fakeChecker: AnswererAdapter<CheckAnswer> = {
   kind: "answerer",
