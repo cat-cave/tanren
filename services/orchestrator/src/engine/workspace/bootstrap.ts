@@ -14,9 +14,13 @@ import { quoteSshShellArg } from "../ssh/command.js";
 // recovery surface carry a useful, bounded diagnostic.
 const OUTPUT_TAIL_LIMIT = 4_000;
 
-// Default install command. We prefer pnpm (the monorepo + fixture standard)
-// but fall back to npm when there is no pnpm lockfile, so a plain-npm repo
-// still bootstraps. The detection runs runner-side as part of the command.
+// Default install command. The branch is chosen runner-side by which manifest
+// the repo actually ships: a pnpm lockfile uses pnpm, an npm lockfile uses
+// `npm ci`, a bare `package.json` (no lockfile) uses `npm install`, and a repo
+// with NO package manifest skips dependency bootstrap entirely (exit 0). The
+// old default ran `pnpm install` unconditionally, which failed `exit 127`
+// (`pnpm: command not found`) on manifest-less repos — a class the easy fixture
+// falls into. npm is always present in the base runner image; pnpm is too.
 //
 // This is the fallback used only when the repo declares no install command: the
 // run path resolves the repo's tanren-ci.yml `bootstrap.run` (P3-0004's
@@ -24,7 +28,10 @@ const OUTPUT_TAIL_LIMIT = 4_000;
 // `command`; when the repo ships no tanren-ci.yml the resolver yields undefined
 // and this heuristic default applies.
 export const DEFAULT_BOOTSTRAP_COMMAND =
-  "if [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile; elif [ -f package-lock.json ]; then npm ci; else pnpm install; fi";
+  "if [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile; " +
+  "elif [ -f package-lock.json ]; then npm ci; " +
+  "elif [ -f package.json ]; then npm install; " +
+  "else echo 'tanren: no package manifest found; skipping dependency bootstrap'; fi";
 
 export interface BootstrapWorkspaceInput {
   ssh: SshSubstrate;
