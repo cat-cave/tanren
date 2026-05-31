@@ -266,18 +266,27 @@ smoke-plane-split-worker:
 smoke-plane-split-p3:
   DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/planeSplitP3RemoteWrites.integration.test.ts
 
-# Plane-split P3 cross-process REMOTE-WRITES proof: recreate the `worker` data
-# plane with TANREN_DATA_PLANE_REMOTE_WRITES=1, then re-run the cross-process
-# smoke. The worker now finalizes its run THROUGH the control-plane `/internal/*`
-# write endpoints over mTLS (writing NO tenant tables directly); the smoke's
-# terminal-state assertion proves the remote-write path end-to-end under enforced
-# RLS. Recreates the worker WITHOUT the flag afterward so the stack is restored.
-smoke-plane-split-worker-remote-writes: gen-mtls-certs
-  TANREN_RUNNER_AUTHORIZED_KEY="$(cat /tmp/tanren_runner_key.pub)" TANREN_RUNNER_IDENTITY_PRIVATE_KEY="$(cat /tmp/tanren_runner_key)" TANREN_DATA_PLANE_REMOTE_WRITES=1 docker compose -f compose.dev.yml up -d --no-deps --force-recreate worker
-  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" corepack pnpm exec tsx scripts/smoke/plane-split-worker.ts
-  TANREN_RUNNER_AUTHORIZED_KEY="$(cat /tmp/tanren_runner_key.pub)" TANREN_RUNNER_IDENTITY_PRIVATE_KEY="$(cat /tmp/tanren_runner_key)" docker compose -f compose.dev.yml up -d --no-deps --force-recreate worker
+# Plane-split P3b (real PG): the DE-PRIVILEGE proof. Migrates a fresh DB (creates
+# the `tanren_dataplane` role + drops its events/cost_records write grants), then
+# proves under that role: a direct INSERT INTO events / cost_records is REJECTED
+# for the privilege (42501), the cost_records READ is kept, the run/task writes
+# the workflow still drives are kept, and the control-plane `tanren_app` role can
+# still insert the same event (contrast). DATABASE_URL is the owner.
+smoke-plane-split-p3b:
+  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/planeSplitP3bDeprivilege.integration.test.ts
 
-smoke: compose-build compose-up wait-for-stack smoke-hello smoke-ssh-integration smoke-plane-split-worker smoke-plane-split-worker-remote-writes smoke-plane-split-p3 smoke-rls-r1 smoke-rls-r2 smoke-rls-r2-cohort2 smoke-rls-r2-cohort3 smoke-rls-r2-cohort4 smoke-rls-r3a smoke-rls-r3a-worker smoke-rls-r3b smoke-rls-early-finalize
+# Plane-split P3b cross-process CUTOVER proof. The compose `worker` now DEFAULTS
+# to the de-privileged `tanren_dataplane` role + remote-writes ON, so the regular
+# `smoke-plane-split-worker` already runs the cutover topology; this recipe makes
+# it explicit + adds the LIVE negative test: connect to the running stack as
+# `tanren_dataplane` and confirm a direct tenant-table write (events) is denied by
+# Postgres. Recreates the worker (idempotent, same defaults) so the stack is
+# restored.
+smoke-plane-split-worker-remote-writes: gen-mtls-certs
+  TANREN_RUNNER_AUTHORIZED_KEY="$(cat /tmp/tanren_runner_key.pub)" TANREN_RUNNER_IDENTITY_PRIVATE_KEY="$(cat /tmp/tanren_runner_key)" docker compose -f compose.dev.yml up -d --no-deps --force-recreate worker
+  TANREN_PLANE_SPLIT_PROVE_DEPRIVILEGE=1 DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" corepack pnpm exec tsx scripts/smoke/plane-split-worker.ts
+
+smoke: compose-build compose-up wait-for-stack smoke-hello smoke-ssh-integration smoke-plane-split-worker smoke-plane-split-worker-remote-writes smoke-plane-split-p3 smoke-plane-split-p3b smoke-rls-r1 smoke-rls-r2 smoke-rls-r2-cohort2 smoke-rls-r2-cohort3 smoke-rls-r2-cohort4 smoke-rls-r3a smoke-rls-r3a-worker smoke-rls-r3b smoke-rls-early-finalize
 
 # P3-0001: the Phase 2A direct-execution acceptance gate (`just acceptance`,
 # scripts/acceptance/easy.ts + medium.ts) was removed once the run executor
