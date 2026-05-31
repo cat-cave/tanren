@@ -118,3 +118,34 @@ tanren credential github import --ref <ref> --token-file <path>
 
 These are equivalent to `tanren credentials create --kind <…>` and also
 register the ref in the credential registry so it appears in `credentials list`.
+
+## Benchmark experiments
+
+The tanren-method benchmark toolkit
+(`docs/roadmap/tanren-method-benchmark.md`). An experiment varies exactly one
+knob across its cells; each cell freezes a config point and runs N trials; the
+report/compare verbs read the cached per-trial scorecards (median + bootstrap CI
+per metric) and a cell-vs-cell verdict (diff-of-medians + Mann–Whitney U +
+effect size + winner/no-call/regression).
+
+```sh
+tanren experiments create  --org-id <orgId> --title <t> --knob <k> --hypothesis <h> \
+                           --seed-task-ref '{"repo":"...","sha":"...","acceptTierHash":"...","corpusTier":1}'
+tanren experiments list    --org-id <orgId>
+tanren experiments get     --org-id <orgId> --experiment-id <id>
+
+tanren cells create        --org-id <orgId> --experiment-id <id> --label <l> \
+                           --frozen-config '<FrozenConfig JSON>' --trials-target <n>
+tanren cells list          --org-id <orgId> --experiment-id <id>
+
+tanren experiments run     --org-id <orgId> (--experiment-id <id> | --cell-id <id>)
+tanren experiments report  --org-id <orgId> --cell-id <id> [--json]
+tanren experiments compare --org-id <orgId> --experiment-id <id> --cell-a <id> --cell-b <id> [--json]
+```
+
+`experiments run` enqueues one trial run per `trials-target` through the normal
+worker dequeue→execute path (it does not execute runs itself). `report` and
+`compare` render a table by default; pass `--json` for the raw response. A
+`compare` of two cells that differ in more than one frozen-config dimension is
+**refused** server-side (the §3.3 one-knob invariant) and the CLI surfaces the
+`one_knob_violation` error as a non-zero exit.

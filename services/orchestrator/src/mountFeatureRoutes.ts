@@ -18,7 +18,7 @@ import { mountBrownfieldRoutes } from "./routes/brownfield/mount.js";
 import { createCredentialRoutes, type CredentialRegistry } from "./routes/credentials/index.js";
 import { createDiscoveryRoutes } from "./routes/discovery/index.js";
 import { createDoctorRoutes } from "./routes/doctor/index.js";
-import { createDoraRoutes } from "./routes/dora/index.js";
+import { mountReportRoutes } from "./routes/experiments/mount.js";
 import { createForgeAskRoutes } from "./routes/forge/ask.js";
 import { createForgeProposalRoutes } from "./routes/forge/proposals.js";
 import { createInboxRoutes } from "./routes/inbox/index.js";
@@ -98,7 +98,8 @@ export function mountFeatureRoutes(app: Hono<ActorContextEnv>, deps: FeatureRout
   // candidate inbox as a system (auto-routing) source; the pass runner is
   // injectable (defaults to a safe no-op until an SSH-backed runner is wired).
   app.route("/orgs", createAuditRoutes({ pool: scopedPool }));
-  app.route("/orgs", createDoraRoutes({ pool: scopedPool }));
+  // DORA delivery metrics + the benchmark experiment/cell report+CRUD surface.
+  mountReportRoutes(app, { pool: scopedPool });
   app.route("/orgs", createNotificationRoutes({ pool: scopedPool }));
   app.route("/orgs", createRunRoutes({ pool: scopedPool }));
   app.route("/orgs", createRecoveryRoutes({ pool: scopedPool }));

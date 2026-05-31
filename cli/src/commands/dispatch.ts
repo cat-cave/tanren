@@ -4,6 +4,16 @@
 
 import { behaviorsCreate, behaviorsGet, behaviorsList } from "./behaviors/index.js";
 import { credentialsCreate, credentialsDelete, credentialsGet, credentialsList } from "./credentials/index.js";
+import {
+  cellsCreate,
+  cellsList,
+  experimentsCompare,
+  experimentsCreate,
+  experimentsGet,
+  experimentsList,
+  experimentsReport,
+  experimentsRun,
+} from "./experiments/index.js";
 import { milestonesCreate, milestonesGet, milestonesList } from "./milestones/index.js";
 import { orgsConfigSet, orgsGet, orgsList } from "./orgs/index.js";
 import { personasCreate, personasGet, personasList } from "./personas/index.js";
@@ -35,6 +45,14 @@ const HANDLERS: Record<string, (rest: string[]) => Promise<void>> = {
   "credentials create": credentialsCreate,
   "credentials get": credentialsGet,
   "credentials delete": credentialsDelete,
+  "experiments create": experimentsCreate,
+  "experiments list": experimentsList,
+  "experiments get": experimentsGet,
+  "experiments run": experimentsRun,
+  "experiments report": experimentsReport,
+  "experiments compare": experimentsCompare,
+  "cells create": cellsCreate,
+  "cells list": cellsList,
 };
 
 export function findProductHandler(
