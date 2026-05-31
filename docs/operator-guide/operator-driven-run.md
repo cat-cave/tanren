@@ -31,6 +31,18 @@ stays 3000.
 > `just up-dev`, or otherwise drop the orchestrator volume before bringing the
 > stack up.
 
+> **CLI-equivalent flow + live gotchas.** This runbook is dashboard-driven; the
+> same steps are scriptable with the `tanren` CLI (`docs/operator-guide/cli.md`).
+> A live validation run drove the CLI path end-to-end and surfaced gotchas worth
+> reading before you start — `tanren orgs config-set` **replaces the whole org
+> config** (it is not a deep merge; always send the complete config), org-scoped
+> credentials are namespaced `credential/<slug>/org/<orgId>/<name>` and must be
+> imported through the org-scoped surface (the legacy top-level routes do not
+> populate the credential list), and the default credential registry is
+> in-memory (creds vanish on orchestrator restart). The full set of findings +
+> exactly where the live demo stands is in
+> [live-validation-findings.md](./live-validation-findings.md).
+
 ## 2. Sign in
 
 Open <http://localhost:3000> (or your remapped `DASHBOARD_HOST_PORT`). With the

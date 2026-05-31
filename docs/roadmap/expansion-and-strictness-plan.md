@@ -1,13 +1,17 @@
 # Expansion & Strictness Plan
 
 Two standing tracks pursued autonomously after the Phase 3 build. Both built to
-**code + mocked-tests + CI-green**; live validation (real cloud / SaaS creds)
-remains deferred. Seam inventory + strictness baseline were mapped 2026-05-29.
+**code + mocked-tests + CI-green**. Live validation has since **partially landed**:
+a live operator-driven run validated the RLS multi-tenancy path end-to-end (see
+`docs/operator-guide/live-validation-findings.md`); the full run close-out (real
+harness write → CI → merge) and the cloud-allocator / connector seams still await
+credentials. Seam inventory + strictness baseline were mapped 2026-05-29. The
+current forward plan across all four dimensions is `docs/roadmap/forward-roadmap.md`.
 
 **Status:** both tracks are **merged on `main`**, except the explicitly deferred
-GitLab/VCS abstraction and the agy/pi/reasonix harnesses (await CLI specs). The
-"Backlog" column below is retained as the original plan; the "Status" column
-records what shipped.
+GitLab/VCS abstraction and the **agy** harness (broken headless — the **pi** and
+**reasonix** writer-only adapters have since shipped, #145). The "Backlog" column
+below is retained as the original plan; the "Status" column records what shipped.
 
 ## Track A — capability / connectivity expansion (clean adapter seams)
 

@@ -403,7 +403,7 @@ flows can honestly deliver, and it is enough to answer the motivating questions.
 5. **Where it lives.** An _internal_ tuning tool (the out-of-the-box config) or a
    _customer-facing_ "tune your org's config" surface? That changes whether the
    entities are control-plane-internal or first-class product (and touches the
-   deferred RLS / control-/data-plane split).
+   RLS + control-/data-plane split, now shipped through P3b).
 6. **Default-config feedback loop.** What governs promoting a benchmark-winning
    config to the _shipped default_ routing/gate — auto on a clean snapshot, or
    always human-gated?
