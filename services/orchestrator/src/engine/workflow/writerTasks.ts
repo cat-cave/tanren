@@ -1,17 +1,19 @@
-import type { RunnerAllocation } from "../contracts/allocator.js";
-import type { SshSubstrate } from "../contracts/sshSubstrate.js";
-import { createFakeWriter } from "../providers/fake.js";
-import type { WriterResult } from "../providers/types.js";
+import type { WriterAdapter, WriterResult } from "../providers/types.js";
 
+/**
+ * Run the write stage with the writer adapter the caller resolved. The adapter
+ * is ALWAYS supplied by the caller — the real run path passes the role-routing
+ * selected writer (Codex by default; Claude/opencode purely by routing data),
+ * and the synthetic hello-connectivity fixture passes its fixture writer. No
+ * writer is constructed in here, so production can never hardcode a fake.
+ */
 export async function executeWriteTask(input: {
-  allocation: RunnerAllocation;
+  writer: WriterAdapter;
   prompt: string;
-  ssh: SshSubstrate;
   timeoutMs: number;
   workspacePath: string;
 }): Promise<WriterResult> {
-  const fakeWriter = createFakeWriter({ ssh: input.ssh, target: input.allocation.target });
-  return await fakeWriter.runWriter({
+  return await input.writer.runWriter({
     prompt: input.prompt,
     workspace: input.workspacePath,
     timeoutMs: input.timeoutMs,

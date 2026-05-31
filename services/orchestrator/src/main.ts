@@ -19,7 +19,7 @@ import { startInternalMtlsServer } from "./internalServer.js";
 import type { runHelloWorkflow } from "./engine/workflow/helloRun.js";
 import { createAuthMiddleware, type ActorContextEnv } from "./middleware/auth.js";
 import { createAuthRoutes } from "./routes/auth/index.js";
-import { InMemoryCredentialRegistry, type CredentialRegistry } from "./routes/credentials/index.js";
+import { SecretStoreCredentialRegistry, type CredentialRegistry } from "./routes/credentials/index.js";
 import { mountFeatureRoutes } from "./mountFeatureRoutes.js";
 import { mountRootApiRoutes } from "./mountRootApiRoutes.js";
 
@@ -110,7 +110,10 @@ export function buildApp(input: {
     );
   }
 
-  const credentialRegistry = input.credentialRegistry ?? new InMemoryCredentialRegistry();
+  // Durable credential registry: records persist in the SAME SecretStore as the
+  // credential values (under `credregistry/...`), so the credential LIST survives
+  // an orchestrator restart.
+  const credentialRegistry = input.credentialRegistry ?? new SecretStoreCredentialRegistry(secrets);
 
   // P3-0017: audit-gate GitHub port factory. Mints the org's App token (or the
   // static fallback) so a Bucket-B write opens a PR in `tanren-config`. Injectable.

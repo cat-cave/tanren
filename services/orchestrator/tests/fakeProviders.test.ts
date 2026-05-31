@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { SshTarget } from "../src/engine/contracts/allocator.js";
 import type { SshCommand, SshCommandResult, SshSubstrate } from "../src/engine/contracts/sshSubstrate.js";
 import { auditAnswerSchema, checkAnswerSchema, planAnswerSchema } from "../src/engine/providers/answererSchemas.js";
-import { createFakeWriter, fakeAuditor, fakeChecker, fakePlanner } from "../src/engine/providers/fake.js";
+import { fakeAuditor, fakeChecker, fakePlanner } from "../src/engine/providers/fake.js";
+import { createFakeWriter } from "./fixtures/fakeWriter.js";
 
 describe("fake provider adapters", () => {
   it("prove the writer and answerer contracts can complete with real git metadata", async () => {

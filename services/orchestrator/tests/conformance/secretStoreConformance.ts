@@ -71,5 +71,34 @@ export function describeSecretStoreConformance(label: string, harness: SecretSto
       await expect(store.get("a/one")).resolves.toBeUndefined();
       await expect(store.get("b/two")).resolves.toEqual({ ref: "b/two", value: "2" });
     });
+
+    it("list() returns only the refs under the prefix, never values", async () => {
+      const store = harness.make();
+      await store.put({ ref: "credregistry/one", value: "v1" });
+      await store.put({ ref: "credregistry/two", value: "v2" });
+      await store.put({ ref: "other/three", value: "v3" });
+      const listed = await store.list("credregistry/");
+      expect([...listed].sort()).toEqual(["credregistry/one", "credregistry/two"]);
+      // The values never leak through list — the contract returns refs only.
+      expect(listed.every((ref) => typeof ref === "string")).toBe(true);
+    });
+
+    it("list() recovers nested-path refs and reflects deletes", async () => {
+      const store = harness.make();
+      await store.put({ ref: "credregistry/org/acme/k1", value: "v1" });
+      await store.put({ ref: "credregistry/me/alice/k2", value: "v2" });
+      await expect(store.list("credregistry/").then((r) => [...r].sort())).resolves.toEqual([
+        "credregistry/me/alice/k2",
+        "credregistry/org/acme/k1",
+      ]);
+      await store.delete("credregistry/org/acme/k1");
+      await expect(store.list("credregistry/")).resolves.toEqual(["credregistry/me/alice/k2"]);
+    });
+
+    it("list() returns [] when nothing matches the prefix", async () => {
+      const store = harness.make();
+      await store.put({ ref: "credregistry/one", value: "v" });
+      await expect(store.list("nothing/here/")).resolves.toEqual([]);
+    });
   });
 }

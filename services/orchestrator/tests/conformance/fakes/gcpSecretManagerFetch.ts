@@ -9,6 +9,7 @@
 //   DELETE .../secrets/ID                 -> destroy container (404 if absent)
 export function gcpSecretManagerFetch(project: string): typeof fetch {
   const containers = new Map<string, string | undefined>();
+  const labelsById = new Map<string, Record<string, string>>();
   const base = `https://secretmanager.googleapis.com/v1/projects/${project}/secrets`;
 
   return (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
@@ -20,8 +21,18 @@ export function gcpSecretManagerFetch(project: string): typeof fetch {
       if (containers.has(id)) {
         return new Response("already exists", { status: 409 });
       }
+      const body = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as {
+        labels?: Record<string, string>;
+      };
       containers.set(id, undefined);
+      labelsById.set(id, body.labels ?? {});
       return new Response(JSON.stringify({ name: id }), { status: 200 });
+    }
+
+    if (method === "GET" && url.startsWith(`${base}?`) && url.includes("pageSize=")) {
+      // ListSecrets — return id+labels summaries (no pagination in the fake).
+      const secrets = [...labelsById.entries()].map(([, labels]) => ({ labels }));
+      return new Response(JSON.stringify({ secrets }), { status: 200 });
     }
 
     if (method === "POST" && url.endsWith(":addVersion")) {
@@ -48,6 +59,7 @@ export function gcpSecretManagerFetch(project: string): typeof fetch {
     if (method === "DELETE") {
       const id = idFrom(url, base);
       const existed = containers.delete(id);
+      labelsById.delete(id);
       return new Response(null, { status: existed ? 200 : 404 });
     }
 
