@@ -11,19 +11,9 @@
 import { describe, expect, it } from "vitest";
 import { FakeJobQueue } from "../src/engine/contracts/jobQueue.js";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
-import type { AllocationRequest, Allocator, RunnerAllocation, SshTarget } from "../src/engine/contracts/allocator.js";
-import type { SshCommand, SshCommandResult, SshSubstrate } from "../src/engine/contracts/sshSubstrate.js";
-import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "../src/engine/providers/github.js";
 import type { AdmissionDecision, QuotaPolicy, RunUsage } from "../src/engine/quota/index.js";
 import { executeNextPlanJob } from "../src/engine/worker/index.js";
-
-const target: SshTarget = {
-  host: "runner",
-  port: 22,
-  username: "tanren",
-  hostKeyFingerprint: "SHA256:runner-host",
-  identitySecretRef: "runner/test/identity",
-};
+import { StubAllocator, StubGitHub, StubSsh } from "./quotaAdmissionGate.stubs.js";
 
 const ORG_ID = "org_gated";
 const RUN_ID = "run_gated";
@@ -104,25 +94,6 @@ class GatePool {
   }
 
   release(): void {}
-}
-
-class StubAllocator implements Allocator {
-  async allocate(_request: AllocationRequest): Promise<RunnerAllocation> {
-    return { runnerId: "r", imageSha: "sha", target };
-  }
-  async release(): Promise<void> {}
-}
-
-class StubSsh implements SshSubstrate {
-  async run(_target: SshTarget, _command: SshCommand): Promise<SshCommandResult> {
-    return { exitCode: 0, stdout: "", stderr: "", timedOut: false };
-  }
-}
-
-class StubGitHub implements GitHubHttpClient {
-  async request(_input: GitHubHttpRequest): Promise<GitHubHttpResponse> {
-    return { status: 200, body: {} };
-  }
 }
 
 // A policy stub whose decision is fixed per-test and which records the usage it

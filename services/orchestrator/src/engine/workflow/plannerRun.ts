@@ -43,13 +43,13 @@ import type { PlannerRejectionFeedback } from "./planner/planner.js";
 import {
   mergeForRun,
   pollReviewForRun,
+  reviewerRejection,
   type ConflictResolverHook,
   type MergeForRunResult,
   type MergeProbe,
   type PollReviewForRunResult,
   type ReviewProbe,
 } from "./reviewMerge/index.js";
-import { reviewerRejection } from "./reviewMerge/steering.js";
 import { runSubtaskLoop, type SubtaskLoopAdapters, type SubtaskLoopOutcome } from "./subtaskLoop.js";
 
 type RunStateClient = Pick<pg.Pool | pg.PoolClient, "query">;
