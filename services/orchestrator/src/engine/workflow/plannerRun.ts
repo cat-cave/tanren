@@ -25,12 +25,13 @@ import { codexHomeForRun } from "../credentials/codexMaterializer.js";
 import { type EventName, type EventPayload } from "../events/index.js";
 import { type EventStore, PgEventStore } from "../eventStore.js";
 import type { GitHubHttpClient } from "../providers/github.js";
-import { quoteSshShellArg } from "../ssh/command.js";
 import type { UsageProbe } from "../usage/index.js";
-import { bootstrapWorkspace, runWorkspaceSshCommand, workspaceRepoPathForRun } from "../workspace/index.js";
+import { workspaceRepoPathForRun } from "../workspace/index.js";
+import { prepareCleanPrBranch } from "../workspace/githubPush.js";
 import { pollCiForRun, type PollCiForRunResult } from "./ciPolling.js";
-import { resolveBootstrapCommand, type GateOutcome } from "./gate/index.js";
+import type { GateOutcome } from "./gate/index.js";
 import { buildDefaultGate, defaultRoutingAdapters, defaultUsageProbe } from "./plannerRunAdapters.js";
+import { prepareRunWorkspace } from "./plannerRunWorkspace.js";
 import {
   buildFinalizeRunState,
   finalizeMergeOutcome,
@@ -133,6 +134,11 @@ export interface RunPlannerLoopInput {
   // that drive the loop with a RecordingSsh fake inject a no-op (or scripted
   // failure) so unit runs never depend on a real install.
   runBootstrap?: (input: BootstrapStepInput) => Promise<void>;
+  // Test seam mirroring runBootstrap: the synthetic post-bootstrap commit whose
+  // sha becomes the writer's diff base (run baseSha). When omitted, the real
+  // commitBootstrapState runs over SSH. Tests inject a scripted sha (or a no-op
+  // returning "") so unit runs never touch a real git tree.
+  commitBootstrap?: (input: CommitBootstrapStepInput) => Promise<string>;
   // P3-0005 test seam: the deterministic gate the loop runs per writer
   // iteration (fast tier) and before audit (slow tier). When omitted, the
   // default reads the workspace's tanren-ci.yml (or the P3-0004 default) and
@@ -157,6 +163,13 @@ export interface BootstrapStepInput {
   target: SshTarget;
   workspacePath: string;
   command?: string;
+  timeoutMs: number;
+}
+
+export interface CommitBootstrapStepInput {
+  ssh: SshSubstrate;
+  target: SshTarget;
+  workspacePath: string;
   timeoutMs: number;
 }
 
@@ -204,39 +217,18 @@ export async function runPlannerLoopWorkflow(input: RunPlannerLoopInput): Promis
   await appendEvent("runner.allocated", runnerPayload(allocation));
 
   try {
-    // The run's BASE sha: HEAD immediately after the clone, captured ONCE here.
-    // Threaded into the subtask loop → writer so each subtask is judged against
-    // the CUMULATIVE diff vs this base (not the per-subtask HEAD), so replanned
-    // already-done work isn't false-rejected as an empty per-iteration delta.
-    const baseSha = await prepareWorkspace(input, allocation.target, workspacePath);
+    // Clone + bootstrap-install + commit-the-bootstrap-state in one stage. The
+    // bootstrap commit's sha is the writer's diff base (so the checker/auditor
+    // and captured diff see only the writer's changes); the clone HEAD is kept so
+    // the PR-branch cleanup can drop the bootstrap commit before the push.
+    // P3-0006: deps are installed before the writer loop so gating sees a built
+    // tree. baseSha is threaded so replanned already-done work isn't
+    // false-rejected as an empty per-iteration delta.
+    const { cloneHeadSha, bootstrapSha, baseSha } = await prepareRunWorkspace(input, allocation.target, workspacePath);
     await appendEvent("workspace.prepared", {
       workspacePath,
       repoUrl: context.repoUrl,
       targetBranch: context.targetBranch,
-    });
-
-    // P3-0006: install the target repo's deps in the freshly-cloned workspace
-    // before the writer loop, so the checker/auditor gate a built tree.
-    //
-    // Command precedence: an explicit input.bootstrapCommand override wins;
-    // otherwise resolve the repo's tanren-ci.yml `bootstrap.run` (P3-0004); when
-    // the repo ships no tanren-ci.yml the resolver yields undefined and the
-    // bootstrap step falls back to its pnpm/npm-detecting DEFAULT_BOOTSTRAP_COMMAND.
-    const resolvedBootstrapCommand =
-      input.bootstrapCommand ??
-      (await resolveBootstrapCommand({
-        ssh: input.ssh,
-        target: allocation.target,
-        workspacePath,
-        timeoutMs: input.timeoutMs,
-      }));
-    const runBootstrap = input.runBootstrap ?? ((stepInput) => bootstrapWorkspace(stepInput).then(() => {}));
-    await runBootstrap({
-      ssh: input.ssh,
-      target: allocation.target,
-      workspacePath,
-      command: resolvedBootstrapCommand,
-      timeoutMs: input.timeoutMs,
     });
 
     const adapterCtx: PlannerRunAdapterContext = {
@@ -294,6 +286,20 @@ export async function runPlannerLoopWorkflow(input: RunPlannerLoopInput): Promis
         return { runId: context.runId, workspacePath, outcome };
       }
 
+      // Prepare the PR branch: replay the writer commits onto the clone HEAD,
+      // dropping the synthetic bootstrap commit (and its install artifacts), so
+      // the pushed branch / PR carries only the writer's changes. The working
+      // HEAD is left intact so a review-rework re-entry keeps its bootstrapSha
+      // diff base. No-op (pushes HEAD) on fake-SSH / no-bootstrap paths.
+      const pushSourceRef = await prepareCleanPrBranch({
+        ssh: input.ssh,
+        target: allocation.target,
+        workspacePath,
+        cloneHeadSha,
+        bootstrapSha,
+        timeoutMs: input.timeoutMs,
+      });
+
       pullRequest = await publishDraftPullRequest({
         pool: input.pool,
         eventStore,
@@ -301,6 +307,7 @@ export async function runPlannerLoopWorkflow(input: RunPlannerLoopInput): Promis
         githubHttp: input.githubHttp,
         ssh: input.ssh,
         target: allocation.target,
+        sourceRef: pushSourceRef,
         runId: context.runId,
         specId: context.specId,
         projectId: context.projectId,
@@ -387,30 +394,6 @@ async function supersedeQueuedPlannerTask(pool: RunStateClient, runId: string): 
     [runId],
   );
   await pool.query("UPDATE job_queue SET status = 'cancelled' WHERE run_id = $1 AND status = 'queued'", [runId]);
-}
-
-// prepareWorkspace clones the target branch and returns the run's BASE sha —
-// HEAD right after the clone (the base-branch tip). `git rev-parse HEAD` runs
-// LAST in the chain and is the only stdout-producing step, so the returned
-// stdout is the base sha. Threaded into the loop so each subtask is judged on
-// the CUMULATIVE diff vs this base. Returns "" only on a fake SSH that yields no
-// output (unit paths drive the loop with fake writers that ignore baseSha); the
-// real runner always returns a 40-hex sha.
-async function prepareWorkspace(input: RunPlannerLoopInput, target: SshTarget, workspacePath: string): Promise<string> {
-  const result = await runWorkspaceSshCommand(input.ssh, target, {
-    label: "prepare planner-loop workspace",
-    timeoutMs: input.timeoutMs,
-    command: [
-      "set -eu",
-      `rm -rf ${quoteSshShellArg(workspacePath)}`,
-      `git clone --depth 1 --branch ${quoteSshShellArg(input.context.targetBranch)} ${quoteSshShellArg(input.context.repoUrl)} ${quoteSshShellArg(workspacePath)}`,
-      `cd ${quoteSshShellArg(workspacePath)}`,
-      "git config user.name 'Tanren Planner'",
-      "git config user.email 'planner@tanren.invalid'",
-      "git rev-parse HEAD",
-    ].join(" && "),
-  });
-  return result.stdout.trim();
 }
 
 async function pollCiUntilTerminal(input: RunPlannerLoopInput): Promise<PollCiForRunResult> {
