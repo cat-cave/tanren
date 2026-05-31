@@ -1,8 +1,15 @@
-import type { SshTarget } from "../contracts/allocator.js";
-import type { SshSubstrate } from "../contracts/sshSubstrate.js";
-import type { Commit, WriterResult } from "../providers/types.js";
-import { quoteSshShellArg } from "../ssh/command.js";
-import { runWorkspaceSshCommand } from "./ssh.js";
+// TEST FIXTURE ONLY. Synthetic git-workspace helpers — a deterministic `git init`
+// baseline (`prepareGitWorkspace`), a fixed HELLO.md mutation + diff capture
+// (`runFakeWriterMutation` / `captureGitMutation`), and the git-log commit
+// parser they share. These are connectivity/test stand-ins and MUST NOT exist in
+// any production/runtime path: production code prepares workspaces and captures
+// diffs through the real writer adapters (codexGit / writerGit). They live under
+// tests/ so they are unreachable from src/.
+import type { SshTarget } from "../../src/engine/contracts/allocator.js";
+import type { SshSubstrate } from "../../src/engine/contracts/sshSubstrate.js";
+import type { Commit, WriterResult } from "../../src/engine/providers/types.js";
+import { quoteSshShellArg } from "../../src/engine/ssh/command.js";
+import { runWorkspaceSshCommand } from "../../src/engine/workspace/index.js";
 
 const authorEnv = "GIT_AUTHOR_DATE='2026-01-01T00:00:00Z' GIT_COMMITTER_DATE='2026-01-01T00:00:00Z'";
 const fakeTokenUsage = {

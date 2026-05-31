@@ -3,11 +3,10 @@ import type { SshTarget } from "../src/engine/contracts/allocator.js";
 import type { SshCommand, SshCommandResult, SshSubstrate } from "../src/engine/contracts/sshSubstrate.js";
 import { defineFailure } from "../src/engine/failure.js";
 import { createFakeWriter } from "./fixtures/fakeWriter.js";
+import { parseGitLogCommit, prepareGitWorkspace } from "./fixtures/workspaceGit.js";
 import {
   bootstrapWorkspace,
   DEFAULT_BOOTSTRAP_COMMAND,
-  parseGitLogCommit,
-  prepareGitWorkspace,
   runWorkspaceSshCommand,
   WorkspaceBootstrapError,
   WorkspaceCommandError,

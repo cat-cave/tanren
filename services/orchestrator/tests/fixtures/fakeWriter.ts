@@ -5,9 +5,9 @@
 // under tests/ so it is unreachable from src/.
 import type { SshTarget } from "../../src/engine/contracts/allocator.js";
 import type { SshSubstrate } from "../../src/engine/contracts/sshSubstrate.js";
-import { fakeSelfHostedAuthRef } from "../../src/engine/providers/fake.js";
 import type { WriterAdapter, WriterResult } from "../../src/engine/providers/types.js";
-import { captureGitMutation, runFakeWriterMutation } from "../../src/engine/workspace/index.js";
+import { fakeSelfHostedAuthRef } from "./fakeAnswerers.js";
+import { captureGitMutation, runFakeWriterMutation } from "./workspaceGit.js";
 
 export interface FakeWriterDependencies {
   ssh: SshSubstrate;
