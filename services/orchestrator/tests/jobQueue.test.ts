@@ -91,6 +91,32 @@ describe("job queue", () => {
     expect(pool.sql[2]).toContain("WHERE run_id = $1 AND status = 'queued'");
     expect(pool.params[2]).toEqual(["run_1", "run_failed", "failed run"]);
   });
+
+  it("emits a job-queue NOTIFY right after the enqueue INSERT (LISTEN/NOTIFY wake)", async () => {
+    // A pool that returns the inserted row id so enqueue can build its envelope,
+    // and records every statement so we can assert the NOTIFY follows the INSERT.
+    const sql: string[] = [];
+    const pool = {
+      async query(text: string): Promise<{ rows: unknown[]; rowCount: number }> {
+        sql.push(text);
+        if (text.startsWith("INSERT INTO job_queue")) {
+          return {
+            rows: [{ id: "42", run_id: "run_1", task_id: "task_1", task_kind: "plan", payload: {}, attempts: 0 }],
+            rowCount: 1,
+          };
+        }
+        return { rows: [], rowCount: 0 };
+      },
+    };
+    const queue = new PgJobQueue(pool as never);
+
+    const envelope = await queue.enqueue({ runId: "run_1", taskId: "task_1", taskKind: "plan", payload: {} });
+
+    expect(envelope.id).toBe("42");
+    // The NOTIFY fires on the cross-tenant job-queue channel, AFTER the INSERT.
+    expect(sql[0]).toContain("INSERT INTO job_queue");
+    expect(sql[1]).toBe("NOTIFY tanren_job_queue");
+  });
 });
 
 describe("job queue lease recovery (P3-0028)", () => {

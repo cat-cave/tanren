@@ -303,6 +303,11 @@ class CiMemoryPool {
   }
 
   async query(sql: string, params: unknown[]): Promise<{ rows: unknown[]; rowCount: number }> {
+    // LISTEN/NOTIFY: the event-store append now emits a run-activity NOTIFY on
+    // the same client; it is a no-op against this in-memory pool.
+    if (sql.startsWith("NOTIFY")) {
+      return { rows: [], rowCount: 0 };
+    }
     if (sql.includes("SELECT org_id FROM runs WHERE run_id = $1")) {
       const run = this.runs.find((candidate) => candidate.run_id === params[0]);
       return { rows: run === undefined ? [] : [{ org_id: run.org_id }], rowCount: run === undefined ? 0 : 1 };

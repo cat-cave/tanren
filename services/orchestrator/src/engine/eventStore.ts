@@ -1,3 +1,4 @@
+import { notifyRunActivity } from "@tanren/db";
 import type pg from "pg";
 import { resolveWritableClient } from "./data/orgScopedDb.js";
 import { assertEventName, EventRegistry, type EventName, type EventPayload } from "./events/index.js";
@@ -48,6 +49,15 @@ export class PgEventStore implements EventStore {
        VALUES ($1, $2, $3, $4, (SELECT org_id FROM projects WHERE project_id = $4), $5, $6::jsonb)`,
       [input.runId, input.taskId ?? null, input.specId, input.projectId, input.eventType, JSON.stringify(parsed)],
     );
+    // LISTEN/NOTIFY: this is the central run-activity seam. Every run-state
+    // change in the engine — queued, task transitions, status/finalize, cost
+    // accrual — emits an event through here, so notifying on the run's channel
+    // after each append wakes that run's SSE stream and replaces its 1s poll as
+    // the primary driver. The notify rides the SAME client (the INSERT's
+    // transaction), so it fires at COMMIT — exactly when the row is visible. The
+    // payload is ONLY the run id: a listener re-queries the deltas under its own
+    // org scope, so the wake leaks no tenant data.
+    await notifyRunActivity(client, input.runId);
   }
 }
 

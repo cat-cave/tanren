@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { getSystemPool, runWithOrgScope } from "@tanren/db";
+import { getSystemPool, notifyJobEnqueued, runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
 import { z } from "zod";
 import type { ActorContext } from "../../auth/schemas.js";
@@ -311,6 +311,10 @@ async function createQueuedRunFromSpecOnClient(
     [run.runId, plannerTaskId, JSON.stringify({ specId: run.specId, projectId: run.projectId, branch: run.branch })],
   );
   run.plannerJobId = String(job.rows[0]?.id);
+  // LISTEN/NOTIFY: wake an idle worker the instant this run's plan job is
+  // enqueued. The NOTIFY rides this transaction's COMMIT (same `client`), so it
+  // fires exactly when the queued row becomes visible — never before.
+  await notifyJobEnqueued(client);
   const eventStore = new PgEventStore(client);
   await eventStore.append({
     runId: run.runId,
