@@ -16,7 +16,7 @@
 // window_exhausted rather than a generic failure (PROJECT_BRIEF §4.3).
 import type pg from "pg";
 import type { CiWhen } from "../ci/index.js";
-import type { EscapeHatches } from "../config/shared.js";
+import type { EscapeHatches, RoutingTable } from "../config/shared.js";
 import type { Allocator, RunnerAllocation, SshTarget } from "../contracts/allocator.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { SshSubstrate } from "../contracts/sshSubstrate.js";
@@ -30,7 +30,7 @@ import type { UsageProbe } from "../usage/index.js";
 import { bootstrapWorkspace, runWorkspaceSshCommand, workspaceRepoPathForRun } from "../workspace/index.js";
 import { pollCiForRun, type PollCiForRunResult } from "./ciPolling.js";
 import { resolveBootstrapCommand, type GateOutcome } from "./gate/index.js";
-import { buildDefaultGate, defaultCodexAdapters, defaultUsageProbe } from "./plannerRunAdapters.js";
+import { buildDefaultGate, defaultRoutingAdapters, defaultUsageProbe } from "./plannerRunAdapters.js";
 import {
   buildFinalizeRunState,
   finalizeMergeOutcome,
@@ -72,6 +72,16 @@ export interface PlannerRunContext {
   // Required to build the default (real Codex) adapters + usage probe. Tests
   // that inject buildAdapters/buildUsageProbe may omit it.
   codexCredentialRef?: string;
+  // The run's effective per-role provider routing table (project routing merged
+  // onto a per-role default-Codex table built from `codexCredentialRef`). This
+  // is what the default adapters resolve from — Codex stays the default ONLY
+  // because the default routing DATA says so, not because of any code-level
+  // hardcode. Tests that inject buildAdapters may omit it.
+  routing?: RoutingTable;
+  // SaaS Tier-B #5: when a MANAGED run resolved an OpenAI-compatible endpoint
+  // override, this is the base URL every resolved adapter is pointed at. Absent
+  // ⇒ BYOK (adapters use their native endpoints).
+  endpointBaseUrl?: string;
 }
 
 export interface PlannerRunAdapterContext {
@@ -230,7 +240,7 @@ export async function runPlannerLoopWorkflow(input: RunPlannerLoopInput): Promis
       target: allocation.target,
       codexHome: codexHomeForRun(context.runId),
     };
-    const adapters = (input.buildAdapters ?? ((ctx) => defaultCodexAdapters(input, ctx)))(adapterCtx);
+    const adapters = (input.buildAdapters ?? ((ctx) => defaultRoutingAdapters(input, ctx)))(adapterCtx);
     const usageProbe = (input.buildUsageProbe ?? ((ctx) => defaultUsageProbe(input, ctx)))(adapterCtx);
 
     // P3-0005: the deterministic gate runs on the just-bootstrapped workspace.

@@ -1,43 +1,49 @@
 /**
  * plannerRunAdapters — the default production adapter/gate/usage-probe builders
  * for the planner loop. Extracted from plannerRun.ts to keep that file under the
- * 500-line architecture cap. These wire the run's single Codex credential/home
- * into the four role answerers, the lazily-resolved CI gate, and the codexbar +
- * ccusage usage probe.
+ * 500-line architecture cap. These resolve the run's four role adapters from the
+ * project's routing table (per-role provider DATA, not a code-level hardcode),
+ * wire the lazily-resolved CI gate, and the codexbar + ccusage usage probe.
  */
-import type { AuditAnswer, CheckAnswer, PlanAnswer } from "../answerers/schemas/index.js";
 import type { CiWhen } from "../ci/index.js";
 import type { SshTarget } from "../contracts/allocator.js";
 import type { EventName, EventPayload } from "../events/index.js";
 import type { EventStore } from "../eventStore.js";
-import { createCodexAnswerer, createCodexWriter } from "../providers/codex.js";
+import { buildAdaptersFromRouting } from "../providers/adapterSelector.js";
 import { SshCcusageAccountant, SshCodexbarUsageMonitor, SshUsageProbe, type UsageProbe } from "../usage/index.js";
 import { type GateOutcome, resolveGateConfig, runGateForWhen } from "./gate/index.js";
 import type { PlannerRunAdapterContext, RunPlannerLoopInput } from "./plannerRun.js";
 import type { SubtaskLoopAdapters } from "./subtaskLoop.js";
 
-export function defaultCodexAdapters(input: RunPlannerLoopInput, ctx: PlannerRunAdapterContext): SubtaskLoopAdapters {
-  const credentialRef = input.context.codexCredentialRef;
-  if (credentialRef === undefined || credentialRef === "") {
-    throw new Error("codexCredentialRef is required to build the default Codex adapters");
+// Builds the run's four role adapters (plan/write/check/audit) by resolving the
+// project's effective routing table through the shared adapter selector. The
+// routing is per-role provider DATA: the writer runs whatever the `write`
+// chain's head names (codex/claude/opencode/...) and each answerer whatever its
+// role chain names. Codex is the default ONLY because the default routing data
+// (built in runExecutionContext) heads every chain with a Codex entry — there is
+// no Codex hardcode here. A role whose chain is empty or names an
+// unsupported/role-incapable provider is a HARD failure (EmptyRoutingChainError
+// / UnsupportedProviderError from the selector) — never a silent Codex fallback.
+//
+// All four roles share one runId → one CODEX_HOME (codexHomeForRun) when they
+// resolve to Codex, so ccusage at run end accounts for the whole run and
+// codexbar reads the run's subscription account. The loop is sequential, so
+// there is no concurrent write to a shared home.
+export function defaultRoutingAdapters(input: RunPlannerLoopInput, ctx: PlannerRunAdapterContext): SubtaskLoopAdapters {
+  const routing = input.context.routing;
+  if (routing === undefined) {
+    throw new Error("context.routing is required to build the run adapters from the project routing table");
   }
-  // All four roles share one runId → one CODEX_HOME (codexHomeForRun), so
-  // ccusage at run end accounts for the whole run and codexbar reads the run's
-  // subscription account. The loop is sequential, so there is no concurrent
-  // write to the shared home.
-  const deps = {
-    secrets: input.secrets,
-    ssh: input.ssh,
-    target: ctx.target,
-    credentialRef,
-    runId: ctx.runId,
-  };
-  return {
-    planner: createCodexAnswerer<PlanAnswer>(deps),
-    writer: createCodexWriter(deps),
-    checker: createCodexAnswerer<CheckAnswer>(deps),
-    auditor: createCodexAnswerer<AuditAnswer>(deps),
-  };
+  return buildAdaptersFromRouting(
+    {
+      secrets: input.secrets,
+      ssh: input.ssh,
+      target: ctx.target,
+      runId: ctx.runId,
+      endpointBaseUrl: input.context.endpointBaseUrl,
+    },
+    routing,
+  );
 }
 
 // Builds the production gate callback. The CI config is resolved lazily on the

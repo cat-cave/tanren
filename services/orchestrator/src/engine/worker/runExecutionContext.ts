@@ -10,10 +10,53 @@
 import { z } from "zod";
 import type pg from "pg";
 import { migrateProjectConfig, type ProjectConfigV1 } from "../config/index.js";
+import type { RoutingTable } from "../config/shared.js";
+import type { ResolvedRunCredentials } from "../credentials/resolveCredentials.js";
 import { resolveCredentialsForRun } from "../credentials/resolveCredentials.js";
 import type { PlannerRunContext } from "../workflow/plannerRun.js";
 
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
+
+// The four loop roles the run's adapter selector resolves into concrete
+// Writer/Answerer adapters (`buildAdaptersFromRouting`). Each empty role chain
+// is filled with the default-Codex entry below. `demo` and `forge` are left
+// untouched — `demo` carries its own empty-chain semantics (the narrator's
+// deterministic-template fallback), and `forge` is not consumed by the loop.
+const DEFAULTED_ROUTING_ROLES = ["plan", "write", "check", "audit"] as const;
+
+/**
+ * Build the run's EFFECTIVE routing table: the project's per-role routing chains
+ * laid on top of a per-role default that heads every loop-role chain with a
+ * Codex entry pointing at the run's resolved LLM credential ref.
+ *
+ * This is the seam that makes "Codex is the default" a DATA fact, not a code
+ * hardcode: a project that overrides a role's chain (e.g. `write` → claude or
+ * opencode) runs that provider; a role the project leaves empty falls back to
+ * the default-Codex entry. The downstream adapter selector
+ * (`buildAdaptersFromRouting`) reads the HEAD of each chain, so a non-empty
+ * project override wins and an empty one resolves to Codex.
+ *
+ * The default entry's `model` is a stable placeholder ("default") — the Codex
+ * adapter derives its model from the credential/CLI, not the routing entry, so
+ * the value only has to satisfy the schema's non-empty constraint.
+ */
+export function buildEffectiveRouting(projectRouting: RoutingTable, codexCredentialRef: string): RoutingTable {
+  const defaultEntry = { cli: "codex", model: "default", authRef: codexCredentialRef };
+  const effective: RoutingTable = {
+    plan: projectRouting.plan,
+    write: projectRouting.write,
+    check: projectRouting.check,
+    audit: projectRouting.audit,
+    demo: projectRouting.demo,
+    forge: projectRouting.forge,
+  };
+  for (const role of DEFAULTED_ROUTING_ROLES) {
+    if (projectRouting[role].chain.length === 0) {
+      effective[role] = { chain: [defaultEntry] };
+    }
+  }
+  return effective;
+}
 
 /** Thrown when a claimed job references a run/spec/project row that is gone. */
 export class RunExecutionContextNotFoundError extends Error {
@@ -114,7 +157,24 @@ export async function loadRunExecutionContext(
     identitySecretRef: input.identitySecretRef,
     githubCredentialRef: resolved.githubCredentialRef,
     codexCredentialRef: resolved.codexCredentialRef,
+    // The run's per-role provider routing: project routing chains over a
+    // per-role default-Codex table built from the resolved LLM credential. The
+    // workflow's adapters are resolved from THIS table — Codex is the default by
+    // data, not by a code-level hardcode. Under a managed run the resolved
+    // codexCredentialRef is the platform ref and `endpointBaseUrl` points the
+    // adapters at the managed OpenAI-compatible endpoint.
+    routing: buildEffectiveRouting(projectConfig.routing, resolved.codexCredentialRef),
+    ...endpointBaseUrlFrom(resolved),
   };
 
   return { context, projectConfig, orgId: decoded.org_id };
+}
+
+/**
+ * The managed-endpoint base URL the run's adapters must be pointed at, when the
+ * run resolved to managed mode. Spread into the context so a BYOK run (no
+ * override) leaves `endpointBaseUrl` absent — behavior-identical to before.
+ */
+function endpointBaseUrlFrom(resolved: ResolvedRunCredentials): { endpointBaseUrl?: string } {
+  return resolved.endpointOverride ? { endpointBaseUrl: resolved.endpointOverride.baseUrl } : {};
 }

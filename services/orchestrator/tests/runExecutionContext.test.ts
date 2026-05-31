@@ -6,7 +6,12 @@
 
 import { describe, expect, it } from "vitest";
 import type pg from "pg";
-import { loadRunExecutionContext, RunExecutionContextNotFoundError } from "../src/engine/worker/runExecutionContext.js";
+import { emptyRoutingTable } from "../src/engine/config/shared.js";
+import {
+  buildEffectiveRouting,
+  loadRunExecutionContext,
+  RunExecutionContextNotFoundError,
+} from "../src/engine/worker/runExecutionContext.js";
 
 // A minimal query stub returning a crafted run⋈spec⋈project row + the org-config
 // read resolveCredentialsForRun issues. Drives the real loader without a DB.
@@ -108,5 +113,65 @@ describe("loadRunExecutionContext", () => {
     await expect(loadRunExecutionContext(rowPool(), { runId: "run_missing", identitySecretRef: "id" })).rejects.toThrow(
       /run_missing/u,
     );
+  });
+
+  it("threads a default-Codex routing table when project config carries no routing", async () => {
+    const { context } = await loadRunExecutionContext(rowPool(fullRow()), {
+      runId: "run_1",
+      identitySecretRef: "id",
+    });
+    // The four loop roles head with a Codex entry pointing at the resolved ref —
+    // Codex by DATA, not a code-level hardcode.
+    for (const role of ["plan", "write", "check", "audit"] as const) {
+      expect(context.routing?.[role].chain[0]).toEqual({ cli: "codex", model: "default", authRef: "cred/codex" });
+    }
+  });
+
+  it("threads the project routing override (a non-Codex writer) onto the run context", async () => {
+    const config = {
+      version: 1,
+      credentials: { codexCredentialRef: "cred/codex", githubCredentialRef: "cred/gh" },
+      routing: {
+        write: { chain: [{ cli: "opencode", model: "zai/glm-5.1", authRef: "cred/opencode" }] },
+      },
+    };
+    const { context } = await loadRunExecutionContext(rowPool(fullRow({ config })), {
+      runId: "run_1",
+      identitySecretRef: "id",
+    });
+    // The overridden write role keeps the project's provider…
+    expect(context.routing?.write.chain[0]).toEqual({
+      cli: "opencode",
+      model: "zai/glm-5.1",
+      authRef: "cred/opencode",
+    });
+    // …while the roles the project left empty still default to Codex.
+    expect(context.routing?.plan.chain[0]?.cli).toBe("codex");
+  });
+});
+
+describe("buildEffectiveRouting", () => {
+  it("fills every empty loop-role chain with a default-Codex entry", () => {
+    const effective = buildEffectiveRouting(emptyRoutingTable(), "cred/codex");
+    for (const role of ["plan", "write", "check", "audit"] as const) {
+      expect(effective[role].chain).toEqual([{ cli: "codex", model: "default", authRef: "cred/codex" }]);
+    }
+  });
+
+  it("keeps a project's per-role override instead of the Codex default", () => {
+    const project = emptyRoutingTable();
+    project.write = { chain: [{ cli: "claude", model: "claude-opus-4-8", authRef: "cred/claude" }] };
+    const effective = buildEffectiveRouting(project, "cred/codex");
+    expect(effective.write.chain[0]?.cli).toBe("claude");
+    // Roles the project did not override still default to Codex.
+    expect(effective.check.chain[0]?.cli).toBe("codex");
+  });
+
+  it("does NOT default demo or forge — they keep their empty chains", () => {
+    const effective = buildEffectiveRouting(emptyRoutingTable(), "cred/codex");
+    // demo carries its own empty-chain semantics (narrator template fallback);
+    // forge is not a loop adapter — neither is filled with a Codex default.
+    expect(effective.demo.chain).toEqual([]);
+    expect(effective.forge.chain).toEqual([]);
   });
 });
