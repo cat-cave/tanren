@@ -14,6 +14,7 @@
 // drives this with an in-memory `pg` query target; under real RLS the same
 // contract holds because the org-scoped client carries `app.current_org_id`.
 import { describe, expect, it } from "vitest";
+import type { ActorContext } from "../../src/auth/schemas.js";
 import type { Repositories, QueryClient } from "../../src/engine/contracts/repositories.js";
 import { systemActor } from "../../src/engine/state/actor.js";
 
@@ -28,10 +29,64 @@ export interface SeedProject {
   orgId: string | null;
 }
 
+export interface SeedSpec {
+  specId: string;
+  projectId: string;
+  title: string;
+  description: string;
+  acceptanceCriteria: string[];
+  dependsOn: string[];
+  status: string;
+  orgId: string | null;
+}
+
+export interface SeedPersona {
+  id: string;
+  scope: "org" | "project";
+  orgId: string;
+  projectId: string | null;
+  name: string;
+  description: string;
+}
+
+export interface SeedBehavior {
+  id: string;
+  personaId: string;
+  title: string;
+  given: string;
+  when: string;
+  then: string;
+  description: string | null;
+}
+
+export interface SeedMilestone {
+  id: string;
+  projectId: string;
+  label: string;
+  name: string;
+  orderIndex: number;
+  status: "planned" | "in_flight" | "done" | "abandoned";
+  orgId: string | null;
+}
+
+export interface SeedSpecDependency {
+  fromSpecId: string;
+  toSpecId: string;
+}
+
+export interface SeedData {
+  projects: SeedProject[];
+  specs?: SeedSpec[];
+  personas?: SeedPersona[];
+  behaviors?: SeedBehavior[];
+  milestones?: SeedMilestone[];
+  specDependencies?: SeedSpecDependency[];
+}
+
 export interface RepositoriesConformanceHarness {
   repositories: Repositories;
-  /** Seed the backing store with projects before the assertions run. */
-  seed(data: { projects: SeedProject[] }): Promise<void> | void;
+  /** Seed the backing store with projects (and optionally other entities) first. */
+  seed(data: SeedData): Promise<void> | void;
   /**
    * A client scoped to `orgId`. Reads through it must see ONLY that org's rows
    * (and writes ride this client) — the RLS row-visibility contract the seam
@@ -43,6 +98,18 @@ export interface RepositoriesConformanceHarness {
 const ORG_A = "org_a";
 const ORG_B = "org_b";
 
+// A platform-admin actor: the product-entity stores self-authorize via the
+// actor's org/project scoping, so the conformance suite uses an admin so the
+// store's authorization gate never masks the RLS row-visibility assertion we are
+// actually testing (off-scope client → zero rows).
+const adminActor: ActorContext = {
+  userId: "user_admin",
+  orgId: null,
+  projectId: null,
+  scopes: ["platform:admin"],
+  source: "local_dev",
+};
+
 function projectA(): SeedProject {
   return {
     projectId: "project_a",
@@ -52,6 +119,19 @@ function projectA(): SeedProject {
     runnerImage: "img",
     allocator: "local",
     config: { version: 1 },
+    orgId: ORG_A,
+  };
+}
+
+function specA(): SeedSpec {
+  return {
+    specId: "spec_a",
+    projectId: "project_a",
+    title: "Spec A",
+    description: "desc",
+    acceptanceCriteria: ["does the thing"],
+    dependsOn: [],
+    status: "draft",
     orgId: ORG_A,
   };
 }
@@ -129,6 +209,138 @@ export function describeRepositoriesConformance(
       expect(offGet).toBeUndefined();
       const offOrgId = await h.repositories.projects.getOrgId(h.clientForOrg(ORG_B), "project_a", systemActor);
       expect(offOrgId).toBeUndefined();
+    });
+
+    it("lists project specs ordered, decoded to the route row shape", async () => {
+      const h = await makeHarness();
+      await h.seed({ projects: [projectA()], specs: [specA()] });
+      const rows = await h.repositories.projectSpecs.listForProject(h.clientForOrg(ORG_A), "project_a", systemActor);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ spec_id: "spec_a", project_id: "project_a", status: "draft" });
+    });
+
+    it("returns undefined for a missing spec (no throw)", async () => {
+      const h = await makeHarness();
+      await h.seed({ projects: [projectA()], specs: [] });
+      const row = await h.repositories.projectSpecs.get(h.clientForOrg(ORG_A), "spec_missing", systemActor);
+      expect(row).toBeUndefined();
+    });
+
+    it("patches a spec on the caller's client, returning whether a row matched", async () => {
+      const h = await makeHarness();
+      await h.seed({ projects: [projectA()], specs: [specA()] });
+      const client = h.clientForOrg(ORG_A);
+      const ok = await h.repositories.projectSpecs.patch(
+        client,
+        "spec_a",
+        { fragments: ["title = $1"], params: ["renamed"] },
+        systemActor,
+      );
+      expect(ok).toBe(true);
+      const row = await h.repositories.projectSpecs.get(client, "spec_a", systemActor);
+      expect(row?.title).toBe("renamed");
+      const missing = await h.repositories.projectSpecs.patch(
+        client,
+        "spec_missing",
+        { fragments: ["title = $1"], params: ["x"] },
+        systemActor,
+      );
+      expect(missing).toBe(false);
+    });
+
+    it("scopes spec reads/writes to the org (RLS: off-scope sees zero)", async () => {
+      const h = await makeHarness();
+      await h.seed({ projects: [projectA()], specs: [specA()] });
+      const inScope = await h.repositories.projectSpecs.listForProject(h.clientForOrg(ORG_A), "project_a", systemActor);
+      expect(inScope).toHaveLength(1);
+      const offList = await h.repositories.projectSpecs.listForProject(h.clientForOrg(ORG_B), "project_a", systemActor);
+      expect(offList).toHaveLength(0);
+      const offGet = await h.repositories.projectSpecs.get(h.clientForOrg(ORG_B), "spec_a", systemActor);
+      expect(offGet).toBeUndefined();
+      // An off-scope PATCH matches no visible row, so it reports no update.
+      const offPatch = await h.repositories.projectSpecs.patch(
+        h.clientForOrg(ORG_B),
+        "spec_a",
+        { fragments: ["title = $1"], params: ["nope"] },
+        systemActor,
+      );
+      expect(offPatch).toBe(false);
+    });
+
+    it("lists/decodes personas for an org and scopes off-scope reads to zero", async () => {
+      const h = await makeHarness();
+      await h.seed({
+        projects: [projectA()],
+        personas: [{ id: "persona_a", scope: "org", orgId: ORG_A, projectId: null, name: "Buyer", description: "d" }],
+      });
+      const rows = await h.repositories.personas.listForOrg(h.clientForOrg(ORG_A), ORG_A, adminActor);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ id: "persona_a", orgId: ORG_A, name: "Buyer" });
+      const off = await h.repositories.personas.listForOrg(h.clientForOrg(ORG_B), ORG_A, adminActor);
+      expect(off).toHaveLength(0);
+      const missing = await h.repositories.personas.get(h.clientForOrg(ORG_A), "persona_missing", adminActor);
+      expect(missing).toBeUndefined();
+    });
+
+    it("lists behaviors for a persona and scopes off-scope reads to zero", async () => {
+      const h = await makeHarness();
+      /* eslint-disable unicorn/no-thenable */
+      // `then` is the persisted BDD Given/When/Then column name, not a Promise hook.
+      await h.seed({
+        projects: [projectA()],
+        personas: [{ id: "persona_a", scope: "org", orgId: ORG_A, projectId: null, name: "Buyer", description: "d" }],
+        behaviors: [
+          { id: "behavior_a", personaId: "persona_a", title: "B", given: "g", when: "w", then: "t", description: null },
+        ],
+      });
+      /* eslint-enable unicorn/no-thenable */
+      const rows = await h.repositories.behaviors.listForPersona(h.clientForOrg(ORG_A), "persona_a", adminActor);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ id: "behavior_a", personaId: "persona_a", title: "B" });
+      // Off-scope: the parent persona is invisible, so the store's persona gate
+      // throws (it cannot address the persona) — the row is unreachable.
+      await expect(
+        h.repositories.behaviors.listForPersona(h.clientForOrg(ORG_B), "persona_a", adminActor),
+      ).rejects.toThrow(/persona not found/u);
+    });
+
+    it("lists milestones for a project and scopes off-scope reads to zero", async () => {
+      const h = await makeHarness();
+      await h.seed({
+        projects: [projectA()],
+        milestones: [
+          {
+            id: "ms_a",
+            projectId: "project_a",
+            label: "M1",
+            name: "Alpha",
+            orderIndex: 0,
+            status: "planned",
+            orgId: ORG_A,
+          },
+        ],
+      });
+      const rows = await h.repositories.milestones.listForProject(h.clientForOrg(ORG_A), "project_a", adminActor);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ id: "ms_a", projectId: "project_a", name: "Alpha" });
+      const off = await h.repositories.milestones.listForProject(h.clientForOrg(ORG_B), "project_a", adminActor);
+      expect(off).toHaveLength(0);
+      const missing = await h.repositories.milestones.get(h.clientForOrg(ORG_A), "ms_missing", adminActor);
+      expect(missing).toBeUndefined();
+    });
+
+    it("lists spec dependency edges and scopes off-scope reads to zero", async () => {
+      const h = await makeHarness();
+      await h.seed({
+        projects: [projectA()],
+        specs: [specA()],
+        specDependencies: [{ fromSpecId: "spec_a", toSpecId: "spec_b" }],
+      });
+      const rows = await h.repositories.specDependencies.listOutgoing(h.clientForOrg(ORG_A), "spec_a", adminActor);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ fromSpecId: "spec_a", toSpecId: "spec_b" });
+      const off = await h.repositories.specDependencies.listOutgoing(h.clientForOrg(ORG_B), "spec_a", adminActor);
+      expect(off).toHaveLength(0);
     });
   });
 }

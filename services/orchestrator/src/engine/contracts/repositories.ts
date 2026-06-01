@@ -18,9 +18,14 @@ import type { ActorRef } from "../state/actor.js";
 import { ProjectStore } from "../repositories/projects.js";
 import { RunStore } from "../repositories/runs.js";
 import { SpecStore } from "../repositories/specs.js";
+import { ProjectSpecStore } from "../repositories/projectSpecs.js";
 import { TaskStore } from "../repositories/tasks.js";
 import { JobStore } from "../repositories/jobs.js";
 import { ActorStore } from "../repositories/actors.js";
+import { PersonaStore } from "../entities/personas.js";
+import { BehaviorStore } from "../entities/behaviors.js";
+import { MilestoneStore } from "../entities/milestones.js";
+import { SpecDependencyStore } from "../entities/specDependencies.js";
 
 /** A pool or a checked-out (org-scoped) client — anything that can run a query. */
 export type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
@@ -33,11 +38,20 @@ export type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
  */
 export interface Repositories {
   readonly runs: typeof RunStore;
+  /** The run-lifecycle spec store (org_id + SpecStatus enum; engine/workflow). */
   readonly specs: typeof SpecStore;
+  /** The product-facing spec CRUD store backing `routes/specs` (no org_id; status as string). */
+  readonly projectSpecs: typeof ProjectSpecStore;
   readonly projects: typeof ProjectStore;
   readonly tasks: typeof TaskStore;
   readonly jobs: typeof JobStore;
   readonly actors: typeof ActorStore;
+  // Product entities (engine/entities). Their methods take an HTTP `ActorContext`
+  // and self-authorize via org/project scoping; the seam carries that through.
+  readonly personas: typeof PersonaStore;
+  readonly behaviors: typeof BehaviorStore;
+  readonly milestones: typeof MilestoneStore;
+  readonly specDependencies: typeof SpecDependencyStore;
 }
 
 /**
@@ -49,10 +63,15 @@ export interface Repositories {
 export const pgRepositories: Repositories = {
   runs: RunStore,
   specs: SpecStore,
+  projectSpecs: ProjectSpecStore,
   projects: ProjectStore,
   tasks: TaskStore,
   jobs: JobStore,
   actors: ActorStore,
+  personas: PersonaStore,
+  behaviors: BehaviorStore,
+  milestones: MilestoneStore,
+  specDependencies: SpecDependencyStore,
 } as const;
 
 export type { ActorRef };
