@@ -1,6 +1,18 @@
 import { MergifyReporter } from "@mergifyio/vitest";
 import { defineConfig } from "vitest/config";
 
+// The Mergify reporter is TELEMETRY + a quarantine convenience (it reports
+// flaky/quarantined tests to the Mergify API), NOT the correctness gate — `just
+// ci` is. Its `0.2.0` build swaps in a custom vitest runner resolved at
+// `dist/runner.js`, a file the published tarball does not ship; under a fresh
+// CI pnpm install vite-node resolves that missing path as a hard
+// `ERR_MODULE_NOT_FOUND` and crashes the whole suite (it is merely tolerated on
+// warm/local installs). So the reporter is attached ONLY when explicitly
+// enabled — `VITEST_MERGIFY_ENABLE=1` (the flag the package itself reads) — so
+// the default `just ci` test gate never depends on the broken runner swap. The
+// telemetry-bearing jobs (e.g. mutation-weekly) opt in by setting the flag.
+const mergifyEnabled = process.env["VITEST_MERGIFY_ENABLE"] === "1";
+
 export default defineConfig({
   resolve: {
     alias: {
@@ -8,7 +20,7 @@ export default defineConfig({
     },
   },
   test: {
-    reporters: ["default", new MergifyReporter()],
+    reporters: mergifyEnabled ? ["default", new MergifyReporter()] : ["default"],
     // P3-0029 observability: per-glob coverage thresholds for WORKFLOW-CRITICAL
     // modules — the planner-feedback loop stages, the answerer reasoning paths
     // (planner/checker/auditor), the cost-recording path, and the
