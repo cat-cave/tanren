@@ -153,9 +153,13 @@ export type MergeIntegration = z.infer<typeof MergeIntegration>;
 // stage polls GitHub for an approval/changes-requested verdict and hands off to
 // an operator if none arrives. `auto` is the no-review tier (easy/medium): the
 // review stage short-circuits to an approved verdict immediately so the merge
-// dispatch proceeds. The default MUST be `human` — never auto-merge without a
-// review unless a project explicitly opts in.
-export const ReviewPolicy = z.enum(["human", "auto"]);
+// dispatch proceeds. `simulated` is the HARD tier's in-the-loop reviewer
+// exercised WITHOUT a human: an orchestrator-managed reviewer Answerer reads the
+// PR diff + acceptance criteria, decides approve/request_changes, and posts that
+// as a REAL GitHub review — so the same human-verdict path then proceeds
+// (approve→merge) or loops back (changes_requested→rework). The default MUST be
+// `human` — never auto-merge without a review unless a project explicitly opts in.
+export const ReviewPolicy = z.enum(["human", "auto", "simulated"]);
 export type ReviewPolicy = z.infer<typeof ReviewPolicy>;
 
 // ---- Errors --------------------------------------------------------------

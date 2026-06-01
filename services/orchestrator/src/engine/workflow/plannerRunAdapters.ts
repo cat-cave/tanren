@@ -9,7 +9,9 @@ import type { CiWhen } from "../ci/index.js";
 import type { SshTarget } from "../contracts/allocator.js";
 import type { EventName, EventPayload } from "../events/index.js";
 import type { EventStore } from "../eventStore.js";
-import { buildAdaptersFromRouting } from "../providers/adapterSelector.js";
+import type { ReviewAnswer } from "../answerers/schemas/index.js";
+import { buildAdaptersFromRouting, buildSimulatedReviewerAdapter } from "../providers/adapterSelector.js";
+import type { AnswererAdapter } from "../providers/types.js";
 import { SshCcusageAccountant, SshCodexbarUsageMonitor, SshUsageProbe, type UsageProbe } from "../usage/index.js";
 import { type GateOutcome, resolveGateConfig, runGateForWhen } from "./gate/index.js";
 import type { PlannerRunAdapterContext, RunPlannerLoopInput } from "./plannerRun.js";
@@ -44,6 +46,56 @@ export function defaultRoutingAdapters(input: RunPlannerLoopInput, ctx: PlannerR
     },
     routing,
   );
+}
+
+// Builds the simulated reviewer's Answerer (reviewPolicy: "simulated") from the
+// project routing — the `audit` chain head, reusing the same adapter seam every
+// Answerer uses (Codex by default). Only called when the review stage needs it.
+export function defaultSimulatedReviewer(
+  input: RunPlannerLoopInput,
+  ctx: PlannerRunAdapterContext,
+): AnswererAdapter<ReviewAnswer> {
+  const routing = input.context.routing;
+  if (routing === undefined) {
+    throw new Error(
+      "context.routing is required to build the simulated reviewer Answerer from the project routing table",
+    );
+  }
+  return buildSimulatedReviewerAdapter(
+    {
+      secrets: input.secrets,
+      ssh: input.ssh,
+      target: ctx.target,
+      runId: ctx.runId,
+      endpointBaseUrl: input.context.endpointBaseUrl,
+    },
+    routing,
+  );
+}
+
+// The `pollReviewForRun` fields for reviewPolicy: "simulated". The reviewer
+// factory is LAZY — invoked only on the simulated branch — so a human/auto run
+// never resolves a reviewer adapter. The spec context the reviewer judges
+// against is the run's own spec title/description/acceptance-criteria.
+export function simulatedReviewSeam(
+  input: RunPlannerLoopInput,
+  ctx: PlannerRunAdapterContext,
+): {
+  simulatedReviewer: () => AnswererAdapter<ReviewAnswer>;
+  simulatedReviewContext: {
+    specTitle: string;
+    specDescription: string;
+    acceptanceCriteria: ReadonlyArray<string>;
+  };
+} {
+  return {
+    simulatedReviewer: () => (input.buildSimulatedReviewer ?? ((c) => defaultSimulatedReviewer(input, c)))(ctx),
+    simulatedReviewContext: {
+      specTitle: input.context.specTitle,
+      specDescription: input.context.specDescription,
+      acceptanceCriteria: input.context.acceptanceCriteria,
+    },
+  };
 }
 
 // Builds the production gate callback. The CI config is resolved lazily on the

@@ -8,17 +8,20 @@
 // All GitHub calls go through the P3-0003 resolver/client (App-or-static,
 // 401-retry). The poll function is injectable so tests never hit real GitHub.
 
+import type { ReviewAnswer } from "../../answerers/schemas/index.js";
 import type { RunStateWriter } from "../../contracts/runStateWriter.js";
 import type { SecretStore } from "../../contracts/secretStore.js";
 import { ensureSystemTask, routeTaskUpdate } from "../taskWriteRouting.js";
 import { resolveGithubToken } from "../../credentials/githubTokenResolver.js";
 import { type EventStore, PgEventStore } from "../../eventStore.js";
+import type { AnswererAdapter } from "../../providers/types.js";
 import type { GithubAppTokenMinter } from "../../providers/githubAppTokenMinter.js";
 import { parseGitHubPullRequestUrl, type GitHubHttpClient } from "../../providers/github.js";
 import {
   GitHubReviewMergeService,
   type ReviewVerdict,
   type ReviewVerdictResult,
+  type SubmitReviewEvent,
 } from "../../providers/githubReviewMerge.js";
 import {
   contextOptionsFor,
@@ -26,6 +29,7 @@ import {
   type ReviewMergeRunContext,
   type RunStateClient,
 } from "./context.js";
+import { reviewEventFor, runSimulatedReviewer, type SimulatedReviewContext } from "./simulatedReviewer.js";
 
 export interface PollReviewForRunInput {
   pool: RunStateClient;
@@ -53,12 +57,37 @@ export interface PollReviewForRunInput {
    * GitHubReviewMergeService drives both through the resolved token.
    */
   reviewProbe?: ReviewProbe;
+  /**
+   * reviewPolicy: "simulated" — a factory for the orchestrator-managed reviewer
+   * Answerer + the spec context it judges. Required when the project's
+   * reviewPolicy is "simulated"; on every other policy it is NEVER invoked (so a
+   * `human`/`auto` run never needs to resolve a reviewer adapter). The Answerer
+   * reads the PR diff (fetched via the probe) + these criteria and the stage
+   * posts its verdict as a REAL GitHub review before proceeding through the
+   * standard verdict path.
+   */
+  simulatedReviewer?: () => AnswererAdapter<ReviewAnswer>;
+  simulatedReviewContext?: SimulatedReviewSpec;
 }
 
-/** Injectable review-state probe (real GitHub by default; mocked in tests). */
+/** Spec inputs the simulated reviewer judges the PR diff against. */
+export interface SimulatedReviewSpec {
+  specTitle: string;
+  specDescription: string;
+  acceptanceCriteria: ReadonlyArray<string>;
+}
+
+/**
+ * Injectable review-state probe (real GitHub by default; mocked in tests). The
+ * `fetchDiff`/`submitReview` members are used ONLY on the simulated path; the
+ * real GitHub probe always provides them, while human/auto test probes may omit
+ * them (the simulated branch asserts their presence before use).
+ */
 export interface ReviewProbe {
   markReady(): Promise<void>;
   fetchVerdict(): Promise<ReviewVerdictResult>;
+  fetchDiff?(): Promise<string>;
+  submitReview?(event: SubmitReviewEvent, body: string): Promise<void>;
 }
 
 export interface PollReviewForRunResult {
@@ -135,6 +164,18 @@ export async function pollReviewForRun(input: PollReviewForRunInput): Promise<Po
     return autoResult;
   }
 
+  // Simulated tier (project reviewPolicy === "simulated"): the orchestrator runs
+  // a reviewer Answerer over the PR diff + acceptance criteria, posts its verdict
+  // as a REAL GitHub review, then proceeds through the SAME verdict path as the
+  // human policy. The posted review is a genuine verdict on the PR — not a
+  // synthetic shortcut — so the rest of the pipeline (approve→merge,
+  // changes_requested→rework) reacts exactly as it does for a human reviewer.
+  if (context.reviewPolicy === "simulated") {
+    const result = await runSimulatedReview(input, context, probe, taskId, pr.pullNumber);
+    await finalizeReviewTask(input.pool, eventStore, context, result, input.runStateWriter);
+    return result;
+  }
+
   const maxPolls = input.maxPolls ?? 12;
   const delayMs = input.pollDelayMs ?? 10_000;
   const sleep =
@@ -166,6 +207,56 @@ export async function pollReviewForRun(input: PollReviewForRunInput): Promise<Po
   };
   await finalizeReviewTask(input.pool, eventStore, context, result, input.runStateWriter);
   return result;
+}
+
+/**
+ * Drive the simulated-reviewer verdict: fetch the PR diff, run the reviewer
+ * Answerer over it + the spec's acceptance criteria, post the verdict as a REAL
+ * GitHub review, and return the normalized verdict the standard finalize path
+ * consumes. The review is genuinely posted before the verdict is returned, so
+ * the human-policy verdict path proceeds against a real PR review.
+ */
+async function runSimulatedReview(
+  input: PollReviewForRunInput,
+  context: ReviewMergeRunContext,
+  probe: ReviewProbe,
+  taskId: string,
+  pullNumber: number,
+): Promise<PollReviewForRunResult> {
+  const resolveReviewer = input.simulatedReviewer;
+  const spec = input.simulatedReviewContext;
+  if (resolveReviewer === undefined || spec === undefined) {
+    throw new Error(
+      "reviewPolicy 'simulated' requires both simulatedReviewer (the reviewer Answerer factory) and simulatedReviewContext",
+    );
+  }
+  if (probe.fetchDiff === undefined || probe.submitReview === undefined) {
+    throw new Error("reviewPolicy 'simulated' requires a review probe that can fetch the PR diff and submit a review");
+  }
+  const reviewer = resolveReviewer();
+  const prDiff = await probe.fetchDiff();
+  const reviewContext: SimulatedReviewContext = {
+    specTitle: spec.specTitle,
+    specDescription: spec.specDescription,
+    acceptanceCriteria: spec.acceptanceCriteria,
+    prDiff,
+  };
+  const { verdict } = await runSimulatedReviewer(reviewer, {
+    context: reviewContext,
+    timeoutMs: input.pollDelayMs ?? 60_000,
+  });
+  // Post the REAL GitHub review — this is the genuine verdict the rest of the
+  // pipeline (and any human watching the PR) sees.
+  await probe.submitReview(reviewEventFor(verdict), verdict.reasoning);
+  return {
+    runId: context.runId,
+    taskId,
+    verdict: verdict.verdict === "approve" ? "approved" : "changes_requested",
+    prUrl: context.prUrl,
+    prNumber: pullNumber,
+    reviewer: "tanren-simulated-reviewer",
+    feedback: verdict.reasoning,
+  };
 }
 
 async function finalizeReviewTask(
@@ -265,6 +356,22 @@ async function buildGitHubProbe(
       service.fetchReviewVerdict({
         repo,
         pullNumber,
+        token: resolved.token,
+        refreshToken: resolved.refresh,
+      }),
+    fetchDiff: () =>
+      service.fetchPullRequestDiff({
+        repo,
+        pullNumber,
+        token: resolved.token,
+        refreshToken: resolved.refresh,
+      }),
+    submitReview: (event, body) =>
+      service.submitReview({
+        repo,
+        pullNumber,
+        event,
+        body,
         token: resolved.token,
         refreshToken: resolved.refresh,
       }),

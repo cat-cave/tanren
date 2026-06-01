@@ -25,7 +25,16 @@ export {
   type PollReviewForRunInput,
   type PollReviewForRunResult,
   type ReviewProbe,
+  type SimulatedReviewSpec,
 } from "./reviewPolling.js";
+export {
+  buildSimulatedReviewerPrompt,
+  reviewEventFor,
+  runSimulatedReviewer,
+  type SimulatedReviewContext,
+  type SimulatedReviewInput,
+  type SimulatedReviewResult,
+} from "./simulatedReviewer.js";
 export {
   mergeForRun,
   dispatchedIntegrationFor,

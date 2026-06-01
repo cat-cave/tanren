@@ -19,6 +19,13 @@ export interface GitHubReview {
 /** Aggregate review verdict the polling stage acts on. */
 export type ReviewVerdict = "approved" | "changes_requested" | "pending";
 
+/**
+ * The two GitHub review events the simulated reviewer submits. APPROVE +
+ * REQUEST_CHANGES are the only verdict-bearing events; COMMENT/PENDING never
+ * gate a merge, so they are intentionally not modeled here.
+ */
+export type SubmitReviewEvent = "APPROVE" | "REQUEST_CHANGES";
+
 export interface ReviewVerdictResult {
   verdict: ReviewVerdict;
   /** The latest review per the verdict (drives steering / event payload). */
@@ -123,6 +130,55 @@ export class GitHubReviewMergeService {
     }
     const reviews = parseReviews(response.body);
     return reduceReviewVerdict(reviews);
+  }
+
+  /**
+   * Submit a REAL GitHub review on the PR (the simulated-reviewer write path).
+   * `POST /repos/:owner/:repo/pulls/:n/reviews` with event APPROVE or
+   * REQUEST_CHANGES and the reviewer reasoning as the body. The posted review is
+   * a genuine verdict on the PR — the same `fetchReviewVerdict` poll the `human`
+   * policy uses then sees it. A non-2xx response throws so the stage fails loudly
+   * rather than silently skipping the review.
+   */
+  async submitReview(
+    input: {
+      repo: GitHubRepository;
+      pullNumber: number;
+      event: SubmitReviewEvent;
+      body: string;
+    } & TokenInput,
+  ): Promise<void> {
+    const response = await this.http.request({
+      method: "POST",
+      path: repoPath(input.repo, `/pulls/${input.pullNumber}/reviews`),
+      token: input.token,
+      refreshToken: input.refreshToken,
+      body: { event: input.event, body: input.body },
+    });
+    if (response.status !== 200 && response.status !== 201) {
+      const message = parseMessage(response.body) ?? `HTTP ${response.status}`;
+      throw new Error(`GitHub submit-review failed: ${message}`);
+    }
+  }
+
+  /**
+   * Read the PR's per-file patches and concatenate them into a unified diff the
+   * reviewer Answerer judges. Uses `GET /pulls/:n/files` (JSON, page-bounded)
+   * rather than the raw `application/vnd.github.diff` media type so it flows
+   * through the existing JSON HTTP client unchanged. Files with no `patch`
+   * (binary, or truncated by GitHub) contribute a header line only.
+   */
+  async fetchPullRequestDiff(input: { repo: GitHubRepository; pullNumber: number } & TokenInput): Promise<string> {
+    const response = await this.http.request({
+      method: "GET",
+      path: repoPath(input.repo, `/pulls/${input.pullNumber}/files?per_page=100`),
+      token: input.token,
+      refreshToken: input.refreshToken,
+    });
+    if (response.status !== 200) {
+      throw new Error(`GitHub PR files fetch failed: HTTP ${response.status}`);
+    }
+    return renderFilesDiff(response.body);
   }
 
   /**
@@ -252,6 +308,29 @@ export function reduceReviewVerdict(reviews: GitHubReview[]): ReviewVerdictResul
     return { verdict: "approved", latest: approval };
   }
   return { verdict: "pending" };
+}
+
+/**
+ * Concatenate the per-file patches from a `GET /pulls/:n/files` JSON response
+ * into a single unified-diff string. Each file contributes a `diff --git`
+ * header plus its `patch` hunk (when present); a file without a patch (binary or
+ * truncated) contributes the header alone so the reviewer still sees it changed.
+ */
+function renderFilesDiff(value: unknown): string {
+  if (!Array.isArray(value)) {
+    throw new TypeError("GitHub PR files response was not an array");
+  }
+  const sections: string[] = [];
+  for (const entry of value) {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+      continue;
+    }
+    const object = entry as Record<string, unknown>;
+    const filename = typeof object["filename"] === "string" ? object["filename"] : "(unknown)";
+    const patch = typeof object["patch"] === "string" ? object["patch"] : undefined;
+    sections.push(patch === undefined ? `diff --git ${filename}` : `diff --git ${filename}\n${patch}`);
+  }
+  return sections.join("\n");
 }
 
 function parseMergeSha(value: unknown): string | undefined {
