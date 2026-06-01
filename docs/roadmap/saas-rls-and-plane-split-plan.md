@@ -1,6 +1,20 @@
 # SaaS multi-tenancy: RLS + control-plane/data-plane split — plan
 
-**Status: IN PROGRESS.** Refactor 1 (RLS) is **DONE, FULLY ENFORCED, and
+> **STATUS UPDATE (2026-06-01, naming reconciled).** Both refactors are now
+> further along than the body below — read this header for current truth.
+> **Refactor 1 (RLS): DONE + live-validated** (unchanged, below). **Refactor 2
+> (plane split): DONE through P3c.** "P3c" was renamed: the **lifecycle-write
+> de-privilege** (route `runs`/`specs`/`tasks` writes through the control plane +
+> drop those `tanren_dataplane` grants) **shipped** — migration `0035`, new
+> `/internal/*` endpoints, proven by `just smoke-plane-split-p3c` (`42501`
+> negative test). The standalone **allocator** service is now org-threaded too
+> (`just smoke-rls-allocator`). The **only remaining plane-split item is Vault
+> per-run scoped credentials** (the data plane still holds the broad Vault token)
+> — tracked as a near-term item in `tempering.md` / `autonomy-engine.md` (P1·0
+> also deletes the unused `QuotaPolicy` seam). The historical P1→P3b narrative
+> below is preserved as the record.
+
+**Status (historical): IN PROGRESS.** Refactor 1 (RLS) is **DONE, FULLY ENFORCED, and
 LIVE-VALIDATED** (waves R1 → R3b; migration `0030`). A live operator-driven run
 exercised it end-to-end (signup → CRUD → run → mTLS-claim → cred-resolution →
 runner-allocation) and **caught + fixed a class of RLS-completeness bugs the
@@ -8,18 +22,17 @@ hello-fixture smoke missed** — org creation, the operator/resource HTTP routes
 and the run-lifecycle allocator write — each now regression-tested (`just
 smoke-rls-org-bootstrap` / `-operator-flow` / `-http-route-scoping` /
 `-run-lifecycle`), including a full run-lifecycle-under-RLS test. See
-`docs/operator-guide/live-validation-findings.md`. Refactor 2 (plane split) is
-**at P3b: the run-executor worker is a STANDALONE deployable (P1) that claims over an
+`docs/operator-guide/live-validation-findings.md`. Refactor 2 (plane split) was
+**at P3b** at the time this body was written: the run-executor worker is a STANDALONE deployable (P1) that claims over an
 authenticated mTLS control-plane endpoint (P2 — `POST /internal/claim-job`),
 routes its run-state WRITES (event-append, cost-record insert, run finalize)
 through control-plane `/internal/*` write endpoints over the same mTLS channel
 (P3a — the `RunStateWriter` seam), and HAS NOW CUT OVER: remote-writes is ON by
 default for the `worker`, which connects as the de-privileged `tanren_dataplane`
 DB role (migration `0031`) whose `events` / `cost_records` write grants are
-DROPPED — a compromised runner can no longer forge those control-DB rows (P3b)**;
-**P3c (per-run scoped creds / Vault de-privilege) is DEFERRED — not started.** The
-data plane still writes `runs`/`specs`/`tasks` directly (deferred) and still holds
-the broad Vault token (P3c). The live conversion checklist is
+DROPPED — a compromised runner can no longer forge those control-DB rows (P3b).
+_(The lifecycle-write de-privilege + Vault split, written below as "deferred," is
+now partly done — see the status update above.)_ The live conversion checklist is
 `docs/roadmap/R-WAVES.md` (RLS R-waves + plane-split P-waves). These are the two
 big multi-tenant refactors deliberately deferred from the expansion work.
 

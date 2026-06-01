@@ -82,12 +82,25 @@ cells` CRUD + `report` / `compare`. See `docs/roadmap/tanren-method-benchmark.md
 
 The forward plan (near- and long-term) lives in **`docs/roadmap/tempering.md`**
 (the live tracker) and **`docs/roadmap/forward-roadmap.md`** (the detailed
-four-dimension plan). In brief: **Vault per-run scoped credentials** (the last
-big data-plane de-privilege), the **benchmark seed corpus** (content — tiered
-seed repos with hidden accept tiers), the **remaining DAL clusters**
-(forge/quota/recovery), post-merge auto-issue creation, and the long-horizon
-items (the GitLab/VCS abstraction; the Rust rewrite / native harness). None of
-these block the core promise above.
+four-dimension plan).
+
+The **largest remaining effort is the autonomy engine** —
+**`docs/roadmap/autonomy-engine.md`**. Today Tanren is a parallel
+spec-execution engine with a _manual_ driver: an operator triggers each spec,
+and the Forge ideation agents default to deterministic stubs. The autonomy plan
+closes that — an autonomous **DAG-walker** that drives the spec graph to
+completion, real-LLM Forge (brief → DAG in-house), webhook-driven issue
+ingestion, and a **native, intent-preserving merge queue** (auto-rebase,
+DAG-aware conflict resolution, speculative execution / stacked PRs) — proven by
+`apex`, a max-difficulty fixture that takes a one-paragraph brief to a deployed
+product autonomously. It also adds two standing guardrails: a **stub-ban
+architecture lint** (stubs/shells/mocks are test-fixtures-only, enforced) and a
+**real-resource `just e2e` gate**.
+
+Smaller near-term items: **Vault per-run scoped credentials** (the last big
+data-plane de-privilege), the **benchmark seed corpus**, the **remaining DAL
+clusters** (forge/quota/recovery); long-horizon: the GitLab/VCS abstraction and
+the Rust rewrite / native harness. None of these block the core promise above.
 
 ## Quickstart for a real run (operator flow)
 
@@ -142,6 +155,9 @@ volumes).
   source of truth for _what Tanren is_).
 - **`docs/roadmap/tempering.md`** — the live forward tracker: what's done, what's
   next (near- and long-term), and how a fresh clone reproduces the validated state.
+- **`docs/roadmap/autonomy-engine.md`** — the plan for the largest remaining
+  effort: making the DAG autonomous (DAG-walker · real-LLM Forge · native merge
+  queue · the `apex` proof) + the stub-ban + real-e2e guardrails.
 - **`docs/roadmap/forward-roadmap.md`** — the detailed four-dimension plan (core
   run loop · pipeline experimentation · refactor/scale prepwork · managed-hosting).
 - **`ROADMAP.md`** — the phase history (Phase 0–3) + exit criteria.

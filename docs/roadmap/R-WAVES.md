@@ -3,6 +3,15 @@
 The live checklist for the Postgres RLS rollout. Companion to
 `docs/roadmap/saas-rls-and-plane-split-plan.md` (mechanism + locked decisions).
 
+> **STATUS UPDATE (2026-06-01).** This is a historical wave-log; sections below
+> that list plane-split **P3c (run/spec/task lifecycle writes)** or the
+> **standalone-allocator org-threading** as "remaining" are now **DONE**
+> (migration `0035`; `just smoke-plane-split-p3c` / `smoke-rls-allocator`). The
+> only remaining plane-split item is **Vault per-run scoped credentials**.
+> Also: references to **`smoke-hello`** are stale — that synthetic smoke was
+> purged; `just smoke` now runs `smoke-connectivity` + the plane-split/RLS
+> proofs. Current forward truth: `docs/roadmap/tempering.md`.
+
 **Status: R1 → R2 (cohorts 1–4) → R3a → R3a-worker → R3b are all DONE. RLS is
 FULLY ENFORCED and LIVE-VALIDATED** at the database — the runtime connects as the
 restricted `tanren_app` role and Postgres policies enforce org isolation

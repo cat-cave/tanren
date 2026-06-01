@@ -22,16 +22,15 @@ Vault refs are **tenant-namespaced**: the import route derives the ref server-si
 
 ## Codex ChatGPT Auth
 
-Bootstrap Codex auth intentionally, then import the resulting managed `auth.json` bundle by path:
+Bootstrap Codex auth intentionally, then import the resulting managed `auth.json` bundle through the **org-scoped** credentials surface:
 
 ```sh
-corepack pnpm --filter @tanren/cli tanren credential codex import \
-  --ref credential/codex/dev \
-  --auth-json-file /path/to/auth.json
+corepack pnpm --filter @tanren/cli tanren credentials create \
+  --org-id <orgId> --kind codex_chatgpt_auth \
+  --ref codex-default --value "$(cat /path/to/auth.json)"
 ```
 
-The CLI sends the file contents to the orchestrator, which validates that the payload is JSON and stores it in Vault
-under the explicit ref. Responses include only the credential kind, ref, and a redaction marker.
+> The legacy top-level `tanren credential codex import` / `tanren credential github import` commands were **removed** (they POSTed to deleted routes and now fail). `tanren credentials create` is the only import path. The orchestrator derives the tenant-namespaced ref server-side (`credential/<kind>/org/<orgId>/<name>`) and stores it in the secret store. Responses include only the credential kind, ref, and a redaction marker.
 
 Runner sessions materialize the stored bundle into a fresh per-run `CODEX_HOME` over SSH before `codex exec`.
 The returned materialization result contains only `CODEX_HOME` and the credential ref; secret values are not emitted
@@ -48,9 +47,9 @@ When the compose stack is running with dev Vault, import a disposable auth fixtu
 
 ```sh
 TANREN_ORCHESTRATOR_URL=http://127.0.0.1:3100 \
-  corepack pnpm --filter @tanren/cli tanren credential codex import \
-  --ref credential/codex/dev \
-  --auth-json-file /path/to/auth.json
+  corepack pnpm --filter @tanren/cli tanren credentials create \
+  --org-id <orgId> --kind codex_chatgpt_auth \
+  --ref codex-default --value "$(cat /path/to/auth.json)"
 ```
 
 Do not use a host default path. The auth file path must be provided intentionally for each import.
