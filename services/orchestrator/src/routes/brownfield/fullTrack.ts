@@ -51,6 +51,8 @@ import type { IngestedItem } from "../../engine/forge/inbox/types.js";
 import type { GitHubHttpClient } from "../../engine/providers/github.js";
 import { parseGitHubRepository } from "../../engine/providers/github.js";
 import type { GithubAppTokenMinter } from "../../engine/providers/githubAppTokenMinter.js";
+import { ProjectStore } from "../../engine/repositories/index.js";
+import { systemActor } from "../../engine/state/actor.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg } from "../orgs/index.js";
 
@@ -234,14 +236,11 @@ async function guardOrg(
   };
   if (actor === undefined) return { ...base, error: "actor_missing" };
   if (!actorCanAccessOrg(actor, orgId)) return { ...base, error: "org_access_denied", status: 403 };
-  const row = await pool.query<{ org_id: string | null; default_branch: string | null }>(
-    "SELECT org_id, default_branch FROM projects WHERE project_id = $1",
-    [projectId],
-  );
-  if (row.rowCount === 0) return { ...base, error: "project_not_found", status: 404 };
-  if (row.rows[0]?.org_id !== null && row.rows[0]?.org_id !== orgId)
+  const ownership = await ProjectStore.getOwnership(pool, projectId, systemActor);
+  if (ownership === undefined) return { ...base, error: "project_not_found", status: 404 };
+  if (ownership.orgId !== null && ownership.orgId !== orgId)
     return { ...base, error: "project_access_denied", status: 403 };
-  return { ...base, defaultBranch: row.rows[0]?.default_branch ?? "main" };
+  return { ...base, defaultBranch: ownership.defaultBranch ?? "main" };
 }
 
 async function resolveTokenFor(options: BrownfieldFullTrackOptions, orgId: string): Promise<ResolvedGithubToken> {
@@ -292,10 +291,10 @@ async function fetchIssuesFor(
 }
 
 async function persistPosture(pool: pg.Pool, projectId: string, posture: GovernancePostureType): Promise<unknown> {
-  const row = await pool.query<{ config: unknown }>("SELECT config FROM projects WHERE project_id = $1", [projectId]);
-  const current = migrateProjectConfig(row.rows[0]?.config);
+  const config = await ProjectStore.getConfig(pool, projectId, systemActor);
+  const current = migrateProjectConfig(config);
   const next = { ...current, governancePosture: posture };
-  await pool.query("UPDATE projects SET config = $1::jsonb WHERE project_id = $2", [JSON.stringify(next), projectId]);
+  await ProjectStore.updateConfig(pool, projectId, next, systemActor);
   return next;
 }
 

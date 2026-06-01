@@ -18,3 +18,8 @@ export * from "./awsSecretsManager.js";
 export * from "./onePassword.js";
 export * from "./secretStoreFactory.js";
 export * from "./sshSubstrate.js";
+// The data-access layer seam (Track C): aggregates `engine/repositories/**` into
+// a slottable `Repositories` contract with a pg-backed impl, mirroring the
+// JobQueue/EventStore/SecretStore pattern. The conformance suite lives under
+// tests/conformance/repositories.*.
+export * from "./repositories.js";

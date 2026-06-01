@@ -8,6 +8,8 @@ import type pg from "pg";
 import { z } from "zod";
 import type { ActorContext } from "../../auth/schemas.js";
 import { migrateProjectConfig } from "../../engine/config/projectConfig.js";
+import { ProjectStore, type ProjectRow as RepoProjectRow } from "../../engine/repositories/index.js";
+import { systemActor } from "../../engine/state/actor.js";
 import { createProject, ProjectAccessDeniedError, ProjectNotFoundError } from "../../engine/workflow/projectSpec.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg } from "../orgs/index.js";
@@ -38,14 +40,8 @@ export function createProjectRoutes(options: ProjectRoutesOptions) {
     if (!actorCanAccessOrg(actor, orgId)) {
       return c.json({ error: "org_access_denied" }, 403);
     }
-    const rows = await options.pool.query<ProjectRow>(
-      `SELECT project_id, name, repo_url, default_branch, runner_image, allocator, config
-         FROM projects
-        WHERE org_id = $1
-        ORDER BY name`,
-      [orgId],
-    );
-    return c.json({ projects: rows.rows.map(toProjectContract) });
+    const rows = await ProjectStore.listForOrg(options.pool, orgId, systemActor);
+    return c.json({ projects: rows.map((row) => toProjectContract(row)) });
   });
 
   app.post("/:orgId/projects", async (c) => {
@@ -111,18 +107,11 @@ export function createProjectRoutes(options: ProjectRoutesOptions) {
     } catch (error) {
       return c.json({ error: "invalid_project_config", message: messageOf(error) }, 400);
     }
-    const existing = await options.pool.query<{ org_id: string | null }>(
-      "SELECT org_id FROM projects WHERE project_id = $1",
-      [projectId],
-    );
-    const projectOrg = existing.rows[0]?.org_id ?? null;
-    if (existing.rowCount === 0 || (projectOrg !== null && projectOrg !== orgId)) {
+    const ownership = await ProjectStore.getOwnership(options.pool, projectId, systemActor);
+    if (ownership === undefined || (ownership.orgId !== null && ownership.orgId !== orgId)) {
       return c.json({ error: "project_not_found" }, 404);
     }
-    await options.pool.query("UPDATE projects SET config = $1::jsonb WHERE project_id = $2", [
-      JSON.stringify(nextConfig),
-      projectId,
-    ]);
+    await ProjectStore.updateConfig(options.pool, projectId, nextConfig, systemActor);
     return c.json({ projectId, config: nextConfig });
   });
 
@@ -130,29 +119,23 @@ export function createProjectRoutes(options: ProjectRoutesOptions) {
 }
 
 export async function readProject(pool: pg.Pool, orgId: string, projectId: string, _actor: ActorContext) {
-  const result = await pool.query<ProjectRow & { org_id: string | null }>(
-    `SELECT project_id, name, repo_url, default_branch, runner_image, allocator, config, org_id
-       FROM projects
-      WHERE project_id = $1`,
-    [projectId],
-  );
-  const row = result.rows[0];
+  const row = await ProjectStore.get(pool, projectId, systemActor);
   if (row === undefined) {
     throw new ProjectNotFoundError(projectId);
   }
-  if (row.org_id !== null && row.org_id !== orgId) {
+  if (row.orgId !== null && row.orgId !== orgId) {
     throw new ProjectAccessDeniedError(projectId);
   }
   return toProjectContract(row);
 }
 
-function toProjectContract(row: ProjectRow) {
+function toProjectContract(row: RepoProjectRow) {
   return {
-    projectId: row.project_id,
+    projectId: row.projectId,
     name: row.name,
-    repoUrl: row.repo_url,
-    defaultBranch: row.default_branch,
-    runnerImage: row.runner_image,
+    repoUrl: row.repoUrl,
+    defaultBranch: row.defaultBranch,
+    runnerImage: row.runnerImage,
     allocator: row.allocator,
     config: migrateProjectConfig(row.config),
   };
@@ -167,14 +150,4 @@ function requireActor(c: { var: { actor?: ActorContext } }): ActorContext {
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-interface ProjectRow {
-  project_id: string;
-  name: string;
-  repo_url: string;
-  default_branch: string;
-  runner_image: string;
-  allocator: string;
-  config: unknown;
 }
