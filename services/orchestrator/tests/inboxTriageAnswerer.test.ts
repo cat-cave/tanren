@@ -8,7 +8,7 @@
 // the headline branches; this file pins the boundaries the mutants exploit.
 
 import { describe, expect, it } from "vitest";
-import { createDeterministicTriageAnswerer } from "../src/engine/forge/inbox/index.js";
+import { createDeterministicTriageAnswerer } from "./fixtures/forge/deterministicTriageAnswerer.js";
 import type { InboxSource, TriageAnswererContext } from "../src/engine/forge/inbox/index.js";
 
 const issuesSource: InboxSource = {

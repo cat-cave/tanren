@@ -7,7 +7,13 @@
 // integration files). Production wraps a provider read-only Answerer instead;
 // tests inject a fake. All three implement the same `ReconAnswerer` seam.
 
-import type { ReconAnswerer, ReconArchitectureLine, ReconIndex, ReconReport, ReconRisk } from "./types.js";
+import type {
+  ReconAnswerer,
+  ReconArchitectureLine,
+  ReconIndex,
+  ReconReport,
+  ReconRisk,
+} from "../../../src/engine/forge/brownfield/types.js";
 
 function slugFromRepoUrl(repoUrl: string): string {
   const tail = repoUrl

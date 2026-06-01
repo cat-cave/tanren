@@ -22,6 +22,7 @@ import {
   type InboxSource,
   type SourceConnector,
 } from "../src/engine/forge/inbox/index.js";
+import { createDeterministicTriageAnswerer } from "./fixtures/forge/deterministicTriageAnswerer.js";
 
 const actor: ActorContext = {
   userId: "user_a",
@@ -126,7 +127,8 @@ function stubPool(): {
 }
 
 function depsFor(connectors: ReadonlyMap<string, SourceConnector>, pool: pg.Pool): InboxEngineDeps {
-  return { pool, connectors };
+  // The deterministic triage fixture stands in for the real provider answerer.
+  return { pool, connectors, answerer: createDeterministicTriageAnswerer() };
 }
 
 const oneItemConnector = (kind: SourceConnector["kind"]): SourceConnector => ({

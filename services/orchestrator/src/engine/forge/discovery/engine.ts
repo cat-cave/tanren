@@ -24,7 +24,6 @@
 import type pg from "pg";
 import type { ActorContext } from "../../../auth/schemas.js";
 import { createSpec, type SpecContract } from "../../workflow/projectSpec.js";
-import { createDeterministicDiscoveryAnswerer } from "./defaultAnswerer.js";
 import { writeProvenance, type DiscoveryProvenance } from "./provenance.js";
 import {
   DiscoveryInsight,
@@ -38,8 +37,11 @@ type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
 export interface DiscoveryEngineDeps {
   pool: pg.Pool;
-  // Injectable/mockable classification seam. Defaults to the deterministic,
-  // grounded answerer so the endpoint is live without provider infra.
+  // The classification seam — REQUIRED. Production resolves a real provider
+  // answerer from the project's `forge` routing (the model DERIVES the proposed
+  // specs + DAG placement); tests inject a fake. There is NO production fallback
+  // to a hardcoded-proposal template (§8a). Only `classifyInsight` consults it;
+  // `acceptProposals` commits an already-classified set, so it is optional there.
   answerer?: DiscoveryAnswerer;
 }
 
@@ -61,13 +63,23 @@ async function loadExistingSpecs(
   return result.rows.map((row) => ({ specId: row.spec_id, title: row.title, status: row.status }));
 }
 
+/** Thrown when `classifyInsight` runs without a model answerer wired (§8a). */
+export class DiscoveryAnswererUnconfiguredError extends Error {
+  constructor() {
+    super("discovery classification requires a provider answerer; none was wired");
+    this.name = "DiscoveryAnswererUnconfiguredError";
+  }
+}
+
 export async function classifyInsight(deps: DiscoveryEngineDeps, input: ClassifyInput): Promise<DiscoveryResult> {
   // Validate the insight at the engine boundary (defence in depth; the route
   // also validates) so a malformed body never reaches the answerer.
   const insight = DiscoveryInsight.parse(input.insight);
-  const answerer = deps.answerer ?? createDeterministicDiscoveryAnswerer();
+  if (deps.answerer === undefined) {
+    throw new DiscoveryAnswererUnconfiguredError();
+  }
   const existingSpecs = await loadExistingSpecs(deps.pool, input.projectId);
-  return answerer.classify({ insight, projectId: input.projectId, existingSpecs });
+  return deps.answerer.classify({ insight, projectId: input.projectId, existingSpecs });
 }
 
 export interface AcceptInput {

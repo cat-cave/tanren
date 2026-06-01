@@ -21,7 +21,6 @@
 import type pg from "pg";
 import type { ActorContext } from "../../../auth/schemas.js";
 import { mergeCapture } from "./capture.js";
-import { createDeterministicInterviewAnswerer } from "./defaultAnswerer.js";
 import { deriveProductGraph, type DeriveResult } from "./derive.js";
 import {
   DEFAULT_TOTAL_ROUNDS,
@@ -35,9 +34,11 @@ import {
 
 export interface InterviewEngineDeps {
   pool: pg.Pool;
-  // Injectable/mockable interview seam. Defaults to the deterministic scripted
-  // answerer so the greenfield flow is live without provider infra.
-  answerer?: InterviewAnswerer;
+  // The interview seam — REQUIRED. Production resolves a real provider answerer
+  // from the project's `forge` routing (engine/forge/providerFactory.ts); tests
+  // inject a fake/deterministic fixture. There is NO production fallback: a Forge
+  // surface that reasons must use a model or hard-fail (§8a).
+  answerer: InterviewAnswerer;
   totalRounds?: number;
 }
 
@@ -62,10 +63,9 @@ export interface RunRoundResult {
 
 export async function runRound(deps: InterviewEngineDeps, input: RunRoundInput): Promise<RunRoundResult> {
   const totalRounds = deps.totalRounds ?? DEFAULT_TOTAL_ROUNDS;
-  const answerer = deps.answerer ?? createDeterministicInterviewAnswerer();
   const priorCapture = InterviewCapture.parse(input.capture);
 
-  const rawOutput = await answerer.ask({
+  const rawOutput = await deps.answerer.ask({
     round: input.round,
     totalRounds,
     answer: input.answer,
@@ -94,7 +94,9 @@ export interface DeriveFromCaptureInput {
 }
 
 export async function deriveFromCapture(
-  deps: InterviewEngineDeps,
+  // Derivation only needs the pool — it commits an already-accumulated capture
+  // through the existing creation paths and consults no answerer.
+  deps: Pick<InterviewEngineDeps, "pool">,
   input: DeriveFromCaptureInput,
 ): Promise<DeriveResult> {
   return deriveProductGraph(deps.pool, {

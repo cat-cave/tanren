@@ -30,14 +30,23 @@ import {
   type AuditPassRunner,
   type AuditSchedulerDeps,
 } from "../../engine/forge/audits/index.js";
+import type { TriageAnswerer } from "../../engine/forge/inbox/index.js";
+import type { ForgeAnswererTarget } from "../../engine/forge/providerFactory.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg } from "../orgs/index.js";
 
 export interface AuditRoutesOptions {
   pool: pg.Pool;
   // Injectable read-only pass executor (SSH/Answerer-backed in prod; a fake in
-  // tests). Defaults to the safe no-op runner.
+  // tests). Defaults to the safe no-op runner (a clean pass that records no
+  // findings — the §8a "absence is the honest behavior" case).
   passRunner?: AuditPassRunner;
+  // The triage answerer factory, called per-run with the job's org/project so an
+  // emitted finding is triaged by a REAL provider answerer
+  // (`buildForgeTriageAnswererFactory`); tests pass a fake. REQUIRED — there is
+  // no deterministic fallback. The default no-op pass yields no findings, so the
+  // answerer is consulted only once a real pass runner surfaces one.
+  answererFactory: (target: ForgeAnswererTarget) => TriageAnswerer;
 }
 
 const CreateJobBody = z
@@ -54,10 +63,7 @@ const CreateJobBody = z
 
 export function createAuditRoutes(options: AuditRoutesOptions) {
   const app = new Hono<ActorContextEnv>();
-  const schedulerDeps: AuditSchedulerDeps = {
-    pool: options.pool,
-    passRunner: options.passRunner ?? createNoopPassRunner(),
-  };
+  const passRunner = options.passRunner ?? createNoopPassRunner();
 
   app.get("/:orgId/audits", async (c) => {
     const orgId = c.req.param("orgId");
@@ -83,6 +89,14 @@ export function createAuditRoutes(options: AuditRoutesOptions) {
     if (!guard(c, orgId)) return c.json({ error: "org_access_denied" }, 403);
     const job = await getAuditJob(options.pool, c.req.param("jobId"));
     if (job === undefined || job.orgId !== orgId) return c.json({ error: "audit_job_not_found" }, 404);
+    const schedulerDeps: AuditSchedulerDeps = {
+      pool: options.pool,
+      passRunner,
+      answerer: options.answererFactory({
+        orgId,
+        ...(job.projectId === null ? {} : { projectId: job.projectId }),
+      }),
+    };
     try {
       const result = await runAuditJob(schedulerDeps, job);
       return c.json({ job: result.job, candidates: result.candidates }, 200);

@@ -86,8 +86,8 @@ export interface ForgeConversationContext {
 }
 
 // The injectable answerer. The engine calls `respond` once per step until it
-// returns a `final`. Implementations: `wrapProviderAnswerer` (real LLM) and
-// `createFakeForgeAnswerer` (tests). Pure async — no DB, no provider state.
+// returns a `final`. The production implementation is `wrapProviderAnswerer`
+// (real LLM); tests use a scripted fake fixture. Pure async — no DB, no state.
 export interface ForgeConversationAnswerer {
   respond(context: ForgeConversationContext): Promise<ForgeAnswererStep>;
 }

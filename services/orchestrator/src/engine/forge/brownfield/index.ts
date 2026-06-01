@@ -4,7 +4,8 @@
 // Every seam is injectable/mockable; nothing here adds a migration.
 
 export * from "./types.js";
-export { createDeterministicReconAnswerer } from "./defaultReconAnswerer.js";
+export { wrapProviderReconAnswerer, type WrapProviderReconAnswererOptions } from "./providerReconAnswerer.js";
+export { buildReconPrompt } from "./prompt.js";
 export { GithubRepoReader, type GithubRepoReaderInput } from "./githubRepoReader.js";
 export { runRecon, type ReconEngineDeps, type RunReconResult } from "./recon.js";
 export {

@@ -1,19 +1,20 @@
-// P3-0010: deterministic grounded Forge answerer.
+// TEST FIXTURE ONLY (P1c). Deterministic grounded Forge conversation answerer —
+// a stand-in for the real provider answerer (`wrapProviderAnswerer`). It MUST NOT
+// be constructed by any production/runtime path: the ask route resolves a real
+// provider answerer from the project's `forge` routing. It lives under tests/ so
+// the §8a arch-lint keeps it out of src/.
 //
-// The fallback `ForgeConversationAnswerer` the ask route uses when no provider
-// Answerer (P3-0012) is configured. It is NOT templated narration v0 — it runs
-// inside the same conversation engine, reads a relevant tool to ground itself,
-// and finalizes a ForgeAnswer with follow-up chips + an auto-navigate card.
-// Production swaps in `wrapProviderAnswerer` via the route's answererFactory;
-// this keeps the endpoint live (and the loop testable) without provider infra.
+// It runs inside the same conversation engine, reads a relevant tool to ground
+// itself, and finalizes a ForgeAnswer with follow-up chips + an auto-navigate
+// card, so a test can exercise the loop without hitting a provider.
 
 import type {
   ForgeAnswererStep,
   ForgeConversationAnswerer,
   ForgeConversationContext,
   ForgeReadToolCall,
-} from "../../engine/forge/index.js";
-import type { ForgeAnswer, ForgeAttentionItem } from "../../engine/answerers/schemas/forge.js";
+} from "../../../src/engine/forge/index.js";
+import type { ForgeAnswer, ForgeAttentionItem } from "../../../src/engine/answerers/schemas/forge.js";
 
 type Topic = "costs" | "run" | "insights" | "milestones" | "generic";
 

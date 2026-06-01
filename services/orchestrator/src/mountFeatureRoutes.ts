@@ -9,7 +9,8 @@
 import type { Hono } from "hono";
 import type pg from "pg";
 import { orgScopingPool } from "./engine/data/orgScopedDb.js";
-import type { SecretStore } from "./engine/contracts/index.js";
+import type { Allocator, SecretStore, SshSubstrate } from "./engine/contracts/index.js";
+import { buildForgeRouteAnswererFactories } from "./engine/forge/routeFactories.js";
 import type { GitHubHttpClient } from "./engine/providers/github.js";
 import type { GithubAppTokenMinter } from "./engine/providers/githubAppTokenMinter.js";
 import { mountGithubAppInstallFromEnv } from "./routes/auth/githubAppInstall.js";
@@ -18,13 +19,10 @@ import { mountBrownfieldRoutes } from "./routes/brownfield/mount.js";
 import { createCredentialRoutes, type CredentialRegistry } from "./routes/credentials/index.js";
 import { createDiscoveryRoutes } from "./routes/discovery/index.js";
 import { createDoctorRoutes } from "./routes/doctor/index.js";
-import { mountReportRoutes } from "./routes/experiments/mount.js";
-import type { LiveBenchmarkInfra } from "./engine/benchmark/liveScheduler.js";
-import { createForgeAskRoutes } from "./routes/forge/ask.js";
-import { createForgeProposalRoutes } from "./routes/forge/proposals.js";
+import { mountReportRoutes, type MountReportRoutesDeps } from "./routes/experiments/mount.js";
+import { createForgeAskRoutes, createForgeProposalRoutes, createForgeRoutes } from "./routes/forge/mount.js";
 import { createInboxRoutes } from "./routes/inbox/index.js";
 import { createAuditRoutes } from "./routes/audits/index.js";
-import { createForgeRoutes } from "./routes/forge/index.js";
 import { createGithubWebhookRoutes } from "./routes/githubWebhooks/index.js";
 import { createInsightRoutes } from "./routes/insights/index.js";
 import { createMilestoneRoutes } from "./routes/milestones/index.js";
@@ -39,7 +37,7 @@ import { createSpecRoutes } from "./routes/specs/index.js";
 import type { ActorContextEnv } from "./middleware/auth.js";
 
 /** The benchmark scheduler's live infra (the route supplies the pool itself). */
-export type BenchmarkRouteInfra = Omit<LiveBenchmarkInfra, "pool">;
+export type BenchmarkRouteInfra = NonNullable<MountReportRoutesDeps["benchmark"]>;
 
 export interface FeatureRouteDeps {
   pool: pg.Pool;
@@ -49,6 +47,13 @@ export interface FeatureRouteDeps {
   credentialRegistry: CredentialRegistry;
   configGateGithub: ConfigGateGithubFactory;
   vaultHealthCheck: () => Promise<{ ok: boolean; status: number }>;
+  // The runner allocator + SSH substrate + identity ref the run worker uses —
+  // the Forge answerer factories allocate a short-lived runner per model call to
+  // run the REAL provider answerer (engine/forge/providerFactory.ts). Same
+  // values `buildApp` assembles for the benchmark infra.
+  allocator: Allocator;
+  ssh: SshSubstrate;
+  identitySecretRef: string;
   // Live benchmark infra (allocator + SSH + runner identity + the shared LISTEN
   // connection) so the benchmark scheduler runs REAL trials — the post-merge
   // accept tier and the LISTEN/NOTIFY terminal await. Omitted (the default) →
@@ -64,6 +69,18 @@ export interface FeatureRouteDeps {
 export function mountFeatureRoutes(app: Hono<ActorContextEnv>, deps: FeatureRouteDeps): void {
   const { pool, secrets, githubHttp, githubAppMinter, credentialRegistry, configGateGithub, vaultHealthCheck } = deps;
   const benchmarkInfra = deps.benchmark;
+  // The per-surface Forge answerer factories: each Forge ideation surface
+  // resolves a REAL provider answerer (no deterministic fallback — §8a) by
+  // allocating a runner per model call against the shared infra (the same
+  // allocator / SSH / identity ref the run worker uses). Each route calls its
+  // factory with the request's org/project target.
+  const forgeAnswerers = buildForgeRouteAnswererFactories({
+    pool,
+    secrets,
+    allocator: deps.allocator,
+    ssh: deps.ssh,
+    identitySecretRef: deps.identitySecretRef,
+  });
   // RLS R3b: every `/orgs/:orgId/*` (+ `/orgs/:orgId/credentials`) operator route
   // handler runs its tenant-table reads/writes on this org-scoping pool. Combined
   // with the per-request `runWithJobOrgId` org scope the auth middleware
@@ -81,12 +98,27 @@ export function mountFeatureRoutes(app: Hono<ActorContextEnv>, deps: FeatureRout
   app.route("/orgs", createPersonaRoutes({ pool: scopedPool }));
   app.route("/orgs", createBehaviorRoutes({ pool: scopedPool }));
   app.route("/orgs", createMilestoneRoutes({ pool: scopedPool }));
-  mountBrownfieldRoutes(app, { pool: scopedPool, secrets, githubHttp, githubAppMinter });
+  mountBrownfieldRoutes(app, {
+    pool: scopedPool,
+    secrets,
+    githubHttp,
+    githubAppMinter,
+    reconAnswererFactory: forgeAnswerers.recon,
+  });
   // P3-0003: GitHub App install flow; mounts only when configured via env.
   mountGithubAppInstallFromEnv(app, { pool, secrets, minter: githubAppMinter });
   app.route("/orgs", createForgeRoutes({ pool: scopedPool, secrets, githubHttp }));
-  // P3-0010: thick-Forge LLM conversation endpoint (⌘K chat morph); answerer injectable.
-  app.route("/orgs", createForgeAskRoutes({ pool: scopedPool, secrets, githubHttp }));
+  // P3-0010: thick-Forge LLM conversation endpoint (⌘K chat morph); the answerer
+  // is the real provider conversation answerer, resolved per-request.
+  app.route(
+    "/orgs",
+    createForgeAskRoutes({
+      pool: scopedPool,
+      secrets,
+      githubHttp,
+      answererFactory: forgeAnswerers.conversation,
+    }),
+  );
   // P3-0010 (write-action approval): approve/reject proposed write actions.
   app.route("/orgs", createForgeProposalRoutes({ pool: scopedPool }));
   // P3-0028 webhook-driven CI (option). Mounted at root so GitHub posts to
@@ -95,20 +127,24 @@ export function mountFeatureRoutes(app: Hono<ActorContextEnv>, deps: FeatureRout
   // scope), so it keeps the bare pool.
   app.route("/", createGithubWebhookRoutes({ pool, secrets, githubHttp, githubAppMinter }));
   app.route("/orgs", createInsightRoutes({ pool: scopedPool }));
-  // P3-0014: spec discovery — classify an insight into proposed specs +
-  // DAG-placement options, accept → create specs with provenance.
-  app.route("/orgs", createDiscoveryRoutes({ pool: scopedPool }));
+  // P3-0014: spec discovery — the model DERIVES proposed specs + DAG placement
+  // from the insight; accept → create specs with provenance.
+  app.route("/orgs", createDiscoveryRoutes({ pool: scopedPool, answererFactory: forgeAnswerers.discovery }));
   // P3-0015: greenfield onboarding — Forge vision interview → derived product
-  // graph via the existing creation paths; interview answerer injectable.
-  app.route("/orgs", createOnboardingRoutes({ pool: scopedPool }));
+  // graph via the existing creation paths; the real provider interview answerer.
+  app.route("/orgs", createOnboardingRoutes({ pool: scopedPool, answererFactory: forgeAnswerers.interview }));
   // P3-0022: candidate inbox — issue sources → Forge triage → discovery accept;
-  // connector reads via the App resolver, triage answerer injectable.
-  app.route("/orgs", createInboxRoutes({ pool: scopedPool, secrets, githubHttp }));
+  // connector reads via the App resolver, the real provider triage answerer.
+  app.route(
+    "/orgs",
+    createInboxRoutes({ pool: scopedPool, secrets, githubHttp, answererFactory: forgeAnswerers.triage }),
+  );
   // P3-0021: scheduled audits — recurring read-only Answerer passes (the audit
   // job library). A run executes a read-only pass and emits findings into the
-  // candidate inbox as a system (auto-routing) source; the pass runner is
-  // injectable (defaults to a safe no-op until an SSH-backed runner is wired).
-  app.route("/orgs", createAuditRoutes({ pool: scopedPool }));
+  // candidate inbox as a system (auto-routing) source; the pass runner defaults
+  // to a safe no-op (no findings) until an SSH-backed runner is wired, and an
+  // emitted finding is triaged by the real provider triage answerer.
+  app.route("/orgs", createAuditRoutes({ pool: scopedPool, answererFactory: forgeAnswerers.triage }));
   // DORA delivery metrics + the benchmark experiment/cell report+CRUD surface.
   // The benchmark scheduler runs on the scoped pool; its live accept/await seams
   // carry their own infra (allocator/ssh/identity/notify) when the boot wired it.

@@ -14,7 +14,6 @@ import type pg from "pg";
 import { describe, expect, it } from "vitest";
 import type { ActorContext } from "../src/auth/schemas.js";
 import {
-  createDeterministicInterviewAnswerer,
   deriveFromCapture,
   emptyCapture,
   mergeCapture,
@@ -22,6 +21,7 @@ import {
   type InterviewAnswerer,
   type InterviewCapture,
 } from "../src/engine/forge/interview/index.js";
+import { createDeterministicInterviewAnswerer } from "./fixtures/forge/deterministicInterviewAnswerer.js";
 
 const actor: ActorContext = {
   userId: "user_a",

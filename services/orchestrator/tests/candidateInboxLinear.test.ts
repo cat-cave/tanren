@@ -26,6 +26,7 @@ import {
   type LinearHttpRequest,
   type SourceConnector,
 } from "../src/engine/forge/inbox/index.js";
+import { createDeterministicTriageAnswerer } from "./fixtures/forge/deterministicTriageAnswerer.js";
 
 // A stub Jira client for the dispatcher wiring (this file's dispatcher tests
 // exercise github/linear routing; the jira connector has its own test file).
@@ -136,7 +137,8 @@ function stubPool(): { pool: pg.Pool; candidates: Map<string, Record<string, unk
 }
 
 function depsFor(connectors: ReadonlyMap<string, SourceConnector>, pool: pg.Pool): InboxEngineDeps {
-  return { pool, connectors };
+  // The deterministic triage fixture stands in for the real provider answerer.
+  return { pool, connectors, answerer: createDeterministicTriageAnswerer() };
 }
 
 const linearIssues = [

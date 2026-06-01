@@ -10,10 +10,11 @@
 //     accepted specs through the existing P2A-0013 path and stamps discovery
 //     provenance onto each spec's metadata. Returns the created spec-ids.
 //
-// The answerer is injectable (`answererFactory`) — production can wire a
-// provider-backed discovery answerer; tests inject a fake. When omitted the
-// engine falls back to its deterministic grounded answerer, so the endpoint is
-// always live. Mounted on the same `/orgs` base as the other product routes.
+// The answerer is resolved per-request from the request's org/project via
+// `answererFactory(target)` — production wires `buildForgeDiscoveryAnswererFactory`
+// (a REAL provider answerer that derives the DAG with a model); tests inject a
+// fake. There is no deterministic fallback (§8a). Mounted on the same `/orgs`
+// base as the other product routes.
 
 import { Hono } from "hono";
 import type pg from "pg";
@@ -27,6 +28,7 @@ import {
   ProposedSpec,
   type DiscoveryAnswerer,
 } from "../../engine/forge/discovery/index.js";
+import type { ForgeAnswererTarget } from "../../engine/forge/providerFactory.js";
 import {
   ProjectAccessDeniedError,
   ProjectNotFoundError,
@@ -37,9 +39,11 @@ import { actorCanAccessOrg } from "../orgs/index.js";
 
 export interface DiscoveryRoutesOptions {
   pool: pg.Pool;
-  // Injectable classification answerer (provider wrap or a test fake). Defaults
-  // to the engine's deterministic grounded answerer when omitted.
-  answererFactory?: () => DiscoveryAnswerer;
+  // The classification answerer factory, called per-request with the request's
+  // org/project so the answerer resolves THAT project's `forge` routing. The
+  // production wiring passes `buildForgeDiscoveryAnswererFactory` (a real provider
+  // answerer); tests pass a fake. REQUIRED — there is no deterministic fallback.
+  answererFactory: (target: ForgeAnswererTarget) => DiscoveryAnswerer;
 }
 
 const ClassifyBody = DiscoveryInsight;
@@ -55,7 +59,6 @@ const AcceptBody = z
 
 export function createDiscoveryRoutes(options: DiscoveryRoutesOptions) {
   const app = new Hono<ActorContextEnv>();
-  const answerer = options.answererFactory?.();
 
   app.post("/:orgId/projects/:projectId/discovery/classify", async (c) => {
     const actor = requireActor(c);
@@ -67,10 +70,11 @@ export function createDiscoveryRoutes(options: DiscoveryRoutesOptions) {
     if (!parsed.success) {
       return c.json({ error: "invalid_insight", issues: parsed.error.issues }, 400);
     }
+    const projectId = c.req.param("projectId");
     try {
       const result = await classifyInsight(
-        { pool: options.pool, ...(answerer === undefined ? {} : { answerer }) },
-        { projectId: c.req.param("projectId"), insight: parsed.data, actor },
+        { pool: options.pool, answerer: options.answererFactory({ orgId, projectId }) },
+        { projectId, insight: parsed.data, actor },
       );
       return c.json(result, 200);
     } catch (error) {
@@ -90,7 +94,7 @@ export function createDiscoveryRoutes(options: DiscoveryRoutesOptions) {
     }
     try {
       const result = await acceptProposals(
-        { pool: options.pool, ...(answerer === undefined ? {} : { answerer }) },
+        { pool: options.pool },
         {
           projectId: c.req.param("projectId"),
           insight: parsed.data.insight,

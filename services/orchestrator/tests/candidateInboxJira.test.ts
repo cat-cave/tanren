@@ -26,6 +26,7 @@ import {
   type LinearHttpClient,
   type SourceConnector,
 } from "../src/engine/forge/inbox/index.js";
+import { createDeterministicTriageAnswerer } from "./fixtures/forge/deterministicTriageAnswerer.js";
 
 // A Jira source wired under the `issues` kind (dispatch by config.provider).
 const jiraSource: InboxSource = {
@@ -150,7 +151,8 @@ function stubPool(): { pool: pg.Pool; candidates: Map<string, Record<string, unk
 }
 
 function depsFor(connectors: ReadonlyMap<string, SourceConnector>, pool: pg.Pool): InboxEngineDeps {
-  return { pool, connectors };
+  // The deterministic triage fixture stands in for the real provider answerer.
+  return { pool, connectors, answerer: createDeterministicTriageAnswerer() };
 }
 
 // A description in Atlassian Document Format (the API v3 default shape).

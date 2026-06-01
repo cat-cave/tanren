@@ -15,7 +15,6 @@ import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
 import type { GitHubHttpClient, GitHubHttpRequest } from "../src/engine/providers/github.js";
 import {
   acceptCandidate,
-  createDeterministicTriageAnswerer,
   createGitHubIssuesConnector,
   createSentryConnector,
   dismissCandidate,
@@ -27,6 +26,7 @@ import {
   type SourceConnector,
   type TriageAnswererContext,
 } from "../src/engine/forge/inbox/index.js";
+import { createDeterministicTriageAnswerer } from "./fixtures/forge/deterministicTriageAnswerer.js";
 
 const actor: ActorContext = {
   userId: "user_a",
@@ -195,7 +195,9 @@ function stubPool(existingSpecs: Array<{ spec_id: string; title: string; status:
 }
 
 function depsFor(connectors: ReadonlyMap<string, SourceConnector>, pool: pg.Pool): InboxEngineDeps {
-  return { pool, connectors };
+  // The deterministic triage fixture stands in for the real provider answerer so
+  // ingestion is exercised without a provider call.
+  return { pool, connectors, answerer: createDeterministicTriageAnswerer() };
 }
 
 describe("github issues connector (mocked)", () => {

@@ -15,7 +15,7 @@
 //     placement = fold into the live run (the hi-fi sentry→in-flight case).
 //   • Otherwise → needs_call with a proposed DAG placement.
 
-import type { CandidateTriage, TriageAnswerer, TriageAnswererContext } from "./types.js";
+import type { CandidateTriage, TriageAnswerer, TriageAnswererContext } from "../../../src/engine/forge/inbox/types.js";
 
 const STOPWORDS = new Set([
   "the",

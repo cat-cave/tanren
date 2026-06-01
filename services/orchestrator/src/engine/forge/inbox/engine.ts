@@ -21,7 +21,6 @@
 import type pg from "pg";
 import type { ActorContext } from "../../../auth/schemas.js";
 import { acceptProposals, type DiscoveryInsight, type PlacementKind } from "../discovery/index.js";
-import { createDeterministicTriageAnswerer } from "./defaultAnswerer.js";
 import { getCandidate, resolveCandidate, upsertCandidate } from "./store.js";
 import type { Candidate, CandidateTriage, InboxSource, SourceConnector, TriageAnswerer } from "./types.js";
 
@@ -32,8 +31,20 @@ export interface InboxEngineDeps {
   // Connectors keyed by source kind. The route wires the GitHub Issues
   // connector; tests inject fakes. A source with no connector is skipped.
   connectors: ReadonlyMap<string, SourceConnector>;
-  // Injectable triage answerer; defaults to the deterministic grounded one.
+  // The triage answerer — REQUIRED for ingestion. Production resolves a real
+  // provider answerer from the project's `forge` routing (the model reaches a
+  // real verdict); tests inject a fake. There is NO production fallback to a
+  // deterministic verdict (§8a). Only `ingestSource` consults it; the resolution
+  // transitions (fold/dismiss/…) don't, so it is optional on the shared deps.
   answerer?: TriageAnswerer;
+}
+
+/** Thrown when `ingestSource` runs without a model triage answerer wired (§8a). */
+export class TriageAnswererUnconfiguredError extends Error {
+  constructor() {
+    super("candidate triage requires a provider answerer; none was wired");
+    this.name = "TriageAnswererUnconfiguredError";
+  }
 }
 
 async function loadExistingSpecs(
@@ -58,7 +69,10 @@ export async function ingestSource(deps: InboxEngineDeps, source: InboxSource): 
   const connector = deps.connectors.get(source.kind);
   if (connector === undefined) return { candidates: [] };
 
-  const answerer = deps.answerer ?? createDeterministicTriageAnswerer();
+  if (deps.answerer === undefined) {
+    throw new TriageAnswererUnconfiguredError();
+  }
+  const answerer = deps.answerer;
   const items = await connector.fetch(source);
   const existingSpecs = await loadExistingSpecs(deps.pool, source.projectId);
 

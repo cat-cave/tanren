@@ -12,7 +12,6 @@ import type { ActorContext } from "../src/auth/schemas.js";
 import { ForgeAnswer, type ForgeWriteToolCall } from "../src/engine/answerers/schemas/forge.js";
 import {
   askForge,
-  createFakeForgeAnswerer,
   decideForgeProposal,
   ForgeProposalStore,
   ProposalAlreadyDecidedError,
@@ -21,6 +20,7 @@ import {
   type ForgeWriteToolDispatcher,
 } from "../src/engine/forge/index.js";
 import { ForgeThreadStore } from "../src/engine/forge/threads.js";
+import { createFakeForgeAnswerer } from "./fixtures/forge/fakeForgeAnswerer.js";
 import { ForgeMemoryClient } from "./helpers/forgeMemoryClient.js";
 
 const operator: ActorContext = {

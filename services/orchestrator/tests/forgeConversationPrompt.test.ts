@@ -11,13 +11,13 @@ import { describe, expect, it } from "vitest";
 import { ForgeAnswer } from "../src/engine/answerers/schemas/forge.js";
 import {
   buildForgePrompt,
-  createFakeForgeAnswerer,
   wrapProviderAnswerer,
   ForgeAnswererStepSchema,
   type ForgeAnswererStep,
   type ForgeAnswererStepOutput,
   type ForgeConversationContext,
 } from "../src/engine/forge/conversation/index.js";
+import { createFakeForgeAnswerer } from "./fixtures/forge/fakeForgeAnswerer.js";
 import type { ForgeTurnRow } from "../src/engine/forge/schemas.js";
 
 // Narrow a step to a `tools` variant (throws if it is not) so assertions on the
