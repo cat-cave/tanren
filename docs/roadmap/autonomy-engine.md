@@ -97,7 +97,7 @@ seams match it; pricing specifics stay out of the repo as commercial logic):
 - **Managed — metered:** Tanren provides the router/keys/compute and bills
   **transparent usage-based — our cost + a fixed, disclosed margin** (e.g.
   cost + ~10%). Your billing transparency _is_ our cost transparency. The trust
-  play is exactly this: an org weighs "self-host vs. pay a small upcharge to not
+  play is exactly this: an org weighs "self-host vs. pay a small margin to not
   worry about it" as a clean economic decision, because nothing is hidden. This
   holds even long-term (e.g. self-served models on rented GPUs stay usage-based).
 
@@ -409,7 +409,7 @@ surfaces, gets a real product.
    threshold, drives aggressively (no milestone pauses) — **zero per-spec
    triggers.**
 4. **Merge coordination:** parallel specs auto-rebase; real conflicts resolved
-   **intent-preservingly**; dependents **stack** on speculative integration
+   **with intent preserved**; dependents **stack** on speculative integration
    branches; the **native merge queue** orders + speculatively checks + merges.
 5. **Issue loop:** planted deficiency → **real issue** (webhook-ingested) →
    triage → spec → DAG-insert → prioritize → execute → merge.
@@ -563,7 +563,7 @@ unless Tanren actually works against real resources.**
   three tier proofs (easy/medium/hard → merged PR) and, as each Phase-1/2/3
   capability lands, the autonomous slices: real-LLM ideation produces a real DAG;
   the walker drives a multi-spec DAG to merged PRs with no per-spec trigger; a
-  real conflict is resolved intent-preservingly; a real issue ingests → triages →
+  real conflict is resolved with intent preserved; a real issue ingests → triages →
   becomes a merged spec. `apex` (Phase 3) is the apex e2e case.
 - Each e2e asserts on **real persisted artifacts** — a merged PR on GitHub, the
   implemented file on the base branch, `cost_records` rows with real basis, the
