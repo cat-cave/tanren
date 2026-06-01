@@ -1,11 +1,15 @@
-# Tanren-Method Benchmark + Experimentation Harness (scoping)
+# Tanren-Method Benchmark + Experimentation Harness
 
-> **Status: horizon / scoping doc. Decisions deferred.** This is a concrete,
-> codebase-grounded design for a future capability, not a spec to build now.
-> Its hard prerequisite — real credentials and real model/harness runs — is
-> still **deferred** (see `ROADMAP.md`'s pending list and P3-0009). Nothing in
-> here is meaningful until that lands. Treat the entity names and shapes below
-> as proposals to argue with, not commitments.
+> **Status: the toolkit described here is BUILT** (prerequisite met — the run
+> loop is live-validated to merged PRs across three tiers). Code-complete on
+> `main` under `engine/benchmark/**` (entities, migration `0033`; `TrialScorecard`
+> projection; `deriveCellScorecard`/`compareCells` reducers; `BenchmarkRunner`
+> scheduling trials through the real worker; the post-merge hidden-`accept` step
+> emitting `benchmark.accept.*`, migration `0034`) plus the
+> `tanren experiments`/`tanren cells` CRUD + `report`/`compare` CLI over the
+> `/orgs/:orgId/experiments[/cells]` routes. **The remaining piece is the seed
+> corpus** (§1.2/§4.3 — content, not code). Where the design below says
+> "net-new"/"proposed", that work has now landed.
 
 ## §0 — Why this exists, and what it is NOT
 
@@ -321,19 +325,15 @@ gates the whole capability (§5).
 
 ## §5 — A phased path
 
-The prerequisite: **none of this is meaningful until real credentials + real
-model/harness runs exist.** The system is built but live-deferred (P3-0009); a
-benchmark of nondeterministic real flows cannot run on the fixture-fake path —
-the first real step is _unblocking live runs at all_, not building benchmark
-infra. Cost/time then shapes the phasing: each Tier-1 trial is a full real
-agentic run (minutes, real tokens, a real PR + CI cycle), so a 2-cell × 10-trial
-Tier-1 experiment is ~20 real runs and Tier-2 is far more. The harness is designed
-to **spend the minimum runs that still yield a callable result** and fail loudly
-when N is too small rather than over-spend or over-claim.
+The prerequisite (real credentials + real runs) is **met** and the toolkit phases
+below (B1/B2) are **built on `main`**; what remains is the seed corpus (content)
+and then running the experiments (B3). Cost/time shapes that work: each Tier-1
+trial is a full real agentic run (minutes, real tokens, a real PR + CI cycle), so
+a 2-cell × 10-trial Tier-1 experiment is ~20 real runs and Tier-2 is far more. The
+harness is designed to **spend the minimum runs that still yield a callable
+result** and fail loudly when N is too small rather than over-spend or over-claim.
 
-- **Phase B0 — prerequisite (no benchmark code).** Land the live run path
-  (P3-0009): real credentials, one real end-to-end operator run merged. Until
-  then the benchmark is a paper design.
+- **Phase B0 — prerequisite (DONE).** The live run path (P3-0009) is landed.
 - **Phase B1 — smallest meaningful experiment, by hand.** One Tier-1 seed
   (distilled from a real merged spec, §1.2 path 1, frozen `accept` tier). **Two
   cells, one knob** (lint-only vs lint+typecheck `fast` tier). **N = 5–7 trials**,
@@ -341,11 +341,10 @@ when N is too small rather than over-spend or over-claim.
   existing `runs`/`cost_records`/`events` (one query + a spreadsheet). Deliverable:
   a learned answer to one question + a calibration of real-run noise (which sets N
   later). **No new entities yet** — prove the methodology before building infra.
-- **Phase B2 — the harness skeleton.** Add the three entities, the
-  `TrialScorecard` projection, and `deriveCellScorecard`/`compareCells` reducers;
-  wrap B1 in a thin `BenchmarkRunner` (enqueue trials + `accept` step + write
-  rows) and confirm it reproduces the hand result. Deliverable: a repeatable
-  single-knob experiment.
+- **Phase B2 — the harness skeleton (BUILT).** The entities, `TrialScorecard`
+  projection, `deriveCellScorecard`/`compareCells` reducers, and `BenchmarkRunner`
+  (enqueue trials + `accept` step + write rows) are merged (banner has file
+  paths). What remains is exercising it against a real seed.
 - **Phase B3 — the standing benchmark.** Grow the corpus across all tiers
   (admission gate, §1.2), add the report surface (§4.2.4), and run a frozen config
   snapshot as a **regression detector**: re-run on a Tanren process change and
@@ -403,7 +402,8 @@ flows can honestly deliver, and it is enough to answer the motivating questions.
 5. **Where it lives.** An _internal_ tuning tool (the out-of-the-box config) or a
    _customer-facing_ "tune your org's config" surface? That changes whether the
    entities are control-plane-internal or first-class product (and touches the
-   RLS + control-/data-plane split, now shipped through P3b).
+   RLS + control-/data-plane split, now shipped through P3c). The benchmark
+   entities ship today as control-plane-internal, RLS-scoped records.
 6. **Default-config feedback loop.** What governs promoting a benchmark-winning
    config to the _shipped default_ routing/gate — auto on a clean snapshot, or
    always human-gated?
@@ -488,13 +488,12 @@ we benchmark _a Tanren process configuration_.
 
 **[unverified]**: whether the _paper_ reports multi-sample / pass@k stats
 (baseline docs describe single-attempt); the **task-selection methodology** for
-the 200 programs (range confirmed — CLI tools → FFmpeg/SQLite/PHP — criteria
-not); the exact **cross-task aggregation formula** (per-test fraction confirmed,
+the 200 programs (range confirmed — CLI tools → FFmpeg/SQLite/PHP — criteria not);
+the exact **cross-task aggregation formula** (per-test fraction confirmed,
 averaging across tasks not nailed down in our sources).
 
 ### §8.5 Sources
 
-- ProgramBench repo — <https://github.com/facebookresearch/ProgramBench> (README +
-  usage/eval docs at `/README.md` and `/docs/README.md`)
+- ProgramBench repo — <https://github.com/facebookresearch/ProgramBench> (README + usage/eval docs)
 - Paper ("Can Language Models Rebuild Programs From Scratch?") — <https://arxiv.org/abs/2605.03546>
 - mini-swe-agent ProgramBench baseline — <https://mini-swe-agent.com/latest/usage/programbench/>
