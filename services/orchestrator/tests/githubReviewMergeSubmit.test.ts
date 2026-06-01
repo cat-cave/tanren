@@ -1,8 +1,9 @@
 // Covers GitHubReviewMergeService.submitReview + fetchPullRequestDiff — the
 // real GitHub write/read the simulated reviewer drives. submitReview must POST
-// to /pulls/:n/reviews with the APPROVE/REQUEST_CHANGES event + the reasoning
-// body; fetchPullRequestDiff must read /pulls/:n/files and concatenate the
-// per-file patches into a unified diff.
+// to /pulls/:n/reviews with the event (COMMENT for the self-PR-safe simulated
+// path, or APPROVE/REQUEST_CHANGES for a distinct reviewer identity) + the
+// reasoning body; fetchPullRequestDiff must read /pulls/:n/files and concatenate
+// the per-file patches into a unified diff.
 import { describe, expect, it } from "vitest";
 import type { GitHubHttpRequest, GitHubHttpResponse } from "../src/engine/providers/github.js";
 import { GitHubReviewMergeService } from "../src/engine/providers/githubReviewMerge.js";
@@ -52,6 +53,27 @@ describe("submitReview posts a real GitHub review", () => {
     });
 
     expect(http.requests[0]?.body).toEqual({ event: "REQUEST_CHANGES", body: "criterion 2 is unmet" });
+  });
+
+  it("POSTs a COMMENT event (self-PR-safe) with the verdict-bearing body", async () => {
+    const http = recordingHttp(() => ({ status: 200, body: { id: 3 } }));
+    const service = new GitHubReviewMergeService(http.client);
+
+    await service.submitReview({
+      repo: { owner: "cat-cave", name: "fix" },
+      pullNumber: 9,
+      event: "COMMENT",
+      body: "Tanren simulated review — VERDICT: approve\n\ncriteria satisfied",
+      token: "t",
+    });
+
+    const req = http.requests[0];
+    expect(req?.method).toBe("POST");
+    expect(req?.path).toBe("/repos/cat-cave/fix/pulls/9/reviews");
+    expect(req?.body).toEqual({
+      event: "COMMENT",
+      body: "Tanren simulated review — VERDICT: approve\n\ncriteria satisfied",
+    });
   });
 
   it("throws on a non-2xx submit response", async () => {

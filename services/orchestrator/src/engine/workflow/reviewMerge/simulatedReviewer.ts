@@ -4,11 +4,13 @@
 // end-to-end WITHOUT a real human, the orchestrator runs a reviewer Answerer:
 // it reads the PR diff + the spec's title/description/acceptance-criteria and
 // returns a single verdict (approve | request_changes) with reasoning. The
-// review stage then posts that as a REAL GitHub review on the PR (see
-// reviewPolling.ts), so the genuine verdict flows through the SAME path as the
-// `human` policy. This module owns only the read-only Answerer half: build the
-// prompt, run the adapter, return the strict-JSON verdict. It never touches the
-// filesystem, runs commands, or merges — it judges and explains.
+// review stage then posts that as a REAL GitHub COMMENT review on the PR (see
+// reviewPolling.ts) — a self-PR-safe audit artifact, since the bot pushes AND
+// reviews with the same identity and GitHub forbids self-APPROVE/REQUEST_CHANGES
+// — and drives the approve/request_changes decision INTERNALLY off this verdict.
+// This module owns only the read-only Answerer half: build the prompt, run the
+// adapter, return the strict-JSON verdict. It never touches the filesystem, runs
+// commands, or merges — it judges and explains.
 import { answererOutputSchemaFor, ReviewAnswer } from "../../answerers/schemas/index.js";
 import type { AnswererAdapter } from "../../providers/types.js";
 
@@ -52,9 +54,30 @@ export async function runSimulatedReviewer(
   return { verdict, schemaId: outputSchema.name };
 }
 
-/** Map the Answerer verdict to the GitHub review event the stage submits. */
-export function reviewEventFor(verdict: ReviewAnswer): "APPROVE" | "REQUEST_CHANGES" {
-  return verdict.verdict === "approve" ? "APPROVE" : "REQUEST_CHANGES";
+/**
+ * The GitHub review event the simulated reviewer submits: always COMMENT.
+ *
+ * Tanren's bot pushes the PR AND reviews it with the SAME GitHub identity, and
+ * GitHub forbids APPROVE / REQUEST_CHANGES on your own PR (HTTP 422 "Review Can
+ * not approve your own pull request"). A COMMENT-event review IS allowed on a
+ * self-PR, so the simulated reviewer posts its verdict as a real, visible
+ * COMMENT audit artifact and drives the approve/request_changes decision
+ * INTERNALLY off the Answerer verdict (see runSimulatedReview in
+ * reviewPolling.ts). The human policy still reads real APPROVE/REQUEST_CHANGES
+ * reviews via fetchReviewVerdict — unchanged.
+ */
+export function reviewEventFor(_verdict: ReviewAnswer): "COMMENT" {
+  return "COMMENT";
+}
+
+/**
+ * Build the COMMENT review body: a header that states the orchestrator-managed
+ * reviewer's verdict (so the posted COMMENT is honest and self-explaining, since
+ * a COMMENT carries no APPROVE/REQUEST_CHANGES state) followed by the Answerer's
+ * reasoning verbatim.
+ */
+export function reviewBodyFor(verdict: ReviewAnswer): string {
+  return `Tanren simulated review — VERDICT: ${verdict.verdict}\n\n${verdict.reasoning}`;
 }
 
 export function buildSimulatedReviewerPrompt(context: SimulatedReviewContext): string {

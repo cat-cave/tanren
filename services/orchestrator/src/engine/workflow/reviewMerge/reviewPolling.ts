@@ -29,7 +29,12 @@ import {
   type ReviewMergeRunContext,
   type RunStateClient,
 } from "./context.js";
-import { reviewEventFor, runSimulatedReviewer, type SimulatedReviewContext } from "./simulatedReviewer.js";
+import {
+  reviewBodyFor,
+  reviewEventFor,
+  runSimulatedReviewer,
+  type SimulatedReviewContext,
+} from "./simulatedReviewer.js";
 
 export interface PollReviewForRunInput {
   pool: RunStateClient;
@@ -63,8 +68,8 @@ export interface PollReviewForRunInput {
    * reviewPolicy is "simulated"; on every other policy it is NEVER invoked (so a
    * `human`/`auto` run never needs to resolve a reviewer adapter). The Answerer
    * reads the PR diff (fetched via the probe) + these criteria and the stage
-   * posts its verdict as a REAL GitHub review before proceeding through the
-   * standard verdict path.
+   * posts its verdict as a REAL GitHub COMMENT review (self-PR-safe) before
+   * driving the approve/request_changes decision internally off that verdict.
    */
   simulatedReviewer?: () => AnswererAdapter<ReviewAnswer>;
   simulatedReviewContext?: SimulatedReviewSpec;
@@ -166,10 +171,13 @@ export async function pollReviewForRun(input: PollReviewForRunInput): Promise<Po
 
   // Simulated tier (project reviewPolicy === "simulated"): the orchestrator runs
   // a reviewer Answerer over the PR diff + acceptance criteria, posts its verdict
-  // as a REAL GitHub review, then proceeds through the SAME verdict path as the
-  // human policy. The posted review is a genuine verdict on the PR — not a
-  // synthetic shortcut — so the rest of the pipeline (approve→merge,
-  // changes_requested→rework) reacts exactly as it does for a human reviewer.
+  // as a REAL GitHub COMMENT review (self-PR-safe — the bot pushes AND reviews
+  // with the same identity, which GitHub forbids for APPROVE/REQUEST_CHANGES),
+  // then drives the approve/request_changes decision INTERNALLY off the Answerer
+  // verdict through the SAME finalize path the human policy uses. The posted
+  // COMMENT is a genuine, visible audit artifact — not a synthetic shortcut — so
+  // the rest of the pipeline (approve→merge, changes_requested→rework) reacts
+  // exactly as it does for a human reviewer.
   if (context.reviewPolicy === "simulated") {
     const result = await runSimulatedReview(input, context, probe, taskId, pr.pullNumber);
     await finalizeReviewTask(input.pool, eventStore, context, result, input.runStateWriter);
@@ -212,9 +220,11 @@ export async function pollReviewForRun(input: PollReviewForRunInput): Promise<Po
 /**
  * Drive the simulated-reviewer verdict: fetch the PR diff, run the reviewer
  * Answerer over it + the spec's acceptance criteria, post the verdict as a REAL
- * GitHub review, and return the normalized verdict the standard finalize path
- * consumes. The review is genuinely posted before the verdict is returned, so
- * the human-policy verdict path proceeds against a real PR review.
+ * GitHub COMMENT review (self-PR-safe audit artifact), and return the normalized
+ * verdict the standard finalize path consumes. The approve/request_changes
+ * decision is derived INTERNALLY from the Answerer verdict here (the COMMENT
+ * review is the audit trail, not the decision source), so finalizeReviewTask
+ * routes approve→merge / request_changes→rework off a genuine, posted review.
  */
 async function runSimulatedReview(
   input: PollReviewForRunInput,
@@ -245,9 +255,13 @@ async function runSimulatedReview(
     context: reviewContext,
     timeoutMs: input.pollDelayMs ?? 60_000,
   });
-  // Post the REAL GitHub review — this is the genuine verdict the rest of the
-  // pipeline (and any human watching the PR) sees.
-  await probe.submitReview(reviewEventFor(verdict), verdict.reasoning);
+  // Post the REAL GitHub review as a COMMENT (self-PR-safe: the bot pushes AND
+  // reviews with the same identity, and GitHub forbids self-APPROVE/REQUEST_
+  // CHANGES). The COMMENT body states the verdict + reasoning so it is a real,
+  // honest audit artifact on the PR. The approve/request_changes decision is
+  // driven INTERNALLY off the Answerer verdict below — not read back from a
+  // review-state poll (a COMMENT carries no APPROVE/REQUEST_CHANGES state).
+  await probe.submitReview(reviewEventFor(verdict), reviewBodyFor(verdict));
   return {
     runId: context.runId,
     taskId,

@@ -1,9 +1,10 @@
 // reviewPolicy: "simulated" — the orchestrator-managed reviewer. Proves the
 // review stage runs the reviewer Answerer over the PR diff + acceptance
-// criteria, posts a REAL GitHub review (asserted via the injected probe's
-// submitReview with the right event + body), and routes approve→approved /
-// request_changes→changes_requested through the SAME verdict path the human
-// policy uses. Also proves the Answerer returns strict JSON.
+// criteria, posts a REAL GitHub COMMENT review (self-PR-safe — asserted via the
+// injected probe's submitReview with event=COMMENT + the verdict-bearing body),
+// and routes approve→approved / request_changes→changes_requested INTERNALLY off
+// the Answerer verdict through the SAME finalize path the human policy uses.
+// Also proves the Answerer returns strict JSON.
 import { describe, expect, it } from "vitest";
 
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
@@ -13,6 +14,7 @@ import type { AnswererAdapter } from "../src/engine/providers/types.js";
 import { pollReviewForRun, type ReviewProbe } from "../src/engine/workflow/reviewMerge/reviewPolling.js";
 import {
   buildSimulatedReviewerPrompt,
+  reviewBodyFor,
   reviewEventFor,
   runSimulatedReviewer,
 } from "../src/engine/workflow/reviewMerge/simulatedReviewer.js";
@@ -57,12 +59,19 @@ function fakeReviewer(verdict: ReviewAnswer, seen: { prompts: string[] }): Answe
 }
 
 describe("simulated reviewer Answerer", () => {
-  it("returns strict JSON and maps the verdict to a GitHub review event", () => {
+  it("returns strict JSON and posts the verdict as a self-PR-safe COMMENT review", () => {
     const schema = answererOutputSchemaFor("review", ReviewAnswer);
     const approved = schema.parse({ verdict: "approve", reasoning: "all criteria met" });
     expect(approved.verdict).toBe("approve");
-    expect(reviewEventFor(approved)).toBe("APPROVE");
-    expect(reviewEventFor({ verdict: "request_changes", reasoning: "criterion 2 unmet" })).toBe("REQUEST_CHANGES");
+    // Both verdicts post a COMMENT event (GitHub forbids self-APPROVE/REQUEST_
+    // CHANGES); the verdict is stated in the body + driven internally.
+    expect(reviewEventFor(approved)).toBe("COMMENT");
+    expect(reviewEventFor({ verdict: "request_changes", reasoning: "criterion 2 unmet" })).toBe("COMMENT");
+    // The COMMENT body states the verdict (honest audit artifact) + the reasoning.
+    expect(reviewBodyFor(approved)).toBe("Tanren simulated review — VERDICT: approve\n\nall criteria met");
+    expect(reviewBodyFor({ verdict: "request_changes", reasoning: "criterion 2 unmet" })).toBe(
+      "Tanren simulated review — VERDICT: request_changes\n\ncriterion 2 unmet",
+    );
 
     // Strict: unknown keys and missing fields are rejected.
     expect(() => schema.parse({ verdict: "approve", reasoning: "x", extra: 1 })).toThrow(/unrecognized|extra/iu);
@@ -103,7 +112,7 @@ describe("simulated reviewer Answerer", () => {
 });
 
 describe("review polling stage — reviewPolicy: simulated", () => {
-  it("runs the reviewer, posts a REAL approve review, and routes to approved→merge", async () => {
+  it("runs the reviewer, posts a REAL COMMENT review, and routes to approved→merge", async () => {
     const pool = new ReviewMergePool("direct_merge", "open", "simulated");
     const events = new FakeEventStore();
     const captured = { diff: "diff --git a/x b/x\n+x", submitted: [] as SubmittedReview[], fetchedDiff: false };
@@ -128,8 +137,11 @@ describe("review polling stage — reviewPolicy: simulated", () => {
     // The diff was fetched and the criteria reached the model.
     expect(captured.fetchedDiff).toBe(true);
     expect(seen.prompts[0]).toContain("does the thing");
-    // A REAL GitHub review was posted with the APPROVE event + the reasoning body.
-    expect(captured.submitted).toEqual([{ event: "APPROVE", body: "criteria satisfied" }]);
+    // A REAL GitHub review was posted as a self-PR-safe COMMENT, with the verdict
+    // stated in the body. approve→merge is driven internally off the Answerer.
+    expect(captured.submitted).toEqual([
+      { event: "COMMENT", body: "Tanren simulated review — VERDICT: approve\n\ncriteria satisfied" },
+    ]);
     const types = events.events.map((e) => e.eventType);
     expect(types).toContain("review.requested");
     expect(types).toContain("review.approved");
@@ -137,7 +149,7 @@ describe("review polling stage — reviewPolicy: simulated", () => {
     expect(pool.tasks.find((t) => t.kind === "review")?.status).toBe("done");
   });
 
-  it("posts a REAL request_changes review and routes to changes_requested→rework (feedback steers)", async () => {
+  it("posts a REAL COMMENT review and routes to changes_requested→rework (feedback steers)", async () => {
     const pool = new ReviewMergePool("direct_merge", "open", "simulated");
     const events = new FakeEventStore();
     const captured = { diff: "diff", submitted: [] as SubmittedReview[], fetchedDiff: false };
@@ -161,7 +173,11 @@ describe("review polling stage — reviewPolicy: simulated", () => {
     expect(result.verdict).toBe("changes_requested");
     // The changes-requested reasoning is carried as the rework steering feedback.
     expect(result.feedback).toBe("criterion 1 is unmet");
-    expect(captured.submitted).toEqual([{ event: "REQUEST_CHANGES", body: "criterion 1 is unmet" }]);
+    // A COMMENT review carries the request_changes verdict in its body; the
+    // changes_requested→rework decision is driven internally off the Answerer.
+    expect(captured.submitted).toEqual([
+      { event: "COMMENT", body: "Tanren simulated review — VERDICT: request_changes\n\ncriterion 1 is unmet" },
+    ]);
     const types = events.events.map((e) => e.eventType);
     expect(types).toContain("review.changes_requested");
     expect(types).not.toContain("review.approved");
