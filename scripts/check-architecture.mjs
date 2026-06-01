@@ -18,9 +18,9 @@ const patterns = [
   "justfile",
 ];
 const ignoredDirs = new Set(["node_modules", "dist", "coverage", ".git"]);
-// PROJECT_BRIEF + R-WAVES are long-running narrative/checklist docs (R-WAVES
-// gains a section each wave); the 500-line code cap does not fit them.
-const lineMaxExclusions = new Set(["PROJECT_BRIEF.md", "pnpm-lock.yaml", "docs/roadmap/R-WAVES.md"]);
+// PROJECT_BRIEF + R-WAVES + autonomy-engine are long-running narrative/roadmap
+// docs (they gain sections as the plan evolves); the 500-line code cap does not fit them.
+const lineMaxExclusions = new Set(["PROJECT_BRIEF.md", "pnpm-lock.yaml", "docs/roadmap/R-WAVES.md", "docs/roadmap/autonomy-engine.md"]); // prettier-ignore
 const invariantDocExclusions = new Set(["PROJECT_BRIEF.md", "docs/contracts/architecture-checks.md"]);
 // Plane-split P3b: these files deliberately attempt (or document) a RAW event
 // insert by the de-privileged data-plane role to PROVE Postgres REJECTS it — not
