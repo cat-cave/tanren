@@ -369,6 +369,27 @@ export const sensitivityRules: SensitivityRule[] = [
     ["steps[].outputTail", "secret"],
   ]),
 
+  // DagWalker (autonomy-engine.md §1a) scheduling events. Every field is a spec/
+  // run identifier or a non-sensitive count (in-flight / ceiling / breakdown),
+  // so all are public — nothing here carries diff content, credentials, or output.
+  ...rulesFor("dag.spec.enqueued", [
+    ["specId", "public"],
+    ["runId", "public"],
+    ["satisfiedDependsOn[]", "public"],
+    ["inFlightBefore", "public"],
+    ["concurrencyCeiling", "public"],
+  ]),
+  ...rulesFor("dag.drained", [
+    ["doneCount", "public"],
+    ["inFlightCount", "public"],
+    ["blockedCount", "public"],
+  ]),
+  ...rulesFor("dag.budget.paused", [
+    ["readyHeldBack", "public"],
+    ["inFlightCount", "public"],
+    ["concurrencyCeiling", "public"],
+  ]),
+
   // Infrastructure + integration rules (runner/allocator/workspace/credential,
   // cost + usage telemetry, github/ci/phase1/reviews/notifications/hello/
   // redaction) live in sensitivityRules.infra.ts to keep this file under the

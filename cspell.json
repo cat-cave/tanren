@@ -23,6 +23,7 @@
     ".env.example"
   ],
   "words": [
+    "ctid",
     "rerere",
     "Workstream",
     "unlisten",

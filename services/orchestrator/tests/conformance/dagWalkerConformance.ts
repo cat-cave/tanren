@@ -1,0 +1,247 @@
+// Seam conformance suite for the DagWalker contract
+// (`engine/contracts/dagWalker.ts`). The reusable behavior spec every DagWalker
+// implementation must satisfy — the keystone of the autonomy engine
+// (autonomy-engine.md §1a). It pins the SCHEDULING CONTRACT behaviorally, through
+// the public `walk(projectId)` surface + the observable enqueue/event effects
+// only: readiness respects dependencies (all deps DONE), the governed concurrency
+// ceiling is honored, a spec already in-flight is never re-enqueued (idempotency),
+// and the drained / budget.paused / spec.enqueued outcomes fire correctly.
+//
+// It never inspects private fields or mock-call internals beyond the harness's
+// own recorded enqueues/events (the contract's observable surface). The harness
+// supplies a fresh DAG read model the test can mutate (set spec phases + deps +
+// the ceiling) and records every enqueue + emitted event, so the SAME spec runs
+// against any DagWalker impl. Mirrors the Allocator/JobQueue/Repositories suites.
+
+import { describe, expect, it } from "vitest";
+import type { DagSpecNode, DagSpecPhase, DagWalker } from "../../src/engine/contracts/dagWalker.js";
+
+/** A recorded dag.* event the walker emitted (the contract's visibility surface). */
+export interface RecordedDagEvent {
+  type: "dag.spec.enqueued" | "dag.drained" | "dag.budget.paused";
+  specId?: string;
+  runId?: string;
+  inFlightBefore?: number;
+  concurrencyCeiling?: number;
+  readyHeldBack?: number;
+  doneCount?: number;
+  inFlightCount?: number;
+  blockedCount?: number;
+  satisfiedDependsOn?: string[];
+}
+
+/** A recorded enqueue (the createQueuedRunFromSpec effect). */
+export interface RecordedEnqueue {
+  projectId: string;
+  specId: string;
+  runId: string;
+}
+
+/**
+ * The harness the conformance suite drives. The test seeds the DAG via `setSpec`
+ * + `setCeiling`, runs `walk`, then asserts on `enqueues` + `events`. `phaseOf`
+ * reflects the read model AFTER the walk so idempotency (a re-walk does not
+ * re-enqueue an already-claimed spec) is observable through the public surface.
+ */
+export interface DagWalkerConformanceHarness {
+  walker: DagWalker;
+  readonly projectId: string;
+  /** Seed/override a spec node in the DAG read model. */
+  setSpec(node: DagSpecNode): void;
+  /** Set the governed concurrency ceiling the walker reads. */
+  setCeiling(ceiling: number): void;
+  /** The spec's current phase in the read model (reflects walk-time claims). */
+  phaseOf(specId: string): DagSpecPhase | undefined;
+  /** Every enqueue the walker performed, in order. */
+  readonly enqueues: RecordedEnqueue[];
+  /** Every dag.* event the walker emitted, in order. */
+  readonly events: RecordedDagEvent[];
+}
+
+export interface DagWalkerConformanceSuite {
+  /** Build a fresh harness with an empty DAG + the given ceiling. */
+  make(ceiling: number): DagWalkerConformanceHarness;
+}
+
+function node(specId: string, phase: DagSpecPhase, dependsOn: string[], orderKey: number): DagSpecNode {
+  return { specId, phase, dependsOn, orderKey };
+}
+
+export function describeDagWalkerConformance(label: string, suite: DagWalkerConformanceSuite): void {
+  describe(`DagWalker conformance: ${label}`, () => {
+    it("enqueues a single ready root spec and emits dag.spec.enqueued", async () => {
+      const h = suite.make(3);
+      h.setSpec(node("spec_root", "pending", [], 0));
+      const result = await h.walker.walk(h.projectId);
+
+      expect(result.status).toBe("enqueued");
+      expect(result.enqueuedSpecIds).toEqual(["spec_root"]);
+      expect(h.enqueues).toEqual([expect.objectContaining({ projectId: h.projectId, specId: "spec_root" })]);
+      const enqueuedEvent = h.events.find((e) => e.type === "dag.spec.enqueued");
+      expect(enqueuedEvent?.specId).toBe("spec_root");
+      expect(enqueuedEvent?.runId).toBe(result.enqueuedRunIds[0]);
+    });
+
+    it("does NOT enqueue a spec whose dependency is not yet done", async () => {
+      const h = suite.make(3);
+      // spec_a is the ancestor still running; spec_b is blocked on it.
+      h.setSpec(node("spec_a", "in_flight", [], 0));
+      h.setSpec(node("spec_b", "pending", ["spec_a"], 1));
+      const result = await h.walker.walk(h.projectId);
+
+      expect(result.enqueuedSpecIds).toEqual([]);
+      expect(h.enqueues).toEqual([]);
+      // A is in-flight, B is blocked ⇒ nothing ready, nothing held back ⇒ drained.
+      expect(result.status).toBe("drained");
+      const drained = h.events.find((e) => e.type === "dag.drained");
+      expect(drained?.blockedCount).toBe(1);
+      expect(drained?.inFlightCount).toBe(1);
+    });
+
+    it("enqueues a dependent once its dependency is done", async () => {
+      const h = suite.make(3);
+      h.setSpec(node("spec_a", "done", [], 0));
+      h.setSpec(node("spec_b", "pending", ["spec_a"], 1));
+      const result = await h.walker.walk(h.projectId);
+
+      expect(result.enqueuedSpecIds).toEqual(["spec_b"]);
+    });
+
+    it("requires ALL dependencies done before a multi-dep spec is ready", async () => {
+      const h = suite.make(3);
+      h.setSpec(node("spec_a", "done", [], 0));
+      // spec_b is not done yet, so spec_c (depending on both) is blocked.
+      h.setSpec(node("spec_b", "in_flight", [], 1));
+      h.setSpec(node("spec_c", "pending", ["spec_a", "spec_b"], 2));
+      const first = await h.walker.walk(h.projectId);
+      expect(first.enqueuedSpecIds).toEqual([]);
+
+      // B finishes ⇒ C becomes ready.
+      h.setSpec(node("spec_b", "done", [], 1));
+      const second = await h.walker.walk(h.projectId);
+      expect(second.enqueuedSpecIds).toEqual(["spec_c"]);
+    });
+
+    it("treats a merged dependency as satisfied (all deps merged/done)", async () => {
+      const h = suite.make(3);
+      // The read model carries the normalized phase; a merged spec normalizes to
+      // `done` for the walker, so the dependent is ready.
+      h.setSpec(node("spec_a", "done", [], 0));
+      h.setSpec(node("spec_b", "pending", ["spec_a"], 1));
+      const result = await h.walker.walk(h.projectId);
+      expect(result.enqueuedSpecIds).toEqual(["spec_b"]);
+    });
+
+    it("honors the governed concurrency ceiling — never enqueues past headroom", async () => {
+      const h = suite.make(2);
+      h.setSpec(node("spec_a", "pending", [], 0));
+      h.setSpec(node("spec_b", "pending", [], 1));
+      h.setSpec(node("spec_c", "pending", [], 2));
+      const result = await h.walker.walk(h.projectId);
+
+      // Ceiling 2, zero in-flight ⇒ exactly two enqueued; the third held back.
+      expect(result.enqueuedSpecIds).toHaveLength(2);
+      expect(result.status).toBe("enqueued");
+      expect(h.enqueues).toHaveLength(2);
+    });
+
+    it("counts existing in-flight specs against the ceiling", async () => {
+      const h = suite.make(2);
+      // spec_a already occupies one slot.
+      h.setSpec(node("spec_a", "in_flight", [], 0));
+      h.setSpec(node("spec_b", "pending", [], 1));
+      h.setSpec(node("spec_c", "pending", [], 2));
+      const result = await h.walker.walk(h.projectId);
+
+      // Ceiling 2, one in-flight ⇒ headroom 1 ⇒ exactly one enqueued, by order.
+      expect(result.enqueuedSpecIds).toHaveLength(1);
+      expect(result.enqueuedSpecIds[0]).toBe("spec_b");
+    });
+
+    it("emits dag.budget.paused when ready specs exceed headroom", async () => {
+      const h = suite.make(1);
+      // spec_a saturates the ceiling; spec_b is ready but has no slot.
+      h.setSpec(node("spec_a", "in_flight", [], 0));
+      h.setSpec(node("spec_b", "pending", [], 1));
+      const result = await h.walker.walk(h.projectId);
+
+      expect(result.status).toBe("budget_paused");
+      expect(result.enqueuedSpecIds).toEqual([]);
+      const paused = h.events.find((e) => e.type === "dag.budget.paused");
+      expect(paused?.readyHeldBack).toBe(1);
+      expect(paused?.inFlightCount).toBe(1);
+      expect(paused?.concurrencyCeiling).toBe(1);
+      // No spurious drained event when we paused.
+      expect(h.events.some((e) => e.type === "dag.drained")).toBe(false);
+    });
+
+    it("orders the ready set by the stable creation-order tiebreak", async () => {
+      const h = suite.make(3);
+      // Insert out of order; the walker must enqueue by orderKey ascending.
+      h.setSpec(node("spec_z", "pending", [], 2));
+      h.setSpec(node("spec_x", "pending", [], 0));
+      h.setSpec(node("spec_y", "pending", [], 1));
+      const result = await h.walker.walk(h.projectId);
+      expect(result.enqueuedSpecIds).toEqual(["spec_x", "spec_y", "spec_z"]);
+    });
+
+    it("is idempotent — a claimed spec is never re-enqueued on a re-walk", async () => {
+      const h = suite.make(3);
+      h.setSpec(node("spec_a", "pending", [], 0));
+      const first = await h.walker.walk(h.projectId);
+      expect(first.enqueuedSpecIds).toEqual(["spec_a"]);
+      // The enqueue claimed the spec (pending → in_flight) in the read model.
+      expect(h.phaseOf("spec_a")).toBe("in_flight");
+
+      const second = await h.walker.walk(h.projectId);
+      expect(second.enqueuedSpecIds).toEqual([]);
+      // Still exactly ONE enqueue total across both walks — no double-enqueue.
+      expect(h.enqueues).toHaveLength(1);
+    });
+
+    it("emits dag.drained with an accurate spec breakdown", async () => {
+      const h = suite.make(3);
+      h.setSpec(node("spec_a", "done", [], 0));
+      h.setSpec(node("spec_b", "in_flight", [], 1));
+      // spec_c is blocked on the still-running spec_b.
+      h.setSpec(node("spec_c", "pending", ["spec_b"], 2));
+      const result = await h.walker.walk(h.projectId);
+
+      expect(result.status).toBe("drained");
+      const drained = h.events.find((e) => e.type === "dag.drained");
+      expect(drained?.doneCount).toBe(1);
+      expect(drained?.inFlightCount).toBe(1);
+      expect(drained?.blockedCount).toBe(1);
+    });
+
+    it("drives a layered DAG to completion across successive walks", async () => {
+      const h = suite.make(5);
+      // a → b → c chain plus an independent d ready at once with a.
+      h.setSpec(node("spec_a", "pending", [], 0));
+      h.setSpec(node("spec_b", "pending", ["spec_a"], 1));
+      h.setSpec(node("spec_c", "pending", ["spec_b"], 2));
+      h.setSpec(node("spec_d", "pending", [], 3));
+
+      // Walk 1: a + d are ready (roots); b, c blocked.
+      const w1 = await h.walker.walk(h.projectId);
+      expect(new Set(w1.enqueuedSpecIds)).toEqual(new Set(["spec_a", "spec_d"]));
+
+      // a + d finish. Walk 2: b ready (a done); c still blocked.
+      h.setSpec(node("spec_a", "done", [], 0));
+      h.setSpec(node("spec_d", "done", [], 3));
+      const w2 = await h.walker.walk(h.projectId);
+      expect(w2.enqueuedSpecIds).toEqual(["spec_b"]);
+
+      // b finishes. Walk 3: c ready.
+      h.setSpec(node("spec_b", "done", [], 1));
+      const w3 = await h.walker.walk(h.projectId);
+      expect(w3.enqueuedSpecIds).toEqual(["spec_c"]);
+
+      // c finishes. Walk 4: fully drained.
+      h.setSpec(node("spec_c", "done", [], 2));
+      const w4 = await h.walker.walk(h.projectId);
+      expect(w4.status).toBe("drained");
+      expect(w4.enqueuedSpecIds).toEqual([]);
+    });
+  });
+}

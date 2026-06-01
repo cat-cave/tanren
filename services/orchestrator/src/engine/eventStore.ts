@@ -10,9 +10,14 @@ type EventStoreClient = Pick<pg.Pool | pg.PoolClient, "query">;
 // constructor still accepts a bare `string` for legacy migrate-in-progress
 // callers; the runtime parser rejects unknown names and bad payload shapes.
 export type AppendEventInput<N extends EventName = EventName> = {
-  runId: string;
+  // run_id / spec_id are nullable on the events table: a PROJECT-scoped event
+  // (e.g. the DagWalker's `dag.drained` / `dag.budget.paused`, which describe the
+  // project's DAG, not a single run) carries only projectId. A run-scoped event
+  // supplies both, exactly as before. The notify wake (tanren_run) fires only
+  // when a runId is present — a project-scoped append needs no per-run wake.
+  runId?: string;
   taskId?: string;
-  specId: string;
+  specId?: string;
   projectId: string;
   eventType: N;
   payload: EventPayload<N>;
@@ -47,7 +52,14 @@ export class PgEventStore implements EventStore {
       // project_id → projects.org_id hop.
       `INSERT INTO events (run_id, task_id, spec_id, project_id, org_id, event_type, payload)
        VALUES ($1, $2, $3, $4, (SELECT org_id FROM projects WHERE project_id = $4), $5, $6::jsonb)`,
-      [input.runId, input.taskId ?? null, input.specId, input.projectId, input.eventType, JSON.stringify(parsed)],
+      [
+        input.runId ?? null,
+        input.taskId ?? null,
+        input.specId ?? null,
+        input.projectId,
+        input.eventType,
+        JSON.stringify(parsed),
+      ],
     );
     // LISTEN/NOTIFY: this is the central run-activity seam. Every run-state
     // change in the engine — queued, task transitions, status/finalize, cost
@@ -56,7 +68,11 @@ export class PgEventStore implements EventStore {
     // the primary driver. The notify rides the SAME client (the INSERT's
     // transaction), so it fires at COMMIT — exactly when the row is visible. The
     // payload is ONLY the run id: a listener re-queries the deltas under its own
-    // org scope, so the wake leaks no tenant data.
-    await notifyRunActivity(client, input.runId);
+    // org scope, so the wake leaks no tenant data. A PROJECT-scoped event (no
+    // runId — e.g. the DagWalker's drained/paused) has no run stream to wake, so
+    // it emits no per-run notify.
+    if (input.runId !== undefined) {
+      await notifyRunActivity(client, input.runId);
+    }
   }
 }
