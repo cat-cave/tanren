@@ -17,9 +17,14 @@ import type { MtlsFetch } from "../contracts/mtlsChannel.js";
 import type {
   FinalizeRunInput,
   FinalizeRunResult,
+  InsertTaskInput,
   RecordCostInput,
   ReconcileCostInput,
   RunStateWriter,
+  SetRunPrUrlInput,
+  SetRunStatusInput,
+  SetSpecStatusInput,
+  UpdateTaskInput,
 } from "../contracts/runStateWriter.js";
 import type { RecordedCost } from "../costs/recorder.js";
 import type { EventName } from "../events/index.js";
@@ -71,6 +76,39 @@ export class HttpRunStateWriter implements RunStateWriter {
     // finalizeRun carries the org explicitly (the worker resolves it from the
     // claimed job), so no ambient lookup is needed.
     return this.post<FinalizeRunResult>("/internal/finalize-run", input);
+  }
+
+  // --- Plane-split P3c: the run/spec/task lifecycle writes. ---
+  //
+  // The run/spec ops carry an explicit org (the workflow has the run context);
+  // the task ops resolve org from the ambient per-job scope (`requireOrgId`),
+  // exactly like `append` — the server scopes every write with `runWithOrgScope`.
+
+  async setRunStatus(input: SetRunStatusInput): Promise<void> {
+    await this.post<void>("/internal/set-run-status", input);
+  }
+
+  async setRunPrUrl(input: SetRunPrUrlInput): Promise<void> {
+    await this.post<void>("/internal/set-run-pr-url", input);
+  }
+
+  async setSpecStatus(input: SetSpecStatusInput): Promise<void> {
+    await this.post<void>("/internal/set-spec-status", input);
+  }
+
+  async supersedeQueuedPlannerTask(input: { runId: string; orgId?: string }): Promise<void> {
+    await this.post<void>("/internal/supersede-queued-planner-task", {
+      runId: input.runId,
+      orgId: input.orgId ?? this.requireOrgId(),
+    });
+  }
+
+  async insertTask(input: InsertTaskInput): Promise<void> {
+    await this.post<void>("/internal/insert-task", { ...input, orgId: input.orgId ?? this.requireOrgId() });
+  }
+
+  async updateTask(input: UpdateTaskInput): Promise<void> {
+    await this.post<void>("/internal/update-task", { ...input, orgId: input.orgId ?? this.requireOrgId() });
   }
 
   /**

@@ -246,6 +246,13 @@
       "when": 1780265893873,
       "tag": "0034_flashy_roland_deschain",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1780279395133,
+      "tag": "0035_dataplane_lifecycle_deprivilege",
+      "breakpoints": true
     }
   ]
 }

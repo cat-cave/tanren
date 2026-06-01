@@ -240,6 +240,10 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
             ),
             finalizeRun: (f: { runId: string; status: string; outcome: string; fromStatuses: string[] }) =>
               remoteWriter.finalizeRun({ ...f, orgId }).then(() => {}),
+            // Plane-split P3c: the full lifecycle writer. When present (remote-writes
+            // on), the workflow routes its run/spec/task lifecycle writes through the
+            // control plane; absent, it does its byte-identical in-process writes.
+            runStateWriter: remoteWriter,
           };
     const result = await withJobOrg(orgId, () =>
       runWorkflow({

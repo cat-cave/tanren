@@ -21,18 +21,13 @@
 
 import { runWithOrgScope } from "@tanren/db";
 import { Hono, type Context } from "hono";
-import type pg from "pg";
 import { z } from "zod";
 import { CostRecorder } from "../../engine/costs/recorder.js";
 import { PgEventStore } from "../../engine/eventStore.js";
-import type { MtlsPeerVerifier } from "../../engine/contracts/mtlsChannel.js";
+import { verifyInternalPeer, type RunStateWriteRouteDeps } from "./internalWriteShared.js";
+import { registerRunStateLifecycleRoutes } from "./runStateLifecycleWrites.js";
 
-export interface RunStateWriteRouteDeps {
-  /** The control-plane pool the org-scoped writes run on (the worker holds none under P3b). */
-  pool: pg.Pool;
-  /** Authenticates the inbound mTLS peer; an unverified caller is 401. */
-  verifier: MtlsPeerVerifier;
-}
+export type { RunStateWriteRouteDeps } from "./internalWriteShared.js";
 
 const appendEventSchema = z.object({
   runId: z.string().min(1),
@@ -88,10 +83,7 @@ const finalizeRunSchema = z.object({
 export function createInternalRunStateWriteRoutes(deps: RunStateWriteRouteDeps): Hono {
   const app = new Hono();
 
-  const authnPeer = (c: Context): boolean => {
-    const incoming = (c.env as { incoming?: { socket?: unknown } } | undefined)?.incoming;
-    return deps.verifier.verify({ headers: c.req.raw.headers, socket: incoming?.socket }) !== undefined;
-  };
+  const authnPeer = (c: Context): boolean => verifyInternalPeer(deps.verifier, c);
 
   app.post("/internal/append-event", async (c) => {
     if (!authnPeer(c)) {
@@ -182,6 +174,12 @@ export function createInternalRunStateWriteRoutes(deps: RunStateWriteRouteDeps):
     });
     return c.json(result);
   });
+
+  // Plane-split P3c: the run/spec/task lifecycle write endpoints (set-run-status,
+  // set-run-pr-url, set-spec-status, supersede-queued-planner-task, insert-task,
+  // update-task). Kept in a sibling module so this file stays under the 500-line
+  // cap; they share the same authn + `runWithOrgScope` + fixed-SQL contract.
+  registerRunStateLifecycleRoutes(app, deps);
 
   return app;
 }

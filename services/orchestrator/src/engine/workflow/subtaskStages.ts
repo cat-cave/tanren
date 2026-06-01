@@ -5,6 +5,7 @@
 // so each module stays under the 500-line architecture cap.
 import { randomUUID } from "node:crypto";
 import type pg from "pg";
+import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { AuditAnswer, CheckAnswer, PlanAnswer, PlanSubtask } from "../answerers/schemas/index.js";
 import type { EventName, EventPayload } from "../events/index.js";
 import { emitStageTiming } from "../observability/index.js";
@@ -89,6 +90,8 @@ export async function runPlannerStage(args: PlannerStageInput): Promise<PlanAnsw
 
 export interface WriterStageInput {
   pool: LoopQueryClient;
+  /** Plane-split P3c: route the writer task INSERT/UPDATE remote when wired. */
+  writer?: RunStateWriter;
   costCtx: SubtaskCostContext;
   adapter: WriterAdapter;
   runId: string;
@@ -114,16 +117,20 @@ export interface WriterStageInput {
 }
 
 export async function runWriterStage(args: WriterStageInput): Promise<WriterResult> {
-  await insertChildTask(args.pool, {
-    taskId: args.writeTaskId,
-    runId: args.runId,
-    kind: "write",
-    title: `write subtask ${args.subtask.index}: ${args.subtask.title}`,
-    parentTaskId: args.plannerTaskId,
-    agentKind: "writer",
-    cli: args.adapter.cli,
-    model: null,
-  });
+  await insertChildTask(
+    args.pool,
+    {
+      taskId: args.writeTaskId,
+      runId: args.runId,
+      kind: "write",
+      title: `write subtask ${args.subtask.index}: ${args.subtask.title}`,
+      parentTaskId: args.plannerTaskId,
+      agentKind: "writer",
+      cli: args.adapter.cli,
+      model: null,
+    },
+    args.writer,
+  );
   await args.appendEvent("task.started", { taskKind: "write" }, args.writeTaskId);
   await args.appendEvent(
     "writer.subtask.started",
@@ -175,13 +182,15 @@ export async function runWriterStage(args: WriterStageInput): Promise<WriterResu
       writer: writerResult,
     }) ?? { role: "writer", attempt: 1, subtaskIndex: args.subtask.index },
   });
-  await markTaskDone(args.pool, args.writeTaskId, "passed");
+  await markTaskDone(args.pool, args.writeTaskId, "passed", args.writer);
   await args.appendEvent("task.completed", { taskKind: "write" }, args.writeTaskId);
   return writerResult;
 }
 
 export interface CheckerStageInput {
   pool: LoopQueryClient;
+  /** Plane-split P3c: route the checker task INSERT/UPDATE remote when wired. */
+  writer?: RunStateWriter;
   costCtx: SubtaskCostContext;
   adapter: AnswererAdapter<CheckAnswer>;
   runId: string;
@@ -203,16 +212,20 @@ export interface CheckerStageInput {
 }
 
 export async function runCheckerStage(args: CheckerStageInput): Promise<CheckerDecision> {
-  await insertChildTask(args.pool, {
-    taskId: args.checkerTaskId,
-    runId: args.runId,
-    kind: "check",
-    title: `check subtask ${args.subtask.index}`,
-    parentTaskId: args.writeTaskId,
-    agentKind: "answerer",
-    cli: args.adapter.cli,
-    model: null,
-  });
+  await insertChildTask(
+    args.pool,
+    {
+      taskId: args.checkerTaskId,
+      runId: args.runId,
+      kind: "check",
+      title: `check subtask ${args.subtask.index}`,
+      parentTaskId: args.writeTaskId,
+      agentKind: "answerer",
+      cli: args.adapter.cli,
+      model: null,
+    },
+    args.writer,
+  );
   await args.appendEvent("task.started", { taskKind: "check" }, args.checkerTaskId);
   await args.appendEvent("checker.started", { taskKind: "check" }, args.checkerTaskId);
   const checkerContext: CheckerSubtaskContext = {
@@ -260,7 +273,7 @@ export async function runCheckerStage(args: CheckerStageInput): Promise<CheckerD
   });
   const decision = decideCheckerOutcome(result.verdict);
   if (decision.kind === "reject") {
-    await markTaskDone(args.pool, args.checkerTaskId, "rejected_by_checker");
+    await markTaskDone(args.pool, args.checkerTaskId, "rejected_by_checker", args.writer);
     await args.appendEvent(
       "checker.rejected",
       {
@@ -275,13 +288,15 @@ export async function runCheckerStage(args: CheckerStageInput): Promise<CheckerD
     await args.appendEvent("task.completed", { taskKind: "check" }, args.checkerTaskId);
     return decision;
   }
-  await markTaskDone(args.pool, args.checkerTaskId, "passed");
+  await markTaskDone(args.pool, args.checkerTaskId, "passed", args.writer);
   await args.appendEvent("task.completed", { taskKind: "check" }, args.checkerTaskId);
   return decision;
 }
 
 export interface AuditorStageInput {
   pool: LoopQueryClient;
+  /** Plane-split P3c: route the auditor task INSERT/UPDATE remote when wired. */
+  writer?: RunStateWriter;
   costCtx: SubtaskCostContext;
   adapter: AnswererAdapter<AuditAnswer>;
   runId: string;
@@ -301,16 +316,20 @@ export async function runAuditorStage(
   args: AuditorStageInput,
 ): Promise<{ decision: AuditorDecision; auditorTaskId: string }> {
   const auditorTaskId = `task_${randomUUID()}`;
-  await insertChildTask(args.pool, {
-    taskId: auditorTaskId,
-    runId: args.runId,
-    kind: "audit",
-    title: "audit plan",
-    parentTaskId: args.plannerTaskId,
-    agentKind: "answerer",
-    cli: args.adapter.cli,
-    model: null,
-  });
+  await insertChildTask(
+    args.pool,
+    {
+      taskId: auditorTaskId,
+      runId: args.runId,
+      kind: "audit",
+      title: "audit plan",
+      parentTaskId: args.plannerTaskId,
+      agentKind: "answerer",
+      cli: args.adapter.cli,
+      model: null,
+    },
+    args.writer,
+  );
   await args.appendEvent("task.started", { taskKind: "audit" }, auditorTaskId);
   await args.appendEvent("auditor.started", { taskKind: "audit" }, auditorTaskId);
   const auditorContext: AuditorSpecContext = {
@@ -349,11 +368,11 @@ export async function runAuditorStage(
   });
   const decision = decideAuditorOutcome(result.verdict);
   if (decision.kind === "pass") {
-    await markTaskDone(args.pool, auditorTaskId, "passed");
+    await markTaskDone(args.pool, auditorTaskId, "passed", args.writer);
     await args.appendEvent("task.completed", { taskKind: "audit" }, auditorTaskId);
     return { decision, auditorTaskId };
   }
-  await markTaskDone(args.pool, auditorTaskId, "rejected_by_auditor");
+  await markTaskDone(args.pool, auditorTaskId, "rejected_by_auditor", args.writer);
   await args.appendEvent(
     "auditor.rejected",
     {

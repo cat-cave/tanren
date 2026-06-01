@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type pg from "pg";
 import { migrateOrgConfig, type OrgGithubAppInstallation } from "../config/orgConfig.js";
+import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import { validateGithubCredentialRef } from "../credentials/githubToken.js";
+import { routeTaskUpdate } from "./taskWriteRouting.js";
 import { resolveGithubToken } from "../credentials/githubTokenResolver.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import { type EventStore, PgEventStore } from "../eventStore.js";
@@ -43,6 +45,9 @@ export interface CiObservation {
 export interface PollCiForRunInput {
   pool: RunStateClient;
   eventStore?: EventStore;
+  // Plane-split P3c: route the CI task INSERT/UPDATE through the control plane
+  // when wired (remote-writes on); absent, the in-process org-scoped write runs.
+  runStateWriter?: RunStateWriter;
   secrets: SecretStore;
   githubHttp: GitHubHttpClient;
   runId: string;
@@ -88,7 +93,7 @@ export async function pollCiForRun(input: PollCiForRunInput): Promise<PollCiForR
   }
 
   const eventStore = input.eventStore ?? new PgEventStore(input.pool);
-  const task = await ensureCiTask(input.pool, context);
+  const task = await ensureCiTask(input.pool, context, input.runStateWriter);
   if (task.created) {
     await eventStore.append({
       runId: context.runId,
@@ -119,7 +124,7 @@ export async function pollCiForRun(input: PollCiForRunInput): Promise<PollCiForR
     pullNumber: pr.pullNumber,
   });
   const observation = evaluateCiObservation(checks);
-  await persistCiObservation(input.pool, task.taskId, observation);
+  await persistCiObservation(input.pool, task.taskId, observation, input.runStateWriter);
 
   const payload = ciEventPayload(context.prUrl, credentialRef, observation);
   await eventStore.append({
@@ -294,7 +299,10 @@ async function loadCiRunContext(pool: RunStateClient, runId: string): Promise<Ci
 async function ensureCiTask(
   pool: RunStateClient,
   context: CiRunContext,
+  writer?: RunStateWriter,
 ): Promise<{ taskId: string; attempt: number; created: boolean }> {
+  // The SELECT is a READ — the data plane keeps `tasks` SELECT, so it always runs
+  // in-process (the writer carries no read surface). Only the INSERT/UPDATE route.
   const existing = await pool.query(
     `SELECT task_id, attempt
      FROM tasks
@@ -306,35 +314,71 @@ async function ensureCiTask(
   const existingTask = existing.rows[0] as { task_id: string; attempt: number } | undefined;
   if (existingTask !== undefined) {
     const attempt = Number(existingTask.attempt) + 1;
-    await pool.query(
-      "UPDATE tasks SET status = 'running', started_at = COALESCE(started_at, now()), attempt = $2 WHERE task_id = $1",
-      [existingTask.task_id, attempt],
-    );
+    if (writer === undefined) {
+      await pool.query(
+        "UPDATE tasks SET status = 'running', started_at = COALESCE(started_at, now()), attempt = $2 WHERE task_id = $1",
+        [existingTask.task_id, attempt],
+      );
+    } else {
+      await writer.updateTask({ taskId: existingTask.task_id, transition: "running_attempt", attempt });
+    }
     return { taskId: existingTask.task_id, attempt, created: false };
   }
 
   const taskId = `task_${randomUUID()}`;
-  await pool.query(
-    `INSERT INTO tasks (task_id, run_id, org_id, kind, title, status, started_at, agent_kind, cli, model, attempt)
-     VALUES ($1, $2, (SELECT org_id FROM runs WHERE run_id = $2), 'ci', 'Poll pull request CI', 'running', now(), 'system', 'github', NULL, 1)`,
-    [taskId, context.runId],
-  );
+  if (writer === undefined) {
+    await pool.query(
+      `INSERT INTO tasks (task_id, run_id, org_id, kind, title, status, started_at, agent_kind, cli, model, attempt)
+       VALUES ($1, $2, (SELECT org_id FROM runs WHERE run_id = $2), 'ci', 'Poll pull request CI', 'running', now(), 'system', 'github', NULL, 1)`,
+      [taskId, context.runId],
+    );
+  } else {
+    await writer.insertTask({
+      taskId,
+      runId: context.runId,
+      kind: "ci",
+      title: "Poll pull request CI",
+      status: "running",
+      agentKind: "system",
+      cli: "github",
+      model: null,
+      setStartedAt: true,
+      attempt: 1,
+    });
+  }
   return { taskId, attempt: 1, created: true };
 }
 
-async function persistCiObservation(pool: RunStateClient, taskId: string, observation: CiObservation): Promise<void> {
+async function persistCiObservation(
+  pool: RunStateClient,
+  taskId: string,
+  observation: CiObservation,
+  writer?: RunStateWriter,
+): Promise<void> {
   if (observation.status === "passed") {
-    await pool.query("UPDATE tasks SET status = 'done', outcome = 'ok', ended_at = now() WHERE task_id = $1", [taskId]);
+    await routeTaskUpdate(
+      writer,
+      pool,
+      { taskId, transition: "done", outcome: "ok" },
+      "UPDATE tasks SET status = 'done', outcome = 'ok', ended_at = now() WHERE task_id = $1",
+      [taskId],
+    );
     return;
   }
   if (observation.status === "failed") {
-    await pool.query(
+    await routeTaskUpdate(
+      writer,
+      pool,
+      { taskId, transition: "failed_with_kind", failureKind: "ci_failed" },
       "UPDATE tasks SET status = 'failed', outcome = 'failed', failure_kind = 'ci_failed', ended_at = now() WHERE task_id = $1",
       [taskId],
     );
     return;
   }
-  await pool.query(
+  await routeTaskUpdate(
+    writer,
+    pool,
+    { taskId, transition: "running_pending_clear_failure" },
     "UPDATE tasks SET status = 'running', outcome = 'pending', ended_at = NULL, failure_kind = NULL WHERE task_id = $1",
     [taskId],
   );

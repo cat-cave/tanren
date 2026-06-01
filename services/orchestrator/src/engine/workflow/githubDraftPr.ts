@@ -1,6 +1,7 @@
 import type pg from "pg";
 import { migrateOrgConfig, type OrgGithubAppInstallation } from "../config/orgConfig.js";
 import type { SshTarget } from "../contracts/allocator.js";
+import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { SshSubstrate } from "../contracts/sshSubstrate.js";
 import { redactedGithubTokenResult, validateGithubCredentialRef } from "../credentials/githubToken.js";
@@ -16,6 +17,11 @@ type RunStateClient = Pick<pg.Pool | pg.PoolClient, "query">;
 export interface PublishDraftPullRequestInput {
   pool: RunStateClient;
   eventStore?: EventStore;
+  // Plane-split P3c: route the `UPDATE runs SET pr_url` through the control plane
+  // when wired (remote-writes on) — else the byte-identical in-process write on
+  // `pool`. `orgId` scopes the remote write (present whenever the writer is).
+  runStateWriter?: RunStateWriter;
+  orgId?: string | null;
   secrets: SecretStore;
   githubHttp: GitHubHttpClient;
   ssh: SshSubstrate;
@@ -128,7 +134,12 @@ export async function publishDraftPullRequest(input: PublishDraftPullRequestInpu
       title: input.title,
       body: input.body,
     });
-    await input.pool.query("UPDATE runs SET pr_url = $2 WHERE run_id = $1", [input.runId, pr.url]);
+    const prOrgId = typeof input.orgId === "string" ? input.orgId : undefined;
+    if (input.runStateWriter !== undefined && prOrgId !== undefined) {
+      await input.runStateWriter.setRunPrUrl({ runId: input.runId, orgId: prOrgId, prUrl: pr.url });
+    } else {
+      await input.pool.query("UPDATE runs SET pr_url = $2 WHERE run_id = $1", [input.runId, pr.url]);
+    }
     await eventStore.append({
       ...context,
       eventType: "github.pr.created",

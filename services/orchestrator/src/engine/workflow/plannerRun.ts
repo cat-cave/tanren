@@ -18,6 +18,7 @@ import type pg from "pg";
 import type { CiWhen } from "../ci/index.js";
 import type { EscapeHatches, RoutingTable } from "../config/shared.js";
 import type { Allocator, RunnerAllocation, SshTarget } from "../contracts/allocator.js";
+import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { SshSubstrate } from "../contracts/sshSubstrate.js";
 import { CostRecorder } from "../costs/index.js";
@@ -37,7 +38,9 @@ import {
   finalizeMergeOutcome,
   finalizeNonPass,
   finalizeWorkflowError,
+  markRunRunning,
   runOutcomeFor,
+  setSpecStatus,
 } from "./plannerRunFinalize.js";
 import { publishDraftPullRequest, type PublishedDraftPullRequest } from "./githubDraftPr.js";
 import type { PlannerRejectionFeedback } from "./planner/planner.js";
@@ -114,6 +117,11 @@ export interface RunPlannerLoopInput {
   // control-plane endpoint when remote-writes is on. Returns nothing — the
   // workflow does not branch on the finalize result.
   finalizeRun?: (input: { runId: string; status: string; outcome: string; fromStatuses: string[] }) => Promise<void>;
+  // Plane-split P3c: the run/spec/task LIFECYCLE writer. When present (remote-writes
+  // on, the run has an org), every non-finalize `runs` / `specs` / `tasks` write the
+  // workflow drives routes through the control-plane endpoints; absent (the default),
+  // the workflow runs its byte-identical in-process org-scoped writes on `pool`.
+  runStateWriter?: RunStateWriter;
   allocator: Allocator;
   ssh: SshSubstrate;
   secrets: SecretStore;
@@ -192,6 +200,16 @@ export interface PlannerRunResult {
   merge?: MergeForRunResult;
 }
 
+/**
+ * Plane-split P3c: the optional lifecycle-writer seam for a sub-stage input — the
+ * `runStateWriter` when one is wired, else `{}` (the sub-stage does its in-process
+ * write). One helper so the workflow threads it into each stage with no per-call
+ * `exactOptionalPropertyTypes` ternary (keeping the workflow's branch count down).
+ */
+function writerSeam(input: RunPlannerLoopInput): { runStateWriter?: RunStateWriter } {
+  return input.runStateWriter === undefined ? {} : { runStateWriter: input.runStateWriter };
+}
+
 export async function runPlannerLoopWorkflow(input: RunPlannerLoopInput): Promise<PlannerRunResult> {
   const eventStore = input.eventStore ?? new PgEventStore(input.pool);
   const context = input.context;
@@ -212,8 +230,10 @@ export async function runPlannerLoopWorkflow(input: RunPlannerLoopInput): Promis
   // {@link buildFinalizeRunState}.
   const finalizeRunState = buildFinalizeRunState(input, context.runId);
 
-  await input.pool.query("UPDATE runs SET status = 'running', started_at = now() WHERE run_id = $1", [context.runId]);
-  await supersedeQueuedPlannerTask(input.pool, context.runId);
+  // Plane-split P3c: the `running` transition + the supersede route through the
+  // lifecycle writer when wired (remote), else the byte-identical in-process write.
+  await markRunRunning(input, context);
+  await supersedeQueuedPlannerTask(input, context.runId);
   const allocation = await input.allocator.allocate({
     runId: context.runId,
     projectId: context.projectId,
@@ -270,6 +290,7 @@ export async function runPlannerLoopWorkflow(input: RunPlannerLoopInput): Promis
       outcome = await runSubtaskLoop({
         pool: input.pool,
         eventStore,
+        ...writerSeam(input),
         recorder,
         adapters,
         context: {
@@ -313,6 +334,8 @@ export async function runPlannerLoopWorkflow(input: RunPlannerLoopInput): Promis
       pullRequest = await publishDraftPullRequest({
         pool: input.pool,
         eventStore,
+        ...writerSeam(input),
+        orgId: context.orgId,
         secrets: input.secrets,
         githubHttp: input.githubHttp,
         ssh: input.ssh,
@@ -335,6 +358,7 @@ export async function runPlannerLoopWorkflow(input: RunPlannerLoopInput): Promis
       review = await pollReviewForRun({
         pool: input.pool,
         eventStore,
+        ...writerSeam(input),
         secrets: input.secrets,
         githubHttp: input.githubHttp,
         runId: context.runId,
@@ -356,7 +380,7 @@ export async function runPlannerLoopWorkflow(input: RunPlannerLoopInput): Promis
         // steering. The spec returns to in_flight; the next pass re-plans
         // against the changes-requested feedback.
         seedRejections.push(reviewerRejection(review, pullRequest.branch));
-        await input.pool.query("UPDATE specs SET status = 'in_flight' WHERE spec_id = $1", [context.specId]);
+        await setSpecStatus(input, context, "in_flight");
         continue;
       }
       // Pending after the budget, or changes-requested with the rework budget
@@ -369,6 +393,7 @@ export async function runPlannerLoopWorkflow(input: RunPlannerLoopInput): Promis
     const merge = await mergeForRun({
       pool: input.pool,
       eventStore,
+      ...writerSeam(input),
       secrets: input.secrets,
       githubHttp: input.githubHttp,
       runId: context.runId,
@@ -398,12 +423,20 @@ export async function runPlannerLoopWorkflow(input: RunPlannerLoopInput): Promis
 // async worker path. This workflow executes the run directly and the loop
 // creates its own planner task, so the pre-created artifacts are vestigial —
 // cancel them so the run does not carry a dangling queued task.
-async function supersedeQueuedPlannerTask(pool: RunStateClient, runId: string): Promise<void> {
-  await pool.query(
-    "UPDATE tasks SET status = 'cancelled', outcome = 'cancelled', ended_at = now() WHERE run_id = $1 AND kind = 'plan' AND status = 'queued'",
-    [runId],
-  );
-  await pool.query("UPDATE job_queue SET status = 'cancelled' WHERE run_id = $1 AND status = 'queued'", [runId]);
+async function supersedeQueuedPlannerTask(input: RunPlannerLoopInput, runId: string): Promise<void> {
+  // Plane-split P3c: the vestigial `plan` task cancel routes through the lifecycle
+  // writer when wired (remote), else the byte-identical in-process write. The
+  // `job_queue` cancel always runs in-process — `job_queue` is a cross-org system
+  // table OUTSIDE RLS that the data plane keeps writing directly.
+  if (input.runStateWriter === undefined) {
+    await input.pool.query(
+      "UPDATE tasks SET status = 'cancelled', outcome = 'cancelled', ended_at = now() WHERE run_id = $1 AND kind = 'plan' AND status = 'queued'",
+      [runId],
+    );
+  } else {
+    await input.runStateWriter.supersedeQueuedPlannerTask({ runId });
+  }
+  await input.pool.query("UPDATE job_queue SET status = 'cancelled' WHERE run_id = $1 AND status = 'queued'", [runId]);
 }
 
 async function pollCiUntilTerminal(input: RunPlannerLoopInput): Promise<PollCiForRunResult> {
@@ -420,6 +453,7 @@ async function pollCiUntilTerminal(input: RunPlannerLoopInput): Promise<PollCiFo
     last = await pollCiForRun({
       pool: input.pool,
       eventStore: input.eventStore,
+      ...writerSeam(input),
       secrets: input.secrets,
       githubHttp: input.githubHttp,
       runId: input.context.runId,

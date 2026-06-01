@@ -196,19 +196,19 @@ describeDb("plane-split P3b — the de-privileged tanren_dataplane role (real PG
     ).resolves.toMatchObject({ rows: [{ n: 0 }] });
   });
 
-  // (d) The role KEEPS the run/task writes the workflow still drives directly —
-  // proving we did not over-revoke and break the run loop. The writes are
-  // org-scoped (RLS admits the row); the privilege is present.
-  it("(d) ALLOWS the data-plane role to write runs + tasks (kept this wave)", async () => {
-    await inOrgScope(dataPlanePool, async (client) => {
-      const run = await client.query("UPDATE runs SET status = 'running', started_at = now() WHERE run_id = $1", [RUN]);
-      expect(run.rowCount).toBe(1);
-      const task = await client.query(
-        "UPDATE tasks SET status = 'cancelled', outcome = 'cancelled', ended_at = now() WHERE task_id = $1",
-        [TASK],
-      );
-      expect(task.rowCount).toBe(1);
-    });
+  // (d) The role KEEPS the `job_queue` write — a cross-org SYSTEM table OUTSIDE
+  // RLS that the data plane still writes directly (the supersede's queue cancel,
+  // the worker's claim/complete/fail). Proving we did not over-revoke the role's
+  // legitimate system-table reach. (The run/spec/task lifecycle writes were
+  // DROPPED in P3c — migration 0035 — and are asserted rejected in the P3c test.)
+  it("(d) ALLOWS the data-plane role to write job_queue (system table kept)", async () => {
+    const queue = await dataPlanePool.query(
+      "UPDATE job_queue SET status = 'cancelled' WHERE run_id = $1 AND status = 'queued'",
+      [RUN],
+    );
+    // No queued job for this run was seeded, so zero rows move — but the lack of a
+    // 42501 is the point: the role still HOLDS the `job_queue` write privilege.
+    expect(queue.rowCount).toBe(0);
   });
 
   // (e) Contrast: the write-capable control-plane role (tanren_app) CAN insert an

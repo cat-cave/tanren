@@ -37,6 +37,39 @@ export function buildFinalizeRunState(input: RunPlannerLoopInput, runId: string)
   };
 }
 
+/**
+ * Plane-split P3c: drive the run's `running` transition, routing through the
+ * lifecycle writer when wired (remote) — else the byte-identical in-process
+ * `UPDATE runs ... started_at = now()`. The remote path requires the run's org
+ * (the seam is only wired when it is known).
+ */
+export async function markRunRunning(input: RunPlannerLoopInput, context: PlannerRunContext): Promise<void> {
+  const orgId = typeof context.orgId === "string" ? context.orgId : undefined;
+  if (input.runStateWriter !== undefined && orgId !== undefined) {
+    await input.runStateWriter.setRunStatus({ runId: context.runId, orgId, status: "running", setStartedAt: true });
+    return;
+  }
+  await input.pool.query("UPDATE runs SET status = 'running', started_at = now() WHERE run_id = $1", [context.runId]);
+}
+
+/**
+ * Plane-split P3c: set the spec's status, routing through the lifecycle writer
+ * when wired (remote) — else the byte-identical in-process `UPDATE specs`. The
+ * remote path requires the run's org (the seam is only wired when it is known).
+ */
+export async function setSpecStatus(
+  input: RunPlannerLoopInput,
+  context: PlannerRunContext,
+  status: string,
+): Promise<void> {
+  const orgId = typeof context.orgId === "string" ? context.orgId : undefined;
+  if (input.runStateWriter !== undefined && orgId !== undefined) {
+    await input.runStateWriter.setSpecStatus({ specId: context.specId, orgId, status });
+    return;
+  }
+  await input.pool.query("UPDATE specs SET status = $2 WHERE spec_id = $1", [context.specId, status]);
+}
+
 /** Maps a non-pass loop outcome to the persisted run.outcome value (all → halted). */
 export function runOutcomeFor(outcome: SubtaskLoopOutcome): "window_exhausted" | "retry_budget_exhausted" | "halted" {
   if (outcome.kind === "window_exhausted") {
@@ -95,7 +128,7 @@ export async function finalizeMergeOutcome(
     return;
   }
   const specStatus = outcome === "merged" ? "merged" : "done";
-  await input.pool.query("UPDATE specs SET status = $2 WHERE spec_id = $1", [context.specId, specStatus]);
+  await setSpecStatus(input, context, specStatus);
   await finalizeRunState(
     "done",
     "ok",
