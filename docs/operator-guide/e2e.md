@@ -21,11 +21,21 @@ the **release evidence**.
 - **`just fast-check` / `just ci`** run the e2e **harness unit tests**
   (`tests/e2e/lib/**/*.test.ts` — pure, no creds) and the **`e2e-no-mock-imports`**
   architecture check. They do **not** run the credentialed cases.
+- **`just smoke`** additionally runs **`smoke-e2e-artifacts`** — the gate's
+  artifact-read teeth (`readRunArtifacts`) against a **real seeded Postgres**
+  (gated behind `TANREN_RLS_DB_TEST=1`, like the RLS integration smokes). It
+  proves the SQL the credentialed run reads its evidence through actually returns
+  a seeded merged run (outcome + `pr_url` + a `cost_records` row + the DORA
+  count), not just that the verdict logic is correct over hand-built evidence.
 - **`just e2e`** runs the credentialed **cases** (`tests/e2e/cases/**/*.e2e.ts`)
   against a live stack, via `vitest.e2e.config.ts`.
 
 The credentialed cases are named `*.e2e.ts` (not `*.test.ts`/`*.spec.ts`) so the
-default vitest discovery never picks them up; only `just e2e` opts them in.
+default vitest discovery never picks them up; only `just e2e` opts them in. They
+are declared `active` in the manifest but **skip cleanly** (`it.skipIf`) unless a
+live stack + real credentials are present (`TANREN_E2E_API_TOKEN` + a
+`tanren.acceptance.json` / `TANREN_ACCEPTANCE_CONFIG` config) — so a no-creds run
+of `just e2e` never throws and never reports a false green; it just skips.
 
 ## The cases (a manifest + harness)
 
