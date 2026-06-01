@@ -1,25 +1,49 @@
 # Tanren — start here (for agents)
 
 Tanren turns specs into merged PRs through an agent workflow that runs each unit
-of work per-PR through real CI. **v0 (Phases 0–3) is built and merged on `main`.**
+of work per-PR through real CI. **v0 (Phases 0–3) is built and merged, and the
+real run loop is live-validated end-to-end across three tiers (easy/medium/hard,
+the hard one a private repo) — each reached a merged PR with real Codex + real
+credentials.**
 
 ## Read order for a fresh session
 
-1. **`README.md`** — current state up top + the honest pending/deferred list.
-2. **`docs/roadmap/forward-roadmap.md`** — the single authoritative forward plan across all four dimensions; this is the live to-do.
-3. **`ROADMAP.md`** — phase history + exit criteria; the "pending/deferred" list near the end points here.
-4. **`docs/operator-guide/live-validation-findings.md`** — exactly where the live demo stands + the config gotchas to resume it.
-5. **`PROJECT_BRIEF.md`** — the durable source-of-truth vision.
+1. **`README.md`** — current state up top + the quickstart.
+2. **`docs/roadmap/tempering.md`** — the live forward tracker (the single live
+   to-do): what's done, what's next near- and long-term, and how a fresh clone
+   reproduces the validated state.
+3. **`docs/roadmap/forward-roadmap.md`** — the detailed four-dimension reference
+   (more granular than tempering.md).
+4. **`docs/operator-guide/live-validation-findings.md`** — what the live
+   validation proved across all three tiers + the config gotchas.
+5. **`ROADMAP.md`** — phase history + exit criteria.
+6. **`PROJECT_BRIEF.md`** — the durable source-of-truth vision.
 
-## What's next (pull from `docs/roadmap/forward-roadmap.md`, not from memory)
+## What's next (pull from `docs/roadmap/tempering.md`, not from memory)
 
-The critical path: **A unblocks B; P3c + Vault per-run creds and the data-access layer are the top structural items.**
+The core promise — a real user gets merged PRs from specs, on public **and
+private** repos, across easy/medium/hard governance tiers — is **done and
+live-proven**. The remaining work is hardening, content, and long-horizon items:
 
-- **A — finish a real run (the gate).** The live demo is paused at the **harness-integration frontier**: worker→runner SSH auth (`All configured authentication methods failed`), the real codex/claude/opencode write stage, and draft-PR → CI (`tanren-ci.yml`) → Mergify merge. Plus the durable credential registry (the in-memory `CredentialRegistry` loses creds on restart). A live run needs a **fresh/reset dev DB** (`0026` makes `org_id` NOT NULL).
-- **B — pipeline experimentation.** B0 == finishing A. Then the tanren-method benchmark (`docs/roadmap/tanren-method-benchmark.md`).
-- **C — refactor/scale prepwork.** Top items: complete the data-access layer; `LISTEN/NOTIFY` to kill 1s polling; finish type-sharing + a `typify→serde` codegen.
-- **D — managed-hosting.** RLS + plane-split P1→P3b are **done + live-validated**. Remaining: P3c (route run/spec/task lifecycle writes through the control plane), Vault per-run scoped creds, allocator-service org threading.
-- **Held:** agy harness (broken headless); GitLab/VCS abstraction (GitHub-coupled via Mergify/Actions); the Rust rewrite/native harness.
+- **A — core run loop.** ✅ Done. The harness frontier is resolved; the loop
+  converges reliably; private-repo clone auth works; the simulated reviewer
+  (`reviewPolicy: simulated`) closes the human-review tier. Remaining: post-merge
+  auto-issue creation.
+- **B — pipeline experimentation.** The tanren-method **benchmark toolkit is
+  code-complete** (entities/scorecard/reducers/runner/accept/CLI). Remaining: the
+  **seed corpus** (tiered seed repos + hidden accept tiers) and running the
+  experiments. See `docs/roadmap/tanren-method-benchmark.md`.
+- **C — refactor/scale prepwork.** The `Repositories` seam + conformance is in;
+  routes + run-lifecycle writes are migrated off raw SQL; `LISTEN/NOTIFY`
+  replaced 1s polling. Remaining: the rest of the DAL (forge/quota/recovery),
+  `typify→serde` codegen, the first whole-repo mutation baseline.
+- **D — managed-hosting.** RLS + plane-split **P1→P3c** done + live-validated
+  (events/cost AND run/spec/task lifecycle writes route through the control
+  plane, `42501`-proven); the standalone allocator is org-threaded. Remaining:
+  **Vault per-run scoped credentials** (the last big de-privilege; also remove
+  the `?? "dev-root-token"` fallbacks in `main.ts` + `allocator/main.ts`).
+- **Held:** agy harness (broken headless); GitLab/VCS abstraction (GitHub-coupled
+  via Mergify/Actions); the Rust rewrite/native harness.
 
 ## Working rules
 
