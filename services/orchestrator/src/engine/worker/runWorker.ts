@@ -171,14 +171,17 @@ export class RunWorker {
 // A resolvable promise (the ES2024 `Promise.withResolvers` shape, hand-rolled
 // since the repo targets ES2022). Used to park an idle slot until woken.
 function deferred(): { promise: Promise<void>; resolve: () => void } {
-  let resolve: () => void = noop;
+  // `unset` is an unreachable initializer (TS requires a definite assignment);
+  // the Promise executor runs synchronously and overwrites it before `resolve`
+  // is ever exposed. Not a no-op policy — just the withResolvers placeholder.
+  let resolve: () => void = unset;
   const promise = new Promise<void>((res) => {
     resolve = res;
   });
   return { promise, resolve };
 }
 
-function noop(): void {}
+function unset(): void {}
 
 function defaultOnResult(result: ExecuteJobResult): void {
   if (result.kind === "completed") {

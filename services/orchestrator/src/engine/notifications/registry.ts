@@ -52,6 +52,9 @@ export function buildChannelRegistry(deps: ChannelRegistryDeps = {}): Record<Cha
   return registry as Record<ChannelKind, NotificationChannel>;
 }
 
+// arch-allow: StubChannel — an unconfigured channel resolves to a StubChannel that records
+// the dispatch as 'stubbed' in the notifications log (an honest "not wired" audit record),
+// never silently dropping. Absence-is-honest, not a stand-in for a real delivery. See P8a §8a.
 function buildChannel(kind: ChannelKind, deps: ChannelRegistryDeps): NotificationChannel {
   switch (kind) {
     case "ntfy":

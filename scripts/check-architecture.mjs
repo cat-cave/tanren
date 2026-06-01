@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { glob, readFile } from "node:fs/promises";
 import { relative, resolve } from "node:path";
 import { exit } from "node:process";
+import { checkNoProductionStubs } from "./check-architecture-stubs.mjs";
 import { runStructureChecks } from "./check-architecture-structure.mjs";
 import {
   checkDockerApiAllocatorOnly,
@@ -341,33 +342,30 @@ function checkStateDriftWiring(projectFiles) {
   return [];
 }
 
-function checkAnswererSchemaDriftWiring(projectFiles) {
-  const rule = "answerer-schema-drift-check-wired";
+// Shared wiring check for the codegen-export drift gates (answerer + contract
+// schema). Each must run its export script via `check:<key>` and be reachable
+// from the root `check` (directly or by delegating to `just ci`).
+function checkCodegenDriftWiring(projectFiles, { rule, key, script, label }) {
   const pkg = projectFiles.find((item) => item.file === "package.json");
   const just = projectFiles.find((item) => item.file === "justfile");
-  if (!projectFiles.some((item) => item.file === "scripts/answerer-schema-export.mjs")) {
-    return [diagnostic(rule, "scripts/answerer-schema-export.mjs", "answerer schema codegen script is missing")];
+  if (!projectFiles.some((item) => item.file === script)) {
+    return [diagnostic(rule, script, `${label} schema codegen script is missing`)];
   }
   if (!pkg) {
-    return [diagnostic(rule, "package.json", "root package.json is required for answerer schema drift wiring")];
+    return [diagnostic(rule, "package.json", `root package.json is required for ${label} schema drift wiring`)];
   }
   try {
-    const json = JSON.parse(pkg.text);
-    const scripts = json.scripts ?? {};
-    const drift = String(scripts["check:answerer-schema-drift"] ?? "");
+    const scripts = JSON.parse(pkg.text).scripts ?? {};
+    const drift = String(scripts[`check:${key}`] ?? "");
     const check = String(scripts.check ?? "");
-    if (!drift.includes("scripts/answerer-schema-export.mjs")) {
-      return [
-        diagnostic(rule, "package.json", "check:answerer-schema-drift must run scripts/answerer-schema-export.mjs"),
-      ];
+    if (!drift.includes(script)) {
+      return [diagnostic(rule, "package.json", `check:${key} must run ${script}`)];
     }
     const wired =
-      check.includes("check:answerer-schema-drift") ||
-      (check.includes("just ci") && just?.text.includes("ci:") && just.text.includes("answerer-schema-drift"));
+      check.includes(`check:${key}`) ||
+      (check.includes("just ci") && just?.text.includes("ci:") && just.text.includes(key));
     if (!wired) {
-      return [
-        diagnostic(rule, "package.json", "root check must include check:answerer-schema-drift or delegate to just ci"),
-      ];
+      return [diagnostic(rule, "package.json", `root check must include check:${key} or delegate to just ci`)];
     }
   } catch {
     return [diagnostic(rule, "package.json", "root package.json must be valid JSON")];
@@ -375,38 +373,22 @@ function checkAnswererSchemaDriftWiring(projectFiles) {
   return [];
 }
 
+function checkAnswererSchemaDriftWiring(projectFiles) {
+  return checkCodegenDriftWiring(projectFiles, {
+    rule: "answerer-schema-drift-check-wired",
+    key: "answerer-schema-drift",
+    script: "scripts/answerer-schema-export.mjs",
+    label: "answerer",
+  });
+}
+
 function checkContractSchemaDriftWiring(projectFiles) {
-  const rule = "contract-schema-drift-check-wired";
-  const pkg = projectFiles.find((item) => item.file === "package.json");
-  const just = projectFiles.find((item) => item.file === "justfile");
-  if (!projectFiles.some((item) => item.file === "scripts/contract-schema-export.mjs")) {
-    return [diagnostic(rule, "scripts/contract-schema-export.mjs", "contract schema codegen script is missing")];
-  }
-  if (!pkg) {
-    return [diagnostic(rule, "package.json", "root package.json is required for contract schema drift wiring")];
-  }
-  try {
-    const json = JSON.parse(pkg.text);
-    const scripts = json.scripts ?? {};
-    const drift = String(scripts["check:contract-schema-drift"] ?? "");
-    const check = String(scripts.check ?? "");
-    if (!drift.includes("scripts/contract-schema-export.mjs")) {
-      return [
-        diagnostic(rule, "package.json", "check:contract-schema-drift must run scripts/contract-schema-export.mjs"),
-      ];
-    }
-    const wired =
-      check.includes("check:contract-schema-drift") ||
-      (check.includes("just ci") && just?.text.includes("ci:") && just.text.includes("contract-schema-drift"));
-    if (!wired) {
-      return [
-        diagnostic(rule, "package.json", "root check must include check:contract-schema-drift or delegate to just ci"),
-      ];
-    }
-  } catch {
-    return [diagnostic(rule, "package.json", "root package.json must be valid JSON")];
-  }
-  return [];
+  return checkCodegenDriftWiring(projectFiles, {
+    rule: "contract-schema-drift-check-wired",
+    key: "contract-schema-drift",
+    script: "scripts/contract-schema-export.mjs",
+    label: "contract",
+  });
 }
 
 function checkSchemaDriftWiring(projectFiles) {
@@ -479,6 +461,7 @@ export async function runArchitectureChecks({ root = process.cwd() } = {}) {
     ...checkAnswererSchemaDriftWiring(projectFiles),
     ...checkContractSchemaDriftWiring(projectFiles),
     ...checkNoRowCastsInWorkflow(projectFiles),
+    ...checkNoProductionStubs(projectFiles),
     ...runStructureChecks(projectFiles),
   ];
 }

@@ -311,6 +311,9 @@ class MergeDispatcher {
 
   private async tryResolveConflict(merge: MergePullRequestResult): Promise<MergePullRequestResult | undefined> {
     const { input, context, pr, probe } = this.deps;
+    // arch-allow: pending P2b — noopConflictResolver is the TEMPORARY default until the
+    // intent-preserving conflict resolver lands. When P2b wires the real resolver as the
+    // production default, delete this fallback and the allowlist entry tightens. P8a §8a.
     const resolver = input.resolveConflict ?? noopConflictResolver;
     const outcome = await resolver({
       runId: context.runId,
