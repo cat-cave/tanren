@@ -148,10 +148,21 @@ function hasGitRefControlCharacter(value: string): boolean {
   return false;
 }
 
-export function buildGitHubPushCommand(input: { repoUrl: string; branch: string; sourceRef?: string }): string {
-  const branch = validateGitBranchName(input.branch);
-  const sourceRef = validatePushSourceRef(input.sourceRef);
-  const remote = githubHttpsRemote(parseGitHubRepository(input.repoUrl));
+// The shell-environment prefix that makes a single `git` invocation
+// authenticate over HTTPS as `x-access-token:<token>`, where the token is read
+// from a temp file written from the command's stdin. Prepend this to any git
+// subcommand string. Kept as discrete tokens so callers `.join(" ")` it onto
+// their git args.
+const GIT_AUTH_ENV_PREFIX = ["GIT_TERMINAL_PROMPT=0", 'GIT_ASKPASS="$askpass"', 'GITHUB_TOKEN_FILE="$token_file"'];
+
+// The shell prelude (run before the authed git command) that consumes the
+// command's stdin as the GitHub token and writes the GIT_ASKPASS helper that
+// feeds it. The token is read from stdin — it never appears in the command
+// string, the process args, or any emitted event — and the temp dir is removed
+// on exit. The trailing `git ...` invocation must be prefixed with
+// {@link GIT_AUTH_ENV_PREFIX}. Shared by clone (read) and push (write) so both
+// authenticate private repos the same secure way.
+export function gitTokenAuthPrelude(): string[] {
   const askpassScript = [
     "#!/bin/sh",
     'case "$1" in',
@@ -160,9 +171,7 @@ export function buildGitHubPushCommand(input: { repoUrl: string; branch: string;
     "esac",
     "",
   ].join("\n");
-
   return [
-    "set -eu",
     "tmpdir=$(mktemp -d)",
     'cleanup() { rm -rf "$tmpdir"; }',
     "trap cleanup EXIT",
@@ -172,16 +181,29 @@ export function buildGitHubPushCommand(input: { repoUrl: string; branch: string;
     'cat > "$token_file"',
     `printf %s ${quoteSshShellArg(askpassScript)} > "$askpass"`,
     'chmod 700 "$askpass"',
-    [
-      "GIT_TERMINAL_PROMPT=0",
-      'GIT_ASKPASS="$askpass"',
-      'GITHUB_TOKEN_FILE="$token_file"',
-      "git",
+  ];
+}
+
+// Prefixes a git subcommand (its already-quoted args) with the auth env so it
+// authenticates via the {@link gitTokenAuthPrelude} credential helper.
+export function gitAuthedCommand(gitArgs: string[]): string {
+  return [...GIT_AUTH_ENV_PREFIX, "git", ...gitArgs].join(" ");
+}
+
+export function buildGitHubPushCommand(input: { repoUrl: string; branch: string; sourceRef?: string }): string {
+  const branch = validateGitBranchName(input.branch);
+  const sourceRef = validatePushSourceRef(input.sourceRef);
+  const remote = githubHttpsRemote(parseGitHubRepository(input.repoUrl));
+
+  return [
+    "set -eu",
+    ...gitTokenAuthPrelude(),
+    gitAuthedCommand([
       "push",
       "--force",
       quoteSshShellArg(remote),
       quoteSshShellArg(`${sourceRef}:refs/heads/${branch}`),
-    ].join(" "),
+    ]),
   ].join(" && ");
 }
 
