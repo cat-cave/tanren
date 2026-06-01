@@ -34,6 +34,7 @@ import {
   type WalkResult,
 } from "../contracts/dagWalker.js";
 import { PgEventStore } from "../eventStore.js";
+import { SpecPriority } from "../state/spec.js";
 import { createQueuedRunFromSpec } from "../workflow/projectSpec.js";
 
 /**
@@ -73,6 +74,7 @@ interface SpecDagRow {
   spec_id: string;
   status: string;
   depends_on: unknown;
+  priority: unknown;
   rn: string | number;
 }
 
@@ -85,8 +87,9 @@ function asStringArray(value: unknown): string[] {
  * same bootstrap the worker + benchmark use to discover an org before any tenant
  * work), then reads the project's specs UNDER THAT ORG SCOPE (RLS). A read off
  * the wrong scope sees zero rows — so the snapshot is always exactly the project's
- * own DAG. The `orderKey` is the row's creation order (a stable, monotonic
- * tiebreak); P1b layers priority on top in the pure planner's `orderReadySet`.
+ * own DAG. The `priority` column is the primary ordering key (the pure planner's
+ * `orderReadySet` sorts P0→tbd first); the `orderKey` (creation order) is the
+ * deterministic tiebreak within a priority.
  */
 export class PgDagReadModel implements DagReadModel {
   constructor(private readonly pool: pg.Pool) {}
@@ -100,7 +103,7 @@ export class PgDagReadModel implements DagReadModel {
     }
     const nodes = await runWithOrgScope(this.pool, orgId, async (client) => {
       const result = await client.query<SpecDagRow>(
-        `SELECT spec_id, status, depends_on,
+        `SELECT spec_id, status, depends_on, priority,
                 row_number() OVER (ORDER BY ctid) AS rn
            FROM specs
           WHERE project_id = $1`,
@@ -111,6 +114,8 @@ export class PgDagReadModel implements DagReadModel {
           specId: row.spec_id,
           phase: classifySpecStatus(row.status),
           dependsOn: asStringArray(row.depends_on),
+          // The DB CHECK guarantees a valid value; parse defends the read seam.
+          priority: SpecPriority.parse(row.priority),
           orderKey: Number(row.rn),
         }),
       );

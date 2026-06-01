@@ -24,6 +24,7 @@ interface SpecRow {
   acceptance_criteria: unknown;
   depends_on: string[];
   status: string;
+  priority: string;
 }
 interface RunRow {
   run_id: string;
@@ -94,6 +95,7 @@ export class WorkerPool {
         acceptance_criteria: JSON.parse(String(params[4])) as unknown,
         depends_on: params[5] as string[],
         status: String(params[6]),
+        priority: String(params[7]),
       });
       return { rows: [], rowCount: 1 };
     }
@@ -116,6 +118,7 @@ export class WorkerPool {
         acceptance_criteria: spec.acceptance_criteria,
         depends_on: spec.depends_on,
         status: spec.status,
+        priority: spec.priority,
       });
     }
     // worker loadRunExecutionContext: run⋈spec⋈project join

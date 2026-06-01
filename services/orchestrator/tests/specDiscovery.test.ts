@@ -41,9 +41,9 @@ const featureInsight: DiscoveryInsight = {
 // createSpec + writeProvenance round-trip is observable.
 function stubPool(existingSpecs: Array<{ spec_id: string; title: string; status: string }> = []): {
   pool: pg.Pool;
-  specs: Map<string, { metadata: unknown }>;
+  specs: Map<string, { metadata: unknown; priority: string }>;
 } {
-  const specs = new Map<string, { metadata: unknown }>();
+  const specs = new Map<string, { metadata: unknown; priority: string }>();
   const query = async (text: string, params: unknown[] = []): Promise<{ rows: unknown[]; rowCount: number }> => {
     const sql = text.replaceAll(/\s+/gu, " ").trim();
     if (sql.startsWith("SELECT spec_id, title, status FROM specs")) {
@@ -54,7 +54,9 @@ function stubPool(existingSpecs: Array<{ spec_id: string; title: string; status:
     }
     if (sql.startsWith("INSERT INTO specs")) {
       const specId = String(params[0]);
-      specs.set(specId, { metadata: {} });
+      // params[7] is the `priority` bind (§1b): capture it so the accept test can
+      // assert the proposal's priority is persisted onto the spec.
+      specs.set(specId, { metadata: {}, priority: String(params[7]) });
       return { rows: [], rowCount: 1 };
     }
     if (sql.startsWith("SELECT metadata FROM specs")) {
@@ -65,7 +67,8 @@ function stubPool(existingSpecs: Array<{ spec_id: string; title: string; status:
     if (sql.startsWith("UPDATE specs SET metadata")) {
       const specId = String(params[0]);
       const metadata = JSON.parse(String(params[1])) as unknown;
-      specs.set(specId, { metadata });
+      const existing = specs.get(specId);
+      specs.set(specId, { metadata, priority: existing?.priority ?? "tbd" });
       return { rows: [{ spec_id: specId }], rowCount: 1 };
     }
     return { rows: [], rowCount: 0 };
@@ -196,6 +199,11 @@ describe("acceptProposals · creates specs + stamps provenance", () => {
     const created = result.accepted[0];
     expect(created?.spec.specId).toMatch(/^spec_/u);
     expect(created?.proposalId).toBe("p1");
+
+    // The proposal's priority is persisted onto the created spec (§1b) — both on
+    // the returned contract and the stored row the DagWalker later orders by.
+    expect(created?.spec.priority).toBe("P1");
+    expect(specs.get(created!.spec.specId)?.priority).toBe("P1");
 
     // Provenance landed on the spec's metadata under the discovery key.
     const stored = specs.get(created!.spec.specId);

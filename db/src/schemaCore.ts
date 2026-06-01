@@ -67,6 +67,12 @@ export const specs = pgTable(
       .notNull()
       .default(sql`'{}'::text[]`),
     status: text("status").notNull().default("pending"),
+    // Execution priority (autonomy-engine.md §1b): the DagWalker orders the ready
+    // set by this (P0 first … `tbd` last) before the deterministic tiebreak. It
+    // originates on a discovery/triage `ProposedSpec` and is persisted at create
+    // time. NOT a state-machine value — these literals mirror the `SpecPriority`
+    // Zod enum in services/orchestrator/src/engine/state/spec.ts.
+    priority: text("priority").notNull().default("tbd"),
     metadata: jsonb("metadata")
       .notNull()
       // P3-0014: discovery provenance under `discovery` key
@@ -75,6 +81,7 @@ export const specs = pgTable(
   },
   (table) => [
     enumCheck("specs_status_check", table.status, stateEnumLists.specs_status),
+    enumCheck("specs_priority_check", table.priority, ["P0", "P1", "P2", "tbd"]),
     index("specs_org_id").on(table.orgId),
   ],
 );

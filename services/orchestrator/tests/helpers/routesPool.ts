@@ -43,6 +43,7 @@ interface SpecRow {
   acceptance_criteria: unknown;
   depends_on: string[];
   status: string;
+  priority: string;
 }
 
 export class RoutesPool {
@@ -102,6 +103,7 @@ export class RoutesPool {
       acceptance_criteria: input.acceptance_criteria ?? ["criterion"],
       depends_on: input.depends_on ?? [],
       status: input.status ?? "pending",
+      priority: input.priority ?? "tbd",
     };
     this.specs.set(row.spec_id, row);
     return row;
@@ -218,6 +220,7 @@ export class RoutesPool {
         acceptance_criteria: JSON.parse(String(params[4])) as unknown,
         depends_on: params[5] as string[],
         status: String(params[6]),
+        priority: String(params[7]),
       });
       return { rows: [], rowCount: 1 };
     }

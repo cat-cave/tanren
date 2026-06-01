@@ -5,6 +5,7 @@ import { z } from "zod";
 import type { ActorContext } from "../../auth/schemas.js";
 import { type ProjectConfigV1, defaultProjectConfigV1, migrateProjectConfig } from "../config/index.js";
 import { PgEventStore } from "../eventStore.js";
+import { DEFAULT_SPEC_PRIORITY, SpecPriority } from "../state/spec.js";
 import {
   ProjectAccessDeniedError,
   ProjectNotFoundError,
@@ -52,6 +53,8 @@ export interface CreateSpecInput {
   description: string;
   acceptanceCriteria: string[];
   dependsOn?: string[];
+  /** Execution priority (§1b); omitted ⇒ the `tbd` default the DagWalker schedules last. */
+  priority?: SpecPriority;
 }
 
 export interface SpecContract {
@@ -62,6 +65,7 @@ export interface SpecContract {
   acceptanceCriteria: string[];
   dependsOn: string[];
   status: string;
+  priority: SpecPriority;
 }
 
 export interface CreateSpecRunInput {
@@ -169,12 +173,13 @@ async function createSpecOnClient(
     acceptanceCriteria: input.acceptanceCriteria,
     dependsOn: input.dependsOn ?? [],
     status: "pending",
+    priority: input.priority ?? DEFAULT_SPEC_PRIORITY,
   };
 
   await client.query(
     // org_id derived in-statement from the parent project (tanren tenancy).
-    `INSERT INTO specs (spec_id, project_id, org_id, title, description, acceptance_criteria, depends_on, status)
-     VALUES ($1, $2, (SELECT org_id FROM projects WHERE project_id = $2), $3, $4, $5::jsonb, $6::text[], $7)`,
+    `INSERT INTO specs (spec_id, project_id, org_id, title, description, acceptance_criteria, depends_on, status, priority)
+     VALUES ($1, $2, (SELECT org_id FROM projects WHERE project_id = $2), $3, $4, $5::jsonb, $6::text[], $7, $8)`,
     [
       spec.specId,
       spec.projectId,
@@ -183,6 +188,7 @@ async function createSpecOnClient(
       JSON.stringify(spec.acceptanceCriteria),
       spec.dependsOn,
       spec.status,
+      spec.priority,
     ],
   );
   return spec;
@@ -396,7 +402,8 @@ async function loadSpecWithProject(
        s.description,
        s.acceptance_criteria,
        s.depends_on,
-       s.status
+       s.status,
+       s.priority
      FROM specs s
      JOIN projects p ON p.project_id = s.project_id
      WHERE s.spec_id = $1`,
@@ -428,6 +435,7 @@ async function loadSpecWithProject(
       acceptanceCriteria: decoded.acceptance_criteria,
       dependsOn: decoded.depends_on,
       status: decoded.status,
+      priority: decoded.priority,
     },
   };
 }
@@ -456,6 +464,7 @@ const SpecProjectRowSchema = z.object({
   acceptance_criteria: StringArrayOrEmpty,
   depends_on: StringArrayOrEmpty,
   status: z.string(),
+  priority: SpecPriority,
 });
 
 async function ensureClientProjectAccess(

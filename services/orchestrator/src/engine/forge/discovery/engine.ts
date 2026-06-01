@@ -125,6 +125,9 @@ export async function acceptProposals(deps: DiscoveryEngineDeps, input: AcceptIn
         title: proposal.title,
         description: proposal.description,
         acceptanceCriteria: proposal.acceptanceCriteria,
+        // Persist the discovery/triage priority onto the spec (autonomy-engine.md
+        // §1b) so the DagWalker orders by it instead of FIFO.
+        priority: proposal.priority,
         ...(proposal.dependsOn.length > 0 ? { dependsOn: proposal.dependsOn } : {}),
       },
       input.actor,

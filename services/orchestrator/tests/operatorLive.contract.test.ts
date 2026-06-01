@@ -159,6 +159,7 @@ interface SpecRow {
   acceptanceCriteria: string[];
   dependsOn: string[];
   status: string;
+  priority: string;
 }
 
 class SpecRunPool {
@@ -297,6 +298,7 @@ class SpecRunPool {
           acceptance_criteria: spec.acceptanceCriteria,
           depends_on: spec.dependsOn,
           status: spec.status,
+          priority: spec.priority,
         },
       ],
       rowCount: 1,
@@ -313,5 +315,6 @@ function specFromParams(params: unknown[]): SpecRow {
     acceptanceCriteria: JSON.parse(String(params[4])) as string[],
     dependsOn: params[5] as string[],
     status: String(params[6]),
+    priority: String(params[7]),
   };
 }
