@@ -29,10 +29,9 @@ import type { SshSubstrate } from "../contracts/sshSubstrate.js";
 import type { EscapeHatches } from "../config/index.js";
 import { CostRecorder } from "../costs/recorder.js";
 import type { GitHubHttpClient } from "../providers/github.js";
-import { finalizeRunQuotaExceeded, finalizeRunRecoverable } from "./runFinalize.js";
+import { finalizeRunRecoverable } from "./runFinalize.js";
 import { loadRunExecutionContext, type RunExecutionContext } from "./runExecutionContext.js";
 import { runPlannerLoopWorkflow, type PlannerRunResult, type RunPlannerLoopInput } from "../workflow/plannerRun.js";
-import { NoopQuotaPolicy, SINGLE_RUN_REQUEST, getRunUsage, type QuotaPolicy } from "../quota/index.js";
 
 /** Escape-hatch + CI-poll defaults the run worker applies to a dequeued plan job. */
 export const DEFAULT_ESCAPE_HATCHES: Pick<
@@ -94,11 +93,6 @@ export interface RunExecutorDeps {
   // while the workflow runs.
   leaseMs?: number;
   heartbeatIntervalMs?: number;
-  // SaaS Tier-B quota-admission-gate (OSS↔hosting seam). Defaults to the
-  // unlimited NoopQuotaPolicy so self-hosters are unrestricted; a hosting layer
-  // wires its own policy (or the DbQuotaPolicy reading `org_quotas`). The
-  // executor calls `checkAdmission` pre-flight and `accrueUsage` on completion.
-  quotaPolicy?: QuotaPolicy;
   // Test seam: defaults to the real planner-loop workflow. Tests inject a
   // wrapper that calls the real workflow with fake adapters / usage probe so
   // the dequeue→execute seam is proven without real Codex/SSH.
@@ -108,11 +102,6 @@ export interface RunExecutorDeps {
 export type ExecuteJobResult =
   | { kind: "idle" }
   | { kind: "completed"; jobId: string; runId: string; outcome: string }
-  // SaaS Tier-B quota-admission-gate: the wired QuotaPolicy denied the run
-  // pre-flight. The run is finalized `quota_exceeded` (recoverable) and the job
-  // is completed (not failed/retried) — re-running is the operator's call once
-  // the hosting layer lifts the quota.
-  | { kind: "quota_denied"; jobId: string; runId: string; reason: string }
   | { kind: "failed"; jobId: string; runId?: string; failure: { kind: string; message: string } };
 
 /**
@@ -144,7 +133,6 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
   // while the (potentially long) workflow runs. The reaper only recovers a job
   // whose lease has lapsed — i.e. a crashed worker that stopped heartbeating.
   const stopHeartbeat = startHeartbeat(deps, job.id, leaseMs);
-  const quotaPolicy = deps.quotaPolicy ?? new NoopQuotaPolicy();
   // RLS: the catch-path recoverable finalize must org-scope its UPDATE runs, or
   // the enforced `tanren_app` policy denies the unscoped write and the run sticks
   // `queued` forever. The owning run's org is KNOWN from the claim itself — the
@@ -184,28 +172,11 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
       await establishJobOrgContext(deps.pool, orgId, runId);
     }
 
-    // SaaS Tier-B quota-admission-gate: PRE-FLIGHT check before ANY runner /
-    // credential / workflow work. A legacy unscoped run (org_id NULL) is never
-    // gated — the unlimited default already admits, and there is no org to
-    // attribute usage to. A denied run lands `quota_exceeded` (recoverable) and
-    // the job is completed; we never start the workflow.
-    if (orgId !== null) {
-      // RLS R2 cohort-3 (org_quotas read): run the admission gate inside a short
-      // org-scoped transaction so the DbQuotaPolicy's `org_quotas` SELECT carries
-      // org context (`SET LOCAL app.current_org_id = <orgId>`). Inert in R1 — the
-      // NoopQuotaPolicy default ignores the scope and a pool/scoped read return
-      // the same decision.
-      const decision = await runWithOrgScope(deps.pool, orgId, () =>
-        quotaPolicy.checkAdmission(orgId, SINGLE_RUN_REQUEST),
-      );
-      if (!decision.admit) {
-        const reason = decision.reason ?? "quota exceeded";
-        await finalizeRunQuotaExceeded(deps.pool, deps.runStateWriter, runId, reason, decision.windowKey, orgId);
-        await deps.jobQueue.complete(job.id);
-        return { kind: "quota_denied", jobId: job.id, runId, reason };
-      }
-    }
-
+    // The ONLY thing that ever stops a run is BUDGET — there are no quotas
+    // (autonomy-engine.md §1.3/§1.x). Budget enforcement fires DOWNSTREAM, inside
+    // the workflow's usage accounting (`subtaskAccounting` → `window_exhausted`
+    // halt), so there is nothing to gate here pre-flight: the worker hydrates the
+    // run's context and hands it straight to the workflow.
     const runWorkflow = deps.runWorkflow ?? runPlannerLoopWorkflow;
     // RLS R3a-worker: the per-job WORKFLOW execution interleaves DB writes with
     // minutes of external I/O (allocate, clone, bootstrap, CI polling), so it
@@ -261,12 +232,6 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
       }),
     );
     await deps.jobQueue.complete(job.id);
-    // POST-RUN accrual: feed the policy the run's REAL usage from cost_records
-    // (org_id). Best-effort — a metering/accrual blip must never mask a
-    // completed run, so failures are swallowed.
-    if (orgId !== null) {
-      await accrueRunUsage(deps.pool, quotaPolicy, orgId, runId);
-    }
     return { kind: "completed", jobId: job.id, runId, outcome: result.outcome.kind };
   } catch (error) {
     const failure = { kind: failureKind(error), message: messageOf(error) };
@@ -371,29 +336,6 @@ function startHeartbeat(deps: RunExecutorDeps, jobId: string, leaseMs: number): 
     }
     await control.inFlight;
   };
-}
-
-/**
- * Accrue a completed run's real usage into the quota policy. Reads the run's
- * cost_records (org_id) for the token + dollar totals — ground truth, not an
- * estimate — and hands them to the policy. Best-effort: swallowed so a metering
- * blip never masks a completed run.
- */
-async function accrueRunUsage(pool: pg.Pool, policy: QuotaPolicy, orgId: string, runId: string): Promise<void> {
-  try {
-    // RLS R2 cohort-2 (cost_records read) + cohort-3 (org_quotas write): both the
-    // post-run metering read AND the policy's accrual UPDATE run inside ONE short
-    // org-scoped transaction (`SET LOCAL app.current_org_id = <orgId>`), so the
-    // `cost_records` SELECT and the `org_quotas` write both carry org context.
-    // Inert in R1 — same totals + same accrued counters as the pool path — and
-    // RLS-correct in R3.
-    await runWithOrgScope(pool, orgId, async (client) => {
-      const usage = await getRunUsage(client, runId);
-      await policy.accrueUsage(orgId, { runs: 1, tokens: usage.tokens, costUsd: usage.costUsd });
-    });
-  } catch {
-    // Accrual is best-effort; never fail a completed run on a metering blip.
-  }
 }
 
 /**

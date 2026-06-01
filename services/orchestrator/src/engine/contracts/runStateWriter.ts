@@ -32,7 +32,7 @@ export interface FinalizeRunInput {
   orgId: string;
   /** Terminal run status to set (today always `halted`/`failed`/`done`). */
   status: string;
-  /** Terminal outcome to set (e.g. `halted`, `quota_exceeded`, `ok`, `failed`). */
+  /** Terminal outcome to set (e.g. `halted`, `window_exhausted`, `ok`, `failed`). */
   outcome: string;
   /**
    * The `WHERE status IN (...)` guard the finalize UPDATE applies, so a run

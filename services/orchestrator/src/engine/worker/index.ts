@@ -38,20 +38,15 @@ export {
   RunExecutionContextNotFoundError,
   type RunExecutionContext,
 } from "./runExecutionContext.js";
-// SaaS Tier-B quota-admission-gate (OSS↔hosting seam): re-export the policy
-// surface + metering reads so the worker barrel is the single import site for
-// wiring a hosting policy.
+// Metering-export (OSS↔hosting billing READ substrate): re-export the typed
+// usage reads off `cost_records` so the worker barrel is the single import site
+// for a hosting layer's transparent usage-based billing (autonomy-engine.md
+// §1.x — budget is the only run gate; there are no quotas).
 export {
-  type QuotaPolicy,
-  type AdmissionRequest,
-  type AdmissionDecision,
-  type RunUsage,
   type UsageWindow,
   type OrgUsage,
   type BillableRun,
-  NoopQuotaPolicy,
-  DbQuotaPolicy,
   getOrgUsage,
   streamBillableRuns,
   getRunUsage,
-} from "../quota/index.js";
+} from "../metering/index.js";

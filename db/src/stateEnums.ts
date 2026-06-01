@@ -23,7 +23,6 @@ export const stateEnumLists = {
     "escape_hatch_hit",
     "retry_budget_exhausted",
     "window_exhausted",
-    "quota_exceeded",
     "cancelled",
     "hello_world_complete",
     "ok",

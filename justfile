@@ -190,12 +190,12 @@ smoke-rls-r2:
 smoke-rls-r2-cohort2:
   DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/rlsR2DalTasksCosts.integration.test.ts
 
-# RLS wave R2 cohort-3 behavior proof: the specs + runners + org_quotas read/write
-# sites + the worker failure-path finalize UPDATE run through the org-scoped
-# client (inert — no policies), identical to the pool. Same ephemeral-DB +
-# restricted-role harness as R1 / cohort-1 / cohort-2.
+# RLS wave R2 cohort-3 behavior proof: the specs + runners read/write sites + the
+# worker failure-path finalize UPDATE run through the org-scoped client (inert —
+# no policies), identical to the pool. Same ephemeral-DB + restricted-role
+# harness as R1 / cohort-1 / cohort-2.
 smoke-rls-r2-cohort3:
-  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/rlsR2DalSpecsRunnersQuota.integration.test.ts
+  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/rlsR2DalSpecsRunnersFinalizers.integration.test.ts
 
 # RLS wave R2 cohort-4 (FINAL) behavior proof: the forge stores —
 # forge_threads / forge_turns / forge_action_proposals reads + writes — run

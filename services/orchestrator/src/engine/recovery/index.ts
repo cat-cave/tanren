@@ -36,8 +36,6 @@ export const RECOVERABLE_OUTCOMES = new Set([
   "escape_hatch_hit",
   "retry_budget_exhausted",
   "window_exhausted",
-  // SaaS Tier-B quota-admission-gate: a run the QuotaPolicy denied pre-flight.
-  "quota_exceeded",
 ]);
 
 export class RunNotRecoverableError extends Error {

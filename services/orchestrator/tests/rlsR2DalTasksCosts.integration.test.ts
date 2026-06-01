@@ -26,7 +26,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { migrate, runWithOrgScope } from "@tanren/db";
 import { CostRecorder } from "../src/engine/costs/recorder.js";
 import { FakeEventStore } from "./helpers/fakeEventStore.js";
-import { getRunUsage } from "../src/engine/quota/index.js";
+import { getRunUsage } from "../src/engine/metering/index.js";
 import { insertChildTask, markTaskDone } from "../src/engine/workflow/subtaskTasks.js";
 import { fetchCostsPage, fetchRunCostsForSnapshot, fetchRunTasks } from "../src/routes/runs/list.js";
 

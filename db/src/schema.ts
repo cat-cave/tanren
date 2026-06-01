@@ -453,5 +453,4 @@ export { forgeThreads, forgeTurns, forgeActionProposals } from "./schemaForge.js
 export { workflowInsights } from "./schemaInsights.js";
 export { inboxSources, candidates } from "./schemaInbox.js";
 export { auditJobs } from "./schemaAudits.js";
-export { orgQuotas } from "./schemaQuotas.js";
 export { experiments, experimentCells, experimentTrials } from "./schemaBenchmark.js";

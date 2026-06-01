@@ -125,9 +125,9 @@ export async function streamBillableRuns(
 
 /**
  * The real usage a single completed run consumed, summed from its
- * `cost_records` rows. The run-executor's post-run accrual hook calls this to
- * feed {@link QuotaPolicy.accrueUsage} ground truth. Returns zero tokens/cost
- * for a run that recorded no cost rows (e.g. denied/empty run).
+ * `cost_records` rows — the per-run billing substrate a hosting layer reads to
+ * attribute a single run's transparent cost. Returns zero tokens/cost for a run
+ * that recorded no cost rows (e.g. an empty run).
  */
 export async function getRunUsage(pool: QueryClient, runId: string): Promise<{ tokens: number; costUsd: number }> {
   const result = await pool.query(
