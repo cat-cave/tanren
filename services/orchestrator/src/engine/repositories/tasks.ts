@@ -84,6 +84,14 @@ function decodeTaskRow(raw: RawTaskRow): TaskRow {
   });
 }
 
+// The run-detail timeline projects a route-specific column set (failure_kind,
+// attempt, cli, model) ordered by the canonical phase sequence, and is filtered
+// by org as a defense-in-depth tenant predicate. The route decodes these raw
+// rows into TaskTimelineEntry; the SQL is byte-identical to the loader it
+// replaces.
+const SELECT_TASK_TIMELINE_COLUMNS = `task_id, run_id, kind, title, parent_task_id, status, outcome, failure_kind,
+            attempt, cli, model, started_at, ended_at`;
+
 export const TaskStore = {
   async get(client: QueryClient, taskId: string, _actor: ActorRef): Promise<TaskRow | undefined> {
     const result = await client.query(`SELECT ${SELECT_TASK_COLUMNS} FROM tasks WHERE task_id = $1`, [taskId]);
@@ -116,6 +124,32 @@ export const TaskStore = {
     const where = clauses.length === 0 ? "" : ` WHERE ${clauses.join(" AND ")}`;
     const result = await client.query(`SELECT ${SELECT_TASK_COLUMNS} FROM tasks${where} ORDER BY task_id`, params);
     return result.rows.map((row) => decodeTaskRow(row as RawTaskRow));
+  },
+
+  /**
+   * Run-detail timeline read: tasks for a run (org-scoped) in the canonical
+   * phase order (plan→write→check→audit→ci), then start time, then id. Returns
+   * the raw projected rows; the route decodes them into TaskTimelineEntry.
+   */
+  async selectTimeline(
+    client: QueryClient,
+    runId: string,
+    orgId: string,
+    _actor: ActorRef,
+  ): Promise<ReadonlyArray<Record<string, unknown>>> {
+    const result = await client.query(
+      `SELECT ${SELECT_TASK_TIMELINE_COLUMNS}
+       FROM tasks
+      WHERE run_id = $1 AND org_id = $2
+      ORDER BY CASE kind
+                 WHEN 'plan' THEN 1 WHEN 'write' THEN 2 WHEN 'check' THEN 3
+                 WHEN 'audit' THEN 4 WHEN 'ci' THEN 5 ELSE 99
+               END,
+               started_at ASC NULLS FIRST,
+               task_id ASC`,
+      [runId, orgId],
+    );
+    return result.rows as Array<Record<string, unknown>>;
   },
 
   async updateStatus(

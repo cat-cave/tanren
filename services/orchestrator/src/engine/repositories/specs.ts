@@ -77,6 +77,44 @@ export const SpecStore = {
     return result.rows.map((row) => decodeSpecRow(row as RawSpecRow));
   },
 
+  /**
+   * Run-detail spec header: just the title + description for the spec card.
+   * Returns undefined when the spec row is gone (the route renders a fallback).
+   */
+  async selectSummaryHeader(
+    client: QueryClient,
+    specId: string,
+    _actor: ActorRef,
+  ): Promise<{ spec_id: string; title: string; description: string } | undefined> {
+    const result = await client.query<{ spec_id: string; title: string; description: string }>(
+      "SELECT spec_id, title, description FROM specs WHERE spec_id = $1",
+      [specId],
+    );
+    return result.rows[0];
+  },
+
+  /**
+   * Behavior ids attached to a spec (P2A-0018). The `spec_behaviors` table may
+   * be absent on older deployments; the route degrades to an empty list, so this
+   * read surfaces the raw rows and lets the caller own that fallback.
+   */
+  async selectBehaviorIds(client: QueryClient, specId: string, _actor: ActorRef): Promise<string[]> {
+    const result = await client.query<{ behavior_id: string }>(
+      "SELECT behavior_id FROM spec_behaviors WHERE spec_id = $1 ORDER BY behavior_id",
+      [specId],
+    );
+    return result.rows.map((row) => row.behavior_id);
+  },
+
+  /** The spec's milestone id, if any (`spec_milestones`); same fallback caveat. */
+  async selectMilestoneId(client: QueryClient, specId: string, _actor: ActorRef): Promise<string | null> {
+    const result = await client.query<{ milestone_id: string }>(
+      "SELECT milestone_id FROM spec_milestones WHERE spec_id = $1 LIMIT 1",
+      [specId],
+    );
+    return result.rows[0]?.milestone_id ?? null;
+  },
+
   async updateStatus(
     client: QueryClient,
     specId: string,

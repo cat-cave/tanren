@@ -36,6 +36,8 @@ import {
   type SseEventName,
   type TaskTimelineEntry,
 } from "./contract.js";
+import { CostStore, EventStore } from "../../engine/repositories/index.js";
+import { systemActor } from "../../engine/state/actor.js";
 import { fetchRunCostsForSnapshot, fetchRunEventsForSnapshot, fetchRunSummary, fetchRunTasks } from "./list.js";
 
 interface SseStreamArgs {
@@ -269,13 +271,10 @@ export class SseDriver {
     // the snapshot loader to keep payload shapes identical between the
     // initial frame and subsequent delta frames. RLS R2 cohort-1: runs on the
     // tick's ambient org-scoped client (events table).
-    const { rows } = await client.query<Record<string, unknown>>(
-      `SELECT id, ts, run_id, task_id, spec_id, project_id, event_type, payload
-         FROM events
-        WHERE run_id = $1 AND org_id = $3 AND id > $2
-        ORDER BY ts ASC, id ASC
-        LIMIT 200`,
-      [this.args.runId, this.lastEventId, this.args.orgId],
+    const rows = await EventStore.selectNewForRunSince(
+      client,
+      { runId: this.args.runId, orgId: this.args.orgId, sinceId: this.lastEventId },
+      systemActor,
     );
     if (rows.length === 0) return [];
     // Re-use the redaction path through fetchRunEventsForSnapshot by giving
@@ -315,16 +314,10 @@ export class SseDriver {
   private async pollNewCosts(client: QueryClient): Promise<RunCostRecord[]> {
     // cost_records is a later cohort; it rides the same org-scoped client here
     // (inert) purely so the per-tick reads share one transaction.
-    const { rows } = await client.query<Record<string, unknown>>(
-      `SELECT id, task_id, run_id, project_id, cli, provider, model,
-              input_tokens, cached_input_tokens, cache_creation_tokens,
-              output_tokens, reasoning_output_tokens, total_tokens, cost_usd,
-              billing_mode, cost_basis, recorded_at
-         FROM cost_records
-        WHERE run_id = $1 AND org_id = $3 AND id > $2
-        ORDER BY recorded_at ASC, id ASC
-        LIMIT 200`,
-      [this.args.runId, this.lastCostId, this.args.orgId],
+    const rows = await CostStore.selectNewForRunSince(
+      client,
+      { runId: this.args.runId, orgId: this.args.orgId, sinceId: this.lastCostId },
+      systemActor,
     );
     return rows.map((row) => ({
       id: row["id"] as number | string,

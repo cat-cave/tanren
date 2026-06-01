@@ -7,194 +7,27 @@
 // row-filter contract the real org-scoped transaction provides. Tables without a
 // literal org_id column (behaviors, milestones, spec_dependencies) carry an
 // org tag in the harness purely to model that visibility gate; the SQL the
-// stores emit selects only the real columns.
+// stores emit selects only the real columns. The record shapes + seeding live in
+// `conformanceMemoryDb.ts`; the run-domain read SQL in `conformanceRunSql.ts`.
 import { pgRepositories, type QueryClient } from "../../src/engine/contracts/repositories.js";
 import {
-  describeRepositoriesConformance,
-  type SeedBehavior,
-  type SeedData,
-  type SeedMilestone,
-  type SeedPersona,
-  type SeedProject,
-  type SeedSpec,
-  type SeedSpecDependency,
-} from "./repositoriesConformance.js";
-
-interface ProjectRecord {
-  project_id: string;
-  name: string;
-  repo_url: string;
-  default_branch: string;
-  runner_image: string;
-  allocator: string;
-  config: unknown;
-  org_id: string | null;
-}
-
-interface SpecRecord {
-  spec_id: string;
-  project_id: string;
-  title: string;
-  description: string;
-  acceptance_criteria: unknown;
-  depends_on: unknown;
-  status: string;
-  org_id: string | null;
-}
-
-interface PersonaRecord {
-  id: string;
-  scope: string;
-  org_id: string;
-  project_id: string | null;
-  name: string;
-  description: string;
-  metadata: unknown;
-  created_at: Date;
-  updated_at: Date;
-}
-
-interface BehaviorRecord {
-  id: string;
-  persona_id: string;
-  title: string;
-  given: string;
-  when: string;
-  then: string;
-  description: string | null;
-  metadata: unknown;
-  created_at: Date;
-  updated_at: Date;
-  org_id: string | null;
-}
-
-interface MilestoneRecord {
-  id: string;
-  project_id: string;
-  label: string;
-  name: string;
-  description: string | null;
-  order_index: number;
-  eta: Date | null;
-  status: string;
-  created_at: Date;
-  updated_at: Date;
-  org_id: string | null;
-}
-
-interface SpecDependencyRecord {
-  from_spec_id: string;
-  to_spec_id: string;
-  created_at: Date;
-  org_id: string | null;
-}
-
-const NOW = new Date("2026-01-01T00:00:00.000Z");
-
-// In-memory store shared by every scoped client the harness hands out.
-class MemoryDb {
-  projects: ProjectRecord[] = [];
-  specs: SpecRecord[] = [];
-  personas: PersonaRecord[] = [];
-  behaviors: BehaviorRecord[] = [];
-  milestones: MilestoneRecord[] = [];
-  specDependencies: SpecDependencyRecord[] = [];
-
-  seedProject(p: SeedProject): void {
-    this.projects.push({
-      project_id: p.projectId,
-      name: p.name,
-      repo_url: p.repoUrl,
-      default_branch: p.defaultBranch,
-      runner_image: p.runnerImage,
-      allocator: p.allocator,
-      config: p.config,
-      org_id: p.orgId,
-    });
-  }
-
-  seedSpec(s: SeedSpec): void {
-    this.specs.push({
-      spec_id: s.specId,
-      project_id: s.projectId,
-      title: s.title,
-      description: s.description,
-      acceptance_criteria: s.acceptanceCriteria,
-      depends_on: s.dependsOn,
-      status: s.status,
-      org_id: s.orgId,
-    });
-  }
-
-  seedPersona(p: SeedPersona): void {
-    this.personas.push({
-      id: p.id,
-      scope: p.scope,
-      org_id: p.orgId,
-      project_id: p.projectId,
-      name: p.name,
-      description: p.description,
-      metadata: {},
-      created_at: NOW,
-      updated_at: NOW,
-    });
-  }
-
-  seedBehavior(b: SeedBehavior): void {
-    const persona = this.personas.find((p) => p.id === b.personaId);
-    /* eslint-disable unicorn/no-thenable */
-    // `then` is the persisted BDD Given/When/Then column name, not a Promise hook.
-    this.behaviors.push({
-      id: b.id,
-      persona_id: b.personaId,
-      title: b.title,
-      given: b.given,
-      when: b.when,
-      then: b.then,
-      description: b.description,
-      metadata: {},
-      created_at: NOW,
-      updated_at: NOW,
-      org_id: persona?.org_id ?? null,
-    });
-    /* eslint-enable unicorn/no-thenable */
-  }
-
-  seedMilestone(m: SeedMilestone): void {
-    this.milestones.push({
-      id: m.id,
-      project_id: m.projectId,
-      label: m.label,
-      name: m.name,
-      description: null,
-      order_index: m.orderIndex,
-      eta: null,
-      status: m.status,
-      created_at: NOW,
-      updated_at: NOW,
-      org_id: m.orgId,
-    });
-  }
-
-  seedSpecDependency(d: SeedSpecDependency): void {
-    this.specDependencies.push({
-      from_spec_id: d.fromSpecId,
-      to_spec_id: d.toSpecId,
-      created_at: NOW,
-      // The DAG edge inherits the org of its source spec for visibility modeling.
-      org_id: this.specs.find((s) => s.spec_id === d.fromSpecId)?.org_id ?? "org_a",
-    });
-  }
-}
-
-interface QueryResult {
-  rows: unknown[];
-  rowCount: number;
-}
+  MemoryDb,
+  type BehaviorRecord,
+  type MilestoneRecord,
+  type PersonaRecord,
+  type ProjectRecord,
+  type QueryResult,
+  type SpecDependencyRecord,
+  type SpecRecord,
+} from "./conformanceMemoryDb.js";
+import { handleRunReadSql } from "./conformanceRunSql.js";
+import type { SeedData } from "./conformanceFixtures.js";
+import { describeRepositoriesConformance } from "./repositoriesConformance.js";
 
 // A `pg`-shaped client bound to one org scope. Reads filter rows whose `org_id`
 // does not match the scope (RLS); writes mutate the shared store but only for
-// rows visible to this scope.
+// rows visible to this scope. Product-entity SQL is handled inline; the
+// run-domain read SQL delegates to `handleRunReadSql`.
 class ScopedClient {
   constructor(
     private readonly db: MemoryDb,
@@ -206,6 +39,14 @@ class ScopedClient {
     // The repository emits multi-line SQL; collapse whitespace so the shape
     // matchers below are agnostic to formatting/indentation.
     const sql = rawSql.replaceAll(/\s+/gu, " ").trim();
+    const productResult = this.handleProductSql(sql, params);
+    if (productResult !== undefined) return productResult;
+    const runResult = handleRunReadSql(this.db, this.orgId, sql, params);
+    if (runResult !== undefined) return runResult;
+    throw new Error(`MemoryDb: unrecognized SQL in conformance harness: ${sql}`);
+  }
+
+  private handleProductSql(sql: string, params: readonly unknown[]): QueryResult | undefined {
     const projects = (): ProjectRecord[] => this.db.projects.filter((p) => p.org_id === this.orgId);
     const specs = (): SpecRecord[] => this.db.specs.filter((s) => s.org_id === this.orgId);
     const personas = (): PersonaRecord[] => this.db.personas.filter((p) => p.org_id === this.orgId);
@@ -312,7 +153,7 @@ class ScopedClient {
       return { rows, rowCount: rows.length };
     }
 
-    throw new Error(`MemoryDb: unrecognized SQL in conformance harness: ${sql}`);
+    return undefined;
   }
 }
 
@@ -327,6 +168,10 @@ describeRepositoriesConformance("pgRepositories (in-memory pg)", () => {
       data.behaviors?.forEach((b) => db.seedBehavior(b));
       data.milestones?.forEach((m) => db.seedMilestone(m));
       data.specDependencies?.forEach((d) => db.seedSpecDependency(d));
+      data.runs?.forEach((r) => db.seedRun(r));
+      data.runTasks?.forEach((t) => db.seedRunTask(t));
+      data.events?.forEach((e) => db.seedEvent(e));
+      data.costRecords?.forEach((c) => db.seedCostRecord(c));
     },
     clientForOrg: (orgId): QueryClient => new ScopedClient(db, orgId) as unknown as QueryClient,
   };
