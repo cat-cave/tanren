@@ -285,16 +285,31 @@ reaches `main` early). The queue + speculative CI ensure the eventual A→B→C 
 sequence is pre-validated (speculative checks on the prospective merged state)
 rather than discovered-broken at merge.
 
-**Invalidation.** If, after dependents started speculatively, an ancestor gets
-**changes-requested** or a **new P0/P1 finding**, the walker **invalidates the
-affected dependents** and re-plans them against the updated ancestor — the
-dependent's intent is preserved and its work re-based/re-run, never silently
-merged on top of stale work. P2/P3 findings appearing later do not invalidate
-(consistent with the threshold).
+**Change-percolation — NOT discard.** When an ancestor changes after dependents
+started speculatively (a P3 patch applies to A, a reviewer edits A, a new finding
+lands), the walker must **NOT** throw away B's and C's work. It treats the
+ancestor's change as a **delta to percolate down the chain**: an agent (the same
+intent-preserving resolver as 2b, applied to an _intentional upstream change_
+rather than a textual conflict) determines, for `A → B → C`, exactly **what in
+A's change needs to flow into B**, applies it while **keeping B's work intact**,
+re-gates B, then percolates B's resulting delta into C the same way. It is a
+chain re-integration, not a rollback. The cheaper, faster, and more reliable this
+percolation is, the **earlier B can safely start in A's journey** — percolation
+quality is what makes an aggressive speculation threshold (and deeper speculative
+stacks) economical. So this is a first-class capability, co-designed with 2b/2d,
+not an error path: how well Tanren percolates upstream changes through a live DAG
+is one of its core differentiators.
+
+Severity still gates _whether_ percolation is even needed promptly: a **P0/P1**
+finding or **changes-requested** on A triggers immediate percolation (the chain
+must absorb it before merging); **P2/P3** changes percolate lazily (batched into
+the next rebase) since they don't block. Nothing is ever silently merged on stale
+work — but nothing is ever needlessly thrown away either.
 
 **Net:** the threshold turns "wait for merge" into "wait for stable-enough,"
 speculative integration branches make conflicts surface early and cheaply, the
-queue keeps `main` always-valid, and invalidation keeps speculation honest.
+queue keeps `main` always-valid, and **change-percolation keeps the chain's work
+alive while absorbing upstream change** — making earlier speculation safe.
 
 ### 2d. The native intelligent merge queue (headline capability)
 
@@ -314,9 +329,29 @@ Per §1.1, the merge queue is **owned natively**, not delegated. The
   VCS/CI calls are behind the adapter. This is the "intelligent velocity for any
   VCS + actions provider" headline.
 
-External Mergify becomes an **optional** `VcsProvider`-level adapter for orgs that
-already run it, not a default and not required. Conflict resolution and
-intent-preservation are native in all cases.
+**Reaching Mergify parity → removing it entirely.** The goal is not "Tanren + an
+optional Mergify adapter" but **Tanren replacing Mergify**, because the things
+Mergify provides are things Tanren wants to _act on_, not just delegate. The
+parity checklist (we're ~80% there once 2a–2d land):
+
+- merge queue + speculative checks → **2d** (native).
+- stacks / stack diffs for review efficiency → **2c** (native, DAG-derived).
+- auto-rebase / branch-up-to-date → **2a** (native).
+- **test quarantine + flaky-test detection** → a `ci.flaky` / quarantine surface:
+  Tanren already records per-run attempt/retry signals (`retry_hotspot`) — extend
+  to detect flaky tests across runs and auto-quarantine them (with an event so the
+  operator sees it), exactly the kind of thing Tanren _should_ act on.
+- **CI analytics / insights (timing, pass-rate, slow steps)** → extends the
+  existing workflow-insights compute (already real: retry_hotspot / review_stall /
+  pace_anomaly) + the benchmark's DORA — surfaced per project.
+- **queue / stack statistics** → derived from the native queue's own events.
+
+Once that checklist is green, **Mergify is removed** (no adapter, no dependency) —
+the native engine is strictly more capable because it has the DAG + spec intent
+that an external tool never sees. (A `VcsProvider` adapter for a _different
+external queue_ remains possible, but is not a goal.) The flaky-detection +
+CI-analytics items are tracked as P2e (below); they are not blockers for the apex
+proof but complete the "remove Mergify" story.
 
 ## 4. Phase 3 — `apex` fixture + run + benchmark
 
@@ -328,10 +363,10 @@ fixture must **not** arrive with those already written. What `apex` ships:
 
 - **A single paragraph of rough, high-level operator notes** — _not_ a polished
   brief, _not_ personas/behaviors/milestones. Just "I want a URL shortener with
-  per-link analytics, and a Slack bot that posts a summary when a link crosses N
-  clicks." A core part of the evaluation is **how well Tanren turns those
-  high-level notes, through conversation, into real actionable personas /
-  behaviors / milestones / a DAG.**
+  per-link analytics, a small web UI to create/manage links, and a Slack bot that
+  posts a summary when a link crosses N clicks." A core part of the evaluation is
+  **how well Tanren turns those high-level notes, through conversation, into real
+  actionable personas / behaviors / milestones / a DAG.**
 - **An empty (or near-empty) target repo** — Tanren writes everything.
 - **A hidden, growing acceptance harness** (the only "answer key") — used as the
   benchmark `accept` tier; never shown to the building agents.
@@ -339,16 +374,18 @@ fixture must **not** arrive with those already written. What `apex` ships:
   index, an unhandled edge — to be **filed as real issues** that drive the
   ingestion → triage → spec → DAG-insert loop on real artifacts.
 
-**The domain — a URL shortener _with a real external integration_** (a Slack bot,
-or similar). The external integration is deliberate: it forces Tanren to build
-something **real and outward-facing** — an external API client, secret handling
-for the Slack token, outbound calls, a behavior that can't be unit-tested in
-isolation — not just a self-contained CRUD service. Structurally it still yields
-the needed shape: layered hard-blocked dependencies (model → storage → shorten/
-redirect → API → analytics → the Slack integration that depends on the analytics
-event) **and** independent-ready-at-once specs (rate-limit ∥ analytics) that force
-parallelism, plus shared-file pressure (router/types/migrations) that forces real
-conflicts.
+**The domain — a URL shortener _with a real external integration_** (a Slack bot)
+**and a deployed web UI.** The external integration is deliberate: it forces
+Tanren to build something **real and outward-facing** — an external API client,
+secret handling for the Slack token, outbound calls, a behavior that can't be
+unit-tested in isolation. The **web UI + deploy** is also deliberate: it exercises
+the **live-preview-deploy** surface (the run-detail/review preview pane that
+nothing has driven yet) and a full product slice, not just an API. Structurally it
+yields the needed shape: layered hard-blocked dependencies (model → storage →
+shorten/redirect → API → analytics → the Slack integration that depends on the
+analytics event → the web UI that depends on the API) **and**
+independent-ready-at-once specs (rate-limit ∥ analytics) that force parallelism,
+plus shared-file pressure (router/types/migrations) that forces real conflicts.
 
 ### The operator interacts only as a real user would
 
@@ -379,9 +416,11 @@ surfaces, gets a real product.
 6. **Observability:** budget ceiling enforced (run pauses on exhaustion); live
    token usage per role; 4-source cost incl. (managed-mode) the transparent
    margin line; **DORA accumulating across the many merged runs.**
-7. **The finished product:** near-empty repo → a working, tested, deployed URL
-   shortener **with a live Slack integration**, every change a merged PR with full
-   provenance — driven entirely over real external surfaces.
+7. **The finished product:** near-empty repo → a working, tested, **deployed** URL
+   shortener with a **web UI** for creating/managing links and a **live Slack
+   integration** — exercising the **live-preview-deploy** surface (the
+   run-detail/review preview pane) — every change a merged PR with full
+   provenance, driven entirely over real external surfaces.
 
 ### Then benchmark
 
@@ -409,14 +448,15 @@ Phase 2 (merge coordination — native) — starts once P1a lands (collisions ap
   P2·0 VcsProvider contract (GitHub adapter extracted) + conformance       → P1a
   P2a  up-to-date/auto-rebase (re-gate on rebase)                          → P2·0
   P2b  intent-preserving conflict-resolution Answerer + re-gate            → P2a
-  P2c  speculative execution: spec lifecycle states + threshold + integration branches
-       + dynamic base + invalidation                                       → P2a
+  P2c  speculative execution: spec lifecycle + threshold + integration branches
+       + dynamic base + CHANGE-PERCOLATION (chain re-integration, not discard)   → P2a, P2b
   P2d  native intelligent merge queue (DAG-order, speculative batch-check, bisect)   → P2b, P2c
-       (optional external-Mergify VcsProvider adapter)                     → P2d
+  P2e  Mergify-parity CI intelligence: flaky-test detection + auto-quarantine,
+       CI analytics/insights, queue/stack stats → then REMOVE Mergify       → P2d
 
 Phase 3 (proof)
-  P3a  apex fixture (rough operator notes + empty repo + hidden accept tiers + planted issues + Slack integration)   → P1*, P2*
-  P3b  apex live run over real surfaces (API + Playwright UI) + fix-what-stalls   → P3a
+  P3a  apex fixture (rough operator notes + empty repo + hidden accept tiers + planted issues + Slack + web UI)   → P1*, P2*
+  P3b  apex live run over real surfaces (API + Playwright UI) + live-preview-deploy + fix-what-stalls   → P3a
   P3c  benchmark apex (knob experiments)                                   → P3b
 ```
 
@@ -439,17 +479,18 @@ of change they exist to catch.
 - **No quotas** — budget is the only run gate; managed/BYOK billing is transparent
   usage-based via `providerMode` + `metering-export`. §1.3, §1.x.
 - **apex domain → URL shortener + a real external (Slack) integration.** §3.
+- **apex scope → full product: API + Slack integration + a web UI for creating/
+  managing URLs**, so the run exercises the **live-preview-deploy** surface (the
+  run-detail/review preview pane that nothing has driven yet). §3.
 - **apex operator surfaces → real API + dashboard UI (Playwright) now; HTTP MCP
   is a tracked follow-up** added to apex once built (PROJECT_BRIEF §6.6 defers MCP
   to v1; building the HTTP MCP server is its own effort, not an apex blocker). §3.
 
 **Still open (decide as we reach them):**
 
-- **`apex` scope** — API + Slack integration only (cheaper; exercises every
-  primitive except live-preview-deploy) vs. also a dashboard UI + deploy surface.
 - **Speculative-integration depth** — how many unmerged ancestors deep to
   speculatively integrate before the rework risk outweighs the velocity (a tuned
-  cap, surfaced when P2c is built).
+  cap, surfaced when P2c is built); bounded by change-percolation quality (§2c).
 - **HTTP MCP server** — when to build it (it unlocks the third apex surface and is
   a v1 product goal regardless).
 
