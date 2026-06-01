@@ -120,18 +120,34 @@ describe("allocator HTTP API", () => {
     expect(response.status).toBe(400);
   });
 
+  it("rejects an /allocate request with no orgId (de-priv: never write off-RLS)", async () => {
+    const { app, store } = buildApp();
+    const response = await postJson(app, "/allocate", {
+      runId: "run_no_org",
+      projectId: "proj",
+      runnerImage: "ghcr.io/cat-cave/tanren-runner:v0",
+      vaultRefs: [],
+    });
+    expect(response.status).toBe(400);
+    expect(store.records).toHaveLength(0);
+  });
+
   it("allocates and releases successfully", async () => {
     const { app, docker, store } = buildApp();
 
     const allocated = await postJson(app, "/allocate", {
       runId: "run_api",
       projectId: "proj",
+      orgId: "org_api",
       runnerImage: "ghcr.io/cat-cave/tanren-runner:v0",
       vaultRefs: [],
     });
     expect(allocated.status).toBe(201);
     const allocatedBody = (await allocated.json()) as { runnerId: string };
     expect(allocatedBody.runnerId).toBe("runner_run_api");
+    // De-priv: the run's org reaches the store so the `runners` row can be
+    // written under that org's RLS scope.
+    expect(store.records[0]?.orgId).toBe("org_api");
 
     const released = await postJson(app, "/release", {
       runnerId: allocatedBody.runnerId,

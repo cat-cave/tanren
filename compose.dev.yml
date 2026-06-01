@@ -200,10 +200,14 @@ services:
       context: .
       dockerfile: services/allocator/Dockerfile
     environment:
-      # RLS R3b: the allocator is a cross-org SYSTEM service (manages runners for
-      # all tenants). Migrations run as owner (MIGRATION_DATABASE_URL); its runtime
-      # pool uses the BYPASSRLS `tanren_system` role (TANREN_SYSTEM_DATABASE_URL)
-      # so its `runners` reads/writes are not filtered by per-tenant policy.
+      # RLS R3b: the allocator is partly a cross-org SYSTEM service (it reaps
+      # runners across all tenants). Migrations run as owner
+      # (MIGRATION_DATABASE_URL). It runs TWO runtime pools: the BYPASSRLS
+      # `tanren_system` role (TANREN_SYSTEM_DATABASE_URL) for cross-org sweep +
+      # release, and the RESTRICTED app-role pool (DATABASE_URL, via
+      # `runWithOrgScope`) for the per-run `runners` INSERT so that tenant row is
+      # written WITHIN RLS. In single-role dev DATABASE_URL is the owner role and
+      # both behave identically (no enforced policies).
       DATABASE_URL: postgres://tanren:tanren@postgres:5432/tanren
       MIGRATION_DATABASE_URL: postgres://tanren:tanren@postgres:5432/tanren
       TANREN_SYSTEM_DATABASE_URL: postgres://tanren_system:tanren_system@postgres:5432/tanren

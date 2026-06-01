@@ -49,6 +49,7 @@ export class SidecarHttpAllocator implements Allocator {
         runId: request.runId,
         projectId: request.projectId,
         runnerImage: request.runnerImage,
+        orgId: request.orgId,
         vaultRefs,
       }),
     });

@@ -147,6 +147,7 @@ export async function loadRunExecutionContext(
     runId: decoded.run_id,
     specId: decoded.spec_id,
     projectId: decoded.project_id,
+    orgId: decoded.org_id,
     repoUrl: decoded.repo_url,
     targetBranch: decoded.default_branch,
     runBranch: decoded.branch,

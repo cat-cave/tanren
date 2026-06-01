@@ -12,6 +12,14 @@ export interface AllocationRequest {
   runnerImage: string;
   identitySecretRef: string;
   /**
+   * The org the run belongs to. Threaded end-to-end so a backend that persists
+   * a `runners` row (a tenant table) writes it under the org's RLS scope rather
+   * than off-RLS via a BYPASSRLS role. Optional on the contract so scaffolded /
+   * benchmark / fixture constructions keep compiling, but the live worker path
+   * always supplies it and the sidecar allocator SERVICE requires it.
+   */
+  orgId?: string;
+  /**
    * Optional list of Vault references whose values the allocator must
    * materialize into the runner's `CODEX_HOME` mount before signaling that
    * the runner is ready. The allocator owns the lifetime of any files

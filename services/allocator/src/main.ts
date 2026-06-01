@@ -18,14 +18,20 @@ const sweeperIntervalMs = Number(process.env["TANREN_ALLOCATOR_SWEEPER_INTERVAL_
 async function main(): Promise<void> {
   const docker = new HttpDockerEngineClient();
   // RLS R3b: migrations run as the OWNER (MIGRATION_DATABASE_URL when set, else
-  // the runtime URL for single-role dev). The allocator is a genuinely cross-org
-  // SYSTEM service — it manages runners across ALL tenants — so its runtime pool
-  // connects via TANREN_SYSTEM_DATABASE_URL (the BYPASSRLS `tanren_system` role)
-  // when configured, so its `runners` reads/writes are not filtered by per-tenant
-  // policy. Both fall back to DATABASE_URL when their dedicated env is unset.
+  // the runtime URL for single-role dev). The allocator runs TWO runtime pools:
+  //  - the SYSTEM pool (TANREN_SYSTEM_DATABASE_URL, the BYPASSRLS `tanren_system`
+  //    role) for genuinely cross-org work — the abandoned-runner sweep/reap and
+  //    the runner_id-keyed `/release` (no org context), which must see every
+  //    tenant's `runners` rows; and
+  //  - a RESTRICTED app-role pool (DATABASE_URL) used ONLY through
+  //    `runWithOrgScope` for the per-run `runners` INSERT, so that TENANT row is
+  //    written WITHIN RLS (de-priv), not off-RLS via the system role.
+  // In single-role dev both env vars resolve to the same URL; behavior is
+  // identical because, without enforced policies, every connection reads all rows.
   await runAllocatorMigrations();
-  const pool = createDbPool(process.env["TANREN_SYSTEM_DATABASE_URL"] || process.env["DATABASE_URL"]);
-  const store = new PgRunnerStore(pool);
+  const systemPool = createDbPool(process.env["TANREN_SYSTEM_DATABASE_URL"] || process.env["DATABASE_URL"]);
+  const appPool = createDbPool(process.env["DATABASE_URL"]);
+  const store = new PgRunnerStore(systemPool, appPool);
   const secrets = new VaultSecretsClient({
     addr: process.env["VAULT_ADDR"] ?? "http://vault:8200",
     token: process.env["VAULT_TOKEN"] ?? "dev-root-token",

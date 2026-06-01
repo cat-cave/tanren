@@ -73,6 +73,7 @@ describe("AbandonedRunSweeper", () => {
     await lifecycle.allocate({
       runId: "run_a",
       projectId: "proj_a",
+      orgId: "org_test",
       runnerImage: "img",
       vaultRefs: [],
     });

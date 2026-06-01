@@ -200,11 +200,15 @@ services:
       context: .
       dockerfile: services/allocator/Dockerfile
     environment:
-      # RLS R3b: the allocator is a cross-org SYSTEM service. Migrations run as
-      # owner (MIGRATION_DATABASE_URL); its runtime pool uses the BYPASSRLS
-      # `tanren_system` role (TANREN_SYSTEM_DATABASE_URL) so its cross-tenant
-      # `runners` management is not filtered by per-tenant policy.
-      DATABASE_URL: postgres://tanren:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set for the prod profile}@postgres:5432/tanren
+      # RLS R3b: the allocator is partly a cross-org SYSTEM service (it reaps
+      # runners across all tenants) and partly a per-run tenant writer. Migrations
+      # run as owner (MIGRATION_DATABASE_URL). It runs TWO runtime pools:
+      #  - DATABASE_URL = the RESTRICTED `tanren_app` (NOBYPASSRLS) role, used ONLY
+      #    through `runWithOrgScope` for the per-run `runners` INSERT, so that
+      #    tenant row is written WITHIN RLS (de-priv); and
+      #  - TANREN_SYSTEM_DATABASE_URL = the BYPASSRLS `tanren_system` role, for the
+      #    genuinely cross-org sweep/reap + runner_id-keyed release.
+      DATABASE_URL: postgres://tanren_app:${TANREN_APP_DB_PASSWORD:?TANREN_APP_DB_PASSWORD must be set for the prod profile}@postgres:5432/tanren
       MIGRATION_DATABASE_URL: postgres://tanren:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set for the prod profile}@postgres:5432/tanren
       TANREN_SYSTEM_DATABASE_URL: postgres://tanren_system:${TANREN_SYSTEM_DB_PASSWORD:?TANREN_SYSTEM_DB_PASSWORD must be set for the prod profile}@postgres:5432/tanren
       VAULT_ADDR: http://vault:8200

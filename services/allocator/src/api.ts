@@ -14,6 +14,10 @@ const allocateSchema = z.object({
   runId: z.string().min(1),
   projectId: z.string().min(1),
   runnerImage: z.string().min(1),
+  // De-priv: the allocator SERVICE persists a tenant `runners` row, so it
+  // REQUIRES the run's org and writes the row under that org's RLS scope. A
+  // request without an org is rejected — the service can never write off-RLS.
+  orgId: z.string().min(1),
   vaultRefs: z.array(z.string().min(1)).default([]),
 });
 

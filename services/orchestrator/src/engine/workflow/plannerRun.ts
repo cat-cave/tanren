@@ -59,6 +59,12 @@ export interface PlannerRunContext {
   runId: string;
   specId: string;
   projectId: string;
+  /**
+   * The org the run belongs to (null for legacy/unscoped runs). Threaded into
+   * the allocate request so a backend that persists a `runners` row (the sidecar
+   * allocator service) writes it under the org's RLS scope.
+   */
+  orgId?: string | null;
   repoUrl: string;
   targetBranch: string;
   runBranch: string;
@@ -213,6 +219,10 @@ export async function runPlannerLoopWorkflow(input: RunPlannerLoopInput): Promis
     projectId: context.projectId,
     runnerImage: context.runnerImage,
     identitySecretRef: context.identitySecretRef,
+    // The run's org. Threaded into the allocate request so a backend that
+    // persists a `runners` row (the sidecar allocator service) writes it under
+    // the org's RLS scope. Undefined for legacy/unscoped runs (org_id NULL).
+    orgId: context.orgId ?? undefined,
   });
   await appendEvent("runner.allocated", runnerPayload(allocation));
 
