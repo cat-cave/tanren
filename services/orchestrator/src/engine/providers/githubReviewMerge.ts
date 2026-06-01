@@ -20,11 +20,15 @@ export interface GitHubReview {
 export type ReviewVerdict = "approved" | "changes_requested" | "pending";
 
 /**
- * The two GitHub review events the simulated reviewer submits. APPROVE +
- * REQUEST_CHANGES are the only verdict-bearing events; COMMENT/PENDING never
- * gate a merge, so they are intentionally not modeled here.
+ * The GitHub review events the orchestrator submits. APPROVE + REQUEST_CHANGES
+ * are the verdict-bearing events GitHub forbids on your OWN pull request (HTTP
+ * 422 "Review Can not approve your own pull request"). COMMENT is the
+ * self-PR-safe event: GitHub allows a COMMENT-event review on your own PR, so
+ * the simulated reviewer — which pushes AND reviews the PR with the same bot
+ * identity — posts its verdict as a COMMENT audit artifact and drives the
+ * approve/request_changes decision INTERNALLY off the Answerer verdict.
  */
-export type SubmitReviewEvent = "APPROVE" | "REQUEST_CHANGES";
+export type SubmitReviewEvent = "APPROVE" | "REQUEST_CHANGES" | "COMMENT";
 
 export interface ReviewVerdictResult {
   verdict: ReviewVerdict;
@@ -134,11 +138,13 @@ export class GitHubReviewMergeService {
 
   /**
    * Submit a REAL GitHub review on the PR (the simulated-reviewer write path).
-   * `POST /repos/:owner/:repo/pulls/:n/reviews` with event APPROVE or
-   * REQUEST_CHANGES and the reviewer reasoning as the body. The posted review is
-   * a genuine verdict on the PR — the same `fetchReviewVerdict` poll the `human`
-   * policy uses then sees it. A non-2xx response throws so the stage fails loudly
-   * rather than silently skipping the review.
+   * `POST /repos/:owner/:repo/pulls/:n/reviews` with the event (COMMENT for the
+   * simulated reviewer, since GitHub forbids APPROVE/REQUEST_CHANGES on your own
+   * PR) and the reviewer reasoning as the body. The posted review is a genuine,
+   * visible audit artifact on the PR; the simulated path drives the
+   * approve/request_changes verdict internally off the Answerer rather than
+   * reading it back from a review-state poll. A non-2xx response throws so the
+   * stage fails loudly rather than silently skipping the review.
    */
   async submitReview(
     input: {
