@@ -133,6 +133,7 @@ describe("RunnerLifecycle.allocate", () => {
     const result = await lifecycle.allocate({
       runId: "run_42",
       projectId: "proj_a",
+      orgId: "org_test",
       runnerImage: "ghcr.io/cat-cave/tanren-runner:v0",
       vaultRefs: [],
     });
@@ -157,6 +158,7 @@ describe("RunnerLifecycle.allocate", () => {
     await lifecycle.allocate({
       runId: "run_codex",
       projectId: "proj_a",
+      orgId: "org_test",
       runnerImage: "ghcr.io/cat-cave/tanren-runner:v0",
       vaultRefs: ["credential/codex/test"],
     });
@@ -179,6 +181,7 @@ describe("RunnerLifecycle.allocate", () => {
       lifecycle.allocate({
         runId: "run_missing",
         projectId: "proj_a",
+        orgId: "org_test",
         runnerImage: "ghcr.io/cat-cave/tanren-runner:v0",
         vaultRefs: ["credential/missing"],
       }),
@@ -194,6 +197,7 @@ describe("RunnerLifecycle.allocate", () => {
     const result = await lifecycle.allocate({
       runId: "run_slow",
       projectId: "proj_a",
+      orgId: "org_test",
       runnerImage: "ghcr.io/cat-cave/tanren-runner:v0",
       vaultRefs: [],
     });
@@ -211,6 +215,7 @@ describe("RunnerLifecycle.release", () => {
     const allocated = await lifecycle.allocate({
       runId: "run_release",
       projectId: "proj_a",
+      orgId: "org_test",
       runnerImage: "ghcr.io/cat-cave/tanren-runner:v0",
       vaultRefs: [],
     });
@@ -234,6 +239,7 @@ describe("RunnerLifecycle.release", () => {
     const allocated = await lifecycle.allocate({
       runId: "run_idemp",
       projectId: "proj_a",
+      orgId: "org_test",
       runnerImage: "ghcr.io/cat-cave/tanren-runner:v0",
       vaultRefs: [],
     });
@@ -252,6 +258,7 @@ describe("RunnerLifecycle.release", () => {
     const allocated = await lifecycle.allocate({
       runId: "run_failed",
       projectId: "proj_a",
+      orgId: "org_test",
       runnerImage: "ghcr.io/cat-cave/tanren-runner:v0",
       vaultRefs: [],
     });
@@ -274,6 +281,7 @@ describe("RunnerLifecycle.sweepAbandoned", () => {
     await lifecycle.allocate({
       runId: "run_stale",
       projectId: "proj_a",
+      orgId: "org_test",
       runnerImage: "ghcr.io/cat-cave/tanren-runner:v0",
       vaultRefs: [],
     });
@@ -299,6 +307,7 @@ describe("RunnerLifecycle.sweepAbandoned", () => {
     await lifecycle.allocate({
       runId: "run_fresh",
       projectId: "proj_a",
+      orgId: "org_test",
       runnerImage: "ghcr.io/cat-cave/tanren-runner:v0",
       vaultRefs: [],
     });
@@ -321,6 +330,7 @@ describe("RunnerLifecycle finalizer under simulated crash", () => {
     const allocated = await lifecycle.allocate({
       runId: "run_crash",
       projectId: "proj_a",
+      orgId: "org_test",
       runnerImage: "ghcr.io/cat-cave/tanren-runner:v0",
       vaultRefs: [],
     });

@@ -10,6 +10,8 @@ export interface RunnerRecord {
   runnerId: string;
   runId: string;
   projectId: string;
+  /** The org the run belongs to; the `runners` row is written under its RLS scope. */
+  orgId: string;
   containerId: string;
   workspaceVolume: string;
   codexHomeVolume: string;
@@ -34,6 +36,8 @@ export interface AllocateInput {
   projectId: string;
   runnerImage: string;
   vaultRefs: string[];
+  /** The org the run belongs to; the runner row is persisted under its RLS scope. */
+  orgId: string;
 }
 
 export interface AllocateResult {
@@ -140,6 +144,7 @@ export class RunnerLifecycle {
       runnerId,
       runId: input.runId,
       projectId: input.projectId,
+      orgId: input.orgId,
       containerId,
       workspaceVolume,
       codexHomeVolume,

@@ -67,6 +67,7 @@ describe("SidecarHttpAllocator", () => {
     const result = await allocator.allocate({
       runId: "run_1",
       projectId: "proj_a",
+      orgId: "org_1",
       runnerImage: "ghcr.io/cat-cave/tanren-runner:v0",
       identitySecretRef: "runner/identity",
       vaultRefs: ["credential/codex"],
@@ -75,9 +76,12 @@ describe("SidecarHttpAllocator", () => {
     expect(captured.url).toBe("http://allocator:3200/allocate");
     expect(captured.method).toBe("POST");
     expect(captured.headers?.authorization).toBe("Bearer supersecret");
-    const sentBody = JSON.parse(captured.body ?? "{}") as { vaultRefs: string[]; runId: string };
+    const sentBody = JSON.parse(captured.body ?? "{}") as { vaultRefs: string[]; runId: string; orgId: string };
     expect(sentBody.runId).toBe("run_1");
     expect(sentBody.vaultRefs).toEqual(["runner/identity", "credential/codex"]);
+    // De-priv: the run's org is threaded into the /allocate POST body so the
+    // service writes the `runners` row under that org's RLS scope.
+    expect(sentBody.orgId).toBe("org_1");
 
     expect(result.runnerId).toBe("runner_run_1");
     expect(result.target.host).toBe("tanren-runner-run_1");
