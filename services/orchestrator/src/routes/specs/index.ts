@@ -6,6 +6,9 @@ import { Hono } from "hono";
 import type pg from "pg";
 import { z } from "zod";
 import type { ActorContext } from "../../auth/schemas.js";
+import { pgRepositories } from "../../engine/contracts/repositories.js";
+import type { ProjectSpecRow } from "../../engine/repositories/index.js";
+import { systemActor } from "../../engine/state/actor.js";
 import {
   createQueuedRunFromSpec,
   createSpec,
@@ -53,17 +56,12 @@ export function createSpecRoutes(options: SpecRoutesOptions) {
     // RLS R2 cohort-3 (specs read): the spec-list query runs through the
     // org-scoped client so it executes inside `SET LOCAL app.current_org_id =
     // <orgId>` (org validated against the actor above). Inert in R1 — no
-    // policies read the GUC — and behavior-identical to the pool path.
+    // policies read the GUC — and behavior-identical to the pool path. The query
+    // moves behind the `projectSpecs` repository; the scope still lives here.
     const rows = await runWithOrgScope(options.pool, orgId, (client) =>
-      client.query<SpecRow>(
-        `SELECT spec_id, project_id, title, description, acceptance_criteria, depends_on, status
-           FROM specs
-          WHERE project_id = $1
-          ORDER BY title`,
-        [projectId],
-      ),
+      pgRepositories.projectSpecs.listForProject(client, projectId, systemActor),
     );
-    return c.json({ specs: rows.rows.map(toSpecContract) });
+    return c.json({ specs: rows.map((row) => toSpecContract(row)) });
   });
 
   app.post("/:orgId/projects/:projectId/specs", async (c) => {
@@ -102,15 +100,11 @@ export function createSpecRoutes(options: SpecRoutesOptions) {
       return c.json({ error: "org_access_denied" }, 403);
     }
     // RLS R2 cohort-3 (specs read): the spec-detail query runs through the
-    // org-scoped client (inert in R1; same row as the pool path).
-    const result = await runWithOrgScope(options.pool, orgId, (client) =>
-      client.query<SpecRow>(
-        `SELECT spec_id, project_id, title, description, acceptance_criteria, depends_on, status
-           FROM specs WHERE spec_id = $1`,
-        [specId],
-      ),
+    // org-scoped client (inert in R1; same row as the pool path). The query
+    // moves behind the `projectSpecs` repository; the scope still lives here.
+    const row = await runWithOrgScope(options.pool, orgId, (client) =>
+      pgRepositories.projectSpecs.get(client, specId, systemActor),
     );
-    const row = result.rows[0];
     if (row === undefined) {
       return c.json({ error: "spec_not_found" }, 404);
     }
@@ -146,17 +140,16 @@ export function createSpecRoutes(options: SpecRoutesOptions) {
     if (fragments.length === 0) {
       return c.json({ error: "invalid_spec_patch", message: "no updatable fields supplied" }, 400);
     }
-    params.push(specId);
     // RLS R2 cohort-3 (specs write): the spec PATCH runs through the org-scoped
     // client so the UPDATE executes inside `SET LOCAL app.current_org_id =
-    // <orgId>` (inert in R1; same committed row as the pool path).
+    // <orgId>` (inert in R1; same committed row as the pool path). The dynamic
+    // `SET <fragments> ... RETURNING spec_id` UPDATE moves behind the
+    // `projectSpecs` repository; the route renders the fragments/params and the
+    // store binds the spec id last, byte-identical to the inline query.
     const updated = await runWithOrgScope(options.pool, orgId, (client) =>
-      client.query(
-        `UPDATE specs SET ${fragments.join(", ")} WHERE spec_id = $${params.length} RETURNING spec_id`,
-        params,
-      ),
+      pgRepositories.projectSpecs.patch(client, specId, { fragments, params }, systemActor),
     );
-    if (updated.rowCount === 0) {
+    if (!updated) {
       return c.json({ error: "spec_not_found" }, 404);
     }
     return c.json({ specId, patched: true });
@@ -196,7 +189,7 @@ export function createSpecRoutes(options: SpecRoutesOptions) {
   return app;
 }
 
-function toSpecContract(row: SpecRow) {
+function toSpecContract(row: ProjectSpecRow) {
   return {
     specId: row.spec_id,
     projectId: row.project_id,
@@ -228,14 +221,4 @@ function requireActor(c: { var: { actor?: ActorContext } }): ActorContext {
     throw new Error("actor missing on context");
   }
   return c.var.actor;
-}
-
-interface SpecRow {
-  spec_id: string;
-  project_id: string;
-  title: string;
-  description: string;
-  acceptance_criteria: unknown;
-  depends_on: unknown;
-  status: string;
 }
