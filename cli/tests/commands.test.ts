@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -148,51 +148,6 @@ describe("cli package", () => {
     expect(sent.method).toBe("POST");
     expect(sent.path).toBe("/specs/spec_1/runs");
     expect(sent.json).toEqual({ trigger: "cli", branch: "tanren/custom" });
-  });
-
-  it("imports Codex credentials from an explicit file path", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "tanren-cli-"));
-    const authPath = join(dir, "auth.json");
-    const authJson = JSON.stringify({ tokens: { access_token: "secret-token" } });
-    const imported = { credentialKind: "codex_chatgpt_auth", ref: "credential/codex/dev", redacted: true };
-    const { importCodexCredentialCommand } = await withStub(imported);
-
-    try {
-      await writeFile(authPath, authJson, "utf8");
-      const out = await captureStdout(() =>
-        importCodexCredentialCommand(["--ref", "credential/codex/dev", "--auth-json-file", authPath]),
-      );
-      expect(out.json()).toEqual(imported);
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
-
-    const sent = server.lastRequest();
-    expect(sent.method).toBe("POST");
-    expect(sent.path).toBe("/credentials/codex/import");
-    expect(sent.json).toEqual({ ref: "credential/codex/dev", authJson });
-  });
-
-  it("imports GitHub credentials from an explicit file path", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "tanren-cli-"));
-    const tokenPath = join(dir, "github-token");
-    const imported = { credentialKind: "github_token", ref: "credential/github/dev", redacted: true };
-    const { importGithubCredentialCommand } = await withStub(imported);
-
-    try {
-      await writeFile(tokenPath, "ghp_secretToken", "utf8");
-      const out = await captureStdout(() =>
-        importGithubCredentialCommand(["--ref", "credential/github/dev", "--token-file", tokenPath]),
-      );
-      expect(out.json()).toEqual(imported);
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
-
-    const sent = server.lastRequest();
-    expect(sent.method).toBe("POST");
-    expect(sent.path).toBe("/credentials/github/import");
-    expect(sent.json).toEqual({ ref: "credential/github/dev", token: "ghp_secretToken" });
   });
 
   it("requests draft PR creation for a run", async () => {

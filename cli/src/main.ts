@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-import { readFile } from "node:fs/promises";
 import { CliLoginIncomplete, deleteAuth, login, readAuth, writeAuth } from "./auth/index.js";
 import { findProductHandler, listProductCommands } from "./commands/dispatch.js";
 import { jsonRequest, orchestratorUrl, request } from "./httpClient.js";
@@ -110,26 +109,6 @@ export async function runSpecCommand(argv: string[]) {
   console.log(JSON.stringify(run, null, 2));
 }
 
-export async function importCodexCredentialCommand(argv: string[]) {
-  const args = parseArgs(argv);
-  const authJson = await readFile(required(args, "auth-json-file"), "utf8");
-  const credential = await jsonRequest("/credentials/codex/import", {
-    ref: required(args, "ref"),
-    authJson,
-  });
-  console.log(JSON.stringify(credential, null, 2));
-}
-
-export async function importGithubCredentialCommand(argv: string[]) {
-  const args = parseArgs(argv);
-  const token = await readFile(required(args, "token-file"), "utf8");
-  const credential = await jsonRequest("/credentials/github/import", {
-    ref: required(args, "ref"),
-    token,
-  });
-  console.log(JSON.stringify(credential, null, 2));
-}
-
 export async function createDraftPrCommand(argv: string[]) {
   const args = parseArgs(argv);
   const runId = optional(args, "run-id") ?? args._[0];
@@ -165,8 +144,6 @@ Commands:
   auth status        Print stored auth metadata (never the token)
   auth logout        Remove stored CLI auth
   doctor             Check orchestrator, Postgres, and Vault connectivity
-  credential codex import --ref <ref> --auth-json-file <path>
-  credential github import --ref <ref> --token-file <path>
   project create     Create a persisted project contract
   run draft-pr       Push a runner workspace branch and open/reuse a draft PR
   run poll-ci        Poll and persist pull request CI status for a run
@@ -231,16 +208,6 @@ export async function main(argv: string[]) {
         break;
       }
       throw new Error("usage: tanren spec <create|run>");
-    case "credential":
-      if (subcommand === "codex" && rest[0] === "import") {
-        await importCodexCredentialCommand(rest.slice(1));
-        break;
-      }
-      if (subcommand === "github" && rest[0] === "import") {
-        await importGithubCredentialCommand(rest.slice(1));
-        break;
-      }
-      throw new Error("usage: tanren credential <codex|github> import");
     case "run":
       if (subcommand === "draft-pr") {
         await createDraftPrCommand(rest);
