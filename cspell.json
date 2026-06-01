@@ -23,6 +23,9 @@
     ".env.example"
   ],
   "words": [
+    "pollable",
+    "inboxed",
+    "ingestable",
     "ctid",
     "rerere",
     "Workstream",

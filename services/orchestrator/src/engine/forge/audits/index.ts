@@ -26,3 +26,5 @@ export { runAuditJob, summarizeFindings, type AuditSchedulerDeps, type RunAuditJ
 export { recommendCoverage, type AuditRecommendation } from "./recommended.js";
 
 export { createNoopPassRunner } from "./defaultPassRunner.js";
+
+export { AuditSchedulerLoop, isAuditJobDue, type AuditSchedulerLoopDeps } from "./loop.js";

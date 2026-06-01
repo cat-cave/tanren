@@ -8,6 +8,7 @@
 // mockable and nothing here couples to a provider.
 
 import { z } from "zod";
+import { SpecPriority } from "../../state/spec.js";
 
 // The connector kinds — mirror the hi-fi `INBOX_SOURCES` glyph keys. `system`
 // and `scheduled_audit` are the auto-routing system sources.
@@ -37,6 +38,24 @@ export type InboxSource = z.infer<typeof InboxSource>;
 export const TriageVerdict = z.enum(["auto_routable", "needs_call", "dedupe_close"]);
 export type TriageVerdict = z.infer<typeof TriageVerdict>;
 
+// The committable spec the model proposes for an `auto_routable` candidate — the
+// exact shape the discovery accept path (`acceptProposals`) commits into the DAG.
+// Carries the dependency edges + priority (P1b) the DagWalker orders by, so an
+// autonomously-ingested issue becomes a real, prioritized, dependency-aware spec
+// with NO operator click. Present ONLY when `verdict === "auto_routable"`; null
+// otherwise (the candidate then rests in the inbox for operator review).
+export const TriageRoutableSpec = z
+  .object({
+    title: z.string().min(1).max(200),
+    description: z.string().min(1).max(4000),
+    acceptanceCriteria: z.array(z.string().min(1)).min(1),
+    // Existing spec-ids in the live DAG this spec builds on (mirrors `dependsOn`).
+    dependsOn: z.array(z.string().min(1)).default([]),
+    priority: SpecPriority.default("tbd"),
+  })
+  .strict();
+export type TriageRoutableSpec = z.infer<typeof TriageRoutableSpec>;
+
 export const CandidateTriage = z
   .object({
     // dedupe: prose on whether this matches an existing spec/candidate.
@@ -50,6 +69,11 @@ export const CandidateTriage = z
     duplicateOfSpecId: z.string().min(1).nullable().default(null),
     // The discovery variant the accept→discovery hand-off should open with.
     discoveryVariant: z.enum(["feature", "bug", "strategic"]).default("feature"),
+    // The spec to commit into the DAG when (and only when) the verdict is
+    // `auto_routable` — the autonomous-intake hand-off (autonomy-engine.md §1d).
+    // The model fills this for an auto-routable candidate; otherwise null and the
+    // candidate lands in the inbox for operator review.
+    routableSpec: TriageRoutableSpec.nullable().default(null),
   })
   .strict();
 export type CandidateTriage = z.infer<typeof CandidateTriage>;

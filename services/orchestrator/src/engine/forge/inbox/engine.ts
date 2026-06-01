@@ -20,9 +20,16 @@
 
 import type pg from "pg";
 import type { ActorContext } from "../../../auth/schemas.js";
-import { acceptProposals, type DiscoveryInsight, type PlacementKind } from "../discovery/index.js";
+import { acceptProposals, type DiscoveryInsight, type PlacementKind, type ProposedSpec } from "../discovery/index.js";
 import { getCandidate, resolveCandidate, upsertCandidate } from "./store.js";
-import type { Candidate, CandidateTriage, InboxSource, SourceConnector, TriageAnswerer } from "./types.js";
+import type {
+  Candidate,
+  CandidateTriage,
+  InboxSource,
+  SourceConnector,
+  TriageAnswerer,
+  TriageRoutableSpec,
+} from "./types.js";
 
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
@@ -63,8 +70,15 @@ export interface IngestResult {
   candidates: Candidate[];
 }
 
-// Pull → triage → persist for a single source.
-export async function ingestSource(deps: InboxEngineDeps, source: InboxSource): Promise<IngestResult> {
+// Pull → triage → persist for a single source. When `autoRouteDeps` is wired,
+// an `auto_routable` candidate carrying a `routableSpec` is INSERTED INTO THE DAG
+// (autonomy-engine.md §1d) before it is returned — the autonomous-intake path;
+// without it the candidate rests `auto_routed`/`triaged` for the operator.
+export async function ingestSource(
+  deps: InboxEngineDeps,
+  source: InboxSource,
+  autoRouteDeps?: AutoRouteDeps,
+): Promise<IngestResult> {
   if (!source.enabled) return { candidates: [] };
   const connector = deps.connectors.get(source.kind);
   if (connector === undefined) return { candidates: [] };
@@ -91,9 +105,71 @@ export async function ingestSource(deps: InboxEngineDeps, source: InboxSource): 
     });
     // System sources whose triage is auto-routable promote straight through.
     const status = triage.verdict === "auto_routable" ? "auto_routed" : "triaged";
-    out.push(await upsertCandidate(deps.pool, source, item, triage, status));
+    let candidate = await upsertCandidate(deps.pool, source, item, triage, status);
+    // Autonomous DAG insert: when intake is autonomous and the model produced a
+    // routable spec, commit it now (no operator) and resolve the candidate.
+    if (autoRouteDeps !== undefined && status === "auto_routed" && triage.routableSpec !== null) {
+      candidate = (await autoRouteCandidate(deps, candidate, triage.routableSpec, autoRouteDeps)).candidate;
+    }
+    out.push(candidate);
   }
   return { candidates: out };
+}
+
+/**
+ * What the autonomous-intake path needs to COMMIT an auto-routable candidate's
+ * spec into the DAG without an operator (autonomy-engine.md §1d). The walker, the
+ * webhook receiver, and the poller all carry this so an `auto_routable` candidate
+ * becomes a real spec — under RLS, org-scoped — instead of waiting for a click.
+ */
+export interface AutoRouteDeps {
+  /** Resolve a system actor carrying the candidate's org so the spec write is RLS-scoped. */
+  resolveActor: (orgId: string) => ActorContext;
+}
+
+export interface AutoRouteResult {
+  candidate: Candidate;
+  specId: string;
+}
+
+/**
+ * Commit an auto-routable candidate's `routableSpec` into the DAG, reusing the
+ * SAME discovery accept path (`acceptProposals`) as the operator click — so the
+ * spec carries provenance + its dependency edges + priority (P1b), and the
+ * DagWalker picks it up on the next tick. Resolves the candidate to `accepted`.
+ */
+export async function autoRouteCandidate(
+  deps: Pick<InboxEngineDeps, "pool">,
+  candidate: Candidate,
+  routableSpec: TriageRoutableSpec,
+  autoRouteDeps: AutoRouteDeps,
+): Promise<AutoRouteResult> {
+  if (candidate.projectId === null) throw new CandidateNotPlaceableError(candidate.id);
+  const proposal: ProposedSpec = {
+    proposalId: `auto_${candidate.id}`,
+    title: routableSpec.title,
+    description: routableSpec.description,
+    acceptanceCriteria: routableSpec.acceptanceCriteria,
+    dependsOn: routableSpec.dependsOn,
+    priority: routableSpec.priority,
+    estLabel: "",
+  };
+  const { accepted } = await acceptProposals(
+    { pool: deps.pool },
+    {
+      projectId: candidate.projectId,
+      insight: insightFor(candidate),
+      proposals: [proposal],
+      // A new ingested unit of work slots onto the backlog by default; the
+      // model's `dependsOn` (carried onto the spec) determines real DAG order.
+      placementKind: "slot_after",
+      placementLabel: "auto-routed from intake",
+      actor: autoRouteDeps.resolveActor(candidate.orgId),
+    },
+  );
+  const specId = accepted[0]?.spec.specId ?? null;
+  const resolved = await resolveCandidate(deps.pool, candidate.id, "accepted", specId);
+  return { candidate: resolved ?? candidate, specId: specId ?? "" };
 }
 
 // Build a discovery insight from a candidate so the accept hand-off reuses the

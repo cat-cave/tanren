@@ -1,0 +1,61 @@
+// The worker's autonomy background loops, assembled in one place so the worker
+// boot wires them with a single dependency: the DagWalker subscriber
+// (autonomy-engine.md §1a — turns the spec DAG into self-driving execution) and
+// the autonomous-intake loops (§1d — the webhook-fallback poller + the
+// now-on-a-loop scheduled-audit scheduler). All three react to the live system
+// (the LISTEN/NOTIFY bus for the walker; per-source/cadence intervals for intake)
+// and need no operator trigger.
+
+import type pg from "pg";
+import { PgNotifyListener } from "@tanren/db";
+import type { Allocator } from "../contracts/allocator.js";
+import type { SecretStore } from "../contracts/secretStore.js";
+import type { SshSubstrate } from "../contracts/sshSubstrate.js";
+import type { GitHubHttpClient } from "../providers/github.js";
+import { startDagWalkerSubscriber } from "../dag/subscriber.js";
+import { startIntake } from "../forge/intake/bootIntake.js";
+import type { DagWalkerSubscriber } from "../dag/subscriber.js";
+import type { BootedIntake } from "../forge/intake/bootIntake.js";
+
+export interface AutonomyLoopsDeps {
+  pool: pg.Pool;
+  secrets: SecretStore;
+  allocator: Allocator;
+  ssh: SshSubstrate;
+  githubHttp: GitHubHttpClient;
+  identitySecretRef: string;
+}
+
+export interface AutonomyLoops {
+  dagWalker: DagWalkerSubscriber;
+  intake: BootedIntake;
+  /** Drain every autonomy loop (the SIGTERM path); idempotent. */
+  stop: () => Promise<void>;
+}
+
+/**
+ * Start the worker's autonomy loops. The DagWalker subscribes to the run-activity
+ * bus and self-drives the DAG; the intake loops ingest issues/signals (webhook
+ * fallback poller + audit scheduler) and auto-route into the DAG/inbox. Returns
+ * the handles so the boot's `stop()` tears them all down.
+ */
+export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<AutonomyLoops> {
+  const dagNotifyListener = new PgNotifyListener(deps.pool);
+  const dagWalker = await startDagWalkerSubscriber({ pool: deps.pool, notifyListener: dagNotifyListener });
+  console.log("[run-worker] DagWalker subscriber started (autonomous DAG execution, autonomy-engine §1a)");
+  const intake = startIntake({
+    pool: deps.pool,
+    secrets: deps.secrets,
+    allocator: deps.allocator,
+    ssh: deps.ssh,
+    githubHttp: deps.githubHttp,
+    identitySecretRef: deps.identitySecretRef,
+  });
+  console.log("[run-worker] intake poller + audit scheduler loops started (autonomy-engine §1d)");
+  const stop = async (): Promise<void> => {
+    dagWalker.stop();
+    intake.stop();
+    await dagNotifyListener.close();
+  };
+  return { dagWalker, intake, stop };
+}

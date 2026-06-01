@@ -24,6 +24,7 @@ import { createForgeAskRoutes, createForgeProposalRoutes, createForgeRoutes } fr
 import { createInboxRoutes } from "./routes/inbox/index.js";
 import { createAuditRoutes } from "./routes/audits/index.js";
 import { createGithubWebhookRoutes } from "./routes/githubWebhooks/index.js";
+import { createIssueWebhookRoutes } from "./routes/githubWebhooks/issues.js";
 import { createInsightRoutes } from "./routes/insights/index.js";
 import { createMilestoneRoutes } from "./routes/milestones/index.js";
 import { createNotificationRoutes } from "./routes/notifications/index.js";
@@ -126,6 +127,13 @@ export function mountFeatureRoutes(app: Hono<ActorContextEnv>, deps: FeatureRout
   // per-request (the webhook resolves its run's org server-side via the system
   // scope), so it keeps the bare pool.
   app.route("/", createGithubWebhookRoutes({ pool, secrets, githubHttp, githubAppMinter }));
+  // P1d autonomous intake — the GitHub issues WEBHOOK RECEIVER (autonomy-engine.md
+  // §1d). GitHub posts to `/github/webhooks/issues/:sourceId`; the receiver
+  // verifies the source's signature (mandatory), triages with the real provider
+  // answerer, and inserts an auto-routable issue into the DAG (else inbox). Like
+  // the CI receiver it resolves its tenant server-side, so it keeps the bare pool;
+  // the auto-route DAG insert runs under the resolved org's RLS scope internally.
+  app.route("/", createIssueWebhookRoutes({ pool, secrets, answererFactory: forgeAnswerers.triage }));
   app.route("/orgs", createInsightRoutes({ pool: scopedPool }));
   // P3-0014: spec discovery — the model DERIVES proposed specs + DAG placement
   // from the insight; accept → create specs with provenance.
