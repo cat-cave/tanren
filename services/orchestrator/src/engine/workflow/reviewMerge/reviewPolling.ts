@@ -8,8 +8,9 @@
 // All GitHub calls go through the P3-0003 resolver/client (App-or-static,
 // 401-retry). The poll function is injectable so tests never hit real GitHub.
 
-import { randomUUID } from "node:crypto";
+import type { RunStateWriter } from "../../contracts/runStateWriter.js";
 import type { SecretStore } from "../../contracts/secretStore.js";
+import { ensureSystemTask, routeTaskUpdate } from "../taskWriteRouting.js";
 import { resolveGithubToken } from "../../credentials/githubTokenResolver.js";
 import { type EventStore, PgEventStore } from "../../eventStore.js";
 import type { GithubAppTokenMinter } from "../../providers/githubAppTokenMinter.js";
@@ -29,6 +30,9 @@ import {
 export interface PollReviewForRunInput {
   pool: RunStateClient;
   eventStore?: EventStore;
+  // Plane-split P3c: route the review task INSERT/UPDATE through the control plane
+  // when wired (remote-writes on); absent, the in-process org-scoped write runs.
+  runStateWriter?: RunStateWriter;
   secrets: SecretStore;
   githubHttp: GitHubHttpClient;
   runId: string;
@@ -73,7 +77,7 @@ export async function pollReviewForRun(input: PollReviewForRunInput): Promise<Po
   const context = await loadReviewMergeRunContext(input.pool, input.runId, contextOptionsFor(input));
   const eventStore = input.eventStore ?? new PgEventStore(input.pool);
   const pr = parseGitHubPullRequestUrl(context.prUrl);
-  const taskId = await ensureReviewTask(input.pool, context);
+  const taskId = await ensureReviewTask(input.pool, context, input.runStateWriter);
   await eventStore.append({
     runId: context.runId,
     specId: context.specId,
@@ -127,7 +131,7 @@ export async function pollReviewForRun(input: PollReviewForRunInput): Promise<Po
       prUrl: context.prUrl,
       prNumber: pr.pullNumber,
     };
-    await finalizeReviewTask(input.pool, eventStore, context, autoResult);
+    await finalizeReviewTask(input.pool, eventStore, context, autoResult, input.runStateWriter);
     return autoResult;
   }
 
@@ -160,7 +164,7 @@ export async function pollReviewForRun(input: PollReviewForRunInput): Promise<Po
     reviewer: last.latest?.reviewer,
     feedback: last.latest?.body,
   };
-  await finalizeReviewTask(input.pool, eventStore, context, result);
+  await finalizeReviewTask(input.pool, eventStore, context, result, input.runStateWriter);
   return result;
 }
 
@@ -169,6 +173,7 @@ async function finalizeReviewTask(
   eventStore: EventStore,
   context: ReviewMergeRunContext,
   result: PollReviewForRunResult,
+  writer?: RunStateWriter,
 ): Promise<void> {
   const base = {
     runId: context.runId,
@@ -177,9 +182,7 @@ async function finalizeReviewTask(
     taskId: result.taskId,
   };
   if (result.verdict === "approved") {
-    await pool.query("UPDATE tasks SET status = 'done', outcome = 'ok', ended_at = now() WHERE task_id = $1", [
-      result.taskId,
-    ]);
+    await markTaskDoneOk(pool, result.taskId, writer);
     await eventStore.append({
       ...base,
       eventType: "review.approved",
@@ -197,9 +200,7 @@ async function finalizeReviewTask(
     // the writer-rework path. Record the verdict event with the reviewer's body
     // as the steering message, and leave the task closed as ok (the rework
     // re-enters the loop, which opens its own writer tasks).
-    await pool.query("UPDATE tasks SET status = 'done', outcome = 'ok', ended_at = now() WHERE task_id = $1", [
-      result.taskId,
-    ]);
+    await markTaskDoneOk(pool, result.taskId, writer);
     await eventStore.append({
       ...base,
       eventType: "review.changes_requested",
@@ -219,9 +220,24 @@ async function finalizeReviewTask(
   }
   // Pending after the budget: leave the task running (the operator hand-off and
   // the dashboard surface drive it from here).
-  await pool.query("UPDATE tasks SET status = 'running', outcome = 'pending', ended_at = NULL WHERE task_id = $1", [
-    result.taskId,
-  ]);
+  await routeTaskUpdate(
+    writer,
+    pool,
+    { taskId: result.taskId, transition: "running_pending" },
+    "UPDATE tasks SET status = 'running', outcome = 'pending', ended_at = NULL WHERE task_id = $1",
+    [result.taskId],
+  );
+}
+
+/** The `task done/ok` write, routed remote when wired (review approved + changes-requested). */
+async function markTaskDoneOk(pool: RunStateClient, taskId: string, writer?: RunStateWriter): Promise<void> {
+  await routeTaskUpdate(
+    writer,
+    pool,
+    { taskId, transition: "done", outcome: "ok" },
+    "UPDATE tasks SET status = 'done', outcome = 'ok', ended_at = now() WHERE task_id = $1",
+    [taskId],
+  );
 }
 
 async function buildGitHubProbe(
@@ -255,24 +271,10 @@ async function buildGitHubProbe(
   };
 }
 
-async function ensureReviewTask(pool: RunStateClient, context: ReviewMergeRunContext): Promise<string> {
-  const existing = await pool.query(
-    "SELECT task_id FROM tasks WHERE run_id = $1 AND kind = 'review' ORDER BY started_at DESC NULLS LAST, task_id ASC LIMIT 1",
-    [context.runId],
-  );
-  const existingTask = existing.rows[0] as { task_id: string } | undefined;
-  if (existingTask !== undefined) {
-    await pool.query(
-      "UPDATE tasks SET status = 'running', started_at = COALESCE(started_at, now()), ended_at = NULL WHERE task_id = $1",
-      [existingTask.task_id],
-    );
-    return existingTask.task_id;
-  }
-  const taskId = `task_${randomUUID()}`;
-  await pool.query(
-    `INSERT INTO tasks (task_id, run_id, org_id, kind, title, status, started_at, agent_kind, cli, model, attempt)
-     VALUES ($1, $2, (SELECT org_id FROM runs WHERE run_id = $2), 'review', 'Poll pull request review', 'running', now(), 'system', 'github', NULL, 1)`,
-    [taskId, context.runId],
-  );
-  return taskId;
+async function ensureReviewTask(
+  pool: RunStateClient,
+  context: ReviewMergeRunContext,
+  writer?: RunStateWriter,
+): Promise<string> {
+  return ensureSystemTask(pool, { runId: context.runId, kind: "review", title: "Poll pull request review" }, writer);
 }

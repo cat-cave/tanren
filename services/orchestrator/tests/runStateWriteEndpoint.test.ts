@@ -43,7 +43,18 @@ function post(
 describe("plane-split P3 — write endpoint authn + validation (no DB)", () => {
   it("rejects an untrusted peer with 401 before any DB work, on every write endpoint", async () => {
     const app = createInternalRunStateWriteRoutes({ pool: THROWING_POOL, verifier: new DenyAllPeerVerifier() });
-    for (const path of ["/internal/append-event", "/internal/record-cost", "/internal/finalize-run"]) {
+    for (const path of [
+      "/internal/append-event",
+      "/internal/record-cost",
+      "/internal/finalize-run",
+      // Plane-split P3c lifecycle endpoints — same authn-before-DB contract.
+      "/internal/set-run-status",
+      "/internal/set-run-pr-url",
+      "/internal/set-spec-status",
+      "/internal/supersede-queued-planner-task",
+      "/internal/insert-task",
+      "/internal/update-task",
+    ]) {
       const response = await post(app, path, { anything: true });
       expect(response.status).toBe(401);
       expect(await response.json()).toEqual({ error: "untrusted_peer" });
@@ -54,6 +65,13 @@ describe("plane-split P3 — write endpoint authn + validation (no DB)", () => {
     const app = createInternalRunStateWriteRoutes({ pool: THROWING_POOL, verifier: new AllowAllPeerVerifier() });
     // Missing orgId/status/outcome/fromStatuses → schema rejects pre-DB.
     const response = await post(app, "/internal/finalize-run", { runId: "run_1" });
+    expect(response.status).toBe(400);
+  });
+
+  it("rejects a malformed P3c lifecycle request with 400 before any DB work", async () => {
+    const app = createInternalRunStateWriteRoutes({ pool: THROWING_POOL, verifier: new AllowAllPeerVerifier() });
+    // Missing status/setStartedAt etc. → schema rejects pre-DB (THROWING_POOL untouched).
+    const response = await post(app, "/internal/set-run-status", { runId: "run_1" });
     expect(response.status).toBe(400);
   });
 });

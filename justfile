@@ -331,11 +331,20 @@ smoke-plane-split-p3:
 # Plane-split P3b (real PG): the DE-PRIVILEGE proof. Migrates a fresh DB (creates
 # the `tanren_dataplane` role + drops its events/cost_records write grants), then
 # proves under that role: a direct INSERT INTO events / cost_records is REJECTED
-# for the privilege (42501), the cost_records READ is kept, the run/task writes
-# the workflow still drives are kept, and the control-plane `tanren_app` role can
-# still insert the same event (contrast). DATABASE_URL is the owner.
+# for the privilege (42501), the cost_records READ is kept, the `job_queue` system
+# write is kept, and the control-plane `tanren_app` role can still insert the same
+# event (contrast). DATABASE_URL is the owner.
 smoke-plane-split-p3b:
   DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/planeSplitP3bDeprivilege.integration.test.ts
+
+# Plane-split P3c (real PG): the run/spec/task LIFECYCLE de-privilege proof.
+# Migrates a fresh DB (0035 drops the data plane's runs/specs/tasks WRITE grants),
+# then proves under `tanren_dataplane`: a direct UPDATE runs / UPDATE specs /
+# INSERT|UPDATE tasks is REJECTED for the privilege (42501), the SELECT on all
+# three is kept, and the control-plane `tanren_app` role CAN run the same writes
+# (so the lifecycle still works through the control plane). DATABASE_URL is owner.
+smoke-plane-split-p3c:
+  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/planeSplitP3cDeprivilege.integration.test.ts
 
 # Plane-split P3b cross-process CUTOVER proof. The compose `worker` now DEFAULTS
 # to the de-privileged `tanren_dataplane` role + remote-writes ON, so the regular
@@ -348,7 +357,7 @@ smoke-plane-split-worker-remote-writes: gen-mtls-certs
   TANREN_RUNNER_AUTHORIZED_KEY="$(cat /tmp/tanren_runner_key.pub)" TANREN_RUNNER_IDENTITY_PRIVATE_KEY="$(cat /tmp/tanren_runner_key)" docker compose -f compose.dev.yml up -d --no-deps --force-recreate worker
   TANREN_PLANE_SPLIT_PROVE_DEPRIVILEGE=1 DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" corepack pnpm exec tsx scripts/smoke/plane-split-worker.ts
 
-smoke: compose-build compose-up wait-for-stack smoke-connectivity smoke-ssh-integration smoke-plane-split-worker smoke-plane-split-worker-remote-writes smoke-plane-split-p3 smoke-plane-split-p3b smoke-rls-r1 smoke-rls-r2 smoke-rls-r2-cohort2 smoke-rls-r2-cohort3 smoke-rls-r2-cohort4 smoke-rls-r3a smoke-rls-r3a-worker smoke-rls-r3b smoke-rls-early-finalize smoke-rls-org-bootstrap smoke-rls-operator-flow smoke-rls-http-route-scoping smoke-rls-run-lifecycle smoke-rls-allocator
+smoke: compose-build compose-up wait-for-stack smoke-connectivity smoke-ssh-integration smoke-plane-split-worker smoke-plane-split-worker-remote-writes smoke-plane-split-p3 smoke-plane-split-p3b smoke-plane-split-p3c smoke-rls-r1 smoke-rls-r2 smoke-rls-r2-cohort2 smoke-rls-r2-cohort3 smoke-rls-r2-cohort4 smoke-rls-r3a smoke-rls-r3a-worker smoke-rls-r3b smoke-rls-early-finalize smoke-rls-org-bootstrap smoke-rls-operator-flow smoke-rls-http-route-scoping smoke-rls-run-lifecycle smoke-rls-allocator
 
 # P3-0001: the Phase 2A direct-execution acceptance gate (`just acceptance`,
 # scripts/acceptance/easy.ts + medium.ts) was removed once the run executor

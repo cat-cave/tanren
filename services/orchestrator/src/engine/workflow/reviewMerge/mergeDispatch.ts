@@ -14,9 +14,10 @@
 // conflict-resolver attaches to. Required checks are never bypassed: a
 // branch-protected PR returns 405 and is reported as not-merged, not forced.
 
-import { randomUUID } from "node:crypto";
 import type { MergeIntegration } from "../../config/shared.js";
+import type { RunStateWriter } from "../../contracts/runStateWriter.js";
 import type { SecretStore } from "../../contracts/secretStore.js";
+import { ensureSystemTask, routeTaskUpdate } from "../taskWriteRouting.js";
 import { resolveGithubToken } from "../../credentials/githubTokenResolver.js";
 import { type EventStore, PgEventStore } from "../../eventStore.js";
 import type { GithubAppTokenMinter } from "../../providers/githubAppTokenMinter.js";
@@ -62,6 +63,9 @@ export interface MergeForRunResult {
 export interface MergeForRunInput {
   pool: RunStateClient;
   eventStore?: EventStore;
+  // Plane-split P3c: route the merge task INSERT/UPDATE through the control plane
+  // when wired (remote-writes on); absent, the in-process org-scoped write runs.
+  runStateWriter?: RunStateWriter;
   secrets: SecretStore;
   githubHttp: GitHubHttpClient;
   runId: string;
@@ -126,7 +130,7 @@ export async function mergeForRun(input: MergeForRunInput): Promise<MergeForRunR
   const eventStore = input.eventStore ?? new PgEventStore(input.pool);
   const pr = parseGitHubPullRequestUrl(context.prUrl);
   const integration = dispatchedIntegrationFor(context.mergeIntegration);
-  const taskId = await ensureMergeTask(input.pool, context);
+  const taskId = await ensureMergeTask(input.pool, context, input.runStateWriter);
   await eventStore.append({
     runId: context.runId,
     specId: context.specId,
@@ -346,11 +350,15 @@ class MergeDispatcher {
     },
   ): Promise<void> {
     const { input, taskId, eventStore, integration } = this.deps;
+    const writer = input.runStateWriter;
     if (state.taskStatus === "done") {
-      await input.pool.query("UPDATE tasks SET status = 'done', outcome = $2, ended_at = now() WHERE task_id = $1", [
-        taskId,
-        "ok",
-      ]);
+      await routeTaskUpdate(
+        writer,
+        input.pool,
+        { taskId, transition: "done", outcome: "ok" },
+        "UPDATE tasks SET status = 'done', outcome = $2, ended_at = now() WHERE task_id = $1",
+        [taskId, "ok"],
+      );
       await eventStore.append({
         ...this.base(),
         eventType: "task.completed",
@@ -359,18 +367,25 @@ class MergeDispatcher {
       return;
     }
     if (state.taskStatus === "failed") {
-      await input.pool.query(
+      const failureKind = state.failureKind ?? "merge_failed";
+      await routeTaskUpdate(
+        writer,
+        input.pool,
+        { taskId, transition: "failed_with_kind", failureKind },
         "UPDATE tasks SET status = 'failed', outcome = 'failed', failure_kind = $2, ended_at = now() WHERE task_id = $1",
-        [taskId, state.failureKind ?? "merge_failed"],
+        [taskId, failureKind],
       );
       await eventStore.append({
         ...this.base(),
         eventType: "task.failed",
-        payload: { taskKind: "merge", failureKind: state.failureKind ?? "merge_failed" },
+        payload: { taskKind: "merge", failureKind },
       });
       return;
     }
-    await input.pool.query(
+    await routeTaskUpdate(
+      writer,
+      input.pool,
+      { taskId, transition: "running_pending" },
       "UPDATE tasks SET status = 'running', outcome = 'pending', ended_at = NULL WHERE task_id = $1",
       [taskId],
     );
@@ -459,24 +474,10 @@ function buildContributorProbe(
   };
 }
 
-async function ensureMergeTask(pool: RunStateClient, context: ReviewMergeRunContext): Promise<string> {
-  const existing = await pool.query(
-    "SELECT task_id FROM tasks WHERE run_id = $1 AND kind = 'merge' ORDER BY started_at DESC NULLS LAST, task_id ASC LIMIT 1",
-    [context.runId],
-  );
-  const existingTask = existing.rows[0] as { task_id: string } | undefined;
-  if (existingTask !== undefined) {
-    await pool.query(
-      "UPDATE tasks SET status = 'running', started_at = COALESCE(started_at, now()), ended_at = NULL WHERE task_id = $1",
-      [existingTask.task_id],
-    );
-    return existingTask.task_id;
-  }
-  const taskId = `task_${randomUUID()}`;
-  await pool.query(
-    `INSERT INTO tasks (task_id, run_id, org_id, kind, title, status, started_at, agent_kind, cli, model, attempt)
-     VALUES ($1, $2, (SELECT org_id FROM runs WHERE run_id = $2), 'merge', 'Merge pull request', 'running', now(), 'system', 'github', NULL, 1)`,
-    [taskId, context.runId],
-  );
-  return taskId;
+async function ensureMergeTask(
+  pool: RunStateClient,
+  context: ReviewMergeRunContext,
+  writer?: RunStateWriter,
+): Promise<string> {
+  return ensureSystemTask(pool, { runId: context.runId, kind: "merge", title: "Merge pull request" }, writer);
 }

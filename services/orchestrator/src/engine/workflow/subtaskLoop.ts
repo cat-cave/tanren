@@ -21,6 +21,7 @@ import type { EscapeHatches } from "../config/shared.js";
 import type { CostRecorder } from "../costs/index.js";
 import type { EventName, EventPayload } from "../events/index.js";
 import type { EventStore } from "../eventStore.js";
+import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { AnswererAdapter, WriterAdapter, WriterResult } from "../providers/types.js";
 import type { UsageProbe } from "../usage/index.js";
 import type { GateOutcome } from "./gate/index.js";
@@ -59,6 +60,10 @@ export interface SubtaskLoopCostHooks {
 export interface SubtaskLoopInput {
   pool: LoopQueryClient;
   eventStore: EventStore;
+  // Plane-split P3c: the lifecycle writer. When present (remote-writes on), the
+  // loop's `tasks` INSERT/UPDATE route through the control plane; absent, the
+  // in-process org-scoped writes run as before.
+  runStateWriter?: RunStateWriter;
   recorder: CostRecorder;
   adapters: SubtaskLoopAdapters;
   context: PlannerSpecContext & {
@@ -163,7 +168,7 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
     return outcome;
   };
 
-  await insertPlannerTask(input.pool, input.context.runId, plannerTaskId, input.adapters.planner);
+  await insertPlannerTask(input.pool, input.context.runId, plannerTaskId, input.adapters.planner, input.runStateWriter);
   await appendEvent("task.started", { taskKind: "plan" }, plannerTaskId);
   await appendEvent("planner.started", { taskKind: "plan" }, plannerTaskId);
 
@@ -173,7 +178,7 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
   while (true) {
     const windowOutcome = await checkWindowPreflight(input, appendEvent, plannerTaskId, plannerRerunCount, creditState);
     if (windowOutcome !== null) {
-      await markTaskDone(input.pool, plannerTaskId, "window_exhausted");
+      await markTaskDone(input.pool, plannerTaskId, "window_exhausted", input.runStateWriter);
       return await finalize(windowOutcome);
     }
     const plan = await runPlannerStage({
@@ -252,6 +257,7 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
 
     const audit = await runAuditorStage({
       pool: input.pool,
+      writer: input.runStateWriter,
       costCtx,
       adapter: input.adapters.auditor,
       runId: input.context.runId,
@@ -267,7 +273,7 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
       buildUsage: input.costHooks?.buildAuditorUsage,
     });
     if (audit.decision.kind === "pass") {
-      await markTaskDone(input.pool, plannerTaskId, "passed");
+      await markTaskDone(input.pool, plannerTaskId, "passed", input.runStateWriter);
       return await finalize({
         kind: "passed",
         plannerTaskId,
@@ -276,7 +282,7 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
       });
     }
     if (audit.decision.action === "halt") {
-      await markTaskDone(input.pool, plannerTaskId, "rejected_by_auditor");
+      await markTaskDone(input.pool, plannerTaskId, "rejected_by_auditor", input.runStateWriter);
       return await finalize({ kind: "halted", plannerRerunCount, reason: audit.decision.reason });
     }
     const auditorRejection: PlannerRejectionFeedback = {
@@ -321,6 +327,7 @@ async function runSubtaskSequence(args: {
     const writeTaskId = `task_${randomUUID()}`;
     const writerResult = await runWriterStage({
       pool: input.pool,
+      writer: input.runStateWriter,
       costCtx,
       adapter: input.adapters.writer,
       runId: input.context.runId,
@@ -348,6 +355,7 @@ async function runSubtaskSequence(args: {
     const checkerTaskId = `task_${randomUUID()}`;
     const decision = await runCheckerStage({
       pool: input.pool,
+      writer: input.runStateWriter,
       costCtx,
       adapter: input.adapters.checker,
       runId: input.context.runId,

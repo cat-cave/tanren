@@ -96,12 +96,16 @@ export class ReviewMergePool {
       };
     }
     if (sql.includes("FROM tasks") && sql.includes("LIMIT 1")) {
-      const kind = sql.includes("kind = 'review'") ? "review" : "merge";
+      // Plane-split P3c: the ensure-system-task SELECT now binds kind as a
+      // parameter (`kind = $2`), so read it from params rather than the SQL literal.
+      const kind = String(params[1]);
       const task = this.tasks.find((t) => t.run_id === params[0] && t.kind === kind);
       return { rows: task === undefined ? [] : [task], rowCount: task === undefined ? 0 : 1 };
     }
     if (sql.startsWith("INSERT INTO tasks")) {
-      const kind = String(sql.includes("'review'") ? "review" : "merge");
+      // Plane-split P3c: the ensure-system-task INSERT now binds kind/title as
+      // parameters (`$3, $4`); read kind from params[2] rather than the SQL literal.
+      const kind = String(params[2]);
       this.tasks.push({ task_id: params[0], run_id: params[1], kind, status: "running" });
       return { rows: [], rowCount: 1 };
     }
