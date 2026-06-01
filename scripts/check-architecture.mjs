@@ -18,9 +18,9 @@ const patterns = [
   "justfile",
 ];
 const ignoredDirs = new Set(["node_modules", "dist", "coverage", ".git"]);
-// Long-running narrative/roadmap docs that gain sections as the plan evolves; the 500-line cap does not fit them.
-const lineMaxExclusions = new Set(["PROJECT_BRIEF.md", "pnpm-lock.yaml", "docs/roadmap/R-WAVES.md"]);
-lineMaxExclusions.add("docs/roadmap/autonomy-engine.md");
+// Long-running narrative/roadmap docs (gain sections as the plan evolves); the 500-line cap does not fit them.
+const roadmapDocs = ["PROJECT_BRIEF.md", "docs/roadmap/R-WAVES.md", "docs/roadmap/autonomy-engine.md"];
+const lineMaxExclusions = new Set([...roadmapDocs, "pnpm-lock.yaml"]);
 const invariantDocExclusions = new Set(["PROJECT_BRIEF.md", "docs/contracts/architecture-checks.md"]);
 // Plane-split P3b: these files deliberately attempt (or document) a RAW event insert by
 // the de-privileged data-plane role to PROVE Postgres REJECTS it — exempt from single-event-writer.
