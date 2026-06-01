@@ -9,8 +9,11 @@
 // `cloneHeadSha` is threaded onward so the PR-branch cleanup can replay the
 // writer commits onto it (dropping the bootstrap commit) before the push.
 import type { SshTarget } from "../contracts/allocator.js";
+import { resolveGithubToken } from "../credentials/githubTokenResolver.js";
+import { githubHttpsRemote, parseGitHubRepository } from "../providers/github.js";
 import { quoteSshShellArg } from "../ssh/command.js";
 import { bootstrapWorkspace, commitBootstrapState, runWorkspaceSshCommand } from "../workspace/index.js";
+import { gitAuthedCommand, gitTokenAuthPrelude } from "../workspace/githubPush.js";
 import { resolveBootstrapCommand } from "./gate/index.js";
 import type { BootstrapStepInput, CommitBootstrapStepInput, RunPlannerLoopInput } from "./plannerRun.js";
 
@@ -68,19 +71,79 @@ export async function prepareRunWorkspace(
 // LAST in the chain and is the only stdout-producing step, so the returned
 // stdout is the clone HEAD sha. Returns "" only on a fake SSH that yields no
 // output; the real runner always returns a 40-hex sha.
+//
+// When a GitHub token is threaded (`input.githubToken`) the clone authenticates
+// over HTTPS as `x-access-token:<token>` so a PRIVATE target repo can be cloned.
+// The token is fed to the command over SSH stdin via the shared git credential
+// helper (the same mechanism `githubPush.ts` uses) — it never appears in the
+// command string, the process args, or any emitted `workspace.*` event. Without
+// a token the clone runs unauthenticated against the repo URL as-is (public-repo
+// path), unchanged.
 async function cloneWorkspace(input: RunPlannerLoopInput, target: SshTarget, workspacePath: string): Promise<string> {
+  const token = await resolveCloneToken(input);
   const result = await runWorkspaceSshCommand(input.ssh, target, {
     label: "prepare planner-loop workspace",
     timeoutMs: input.timeoutMs,
-    command: [
-      "set -eu",
-      `rm -rf ${quoteSshShellArg(workspacePath)}`,
-      `git clone --depth 1 --branch ${quoteSshShellArg(input.context.targetBranch)} ${quoteSshShellArg(input.context.repoUrl)} ${quoteSshShellArg(workspacePath)}`,
-      `cd ${quoteSshShellArg(workspacePath)}`,
-      "git config user.name 'Tanren Planner'",
-      "git config user.email 'planner@tanren.invalid'",
-      "git rev-parse HEAD",
-    ].join(" && "),
+    command: buildCloneCommand(input.context.repoUrl, input.context.targetBranch, token, workspacePath),
+    ...(token === undefined ? {} : { stdin: token }),
   });
   return result.stdout.trim();
+}
+
+// Resolves the run's GitHub token for the clone via the SAME seam push uses: a
+// caller-injected `githubToken` (test seam) wins; otherwise the resolver mints
+// an App installation token when one is wired, else reads the static
+// `github_token` at the run's resolved credential ref. When no credential ref is
+// configured the clone must still run for the public-repo path, so we return
+// undefined (unauthenticated clone) instead of throwing; a missing secret at a
+// CONFIGURED ref still propagates so a misconfigured private run fails loudly.
+// The token is only returned (fed to the clone over stdin) — never logged.
+async function resolveCloneToken(input: RunPlannerLoopInput): Promise<string | undefined> {
+  if (input.githubToken !== undefined) {
+    return input.githubToken;
+  }
+  const staticRef = input.context.githubCredentialRef;
+  if (staticRef.trim() === "") {
+    return undefined;
+  }
+  const resolved = await resolveGithubToken({ secrets: input.secrets, staticRef });
+  return resolved.token;
+}
+
+function buildCloneCommand(
+  repoUrl: string,
+  targetBranch: string,
+  token: string | undefined,
+  workspacePath: string,
+): string {
+  const branch = quoteSshShellArg(targetBranch);
+  const dest = quoteSshShellArg(workspacePath);
+  const post = [
+    `cd ${dest}`,
+    "git config user.name 'Tanren Planner'",
+    "git config user.email 'planner@tanren.invalid'",
+    "git rev-parse HEAD",
+  ];
+
+  // No token → plain unauthenticated clone of the repo URL as configured.
+  if (token === undefined) {
+    return [
+      "set -eu",
+      `rm -rf ${dest}`,
+      `git clone --depth 1 --branch ${branch} ${quoteSshShellArg(repoUrl)} ${dest}`,
+      ...post,
+    ].join(" && ");
+  }
+
+  // Token present → authenticate over HTTPS via the stdin-fed credential helper
+  // (token never on the command line). Normalize the repo URL to the HTTPS
+  // remote the helper authenticates against.
+  const remote = quoteSshShellArg(githubHttpsRemote(parseGitHubRepository(repoUrl)));
+  return [
+    "set -eu",
+    ...gitTokenAuthPrelude(),
+    `rm -rf ${dest}`,
+    gitAuthedCommand(["clone", "--depth", "1", "--branch", branch, remote, dest]),
+    ...post,
+  ].join(" && ");
 }

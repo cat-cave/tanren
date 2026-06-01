@@ -17,7 +17,7 @@
 import type pg from "pg";
 import type { CiWhen } from "../ci/index.js";
 import type { EscapeHatches, RoutingTable } from "../config/shared.js";
-import type { Allocator, RunnerAllocation, SshTarget } from "../contracts/allocator.js";
+import type { Allocator, SshTarget } from "../contracts/allocator.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { SshSubstrate } from "../contracts/sshSubstrate.js";
@@ -46,6 +46,7 @@ import {
   finalizeNonPass,
   finalizeWorkflowError,
   markRunRunning,
+  runnerPayload,
   runOutcomeFor,
   setSpecStatus,
 } from "./plannerRunFinalize.js";
@@ -140,6 +141,8 @@ export interface RunPlannerLoopInput {
   >;
   timeoutMs: number;
   workspacePath?: string;
+  // Test seam: a pre-resolved GitHub clone token. Production omits it (prepareRunWorkspace resolves it from secrets + context.githubCredentialRef).
+  githubToken?: string;
   maxCiPolls?: number;
   ciPollDelayMs?: number;
   sleep?: (ms: number) => Promise<void>;
@@ -259,12 +262,12 @@ export async function runPlannerLoopWorkflow(input: RunPlannerLoopInput): Promis
 
   try {
     // Clone + bootstrap-install + commit-the-bootstrap-state in one stage. The
-    // bootstrap commit's sha is the writer's diff base (so the checker/auditor
-    // and captured diff see only the writer's changes); the clone HEAD is kept so
-    // the PR-branch cleanup can drop the bootstrap commit before the push.
-    // P3-0006: deps are installed before the writer loop so gating sees a built
-    // tree. baseSha is threaded so replanned already-done work isn't
-    // false-rejected as an empty per-iteration delta.
+    // bootstrap commit's sha is the writer's diff base (so the checker/auditor and
+    // captured diff see only the writer's changes); the clone HEAD is kept so the
+    // PR-branch cleanup can drop the bootstrap commit before the push. P3-0006: deps
+    // install before the writer loop so gating sees a built tree; baseSha is threaded
+    // so replanned done work isn't false-rejected as an empty delta. The clone
+    // authenticates with the run's GitHub token (same seam as push) for PRIVATE repos.
     const { cloneHeadSha, bootstrapSha, baseSha } = await prepareRunWorkspace(input, allocation.target, workspacePath);
     await appendEvent("workspace.prepared", {
       workspacePath,
@@ -484,17 +487,4 @@ async function pollCiUntilTerminal(input: RunPlannerLoopInput): Promise<PollCiFo
     }
   }
   throw new Error(`planner-loop CI did not finish after ${maxPolls} polls: ${last?.reason ?? "not_polled"}`);
-}
-
-function runnerPayload(allocation: RunnerAllocation) {
-  return {
-    runnerId: allocation.runnerId,
-    imageSha: allocation.imageSha,
-    target: {
-      host: allocation.target.host,
-      port: allocation.target.port,
-      username: allocation.target.username,
-      hostKeyFingerprint: allocation.target.hostKeyFingerprint,
-    },
-  };
 }
