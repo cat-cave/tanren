@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "reasoning": {
+      "description": "Reviewer rationale posted as the GitHub review body: cite each acceptance criterion and state whether the diff satisfies it, and call out any blocking concerns when requesting changes.",
+      "minLength": 1,
+      "type": "string"
+    },
+    "verdict": {
+      "description": "The review verdict: 'approve' when the PR diff fulfils the spec intent and every acceptance criterion; 'request_changes' when any criterion is unmet or the diff is incorrect/incomplete.",
+      "enum": [
+        "approve",
+        "request_changes"
+      ],
+      "type": "string"
+    }
+  },
+  "required": [
+    "verdict",
+    "reasoning"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.review_answer.v1"
+}

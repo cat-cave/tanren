@@ -25,13 +25,20 @@ import { CostRecorder } from "../costs/index.js";
 import { codexHomeForRun } from "../credentials/codexMaterializer.js";
 import { type EventName, type EventPayload } from "../events/index.js";
 import { type EventStore, PgEventStore } from "../eventStore.js";
+import type { ReviewAnswer } from "../answerers/schemas/index.js";
 import type { GitHubHttpClient } from "../providers/github.js";
+import type { AnswererAdapter } from "../providers/types.js";
 import type { UsageProbe } from "../usage/index.js";
 import { workspaceRepoPathForRun } from "../workspace/index.js";
 import { prepareCleanPrBranch } from "../workspace/githubPush.js";
 import { pollCiForRun, type PollCiForRunResult } from "./ciPolling.js";
 import type { GateOutcome } from "./gate/index.js";
-import { buildDefaultGate, defaultRoutingAdapters, defaultUsageProbe } from "./plannerRunAdapters.js";
+import {
+  buildDefaultGate,
+  defaultRoutingAdapters,
+  defaultUsageProbe,
+  simulatedReviewSeam,
+} from "./plannerRunAdapters.js";
 import { prepareRunWorkspace } from "./plannerRunWorkspace.js";
 import {
   buildFinalizeRunState,
@@ -162,6 +169,10 @@ export interface RunPlannerLoopInput {
   // Test seams. Omitted in production → real Codex adapters + SSH usage probe.
   buildAdapters?: (ctx: PlannerRunAdapterContext) => SubtaskLoopAdapters;
   buildUsageProbe?: (ctx: PlannerRunAdapterContext) => UsageProbe | undefined;
+  // reviewPolicy: "simulated" seam. Omitted in production → the reviewer
+  // Answerer is resolved from the project routing (audit chain head; Codex by
+  // default). Only invoked when the project's reviewPolicy is "simulated".
+  buildSimulatedReviewer?: (ctx: PlannerRunAdapterContext) => AnswererAdapter<ReviewAnswer>;
   // P3-0008 review→merge tail seams. Omitted in production → the real GitHub
   // review/merge stages drive through the P3-0003 resolver. Tests inject mocks
   // so unit runs never hit GitHub.
@@ -370,6 +381,9 @@ export async function runPlannerLoopWorkflow(input: RunPlannerLoopInput): Promis
         pollDelayMs: input.ciPollDelayMs,
         sleep: input.sleep,
         reviewProbe: input.reviewProbe,
+        // reviewPolicy: "simulated": the lazy reviewer-Answerer factory + the
+        // spec it judges. Used ONLY on the simulated branch (see reviewPolling).
+        ...simulatedReviewSeam(input, adapterCtx),
       });
 
       if (review.verdict === "approved") {

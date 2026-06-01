@@ -10,8 +10,9 @@ import { CHECK_ANSWER_SCHEMA_ID, CheckAnswer } from "./check.js";
 import { DEMO_ANSWER_SCHEMA_ID, DemoAnswer } from "./demo.js";
 import { FORGE_ANSWER_SCHEMA_ID, ForgeAnswer } from "./forge.js";
 import { PLAN_ANSWER_SCHEMA_ID, PlanAnswer } from "./plan.js";
+import { REVIEW_ANSWER_SCHEMA_ID, ReviewAnswer } from "./review.js";
 
-export type AnswererRole = "plan" | "check" | "audit" | "demo" | "forge";
+export type AnswererRole = "plan" | "check" | "audit" | "demo" | "forge" | "review";
 
 export interface AnswererSchemaDescriptor {
   readonly role: AnswererRole;
@@ -55,5 +56,11 @@ export const answererSchemaCatalog: Readonly<Record<AnswererRole, AnswererSchema
     schemaId: FORGE_ANSWER_SCHEMA_ID,
     generatedFile: "forge.json",
     zod: ForgeAnswer,
+  },
+  review: {
+    role: "review",
+    schemaId: REVIEW_ANSWER_SCHEMA_ID,
+    generatedFile: "review.json",
+    zod: ReviewAnswer,
   },
 } as const;

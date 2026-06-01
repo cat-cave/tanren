@@ -1,4 +1,4 @@
-import type { AuditAnswer, CheckAnswer, DemoAnswer, PlanAnswer } from "../answerers/schemas/index.js";
+import type { AuditAnswer, CheckAnswer, DemoAnswer, PlanAnswer, ReviewAnswer } from "../answerers/schemas/index.js";
 import type { RoutingChainEntry, RoutingTable } from "../config/shared.js";
 import type { SshTarget } from "../contracts/allocator.js";
 import type { SecretStore } from "../contracts/secretStore.js";
@@ -186,6 +186,19 @@ function chainHead(routing: RoutingTable, role: "plan" | "write" | "check" | "au
     throw new EmptyRoutingChainError(role);
   }
   return head;
+}
+
+// Resolves the simulated reviewer's Answerer (reviewPolicy: "simulated"). There
+// is no dedicated `review` routing chain — the reviewer is a final-verdict judge
+// over the PR diff + acceptance criteria, the same shape the `audit` role plays,
+// so it reuses the `audit` chain head (Codex by default, or whatever the audit
+// chain names). This keeps the simulated reviewer selectable with NO schema or
+// DB migration: it rides the existing per-role routing DATA.
+export function buildSimulatedReviewerAdapter(
+  deps: AdapterSelectorDependencies,
+  routing: RoutingTable,
+): AnswererAdapter<ReviewAnswer> {
+  return buildAnswererAdapter<ReviewAnswer>(deps, chainHead(routing, "audit"), "review");
 }
 
 // P3-0011: resolves the project's `demo` routing chain into an Answerer that
