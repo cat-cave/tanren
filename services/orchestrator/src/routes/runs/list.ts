@@ -4,6 +4,8 @@
 
 import type pg from "pg";
 import type { ActorContext } from "../../auth/schemas.js";
+import { CostStore, EventStore, RunStore, SpecStore, TaskStore } from "../../engine/repositories/index.js";
+import { systemActor } from "../../engine/state/actor.js";
 import { isEventName } from "../../engine/events/index.js";
 import { loadInsightsForProject } from "../../engine/insights/index.js";
 import { redactEventPayload } from "../../engine/redaction/index.js";
@@ -54,10 +56,6 @@ function decodeRunSummary(raw: RawRunRow): RunSummary {
   });
 }
 
-const SELECT_RUN_COLUMNS = `
-  run_id, spec_id, project_id, trigger, branch, status, outcome, pr_url, started_at, ended_at
-`;
-
 // --- Run summary + tasks ---------------------------------------------------
 // orgId is a defense-in-depth tenant predicate: the loaders filter by the
 // actor's resolved org (validated route-side via actorCanAccessOrg) so a
@@ -67,26 +65,13 @@ export async function fetchRunSummary(
   runId: string,
   orgId: string,
 ): Promise<RunSummary | undefined> {
-  const q = `SELECT ${SELECT_RUN_COLUMNS} FROM runs WHERE run_id = $1 AND org_id = $2`;
-  const result = await pool.query<RawRunRow>(q, [runId, orgId]);
-  return result.rows[0] === undefined ? undefined : decodeRunSummary(result.rows[0]);
+  const row = await RunStore.selectSummary(pool, runId, orgId, systemActor);
+  return row === undefined ? undefined : decodeRunSummary(row as RawRunRow);
 }
 
 export async function fetchRunTasks(pool: QueryClient, runId: string, orgId: string): Promise<TaskTimelineEntry[]> {
-  const result = await pool.query<Record<string, unknown>>(
-    `SELECT task_id, run_id, kind, title, parent_task_id, status, outcome, failure_kind,
-            attempt, cli, model, started_at, ended_at
-       FROM tasks
-      WHERE run_id = $1 AND org_id = $2
-      ORDER BY CASE kind
-                 WHEN 'plan' THEN 1 WHEN 'write' THEN 2 WHEN 'check' THEN 3
-                 WHEN 'audit' THEN 4 WHEN 'ci' THEN 5 ELSE 99
-               END,
-               started_at ASC NULLS FIRST,
-               task_id ASC`,
-    [runId, orgId],
-  );
-  return result.rows.map((row) =>
+  const rows = await TaskStore.selectTimeline(pool, runId, orgId, systemActor);
+  return rows.map((row) =>
     TaskTimelineEntry.parse({
       taskId: String(row["task_id"]),
       runId: String(row["run_id"]),
@@ -109,11 +94,7 @@ export async function fetchRunTasks(pool: QueryClient, runId: string, orgId: str
 
 // --- Spec summary (with milestone + behaviors) -----------------------------
 export async function fetchRunSpecSummary(pool: QueryClient, specId: string): Promise<RunSpecSummary | undefined> {
-  const specResult = await pool.query<{ spec_id: string; title: string; description: string }>(
-    "SELECT spec_id, title, description FROM specs WHERE spec_id = $1",
-    [specId],
-  );
-  const spec = specResult.rows[0];
+  const spec = await SpecStore.selectSummaryHeader(pool, specId, systemActor);
   if (spec === undefined) return undefined;
   const behaviorIds = await fetchBehaviorIds(pool, specId);
   const milestoneId = await fetchSpecMilestone(pool, specId);
@@ -130,11 +111,7 @@ async function fetchBehaviorIds(pool: QueryClient, specId: string): Promise<stri
   // spec_behaviors table arrived with P2A-0018; older deployments without
   // the table degrade to an empty list rather than 500ing.
   try {
-    const result = await pool.query<{ behavior_id: string }>(
-      "SELECT behavior_id FROM spec_behaviors WHERE spec_id = $1 ORDER BY behavior_id",
-      [specId],
-    );
-    return result.rows.map((row) => row.behavior_id);
+    return await SpecStore.selectBehaviorIds(pool, specId, systemActor);
   } catch {
     return [];
   }
@@ -142,11 +119,7 @@ async function fetchBehaviorIds(pool: QueryClient, specId: string): Promise<stri
 
 async function fetchSpecMilestone(pool: QueryClient, specId: string): Promise<string | null> {
   try {
-    const result = await pool.query<{ milestone_id: string }>(
-      "SELECT milestone_id FROM spec_milestones WHERE spec_id = $1 LIMIT 1",
-      [specId],
-    );
-    return result.rows[0]?.milestone_id ?? null;
+    return await SpecStore.selectMilestoneId(pool, specId, systemActor);
   } catch {
     return null;
   }
@@ -207,19 +180,12 @@ interface SnapshotEventsArgs {
 
 export async function fetchRunEventsForSnapshot(pool: QueryClient, args: SnapshotEventsArgs): Promise<RunEventRow[]> {
   // Most recent N events rendered chronologically; org_id filters by tenant.
-  const result = await pool.query<EventQueryRow>(
-    `SELECT id, ts, run_id, task_id, spec_id, project_id, event_type, payload
-       FROM (
-         SELECT id, ts, run_id, task_id, spec_id, project_id, event_type, payload
-           FROM events
-          WHERE run_id = $1 AND org_id = $3
-          ORDER BY ts DESC, id DESC
-          LIMIT $2
-       ) recent
-      ORDER BY ts ASC, id ASC`,
-    [args.runId, args.limit, args.orgId],
+  const rows = await EventStore.selectRecentForRun(
+    pool,
+    { runId: args.runId, orgId: args.orgId, limit: args.limit },
+    systemActor,
   );
-  return applyEventRedaction(result.rows, args.actor, args.rawView);
+  return applyEventRedaction(rows, args.actor, args.rawView);
 }
 
 interface EventsPageArgs {
@@ -237,25 +203,15 @@ export async function fetchEventsPage(
 ): Promise<{ items: RunEventRow[]; nextCursor: string | null }> {
   const limit = parsePageSize(args.pageSize);
   const cursor = args.cursor === undefined || args.cursor === "" ? undefined : decodeCursor(args.cursor);
-  const params: unknown[] = [args.runId, args.orgId];
-  let cursorClause = "";
-  if (cursor !== undefined) {
-    params.push(cursor.ts, cursor.id);
-    cursorClause = ` AND (ts, id) > ($${params.length - 1}::timestamptz, $${params.length}::bigint)`;
-  }
-  params.push(limit + 1);
-  const result = await pool.query<EventQueryRow>(
-    `SELECT id, ts, run_id, task_id, spec_id, project_id, event_type, payload
-       FROM events
-      WHERE run_id = $1 AND org_id = $2${cursorClause}
-      ORDER BY ts ASC, id ASC
-      LIMIT $${params.length}`,
-    params,
+  const fetched = await EventStore.selectPageForRun(
+    pool,
+    { runId: args.runId, orgId: args.orgId, cursor, limit },
+    systemActor,
   );
-  const rows = result.rows.slice(0, limit);
+  const rows = fetched.slice(0, limit);
   const items = applyEventRedaction(rows, args.actor, args.rawView);
   const nextCursor =
-    result.rows.length > limit
+    fetched.length > limit
       ? encodeCursor({
           ts: rows.at(-1)?.ts as Date,
           id: rows.at(-1)?.id as number,
@@ -282,27 +238,17 @@ export async function fetchFeedPage(
   // Newest-first feed; cursor goes backwards in time, encoding the (ts, id) of
   // the oldest item shown. org_id is a defense-in-depth tenant predicate.
   const cursor = args.cursor === undefined || args.cursor === "" ? undefined : decodeCursor(args.cursor);
-  const params: unknown[] = [args.projectId, args.orgId];
-  let cursorClause = "";
-  if (cursor !== undefined) {
-    params.push(cursor.ts, cursor.id);
-    cursorClause = ` AND (ts, id) < ($${params.length - 1}::timestamptz, $${params.length}::bigint)`;
-  }
-  params.push(limit + 1);
-  const result = await pool.query<EventQueryRow>(
-    `SELECT id, ts, run_id, task_id, spec_id, project_id, event_type, payload
-       FROM events
-      WHERE project_id = $1 AND org_id = $2 AND run_id IS NOT NULL${cursorClause}
-      ORDER BY ts DESC, id DESC
-      LIMIT $${params.length}`,
-    params,
+  const fetched = await EventStore.selectFeedPageForProject(
+    pool,
+    { projectId: args.projectId, orgId: args.orgId, cursor, limit },
+    systemActor,
   );
-  const rows = result.rows.slice(0, limit);
+  const rows = fetched.slice(0, limit);
   const redacted = applyEventRedaction(rows, args.actor, args.rawView);
   // ProjectFeedItem narrows runId to non-null; we already filter at SQL.
   const items = redacted.map((row) => ProjectFeedItem.parse({ ...row, runId: row.runId ?? "" }));
   const nextCursor =
-    result.rows.length > limit
+    fetched.length > limit
       ? encodeCursor({
           ts: rows.at(-1)?.ts as Date,
           id: rows.at(-1)?.id as number,
@@ -344,16 +290,8 @@ export async function fetchRunCostsForSnapshot(
   runId: string,
   orgId: string,
 ): Promise<RunCostRecord[]> {
-  const result = await pool.query<CostQueryRow>(
-    `SELECT id, task_id, run_id, project_id, cli, provider, model,
-            input_tokens, cached_input_tokens, cache_creation_tokens, output_tokens, reasoning_output_tokens, total_tokens,
-            cost_usd, billing_mode, cost_basis, recorded_at
-       FROM cost_records
-      WHERE run_id = $1 AND org_id = $2
-      ORDER BY recorded_at ASC, id ASC`,
-    [runId, orgId],
-  );
-  return result.rows.map(decodeCostRow);
+  const rows = await CostStore.selectForRun(pool, { runId, orgId }, systemActor);
+  return rows.map((row) => decodeCostRow(row));
 }
 
 interface CostsPageArgs {
@@ -372,27 +310,15 @@ export async function fetchCostsPage(
 ): Promise<{ items: RunCostRecord[]; nextCursor: string | null }> {
   const limit = parsePageSize(args.pageSize);
   const cursor = args.cursor === undefined || args.cursor === "" ? undefined : decodeCursor(args.cursor);
-  const params: unknown[] = [args.runId, args.orgId];
-  let cursorClause = "";
-  if (cursor !== undefined) {
-    params.push(cursor.ts, cursor.id);
-    cursorClause = ` AND (recorded_at, id) > ($${params.length - 1}::timestamptz, $${params.length}::bigint)`;
-  }
-  params.push(limit + 1);
-  const result = await pool.query<CostQueryRow>(
-    `SELECT id, task_id, run_id, project_id, cli, provider, model,
-            input_tokens, cached_input_tokens, cache_creation_tokens, output_tokens, reasoning_output_tokens, total_tokens,
-            cost_usd, billing_mode, cost_basis, recorded_at
-       FROM cost_records
-      WHERE run_id = $1 AND org_id = $2${cursorClause}
-      ORDER BY recorded_at ASC, id ASC
-      LIMIT $${params.length}`,
-    params,
+  const fetched = await CostStore.selectPageForRun(
+    pool,
+    { runId: args.runId, orgId: args.orgId, cursor, limit },
+    systemActor,
   );
-  const rows = result.rows.slice(0, limit);
+  const rows = fetched.slice(0, limit);
   const items = rows.map((row) => decodeCostRow(row));
   const nextCursor =
-    result.rows.length > limit
+    fetched.length > limit
       ? encodeCursor({
           ts: rows.at(-1)?.["recorded_at"] as Date,
           id: rows.at(-1)?.["id"] as number,
@@ -437,38 +363,13 @@ interface RunListArgs {
   specId: string | undefined;
 }
 
-interface RawRunListRow extends RawRunRow {
-  spec_title: string | null;
-  cost_total_usd: string | null;
-  last_event_at: Date | null;
-}
-
 export async function fetchRunListItems(pool: QueryClient, args: RunListArgs): Promise<RunListItem[]> {
-  const params: unknown[] = [args.projectId, args.orgId];
-  const clauses: string[] = ["r.project_id = $1", "r.org_id = $2"];
-  if (args.status !== undefined && args.status !== "") {
-    params.push(args.status);
-    clauses.push(`r.status = $${params.length}`);
-  }
-  if (args.specId !== undefined && args.specId !== "") {
-    params.push(args.specId);
-    clauses.push(`r.spec_id = $${params.length}`);
-  }
-  const where = clauses.join(" AND ");
-  const result = await pool.query<RawRunListRow>(
-    `SELECT r.run_id, r.spec_id, r.project_id, r.trigger, r.branch, r.status, r.outcome,
-            r.pr_url, r.started_at, r.ended_at,
-            s.title AS spec_title,
-            (SELECT COALESCE(SUM(cost_usd::numeric), 0)::text
-               FROM cost_records WHERE cost_records.run_id = r.run_id) AS cost_total_usd,
-            (SELECT MAX(ts) FROM events WHERE events.run_id = r.run_id) AS last_event_at
-       FROM runs r
-       LEFT JOIN specs s ON s.spec_id = r.spec_id
-      WHERE ${where}
-      ORDER BY r.started_at DESC, r.run_id ASC`,
-    params,
+  const rows = await RunStore.selectListForProject(
+    pool,
+    { projectId: args.projectId, orgId: args.orgId, status: args.status, specId: args.specId },
+    systemActor,
   );
-  return result.rows.map((row) => {
+  return rows.map((row) => {
     const summary = decodeRunSummary(row);
     const needsReview = summary.prUrl !== null && needsReviewFromOutcome(summary.outcome);
     return RunListItem.parse({

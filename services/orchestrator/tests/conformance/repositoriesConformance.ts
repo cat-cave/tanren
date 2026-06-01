@@ -14,127 +14,16 @@
 // drives this with an in-memory `pg` query target; under real RLS the same
 // contract holds because the org-scoped client carries `app.current_org_id`.
 import { describe, expect, it } from "vitest";
-import type { ActorContext } from "../../src/auth/schemas.js";
-import type { Repositories, QueryClient } from "../../src/engine/contracts/repositories.js";
 import { systemActor } from "../../src/engine/state/actor.js";
-
-export interface SeedProject {
-  projectId: string;
-  name: string;
-  repoUrl: string;
-  defaultBranch: string;
-  runnerImage: string;
-  allocator: string;
-  config: unknown;
-  orgId: string | null;
-}
-
-export interface SeedSpec {
-  specId: string;
-  projectId: string;
-  title: string;
-  description: string;
-  acceptanceCriteria: string[];
-  dependsOn: string[];
-  status: string;
-  orgId: string | null;
-}
-
-export interface SeedPersona {
-  id: string;
-  scope: "org" | "project";
-  orgId: string;
-  projectId: string | null;
-  name: string;
-  description: string;
-}
-
-export interface SeedBehavior {
-  id: string;
-  personaId: string;
-  title: string;
-  given: string;
-  when: string;
-  then: string;
-  description: string | null;
-}
-
-export interface SeedMilestone {
-  id: string;
-  projectId: string;
-  label: string;
-  name: string;
-  orderIndex: number;
-  status: "planned" | "in_flight" | "done" | "abandoned";
-  orgId: string | null;
-}
-
-export interface SeedSpecDependency {
-  fromSpecId: string;
-  toSpecId: string;
-}
-
-export interface SeedData {
-  projects: SeedProject[];
-  specs?: SeedSpec[];
-  personas?: SeedPersona[];
-  behaviors?: SeedBehavior[];
-  milestones?: SeedMilestone[];
-  specDependencies?: SeedSpecDependency[];
-}
-
-export interface RepositoriesConformanceHarness {
-  repositories: Repositories;
-  /** Seed the backing store with projects (and optionally other entities) first. */
-  seed(data: SeedData): Promise<void> | void;
-  /**
-   * A client scoped to `orgId`. Reads through it must see ONLY that org's rows
-   * (and writes ride this client) — the RLS row-visibility contract the seam
-   * carries through from the org-scoped transaction.
-   */
-  clientForOrg(orgId: string): QueryClient;
-}
-
-const ORG_A = "org_a";
-const ORG_B = "org_b";
-
-// A platform-admin actor: the product-entity stores self-authorize via the
-// actor's org/project scoping, so the conformance suite uses an admin so the
-// store's authorization gate never masks the RLS row-visibility assertion we are
-// actually testing (off-scope client → zero rows).
-const adminActor: ActorContext = {
-  userId: "user_admin",
-  orgId: null,
-  projectId: null,
-  scopes: ["platform:admin"],
-  source: "local_dev",
-};
-
-function projectA(): SeedProject {
-  return {
-    projectId: "project_a",
-    name: "A",
-    repoUrl: "https://example.com/a.git",
-    defaultBranch: "main",
-    runnerImage: "img",
-    allocator: "local",
-    config: { version: 1 },
-    orgId: ORG_A,
-  };
-}
-
-function specA(): SeedSpec {
-  return {
-    specId: "spec_a",
-    projectId: "project_a",
-    title: "Spec A",
-    description: "desc",
-    acceptanceCriteria: ["does the thing"],
-    dependsOn: [],
-    status: "draft",
-    orgId: ORG_A,
-  };
-}
+import {
+  adminActor,
+  ORG_A,
+  ORG_B,
+  projectA,
+  type RepositoriesConformanceHarness,
+  specA,
+} from "./conformanceFixtures.js";
+import { describeRunReadConformance } from "./runReadConformance.js";
 
 export function describeRepositoriesConformance(
   label: string,
@@ -343,4 +232,9 @@ export function describeRepositoriesConformance(
       expect(off).toHaveLength(0);
     });
   });
+
+  // The run-detail / run-list / event / cost read projections (routes/runs
+  // loaders) live in a sibling suite to keep each file under the line cap; they
+  // share the same harness + fixtures.
+  describeRunReadConformance(label, makeHarness);
 }

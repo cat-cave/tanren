@@ -20,6 +20,9 @@ import { RunStore } from "../repositories/runs.js";
 import { SpecStore } from "../repositories/specs.js";
 import { ProjectSpecStore } from "../repositories/projectSpecs.js";
 import { TaskStore } from "../repositories/tasks.js";
+// The run-detail event/cost read stores ride in via the repositories barrel so
+// the contract keeps its module-dependency budget (one import for both stores).
+import { CostStore, EventStore } from "../repositories/index.js";
 import { JobStore } from "../repositories/jobs.js";
 import { ActorStore } from "../repositories/actors.js";
 import { PersonaStore } from "../entities/personas.js";
@@ -44,6 +47,10 @@ export interface Repositories {
   readonly projectSpecs: typeof ProjectSpecStore;
   readonly projects: typeof ProjectStore;
   readonly tasks: typeof TaskStore;
+  /** Run-detail event-feed reads (recent snapshot, paginated events, project feed). */
+  readonly events: typeof EventStore;
+  /** Run-detail cost-record reads (per-run snapshot + paginated costs). */
+  readonly costs: typeof CostStore;
   readonly jobs: typeof JobStore;
   readonly actors: typeof ActorStore;
   // Product entities (engine/entities). Their methods take an HTTP `ActorContext`
@@ -66,6 +73,8 @@ export const pgRepositories: Repositories = {
   projectSpecs: ProjectSpecStore,
   projects: ProjectStore,
   tasks: TaskStore,
+  events: EventStore,
+  costs: CostStore,
   jobs: JobStore,
   actors: ActorStore,
   personas: PersonaStore,
