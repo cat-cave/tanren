@@ -41,7 +41,7 @@ export function createProjectRoutes(options: ProjectRoutesOptions) {
       return c.json({ error: "org_access_denied" }, 403);
     }
     const rows = await ProjectStore.listForOrg(options.pool, orgId, systemActor);
-    return c.json({ projects: rows.map(toProjectContract) });
+    return c.json({ projects: rows.map((row) => toProjectContract(row)) });
   });
 
   app.post("/:orgId/projects", async (c) => {
