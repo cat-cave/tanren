@@ -19,6 +19,8 @@ import {
   loadOrgDefaultGithubCredentialRef,
   loadOrgGithubAppInstallation,
 } from "../../engine/credentials/orgGithubApp.js";
+import { ProjectStore } from "../../engine/repositories/index.js";
+import { systemActor } from "../../engine/state/actor.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg } from "../orgs/index.js";
 
@@ -66,14 +68,11 @@ export function createBrownfieldRoutes(options: BrownfieldRoutesOptions) {
       return c.json({ error: "invalid_brownfield_link", issues: parsed.error.issues }, 400);
     }
 
-    const projectRow = await options.pool.query<{ org_id: string | null }>(
-      "SELECT org_id FROM projects WHERE project_id = $1",
-      [projectId],
-    );
-    if (projectRow.rowCount === 0) {
+    const ownership = await ProjectStore.getOwnership(options.pool, projectId, systemActor);
+    if (ownership === undefined) {
       return c.json({ error: "project_not_found" }, 404);
     }
-    if (projectRow.rows[0]?.org_id !== null && projectRow.rows[0]?.org_id !== orgId) {
+    if (ownership.orgId !== null && ownership.orgId !== orgId) {
       return c.json({ error: "project_access_denied" }, 403);
     }
 
@@ -121,10 +120,7 @@ export function createBrownfieldRoutes(options: BrownfieldRoutesOptions) {
       detected.push(await readRepoFile(options.githubHttp, repo, path, resolved));
     }
 
-    await options.pool.query(`UPDATE projects SET repo_url = $1 WHERE project_id = $2`, [
-      parsed.data.repoUrl,
-      projectId,
-    ]);
+    await ProjectStore.updateRepoUrl(options.pool, projectId, parsed.data.repoUrl, systemActor);
 
     return c.json({
       projectId,
