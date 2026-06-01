@@ -52,7 +52,10 @@ class ScopedClient {
   ) {}
 
   // eslint-disable-next-line @typescript-eslint/require-await
-  async query(sql: string, params: readonly unknown[] = []): Promise<QueryResult> {
+  async query(rawSql: string, params: readonly unknown[] = []): Promise<QueryResult> {
+    // The repository emits multi-line SQL; collapse whitespace so the shape
+    // matchers below are agnostic to formatting/indentation.
+    const sql = rawSql.replace(/\s+/gu, " ").trim();
     const visible = (): ProjectRecord[] => this.db.projects.filter((p) => p.org_id === this.orgId);
 
     if (/UPDATE projects SET config/u.test(sql)) {
