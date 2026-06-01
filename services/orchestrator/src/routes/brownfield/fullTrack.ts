@@ -51,6 +51,8 @@ import type { IngestedItem } from "../../engine/forge/inbox/types.js";
 import type { GitHubHttpClient } from "../../engine/providers/github.js";
 import { parseGitHubRepository } from "../../engine/providers/github.js";
 import type { GithubAppTokenMinter } from "../../engine/providers/githubAppTokenMinter.js";
+import { ProjectStore } from "../../engine/repositories/index.js";
+import { systemActor } from "../../engine/state/actor.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg } from "../orgs/index.js";
 
