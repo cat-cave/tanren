@@ -74,6 +74,11 @@ class ScopedClient {
         ? { rows: [], rowCount: 0 }
         : { rows: [{ org_id: row.org_id, default_branch: row.default_branch }], rowCount: 1 };
     }
+    if (/SELECT org_id FROM projects/u.test(sql)) {
+      const [projectId] = params as [string];
+      const row = visible().find((p) => p.project_id === projectId);
+      return row === undefined ? { rows: [], rowCount: 0 } : { rows: [{ org_id: row.org_id }], rowCount: 1 };
+    }
     if (/SELECT config FROM projects/u.test(sql)) {
       const [projectId] = params as [string];
       const row = visible().find((p) => p.project_id === projectId);

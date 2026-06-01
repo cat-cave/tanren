@@ -76,7 +76,14 @@ export function describeRepositoriesConformance(
       expect(row).toBeUndefined();
     });
 
-    it("reports project ownership for the tenant gate", async () => {
+    it("reports project org id for the tenant gate", async () => {
+      const h = await makeHarness();
+      await h.seed({ projects: [projectA()] });
+      const orgId = await h.repositories.projects.getOrgId(h.clientForOrg(ORG_A), "project_a", systemActor);
+      expect(orgId).toBe(ORG_A);
+    });
+
+    it("reports project ownership (org id + default branch) for the full-track gate", async () => {
       const h = await makeHarness();
       await h.seed({ projects: [projectA()] });
       const ownership = await h.repositories.projects.getOwnership(h.clientForOrg(ORG_A), "project_a", systemActor);
@@ -117,15 +124,11 @@ export function describeRepositoriesConformance(
       // filters org A's rows out.
       const offScope = await h.repositories.projects.listForOrg(h.clientForOrg(ORG_B), ORG_A, systemActor);
       expect(offScope).toHaveLength(0);
-      // The single-row get + ownership gate are scoped the same way.
+      // The single-row get + org-id gate are scoped the same way.
       const offGet = await h.repositories.projects.get(h.clientForOrg(ORG_B), "project_a", systemActor);
       expect(offGet).toBeUndefined();
-      const offOwnership = await h.repositories.projects.getOwnership(
-        h.clientForOrg(ORG_B),
-        "project_a",
-        systemActor,
-      );
-      expect(offOwnership).toBeUndefined();
+      const offOrgId = await h.repositories.projects.getOrgId(h.clientForOrg(ORG_B), "project_a", systemActor);
+      expect(offOrgId).toBeUndefined();
     });
   });
 }

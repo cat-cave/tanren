@@ -68,11 +68,11 @@ export function createBrownfieldRoutes(options: BrownfieldRoutesOptions) {
       return c.json({ error: "invalid_brownfield_link", issues: parsed.error.issues }, 400);
     }
 
-    const ownership = await ProjectStore.getOwnership(options.pool, projectId, systemActor);
-    if (ownership === undefined) {
+    const projectOrgId = await ProjectStore.getOrgId(options.pool, projectId, systemActor);
+    if (projectOrgId === undefined) {
       return c.json({ error: "project_not_found" }, 404);
     }
-    if (ownership.orgId !== null && ownership.orgId !== orgId) {
+    if (projectOrgId !== null && projectOrgId !== orgId) {
       return c.json({ error: "project_access_denied" }, 403);
     }
 
