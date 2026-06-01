@@ -7,11 +7,12 @@
 // can never drift. See docs/roadmap/saas-rls-and-plane-split-plan.md (P1).
 
 import { readFile } from "node:fs/promises";
-import { createDbPool } from "@tanren/db";
+import { createDbPool, PgNotifyListener } from "@tanren/db";
 import type pg from "pg";
 import { buildAllocatorFromEnv } from "../allocators/index.js";
 import { resolveWorkerConcurrency } from "../config/index.js";
 import { buildSecretStore, type SecretStore } from "../contracts/index.js";
+import { startDagWalkerSubscriber, type DagWalkerSubscriber } from "../dag/subscriber.js";
 import { TimedGitHubHttpClient, TimedSshSubstrate } from "../observability/index.js";
 import { FetchGitHubHttpClient } from "../providers/github.js";
 import { Ssh2Substrate } from "../ssh/index.js";
@@ -28,7 +29,15 @@ export interface BootedRunWorker {
   /** The runtime (`tanren_app`) pool the worker claims + writes through. */
   pool: pg.Pool;
   secrets: SecretStore;
-  /** Drain the worker + reaper (the SIGTERM path); used by tests/owned shutdown. */
+  /**
+   * The DagWalker subscriber (autonomy-engine.md §1a): the per-project background
+   * scheduler that turns the spec DAG into self-driving execution. It listens on
+   * the SAME run-activity bus the worker writes to and enqueues ready specs
+   * through createQueuedRunFromSpec — the worker then runs them. Co-located with
+   * the worker boot because it shares the runtime pool + drives the same executor.
+   */
+  dagWalker: DagWalkerSubscriber;
+  /** Drain the worker + reaper + DAG subscriber (the SIGTERM path). */
   stop: () => Promise<void>;
 }
 
@@ -91,10 +100,22 @@ export async function bootRunWorker(): Promise<BootedRunWorker> {
     ...(claimClient === undefined ? {} : { claimClient }),
     ...(runStateWriter === undefined ? {} : { runStateWriter }),
   });
+  // Autonomy engine §1a: start the per-project DagWalker as a long-lived
+  // subscriber on the SAME LISTEN/NOTIFY run-activity bus the worker writes to. On
+  // startup + on every terminal-run / merge.completed notification it loads the
+  // spec DAG under RLS, computes the ready set (deps all done), and enqueues up to
+  // the governed concurrency headroom of ready specs via createQueuedRunFromSpec —
+  // which THIS worker then executes. The driver becomes autonomous; no operator
+  // triggers each spec.
+  const dagNotifyListener = new PgNotifyListener(pool);
+  const dagWalker = await startDagWalkerSubscriber({ pool, notifyListener: dagNotifyListener });
+  console.log("[run-worker] DagWalker subscriber started (autonomous DAG execution, autonomy-engine §1a)");
   const stop = async (): Promise<void> => {
+    dagWalker.stop();
+    await dagNotifyListener.close();
     await Promise.all([worker.stop(), reaper.stop()]);
   };
-  return { worker, reaper, pool, secrets, stop };
+  return { worker, reaper, pool, secrets, dagWalker, stop };
 }
 
 /**

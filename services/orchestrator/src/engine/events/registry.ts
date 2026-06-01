@@ -92,6 +92,7 @@ import {
 } from "./schemas/recovery.js";
 import { RedactionRawAccessPayload } from "./schemas/redaction.js";
 import { BenchmarkAcceptFailedPayload, BenchmarkAcceptPassedPayload } from "./schemas/benchmark.js";
+import { DagBudgetPausedPayload, DagDrainedPayload, DagSpecEnqueuedPayload } from "./schemas/dag.js";
 
 // The EventRegistry is the single source of truth mapping event names to
 // their typed Zod payload schemas. Adding a new event name requires:
@@ -239,6 +240,14 @@ export const EventRegistry = {
   // the equivalence oracle the config under test never saw.
   "benchmark.accept.passed": BenchmarkAcceptPassedPayload,
   "benchmark.accept.failed": BenchmarkAcceptFailedPayload,
+
+  // DagWalker (autonomy-engine.md §1a): the per-project background scheduler's
+  // autonomous decisions — a spec auto-enqueued, the DAG drained, or a pause for
+  // lack of governed concurrency headroom. Milestones are labels, not gates, so
+  // there is no milestone-boundary event.
+  "dag.spec.enqueued": DagSpecEnqueuedPayload,
+  "dag.drained": DagDrainedPayload,
+  "dag.budget.paused": DagBudgetPausedPayload,
 } as const satisfies Record<string, z.ZodTypeAny>;
 
 export type EventRegistry = typeof EventRegistry;
