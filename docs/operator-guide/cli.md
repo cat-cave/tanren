@@ -104,20 +104,19 @@ tanren credentials get    --org-id <orgId> --ref <ref>
 tanren credentials delete --org-id <orgId> --ref <ref>
 ```
 
-Supported `--kind` values: `opaque` (default), `github_token`,
-`codex_chatgpt_auth`. For `github_token`/`codex_chatgpt_auth`, `--value` is
-the raw token / auth JSON. For `opaque`, `--value` is whatever string the
-operator wants stored.
+Supported `--kind` values via this CLI command: `opaque` (default),
+`github_token`, `codex_chatgpt_auth`. For `github_token`/`codex_chatgpt_auth`,
+`--value` is the raw token / auth JSON; for `opaque`, `--value` is whatever
+string the operator wants stored. (The underlying `POST /orgs/:orgId/credentials`
+route also accepts `claude_cli_auth`, `opencode_cli_auth`, and `github_app`.)
 
-The Phase 1 import commands continue to work:
-
-```sh
-tanren credential codex import  --ref <ref> --auth-json-file <path>
-tanren credential github import --ref <ref> --token-file <path>
-```
-
-These are equivalent to `tanren credentials create --kind <…>` and also
-register the ref in the credential registry so it appears in `credentials list`.
+The **org-scoped surface above is the only credential import path**, and the
+credential registry is **durable** (Vault-backed) — an imported credential
+survives an orchestrator restart and appears in `credentials list`. The legacy
+top-level import routes (`POST /credentials/codex/import`,
+`/credentials/github/import`) have been **removed**; any old
+`tanren credential codex import` / `tanren credential github import` invocation
+now fails. Use `tanren credentials create` instead.
 
 ## Benchmark experiments
 
