@@ -12,18 +12,30 @@ credentials.**
 2. **`docs/roadmap/tempering.md`** — the live forward tracker (the single live
    to-do): what's done, what's next near- and long-term, and how a fresh clone
    reproduces the validated state.
-3. **`docs/roadmap/forward-roadmap.md`** — the detailed four-dimension reference
+3. **`docs/roadmap/autonomy-engine.md`** — the plan for the largest remaining
+   effort (DAG-walker · real-LLM Forge · native merge queue · `apex` · the
+   stub-ban + real-e2e guardrails). The build starts here.
+4. **`docs/roadmap/forward-roadmap.md`** — the detailed four-dimension reference
    (more granular than tempering.md).
-4. **`docs/operator-guide/live-validation-findings.md`** — what the live
+5. **`docs/operator-guide/live-validation-findings.md`** — what the live
    validation proved across all three tiers + the config gotchas.
-5. **`ROADMAP.md`** — phase history + exit criteria.
-6. **`PROJECT_BRIEF.md`** — the durable source-of-truth vision.
+6. **`ROADMAP.md`** — phase history + exit criteria.
+7. **`PROJECT_BRIEF.md`** — the durable source-of-truth vision.
 
 ## What's next (pull from `docs/roadmap/tempering.md`, not from memory)
 
 The core promise — a real user gets merged PRs from specs, on public **and
 private** repos, across easy/medium/hard governance tiers — is **done and
-live-proven**. The remaining work is hardening, content, and long-horizon items:
+live-proven**.
+
+**The active build is the autonomy engine** (`docs/roadmap/autonomy-engine.md`):
+today the run loop is real but the _driver_ is manual (an operator triggers each
+spec; the Forge ideation agents default to deterministic stubs). The plan makes
+the DAG autonomous (DAG-walker · real-LLM Forge · webhook ingestion · a native
+intent-preserving merge queue with speculative execution) and proves it with
+`apex`. It starts with **P1·0** (delete the quota seam → budget-is-the-gate +
+concurrency-to-config), then the DAG-walker. Everything else below is hardening,
+content, and long-horizon items:
 
 - **A — core run loop.** ✅ Done. The harness frontier is resolved; the loop
   converges reliably; private-repo clone auth works; the simulated reviewer
