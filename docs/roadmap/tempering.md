@@ -17,6 +17,18 @@ live at the top of `forward-roadmap.md`; that doc remains the detailed
 four-dimension reference. `ROADMAP.md` carries the phase history;
 `PROJECT_BRIEF.md` carries the durable vision.
 
+> **The next major effort — `docs/roadmap/autonomy-engine.md`.** Tempering proved
+> the run loop (one spec → merged PR, three tiers). A 2026-06-01 audit found that
+> the surrounding **product engine** is not yet autonomous: there is no DAG-walker
+> (execution is pull, one operator trigger per spec), the Forge ideation agents
+> default to deterministic stubs (real-LLM answerers exist but are unwired), issue
+> ingestion is manual, and merge coordination (auto-rebase, conflict resolution,
+> stacking) is scaffolded or absent. The autonomy-engine doc is the full plan to
+> close that — plus two new standing guardrails: a **stub-ban architecture lint**
+> (stubs/shells/mocks are test-fixtures-only, enforced) and a **real-resource,
+> real-credential tagged e2e gate** (`just e2e`) that cannot pass unless Tanren
+> does real work end-to-end. Its capstone is `apex`, the max-difficulty fixture.
+
 ## Definition of done — real-user-ready (status: MET for the core)
 
 A fresh operator (even the owner, for a side project) can — with **no source

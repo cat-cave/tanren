@@ -18,13 +18,12 @@ const patterns = [
   "justfile",
 ];
 const ignoredDirs = new Set(["node_modules", "dist", "coverage", ".git"]);
-// PROJECT_BRIEF + R-WAVES are long-running narrative/checklist docs (R-WAVES
-// gains a section each wave); the 500-line code cap does not fit them.
-const lineMaxExclusions = new Set(["PROJECT_BRIEF.md", "pnpm-lock.yaml", "docs/roadmap/R-WAVES.md"]);
+// Long-running narrative/roadmap docs (gain sections as the plan evolves); the 500-line cap does not fit them.
+const roadmapDocs = ["PROJECT_BRIEF.md", "docs/roadmap/R-WAVES.md", "docs/roadmap/autonomy-engine.md"];
+const lineMaxExclusions = new Set([...roadmapDocs, "pnpm-lock.yaml"]);
 const invariantDocExclusions = new Set(["PROJECT_BRIEF.md", "docs/contracts/architecture-checks.md"]);
-// Plane-split P3b: these files deliberately attempt (or document) a RAW event
-// insert by the de-privileged data-plane role to PROVE Postgres REJECTS it — not
-// a production write path, so they are exempt from the single-event-writer rule.
+// Plane-split P3b: these files deliberately attempt (or document) a RAW event insert by
+// the de-privileged data-plane role to PROVE Postgres REJECTS it — exempt from single-event-writer.
 const singleEventWriterExclusions = new Set([
   "services/orchestrator/tests/planeSplitP3bDeprivilege.integration.test.ts",
   "scripts/smoke/plane-split-deprivilege.ts",
