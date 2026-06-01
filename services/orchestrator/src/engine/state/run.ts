@@ -27,10 +27,6 @@ export const RunOutcome = z.enum([
   "escape_hatch_hit",
   "retry_budget_exhausted",
   "window_exhausted",
-  // SaaS Tier-B quota-admission-gate: a run denied by the wired QuotaPolicy
-  // before execution. Recoverable (surfaces on the P2B-0008 recovery surface)
-  // so the operator can retry once the hosting layer lifts the quota.
-  "quota_exceeded",
   "cancelled",
   // Phase 0/1 historical outcomes still present in the database
   "hello_world_complete",

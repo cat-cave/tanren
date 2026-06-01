@@ -99,6 +99,22 @@ export const AllocatorConfig = z
   .strict();
 export type AllocatorConfig = z.infer<typeof AllocatorConfig>;
 
+/**
+ * The worker's max in-flight run-slot ceiling, resolved from the config surface
+ * (`AllocatorConfig.concurrency`) — NOT from an env var (autonomy-engine.md
+ * §1.4: "concurrency is a governed config knob, never an env var").
+ *
+ * This is the process-global default ceiling the run-executor worker boots with.
+ * It is derived by parsing an `AllocatorConfig` (so the single schema default —
+ * and any future config source feeding that schema — is the one source of
+ * truth), never read from `process.env`. The future DagWalker reads the same
+ * per-project/org `AllocatorConfig.concurrency` and throttles BELOW this ceiling
+ * in response to live rate-limit/budget signals.
+ */
+export function resolveWorkerConcurrency(): number {
+  return AllocatorConfig.parse({}).concurrency;
+}
+
 // See PartialEscapeHatches for why this is not `AllocatorConfig.partial()`.
 export const PartialAllocatorConfig = z
   .object({

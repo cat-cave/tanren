@@ -18,6 +18,7 @@ export {
   RoutingTable,
   UnknownConfigVersionError,
   emptyRoutingTable,
+  resolveWorkerConcurrency,
 } from "./shared.js";
 
 export {

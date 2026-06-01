@@ -10,6 +10,7 @@ import { readFile } from "node:fs/promises";
 import { createDbPool } from "@tanren/db";
 import type pg from "pg";
 import { buildAllocatorFromEnv } from "../allocators/index.js";
+import { resolveWorkerConcurrency } from "../config/index.js";
 import { buildSecretStore, type SecretStore } from "../contracts/index.js";
 import { TimedGitHubHttpClient, TimedSshSubstrate } from "../observability/index.js";
 import { FetchGitHubHttpClient } from "../providers/github.js";
@@ -71,8 +72,15 @@ export async function bootRunWorker(): Promise<BootedRunWorker> {
       ? "[run-worker] writing run state via direct in-process DB writes (remote-writes off)"
       : "[run-worker] writing run state via the mTLS control-plane endpoints (plane-split P3)",
   );
+  // Concurrency is a GOVERNED CONFIG KNOB, not an env var (autonomy-engine.md
+  // §1.4): resolve the worker's slot ceiling from the config surface's
+  // `AllocatorConfig.concurrency`. The future DagWalker reads the same
+  // per-project/org ceiling and throttles below it on live signals.
+  const concurrency = resolveWorkerConcurrency();
+  console.log(`[run-worker] concurrency ceiling = ${concurrency} (config: allocator.concurrency)`);
   const { worker, reaper } = startRunWorker({
     pool,
+    concurrency,
     allocator: buildAllocatorFromEnv(pool),
     // Same boundary-timing wrappers as the HTTP-server worker path; the worker
     // internals are untouched, only its injected SSH / GitHub clients decorated.

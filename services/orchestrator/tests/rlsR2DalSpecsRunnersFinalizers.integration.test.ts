@@ -1,15 +1,14 @@
-// RLS wave R2 cohort-3 — specs + runners + quota + the worker failure-path
-// finalizers DAL conversion, proven against a REAL Postgres (no SQL mocks).
+// RLS wave R2 cohort-3 — specs + runners + the worker failure-path finalizers
+// DAL conversion, proven against a REAL Postgres (no SQL mocks).
 //
-// R2 cohort-3 routes the specs read/write sites, the runner-metadata writes, the
-// `org_quotas` admission read + accrual write, and the worker's failure-path
-// finalize writes through R1's org-scoped client (`runWithOrgScope` →
-// `getOrgScopedClient()`), so each tenant query executes inside a `SET LOCAL
-// app.current_org_id = <org>` transaction. (Updated for R3b: the migration now
-// ENABLES the policies — the org-scoped client returns/writes the org's rows
-// while the raw runtime pool is deny-by-default; baselines compare against the
-// OWNER pool, and the unscoped pool-fallback writes are now denied.) These tests
-// prove that end-to-end:
+// R2 cohort-3 routes the specs read/write sites, the runner-metadata writes, and
+// the worker's failure-path finalize writes through R1's org-scoped client
+// (`runWithOrgScope` → `getOrgScopedClient()`), so each tenant query executes
+// inside a `SET LOCAL app.current_org_id = <org>` transaction. (Updated for R3b:
+// the migration now ENABLES the policies — the org-scoped client returns/writes
+// the org's rows while the raw runtime pool is deny-by-default; baselines compare
+// against the OWNER pool, and the unscoped pool-fallback writes are now denied.)
+// These tests prove that end-to-end:
 //   (a) the specs READ loaders (SpecStore.get/list) return the org's rows on the
 //       org-scoped client, identical to the raw pool;
 //   (b) the specs WRITE paths (createSpec INSERT via the engine, SpecStore
@@ -18,9 +17,6 @@
 //   (c) the runner-metadata WRITES (PgRunnerStore.claim / .release, handed the
 //       pool) route through the ambient org-scoped client inside a scope and via
 //       the pool fallback — same committed row either way;
-//   (d) the org_quotas READ + WRITE (DbQuotaPolicy.checkAdmission / .accrueUsage,
-//       handed the pool) carry org context inside a scope and fall back to the
-//       pool — same decision + same accrued counters either way;
 //   (e) the worker failure-path finalize UPDATE (runs → halted) commits the same
 //       row inside an org scope as on the pool — the org-scoping the worker's
 //       finalizers now establish.
@@ -33,7 +29,6 @@ import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { migrate, runWithOrgScope } from "@tanren/db";
 import { PgRunnerStore } from "../src/engine/allocators/runnerStore.js";
-import { DbQuotaPolicy } from "../src/engine/quota/index.js";
 import { createSpec } from "../src/engine/workflow/projectSpec.js";
 import { SpecStore } from "../src/engine/repositories/specs.js";
 
@@ -77,7 +72,7 @@ const ACTOR_A = {
   scopes: ["platform:admin"],
 } as const;
 
-describeDb("RLS R2 cohort-3 — specs + runners + quota + finalizers through the org-scoped client", () => {
+describeDb("RLS R2 cohort-3 — specs + runners + finalizers through the org-scoped client", () => {
   const database = dbName();
   let ownerPool: Pool;
   let runtimePool: Pool;
@@ -96,12 +91,6 @@ describeDb("RLS R2 cohort-3 — specs + runners + quota + finalizers through the
     // app-layer org predicate still scopes reads (belt-and-suspenders).
     await seedTenant(ownerPool, ORG_A, PROJECT_A, SPEC_A, RUN_A);
     await seedTenant(ownerPool, ORG_B, `proj_${ORG_B}`, `spec_${ORG_B}`, "run_b");
-    // A quota row for org A so the admission read + accrual write have a target.
-    await ownerPool.query(
-      `INSERT INTO org_quotas (org_id, window_key, run_limit, runs_used, tokens_used, credits_used)
-       VALUES ($1, 'default', 10, 2, 100, 5)`,
-      [ORG_A],
-    );
   }, 60_000);
 
   afterAll(async () => {
@@ -223,48 +212,10 @@ describeDb("RLS R2 cohort-3 — specs + runners + quota + finalizers through the
     expect(committed.rowCount).toBe(0);
   });
 
-  // (d) org_quotas READ (admission) + WRITE (accrual) carry org context inside a
-  //     scope. Under R3b the policies are enforced: the scoped admission reads the
-  //     org's quota row (windowKey 'default'), while on the raw pool the row is
-  //     invisible → the "no row = unlimited" default (admit, no windowKey).
-  it("(d) DbQuotaPolicy admission read + accrual write are org-scoped", async () => {
-    const policy = new DbQuotaPolicy(runtimePool);
-
-    // Scoped admission sees the quota row (headroom: runs_used 2 / 10).
-    const scoped = await runWithOrgScope(runtimePool, ORG_A, () => policy.checkAdmission(ORG_A, { runs: 1 }));
-    expect(scoped.admit).toBe(true);
-    expect(scoped.windowKey).toBe("default");
-    // Raw pool (empty GUC): the quota row is invisible → unlimited default admit.
-    const pooled = await policy.checkAdmission(ORG_A, { runs: 1 });
-    expect(pooled.admit).toBe(true);
-    expect(pooled.windowKey).toBeUndefined();
-
-    // Accrual inside a scope advances the counter; the change is visible inside
-    // the SAME transaction (only if the UPDATE used the ambient client).
-    await runWithOrgScope(runtimePool, ORG_A, async (client) => {
-      await policy.accrueUsage(ORG_A, { runs: 1, tokens: 50, costUsd: 1.5 });
-      const within = await client.query<{ runs_used: string; tokens_used: string }>(
-        "SELECT runs_used::text, tokens_used::text FROM org_quotas WHERE org_id = $1 AND window_key = 'default'",
-        [ORG_A],
-      );
-      expect(Number(within.rows[0]?.runs_used)).toBe(3);
-      expect(Number(within.rows[0]?.tokens_used)).toBe(150);
-    });
-
-    // Accrual via the raw pool (no scope) matches ZERO rows under the policy, so
-    // its UPDATE is a no-op — the counter does NOT advance past the scoped value.
-    await policy.accrueUsage(ORG_A, { runs: 1, tokens: 50, costUsd: 1.5 });
-    const after = await ownerPool.query<{ runs_used: string }>(
-      "SELECT runs_used::text FROM org_quotas WHERE org_id = $1 AND window_key = 'default'",
-      [ORG_A],
-    );
-    expect(Number(after.rows[0]?.runs_used)).toBe(3);
-  });
-
   // (e) the worker failure-path finalize UPDATE (runs → halted) commits the same
   //     row inside an org scope as on the pool — the org-scoping the worker's
   //     finalizers now establish (the UPDATE the run executor runs in the catch
-  //     / quota-deny path, here proven org-scoped vs pool-fallback).
+  //     path, here proven org-scoped vs pool-fallback).
   it("(e) the run-finalize UPDATE commits the same row inside an org scope as on the pool", async () => {
     // Seed a fresh running run for org A to finalize.
     await ownerPool.query(

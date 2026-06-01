@@ -190,9 +190,9 @@ export class WorkerPool {
       this.specStatus = String(params[1]);
       return { rows: [], rowCount: 1 };
     }
-    // Post-run accrual: getRunUsage SUMs the run's cost_records. The accrual
-    // path (`accrueRunUsage`) feeds these totals to the quota policy, so a test
-    // that seeds a cost row can assert the policy accrued the run's real usage.
+    // Metering / cost-reconcile read: SUMs the run's cost_records totals (the
+    // workflow's run-end cost apportion reads these). A test that seeds a cost
+    // row can assert the summed totals flow through.
     if (/SUM\(total_tokens\)[\s\S]*FROM cost_records/u.test(trimmed)) {
       const tokens = this.costRows.reduce((sum, r) => sum + r.total_tokens, 0);
       return single({ runs: tokens, tokens, cost_usd: tokens === 0 ? 0 : 1.5 });
@@ -264,12 +264,10 @@ export class WorkerPool {
       return { rows: [], rowCount: 1 };
     }
     if (trimmed.startsWith("UPDATE runs SET status = 'halted'")) {
-      // The worker's two failure-path finalizers both start here + carry a
-      // RETURNING clause. They differ in (a) the `outcome` literal they set
-      // (`halted` for the recoverable finalize, `quota_exceeded` for the deny
-      // path) and (b) their `status IN (...)` guard. Honor BOTH from the SQL so
-      // each finalizer's effect is observed distinctly (else a mutant that
-      // swaps the literal would survive).
+      // The worker's failure-path finalizer (`finalizeRunRecoverable`) starts
+      // here + carries a RETURNING clause. Honor the `outcome` literal and the
+      // `status IN (...)` guard parsed from the SQL so the finalizer's effect is
+      // observed exactly (else a mutant that swaps the literal would survive).
       if (trimmed.includes("RETURNING")) {
         const outcomeMatch = /outcome = '([a-z_]+)'/u.exec(trimmed);
         const finalizeOutcome = outcomeMatch?.[1] ?? "halted";

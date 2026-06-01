@@ -69,7 +69,6 @@ export const eventTypeNames = [
   "run.completed",
   "run.failed",
   "run.queued",
-  "run.quota_exceeded",
   "run.started",
   "runner.allocated",
   "runner.failed",

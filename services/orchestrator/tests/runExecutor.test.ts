@@ -1,7 +1,7 @@
 // Mutation-strengthening behavior suite for the run executor (runExecutor.ts) +
 // the RunWorker slot loop (runWorker.ts). Drives REAL observable outcomes — DB
-// rows via the in-memory WorkerPool, claimed jobs, emitted events, quota
-// decisions — through the fake-adapter workflow body (./helpers/workerExec.ts).
+// rows via the in-memory WorkerPool, claimed jobs, emitted events — through the
+// fake-adapter workflow body (./helpers/workerExec.ts).
 
 import { describe, expect, it } from "vitest";
 import { FakeJobQueue } from "../src/engine/contracts/jobQueue.js";
@@ -13,7 +13,6 @@ import {
   establishJobOrgContext,
   JobOrgContextLostError,
 } from "../src/engine/worker/runExecutor.js";
-import type { AdmissionDecision, AdmissionRequest, QuotaPolicy, RunUsage } from "../src/engine/quota/index.js";
 import {
   delay,
   deps,
@@ -24,24 +23,6 @@ import {
   setupSeededRun,
 } from "./helpers/workerExec.js";
 import { WorkerPool } from "./helpers/workerPool.js";
-
-// A recording quota policy: scripts an admission decision + captures accrued usage.
-const DEFAULT_ADMISSION_DECISION: AdmissionDecision = { admit: true };
-
-class RecordingQuotaPolicy implements QuotaPolicy {
-  readonly admissionCalls: Array<{ orgId: string; requested: AdmissionRequest }> = [];
-  readonly accrued: Array<{ orgId: string; usage: RunUsage }> = [];
-  constructor(private readonly decision: AdmissionDecision = DEFAULT_ADMISSION_DECISION) {}
-
-  async checkAdmission(orgId: string, requested: AdmissionRequest): Promise<AdmissionDecision> {
-    this.admissionCalls.push({ orgId, requested });
-    return this.decision;
-  }
-
-  async accrueUsage(orgId: string, usage: RunUsage): Promise<void> {
-    this.accrued.push({ orgId, usage });
-  }
-}
 
 const ORG = "org_worker_test";
 
@@ -56,78 +37,30 @@ async function enqueuePlanJob(jobQueue: FakeJobQueue, run: { runId: string; plan
 }
 
 describe("run worker — org-scoped execution (runExecutor RLS seam)", () => {
-  it("establishes the per-job org context, runs the workflow org-scoped, completes, and accrues real usage", async () => {
+  it("establishes the per-job org context, runs the workflow org-scoped, and completes", async () => {
     const { pool, secrets, run } = await setupSeededRun();
     // Project + claimed job share ORG → the org !== null branches engage
-    // (establish context, org-scoped workflow pool, accrual). Seed a cost row.
+    // (establish context, org-scoped workflow pool).
     pool.forcedProjectOrgId = ORG;
-    pool.seedCostRow(12);
     const jobQueue = new FakeJobQueue();
     await enqueuePlanJob(jobQueue, run, ORG);
 
-    const quota = new RecordingQuotaPolicy({ admit: true });
-    const result = await executeNextPlanJob({
-      ...deps(pool, secrets, jobQueue, passingGitHub()),
-      quotaPolicy: quota,
-    });
+    const result = await executeNextPlanJob(deps(pool, secrets, jobQueue, passingGitHub()));
 
     expect(result).toMatchObject({ kind: "completed", runId: run.runId });
     expect(pool.runStatus).toEqual({ status: "done", outcome: "ok" });
-    // Pre-flight admission was checked for the run's org (orgId !== null branch).
-    expect(quota.admissionCalls).toEqual([{ orgId: ORG, requested: { runs: 1 } }]);
-    // Post-run accrual fed the run's REAL cost_records totals to the policy: one
-    // accrual, for the run's org, runs+1 with the summed tokens + dollar cost.
-    expect(quota.accrued).toHaveLength(1);
-    expect(quota.accrued[0]!.orgId).toBe(ORG);
-    expect(quota.accrued[0]!.usage.runs).toBe(1);
-    expect(quota.accrued[0]!.usage.tokens).toBeGreaterThanOrEqual(12);
-    expect(quota.accrued[0]!.usage.costUsd).toBe(1.5);
   });
 
-  it("does NOT check admission or accrue for a legacy/unscoped job (org_id NULL)", async () => {
+  it("runs a legacy/unscoped job (org_id NULL) on the bare-pool path", async () => {
     const { pool, secrets, run } = await setupSeededRun();
     // No forced org → org_id NULL, so every `orgId !== null` branch is skipped.
-    pool.seedCostRow(99);
     const jobQueue = new FakeJobQueue();
     await enqueuePlanJob(jobQueue, run);
 
-    const quota = new RecordingQuotaPolicy({ admit: true });
-    const result = await executeNextPlanJob({
-      ...deps(pool, secrets, jobQueue, passingGitHub()),
-      quotaPolicy: quota,
-    });
+    const result = await executeNextPlanJob(deps(pool, secrets, jobQueue, passingGitHub()));
 
     expect(result.kind).toBe("completed");
-    expect(quota.admissionCalls).toEqual([]);
-    expect(quota.accrued).toEqual([]);
-  });
-
-  it("denies the run pre-flight when quota is exceeded — finalizes quota_exceeded, completes the job, never runs the workflow", async () => {
-    const { pool, secrets, run } = await setupSeededRun();
-    pool.forcedProjectOrgId = ORG;
-    const jobQueue = new FakeJobQueue();
-    await enqueuePlanJob(jobQueue, run, ORG);
-
-    let workflowRan = false;
-    const quota = new RecordingQuotaPolicy({ admit: false, reason: "monthly cap hit", windowKey: "2026-05" });
-    const result = await executeNextPlanJob({
-      ...deps(pool, secrets, jobQueue, passingGitHub()),
-      quotaPolicy: quota,
-      runWorkflow: async (input) => {
-        workflowRan = true;
-        return fakeWorkflowRunner(passingGitHub())(input);
-      },
-    });
-
-    expect(result).toEqual({ kind: "quota_denied", jobId: "job_1", runId: run.runId, reason: "monthly cap hit" });
-    // The run is finalized recoverable as quota_exceeded (NOT halted/failed).
-    expect(pool.runStatus).toEqual({ status: "halted", outcome: "quota_exceeded" });
-    expect(pool.eventTypes).toContain("run.quota_exceeded");
-    // The job is COMPLETED (not failed) so it is not retried; the workflow never ran.
-    expect(workflowRan).toBe(false);
-    expect(await jobQueue.claim("plan")).toBeUndefined();
-    // A denied run is never accrued.
-    expect(quota.accrued).toEqual([]);
+    expect(pool.runStatus).toEqual({ status: "done", outcome: "ok" });
   });
 
   it("fails the job loudly when the claimed run is not reachable under its own org (JobOrgContextLost)", async () => {
@@ -394,18 +327,6 @@ describe("RunWorker default onResult logging classifier", () => {
     expect(out.logs.join("\n")).toContain("run_9");
     expect(out.logs.join("\n")).toContain("passed");
     expect(out.warns).toEqual([]);
-  });
-
-  it("warns quota_denied runs with the reason (distinct from failed)", () => {
-    const out = emit(workerWithDefaultOnResult(), {
-      kind: "quota_denied",
-      jobId: "job_q",
-      runId: "run_q",
-      reason: "cap reached",
-    });
-    expect(out.warns.join("\n")).toContain("quota_exceeded");
-    expect(out.warns.join("\n")).toContain("cap reached");
-    expect(out.logs).toEqual([]);
   });
 
   it("warns failed runs with the failure kind + message", () => {

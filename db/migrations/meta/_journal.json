@@ -253,6 +253,13 @@
       "when": 1780279395133,
       "tag": "0035_dataplane_lifecycle_deprivilege",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1780348680293,
+      "tag": "0036_striped_thunderbolts",
+      "breakpoints": true
     }
   ]
 }

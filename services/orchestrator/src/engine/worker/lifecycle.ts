@@ -16,22 +16,12 @@ import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { SshSubstrate } from "../contracts/sshSubstrate.js";
 import type { GitHubHttpClient } from "../providers/github.js";
-import type { QuotaPolicy } from "../quota/index.js";
 import { JobReaper } from "./jobReaper.js";
 import { RunWorker, type RunWorkerOptions } from "./runWorker.js";
 
 /** True when the in-process run worker is enabled (TANREN_RUN_WORKER=1). */
 export function runWorkerEnabled(): boolean {
   return process.env["TANREN_RUN_WORKER"] === "1";
-}
-
-function workerConcurrencyFromEnv(): number {
-  const raw = process.env["TANREN_RUN_WORKER_CONCURRENCY"];
-  if (raw === undefined || raw === "") {
-    return 2;
-  }
-  const parsed = Number(raw);
-  return Number.isFinite(parsed) && parsed >= 1 ? Math.floor(parsed) : 2;
 }
 
 export interface StartRunWorkerInput {
@@ -41,9 +31,12 @@ export interface StartRunWorkerInput {
   secrets: SecretStore;
   githubHttp: GitHubHttpClient;
   identitySecretRef: string;
-  // SaaS Tier-B quota-admission-gate (OSS↔hosting seam). Omit for the unlimited
-  // default (self-host is unrestricted); a hosting layer passes its own policy.
-  quotaPolicy?: QuotaPolicy;
+  // Concurrency is a GOVERNED CONFIG KNOB, never an env var (autonomy-engine.md
+  // §1.4): the max in-flight run slots this worker maintains. Sourced from the
+  // config surface's `AllocatorConfig.concurrency` (boot resolves it), so a
+  // spend-rate change is config, not a redeploy. The future DagWalker reads the
+  // same per-project/org ceiling and throttles BELOW it on live signals.
+  concurrency: number;
   // Plane-split P2: how the worker CLAIMS. Omit for the direct DB-CAS over a
   // `PgJobQueue` (the in-process / single-process path); the cross-process
   // `worker` container passes an `HttpJobClaimClient` that claims over the mTLS
@@ -92,11 +85,10 @@ export function startRunWorker(input: StartRunWorkerInput): StartedRunWorker {
       secrets: input.secrets,
       githubHttp: input.githubHttp,
       identitySecretRef: input.identitySecretRef,
-      ...(input.quotaPolicy === undefined ? {} : { quotaPolicy: input.quotaPolicy }),
       ...(input.claimClient === undefined ? {} : { claimClient: input.claimClient }),
       ...(input.runStateWriter === undefined ? {} : { runStateWriter: input.runStateWriter }),
     },
-    { concurrency: workerConcurrencyFromEnv(), notifyListener, ...input.options },
+    { concurrency: input.concurrency, notifyListener, ...input.options },
   );
   worker.start();
   // P3-0028: a co-located reaper recovers leases dropped by crashed workers.

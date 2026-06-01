@@ -44,18 +44,6 @@ export const RunFailedPayload = z
   })
   .strict();
 
-// SaaS Tier-B quota-admission-gate: emitted when the wired QuotaPolicy denies a
-// run pre-flight (before any runner/credential work). `reason` is the
-// policy-supplied denial reason; the run lands on the recovery surface with
-// outcome `quota_exceeded`. The hosting layer's billing/upgrade UX consumes
-// this event to prompt the operator.
-export const RunQuotaExceededPayload = z
-  .object({
-    reason: z.string(),
-    windowKey: z.string().optional(),
-  })
-  .strict();
-
 // task.* payloads carry a taskKind plus optional job-queue correlation. The
 // failure variant adds the failure kind/message so the timeline UI doesn't
 // need to join through tasks to render the failure row.
