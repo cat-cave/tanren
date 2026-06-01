@@ -102,13 +102,28 @@ export default defineConfig({
     // `.claude/**` excludes Claude Code agent worktrees, which are full
     // checkouts of the repo and would otherwise be discovered (and re-run)
     // by vitest during local development.
-    // `**/tests/e2e/**` excludes the dashboard's LOCAL-ONLY Playwright smoke
-    // (P2B-0001): it imports `@playwright/test` (not a CI dependency) and is run
-    // manually via `pnpm test:e2e`, never through the unit `vitest run` gate.
+    // `**/tests/e2e/**/*.spec.ts` excludes the dashboard's LOCAL-ONLY Playwright
+    // smoke (P2B-0001): it imports `@playwright/test` (not a CI dependency) and is
+    // run manually via `pnpm test:e2e`, never through the unit `vitest run` gate.
+    // `**/tests/e2e/cases/**` excludes the P8b real-resource, real-CREDENTIAL e2e
+    // CASES (autonomy-engine §8b): they spend real credits + wall-clock against a
+    // live stack and run ONLY via `just e2e`, never in `just fast-check` / public
+    // PR CI. The e2e suite's own HARNESS unit tests (`tests/e2e/lib/**/*.test.ts`)
+    // are pure (no creds/stack) and DO run here — they pin the gate's verdict
+    // logic + the no-mock invariant. The credentialed cases are named `*.e2e.ts`
+    // (not `*.test.ts`) so default discovery never picks them up either.
     // `reports/**` excludes Stryker mutation-testing artifacts: Stryker copies
     // the repo into `reports/mutation/.stryker-tmp/sandbox-*` to mutate it, and
     // an interrupted run can leave those copies behind. Without this exclude the
     // unit-test gate would discover and (fail to) run the sandboxed test files.
-    exclude: ["**/node_modules/**", "**/dist/**", "fixtures/**", ".claude/**", "**/tests/e2e/**", "reports/**"],
+    exclude: [
+      "**/node_modules/**",
+      "**/dist/**",
+      "fixtures/**",
+      ".claude/**",
+      "**/tests/e2e/**/*.spec.ts",
+      "**/tests/e2e/cases/**",
+      "reports/**",
+    ],
   },
 });

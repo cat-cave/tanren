@@ -376,3 +376,23 @@ smoke: compose-build compose-up wait-for-stack smoke-connectivity smoke-ssh-inte
 # dashboard with TANREN_RUN_WORKER=1) is documented in docs/operator-guide/acceptance.md.
 acceptance-hard:
   corepack pnpm exec vitest run services/orchestrator/tests/acceptanceHardTier.test.ts
+
+# P8b: the real-resource, real-CREDENTIAL e2e gate (autonomy-engine §8b). OPT-IN /
+# nightly / pre-release — NOT on the per-PR fast path: it runs the REAL stack
+# (`just up-dev`) with REAL provider + GitHub credentials, spends real credits +
+# wall-clock, and drives the REAL operator flow over the REAL external surfaces
+# only (HTTP API + dashboard). It FORBIDS test fixtures / mock adapters entirely —
+# the `e2e-no-mock-imports` arch check (in `just architecture`, on the fast path)
+# fails any tests/e2e/** file that imports a fixture/mock or a non-public internal
+# seam. Each case asserts on REAL persisted artifacts (a merged PR on GitHub, the
+# implemented file on the base branch, cost_records rows with a real basis, the
+# DORA projection) — never on a mocked return; its result (run IDs + PR URLs) is
+# the release evidence. NEVER runs in public PR CI (no secrets there — same
+# discipline as `just acceptance`). Credentials live in tanren.acceptance.json +
+# TANREN_E2E_API_TOKEN; the stack must be up first (`just up-dev`). The harness's
+# own unit tests run on the fast path via `just test` (tests/e2e/lib/**). See
+# docs/operator-guide/e2e.md.
+e2e:
+  test -f tanren.acceptance.json || test -n "${TANREN_ACCEPTANCE_CONFIG:-}"
+  test -n "${TANREN_E2E_API_TOKEN:-}"
+  corepack pnpm exec vitest run --config vitest.e2e.config.ts

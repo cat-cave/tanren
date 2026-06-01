@@ -357,11 +357,79 @@ export function checkCrossPackageDeepImports(projectFiles) {
   return diagnostics;
 }
 
+// --- the real-resource e2e gate's no-mock arch check (autonomy-engine §8b) ---
+// The `just e2e` suite (tests/e2e/**) must drive Tanren ONLY through real
+// external surfaces and assert on REAL persisted artifacts. So any file under
+// tests/e2e/** that imports a TEST FIXTURE / MOCK / STUB / deterministic
+// stand-in, OR reaches into a NON-PUBLIC INTERNAL SEAM, fails — mechanically.
+// This is what makes "the e2e gate cannot pass on a shell" enforceable rather
+// than a claim. Allowed imports: the e2e suite's own lib/ + cases/, node
+// builtins, the @tanren/db PUBLIC entry (raw artifact reads), and third-party
+// clients (pg/octokit/playwright/vitest). See docs/contracts/architecture-checks.md.
+
+const e2eFixtureImportPatterns = [
+  // any fixture directory anywhere in the specifier
+  /(?:^|\/)fixtures(?:\/|$)/u,
+  // a fixture/stub/mock/no-op/deterministic-stand-in/templated file by name
+  // (mirrors the §8a stub taxonomy: *Stub, Mock*, Fake*, Noop*, deterministic*,
+  // templated*)
+  /(?:^|\/)[A-Za-z0-9_.-]*(?:[Ss]tub|[Mm]ock|[Ff]ake|[Nn]oop|Deterministic|deterministic|Templated|templated)[A-Za-z0-9_.-]*(?:\.js|\.ts)?$/u,
+];
+
+// A deep internal-seam import: another package's internals (`@tanren/*/src/**`)
+// or any reach into a service's source tree (`services/*/src/**`). The e2e suite
+// has no business touching these — it talks to the running services over HTTP.
+function isInternalSeamImport(specifier) {
+  return /^@tanren\/[a-z-]+\/src\//u.test(specifier) || /(?:^|\/)services\/[a-z-]+\/src\//u.test(specifier);
+}
+
+export function checkE2eNoMockImports(projectFiles) {
+  const diagnostics = [];
+  const importPattern = /(?:from|import|require)\s*\(?\s*["']([^"']+)["']/gu;
+  for (const { file, text } of projectFiles) {
+    if (!/(?:^|\/)tests\/e2e\//u.test(file) || !(file.endsWith(".ts") || file.endsWith(".tsx"))) {
+      continue;
+    }
+    // The checker's own unit tests embed forbidden-specifier STRINGS as fixtures.
+    if (file === "scripts/check-architecture.test.ts") {
+      continue;
+    }
+    let match;
+    while ((match = importPattern.exec(text)) !== null) {
+      const specifier = match[1];
+      const line = lineFor(text, match.index);
+      if (e2eFixtureImportPatterns.some((pattern) => pattern.test(specifier))) {
+        diagnostics.push(
+          diagnostic(
+            "e2e-no-mock-imports",
+            file,
+            `e2e suite may not import a fixture/mock/stub: "${specifier}" — the e2e gate asserts on real artifacts only`,
+            line,
+          ),
+        );
+        continue;
+      }
+      if (isInternalSeamImport(specifier)) {
+        diagnostics.push(
+          diagnostic(
+            "e2e-no-mock-imports",
+            file,
+            `e2e suite may not reach a non-public internal seam: "${specifier}" — drive Tanren over the real HTTP/dashboard surface instead`,
+            line,
+          ),
+        );
+      }
+    }
+  }
+  return diagnostics;
+}
+
 export function runStructureChecks(projectFiles) {
   return [
     ...checkCyclomaticComplexity(projectFiles),
     ...checkMaxParams(projectFiles),
     ...checkCrossPackageDeepImports(projectFiles),
     ...checkNoMockOnlyTests(projectFiles),
+    ...checkE2eNoMockImports(projectFiles),
   ];
 }
