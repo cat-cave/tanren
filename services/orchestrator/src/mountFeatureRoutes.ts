@@ -24,9 +24,9 @@ import { mountReportRoutes, type MountReportRoutesDeps } from "./routes/experime
 import { createForgeAskRoutes, createForgeProposalRoutes, createForgeRoutes } from "./routes/forge/mount.js";
 import { createInboxRoutes } from "./routes/inbox/index.js";
 import { createAuditRoutes } from "./routes/audits/index.js";
-import { createGithubWebhookRoutes } from "./routes/githubWebhooks/index.js";
-import { createIssueWebhookRoutes } from "./routes/githubWebhooks/issues.js";
+import { createGithubWebhookRoutes, createIssueWebhookRoutes } from "./routes/githubWebhooks/index.js";
 import { createInsightRoutes } from "./routes/insights/index.js";
+import { createIntegrationRoutes } from "./routes/integrations/index.js";
 import { createMilestoneRoutes } from "./routes/milestones/index.js";
 import { createNotificationRoutes } from "./routes/notifications/index.js";
 import { createOnboardingRoutes } from "./routes/onboarding/index.js";
@@ -182,6 +182,13 @@ export function mountFeatureRoutes(app: Hono<ActorContextEnv>, deps: FeatureRout
   // carry their own infra (allocator/ssh/identity/notify) when the boot wired it.
   mountReportRoutes(app, { pool: scopedPool, ...(benchmarkInfra === undefined ? {} : { benchmark: benchmarkInfra }) });
   app.route("/orgs", createNotificationRoutes({ pool: scopedPool }));
+  // P-INT-2: capability-driven onboarding — "enable error tracking / notify /
+  // deploy" resolves the org grant, builds the provisioner with PRODUCTION deps,
+  // applies confirm-with-smart-default, persists the artifact (inbox source /
+  // notification target / projects.config / secret refs), and emits
+  // `integration.provisioned` (refs only). Org-scoped on the scoped pool; the
+  // configured SecretStore backs the provisioner's transports.
+  app.route("/orgs", createIntegrationRoutes({ pool: scopedPool, secrets }));
   app.route("/orgs", createRunRoutes({ pool: scopedPool }));
   app.route("/orgs", createRecoveryRoutes({ pool: scopedPool }));
   // Credentials mount at root but every endpoint is `/orgs/:orgId/credentials/*`

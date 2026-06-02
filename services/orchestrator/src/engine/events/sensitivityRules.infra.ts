@@ -1,10 +1,10 @@
 import type { SensitivityRule } from "./sensitivity.js";
+import { integrationProvisioningSensitivityRules } from "./sensitivityRules.integrations.js";
 
 // Infrastructure-and-integration sensitivity rules, split out of
-// sensitivityRules.ts to keep each file under the 500-line cap. Covers the
-// runtime substrate (runner/allocator/workspace/credential), cost + usage
-// telemetry, and the integration surface (github/ci/phase1/reviews/
-// notifications/hello/redaction). Role rules remain in sensitivityRules.ts.
+// sensitivityRules.ts to keep each file under the 500-line cap (role rules stay
+// there). Covers the runtime substrate, cost/usage telemetry, and the
+// integration surface (github/ci/phase1/reviews/notifications/onboarding/hello).
 export const infraSensitivityRules: SensitivityRule[] = [
   // runner allocation
   ...rulesFor("allocator.requested", [
@@ -402,7 +402,7 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["reason", "public"],
   ]),
 
-  // notifications
+  // notifications + P-INT-2 onboarding (the latter in its own module)
   ...rulesFor("notification.enqueued", [
     ["channel", "public"],
     ["eventName", "public"],
@@ -415,7 +415,7 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["channel", "public"],
     ["message", "public"],
   ]),
-
+  ...integrationProvisioningSensitivityRules,
   // hello run
   ...rulesFor("hello.started", []),
   ...rulesFor("hello.ssh_started", [

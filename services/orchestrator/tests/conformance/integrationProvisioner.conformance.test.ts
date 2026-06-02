@@ -121,9 +121,11 @@ describe("SentryProvisioner — Sentry-specific behavior", () => {
     expect(JSON.stringify(artifact)).not.toContain(stored?.value);
   });
 
-  it("provision() emits a sentry inbox_source referencing the project slug + the org token ref (no token value)", async () => {
+  it("provision() emits an errors-kind inbox_source referencing the project slug + the org token ref (no token value)", async () => {
     const artifact = await makeSentry().provision(sentryGrant(), projectCtx("billing"));
-    expect(artifact.inboxSource?.kind).toBe("sentry");
+    // `errors` is the DB-allowed (inbox_sources_kind_check) + connector-registered
+    // (connectorMap.ts) kind for Sentry intake; "sentry" would violate both.
+    expect(artifact.inboxSource?.kind).toBe("errors");
     expect(artifact.inboxSource?.config).toMatchObject({
       org: "acme",
       project: "billing",

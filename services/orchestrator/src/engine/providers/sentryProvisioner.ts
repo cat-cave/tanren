@@ -374,10 +374,13 @@ export class SentryProvisioner implements IntegrationProvisioner {
       secretRefs: { SENTRY_DSN: ref },
       // The inbox_sources row the runtime `sentryConnector` consumes: it carries
       // the Sentry org + project slug and the ORG TOKEN REF (intake reuses the
-      // same org grant credential) — never a token value. `kind: "sentry"` is the
-      // source-kind the connector factory maps onto the `errors` slot.
+      // same org grant credential) — never a token value. `kind: "errors"` is the
+      // source-kind the connector map registers Sentry under (connectorMap.ts) AND
+      // the only Sentry-valid value in `inbox_sources_kind_check` (migration 0024;
+      // the set is issues|errors|system|manual|scheduled_audit). Emitting "sentry"
+      // would both violate the CHECK on insert and never resolve a connector.
       inboxSource: {
-        kind: "sentry",
+        kind: "errors",
         config: {
           org: meta.orgSlug,
           project: slug,

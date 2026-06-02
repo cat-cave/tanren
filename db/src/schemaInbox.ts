@@ -62,6 +62,14 @@ export const inboxSources = pgTable(
     check("inbox_sources_auto_route_check", sql`${table.autoRoute} IN ('true','false')`),
     index("inbox_sources_org_id").on(table.orgId),
     index("inbox_sources_project_id").on(table.projectId),
+    // P-INT-2 onboarding-provisioner idempotency backstop: at most ONE
+    // provisioner-managed source per (org, project, kind). PARTIAL — scoped to the
+    // `managedBy` marker the provisioning engine writes — so operator-created
+    // sources (which may legitimately repeat a kind per project) and audit-system
+    // sources stay unconstrained; only re-onboards dedupe.
+    uniqueIndex("inbox_sources_provisioned_unique")
+      .on(table.orgId, table.projectId, table.kind)
+      .where(sql`(${table.config}->>'managedBy') = 'integration-provisioner'`),
   ],
 );
 
