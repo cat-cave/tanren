@@ -37,12 +37,20 @@ Forge stubs are gone — the autonomous **DagWalker**, persisted **priority**,
 **real-resource `just e2e` gate** all landed, with `QuotaPolicy` deleted (budget
 is the only gate) and concurrency moved env→config.
 
-**Phase 2 — native merge coordination — is the active next build**: the live
-DAG-walker makes parallel specs collide, so the `VcsProvider` seam → auto-rebase →
-intent-preserving conflict resolution → speculative execution + change-percolation
-→ the native merge queue → removing Mergify. Then **Phase 3 — `apex`** (needs a
-budget ceiling for the real-credit run). Everything else below is hardening,
-content, and long-horizon items:
+**Phase 2 — native merge coordination — is also merged on `main`** (PRs #228–#236,
+2026-06-02): the **`VcsProvider` seam**, **auto-rebase**, **DAG-aware
+intent-preserving conflict resolution**, **speculative execution** +
+**change-percolation**, the **native intelligent merge queue** (DAG-order
+serialized merge + speculative batch-check + bisect), **CI-intelligence parity**
+(flaky-quarantine · CI analytics · queue stats), and **Mergify removed entirely**
+(`native_queue` is the merge engine). Each unit was adversarially verified before
+merge.
+
+**The only remaining major effort is Phase 3 — `apex`**: the max-difficulty
+fixture (rough operator notes → a deployed product autonomously). It is gated on
+the real Tier-1 credentials (GitHub App + Slack + a deploy target;
+`docs/operator-guide/validation-credentials.md`) and spends real credits under the
+$50 ceiling. Everything else below is hardening, content, and long-horizon items:
 
 - **A — core run loop.** ✅ Done, now **autonomous**. The harness frontier is
   resolved; the loop converges; private-repo clone auth works; the simulated

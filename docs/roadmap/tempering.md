@@ -29,17 +29,27 @@ four-dimension reference. `ROADMAP.md` carries the phase history;
 > real-credential tagged e2e gate** (`just e2e`) that cannot pass unless Tanren
 > does real work end-to-end. Its capstone is `apex`, the max-difficulty fixture.
 >
-> **Status — Phase 1 (the autonomy core) is built and merged on `main`**
-> (2026-06-01, PRs #220–#226): the budget-is-the-gate cleanup (`QuotaPolicy`
-> deleted, concurrency env→config), the autonomous **DagWalker** + its conformance
-> suite, persisted spec **priority**, **real-LLM Forge** wiring (the deterministic
-> answerers moved to `tests/fixtures/`), **webhook-first autonomous intake**, the
-> **stub-ban architecture lint** (`no-production-stubs`), and the **real-resource
-> `just e2e` gate** + no-mock arch check. **Next: Phase 2 — native merge
-> coordination**, which the live DAG-walker now forces (parallel specs collide):
-> the `VcsProvider` seam → auto-rebase → intent-preserving conflict resolution →
-> speculative execution + change-percolation → the native merge queue → removing
-> Mergify. Then Phase 3 — `apex`.
+> **Status — Phases 1 AND 2 of the autonomy engine are merged on `main`.**
+>
+> - **Phase 1 — the autonomy core** (2026-06-01, PRs #220–#226): budget-is-the-gate
+>   (`QuotaPolicy` deleted, concurrency env→config), the autonomous **DagWalker** +
+>   conformance, persisted spec **priority**, **real-LLM Forge** (deterministic
+>   answerers → `tests/fixtures/`), **webhook-first autonomous intake**, the
+>   **stub-ban lint** (`no-production-stubs`), and the **real-resource `just e2e`
+>   gate** + no-mock arch check.
+> - **Phase 2 — native merge coordination** (2026-06-02, PRs #228–#236): the
+>   **`VcsProvider` seam**, **auto-rebase**, **DAG-aware intent-preserving conflict
+>   resolution**, **speculative execution** + **change-percolation**, the **native
+>   intelligent merge queue** (DAG-order serialized merge + speculative batch-check +
+>   bisect), **CI-intelligence parity** (flaky-quarantine · CI analytics · queue
+>   stats), and **Mergify removed entirely** (`native_queue` is the merge engine).
+>   Each unit was adversarially verified before merge; four real merge-safety
+>   defects were caught and fixed in review.
+>
+> **Only Phase 3 — `apex` — remains** (the max-difficulty fixture: rough notes →
+> deployed product autonomously). It is gated on the real Tier-1 credentials
+> (GitHub App + Slack + a deploy target) and spends real credits under the $50
+> ceiling. See `docs/operator-guide/validation-credentials.md`.
 
 ## Definition of done — real-user-ready (status: MET for the core)
 
