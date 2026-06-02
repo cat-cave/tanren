@@ -105,6 +105,10 @@ import {
   DagBudgetPausedPayload,
   DagDrainedPayload,
   DagSpecEnqueuedPayload,
+  DagSpecPercolatedPayload,
+  DagSpecPercolatingPayload,
+  DagSpecPercolationDeferredPayload,
+  DagSpecPercolationReplanPayload,
   DagSpecSpeculationHeldPayload,
   DagSpecSpeculativePayload,
 } from "./schemas/dag.js";
@@ -281,6 +285,13 @@ export const EventRegistry = {
   // speculative integration branch, or was held over the depth cap.
   "dag.spec.speculative": DagSpecSpeculativePayload,
   "dag.spec.speculation_held": DagSpecSpeculationHeldPayload,
+  // P2c-2 (§2c CHANGE-PERCOLATION): an ancestor changed after a dependent started
+  // speculatively — the delta percolates down the chain (NOT discarded). Started,
+  // absorbed, deferred (lazy P2/P3), or routed-back-to-planner (irreconcilable).
+  "dag.spec.percolating": DagSpecPercolatingPayload,
+  "dag.spec.percolated": DagSpecPercolatedPayload,
+  "dag.spec.percolation_deferred": DagSpecPercolationDeferredPayload,
+  "dag.spec.percolation_replan": DagSpecPercolationReplanPayload,
 } as const satisfies Record<string, z.ZodTypeAny>;
 
 export type EventRegistry = typeof EventRegistry;

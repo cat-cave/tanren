@@ -14,6 +14,7 @@ import { RUN_ACTIVITY_CHANNEL } from "@tanren/db";
 import type pg from "pg";
 import { describe, expect, it, vi } from "vitest";
 import type { DagWalker, WalkResult } from "../src/engine/contracts/dagWalker.js";
+import type { ChangePercolationCoordinator, PercolationPassResult } from "../src/engine/dag/percolation.js";
 import { DagWalkerSubscriber } from "../src/engine/dag/subscriber.js";
 
 // A fake PgNotifyListener mirroring the liveAwait test's: records subscriptions
@@ -83,6 +84,26 @@ class RecordingWalker implements DagWalker {
     this.walks.push(projectId);
     if (this.onWalk !== undefined) await this.onWalk(projectId);
     return { projectId, status: "drained", enqueuedSpecIds: [], enqueuedRunIds: [] };
+  }
+}
+
+/** A recording percolation coordinator: counts passes per project (P2c-2). */
+class RecordingPercolation implements ChangePercolationCoordinator {
+  readonly passes: string[] = [];
+  constructor(private readonly fail = false) {}
+  async percolate(projectId: string): Promise<PercolationPassResult> {
+    this.passes.push(projectId);
+    if (this.fail) throw new Error("percolation pass blew up");
+    return {
+      projectId,
+      absorbed: [],
+      deferred: [],
+      replanned: [],
+      reexecuting: [],
+      inFlight: [],
+      held: [],
+      unchanged: [],
+    };
   }
 }
 
@@ -205,6 +226,51 @@ describe("DagWalkerSubscriber", () => {
 
     // Exactly two walks: the original + ONE coalesced re-walk (not three).
     expect(walker.walks).toEqual(["project_x", "project_x"]);
+    sub.stop();
+  });
+
+  it("runs the change-percolation pass alongside the walk on a terminal notification (P2c-2)", async () => {
+    const pool = fakePool({
+      projectsWithDag: [],
+      runs: { run_done: { projectId: "project_x", status: "done" } },
+    });
+    const listener = new FakeNotifyListener();
+    const walker = new RecordingWalker();
+    const percolation = new RecordingPercolation();
+    const sub = new DagWalkerSubscriber({ pool, notifyListener: listener as never, walker, percolation });
+    await sub.start();
+    await flush();
+
+    listener.fire(RUN_ACTIVITY_CHANNEL, "run_done");
+    await flush();
+
+    // The walk AND the percolation pass both ran for the run's project.
+    expect(walker.walks).toEqual(["project_x"]);
+    expect(percolation.passes).toEqual(["project_x"]);
+    sub.stop();
+  });
+
+  it("a percolation failure is non-fatal to the walk loop (logged, swallowed)", async () => {
+    const pool = fakePool({
+      projectsWithDag: [],
+      runs: { run_done: { projectId: "project_x", status: "done" } },
+    });
+    const listener = new FakeNotifyListener();
+    const walker = new RecordingWalker();
+    const percolation = new RecordingPercolation(true);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const sub = new DagWalkerSubscriber({ pool, notifyListener: listener as never, walker, percolation });
+    await sub.start();
+    await flush();
+
+    expect(() => listener.fire(RUN_ACTIVITY_CHANNEL, "run_done")).not.toThrow();
+    await flush();
+
+    // The walk still ran; the percolation error was logged, not thrown.
+    expect(walker.walks).toEqual(["project_x"]);
+    expect(percolation.passes).toEqual(["project_x"]);
+    expect(errorSpy).toHaveBeenCalled();
+    errorSpy.mockRestore();
     sub.stop();
   });
 

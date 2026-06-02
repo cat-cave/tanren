@@ -5,6 +5,7 @@
 // conformance suite primes: a present base-branch file, a mergeable PR #7, and a
 // conflicted PR (CONFORMANCE_CONFLICT_PR_NUMBER).
 import {
+  CONFORMANCE_ABSENT_BRANCH,
   CONFORMANCE_ABSENT_FILE,
   CONFORMANCE_ANCESTOR_CONFLICT,
   CONFORMANCE_BASE_BRANCH,
@@ -108,6 +109,16 @@ export class InMemoryVcsProvider implements VcsProvider {
     if (input.path === CONFORMANCE_ABSENT_FILE) return undefined;
     return undefined;
   }
+  async readBranchHeadSha(input: {
+    repo: RepoRef;
+    branch: string;
+    token: ResolvedVcsToken;
+  }): Promise<string | undefined> {
+    // A deterministic head SHA per branch (the conformance suite asserts the read
+    // round-trips); the well-known absent branch returns undefined (missing ref).
+    if (input.branch === CONFORMANCE_ABSENT_BRANCH) return undefined;
+    return `sha-${input.branch}`;
+  }
   async readMergeability(pr: PullRequestRef, _token: ResolvedVcsToken): Promise<PullRequestMergeability> {
     const refs = { baseBranch: CONFORMANCE_BASE_BRANCH, headBranch: CONFORMANCE_HEAD_BRANCH };
     if (pr.number === CONFORMANCE_BEHIND_PR_NUMBER) return { state: "behind", behind: true, ...refs };
@@ -134,6 +145,7 @@ export class InMemoryVcsProvider implements VcsProvider {
           outcome: "conflict",
           integrationBranch: input.integrationBranch,
           mergedAncestors: merged,
+          ancestorHeadShas: Object.fromEntries(merged.map((id) => [id, `sha-${id}`])),
           conflictBetween: { specId: ancestor.specId, otherSpecId },
           message: `ancestor ${ancestor.specId} conflicts with ${otherSpecId}`,
         };
@@ -144,6 +156,7 @@ export class InMemoryVcsProvider implements VcsProvider {
       outcome: "integrated",
       integrationBranch: input.integrationBranch,
       mergedAncestors: merged,
+      ancestorHeadShas: Object.fromEntries(merged.map((id) => [id, `sha-${id}`])),
       message: `integrated ${merged.length} ancestor(s)`,
     };
   }

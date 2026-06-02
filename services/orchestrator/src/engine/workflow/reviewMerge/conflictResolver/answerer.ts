@@ -14,7 +14,12 @@
 
 import { answererOutputSchemaFor, ConflictAnswer } from "../../../answerers/schemas/index.js";
 import type { AnswererAdapter } from "../../../providers/types.js";
-import type { ConflictAnswererInvoker, ConflictedFile, SpecIntent } from "../../../contracts/conflictResolution.js";
+import type {
+  ConflictAnswererInvoker,
+  ConflictedFile,
+  SpecIntent,
+  UpstreamChangeContext,
+} from "../../../contracts/conflictResolution.js";
 
 export interface AnswererBackedConflictInvokerDeps {
   adapter: AnswererAdapter<ConflictAnswer>;
@@ -30,6 +35,7 @@ export class AnswererBackedConflictInvoker implements ConflictAnswererInvoker {
     conflictingSpecIntent?: SpecIntent;
     dagEdge: boolean;
     conflictedFiles: ReadonlyArray<ConflictedFile>;
+    upstreamChange?: UpstreamChangeContext;
   }): Promise<ConflictAnswer> {
     const outputSchema = answererOutputSchemaFor("conflict", ConflictAnswer);
     const prompt = buildConflictResolverPrompt(input);
@@ -48,13 +54,10 @@ export function buildConflictResolverPrompt(input: {
   conflictingSpecIntent?: SpecIntent;
   dagEdge: boolean;
   conflictedFiles: ReadonlyArray<ConflictedFile>;
+  upstreamChange?: UpstreamChangeContext;
 }): string {
   const lines: string[] = [
-    "You are the Tanren Conflict-Resolution-Planner Answerer. A merge conflict",
-    "arose between TWO specs' changes. A conflict is a RE-PLANNING problem, not a",
-    "text-picking problem: you have BOTH specs' intent + acceptance criteria, so",
-    "resolve to satisfy BOTH intents — never pick one side's text and drop the",
-    "other's intent.",
+    ...(input.upstreamChange === undefined ? conflictFraming() : upstreamChangeFraming(input.upstreamChange)),
     "",
     "Hard boundaries (you are an Answerer — read-only):",
     "- Do NOT run, simulate, or shell out to tests/builds/linters. A separate",
@@ -75,10 +78,14 @@ export function buildConflictResolverPrompt(input: {
     "",
     `DAG edge between the two specs: ${input.dagEdge ? "YES (a known dependency relationship)" : "NO (no persisted dependency edge)"}`,
     "",
-    "=== MERGING spec (the PR being merged) ===",
+    input.upstreamChange === undefined
+      ? "=== MERGING spec (the PR being merged) ==="
+      : "=== DEPENDENT spec (whose work must be KEPT INTACT while absorbing the upstream change) ===",
     ...specIntentLines(input.mergingSpecIntent),
     "",
-    "=== BASE spec (the change already on the base branch) ===",
+    input.upstreamChange === undefined
+      ? "=== BASE spec (the change already on the base branch) ==="
+      : `=== ANCESTOR spec ${input.upstreamChange.ancestorSpecId} (whose intentional upstream change must flow IN) ===`,
     ...baseSpecLines(input.conflictingSpecIntent),
     "",
     "=== Conflicted files (markers intact) ===",
@@ -87,6 +94,39 @@ export function buildConflictResolverPrompt(input: {
     "Return only the structured JSON required by the provided schema.",
   ];
   return lines.join("\n");
+}
+
+/** The default (symmetric merge-conflict) framing header. */
+function conflictFraming(): string[] {
+  return [
+    "You are the Tanren Conflict-Resolution-Planner Answerer. A merge conflict",
+    "arose between TWO specs' changes. A conflict is a RE-PLANNING problem, not a",
+    "text-picking problem: you have BOTH specs' intent + acceptance criteria, so",
+    "resolve to satisfy BOTH intents — never pick one side's text and drop the",
+    "other's intent.",
+  ];
+}
+
+/**
+ * The P2c-2 upstream-change framing header: this is NOT a symmetric collision —
+ * an ANCESTOR changed AFTER the DEPENDENT started speculatively, and the
+ * ancestor's intentional change must flow INTO the dependent while the dependent's
+ * own work stays intact. `decision='resolve'` = the absorbed tree (keep BOTH); an
+ * `irreconcilable` answer must route the 'merging' side (= the dependent) back to
+ * the planner with the ancestor's change as context. Same schema, same invariants.
+ */
+function upstreamChangeFraming(upstream: UpstreamChangeContext): string[] {
+  return [
+    "You are the Tanren Conflict-Resolution-Planner Answerer, in UPSTREAM-CHANGE",
+    "mode. A dependent spec started building speculatively on an ancestor; the",
+    `ANCESTOR (${upstream.ancestorSpecId}) has since changed and that change must`,
+    "PERCOLATE DOWN into the dependent. This is NOT a symmetric conflict: the",
+    "ancestor's change is intentional and authoritative — apply it INTO the",
+    "dependent WHILE KEEPING THE DEPENDENT'S OWN WORK INTACT. Never discard the",
+    "dependent's work, and never drop the ancestor's change.",
+    "",
+    `Upstream change to absorb: ${upstream.changeSummary}`,
+  ];
 }
 
 function baseSpecLines(conflictingSpecIntent: SpecIntent | undefined): string[] {

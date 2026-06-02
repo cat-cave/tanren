@@ -25,6 +25,7 @@ import type pg from "pg";
 import type { DagWalker } from "../contracts/dagWalker.js";
 import type { SpeculativeIntegrator } from "../contracts/speculativeIntegrator.js";
 import { isTerminalStatus } from "../benchmark/runnerDb.js";
+import type { ChangePercolationCoordinator } from "./percolation.js";
 import { buildDagWalker, listWalkableProjectIds } from "./walker.js";
 
 export interface DagWalkerSubscriberDeps {
@@ -43,6 +44,15 @@ export interface DagWalkerSubscriberDeps {
    * trigger fires it (then `integrator` is not needed).
    */
   walker?: DagWalker;
+  /**
+   * P2c-2 (change-percolation): the coordinator that, on the SAME notifications,
+   * detects whether an ancestor changed under an in-flight speculative dependent
+   * and percolates the delta down the chain (NOT discard). Optional — when absent
+   * the subscriber only walks (a test that asserts walking alone omits it); the
+   * worker boot always supplies it so percolation is live. It runs AFTER the walk
+   * so a freshly-enqueued dependent's SHAs are already recorded before detection.
+   */
+  percolation?: ChangePercolationCoordinator;
 }
 
 /**
@@ -180,6 +190,15 @@ export class DagWalkerSubscriber {
     do {
       this.reWalkPending.delete(projectId);
       await this.walker.walk(projectId);
+      // P2c-2: after the walk (so any just-enqueued speculative dependent's
+      // integrated SHAs are already recorded), detect + percolate ancestor changes
+      // into in-flight speculative dependents. A percolation failure is logged,
+      // never fatal to the walk loop — the next notification re-detects.
+      if (this.deps.percolation !== undefined) {
+        await this.deps.percolation.percolate(projectId).catch((error: unknown) => {
+          console.error(`[dag-walker] change-percolation pass failed for project ${projectId}:`, error);
+        });
+      }
     } while (this.reWalkPending.has(projectId));
   }
 }

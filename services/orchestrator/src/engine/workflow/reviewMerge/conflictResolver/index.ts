@@ -58,6 +58,9 @@ export interface DefaultConflictResolverDeps {
   checker: AnswererAdapter<CheckAnswer>;
   auditor: AnswererAdapter<AuditAnswer>;
   runGate: (input: { when: CiWhen; taskId?: string }) => Promise<GateOutcome>;
+  // P2c-2: present when this run is a change-percolation re-execution — reframes the
+  // resolver into upstream-change mode (the ancestor's change flows INTO this spec).
+  upstreamChange?: { ancestorSpecId: string; changeSummary: string };
 }
 
 export function buildDefaultConflictResolver(deps: DefaultConflictResolverDeps): ConflictResolverHook {
@@ -116,6 +119,7 @@ export function buildDefaultConflictResolver(deps: DefaultConflictResolverDeps):
       runId: deps.runId,
       projectId: deps.projectId,
     }),
+    ...(deps.upstreamChange !== undefined && { upstreamChange: deps.upstreamChange }),
   });
 }
 

@@ -97,6 +97,24 @@ export interface WorkspaceConflictApplier {
 
 // ---- The conflict Answerer invocation -------------------------------------
 
+/**
+ * P2c-2 (autonomy-engine.md §2c change-percolation): the UPSTREAM-CHANGE framing.
+ * When an ANCESTOR A changes after a dependent B started speculatively, the SAME
+ * intent-preserving resolver runs — but the model is told the conflict it sees is
+ * A's INTENTIONAL upstream change flowing INTO B (not a symmetric two-spec
+ * collision). The resolver must apply A's change into B WHILE KEEPING B's work
+ * intact (the `resolve` outcome), or — if that is impossible — route B back to the
+ * planner with A's change as context (the `irreconcilable` outcome, mapped to the
+ * `merging` side = B). The decision core (`decideConflictResolution`) is unchanged;
+ * only the prompt framing differs, so the answer schema + invariants are reused.
+ */
+export interface UpstreamChangeContext {
+  /** The ancestor whose intentional change must flow down into the dependent. */
+  ancestorSpecId: string;
+  /** A summary of what changed upstream (new commits / new finding / changes-requested). */
+  changeSummary: string;
+}
+
 /** Invokes the conflict-resolution Answerer with both intents + hunks + the edge. */
 export interface ConflictAnswererInvoker {
   resolve(input: {
@@ -104,6 +122,13 @@ export interface ConflictAnswererInvoker {
     conflictingSpecIntent?: SpecIntent;
     dagEdge: boolean;
     conflictedFiles: ReadonlyArray<ConflictedFile>;
+    /**
+     * P2c-2: present iff this is an UPSTREAM-CHANGE percolation (not a symmetric
+     * merge conflict). It reframes the prompt — apply the ancestor's change into
+     * the dependent while keeping the dependent's work intact — without changing
+     * the answer schema or the `decideConflictResolution` invariants.
+     */
+    upstreamChange?: UpstreamChangeContext;
   }): Promise<ConflictAnswer>;
 }
 

@@ -14,6 +14,7 @@ import type { SshSubstrate } from "../contracts/sshSubstrate.js";
 import type { VcsProvider } from "../contracts/vcsProvider.js";
 import type { GitHubHttpClient } from "../providers/github.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
+import { buildPercolationCoordinator } from "../dag/percolationBuild.js";
 import { PgSpeculativeIntegrator } from "../dag/speculativeIntegrator.js";
 import { startDagWalkerSubscriber } from "../dag/subscriber.js";
 import { startIntake } from "../forge/intake/bootIntake.js";
@@ -54,8 +55,25 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
     secrets: deps.secrets,
     ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
   });
-  const dagWalker = await startDagWalkerSubscriber({ pool: deps.pool, notifyListener: dagNotifyListener, integrator });
-  console.log("[run-worker] DagWalker subscriber started (autonomous DAG execution, autonomy-engine §1a)");
+  // P2c-2: the change-percolation coordinator runs on the SAME notifications as
+  // the walker — when an ancestor changes under an in-flight speculative dependent,
+  // it percolates the delta down the chain (rebuild → re-base → re-gate) rather
+  // than discarding the dependent's work.
+  const percolation = buildPercolationCoordinator({
+    pool: deps.pool,
+    vcsProvider: deps.vcsProvider,
+    secrets: deps.secrets,
+    ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
+  });
+  const dagWalker = await startDagWalkerSubscriber({
+    pool: deps.pool,
+    notifyListener: dagNotifyListener,
+    integrator,
+    percolation,
+  });
+  console.log(
+    "[run-worker] DagWalker + change-percolation subscriber started (autonomous DAG execution + §2c percolation)",
+  );
   const intake = startIntake({
     pool: deps.pool,
     secrets: deps.secrets,

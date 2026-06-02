@@ -25,6 +25,13 @@
 export interface IntegrationOutcome {
   outcome: "integrated" | "conflict";
   integrationBranch: string;
+  /**
+   * P2c-2 (change-percolation): the head SHA each merged ancestor was integrated
+   * AT, keyed by ancestor spec id. The walker records this on the dependent's
+   * speculative run as the divergence key; a later ancestor advance past the
+   * recorded SHA is what the change-percolation detect keys off.
+   */
+  ancestorHeadShas: Record<string, string>;
   /** On `conflict`: the two ancestor specs that conflict with each other. */
   conflictBetween?: { specId: string; otherSpecId: string };
   message: string;

@@ -28,12 +28,9 @@ export interface CreateProjectInput {
   defaultBranch?: string;
   runnerImage?: string;
   allocator?: string;
-  // The HTTP/CLI surface accepts a jsonb-ish blob; `createProject` parses it
-  // through `migrateProjectConfig` (fail-hard on missing/unknown `version`)
-  // before persisting and never stores unknown fields in the typed V1 shape.
-  // Optional. When omitted, the project is created with a fully-defaulted V1.
-  // When supplied it MUST be an explicit `version: 1` blob — an unversioned
-  // blob is rejected (no silent upgrade).
+  // Optional jsonb blob, parsed via `migrateProjectConfig` (fail-hard on
+  // missing/unknown `version`). Omitted ⇒ a defaulted V1; supplied ⇒ MUST be an
+  // explicit `version: 1` blob (no silent upgrade).
   config?: unknown;
 }
 
@@ -72,8 +69,14 @@ export interface CreateSpecRunInput {
   specId: string;
   trigger?: string;
   branch?: string;
-  // P2c-1 (§2c): a SPECULATIVE start; `speculativeBase` is the dynamic base, gate skipped.
-  speculative?: { speculativeBase: string };
+  // P2c-1 (§2c) SPECULATIVE start; P2c-2: `integratedAncestorShas` = build base,
+  // `verifiedAncestorShas` = re-gated-clean (absorbed) carry-forward, `percolationPending` = in-flight marker.
+  speculative?: {
+    speculativeBase: string;
+    integratedAncestorShas?: Record<string, string>;
+    verifiedAncestorShas?: Record<string, string>;
+    percolationPending?: unknown;
+  };
 }
 
 export interface SpecRunContract {
@@ -112,15 +115,13 @@ export async function createProject(
     defaultBranch: input.defaultBranch ?? defaultBranch,
     runnerImage: input.runnerImage ?? defaultRunnerImage,
     allocator: input.allocator ?? defaultAllocator,
-    // No config supplied ⇒ fully-defaulted V1. A supplied config must be an
-    // explicit `version: 1` blob; an unversioned blob or unknown keys is
-    // rejected (fail-hard, no silent upgrade).
+    // No config ⇒ defaulted V1; a supplied config must be an explicit `version: 1`
+    // blob (an unversioned blob / unknown keys are rejected — fail-hard).
     config: input.config === undefined ? defaultProjectConfigV1() : migrateProjectConfig(input.config),
   };
 
-  // RLS R3b: an org-carrying operator persists under `runWithOrgScope`; a
-  // null-org caller is cross-org system seeding → the BYPASSRLS `tanren_system`
-  // pool (else the passed pool, inert).
+  // RLS R3b: an org-carrying operator persists under `runWithOrgScope`; a null-org
+  // caller is cross-org system seeding → the BYPASSRLS `tanren_system` pool.
   const orgId = _actor?.orgId ?? null;
   const persist = async (client: QueryClient): Promise<void> => {
     await client.query(
@@ -150,8 +151,7 @@ export async function createProject(
 }
 
 export async function createSpec(pool: pg.Pool, input: CreateSpecInput, actor?: ActorContext): Promise<SpecContract> {
-  // RLS (specs write): an org-carrying actor runs the spec pre-checks + INSERT
-  // through the org-scoped client; a legacy/unscoped actor keeps the pool path.
+  // RLS (specs write): org-carrying actor → org-scoped client; null-org → pool path.
   const orgId = actor?.orgId ?? null;
   if (orgId !== null) {
     return runWithOrgScope(pool, orgId, (client) => createSpecOnClient(client, input, actor));
@@ -201,9 +201,7 @@ export async function createQueuedRunFromSpec(
   input: CreateSpecRunInput,
   actor?: ActorContext,
 ): Promise<SpecRunContract> {
-  // RLS (write path): an org-carrying actor runs the run-create transaction
-  // through the org-scoped client (`SET LOCAL app.current_org_id`); a legacy/
-  // unscoped actor (no org — e.g. a CLI caller) keeps the manual-transaction path.
+  // RLS (write path): org-carrying actor → org-scoped tx; null-org (CLI) → manual tx.
   const orgId = actor?.orgId ?? null;
   if (orgId !== null) {
     return runWithOrgScope(pool, orgId, (client) => createQueuedRunFromSpecOnClient(client, input, actor));
@@ -246,6 +244,11 @@ async function ensureProjectAccess(pool: QueryClient, projectId: string, actor?:
     return;
   }
   throw new ProjectAccessDeniedError(projectId);
+}
+
+/** JSON-encode a value for a jsonb column, or NULL when absent (the P2c-2 percolation columns). */
+function jsonbOrNull(value: unknown): string | null {
+  return value === undefined || value === null ? null : JSON.stringify(value);
 }
 
 function defaultRunBranch(spec: SpecContract): string {
@@ -303,11 +306,24 @@ async function createQueuedRunFromSpecOnClient(
     spec: { ...loaded.spec, status: "active" },
   };
 
+  // P2c-2 percolation columns — set only on a speculative start (`verified`/`pending` carried onto a re-execution run).
+  const spec = input.speculative;
   await client.query(
     // org_id derived in-statement from the parent project (tanren tenancy).
-    `INSERT INTO runs (run_id, spec_id, project_id, org_id, trigger, branch, status, speculative_base)
-     VALUES ($1, $2, $3, (SELECT org_id FROM projects WHERE project_id = $3), $4, $5, 'queued', $6)`,
-    [run.runId, run.specId, run.projectId, run.trigger, run.branch, input.speculative?.speculativeBase ?? null],
+    `INSERT INTO runs (run_id, spec_id, project_id, org_id, trigger, branch, status, speculative_base,
+                       integrated_ancestor_shas, verified_ancestor_shas, percolation_pending)
+     VALUES ($1, $2, $3, (SELECT org_id FROM projects WHERE project_id = $3), $4, $5, 'queued', $6, $7, $8, $9)`,
+    [
+      run.runId,
+      run.specId,
+      run.projectId,
+      run.trigger,
+      run.branch,
+      spec?.speculativeBase ?? null,
+      jsonbOrNull(spec?.integratedAncestorShas),
+      jsonbOrNull(spec?.verifiedAncestorShas),
+      jsonbOrNull(spec?.percolationPending),
+    ],
   );
   await claimPendingSpec(client, loaded.spec);
   await client.query(
@@ -323,9 +339,8 @@ async function createQueuedRunFromSpecOnClient(
     [run.runId, plannerTaskId, JSON.stringify({ specId: run.specId, projectId: run.projectId, branch: run.branch })],
   );
   run.plannerJobId = String(job.rows[0]?.id);
-  // LISTEN/NOTIFY: wake an idle worker the instant this run's plan job is
-  // enqueued. The NOTIFY rides this transaction's COMMIT (same `client`), so it
-  // fires exactly when the queued row becomes visible — never before.
+  // LISTEN/NOTIFY: wake an idle worker the instant this run's plan job is enqueued.
+  // The NOTIFY rides this tx's COMMIT, so it fires exactly when the row is visible.
   await notifyJobEnqueued(client);
   const eventStore = new PgEventStore(client);
   await eventStore.append({
@@ -392,24 +407,10 @@ async function loadSpecWithProject(
   specId: string,
 ): Promise<{ project: ProjectContract; spec: SpecContract }> {
   const result = await pool.query(
-    `SELECT
-       p.project_id,
-       p.name,
-       p.repo_url,
-       p.default_branch,
-       p.runner_image,
-       p.allocator,
-       p.config,
-       s.spec_id,
-       s.title,
-       s.description,
-       s.acceptance_criteria,
-       s.depends_on,
-       s.status,
-       s.priority
-     FROM specs s
-     JOIN projects p ON p.project_id = s.project_id
-     WHERE s.spec_id = $1`,
+    `SELECT p.project_id, p.name, p.repo_url, p.default_branch, p.runner_image, p.allocator, p.config,
+            s.spec_id, s.title, s.description, s.acceptance_criteria, s.depends_on, s.status, s.priority
+       FROM specs s JOIN projects p ON p.project_id = s.project_id
+      WHERE s.spec_id = $1`,
     [specId],
   );
   const row = result.rows[0];
@@ -425,9 +426,8 @@ async function loadSpecWithProject(
       defaultBranch: decoded.default_branch,
       runnerImage: decoded.runner_image,
       allocator: decoded.allocator,
-      // Read-path parser: a stored row missing `version` (or carrying an
-      // unknown version) raises a typed UnknownConfigVersionError out of
-      // migrateProjectConfig — no silent default.
+      // Read-path parser: a row missing/unknown `version` raises a typed
+      // UnknownConfigVersionError out of migrateProjectConfig — no silent default.
       config: migrateProjectConfig(decoded.config),
     },
     spec: {

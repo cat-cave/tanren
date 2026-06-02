@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "ancestorSpecId": {
+      "type": "string"
+    },
+    "fromAncestorSha": {
+      "type": "string"
+    },
+    "runId": {
+      "type": "string"
+    },
+    "severity": {
+      "enum": [
+        "P0",
+        "P1",
+        "P2",
+        "P3",
+        "changes_requested"
+      ],
+      "type": "string"
+    },
+    "specId": {
+      "type": "string"
+    },
+    "toAncestorSha": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "specId",
+    "runId",
+    "ancestorSpecId",
+    "fromAncestorSha",
+    "toAncestorSha",
+    "severity"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.dag.spec.percolating"
+}

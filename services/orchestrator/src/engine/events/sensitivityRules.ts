@@ -404,6 +404,39 @@ export const sensitivityRules: SensitivityRule[] = [
     ["depth", "public"],
     ["depthCap", "public"],
   ]),
+  // P2c-2 (§2c) change-percolation events — spec/run/ancestor ids, ancestor head
+  // SHAs (public: a commit hash is not a secret), the severity label, the resolver
+  // flag, and the irreconcilable diagnosis reason. None carry diff content,
+  // credentials, or command output.
+  ...rulesFor("dag.spec.percolating", [
+    ["specId", "public"],
+    ["runId", "public"],
+    ["ancestorSpecId", "public"],
+    ["fromAncestorSha", "public"],
+    ["toAncestorSha", "public"],
+    ["severity", "public"],
+  ]),
+  ...rulesFor("dag.spec.percolated", [
+    ["specId", "public"],
+    ["runId", "public"],
+    ["ancestorSpecId", "public"],
+    ["integratedAncestorSha", "public"],
+    ["viaResolver", "public"],
+  ]),
+  ...rulesFor("dag.spec.percolation_deferred", [
+    ["specId", "public"],
+    ["runId", "public"],
+    ["ancestorSpecId", "public"],
+    ["pendingAncestorSha", "public"],
+    ["severity", "public"],
+  ]),
+  ...rulesFor("dag.spec.percolation_replan", [
+    ["specId", "public"],
+    ["runId", "public"],
+    ["ancestorSpecId", "public"],
+    ["ancestorSha", "public"],
+    ["reason", "public"],
+  ]),
 
   // Infrastructure + integration rules (runner/allocator/workspace/credential,
   // cost + usage telemetry, github/ci/phase1/reviews/notifications/hello/

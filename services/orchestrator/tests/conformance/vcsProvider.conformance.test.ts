@@ -17,6 +17,7 @@ import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "..
 import type { VcsProvider } from "../../src/engine/contracts/vcsProvider.js";
 import { InMemoryVcsProvider } from "./fakes/inMemoryVcsProvider.js";
 import {
+  CONFORMANCE_ABSENT_BRANCH,
   CONFORMANCE_ANCESTOR_CONFLICT,
   CONFORMANCE_BEHIND_PR_NUMBER,
   CONFORMANCE_DIRTY_PR_NUMBER,
@@ -111,6 +112,10 @@ class RoutingGitHubHttp implements GitHubHttpClient {
     // ephemeral integration ref, then merge each ancestor branch. The conflict
     // ancestor's branch yields a 409 from the merges endpoint.
     if (input.method === "GET" && /\/git\/ref\/heads\//u.test(path)) {
+      // P2c-2 readBranchHeadSha: the well-known absent branch 404s (missing ref).
+      if (path.includes(encodeURIComponent(CONFORMANCE_ABSENT_BRANCH))) {
+        return { status: 404, body: { message: "Not Found" } };
+      }
       return ok({ object: { sha: HEAD_SHA } });
     }
     if (input.method === "POST" && path.endsWith("/git/refs")) {

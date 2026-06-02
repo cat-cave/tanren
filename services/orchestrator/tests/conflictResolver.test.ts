@@ -277,4 +277,42 @@ describe("intentPreservingConflictResolver", () => {
     expect(resolving?.payload).not.toHaveProperty("conflictingSpecId");
     expect(resolving?.payload).toMatchObject({ dagEdge: false });
   });
+
+  it("P2c-2: a percolation re-execution threads the UPSTREAM-CHANGE context to the answerer", async () => {
+    // When `upstreamChange` is set (a change-percolation re-execution), the resolver
+    // runs in upstream-change mode — the ancestor's change flows INTO this spec.
+    const events = new FakeEventStore();
+    const log: string[] = [];
+    const applier = fakeApplier(conflictedFiles, log);
+    const captured: { input?: Parameters<ConflictAnswererInvoker["resolve"]>[0] } = {};
+
+    const resolver = buildIntentPreservingConflictResolver({
+      projectId: "proj_1",
+      mergingSpecIntent: MERGING,
+      eventStore: events,
+      provenance: fakeProvenance({ conflictingSpecId: BASE.specId, conflictingSpecIntent: BASE, dagEdge: true }),
+      applier,
+      answerer: fakeAnswerer(
+        {
+          decision: "resolve",
+          reasoning: "absorbed the ancestor change, kept this spec's work",
+          resolvedFiles: [{ path: "src/router.ts", content: "ancestor + dependent\n" }],
+          replanSpec: null,
+        },
+        captured,
+      ),
+      reGate: fakeReGate({ passed: true, reason: "green" }),
+      replan: recordingReplan(),
+      upstreamChange: { ancestorSpecId: "spec_base", changeSummary: "the reviewer reworked the rate limiter" },
+    });
+
+    const result = await resolver(CONTEXT);
+
+    expect(result.resolved).toBe(true);
+    // The upstream-change framing reached the answerer (now-reachable in production).
+    expect(captured.input?.upstreamChange).toEqual({
+      ancestorSpecId: "spec_base",
+      changeSummary: "the reviewer reworked the rate limiter",
+    });
+  });
 });

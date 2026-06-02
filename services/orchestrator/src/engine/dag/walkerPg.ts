@@ -141,6 +141,7 @@ export class SpecRunDagEnqueuer implements DagEnqueuer {
     projectId: string;
     specId: string;
     speculativeBase?: string;
+    integratedAncestorShas?: Record<string, string>;
   }): Promise<{ runId: string }> {
     const orgId = await runWithSystemScope(this.pool, async (client) => {
       const result = await client.query<{ org_id: string | null }>(
@@ -165,8 +166,16 @@ export class SpecRunDagEnqueuer implements DagEnqueuer {
         specId: input.specId,
         trigger: "dag_walker",
         // A speculative start skips the done-only dependency gate and records the
-        // integration branch as the run's dynamic base.
-        ...(input.speculativeBase !== undefined && { speculative: { speculativeBase: input.speculativeBase } }),
+        // integration branch as the run's dynamic base + the per-ancestor head SHA
+        // map (the change-percolation divergence key, P2c-2).
+        ...(input.speculativeBase !== undefined && {
+          speculative: {
+            speculativeBase: input.speculativeBase,
+            ...(input.integratedAncestorShas !== undefined && {
+              integratedAncestorShas: input.integratedAncestorShas,
+            }),
+          },
+        }),
       },
       actor,
     );
