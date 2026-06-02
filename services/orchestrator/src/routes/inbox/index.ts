@@ -23,19 +23,12 @@ import type { GitHubHttpClient } from "../../engine/providers/github.js";
 import { ProposedSpec, PlacementKind } from "../../engine/forge/discovery/index.js";
 import {
   acceptCandidate,
+  buildInboxConnectorMap,
   CandidateNotFoundError,
   CandidateNotPlaceableError,
   closeDuplicateCandidate,
-  createGitHubIssuesConnector,
-  createIssuesConnector,
-  createJiraConnector,
-  createLinearConnector,
-  createSentryConnector,
   createSource,
   dismissCandidate,
-  FetchJiraHttpClient,
-  FetchLinearHttpClient,
-  FetchSentryHttpClient,
   foldCandidate,
   getSource,
   ingestSource,
@@ -97,39 +90,19 @@ const AcceptBody = z
 
 export function createInboxRoutes(options: InboxRoutesOptions) {
   const app = new Hono<ActorContextEnv>();
+  // The `issues` slot dispatches by `config.provider` (default `github`, or
+  // `linear`/`jira`); `errors` is Sentry — the SAME default map the P1d poller
+  // builds (shared `buildInboxConnectorMap`). GitHub sources carry no `provider`
+  // and keep working. Tests may override via `options.connectors`.
   const connectors =
     options.connectors ??
-    new Map<string, SourceConnector>([
-      // The `issues` slot dispatches by `config.provider` (default `github`, or
-      // `linear`/`jira`) — each provider reuses the existing issue-tracker kind
-      // (no enum/DB-CHECK change). GitHub sources carry no `provider` and keep
-      // working.
-      [
-        "issues",
-        createIssuesConnector({
-          github: createGitHubIssuesConnector({
-            secrets: options.secrets,
-            githubHttp: options.githubHttp,
-          }),
-          linear: createLinearConnector({
-            secrets: options.secrets,
-            linearHttp: options.linearHttp ?? new FetchLinearHttpClient(),
-          }),
-          jira: createJiraConnector({
-            secrets: options.secrets,
-            jiraHttp: options.jiraHttp ?? new FetchJiraHttpClient(),
-          }),
-        }),
-      ],
-      // Sentry is wired under the `errors` source kind (no enum/DB-CHECK change).
-      [
-        "errors",
-        createSentryConnector({
-          secrets: options.secrets,
-          sentryHttp: options.sentryHttp ?? new FetchSentryHttpClient(),
-        }),
-      ],
-    ]);
+    buildInboxConnectorMap({
+      secrets: options.secrets,
+      githubHttp: options.githubHttp,
+      ...(options.sentryHttp === undefined ? {} : { sentryHttp: options.sentryHttp }),
+      ...(options.linearHttp === undefined ? {} : { linearHttp: options.linearHttp }),
+      ...(options.jiraHttp === undefined ? {} : { jiraHttp: options.jiraHttp }),
+    });
   // The shared deps for the accept + resolution transitions — none of which
   // consult a triage answerer (they commit / move an already-triaged candidate).
   // Ingestion builds its own deps per-request with the source-scoped answerer.

@@ -96,6 +96,7 @@ export function createDeterministicTriageAnswerer(): TriageAnswerer {
           verdict: "auto_routable",
           duplicateOfSpecId: null,
           discoveryVariant: variantFor(candidate.severity),
+          routableSpec: null,
         });
       }
 
@@ -113,6 +114,7 @@ export function createDeterministicTriageAnswerer(): TriageAnswerer {
           verdict: "dedupe_close",
           duplicateOfSpecId: match.specId,
           discoveryVariant: variantFor(candidate.severity),
+          routableSpec: null,
         });
       }
 
@@ -125,6 +127,7 @@ export function createDeterministicTriageAnswerer(): TriageAnswerer {
           verdict: "needs_call",
           duplicateOfSpecId: null,
           discoveryVariant: candidate.severity === "fail" ? "bug" : "feature",
+          routableSpec: null,
         });
       }
 
@@ -136,6 +139,7 @@ export function createDeterministicTriageAnswerer(): TriageAnswerer {
         verdict: "needs_call",
         duplicateOfSpecId: null,
         discoveryVariant: variantFor(candidate.severity),
+        routableSpec: null,
       });
     },
   };

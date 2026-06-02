@@ -5,6 +5,7 @@ export {
   SourceKind,
   InboxSource,
   TriageVerdict,
+  TriageRoutableSpec,
   CandidateTriage,
   CandidateStatus,
   Candidate,
@@ -51,6 +52,8 @@ export {
 
 export { createIssuesConnector, type IssuesConnectorDeps } from "./issuesConnector.js";
 
+export { buildInboxConnectorMap, type BuildConnectorMapDeps } from "./connectorMap.js";
+
 export {
   createSource,
   listSources,
@@ -64,6 +67,7 @@ export {
 
 export {
   ingestSource,
+  autoRouteCandidate,
   acceptCandidate,
   foldCandidate,
   dismissCandidate,
@@ -73,6 +77,8 @@ export {
   TriageAnswererUnconfiguredError,
   type InboxEngineDeps,
   type IngestResult,
+  type AutoRouteDeps,
+  type AutoRouteResult,
   type AcceptCandidateInput,
   type AcceptCandidateResult,
 } from "./engine.js";

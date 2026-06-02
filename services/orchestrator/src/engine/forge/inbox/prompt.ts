@@ -27,8 +27,15 @@ export function buildTriagePrompt(context: TriageAnswererContext): string {
     "- `dedupe`: whether this duplicates an existing spec/candidate (and which).",
     "- `match`: which behavior/spec/milestone it fits.",
     "- `placement`: the proposed DAG placement (or `auto → … queued`).",
-    "- `verdict`: your routing decision.",
+    "- `verdict`: your routing decision. Use `auto_routable` ONLY when this is a",
+    "  clear, self-contained unit of work safe to enqueue without a human call;",
+    "  `needs_call` when an operator should review/shape it first; `dedupe_close`",
+    "  when it duplicates existing work.",
     "- `duplicateOfSpecId`: the existing spec-id when dedupe found one, else null.",
     "- `discoveryVariant`: the variant the accept→discovery hand-off should open with.",
+    "- `routableSpec`: WHEN AND ONLY WHEN `verdict` is `auto_routable`, the spec to",
+    "  commit into the DAG — a `title`, a `description`, concrete `acceptanceCriteria`,",
+    "  any `dependsOn` (existing spec-ids above this spec builds on), and a `priority`",
+    "  (`P0`/`P1`/`P2`/`tbd`). For every other verdict, set `routableSpec` to null.",
   ].join("\n");
 }
