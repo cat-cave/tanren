@@ -46,6 +46,7 @@ import {
   type ReconAnswerer,
   type RepoReader,
 } from "../../engine/forge/brownfield/index.js";
+import type { ForgeAnswererTarget } from "../../engine/forge/providerFactory.js";
 import { createGitHubIssuesConnector } from "../../engine/forge/inbox/githubConnector.js";
 import type { IngestedItem } from "../../engine/forge/inbox/types.js";
 import type { GitHubHttpClient } from "../../engine/providers/github.js";
@@ -61,9 +62,11 @@ export interface BrownfieldFullTrackOptions {
   secrets: SecretStore;
   githubHttp: GitHubHttpClient;
   githubAppMinter?: GithubAppTokenMinter;
-  // Injectable recon Answerer (provider wrap or test fake). Defaults to the
-  // engine's deterministic recon Answerer when omitted.
-  reconAnswererFactory?: () => ReconAnswerer;
+  // The recon answerer factory, called per-request with the request's org/project
+  // so the answerer resolves THAT project's `forge` routing. Production passes
+  // `buildForgeReconAnswererFactory` (a real provider answerer); tests pass a
+  // fake. REQUIRED — there is no deterministic fallback.
+  reconAnswererFactory: (target: ForgeAnswererTarget) => ReconAnswerer;
   // Test seams: override the repo reader / config-injection GitHub / issue
   // fetch so the routes are exercised without network.
   repoReaderFor?: (repoUrl: string, defaultBranch: string, resolved: ResolvedGithubToken) => RepoReader;
@@ -113,7 +116,7 @@ export function createBrownfieldFullTrackRoutes(options: BrownfieldFullTrackOpti
       const { index, report } = await runRecon(
         {
           reader,
-          ...(options.reconAnswererFactory === undefined ? {} : { answerer: options.reconAnswererFactory() }),
+          answerer: options.reconAnswererFactory({ orgId: guard.orgId, projectId: c.req.param("projectId") }),
         },
         parsed.data.repoUrl,
       );

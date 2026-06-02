@@ -16,12 +16,16 @@ export {
 export {
   classifyInsight,
   acceptProposals,
+  DiscoveryAnswererUnconfiguredError,
   type DiscoveryEngineDeps,
   type ClassifyInput,
   type AcceptInput,
   type AcceptResult,
   type AcceptedSpec,
 } from "./engine.js";
+
+export { wrapProviderDiscoveryAnswerer, type WrapProviderDiscoveryAnswererOptions } from "./providerAnswerer.js";
+export { buildDiscoveryPrompt } from "./prompt.js";
 
 export {
   DISCOVERY_METADATA_KEY,
@@ -31,5 +35,3 @@ export {
   writeProvenance,
   readProvenance,
 } from "./provenance.js";
-
-export { createDeterministicDiscoveryAnswerer } from "./defaultAnswerer.js";

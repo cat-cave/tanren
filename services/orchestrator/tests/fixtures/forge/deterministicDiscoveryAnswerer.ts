@@ -18,7 +18,7 @@ import type {
   ImpactDelta,
   PlacementOption,
   ProposedSpec,
-} from "./types.js";
+} from "../../../src/engine/forge/discovery/types.js";
 
 // The three canonical placement options, ordered by impact on existing work.
 // `recommended`/`risk` differ per variant: a bug recommends the interrupt

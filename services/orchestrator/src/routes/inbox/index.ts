@@ -9,9 +9,10 @@
 //   POST /:orgId/inbox/candidates/:id/close-duplicate
 //
 // The GitHub Issues connector is wired from the injected `secrets` + `githubHttp`
-// (the same deps the rest of P3 uses); the triage answerer is injectable
-// (`answererFactory`) and defaults to the deterministic grounded one, so the
-// endpoint is live without provider infra. Mounted on the shared `/orgs` base.
+// (the same deps the rest of P3 uses); the triage answerer is resolved per-ingest
+// from the source's org/project via `answererFactory(target)` — production wires
+// a REAL provider answerer (`buildForgeTriageAnswererFactory`), tests a fake.
+// There is no deterministic fallback (§8a). Mounted on the shared `/orgs` base.
 
 import { Hono, type Context } from "hono";
 import type pg from "pg";
@@ -48,6 +49,7 @@ import {
   type SourceConnector,
   type TriageAnswerer,
 } from "../../engine/forge/inbox/index.js";
+import type { ForgeAnswererTarget } from "../../engine/forge/providerFactory.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg } from "../orgs/index.js";
 
@@ -64,8 +66,11 @@ export interface InboxRoutesOptions {
   // Injectable Jira transport (defaults to a fetch-based client). The Jira
   // connector reuses `secrets` for its API token (config `tokenRef`).
   jiraHttp?: JiraHttpClient;
-  // Injectable triage answerer (provider wrap or a test fake).
-  answererFactory?: () => TriageAnswerer;
+  // The triage answerer factory, called per-ingest with the source's org/project
+  // so the answerer resolves THAT project's `forge` routing. Production passes
+  // `buildForgeTriageAnswererFactory` (a real provider answerer); tests pass a
+  // fake. REQUIRED — there is no deterministic fallback.
+  answererFactory: (target: ForgeAnswererTarget) => TriageAnswerer;
   // Test seam: override the connector map (defaults to GitHub + Sentry).
   connectors?: ReadonlyMap<string, SourceConnector>;
 }
@@ -92,7 +97,6 @@ const AcceptBody = z
 
 export function createInboxRoutes(options: InboxRoutesOptions) {
   const app = new Hono<ActorContextEnv>();
-  const answerer = options.answererFactory?.();
   const connectors =
     options.connectors ??
     new Map<string, SourceConnector>([
@@ -126,10 +130,12 @@ export function createInboxRoutes(options: InboxRoutesOptions) {
         }),
       ],
     ]);
+  // The shared deps for the accept + resolution transitions — none of which
+  // consult a triage answerer (they commit / move an already-triaged candidate).
+  // Ingestion builds its own deps per-request with the source-scoped answerer.
   const deps: InboxEngineDeps = {
     pool: options.pool,
     connectors,
-    ...(answerer === undefined ? {} : { answerer }),
   };
 
   app.get("/:orgId/inbox", async (c) => {
@@ -158,8 +164,17 @@ export function createInboxRoutes(options: InboxRoutesOptions) {
     if (source === undefined || source.orgId !== orgId) {
       return c.json({ error: "source_not_found" }, 404);
     }
+    // Resolve the triage answerer against the source's org/project so the model
+    // grounds on the right project's specs/routing.
+    const ingestDeps: InboxEngineDeps = {
+      ...deps,
+      answerer: options.answererFactory({
+        orgId,
+        ...(source.projectId === null ? {} : { projectId: source.projectId }),
+      }),
+    };
     try {
-      const { candidates } = await ingestSource(deps, source);
+      const { candidates } = await ingestSource(ingestDeps, source);
       return c.json({ candidates }, 200);
     } catch (error) {
       return c.json({ error: "inbox_ingest_failed", message: messageOf(error) }, 500);

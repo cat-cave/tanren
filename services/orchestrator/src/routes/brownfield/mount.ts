@@ -9,6 +9,8 @@
 import type { Hono } from "hono";
 import type pg from "pg";
 import type { SecretStore } from "../../engine/contracts/secretStore.js";
+import type { ReconAnswerer } from "../../engine/forge/brownfield/index.js";
+import type { ForgeAnswererTarget } from "../../engine/forge/providerFactory.js";
 import type { GitHubHttpClient } from "../../engine/providers/github.js";
 import type { GithubAppTokenMinter } from "../../engine/providers/githubAppTokenMinter.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
@@ -20,6 +22,9 @@ export interface MountBrownfieldOptions {
   secrets: SecretStore;
   githubHttp: GitHubHttpClient;
   githubAppMinter?: GithubAppTokenMinter;
+  // The recon answerer factory (real provider answerer in prod; fake in tests).
+  // Threaded into the full-track recon route; the minimal link route ignores it.
+  reconAnswererFactory: (target: ForgeAnswererTarget) => ReconAnswerer;
 }
 
 export function mountBrownfieldRoutes(app: Hono<ActorContextEnv>, options: MountBrownfieldOptions): void {

@@ -12,12 +12,12 @@ import type { ActorContext } from "../src/auth/schemas.js";
 import {
   acceptProposals,
   classifyInsight,
-  createDeterministicDiscoveryAnswerer,
   parseDiscoveryProvenance,
   type DiscoveryAnswerer,
   type DiscoveryInsight,
   type DiscoveryResult,
 } from "../src/engine/forge/discovery/index.js";
+import { createDeterministicDiscoveryAnswerer } from "./fixtures/forge/deterministicDiscoveryAnswerer.js";
 
 const actor: ActorContext = {
   userId: "user_a",
@@ -141,7 +141,10 @@ describe("deterministic discovery answerer · per variant", () => {
     it(`${variant}: proposes ${minProposals}+ spec(s) + three placement options with one recommended`, async () => {
       const { pool } = stubPool([{ spec_id: "s_done", title: "stats page", status: "done" }]);
       const insight: DiscoveryInsight = { ...featureInsight, variant };
-      const result = await classifyInsight({ pool }, { projectId: "project_a", insight, actor });
+      const result = await classifyInsight(
+        { pool, answerer: createDeterministicDiscoveryAnswerer() },
+        { projectId: "project_a", insight, actor },
+      );
       expect(result.variant).toBe(variant);
       expect(result.proposals.length).toBeGreaterThanOrEqual(minProposals);
       // Three canonical placements, exactly one recommended.
@@ -154,7 +157,10 @@ describe("deterministic discovery answerer · per variant", () => {
 
   it("feature: grounds the lead proposal's dependsOn against a shipped spec", async () => {
     const { pool } = stubPool([{ spec_id: "s_done", title: "stats page", status: "merged" }]);
-    const result = await classifyInsight({ pool }, { projectId: "project_a", insight: featureInsight, actor });
+    const result = await classifyInsight(
+      { pool, answerer: createDeterministicDiscoveryAnswerer() },
+      { projectId: "project_a", insight: featureInsight, actor },
+    );
     expect(result.proposals[0]?.dependsOn).toContain("s_done");
   });
 

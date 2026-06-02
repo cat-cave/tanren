@@ -14,7 +14,8 @@ export {
   type TriageAnswererContext,
 } from "./types.js";
 
-export { createDeterministicTriageAnswerer } from "./defaultAnswerer.js";
+export { wrapProviderTriageAnswerer, type WrapProviderTriageAnswererOptions } from "./providerAnswerer.js";
+export { buildTriagePrompt } from "./prompt.js";
 
 export { GitHubIssuesConfig, createGitHubIssuesConnector, type GitHubConnectorDeps } from "./githubConnector.js";
 
@@ -69,6 +70,7 @@ export {
   closeDuplicateCandidate,
   CandidateNotFoundError,
   CandidateNotPlaceableError,
+  TriageAnswererUnconfiguredError,
   type InboxEngineDeps,
   type IngestResult,
   type AcceptCandidateInput,

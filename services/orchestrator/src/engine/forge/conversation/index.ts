@@ -2,13 +2,13 @@
 //
 // The LLM-backed conversation engine that replaces the templated v0 narration
 // for operator-driven questions. The Forge thread route imports `askForge` +
-// `wrapProviderAnswerer`; tests import `createFakeForgeAnswerer`.
+// `wrapProviderAnswerer`; the scripted fake answerer is a test fixture.
 
 export { askForge } from "./engine.js";
 export type { ForgeAskInput, ForgeAskResult, ForgeConversationDeps, ForgeReadToolDispatcher } from "./engine.js";
 
-export { wrapProviderAnswerer, createFakeForgeAnswerer, ForgeAnswererStepSchema } from "./answerer.js";
-export type { ForgeAnswererStepOutput, WrapProviderAnswererOptions, FakeForgeAnswererOptions } from "./answerer.js";
+export { wrapProviderAnswerer, ForgeAnswererStepSchema } from "./answerer.js";
+export type { ForgeAnswererStepOutput, WrapProviderAnswererOptions } from "./answerer.js";
 
 export { buildForgePrompt } from "./prompt.js";
 

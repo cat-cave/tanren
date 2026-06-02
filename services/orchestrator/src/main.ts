@@ -133,8 +133,11 @@ export function buildApp(input: {
   // identity ref come from the injected substrate. A single PgNotifyListener
   // (held off `input.pool`, the SAME `tanren_run` channel the SSE source uses)
   // drives the LISTEN/NOTIFY terminal await.
+  // One allocator shared by the benchmark scheduler AND the Forge answerer
+  // factories (each allocates a short-lived runner per model call).
+  const allocator = buildAllocatorFromEnv(input.pool);
   const benchmark = {
-    allocator: buildAllocatorFromEnv(input.pool),
+    allocator,
     ssh: input.ssh,
     identitySecretRef,
     notifyListener: new PgNotifyListener(input.pool),
@@ -150,6 +153,11 @@ export function buildApp(input: {
     credentialRegistry,
     configGateGithub,
     vaultHealthCheck,
+    // The Forge answerer factories allocate a runner per model call; they share
+    // the run worker's allocator / SSH substrate / identity ref.
+    allocator,
+    ssh: input.ssh,
+    identitySecretRef,
     benchmark,
   });
 

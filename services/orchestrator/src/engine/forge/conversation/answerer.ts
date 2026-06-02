@@ -4,8 +4,9 @@
 //     returns each step (request read tools OR finalize a ForgeAnswer).
 //   - `wrapProviderAnswerer`      — adapts a P3-0012 AnswererAdapter (Claude /
 //     Codex, resolved via adapterSelector) into a ForgeConversationAnswerer.
-//   - `createFakeForgeAnswerer`   — a deterministic, scripted answerer for
-//     tests so no test hits a real provider.
+//
+// The scripted fake answerer lives under tests/fixtures (P1c §8a) — it is a
+// test stand-in and must never be constructed by a production path.
 
 import { z } from "zod";
 import { renderAnswererJsonSchema } from "../../answerers/schemas/index.js";
@@ -69,36 +70,4 @@ function normalizeStep(step: ForgeAnswererStepOutput): ForgeAnswererStep {
   }
   const readCalls = step.toolCalls.filter((call): call is ForgeReadToolCall => isReadToolName(call.tool));
   return { kind: "tools", toolCalls: readCalls };
-}
-
-// ---------------------------------------------------------------------------
-// Fake answerer — scripted steps for tests. Each entry in `script` is returned
-// in order on successive `respond` calls; the last entry repeats if the engine
-// asks again. This lets a test express "read a run, then finalize" without a
-// provider.
-// ---------------------------------------------------------------------------
-
-export interface FakeForgeAnswererOptions {
-  script: ForgeAnswererStep[];
-  // Optional spy: invoked with each context the engine passes, so a test can
-  // assert the answerer saw the tool results / history it expected.
-  onRespond?: (context: ForgeConversationContext) => void;
-}
-
-export function createFakeForgeAnswerer(options: FakeForgeAnswererOptions): ForgeConversationAnswerer {
-  let index = 0;
-  return {
-    async respond(context: ForgeConversationContext): Promise<ForgeAnswererStep> {
-      options.onRespond?.(context);
-      const step = options.script[Math.min(index, options.script.length - 1)];
-      index += 1;
-      if (step === undefined) {
-        return {
-          kind: "final",
-          answer: { body: "(no script)", attentionItems: [], insights: [], prompts: [] },
-        };
-      }
-      return step.kind === "tools" ? normalizeStep(step) : step;
-    },
-  };
 }

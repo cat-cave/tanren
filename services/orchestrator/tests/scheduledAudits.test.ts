@@ -18,6 +18,7 @@ import {
   type AuditJob,
   type AuditPassRunner,
 } from "../src/engine/forge/audits/index.js";
+import { createDeterministicTriageAnswerer } from "./fixtures/forge/deterministicTriageAnswerer.js";
 
 // In-memory pool tracking audit_jobs + inbox_sources + candidates so the
 // run → emit-to-inbox round trip is observable.
@@ -198,7 +199,15 @@ describe("runAuditJob → candidate inbox auto-route", () => {
       },
     ]);
 
-    const result = await runAuditJob({ pool, passRunner: runner, now: () => new Date("2026-05-28T03:00:00Z") }, job);
+    const result = await runAuditJob(
+      {
+        pool,
+        passRunner: runner,
+        answerer: createDeterministicTriageAnswerer(),
+        now: () => new Date("2026-05-28T03:00:00Z"),
+      },
+      job,
+    );
 
     // The system scheduled-audit source was created + the finding routed through it.
     expect([...sources.values()].some((s) => s.kind === "scheduled_audit" && s.auto_route === "true")).toBe(true);
@@ -227,7 +236,7 @@ describe("runAuditJob → candidate inbox auto-route", () => {
       cadence: "nightly",
     });
     const runner = fakeRunner([{ externalId: "dep-1", title: "lodash outdated", body: "v1", severity: "info" }]);
-    const deps = { pool, passRunner: runner };
+    const deps = { pool, passRunner: runner, answerer: createDeterministicTriageAnswerer() };
     await runAuditJob(deps, job);
     await runAuditJob(deps, job);
     expect(candidates.size).toBe(1);

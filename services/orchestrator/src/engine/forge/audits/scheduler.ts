@@ -17,7 +17,6 @@
 // whole flow with fakes and no provider / SSH — see scheduledAudits.test.ts.
 
 import type pg from "pg";
-import { createDeterministicTriageAnswerer } from "../inbox/defaultAnswerer.js";
 import { createSource, listSources, upsertCandidate } from "../inbox/store.js";
 import type { Candidate, InboxSource, TriageAnswerer } from "../inbox/types.js";
 import { recordAuditRun } from "./store.js";
@@ -36,11 +35,22 @@ export interface AuditSchedulerDeps {
   // The injectable read-only pass executor (Answerer over SSH in prod; a fake
   // in tests). A job with no runner is a no-op (records a clean run).
   passRunner: AuditPassRunner;
-  // Injectable triage answerer; defaults to the deterministic grounded one,
-  // which auto-routes system / scheduled-audit sources.
+  // The triage answerer — REQUIRED only when a pass actually produces findings.
+  // Production resolves a real provider answerer from the project's `forge`
+  // routing; tests inject a fake. There is NO production fallback to a
+  // deterministic verdict (§8a). A job with no findings never consults it, so it
+  // is optional on the deps (a clean/no-op pass needs no model).
   answerer?: TriageAnswerer;
   // Test/clock seam.
   now?: () => Date;
+}
+
+/** Thrown when an audit pass yields findings but no model answerer is wired (§8a). */
+export class AuditTriageAnswererUnconfiguredError extends Error {
+  constructor() {
+    super("audit-finding triage requires a provider answerer; none was wired");
+    this.name = "AuditTriageAnswererUnconfiguredError";
+  }
 }
 
 export interface RunAuditJobResult {
@@ -97,11 +107,14 @@ export async function runAuditJob(deps: AuditSchedulerDeps, job: AuditJob): Prom
     return { job, candidates: [], findings: [] };
   }
 
-  const answerer = deps.answerer ?? createDeterministicTriageAnswerer();
   const { findings } = await deps.passRunner.run(job);
 
   const candidates: Candidate[] = [];
   if (findings.length > 0) {
+    if (deps.answerer === undefined) {
+      throw new AuditTriageAnswererUnconfiguredError();
+    }
+    const answerer = deps.answerer;
     const source = await findOrCreateAuditSource(deps.pool, job.orgId);
     for (const finding of findings) {
       const triage = await answerer.triage({

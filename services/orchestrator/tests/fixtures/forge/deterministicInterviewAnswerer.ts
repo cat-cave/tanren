@@ -1,23 +1,21 @@
-// P3-0015 greenfield onboarding: deterministic vision-interview answerer.
+// TEST FIXTURE ONLY (P1c). Deterministic vision-interview answerer — a scripted
+// stand-in for the real provider interview answerer (`wrapProviderInterviewAnswerer`).
+// It MUST NOT be constructed by any production/runtime path: production resolves a
+// real provider answerer from the project's `forge` routing (see
+// engine/forge/providerFactory.ts). It lives under tests/ so the §8a arch-lint
+// keeps it out of src/.
 //
-// The fallback `InterviewAnswerer` used when no provider Answerer is wired —
-// the analogue of P3-0010's deterministic Forge answerer and P3-0014's
-// deterministic discovery answerer. It runs a scripted ~14-round interview
-// that accumulates the capture (identity → personas → behaviors → interfaces →
-// design-DNA → architecture → rulesets), so the greenfield flow is live without
-// provider infra and the round/derive paths are testable without an LLM.
-//
-// The script mirrors the hi-fi `supply-chain-os` example. Each round contributes
-// a capture delta + the next question; the final round flips `complete`. The
-// answerer is grounded — it reads the round number + prior capture it is handed
-// — but deterministic. Production swaps in a provider-backed answerer.
+// It runs a scripted ~14-round interview that accumulates the capture (identity →
+// personas → behaviors → interfaces → design-DNA → architecture → rulesets), so a
+// test can drive the round/derive paths without hitting an LLM. The script mirrors
+// the hi-fi `supply-chain-os` example; each round contributes a capture delta + the
+// next question; the final round flips `complete`.
 
 import {
-  DEFAULT_TOTAL_ROUNDS,
   type InterviewAnswerer,
   type InterviewAnswererContext,
   type InterviewRoundOutput,
-} from "./types.js";
+} from "../../../src/engine/forge/interview/types.js";
 
 // One scripted round: the question Forge asks NEXT and the capture this round
 // folds in. Index 0 is round 1.
@@ -212,5 +210,3 @@ export function createDeterministicInterviewAnswerer(): InterviewAnswerer {
     },
   };
 }
-
-export { DEFAULT_TOTAL_ROUNDS };

@@ -12,10 +12,12 @@
 //     P2A-0018/0013 creation paths and returns the new project + derived ids.
 //     The DAG is then read back via the existing P3-0013 project-DAG endpoint.
 //
-// The answerer is injectable (`answererFactory`) — production can wire a
-// provider-backed interview answerer; tests inject a fake. When omitted the
-// engine falls back to its deterministic scripted answerer, so the endpoint is
-// always live. Mounted on the same `/orgs` base as the other product routes.
+// The answerer is resolved per-request from the request's org via
+// `answererFactory(target)` — production wires `buildForgeInterviewAnswererFactory`
+// (a REAL provider answerer that derives personas/behaviors/milestones with a
+// model); tests inject a fake. Greenfield onboarding has no project yet, so the
+// answerer resolves the ORG's default LLM credential. There is no deterministic
+// fallback (§8a). Mounted on the same `/orgs` base as the other product routes.
 
 import { Hono } from "hono";
 import type pg from "pg";
@@ -27,6 +29,7 @@ import {
   runRound,
   type InterviewAnswerer,
 } from "../../engine/forge/interview/index.js";
+import type { ForgeAnswererTarget } from "../../engine/forge/providerFactory.js";
 import {
   ProjectAccessDeniedError,
   ProjectNotFoundError,
@@ -37,9 +40,11 @@ import { actorCanAccessOrg } from "../orgs/index.js";
 
 export interface OnboardingRoutesOptions {
   pool: pg.Pool;
-  // Injectable interview answerer (provider wrap or a test fake). Defaults to
-  // the engine's deterministic scripted answerer when omitted.
-  answererFactory?: () => InterviewAnswerer;
+  // The interview answerer factory, called per-request with the request's org so
+  // the answerer resolves the org's default `forge`/LLM credential (greenfield —
+  // no project exists yet). Production passes `buildForgeInterviewAnswererFactory`
+  // (a real provider answerer); tests pass a fake. REQUIRED — no fallback.
+  answererFactory: (target: ForgeAnswererTarget) => InterviewAnswerer;
 }
 
 const RoundBody = z
@@ -59,7 +64,6 @@ const DeriveBody = z
 
 export function createOnboardingRoutes(options: OnboardingRoutesOptions) {
   const app = new Hono<ActorContextEnv>();
-  const answerer = options.answererFactory?.();
 
   app.post("/:orgId/onboarding/interview/round", async (c) => {
     const actor = requireActor(c);
@@ -72,10 +76,7 @@ export function createOnboardingRoutes(options: OnboardingRoutesOptions) {
       return c.json({ error: "invalid_round", issues: parsed.error.issues }, 400);
     }
     try {
-      const result = await runRound(
-        { pool: options.pool, ...(answerer === undefined ? {} : { answerer }) },
-        parsed.data,
-      );
+      const result = await runRound({ pool: options.pool, answerer: options.answererFactory({ orgId }) }, parsed.data);
       return c.json(result, 200);
     } catch (error) {
       return c.json({ error: "interview_round_failed", message: messageOf(error) }, 500);
@@ -94,7 +95,7 @@ export function createOnboardingRoutes(options: OnboardingRoutesOptions) {
     }
     try {
       const result = await deriveFromCapture(
-        { pool: options.pool, ...(answerer === undefined ? {} : { answerer }) },
+        { pool: options.pool },
         {
           orgId,
           capture: parsed.data.capture,

@@ -10,10 +10,10 @@
 // alongside it on the same `/orgs` base — additive, no edits to the existing
 // route file.
 //
-// The answerer is injectable (`answererFactory`): production wires a provider
-// Answerer (P3-0012); when none is configured the route falls back to a
-// deterministic grounded answerer so the endpoint always responds without
-// provider infra. Tests inject a fake answerer.
+// The answerer is resolved per-request from the thread's org/project via
+// `answererFactory(target)` — production wires `buildForgeConversationAnswererFactory`
+// (a REAL provider answerer); tests inject a fake. There is no deterministic
+// fallback (§8a).
 
 import { runWithOrgScope } from "@tanren/db";
 import { Hono } from "hono";
@@ -23,6 +23,7 @@ import type { ActorContext } from "../../auth/schemas.js";
 import {
   askForge,
   ForgeThreadAccessDeniedError,
+  ForgeThreadStore,
   repoGrep,
   repoReadFile,
   repoReadIssue,
@@ -38,19 +39,20 @@ import {
   type ForgeReadToolCall,
   type ForgeReadToolDispatcher,
 } from "../../engine/forge/index.js";
+import type { ForgeAnswererTarget } from "../../engine/forge/providerFactory.js";
 import type { GitHubHttpClient } from "../../engine/providers/github.js";
 import type { SecretStore } from "../../engine/contracts/secretStore.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg } from "../orgs/index.js";
-import { createDeterministicForgeAnswerer } from "./deterministicAnswerer.js";
 
 export interface ForgeAskRoutesOptions {
   pool: pg.Pool;
   secrets: SecretStore;
   githubHttp: GitHubHttpClient;
-  // Injectable answerer (P3-0012 provider wrap, or a test fake). Defaults to a
-  // deterministic grounded answerer when omitted.
-  answererFactory?: () => ForgeConversationAnswerer;
+  // The conversation answerer factory, called per-request with the thread's
+  // org/project. Production passes `buildForgeConversationAnswererFactory` (a real
+  // provider answerer); tests pass a fake. REQUIRED — no deterministic fallback.
+  answererFactory: (target: ForgeAnswererTarget) => ForgeConversationAnswerer;
 }
 
 const AskBody = z.object({
@@ -60,7 +62,6 @@ const AskBody = z.object({
 
 export function createForgeAskRoutes(options: ForgeAskRoutesOptions) {
   const app = new Hono<ActorContextEnv>();
-  const answererFactory = options.answererFactory ?? (() => createDeterministicForgeAnswerer());
 
   app.post("/:orgId/forge/threads/:threadId/ask", async (c) => {
     const actor = requireActor(c);
@@ -72,6 +73,7 @@ export function createForgeAskRoutes(options: ForgeAskRoutesOptions) {
     if (!parsed.success) {
       return c.json({ error: "invalid_ask", issues: parsed.error.issues }, 400);
     }
+    const threadId = c.req.param("threadId");
     try {
       // RLS R2 cohort-4 (forge): the conversation engine appends operator +
       // forge turns and persists proposals across several statements — run them
@@ -80,21 +82,32 @@ export function createForgeAskRoutes(options: ForgeAskRoutesOptions) {
       // (invoked from inside `askForge`, i.e. within this scope) now routes its
       // spec/run/etc. reads through the ambient scope via `resolveQueryClient`.
       // Inert in R1; behavior-identical to the pool.
-      const result = await runWithOrgScope(options.pool, orgId, (client) =>
-        askForge(
+      const result = await runWithOrgScope(options.pool, orgId, async (client) => {
+        // Resolve the thread's project so the answerer grounds on THAT project's
+        // `forge` routing/credentials; an org-scoped thread (no project) resolves
+        // the org default. The thread read also validates actor access early.
+        const thread = await ForgeThreadStore.get(client, threadId, actor);
+        if (thread === undefined) {
+          throw new ForgeThreadAccessDeniedError(threadId);
+        }
+        const target: ForgeAnswererTarget = {
+          orgId,
+          ...(thread.projectId === null ? {} : { projectId: thread.projectId }),
+        };
+        return askForge(
           {
             client,
-            answerer: answererFactory(),
+            answerer: options.answererFactory(target),
             dispatchReadTool: buildReadToolDispatcher(options),
           },
           {
-            threadId: c.req.param("threadId"),
+            threadId,
             question: parsed.data.question,
             audience: parsed.data.audience ?? "project:member",
             actor,
           },
-        ),
-      );
+        );
+      });
       return c.json(
         {
           operatorTurn: result.operatorTurn,

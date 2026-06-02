@@ -19,7 +19,6 @@ import type pg from "pg";
 import { describe, expect, it } from "vitest";
 import type { ActorContext } from "../src/auth/schemas.js";
 import {
-  createDeterministicReconAnswerer,
   openConfigInjectionPr,
   proposeConfigFiles,
   runRecon,
@@ -31,6 +30,7 @@ import {
   type ReconReport,
   type RepoReader,
 } from "../src/engine/forge/brownfield/index.js";
+import { createDeterministicReconAnswerer } from "./fixtures/forge/deterministicReconAnswerer.js";
 import type { IngestedItem } from "../src/engine/forge/inbox/types.js";
 
 const actor: ActorContext = {
@@ -93,7 +93,10 @@ describe("runRecon · read-only recon pre-fills chapters", () => {
   });
 
   it("deterministic answerer derives chapters + flags missing integration files", async () => {
-    const { report } = await runRecon({ reader: fakeReader(SAMPLE_INDEX) }, SAMPLE_INDEX.repoUrl);
+    const { report } = await runRecon(
+      { reader: fakeReader(SAMPLE_INDEX), answerer: createDeterministicReconAnswerer() },
+      SAMPLE_INDEX.repoUrl,
+    );
     expect(report.identity.slug).toBe("tanren-fixture-easy");
     expect(report.architecture.length).toBeGreaterThan(0);
     // No CODEOWNERS / .mergify / tanren-ci in the index → risks flagged.

@@ -11,14 +11,14 @@ import type { ActorContext } from "../src/auth/schemas.js";
 import { ForgeAnswer } from "../src/engine/answerers/schemas/forge.js";
 import {
   askForge,
-  createFakeForgeAnswerer,
   type ForgeConversationAnswerer,
   type ForgeConversationContext,
   type ForgeReadToolCall,
   type ForgeReadToolDispatcher,
 } from "../src/engine/forge/index.js";
 import { ForgeThreadStore } from "../src/engine/forge/threads.js";
-import { createDeterministicForgeAnswerer } from "../src/routes/forge/deterministicAnswerer.js";
+import { createDeterministicForgeAnswerer } from "./fixtures/forge/deterministicForgeAnswerer.js";
+import { createFakeForgeAnswerer } from "./fixtures/forge/fakeForgeAnswerer.js";
 import { ForgeMemoryClient } from "./helpers/forgeMemoryClient.js";
 
 const actor: ActorContext = {
