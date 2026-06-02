@@ -278,6 +278,17 @@ export interface VcsProvider {
    */
   readPullRequestChecks(pr: PullRequestRef, token: ResolvedVcsToken): Promise<GitHubPullRequestChecks>;
 
+  /**
+   * P2d-2 (speculative batch-check): read the CI/check status of an arbitrary
+   * BRANCH ref (not a PR) — the prospective merged state on an ephemeral
+   * speculative-integration branch. Same check-runs + commit-status semantics as
+   * `readPullRequestChecks`, keyed on the branch's HEAD SHA + gated by the branch's
+   * own protection required contexts, so the batch-check reuses the EXACT CI-poll
+   * evaluator (`evaluateCiObservation`). Provider-neutral: a GitLab impl maps it from
+   * its own pipeline-for-ref read.
+   */
+  readBranchChecks(input: { repo: RepoRef; branch: string; token: ResolvedVcsToken }): Promise<GitHubPullRequestChecks>;
+
   /** Read the PR's reviews, reduced to a single actionable verdict. */
   readReviewVerdict(pr: PullRequestRef, token: ResolvedVcsToken): Promise<ReviewVerdictResult>;
 

@@ -234,6 +234,15 @@ export const DEFAULT_SPECULATION_THRESHOLD: SpeculationThreshold = "moderate";
 // enough ancestors merge. Default 2 (the §6 resolved default); a positive int.
 export const DEFAULT_SPECULATIVE_INTEGRATION_DEPTH = 2;
 
+// The MAX BATCH SIZE (§2d — speculative batch-check + bisect): how many
+// mutually-eligible queued entries the native MergeCoordinator speculatively
+// integrates + CI-checks as a combined unit before merging. A larger batch amortizes
+// the (expensive) integration-CI run; a smaller one shrinks the bisect cost of a bad
+// interaction. Default 5 (the §2d resolved default). When more entries are eligible
+// the batch is CAPPED to the DAG-ordered prefix + the cap is LOGGED (never a silent
+// truncation); the dropped entries keep their queue position for the next pass.
+export const DEFAULT_MAX_BATCH_SIZE = 5;
+
 // ---- Errors --------------------------------------------------------------
 
 // Thrown by the migration helpers when the persisted `version` discriminator

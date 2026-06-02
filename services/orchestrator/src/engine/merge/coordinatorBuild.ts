@@ -120,9 +120,10 @@ function buildDriveConflictResolver(pool: pg.Pool, facts: RunFacts): ConflictRes
 /**
  * Build the production merge-drive closure: drive ONE queued run's merge through
  * the EXISTING `mergeForRun` path in `native_queue` DRIVE mode. Maps the
- * merge-stage outcome to the coordinator's drive outcome.
+ * merge-stage outcome to the coordinator's drive outcome. Exported so the P2d-2
+ * batch-coordinator assembly (batchCoordinatorBuild.ts) reuses the SAME drive path.
  */
-function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQueuedRun {
+export function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQueuedRun {
   return async ({ runId }): Promise<MergeDriveOutcome> => {
     const facts = await resolveRunFacts(deps.pool, runId);
     const eventStore = new PgEventStore(deps.pool);
@@ -200,7 +201,7 @@ export function buildNativeQueueEnqueuer(pool: pg.Pool): NativeQueueEnqueuer {
   };
 }
 
-/** Assemble the production native MergeCoordinator. */
+/** Assemble the production native MergeCoordinator (P2d-1: one-at-a-time DAG-ordered). */
 export function buildMergeCoordinator(deps: BuildMergeCoordinatorDeps): MergeCoordinator {
   return new EventEmittingMergeCoordinator({
     queue: new PgMergeQueueModel(deps.pool),

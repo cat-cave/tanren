@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { ManagedProviderConfig, ProviderMode } from "./managedProvider.js";
 import {
+  DEFAULT_MAX_BATCH_SIZE,
   DEFAULT_SPECULATION_THRESHOLD,
   DEFAULT_SPECULATIVE_INTEGRATION_DEPTH,
   GovernancePosture,
@@ -68,6 +69,14 @@ export const ProjectConfigV1 = z
     // dag.spec.speculation_held, never silently truncated) until ancestors merge.
     // Default 2. Additive; legacy rows parse to the default.
     speculativeIntegrationDepth: z.number().int().min(1).default(DEFAULT_SPECULATIVE_INTEGRATION_DEPTH),
+    // P2d-2 (§2d): the MAX BATCH SIZE for speculative batch-check + bisect — how many
+    // mutually-eligible queued entries the native MergeCoordinator speculatively
+    // integrates + CI-checks as a combined unit before merging. A larger batch
+    // amortizes the integration-CI run; a smaller one shrinks bisect cost. Default 5.
+    // When more entries are eligible the batch is CAPPED to the DAG-ordered prefix +
+    // the cap is logged (never a silent truncation). Additive; legacy rows parse to
+    // the default. Only consulted under `native_queue`.
+    maxBatchSize: z.number().int().min(1).default(DEFAULT_MAX_BATCH_SIZE),
     // P3-0025: optional per-project preview-deploy URL pattern. Drives the live
     // preview iframe in the Review surface. Supports `{branch}` and `{pr}`
     // placeholders (e.g. `https://pr-{pr}.preview.fly.dev`). Optional + additive:

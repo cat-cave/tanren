@@ -53,6 +53,10 @@ export const CONFORMANCE_ANCESTOR_A = { specId: "spec_a", branch: "tanren/run_a"
 export const CONFORMANCE_ANCESTOR_B = { specId: "spec_b", branch: "tanren/run_b" };
 /** P2c: an ancestor branch that conflicts WITH ANOTHER ancestor on the integration ref. */
 export const CONFORMANCE_ANCESTOR_CONFLICT = { specId: "spec_x", branch: "tanren/run_conflict" };
+/** P2d-2: a branch ref whose CI (readBranchChecks) is GREEN (prospective merged state passes). */
+export const CONFORMANCE_GREEN_BRANCH = "tanren/integ/green";
+/** P2d-2: a branch ref whose CI (readBranchChecks) is FAILING (a bad interaction). */
+export const CONFORMANCE_FAILING_BRANCH = "tanren/integ/failing";
 
 const REPO = { owner: "cat-cave", name: "tanren-conformance" };
 
@@ -192,6 +196,25 @@ export function describeVcsProviderConformance(label: string, harness: VcsProvid
       const token = await resolve(provider);
       const sha = await provider.readBranchHeadSha({ repo: REPO, branch: CONFORMANCE_ABSENT_BRANCH, token });
       expect(sha).toBeUndefined();
+    });
+
+    // ---- P2d-2: branch-ref CI read (batch-check) -------------------------
+    it("readBranchChecks reads CI for a GREEN integration ref (prospective merged state passes)", async () => {
+      const provider = harness.make();
+      const token = await resolve(provider);
+      const checks = await provider.readBranchChecks({ repo: REPO, branch: CONFORMANCE_GREEN_BRANCH, token });
+      expect(typeof checks.head.sha).toBe("string");
+      expect(Array.isArray(checks.checkRuns)).toBe(true);
+      // A green ref has no failing check run.
+      expect(checks.checkRuns.some((c) => c.conclusion === "failure")).toBe(false);
+    });
+
+    it("readBranchChecks reads CI for a FAILING integration ref (a bad interaction)", async () => {
+      const provider = harness.make();
+      const token = await resolve(provider);
+      const checks = await provider.readBranchChecks({ repo: REPO, branch: CONFORMANCE_FAILING_BRANCH, token });
+      // The failing ref reports at least one failing check (the bad-interaction signal).
+      expect(checks.checkRuns.some((c) => c.conclusion === "failure")).toBe(true);
     });
 
     // ---- P2a: up-to-date / mergeability + update-branch ------------------

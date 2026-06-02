@@ -155,13 +155,22 @@ export function selectNextMerge(snapshot: MergeQueueSnapshot): MergeSelection {
  * earlier, never queued, or handled by another path) — the queue only serializes
  * the runs it actually holds, and the merge stage's own speculative-hold gate is
  * the backstop that no unmerged ancestor code reaches `main`.
+ *
+ * Exported so the P2d-2 batch former reuses the EXACT SAME eligibility rule (a
+ * batch is a set of mutually-eligible entries — never a second, divergent notion of
+ * "ready").
  */
-function isEligible(entry: MergeQueueEntry, mergedSpecIds: Set<string>, queuedSpecIds: Set<string>): boolean {
+export function isEligible(entry: MergeQueueEntry, mergedSpecIds: Set<string>, queuedSpecIds: Set<string>): boolean {
   return entry.dependsOn.every((depId) => mergedSpecIds.has(depId) || !queuedSpecIds.has(depId));
 }
 
-/** DAG layer is enforced by eligibility; within it, priority then a stable tiebreak. */
-function compareEntries(a: MergeQueueEntry, b: MergeQueueEntry): number {
+/**
+ * DAG layer is enforced by eligibility; within it, priority then a stable tiebreak.
+ * Exported so the P2d-2 batch former orders a batch the SAME way the single-merge
+ * selection does (so a batch's merge order == the order the one-at-a-time path would
+ * have used).
+ */
+export function compareEntries(a: MergeQueueEntry, b: MergeQueueEntry): number {
   const byPriority = priorityRank(a.priority) - priorityRank(b.priority);
   if (byPriority !== 0) return byPriority;
   if (a.orderKey !== b.orderKey) return a.orderKey - b.orderKey;

@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "capped": {
+      "type": "boolean"
+    },
+    "eligibleCount": {
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "integration": {
+      "enum": [
+        "mergify_queue",
+        "native_queue",
+        "direct_merge",
+        "external_reviewer"
+      ],
+      "type": "string"
+    },
+    "maxBatchSize": {
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991,
+      "type": "integer"
+    },
+    "members": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "prNumber": {
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer"
+          },
+          "specId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "specId",
+          "prNumber"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "integration",
+    "members",
+    "eligibleCount",
+    "capped",
+    "maxBatchSize"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.merge.batch.checking"
+}

@@ -81,7 +81,14 @@ import {
   ReviewChangesRequestedPayload,
   ReviewRequestedPayload,
 } from "./schemas/integrations.js";
-import { MergeDequeuedPayload, MergeQueueAdvancedPayload } from "./schemas/mergeQueue.js";
+import {
+  MergeBatchBisectingPayload,
+  MergeBatchCheckingPayload,
+  MergeBatchCulpritPayload,
+  MergeBatchPassedPayload,
+  MergeDequeuedPayload,
+  MergeQueueAdvancedPayload,
+} from "./schemas/mergeQueue.js";
 import { GateFailedPayload, GatePassedPayload, GateStartedPayload } from "./schemas/gate.js";
 import {
   JobDeadLetteredPayload,
@@ -252,6 +259,16 @@ export const EventRegistry = {
   // blocked / failed) records merge.dequeued. Serialized: one merge at a time.
   "merge.queue.advanced": MergeQueueAdvancedPayload,
   "merge.dequeued": MergeDequeuedPayload,
+  // P2d-2 (§2d): speculative batch-check + bisect. The coordinator speculatively
+  // integrates `default_branch + batch PRs` + CI-checks that prospective merged state
+  // (merge.batch.checking); a green check merges the batch in DAG order
+  // (merge.batch.passed); a failed check is BISECTED (merge.batch.bisecting) to isolate
+  // the single offending PR (merge.batch.culprit), which is dequeued to a recoverable
+  // re-execution while the innocent remainder merges. No failed batch ever reaches main.
+  "merge.batch.checking": MergeBatchCheckingPayload,
+  "merge.batch.passed": MergeBatchPassedPayload,
+  "merge.batch.bisecting": MergeBatchBisectingPayload,
+  "merge.batch.culprit": MergeBatchCulpritPayload,
 
   // Notification dispatch (schemas declared; dispatcher lands in P2A-0017)
   "notification.enqueued": NotificationEnqueuedPayload,
