@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "newContext": {
+      "type": "string"
+    },
+    "otherSpecId": {
+      "type": "string"
+    },
+    "replanStatus": {
+      "type": "string"
+    },
+    "specId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "specId",
+    "newContext",
+    "replanStatus"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.merge.conflict.replan_routed"
+}

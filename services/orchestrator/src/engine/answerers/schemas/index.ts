@@ -24,6 +24,7 @@ export {
   FORGE_ANSWER_SCHEMA_ID,
 } from "./forge.js";
 export { ReviewAnswer, ReviewVerdictDecision, REVIEW_ANSWER_SCHEMA_ID } from "./review.js";
+export { ConflictAnswer, ConflictResolutionDecision, ResolvedFile, CONFLICT_ANSWER_SCHEMA_ID } from "./conflict.js";
 export { answererOutputSchemaFor, type AnswererOutputSchema } from "./adapter.js";
 
 export { answererSchemaCatalog, type AnswererRole, type AnswererSchemaDescriptor } from "./catalog.js";

@@ -12,6 +12,7 @@ import { vcsProviderOver } from "./helpers/vcsProvider.js";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import { FakeEventStore } from "./helpers/fakeEventStore.js";
 import { mergeForRun } from "../src/engine/workflow/reviewMerge/index.js";
+import { noopConflictResolver } from "./fixtures/noopConflictResolver.js";
 import { recordingMergeProbe, ReviewMergePool, unusedHttp } from "./reviewMerge.fixtures.js";
 
 describe("P2a up-to-date enforcement (merge stage)", () => {
@@ -31,6 +32,7 @@ describe("P2a up-to-date enforcement (merge stage)", () => {
       pool: pool.asPgPool(),
       eventStore: events,
       secrets: new FakeSecretStore(),
+      resolveConflict: noopConflictResolver,
       vcsProvider: vcsProviderOver(unusedHttp()),
       runId: "run_1",
       mergeProbe: probe,
@@ -135,6 +137,7 @@ describe("P2a up-to-date enforcement (merge stage)", () => {
       pool: pool.asPgPool(),
       eventStore: events,
       secrets: new FakeSecretStore(),
+      resolveConflict: noopConflictResolver,
       vcsProvider: vcsProviderOver(unusedHttp()),
       runId: "run_1",
       mergeProbe: probe,
@@ -164,6 +167,7 @@ describe("P2a up-to-date enforcement (merge stage)", () => {
       pool: pool.asPgPool(),
       eventStore: events,
       secrets: new FakeSecretStore(),
+      resolveConflict: noopConflictResolver,
       vcsProvider: vcsProviderOver(unusedHttp()),
       runId: "run_1",
       mergeProbe: probe,

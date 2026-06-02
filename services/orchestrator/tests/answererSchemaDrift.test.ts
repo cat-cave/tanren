@@ -46,7 +46,7 @@ function expectedJson(role: AnswererRole): string {
 describe("answerer JSON Schema drift", () => {
   it("exposes the Answerer roles in a stable order", () => {
     const roles = Object.keys(answererSchemaCatalog) as AnswererRole[];
-    expect(roles).toEqual(["plan", "check", "audit", "demo", "forge", "review"]);
+    expect(roles).toEqual(["plan", "check", "audit", "demo", "forge", "review", "conflict"]);
   });
 
   it("regenerates byte-identical JSON Schema for every committed mirror", () => {

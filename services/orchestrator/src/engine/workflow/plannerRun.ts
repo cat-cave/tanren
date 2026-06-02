@@ -40,6 +40,7 @@ import {
   buildDefaultGate,
   defaultRoutingAdapters,
   defaultUsageProbe,
+  resolveConflictResolverHook,
   simulatedReviewSeam,
 } from "./plannerRunAdapters.js";
 import { prepareRunWorkspace } from "./plannerRunWorkspace.js";
@@ -436,7 +437,19 @@ export async function runPlannerLoopWorkflow(input: RunPlannerLoopInput): Promis
       // Same source as PR-creation + CI-poll (project record → org default).
       resolvedGithubCredentialRef: context.githubCredentialRef,
       mergeProbe: input.mergeProbe,
-      resolveConflict: input.resolveConflict,
+      // P2b: the intent-preserving conflict resolver is the PRODUCTION DEFAULT
+      // for the resolveConflict hook (replacing noopConflictResolver). Tests
+      // inject input.resolveConflict to skip the live runner/model; production
+      // omits it → the real resolver, built from the run's merge-stage context.
+      resolveConflict: resolveConflictResolverHook(input, {
+        eventStore,
+        target: allocation.target,
+        workspacePath,
+        baseSha,
+        runGate,
+        checker: adapters.checker,
+        auditor: adapters.auditor,
+      }),
       // P2a: after an auto-rebase advances the branch, re-poll CI to a terminal
       // verdict (the prior green is stale) before merging — through the SAME CI
       // path the run already uses.

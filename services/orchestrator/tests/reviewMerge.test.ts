@@ -8,12 +8,12 @@ import {
   decidePosture,
   dispatchedIntegrationFor,
   mergeForRun,
-  noopConflictResolver,
   reviewerRejection,
   tanrenIdentity,
   type ContributorProbe,
   type ReviewProbe,
 } from "../src/engine/workflow/reviewMerge/index.js";
+import { noopConflictResolver } from "./fixtures/noopConflictResolver.js";
 import { pollReviewForRun } from "../src/engine/workflow/reviewMerge/reviewPolling.js";
 import { approvingReviewProbe, recordingMergeProbe, ReviewMergePool, unusedHttp } from "./reviewMerge.fixtures.js";
 
@@ -194,6 +194,7 @@ describe("merge dispatch stage", () => {
       pool: pool.asPgPool(),
       eventStore: events,
       secrets: new FakeSecretStore(),
+      resolveConflict: noopConflictResolver,
       vcsProvider: vcsProviderOver(unusedHttp()),
       runId: "run_1",
       mergeProbe: probe,
@@ -217,6 +218,7 @@ describe("merge dispatch stage", () => {
       pool: pool.asPgPool(),
       eventStore: events,
       secrets: new FakeSecretStore(),
+      resolveConflict: noopConflictResolver,
       vcsProvider: vcsProviderOver(unusedHttp()),
       runId: "run_1",
       mergeProbe: probe,
@@ -242,6 +244,7 @@ describe("merge dispatch stage", () => {
       pool: pool.asPgPool(),
       eventStore: events,
       secrets: new FakeSecretStore(),
+      resolveConflict: noopConflictResolver,
       vcsProvider: vcsProviderOver(unusedHttp()),
       runId: "run_1",
       mergeProbe: probe,
@@ -286,20 +289,6 @@ describe("merge dispatch stage", () => {
     expect(conflict?.payload).toMatchObject({ baseBranch: "main", message: "merge conflict" });
     // recoverable: the merge task stays running for the recovery surface.
     expect(pool.tasks.find((t) => t.kind === "merge")?.status).toBe("running");
-  });
-
-  it("noopConflictResolver does not resolve", async () => {
-    expect(
-      await noopConflictResolver({
-        runId: "r",
-        prUrl: "u",
-        prNumber: 1,
-        baseBranch: "main",
-        message: "x",
-      }),
-    ).toEqual({
-      resolved: false,
-    });
   });
 });
 
@@ -373,6 +362,7 @@ describe("governance posture gate at the merge decision", () => {
       pool: pool.asPgPool(),
       eventStore: events,
       secrets: new FakeSecretStore(),
+      resolveConflict: noopConflictResolver,
       vcsProvider: vcsProviderOver(unusedHttp()),
       runId: "run_1",
       mergeProbe: probe,
@@ -404,6 +394,7 @@ describe("governance posture gate at the merge decision", () => {
       pool: pool.asPgPool(),
       eventStore: events,
       secrets: new FakeSecretStore(),
+      resolveConflict: noopConflictResolver,
       vcsProvider: vcsProviderOver(unusedHttp()),
       runId: "run_1",
       mergeProbe: probe,
@@ -433,6 +424,7 @@ describe("governance posture gate at the merge decision", () => {
       pool: pool.asPgPool(),
       eventStore: events,
       secrets: new FakeSecretStore(),
+      resolveConflict: noopConflictResolver,
       vcsProvider: vcsProviderOver(unusedHttp()),
       runId: "run_1",
       mergeProbe: probe,
@@ -459,6 +451,7 @@ describe("governance posture gate at the merge decision", () => {
       pool: pool.asPgPool(),
       eventStore: events,
       secrets: new FakeSecretStore(),
+      resolveConflict: noopConflictResolver,
       vcsProvider: vcsProviderOver(unusedHttp()),
       runId: "run_1",
       mergeProbe: probe,

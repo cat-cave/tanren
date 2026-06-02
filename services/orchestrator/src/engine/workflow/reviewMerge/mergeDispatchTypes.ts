@@ -63,12 +63,17 @@ export interface MergeForRunInput {
    */
   contributorProbe?: ContributorProbe;
   /**
-   * P3-0008 conflict-resolver scaffolding. Invoked on a detected merge conflict
-   * BEFORE the recoverable `merge.conflict` outcome is emitted. The default is a
-   * no-op stub; a future resolver replaces it. Returning `resolved: true` lets
-   * the dispatcher retry the merge once.
+   * P2b intent-preserving conflict resolver — a REQUIRED merge-stage input.
+   * Invoked on a detected merge conflict BEFORE the recoverable `merge.conflict`
+   * outcome is emitted. Production wires the real
+   * `intentPreservingConflictResolver` (built from the run's merge-stage context,
+   * resolved from the project routing like the other Answerers); tests inject a
+   * fake under tests/. Returning `resolved: true` (only after a clean re-gate of
+   * a both-intents-preserving resolution) lets the dispatcher retry the merge
+   * once. There is no noop default (§8a): a conflict is always routed to a real
+   * resolver, never silently dropped.
    */
-  resolveConflict?: ConflictResolverHook;
+  resolveConflict: ConflictResolverHook;
   /**
    * P2a up-to-date enforcement: re-poll the run's CI to a terminal verdict after
    * an auto-rebase advanced the branch (the branch HEAD moved, so the prior
@@ -108,9 +113,3 @@ export interface ConflictContext {
 }
 
 export type ConflictResolverHook = (context: ConflictContext) => Promise<{ resolved: boolean }>;
-
-/** The default conflict-resolver stub: records nothing, resolves nothing. */
-// arch-allow: pending P2b — noopConflictResolver is the TEMPORARY default until the
-// intent-preserving conflict resolver lands. When P2b wires the real resolver as the
-// production default, delete this and the allowlist entry tightens. P8a §8a.
-export const noopConflictResolver: ConflictResolverHook = async () => ({ resolved: false });

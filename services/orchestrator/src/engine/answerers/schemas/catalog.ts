@@ -7,12 +7,13 @@ import type { ZodType } from "zod";
 
 import { AUDIT_ANSWER_SCHEMA_ID, AuditAnswer } from "./audit.js";
 import { CHECK_ANSWER_SCHEMA_ID, CheckAnswer } from "./check.js";
+import { CONFLICT_ANSWER_SCHEMA_ID, ConflictAnswer } from "./conflict.js";
 import { DEMO_ANSWER_SCHEMA_ID, DemoAnswer } from "./demo.js";
 import { FORGE_ANSWER_SCHEMA_ID, ForgeAnswer } from "./forge.js";
 import { PLAN_ANSWER_SCHEMA_ID, PlanAnswer } from "./plan.js";
 import { REVIEW_ANSWER_SCHEMA_ID, ReviewAnswer } from "./review.js";
 
-export type AnswererRole = "plan" | "check" | "audit" | "demo" | "forge" | "review";
+export type AnswererRole = "plan" | "check" | "audit" | "demo" | "forge" | "review" | "conflict";
 
 export interface AnswererSchemaDescriptor {
   readonly role: AnswererRole;
@@ -62,5 +63,11 @@ export const answererSchemaCatalog: Readonly<Record<AnswererRole, AnswererSchema
     schemaId: REVIEW_ANSWER_SCHEMA_ID,
     generatedFile: "review.json",
     zod: ReviewAnswer,
+  },
+  conflict: {
+    role: "conflict",
+    schemaId: CONFLICT_ANSWER_SCHEMA_ID,
+    generatedFile: "conflict.json",
+    zod: ConflictAnswer,
   },
 } as const;

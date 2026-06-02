@@ -251,6 +251,49 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["headBranch", "public"],
     ["reGatedCi", "public"],
   ]),
+  // P2b intent-preserving conflict resolution — PR identifiers + spec ids +
+  // refs + the DAG-edge signal + file paths + reasoning prose, all public.
+  ...rulesFor("merge.conflict.resolving", [
+    ["prUrl", "public"],
+    ["prNumber", "public"],
+    ["integration", "public"],
+    ["baseBranch", "public"],
+    ["mergingSpecId", "public"],
+    ["conflictingSpecId", "public"],
+    ["dagEdge", "public"],
+    ["conflictedFiles", "public"],
+    ["conflictedFiles[]", "public"],
+  ]),
+  ...rulesFor("merge.conflict.resolved", [
+    ["prUrl", "public"],
+    ["prNumber", "public"],
+    ["integration", "public"],
+    ["baseBranch", "public"],
+    ["mergingSpecId", "public"],
+    ["conflictingSpecId", "public"],
+    ["resolvedFiles", "public"],
+    ["resolvedFiles[]", "public"],
+    ["reGated", "public"],
+  ]),
+  ...rulesFor("merge.conflict.irreconcilable", [
+    ["prUrl", "public"],
+    ["prNumber", "public"],
+    ["integration", "public"],
+    ["baseBranch", "public"],
+    ["mergingSpecId", "public"],
+    ["conflictingSpecId", "public"],
+    ["replanned", "public"],
+    ["replannedSpecId", "public"],
+    ["reason", "public"],
+    ["fromFailedReGate", "public"],
+  ]),
+  // P2b replan-routed — spec ids + new planning context + status, all public.
+  ...rulesFor("merge.conflict.replan_routed", [
+    ["specId", "public"],
+    ["otherSpecId", "public"],
+    ["newContext", "public"],
+    ["replanStatus", "public"],
+  ]),
   // P3-0023 governance posture block — PR identifiers + posture + external
   // contributor logins (public GitHub handles) + prose, all public.
   ...rulesFor("merge.blocked", [

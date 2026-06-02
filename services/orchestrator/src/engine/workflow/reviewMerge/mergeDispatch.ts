@@ -44,7 +44,6 @@ import {
 } from "./governancePosture.js";
 import { MergeDispatcher } from "./mergeDispatcher.js";
 import {
-  noopConflictResolver,
   type ConflictContext,
   type ConflictResolverHook,
   type DispatchedIntegration,
@@ -58,7 +57,6 @@ import {
 // Re-export the merge-stage contracts so the barrel + existing import sites keep
 // pulling them from `mergeDispatch.ts` after the type extraction.
 export {
-  noopConflictResolver,
   type ConflictContext,
   type ConflictResolverHook,
   type DispatchedIntegration,

@@ -59,6 +59,10 @@ import {
   MergeBlockedPayload,
   MergeCompletedPayload,
   MergeConflictPayload,
+  MergeConflictIrreconcilablePayload,
+  MergeConflictReplanRoutedPayload,
+  MergeConflictResolvedPayload,
+  MergeConflictResolvingPayload,
   MergeFailedPayload,
   MergeQueuedPayload,
   MergeRebasedPayload,
@@ -215,6 +219,12 @@ export const EventRegistry = {
   // P2a up-to-date enforcement: branch behind base → auto-rebase + re-gate CI.
   "merge.behind": MergeBehindPayload,
   "merge.rebased": MergeRebasedPayload,
+  // P2b intent-preserving conflict resolution: resolver invoked → resolved
+  // (re-gated) or irreconcilable (one spec re-planned, intent kept alive).
+  "merge.conflict.resolving": MergeConflictResolvingPayload,
+  "merge.conflict.resolved": MergeConflictResolvedPayload,
+  "merge.conflict.irreconcilable": MergeConflictIrreconcilablePayload,
+  "merge.conflict.replan_routed": MergeConflictReplanRoutedPayload,
   // P3-0023 external-push governance posture block (strict / audit_only)
   "merge.blocked": MergeBlockedPayload,
 

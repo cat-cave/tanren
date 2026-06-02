@@ -38,7 +38,6 @@ export {
 export {
   mergeForRun,
   dispatchedIntegrationFor,
-  noopConflictResolver,
   type MergeForRunInput,
   type MergeForRunResult,
   type MergeOutcomeKind,
