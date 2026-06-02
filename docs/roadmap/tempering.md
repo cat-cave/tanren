@@ -111,6 +111,14 @@ authentication methods failed`) is **resolved** — durable Vault-backed
   the orchestrator-managed reviewer posts a real GitHub `COMMENT` review and
   drives the verdict internally, self-PR-safe). `markReadyForReview` un-drafts
   via the GraphQL ready mutation.
+- **Post-merge auto-issue creation** ✅ (the last core run-loop item). After a
+  run's PR merges, `engine/postMerge/watcher.ts` re-reads the post-merge CI on the
+  base branch (same `evaluateCiObservation` evaluator + `VcsProvider.readBranchChecks`
+  as the run/queue poll) for the merge commit; on FAILURE it opens ONE tracking
+  issue via `VcsProvider.createIssue` (label `tanren:post-merge-failure`) and
+  records `merge.post_merge_failed` + `issue.opened`. Idempotent via a claim store
+  - prior-`issue.opened` check (never spams); woken on the same run-activity bus
+    the DagWalker / MergeCoordinator listen on (not a new poller).
 
 ### B — Benchmark toolkit ✅ (code-complete; seed corpus is the remaining content)
 
@@ -161,6 +169,25 @@ one-off study. `docs/roadmap/tanren-method-benchmark.md` is the design.
 - **Durable credential registry** — Vault-backed, survives restart; needed
   `SecretStore.list(prefix)` (added across all backends). Legacy top-level import
   routes deleted; the org-scoped surface is the only import path.
+- **Vault per-run scoped credentials** ✅ — the last big de-privilege. Before a run
+  touches any credential, `VaultRunTokenMinter` (under the broad token, at boot)
+  writes a per-run ACL policy granting `read` on EXACTLY this run's KV-v2 cred
+  paths (one stanza per ref, never a glob) and creates an orphan child token
+  carrying only that policy (`ttl` · `num_uses` · `renewable:false` · `no_parent`);
+  the run's `SecretStore` is swapped for a `VaultSecretStore` backed by THAT scoped
+  token (`applyScopedRunCredentials`), built at boot via `buildRunCredentialScoping()`
+  and threaded executor→workflow. The broad token is never returned/attached/logged.
+  Non-Vault backends (already tenant-namespaced) pass through unchanged. The
+  `?? "dev-root-token"` fallbacks in `main.ts` + `allocator/main.ts` are removed —
+  the broad token is REQUIRED, fail-hard. (Conformance + unit tests:
+  `vaultTokenMinter.conformance` · `vaultPerRunScopedCreds`.)
+- **Integration provisioning — pre-apex wiring** ✅ (two-plane model;
+  `docs/roadmap/integration-provisioning.md`). Foundation + 4 apex-relevant
+  providers (Sentry/Deploy/Slack/Hetzner) + the pre-apex wiring all merged: P-INT-2
+  onboarding wires provisioners (capabilities, not leaf secrets; atomic upsert on
+  partial unique indexes; `integration.provisioned`), P-APP-ENV-1 app env → CI
+  Actions secrets (`crypto_box_seal`), P-APP-ENV-2 runtime env → deployed app, P-INT-6
+  webhook signing (HMAC-SHA256). Apex can run on the real provisioned path.
 
 ### Hygiene ✅
 
@@ -172,14 +199,12 @@ adapters select the writer/answerers from the project routing table.
 
 ## Remaining (near-term)
 
-| Item                                          | Dimension | Notes                                                                                                                                                                                                                                          |
-| --------------------------------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Vault per-run scoped credentials**          | D         | The data plane still holds a broad `VAULT_TOKEN`; mint a short-lived child token scoped to a single run's cred paths. The last big de-privilege. (Also: `main.ts` + `allocator/main.ts` still have `?? "dev-root-token"` fallbacks to remove.) |
-| **Benchmark seed corpus**                     | B         | Tiered seed repos + hidden content-addressed `accept` tiers + reference paths (`tanren-method-benchmark.md` §4.3). The benchmark code is done; this is the content that makes it produce signal.                                               |
-| **Remaining DAL clusters**                    | C         | `engine/forge/**`, `engine/recovery/**` raw query sites onto the `Repositories` seam. (`engine/quota/**` is gone — deleted in P1·0.)                                                                                                           |
-| **Post-merge auto-issue creation**            | A (hard)  | On a post-merge check failure, auto-open a tracking issue. (The merge-queue + human-review paths already exist.)                                                                                                                               |
-| **First whole-repo `mutation-full` baseline** | C         | `just mutation-full` + the weekly job exist; capture the first full-repo number + add dashboard/routes clusters.                                                                                                                               |
-| **Type-sharing + `typify → serde` codegen**   | C         | SSE frame + dashboard-only shapes; a Rust impl shares the neutral JSON-Schema.                                                                                                                                                                 |
+| Item                                          | Dimension | Notes                                                                                                                                                                                            |
+| --------------------------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Benchmark seed corpus**                     | B         | Tiered seed repos + hidden content-addressed `accept` tiers + reference paths (`tanren-method-benchmark.md` §4.3). The benchmark code is done; this is the content that makes it produce signal. |
+| **Remaining DAL clusters**                    | C         | `engine/forge/**` (`audits/store.ts`, `inbox/store.ts`) raw query sites onto the `Repositories` seam. (`engine/recovery/**` carries no raw SQL; `engine/quota/**` is gone — deleted in P1·0.)    |
+| **First whole-repo `mutation-full` baseline** | C         | `just mutation-full` + the weekly job exist; capture the first full-repo number + add dashboard/routes clusters.                                                                                 |
+| **Type-sharing + `typify → serde` codegen**   | C         | SSE frame + dashboard-only shapes; a Rust impl shares the neutral JSON-Schema.                                                                                                                   |
 
 ## Remaining (long-term / held — explicit triggers, not the calendar)
 
