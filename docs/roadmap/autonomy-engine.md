@@ -380,6 +380,15 @@ proof but complete the "remove Mergify" story.
 
 ## 4. Phase 3 — `apex` fixture + run + benchmark
 
+> **Operating contract for whoever drives the run:
+> `docs/operator-guide/apex.md`.** It is binding and counterintuitive: apex tests
+> **Tanren**, not the URL shortener (a disposable fixture) and not efficiency
+> (not a benchmark yet — the target is "functional but weak"). The driver acts as
+> a **non-technical end user over the API only** — never hand-fixes the generated
+> repo; files real **issues into Tanren** for every defect and watches the
+> triage→spec→DAG→fix→merge loop close; adds a Tanren API endpoint rather than
+> reaching inside when one is missing. Read it before P3a/P3b.
+
 ### The fixture — what `apex` ships is almost nothing
 
 The point of apex is to prove **Tanren itself** builds the product brief,
