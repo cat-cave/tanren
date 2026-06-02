@@ -58,7 +58,8 @@ class RoutingGitHubHttp implements GitHubHttpClient {
     const updateMatch = /\/pulls\/(\d+)\/update-branch$/u.exec(path);
     if (input.method === "PUT" && updateMatch !== null) {
       const number = Number(updateMatch[1]);
-      if (number === CONFORMANCE_BEHIND_PR_NUMBER) return { status: 202, body: { message: "Updating pull request branch." } };
+      if (number === CONFORMANCE_BEHIND_PR_NUMBER)
+        return { status: 202, body: { message: "Updating pull request branch." } };
       if (number === CONFORMANCE_DIRTY_PR_NUMBER) return { status: 422, body: { message: "merge conflict" } };
       return { status: 204, body: {} };
     }

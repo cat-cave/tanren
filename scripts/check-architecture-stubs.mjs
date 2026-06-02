@@ -76,7 +76,16 @@ export const productionStubAllowlist = [
     reason: "unconfigured channel → 'stubbed' audit record (honest not-wired), never a silent drop",
   },
   {
-    file: "services/orchestrator/src/engine/workflow/reviewMerge/mergeDispatch.ts",
+    // The noop default's definition (the const) — P2a extracted the merge-stage
+    // contracts here so mergeDispatch.ts ↔ mergeDispatcher.ts don't form a cycle.
+    file: "services/orchestrator/src/engine/workflow/reviewMerge/mergeDispatchTypes.ts",
+    identifier: "noopConflictResolver",
+    pending: "P2b — replaced by the intent-preserving conflict resolver",
+  },
+  {
+    // The noop default's USE site — `input.resolveConflict ?? noopConflictResolver`
+    // in the MergeDispatcher (P2a extracted the dispatcher class out of mergeDispatch.ts).
+    file: "services/orchestrator/src/engine/workflow/reviewMerge/mergeDispatcher.ts",
     identifier: "noopConflictResolver",
     pending: "P2b — replaced by the intent-preserving conflict resolver",
   },
