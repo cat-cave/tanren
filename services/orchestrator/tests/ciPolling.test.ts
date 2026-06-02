@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { vcsProviderOver } from "./helpers/vcsProvider.js";
 import { describe, expect, it } from "vitest";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import { FakeEventStore } from "./helpers/fakeEventStore.js";
@@ -118,7 +119,7 @@ describe("CI polling loop", () => {
       pool: pool.asPgPool(),
       eventStore: events,
       secrets,
-      githubHttp: http,
+      vcsProvider: vcsProviderOver(http),
       runId: "run_1",
     });
 
@@ -152,14 +153,16 @@ describe("CI polling loop", () => {
       pool: passPool.asPgPool(),
       eventStore: passEvents,
       secrets,
-      githubHttp: new ScriptedGitHubHttp([
-        { status: 200, body: { head: { sha: "pass123" } } },
-        {
-          status: 200,
-          body: { check_runs: [{ name: "build", status: "completed", conclusion: "success" }] },
-        },
-        { status: 200, body: { statuses: [{ context: "legacy", state: "success" }] } },
-      ]),
+      vcsProvider: vcsProviderOver(
+        new ScriptedGitHubHttp([
+          { status: 200, body: { head: { sha: "pass123" } } },
+          {
+            status: 200,
+            body: { check_runs: [{ name: "build", status: "completed", conclusion: "success" }] },
+          },
+          { status: 200, body: { statuses: [{ context: "legacy", state: "success" }] } },
+        ]),
+      ),
       runId: "run_1",
     });
 
@@ -172,14 +175,16 @@ describe("CI polling loop", () => {
       pool: failPool.asPgPool(),
       eventStore: failEvents,
       secrets,
-      githubHttp: new ScriptedGitHubHttp([
-        { status: 200, body: { head: { sha: "fail123" } } },
-        {
-          status: 200,
-          body: { check_runs: [{ name: "test", status: "completed", conclusion: "failure" }] },
-        },
-        { status: 200, body: { statuses: [] } },
-      ]),
+      vcsProvider: vcsProviderOver(
+        new ScriptedGitHubHttp([
+          { status: 200, body: { head: { sha: "fail123" } } },
+          {
+            status: 200,
+            body: { check_runs: [{ name: "test", status: "completed", conclusion: "failure" }] },
+          },
+          { status: 200, body: { statuses: [] } },
+        ]),
+      ),
       runId: "run_1",
     });
 
@@ -245,7 +250,7 @@ describe("live CI polling fixture", () => {
       pool: pool.asPgPool(),
       eventStore: new FakeEventStore(),
       secrets,
-      githubHttp: new FetchGitHubHttpClient(),
+      vcsProvider: vcsProviderOver(new FetchGitHubHttpClient()),
       runId: "run_1",
     });
 

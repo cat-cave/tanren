@@ -8,7 +8,7 @@
 import type pg from "pg";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { EventStore } from "../eventStore.js";
-import type { GitHubHttpClient } from "../providers/github.js";
+import type { VcsProvider } from "../contracts/vcsProvider.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import { type PollCiForRunResult, pollCiForRun } from "./ciPolling.js";
 
@@ -22,7 +22,7 @@ export interface AdvanceCiFromWebhookInput {
   pool: pg.Pool;
   eventStore?: EventStore;
   secrets: SecretStore;
-  githubHttp: GitHubHttpClient;
+  vcsProvider: VcsProvider;
   /** GitHub `X-GitHub-Event` header value (e.g. `check_run`, `check_suite`, `status`). */
   event: string;
   /** Parsed webhook JSON body. */
@@ -57,7 +57,7 @@ export async function advanceCiFromWebhook(input: AdvanceCiFromWebhookInput): Pr
         pool: input.pool,
         eventStore: input.eventStore,
         secrets: input.secrets,
-        githubHttp: input.githubHttp,
+        vcsProvider: input.vcsProvider,
         runId,
         githubCredentialRef: input.githubCredentialRef,
         githubAppMinter: input.githubAppMinter,

@@ -6,6 +6,7 @@ import type pg from "pg";
 import { buildAuthFromEnv, type BuildAppAuthOptions } from "./mainAuth.js";
 import { buildSecretStore, type SecretStore, type SshSubstrate } from "./engine/contracts/index.js";
 import { FetchGitHubHttpClient, type GitHubHttpClient } from "./engine/providers/github.js";
+import { buildVcsProvider } from "./engine/providers/buildVcsProvider.js";
 import { GithubAppTokenMinter } from "./engine/providers/githubAppTokenMinter.js";
 import { FetchConfigGateGitHub } from "./engine/config/configGateGithub.js";
 import { loadOrgGithubAppInstallation } from "./engine/credentials/orgGithubApp.js";
@@ -81,6 +82,11 @@ export function buildApp(input: {
   // P3-0029: wrap the GitHub HTTP client so every API round trip emits a
   // boundary timing record (with method, path template, status, 429 flag).
   const githubHttp = new TimedGitHubHttpClient(input.githubHttp ?? new FetchGitHubHttpClient());
+  // P2·0: the run/merge lifecycle's VCS/CI operations route through the
+  // VcsProvider seam (the registry default is the real GitHub impl, composing
+  // `githubHttp`). The forge-recon / config-gate / notifications GitHub code
+  // keeps using `githubHttp` directly — only the run+merge path uses the seam.
+  const vcsProvider = buildVcsProvider(githubHttp);
   const identitySecretRef = input.runnerIdentitySecretRef ?? runnerIdentitySecretRef;
   const vaultHealthCheck = input.vaultHealthCheck ?? vaultHealth;
   // P3-0003: one shared minter so installation-token caching spans routes.
@@ -149,6 +155,7 @@ export function buildApp(input: {
     pool: input.pool,
     secrets,
     githubHttp,
+    vcsProvider,
     githubAppMinter,
     credentialRegistry,
     configGateGithub,
@@ -182,7 +189,7 @@ export function buildApp(input: {
   mountRootApiRoutes(app, {
     pool: input.pool,
     secrets,
-    githubHttp,
+    vcsProvider,
     githubAppMinter,
     identitySecretRef,
     ssh: input.ssh,

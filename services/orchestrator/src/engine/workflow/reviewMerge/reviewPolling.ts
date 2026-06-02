@@ -12,13 +12,11 @@ import type { ReviewAnswer } from "../../answerers/schemas/index.js";
 import type { RunStateWriter } from "../../contracts/runStateWriter.js";
 import type { SecretStore } from "../../contracts/secretStore.js";
 import { ensureSystemTask, routeTaskUpdate } from "../taskWriteRouting.js";
-import { resolveGithubToken } from "../../credentials/githubTokenResolver.js";
 import { type EventStore, PgEventStore } from "../../eventStore.js";
 import type { AnswererAdapter } from "../../providers/types.js";
 import type { GithubAppTokenMinter } from "../../providers/githubAppTokenMinter.js";
-import { parseGitHubPullRequestUrl, type GitHubHttpClient } from "../../providers/github.js";
+import type { PullRequestRef, RepoRef, VcsProvider } from "../../contracts/vcsProvider.js";
 import {
-  GitHubReviewMergeService,
   type ReviewVerdict,
   type ReviewVerdictResult,
   type SubmitReviewEvent,
@@ -43,7 +41,7 @@ export interface PollReviewForRunInput {
   // when wired (remote-writes on); absent, the in-process org-scoped write runs.
   runStateWriter?: RunStateWriter;
   secrets: SecretStore;
-  githubHttp: GitHubHttpClient;
+  vcsProvider: VcsProvider;
   runId: string;
   githubAppMinter?: GithubAppTokenMinter;
   /**
@@ -110,7 +108,8 @@ export interface PollReviewForRunResult {
 export async function pollReviewForRun(input: PollReviewForRunInput): Promise<PollReviewForRunResult> {
   const context = await loadReviewMergeRunContext(input.pool, input.runId, contextOptionsFor(input));
   const eventStore = input.eventStore ?? new PgEventStore(input.pool);
-  const pr = parseGitHubPullRequestUrl(context.prUrl);
+  const prRef = input.vcsProvider.parsePullRequest(context.prUrl);
+  const pr = { repo: prRef.repo, pullNumber: prRef.number };
   const taskId = await ensureReviewTask(input.pool, context, input.runStateWriter);
   await eventStore.append({
     runId: context.runId,
@@ -348,47 +347,22 @@ async function markTaskDoneOk(pool: RunStateClient, taskId: string, writer?: Run
 async function buildGitHubProbe(
   input: PollReviewForRunInput,
   context: ReviewMergeRunContext,
-  repo: ReturnType<typeof parseGitHubPullRequestUrl>["repo"],
+  repo: RepoRef,
   pullNumber: number,
 ): Promise<ReviewProbe> {
-  const resolved = await resolveGithubToken({
+  const provider = input.vcsProvider;
+  const resolved = await provider.resolveToken({
     secrets: input.secrets,
     installation: context.installation,
     staticRef: context.staticCredentialRef,
     minter: input.githubAppMinter,
   });
-  const service = new GitHubReviewMergeService(input.githubHttp);
+  const pr: PullRequestRef = { repo, number: pullNumber };
   return {
-    markReady: () =>
-      service.markReadyForReview({
-        repo,
-        pullNumber,
-        token: resolved.token,
-        refreshToken: resolved.refresh,
-      }),
-    fetchVerdict: () =>
-      service.fetchReviewVerdict({
-        repo,
-        pullNumber,
-        token: resolved.token,
-        refreshToken: resolved.refresh,
-      }),
-    fetchDiff: () =>
-      service.fetchPullRequestDiff({
-        repo,
-        pullNumber,
-        token: resolved.token,
-        refreshToken: resolved.refresh,
-      }),
-    submitReview: (event, body) =>
-      service.submitReview({
-        repo,
-        pullNumber,
-        event,
-        body,
-        token: resolved.token,
-        refreshToken: resolved.refresh,
-      }),
+    markReady: () => provider.markReadyForReview(pr, resolved),
+    fetchVerdict: () => provider.readReviewVerdict(pr, resolved),
+    fetchDiff: () => provider.readPullRequestDiff(pr, resolved),
+    submitReview: (event, body) => provider.submitReview(pr, event, body, resolved),
   };
 }
 

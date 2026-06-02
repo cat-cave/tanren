@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { vcsProviderOver } from "./helpers/vcsProvider.js";
 import { createDbPool, migrate } from "@tanren/db";
 import type { ServerHostKeyAlgorithm } from "ssh2";
 import { describe, expect, it } from "vitest";
@@ -75,7 +76,7 @@ describeLive("live phase 1 fixture workflow", () => {
         }),
         ssh,
         secrets,
-        githubHttp: new FetchGitHubHttpClient(),
+        vcsProvider: vcsProviderOver(new FetchGitHubHttpClient()),
         context: {
           runId: run.runId,
           specId: run.specId,

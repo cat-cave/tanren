@@ -12,6 +12,7 @@ import { orgScopingPool } from "./engine/data/orgScopedDb.js";
 import type { Allocator, SecretStore, SshSubstrate } from "./engine/contracts/index.js";
 import { buildForgeRouteAnswererFactories } from "./engine/forge/routeFactories.js";
 import type { GitHubHttpClient } from "./engine/providers/github.js";
+import type { VcsProvider } from "./engine/contracts/vcsProvider.js";
 import type { GithubAppTokenMinter } from "./engine/providers/githubAppTokenMinter.js";
 import { mountGithubAppInstallFromEnv } from "./routes/auth/githubAppInstall.js";
 import { createBehaviorRoutes } from "./routes/behaviors/index.js";
@@ -44,6 +45,10 @@ export interface FeatureRouteDeps {
   pool: pg.Pool;
   secrets: SecretStore;
   githubHttp: GitHubHttpClient;
+  // P2·0: the VcsProvider seam, used by the run/merge-lifecycle routes (the CI
+  // webhook fallback). The forge-recon / inbox / config-gate routes keep using
+  // `githubHttp` directly — only the run+merge path goes through the provider.
+  vcsProvider: VcsProvider;
   githubAppMinter: GithubAppTokenMinter;
   credentialRegistry: CredentialRegistry;
   configGateGithub: ConfigGateGithubFactory;
@@ -126,7 +131,7 @@ export function mountFeatureRoutes(app: Hono<ActorContextEnv>, deps: FeatureRout
   // `/github/webhooks/ci`. Polling remains the default fallback. NOT org-keyed
   // per-request (the webhook resolves its run's org server-side via the system
   // scope), so it keeps the bare pool.
-  app.route("/", createGithubWebhookRoutes({ pool, secrets, githubHttp, githubAppMinter }));
+  app.route("/", createGithubWebhookRoutes({ pool, secrets, vcsProvider: deps.vcsProvider, githubAppMinter }));
   // P1d autonomous intake — the GitHub issues WEBHOOK RECEIVER (autonomy-engine.md
   // §1d). GitHub posts to `/github/webhooks/issues/:sourceId`; the receiver
   // verifies the source's signature (mandatory), triages with the real provider

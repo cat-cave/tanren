@@ -2,6 +2,7 @@
 // advances its CI state by an authoritative re-fetch (poll fallback remains).
 
 import { describe, expect, it } from "vitest";
+import { vcsProviderOver } from "./helpers/vcsProvider.js";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import { FakeEventStore } from "./helpers/fakeEventStore.js";
 import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "../src/engine/providers/github.js";
@@ -29,7 +30,7 @@ describe("CI webhook (P3-0028)", () => {
       advanceCiFromWebhook({
         pool: new WebhookPool().asPgPool(),
         secrets: new FakeSecretStore(),
-        githubHttp: new ScriptedGitHubHttp([]),
+        vcsProvider: vcsProviderOver(new ScriptedGitHubHttp([])),
         event: "push",
         payload: {},
       }),
@@ -46,15 +47,17 @@ describe("CI webhook (P3-0028)", () => {
       pool: pool.asPgPool(),
       eventStore: events,
       secrets,
-      githubHttp: new ScriptedGitHubHttp([
-        { status: 200, body: { head: { sha: "abc123" }, base: { ref: "main" } } },
-        {
-          status: 200,
-          body: { check_runs: [{ name: "build", status: "completed", conclusion: "success" }] },
-        },
-        { status: 200, body: { statuses: [] } },
-        { status: 404, body: { message: "Branch not protected" } },
-      ]),
+      vcsProvider: vcsProviderOver(
+        new ScriptedGitHubHttp([
+          { status: 200, body: { head: { sha: "abc123" }, base: { ref: "main" } } },
+          {
+            status: 200,
+            body: { check_runs: [{ name: "build", status: "completed", conclusion: "success" }] },
+          },
+          { status: 200, body: { statuses: [] } },
+          { status: 404, body: { message: "Branch not protected" } },
+        ]),
+      ),
       event: "check_run",
       payload: { check_run: { pull_requests: [{ html_url: PR_URL }] } },
     });
@@ -68,7 +71,7 @@ describe("CI webhook (P3-0028)", () => {
     const result = await advanceCiFromWebhook({
       pool: new WebhookPool().asPgPool(),
       secrets: new FakeSecretStore(),
-      githubHttp: new ScriptedGitHubHttp([]),
+      vcsProvider: vcsProviderOver(new ScriptedGitHubHttp([])),
       event: "check_suite",
       payload: { check_suite: { pull_requests: [{ html_url: "https://github.com/x/y/pull/99" }] } },
     });

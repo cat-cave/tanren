@@ -18,12 +18,10 @@ import type { MergeIntegration } from "../../config/shared.js";
 import type { RunStateWriter } from "../../contracts/runStateWriter.js";
 import type { SecretStore } from "../../contracts/secretStore.js";
 import { ensureSystemTask, routeTaskUpdate } from "../taskWriteRouting.js";
-import { resolveGithubToken } from "../../credentials/githubTokenResolver.js";
 import { type EventStore, PgEventStore } from "../../eventStore.js";
 import type { GithubAppTokenMinter } from "../../providers/githubAppTokenMinter.js";
-import { parseGitHubPullRequestUrl, type GitHubHttpClient, type GitHubRepository } from "../../providers/github.js";
-import { GitHubReviewMergeService, type MergePullRequestResult } from "../../providers/githubReviewMerge.js";
-import { parseCommitLogins } from "./commitLogins.js";
+import type { MergePullRequestResult } from "../../providers/githubReviewMerge.js";
+import type { PullRequestRef, RepoRef, VcsProvider } from "../../contracts/vcsProvider.js";
 import {
   contextOptionsFor,
   loadReviewMergeRunContext,
@@ -67,7 +65,7 @@ export interface MergeForRunInput {
   // when wired (remote-writes on); absent, the in-process org-scoped write runs.
   runStateWriter?: RunStateWriter;
   secrets: SecretStore;
-  githubHttp: GitHubHttpClient;
+  vcsProvider: VcsProvider;
   runId: string;
   githubAppMinter?: GithubAppTokenMinter;
   /** Run-resolved GitHub credential ref; see PollReviewForRunInput. */
@@ -85,7 +83,7 @@ export interface MergeForRunInput {
   /**
    * P3-0023 test seam. Resolves the PR's distinct contributor logins for
    * external-change detection. Production omits it → the dispatcher lists the
-   * PR commits through `githubHttp` and derives the logins.
+   * PR commits through the VcsProvider and derives the logins.
    */
   contributorProbe?: ContributorProbe;
   /**
@@ -128,7 +126,8 @@ export function dispatchedIntegrationFor(mode: MergeIntegration): DispatchedInte
 export async function mergeForRun(input: MergeForRunInput): Promise<MergeForRunResult> {
   const context = await loadReviewMergeRunContext(input.pool, input.runId, contextOptionsFor(input));
   const eventStore = input.eventStore ?? new PgEventStore(input.pool);
-  const pr = parseGitHubPullRequestUrl(context.prUrl);
+  const prRef = input.vcsProvider.parsePullRequest(context.prUrl);
+  const pr = { repo: prRef.repo, pullNumber: prRef.number };
   const integration = dispatchedIntegrationFor(context.mergeIntegration);
   const taskId = await ensureMergeTask(input.pool, context, input.runStateWriter);
   await eventStore.append({
@@ -182,7 +181,7 @@ export async function mergeForRun(input: MergeForRunInput): Promise<MergeForRunR
 async function evaluatePosture(
   input: MergeForRunInput,
   context: ReviewMergeRunContext,
-  repo: GitHubRepository,
+  repo: RepoRef,
   pullNumber: number,
 ): Promise<PostureDecision> {
   if (context.governancePosture === "open") {
@@ -200,7 +199,7 @@ interface DispatcherDeps {
   eventStore: EventStore;
   taskId: string;
   integration: DispatchedIntegration;
-  pr: ReturnType<typeof parseGitHubPullRequestUrl>;
+  pr: { repo: RepoRef; pullNumber: number };
   probe: MergeProbe;
 }
 
@@ -412,67 +411,45 @@ class MergeDispatcher {
 async function buildGitHubProbe(
   input: MergeForRunInput,
   context: ReviewMergeRunContext,
-  repo: ReturnType<typeof parseGitHubPullRequestUrl>["repo"],
+  repo: RepoRef,
   pullNumber: number,
 ): Promise<MergeProbe> {
-  const resolved = await resolveGithubToken({
+  const provider = input.vcsProvider;
+  const resolved = await provider.resolveToken({
     secrets: input.secrets,
     installation: context.installation,
     staticRef: context.staticCredentialRef,
     minter: input.githubAppMinter,
   });
-  const service = new GitHubReviewMergeService(input.githubHttp);
+  const pr: PullRequestRef = { repo, number: pullNumber };
   return {
-    applyQueueLabel: (label) =>
-      service.applyQueueLabel({
-        repo,
-        pullNumber,
-        label,
-        token: resolved.token,
-        refreshToken: resolved.refresh,
-      }),
-    merge: () =>
-      service.mergePullRequest({
-        repo,
-        pullNumber,
-        mergeMethod: input.mergeMethod,
-        token: resolved.token,
-        refreshToken: resolved.refresh,
-      }),
+    applyQueueLabel: (label) => provider.applyQueueLabel(pr, label, resolved),
+    merge: () => provider.mergePullRequest(pr, resolved, input.mergeMethod),
   };
 }
 
 /**
  * P3-0023 production contributor probe. Lists the PR's commits through the
- * resolved GitHub token and collects the distinct author + committer logins.
- * The HTTP call lives here (not the provider surface) so external-change
- * detection stays inside the governance/review-merge decision path. Token
+ * VcsProvider and collects the distinct author + committer logins for the
+ * external-change detection in the governance/review-merge decision path. Token
  * resolution is lazy — only paid when the gate actually needs contributors.
  */
 function buildContributorProbe(
   input: MergeForRunInput,
   context: ReviewMergeRunContext,
-  repo: GitHubRepository,
+  repo: RepoRef,
   pullNumber: number,
 ): ContributorProbe {
+  const provider = input.vcsProvider;
   return {
     listContributors: async (): Promise<PullRequestContributors> => {
-      const resolved = await resolveGithubToken({
+      const resolved = await provider.resolveToken({
         secrets: input.secrets,
         installation: context.installation,
         staticRef: context.staticCredentialRef,
         minter: input.githubAppMinter,
       });
-      const response = await input.githubHttp.request({
-        method: "GET",
-        path: `/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}/pulls/${pullNumber}/commits`,
-        token: resolved.token,
-        refreshToken: resolved.refresh,
-      });
-      if (response.status !== 200) {
-        throw new Error(`GitHub PR commits fetch failed: HTTP ${response.status}`);
-      }
-      return { logins: parseCommitLogins(response.body) };
+      return provider.listContributors({ repo, number: pullNumber }, resolved);
     },
   };
 }

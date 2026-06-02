@@ -15,7 +15,7 @@ import { PgJobQueue } from "../contracts/jobQueue.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { SshSubstrate } from "../contracts/sshSubstrate.js";
-import type { GitHubHttpClient } from "../providers/github.js";
+import type { VcsProvider } from "../contracts/vcsProvider.js";
 import { JobReaper } from "./jobReaper.js";
 import { RunWorker, type RunWorkerOptions } from "./runWorker.js";
 
@@ -29,7 +29,7 @@ export interface StartRunWorkerInput {
   allocator: Allocator;
   ssh: SshSubstrate;
   secrets: SecretStore;
-  githubHttp: GitHubHttpClient;
+  vcsProvider: VcsProvider;
   identitySecretRef: string;
   // Concurrency is a GOVERNED CONFIG KNOB, never an env var (autonomy-engine.md
   // §1.4): the max in-flight run slots this worker maintains. Sourced from the
@@ -83,7 +83,7 @@ export function startRunWorker(input: StartRunWorkerInput): StartedRunWorker {
       allocator: input.allocator,
       ssh: input.ssh,
       secrets: input.secrets,
-      githubHttp: input.githubHttp,
+      vcsProvider: input.vcsProvider,
       identitySecretRef: input.identitySecretRef,
       ...(input.claimClient === undefined ? {} : { claimClient: input.claimClient }),
       ...(input.runStateWriter === undefined ? {} : { runStateWriter: input.runStateWriter }),

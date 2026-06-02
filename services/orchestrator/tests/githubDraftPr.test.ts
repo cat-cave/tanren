@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { vcsProviderOver } from "./helpers/vcsProvider.js";
 import type { SshTarget } from "../src/engine/contracts/allocator.js";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import type { SshCommand, SshCommandResult, SshSubstrate } from "../src/engine/contracts/sshSubstrate.js";
@@ -227,7 +228,7 @@ describe("GitHub draft PR contract", () => {
       pool: pool.asPgPool(),
       eventStore: events,
       secrets,
-      githubHttp: http,
+      vcsProvider: vcsProviderOver(http),
       ssh,
       target,
       runId: "run_123",
@@ -283,7 +284,7 @@ describe("GitHub draft PR contract", () => {
       pool: pool.asPgPool(),
       eventStore: events,
       secrets,
-      githubHttp: http,
+      vcsProvider: vcsProviderOver(http),
       ssh,
       runId: "run_123",
       identitySecretRef: "runner/local/identity",

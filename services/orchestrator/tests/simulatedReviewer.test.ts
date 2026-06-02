@@ -6,6 +6,7 @@
 // the Answerer verdict through the SAME finalize path the human policy uses.
 // Also proves the Answerer returns strict JSON.
 import { describe, expect, it } from "vitest";
+import { vcsProviderOver } from "./helpers/vcsProvider.js";
 
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import { answererOutputSchemaFor, ReviewAnswer } from "../src/engine/answerers/schemas/index.js";
@@ -122,7 +123,7 @@ describe("review polling stage — reviewPolicy: simulated", () => {
       pool: pool.asPgPool(),
       eventStore: events,
       secrets: new FakeSecretStore(),
-      githubHttp: unusedHttp(),
+      vcsProvider: vcsProviderOver(unusedHttp()),
       runId: "run_1",
       reviewProbe: simulatedProbe(captured),
       simulatedReviewer: () => fakeReviewer({ verdict: "approve", reasoning: "criteria satisfied" }, seen),
@@ -159,7 +160,7 @@ describe("review polling stage — reviewPolicy: simulated", () => {
       pool: pool.asPgPool(),
       eventStore: events,
       secrets: new FakeSecretStore(),
-      githubHttp: unusedHttp(),
+      vcsProvider: vcsProviderOver(unusedHttp()),
       runId: "run_1",
       reviewProbe: simulatedProbe(captured),
       simulatedReviewer: () => fakeReviewer({ verdict: "request_changes", reasoning: "criterion 1 is unmet" }, seen),
@@ -193,7 +194,7 @@ describe("review polling stage — reviewPolicy: simulated", () => {
         pool: pool.asPgPool(),
         eventStore: events,
         secrets: new FakeSecretStore(),
-        githubHttp: unusedHttp(),
+        vcsProvider: vcsProviderOver(unusedHttp()),
         runId: "run_1",
         reviewProbe: simulatedProbe(captured),
         // No simulatedReviewer / simulatedReviewContext.

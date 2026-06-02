@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { vcsProviderOver } from "./helpers/vcsProvider.js";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import { FakeEventStore } from "./helpers/fakeEventStore.js";
 import { reduceReviewVerdict } from "../src/engine/providers/githubReviewMerge.js";
@@ -61,7 +62,7 @@ describe("review polling stage", () => {
       pool: pool.asPgPool(),
       eventStore: events,
       secrets: new FakeSecretStore(),
-      githubHttp: unusedHttp(),
+      vcsProvider: vcsProviderOver(unusedHttp()),
       runId: "run_1",
       reviewProbe: probe,
     });
@@ -95,7 +96,7 @@ describe("review polling stage", () => {
       pool: pool.asPgPool(),
       eventStore: events,
       secrets: new FakeSecretStore(),
-      githubHttp: unusedHttp(),
+      vcsProvider: vcsProviderOver(unusedHttp()),
       runId: "run_1",
       reviewProbe: probe,
     });
@@ -131,7 +132,7 @@ describe("review polling stage", () => {
       pool: pool.asPgPool(),
       eventStore: events,
       secrets: new FakeSecretStore(),
-      githubHttp: unusedHttp(),
+      vcsProvider: vcsProviderOver(unusedHttp()),
       runId: "run_1",
       reviewProbe: probe,
     });
@@ -159,7 +160,7 @@ describe("review polling stage", () => {
       pool: pool.asPgPool(),
       eventStore: events,
       secrets: new FakeSecretStore(),
-      githubHttp: unusedHttp(),
+      vcsProvider: vcsProviderOver(unusedHttp()),
       runId: "run_1",
       reviewProbe: probe,
     });
@@ -193,7 +194,7 @@ describe("merge dispatch stage", () => {
       pool: pool.asPgPool(),
       eventStore: events,
       secrets: new FakeSecretStore(),
-      githubHttp: unusedHttp(),
+      vcsProvider: vcsProviderOver(unusedHttp()),
       runId: "run_1",
       mergeProbe: probe,
     });
@@ -216,7 +217,7 @@ describe("merge dispatch stage", () => {
       pool: pool.asPgPool(),
       eventStore: events,
       secrets: new FakeSecretStore(),
-      githubHttp: unusedHttp(),
+      vcsProvider: vcsProviderOver(unusedHttp()),
       runId: "run_1",
       mergeProbe: probe,
       mergifyQueueLabel: "tanren:merge",
@@ -241,7 +242,7 @@ describe("merge dispatch stage", () => {
       pool: pool.asPgPool(),
       eventStore: events,
       secrets: new FakeSecretStore(),
-      githubHttp: unusedHttp(),
+      vcsProvider: vcsProviderOver(unusedHttp()),
       runId: "run_1",
       mergeProbe: probe,
     });
@@ -269,7 +270,7 @@ describe("merge dispatch stage", () => {
       pool: pool.asPgPool(),
       eventStore: events,
       secrets: new FakeSecretStore(),
-      githubHttp: unusedHttp(),
+      vcsProvider: vcsProviderOver(unusedHttp()),
       runId: "run_1",
       mergeProbe: probe,
       resolveConflict: async (ctx) => {
@@ -372,7 +373,7 @@ describe("governance posture gate at the merge decision", () => {
       pool: pool.asPgPool(),
       eventStore: events,
       secrets: new FakeSecretStore(),
-      githubHttp: unusedHttp(),
+      vcsProvider: vcsProviderOver(unusedHttp()),
       runId: "run_1",
       mergeProbe: probe,
       contributorProbe: externalProbe,
@@ -403,7 +404,7 @@ describe("governance posture gate at the merge decision", () => {
       pool: pool.asPgPool(),
       eventStore: events,
       secrets: new FakeSecretStore(),
-      githubHttp: unusedHttp(),
+      vcsProvider: vcsProviderOver(unusedHttp()),
       runId: "run_1",
       mergeProbe: probe,
       contributorProbe: externalProbe,
@@ -432,7 +433,7 @@ describe("governance posture gate at the merge decision", () => {
       pool: pool.asPgPool(),
       eventStore: events,
       secrets: new FakeSecretStore(),
-      githubHttp: unusedHttp(),
+      vcsProvider: vcsProviderOver(unusedHttp()),
       runId: "run_1",
       mergeProbe: probe,
       contributorProbe: internalProbe,
@@ -458,7 +459,7 @@ describe("governance posture gate at the merge decision", () => {
       pool: pool.asPgPool(),
       eventStore: events,
       secrets: new FakeSecretStore(),
-      githubHttp: unusedHttp(),
+      vcsProvider: vcsProviderOver(unusedHttp()),
       runId: "run_1",
       mergeProbe: probe,
       contributorProbe: externalProbe,

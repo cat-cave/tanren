@@ -26,7 +26,7 @@ import { codexHomeForRun } from "../credentials/codexMaterializer.js";
 import { type EventName, type EventPayload } from "../events/index.js";
 import { type EventStore, PgEventStore } from "../eventStore.js";
 import type { ReviewAnswer } from "../answerers/schemas/index.js";
-import type { GitHubHttpClient } from "../providers/github.js";
+import type { VcsProvider } from "../contracts/vcsProvider.js";
 import type { AnswererAdapter } from "../providers/types.js";
 import type { UsageProbe } from "../usage/index.js";
 import { workspaceRepoPathForRun } from "../workspace/index.js";
@@ -133,7 +133,7 @@ export interface RunPlannerLoopInput {
   allocator: Allocator;
   ssh: SshSubstrate;
   secrets: SecretStore;
-  githubHttp: GitHubHttpClient;
+  vcsProvider: VcsProvider;
   context: PlannerRunContext;
   escapeHatches: Pick<
     EscapeHatches,
@@ -351,7 +351,7 @@ export async function runPlannerLoopWorkflow(input: RunPlannerLoopInput): Promis
         ...writerSeam(input),
         orgId: context.orgId,
         secrets: input.secrets,
-        githubHttp: input.githubHttp,
+        vcsProvider: input.vcsProvider,
         ssh: input.ssh,
         target: allocation.target,
         sourceRef: pushSourceRef,
@@ -374,7 +374,7 @@ export async function runPlannerLoopWorkflow(input: RunPlannerLoopInput): Promis
         eventStore,
         ...writerSeam(input),
         secrets: input.secrets,
-        githubHttp: input.githubHttp,
+        vcsProvider: input.vcsProvider,
         runId: context.runId,
         // Resolve the review-stage GitHub token from the SAME ref the
         // PR-creation + CI-poll steps used (project record → org default), not
@@ -412,7 +412,7 @@ export async function runPlannerLoopWorkflow(input: RunPlannerLoopInput): Promis
       eventStore,
       ...writerSeam(input),
       secrets: input.secrets,
-      githubHttp: input.githubHttp,
+      vcsProvider: input.vcsProvider,
       runId: context.runId,
       // Same source as PR-creation + CI-poll (project record → org default).
       resolvedGithubCredentialRef: context.githubCredentialRef,
@@ -472,7 +472,7 @@ async function pollCiUntilTerminal(input: RunPlannerLoopInput): Promise<PollCiFo
       eventStore: input.eventStore,
       ...writerSeam(input),
       secrets: input.secrets,
-      githubHttp: input.githubHttp,
+      vcsProvider: input.vcsProvider,
       runId: input.context.runId,
       githubCredentialRef: input.context.githubCredentialRef,
     });

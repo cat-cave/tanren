@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { vcsProviderOver } from "./helpers/vcsProvider.js";
 import type { AllocationRequest, Allocator, RunnerAllocation, SshTarget } from "../src/engine/contracts/allocator.js";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import type { SshCommand, SshCommandResult, SshSubstrate } from "../src/engine/contracts/sshSubstrate.js";
@@ -41,41 +42,43 @@ describe("phase 1 fixture cost-record persistence", () => {
       allocator: new RecordingAllocator(),
       ssh: new RecordingSsh(),
       secrets,
-      githubHttp: new ScriptedGitHubHttp([
-        { status: 200, body: [] },
-        {
-          status: 201,
-          body: {
-            number: 7,
-            html_url: "https://github.com/cat-cave/tanren-fixture-easy/pull/7",
-            draft: true,
-            base: { ref: "main" },
-          },
-        },
-        {
-          status: 200,
-          body: {
-            head: {
-              sha: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
-              ref: "tanren/p2a-0011-phase1",
+      vcsProvider: vcsProviderOver(
+        new ScriptedGitHubHttp([
+          { status: 200, body: [] },
+          {
+            status: 201,
+            body: {
+              number: 7,
+              html_url: "https://github.com/cat-cave/tanren-fixture-easy/pull/7",
+              draft: true,
+              base: { ref: "main" },
             },
           },
-        },
-        {
-          status: 200,
-          body: {
-            check_runs: [
-              {
-                name: "check",
-                status: "completed",
-                conclusion: "success",
-                html_url: "https://ci.example/check",
+          {
+            status: 200,
+            body: {
+              head: {
+                sha: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+                ref: "tanren/p2a-0011-phase1",
               },
-            ],
+            },
           },
-        },
-        { status: 200, body: { statuses: [] } },
-      ]),
+          {
+            status: 200,
+            body: {
+              check_runs: [
+                {
+                  name: "check",
+                  status: "completed",
+                  conclusion: "success",
+                  html_url: "https://ci.example/check",
+                },
+              ],
+            },
+          },
+          { status: 200, body: { statuses: [] } },
+        ]),
+      ),
       context,
       createWriter: () => fakeWriter,
       createChecker: () => fakeChecker,
@@ -141,41 +144,43 @@ describe("phase 1 fixture cost-record persistence", () => {
       allocator: new RecordingAllocator(),
       ssh: new RecordingSsh(),
       secrets,
-      githubHttp: new ScriptedGitHubHttp([
-        { status: 200, body: [] },
-        {
-          status: 201,
-          body: {
-            number: 9,
-            html_url: "https://github.com/cat-cave/tanren-fixture-easy/pull/9",
-            draft: true,
-            base: { ref: "main" },
-          },
-        },
-        {
-          status: 200,
-          body: {
-            head: {
-              sha: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
-              ref: "tanren/cost-unknown-ok",
+      vcsProvider: vcsProviderOver(
+        new ScriptedGitHubHttp([
+          { status: 200, body: [] },
+          {
+            status: 201,
+            body: {
+              number: 9,
+              html_url: "https://github.com/cat-cave/tanren-fixture-easy/pull/9",
+              draft: true,
+              base: { ref: "main" },
             },
           },
-        },
-        {
-          status: 200,
-          body: {
-            check_runs: [
-              {
-                name: "check",
-                status: "completed",
-                conclusion: "success",
-                html_url: "https://ci.example/check",
+          {
+            status: 200,
+            body: {
+              head: {
+                sha: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+                ref: "tanren/cost-unknown-ok",
               },
-            ],
+            },
           },
-        },
-        { status: 200, body: { statuses: [] } },
-      ]),
+          {
+            status: 200,
+            body: {
+              check_runs: [
+                {
+                  name: "check",
+                  status: "completed",
+                  conclusion: "success",
+                  html_url: "https://ci.example/check",
+                },
+              ],
+            },
+          },
+          { status: 200, body: { statuses: [] } },
+        ]),
+      ),
       context,
       createWriter: () => unattributableWriter,
       createChecker: () => fakeChecker,

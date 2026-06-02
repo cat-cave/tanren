@@ -23,6 +23,7 @@
 // loop stays inside the configured retry budgets.
 
 import { describe, expect, it } from "vitest";
+import { vcsProviderOver } from "./helpers/vcsProvider.js";
 import type { AuditAnswer, CheckAnswer, PlanAnswer } from "../src/engine/answerers/schemas/index.js";
 import { FakeJobQueue } from "../src/engine/contracts/jobQueue.js";
 import type { AnswererAdapter } from "../src/engine/usage/index.js";
@@ -76,7 +77,7 @@ describe("acceptance hard tier (dequeue→execute, all hard paths)", () => {
       allocator: new RecordingAllocator(),
       ssh: new RecordingSsh(),
       secrets,
-      githubHttp: github,
+      vcsProvider: vcsProviderOver(github),
       identitySecretRef,
       // Budgets generous enough that the scripted loops stay well within them
       // (1 gate re-plan + 1 auditor re-plan = 2 reruns < 5).
@@ -143,12 +144,12 @@ describe("acceptance hard tier (dequeue→execute, all hard paths)", () => {
       allocator: new RecordingAllocator(),
       ssh: new RecordingSsh(),
       secrets,
-      githubHttp: github,
+      vcsProvider: vcsProviderOver(github),
       identitySecretRef,
       runWorkflow: (input) =>
         runPlannerLoopWorkflow({
           ...input,
-          githubHttp: github,
+          vcsProvider: vcsProviderOver(github),
           maxCiPolls: 1,
           ciPollDelayMs: 0,
           sleep: async () => {},
@@ -215,7 +216,7 @@ describe("acceptance hard tier (dequeue→execute, all hard paths)", () => {
       allocator: new RecordingAllocator(),
       ssh: new RecordingSsh(),
       secrets,
-      githubHttp: hardTierGitHub(),
+      vcsProvider: vcsProviderOver(hardTierGitHub()),
       identitySecretRef,
       escapeHatches: {
         maxPlannerRerunsPerSpec: maxReruns,
@@ -225,7 +226,7 @@ describe("acceptance hard tier (dequeue→execute, all hard paths)", () => {
       runWorkflow: (input) =>
         runPlannerLoopWorkflow({
           ...input,
-          githubHttp: hardTierGitHub(),
+          vcsProvider: vcsProviderOver(hardTierGitHub()),
           maxCiPolls: 1,
           ciPollDelayMs: 0,
           sleep: async () => {},

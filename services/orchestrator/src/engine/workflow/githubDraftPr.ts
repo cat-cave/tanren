@@ -5,12 +5,11 @@ import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { SshSubstrate } from "../contracts/sshSubstrate.js";
 import { redactedGithubTokenResult, validateGithubCredentialRef } from "../credentials/githubToken.js";
-import { resolveGithubToken } from "../credentials/githubTokenResolver.js";
 import { type EventStore, PgEventStore } from "../eventStore.js";
-import { GitHubPullRequestService, parseGitHubRepository, type GitHubHttpClient } from "../providers/github.js";
+import type { VcsProvider } from "../contracts/vcsProvider.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import { workspaceRepoPathForRun } from "../workspace/index.js";
-import { draftPrBranchName, pushWorkspaceBranchToGitHub } from "../workspace/githubPush.js";
+import { draftPrBranchName } from "../workspace/githubPush.js";
 
 type RunStateClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
@@ -23,7 +22,7 @@ export interface PublishDraftPullRequestInput {
   runStateWriter?: RunStateWriter;
   orgId?: string | null;
   secrets: SecretStore;
-  githubHttp: GitHubHttpClient;
+  vcsProvider: VcsProvider;
   ssh: SshSubstrate;
   target: SshTarget;
   runId: string;
@@ -60,7 +59,7 @@ export interface PublishDraftPullRequestForRunInput {
   pool: RunStateClient;
   eventStore?: EventStore;
   secrets: SecretStore;
-  githubHttp: GitHubHttpClient;
+  vcsProvider: VcsProvider;
   ssh: SshSubstrate;
   runId: string;
   githubCredentialRef?: string;
@@ -101,7 +100,7 @@ export async function publishDraftPullRequest(input: PublishDraftPullRequestInpu
       eventType: "credential.requested",
       payload: redactedGithubTokenResult(ledgerRef),
     });
-    const resolved = await resolveGithubToken({
+    const resolved = await input.vcsProvider.resolveToken({
       secrets: input.secrets,
       installation: input.installation,
       staticRef,
@@ -112,11 +111,17 @@ export async function publishDraftPullRequest(input: PublishDraftPullRequestInpu
       eventType: "credential.loaded",
       payload: redactedGithubTokenResult(ledgerRef),
     });
-    await pushWorkspaceBranchToGitHub({
-      ...input,
+    await input.vcsProvider.pushBranch({
+      secrets: input.secrets,
+      ssh: input.ssh,
+      target: input.target,
+      workspacePath: input.workspacePath,
+      repoUrl: input.repoUrl,
       branch,
       credentialRef: ledgerRef,
-      token: resolved.token,
+      token: resolved,
+      timeoutMs: input.timeoutMs,
+      sourceRef: input.sourceRef,
     });
     await eventStore.append({
       ...context,
@@ -124,11 +129,9 @@ export async function publishDraftPullRequest(input: PublishDraftPullRequestInpu
       payload: { repoUrl: input.repoUrl, branch, credentialRef: ledgerRef, redacted: true },
     });
 
-    const service = new GitHubPullRequestService(input.githubHttp);
-    const pr = await service.ensureDraftPullRequest({
-      repo: parseGitHubRepository(input.repoUrl),
-      token: resolved.token,
-      refreshToken: resolved.refresh,
+    const pr = await input.vcsProvider.openDraftPullRequest({
+      repo: input.vcsProvider.parseRepository(input.repoUrl),
+      token: resolved,
       headBranch: branch,
       baseBranch: input.targetBranch,
       title: input.title,
@@ -182,7 +185,7 @@ export async function publishDraftPullRequestForRun(
     pool: input.pool,
     eventStore: input.eventStore,
     secrets: input.secrets,
-    githubHttp: input.githubHttp,
+    vcsProvider: input.vcsProvider,
     ssh: input.ssh,
     target: {
       host: context.runner.sshHost,
