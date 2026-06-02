@@ -48,6 +48,10 @@ import { fetchDeployTransport, type DeployHttpTransport } from "../provisioners/
  * the matrix names today (`errors` | `notify` | `deploy`) are the canonical values
  * documented here, but the type does not constrain to them.
  */
+import { buildSecretStore } from "./secretStoreFactory.js";
+import { FetchSlackApiTransport, type SlackApiTransport } from "../integrations/slack/slackApiTransport.js";
+import { SlackProvisioner, secretStoreSlackTransportFactory } from "../integrations/slack/slackProvisioner.js";
+
 export type CapabilityId = string;
 
 /** The provisioning mode onboarding picks per the greenfield/brownfield rule. */
@@ -265,10 +269,31 @@ export function buildIntegrationProvisioner(
       const deployDeps = { transport, secrets: deps.secrets };
       return kind === "deploy.vercel" ? new VercelDeployProvisioner(deployDeps) : new FlyDeployProvisioner(deployDeps);
     }
-    // Other real impls (slack, linear, jira) slot in here as new cases in P-INT-1+.
-    // Cloud-allocator (`allocator.*`, P-INT-5) is NOT one of these — it extends the
-    // Allocator seam, not this port (see the module-header SCOPE note).
+    // P-INT-3 — Plane-A Slack `notify` provisioner (bot `chat.postMessage` model);
+    // `buildSlackProvisioner` resolves the grant's bot-token ref against the
+    // configured SecretStore.
+    case "slack":
+      return buildSlackProvisioner();
+    // Other real impls (linear, jira) slot in here as new cases. Cloud-allocator
+    // (`allocator.*`, P-INT-5) is NOT one of these — it extends the Allocator seam
+    // (see the module-header SCOPE note).
     default:
       return new UnconfiguredIntegrationProvisioner(kind);
   }
+}
+
+/**
+ * Construct the production Plane-A Slack provisioner: a transport factory that, per
+ * org grant, resolves the bot-token credential ref against the configured
+ * SecretStore (`TANREN_SECRET_STORE`) and builds a fetch-backed Slack Web API
+ * transport for it. The bot token lives only inside the transport for the duration
+ * of a call — it is never embedded in a `ProvisionedArtifact` (only its ref is).
+ */
+function buildSlackProvisioner(): IntegrationProvisioner {
+  const secrets = buildSecretStore();
+  const transportFactory = secretStoreSlackTransportFactory(
+    secrets,
+    (botToken: string): SlackApiTransport => new FetchSlackApiTransport(botToken),
+  );
+  return new SlackProvisioner({ transportFactory });
 }

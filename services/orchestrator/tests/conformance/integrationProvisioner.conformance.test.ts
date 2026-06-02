@@ -21,6 +21,8 @@ import { VercelDeployProvisioner } from "../../src/engine/provisioners/vercelDep
 import { InMemoryIntegrationProvisioner } from "./fakes/inMemoryIntegrationProvisioner.js";
 import { ScriptedSentryTransport } from "./fakes/scriptedSentryTransport.js";
 import { scriptedDeployTransport } from "./fakes/scriptedDeployTransport.js";
+import { SlackProvisioner } from "../../src/engine/integrations/slack/slackProvisioner.js";
+import { ScriptedSlackTransport } from "./fakes/scriptedSlackTransport.js";
 import { describeIntegrationProvisionerConformance } from "./integrationProvisionerConformance.js";
 
 const grant = (): OrgGrant => ({
@@ -193,7 +195,36 @@ describeIntegrationProvisionerConformance("FlyDeployProvisioner", {
   seededResourceId: "fly_app_1",
 });
 
-// --- Registry: deploy.* registered (P-INT-4); other kinds still hard-throw -------
+// --- Contract conformance over the REAL SlackProvisioner (P-INT-3) -------------
+// Driven against the scripted Slack transport (no real Slack call in CI). Seeded
+// with one brownfield channel so the bind spec has a target. Each make() gets its
+// own transport so the per-instance state (provision → discover) is isolated.
+const slackGrant = (): OrgGrant => ({
+  providerKind: "slack",
+  credentialRef: "secret://org/slack-bot-token",
+  metadata: { workspaceId: "T123" },
+});
+
+const SLACK_SEEDED_ID = "C_existing-team";
+
+function makeSlackProvisioner(): SlackProvisioner {
+  const transport = new ScriptedSlackTransport({
+    channels: [{ id: SLACK_SEEDED_ID, name: "existing-team", isMember: false }],
+    // page size 1 exercises cursor pagination across the conformance run
+    pageSize: 1,
+  });
+  // eslint-disable-next-line @typescript-eslint/require-await
+  return new SlackProvisioner({ transportFactory: async () => transport });
+}
+
+describeIntegrationProvisionerConformance("SlackProvisioner", {
+  make: makeSlackProvisioner,
+  grant: slackGrant,
+  projectCtx,
+  seededResourceId: SLACK_SEEDED_ID,
+});
+
+// --- Registry: sentry/deploy.*/slack registered; other kinds still hard-throw ---
 describe("buildIntegrationProvisioner registry", () => {
   it("returns the hard-throw UnconfiguredIntegrationProvisioner for an unregistered kind", () => {
     const provisioner = buildIntegrationProvisioner("linear");
@@ -226,6 +257,23 @@ describe("buildIntegrationProvisioner registry", () => {
 
   it("a deploy provisioner without a SecretStore in deps throws (no silent no-op)", () => {
     expect(() => buildIntegrationProvisioner("deploy.vercel")).toThrow(/SecretStore/u);
+  });
+
+  it("resolves the slack kind to the real SlackProvisioner (notify capability)", () => {
+    // buildSecretStore needs a backend named; memory is the in-process test backend.
+    const prior = process.env["TANREN_SECRET_STORE"];
+    process.env["TANREN_SECRET_STORE"] = "memory";
+    try {
+      const provisioner = buildIntegrationProvisioner("slack");
+      expect(provisioner).toBeInstanceOf(SlackProvisioner);
+      expect(provisioner.capability()).toEqual(["notify"]);
+    } finally {
+      if (prior === undefined) {
+        delete process.env["TANREN_SECRET_STORE"];
+      } else {
+        process.env["TANREN_SECRET_STORE"] = prior;
+      }
+    }
   });
 });
 
