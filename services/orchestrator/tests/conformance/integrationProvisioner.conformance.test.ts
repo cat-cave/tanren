@@ -14,7 +14,10 @@ import {
   type OrgGrant,
   type ProjectContext,
 } from "../../src/engine/contracts/integrationProvisioner.js";
+import { InMemorySecretStore } from "../../src/engine/contracts/secretStore.js";
+import { SentryProvisioner } from "../../src/engine/providers/sentryProvisioner.js";
 import { InMemoryIntegrationProvisioner } from "./fakes/inMemoryIntegrationProvisioner.js";
+import { ScriptedSentryTransport } from "./fakes/scriptedSentryTransport.js";
 import { describeIntegrationProvisionerConformance } from "./integrationProvisionerConformance.js";
 
 const grant = (): OrgGrant => ({
@@ -40,10 +43,116 @@ describeIntegrationProvisionerConformance("InMemoryIntegrationProvisioner", {
   seededResourceId: SEEDED.id,
 });
 
-// --- Registry: empty in the foundation wave → hard-throw for every kind --------
-describe("buildIntegrationProvisioner registry (foundation wave: no providers)", () => {
-  it("returns the hard-throw UnconfiguredIntegrationProvisioner for any kind", () => {
-    const provisioner = buildIntegrationProvisioner("sentry");
+// --- Sentry: the REAL SentryProvisioner driven over a SCRIPTED FAKE transport ---
+// A token preloaded into the in-memory secret store satisfies the org grant; the
+// scripted transport models the Sentry org. The seeded project ("acme-web") is
+// the bind target. A fresh transport + store per make() keeps specs isolated.
+const SENTRY_TOKEN_REF = "secret://org/sentry-token";
+const SENTRY_SEEDED_SLUG = "acme-web";
+
+function sentryGrant(): OrgGrant {
+  return {
+    providerKind: "sentry",
+    credentialRef: SENTRY_TOKEN_REF,
+    metadata: { orgSlug: "acme", team: "platform" },
+  };
+}
+
+function makeSentry(): SentryProvisioner {
+  const secrets = new InMemorySecretStore();
+  // The org grant token lives in the secret store (resolved by ref, never inline).
+  void secrets.put({ ref: SENTRY_TOKEN_REF, value: "org-token-value" });
+  const transport = new ScriptedSentryTransport({
+    existing: [{ slug: SENTRY_SEEDED_SLUG, name: "acme-web", platform: "node" }],
+  });
+  return new SentryProvisioner(transport, secrets);
+}
+
+describeIntegrationProvisionerConformance("SentryProvisioner (scripted transport)", {
+  make: makeSentry,
+  grant: sentryGrant,
+  projectCtx,
+  seededResourceId: SENTRY_SEEDED_SLUG,
+});
+
+describe("SentryProvisioner — Sentry-specific behavior", () => {
+  it("discover() lists org projects as ExistingResource (slug → id, name → label)", async () => {
+    const resources = await makeSentry().discover(sentryGrant());
+    expect(resources).toContainEqual(expect.objectContaining({ id: SENTRY_SEEDED_SLUG, label: "acme-web" }));
+  });
+
+  it("provision() find-or-create is idempotent — a 2nd provision creates NO 2nd project", async () => {
+    const secrets = new InMemorySecretStore();
+    await secrets.put({ ref: SENTRY_TOKEN_REF, value: "org-token-value" });
+    const transport = new ScriptedSentryTransport();
+    const provisioner = new SentryProvisioner(transport, secrets);
+    const ctx = projectCtx("billing");
+
+    const first = await provisioner.provision(sentryGrant(), ctx);
+    const second = await provisioner.provision(sentryGrant(), ctx);
+
+    // Exactly ONE project-create POST landed across both provisions.
+    expect(transport.projectCreates).toBe(1);
+    expect(first.projectConfig).toEqual(second.projectConfig);
+    expect((first.projectConfig as { sentryProjectSlug: string }).sentryProjectSlug).toBe("billing");
+  });
+
+  it("provision() stores the DSN in the secret manager and the artifact carries ONLY the ref (never the DSN value)", async () => {
+    const secrets = new InMemorySecretStore();
+    await secrets.put({ ref: SENTRY_TOKEN_REF, value: "org-token-value" });
+    const transport = new ScriptedSentryTransport();
+    const provisioner = new SentryProvisioner(transport, secrets);
+
+    const artifact = await provisioner.provision(sentryGrant(), projectCtx("billing"));
+    const ref = artifact.secretRefs?.["SENTRY_DSN"];
+    expect(ref).toBeDefined();
+
+    const stored = await secrets.get(ref as string);
+    // The real DSN landed in the store.
+    expect(stored?.value).toMatch(/^https:\/\//u);
+    // The artifact ref is a POINTER, not the DSN value.
+    expect(ref).not.toMatch(/^https:\/\//u);
+    // No field of the artifact leaks the DSN value.
+    expect(JSON.stringify(artifact)).not.toContain(stored?.value);
+  });
+
+  it("provision() emits a sentry inbox_source referencing the project slug + the org token ref (no token value)", async () => {
+    const artifact = await makeSentry().provision(sentryGrant(), projectCtx("billing"));
+    expect(artifact.inboxSource?.kind).toBe("sentry");
+    expect(artifact.inboxSource?.config).toMatchObject({
+      org: "acme",
+      project: "billing",
+      tokenRef: SENTRY_TOKEN_REF,
+    });
+    // The inbox source carries the token REF, never the resolved token value.
+    expect(JSON.stringify(artifact.inboxSource)).not.toContain("org-token-value");
+  });
+
+  it("bind() links an existing project + ensures a DSN; binding an unknown slug rejects", async () => {
+    const provisioner = makeSentry();
+    const artifact = await provisioner.bind(sentryGrant(), SENTRY_SEEDED_SLUG, projectCtx("billing"));
+    expect((artifact.projectConfig as { sentryProjectSlug: string }).sentryProjectSlug).toBe(SENTRY_SEEDED_SLUG);
+    expect(artifact.secretRefs?.["SENTRY_DSN"]).toBeDefined();
+    await expect(provisioner.bind(sentryGrant(), "ghost-project", projectCtx("p"))).rejects.toThrow(/unknown project/u);
+  });
+
+  it("registry: buildIntegrationProvisioner('sentry', { sentry }) constructs the real SentryProvisioner", () => {
+    const provisioner = buildIntegrationProvisioner("sentry", {
+      sentry: { http: new ScriptedSentryTransport(), secrets: new InMemorySecretStore() },
+    });
+    expect(provisioner).toBeInstanceOf(SentryProvisioner);
+    expect(provisioner.capability()).toEqual(["errors"]);
+  });
+
+  it("registry: buildIntegrationProvisioner('sentry') without deps throws (no silent stub)", () => {
+    expect(() => buildIntegrationProvisioner("sentry")).toThrow(/requires deps\.sentry/u);
+  });
+});
+
+// --- Registry: an UNREGISTERED kind → hard-throw unconfigured provisioner ------
+describe("buildIntegrationProvisioner registry (unregistered kinds)", () => {
+  it("returns the hard-throw UnconfiguredIntegrationProvisioner for an unregistered kind", () => {
+    const provisioner = buildIntegrationProvisioner("linear");
     expect(provisioner).toBeInstanceOf(UnconfiguredIntegrationProvisioner);
   });
 
