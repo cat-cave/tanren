@@ -124,6 +124,13 @@ export interface BuildIntegrationBranchResult {
   integrationBranch: string;
   /** The ancestor spec ids that merged cleanly, in order. */
   mergedAncestors: string[];
+  /**
+   * P2c-2 (change-percolation): the head SHA each merged ancestor was integrated
+   * AT, keyed by ancestor spec id — recorded on the dependent's run as the
+   * divergence key, so a later ancestor advance is detectable. Present for the
+   * `mergedAncestors`; an ancestor that conflicted (not merged) is absent.
+   */
+  ancestorHeadShas: Record<string, string>;
   /** On `conflict`: the two ancestor specs that conflict with each other. */
   conflictBetween?: { specId: string; otherSpecId: string };
   /** Human-readable detail (the forge message), for events/diagnostics. */
@@ -311,6 +318,16 @@ export interface VcsProvider {
     path: string;
     token: ResolvedVcsToken;
   }): Promise<string | undefined>;
+
+  /**
+   * P2c-2 (change-percolation detect): read a branch's current HEAD SHA (or
+   * `undefined` when the ref does not exist). The change-percolation detect
+   * compares an ancestor branch's current head against the SHA the dependent
+   * INTEGRATED against — a divergence is an upstream change to percolate. On
+   * GitHub this reads `GET /git/ref/heads/{branch}`'s `object.sha`. Provider-
+   * neutral: a GitLab impl maps it from its own ref read.
+   */
+  readBranchHeadSha(input: { repo: RepoRef; branch: string; token: ResolvedVcsToken }): Promise<string | undefined>;
 
   /**
    * P2a: read the PR branch's up-to-date / mergeability state relative to its

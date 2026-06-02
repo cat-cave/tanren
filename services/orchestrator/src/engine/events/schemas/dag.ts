@@ -103,3 +103,92 @@ export const DagBudgetPausedPayload = z
   })
   .strict();
 export type DagBudgetPausedPayload = z.infer<typeof DagBudgetPausedPayload>;
+
+// Change-percolation events (autonomy-engine.md §2c "Change-percolation — NOT
+// discard"). When an ANCESTOR changes after a dependent started speculatively (a
+// reviewer pushes new commits, a P0/P1 finding lands, changes-requested), the
+// walker does NOT throw away the dependent's work — it PERCOLATES the upstream
+// delta down the chain (rebuild the speculative integration with the ancestor's
+// NEW state → re-base → re-gate; a conflict/semantic-break invokes the P2b
+// intent-preserving resolver in UPSTREAM-CHANGE mode). These events make that live
+// re-integration visible: which ancestor changed, why (severity), and the outcome.
+
+// dag.spec.percolating: the walker detected an ancestor change (the ancestor's
+// head SHA diverged from the SHA the dependent integrated against, OR a blocking
+// lifecycle/finding change) and is STARTING to percolate it into the dependent —
+// rebuilding the integration branch against the ancestor's new state, ready to
+// re-base + re-gate. The promptness (`severity`) explains WHY it fired now.
+export const DagSpecPercolatingPayload = z
+  .object({
+    // The dependent whose speculative work absorbs the upstream change.
+    specId: z.string(),
+    runId: z.string(),
+    // The ancestor that changed (the source of the percolated delta).
+    ancestorSpecId: z.string(),
+    // The ancestor head SHA the dependent had integrated against (the OLD base).
+    fromAncestorSha: z.string(),
+    // The ancestor's NEW head SHA the percolation re-integrates against.
+    toAncestorSha: z.string(),
+    // Why this percolation is happening promptly: an open P0/P1 finding or a
+    // changes-requested verdict on the ancestor forces IMMEDIATE percolation; a
+    // P2/P3 change would instead defer (dag.spec.percolation_deferred).
+    severity: z.enum(["P0", "P1", "P2", "P3", "changes_requested"]),
+  })
+  .strict();
+export type DagSpecPercolatingPayload = z.infer<typeof DagSpecPercolatingPayload>;
+
+// dag.spec.percolated: the upstream change was successfully absorbed — the
+// dependent's integration was rebuilt against the ancestor's new state, re-based,
+// and the re-gate (gate + checker + auditor) passed against the new base while the
+// dependent's OWN work stayed intact. The new integrated SHA is recorded so a
+// no-op re-trigger does not re-percolate (termination). `viaResolver` is true when
+// the re-base/re-gate surfaced a conflict/semantic-break that the P2b resolver
+// (upstream-change mode) reconciled before the clean re-gate.
+export const DagSpecPercolatedPayload = z
+  .object({
+    specId: z.string(),
+    runId: z.string(),
+    ancestorSpecId: z.string(),
+    // The ancestor SHA now recorded as integrated (the divergence key going fwd).
+    integratedAncestorSha: z.string(),
+    // True when the intent-preserving resolver reconciled a break before re-gate.
+    viaResolver: z.boolean(),
+  })
+  .strict();
+export type DagSpecPercolatedPayload = z.infer<typeof DagSpecPercolatedPayload>;
+
+// dag.spec.percolation_deferred (LAZY): the ancestor changed, but the change is
+// non-blocking polish (the ancestor's open findings are only P2/P3 and there is no
+// changes-requested verdict), so the percolation is BATCHED into the dependent's
+// next rebase rather than prompted now. Nothing is silently merged on stale work —
+// the deferral is recorded so the next walk/merge re-evaluates it.
+export const DagSpecPercolationDeferredPayload = z
+  .object({
+    specId: z.string(),
+    runId: z.string(),
+    ancestorSpecId: z.string(),
+    // The diverged head SHA that will be folded into the next rebase.
+    pendingAncestorSha: z.string(),
+    // The non-blocking severity that made this lazy (P2/P3 only).
+    severity: z.enum(["P2", "P3"]),
+  })
+  .strict();
+export type DagSpecPercolationDeferredPayload = z.infer<typeof DagSpecPercolationDeferredPayload>;
+
+// dag.spec.percolation_replan: the percolation could NOT reconcile the upstream
+// change with the dependent's work (the resolver returned irreconcilable, or the
+// re-gate failed). The dependent's work is NOT discarded and NOT merged — it is
+// routed BACK TO THE PLANNER with the ancestor's change as new context (the P2b
+// replan path), so the intent stays alive and is re-planned on top of the change.
+export const DagSpecPercolationReplanPayload = z
+  .object({
+    specId: z.string(),
+    runId: z.string(),
+    ancestorSpecId: z.string(),
+    // The ancestor SHA whose change the dependent must now re-plan on top of.
+    ancestorSha: z.string(),
+    // Why it could not be auto-absorbed (resolver-irreconcilable / re-gate failure).
+    reason: z.string(),
+  })
+  .strict();
+export type DagSpecPercolationReplanPayload = z.infer<typeof DagSpecPercolationReplanPayload>;

@@ -303,6 +303,13 @@ export interface DagEnqueuer {
      * normal start (full dependency-done gate + `default_branch` base).
      */
     speculativeBase?: string;
+    /**
+     * P2c-2 (change-percolation): the head SHA each unmerged ancestor was
+     * integrated AT, keyed by ancestor spec id. Persisted on the run as the
+     * DIVERGENCE KEY — the change-percolation detect later compares each ancestor's
+     * live head against this. Present iff `speculativeBase` is.
+     */
+    integratedAncestorShas?: Record<string, string>;
   }): Promise<{ runId: string }>;
 }
 

@@ -45,6 +45,8 @@ export const CONFORMANCE_BEHIND_PR_NUMBER = 11;
 /** P2a: a PR whose branch conflicts with base (update-branch reports a conflict). */
 export const CONFORMANCE_DIRTY_PR_NUMBER = 13;
 export const CONFORMANCE_HEAD_BRANCH = "tanren/run_conf";
+/** P2c-2: a branch that does not exist (readBranchHeadSha → undefined). */
+export const CONFORMANCE_ABSENT_BRANCH = "tanren/does-not-exist";
 /** P2c: ancestor branches that speculatively integrate cleanly onto the base. */
 export const CONFORMANCE_INTEGRATION_BRANCH = "tanren/integ/spec_c";
 export const CONFORMANCE_ANCESTOR_A = { specId: "spec_a", branch: "tanren/run_a" };
@@ -173,6 +175,23 @@ export function describeVcsProviderConformance(label: string, harness: VcsProvid
         token,
       });
       expect(content).toBeUndefined();
+    });
+
+    // ---- P2c-2: branch head SHA (change-percolation divergence key) ------
+
+    it("readBranchHeadSha returns a SHA for an existing branch", async () => {
+      const provider = harness.make();
+      const token = await resolve(provider);
+      const sha = await provider.readBranchHeadSha({ repo: REPO, branch: CONFORMANCE_HEAD_BRANCH, token });
+      expect(typeof sha).toBe("string");
+      expect(sha).not.toBe("");
+    });
+
+    it("readBranchHeadSha returns undefined for a missing branch (deleted ref)", async () => {
+      const provider = harness.make();
+      const token = await resolve(provider);
+      const sha = await provider.readBranchHeadSha({ repo: REPO, branch: CONFORMANCE_ABSENT_BRANCH, token });
+      expect(sha).toBeUndefined();
     });
 
     // ---- P2a: up-to-date / mergeability + update-branch ------------------

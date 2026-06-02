@@ -107,6 +107,7 @@ export class PgSpeculativeIntegrator implements SpeculativeIntegrator {
     return {
       outcome: result.outcome,
       integrationBranch: result.integrationBranch,
+      ancestorHeadShas: result.ancestorHeadShas,
       ...(result.conflictBetween !== undefined && { conflictBetween: result.conflictBetween }),
       message: result.message,
     };

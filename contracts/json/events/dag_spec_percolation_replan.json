@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "ancestorSha": {
+      "type": "string"
+    },
+    "ancestorSpecId": {
+      "type": "string"
+    },
+    "reason": {
+      "type": "string"
+    },
+    "runId": {
+      "type": "string"
+    },
+    "specId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "specId",
+    "runId",
+    "ancestorSpecId",
+    "ancestorSha",
+    "reason"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.dag.spec.percolation_replan"
+}

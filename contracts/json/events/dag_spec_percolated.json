@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "ancestorSpecId": {
+      "type": "string"
+    },
+    "integratedAncestorSha": {
+      "type": "string"
+    },
+    "runId": {
+      "type": "string"
+    },
+    "specId": {
+      "type": "string"
+    },
+    "viaResolver": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "specId",
+    "runId",
+    "ancestorSpecId",
+    "integratedAncestorSha",
+    "viaResolver"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.dag.spec.percolated"
+}

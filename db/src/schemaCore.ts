@@ -152,6 +152,16 @@ export const runs = pgTable(
     // merges against this ref — it is the WORK base; the dependent's MERGE waits
     // for the real ancestor merges, then re-gates against `default_branch`.
     speculativeBase: text("speculative_base"),
+    // P2c-2 (autonomy-engine.md §2c CHANGE-PERCOLATION): the per-ancestor head SHA
+    // map this speculative run INTEGRATED AGAINST — `{ "<ancestorSpecId>": "<sha>" }`.
+    // It is the DIVERGENCE KEY: when an ancestor's branch advances past the SHA
+    // captured here (or its lifecycle/finding state changes), the change must
+    // PERCOLATE down the chain (rebuild integration → re-base → re-gate → resolver
+    // on a break). A SHA that still matches is a NO-OP (termination — no
+    // re-percolation when nothing actually changed). NULL ⇒ a non-speculative run
+    // (nothing to percolate against). Recorded by the walker at speculative start
+    // and overwritten with the new SHAs after each successful percolation.
+    integratedAncestorShas: jsonb("integrated_ancestor_shas"),
   },
   (table) => [
     enumCheck("runs_status_check", table.status, stateEnumLists.runs_status),

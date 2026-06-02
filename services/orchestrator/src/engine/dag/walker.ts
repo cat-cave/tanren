@@ -202,6 +202,9 @@ export class EventEmittingDagWalker implements DagWalker {
       projectId,
       specId: enqueue.specId,
       speculativeBase: integration.integrationBranch,
+      // P2c-2: record the per-ancestor head SHA the run integrated against (the
+      // change-percolation divergence key); a later ancestor advance is detectable.
+      integratedAncestorShas: integration.ancestorHeadShas,
     });
     await this.deps.events.emitSpecSpeculative({
       projectId,

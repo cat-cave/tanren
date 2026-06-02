@@ -273,17 +273,24 @@ export class GitHubVcsProvider implements VcsProvider {
     //    409 from the merge API is a real conflict BETWEEN this ancestor and what
     //    is already integrated (an earlier ancestor) — surface it here, early.
     const merged: string[] = [];
+    const ancestorHeadShas: Record<string, string> = {};
     for (const ancestor of ancestors) {
+      // Capture the ancestor's head SHA AT integration time (the divergence key the
+      // change-percolation detect later compares the live head against, P2c-2).
+      ancestorHeadShas[ancestor.specId] = await this.refSha(repo, token, ancestor.branch);
       const result = await this.mergeBranchInto(repo, token, integrationBranch, ancestor.branch);
       if (result === "conflict") {
         // The conflict is between THIS ancestor and what is already on the
         // integration ref. The immediately-prior integrated ancestor is the most
         // specific other side; with none yet integrated it is the base itself.
         const otherSpecId = merged.at(-1) ?? baseBranch;
+        // The conflicting ancestor did not merge — drop its captured head SHA.
+        delete ancestorHeadShas[ancestor.specId];
         return {
           outcome: "conflict",
           integrationBranch,
           mergedAncestors: merged,
+          ancestorHeadShas,
           conflictBetween: { specId: ancestor.specId, otherSpecId },
           message: `ancestor ${ancestor.specId} (${ancestor.branch}) conflicts with the integration of ${otherSpecId} on ${integrationBranch}`,
         };
@@ -294,6 +301,7 @@ export class GitHubVcsProvider implements VcsProvider {
       outcome: "integrated",
       integrationBranch,
       mergedAncestors: merged,
+      ancestorHeadShas,
       message: `integrated ${merged.length} ancestor branch(es) onto ${integrationBranch}`,
     };
   }
@@ -313,6 +321,27 @@ export class GitHubVcsProvider implements VcsProvider {
       throw new Error(`GitHub ref read for ${branch} returned no sha`);
     }
     return object.sha;
+  }
+
+  async readBranchHeadSha(input: {
+    repo: RepoRef;
+    branch: string;
+    token: ResolvedVcsToken;
+  }): Promise<string | undefined> {
+    const response = await this.http.request({
+      method: "GET",
+      path: repoApiPath(input.repo, `/git/ref/heads/${encodeURIComponent(input.branch)}`),
+      token: input.token.token,
+      refreshToken: input.token.refresh,
+    });
+    // 404 = the ref does not exist (the ancestor's branch was deleted/renamed): no
+    // head to compare against — the detect treats it as unreadable, never invents a change.
+    if (response.status === 404) return undefined;
+    if (response.status !== 200 || typeof response.body !== "object" || response.body === null) {
+      throw new Error(`GitHub head-sha read failed for ${input.branch}: HTTP ${response.status}`);
+    }
+    const object = (response.body as { object?: { sha?: unknown } }).object;
+    return object !== undefined && typeof object.sha === "string" ? object.sha : undefined;
   }
 
   /** Create the integration ref at `sha`, or force-update it if it already exists. */

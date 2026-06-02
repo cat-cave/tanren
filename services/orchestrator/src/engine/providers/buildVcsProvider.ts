@@ -115,6 +115,13 @@ export class UnconfiguredVcsProvider implements VcsProvider {
   }): Promise<string | undefined> {
     return this.fail();
   }
+  async readBranchHeadSha(_input: {
+    repo: RepoRef;
+    branch: string;
+    token: ResolvedVcsToken;
+  }): Promise<string | undefined> {
+    return this.fail();
+  }
   async readMergeability(_pr: PullRequestRef, _token: ResolvedVcsToken): Promise<PullRequestMergeability> {
     return this.fail();
   }
