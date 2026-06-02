@@ -471,3 +471,29 @@ export const AppEnvRuntimeAttachedPayload = z
     keys: z.array(z.string()),
   })
   .strict();
+
+// Plane B app-environment (P-APP-ENV-1): the project's TEST-scoped app env was
+// propagated to the target repo's GitHub Actions repository SECRETS, so the
+// project's `tanren-ci.yml` tests that read e.g. RESEND_API_KEY pass. The Actions
+// secrets are a CI integration the built product's tests run against, so the event
+// lives here alongside `app_env.runtime_attached`.
+//
+// SECURITY: this payload carries ONLY the project, the repo (owner/name), and the
+// Actions-secret KEY NAMES — never a single secret VALUE. The values went into the
+// encrypted Actions-secret PUT and nowhere else; this event is the observable proof
+// the propagation ran, safe to surface to any project member.
+export const AppEnvCiPropagatedPayload = z
+  .object({
+    /** The Tanren project whose test-scoped app env was propagated. */
+    projectId: z.string(),
+    /** The target repo the Actions secrets were set on. */
+    repo: z
+      .object({
+        owner: z.string(),
+        name: z.string(),
+      })
+      .strict(),
+    /** The Actions-secret KEY NAMES set (sorted). NEVER the values. */
+    secretNames: z.array(z.string()),
+  })
+  .strict();

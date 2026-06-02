@@ -12,46 +12,33 @@
 //
 // SECURITY: the resolved values are SECRET. They are passed ONLY into the
 // encrypted Actions-secret PUT (inside `setActionsSecret`) — never logged, never
-// returned, never placed in the emitted event. The event carries the propagated
-// KEY NAMES only (names are non-secret env-var keys). This module logs nothing.
+// returned, never placed in the emitted event. The emitted `app_env.ci_propagated`
+// event (through the org-scoped PgEventStore, mirroring P-APP-ENV-2's
+// `app_env.runtime_attached`) carries the repo + the propagated KEY NAMES only.
+// This module logs nothing.
 
 import { resolveAppEnvForScope } from "./resolveAppEnv.js";
 import type { ResolvedVcsToken, VcsProvider } from "../contracts/vcsProvider.js";
 import type { SecretStore } from "../contracts/secretStore.js";
+import type { EventStore } from "../eventStore.js";
 import type { ActorRef } from "../state/actor.js";
 import type pg from "pg";
 
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
-
-/**
- * Names-only signal the flow emits after propagating. It carries the project, the
- * repo, and the SECRET NAMES set — NEVER any value. Wired to a structured emitter
- * by the caller (the route); kept off the migration-gated typed event store so
- * adding this signal needs no schema/migration change.
- */
-export interface AppEnvCiPropagatedEvent {
-  event: "app_env.ci_propagated";
-  projectId: string;
-  repo: { owner: string; name: string };
-  /** The Actions-secret names that were set (non-secret env-var keys). */
-  secretNames: string[];
-}
-
-export type AppEnvCiPropagatedEmit = (event: AppEnvCiPropagatedEvent) => void | Promise<void>;
 
 export interface PropagateAppEnvToCiInput {
   /** Org-scope-carrying client (RLS gates which project's app-env is visible). */
   client: QueryClient;
   secrets: SecretStore;
   vcsProvider: VcsProvider;
+  /** Where the `app_env.ci_propagated` event is appended (project-scoped, org-RLS'd). */
+  events: EventStore;
   /** The repo clone URL; parsed to owner/name by the provider. */
   repoUrl: string;
   projectId: string;
   /** A token already resolved for the target repo (App-first / static). */
   token: ResolvedVcsToken;
   actor: ActorRef;
-  /** Optional names-only emitter (the route wires a structured logger/event). */
-  emit?: AppEnvCiPropagatedEmit;
 }
 
 export interface PropagateAppEnvToCiResult {
@@ -62,9 +49,8 @@ export interface PropagateAppEnvToCiResult {
 /**
  * Resolve the project's TEST-scoped app env and set each entry as an Actions
  * repository secret on the target repo. Returns the NAMES set (never values).
- * Emits `app_env.ci_propagated` (names only) when an emitter is supplied. A
- * project with no test-scoped entries is a no-op (no secrets set, empty event not
- * forced).
+ * Emits `app_env.ci_propagated` (repo + names only) when at least one secret was
+ * set. A project with no test-scoped entries is a no-op (no secrets set, no event).
  */
 export async function propagateAppEnvToCi(input: PropagateAppEnvToCiInput): Promise<PropagateAppEnvToCiResult> {
   // SCOPE GUARANTEE: only `test`-scoped entries — `resolveAppEnvForScope` filters
@@ -79,21 +65,21 @@ export async function propagateAppEnvToCi(input: PropagateAppEnvToCiInput): Prom
   });
 
   const repo = input.vcsProvider.parseRepository(input.repoUrl);
-  const secretNames: string[] = [];
-  for (const [name, value] of Object.entries(env)) {
+  // Stable order so the emitted KEY list + the per-secret sets are deterministic.
+  const names = Object.keys(env).sort();
+  for (const name of names) {
     // The plaintext `value` goes ONLY into setActionsSecret's encrypted PUT body.
-    await input.vcsProvider.setActionsSecret({ repo, token: input.token, name, value });
-    secretNames.push(name);
+    await input.vcsProvider.setActionsSecret({ repo, token: input.token, name, value: env[name] as string });
   }
 
-  if (input.emit !== undefined && secretNames.length > 0) {
-    await input.emit({
-      event: "app_env.ci_propagated",
+  if (names.length > 0) {
+    // Record the propagation — repo + KEY NAMES only, never a value.
+    await input.events.append({
       projectId: input.projectId,
-      repo: { owner: repo.owner, name: repo.name },
-      secretNames,
+      eventType: "app_env.ci_propagated",
+      payload: { projectId: input.projectId, repo: { owner: repo.owner, name: repo.name }, secretNames: names },
     });
   }
 
-  return { secretNames };
+  return { secretNames: names };
 }

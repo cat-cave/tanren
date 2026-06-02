@@ -23,6 +23,7 @@ import {
   loadOrgGithubAppInstallation,
 } from "../../engine/credentials/orgGithubApp.js";
 import { migrateProjectConfig } from "../../engine/config/projectConfig.js";
+import { PgEventStore } from "../../engine/eventStore.js";
 import type { GithubAppTokenMinter } from "../../engine/providers/githubAppTokenMinter.js";
 import type { SecretStore } from "../../engine/contracts/secretStore.js";
 import type { VcsCredentialContext, VcsProvider } from "../../engine/contracts/vcsProvider.js";
@@ -67,23 +68,20 @@ export function createAppEnvCiRoutes(options: AppEnvCiRoutesOptions) {
     const creds = await buildVcsCredentialContext(options, orgId, project.config);
     const token = await options.vcsProvider.resolveToken(creds);
 
-    // The app-env read MUST run org-scoped so RLS gates which project's entries are
-    // visible. The propagation resolves test-scoped values + sets each Actions secret.
+    // The app-env read + the event append MUST run org-scoped so RLS gates which
+    // project's entries are visible (and the events INSERT joins the org tx). The
+    // propagation resolves test-scoped values, sets each Actions secret, and appends
+    // the names-only `app_env.ci_propagated` event through the org-scoped PgEventStore.
     const result = await runWithOrgScope(options.pool, orgId, async (client) =>
       propagateAppEnvToCi({
         client,
         secrets: options.secrets,
         vcsProvider: options.vcsProvider,
+        events: new PgEventStore(client),
         repoUrl: project.repoUrl,
         projectId,
         token,
         actor: systemActor,
-        // Names-only emitter — never a value (the structured app log, the same
-        // channel run-lifecycle structured signals use). Kept off the typed event
-        // store so this needs no migration.
-        emit: (event) => {
-          process.stdout.write(`${JSON.stringify({ ...event, ts: new Date().toISOString() })}\n`);
-        },
       }),
     );
 

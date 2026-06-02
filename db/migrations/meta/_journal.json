@@ -372,6 +372,13 @@
       "when": 1780423701786,
       "tag": "0052_smooth_cloak",
       "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "7",
+      "when": 1780425368446,
+      "tag": "0053_legal_otto_octavius",
+      "breakpoints": true
     }
   ]
 }

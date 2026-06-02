@@ -44,6 +44,7 @@ import {
   WorkspacePreparedPayload,
 } from "./schemas/infra.js";
 import {
+  AppEnvCiPropagatedPayload,
   AppEnvRuntimeAttachedPayload,
   CiFailedPayload,
   CiPassedPayload,
@@ -344,6 +345,12 @@ export const EventRegistry = {
   // attached to the DEPLOYED app (Vercel/Fly). Records the deploy target + the env
   // KEY NAMES only — never a secret value.
   "app_env.runtime_attached": AppEnvRuntimeAttachedPayload,
+
+  // Plane B app environment (P-APP-ENV-1): the project's test-scoped app env was
+  // propagated to the target repo's GitHub Actions secrets (so `tanren-ci.yml`
+  // tests that read e.g. RESEND_API_KEY pass). Records the repo + the secret KEY
+  // NAMES only — never a secret value.
+  "app_env.ci_propagated": AppEnvCiPropagatedPayload,
 } as const satisfies Record<string, z.ZodTypeAny>;
 
 export type EventRegistry = typeof EventRegistry;

@@ -20,7 +20,8 @@ import { GitHubVcsProvider } from "../src/engine/providers/githubVcsProvider.js"
 import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "../src/engine/providers/github.js";
 import { AppEnvironmentStore } from "../src/engine/repositories/appEnvironment.js";
 import { systemActor } from "../src/engine/state/actor.js";
-import { propagateAppEnvToCi, type AppEnvCiPropagatedEvent } from "../src/engine/workflow/propagateAppEnvToCi.js";
+import { propagateAppEnvToCi } from "../src/engine/workflow/propagateAppEnvToCi.js";
+import { FakeEventStore } from "./helpers/fakeEventStore.js";
 
 const REPO_URL = "https://github.com/cat-cave/appenv-target";
 const TEST_SECRET_NAME = "RESEND_API_KEY";
@@ -160,19 +161,17 @@ const TOKEN = { token: "ghp_appenv_test", source: "static" as const, refresh: as
 describe("propagateAppEnvToCi", () => {
   it("sets the TEST-scoped entries as Actions secrets (the right names) and skips non-test scopes", async () => {
     const { http, provider, client, secrets } = await harness();
-    const events: AppEnvCiPropagatedEvent[] = [];
+    const events = new FakeEventStore();
 
     const result = await propagateAppEnvToCi({
       client,
       secrets,
       vcsProvider: provider,
+      events,
       repoUrl: REPO_URL,
       projectId: "proj",
       token: TOKEN,
       actor: systemActor,
-      emit: (event) => {
-        events.push(event);
-      },
     });
 
     // Exactly the two TEST-scoped names — DEV_ONLY (dev-only) is NOT propagated.
@@ -182,11 +181,21 @@ describe("propagateAppEnvToCi", () => {
     // The dev-only secret value was never even resolved/sent.
     expect(JSON.stringify(http.requests)).not.toContain(DEV_SECRET_VALUE);
 
-    // The names-only event carries the names, never a value.
-    expect(events).toHaveLength(1);
-    expect(events[0]?.event).toBe("app_env.ci_propagated");
-    expect(new Set(events[0]?.secretNames)).toEqual(new Set([TEST_SECRET_NAME, "PUBLIC_URL"]));
-    expect(JSON.stringify(events[0])).not.toContain(TEST_SECRET_VALUE);
+    // The registered names-only event carries the repo + names, never a value. The
+    // FakeEventStore validates the payload through the Zod EventRegistry, so a value
+    // field would be a schema violation (strict object).
+    expect(events.events).toHaveLength(1);
+    const recorded = events.events[0];
+    expect(recorded?.eventType).toBe("app_env.ci_propagated");
+    const payload = recorded?.payload as {
+      projectId: string;
+      repo: { owner: string; name: string };
+      secretNames: string[];
+    };
+    expect(payload.projectId).toBe("proj");
+    expect(payload.repo).toEqual({ owner: "cat-cave", name: "appenv-target" });
+    expect(new Set(payload.secretNames)).toEqual(new Set([TEST_SECRET_NAME, "PUBLIC_URL"]));
+    expect(JSON.stringify(recorded)).not.toContain(TEST_SECRET_VALUE);
   });
 
   it("exercises the encryption path: each secret PUT is a real sealed box that decrypts to the plaintext", async () => {
@@ -195,6 +204,7 @@ describe("propagateAppEnvToCi", () => {
       client,
       secrets,
       vcsProvider: provider,
+      events: new FakeEventStore(),
       repoUrl: REPO_URL,
       projectId: "proj",
       token: TOKEN,
@@ -215,6 +225,7 @@ describe("propagateAppEnvToCi", () => {
       client,
       secrets,
       vcsProvider: provider,
+      events: new FakeEventStore(),
       repoUrl: REPO_URL,
       projectId: "proj",
       token: TOKEN,
@@ -236,21 +247,20 @@ describe("propagateAppEnvToCi", () => {
       systemActor,
     );
     const http = new RecordingGitHubHttp();
-    const events: AppEnvCiPropagatedEvent[] = [];
+    const events = new FakeEventStore();
     const result = await propagateAppEnvToCi({
       client: db as unknown as Pick<pg.Pool, "query">,
       secrets,
       vcsProvider: new GitHubVcsProvider(http),
+      events,
       repoUrl: REPO_URL,
       projectId: "proj",
       token: TOKEN,
       actor: systemActor,
-      emit: (event) => {
-        events.push(event);
-      },
     });
     expect(result.secretNames).toEqual([]);
     expect(http.secretPuts).toEqual([]);
-    expect(events).toEqual([]);
+    // No test-scoped entries → no event appended (no empty event forced).
+    expect(events.events).toEqual([]);
   });
 });
