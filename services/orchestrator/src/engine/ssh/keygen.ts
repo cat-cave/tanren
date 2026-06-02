@@ -1,5 +1,34 @@
-import { utils as sshUtils } from "ssh2";
+import { createRequire } from "node:module";
+import type { ParsedKey } from "ssh2";
 import { sshSha256Fingerprint } from "./fingerprint.js";
+
+/**
+ * `ssh2` is a CommonJS module whose `utils` namespace is NOT a statically
+ * detectable named export, so a top-level `import { utils } from "ssh2"` throws
+ * `SyntaxError: ... does not provide an export named 'utils'` under Node's real
+ * ESM loader (the production image) — crashing the orchestrator at boot because
+ * `buildAllocator.ts` statically imports the Hetzner allocator for EVERY
+ * allocator kind. (Vitest's loader tolerates it, so fast-check never saw it.)
+ *
+ * We therefore resolve `utils` LAZILY via `createRequire`, only on first actual
+ * key operation. Boot never loads this path (no Hetzner allocation = no `ssh2`
+ * keygen load), and the resolution uses the CJS `module.exports` object where
+ * `utils` is a plain property (no named-export interop involved).
+ */
+interface Ssh2KeygenUtils {
+  generateKeyPairSync: (type: "ed25519") => { private: string; public: string };
+  parseKey: (data: string) => ParsedKey | Error;
+}
+
+let cachedUtils: Ssh2KeygenUtils | undefined;
+
+function sshUtils(): Ssh2KeygenUtils {
+  if (cachedUtils === undefined) {
+    const require = createRequire(import.meta.url);
+    cachedUtils = (require("ssh2") as { utils: Ssh2KeygenUtils }).utils;
+  }
+  return cachedUtils;
+}
 
 /**
  * An ephemeral SSH keypair Tanren generates for a single allocation. The
@@ -37,7 +66,7 @@ const KEYGEN_MAX_ATTEMPTS = 8;
  * `0x00` byte; such a key fails this round-trip.
  */
 function publicKeyRoundTrips(publicKey: string): boolean {
-  const parsed = sshUtils.parseKey(publicKey);
+  const parsed = sshUtils().parseKey(publicKey);
   if (parsed instanceof Error) {
     return false;
   }
@@ -63,7 +92,7 @@ function publicKeyRoundTrips(publicKey: string): boolean {
  */
 export const generateEd25519KeyPair: KeyPairGenerator = () => {
   for (let attempt = 0; attempt < KEYGEN_MAX_ATTEMPTS; attempt++) {
-    const { private: privateKey, public: publicKey } = sshUtils.generateKeyPairSync("ed25519");
+    const { private: privateKey, public: publicKey } = sshUtils().generateKeyPairSync("ed25519");
     if (publicKeyRoundTrips(publicKey)) {
       return { privateKey, publicKey };
     }
@@ -83,7 +112,7 @@ export const generateEd25519KeyPair: KeyPairGenerator = () => {
  * parsed (a programming error — the key we generated must parse).
  */
 export function hostKeyFingerprintFromPublicKey(publicKey: string): string {
-  const parsed = sshUtils.parseKey(publicKey);
+  const parsed = sshUtils().parseKey(publicKey);
   if (parsed instanceof Error) {
     throw new TypeError(`could not parse host public key to pin its fingerprint: ${parsed.message}`);
   }
