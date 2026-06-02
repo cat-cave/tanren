@@ -106,15 +106,16 @@ describe("authentik preset defaults", () => {
       email: "admin@home.lan",
       displayName: "Homelab Admin",
     });
+    // M3: org externalId is issuer-namespaced (collision-free across IdPs).
     expect(claims.orgs).toEqual([
       {
-        externalId: "Platform-Admins",
+        externalId: `${ISSUER}#Platform-Admins`,
         login: "platform-admins",
         displayName: "Platform-Admins",
         kind: "oidc",
       },
       {
-        externalId: "tanren-users",
+        externalId: `${ISSUER}#tanren-users`,
         login: "tanren-users",
         displayName: "tanren-users",
         kind: "oidc",
@@ -231,7 +232,7 @@ describe("buildOidcProviderFromEnv with TANREN_OIDC_PRESET=authentik", () => {
     expect(claims.login).toBe("alice");
     expect(claims.displayName).toBe("Alice");
     expect(claims.orgs).toEqual([
-      { externalId: "engineering", login: "engineering", displayName: "engineering", kind: "oidc" },
+      { externalId: `${ISSUER}#engineering`, login: "engineering", displayName: "engineering", kind: "oidc" },
     ]);
   });
 

@@ -46,6 +46,16 @@ function discoveryResponse(): Response {
   });
 }
 
+// A userinfo handler that returns a single `engineering` group (M3 test).
+function engineeringUserinfo(call: FetchCall): Response | undefined {
+  if (call.url.endsWith("/userinfo/")) {
+    return new Response(JSON.stringify({ sub: "s", groups: ["engineering"] }), {
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+  return undefined;
+}
+
 describe("OidcProvider", () => {
   it("builds an authorize URL with response_type=code and the configured scopes/state", () => {
     const { provider } = buildProvider(() => new Response(null));
@@ -88,14 +98,16 @@ describe("OidcProvider", () => {
       email: "octo@example.com",
       displayName: "Octo OIDC",
     });
+    // M3: org externalId is namespaced by issuer so group names cannot collide
+    // across IdPs; login/displayName remain the bare group name.
     expect(claims.orgs).toEqual([
       {
-        externalId: "Platform-Admins",
+        externalId: `${ISSUER}#Platform-Admins`,
         login: "platform-admins",
         displayName: "Platform-Admins",
         kind: "oidc",
       },
-      { externalId: "engineering", login: "engineering", displayName: "engineering", kind: "oidc" },
+      { externalId: `${ISSUER}#engineering`, login: "engineering", displayName: "engineering", kind: "oidc" },
     ]);
 
     const tokenCall = calls.find((c) => c.url === DISCOVERY.token_endpoint);
@@ -142,7 +154,50 @@ describe("OidcProvider", () => {
     const claims = await provider.exchangeCode("c", "https://app.example.com/cb");
     expect(claims.providerSubject).toBe("oid-9");
     expect(claims.login).toBe("custom-user");
-    expect(claims.orgs).toEqual([{ externalId: "alpha", login: "alpha", displayName: "alpha", kind: "oidc" }]);
+    expect(claims.orgs).toEqual([
+      { externalId: `${ISSUER}#alpha`, login: "alpha", displayName: "alpha", kind: "oidc" },
+    ]);
+  });
+
+  it("M3: a same-named group from two different issuers maps to DISTINCT external ids", async () => {
+    const issuerB = "https://other-idp.example.com";
+    const discoveryB = {
+      issuer: issuerB,
+      authorization_endpoint: `${issuerB}/application/o/authorize/`,
+      token_endpoint: `${issuerB}/application/o/token/`,
+      userinfo_endpoint: `${issuerB}/application/o/userinfo/`,
+    };
+    const { provider: providerA } = buildProvider((call) => {
+      if (call.url.endsWith("/.well-known/openid-configuration")) return discoveryResponse();
+      if (call.url === DISCOVERY.token_endpoint) {
+        return new Response(JSON.stringify({ access_token: "tok" }), {
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return engineeringUserinfo(call) ?? new Response("not found", { status: 404 });
+    });
+    const { provider: providerB } = buildProvider(
+      (call) => {
+        if (call.url.endsWith("/.well-known/openid-configuration")) {
+          return new Response(JSON.stringify(discoveryB), { headers: { "Content-Type": "application/json" } });
+        }
+        if (call.url === discoveryB.token_endpoint) {
+          return new Response(JSON.stringify({ access_token: "tok" }), {
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        return engineeringUserinfo(call) ?? new Response("not found", { status: 404 });
+      },
+      { issuer: issuerB },
+    );
+
+    const claimsA = await providerA.exchangeCode("c", "https://app.example.com/cb");
+    const claimsB = await providerB.exchangeCode("c", "https://app.example.com/cb");
+    expect(claimsA.orgs[0]?.externalId).toBe(`${ISSUER}#engineering`);
+    expect(claimsB.orgs[0]?.externalId).toBe(`${issuerB}#engineering`);
+    // The collision is gone: distinct issuers → distinct `(kind, external_id)`
+    // keys → distinct Tanren orgs (no cross-IdP group-name squatting).
+    expect(claimsA.orgs[0]?.externalId).not.toBe(claimsB.orgs[0]?.externalId);
   });
 
   it("raises IdentityProviderError when the token endpoint returns an error payload", async () => {

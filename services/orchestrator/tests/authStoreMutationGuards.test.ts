@@ -444,7 +444,8 @@ describe("buildOidcProviderFromEnv env-gating guards", () => {
     setCreds();
     process.env.TANREN_OIDC_GROUPS_CLAIM = "teams";
     const claims = await claimsFromEnv({ sub: "s", teams: ["engineering"] });
-    expect(claims.orgs.map((o) => o.externalId)).toEqual(["engineering"]);
+    // M3: the OIDC org externalId is issuer-namespaced (collision-free across IdPs).
+    expect(claims.orgs.map((o) => o.externalId)).toEqual([`${OIDC_ISSUER}#engineering`]);
   });
 
   it("falls back to the generic provider defaults for an unknown preset", () => {

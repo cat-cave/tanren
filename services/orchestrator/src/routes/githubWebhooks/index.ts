@@ -23,11 +23,13 @@ export interface GithubWebhookRouteDeps {
   secrets: SecretStore;
   vcsProvider: VcsProvider;
   githubAppMinter?: GithubAppTokenMinter;
-  // P-INT-6: the secret ref for the CI webhook's HMAC signing secret. When set,
-  // EVERY inbound CI webhook MUST carry a valid `x-hub-signature-256` over the
-  // raw body or it is rejected 401 (no unauthenticated CI intake). When unset
-  // the receiver stays unsigned (the documented sign-if-configured fallback) —
-  // a Tanren-created service hook SHOULD provision this secret.
+  // P-INT-6 / M1: the secret ref for the CI webhook's HMAC signing secret.
+  // Verification is MANDATORY — EVERY inbound CI webhook MUST carry a valid
+  // `x-hub-signature-256` over the raw body or it is rejected 401 (no
+  // unauthenticated CI intake). When this ref is UNSET the receiver has no key to
+  // verify against, so it rejects every request 401 (a LOUD refusal — never an
+  // unsigned-acceptance fallback). A Tanren-created service hook MUST provision
+  // this secret for the receiver to admit anything.
   signingSecretRef?: string;
 }
 
@@ -40,17 +42,17 @@ export function createGithubWebhookRoutes(deps: GithubWebhookRouteDeps) {
     // so we verify before parsing JSON.
     const rawBody = await c.req.text();
 
-    // Mandatory verification when a signing secret is configured. Resolve the
-    // secret, then constant-time compare; a missing/invalid signature is 401.
-    if (deps.signingSecretRef !== undefined) {
-      const secret = await deps.secrets.get(deps.signingSecretRef);
-      const check = verifyGithubSignature({
-        rawBody,
-        signatureHeader: c.req.header("x-hub-signature-256"),
-        secret: secret?.value ?? "",
-      });
-      if (!check.ok) return c.json({ error: "signature_rejected", message: check.reason }, 401);
-    }
+    // M1: signature verification is MANDATORY — there is NO unsigned-acceptance
+    // path. Resolve the configured secret (an empty/absent secret fails closed in
+    // `verifyGithubSignature`), then constant-time compare over the raw body. A
+    // missing/invalid signature — OR an unconfigured signing ref — is a 401.
+    const secret = deps.signingSecretRef === undefined ? undefined : await deps.secrets.get(deps.signingSecretRef);
+    const check = verifyGithubSignature({
+      rawBody,
+      signatureHeader: c.req.header("x-hub-signature-256"),
+      secret: secret?.value ?? "",
+    });
+    if (!check.ok) return c.json({ error: "signature_rejected", message: check.reason }, 401);
 
     let payload: unknown;
     try {

@@ -61,13 +61,19 @@ describe("OidcProvider claim-mapping + wire-shape guards", () => {
     expect(claims.login).toBe("octo");
   });
 
-  it("derives org login by lowercasing the group and preserves displayName/externalId casing", async () => {
-    // mapOrgs: login = group.toLowerCase(); externalId/displayName keep raw case.
-    // Kills toLowerCase drop and externalId<->login source swaps.
+  it("derives org login by lowercasing the group and namespaces the externalId by issuer (M3)", async () => {
+    // mapOrgs: login = group.toLowerCase(); displayName keeps raw case; externalId
+    // is `${issuer}#${group}` (M3 — collision-free across IdPs). Kills toLowerCase
+    // drop, the externalId<->login source swap, and the issuer-namespace drop.
     const { provider } = driveOidc({ sub: "s1", groups: ["Platform-Admins"] });
     const claims = await provider.exchangeCode("c", "https://cb");
     expect(claims.orgs).toEqual([
-      { externalId: "Platform-Admins", login: "platform-admins", displayName: "Platform-Admins", kind: "oidc" },
+      {
+        externalId: `${OIDC_ISSUER}#Platform-Admins`,
+        login: "platform-admins",
+        displayName: "Platform-Admins",
+        kind: "oidc",
+      },
     ]);
   });
 
@@ -76,7 +82,7 @@ describe("OidcProvider claim-mapping + wire-shape guards", () => {
     // logical-operator mutants that would let an empty org through.
     const { provider } = driveOidc({ sub: "s1", groups: ["", "real", null, {}, "Second"] });
     const claims = await provider.exchangeCode("c", "https://cb");
-    expect(claims.orgs.map((o) => o.externalId)).toEqual(["real", "Second"]);
+    expect(claims.orgs.map((o) => o.externalId)).toEqual([`${OIDC_ISSUER}#real`, `${OIDC_ISSUER}#Second`]);
   });
 
   it("returns no orgs when the groups claim is not an array", async () => {

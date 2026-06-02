@@ -1,7 +1,8 @@
-// P-INT-6 — the CI webhook RECEIVER route (`/github/webhooks/ci`) signature
-// verification. When a `signingSecretRef` is configured, EVERY inbound webhook
-// must carry a valid `x-hub-signature-256` over the raw body or it is rejected
-// 401. With no ref configured the receiver stays unsigned (documented fallback).
+// P-INT-6 / M1 — the CI webhook RECEIVER route (`/github/webhooks/ci`) signature
+// verification. Verification is MANDATORY: EVERY inbound webhook must carry a
+// valid `x-hub-signature-256` over the raw body or it is rejected 401. With NO
+// ref configured the receiver has no key to verify against and rejects every
+// request 401 — there is no unsigned-acceptance fallback.
 
 import { describe, expect, it } from "vitest";
 import { createHmac } from "node:crypto";
@@ -89,10 +90,16 @@ describe("CI webhook route signature verification (P-INT-6)", () => {
     expect(res.status).toBe(401);
   });
 
-  it("does NOT verify when no signing ref is configured (unsigned fallback)", async () => {
+  it("M1: REJECTS every request 401 when no signing ref is configured (no unsigned acceptance)", async () => {
     const { app } = buildApp();
-    const res = await post(app, {}, PAYLOAD);
-    expect(res.status).toBe(200);
+    // Even a body with a plausible-looking signature is rejected: with no
+    // configured secret the receiver has no key to verify against and fails
+    // closed — there is NO unsigned-acceptance fallback.
+    const signed = await post(app, { "x-hub-signature-256": githubSignature(PAYLOAD, SIGNING_SECRET) }, PAYLOAD);
+    expect(signed.status).toBe(401);
+    const unsigned = await post(app, {}, PAYLOAD);
+    expect(unsigned.status).toBe(401);
+    expect(await unsigned.json()).toMatchObject({ error: "signature_rejected" });
   });
 
   it("never echoes the signing secret in the rejection body", async () => {

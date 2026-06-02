@@ -198,7 +198,14 @@ export class OidcProvider implements IdentityProvider {
       }
       const login = group.toLowerCase();
       orgs.push({
-        externalId: group,
+        // M3: NAMESPACE the externalId by issuer. `upsertOrg` keys orgs on
+        // `(kind, external_id)`, so a bare group name (`engineering`) would let
+        // two DISTINCT IdPs — or anyone who can land a matching `groups` claim —
+        // resolve to the SAME Tanren org and auto-grant membership. Prefixing the
+        // issuer makes the id collision-free across IdPs. Forward-safe: these are
+        // synthetic ids the IdP never sees and nothing else looks them up by the
+        // raw group name.
+        externalId: `${this.issuer}#${group}`,
         login,
         displayName: group,
         kind: "oidc" as const,

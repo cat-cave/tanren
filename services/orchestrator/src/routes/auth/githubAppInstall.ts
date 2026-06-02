@@ -16,9 +16,11 @@
 // never touches it directly — it asks the minter to verify access.
 
 import { randomBytes } from "node:crypto";
+import { runWithSystemScope } from "@tanren/db";
 import { Hono } from "hono";
 import type pg from "pg";
 import { z } from "zod";
+import type { ActorContext } from "../../auth/schemas.js";
 import type { OrgGithubAppInstallation } from "../../engine/config/orgConfig.js";
 import { loadGithubAppCredential } from "../../engine/credentials/githubApp.js";
 import { persistOrgGithubAppInstallation } from "../../engine/credentials/orgGithubApp.js";
@@ -49,10 +51,19 @@ export function createGithubAppInstallRoutes(options: GithubAppInstallRoutesOpti
   const app = new Hono<ActorContextEnv>();
   const minter = options.minter ?? new GithubAppTokenMinter({ secrets: options.secrets });
 
-  app.get("/install", (c) => {
+  app.get("/install", async (c) => {
     const parsed = installQuerySchema.safeParse({ orgId: c.req.query("orgId") });
     if (!parsed.success) {
       return c.json({ error: "invalid_install", issues: parsed.error.issues }, 400);
+    }
+    // SECURITY (H1): installing/overwriting an org's GitHub App is an org-config
+    // write, so the authenticated actor MUST be an admin of the TARGET org — a
+    // missing actor or a non-admin is a LOUD 403, never a permissive default.
+    // The org id comes from the request (the `?orgId=` query), NOT from the
+    // actor's middleware-resolved scope, so we re-authorize it directly.
+    const actor = requireActor(c);
+    if (!(await actorIsOrgAdmin(options.pool, actor, parsed.data.orgId))) {
+      return c.json({ error: "org_access_denied" }, 403);
     }
     // The state cookie carries a nonce + the org id so the callback (which only
     // receives `installation_id`/`state` from GitHub) knows which org to bind.
@@ -77,6 +88,16 @@ export function createGithubAppInstallRoutes(options: GithubAppInstallRoutesOpti
     const orgId = parsed.data.state.split(".").slice(1).join(".");
     if (orgId === "") {
       return c.json({ error: "state_mismatch" }, 400);
+    }
+
+    // SECURITY (H1): the target org is carried in the (HttpOnly, state-matched)
+    // cookie, not the actor's middleware-resolved scope, so re-authorize it
+    // here: the authenticated actor MUST be an admin of THIS org before we
+    // overwrite its `config.github_app`. A non-admin (or no actor) is a LOUD
+    // 403 — never a silent write through the raw pool.
+    const actor = requireActor(c);
+    if (!(await actorIsOrgAdmin(options.pool, actor, orgId))) {
+      return c.json({ error: "org_access_denied" }, 403);
     }
 
     // Verify the App can actually mint an installation token (and read the
@@ -144,6 +165,36 @@ export function mountGithubAppInstallFromEnv(
       cookieSecure: process.env["TANREN_COOKIE_SECURE"] === "1",
     }),
   );
+}
+
+function requireActor(c: { var: { actor?: ActorContext } }): ActorContext {
+  if (c.var.actor === undefined) {
+    // The auth middleware admits no unauthenticated request to a mounted route,
+    // so a missing actor here is a wiring fault — fail loud, never permissive.
+    throw new Error("actor missing on context");
+  }
+  return c.var.actor;
+}
+
+/**
+ * SECURITY (H1): is `actor` an admin of `orgId`? `platform:admin` always passes.
+ * Otherwise we read the actor's role from `org_members` directly — the target
+ * org is request-supplied (install query / callback cookie), so we must NOT lean
+ * on the actor's middleware-resolved scope (which is keyed to whatever org the
+ * middleware happened to resolve). `org_members` is RLS deny-by-default and this
+ * membership lookup precedes any org scope, so — exactly like
+ * `resolveActorContext` / `ensureOrgMembership` — it runs system-scoped. A
+ * non-member or non-admin resolves to `false` → the caller returns 403.
+ */
+async function actorIsOrgAdmin(pool: pg.Pool, actor: ActorContext, orgId: string): Promise<boolean> {
+  if (actor.scopes.includes("platform:admin")) return true;
+  const result = await runWithSystemScope(pool, (client) =>
+    client.query<{ role: string }>("SELECT role FROM org_members WHERE org_id = $1 AND user_id = $2", [
+      orgId,
+      actor.userId,
+    ]),
+  );
+  return result.rows[0]?.role === "admin";
 }
 
 function stateCookie(value: string, secure?: boolean): string {
