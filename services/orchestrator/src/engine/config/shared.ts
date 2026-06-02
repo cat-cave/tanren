@@ -170,19 +170,11 @@ export type GovernancePosture = z.infer<typeof GovernancePosture>;
 //                           layer) and SERIALIZES their merges (one at a time),
 //                           driving the SAME per-run merge path (P2a up-to-date +
 //                           P2b conflict-resolution + P2c-1 retarget). This is the
-//                           native, provider-agnostic replacement for `mergify_queue`.
-//   - `mergify_queue`     — apply a label + hand off to an external Mergify app
-//                           (Tanren manages nothing). Retained until P2e removes it.
+//                           queue — native, provider-agnostic, intent-preserving.
 //   - `external_reviewer` — stop at ready-for-review; a human merges (no auto-merge).
 //   - `not_configured`    — treated as `external_reviewer` (never auto-merge a repo
 //                           that has not opted in).
-export const MergeIntegration = z.enum([
-  "mergify_queue",
-  "native_queue",
-  "direct_merge",
-  "external_reviewer",
-  "not_configured",
-]);
+export const MergeIntegration = z.enum(["native_queue", "direct_merge", "external_reviewer", "not_configured"]);
 export type MergeIntegration = z.infer<typeof MergeIntegration>;
 
 // ---- Review policy -------------------------------------------------------

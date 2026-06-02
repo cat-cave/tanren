@@ -99,7 +99,7 @@ describe("runRecon · read-only recon pre-fills chapters", () => {
     );
     expect(report.identity.slug).toBe("tanren-fixture-easy");
     expect(report.architecture.length).toBeGreaterThan(0);
-    // No CODEOWNERS / .mergify / tanren-ci in the index → risks flagged.
+    // No CODEOWNERS / tanren-ci in the index → risks flagged.
     expect(report.risks.some((r) => r.note.toLowerCase().includes("codeowners"))).toBe(true);
     expect(report.gaps.length).toBeGreaterThanOrEqual(3);
   });
@@ -111,7 +111,7 @@ describe("runRecon · read-only recon pre-fills chapters", () => {
   });
 });
 
-describe("config-injection · 6 files + per-file exclude + open PR", () => {
+describe("config-injection · 5 files + per-file exclude + open PR", () => {
   const proposeInput = {
     repoSlug: "tanren-fixture-easy",
     orgLogin: "cat-cave",
@@ -121,23 +121,24 @@ describe("config-injection · 6 files + per-file exclude + open PR", () => {
     generatedAt: "2026-05-28T00:00:00.000Z",
   };
 
-  it("proposes the 6 integration files including the PROJECT.md snapshot", () => {
+  it("proposes the 5 integration files including the PROJECT.md snapshot", () => {
     const files = proposeConfigFiles(proposeInput);
-    expect(files).toHaveLength(6);
+    expect(files).toHaveLength(5);
     expect(files[0]?.path).toBe(".tanren/PROJECT.md");
     expect(files[0]?.snapshot).toBe(true);
     expect(files.map((f) => f.path)).toContain(".github/workflows/tanren-ci.yml");
-    expect(files.map((f) => f.path)).toContain(".mergify.yml");
     expect(files.map((f) => f.path)).toContain("CODEOWNERS");
+    // P2e-2: the native merge queue drives merges — no `.mergify.yml` is injected.
+    expect(files.map((f) => f.path)).not.toContain(".mergify.yml");
     // The snapshot mirrors the recon report.
     expect(files[0]?.content).toContain("tanren-fixture-easy");
     expect(files[0]?.content).toContain("smoke fixture");
   });
 
   it("honors per-file exclude", () => {
-    const files = proposeConfigFiles(proposeInput, [".mergify.yml", "CODEOWNERS"]);
-    expect(files).toHaveLength(4);
-    expect(files.map((f) => f.path)).not.toContain(".mergify.yml");
+    const files = proposeConfigFiles(proposeInput, [".github/workflows/tanren-ci.yml", "CODEOWNERS"]);
+    expect(files).toHaveLength(3);
+    expect(files.map((f) => f.path)).not.toContain(".github/workflows/tanren-ci.yml");
     expect(files.map((f) => f.path)).not.toContain("CODEOWNERS");
   });
 
@@ -164,7 +165,7 @@ describe("config-injection · 6 files + per-file exclude + open PR", () => {
     });
     expect(pr.number).toBe(48);
     expect(pr.branch).toBe("tanren/integrate");
-    expect(committed).toHaveLength(5);
+    expect(committed).toHaveLength(4);
     expect(committed).not.toContain(".gitignore");
   });
 

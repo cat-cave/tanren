@@ -22,10 +22,6 @@ describe("P2b merge-stage conflict resolution", () => {
     // retries the merge and it succeeds.
     let mergeCalls = 0;
     const probe = {
-      labels: [] as string[],
-      async applyQueueLabel(label: string) {
-        this.labels.push(label);
-      },
       async merge() {
         mergeCalls += 1;
         return mergeCalls === 1

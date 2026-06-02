@@ -17,9 +17,10 @@ Phase 2 stores config in the database only:
 Other operator surfaces that _look_ like config are intentionally kept out
 of the DB:
 
-- `.github/workflows/tanren-ci.yml`, `.mergify.yml`, and `CODEOWNERS` live
-  in the target repository. Tanren reads them at link time (P2A-0013) but
-  does not author or write them back in Phase 2.
+- `.github/workflows/tanren-ci.yml` and `CODEOWNERS` live in the target
+  repository. Tanren reads them at link time (P2A-0013) but does not author
+  or write them back in Phase 2. (Merge ordering is Tanren's own native merge
+  queue — there is no external merge-queue config in the repo.)
 - The optional `tanren-config` audit-gate write path that promotes
   reviewed config changes through a PR review is **Phase 3 scope** and not
   built in this spec. `OrgConfigV1.auditGateEnabled` exposes the on/off

@@ -119,10 +119,16 @@ describe("ProjectConfigV1 parser", () => {
     const cfg = migrateProjectConfig({
       version: 1,
       governancePosture: "audit_only",
-      mergeIntegration: "mergify_queue",
+      mergeIntegration: "native_queue",
     });
     expect(cfg.governancePosture).toBe("audit_only");
-    expect(cfg.mergeIntegration).toBe("mergify_queue");
+    expect(cfg.mergeIntegration).toBe("native_queue");
+  });
+
+  it("rejects the removed `mergify_queue` merge integration (no-legacy fail-hard)", () => {
+    // P2e-2: Mergify is gone. A stored config that still names `mergify_queue`
+    // must FAIL the versioned parse — never be silently coerced to another mode.
+    expect(() => migrateProjectConfig({ version: 1, mergeIntegration: "mergify_queue" })).toThrow(/.+/u);
   });
 
   it("defaults reviewPolicy to human and accepts an auto override", () => {

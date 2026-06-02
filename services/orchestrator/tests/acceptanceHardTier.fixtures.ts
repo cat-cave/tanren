@@ -183,7 +183,6 @@ export function hardTierWorkflowRunner(github: GitHubHttpClient, trace: HardTier
         }),
       },
       mergeProbe: {
-        applyQueueLabel: async () => {},
         merge: async () => {
           mergeCall += 1;
           trace.mergeAttempts = mergeCall;

@@ -361,8 +361,8 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
   }
 
   /**
-   * Link a target repo (P2A-0013 brownfield). Reads `.github/workflows/`,
-   * `.mergify.yml`, `CODEOWNERS` for display; WRITES NOTHING to the target.
+   * Link a target repo (P2A-0013 brownfield). Reads `.github/workflows/` and
+   * `CODEOWNERS` for display; WRITES NOTHING to the target.
    */
   async brownfieldLink(
     orgId: string,

@@ -120,9 +120,8 @@ export async function finalizeNonPass(
  *   - failed → run failed;
  *   - merged → run done/ok; spec `merged`;
  *   - queued/handed_off → run done/ok; spec status depends on WHO owns the merge:
- *       - `mergify_queue` / `external_reviewer` / `not_configured` HAND OFF — Tanren
- *         is NOT going to merge, so the spec is `done` (the merge is left to Mergify
- *         / an operator).
+ *       - `external_reviewer` / `not_configured` HAND OFF — Tanren is NOT going to
+ *         merge, so the spec is `done` (the merge is left to an operator).
  *       - `native_queue` does NOT hand off — Tanren OWNS the merge (the run merely
  *         ENTERED the native queue; the coordinator's DRIVE pass merges it later).
  *         So the spec MUST stay in its pre-merge status (NOT `done`/`merged`) until

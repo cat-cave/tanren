@@ -104,9 +104,6 @@ export class UnconfiguredVcsProvider implements VcsProvider {
   async listContributors(_pr: PullRequestRef, _token: ResolvedVcsToken): Promise<PullRequestContributors> {
     return this.fail();
   }
-  async applyQueueLabel(_pr: PullRequestRef, _label: string, _token: ResolvedVcsToken): Promise<void> {
-    return this.fail();
-  }
   async mergePullRequest(
     _pr: PullRequestRef,
     _token: ResolvedVcsToken,

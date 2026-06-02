@@ -58,7 +58,7 @@ the top-left and your projects in the sidenav.
 
 If you have no project yet, follow the existing-project onboarding flow
 (**link a repo** → `/onboarding/existing`). The dashboard reads
-`.github/workflows/`, `.mergify.yml`, and `CODEOWNERS` for display and **writes
+`.github/workflows/` and `CODEOWNERS` for display and **writes
 nothing** to the target repo.
 
 Before a run can do real work it needs CLI credentials (Codex, etc.). Import

@@ -22,9 +22,9 @@
 // Those intent points are marked `// Phase 2:` below. They are NOT implemented
 // here — the contract is shaped so adding them is purely additive.
 //
-// The seam is the VCS/ACTIONS provider, NOT the merge QUEUE (§1.1): the queue
-// (Mergify today, the native intent-preserving queue later) sits ABOVE the
-// provider and drives it through these operations.
+// The seam is the VCS/ACTIONS provider, NOT the merge QUEUE (§1.1): the native
+// intent-preserving merge queue (P2d) sits ABOVE the provider and drives it
+// through these operations.
 
 import { Buffer } from "node:buffer";
 import type { SshTarget } from "./allocator.js";
@@ -241,7 +241,6 @@ export interface OpenDraftPullRequestInput {
  *   - readPullRequestDiff ← githubReviewMerge.fetchPullRequestDiff
  *   - submitReview        ← githubReviewMerge.submitReview
  *   - listContributors    ← mergeDispatch's PR-commits contributor read
- *   - applyQueueLabel     ← githubReviewMerge.applyQueueLabel (the Mergify trigger)
  *   - mergePullRequest    ← githubReviewMerge.mergePullRequest
  *   - readFileOnBranch    ← the forge `/contents` read on a base/head ref
  *
@@ -303,9 +302,6 @@ export interface VcsProvider {
    * governance-posture external-change gate.
    */
   listContributors(pr: PullRequestRef, token: ResolvedVcsToken): Promise<PullRequestContributors>;
-
-  /** Apply the merge-queue label to the PR (the Mergify trigger). */
-  applyQueueLabel(pr: PullRequestRef, label: string, token: ResolvedVcsToken): Promise<void>;
 
   /**
    * Merge the PR. A 200 merges; a non-mergeable (405/409) is reported as a

@@ -36,7 +36,7 @@ event log, and full run/task provenance are persisted and inspectable.
   source — fakes live only in `tests/`.
 - **Per-project, tiered integration policy** — `governancePosture`
   (`strict`/`open`/`audit_only`), `mergeIntegration`
-  (`direct_merge`/`mergify_queue`/`external_reviewer`/`not_configured`), and
+  (`native_queue`/`direct_merge`/`external_reviewer`/`not_configured`), and
   `reviewPolicy` (`human`/`auto`/`simulated`). The **simulated reviewer** is an
   orchestrator-managed Answerer that judges the PR diff against the spec and
   posts a real GitHub review, so the human-review path runs end-to-end in testing

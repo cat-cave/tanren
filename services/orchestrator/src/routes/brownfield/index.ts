@@ -1,6 +1,6 @@
 // P2A-0013: brownfield link endpoint. Verifies the configured GitHub App can
-// reach the target repo, reads `.github/workflows/`, `.mergify.yml`, and
-// `CODEOWNERS` (no writes), and persists the linkage on the project row.
+// reach the target repo, reads `.github/workflows/` and `CODEOWNERS` (no
+// writes), and persists the linkage on the project row.
 //
 // Phase 2 contract: this endpoint NEVER writes to the target repository. It
 // is observation-only; the operator opts in to writes via a separate
@@ -40,7 +40,6 @@ const BrownfieldLinkSchema = z.object({
 const DETECTED_FILES = [
   ".github/workflows/tanren-ci.yml",
   ".github/workflows/ci.yml",
-  ".mergify.yml",
   "CODEOWNERS",
   ".github/CODEOWNERS",
 ] as const;

@@ -24,7 +24,6 @@ const SIGNAL_FRAGMENTS = [
   "prisma/schema.prisma",
   ".github/workflows/",
   "codeowners",
-  ".mergify.yml",
 ];
 
 function repoApi(repo: GitHubRepository, suffix: string): string {

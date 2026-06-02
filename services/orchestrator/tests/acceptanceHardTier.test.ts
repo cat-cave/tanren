@@ -168,7 +168,6 @@ describe("acceptance hard tier (dequeue→execute, all hard paths)", () => {
             }),
           },
           mergeProbe: {
-            applyQueueLabel: async () => {},
             merge: async () => ({
               merged: true,
               mergeSha: "merge-sha",
