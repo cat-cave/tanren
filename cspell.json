@@ -23,6 +23,11 @@
     ".env.example"
   ],
   "words": [
+    "libsodium",
+    "blakejs",
+    "nacl",
+    "ciphertext",
+    "appenv",
     "sendgrid",
     "flyio",
     "pollable",

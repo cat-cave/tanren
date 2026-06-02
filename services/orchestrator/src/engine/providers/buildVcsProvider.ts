@@ -34,6 +34,7 @@ import type {
   PushBranchInput,
   RepoRef,
   ResolvedVcsToken,
+  SetActionsSecretInput,
   UpdateBranchResult,
   VcsCredentialContext,
   VcsProvider,
@@ -77,6 +78,9 @@ export class UnconfiguredVcsProvider implements VcsProvider {
     return this.fail();
   }
   async createIssue(_input: CreateIssueInput): Promise<CreatedIssue> {
+    return this.fail();
+  }
+  async setActionsSecret(_input: SetActionsSecretInput): Promise<void> {
     return this.fail();
   }
   async markReadyForReview(_pr: PullRequestRef, _token: ResolvedVcsToken): Promise<void> {
