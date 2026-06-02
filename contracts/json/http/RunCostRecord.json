@@ -6,7 +6,8 @@
       "enum": [
         "per_token",
         "subscription",
-        "self_hosted"
+        "self_hosted",
+        "unattributed"
       ],
       "type": "string"
     },
@@ -28,7 +29,9 @@
       "enum": [
         "ccusage",
         "provider_pricing",
-        "unknown"
+        "credits",
+        "unknown",
+        "unattributed"
       ],
       "type": "string"
     },

@@ -62,6 +62,18 @@ export const PRICING_MODEL_META: Record<BillingMode, PricingModelMeta> = {
     colorVar: "var(--cost-opportunity)",
     hint: "flat-fee / local gpu · utilization, not a cap",
   },
+  // BUDGET-SAFETY C1: NOT a real pricing model — an UNRECOGNIZED credential ref
+  // (a misconfig) whose cost could not be priced. Recorded NULL-dollar but
+  // FLAGGED (the budget gate fails closed on it). Kept out of PRICING_MODELS (the
+  // operator's three real models) but present here so the provider breakdown can
+  // color-dot the misconfig distinctly.
+  unattributed: {
+    mode: "unattributed",
+    label: "unattributed · unrecognized ref",
+    model: "misconfig · budget fails closed",
+    colorVar: "var(--cost-unattributed, var(--status-fail))",
+    hint: "unrecognized credential ref · cannot price · fix the credential mapping",
+  },
 };
 
 /** Provenance label + dot color for a `costBasis`, surfaced per row. */
@@ -73,7 +85,11 @@ export interface CostBasisMeta {
 export const COST_BASIS_META: Record<CostBasis, CostBasisMeta> = {
   ccusage: { basis: "ccusage", label: "ccusage · real billed" },
   provider_pricing: { basis: "provider_pricing", label: "provider pricing · rate table" },
+  credits: { basis: "credits", label: "credits · prepaid drawdown" },
   unknown: { basis: "unknown", label: "no priced basis · tokens only" },
+  // BUDGET-SAFETY C1: an UNRECOGNIZED credential ref — cost could not be priced;
+  // recorded NULL-dollar but flagged so the budget gate fails closed.
+  unattributed: { basis: "unattributed", label: "unattributed · unrecognized ref" },
 };
 
 /** Parse a nullable dollar string into a number; null/unparseable → 0. */

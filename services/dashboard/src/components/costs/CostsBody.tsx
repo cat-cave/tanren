@@ -176,6 +176,8 @@ function ProviderBreakdown(props: { summary: CostSummary }) {
 function modelColor(mode: string): string {
   if (mode === "per_token") return "var(--cost-token)";
   if (mode === "subscription") return "var(--cost-window)";
+  // BUDGET-SAFETY C1: an unrecognized credential ref (a misconfig) — distinct color.
+  if (mode === "unattributed") return "var(--cost-unattributed, var(--status-fail))";
   return "var(--cost-opportunity)";
 }
 

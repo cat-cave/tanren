@@ -1,8 +1,12 @@
 // CostResolver contract. Mirrors the cost model in engine/costs: token
 // accounting by disjoint type is mandatory; the dollar figure is best-effort
 // (null when no reliable basis exists).
-export type CostBasis = "ccusage" | "provider_pricing" | "unknown";
-export type BillingMode = "per_token" | "subscription" | "self_hosted";
+// 'unattributed' (BUDGET-SAFETY C1): an UNRECOGNIZED credential ref whose cost
+// could not be priced — recorded NULL-dollar but FLAGGED (not silent $0) so the
+// budget gate fails closed. 'credits' is the prepaid-credit drawdown basis. Both
+// are real DB-persisted values, so every read-side consumer must accept them.
+export type CostBasis = "ccusage" | "provider_pricing" | "credits" | "unknown" | "unattributed";
+export type BillingMode = "per_token" | "subscription" | "self_hosted" | "unattributed";
 
 export interface CostResolutionInput {
   provider: string;
