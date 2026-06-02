@@ -5,8 +5,8 @@
  *
  * The operator picks a repo the GitHub App can see, fills the project-config
  * form, and submits. Submit creates the project row (P2A-0013) then calls the
- * brownfield-link endpoint which reads `.github/workflows/`, `.mergify.yml`,
- * `CODEOWNERS` for display but WRITES NOTHING to the target repo.
+ * brownfield-link endpoint which reads `.github/workflows/` and `CODEOWNERS`
+ * for display but WRITES NOTHING to the target repo.
  */
 
 import type { BrownfieldDetectedFile } from "../../api/types.js";
@@ -57,7 +57,7 @@ function GithubScopeCard() {
 
 function WhatHappensNext() {
   const points = [
-    "tanren reads any existing .github/workflows/, .mergify.yml, and CODEOWNERS — for display only",
+    "tanren reads any existing .github/workflows/ and CODEOWNERS — for display only",
     "tanren does NOT write to the target repo (no config-injection PR in v0)",
     "tanren does NOT run a recon agent (no repo indexing / persona inference in v0)",
     "the project row is created and you land on the project view",

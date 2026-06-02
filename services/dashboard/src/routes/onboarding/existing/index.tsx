@@ -276,11 +276,10 @@ async function handleGovernance(c: Context, ctx: ShellContext, deps: ShellDeps, 
   );
 }
 
-// The 6 proposed file paths (mirror the orchestrator `proposeConfigFiles`).
+// The 5 proposed file paths (mirror the orchestrator `proposeConfigFiles`).
 const ALL_PROPOSED_PATHS = [
   ".tanren/PROJECT.md",
   ".github/workflows/tanren-ci.yml",
-  ".mergify.yml",
   "CODEOWNERS",
   ".gitignore",
   ".github/PULL_REQUEST_TEMPLATE.md",

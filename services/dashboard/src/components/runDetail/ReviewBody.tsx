@@ -22,7 +22,7 @@ import { summarizeCosts, formatUsd, reviewMergeStateFromEvents, type ReviewMerge
 import { RUN_DETAIL_CSS } from "./runDetail.css.js";
 
 /** The four Phase-2 merge-integration modes (mirrors P2A-0006 MergeIntegration). */
-export type MergeIntegration = "mergify_queue" | "direct_merge" | "external_reviewer" | "not_configured";
+export type MergeIntegration = "native_queue" | "direct_merge" | "external_reviewer" | "not_configured";
 
 export interface ReviewDeferral {
   /** Stable key (the source event id) so the island can address it. */
@@ -126,7 +126,7 @@ function repoFromUrl(url: string | null): string {
 
 // The sign-off CTA drives the P3-0008 merge stage through its per-repo
 // integration. The gesture posts to `signOffHref`; the orchestrator dispatches
-// to the configured integration (direct merge / mergify queue / external-
+// to the configured integration (direct merge / native merge queue / external-
 // reviewer hand-off). `not_configured` has no merge path — only a settings link.
 function MergeActions(props: { mode: MergeIntegration; settingsHref: string; signOffHref: string; done: boolean }) {
   if (props.mode === "not_configured") {
@@ -144,7 +144,7 @@ function MergeActions(props: { mode: MergeIntegration; settingsHref: string; sig
       ? "approve · notify reviewer"
       : props.mode === "direct_merge"
         ? "sign off · merge now ↗"
-        : "sign off · queue with mergify";
+        : "sign off · queue the merge";
   return (
     <form method="post" action={props.signOffHref} style="display:inline">
       <button class="btn primary notched" type="submit" data-review="signoff">

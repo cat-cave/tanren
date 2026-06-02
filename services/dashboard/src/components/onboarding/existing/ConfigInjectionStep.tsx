@@ -23,7 +23,6 @@ interface PreviewFile {
 const PROPOSED: PreviewFile[] = [
   { path: ".tanren/PROJECT.md", addedLines: 30, snapshot: true },
   { path: ".github/workflows/tanren-ci.yml", addedLines: 24 },
-  { path: ".mergify.yml", addedLines: 14 },
   { path: "CODEOWNERS", addedLines: 4 },
   { path: ".gitignore", addedLines: 3 },
   { path: ".github/PULL_REQUEST_TEMPLATE.md", addedLines: 4 },

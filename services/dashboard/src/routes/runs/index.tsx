@@ -36,12 +36,7 @@ function actorCanViewRaw(role: string | undefined): boolean {
  * absent (legacy rows), which renders the settings-link branch.
  */
 function mergeIntegrationFromConfig(mode: unknown): MergeIntegration {
-  if (
-    mode === "mergify_queue" ||
-    mode === "direct_merge" ||
-    mode === "external_reviewer" ||
-    mode === "not_configured"
-  ) {
+  if (mode === "native_queue" || mode === "direct_merge" || mode === "external_reviewer" || mode === "not_configured") {
     return mode;
   }
   return "not_configured";
@@ -301,8 +296,8 @@ function SignOffAck(props: { runId: string; mode: MergeIntegration; runHref: str
   const action =
     props.mode === "direct_merge"
       ? "a direct GitHub merge"
-      : props.mode === "mergify_queue"
-        ? "a Mergify queue enqueue"
+      : props.mode === "native_queue"
+        ? "a native merge-queue enqueue"
         : props.mode === "external_reviewer"
           ? "an external-reviewer hand-off"
           : "no merge integration (configure one in project settings)";
