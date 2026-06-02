@@ -30,6 +30,12 @@
 //
 // See docs/operator-guide/integration-provisioning.md (the boundary model + the
 // two planes) and docs/roadmap/integration-provisioning.md (the build sequence).
+//
+// The registry (`buildIntegrationProvisioner`) is the single append point real
+// providers register at (P-INT-1+): each adds ONE `case` arm + its dep-slice on
+// `IntegrationProvisionerDeps`, exactly like `buildVcsProvider`'s case arms.
+
+import { SentryProvisioner, type SentryProvisionerDeps } from "../providers/sentryProvisioner.js";
 
 /**
  * The capability ids a provisioner can satisfy. Kept a free `string` (not a closed
@@ -203,17 +209,48 @@ export class UnconfiguredIntegrationProvisioner implements IntegrationProvisione
 export type IntegrationProviderKind = string;
 
 /**
- * Select + construct the IntegrationProvisioner for a provider kind. The registry
- * is empty in the foundation wave, so this returns the hard-throw unconfigured
- * provisioner for every kind; P-INT-1+ add real `case` arms. Mirrors
- * `buildAllocator` / `buildVcsProvider`.
+ * Per-call wiring a real provisioner needs (the injected transports/stores its
+ * impl composes — e.g. Sentry's HTTP client + the SecretStore the DSN is written
+ * to). Optional + per-provider-keyed so each provider reads ONLY its own slice;
+ * a new provider adds its slice here without disturbing the others. Foundation
+ * (unconfigured) kinds ignore it. Typed `unknown` per slot so the contract file
+ * does not import the concrete provider transports (the case arm narrows them).
  */
-export function buildIntegrationProvisioner(kind: IntegrationProviderKind): IntegrationProvisioner {
+export interface IntegrationProvisionerDeps {
+  /** Sentry's injected `{ http: SentryProvisionHttpClient; secrets: SecretStore }`. */
+  sentry?: SentryProvisionerDeps;
+}
+
+/**
+ * Construct the real Sentry provisioner. Kept a tiny factory (rather than a bare
+ * `new` in the switch) so the concrete provider import is the single line below
+ * and a parallel provider PR's case arm never touches this one's wiring.
+ */
+function makeSentryProvisioner(deps: SentryProvisionerDeps | undefined): IntegrationProvisioner {
+  if (deps === undefined) {
+    throw new Error("buildIntegrationProvisioner('sentry') requires deps.sentry ({ http, secrets })");
+  }
+  return new SentryProvisioner(deps.http, deps.secrets);
+}
+
+/**
+ * Select + construct the IntegrationProvisioner for a provider kind. P-INT-1+
+ * add real `case` arms (each pulling its own slice of {@link
+ * IntegrationProvisionerDeps}); an unregistered kind resolves to the hard-throw
+ * {@link UnconfiguredIntegrationProvisioner}. Mirrors `buildAllocator` /
+ * `buildVcsProvider`.
+ */
+export function buildIntegrationProvisioner(
+  kind: IntegrationProviderKind,
+  deps: IntegrationProvisionerDeps = {},
+): IntegrationProvisioner {
   switch (kind) {
-    // No provider is registered in the foundation wave. Real project-integration
-    // impls (sentry, slack, linear, jira, deploy.*) slot in here as new cases in
-    // P-INT-1+. Cloud-allocator (`allocator.*`, P-INT-5) is NOT one of these — it
-    // extends the Allocator seam, not this port (see the module-header SCOPE note).
+    case "sentry":
+      return makeSentryProvisioner(deps.sentry);
+    // Real project-integration impls (slack, linear, jira, deploy.*) slot in
+    // here as new cases in P-INT-2+. Cloud-allocator (`allocator.*`, P-INT-5) is
+    // NOT one of these — it extends the Allocator seam, not this port (see the
+    // module-header SCOPE note).
     default:
       return new UnconfiguredIntegrationProvisioner(kind);
   }
