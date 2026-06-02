@@ -17,9 +17,9 @@
 // whole flow with fakes and no provider / SSH — see scheduledAudits.test.ts.
 
 import type pg from "pg";
-import { createSource, listSources, upsertCandidate } from "../inbox/store.js";
+import { InboxStore } from "../inbox/store.js";
 import type { Candidate, InboxSource, TriageAnswerer } from "../inbox/types.js";
-import { recordAuditRun } from "./store.js";
+import { AuditsStore } from "./store.js";
 import {
   AuditFindingsSummary,
   type AuditFinding,
@@ -65,11 +65,11 @@ export interface RunAuditJobResult {
 const AUDIT_SOURCE_NAME = "scheduled audits";
 
 async function findOrCreateAuditSource(client: QueryClient, orgId: string): Promise<InboxSource> {
-  const existing = (await listSources(client, orgId)).find(
+  const existing = (await InboxStore.listSources(client, orgId)).find(
     (s) => s.kind === "scheduled_audit" && s.name === AUDIT_SOURCE_NAME,
   );
   if (existing !== undefined) return existing;
-  return createSource(client, {
+  return InboxStore.createSource(client, {
     orgId,
     projectId: null,
     kind: "scheduled_audit",
@@ -131,7 +131,7 @@ export async function runAuditJob(deps: AuditSchedulerDeps, job: AuditJob): Prom
       // System source ⇒ auto_routable ⇒ candidate rests `auto_routed`.
       const status = triage.verdict === "auto_routable" ? "auto_routed" : "triaged";
       candidates.push(
-        await upsertCandidate(
+        await InboxStore.upsertCandidate(
           deps.pool,
           source,
           {
@@ -149,7 +149,7 @@ export async function runAuditJob(deps: AuditSchedulerDeps, job: AuditJob): Prom
   }
 
   const summary = summarizeFindings(findings);
-  const updated = await recordAuditRun(deps.pool, job.id, summary, now);
+  const updated = await AuditsStore.recordAuditRun(deps.pool, job.id, summary, now);
   return {
     job: updated ?? { ...job, lastRun: now.toISOString(), findings: summary },
     candidates,

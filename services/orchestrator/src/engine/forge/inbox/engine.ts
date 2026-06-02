@@ -23,7 +23,7 @@ import type { ActorContext } from "../../../auth/schemas.js";
 import { systemActor } from "../../state/actor.js";
 import { DiscoveryStore, type ExistingSpecSummary } from "../../repositories/discovery.js";
 import { acceptProposals, type DiscoveryInsight, type PlacementKind, type ProposedSpec } from "../discovery/index.js";
-import { getCandidate, resolveCandidate, upsertCandidate } from "./store.js";
+import { InboxStore } from "./store.js";
 import type {
   Candidate,
   CandidateTriage,
@@ -100,7 +100,7 @@ export async function ingestSource(
     });
     // System sources whose triage is auto-routable promote straight through.
     const status = triage.verdict === "auto_routable" ? "auto_routed" : "triaged";
-    let candidate = await upsertCandidate(deps.pool, source, item, triage, status);
+    let candidate = await InboxStore.upsertCandidate(deps.pool, source, item, triage, status);
     // Autonomous DAG insert: when intake is autonomous and the model produced a
     // routable spec, commit it now (no operator) and resolve the candidate.
     if (autoRouteDeps !== undefined && status === "auto_routed" && triage.routableSpec !== null) {
@@ -163,7 +163,7 @@ export async function autoRouteCandidate(
     },
   );
   const specId = accepted[0]?.spec.specId ?? null;
-  const resolved = await resolveCandidate(deps.pool, candidate.id, "accepted", specId);
+  const resolved = await InboxStore.resolveCandidate(deps.pool, candidate.id, "accepted", specId);
   return { candidate: resolved ?? candidate, specId: specId ?? "" };
 }
 
@@ -216,7 +216,7 @@ export async function acceptCandidate(
   deps: InboxEngineDeps,
   input: AcceptCandidateInput,
 ): Promise<AcceptCandidateResult> {
-  const candidate = await getCandidate(deps.pool, input.candidateId);
+  const candidate = await InboxStore.getCandidate(deps.pool, input.candidateId);
   if (candidate === undefined) throw new CandidateNotFoundError(input.candidateId);
   if (candidate.projectId === null) throw new CandidateNotPlaceableError(input.candidateId);
 
@@ -232,7 +232,7 @@ export async function acceptCandidate(
     },
   );
   const specId = accepted[0]?.spec.specId ?? null;
-  const resolved = await resolveCandidate(deps.pool, input.candidateId, "accepted", specId);
+  const resolved = await InboxStore.resolveCandidate(deps.pool, input.candidateId, "accepted", specId);
   return { candidate: resolved ?? candidate, specId: specId ?? "" };
 }
 
@@ -254,7 +254,7 @@ async function requireResolved(
   candidateId: string,
   status: Candidate["status"],
 ): Promise<Candidate> {
-  const resolved = await resolveCandidate(deps.pool, candidateId, status, null);
+  const resolved = await InboxStore.resolveCandidate(deps.pool, candidateId, status, null);
   if (resolved === undefined) throw new CandidateNotFoundError(candidateId);
   return resolved;
 }

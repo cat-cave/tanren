@@ -12,16 +12,7 @@ export {
   type AuditPassRunner,
 } from "./types.js";
 
-export {
-  createAuditJob,
-  listAuditJobs,
-  getAuditJob,
-  setAuditJobEnabled,
-  recordAuditRun,
-  listDistinctAuditJobOrgIds,
-  AuditsStore,
-  type CreateAuditJobInput,
-} from "./store.js";
+export { AuditsStore, type CreateAuditJobInput } from "./store.js";
 
 export { runAuditJob, summarizeFindings, type AuditSchedulerDeps, type RunAuditJobResult } from "./scheduler.js";
 

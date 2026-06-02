@@ -12,7 +12,7 @@ import { systemActor } from "../../state/actor.js";
 import { DiscoveryStore, type ExistingSpecSummary } from "../../repositories/discovery.js";
 import {
   autoRouteCandidate,
-  upsertCandidate,
+  InboxStore,
   type AutoRouteDeps,
   type Candidate,
   type IngestedItem,
@@ -69,7 +69,7 @@ export async function intakeItem(
     existingSpecs,
   });
   const status = triage.verdict === "auto_routable" ? "auto_routed" : "triaged";
-  const candidate = await upsertCandidate(deps.pool, source, item, triage, status);
+  const candidate = await InboxStore.upsertCandidate(deps.pool, source, item, triage, status);
 
   // Autonomous DAG insert: an auto-routable candidate with a routable spec is
   // committed now (no operator). A candidate the source could not place (no

@@ -9,16 +9,18 @@
 import type pg from "pg";
 import { describe, expect, it } from "vitest";
 import {
-  createAuditJob,
-  listAuditJobs,
+  AuditsStore,
   recommendCoverage,
   runAuditJob,
-  setAuditJobEnabled,
   summarizeFindings,
   type AuditJob,
   type AuditPassRunner,
 } from "../src/engine/forge/audits/index.js";
 import { createDeterministicTriageAnswerer } from "./fixtures/forge/deterministicTriageAnswerer.js";
+
+// The store methods exercised below; the `Repositories` seam owns the SQL, so the
+// tests drive the same `AuditsStore.*` surface the route/scheduler/loop now use.
+const { createAuditJob, listAuditJobs, setAuditJobEnabled } = AuditsStore;
 
 // In-memory pool tracking audit_jobs + inbox_sources + candidates so the
 // run → emit-to-inbox round trip is observable.

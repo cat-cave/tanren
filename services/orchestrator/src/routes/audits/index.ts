@@ -20,13 +20,10 @@ import type { ActorContext } from "../../auth/schemas.js";
 import {
   AuditCadence,
   AuditKind,
-  createAuditJob,
+  AuditsStore,
   createNoopPassRunner,
-  getAuditJob,
-  listAuditJobs,
   recommendCoverage,
   runAuditJob,
-  setAuditJobEnabled,
   type AuditPassRunner,
   type AuditSchedulerDeps,
 } from "../../engine/forge/audits/index.js";
@@ -72,7 +69,7 @@ export function createAuditRoutes(options: AuditRoutesOptions) {
   app.get("/:orgId/audits", async (c) => {
     const orgId = c.req.param("orgId");
     if (!guard(c, orgId)) return c.json({ error: "org_access_denied" }, 403);
-    const jobs = await listAuditJobs(options.pool, orgId);
+    const jobs = await AuditsStore.listAuditJobs(options.pool, orgId);
     return c.json({ jobs, recommended: recommendCoverage(jobs) }, 200);
   });
 
@@ -81,7 +78,7 @@ export function createAuditRoutes(options: AuditRoutesOptions) {
     if (!guard(c, orgId)) return c.json({ error: "org_access_denied" }, 403);
     const parsed = CreateJobBody.safeParse(await c.req.json().catch(() => {}));
     if (!parsed.success) return c.json({ error: "invalid_audit_job", issues: parsed.error.issues }, 400);
-    const job = await createAuditJob(options.pool, { orgId, ...parsed.data });
+    const job = await AuditsStore.createAuditJob(options.pool, { orgId, ...parsed.data });
     return c.json({ job }, 201);
   });
 
@@ -91,7 +88,7 @@ export function createAuditRoutes(options: AuditRoutesOptions) {
   app.post("/:orgId/audits/:jobId/run", async (c) => {
     const orgId = c.req.param("orgId");
     if (!guard(c, orgId)) return c.json({ error: "org_access_denied" }, 403);
-    const job = await getAuditJob(options.pool, c.req.param("jobId"));
+    const job = await AuditsStore.getAuditJob(options.pool, c.req.param("jobId"));
     if (job === undefined || job.orgId !== orgId) return c.json({ error: "audit_job_not_found" }, 404);
     const schedulerDeps: AuditSchedulerDeps = {
       pool: options.pool,
@@ -116,9 +113,9 @@ function registerToggle(app: Hono<ActorContextEnv>, pool: pg.Pool, verb: string,
   app.post(`/:orgId/audits/:jobId/${verb}`, async (c) => {
     const orgId = c.req.param("orgId");
     if (!guard(c, orgId)) return c.json({ error: "org_access_denied" }, 403);
-    const job = await getAuditJob(pool, c.req.param("jobId"));
+    const job = await AuditsStore.getAuditJob(pool, c.req.param("jobId"));
     if (job === undefined || job.orgId !== orgId) return c.json({ error: "audit_job_not_found" }, 404);
-    const updated = await setAuditJobEnabled(pool, job.id, enabled);
+    const updated = await AuditsStore.setAuditJobEnabled(pool, job.id, enabled);
     return c.json({ job: updated ?? job }, 200);
   });
 }

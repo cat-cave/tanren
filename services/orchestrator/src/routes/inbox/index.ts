@@ -27,13 +27,10 @@ import {
   CandidateNotFoundError,
   CandidateNotPlaceableError,
   closeDuplicateCandidate,
-  createSource,
   dismissCandidate,
   foldCandidate,
-  getSource,
+  InboxStore,
   ingestSource,
-  listCandidates,
-  listSources,
   SourceKind,
   type InboxEngineDeps,
   type JiraHttpClient,
@@ -115,8 +112,8 @@ export function createInboxRoutes(options: InboxRoutesOptions) {
     const orgId = c.req.param("orgId");
     if (!guard(c, orgId)) return c.json({ error: "org_access_denied" }, 403);
     const [sources, candidates] = await Promise.all([
-      listSources(options.pool, orgId),
-      listCandidates(options.pool, orgId),
+      InboxStore.listSources(options.pool, orgId),
+      InboxStore.listCandidates(options.pool, orgId),
     ]);
     return c.json({ sources, candidates }, 200);
   });
@@ -126,14 +123,14 @@ export function createInboxRoutes(options: InboxRoutesOptions) {
     if (!guard(c, orgId)) return c.json({ error: "org_access_denied" }, 403);
     const parsed = CreateSourceBody.safeParse(await c.req.json().catch(() => {}));
     if (!parsed.success) return c.json({ error: "invalid_source", issues: parsed.error.issues }, 400);
-    const source = await createSource(options.pool, { orgId, ...parsed.data });
+    const source = await InboxStore.createSource(options.pool, { orgId, ...parsed.data });
     return c.json({ source }, 201);
   });
 
   app.post("/:orgId/inbox/sources/:sourceId/ingest", async (c) => {
     const orgId = c.req.param("orgId");
     if (!guard(c, orgId)) return c.json({ error: "org_access_denied" }, 403);
-    const source = await getSource(options.pool, c.req.param("sourceId"));
+    const source = await InboxStore.getSource(options.pool, c.req.param("sourceId"));
     if (source === undefined || source.orgId !== orgId) {
       return c.json({ error: "source_not_found" }, 404);
     }
