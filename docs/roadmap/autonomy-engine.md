@@ -12,17 +12,30 @@ full **before** any code, with PR-sized units and dependencies, so it can be
 reviewed and sequenced deliberately. The capstone is `apex` — a max-difficulty
 fixture that forces every capability below and proves the end-to-end claim.
 
-> **Build status (updated 2026-06-01).** **Phase 1 — the autonomy core — is
-> merged on `main`** (PRs #220–#226): P1·0 budget-is-the-gate + concurrency→config
-> (`QuotaPolicy` deleted), P1a the **DagWalker** (+ conformance suite, wired into
-> worker boot), P1b persisted spec **priority**, P1c **real-LLM Forge** (options +
-> chat; deterministic answerers relocated to `tests/fixtures/`), P1d **webhook-first
-> autonomous intake**, P8a the **stub-ban architecture lint** (`no-production-stubs`),
-> and P8b the **real-resource `just e2e` gate** + no-mock arch check. The §0 gap
-> table below is the _original_ audit; the CRITICAL/HIGH rows it lists for the
-> DAG-walker, real-LLM Forge, discovery, intake, priority, and concurrency are now
-> **closed**. **Phase 2 (native merge coordination) is the active next build** —
-> the live DAG-walker makes parallel collisions real, exactly as §0 predicted.
+> **Build status (updated 2026-06-02). Phases 1 AND 2 are merged on `main`.**
+> The §0 gap table below is the _original_ audit; **every CRITICAL/HIGH/MEDIUM row
+> in it is now closed.**
+>
+> - **Phase 1 — the autonomy core** (PRs #220–#226): P1·0 budget-is-the-gate +
+>   concurrency→config (`QuotaPolicy` deleted), P1a the **DagWalker** (+ conformance,
+>   wired into worker boot), P1b persisted spec **priority**, P1c **real-LLM Forge**
+>   (options + chat; deterministic answerers → `tests/fixtures/`), P1d **webhook-first
+>   autonomous intake**, P8a the **stub-ban lint** (`no-production-stubs`), P8b the
+>   **real-resource `just e2e` gate** + no-mock arch check.
+> - **Phase 2 — native merge coordination** (PRs #228–#236): P2·0 the **`VcsProvider`
+>   seam**, P2a **auto-rebase** + re-gate, P2b **DAG-aware intent-preserving conflict
+>   resolution**, P2c-1 **speculative execution** (lifecycle states · Moderate
+>   threshold · integration branches · dynamic base) + P2c-2 **change-percolation**,
+>   P2d-1 the **native intelligent merge queue** (DAG-order serialized merge) + P2d-2
+>   **speculative batch-check + bisect**, P2e-1 **Mergify-parity CI intelligence**
+>   (flaky-detect/quarantine · CI analytics · queue/stack stats), P2e-2 **Mergify
+>   removed entirely** (`native_queue` is the merge engine). Each unit was
+>   adversarially verified before merge; four real merge-safety defects were caught
+>   and fixed in review (P2c-1 wrong-base merge, P2c-2 no-op re-gate, P2d-1 ordering
+>   poison, P2e-2 incomplete dashboard/CI removal).
+>
+> **Only Phase 3 (`apex`) remains** — gated on the real Tier-1 credentials (GitHub
+> App + Slack + a deploy target); it spends real credits under the $50 ceiling.
 
 ## 0. The honest gap (from the 2026-06-01 autonomy audit)
 
@@ -457,17 +470,18 @@ Phase 1 (autonomy core)  ✅ MERGED on main (PRs #220–#226, 2026-06-01)
   P8b  ✅ real-resource `just e2e` gate (no-mock arch check + tier proofs)    [#226]
        (driveLiveTier wires the real HTTP operator flow; full credentialed run is the nightly/apex)
 
-Phase 2 (merge coordination — native) — ACTIVE NEXT; P1a has landed so collisions are now real
-  P2·0 VcsProvider contract (GitHub adapter extracted) + conformance       → P1a
-  P2a  up-to-date/auto-rebase (re-gate on rebase)                          → P2·0
-  P2b  intent-preserving conflict-resolution Answerer + re-gate            → P2a
-  P2c  speculative execution: spec lifecycle + threshold + integration branches
-       + dynamic base + CHANGE-PERCOLATION (chain re-integration, not discard)   → P2a, P2b
-  P2d  native intelligent merge queue (DAG-order, speculative batch-check, bisect)   → P2b, P2c
-  P2e  Mergify-parity CI intelligence: flaky-test detection + auto-quarantine,
-       CI analytics/insights, queue/stack stats → then REMOVE Mergify       → P2d
+Phase 2 (merge coordination — native)  ✅ MERGED on main (PRs #228–#236, 2026-06-02)
+  P2·0 ✅ VcsProvider contract (GitHub adapter extracted) + conformance       [#228]
+  P2a  ✅ up-to-date/auto-rebase (re-gate on rebase) + App-first clone        [#229]
+  P2b  ✅ intent-preserving conflict-resolution Answerer + re-gate            [#230]
+  P2c-1 ✅ speculative execution: spec lifecycle + threshold + integration branches + dynamic base   [#231]
+  P2c-2 ✅ CHANGE-PERCOLATION (two-phase re-gate; chain re-integration, not discard)   [#232]
+  P2d-1 ✅ native intelligent merge queue (DAG-order serialized merge)        [#233]
+  P2d-2 ✅ speculative batch-check + bisect                                   [#234]
+  P2e-1 ✅ Mergify-parity CI intelligence: flaky-detect + auto-quarantine, CI analytics, queue/stack stats   [#235]
+  P2e-2 ✅ REMOVE Mergify entirely (native_queue is the merge engine)        [#236]
 
-Phase 3 (proof)
+Phase 3 (proof) — the only remaining major effort; gated on real Tier-1 credentials + the $50 ceiling
   P3a  apex fixture (rough operator notes + empty repo + hidden accept tiers + planted issues + Slack + web UI)   → P1*, P2*
   P3b  apex live run over real surfaces (API + Playwright UI) + live-preview-deploy + fix-what-stalls   → P3a
   P3c  benchmark apex (knob experiments)                                   → P3b

@@ -84,21 +84,25 @@ The forward plan (near- and long-term) lives in **`docs/roadmap/tempering.md`**
 (the live tracker) and **`docs/roadmap/forward-roadmap.md`** (the detailed
 four-dimension plan).
 
-The **largest remaining effort is the autonomy engine** —
-**`docs/roadmap/autonomy-engine.md`**. **Phase 1 — the autonomy core — is merged
-on `main`** (PRs #220–#226): Tanren now drives its own spec graph. The autonomous
-**DAG-walker**, persisted **priority**, **real-LLM Forge** (the deterministic
-answerers moved to `tests/fixtures/`), **webhook-first issue intake**, a
-**stub-ban architecture lint** (`no-production-stubs`), and a **real-resource
-`just e2e` gate** all landed — and `QuotaPolicy` is deleted (budget is the only
-run gate). The manual per-spec trigger and the templated ideation stubs are gone.
+The autonomy engine — **`docs/roadmap/autonomy-engine.md`** — is built through
+**Phase 2**. **Phase 1 — the autonomy core** (PRs #220–#226): Tanren drives its
+own spec graph via the autonomous **DAG-walker**, with persisted **priority**,
+**real-LLM Forge** (deterministic answerers → `tests/fixtures/`), **webhook-first
+issue intake**, a **stub-ban lint** (`no-production-stubs`), and a **real-resource
+`just e2e` gate** — and `QuotaPolicy` deleted (budget is the only run gate).
+**Phase 2 — native merge coordination** (PRs #228–#236): a `VcsProvider` seam,
+**auto-rebase**, DAG-aware **intent-preserving conflict resolution**, **speculative
+execution + change-percolation**, the **native intelligent merge queue** (DAG-order
+serialized merge + speculative batch-check + bisect), **CI-intelligence parity**
+(flaky-quarantine · CI analytics · queue stats), and **Mergify removed entirely**
+(`native_queue` is the merge engine).
 
-**Phase 2 — native merge coordination — is the active next build**: because the
-live DAG-walker runs specs in parallel, they now collide, so a `VcsProvider` seam
-→ auto-rebase → DAG-aware **intent-preserving conflict resolution** → speculative
-execution + change-percolation → a **native merge queue** (then Mergify removed).
-**Phase 3** proves the whole thing with **`apex`**, a max-difficulty fixture that
-takes a one-paragraph brief to a deployed product autonomously.
+**The only remaining major effort is Phase 3 — `apex`**: a max-difficulty fixture
+that takes a one-paragraph brief to a deployed product (URL shortener + Slack bot +
+web UI) **autonomously**, over real surfaces. It is gated on real Tier-1 credentials
+(GitHub App + Slack + a deploy target — see
+`docs/operator-guide/validation-credentials.md`) and spends real credits under a
+budget ceiling.
 
 Smaller near-term items: **Vault per-run scoped credentials** (the last big
 data-plane de-privilege), the **benchmark seed corpus**, the **remaining DAL

@@ -9,7 +9,7 @@
 ## In scope for Phase 2
 
 - [ ] **Repo picker**: lists repositories the Tanren GitHub App has access to under the operator's org, with name, description, privacy badge, last-activity timestamp, and a `selected` state. Filter input narrows the list. A "can't see your repo?" link surfaces the GitHub App installation page.
-- [ ] **What-happens-next card**: explicitly documents the v0 minimal scope — Tanren reads any existing `.github/workflows/`, `.mergify.yml`, and `CODEOWNERS` for display only, does not write to the target repo, and does not run a recon agent.
+- [ ] **What-happens-next card**: explicitly documents the v0 minimal scope — Tanren reads any existing `.github/workflows/` and `CODEOWNERS` for display only, does not write to the target repo, and does not run a recon agent. (Mergify was removed in Phase 2 P2e-2 — `native_queue` is the merge engine — so `.mergify.yml` is no longer read.)
 - [ ] **Project config form**: after repo selection, the operator fills the project name, default branch, allocator (from the org default), runner image (from the org default), credential refs (from the org's credential bundle list), provider-route preferences (per-role chain prefilled from org defaults). Form validates against P2A-0006 versioned project config schema.
 - [ ] **GitHub App scope card**: lists what Tanren can and cannot do on this repo — clone & push from runner workspaces, open draft PRs from `tanren/spec_*` branches, poll CI status, read org members for review routing; never push main, never bypass protection, never force-push.
 - [ ] **Confirmation**: submitting the form creates the project row via P2A-0013 (which reads target-repo files for display but writes nothing) and routes the operator to the project view.
