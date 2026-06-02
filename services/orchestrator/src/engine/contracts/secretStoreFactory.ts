@@ -2,6 +2,8 @@ import { InMemorySecretStore, type SecretStore, VaultSecretStore } from "./secre
 import { GcpSecretManagerStore } from "./gcpSecretManager.js";
 import { AwsSecretsManagerStore } from "./awsSecretsManager.js";
 import { OnePasswordStore } from "./onePassword.js";
+import { VaultRunTokenMinter } from "./vaultTokenMinterImpl.js";
+import type { VaultTokenMinter } from "./vaultTokenMinter.js";
 
 /** Selectable SecretStore backends. There is NO default — `TANREN_SECRET_STORE`
  * must name one explicitly (the compose stacks set `vault`). `memory` is the
@@ -79,4 +81,51 @@ export function buildSecretStore(env: SecretStoreEnv = process.env): SecretStore
     default:
       throw new Error(`unknown TANREN_SECRET_STORE='${kind}' (expected vault|gcp_sm|aws_sm|onepassword|memory)`);
   }
+}
+
+/**
+ * The Vault address + KV mount the run-token minter (and the scoped
+ * `VaultSecretStore` it builds) operate against. Resolved from the SAME REQUIRED
+ * env as the Vault SecretStore backend — `VAULT_ADDR` is required (no
+ * `localhost:8200` fallback), `VAULT_KV_MOUNT` optional (defaults to `secret`).
+ */
+export interface VaultMountConfig {
+  addr: string;
+  mount?: string;
+  /**
+   * Test seam: the `fetch` the scoped `VaultSecretStore` reads through. Omitted in
+   * production (global `fetch` against the real Vault); a test points the scoped
+   * store at the SAME recording transport its minter uses so the de-privilege is
+   * provable against a fake Vault.
+   */
+  fetchImpl?: typeof fetch;
+}
+
+/**
+ * Build the per-run scoped-credential minter when (and only when) the configured
+ * secret store is Vault. Returns `undefined` for every other backend — those
+ * backends do NOT have a Vault broad token to de-privilege, so the run path keeps
+ * using their (already-tenant-namespaced) store directly. This is not a stub: a
+ * non-Vault backend genuinely has no Vault child-token to mint. The minter is
+ * constructed from the BROAD `VAULT_TOKEN` (the same REQUIRED token the SecretStore
+ * uses) and is used ONLY to mint short-lived per-run children; the broad token is
+ * never handed to a runner.
+ */
+export function buildVaultTokenMinter(env: SecretStoreEnv = process.env): VaultTokenMinter | undefined {
+  const kind = required(env, "TANREN_SECRET_STORE").toLowerCase() as SecretStoreKind;
+  if (kind !== "vault") {
+    return undefined;
+  }
+  const { addr, mount } = resolveVaultMountConfig(env);
+  return new VaultRunTokenMinter({
+    addr,
+    token: required(env, "VAULT_TOKEN"),
+    ...(mount === undefined ? {} : { mount }),
+  });
+}
+
+/** Resolve the Vault address + optional KV mount from the REQUIRED env. */
+export function resolveVaultMountConfig(env: SecretStoreEnv = process.env): VaultMountConfig {
+  const mount = optional(env, "VAULT_KV_MOUNT");
+  return { addr: required(env, "VAULT_ADDR"), ...(mount === undefined ? {} : { mount }) };
 }

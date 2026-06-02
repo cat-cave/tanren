@@ -32,6 +32,7 @@ import {
   CredentialFailedPayload,
   CredentialLoadedPayload,
   CredentialRequestedPayload,
+  CredentialScopedTokenMintedPayload,
   RunnerAllocatedPayload,
   RunnerFailedPayload,
   RunnerReleasedPayload,
@@ -193,6 +194,9 @@ export const EventRegistry = {
   "credential.requested": CredentialRequestedPayload,
   "credential.loaded": CredentialLoadedPayload,
   "credential.failed": CredentialFailedPayload,
+  // Managed-hosting dimension D: a per-run scoped Vault child token was minted
+  // (ref paths + TTL/uses; never the token value).
+  "credential.scoped_token_minted": CredentialScopedTokenMintedPayload,
 
   // Cost resolution
   "cost.resolved": CostResolvedPayload,

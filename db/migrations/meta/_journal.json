@@ -351,6 +351,13 @@
       "when": 1780406624037,
       "tag": "0049_sour_iceman",
       "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1780407843293,
+      "tag": "0050_yummy_shadow_king",
+      "breakpoints": true
     }
   ]
 }

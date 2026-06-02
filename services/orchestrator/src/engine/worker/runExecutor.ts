@@ -25,6 +25,7 @@ import { DirectJobClaimClient, type JobClaimClient } from "../contracts/jobClaim
 import type { JobQueue } from "../contracts/jobQueue.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SecretStore } from "../contracts/secretStore.js";
+import type { RunCredentialScoping } from "../workflow/plannerRunScopedCreds.js";
 import type { SshSubstrate } from "../contracts/sshSubstrate.js";
 import type { EscapeHatches } from "../config/index.js";
 import { CostRecorder } from "../costs/recorder.js";
@@ -81,6 +82,11 @@ export interface RunExecutorDeps {
   allocator: Allocator;
   ssh: SshSubstrate;
   secrets: SecretStore;
+  // Managed-hosting dimension D: the per-run credential-scoping seam (Vault backend
+  // only). Wired ⇒ the workflow mints a child token scoped to ONLY this run's cred
+  // ref paths and reads the run's credentials through it (the broad VAULT_TOKEN
+  // never reaches a runner). Omitted for a non-Vault backend.
+  credentialScoping?: RunCredentialScoping;
   vcsProvider: VcsProvider;
   // P2a (Part 2): shared App installation-token minter, threaded into the
   // workflow so the App-first CLONE token reuses the same minted/cached token as
@@ -229,6 +235,9 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
         allocator: deps.allocator,
         ssh: deps.ssh,
         secrets: deps.secrets,
+        // Dimension D: thread the credential-scoping seam so the workflow
+        // de-privileges the run's credential reads behind a per-run child token.
+        ...(deps.credentialScoping === undefined ? {} : { credentialScoping: deps.credentialScoping }),
         vcsProvider: deps.vcsProvider,
         // P2a (Part 2): the App-first clone reuses the shared minter when present.
         ...(deps.githubAppMinter === undefined ? {} : { githubAppMinter: deps.githubAppMinter }),

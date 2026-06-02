@@ -3,13 +3,16 @@ import {
   AwsSecretsManagerStore,
   awsSecretNameFromRef,
   buildSecretStore,
+  buildVaultTokenMinter,
   GcpSecretManagerStore,
   gcpSecretIdFromRef,
   InMemorySecretStore,
   OnePasswordStore,
   onePasswordTitleFromRef,
+  resolveVaultMountConfig,
   VaultSecretStore,
 } from "../src/engine/contracts/index.js";
+import { VaultRunTokenMinter } from "../src/engine/contracts/vaultTokenMinterImpl.js";
 
 const agnosticRef = "credential/github_token/org/acme/default";
 
@@ -80,6 +83,44 @@ describe("buildSecretStore selector", () => {
     expect(() => buildSecretStore({ TANREN_SECRET_STORE: "gcp_sm" })).toThrow(/TANREN_GCP_SM_PROJECT/u);
     expect(() => buildSecretStore({ TANREN_SECRET_STORE: "aws_sm" })).toThrow(/TANREN_AWS_SM_/u);
     expect(() => buildSecretStore({ TANREN_SECRET_STORE: "onepassword" })).toThrow(/TANREN_OP_/u);
+  });
+});
+
+describe("buildVaultTokenMinter (per-run scoped credentials, dimension D)", () => {
+  it("builds a VaultRunTokenMinter only for the Vault backend, from the REQUIRED broad token", () => {
+    const minter = buildVaultTokenMinter({
+      TANREN_SECRET_STORE: "vault",
+      VAULT_ADDR: "http://vault.internal:8200",
+      VAULT_TOKEN: "broad-live-token",
+    });
+    expect(minter).toBeInstanceOf(VaultRunTokenMinter);
+  });
+
+  it("returns undefined for every non-Vault backend (no broad Vault token to de-privilege)", () => {
+    expect(buildVaultTokenMinter({ TANREN_SECRET_STORE: "memory" })).toBeUndefined();
+    expect(
+      buildVaultTokenMinter({
+        TANREN_SECRET_STORE: "gcp_sm",
+        TANREN_GCP_SM_PROJECT: "p",
+        TANREN_GCP_SM_ACCESS_TOKEN: "t",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("requires VAULT_ADDR + VAULT_TOKEN for the Vault minter (no dev-root-token fallback)", () => {
+    expect(() => buildVaultTokenMinter({ TANREN_SECRET_STORE: "vault" })).toThrow(/VAULT_ADDR/u);
+    expect(() => buildVaultTokenMinter({ TANREN_SECRET_STORE: "vault", VAULT_ADDR: "http://vault:8200" })).toThrow(
+      /VAULT_TOKEN/u,
+    );
+  });
+
+  it("resolveVaultMountConfig requires VAULT_ADDR and honours the optional mount", () => {
+    expect(resolveVaultMountConfig({ VAULT_ADDR: "http://v:8200" })).toEqual({ addr: "http://v:8200" });
+    expect(resolveVaultMountConfig({ VAULT_ADDR: "http://v:8200", VAULT_KV_MOUNT: "kv" })).toEqual({
+      addr: "http://v:8200",
+      mount: "kv",
+    });
+    expect(() => resolveVaultMountConfig({})).toThrow(/VAULT_ADDR/u);
   });
 });
 

@@ -6,6 +6,7 @@ import { PgRunnerStore } from "./pgRunnerStore.js";
 import { RunnerLifecycle } from "./runnerLifecycle.js";
 import { AbandonedRunSweeper } from "./sweeper.js";
 import { VaultSecretsClient } from "./vaultSecrets.js";
+import { requireEnv } from "./requireEnv.js";
 
 const port = Number(process.env["ALLOCATOR_PORT"] ?? 3200);
 const authToken = process.env["TANREN_ALLOCATOR_TOKEN"] ?? "dev";
@@ -34,7 +35,9 @@ async function main(): Promise<void> {
   const store = new PgRunnerStore(systemPool, appPool);
   const secrets = new VaultSecretsClient({
     addr: process.env["VAULT_ADDR"] ?? "http://vault:8200",
-    token: process.env["VAULT_TOKEN"] ?? "dev-root-token",
+    // The Vault token is REQUIRED — no `dev-root-token` fallback (the dev stack
+    // sets a real VAULT_TOKEN in env). A blank/unset value fails hard.
+    token: requireEnv("VAULT_TOKEN"),
   });
 
   const lifecycle = new RunnerLifecycle({

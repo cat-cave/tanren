@@ -14,6 +14,10 @@ import type { JobClaimClient } from "../contracts/jobClaim.js";
 import { PgJobQueue } from "../contracts/jobQueue.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SecretStore } from "../contracts/secretStore.js";
+import type { RunCredentialScoping } from "../workflow/plannerRunScopedCreds.js";
+// Re-exported so `boot.ts` builds the dimension-D credential-scoping seam from a
+// module it already depends on (keeping boot's import-dependency count under cap).
+export { buildRunCredentialScoping } from "../workflow/plannerRunScopedCreds.js";
 import type { SshSubstrate } from "../contracts/sshSubstrate.js";
 import type { VcsProvider } from "../contracts/vcsProvider.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
@@ -30,6 +34,10 @@ export interface StartRunWorkerInput {
   allocator: Allocator;
   ssh: SshSubstrate;
   secrets: SecretStore;
+  // Managed-hosting dimension D: the per-run credential-scoping seam (Vault backend
+  // only). Threaded to the executor so the workflow de-privileges the run's
+  // credential reads behind a per-run child token.
+  credentialScoping?: RunCredentialScoping;
   vcsProvider: VcsProvider;
   // P2a (Part 2): shared App installation-token minter (cache lives here),
   // threaded to the workflow so the App-first clone reuses it. Optional — the
@@ -88,6 +96,7 @@ export function startRunWorker(input: StartRunWorkerInput): StartedRunWorker {
       allocator: input.allocator,
       ssh: input.ssh,
       secrets: input.secrets,
+      ...(input.credentialScoping === undefined ? {} : { credentialScoping: input.credentialScoping }),
       vcsProvider: input.vcsProvider,
       ...(input.githubAppMinter === undefined ? {} : { githubAppMinter: input.githubAppMinter }),
       identitySecretRef: input.identitySecretRef,

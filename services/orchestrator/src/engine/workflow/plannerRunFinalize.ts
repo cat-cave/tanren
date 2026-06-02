@@ -18,6 +18,11 @@ import type { MergeForRunResult } from "./reviewMerge/index.js";
 import type { PlannerRunContext, RunPlannerLoopInput } from "./plannerRun.js";
 import type { SubtaskLoopOutcome } from "./subtaskLoop.js";
 
+// Dimension D per-run credential-scoping seam: re-exported here (alongside the
+// other lifecycle-write helpers) so `plannerRun.ts` imports it from a module it
+// already depends on, keeping that file's dependency count under the cap.
+export { applyScopedRunCredentials, type RunCredentialScoping } from "./plannerRunScopedCreds.js";
+
 /** The `runner.allocated` event payload — runner id/image + the SSH target's public fields. */
 export function runnerPayload(allocation: RunnerAllocation) {
   return {
@@ -214,4 +219,24 @@ export async function finalizeWorkflowError(error: unknown, ctx: WorkflowErrorCo
     "UPDATE runs SET status = 'failed', outcome = 'failed', ended_at = now() WHERE run_id = $1",
     [ctx.runId],
   );
+}
+
+// The spec-run trigger pre-creates a queued 'plan' task + job_queue row for the
+// async worker path. The workflow executes the run directly and the loop creates
+// its own planner task, so the pre-created artifacts are vestigial — cancel them
+// so the run does not carry a dangling queued task.
+export async function supersedeQueuedPlannerTask(input: RunPlannerLoopInput, runId: string): Promise<void> {
+  // Plane-split P3c: the vestigial `plan` task cancel routes through the lifecycle
+  // writer when wired (remote), else the byte-identical in-process write. The
+  // `job_queue` cancel always runs in-process — `job_queue` is a cross-org system
+  // table OUTSIDE RLS that the data plane keeps writing directly.
+  if (input.runStateWriter === undefined) {
+    await input.pool.query(
+      "UPDATE tasks SET status = 'cancelled', outcome = 'cancelled', ended_at = now() WHERE run_id = $1 AND kind = 'plan' AND status = 'queued'",
+      [runId],
+    );
+  } else {
+    await input.runStateWriter.supersedeQueuedPlannerTask({ runId });
+  }
+  await input.pool.query("UPDATE job_queue SET status = 'cancelled' WHERE run_id = $1 AND status = 'queued'", [runId]);
 }

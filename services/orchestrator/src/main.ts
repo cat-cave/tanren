@@ -27,13 +27,31 @@ export { buildAuthFromEnv, type BuildAppAuthOptions } from "./mainAuth.js";
 
 const port = Number(process.env["ORCHESTRATOR_PORT"] ?? 3100);
 const vaultAddr = process.env["VAULT_ADDR"] ?? "http://localhost:8200";
-const vaultToken = process.env["VAULT_TOKEN"] ?? "dev-root-token";
 const runnerIdentitySecretRef = process.env["TANREN_RUNNER_IDENTITY_SECRET_REF"] ?? "runner/local-docker/identity";
+
+/**
+ * Require a non-blank env var; throw a clear error when unset/blank (NO fallback).
+ * Mirrors `required(env, ...)` in secretStoreFactory.ts. Resolved at the point of
+ * USE (not at module load) so importing this module for `buildApp` tests — which
+ * inject their own `vaultHealthCheck` — does not require the production env.
+ */
+export function requireEnv(name: string): string {
+  const value = process.env[name];
+  if (value === undefined || value === "") {
+    throw new Error(`${name} is required (set it in the environment; there is no default)`);
+  }
+  return value;
+}
+
 let productionPool: pg.Pool | undefined;
 
 async function vaultHealth() {
+  // The broad Vault token is REQUIRED — there is NO `dev-root-token` fallback (the
+  // dev stack sets a real VAULT_TOKEN in env). This token is the orchestrator's
+  // broad credential; it is used ONLY to read Vault health and to MINT per-run
+  // scoped child tokens — it is never handed to a runner.
   const response = await fetch(`${vaultAddr}/v1/sys/health`, {
-    headers: { "X-Vault-Token": vaultToken },
+    headers: { "X-Vault-Token": requireEnv("VAULT_TOKEN") },
   });
   return {
     ok: response.ok || response.status === 429 || response.status === 472,

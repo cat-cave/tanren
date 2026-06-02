@@ -45,14 +45,17 @@ import {
 } from "./plannerRunAdapters.js";
 import { prepareRunWorkspace } from "./plannerRunWorkspace.js";
 import {
+  applyScopedRunCredentials,
   buildFinalizeRunState,
   finalizeMergeOutcome,
   finalizeNonPass,
   finalizeWorkflowError,
   markRunRunning,
+  type RunCredentialScoping,
   runnerPayload,
   runOutcomeFor,
   setSpecStatus,
+  supersedeQueuedPlannerTask,
 } from "./plannerRunFinalize.js";
 import { publishDraftPullRequest, type PublishedDraftPullRequest } from "./githubDraftPr.js";
 import type { PlannerRejectionFeedback } from "./planner/planner.js";
@@ -146,6 +149,8 @@ export interface RunPlannerLoopInput {
   allocator: Allocator;
   ssh: SshSubstrate;
   secrets: SecretStore;
+  // Dimension D — the per-run credential-scoping seam ({@link applyScopedRunCredentials}).
+  credentialScoping?: RunCredentialScoping;
   vcsProvider: VcsProvider;
   /**
    * P2a (Part 2): the shared GitHub App installation-token minter (its cache
@@ -249,11 +254,11 @@ function nativeQueueSeam(input: RunPlannerLoopInput): { enqueueNativeQueue?: Nat
   return input.nativeQueueEnqueuer === undefined ? {} : { enqueueNativeQueue: input.nativeQueueEnqueuer };
 }
 
-export async function runPlannerLoopWorkflow(input: RunPlannerLoopInput): Promise<PlannerRunResult> {
-  const eventStore = input.eventStore ?? new PgEventStore(input.pool);
-  const context = input.context;
-  const workspacePath = input.workspacePath ?? workspaceRepoPathForRun(context.runId);
-  const recorder = input.recorder ?? new CostRecorder(input.pool, eventStore);
+export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Promise<PlannerRunResult> {
+  const eventStore = rawInput.eventStore ?? new PgEventStore(rawInput.pool);
+  const context = rawInput.context;
+  const workspacePath = rawInput.workspacePath ?? workspaceRepoPathForRun(context.runId);
+  const recorder = rawInput.recorder ?? new CostRecorder(rawInput.pool, eventStore);
   const appendEvent = async <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string) => {
     await eventStore.append({
       runId: context.runId,
@@ -264,6 +269,10 @@ export async function runPlannerLoopWorkflow(input: RunPlannerLoopInput): Promis
       payload,
     });
   };
+
+  // Dimension D: de-privilege the run behind a per-run scoped Vault child token
+  // BEFORE any credential read ({@link applyScopedRunCredentials}).
+  const input = await applyScopedRunCredentials(rawInput, appendEvent);
   // Plane-split P3: how the run's terminal status is finalized (remote via the
   // control-plane endpoint, or the byte-identical in-process UPDATE) — see
   // {@link buildFinalizeRunState}.
@@ -477,24 +486,4 @@ export async function runPlannerLoopWorkflow(input: RunPlannerLoopInput): Promis
     await input.allocator.release(allocation.runnerId);
     await appendEvent("runner.released", { runnerId: allocation.runnerId });
   }
-}
-
-// The spec-run trigger pre-creates a queued 'plan' task + job_queue row for the
-// async worker path. This workflow executes the run directly and the loop
-// creates its own planner task, so the pre-created artifacts are vestigial —
-// cancel them so the run does not carry a dangling queued task.
-async function supersedeQueuedPlannerTask(input: RunPlannerLoopInput, runId: string): Promise<void> {
-  // Plane-split P3c: the vestigial `plan` task cancel routes through the lifecycle
-  // writer when wired (remote), else the byte-identical in-process write. The
-  // `job_queue` cancel always runs in-process — `job_queue` is a cross-org system
-  // table OUTSIDE RLS that the data plane keeps writing directly.
-  if (input.runStateWriter === undefined) {
-    await input.pool.query(
-      "UPDATE tasks SET status = 'cancelled', outcome = 'cancelled', ended_at = now() WHERE run_id = $1 AND kind = 'plan' AND status = 'queued'",
-      [runId],
-    );
-  } else {
-    await input.runStateWriter.supersedeQueuedPlannerTask({ runId });
-  }
-  await input.pool.query("UPDATE job_queue SET status = 'cancelled' WHERE run_id = $1 AND status = 'queued'", [runId]);
 }
