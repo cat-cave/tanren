@@ -1,0 +1,385 @@
+# =============================================================================
+# Tanren — connections manifest (connections.manifest.example.yaml)
+# =============================================================================
+# This is the REAL home for (almost) every credential. Each entry is a MANAGED
+# CREDENTIAL: in production it lives in user configuration → the secret manager,
+# set through the dashboard / `tanren credentials create` / org-config API. The
+# orchestrator reads it from the secret manager at run time — NEVER from env.
+#
+# The SAME schema drives testing: the `just e2e` harness (P8b) reads this
+# manifest, imports each entry into a fresh stack's secret manager, then runs the
+# suite. That is the whole point — one declaration, two uses:
+#
+#   value_source: secret_manager_ref   → PRODUCTION (already stored; nothing to import)
+#   value_source: inline | file | env  → TESTING    (harness imports it for you)
+#
+# So a real operator never fills in `inline`/`file` — they configure through the
+# UI and reference the stored secret. A test run points at this file with raw
+# material. Identical shape, identical meaning.
+#
+# Schema per entry:
+#   connector:  stable id (your name for it)
+#   kind:       Tanren credential/connector kind (the registry value)
+#   home:       where it canonically lives — `managed` (secret manager, default)
+#               or `infra-env` (the rare bootstrap exceptions; see note *ENV)
+#   scope:      org | me        (tenant namespacing; org = shared, me = personal)
+#   ref:        the credential ref the org config points at
+#   config:     non-secret configuration (safe to store in org config JSONB)
+#   secret:     { value_source, + (inline|file|env|secret_manager_ref) field }
+#   validation: { priority, cadence, proves }
+#
+# priority:  P0 (apex needs it) · P1 (proves a seam only conformance-tested today) · P2 (breadth)
+# cadence:   nightly · weekly · on-demand    (per-PR is NEVER real-cred: no secrets in public PR CI)
+# =============================================================================
+
+connections:
+  # ===========================================================================
+  # PROVIDERS — Writer/Answerer auth (managed credentials)
+  # ===========================================================================
+  - connector: codex-default
+    kind: codex_chatgpt_auth
+    home: managed
+    scope: org
+    ref: codex-default
+    config: {}
+    secret: { value_source: file, file: ./secrets/codex/auth.json } # ALREADY HAVE
+    validation:
+      { priority: P0, cadence: nightly, proves: "real run loop: plan→write→check→audit→PR→merge (sub-covered)" }
+
+  - connector: claude-default
+    kind: claude_cli_auth
+    home: managed
+    scope: org
+    ref: claude-default
+    config: {}
+    secret: { value_source: file, file: ./secrets/claude/auth.json } # ALREADY HAVE
+    validation:
+      {
+        priority: P1,
+        cadence: weekly,
+        proves: "alt writer/answerer provider; role-routing across providers (sub-covered)",
+      }
+
+  - connector: opencode-default
+    kind: opencode_cli_auth
+    home: managed
+    scope: org
+    ref: opencode-default
+    config: {}
+    secret: { value_source: file, file: ./secrets/opencode/auth.json } # ALREADY HAVE
+    validation: { priority: P1, cadence: weekly, proves: "third writer provider; multi-key routing" }
+
+  - connector: managed-router
+    kind: opaque # providerMode:managed router credential
+    home: managed
+    scope: org
+    ref: managed-router-key
+    config: { providerMode: managed, router: openrouter } # or a raw OpenAI/Anthropic key
+    secret: { value_source: env, env: TANREN_E2E_MANAGED_ROUTER_KEY } # WISHLIST
+    validation:
+      {
+        priority: P1,
+        cadence: weekly,
+        proves: "managed/metered billing path: platform router cred + transparent cost+margin cost-record per call",
+      }
+
+  # ===========================================================================
+  # VCS connectivity (managed credentials)
+  # ===========================================================================
+  - connector: github-app
+    kind: github_app
+    home: managed
+    scope: org
+    ref: github-app-default
+    config: { appId: "<APP_ID>", installationId: "<INSTALLATION_ID>" } # non-secret
+    secret: { value_source: file, file: ./secrets/github/app-private-key.pem } # WISHLIST (P0)
+    validation:
+      {
+        priority: P0,
+        cadence: nightly,
+        proves: "PREFERRED connectivity: per-org install-token auto-mint+rotate; draft PR on a PRIVATE repo; CI status; issue webhooks for intake",
+      }
+
+  - connector: github-token
+    kind: github_token
+    home: managed
+    scope: org
+    ref: github-token-default
+    config: {}
+    secret: { value_source: file, file: ./secrets/github/token.txt } # ALREADY HAVE (fallback path)
+    validation: { priority: P0, cadence: nightly, proves: "PAT fallback connectivity (the live-validated path today)" }
+
+  # ===========================================================================
+  # CLOUD ALLOCATORS — provision real runner VMs
+  #   *ENV NOTE: these read from env TODAY (TANREN_HETZNER_API_TOKEN, ...). Per
+  #   the managed-by-default principle, the TARGET is managed per-org config in
+  #   the secret manager; the env form is the bootstrap/test path until that
+  #   migration lands (tracked for the managed-hosting workstream). Declared here
+  #   as `home: managed (target)` so real setup is config, test setup is env.
+  # ===========================================================================
+  - connector: hetzner
+    kind: allocator.hetzner
+    home: managed-target # reads env today; migrate to managed config
+    scope: org
+    ref: hetzner-default
+    config: { serverType: cx22, location: nbg1, sshUser: tanren, image: ubuntu-24.04 }
+    secret: { value_source: env, env: TANREN_HETZNER_API_TOKEN } # WISHLIST (P1)
+    validation:
+      {
+        priority: P1,
+        cadence: nightly,
+        proves: "allocator family for real: provision VM → push SSH key → run → monitor spend → teardown (~cents/run)",
+      }
+
+  - connector: digitalocean
+    kind: allocator.digitalocean
+    home: managed-target
+    scope: org
+    ref: do-default
+    config: { size: s-1vcpu-1gb, region: nyc1, sshUser: tanren, image: ubuntu-24-04-x64 }
+    secret: { value_source: env, env: TANREN_DO_API_TOKEN }
+    validation: { priority: P2, cadence: weekly, proves: "second real cloud allocator" }
+
+  - connector: gcp-compute
+    kind: allocator.gcp
+    home: managed-target
+    scope: org
+    ref: gcp-default
+    config: { project: "<PROJECT>", zone: us-central1-a, machineType: e2-small, sshUser: tanren }
+    secret: { value_source: env, env: TANREN_GCP_ACCESS_TOKEN }
+    validation: { priority: P2, cadence: on-demand, proves: "GCP allocator" }
+
+  - connector: aws-ec2
+    kind: allocator.aws_ec2
+    home: managed-target
+    scope: org
+    ref: aws-default
+    config:
+      {
+        region: us-east-1,
+        instanceType: t3.small,
+        sshUser: ubuntu,
+        imageId: "<AMI>",
+        subnetId: "<SUBNET>",
+        securityGroupIds: "<SG>",
+      }
+    secret: { value_source: env, env: TANREN_AWS_ACCESS_KEY_ID } # + TANREN_AWS_SECRET_ACCESS_KEY
+    validation: { priority: P2, cadence: on-demand, proves: "AWS EC2 allocator" }
+
+  - connector: kubernetes
+    kind: allocator.k8s
+    home: managed-target
+    scope: org
+    ref: k8s-default
+    config: { apiServer: "<URL>", namespace: tanren, runnerImage: "<IMG>" }
+    secret: { value_source: env, env: TANREN_K8S_TOKEN_REF }
+    validation: { priority: P2, cadence: on-demand, proves: "Kubernetes allocator" }
+
+  # ===========================================================================
+  # ALT SECRET STORES — the store backend is infra-env (§1), but proving the
+  # NON-Vault backends work end-to-end is a managed-hosting validation.
+  # ===========================================================================
+  - connector: onepassword-store
+    kind: secret_store.onepassword
+    home: infra-env # *ENV: the store itself is bootstrap (§1)
+    scope: org
+    ref: n/a
+    config: { connectUrlEnv: TANREN_OP_CONNECT_URL, vaultIdEnv: TANREN_OP_VAULT_ID }
+    secret: { value_source: env, env: TANREN_OP_CONNECT_TOKEN } # WISHLIST (P1)
+    validation:
+      {
+        priority: P1,
+        cadence: weekly,
+        proves: "pluggable secret store against a real non-Vault backend (only dev-Vault proven today)",
+      }
+
+  - connector: gcp-secret-manager
+    kind: secret_store.gcp_sm
+    home: infra-env
+    scope: org
+    ref: n/a
+    config: { projectEnv: TANREN_GCP_SM_PROJECT }
+    secret: { value_source: env, env: TANREN_GCP_SM_ACCESS_TOKEN }
+    validation: { priority: P2, cadence: on-demand, proves: "GCP Secret Manager backend" }
+
+  - connector: aws-secrets-manager
+    kind: secret_store.aws_sm
+    home: infra-env
+    scope: org
+    ref: n/a
+    config: { regionEnv: TANREN_AWS_SM_REGION }
+    secret: { value_source: env, env: TANREN_AWS_SM_SECRET_ACCESS_KEY } # + TANREN_AWS_SM_ACCESS_KEY_ID
+    validation: { priority: P2, cadence: on-demand, proves: "AWS Secrets Manager backend" }
+
+  # ===========================================================================
+  # IDENTITY PROVIDERS — operator sign-in
+  #   *ENV: read from env today; OIDC/OAuth client config is reasonable to keep
+  #   as deploy-time infra, but per-org IdP belongs in managed config long-term.
+  # ===========================================================================
+  - connector: github-oauth
+    kind: idp.github_oauth
+    home: infra-env
+    scope: org
+    ref: n/a
+    config: { clientIdEnv: TANREN_GITHUB_OAUTH_CLIENT_ID }
+    secret: { value_source: env, env: TANREN_GITHUB_OAUTH_CLIENT_SECRET } # WISHLIST (P1)
+    validation: { priority: P1, cadence: weekly, proves: "real GitHub OAuth sign-in flow" }
+
+  - connector: oidc
+    kind: idp.oidc
+    home: infra-env
+    scope: org
+    ref: n/a
+    config: { issuerEnv: TANREN_OIDC_ISSUER, clientIdEnv: TANREN_OIDC_CLIENT_ID, preset: authentik }
+    secret: { value_source: env, env: TANREN_OIDC_CLIENT_SECRET }
+    validation: { priority: P2, cadence: on-demand, proves: "generic OIDC / Authentik sign-in" }
+
+  # ===========================================================================
+  # NOTIFICATION CHANNELS (managed credentials; per-org targets) — the nine:
+  #   slack discord email teams twilio pagerduty webhook ntfy githubChecks
+  # ===========================================================================
+  - connector: slack-notify
+    kind: channel.slack
+    home: managed
+    scope: org
+    ref: slack-notify
+    config: { channel: "#tanren" }
+    secret: { value_source: env, env: TANREN_E2E_SLACK_BOT_TOKEN } # WISHLIST (P0)
+    validation:
+      { priority: P0, cadence: nightly, proves: "real Slack delivery (also the apex external-integration substrate)" }
+
+  - connector: ntfy-notify
+    kind: channel.ntfy
+    home: managed
+    scope: org
+    ref: ntfy-notify
+    config: { topic: trevor-auto-ai-alerts, server: https://ntfy.sh }
+    secret: { value_source: inline, inline: "" } # ALREADY HAVE (no auth)
+    validation: { priority: P0, cadence: nightly, proves: "push delivery (free)" }
+
+  - connector: webhook-notify
+    kind: channel.webhook
+    home: managed
+    scope: org
+    ref: webhook-notify
+    config: { url: "<https://your-receiver>" }
+    secret: { value_source: env, env: TANREN_E2E_WEBHOOK_SIGNING_SECRET } # P1
+    validation: { priority: P1, cadence: nightly, proves: "signed generic webhook delivery (free-ish)" }
+
+  - connector: discord-notify
+    kind: channel.discord
+    home: managed
+    scope: org
+    ref: discord-notify
+    config: { webhookUrlEnv: TANREN_E2E_DISCORD_WEBHOOK_URL }
+    secret: { value_source: env, env: TANREN_E2E_DISCORD_WEBHOOK_URL } # P1 (free)
+    validation: { priority: P1, cadence: weekly, proves: "Discord delivery" }
+
+  - connector: email-notify
+    kind: channel.email
+    home: managed
+    scope: org
+    ref: email-notify
+    config: { from: tanren@example.com, transport: sendgrid } # or SMTP host/port/user
+    secret: { value_source: env, env: TANREN_E2E_SENDGRID_API_KEY } # P1
+    validation: { priority: P1, cadence: weekly, proves: "email delivery (SendGrid/SMTP)" }
+
+  - connector: teams-notify
+    kind: channel.teams
+    home: managed
+    scope: org
+    ref: teams-notify
+    config: { webhookUrlEnv: TANREN_E2E_TEAMS_WEBHOOK_URL }
+    secret: { value_source: env, env: TANREN_E2E_TEAMS_WEBHOOK_URL } # P2 (free)
+    validation: { priority: P2, cadence: on-demand, proves: "MS Teams delivery" }
+
+  - connector: pagerduty-notify
+    kind: channel.pagerduty
+    home: managed
+    scope: org
+    ref: pagerduty-notify
+    config: {}
+    secret: { value_source: env, env: TANREN_E2E_PAGERDUTY_ROUTING_KEY } # P2
+    validation: { priority: P2, cadence: on-demand, proves: "PagerDuty incident routing" }
+
+  - connector: twilio-notify
+    kind: channel.twilio
+    home: managed
+    scope: org
+    ref: twilio-notify
+    config: { accountSid: "<SID>", fromNumber: "+1..." }
+    secret: { value_source: env, env: TANREN_E2E_TWILIO_AUTH_TOKEN } # P2 (costs per SMS)
+    validation: { priority: P2, cadence: on-demand, proves: "Twilio SMS delivery" }
+
+  # githubChecks channel reuses github-app/github-token — no separate secret.
+
+  # ===========================================================================
+  # INTAKE SOURCES (P1d autonomous ingestion) — managed credentials + webhooks
+  # ===========================================================================
+  - connector: github-issues-intake
+    kind: intake.github_issues
+    home: managed
+    scope: org
+    ref: github-app-default # reuses the GitHub App install + webhook
+    config: { mode: webhook }
+    secret: { value_source: secret_manager_ref, secret_manager_ref: github-app-default }
+    validation:
+      {
+        priority: P0,
+        cadence: nightly,
+        proves: "issue webhook → real-LLM triage → spec → DAG-insert (closes the loop on real artifacts)",
+      }
+
+  - connector: sentry-intake
+    kind: intake.sentry
+    home: managed
+    scope: org
+    ref: sentry-default
+    config: { mode: webhook }
+    secret: { value_source: env, env: TANREN_E2E_SENTRY_WEBHOOK_SECRET } # P2
+    validation: { priority: P2, cadence: weekly, proves: "Sentry signal → triage → spec (multi-source intake)" }
+
+  - connector: linear-intake
+    kind: intake.linear
+    home: managed
+    scope: org
+    ref: linear-default
+    config: { mode: webhook }
+    secret: { value_source: env, env: TANREN_E2E_LINEAR_API_KEY } # P2
+    validation: { priority: P2, cadence: weekly, proves: "Linear issue → triage → spec" }
+
+  # ===========================================================================
+  # DEPLOY TARGET (apex live-preview-deploy) — managed credential
+  # ===========================================================================
+  - connector: deploy-target
+    kind: deploy.flyio # or render | railway | vercel | a hetzner VM
+    home: managed
+    scope: org
+    ref: deploy-default
+    config: { platform: flyio, region: iad }
+    secret: { value_source: env, env: TANREN_E2E_DEPLOY_TOKEN } # WISHLIST (P0 for apex)
+    validation:
+      {
+        priority: P0,
+        cadence: weekly,
+        proves: "the apex web UI actually deploys; exercises the live-preview-deploy surface",
+      }
+
+  # ===========================================================================
+  # APEX PRODUCT's OWN Slack bot (the product Tanren BUILDS integrates Slack) —
+  # distinct from slack-notify (Tanren's own alerts). Provisioned to the apex
+  # target repo as a project secret, not a Tanren org credential.
+  # ===========================================================================
+  - connector: apex-product-slack
+    kind: project_secret.slack
+    home: managed
+    scope: org
+    ref: apex-slack-bot
+    config: { channel: "#apex-links" }
+    secret: { value_source: env, env: TANREN_E2E_APEX_SLACK_BOT_TOKEN } # WISHLIST (P0 for apex)
+    validation:
+      {
+        priority: P0,
+        cadence: weekly,
+        proves: "Tanren builds a product that calls a REAL external API with managed secret handling",
+      }

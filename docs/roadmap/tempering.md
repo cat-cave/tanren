@@ -28,6 +28,18 @@ four-dimension reference. `ROADMAP.md` carries the phase history;
 > (stubs/shells/mocks are test-fixtures-only, enforced) and a **real-resource,
 > real-credential tagged e2e gate** (`just e2e`) that cannot pass unless Tanren
 > does real work end-to-end. Its capstone is `apex`, the max-difficulty fixture.
+>
+> **Status — Phase 1 (the autonomy core) is built and merged on `main`**
+> (2026-06-01, PRs #220–#226): the budget-is-the-gate cleanup (`QuotaPolicy`
+> deleted, concurrency env→config), the autonomous **DagWalker** + its conformance
+> suite, persisted spec **priority**, **real-LLM Forge** wiring (the deterministic
+> answerers moved to `tests/fixtures/`), **webhook-first autonomous intake**, the
+> **stub-ban architecture lint** (`no-production-stubs`), and the **real-resource
+> `just e2e` gate** + no-mock arch check. **Next: Phase 2 — native merge
+> coordination**, which the live DAG-walker now forces (parallel specs collide):
+> the `VcsProvider` seam → auto-rebase → intent-preserving conflict resolution →
+> speculative execution + change-percolation → the native merge queue → removing
+> Mergify. Then Phase 3 — `apex`.
 
 ## Definition of done — real-user-ready (status: MET for the core)
 
@@ -154,7 +166,7 @@ adapters select the writer/answerers from the project routing table.
 | --------------------------------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Vault per-run scoped credentials**          | D         | The data plane still holds a broad `VAULT_TOKEN`; mint a short-lived child token scoped to a single run's cred paths. The last big de-privilege. (Also: `main.ts` + `allocator/main.ts` still have `?? "dev-root-token"` fallbacks to remove.) |
 | **Benchmark seed corpus**                     | B         | Tiered seed repos + hidden content-addressed `accept` tiers + reference paths (`tanren-method-benchmark.md` §4.3). The benchmark code is done; this is the content that makes it produce signal.                                               |
-| **Remaining DAL clusters**                    | C         | `engine/forge/**`, `engine/quota/**`, `engine/recovery/**` raw query sites onto the `Repositories` seam.                                                                                                                                       |
+| **Remaining DAL clusters**                    | C         | `engine/forge/**`, `engine/recovery/**` raw query sites onto the `Repositories` seam. (`engine/quota/**` is gone — deleted in P1·0.)                                                                                                           |
 | **Post-merge auto-issue creation**            | A (hard)  | On a post-merge check failure, auto-open a tracking issue. (The merge-queue + human-review paths already exist.)                                                                                                                               |
 | **First whole-repo `mutation-full` baseline** | C         | `just mutation-full` + the weekly job exist; capture the first full-repo number + add dashboard/routes clusters.                                                                                                                               |
 | **Type-sharing + `typify → serde` codegen**   | C         | SSE frame + dashboard-only shapes; a Rust impl shares the neutral JSON-Schema.                                                                                                                                                                 |

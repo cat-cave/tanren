@@ -23,6 +23,8 @@
     ".env.example"
   ],
   "words": [
+    "sendgrid",
+    "flyio",
     "pollable",
     "inboxed",
     "ingestable",
