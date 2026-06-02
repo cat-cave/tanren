@@ -19,6 +19,21 @@ const PUBLIC_PATHS = new Set([
   "/auth/cli/complete",
 ]);
 
+// M2: the GitHub webhook RECEIVERS carry no session/bearer — an inbound webhook
+// authenticates by its mandatory HMAC signature (M1; `routes/githubWebhooks/*`),
+// not the session. They are mounted at root (`/github/webhooks/ci`,
+// `/github/webhooks/issues/:sourceId`), so an EXACT-match public-path set cannot
+// cover the parameterized issues path; we exempt the whole receiver PREFIX so the
+// HMAC verifier — not a session 401 — is the gate. ONLY this prefix is exempted;
+// every other route still requires a session/bearer. The receivers themselves
+// reject any request lacking a valid signature 401, so this is not an open door.
+const PUBLIC_PATH_PREFIXES = ["/github/webhooks/"] as const;
+
+function isPublicPath(publicPaths: ReadonlySet<string>, path: string): boolean {
+  if (publicPaths.has(path)) return true;
+  return PUBLIC_PATH_PREFIXES.some((prefix) => path.startsWith(prefix));
+}
+
 const STATE_CHANGING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
 export interface AuthMiddlewareOptions {
@@ -51,7 +66,7 @@ export interface ActorContextEnv {
 export function createAuthMiddleware(options: AuthMiddlewareOptions): MiddlewareHandler<ActorContextEnv> {
   const publicPaths = options.publicPaths ?? PUBLIC_PATHS;
   return async (c, next) => {
-    if (publicPaths.has(c.req.path)) {
+    if (isPublicPath(publicPaths, c.req.path)) {
       return next();
     }
 

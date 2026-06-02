@@ -149,6 +149,12 @@ export class RoutesPool {
       return { rows: [{ id: org.id }], rowCount: 1 };
     }
 
+    // org_members (the GitHub-App install/callback org-admin authorization read).
+    if (trimmed.startsWith("SELECT role FROM org_members WHERE org_id = $1 AND user_id = $2")) {
+      const row = this.orgMembers.get(`${String(params[0])}:${String(params[1])}`);
+      return single(row === undefined ? undefined : { role: row.role });
+    }
+
     // projects
     if (trimmed.startsWith("SELECT project_id, name, repo_url, default_branch, runner_image, allocator, config")) {
       if (sql.includes("WHERE org_id = $1")) {

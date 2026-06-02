@@ -50,6 +50,14 @@ function middlewareHarness(opts?: Partial<Parameters<typeof createAuthMiddleware
   app.get("/runs/:runId", (c) => c.json({ actor: c.var.actor, requestOrgId: getRequestOrgId(c) }));
   app.post("/runs/:runId", (c) => c.json({ actor: c.var.actor }));
   app.get("/healthz", (c) => c.json({ ok: true }));
+  // M2: stand-ins for the webhook RECEIVERS mounted at root. They authenticate
+  // by HMAC inside the handler (here a fixed marker), so the auth middleware must
+  // let an UNAUTHENTICATED request through to them via the prefix exemption — a
+  // session 401 would make the HMAC gate dead code in prod.
+  app.post("/github/webhooks/ci", (c) => c.json({ reached: "ci-receiver" }, 200));
+  app.post("/github/webhooks/issues/:sourceId", (c) =>
+    c.json({ reached: "issues-receiver", id: c.req.param("sourceId") }, 200),
+  );
   return { app, pool, store };
 }
 
@@ -82,6 +90,28 @@ describe("auth middleware deny/allow + actor-context guards", () => {
     const res = await app.request("/healthz");
     expect(res.status).toBe(200);
     expect((await res.json()).ok).toBe(true);
+  });
+
+  it("M2: an UNAUTHENTICATED webhook request reaches the receiver (HMAC is the gate, not a session 401)", async () => {
+    const { app } = harness();
+    // No session/bearer: the CI receiver path must NOT be session-401'd — it must
+    // reach the handler so its mandatory HMAC verification (M1) is the gate.
+    const ci = await app.request("/github/webhooks/ci", { method: "POST", body: "{}" });
+    expect(ci.status).toBe(200);
+    expect((await ci.json()).reached).toBe("ci-receiver");
+    // The PARAMETERIZED issues path is exempt by prefix too (an exact-match set
+    // could never cover `:sourceId`).
+    const issues = await app.request("/github/webhooks/issues/src_42", { method: "POST", body: "{}" });
+    expect(issues.status).toBe(200);
+    expect((await issues.json()).reached).toBe("issues-receiver");
+  });
+
+  it("M2: the webhook exemption is a PREFIX, not a blanket bypass — other roots still require auth", async () => {
+    const { app } = harness();
+    // A path that merely shares an early segment but is not a webhook receiver
+    // must still 401 (the exemption is scoped to `/github/webhooks/`).
+    const res = await app.request("/github", { method: "POST", body: "{}" });
+    expect(res.status).toBe(401);
   });
 
   it("rejects an unknown bearer token with 401 'invalid api token'", async () => {

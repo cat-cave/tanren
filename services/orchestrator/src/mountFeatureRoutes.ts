@@ -129,7 +129,10 @@ export function mountFeatureRoutes(app: Hono<ActorContextEnv>, deps: FeatureRout
     reconAnswererFactory: forgeAnswerers.recon,
   });
   // P3-0003: GitHub App install flow; mounts only when configured via env.
-  mountGithubAppInstallFromEnv(app, { pool, secrets, minter: githubAppMinter });
+  // SECURITY (H1): the install/callback handlers write the org's
+  // `config.github_app` and self-authorize the request actor against the TARGET
+  // org (org-admin), so they run on the org-scoping pool — never the raw pool.
+  mountGithubAppInstallFromEnv(app, { pool: scopedPool, secrets, minter: githubAppMinter });
   app.route("/orgs", createForgeRoutes({ pool: scopedPool, secrets, githubHttp }));
   // P3-0010: thick-Forge LLM conversation endpoint (⌘K chat morph); the answerer
   // is the real provider conversation answerer, resolved per-request.

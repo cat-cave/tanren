@@ -23,9 +23,23 @@ const alice: ActorContext = {
   source: "session",
 };
 
-async function buildHarness() {
+// A non-admin/non-member actor used to prove the H1 org-admin authorization
+// gate: install/callback must 403 unless the actor is an admin of the TARGET org.
+const mallory: ActorContext = {
+  userId: "user_mallory",
+  orgId: "org_other",
+  projectId: null,
+  scopes: ["org:admin"],
+  source: "session",
+};
+
+async function buildHarness(actor: ActorContext = alice) {
   const pool = new RoutesPool();
   pool.seedOrg({ id: "org_acme", login: "acme", config: { version: 1 } });
+  // H1: alice is an ADMIN of org_acme (the target org). The install/callback
+  // org-admin check reads `org_members` directly, so the membership must exist
+  // for the happy path. `mallory` gets NO membership in org_acme → 403.
+  pool.seedMembership("org_acme", "user_alice", "admin");
   const secrets = new InMemorySecretStore();
   await storeGithubAppCredential(secrets, {
     ref: "credential/github_app/org/org_acme/default",
@@ -49,10 +63,10 @@ async function buildHarness() {
     createAuthMiddleware({
       store: {
         async resolveActorContext() {
-          return alice;
+          return actor;
         },
       } as never,
-      localDevActor: alice,
+      localDevActor: actor,
     }),
   );
   app.route(
@@ -112,5 +126,38 @@ describe("github app install flow", () => {
       headers: { Cookie: "tanren_github_app_state=different" },
     });
     expect(callback.status).toBe(400);
+  });
+
+  // H1 (cross-tenant security hole): the install/callback routes must re-authorize
+  // the TARGET org against the actor (org-admin), not trust the request-supplied
+  // org. A non-member actor is a LOUD 403 — never a silent write.
+  it("H1: rejects /install for an actor who is not an admin of the target org (403)", async () => {
+    const { app } = await buildHarness(mallory);
+    const response = await app.request("/auth/github-app/install?orgId=org_acme", { redirect: "manual" });
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ error: "org_access_denied" });
+    // No state cookie is issued to an unauthorized actor.
+    expect(response.headers.get("set-cookie")).toBeNull();
+  });
+
+  it("H1: rejects /callback for a non-member actor and does NOT write the org config (403)", async () => {
+    // Mint a valid (nonce.org) state by issuing it as an ADMIN, then replay the
+    // callback as the non-member `mallory`. The org-admin re-authorization on the
+    // callback must still refuse — a valid state cookie is NOT authorization.
+    const admin = await buildHarness(alice);
+    const start = await admin.app.request("/auth/github-app/install?orgId=org_acme", { redirect: "manual" });
+    const setCookie = start.headers.get("set-cookie") ?? "";
+    const stateValue = decodeURIComponent(setCookie.split(";")[0]!.split("=")[1]!);
+
+    const { app, pool } = await buildHarness(mallory);
+    const callback = await app.request(
+      `/auth/github-app/callback?installation_id=42&state=${encodeURIComponent(stateValue)}`,
+      { headers: { Cookie: `tanren_github_app_state=${encodeURIComponent(stateValue)}` } },
+    );
+    expect(callback.status).toBe(403);
+    expect(await callback.json()).toMatchObject({ error: "org_access_denied" });
+    // The org's config was never touched (no github_app block written).
+    const config = migrateOrgConfig(pool.orgs.get("org_acme")!.config);
+    expect(config.github_app).toBeUndefined();
   });
 });
