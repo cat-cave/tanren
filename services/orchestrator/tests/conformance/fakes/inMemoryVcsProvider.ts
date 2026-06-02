@@ -6,7 +6,11 @@
 // conflicted PR (CONFORMANCE_CONFLICT_PR_NUMBER).
 import {
   CONFORMANCE_ABSENT_FILE,
+  CONFORMANCE_BASE_BRANCH,
+  CONFORMANCE_BEHIND_PR_NUMBER,
   CONFORMANCE_CONFLICT_PR_NUMBER,
+  CONFORMANCE_DIRTY_PR_NUMBER,
+  CONFORMANCE_HEAD_BRANCH,
   CONFORMANCE_PRESENT_FILE,
   CONFORMANCE_PRESENT_FILE_BODY,
 } from "../vcsProviderConformance.js";
@@ -20,10 +24,12 @@ import type { PullRequestContributors } from "../../../src/engine/workflow/revie
 import type {
   OpenDraftPullRequestInput,
   OpenedPullRequest,
+  PullRequestMergeability,
   PullRequestRef,
   PushBranchInput,
   RepoRef,
   ResolvedVcsToken,
+  UpdateBranchResult,
   VcsCredentialContext,
   VcsProvider,
 } from "../../../src/engine/contracts/vcsProvider.js";
@@ -98,5 +104,20 @@ export class InMemoryVcsProvider implements VcsProvider {
     if (input.path === CONFORMANCE_PRESENT_FILE) return CONFORMANCE_PRESENT_FILE_BODY;
     if (input.path === CONFORMANCE_ABSENT_FILE) return undefined;
     return undefined;
+  }
+  async readMergeability(pr: PullRequestRef, _token: ResolvedVcsToken): Promise<PullRequestMergeability> {
+    const refs = { baseBranch: CONFORMANCE_BASE_BRANCH, headBranch: CONFORMANCE_HEAD_BRANCH };
+    if (pr.number === CONFORMANCE_BEHIND_PR_NUMBER) return { state: "behind", behind: true, ...refs };
+    if (pr.number === CONFORMANCE_DIRTY_PR_NUMBER || pr.number === CONFORMANCE_CONFLICT_PR_NUMBER) {
+      return { state: "dirty", behind: false, ...refs };
+    }
+    return { state: "clean", behind: false, ...refs };
+  }
+  async updateBranch(pr: PullRequestRef, _token: ResolvedVcsToken): Promise<UpdateBranchResult> {
+    if (pr.number === CONFORMANCE_BEHIND_PR_NUMBER) return { outcome: "updated", message: "updated onto base" };
+    if (pr.number === CONFORMANCE_DIRTY_PR_NUMBER || pr.number === CONFORMANCE_CONFLICT_PR_NUMBER) {
+      return { outcome: "conflict", message: "merge conflict" };
+    }
+    return { outcome: "up_to_date", message: "already up to date" };
   }
 }

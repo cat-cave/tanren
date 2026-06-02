@@ -16,6 +16,7 @@ import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { SshSubstrate } from "../contracts/sshSubstrate.js";
 import type { VcsProvider } from "../contracts/vcsProvider.js";
+import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import { JobReaper } from "./jobReaper.js";
 import { RunWorker, type RunWorkerOptions } from "./runWorker.js";
 
@@ -30,6 +31,10 @@ export interface StartRunWorkerInput {
   ssh: SshSubstrate;
   secrets: SecretStore;
   vcsProvider: VcsProvider;
+  // P2a (Part 2): shared App installation-token minter (cache lives here),
+  // threaded to the workflow so the App-first clone reuses it. Optional — the
+  // provider mints a per-call minter when absent.
+  githubAppMinter?: GithubAppTokenMinter;
   identitySecretRef: string;
   // Concurrency is a GOVERNED CONFIG KNOB, never an env var (autonomy-engine.md
   // §1.4): the max in-flight run slots this worker maintains. Sourced from the
@@ -84,6 +89,7 @@ export function startRunWorker(input: StartRunWorkerInput): StartedRunWorker {
       ssh: input.ssh,
       secrets: input.secrets,
       vcsProvider: input.vcsProvider,
+      ...(input.githubAppMinter === undefined ? {} : { githubAppMinter: input.githubAppMinter }),
       identitySecretRef: input.identitySecretRef,
       ...(input.claimClient === undefined ? {} : { claimClient: input.claimClient }),
       ...(input.runStateWriter === undefined ? {} : { runStateWriter: input.runStateWriter }),

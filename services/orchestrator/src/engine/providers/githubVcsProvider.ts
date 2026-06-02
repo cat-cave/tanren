@@ -22,10 +22,12 @@ import { decodeBase64Content } from "../contracts/vcsProvider.js";
 import type {
   OpenDraftPullRequestInput,
   OpenedPullRequest,
+  PullRequestMergeability,
   PullRequestRef,
   PushBranchInput,
   RepoRef,
   ResolvedVcsToken,
+  UpdateBranchResult,
   VcsCredentialContext,
   VcsProvider,
 } from "../contracts/vcsProvider.js";
@@ -47,6 +49,30 @@ import {
 
 function repoApiPath(repo: RepoRef, suffix: string): string {
   return `/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}${suffix}`;
+}
+
+/**
+ * Map GitHub's `mergeable_state` string onto the provider-neutral mergeability
+ * state the merge stage gates on. `behind` → rebase; `dirty` → conflict
+ * resolver; `clean`/`unstable`/`has_hooks` → mergeable (proceed). `blocked` is a
+ * gating issue OTHER than freshness (failing required checks / pending review),
+ * NOT a stale-branch problem. `unknown`/`draft` → unknown (do not assume current).
+ */
+function mapMergeableState(state: string): PullRequestMergeability["state"] {
+  switch (state) {
+    case "behind":
+      return "behind";
+    case "dirty":
+      return "dirty";
+    case "clean":
+    case "unstable":
+    case "has_hooks":
+      return "clean";
+    case "blocked":
+      return "blocked";
+    default:
+      return "unknown";
+  }
 }
 
 function encodeRepoFilePath(path: string): string {
@@ -206,6 +232,31 @@ export class GitHubVcsProvider implements VcsProvider {
       token: token.token,
       refreshToken: token.refresh,
     });
+  }
+
+  async readMergeability(pr: PullRequestRef, token: ResolvedVcsToken): Promise<PullRequestMergeability> {
+    const result = await this.reviewMerge.fetchMergeability({
+      repo: pr.repo,
+      pullNumber: pr.number,
+      token: token.token,
+      refreshToken: token.refresh,
+    });
+    return {
+      state: mapMergeableState(result.mergeableState),
+      behind: result.behind,
+      baseBranch: result.baseBranch,
+      headBranch: result.headBranch,
+    };
+  }
+
+  async updateBranch(pr: PullRequestRef, token: ResolvedVcsToken): Promise<UpdateBranchResult> {
+    const result = await this.reviewMerge.updateBranch({
+      repo: pr.repo,
+      pullNumber: pr.number,
+      token: token.token,
+      refreshToken: token.refresh,
+    });
+    return { outcome: result.outcome, message: result.message };
   }
 
   async readFileOnBranch(input: {

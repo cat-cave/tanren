@@ -8,8 +8,12 @@ import type { SshTarget } from "../src/engine/contracts/allocator.js";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import type { SshCommand, SshCommandResult, SshSubstrate } from "../src/engine/contracts/sshSubstrate.js";
 import { storeGithubToken } from "../src/engine/credentials/githubToken.js";
+import type { OrgGithubAppInstallation } from "../src/engine/config/orgConfig.js";
+import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "../src/engine/providers/github.js";
 import { prepareRunWorkspace } from "../src/engine/workflow/plannerRunWorkspace.js";
 import type { PlannerRunContext, RunPlannerLoopInput } from "../src/engine/workflow/plannerRun.js";
+import { vcsProviderOver } from "./helpers/vcsProvider.js";
+import type { VcsCredentialContext } from "../src/engine/contracts/vcsProvider.js";
 
 const target: SshTarget = {
   host: "runner",
@@ -33,6 +37,52 @@ class RecordingSsh implements SshSubstrate {
 
 const CLONE_HEAD = "a".repeat(40);
 const TOKEN = "ghp_secretClONEToken";
+const APP_TOKEN = "ghs_appInstallationToken";
+
+// A GitHub HTTP client that must never be touched on the clone-auth path — the
+// clone resolves its token via the VcsProvider seam, and the static path reads
+// the secret store, so no HTTP is issued for these unit cases.
+function unusedHttp(): GitHubHttpClient {
+  return {
+    request: async (_req: GitHubHttpRequest): Promise<GitHubHttpResponse> => {
+      throw new Error("clone-auth must not issue GitHub HTTP");
+    },
+  };
+}
+
+const installation: OrgGithubAppInstallation = {
+  appId: "12345",
+  installationId: "67890",
+  credentialRef: "credential/github_app/test",
+  installedAt: "2026-01-01T00:00:00Z",
+};
+
+/**
+ * A VcsProvider that delegates everything to the REAL GitHubVcsProvider but
+ * RECORDS the credential context each `resolveToken` receives and, when an App
+ * installation is present, short-circuits to a fixed installation token (so the
+ * App-first path is observable without standing up a real App-token minter).
+ * This proves the clone routes through the seam App-first.
+ */
+function recordingProvider(): { provider: ReturnType<typeof vcsProviderOver>; calls: VcsCredentialContext[] } {
+  const real = vcsProviderOver(unusedHttp());
+  const calls: VcsCredentialContext[] = [];
+  const provider = new Proxy(real, {
+    get(inner, prop, receiver) {
+      if (prop === "resolveToken") {
+        return async (creds: VcsCredentialContext) => {
+          calls.push(creds);
+          if (creds.installation !== undefined) {
+            return { token: APP_TOKEN, source: "github_app" as const, refresh: async () => APP_TOKEN };
+          }
+          return inner.resolveToken(creds);
+        };
+      }
+      return Reflect.get(inner, prop, receiver);
+    },
+  });
+  return { provider, calls };
+}
 
 function makeContext(overrides: Partial<PlannerRunContext> = {}): PlannerRunContext {
   return {
@@ -58,11 +108,16 @@ function makeContext(overrides: Partial<PlannerRunContext> = {}): PlannerRunCont
 function makeInput(
   ssh: SshSubstrate,
   context: PlannerRunContext,
-  opts: { githubToken?: string; secrets?: FakeSecretStore } = {},
+  opts: {
+    githubToken?: string;
+    secrets?: FakeSecretStore;
+    vcsProvider?: ReturnType<typeof vcsProviderOver>;
+  } = {},
 ): RunPlannerLoopInput {
   return {
     ssh,
     secrets: opts.secrets ?? new FakeSecretStore(),
+    vcsProvider: opts.vcsProvider ?? vcsProviderOver(unusedHttp()),
     context,
     timeoutMs: 500,
     bootstrapCommand: "true",
@@ -141,5 +196,43 @@ describe("prepareRunWorkspace clone authentication", () => {
     expect(clone?.stdin).toBe(TOKEN);
     expect(clone?.command).toContain("GIT_ASKPASS");
     expect(clone?.command).not.toContain(TOKEN);
+  });
+
+  it("P2a Part 2: clone resolves APP-FIRST through the VcsProvider seam when an App is installed", async () => {
+    const ssh = new RecordingSsh();
+    const { provider, calls } = recordingProvider();
+    // Both an App installation AND a static ref are present: App-first wins.
+    await prepareRunWorkspace(
+      makeInput(ssh, makeContext({ installation }), { vcsProvider: provider }),
+      target,
+      "/workspace/runs/run_clone/repo",
+    );
+
+    // The clone resolved through the seam carrying the installation (App-first),
+    // and used the minted installation token over stdin — not the static ref.
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.installation).toEqual(installation);
+    const clone = ssh.commands[0]?.command;
+    expect(clone?.stdin).toBe(APP_TOKEN);
+    expect(clone?.command).toContain("GIT_ASKPASS");
+    expect(clone?.command).not.toContain(APP_TOKEN);
+  });
+
+  it("P2a Part 2: clone routes through the seam (no installation) carrying the static ref only", async () => {
+    const ssh = new RecordingSsh();
+    const secrets = new FakeSecretStore();
+    await storeGithubToken(secrets, { ref: "credential/github/dev", token: TOKEN });
+    const { provider, calls } = recordingProvider();
+
+    await prepareRunWorkspace(
+      makeInput(ssh, makeContext(), { secrets, vcsProvider: provider }),
+      target,
+      "/workspace/runs/run_clone/repo",
+    );
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.installation).toBeUndefined();
+    expect(calls[0]?.staticRef).toBe("credential/github/dev");
+    expect(ssh.commands[0]?.command.stdin).toBe(TOKEN);
   });
 });

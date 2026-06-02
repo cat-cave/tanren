@@ -209,11 +209,28 @@ export function pendingReview() {
   };
 }
 
+// P2a: the merge stage now reads branch freshness before merging. These tail
+// fixtures exercise the merge OUTCOME mapping, so they report the branch CLEAN +
+// up to date — the up-to-date enforcement is a no-op and the merge() outcome
+// drives the result, exactly as before P2a.
+function cleanFreshness() {
+  return {
+    readMergeability: async () => ({
+      state: "clean" as const,
+      behind: false,
+      baseBranch: "main",
+      headBranch: "tanren/run_1",
+    }),
+    updateBranch: async () => ({ outcome: "up_to_date" as const, message: "up to date" }),
+  };
+}
+
 // Direct-merge probe whose merge() reports a GitHub-detected conflict (405/409).
 export function conflictMerge() {
   return {
     applyQueueLabel: async () => {},
     merge: async () => ({ merged: false, conflict: true, status: 409, message: "merge conflict" }),
+    ...cleanFreshness(),
   };
 }
 
@@ -222,6 +239,7 @@ export function failedMerge() {
   return {
     applyQueueLabel: async () => {},
     merge: async () => ({ merged: false, conflict: false, status: 500, message: "merge api error" }),
+    ...cleanFreshness(),
   };
 }
 
@@ -230,6 +248,7 @@ export function mergedMerge() {
   return {
     applyQueueLabel: async () => {},
     merge: async () => ({ merged: true, mergeSha: "merge-sha", conflict: false, status: 200, message: "merged" }),
+    ...cleanFreshness(),
   };
 }
 
@@ -257,6 +276,7 @@ export function noopMerge() {
       status: 200,
       message: "merged",
     }),
+    ...cleanFreshness(),
   };
 }
 

@@ -106,6 +106,31 @@ describe("loadRunExecutionContext", () => {
     expect(orgId).toBe("org_42");
   });
 
+  it("P2a Part 2: threads the org App installation onto the context (for App-first clone)", async () => {
+    const orgConfig = {
+      version: 1,
+      github_app: {
+        appId: "12345",
+        installationId: "67890",
+        credentialRef: "credential/github_app/test",
+        installedAt: "2026-01-01T00:00:00Z",
+      },
+    };
+    const { context } = await loadRunExecutionContext(rowPool(fullRow({ org_id: "org_42", org_config: orgConfig })), {
+      runId: "run_1",
+      identitySecretRef: "id",
+    });
+    expect(context.installation).toEqual(orgConfig.github_app);
+  });
+
+  it("P2a Part 2: leaves installation undefined when the org has no App installed", async () => {
+    const { context } = await loadRunExecutionContext(
+      rowPool(fullRow({ org_id: "org_42", org_config: { version: 1 } })),
+      { runId: "run_1", identitySecretRef: "id" },
+    );
+    expect(context.installation).toBeUndefined();
+  });
+
   it("throws RunExecutionContextNotFoundError (with the run id) when no row is found", async () => {
     await expect(loadRunExecutionContext(rowPool(), { runId: "run_missing", identitySecretRef: "id" })).rejects.toThrow(
       RunExecutionContextNotFoundError,

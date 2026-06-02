@@ -234,6 +234,23 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["headBranch", "public"],
     ["message", "public"],
   ]),
+  // P2a up-to-date enforcement — PR identifiers + refs + freshness signal, public.
+  ...rulesFor("merge.behind", [
+    ["prUrl", "public"],
+    ["prNumber", "public"],
+    ["integration", "public"],
+    ["baseBranch", "public"],
+    ["headBranch", "public"],
+    ["mergeableState", "public"],
+  ]),
+  ...rulesFor("merge.rebased", [
+    ["prUrl", "public"],
+    ["prNumber", "public"],
+    ["integration", "public"],
+    ["baseBranch", "public"],
+    ["headBranch", "public"],
+    ["reGatedCi", "public"],
+  ]),
   // P3-0023 governance posture block — PR identifiers + posture + external
   // contributor logins (public GitHub handles) + prose, all public.
   ...rulesFor("merge.blocked", [

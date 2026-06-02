@@ -29,6 +29,7 @@ import type { SshSubstrate } from "../contracts/sshSubstrate.js";
 import type { EscapeHatches } from "../config/index.js";
 import { CostRecorder } from "../costs/recorder.js";
 import type { VcsProvider } from "../contracts/vcsProvider.js";
+import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import { finalizeRunRecoverable } from "./runFinalize.js";
 import { loadRunExecutionContext, type RunExecutionContext } from "./runExecutionContext.js";
 import { runPlannerLoopWorkflow, type PlannerRunResult, type RunPlannerLoopInput } from "../workflow/plannerRun.js";
@@ -80,6 +81,10 @@ export interface RunExecutorDeps {
   ssh: SshSubstrate;
   secrets: SecretStore;
   vcsProvider: VcsProvider;
+  // P2a (Part 2): shared App installation-token minter, threaded into the
+  // workflow so the App-first CLONE token reuses the same minted/cached token as
+  // the CI-poll / merge stages. Optional — the provider mints per-call when absent.
+  githubAppMinter?: GithubAppTokenMinter;
   identitySecretRef: string;
   escapeHatches?: Pick<
     EscapeHatches,
@@ -224,6 +229,8 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
         ssh: deps.ssh,
         secrets: deps.secrets,
         vcsProvider: deps.vcsProvider,
+        // P2a (Part 2): the App-first clone reuses the shared minter when present.
+        ...(deps.githubAppMinter === undefined ? {} : { githubAppMinter: deps.githubAppMinter }),
         context,
         escapeHatches: deps.escapeHatches ?? DEFAULT_ESCAPE_HATCHES,
         timeoutMs: deps.timeoutMs ?? DEFAULT_TIMEOUT_MS,

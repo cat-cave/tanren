@@ -17,6 +17,7 @@
 import type pg from "pg";
 import type { CiWhen } from "../ci/index.js";
 import type { EscapeHatches, RoutingTable } from "../config/shared.js";
+import type { OrgGithubAppInstallation } from "../config/orgConfig.js";
 import type { Allocator, SshTarget } from "../contracts/allocator.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SecretStore } from "../contracts/secretStore.js";
@@ -27,11 +28,13 @@ import { type EventName, type EventPayload } from "../events/index.js";
 import { type EventStore, PgEventStore } from "../eventStore.js";
 import type { ReviewAnswer } from "../answerers/schemas/index.js";
 import type { VcsProvider } from "../contracts/vcsProvider.js";
+import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import type { AnswererAdapter } from "../providers/types.js";
 import type { UsageProbe } from "../usage/index.js";
 import { workspaceRepoPathForRun } from "../workspace/index.js";
 import { prepareCleanPrBranch } from "../workspace/githubPush.js";
-import { pollCiForRun, type PollCiForRunResult } from "./ciPolling.js";
+import type { PollCiForRunResult } from "./ciPolling.js";
+import { buildReGateCi, pollCiUntilTerminal } from "./plannerRunCi.js";
 import type { GateOutcome } from "./gate/index.js";
 import {
   buildDefaultGate,
@@ -87,6 +90,14 @@ export interface PlannerRunContext {
   runnerImage: string;
   identitySecretRef: string;
   githubCredentialRef: string;
+  /**
+   * P2a (Part 2): the org's GitHub App installation, when the org installed the
+   * App. The workspace CLONE resolves its token App-first through the
+   * VcsProvider seam (exactly like the CI-poll / merge stages), so a private
+   * clone uses the auto-rotating installation token when an App is present and
+   * only falls back to the static `githubCredentialRef` when it is not.
+   */
+  installation?: OrgGithubAppInstallation;
   // Required to build the default (real Codex) adapters + usage probe. Tests
   // that inject buildAdapters/buildUsageProbe may omit it.
   codexCredentialRef?: string;
@@ -134,6 +145,14 @@ export interface RunPlannerLoopInput {
   ssh: SshSubstrate;
   secrets: SecretStore;
   vcsProvider: VcsProvider;
+  /**
+   * P2a (Part 2): the shared GitHub App installation-token minter (its cache
+   * lives here). Threaded into the App-first clone-token resolution so a private
+   * clone reuses the same minted/cached installation token as the run's other
+   * stages instead of minting a throwaway. Omitted (the default) → the provider
+   * mints a per-call minter when an App is installed.
+   */
+  githubAppMinter?: GithubAppTokenMinter;
   context: PlannerRunContext;
   escapeHatches: Pick<
     EscapeHatches,
@@ -418,6 +437,10 @@ export async function runPlannerLoopWorkflow(input: RunPlannerLoopInput): Promis
       resolvedGithubCredentialRef: context.githubCredentialRef,
       mergeProbe: input.mergeProbe,
       resolveConflict: input.resolveConflict,
+      // P2a: after an auto-rebase advances the branch, re-poll CI to a terminal
+      // verdict (the prior green is stale) before merging — through the SAME CI
+      // path the run already uses.
+      reGateCi: buildReGateCi(input),
     });
 
     // Finalize the run for the merge stage's outcome (conflict → recoverable
@@ -454,37 +477,4 @@ async function supersedeQueuedPlannerTask(input: RunPlannerLoopInput, runId: str
     await input.runStateWriter.supersedeQueuedPlannerTask({ runId });
   }
   await input.pool.query("UPDATE job_queue SET status = 'cancelled' WHERE run_id = $1 AND status = 'queued'", [runId]);
-}
-
-async function pollCiUntilTerminal(input: RunPlannerLoopInput): Promise<PollCiForRunResult> {
-  const maxPolls = input.maxCiPolls ?? 12;
-  const delayMs = input.ciPollDelayMs ?? 10_000;
-  const sleep =
-    input.sleep ??
-    ((ms) =>
-      new Promise<void>((resolve) => {
-        setTimeout(resolve, ms);
-      }));
-  let last: PollCiForRunResult | undefined;
-  for (let attempt = 0; attempt < maxPolls; attempt += 1) {
-    last = await pollCiForRun({
-      pool: input.pool,
-      eventStore: input.eventStore,
-      ...writerSeam(input),
-      secrets: input.secrets,
-      vcsProvider: input.vcsProvider,
-      runId: input.context.runId,
-      githubCredentialRef: input.context.githubCredentialRef,
-    });
-    if (last.status === "passed") {
-      return last;
-    }
-    if (last.status === "failed") {
-      throw new Error(`planner-loop CI failed: ${last.reason}`);
-    }
-    if (attempt < maxPolls - 1) {
-      await sleep(delayMs);
-    }
-  }
-  throw new Error(`planner-loop CI did not finish after ${maxPolls} polls: ${last?.reason ?? "not_polled"}`);
 }

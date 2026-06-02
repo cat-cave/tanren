@@ -13,15 +13,21 @@
 // `merge.conflict` + a typed recoverable outcome — the hook the future
 // conflict-resolver attaches to. Required checks are never bypassed: a
 // branch-protected PR returns 405 and is reported as not-merged, not forced.
+//
+// P2a up-to-date enforcement: BEFORE the direct merge, the stage reads the PR
+// branch's mergeability (`readMergeability`). A `behind` branch is auto-rebased
+// via the server-side update-branch API (`updateBranch`) and its CI is re-polled
+// to green (`reGateCi`) before merging — emitting `merge.behind` + `merge.rebased`
+// for visibility. A `dirty` branch (or a 422 from update-branch) is routed to the
+// conflict-resolver hook + the recoverable `merge.conflict` outcome, NOT merged.
+// So a stale/conflicting branch is DETECTED and routed, not discovered as a raw
+// 405/409 at merge time.
 
 import type { MergeIntegration } from "../../config/shared.js";
 import type { RunStateWriter } from "../../contracts/runStateWriter.js";
-import type { SecretStore } from "../../contracts/secretStore.js";
-import { ensureSystemTask, routeTaskUpdate } from "../taskWriteRouting.js";
-import { type EventStore, PgEventStore } from "../../eventStore.js";
-import type { GithubAppTokenMinter } from "../../providers/githubAppTokenMinter.js";
-import type { MergePullRequestResult } from "../../providers/githubReviewMerge.js";
-import type { PullRequestRef, RepoRef, VcsProvider } from "../../contracts/vcsProvider.js";
+import { ensureSystemTask } from "../taskWriteRouting.js";
+import { PgEventStore } from "../../eventStore.js";
+import type { PullRequestRef, RepoRef } from "../../contracts/vcsProvider.js";
 import {
   contextOptionsFor,
   loadReviewMergeRunContext,
@@ -36,83 +42,32 @@ import {
   type PostureDecision,
   type PullRequestContributors,
 } from "./governancePosture.js";
+import { MergeDispatcher } from "./mergeDispatcher.js";
+import {
+  noopConflictResolver,
+  type ConflictContext,
+  type ConflictResolverHook,
+  type DispatchedIntegration,
+  type MergeForRunInput,
+  type MergeForRunResult,
+  type MergeOutcomeKind,
+  type MergeProbe,
+  type ReGateCiHook,
+} from "./mergeDispatchTypes.js";
 
-/** The integration modes the merge stage actually dispatches to. */
-export type DispatchedIntegration = "mergify_queue" | "direct_merge" | "external_reviewer";
-
-/**
- * The outcome of the merge stage. `conflict` is the recoverable branch;
- * `blocked` is the P3-0023 governance-posture outcome — a strict-posture
- * external change held for operator approval, or an audit_only observed change.
- */
-export type MergeOutcomeKind = "merged" | "queued" | "handed_off" | "conflict" | "failed" | "blocked";
-
-export interface MergeForRunResult {
-  runId: string;
-  taskId: string;
-  integration: DispatchedIntegration;
-  outcome: MergeOutcomeKind;
-  prUrl: string;
-  prNumber: number;
-  mergeSha?: string;
-  message?: string;
-}
-
-export interface MergeForRunInput {
-  pool: RunStateClient;
-  eventStore?: EventStore;
-  // Plane-split P3c: route the merge task INSERT/UPDATE through the control plane
-  // when wired (remote-writes on); absent, the in-process org-scoped write runs.
-  runStateWriter?: RunStateWriter;
-  secrets: SecretStore;
-  vcsProvider: VcsProvider;
-  runId: string;
-  githubAppMinter?: GithubAppTokenMinter;
-  /** Run-resolved GitHub credential ref; see PollReviewForRunInput. */
-  resolvedGithubCredentialRef?: string;
-  /** Label applied for the mergify_queue path; defaults to `tanren:merge`. */
-  mergifyQueueLabel?: string;
-  /** GitHub merge method for direct_merge; defaults to `squash`. */
-  mergeMethod?: "merge" | "squash" | "rebase";
-  /**
-   * Test seam. When provided, the stage uses this instead of GitHub for the
-   * label/merge operations. Production omits it → the real
-   * GitHubReviewMergeService drives both through the resolved token.
-   */
-  mergeProbe?: MergeProbe;
-  /**
-   * P3-0023 test seam. Resolves the PR's distinct contributor logins for
-   * external-change detection. Production omits it → the dispatcher lists the
-   * PR commits through the VcsProvider and derives the logins.
-   */
-  contributorProbe?: ContributorProbe;
-  /**
-   * P3-0008 conflict-resolver scaffolding. Invoked on a detected merge conflict
-   * BEFORE the recoverable `merge.conflict` outcome is emitted. The default is a
-   * no-op stub; a future resolver replaces it. Returning `resolved: true` lets
-   * the dispatcher retry the merge once.
-   */
-  resolveConflict?: ConflictResolverHook;
-}
-
-/** Injectable merge-operation probe (real GitHub by default; mocked in tests). */
-export interface MergeProbe {
-  applyQueueLabel(label: string): Promise<void>;
-  merge(): Promise<MergePullRequestResult>;
-}
-
-export interface ConflictContext {
-  runId: string;
-  prUrl: string;
-  prNumber: number;
-  baseBranch: string;
-  message: string;
-}
-
-export type ConflictResolverHook = (context: ConflictContext) => Promise<{ resolved: boolean }>;
-
-/** The default conflict-resolver stub: records nothing, resolves nothing. */
-export const noopConflictResolver: ConflictResolverHook = async () => ({ resolved: false });
+// Re-export the merge-stage contracts so the barrel + existing import sites keep
+// pulling them from `mergeDispatch.ts` after the type extraction.
+export {
+  noopConflictResolver,
+  type ConflictContext,
+  type ConflictResolverHook,
+  type DispatchedIntegration,
+  type MergeForRunInput,
+  type MergeForRunResult,
+  type MergeOutcomeKind,
+  type MergeProbe,
+  type ReGateCiHook,
+};
 
 /** Map the configured integration to the mode the stage dispatches to. */
 export function dispatchedIntegrationFor(mode: MergeIntegration): DispatchedIntegration {
@@ -193,221 +148,6 @@ async function evaluatePosture(
   return decidePosture(context.governancePosture, assessExternalChange(contributors, identity));
 }
 
-interface DispatcherDeps {
-  input: MergeForRunInput;
-  context: ReviewMergeRunContext;
-  eventStore: EventStore;
-  taskId: string;
-  integration: DispatchedIntegration;
-  pr: { repo: RepoRef; pullNumber: number };
-  probe: MergeProbe;
-}
-
-class MergeDispatcher {
-  constructor(private readonly deps: DispatcherDeps) {}
-
-  private base() {
-    const { context, taskId } = this.deps;
-    return { runId: context.runId, specId: context.specId, projectId: context.projectId, taskId };
-  }
-
-  private prFields() {
-    const { context, pr } = this.deps;
-    return { prUrl: context.prUrl, prNumber: pr.pullNumber };
-  }
-
-  /**
-   * P3-0023: a governance posture blocked the merge. Emits the typed
-   * `merge.blocked` event with the posture, mode, and external logins, then
-   * leaves the task `running` so the operator-approval / audit recovery surface
-   * can pick it up (the block is recoverable, not a hard failure — analogous to
-   * the conflict branch). No merge call is made.
-   */
-  async blockByPosture(decision: PostureDecision): Promise<MergeForRunResult> {
-    const { eventStore, integration } = this.deps;
-    const mode = decision.kind === "block" ? "operator_approval" : "audit_only";
-    await eventStore.append({
-      ...this.base(),
-      eventType: "merge.blocked",
-      payload: {
-        ...this.prFields(),
-        integration,
-        posture: decision.posture,
-        mode,
-        externalLogins: [...decision.externalLogins],
-        reason: decision.reason,
-      },
-    });
-    await this.finalize("blocked", { taskOutcome: "pending", taskStatus: "running" });
-    return this.result("blocked", { message: decision.reason });
-  }
-
-  /** external_reviewer / not_configured: stop at ready, emit the hand-off. */
-  async handOff(): Promise<MergeForRunResult> {
-    const { eventStore, integration } = this.deps;
-    await eventStore.append({
-      ...this.base(),
-      eventType: "merge.queued",
-      payload: { ...this.prFields(), integration },
-    });
-    await this.finalize("handed_off", { taskOutcome: "ok", taskStatus: "done" });
-    return this.result("handed_off");
-  }
-
-  /** mergify_queue: apply the label, then mark the stage handed-off to Mergify. */
-  async enqueueMergify(): Promise<MergeForRunResult> {
-    const { eventStore, probe, input } = this.deps;
-    const label = input.mergifyQueueLabel ?? "tanren:merge";
-    await probe.applyQueueLabel(label);
-    await eventStore.append({
-      ...this.base(),
-      eventType: "merge.queued",
-      payload: { ...this.prFields(), integration: "mergify_queue", queueLabel: label },
-    });
-    await this.finalize("queued", { taskOutcome: "ok", taskStatus: "done" });
-    return this.result("queued", { message: `enqueued with label ${label}` });
-  }
-
-  /** direct_merge: GitHub merge, with a single conflict-resolver retry. */
-  async directMerge(): Promise<MergeForRunResult> {
-    const { eventStore, probe } = this.deps;
-    await eventStore.append({
-      ...this.base(),
-      eventType: "merge.queued",
-      payload: { ...this.prFields(), integration: "direct_merge" },
-    });
-    let merge = await probe.merge();
-    if (!merge.merged && merge.conflict) {
-      const retried = await this.tryResolveConflict(merge);
-      if (retried !== undefined) {
-        merge = retried;
-      }
-    }
-    if (merge.merged) {
-      await eventStore.append({
-        ...this.base(),
-        eventType: "merge.completed",
-        payload: { ...this.prFields(), integration: "direct_merge", mergeSha: merge.mergeSha },
-      });
-      await this.finalize("merged", { taskOutcome: "ok", taskStatus: "done" });
-      return this.result("merged", { mergeSha: merge.mergeSha });
-    }
-    if (merge.conflict) {
-      return this.emitConflict(merge.message);
-    }
-    await eventStore.append({
-      ...this.base(),
-      eventType: "merge.failed",
-      payload: { ...this.prFields(), integration: "direct_merge", message: merge.message },
-    });
-    await this.finalize("failed", {
-      taskOutcome: "failed",
-      taskStatus: "failed",
-      failureKind: "merge_failed",
-    });
-    return this.result("failed", { message: merge.message });
-  }
-
-  private async tryResolveConflict(merge: MergePullRequestResult): Promise<MergePullRequestResult | undefined> {
-    const { input, context, pr, probe } = this.deps;
-    // arch-allow: pending P2b — noopConflictResolver is the TEMPORARY default until the
-    // intent-preserving conflict resolver lands. When P2b wires the real resolver as the
-    // production default, delete this fallback and the allowlist entry tightens. P8a §8a.
-    const resolver = input.resolveConflict ?? noopConflictResolver;
-    const outcome = await resolver({
-      runId: context.runId,
-      prUrl: context.prUrl,
-      prNumber: pr.pullNumber,
-      baseBranch: context.baseBranch,
-      message: merge.message,
-    });
-    return outcome.resolved ? await probe.merge() : undefined;
-  }
-
-  /** Emit the recoverable conflict outcome (the resolver-scaffolding hook). */
-  private async emitConflict(message: string): Promise<MergeForRunResult> {
-    const { eventStore, context } = this.deps;
-    await eventStore.append({
-      ...this.base(),
-      eventType: "merge.conflict",
-      payload: {
-        ...this.prFields(),
-        integration: "direct_merge",
-        baseBranch: context.baseBranch,
-        message,
-      },
-    });
-    // A conflict is recoverable, not a hard failure: leave the task running so
-    // the P2B-0008 recovery surface can pick it up.
-    await this.finalize("conflict", { taskOutcome: "pending", taskStatus: "running" });
-    return this.result("conflict", { message });
-  }
-
-  private async finalize(
-    _outcome: MergeOutcomeKind,
-    state: {
-      taskOutcome: "ok" | "failed" | "pending";
-      taskStatus: "done" | "failed" | "running";
-      failureKind?: string;
-    },
-  ): Promise<void> {
-    const { input, taskId, eventStore, integration } = this.deps;
-    const writer = input.runStateWriter;
-    if (state.taskStatus === "done") {
-      await routeTaskUpdate(
-        writer,
-        input.pool,
-        { taskId, transition: "done", outcome: "ok" },
-        "UPDATE tasks SET status = 'done', outcome = $2, ended_at = now() WHERE task_id = $1",
-        [taskId, "ok"],
-      );
-      await eventStore.append({
-        ...this.base(),
-        eventType: "task.completed",
-        payload: { taskKind: "merge", status: integration },
-      });
-      return;
-    }
-    if (state.taskStatus === "failed") {
-      const failureKind = state.failureKind ?? "merge_failed";
-      await routeTaskUpdate(
-        writer,
-        input.pool,
-        { taskId, transition: "failed_with_kind", failureKind },
-        "UPDATE tasks SET status = 'failed', outcome = 'failed', failure_kind = $2, ended_at = now() WHERE task_id = $1",
-        [taskId, failureKind],
-      );
-      await eventStore.append({
-        ...this.base(),
-        eventType: "task.failed",
-        payload: { taskKind: "merge", failureKind },
-      });
-      return;
-    }
-    await routeTaskUpdate(
-      writer,
-      input.pool,
-      { taskId, transition: "running_pending" },
-      "UPDATE tasks SET status = 'running', outcome = 'pending', ended_at = NULL WHERE task_id = $1",
-      [taskId],
-    );
-  }
-
-  private result(outcome: MergeOutcomeKind, extra: { mergeSha?: string; message?: string } = {}): MergeForRunResult {
-    const { context, taskId, integration, pr } = this.deps;
-    return {
-      runId: context.runId,
-      taskId,
-      integration,
-      outcome,
-      prUrl: context.prUrl,
-      prNumber: pr.pullNumber,
-      mergeSha: extra.mergeSha,
-      message: extra.message,
-    };
-  }
-}
-
 async function buildGitHubProbe(
   input: MergeForRunInput,
   context: ReviewMergeRunContext,
@@ -425,6 +165,8 @@ async function buildGitHubProbe(
   return {
     applyQueueLabel: (label) => provider.applyQueueLabel(pr, label, resolved),
     merge: () => provider.mergePullRequest(pr, resolved, input.mergeMethod),
+    readMergeability: () => provider.readMergeability(pr, resolved),
+    updateBranch: () => provider.updateBranch(pr, resolved),
   };
 }
 

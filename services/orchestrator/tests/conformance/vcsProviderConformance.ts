@@ -40,6 +40,11 @@ export const CONFORMANCE_PRESENT_FILE = "tanren-ci.yml";
 export const CONFORMANCE_PRESENT_FILE_BODY = "version: 1\n";
 export const CONFORMANCE_ABSENT_FILE = "does/not/exist.yml";
 export const CONFORMANCE_CONFLICT_PR_NUMBER = 9;
+/** P2a: a PR whose branch is behind base (clean update available). */
+export const CONFORMANCE_BEHIND_PR_NUMBER = 11;
+/** P2a: a PR whose branch conflicts with base (update-branch reports a conflict). */
+export const CONFORMANCE_DIRTY_PR_NUMBER = 13;
+export const CONFORMANCE_HEAD_BRANCH = "tanren/run_conf";
 
 const REPO = { owner: "cat-cave", name: "tanren-conformance" };
 
@@ -162,6 +167,49 @@ export function describeVcsProviderConformance(label: string, harness: VcsProvid
         token,
       });
       expect(content).toBeUndefined();
+    });
+
+    // ---- P2a: up-to-date / mergeability + update-branch ------------------
+
+    it("readMergeability of a current PR reports clean (not behind) with the refs", async () => {
+      const provider = harness.make();
+      const token = await resolve(provider);
+      const m = await provider.readMergeability({ repo: REPO, number: 7 }, token);
+      expect(m.state).toBe("clean");
+      expect(m.behind).toBe(false);
+      expect(m.baseBranch).toBe(CONFORMANCE_BASE_BRANCH);
+      expect(m.headBranch).toBe(CONFORMANCE_HEAD_BRANCH);
+    });
+
+    it("readMergeability of a stale PR reports behind", async () => {
+      const provider = harness.make();
+      const token = await resolve(provider);
+      const m = await provider.readMergeability({ repo: REPO, number: CONFORMANCE_BEHIND_PR_NUMBER }, token);
+      expect(m.state).toBe("behind");
+      expect(m.behind).toBe(true);
+    });
+
+    it("readMergeability of a conflicting PR reports dirty (routes to the resolver)", async () => {
+      const provider = harness.make();
+      const token = await resolve(provider);
+      const m = await provider.readMergeability({ repo: REPO, number: CONFORMANCE_DIRTY_PR_NUMBER }, token);
+      expect(m.state).toBe("dirty");
+    });
+
+    it("updateBranch advances a behind PR (updated), idempotent up_to_date on a current PR", async () => {
+      const provider = harness.make();
+      const token = await resolve(provider);
+      const updated = await provider.updateBranch({ repo: REPO, number: CONFORMANCE_BEHIND_PR_NUMBER }, token);
+      expect(updated.outcome).toBe("updated");
+      const current = await provider.updateBranch({ repo: REPO, number: 7 }, token);
+      expect(current.outcome).toBe("up_to_date");
+    });
+
+    it("updateBranch of a conflicting PR reports a recoverable conflict, not a throw", async () => {
+      const provider = harness.make();
+      const token = await resolve(provider);
+      const result = await provider.updateBranch({ repo: REPO, number: CONFORMANCE_DIRTY_PR_NUMBER }, token);
+      expect(result.outcome).toBe("conflict");
     });
   });
 }

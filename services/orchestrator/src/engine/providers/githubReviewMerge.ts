@@ -5,6 +5,13 @@
 // flows through unchanged — no static-token reads live here.
 
 import type { GitHubHttpClient, GitHubRepository } from "./github.js";
+import {
+  parseMergeability,
+  type GitHubMergeabilityResult,
+  type GitHubUpdateBranchResult,
+} from "./githubBranchFreshness.js";
+
+export type { GitHubMergeabilityResult, GitHubUpdateBranchResult };
 
 /** A GitHub PR review state, normalized to the states the run loop reacts to. */
 export type GitHubReviewState = "approved" | "changes_requested" | "commented" | "dismissed" | "pending";
@@ -239,6 +246,61 @@ export class GitHubReviewMergeService {
     const message = parseMessage(response.body) ?? `HTTP ${response.status}`;
     const conflict = response.status === 405 || response.status === 409;
     return { merged: false, conflict, status: response.status, message };
+  }
+
+  /**
+   * P2a: read the PR's up-to-date / mergeability state. GitHub computes
+   * `mergeable_state` asynchronously, so a freshly-opened/updated PR can briefly
+   * report `unknown` (with `mergeable: null`); the caller treats that as "do not
+   * assume current". `behind` is true when GitHub says the head is out of date
+   * with base (`mergeable_state: "behind"`). The base/head refs are surfaced so
+   * the rebase + events can name them without a second read.
+   */
+  async fetchMergeability(
+    input: { repo: GitHubRepository; pullNumber: number } & TokenInput,
+  ): Promise<GitHubMergeabilityResult> {
+    const response = await this.http.request({
+      method: "GET",
+      path: repoPath(input.repo, `/pulls/${input.pullNumber}`),
+      token: input.token,
+      refreshToken: input.refreshToken,
+    });
+    if (response.status !== 200) {
+      throw new Error(`GitHub PR mergeability fetch failed: HTTP ${response.status}`);
+    }
+    return parseMergeability(response.body);
+  }
+
+  /**
+   * P2a: bring the PR branch up to date with its base via GitHub's server-side
+   * update-branch endpoint (`PUT /pulls/{n}/update-branch`). A 202 is an
+   * accepted update (the branch advanced onto base — re-gate then merge); a 422
+   * is GitHub reporting the update cannot be performed because of a real merge
+   * conflict, surfaced as `conflict` (the caller routes to the resolver, NOT a
+   * merge); a 204 means the branch was already current. Required-checks /
+   * protection are never bypassed — this only advances the branch ref.
+   */
+  async updateBranch(
+    input: { repo: GitHubRepository; pullNumber: number } & TokenInput,
+  ): Promise<GitHubUpdateBranchResult> {
+    const response = await this.http.request({
+      method: "PUT",
+      path: repoPath(input.repo, `/pulls/${input.pullNumber}/update-branch`),
+      token: input.token,
+      refreshToken: input.refreshToken,
+    });
+    if (response.status === 202) {
+      return { outcome: "updated", message: parseMessage(response.body) ?? "branch update accepted" };
+    }
+    if (response.status === 204) {
+      return { outcome: "up_to_date", message: "branch already up to date" };
+    }
+    // 422 (and 409) are GitHub reporting the update cannot proceed because of a
+    // real conflict — a recoverable handoff to the resolver, NOT a hard failure.
+    if (response.status === 422 || response.status === 409) {
+      return { outcome: "conflict", message: parseMessage(response.body) ?? `HTTP ${response.status}` };
+    }
+    throw new Error(`GitHub update-branch failed: HTTP ${response.status}: ${parseMessage(response.body) ?? ""}`);
   }
 }
 

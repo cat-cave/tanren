@@ -10,6 +10,7 @@
 import { z } from "zod";
 import type pg from "pg";
 import { migrateProjectConfig, type ProjectConfigV1 } from "../config/index.js";
+import { migrateOrgConfig, type OrgGithubAppInstallation } from "../config/orgConfig.js";
 import type { RoutingTable } from "../config/shared.js";
 import type { ResolvedRunCredentials } from "../credentials/resolveCredentials.js";
 import { resolveCredentialsForRun } from "../credentials/resolveCredentials.js";
@@ -76,10 +77,28 @@ const RunSpecProjectRowSchema = z.object({
   runner_image: z.string(),
   config: z.unknown(),
   org_id: z.string().nullable(),
+  org_config: z.unknown().optional(),
   title: z.string(),
   description: z.string(),
   acceptance_criteria: z.unknown(),
 });
+
+/**
+ * P2a (Part 2): the org's GitHub App installation from `organizations.config`,
+ * or undefined when no App is installed (or the config can't be parsed). Used to
+ * resolve the clone token App-first, mirroring how the CI-poll / merge stage
+ * context loaders derive their installation.
+ */
+function installationFromOrgConfig(orgConfig: unknown): OrgGithubAppInstallation | undefined {
+  if (orgConfig === null || orgConfig === undefined) {
+    return undefined;
+  }
+  try {
+    return migrateOrgConfig(orgConfig).github_app;
+  } catch {
+    return undefined;
+  }
+}
 
 function stringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
@@ -116,12 +135,14 @@ export async function loadRunExecutionContext(
        p.runner_image,
        p.config,
        p.org_id,
+       o.config AS org_config,
        s.title,
        s.description,
        s.acceptance_criteria
      FROM runs r
      JOIN specs s ON s.spec_id = r.spec_id
      JOIN projects p ON p.project_id = r.project_id
+     LEFT JOIN organizations o ON o.id = p.org_id
      WHERE r.run_id = $1`,
     [input.runId],
   );
@@ -157,6 +178,10 @@ export async function loadRunExecutionContext(
     runnerImage: decoded.runner_image,
     identitySecretRef: input.identitySecretRef,
     githubCredentialRef: resolved.githubCredentialRef,
+    // P2a (Part 2): the org App installation, so the clone resolves App-first.
+    ...(installationFromOrgConfig(decoded.org_config) !== undefined && {
+      installation: installationFromOrgConfig(decoded.org_config),
+    }),
     codexCredentialRef: resolved.codexCredentialRef,
     // The run's per-role provider routing: project routing chains over a
     // per-role default-Codex table built from the resolved LLM credential. The

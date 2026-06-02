@@ -11,22 +11,26 @@
 
 import { FetchGitHubHttpClient, type GitHubHttpClient } from "./github.js";
 import { GitHubVcsProvider } from "./githubVcsProvider.js";
+import { GithubAppTokenMinter } from "./githubAppTokenMinter.js";
 
-// Re-exported so a single import site (the worker boot) can pull both the
-// concrete GitHub HTTP client AND the provider builder from one module, keeping
-// that file under the per-file dependency cap. The HTTP client is the transport
-// the provider composes.
-export { FetchGitHubHttpClient };
+// Re-exported so a single import site (the worker boot) can pull the concrete
+// GitHub HTTP client, the provider builder, AND the shared App-token minter from
+// one module, keeping that file under the per-file dependency cap. The HTTP
+// client is the transport the provider composes; the minter caches the App
+// installation token the App-first clone/CI/merge stages reuse.
+export { FetchGitHubHttpClient, GithubAppTokenMinter };
 import type { MergePullRequestResult, ReviewVerdictResult, SubmitReviewEvent } from "./githubReviewMerge.js";
 import type { GitHubPullRequestChecks } from "./github.js";
 import type { PullRequestContributors } from "../workflow/reviewMerge/governancePosture.js";
 import type {
   OpenDraftPullRequestInput,
   OpenedPullRequest,
+  PullRequestMergeability,
   PullRequestRef,
   PushBranchInput,
   RepoRef,
   ResolvedVcsToken,
+  UpdateBranchResult,
   VcsCredentialContext,
   VcsProvider,
 } from "../contracts/vcsProvider.js";
@@ -107,6 +111,12 @@ export class UnconfiguredVcsProvider implements VcsProvider {
     path: string;
     token: ResolvedVcsToken;
   }): Promise<string | undefined> {
+    return this.fail();
+  }
+  async readMergeability(_pr: PullRequestRef, _token: ResolvedVcsToken): Promise<PullRequestMergeability> {
+    return this.fail();
+  }
+  async updateBranch(_pr: PullRequestRef, _token: ResolvedVcsToken): Promise<UpdateBranchResult> {
     return this.fail();
   }
 }

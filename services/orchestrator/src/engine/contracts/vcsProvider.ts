@@ -11,8 +11,9 @@
 // preserved exactly.
 //
 // Phase 2 EXTENDS this contract WITHOUT reshaping it:
-//   - P2a (auto-rebase) adds `updateBranch(...)` to bring a PR branch up to date
-//     with its base before merge.
+//   - P2a (auto-rebase) adds `readMergeability(...)` + `updateBranch(...)` to
+//     read a PR branch's up-to-date state and bring it current with its base
+//     before merge (IMPLEMENTED — additive; the existing signatures are intact).
 //   - P2b (intent-preserving conflict resolution) adds the conflict-resolution
 //     read/write hooks (read both sides, write a resolved tree) the resolver
 //     drives — replacing the `noopConflictResolver` default in mergeDispatch.
@@ -57,6 +58,43 @@ export interface OpenedPullRequest {
   url: string;
   /** True when an already-open PR was reused rather than freshly created. */
   reused: boolean;
+}
+
+/**
+ * P2a: the up-to-date / mergeability state of a PR branch relative to its base,
+ * read in provider-neutral terms. The merge stage uses this BEFORE merging to
+ * decide whether a rebase/update is needed (`behind`), whether the branch is a
+ * genuine conflict the resolver must handle (`dirty`), or whether it is current
+ * and safe to merge (`clean`). It is derived from GitHub's PR `mergeable_state`
+ * + the head/base comparison; a GitLab impl maps it from its own divergence
+ * signal. `baseBranch` / `headBranch` are surfaced so the rebase + events can
+ * name the refs without a second read.
+ */
+export interface PullRequestMergeability {
+  /**
+   * `clean`   — up to date with base + mergeable: proceed to merge.
+   * `behind`  — out of date with base (no conflict): update/rebase then re-gate.
+   * `dirty`   — a real merge conflict with base: route to the conflict resolver.
+   * `blocked` — mergeability is gated by something other than freshness (e.g.
+   *             failing required checks / pending review) — NOT a freshness issue.
+   * `unknown` — GitHub has not computed mergeability yet (transient); the caller
+   *             treats it as "do not assume current" and may re-read.
+   */
+  state: "clean" | "behind" | "dirty" | "blocked" | "unknown";
+  /** True when the branch is strictly behind its base (a subset of `behind`/`dirty`). */
+  behind: boolean;
+  baseBranch: string;
+  headBranch: string;
+}
+
+/** The outcome of attempting to bring a PR branch up to date with its base. */
+export interface UpdateBranchResult {
+  /** `updated` — the branch was advanced onto the latest base (re-gate + merge). */
+  /** `up_to_date` — already current; nothing to do (proceed to merge). */
+  /** `conflict` — a real conflict prevents the update; route to the resolver. */
+  outcome: "updated" | "up_to_date" | "conflict";
+  /** Human-readable detail (the forge message), for events/diagnostics. */
+  message: string;
 }
 
 // ---- Credentials -----------------------------------------------------------
@@ -231,9 +269,26 @@ export interface VcsProvider {
     token: ResolvedVcsToken;
   }): Promise<string | undefined>;
 
-  // Phase 2 (P2a auto-rebase): `updateBranch(pr, token)` — bring the PR branch
-  // up to date with its base before merge (GitHub's update-branch endpoint).
-  //
+  /**
+   * P2a: read the PR branch's up-to-date / mergeability state relative to its
+   * base — the signal the merge stage gates on (behind → update; dirty →
+   * conflict resolver; clean → merge). On GitHub this reads the PR's
+   * `mergeable` / `mergeable_state` fields + the base/head refs.
+   */
+  readMergeability(pr: PullRequestRef, token: ResolvedVcsToken): Promise<PullRequestMergeability>;
+
+  /**
+   * P2a: bring the PR branch up to date with its base (the server-side fast
+   * path: GitHub `PUT /repos/{o}/{r}/pulls/{n}/update-branch`). Returns
+   * `updated` when the branch was advanced (the caller must then re-poll CI to
+   * green before merging), `up_to_date` when nothing was needed, and `conflict`
+   * when GitHub reports the update cannot be performed because of a real merge
+   * conflict (422) — the caller routes that to the conflict-resolution hook
+   * rather than merging broken work. It NEVER merges and NEVER silently
+   * swallows a conflict.
+   */
+  updateBranch(pr: PullRequestRef, token: ResolvedVcsToken): Promise<UpdateBranchResult>;
+
   // Phase 2 (P2b intent-preserving conflict resolution): conflict read/write
   // hooks — read both sides of a conflicted path + write a resolved tree —
   // replacing the `noopConflictResolver` default.

@@ -14,7 +14,7 @@ import { resolveWorkerConcurrency } from "../config/index.js";
 import { buildSecretStore, type SecretStore } from "../contracts/index.js";
 import { startAutonomyLoops, type AutonomyLoops } from "./autonomyLoops.js";
 import { TimedGitHubHttpClient, TimedSshSubstrate } from "../observability/index.js";
-import { buildVcsProvider, FetchGitHubHttpClient } from "../providers/buildVcsProvider.js";
+import { buildVcsProvider, FetchGitHubHttpClient, GithubAppTokenMinter } from "../providers/buildVcsProvider.js";
 import { Ssh2Substrate } from "../ssh/index.js";
 import { buildClaimClientFromEnv } from "./claimClientFromEnv.js";
 import { buildRunStateWriterFromEnv } from "./runStateWriterFromEnv.js";
@@ -97,6 +97,10 @@ export async function bootRunWorker(): Promise<BootedRunWorker> {
   // P2·0: the run/merge lifecycle routes its VCS/CI ops through the VcsProvider
   // seam (registry default = the real GitHub impl composing `githubHttp`).
   const vcsProvider = buildVcsProvider(githubHttp);
+  // P2a (Part 2): the shared App installation-token minter (cache lives here),
+  // threaded into the workflow so the App-first CLONE token reuses the same
+  // minted/cached installation token as the CI-poll / merge stages.
+  const githubAppMinter = new GithubAppTokenMinter({ secrets });
   const { worker, reaper } = startRunWorker({
     pool,
     concurrency,
@@ -106,6 +110,7 @@ export async function bootRunWorker(): Promise<BootedRunWorker> {
     ssh,
     secrets,
     vcsProvider,
+    githubAppMinter,
     identitySecretRef,
     ...(claimClient === undefined ? {} : { claimClient }),
     ...(runStateWriter === undefined ? {} : { runStateWriter }),
