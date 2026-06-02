@@ -9,11 +9,13 @@
 // -> destroy); each accepts a `fail` flag for the never-ready variant.
 import { FakeAllocator } from "../../src/engine/contracts/allocator.js";
 import type { AllocationRequest, Allocator } from "../../src/engine/contracts/allocator.js";
+import { InMemorySecretStore } from "../../src/engine/contracts/secretStore.js";
 import type { ClaimRunnerInput, RunnerStore } from "../../src/engine/allocators/runnerStore.js";
 import { StaticRunnerAllocator } from "../../src/engine/allocators/staticRunnerAllocator.js";
 import { ManualSshAllocator } from "../../src/engine/allocators/manualSshAllocator.js";
 import { SidecarHttpAllocator } from "../../src/engine/allocators/sidecarHttpAllocator.js";
 import { HetznerAllocator, type HetznerClient } from "../../src/engine/allocators/hetznerAllocator.js";
+import { generateEd25519KeyPair } from "../../src/engine/ssh/keygen.js";
 import { DigitalOceanAllocator, type DigitalOceanClient } from "../../src/engine/allocators/digitalOceanAllocator.js";
 import { GcpAllocator, type GcpComputeClient } from "../../src/engine/allocators/gcpAllocator.js";
 import { AwsEc2Allocator, type AwsEc2Client } from "../../src/engine/allocators/awsEc2Allocator.js";
@@ -48,6 +50,10 @@ const slowReady = { sleep: noSleep, readyTimeoutMs: 5, pollIntervalMs: 1 } as co
 function hetznerClient(fail = false): HetznerClient {
   let polls = 0;
   return {
+    async createSshKey(): Promise<{ id: number }> {
+      return { id: 1 };
+    },
+    async deleteSshKey(): Promise<void> {},
     async createServer(): Promise<{ id: number; status: string }> {
       return { id: 1, status: "initializing" };
     },
@@ -174,14 +180,21 @@ const makeSidecar = (): Allocator =>
     sshUsername: "tanren",
   });
 
+// Inject a DETERMINISTIC, pre-generated well-formed keypair so the Hetzner
+// conformance run can never flake on the (now-retry-hardened) live generator.
+// One real ed25519 keypair, generated once at module load, reused for both the
+// client + host key slots — the conformance suite only asserts the SHA256
+// fingerprint SHAPE, not uniqueness.
+const CONFORMANCE_KEYPAIR = generateEd25519KeyPair();
 const makeHetzner = (fail = false): Allocator =>
   new HetznerAllocator({
     apiToken: "tok",
-    hostKeyFingerprint: PINNED_FINGERPRINT,
     serverType: "cx22",
     image: "docker-ce",
     runners: new MemoryRunnerStore(),
+    secrets: new InMemorySecretStore(),
     client: hetznerClient(fail),
+    generateKeyPair: () => CONFORMANCE_KEYPAIR,
     ...slowReady,
   });
 

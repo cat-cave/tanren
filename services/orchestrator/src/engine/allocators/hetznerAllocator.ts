@@ -1,4 +1,11 @@
 import type { AllocationRequest, Allocator, ReleaseReason, RunnerAllocation } from "../contracts/allocator.js";
+import type { SecretStore } from "../contracts/secretStore.js";
+import {
+  buildKnownHostKeyCloudInit,
+  generateEd25519KeyPair,
+  hostKeyFingerprintFromPublicKey,
+  type KeyPairGenerator,
+} from "../ssh/keygen.js";
 import type { RunnerStore } from "./runnerStore.js";
 
 const allocatorName = "hetzner";
@@ -10,9 +17,22 @@ const hetznerApiBase = "https://api.hetzner.cloud/v1";
  * Tests inject a fake; production uses {@link fetchHetznerClient}.
  */
 export interface HetznerClient {
+  createSshKey(input: HetznerCreateSshKeyInput): Promise<HetznerSshKey>;
+  deleteSshKey(sshKeyId: number): Promise<void>;
   createServer(input: HetznerCreateServerInput): Promise<HetznerServer>;
   getServer(serverId: number): Promise<HetznerServer>;
   deleteServer(serverId: number): Promise<void>;
+}
+
+export interface HetznerCreateSshKeyInput {
+  name: string;
+  /** The single-line `ssh-ed25519 AAAA...` authorized-keys form. */
+  publicKey: string;
+  labels?: Record<string, string>;
+}
+
+export interface HetznerSshKey {
+  id: number;
 }
 
 export interface HetznerCreateServerInput {
@@ -20,9 +40,9 @@ export interface HetznerCreateServerInput {
   serverType: string;
   image: string;
   location?: string;
-  /** Hetzner SSH key ids/names authorized for root on the new server. */
+  /** Hetzner SSH key ids authorized for root on the new server. */
   sshKeys?: ReadonlyArray<string | number>;
-  /** cloud-init user data, e.g. to install the runner agent. */
+  /** cloud-init user data, e.g. to install the runner agent + host key. */
   userData?: string;
   labels?: Record<string, string>;
 }
@@ -42,23 +62,28 @@ export interface HetznerAllocatorOptions {
   image: string;
   /** Datacenter location, e.g. `nbg1`. */
   location?: string;
-  /** Hetzner SSH key ids/names to authorize on the provisioned server. */
-  sshKeys?: ReadonlyArray<string | number>;
-  /** Optional cloud-init user data to bootstrap the runner agent. */
-  userData?: string;
+  /**
+   * Optional extra cloud-init `write_files` entries (the operator's own
+   * bootstrap) merged into the host-key-injection cloud-config. The allocator
+   * always owns the host-key portion; this composes with it. No manual SSH key
+   * or fingerprint is accepted — Tanren generates and pins them per run.
+   */
+  extraWriteFiles?: string;
   /** SSH username to return in the target (Hetzner default is `root`). */
   sshUsername?: string;
   /**
-   * Pre-known host key fingerprint to pin. Hetzner does not expose the host
-   * key via API; in production this is derived from a baked image / cloud-init
-   * that installs a known key. When unset, allocation fails so we never hand
-   * back an unverifiable target.
+   * Secret manager. The per-run ephemeral SSH PRIVATE key is stored here under
+   * a per-runner ref and wiped on release; it is never logged or returned in
+   * config. The SSH substrate materializes the runner identity from this same
+   * ref via the target's `identitySecretRef`.
    */
-  hostKeyFingerprint: string;
+  secrets: SecretStore;
   /** Orchestrator mirror of the runners table. */
   runners: RunnerStore;
   /** Injectable client (tests pass a mock). Defaults to the real fetch client. */
   client?: HetznerClient;
+  /** Injectable keypair generator (tests pass a deterministic fake). */
+  generateKeyPair?: KeyPairGenerator;
   /** Poll interval while waiting for the server to become running. */
   pollIntervalMs?: number;
   /** Max time to wait for the server to become running + get an IP. */
@@ -67,32 +92,49 @@ export interface HetznerAllocatorOptions {
   sleep?: (ms: number) => Promise<void>;
 }
 
+/** Per-allocation resources the allocator owns and must tear down on release. */
+interface HetznerAllocationResources {
+  serverId: number;
+  sshKeyId: number;
+  identitySecretRef: string;
+}
+
 /**
  * Reference cloud allocator: provisions a Hetzner Cloud server on demand,
  * waits for it to come up and acquire a public IP, and returns it as an SSH
- * target. Release destroys the server. All API calls go through an injectable
- * {@link HetznerClient} so the lifecycle is unit-tested against a mock with no
- * live credentials.
+ * target. All API calls go through an injectable {@link HetznerClient} so the
+ * lifecycle is unit-tested against a mock with no live credentials.
  *
- * This is intentionally a *reference* implementation of the cloud-allocator
- * shape (create -> wait -> target; release -> destroy). It pins a pre-known
- * host key fingerprint rather than doing TOFU because production deployments
- * bake a known host key into the image / cloud-init.
+ * SSH is fully Tanren-managed — no pre-uploaded key, no pre-known fingerprint:
+ *
+ * 1. Per allocation it generates an EPHEMERAL ed25519 client keypair, uploads
+ *    the PUBLIC key to Hetzner (`POST /v1/ssh_keys`), references that key id in
+ *    the server-create (so it lands in the server's `authorized_keys`), and
+ *    stores the PRIVATE key in the secret manager under a per-run ref. The
+ *    returned target's `identitySecretRef` points at that ref; the SSH
+ *    substrate materializes the key from it.
+ * 2. It also generates an ephemeral ed25519 HOST keypair and injects the host
+ *    private key via cloud-init so the server presents a KNOWN host key on the
+ *    first connection. It pins that host key's locally-computed SHA256
+ *    fingerprint — deterministic, no TOFU, no manual fingerprint. The SSH
+ *    substrate verifies every connection against the pinned value and rejects a
+ *    mismatch.
+ * 3. Release destroys the server, deletes the Hetzner ssh_key, and wipes the
+ *    stored private key — nothing leaks past the run.
  */
 export class HetznerAllocator implements Allocator {
   private readonly client: HetznerClient;
+  private readonly generateKeyPair: KeyPairGenerator;
   private readonly sleep: (ms: number) => Promise<void>;
-  /** runnerId -> hetzner server id, so release can destroy the right server. */
-  private readonly servers = new Map<string, number>();
+  /** runnerId -> the resources release must tear down. */
+  private readonly resources = new Map<string, HetznerAllocationResources>();
 
   constructor(private readonly options: HetznerAllocatorOptions) {
     if (options.apiToken === "") {
       throw new Error("HetznerAllocator requires a non-empty apiToken");
     }
-    if (options.hostKeyFingerprint === "") {
-      throw new Error("HetznerAllocator requires a pinned hostKeyFingerprint");
-    }
     this.client = options.client ?? fetchHetznerClient(options.apiToken);
+    this.generateKeyPair = options.generateKeyPair ?? generateEd25519KeyPair;
     this.sleep =
       options.sleep ??
       ((ms) =>
@@ -103,49 +145,61 @@ export class HetznerAllocator implements Allocator {
 
   async allocate(request: AllocationRequest): Promise<RunnerAllocation> {
     const name = `tanren-${request.runId}`.toLowerCase().replaceAll(/[^a-z0-9-]/gu, "-");
-    const created = await this.client.createServer({
-      name,
-      serverType: this.options.serverType,
-      image: this.options.image,
-      location: this.options.location,
-      sshKeys: this.options.sshKeys,
-      userData: this.options.userData,
-      labels: { tanren_run: request.runId, tanren_project: request.projectId },
-    });
-
-    let server = created;
-    try {
-      server = await this.waitForRunning(created.id);
-    } catch (error) {
-      // Best-effort destroy so a stuck server doesn't leak.
-      await this.client.deleteServer(created.id).catch(() => {});
-      throw error;
-    }
-
-    const ip = server.publicIpv4;
-    if (ip === undefined || ip === "") {
-      await this.client.deleteServer(server.id).catch(() => {});
-      throw new Error(`hetzner server ${server.id} became running without a public IPv4`);
-    }
-
-    const port = 22;
-    const username = this.options.sshUsername ?? "root";
     const runnerId = `runner_${request.runId}`;
-    this.servers.set(runnerId, server.id);
+    const labels = { tanren_run: request.runId, tanren_project: request.projectId };
+    const identitySecretRef = `hetzner/${runnerId}/identity`;
 
-    const allocation: RunnerAllocation = {
-      runnerId,
-      imageSha: `${request.runnerImage}@sha256:hetzner`,
-      target: {
-        host: ip,
-        port,
-        username,
-        hostKeyFingerprint: this.options.hostKeyFingerprint,
-        identitySecretRef: request.identitySecretRef,
-      },
-    };
+    // PHASE 1 — all fallible LOCAL crypto, BEFORE any external side effect.
+    // Generate both ephemeral keypairs and compute the pinned host-key
+    // fingerprint + cloud-init up front. The generator validates each key's
+    // round-trip and retries, but if anything here still throws (e.g. retry
+    // exhausted), nothing has been stored or provisioned yet, so there is
+    // nothing to leak.
+    const clientKey = this.generateKeyPair();
+    const hostKey = this.generateKeyPair();
+    const hostKeyFingerprint = hostKeyFingerprintFromPublicKey(hostKey.publicKey);
+    const userData = buildKnownHostKeyCloudInit(hostKey.privateKey, this.options.extraWriteFiles);
 
+    // PHASE 2 — external side effects (secret store + Hetzner API). From the
+    // first side effect onward, ANY throw funnels through cleanup() so the
+    // stored client private key + the uploaded Hetzner ssh_key + any created
+    // server are all torn down — no dangling resources.
+    let sshKeyId: number | undefined;
+    let serverId: number | undefined;
     try {
+      await this.options.secrets.put({ ref: identitySecretRef, value: clientKey.privateKey });
+
+      const sshKey = await this.client.createSshKey({ name, publicKey: clientKey.publicKey, labels });
+      sshKeyId = sshKey.id;
+
+      const created = await this.client.createServer({
+        name,
+        serverType: this.options.serverType,
+        image: this.options.image,
+        location: this.options.location,
+        sshKeys: [sshKey.id],
+        userData,
+        labels,
+      });
+      serverId = created.id;
+
+      const server = await this.waitForRunning(created.id);
+      serverId = server.id;
+
+      const ip = server.publicIpv4;
+      if (ip === undefined || ip === "") {
+        throw new Error(`hetzner server ${server.id} became running without a public IPv4`);
+      }
+
+      const port = 22;
+      const username = this.options.sshUsername ?? "root";
+
+      const allocation: RunnerAllocation = {
+        runnerId,
+        imageSha: `${request.runnerImage}@sha256:hetzner`,
+        target: { host: ip, port, username, hostKeyFingerprint, identitySecretRef },
+      };
+
       await this.options.runners.claim({
         runnerId,
         runId: request.runId,
@@ -153,28 +207,49 @@ export class HetznerAllocator implements Allocator {
         allocator: allocatorName,
         sshHost: ip,
         sshPort: port,
-        hostKeyFingerprint: this.options.hostKeyFingerprint,
+        hostKeyFingerprint,
         imageSha: allocation.imageSha,
         containerId: String(server.id),
       });
+
+      // Only record the runner for release AFTER the claim succeeds, so a failed
+      // claim cleans up inline (below) without a half-tracked resource.
+      this.resources.set(runnerId, { serverId: server.id, sshKeyId: sshKey.id, identitySecretRef });
+      return allocation;
     } catch (error) {
-      await this.client.deleteServer(server.id).catch(() => {});
-      this.servers.delete(runnerId);
+      // serverId may be undefined (failed before/at create); cleanup tolerates
+      // missing resources via the per-call best-effort catches.
+      await this.cleanup({ serverId, sshKeyId, identitySecretRef });
       throw error;
     }
-
-    return allocation;
   }
 
   async release(runnerId: string, _reason: ReleaseReason = "completed"): Promise<void> {
-    const serverId = this.servers.get(runnerId);
-    if (serverId === undefined) {
+    const resources = this.resources.get(runnerId);
+    if (resources === undefined) {
       // Already released or unknown to this instance: no-op.
       return;
     }
-    this.servers.delete(runnerId);
-    await this.client.deleteServer(serverId);
+    this.resources.delete(runnerId);
+    await this.cleanup(resources);
     await this.options.runners.release(runnerId);
+  }
+
+  /**
+   * Best-effort teardown of every per-allocation resource. Each id is optional
+   * so the `allocate` failure path can call this no matter how far provisioning
+   * got (a throw before `createServer` leaves `serverId` undefined, a throw
+   * before `createSshKey` leaves `sshKeyId` undefined). Missing ids are skipped;
+   * the secret ref is always wiped (idempotent if it was never stored).
+   */
+  private async cleanup(resources: { serverId?: number; sshKeyId?: number; identitySecretRef: string }): Promise<void> {
+    if (resources.serverId !== undefined) {
+      await this.client.deleteServer(resources.serverId).catch(() => {});
+    }
+    if (resources.sshKeyId !== undefined) {
+      await this.client.deleteSshKey(resources.sshKeyId).catch(() => {});
+    }
+    await this.options.secrets.delete(resources.identitySecretRef).catch(() => {});
   }
 
   private async waitForRunning(serverId: number): Promise<HetznerServer> {
@@ -204,6 +279,10 @@ interface HetznerServerResponse {
   };
 }
 
+interface HetznerSshKeyResponse {
+  ssh_key: { id: number };
+}
+
 function toServer(body: HetznerServerResponse): HetznerServer {
   const ipv4 = body.server.public_net?.ipv4?.ip;
   return {
@@ -225,6 +304,34 @@ export function fetchHetznerClient(apiToken: string, fetchImpl: typeof fetch = f
   } as const;
 
   return {
+    async createSshKey(input: HetznerCreateSshKeyInput): Promise<HetznerSshKey> {
+      const response = await fetchImpl(`${hetznerApiBase}/ssh_keys`, {
+        method: "POST",
+        headers: authHeaders,
+        body: JSON.stringify({
+          name: input.name,
+          public_key: input.publicKey,
+          labels: input.labels,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(`hetzner createSshKey failed: ${response.status} ${await response.text()}`);
+      }
+      const body = (await response.json()) as HetznerSshKeyResponse;
+      return { id: body.ssh_key.id };
+    },
+
+    async deleteSshKey(sshKeyId: number): Promise<void> {
+      const response = await fetchImpl(`${hetznerApiBase}/ssh_keys/${sshKeyId}`, {
+        method: "DELETE",
+        headers: authHeaders,
+      });
+      // 404 means already gone — treat as success (idempotent destroy).
+      if (!response.ok && response.status !== 404) {
+        throw new Error(`hetzner deleteSshKey failed: ${response.status} ${await response.text()}`);
+      }
+    },
+
     async createServer(input: HetznerCreateServerInput): Promise<HetznerServer> {
       const response = await fetchImpl(`${hetznerApiBase}/servers`, {
         method: "POST",

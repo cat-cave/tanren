@@ -1,5 +1,10 @@
 import { afterEach, beforeEach } from "vitest";
 import type pg from "pg";
+import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
+
+// The secret manager the cloud allocators store the ephemeral SSH private key
+// in. A fresh in-memory store per call keeps the e2e cases isolated.
+export const memSecrets = (): InMemorySecretStore => new InMemorySecretStore();
 
 // Shared harness for the buildAllocatorFromEnv end-to-end tests. These cases
 // build the allocator straight from env and drive allocate() against a stubbed
@@ -11,10 +16,14 @@ import type pg from "pg";
 // it; allocate() persists the mirror row via .query, which this no-op handles.
 export const queryPool = { query: async () => ({ rows: [] }) } as unknown as pg.Pool;
 
+// Hetzner now manages SSH + host key itself: only the project token is required.
 export const HETZNER_ENV = {
   TANREN_HETZNER_API_TOKEN: "tok",
-  TANREN_HETZNER_HOST_FINGERPRINT: "SHA256:hz",
 };
+
+// A stub `/ssh_keys` create response so the e2e fetch handler can answer the
+// ephemeral-key upload the Hetzner allocator does before creating the server.
+export const hetznerSshKeyResponse = (id = 7777): Response => json({ ssh_key: { id } }, 201);
 
 export const allocReq = {
   runId: "run_E2E",
@@ -34,11 +43,10 @@ const ALLOC_ENV_KEYS = [
   "TANREN_ALLOCATOR_TOKEN",
   "TANREN_MANUAL_SSH_HOSTS",
   "TANREN_HETZNER_API_TOKEN",
-  "TANREN_HETZNER_HOST_FINGERPRINT",
   "TANREN_HETZNER_SERVER_TYPE",
   "TANREN_HETZNER_IMAGE",
   "TANREN_HETZNER_LOCATION",
-  "TANREN_HETZNER_SSH_KEYS",
+  "TANREN_HETZNER_EXTRA_CLOUD_INIT_WRITE_FILES",
   "TANREN_HETZNER_SSH_USER",
   "TANREN_DO_API_TOKEN",
   "TANREN_DO_HOST_FINGERPRINT",

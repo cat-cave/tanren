@@ -91,7 +91,7 @@ export async function bootRunWorker(): Promise<BootedRunWorker> {
   // Hoisted so the run worker AND the P1d intake poller share the same allocator /
   // SSH / GitHub plumbing (the poller's triage answerer allocates a runner per
   // model call exactly as the Forge route factories do).
-  const allocator = buildAllocatorFromEnv(pool);
+  const allocator = buildAllocatorFromEnv(pool, secrets);
   const ssh = new TimedSshSubstrate(new Ssh2Substrate(secrets));
   const githubHttp = new TimedGitHubHttpClient(new FetchGitHubHttpClient());
   // P2·0: the run/merge lifecycle routes its VCS/CI ops through the VcsProvider

@@ -1,5 +1,6 @@
 import type pg from "pg";
 import type { Allocator } from "../contracts/allocator.js";
+import type { SecretStore } from "../contracts/secretStore.js";
 import { AllocatorRouter, type AllocatorRegistry } from "./allocatorRouter.js";
 import { AwsEc2Allocator } from "./awsEc2Allocator.js";
 import { DigitalOceanAllocator } from "./digitalOceanAllocator.js";
@@ -48,24 +49,25 @@ function buildManualSsh(runners: RunnerStore): ManualSshAllocator {
   return new ManualSshAllocator({ hosts, runners });
 }
 
-function buildHetzner(runners: RunnerStore): HetznerAllocator {
+function buildHetzner(runners: RunnerStore, secrets: SecretStore): HetznerAllocator {
   // The token is a resolved secret here. In production it is sourced from a
-  // Vault ref by the operator's secret tooling, never hardcoded.
+  // Vault ref by the operator's secret tooling, never hardcoded. SSH is fully
+  // Tanren-managed: the allocator generates an ephemeral per-run keypair (stored
+  // in `secrets`, uploaded to Hetzner) and a known host key it pins itself — so
+  // there is NO manual TANREN_HETZNER_SSH_KEYS and NO manual
+  // TANREN_HETZNER_HOST_FINGERPRINT.
   const apiToken = env("TANREN_HETZNER_API_TOKEN");
-  const hostKeyFingerprint = env("TANREN_HETZNER_HOST_FINGERPRINT");
-  if (apiToken === undefined || hostKeyFingerprint === undefined) {
-    throw new Error("hetzner allocator requires TANREN_HETZNER_API_TOKEN and TANREN_HETZNER_HOST_FINGERPRINT");
+  if (apiToken === undefined) {
+    throw new Error("hetzner allocator requires TANREN_HETZNER_API_TOKEN");
   }
   return new HetznerAllocator({
     apiToken,
-    hostKeyFingerprint,
     serverType: env("TANREN_HETZNER_SERVER_TYPE") ?? "cx22",
     image: env("TANREN_HETZNER_IMAGE") ?? "docker-ce",
     location: env("TANREN_HETZNER_LOCATION"),
-    sshKeys: env("TANREN_HETZNER_SSH_KEYS")
-      ?.split(",")
-      .map((s) => s.trim()),
+    extraWriteFiles: env("TANREN_HETZNER_EXTRA_CLOUD_INIT_WRITE_FILES"),
     sshUsername: env("TANREN_HETZNER_SSH_USER") ?? "root",
+    secrets,
     runners,
   });
 }
@@ -206,14 +208,14 @@ function buildKubernetes(runners: RunnerStore): KubernetesAllocator {
  * Builds the single allocator kind named by `kind`. This is the non-router path
  * used by the existing `static` / `sidecar` deployments.
  */
-function buildSingle(kind: string, runners: RunnerStore): Allocator {
+function buildSingle(kind: string, runners: RunnerStore, secrets: SecretStore): Allocator {
   switch (kind) {
     case "static":
       return buildStatic(runners);
     case "manual_ssh":
       return buildManualSsh(runners);
     case "hetzner":
-      return buildHetzner(runners);
+      return buildHetzner(runners, secrets);
     case "digitalocean":
       return buildDigitalOcean(runners);
     case "gcp":
@@ -237,7 +239,7 @@ function buildSingle(kind: string, runners: RunnerStore): Allocator {
  * Kinds the routing config never selects resolve to throwing UnconfiguredAllocator
  * stubs (their credentials are never loaded).
  */
-function buildRegistry(runners: RunnerStore, config: AllocatorRoutingConfig): AllocatorRegistry {
+function buildRegistry(runners: RunnerStore, secrets: SecretStore, config: AllocatorRoutingConfig): AllocatorRegistry {
   // Determine which kinds the routing config can actually select.
   const usedKinds = new Set<AllocatorKind>([config.defaultAllocator]);
   for (const rule of config.rules) {
@@ -253,7 +255,7 @@ function buildRegistry(runners: RunnerStore, config: AllocatorRoutingConfig): Al
       case "manual_ssh":
         return usedKinds.has("manual_ssh") ? buildManualSsh(runners) : new UnconfiguredAllocator("manual_ssh");
       case "hetzner":
-        return usedKinds.has("hetzner") ? buildHetzner(runners) : new UnconfiguredAllocator("hetzner");
+        return usedKinds.has("hetzner") ? buildHetzner(runners, secrets) : new UnconfiguredAllocator("hetzner");
       case "digitalocean":
         return usedKinds.has("digitalocean") ? buildDigitalOcean(runners) : new UnconfiguredAllocator("digitalocean");
       case "gcp":
@@ -285,8 +287,12 @@ function buildRegistry(runners: RunnerStore, config: AllocatorRoutingConfig): Al
  *   Label routing + pool policy live here.
  * - Any other kind (`static`, `sidecar`, `manual_ssh`, `hetzner`) builds that
  *   single allocator directly (backward compatible; default is `sidecar`).
+ *
+ * `secrets` is the SAME secret manager the SSH substrate reads from: cloud
+ * allocators (Hetzner) store the ephemeral per-run SSH private key there and the
+ * substrate materializes the runner identity from it.
  */
-export function buildAllocatorFromEnv(pool: pg.Pool): Allocator {
+export function buildAllocatorFromEnv(pool: pg.Pool, secrets: SecretStore): Allocator {
   const runners = new PgRunnerStore(pool);
   const kind = (env("TANREN_ALLOCATOR_KIND") ?? "sidecar").toLowerCase();
 
@@ -296,8 +302,8 @@ export function buildAllocatorFromEnv(pool: pg.Pool): Allocator {
       throw new Error("router allocator requires TANREN_ALLOCATOR_ROUTING (JSON routing config)");
     }
     const config = AllocatorRoutingConfig.parse(JSON.parse(raw));
-    return new AllocatorRouter(buildRegistry(runners, config), config);
+    return new AllocatorRouter(buildRegistry(runners, secrets, config), config);
   }
 
-  return buildSingle(kind, runners);
+  return buildSingle(kind, runners, secrets);
 }

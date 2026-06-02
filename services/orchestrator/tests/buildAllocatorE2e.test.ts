@@ -4,8 +4,10 @@ import {
   allocReq,
   type CapturedCall,
   HETZNER_ENV,
+  hetznerSshKeyResponse,
   installAllocatorE2eLifecycle,
   json,
+  memSecrets,
   queryPool,
   stubFetch,
 } from "./allocatorE2eHarness.js";
@@ -25,44 +27,57 @@ describe("buildAllocatorFromEnv — env defaults flow through allocate() (stubbe
     process.env.TANREN_ALLOCATOR_KIND = "hetzner";
     Object.assign(process.env, HETZNER_ENV);
     const calls = stubFetch((url) => {
-      if (url.endsWith("/servers")) {
-        return json({ server: { id: 100, status: "running", public_net: { ipv4: { ip: "203.0.113.1" } } } }, 201);
+      if (url.endsWith("/ssh_keys")) {
+        return hetznerSshKeyResponse();
       }
-      // getServer: already running with an IP.
-      return json({ server: { id: 100, status: "running", public_net: { ipv4: { ip: "203.0.113.1" } } } });
+      // create + getServer: running with an IP.
+      return json({ server: { id: 100, status: "running", public_net: { ipv4: { ip: "203.0.113.1" } } } }, 201);
     });
-    const allocator = buildAllocatorFromEnv(queryPool);
+    const secrets = memSecrets();
+    const allocator = buildAllocatorFromEnv(queryPool, secrets);
     const allocation = await allocator.allocate(allocReq);
 
     const create = calls.find((c) => c.url.endsWith("/servers") && c.method === "POST");
     // Defaults from buildHetzner: server_type cx22, image docker-ce.
     expect(create?.body?.server_type).toBe("cx22");
     expect(create?.body?.image).toBe("docker-ce");
+    // The server references the just-uploaded ephemeral ssh_key id (not manual).
+    expect(create?.body?.ssh_keys).toEqual([7777]);
     // Authorization carries the env token (Bearer <token>).
     expect(allocation.target.host).toBe("203.0.113.1");
     // Default ssh user is root.
     expect(allocation.target.username).toBe("root");
-    expect(allocation.target.hostKeyFingerprint).toBe("SHA256:hz");
+    // The pinned host-key fingerprint is the allocator-computed SHA256 (no env).
+    expect(allocation.target.hostKeyFingerprint).toMatch(/^SHA256:.+/u);
+    // The CLIENT (identity) private key was stored under the per-run ref the
+    // target points at, and never appears in the create body or the target. (The
+    // create body's user_data DOES carry the HOST private key — that injection is
+    // the host-key-pinning mechanism — but never the identity key.)
+    const stored = await secrets.get(allocation.target.identitySecretRef);
+    expect(stored?.value).toContain("BEGIN OPENSSH PRIVATE KEY");
+    expect(JSON.stringify(create?.body)).not.toContain(stored?.value);
+    expect(JSON.stringify(allocation.target)).not.toContain("BEGIN OPENSSH PRIVATE KEY");
   });
 
-  it("hetzner: env overrides for server type / image / location / ssh keys / user beat the defaults", async () => {
+  it("hetzner: env overrides for server type / image / location / user beat the defaults", async () => {
     process.env.TANREN_ALLOCATOR_KIND = "hetzner";
     Object.assign(process.env, HETZNER_ENV);
     process.env.TANREN_HETZNER_SERVER_TYPE = "cx42";
     process.env.TANREN_HETZNER_IMAGE = "ubuntu-24.04";
     process.env.TANREN_HETZNER_LOCATION = "hel1";
-    process.env.TANREN_HETZNER_SSH_KEYS = "key-a, key-b";
     process.env.TANREN_HETZNER_SSH_USER = "deploy";
-    const calls = stubFetch(() =>
-      json({ server: { id: 101, status: "running", public_net: { ipv4: { ip: "203.0.113.2" } } } }, 201),
+    const calls = stubFetch((url) =>
+      url.endsWith("/ssh_keys")
+        ? hetznerSshKeyResponse(8888)
+        : json({ server: { id: 101, status: "running", public_net: { ipv4: { ip: "203.0.113.2" } } } }, 201),
     );
-    const allocation = await buildAllocatorFromEnv(queryPool).allocate(allocReq);
-    const create = calls.find((c) => c.method === "POST");
+    const allocation = await buildAllocatorFromEnv(queryPool, memSecrets()).allocate(allocReq);
+    const create = calls.find((c) => c.url.endsWith("/servers") && c.method === "POST");
     expect(create?.body?.server_type).toBe("cx42");
     expect(create?.body?.image).toBe("ubuntu-24.04");
     expect(create?.body?.location).toBe("hel1");
-    // The CSV ssh-keys env is split + trimmed into an array.
-    expect(create?.body?.ssh_keys).toEqual(["key-a", "key-b"]);
+    // The server references the ephemeral ssh_key id Tanren just uploaded.
+    expect(create?.body?.ssh_keys).toEqual([8888]);
     expect(allocation.target.username).toBe("deploy");
   });
 
@@ -72,8 +87,12 @@ describe("buildAllocatorFromEnv — env defaults flow through allocate() (stubbe
     process.env.TANREN_ALLOCATOR_KIND = "hetzner";
     Object.assign(process.env, HETZNER_ENV);
     process.env.TANREN_HETZNER_SSH_USER = "";
-    stubFetch(() => json({ server: { id: 102, status: "running", public_net: { ipv4: { ip: "203.0.113.8" } } } }, 201));
-    const allocation = await buildAllocatorFromEnv(queryPool).allocate(allocReq);
+    stubFetch((url) =>
+      url.endsWith("/ssh_keys")
+        ? hetznerSshKeyResponse()
+        : json({ server: { id: 102, status: "running", public_net: { ipv4: { ip: "203.0.113.8" } } } }, 201),
+    );
+    const allocation = await buildAllocatorFromEnv(queryPool, memSecrets()).allocate(allocReq);
     expect(allocation.target.username).toBe("root");
   });
 
@@ -85,7 +104,7 @@ describe("buildAllocatorFromEnv — env defaults flow through allocate() (stubbe
       droplet: { id: 200, status: "active", networks: { v4: [{ ip_address: "203.0.113.3", type: "public" }] } },
     };
     const calls = stubFetch(() => json(droplet, 202));
-    const allocation = await buildAllocatorFromEnv(queryPool).allocate(allocReq);
+    const allocation = await buildAllocatorFromEnv(queryPool, memSecrets()).allocate(allocReq);
 
     const create = calls.find((c) => c.url.endsWith("/droplets") && c.method === "POST");
     // Defaults from buildDigitalOcean: region nyc3, size s-1vcpu-1gb, image docker-20-04.
@@ -109,7 +128,7 @@ describe("buildAllocatorFromEnv — env defaults flow through allocate() (stubbe
       droplet: { id: 201, status: "active", networks: { v4: [{ ip_address: "203.0.113.31", type: "public" }] } },
     };
     const calls = stubFetch(() => json(droplet, 202));
-    const allocation = await buildAllocatorFromEnv(queryPool).allocate(allocReq);
+    const allocation = await buildAllocatorFromEnv(queryPool, memSecrets()).allocate(allocReq);
     const create = calls.find((c) => c.method === "POST");
     expect(create?.body?.region).toBe("sgp1");
     expect(create?.body?.size).toBe("s-4vcpu-8gb");
@@ -140,7 +159,7 @@ describe("buildAllocatorFromEnv — env defaults flow through allocate() (stubbe
         networkInterfaces: [{ accessConfigs: [{ type: "ONE_TO_ONE_NAT", natIP: "203.0.113.4" }] }],
       });
     });
-    const allocation = await buildAllocatorFromEnv(queryPool).allocate(allocReq);
+    const allocation = await buildAllocatorFromEnv(queryPool, memSecrets()).allocate(allocReq);
 
     const insert = calls.find((c) => c.method === "POST");
     // Default machineType e2-small rendered as a zone-qualified path.
@@ -176,7 +195,7 @@ describe("buildAllocatorFromEnv — env defaults flow through allocate() (stubbe
         networkInterfaces: [{ accessConfigs: [{ type: "ONE_TO_ONE_NAT", natIP: "203.0.113.41" }] }],
       });
     });
-    const allocation = await buildAllocatorFromEnv(queryPool).allocate(allocReq);
+    const allocation = await buildAllocatorFromEnv(queryPool, memSecrets()).allocate(allocReq);
     const insert = calls.find((c) => c.method === "POST");
     expect(insert?.body?.machineType).toBe("zones/us-central1-a/machineTypes/n2-standard-4");
     const disks = insert?.body?.disks as Array<{ initializeParams: { sourceImage: string } }>;
@@ -202,7 +221,7 @@ describe("buildAllocatorFromEnv — env defaults flow through allocate() (stubbe
       // getPod: running with a pod IP.
       return json({ metadata: { name: "tanren-run-e2e" }, status: { phase: "Running", podIP: "10.2.3.4" } });
     });
-    const allocation = await buildAllocatorFromEnv(queryPool).allocate(allocReq);
+    const allocation = await buildAllocatorFromEnv(queryPool, memSecrets()).allocate(allocReq);
 
     expect(calls.some((c) => c.url.endsWith("/secrets") && c.method === "POST")).toBe(true);
     expect(calls.some((c) => c.url.endsWith("/pods") && c.method === "POST")).toBe(true);
@@ -234,7 +253,7 @@ describe("buildAllocatorFromEnv — env defaults flow through allocate() (stubbe
       return new Response(xml, { status: 200, headers: { "Content-Type": "text/xml" } });
     }) as typeof fetch;
 
-    const allocation = await buildAllocatorFromEnv(queryPool).allocate(allocReq);
+    const allocation = await buildAllocatorFromEnv(queryPool, memSecrets()).allocate(allocReq);
     // The region-derived endpoint host comes from the env region.
     expect(calls[0]?.url).toMatch(/^https:\/\/ec2\.eu-central-1\.amazonaws\.com\//u);
     expect(allocation.target.host).toBe("203.0.113.5");
@@ -279,7 +298,7 @@ describe("buildAllocatorFromEnv — env defaults flow through allocate() (stubbe
       );
     }) as typeof fetch;
 
-    const allocation = await buildAllocatorFromEnv(queryPool).allocate(allocReq);
+    const allocation = await buildAllocatorFromEnv(queryPool, memSecrets()).allocate(allocReq);
     const runUrl = runInUrls[0] ?? "";
     expect(runUrl).toMatch(/InstanceType=m6i.large/u);
     expect(runUrl).toMatch(/KeyName=tanren-kp/u);
@@ -309,7 +328,7 @@ describe("buildAllocatorFromEnv — env defaults flow through allocate() (stubbe
         imageSha: "sha256:z",
       });
     }) as typeof fetch;
-    await buildAllocatorFromEnv(queryPool).allocate(allocReq);
+    await buildAllocatorFromEnv(queryPool, memSecrets()).allocate(allocReq);
     // Defaults from buildSidecar: base url http://allocator:3200, token "dev".
     expect(captured.url).toBe("http://allocator:3200/allocate");
     expect(captured.auth).toBe("Bearer dev");
@@ -333,7 +352,7 @@ describe("buildAllocatorFromEnv — env defaults flow through allocate() (stubbe
         imageSha: "sha256:z",
       });
     }) as typeof fetch;
-    await buildAllocatorFromEnv(queryPool).allocate(allocReq);
+    await buildAllocatorFromEnv(queryPool, memSecrets()).allocate(allocReq);
     expect(captured.url).toBe("http://sidecar.internal:9000/allocate");
     expect(captured.auth).toBe("Bearer prod-token");
   });
@@ -342,7 +361,7 @@ describe("buildAllocatorFromEnv — env defaults flow through allocate() (stubbe
     // static uses a pre-known fingerprint (no TOFU) so no SSH handshake runs.
     process.env.TANREN_ALLOCATOR_KIND = "static";
     process.env.TANREN_RUNNER_SSH_HOST_FINGERPRINT = "SHA256:static-pin";
-    const allocation = await buildAllocatorFromEnv(queryPool).allocate(allocReq);
+    const allocation = await buildAllocatorFromEnv(queryPool, memSecrets()).allocate(allocReq);
     // Defaults from buildStatic: host "runner", port 22, user "tanren".
     expect(allocation.target.host).toBe("runner");
     expect(allocation.target.port).toBe(22);
@@ -356,7 +375,7 @@ describe("buildAllocatorFromEnv — env defaults flow through allocate() (stubbe
     process.env.TANREN_RUNNER_SSH_PORT = "2200";
     process.env.TANREN_RUNNER_SSH_USER = "runner-user";
     process.env.TANREN_RUNNER_SSH_HOST_FINGERPRINT = "SHA256:static-pin";
-    const allocation = await buildAllocatorFromEnv(queryPool).allocate(allocReq);
+    const allocation = await buildAllocatorFromEnv(queryPool, memSecrets()).allocate(allocReq);
     expect(allocation.target.host).toBe("10.20.30.40");
     expect(allocation.target.port).toBe(2200);
     expect(allocation.target.username).toBe("runner-user");
@@ -367,7 +386,7 @@ describe("buildAllocatorFromEnv — env defaults flow through allocate() (stubbe
     process.env.TANREN_MANUAL_SSH_HOSTS = JSON.stringify([
       { id: "h1", host: "10.9.8.7", port: 2022, username: "ops", hostKeyFingerprint: "SHA256:m" },
     ]);
-    const allocation = await buildAllocatorFromEnv(queryPool).allocate(allocReq);
+    const allocation = await buildAllocatorFromEnv(queryPool, memSecrets()).allocate(allocReq);
     expect(allocation.target.host).toBe("10.9.8.7");
     expect(allocation.target.port).toBe(2022);
     expect(allocation.target.username).toBe("ops");
