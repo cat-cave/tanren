@@ -306,6 +306,17 @@ smoke-rls-run-lifecycle:
 smoke-rls-allocator:
   DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/allocator/tests/pgRunnerStore.rls.integration.test.ts
 
+# P8b: the e2e gate's ARTIFACT-READ teeth against a real Postgres. The `just e2e`
+# harness reads the real persisted run / cost_records / DORA rows via
+# `readRunArtifacts`; this proves that SQL actually returns a seeded merged run
+# (not just asserts verdict logic over hand-built evidence). Provisions an
+# ephemeral DB, migrates it, seeds a minimal `done` run (outcome + pr_url) + a
+# cost_records row, and asserts `readRunArtifacts` returns it. Gated behind the
+# same TANREN_RLS_DB_TEST switch as the RLS integration smokes; the credentialed
+# CASES themselves run only under `just e2e`.
+smoke-e2e-artifacts:
+  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run tests/e2e/lib/readRunArtifacts.db.test.ts
+
 # Plane-split P1 cross-process proof: the run-executor worker is a STANDALONE
 # deployable. Seeds a queued plan job against the shared Postgres (the same
 # job_queue insert the control-plane API does), then waits for the SEPARATE
@@ -357,7 +368,7 @@ smoke-plane-split-worker-remote-writes: gen-mtls-certs
   TANREN_RUNNER_AUTHORIZED_KEY="$(cat /tmp/tanren_runner_key.pub)" TANREN_RUNNER_IDENTITY_PRIVATE_KEY="$(cat /tmp/tanren_runner_key)" docker compose -f compose.dev.yml up -d --no-deps --force-recreate worker
   TANREN_PLANE_SPLIT_PROVE_DEPRIVILEGE=1 DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" corepack pnpm exec tsx scripts/smoke/plane-split-worker.ts
 
-smoke: compose-build compose-up wait-for-stack smoke-connectivity smoke-ssh-integration smoke-plane-split-worker smoke-plane-split-worker-remote-writes smoke-plane-split-p3 smoke-plane-split-p3b smoke-plane-split-p3c smoke-rls-r1 smoke-rls-r2 smoke-rls-r2-cohort2 smoke-rls-r2-cohort3 smoke-rls-r2-cohort4 smoke-rls-r3a smoke-rls-r3a-worker smoke-rls-r3b smoke-rls-early-finalize smoke-rls-org-bootstrap smoke-rls-operator-flow smoke-rls-http-route-scoping smoke-rls-run-lifecycle smoke-rls-allocator
+smoke: compose-build compose-up wait-for-stack smoke-connectivity smoke-ssh-integration smoke-plane-split-worker smoke-plane-split-worker-remote-writes smoke-plane-split-p3 smoke-plane-split-p3b smoke-plane-split-p3c smoke-rls-r1 smoke-rls-r2 smoke-rls-r2-cohort2 smoke-rls-r2-cohort3 smoke-rls-r2-cohort4 smoke-rls-r3a smoke-rls-r3a-worker smoke-rls-r3b smoke-rls-early-finalize smoke-rls-org-bootstrap smoke-rls-operator-flow smoke-rls-http-route-scoping smoke-rls-run-lifecycle smoke-rls-allocator smoke-e2e-artifacts
 
 # P3-0001: the Phase 2A direct-execution acceptance gate (`just acceptance`,
 # scripts/acceptance/easy.ts + medium.ts) was removed once the run executor
@@ -376,3 +387,23 @@ smoke: compose-build compose-up wait-for-stack smoke-connectivity smoke-ssh-inte
 # dashboard with TANREN_RUN_WORKER=1) is documented in docs/operator-guide/acceptance.md.
 acceptance-hard:
   corepack pnpm exec vitest run services/orchestrator/tests/acceptanceHardTier.test.ts
+
+# P8b: the real-resource, real-CREDENTIAL e2e gate (autonomy-engine §8b). OPT-IN /
+# nightly / pre-release — NOT on the per-PR fast path: it runs the REAL stack
+# (`just up-dev`) with REAL provider + GitHub credentials, spends real credits +
+# wall-clock, and drives the REAL operator flow over the REAL external surfaces
+# only (HTTP API + dashboard). It FORBIDS test fixtures / mock adapters entirely —
+# the `e2e-no-mock-imports` arch check (in `just architecture`, on the fast path)
+# fails any tests/e2e/** file that imports a fixture/mock or a non-public internal
+# seam. Each case asserts on REAL persisted artifacts (a merged PR on GitHub, the
+# implemented file on the base branch, cost_records rows with a real basis, the
+# DORA projection) — never on a mocked return; its result (run IDs + PR URLs) is
+# the release evidence. NEVER runs in public PR CI (no secrets there — same
+# discipline as `just acceptance`). Credentials live in tanren.acceptance.json +
+# TANREN_E2E_API_TOKEN; the stack must be up first (`just up-dev`). The harness's
+# own unit tests run on the fast path via `just test` (tests/e2e/lib/**). See
+# docs/operator-guide/e2e.md.
+e2e:
+  test -f tanren.acceptance.json || test -n "${TANREN_ACCEPTANCE_CONFIG:-}"
+  test -n "${TANREN_E2E_API_TOKEN:-}"
+  corepack pnpm exec vitest run --config vitest.e2e.config.ts

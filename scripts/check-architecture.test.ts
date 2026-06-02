@@ -7,6 +7,7 @@ import { runArchitectureChecks } from "./check-architecture.mjs";
 import {
   checkCrossPackageDeepImports,
   checkCyclomaticComplexity,
+  checkE2eNoMockImports,
   checkMaxParams,
   checkNoMockOnlyTests,
   COMPLEXITY_CAP,
@@ -380,5 +381,50 @@ describe("no-production-stubs (P8a §8a stub-ban lint)", () => {
     const flagged = checkNoProductionStubs([{ file, text }]);
     expect(flagged).toHaveLength(1);
     expect(flagged[0]?.line).toBe(3);
+  });
+});
+
+describe("e2e no-mock arch check", () => {
+  const harnessFile = "tests/e2e/cases/tierProofs.e2e.ts";
+
+  it("flags an e2e file importing a test fixture / mock / stub", () => {
+    const text = [
+      'import { fakeWriter } from "../../../services/orchestrator/tests/fixtures/fakeWriter.js";',
+      'import { stubAnswerer } from "./helpers/answererStub.js";',
+      'import { createInterviewAnswerer } from "../lib/deterministicAnswerer.js";',
+    ].join("\n");
+    const flagged = checkE2eNoMockImports([{ file: harnessFile, text }]);
+    expect(flagged.map((item) => item.rule)).toEqual([
+      "e2e-no-mock-imports",
+      "e2e-no-mock-imports",
+      "e2e-no-mock-imports",
+    ]);
+    expect(flagged[0]?.message).toContain("fixture/mock/stub");
+  });
+
+  it("flags an e2e file reaching into a non-public internal seam", () => {
+    const text = [
+      'import { runWriter } from "@tanren/orchestrator/src/engine/workflow/writerRun.js";',
+      'import { mountFeatureRoutes } from "../../../services/orchestrator/src/routes/forge/index.js";',
+    ].join("\n");
+    const flagged = checkE2eNoMockImports([{ file: harnessFile, text }]);
+    expect(flagged.map((item) => item.rule)).toEqual(["e2e-no-mock-imports", "e2e-no-mock-imports"]);
+    expect(flagged[1]?.message).toContain("internal seam");
+  });
+
+  it("allows the e2e suite's own lib, node builtins, the @tanren/db public entry, and third-party clients", () => {
+    const text = [
+      'import { describe, expect, it } from "vitest";',
+      'import { readFile } from "node:fs/promises";',
+      'import { createDbPool } from "@tanren/db";',
+      'import { runCase } from "../lib/harness.js";',
+      'import { e2eManifest } from "../lib/manifest.js";',
+    ].join("\n");
+    expect(checkE2eNoMockImports([{ file: harnessFile, text }])).toEqual([]);
+  });
+
+  it("ignores files outside tests/e2e/**", () => {
+    const text = 'import { fakeWriter } from "../tests/fixtures/fakeWriter.js";';
+    expect(checkE2eNoMockImports([{ file: "services/orchestrator/tests/run.test.ts", text }])).toEqual([]);
   });
 });
