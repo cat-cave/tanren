@@ -26,6 +26,7 @@ import {
   CONFORMANCE_ANCESTOR_CONFLICT,
   CONFORMANCE_BEHIND_PR_NUMBER,
   CONFORMANCE_DIRTY_PR_NUMBER,
+  CONFORMANCE_EXISTING_REPO_NAME,
   CONFORMANCE_FAILING_BRANCH,
   CONFORMANCE_HEAD_BRANCH,
   CONFORMANCE_PRESENT_FILE,
@@ -187,6 +188,23 @@ class RoutingGitHubHttp implements GitHubHttpClient {
     if (input.method === "PUT" && /\/actions\/secrets\/[^/]+$/u.test(path)) {
       this.lastSecretPut = { serialized: JSON.stringify(input), body: input.body };
       return { status: 201, body: {} };
+    }
+    // createRepository (GREENFIELD): POST /orgs/:owner/repos. The taken name 422s
+    // (already-exists → typed error); any other name creates (201) with the real
+    // full_name/html_url/default_branch the auto_init seeded.
+    if (input.method === "POST" && /^\/orgs\/[^/]+\/repos$/u.test(path)) {
+      const name = (input.body as { name?: unknown } | undefined)?.name;
+      if (name === CONFORMANCE_EXISTING_REPO_NAME) {
+        return { status: 422, body: { message: "name already exists on this account" } };
+      }
+      return {
+        status: 201,
+        body: {
+          full_name: `cat-cave/${typeof name === "string" ? name : "repo"}`,
+          html_url: `https://github.com/cat-cave/${typeof name === "string" ? name : "repo"}`,
+          default_branch: "main",
+        },
+      };
     }
     // createIssue: POST /issues → 201 with the issue number + html_url.
     if (input.method === "POST" && path.endsWith("/issues")) {

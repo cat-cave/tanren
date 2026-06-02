@@ -2,8 +2,10 @@ import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import type { ActorContext } from "../src/auth/schemas.js";
 import { createAuthMiddleware, type ActorContextEnv } from "../src/middleware/auth.js";
+import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
 import { createOrgRoutes } from "../src/routes/orgs/index.js";
 import { createProjectRoutes } from "../src/routes/projects/index.js";
+import { InMemoryVcsProvider } from "./conformance/fakes/inMemoryVcsProvider.js";
 import { createFakeIdentityPool } from "./helpers/fakeIdentityPool.js";
 import { RoutesPool } from "./helpers/routesPool.js";
 
@@ -25,7 +27,14 @@ function buildHarness(actor: ActorContext) {
     }),
   );
   app.route("/orgs", createOrgRoutes({ pool: pool.asPgPool() }));
-  app.route("/orgs", createProjectRoutes({ pool: pool.asPgPool() }));
+  app.route(
+    "/orgs",
+    createProjectRoutes({
+      pool: pool.asPgPool(),
+      secrets: new InMemorySecretStore(),
+      vcsProvider: new InMemoryVcsProvider(),
+    }),
+  );
   return { app, pool, identityPool };
 }
 

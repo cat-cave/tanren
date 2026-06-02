@@ -2,17 +2,27 @@
 // non-brownfield path (caller supplies repoUrl + name). The brownfield link
 // endpoint lives in routes/brownfield/ and reads target-repo files via the
 // org's GitHub App credentials; it never writes.
+//
+// GREENFIELD: the `/projects/greenfield` create path lets an end user start a
+// greenfield project WITHOUT bringing a repo — Tanren creates a brand-new repo
+// under the org's GitHub App grant (the `VcsProvider.createRepository` seam) and
+// binds the project to the real new repoUrl. The repo-create itself lives in
+// `greenfield.ts` so this file stays under the per-file line cap.
 
 import { Hono } from "hono";
 import type pg from "pg";
 import { z } from "zod";
 import type { ActorContext } from "../../auth/schemas.js";
 import { migrateProjectConfig } from "../../engine/config/projectConfig.js";
+import type { SecretStore } from "../../engine/contracts/secretStore.js";
+import type { VcsProvider } from "../../engine/contracts/vcsProvider.js";
+import type { GithubAppTokenMinter } from "../../engine/providers/githubAppTokenMinter.js";
 import { ProjectStore, type ProjectRow as RepoProjectRow } from "../../engine/repositories/index.js";
 import { systemActor } from "../../engine/state/actor.js";
 import { createProject, ProjectAccessDeniedError, ProjectNotFoundError } from "../../engine/workflow/projectSpec.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg } from "../orgs/index.js";
+import { GreenfieldCreateSchema, handleGreenfieldCreate } from "./greenfield.js";
 
 // P-APP-ENV-1: re-exported here so the feature-route mounter pulls both the
 // project CRUD routes and the app-env CI-secret propagation route from one import
@@ -21,6 +31,11 @@ export { createAppEnvCiRoutes } from "./appEnvCi.js";
 
 interface ProjectRoutesOptions {
   pool: pg.Pool;
+  // GREENFIELD: the deps the `/projects/greenfield` create path needs to mint the
+  // org's GitHub App token + create the repo through the VcsProvider seam.
+  secrets: SecretStore;
+  vcsProvider: VcsProvider;
+  githubAppMinter?: GithubAppTokenMinter;
 }
 
 const ProjectCreateSchema = z.object({
@@ -72,6 +87,32 @@ export function createProjectRoutes(options: ProjectRoutesOptions) {
     const scopedActor: ActorContext = { ...actor, orgId };
     const project = await createProject(options.pool, parsed.data, scopedActor);
     return c.json(project, 201);
+  });
+
+  // GREENFIELD: create a project with NO repoUrl — Tanren creates a brand-new
+  // GitHub repo under the org's App grant (`owner`), auto-inits it (immediately
+  // cloneable), then binds the project to the real new repoUrl. The repo-create +
+  // token resolution live in `greenfield.ts`; this handler owns the org guard +
+  // the org-scoped project persist.
+  app.post("/:orgId/projects/greenfield", async (c) => {
+    const actor = requireActor(c);
+    const orgId = c.req.param("orgId");
+    if (!actorCanAccessOrg(actor, orgId)) {
+      return c.json({ error: "org_access_denied" }, 403);
+    }
+    const parsed = GreenfieldCreateSchema.safeParse(await c.req.json().catch(() => {}));
+    if (!parsed.success) {
+      return c.json({ error: "invalid_greenfield_project", issues: parsed.error.issues }, 400);
+    }
+    return handleGreenfieldCreate(c, {
+      pool: options.pool,
+      secrets: options.secrets,
+      vcsProvider: options.vcsProvider,
+      githubAppMinter: options.githubAppMinter,
+      orgId,
+      actor,
+      input: parsed.data,
+    });
   });
 
   app.get("/:orgId/projects/:projectId", async (c) => {

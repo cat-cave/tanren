@@ -26,7 +26,9 @@ import type {
   BuildIntegrationBranchInput,
   BuildIntegrationBranchResult,
   CreatedIssue,
+  CreatedRepository,
   CreateIssueInput,
+  CreateRepositoryInput,
   OpenDraftPullRequestInput,
   OpenedPullRequest,
   PullRequestMergeability,
@@ -72,6 +74,9 @@ export class UnconfiguredVcsProvider implements VcsProvider {
     return this.fail();
   }
   async pushBranch(_input: PushBranchInput): Promise<void> {
+    return this.fail();
+  }
+  async createRepository(_input: CreateRepositoryInput, _token: ResolvedVcsToken): Promise<CreatedRepository> {
     return this.fail();
   }
   async openDraftPullRequest(_input: OpenDraftPullRequestInput): Promise<OpenedPullRequest> {
