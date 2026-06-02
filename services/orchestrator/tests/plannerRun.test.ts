@@ -5,6 +5,7 @@
 // escalation path. Allocator release always runs (finally). Shared fakes +
 // builders live in plannerRun.fixtures.ts (500-line cap split).
 import { describe, expect, it } from "vitest";
+import { vcsProviderOver } from "./helpers/vcsProvider.js";
 import type { SshTarget } from "../src/engine/contracts/allocator.js";
 import type { SshCommand, SshCommandResult, SshSubstrate } from "../src/engine/contracts/sshSubstrate.js";
 import { CodexUsageLimitError } from "../src/engine/providers/codex.js";
@@ -42,7 +43,7 @@ describe("runPlannerLoopWorkflow", () => {
       allocator,
       ssh,
       secrets,
-      githubHttp: github,
+      vcsProvider: vcsProviderOver(github),
       context: ctx,
       escapeHatches: {
         maxPlannerRerunsPerSpec: 3,
@@ -100,7 +101,7 @@ describe("runPlannerLoopWorkflow", () => {
       allocator,
       ssh,
       secrets,
-      githubHttp: passingGitHub(),
+      vcsProvider: vcsProviderOver(passingGitHub()),
       context: ctx,
       escapeHatches: {
         maxPlannerRerunsPerSpec: 3,
@@ -132,7 +133,7 @@ describe("runPlannerLoopWorkflow", () => {
       allocator,
       ssh,
       secrets,
-      githubHttp: github,
+      vcsProvider: vcsProviderOver(github),
       context: ctx,
       escapeHatches: {
         maxPlannerRerunsPerSpec: 3,
@@ -161,7 +162,7 @@ describe("runPlannerLoopWorkflow", () => {
       allocator,
       ssh,
       secrets,
-      githubHttp: passingGitHub(),
+      vcsProvider: vcsProviderOver(passingGitHub()),
       context: ctx,
       escapeHatches: {
         maxPlannerRerunsPerSpec: 3,
@@ -196,7 +197,7 @@ describe("runPlannerLoopWorkflow", () => {
       allocator,
       ssh,
       secrets,
-      githubHttp: passingGitHub(),
+      vcsProvider: vcsProviderOver(passingGitHub()),
       context: ctx,
       escapeHatches: {
         maxPlannerRerunsPerSpec: 3,
@@ -264,7 +265,7 @@ describe("runPlannerLoopWorkflow", () => {
       allocator,
       ssh,
       secrets,
-      githubHttp: passingGitHub(),
+      vcsProvider: vcsProviderOver(passingGitHub()),
       context: ctx,
       escapeHatches: { maxPlannerRerunsPerSpec: 3, maxWriterIterPerSubtask: 5, maxRetriesPerTransientFailure: 3 },
       timeoutMs: 100,
@@ -326,7 +327,7 @@ describe("runPlannerLoopWorkflow", () => {
       allocator,
       ssh,
       secrets,
-      githubHttp: passingGitHub(),
+      vcsProvider: vcsProviderOver(passingGitHub()),
       context: ctx,
       escapeHatches: { maxPlannerRerunsPerSpec: 3, maxWriterIterPerSubtask: 5, maxRetriesPerTransientFailure: 3 },
       timeoutMs: 100,
@@ -359,7 +360,7 @@ describe("runPlannerLoopWorkflow", () => {
       allocator,
       ssh,
       secrets,
-      githubHttp: passingGitHub(),
+      vcsProvider: vcsProviderOver(passingGitHub()),
       context: ctx,
       escapeHatches: { maxPlannerRerunsPerSpec: 3, maxWriterIterPerSubtask: 5, maxRetriesPerTransientFailure: 3 },
       timeoutMs: 100,
@@ -388,7 +389,7 @@ describe("runPlannerLoopWorkflow", () => {
         allocator,
         ssh,
         secrets,
-        githubHttp: new ScriptedGitHubHttp([]),
+        vcsProvider: vcsProviderOver(new ScriptedGitHubHttp([])),
         context: ctx,
         escapeHatches: {
           maxPlannerRerunsPerSpec: 3,
@@ -430,7 +431,7 @@ describe("runPlannerLoopWorkflow", () => {
         allocator,
         ssh,
         secrets,
-        githubHttp: new ScriptedGitHubHttp([]),
+        vcsProvider: vcsProviderOver(new ScriptedGitHubHttp([])),
         context: ctx,
         escapeHatches: {
           maxPlannerRerunsPerSpec: 3,

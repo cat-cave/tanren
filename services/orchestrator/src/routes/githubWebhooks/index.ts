@@ -8,7 +8,7 @@ import { Hono } from "hono";
 import type pg from "pg";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import type { SecretStore } from "../../engine/contracts/index.js";
-import type { GitHubHttpClient } from "../../engine/providers/github.js";
+import type { VcsProvider } from "../../engine/contracts/vcsProvider.js";
 import type { GithubAppTokenMinter } from "../../engine/providers/githubAppTokenMinter.js";
 import { CiPullRequestNotFoundError, CiRunNotFoundError } from "../../engine/workflow/ciPolling.js";
 import { advanceCiFromWebhook, CiWebhookUnsupportedEventError } from "../../engine/workflow/ciWebhook.js";
@@ -16,7 +16,7 @@ import { advanceCiFromWebhook, CiWebhookUnsupportedEventError } from "../../engi
 export interface GithubWebhookRouteDeps {
   pool: pg.Pool;
   secrets: SecretStore;
-  githubHttp: GitHubHttpClient;
+  vcsProvider: VcsProvider;
   githubAppMinter?: GithubAppTokenMinter;
 }
 
@@ -33,7 +33,7 @@ export function createGithubWebhookRoutes(deps: GithubWebhookRouteDeps) {
       const result = await advanceCiFromWebhook({
         pool: deps.pool,
         secrets: deps.secrets,
-        githubHttp: deps.githubHttp,
+        vcsProvider: deps.vcsProvider,
         githubAppMinter: deps.githubAppMinter,
         event,
         payload,

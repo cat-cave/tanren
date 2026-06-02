@@ -31,6 +31,7 @@
 // `just smoke-rls-run-lifecycle`.
 
 import { Pool } from "pg";
+import { vcsProviderOver } from "./helpers/vcsProvider.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { migrate, setSystemPool } from "@tanren/db";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
@@ -171,7 +172,7 @@ describeDb("RLS run lifecycle — a real org-scoped run writes every lifecycle t
       allocator,
       ssh,
       secrets,
-      githubHttp: passingGitHub(),
+      vcsProvider: vcsProviderOver(passingGitHub()),
       identitySecretRef: "runner/test/identity",
       heartbeatIntervalMs: 1_000_000,
       maxCiPolls: 1,

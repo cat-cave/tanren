@@ -28,7 +28,7 @@ import type { SecretStore } from "../contracts/secretStore.js";
 import type { SshSubstrate } from "../contracts/sshSubstrate.js";
 import type { EscapeHatches } from "../config/index.js";
 import { CostRecorder } from "../costs/recorder.js";
-import type { GitHubHttpClient } from "../providers/github.js";
+import type { VcsProvider } from "../contracts/vcsProvider.js";
 import { finalizeRunRecoverable } from "./runFinalize.js";
 import { loadRunExecutionContext, type RunExecutionContext } from "./runExecutionContext.js";
 import { runPlannerLoopWorkflow, type PlannerRunResult, type RunPlannerLoopInput } from "../workflow/plannerRun.js";
@@ -79,7 +79,7 @@ export interface RunExecutorDeps {
   allocator: Allocator;
   ssh: SshSubstrate;
   secrets: SecretStore;
-  githubHttp: GitHubHttpClient;
+  vcsProvider: VcsProvider;
   identitySecretRef: string;
   escapeHatches?: Pick<
     EscapeHatches,
@@ -223,7 +223,7 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
         allocator: deps.allocator,
         ssh: deps.ssh,
         secrets: deps.secrets,
-        githubHttp: deps.githubHttp,
+        vcsProvider: deps.vcsProvider,
         context,
         escapeHatches: deps.escapeHatches ?? DEFAULT_ESCAPE_HATCHES,
         timeoutMs: deps.timeoutMs ?? DEFAULT_TIMEOUT_MS,

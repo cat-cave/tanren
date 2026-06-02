@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { vcsProviderOver } from "./helpers/vcsProvider.js";
 import type { AllocationRequest, Allocator, RunnerAllocation, SshTarget } from "../src/engine/contracts/allocator.js";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import type { SshCommand, SshCommandResult, SshSubstrate } from "../src/engine/contracts/sshSubstrate.js";
@@ -70,7 +71,7 @@ describe("phase 1 end-to-end fixture workflow", () => {
       allocator,
       ssh,
       secrets,
-      githubHttp: github,
+      vcsProvider: vcsProviderOver(github),
       context,
       createWriter: () => fakeWriter,
       createChecker: () => fakeChecker,

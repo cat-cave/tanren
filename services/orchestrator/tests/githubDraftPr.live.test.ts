@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { vcsProviderOver } from "./helpers/vcsProvider.js";
 import type { ServerHostKeyAlgorithm } from "ssh2";
 import { describe, expect, it } from "vitest";
 import type { SshTarget } from "../src/engine/contracts/allocator.js";
@@ -58,7 +59,7 @@ describeLive("live GitHub draft PR contract", () => {
         pool: new RecordingPool().asPgPool(),
         eventStore: events,
         secrets,
-        githubHttp: new FetchGitHubHttpClient(),
+        vcsProvider: vcsProviderOver(new FetchGitHubHttpClient()),
         ssh,
         target,
         runId,

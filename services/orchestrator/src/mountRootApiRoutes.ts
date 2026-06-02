@@ -19,7 +19,7 @@ import {
 } from "./inputSchemas.js";
 import type { SecretStore, SshSubstrate } from "./engine/contracts/index.js";
 import { parseRawViewOptIn, redactEventRows } from "./routes/runs/redaction.js";
-import type { GitHubHttpClient } from "./engine/providers/github.js";
+import type { VcsProvider } from "./engine/contracts/vcsProvider.js";
 import type { GithubAppTokenMinter } from "./engine/providers/githubAppTokenMinter.js";
 import { CiPullRequestNotFoundError, CiRunNotFoundError, pollCiForRun } from "./engine/workflow/ciPolling.js";
 import {
@@ -42,7 +42,7 @@ import type { ActorContextEnv } from "./middleware/auth.js";
 export interface RootApiDeps {
   pool: pg.Pool;
   secrets: SecretStore;
-  githubHttp: GitHubHttpClient;
+  vcsProvider: VcsProvider;
   githubAppMinter: GithubAppTokenMinter;
   identitySecretRef: string;
   // The per-run draft-PR route pushes the runner workspace branch over this
@@ -63,7 +63,7 @@ function actorOf(c: { var: { actor?: ActorContext } }): ActorContext | undefined
  * the prior inline block in `buildApp`; behavior is identical.
  */
 export function mountRootApiRoutes(app: Hono<ActorContextEnv>, deps: RootApiDeps): void {
-  const { pool, secrets, githubHttp, githubAppMinter, identitySecretRef } = deps;
+  const { pool, secrets, vcsProvider, githubAppMinter, identitySecretRef } = deps;
   // RLS HTTP-route scoping: these root handlers are RESOURCE-keyed (no `:orgId`
   // path segment), so the auth middleware resolves the request's org from the
   // addressed spec/run/project and publishes it on the `runWithJobOrgId` ambient.
@@ -148,7 +148,7 @@ export function mountRootApiRoutes(app: Hono<ActorContextEnv>, deps: RootApiDeps
         await publishDraftPullRequestForRun({
           pool: scopedPool,
           secrets,
-          githubHttp,
+          vcsProvider,
           ssh: deps.ssh,
           runId: c.req.param("runId"),
           identitySecretRef,
@@ -179,7 +179,7 @@ export function mountRootApiRoutes(app: Hono<ActorContextEnv>, deps: RootApiDeps
         await pollCiForRun({
           pool: scopedPool,
           secrets,
-          githubHttp,
+          vcsProvider,
           runId: c.req.param("runId"),
           githubAppMinter,
           ...parsed.data,

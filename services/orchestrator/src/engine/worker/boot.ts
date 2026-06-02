@@ -14,7 +14,7 @@ import { resolveWorkerConcurrency } from "../config/index.js";
 import { buildSecretStore, type SecretStore } from "../contracts/index.js";
 import { startAutonomyLoops, type AutonomyLoops } from "./autonomyLoops.js";
 import { TimedGitHubHttpClient, TimedSshSubstrate } from "../observability/index.js";
-import { FetchGitHubHttpClient } from "../providers/github.js";
+import { buildVcsProvider, FetchGitHubHttpClient } from "../providers/buildVcsProvider.js";
 import { Ssh2Substrate } from "../ssh/index.js";
 import { buildClaimClientFromEnv } from "./claimClientFromEnv.js";
 import { buildRunStateWriterFromEnv } from "./runStateWriterFromEnv.js";
@@ -94,6 +94,9 @@ export async function bootRunWorker(): Promise<BootedRunWorker> {
   const allocator = buildAllocatorFromEnv(pool);
   const ssh = new TimedSshSubstrate(new Ssh2Substrate(secrets));
   const githubHttp = new TimedGitHubHttpClient(new FetchGitHubHttpClient());
+  // P2·0: the run/merge lifecycle routes its VCS/CI ops through the VcsProvider
+  // seam (registry default = the real GitHub impl composing `githubHttp`).
+  const vcsProvider = buildVcsProvider(githubHttp);
   const { worker, reaper } = startRunWorker({
     pool,
     concurrency,
@@ -102,7 +105,7 @@ export async function bootRunWorker(): Promise<BootedRunWorker> {
     // internals are untouched, only its injected SSH / GitHub clients decorated.
     ssh,
     secrets,
-    githubHttp,
+    vcsProvider,
     identitySecretRef,
     ...(claimClient === undefined ? {} : { claimClient }),
     ...(runStateWriter === undefined ? {} : { runStateWriter }),

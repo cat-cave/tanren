@@ -8,7 +8,7 @@ import { CostRecorder } from "../costs/index.js";
 import { type EventName, type EventPayload } from "../events/index.js";
 import { type EventStore, PgEventStore } from "../eventStore.js";
 import type { AuditAnswer, CheckAnswer } from "../providers/answererSchemas.js";
-import type { GitHubHttpClient } from "../providers/github.js";
+import type { VcsProvider } from "../contracts/vcsProvider.js";
 import { type AnswererAdapter, type WriterAdapter, type WriterResult } from "../providers/types.js";
 import { quoteSshShellArg } from "../ssh/command.js";
 import { runWorkspaceSshCommand, workspaceRepoPathForRun } from "../workspace/index.js";
@@ -55,7 +55,7 @@ export interface RunPhase1FixtureInput {
   allocator: Allocator;
   ssh: SshSubstrate;
   secrets: SecretStore;
-  githubHttp: GitHubHttpClient;
+  vcsProvider: VcsProvider;
   context: Phase1FixtureRunContext;
   createWriter(input: Phase1FixtureAdapterContext): WriterAdapter;
   createChecker(input: Phase1FixtureAdapterContext): AnswererAdapter<CheckAnswer>;
@@ -230,7 +230,7 @@ export async function runPhase1FixtureWorkflow(input: RunPhase1FixtureInput): Pr
       pool: input.pool,
       eventStore,
       secrets: input.secrets,
-      githubHttp: input.githubHttp,
+      vcsProvider: input.vcsProvider,
       ssh: input.ssh,
       target: allocation.target,
       runId: context.runId,
@@ -375,7 +375,7 @@ async function pollCiUntilTerminal(
       pool: input.pool,
       eventStore: input.eventStore,
       secrets: input.secrets,
-      githubHttp: input.githubHttp,
+      vcsProvider: input.vcsProvider,
       runId: input.context.runId,
       githubCredentialRef: input.context.githubCredentialRef,
     });

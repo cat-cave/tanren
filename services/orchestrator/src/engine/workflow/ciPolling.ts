@@ -5,17 +5,10 @@ import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import { validateGithubCredentialRef } from "../credentials/githubToken.js";
 import { routeTaskUpdate } from "./taskWriteRouting.js";
-import { resolveGithubToken } from "../credentials/githubTokenResolver.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
+import type { VcsProvider } from "../contracts/vcsProvider.js";
 import { type EventStore, PgEventStore } from "../eventStore.js";
-import {
-  GitHubStatusService,
-  parseGitHubPullRequestUrl,
-  type GitHubCheckRun,
-  type GitHubCommitStatus,
-  type GitHubHttpClient,
-  type GitHubPullRequestChecks,
-} from "../providers/github.js";
+import { type GitHubCheckRun, type GitHubCommitStatus, type GitHubPullRequestChecks } from "../providers/github.js";
 
 type RunStateClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
@@ -49,7 +42,7 @@ export interface PollCiForRunInput {
   // when wired (remote-writes on); absent, the in-process org-scoped write runs.
   runStateWriter?: RunStateWriter;
   secrets: SecretStore;
-  githubHttp: GitHubHttpClient;
+  vcsProvider: VcsProvider;
   runId: string;
   githubCredentialRef?: string;
   /** P3-0003: shared installation-token minter (cache lives here). */
@@ -109,20 +102,15 @@ export async function pollCiForRun(input: PollCiForRunInput): Promise<PollCiForR
       ? githubCredentialRefFromInput(input.githubCredentialRef, context.projectConfig)
       : credentialRefOrUndefined(input.githubCredentialRef, context.projectConfig);
   const ledgerRef = context.installation?.credentialRef ?? staticRef ?? "github_app";
-  const resolved = await resolveGithubToken({
+  const resolved = await input.vcsProvider.resolveToken({
     secrets: input.secrets,
     installation: context.installation,
     staticRef,
     minter: input.githubAppMinter,
   });
   const credentialRef = ledgerRef;
-  const pr = parseGitHubPullRequestUrl(context.prUrl);
-  const checks = await new GitHubStatusService(input.githubHttp).fetchPullRequestChecks({
-    repo: pr.repo,
-    token: resolved.token,
-    refreshToken: resolved.refresh,
-    pullNumber: pr.pullNumber,
-  });
+  const pr = input.vcsProvider.parsePullRequest(context.prUrl);
+  const checks = await input.vcsProvider.readPullRequestChecks(pr, resolved);
   const observation = evaluateCiObservation(checks);
   await persistCiObservation(input.pool, task.taskId, observation, input.runStateWriter);
 
