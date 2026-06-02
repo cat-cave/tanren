@@ -109,6 +109,27 @@ export async function markTaskDone(
   );
 }
 
+// Move a subtask row to a hard FAILED terminal with its failure kind. Used when a
+// writer run did NOT complete (crashed / timed out): the task must NOT be laundered
+// to a `done`/`passed` row whose partial/empty diff then flows downstream as a
+// success. Mirrors the merge dispatcher's `failed_with_kind` transition (same fixed
+// UPDATE), so the row reads status='failed', outcome='failed', failure_kind=$kind.
+export async function markTaskFailed(
+  pool: LoopQueryClient,
+  taskId: string,
+  failureKind: string,
+  writer?: RunStateWriter,
+): Promise<void> {
+  if (writer !== undefined) {
+    await writer.updateTask({ taskId, transition: "failed_with_kind", failureKind });
+    return;
+  }
+  await resolveWritableClient(pool).query(
+    `UPDATE tasks SET status = 'failed', outcome = 'failed', failure_kind = $2, ended_at = now() WHERE task_id = $1`,
+    [taskId, failureKind],
+  );
+}
+
 export function writerAdapterRowMeta(writer: WriterAdapter): { cli: string; agentKind: "writer" } {
   return { cli: writer.cli, agentKind: "writer" };
 }

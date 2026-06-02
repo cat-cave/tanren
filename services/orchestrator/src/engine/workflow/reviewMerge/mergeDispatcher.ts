@@ -257,10 +257,32 @@ export class MergeDispatcher {
       return { kind: "proceed" };
     }
 
-    // The branch advanced onto base. Its prior green is now stale, so re-poll CI
-    // before merging.
+    // The branch advanced onto base. Its prior green is now stale, so the CI MUST
+    // be re-verified before merging. Post-rebase re-gating is REQUIRED, not
+    // optional: if the re-gate hook is absent we have no way to confirm the rebased
+    // branch is green, so we HARD-HOLD (emit the recoverable conflict outcome, do
+    // NOT merge) rather than laundering an unverified rebase into a merge. This
+    // mirrors how directMerge already throws loudly when its enqueue hook is
+    // missing — a missing required hook is a hold, never "merge anyway".
     const reGate = this.deps.input.reGateCi;
-    const ci = reGate === undefined ? undefined : await reGate();
+    if (reGate === undefined) {
+      await eventStore.append({
+        ...this.base(),
+        eventType: "merge.rebased",
+        payload: {
+          ...this.prFields(),
+          integration: this.mergeLabel(),
+          baseBranch: mergeability.baseBranch || context.baseBranch,
+          headBranch: mergeability.headBranch || undefined,
+          reGatedCi: false,
+        },
+      });
+      return {
+        kind: "halt",
+        result: await this.emitConflict("post-rebase CI re-gate hook is absent; cannot verify rebased branch"),
+      };
+    }
+    const ci = await reGate();
     await eventStore.append({
       ...this.base(),
       eventType: "merge.rebased",

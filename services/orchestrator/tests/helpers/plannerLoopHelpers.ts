@@ -22,6 +22,7 @@ interface FakePoolRecord {
   parentTaskId: string | null;
   status: string;
   outcome: string | null;
+  failureKind: string | null;
   cli: string;
 }
 
@@ -63,6 +64,7 @@ export class FakePool {
           parentTaskId: params[4] === null ? null : String(params[4]),
           status: "running",
           outcome: null,
+          failureKind: null,
           cli: String(params[6]),
         });
       } else {
@@ -74,8 +76,23 @@ export class FakePool {
           parentTaskId: null,
           status: "running",
           outcome: null,
+          failureKind: null,
           cli: String(params[2]),
         });
+      }
+      return { rows: [], rowCount: 1 };
+    }
+    // A hard task FAILURE (markTaskFailed): status='failed', outcome='failed',
+    // failure_kind=$2. Distinct from the done update so a non-completing writer's
+    // row reads `failed`, never a laundered `done`/`passed`.
+    if (trimmed.startsWith("UPDATE tasks SET status = 'failed'")) {
+      const taskId = String(params[0]);
+      const failureKind = String(params[1]);
+      const record = this.tasks.find((task) => task.taskId === taskId);
+      if (record !== undefined) {
+        record.status = "failed";
+        record.outcome = "failed";
+        record.failureKind = failureKind;
       }
       return { rows: [], rowCount: 1 };
     }
@@ -182,6 +199,38 @@ export function makeWriter(
           outputTokens: 1,
           reasoningOutputTokens: 0,
           totalTokens: 2,
+        },
+        telemetry: { rawEventCount: 1 },
+      };
+    },
+  };
+}
+
+// A writer that returns a single result with a non-`completed` exitReason (and
+// an empty diff, as a crashed/timed-out/exhausted writer typically does). Used to
+// prove the loop NEVER marks such a subtask passed and halts/reworks instead.
+export function makeFailingWriter(
+  exitReason: WriterResult["exitReason"],
+): WriterAdapter & { calls: Array<{ prompt: string; workspace: string }> } {
+  const calls: Array<{ prompt: string; workspace: string }> = [];
+  return {
+    kind: "writer",
+    cli: "fake",
+    authRef: fakeAuthRef,
+    calls,
+    async runWriter(opts): Promise<WriterResult> {
+      calls.push({ prompt: opts.prompt, workspace: opts.workspace });
+      return {
+        diff: "",
+        commits: [],
+        exitReason,
+        tokenUsage: {
+          inputTokens: 1,
+          cachedInputTokens: 0,
+          cacheCreationTokens: 0,
+          outputTokens: 0,
+          reasoningOutputTokens: 0,
+          totalTokens: 1,
         },
         telemetry: { rawEventCount: 1 },
       };

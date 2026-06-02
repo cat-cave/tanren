@@ -24,7 +24,7 @@ import {
 } from "./checker/checker.js";
 import { invokePlanner, type PlannerRejectionFeedback, type PlannerSpecContext } from "./planner/planner.js";
 import { recordAnswererCost, recordWriterCost, secondsSince, type SubtaskCostContext } from "./subtaskCost.js";
-import { insertChildTask, markTaskDone } from "./subtaskTasks.js";
+import { insertChildTask, markTaskDone, markTaskFailed } from "./subtaskTasks.js";
 
 type LoopQueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
@@ -116,7 +116,22 @@ export interface WriterStageInput {
   }) => Record<string, unknown>;
 }
 
-export async function runWriterStage(args: WriterStageInput): Promise<WriterResult> {
+// The classified result of a writer subtask call. The provider adapters carefully
+// classify each run via `WriterResult.exitReason`; this is where that signal is
+// READ and routed. A non-`completed` writer must NEVER be laundered into a passed
+// task whose partial/empty diff flows downstream as a success:
+//   - `completed` / `token_limit` → the task passes; the diff is consumed (the
+//     existing semantics — `token_limit` is a clean stop with usable output).
+//   - `window_exhausted` → the subscription window is spent mid-call (an expected,
+//     RECOVERABLE §4.3 condition); the loop halts the run as window pressure.
+//   - `crashed` / `timeout` → a hard, typed failure routed back through the
+//     planner-rework/retry-budget path; the task row lands `failed`, not `passed`.
+export type WriterStageOutcome =
+  | { kind: "completed"; writer: WriterResult }
+  | { kind: "window_exhausted"; writer: WriterResult }
+  | { kind: "failed"; writer: WriterResult; failureKind: "crashed" | "timeout" };
+
+export async function runWriterStage(args: WriterStageInput): Promise<WriterStageOutcome> {
   await insertChildTask(
     args.pool,
     {
@@ -155,6 +170,53 @@ export async function runWriterStage(args: WriterStageInput): Promise<WriterResu
     runId: args.runId,
     subtaskIndex: args.subtask.index,
   });
+  // The cost is recorded for EVERY outcome — a crashed / timed-out / window-
+  // exhausted writer still consumed real tokens. The success event
+  // (`writer.subtask.completed`) is emitted ONLY on the success branch below, so
+  // a non-completing writer never claims completion.
+  await recordWriterCost({
+    ctx: args.costCtx,
+    adapter: args.adapter,
+    taskId: args.writeTaskId,
+    runtimeSeconds,
+    tokenUsage: writerResult.tokenUsage,
+    rawUsage: args.buildUsage?.({
+      subtaskTaskId: args.writeTaskId,
+      subtaskIndex: args.subtask.index,
+      attempt: 1,
+      writer: writerResult,
+    }) ?? { role: "writer", attempt: 1, subtaskIndex: args.subtask.index },
+  });
+
+  // Branch on how the writer actually exited (provider adapters classify this
+  // via `exitReason`; read it HERE so a non-`completed` run never reaches the
+  // checker as a passed task with a partial/empty diff). The cost above is
+  // recorded for every outcome — the work consumed real tokens regardless.
+  const exitReason = writerResult.exitReason;
+  if (exitReason === "window_exhausted") {
+    // §4.3 window pressure surfaced MID-CALL (not just by the pre-flight probe):
+    // the task did NOT complete its subtask. Mark it failed (window_exhausted)
+    // and emit the failed event; the loop halts the run as recoverable window
+    // pressure. Never `passed`.
+    await markTaskFailed(args.pool, args.writeTaskId, "window_exhausted", args.writer);
+    await emitWriterSubtaskFailed(args, "window_exhausted", "writer usage window exhausted mid-subtask");
+    await args.appendEvent("task.failed", { taskKind: "write", failureKind: "window_exhausted" }, args.writeTaskId);
+    return { kind: "window_exhausted", writer: writerResult };
+  }
+  if (exitReason === "crashed" || exitReason === "timeout") {
+    // The writer crashed or timed out before finishing: its diff is partial or
+    // empty and must NOT be handed to the checker as a success. Fail the task
+    // with the typed kind; the loop routes it through the planner-rework path
+    // (or exhausts the retry budget) — a loud, recoverable halt.
+    const message =
+      exitReason === "timeout" ? "writer timed out before completing the subtask" : "writer crashed mid-subtask";
+    await markTaskFailed(args.pool, args.writeTaskId, exitReason, args.writer);
+    await emitWriterSubtaskFailed(args, exitReason, message);
+    await args.appendEvent("task.failed", { taskKind: "write", failureKind: exitReason }, args.writeTaskId);
+    return { kind: "failed", writer: writerResult, failureKind: exitReason };
+  }
+  // `completed` / `token_limit`: the diff is usable, mark the task passed and
+  // emit the success event (the writer genuinely produced its subtask output).
   await args.appendEvent(
     "writer.subtask.completed",
     {
@@ -169,22 +231,27 @@ export async function runWriterStage(args: WriterStageInput): Promise<WriterResu
     },
     args.writeTaskId,
   );
-  await recordWriterCost({
-    ctx: args.costCtx,
-    adapter: args.adapter,
-    taskId: args.writeTaskId,
-    runtimeSeconds,
-    tokenUsage: writerResult.tokenUsage,
-    rawUsage: args.buildUsage?.({
-      subtaskTaskId: args.writeTaskId,
-      subtaskIndex: args.subtask.index,
-      attempt: 1,
-      writer: writerResult,
-    }) ?? { role: "writer", attempt: 1, subtaskIndex: args.subtask.index },
-  });
   await markTaskDone(args.pool, args.writeTaskId, "passed", args.writer);
   await args.appendEvent("task.completed", { taskKind: "write" }, args.writeTaskId);
-  return writerResult;
+  return { kind: "completed", writer: writerResult };
+}
+
+// Emit the (previously latent) `writer.subtask.failed` timeline event so a
+// crashed / timed-out / window-exhausted writer is recorded loudly with its
+// failure kind + message, never silently swallowed.
+async function emitWriterSubtaskFailed(args: WriterStageInput, failureKind: string, message: string): Promise<void> {
+  await args.appendEvent(
+    "writer.subtask.failed",
+    {
+      runId: args.runId,
+      taskId: args.writeTaskId,
+      subtaskIndex: args.subtask.index,
+      intent: args.subtask.intent,
+      failureKind,
+      message,
+    },
+    args.writeTaskId,
+  );
 }
 
 export interface CheckerStageInput {
