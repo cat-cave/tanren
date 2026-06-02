@@ -10,17 +10,13 @@
 
 import type pg from "pg";
 import { describe, expect, it } from "vitest";
-import {
-  createSource,
-  getCandidate,
-  getSource,
-  listCandidates,
-  listSources,
-  resolveCandidate,
-  upsertCandidate,
-  type CreateSourceInput,
-} from "../src/engine/forge/inbox/index.js";
+import { InboxStore, type CreateSourceInput } from "../src/engine/forge/inbox/index.js";
 import type { CandidateTriage, IngestedItem, InboxSource } from "../src/engine/forge/inbox/index.js";
+
+// The store methods exercised below; the `Repositories` seam owns the SQL, so the
+// tests drive the same `InboxStore.*` surface the routes/engine/poller now use.
+const { createSource, getCandidate, getSource, listCandidates, listSources, resolveCandidate, upsertCandidate } =
+  InboxStore;
 
 interface Call {
   sql: string;

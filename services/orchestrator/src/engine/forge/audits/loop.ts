@@ -11,7 +11,7 @@
 
 import type pg from "pg";
 import { runWithSystemScope } from "@tanren/db";
-import { listAuditJobs, listDistinctAuditJobOrgIds } from "./store.js";
+import { AuditsStore } from "./store.js";
 import { runAuditJob } from "./scheduler.js";
 import type { AuditCadence, AuditJob, AuditPassRunner } from "./types.js";
 import type { TriageAnswerer } from "../inbox/index.js";
@@ -119,10 +119,10 @@ export class AuditSchedulerLoop {
 
   private async listDueJobs(): Promise<AuditJob[]> {
     const now = this.now();
-    const orgIds = await runWithSystemScope(this.deps.pool, (client) => listDistinctAuditJobOrgIds(client));
+    const orgIds = await runWithSystemScope(this.deps.pool, (client) => AuditsStore.listDistinctAuditJobOrgIds(client));
     const due: AuditJob[] = [];
     for (const orgId of orgIds) {
-      const jobs = await runWithSystemScope(this.deps.pool, (client) => listAuditJobs(client, orgId));
+      const jobs = await runWithSystemScope(this.deps.pool, (client) => AuditsStore.listAuditJobs(client, orgId));
       for (const job of jobs) if (isAuditJobDue(job, now)) due.push(job);
     }
     return due;

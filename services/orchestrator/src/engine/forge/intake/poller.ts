@@ -15,8 +15,7 @@ import { runWithSystemScope } from "@tanren/db";
 import { z } from "zod";
 import {
   ingestSource,
-  listDistinctEnabledSourceOrgIds,
-  listSources,
+  InboxStore,
   type AutoRouteDeps,
   type Candidate,
   type InboxEngineDeps,
@@ -169,11 +168,13 @@ export class IntakePoller {
 
   /** List every org's pollable, due-now source (cross-org, system-scoped). */
   private async listDuePollableSources(): Promise<InboxSource[]> {
-    const orgIds = await runWithSystemScope(this.deps.pool, (client) => listDistinctEnabledSourceOrgIds(client));
+    const orgIds = await runWithSystemScope(this.deps.pool, (client) =>
+      InboxStore.listDistinctEnabledSourceOrgIds(client),
+    );
     const due: InboxSource[] = [];
     const now = this.now();
     for (const orgId of orgIds) {
-      const sources = await runWithSystemScope(this.deps.pool, (client) => listSources(client, orgId));
+      const sources = await runWithSystemScope(this.deps.pool, (client) => InboxStore.listSources(client, orgId));
       for (const source of sources) {
         if (!isPollableSource(source, this.deps.connectors)) continue;
         const last = this.lastPolledAt.get(source.id);

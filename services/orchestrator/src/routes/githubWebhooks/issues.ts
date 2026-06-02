@@ -23,7 +23,7 @@ import {
   type IntakeOutcome,
 } from "../../engine/forge/intake/index.js";
 import { intakeAutoRouteDeps } from "../../engine/forge/intake/index.js";
-import { getSource, type InboxSource, type TriageAnswerer } from "../../engine/forge/inbox/index.js";
+import { InboxStore, type InboxSource, type TriageAnswerer } from "../../engine/forge/inbox/index.js";
 import type { ForgeAnswererTarget } from "../../engine/forge/providerFactory.js";
 import { z } from "zod";
 
@@ -40,7 +40,7 @@ export interface IssueWebhookRouteDeps {
 
 /** Resolve a source system-scoped (the receiver has no tenant context in the path). */
 async function resolveSource(pool: pg.Pool, sourceId: string): Promise<InboxSource | undefined> {
-  return runWithSystemScope(pool, (client) => getSource(client, sourceId));
+  return runWithSystemScope(pool, (client) => InboxStore.getSource(client, sourceId));
 }
 
 export function createIssueWebhookRoutes(deps: IssueWebhookRouteDeps) {
