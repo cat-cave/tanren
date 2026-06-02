@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "baseBranch": {
+      "type": "string"
+    },
+    "conflictingSpecId": {
+      "type": "string"
+    },
+    "fromFailedReGate": {
+      "type": "boolean"
+    },
+    "integration": {
+      "enum": [
+        "mergify_queue",
+        "direct_merge",
+        "external_reviewer"
+      ],
+      "type": "string"
+    },
+    "mergingSpecId": {
+      "type": "string"
+    },
+    "prNumber": {
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+    },
+    "prUrl": {
+      "type": "string"
+    },
+    "reason": {
+      "type": "string"
+    },
+    "replanned": {
+      "enum": [
+        "merging",
+        "base"
+      ],
+      "type": "string"
+    },
+    "replannedSpecId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "prUrl",
+    "prNumber",
+    "integration",
+    "baseBranch",
+    "mergingSpecId",
+    "reason",
+    "fromFailedReGate"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.merge.conflict.irreconcilable"
+}

@@ -339,7 +339,9 @@ describe("no-production-stubs (P8a §8a stub-ban lint)", () => {
   });
 
   it("scopes a pending allowlist entry to its own file (not file-agnostic)", () => {
-    // noopConflictResolver is pending-allowlisted in mergeDispatch.ts only.
+    // The audit pass runner is pending-allowlisted in routes/audits/index.ts only;
+    // a `noop*` stub elsewhere is still flagged even with an arch-allow annotation
+    // (an allowlist entry is file + identifier scoped).
     const elsewhere = "services/orchestrator/src/engine/other.ts";
     const text = "// arch-allow: pending\nconst r = input.resolve ?? noopConflictResolver;\n";
     const flagged = checkNoProductionStubs([{ file: elsewhere, text }]);

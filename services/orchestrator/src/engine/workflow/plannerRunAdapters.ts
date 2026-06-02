@@ -16,6 +16,8 @@ import { SshCcusageAccountant, SshCodexbarUsageMonitor, SshUsageProbe, type Usag
 import { type GateOutcome, resolveGateConfig, runGateForWhen } from "./gate/index.js";
 import type { PlannerRunAdapterContext, RunPlannerLoopInput } from "./plannerRun.js";
 import type { SubtaskLoopAdapters } from "./subtaskLoop.js";
+import { buildDefaultConflictResolver } from "./reviewMerge/conflictResolver/index.js";
+import type { ConflictResolverHook } from "./reviewMerge/index.js";
 
 // Builds the run's four role adapters (plan/write/check/audit) by resolving the
 // project's effective routing table through the shared adapter selector. The
@@ -96,6 +98,100 @@ export function simulatedReviewSeam(
       acceptanceCriteria: input.context.acceptanceCriteria,
     },
   };
+}
+
+// Builds the PRODUCTION default intent-preserving conflict resolver (P2b,
+// autonomy-engine.md §2b) — the real replacement for `noopConflictResolver` as
+// the `resolveConflict` hook the merge stage calls on a detected conflict. It
+// composes the run's already-resolved merge-stage context (the runner target +
+// workspace, the gate/checker/auditor the loop built, the project routing, the
+// run's spec intent, the diff base sha) into the resolver. Tests inject
+// `input.resolveConflict` to skip the live runner/model; production omits it →
+// this real resolver is the default (§8a: the default of an injectable seam is
+// the REAL impl, never a stub).
+export function resolveConflictResolverHook(
+  input: RunPlannerLoopInput,
+  deps: {
+    eventStore: EventStore;
+    target: SshTarget;
+    workspacePath: string;
+    baseSha: string;
+    runGate: (gate: { when: CiWhen; taskId?: string }) => Promise<GateOutcome>;
+    checker: SubtaskLoopAdapters["checker"];
+    auditor: SubtaskLoopAdapters["auditor"];
+  },
+): ConflictResolverHook {
+  // Test seam: a scripted resolver skips the live runner/model. Production omits
+  // it → the real intent-preserving resolver is the default. The `??` lives HERE
+  // (not in the workflow function) so the merge-stage call stays a single
+  // expression and the workflow's branch count is unchanged.
+  return input.resolveConflict ?? defaultConflictResolver(input, deps);
+}
+
+function defaultConflictResolver(
+  input: RunPlannerLoopInput,
+  deps: {
+    eventStore: EventStore;
+    target: SshTarget;
+    workspacePath: string;
+    baseSha: string;
+    runGate: (gate: { when: CiWhen; taskId?: string }) => Promise<GateOutcome>;
+    checker: SubtaskLoopAdapters["checker"];
+    auditor: SubtaskLoopAdapters["auditor"];
+  },
+): ConflictResolverHook {
+  // LAZY construction: the real resolver (which needs the project routing to
+  // resolve its conflict Answerer) is built only when a conflict ACTUALLY occurs
+  // and the hook is invoked. So a run that merges cleanly never constructs it —
+  // and `context.routing` (always present in production) is required only on the
+  // conflict path, where a missing routing is a genuine misconfiguration to fail
+  // loudly on, not a silent no-op.
+  return (conflictContext) => buildResolver(input, deps)(conflictContext);
+}
+
+function buildResolver(
+  input: RunPlannerLoopInput,
+  deps: {
+    eventStore: EventStore;
+    target: SshTarget;
+    workspacePath: string;
+    baseSha: string;
+    runGate: (gate: { when: CiWhen; taskId?: string }) => Promise<GateOutcome>;
+    checker: SubtaskLoopAdapters["checker"];
+    auditor: SubtaskLoopAdapters["auditor"];
+  },
+): ConflictResolverHook {
+  const context = input.context;
+  const routing = context.routing;
+  if (routing === undefined) {
+    throw new Error("context.routing is required to build the intent-preserving conflict resolver");
+  }
+  const orgId = typeof context.orgId === "string" ? context.orgId : undefined;
+  return buildDefaultConflictResolver({
+    pool: input.pool,
+    ...(input.runStateWriter !== undefined && { runStateWriter: input.runStateWriter }),
+    eventStore: deps.eventStore,
+    ssh: input.ssh,
+    secrets: input.secrets,
+    target: deps.target,
+    workspacePath: deps.workspacePath,
+    baseSha: deps.baseSha,
+    timeoutMs: input.timeoutMs,
+    runId: context.runId,
+    projectId: context.projectId,
+    ...(orgId !== undefined && { orgId }),
+    specId: context.specId,
+    specTitle: context.specTitle,
+    specDescription: context.specDescription,
+    acceptanceCriteria: context.acceptanceCriteria,
+    baseBranch: context.targetBranch,
+    headBranch: context.runBranch,
+    ...(context.endpointBaseUrl !== undefined && { endpointBaseUrl: context.endpointBaseUrl }),
+    routing,
+    checker: deps.checker,
+    auditor: deps.auditor,
+    runGate: deps.runGate,
+  });
 }
 
 // Builds the production gate callback. The CI config is resolved lazily on the

@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "decision": {
+      "description": "The resolution outcome: 'resolve' when a single tree satisfies BOTH specs' intent + acceptance criteria; 'irreconcilable' when no single edit can satisfy both and one spec must be re-planned with the other's change as context.",
+      "enum": [
+        "resolve",
+        "irreconcilable"
+      ],
+      "type": "string"
+    },
+    "reasoning": {
+      "description": "Why this resolution preserves both intents (when 'resolve'), or why the two intents cannot both be satisfied by one edit (when 'irreconcilable'). Cite each conflicting spec's acceptance criteria.",
+      "minLength": 1,
+      "type": "string"
+    },
+    "replanSpec": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "newContext": {
+              "description": "The OTHER spec's change, summarized as new planning context so the re-planned spec satisfies its intent ON TOP of the other's change — keeping both intents alive.",
+              "minLength": 1,
+              "type": "string"
+            },
+            "which": {
+              "description": "Which spec re-plans: 'merging' (the spec whose PR is being merged) or 'base' (the spec already merged on the base branch).",
+              "enum": [
+                "merging",
+                "base"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "which",
+            "newContext"
+          ],
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "When decision='irreconcilable': which spec to re-plan ('merging' = the spec whose PR is merging; 'base' = the spec already on the base branch) plus the new planning context to carry. Null when decision='resolve'."
+    },
+    "resolvedFiles": {
+      "default": [],
+      "description": "When decision='resolve': the full resolved content for EVERY conflicted file. Empty/omitted when decision='irreconcilable'.",
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "content": {
+            "description": "The FULL resolved UTF-8 content of the file with conflict markers removed, preserving BOTH specs' intent. This is the whole file, not a patch or a single hunk.",
+            "type": "string"
+          },
+          "path": {
+            "description": "The conflicted file path (repo-relative), exactly as presented in the conflict hunks.",
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "content"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "decision",
+    "reasoning",
+    "resolvedFiles",
+    "replanSpec"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.conflict_answer.v1"
+}

@@ -1,4 +1,11 @@
-import type { AuditAnswer, CheckAnswer, DemoAnswer, PlanAnswer, ReviewAnswer } from "../answerers/schemas/index.js";
+import type {
+  AuditAnswer,
+  CheckAnswer,
+  ConflictAnswer,
+  DemoAnswer,
+  PlanAnswer,
+  ReviewAnswer,
+} from "../answerers/schemas/index.js";
 import type { RoutingChainEntry, RoutingTable } from "../config/shared.js";
 import type { SshTarget } from "../contracts/allocator.js";
 import type { SecretStore } from "../contracts/secretStore.js";
@@ -199,6 +206,21 @@ export function buildSimulatedReviewerAdapter(
   routing: RoutingTable,
 ): AnswererAdapter<ReviewAnswer> {
   return buildAnswererAdapter<ReviewAnswer>(deps, chainHead(routing, "audit"), "review");
+}
+
+// Resolves the intent-preserving conflict-resolution Answerer (P2b,
+// autonomy-engine.md §2b). Like the simulated reviewer, there is no dedicated
+// `conflict` routing chain — resolving a DAG-aware conflict is a high-stakes
+// reasoning judgment over BOTH specs' intent + the conflict hunks + the DAG
+// edge, the same provider class the `audit` role plays — so it rides the
+// `audit` chain head (Codex by default, or whatever the audit chain names). This
+// keeps the resolver selectable with NO schema or DB migration: it rides the
+// existing per-role routing DATA, exactly like every other Answerer.
+export function buildConflictResolverAdapter(
+  deps: AdapterSelectorDependencies,
+  routing: RoutingTable,
+): AnswererAdapter<ConflictAnswer> {
+  return buildAnswererAdapter<ConflictAnswer>(deps, chainHead(routing, "audit"), "conflict");
 }
 
 // P3-0011: resolves the project's `demo` routing chain into an Answerer that

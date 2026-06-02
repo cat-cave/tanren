@@ -13,7 +13,6 @@ import type { PullRequestMergeability, RepoRef } from "../../contracts/vcsProvid
 import type { ReviewMergeRunContext } from "./context.js";
 import type { PostureDecision } from "./governancePosture.js";
 import {
-  noopConflictResolver,
   type DispatchedIntegration,
   type MergeForRunInput,
   type MergeForRunResult,
@@ -183,8 +182,8 @@ export class MergeDispatcher {
 
     const updated = await probe.updateBranch();
     if (updated.outcome === "conflict") {
-      // The server-side update hit a real conflict — route to the resolver, do
-      // NOT merge. (P2b replaces noopConflictResolver with the real resolver.)
+      // The server-side update hit a real conflict — route to the intent-
+      // preserving resolver, do NOT merge.
       return { kind: "halt", result: await this.handleBranchConflict(mergeability, updated.message) };
     }
     if (updated.outcome === "up_to_date") {
@@ -255,13 +254,17 @@ export class MergeDispatcher {
     return this.emitConflict(message, mergeability.headBranch || undefined);
   }
 
-  /** Invoke the conflict-resolution hook (noop default until P2b) for a message. */
+  /**
+   * Invoke the intent-preserving conflict-resolution hook (P2b). The hook is a
+   * REQUIRED merge-stage input — production wires the real
+   * `intentPreservingConflictResolver` (built from the run's merge-stage
+   * context), tests inject a fake under tests/. There is no noop default: a
+   * conflict is always routed to a real resolver that preserves both intents +
+   * re-gates, never silently dropped.
+   */
   private async runConflictResolver(message: string): Promise<{ resolved: boolean }> {
     const { input, context, pr } = this.deps;
-    // arch-allow: pending P2b — noopConflictResolver is the TEMPORARY default until the
-    // intent-preserving conflict resolver lands. P8a §8a.
-    const resolver = input.resolveConflict ?? noopConflictResolver;
-    return resolver({
+    return input.resolveConflict({
       runId: context.runId,
       prUrl: context.prUrl,
       prNumber: pr.pullNumber,

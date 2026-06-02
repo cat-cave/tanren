@@ -13,6 +13,7 @@ import type { AuditAnswer, CheckAnswer, PlanAnswer } from "../src/engine/answere
 import type { AnswererAdapter } from "../src/engine/providers/types.js";
 import type { GitHubHttpResponse } from "../src/engine/providers/github.js";
 import { runPlannerLoopWorkflow } from "../src/engine/workflow/plannerRun.js";
+import { noopConflictResolver } from "./fixtures/noopConflictResolver.js";
 import {
   accounting,
   alwaysChangesReview,
@@ -221,6 +222,10 @@ describe("runPlannerLoopWorkflow — merge-outcome mapping (direct_merge)", () =
         buildAdapters: () => twoSubtaskAdapters([passingCheck, passingCheck]),
         reviewProbe: approvingReview(),
         mergeProbe: conflictMerge(),
+        // Isolate the merge-outcome mapping (conflict → halted) from the
+        // resolver's own behavior (covered by conflictResolver.test.ts): inject
+        // the test-fixture no-op resolver so the conflict stays unresolved.
+        resolveConflict: noopConflictResolver,
       }) as Parameters<typeof runPlannerLoopWorkflow>[0],
     );
 

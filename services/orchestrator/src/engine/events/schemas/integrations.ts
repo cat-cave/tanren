@@ -232,6 +232,93 @@ export const MergeRebasedPayload = z
   })
   .strict();
 
+// P2b intent-preserving conflict resolution (autonomy-engine.md §2b). On a real
+// conflict between the merging spec and what is now on the base branch, the
+// resolver makes the resolution INSPECTABLE through three events:
+//   - merge.conflict.resolving      → the resolver was invoked: which other spec
+//                                      the DAG provenance identified, the DAG
+//                                      edge between them, and the conflicted
+//                                      files. (A conflict is a re-planning
+//                                      problem, not a text-picking one.)
+//   - merge.conflict.resolved       → the Answerer produced a both-intents-
+//                                      preserving tree AND the re-gate (gate +
+//                                      checker + auditor over the RESOLVED tree)
+//                                      passed: the merge proceeds. NEVER emitted
+//                                      for an unverified resolution.
+//   - merge.conflict.irreconcilable → the Answerer (or a failed re-gate) judged
+//                                      the two intents cannot both be satisfied
+//                                      by one edit: one spec is routed back to
+//                                      the planner with the other's change as new
+//                                      context. The intent stays ALIVE; the PR is
+//                                      NOT merged.
+export const MergeConflictResolvingPayload = z
+  .object({
+    prUrl: z.string(),
+    prNumber: z.number().int(),
+    integration: MergeIntegrationMode,
+    baseBranch: z.string(),
+    /** The spec whose PR is being merged. */
+    mergingSpecId: z.string(),
+    /** The other conflicting spec the DAG + file provenance identified, if any. */
+    conflictingSpecId: z.string().optional(),
+    /** Whether a persisted DAG edge connects the two specs (provenance signal). */
+    dagEdge: z.boolean(),
+    /** The conflicted file paths the resolver gathered. */
+    conflictedFiles: z.array(z.string()),
+  })
+  .strict();
+
+export const MergeConflictResolvedPayload = z
+  .object({
+    prUrl: z.string(),
+    prNumber: z.number().int(),
+    integration: MergeIntegrationMode,
+    baseBranch: z.string(),
+    mergingSpecId: z.string(),
+    conflictingSpecId: z.string().optional(),
+    /** The files the resolution rewrote (the recorded resolution diff surface). */
+    resolvedFiles: z.array(z.string()),
+    /** Always true here — the resolution is only `resolved` after a clean re-gate. */
+    reGated: z.boolean(),
+  })
+  .strict();
+
+export const MergeConflictIrreconcilablePayload = z
+  .object({
+    prUrl: z.string(),
+    prNumber: z.number().int(),
+    integration: MergeIntegrationMode,
+    baseBranch: z.string(),
+    mergingSpecId: z.string(),
+    conflictingSpecId: z.string().optional(),
+    /** Which spec was routed back to the planner ('merging' | 'base'). */
+    replanned: z.enum(["merging", "base"]).optional(),
+    /** The spec id routed back to the planner (kept alive, not dropped). */
+    replannedSpecId: z.string().optional(),
+    /** Why irreconcilable: the Answerer diagnosis, or a failed re-gate. */
+    reason: z.string(),
+    /** True when the irreconcilable verdict came from a FAILED re-gate, not the Answerer. */
+    fromFailedReGate: z.boolean(),
+  })
+  .strict();
+
+// P2b: the routed-back-to-planner record — the durable carrier that keeps a
+// re-planned spec's intent ALIVE. Emitted by the replan router when an
+// irreconcilable conflict (or a failed re-gate) routes one spec back to the
+// planner with the other's change as new context. The next planner pass reads
+// `newContext` so the spec re-plans ON TOP of the other's change.
+export const MergeConflictReplanRoutedPayload = z
+  .object({
+    specId: z.string(),
+    /** The other spec whose change the re-planned spec must build on, if any. */
+    otherSpecId: z.string().optional(),
+    /** The other spec's change, as new planning context for the re-plan. */
+    newContext: z.string(),
+    /** The status the spec was returned to so it can be re-planned. */
+    replanStatus: z.string(),
+  })
+  .strict();
+
 // P3-0023 external-push governance posture. Emitted at the merge decision when
 // the configured posture (strict | open | audit_only) holds an auto-merge:
 //   strict + external change     → mode "operator_approval" (needs a human OK)

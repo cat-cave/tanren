@@ -19,8 +19,9 @@
 //   - absence-is-correct: a HARD-THROW default (UnconfiguredAllocator) or an
 //     honest "not wired" audit record (StubChannel records 'stubbed').
 //   - pending: a TEMPORARY exemption whose real replacement is not yet built
-//     (noopConflictResolver → P2b intent-preserving resolver). These tighten
-//     when the phase lands and the real default is wired.
+//     (e.g. the audit pass runner → P3). These tighten when the phase lands and
+//     the real default is wired. (P2b retired the noopConflictResolver entries:
+//     the intent-preserving resolver is now the production default.)
 // The OSS quota no-op is intentionally NOT on this list — P1·0 deleted it.
 
 function diagnostic(rule, file, message, line = 1) {
@@ -74,20 +75,6 @@ export const productionStubAllowlist = [
     file: "services/orchestrator/src/engine/notifications/registry.ts",
     identifier: "StubChannel",
     reason: "unconfigured channel → 'stubbed' audit record (honest not-wired), never a silent drop",
-  },
-  {
-    // The noop default's definition (the const) — P2a extracted the merge-stage
-    // contracts here so mergeDispatch.ts ↔ mergeDispatcher.ts don't form a cycle.
-    file: "services/orchestrator/src/engine/workflow/reviewMerge/mergeDispatchTypes.ts",
-    identifier: "noopConflictResolver",
-    pending: "P2b — replaced by the intent-preserving conflict resolver",
-  },
-  {
-    // The noop default's USE site — `input.resolveConflict ?? noopConflictResolver`
-    // in the MergeDispatcher (P2a extracted the dispatcher class out of mergeDispatch.ts).
-    file: "services/orchestrator/src/engine/workflow/reviewMerge/mergeDispatcher.ts",
-    identifier: "noopConflictResolver",
-    pending: "P2b — replaced by the intent-preserving conflict resolver",
   },
   {
     file: "services/orchestrator/src/routes/audits/index.ts",
