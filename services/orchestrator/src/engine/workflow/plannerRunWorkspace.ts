@@ -14,6 +14,7 @@ import { quoteSshShellArg } from "../ssh/command.js";
 import { bootstrapWorkspace, commitBootstrapState, runWorkspaceSshCommand } from "../workspace/index.js";
 import { gitAuthedCommand, gitTokenAuthPrelude } from "../workspace/githubPush.js";
 import { resolveBootstrapCommand } from "./gate/index.js";
+import { withAppEnv } from "./appEnvPrelude.js";
 import type { BootstrapStepInput, CommitBootstrapStepInput, RunPlannerLoopInput } from "./plannerRun.js";
 
 export interface PreparedRunWorkspace {
@@ -41,9 +42,15 @@ export async function prepareRunWorkspace(
   // otherwise resolve the repo's tanren-ci.yml `bootstrap.run` (P3-0004); when
   // the repo ships no tanren-ci.yml the resolver yields undefined and the
   // bootstrap step falls back to its pnpm/npm-detecting DEFAULT_BOOTSTRAP_COMMAND.
-  const resolvedBootstrapCommand =
+  const baseBootstrapCommand =
     input.bootstrapCommand ??
     (await resolveBootstrapCommand({ ssh: input.ssh, target, workspacePath, timeoutMs: input.timeoutMs }));
+  // Plane B (P-APP-ENV-0): the building agent runs install/build under the
+  // project's dev+test app env, so a bootstrap that needs an app secret has it.
+  // The prelude is prepended to the EXECUTED command only (never logged) and is
+  // distinct from Tanren's own provider creds. Undefined env ⇒ command unchanged.
+  const resolvedBootstrapCommand =
+    baseBootstrapCommand === undefined ? undefined : withAppEnv(baseBootstrapCommand, input.appEnv);
   const runBootstrap =
     input.runBootstrap ?? ((stepInput: BootstrapStepInput) => bootstrapWorkspace(stepInput).then(() => {}));
   await runBootstrap({

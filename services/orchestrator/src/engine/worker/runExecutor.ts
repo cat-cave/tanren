@@ -33,6 +33,9 @@ import type { VcsProvider } from "../contracts/vcsProvider.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import { buildNativeQueueEnqueuer } from "../merge/coordinatorBuild.js";
 import { finalizeRunRecoverable } from "./runFinalize.js";
+import { systemActor } from "../state/actor.js";
+import { resolveAppEnvForScope } from "../workflow/resolveAppEnv.js";
+import type { AppEnvScope } from "../repositories/appEnvironment.js";
 import { loadRunExecutionContext, type RunExecutionContext } from "./runExecutionContext.js";
 import { runPlannerLoopWorkflow, type PlannerRunResult, type RunPlannerLoopInput } from "../workflow/plannerRun.js";
 
@@ -184,6 +187,15 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
       await establishJobOrgContext(deps.pool, orgId, runId);
     }
 
+    // Plane B (P-APP-ENV-0): resolve the PROJECT's dev+test app env — the env vars
+    // + secrets the product Tanren is BUILDING needs to run + test the app it
+    // writes — from the `project_app_env` store (secret refs read from the secret
+    // manager). Materialized over the runner into the building agent's command env
+    // (gate steps + bootstrap), NEVER logged and DISTINCT from Tanren's own
+    // provider creds. Resolved under the run's org scope so RLS gates visibility; a
+    // legacy/unscoped run (org_id NULL) resolves nothing (no app env).
+    const appEnv = await resolveRunAppEnv(deps, context.projectId, orgId);
+
     // The ONLY thing that ever stops a run is BUDGET — there are no quotas
     // (autonomy-engine.md §1.3/§1.x). Budget enforcement fires DOWNSTREAM, inside
     // the workflow's usage accounting (`subtaskAccounting` → `window_exhausted`
@@ -242,6 +254,9 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
         // P2a (Part 2): the App-first clone reuses the shared minter when present.
         ...(deps.githubAppMinter === undefined ? {} : { githubAppMinter: deps.githubAppMinter }),
         context,
+        // Plane B: the project's resolved dev+test app env (over the runner,
+        // never logged, distinct from Tanren creds). Empty ⇒ field omitted.
+        ...(Object.keys(appEnv).length === 0 ? {} : { appEnv }),
         escapeHatches: deps.escapeHatches ?? DEFAULT_ESCAPE_HATCHES,
         timeoutMs: deps.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         maxCiPolls: deps.maxCiPolls ?? DEFAULT_MAX_CI_POLLS,
@@ -287,6 +302,39 @@ async function loadRunContextScoped(
     return runWithSystemScope(deps.pool, load);
   }
   return runWithOrgScope(deps.pool, jobOrgId, load);
+}
+
+// Plane B (P-APP-ENV-0): resolve + MERGE the project's dev and test app-env into
+// one env map for the run workspace. Each scope's entries are resolved under the
+// run's org scope (so RLS gates which project's entries are visible) with secret
+// refs read from the secret manager. dev and test overlap is intentional (both
+// feed the building agent's run+test commands); on a key in both, test wins (the
+// later spread). A legacy/unscoped run (org_id NULL) has no org GUC to scope the
+// read, so it resolves to an empty map — no app env, behavior-identical to before.
+const RUN_WORKSPACE_APP_ENV_SCOPES: readonly AppEnvScope[] = ["dev", "test"];
+
+async function resolveRunAppEnv(
+  deps: RunExecutorDeps,
+  projectId: string,
+  orgId: string | null,
+): Promise<Record<string, string>> {
+  if (orgId === null) {
+    return {};
+  }
+  return runWithOrgScope(deps.pool, orgId, async (client) => {
+    const merged: Record<string, string> = {};
+    for (const scope of RUN_WORKSPACE_APP_ENV_SCOPES) {
+      const env = await resolveAppEnvForScope({
+        client,
+        secrets: deps.secrets,
+        projectId,
+        scope,
+        actor: systemActor,
+      });
+      Object.assign(merged, env);
+    }
+    return merged;
+  });
 }
 
 /**

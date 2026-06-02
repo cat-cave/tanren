@@ -40,6 +40,8 @@ import {
   ForgeProposalStore,
   InboxStore,
   AuditsStore,
+  OrgIntegrationsStore,
+  AppEnvironmentStore,
 } from "../repositories/index.js";
 
 /** A pool or a checked-out (org-scoped) client — anything that can run a query. */
@@ -88,6 +90,10 @@ export interface Repositories {
   readonly recovery: typeof RecoveryStore;
   /** Forge-tools tenant reads (access gates + the `tanren.read_*` projections). */
   readonly forgeTools: typeof ForgeToolsStore;
+  /** Plane A: the `org_integrations` registry (CRUD + `getGrant`). */
+  readonly orgIntegrations: typeof OrgIntegrationsStore;
+  /** Plane B: the built product's `project_app_env` store (upsert/list/get/delete). */
+  readonly appEnvironment: typeof AppEnvironmentStore;
 }
 
 /**
@@ -118,6 +124,8 @@ export const pgRepositories: Repositories = {
   discovery: DiscoveryStore,
   recovery: RecoveryStore,
   forgeTools: ForgeToolsStore,
+  orgIntegrations: OrgIntegrationsStore,
+  appEnvironment: AppEnvironmentStore,
 } as const;
 
 export type { ActorRef };

@@ -19,6 +19,9 @@ export interface RunGateForWhenInput {
   timeoutMs: number;
   appendEvent: GateAppendEvent;
   taskId?: string;
+  // Plane B (P-APP-ENV-0): the project's dev+test app env, threaded to each tier
+  // so the building agent's gate commands run with it. Never logged/emitted.
+  appEnv?: Record<string, string>;
 }
 
 // The combined result across every tier mapped to a lifecycle point. `passed`
@@ -48,6 +51,7 @@ export async function runGateForWhen(input: RunGateForWhenInput): Promise<GateOu
       timeoutMs: input.timeoutMs,
       appendEvent: input.appendEvent,
       taskId: input.taskId,
+      ...(input.appEnv === undefined ? {} : { appEnv: input.appEnv }),
     });
     results.push(result);
     if (!result.passed) {

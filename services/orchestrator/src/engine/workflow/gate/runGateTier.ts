@@ -9,6 +9,7 @@ import type { CiStep, CiWhen } from "../../ci/index.js";
 import type { SshTarget } from "../../contracts/allocator.js";
 import type { SshCommandResult, SshSubstrate } from "../../contracts/sshSubstrate.js";
 import type { EventName, EventPayload } from "../../events/index.js";
+import { withAppEnv } from "../appEnvPrelude.js";
 
 // Captured command output can be large; we keep only the last N characters so
 // the emitted gate.* events and the typed result carry a useful, bounded
@@ -57,6 +58,12 @@ export interface RunGateTierInput {
   // Correlates the gate.* events with the loop task that triggered them (the
   // writer task for per_iteration, the planner task for pre_audit).
   taskId?: string;
+  // Plane B (P-APP-ENV-0): the PROJECT's dev+test app env, materialized into the
+  // EXECUTED command's environment (the building agent's test/dev commands need
+  // it). Prepended ONLY to the command handed to the substrate — the emitted
+  // gate.* `step.run` stays the ORIGINAL command, so no secret value reaches the
+  // events table. Distinct from Tanren's own provider creds. Undefined ⇒ no env.
+  appEnv?: Record<string, string>;
 }
 
 // Runs every step of one tier in order, stopping at the first failure. Emits
@@ -74,7 +81,9 @@ export async function runGateTier(input: RunGateTierInput): Promise<GateTierResu
   const outcomes: GateStepOutcome[] = [];
   for (const step of input.steps) {
     const result = await input.ssh.run(input.target, {
-      command: step.run,
+      // The app-env prelude is prepended to the EXECUTED command only; the
+      // emitted `step.run` below stays the original (no secret in events).
+      command: withAppEnv(step.run, input.appEnv),
       cwd: input.workspacePath,
       timeoutMs: input.timeoutMs,
     });

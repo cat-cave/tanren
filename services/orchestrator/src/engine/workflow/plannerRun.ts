@@ -210,6 +210,14 @@ export interface RunPlannerLoopInput {
   nativeQueueEnqueuer?: NativeQueueEnqueuer;
   // Max review→rework re-entries before the run halts pending operator action.
   maxReviewReworks?: number;
+  // Plane B (P-APP-ENV-0): the PROJECT's dev+test app env — the env vars + secrets
+  // the product Tanren is BUILDING needs to run + test the app it writes. Resolved
+  // (by the worker) from the `project_app_env` store via `resolveAppEnvForScope`
+  // (dev+test scopes), with secret refs read from the secret manager. Materialized
+  // over the runner into the building agent's command environment (the gate steps
+  // + bootstrap), NEVER logged and DISTINCT from Tanren's own provider creds
+  // (`secrets`, `githubToken`, the credential refs). Undefined ⇒ no app env.
+  appEnv?: Record<string, string>;
 }
 
 export interface BootstrapStepInput {
