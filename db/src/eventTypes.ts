@@ -6,6 +6,7 @@ export const eventTypeNames = [
   "allocator.allocated",
   "allocator.failed",
   "allocator.requested",
+  "app_env.runtime_attached",
   "auditor.completed",
   "auditor.failed",
   "auditor.rejected",

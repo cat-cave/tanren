@@ -96,6 +96,28 @@ describe("VercelDeployProvisioner", () => {
     });
     await expect(prov.provision(vercelGrant, ctx("acme-web"))).rejects.toThrow(/credentialRef/u);
   });
+
+  it("attachRuntimeEnv sends each var to the Vercel env endpoint; the value reaches the transport", async () => {
+    const transport = scriptedDeployTransport("vercel");
+    const prov = new VercelDeployProvisioner({ transport, secrets: secrets() });
+    await prov.attachRuntimeEnv(vercelGrant, "prj_123", [
+      { key: "RESEND_API_KEY", value: "re_live_xyz" },
+      { key: "PUBLIC_URL", value: "https://app.example" },
+    ]);
+    expect(transport.envByApp()).toEqual({
+      prj_123: { RESEND_API_KEY: "re_live_xyz", PUBLIC_URL: "https://app.example" },
+    });
+    // The deploy token is the bearer; the env VALUES are never used as a bearer.
+    expect(transport.bearersSeen).toContain(`Bearer ${TOKEN_VALUE}`);
+  });
+
+  it("attachRuntimeEnv with no vars makes no provider call", async () => {
+    const transport = scriptedDeployTransport("vercel");
+    const prov = new VercelDeployProvisioner({ transport, secrets: secrets() });
+    await prov.attachRuntimeEnv(vercelGrant, "prj_123", []);
+    expect(transport.bearersSeen).toEqual([]);
+    expect(transport.envByApp()).toEqual({});
+  });
 });
 
 describe("FlyDeployProvisioner", () => {
@@ -135,5 +157,29 @@ describe("FlyDeployProvisioner", () => {
     expect(discovered.map((r) => r.label)).toContain("existing-app");
     const bound = await prov.bind(flyGrant, discovered[0]!.id, ctx("whatever"));
     expect(bound.deployRef?.appId).toBe(discovered[0]!.id);
+  });
+
+  it("attachRuntimeEnv sets the app's Fly secrets in one call; the values reach the transport", async () => {
+    const transport = scriptedDeployTransport("fly");
+    const prov = new FlyDeployProvisioner({ transport, secrets: secrets() });
+    await prov.attachRuntimeEnv(flyGrant, "acme-web", [
+      { key: "RESEND_API_KEY", value: "re_live_xyz" },
+      { key: "DATABASE_URL", value: "postgres://secret" },
+    ]);
+    expect(transport.envByApp()).toEqual({
+      "acme-web": { RESEND_API_KEY: "re_live_xyz", DATABASE_URL: "postgres://secret" },
+    });
+    // Fly batches all secrets into ONE POST → exactly one bearer observed.
+    expect(transport.bearersSeen).toEqual([`Bearer ${TOKEN_VALUE}`]);
+  });
+
+  it("attachRuntimeEnv fails loud when the org deploy token is absent", async () => {
+    const prov = new FlyDeployProvisioner({
+      transport: scriptedDeployTransport("fly"),
+      secrets: new InMemorySecretStore(),
+    });
+    await expect(prov.attachRuntimeEnv(flyGrant, "acme-web", [{ key: "K", value: "v" }])).rejects.toThrow(
+      /credentialRef/u,
+    );
   });
 });

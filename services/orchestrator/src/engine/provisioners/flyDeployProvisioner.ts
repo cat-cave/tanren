@@ -20,6 +20,7 @@ import type { OrgGrant, ProjectContext } from "../contracts/integrationProvision
 import {
   DeployProvisioner,
   type DeployApp,
+  type DeployEnvVar,
   type DeployProviderApi,
   type DeployProvisionerDeps,
 } from "./deployProvisioner.js";
@@ -94,6 +95,28 @@ class FlyDeployApi implements DeployProviderApi {
       name: appName,
       previewUrlPattern: previewUrlPattern(appName),
     };
+  }
+
+  async setEnvVars(_grant: OrgGrant, token: string, appId: string, vars: ReadonlyArray<DeployEnvVar>): Promise<void> {
+    // Fly app secrets: POST /v1/apps/{app_name}/secrets sets the app's runtime
+    // environment in ONE call (`secrets: { KEY: value }`). Fly keys an app by its
+    // globally-unique name, which is the `appId` carried on the deployRef. The
+    // values are sent as the app's secrets — and travel ONLY in this request body.
+    const secretsBody: Record<string, string> = {};
+    for (const variable of vars) {
+      secretsBody[variable.key] = variable.value;
+    }
+    const response = await this.transport.request({
+      method: "POST",
+      url: `${FLY_API_BASE}/v1/apps/${encodeURIComponent(appId)}/secrets`,
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: { secrets: secretsBody },
+    });
+    if (!response.ok) {
+      // Only env-var KEYS reach the error message (never the values).
+      const keys = vars.map((variable) => variable.key).join(", ");
+      throw new Error(`fly set secrets [${keys}] on '${appId}' failed: ${response.status} ${response.text}`);
+    }
   }
 }
 

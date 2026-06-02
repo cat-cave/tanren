@@ -22,6 +22,7 @@ import type { OrgGrant, ProjectContext } from "../contracts/integrationProvision
 import {
   DeployProvisioner,
   type DeployApp,
+  type DeployEnvVar,
   type DeployProviderApi,
   type DeployProvisionerDeps,
 } from "./deployProvisioner.js";
@@ -58,11 +59,15 @@ function previewUrlPattern(grant: OrgGrant, projectName: string): string {
   return `https://${projectName}-*${suffix}.vercel.app`;
 }
 
-/** Append `?teamId=` when the grant carries a team id. */
+/** Append `teamId=` when the grant carries a team id (joined with `&` if the path already has a query). */
 function scoped(grant: OrgGrant, path: string): string {
   const team = teamId(grant);
   const url = `${VERCEL_API_BASE}${path}`;
-  return team === undefined ? url : `${url}?teamId=${encodeURIComponent(team)}`;
+  if (team === undefined) {
+    return url;
+  }
+  const sep = path.includes("?") ? "&" : "?";
+  return `${url}${sep}teamId=${encodeURIComponent(team)}`;
 }
 
 class VercelDeployApi implements DeployProviderApi {
@@ -106,6 +111,26 @@ class VercelDeployApi implements DeployProviderApi {
       name: project.name,
       previewUrlPattern: previewUrlPattern(grant, project.name),
     };
+  }
+
+  async setEnvVars(grant: OrgGrant, token: string, appId: string, vars: ReadonlyArray<DeployEnvVar>): Promise<void> {
+    // Vercel env upsert: POST /v10/projects/{id}/env with `?upsert=true` so a
+    // re-attach updates the existing var rather than 409ing on a duplicate key.
+    // `target: ["production"]` scopes the var to the deployed (production) runtime
+    // — the runtime-scoped App-Environment entries map to the production deploy.
+    for (const variable of vars) {
+      const response = await this.transport.request({
+        method: "POST",
+        url: scoped(grant, `/v10/projects/${encodeURIComponent(appId)}/env?upsert=true`),
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body: { key: variable.key, value: variable.value, type: "encrypted", target: ["production"] },
+      });
+      if (!response.ok) {
+        // The error text is provider-supplied (status + provider message); the
+        // VALUE we sent is never interpolated into the thrown message.
+        throw new Error(`vercel set env '${variable.key}' failed: ${response.status} ${response.text}`);
+      }
+    }
   }
 }
 

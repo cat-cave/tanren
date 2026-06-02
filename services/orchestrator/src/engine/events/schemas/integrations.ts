@@ -452,3 +452,22 @@ export const HelloCompletedPayload = z
     workspacePath: z.string(),
   })
   .strict();
+
+// Plane B app-environment (P-APP-ENV-2): the project's RUNTIME-scoped app env was
+// attached to the DEPLOYED app (Vercel/Fly) as its environment. The deploy is an
+// external integration the built product runs on, so the event lives here.
+//
+// SECURITY: this payload carries ONLY the deploy target (provider + appId) and the
+// env var KEY NAMES — never a single secret VALUE. The values went into the deploy
+// provider's set-env request and nowhere else; this event is the observable proof
+// the attach ran, safe to surface to any project member.
+export const AppEnvRuntimeAttachedPayload = z
+  .object({
+    /** The deploy provider kind the env was attached on (`deploy.vercel` | `deploy.flyio`). */
+    provider: z.string(),
+    /** The deployed app/project id the env was attached to (the deployRef's appId). */
+    appId: z.string(),
+    /** The env var KEY NAMES attached (sorted). NEVER the values. */
+    keys: z.array(z.string()),
+  })
+  .strict();

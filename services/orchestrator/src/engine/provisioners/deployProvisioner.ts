@@ -50,9 +50,20 @@ export interface DeployApp {
 }
 
 /**
+ * A single runtime env var to set onto a deployed app. `key` is the env name the
+ * built product reads; `value` is the resolved secret/plain VALUE (from the
+ * App-Environment store). The value flows ONLY into the provider's set-env request
+ * — it is never logged, placed in an event, returned, or held beyond the request.
+ */
+export interface DeployEnvVar {
+  key: string;
+  value: string;
+}
+
+/**
  * The provider-specific HTTP primitives. The base class drives find-or-create,
- * bind, discover, and artifact assembly on top of these three; a new deploy
- * provider implements only this surface (Vercel / Fly do today).
+ * bind, discover, artifact assembly, and runtime env attachment on top of these;
+ * a new deploy provider implements only this surface (Vercel / Fly do today).
  */
 export interface DeployProviderApi {
   /** The provider kind this API speaks for (`deploy.vercel` | `deploy.flyio`). */
@@ -61,6 +72,13 @@ export interface DeployProviderApi {
   listApps(grant: OrgGrant, token: string): Promise<DeployApp[]>;
   /** Create one app/project under the team. Caller has already checked it is absent. */
   createApp(grant: OrgGrant, token: string, name: string, projectCtx: ProjectContext): Promise<DeployApp>;
+  /**
+   * Attach the runtime env VARS onto the deployed app (P-APP-ENV-2): Vercel
+   * `POST /v10/projects/{id}/env`, Fly the app-secrets endpoint. Each var's VALUE
+   * is sent as the app's environment over the transport — and ONLY there. The
+   * provider receives the values; this code never logs/returns them.
+   */
+  setEnvVars(grant: OrgGrant, token: string, appId: string, vars: ReadonlyArray<DeployEnvVar>): Promise<void>;
 }
 
 /**
@@ -99,6 +117,26 @@ export abstract class DeployProvisioner implements IntegrationProvisioner {
 
   capability(): CapabilityId[] {
     return ["deploy"];
+  }
+
+  /** The provider kind this provisioner speaks for — so the attach flow can assert the deployRef matches. */
+  get providerKind(): string {
+    return this.api.providerKind;
+  }
+
+  /**
+   * P-APP-ENV-2: attach the runtime env VARS onto an already-deployed app (the
+   * `appId` from the `deployRef`). Resolves the org grant's deploy token and hands
+   * the vars to the provider's `setEnvVars`. The VALUES travel ONLY into that
+   * request; this method returns nothing and logs/keeps nothing. An empty `vars`
+   * list is a no-op (no provider call).
+   */
+  async attachRuntimeEnv(grant: OrgGrant, appId: string, vars: ReadonlyArray<DeployEnvVar>): Promise<void> {
+    if (vars.length === 0) {
+      return;
+    }
+    const token = await this.resolveToken(grant);
+    await this.api.setEnvVars(grant, token, appId, vars);
   }
 
   async discover(grant: OrgGrant): Promise<ExistingResource[]> {

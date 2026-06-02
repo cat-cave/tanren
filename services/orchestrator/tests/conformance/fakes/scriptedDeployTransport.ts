@@ -25,6 +25,12 @@ export interface ScriptedDeployTransport extends DeployHttpTransport {
   appNames(): string[];
   /** Every bearer token the transport observed (to assert it is never leaked). */
   bearersSeen: string[];
+  /**
+   * The env vars the emulated provider received via a set-env request, by appId →
+   * { KEY: value }. This is the ONLY place a test can observe the runtime VALUES —
+   * proving they reached the deploy transport and nowhere else.
+   */
+  envByApp(): Record<string, Record<string, string>>;
 }
 
 /**
@@ -47,6 +53,9 @@ export function scriptedDeployTransport(flavor: DeployFlavor, seedNames: string[
   }
 
   const bearersSeen: string[] = [];
+  // appId → { KEY: value } received via set-env. Mirrors the provider holding the
+  // app's environment, so a test can prove the runtime values reached the transport.
+  const envByApp: Record<string, Record<string, string>> = {};
 
   const listBody = (): unknown =>
     flavor === "vercel"
@@ -56,11 +65,21 @@ export function scriptedDeployTransport(flavor: DeployFlavor, seedNames: string[
   const transport: ScriptedDeployTransport = {
     appNames: () => [...apps.keys()],
     bearersSeen,
+    envByApp: () => structuredClone(envByApp),
     async request(req: DeployHttpRequest): Promise<DeployHttpResponse> {
       bearersSeen.push(req.headers["authorization"] ?? "");
 
       if (req.method === "GET") {
         return okResponse(listBody());
+      }
+      // Set-env requests (P-APP-ENV-2): Vercel `/v10/projects/{id}/env`, Fly
+      // `/v1/apps/{name}/secrets`. Captured into envByApp so the test can assert the
+      // right KEYS + VALUES reached the transport (and nowhere else).
+      const setEnv = parseSetEnv(flavor, req);
+      if (setEnv !== undefined) {
+        const bucket = (envByApp[setEnv.appId] ??= {});
+        Object.assign(bucket, setEnv.vars);
+        return okResponse({}, flavor === "vercel" ? 201 : 200);
       }
       if (req.method === "POST") {
         const name = createName(flavor, req.body);
@@ -93,4 +112,48 @@ function createName(flavor: DeployFlavor, body: unknown): string {
     throw new Error("scripted deploy transport: create request carried no app name");
   }
   return name;
+}
+
+/**
+ * Recognize a set-env request and extract the target appId + the { KEY: value }
+ * payload. Vercel sends ONE var per POST to `/v10/projects/{id}/env`; Fly sends all
+ * vars in ONE POST to `/v1/apps/{name}/secrets` as `{ secrets: { KEY: value } }`.
+ * Returns undefined when the request is not a set-env (so the create path runs).
+ */
+function parseSetEnv(
+  flavor: DeployFlavor,
+  req: DeployHttpRequest,
+): { appId: string; vars: Record<string, string> } | undefined {
+  if (req.method !== "POST") {
+    return undefined;
+  }
+  const path = req.url.split("?")[0] ?? "";
+  const record = (req.body ?? {}) as Record<string, unknown>;
+  if (flavor === "vercel") {
+    const match = /\/v10\/projects\/([^/]+)\/env$/u.exec(path);
+    if (match === null) {
+      return undefined;
+    }
+    const appId = decodeURIComponent(match[1] as string);
+    const key = record["key"];
+    const value = record["value"];
+    if (typeof key !== "string" || typeof value !== "string") {
+      throw new TypeError("scripted deploy transport: vercel env request missing key/value");
+    }
+    return { appId, vars: { [key]: value } };
+  }
+  const match = /\/v1\/apps\/([^/]+)\/secrets$/u.exec(path);
+  if (match === null) {
+    return undefined;
+  }
+  const appId = decodeURIComponent(match[1] as string);
+  const secrets = (record["secrets"] ?? {}) as Record<string, unknown>;
+  const vars: Record<string, string> = {};
+  for (const [key, value] of Object.entries(secrets)) {
+    if (typeof value !== "string") {
+      throw new TypeError(`scripted deploy transport: fly secret '${key}' is not a string`);
+    }
+    vars[key] = value;
+  }
+  return { appId, vars };
 }
