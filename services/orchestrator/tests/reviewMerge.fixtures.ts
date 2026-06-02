@@ -53,7 +53,6 @@ export function recordingMergeProbe(
   };
   const update: UpdateBranchResult = freshness.updateBranch ?? { outcome: "up_to_date", message: "up to date" };
   return {
-    labels: [] as string[],
     mergeCalls: 0,
     mergeabilityCalls: 0,
     updateBranchCalls: 0,
@@ -61,9 +60,6 @@ export function recordingMergeProbe(
     // can assert the PR base was re-pointed to default_branch + the integ ref cleaned.
     retargetedBases: [] as string[],
     deletedIntegrationBranches: [] as string[],
-    async applyQueueLabel(label: string) {
-      this.labels.push(label);
-    },
     async merge() {
       this.mergeCalls += 1;
       return result;
@@ -83,7 +79,6 @@ export function recordingMergeProbe(
       this.deletedIntegrationBranches.push(branch);
     },
   } satisfies MergeProbe & {
-    labels: string[];
     mergeCalls: number;
     mergeabilityCalls: number;
     updateBranchCalls: number;

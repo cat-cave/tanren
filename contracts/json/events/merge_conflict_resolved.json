@@ -10,7 +10,6 @@
     },
     "integration": {
       "enum": [
-        "mergify_queue",
         "native_queue",
         "direct_merge",
         "external_reviewer"

@@ -3,7 +3,8 @@
 // project config:
 //
 //   direct_merge      → GitHub merge API (PUT /pulls/:n/merge)
-//   mergify_queue     → apply the configured label; Mergify enqueues + merges
+//   native_queue      → enter Tanren's native merge queue (P2d); the coordinator
+//                       later DRIVES the merge through the same per-run path
 //   external_reviewer → stop at ready-for-review; emit a hand-off and let a
 //                       human merge (no merge call is made here)
 //   not_configured    → treated as an external_reviewer hand-off (safe default;
@@ -71,7 +72,7 @@ export {
 
 /** Map the configured integration to the mode the stage dispatches to. */
 export function dispatchedIntegrationFor(mode: MergeIntegration): DispatchedIntegration {
-  if (mode === "direct_merge" || mode === "mergify_queue" || mode === "native_queue" || mode === "external_reviewer") {
+  if (mode === "direct_merge" || mode === "native_queue" || mode === "external_reviewer") {
     return mode;
   }
   // not_configured → never auto-merge; hand off to a human.
@@ -170,7 +171,7 @@ export async function mergeForRun(input: MergeForRunInput): Promise<MergeForRunR
   });
 
   // P3-0023 governance posture gate. Only Tanren-initiated auto-merges
-  // (direct_merge / mergify_queue) are governed: a strict-posture external
+  // (direct_merge / native_queue) are governed: a strict-posture external
   // change blocks (operator approval required); an audit_only external change
   // is observed (no merge call). The external_reviewer / not_configured
   // hand-off is already a human-merge path — Tanren is not auto-merging, so
@@ -184,9 +185,6 @@ export async function mergeForRun(input: MergeForRunInput): Promise<MergeForRunR
 
   if (integration === "external_reviewer") {
     return dispatcher.handOff();
-  }
-  if (integration === "mergify_queue") {
-    return dispatcher.enqueueMergify();
   }
   if (integration === "native_queue" && input.queueDrive !== true) {
     // P2d: the run-loop's first pass under `native_queue` ENTERS the queue instead
@@ -288,7 +286,6 @@ async function buildGitHubProbe(
   });
   const pr: PullRequestRef = { repo, number: pullNumber };
   return {
-    applyQueueLabel: (label) => provider.applyQueueLabel(pr, label, resolved),
     merge: () => provider.mergePullRequest(pr, resolved, input.mergeMethod),
     readMergeability: () => provider.readMergeability(pr, resolved),
     updateBranch: () => provider.updateBranch(pr, resolved),

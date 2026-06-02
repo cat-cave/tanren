@@ -149,7 +149,7 @@ describe("compareCells — §3.3 one-knob invariant", () => {
     escapeHatches: { maxWriterIterPerSubtask: 5 },
     ciTiers: { fast: ["lint"] },
     governance: "strict",
-    mergeIntegration: "mergify_queue",
+    mergeIntegration: "native_queue",
   };
 
   it("permits a comparison when exactly one dimension differs", () => {

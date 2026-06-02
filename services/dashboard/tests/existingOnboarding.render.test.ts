@@ -59,11 +59,11 @@ const CONFIG_INJECTION_RESULT = {
     number: 48,
     url: "https://github.com/cat-cave/tanren-fixture-easy/pull/48",
     branch: "tanren/integrate",
-    filesCommitted: [".tanren/PROJECT.md", ".mergify.yml"],
+    filesCommitted: [".tanren/PROJECT.md", ".github/workflows/tanren-ci.yml"],
   },
   files: [
     { path: ".tanren/PROJECT.md", addedLines: 30 },
-    { path: ".mergify.yml", addedLines: 14 },
+    { path: ".github/workflows/tanren-ci.yml", addedLines: 14 },
   ],
   noRunsUntilMerged: true,
 };
@@ -213,7 +213,7 @@ describe("brownfield · config-injection PR (step 3)", () => {
         ["report", REPORT_JSON],
         ["posture", "strict"],
         ["keep", ".tanren/PROJECT.md"],
-        ["keep", ".mergify.yml"],
+        ["keep", ".github/workflows/tanren-ci.yml"],
       ]),
     });
     const html = await res.text();

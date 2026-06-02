@@ -181,7 +181,8 @@ adapters select the writer/answerers from the project routing table.
   DORA). Real-cost-gated.
 - **GitLab / VCS-provider abstraction**
   (`docs/roadmap/vcs-adapterization-plan.md`) — **held** until a real second
-  backend; GitHub is coupled across PR / merge / CI via Mergify + Actions.
+  backend; GitHub is coupled across PR / merge / CI (the merge queue is now
+  Tanren's own native queue; CI is GitHub Actions).
 - **agy / pi / reasonix live harness validation** — pi/reasonix writer-only
   adapters are built; agy is deferred (broken headless). Awaits credentials.
 - **The Rust rewrite / native harness** — long-horizon. The prepwork

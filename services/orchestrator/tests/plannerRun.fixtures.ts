@@ -232,7 +232,6 @@ function cleanFreshness() {
 // Direct-merge probe whose merge() reports a GitHub-detected conflict (405/409).
 export function conflictMerge() {
   return {
-    applyQueueLabel: async () => {},
     merge: async () => ({ merged: false, conflict: true, status: 409, message: "merge conflict" }),
     ...cleanFreshness(),
   };
@@ -241,7 +240,6 @@ export function conflictMerge() {
 // Direct-merge probe whose merge() neither merges nor conflicts → failed.
 export function failedMerge() {
   return {
-    applyQueueLabel: async () => {},
     merge: async () => ({ merged: false, conflict: false, status: 500, message: "merge api error" }),
     ...cleanFreshness(),
   };
@@ -250,7 +248,6 @@ export function failedMerge() {
 // Direct-merge probe whose merge() succeeds.
 export function mergedMerge() {
   return {
-    applyQueueLabel: async () => {},
     merge: async () => ({ merged: true, mergeSha: "merge-sha", conflict: false, status: 200, message: "merged" }),
     ...cleanFreshness(),
   };
@@ -272,7 +269,6 @@ export function approvingReview() {
 
 export function noopMerge() {
   return {
-    applyQueueLabel: async () => {},
     merge: async () => ({
       merged: true,
       mergeSha: "merge-sha",

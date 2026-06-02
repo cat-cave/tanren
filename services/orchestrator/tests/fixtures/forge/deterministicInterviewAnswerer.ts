@@ -188,7 +188,7 @@ const SCRIPT: InterviewRoundOutput[] = [
         "linear history",
         "status checks required",
         "no force push",
-        "mergify on",
+        "native merge queue on",
       ],
     },
     suggestions: [],

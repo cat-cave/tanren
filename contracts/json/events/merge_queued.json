@@ -4,7 +4,6 @@
   "properties": {
     "integration": {
       "enum": [
-        "mergify_queue",
         "native_queue",
         "direct_merge",
         "external_reviewer"
@@ -17,9 +16,6 @@
       "type": "integer"
     },
     "prUrl": {
-      "type": "string"
-    },
-    "queueLabel": {
       "type": "string"
     }
   },

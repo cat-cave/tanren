@@ -225,16 +225,6 @@ export class GitHubVcsProvider implements VcsProvider {
     return { logins: parseCommitLogins(response.body) };
   }
 
-  async applyQueueLabel(pr: PullRequestRef, label: string, token: ResolvedVcsToken): Promise<void> {
-    await this.reviewMerge.applyQueueLabel({
-      repo: pr.repo,
-      pullNumber: pr.number,
-      label,
-      token: token.token,
-      refreshToken: token.refresh,
-    });
-  }
-
   async mergePullRequest(
     pr: PullRequestRef,
     token: ResolvedVcsToken,

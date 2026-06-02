@@ -113,7 +113,6 @@ export class InMemoryVcsProvider implements VcsProvider {
   async listContributors(_pr: PullRequestRef, _token: ResolvedVcsToken): Promise<PullRequestContributors> {
     return { logins: ["author-bot"] };
   }
-  async applyQueueLabel(_pr: PullRequestRef, _label: string, _token: ResolvedVcsToken): Promise<void> {}
   async mergePullRequest(pr: PullRequestRef, _token: ResolvedVcsToken): Promise<MergePullRequestResult> {
     if (pr.number === CONFORMANCE_CONFLICT_PR_NUMBER) {
       return { merged: false, conflict: true, status: 409, message: "merge conflict" };

@@ -1,7 +1,7 @@
 // P2a: the MergeDispatcher — the per-run merge driver, split out of
 // mergeDispatch.ts to keep each file under the 500-line architecture cap.
 // `mergeForRun` builds the dispatcher and calls one of its mode methods
-// (handOff / enqueueMergify / directMerge / blockByPosture). directMerge runs
+// (handOff / enqueueNative / directMerge / blockByPosture). directMerge runs
 // the P2a up-to-date enforcement (ensureUpToDate) BEFORE the merge: a behind
 // branch is rebased + re-gated, a dirty/422 branch is routed to the
 // conflict-resolver hook — never merged stale, never merged broken.
@@ -95,20 +95,6 @@ export class MergeDispatcher {
     });
     await this.finalize("handed_off", { taskOutcome: "ok", taskStatus: "done" });
     return this.result("handed_off");
-  }
-
-  /** mergify_queue: apply the label, then mark the stage handed-off to Mergify. */
-  async enqueueMergify(): Promise<MergeForRunResult> {
-    const { eventStore, probe, input } = this.deps;
-    const label = input.mergifyQueueLabel ?? "tanren:merge";
-    await probe.applyQueueLabel(label);
-    await eventStore.append({
-      ...this.base(),
-      eventType: "merge.queued",
-      payload: { ...this.prFields(), integration: "mergify_queue", queueLabel: label },
-    });
-    await this.finalize("queued", { taskOutcome: "ok", taskStatus: "done" });
-    return this.result("queued", { message: `enqueued with label ${label}` });
   }
 
   /**

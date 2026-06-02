@@ -55,9 +55,6 @@ function detectRisks(index: ReconIndex): ReconRisk[] {
       note: "no CODEOWNERS file — review-gate routing has no owners",
     });
   }
-  if (!hasFile(index, ".mergify.yml")) {
-    risks.push({ severity: "info", note: "no mergify config detected" });
-  }
   if (!hasPathContaining(index, "tanren-ci")) {
     risks.push({
       severity: "warn",

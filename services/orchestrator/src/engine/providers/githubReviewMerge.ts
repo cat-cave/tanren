@@ -65,10 +65,10 @@ function repoPath(repo: GitHubRepository, suffix: string): string {
 
 /**
  * Review + merge GitHub operations: mark a draft PR ready-for-review, read the
- * latest reviews to derive a verdict, apply a Mergify queue label, and perform
- * a direct GitHub merge. The merge method deliberately distinguishes a conflict
- * (405/409 → recoverable) from a hard failure so the merge dispatcher can route
- * to the conflict-resolver scaffolding.
+ * latest reviews to derive a verdict, and perform a direct GitHub merge. The
+ * merge method deliberately distinguishes a conflict (405/409 → recoverable)
+ * from a hard failure so the merge dispatcher can route to the conflict-resolver
+ * scaffolding.
  */
 export class GitHubReviewMergeService {
   constructor(private readonly http: GitHubHttpClient) {}
@@ -192,25 +192,6 @@ export class GitHubReviewMergeService {
       throw new Error(`GitHub PR files fetch failed: HTTP ${response.status}`);
     }
     return renderFilesDiff(response.body);
-  }
-
-  /**
-   * Apply a label to the PR (the Mergify queue trigger). Mergify watches for the
-   * configured label and enqueues the PR; the merge itself happens off-platform.
-   */
-  async applyQueueLabel(
-    input: { repo: GitHubRepository; pullNumber: number; label: string } & TokenInput,
-  ): Promise<void> {
-    const response = await this.http.request({
-      method: "POST",
-      path: repoPath(input.repo, `/issues/${input.pullNumber}/labels`),
-      token: input.token,
-      refreshToken: input.refreshToken,
-      body: { labels: [input.label] },
-    });
-    if (response.status !== 200 && response.status !== 201) {
-      throw new Error(`GitHub label apply failed: HTTP ${response.status}`);
-    }
   }
 
   /**

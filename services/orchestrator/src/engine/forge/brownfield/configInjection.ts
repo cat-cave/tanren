@@ -1,8 +1,10 @@
 // P3-0016: the config-injection PR. From a confirmed recon report + the chosen
-// governance posture, propose the 6 integration files, let the operator EXCLUDE
+// governance posture, propose the integration files, let the operator EXCLUDE
 // any, then open ONE PR in the target repo that adds the kept files. "No runs
 // until merged" — opening the PR performs the only writes brownfield onboarding
-// ever makes, and the run loop stays gated on the merge.
+// ever makes, and the run loop stays gated on the merge. Tanren's native merge
+// queue (P2d) drives the merge directly, so no external merge-queue config is
+// injected — only the CI gate, CODEOWNERS, and the project snapshot land.
 //
 // The GitHub side is an injectable `ConfigInjectionGitHub` port (same shape as
 // the P3-0017 `ConfigGateGitHub`): production wires the App-token-backed adapter
@@ -99,21 +101,6 @@ jobs:
         run: corepack pnpm run build
 `;
 
-const MERGIFY_YAML = `# .mergify.yml — added by tanren config-injection (P3-0016)
-queue_rules:
-  - name: default
-    conditions:
-      - check-success=tanren-gate
-pull_request_rules:
-  - name: tanren auto-queue when green + approved
-    conditions:
-      - check-success=tanren-gate
-      - "#approved-reviews-by>=1"
-    actions:
-      queue:
-        name: default
-`;
-
 function codeowners(team: string): string {
   return `# CODEOWNERS — scaffolded by tanren config-injection (P3-0016)
 * @${team}
@@ -127,7 +114,7 @@ function countLines(content: string): number {
 }
 
 /**
- * Build the 6 proposed integration files from the recon report + posture. The
+ * Build the proposed integration files from the recon report + posture. The
  * order matches the hi-fi file column. `excludePaths` removes any the operator
  * unchecked before the PR is opened.
  */
@@ -146,7 +133,6 @@ export function proposeConfigFiles(input: ProposeFilesInput, excludePaths: Reado
       content: TANREN_CI_YAML,
       addedLines: countLines(TANREN_CI_YAML),
     },
-    { path: ".mergify.yml", content: MERGIFY_YAML, addedLines: countLines(MERGIFY_YAML) },
     { path: "CODEOWNERS", content: codeowners(team), addedLines: countLines(codeowners(team)) },
     {
       path: ".gitignore",

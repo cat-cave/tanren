@@ -2,8 +2,8 @@
 // fix: under `native_queue`, the first-pass `queued` outcome ENTERED the queue but
 // did NOT merge (Tanren owns the merge — the coordinator's drive pass merges it
 // later), so the spec must NOT be marked `done`/`merged` here. Every other mode is
-// unchanged: `direct_merge` `merged` → spec `merged`; a hand-off `queued`
-// (mergify_queue / external_reviewer) → spec `done`.
+// unchanged: `direct_merge` `merged` → spec `merged`; an `external_reviewer`
+// hand-off → spec `done`.
 
 import { describe, expect, it } from "vitest";
 import { finalizeMergeOutcome } from "../src/engine/workflow/plannerRunFinalize.js";
@@ -70,12 +70,6 @@ describe("finalizeMergeOutcome — native_queue spec status (P2d cardinal-sin fi
     const pool = new RecordingPool();
     await run(pool, "merged", "direct_merge");
     expect(pool.specStatusWritten()).toBe("merged");
-  });
-
-  it("a mergify_queue hand-off `queued` marks the spec `done` (unchanged)", async () => {
-    const pool = new RecordingPool();
-    await run(pool, "queued", "mergify_queue");
-    expect(pool.specStatusWritten()).toBe("done");
   });
 
   it("an external_reviewer hand-off `handed_off` marks the spec `done` (unchanged)", async () => {

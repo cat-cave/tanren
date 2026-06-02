@@ -14,7 +14,7 @@ import type { RunStateClient } from "./context.js";
 import type { ContributorProbe } from "./governancePosture.js";
 
 /** The integration modes the merge stage actually dispatches to. */
-export type DispatchedIntegration = "mergify_queue" | "native_queue" | "direct_merge" | "external_reviewer";
+export type DispatchedIntegration = "native_queue" | "direct_merge" | "external_reviewer";
 
 /**
  * The outcome of the merge stage. `conflict` is the recoverable branch;
@@ -46,8 +46,6 @@ export interface MergeForRunInput {
   githubAppMinter?: GithubAppTokenMinter;
   /** Run-resolved GitHub credential ref; see PollReviewForRunInput. */
   resolvedGithubCredentialRef?: string;
-  /** Label applied for the mergify_queue path; defaults to `tanren:merge`. */
-  mergifyQueueLabel?: string;
   /** GitHub merge method for direct_merge; defaults to `squash`. */
   mergeMethod?: "merge" | "squash" | "rebase";
   /**
@@ -121,7 +119,6 @@ export type NativeQueueEnqueuer = (input: {
 
 /** Injectable merge-operation probe (real GitHub by default; mocked in tests). */
 export interface MergeProbe {
-  applyQueueLabel(label: string): Promise<void>;
   merge(): Promise<MergePullRequestResult>;
   /** P2a: read the PR branch's up-to-date / mergeability state before merging. */
   readMergeability(): Promise<PullRequestMergeability>;

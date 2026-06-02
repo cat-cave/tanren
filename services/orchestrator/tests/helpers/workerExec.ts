@@ -139,7 +139,6 @@ export function fakeWorkflowRunner(github: GitHubHttpClient) {
         }),
       },
       mergeProbe: {
-        applyQueueLabel: async () => {},
         merge: async () => ({
           merged: true,
           mergeSha: "merge-sha",

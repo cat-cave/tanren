@@ -232,7 +232,6 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["prUrl", "public"],
     ["prNumber", "public"],
     ["integration", "public"],
-    ["queueLabel", "public"],
   ]),
   ...rulesFor("merge.completed", [
     ["prUrl", "public"],

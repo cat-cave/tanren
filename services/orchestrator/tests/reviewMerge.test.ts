@@ -46,7 +46,7 @@ describe("review verdict reduction", () => {
 describe("merge integration selection", () => {
   it("maps configured modes and treats not_configured as a hand-off", () => {
     expect(dispatchedIntegrationFor("direct_merge")).toBe("direct_merge");
-    expect(dispatchedIntegrationFor("mergify_queue")).toBe("mergify_queue");
+    expect(dispatchedIntegrationFor("native_queue")).toBe("native_queue");
     expect(dispatchedIntegrationFor("external_reviewer")).toBe("external_reviewer");
     expect(dispatchedIntegrationFor("not_configured")).toBe("external_reviewer");
   });
@@ -209,32 +209,6 @@ describe("merge dispatch stage", () => {
     expect(pool.tasks.find((t) => t.kind === "merge")?.status).toBe("done");
   });
 
-  it("mergify_queue → applies the label → merge.queued only", async () => {
-    const pool = new ReviewMergePool("mergify_queue");
-    const events = new FakeEventStore();
-    const probe = recordingMergeProbe({ merged: true, conflict: false, status: 200, message: "" });
-
-    const result = await mergeForRun({
-      pool: pool.asPgPool(),
-      eventStore: events,
-      secrets: new FakeSecretStore(),
-      resolveConflict: noopConflictResolver,
-      vcsProvider: vcsProviderOver(unusedHttp()),
-      runId: "run_1",
-      mergeProbe: probe,
-      mergifyQueueLabel: "tanren:merge",
-    });
-
-    expect(result.outcome).toBe("queued");
-    expect(probe.labels).toEqual(["tanren:merge"]);
-    expect(probe.mergeCalls).toBe(0);
-    const queued = events.events.find((e) => e.eventType === "merge.queued");
-    expect(queued?.payload).toMatchObject({
-      integration: "mergify_queue",
-      queueLabel: "tanren:merge",
-    });
-  });
-
   it("external_reviewer → hand-off, no merge call", async () => {
     const pool = new ReviewMergePool("external_reviewer");
     const events = new FakeEventStore();
@@ -252,7 +226,6 @@ describe("merge dispatch stage", () => {
 
     expect(result.outcome).toBe("handed_off");
     expect(probe.mergeCalls).toBe(0);
-    expect(probe.labels).toEqual([]);
     expect(events.events.find((e) => e.eventType === "merge.queued")?.payload).toMatchObject({
       integration: "external_reviewer",
     });

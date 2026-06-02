@@ -256,7 +256,8 @@ export interface ProjectConfig {
   routing: RoutingTable;
   escapeHatches: Partial<EscapeHatches>;
   governancePosture?: string;
-  mergeIntegration?: string;
+  /** The per-repo merge integration mode (mirrors the orchestrator `MergeIntegration` enum). */
+  mergeIntegration?: "native_queue" | "direct_merge" | "external_reviewer" | "not_configured";
   // P3-0025: preview-deploy URL pattern ({branch}/{pr})
   previewUrlPattern?: string;
   /** Project-bound credential refs (P3-0002); org default fills any omitted kind. */
