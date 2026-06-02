@@ -85,22 +85,26 @@ The forward plan (near- and long-term) lives in **`docs/roadmap/tempering.md`**
 four-dimension plan).
 
 The **largest remaining effort is the autonomy engine** —
-**`docs/roadmap/autonomy-engine.md`**. Today Tanren is a parallel
-spec-execution engine with a _manual_ driver: an operator triggers each spec,
-and the Forge ideation agents default to deterministic stubs. The autonomy plan
-closes that — an autonomous **DAG-walker** that drives the spec graph to
-completion, real-LLM Forge (brief → DAG in-house), webhook-driven issue
-ingestion, and a **native, intent-preserving merge queue** (auto-rebase,
-DAG-aware conflict resolution, speculative execution / stacked PRs) — proven by
-`apex`, a max-difficulty fixture that takes a one-paragraph brief to a deployed
-product autonomously. It also adds two standing guardrails: a **stub-ban
-architecture lint** (stubs/shells/mocks are test-fixtures-only, enforced) and a
-**real-resource `just e2e` gate**.
+**`docs/roadmap/autonomy-engine.md`**. **Phase 1 — the autonomy core — is merged
+on `main`** (PRs #220–#226): Tanren now drives its own spec graph. The autonomous
+**DAG-walker**, persisted **priority**, **real-LLM Forge** (the deterministic
+answerers moved to `tests/fixtures/`), **webhook-first issue intake**, a
+**stub-ban architecture lint** (`no-production-stubs`), and a **real-resource
+`just e2e` gate** all landed — and `QuotaPolicy` is deleted (budget is the only
+run gate). The manual per-spec trigger and the templated ideation stubs are gone.
+
+**Phase 2 — native merge coordination — is the active next build**: because the
+live DAG-walker runs specs in parallel, they now collide, so a `VcsProvider` seam
+→ auto-rebase → DAG-aware **intent-preserving conflict resolution** → speculative
+execution + change-percolation → a **native merge queue** (then Mergify removed).
+**Phase 3** proves the whole thing with **`apex`**, a max-difficulty fixture that
+takes a one-paragraph brief to a deployed product autonomously.
 
 Smaller near-term items: **Vault per-run scoped credentials** (the last big
 data-plane de-privilege), the **benchmark seed corpus**, the **remaining DAL
-clusters** (forge/quota/recovery); long-horizon: the GitLab/VCS abstraction and
-the Rust rewrite / native harness. None of these block the core promise above.
+clusters** (forge/recovery — quota is gone); long-horizon: the GitLab/VCS
+abstraction and the Rust rewrite / native harness. None of these block the core
+promise above.
 
 ## Quickstart for a real run (operator flow)
 

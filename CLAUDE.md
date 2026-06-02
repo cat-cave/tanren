@@ -28,27 +28,35 @@ The core promise — a real user gets merged PRs from specs, on public **and
 private** repos, across easy/medium/hard governance tiers — is **done and
 live-proven**.
 
-**The active build is the autonomy engine** (`docs/roadmap/autonomy-engine.md`):
-today the run loop is real but the _driver_ is manual (an operator triggers each
-spec; the Forge ideation agents default to deterministic stubs). The plan makes
-the DAG autonomous (DAG-walker · real-LLM Forge · webhook ingestion · a native
-intent-preserving merge queue with speculative execution) and proves it with
-`apex`. It starts with **P1·0** (delete the quota seam → budget-is-the-gate +
-concurrency-to-config), then the DAG-walker. Everything else below is hardening,
+**The active build is the autonomy engine** (`docs/roadmap/autonomy-engine.md`).
+**Phase 1 — the autonomy core — is merged on `main`** (PRs #220–#226,
+2026-06-01): the DAG now drives itself. The manual driver and the deterministic
+Forge stubs are gone — the autonomous **DagWalker**, persisted **priority**,
+**real-LLM Forge** (deterministic answerers moved to `tests/fixtures/`),
+**webhook-first intake**, the **stub-ban lint** (`no-production-stubs`), and the
+**real-resource `just e2e` gate** all landed, with `QuotaPolicy` deleted (budget
+is the only gate) and concurrency moved env→config.
+
+**Phase 2 — native merge coordination — is the active next build**: the live
+DAG-walker makes parallel specs collide, so the `VcsProvider` seam → auto-rebase →
+intent-preserving conflict resolution → speculative execution + change-percolation
+→ the native merge queue → removing Mergify. Then **Phase 3 — `apex`** (needs a
+budget ceiling for the real-credit run). Everything else below is hardening,
 content, and long-horizon items:
 
-- **A — core run loop.** ✅ Done. The harness frontier is resolved; the loop
-  converges reliably; private-repo clone auth works; the simulated reviewer
-  (`reviewPolicy: simulated`) closes the human-review tier. Remaining: post-merge
-  auto-issue creation.
+- **A — core run loop.** ✅ Done, now **autonomous**. The harness frontier is
+  resolved; the loop converges; private-repo clone auth works; the simulated
+  reviewer closes the human-review tier; and the **DagWalker** drives the spec
+  graph with no per-spec trigger (Phase 1). Remaining: post-merge auto-issue
+  creation (and the Phase-2 merge coordination the walker now requires).
 - **B — pipeline experimentation.** The tanren-method **benchmark toolkit is
   code-complete** (entities/scorecard/reducers/runner/accept/CLI). Remaining: the
   **seed corpus** (tiered seed repos + hidden accept tiers) and running the
   experiments. See `docs/roadmap/tanren-method-benchmark.md`.
 - **C — refactor/scale prepwork.** The `Repositories` seam + conformance is in;
   routes + run-lifecycle writes are migrated off raw SQL; `LISTEN/NOTIFY`
-  replaced 1s polling. Remaining: the rest of the DAL (forge/quota/recovery),
-  `typify→serde` codegen, the first whole-repo mutation baseline.
+  replaced 1s polling. Remaining: the rest of the DAL (forge/recovery — quota is
+  gone), `typify→serde` codegen, the first whole-repo mutation baseline.
 - **D — managed-hosting.** RLS + plane-split **P1→P3c** done + live-validated
   (events/cost AND run/spec/task lifecycle writes route through the control
   plane, `42501`-proven); the standalone allocator is org-threaded. Remaining:

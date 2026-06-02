@@ -12,6 +12,18 @@ full **before** any code, with PR-sized units and dependencies, so it can be
 reviewed and sequenced deliberately. The capstone is `apex` — a max-difficulty
 fixture that forces every capability below and proves the end-to-end claim.
 
+> **Build status (updated 2026-06-01).** **Phase 1 — the autonomy core — is
+> merged on `main`** (PRs #220–#226): P1·0 budget-is-the-gate + concurrency→config
+> (`QuotaPolicy` deleted), P1a the **DagWalker** (+ conformance suite, wired into
+> worker boot), P1b persisted spec **priority**, P1c **real-LLM Forge** (options +
+> chat; deterministic answerers relocated to `tests/fixtures/`), P1d **webhook-first
+> autonomous intake**, P8a the **stub-ban architecture lint** (`no-production-stubs`),
+> and P8b the **real-resource `just e2e` gate** + no-mock arch check. The §0 gap
+> table below is the _original_ audit; the CRITICAL/HIGH rows it lists for the
+> DAG-walker, real-LLM Forge, discovery, intake, priority, and concurrency are now
+> **closed**. **Phase 2 (native merge coordination) is the active next build** —
+> the live DAG-walker makes parallel collisions real, exactly as §0 predicted.
+
 ## 0. The honest gap (from the 2026-06-01 autonomy audit)
 
 What is **real** today (proven by the easy/medium/hard live runs): the
@@ -433,18 +445,19 @@ guessed.
 ## 5. PR-sized work breakdown + dependencies
 
 ```
-Phase 1 (autonomy core)
-  P1·0 budget-is-the-gate (delete QuotaPolicy/Noop) + concurrency→config   [lands first; §8a stub removal]
-  P1a  DagWalker contract + walker + conformance + worker-boot wiring      [keystone]   → P1·0
-  P1b  specs.priority migration + thread through create/accept + walker order   → P1a
-  P1c  wire real-LLM Forge answerers (interview/discovery/triage/recon/⌘K),
-       dual-mode options+chat; deterministic answerers → test fixtures    [parallel to P1a]
-  P1d  autonomous intake: webhook receivers (push) + poll fallback → real triage → DAG insert   → P1b, P1c
+Phase 1 (autonomy core)  ✅ MERGED on main (PRs #220–#226, 2026-06-01)
+  P1·0 ✅ budget-is-the-gate (delete QuotaPolicy/Noop) + concurrency→config   [#220]
+  P1a  ✅ DagWalker contract + walker + conformance + worker-boot wiring      [keystone, #221]
+  P1b  ✅ specs.priority migration + thread through create/accept + walker order   [#222]
+  P1c  ✅ wire real-LLM Forge answerers (interview/discovery/triage/recon/⌘K),
+          dual-mode options+chat; deterministic answerers → test fixtures    [#223]
+  P1d  ✅ autonomous intake: webhook receivers (push) + poll fallback → real triage → DAG insert   [#225]
 
-  P8a  stub-ban architecture lint (check-architecture) + purge prod stubs  [parallel; pairs with P1·0/P1c]
-  P8b  real-resource `just e2e` gate (no-mock arch check + tier proofs)    [parallel; grows per capability]
+  P8a  ✅ stub-ban architecture lint (check-architecture) + purge prod stubs  [#224]
+  P8b  ✅ real-resource `just e2e` gate (no-mock arch check + tier proofs)    [#226]
+       (driveLiveTier wires the real HTTP operator flow; full credentialed run is the nightly/apex)
 
-Phase 2 (merge coordination — native) — starts once P1a lands (collisions appear)
+Phase 2 (merge coordination — native) — ACTIVE NEXT; P1a has landed so collisions are now real
   P2·0 VcsProvider contract (GitHub adapter extracted) + conformance       → P1a
   P2a  up-to-date/auto-rebase (re-gate on rebase)                          → P2·0
   P2b  intent-preserving conflict-resolution Answerer + re-gate            → P2a
