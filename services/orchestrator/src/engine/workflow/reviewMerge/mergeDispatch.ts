@@ -51,6 +51,7 @@ import {
   type MergeForRunResult,
   type MergeOutcomeKind,
   type MergeProbe,
+  type NativeQueueEnqueuer,
   type ReGateCiHook,
 } from "./mergeDispatchTypes.js";
 
@@ -64,12 +65,13 @@ export {
   type MergeForRunResult,
   type MergeOutcomeKind,
   type MergeProbe,
+  type NativeQueueEnqueuer,
   type ReGateCiHook,
 };
 
 /** Map the configured integration to the mode the stage dispatches to. */
 export function dispatchedIntegrationFor(mode: MergeIntegration): DispatchedIntegration {
-  if (mode === "direct_merge" || mode === "mergify_queue" || mode === "external_reviewer") {
+  if (mode === "direct_merge" || mode === "mergify_queue" || mode === "native_queue" || mode === "external_reviewer") {
     return mode;
   }
   // not_configured → never auto-merge; hand off to a human.
@@ -186,6 +188,19 @@ export async function mergeForRun(input: MergeForRunInput): Promise<MergeForRunR
   if (integration === "mergify_queue") {
     return dispatcher.enqueueMergify();
   }
+  if (integration === "native_queue" && input.queueDrive !== true) {
+    // P2d: the run-loop's first pass under `native_queue` ENTERS the queue instead
+    // of merging. The native MergeCoordinator later drives the actual merge (a
+    // second mergeForRun call with `queueDrive: true` → the directMerge path
+    // below). A speculative dependent whose hold has NOT cleared returned `blocked`
+    // ABOVE and never reaches here — it enters the queue only once its ancestors
+    // merge, so the queue never holds a dependent ahead of its ancestors.
+    return dispatcher.enqueueNative();
+  }
+  // `direct_merge`, OR `native_queue` on the coordinator DRIVE pass: the SAME
+  // per-run merge path (P2a up-to-date/rebase + P2b conflict-resolution + P2c-1
+  // retarget). The dispatcher labels its events from `this.deps.integration`, so a
+  // drive pass records `native_queue` — not a second merge implementation.
   return dispatcher.directMerge();
 }
 

@@ -50,6 +50,16 @@ export class MergeDispatcher {
   }
 
   /**
+   * The integration label the directMerge path stamps on its events. `direct_merge`
+   * for the immediate-merge mode; `native_queue` when the coordinator DRIVES the
+   * SAME path for a queued head (P2d) — so the events read `native_queue` without a
+   * second merge implementation. Only these two modes reach directMerge.
+   */
+  private mergeLabel(): "direct_merge" | "native_queue" {
+    return this.deps.integration === "native_queue" ? "native_queue" : "direct_merge";
+  }
+
+  /**
    * P3-0023: a governance posture blocked the merge. Emits the typed
    * `merge.blocked` event with the posture, mode, and external logins, then
    * leaves the task `running` so the operator-approval / audit recovery surface
@@ -101,13 +111,46 @@ export class MergeDispatcher {
     return this.result("queued", { message: `enqueued with label ${label}` });
   }
 
+  /**
+   * P2d (native_queue, first pass): ENTER the run into Tanren's native merge queue
+   * instead of merging now. Persists the queue entry (idempotent — a re-pass does
+   * not double-queue), emits merge.queued exactly once (on creation), and finalizes
+   * the run as `queued` (done) so the run loop returns + frees its slot. The native
+   * MergeCoordinator later selects this entry in DAG order and DRIVES the actual
+   * merge (a second mergeForRun with `queueDrive: true` → directMerge). A run
+   * already queued/merging is not re-queued (no double-queue, no double-merge).
+   */
+  async enqueueNative(): Promise<MergeForRunResult> {
+    const { eventStore, input, context, pr } = this.deps;
+    const enqueue = input.enqueueNativeQueue;
+    if (enqueue === undefined) {
+      throw new Error("native_queue merge requires an enqueueNativeQueue hook (the MergeQueueModel-backed enqueuer)");
+    }
+    const { created } = await enqueue({
+      projectId: context.projectId,
+      runId: context.runId,
+      specId: context.specId,
+      prUrl: context.prUrl,
+      prNumber: pr.pullNumber,
+    });
+    if (created) {
+      await eventStore.append({
+        ...this.base(),
+        eventType: "merge.queued",
+        payload: { ...this.prFields(), integration: "native_queue" },
+      });
+    }
+    await this.finalize("queued", { taskOutcome: "ok", taskStatus: "done" });
+    return this.result("queued", { message: created ? "entered native merge queue" : "already in native merge queue" });
+  }
+
   /** direct_merge: GitHub merge, with a single conflict-resolver retry. */
   async directMerge(): Promise<MergeForRunResult> {
     const { eventStore, probe } = this.deps;
     await eventStore.append({
       ...this.base(),
       eventType: "merge.queued",
-      payload: { ...this.prFields(), integration: "direct_merge" },
+      payload: { ...this.prFields(), integration: this.mergeLabel() },
     });
     // P2a up-to-date enforcement: BEFORE merging, ensure the PR branch is current
     // with its base. A stale branch is rebased + re-gated here; a real conflict is
@@ -128,7 +171,7 @@ export class MergeDispatcher {
       await eventStore.append({
         ...this.base(),
         eventType: "merge.completed",
-        payload: { ...this.prFields(), integration: "direct_merge", mergeSha: merge.mergeSha },
+        payload: { ...this.prFields(), integration: this.mergeLabel(), mergeSha: merge.mergeSha },
       });
       // P2c-1 (§2c cleanup): the dependent merged onto `default_branch`; delete its
       // ephemeral integration ref. Best-effort — a cleanup failure never undoes the
@@ -143,7 +186,7 @@ export class MergeDispatcher {
     await eventStore.append({
       ...this.base(),
       eventType: "merge.failed",
-      payload: { ...this.prFields(), integration: "direct_merge", message: merge.message },
+      payload: { ...this.prFields(), integration: this.mergeLabel(), message: merge.message },
     });
     await this.finalize("failed", {
       taskOutcome: "failed",
@@ -210,7 +253,7 @@ export class MergeDispatcher {
       eventType: "merge.behind",
       payload: {
         ...this.prFields(),
-        integration: "direct_merge",
+        integration: this.mergeLabel(),
         baseBranch: mergeability.baseBranch || context.baseBranch,
         headBranch: mergeability.headBranch || undefined,
         mergeableState: mergeability.state,
@@ -237,7 +280,7 @@ export class MergeDispatcher {
       eventType: "merge.rebased",
       payload: {
         ...this.prFields(),
-        integration: "direct_merge",
+        integration: this.mergeLabel(),
         baseBranch: mergeability.baseBranch || context.baseBranch,
         headBranch: mergeability.headBranch || undefined,
         reGatedCi: ci !== undefined,
@@ -247,7 +290,7 @@ export class MergeDispatcher {
       await eventStore.append({
         ...this.base(),
         eventType: "merge.failed",
-        payload: { ...this.prFields(), integration: "direct_merge", message: "CI failed after auto-rebase" },
+        payload: { ...this.prFields(), integration: this.mergeLabel(), message: "CI failed after auto-rebase" },
       });
       await this.finalize("failed", {
         taskOutcome: "failed",
@@ -282,7 +325,7 @@ export class MergeDispatcher {
         await this.deps.eventStore.append({
           ...this.base(),
           eventType: "merge.completed",
-          payload: { ...this.prFields(), integration: "direct_merge", mergeSha: merge.mergeSha },
+          payload: { ...this.prFields(), integration: this.mergeLabel(), mergeSha: merge.mergeSha },
         });
         await this.finalize("merged", { taskOutcome: "ok", taskStatus: "done" });
         return this.result("merged", { mergeSha: merge.mergeSha });
@@ -324,7 +367,7 @@ export class MergeDispatcher {
       eventType: "merge.conflict",
       payload: {
         ...this.prFields(),
-        integration: "direct_merge",
+        integration: this.mergeLabel(),
         baseBranch: context.baseBranch,
         ...(headBranch !== undefined && { headBranch }),
         message,

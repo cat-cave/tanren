@@ -186,3 +186,70 @@ export const runs = pgTable(
     index("runs_org_project").on(table.orgId, table.projectId),
   ],
 );
+
+// P2d (autonomy-engine.md §2d): the native intelligent merge queue. One row per
+// ready-to-merge run under `native_queue` — the persisted, RLS-scoped queue state
+// the MergeCoordinator orders + serializes. DAG state is the source of truth
+// (§1.7), so this table holds ONLY the queue membership + serialization claim, not
+// duplicated DAG/lifecycle state: ordering (DAG-order + priority) is DERIVED fresh
+// each pass from `specs` + `runs`. The table exists so the queue SURVIVES A
+// RESTART (a process crash mid-coordinate leaves the queued/merging rows
+// recoverable) and so the serialization claim (`status = 'merging'`) is durable —
+// at most one entry per project is `merging` at a time (one merge in flight).
+//
+//   status:
+//     - `queued`   — ready-to-merge, awaiting its turn in DAG order.
+//     - `merging`  — the coordinator CLAIMED this entry and is driving its merge
+//                    (the serialization lock — at most one per project).
+//     - `merged`   — its merge landed (terminal; kept for queue statistics).
+//     - `dequeued` — left the queue WITHOUT merging (conflict → recoverable hold,
+//                    or removed for liveness so independent items proceed); the
+//                    `dequeue_reason` records which. A re-ready run re-enqueues a
+//                    NEW row, so a dequeued row is terminal.
+//
+// org_id is the tenant root (RLS deny-by-default); a `queued` unique index per run
+// is the IDEMPOTENCY boundary — a run already queued/merging is never re-queued.
+export const mergeQueue = pgTable(
+  "merge_queue",
+  {
+    queueId: text("queue_id").primaryKey(),
+    runId: text("run_id")
+      .notNull()
+      .references(() => runs.runId),
+    specId: text("spec_id")
+      .notNull()
+      .references(() => specs.specId),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.projectId),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organizations.id),
+    status: text("status").notNull().default("queued"),
+    /** The dequeue reason when status = 'dequeued' (conflict | blocked | failed). */
+    dequeueReason: text("dequeue_reason"),
+    /** The PR url + number captured at enqueue (the coordinator drives by run id). */
+    prUrl: text("pr_url").notNull(),
+    prNumber: text("pr_number").notNull(),
+    enqueuedAt: timestamp("enqueued_at", { withTimezone: true }).notNull().defaultNow(),
+    /** Set when the coordinator CLAIMED the entry (status → merging). */
+    claimedAt: timestamp("claimed_at", { withTimezone: true }),
+    /** Set when the entry reached a terminal status (merged / dequeued). */
+    settledAt: timestamp("settled_at", { withTimezone: true }),
+  },
+  (table) => [
+    enumCheck("merge_queue_status_check", table.status, ["queued", "merging", "merged", "dequeued"]),
+    check(
+      "merge_queue_dequeue_reason_check",
+      sql`${table.dequeueReason} IS NULL OR ${table.dequeueReason} IN ('conflict','blocked','failed')`,
+    ),
+    index("merge_queue_org_id").on(table.orgId),
+    index("merge_queue_org_project").on(table.orgId, table.projectId),
+    index("merge_queue_org_project_status").on(table.orgId, table.projectId, table.status),
+    // The idempotency boundary: a run may have at most ONE active (queued/merging)
+    // entry. A partial unique index keyed on run_id where status is non-terminal.
+    uniqueIndex("merge_queue_active_run_unique")
+      .on(table.runId)
+      .where(sql`status IN ('queued', 'merging')`),
+  ],
+);

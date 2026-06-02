@@ -81,6 +81,7 @@ import {
   ReviewChangesRequestedPayload,
   ReviewRequestedPayload,
 } from "./schemas/integrations.js";
+import { MergeDequeuedPayload, MergeQueueAdvancedPayload } from "./schemas/mergeQueue.js";
 import { GateFailedPayload, GatePassedPayload, GateStartedPayload } from "./schemas/gate.js";
 import {
   JobDeadLetteredPayload,
@@ -245,6 +246,12 @@ export const EventRegistry = {
   "merge.speculative_held": MergeSpeculativeHeldPayload,
   "merge.retargeted": MergeRetargetedPayload,
   "merge.integration_cleaned": MergeIntegrationCleanedPayload,
+  // P2d (§2d): the native intelligent merge queue. A ready run ENTERS the queue
+  // (merge.queued w/ native_queue), the coordinator selects the DAG-ordered head
+  // (merge.queue.advanced), and an entry that left without merging (conflict /
+  // blocked / failed) records merge.dequeued. Serialized: one merge at a time.
+  "merge.queue.advanced": MergeQueueAdvancedPayload,
+  "merge.dequeued": MergeDequeuedPayload,
 
   // Notification dispatch (schemas declared; dispatcher lands in P2A-0017)
   "notification.enqueued": NotificationEnqueuedPayload,

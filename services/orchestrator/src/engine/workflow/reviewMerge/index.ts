@@ -45,6 +45,7 @@ export {
   type MergeProbe,
   type ConflictResolverHook,
   type ConflictContext,
+  type NativeQueueEnqueuer,
   type ReGateCiHook,
 } from "./mergeDispatch.js";
 export { reviewerRejection } from "./steering.js";

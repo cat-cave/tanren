@@ -63,6 +63,7 @@ import {
   type ConflictResolverHook,
   type MergeForRunResult,
   type MergeProbe,
+  type NativeQueueEnqueuer,
   type PollReviewForRunResult,
   type ReviewProbe,
 } from "./reviewMerge/index.js";
@@ -167,11 +168,9 @@ export interface RunPlannerLoopInput {
   ciPollDelayMs?: number;
   sleep?: (ms: number) => Promise<void>;
   pressureThresholdPercent?: number;
-  // P3-0006: the install command run over SSH in the workspace after clone and
-  // before the writer loop, so gating + intent-checking see a built tree. This
-  // is an explicit override (operator/test). When omitted, the run resolves the
-  // repo's tanren-ci.yml `bootstrap.run` (P3-0004) and uses that; when the repo
-  // ships no tanren-ci.yml it falls back to the pnpm/npm-detecting
+  // P3-0006: the install command run over SSH after clone (so gating + intent-
+  // checking see a built tree). An explicit override; when omitted the run resolves
+  // the repo's tanren-ci.yml `bootstrap.run` (P3-0004), else the pnpm/npm-detecting
   // DEFAULT_BOOTSTRAP_COMMAND heuristic.
   bootstrapCommand?: string;
   // Test seam: when omitted, the real bootstrapWorkspace runs over SSH. Tests
@@ -202,6 +201,8 @@ export interface RunPlannerLoopInput {
   reviewProbe?: ReviewProbe;
   mergeProbe?: MergeProbe;
   resolveConflict?: ConflictResolverHook;
+  // P2d (native_queue): enters a ready run into the native merge queue (→ mergeForRun).
+  nativeQueueEnqueuer?: NativeQueueEnqueuer;
   // Max review→rework re-entries before the run halts pending operator action.
   maxReviewReworks?: number;
 }
@@ -242,6 +243,10 @@ export interface PlannerRunResult {
  */
 function writerSeam(input: RunPlannerLoopInput): { runStateWriter?: RunStateWriter } {
   return input.runStateWriter === undefined ? {} : { runStateWriter: input.runStateWriter };
+}
+
+function nativeQueueSeam(input: RunPlannerLoopInput): { enqueueNativeQueue?: NativeQueueEnqueuer } {
+  return input.nativeQueueEnqueuer === undefined ? {} : { enqueueNativeQueue: input.nativeQueueEnqueuer };
 }
 
 export async function runPlannerLoopWorkflow(input: RunPlannerLoopInput): Promise<PlannerRunResult> {
@@ -454,6 +459,8 @@ export async function runPlannerLoopWorkflow(input: RunPlannerLoopInput): Promis
       // verdict (the prior green is stale) before merging — through the SAME CI
       // path the run already uses.
       reGateCi: buildReGateCi(input),
+      // P2d: under `native_queue` the merge stage enters this run into the queue.
+      ...nativeQueueSeam(input),
     });
 
     // Finalize the run for the merge stage's outcome (conflict → recoverable

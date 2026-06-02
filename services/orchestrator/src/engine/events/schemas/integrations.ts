@@ -161,7 +161,7 @@ export const ReviewAutoApprovedPayload = z
 // the merge sha on a real GitHub merge; `merge.failed` records a non-conflict
 // failure; `merge.conflict` is the typed recoverable branch the conflict
 // resolver scaffolding hooks into.
-export const MergeIntegrationMode = z.enum(["mergify_queue", "direct_merge", "external_reviewer"]);
+export const MergeIntegrationMode = z.enum(["mergify_queue", "native_queue", "direct_merge", "external_reviewer"]);
 
 export const MergeQueuedPayload = z
   .object({
