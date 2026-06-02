@@ -238,15 +238,19 @@ connections:
   # NOTIFICATION CHANNELS (managed credentials; per-org targets) — the nine:
   #   slack discord email teams twilio pagerduty webhook ntfy githubChecks
   # ===========================================================================
-  - connector: slack-notify
-    kind: channel.slack
+  - connector: slack-org
+    kind: integration.slack_org
     home: managed
     scope: org
-    ref: slack-notify
-    config: { channel: "#tanren" }
+    ref: slack-org
+    config: { workspace: "<WORKSPACE_ID>", managesChannels: true, delivery: bot_or_webhook }
     secret: { value_source: env, env: TANREN_E2E_SLACK_BOT_TOKEN } # WISHLIST (P0)
     validation:
-      { priority: P0, cadence: nightly, proves: "real Slack delivery (also the apex external-integration substrate)" }
+      {
+        priority: P0,
+        cadence: nightly,
+        proves: "org-level Slack grant can provision/project-bind a channel or webhook, then deliver a real message",
+      }
 
   - connector: ntfy-notify
     kind: channel.ntfy
@@ -263,7 +267,7 @@ connections:
     scope: org
     ref: webhook-notify
     config: { url: "<https://your-receiver>" }
-    secret: { value_source: env, env: TANREN_E2E_WEBHOOK_SIGNING_SECRET } # P1
+    secret: { value_source: env, env: TANREN_E2E_WEBHOOK_URL } # P1
     validation: { priority: P1, cadence: nightly, proves: "signed generic webhook delivery (free-ish)" }
 
   - connector: discord-notify
@@ -330,14 +334,19 @@ connections:
         proves: "issue webhook → real-LLM triage → spec → DAG-insert (closes the loop on real artifacts)",
       }
 
-  - connector: sentry-intake
-    kind: intake.sentry
+  - connector: sentry-org
+    kind: integration.sentry_org
     home: managed
     scope: org
     ref: sentry-default
-    config: { mode: webhook }
-    secret: { value_source: env, env: TANREN_E2E_SENTRY_WEBHOOK_SECRET } # P2
-    validation: { priority: P2, cadence: weekly, proves: "Sentry signal → triage → spec (multi-source intake)" }
+    config: { org: "<SENTRY_ORG_SLUG>", team: "<SENTRY_TEAM_SLUG>", managesProjects: true }
+    secret: { value_source: env, env: TANREN_E2E_SENTRY_AUTH_TOKEN } # P2
+    validation:
+      {
+        priority: P2,
+        cadence: weekly,
+        proves: "Sentry org grant provisions a project/key/source, then Sentry signal → triage → spec",
+      }
 
   - connector: linear-intake
     kind: intake.linear

@@ -80,15 +80,21 @@ GitHub token, the local SSH runner.
 
 1. **Tier 1 — makes `apex` runnable as designed (P0):**
    - **GitHub App** on a throwaway org/repo — App id + installation id + private-key PEM. Unlocks the preferred connectivity path _and_ real issue webhooks for intake.
-   - **Slack bot** — bot token + channel (one for Tanren's own alerts, one for the apex product's bot; can be the same workspace).
-   - **Deploy target** — a Fly.io / Render / Railway / Vercel token (or a Hetzner VM), so the apex web UI actually deploys.
+   - **Slack org grant** — bot/app token with permission for Tanren to bind or create project channels/webhooks; a pre-created webhook URL is only a validation fallback.
+   - **Deploy provider grant** — a Fly.io / Render / Railway / Vercel org/team token (or a Hetzner VM allocator grant), so Tanren can create the apex web UI target instead of requiring a manually-created project.
 
 2. **Tier 2 — proves the seams only conformance-tested today (P1):**
    - **Hetzner** API token — the real allocator-family proof (provision → SSH → run → teardown), cents per run.
    - **Managed-router key** (OpenRouter or a raw OpenAI/Anthropic key) — the managed/metered billing path + the transparent cost+margin record.
    - **One alt secret store** — a 1Password Connect token (url + token + vault id), or a cloud SM credential.
 
-3. **Tier 3 — breadth (P2):** Sentry/Linear (multi-source intake), Discord/SendGrid/Teams/Twilio/PagerDuty (more channels), DigitalOcean/GCP/AWS/k8s (more allocators), GitHub OAuth / OIDC (real sign-in).
+3. **Tier 3 — breadth (P2):** Sentry/Linear org grants (multi-source intake plus project/source provisioning), Discord/SendGrid/Teams/Twilio/PagerDuty (more channels), DigitalOcean/GCP/AWS/k8s (more allocators), GitHub OAuth / OIDC (real sign-in).
+
+Do not treat project-specific upstream resources as operator prerequisites. A
+Sentry project, Slack channel/webhook, PagerDuty routing key, deploy app, cloud
+SSH key, or preview URL is a Tanren-created artifact when the upstream API
+supports it. See [`integration-provisioning.md`](integration-provisioning.md)
+for the org-grant vs project-artifact matrix and the code backlog.
 
 All of it fits well under the **$50** ceiling, and the bulk runs on the Codex
 subscription. The full per-connector breakdown — kind, scope, ref, config,

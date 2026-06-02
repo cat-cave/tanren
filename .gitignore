@@ -4,10 +4,14 @@ coverage/
 # Stryker mutation-testing output (html report + temp dir); see stryker.config.mjs
 reports/
 .env
+.env.*
+!.env.*.example
 .DS_Store
 *.log
 .pnpm-store/
 .turbo/
+secrets/
+connections.manifest.local.yaml
 
 # Claude Code agent worktrees
 .claude/
