@@ -15,6 +15,7 @@ import { StaticRunnerAllocator } from "../../src/engine/allocators/staticRunnerA
 import { ManualSshAllocator } from "../../src/engine/allocators/manualSshAllocator.js";
 import { SidecarHttpAllocator } from "../../src/engine/allocators/sidecarHttpAllocator.js";
 import { HetznerAllocator, type HetznerClient } from "../../src/engine/allocators/hetznerAllocator.js";
+import { generateEd25519KeyPair } from "../../src/engine/ssh/keygen.js";
 import { DigitalOceanAllocator, type DigitalOceanClient } from "../../src/engine/allocators/digitalOceanAllocator.js";
 import { GcpAllocator, type GcpComputeClient } from "../../src/engine/allocators/gcpAllocator.js";
 import { AwsEc2Allocator, type AwsEc2Client } from "../../src/engine/allocators/awsEc2Allocator.js";
@@ -179,6 +180,12 @@ const makeSidecar = (): Allocator =>
     sshUsername: "tanren",
   });
 
+// Inject a DETERMINISTIC, pre-generated well-formed keypair so the Hetzner
+// conformance run can never flake on the (now-retry-hardened) live generator.
+// One real ed25519 keypair, generated once at module load, reused for both the
+// client + host key slots — the conformance suite only asserts the SHA256
+// fingerprint SHAPE, not uniqueness.
+const CONFORMANCE_KEYPAIR = generateEd25519KeyPair();
 const makeHetzner = (fail = false): Allocator =>
   new HetznerAllocator({
     apiToken: "tok",
@@ -187,6 +194,7 @@ const makeHetzner = (fail = false): Allocator =>
     runners: new MemoryRunnerStore(),
     secrets: new InMemorySecretStore(),
     client: hetznerClient(fail),
+    generateKeyPair: () => CONFORMANCE_KEYPAIR,
     ...slowReady,
   });
 

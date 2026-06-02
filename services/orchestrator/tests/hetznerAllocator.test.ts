@@ -218,6 +218,51 @@ describe("HetznerAllocator", () => {
     expect(client.deletedKeys).toEqual([]);
   });
 
+  // Regression for the ssh2@1.17.0 malformed-public-key bug: an UNPARSEABLE
+  // public key escaping the generator must NOT cause a teardown leak. Because
+  // all keypair generation + the host-key fingerprint are computed in Phase 1
+  // (before any external side effect), a bad key fails BEFORE secrets.put /
+  // createSshKey / createServer — so nothing is stored or provisioned to leak.
+  it("rejects with NO external side effect when a malformed public key reaches the fingerprint step", async () => {
+    const client = new FakeHetznerClient();
+    const runners = new FakeRunnerStore();
+    const secrets = new InMemorySecretStore();
+    // First call (client key) is fine; the host key is malformed -> the Phase-1
+    // host-key fingerprint computation throws before anything external runs.
+    const hostKey: EphemeralKeyPair = { privateKey: "p", publicKey: "not-a-valid-ssh-public-key" };
+    let i = 0;
+    const seq = [CLIENT_KEY, hostKey];
+    const alloc = new HetznerAllocator({
+      ...baseOpts(client, runners, secrets),
+      generateKeyPair: (): EphemeralKeyPair => seq[i++] as EphemeralKeyPair,
+    });
+
+    await expect(alloc.allocate(req("run_bad_key"))).rejects.toThrow(/could not parse host public key/u);
+    // Nothing was uploaded, created, or stored — no dangling resources.
+    expect(client.createdKeys).toEqual([]);
+    expect(client.created).toEqual([]);
+    expect(client.deletedKeys).toEqual([]);
+    expect(client.deleted).toEqual([]);
+    expect(await secrets.list("hetzner/")).toEqual([]);
+  });
+
+  // If a throw DOES happen after an external step (e.g. the server-create
+  // rejects right after the ssh_key was uploaded + the private key stored), the
+  // extended cleanup guard must still funnel through cleanup(): delete the
+  // ssh_key AND wipe the secret. (Pinned via the existing failCreateServer path,
+  // re-asserted here for the no-leak invariant.)
+  it("funnels any post-upload throw through cleanup so the ssh_key + secret never dangle", async () => {
+    const client = new FakeHetznerClient({ failCreateServer: true });
+    const runners = new FakeRunnerStore();
+    const secrets = new InMemorySecretStore();
+    await expect(allocator(client, runners, secrets).allocate(req("run_post_upload"))).rejects.toThrow(/boom/u);
+    expect(client.createdKeys).toHaveLength(1);
+    expect(client.deletedKeys).toEqual([555]);
+    // server-create never returned a server, so there is nothing to delete.
+    expect(client.deleted).toEqual([]);
+    expect(await secrets.list("hetzner/")).toEqual([]);
+  });
+
   it("requires a non-empty token", () => {
     const runners = new FakeRunnerStore();
     const secrets = new InMemorySecretStore();

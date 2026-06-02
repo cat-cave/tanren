@@ -23,10 +23,55 @@ export interface EphemeralKeyPair {
  */
 export type KeyPairGenerator = () => EphemeralKeyPair;
 
-/** Production keypair generator backed by ssh2's native keygen. */
+/** Max attempts before {@link generateEd25519KeyPair} gives up on a clean key. */
+const KEYGEN_MAX_ATTEMPTS = 8;
+
+/**
+ * Parses + re-serializes a public key the way the fingerprint computation and
+ * the Hetzner key upload both do (`parseKey` → `getPublicSSH`). Returns `true`
+ * only when that full round-trip succeeds, so a malformed key is caught here
+ * rather than throwing later from inside `allocate` (after side effects).
+ *
+ * `ssh2@1.17.0`'s `generateKeyPairSync("ed25519")` intermittently (~0.36%)
+ * emits a public key with a broken length prefix when the point begins with a
+ * `0x00` byte; such a key fails this round-trip.
+ */
+function publicKeyRoundTrips(publicKey: string): boolean {
+  const parsed = sshUtils.parseKey(publicKey);
+  if (parsed instanceof Error) {
+    return false;
+  }
+  try {
+    // `getPublicSSH()` re-encodes the wire blob; the length-prefix bug surfaces
+    // here even when `parseKey` itself did not reject.
+    parsed.getPublicSSH();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Production keypair generator backed by ssh2's native keygen, hardened against
+ * the `ssh2@1.17.0` malformed-public-key bug: it VALIDATES each generated key's
+ * `parseKey`→`getPublicSSH` round-trip (the exact path the host-key fingerprint
+ * AND the Hetzner public-key upload depend on) and REGENERATES on failure, up to
+ * {@link KEYGEN_MAX_ATTEMPTS} times. A malformed key therefore never escapes the
+ * generator, so neither the client key (uploaded to Hetzner) nor the host key
+ * (fingerprint) can be the bad shape. Throws only if every attempt is malformed
+ * (astronomically unlikely — ~0.36% per attempt → < 1e-21 over 8 attempts).
+ */
 export const generateEd25519KeyPair: KeyPairGenerator = () => {
-  const { private: privateKey, public: publicKey } = sshUtils.generateKeyPairSync("ed25519");
-  return { privateKey, publicKey };
+  for (let attempt = 0; attempt < KEYGEN_MAX_ATTEMPTS; attempt++) {
+    const { private: privateKey, public: publicKey } = sshUtils.generateKeyPairSync("ed25519");
+    if (publicKeyRoundTrips(publicKey)) {
+      return { privateKey, publicKey };
+    }
+  }
+  throw new Error(
+    `failed to generate a well-formed ed25519 keypair after ${KEYGEN_MAX_ATTEMPTS} attempts ` +
+      "(every attempt produced a malformed OpenSSH public key)",
+  );
 };
 
 /**
