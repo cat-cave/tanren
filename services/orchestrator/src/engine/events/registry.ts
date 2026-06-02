@@ -44,6 +44,7 @@ import {
   WorkspacePreparedPayload,
 } from "./schemas/infra.js";
 import {
+  AppEnvRuntimeAttachedPayload,
   CiFailedPayload,
   CiPassedPayload,
   CiStartedPayload,
@@ -338,6 +339,11 @@ export const EventRegistry = {
   "dag.spec.percolated": DagSpecPercolatedPayload,
   "dag.spec.percolation_deferred": DagSpecPercolationDeferredPayload,
   "dag.spec.percolation_replan": DagSpecPercolationReplanPayload,
+
+  // Plane B app environment (P-APP-ENV-2): the project's runtime-scoped app env was
+  // attached to the DEPLOYED app (Vercel/Fly). Records the deploy target + the env
+  // KEY NAMES only — never a secret value.
+  "app_env.runtime_attached": AppEnvRuntimeAttachedPayload,
 } as const satisfies Record<string, z.ZodTypeAny>;
 
 export type EventRegistry = typeof EventRegistry;

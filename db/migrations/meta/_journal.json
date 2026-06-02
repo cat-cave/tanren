@@ -365,6 +365,13 @@
       "when": 1780414356040,
       "tag": "0051_great_mad_thinker",
       "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "7",
+      "when": 1780423701786,
+      "tag": "0052_smooth_cloak",
+      "breakpoints": true
     }
   ]
 }

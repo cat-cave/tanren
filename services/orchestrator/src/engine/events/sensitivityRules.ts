@@ -465,6 +465,14 @@ export const sensitivityRules: SensitivityRule[] = [
     ["label", "public"],
   ]),
 
+  // app_env.runtime_attached (P-APP-ENV-2): deploy target + env KEY NAMES — all
+  // public (NO secret value in the payload; values went only to the deploy request).
+  ...rulesFor("app_env.runtime_attached", [
+    ["provider", "public"],
+    ["appId", "public"],
+    ["keys[]", "public"],
+  ]),
+
   // Infrastructure + integration rules (runner/allocator/workspace/credential,
   // cost + usage telemetry, github/ci/phase1/reviews/notifications/hello/
   // redaction) live in sensitivityRules.infra.ts to keep this file under the
