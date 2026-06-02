@@ -60,6 +60,9 @@ export interface FeatureRouteDeps {
   allocator: Allocator;
   ssh: SshSubstrate;
   identitySecretRef: string;
+  // P-INT-6: when set, the CI webhook receiver verifies the inbound signature
+  // against this secret ref (rejecting unsigned/invalid 401). Omitted → unsigned.
+  ciWebhookSigningSecretRef?: string;
   // Live benchmark infra (allocator + SSH + runner identity + the shared LISTEN
   // connection) so the benchmark scheduler runs REAL trials — the post-merge
   // accept tier and the LISTEN/NOTIFY terminal await. Omitted (the default) →
@@ -131,7 +134,16 @@ export function mountFeatureRoutes(app: Hono<ActorContextEnv>, deps: FeatureRout
   // `/github/webhooks/ci`. Polling remains the default fallback. NOT org-keyed
   // per-request (the webhook resolves its run's org server-side via the system
   // scope), so it keeps the bare pool.
-  app.route("/", createGithubWebhookRoutes({ pool, secrets, vcsProvider: deps.vcsProvider, githubAppMinter }));
+  app.route(
+    "/",
+    createGithubWebhookRoutes({
+      pool,
+      secrets,
+      vcsProvider: deps.vcsProvider,
+      githubAppMinter,
+      ...(deps.ciWebhookSigningSecretRef === undefined ? {} : { signingSecretRef: deps.ciWebhookSigningSecretRef }),
+    }),
+  );
   // P1d autonomous intake — the GitHub issues WEBHOOK RECEIVER (autonomy-engine.md
   // §1d). GitHub posts to `/github/webhooks/issues/:sourceId`; the receiver
   // verifies the source's signature (mandatory), triages with the real provider

@@ -12,12 +12,19 @@ import type { VcsProvider } from "../../engine/contracts/vcsProvider.js";
 import type { GithubAppTokenMinter } from "../../engine/providers/githubAppTokenMinter.js";
 import { CiPullRequestNotFoundError, CiRunNotFoundError } from "../../engine/workflow/ciPolling.js";
 import { advanceCiFromWebhook, CiWebhookUnsupportedEventError } from "../../engine/workflow/ciWebhook.js";
+import { verifyGithubSignature } from "../../engine/forge/intake/index.js";
 
 export interface GithubWebhookRouteDeps {
   pool: pg.Pool;
   secrets: SecretStore;
   vcsProvider: VcsProvider;
   githubAppMinter?: GithubAppTokenMinter;
+  // P-INT-6: the secret ref for the CI webhook's HMAC signing secret. When set,
+  // EVERY inbound CI webhook MUST carry a valid `x-hub-signature-256` over the
+  // raw body or it is rejected 401 (no unauthenticated CI intake). When unset
+  // the receiver stays unsigned (the documented sign-if-configured fallback) —
+  // a Tanren-created service hook SHOULD provision this secret.
+  signingSecretRef?: string;
 }
 
 export function createGithubWebhookRoutes(deps: GithubWebhookRouteDeps) {
@@ -25,7 +32,28 @@ export function createGithubWebhookRoutes(deps: GithubWebhookRouteDeps) {
 
   app.post("/github/webhooks/ci", async (c) => {
     const event = c.req.header("x-github-event") ?? "";
-    const payload = await c.req.json().catch(() => {});
+    // Read the RAW body first — the signature is computed over the raw bytes,
+    // so we verify before parsing JSON.
+    const rawBody = await c.req.text();
+
+    // Mandatory verification when a signing secret is configured. Resolve the
+    // secret, then constant-time compare; a missing/invalid signature is 401.
+    if (deps.signingSecretRef !== undefined) {
+      const secret = await deps.secrets.get(deps.signingSecretRef);
+      const check = verifyGithubSignature({
+        rawBody,
+        signatureHeader: c.req.header("x-hub-signature-256"),
+        secret: secret?.value ?? "",
+      });
+      if (!check.ok) return c.json({ error: "signature_rejected", message: check.reason }, 401);
+    }
+
+    let payload: unknown;
+    try {
+      payload = JSON.parse(rawBody);
+    } catch {
+      payload = undefined;
+    }
     if (payload === undefined) {
       return c.json({ error: "invalid_webhook", message: "request body was not JSON" }, 400);
     }
