@@ -10,7 +10,7 @@
 // finalize guard (`status IN (...)`) is applied either way, so a retry is a
 // no-op — exactly-once preserved.
 
-import { runWithJobOrgId, runWithOrgScope } from "@tanren/db";
+import { runWithJobOrgId, runWithOrgScope, runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import { PgEventStore } from "../eventStore.js";
@@ -92,19 +92,21 @@ export async function finalizeRunRecoverable(
 
 /**
  * Run a run-finalize body (UPDATE + best-effort event append) under the run's
- * org scope when the org is known, else on the pool (the pre-cohort-3 fallback).
- * Centralizes the org-scoping the two worker failure-path finalizers share: a
- * known org opens a `SET LOCAL app.current_org_id = <org>` transaction and hands
- * the body the scoped client; a null org hands it the pool verbatim so behavior
- * is identical to before the cohort.
+ * org scope when the org is known, else under the EXPLICIT cross-org SYSTEM scope
+ * (BYPASSRLS). Centralizes the org-scoping the two worker failure-path finalizers
+ * share: a known org opens a `SET LOCAL app.current_org_id = <org>` transaction;
+ * a null-org (legacy/unscoped, or a context load that itself failed before the
+ * org was resolved) opens a `runWithSystemScope` transaction so the finalize +
+ * its `PgEventStore(client)` write still land — never the implicit bare-pool
+ * fallback (which under the `tanren_app` RLS role would silently deny the write).
  */
 async function withRunFinalizeScope(
   pool: pg.Pool,
   orgId: string | null,
-  body: (client: pg.Pool | pg.PoolClient) => Promise<void>,
+  body: (client: pg.PoolClient) => Promise<void>,
 ): Promise<void> {
   if (orgId === null) {
-    await body(pool);
+    await runWithSystemScope(pool, (client) => body(client));
     return;
   }
   await runWithOrgScope(pool, orgId, (client) => body(client));

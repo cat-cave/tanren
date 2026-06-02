@@ -11,7 +11,12 @@ import type pg from "pg";
 import { z } from "zod";
 import type { ActorContext } from "../../auth/schemas.js";
 import type { SecretStore } from "../../engine/contracts/secretStore.js";
-import { resolveGithubToken, type ResolvedGithubToken } from "../../engine/credentials/githubTokenResolver.js";
+import {
+  MissingGithubCredentialRefError,
+  NoGithubCredentialConfiguredError,
+  resolveGithubToken,
+  type ResolvedGithubToken,
+} from "../../engine/credentials/githubTokenResolver.js";
 import type { GitHubHttpClient } from "../../engine/providers/github.js";
 import { parseGitHubRepository } from "../../engine/providers/github.js";
 import type { GithubAppTokenMinter } from "../../engine/providers/githubAppTokenMinter.js";
@@ -91,8 +96,15 @@ export function createBrownfieldRoutes(options: BrownfieldRoutesOptions) {
         ...(staticRef === undefined ? {} : { staticRef }),
         minter: options.githubAppMinter,
       });
-    } catch {
-      return c.json({ error: "github_credential_missing" }, 400);
+    } catch (error) {
+      // ONLY the typed "operator hasn't configured a credential" errors are a
+      // user 400. A DB/RLS read failure, a secret-store error, or a minter
+      // failure must NOT be disguised as a missing credential — those propagate
+      // as a 5xx so the real fault is visible (no silent fallback).
+      if (error instanceof NoGithubCredentialConfiguredError || error instanceof MissingGithubCredentialRefError) {
+        return c.json({ error: "github_credential_missing" }, 400);
+      }
+      return c.json({ error: "github_credential_unreadable", message: messageOf(error) }, 502);
     }
 
     const repoCheck = await options.githubHttp.request({
@@ -191,6 +203,10 @@ function requireActor(c: { var: { actor?: ActorContext } }): ActorContext {
     throw new Error("actor missing on context");
   }
   return c.var.actor;
+}
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 interface RepoContent {

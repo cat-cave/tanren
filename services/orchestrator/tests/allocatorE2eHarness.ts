@@ -1,6 +1,8 @@
 import { afterEach, beforeEach } from "vitest";
 import type pg from "pg";
+import { runWithSystemJobScope } from "@tanren/db";
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
+import type { Allocator, AllocationRequest, RunnerAllocation } from "../src/engine/contracts/allocator.js";
 
 // The secret manager the cloud allocators store the ephemeral SSH private key
 // in. A fresh in-memory store per call keeps the e2e cases isolated.
@@ -13,8 +15,23 @@ export const memSecrets = (): InMemorySecretStore => new InMemorySecretStore();
 // stay under the per-file line cap.
 
 // A pg.Pool stand-in: buildAllocatorFromEnv constructs a PgRunnerStore around
-// it; allocate() persists the mirror row via .query, which this no-op handles.
-export const queryPool = { query: async () => ({ rows: [] }) } as unknown as pg.Pool;
+// it; allocate() persists the runner mirror row via the RLS write seam. The seam
+// now REQUIRES an ambient scope, so `connect()` is provided (the per-job SYSTEM
+// scope `allocateScoped` establishes opens a short `runWithSystemScope` for the
+// INSERT) — both query paths are no-ops here (the test observes the HTTP, not the
+// DB row).
+export const queryPool = {
+  query: async () => ({ rows: [] }),
+  connect: async () => ({ query: async () => ({ rows: [] }), release: () => {} }),
+} as unknown as pg.Pool;
+
+// Drive `allocate()` under a per-job SYSTEM scope — the runner is claimed during
+// a run job, and the RLS write seam admits the runner-mirror INSERT only under a
+// scope (org / system). The e2e cases have no org, so the system-job scope is the
+// null-org worker path; it never silently writes unscoped.
+export function allocateScoped(allocator: Allocator, request: AllocationRequest): Promise<RunnerAllocation> {
+  return runWithSystemJobScope(() => allocator.allocate(request));
+}
 
 // Hetzner now manages SSH + host key itself: only the project token is required.
 export const HETZNER_ENV = {

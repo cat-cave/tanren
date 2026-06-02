@@ -52,6 +52,23 @@ export class NoGithubCredentialConfiguredError extends Error {
   }
 }
 
+/**
+ * Thrown when a credential ref IS configured but the secret store has no secret
+ * at that ref. Like {@link NoGithubCredentialConfiguredError} this is an operator
+ * configuration error (the ref points at nothing) — distinct from an unexpected
+ * secret-store / minter FAILURE, so a caller (e.g. the brownfield link route) can
+ * map it to a precise 400 while letting a real backend failure surface as a 5xx.
+ */
+export class MissingGithubCredentialRefError extends Error {
+  readonly ref: string;
+
+  constructor(ref: string) {
+    super(`missing GitHub credential ref: ${ref}`);
+    this.name = "MissingGithubCredentialRefError";
+    this.ref = ref;
+  }
+}
+
 export async function resolveGithubToken(input: GithubTokenResolverInput): Promise<ResolvedGithubToken> {
   if (input.installation !== undefined) {
     const minter = input.minter ?? new GithubAppTokenMinter({ secrets: input.secrets });
@@ -74,7 +91,7 @@ export async function resolveGithubToken(input: GithubTokenResolverInput): Promi
   const readStatic = async (): Promise<string> => {
     const secret = await input.secrets.get(ref);
     if (secret === undefined) {
-      throw new Error(`missing GitHub credential ref: ${ref}`);
+      throw new MissingGithubCredentialRefError(ref);
     }
     return secret.value;
   };

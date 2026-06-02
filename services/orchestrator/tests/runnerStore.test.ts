@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type pg from "pg";
+import { runWithSystemJobScope } from "@tanren/db";
 import { PgRunnerStore, type ClaimRunnerInput } from "../src/engine/allocators/runnerStore.js";
 
 // PgRunnerStore is the orchestrator-side mirror of the runners table. The
@@ -8,6 +9,14 @@ import { PgRunnerStore, type ClaimRunnerInput } from "../src/engine/allocators/r
 // parameter order) was never asserted. These tests capture the emitted SQL +
 // params so a mutated statement (wrong column, dropped status, reordered
 // params) is caught.
+//
+// The store routes its write through `withJobOrgScope`, which now REQUIRES an
+// ambient scope (no silent unscoped tenant write). The runner is claimed during
+// a run job, so each call runs under a per-job SYSTEM scope
+// (`runWithSystemJobScope`) — exactly the null-org worker path — and the write
+// lands on the system-scope connection. The pool's `connect()` returns a client
+// that records only the business statement (BEGIN/COMMIT are swallowed) so the
+// single-statement assertions are unchanged.
 
 interface RecordedQuery {
   text: string;
@@ -16,9 +25,21 @@ interface RecordedQuery {
 
 class RecordingPool {
   readonly queries: RecordedQuery[] = [];
-  async query(text: string, params: unknown[]): Promise<{ rows: unknown[] }> {
-    this.queries.push({ text, params });
+  private record(text: string, params: unknown[]): { rows: unknown[] } {
+    const trimmed = text.trim();
+    if (!["BEGIN", "COMMIT", "ROLLBACK"].includes(trimmed) && !trimmed.startsWith("SET LOCAL")) {
+      this.queries.push({ text, params });
+    }
     return { rows: [] };
+  }
+  async query(text: string, params: unknown[] = []): Promise<{ rows: unknown[] }> {
+    return this.record(text, params);
+  }
+  async connect(): Promise<pg.PoolClient> {
+    return {
+      query: (text: string, params: unknown[] = []) => this.record(text, params),
+      release: () => {},
+    } as unknown as pg.PoolClient;
   }
 }
 
@@ -41,7 +62,7 @@ const claimInput: ClaimRunnerInput = {
 describe("PgRunnerStore.claim", () => {
   it("INSERTs into the runners table with the claimed status", async () => {
     const pool = new RecordingPool();
-    await new PgRunnerStore(poolAs(pool)).claim(claimInput);
+    await runWithSystemJobScope(() => new PgRunnerStore(poolAs(pool)).claim(claimInput));
 
     expect(pool.queries).toHaveLength(1);
     const { text } = pool.queries[0]!;
@@ -51,7 +72,7 @@ describe("PgRunnerStore.claim", () => {
 
   it("derives org_id from the run via a subquery (tenancy hardening)", async () => {
     const pool = new RecordingPool();
-    await new PgRunnerStore(poolAs(pool)).claim(claimInput);
+    await runWithSystemJobScope(() => new PgRunnerStore(poolAs(pool)).claim(claimInput));
 
     const { text } = pool.queries[0]!;
     expect(text).toMatch(/org_id/u);
@@ -60,7 +81,7 @@ describe("PgRunnerStore.claim", () => {
 
   it("binds the claim fields in the documented parameter order", async () => {
     const pool = new RecordingPool();
-    await new PgRunnerStore(poolAs(pool)).claim(claimInput);
+    await runWithSystemJobScope(() => new PgRunnerStore(poolAs(pool)).claim(claimInput));
 
     expect(pool.queries[0]!.params).toEqual([
       "runner_run_1",
@@ -79,7 +100,7 @@ describe("PgRunnerStore.claim", () => {
 describe("PgRunnerStore.release", () => {
   it("UPDATEs the row to released and stamps released_at, scoped by runner_id", async () => {
     const pool = new RecordingPool();
-    await new PgRunnerStore(poolAs(pool)).release("runner_run_1");
+    await runWithSystemJobScope(() => new PgRunnerStore(poolAs(pool)).release("runner_run_1"));
 
     expect(pool.queries).toHaveLength(1);
     const { text, params } = pool.queries[0]!;

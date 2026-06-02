@@ -31,8 +31,9 @@ export class PgRunnerStore implements RunnerStore {
     // for table "runners"`). Routing through `withJobOrgScope` opens a SHORT
     // `runWithOrgScope` from the per-job org-id for THIS statement, so the
     // INSERT carries `app.current_org_id` and the policy admits the run's own
-    // runner row. With no job-org-id (a legacy/unscoped run) it falls through to
-    // the pool — behavior-identical to before RLS.
+    // runner row. A legacy/unscoped run (org_id NULL) runs under the worker's
+    // per-job SYSTEM scope, so this routes through a short `runWithSystemScope`
+    // (BYPASSRLS) instead — never an implicit unscoped bare-pool write.
     await withJobOrgScope(this.pool, (client) =>
       client.query(
         // org_id is mandatory (tanren tenancy hardening); derive it from the

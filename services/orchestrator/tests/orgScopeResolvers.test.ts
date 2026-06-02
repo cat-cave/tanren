@@ -29,6 +29,7 @@ import {
 import {
   hasOrgScope,
   isPool,
+  MissingOrgScopeError,
   orgScopingPool,
   resolveQueryClient,
   resolveWritableClient,
@@ -81,10 +82,10 @@ afterEach(() => {
   resetSystemPool();
 });
 
-describe("resolveQueryClient — ambient-scope vs pool", () => {
-  it("returns the bare pool when no scope is open", () => {
+describe("resolveQueryClient — ambient-scope vs loud throw", () => {
+  it("THROWS MissingOrgScopeError when no scope is open (no silent bare-pool fallback)", () => {
     const { pool } = fakePool();
-    expect(resolveQueryClient(pool)).toBe(pool);
+    expect(() => resolveQueryClient(pool)).toThrow(MissingOrgScopeError);
   });
 
   it("returns the ambient org-scoped client inside a runWithOrgScope txn", async () => {
@@ -137,9 +138,9 @@ describe("resolveWritableClient — write-path routing", () => {
     expect(resolved).toBe(client);
   });
 
-  it("returns the pool itself when handed a pool with no scope open", () => {
+  it("THROWS MissingOrgScopeError when handed a pool with no scope open (no silent fallback)", () => {
     const { pool } = fakePool();
-    expect(resolveWritableClient(pool)).toBe(pool);
+    expect(() => resolveWritableClient(pool)).toThrow(MissingOrgScopeError);
   });
 
   it("uses a handed-in query-only client verbatim even inside a scope", async () => {
@@ -189,16 +190,15 @@ describe("withJobOrgScope — the per-job 3-arm resolution", () => {
     expect(fp.releases).toBe(1);
   });
 
-  it("arm 3: falls through to the bare pool with no scope and no job org-id", async () => {
+  it("arm 4: THROWS MissingOrgScopeError with no scope, no job org-id, no system-job scope", async () => {
     const fp = fakePool();
-    let ran: unknown;
-    await withJobOrgScope(fp.pool, async (c) => {
-      ran = c;
-      await c.query("SELECT op");
-    });
-    expect(ran).toBe(fp.pool);
+    await expect(
+      withJobOrgScope(fp.pool, async (c) => {
+        await c.query("SELECT op");
+      }),
+    ).rejects.toThrow(MissingOrgScopeError);
     expect(fp.connects).toBe(0);
-    expect(fp.poolSql).toContain("SELECT op");
+    expect(fp.poolSql).not.toContain("SELECT op");
   });
 
   it("arm 1 takes precedence over an also-present job org-id", async () => {
@@ -218,7 +218,7 @@ describe("withJobOrgScope — the per-job 3-arm resolution", () => {
 
   it("propagates the op's return value", async () => {
     const fp = fakePool();
-    expect(await withJobOrgScope(fp.pool, async () => 42)).toBe(42);
+    expect(await runWithJobOrgId("org_job", () => withJobOrgScope(fp.pool, async () => 42))).toBe(42);
   });
 });
 
@@ -228,11 +228,11 @@ describe("orgScopingPool — the pool-shaped routing proxy", () => {
     expect(isPool(orgScopingPool(fp.pool))).toBe(true);
   });
 
-  it("routes .query() through the bare pool when no scope / job org is set", async () => {
+  it("THROWS MissingOrgScopeError on .query() when no scope / job org / system-job is set", async () => {
     const fp = fakePool();
     const scoping = orgScopingPool(fp.pool);
-    await scoping.query("SELECT direct");
-    expect(fp.poolSql).toContain("SELECT direct");
+    await expect(scoping.query("SELECT direct")).rejects.toThrow(MissingOrgScopeError);
+    expect(fp.poolSql).not.toContain("SELECT direct");
     expect(fp.connects).toBe(0);
   });
 

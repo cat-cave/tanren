@@ -314,8 +314,10 @@ class ContractPool {
     return { rows: [], rowCount: 0 };
   }
 
-  async connect(): Promise<ContractPool> {
-    return this;
+  // A client VIEW sharing `query` but with NO `connect` (like a real PoolClient),
+  // so the RLS write-path `isPool` discriminator uses a handed-in client verbatim.
+  async connect() {
+    return { query: (s: string, p?: unknown[]) => this.query(s, p ?? []), release: () => {} } as never;
   }
 
   release(): void {}
@@ -326,9 +328,7 @@ class ContractPool {
 
   markSpecDone(specId: string): void {
     const spec = this.specs.get(specId);
-    if (spec !== undefined) {
-      spec.status = "done";
-    }
+    if (spec !== undefined) spec.status = "done";
   }
 
   private selectSpecsForProject(projectId: string, specIds: string[]): { rows: unknown[]; rowCount: number } {

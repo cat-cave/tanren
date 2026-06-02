@@ -6,9 +6,11 @@ export {
   getOrgScope,
   getOrgScopedClient,
   getSystemPool,
+  isSystemJobScope,
   resetSystemPool,
   runWithJobOrgId,
   runWithOrgScope,
+  runWithSystemJobScope,
   runWithSystemScope,
   setSystemPool,
 } from "./orgScope.js";

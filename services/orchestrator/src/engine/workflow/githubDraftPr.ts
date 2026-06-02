@@ -1,5 +1,5 @@
 import type pg from "pg";
-import { migrateOrgConfig, type OrgGithubAppInstallation } from "../config/orgConfig.js";
+import { installationFromOrgConfig, type OrgGithubAppInstallation } from "../config/orgConfig.js";
 import type { SshTarget } from "../contracts/allocator.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SecretStore } from "../contracts/secretStore.js";
@@ -329,17 +329,6 @@ interface DraftPrRunRow {
 
 function asRecord(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
-}
-
-function installationFromOrgConfig(orgConfig: unknown): OrgGithubAppInstallation | undefined {
-  if (orgConfig === null || orgConfig === undefined) {
-    return undefined;
-  }
-  try {
-    return migrateOrgConfig(orgConfig).github_app;
-  } catch {
-    return undefined;
-  }
 }
 
 function messageFromError(error: unknown): string {

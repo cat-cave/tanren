@@ -10,7 +10,7 @@
 import { z } from "zod";
 import type pg from "pg";
 import { migrateProjectConfig, type ProjectConfigV1 } from "../config/index.js";
-import { migrateOrgConfig, type OrgGithubAppInstallation } from "../config/orgConfig.js";
+import { installationFromOrgConfig } from "../config/orgConfig.js";
 import type { RoutingTable } from "../config/shared.js";
 import type { ResolvedRunCredentials } from "../credentials/resolveCredentials.js";
 import { resolveCredentialsForRun } from "../credentials/resolveCredentials.js";
@@ -85,23 +85,6 @@ const RunSpecProjectRowSchema = z.object({
   description: z.string(),
   acceptance_criteria: z.unknown(),
 });
-
-/**
- * P2a (Part 2): the org's GitHub App installation from `organizations.config`,
- * or undefined when no App is installed (or the config can't be parsed). Used to
- * resolve the clone token App-first, mirroring how the CI-poll / merge stage
- * context loaders derive their installation.
- */
-function installationFromOrgConfig(orgConfig: unknown): OrgGithubAppInstallation | undefined {
-  if (orgConfig === null || orgConfig === undefined) {
-    return undefined;
-  }
-  try {
-    return migrateOrgConfig(orgConfig).github_app;
-  } catch {
-    return undefined;
-  }
-}
 
 function stringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];

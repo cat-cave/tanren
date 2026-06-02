@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildAllocatorFromEnv } from "../src/engine/allocators/buildAllocator.js";
 import {
+  allocateScoped,
   allocReq,
   HETZNER_ENV,
   hetznerSshKeyResponse,
@@ -35,7 +36,7 @@ describe("buildAllocatorFromEnv — router registry wires each kind (stubbed fet
         ? hetznerSshKeyResponse()
         : json({ server: { id: 300, status: "running", public_net: { ipv4: { ip: "203.0.113.9" } } } }, 201),
     );
-    const allocation = await buildAllocatorFromEnv(queryPool, memSecrets()).allocate(allocReq);
+    const allocation = await allocateScoped(buildAllocatorFromEnv(queryPool, memSecrets()), allocReq);
     // hetzner imageSha suffix proves the hetzner backing allocator served it.
     expect(allocation.imageSha).toMatch(/@sha256:hetzner$/u);
     expect(allocation.target.host).toBe("203.0.113.9");
@@ -53,7 +54,7 @@ describe("buildAllocatorFromEnv — router registry wires each kind (stubbed fet
         imageSha: "sha256:sc",
       }),
     );
-    const allocation = await buildAllocatorFromEnv(queryPool, memSecrets()).allocate(allocReq);
+    const allocation = await allocateScoped(buildAllocatorFromEnv(queryPool, memSecrets()), allocReq);
     expect(allocation.runnerId).toBe("runner_router_sidecar");
     expect(allocation.target.host).toBe("sidecar-host");
   });
@@ -62,7 +63,7 @@ describe("buildAllocatorFromEnv — router registry wires each kind (stubbed fet
     process.env.TANREN_ALLOCATOR_KIND = "router";
     process.env.TANREN_RUNNER_SSH_HOST_FINGERPRINT = "SHA256:static-pin";
     process.env.TANREN_ALLOCATOR_ROUTING = JSON.stringify({ defaultAllocator: "static" });
-    const allocation = await buildAllocatorFromEnv(queryPool, memSecrets()).allocate(allocReq);
+    const allocation = await allocateScoped(buildAllocatorFromEnv(queryPool, memSecrets()), allocReq);
     // static imageSha suffix proves the static backing allocator served it.
     expect(allocation.imageSha).toMatch(/@sha256:static$/u);
     expect(allocation.target.hostKeyFingerprint).toBe("SHA256:static-pin");
@@ -74,7 +75,7 @@ describe("buildAllocatorFromEnv — router registry wires each kind (stubbed fet
       { id: "h1", host: "10.1.1.1", hostKeyFingerprint: "SHA256:m" },
     ]);
     process.env.TANREN_ALLOCATOR_ROUTING = JSON.stringify({ defaultAllocator: "manual_ssh" });
-    const allocation = await buildAllocatorFromEnv(queryPool, memSecrets()).allocate(allocReq);
+    const allocation = await allocateScoped(buildAllocatorFromEnv(queryPool, memSecrets()), allocReq);
     expect(allocation.imageSha).toMatch(/@sha256:manual-ssh$/u);
     expect(allocation.target.host).toBe("10.1.1.1");
   });
@@ -90,7 +91,7 @@ describe("buildAllocatorFromEnv — router registry wires each kind (stubbed fet
         202,
       ),
     );
-    const allocation = await buildAllocatorFromEnv(queryPool, memSecrets()).allocate(allocReq);
+    const allocation = await allocateScoped(buildAllocatorFromEnv(queryPool, memSecrets()), allocReq);
     expect(allocation.imageSha).toMatch(/@sha256:digitalocean$/u);
     expect(allocation.target.host).toBe("203.0.113.40");
   });
@@ -113,7 +114,7 @@ describe("buildAllocatorFromEnv — router registry wires each kind (stubbed fet
         networkInterfaces: [{ accessConfigs: [{ type: "ONE_TO_ONE_NAT", natIP: "203.0.113.42" }] }],
       });
     });
-    const allocation = await buildAllocatorFromEnv(queryPool, memSecrets()).allocate(allocReq);
+    const allocation = await allocateScoped(buildAllocatorFromEnv(queryPool, memSecrets()), allocReq);
     expect(allocation.imageSha).toMatch(/@sha256:gcp$/u);
     expect(allocation.target.host).toBe("203.0.113.42");
   });
@@ -136,7 +137,7 @@ describe("buildAllocatorFromEnv — router registry wires each kind (stubbed fet
           `<ipAddress>203.0.113.43</ipAddress></item></instancesSet></item></reservationSet></DescribeInstancesResponse>`;
       return new Response(xml, { status: 200, headers: { "Content-Type": "text/xml" } });
     }) as typeof fetch;
-    const allocation = await buildAllocatorFromEnv(queryPool, memSecrets()).allocate(allocReq);
+    const allocation = await allocateScoped(buildAllocatorFromEnv(queryPool, memSecrets()), allocReq);
     expect(allocation.imageSha).toMatch(/@sha256:aws-ec2$/u);
     expect(allocation.target.host).toBe("203.0.113.43");
   });
@@ -159,7 +160,7 @@ describe("buildAllocatorFromEnv — router registry wires each kind (stubbed fet
       }
       return json({ metadata: { name: "tanren-run-e2e" }, status: { phase: "Running", podIP: "10.5.6.7" } });
     });
-    const allocation = await buildAllocatorFromEnv(queryPool, memSecrets()).allocate(allocReq);
+    const allocation = await allocateScoped(buildAllocatorFromEnv(queryPool, memSecrets()), allocReq);
     expect(allocation.imageSha).toMatch(/@sha256:kubernetes$/u);
     expect(allocation.target.host).toBe("10.5.6.7");
   });

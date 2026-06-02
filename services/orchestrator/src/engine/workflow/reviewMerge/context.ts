@@ -5,7 +5,7 @@
 
 import type pg from "pg";
 import { z } from "zod";
-import { migrateOrgConfig, type OrgGithubAppInstallation } from "../../config/orgConfig.js";
+import { installationFromOrgConfig, type OrgGithubAppInstallation } from "../../config/orgConfig.js";
 import { migrateProjectConfig } from "../../config/projectConfig.js";
 import type { GovernancePosture, MergeIntegration, ReviewPolicy } from "../../config/shared.js";
 import { validateGithubCredentialRef } from "../../credentials/githubToken.js";
@@ -165,17 +165,6 @@ function credentialRefFromConfig(config: unknown): string | undefined {
       : {};
   const ref = credentials["githubCredentialRef"] ?? record["githubCredentialRef"];
   return typeof ref === "string" ? validateGithubCredentialRef(ref) : undefined;
-}
-
-function installationFromOrgConfig(orgConfig: unknown): OrgGithubAppInstallation | undefined {
-  if (orgConfig === null || orgConfig === undefined) {
-    return undefined;
-  }
-  try {
-    return migrateOrgConfig(orgConfig).github_app;
-  } catch {
-    return undefined;
-  }
 }
 
 // Typed row decode (no raw `as` cast — the architecture check forbids those in

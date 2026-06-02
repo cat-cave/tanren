@@ -11,6 +11,7 @@
 
 import type pg from "pg";
 import { describe, expect, it } from "vitest";
+import { runWithJobOrgId } from "@tanren/db";
 import type { ActorContext } from "../src/auth/schemas.js";
 import {
   assertProjectAccess,
@@ -219,11 +220,17 @@ describe("tanrenRerunTask", () => {
 
   it("throws WriteToolAccessDeniedError naming the task when the task is unknown", async () => {
     const p = new RerunPool();
-    await expect(tanrenRerunTask({ pool: p.asPool() }, { taskId: "task_missing" }, projectMember)).rejects.toThrowError(
-      /task not found: task_missing/u,
-    );
+    // The tool reads on the ambient org-scoped client (the route runs it under
+    // the actor's org scope); the lightweight per-job org-id supplies that scope.
     await expect(
-      tanrenRerunTask({ pool: p.asPool() }, { taskId: "task_missing" }, projectMember),
+      runWithJobOrgId(projectMember.orgId ?? "org_a", () =>
+        tanrenRerunTask({ pool: p.asPool() }, { taskId: "task_missing" }, projectMember),
+      ),
+    ).rejects.toThrowError(/task not found: task_missing/u);
+    await expect(
+      runWithJobOrgId(projectMember.orgId ?? "org_a", () =>
+        tanrenRerunTask({ pool: p.asPool() }, { taskId: "task_missing" }, projectMember),
+      ),
     ).rejects.toBeInstanceOf(WriteToolAccessDeniedError);
   });
 });

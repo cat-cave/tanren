@@ -17,7 +17,7 @@
 // and finalize leaves the job `running`; the recovery surface + a future
 // reaper own re-queueing — the worker never double-executes a claimed job.
 
-import { runWithJobOrgId, runWithOrgScope, runWithSystemScope } from "@tanren/db";
+import { runWithJobOrgId, runWithOrgScope, runWithSystemJobScope, runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
 import { orgScopingPool } from "../data/orgScopedDb.js";
 import type { Allocator } from "../contracts/allocator.js";
@@ -242,7 +242,11 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
           };
     const result = await withJobOrg(orgId, () =>
       runWorkflow({
-        pool: orgId === null ? deps.pool : orgScopingPool(deps.pool),
+        // The workflow ALWAYS gets the org-scoping proxy so its tenant ops
+        // self-route per-op: under an org → a short `runWithOrgScope`; under a
+        // null-org SYSTEM job → a short `runWithSystemScope` (BYPASSRLS). The
+        // implicit bare-pool handoff is gone (no silent unscoped tenant op).
+        pool: orgScopingPool(deps.pool),
         ...remoteWorkflowSeams,
         allocator: deps.allocator,
         ssh: deps.ssh,
@@ -409,12 +413,13 @@ function startHeartbeat(deps: RunExecutorDeps, jobId: string, leaseMs: number): 
 
 /**
  * Run `work` with the run's org as the per-job ambient org-id (R3a-worker) when
- * the org is known, else run it as-is. A legacy/unscoped run (org_id NULL) has
- * no org to set, so its workflow stays on the bare-pool path — inert, identical
- * to before this cohort.
+ * the org is known, else under the EXPLICIT per-job SYSTEM scope. A legacy/
+ * unscoped run (org_id NULL) has no org GUC, so its workflow's tenant ops route
+ * through the BYPASSRLS system pool (`runWithSystemScope` per op) rather than the
+ * old implicit bare-pool handoff — an unscoped tenant op never silently degrades.
  */
 function withJobOrg<T>(orgId: string | null, work: () => Promise<T>): Promise<T> {
-  return orgId === null ? work() : runWithJobOrgId(orgId, work);
+  return orgId === null ? runWithSystemJobScope(work) : runWithJobOrgId(orgId, work);
 }
 
 function failureKind(error: unknown): string {

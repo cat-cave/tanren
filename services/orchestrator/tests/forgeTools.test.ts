@@ -2,6 +2,7 @@
 
 import type pg from "pg";
 import { describe, expect, it } from "vitest";
+import { runWithOrgScope } from "@tanren/db";
 import type { ActorContext } from "../src/auth/schemas.js";
 import {
   peekAcknowledgedInsightForTests,
@@ -34,6 +35,14 @@ function pool(p: RoutesPool): pg.Pool {
   return p.asPgPool();
 }
 
+// The Forge tools read tenant tables on the ambient org-scoped client (the route
+// wraps each tool call in `runWithOrgScope` for the actor's org). Mirror that
+// here so the tools resolve their reads under a scope instead of throwing
+// MissingOrgScopeError — the actor's own org is the scope the request carries.
+function scoped<T>(p: RoutesPool, actor: ActorContext, work: () => Promise<T>): Promise<T> {
+  return runWithOrgScope(p.asPgPool(), actor.orgId ?? "org_unscoped", work);
+}
+
 function seedProject(p: RoutesPool, projectId: string, orgId: string) {
   p.seedOrg({ id: orgId });
   p.seedMembership(orgId, "user_m");
@@ -44,16 +53,18 @@ describe("tanrenReadInsights", () => {
   it("returns an empty insights array (P2A-0020 stub)", async () => {
     const p = new RoutesPool();
     seedProject(p, "project_a", "org_a");
-    const result = await tanrenReadInsights({ pool: pool(p) }, { projectId: "project_a" }, orgMember);
+    const result = await scoped(p, orgMember, () =>
+      tanrenReadInsights({ pool: pool(p) }, { projectId: "project_a" }, orgMember),
+    );
     expect(result).toEqual({ insights: [] });
   });
 
   it("rejects an actor outside the project's org", async () => {
     const p = new RoutesPool();
     seedProject(p, "project_a", "org_a");
-    await expect(tanrenReadInsights({ pool: pool(p) }, { projectId: "project_a" }, stranger)).rejects.toBeInstanceOf(
-      ToolAccessDeniedError,
-    );
+    await expect(
+      scoped(p, stranger, () => tanrenReadInsights({ pool: pool(p) }, { projectId: "project_a" }, stranger)),
+    ).rejects.toBeInstanceOf(ToolAccessDeniedError);
   });
 });
 
@@ -61,7 +72,9 @@ describe("tanrenReadMilestones", () => {
   it("returns an empty milestone list when no milestones exist", async () => {
     const p = new RoutesPool();
     seedProject(p, "project_a", "org_a");
-    const result = await tanrenReadMilestones({ pool: pool(p) }, { projectId: "project_a" }, orgMember);
+    const result = await scoped(p, orgMember, () =>
+      tanrenReadMilestones({ pool: pool(p) }, { projectId: "project_a" }, orgMember),
+    );
     expect(result).toEqual({ milestones: [] });
   });
 });
@@ -70,16 +83,18 @@ describe("tanrenReadRun authz", () => {
   it("404-equivalent throw when run does not exist", async () => {
     const p = new RoutesPool();
     seedProject(p, "project_a", "org_a");
-    await expect(tanrenReadRun({ pool: pool(p) }, { runId: "run_missing" }, orgMember)).rejects.toBeInstanceOf(
-      ToolAccessDeniedError,
-    );
+    await expect(
+      scoped(p, orgMember, () => tanrenReadRun({ pool: pool(p) }, { runId: "run_missing" }, orgMember)),
+    ).rejects.toBeInstanceOf(ToolAccessDeniedError);
   });
 });
 
 describe("tanrenAcknowledgeInsight stub", () => {
   it("records the ack with the actor's userId", async () => {
     const p = new RoutesPool();
-    const result = await tanrenAcknowledgeInsight({ pool: pool(p) }, { insightId: "insight_42" }, orgMember);
+    const result = await scoped(p, orgMember, () =>
+      tanrenAcknowledgeInsight({ pool: pool(p) }, { insightId: "insight_42" }, orgMember),
+    );
     expect(result.insightId).toBe("insight_42");
     expect(result.acknowledgedBy).toBe("user_m");
     expect(peekAcknowledgedInsightForTests("insight_42")?.acknowledgedBy).toBe("user_m");

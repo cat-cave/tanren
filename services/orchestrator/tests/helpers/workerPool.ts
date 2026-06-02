@@ -309,8 +309,16 @@ export class WorkerPool {
     return { rows: [], rowCount: 0 };
   }
 
-  async connect(): Promise<WorkerPool> {
-    return this;
+  // A checked-out client VIEW: shares this fake's `query` (so seeded state is one
+  // store) but is NOT itself a pool — it has no `connect`, exactly like a real
+  // `pg.PoolClient`. This matters for the RLS write-path discriminator
+  // (`isPool`): a store constructed with a handed-in client must be treated as a
+  // client (used verbatim), never re-resolved through the org-scope seam.
+  async connect(): Promise<pg.PoolClient> {
+    return {
+      query: (sql: string, params?: unknown[]) => this.query(sql, params ?? []),
+      release: () => {},
+    } as unknown as pg.PoolClient;
   }
 
   release(): void {}

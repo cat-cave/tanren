@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type pg from "pg";
-import { migrateOrgConfig, type OrgGithubAppInstallation } from "../config/orgConfig.js";
+import { installationFromOrgConfig, type OrgGithubAppInstallation } from "../config/orgConfig.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import { validateGithubCredentialRef } from "../credentials/githubToken.js";
@@ -386,17 +386,6 @@ function credentialRefOrUndefined(
 ): string | undefined {
   const configured = override ?? projectConfig["githubCredentialRef"];
   return typeof configured === "string" ? validateGithubCredentialRef(configured) : undefined;
-}
-
-function installationFromOrgConfig(orgConfig: unknown): OrgGithubAppInstallation | undefined {
-  if (orgConfig === null || orgConfig === undefined) {
-    return undefined;
-  }
-  try {
-    return migrateOrgConfig(orgConfig).github_app;
-  } catch {
-    return undefined;
-  }
 }
 
 function eventTypeForObservation(observation: CiObservation): "ci.started" | "ci.passed" | "ci.failed" {

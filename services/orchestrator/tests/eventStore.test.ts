@@ -1,7 +1,8 @@
 import type pg from "pg";
 import { describe, expect, it } from "vitest";
-import { runWithOrgScope } from "@tanren/db";
+import { runWithOrgScope, runWithSystemJobScope } from "@tanren/db";
 import { PgEventStore } from "../src/engine/eventStore.js";
+import { MissingOrgScopeError, orgScopingPool } from "../src/engine/data/orgScopedDb.js";
 import { listEventNames } from "../src/engine/events.js";
 import { FakeEventStore } from "./helpers/fakeEventStore.js";
 
@@ -90,11 +91,22 @@ describe("PgEventStore — RLS R2 org-scope routing (inert)", () => {
     expect(insertsOnPool).toHaveLength(0);
   });
 
-  it("falls back to the pool when there is no ambient scope (inert)", async () => {
+  it("THROWS MissingOrgScopeError on a pool-routed append with no ambient scope (no silent fallback)", async () => {
     const { pool, insertsOnPool, insertsOnClient } = fakePool();
-    await new PgEventStore(pool).append(event);
-    expect(insertsOnPool).toHaveLength(1);
+    await expect(new PgEventStore(pool).append(event)).rejects.toThrow(MissingOrgScopeError);
+    expect(insertsOnPool).toHaveLength(0);
     expect(insertsOnClient).toHaveLength(0);
+  });
+
+  it("routes an orgScopingPool-constructed append through a short system-scope txn under a per-job SYSTEM scope", async () => {
+    const { pool, insertsOnPool, insertsOnClient } = fakePool();
+    // The worker hands its stores the orgScopingPool; under a null-org/cross-org
+    // SYSTEM job each .query opens a short BYPASSRLS runWithSystemScope.
+    await runWithSystemJobScope(async () => {
+      await new PgEventStore(orgScopingPool(pool)).append(event);
+    });
+    expect(insertsOnClient).toHaveLength(1);
+    expect(insertsOnPool).toHaveLength(0);
   });
 
   it("uses a handed-in client verbatim (no ambient re-resolution)", async () => {
