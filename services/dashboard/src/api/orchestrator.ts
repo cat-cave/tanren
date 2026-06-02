@@ -160,14 +160,15 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
 
   /**
    * Workflow insights, filtered to the supported kinds (P2A-0020 trio plus the
-   * P3-0020 `stuck` + `review_stall` additions). Acknowledged rows drop out.
+   * P3-0020 `stuck` + `review_stall` and the P2e-1 `ci_flaky` additions).
+   * Acknowledged rows drop out.
    */
   async listInsights(orgId: string, projectId: string): Promise<InsightSummary[]> {
     const json = await this.getJson<{ insights?: InsightSummary[] }>(
       `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/insights`,
     );
     const all = json?.insights ?? [];
-    const supported = new Set(["retry_hotspot", "model_mismatch", "pace_anomaly", "stuck", "review_stall"]);
+    const supported = new Set(["retry_hotspot", "model_mismatch", "pace_anomaly", "stuck", "review_stall", "ci_flaky"]);
     return all.filter((insight) => supported.has(insight.kind) && insight.acknowledgedAt === null);
   }
 

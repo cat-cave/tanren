@@ -450,7 +450,7 @@ export const specDependencies = pgTable(
 // schemaAudits (P3-0021), schemaBenchmark (tanren-method benchmark).
 export { notificationTargets, notificationRoutes } from "./schemaNotifications.js";
 export { forgeThreads, forgeTurns, forgeActionProposals } from "./schemaForge.js";
-export { workflowInsights } from "./schemaInsights.js";
+export { workflowInsights, quarantinedTests } from "./schemaInsights.js";
 export { inboxSources, candidates } from "./schemaInbox.js";
 export { auditJobs } from "./schemaAudits.js";
 export { experiments, experimentCells, experimentTrials } from "./schemaBenchmark.js";

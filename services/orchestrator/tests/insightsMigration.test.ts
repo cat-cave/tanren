@@ -47,3 +47,37 @@ describe("0020 workflow_insights kind widening migration", () => {
     expect(sql).toMatch(/IN \('retry_hotspot','model_mismatch','pace_anomaly','stuck','review_stall'\)/u);
   });
 });
+
+// P2e-1: the quarantine surface + the kind widening for `ci_flaky` + the
+// quarantined_tests RLS policy.
+const p2e1MigrationPath = fileURLToPath(new URL("../../../db/migrations/0047_rich_boom_boom.sql", import.meta.url));
+
+describe("0047 quarantine surface + ci_flaky migration", () => {
+  it("creates quarantined_tests with the toggle/observation safety CHECKs", async () => {
+    const sql = await readFile(p2e1MigrationPath, "utf8");
+    expect(sql).toContain('CREATE TABLE "quarantined_tests"');
+    expect(sql).toContain("quarantined_tests_toggled_check");
+    expect(sql).toContain("quarantined_tests_observation_check");
+    // one ACTIVE quarantine per (project, check) — partial unique on cleared_at.
+    expect(sql).toContain("quarantined_tests_active_unique");
+    expect(sql).toMatch(/WHERE\s+"quarantined_tests"\."cleared_at"\s+IS\s+NULL/iu);
+  });
+
+  it("widens the insight kind CHECK to add ci_flaky", async () => {
+    const sql = await readFile(p2e1MigrationPath, "utf8");
+    expect(sql).toMatch(/IN \('retry_hotspot','model_mismatch','pace_anomaly','stuck','review_stall','ci_flaky'\)/u);
+  });
+
+  it("registers the new ci.flaky.* events in the events CHECK", async () => {
+    const sql = await readFile(p2e1MigrationPath, "utf8");
+    expect(sql).toContain("'ci.flaky.detected'");
+    expect(sql).toContain("'ci.test.quarantined'");
+  });
+
+  it("enables deny-by-default RLS on quarantined_tests via the project chain", async () => {
+    const sql = await readFile(p2e1MigrationPath, "utf8");
+    expect(sql).toContain("ALTER TABLE quarantined_tests ENABLE ROW LEVEL SECURITY");
+    expect(sql).toContain("CREATE POLICY rls_org_isolation ON quarantined_tests");
+    expect(sql).toMatch(/EXISTS \(SELECT 1 FROM projects p WHERE p\.project_id = quarantined_tests\.project_id\)/u);
+  });
+});

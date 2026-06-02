@@ -181,12 +181,12 @@ export interface BehaviorSummary {
 
 /**
  * A workflow-insight (`GET .../insights`, P2A-0020; `stuck` + `review_stall`
- * added in P3-0020). `payload` carries the kind-specific fields; `actions`
- * carry operator-button tool calls.
+ * added in P3-0020; `ci_flaky` added in P2e-1). `payload` carries the
+ * kind-specific fields; `actions` carry operator-button tool calls.
  */
 export interface InsightSummary {
   id: string;
-  kind: "retry_hotspot" | "model_mismatch" | "pace_anomaly" | "stuck" | "review_stall";
+  kind: "retry_hotspot" | "model_mismatch" | "pace_anomaly" | "stuck" | "review_stall" | "ci_flaky";
   projectId: string;
   severity: "info" | "warn" | "fail";
   title: string;

@@ -19,6 +19,12 @@ export interface InsightThresholds {
   // review_stall (P3-0020). `stuck` needs no threshold — it is a pure
   // graph-reachability check over current spec statuses.
   reviewStallHours: number;
+  // ci_flaky (P2e-1). `flakyMinToggledShas` is the SAFETY bar: a check must show
+  // a pass+fail toggle on at least this many distinct head SHAs to be
+  // quarantined (default 1 — a single proven non-determinism). Raising it
+  // demands repeated flakes. `flakyWindowDays` bounds the observation lookback.
+  flakyMinToggledShas: number;
+  flakyWindowDays: number;
   // cache freshness
   cacheFreshnessMs: number;
 }
@@ -33,5 +39,7 @@ export const DEFAULT_THRESHOLDS: InsightThresholds = {
   paceAnomalyWindowDays: 30,
   paceAnomalyMinSamples: 3,
   reviewStallHours: 48,
+  flakyMinToggledShas: 1,
+  flakyWindowDays: 14,
   cacheFreshnessMs: 60 * 60 * 1000,
 };
