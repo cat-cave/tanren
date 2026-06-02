@@ -18,9 +18,11 @@ import { buildPercolationCoordinator } from "../dag/percolationBuild.js";
 import { PgSpeculativeIntegrator } from "../dag/speculativeIntegrator.js";
 import { startDagWalkerSubscriber } from "../dag/subscriber.js";
 import { startMergeCoordinatorSubscriber } from "../merge/subscriber.js";
+import { startPostMergeSubscriber } from "../postMerge/subscriber.js";
 import { startIntake } from "../forge/intake/bootIntake.js";
 import type { DagWalkerSubscriber } from "../dag/subscriber.js";
 import type { MergeCoordinatorSubscriber } from "../merge/subscriber.js";
+import type { PostMergeSubscriber } from "../postMerge/subscriber.js";
 import type { BootedIntake } from "../forge/intake/bootIntake.js";
 
 export interface AutonomyLoopsDeps {
@@ -40,6 +42,8 @@ export interface AutonomyLoops {
   dagWalker: DagWalkerSubscriber;
   /** P2d: the native merge queue coordinator subscriber. */
   mergeCoordinator: MergeCoordinatorSubscriber;
+  /** tempering.md dim A: the post-merge-failure → auto-issue watcher subscriber. */
+  postMerge: PostMergeSubscriber;
   intake: BootedIntake;
   /** Drain every autonomy loop (the SIGTERM path); idempotent. */
   stop: () => Promise<void>;
@@ -92,6 +96,19 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
     ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
   });
   console.log("[run-worker] native merge-queue coordinator subscriber started (autonomy-engine §2d)");
+  // tempering.md dim A: the post-merge watcher reacts on the SAME run-activity bus —
+  // once a run's PR merges onto default_branch it reads the post-merge CI on the base
+  // branch and auto-opens ONE tracking issue on a genuine failure. Its own LISTEN
+  // connection so it never contends with the walker's / coordinator's notify pumps.
+  const postMergeNotifyListener = new PgNotifyListener(deps.pool);
+  const postMerge = await startPostMergeSubscriber({
+    pool: deps.pool,
+    notifyListener: postMergeNotifyListener,
+    secrets: deps.secrets,
+    vcsProvider: deps.vcsProvider,
+    ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
+  });
+  console.log("[run-worker] post-merge auto-issue watcher subscriber started (tempering.md dim A)");
   const intake = startIntake({
     pool: deps.pool,
     secrets: deps.secrets,
@@ -104,9 +121,11 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
   const stop = async (): Promise<void> => {
     dagWalker.stop();
     mergeCoordinator.stop();
+    postMerge.stop();
     intake.stop();
     await dagNotifyListener.close();
     await mergeNotifyListener.close();
+    await postMergeNotifyListener.close();
   };
-  return { dagWalker, mergeCoordinator, intake, stop };
+  return { dagWalker, mergeCoordinator, postMerge, intake, stop };
 }

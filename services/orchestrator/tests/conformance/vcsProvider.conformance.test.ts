@@ -146,6 +146,13 @@ class RoutingGitHubHttp implements GitHubHttpClient {
       if (head === CONFORMANCE_ANCESTOR_CONFLICT.branch) return { status: 409, body: { message: "Merge conflict" } };
       return { status: 201, body: { sha: "integ-merge-sha" } };
     }
+    // createIssue: POST /issues → 201 with the issue number + html_url.
+    if (input.method === "POST" && path.endsWith("/issues")) {
+      return {
+        status: 201,
+        body: { number: 42, html_url: "https://github.com/cat-cave/tanren-conformance/issues/42" },
+      };
+    }
     // readFileOnBranch: present file → base64 content; everything else 404.
     if (input.method === "GET" && path.includes(`/contents/${CONFORMANCE_PRESENT_FILE}`)) {
       return ok({ content: Buffer.from(CONFORMANCE_PRESENT_FILE_BODY, "utf8").toString("base64"), encoding: "base64" });

@@ -104,6 +104,22 @@ export function describeVcsProviderConformance(label: string, harness: VcsProvid
       expect(typeof opened.reused).toBe("boolean");
     });
 
+    it("createIssue opens a tracking issue and returns its number + url", async () => {
+      const provider = harness.make();
+      const token = await resolve(provider);
+      const issue = await provider.createIssue({
+        repo: REPO,
+        token,
+        title: "post-merge CI failed",
+        body: "the post-merge check failed on main",
+        labels: ["tanren:post-merge-failure"],
+      });
+      expect(Number.isInteger(issue.number)).toBe(true);
+      expect(issue.number).toBeGreaterThan(0);
+      expect(typeof issue.url).toBe("string");
+      expect(issue.url.length).toBeGreaterThan(0);
+    });
+
     it("markReadyForReview resolves (idempotent un-draft)", async () => {
       const provider = harness.make();
       const token = await resolve(provider);

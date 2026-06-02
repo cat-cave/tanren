@@ -438,6 +438,28 @@ export const sensitivityRules: SensitivityRule[] = [
     ["reason", "public"],
   ]),
 
+  // Post-merge auto-issue creation (tempering.md dim A) — PR/merge identity + the
+  // failing post-merge checks + the auto-filed issue's number/url/label, all public
+  // (the regression + its tracking issue are visible run lineage, no secrets).
+  ...rulesFor("merge.post_merge_failed", [
+    ["prUrl", "public"],
+    ["prNumber", "public"],
+    ["specId", "public"],
+    ["baseBranch", "public"],
+    ["mergeSha", "public"],
+    ["failingChecks[].kind", "public"],
+    ["failingChecks[].name", "public"],
+    ["failingChecks[].state", "public"],
+    ["failingChecks[].url", "public"],
+  ]),
+  ...rulesFor("issue.opened", [
+    ["reason", "public"],
+    ["issueNumber", "public"],
+    ["issueUrl", "public"],
+    ["prUrl", "public"],
+    ["label", "public"],
+  ]),
+
   // Infrastructure + integration rules (runner/allocator/workspace/credential,
   // cost + usage telemetry, github/ci/phase1/reviews/notifications/hello/
   // redaction) live in sensitivityRules.infra.ts to keep this file under the

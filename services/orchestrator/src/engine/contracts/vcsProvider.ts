@@ -221,6 +221,27 @@ export interface OpenDraftPullRequestInput {
 }
 
 /**
+ * Open a tracking issue on the repo (GitHub `POST /repos/{o}/{r}/issues`). Used by
+ * the post-merge-failure watcher to file ONE tracking issue when the post-merge CI
+ * on `default_branch` fails for a merged run. Provider-neutral: a GitLab impl maps
+ * it onto its own issue-create. `labels` are applied at create time so the issue is
+ * easy to triage (e.g. `tanren:post-merge-failure`).
+ */
+export interface CreateIssueInput {
+  repo: RepoRef;
+  token: ResolvedVcsToken;
+  title: string;
+  body: string;
+  labels?: ReadonlyArray<string>;
+}
+
+/** The result of opening a tracking issue — its forge-local number + html url. */
+export interface CreatedIssue {
+  number: number;
+  url: string;
+}
+
+/**
  * The VcsProvider contract: every VCS/CI operation the run + merge lifecycle
  * performs directly against the forge, behind a provider-neutral seam. Each
  * operation takes a pre-`resolveToken`'d {@link ResolvedVcsToken} so a stage
@@ -267,6 +288,14 @@ export interface VcsProvider {
 
   /** Open (or re-use) a draft pull request; idempotent on an open head/base. */
   openDraftPullRequest(input: OpenDraftPullRequestInput): Promise<OpenedPullRequest>;
+
+  /**
+   * Open a tracking issue (title/body/labels) on the repo. The post-merge-failure
+   * watcher calls this to file ONE tracking issue per merge when the post-merge CI
+   * on `default_branch` fails. NOT idempotent at the forge — the caller owns
+   * single-issue-per-merge idempotency (it never calls this twice for one merge).
+   */
+  createIssue(input: CreateIssueInput): Promise<CreatedIssue>;
 
   /** Mark a draft PR ready for review (genuinely un-draft it); idempotent. */
   markReadyForReview(pr: PullRequestRef, token: ResolvedVcsToken): Promise<void>;

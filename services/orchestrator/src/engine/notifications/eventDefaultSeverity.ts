@@ -98,6 +98,12 @@ const SEVERITY_OVERRIDES: Partial<Record<EventName, Severity>> = {
   "ci.passed": "ok",
   "ci.failed": "warn",
 
+  // Post-merge auto-issue creation (tempering.md dim A): a post-merge regression
+  // on default_branch is a real change-failure (fail); auto-opening its tracking
+  // issue is an operator-actionable signal (warn).
+  "merge.post_merge_failed": "fail",
+  "issue.opened": "warn",
+
   // Phase 1 fixture
   "phase1.fixture.started": "info",
   "phase1.fixture.ci_pending": "info",

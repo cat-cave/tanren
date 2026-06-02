@@ -90,6 +90,7 @@ import {
   MergeQueueAdvancedPayload,
 } from "./schemas/mergeQueue.js";
 import { CiFlakyDetectedPayload, CiTestQuarantinedPayload } from "./schemas/ciFlaky.js";
+import { IssueOpenedPayload, MergePostMergeFailedPayload } from "./schemas/postMerge.js";
 import { GateFailedPayload, GatePassedPayload, GateStartedPayload } from "./schemas/gate.js";
 import {
   JobDeadLetteredPayload,
@@ -278,6 +279,14 @@ export const EventRegistry = {
   "merge.batch.passed": MergeBatchPassedPayload,
   "merge.batch.bisecting": MergeBatchBisectingPayload,
   "merge.batch.culprit": MergeBatchCulpritPayload,
+
+  // Post-merge auto-issue creation (tempering.md dim A): after a run's PR merges
+  // onto default_branch, the watcher reads the post-merge CI on the base branch;
+  // a FAILURE records merge.post_merge_failed + auto-opens ONE tracking issue
+  // (issue.opened, which is also the per-merge idempotency marker — at most one
+  // issue per merge, never spammed on repeated checks).
+  "merge.post_merge_failed": MergePostMergeFailedPayload,
+  "issue.opened": IssueOpenedPayload,
 
   // Notification dispatch (schemas declared; dispatcher lands in P2A-0017)
   "notification.enqueued": NotificationEnqueuedPayload,

@@ -1,0 +1,114 @@
+// The PostMergeWatcher subscriber (tempering.md dimension A, autonomy-engine §1.5):
+// a long-lived per-process listener that drives the PostMergeWatcher on every
+// run-activity notification — reacting to the events ALREADY on the LISTEN/NOTIFY
+// bus (the SAME `tanren_run` channel the DagWalker / MergeCoordinator use), no new
+// poller. It is the wiring the worker boot starts so post-merge-failure tracking
+// self-drives.
+//
+// Mechanism mirrors the DagWalker / MergeCoordinator subscribers: the eventStore
+// fires a `tanren_run` NOTIFY (payload = the run id) at every run-state change —
+// including `merge.completed` (the merge finalizes the run + fires a notify). This
+// subscriber wakes on that channel and hands the run id to the watcher, which is a
+// no-op unless the run merged + the post-merge CI on the base branch failed.
+//
+// Coalesced PER RUN (the post-merge check is per-run, keyed on the run's
+// merge.completed): a run already being checked re-checks once when its current
+// pass finishes, so a notification storm collapses to at most one in-flight check +
+// one queued re-check. The watcher's own `issue.opened` idempotency guard is the
+// hard "one issue per merge" boundary regardless; coalescing keeps the load sane.
+
+import { RUN_ACTIVITY_CHANNEL, type PgNotifyListener } from "@tanren/db";
+import { PostMergeWatcher, type PostMergeWatcherDeps } from "./watcher.js";
+
+export interface PostMergeSubscriberDeps extends PostMergeWatcherDeps {
+  /** The shared LISTEN connection (its own, so it never contends with the walker's pump). */
+  notifyListener: PgNotifyListener;
+  /**
+   * The watcher to drive. Defaults to the production `PostMergeWatcher`. A test
+   * injects a recording watcher to assert the event-driven trigger fires it.
+   */
+  watcher?: PostMergeWatcher;
+}
+
+/**
+ * The running subscriber handle: on every run-activity notification it drives the
+ * watcher for that run. `stop()` unsubscribes (idempotent). Per-run checks are
+ * coalesced so a storm of notifications collapses into at most one in-flight check
+ * + one queued re-check per run.
+ */
+export class PostMergeSubscriber {
+  private readonly watcher: PostMergeWatcher;
+  private unsubscribe: (() => void) | undefined;
+  private stopped = false;
+  private readonly inFlight = new Map<string, Promise<void>>();
+  private readonly rePending = new Set<string>();
+
+  constructor(private readonly deps: PostMergeSubscriberDeps) {
+    this.watcher = deps.watcher ?? new PostMergeWatcher(deps);
+  }
+
+  // eslint-disable-next-line @typescript-eslint/require-await
+  async start(): Promise<void> {
+    void this.subscribeInBackground();
+  }
+
+  private async subscribeInBackground(): Promise<void> {
+    try {
+      const unsubscribe = await this.deps.notifyListener.subscribe(RUN_ACTIVITY_CHANNEL, (payload) => {
+        void this.onRunActivity(payload).catch((error: unknown) => {
+          console.error(`[post-merge] run-activity handler failed for run ${payload}:`, error);
+        });
+      });
+      if (this.stopped) {
+        unsubscribe();
+        return;
+      }
+      this.unsubscribe = unsubscribe;
+    } catch (error) {
+      console.error("[post-merge] failed to subscribe to the run-activity bus (will not auto-track):", error);
+    }
+  }
+
+  /** Stop listening. Idempotent; in-flight checks finish on their own. */
+  stop(): void {
+    this.stopped = true;
+    this.unsubscribe?.();
+    this.unsubscribe = undefined;
+  }
+
+  private async onRunActivity(runId: string): Promise<void> {
+    if (runId === "") return;
+    await this.schedule(runId);
+  }
+
+  /** Check a run, coalescing concurrent requests (latest state, once). */
+  private schedule(runId: string): Promise<void> {
+    const existing = this.inFlight.get(runId);
+    if (existing !== undefined) {
+      this.rePending.add(runId);
+      return existing;
+    }
+    const run = this.runChain(runId).finally(() => {
+      this.inFlight.delete(runId);
+    });
+    this.inFlight.set(runId, run);
+    return run;
+  }
+
+  /** Check, then re-check while a trigger arrived mid-pass. */
+  private async runChain(runId: string): Promise<void> {
+    do {
+      this.rePending.delete(runId);
+      await this.watcher.check(runId).catch((error: unknown) => {
+        console.error(`[post-merge] check failed for run ${runId}:`, error);
+      });
+    } while (this.rePending.has(runId));
+  }
+}
+
+/** Build + start the PostMergeWatcher subscriber from the worker boot. */
+export async function startPostMergeSubscriber(deps: PostMergeSubscriberDeps): Promise<PostMergeSubscriber> {
+  const subscriber = new PostMergeSubscriber(deps);
+  await subscriber.start();
+  return subscriber;
+}
