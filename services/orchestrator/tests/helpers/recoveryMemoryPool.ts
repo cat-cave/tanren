@@ -30,6 +30,7 @@ export interface SpecRow {
   acceptance_criteria: string[];
   depends_on: string[];
   status: string;
+  priority: string;
 }
 
 export interface EventRow {
@@ -106,6 +107,7 @@ export class RecoveryMemoryPool {
       acceptance_criteria: input.acceptance_criteria ?? ["no flash on first paint"],
       depends_on: input.depends_on ?? [],
       status: input.status ?? "active",
+      priority: input.priority ?? "tbd",
     };
     this.specs.set(row.spec_id, row);
     return row;
@@ -231,6 +233,7 @@ export class RecoveryMemoryPool {
             acceptance_criteria: spec.acceptance_criteria,
             depends_on: spec.depends_on,
             status: spec.status,
+            priority: spec.priority,
           },
         ],
         rowCount: 1,

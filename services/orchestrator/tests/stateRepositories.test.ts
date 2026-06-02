@@ -130,6 +130,7 @@ describe("SpecStore", () => {
             acceptance_criteria: ["one"],
             depends_on: [],
             status: "in_flight",
+            priority: "P1",
             org_id: "org_acme",
           },
         ],
@@ -138,6 +139,7 @@ describe("SpecStore", () => {
     const spec = await SpecStore.get(client, "spec_1", systemActor);
     expect(spec?.status).toBe("in_flight");
     expect(spec?.acceptanceCriteria).toEqual(["one"]);
+    expect(spec?.priority).toBe("P1");
   });
 });
 

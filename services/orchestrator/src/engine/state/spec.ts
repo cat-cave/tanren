@@ -1,5 +1,27 @@
 import { z } from "zod";
 
+/**
+ * The execution priority of a spec (autonomy-engine.md §1b). It is NOT a state
+ * machine value (no transitions) — it is the ordering key the DagWalker honors
+ * when choosing which ready specs to enqueue first: P0 before P1 before P2 before
+ * `tbd` (not yet triaged). It originates on a `ProposedSpec` (discovery/triage) and is
+ * persisted onto the spec at create time. `priorityRank` maps it to a sortable
+ * integer (lower = scheduled first); the DB CHECK in `db/src/schemaCore.ts`
+ * mirrors these literals. `tbd` means not-yet-triaged and sorts last.
+ */
+export const SpecPriority = z.enum(["P0", "P1", "P2", "tbd"]);
+export type SpecPriority = z.infer<typeof SpecPriority>;
+
+/** The default priority a not-yet-triaged spec carries (matches the DB column default). */
+export const DEFAULT_SPEC_PRIORITY: SpecPriority = "tbd";
+
+const SPEC_PRIORITY_RANK: Record<SpecPriority, number> = { P0: 0, P1: 1, P2: 2, tbd: 3 };
+
+/** Sortable rank for a priority — lower sorts first (P0=0 … tbd=3). */
+export function priorityRank(priority: SpecPriority): number {
+  return SPEC_PRIORITY_RANK[priority];
+}
+
 export const SpecStatus = z.enum([
   // Phase 2 canonical values
   "open",

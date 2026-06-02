@@ -7,12 +7,19 @@
 import { describe, expect, it } from "vitest";
 import { type DagSnapshot, type DagSpecNode, orderReadySet, planDagTick } from "../src/engine/contracts/dagWalker.js";
 import { classifySpecStatus } from "../src/engine/dag/walker.js";
+import type { SpecPriority } from "../src/engine/state/spec.js";
 
 function snap(nodes: DagSpecNode[]): DagSnapshot {
   return { projectId: "project_p", nodes };
 }
-function n(specId: string, phase: DagSpecNode["phase"], dependsOn: string[], orderKey: number): DagSpecNode {
-  return { specId, phase, dependsOn, orderKey };
+function n(
+  specId: string,
+  phase: DagSpecNode["phase"],
+  dependsOn: string[],
+  orderKey: number,
+  priority: SpecPriority = "tbd",
+): DagSpecNode {
+  return { specId, phase, dependsOn, priority, orderKey };
 }
 
 describe("classifySpecStatus", () => {
@@ -38,7 +45,7 @@ describe("classifySpecStatus", () => {
 });
 
 describe("orderReadySet", () => {
-  it("sorts by orderKey ascending then specId for total determinism", () => {
+  it("sorts by orderKey ascending then specId for total determinism (within a priority)", () => {
     const ordered = orderReadySet([
       n("spec_b", "pending", [], 1),
       // Same orderKey as spec_b ⇒ the specId tiebreak decides.
@@ -47,6 +54,29 @@ describe("orderReadySet", () => {
     ]);
     expect(ordered.map((x) => x.specId)).toEqual(["spec_c", "spec_a", "spec_b"]);
   });
+
+  it("orders P0 before P1 before P2 before tbd, regardless of creation order (§1b)", () => {
+    // Creation order is deliberately the INVERSE of priority order, so a FIFO
+    // sort would fail this — only a priority-first sort passes.
+    const ordered = orderReadySet([
+      n("spec_tbd", "pending", [], 0, "tbd"),
+      n("spec_p2", "pending", [], 1, "P2"),
+      n("spec_p1", "pending", [], 2, "P1"),
+      n("spec_p0", "pending", [], 3, "P0"),
+    ]);
+    expect(ordered.map((x) => x.specId)).toEqual(["spec_p0", "spec_p1", "spec_p2", "spec_tbd"]);
+  });
+
+  it("breaks a priority tie deterministically by creation order then specId", () => {
+    const ordered = orderReadySet([
+      n("spec_late", "pending", [], 2, "P0"),
+      // Same priority + same orderKey as spec_first ⇒ specId decides.
+      n("spec_b", "pending", [], 0, "P0"),
+      n("spec_a", "pending", [], 0, "P0"),
+    ]);
+    expect(ordered.map((x) => x.specId)).toEqual(["spec_a", "spec_b", "spec_late"]);
+  });
+
   it("does not mutate its input", () => {
     const input = [n("spec_b", "pending", [], 1), n("spec_a", "pending", [], 0)];
     const copy = [...input];
@@ -93,6 +123,18 @@ describe("planDagTick", () => {
     // ceiling 2, one in-flight ⇒ headroom 1.
     expect(plan.toEnqueue).toEqual(["spec_b"]);
     expect(plan.readyHeldBack).toBe(2);
+    expect(plan.status).toBe("enqueued");
+  });
+
+  it("enqueues higher-priority ready specs first when headroom is scarce (§1b)", () => {
+    // Two ready specs, headroom 1: the P0 wins even though the tbd spec was
+    // created first (lower orderKey) — priority dominates the FIFO tiebreak.
+    const plan = planDagTick(
+      snap([n("spec_old_tbd", "pending", [], 0, "tbd"), n("spec_new_p0", "pending", [], 1, "P0")]),
+      1,
+    );
+    expect(plan.toEnqueue).toEqual(["spec_new_p0"]);
+    expect(plan.readyHeldBack).toBe(1);
     expect(plan.status).toBe("enqueued");
   });
 

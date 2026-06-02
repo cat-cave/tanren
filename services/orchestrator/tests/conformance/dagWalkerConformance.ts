@@ -15,6 +15,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { DagSpecNode, DagSpecPhase, DagWalker } from "../../src/engine/contracts/dagWalker.js";
+import type { SpecPriority } from "../../src/engine/state/spec.js";
 
 /** A recorded dag.* event the walker emitted (the contract's visibility surface). */
 export interface RecordedDagEvent {
@@ -64,7 +65,22 @@ export interface DagWalkerConformanceSuite {
 }
 
 function node(specId: string, phase: DagSpecPhase, dependsOn: string[], orderKey: number): DagSpecNode {
-  return { specId, phase, dependsOn, orderKey };
+  // The dependency/headroom/idempotency suite is priority-agnostic, so every node
+  // carries the same `tbd` priority — ordering then falls through to the
+  // creation-order tiebreak the suite asserts on. The priority ORDERING contract
+  // is pinned separately (dagWalkerPlan + dagWalkerPriority tests).
+  return { specId, phase, dependsOn, priority: "tbd", orderKey };
+}
+
+/** Like `node`, but with an explicit priority — for the §1b ordering cases. */
+function priNode(
+  specId: string,
+  phase: DagSpecPhase,
+  dependsOn: string[],
+  orderKey: number,
+  priority: SpecPriority,
+): DagSpecNode {
+  return { specId, phase, dependsOn, priority, orderKey };
 }
 
 export function describeDagWalkerConformance(label: string, suite: DagWalkerConformanceSuite): void {
@@ -183,6 +199,29 @@ export function describeDagWalkerConformance(label: string, suite: DagWalkerConf
       h.setSpec(node("spec_y", "pending", [], 1));
       const result = await h.walker.walk(h.projectId);
       expect(result.enqueuedSpecIds).toEqual(["spec_x", "spec_y", "spec_z"]);
+    });
+
+    it("orders by priority (P0→P1→P2→tbd) ahead of the creation-order tiebreak (§1b)", async () => {
+      // Headroom 1, four ready specs whose creation order is the INVERSE of
+      // priority — only a priority-honoring walker enqueues the P0 first.
+      const h = suite.make(1);
+      h.setSpec(priNode("spec_tbd", "pending", [], 0, "tbd"));
+      h.setSpec(priNode("spec_p2", "pending", [], 1, "P2"));
+      h.setSpec(priNode("spec_p1", "pending", [], 2, "P1"));
+      h.setSpec(priNode("spec_p0", "pending", [], 3, "P0"));
+      const result = await h.walker.walk(h.projectId);
+      expect(result.enqueuedSpecIds).toEqual(["spec_p0"]);
+    });
+
+    it("breaks a priority tie by the deterministic creation-order tiebreak (§1b)", async () => {
+      // Three ready P1 specs: ordering falls through to orderKey then specId.
+      const h = suite.make(2);
+      h.setSpec(priNode("spec_late", "pending", [], 2, "P1"));
+      h.setSpec(priNode("spec_b", "pending", [], 0, "P1"));
+      h.setSpec(priNode("spec_a", "pending", [], 0, "P1"));
+      const result = await h.walker.walk(h.projectId);
+      // Same priority, lowest orderKey wins; specId breaks the orderKey tie.
+      expect(result.enqueuedSpecIds).toEqual(["spec_a", "spec_b"]);
     });
 
     it("is idempotent — a claimed spec is never re-enqueued on a re-walk", async () => {

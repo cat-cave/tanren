@@ -68,6 +68,7 @@ describe("project/spec workflow contract", () => {
       projectId: project.projectId,
       status: "pending",
       dependsOn: [foundation.specId],
+      priority: "tbd",
     });
 
     const runResponse = await app.request(`/specs/${spec.specId}/runs`, { method: "POST" });
@@ -368,6 +369,7 @@ class ContractPool {
           acceptance_criteria: spec.acceptanceCriteria,
           depends_on: spec.dependsOn,
           status: spec.status,
+          priority: spec.priority,
         },
       ],
       rowCount: 1,
@@ -393,6 +395,7 @@ interface SpecRow {
   acceptanceCriteria: string[];
   dependsOn: string[];
   status: string;
+  priority: string;
 }
 
 interface RunRow {
@@ -450,6 +453,7 @@ function specFromParams(params: unknown[]): SpecRow {
     acceptanceCriteria: JSON.parse(String(params[4])) as string[],
     dependsOn: params[5] as string[],
     status: String(params[6]),
+    priority: String(params[7]),
   };
 }
 

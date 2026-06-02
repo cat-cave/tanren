@@ -3,6 +3,7 @@
 // (architecture rule file-line-max-500); the shapes are unchanged.
 
 import { z } from "zod";
+import { SpecPriority } from "./engine/state/spec.js";
 
 export const projectInputSchema = z.object({
   name: z.string().min(1),
@@ -19,6 +20,8 @@ export const specInputSchema = z.object({
   description: z.string().min(1),
   acceptanceCriteria: z.array(z.string().min(1)).min(1),
   dependsOn: z.array(z.string().min(1)).optional(),
+  // Execution priority (autonomy-engine.md §1b); omitted ⇒ the `tbd` default.
+  priority: SpecPriority.optional(),
 });
 
 export const runInputSchema = z.object({

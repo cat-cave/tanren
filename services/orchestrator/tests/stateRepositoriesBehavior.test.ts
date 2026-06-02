@@ -101,6 +101,7 @@ function specRow(over: Record<string, unknown> = {}): Record<string, unknown> {
     acceptance_criteria: ["one"],
     depends_on: [],
     status: "open",
+    priority: "tbd",
     org_id: "org_acme",
     ...over,
   };
@@ -379,6 +380,7 @@ describe("SpecStore SQL + array decoding", () => {
       "acceptance_criteria",
       "depends_on",
       "status",
+      "priority",
       "org_id",
     ]) {
       expect(sql).toContain(col);

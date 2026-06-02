@@ -12,6 +12,7 @@
 // migration 0023), NOT in a bespoke table; see `provenance.ts`.
 
 import { z } from "zod";
+import { SpecPriority } from "../../state/spec.js";
 
 // The three discovery variants the surface supports. They drive the default
 // answerer's framing (feature = additive, bug = root-cause/hardening,
@@ -45,7 +46,7 @@ export const ProposedSpec = z
     description: z.string().min(1).max(4000),
     acceptanceCriteria: z.array(z.string().min(1)).min(1),
     dependsOn: z.array(z.string().min(1)).default([]),
-    priority: z.enum(["P0", "P1", "P2", "tbd"]).default("tbd"),
+    priority: SpecPriority.default("tbd"),
     estLabel: z.string().max(80).default(""),
   })
   .strict();

@@ -27,10 +27,13 @@ export interface ProjectSpecRow {
   acceptance_criteria: unknown;
   depends_on: unknown;
   status: string;
+  priority: string;
 }
 
-// The exact column list the spec list/detail routes used (7 columns, no org_id).
-const SELECT_SPEC_COLUMNS = "spec_id, project_id, title, description, acceptance_criteria, depends_on, status";
+// The exact column list the spec list/detail routes used (now 8 columns with the
+// P1b `priority` ordering key; no org_id — the org-scoped client carries tenancy).
+const SELECT_SPEC_COLUMNS =
+  "spec_id, project_id, title, description, acceptance_criteria, depends_on, status, priority";
 
 /**
  * The pre-rendered dynamic PATCH payload. The route inspects the parsed body,

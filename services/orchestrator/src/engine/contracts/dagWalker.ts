@@ -26,6 +26,8 @@
 // any database or worker. The pg-backed read model + the createQueuedRunFromSpec
 // enqueuer + the LISTEN/NOTIFY subscriber live in `engine/dag/walker.ts`.
 
+import { priorityRank, type SpecPriority } from "../state/spec.js";
+
 // ---- DAG snapshot ---------------------------------------------------------
 
 /**
@@ -47,9 +49,14 @@ export interface DagSpecNode {
   /** The spec ids this spec depends on (its `depends_on` edges). */
   dependsOn: string[];
   /**
-   * A stable, monotonic ordering key for the deterministic tiebreak (creation
-   * order). Priority ordering (P1b) layers ON TOP of this; until then this is the
-   * sole order. Lower sorts first.
+   * The spec's execution priority (autonomy-engine.md §1b). The PRIMARY ordering
+   * key of the ready set: P0 before P1 before P2 before `tbd` (via `priorityRank`).
+   * `orderKey`/`specId` are the deterministic tiebreak WITHIN a priority.
+   */
+  priority: SpecPriority;
+  /**
+   * A stable, monotonic ordering key (creation order) — the deterministic
+   * tiebreak applied AFTER priority. Lower sorts first.
    */
   orderKey: number;
 }
@@ -101,9 +108,10 @@ export interface DagTickPlan {
  * blocked makes the spec NOT ready. A `pending` spec with no dependencies is
  * always ready (a root).
  *
- * Ordering: ready specs sort by `orderKey` ascending (the stable creation-order
- * tiebreak). `orderReadySet` is the single seam P1b extends to sort by priority
- * first, then this tiebreak — the planner calls it so the seam is honored here.
+ * Ordering: ready specs sort by `priority` first (P0 → P1 → P2 → tbd), then the
+ * stable creation-order tiebreak (`orderKey`, then `specId`). `orderReadySet` is
+ * the single ordering seam the planner calls, so the priority order is honored
+ * here (autonomy-engine.md §1b).
  *
  * Headroom: enqueue at most `max(0, ceiling - inFlightCount)` specs. A spec
  * already in-flight is NEVER re-enqueued (idempotency) — it is counted as a slot
@@ -153,15 +161,19 @@ function isReady(node: DagSpecNode, byId: Map<string, DagSpecNode>): boolean {
 }
 
 /**
- * Order the ready set deterministically. Phase-1: the stable creation-order
- * tiebreak (`orderKey` ascending, then `specId` for total determinism). This is
- * the SINGLE seam P1b extends to sort by `priority` first, then this tiebreak —
- * keeping the planner's ordering call site unchanged.
+ * Order the ready set deterministically (autonomy-engine.md §1b): PRIORITY first
+ * (P0 → P1 → P2 → tbd via `priorityRank`), then the stable creation-order
+ * tiebreak (`orderKey` ascending, then `specId` for total determinism) WITHIN a
+ * priority. This is the SINGLE ordering seam the planner calls, so a higher-
+ * priority spec always schedules ahead of a lower one regardless of creation
+ * order, while ties resolve identically every tick.
  */
 export function orderReadySet(ready: ReadonlyArray<DagSpecNode>): DagSpecNode[] {
-  return [...ready].sort((a, b) =>
-    a.orderKey === b.orderKey ? compareIds(a.specId, b.specId) : a.orderKey - b.orderKey,
-  );
+  return [...ready].sort((a, b) => {
+    const byPriority = priorityRank(a.priority) - priorityRank(b.priority);
+    if (byPriority !== 0) return byPriority;
+    return a.orderKey === b.orderKey ? compareIds(a.specId, b.specId) : a.orderKey - b.orderKey;
+  });
 }
 
 function compareIds(a: string, b: string): number {

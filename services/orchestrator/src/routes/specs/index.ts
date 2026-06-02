@@ -6,6 +6,7 @@ import { Hono } from "hono";
 import type pg from "pg";
 import { z } from "zod";
 import type { ActorContext } from "../../auth/schemas.js";
+import { SpecPriority } from "../../engine/state/spec.js";
 import { pgRepositories } from "../../engine/contracts/repositories.js";
 import type { ProjectSpecRow } from "../../engine/repositories/index.js";
 import { systemActor } from "../../engine/state/actor.js";
@@ -30,6 +31,9 @@ const SpecCreateSchema = z.object({
   description: z.string().min(1),
   acceptanceCriteria: z.array(z.string().min(1)).min(1),
   dependsOn: z.array(z.string().min(1)).optional(),
+  // Execution priority (autonomy-engine.md §1b); omitted ⇒ the `tbd` default the
+  // DagWalker schedules last.
+  priority: SpecPriority.optional(),
 });
 
 const SpecPatchSchema = z.object({
@@ -198,6 +202,7 @@ function toSpecContract(row: ProjectSpecRow) {
     acceptanceCriteria: parseStringArray(row.acceptance_criteria),
     dependsOn: parseStringArray(row.depends_on),
     status: row.status,
+    priority: row.priority,
   };
 }
 

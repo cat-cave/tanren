@@ -1,7 +1,7 @@
 import type pg from "pg";
 import { z } from "zod";
 import type { ActorRef } from "../state/actor.js";
-import { SpecStatus, transitionSpec } from "../state/spec.js";
+import { SpecPriority, SpecStatus, transitionSpec } from "../state/spec.js";
 
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
@@ -13,6 +13,7 @@ export const SpecRow = z.object({
   acceptanceCriteria: z.array(z.string()),
   dependsOn: z.array(z.string()),
   status: SpecStatus,
+  priority: SpecPriority,
   orgId: z.string(),
 });
 export type SpecRow = z.infer<typeof SpecRow>;
@@ -25,6 +26,7 @@ interface RawSpecRow {
   acceptance_criteria: unknown;
   depends_on: unknown;
   status: unknown;
+  priority: unknown;
   org_id: unknown;
 }
 
@@ -36,6 +38,7 @@ const SELECT_SPEC_COLUMNS = `
   acceptance_criteria,
   depends_on,
   status,
+  priority,
   org_id
 `;
 
@@ -52,6 +55,7 @@ function decodeSpecRow(raw: RawSpecRow): SpecRow {
     acceptanceCriteria: asStringArray(raw.acceptance_criteria),
     dependsOn: asStringArray(raw.depends_on),
     status: raw.status,
+    priority: raw.priority,
     orgId: raw.org_id,
   });
 }
