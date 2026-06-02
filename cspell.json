@@ -27,6 +27,7 @@
     "blakejs",
     "nacl",
     "ciphertext",
+    "dollarized",
     "appenv",
     "sendgrid",
     "flyio",
