@@ -46,11 +46,19 @@ export async function prepareRunWorkspace(
     (await resolveBootstrapCommand({ ssh: input.ssh, target, workspacePath, timeoutMs: input.timeoutMs }));
   const runBootstrap =
     input.runBootstrap ?? ((stepInput: BootstrapStepInput) => bootstrapWorkspace(stepInput).then(() => {}));
+  // Plane B (P-APP-ENV-0): the building agent runs install/build under the
+  // project's dev+test app env. The app env is passed SEPARATELY (NOT folded into
+  // the command string): `bootstrapWorkspace` builds the `export …;` prelude at
+  // the SSH substrate boundary and prepends it to the EXECUTED command only, so
+  // the ORIGINAL command — the value that flows into WorkspaceBootstrapError and
+  // the `workspace.failed` / `run.failed` event payloads — never carries an
+  // app-secret value. Distinct from Tanren's own provider creds.
   await runBootstrap({
     ssh: input.ssh,
     target,
     workspacePath,
     command: resolvedBootstrapCommand,
+    ...(input.appEnv === undefined ? {} : { appEnv: input.appEnv }),
     timeoutMs: input.timeoutMs,
   });
 

@@ -7,6 +7,11 @@ export { JobRow, JobStore } from "./jobs.js";
 export { ActorStore, TaskActorRow } from "./actors.js";
 export { ProjectRow, ProjectStore } from "./projects.js";
 export { ProjectSpecStore, type ProjectSpecRow, type SpecPatch } from "./projectSpecs.js";
+// Integration-provisioning foundation (P-INT-0 + P-APP-ENV-0): the org-level
+// integration registry (Plane A) + the built product's app-environment store
+// (Plane B).
+export { OrgIntegrationsStore, type OrgIntegration, type OrgIntegrationStatus } from "./orgIntegrations.js";
+export { AppEnvironmentStore, type AppEnvEntry, type AppEnvScope, type AppEnvSource } from "./appEnvironment.js";
 // Forge + recovery data-access stores. The thread/turn/proposal stores live
 // under engine/forge (their routes import them by name); the seam aggregates
 // them here so callers depend on the `Repositories` contract. The discovery /

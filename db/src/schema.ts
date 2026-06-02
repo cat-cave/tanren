@@ -463,3 +463,7 @@ export { workflowInsights, quarantinedTests } from "./schemaInsights.js";
 export { inboxSources, candidates } from "./schemaInbox.js";
 export { auditJobs } from "./schemaAudits.js";
 export { experiments, experimentCells, experimentTrials } from "./schemaBenchmark.js";
+// Integration-provisioning foundation (P-INT-0 + P-APP-ENV-0): the org-level
+// integration registry (Plane A) + the built product's app-environment store
+// (Plane B). See schemaIntegrations.ts for the two-plane rationale.
+export { orgIntegrations, projectAppEnv } from "./schemaIntegrations.js";

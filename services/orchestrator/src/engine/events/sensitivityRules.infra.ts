@@ -43,7 +43,7 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["result.failure.message", "redacted"],
   ]),
 
-  // workspace
+  // workspace (workspace.failed.message → see P-APP-ENV-0 audit in sensitivityRules.ts)
   ...rulesFor("workspace.prepared", [
     ["runnerId", "public"],
     ["workspacePath", "public"],

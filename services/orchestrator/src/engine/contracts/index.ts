@@ -1,5 +1,11 @@
 export * from "./allocator.js";
 export * from "./costResolver.js";
+// Integration-provisioning foundation (P-INT-0): the IntegrationProvisioner port
+// every provider implements (sentry | slack | deploy.* | …), its registry
+// (`buildIntegrationProvisioner`), and the pure `resolveSmartDefault` helper. No
+// provider impl is wired in this wave — every kind resolves to the hard-throw
+// UnconfiguredIntegrationProvisioner. Conformance lives under tests/conformance.
+export * from "./integrationProvisioner.js";
 export * from "./internalRpc.js";
 export * from "./jobClaim.js";
 export * from "./jobQueue.js";

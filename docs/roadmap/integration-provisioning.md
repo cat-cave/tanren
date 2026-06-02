@@ -40,8 +40,10 @@ behind a registry (like `Allocator` / `VcsProvider` / `Repositories`), with a
 conformance suite:
 
 ```
-IntegrationProvisioner (per provider kind: sentry | slack | linear | jira |
-                        deploy.vercel | deploy.flyio | allocator.hetzner | …)
+IntegrationProvisioner (project-INTEGRATION providers only — per provider kind:
+                        sentry | slack | linear | jira | deploy.vercel | deploy.flyio | …;
+                        cloud-allocator SSH/host-key automation is NOT this port — it
+                        extends the Allocator seam, see P-INT-5)
   capability(): the capability id(s) this provisioner satisfies (e.g. "errors", "notify", "deploy")
   discover(orgGrant): ExistingResource[]        // brownfield: list what the org already has
   provision(orgGrant, projectCtx): ProvisionedArtifact   // greenfield / create-if-absent (idempotent find-or-create)
@@ -100,9 +102,10 @@ P-INT-4  Deploy provisioners (Vercel + Fly): create app/project, attach env vars
          store preview-URL pattern + deployment ref → the live-preview-deploy
          surface (also unblocks apex P3b).   → P-INT-0, P-INT-2
 
-P-INT-5  Cloud allocator provisioner (Hetzner first, then DO): create/import
-         ephemeral per-run SSH key, inject runner cloud-init, pin host key (baked
-         image or generated known_hosts) — removes the manual sshKeys + fingerprint.   → P-INT-0
+P-INT-5  Cloud allocator provisioning — an EXTENSION of the Allocator seam (NOT
+         IntegrationProvisioner): Hetzner first, then DO — create/import ephemeral
+         per-run SSH key, inject runner cloud-init, pin host key (baked image or
+         generated known_hosts) — removes the manual sshKeys + fingerprint.   → existing Allocator seam
 
 P-INT-6  Outbound webhook signing + a webhook destination provision/test flow
          (the generic webhook channel currently doesn't sign; Sentry/GitHub

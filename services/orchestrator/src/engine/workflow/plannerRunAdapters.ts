@@ -266,6 +266,9 @@ export function buildDefaultGate(
       timeoutMs: input.timeoutMs,
       appendEvent,
       taskId,
+      // Plane B: the project's dev+test app env, so the building agent's gate
+      // commands run with it. Never logged/emitted. Distinct from Tanren creds.
+      ...(input.appEnv === undefined ? {} : { appEnv: input.appEnv }),
     });
   };
 }
