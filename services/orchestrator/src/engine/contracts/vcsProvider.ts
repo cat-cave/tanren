@@ -27,6 +27,9 @@
 // through these operations.
 
 import { Buffer } from "node:buffer";
+// Typed contract errors live in `./vcsProviderErrors.js` (line cap); re-exported
+// so callers import them from the contract module unchanged.
+export { RepositoryAlreadyExistsError, RepositoryCreationForbiddenError } from "./vcsProviderErrors.js";
 import type { SshTarget } from "./allocator.js";
 import type { SecretStore } from "./secretStore.js";
 import type { SshSubstrate } from "./sshSubstrate.js";
@@ -50,6 +53,32 @@ export type RepoRef = GitHubRepository;
 export interface PullRequestRef {
   repo: RepoRef;
   number: number;
+}
+
+/**
+ * GREENFIELD: input to creating a brand-new repository under `owner` (the GitHub
+ * org/user login that will own it). `autoInit: true` MUST create an initial
+ * commit (GitHub `auto_init`) so the repo is immediately cloneable + has a
+ * `defaultBranch`. `private` chooses visibility; `description` is an optional,
+ * non-secret summary.
+ */
+export interface CreateRepositoryInput {
+  owner: string;
+  name: string;
+  private: boolean;
+  description?: string;
+  autoInit: boolean;
+}
+
+/**
+ * GREENFIELD: the just-created repository (provider-neutral). `fullName` is
+ * `owner/name`; `repoUrl` is the HTTPS clone URL the project row binds to;
+ * `defaultBranch` is the branch `auto_init` seeded. No token ever appears here.
+ */
+export interface CreatedRepository {
+  fullName: string;
+  repoUrl: string;
+  defaultBranch: string;
 }
 
 /** The result of opening (or re-using an open) draft pull request. */
@@ -302,6 +331,16 @@ export interface VcsProvider {
   /** Parse a pull-request URL into its {@link PullRequestRef}. */
   parsePullRequest(prUrl: string): PullRequestRef;
 
+  /**
+   * GREENFIELD: create a brand-new repository under `input.owner` so a greenfield
+   * project needs no existing repo. On GitHub: `POST /orgs/{owner}/repos` with
+   * `{ name, private, description, auto_init }`; returns the real `full_name`,
+   * HTTPS clone url, and `default_branch`. Throws {@link RepositoryAlreadyExistsError}
+   * on a taken name (422) and {@link RepositoryCreationForbiddenError} when the
+   * credential lacks `administration: write` (403) — never leaking the token.
+   */
+  createRepository(input: CreateRepositoryInput, token: ResolvedVcsToken): Promise<CreatedRepository>;
+
   /** Push a branch to the repo over SSH using the resolved token as HTTPS auth. */
   pushBranch(input: PushBranchInput): Promise<void>;
 
@@ -446,16 +485,6 @@ export interface VcsProvider {
    * best-effort and idempotent, never a hard failure that blocks the merge result.
    */
   deleteBranch(repo: RepoRef, branch: string, token: ResolvedVcsToken): Promise<void>;
-
-  // Phase 2 (P2b intent-preserving conflict resolution): conflict read/write
-  // hooks — read both sides of a conflicted path + write a resolved tree —
-  // replacing the `noopConflictResolver` default.
-  //
-  // Phase 2 (P2c speculative execution): integration-branch ops — create a
-  // speculative integration ref, push a batched merge onto it, tear it down.
-  //
-  // All three are PURELY ADDITIVE methods on this interface; the existing run +
-  // merge path above does not change when they land.
 }
 
 /**

@@ -17,6 +17,7 @@
 
 import { resolveGithubToken } from "../credentials/githubTokenResolver.js";
 import { setRepoActionsSecret } from "./actionsSecretSeal.js";
+import { createGitHubRepository } from "./githubRepoCreate.js";
 import { parseCommitLogins } from "../workflow/reviewMerge/commitLogins.js";
 import type { PullRequestContributors } from "../workflow/reviewMerge/governancePosture.js";
 import { decodeBase64Content } from "../contracts/vcsProvider.js";
@@ -24,7 +25,9 @@ import type {
   BuildIntegrationBranchInput,
   BuildIntegrationBranchResult,
   CreatedIssue,
+  CreatedRepository,
   CreateIssueInput,
+  CreateRepositoryInput,
   OpenDraftPullRequestInput,
   OpenedPullRequest,
   PullRequestMergeability,
@@ -121,6 +124,13 @@ export class GitHubVcsProvider implements VcsProvider {
   parsePullRequest(prUrl: string): PullRequestRef {
     const parsed = parseGitHubPullRequestUrl(prUrl);
     return { repo: parsed.repo, number: parsed.pullNumber };
+  }
+
+  async createRepository(input: CreateRepositoryInput, token: ResolvedVcsToken): Promise<CreatedRepository> {
+    // `POST /orgs/{owner}/repos` with auto_init → an immediately-cloneable repo;
+    // the 422/403 cases map to the contract's typed errors (delegated to the
+    // helper so the provider stays under the per-file line cap).
+    return createGitHubRepository(this.http, input, token);
   }
 
   async pushBranch(input: PushBranchInput): Promise<void> {

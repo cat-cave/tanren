@@ -15,7 +15,11 @@
 // (GitLab) gets contract coverage by adding one harness entry.
 
 import { describe, expect, it } from "vitest";
-import type { ResolvedVcsToken, VcsProvider } from "../../src/engine/contracts/vcsProvider.js";
+import {
+  RepositoryAlreadyExistsError,
+  type ResolvedVcsToken,
+  type VcsProvider,
+} from "../../src/engine/contracts/vcsProvider.js";
 
 /**
  * What a per-implementation test file hands the suite. `make()` returns a FRESH
@@ -60,6 +64,11 @@ export const CONFORMANCE_FAILING_BRANCH = "tanren/integ/failing";
 /** P-APP-ENV-1: the Actions-secret name + plaintext value the suite sets. */
 export const CONFORMANCE_ACTIONS_SECRET_NAME = "RESEND_API_KEY";
 export const CONFORMANCE_ACTIONS_SECRET_VALUE = "re_conformance_plaintext_must_never_leak";
+/** GREENFIELD: the owner + names the suite creates a brand-new repo under. */
+export const CONFORMANCE_REPO_OWNER = "cat-cave";
+export const CONFORMANCE_NEW_REPO_NAME = "tanren-greenfield-new";
+/** GREENFIELD: a repo name that already exists (createRepository → typed 422 error). */
+export const CONFORMANCE_EXISTING_REPO_NAME = "tanren-greenfield-taken";
 
 const REPO = { owner: "cat-cave", name: "tanren-conformance" };
 
@@ -138,6 +147,34 @@ export function describeVcsProviderConformance(label: string, harness: VcsProvid
           value: CONFORMANCE_ACTIONS_SECRET_VALUE,
         }),
       ).resolves.toBeUndefined();
+    });
+
+    // ---- GREENFIELD: createRepository -----------------------------------
+
+    it("createRepository creates a brand-new repo and returns full_name/url/default_branch", async () => {
+      const provider = harness.make();
+      const token = await resolve(provider);
+      const created = await provider.createRepository(
+        { owner: CONFORMANCE_REPO_OWNER, name: CONFORMANCE_NEW_REPO_NAME, private: true, autoInit: true },
+        token,
+      );
+      expect(created.fullName).toBe(`${CONFORMANCE_REPO_OWNER}/${CONFORMANCE_NEW_REPO_NAME}`);
+      expect(typeof created.repoUrl).toBe("string");
+      expect(created.repoUrl.length).toBeGreaterThan(0);
+      // auto_init seeded a default branch so the repo is immediately cloneable.
+      expect(typeof created.defaultBranch).toBe("string");
+      expect(created.defaultBranch.length).toBeGreaterThan(0);
+    });
+
+    it("createRepository surfaces a typed already-exists error for a taken name (not a stack trace)", async () => {
+      const provider = harness.make();
+      const token = await resolve(provider);
+      await expect(
+        provider.createRepository(
+          { owner: CONFORMANCE_REPO_OWNER, name: CONFORMANCE_EXISTING_REPO_NAME, private: true, autoInit: true },
+          token,
+        ),
+      ).rejects.toBeInstanceOf(RepositoryAlreadyExistsError);
     });
 
     it("markReadyForReview resolves (idempotent un-draft)", async () => {

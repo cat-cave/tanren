@@ -102,7 +102,14 @@ export function mountFeatureRoutes(app: Hono<ActorContextEnv>, deps: FeatureRout
   // `resolveWritableClient`) still resolve correctly through it.
   const scopedPool = orgScopingPool(pool);
   app.route("/orgs", createOrgRoutes({ pool: scopedPool, configGateGithub }));
-  app.route("/orgs", createProjectRoutes({ pool: scopedPool }));
+  app.route(
+    "/orgs",
+    // GREENFIELD: the `/projects/greenfield` create path mints the org's GitHub App
+    // token + creates a brand-new repo through the VcsProvider seam, so the project
+    // routes carry the secrets/provider/minter deps (the brownfield-link route uses
+    // the same App resolution).
+    createProjectRoutes({ pool: scopedPool, secrets, vcsProvider: deps.vcsProvider, githubAppMinter }),
+  );
   // P-APP-ENV-1: push a project's TEST-scoped app env to the target repo's Actions
   // secrets (so `tanren-ci.yml` tests that read e.g. RESEND_API_KEY pass). Uses the
   // VcsProvider seam (App-first token + sealed-box secret set); names-only signal.

@@ -12,6 +12,7 @@ import {
   CONFORMANCE_BEHIND_PR_NUMBER,
   CONFORMANCE_CONFLICT_PR_NUMBER,
   CONFORMANCE_DIRTY_PR_NUMBER,
+  CONFORMANCE_EXISTING_REPO_NAME,
   CONFORMANCE_FAILING_BRANCH,
   CONFORMANCE_HEAD_BRANCH,
   CONFORMANCE_PRESENT_FILE,
@@ -24,11 +25,14 @@ import type {
 } from "../../../src/engine/providers/githubReviewMerge.js";
 import type { GitHubPullRequestChecks } from "../../../src/engine/providers/github.js";
 import type { PullRequestContributors } from "../../../src/engine/workflow/reviewMerge/governancePosture.js";
+import { RepositoryAlreadyExistsError } from "../../../src/engine/contracts/vcsProvider.js";
 import type {
   BuildIntegrationBranchInput,
   BuildIntegrationBranchResult,
   CreatedIssue,
+  CreatedRepository,
   CreateIssueInput,
+  CreateRepositoryInput,
   OpenDraftPullRequestInput,
   OpenedPullRequest,
   PullRequestMergeability,
@@ -64,6 +68,22 @@ export class InMemoryVcsProvider implements VcsProvider {
   }
   parsePullRequest(prUrl: string): PullRequestRef {
     return parsePr(prUrl);
+  }
+  /** Recorded greenfield repo creations so the suite can assert what was created. */
+  readonly createdRepositories: Array<{ owner: string; name: string; private: boolean }> = [];
+  async createRepository(input: CreateRepositoryInput, _token: ResolvedVcsToken): Promise<CreatedRepository> {
+    // The well-known taken name surfaces the typed already-exists error (the
+    // contract's recoverable 422 case); every other name creates cleanly with an
+    // auto-init default branch.
+    if (input.name === CONFORMANCE_EXISTING_REPO_NAME) {
+      throw new RepositoryAlreadyExistsError(input.owner, input.name);
+    }
+    this.createdRepositories.push({ owner: input.owner, name: input.name, private: input.private });
+    return {
+      fullName: `${input.owner}/${input.name}`,
+      repoUrl: `https://github.com/${input.owner}/${input.name}`,
+      defaultBranch: "main",
+    };
   }
   async pushBranch(_input: PushBranchInput): Promise<void> {}
   async openDraftPullRequest(input: OpenDraftPullRequestInput): Promise<OpenedPullRequest> {
