@@ -55,11 +55,13 @@ import {
   HelloSshCompletedPayload,
   HelloSshStartedPayload,
   HelloStartedPayload,
+  MergeBehindPayload,
   MergeBlockedPayload,
   MergeCompletedPayload,
   MergeConflictPayload,
   MergeFailedPayload,
   MergeQueuedPayload,
+  MergeRebasedPayload,
   NotificationEnqueuedPayload,
   NotificationFailedPayload,
   NotificationSentPayload,
@@ -210,6 +212,9 @@ export const EventRegistry = {
   "merge.completed": MergeCompletedPayload,
   "merge.failed": MergeFailedPayload,
   "merge.conflict": MergeConflictPayload,
+  // P2a up-to-date enforcement: branch behind base → auto-rebase + re-gate CI.
+  "merge.behind": MergeBehindPayload,
+  "merge.rebased": MergeRebasedPayload,
   // P3-0023 external-push governance posture block (strict / audit_only)
   "merge.blocked": MergeBlockedPayload,
 

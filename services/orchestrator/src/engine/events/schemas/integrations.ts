@@ -202,6 +202,36 @@ export const MergeConflictPayload = z
   })
   .strict();
 
+// P2a up-to-date enforcement. Before merging, the stage checks the PR branch's
+// freshness: `merge.behind` records that the branch was out of date with its
+// base (so a rebase is being driven); `merge.rebased` records that the
+// server-side update-branch advanced the branch onto base and the stage is
+// re-polling CI before merging. A stale/conflicting branch is now DETECTED and
+// routed here, not discovered as a raw 405/409 at merge time.
+export const MergeBehindPayload = z
+  .object({
+    prUrl: z.string(),
+    prNumber: z.number().int(),
+    integration: MergeIntegrationMode,
+    baseBranch: z.string(),
+    headBranch: z.string().optional(),
+    /** The mergeability state observed (`behind` / `dirty` / `unknown`). */
+    mergeableState: z.string(),
+  })
+  .strict();
+
+export const MergeRebasedPayload = z
+  .object({
+    prUrl: z.string(),
+    prNumber: z.number().int(),
+    integration: MergeIntegrationMode,
+    baseBranch: z.string(),
+    headBranch: z.string().optional(),
+    /** Whether CI was re-polled green after the rebase before merging. */
+    reGatedCi: z.boolean(),
+  })
+  .strict();
+
 // P3-0023 external-push governance posture. Emitted at the merge decision when
 // the configured posture (strict | open | audit_only) holds an auto-merge:
 //   strict + external change     → mode "operator_approval" (needs a human OK)

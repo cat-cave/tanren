@@ -13,6 +13,15 @@
 // `merge.conflict` + a typed recoverable outcome — the hook the future
 // conflict-resolver attaches to. Required checks are never bypassed: a
 // branch-protected PR returns 405 and is reported as not-merged, not forced.
+//
+// P2a up-to-date enforcement: BEFORE the direct merge, the stage reads the PR
+// branch's mergeability (`readMergeability`). A `behind` branch is auto-rebased
+// via the server-side update-branch API (`updateBranch`) and its CI is re-polled
+// to green (`reGateCi`) before merging — emitting `merge.behind` + `merge.rebased`
+// for visibility. A `dirty` branch (or a 422 from update-branch) is routed to the
+// conflict-resolver hook + the recoverable `merge.conflict` outcome, NOT merged.
+// So a stale/conflicting branch is DETECTED and routed, not discovered as a raw
+// 405/409 at merge time.
 
 import type { MergeIntegration } from "../../config/shared.js";
 import type { RunStateWriter } from "../../contracts/runStateWriter.js";
@@ -21,7 +30,13 @@ import { ensureSystemTask, routeTaskUpdate } from "../taskWriteRouting.js";
 import { type EventStore, PgEventStore } from "../../eventStore.js";
 import type { GithubAppTokenMinter } from "../../providers/githubAppTokenMinter.js";
 import type { MergePullRequestResult } from "../../providers/githubReviewMerge.js";
-import type { PullRequestRef, RepoRef, VcsProvider } from "../../contracts/vcsProvider.js";
+import type {
+  PullRequestMergeability,
+  PullRequestRef,
+  RepoRef,
+  UpdateBranchResult,
+  VcsProvider,
+} from "../../contracts/vcsProvider.js";
 import {
   contextOptionsFor,
   loadReviewMergeRunContext,
@@ -93,13 +108,35 @@ export interface MergeForRunInput {
    * the dispatcher retry the merge once.
    */
   resolveConflict?: ConflictResolverHook;
+  /**
+   * P2a up-to-date enforcement: re-poll the run's CI to a terminal verdict after
+   * an auto-rebase advanced the branch (the branch HEAD moved, so the prior
+   * green is stale). Production wires this to `pollCiForRun` through the SAME
+   * vcsProvider seam; tests inject a scripted re-gate. When omitted, the stage
+   * skips the re-poll (it still emits `merge.rebased` with `reGatedCi: false`)
+   * and proceeds to let the GitHub merge API gate on required checks — the merge
+   * is never forced past protection.
+   */
+  reGateCi?: ReGateCiHook;
 }
 
 /** Injectable merge-operation probe (real GitHub by default; mocked in tests). */
 export interface MergeProbe {
   applyQueueLabel(label: string): Promise<void>;
   merge(): Promise<MergePullRequestResult>;
+  /** P2a: read the PR branch's up-to-date / mergeability state before merging. */
+  readMergeability(): Promise<PullRequestMergeability>;
+  /** P2a: bring the PR branch up to date with its base (server-side update). */
+  updateBranch(): Promise<UpdateBranchResult>;
 }
+
+/**
+ * P2a re-gate hook: drive the run's CI back to a terminal verdict after a
+ * rebase. Returns the CI status so the stage knows whether to merge (`passed`),
+ * fail (`failed`), or hold (`pending` after the budget). Production resolves
+ * this to a `pollCiForRun` loop; tests inject a scripted result.
+ */
+export type ReGateCiHook = () => Promise<{ status: "passed" | "failed" | "pending" }>;
 
 export interface ConflictContext {
   runId: string;
@@ -276,6 +313,14 @@ class MergeDispatcher {
       eventType: "merge.queued",
       payload: { ...this.prFields(), integration: "direct_merge" },
     });
+    // P2a up-to-date enforcement: BEFORE merging, ensure the PR branch is current
+    // with its base. A stale branch is rebased + re-gated here; a real conflict is
+    // routed to the resolver hook — so we never discover a 405/409 at merge time
+    // and never merge broken work.
+    const freshness = await this.ensureUpToDate();
+    if (freshness.kind !== "proceed") {
+      return freshness.result;
+    }
     let merge = await probe.merge();
     if (!merge.merged && merge.conflict) {
       const retried = await this.tryResolveConflict(merge);
@@ -308,24 +353,140 @@ class MergeDispatcher {
     return this.result("failed", { message: merge.message });
   }
 
-  private async tryResolveConflict(merge: MergePullRequestResult): Promise<MergePullRequestResult | undefined> {
-    const { input, context, pr, probe } = this.deps;
+  /**
+   * P2a: ensure the PR branch is up to date with its base before the merge.
+   *
+   *   clean / blocked / unknown → proceed (the merge API itself gates on
+   *       required checks / protection; `unknown` means GitHub has not computed
+   *       freshness yet, so we let the merge attempt surface it rather than
+   *       blindly rebasing).
+   *   dirty → a real conflict with base: route to the conflict hook + emit
+   *       merge.conflict (recoverable) — NEVER merge.
+   *   behind → update the branch onto base, re-poll CI to green, then proceed.
+   *       If update-branch reports a conflict, route to the conflict hook. If the
+   *       re-gated CI fails, fail the stage. The branch never reaches the merge
+   *       call stale.
+   */
+  private async ensureUpToDate(): Promise<{ kind: "proceed" } | { kind: "halt"; result: MergeForRunResult }> {
+    const { probe, eventStore, context } = this.deps;
+    const mergeability = await probe.readMergeability();
+    if (mergeability.state === "dirty") {
+      return { kind: "halt", result: await this.handleBranchConflict(mergeability, "branch conflicts with base") };
+    }
+    if (mergeability.state !== "behind") {
+      // clean / blocked / unknown: nothing to rebase here.
+      return { kind: "proceed" };
+    }
+
+    await eventStore.append({
+      ...this.base(),
+      eventType: "merge.behind",
+      payload: {
+        ...this.prFields(),
+        integration: "direct_merge",
+        baseBranch: mergeability.baseBranch || context.baseBranch,
+        headBranch: mergeability.headBranch || undefined,
+        mergeableState: mergeability.state,
+      },
+    });
+
+    const updated = await probe.updateBranch();
+    if (updated.outcome === "conflict") {
+      // The server-side update hit a real conflict — route to the resolver, do
+      // NOT merge. (P2b replaces noopConflictResolver with the real resolver.)
+      return { kind: "halt", result: await this.handleBranchConflict(mergeability, updated.message) };
+    }
+    if (updated.outcome === "up_to_date") {
+      // A benign race: it became current between the read and the update.
+      return { kind: "proceed" };
+    }
+
+    // The branch advanced onto base. Its prior green is now stale, so re-poll CI
+    // before merging.
+    const reGate = this.deps.input.reGateCi;
+    const ci = reGate === undefined ? undefined : await reGate();
+    await eventStore.append({
+      ...this.base(),
+      eventType: "merge.rebased",
+      payload: {
+        ...this.prFields(),
+        integration: "direct_merge",
+        baseBranch: mergeability.baseBranch || context.baseBranch,
+        headBranch: mergeability.headBranch || undefined,
+        reGatedCi: ci !== undefined,
+      },
+    });
+    if (ci?.status === "failed") {
+      await eventStore.append({
+        ...this.base(),
+        eventType: "merge.failed",
+        payload: { ...this.prFields(), integration: "direct_merge", message: "CI failed after auto-rebase" },
+      });
+      await this.finalize("failed", {
+        taskOutcome: "failed",
+        taskStatus: "failed",
+        failureKind: "merge_failed",
+      });
+      return { kind: "halt", result: this.result("failed", { message: "CI failed after auto-rebase" }) };
+    }
+    if (ci?.status === "pending") {
+      // CI did not converge within the re-gate budget: hold (recoverable), do not
+      // merge on an unverified rebase.
+      return { kind: "halt", result: await this.emitConflict("CI did not converge after auto-rebase") };
+    }
+    return { kind: "proceed" };
+  }
+
+  /**
+   * P2a: a behind/dirty branch surfaced a real conflict (the `dirty` state or a
+   * 422 from update-branch). Route it through the SAME conflict-resolver hook as
+   * a merge-time conflict; if the resolver resolves it we retry the merge once,
+   * otherwise emit the recoverable merge.conflict outcome — never a raw merge.
+   */
+  private async handleBranchConflict(
+    mergeability: PullRequestMergeability,
+    message: string,
+  ): Promise<MergeForRunResult> {
+    const { probe } = this.deps;
+    const resolution = await this.runConflictResolver(message);
+    if (resolution.resolved) {
+      const merge = await probe.merge();
+      if (merge.merged) {
+        await this.deps.eventStore.append({
+          ...this.base(),
+          eventType: "merge.completed",
+          payload: { ...this.prFields(), integration: "direct_merge", mergeSha: merge.mergeSha },
+        });
+        await this.finalize("merged", { taskOutcome: "ok", taskStatus: "done" });
+        return this.result("merged", { mergeSha: merge.mergeSha });
+      }
+    }
+    return this.emitConflict(message, mergeability.headBranch || undefined);
+  }
+
+  /** Invoke the conflict-resolution hook (noop default until P2b) for a message. */
+  private async runConflictResolver(message: string): Promise<{ resolved: boolean }> {
+    const { input, context, pr } = this.deps;
     // arch-allow: pending P2b — noopConflictResolver is the TEMPORARY default until the
-    // intent-preserving conflict resolver lands. When P2b wires the real resolver as the
-    // production default, delete this fallback and the allowlist entry tightens. P8a §8a.
+    // intent-preserving conflict resolver lands. P8a §8a.
     const resolver = input.resolveConflict ?? noopConflictResolver;
-    const outcome = await resolver({
+    return resolver({
       runId: context.runId,
       prUrl: context.prUrl,
       prNumber: pr.pullNumber,
       baseBranch: context.baseBranch,
-      message: merge.message,
+      message,
     });
+  }
+
+  private async tryResolveConflict(merge: MergePullRequestResult): Promise<MergePullRequestResult | undefined> {
+    const { probe } = this.deps;
+    const outcome = await this.runConflictResolver(merge.message);
     return outcome.resolved ? await probe.merge() : undefined;
   }
 
   /** Emit the recoverable conflict outcome (the resolver-scaffolding hook). */
-  private async emitConflict(message: string): Promise<MergeForRunResult> {
+  private async emitConflict(message: string, headBranch?: string): Promise<MergeForRunResult> {
     const { eventStore, context } = this.deps;
     await eventStore.append({
       ...this.base(),
@@ -334,6 +495,7 @@ class MergeDispatcher {
         ...this.prFields(),
         integration: "direct_merge",
         baseBranch: context.baseBranch,
+        ...(headBranch !== undefined && { headBranch }),
         message,
       },
     });
@@ -425,6 +587,8 @@ async function buildGitHubProbe(
   return {
     applyQueueLabel: (label) => provider.applyQueueLabel(pr, label, resolved),
     merge: () => provider.mergePullRequest(pr, resolved, input.mergeMethod),
+    readMergeability: () => provider.readMergeability(pr, resolved),
+    updateBranch: () => provider.updateBranch(pr, resolved),
   };
 }
 

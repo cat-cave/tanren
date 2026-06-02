@@ -5,6 +5,7 @@
  */
 import type { GovernancePosture, MergeIntegration, ReviewPolicy } from "../src/engine/config/shared.js";
 import type { MergeProbe, ReviewProbe } from "../src/engine/workflow/reviewMerge/index.js";
+import type { PullRequestMergeability, UpdateBranchResult } from "../src/engine/contracts/vcsProvider.js";
 
 export function unusedHttp() {
   return {
@@ -28,16 +29,34 @@ export function approvingReviewProbe(): ReviewProbe & { markedReady: boolean } {
   return probe;
 }
 
-export function recordingMergeProbe(result: {
-  merged: boolean;
-  mergeSha?: string;
-  conflict: boolean;
-  status: number;
-  message: string;
-}) {
+export function recordingMergeProbe(
+  result: {
+    merged: boolean;
+    mergeSha?: string;
+    conflict: boolean;
+    status: number;
+    message: string;
+  },
+  // P2a: by default the probe reports the branch CLEAN + up to date, so existing
+  // merge tests exercise the unchanged "merge once" path. The freshness tests
+  // override these to drive the behind / dirty branches.
+  freshness: {
+    mergeability?: PullRequestMergeability;
+    updateBranch?: UpdateBranchResult;
+  } = {},
+) {
+  const mergeability: PullRequestMergeability = freshness.mergeability ?? {
+    state: "clean",
+    behind: false,
+    baseBranch: "main",
+    headBranch: "tanren/run_1",
+  };
+  const update: UpdateBranchResult = freshness.updateBranch ?? { outcome: "up_to_date", message: "up to date" };
   return {
     labels: [] as string[],
     mergeCalls: 0,
+    mergeabilityCalls: 0,
+    updateBranchCalls: 0,
     async applyQueueLabel(label: string) {
       this.labels.push(label);
     },
@@ -45,7 +64,20 @@ export function recordingMergeProbe(result: {
       this.mergeCalls += 1;
       return result;
     },
-  } satisfies MergeProbe & { labels: string[]; mergeCalls: number };
+    async readMergeability() {
+      this.mergeabilityCalls += 1;
+      return mergeability;
+    },
+    async updateBranch() {
+      this.updateBranchCalls += 1;
+      return update;
+    },
+  } satisfies MergeProbe & {
+    labels: string[];
+    mergeCalls: number;
+    mergeabilityCalls: number;
+    updateBranchCalls: number;
+  };
 }
 
 const eventsTableName = ["events"].join("");

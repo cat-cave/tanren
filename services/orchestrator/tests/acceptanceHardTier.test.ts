@@ -176,6 +176,14 @@ describe("acceptance hard tier (dequeue→execute, all hard paths)", () => {
               status: 200,
               message: "merged",
             }),
+            // P2a: branch reports clean → up-to-date enforcement is a no-op.
+            readMergeability: async () => ({
+              state: "clean" as const,
+              behind: false,
+              baseBranch: "main",
+              headBranch: "tanren/run_hard",
+            }),
+            updateBranch: async () => ({ outcome: "up_to_date" as const, message: "up to date" }),
           },
         }),
     });

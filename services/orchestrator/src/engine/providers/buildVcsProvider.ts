@@ -23,10 +23,12 @@ import type { PullRequestContributors } from "../workflow/reviewMerge/governance
 import type {
   OpenDraftPullRequestInput,
   OpenedPullRequest,
+  PullRequestMergeability,
   PullRequestRef,
   PushBranchInput,
   RepoRef,
   ResolvedVcsToken,
+  UpdateBranchResult,
   VcsCredentialContext,
   VcsProvider,
 } from "../contracts/vcsProvider.js";
@@ -107,6 +109,12 @@ export class UnconfiguredVcsProvider implements VcsProvider {
     path: string;
     token: ResolvedVcsToken;
   }): Promise<string | undefined> {
+    return this.fail();
+  }
+  async readMergeability(_pr: PullRequestRef, _token: ResolvedVcsToken): Promise<PullRequestMergeability> {
+    return this.fail();
+  }
+  async updateBranch(_pr: PullRequestRef, _token: ResolvedVcsToken): Promise<UpdateBranchResult> {
     return this.fail();
   }
 }

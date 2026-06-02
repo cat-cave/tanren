@@ -418,6 +418,19 @@ export async function runPlannerLoopWorkflow(input: RunPlannerLoopInput): Promis
       resolvedGithubCredentialRef: context.githubCredentialRef,
       mergeProbe: input.mergeProbe,
       resolveConflict: input.resolveConflict,
+      // P2a: after an auto-rebase advances the branch, re-poll CI to a terminal
+      // verdict (the prior green is stale) before merging — through the SAME CI
+      // path the run already uses. `pollCiUntilTerminal` resolves only on a green
+      // poll and throws on a failed/timed-out one, so a throw maps to "failed"
+      // (the merge stage holds rather than merging unverified work).
+      reGateCi: async () => {
+        try {
+          await pollCiUntilTerminal(input);
+          return { status: "passed" as const };
+        } catch {
+          return { status: "failed" as const };
+        }
+      },
     });
 
     // Finalize the run for the merge stage's outcome (conflict → recoverable

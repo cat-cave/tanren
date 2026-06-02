@@ -47,6 +47,26 @@ export interface MergePullRequestResult {
   message: string;
 }
 
+/**
+ * P2a: GitHub's PR mergeability snapshot. `mergeableState` is the raw
+ * `mergeable_state` string (`clean` / `behind` / `dirty` / `blocked` /
+ * `unknown` / `unstable` / `draft`); `behind` is the derived boolean the
+ * up-to-date check gates on (a `behind` state, or — defensively — `mergeable`
+ * being null while the branch lags). `baseBranch` / `headBranch` name the refs.
+ */
+export interface GitHubMergeabilityResult {
+  mergeableState: string;
+  behind: boolean;
+  baseBranch: string;
+  headBranch: string;
+}
+
+/** P2a: the outcome of GitHub's update-branch (server-side rebase-onto-base). */
+export interface GitHubUpdateBranchResult {
+  outcome: "updated" | "up_to_date" | "conflict";
+  message: string;
+}
+
 interface TokenInput {
   token: string;
   refreshToken?: () => Promise<string>;
@@ -240,6 +260,90 @@ export class GitHubReviewMergeService {
     const conflict = response.status === 405 || response.status === 409;
     return { merged: false, conflict, status: response.status, message };
   }
+
+  /**
+   * P2a: read the PR's up-to-date / mergeability state. GitHub computes
+   * `mergeable_state` asynchronously, so a freshly-opened/updated PR can briefly
+   * report `unknown` (with `mergeable: null`); the caller treats that as "do not
+   * assume current". `behind` is true when GitHub says the head is out of date
+   * with base (`mergeable_state: "behind"`). The base/head refs are surfaced so
+   * the rebase + events can name them without a second read.
+   */
+  async fetchMergeability(
+    input: { repo: GitHubRepository; pullNumber: number } & TokenInput,
+  ): Promise<GitHubMergeabilityResult> {
+    const response = await this.http.request({
+      method: "GET",
+      path: repoPath(input.repo, `/pulls/${input.pullNumber}`),
+      token: input.token,
+      refreshToken: input.refreshToken,
+    });
+    if (response.status !== 200) {
+      throw new Error(`GitHub PR mergeability fetch failed: HTTP ${response.status}`);
+    }
+    return parseMergeability(response.body);
+  }
+
+  /**
+   * P2a: bring the PR branch up to date with its base via GitHub's server-side
+   * update-branch endpoint (`PUT /pulls/{n}/update-branch`). A 202 is an
+   * accepted update (the branch advanced onto base — re-gate then merge); a 422
+   * is GitHub reporting the update cannot be performed because of a real merge
+   * conflict, surfaced as `conflict` (the caller routes to the resolver, NOT a
+   * merge); a 204 means the branch was already current. Required-checks /
+   * protection are never bypassed — this only advances the branch ref.
+   */
+  async updateBranch(
+    input: { repo: GitHubRepository; pullNumber: number } & TokenInput,
+  ): Promise<GitHubUpdateBranchResult> {
+    const response = await this.http.request({
+      method: "PUT",
+      path: repoPath(input.repo, `/pulls/${input.pullNumber}/update-branch`),
+      token: input.token,
+      refreshToken: input.refreshToken,
+    });
+    if (response.status === 202) {
+      return { outcome: "updated", message: parseMessage(response.body) ?? "branch update accepted" };
+    }
+    if (response.status === 204) {
+      return { outcome: "up_to_date", message: "branch already up to date" };
+    }
+    // 422 (and 409) are GitHub reporting the update cannot proceed because of a
+    // real conflict — a recoverable handoff to the resolver, NOT a hard failure.
+    if (response.status === 422 || response.status === 409) {
+      return { outcome: "conflict", message: parseMessage(response.body) ?? `HTTP ${response.status}` };
+    }
+    throw new Error(`GitHub update-branch failed: HTTP ${response.status}: ${parseMessage(response.body) ?? ""}`);
+  }
+}
+
+/** Parse a GitHub PR detail body into the P2a mergeability snapshot. */
+function parseMergeability(value: unknown): GitHubMergeabilityResult {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new TypeError("GitHub PR response was not an object");
+  }
+  const object = value as Record<string, unknown>;
+  const mergeableState = typeof object["mergeable_state"] === "string" ? object["mergeable_state"] : "unknown";
+  // `mergeable: false` with state `dirty` is a conflict; `behind` is the
+  // out-of-date-with-base state the up-to-date check rebases. We treat ONLY the
+  // explicit `behind` state as behind — `unknown`/`null` mergeability stays
+  // "unknown" so the caller re-reads rather than assuming staleness.
+  const behind = mergeableState === "behind";
+  return {
+    mergeableState,
+    behind,
+    baseBranch: parseRef(object["base"]),
+    headBranch: parseRef(object["head"]),
+  };
+}
+
+/** Lift a `ref` from a PR `base`/`head` object (`{ ref: "main", ... }`). */
+function parseRef(value: unknown): string {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return "";
+  }
+  const ref = (value as Record<string, unknown>)["ref"];
+  return typeof ref === "string" ? ref : "";
 }
 
 function parseReviews(value: unknown): GitHubReview[] {

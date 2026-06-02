@@ -17,6 +17,9 @@ import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "..
 import type { VcsProvider } from "../../src/engine/contracts/vcsProvider.js";
 import { InMemoryVcsProvider } from "./fakes/inMemoryVcsProvider.js";
 import {
+  CONFORMANCE_BEHIND_PR_NUMBER,
+  CONFORMANCE_DIRTY_PR_NUMBER,
+  CONFORMANCE_HEAD_BRANCH,
   CONFORMANCE_PRESENT_FILE,
   CONFORMANCE_PRESENT_FILE_BODY,
   describeVcsProviderConformance,
@@ -50,9 +53,29 @@ class RoutingGitHubHttp implements GitHubHttpClient {
       return { status: 409, body: { message: "merge conflict" } };
     }
     if (input.method === "PUT" && path.endsWith("/merge")) return ok({ sha: "merge-sha", merged: true });
-    // markReadyForReview: read node id, then the GraphQL mutation.
-    if (input.method === "GET" && /\/pulls\/\d+$/u.test(path)) {
-      return ok({ node_id: "PR_node_7", head: { sha: HEAD_SHA }, base: { ref: "main" } });
+    // updateBranch (P2a): the behind PR is accepted (202); the dirty PR conflicts
+    // (422); any other PR is already current (204).
+    const updateMatch = /\/pulls\/(\d+)\/update-branch$/u.exec(path);
+    if (input.method === "PUT" && updateMatch !== null) {
+      const number = Number(updateMatch[1]);
+      if (number === CONFORMANCE_BEHIND_PR_NUMBER) return { status: 202, body: { message: "Updating pull request branch." } };
+      if (number === CONFORMANCE_DIRTY_PR_NUMBER) return { status: 422, body: { message: "merge conflict" } };
+      return { status: 204, body: {} };
+    }
+    // PR detail GET (P2a mergeability + markReadyForReview node id): vary
+    // mergeable_state by PR number — the behind PR is `behind`, the dirty PR is
+    // `dirty`, everything else `clean`.
+    const detailMatch = /\/pulls\/(\d+)$/u.exec(path);
+    if (input.method === "GET" && detailMatch !== null) {
+      const number = Number(detailMatch[1]);
+      const mergeableState =
+        number === CONFORMANCE_BEHIND_PR_NUMBER ? "behind" : number === CONFORMANCE_DIRTY_PR_NUMBER ? "dirty" : "clean";
+      return ok({
+        node_id: "PR_node_7",
+        head: { sha: HEAD_SHA, ref: CONFORMANCE_HEAD_BRANCH },
+        base: { ref: "main" },
+        mergeable_state: mergeableState,
+      });
     }
     if (input.method === "POST" && path === "/graphql") {
       return ok({ data: { markPullRequestReadyForReview: { pullRequest: { isDraft: false } } } });

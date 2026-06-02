@@ -205,6 +205,16 @@ export function hardTierWorkflowRunner(github: GitHubHttpClient, trace: HardTier
                 message: "merged",
               };
         },
+        // P2a: the branch reports CLEAN, so the up-to-date enforcement is a no-op
+        // and this fixture still exercises the merge-TIME conflict + resolver
+        // retry path (the GitHub merge API returns the 409 on the first attempt).
+        readMergeability: async () => ({
+          state: "clean" as const,
+          behind: false,
+          baseBranch: "main",
+          headBranch: "tanren/run_hard",
+        }),
+        updateBranch: async () => ({ outcome: "up_to_date" as const, message: "up to date" }),
       },
       resolveConflict: async (_context: ConflictContext) => {
         trace.conflictResolved += 1;
