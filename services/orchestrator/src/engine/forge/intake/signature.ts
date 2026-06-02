@@ -8,16 +8,18 @@
 // constant-time compare. A source with no configured secret CANNOT receive a
 // webhook (the receiver rejects it) — there is no "unsigned is fine" path.
 
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac } from "node:crypto";
+import { constantTimeEqualHex, type SignatureCheck } from "../../webhooks/hmacSignature.js";
 
-/** Verdicts the receiver maps to HTTP responses (401 vs. proceed). */
-export type SignatureCheck = { ok: true } | { ok: false; reason: string };
+export type { SignatureCheck };
 
 /**
  * Verify a GitHub webhook signature (`X-Hub-Signature-256`: `sha256=<hex>`),
- * an HMAC-SHA256 of the raw body under the source's shared secret. Constant-time
- * to avoid leaking the digest via timing. A missing/malformed header or secret
- * fails closed.
+ * an HMAC-SHA256 of the RAW body under the source's shared secret. GitHub's
+ * scheme signs the body only (no timestamp binding), so this stays distinct
+ * from the generic Tanren scheme in `hmacSignature.ts`; both share the
+ * constant-time hex compare so the digest is never leaked via timing. A
+ * missing/malformed header or absent secret fails closed.
  */
 export function verifyGithubSignature(input: {
   rawBody: string;
@@ -30,16 +32,4 @@ export function verifyGithubSignature(input: {
   const provided = header.slice("sha256=".length);
   const expected = createHmac("sha256", input.secret).update(input.rawBody, "utf8").digest("hex");
   return constantTimeEqualHex(provided, expected) ? { ok: true } : { ok: false, reason: "signature mismatch" };
-}
-
-/**
- * Constant-time hex-string compare. Returns false (never throws) on a length
- * mismatch — `timingSafeEqual` requires equal-length buffers, so we guard first.
- */
-function constantTimeEqualHex(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  const bufA = Buffer.from(a, "hex");
-  const bufB = Buffer.from(b, "hex");
-  if (bufA.length !== bufB.length || bufA.length === 0) return false;
-  return timingSafeEqual(bufA, bufB);
 }

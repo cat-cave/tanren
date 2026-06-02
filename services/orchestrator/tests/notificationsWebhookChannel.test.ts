@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { createHmac } from "node:crypto";
 import { WebhookChannel } from "../src/engine/notifications/channels/webhook.js";
+import { verifyWebhookSignature } from "../src/engine/webhooks/hmacSignature.js";
 import type { SecretStore, SecretValue } from "../src/engine/contracts/secretStore.js";
 import type { NotificationTargetRow } from "../src/engine/notifications/index.js";
 
@@ -32,6 +34,9 @@ class MemorySecrets implements SecretStore {
     return value === undefined ? undefined : { ref, value };
   }
   async delete(): Promise<void> {}
+  async list(prefix: string): Promise<string[]> {
+    return Object.keys(this.map).filter((ref) => ref.startsWith(prefix));
+  }
 }
 
 describe("WebhookChannel", () => {
@@ -145,5 +150,82 @@ describe("WebhookChannel", () => {
         eventName: "run.started",
       }),
     ).rejects.toThrow(/webhook publish failed: 500/u);
+  });
+});
+
+function captureFetch() {
+  const captured: { url: string; init: RequestInit }[] = [];
+  const fetchImpl: typeof fetch = async (url, init) => {
+    captured.push({ url: String(url), init: init as RequestInit });
+    return new Response("ok", { status: 200 });
+  };
+  return { captured, fetchImpl };
+}
+
+describe("WebhookChannel signing (P-INT-6)", () => {
+  const SIGNING_SECRET = "per-target-signing-secret";
+  const payload = {
+    title: "run failed",
+    body: "details",
+    severity: "fail" as const,
+    eventName: "run.failed",
+  };
+
+  it("signs the body with the per-target secret and carries a timestamp header", async () => {
+    const { captured, fetchImpl } = captureFetch();
+    const secrets = new MemorySecrets({ "credential/webhook-signing/t": SIGNING_SECRET });
+    const channel = new WebhookChannel({ fetch: fetchImpl, secrets, nowMs: () => 1_700_000_000_000 });
+    await channel.publish(target({ destination: "https://hooks.example.com/x" }), payload);
+
+    const headers = captured[0]!.init.headers as Record<string, string>;
+    const signature = headers["X-Tanren-Signature"];
+    const timestamp = headers["X-Tanren-Timestamp"];
+    expect(timestamp).toBe(String(1_700_000_000));
+    expect(signature).toMatch(/^sha256=[0-9a-f]{64}$/u);
+
+    // The signature is verifiable with the secret over the EXACT body bytes.
+    const body = captured[0]!.init.body as string;
+    const check = verifyWebhookSignature({
+      rawBody: body,
+      signatureHeader: signature,
+      timestampHeader: timestamp,
+      secret: SIGNING_SECRET,
+    });
+    expect(check.ok).toBe(true);
+
+    // And the digest matches a manual HMAC over `<timestamp>.<body>`.
+    const expected = createHmac("sha256", SIGNING_SECRET).update(`${timestamp}.${body}`, "utf8").digest("hex");
+    expect(signature).toBe(`sha256=${expected}`);
+  });
+
+  it("sends UNSIGNED when no signing secret is configured (sign-if-configured fallback)", async () => {
+    const { captured, fetchImpl } = captureFetch();
+    // No signing secret at the ref.
+    const secrets = new MemorySecrets({});
+    const channel = new WebhookChannel({ fetch: fetchImpl, secrets });
+    await channel.publish(target({ destination: "https://hooks.example.com/x" }), payload);
+
+    const headers = captured[0]!.init.headers as Record<string, string>;
+    expect(headers["X-Tanren-Signature"]).toBeUndefined();
+    expect(headers["X-Tanren-Timestamp"]).toBeUndefined();
+  });
+
+  it("sends UNSIGNED when no secret store is wired", async () => {
+    const { captured, fetchImpl } = captureFetch();
+    const channel = new WebhookChannel({ fetch: fetchImpl });
+    await channel.publish(target({ destination: "https://hooks.example.com/x" }), payload);
+    const headers = captured[0]!.init.headers as Record<string, string>;
+    expect(headers["X-Tanren-Signature"]).toBeUndefined();
+  });
+
+  it("never leaks the signing secret into headers, the body, or the URL", async () => {
+    const { captured, fetchImpl } = captureFetch();
+    const secrets = new MemorySecrets({ "credential/webhook-signing/t": SIGNING_SECRET });
+    const channel = new WebhookChannel({ fetch: fetchImpl, secrets });
+    await channel.publish(target({ destination: "https://hooks.example.com/x" }), payload);
+
+    const { url, init } = captured[0]!;
+    const serialized = `${url} ${JSON.stringify(init.headers)} ${String(init.body)}`;
+    expect(serialized).not.toContain(SIGNING_SECRET);
   });
 });

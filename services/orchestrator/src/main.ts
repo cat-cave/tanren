@@ -28,6 +28,12 @@ export { buildAuthFromEnv, type BuildAppAuthOptions } from "./mainAuth.js";
 const port = Number(process.env["ORCHESTRATOR_PORT"] ?? 3100);
 const vaultAddr = process.env["VAULT_ADDR"] ?? "http://localhost:8200";
 const runnerIdentitySecretRef = process.env["TANREN_RUNNER_IDENTITY_SECRET_REF"] ?? "runner/local-docker/identity";
+// P-INT-6: the secret ref for the CI webhook's HMAC signing secret. When set,
+// the `/github/webhooks/ci` receiver verifies every inbound `x-hub-signature-256`
+// (rejecting unsigned/invalid 401); when unset the receiver stays unsigned (the
+// documented sign-if-configured fallback). This is a ref POINTER (config) — the
+// secret VALUE lives in the secret store, never in env.
+const ciWebhookSigningSecretRefDefault = process.env["TANREN_CI_WEBHOOK_SIGNING_SECRET_REF"];
 
 /**
  * Require a non-blank env var; throw a clear error when unset/blank (NO fallback).
@@ -84,6 +90,7 @@ export function buildApp(input: {
   secrets?: SecretStore;
   githubHttp?: GitHubHttpClient;
   runnerIdentitySecretRef?: string;
+  ciWebhookSigningSecretRef?: string;
   vaultHealthCheck?: () => Promise<{ ok: boolean; status: number }>;
   auth?: BuildAppAuthOptions;
   credentialRegistry?: CredentialRegistry;
@@ -106,6 +113,7 @@ export function buildApp(input: {
   // keeps using `githubHttp` directly — only the run+merge path uses the seam.
   const vcsProvider = buildVcsProvider(githubHttp);
   const identitySecretRef = input.runnerIdentitySecretRef ?? runnerIdentitySecretRef;
+  const ciWebhookSigningSecretRef = input.ciWebhookSigningSecretRef ?? ciWebhookSigningSecretRefDefault;
   const vaultHealthCheck = input.vaultHealthCheck ?? vaultHealth;
   // P3-0003: one shared minter so installation-token caching spans routes.
   const githubAppMinter = new GithubAppTokenMinter({ secrets });
@@ -183,6 +191,7 @@ export function buildApp(input: {
     allocator,
     ssh: input.ssh,
     identitySecretRef,
+    ...(ciWebhookSigningSecretRef === undefined ? {} : { ciWebhookSigningSecretRef }),
     benchmark,
   });
 
