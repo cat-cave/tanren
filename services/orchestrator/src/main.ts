@@ -159,7 +159,7 @@ export function buildApp(input: {
   // drives the LISTEN/NOTIFY terminal await.
   // One allocator shared by the benchmark scheduler AND the Forge answerer
   // factories (each allocates a short-lived runner per model call).
-  const allocator = buildAllocatorFromEnv(input.pool);
+  const allocator = buildAllocatorFromEnv(input.pool, secrets);
   const benchmark = {
     allocator,
     ssh: input.ssh,

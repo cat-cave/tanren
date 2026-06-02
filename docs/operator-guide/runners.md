@@ -189,18 +189,29 @@ pre-existing kinds (`static`, `sidecar`).
 
 ### Env for the new allocators
 
-| Env var                           | Used by      | Notes                                                                                 |
-| --------------------------------- | ------------ | ------------------------------------------------------------------------------------- |
-| `TANREN_ALLOCATOR_KIND=router`    | router       | Enables label routing + pool policy                                                   |
-| `TANREN_ALLOCATOR_ROUTING`        | router       | JSON routing config (see above)                                                       |
-| `TANREN_MANUAL_SSH_HOSTS`         | `manual_ssh` | JSON array `[{ id, host, port?, username?, hostKeyFingerprint, identitySecretRef? }]` |
-| `TANREN_HETZNER_API_TOKEN`        | `hetzner`    | API token. Sourced from a Vault ref by operator tooling; never hardcode               |
-| `TANREN_HETZNER_HOST_FINGERPRINT` | `hetzner`    | Pinned SHA256 host key fingerprint (baked into the image / cloud-init)                |
-| `TANREN_HETZNER_SERVER_TYPE`      | `hetzner`    | e.g. `cx22` (default)                                                                 |
-| `TANREN_HETZNER_IMAGE`            | `hetzner`    | e.g. `docker-ce` (default)                                                            |
-| `TANREN_HETZNER_LOCATION`         | `hetzner`    | e.g. `nbg1`                                                                           |
-| `TANREN_HETZNER_SSH_KEYS`         | `hetzner`    | Comma-separated Hetzner SSH key ids/names to authorize                                |
-| `TANREN_HETZNER_SSH_USER`         | `hetzner`    | SSH username (default `root`)                                                         |
+| Env var                                       | Used by      | Notes                                                                                           |
+| --------------------------------------------- | ------------ | ----------------------------------------------------------------------------------------------- |
+| `TANREN_ALLOCATOR_KIND=router`                | router       | Enables label routing + pool policy                                                             |
+| `TANREN_ALLOCATOR_ROUTING`                    | router       | JSON routing config (see above)                                                                 |
+| `TANREN_MANUAL_SSH_HOSTS`                     | `manual_ssh` | JSON array `[{ id, host, port?, username?, hostKeyFingerprint, identitySecretRef? }]`           |
+| `TANREN_HETZNER_API_TOKEN`                    | `hetzner`    | Project API token (the org grant). Sourced from a Vault ref by operator tooling; never hardcode |
+| `TANREN_HETZNER_SERVER_TYPE`                  | `hetzner`    | e.g. `cx22` (default)                                                                           |
+| `TANREN_HETZNER_IMAGE`                        | `hetzner`    | e.g. `docker-ce` (default)                                                                      |
+| `TANREN_HETZNER_LOCATION`                     | `hetzner`    | e.g. `nbg1`                                                                                     |
+| `TANREN_HETZNER_EXTRA_CLOUD_INIT_WRITE_FILES` | `hetzner`    | Optional extra cloud-init `write_files:` entries merged with the host-key injection             |
+| `TANREN_HETZNER_SSH_USER`                     | `hetzner`    | SSH username (default `root`)                                                                   |
+
+> **SSH is fully Tanren-managed (P-INT-5).** The Hetzner allocator no longer
+> takes a manual `TANREN_HETZNER_SSH_KEYS` or `TANREN_HETZNER_HOST_FINGERPRINT`.
+> Per allocation it generates an **ephemeral ed25519 client keypair**, uploads
+> the public key to Hetzner (`POST /v1/ssh_keys`), references it in the
+> server-create, and stores the **private** key in the secret manager (never
+> logged / never in config); the runner SSH identity materializes from that ref.
+> It also generates an **ephemeral host keypair**, injects the host private key
+> via cloud-init so the server presents a **known** host key on first connect,
+> and pins that key's locally-computed SHA256 fingerprint — deterministic, no
+> pre-known fingerprint, no TOFU. Release destroys the server, deletes the
+> Hetzner ssh_key, and wipes the stored private key.
 
 The DigitalOcean, GCP, and AWS EC2 allocators take an analogous set of env vars —
 `TANREN_DO_*` (API token, region, size, image, host fingerprint),

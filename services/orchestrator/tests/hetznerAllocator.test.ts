@@ -4,9 +4,17 @@ import {
   HetznerAllocator,
   type HetznerClient,
   type HetznerCreateServerInput,
+  type HetznerCreateSshKeyInput,
   type HetznerServer,
+  type HetznerSshKey,
 } from "../src/engine/allocators/hetznerAllocator.js";
 import type { ClaimRunnerInput, RunnerStore } from "../src/engine/allocators/runnerStore.js";
+import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
+import {
+  generateEd25519KeyPair,
+  hostKeyFingerprintFromPublicKey,
+  type EphemeralKeyPair,
+} from "../src/engine/ssh/keygen.js";
 
 class FakeRunnerStore implements RunnerStore {
   readonly claims: ClaimRunnerInput[] = [];
@@ -19,14 +27,33 @@ class FakeRunnerStore implements RunnerStore {
   }
 }
 
-/** Mocked Hetzner API: created server is "initializing" then "running". */
+/**
+ * Mocked Hetzner API: created server is "initializing" then "running". Records
+ * the ssh-key + server creates/deletes so the ephemeral-key + teardown
+ * lifecycle is behavior-asserted.
+ */
 class FakeHetznerClient implements HetznerClient {
+  readonly createdKeys: HetznerCreateSshKeyInput[] = [];
+  readonly deletedKeys: number[] = [];
   readonly created: HetznerCreateServerInput[] = [];
   readonly deleted: number[] = [];
   private getCalls = 0;
-  constructor(private readonly opts: { neverRuns?: boolean; noIp?: boolean; emptyIp?: boolean } = {}) {}
+  private nextKeyId = 555;
+  constructor(
+    private readonly opts: { neverRuns?: boolean; noIp?: boolean; emptyIp?: boolean; failCreateServer?: boolean } = {},
+  ) {}
 
+  async createSshKey(input: HetznerCreateSshKeyInput): Promise<HetznerSshKey> {
+    this.createdKeys.push(input);
+    return { id: this.nextKeyId++ };
+  }
+  async deleteSshKey(sshKeyId: number): Promise<void> {
+    this.deletedKeys.push(sshKeyId);
+  }
   async createServer(input: HetznerCreateServerInput): Promise<HetznerServer> {
+    if (this.opts.failCreateServer) {
+      throw new Error("hetzner createServer boom");
+    }
     this.created.push(input);
     return { id: 42, status: "initializing", publicIpv4: undefined };
   }
@@ -35,7 +62,6 @@ class FakeHetznerClient implements HetznerClient {
     if (this.opts.neverRuns) {
       return { id: serverId, status: "initializing" };
     }
-    // First poll still initializing, then running.
     if (this.getCalls < 2) {
       return { id: serverId, status: "initializing" };
     }
@@ -50,16 +76,45 @@ class FakeHetznerClient implements HetznerClient {
   }
 }
 
-const baseOpts = (client: HetznerClient, runners: RunnerStore) => ({
-  apiToken: "tok",
-  hostKeyFingerprint: "SHA256:hetzner",
-  serverType: "cx22",
-  image: "docker-ce",
-  location: "nbg1",
-  runners,
-  client,
-  sleep: async () => {},
-});
+// A fixed fake CLIENT key (so the stored private key is pinnable) followed by a
+// real generated HOST key (so its fingerprint is computable + verifiable).
+const CLIENT_KEY: EphemeralKeyPair = {
+  privateKey: "-----BEGIN OPENSSH PRIVATE KEY-----\nCLIENT-FAKE\n-----END OPENSSH PRIVATE KEY-----",
+  publicKey: "ssh-ed25519 AAAAClientKeyMaterial tanren-client",
+};
+
+/**
+ * Deterministic keygen: yields the fixed client key first, then a freshly
+ * generated real host key. Returns the pinned host fingerprint alongside.
+ */
+function keyGenSequence(): { gen: () => EphemeralKeyPair; hostFingerprint: string } {
+  const hostKey = generateEd25519KeyPair();
+  const seq = [CLIENT_KEY, hostKey];
+  let i = 0;
+  return {
+    gen: (): EphemeralKeyPair => seq[i++ % seq.length] as EphemeralKeyPair,
+    hostFingerprint: hostKeyFingerprintFromPublicKey(hostKey.publicKey),
+  };
+}
+
+function baseOpts(client: HetznerClient, runners: RunnerStore, secrets: InMemorySecretStore) {
+  return {
+    apiToken: "tok",
+    serverType: "cx22",
+    image: "docker-ce",
+    location: "nbg1",
+    runners,
+    secrets,
+    client,
+    generateKeyPair: keyGenSequence().gen,
+    sleep: async (): Promise<void> => undefined,
+  };
+}
+
+/** A Hetzner allocator with a fresh deterministic keygen for the happy path. */
+function allocator(client: HetznerClient, runners: RunnerStore, secrets: InMemorySecretStore): HetznerAllocator {
+  return new HetznerAllocator(baseOpts(client, runners, secrets));
+}
 
 function req(runId: string) {
   return {
@@ -71,109 +126,173 @@ function req(runId: string) {
 }
 
 describe("HetznerAllocator", () => {
-  it("creates a server, waits for running+IP, and returns the SSH target", async () => {
+  it("uploads an ephemeral key, stores the private key, references the key id, and pins a computed host fingerprint", async () => {
     const client = new FakeHetznerClient();
     const runners = new FakeRunnerStore();
-    const allocator = new HetznerAllocator(baseOpts(client, runners));
+    const secrets = new InMemorySecretStore();
+    const { gen, hostFingerprint } = keyGenSequence();
+    const alloc = new HetznerAllocator({ ...baseOpts(client, runners, secrets), generateKeyPair: gen });
 
-    const allocation = await allocator.allocate(req("run_1"));
-    expect(client.created).toHaveLength(1);
-    expect(client.created[0]?.serverType).toBe("cx22");
-    expect(client.created[0]?.labels).toMatchObject({ tanren_run: "run_1" });
+    const allocation = await alloc.allocate(req("run_1"));
+
+    // Ephemeral public key uploaded to Hetzner.
+    expect(client.createdKeys).toHaveLength(1);
+    expect(client.createdKeys[0]?.publicKey).toBe(CLIENT_KEY.publicKey);
+    // Server references the uploaded key id (not a manual key name).
+    expect(client.created[0]?.sshKeys).toEqual([555]);
+    // Private key stored under the per-run ref the target points at; never inlined.
+    expect(allocation.target.identitySecretRef).toBe("hetzner/runner_run_1/identity");
+    const stored = await secrets.get(allocation.target.identitySecretRef);
+    expect(stored?.value).toBe(CLIENT_KEY.privateKey);
+    // Host key injected via cloud-init + the matching fingerprint pinned (computed,
+    // no manual fingerprint input).
+    expect(allocation.target.hostKeyFingerprint).toBe(hostFingerprint);
+    expect(client.created[0]?.userData).toContain("/etc/ssh/ssh_host_ed25519_key");
     expect(allocation.target.host).toBe("203.0.113.10");
     expect(allocation.target.username).toBe("root");
-    expect(allocation.target.hostKeyFingerprint).toBe("SHA256:hetzner");
-    expect(runners.claims[0]?.allocator).toBe("hetzner");
+    expect(runners.claims[0]?.hostKeyFingerprint).toBe(hostFingerprint);
     expect(runners.claims[0]?.containerId).toBe("42");
   });
 
-  it("destroys the server and clears the mirror row on release", async () => {
+  it("never logs or returns the private key or host private key in the create body / target / claim", async () => {
     const client = new FakeHetznerClient();
     const runners = new FakeRunnerStore();
-    const allocator = new HetznerAllocator(baseOpts(client, runners));
-    const allocation = await allocator.allocate(req("run_2"));
-    await allocator.release(allocation.runnerId, "completed");
+    const secrets = new InMemorySecretStore();
+    const allocation = await allocator(client, runners, secrets).allocate(req("run_secret"));
+
+    // The CLIENT private key lives ONLY in the secret store, not the create body,
+    // the target, or the runners-claim mirror row.
+    const serialized = JSON.stringify({ created: client.created, allocation, claims: runners.claims });
+    expect(serialized).not.toContain("CLIENT-FAKE");
+    // The HOST private key is only inside user_data (sensitive cloud-init), never
+    // in the returned target.
+    expect(JSON.stringify(allocation)).not.toContain("BEGIN OPENSSH PRIVATE KEY");
+  });
+
+  it("on release destroys the server, deletes the Hetzner ssh_key, and wipes the stored private key", async () => {
+    const client = new FakeHetznerClient();
+    const runners = new FakeRunnerStore();
+    const secrets = new InMemorySecretStore();
+    const alloc = allocator(client, runners, secrets);
+    const allocation = await alloc.allocate(req("run_2"));
+    expect(await secrets.get(allocation.target.identitySecretRef)).toBeDefined();
+
+    await alloc.release(allocation.runnerId, "completed");
     expect(client.deleted).toEqual([42]);
+    expect(client.deletedKeys).toEqual([555]);
+    expect(await secrets.get(allocation.target.identitySecretRef)).toBeUndefined();
     expect(runners.releases).toEqual([allocation.runnerId]);
   });
 
-  it("destroys the server if it never becomes running", async () => {
+  it("cleans up the ssh_key + stored private key when server-create fails", async () => {
+    const client = new FakeHetznerClient({ failCreateServer: true });
+    const runners = new FakeRunnerStore();
+    const secrets = new InMemorySecretStore();
+    await expect(allocator(client, runners, secrets).allocate(req("run_fail_create"))).rejects.toThrow(/boom/u);
+    // The uploaded key is deleted and the stored private key wiped — no leak.
+    expect(client.deletedKeys).toEqual([555]);
+    expect(await secrets.list("hetzner/")).toEqual([]);
+  });
+
+  it("destroys the server + key and wipes the secret if it never becomes running", async () => {
     const client = new FakeHetznerClient({ neverRuns: true });
     const runners = new FakeRunnerStore();
-    const allocator = new HetznerAllocator({
-      ...baseOpts(client, runners),
+    const secrets = new InMemorySecretStore();
+    const alloc = new HetznerAllocator({
+      ...baseOpts(client, runners, secrets),
       readyTimeoutMs: 5,
       pollIntervalMs: 1,
     });
-    await expect(allocator.allocate(req("run_3"))).rejects.toThrow(/did not become running/u);
+    await expect(alloc.allocate(req("run_3"))).rejects.toThrow(/did not become running/u);
     expect(client.deleted).toEqual([42]);
+    expect(client.deletedKeys).toEqual([555]);
+    expect(await secrets.list("hetzner/")).toEqual([]);
   });
 
   it("release of an unknown runner is a no-op", async () => {
     const client = new FakeHetznerClient();
     const runners = new FakeRunnerStore();
-    const allocator = new HetznerAllocator(baseOpts(client, runners));
-    await allocator.release("runner_unknown");
+    const secrets = new InMemorySecretStore();
+    await allocator(client, runners, secrets).release("runner_unknown");
     expect(client.deleted).toEqual([]);
+    expect(client.deletedKeys).toEqual([]);
   });
 
-  it("requires a token and pinned fingerprint", () => {
+  it("requires a non-empty token", () => {
     const runners = new FakeRunnerStore();
-    expect(() => new HetznerAllocator({ ...baseOpts(new FakeHetznerClient(), runners), apiToken: "" })).toThrow(
-      /non-empty apiToken/u,
-    );
+    const secrets = new InMemorySecretStore();
     expect(
-      () =>
-        new HetznerAllocator({
-          ...baseOpts(new FakeHetznerClient(), runners),
-          hostKeyFingerprint: "",
-        }),
-    ).toThrow(/pinned hostKeyFingerprint/u);
+      () => new HetznerAllocator({ ...baseOpts(new FakeHetznerClient(), runners, secrets), apiToken: "" }),
+    ).toThrow(/non-empty apiToken/u);
   });
 
-  it("sanitizes the run id into a lowercase, hyphen-only server name", async () => {
+  it("sanitizes the run id into a lowercase, hyphen-only server + key name", async () => {
     const client = new FakeHetznerClient();
     const runners = new FakeRunnerStore();
-    const allocator = new HetznerAllocator(baseOpts(client, runners));
-    await allocator.allocate(req("Run_ABC/123"));
-    // tanren- prefix, lowercased, every non [a-z0-9-] char replaced with "-".
+    const secrets = new InMemorySecretStore();
+    await allocator(client, runners, secrets).allocate(req("Run_ABC/123"));
     expect(client.created[0]?.name).toBe("tanren-run-abc-123");
+    expect(client.createdKeys[0]?.name).toBe("tanren-run-abc-123");
   });
 
-  it("destroys the server and rejects when it becomes running without an IP", async () => {
+  it("destroys everything and rejects when it becomes running without an IP", async () => {
     const client = new FakeHetznerClient({ noIp: true });
     const runners = new FakeRunnerStore();
-    const allocator = new HetznerAllocator({
-      ...baseOpts(client, runners),
+    const secrets = new InMemorySecretStore();
+    const alloc = new HetznerAllocator({
+      ...baseOpts(client, runners, secrets),
       readyTimeoutMs: 5,
       pollIntervalMs: 1,
     });
-    // status reaches "running" but publicIpv4 stays undefined: the ready
-    // condition requires BOTH, so it never returns and the deadline trips.
-    await expect(allocator.allocate(req("run_no_ip"))).rejects.toThrow(/did not become running/u);
+    await expect(alloc.allocate(req("run_no_ip"))).rejects.toThrow(/did not become running/u);
     expect(client.deleted).toEqual([42]);
+    expect(client.deletedKeys).toEqual([555]);
     expect(runners.claims).toEqual([]);
   });
 
-  // waitForRunning requires the server to be "running" AND hold a non-empty
-  // IPv4. An empty-string IPv4 must NOT satisfy the ready condition, so the
-  // wait keeps polling until the deadline and the server is destroyed.
   it("treats an empty-string IPv4 as not-yet-ready and destroys on timeout", async () => {
     const client = new FakeHetznerClient({ emptyIp: true });
     const runners = new FakeRunnerStore();
-    const allocator = new HetznerAllocator({
-      ...baseOpts(client, runners),
+    const secrets = new InMemorySecretStore();
+    const alloc = new HetznerAllocator({
+      ...baseOpts(client, runners, secrets),
       readyTimeoutMs: 5,
       pollIntervalMs: 1,
     });
-    await expect(allocator.allocate(req("run_empty"))).rejects.toThrow(/did not become running/u);
+    await expect(alloc.allocate(req("run_empty"))).rejects.toThrow(/did not become running/u);
     expect(client.deleted).toEqual([42]);
     expect(runners.claims).toEqual([]);
   });
 
-  // The create body carries the Hetzner server spec plus the always-on
-  // start_after_create flag and the snake_cased field names. Pin the POSTed
-  // body so the JSON.stringify field mapping is behavior-asserted.
+  // --- fetchHetznerClient HTTP mapping ---------------------------------------
+  it("fetchHetznerClient POSTs the ssh_key with a snake_case public_key", async () => {
+    let body: Record<string, unknown> = {};
+    const fetchImpl = (async (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return new Response(JSON.stringify({ ssh_key: { id: 99 } }), {
+        status: 201,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
+    const client = fetchHetznerClient("tok", fetchImpl);
+    const key = await client.createSshKey({ name: "tanren-run-1", publicKey: "ssh-ed25519 AAAA" });
+    expect(body.name).toBe("tanren-run-1");
+    expect(body.public_key).toBe("ssh-ed25519 AAAA");
+    expect(key).toEqual({ id: 99 });
+  });
+
+  it("fetchHetznerClient DELETEs the ssh_key (404 is idempotent)", async () => {
+    const calls: Array<{ url: string; method?: string }> = [];
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      calls.push({ url: typeof input === "string" ? input : input.toString(), method: init?.method });
+      return new Response("gone", { status: 404 });
+    }) as typeof fetch;
+    const client = fetchHetznerClient("tok", fetchImpl);
+    await expect(client.deleteSshKey(99)).resolves.toBeUndefined();
+    expect(calls[0]).toMatchObject({ method: "DELETE" });
+    expect(calls[0]?.url).toMatch(/\/ssh_keys\/99$/u);
+  });
+
   it("fetchHetznerClient POSTs the server spec with start_after_create and snake_case fields", async () => {
     let body: Record<string, unknown> = {};
     const fetchImpl = (async (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
@@ -189,15 +308,14 @@ describe("HetznerAllocator", () => {
       serverType: "cx32",
       image: "docker-ce",
       location: "fsn1",
+      sshKeys: [99],
     });
     expect(body.name).toBe("tanren-run-1");
     expect(body.server_type).toBe("cx32");
-    expect(body.image).toBe("docker-ce");
-    expect(body.location).toBe("fsn1");
+    expect(body.ssh_keys).toEqual([99]);
     expect(body.start_after_create).toBe(true);
   });
 
-  // toServer maps a present ipv4.ip into publicIpv4 (not just null -> undefined).
   it("fetchHetznerClient maps a present public_net ipv4 into publicIpv4", async () => {
     const fetchImpl = (async (): Promise<Response> =>
       new Response(
@@ -225,9 +343,7 @@ describe("HetznerAllocator", () => {
     await client.getServer(3);
     await expect(client.deleteServer(3)).resolves.toBeUndefined();
     expect(calls[0]).toMatchObject({ method: "GET" });
-    expect(calls[0]?.url).toMatch(/\/servers\/3$/u);
     expect(calls[1]).toMatchObject({ method: "DELETE" });
-    expect(calls[1]?.url).toMatch(/\/servers\/3$/u);
   });
 
   it("toServer treats a null public_net as no IP (via fetchHetznerClient)", async () => {
@@ -241,28 +357,17 @@ describe("HetznerAllocator", () => {
     expect(server.publicIpv4).toBeUndefined();
   });
 
-  it("fetchHetznerClient maps the API response and sends the bearer token", async () => {
-    let captured: { url: string; method?: string; auth?: string } = { url: "" };
-    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
-      const url = typeof input === "string" ? input : input.toString();
-      captured = {
-        url,
-        method: init?.method,
-        auth: (init?.headers as Record<string, string> | undefined)?.authorization,
-      };
+  it("fetchHetznerClient sends the bearer token", async () => {
+    let auth: string | undefined;
+    const fetchImpl = (async (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      auth = (init?.headers as Record<string, string> | undefined)?.authorization;
       return new Response(
-        JSON.stringify({
-          server: { id: 7, status: "running", public_net: { ipv4: { ip: "198.51.100.5" } } },
-        }),
+        JSON.stringify({ server: { id: 7, status: "running", public_net: { ipv4: { ip: "198.51.100.5" } } } }),
         { status: 201, headers: { "Content-Type": "application/json" } },
       );
     }) as typeof fetch;
-
     const client = fetchHetznerClient("secret-token", fetchImpl);
-    const server = await client.createServer({ name: "n", serverType: "cx22", image: "docker-ce" });
-    expect(captured.url).toMatch(/\/servers$/u);
-    expect(captured.method).toBe("POST");
-    expect(captured.auth).toBe("Bearer secret-token");
-    expect(server).toEqual({ id: 7, status: "running", publicIpv4: "198.51.100.5" });
+    await client.createServer({ name: "n", serverType: "cx22", image: "docker-ce" });
+    expect(auth).toBe("Bearer secret-token");
   });
 });

@@ -77,6 +77,48 @@ describe("SSH substrate contract", () => {
     });
   });
 
+  it("pins the host key: the hostVerifier ACCEPTS the matching fingerprint and REJECTS a mismatch", async () => {
+    const secrets = new FakeSecretStore();
+    await secrets.put({ ref: target.identitySecretRef, value: "private-key" });
+
+    // Generate a real ed25519 host key, pin its fingerprint, and confirm the
+    // substrate's hostVerifier accepts the SHA256 the server would present and
+    // rejects a different key's SHA256 — no blind trust.
+    const { utils } = await import("ssh2");
+    const hostKey = utils.generateKeyPairSync("ed25519");
+    const parsed = utils.parseKey(hostKey.public);
+    if (parsed instanceof Error) {
+      throw parsed;
+    }
+    const pinned = sshSha256Fingerprint(parsed.getPublicSSH());
+    // With `hostHash: "sha256"`, ssh2 hands the verifier the HEX digest of the
+    // server's public-SSH blob (see ssh2 client.js). Reproduce that exact input.
+    const presented = createHash("sha256").update(parsed.getPublicSSH()).digest("hex");
+    const otherKey = utils.parseKey(utils.generateKeyPairSync("ed25519").public);
+    if (otherKey instanceof Error) {
+      throw otherKey;
+    }
+    const mismatch = createHash("sha256").update(otherKey.getPublicSSH()).digest("hex");
+
+    const { client, capture } = createCaptureClient();
+    const substrate = new Ssh2Substrate(secrets, { clientFactory: () => client });
+    const pinnedTarget: SshTarget = { ...target, hostKeyFingerprint: pinned };
+
+    // Drive a run; the substrate calls client.connect with a hostVerifier we capture.
+    const runPromise = substrate.run(pinnedTarget, { command: "echo ok", timeoutMs: 100 });
+    const verifier = await capture;
+
+    // The verifier receives the bare base64 (no SHA256: prefix); both forms are
+    // normalized. Matching key -> accepted; different key -> rejected.
+    expect(verifier(presented)).toBe(true);
+    expect(verifier(mismatch)).toBe(false);
+
+    // Settle the run so the promise resolves (the fake never authenticates).
+    client.emit("error", new Error("done"));
+    const result = await runPromise;
+    expect(result.failure?.kind).toBe("ssh_failed");
+  });
+
   it("returns ssh_failed with timedOut when the SSH operation exceeds the command timeout", async () => {
     vi.useFakeTimers();
     const secrets = new FakeSecretStore();
@@ -104,4 +146,30 @@ function createNeverReadyClient(): Client {
     exec: () => client,
   });
   return client as unknown as Client;
+}
+
+type HostVerifier = (fingerprint: string) => boolean;
+
+/**
+ * A fake ssh2 Client that captures the `hostVerifier` passed to `connect()` so a
+ * test can invoke it directly and assert accept/reject. Never authenticates.
+ */
+function createCaptureClient(): { client: Client & EventEmitter; capture: Promise<HostVerifier> } {
+  const emitter = new EventEmitter();
+  let resolveVerifier: (v: HostVerifier) => void;
+  const capture = new Promise<HostVerifier>((resolve) => {
+    resolveVerifier = resolve;
+  });
+  const client = Object.assign(emitter, {
+    connect: (config: { hostVerifier?: HostVerifier }) => {
+      if (config.hostVerifier !== undefined) {
+        resolveVerifier(config.hostVerifier);
+      }
+      return client;
+    },
+    destroy: () => client,
+    end: () => client,
+    exec: () => client,
+  });
+  return { client: client as unknown as Client & EventEmitter, capture };
 }

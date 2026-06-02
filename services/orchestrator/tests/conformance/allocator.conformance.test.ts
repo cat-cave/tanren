@@ -9,6 +9,7 @@
 // -> destroy); each accepts a `fail` flag for the never-ready variant.
 import { FakeAllocator } from "../../src/engine/contracts/allocator.js";
 import type { AllocationRequest, Allocator } from "../../src/engine/contracts/allocator.js";
+import { InMemorySecretStore } from "../../src/engine/contracts/secretStore.js";
 import type { ClaimRunnerInput, RunnerStore } from "../../src/engine/allocators/runnerStore.js";
 import { StaticRunnerAllocator } from "../../src/engine/allocators/staticRunnerAllocator.js";
 import { ManualSshAllocator } from "../../src/engine/allocators/manualSshAllocator.js";
@@ -48,6 +49,10 @@ const slowReady = { sleep: noSleep, readyTimeoutMs: 5, pollIntervalMs: 1 } as co
 function hetznerClient(fail = false): HetznerClient {
   let polls = 0;
   return {
+    async createSshKey(): Promise<{ id: number }> {
+      return { id: 1 };
+    },
+    async deleteSshKey(): Promise<void> {},
     async createServer(): Promise<{ id: number; status: string }> {
       return { id: 1, status: "initializing" };
     },
@@ -177,10 +182,10 @@ const makeSidecar = (): Allocator =>
 const makeHetzner = (fail = false): Allocator =>
   new HetznerAllocator({
     apiToken: "tok",
-    hostKeyFingerprint: PINNED_FINGERPRINT,
     serverType: "cx22",
     image: "docker-ce",
     runners: new MemoryRunnerStore(),
+    secrets: new InMemorySecretStore(),
     client: hetznerClient(fail),
     ...slowReady,
   });
