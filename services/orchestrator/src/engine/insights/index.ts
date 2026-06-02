@@ -1,6 +1,7 @@
 // P2A-0020 barrel.
 
 export {
+  CiFlakyPayload,
   Insight,
   InsightAction,
   InsightKind,
@@ -21,6 +22,7 @@ export {
   INSIGHT_KINDS,
   type ComputeInsightContext,
   type LoadInsightsOptions,
+  type ReadThroughInsightKind,
 } from "./computer.js";
 
 export { computeRetryHotspot } from "./retryHotspot.js";
@@ -28,6 +30,34 @@ export { computeModelMismatch } from "./modelMismatch.js";
 export { computePaceAnomaly } from "./paceAnomaly.js";
 export { computeStuck } from "./stuck.js";
 export { computeReviewStall } from "./reviewStall.js";
+
+// P2e-1 Mergify parity (autonomy-engine.md §2d).
+export {
+  detectAndQuarantineFlaky,
+  deriveFlakyTests,
+  loadCiObservations,
+  flattenCiObservations,
+  type CiCheckObservation,
+  type FlakyVerdict,
+  type DetectFlakyContext,
+} from "./ciFlaky.js";
+export {
+  computeCiAnalytics,
+  deriveCiAnalytics,
+  reduceCiEventsToRuns,
+  CiAnalytics,
+  type CiRunObservation,
+  type CiAnalyticsInputs,
+} from "./ci/index.js";
+export {
+  computeQueueStats,
+  deriveQueueStats,
+  normalizeQueueEvent,
+  QueueStats,
+  type QueueEvent,
+  type DependencyEdge,
+  type QueueStatsInputs,
+} from "./queue/index.js";
 
 export {
   readFreshInsights,

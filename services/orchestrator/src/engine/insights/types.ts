@@ -30,6 +30,9 @@ export const InsightKind = z.enum([
   // from review.* events (P3-0008).
   "stuck",
   "review_stall",
+  // P2e-1 (§2d Mergify parity): a CI check proven non-deterministic (flaky) on
+  // unchanged code and auto-quarantined. Surfaced so the quarantine is visible.
+  "ci_flaky",
 ]);
 export type InsightKind = z.infer<typeof InsightKind>;
 
@@ -138,12 +141,32 @@ export const ReviewStallPayload = z
   .strict();
 export type ReviewStallPayload = z.infer<typeof ReviewStallPayload>;
 
+// P2e-1 `ci_flaky`: a CI check proven non-deterministic (it BOTH passed and
+// failed on the same head SHA) and auto-quarantined. `toggledShaCount` is the
+// genuine-non-determinism count (always ≥ 1 — a consistently-failing check is
+// never surfaced here). `passedOnRetryCount` records failed-then-passed-on-retry
+// on the same SHA. The payload mirrors the quarantine surface + the ci.flaky.*
+// events so the operator sees the same evidence everywhere.
+export const CiFlakyPayload = z
+  .object({
+    kind: z.literal("ci_flaky"),
+    checkName: z.string().min(1),
+    toggledShaCount: z.number().int().positive(),
+    observationCount: z.number().int().positive(),
+    passedOnRetryCount: z.number().int().nonnegative(),
+    sampleShas: z.array(z.string()),
+    windowDays: z.number().int().positive(),
+  })
+  .strict();
+export type CiFlakyPayload = z.infer<typeof CiFlakyPayload>;
+
 export const InsightPayload = z.discriminatedUnion("kind", [
   RetryHotspotPayload,
   ModelMismatchPayload,
   PaceAnomalyPayload,
   StuckPayload,
   ReviewStallPayload,
+  CiFlakyPayload,
 ]);
 export type InsightPayload = z.infer<typeof InsightPayload>;
 

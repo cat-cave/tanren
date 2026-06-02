@@ -13,6 +13,7 @@ import { Hono } from "hono";
 import type pg from "pg";
 import type { ActorContext } from "../../auth/schemas.js";
 import { assertProjectAccess, ToolAccessDeniedError } from "../../engine/forge/tools/authz.js";
+import { PgEventStore } from "../../engine/eventStore.js";
 import { acknowledgeInsight, loadInsightsForProject } from "../../engine/insights/index.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg } from "../orgs/index.js";
@@ -40,7 +41,15 @@ export function createInsightRoutes(options: InsightRoutesOptions) {
       throw error;
     }
     try {
-      const insights = await loadInsightsForProject(options.pool, { projectId });
+      // P2e-1: pass an event store so flaky-test detection runs on read — a
+      // newly-proven-flaky check is quarantined + the ci.flaky.* events emitted,
+      // and every active quarantine surfaces as a `ci_flaky` insight. The store
+      // rides the org-scoped pool, so the writes land under the request's org
+      // transaction (RLS-admitted).
+      const insights = await loadInsightsForProject(options.pool, {
+        projectId,
+        eventStore: new PgEventStore(options.pool),
+      });
       return c.json({ insights });
     } catch (error) {
       return c.json(

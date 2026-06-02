@@ -89,6 +89,7 @@ import {
   MergeDequeuedPayload,
   MergeQueueAdvancedPayload,
 } from "./schemas/mergeQueue.js";
+import { CiFlakyDetectedPayload, CiTestQuarantinedPayload } from "./schemas/ciFlaky.js";
 import { GateFailedPayload, GatePassedPayload, GateStartedPayload } from "./schemas/gate.js";
 import {
   JobDeadLetteredPayload,
@@ -214,6 +215,14 @@ export const EventRegistry = {
   "ci.started": CiStartedPayload,
   "ci.passed": CiPassedPayload,
   "ci.failed": CiFailedPayload,
+
+  // P2e-1 (§2d Mergify parity): flaky-test detection + auto-quarantine. The
+  // detector reduces ci.passed/ci.failed observations and flags a check that
+  // toggled outcome on UNCHANGED code (ci.flaky.detected); that check is then
+  // recorded on the quarantine surface (ci.test.quarantined). A
+  // consistently-failing check is never flagged — quarantine ≠ ignore-failures.
+  "ci.flaky.detected": CiFlakyDetectedPayload,
+  "ci.test.quarantined": CiTestQuarantinedPayload,
 
   // P3-0005 in-loop deterministic gate-check stage (exit-code driven; no agent)
   "gate.started": GateStartedPayload,
