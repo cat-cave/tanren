@@ -11,7 +11,10 @@ import { z } from "zod";
 //
 // Milestones are LABELS, never gates: the walker never pauses at a milestone
 // boundary, so there is no milestone event here — only the real scheduling
-// outcomes (enqueued / drained / budget-paused).
+// outcomes (enqueued / drained / budget-paused / concurrency-saturated). The
+// budget pause is the GENUINE dollar-budget gate (cumulative spend ≥ the
+// configured ceiling); the concurrency-saturated hold is "no in-flight slot
+// free" — historically conflated under `budget.paused`, now split honestly.
 
 // dag.spec.enqueued: the walker auto-selected a ready spec and enqueued a run for
 // it through createQueuedRunFromSpec (the SAME path an operator's manual trigger
@@ -89,12 +92,35 @@ export const DagSpecSpeculationHeldPayload = z
   .strict();
 export type DagSpecSpeculationHeldPayload = z.infer<typeof DagSpecSpeculationHeldPayload>;
 
-// dag.budget.paused: the walker had ready specs to enqueue but stopped because
-// the project's in-flight count is already at the governed concurrency ceiling
-// (the headroom is zero). This is the Phase-1 throttle: budget enforcement
-// proper fires DOWNSTREAM inside the run (window_exhausted halt), and the walker
-// re-evaluates on the next run-terminal notification when a slot frees.
+// dag.budget.paused (autonomy-engine.md §3 proof 6): the walker had ready specs to
+// enqueue but STOPPED because the project's cumulative DOLLAR SPEND over the
+// configured budget period has reached the configured ceiling. This is the GENUINE
+// budget gate — the real "budget ceiling enforced → run pauses on exhaustion"
+// outcome. New spec runs are not enqueued this tick; in-flight runs are NOT killed
+// (they are bounded by the escape hatches). The walker re-evaluates on the next
+// notification — if spend later falls under the ceiling (a `total`-period ceiling
+// never does; a `monthly` one resets at the month boundary) it resumes.
 export const DagBudgetPausedPayload = z
+  .object({
+    // The configured dollar ceiling that was reached, and the cumulative spend
+    // measured against it over the configured period (both in USD).
+    ceilingUsd: z.number().nonnegative(),
+    spentUsd: z.number().nonnegative(),
+    // The budget period the spend was summed over (calendar month vs. lifetime).
+    period: z.enum(["monthly", "total"]),
+    // How many ready specs the walker held back because the ceiling was reached.
+    readyHeldBack: z.number().int().nonnegative(),
+  })
+  .strict();
+export type DagBudgetPausedPayload = z.infer<typeof DagBudgetPausedPayload>;
+
+// dag.concurrency.saturated: the walker had ready specs to enqueue but the
+// project's in-flight count is already at the governed CONCURRENCY ceiling (the
+// headroom is zero) — distinct from a dollar-budget pause. This was historically
+// (and misleadingly) emitted as `dag.budget.paused`; the two are now split so the
+// timeline distinguishes "no slot free" from "out of money". The walker
+// re-evaluates on the next run-terminal notification when a slot frees.
+export const DagConcurrencySaturatedPayload = z
   .object({
     // How many ready specs the walker could not enqueue because no slot was free.
     readyHeldBack: z.number().int().nonnegative(),
@@ -102,7 +128,7 @@ export const DagBudgetPausedPayload = z
     concurrencyCeiling: z.number().int().positive(),
   })
   .strict();
-export type DagBudgetPausedPayload = z.infer<typeof DagBudgetPausedPayload>;
+export type DagConcurrencySaturatedPayload = z.infer<typeof DagConcurrencySaturatedPayload>;
 
 // Change-percolation events (autonomy-engine.md §2c "Change-percolation — NOT
 // discard"). When an ANCESTOR changes after a dependent started speculatively (a

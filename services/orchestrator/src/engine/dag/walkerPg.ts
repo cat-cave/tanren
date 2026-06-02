@@ -9,13 +9,14 @@
 //     idempotency boundary). A speculative start threads the dynamic base + skips
 //     the done-only dependency gate (P2c-1).
 //   - PgDagEventEmitter: writes dag.spec.enqueued / dag.spec.speculative /
-//     dag.spec.speculation_held / dag.drained / dag.budget.paused through the
-//     single org-scoped event-writer seam.
+//     dag.spec.speculation_held / dag.drained / dag.budget.paused (the GENUINE
+//     dollar-budget pause) / dag.concurrency.saturated (the slot-saturation hold)
+//     through the single org-scoped event-writer seam.
 
 import { runWithOrgScope, runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
 import type { ActorContext } from "../../auth/schemas.js";
-import type { SpeculationThreshold } from "../config/index.js";
+import type { BudgetPeriod, SpeculationThreshold } from "../config/index.js";
 import type {
   DagEnqueuer,
   DagReadModel,
@@ -209,7 +210,16 @@ interface DagEventEmitter {
     depthCap: number;
   }): Promise<void>;
   emitDrained(input: { projectId: string; plan: DagTickPlan }): Promise<void>;
-  emitBudgetPaused(input: { projectId: string; plan: DagTickPlan }): Promise<void>;
+  /** The GENUINE dollar-budget pause: cumulative spend reached the configured ceiling. */
+  emitBudgetPaused(input: {
+    projectId: string;
+    ceilingUsd: number;
+    spentUsd: number;
+    period: BudgetPeriod;
+    readyHeldBack: number;
+  }): Promise<void>;
+  /** The concurrency-saturation hold: ready specs held back because no slot is free. */
+  emitConcurrencySaturated(input: { projectId: string; plan: DagTickPlan }): Promise<void>;
 }
 
 /**
@@ -319,11 +329,32 @@ export class PgDagEventEmitter implements DagEventEmitter {
     );
   }
 
-  async emitBudgetPaused(input: { projectId: string; plan: DagTickPlan }): Promise<void> {
+  async emitBudgetPaused(input: {
+    projectId: string;
+    ceilingUsd: number;
+    spentUsd: number;
+    period: BudgetPeriod;
+    readyHeldBack: number;
+  }): Promise<void> {
     await this.withScopedStore(input.projectId, (store) =>
       store.append({
         projectId: input.projectId,
         eventType: "dag.budget.paused",
+        payload: {
+          ceilingUsd: input.ceilingUsd,
+          spentUsd: input.spentUsd,
+          period: input.period,
+          readyHeldBack: input.readyHeldBack,
+        },
+      }),
+    );
+  }
+
+  async emitConcurrencySaturated(input: { projectId: string; plan: DagTickPlan }): Promise<void> {
+    await this.withScopedStore(input.projectId, (store) =>
+      store.append({
+        projectId: input.projectId,
+        eventType: "dag.concurrency.saturated",
         payload: {
           readyHeldBack: input.plan.readyHeldBack,
           inFlightCount: input.plan.inFlightCount,

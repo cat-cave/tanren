@@ -8,6 +8,7 @@ import { Hono } from "hono";
 import type pg from "pg";
 import { z } from "zod";
 import type { ActorContext } from "../../auth/schemas.js";
+import { DEFAULT_BUDGET_PERIOD } from "../../engine/config/index.js";
 import { migrateOrgConfig, type OrgAuditGateTarget, type OrgConfigV1 } from "../../engine/config/orgConfig.js";
 import { gatedConfigWrite, type ConfigGateGitHub } from "../../engine/config/tanrenConfigGate.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
@@ -32,6 +33,15 @@ interface OrgRoutesOptions {
 const OrgConfigPatchSchema = z.object({
   config: z.record(z.string(), z.unknown()),
 });
+
+// `ceilingUsd: null` clears the org's default budget; a number (+ optional period)
+// sets it. The org-level DEFAULT every project inherits unless it sets its own.
+const OrgBudgetPutSchema = z
+  .object({
+    ceilingUsd: z.number().nonnegative().nullable(),
+    period: z.enum(["monthly", "total"]).optional(),
+  })
+  .strict();
 
 export function createOrgRoutes(options: OrgRoutesOptions) {
   const app = new Hono<ActorContextEnv>();
@@ -151,6 +161,64 @@ export function createOrgRoutes(options: OrgRoutesOptions) {
       return c.json({ error: "org_not_found" }, 404);
     }
     return c.json({ id: orgId, config: gated.config });
+  });
+
+  // The org-level DEFAULT dollar budget (autonomy-engine.md §3 proof 6): the
+  // ceiling every project inherits unless it sets its own. A dedicated, discoverable
+  // read + update over `organizations.config.defaultBudget` — `defaultBudget` is NOT
+  // a Bucket-B (routing/limits) field, so it is never audit-gated; the write applies
+  // directly. No per-project spend is summed here (spend is per-project).
+  app.get("/:orgId/budget", async (c) => {
+    const actor = requireActor(c);
+    const orgId = c.req.param("orgId");
+    if (!actorCanAccessOrg(actor, orgId)) {
+      return c.json({ error: "org_access_denied" }, 403);
+    }
+    const result = await options.pool.query<{ config: unknown }>("SELECT config FROM organizations WHERE id = $1", [
+      orgId,
+    ]);
+    if (result.rows[0] === undefined) {
+      return c.json({ error: "org_not_found" }, 404);
+    }
+    const budget = migrateOrgConfig(result.rows[0].config).defaultBudget;
+    return c.json({
+      ceilingUsd: budget?.ceilingUsd ?? null,
+      period: budget?.period ?? DEFAULT_BUDGET_PERIOD,
+    });
+  });
+
+  app.put("/:orgId/budget", async (c) => {
+    const actor = requireActor(c);
+    const orgId = c.req.param("orgId");
+    if (!actorIsOrgAdmin(actor, orgId)) {
+      return c.json({ error: "org_admin_required" }, 403);
+    }
+    const parsed = OrgBudgetPutSchema.safeParse(await c.req.json().catch(() => {}));
+    if (!parsed.success) {
+      return c.json({ error: "invalid_budget", issues: parsed.error.issues }, 400);
+    }
+    const current = await options.pool.query<{ config: unknown }>("SELECT config FROM organizations WHERE id = $1", [
+      orgId,
+    ]);
+    if (current.rows[0] === undefined) {
+      return c.json({ error: "org_not_found" }, 404);
+    }
+    const prev = migrateOrgConfig(current.rows[0].config);
+    const nextConfig = migrateOrgConfig({
+      ...prev,
+      defaultBudget:
+        parsed.data.ceilingUsd === null
+          ? undefined
+          : { ceilingUsd: parsed.data.ceilingUsd, period: parsed.data.period ?? DEFAULT_BUDGET_PERIOD },
+    });
+    await options.pool.query("UPDATE organizations SET config = $1::jsonb, updated_at = now() WHERE id = $2", [
+      JSON.stringify(nextConfig),
+      orgId,
+    ]);
+    return c.json({
+      ceilingUsd: nextConfig.defaultBudget?.ceilingUsd ?? null,
+      period: nextConfig.defaultBudget?.period ?? DEFAULT_BUDGET_PERIOD,
+    });
   });
 
   return app;

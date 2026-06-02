@@ -117,6 +117,7 @@ import { RedactionRawAccessPayload } from "./schemas/redaction.js";
 import { BenchmarkAcceptFailedPayload, BenchmarkAcceptPassedPayload } from "./schemas/benchmark.js";
 import {
   DagBudgetPausedPayload,
+  DagConcurrencySaturatedPayload,
   DagDrainedPayload,
   DagSpecEnqueuedPayload,
   DagSpecPercolatedPayload,
@@ -333,7 +334,10 @@ export const EventRegistry = {
   // there is no milestone-boundary event.
   "dag.spec.enqueued": DagSpecEnqueuedPayload,
   "dag.drained": DagDrainedPayload,
+  // The GENUINE dollar-budget pause (cumulative spend reached the ceiling) vs. the
+  // concurrency-saturation hold (no in-flight slot free) — two distinct outcomes.
   "dag.budget.paused": DagBudgetPausedPayload,
+  "dag.concurrency.saturated": DagConcurrencySaturatedPayload,
   // P2c-1 (§2c): speculative execution — a dependent started early on a
   // speculative integration branch, or was held over the depth cap.
   "dag.spec.speculative": DagSpecSpeculativePayload,

@@ -2,26 +2,32 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
-    "concurrencyCeiling": {
-      "exclusiveMinimum": 0,
-      "maximum": 9007199254740991,
-      "type": "integer"
-    },
-    "inFlightCount": {
-      "maximum": 9007199254740991,
+    "ceilingUsd": {
       "minimum": 0,
-      "type": "integer"
+      "type": "number"
+    },
+    "period": {
+      "enum": [
+        "monthly",
+        "total"
+      ],
+      "type": "string"
     },
     "readyHeldBack": {
       "maximum": 9007199254740991,
       "minimum": 0,
       "type": "integer"
+    },
+    "spentUsd": {
+      "minimum": 0,
+      "type": "number"
     }
   },
   "required": [
-    "readyHeldBack",
-    "inFlightCount",
-    "concurrencyCeiling"
+    "ceilingUsd",
+    "spentUsd",
+    "period",
+    "readyHeldBack"
   ],
   "type": "object",
   "x-tanren-schema-id": "tanren.event.dag.budget.paused"

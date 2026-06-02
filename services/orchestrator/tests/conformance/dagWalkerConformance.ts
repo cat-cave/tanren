@@ -5,7 +5,9 @@
 // the public `walk(projectId)` surface + the observable enqueue/event effects
 // only: readiness respects dependencies (all deps DONE), the governed concurrency
 // ceiling is honored, a spec already in-flight is never re-enqueued (idempotency),
-// and the drained / budget.paused / spec.enqueued outcomes fire correctly.
+// the genuine dollar-budget gate pauses the tick when spend reaches the configured
+// ceiling, and the drained / budget.paused / concurrency.saturated / spec.enqueued
+// outcomes fire correctly.
 //
 // It never inspects private fields or mock-call internals beyond the harness's
 // own recorded enqueues/events (the contract's observable surface). The harness
@@ -14,12 +16,12 @@
 // against any DagWalker impl. Mirrors the Allocator/JobQueue/Repositories suites.
 
 import { describe, expect, it } from "vitest";
-import type { DagSpecNode, DagSpecPhase, DagWalker } from "../../src/engine/contracts/dagWalker.js";
+import type { DagSpecNode, DagSpecPhase, DagWalker, ProjectBudgetState } from "../../src/engine/contracts/dagWalker.js";
 import type { SpecPriority } from "../../src/engine/state/spec.js";
 
 /** A recorded dag.* event the walker emitted (the contract's visibility surface). */
 export interface RecordedDagEvent {
-  type: "dag.spec.enqueued" | "dag.drained" | "dag.budget.paused";
+  type: "dag.spec.enqueued" | "dag.drained" | "dag.budget.paused" | "dag.concurrency.saturated";
   specId?: string;
   runId?: string;
   inFlightBefore?: number;
@@ -29,6 +31,10 @@ export interface RecordedDagEvent {
   inFlightCount?: number;
   blockedCount?: number;
   satisfiedDependsOn?: string[];
+  // The GENUINE dollar-budget pause payload (dag.budget.paused).
+  ceilingUsd?: number;
+  spentUsd?: number;
+  period?: "monthly" | "total";
 }
 
 /** A recorded enqueue (the createQueuedRunFromSpec effect). */
@@ -51,6 +57,8 @@ export interface DagWalkerConformanceHarness {
   setSpec(node: DagSpecNode): void;
   /** Set the governed concurrency ceiling the walker reads. */
   setCeiling(ceiling: number): void;
+  /** Set the project's resolved budget state the walker's budget gate returns. */
+  setBudget(state: ProjectBudgetState): void;
   /** The spec's current phase in the read model (reflects walk-time claims). */
   phaseOf(specId: string): DagSpecPhase | undefined;
   /** Every enqueue the walker performed, in order. */
@@ -174,21 +182,75 @@ export function describeDagWalkerConformance(label: string, suite: DagWalkerConf
       expect(result.enqueuedSpecIds[0]).toBe("spec_b");
     });
 
-    it("emits dag.budget.paused when ready specs exceed headroom", async () => {
+    it("emits dag.concurrency.saturated when ready specs exceed headroom", async () => {
       const h = suite.make(1);
-      // spec_a saturates the ceiling; spec_b is ready but has no slot.
+      // spec_a saturates the ceiling; spec_b is ready but has no slot. This is slot
+      // pressure — NOT a dollar-budget pause (the two are honestly distinguished).
       h.setSpec(node("spec_a", "in_flight", [], 0));
       h.setSpec(node("spec_b", "pending", [], 1));
       const result = await h.walker.walk(h.projectId);
 
+      expect(result.status).toBe("concurrency_saturated");
+      expect(result.enqueuedSpecIds).toEqual([]);
+      const saturated = h.events.find((e) => e.type === "dag.concurrency.saturated");
+      expect(saturated?.readyHeldBack).toBe(1);
+      expect(saturated?.inFlightCount).toBe(1);
+      expect(saturated?.concurrencyCeiling).toBe(1);
+      // Slot pressure is NOT a budget pause, and not a drain.
+      expect(h.events.some((e) => e.type === "dag.budget.paused")).toBe(false);
+      expect(h.events.some((e) => e.type === "dag.drained")).toBe(false);
+    });
+
+    it("enqueues normally when spend is under the configured ceiling", async () => {
+      const h = suite.make(3);
+      h.setBudget({ ceilingUsd: 50, period: "monthly", spentUsd: 10 });
+      h.setSpec(node("spec_root", "pending", [], 0));
+      const result = await h.walker.walk(h.projectId);
+
+      // Under budget ⇒ the gate is transparent; the spec enqueues as usual.
+      expect(result.status).toBe("enqueued");
+      expect(result.enqueuedSpecIds).toEqual(["spec_root"]);
+      expect(h.events.some((e) => e.type === "dag.budget.paused")).toBe(false);
+    });
+
+    it("pauses on budget and enqueues NOTHING when spend reaches the ceiling", async () => {
+      const h = suite.make(3);
+      // Spend has reached the ceiling — the genuine dollar-budget gate fires.
+      h.setBudget({ ceilingUsd: 50, period: "total", spentUsd: 50 });
+      h.setSpec(node("spec_root", "pending", [], 0));
+      h.setSpec(node("spec_other", "pending", [], 1));
+      const result = await h.walker.walk(h.projectId);
+
       expect(result.status).toBe("budget_paused");
       expect(result.enqueuedSpecIds).toEqual([]);
+      expect(h.enqueues).toEqual([]);
       const paused = h.events.find((e) => e.type === "dag.budget.paused");
-      expect(paused?.readyHeldBack).toBe(1);
-      expect(paused?.inFlightCount).toBe(1);
-      expect(paused?.concurrencyCeiling).toBe(1);
-      // No spurious drained event when we paused.
+      expect(paused?.ceilingUsd).toBe(50);
+      expect(paused?.spentUsd).toBe(50);
+      expect(paused?.period).toBe("total");
+      // A budget pause is neither a concurrency hold nor a drain.
+      expect(h.events.some((e) => e.type === "dag.concurrency.saturated")).toBe(false);
       expect(h.events.some((e) => e.type === "dag.drained")).toBe(false);
+    });
+
+    it("pauses on budget when spend EXCEEDS the ceiling too", async () => {
+      const h = suite.make(3);
+      h.setBudget({ ceilingUsd: 50, period: "monthly", spentUsd: 73.25 });
+      h.setSpec(node("spec_root", "pending", [], 0));
+      const result = await h.walker.walk(h.projectId);
+      expect(result.status).toBe("budget_paused");
+      expect(result.enqueuedSpecIds).toEqual([]);
+    });
+
+    it("is unlimited when no budget is configured (byte-identical to today)", async () => {
+      const h = suite.make(3);
+      // ceilingUsd undefined ⇒ no ceiling; even a huge spend never pauses.
+      h.setBudget({ ceilingUsd: undefined, period: "monthly", spentUsd: 999999 });
+      h.setSpec(node("spec_root", "pending", [], 0));
+      const result = await h.walker.walk(h.projectId);
+      expect(result.status).toBe("enqueued");
+      expect(result.enqueuedSpecIds).toEqual(["spec_root"]);
+      expect(h.events.some((e) => e.type === "dag.budget.paused")).toBe(false);
     });
 
     it("orders the ready set by the stable creation-order tiebreak", async () => {
