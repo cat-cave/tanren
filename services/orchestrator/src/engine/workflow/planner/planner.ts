@@ -28,8 +28,10 @@ export interface PlannerSpecContext {
 export interface PlannerRejectionFeedback {
   // P3-0008 adds "reviewer": a changes-requested PR review routed back through
   // the same rework path the checker/auditor/gate use, so the planner re-plans
-  // against the reviewer's feedback.
-  producer: "checker" | "auditor" | "gate" | "reviewer";
+  // against the reviewer's feedback. "writer" is a hard writer failure (the
+  // provider crashed / timed out mid-subtask) routed through the SAME path so a
+  // non-completing writer re-plans instead of being laundered into a passed task.
+  producer: "checker" | "auditor" | "gate" | "reviewer" | "writer";
   rejectionReason: string;
   behaviorIdsFailed: ReadonlyArray<string>;
   previousSubtasks: ReadonlyArray<PlanSubtask>;

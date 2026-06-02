@@ -76,10 +76,11 @@ export interface MergeForRunInput {
    * P2a up-to-date enforcement: re-poll the run's CI to a terminal verdict after
    * an auto-rebase advanced the branch (the branch HEAD moved, so the prior
    * green is stale). Production wires this to `pollCiForRun` through the SAME
-   * vcsProvider seam; tests inject a scripted re-gate. When omitted, the stage
-   * skips the re-poll (it still emits `merge.rebased` with `reGatedCi: false`)
-   * and proceeds to let the GitHub merge API gate on required checks — the merge
-   * is never forced past protection.
+   * vcsProvider seam; tests inject a scripted re-gate. Post-rebase re-gating is
+   * REQUIRED: when the branch was actually rebased and this hook is omitted, the
+   * stage HARD-HOLDS (emits `merge.rebased` with `reGatedCi: false`, then the
+   * recoverable `merge.conflict` outcome) rather than merging on unverified CI —
+   * a missing required re-gate is a hold, never "merge anyway".
    */
   reGateCi?: ReGateCiHook;
   /**

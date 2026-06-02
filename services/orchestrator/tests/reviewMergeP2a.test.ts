@@ -152,6 +152,47 @@ describe("P2a up-to-date enforcement (merge stage)", () => {
     expect(types).not.toContain("merge.completed");
   });
 
+  it("branch REBASED but NO reGateCi hook → HARD-HOLD (merge.conflict), NEVER merge on unverified CI", async () => {
+    // The branch was behind and update-branch advanced it, but the required
+    // post-rebase CI re-gate hook is absent. The default of a required
+    // verification is a HOLD, not "merge anyway": the dispatcher must emit the
+    // recoverable conflict outcome and NEVER call merge on the unverified rebase.
+    const pool = new ReviewMergePool("direct_merge");
+    const events = new FakeEventStore();
+    const probe = recordingMergeProbe(
+      { merged: true, mergeSha: "rebased-sha", conflict: false, status: 200, message: "merged" },
+      {
+        mergeability: { state: "behind", behind: true, baseBranch: "main", headBranch: "tanren/run_1" },
+        updateBranch: { outcome: "updated", message: "updating" },
+      },
+    );
+
+    const result = await mergeForRun({
+      pool: pool.asPgPool(),
+      eventStore: events,
+      secrets: new FakeSecretStore(),
+      resolveConflict: noopConflictResolver,
+      vcsProvider: vcsProviderOver(unusedHttp()),
+      runId: "run_1",
+      mergeProbe: probe,
+      // reGateCi intentionally OMITTED.
+    });
+
+    expect(result.outcome).toBe("conflict");
+    // CRUCIAL: the branch WAS rebased, but the merge API was NEVER called.
+    expect(probe.updateBranchCalls).toBe(1);
+    expect(probe.mergeCalls).toBe(0);
+    const types = events.events.map((e) => e.eventType);
+    expect(types).toContain("merge.behind");
+    expect(types).toContain("merge.rebased");
+    expect(types).toContain("merge.conflict");
+    expect(types).not.toContain("merge.completed");
+    // The rebased event records that CI was NOT re-gated.
+    expect(events.events.find((e) => e.eventType === "merge.rebased")?.payload).toMatchObject({ reGatedCi: false });
+    // Recoverable: the merge task stays running for the recovery surface.
+    expect(pool.tasks.find((t) => t.kind === "merge")?.status).toBe("running");
+  });
+
   it("a CLEAN branch merges directly with no update-branch call", async () => {
     const pool = new ReviewMergePool("direct_merge");
     const events = new FakeEventStore();

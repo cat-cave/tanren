@@ -197,7 +197,7 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
     });
 
     const writerResults: { subtask: PlanSubtask; writer: WriterResult }[] = [];
-    const checkerRejection = await runSubtaskSequence({
+    const sequence = await runSubtaskSequence({
       input,
       costCtx,
       appendEvent,
@@ -206,13 +206,24 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
       writerResults,
     });
 
-    if (checkerRejection !== undefined) {
+    // A writer that exhausted its usage window mid-subtask halts the run as
+    // recoverable §4.3 window pressure — the SAME terminal the pre-flight probe
+    // produces. The planner task is stamped window_exhausted, not passed.
+    if (sequence.kind === "window_exhausted") {
+      await markTaskDone(input.pool, plannerTaskId, "window_exhausted", input.runStateWriter);
+      return await finalize(sequence.outcome);
+    }
+
+    // A checker rejection OR a hard writer failure (crashed / timed out) routes
+    // back through the planner-rework path; on budget exhaustion the run halts as
+    // retry_budget_exhausted. Either way the failing subtask was NOT recorded passed.
+    if (sequence.kind === "rejection") {
       const exhausted = await handleRejection({
         appendEvent,
         plannerTaskId,
         runId: input.context.runId,
         max: input.escapeHatches.maxPlannerRerunsPerSpec,
-        rejection: checkerRejection,
+        rejection: sequence.rejection,
         plannerRerunCount,
         history: rejectionHistory,
       });
@@ -220,7 +231,7 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
         return await finalize({
           kind: "retry_budget_exhausted",
           plannerRerunCount: plannerRerunCount + 1,
-          lastRejection: checkerRejection,
+          lastRejection: sequence.rejection,
         });
       }
       plannerRerunCount += 1;
@@ -311,9 +322,19 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
   }
 }
 
+// The result of walking a plan's subtasks: a clean pass, a rejection routed to
+// rework (checker reject OR a hard crashed/timeout writer), or a window-exhausted
+// halt (a writer whose §4.3 usage window was spent mid-call). Each non-pass case
+// guarantees the failing subtask was NOT recorded as a passed task.
+type SubtaskSequenceResult =
+  | { kind: "passed" }
+  | { kind: "rejection"; rejection: PlannerRejectionFeedback }
+  | { kind: "window_exhausted"; outcome: Extract<SubtaskLoopOutcome, { kind: "window_exhausted" }> };
+
 // runSubtaskSequence walks the plan in order, executing each subtask's
-// writer + check stages. Returns undefined on success, or a populated
-// rejection feedback record when the checker rejected a subtask.
+// writer + check stages. Returns `passed` on success, a `rejection` when the
+// checker rejected OR the writer hard-failed (crashed / timed out), or
+// `window_exhausted` when a writer's usage window was spent mid-subtask.
 async function runSubtaskSequence(args: {
   input: SubtaskLoopInput;
   costCtx: SubtaskCostContext;
@@ -321,11 +342,11 @@ async function runSubtaskSequence(args: {
   plan: PlanAnswer;
   plannerTaskId: string;
   writerResults: { subtask: PlanSubtask; writer: WriterResult }[];
-}): Promise<PlannerRejectionFeedback | undefined> {
+}): Promise<SubtaskSequenceResult> {
   const { input, costCtx, appendEvent, plan, plannerTaskId, writerResults } = args;
   for (const subtask of plan.subtasks) {
     const writeTaskId = `task_${randomUUID()}`;
-    const writerResult = await runWriterStage({
+    const writerOutcome = await runWriterStage({
       pool: input.pool,
       writer: input.runStateWriter,
       costCtx,
@@ -341,6 +362,25 @@ async function runSubtaskSequence(args: {
       appendEvent,
       buildUsage: input.costHooks?.buildWriterUsage,
     });
+    // The writer's classified exit (provider `exitReason`) decides routing here —
+    // a non-`completed` writer never proceeds to the checker as a success.
+    if (writerOutcome.kind === "window_exhausted") {
+      return {
+        kind: "window_exhausted",
+        outcome: {
+          kind: "window_exhausted",
+          plannerRerunCount: 0,
+          provider: input.adapters.writer.cli,
+          slot: "writer",
+          usedPercent: 100,
+          resetsAt: new Date().toISOString(),
+        },
+      };
+    }
+    if (writerOutcome.kind === "failed") {
+      return { kind: "rejection", rejection: writerFailureRejection(writerOutcome.failureKind, plan.subtasks) };
+    }
+    const writerResult = writerOutcome.writer;
     // P3-0005: deterministic per-iteration gate. The fast tier runs over the
     // bootstrapped workspace right after the writer edits. A nonzero exit means
     // the tree is broken (build/lint/typecheck/unit), so route straight back to
@@ -349,7 +389,7 @@ async function runSubtaskSequence(args: {
     if (input.runGate !== undefined) {
       const gate = await input.runGate({ when: "per_iteration", taskId: writeTaskId });
       if (!gate.passed) {
-        return gateRejection(gate, plan.subtasks);
+        return { kind: "rejection", rejection: gateRejection(gate, plan.subtasks) };
       }
     }
     const checkerTaskId = `task_${randomUUID()}`;
@@ -373,15 +413,36 @@ async function runSubtaskSequence(args: {
     });
     if (decision.kind === "reject") {
       return {
-        producer: "checker",
-        rejectionReason: decision.reason,
-        behaviorIdsFailed: [...decision.behaviorIdsFailed],
-        previousSubtasks: plan.subtasks,
+        kind: "rejection",
+        rejection: {
+          producer: "checker",
+          rejectionReason: decision.reason,
+          behaviorIdsFailed: [...decision.behaviorIdsFailed],
+          previousSubtasks: plan.subtasks,
+        },
       };
     }
     writerResults.push({ subtask, writer: writerResult });
   }
-  return undefined;
+  return { kind: "passed" };
+}
+
+// Turn a hard writer failure (crashed / timed out) into the planner-feedback
+// record routed through the SAME rework path the checker/auditor/gate use, so a
+// non-completing writer re-plans (or exhausts the retry budget) instead of being
+// laundered into a passed subtask. The writer carries no per-behavior verdict, so
+// behaviorIdsFailed is empty.
+function writerFailureRejection(
+  failureKind: "crashed" | "timeout",
+  subtasks: ReadonlyArray<PlanSubtask>,
+): PlannerRejectionFeedback {
+  const detail = failureKind === "timeout" ? "timed out before completing the subtask" : "crashed mid-subtask";
+  return {
+    producer: "writer",
+    rejectionReason: `writer ${detail} (exitReason="${failureKind}")`,
+    behaviorIdsFailed: [],
+    previousSubtasks: subtasks,
+  };
 }
 
 function writerPromptFor(input: SubtaskLoopInput, subtask: PlanSubtask): string {

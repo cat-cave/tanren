@@ -14,6 +14,7 @@ import {
   loopAudit,
   makeAuditor,
   makeChecker,
+  makeFailingWriter,
   makePlanner,
   makeWriter,
   passingAudit,
@@ -211,6 +212,89 @@ describe("subtask loop — budget exhaustion", () => {
 
     const rerequested = events.events.filter((event) => event.eventType === "planner.rerequested");
     expect(rerequested).toHaveLength(2);
+  });
+});
+
+describe("subtask loop — non-completing writer halts/reworks (never laundered to passed)", () => {
+  it("a crashed writer is NOT marked passed: the write task fails and the run reworks to retry_budget_exhausted", async () => {
+    // The writer crashes on every attempt. Each crash must route through the
+    // planner-rework path (NOT proceed to the checker on a partial diff), and on
+    // budget exhaustion the run halts as retry_budget_exhausted.
+    const { input, events, pool } = defaultLoopInput({
+      adapters: {
+        planner: makePlanner([
+          buildPlan([{ title: "T1", intent: "first", behaviorIds: ["B1"] }]),
+          buildPlan([{ title: "T2", intent: "second", behaviorIds: ["B1"] }]),
+        ]),
+        writer: makeFailingWriter("crashed"),
+        checker: makeChecker([passingCheck, passingCheck]),
+        auditor: makeAuditor([passingAudit]),
+      },
+      escapeHatches: {
+        maxPlannerRerunsPerSpec: 1,
+        maxWriterIterPerSubtask: 5,
+        maxRetriesPerTransientFailure: 3,
+      },
+    });
+    const outcome = await runSubtaskLoop(input);
+
+    expect(outcome.kind).toBe("retry_budget_exhausted");
+    if (outcome.kind !== "retry_budget_exhausted") return;
+    // The rework was driven by the WRITER failure, not a checker reject.
+    expect(outcome.lastRejection.producer).toBe("writer");
+
+    // The write task rows are hard-FAILED with the crashed failure kind — NEVER
+    // a laundered done/passed row.
+    const writes = pool.tasks.filter((task) => task.kind === "write");
+    expect(writes.length).toBeGreaterThan(0);
+    expect(writes.every((task) => task.status === "failed")).toBe(true);
+    expect(writes.every((task) => task.outcome === "failed")).toBe(true);
+    expect(writes.every((task) => task.failureKind === "crashed")).toBe(true);
+    expect(writes.some((task) => task.outcome === "passed")).toBe(false);
+
+    // No checker ever ran on the crashed diff — the failure short-circuits before
+    // the checker stage.
+    expect(pool.tasks.some((task) => task.kind === "check")).toBe(false);
+
+    // The loud failure events were emitted (the previously-latent surface).
+    const writerFailed = events.events.filter((event) => event.eventType === "writer.subtask.failed");
+    expect(writerFailed.length).toBeGreaterThan(0);
+    expect((writerFailed[0]!.payload as { failureKind: string }).failureKind).toBe("crashed");
+    const taskFailed = events.events.filter((event) => event.eventType === "task.failed");
+    expect(taskFailed.some((event) => (event.payload as { taskKind?: string }).taskKind === "write")).toBe(true);
+    // The writer's success event is NEVER emitted for a crashed run.
+    expect(events.events.some((event) => event.eventType === "writer.subtask.completed")).toBe(false);
+  });
+
+  it("a window_exhausted writer halts the run as window_exhausted (the §4.3 terminal), planner task not passed", async () => {
+    const { input, events, pool } = defaultLoopInput({
+      adapters: {
+        planner: makePlanner([buildPlan([{ title: "T1", intent: "first", behaviorIds: ["B1"] }])]),
+        writer: makeFailingWriter("window_exhausted"),
+        checker: makeChecker([passingCheck]),
+        auditor: makeAuditor([passingAudit]),
+      },
+    });
+    const outcome = await runSubtaskLoop(input);
+
+    expect(outcome.kind).toBe("window_exhausted");
+
+    // The write task is failed (window_exhausted), and the planner task is stamped
+    // window_exhausted — neither is a passed/done success row.
+    const write = pool.tasks.find((task) => task.kind === "write")!;
+    expect(write.status).toBe("failed");
+    expect(write.failureKind).toBe("window_exhausted");
+    const planner = pool.tasks.find((task) => task.kind === "plan")!;
+    expect(planner.outcome).toBe("window_exhausted");
+    expect(planner.outcome).not.toBe("passed");
+
+    // No checker / auditor ran — the run halted at the writer.
+    expect(pool.tasks.some((task) => task.kind === "check")).toBe(false);
+    expect(pool.tasks.some((task) => task.kind === "audit")).toBe(false);
+
+    const writerFailed = events.events.filter((event) => event.eventType === "writer.subtask.failed");
+    expect(writerFailed.length).toBe(1);
+    expect((writerFailed[0]!.payload as { failureKind: string }).failureKind).toBe("window_exhausted");
   });
 });
 
