@@ -11,6 +11,10 @@
 // against the live stack; this suite is the behavioral contract every
 // VcsProvider impl must satisfy without a database or network.
 
+import { Buffer } from "node:buffer";
+import { blake2b } from "blakejs";
+import nacl from "tweetnacl";
+import { describe, expect, it } from "vitest";
 import { InMemorySecretStore } from "../../src/engine/contracts/secretStore.js";
 import { GitHubVcsProvider } from "../../src/engine/providers/githubVcsProvider.js";
 import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "../../src/engine/providers/github.js";
@@ -18,6 +22,7 @@ import type { VcsProvider } from "../../src/engine/contracts/vcsProvider.js";
 import { InMemoryVcsProvider } from "./fakes/inMemoryVcsProvider.js";
 import {
   CONFORMANCE_ABSENT_BRANCH,
+  CONFORMANCE_ACTIONS_SECRET_VALUE,
   CONFORMANCE_ANCESTOR_CONFLICT,
   CONFORMANCE_BEHIND_PR_NUMBER,
   CONFORMANCE_DIRTY_PR_NUMBER,
@@ -27,6 +32,30 @@ import {
   CONFORMANCE_PRESENT_FILE_BODY,
   describeVcsProviderConformance,
 } from "./vcsProviderConformance.js";
+
+/**
+ * A real Actions X25519 keypair the scripted transport serves so the PRODUCTION
+ * provider's sealed-box runs for real (not a stubbed encrypt). The matching
+ * secret key decrypts the ciphertext in the assertion below to PROVE the
+ * encrypted_value is a genuine seal of the plaintext — without the plaintext ever
+ * appearing on the wire.
+ */
+const ACTIONS_KEY_ID = "conformance-key-1";
+const actionsKeyPair = nacl.box.keyPair();
+const actionsPublicKeyB64 = Buffer.from(actionsKeyPair.publicKey).toString("base64");
+
+/** Open a GitHub-style sealed box (the inverse of the provider's `sealActionsSecret`). */
+function openSealedBox(sealedB64: string): string | null {
+  const sealed = new Uint8Array(Buffer.from(sealedB64, "base64"));
+  const ephPk = sealed.subarray(0, nacl.box.publicKeyLength);
+  const boxed = sealed.subarray(nacl.box.publicKeyLength);
+  const nonceInput = new Uint8Array(ephPk.length + actionsKeyPair.publicKey.length);
+  nonceInput.set(ephPk, 0);
+  nonceInput.set(actionsKeyPair.publicKey, ephPk.length);
+  const nonce = blake2b(nonceInput, undefined, nacl.box.nonceLength);
+  const opened = nacl.box.open(boxed, nonce, ephPk, actionsKeyPair.secretKey);
+  return opened === null ? null : Buffer.from(opened).toString("utf8");
+}
 
 const STATIC_REF = "credential/github/conformance";
 const HEAD_SHA = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
@@ -42,6 +71,9 @@ const ok = (body: unknown): GitHubHttpResponse => ({ status: 200, body });
  * fields the provider/contract reads are populated.
  */
 class RoutingGitHubHttp implements GitHubHttpClient {
+  /** The last Actions-secret PUT seen (serialized request + parsed body), for assertions. */
+  lastSecretPut: { serialized: string; body: unknown } | undefined;
+
   async request(input: GitHubHttpRequest): Promise<GitHubHttpResponse> {
     const path = input.path.split("?")[0] ?? input.path;
 
@@ -146,6 +178,16 @@ class RoutingGitHubHttp implements GitHubHttpClient {
       if (head === CONFORMANCE_ANCESTOR_CONFLICT.branch) return { status: 409, body: { message: "Merge conflict" } };
       return { status: 201, body: { sha: "integ-merge-sha" } };
     }
+    // setActionsSecret (P-APP-ENV-1): serve the repo Actions public key, then accept
+    // the encrypted PUT — recording the body so the GitHub-specific test below can
+    // assert the plaintext never appears + the ciphertext decrypts back to it.
+    if (input.method === "GET" && path.endsWith("/actions/secrets/public-key")) {
+      return ok({ key_id: ACTIONS_KEY_ID, key: actionsPublicKeyB64 });
+    }
+    if (input.method === "PUT" && /\/actions\/secrets\/[^/]+$/u.test(path)) {
+      this.lastSecretPut = { serialized: JSON.stringify(input), body: input.body };
+      return { status: 201, body: {} };
+    }
     // createIssue: POST /issues → 201 with the issue number + html_url.
     if (input.method === "POST" && path.endsWith("/issues")) {
       return {
@@ -180,4 +222,37 @@ describeVcsProviderConformance("GitHubVcsProvider", gitHubProviderHarness());
 describeVcsProviderConformance("InMemoryVcsProvider", {
   make: (): VcsProvider => new InMemoryVcsProvider(),
   creds: () => ({ secrets: new InMemorySecretStore(), staticRef: STATIC_REF }),
+});
+
+// GitHub-specific transport assertion (the generic suite only asserts the call
+// resolves): the real provider's setActionsSecret PUT must carry the right key_id
+// + a genuine sealed box that decrypts to the plaintext, and the PLAINTEXT must
+// never appear anywhere in the serialized request.
+describe("GitHubVcsProvider.setActionsSecret encryption", () => {
+  it("PUTs an encrypted secret (key_id + sealed box) and never leaks the plaintext", async () => {
+    const http = new RoutingGitHubHttp();
+    const provider = new GitHubVcsProvider(http);
+    const secrets = new InMemorySecretStore();
+    await secrets.put({ ref: STATIC_REF, value: "ghp_conformanceToken" });
+    const token = await provider.resolveToken({ secrets, staticRef: STATIC_REF });
+
+    await provider.setActionsSecret({
+      repo: { owner: "cat-cave", name: "tanren-conformance" },
+      token,
+      name: "RESEND_API_KEY",
+      value: CONFORMANCE_ACTIONS_SECRET_VALUE,
+    });
+
+    const put = http.lastSecretPut;
+    expect(put).toBeDefined();
+    // The plaintext appears nowhere in the serialized request.
+    expect(put?.serialized).not.toContain(CONFORMANCE_ACTIONS_SECRET_VALUE);
+    const body = put?.body as { encrypted_value?: unknown; key_id?: unknown } | undefined;
+    expect(body?.key_id).toBe(ACTIONS_KEY_ID);
+    expect(typeof body?.encrypted_value).toBe("string");
+    const encrypted = body?.encrypted_value as string;
+    expect(encrypted.length).toBeGreaterThan(0);
+    // The ciphertext is a genuine seal of the plaintext (decrypts back to it).
+    expect(openSealedBox(encrypted)).toBe(CONFORMANCE_ACTIONS_SECRET_VALUE);
+  });
 });

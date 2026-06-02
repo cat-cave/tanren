@@ -1,5 +1,6 @@
 import { registerSensitivities, type SensitivityRule } from "./sensitivity.js";
 import { infraSensitivityRules } from "./sensitivityRules.infra.js";
+import { appEnvSensitivityRules } from "./sensitivityRules.appEnv.js";
 
 // Sensitivity rule table. Every payload field reachable from an event must
 // have a registered tag. The eventRegistryFieldCoverage test enforces this so
@@ -465,18 +466,12 @@ export const sensitivityRules: SensitivityRule[] = [
     ["label", "public"],
   ]),
 
-  // app_env.runtime_attached (P-APP-ENV-2): deploy target + env KEY NAMES — all
-  // public (NO secret value in the payload; values went only to the deploy request).
-  ...rulesFor("app_env.runtime_attached", [
-    ["provider", "public"],
-    ["appId", "public"],
-    ["keys[]", "public"],
-  ]),
-
-  // Infrastructure + integration rules (runner/allocator/workspace/credential,
-  // cost + usage telemetry, github/ci/phase1/reviews/notifications/hello/
-  // redaction) live in sensitivityRules.infra.ts to keep this file under the
-  // 500-line cap.
+  // Plane B app-environment rules (app_env.runtime_attached / app_env.ci_propagated)
+  // live in sensitivityRules.appEnv.ts; infrastructure + integration rules
+  // (runner/allocator/workspace/credential, cost + usage telemetry, github/ci/
+  // phase1/reviews/notifications/hello/redaction) live in sensitivityRules.infra.ts
+  // — both split out to keep this file under the 500-line cap.
+  ...appEnvSensitivityRules,
   ...infraSensitivityRules,
 ];
 

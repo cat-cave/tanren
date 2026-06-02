@@ -32,7 +32,7 @@ import { createNotificationRoutes } from "./routes/notifications/index.js";
 import { createOnboardingRoutes } from "./routes/onboarding/index.js";
 import { type ConfigGateGithubFactory, createOrgRoutes } from "./routes/orgs/index.js";
 import { createPersonaRoutes } from "./routes/personas/index.js";
-import { createProjectRoutes } from "./routes/projects/index.js";
+import { createAppEnvCiRoutes, createProjectRoutes } from "./routes/projects/index.js";
 import { createRecoveryRoutes } from "./routes/recovery/index.js";
 import { createRunRoutes } from "./routes/runs/index.js";
 import { createSpecRoutes } from "./routes/specs/index.js";
@@ -103,6 +103,13 @@ export function mountFeatureRoutes(app: Hono<ActorContextEnv>, deps: FeatureRout
   const scopedPool = orgScopingPool(pool);
   app.route("/orgs", createOrgRoutes({ pool: scopedPool, configGateGithub }));
   app.route("/orgs", createProjectRoutes({ pool: scopedPool }));
+  // P-APP-ENV-1: push a project's TEST-scoped app env to the target repo's Actions
+  // secrets (so `tanren-ci.yml` tests that read e.g. RESEND_API_KEY pass). Uses the
+  // VcsProvider seam (App-first token + sealed-box secret set); names-only signal.
+  app.route(
+    "/orgs",
+    createAppEnvCiRoutes({ pool: scopedPool, secrets, vcsProvider: deps.vcsProvider, githubAppMinter }),
+  );
   app.route("/orgs", createSpecRoutes({ pool: scopedPool }));
   app.route("/orgs", createPersonaRoutes({ pool: scopedPool }));
   app.route("/orgs", createBehaviorRoutes({ pool: scopedPool }));

@@ -14,6 +14,11 @@ import { createProject, ProjectAccessDeniedError, ProjectNotFoundError } from ".
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg } from "../orgs/index.js";
 
+// P-APP-ENV-1: re-exported here so the feature-route mounter pulls both the
+// project CRUD routes and the app-env CI-secret propagation route from one import
+// site (keeping the mounter under its per-file dependency cap).
+export { createAppEnvCiRoutes } from "./appEnvCi.js";
+
 interface ProjectRoutesOptions {
   pool: pg.Pool;
 }

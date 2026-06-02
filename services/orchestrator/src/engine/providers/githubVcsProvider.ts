@@ -16,6 +16,7 @@
 // place the GitHub forge surface for the lifecycle is reached.
 
 import { resolveGithubToken } from "../credentials/githubTokenResolver.js";
+import { setRepoActionsSecret } from "./actionsSecretSeal.js";
 import { parseCommitLogins } from "../workflow/reviewMerge/commitLogins.js";
 import type { PullRequestContributors } from "../workflow/reviewMerge/governancePosture.js";
 import { decodeBase64Content } from "../contracts/vcsProvider.js";
@@ -31,6 +32,7 @@ import type {
   PushBranchInput,
   RepoRef,
   ResolvedVcsToken,
+  SetActionsSecretInput,
   UpdateBranchResult,
   VcsCredentialContext,
   VcsProvider,
@@ -169,6 +171,12 @@ export class GitHubVcsProvider implements VcsProvider {
       throw new TypeError("GitHub issue create returned no number/url");
     }
     return { number: body.number, url: body.html_url };
+  }
+
+  async setActionsSecret(input: SetActionsSecretInput): Promise<void> {
+    // Read the repo's Actions public key → sealed-box encrypt the plaintext → PUT
+    // the encrypted value. The plaintext travels ONLY inside the encrypted body.
+    await setRepoActionsSecret(this.http, input);
   }
 
   async markReadyForReview(pr: PullRequestRef, token: ResolvedVcsToken): Promise<void> {
