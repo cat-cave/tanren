@@ -1,18 +1,17 @@
 // The pg-backed change-percolation seam wirings (autonomy-engine.md §2c
 // change-percolation), split out of `percolation.ts` to keep each file under the
-// 500-line cap. Three production wirings of the `ChangePercolation` contract
-// seams the PercolatingCoordinator composes:
+// 500-line cap. Two production wirings of the `ChangePercolation` contract seams
+// the PercolatingCoordinator composes (the write helpers — verified-SHA / clear /
+// replan — live in `percolationWrites.ts`):
 //   - PgPercolationReadModel: the org-scoped, READ-ONLY detect — the project's
-//     in-flight SPECULATIVE dependents (runs carrying a `speculative_base` + a
-//     non-empty `integrated_ancestor_shas` map) + each ancestor's CURRENT head SHA
-//     (read through the VcsProvider) and lifecycle severity (the P2c-1 lifecycle
-//     projection). DAG state is the source of truth: read fresh each detect.
-//   - PgPercolationEventEmitter: writes the four dag.spec.percolation events
-//     through the single org-scoped event-writer seam (mirrors PgDagEventEmitter).
-//   - recordIntegratedAncestorSha: persists the NEW integrated SHA on the
-//     dependent's run after a clean re-gate (the next detect's termination key).
+//     in-flight SPECULATIVE dependents (the build base + the VERIFIED/absorbed SHA
+//     map + the in-flight marker + the dependent's OWN lifecycle) and, per ancestor,
+//     its CURRENT head SHA (via the VcsProvider) + lifecycle severity/verdict (the
+//     P2c-1 lifecycle projection). DAG state is the source of truth: read fresh.
+//   - PgPercolationEventEmitter: writes the four dag.spec.percolation events through
+//     the single org-scoped event-writer seam (mirrors PgDagEventEmitter).
 
-import { runWithOrgScope, runWithSystemScope } from "@tanren/db";
+import { runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
 import {
   type AncestorChangeSignal,
@@ -22,7 +21,7 @@ import {
   type PercolationReadModel,
   type SpeculativeDependent,
 } from "../contracts/changePercolation.js";
-import { projectSpecLifecycle, type SpecLifecycle } from "../contracts/dagLifecycle.js";
+import { projectSpecLifecycle, type ReviewVerdict, type SpecLifecycle } from "../contracts/dagLifecycle.js";
 import type { ResolvedVcsToken, VcsProvider } from "../contracts/vcsProvider.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import { migrateOrgConfig } from "../config/orgConfig.js";
@@ -30,22 +29,15 @@ import { migrateProjectConfig } from "../config/projectConfig.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import { PgDagLifecycleReadModel } from "./lifecycle.js";
 import { PgEventStore } from "../eventStore.js";
-
-/** Resolve the project's org id (system-scoped bootstrap, the same hop the walker uses). */
-async function resolveProjectOrg(pool: pg.Pool, projectId: string): Promise<string | null> {
-  return runWithSystemScope(pool, async (client) => {
-    const result = await client.query<{ org_id: string | null }>("SELECT org_id FROM projects WHERE project_id = $1", [
-      projectId,
-    ]);
-    return result.rows[0]?.org_id ?? null;
-  });
-}
+import { decodePercolationPending, decodeVerified, resolveProjectOrg } from "./percolationWrites.js";
 
 interface SpeculativeRunRow {
   run_id: string;
   spec_id: string;
   speculative_base: string;
   integrated_ancestor_shas: unknown;
+  verified_ancestor_shas: unknown;
+  percolation_pending: unknown;
 }
 
 /** Coerce a persisted jsonb blob into the per-ancestor SHA map (string→string only). */
@@ -80,12 +72,17 @@ export class PgPercolationReadModel implements PercolationReadModel {
   async loadSpeculativeDependents(projectId: string): Promise<SpeculativeDependent[]> {
     const orgId = await resolveProjectOrg(this.deps.pool, projectId);
     if (orgId === null) return [];
+    // The dependent's OWN lifecycle (for settling an in-flight marker) comes from
+    // the shared P2c-1 projection — one snapshot per pass.
+    const lifecycleSnapshot = await this.lifecycle.loadLifecycle(projectId);
     const rows = await runWithOrgScope(this.deps.pool, orgId, async (client) => {
       // The latest run per spec that is speculative (carries a base + a non-empty
-      // integrated-SHA map) AND still in-flight (not yet merged) — exactly the
-      // dependents whose recorded integrated SHA may have diverged.
+      // build-base map) AND still in-flight (not merged/halted) — the dependents
+      // whose VERIFIED SHAs may have diverged, plus their absorbed-key + marker.
       const result = await client.query<SpeculativeRunRow>(
-        `SELECT DISTINCT ON (r.spec_id) r.run_id, r.spec_id, r.speculative_base, r.integrated_ancestor_shas
+        `SELECT DISTINCT ON (r.spec_id)
+                r.run_id, r.spec_id, r.speculative_base, r.integrated_ancestor_shas,
+                r.verified_ancestor_shas, r.percolation_pending
            FROM runs r
           WHERE r.project_id = $1
             AND r.speculative_base IS NOT NULL
@@ -98,15 +95,28 @@ export class PgPercolationReadModel implements PercolationReadModel {
     });
     return (
       rows
-        .map(
-          (row): SpeculativeDependent => ({
+        .map((row): SpeculativeDependent => {
+          const life = lifecycleSnapshot.bySpecId.get(row.spec_id);
+          const buildBase = asShaMap(row.integrated_ancestor_shas);
+          // The verified (absorbed) map defaults to the build base before the first
+          // percolation: a fresh speculative start was audited against its build
+          // base, so that IS its verified SHA until an ancestor changes.
+          const verified = decodeVerified(row.verified_ancestor_shas);
+          const verifiedShas = Object.keys(verified.shas).length > 0 ? verified.shas : buildBase;
+          const pending = decodePercolationPending(row.percolation_pending);
+          return {
             specId: row.spec_id,
             runId: row.run_id,
             speculativeBase: row.speculative_base,
-            integratedAncestorShas: asShaMap(row.integrated_ancestor_shas),
-          }),
-        )
-        // A run whose map decoded empty has nothing to percolate against — drop it.
+            integratedAncestorShas: buildBase,
+            verifiedAncestorShas: verifiedShas,
+            absorbedReviewVerdicts: verified.verdicts,
+            ...(pending !== undefined && { pending }),
+            lifecycleState: life?.state ?? "building",
+            openFindingMaxSeverity: life?.openFindingMaxSeverity ?? "unaudited",
+          };
+        })
+        // A run whose build-base map decoded empty has nothing to percolate against.
         .filter((d) => Object.keys(d.integratedAncestorShas).length > 0)
     );
   }
@@ -120,13 +130,18 @@ export class PgPercolationReadModel implements PercolationReadModel {
       input.projectId,
       Object.keys(input.dependent.integratedAncestorShas),
     );
+    const verifiedShas = input.dependent.verifiedAncestorShas;
+    const absorbedVerdicts = input.dependent.absorbedReviewVerdicts ?? {};
     const signals: AncestorChangeSignal[] = [];
-    for (const [ancestorSpecId, integratedSha] of Object.entries(input.dependent.integratedAncestorShas)) {
+    for (const ancestorSpecId of Object.keys(input.dependent.integratedAncestorShas)) {
+      // Detection keys off the VERIFIED (re-gated-clean) SHA, NOT the bare build
+      // base — a change is actionable until the dependent's own governance re-ran.
+      const verifiedSha = verifiedShas[ancestorSpecId] ?? input.dependent.integratedAncestorShas[ancestorSpecId] ?? "";
       const branch = branchBySpec.get(ancestorSpecId);
       // A missing branch (the ancestor's run vanished) cannot be read — treat the
-      // current SHA as the integrated one (no divergence detectable) rather than
-      // inventing a change; the dependent is left untouched (never falsely percolated).
-      const currentSha = branch === undefined ? integratedSha : await this.headSha(repo, token, branch, integratedSha);
+      // current SHA as the verified one (no divergence) rather than inventing a
+      // change; the dependent is left untouched (never falsely percolated).
+      const currentSha = branch === undefined ? verifiedSha : await this.headSha(repo, token, branch, verifiedSha);
       const life: SpecLifecycle =
         lifecycleSnapshot.bySpecId.get(ancestorSpecId) ??
         projectSpecLifecycle({
@@ -136,12 +151,14 @@ export class PgPercolationReadModel implements PercolationReadModel {
           prOpened: false,
           ciPassed: false,
         });
+      const absorbed: ReviewVerdict | undefined = absorbedVerdicts[ancestorSpecId];
       signals.push({
         ancestorSpecId,
-        integratedSha,
+        verifiedSha,
         currentSha,
         openFindingMaxSeverity: life.openFindingMaxSeverity,
         ...(life.review?.verdict !== undefined && { reviewVerdict: life.review.verdict }),
+        ...(absorbed !== undefined && { absorbedReviewVerdict: absorbed }),
       });
     }
     return signals;
@@ -330,29 +347,6 @@ export class PgPercolationEventEmitter implements PercolationEventEmitter {
       }),
     );
   }
-}
-
-/**
- * Persist the NEW integrated head SHA for one ancestor on the dependent's run after
- * a clean re-gate — the next detect's TERMINATION key (a subsequent detect with the
- * same SHA is a no-op). Org-scoped; merges into the existing jsonb map so other
- * ancestors' recorded SHAs are preserved.
- */
-export async function recordIntegratedAncestorSha(
-  pool: pg.Pool,
-  input: { projectId: string; runId: string; ancestorSpecId: string; sha: string },
-): Promise<void> {
-  const orgId = await resolveProjectOrg(pool, input.projectId);
-  if (orgId === null) throw new Error(`project ${input.projectId} has no org to record integrated SHA`);
-  await runWithOrgScope(pool, orgId, async (client) => {
-    await client.query(
-      `UPDATE runs
-          SET integrated_ancestor_shas =
-            COALESCE(integrated_ancestor_shas, '{}'::jsonb) || jsonb_build_object($2::text, $3::text)
-        WHERE run_id = $1`,
-      [input.runId, input.ancestorSpecId, input.sha],
-    );
-  });
 }
 
 /** Resolve the org App installation block from the org config blob (App-first auth). */

@@ -52,6 +52,13 @@ export interface IntentPreservingResolverDeps {
   reGate: ResolvedTreeReGate;
   /** Route one spec back to the planner with the other's change (intent stays alive). */
   replan: ReplanRouter;
+  /**
+   * P2c-2 (change-percolation): present when THIS run is a percolation re-execution
+   * — the ancestor whose intentional upstream change must flow IN. It reframes the
+   * Answerer into UPSTREAM-CHANGE mode (apply the ancestor's change INTO the
+   * dependent, keeping its work intact). Absent for a normal symmetric conflict.
+   */
+  upstreamChange?: { ancestorSpecId: string; changeSummary: string };
 }
 
 /**
@@ -96,6 +103,11 @@ export function buildIntentPreservingConflictResolver(deps: IntentPreservingReso
       }),
       dagEdge: provenance.dagEdge,
       conflictedFiles: gathered.files,
+      // P2c-2: in a percolation re-execution, reframe into upstream-change mode so
+      // the ancestor's intentional change flows INTO this dependent (keeping its
+      // work intact), and an irreconcilable answer re-plans THIS spec (the merging
+      // side) WITH the ancestor's change — the now-reachable replan path.
+      ...(deps.upstreamChange !== undefined && { upstreamChange: deps.upstreamChange }),
     });
 
     const decision = decideConflictResolution(answer, {

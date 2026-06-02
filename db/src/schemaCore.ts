@@ -153,15 +153,25 @@ export const runs = pgTable(
     // for the real ancestor merges, then re-gates against `default_branch`.
     speculativeBase: text("speculative_base"),
     // P2c-2 (autonomy-engine.md §2c CHANGE-PERCOLATION): the per-ancestor head SHA
-    // map this speculative run INTEGRATED AGAINST — `{ "<ancestorSpecId>": "<sha>" }`.
-    // It is the DIVERGENCE KEY: when an ancestor's branch advances past the SHA
-    // captured here (or its lifecycle/finding state changes), the change must
-    // PERCOLATE down the chain (rebuild integration → re-base → re-gate → resolver
-    // on a break). A SHA that still matches is a NO-OP (termination — no
-    // re-percolation when nothing actually changed). NULL ⇒ a non-speculative run
-    // (nothing to percolate against). Recorded by the walker at speculative start
-    // and overwritten with the new SHAs after each successful percolation.
+    // map this speculative run is BUILT ON (its current base) —
+    // `{ "<ancestorSpecId>": "<sha>" }`. Set at speculative start, and re-pointed
+    // (with `speculative_base`) when a percolation re-bases the dependent onto an
+    // ancestor's new head. NULL ⇒ a non-speculative run (nothing to percolate).
     integratedAncestorShas: jsonb("integrated_ancestor_shas"),
+    // P2c-2: the per-ancestor head SHA map this dependent's work has actually
+    // RE-GATED CLEAN against — gate+checker+auditor genuinely re-ran (a real run)
+    // and passed with no open P0/P1. This is the ABSORBED / TERMINATION key: the
+    // detect compares an ancestor's LIVE head against THIS (not the build-base), so
+    // a change is only "absorbed" once the dependent's own governance re-ran clean
+    // — never on a bare re-base. NULL until the first clean re-gate.
+    verifiedAncestorShas: jsonb("verified_ancestor_shas"),
+    // P2c-2: the IN-FLIGHT percolation marker (the loop-termination guard). When an
+    // immediate upstream change kicks off a re-execution, this records the exact
+    // `{ ancestorSpecId, toSha, reviewVerdict }` being absorbed so a sticky signal
+    // (e.g. a `changes_requested` at an unchanged SHA) does NOT re-trigger every
+    // walk: a pending marker means "already re-executing this signal — wait." It is
+    // cleared (and `verified_ancestor_shas` advanced) when the re-execution settles.
+    percolationPending: jsonb("percolation_pending"),
   },
   (table) => [
     enumCheck("runs_status_check", table.status, stateEnumLists.runs_status),

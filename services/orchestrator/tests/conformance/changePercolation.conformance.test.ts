@@ -1,22 +1,18 @@
-// Drives the PercolationOperation conformance suite against the PRODUCTION
-// `PercolatingOperation` (autonomy-engine.md §2c), composing in-memory fixtures of
-// its three seams (the SpeculativeIntegrator rebuild, the re-base/re-gate, the SHA
-// recorder). This proves the real operation class — not a parallel fake — honors
-// the §2c contract: absorb-on-clean (+ record the SHA), hold-on-rebuild-conflict,
-// replan-on-irreconcilable. The fixtures live HERE, never src/.
+// Drives the PercolationKickOff conformance suite against the PRODUCTION
+// `PercolatingKickOff` (autonomy-engine.md §2c), composing in-memory fixtures of its
+// two seams (the SpeculativeIntegrator rebuild + the re-executor). This proves the
+// real kick-off class — not a parallel fake — honors the §2c contract:
+// re-execute-on-clean-rebuild, hold-on-rebuild-conflict. The fixtures live HERE,
+// never src/.
 
 import type {
   BuildSpeculativeIntegrationInput,
   IntegrationOutcome,
   SpeculativeIntegrator,
 } from "../../src/engine/contracts/speculativeIntegrator.js";
-import type { SpeculativeDependent } from "../../src/engine/contracts/changePercolation.js";
-import { PercolatingOperation, type PercolationReGate } from "../../src/engine/dag/percolationOperation.js";
-import {
-  CONF_CONFLICT_DEPENDENT,
-  CONF_REPLAN_DEPENDENT,
-  describeChangePercolationConformance,
-} from "./changePercolationConformance.js";
+import type { PercolationDecision, SpeculativeDependent } from "../../src/engine/contracts/changePercolation.js";
+import { PercolatingKickOff, type PercolationReexecutor } from "../../src/engine/dag/percolationOperation.js";
+import { CONF_CONFLICT_DEPENDENT, describeChangePercolationConformance } from "./changePercolationConformance.js";
 
 // The integrator returns `conflict` for the well-known multi-ancestor dependent
 // (its rebuild surfaces an ancestor-vs-ancestor conflict), else `integrated`.
@@ -44,25 +40,22 @@ class ConformanceIntegrator implements SpeculativeIntegrator {
   }
 }
 
-// The re-gate is irreconcilable for the well-known replan dependent, else clean.
-class ConformanceReGate implements PercolationReGate {
-  async rebaseAndReGate(input: {
+// An in-memory re-executor: returns a deterministic re-execution run id.
+class ConformanceReexecutor implements PercolationReexecutor {
+  async reexecute(input: {
     dependent: SpeculativeDependent;
-  }): Promise<{ outcome: "absorbed" | "replanned"; viaResolver: boolean; reason?: string }> {
-    if (input.dependent.specId === CONF_REPLAN_DEPENDENT.specId) {
-      return { outcome: "replanned", viaResolver: true, reason: "irreconcilable" };
-    }
-    return { outcome: "absorbed", viaResolver: false };
+    decision: PercolationDecision;
+    integrationBranch: string;
+    ancestorHeadShas: Record<string, string>;
+  }): Promise<{ reexecRunId: string }> {
+    return { reexecRunId: `reexec_${input.dependent.specId}` };
   }
 }
 
-describeChangePercolationConformance("PercolatingOperation (in-memory seams)", {
+describeChangePercolationConformance("PercolatingKickOff (in-memory seams)", {
   make: () =>
-    new PercolatingOperation({
+    new PercolatingKickOff({
       integrator: new ConformanceIntegrator(),
-      reGate: new ConformanceReGate(),
-      recordIntegratedSha: async () => {
-        /* in-memory: recording is a no-op fixture; the production impl writes pg. */
-      },
+      reexecutor: new ConformanceReexecutor(),
     }),
 });

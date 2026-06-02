@@ -145,8 +145,36 @@ function defaultConflictResolver(
   // and the hook is invoked. So a run that merges cleanly never constructs it —
   // and `context.routing` (always present in production) is required only on the
   // conflict path, where a missing routing is a genuine misconfiguration to fail
-  // loudly on, not a silent no-op.
-  return (conflictContext) => buildResolver(input, deps)(conflictContext);
+  // loudly on, not a silent no-op. P2c-2: read the run's percolation marker here so
+  // a percolation re-execution's conflict is resolved in UPSTREAM-CHANGE mode.
+  return async (conflictContext) => {
+    const upstreamChange = await readPercolationUpstreamChange(input);
+    return buildResolver(input, deps, upstreamChange)(conflictContext);
+  };
+}
+
+/**
+ * Read the run's in-flight percolation marker (`percolation_pending`). When set,
+ * THIS run is a change-percolation re-execution absorbing an ancestor's change, so
+ * the resolver runs in upstream-change mode (the ancestor's change flows INTO this
+ * spec). Returns undefined for a normal (non-percolation) run.
+ */
+async function readPercolationUpstreamChange(
+  input: RunPlannerLoopInput,
+): Promise<{ ancestorSpecId: string; changeSummary: string } | undefined> {
+  const result = await input.pool.query<{ percolation_pending: unknown }>(
+    "SELECT percolation_pending FROM runs WHERE run_id = $1",
+    [input.context.runId],
+  );
+  const marker = result.rows[0]?.percolation_pending;
+  if (marker === null || typeof marker !== "object" || Array.isArray(marker)) return undefined;
+  const ancestorSpecId = (marker as Record<string, unknown>)["ancestorSpecId"];
+  const toSha = (marker as Record<string, unknown>)["toSha"];
+  if (typeof ancestorSpecId !== "string") return undefined;
+  return {
+    ancestorSpecId,
+    changeSummary: `the upstream change from ${ancestorSpecId}${typeof toSha === "string" ? ` (head ${toSha})` : ""}`,
+  };
 }
 
 function buildResolver(
@@ -160,6 +188,7 @@ function buildResolver(
     checker: SubtaskLoopAdapters["checker"];
     auditor: SubtaskLoopAdapters["auditor"];
   },
+  upstreamChange?: { ancestorSpecId: string; changeSummary: string },
 ): ConflictResolverHook {
   const context = input.context;
   const routing = context.routing;
@@ -191,6 +220,7 @@ function buildResolver(
     checker: deps.checker,
     auditor: deps.auditor,
     runGate: deps.runGate,
+    ...(upstreamChange !== undefined && { upstreamChange }),
   });
 }
 

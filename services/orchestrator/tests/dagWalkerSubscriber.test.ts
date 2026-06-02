@@ -94,7 +94,16 @@ class RecordingPercolation implements ChangePercolationCoordinator {
   async percolate(projectId: string): Promise<PercolationPassResult> {
     this.passes.push(projectId);
     if (this.fail) throw new Error("percolation pass blew up");
-    return { projectId, absorbed: [], deferred: [], replanned: [], held: [], unchanged: [] };
+    return {
+      projectId,
+      absorbed: [],
+      deferred: [],
+      replanned: [],
+      reexecuting: [],
+      inFlight: [],
+      held: [],
+      unchanged: [],
+    };
   }
 }
 
