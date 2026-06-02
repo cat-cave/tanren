@@ -100,7 +100,32 @@ export class ReviewMergePool {
     private readonly reviewPolicy: ReviewPolicy = "human",
   ) {}
 
+  /**
+   * P2c-1: the speculative-merge-hold lookups. By default a run is NOT speculative
+   * (speculative_base null) and has no deps, so the hold is a no-op and existing
+   * tests proceed to merge unchanged. A test can set `speculativeBase` +
+   * `specDependsOn` + `mergedAncestors` to drive the hold path.
+   */
+  speculativeBase: string | null = null;
+  specDependsOn: string[] = [];
+  mergedAncestors: string[] = [];
+
   async query(sql: string, params: unknown[]): Promise<{ rows: unknown[]; rowCount: number }> {
+    if (sql.startsWith("SELECT speculative_base, spec_id, project_id FROM runs")) {
+      const run = this.runs.find((r) => r.run_id === params[0]);
+      return run === undefined
+        ? { rows: [], rowCount: 0 }
+        : {
+            rows: [{ speculative_base: this.speculativeBase, spec_id: run.spec_id, project_id: run.project_id }],
+            rowCount: 1,
+          };
+    }
+    if (sql.startsWith("SELECT depends_on FROM specs")) {
+      return { rows: [{ depends_on: this.specDependsOn }], rowCount: 1 };
+    }
+    if (sql.includes("SELECT spec_id FROM specs") && sql.includes("status IN ('done', 'merged')")) {
+      return { rows: this.mergedAncestors.map((spec_id) => ({ spec_id })), rowCount: this.mergedAncestors.length };
+    }
     if (sql.includes("FROM runs r") && sql.includes("default_branch")) {
       const run = this.runs.find((r) => r.run_id === params[0]);
       return {

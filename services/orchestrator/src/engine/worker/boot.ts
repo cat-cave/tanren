@@ -121,7 +121,19 @@ export async function bootRunWorker(): Promise<BootedRunWorker> {
   // worker then executes) and the autonomous-intake loops (the webhook-fallback
   // poller + the now-on-a-loop audit scheduler, both auto-routing into the
   // DAG/inbox). The driver becomes autonomous; no operator triggers each spec.
-  const autonomy = await startAutonomyLoops({ pool, secrets, allocator, ssh, githubHttp, identitySecretRef });
+  const autonomy = await startAutonomyLoops({
+    pool,
+    secrets,
+    allocator,
+    ssh,
+    githubHttp,
+    identitySecretRef,
+    // P2c-1: the DagWalker's speculative integrator builds a dependent's
+    // dynamic-base integration branch through the SAME VcsProvider + App minter
+    // the run/merge lifecycle uses.
+    vcsProvider,
+    githubAppMinter,
+  });
   const stop = async (): Promise<void> => {
     await autonomy.stop();
     await Promise.all([worker.stop(), reaper.stop()]);

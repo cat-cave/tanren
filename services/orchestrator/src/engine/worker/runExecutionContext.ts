@@ -74,6 +74,9 @@ const RunSpecProjectRowSchema = z.object({
   branch: z.string(),
   repo_url: z.string(),
   default_branch: z.string(),
+  // P2c-1: the speculative integration branch this run's PR bases on (the dynamic
+  // base), or NULL for a normal run that bases on `default_branch`.
+  speculative_base: z.string().nullable(),
   runner_image: z.string(),
   config: z.unknown(),
   org_id: z.string().nullable(),
@@ -132,6 +135,7 @@ export async function loadRunExecutionContext(
        r.branch,
        p.repo_url,
        p.default_branch,
+       r.speculative_base,
        p.runner_image,
        p.config,
        p.org_id,
@@ -170,7 +174,11 @@ export async function loadRunExecutionContext(
     projectId: decoded.project_id,
     orgId: decoded.org_id,
     repoUrl: decoded.repo_url,
-    targetBranch: decoded.default_branch,
+    // P2c-1 (autonomy-engine.md §2c): DYNAMIC BASE. A speculative run's PR bases
+    // on its integration branch (the prospective merged world of its unmerged
+    // ancestors); a normal run bases on `default_branch`. The run's MERGE stage
+    // still re-gates against `default_branch` once ancestors genuinely merge.
+    targetBranch: decoded.speculative_base ?? decoded.default_branch,
     runBranch: decoded.branch,
     specTitle: decoded.title,
     specDescription: decoded.description,

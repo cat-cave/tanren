@@ -66,6 +66,7 @@ import {
   MergeFailedPayload,
   MergeQueuedPayload,
   MergeRebasedPayload,
+  MergeSpeculativeHeldPayload,
   NotificationEnqueuedPayload,
   NotificationFailedPayload,
   NotificationSentPayload,
@@ -98,7 +99,13 @@ import {
 } from "./schemas/recovery.js";
 import { RedactionRawAccessPayload } from "./schemas/redaction.js";
 import { BenchmarkAcceptFailedPayload, BenchmarkAcceptPassedPayload } from "./schemas/benchmark.js";
-import { DagBudgetPausedPayload, DagDrainedPayload, DagSpecEnqueuedPayload } from "./schemas/dag.js";
+import {
+  DagBudgetPausedPayload,
+  DagDrainedPayload,
+  DagSpecEnqueuedPayload,
+  DagSpecSpeculationHeldPayload,
+  DagSpecSpeculativePayload,
+} from "./schemas/dag.js";
 
 // The EventRegistry is the single source of truth mapping event names to
 // their typed Zod payload schemas. Adding a new event name requires:
@@ -227,6 +234,8 @@ export const EventRegistry = {
   "merge.conflict.replan_routed": MergeConflictReplanRoutedPayload,
   // P3-0023 external-push governance posture block (strict / audit_only)
   "merge.blocked": MergeBlockedPayload,
+  // P2c-1 (§2c): a speculative dependent's MERGE held until its ancestors merge.
+  "merge.speculative_held": MergeSpeculativeHeldPayload,
 
   // Notification dispatch (schemas declared; dispatcher lands in P2A-0017)
   "notification.enqueued": NotificationEnqueuedPayload,
@@ -263,6 +272,10 @@ export const EventRegistry = {
   "dag.spec.enqueued": DagSpecEnqueuedPayload,
   "dag.drained": DagDrainedPayload,
   "dag.budget.paused": DagBudgetPausedPayload,
+  // P2c-1 (§2c): speculative execution — a dependent started early on a
+  // speculative integration branch, or was held over the depth cap.
+  "dag.spec.speculative": DagSpecSpeculativePayload,
+  "dag.spec.speculation_held": DagSpecSpeculationHeldPayload,
 } as const satisfies Record<string, z.ZodTypeAny>;
 
 export type EventRegistry = typeof EventRegistry;

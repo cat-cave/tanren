@@ -251,6 +251,15 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["headBranch", "public"],
     ["reGatedCi", "public"],
   ]),
+  // P2c-1 (§2c): a speculative dependent's merge held for unmerged ancestors —
+  // PR identifiers + the integration ref + ancestor spec ids, all public.
+  ...rulesFor("merge.speculative_held", [
+    ["prUrl", "public"],
+    ["prNumber", "public"],
+    ["integration", "public"],
+    ["speculativeBase", "public"],
+    ["unmergedAncestors[]", "public"],
+  ]),
   // P2b intent-preserving conflict resolution — PR identifiers + spec ids +
   // refs + the DAG-edge signal + file paths + reasoning prose, all public.
   ...rulesFor("merge.conflict.resolving", [

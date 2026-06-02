@@ -229,3 +229,28 @@ describe("ProjectConfigV1 Zod default surface", () => {
     expect(ProjectConfigV1.parse({ version: 1 })).toEqual(defaultProjectConfigV1());
   });
 });
+
+describe("ProjectConfigV1 speculation knobs (P2c-1, §2c)", () => {
+  it("defaults speculationThreshold to moderate + depth to 2 (legacy rows parse cleanly)", () => {
+    const parsed = migrateProjectConfig({ version: 1 });
+    expect(parsed.speculationThreshold).toBe("moderate");
+    expect(parsed.speculativeIntegrationDepth).toBe(2);
+  });
+
+  it("round-trips an explicit threshold + depth", () => {
+    const parsed = migrateProjectConfig({
+      version: 1,
+      speculationThreshold: "aggressive",
+      speculativeIntegrationDepth: 4,
+    });
+    expect(parsed.speculationThreshold).toBe("aggressive");
+    expect(parsed.speculativeIntegrationDepth).toBe(4);
+  });
+
+  it("rejects an unknown threshold + a non-positive depth", () => {
+    expect(() => migrateProjectConfig({ version: 1, speculationThreshold: "yolo" })).toThrow(/invalid|expected|enum/iu);
+    expect(() => migrateProjectConfig({ version: 1, speculativeIntegrationDepth: 0 })).toThrow(
+      /greater|min|>=|positive/iu,
+    );
+  });
+});

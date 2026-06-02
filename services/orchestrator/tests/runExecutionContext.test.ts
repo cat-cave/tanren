@@ -36,6 +36,7 @@ function fullRow(overrides: Record<string, unknown> = {}): Record<string, unknow
     branch: "tanren/feature",
     repo_url: "https://github.com/acme/repo",
     default_branch: "main",
+    speculative_base: null,
     runner_image: "ghcr.io/acme/runner:1",
     config: { version: 1, credentials: { codexCredentialRef: "cred/codex", githubCredentialRef: "cred/gh" } },
     org_id: null,
@@ -80,6 +81,14 @@ describe("loadRunExecutionContext", () => {
     );
     expect(context.runBranch).toBe("tanren/x");
     expect(context.targetBranch).toBe("develop");
+  });
+
+  it("P2c-1: a speculative run's targetBranch is its integration branch (the DYNAMIC BASE), not default_branch", async () => {
+    const { context } = await loadRunExecutionContext(
+      rowPool(fullRow({ default_branch: "main", speculative_base: "tanren/integ/spec_1" })),
+      { runId: "run_1", identitySecretRef: "id" },
+    );
+    expect(context.targetBranch).toBe("tanren/integ/spec_1");
   });
 
   it("keeps only string acceptance criteria (drops non-strings)", async () => {

@@ -92,6 +92,40 @@ export async function mergeForRun(input: MergeForRunInput): Promise<MergeForRunR
     payload: { taskKind: "merge" },
   });
 
+  // P2c-1 (§2c): a SPECULATIVE dependent's MERGE waits until its ancestors are
+  // genuinely merged — its WORK proceeded against a speculative integration branch,
+  // but no unreviewed ancestor code may reach `main` early. If the run is
+  // speculative and any ancestor is still unmerged, HOLD the merge (emit
+  // merge.speculative_held, return a `blocked` outcome) rather than merging against
+  // the integration base. The DagWalker re-walks on the ancestor's merge.completed,
+  // which re-enters this stage once the ancestors land.
+  const hold = await speculativeMergeHold(input.pool, context.runId);
+  if (hold !== undefined) {
+    await eventStore.append({
+      runId: context.runId,
+      specId: context.specId,
+      projectId: context.projectId,
+      taskId,
+      eventType: "merge.speculative_held",
+      payload: {
+        prUrl: context.prUrl,
+        prNumber: pr.pullNumber,
+        integration,
+        speculativeBase: hold.speculativeBase,
+        unmergedAncestors: hold.unmergedAncestors,
+      },
+    });
+    return {
+      runId: context.runId,
+      taskId,
+      integration,
+      outcome: "blocked",
+      prUrl: context.prUrl,
+      prNumber: pr.pullNumber,
+      message: `merge held: ancestors not yet merged (${hold.unmergedAncestors.join(", ")})`,
+    };
+  }
+
   const probe = input.mergeProbe ?? (await buildGitHubProbe(input, context, pr.repo, pr.pullNumber));
   const dispatcher = new MergeDispatcher({
     input,
@@ -123,6 +157,50 @@ export async function mergeForRun(input: MergeForRunInput): Promise<MergeForRunR
     return dispatcher.enqueueMergify();
   }
   return dispatcher.directMerge();
+}
+
+/**
+ * P2c-1 (§2c): determine whether this run's MERGE must be HELD because it is a
+ * speculative dependent whose ancestors are not all merged yet. Returns the hold
+ * detail (the speculative base + the unmerged ancestor spec ids) when the merge
+ * must wait, or `undefined` when it may proceed (a normal run, or a speculative
+ * one whose ancestors have all since merged). A `done`/`merged` ancestor is
+ * satisfied; anything else is unmerged. This is the safety property that no
+ * unreviewed ancestor code reaches `main` early — the dependent's WORK ran on the
+ * integration branch, but its MERGE waits for the real ancestor merges.
+ */
+async function speculativeMergeHold(
+  pool: RunStateClient,
+  runId: string,
+): Promise<{ speculativeBase: string; unmergedAncestors: string[] } | undefined> {
+  const runResult = await pool.query<{ speculative_base: string | null; spec_id: string; project_id: string }>(
+    "SELECT speculative_base, spec_id, project_id FROM runs WHERE run_id = $1",
+    [runId],
+  );
+  const run = runResult.rows[0];
+  if (run === undefined || run.speculative_base === null) {
+    return undefined;
+  }
+  const specResult = await pool.query<{ depends_on: string[] | null }>(
+    "SELECT depends_on FROM specs WHERE spec_id = $1",
+    [run.spec_id],
+  );
+  const dependsOn = (specResult.rows[0]?.depends_on ?? []).filter((id): id is string => typeof id === "string");
+  if (dependsOn.length === 0) {
+    return undefined;
+  }
+  // The ancestors that are genuinely merged (status done/merged); the rest are
+  // unmerged and the merge must wait on them.
+  const mergedResult = await pool.query<{ spec_id: string }>(
+    "SELECT spec_id FROM specs WHERE project_id = $1 AND spec_id = ANY($2::text[]) AND status IN ('done', 'merged')",
+    [run.project_id, dependsOn],
+  );
+  const merged = new Set(mergedResult.rows.map((row) => row.spec_id));
+  const unmergedAncestors = dependsOn.filter((id) => !merged.has(id));
+  if (unmergedAncestors.length === 0) {
+    return undefined;
+  }
+  return { speculativeBase: run.speculative_base, unmergedAncestors };
 }
 
 /**

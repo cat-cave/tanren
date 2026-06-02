@@ -202,6 +202,24 @@ export const MergeConflictPayload = z
   })
   .strict();
 
+// P2c-1 (autonomy-engine.md §2c): a SPECULATIVE dependent's MERGE is HELD because
+// one or more of its ancestors are not yet genuinely merged. Its WORK proceeded
+// (it built against a speculative integration branch), but its MERGE must wait so
+// no unreviewed ancestor code reaches `main` early. The merge stage emits this
+// instead of merging; the run re-enters the merge stage once its ancestors merge
+// (the DagWalker re-walks on ancestor merge.completed). NOT a failure — a hold.
+export const MergeSpeculativeHeldPayload = z
+  .object({
+    prUrl: z.string(),
+    prNumber: z.number().int(),
+    integration: MergeIntegrationMode,
+    /** The integration branch the dependent's PR currently bases on. */
+    speculativeBase: z.string(),
+    /** The ancestor spec ids that are not yet merged (the merge is held on these). */
+    unmergedAncestors: z.array(z.string()).min(1),
+  })
+  .strict();
+
 // P2a up-to-date enforcement. Before merging, the stage checks the PR branch's
 // freshness: `merge.behind` records that the branch was out of date with its
 // base (so a rebase is being driven); `merge.rebased` records that the

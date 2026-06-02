@@ -23,6 +23,7 @@
 import { RUN_ACTIVITY_CHANNEL, type PgNotifyListener, runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
 import type { DagWalker } from "../contracts/dagWalker.js";
+import type { SpeculativeIntegrator } from "../contracts/speculativeIntegrator.js";
 import { isTerminalStatus } from "../benchmark/runnerDb.js";
 import { buildDagWalker, listWalkableProjectIds } from "./walker.js";
 
@@ -31,8 +32,15 @@ export interface DagWalkerSubscriberDeps {
   /** The shared LISTEN connection (the SAME one the SSE source / benchmark use). */
   notifyListener: PgNotifyListener;
   /**
-   * The walker to drive. Defaults to the production `buildDagWalker(pool)`. A
-   * test injects a recording walker to assert the event-driven trigger fires it.
+   * The speculative integrator (P2c-1) the production walker uses to build a
+   * dependent's dynamic-base integration branch. Required when `walker` is not
+   * injected (the production path); a test that injects `walker` omits it.
+   */
+  integrator?: SpeculativeIntegrator;
+  /**
+   * The walker to drive. Defaults to the production `buildDagWalker(pool,
+   * { integrator })`. A test injects a recording walker to assert the event-driven
+   * trigger fires it (then `integrator` is not needed).
    */
   walker?: DagWalker;
 }
@@ -75,7 +83,16 @@ export class DagWalkerSubscriber {
   private readonly reWalkPending = new Set<string>();
 
   constructor(private readonly deps: DagWalkerSubscriberDeps) {
-    this.walker = deps.walker ?? buildDagWalker(deps.pool);
+    this.walker = deps.walker ?? this.buildProductionWalker();
+  }
+
+  /** Build the production walker; requires the integrator (no walker injected). */
+  private buildProductionWalker(): DagWalker {
+    const integrator = this.deps.integrator;
+    if (integrator === undefined) {
+      throw new Error("DagWalkerSubscriber requires a SpeculativeIntegrator when no walker is injected");
+    }
+    return buildDagWalker(this.deps.pool, { integrator });
   }
 
   /**

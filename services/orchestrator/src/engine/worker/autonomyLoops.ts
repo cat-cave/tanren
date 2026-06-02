@@ -11,7 +11,10 @@ import { PgNotifyListener } from "@tanren/db";
 import type { Allocator } from "../contracts/allocator.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { SshSubstrate } from "../contracts/sshSubstrate.js";
+import type { VcsProvider } from "../contracts/vcsProvider.js";
 import type { GitHubHttpClient } from "../providers/github.js";
+import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
+import { PgSpeculativeIntegrator } from "../dag/speculativeIntegrator.js";
 import { startDagWalkerSubscriber } from "../dag/subscriber.js";
 import { startIntake } from "../forge/intake/bootIntake.js";
 import type { DagWalkerSubscriber } from "../dag/subscriber.js";
@@ -24,6 +27,10 @@ export interface AutonomyLoopsDeps {
   ssh: SshSubstrate;
   githubHttp: GitHubHttpClient;
   identitySecretRef: string;
+  /** P2c-1: the VcsProvider the speculative integrator drives to build integration branches. */
+  vcsProvider: VcsProvider;
+  /** P2c-1: the shared App-token minter the integrator reuses for the integration push. */
+  githubAppMinter?: GithubAppTokenMinter;
 }
 
 export interface AutonomyLoops {
@@ -41,7 +48,13 @@ export interface AutonomyLoops {
  */
 export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<AutonomyLoops> {
   const dagNotifyListener = new PgNotifyListener(deps.pool);
-  const dagWalker = await startDagWalkerSubscriber({ pool: deps.pool, notifyListener: dagNotifyListener });
+  const integrator = new PgSpeculativeIntegrator({
+    pool: deps.pool,
+    vcsProvider: deps.vcsProvider,
+    secrets: deps.secrets,
+    ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
+  });
+  const dagWalker = await startDagWalkerSubscriber({ pool: deps.pool, notifyListener: dagNotifyListener, integrator });
   console.log("[run-worker] DagWalker subscriber started (autonomous DAG execution, autonomy-engine §1a)");
   const intake = startIntake({
     pool: deps.pool,

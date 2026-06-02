@@ -12,7 +12,8 @@
 // are integration-tested against the live stack; this suite is the behavioral
 // contract every DagWalker impl must satisfy without a database.
 
-import { EventEmittingDagWalker, type DagEventEmitter } from "../../src/engine/dag/walker.js";
+import { EventEmittingDagWalker } from "../../src/engine/dag/walker.js";
+import type { DagEventEmitter } from "../../src/engine/dag/walkerPg.js";
 import type {
   DagEnqueuer,
   DagReadModel,
@@ -21,6 +22,12 @@ import type {
   DagSpecPhase,
   DagTickPlan,
 } from "../../src/engine/contracts/dagWalker.js";
+import type {
+  DagLifecycleReadModel,
+  DagLifecycleSnapshot,
+  SpecLifecycle,
+} from "../../src/engine/contracts/dagLifecycle.js";
+import type { SpeculativeIntegrator } from "../../src/engine/contracts/speculativeIntegrator.js";
 import {
   describeDagWalkerConformance,
   type DagWalkerConformanceHarness,
@@ -53,6 +60,25 @@ class MemoryDag {
   snapshot(projectId: string): DagSnapshot {
     return { projectId, nodes: [...this.nodes.values()].map((n) => ({ ...n })) };
   }
+
+  /**
+   * Derive a lifecycle projection from the DAG phase: a `done` spec projects
+   * `merged` (a satisfied dependency), everything else `pending`. The conformance
+   * suite drives the walker at the CONSERVATIVE threshold (deps must be merged),
+   * so this reproduces the Phase-1 "all deps done" readiness contract exactly.
+   */
+  lifecycle(projectId: string): DagLifecycleSnapshot {
+    const bySpecId = new Map<string, SpecLifecycle>();
+    for (const n of this.nodes.values()) {
+      const state = n.phase === "done" ? "merged" : "pending";
+      bySpecId.set(n.specId, {
+        specId: n.specId,
+        state,
+        openFindingMaxSeverity: state === "merged" ? "none" : "unaudited",
+      });
+    }
+    return { projectId, bySpecId };
+  }
 }
 
 class MemoryReadModel implements DagReadModel {
@@ -61,6 +87,18 @@ class MemoryReadModel implements DagReadModel {
     return this.dag.snapshot(projectId);
   }
 }
+
+/** The conservative-threshold lifecycle read model + a never-called integrator —
+ *  object literals (not classes) to keep this file under the per-file class cap. */
+function memoryLifecycleReadModel(dag: MemoryDag): DagLifecycleReadModel {
+  return { loadLifecycle: async (projectId: string): Promise<DagLifecycleSnapshot> => dag.lifecycle(projectId) };
+}
+
+const neverSpeculateIntegrator: SpeculativeIntegrator = {
+  buildIntegration: async (): Promise<never> => {
+    throw new Error("conformance suite runs conservative; the integrator must never be called");
+  },
+};
 
 class RecordingEnqueuer implements DagEnqueuer {
   private seq = 0;
@@ -104,6 +142,11 @@ class RecordingEventEmitter implements DagEventEmitter {
     });
   }
 
+  // The conservative-threshold suite never speculates, so these record nothing the
+  // Phase-1 contract asserts on — but they must exist to satisfy the seam.
+  async emitSpecSpeculative(): Promise<void> {}
+  async emitSpeculationHeld(): Promise<void> {}
+
   async emitDrained(input: { projectId: string; plan: DagTickPlan }): Promise<void> {
     this.records.push({
       type: "dag.drained",
@@ -130,8 +173,13 @@ function makeHarness(ceiling: number): DagWalkerConformanceHarness {
   let currentCeiling = ceiling;
   const walker = new EventEmittingDagWalker({
     readModel: new MemoryReadModel(dag),
+    lifecycleReadModel: memoryLifecycleReadModel(dag),
     enqueuer: new RecordingEnqueuer(dag, enqueues),
     events: new RecordingEventEmitter(events),
+    integrator: neverSpeculateIntegrator,
+    // The conformance suite pins the Phase-1 readiness contract (all deps merged/
+    // done) — that is exactly the CONSERVATIVE threshold; depth cap is irrelevant.
+    speculationConfig: async () => ({ threshold: "conservative", depthCap: 2 }),
     concurrency: () => currentCeiling,
   });
   return {

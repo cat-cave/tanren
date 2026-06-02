@@ -389,6 +389,21 @@ export const sensitivityRules: SensitivityRule[] = [
     ["inFlightCount", "public"],
     ["concurrencyCeiling", "public"],
   ]),
+  // P2c-1 (§2c) speculative-execution events — spec/run ids, ancestor ids, the
+  // threshold label, the integration branch ref, and non-sensitive counts.
+  ...rulesFor("dag.spec.speculative", [
+    ["specId", "public"],
+    ["runId", "public"],
+    ["unmergedAncestors[]", "public"],
+    ["threshold", "public"],
+    ["integrationBranch", "public"],
+  ]),
+  ...rulesFor("dag.spec.speculation_held", [
+    ["specId", "public"],
+    ["unmergedAncestors[]", "public"],
+    ["depth", "public"],
+    ["depthCap", "public"],
+  ]),
 
   // Infrastructure + integration rules (runner/allocator/workspace/credential,
   // cost + usage telemetry, github/ci/phase1/reviews/notifications/hello/
