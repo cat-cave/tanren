@@ -26,6 +26,17 @@ import {
 } from "../contracts/mergeCoordinator.js";
 import type { DriveMergeForQueuedRun } from "./coordinator.js";
 
+/**
+ * The merge-claim LEASE: how long a `merging` claim is considered fresh before it
+ * is treated as STALE (a coordinator died mid-merge). `recoverStaleClaims` only
+ * reclaims a `merging` row whose `claimed_at` is OLDER than this — so a fresh,
+ * legitimately in-flight claim SURVIVES a concurrent coordinate pass (a second
+ * coordinator must NOT reset + double-drive an active merge). A merge drive
+ * (up-to-date check + rebase + CI re-poll + GitHub merge) is well under this; the
+ * lease only fires when the driving process genuinely crashed.
+ */
+export const MERGE_CLAIM_LEASE_MS = 15 * 60 * 1000;
+
 /** Resolve a project's org (the system-scoped bootstrap before any tenant work). */
 async function resolveProjectOrg(pool: pg.Pool, projectId: string): Promise<string | null> {
   return runWithSystemScope(pool, async (client) => {
@@ -168,12 +179,20 @@ export class PgMergeQueueModel implements MergeQueueModel {
     const orgId = await resolveProjectOrg(this.pool, projectId);
     if (orgId === null) return 0;
     return runWithOrgScope(this.pool, orgId, async (client) => {
-      // A coordinator died mid-merge: return its `merging` rows to `queued` so the
-      // queue is recoverable. The GitHub merge is idempotent (a re-driven
-      // already-merged PR is a no-op), so re-queuing is safe.
+      // A coordinator died mid-merge: return its STALE `merging` rows to `queued` so
+      // the queue is recoverable. ONLY a claim older than the lease is reclaimed — a
+      // fresh, legitimately in-flight `merging` claim SURVIVES (a concurrent
+      // coordinate pass must not reset + double-drive an active merge). A
+      // never-claimed row (claimed_at NULL) is also reclaimed (an inconsistent
+      // state). The GitHub merge is idempotent, so re-queuing a genuinely-dead
+      // claim is safe.
       const result = await client.query(
-        "UPDATE merge_queue SET status = 'queued', claimed_at = NULL WHERE project_id = $1 AND status = 'merging'",
-        [projectId],
+        `UPDATE merge_queue
+            SET status = 'queued', claimed_at = NULL
+          WHERE project_id = $1
+            AND status = 'merging'
+            AND (claimed_at IS NULL OR claimed_at < now() - ($2::bigint * interval '1 millisecond'))`,
+        [projectId, MERGE_CLAIM_LEASE_MS],
       );
       return result.rowCount ?? 0;
     });

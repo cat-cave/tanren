@@ -26,13 +26,24 @@ interface QueueRow {
   priority: SpecPriority;
   orderKey: number;
   status: "queued" | "merging" | "merged" | "dequeued";
+  /** When the entry was claimed (status → merging) — the lease anchor (ms epoch). */
+  claimedAt?: number;
 }
+
+/**
+ * The merge-claim lease the fake models (mirrors `MERGE_CLAIM_LEASE_MS`): a
+ * `merging` claim newer than this survives `recoverStaleClaims`; an older one is
+ * reclaimed. Kept local so the fake's recovery semantics match the pg impl's.
+ */
+const FAKE_CLAIM_LEASE_MS = 15 * 60 * 1000;
 
 /** An in-memory native-queue model — the same observable contract as the pg impl. */
 export class InMemoryMergeQueueModel implements MergeQueueModel {
   private readonly rows = new Map<string, QueueRow>();
   private readonly mergedSpecs = new Set<string>();
   private order = 0;
+  /** Injectable clock so a test can advance time past the lease deterministically. */
+  now: () => number = () => Date.now();
 
   /** Test helper: seed a queued entry directly (an already-enqueued ready run). */
   seed(input: { runId: string; specId: string; dependsOn: string[]; priority: SpecPriority }): void {
@@ -118,6 +129,7 @@ export class InMemoryMergeQueueModel implements MergeQueueModel {
     const row = this.rows.get(queueId);
     if (row === undefined || row.status !== "queued") return false;
     row.status = "merging";
+    row.claimedAt = this.now();
     return true;
   }
 
@@ -140,9 +152,13 @@ export class InMemoryMergeQueueModel implements MergeQueueModel {
   // eslint-disable-next-line @typescript-eslint/require-await
   async recoverStaleClaims(_projectId: string): Promise<number> {
     let recovered = 0;
+    const cutoff = this.now() - FAKE_CLAIM_LEASE_MS;
     for (const row of this.rows.values()) {
-      if (row.status === "merging") {
+      // Only reclaim STALE claims: a fresh `merging` claim (claimed within the
+      // lease) survives so a concurrent coordinate pass never double-drives it.
+      if (row.status === "merging" && (row.claimedAt === undefined || row.claimedAt < cutoff)) {
         row.status = "queued";
+        row.claimedAt = undefined;
         recovered += 1;
       }
     }

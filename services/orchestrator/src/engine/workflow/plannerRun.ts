@@ -463,9 +463,9 @@ export async function runPlannerLoopWorkflow(input: RunPlannerLoopInput): Promis
       ...nativeQueueSeam(input),
     });
 
-    // Finalize the run for the merge stage's outcome (conflict → recoverable
-    // halt; failed → failed; merged/queued/handed_off → done + spec status).
-    await finalizeMergeOutcome(input, finalizeRunState, context, merge.outcome);
+    // Finalize the run + spec for the merge stage's outcome (see
+    // finalizeMergeOutcome; a native_queue enqueue leaves the spec NON-done).
+    await finalizeMergeOutcome(input, finalizeRunState, context, merge);
     return { runId: context.runId, workspacePath, outcome, pullRequest, ci, review, merge };
   } catch (error) {
     // Finalize the run for the thrown error (recoverable halt for a known

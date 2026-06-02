@@ -111,6 +111,28 @@ export function describeMergeCoordinatorConformance(label: string, suite: MergeC
       expect(h.drives).toEqual([{ runId: "run_a" }, { runId: "run_b" }]);
     });
 
+    it("a dependent is NOT eligible while its ancestor is merely QUEUED — only once the ancestor's drive MERGES it", async () => {
+      // The cardinal-sin regression lock (P2d): a queued-but-UNMERGED ancestor must
+      // NOT satisfy a dependent. This drives the WHOLE loop with NO manual setMerged
+      // — the dependent becomes eligible ONLY because the coordinator's own drive
+      // merged the ancestor (which is the single point an ancestor reaches merged).
+      const h = suite.make();
+      h.seed({ runId: "run_dep", specId: "spec_dep", dependsOn: ["spec_anc"], priority: "P0" });
+      h.seed({ runId: "run_anc", specId: "spec_anc", dependsOn: [], priority: "P2" });
+
+      // Pass 1: the ancestor (lower priority) is driven; the dependent (P0) is held
+      // because its ancestor is queued, NOT merged.
+      await h.coordinator.coordinate(h.projectId);
+      expect(h.drives).toEqual([{ runId: "run_anc" }]);
+      expect(h.statusOf("run_dep")).toBe("queued");
+      expect(h.statusOf("run_anc")).toBe("merged");
+
+      // Pass 2: the ancestor's merge (from pass 1's drive) is what makes the
+      // dependent eligible — now it merges, in order, second.
+      await h.coordinator.coordinate(h.projectId);
+      expect(h.drives).toEqual([{ runId: "run_anc" }, { runId: "run_dep" }]);
+    });
+
     it("NEVER merges a dependent before its ancestor, even if the dependent sorts first", async () => {
       const h = suite.make();
       // The dependent has higher priority (P0) but depends on a lower-priority (P2)

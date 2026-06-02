@@ -154,6 +154,12 @@ function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQueuedRu
     });
     switch (merge.outcome) {
       case "merged":
+        // P2d: the run-loop's first pass left the spec NON-`done` (Tanren owns the
+        // merge); the DRIVE pass is what actually merged, so it sets the spec
+        // `merged` HERE (the merge dispatcher only finalizes the task). This is the
+        // single point the ancestor's status reaches `merged` — which is exactly
+        // what unblocks its dependents in `mergedSpecIds` + the P2c-1 hold.
+        await markSpecMerged(deps.pool, facts);
         return { kind: "merged", ...(merge.mergeSha !== undefined && { mergeSha: merge.mergeSha }) };
       case "conflict":
         return { kind: "conflict", message: merge.message ?? "merge conflict" };
@@ -163,6 +169,21 @@ function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQueuedRu
         return { kind: "failed", message: merge.message ?? `merge ${merge.outcome}` };
     }
   };
+}
+
+/**
+ * Set the merged spec's status to `merged` under RLS (the drive-pass spec
+ * finalize). Mirrors what `finalizeMergeOutcome` does in the run loop for a
+ * `direct_merge`, but for the coordinator-driven `native_queue` merge — the only
+ * place a native_queue spec reaches `merged`. The transition guard keeps it
+ * idempotent (a spec already `merged`/`done` is left alone).
+ */
+async function markSpecMerged(pool: pg.Pool, facts: RunFacts): Promise<void> {
+  await runWithOrgScope(pool, facts.orgId, async (client) => {
+    await client.query(`UPDATE specs SET status = 'merged' WHERE spec_id = $1 AND status NOT IN ('merged', 'done')`, [
+      facts.specId,
+    ]);
+  });
 }
 
 /**
