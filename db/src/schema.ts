@@ -106,10 +106,13 @@ export const costRecords = pgTable(
     userId: text("user_id"),
   },
   (table) => [
-    check("cost_records_billing_mode_check", sql`${table.billingMode} IN ('per_token','subscription','self_hosted')`),
+    check(
+      "cost_records_billing_mode_check",
+      sql`${table.billingMode} IN ('per_token','subscription','self_hosted','unattributed')`,
+    ),
     check(
       "cost_records_cost_basis_check",
-      sql`${table.costBasis} IN ('ccusage','provider_pricing','credits','unknown')`,
+      sql`${table.costBasis} IN ('ccusage','provider_pricing','credits','unknown','unattributed')`,
     ),
     index("cost_records_org_id").on(table.orgId),
     index("cost_records_org_run").on(table.orgId, table.runId),

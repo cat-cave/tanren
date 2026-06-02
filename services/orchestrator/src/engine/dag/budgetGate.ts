@@ -27,24 +27,40 @@ import type { ProjectBudget } from "../config/shared.js";
 import type { BudgetGate, ProjectBudgetState } from "../contracts/dagWalker.js";
 
 /**
+ * The result of resolving a project's effective budget. We DISTINGUISH the three
+ * honestly-different states (BUDGET-SAFETY M5) so the gate can fail loud on the
+ * dangerous one rather than collapse them all into "unlimited":
+ *   - `{ budget }`        — a parseable budget (project-over-org). undefined budget
+ *                           ⇒ genuinely ABSENT ⇒ legitimately unlimited.
+ *   - `{ unparseable }`   — a PRESENT-but-undecodable config blob. NOT unlimited:
+ *                           the gate fails CLOSED rather than fail OPEN to unbounded
+ *                           spend on a config it cannot read.
+ */
+export type EffectiveBudgetResolution = { kind: "ok"; budget: ProjectBudget | undefined } | { kind: "unparseable" };
+
+/**
  * Resolve the EFFECTIVE budget for a project: the project's own `budget` wins; else
  * the org's `defaultBudget`; else undefined (no ceiling). A whole-object override
  * (the project either sets a complete budget or inherits the org's complete one) —
- * matching the `ProjectBudget` shape, which carries a required `ceilingUsd`. An
- * unparseable config blob is treated as "no budget" (unlimited) rather than throwing
- * — the gate must never block the walker on a config read it cannot decode.
+ * matching the `ProjectBudget` shape, which carries a required `ceilingUsd`.
+ *
+ * BUDGET-SAFETY (M5): a PRESENT-but-unparseable config blob is NOT silently treated
+ * as "no budget" (which fails OPEN to unlimited). It returns `{ kind: 'unparseable' }`
+ * so the gate fails CLOSED. A genuinely ABSENT budget (a parseable config that simply
+ * sets none) is still legitimately unlimited.
  */
-export function resolveEffectiveBudget(projectConfigRaw: unknown, orgConfigRaw: unknown): ProjectBudget | undefined {
-  const projectBudget = safeBudget(() => migrateProjectConfig(projectConfigRaw).budget);
-  if (projectBudget !== undefined) return projectBudget;
-  return safeBudget(() => migrateOrgConfig(orgConfigRaw).defaultBudget);
-}
-
-function safeBudget(read: () => ProjectBudget | undefined): ProjectBudget | undefined {
+export function resolveEffectiveBudget(projectConfigRaw: unknown, orgConfigRaw: unknown): EffectiveBudgetResolution {
+  let projectBudget: ProjectBudget | undefined;
   try {
-    return read();
+    projectBudget = migrateProjectConfig(projectConfigRaw).budget;
   } catch {
-    return undefined;
+    return { kind: "unparseable" };
+  }
+  if (projectBudget !== undefined) return { kind: "ok", budget: projectBudget };
+  try {
+    return { kind: "ok", budget: migrateOrgConfig(orgConfigRaw).defaultBudget };
+  } catch {
+    return { kind: "unparseable" };
   }
 }
 
@@ -73,31 +89,60 @@ export class PgBudgetGate implements BudgetGate {
       return result.rows[0]?.config;
     });
 
-    const budget = resolveEffectiveBudget(owner.projectConfig, orgConfig);
+    const resolution = resolveEffectiveBudget(owner.projectConfig, orgConfig);
+    if (resolution.kind === "unparseable") {
+      // BUDGET-SAFETY (M5): a PRESENT-but-unparseable budget config must NOT fail
+      // OPEN to unlimited. Fail CLOSED — the walker pauses and narrates the reason.
+      return {
+        ceilingUsd: undefined,
+        period: DEFAULT_BUDGET_PERIOD,
+        spentUsd: 0,
+        failClosed: "unparseable_config",
+      };
+    }
+    const budget = resolution.budget;
     if (budget === undefined) {
-      // Unlimited: skip the (otherwise unnecessary) spend sum entirely.
+      // Genuinely ABSENT budget ⇒ unlimited: skip the (otherwise unnecessary) sum.
       return { ceilingUsd: undefined, period: DEFAULT_BUDGET_PERIOD, spentUsd: 0 };
     }
 
-    const spentUsd = await this.sumSpend(owner.orgId, projectId, budget.period);
+    const { spentUsd, unpricedCount } = await this.sumSpend(owner.orgId, projectId, budget.period);
+    // BUDGET-SAFETY (C1b): with a configured ceiling, an UNATTRIBUTED NULL-cost row
+    // (an unrecognized credential ref that should have priced) in the window means
+    // the true spend is UNKNOWN — it may already exceed the ceiling. Do not assume
+    // $0; fail CLOSED. (Honestly-unpriceable subscription/self-hosted NULLs do NOT
+    // trigger this — only cost_basis='unattributed' rows do.)
+    if (unpricedCount > 0) {
+      return { ceilingUsd: budget.ceilingUsd, period: budget.period, spentUsd, failClosed: "unpriced_spend" };
+    }
     return { ceilingUsd: budget.ceilingUsd, period: budget.period, spentUsd };
   }
 
   /**
-   * Sum the project's `cost_records.cost_usd` over the period, ORG-SCOPED (RLS).
-   * `cost_usd` is nullable (cost-unknown is an honest state) — COALESCE skips NULLs;
-   * a `monthly` window filters to the current calendar month, `total` sums all rows.
+   * Sum the project's `cost_records.cost_usd` over the period, ORG-SCOPED (RLS), and
+   * COUNT the unattributed NULL-cost rows in the same window. `cost_usd` is nullable
+   * (cost-unknown is an honest state) — COALESCE skips NULLs for the dollar sum; a
+   * `monthly` window filters to the current calendar month, `total` sums all rows.
+   * `unpricedCount` is the BUDGET-SAFETY (C1b) signal: rows that SHOULD have priced
+   * (cost_basis='unattributed') but did not — an honestly-unpriceable subscription/
+   * self-hosted NULL is NOT counted.
    */
-  private async sumSpend(orgId: string, projectId: string, period: BudgetPeriod): Promise<number> {
+  private async sumSpend(
+    orgId: string,
+    projectId: string,
+    period: BudgetPeriod,
+  ): Promise<{ spentUsd: number; unpricedCount: number }> {
     const windowClause = period === "monthly" ? " AND recorded_at >= date_trunc('month', now())" : "";
     return runWithOrgScope(this.pool, orgId, async (client) => {
-      const result = await client.query<{ total: string | null }>(
-        `SELECT COALESCE(SUM(cost_usd::numeric), 0)::text AS total
+      const result = await client.query<{ total: string | null; unpriced: string | null }>(
+        `SELECT COALESCE(SUM(cost_usd::numeric), 0)::text AS total,
+                COUNT(*) FILTER (WHERE cost_usd IS NULL AND cost_basis = 'unattributed')::text AS unpriced
            FROM cost_records
           WHERE project_id = $1${windowClause}`,
         [projectId],
       );
-      return Number(result.rows[0]?.total ?? "0");
+      const row = result.rows[0];
+      return { spentUsd: Number(row?.total ?? "0"), unpricedCount: Number(row?.unpriced ?? "0") };
     });
   }
 }

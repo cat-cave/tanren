@@ -72,14 +72,16 @@ describe("classifyAuthRef — exact prefix routing", () => {
     expect(classifyAuthRef("credential/self-hosted/").provider).toBe("self-hosted");
   });
 
-  it("classifies the empty ref as unknown/unknown (distinct from the catch-all)", () => {
-    expect(classifyAuthRef("")).toEqual({ billingMode: "unknown", provider: "unknown" });
+  it("classifies the empty ref as 'absent'/unknown (the no-credential path, distinct from the catch-all)", () => {
+    expect(classifyAuthRef("")).toEqual({ billingMode: "absent", provider: "unknown" });
   });
 
-  it("classifies an unrecognized prefix as unknown/unknown", () => {
+  it("BUDGET-SAFETY C1: classifies an unrecognized non-empty prefix as 'unrecognized' with a secret-free refKind", () => {
     expect(classifyAuthRef("vault/secret/legacy")).toEqual({
-      billingMode: "unknown",
+      billingMode: "unrecognized",
       provider: "unknown",
+      // The ref-KIND segments only (the trailing identifier stripped) — no secret.
+      refKind: "vault/secret",
     });
   });
 });
@@ -109,12 +111,14 @@ describe("providerRate — pinned v0 price table", () => {
 });
 
 describe("resolveCostSource — basis precedence + ccusage guard", () => {
-  it("treats an unknown billing mode as self_hosted for the recorded billingMode", () => {
-    // billingMode: classification "unknown" -> "self_hosted"; costBasis stays
-    // "unknown". Pins the `=== "unknown" ? "self_hosted"` remap.
+  it("BUDGET-SAFETY C1: records an unrecognized ref as 'unattributed' (NOT silently self_hosted/$0)", () => {
+    // The old behavior remapped the unrecognized billing mode to self_hosted with
+    // costBasis 'unknown' — a silent $0 row. It must now be flagged 'unattributed'
+    // so the recorder narrates it and the budget gate fails closed.
     const source = resolveCostSource({ cli: "codex", authRef: "vault/x", rawUsage: {} });
-    expect(source.billingMode).toBe("self_hosted");
-    expect(source.costBasis).toBe("unknown");
+    expect(source.billingMode).toBe("unattributed");
+    expect(source.costBasis).toBe("unattributed");
+    expect(source.unattributedRefKind).toBe("vault");
     expect(source.rate).toBeNull();
   });
 

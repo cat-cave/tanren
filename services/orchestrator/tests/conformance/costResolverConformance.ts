@@ -33,14 +33,16 @@ import { describe, expect, it } from "vitest";
 import type { CostResolution, CostResolutionInput, CostResolver } from "../../src/engine/contracts/costResolver.js";
 
 // The billing modes the contract permits. Mirrors BillingMode in costs/sources
-// and the cost_records.billing_mode CHECK constraint.
-const BILLING_MODES = ["per_token", "subscription", "self_hosted"] as const;
+// and the cost_records.billing_mode CHECK constraint. `unattributed`
+// (BUDGET-SAFETY C1) is an UNRECOGNIZED credential ref — a misconfig recorded
+// NULL-dollar but flagged so the budget gate fails closed.
+const BILLING_MODES = ["per_token", "subscription", "self_hosted", "unattributed"] as const;
 
 // The cost bases the DB CHECK constraint pins cost_records.cost_basis to
-// (migration 0016). An impl that emits anything outside this set produces a
-// row the CHECK rejects — the hard-failure rule. The contract's published
-// CostBasis union is narrower (no "credits"); see the test wiring for that gap.
-const ALLOWED_COST_BASES = ["ccusage", "provider_pricing", "credits", "unknown"] as const;
+// (migration 0016, widened in 0056 for `unattributed`). An impl that emits
+// anything outside this set produces a row the CHECK rejects — the hard-failure
+// rule. Mirrors the widened cost_records.cost_basis CHECK exactly.
+const ALLOWED_COST_BASES = ["ccusage", "provider_pricing", "credits", "unknown", "unattributed"] as const;
 type AllowedCostBasis = (typeof ALLOWED_COST_BASES)[number];
 
 export interface Scenario {

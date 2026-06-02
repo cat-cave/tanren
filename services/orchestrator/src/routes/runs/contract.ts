@@ -94,8 +94,8 @@ export const RunCostRecord = z
     reasoningOutputTokens: z.number().int().nonnegative(),
     totalTokens: z.number().int().nonnegative(),
     costUsd: z.string().min(1).nullable(),
-    billingMode: z.enum(["per_token", "subscription", "self_hosted"]),
-    costBasis: z.enum(["ccusage", "provider_pricing", "unknown"]),
+    billingMode: z.enum(["per_token", "subscription", "self_hosted", "unattributed"]),
+    costBasis: z.enum(["ccusage", "provider_pricing", "credits", "unknown", "unattributed"]),
     recordedAt: z.coerce.date(),
   })
   .strict();

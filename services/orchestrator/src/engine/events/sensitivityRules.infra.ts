@@ -1,4 +1,5 @@
 import type { SensitivityRule } from "./sensitivity.js";
+import { costSensitivityRules } from "./sensitivityRules.cost.js";
 import { integrationProvisioningSensitivityRules } from "./sensitivityRules.integrations.js";
 
 // Infrastructure-and-integration sensitivity rules, split out of
@@ -85,29 +86,8 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["numUses", "public"],
   ]),
 
-  // cost
-  ...rulesFor("cost.resolved", [
-    ["taskId", "public"],
-    ["cli", "public"],
-    ["provider", "public"],
-    ["model", "public"],
-    ["costUsd", "public"],
-    ["billingMode", "public"],
-    ["costBasis", "public"],
-  ]),
-  ...rulesFor("cost.failed", [
-    ["taskId", "public"],
-    ["message", "public"],
-  ]),
-  ...rulesFor("cost.unattributable", [
-    ["taskId", "public"],
-    ["cli", "public"],
-    ["authRef", "redacted"],
-    ["reason", "public"],
-    ["inputTokens", "public"],
-    ["outputTokens", "public"],
-    ["cachedInputTokens", "public"],
-  ]),
+  // cost / cost-safety — extracted to ./sensitivityRules.cost.ts (500-line cap).
+  ...costSensitivityRules,
 
   // usage monitoring (P2A-cost-monitors) — percent-of-window + token counts are non-sensitive operational telemetry; all public.
   ...rulesFor("usage.window.observed", [

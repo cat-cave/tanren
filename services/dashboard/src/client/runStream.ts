@@ -27,7 +27,7 @@ interface BillingAgg {
 }
 
 interface CostRecordFrame {
-  billingMode: "per_token" | "subscription" | "self_hosted";
+  billingMode: "per_token" | "subscription" | "self_hosted" | "unattributed";
   model: string;
   inputTokens: number;
   outputTokens: number;
@@ -57,11 +57,14 @@ const COST_SOURCE_VAR: Record<CostRecordFrame["billingMode"], string> = {
   per_token: "var(--cost-token)",
   subscription: "var(--cost-window)",
   self_hosted: "var(--cost-opportunity)",
+  // BUDGET-SAFETY C1: an unrecognized credential ref (a misconfig) — distinct color.
+  unattributed: "var(--cost-unattributed, var(--status-fail))",
 };
 const COST_SOURCE_LABEL: Record<CostRecordFrame["billingMode"], string> = {
   per_token: "per-token",
   subscription: "window",
   self_hosted: "self-hosted",
+  unattributed: "unattributed",
 };
 
 function formatTokens(count: number): string {

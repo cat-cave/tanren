@@ -85,6 +85,12 @@ const SEVERITY_OVERRIDES: Partial<Record<EventName, Severity>> = {
   "cost.resolved": "info",
   "cost.failed": "warn",
   "cost.unattributable": "fail",
+  // An unrecognized credential ref priced a real call as $0 — a budget-defeating
+  // misconfig the operator must fix; surfaced as fail.
+  "cost.unattributed": "fail",
+  // A configured dollar ceiling can never fire against this credential — the run
+  // fails closed; a setup-time misconfig the operator must fix; fail.
+  "cost.ceiling_unreachable": "fail",
 
   // GitHub integration
   "github.branch.pushed": "info",

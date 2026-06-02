@@ -90,18 +90,21 @@ export interface PaletteGroup {
  * How a credential is billed — the operator-facing "pricing model" axis from
  * PROJECT_BRIEF §4. `per_token` (token-billed API), `subscription`
  * (server-enforced window), `self_hosted` (flat-fee / local GPU, opportunity
- * cost). Mirrors `RunCostRecord.billingMode`.
+ * cost), `unattributed` (BUDGET-SAFETY C1: an UNRECOGNIZED credential ref —
+ * cost could not be priced, flagged so the budget gate fails closed, never a
+ * silent $0). Mirrors `RunCostRecord.billingMode`.
  */
-export type BillingMode = "per_token" | "subscription" | "self_hosted";
+export type BillingMode = "per_token" | "subscription" | "self_hosted" | "unattributed";
 
 /**
  * How a dollar figure (if any) was derived. `ccusage` (real billed/computed
  * cost from the CLI's own session logs), `provider_pricing` (computed from a
- * known per-token price table), `unknown` (no reliable basis — `costUsd` is
- * null; an HONEST, allowed state, never a fabricated placeholder). Mirrors the
- * frozen `RunCostRecord.costBasis` enum shipped in P2A-0011.
+ * known per-token price table), `credits` (prepaid-credit drawdown), `unknown`
+ * (no reliable basis — `costUsd` is null; an HONEST, allowed state, never a
+ * fabricated placeholder), `unattributed` (BUDGET-SAFETY C1: an unrecognized
+ * credential ref — NULL-dollar but flagged). Mirrors `RunCostRecord.costBasis`.
  */
-export type CostBasis = "ccusage" | "provider_pricing" | "unknown";
+export type CostBasis = "ccusage" | "provider_pricing" | "credits" | "unknown" | "unattributed";
 
 /**
  * A single cost record (`GET .../runs/:runId/costs` items). Token accounting is

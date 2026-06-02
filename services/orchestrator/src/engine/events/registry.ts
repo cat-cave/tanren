@@ -26,9 +26,11 @@ import {
   AllocatorAllocatedPayload,
   AllocatorFailedPayload,
   AllocatorRequestedPayload,
+  CostCeilingUnreachablePayload,
   CostFailedPayload,
   CostResolvedPayload,
   CostUnattributablePayload,
+  CostUnattributedPayload,
   CredentialFailedPayload,
   CredentialLoadedPayload,
   CredentialRequestedPayload,
@@ -206,6 +208,8 @@ export const EventRegistry = {
   "cost.resolved": CostResolvedPayload,
   "cost.failed": CostFailedPayload,
   "cost.unattributable": CostUnattributablePayload,
+  "cost.unattributed": CostUnattributedPayload,
+  "cost.ceiling_unreachable": CostCeilingUnreachablePayload,
 
   // Usage monitoring (P2A-cost-monitors): codexbar live subscription windows
   // + ccusage token-consumption accounting, captured runner-side over SSH.

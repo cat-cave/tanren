@@ -67,7 +67,7 @@ function scorecard(runId: string, reachedAcceptGreen: boolean | null): TrialScor
     auditedConcerns: 0,
     tokens: { input: 0, cachedInput: 0, cacheCreation: 0, output: 0, reasoning: 0, total: 0 },
     costUsd: null,
-    costBasisMix: { ccusage: 0, provider_pricing: 0, credits: 0, unknown: 0 },
+    costBasisMix: { ccusage: 0, provider_pricing: 0, credits: 0, unknown: 0, unattributed: 0 },
   };
 }
 

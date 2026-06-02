@@ -110,6 +110,13 @@ export const DagBudgetPausedPayload = z
     period: z.enum(["monthly", "total"]),
     // How many ready specs the walker held back because the ceiling was reached.
     readyHeldBack: z.number().int().nonnegative(),
+    // BUDGET-SAFETY (C1b / M5): present when the pause is a FAIL-CLOSED safety
+    // pause rather than a genuine ceiling-reached pause. `unpriced_spend` — the
+    // window has unattributed NULL-cost rows (an unrecognized credential ref that
+    // should have priced) so the true spend is unknown and assumed over-ceiling;
+    // `unparseable_config` — a present-but-undecodable budget config. Absent on
+    // the ordinary ceiling-reached pause.
+    reason: z.enum(["unpriced_spend", "unparseable_config"]).optional(),
   })
   .strict();
 export type DagBudgetPausedPayload = z.infer<typeof DagBudgetPausedPayload>;

@@ -24,15 +24,19 @@ export const TrialTokens = z
   .strict();
 export type TrialTokens = z.infer<typeof TrialTokens>;
 
-// Count of cost_records per `cost_basis` (§2.2): the 4 attribution sources. A
-// mix skewed to `unknown` means costUsd is low-confidence — the aggregate reads
-// this to decide whether to trust the dollar figure.
+// Count of cost_records per `cost_basis` (§2.2): the attribution sources. A mix
+// skewed to `unknown` means costUsd is low-confidence — the aggregate reads this
+// to decide whether to trust the dollar figure. `unattributed` (BUDGET-SAFETY C1)
+// is a DISTINCT bucket: an unrecognized credential ref (a misconfig) that should
+// have priced but could not — NOT folded into honest `unknown`, so a budget-
+// defeating misconfig is visible in the scorecard.
 export const CostBasisMix = z
   .object({
     ccusage: z.number().int().nonnegative(),
     provider_pricing: z.number().int().nonnegative(),
     credits: z.number().int().nonnegative(),
     unknown: z.number().int().nonnegative(),
+    unattributed: z.number().int().nonnegative(),
   })
   .strict();
 export type CostBasisMix = z.infer<typeof CostBasisMix>;
@@ -196,11 +200,18 @@ export function projectTrialScorecard(inputs: TrialProjectionInputs): TrialScore
   const priced = costs.filter((c) => c.costUsd !== null);
   const costUsd = priced.length === 0 ? null : priced.reduce((sum, c) => sum + (c.costUsd ?? 0), 0);
 
-  const costBasisMix: CostBasisMix = { ccusage: 0, provider_pricing: 0, credits: 0, unknown: 0 };
+  const costBasisMix: CostBasisMix = {
+    ccusage: 0,
+    provider_pricing: 0,
+    credits: 0,
+    unknown: 0,
+    unattributed: 0,
+  };
   for (const c of costs) {
     if (c.costBasis === "ccusage") costBasisMix.ccusage += 1;
     else if (c.costBasis === "provider_pricing") costBasisMix.provider_pricing += 1;
     else if (c.costBasis === "credits") costBasisMix.credits += 1;
+    else if (c.costBasis === "unattributed") costBasisMix.unattributed += 1;
     else costBasisMix.unknown += 1;
   }
 

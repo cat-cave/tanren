@@ -375,9 +375,8 @@ export const sensitivityRules: SensitivityRule[] = [
     ["steps[].outputTail", "secret"],
   ]),
 
-  // DagWalker (autonomy-engine.md §1a) scheduling events. Every field is a spec/
-  // run identifier or a non-sensitive count (in-flight / ceiling / breakdown),
-  // so all are public — nothing here carries diff content, credentials, or output.
+  // DagWalker (autonomy-engine.md §1a) scheduling events. Every field is a spec/run
+  // id or a non-sensitive count (in-flight / ceiling / breakdown) — all public.
   ...rulesFor("dag.spec.enqueued", [
     ["specId", "public"],
     ["runId", "public"],
@@ -395,6 +394,7 @@ export const sensitivityRules: SensitivityRule[] = [
     ["spentUsd", "public"],
     ["period", "public"],
     ["readyHeldBack", "public"],
+    ["reason", "public"],
   ]),
   ...rulesFor("dag.concurrency.saturated", [
     ["readyHeldBack", "public"],

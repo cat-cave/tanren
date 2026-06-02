@@ -5,6 +5,7 @@
  * project's routing table (per-role provider DATA, not a code-level hardcode),
  * wire the lazily-resolved CI gate, and the codexbar + ccusage usage probe.
  */
+import type pg from "pg";
 import type { CiWhen } from "../ci/index.js";
 import type { SshTarget } from "../contracts/allocator.js";
 import type { EventName, EventPayload } from "../events/index.js";
@@ -13,9 +14,11 @@ import type { ReviewAnswer } from "../answerers/schemas/index.js";
 import { buildAdaptersFromRouting, buildSimulatedReviewerAdapter } from "../providers/adapterSelector.js";
 import type { AnswererAdapter } from "../providers/types.js";
 import { SshCcusageAccountant, SshCodexbarUsageMonitor, SshUsageProbe, type UsageProbe } from "../usage/index.js";
+import { PgBudgetGate } from "../dag/budgetGate.js";
+import { runBudgetCeilingPreflight } from "./budgetPreflight.js";
 import { type GateOutcome, resolveGateConfig, runGateForWhen } from "./gate/index.js";
 import type { PlannerRunAdapterContext, RunPlannerLoopInput } from "./plannerRun.js";
-import type { SubtaskLoopAdapters } from "./subtaskLoop.js";
+import type { AppendEvent, SubtaskLoopAdapters } from "./subtaskLoop.js";
 import { buildDefaultConflictResolver } from "./reviewMerge/conflictResolver/index.js";
 import type { ConflictResolverHook } from "./reviewMerge/index.js";
 
@@ -284,4 +287,34 @@ export function defaultUsageProbe(input: RunPlannerLoopInput, ctx: PlannerRunAda
     timeoutMs: input.timeoutMs,
     pressureThresholdPercent: input.pressureThresholdPercent,
   });
+}
+
+/**
+ * Build the run's adapters + usage probe through the injectable factories (the
+ * production defaults above, or test-injected ones), then run the BUDGET-SAFETY
+ * (M6) ceiling-reachability preflight: a configured dollar ceiling against a
+ * subscription/self-hosted credential with no usage probe is structurally
+ * unreachable, so the run fails closed at setup (a loud `cost.ceiling_unreachable`
+ * event + a thrown error). Consolidated here so plannerRun threads it in one call
+ * (keeping that file under the 500-line cap). The budget gate is the injectable
+ * `input.budgetGate` seam, defaulting to the pg-backed PgBudgetGate over `input.pool`
+ * (a real `pg.Pool` at runtime — deps.pool / orgScopingPool; the narrow type is for
+ * test ergonomics, and tests over a query-only pool inject a budget-gate seam).
+ */
+export async function resolveRunAdaptersWithBudgetPreflight(
+  input: RunPlannerLoopInput,
+  ctx: PlannerRunAdapterContext,
+  appendEvent: AppendEvent,
+): Promise<{ adapters: SubtaskLoopAdapters; usageProbe: UsageProbe | undefined }> {
+  const adapters = (input.buildAdapters ?? ((c) => defaultRoutingAdapters(input, c)))(ctx);
+  const usageProbe = (input.buildUsageProbe ?? ((c) => defaultUsageProbe(input, c)))(ctx);
+  const budgetGate = input.budgetGate ?? new PgBudgetGate(input.pool as pg.Pool);
+  await runBudgetCeilingPreflight(
+    budgetGate,
+    input.context.projectId,
+    adapters.writer.authRef,
+    usageProbe !== undefined,
+    appendEvent,
+  );
+  return { adapters, usageProbe };
 }

@@ -13,7 +13,7 @@
 import type { RunCostRecord, RunDetail, RunEventRow, TaskTimelineEntry } from "../../api/types.js";
 
 /** A cost-source semantic color key (matches the design tokens). */
-export type CostSource = "per_token" | "subscription" | "self_hosted";
+export type CostSource = "per_token" | "subscription" | "self_hosted" | "unattributed";
 
 /** The token var for a billing mode's cost-source color. */
 export function costSourceVar(mode: RunCostRecord["billingMode"]): string {
@@ -24,6 +24,10 @@ export function costSourceVar(mode: RunCostRecord["billingMode"]): string {
       return "var(--cost-window)";
     case "self_hosted":
       return "var(--cost-opportunity)";
+    // BUDGET-SAFETY C1: an unrecognized credential ref (a misconfig) — surfaced
+    // distinctly so the operator notices it, reusing the failure token.
+    case "unattributed":
+      return "var(--cost-unattributed, var(--status-fail))";
   }
 }
 
@@ -36,6 +40,8 @@ export function costSourceLabel(mode: RunCostRecord["billingMode"]): string {
       return "window";
     case "self_hosted":
       return "self-hosted";
+    case "unattributed":
+      return "unattributed";
   }
 }
 

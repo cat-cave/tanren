@@ -23,11 +23,11 @@ export interface ProjectFeedItem {
 
 /** Generated from `tanren.http.RunCostRecord` (contracts/json/http/RunCostRecord.json). */
 export interface RunCostRecord {
-  billingMode: "per_token" | "subscription" | "self_hosted";
+  billingMode: "per_token" | "subscription" | "self_hosted" | "unattributed";
   cacheCreationTokens: number;
   cachedInputTokens: number;
   cli: string;
-  costBasis: "ccusage" | "provider_pricing" | "unknown";
+  costBasis: "ccusage" | "provider_pricing" | "credits" | "unknown" | "unattributed";
   costUsd: string | null;
   id: number | string;
   inputTokens: number;
@@ -45,11 +45,11 @@ export interface RunCostRecord {
 /** Generated from `tanren.http.RunDetail` (contracts/json/http/RunDetail.json). */
 export interface RunDetail {
   costs: Array<{
-    billingMode: "per_token" | "subscription" | "self_hosted";
+    billingMode: "per_token" | "subscription" | "self_hosted" | "unattributed";
     cacheCreationTokens: number;
     cachedInputTokens: number;
     cli: string;
-    costBasis: "ccusage" | "provider_pricing" | "unknown";
+    costBasis: "ccusage" | "provider_pricing" | "credits" | "unknown" | "unattributed";
     costUsd: string | null;
     id: number | string;
     inputTokens: number;
@@ -225,11 +225,11 @@ export interface RunSummary {
 /** Generated from `tanren.http.SseCostsFrame` (contracts/json/http/SseCostsFrame.json). */
 export interface SseCostsFrame {
   costs: Array<{
-    billingMode: "per_token" | "subscription" | "self_hosted";
+    billingMode: "per_token" | "subscription" | "self_hosted" | "unattributed";
     cacheCreationTokens: number;
     cachedInputTokens: number;
     cli: string;
-    costBasis: "ccusage" | "provider_pricing" | "unknown";
+    costBasis: "ccusage" | "provider_pricing" | "credits" | "unknown" | "unattributed";
     costUsd: string | null;
     id: number | string;
     inputTokens: number;

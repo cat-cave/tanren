@@ -162,6 +162,42 @@ export const CostUnattributablePayload = z
   })
   .strict();
 
+// cost.unattributed (BUDGET-SAFETY C1): a real priced call ran against an
+// UNRECOGNIZED credential ref (no known `credential/<kind>/` prefix), so its
+// cost could not be priced and the row was recorded as cost_usd=NULL with
+// billing_mode/cost_basis='unattributed'. This is a MISCONFIGURATION — an
+// unrecognized LLM credential that must NOT silently count as $0 spend. The
+// event names the ref KIND only (`refKind`, e.g. `credential/mystery`), NEVER
+// the secret value, and the budget gate FAILS CLOSED on the NULL row it created.
+export const CostUnattributedPayload = z
+  .object({
+    taskId: z.string(),
+    cli: z.string(),
+    // The SAFE ref-kind label (leading path segments, secret name stripped).
+    refKind: z.string(),
+    // Why it could not be attributed (a fixed, secret-free diagnosis string).
+    reason: z.string(),
+  })
+  .strict();
+
+// cost.ceiling_unreachable (BUDGET-SAFETY M6): a run was set up with a configured
+// DOLLAR ceiling but a subscription/self-hosted credential (no per-call dollar
+// basis) and NO usage probe wired to reconcile real cost — so the ceiling can
+// never fire (the run accrues $0). Surfaced LOUDLY at run setup; the run then
+// fails closed. Names the ref KIND only (`refKind`), never the secret value.
+export const CostCeilingUnreachablePayload = z
+  .object({
+    // The SAFE ref-kind label (leading path segments, secret name stripped).
+    refKind: z.string(),
+    // The credential's billing mode (subscription / self_hosted) that has no basis.
+    billingMode: z.string(),
+    // The configured dollar ceiling that can never be reached, in USD.
+    ceilingUsd: z.number().nonnegative(),
+    // A fixed, secret-free diagnosis string.
+    reason: z.string(),
+  })
+  .strict();
+
 // Usage monitoring (P2A-cost-monitors): codexbar (live subscription windows)
 // and ccusage (token-consumption accounting), captured in the runner over SSH.
 

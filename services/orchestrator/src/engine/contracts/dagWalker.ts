@@ -325,22 +325,53 @@ export interface DagEnqueuer {
 // ---- Budget gate (autonomy-engine.md §3 proof 6) --------------------------
 
 /**
+ * Why the budget gate FAILS CLOSED rather than the ordinary ceiling-reached path
+ * (BUDGET-SAFETY C1b / M5). The walker pauses on any of these exactly as it pauses
+ * on a reached ceiling — an unpriced/unparseable budget can never be allowed to
+ * silently keep enqueuing real spend:
+ *   - `unpriced_spend` — the window has cost_records rows with NULL cost_usd that
+ *     are NOT honestly-unpriceable (cost_basis='unattributed': an unrecognized
+ *     credential ref that SHOULD have priced). Their dollars are unknown, so the
+ *     true spend may already exceed the ceiling; assume the ceiling is reached.
+ *   - `unparseable_config` — a PRESENT-but-undecodable project/org budget config
+ *     blob. We will not fail OPEN to unlimited on a config we cannot read.
+ */
+export type BudgetFailClosedReason = "unpriced_spend" | "unparseable_config";
+
+/**
  * A project's resolved budget state at walk time: the configured ceiling (project
  * budget over org default, or absent = unlimited) and the cumulative spend summed
  * over the configured period from `cost_records`. The walker consults this BEFORE
  * enqueuing; when `ceilingUsd` is set and `spentUsd >= ceilingUsd`, the tick
  * pauses on budget (enqueues nothing, emits dag.budget.paused). `ceilingUsd:
  * undefined` ⇒ NO budget configured ⇒ unlimited (byte-identical to today).
+ *
+ * `failClosed` (BUDGET-SAFETY C1b / M5): when set, the gate PAUSES regardless of
+ * the measured `spentUsd` — an unpriced or unparseable budget cannot be assumed to
+ * be under the ceiling. It is only ever set on a project that HAS a budget concern
+ * (a configured ceiling, or a present-but-broken config); an absent budget stays
+ * legitimately unlimited.
  */
 export interface ProjectBudgetState {
   ceilingUsd: number | undefined;
   period: BudgetPeriod;
   spentUsd: number;
+  failClosed?: BudgetFailClosedReason;
 }
 
 /** True iff a configured ceiling has been reached (the genuine budget gate). */
 export function isBudgetExhausted(state: ProjectBudgetState): boolean {
   return state.ceilingUsd !== undefined && state.spentUsd >= state.ceilingUsd;
+}
+
+/**
+ * The full budget-pause decision the walker consults (BUDGET-SAFETY C1b / M5):
+ * pause when the configured ceiling has been reached (the genuine gate) OR when the
+ * gate must fail CLOSED (unpriced spend / unparseable config). Either way NO new
+ * spec runs are enqueued this tick.
+ */
+export function shouldPauseOnBudget(state: ProjectBudgetState): boolean {
+  return state.failClosed !== undefined || isBudgetExhausted(state);
 }
 
 /**
