@@ -11,7 +11,13 @@ import { storeGithubToken } from "../src/engine/credentials/githubToken.js";
 import { FakeEventStore } from "./helpers/fakeEventStore.js";
 import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "../src/engine/providers/github.js";
 import type { AnswererAdapter, CcusageAccounting, UsageProbe, WindowObservation } from "../src/engine/usage/index.js";
-import type { PlannerRunContext } from "../src/engine/workflow/plannerRun.js";
+import { runWithSystemJobScope } from "@tanren/db";
+import {
+  runPlannerLoopWorkflow,
+  type PlannerRunContext,
+  type PlannerRunResult,
+  type RunPlannerLoopInput,
+} from "../src/engine/workflow/plannerRun.js";
 import {
   buildPlan,
   makeAuditor,
@@ -20,6 +26,21 @@ import {
   makeWriter,
   passingAudit,
 } from "./helpers/plannerLoopHelpers.js";
+
+/**
+ * Run the planner-loop workflow under the EXPLICIT per-job SYSTEM scope, mirroring
+ * production: the run worker (`runExecutor`) wraps the workflow in
+ * `runWithJobOrgId` / `runWithSystemJobScope` and hands it the `orgScopingPool`, so
+ * the workflow's tenant ops (`insertPlannerTask`, cost recorder, the M6 budget
+ * preflight) always run under a scope. These DB-free tests drive the workflow
+ * directly over a fake pool, so they establish the same null-org system-job scope
+ * here — otherwise the tenant write resolves with no ambient scope and the hardened
+ * seam correctly throws `MissingOrgScopeError` (the test pool became pool-shaped
+ * once it grew a `connect()` for the budget preflight).
+ */
+export function runPlannerLoopScoped(input: RunPlannerLoopInput): Promise<PlannerRunResult> {
+  return runWithSystemJobScope(() => runPlannerLoopWorkflow(input));
+}
 
 export {
   buildPlan,

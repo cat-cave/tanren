@@ -12,7 +12,6 @@ import { vcsProviderOver } from "./helpers/vcsProvider.js";
 import type { AuditAnswer, CheckAnswer, PlanAnswer } from "../src/engine/answerers/schemas/index.js";
 import type { AnswererAdapter } from "../src/engine/providers/types.js";
 import type { GitHubHttpResponse } from "../src/engine/providers/github.js";
-import { runPlannerLoopWorkflow } from "../src/engine/workflow/plannerRun.js";
 import { noopConflictResolver } from "./fixtures/noopConflictResolver.js";
 import {
   accounting,
@@ -35,6 +34,7 @@ import {
   passingAudit,
   passingCheck,
   pendingReview,
+  runPlannerLoopScoped,
   ScriptedGitHubHttp,
   setup,
   twoSubtaskAdapters,
@@ -95,7 +95,7 @@ describe("runPlannerLoopWorkflow — review-rework re-entry", () => {
       auditor: makeAuditor([passingAudit, passingAudit]) as AnswererAdapter<AuditAnswer>,
     };
 
-    const result = await runPlannerLoopWorkflow(
+    const result = await runPlannerLoopScoped(
       baseInput({
         pool: pool.asPgPool(),
         eventStore: events,
@@ -108,7 +108,7 @@ describe("runPlannerLoopWorkflow — review-rework re-entry", () => {
         reviewProbe: changesThenApproveReview(),
         mergeProbe: noopMerge(),
         maxReviewReworks: 1,
-      }) as Parameters<typeof runPlannerLoopWorkflow>[0],
+      }) as Parameters<typeof runPlannerLoopScoped>[0],
     );
 
     // Approved on the second pass → handed-off (not_configured default) → done/ok.
@@ -131,7 +131,7 @@ describe("runPlannerLoopWorkflow — review-rework re-entry", () => {
     // budget immediately and halts without re-entering the loop.
     const github = new ScriptedGitHubHttp([...ghRound()]);
 
-    const result = await runPlannerLoopWorkflow(
+    const result = await runPlannerLoopScoped(
       baseInput({
         pool: pool.asPgPool(),
         eventStore: events,
@@ -144,7 +144,7 @@ describe("runPlannerLoopWorkflow — review-rework re-entry", () => {
         reviewProbe: alwaysChangesReview(),
         mergeProbe: noopMerge(),
         maxReviewReworks: 0,
-      }) as Parameters<typeof runPlannerLoopWorkflow>[0],
+      }) as Parameters<typeof runPlannerLoopScoped>[0],
     );
 
     expect(result.outcome.kind).toBe("passed");
@@ -158,7 +158,7 @@ describe("runPlannerLoopWorkflow — review-rework re-entry", () => {
     const { ctx, pool, events, secrets, allocator, ssh } = await setup();
     const github = new ScriptedGitHubHttp([...ghRound()]);
 
-    const result = await runPlannerLoopWorkflow(
+    const result = await runPlannerLoopScoped(
       baseInput({
         pool: pool.asPgPool(),
         eventStore: events,
@@ -171,7 +171,7 @@ describe("runPlannerLoopWorkflow — review-rework re-entry", () => {
         reviewProbe: pendingReview(),
         mergeProbe: noopMerge(),
         maxReviewReworks: 1,
-      }) as Parameters<typeof runPlannerLoopWorkflow>[0],
+      }) as Parameters<typeof runPlannerLoopScoped>[0],
     );
 
     expect(result.review?.verdict).toBe("pending");
@@ -185,7 +185,7 @@ describe("runPlannerLoopWorkflow — merge-outcome mapping (direct_merge)", () =
     const { ctx, pool, events, secrets, allocator, ssh } = await setup(directMergeConfig());
     const github = new ScriptedGitHubHttp([...ghRound()]);
 
-    const result = await runPlannerLoopWorkflow(
+    const result = await runPlannerLoopScoped(
       baseInput({
         pool: pool.asPgPool(),
         eventStore: events,
@@ -197,7 +197,7 @@ describe("runPlannerLoopWorkflow — merge-outcome mapping (direct_merge)", () =
         buildAdapters: () => twoSubtaskAdapters([passingCheck, passingCheck]),
         reviewProbe: approvingReview(),
         mergeProbe: mergedMerge(),
-      }) as Parameters<typeof runPlannerLoopWorkflow>[0],
+      }) as Parameters<typeof runPlannerLoopScoped>[0],
     );
 
     expect(result.merge?.outcome).toBe("merged");
@@ -210,7 +210,7 @@ describe("runPlannerLoopWorkflow — merge-outcome mapping (direct_merge)", () =
     const { ctx, pool, events, secrets, allocator, ssh } = await setup(directMergeConfig());
     const github = new ScriptedGitHubHttp([...ghRound()]);
 
-    const result = await runPlannerLoopWorkflow(
+    const result = await runPlannerLoopScoped(
       baseInput({
         pool: pool.asPgPool(),
         eventStore: events,
@@ -226,7 +226,7 @@ describe("runPlannerLoopWorkflow — merge-outcome mapping (direct_merge)", () =
         // resolver's own behavior (covered by conflictResolver.test.ts): inject
         // the test-fixture no-op resolver so the conflict stays unresolved.
         resolveConflict: noopConflictResolver,
-      }) as Parameters<typeof runPlannerLoopWorkflow>[0],
+      }) as Parameters<typeof runPlannerLoopScoped>[0],
     );
 
     expect(result.merge?.outcome).toBe("conflict");
@@ -239,7 +239,7 @@ describe("runPlannerLoopWorkflow — merge-outcome mapping (direct_merge)", () =
     const { ctx, pool, events, secrets, allocator, ssh } = await setup(directMergeConfig());
     const github = new ScriptedGitHubHttp([...ghRound()]);
 
-    const result = await runPlannerLoopWorkflow(
+    const result = await runPlannerLoopScoped(
       baseInput({
         pool: pool.asPgPool(),
         eventStore: events,
@@ -251,7 +251,7 @@ describe("runPlannerLoopWorkflow — merge-outcome mapping (direct_merge)", () =
         buildAdapters: () => twoSubtaskAdapters([passingCheck, passingCheck]),
         reviewProbe: approvingReview(),
         mergeProbe: failedMerge(),
-      }) as Parameters<typeof runPlannerLoopWorkflow>[0],
+      }) as Parameters<typeof runPlannerLoopScoped>[0],
     );
 
     expect(result.merge?.outcome).toBe("failed");
@@ -276,7 +276,7 @@ describe("runPlannerLoopWorkflow — non-pass loop outcome mapping", () => {
       auditor: makeAuditor([loopAudit, loopAudit, loopAudit]) as AnswererAdapter<AuditAnswer>,
     };
 
-    const result = await runPlannerLoopWorkflow(
+    const result = await runPlannerLoopScoped(
       baseInput({
         pool: pool.asPgPool(),
         eventStore: events,
@@ -287,7 +287,7 @@ describe("runPlannerLoopWorkflow — non-pass loop outcome mapping", () => {
         context: ctx,
         escapeHatches: { maxPlannerRerunsPerSpec: 2, maxWriterIterPerSubtask: 5, maxRetriesPerTransientFailure: 3 },
         buildAdapters: () => adapters,
-      }) as Parameters<typeof runPlannerLoopWorkflow>[0],
+      }) as Parameters<typeof runPlannerLoopScoped>[0],
     );
 
     expect(result.outcome.kind).toBe("retry_budget_exhausted");
@@ -309,7 +309,7 @@ describe("runPlannerLoopWorkflow — non-pass loop outcome mapping", () => {
       ]) as AnswererAdapter<AuditAnswer>,
     };
 
-    const result = await runPlannerLoopWorkflow(
+    const result = await runPlannerLoopScoped(
       baseInput({
         pool: pool.asPgPool(),
         eventStore: events,
@@ -319,7 +319,7 @@ describe("runPlannerLoopWorkflow — non-pass loop outcome mapping", () => {
         vcsProvider: vcsProviderOver(new ScriptedGitHubHttp([])),
         context: ctx,
         buildAdapters: () => adapters,
-      }) as Parameters<typeof runPlannerLoopWorkflow>[0],
+      }) as Parameters<typeof runPlannerLoopScoped>[0],
     );
 
     expect(result.outcome.kind).toBe("halted");

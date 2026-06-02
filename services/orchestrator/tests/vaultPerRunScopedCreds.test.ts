@@ -15,7 +15,6 @@ import { describe, expect, it } from "vitest";
 import { vcsProviderOver } from "./helpers/vcsProvider.js";
 import { VaultRunTokenMinter, buildScopedCredentialAccess } from "../src/engine/contracts/vaultTokenMinterImpl.js";
 import { VaultSecretStore } from "../src/engine/contracts/secretStore.js";
-import { runPlannerLoopWorkflow } from "../src/engine/workflow/plannerRun.js";
 import {
   applyScopedRunCredentials,
   buildRunCredentialScoping,
@@ -32,6 +31,7 @@ import {
   noopMerge,
   passingCheck,
   passingGitHub,
+  runPlannerLoopScoped,
   setup,
   twoSubtaskAdapters,
 } from "./plannerRun.fixtures.js";
@@ -200,7 +200,7 @@ describe("runPlannerLoopWorkflow — per-run credential de-privilege wiring", ()
     broad.seed(GH_REF, "ghp_BROAD_should_not_be_read");
     const broadSecrets = new VaultSecretStore({ addr: "http://vault:8200", token: "BROAD", fetchImpl: broad.fetch });
 
-    const result = await runPlannerLoopWorkflow({
+    const result = await runPlannerLoopScoped({
       pool: pool.asPgPool(),
       eventStore: events,
       allocator,
