@@ -28,6 +28,12 @@ export interface DispatcherDeps {
   integration: DispatchedIntegration;
   pr: { repo: RepoRef; pullNumber: number };
   probe: MergeProbe;
+  /**
+   * P2c-1 (§2c cleanup): the ephemeral integration ref to delete AFTER a
+   * speculative dependent merges onto `default_branch`. Present only for a
+   * speculative run whose hold cleared; absent for a normal run.
+   */
+  speculativeCleanup?: string;
 }
 
 export class MergeDispatcher {
@@ -124,6 +130,10 @@ export class MergeDispatcher {
         eventType: "merge.completed",
         payload: { ...this.prFields(), integration: "direct_merge", mergeSha: merge.mergeSha },
       });
+      // P2c-1 (§2c cleanup): the dependent merged onto `default_branch`; delete its
+      // ephemeral integration ref. Best-effort — a cleanup failure never undoes the
+      // merge (the merge already landed), so it is logged and swallowed.
+      await this.cleanupIntegrationBranch();
       await this.finalize("merged", { taskOutcome: "ok", taskStatus: "done" });
       return this.result("merged", { mergeSha: merge.mergeSha });
     }
@@ -141,6 +151,33 @@ export class MergeDispatcher {
       failureKind: "merge_failed",
     });
     return this.result("failed", { message: merge.message });
+  }
+
+  /**
+   * P2c-1 (§2c cleanup): delete the ephemeral integration ref after a speculative
+   * dependent merged onto `default_branch`. No-op for a normal run (no cleanup
+   * ref). Best-effort: a delete failure is logged + swallowed — the merge already
+   * landed, so cleanup must never turn a successful merge into a failure. Emits
+   * `merge.integration_cleaned` on success for the audit trail.
+   */
+  private async cleanupIntegrationBranch(): Promise<void> {
+    const { speculativeCleanup, probe, eventStore, integration } = this.deps;
+    if (speculativeCleanup === undefined) {
+      return;
+    }
+    try {
+      await probe.deleteIntegrationBranch(speculativeCleanup);
+      await eventStore.append({
+        ...this.base(),
+        eventType: "merge.integration_cleaned",
+        payload: { ...this.prFields(), integration, integrationBranch: speculativeCleanup },
+      });
+    } catch (error) {
+      console.warn(
+        `[merge] integration-ref cleanup of ${speculativeCleanup} failed (merge already landed, ignoring):`,
+        error,
+      );
+    }
   }
 
   /**

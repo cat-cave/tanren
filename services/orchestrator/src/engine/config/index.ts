@@ -2,6 +2,8 @@
 export {
   AllocatorConfig,
   AllocatorKind,
+  DEFAULT_SPECULATION_THRESHOLD,
+  DEFAULT_SPECULATIVE_INTEGRATION_DEPTH,
   EscapeHatches,
   ForgePersona,
   GovernancePosture,
@@ -16,6 +18,7 @@ export {
   RoutingChain,
   RoutingChainEntry,
   RoutingTable,
+  SpeculationThreshold,
   UnknownConfigVersionError,
   emptyRoutingTable,
   resolveWorkerConcurrency,

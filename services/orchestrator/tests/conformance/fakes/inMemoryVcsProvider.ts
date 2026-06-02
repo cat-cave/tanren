@@ -6,6 +6,7 @@
 // conflicted PR (CONFORMANCE_CONFLICT_PR_NUMBER).
 import {
   CONFORMANCE_ABSENT_FILE,
+  CONFORMANCE_ANCESTOR_CONFLICT,
   CONFORMANCE_BASE_BRANCH,
   CONFORMANCE_BEHIND_PR_NUMBER,
   CONFORMANCE_CONFLICT_PR_NUMBER,
@@ -22,6 +23,8 @@ import type {
 import type { GitHubPullRequestChecks } from "../../../src/engine/providers/github.js";
 import type { PullRequestContributors } from "../../../src/engine/workflow/reviewMerge/governancePosture.js";
 import type {
+  BuildIntegrationBranchInput,
+  BuildIntegrationBranchResult,
   OpenDraftPullRequestInput,
   OpenedPullRequest,
   PullRequestMergeability,
@@ -119,5 +122,38 @@ export class InMemoryVcsProvider implements VcsProvider {
       return { outcome: "conflict", message: "merge conflict" };
     }
     return { outcome: "up_to_date", message: "already up to date" };
+  }
+  async buildIntegrationBranch(input: BuildIntegrationBranchInput): Promise<BuildIntegrationBranchResult> {
+    // Merge ancestors in order until one matches the well-known conflict ancestor
+    // — that one collides with whatever was integrated before it.
+    const merged: string[] = [];
+    for (const ancestor of input.ancestors) {
+      if (ancestor.specId === CONFORMANCE_ANCESTOR_CONFLICT.specId) {
+        const otherSpecId = merged.at(-1) ?? input.baseBranch;
+        return {
+          outcome: "conflict",
+          integrationBranch: input.integrationBranch,
+          mergedAncestors: merged,
+          conflictBetween: { specId: ancestor.specId, otherSpecId },
+          message: `ancestor ${ancestor.specId} conflicts with ${otherSpecId}`,
+        };
+      }
+      merged.push(ancestor.specId);
+    }
+    return {
+      outcome: "integrated",
+      integrationBranch: input.integrationBranch,
+      mergedAncestors: merged,
+      message: `integrated ${merged.length} ancestor(s)`,
+    };
+  }
+  /** Recorded retargets/deletes so the conformance suite can assert them. */
+  readonly retargets: Array<{ prNumber: number; newBase: string }> = [];
+  readonly deletedBranches: string[] = [];
+  async retargetPullRequestBase(pr: PullRequestRef, newBase: string, _token: ResolvedVcsToken): Promise<void> {
+    this.retargets.push({ prNumber: pr.number, newBase });
+  }
+  async deleteBranch(_repo: RepoRef, branch: string, _token: ResolvedVcsToken): Promise<void> {
+    this.deletedBranches.push(branch);
   }
 }

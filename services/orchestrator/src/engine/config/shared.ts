@@ -178,6 +178,39 @@ export type MergeIntegration = z.infer<typeof MergeIntegration>;
 export const ReviewPolicy = z.enum(["human", "auto", "simulated"]);
 export type ReviewPolicy = z.infer<typeof ReviewPolicy>;
 
+// ---- Speculative execution (autonomy-engine.md §2c) ----------------------
+
+// The SPECULATION THRESHOLD: how far along an ancestor must be before a dependent
+// may START BUILDING speculatively (against the ancestor's prospective merged
+// world) rather than waiting for the ancestor to genuinely merge. Per-project;
+// the default is `moderate` (the §2c/§6 resolved default — routes around the
+// human-review bottleneck while staying off genuinely-unstable ancestors):
+//
+//   - `conservative` — a dependent may start only once its ancestor is MERGED.
+//                      Zero speculative rework; human review serializes the DAG.
+//   - `moderate`     — a dependent may start once its ancestor is CI-GREEN +
+//                      AUDITED with NO open P0/P1 finding (P2/P3 are OK), EVEN IF
+//                      human/simulated review is still pending. An ancestor that
+//                      is "technically complete but pending automated audits" is
+//                      NOT ready (audits gate); only-P2/P3 findings ARE ready.
+//   - `aggressive`   — a dependent may start as soon as the ancestor's PR is OPEN
+//                      (pre-CI). Maximum parallelism, highest invalidation risk.
+//
+// The dependent's MERGE always still waits for the ancestor to genuinely merge
+// (no unreviewed code reaches `main` early) — the threshold gates WORK, not MERGE.
+export const SpeculationThreshold = z.enum(["conservative", "moderate", "aggressive"]);
+export type SpeculationThreshold = z.infer<typeof SpeculationThreshold>;
+
+export const DEFAULT_SPECULATION_THRESHOLD: SpeculationThreshold = "moderate";
+
+// The MAX SPECULATIVE-INTEGRATION DEPTH (§2c open decision §6): how many UNMERGED
+// ancestors deep a speculative integration branch may stack before the rework
+// risk outweighs the velocity. When a ready dependent's unmerged-ancestor depth
+// would EXCEED this cap, the spec is HELD (not silently truncated — the walker
+// emits a `dag.spec.speculation_held` event and treats it as not-yet-ready) until
+// enough ancestors merge. Default 2 (the §6 resolved default); a positive int.
+export const DEFAULT_SPECULATIVE_INTEGRATION_DEPTH = 2;
+
 // ---- Errors --------------------------------------------------------------
 
 // Thrown by the migration helpers when the persisted `version` discriminator

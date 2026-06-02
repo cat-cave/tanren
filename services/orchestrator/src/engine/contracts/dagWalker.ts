@@ -26,6 +26,9 @@
 // any database or worker. The pg-backed read model + the createQueuedRunFromSpec
 // enqueuer + the LISTEN/NOTIFY subscriber live in `engine/dag/walker.ts`.
 
+import type { SpeculationThreshold } from "../config/shared.js";
+import type { DagLifecycleSnapshot } from "./dagLifecycle.js";
+import { computeReadiness, type SpecReadiness } from "../dag/speculation.js";
 import { priorityRank, type SpecPriority } from "../state/spec.js";
 
 // ---- DAG snapshot ---------------------------------------------------------
@@ -160,6 +163,94 @@ function isReady(node: DagSpecNode, byId: Map<string, DagSpecNode>): boolean {
   return node.dependsOn.every((depId) => byId.get(depId)?.phase === "done");
 }
 
+// ---- Speculative tick plan (P2c-1, autonomy-engine.md §2c) -----------------
+
+/**
+ * The per-spec speculation outcome the walker narrates: each spec the walker
+ * enqueues this tick carries whether it was a speculative start (and on which
+ * unmerged ancestors), so the dag.spec.speculative event names them.
+ */
+export interface PlannedEnqueue {
+  specId: string;
+  speculative: boolean;
+  /** The unmerged ancestors forming the integration branch (empty when not speculative). */
+  unmergedAncestors: string[];
+}
+
+/**
+ * The speculative tick plan: the Phase-1 `DagTickPlan` shape enriched with
+ * per-spec speculation info (`enqueues`) and the specs HELD over the depth cap
+ * (`held` — surfaced so the walker logs dag.spec.speculation_held rather than
+ * silently truncating, §2c "no silent caps"). `toEnqueue` stays the bare ordered
+ * id list for parity with the Phase-1 plan's consumers.
+ */
+export interface DagSpeculativeTickPlan extends DagTickPlan {
+  enqueues: PlannedEnqueue[];
+  held: SpecReadiness[];
+}
+
+/**
+ * The PURE speculative scheduling core (no DB, no I/O): the §2c readiness model.
+ * Identical to `planDagTick` EXCEPT readiness is "all deps crossed the configured
+ * SPECULATION THRESHOLD" (per the lifecycle projection), not "all deps done". A
+ * spec ready with one or more deps not-yet-merged is SPECULATIVE; a spec that
+ * would be ready but whose unmerged-ancestor depth exceeds the cap is HELD (not
+ * truncated). Ordering, headroom, and idempotency are unchanged from Phase 1.
+ *
+ * `conservative` reduces EXACTLY to the Phase-1 predicate (a crossed ancestor is a
+ * merged one — `phase === "done"`), so the baseline behavior is preserved.
+ */
+export function planSpeculativeDagTick(
+  snapshot: DagSnapshot,
+  lifecycle: DagLifecycleSnapshot,
+  options: { concurrencyCeiling: number; threshold: SpeculationThreshold; depthCap: number },
+): DagSpeculativeTickPlan {
+  const { concurrencyCeiling, threshold, depthCap } = options;
+  if (!Number.isInteger(concurrencyCeiling) || concurrencyCeiling < 1) {
+    throw new RangeError(`concurrencyCeiling must be a positive integer, got ${concurrencyCeiling}`);
+  }
+
+  const doneCount = snapshot.nodes.filter((n) => n.phase === "done").length;
+  const inFlightCount = snapshot.nodes.filter((n) => n.phase === "in_flight").length;
+  const pending = snapshot.nodes.filter((n) => n.phase === "pending");
+
+  const readiness = computeReadiness(pending, snapshot.nodes, lifecycle, threshold, depthCap);
+  const ready = pending.filter((n) => readiness.get(n.specId)?.ready === true);
+  const held = pending.map((n) => readiness.get(n.specId)).filter((r): r is SpecReadiness => r?.held === true);
+  // Blocked = pending, not ready, not held (genuinely waiting on an ancestor that
+  // has not crossed the threshold).
+  const blockedCount = pending.length - ready.length - held.length;
+
+  const ordered = orderReadySet(ready);
+  const headroom = Math.max(0, concurrencyCeiling - inFlightCount);
+  const orderedToEnqueue = ordered.slice(0, headroom);
+  const toEnqueue = orderedToEnqueue.map((n) => n.specId);
+  const readyHeldBack = ordered.length - toEnqueue.length;
+
+  const enqueues: PlannedEnqueue[] = orderedToEnqueue.map((n) => {
+    const r = readiness.get(n.specId);
+    return {
+      specId: n.specId,
+      speculative: r?.speculative ?? false,
+      unmergedAncestors: r?.unmergedAncestors ?? [],
+    };
+  });
+
+  const status: DagTickStatus = toEnqueue.length > 0 ? "enqueued" : readyHeldBack > 0 ? "budget_paused" : "drained";
+
+  return {
+    status,
+    toEnqueue,
+    enqueues,
+    held,
+    inFlightCount,
+    doneCount,
+    blockedCount,
+    readyHeldBack,
+    concurrencyCeiling,
+  };
+}
+
 /**
  * Order the ready set deterministically (autonomy-engine.md §1b): PRIORITY first
  * (P0 → P1 → P2 → tbd via `priorityRank`), then the stable creation-order
@@ -201,7 +292,18 @@ export interface DagReadModel {
  * never double-enqueue the same spec — the claim is the idempotency boundary.
  */
 export interface DagEnqueuer {
-  enqueueSpecRun(input: { projectId: string; specId: string }): Promise<{ runId: string }>;
+  enqueueSpecRun(input: {
+    projectId: string;
+    specId: string;
+    /**
+     * P2c-1: the SPECULATIVE integration branch the run's PR bases on (the dynamic
+     * base), present iff the walker started this spec speculatively. When set, the
+     * enqueuer skips the `done`-only dependency gate (the walker already enforced
+     * the threshold gate) and persists `speculative_base` on the run. Absent ⇒ a
+     * normal start (full dependency-done gate + `default_branch` base).
+     */
+    speculativeBase?: string;
+  }): Promise<{ runId: string }>;
 }
 
 /** What a single walk produced — surfaced for the subscriber + tests to assert. */

@@ -87,6 +87,49 @@ export interface PullRequestMergeability {
   headBranch: string;
 }
 
+/**
+ * P2c: one ancestor in a speculative integration branch — its branch ref + the
+ * spec it implements (so the coordinator can route an A-vs-B conflict to the P2b
+ * intent-preserving resolver with the right intent). DAG order is the order the
+ * coordinator passes these in (ancestors before dependents).
+ */
+export interface IntegrationAncestor {
+  specId: string;
+  branch: string;
+}
+
+/** Input to building/refreshing a speculative integration branch (P2c). */
+export interface BuildIntegrationBranchInput {
+  repo: RepoRef;
+  token: ResolvedVcsToken;
+  /** The real base (`projects.default_branch`) the integration starts from. */
+  baseBranch: string;
+  /** The ephemeral integration ref to create/reset (e.g. `tanren/integ/<dependent>`). */
+  integrationBranch: string;
+  /** The unmerged ancestors to speculatively merge in, in DAG order. */
+  ancestors: ReadonlyArray<IntegrationAncestor>;
+}
+
+/**
+ * P2c: the outcome of building a speculative integration branch. `integrated`
+ * means every ancestor merged cleanly onto the integration ref (the dependent's
+ * dynamic base is ready). `conflict` means two ancestors conflict WITH EACH OTHER
+ * — surfaced HERE, early, on the integration branch, so the P2b resolver runs
+ * against it (not against the innocent dependent); `conflictBetween` names the two
+ * conflicting ancestor specs so the resolver gets both intents.
+ */
+export interface BuildIntegrationBranchResult {
+  outcome: "integrated" | "conflict";
+  /** The integration ref (echoed for the dynamic base). */
+  integrationBranch: string;
+  /** The ancestor spec ids that merged cleanly, in order. */
+  mergedAncestors: string[];
+  /** On `conflict`: the two ancestor specs that conflict with each other. */
+  conflictBetween?: { specId: string; otherSpecId: string };
+  /** Human-readable detail (the forge message), for events/diagnostics. */
+  message: string;
+}
+
 /** The outcome of attempting to bring a PR branch up to date with its base. */
 export interface UpdateBranchResult {
   /** `updated` — the branch was advanced onto the latest base (re-gate + merge). */
@@ -288,6 +331,40 @@ export interface VcsProvider {
    * swallows a conflict.
    */
   updateBranch(pr: PullRequestRef, token: ResolvedVcsToken): Promise<UpdateBranchResult>;
+
+  /**
+   * P2c (speculative execution): build (or reset + rebuild) the ephemeral
+   * SPECULATIVE INTEGRATION BRANCH for a dependent — `baseBranch` + each unmerged
+   * ancestor's branch merged in DAG order (server-side merges via the forge merge
+   * API). It NEVER touches `default_branch`/`main`; it writes only the ephemeral
+   * integration ref. When two ancestors conflict WITH EACH OTHER it returns
+   * `conflict` (naming the pair) rather than forcing the conflict — the caller
+   * routes that pair to the P2b resolver and rebuilds. The dependent's PR then
+   * bases on this ref (the dynamic base). Idempotent: re-running resets the ref to
+   * `baseBranch` first, so a stale integration is never additive.
+   */
+  buildIntegrationBranch(input: BuildIntegrationBranchInput): Promise<BuildIntegrationBranchResult>;
+
+  /**
+   * P2c (speculative execution — land-on-real-main): re-point an open PR's BASE
+   * to a new branch (GitHub `PATCH /repos/{o}/{r}/pulls/{n}` with `{ base }`).
+   * When a speculative dependent's ancestors all genuinely merge, the merge stage
+   * re-targets the dependent's PR from its ephemeral integration ref to
+   * `default_branch` BEFORE merging, so the dependent lands on real `main` (never
+   * the integration ref). After the re-target the caller runs the P2a
+   * up-to-date/auto-rebase + re-gate flow so the branch lands cleanly. Idempotent:
+   * re-targeting to the branch the PR is already based on is a no-op on GitHub's
+   * side (the PATCH returns the unchanged PR).
+   */
+  retargetPullRequestBase(pr: PullRequestRef, newBase: string, token: ResolvedVcsToken): Promise<void>;
+
+  /**
+   * P2c (speculative execution — cleanup): delete an ephemeral branch ref (the
+   * `tanren/integ/<dep>` integration branch) after the dependent has merged. A
+   * missing ref (already deleted) is treated as success — the cleanup is
+   * best-effort and idempotent, never a hard failure that blocks the merge result.
+   */
+  deleteBranch(repo: RepoRef, branch: string, token: ResolvedVcsToken): Promise<void>;
 
   // Phase 2 (P2b intent-preserving conflict resolution): conflict read/write
   // hooks — read both sides of a conflicted path + write a resolved tree —

@@ -17,6 +17,7 @@ import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "..
 import type { VcsProvider } from "../../src/engine/contracts/vcsProvider.js";
 import { InMemoryVcsProvider } from "./fakes/inMemoryVcsProvider.js";
 import {
+  CONFORMANCE_ANCESTOR_CONFLICT,
   CONFORMANCE_BEHIND_PR_NUMBER,
   CONFORMANCE_DIRTY_PR_NUMBER,
   CONFORMANCE_HEAD_BRANCH,
@@ -78,6 +79,11 @@ class RoutingGitHubHttp implements GitHubHttpClient {
         mergeable_state: mergeableState,
       });
     }
+    // retargetPullRequestBase (P2c): PATCH /pulls/:n { base } → the updated PR.
+    if (input.method === "PATCH" && /\/pulls\/\d+$/u.test(path)) {
+      const base = (input.body as { base?: unknown } | undefined)?.base;
+      return ok({ number: 7, base: { ref: typeof base === "string" ? base : "main" } });
+    }
     if (input.method === "POST" && path === "/graphql") {
       return ok({ data: { markPullRequestReadyForReview: { pullRequest: { isDraft: false } } } });
     }
@@ -100,6 +106,27 @@ class RoutingGitHubHttp implements GitHubHttpClient {
     // listContributors.
     if (input.method === "GET" && path.endsWith("/commits")) {
       return ok([{ author: { login: "author-bot" }, committer: { login: "author-bot" } }]);
+    }
+    // buildIntegrationBranch (P2c): resolve the base ref sha, (re)create the
+    // ephemeral integration ref, then merge each ancestor branch. The conflict
+    // ancestor's branch yields a 409 from the merges endpoint.
+    if (input.method === "GET" && /\/git\/ref\/heads\//u.test(path)) {
+      return ok({ object: { sha: HEAD_SHA } });
+    }
+    if (input.method === "POST" && path.endsWith("/git/refs")) {
+      return { status: 201, body: { ref: "refs/heads/integ" } };
+    }
+    if (input.method === "PATCH" && /\/git\/refs\/heads\//u.test(path)) {
+      return ok({ ref: "refs/heads/integ" });
+    }
+    // deleteBranch (P2c cleanup): DELETE /git/refs/heads/:branch → 204.
+    if (input.method === "DELETE" && /\/git\/refs\/heads\//u.test(path)) {
+      return { status: 204, body: {} };
+    }
+    if (input.method === "POST" && path.endsWith("/merges")) {
+      const head = (input.body as { head?: unknown } | undefined)?.head;
+      if (head === CONFORMANCE_ANCESTOR_CONFLICT.branch) return { status: 409, body: { message: "Merge conflict" } };
+      return { status: 201, body: { sha: "integ-merge-sha" } };
     }
     // readFileOnBranch: present file → base64 content; everything else 404.
     if (input.method === "GET" && path.includes(`/contents/${CONFORMANCE_PRESENT_FILE}`)) {

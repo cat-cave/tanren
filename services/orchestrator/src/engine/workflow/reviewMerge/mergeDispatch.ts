@@ -92,7 +92,68 @@ export async function mergeForRun(input: MergeForRunInput): Promise<MergeForRunR
     payload: { taskKind: "merge" },
   });
 
+  // P2c-1 (§2c): resolve the run's speculative state. A NORMAL run is undefined
+  // and proceeds unchanged. A SPECULATIVE run's PR is based on its integration ref
+  // (`speculative_base`); its merge must NEVER land into that ref — it must land on
+  // real `default_branch`.
+  const speculative = await resolveSpeculativeState(input.pool, context.runId);
+
   const probe = input.mergeProbe ?? (await buildGitHubProbe(input, context, pr.repo, pr.pullNumber));
+
+  if (speculative !== undefined) {
+    // (a) HOLD while any ancestor is still unmerged — no unreviewed ancestor code
+    // reaches `main` early. The DagWalker re-walks on the ancestor merge.completed,
+    // re-entering this stage once the ancestors land.
+    if (speculative.unmergedAncestors.length > 0) {
+      await eventStore.append({
+        runId: context.runId,
+        specId: context.specId,
+        projectId: context.projectId,
+        taskId,
+        eventType: "merge.speculative_held",
+        payload: {
+          prUrl: context.prUrl,
+          prNumber: pr.pullNumber,
+          integration,
+          speculativeBase: speculative.speculativeBase,
+          unmergedAncestors: speculative.unmergedAncestors,
+        },
+      });
+      return {
+        runId: context.runId,
+        taskId,
+        integration,
+        outcome: "blocked",
+        prUrl: context.prUrl,
+        prNumber: pr.pullNumber,
+        message: `merge held: ancestors not yet merged (${speculative.unmergedAncestors.join(", ")})`,
+      };
+    }
+    // (b) HOLD CLEARED (all ancestors merged): RE-TARGET the PR base from the
+    // integration ref to `default_branch` (§2c step 3) so the dependent lands on
+    // REAL `main`, never the integration ref. The P2a up-to-date/auto-rebase + CI
+    // re-gate below then brings the branch current with `default_branch`. The base
+    // is re-pointed on the forge BEFORE any merge call, so directMerge's
+    // mergeability read + merge act against `default_branch`.
+    if (speculative.speculativeBase !== context.baseBranch) {
+      await probe.retargetBase(context.baseBranch);
+      await eventStore.append({
+        runId: context.runId,
+        specId: context.specId,
+        projectId: context.projectId,
+        taskId,
+        eventType: "merge.retargeted",
+        payload: {
+          prUrl: context.prUrl,
+          prNumber: pr.pullNumber,
+          integration,
+          fromBase: speculative.speculativeBase,
+          toBase: context.baseBranch,
+        },
+      });
+    }
+  }
+
   const dispatcher = new MergeDispatcher({
     input,
     context,
@@ -101,6 +162,9 @@ export async function mergeForRun(input: MergeForRunInput): Promise<MergeForRunR
     integration,
     pr,
     probe,
+    // (c) After a successful merge onto `default_branch`, delete the ephemeral
+    // integration ref (§2c cleanup). Best-effort + idempotent.
+    ...(speculative !== undefined && { speculativeCleanup: speculative.speculativeBase }),
   });
 
   // P3-0023 governance posture gate. Only Tanren-initiated auto-merges
@@ -123,6 +187,54 @@ export async function mergeForRun(input: MergeForRunInput): Promise<MergeForRunR
     return dispatcher.enqueueMergify();
   }
   return dispatcher.directMerge();
+}
+
+/**
+ * P2c-1 (§2c): the speculative state of a run at merge time. `undefined` for a
+ * NORMAL run (no `speculative_base`) — it merges against `default_branch` as
+ * always. For a SPECULATIVE run, `speculativeBase` is the integration ref the PR
+ * is based on and `unmergedAncestors` is the (possibly empty) set of deps not yet
+ * genuinely merged. The merge stage uses this to:
+ *   - HOLD the merge while `unmergedAncestors` is non-empty (no unreviewed ancestor
+ *     code reaches `main` early — the dependent's WORK ran on the integration
+ *     branch, but its MERGE waits), and
+ *   - once it clears (all deps `done`/`merged`), RE-TARGET the PR base from the
+ *     integration ref to `default_branch` so the dependent lands on real `main`,
+ *     then clean up the integration ref.
+ * A `done`/`merged` ancestor is satisfied; anything else is unmerged.
+ */
+async function resolveSpeculativeState(
+  pool: RunStateClient,
+  runId: string,
+): Promise<{ speculativeBase: string; unmergedAncestors: string[] } | undefined> {
+  const runResult = await pool.query<{ speculative_base: string | null; spec_id: string; project_id: string }>(
+    "SELECT speculative_base, spec_id, project_id FROM runs WHERE run_id = $1",
+    [runId],
+  );
+  const run = runResult.rows[0];
+  if (run === undefined || run.speculative_base === null) {
+    return undefined;
+  }
+  const specResult = await pool.query<{ depends_on: string[] | null }>(
+    "SELECT depends_on FROM specs WHERE spec_id = $1",
+    [run.spec_id],
+  );
+  const dependsOn = (specResult.rows[0]?.depends_on ?? []).filter((id): id is string => typeof id === "string");
+  if (dependsOn.length === 0) {
+    // A speculative run with no deps is degenerate, but still bases on the
+    // integration ref — surface it with an empty unmerged set so the stage
+    // re-targets to default_branch before merging (it must not merge into integ).
+    return { speculativeBase: run.speculative_base, unmergedAncestors: [] };
+  }
+  // The ancestors that are genuinely merged (status done/merged); the rest are
+  // unmerged and the merge must wait on them.
+  const mergedResult = await pool.query<{ spec_id: string }>(
+    "SELECT spec_id FROM specs WHERE project_id = $1 AND spec_id = ANY($2::text[]) AND status IN ('done', 'merged')",
+    [run.project_id, dependsOn],
+  );
+  const merged = new Set(mergedResult.rows.map((row) => row.spec_id));
+  const unmergedAncestors = dependsOn.filter((id) => !merged.has(id));
+  return { speculativeBase: run.speculative_base, unmergedAncestors };
 }
 
 /**
@@ -165,6 +277,8 @@ async function buildGitHubProbe(
     merge: () => provider.mergePullRequest(pr, resolved, input.mergeMethod),
     readMergeability: () => provider.readMergeability(pr, resolved),
     updateBranch: () => provider.updateBranch(pr, resolved),
+    retargetBase: (newBase) => provider.retargetPullRequestBase(pr, newBase, resolved),
+    deleteIntegrationBranch: (branch) => provider.deleteBranch(repo, branch, resolved),
   };
 }
 

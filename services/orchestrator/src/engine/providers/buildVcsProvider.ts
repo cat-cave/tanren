@@ -23,6 +23,8 @@ import type { MergePullRequestResult, ReviewVerdictResult, SubmitReviewEvent } f
 import type { GitHubPullRequestChecks } from "./github.js";
 import type { PullRequestContributors } from "../workflow/reviewMerge/governancePosture.js";
 import type {
+  BuildIntegrationBranchInput,
+  BuildIntegrationBranchResult,
   OpenDraftPullRequestInput,
   OpenedPullRequest,
   PullRequestMergeability,
@@ -117,6 +119,15 @@ export class UnconfiguredVcsProvider implements VcsProvider {
     return this.fail();
   }
   async updateBranch(_pr: PullRequestRef, _token: ResolvedVcsToken): Promise<UpdateBranchResult> {
+    return this.fail();
+  }
+  async buildIntegrationBranch(_input: BuildIntegrationBranchInput): Promise<BuildIntegrationBranchResult> {
+    return this.fail();
+  }
+  async retargetPullRequestBase(_pr: PullRequestRef, _newBase: string, _token: ResolvedVcsToken): Promise<void> {
+    return this.fail();
+  }
+  async deleteBranch(_repo: RepoRef, _branch: string, _token: ResolvedVcsToken): Promise<void> {
     return this.fail();
   }
 }

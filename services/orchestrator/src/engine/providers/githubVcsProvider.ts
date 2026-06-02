@@ -20,6 +20,8 @@ import { parseCommitLogins } from "../workflow/reviewMerge/commitLogins.js";
 import type { PullRequestContributors } from "../workflow/reviewMerge/governancePosture.js";
 import { decodeBase64Content } from "../contracts/vcsProvider.js";
 import type {
+  BuildIntegrationBranchInput,
+  BuildIntegrationBranchResult,
   OpenDraftPullRequestInput,
   OpenedPullRequest,
   PullRequestMergeability,
@@ -257,6 +259,141 @@ export class GitHubVcsProvider implements VcsProvider {
       refreshToken: token.refresh,
     });
     return { outcome: result.outcome, message: result.message };
+  }
+
+  async buildIntegrationBranch(input: BuildIntegrationBranchInput): Promise<BuildIntegrationBranchResult> {
+    const { repo, token, baseBranch, integrationBranch, ancestors } = input;
+    // 1. Resolve the real base SHA and (re)set the ephemeral integration ref to
+    //    it — so a rebuild is never additive over a stale integration. NEVER
+    //    touches `default_branch`; only the ephemeral ref is written.
+    const baseSha = await this.refSha(repo, token, baseBranch);
+    await this.resetRef(repo, token, integrationBranch, baseSha);
+
+    // 2. Merge each ancestor's branch onto the integration ref in DAG order. A
+    //    409 from the merge API is a real conflict BETWEEN this ancestor and what
+    //    is already integrated (an earlier ancestor) — surface it here, early.
+    const merged: string[] = [];
+    for (const ancestor of ancestors) {
+      const result = await this.mergeBranchInto(repo, token, integrationBranch, ancestor.branch);
+      if (result === "conflict") {
+        // The conflict is between THIS ancestor and what is already on the
+        // integration ref. The immediately-prior integrated ancestor is the most
+        // specific other side; with none yet integrated it is the base itself.
+        const otherSpecId = merged.at(-1) ?? baseBranch;
+        return {
+          outcome: "conflict",
+          integrationBranch,
+          mergedAncestors: merged,
+          conflictBetween: { specId: ancestor.specId, otherSpecId },
+          message: `ancestor ${ancestor.specId} (${ancestor.branch}) conflicts with the integration of ${otherSpecId} on ${integrationBranch}`,
+        };
+      }
+      merged.push(ancestor.specId);
+    }
+    return {
+      outcome: "integrated",
+      integrationBranch,
+      mergedAncestors: merged,
+      message: `integrated ${merged.length} ancestor branch(es) onto ${integrationBranch}`,
+    };
+  }
+
+  private async refSha(repo: RepoRef, token: ResolvedVcsToken, branch: string): Promise<string> {
+    const response = await this.http.request({
+      method: "GET",
+      path: repoApiPath(repo, `/git/ref/heads/${encodeURIComponent(branch)}`),
+      token: token.token,
+      refreshToken: token.refresh,
+    });
+    if (response.status !== 200 || typeof response.body !== "object" || response.body === null) {
+      throw new Error(`GitHub ref read failed for ${branch}: HTTP ${response.status}`);
+    }
+    const object = (response.body as { object?: { sha?: unknown } }).object;
+    if (object === undefined || typeof object.sha !== "string") {
+      throw new Error(`GitHub ref read for ${branch} returned no sha`);
+    }
+    return object.sha;
+  }
+
+  /** Create the integration ref at `sha`, or force-update it if it already exists. */
+  private async resetRef(repo: RepoRef, token: ResolvedVcsToken, branch: string, sha: string): Promise<void> {
+    const create = await this.http.request({
+      method: "POST",
+      path: repoApiPath(repo, "/git/refs"),
+      token: token.token,
+      refreshToken: token.refresh,
+      body: { ref: `refs/heads/${branch}`, sha },
+    });
+    if (create.status === 201) {
+      return;
+    }
+    // 422 = ref already exists; force it back to the base sha (idempotent rebuild).
+    if (create.status === 422) {
+      const update = await this.http.request({
+        method: "PATCH",
+        path: repoApiPath(repo, `/git/refs/heads/${encodeURIComponent(branch)}`),
+        token: token.token,
+        refreshToken: token.refresh,
+        body: { sha, force: true },
+      });
+      if (update.status !== 200) {
+        throw new Error(`GitHub integration ref reset failed for ${branch}: HTTP ${update.status}`);
+      }
+      return;
+    }
+    throw new Error(`GitHub integration ref create failed for ${branch}: HTTP ${create.status}`);
+  }
+
+  /** Merge `headBranch` into `base` (the integration ref). 409 ⇒ conflict. */
+  private async mergeBranchInto(
+    repo: RepoRef,
+    token: ResolvedVcsToken,
+    base: string,
+    headBranch: string,
+  ): Promise<"merged" | "conflict"> {
+    const response = await this.http.request({
+      method: "POST",
+      path: repoApiPath(repo, "/merges"),
+      token: token.token,
+      refreshToken: token.refresh,
+      body: { base, head: headBranch, commit_message: `tanren: speculatively integrate ${headBranch}` },
+    });
+    // 201 = a merge commit was created; 204 = nothing to merge (already current).
+    if (response.status === 201 || response.status === 204) {
+      return "merged";
+    }
+    if (response.status === 409) {
+      return "conflict";
+    }
+    throw new Error(`GitHub speculative merge of ${headBranch} into ${base} failed: HTTP ${response.status}`);
+  }
+
+  async retargetPullRequestBase(pr: PullRequestRef, newBase: string, token: ResolvedVcsToken): Promise<void> {
+    const response = await this.http.request({
+      method: "PATCH",
+      path: repoApiPath(pr.repo, `/pulls/${pr.number}`),
+      token: token.token,
+      refreshToken: token.refresh,
+      body: { base: newBase },
+    });
+    // 200 = base updated (or already that base — GitHub returns the unchanged PR).
+    if (response.status !== 200) {
+      throw new Error(`GitHub PR base retarget to ${newBase} failed: HTTP ${response.status}`);
+    }
+  }
+
+  async deleteBranch(repo: RepoRef, branch: string, token: ResolvedVcsToken): Promise<void> {
+    const response = await this.http.request({
+      method: "DELETE",
+      path: repoApiPath(repo, `/git/refs/heads/${encodeURIComponent(branch)}`),
+      token: token.token,
+      refreshToken: token.refresh,
+    });
+    // 204 = deleted; 422/404 = ref already gone (idempotent best-effort cleanup).
+    if (response.status === 204 || response.status === 422 || response.status === 404) {
+      return;
+    }
+    throw new Error(`GitHub branch delete of ${branch} failed: HTTP ${response.status}`);
   }
 
   async readFileOnBranch(input: {

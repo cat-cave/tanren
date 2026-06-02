@@ -94,6 +94,17 @@ export interface MergeProbe {
   readMergeability(): Promise<PullRequestMergeability>;
   /** P2a: bring the PR branch up to date with its base (server-side update). */
   updateBranch(): Promise<UpdateBranchResult>;
+  /**
+   * P2c-1 (§2c step 3): re-point the PR's base to `newBase` (default_branch) when
+   * a speculative dependent's hold clears, so it lands on real `main`, not the
+   * ephemeral integration ref. Followed by the P2a rebase + re-gate flow.
+   */
+  retargetBase(newBase: string): Promise<void>;
+  /**
+   * P2c-1 (§2c cleanup): delete the ephemeral integration ref after the dependent
+   * merged. Best-effort + idempotent (a missing ref is success).
+   */
+  deleteIntegrationBranch(branch: string): Promise<void>;
 }
 
 /**

@@ -49,6 +49,46 @@ export const DagDrainedPayload = z
   .strict();
 export type DagDrainedPayload = z.infer<typeof DagDrainedPayload>;
 
+// dag.spec.speculative (autonomy-engine.md §2c): the walker started a dependent
+// SPECULATIVELY — it crossed the configured speculation threshold while one or
+// more of its ancestors are not yet MERGED. The dependent's PR bases on a
+// speculative integration branch (main + the unmerged ancestors' branches merged
+// in DAG order); its MERGE still waits for those ancestors to genuinely merge.
+// This event names the unmerged ancestors + the threshold so the timeline shows
+// exactly what prospective merged world the dependent built against.
+export const DagSpecSpeculativePayload = z
+  .object({
+    specId: z.string(),
+    runId: z.string(),
+    // The ancestors that have crossed the threshold but are NOT yet merged — the
+    // members of the speculative integration branch the dependent bases on.
+    unmergedAncestors: z.array(z.string()).min(1),
+    // The configured speculation threshold that admitted this early start.
+    threshold: z.enum(["conservative", "moderate", "aggressive"]),
+    // The integration branch ref the dependent's PR bases on (the prospective
+    // merged world). Present so the timeline links the dependent to its base.
+    integrationBranch: z.string(),
+  })
+  .strict();
+export type DagSpecSpeculativePayload = z.infer<typeof DagSpecSpeculativePayload>;
+
+// dag.spec.speculation_held (autonomy-engine.md §2c open decision §6): a dependent
+// WOULD be ready under the threshold, but its unmerged-ancestor DEPTH exceeds the
+// configured cap. Rather than silently truncating the integration stack (the "no
+// silent caps" rule), the walker HOLDS the spec until enough ancestors merge and
+// records WHY here. The walker re-evaluates on the next ancestor-merge notification.
+export const DagSpecSpeculationHeldPayload = z
+  .object({
+    specId: z.string(),
+    // The full unmerged-ancestor stack the spec would have needed (its depth).
+    unmergedAncestors: z.array(z.string()).min(1),
+    depth: z.number().int().positive(),
+    // The configured max integration depth the stack exceeded.
+    depthCap: z.number().int().positive(),
+  })
+  .strict();
+export type DagSpecSpeculationHeldPayload = z.infer<typeof DagSpecSpeculationHeldPayload>;
+
 // dag.budget.paused: the walker had ready specs to enqueue but stopped because
 // the project's in-flight count is already at the governed concurrency ceiling
 // (the headroom is zero). This is the Phase-1 throttle: budget enforcement

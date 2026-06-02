@@ -31,6 +31,7 @@ interface RunRow {
   spec_id: string;
   project_id: string;
   branch: string;
+  speculative_base?: string | null;
 }
 
 export class WorkerPool {
@@ -134,6 +135,8 @@ export class WorkerPool {
         branch: run.branch,
         repo_url: project.repo_url,
         default_branch: project.default_branch,
+        // P2c-1: the run's speculative integration branch (dynamic base) or null.
+        speculative_base: run.speculative_base ?? null,
         runner_image: project.runner_image,
         config: project.config,
         // A test that forces an org echoes it here, so the claimed job's org
@@ -164,6 +167,8 @@ export class WorkerPool {
         spec_id: String(params[1]),
         project_id: String(params[2]),
         branch: String(params[4]),
+        // P2c-1: speculative_base is $6 (NULL for a normal run).
+        speculative_base: params[5] === undefined || params[5] === null ? null : String(params[5]),
       });
       return { rows: [], rowCount: 1 };
     }

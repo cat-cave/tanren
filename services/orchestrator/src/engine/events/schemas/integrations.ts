@@ -202,6 +202,54 @@ export const MergeConflictPayload = z
   })
   .strict();
 
+// P2c-1 (autonomy-engine.md §2c): a SPECULATIVE dependent's MERGE is HELD because
+// one or more of its ancestors are not yet genuinely merged. Its WORK proceeded
+// (it built against a speculative integration branch), but its MERGE must wait so
+// no unreviewed ancestor code reaches `main` early. The merge stage emits this
+// instead of merging; the run re-enters the merge stage once its ancestors merge
+// (the DagWalker re-walks on ancestor merge.completed). NOT a failure — a hold.
+export const MergeSpeculativeHeldPayload = z
+  .object({
+    prUrl: z.string(),
+    prNumber: z.number().int(),
+    integration: MergeIntegrationMode,
+    /** The integration branch the dependent's PR currently bases on. */
+    speculativeBase: z.string(),
+    /** The ancestor spec ids that are not yet merged (the merge is held on these). */
+    unmergedAncestors: z.array(z.string()).min(1),
+  })
+  .strict();
+
+// P2c-1 (§2c step 3): a speculative dependent's ancestors have all merged, so its
+// hold CLEARED — the merge stage re-points the dependent's PR base from its
+// ephemeral integration ref to `default_branch` (GitHub PATCH /pulls/:n { base })
+// BEFORE merging, so it lands on REAL `main` (never the integration ref). The P2a
+// auto-rebase + re-gate then brings the branch current with `default_branch`.
+export const MergeRetargetedPayload = z
+  .object({
+    prUrl: z.string(),
+    prNumber: z.number().int(),
+    integration: MergeIntegrationMode,
+    /** The integration ref the PR was based on before the retarget. */
+    fromBase: z.string(),
+    /** The real base the PR now targets (`default_branch`). */
+    toBase: z.string(),
+  })
+  .strict();
+
+// P2c-1 (§2c cleanup): the ephemeral integration ref (`tanren/integ/<dep>`) was
+// deleted after the dependent merged onto real `main`. Best-effort + idempotent —
+// a missing ref is still success; this records that the cleanup ran.
+export const MergeIntegrationCleanedPayload = z
+  .object({
+    prUrl: z.string(),
+    prNumber: z.number().int(),
+    integration: MergeIntegrationMode,
+    /** The ephemeral integration branch that was deleted. */
+    integrationBranch: z.string(),
+  })
+  .strict();
+
 // P2a up-to-date enforcement. Before merging, the stage checks the PR branch's
 // freshness: `merge.behind` records that the branch was out of date with its
 // base (so a rebase is being driven); `merge.rebased` records that the

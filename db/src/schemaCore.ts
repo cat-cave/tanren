@@ -145,6 +145,13 @@ export const runs = pgTable(
     outcome: text("outcome"),
     prUrl: text("pr_url"),
     userId: text("user_id"),
+    // P2c-1 (autonomy-engine.md §2c): the SPECULATIVE INTEGRATION BRANCH this run's
+    // PR bases on (the dynamic base), when the DagWalker started it speculatively
+    // on one or more unmerged ancestors. NULL ⇒ a non-speculative run whose PR
+    // bases on `projects.default_branch` (the normal path). The merge stage never
+    // merges against this ref — it is the WORK base; the dependent's MERGE waits
+    // for the real ancestor merges, then re-gates against `default_branch`.
+    speculativeBase: text("speculative_base"),
   },
   (table) => [
     enumCheck("runs_status_check", table.status, stateEnumLists.runs_status),

@@ -49,6 +49,8 @@
     "relname",
     "relrowsecurity",
     "tanren",
+    "integ",
+    "retargets",
     "orchestrator",
     "secretmanager",
     "onepassword",

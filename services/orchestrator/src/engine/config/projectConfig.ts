@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { ManagedProviderConfig, ProviderMode } from "./managedProvider.js";
 import {
+  DEFAULT_SPECULATION_THRESHOLD,
+  DEFAULT_SPECULATIVE_INTEGRATION_DEPTH,
   GovernancePosture,
   MergeIntegration,
   NotificationTargetRef,
@@ -9,6 +11,7 @@ import {
   PartialForgePersona,
   ReviewPolicy,
   RoutingTable,
+  SpeculationThreshold,
   UnknownConfigVersionError,
   emptyRoutingTable,
   readObservedVersion,
@@ -50,6 +53,21 @@ export const ProjectConfigV1 = z
     // Additive + backward-compatible: legacy rows carry no key and parse to the
     // `"human"` default (no migration), and `.strict()` round-trips it on save.
     reviewPolicy: ReviewPolicy.default("human"),
+    // P2c-1 (autonomy-engine.md §2c): how far along an ancestor must be before a
+    // dependent may start building SPECULATIVELY (against the ancestor's
+    // prospective merged world) rather than waiting for it to genuinely merge.
+    // Defaults to `moderate` (the §6 resolved default: CI-green + audited with no
+    // open P0/P1 unblocks a dependent even with review pending). Additive +
+    // backward-compatible: legacy rows carry no key and parse to the default (no
+    // migration), and `.strict()` round-trips it on save. The dependent's MERGE
+    // still waits for the real ancestor merge — the threshold gates WORK, not MERGE.
+    speculationThreshold: SpeculationThreshold.default(DEFAULT_SPECULATION_THRESHOLD),
+    // P2c-1 (§2c open decision §6): the max number of UNMERGED ancestors deep a
+    // speculative integration branch may stack. A ready dependent whose
+    // unmerged-ancestor depth EXCEEDS this is HELD (logged via
+    // dag.spec.speculation_held, never silently truncated) until ancestors merge.
+    // Default 2. Additive; legacy rows parse to the default.
+    speculativeIntegrationDepth: z.number().int().min(1).default(DEFAULT_SPECULATIVE_INTEGRATION_DEPTH),
     // P3-0025: optional per-project preview-deploy URL pattern. Drives the live
     // preview iframe in the Review surface. Supports `{branch}` and `{pr}`
     // placeholders (e.g. `https://pr-{pr}.preview.fly.dev`). Optional + additive:

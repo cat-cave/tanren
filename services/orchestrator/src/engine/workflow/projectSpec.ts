@@ -72,6 +72,8 @@ export interface CreateSpecRunInput {
   specId: string;
   trigger?: string;
   branch?: string;
+  // P2c-1 (§2c): a SPECULATIVE start; `speculativeBase` is the dynamic base, gate skipped.
+  speculative?: { speculativeBase: string };
 }
 
 export interface SpecRunContract {
@@ -285,7 +287,8 @@ async function createQueuedRunFromSpecOnClient(
 ): Promise<SpecRunContract> {
   const loaded = await loadSpecWithProject(client, input.specId);
   await ensureClientProjectAccess(client, loaded.project.projectId, actor);
-  await ensureSpecDependenciesDone(client, loaded.spec);
+  // P2c-1: a speculative start skips the done-only gate (the walker enforced the threshold gate).
+  if (input.speculative === undefined) await ensureSpecDependenciesDone(client, loaded.spec);
   const plannerTaskId = `task_${randomUUID()}`;
   const run: SpecRunContract = {
     runId: `run_${randomUUID()}`,
@@ -302,9 +305,9 @@ async function createQueuedRunFromSpecOnClient(
 
   await client.query(
     // org_id derived in-statement from the parent project (tanren tenancy).
-    `INSERT INTO runs (run_id, spec_id, project_id, org_id, trigger, branch, status)
-     VALUES ($1, $2, $3, (SELECT org_id FROM projects WHERE project_id = $3), $4, $5, 'queued')`,
-    [run.runId, run.specId, run.projectId, run.trigger, run.branch],
+    `INSERT INTO runs (run_id, spec_id, project_id, org_id, trigger, branch, status, speculative_base)
+     VALUES ($1, $2, $3, (SELECT org_id FROM projects WHERE project_id = $3), $4, $5, 'queued', $6)`,
+    [run.runId, run.specId, run.projectId, run.trigger, run.branch, input.speculative?.speculativeBase ?? null],
   );
   await claimPendingSpec(client, loaded.spec);
   await client.query(
