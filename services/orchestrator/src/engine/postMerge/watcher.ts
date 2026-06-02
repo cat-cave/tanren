@@ -19,7 +19,7 @@
 // marker, so the NEXT bus wake re-checks; a passing post-merge CI files nothing.
 // Only a genuine FAILURE files an issue + records the marker.
 
-import { runWithSystemScope } from "@tanren/db";
+import { runWithJobOrgId, runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
 import type { EventStore } from "../eventStore.js";
 import { PgEventStore } from "../eventStore.js";
@@ -115,7 +115,7 @@ export class PostMergeWatcher {
     });
     if (!won) return;
 
-    await this.fileTrackingIssue({ runId, context, repo, token: resolved, merge, observation });
+    await this.fileTrackingIssue({ runId, orgId, context, repo, token: resolved, merge, observation });
   }
 
   /** Read the run's `merge.completed` event (the authoritative merge signal), system-scoped. */
@@ -172,13 +172,14 @@ export class PostMergeWatcher {
    */
   private async fileTrackingIssue(args: {
     runId: string;
+    orgId: string;
     context: ReviewMergeRunContext;
     repo: ReturnType<VcsProvider["parseRepository"]>;
     token: Awaited<ReturnType<VcsProvider["resolveToken"]>>;
     merge: MergeRecord;
     observation: CiObservation;
   }): Promise<void> {
-    const { runId, context, repo, token, merge, observation } = args;
+    const { runId, orgId, context, repo, token, merge, observation } = args;
     const failingChecks = observation.failingChecks.map((c) => ({
       kind: c.kind,
       name: c.name,
@@ -210,28 +211,37 @@ export class PostMergeWatcher {
       specId: context.specId,
       projectId: context.projectId,
     };
-    await this.eventStore.append({
-      ...base,
-      eventType: "merge.post_merge_failed",
-      payload: {
-        prUrl: context.prUrl,
-        prNumber: merge.prNumber,
-        specId: context.specId,
-        baseBranch: context.baseBranch,
-        ...(merge.mergeSha !== undefined && { mergeSha: merge.mergeSha }),
-        failingChecks,
-      },
-    });
-    await this.eventStore.append({
-      ...base,
-      eventType: "issue.opened",
-      payload: {
-        reason: "post_merge_failure",
-        issueNumber: issue.number,
-        issueUrl: issue.url,
-        prUrl: context.prUrl,
-        label: POST_MERGE_FAILURE_LABEL,
-      },
+    // The watcher runs with NO ambient org scope (it wakes on the run-activity bus,
+    // and the inner system-scoped reads above already closed), so these two tenant
+    // `events` writes would hit the H2 throw (no scope → MissingOrgScopeError),
+    // which the subscriber catches/logs — the issue would be created on GitHub but
+    // these run-timeline events silently lost. `orgId` is already resolved (the
+    // atomic-claim org) at the call site, so append them under the run's per-job org
+    // id: each `eventStore.append` opens a short `runWithOrgScope` carrying the GUC.
+    await runWithJobOrgId(orgId, async () => {
+      await this.eventStore.append({
+        ...base,
+        eventType: "merge.post_merge_failed",
+        payload: {
+          prUrl: context.prUrl,
+          prNumber: merge.prNumber,
+          specId: context.specId,
+          baseBranch: context.baseBranch,
+          ...(merge.mergeSha !== undefined && { mergeSha: merge.mergeSha }),
+          failingChecks,
+        },
+      });
+      await this.eventStore.append({
+        ...base,
+        eventType: "issue.opened",
+        payload: {
+          reason: "post_merge_failure",
+          issueNumber: issue.number,
+          issueUrl: issue.url,
+          prUrl: context.prUrl,
+          label: POST_MERGE_FAILURE_LABEL,
+        },
+      });
     });
   }
 }
