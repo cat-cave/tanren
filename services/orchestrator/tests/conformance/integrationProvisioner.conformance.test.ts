@@ -16,8 +16,11 @@ import {
 } from "../../src/engine/contracts/integrationProvisioner.js";
 import { InMemorySecretStore } from "../../src/engine/contracts/secretStore.js";
 import { SentryProvisioner } from "../../src/engine/providers/sentryProvisioner.js";
+import { FlyDeployProvisioner } from "../../src/engine/provisioners/flyDeployProvisioner.js";
+import { VercelDeployProvisioner } from "../../src/engine/provisioners/vercelDeployProvisioner.js";
 import { InMemoryIntegrationProvisioner } from "./fakes/inMemoryIntegrationProvisioner.js";
 import { ScriptedSentryTransport } from "./fakes/scriptedSentryTransport.js";
+import { scriptedDeployTransport } from "./fakes/scriptedDeployTransport.js";
 import { describeIntegrationProvisionerConformance } from "./integrationProvisionerConformance.js";
 
 const grant = (): OrgGrant => ({
@@ -149,19 +152,80 @@ describe("SentryProvisioner — Sentry-specific behavior", () => {
   });
 });
 
-// --- Registry: an UNREGISTERED kind → hard-throw unconfigured provisioner ------
-describe("buildIntegrationProvisioner registry (unregistered kinds)", () => {
+// --- P-INT-4 deploy provisioners: the SAME contract over both real providers ----
+// driven against a scripted in-memory transport (no live Vercel/Fly calls). Each
+// `make()` builds a fresh secret store (seeded with the org deploy token) + a
+// transport seeded with one existing app, so the brownfield `bind` spec targets it.
+const DEPLOY_TOKEN_REF = "secret://org/deploy-token";
+const SEEDED_DEPLOY_APP = "seeded-app";
+
+const deployGrant = (kind: string, metadata: Record<string, unknown>): OrgGrant => ({
+  providerKind: kind,
+  credentialRef: DEPLOY_TOKEN_REF,
+  metadata,
+});
+
+function deploySecrets(): InMemorySecretStore {
+  const secrets = new InMemorySecretStore();
+  void secrets.put({ ref: DEPLOY_TOKEN_REF, value: "super-secret-deploy-token-value" });
+  return secrets;
+}
+
+describeIntegrationProvisionerConformance("VercelDeployProvisioner", {
+  make: () =>
+    new VercelDeployProvisioner({
+      transport: scriptedDeployTransport("vercel", [SEEDED_DEPLOY_APP]),
+      secrets: deploySecrets(),
+    }),
+  grant: () => deployGrant("deploy.vercel", { teamId: "team_abc", slug: "acme" }),
+  projectCtx,
+  seededResourceId: "vercel_app_1",
+});
+
+describeIntegrationProvisionerConformance("FlyDeployProvisioner", {
+  make: () =>
+    new FlyDeployProvisioner({
+      transport: scriptedDeployTransport("fly", [SEEDED_DEPLOY_APP]),
+      secrets: deploySecrets(),
+    }),
+  grant: () => deployGrant("deploy.flyio", { orgSlug: "acme" }),
+  projectCtx,
+  seededResourceId: "fly_app_1",
+});
+
+// --- Registry: deploy.* registered (P-INT-4); other kinds still hard-throw -------
+describe("buildIntegrationProvisioner registry", () => {
   it("returns the hard-throw UnconfiguredIntegrationProvisioner for an unregistered kind", () => {
     const provisioner = buildIntegrationProvisioner("linear");
     expect(provisioner).toBeInstanceOf(UnconfiguredIntegrationProvisioner);
   });
 
   it("every operation on the unconfigured provisioner throws loudly (never a silent no-op)", async () => {
-    const provisioner = buildIntegrationProvisioner("slack");
+    const provisioner = buildIntegrationProvisioner("jira");
     expect(() => provisioner.capability()).toThrow(/not implemented/u);
     await expect(provisioner.discover(grant())).rejects.toThrow(/not implemented/u);
     await expect(provisioner.provision(grant(), projectCtx("p"))).rejects.toThrow(/not implemented/u);
     await expect(provisioner.bind(grant(), "x", projectCtx("p"))).rejects.toThrow(/not implemented/u);
+  });
+
+  it("registers the deploy.vercel + deploy.flyio provisioners (capability ['deploy'])", () => {
+    const secrets = deploySecrets();
+    const vercel = buildIntegrationProvisioner("deploy.vercel", {
+      transport: scriptedDeployTransport("vercel"),
+      secrets,
+    });
+    const fly = buildIntegrationProvisioner("deploy.flyio", {
+      transport: scriptedDeployTransport("fly"),
+      secrets,
+    });
+    expect(vercel).toBeInstanceOf(VercelDeployProvisioner);
+    expect(fly).toBeInstanceOf(FlyDeployProvisioner);
+    expect(vercel.capability()).toEqual(["deploy"]);
+    expect(fly.capability()).toEqual(["deploy"]);
+  });
+
+  it("a deploy provisioner without a SecretStore in deps throws (no silent no-op)", () => {
+    expect(() => buildIntegrationProvisioner("deploy.vercel")).toThrow(/SecretStore/u);
   });
 });
 

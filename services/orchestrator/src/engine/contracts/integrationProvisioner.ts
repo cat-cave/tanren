@@ -37,6 +37,11 @@
 
 import { SentryProvisioner, type SentryProvisionerDeps } from "../providers/sentryProvisioner.js";
 
+import type { SecretStore } from "./secretStore.js";
+import { FlyDeployProvisioner } from "../provisioners/flyDeployProvisioner.js";
+import { VercelDeployProvisioner } from "../provisioners/vercelDeployProvisioner.js";
+import { fetchDeployTransport, type DeployHttpTransport } from "../provisioners/deployTransport.js";
+
 /**
  * The capability ids a provisioner can satisfy. Kept a free `string` (not a closed
  * enum) so a new provider's capability slots in without a contract edit; the three
@@ -210,15 +215,17 @@ export type IntegrationProviderKind = string;
 
 /**
  * Per-call wiring a real provisioner needs (the injected transports/stores its
- * impl composes — e.g. Sentry's HTTP client + the SecretStore the DSN is written
- * to). Optional + per-provider-keyed so each provider reads ONLY its own slice;
- * a new provider adds its slice here without disturbing the others. Foundation
- * (unconfigured) kinds ignore it. Typed `unknown` per slot so the contract file
- * does not import the concrete provider transports (the case arm narrows them).
+ * impl composes). Optional + additive — each provider draws ONLY the deps it
+ * uses, so a new provider extends this interface without disturbing the others.
+ * Foundation (unconfigured) kinds ignore it.
  */
 export interface IntegrationProvisionerDeps {
   /** Sentry's injected `{ http: SentryProvisionHttpClient; secrets: SecretStore }`. */
   sentry?: SentryProvisionerDeps;
+  /** The HTTP transport the deploy provisioners (P-INT-4) run over (scripted fake in tests). */
+  transport?: DeployHttpTransport;
+  /** The SecretStore deploy-token aliases / DSNs are written into. */
+  secrets?: SecretStore;
 }
 
 /**
@@ -234,11 +241,12 @@ function makeSentryProvisioner(deps: SentryProvisionerDeps | undefined): Integra
 }
 
 /**
- * Select + construct the IntegrationProvisioner for a provider kind. P-INT-1+
- * add real `case` arms (each pulling its own slice of {@link
- * IntegrationProvisionerDeps}); an unregistered kind resolves to the hard-throw
- * {@link UnconfiguredIntegrationProvisioner}. Mirrors `buildAllocator` /
- * `buildVcsProvider`.
+ * Select + construct the IntegrationProvisioner for a provider kind. Real
+ * project-integration impls slot in as new `case` arms (P-INT-1+, each pulling
+ * its own slice of {@link IntegrationProvisionerDeps}) — exactly like
+ * `buildAllocator` / `buildVcsProvider`; an unregistered kind resolves to the
+ * hard-throw {@link UnconfiguredIntegrationProvisioner}. Cloud-ALLOCATOR kinds
+ * (`allocator.*`, P-INT-5) do NOT belong here — they extend the Allocator seam.
  */
 export function buildIntegrationProvisioner(
   kind: IntegrationProviderKind,
@@ -247,10 +255,19 @@ export function buildIntegrationProvisioner(
   switch (kind) {
     case "sentry":
       return makeSentryProvisioner(deps.sentry);
-    // Real project-integration impls (slack, linear, jira, deploy.*) slot in
-    // here as new cases in P-INT-2+. Cloud-allocator (`allocator.*`, P-INT-5) is
-    // NOT one of these — it extends the Allocator seam, not this port (see the
-    // module-header SCOPE note).
+    // --- P-INT-4 deploy provisioners (Vercel + Fly) --------------------------
+    case "deploy.vercel":
+    case "deploy.flyio": {
+      const transport = deps.transport ?? fetchDeployTransport();
+      if (deps.secrets === undefined) {
+        throw new Error(`integration provisioner '${kind}' requires a SecretStore in deps.secrets`);
+      }
+      const deployDeps = { transport, secrets: deps.secrets };
+      return kind === "deploy.vercel" ? new VercelDeployProvisioner(deployDeps) : new FlyDeployProvisioner(deployDeps);
+    }
+    // Other real impls (slack, linear, jira) slot in here as new cases in P-INT-1+.
+    // Cloud-allocator (`allocator.*`, P-INT-5) is NOT one of these — it extends the
+    // Allocator seam, not this port (see the module-header SCOPE note).
     default:
       return new UnconfiguredIntegrationProvisioner(kind);
   }
