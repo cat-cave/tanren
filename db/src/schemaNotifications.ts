@@ -56,6 +56,14 @@ export const notificationTargets = pgTable(
     index("notification_targets_org_id").on(table.orgId),
     index("notification_targets_user_id").on(table.userId),
     index("notification_targets_channel_kind").on(table.channelKind),
+    // P-INT-2 onboarding-provisioner idempotency backstop: at most ONE org-scoped
+    // target per (org, channel_kind, destination). PARTIAL — scoped to
+    // `scope='org' AND user_id IS NULL`, exactly the shape the provisioning engine
+    // writes — so user-scoped targets (which may legitimately share a destination
+    // with the org default) stay unconstrained; only re-onboards dedupe.
+    uniqueIndex("notification_targets_provisioned_unique")
+      .on(table.orgId, table.channelKind, table.destination)
+      .where(sql`${table.scope} = 'org' AND ${table.userId} IS NULL`),
   ],
 );
 

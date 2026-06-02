@@ -72,6 +72,7 @@ import {
   MergeRebasedPayload,
   MergeRetargetedPayload,
   MergeSpeculativeHeldPayload,
+  IntegrationProvisionedPayload,
   NotificationEnqueuedPayload,
   NotificationFailedPayload,
   NotificationSentPayload,
@@ -298,6 +299,10 @@ export const EventRegistry = {
   "notification.enqueued": NotificationEnqueuedPayload,
   "notification.sent": NotificationSentPayload,
   "notification.failed": NotificationFailedPayload,
+
+  // P-INT-2 capability-driven onboarding: a project leaf resource was provisioned
+  // or bound from the org grant (refs only, never secret values).
+  "integration.provisioned": IntegrationProvisionedPayload,
 
   // Hello / smoke run
   "hello.started": HelloStartedPayload,

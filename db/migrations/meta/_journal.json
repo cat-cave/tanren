@@ -379,6 +379,13 @@
       "when": 1780425368446,
       "tag": "0053_legal_otto_octavius",
       "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1780427142295,
+      "tag": "0054_absurd_tyger_tiger",
+      "breakpoints": true
     }
   ]
 }

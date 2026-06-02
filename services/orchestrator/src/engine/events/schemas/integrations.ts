@@ -406,6 +406,11 @@ export const NotificationFailedPayload = z
   })
   .strict();
 
+// P-INT-2 `integration.provisioned` lives in its own module (schemas/onboarding.ts)
+// to keep this file under the 500-line cap; re-exported here so the registry import
+// site is unchanged.
+export { IntegrationProvisionedPayload } from "./onboarding.js";
+
 const RunnerProofPayload = z
   .object({
     runnerId: z.string(),
@@ -474,14 +479,10 @@ export const AppEnvRuntimeAttachedPayload = z
 
 // Plane B app-environment (P-APP-ENV-1): the project's TEST-scoped app env was
 // propagated to the target repo's GitHub Actions repository SECRETS, so the
-// project's `tanren-ci.yml` tests that read e.g. RESEND_API_KEY pass. The Actions
-// secrets are a CI integration the built product's tests run against, so the event
-// lives here alongside `app_env.runtime_attached`.
-//
-// SECURITY: this payload carries ONLY the project, the repo (owner/name), and the
-// Actions-secret KEY NAMES — never a single secret VALUE. The values went into the
-// encrypted Actions-secret PUT and nowhere else; this event is the observable proof
-// the propagation ran, safe to surface to any project member.
+// project's `tanren-ci.yml` tests that read e.g. RESEND_API_KEY pass. Lives here
+// alongside `app_env.runtime_attached` as a CI integration. SECURITY: carries ONLY
+// the project, the repo (owner/name), and the Actions-secret KEY NAMES — never a
+// secret VALUE; this event is the observable proof the propagation ran.
 export const AppEnvCiPropagatedPayload = z
   .object({
     /** The Tanren project whose test-scoped app env was propagated. */

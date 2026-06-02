@@ -14,6 +14,10 @@ import { CiPullRequestNotFoundError, CiRunNotFoundError } from "../../engine/wor
 import { advanceCiFromWebhook, CiWebhookUnsupportedEventError } from "../../engine/workflow/ciWebhook.js";
 import { verifyGithubSignature } from "../../engine/forge/intake/index.js";
 
+// Re-exported so the route mount table imports both webhook receivers from this
+// one barrel (keeping the mount file under the per-file dependency cap).
+export { createIssueWebhookRoutes, type IssueWebhookRouteDeps } from "./issues.js";
+
 export interface GithubWebhookRouteDeps {
   pool: pg.Pool;
   secrets: SecretStore;
