@@ -35,6 +35,8 @@ export interface RecordedDagEvent {
   ceilingUsd?: number;
   spentUsd?: number;
   period?: "monthly" | "total";
+  // BUDGET-SAFETY (C1b/M5): the fail-closed reason when the pause is a safety pause.
+  reason?: "unpriced_spend" | "unparseable_config";
 }
 
 /** A recorded enqueue (the createQueuedRunFromSpec effect). */
@@ -240,6 +242,35 @@ export function describeDagWalkerConformance(label: string, suite: DagWalkerConf
       const result = await h.walker.walk(h.projectId);
       expect(result.status).toBe("budget_paused");
       expect(result.enqueuedSpecIds).toEqual([]);
+    });
+
+    it("BUDGET-SAFETY C1b: FAILS CLOSED on unpriced spend even though measured spend is under-ceiling", async () => {
+      const h = suite.make(3);
+      // Spend MEASURES at $0 (NULL-cost unattributed rows contribute nothing to the
+      // sum) but the gate signals fail-closed — the walker must NOT enqueue.
+      h.setBudget({ ceilingUsd: 50, period: "monthly", spentUsd: 0, failClosed: "unpriced_spend" });
+      h.setSpec(node("spec_root", "pending", [], 0));
+      const result = await h.walker.walk(h.projectId);
+
+      expect(result.status).toBe("budget_paused");
+      expect(result.enqueuedSpecIds).toEqual([]);
+      expect(h.enqueues).toEqual([]);
+      const paused = h.events.find((e) => e.type === "dag.budget.paused");
+      expect(paused?.reason).toBe("unpriced_spend");
+    });
+
+    it("BUDGET-SAFETY M5: FAILS CLOSED on an unparseable budget config (never unlimited)", async () => {
+      const h = suite.make(3);
+      // An unparseable config resolves ceilingUsd undefined BUT failClosed set — the
+      // gate must pause, NOT fall through to unlimited enqueuing.
+      h.setBudget({ ceilingUsd: undefined, period: "monthly", spentUsd: 0, failClosed: "unparseable_config" });
+      h.setSpec(node("spec_root", "pending", [], 0));
+      const result = await h.walker.walk(h.projectId);
+
+      expect(result.status).toBe("budget_paused");
+      expect(result.enqueuedSpecIds).toEqual([]);
+      const paused = h.events.find((e) => e.type === "dag.budget.paused");
+      expect(paused?.reason).toBe("unparseable_config");
     });
 
     it("is unlimited when no budget is configured (byte-identical to today)", async () => {

@@ -210,13 +210,17 @@ interface DagEventEmitter {
     depthCap: number;
   }): Promise<void>;
   emitDrained(input: { projectId: string; plan: DagTickPlan }): Promise<void>;
-  /** The GENUINE dollar-budget pause: cumulative spend reached the configured ceiling. */
+  /**
+   * The dollar-budget pause: cumulative spend reached the configured ceiling, OR a
+   * BUDGET-SAFETY (C1b/M5) fail-closed safety pause (`reason` set).
+   */
   emitBudgetPaused(input: {
     projectId: string;
     ceilingUsd: number;
     spentUsd: number;
     period: BudgetPeriod;
     readyHeldBack: number;
+    reason?: "unpriced_spend" | "unparseable_config";
   }): Promise<void>;
   /** The concurrency-saturation hold: ready specs held back because no slot is free. */
   emitConcurrencySaturated(input: { projectId: string; plan: DagTickPlan }): Promise<void>;
@@ -335,6 +339,7 @@ export class PgDagEventEmitter implements DagEventEmitter {
     spentUsd: number;
     period: BudgetPeriod;
     readyHeldBack: number;
+    reason?: "unpriced_spend" | "unparseable_config";
   }): Promise<void> {
     await this.withScopedStore(input.projectId, (store) =>
       store.append({
@@ -345,6 +350,7 @@ export class PgDagEventEmitter implements DagEventEmitter {
           spentUsd: input.spentUsd,
           period: input.period,
           readyHeldBack: input.readyHeldBack,
+          ...(input.reason !== undefined && { reason: input.reason }),
         },
       }),
     );

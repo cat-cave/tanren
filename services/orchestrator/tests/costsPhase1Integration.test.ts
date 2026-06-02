@@ -109,7 +109,7 @@ describe("phase 1 fixture cost-record persistence", () => {
     expect(allInsertText).not.toContain(forbiddenPlaceholder);
   });
 
-  it("records an unattributable adapter ref as cost_usd NULL / cost_basis 'unknown' WITHOUT failing the run", async () => {
+  it("BUDGET-SAFETY C1: records an UNRECOGNIZED adapter ref as cost_usd NULL / cost_basis 'unattributed' (NOT silent 'unknown'/$0) WITHOUT failing the run", async () => {
     const context: Phase1FixtureRunContext = {
       runId: "run_cost_unknown_ok",
       specId: "spec_cost_unknown_ok",
@@ -128,8 +128,10 @@ describe("phase 1 fixture cost-record persistence", () => {
     const events = new FakeEventStore();
     const secrets = new FakeSecretStore();
     await storeGithubToken(secrets, { ref: context.githubCredentialRef, token: "ghp_secretToken" });
-    // An auth ref that matches no rule resolves to unknown billing — cost is
-    // unknown, but the run must NOT fail (token accounting still lands).
+    // An auth ref that matches no rule is UNRECOGNIZED (a misconfig). Cost stays a
+    // genuine NULL, but BUDGET-SAFETY C1 records it 'unattributed' (NOT silent $0)
+    // and emits a loud cost.unattributed — the run must still NOT fail (token
+    // accounting still lands).
     const unattributableWriter: WriterAdapter = {
       kind: "writer",
       cli: "fake",
@@ -191,12 +193,21 @@ describe("phase 1 fixture cost-record persistence", () => {
     });
     expect(result.ci.status).toBe("passed");
     expect(events.events.some((event) => event.eventType === "phase1.fixture.failed")).toBe(false);
-    // The writer cost row still lands with cost unknown.
+    // The writer cost row still lands, cost genuinely NULL — but flagged 'unattributed'
+    // (NOT silent 'unknown'/$0) so the budget gate fails closed on it (BUDGET-SAFETY C1).
     const writerInsert = pool.costInserts[0];
     // cost_usd
     expect(writerInsert?.params[12]).toBeNull();
+    // billing_mode
+    expect(String(writerInsert?.params[13])).toBe("unattributed");
     // cost_basis
-    expect(String(writerInsert?.params[14])).toBe("unknown");
+    expect(String(writerInsert?.params[14])).toBe("unattributed");
+    // The misconfig is surfaced LOUDLY — a cost.unattributed event naming the ref
+    // KIND only (never the secret name "something").
+    const unattributed = events.events.find((event) => event.eventType === "cost.unattributed");
+    expect(unattributed).toBeDefined();
+    expect(unattributed?.payload).toMatchObject({ refKind: "vault/secret/legacy" });
+    expect(JSON.stringify(unattributed?.payload)).not.toContain("something");
   });
 });
 

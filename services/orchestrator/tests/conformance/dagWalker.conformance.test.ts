@@ -164,6 +164,7 @@ class RecordingEventEmitter implements DagEventEmitter {
     spentUsd: number;
     period: "monthly" | "total";
     readyHeldBack: number;
+    reason?: "unpriced_spend" | "unparseable_config";
   }): Promise<void> {
     this.records.push({
       type: "dag.budget.paused",
@@ -171,6 +172,7 @@ class RecordingEventEmitter implements DagEventEmitter {
       spentUsd: input.spentUsd,
       period: input.period,
       readyHeldBack: input.readyHeldBack,
+      ...(input.reason !== undefined && { reason: input.reason }),
     });
   }
 

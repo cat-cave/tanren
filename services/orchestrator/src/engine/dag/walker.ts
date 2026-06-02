@@ -30,10 +30,10 @@ import {
   type DagEnqueuer,
   type DagReadModel,
   type DagWalker,
-  isBudgetExhausted,
   planSpeculativeDagTick,
   type PlannedEnqueue,
   type ProjectBudgetState,
+  shouldPauseOnBudget,
   type WalkResult,
 } from "../contracts/dagWalker.js";
 import type { DagLifecycleReadModel } from "../contracts/dagLifecycle.js";
@@ -109,13 +109,14 @@ export class EventEmittingDagWalker implements DagWalker {
       this.deps.budgetGate.resolveBudget(projectId),
     ]);
 
-    // The GENUINE dollar-budget gate (autonomy-engine.md §3 proof 6): when the
-    // project's cumulative spend over the configured period has reached the
-    // configured ceiling, enqueue NOTHING this tick and pause on budget. In-flight
-    // runs are NOT touched (they are bounded by the escape hatches) — only NEW work
-    // stops. A project with no budget configured (`ceilingUsd: undefined`) never
-    // hits this branch, so behavior is byte-identical to before.
-    if (isBudgetExhausted(budget)) {
+    // The dollar-budget gate (autonomy-engine.md §3 proof 6 + BUDGET-SAFETY C1b/M5):
+    // when the project's cumulative spend has reached the configured ceiling — OR the
+    // gate must FAIL CLOSED (unpriced spend / unparseable config) — enqueue NOTHING
+    // this tick and pause on budget. In-flight runs are NOT touched (they are bounded
+    // by the escape hatches) — only NEW work stops. A project with no budget concern
+    // (`ceilingUsd: undefined`, no failClosed) never hits this branch, so behavior is
+    // byte-identical to before.
+    if (shouldPauseOnBudget(budget)) {
       return this.pauseOnBudget(projectId, budget);
     }
 
@@ -178,19 +179,21 @@ export class EventEmittingDagWalker implements DagWalker {
   }
 
   /**
-   * Pause the tick on the genuine dollar-budget ceiling: enqueue nothing, emit
-   * dag.budget.paused with the configured ceiling + the measured spend, and return
-   * a `budget_paused` result. Only reached when a ceiling is configured AND reached
-   * (`isBudgetExhausted`), so `ceilingUsd` is always defined here.
+   * Pause the tick on the dollar-budget gate: enqueue nothing, emit dag.budget.paused
+   * with the configured ceiling + the measured spend (+ the FAIL-CLOSED reason when
+   * this is a safety pause), and return a `budget_paused` result. Reached on a genuine
+   * ceiling-reached pause (ceiling defined) OR a fail-closed pause (BUDGET-SAFETY
+   * C1b/M5 — `ceilingUsd` may be undefined when the config was unparseable, so it
+   * defaults to 0 in the event).
    */
   private async pauseOnBudget(projectId: string, budget: ProjectBudgetState): Promise<WalkResult> {
     await this.deps.events.emitBudgetPaused({
       projectId,
-      // Guarded by isBudgetExhausted — the ceiling is defined on this path.
       ceilingUsd: budget.ceilingUsd ?? 0,
       spentUsd: budget.spentUsd,
       period: budget.period,
       readyHeldBack: 0,
+      ...(budget.failClosed !== undefined && { reason: budget.failClosed }),
     });
     return { projectId, status: "budget_paused", enqueuedSpecIds: [], enqueuedRunIds: [] };
   }

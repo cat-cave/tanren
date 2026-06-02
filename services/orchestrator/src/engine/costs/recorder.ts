@@ -171,6 +171,26 @@ export class CostRecorder {
         costBasis: source.costBasis,
       },
     });
+    // BUDGET-SAFETY (C1): an UNRECOGNIZED credential ref priced this real call as
+    // NULL dollars. Do NOT let it slip by as a silent $0 — emit a loud,
+    // secret-free `cost.unattributed` event naming the ref KIND only, so an
+    // operator sees the misconfig and the budget gate fails closed on the row.
+    if (source.unattributedRefKind !== null) {
+      await this.eventStore.append({
+        runId: context.runId,
+        taskId: context.taskId,
+        specId: context.specId,
+        projectId: context.projectId,
+        eventType: "cost.unattributed",
+        payload: {
+          taskId: context.taskId,
+          cli: context.cli,
+          refKind: source.unattributedRefKind,
+          reason:
+            "unrecognized LLM credential ref (no known credential/<kind>/ prefix): cost cannot be priced, recorded as cost_usd=NULL — budget gate fails closed",
+        },
+      });
+    }
     return {
       billingMode: source.billingMode,
       costBasis: source.costBasis,

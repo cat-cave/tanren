@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "cli": {
+      "type": "string"
+    },
+    "reason": {
+      "type": "string"
+    },
+    "refKind": {
+      "type": "string"
+    },
+    "taskId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "taskId",
+    "cli",
+    "refKind",
+    "reason"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.cost.unattributed"
+}

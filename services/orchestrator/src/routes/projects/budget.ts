@@ -20,7 +20,7 @@ import type { Context } from "hono";
 import type pg from "pg";
 import { z } from "zod";
 import { DEFAULT_BUDGET_PERIOD, migrateProjectConfig } from "../../engine/config/index.js";
-import { isBudgetExhausted } from "../../engine/contracts/dagWalker.js";
+import { type ProjectBudgetState, shouldPauseOnBudget } from "../../engine/contracts/dagWalker.js";
 import { PgBudgetGate } from "../../engine/dag/budgetGate.js";
 import { ProjectStore } from "../../engine/repositories/index.js";
 import { systemActor } from "../../engine/state/actor.js";
@@ -43,14 +43,16 @@ export interface BudgetView {
   paused: boolean;
 }
 
-function toView(state: { ceilingUsd: number | undefined; period: "monthly" | "total"; spentUsd: number }): BudgetView {
+function toView(state: ProjectBudgetState): BudgetView {
   const ceilingUsd = state.ceilingUsd ?? null;
   return {
     ceilingUsd,
     period: state.period,
     spentUsd: state.spentUsd,
     remainingUsd: ceilingUsd === null ? null : Math.max(0, ceilingUsd - state.spentUsd),
-    paused: isBudgetExhausted(state),
+    // BUDGET-SAFETY (C1b/M5): a fail-closed safety pause shows as paused too, not
+    // just the genuine ceiling-reached case.
+    paused: shouldPauseOnBudget(state),
   };
 }
 

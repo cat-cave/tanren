@@ -3,7 +3,7 @@
 // precedence; `isBudgetExhausted` is the gate decision the DagWalker consults.
 
 import { describe, expect, it } from "vitest";
-import { isBudgetExhausted } from "../src/engine/contracts/dagWalker.js";
+import { isBudgetExhausted, shouldPauseOnBudget } from "../src/engine/contracts/dagWalker.js";
 import { resolveEffectiveBudget } from "../src/engine/dag/budgetGate.js";
 
 const orgConfig = (defaultBudget?: { ceilingUsd: number; period?: "monthly" | "total" }) => ({
@@ -16,13 +16,13 @@ const projectConfig = (budget?: { ceilingUsd: number; period?: "monthly" | "tota
 });
 
 describe("resolveEffectiveBudget (project-over-org)", () => {
-  it("returns undefined (unlimited) when neither layer sets a budget", () => {
-    expect(resolveEffectiveBudget(projectConfig(), orgConfig())).toBeUndefined();
+  it("is an ABSENT (unlimited) budget when neither layer sets one", () => {
+    expect(resolveEffectiveBudget(projectConfig(), orgConfig())).toEqual({ kind: "ok", budget: undefined });
   });
 
   it("uses the org default when the project sets none", () => {
     const resolved = resolveEffectiveBudget(projectConfig(), orgConfig({ ceilingUsd: 100 }));
-    expect(resolved).toEqual({ ceilingUsd: 100, period: "monthly" });
+    expect(resolved).toEqual({ kind: "ok", budget: { ceilingUsd: 100, period: "monthly" } });
   });
 
   it("the project budget wins over the org default", () => {
@@ -30,15 +30,41 @@ describe("resolveEffectiveBudget (project-over-org)", () => {
       projectConfig({ ceilingUsd: 10, period: "total" }),
       orgConfig({ ceilingUsd: 100 }),
     );
-    expect(resolved).toEqual({ ceilingUsd: 10, period: "total" });
+    expect(resolved).toEqual({ kind: "ok", budget: { ceilingUsd: 10, period: "total" } });
   });
 
   it("defaults the period to monthly", () => {
-    expect(resolveEffectiveBudget(projectConfig({ ceilingUsd: 5 }), orgConfig())?.period).toBe("monthly");
+    const resolved = resolveEffectiveBudget(projectConfig({ ceilingUsd: 5 }), orgConfig());
+    expect(resolved).toEqual({ kind: "ok", budget: { ceilingUsd: 5, period: "monthly" } });
   });
 
-  it("treats an unparseable config as no budget (never throws)", () => {
-    expect(resolveEffectiveBudget({ not: "versioned" }, { also: "bad" })).toBeUndefined();
+  it("BUDGET-SAFETY M5: a PRESENT-but-unparseable config FAILS CLOSED, never unlimited", () => {
+    // A present-but-undecodable blob must NOT silently resolve to "no budget".
+    expect(resolveEffectiveBudget({ not: "versioned" }, { also: "bad" })).toEqual({ kind: "unparseable" });
+    // An unparseable ORG config (after a parseable project with no budget) also fails closed.
+    expect(resolveEffectiveBudget(projectConfig(), { also: "bad" })).toEqual({ kind: "unparseable" });
+  });
+});
+
+describe("shouldPauseOnBudget (the full gate decision, incl. fail-closed)", () => {
+  it("pauses on a reached ceiling (the genuine gate)", () => {
+    expect(shouldPauseOnBudget({ ceilingUsd: 50, period: "total", spentUsd: 50 })).toBe(true);
+  });
+
+  it("does NOT pause under the ceiling with no fail-closed reason", () => {
+    expect(shouldPauseOnBudget({ ceilingUsd: 50, period: "monthly", spentUsd: 10 })).toBe(false);
+  });
+
+  it("BUDGET-SAFETY C1b: FAILS CLOSED on unpriced spend even when measured spend is $0", () => {
+    expect(shouldPauseOnBudget({ ceilingUsd: 50, period: "monthly", spentUsd: 0, failClosed: "unpriced_spend" })).toBe(
+      true,
+    );
+  });
+
+  it("BUDGET-SAFETY M5: FAILS CLOSED on unparseable config (ceiling undefined)", () => {
+    expect(
+      shouldPauseOnBudget({ ceilingUsd: undefined, period: "monthly", spentUsd: 0, failClosed: "unparseable_config" }),
+    ).toBe(true);
   });
 });
 

@@ -121,7 +121,7 @@ describe("CostRecorder", () => {
     expect(result.costUsd).toBeNull();
   });
 
-  it("records an unattributable ref as cost_basis 'unknown' without throwing", async () => {
+  it("BUDGET-SAFETY C1: records an UNRECOGNIZED ref as 'unattributed' and emits a LOUD cost.unattributed (NOT a silent $0)", async () => {
     const pool = new FakeCostPool();
     const events = new FakeEventStore();
     const recorder = new CostRecorder(pool as never, events);
@@ -130,9 +130,34 @@ describe("CostRecorder", () => {
       usage({ inputTokens: 12, outputTokens: 8, totalTokens: 20 }),
       {},
     );
-    expect(result.costBasis).toBe("unknown");
+    // cost_usd is still genuinely NULL (we cannot price it), but the row is flagged
+    // 'unattributed' (NOT silently 'unknown'/$0) and a loud event names the misconfig.
+    expect(result.billingMode).toBe("unattributed");
+    expect(result.costBasis).toBe("unattributed");
     expect(result.costUsd).toBeNull();
     expect(pool.inserts).toHaveLength(1);
+    const params = pool.inserts[0]?.params ?? [];
+    expect(params[COST_USD]).toBeNull();
+    expect(params[BILLING_MODE]).toBe("unattributed");
+    expect(params[COST_BASIS]).toBe("unattributed");
+    // The recorder emits cost.resolved THEN the loud cost.unattributed.
+    expect(events.events.map((event) => event.eventType)).toEqual(["cost.resolved", "cost.unattributed"]);
+    const unattributed = events.events.find((event) => event.eventType === "cost.unattributed");
+    // The event names the ref KIND only — NEVER the secret value ("legacy").
+    expect(unattributed?.payload).toMatchObject({ refKind: "vault/secret/dev" });
+    expect(JSON.stringify(unattributed?.payload)).not.toContain("legacy");
+  });
+
+  it("does NOT emit cost.unattributed for an honestly-unpriceable subscription ref", async () => {
+    const pool = new FakeCostPool();
+    const events = new FakeEventStore();
+    const recorder = new CostRecorder(pool as never, events);
+    await recorder.record(
+      { ...context, cli: "codex", model: "gpt-codex", authRef: "credential/codex/dev" },
+      usage({ inputTokens: 5, totalTokens: 5 }),
+      {},
+    );
+    // A recognized subscription credential is a legitimate NULL-dollar row — no loud event.
     expect(events.events.map((event) => event.eventType)).toEqual(["cost.resolved"]);
   });
 

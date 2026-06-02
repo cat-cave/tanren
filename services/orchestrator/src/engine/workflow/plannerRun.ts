@@ -19,6 +19,7 @@ import type { CiWhen } from "../ci/index.js";
 import type { EscapeHatches, RoutingTable } from "../config/shared.js";
 import type { OrgGithubAppInstallation } from "../config/orgConfig.js";
 import type { Allocator, SshTarget } from "../contracts/allocator.js";
+import type { BudgetGate } from "../contracts/dagWalker.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { SshSubstrate } from "../contracts/sshSubstrate.js";
@@ -38,9 +39,8 @@ import { buildReGateCi, pollCiUntilTerminal } from "./plannerRunCi.js";
 import type { GateOutcome } from "./gate/index.js";
 import {
   buildDefaultGate,
-  defaultRoutingAdapters,
-  defaultUsageProbe,
   resolveConflictResolverHook,
+  resolveRunAdaptersWithBudgetPreflight,
   simulatedReviewSeam,
 } from "./plannerRunAdapters.js";
 import { prepareRunWorkspace } from "./plannerRunWorkspace.js";
@@ -96,21 +96,18 @@ export interface PlannerRunContext {
   identitySecretRef: string;
   githubCredentialRef: string;
   /**
-   * P2a (Part 2): the org's GitHub App installation, when the org installed the
-   * App. The workspace CLONE resolves its token App-first through the
-   * VcsProvider seam (exactly like the CI-poll / merge stages), so a private
-   * clone uses the auto-rotating installation token when an App is present and
-   * only falls back to the static `githubCredentialRef` when it is not.
+   * P2a (Part 2): the org's GitHub App installation, when the org installed the App. The
+   * workspace CLONE resolves its token App-first through the VcsProvider seam (like the
+   * CI-poll / merge stages), so a private clone uses the auto-rotating installation token
+   * when an App is present and only falls back to the static `githubCredentialRef` if not.
    */
   installation?: OrgGithubAppInstallation;
-  // Required to build the default (real Codex) adapters + usage probe. Tests
-  // that inject buildAdapters/buildUsageProbe may omit it.
+  // Required to build the default (real Codex) adapters + usage probe. Tests that inject buildAdapters/buildUsageProbe may omit it.
   codexCredentialRef?: string;
-  // The run's effective per-role provider routing table (project routing merged
-  // onto a per-role default-Codex table built from `codexCredentialRef`). This
-  // is what the default adapters resolve from — Codex stays the default ONLY
-  // because the default routing DATA says so, not because of any code-level
-  // hardcode. Tests that inject buildAdapters may omit it.
+  // The run's effective per-role provider routing table (project routing merged onto a
+  // per-role default-Codex table built from `codexCredentialRef`). This is what the default
+  // adapters resolve from — Codex stays the default ONLY because the default routing DATA
+  // says so, not any code-level hardcode. Tests that inject buildAdapters may omit it.
   routing?: RoutingTable;
   // SaaS Tier-B #5: when a MANAGED run resolved an OpenAI-compatible endpoint
   // override, this is the base URL every resolved adapter is pointed at. Absent
@@ -196,6 +193,9 @@ export interface RunPlannerLoopInput {
   // Test seams. Omitted in production → real Codex adapters + SSH usage probe.
   buildAdapters?: (ctx: PlannerRunAdapterContext) => SubtaskLoopAdapters;
   buildUsageProbe?: (ctx: PlannerRunAdapterContext) => UsageProbe | undefined;
+  // BUDGET-SAFETY (M6): the budget-gate seam the run-setup ceiling preflight resolves the
+  // configured ceiling through. Defaults to PgBudgetGate over `pool`; tests inject a fake.
+  budgetGate?: BudgetGate;
   // reviewPolicy: "simulated" seam. Omitted in production → the reviewer
   // Answerer is resolved from the project routing (audit chain head; Codex by
   // default). Only invoked when the project's reviewPolicy is "simulated".
@@ -325,8 +325,8 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
       target: allocation.target,
       codexHome: codexHomeForRun(context.runId),
     };
-    const adapters = (input.buildAdapters ?? ((ctx) => defaultRoutingAdapters(input, ctx)))(adapterCtx);
-    const usageProbe = (input.buildUsageProbe ?? ((ctx) => defaultUsageProbe(input, ctx)))(adapterCtx);
+    // Build adapters + usage probe AND run the BUDGET-SAFETY (M6) ceiling preflight (fail closed on an unreachable ceiling).
+    const { adapters, usageProbe } = await resolveRunAdaptersWithBudgetPreflight(input, adapterCtx, appendEvent);
 
     // P3-0005: the deterministic gate runs on the just-bootstrapped workspace.
     // Resolve the CI config once (tanren-ci.yml, else the default) and run the

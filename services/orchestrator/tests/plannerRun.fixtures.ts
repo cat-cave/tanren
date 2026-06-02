@@ -461,6 +461,15 @@ export class PlannerRunPool {
     return { rows: [], rowCount: 1 };
   }
 
+  // A minimal `connect()` so seams that open a `runWithOrgScope` /
+  // `runWithSystemScope` transaction (e.g. the BUDGET-SAFETY M6 PgBudgetGate
+  // preflight) work over this fake: the returned client routes `query` back here
+  // and `release()` is a no-op. The budget read's `SELECT ... FROM projects`
+  // hits the catch-all (empty rows) → no resolvable org → unlimited (no-op).
+  async connect(): Promise<{ query: PlannerRunPool["query"]; release: () => void }> {
+    return { query: this.query.bind(this), release: () => {} };
+  }
+
   asPgPool() {
     return this as never;
   }

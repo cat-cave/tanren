@@ -18,6 +18,13 @@
       "minimum": 0,
       "type": "integer"
     },
+    "reason": {
+      "enum": [
+        "unpriced_spend",
+        "unparseable_config"
+      ],
+      "type": "string"
+    },
     "spentUsd": {
       "minimum": 0,
       "type": "number"

@@ -43,8 +43,15 @@ describe("cost source attribution", () => {
     });
   });
 
-  it("classifies an unrecognized credential prefix as unknown billing", () => {
-    expect(classifyAuthRef("credential/legacy/whatever").billingMode).toBe("unknown");
+  it("BUDGET-SAFETY C1: classifies an unrecognized credential prefix as 'unrecognized' (not silently unknown)", () => {
+    const classification = classifyAuthRef("credential/legacy/whatever");
+    expect(classification.billingMode).toBe("unrecognized");
+    // The ref KIND only (secret name stripped) is surfaced — never the secret value.
+    expect(classification).toMatchObject({ refKind: "credential/legacy" });
+  });
+
+  it("BUDGET-SAFETY C1: classifies the empty (no-credential) ref as honestly 'absent'", () => {
+    expect(classifyAuthRef("").billingMode).toBe("absent");
   });
 
   // SaaS Tier-B #5: a MANAGED run resolves the platform OpenRouter ref. It must
@@ -102,18 +109,37 @@ describe("cost source attribution", () => {
     expect(source.costBasis).toBe("unknown");
   });
 
-  it("resolves an unknown ref to cost_basis 'unknown' without throwing", () => {
+  it("BUDGET-SAFETY C1: resolves an UNRECOGNIZED ref to 'unattributed' (NOT a silent $0 self_hosted)", () => {
     const source = resolveCostSource({
       cli: "codex",
       authRef: "vault/secret/dev/random",
       rawUsage: {},
     });
-    expect(source.costBasis).toBe("unknown");
+    // The old behavior silently relabeled this to billingMode='self_hosted',
+    // costBasis='unknown' → a $0 budget contribution. It must now be flagged.
+    expect(source.billingMode).toBe("unattributed");
+    expect(source.costBasis).toBe("unattributed");
+    expect(source.unattributedRefKind).toBe("vault/secret/dev");
+    // Cost is still genuinely NULL — we cannot price it — but it is NOT silent.
+    expect(computeCostUsd(source, usage({ inputTokens: 100, outputTokens: 100 }))).toBeNull();
   });
 
-  it("resolves an empty ref to cost_basis 'unknown' without throwing", () => {
+  it("BUDGET-SAFETY C1: a real ccusage figure prices even an unrecognized ref (NOT unattributed)", () => {
+    const source = resolveCostSource({
+      cli: "codex",
+      authRef: "vault/secret/dev/random",
+      ccusageCostUsd: 0.9,
+      rawUsage: {},
+    });
+    expect(source.costBasis).toBe("ccusage");
+    expect(source.unattributedRefKind).toBeNull();
+  });
+
+  it("resolves an empty (no-credential) ref to cost_basis 'unknown', NOT unattributed", () => {
     const source = resolveCostSource({ cli: "codex", authRef: "", rawUsage: {} });
     expect(source.costBasis).toBe("unknown");
+    expect(source.billingMode).toBe("self_hosted");
+    expect(source.unattributedRefKind).toBeNull();
   });
 
   it("lets a positive ccusage figure win over the static provider table", () => {

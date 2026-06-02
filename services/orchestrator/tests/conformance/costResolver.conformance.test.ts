@@ -152,8 +152,10 @@ const productionScenarios: readonly ProductionScenario[] = [
   },
   {
     // An empty/unrecognized auth-ref → unknown classification → self_hosted
-    // billing, unknown basis, null cost. It NEVER throws and NEVER fabricates.
-    name: "unrecognized auth-ref degrades to honest-null self-hosted",
+    // billing, unknown basis, null cost. It NEVER throws and NEVER fabricates. An
+    // UNRECOGNIZED non-empty ref is a different, LOUD case (BUDGET-SAFETY C1) —
+    // it is `unattributed`, covered by costsAttribution.test.ts, not honest-null.
+    name: "empty (no-credential) auth-ref degrades to honest-null self-hosted",
     input: makeInput("unknown-provider", "unknown-model"),
     situation: { authRef: "", cli: "fake" },
     expectBillingMode: "self_hosted",

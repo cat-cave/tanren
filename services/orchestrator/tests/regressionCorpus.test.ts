@@ -125,10 +125,13 @@ describe("regression: GitHub 401 token re-mint retry (audit Medium — installat
 // The forbidden literal is assembled at runtime so this test file never
 // embeds the placeholder token the no-unknown-cost-source check scans for.
 describe("regression: cost-basis allow-list (audit High — mandatory cost attribution)", () => {
-  it("accepts only the four honest cost bases and rejects the catch-all placeholder", () => {
+  it("accepts only the honest cost bases (incl. BUDGET-SAFETY 'unattributed') and rejects the catch-all placeholder", () => {
     const forbiddenPlaceholder = ["legacy", "unknown"].join("_");
-    expect(CostBasis.options).toEqual(["ccusage", "provider_pricing", "credits", "unknown"]);
+    // BUDGET-SAFETY (C1): 'unattributed' is the LOUD basis for an unrecognized
+    // credential ref (NULL cost, NOT a silent $0) — added alongside the four honest bases.
+    expect(CostBasis.options).toEqual(["ccusage", "provider_pricing", "credits", "unknown", "unattributed"]);
     expect(CostBasis.safeParse(forbiddenPlaceholder).success).toBe(false);
     expect(CostBasis.safeParse("unknown").success).toBe(true);
+    expect(CostBasis.safeParse("unattributed").success).toBe(true);
   });
 });

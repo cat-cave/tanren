@@ -19,13 +19,24 @@
 // Subscription windows are percent-of-window limits, not token budgets, so we
 // never fabricate a "$20 / 50M tokens" estimate. When we cannot price a call
 // we record cost_usd = NULL with cost_basis = 'unknown' and move on.
+//
+// BUDGET-SAFETY (C1): an HONESTLY-unpriceable call (a recognized subscription /
+// self-hosted credential, or the no-credential fixture path) is a legitimate
+// NULL-dollar row with billing_mode in {subscription,self_hosted} and
+// cost_basis='unknown'. An UNRECOGNIZED credential ref is a DIFFERENT thing — a
+// misconfiguration. It must NOT be silently relabeled as a $0 self-hosted row
+// (which would let unbounded real spend slip under a configured ceiling). It is
+// recorded with the distinct billing_mode='unattributed' + cost_basis=
+// 'unattributed' (cost_usd still NULL — we genuinely cannot price it) so the
+// recorder can emit `cost.unattributed` AND the budget gate can FAIL CLOSED on
+// it rather than assume $0.
 import { z } from "zod";
 import type { TokenUsage } from "../providers/types.js";
 
-export const BillingMode = z.enum(["per_token", "subscription", "self_hosted"]);
+export const BillingMode = z.enum(["per_token", "subscription", "self_hosted", "unattributed"]);
 export type BillingMode = z.infer<typeof BillingMode>;
 
-export const CostBasis = z.enum(["ccusage", "provider_pricing", "credits", "unknown"]);
+export const CostBasis = z.enum(["ccusage", "provider_pricing", "credits", "unknown", "unattributed"]);
 export type CostBasis = z.infer<typeof CostBasis>;
 
 // Dollar value of one prepaid Codex/ChatGPT credit. Observed on the live Pro
@@ -52,6 +63,13 @@ export interface CostSource {
   // else null. ccusage reports actual billed/computed cost from the CLI's own
   // session logs, so when present it OUTRANKS the static provider table.
   ccusageCostUsd: number | null;
+  // BUDGET-SAFETY (C1): the SAFE ref-KIND label (e.g. `credential/mystery`, never
+  // the secret value) when the credential ref was UNRECOGNIZED — set iff
+  // billingMode/costBasis are 'unattributed'. The recorder emits a
+  // `cost.unattributed` event carrying this so an operator sees the misconfig,
+  // and the budget gate fails closed on the resulting NULL-dollar row. `null` for
+  // every honest (priced or honestly-unpriceable) source.
+  unattributedRefKind: string | null;
   rawUsage: RawUsage;
 }
 
@@ -89,15 +107,28 @@ export function providerRate(provider: string): ProviderRate | undefined {
 // subscription bundles must win over per_token when the ref is a Codex/Claude
 // ChatGPT subscription bundle so a subscription operator is never charged at
 // provider list prices.
+//
+// Three honest terminal shapes plus two failure shapes:
+//   - subscription / per_token / self_hosted — a RECOGNIZED ref kind.
+//   - absent      — the empty-ref no-credential path (fixtures / token-only
+//                   accounting calls). Honestly unpriceable, NOT a misconfig.
+//   - unrecognized — a NON-EMPTY ref that matches no known `credential/<kind>/`
+//                   prefix. A MISCONFIGURATION: it must never be silently coerced
+//                   to a $0 self-hosted row (BUDGET-SAFETY C1). `refKind` names
+//                   the ref's KIND segment only (never the secret value) for the
+//                   `cost.unattributed` event.
 type RefClassification =
   | { billingMode: "subscription"; provider: string }
   | { billingMode: "per_token"; provider: string }
   | { billingMode: "self_hosted"; provider: string }
-  | { billingMode: "unknown"; provider: string };
+  | { billingMode: "absent"; provider: string }
+  | { billingMode: "unrecognized"; provider: string; refKind: string };
 
 export function classifyAuthRef(authRef: string): RefClassification {
   if (authRef === "") {
-    return { billingMode: "unknown", provider: "unknown" };
+    // No credential ref at all — the token-only / fixture path. Honestly
+    // unpriceable (subscription-equivalent NULL dollars), never a misconfig.
+    return { billingMode: "absent", provider: "unknown" };
   }
   // Codex/Claude CLI ChatGPT-subscription bundles live under credential/codex/.
   // These are subscription-window dollars, never per-token.
@@ -116,7 +147,8 @@ export function classifyAuthRef(authRef: string): RefClassification {
   if (authRef.startsWith("credential/self-hosted/")) {
     return { billingMode: "self_hosted", provider: refTailSegment(authRef) ?? "self-hosted" };
   }
-  return { billingMode: "unknown", provider: "unknown" };
+  // An UNRECOGNIZED non-empty ref. Do NOT silently relabel to self_hosted/$0.
+  return { billingMode: "unrecognized", provider: "unknown", refKind: refKindOf(authRef) };
 }
 
 function refTailSegment(ref: string): string | undefined {
@@ -124,32 +156,47 @@ function refTailSegment(ref: string): string | undefined {
   return parts.at(-1);
 }
 
+// The KIND segments of a credential ref, SAFE to surface in an event: the leading
+// path segments WITHOUT the final identifier (the secret name). E.g.
+// `credential/mystery/prod-key` → `credential/mystery`. Never the secret value.
+export function refKindOf(ref: string): string {
+  const parts = ref.split("/").filter((part) => part !== "");
+  if (parts.length <= 1) {
+    return parts[0] ?? "unknown";
+  }
+  return parts.slice(0, -1).join("/");
+}
+
 // resolveCostSource maps an auth ref to a billing mode and a cost basis.
-// It NEVER throws for an unrecognized ref: an unknown billing mode resolves to
-// cost_basis = 'unknown' (cost_usd will be null). Token accounting still
-// happens for every call.
+// It NEVER throws for an unrecognized ref (token accounting still happens for
+// every call), but it NO LONGER silently coerces an unrecognized ref into a $0
+// self-hosted row — that would defeat the budget ceiling (BUDGET-SAFETY C1).
 //
 // Cost-basis precedence (PROJECT_BRIEF §4): a positive ccusage figure is a
 // REAL billed/computed dollar amount from the CLI's own logs, so it wins over
 // everything — even for a subscription credential, where ccusage may still
 // compute a comparable cost. Otherwise a per_token credential with a known
-// provider rate prices from the static table; anything else is honestly
-// unknown (cost_usd NULL), which does NOT fail the task.
+// provider rate prices from the static table; a RECOGNIZED subscription/
+// self-hosted (or the no-credential `absent` path) is honestly unknown (cost_usd
+// NULL); an UNRECOGNIZED ref is `unattributed` (also NULL, but flagged so the
+// recorder narrates it and the budget gate fails closed). Either way the task
+// does NOT fail here.
 export function resolveCostSource(input: AttributionInput): CostSource {
   const classification = classifyAuthRef(input.authRef);
   const ccusageCostUsd =
     typeof input.ccusageCostUsd === "number" && Number.isFinite(input.ccusageCostUsd) && input.ccusageCostUsd > 0
       ? input.ccusageCostUsd
       : null;
-  const billingMode: BillingMode =
-    classification.billingMode === "unknown" ? "self_hosted" : classification.billingMode;
   if (ccusageCostUsd !== null) {
+    // A real measured dollar figure prices the call regardless of ref kind —
+    // including an otherwise-unrecognized ref, which is then NOT unattributed.
     return {
-      billingMode,
+      billingMode: ccusageBillingMode(classification.billingMode),
       costBasis: "ccusage",
       provider: classification.provider,
       rate: null,
       ccusageCostUsd,
+      unattributedRefKind: null,
       rawUsage: input.rawUsage,
     };
   }
@@ -162,18 +209,49 @@ export function resolveCostSource(input: AttributionInput): CostSource {
       provider: classification.provider,
       rate,
       ccusageCostUsd: null,
+      unattributedRefKind: null,
       rawUsage: input.rawUsage,
     };
   }
-  // subscription, self_hosted, or unknown → no reliable per-call dollar basis.
+  if (classification.billingMode === "unrecognized") {
+    // The misconfig path: cost_usd stays NULL (we genuinely cannot price it), but
+    // it is recorded as `unattributed` (NOT $0 self_hosted) so the recorder emits
+    // `cost.unattributed` and the budget gate fails closed on the NULL row.
+    return {
+      billingMode: "unattributed",
+      costBasis: "unattributed",
+      provider: classification.provider,
+      rate: null,
+      ccusageCostUsd: null,
+      unattributedRefKind: classification.refKind,
+      rawUsage: input.rawUsage,
+    };
+  }
+  // subscription, self_hosted, or absent → an HONESTLY-unpriceable NULL-dollar
+  // row. `absent` (the no-credential path) maps to self_hosted, unchanged.
   return {
-    billingMode,
+    billingMode: classification.billingMode === "absent" ? "self_hosted" : classification.billingMode,
     costBasis: "unknown",
     provider: classification.provider,
     rate: null,
     ccusageCostUsd: null,
+    unattributedRefKind: null,
     rawUsage: input.rawUsage,
   };
+}
+
+// The billing_mode stamped on a ccusage-priced row: a recognized mode is kept;
+// an `absent`/`unrecognized` ref that nonetheless produced a real ccusage dollar
+// figure is recorded as self_hosted (a real measured cost, so NOT unattributed).
+function ccusageBillingMode(mode: RefClassification["billingMode"]): BillingMode {
+  switch (mode) {
+    case "subscription":
+    case "per_token":
+    case "self_hosted":
+      return mode;
+    default:
+      return "self_hosted";
+  }
 }
 
 // computeCostUsd returns a fixed-precision dollar string for the NUMERIC(14,6)
