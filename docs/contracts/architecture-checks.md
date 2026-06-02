@@ -18,6 +18,20 @@
 - `answerer-schema-drift-check-wired`: root `package.json` must keep `check:answerer-schema-drift` wired to `scripts/answerer-schema-export.mjs`, and root `check` must run it (directly or via `just ci`).
 - `contract-schema-drift-check-wired`: root `package.json` must keep `check:contract-schema-drift` wired to `scripts/contract-schema-export.mjs`, and root `check` must run it (directly or via `just ci`). This pins the unified JSON-Schema export (Track C §3) — `contracts/json/**` — against drift from its Zod sources.
 - `required-docs-present`: `AGENTS.md`, core playbooks, and this contract must exist.
+- `no-production-stubs`: in any `**/src/**` non-test file, a stub / mock / deterministic-stand-in / no-op-policy identifier (`createDeterministic*Answerer`, a CamelCase-delimited `stub`/`noop`/`fake`/`mock` word — both casings, e.g. `StubChannel` and `noopConflictResolver` — and `templated*` generators) may not be **constructed** (`new …(`) or **default-assigned** (`?? …` / `|| …` / `= …(`). A bare type definition is not a construction and is not flagged. Lives in the sibling module `scripts/check-architecture-stubs.mjs` (keeps `check-architecture.mjs` under the 500-line cap). See the allowlist below.
+
+## no-production-stubs allowlist (P8a §8a)
+
+The stub-ban lint enforces the repo invariant that a stub/mock/no-op may exist **only** under `tests/` and may never be the value a production `src/` path constructs or defaults to. The default of an injectable seam in production must be the **real** impl, or a **hard failure** when unconfigured. A seam whose real impl exists but is unwired stays flagged until wired (the §8a ratchet).
+
+The allowlist is finite, enumerated in `scripts/check-architecture-stubs.mjs`, and **honored only when the construction's file carries an in-source `// arch-allow: <reason>` annotation** (so the exemption is reviewable). Two kinds:
+
+- **Absence-is-honest (permanent).** `StubChannel` in `services/orchestrator/src/engine/notifications/registry.ts`: an unconfigured notification channel resolves to a `StubChannel` that records the dispatch as `stubbed` in the notifications log — an honest "not wired" audit record, never a silent drop.
+- **Phase-pending (temporary — tightens when the phase lands).** Each is the no-op default for a seam whose **real replacement is not yet built**; when the real impl is wired as the production default, delete the fallback and remove the entry:
+  - `noopConflictResolver` in `services/orchestrator/src/engine/workflow/reviewMerge/mergeDispatch.ts` — replaced by the **P2b** intent-preserving conflict resolver.
+  - `createNoopPassRunner` in `services/orchestrator/src/routes/audits/index.ts` — replaced by the **P3** SSH/Answerer-backed read-only audit pass runner.
+
+Note: a **hard-throw** unconfigured seam (`UnconfiguredAllocator`, the `*AnswererUnconfiguredError` throws) is the _correct_ default — failing loudly is not a stand-in — and is deliberately **not** in the taxonomy, so it needs no allowlist entry. The OSS quota no-op is also not here: P1·0 deleted it (budget enforcement is the universal gate).
 
 ## Structural ratchets (Track B wave 3)
 

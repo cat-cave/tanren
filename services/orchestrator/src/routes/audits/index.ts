@@ -63,6 +63,10 @@ const CreateJobBody = z
 
 export function createAuditRoutes(options: AuditRoutesOptions) {
   const app = new Hono<ActorContextEnv>();
+  // arch-allow: pending P3 audit-pass-runner — createNoopPassRunner is the TEMPORARY
+  // default until the SSH/Answerer-backed read-only pass runner is built and wired as
+  // the production default. When that lands, drop this fallback (make passRunner required)
+  // and the allowlist entry tightens. P8a §8a.
   const passRunner = options.passRunner ?? createNoopPassRunner();
 
   app.get("/:orgId/audits", async (c) => {

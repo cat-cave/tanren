@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { checkNoProductionStubs } from "./check-architecture-stubs.mjs";
 import { runArchitectureChecks } from "./check-architecture.mjs";
 import {
   checkCrossPackageDeepImports,
@@ -269,5 +270,115 @@ describe("structural architecture checks", () => {
   it("ignores non-test files", () => {
     const text = "export function f() {\n  expect(spy).toHaveBeenCalled();\n}\n";
     expect(checkNoMockOnlyTests([{ file: "pkg/foo.ts", text }])).toEqual([]);
+  });
+});
+
+describe("no-production-stubs (P8a §8a stub-ban lint)", () => {
+  const srcFile = "services/orchestrator/src/engine/sample.ts";
+
+  it("flags a planted stub construction in production src", () => {
+    const text = [
+      'import { FakeAllocator } from "./contracts/allocator.js";',
+      "export const allocator = new FakeAllocator();",
+      "",
+    ].join("\n");
+    const flagged = checkNoProductionStubs([{ file: srcFile, text }]);
+    expect(flagged.map((item) => item.rule)).toEqual(["no-production-stubs"]);
+    expect(flagged[0]?.line).toBe(2);
+  });
+
+  it("flags a stub used as a default-assignment fallback", () => {
+    const text = "const resolver = input.resolveConflict ?? noopConflictResolver;\n";
+    const flagged = checkNoProductionStubs([{ file: srcFile, text }]);
+    expect(flagged.map((item) => item.rule)).toEqual(["no-production-stubs"]);
+  });
+
+  it("flags a deterministic-answerer construction (the absent-Forge-wiring smell)", () => {
+    const text = "const answerer = createDeterministicOptionsAnswerer();\n";
+    const flagged = checkNoProductionStubs([{ file: srcFile, text }]);
+    expect(flagged.map((item) => item.rule)).toEqual(["no-production-stubs"]);
+  });
+
+  it("passes when the same construction lives under tests/", () => {
+    const text = "export const allocator = new FakeAllocator();\n";
+    const testFile = "services/orchestrator/tests/fixtures/allocator.ts";
+    expect(checkNoProductionStubs([{ file: testFile, text }])).toEqual([]);
+    const dotTest = "services/orchestrator/src/engine/sample.test.ts";
+    expect(checkNoProductionStubs([{ file: dotTest, text }])).toEqual([]);
+  });
+
+  it("does not flag a bare class definition (a definition is not a construction)", () => {
+    const text = "export class FakeAllocator implements Allocator {\n  async allocate() {}\n}\n";
+    expect(checkNoProductionStubs([{ file: srcFile, text }])).toEqual([]);
+  });
+
+  it("ignores a taxonomy word that appears only in prose / JSDoc", () => {
+    const text = [
+      "// The LLM-backed engine that replaces the templated v0 narration.",
+      "/** Builds the real, templated-free generator. */",
+      "export const x = buildReal();",
+      "",
+    ].join("\n");
+    expect(checkNoProductionStubs([{ file: srcFile, text }])).toEqual([]);
+  });
+
+  it("honors an allowlisted construction ONLY when the // arch-allow: annotation is present", () => {
+    const file = "services/orchestrator/src/engine/notifications/registry.ts";
+    const withAnnotation = [
+      "// arch-allow: StubChannel — unconfigured channel records 'stubbed', never silently drops.",
+      "return new StubChannel(kind);",
+      "",
+    ].join("\n");
+    expect(checkNoProductionStubs([{ file, text: withAnnotation }])).toEqual([]);
+
+    const withoutAnnotation = "return new StubChannel(kind);\n";
+    const flagged = checkNoProductionStubs([{ file, text: withoutAnnotation }]);
+    expect(flagged.map((item) => item.rule)).toEqual(["no-production-stubs"]);
+    expect(flagged[0]?.message).toContain("missing the required");
+  });
+
+  it("scopes a pending allowlist entry to its own file (not file-agnostic)", () => {
+    // noopConflictResolver is pending-allowlisted in mergeDispatch.ts only.
+    const elsewhere = "services/orchestrator/src/engine/other.ts";
+    const text = "// arch-allow: pending\nconst r = input.resolve ?? noopConflictResolver;\n";
+    const flagged = checkNoProductionStubs([{ file: elsewhere, text }]);
+    expect(flagged.map((item) => item.rule)).toEqual(["no-production-stubs"]);
+  });
+
+  it("classifies stems by CamelCase/prefix/suffix and ignores non-stem lookalikes", () => {
+    // Stub prefix, noop prefix (lowercase), Fake prefix, Mock suffix, Stub suffix.
+    const hits = [
+      "const a = new StubChannel(k);",
+      "const b = input.x ?? noopConflictResolver;",
+      "const c = new FakeAllocator();",
+      "const d = new HttpMock();",
+      "const e = new ApiStub();",
+    ].join("\n");
+    expect(checkNoProductionStubs([{ file: srcFile, text: `${hits}\n` }])).toHaveLength(5);
+
+    // None contain a delimited stub stem word: "stubbornness", "mockingbird",
+    // "smoke", "stubborn" all split to non-stem words.
+    const misses = [
+      "const a = new Stubbornness();",
+      "const b = new MockingbirdLib();",
+      "const c = new SmokeTest();",
+      "const d = stubbornValue;",
+    ].join("\n");
+    expect(checkNoProductionStubs([{ file: srcFile, text: `${misses}\n` }])).toEqual([]);
+  });
+
+  it("does not extend the allowlisted file's exemption to a different stub identifier", () => {
+    const file = "services/orchestrator/src/engine/notifications/registry.ts";
+    // The annotation is present and StubChannel is allowlisted here, but a
+    // FakeAllocator is not — it must still be flagged.
+    const text = [
+      "// arch-allow: StubChannel — honest not-wired audit record.",
+      "const ch = new StubChannel(kind);",
+      "const a = new FakeAllocator();",
+      "",
+    ].join("\n");
+    const flagged = checkNoProductionStubs([{ file, text }]);
+    expect(flagged).toHaveLength(1);
+    expect(flagged[0]?.line).toBe(3);
   });
 });
