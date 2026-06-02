@@ -27,6 +27,8 @@ import type { PullRequestContributors } from "../../../src/engine/workflow/revie
 import type {
   BuildIntegrationBranchInput,
   BuildIntegrationBranchResult,
+  CreatedIssue,
+  CreateIssueInput,
   OpenDraftPullRequestInput,
   OpenedPullRequest,
   PullRequestMergeability,
@@ -69,6 +71,13 @@ export class InMemoryVcsProvider implements VcsProvider {
       url: `https://github.com/${input.repo.owner}/${input.repo.name}/pull/7`,
       reused: false,
     };
+  }
+  /** Recorded issues so the conformance suite + watcher tests can assert what was filed. */
+  readonly createdIssues: Array<{ title: string; body: string; labels: ReadonlyArray<string> }> = [];
+  async createIssue(input: CreateIssueInput): Promise<CreatedIssue> {
+    this.createdIssues.push({ title: input.title, body: input.body, labels: input.labels ?? [] });
+    const number = this.createdIssues.length;
+    return { number, url: `https://github.com/${input.repo.owner}/${input.repo.name}/issues/${number}` };
   }
   async markReadyForReview(_pr: PullRequestRef, _token: ResolvedVcsToken): Promise<void> {}
   async readPullRequestChecks(_pr: PullRequestRef, _token: ResolvedVcsToken): Promise<GitHubPullRequestChecks> {

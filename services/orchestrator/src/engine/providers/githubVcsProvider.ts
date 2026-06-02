@@ -22,6 +22,8 @@ import { decodeBase64Content } from "../contracts/vcsProvider.js";
 import type {
   BuildIntegrationBranchInput,
   BuildIntegrationBranchResult,
+  CreatedIssue,
+  CreateIssueInput,
   OpenDraftPullRequestInput,
   OpenedPullRequest,
   PullRequestMergeability,
@@ -145,6 +147,28 @@ export class GitHubVcsProvider implements VcsProvider {
       body: input.body,
     });
     return { number: pr.number, url: pr.url, reused: pr.reused };
+  }
+
+  async createIssue(input: CreateIssueInput): Promise<CreatedIssue> {
+    const response = await this.http.request({
+      method: "POST",
+      path: repoApiPath(input.repo, "/issues"),
+      token: input.token.token,
+      refreshToken: input.token.refresh,
+      body: {
+        title: input.title,
+        body: input.body,
+        ...(input.labels !== undefined && input.labels.length > 0 && { labels: [...input.labels] }),
+      },
+    });
+    if (response.status !== 201 || typeof response.body !== "object" || response.body === null) {
+      throw new Error(`GitHub issue create failed: HTTP ${response.status}`);
+    }
+    const body = response.body as { number?: unknown; html_url?: unknown };
+    if (typeof body.number !== "number" || typeof body.html_url !== "string") {
+      throw new TypeError("GitHub issue create returned no number/url");
+    }
+    return { number: body.number, url: body.html_url };
   }
 
   async markReadyForReview(pr: PullRequestRef, token: ResolvedVcsToken): Promise<void> {

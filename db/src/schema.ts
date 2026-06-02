@@ -15,13 +15,22 @@ import {
 } from "drizzle-orm/pg-core";
 import { eventTypeNames } from "./eventTypes.js";
 import { stateEnumLists } from "./stateEnums.js";
-import { enumCheck, mergeQueue, organizations, projects, runs, specs, users } from "./schemaCore.js";
+import {
+  enumCheck,
+  mergeQueue,
+  organizations,
+  postMergeIssueClaims,
+  projects,
+  runs,
+  specs,
+  users,
+} from "./schemaCore.js";
 
 // Core identity + project/spec/run tables live in schemaCore.ts so the split
 // sub-schema files can reference them without importing schema.ts (see
 // schemaCore.ts for the cycle-avoidance rationale). Re-exported here so
 // consumers + the migration generator still see one `schema.*` namespace.
-export { enumCheck, mergeQueue, organizations, projects, runs, specs, users };
+export { enumCheck, mergeQueue, organizations, postMergeIssueClaims, projects, runs, specs, users };
 
 export const tasks = pgTable(
   "tasks",

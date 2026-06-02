@@ -25,6 +25,8 @@ import type { PullRequestContributors } from "../workflow/reviewMerge/governance
 import type {
   BuildIntegrationBranchInput,
   BuildIntegrationBranchResult,
+  CreatedIssue,
+  CreateIssueInput,
   OpenDraftPullRequestInput,
   OpenedPullRequest,
   PullRequestMergeability,
@@ -72,6 +74,9 @@ export class UnconfiguredVcsProvider implements VcsProvider {
     return this.fail();
   }
   async openDraftPullRequest(_input: OpenDraftPullRequestInput): Promise<OpenedPullRequest> {
+    return this.fail();
+  }
+  async createIssue(_input: CreateIssueInput): Promise<CreatedIssue> {
     return this.fail();
   }
   async markReadyForReview(_pr: PullRequestRef, _token: ResolvedVcsToken): Promise<void> {
