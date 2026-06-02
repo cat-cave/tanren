@@ -1,18 +1,24 @@
 // Unit tests for the post-merge auto-issue watcher (tempering.md dimension A).
-// Over a fake pool + the in-memory VcsProvider fake + a recording event store
-// (no Postgres, no network), they prove:
+// Over a fake pool + the in-memory VcsProvider fake + a recording event store + an
+// in-memory atomic claim store (no Postgres, no network), they prove:
 //   - a post-merge CI FAILURE on the base branch opens EXACTLY ONE tracking issue
 //     with the failing checks + links + the post-merge label, and records
 //     merge.post_merge_failed + issue.opened,
-//   - a post-merge PASS opens NO issue,
-//   - a post-merge PENDING opens NO issue (re-checked on the next wake),
-//   - idempotency: a run that already has an issue.opened opens no second issue
-//     (repeated checks / re-notification never spam a duplicate),
-//   - a not-yet-merged run (no merge.completed) is a no-op.
+//   - a post-merge PASS opens NO issue, and a post-merge PENDING opens NO issue
+//     (re-checked on the next wake; neither consumes the claim),
+//   - a not-yet-merged run (no merge.completed) is a no-op,
+//   - single-process idempotency: a second check after a filed issue opens no
+//     duplicate (the `filed` claim short-circuits via the fast-path),
+//   - CROSS-PROCESS race (the shipped gap): two watchers over the SAME merged run
+//     against a SHARED claim store, both reaching the guard before either finishes
+//     filing — EXACTLY ONE createIssue + one issue.opened,
+//   - create-failure releases the claim so a later wake retries (at-most-once, not
+//     permanently suppressed).
 
 import { describe, expect, it } from "vitest";
 import type pg from "pg";
 import { PostMergeWatcher, POST_MERGE_FAILURE_LABEL } from "../src/engine/postMerge/watcher.js";
+import type { PostMergeIssueClaimInput, PostMergeIssueClaimStore } from "../src/engine/postMerge/issueClaimStore.js";
 import type { EventStore, AppendEventInput } from "../src/engine/eventStore.js";
 import type { EventName } from "../src/engine/events/index.js";
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
@@ -23,6 +29,7 @@ import type { RepoRef, ResolvedVcsToken } from "../src/engine/contracts/vcsProvi
 const RUN_ID = "run_pm";
 const PROJECT_ID = "project_pm";
 const SPEC_ID = "spec_pm";
+const ORG_ID = "org_pm";
 const PR_URL = "https://github.com/acme/widget/pull/12";
 const PR_NUMBER = 12;
 const BASE_BRANCH = "main";
@@ -30,14 +37,12 @@ const BASE_BRANCH = "main";
 interface FakePoolState {
   /** Whether the run has a merge.completed event (and its merge sha). */
   merged?: { mergeSha?: string };
-  /** Whether an issue.opened already exists for the run (idempotency seed). */
-  alreadyOpened?: boolean;
 }
 
 /**
  * A fake pool answering the watcher's system-scoped reads:
  *   - SELECT payload FROM events ... event_type = 'merge.completed'
- *   - SELECT EXISTS (... event_type = 'issue.opened')
+ *   - SELECT org_id FROM projects WHERE project_id = $1 (claim-org resolution)
  *   - the loadReviewMergeRunContext join (runs ⋈ projects ⋈ organizations)
  */
 function fakePool(state: FakePoolState): pg.Pool {
@@ -60,8 +65,8 @@ function fakePool(state: FakePoolState): pg.Pool {
           rowCount: 1,
         };
       }
-      if (/event_type = 'issue\.opened'/u.test(sql)) {
-        return { rows: [{ exists: state.alreadyOpened === true }], rowCount: 1 };
+      if (/org_id FROM projects WHERE project_id/u.test(sql)) {
+        return { rows: [{ org_id: ORG_ID }], rowCount: 1 };
       }
       if (/FROM runs r/u.test(sql)) {
         return {
@@ -99,11 +104,54 @@ class RecordingEventStore implements EventStore {
 }
 
 /**
+ * An in-memory ATOMIC claim store (test fixture) modeling the Postgres
+ * `INSERT ... ON CONFLICT (run_id) DO NOTHING` semantics: `claim` is the single
+ * serialization point — exactly one caller per run wins. Because JS is single-
+ * threaded, the synchronous Map mutation in `claim` is itself atomic, so two
+ * interleaved `claim()` calls for the same run can never both win — exactly what
+ * the cross-process Postgres lock guarantees.
+ */
+class InMemoryClaimStore implements PostMergeIssueClaimStore {
+  private readonly rows = new Map<string, { status: "claimed" | "filed" }>();
+  claimCount = 0;
+  // eslint-disable-next-line @typescript-eslint/require-await
+  async claim(input: PostMergeIssueClaimInput): Promise<boolean> {
+    this.claimCount += 1;
+    // ON CONFLICT (run_id) DO NOTHING → a row already exists, so this caller loses.
+    if (this.rows.has(input.runId)) return false;
+    this.rows.set(input.runId, { status: "claimed" });
+    return true;
+  }
+  // eslint-disable-next-line @typescript-eslint/require-await
+  async markFiled(runId: string): Promise<void> {
+    const row = this.rows.get(runId);
+    if (row !== undefined) row.status = "filed";
+  }
+  // eslint-disable-next-line @typescript-eslint/require-await
+  async release(runId: string): Promise<void> {
+    const row = this.rows.get(runId);
+    if (row?.status === "claimed") this.rows.delete(runId);
+  }
+  // eslint-disable-next-line @typescript-eslint/require-await
+  async exists(runId: string): Promise<boolean> {
+    return this.rows.has(runId);
+  }
+  /** Test helper: seed an already-filed claim (a prior wake handled this merge). */
+  seedFiled(runId: string): void {
+    this.rows.set(runId, { status: "filed" });
+  }
+}
+
+/**
  * The in-memory VcsProvider fake, with `readBranchChecks` overridden to return the
  * scripted post-merge CI state for the base branch (failure / pass / pending).
+ * `failCreate` makes `createIssue` throw (to prove the claim is released).
  */
 class ScriptedVcsProvider extends InMemoryVcsProvider {
-  constructor(private readonly outcome: "fail" | "pass" | "pending") {
+  constructor(
+    private readonly outcome: "fail" | "pass" | "pending",
+    private readonly failCreate = false,
+  ) {
     super();
   }
   // eslint-disable-next-line @typescript-eslint/require-await
@@ -128,30 +176,34 @@ class ScriptedVcsProvider extends InMemoryVcsProvider {
       statuses: [],
     };
   }
+  override async createIssue(input: Parameters<InMemoryVcsProvider["createIssue"]>[0]) {
+    if (this.failCreate) throw new Error("GitHub issue create failed: HTTP 503");
+    return super.createIssue(input);
+  }
 }
 
-function makeWatcher(args: { state: FakePoolState; outcome: "fail" | "pass" | "pending" }): {
-  watcher: PostMergeWatcher;
-  vcs: ScriptedVcsProvider;
-  events: RecordingEventStore;
-} {
-  const vcs = new ScriptedVcsProvider(args.outcome);
+function makeWatcher(args: {
+  state: FakePoolState;
+  outcome: "fail" | "pass" | "pending";
+  claims?: InMemoryClaimStore;
+  failCreate?: boolean;
+}): { watcher: PostMergeWatcher; vcs: ScriptedVcsProvider; events: RecordingEventStore; claims: InMemoryClaimStore } {
+  const vcs = new ScriptedVcsProvider(args.outcome, args.failCreate ?? false);
   const events = new RecordingEventStore();
+  const claims = args.claims ?? new InMemoryClaimStore();
   const watcher = new PostMergeWatcher({
     pool: fakePool(args.state),
     secrets: new InMemorySecretStore(),
     vcsProvider: vcs,
     eventStore: events,
+    claimStore: claims,
   });
-  return { watcher, vcs, events };
+  return { watcher, vcs, events, claims };
 }
 
 describe("PostMergeWatcher", () => {
   it("opens exactly ONE issue on a post-merge CI failure, with the failing checks + links + label", async () => {
-    const { watcher, vcs, events } = makeWatcher({
-      state: { merged: { mergeSha: "abc123" } },
-      outcome: "fail",
-    });
+    const { watcher, vcs, events } = makeWatcher({ state: { merged: { mergeSha: "abc123" } }, outcome: "fail" });
 
     await watcher.check(RUN_ID);
 
@@ -166,7 +218,7 @@ describe("PostMergeWatcher", () => {
     expect(issue.body).toContain(RUN_ID);
     expect(issue.body).toContain("abc123");
 
-    // Both events recorded; issue.opened is the idempotency marker.
+    // Both events recorded; issue.opened is the durable record.
     expect(events.typesAppended()).toEqual(["merge.post_merge_failed", "issue.opened"]);
     const failed = events.appends[0]!.payload as { failingChecks: Array<{ name: string }>; prNumber: number };
     expect(failed.failingChecks.map((c) => c.name)).toEqual(["build"]);
@@ -177,18 +229,22 @@ describe("PostMergeWatcher", () => {
     expect(opened.issueUrl.length).toBeGreaterThan(0);
   });
 
-  it("opens NO issue on a post-merge CI pass", async () => {
-    const { watcher, vcs, events } = makeWatcher({ state: { merged: {} }, outcome: "pass" });
+  it("opens NO issue on a post-merge CI pass (and does not consume a claim)", async () => {
+    const { watcher, vcs, events, claims } = makeWatcher({ state: { merged: {} }, outcome: "pass" });
     await watcher.check(RUN_ID);
     expect(vcs.createdIssues).toHaveLength(0);
     expect(events.appends).toHaveLength(0);
+    expect(claims.claimCount).toBe(0);
   });
 
-  it("opens NO issue while the post-merge CI is still pending (re-checked later)", async () => {
-    const { watcher, vcs, events } = makeWatcher({ state: { merged: {} }, outcome: "pending" });
+  it("opens NO issue while the post-merge CI is still pending (re-checked later, no claim consumed)", async () => {
+    const { watcher, vcs, events, claims } = makeWatcher({ state: { merged: {} }, outcome: "pending" });
     await watcher.check(RUN_ID);
     expect(vcs.createdIssues).toHaveLength(0);
     expect(events.appends).toHaveLength(0);
+    expect(claims.claimCount).toBe(0);
+    // A pending CI left no claim, so a later wake (now failing) re-evaluates + files.
+    expect(await claims.exists(RUN_ID)).toBe(false);
   });
 
   it("opens NO issue for a run that has not merged (no merge.completed)", async () => {
@@ -199,29 +255,74 @@ describe("PostMergeWatcher", () => {
   });
 
   it("idempotency: opens NO second issue when one was already filed for the merge", async () => {
+    const claims = new InMemoryClaimStore();
+    claims.seedFiled(RUN_ID);
     const { watcher, vcs, events } = makeWatcher({
-      state: { merged: { mergeSha: "abc123" }, alreadyOpened: true },
+      state: { merged: { mergeSha: "abc123" } },
       outcome: "fail",
+      claims,
     });
     await watcher.check(RUN_ID);
     expect(vcs.createdIssues).toHaveLength(0);
     expect(events.appends).toHaveLength(0);
   });
 
-  it("idempotency: a second check after a failure (issue now recorded) opens no duplicate", async () => {
-    // First pass: failing CI, no prior issue → files one. Then a second watcher
-    // over the SAME run with the issue.opened marker present → no second issue.
-    const first = makeWatcher({ state: { merged: { mergeSha: "abc123" } }, outcome: "fail" });
+  it("idempotency: a second check after a failure (claim now filed) opens no duplicate", async () => {
+    // Two SEPARATE watcher instances sharing ONE claim store — mirrors two sequential
+    // wakes (or two workers) for the same merge. The first files; the second skips.
+    const claims = new InMemoryClaimStore();
+    const first = makeWatcher({ state: { merged: { mergeSha: "abc123" } }, outcome: "fail", claims });
     await first.watcher.check(RUN_ID);
     expect(first.vcs.createdIssues).toHaveLength(1);
 
-    const second = makeWatcher({
-      state: { merged: { mergeSha: "abc123" }, alreadyOpened: true },
-      outcome: "fail",
-    });
+    const second = makeWatcher({ state: { merged: { mergeSha: "abc123" } }, outcome: "fail", claims });
     await second.watcher.check(RUN_ID);
     expect(second.vcs.createdIssues).toHaveLength(0);
     expect(second.events.appends).toHaveLength(0);
+  });
+
+  it("CROSS-PROCESS race: two watchers on the same merge against a shared store open EXACTLY ONE issue", async () => {
+    // The shipped-green gap: two worker processes both wake on the SAME
+    // merge.completed NOTIFY and both reach the guard before either finishes filing.
+    // A shared atomic claim store must let exactly one win. We run both check()
+    // calls CONCURRENTLY (Promise.all) so neither has filed before the other claims.
+    const claims = new InMemoryClaimStore();
+    const a = makeWatcher({ state: { merged: { mergeSha: "abc123" } }, outcome: "fail", claims });
+    const b = makeWatcher({ state: { merged: { mergeSha: "abc123" } }, outcome: "fail", claims });
+
+    await Promise.all([a.watcher.check(RUN_ID), b.watcher.check(RUN_ID)]);
+
+    // EXACTLY ONE createIssue across BOTH processes, and exactly one issue.opened.
+    const totalIssues = a.vcs.createdIssues.length + b.vcs.createdIssues.length;
+    expect(totalIssues).toBe(1);
+    const totalOpened =
+      a.events.typesAppended().filter((t) => t === "issue.opened").length +
+      b.events.typesAppended().filter((t) => t === "issue.opened").length;
+    expect(totalOpened).toBe(1);
+    // Both raced to the atomic claim; only one won it.
+    expect(claims.claimCount).toBe(2);
+    expect(await claims.exists(RUN_ID)).toBe(true);
+  });
+
+  it("a createIssue FAILURE releases the claim so a later wake retries (at-most-once, not suppressed)", async () => {
+    const claims = new InMemoryClaimStore();
+    // First wake: createIssue throws → the watcher releases the claim + rethrows.
+    const failing = makeWatcher({
+      state: { merged: { mergeSha: "abc123" } },
+      outcome: "fail",
+      claims,
+      failCreate: true,
+    });
+    await expect(failing.watcher.check(RUN_ID)).rejects.toThrow(/issue create failed/u);
+    expect(failing.vcs.createdIssues).toHaveLength(0);
+    // The claim was RELEASED — not left behind to permanently suppress the issue.
+    expect(await claims.exists(RUN_ID)).toBe(false);
+
+    // A later wake (GitHub recovered) re-claims + files the one issue.
+    const retry = makeWatcher({ state: { merged: { mergeSha: "abc123" } }, outcome: "fail", claims });
+    await retry.watcher.check(RUN_ID);
+    expect(retry.vcs.createdIssues).toHaveLength(1);
+    expect(await claims.exists(RUN_ID)).toBe(true);
   });
 
   it("an empty run id is a no-op", async () => {

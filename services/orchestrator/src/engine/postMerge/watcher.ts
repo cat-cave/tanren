@@ -28,6 +28,7 @@ import type { VcsProvider } from "../contracts/vcsProvider.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import { evaluateCiObservation, type CiObservation } from "../workflow/ciPolling.js";
 import { loadReviewMergeRunContext, type ReviewMergeRunContext } from "../workflow/reviewMerge/context.js";
+import { PgPostMergeIssueClaimStore, type PostMergeIssueClaimStore } from "./issueClaimStore.js";
 
 /** The label every auto-filed post-merge-failure tracking issue carries. */
 export const POST_MERGE_FAILURE_LABEL = "tanren:post-merge-failure";
@@ -41,6 +42,12 @@ export interface PostMergeWatcherDeps {
   githubAppMinter?: GithubAppTokenMinter;
   /** Injectable for tests; defaults to a `PgEventStore` over `pool`. */
   eventStore?: EventStore;
+  /**
+   * The CROSS-PROCESS atomic file-once guard. Injectable for tests; defaults to the
+   * `PgPostMergeIssueClaimStore` over `pool`. Exactly one process across the fleet
+   * wins `claim()` per merged run, so only one `createIssue` ever fires.
+   */
+  claimStore?: PostMergeIssueClaimStore;
 }
 
 /** The authoritative merge signal for a run: its `merge.completed` event. */
@@ -56,23 +63,29 @@ interface MergeRecord {
  */
 export class PostMergeWatcher {
   private readonly eventStore: EventStore;
+  private readonly claimStore: PostMergeIssueClaimStore;
 
   constructor(private readonly deps: PostMergeWatcherDeps) {
     this.eventStore = deps.eventStore ?? new PgEventStore(deps.pool);
+    this.claimStore = deps.claimStore ?? new PgPostMergeIssueClaimStore(deps.pool);
   }
 
   /**
    * Evaluate one run's post-merge state. Returns without effect when the run has
-   * not merged, when an issue was already filed for this merge, or when the
-   * post-merge CI is pending/passing. Files exactly one issue on a genuine failure.
+   * not merged, when this merge's issue is already claimed/filed, or when the
+   * post-merge CI is pending/passing. Files exactly one issue on a genuine failure
+   * — and across an N-process fleet, the atomic claim guarantees exactly one
+   * `createIssue` even when many workers wake on the same `merge.completed` NOTIFY.
    */
   async check(runId: string): Promise<void> {
     if (runId === "") return;
     // Not merged yet — nothing to watch.
     const merge = await this.loadMergeRecord(runId);
     if (merge === undefined) return;
-    // Idempotency: open at most one issue per merge.
-    if (await this.alreadyFiled(runId)) return;
+    // Cheap fast-path: this merge's issue was already claimed/filed — skip the
+    // base-branch CI read entirely. Only an optimization; the atomic claim below is
+    // the real guard, so a stale `false` here can never cause a duplicate.
+    if (await this.claimStore.exists(runId)) return;
 
     const context = await this.loadContext(runId);
     if (context === undefined) return;
@@ -87,8 +100,20 @@ export class PostMergeWatcher {
     });
     const observation = evaluateCiObservation(checks);
     // ONLY a genuine FAILURE files an issue. Pending → leave for the next wake;
-    // passed → nothing to track. Never an issue on a non-failure.
+    // passed → nothing to track. Never an issue on a non-failure. The claim is taken
+    // ONLY here (after a confirmed failure), so a pass/pending never consumes it.
     if (observation.status !== "failed") return;
+
+    // The CROSS-PROCESS atomic lock: exactly one waking worker wins; the rest skip.
+    const orgId = await this.resolveOrg(context.projectId);
+    if (orgId === undefined) return;
+    const won = await this.claimStore.claim({
+      runId,
+      specId: context.specId,
+      projectId: context.projectId,
+      orgId,
+    });
+    if (!won) return;
 
     await this.fileTrackingIssue({ runId, context, repo, token: resolved, merge, observation });
   }
@@ -114,16 +139,14 @@ export class PostMergeWatcher {
     });
   }
 
-  /** Idempotency guard: has an `issue.opened` already been recorded for this run? */
-  private async alreadyFiled(runId: string): Promise<boolean> {
+  /** Resolve the run's project org (for the org-scoped atomic claim), system-scoped. */
+  private async resolveOrg(projectId: string): Promise<string | undefined> {
     return runWithSystemScope(this.deps.pool, async (client) => {
-      const result = await client.query<{ exists: boolean }>(
-        `SELECT EXISTS (
-           SELECT 1 FROM events WHERE run_id = $1 AND event_type = 'issue.opened'
-         ) AS exists`,
-        [runId],
+      const result = await client.query<{ org_id: string | null }>(
+        "SELECT org_id FROM projects WHERE project_id = $1",
+        [projectId],
       );
-      return result.rows[0]?.exists ?? false;
+      return result.rows[0]?.org_id ?? undefined;
     });
   }
 
@@ -141,7 +164,12 @@ export class PostMergeWatcher {
     });
   }
 
-  /** Open the single tracking issue + record the two events (the idempotency marker). */
+  /**
+   * Open the single tracking issue, then mark the claim `filed` + record the two
+   * events. The claim is ALREADY held (this process won it). On a `createIssue`
+   * FAILURE the claim is RELEASED so a later wake re-claims + retries — a transient
+   * GitHub error never permanently suppresses the issue.
+   */
   private async fileTrackingIssue(args: {
     runId: string;
     context: ReviewMergeRunContext;
@@ -159,13 +187,23 @@ export class PostMergeWatcher {
     }));
     const title = `Post-merge CI failed on ${context.baseBranch} after merging ${context.specId} (PR #${merge.prNumber})`;
     const body = renderIssueBody({ context, merge, failingChecks, runId });
-    const issue = await this.deps.vcsProvider.createIssue({
-      repo,
-      token,
-      title,
-      body,
-      labels: [POST_MERGE_FAILURE_LABEL],
-    });
+    let issue;
+    try {
+      issue = await this.deps.vcsProvider.createIssue({
+        repo,
+        token,
+        title,
+        body,
+        labels: [POST_MERGE_FAILURE_LABEL],
+      });
+    } catch (error) {
+      // Release the claim so a later wake retries (at-most-once, never permanently
+      // suppressed). Re-throw so the subscriber logs the failure.
+      await this.claimStore.release(runId);
+      throw error;
+    }
+    // The issue opened: settle the claim to `filed` (the durable terminal marker).
+    await this.claimStore.markFiled(runId, { url: issue.url, number: issue.number });
 
     const base = {
       runId,
