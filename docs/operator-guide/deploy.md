@@ -2,8 +2,10 @@
 
 Phase 2A splits the single `compose.yml` into two profiles:
 
-- `compose.dev.yml` — developer ergonomics. Static Vault root token, exposed host ports for Postgres, runner SSH, orchestrator HTTP, dashboard, and ntfy. No env variables required.
+- `compose.dev.yml` — developer ergonomics. The Vault dev server's root token (`dev-root-token`) is supplied to every service as a real `VAULT_TOKEN` **env value in the compose file** — the source code has NO `dev-root-token` fallback (managed-hosting dimension D: `main.ts` and `allocator/main.ts` now `require` `VAULT_TOKEN` and fail hard if it is unset/blank). Exposed host ports for Postgres, runner SSH, orchestrator HTTP, dashboard, and ntfy. No operator-provided env variables required (the compose file sets `VAULT_TOKEN` itself).
 - `compose.prod.yml` — operator-provided secrets. No static fallbacks. No host-published port except the dashboard.
+
+The broad `VAULT_TOKEN` is the orchestrator's bootstrap credential: it is used ONLY to read Vault health and to **mint per-run scoped child tokens** (a short-lived token whose policy grants `read` on exactly one run's credential ref paths). That broad token is never handed to a runner; each run's credential materialization reads through its own scoped child token (see the per-run-scoped-credentials seam, `engine/contracts/vaultTokenMinter.ts`).
 
 CI runs the dev profile. The Phase 1 fixture flow is unchanged.
 

@@ -4,8 +4,7 @@ import type { SensitivityRule } from "./sensitivity.js";
 // sensitivityRules.ts to keep each file under the 500-line cap. Covers the
 // runtime substrate (runner/allocator/workspace/credential), cost + usage
 // telemetry, and the integration surface (github/ci/phase1/reviews/
-// notifications/hello/redaction). Role rules (run/task/planner/writer/checker/
-// auditor) remain in sensitivityRules.ts.
+// notifications/hello/redaction). Role rules remain in sensitivityRules.ts.
 export const infraSensitivityRules: SensitivityRule[] = [
   // runner allocation
   ...rulesFor("allocator.requested", [
@@ -78,6 +77,13 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["ref", "redacted"],
     ["message", "public"],
   ]),
+  // per-run scoped Vault token mint: ref paths embed the tenant (redacted); policy name + bounds public; the token value is NEVER in the payload.
+  ...rulesFor("credential.scoped_token_minted", [
+    ["policyName", "public"],
+    ["refPaths[]", "redacted"],
+    ["ttlSeconds", "public"],
+    ["numUses", "public"],
+  ]),
 
   // cost
   ...rulesFor("cost.resolved", [
@@ -103,8 +109,7 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["cachedInputTokens", "public"],
   ]),
 
-  // usage monitoring (P2A-cost-monitors) — percent-of-window + token counts
-  // are non-sensitive operational telemetry; all public.
+  // usage monitoring (P2A-cost-monitors) — percent-of-window + token counts are non-sensitive operational telemetry; all public.
   ...rulesFor("usage.window.observed", [
     ["provider", "public"],
     ["windows[].slot", "public"],
@@ -450,9 +455,8 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["runnerProof.timedOut", "public"],
   ]),
 
-  // redaction.raw_access audit event — these fields are the audit metadata
-  // itself, not redacted payload values. All public so org/platform admins
-  // can see who accessed what.
+  // redaction.raw_access audit event — these fields are the audit metadata itself,
+  // not redacted payload values. All public so admins can see who accessed what.
   ...rulesFor("redaction.raw_access", [
     ["actorUserId", "public"],
     ["actorScopes", "public"],

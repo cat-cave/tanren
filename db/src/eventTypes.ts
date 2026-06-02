@@ -29,6 +29,7 @@ export const eventTypeNames = [
   "credential.failed",
   "credential.loaded",
   "credential.requested",
+  "credential.scoped_token_minted",
   "dag.budget.paused",
   "dag.drained",
   "dag.spec.enqueued",

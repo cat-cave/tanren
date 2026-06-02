@@ -17,6 +17,11 @@ export * from "./gcpSecretManager.js";
 export * from "./awsSecretsManager.js";
 export * from "./onePassword.js";
 export * from "./secretStoreFactory.js";
+// Managed-hosting dimension D — the per-run scoped-credential-access seam: mint a
+// short-lived Vault child token scoped to ONE run's credential ref paths and read
+// the run's credentials through it (the broad VAULT_TOKEN never reaches a runner).
+export * from "./vaultTokenMinter.js";
+export * from "./vaultTokenMinterImpl.js";
 export * from "./sshSubstrate.js";
 // The data-access layer seam (Track C): aggregates `engine/repositories/**` into
 // a slottable `Repositories` contract with a pg-backed impl, mirroring the

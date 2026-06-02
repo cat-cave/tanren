@@ -20,7 +20,7 @@ import { buildClaimClientFromEnv } from "./claimClientFromEnv.js";
 import { buildRunStateWriterFromEnv } from "./runStateWriterFromEnv.js";
 import type { JobReaper } from "./jobReaper.js";
 import type { RunWorker } from "./runWorker.js";
-import { startRunWorker } from "./lifecycle.js";
+import { buildRunCredentialScoping, startRunWorker } from "./lifecycle.js";
 
 /** What {@link bootRunWorker} returns so callers (and tests) can drain + assert. */
 export interface BootedRunWorker {
@@ -101,6 +101,16 @@ export async function bootRunWorker(): Promise<BootedRunWorker> {
   // threaded into the workflow so the App-first CLONE token reuses the same
   // minted/cached installation token as the CI-poll / merge stages.
   const githubAppMinter = new GithubAppTokenMinter({ secrets });
+  // Managed-hosting dimension D: the per-run credential-scoping seam. Built from the
+  // BROAD VAULT_TOKEN (Vault backend only) and used ONLY to mint short-lived per-run
+  // child tokens; the broad token is never handed to a runner. Undefined for a
+  // non-Vault backend — that backend has no broad Vault token to de-privilege.
+  const credentialScoping = buildRunCredentialScoping();
+  console.log(
+    credentialScoping === undefined
+      ? "[run-worker] per-run credential scoping OFF (non-Vault secret store; reads use the backend store directly)"
+      : "[run-worker] per-run credential scoping ON (each run reads via a short-lived Vault child token; dimension D)",
+  );
   const { worker, reaper } = startRunWorker({
     pool,
     concurrency,
@@ -109,6 +119,7 @@ export async function bootRunWorker(): Promise<BootedRunWorker> {
     // internals are untouched, only its injected SSH / GitHub clients decorated.
     ssh,
     secrets,
+    ...(credentialScoping === undefined ? {} : { credentialScoping }),
     vcsProvider,
     githubAppMinter,
     identitySecretRef,

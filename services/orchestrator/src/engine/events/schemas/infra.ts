@@ -112,6 +112,21 @@ export const CredentialFailedPayload = z
   })
   .strict();
 
+// Managed-hosting dimension D (per-run scoped credentials): a short-lived Vault
+// CHILD token was minted, scoped to read ONLY this run's credential ref paths,
+// with a bounded TTL + use count. The audit record carries the SCOPE — the ref
+// paths the policy covers, the policy name, the TTL and num_uses — but NEVER the
+// token value (and never the broad VAULT_TOKEN). The ref paths are redacted (they
+// embed the tenant), the bounds are public.
+export const CredentialScopedTokenMintedPayload = z
+  .object({
+    policyName: z.string(),
+    refPaths: z.array(z.string()),
+    ttlSeconds: z.number().int(),
+    numUses: z.number().int(),
+  })
+  .strict();
+
 export const CostResolvedPayload = z
   .object({
     taskId: z.string(),
