@@ -9,7 +9,7 @@ import type { CiStep, CiWhen } from "../../ci/index.js";
 import type { SshTarget } from "../../contracts/allocator.js";
 import type { SshCommandResult, SshSubstrate } from "../../contracts/sshSubstrate.js";
 import type { EventName, EventPayload } from "../../events/index.js";
-import { withAppEnv } from "../appEnvPrelude.js";
+import { withAppEnv } from "../../ssh/appEnvPrelude.js";
 
 // Captured command output can be large; we keep only the last N characters so
 // the emitted gate.* events and the typed result carry a useful, bounded

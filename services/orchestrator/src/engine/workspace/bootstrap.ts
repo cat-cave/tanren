@@ -8,6 +8,7 @@
 import type { SshTarget } from "../contracts/allocator.js";
 import type { SshCommandResult, SshSubstrate } from "../contracts/sshSubstrate.js";
 import { quoteSshShellArg } from "../ssh/command.js";
+import { withAppEnv } from "../ssh/appEnvPrelude.js";
 import { runWorkspaceSshCommand } from "./ssh.js";
 
 // The commit message used for the synthetic post-bootstrap commit. Install
@@ -47,6 +48,15 @@ export interface BootstrapWorkspaceInput {
   // The install command, run in the workspace dir over SSH. Defaults to
   // DEFAULT_BOOTSTRAP_COMMAND when omitted.
   command?: string;
+  // Plane B (P-APP-ENV-0): the PROJECT's dev+test app env, materialized into the
+  // EXECUTED command's environment ONLY (an `export K='v'; …` prelude built at
+  // THIS substrate boundary). It is DELIBERATELY kept off the `command` field —
+  // the original command (never the prelude) is what flows into
+  // WorkspaceBootstrapError / bootstrapFailureMessage / any log, so a bootstrap
+  // failure can never leak an app-secret VALUE into the error message or the
+  // `workspace.failed` / `run.failed` event payloads. Distinct from Tanren's own
+  // provider creds. Undefined ⇒ no app env (command unchanged).
+  appEnv?: Record<string, string>;
   timeoutMs: number;
 }
 
@@ -72,8 +82,14 @@ export class WorkspaceBootstrapError extends Error {
 // nonzero exit, timeout, or substrate failure.
 export async function bootstrapWorkspace(input: BootstrapWorkspaceInput): Promise<SshCommandResult> {
   const command = input.command ?? DEFAULT_BOOTSTRAP_COMMAND;
+  // SUBSTRATE BOUNDARY: the app-env prelude is prepended ONLY to the string handed
+  // to `ssh.run` — never to `command`, which is the value that flows into the
+  // error message / log below. So a bootstrap failure surfaces the ORIGINAL
+  // command (prelude-free), and no app-secret value can reach the emitted
+  // `workspace.failed` / `run.failed` events. Mirrors the gate path, which keeps
+  // the original `step.run` in `gate.*` events.
   const result = await input.ssh.run(input.target, {
-    command,
+    command: withAppEnv(command, input.appEnv),
     cwd: input.workspacePath,
     timeoutMs: input.timeoutMs,
   });

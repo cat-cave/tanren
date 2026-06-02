@@ -10,7 +10,7 @@
 // `step.run`), so a secret value never lands in the events table. Each value is
 // single-quote-escaped so it cannot break out of the assignment or inject shell.
 
-import { quoteSshShellArg } from "../ssh/command.js";
+import { quoteSshShellArg } from "./command.js";
 
 /**
  * Build the `export K='v'; export K2='v2'; ` prelude for the app env. Keys are

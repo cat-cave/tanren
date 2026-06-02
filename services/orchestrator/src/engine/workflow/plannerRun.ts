@@ -212,11 +212,10 @@ export interface RunPlannerLoopInput {
   maxReviewReworks?: number;
   // Plane B (P-APP-ENV-0): the PROJECT's dev+test app env — the env vars + secrets
   // the product Tanren is BUILDING needs to run + test the app it writes. Resolved
-  // (by the worker) from the `project_app_env` store via `resolveAppEnvForScope`
-  // (dev+test scopes), with secret refs read from the secret manager. Materialized
-  // over the runner into the building agent's command environment (the gate steps
-  // + bootstrap), NEVER logged and DISTINCT from Tanren's own provider creds
-  // (`secrets`, `githubToken`, the credential refs). Undefined ⇒ no app env.
+  // by the worker from `project_app_env` via `resolveAppEnvForScope` (dev+test), with
+  // secret refs read from the secret manager. Materialized over the runner into the
+  // building agent's command env (gate steps + bootstrap), NEVER logged and DISTINCT
+  // from Tanren's own provider creds (`secrets`, `githubToken`). Undefined ⇒ no env.
   appEnv?: Record<string, string>;
 }
 
@@ -225,6 +224,10 @@ export interface BootstrapStepInput {
   target: SshTarget;
   workspacePath: string;
   command?: string;
+  // Plane B: the project's dev+test app env, injected at the SSH substrate boundary
+  // (never folded into `command`, so a bootstrap failure can't leak it into the
+  // error message / events). See bootstrap.ts. Undefined ⇒ no app env.
+  appEnv?: Record<string, string>;
   timeoutMs: number;
 }
 

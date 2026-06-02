@@ -40,6 +40,11 @@ export const sensitivityRules: SensitivityRule[] = [
     ["status", "public"],
     ["outcome", "public"],
   ]),
+  // `message` stays "public": for a bootstrap failure it is `messageOf(error)` ===
+  // `WorkspaceBootstrapError.message`, which (post P-APP-ENV-0) carries the ORIGINAL
+  // prelude-free command — the Plane-B app-env prelude is injected only at the SSH
+  // substrate boundary, never into the command string the error message embeds. So
+  // an app-secret VALUE cannot reach this payload. "public" remains correct.
   ...rulesFor("run.failed", [
     ["status", "public"],
     ["message", "public"],
