@@ -30,6 +30,7 @@ import type { EscapeHatches } from "../config/index.js";
 import { CostRecorder } from "../costs/recorder.js";
 import type { VcsProvider } from "../contracts/vcsProvider.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
+import { buildNativeQueueEnqueuer } from "../merge/coordinatorBuild.js";
 import { finalizeRunRecoverable } from "./runFinalize.js";
 import { loadRunExecutionContext, type RunExecutionContext } from "./runExecutionContext.js";
 import { runPlannerLoopWorkflow, type PlannerRunResult, type RunPlannerLoopInput } from "../workflow/plannerRun.js";
@@ -236,6 +237,10 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
         timeoutMs: deps.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         maxCiPolls: deps.maxCiPolls ?? DEFAULT_MAX_CI_POLLS,
         ciPollDelayMs: deps.ciPollDelayMs ?? DEFAULT_CI_POLL_DELAY_MS,
+        // P2d: under `native_queue` the merge stage enters the ready run into the
+        // native merge queue (the coordinator drives the actual merge). Built from
+        // the worker's real pool so the queue write is RLS-scoped.
+        nativeQueueEnqueuer: buildNativeQueueEnqueuer(deps.pool),
       }),
     );
     await deps.jobQueue.complete(job.id);

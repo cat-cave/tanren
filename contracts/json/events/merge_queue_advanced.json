@@ -2,21 +2,6 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
-    "baseBranch": {
-      "type": "string"
-    },
-    "conflictedFiles": {
-      "items": {
-        "type": "string"
-      },
-      "type": "array"
-    },
-    "conflictingSpecId": {
-      "type": "string"
-    },
-    "dagEdge": {
-      "type": "boolean"
-    },
     "integration": {
       "enum": [
         "mergify_queue",
@@ -26,9 +11,6 @@
       ],
       "type": "string"
     },
-    "mergingSpecId": {
-      "type": "string"
-    },
     "prNumber": {
       "maximum": 9007199254740991,
       "minimum": -9007199254740991,
@@ -36,17 +18,23 @@
     },
     "prUrl": {
       "type": "string"
+    },
+    "queueDepth": {
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "specId": {
+      "type": "string"
     }
   },
   "required": [
     "prUrl",
     "prNumber",
     "integration",
-    "baseBranch",
-    "mergingSpecId",
-    "dagEdge",
-    "conflictedFiles"
+    "specId",
+    "queueDepth"
   ],
   "type": "object",
-  "x-tanren-schema-id": "tanren.event.merge.conflict.resolving"
+  "x-tanren-schema-id": "tanren.event.merge.queue.advanced"
 }

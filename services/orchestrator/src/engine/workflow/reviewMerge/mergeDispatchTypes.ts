@@ -14,7 +14,7 @@ import type { RunStateClient } from "./context.js";
 import type { ContributorProbe } from "./governancePosture.js";
 
 /** The integration modes the merge stage actually dispatches to. */
-export type DispatchedIntegration = "mergify_queue" | "direct_merge" | "external_reviewer";
+export type DispatchedIntegration = "mergify_queue" | "native_queue" | "direct_merge" | "external_reviewer";
 
 /**
  * The outcome of the merge stage. `conflict` is the recoverable branch;
@@ -84,7 +84,40 @@ export interface MergeForRunInput {
    * is never forced past protection.
    */
   reGateCi?: ReGateCiHook;
+  /**
+   * P2d (native_queue): the hook that ENTERS a ready run into Tanren's native
+   * merge queue (instead of merging immediately). Required ONLY when the resolved
+   * integration is `native_queue` AND this is the run-loop's first pass (not the
+   * coordinator DRIVE pass) — the dispatcher calls it to persist the queue entry +
+   * emit merge.queued, then finalizes the run as queued. Idempotent: a run already
+   * queued/merging is not re-queued (the model dedupes). Production wires the
+   * PgMergeQueueModel-backed enqueuer; tests inject a fake. Absent on the drive
+   * pass (the coordinator already dequeued + claimed) and for every other mode.
+   */
+  enqueueNativeQueue?: NativeQueueEnqueuer;
+  /**
+   * P2d (native_queue): the DRIVE flag. The native queue's MergeCoordinator calls
+   * mergeForRun a SECOND time for the claimed head run with `queueDrive: true` —
+   * which runs the SAME directMerge logic (P2a/P2b/P2c-1) as `direct_merge`, but
+   * labels its events `native_queue`. Absent (the default) on the run-loop's first
+   * pass, where `native_queue` ENQUEUES instead of merging. This is how the
+   * coordinator reuses the per-run merge path without a second merge impl.
+   */
+  queueDrive?: boolean;
 }
+
+/**
+ * P2d: enters a ready-to-merge run into the native merge queue. Returns whether the
+ * entry was newly created (so merge.queued is emitted exactly once). The pg impl
+ * persists the row under RLS via the MergeQueueModel; a test injects a fake.
+ */
+export type NativeQueueEnqueuer = (input: {
+  projectId: string;
+  runId: string;
+  specId: string;
+  prUrl: string;
+  prNumber: number;
+}) => Promise<{ created: boolean }>;
 
 /** Injectable merge-operation probe (real GitHub by default; mocked in tests). */
 export interface MergeProbe {

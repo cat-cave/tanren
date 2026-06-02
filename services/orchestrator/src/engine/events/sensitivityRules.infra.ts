@@ -220,6 +220,23 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["integration", "public"],
     ["mergeSha", "public"],
   ]),
+  // P2d (§2d) native merge queue — PR identifiers + spec id + queue stats + prose,
+  // all public (queue visibility + queue/stack statistics).
+  ...rulesFor("merge.queue.advanced", [
+    ["prUrl", "public"],
+    ["prNumber", "public"],
+    ["integration", "public"],
+    ["specId", "public"],
+    ["queueDepth", "public"],
+  ]),
+  ...rulesFor("merge.dequeued", [
+    ["prUrl", "public"],
+    ["prNumber", "public"],
+    ["integration", "public"],
+    ["specId", "public"],
+    ["reason", "public"],
+    ["message", "public"],
+  ]),
   ...rulesFor("merge.failed", [
     ["prUrl", "public"],
     ["prNumber", "public"],

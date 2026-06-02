@@ -159,7 +159,30 @@ export type PartialForgePersona = z.infer<typeof PartialForgePersona>;
 export const GovernancePosture = z.enum(["strict", "open", "audit_only"]);
 export type GovernancePosture = z.infer<typeof GovernancePosture>;
 
-export const MergeIntegration = z.enum(["mergify_queue", "direct_merge", "external_reviewer", "not_configured"]);
+// The per-repo merge integration mode (autonomy-engine.md §2d):
+//   - `direct_merge`      — Tanren merges the PR immediately when it is ready
+//                           (audited + reviewed + CI-green), via the GitHub merge
+//                           API. No queue: each ready run merges as it finishes.
+//   - `native_queue`      — Tanren's OWN intelligent merge queue (P2d). A ready run
+//                           ENTERS the queue instead of merging immediately; the
+//                           native MergeCoordinator then orders ready runs in DAG
+//                           order (ancestor before dependent, priority within a
+//                           layer) and SERIALIZES their merges (one at a time),
+//                           driving the SAME per-run merge path (P2a up-to-date +
+//                           P2b conflict-resolution + P2c-1 retarget). This is the
+//                           native, provider-agnostic replacement for `mergify_queue`.
+//   - `mergify_queue`     — apply a label + hand off to an external Mergify app
+//                           (Tanren manages nothing). Retained until P2e removes it.
+//   - `external_reviewer` — stop at ready-for-review; a human merges (no auto-merge).
+//   - `not_configured`    — treated as `external_reviewer` (never auto-merge a repo
+//                           that has not opted in).
+export const MergeIntegration = z.enum([
+  "mergify_queue",
+  "native_queue",
+  "direct_merge",
+  "external_reviewer",
+  "not_configured",
+]);
 export type MergeIntegration = z.infer<typeof MergeIntegration>;
 
 // ---- Review policy -------------------------------------------------------
