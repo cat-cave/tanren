@@ -260,6 +260,21 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["speculativeBase", "public"],
     ["unmergedAncestors[]", "public"],
   ]),
+  // P2c-1 (§2c step 3): the cleared-hold retarget to default_branch + ref cleanup
+  // — PR identifiers + branch refs, all public.
+  ...rulesFor("merge.retargeted", [
+    ["prUrl", "public"],
+    ["prNumber", "public"],
+    ["integration", "public"],
+    ["fromBase", "public"],
+    ["toBase", "public"],
+  ]),
+  ...rulesFor("merge.integration_cleaned", [
+    ["prUrl", "public"],
+    ["prNumber", "public"],
+    ["integration", "public"],
+    ["integrationBranch", "public"],
+  ]),
   // P2b intent-preserving conflict resolution — PR identifiers + spec ids +
   // refs + the DAG-edge signal + file paths + reasoning prose, all public.
   ...rulesFor("merge.conflict.resolving", [

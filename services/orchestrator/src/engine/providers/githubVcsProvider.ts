@@ -368,6 +368,34 @@ export class GitHubVcsProvider implements VcsProvider {
     throw new Error(`GitHub speculative merge of ${headBranch} into ${base} failed: HTTP ${response.status}`);
   }
 
+  async retargetPullRequestBase(pr: PullRequestRef, newBase: string, token: ResolvedVcsToken): Promise<void> {
+    const response = await this.http.request({
+      method: "PATCH",
+      path: repoApiPath(pr.repo, `/pulls/${pr.number}`),
+      token: token.token,
+      refreshToken: token.refresh,
+      body: { base: newBase },
+    });
+    // 200 = base updated (or already that base — GitHub returns the unchanged PR).
+    if (response.status !== 200) {
+      throw new Error(`GitHub PR base retarget to ${newBase} failed: HTTP ${response.status}`);
+    }
+  }
+
+  async deleteBranch(repo: RepoRef, branch: string, token: ResolvedVcsToken): Promise<void> {
+    const response = await this.http.request({
+      method: "DELETE",
+      path: repoApiPath(repo, `/git/refs/heads/${encodeURIComponent(branch)}`),
+      token: token.token,
+      refreshToken: token.refresh,
+    });
+    // 204 = deleted; 422/404 = ref already gone (idempotent best-effort cleanup).
+    if (response.status === 204 || response.status === 422 || response.status === 404) {
+      return;
+    }
+    throw new Error(`GitHub branch delete of ${branch} failed: HTTP ${response.status}`);
+  }
+
   async readFileOnBranch(input: {
     repo: RepoRef;
     ref: string;

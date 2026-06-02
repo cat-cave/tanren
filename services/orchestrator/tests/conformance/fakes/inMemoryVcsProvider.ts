@@ -147,4 +147,13 @@ export class InMemoryVcsProvider implements VcsProvider {
       message: `integrated ${merged.length} ancestor(s)`,
     };
   }
+  /** Recorded retargets/deletes so the conformance suite can assert them. */
+  readonly retargets: Array<{ prNumber: number; newBase: string }> = [];
+  readonly deletedBranches: string[] = [];
+  async retargetPullRequestBase(pr: PullRequestRef, newBase: string, _token: ResolvedVcsToken): Promise<void> {
+    this.retargets.push({ prNumber: pr.number, newBase });
+  }
+  async deleteBranch(_repo: RepoRef, branch: string, _token: ResolvedVcsToken): Promise<void> {
+    this.deletedBranches.push(branch);
+  }
 }

@@ -345,6 +345,27 @@ export interface VcsProvider {
    */
   buildIntegrationBranch(input: BuildIntegrationBranchInput): Promise<BuildIntegrationBranchResult>;
 
+  /**
+   * P2c (speculative execution — land-on-real-main): re-point an open PR's BASE
+   * to a new branch (GitHub `PATCH /repos/{o}/{r}/pulls/{n}` with `{ base }`).
+   * When a speculative dependent's ancestors all genuinely merge, the merge stage
+   * re-targets the dependent's PR from its ephemeral integration ref to
+   * `default_branch` BEFORE merging, so the dependent lands on real `main` (never
+   * the integration ref). After the re-target the caller runs the P2a
+   * up-to-date/auto-rebase + re-gate flow so the branch lands cleanly. Idempotent:
+   * re-targeting to the branch the PR is already based on is a no-op on GitHub's
+   * side (the PATCH returns the unchanged PR).
+   */
+  retargetPullRequestBase(pr: PullRequestRef, newBase: string, token: ResolvedVcsToken): Promise<void>;
+
+  /**
+   * P2c (speculative execution — cleanup): delete an ephemeral branch ref (the
+   * `tanren/integ/<dep>` integration branch) after the dependent has merged. A
+   * missing ref (already deleted) is treated as success — the cleanup is
+   * best-effort and idempotent, never a hard failure that blocks the merge result.
+   */
+  deleteBranch(repo: RepoRef, branch: string, token: ResolvedVcsToken): Promise<void>;
+
   // Phase 2 (P2b intent-preserving conflict resolution): conflict read/write
   // hooks — read both sides of a conflicted path + write a resolved tree —
   // replacing the `noopConflictResolver` default.

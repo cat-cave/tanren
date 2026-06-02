@@ -252,5 +252,22 @@ export function describeVcsProviderConformance(label: string, harness: VcsProvid
       expect(result.conflictBetween?.otherSpecId).toBe(CONFORMANCE_ANCESTOR_A.specId);
       expect(result.mergedAncestors).toEqual([CONFORMANCE_ANCESTOR_A.specId]);
     });
+
+    it("retargetPullRequestBase re-points an open PR's base (lands a speculative dep on real main)", async () => {
+      const provider = harness.make();
+      const token = await resolve(provider);
+      // Resolves (no throw) when GitHub accepts the PATCH /pulls/:n { base }.
+      await expect(
+        provider.retargetPullRequestBase({ repo: REPO, number: 7 }, CONFORMANCE_BASE_BRANCH, token),
+      ).resolves.toBeUndefined();
+    });
+
+    it("deleteBranch removes the ephemeral integration ref; a missing ref is success (idempotent)", async () => {
+      const provider = harness.make();
+      const token = await resolve(provider);
+      await expect(provider.deleteBranch(REPO, CONFORMANCE_INTEGRATION_BRANCH, token)).resolves.toBeUndefined();
+      // A second delete (ref already gone) is still success — best-effort cleanup.
+      await expect(provider.deleteBranch(REPO, CONFORMANCE_INTEGRATION_BRANCH, token)).resolves.toBeUndefined();
+    });
   });
 }

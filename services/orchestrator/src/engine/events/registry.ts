@@ -64,8 +64,10 @@ import {
   MergeConflictResolvedPayload,
   MergeConflictResolvingPayload,
   MergeFailedPayload,
+  MergeIntegrationCleanedPayload,
   MergeQueuedPayload,
   MergeRebasedPayload,
+  MergeRetargetedPayload,
   MergeSpeculativeHeldPayload,
   NotificationEnqueuedPayload,
   NotificationFailedPayload,
@@ -234,8 +236,11 @@ export const EventRegistry = {
   "merge.conflict.replan_routed": MergeConflictReplanRoutedPayload,
   // P3-0023 external-push governance posture block (strict / audit_only)
   "merge.blocked": MergeBlockedPayload,
-  // P2c-1 (§2c): a speculative dependent's MERGE held until its ancestors merge.
+  // P2c-1 (§2c): a speculative dependent's MERGE held until its ancestors merge,
+  // then re-targeted from the integration ref to default_branch + the ref cleaned.
   "merge.speculative_held": MergeSpeculativeHeldPayload,
+  "merge.retargeted": MergeRetargetedPayload,
+  "merge.integration_cleaned": MergeIntegrationCleanedPayload,
 
   // Notification dispatch (schemas declared; dispatcher lands in P2A-0017)
   "notification.enqueued": NotificationEnqueuedPayload,

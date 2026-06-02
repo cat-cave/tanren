@@ -220,6 +220,36 @@ export const MergeSpeculativeHeldPayload = z
   })
   .strict();
 
+// P2c-1 (§2c step 3): a speculative dependent's ancestors have all merged, so its
+// hold CLEARED — the merge stage re-points the dependent's PR base from its
+// ephemeral integration ref to `default_branch` (GitHub PATCH /pulls/:n { base })
+// BEFORE merging, so it lands on REAL `main` (never the integration ref). The P2a
+// auto-rebase + re-gate then brings the branch current with `default_branch`.
+export const MergeRetargetedPayload = z
+  .object({
+    prUrl: z.string(),
+    prNumber: z.number().int(),
+    integration: MergeIntegrationMode,
+    /** The integration ref the PR was based on before the retarget. */
+    fromBase: z.string(),
+    /** The real base the PR now targets (`default_branch`). */
+    toBase: z.string(),
+  })
+  .strict();
+
+// P2c-1 (§2c cleanup): the ephemeral integration ref (`tanren/integ/<dep>`) was
+// deleted after the dependent merged onto real `main`. Best-effort + idempotent —
+// a missing ref is still success; this records that the cleanup ran.
+export const MergeIntegrationCleanedPayload = z
+  .object({
+    prUrl: z.string(),
+    prNumber: z.number().int(),
+    integration: MergeIntegrationMode,
+    /** The ephemeral integration branch that was deleted. */
+    integrationBranch: z.string(),
+  })
+  .strict();
+
 // P2a up-to-date enforcement. Before merging, the stage checks the PR branch's
 // freshness: `merge.behind` records that the branch was out of date with its
 // base (so a rebase is being driven); `merge.rebased` records that the

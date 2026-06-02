@@ -199,7 +199,11 @@ export async function publishDraftPullRequestForRun(
     projectId: context.projectId,
     workspacePath: input.workspacePath ?? workspaceRepoPathForRun(context.runId),
     repoUrl: context.repoUrl,
-    targetBranch: context.defaultBranch,
+    // P2c-1 (§2c): honor the run's DYNAMIC BASE — a speculative run's PR bases on
+    // its integration branch (the prospective merged world), else `default_branch`
+    // — so the operator `POST /runs/:id/github/draft-pr` route opens the same base
+    // the autonomous loop does (not always `default_branch`).
+    targetBranch: context.speculativeBase ?? context.defaultBranch,
     runBranch: context.branch,
     title: input.title ?? `Tanren: ${context.specTitle}`,
     body: input.body ?? context.specDescription,
@@ -218,6 +222,7 @@ async function loadDraftPrRunContext(pool: RunStateClient, runId: string): Promi
        r.spec_id,
        r.project_id,
        r.branch,
+       r.speculative_base,
        p.repo_url,
        p.default_branch,
        p.config,
@@ -250,6 +255,7 @@ async function loadDraftPrRunContext(pool: RunStateClient, runId: string): Promi
     specId: row.spec_id,
     projectId: row.project_id,
     branch: row.branch,
+    speculativeBase: row.speculative_base ?? undefined,
     repoUrl: row.repo_url,
     defaultBranch: row.default_branch,
     projectConfig: asRecord(row.config),
@@ -289,6 +295,8 @@ interface DraftPrRunContext {
   specId: string;
   projectId: string;
   branch: string;
+  /** P2c-1: the speculative integration branch (dynamic base), when speculative. */
+  speculativeBase?: string;
   repoUrl: string;
   defaultBranch: string;
   projectConfig: Record<string, unknown>;
@@ -307,6 +315,7 @@ interface DraftPrRunRow {
   spec_id: string;
   project_id: string;
   branch: string;
+  speculative_base: string | null;
   repo_url: string;
   default_branch: string;
   config: unknown;

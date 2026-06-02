@@ -124,6 +124,12 @@ export class UnconfiguredVcsProvider implements VcsProvider {
   async buildIntegrationBranch(_input: BuildIntegrationBranchInput): Promise<BuildIntegrationBranchResult> {
     return this.fail();
   }
+  async retargetPullRequestBase(_pr: PullRequestRef, _newBase: string, _token: ResolvedVcsToken): Promise<void> {
+    return this.fail();
+  }
+  async deleteBranch(_repo: RepoRef, _branch: string, _token: ResolvedVcsToken): Promise<void> {
+    return this.fail();
+  }
 }
 
 /**

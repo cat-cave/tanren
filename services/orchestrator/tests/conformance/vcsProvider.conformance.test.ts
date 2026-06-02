@@ -79,6 +79,11 @@ class RoutingGitHubHttp implements GitHubHttpClient {
         mergeable_state: mergeableState,
       });
     }
+    // retargetPullRequestBase (P2c): PATCH /pulls/:n { base } → the updated PR.
+    if (input.method === "PATCH" && /\/pulls\/\d+$/u.test(path)) {
+      const base = (input.body as { base?: unknown } | undefined)?.base;
+      return ok({ number: 7, base: { ref: typeof base === "string" ? base : "main" } });
+    }
     if (input.method === "POST" && path === "/graphql") {
       return ok({ data: { markPullRequestReadyForReview: { pullRequest: { isDraft: false } } } });
     }
@@ -113,6 +118,10 @@ class RoutingGitHubHttp implements GitHubHttpClient {
     }
     if (input.method === "PATCH" && /\/git\/refs\/heads\//u.test(path)) {
       return ok({ ref: "refs/heads/integ" });
+    }
+    // deleteBranch (P2c cleanup): DELETE /git/refs/heads/:branch → 204.
+    if (input.method === "DELETE" && /\/git\/refs\/heads\//u.test(path)) {
+      return { status: 204, body: {} };
     }
     if (input.method === "POST" && path.endsWith("/merges")) {
       const head = (input.body as { head?: unknown } | undefined)?.head;

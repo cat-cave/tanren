@@ -57,6 +57,10 @@ export function recordingMergeProbe(
     mergeCalls: 0,
     mergeabilityCalls: 0,
     updateBranchCalls: 0,
+    // P2c-1: record the retarget + cleanup so the speculative-land-on-main tests
+    // can assert the PR base was re-pointed to default_branch + the integ ref cleaned.
+    retargetedBases: [] as string[],
+    deletedIntegrationBranches: [] as string[],
     async applyQueueLabel(label: string) {
       this.labels.push(label);
     },
@@ -72,11 +76,19 @@ export function recordingMergeProbe(
       this.updateBranchCalls += 1;
       return update;
     },
+    async retargetBase(newBase: string) {
+      this.retargetedBases.push(newBase);
+    },
+    async deleteIntegrationBranch(branch: string) {
+      this.deletedIntegrationBranches.push(branch);
+    },
   } satisfies MergeProbe & {
     labels: string[];
     mergeCalls: number;
     mergeabilityCalls: number;
     updateBranchCalls: number;
+    retargetedBases: string[];
+    deletedIntegrationBranches: string[];
   };
 }
 

@@ -301,6 +301,47 @@ describe("GitHub draft PR contract", () => {
     expect(ssh.commands[0]?.command.cwd).toBe("/workspace/runs/run_123/repo");
     expect(pool.updates).toEqual([{ runId: "run_123", prUrl: "https://github.com/cat-cave/repo/pull/10" }]);
   });
+
+  it("P2c-1: the operator publish route honors speculative_base — opens the PR against the integration branch", async () => {
+    const secrets = new FakeSecretStore();
+    await secrets.put({ ref: "credential/github/dev", value: "ghp_secretToken" });
+    const ssh = new RecordingSsh();
+    const http = new ScriptedGitHubHttp([
+      { status: 200, body: [] },
+      {
+        status: 201,
+        body: {
+          number: 10,
+          html_url: "https://github.com/cat-cave/repo/pull/10",
+          draft: true,
+          base: { ref: "tanren/integ/spec_123" },
+        },
+      },
+    ]);
+    const events = new FakeEventStore();
+    // A speculative run: the operator route must base the PR on the integration
+    // branch (the dynamic base), NOT default_branch.
+    const pool = new RecordingRunPool("tanren/integ/spec_123");
+
+    await publishDraftPullRequestForRun({
+      pool: pool.asPgPool(),
+      eventStore: events,
+      secrets,
+      vcsProvider: vcsProviderOver(http),
+      ssh,
+      runId: "run_123",
+      identitySecretRef: "runner/local/identity",
+      timeoutMs: 500,
+    });
+
+    // The create-PR request body's `base` is the integration branch.
+    const createReq = http.requests.find((r) => r.method === "POST" && r.path.endsWith("/pulls"));
+    expect((createReq?.body as { base?: string } | undefined)?.base).toBe("tanren/integ/spec_123");
+    // The github.pr.created event records the integration branch as the targetBranch.
+    expect(events.events.find((e) => e.eventType === "github.pr.created")?.payload).toMatchObject({
+      targetBranch: "tanren/integ/spec_123",
+    });
+  });
 });
 
 class RecordingSsh implements SshSubstrate {
@@ -343,6 +384,11 @@ class RecordingPool {
 }
 
 class RecordingRunPool extends RecordingPool {
+  // P2c-1: a speculative run's dynamic base; null ⇒ a normal run (default_branch).
+  constructor(readonly speculativeBase: string | null = null) {
+    super();
+  }
+
   async query(sql: string, params: unknown[]): Promise<{ rows: unknown[]; rowCount: number }> {
     if (sql.includes("FROM runs r") && sql.includes("JOIN projects p") && sql.includes("LEFT JOIN LATERAL")) {
       if (params[0] !== "run_123") {
@@ -356,6 +402,7 @@ class RecordingRunPool extends RecordingPool {
             spec_id: "spec_123",
             project_id: "project_123",
             branch: "tanren/run_123",
+            speculative_base: this.speculativeBase,
             repo_url: "https://github.com/cat-cave/repo.git",
             default_branch: "main",
             config: { githubCredentialRef: "credential/github/dev" },

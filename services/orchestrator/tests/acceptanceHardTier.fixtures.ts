@@ -215,6 +215,8 @@ export function hardTierWorkflowRunner(github: GitHubHttpClient, trace: HardTier
           headBranch: "tanren/run_hard",
         }),
         updateBranch: async () => ({ outcome: "up_to_date" as const, message: "up to date" }),
+        retargetBase: async () => {},
+        deleteIntegrationBranch: async () => {},
       },
       resolveConflict: async (_context: ConflictContext) => {
         trace.conflictResolved += 1;

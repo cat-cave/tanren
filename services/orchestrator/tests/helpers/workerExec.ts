@@ -155,6 +155,8 @@ export function fakeWorkflowRunner(github: GitHubHttpClient) {
           headBranch: "tanren/run",
         }),
         updateBranch: async () => ({ outcome: "up_to_date" as const, message: "up to date" }),
+        retargetBase: async () => {},
+        deleteIntegrationBranch: async () => {},
       },
     });
 }
