@@ -26,16 +26,20 @@ import {
 } from "../config/index.js";
 import { migrateProjectConfig } from "../config/projectConfig.js";
 import {
+  type BudgetGate,
   type DagEnqueuer,
   type DagReadModel,
   type DagWalker,
+  isBudgetExhausted,
   planSpeculativeDagTick,
   type PlannedEnqueue,
+  type ProjectBudgetState,
   type WalkResult,
 } from "../contracts/dagWalker.js";
 import type { DagLifecycleReadModel } from "../contracts/dagLifecycle.js";
 import type { SpeculativeIntegrator } from "../contracts/speculativeIntegrator.js";
 import type { SpecReadiness } from "./speculation.js";
+import { PgBudgetGate } from "./budgetGate.js";
 import { PgDagLifecycleReadModel } from "./lifecycle.js";
 import { type DagEventEmitter, PgDagEventEmitter, PgDagReadModel, SpecRunDagEnqueuer } from "./walkerPg.js";
 
@@ -57,6 +61,14 @@ export interface DagWalkerDeps {
   lifecycleReadModel: DagLifecycleReadModel;
   enqueuer: DagEnqueuer;
   events: DagEventEmitter;
+  /**
+   * The dollar-budget gate (autonomy-engine.md §3 proof 6): resolves the project's
+   * configured ceiling (project-over-org) + cumulative spend over the period before
+   * enqueuing. When the ceiling is reached the walk pauses on budget (enqueues
+   * nothing, emits dag.budget.paused). A project with no budget configured resolves
+   * `ceilingUsd: undefined` ⇒ unlimited ⇒ behavior byte-identical to today.
+   */
+  budgetGate: BudgetGate;
   /** P2c-1: builds a dependent's speculative integration branch (the dynamic base). */
   integrator: SpeculativeIntegrator;
   /** P2c-1: resolves the project's speculation threshold + depth cap from config. */
@@ -90,11 +102,23 @@ export class EventEmittingDagWalker implements DagWalker {
   }
 
   async walk(projectId: string): Promise<WalkResult> {
-    const [snapshot, lifecycle, config] = await Promise.all([
+    const [snapshot, lifecycle, config, budget] = await Promise.all([
       this.deps.readModel.loadSnapshot(projectId),
       this.deps.lifecycleReadModel.loadLifecycle(projectId),
       this.deps.speculationConfig(projectId),
+      this.deps.budgetGate.resolveBudget(projectId),
     ]);
+
+    // The GENUINE dollar-budget gate (autonomy-engine.md §3 proof 6): when the
+    // project's cumulative spend over the configured period has reached the
+    // configured ceiling, enqueue NOTHING this tick and pause on budget. In-flight
+    // runs are NOT touched (they are bounded by the escape hatches) — only NEW work
+    // stops. A project with no budget configured (`ceilingUsd: undefined`) never
+    // hits this branch, so behavior is byte-identical to before.
+    if (isBudgetExhausted(budget)) {
+      return this.pauseOnBudget(projectId, budget);
+    }
+
     const ceiling = this.concurrency();
     const plan = planSpeculativeDagTick(snapshot, lifecycle, {
       concurrencyCeiling: ceiling,
@@ -136,8 +160,10 @@ export class EventEmittingDagWalker implements DagWalker {
     }
 
     if (enqueuedSpecIds.length === 0) {
-      if (plan.status === "budget_paused") {
-        await this.deps.events.emitBudgetPaused({ projectId, plan });
+      // The pure planner only ever yields concurrency_saturated (slot pressure) or
+      // drained here — the genuine budget pause was already handled above the plan.
+      if (plan.status === "concurrency_saturated") {
+        await this.deps.events.emitConcurrencySaturated({ projectId, plan });
       } else {
         await this.deps.events.emitDrained({ projectId, plan });
       }
@@ -149,6 +175,24 @@ export class EventEmittingDagWalker implements DagWalker {
       enqueuedSpecIds,
       enqueuedRunIds,
     };
+  }
+
+  /**
+   * Pause the tick on the genuine dollar-budget ceiling: enqueue nothing, emit
+   * dag.budget.paused with the configured ceiling + the measured spend, and return
+   * a `budget_paused` result. Only reached when a ceiling is configured AND reached
+   * (`isBudgetExhausted`), so `ceilingUsd` is always defined here.
+   */
+  private async pauseOnBudget(projectId: string, budget: ProjectBudgetState): Promise<WalkResult> {
+    await this.deps.events.emitBudgetPaused({
+      projectId,
+      // Guarded by isBudgetExhausted — the ceiling is defined on this path.
+      ceilingUsd: budget.ceilingUsd ?? 0,
+      spentUsd: budget.spentUsd,
+      period: budget.period,
+      readyHeldBack: 0,
+    });
+    return { projectId, status: "budget_paused", enqueuedSpecIds: [], enqueuedRunIds: [] };
   }
 
   /**
@@ -273,6 +317,7 @@ export function buildDagWalker(pool: pg.Pool, deps: BuildDagWalkerDeps): DagWalk
     events: new PgDagEventEmitter(pool),
     integrator: deps.integrator,
     speculationConfig: buildSpeculationConfigResolver(pool),
+    budgetGate: new PgBudgetGate(pool),
   });
 }
 

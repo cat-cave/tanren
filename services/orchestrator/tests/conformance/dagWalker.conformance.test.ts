@@ -15,12 +15,14 @@
 import { EventEmittingDagWalker } from "../../src/engine/dag/walker.js";
 import type { DagEventEmitter } from "../../src/engine/dag/walkerPg.js";
 import type {
+  BudgetGate,
   DagEnqueuer,
   DagReadModel,
   DagSnapshot,
   DagSpecNode,
   DagSpecPhase,
   DagTickPlan,
+  ProjectBudgetState,
 } from "../../src/engine/contracts/dagWalker.js";
 import type {
   DagLifecycleReadModel,
@@ -156,9 +158,25 @@ class RecordingEventEmitter implements DagEventEmitter {
     });
   }
 
-  async emitBudgetPaused(input: { projectId: string; plan: DagTickPlan }): Promise<void> {
+  async emitBudgetPaused(input: {
+    projectId: string;
+    ceilingUsd: number;
+    spentUsd: number;
+    period: "monthly" | "total";
+    readyHeldBack: number;
+  }): Promise<void> {
     this.records.push({
       type: "dag.budget.paused",
+      ceilingUsd: input.ceilingUsd,
+      spentUsd: input.spentUsd,
+      period: input.period,
+      readyHeldBack: input.readyHeldBack,
+    });
+  }
+
+  async emitConcurrencySaturated(input: { projectId: string; plan: DagTickPlan }): Promise<void> {
+    this.records.push({
+      type: "dag.concurrency.saturated",
       readyHeldBack: input.plan.readyHeldBack,
       inFlightCount: input.plan.inFlightCount,
       concurrencyCeiling: input.plan.concurrencyCeiling,
@@ -166,10 +184,26 @@ class RecordingEventEmitter implements DagEventEmitter {
   }
 }
 
+/**
+ * A test budget gate (fixture — lives under tests/, never in src/). Defaults to NO
+ * budget (unlimited), so the existing conformance cases run byte-identically. A
+ * case that wants to exercise the dollar-budget gate sets a ceiling + spend.
+ */
+class MemoryBudgetGate implements BudgetGate {
+  private state: ProjectBudgetState = { ceilingUsd: undefined, period: "monthly", spentUsd: 0 };
+  set(state: ProjectBudgetState): void {
+    this.state = state;
+  }
+  async resolveBudget(): Promise<ProjectBudgetState> {
+    return this.state;
+  }
+}
+
 function makeHarness(ceiling: number): DagWalkerConformanceHarness {
   const dag = new MemoryDag();
   const enqueues: RecordedEnqueue[] = [];
   const events: RecordedDagEvent[] = [];
+  const budgetGate = new MemoryBudgetGate();
   let currentCeiling = ceiling;
   const walker = new EventEmittingDagWalker({
     readModel: new MemoryReadModel(dag),
@@ -180,6 +214,9 @@ function makeHarness(ceiling: number): DagWalkerConformanceHarness {
     // The conformance suite pins the Phase-1 readiness contract (all deps merged/
     // done) — that is exactly the CONSERVATIVE threshold; depth cap is irrelevant.
     speculationConfig: async () => ({ threshold: "conservative", depthCap: 2 }),
+    // Default: NO budget (unlimited), so the dependency/headroom/idempotency cases
+    // run byte-identically; the budget cases set a ceiling + spend explicitly.
+    budgetGate,
     concurrency: () => currentCeiling,
   });
   return {
@@ -189,6 +226,7 @@ function makeHarness(ceiling: number): DagWalkerConformanceHarness {
     setCeiling: (next) => {
       currentCeiling = next;
     },
+    setBudget: (state) => budgetGate.set(state),
     phaseOf: (specId) => dag.phaseOf(specId),
     enqueues,
     events,

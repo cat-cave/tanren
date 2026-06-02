@@ -26,7 +26,7 @@
 // any database or worker. The pg-backed read model + the createQueuedRunFromSpec
 // enqueuer + the LISTEN/NOTIFY subscriber live in `engine/dag/walker.ts`.
 
-import type { SpeculationThreshold } from "../config/shared.js";
+import type { BudgetPeriod, SpeculationThreshold } from "../config/shared.js";
 import type { DagLifecycleSnapshot } from "./dagLifecycle.js";
 import { computeReadiness, type SpecReadiness } from "../dag/speculation.js";
 import { priorityRank, type SpecPriority } from "../state/spec.js";
@@ -79,8 +79,15 @@ export type DagTickStatus =
   // No pending spec is ready (all deps done) AND no slot pressure — every spec is
   // done or in-flight, or pending specs remain blocked on unfinished deps.
   | "drained"
-  // Ready specs exist but the concurrency ceiling is already saturated — the
-  // walker held them back (the Phase-1 throttle; budget proper halts downstream).
+  // Ready specs exist but the governed CONCURRENCY ceiling is already saturated —
+  // the walker held them back (no in-flight slot free). Honestly named: this is
+  // slot pressure, NOT a dollar-budget pause (which `budget_paused` now means).
+  | "concurrency_saturated"
+  // GENUINE dollar-budget exhaustion: the project's cumulative spend over the
+  // configured period reached the configured ceiling, so the walker enqueued
+  // NOTHING this tick. Decided in the walker (it needs the live spend sum), never
+  // in the pure planner — the pure planners only ever produce
+  // enqueued/drained/concurrency_saturated; the walker overrides to budget_paused.
   | "budget_paused";
 
 /** The deterministic plan a tick produces from a snapshot + a ceiling. */
@@ -141,7 +148,8 @@ export function planDagTick(snapshot: DagSnapshot, concurrencyCeiling: number): 
   const toEnqueue = ordered.slice(0, headroom).map((n) => n.specId);
   const readyHeldBack = ordered.length - toEnqueue.length;
 
-  const status: DagTickStatus = toEnqueue.length > 0 ? "enqueued" : readyHeldBack > 0 ? "budget_paused" : "drained";
+  const status: DagTickStatus =
+    toEnqueue.length > 0 ? "enqueued" : readyHeldBack > 0 ? "concurrency_saturated" : "drained";
 
   return {
     status,
@@ -236,7 +244,8 @@ export function planSpeculativeDagTick(
     };
   });
 
-  const status: DagTickStatus = toEnqueue.length > 0 ? "enqueued" : readyHeldBack > 0 ? "budget_paused" : "drained";
+  const status: DagTickStatus =
+    toEnqueue.length > 0 ? "enqueued" : readyHeldBack > 0 ? "concurrency_saturated" : "drained";
 
   return {
     status,
@@ -311,6 +320,39 @@ export interface DagEnqueuer {
      */
     integratedAncestorShas?: Record<string, string>;
   }): Promise<{ runId: string }>;
+}
+
+// ---- Budget gate (autonomy-engine.md §3 proof 6) --------------------------
+
+/**
+ * A project's resolved budget state at walk time: the configured ceiling (project
+ * budget over org default, or absent = unlimited) and the cumulative spend summed
+ * over the configured period from `cost_records`. The walker consults this BEFORE
+ * enqueuing; when `ceilingUsd` is set and `spentUsd >= ceilingUsd`, the tick
+ * pauses on budget (enqueues nothing, emits dag.budget.paused). `ceilingUsd:
+ * undefined` ⇒ NO budget configured ⇒ unlimited (byte-identical to today).
+ */
+export interface ProjectBudgetState {
+  ceilingUsd: number | undefined;
+  period: BudgetPeriod;
+  spentUsd: number;
+}
+
+/** True iff a configured ceiling has been reached (the genuine budget gate). */
+export function isBudgetExhausted(state: ProjectBudgetState): boolean {
+  return state.ceilingUsd !== undefined && state.spentUsd >= state.ceilingUsd;
+}
+
+/**
+ * Resolves a project's budget state under RLS: the project-over-org budget config
+ * + the cumulative spend over the configured period (the org-scoped `cost_records`
+ * sum). DAG/cost state is the source of truth — read fresh each tick. The pg-backed
+ * impl org-scopes the cost-sum read (an off-scope read sees zero rows), so the spend
+ * is always exactly the calling org's. A project with no budget configured resolves
+ * `ceilingUsd: undefined` (unlimited) and skips the (otherwise unnecessary) sum.
+ */
+export interface BudgetGate {
+  resolveBudget(projectId: string): Promise<ProjectBudgetState>;
 }
 
 /** What a single walk produced — surfaced for the subscriber + tests to assert. */

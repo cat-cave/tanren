@@ -22,6 +22,7 @@ import { systemActor } from "../../engine/state/actor.js";
 import { createProject, ProjectAccessDeniedError, ProjectNotFoundError } from "../../engine/workflow/projectSpec.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg } from "../orgs/index.js";
+import { BudgetPutSchema, handleBudgetGet, handleBudgetPut } from "./budget.js";
 import { GreenfieldCreateSchema, handleGreenfieldCreate } from "./greenfield.js";
 
 // P-APP-ENV-1: re-exported here so the feature-route mounter pulls both the
@@ -159,6 +160,31 @@ export function createProjectRoutes(options: ProjectRoutesOptions) {
     }
     await ProjectStore.updateConfig(options.pool, projectId, nextConfig, systemActor);
     return c.json({ projectId, config: nextConfig });
+  });
+
+  // The dedicated dollar-budget surface (autonomy-engine.md §3 proof 6): a
+  // discoverable read + update for the budget ceiling the DagWalker enforces, so an
+  // operator never hand-crafts a full config PATCH to change it. Both org-scoped.
+  app.get("/:orgId/projects/:projectId/budget", async (c) => {
+    const actor = requireActor(c);
+    const orgId = c.req.param("orgId");
+    if (!actorCanAccessOrg(actor, orgId)) {
+      return c.json({ error: "org_access_denied" }, 403);
+    }
+    return handleBudgetGet(c, options.pool, orgId, c.req.param("projectId"));
+  });
+
+  app.put("/:orgId/projects/:projectId/budget", async (c) => {
+    const actor = requireActor(c);
+    const orgId = c.req.param("orgId");
+    if (!actorCanAccessOrg(actor, orgId)) {
+      return c.json({ error: "org_access_denied" }, 403);
+    }
+    const parsed = BudgetPutSchema.safeParse(await c.req.json().catch(() => {}));
+    if (!parsed.success) {
+      return c.json({ error: "invalid_budget", issues: parsed.error.issues }, 400);
+    }
+    return handleBudgetPut(c, options.pool, orgId, c.req.param("projectId"), parsed.data);
   });
 
   return app;

@@ -391,6 +391,12 @@ export const sensitivityRules: SensitivityRule[] = [
     ["blockedCount", "public"],
   ]),
   ...rulesFor("dag.budget.paused", [
+    ["ceilingUsd", "public"],
+    ["spentUsd", "public"],
+    ["period", "public"],
+    ["readyHeldBack", "public"],
+  ]),
+  ...rulesFor("dag.concurrency.saturated", [
     ["readyHeldBack", "public"],
     ["inFlightCount", "public"],
     ["concurrencyCeiling", "public"],

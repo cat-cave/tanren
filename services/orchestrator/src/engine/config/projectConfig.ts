@@ -10,6 +10,7 @@ import {
   PartialAllocatorConfig,
   PartialEscapeHatches,
   PartialForgePersona,
+  ProjectBudget,
   ReviewPolicy,
   RoutingTable,
   SpeculationThreshold,
@@ -97,6 +98,17 @@ export const ProjectConfigV1 = z
     // the org's platform credential ref + endpoint for this project only.
     providerMode: ProviderMode.optional(),
     managedProvider: ManagedProviderConfig.optional(),
+    // The per-project DOLLAR BUDGET CEILING (autonomy-engine.md §3 proof 6): a
+    // governed SETTING, exactly like `governancePosture`/`reviewPolicy`/
+    // `allocator` above — NOT an env var. When the project's cumulative spend over
+    // the configured `period` reaches `ceilingUsd`, the autonomous DagWalker STOPS
+    // enqueuing new spec runs (genuine `budget_paused` → `dag.budget.paused`);
+    // in-flight runs are not killed. Whole-object override: a project that sets a
+    // budget overrides the org's `defaultBudget`; a project that omits it inherits
+    // the org default (the walker resolves project-over-org). Optional + additive:
+    // legacy rows carry no key and parse to an ABSENT field = NO ceiling = unlimited
+    // (today's behavior, byte-identical), and `.strict()` round-trips it on save.
+    budget: ProjectBudget.optional(),
   })
   .strict();
 export type ProjectConfigV1 = z.infer<typeof ProjectConfigV1>;

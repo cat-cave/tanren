@@ -1,5 +1,6 @@
 // Tiny in-memory pg substitute that covers the SQL shapes used by the
-// P2A-0013 route layer (orgs, projects, specs, doctor, brownfield link).
+// P2A-0013 route layer (orgs, projects, specs, doctor, brownfield link) plus the
+// per-project budget surface (ownership + config read-modify-write + cost sum).
 // Deliberately scoped: only the SQL fragments the routes emit are handled.
 
 import type pg from "pg";
@@ -56,6 +57,12 @@ export class RoutesPool {
   readonly tasks: Array<Record<string, unknown>> = [];
   readonly jobs: Array<Record<string, unknown>> = [];
   readonly runs: Array<Record<string, unknown>> = [];
+  /** Per-project cost-record rows (only `project_id` + `cost_usd` are summed). */
+  readonly costRecords: Array<{ project_id: string; cost_usd: number }> = [];
+
+  seedCostRecord(projectId: string, costUsd: number): void {
+    this.costRecords.push({ project_id: projectId, cost_usd: costUsd });
+  }
 
   seedOrg(input: Partial<OrgRow> & { id: string }): OrgRow {
     const row: OrgRow = {
@@ -157,6 +164,31 @@ export class RoutesPool {
     if (trimmed.startsWith("SELECT org_id FROM projects WHERE project_id = $1")) {
       const project = this.projects.get(String(params[0]));
       return single(project === undefined ? undefined : { org_id: project.org_id });
+    }
+    // ProjectStore.getOwnership (the budget-route ownership guard).
+    if (trimmed.startsWith("SELECT org_id, default_branch FROM projects WHERE project_id = $1")) {
+      const project = this.projects.get(String(params[0]));
+      return single(
+        project === undefined ? undefined : { org_id: project.org_id, default_branch: project.default_branch },
+      );
+    }
+    // PgBudgetGate: resolve the project's org + raw config in one read.
+    if (trimmed.startsWith("SELECT org_id, config FROM projects WHERE project_id = $1")) {
+      const project = this.projects.get(String(params[0]));
+      return single(project === undefined ? undefined : { org_id: project.org_id, config: project.config });
+    }
+    // ProjectStore.getConfig (the budget PUT read-modify-write + narration).
+    if (trimmed.startsWith("SELECT config FROM projects WHERE project_id = $1")) {
+      const project = this.projects.get(String(params[0]));
+      return single(project === undefined ? undefined : { config: project.config });
+    }
+    // PgBudgetGate.sumSpend: COALESCE(SUM(cost_usd)) for a project over the period.
+    // The in-memory store carries no timestamps, so every seeded record counts —
+    // the windowing (monthly vs. total) is exercised by the gate's unit tests.
+    if (trimmed.startsWith("SELECT COALESCE(SUM(cost_usd")) {
+      const projectId = String(params[0]);
+      const total = this.costRecords.filter((r) => r.project_id === projectId).reduce((sum, r) => sum + r.cost_usd, 0);
+      return { rows: [{ total: String(total) }], rowCount: 1 };
     }
     if (trimmed.startsWith("INSERT INTO projects")) {
       this.seedProject({

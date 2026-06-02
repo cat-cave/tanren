@@ -127,6 +127,39 @@ export const PartialAllocatorConfig = z
   .strict();
 export type PartialAllocatorConfig = z.infer<typeof PartialAllocatorConfig>;
 
+// ---- Dollar budget ceiling (autonomy-engine.md §3 proof 6) ---------------
+
+// The PERIOD a budget ceiling sums spend over:
+//   - `monthly` — the CURRENT CALENDAR MONTH (UTC): spend recorded since the
+//                 first of this month (`date_trunc('month', now())`). A fresh
+//                 window opens automatically each month boundary — the rolling
+//                 operating budget for a continuously-running project.
+//   - `total`   — the project's LIFETIME: every cost record ever attributed to
+//                 the project. A hard lifetime cap (e.g. a fixed `apex` budget).
+export const BudgetPeriod = z.enum(["monthly", "total"]);
+export type BudgetPeriod = z.infer<typeof BudgetPeriod>;
+
+export const DEFAULT_BUDGET_PERIOD: BudgetPeriod = "monthly";
+
+// The per-project/org DOLLAR BUDGET CEILING — a governed SETTING (lives in
+// project/org config JSON), never an env var. When the project's cumulative
+// spend over `period` reaches `ceilingUsd`, the DagWalker STOPS enqueuing new
+// spec runs (the genuine `budget_paused` outcome → `dag.budget.paused`);
+// in-flight runs are NOT killed (they are bounded by the escape hatches). The
+// SAME ceiling feeds the Forge narration budget-warning card, so the warning
+// and the gate read one config — there is no second parallel budget concept.
+//
+// Optional + additive everywhere it is referenced: an absent budget means NO
+// ceiling (unlimited — today's behavior, byte-identical). `ceilingUsd` is a
+// non-negative dollar amount; `period` defaults to `monthly`.
+export const ProjectBudget = z
+  .object({
+    ceilingUsd: z.number().nonnegative(),
+    period: BudgetPeriod.default(DEFAULT_BUDGET_PERIOD),
+  })
+  .strict();
+export type ProjectBudget = z.infer<typeof ProjectBudget>;
+
 // ---- Notification target ref ---------------------------------------------
 
 // References a row in the (future) `notification_targets` table delivered by

@@ -138,10 +138,12 @@ describe("planDagTick", () => {
     expect(plan.status).toBe("enqueued");
   });
 
-  it("reports budget_paused when ready specs exist but headroom is zero", () => {
+  it("reports concurrency_saturated when ready specs exist but headroom is zero", () => {
+    // Slot pressure — honestly named concurrency_saturated, NOT budget_paused (the
+    // dollar-budget pause is decided in the walker, never in this pure planner).
     const plan = planDagTick(snap([n("spec_a", "in_flight", [], 0), n("spec_b", "pending", [], 1)]), 1);
     expect(plan.toEnqueue).toEqual([]);
-    expect(plan.status).toBe("budget_paused");
+    expect(plan.status).toBe("concurrency_saturated");
     expect(plan.readyHeldBack).toBe(1);
   });
 

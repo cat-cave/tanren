@@ -24,6 +24,7 @@ import {
   generateRunDetailNarration,
   type NarrationInsight,
 } from "../../engine/forge/index.js";
+import { migrateProjectConfig } from "../../engine/config/index.js";
 import { loadInsightsForProject } from "../../engine/insights/index.js";
 import type { Insight, InsightAction } from "../../engine/insights/index.js";
 
@@ -78,6 +79,14 @@ export async function generateProjectViewTurn(args: GenerateProjectViewArgs) {
   );
   const weekToDateCostUsd = Number(costResult.rows[0]?.total ?? "0");
 
+  // Unify the narration budget-warning threshold with the SAME governed budget
+  // config the DagWalker enforces (autonomy-engine.md §3 proof 6): when the caller
+  // does not pass an explicit `budgetUsdPerWeek`, fall back to the project's
+  // configured budget ceiling. There is no longer a second parallel budget concept
+  // — the warning card and the enforced gate read one config. An explicit
+  // `budgetUsdPerWeek` still wins (the operator can preview a what-if threshold).
+  const budgetUsdPerWeek = args.budgetUsdPerWeek ?? (await resolveConfiguredBudgetCeiling(args.client, args.projectId));
+
   const answer = generateProjectViewNarration({
     project: { projectId: args.projectId, name: projectName },
     recentRuns: recentRuns.rows.map((row) => ({
@@ -99,7 +108,7 @@ export async function generateProjectViewTurn(args: GenerateProjectViewArgs) {
       endedAt: row.ended_at,
     })),
     weekToDateCostUsd,
-    budgetUsdPerWeek: args.budgetUsdPerWeek,
+    budgetUsdPerWeek,
     insights: await loadNarrationInsights(args.client, args.projectId),
     actor: args.actor,
   });
@@ -115,6 +124,24 @@ export async function generateProjectViewTurn(args: GenerateProjectViewArgs) {
     },
     args.actor,
   );
+}
+
+/**
+ * Resolve the project's CONFIGURED budget ceiling for the narration warning — the
+ * SAME `projects.config.budget.ceilingUsd` the DagWalker enforces. Returns
+ * `undefined` (no warning threshold) when no budget is configured or the config is
+ * unparseable — never throws (the narration must render even on a malformed blob).
+ * Read on the ambient org-scoped client.
+ */
+async function resolveConfiguredBudgetCeiling(client: QueryClient, projectId: string): Promise<number | undefined> {
+  const result = await client.query<{ config: unknown }>("SELECT config FROM projects WHERE project_id = $1", [
+    projectId,
+  ]);
+  try {
+    return migrateProjectConfig(result.rows[0]?.config).budget?.ceilingUsd;
+  } catch {
+    return undefined;
+  }
 }
 
 export interface GenerateRunDetailArgs {

@@ -13,11 +13,13 @@ import { describe, expect, it } from "vitest";
 import { EventEmittingDagWalker } from "../src/engine/dag/walker.js";
 import type { DagEventEmitter } from "../src/engine/dag/walkerPg.js";
 import type {
+  BudgetGate,
   DagEnqueuer,
   DagReadModel,
   DagSnapshot,
   DagSpecNode,
   DagTickPlan,
+  ProjectBudgetState,
 } from "../src/engine/contracts/dagWalker.js";
 import type {
   DagLifecycleReadModel,
@@ -111,7 +113,15 @@ class RecordingEmitter implements DagEventEmitter {
     this.drained.push(input.plan);
   }
   async emitBudgetPaused(): Promise<void> {}
+  async emitConcurrencySaturated(): Promise<void> {}
 }
+
+/** Unlimited budget (no ceiling) — the speculative cases never exercise the gate. */
+const unlimitedBudgetGate: BudgetGate = {
+  async resolveBudget(): Promise<ProjectBudgetState> {
+    return { ceilingUsd: undefined, period: "monthly", spentUsd: 0 };
+  },
+};
 
 class FakeIntegrator implements SpeculativeIntegrator {
   readonly calls: BuildSpeculativeIntegrationInput[] = [];
@@ -157,6 +167,7 @@ function makeWalker(opts: {
     events: emitter,
     integrator,
     speculationConfig: async () => ({ threshold: opts.threshold, depthCap: opts.depthCap ?? 2 }),
+    budgetGate: unlimitedBudgetGate,
     concurrency: () => opts.ceiling ?? 5,
   });
   return { walker, enqueuer, emitter, integrator };

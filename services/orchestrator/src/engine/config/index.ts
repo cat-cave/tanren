@@ -2,6 +2,8 @@
 export {
   AllocatorConfig,
   AllocatorKind,
+  BudgetPeriod,
+  DEFAULT_BUDGET_PERIOD,
   DEFAULT_SPECULATION_THRESHOLD,
   DEFAULT_SPECULATIVE_INTEGRATION_DEPTH,
   EscapeHatches,
@@ -13,6 +15,7 @@ export {
   PartialAllocatorConfig,
   PartialEscapeHatches,
   PartialForgePersona,
+  ProjectBudget,
   ReviewPolicy,
   RoleId,
   RoutingChain,

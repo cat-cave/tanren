@@ -33,6 +33,7 @@ export const eventTypeNames = [
   "credential.requested",
   "credential.scoped_token_minted",
   "dag.budget.paused",
+  "dag.concurrency.saturated",
   "dag.drained",
   "dag.spec.enqueued",
   "dag.spec.percolated",

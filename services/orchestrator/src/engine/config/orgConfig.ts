@@ -5,6 +5,7 @@ import {
   EscapeHatches,
   ForgePersona,
   NotificationTargetRef,
+  ProjectBudget,
   RoutingTable,
   UnknownConfigVersionError,
   emptyRoutingTable,
@@ -91,6 +92,13 @@ export const OrgConfigV1 = z
     // Absent ⇒ the managed defaults (platform OpenRouter shell) apply; only
     // consulted when providerMode === "managed".
     managedProvider: ManagedProviderConfig.optional(),
+    // The ORG-LEVEL DEFAULT dollar budget ceiling (autonomy-engine.md §3 proof 6).
+    // A project that sets its own `budget` overrides this; a project that omits it
+    // inherits this org default (the DagWalker resolves project-over-org). Optional
+    // + additive: an absent default means NO org-wide ceiling = unlimited unless a
+    // project sets its own (today's behavior, byte-identical); legacy rows parse to
+    // an absent field (no migration) and `.strict()` round-trips it on save.
+    defaultBudget: ProjectBudget.optional(),
   })
   .strict();
 export type OrgConfigV1 = z.infer<typeof OrgConfigV1>;
