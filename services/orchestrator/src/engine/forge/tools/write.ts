@@ -13,6 +13,8 @@ import type { ActorContext } from "../../../auth/schemas.js";
 import { resolveQueryClient, resolveWritableClient } from "../../data/orgScopedDb.js";
 import { BehaviorStore } from "../../entities/behaviors.js";
 import { MilestoneStore } from "../../entities/milestones.js";
+import { ForgeToolsStore } from "../../repositories/forgeTools.js";
+import { systemActor } from "../../state/actor.js";
 import {
   createQueuedRunFromSpec,
   createSpec,
@@ -111,13 +113,7 @@ export async function tanrenRerunTask(
   args: { taskId: string },
   actor: ActorContext,
 ): Promise<{ taskId: string; rerunRun: SpecRunContract }> {
-  const result = await resolveQueryClient(deps.pool).query<{ spec_id: string }>(
-    `SELECT r.spec_id FROM tasks t
-     INNER JOIN runs r ON r.run_id = t.run_id
-     WHERE t.task_id = $1`,
-    [args.taskId],
-  );
-  const specId = result.rows[0]?.spec_id;
+  const specId = await ForgeToolsStore.getSpecIdForTask(resolveQueryClient(deps.pool), args.taskId, systemActor);
   if (specId === undefined) {
     throw new WriteToolAccessDeniedError(`task not found: ${args.taskId}`);
   }

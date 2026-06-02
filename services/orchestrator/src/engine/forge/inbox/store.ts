@@ -217,3 +217,28 @@ export async function resolveCandidate(
   const row = result.rows[0];
   return row === undefined ? undefined : mapCandidate(row);
 }
+
+// Every org that owns an enabled inbox source — the system-scoped fan-out the
+// cross-org poller reads before listing each org's due sources. The DISTINCT +
+// `enabled = 'true'` predicate are byte-identical to the inline poller read.
+export async function listDistinctEnabledSourceOrgIds(client: QueryClient): Promise<string[]> {
+  const result = await client.query<{ org_id: string }>(
+    "SELECT DISTINCT org_id FROM inbox_sources WHERE enabled = 'true'",
+  );
+  return result.rows.map((r) => r.org_id);
+}
+
+// The candidate-inbox data-access seam aggregated as a value object for the
+// `Repositories` registry. The standalone functions stay exported for the
+// engine/route call sites that import them by name; the store object exposes the
+// same methods through the contract surface.
+export const InboxStore = {
+  createSource,
+  listSources,
+  getSource,
+  upsertCandidate,
+  listCandidates,
+  getCandidate,
+  resolveCandidate,
+  listDistinctEnabledSourceOrgIds,
+} as const;

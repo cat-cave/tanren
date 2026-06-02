@@ -29,6 +29,8 @@ import type { Allocator } from "../contracts/allocator.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { SshSubstrate } from "../contracts/sshSubstrate.js";
 import { resolveCredentialsForRun } from "../credentials/resolveCredentials.js";
+import { ForgeToolsStore } from "../repositories/forgeTools.js";
+import { systemActor } from "../state/actor.js";
 import { buildAnswererAdapter } from "../providers/adapterSelector.js";
 import type { AnswererAdapter, AnswererRunOptions } from "../providers/types.js";
 import type { RoutingChainEntry } from "../config/shared.js";
@@ -82,12 +84,6 @@ export class ForgeProjectNotFoundError extends Error {
   }
 }
 
-interface ProjectRunnerRow {
-  runner_image: string;
-  config: unknown;
-  org_id: string | null;
-}
-
 interface ForgeRunnerContext {
   runnerImage: string;
   routingForge: RoutingChainEntry | undefined;
@@ -97,16 +93,12 @@ interface ForgeRunnerContext {
 }
 
 async function loadProjectRunnerContext(pool: QueryClient, projectId: string): Promise<ForgeRunnerContext> {
-  const result = await pool.query<ProjectRunnerRow>(
-    "SELECT runner_image, config, org_id FROM projects WHERE project_id = $1",
-    [projectId],
-  );
-  const row = result.rows[0];
+  const row = await ForgeToolsStore.getProjectRunnerContext(pool, projectId, systemActor);
   if (row === undefined) {
     throw new ForgeProjectNotFoundError(projectId);
   }
   const projectConfig = migrateProjectConfig(row.config);
-  return resolveForgeRunnerContext(pool, projectConfig, row.org_id ?? "", row.runner_image);
+  return resolveForgeRunnerContext(pool, projectConfig, row.orgId ?? "", row.runnerImage);
 }
 
 /**

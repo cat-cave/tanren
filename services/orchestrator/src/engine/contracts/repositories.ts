@@ -29,6 +29,18 @@ import { PersonaStore } from "../entities/personas.js";
 import { BehaviorStore } from "../entities/behaviors.js";
 import { MilestoneStore } from "../entities/milestones.js";
 import { SpecDependencyStore } from "../entities/specDependencies.js";
+// Forge + recovery stores ride in via the repositories barrel (same as the
+// event/cost read stores) so the contract keeps its module-dependency budget.
+import {
+  DiscoveryStore,
+  RecoveryStore,
+  ForgeToolsStore,
+  ForgeThreadStore,
+  ForgeTurnStore,
+  ForgeProposalStore,
+  InboxStore,
+  AuditsStore,
+} from "../repositories/index.js";
 
 /** A pool or a checked-out (org-scoped) client — anything that can run a query. */
 export type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
@@ -59,6 +71,23 @@ export interface Repositories {
   readonly behaviors: typeof BehaviorStore;
   readonly milestones: typeof MilestoneStore;
   readonly specDependencies: typeof SpecDependencyStore;
+  // Forge data-access stores (engine/forge). Thread/turn/proposal stores take an
+  // HTTP `ActorContext` and self-authorize; the seam carries that through. Their
+  // reads/writes self-route via `resolveWritableClient`, so a handed-in client is
+  // used verbatim and the ambient org-scoped client is joined when one is open.
+  readonly forgeThreads: typeof ForgeThreadStore;
+  readonly forgeTurns: typeof ForgeTurnStore;
+  readonly forgeProposals: typeof ForgeProposalStore;
+  /** Candidate-inbox (`inbox_sources` + `candidates`) data access. */
+  readonly inbox: typeof InboxStore;
+  /** Scheduled-audits (`audit_jobs`) data access. */
+  readonly audits: typeof AuditsStore;
+  /** Forge discovery: `specs.metadata` provenance + the grounding spec list. */
+  readonly discovery: typeof DiscoveryStore;
+  /** Failure-recovery: the run read, captured-commit reads, spec reopen writes. */
+  readonly recovery: typeof RecoveryStore;
+  /** Forge-tools tenant reads (access gates + the `tanren.read_*` projections). */
+  readonly forgeTools: typeof ForgeToolsStore;
 }
 
 /**
@@ -81,6 +110,14 @@ export const pgRepositories: Repositories = {
   behaviors: BehaviorStore,
   milestones: MilestoneStore,
   specDependencies: SpecDependencyStore,
+  forgeThreads: ForgeThreadStore,
+  forgeTurns: ForgeTurnStore,
+  forgeProposals: ForgeProposalStore,
+  inbox: InboxStore,
+  audits: AuditsStore,
+  discovery: DiscoveryStore,
+  recovery: RecoveryStore,
+  forgeTools: ForgeToolsStore,
 } as const;
 
 export type { ActorRef };

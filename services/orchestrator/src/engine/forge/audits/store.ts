@@ -128,3 +128,23 @@ export async function recordAuditRun(
   const row = result.rows[0];
   return row === undefined ? undefined : mapJob(row);
 }
+
+// Every org that owns an audit job — the system-scoped fan-out the cross-org
+// audit scheduler reads before listing each org's due jobs. DISTINCT, no
+// predicate; byte-identical to the inline scheduler read.
+export async function listDistinctAuditJobOrgIds(client: QueryClient): Promise<string[]> {
+  const result = await client.query<{ org_id: string }>("SELECT DISTINCT org_id FROM audit_jobs");
+  return result.rows.map((r) => r.org_id);
+}
+
+// The scheduled-audits data-access seam aggregated as a value object for the
+// `Repositories` registry. The standalone functions stay exported for the
+// scheduler/route call sites; the store object exposes the same methods.
+export const AuditsStore = {
+  createAuditJob,
+  listAuditJobs,
+  getAuditJob,
+  setAuditJobEnabled,
+  recordAuditRun,
+  listDistinctAuditJobOrgIds,
+} as const;

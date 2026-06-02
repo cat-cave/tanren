@@ -62,6 +62,8 @@ export {
   getCandidate,
   upsertCandidate,
   resolveCandidate,
+  listDistinctEnabledSourceOrgIds,
+  InboxStore,
   type CreateSourceInput,
 } from "./store.js";
 

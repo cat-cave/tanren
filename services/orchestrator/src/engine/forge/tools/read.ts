@@ -13,6 +13,8 @@ import type { ActorContext } from "../../../auth/schemas.js";
 import { resolveQueryClient } from "../../data/orgScopedDb.js";
 import { BehaviorStore } from "../../entities/behaviors.js";
 import { MilestoneStore } from "../../entities/milestones.js";
+import { ForgeToolsStore } from "../../repositories/forgeTools.js";
+import { systemActor } from "../../state/actor.js";
 import { isEventName } from "../../events/index.js";
 import { redactEventPayload } from "../../redaction/index.js";
 import { assertProjectAccess, assertRunAccess, assertSpecAccess, ToolAccessDeniedError } from "./authz.js";
@@ -44,8 +46,7 @@ export async function tanrenReadSpec(
 ): Promise<TanrenReadSpecResult> {
   const db = resolveQueryClient(deps.pool);
   await assertSpecAccess(db, args.specId, actor);
-  const specResult = await db.query<Record<string, unknown>>("SELECT * FROM specs WHERE spec_id = $1", [args.specId]);
-  const spec = specResult.rows[0];
+  const spec = await ForgeToolsStore.getSpecRow(db, args.specId, systemActor);
   if (spec === undefined) {
     throw new ToolAccessDeniedError(`spec not found: ${args.specId}`);
   }
@@ -74,17 +75,12 @@ export async function tanrenReadRun(
 ): Promise<TanrenReadRunResult> {
   const db = resolveQueryClient(deps.pool);
   await assertRunAccess(db, args.runId, actor);
-  const runResult = await db.query<Record<string, unknown>>("SELECT * FROM runs WHERE run_id = $1", [args.runId]);
-  const run = runResult.rows[0];
+  const run = await ForgeToolsStore.getRunRow(db, args.runId, systemActor);
   if (run === undefined) {
     throw new ToolAccessDeniedError(`run not found: ${args.runId}`);
   }
-  const tasks = await db.query<Record<string, unknown>>(
-    `SELECT * FROM tasks WHERE run_id = $1
-     ORDER BY started_at ASC NULLS FIRST, task_id ASC`,
-    [args.runId],
-  );
-  return { run, tasks: tasks.rows };
+  const tasks = await ForgeToolsStore.listRunTasks(db, args.runId, systemActor);
+  return { run, tasks };
 }
 
 // ---------------------------------------------------------------------------
@@ -142,15 +138,8 @@ export async function tanrenReadEvents(
   const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
   params.push(Math.min(args.limit ?? 500, 1000));
   const limitIdx = params.length;
-  const result = await db.query(
-    `SELECT id, ts, run_id, task_id, spec_id, project_id, event_type, payload
-     FROM events
-     ${where}
-     ORDER BY ts ASC, id ASC
-     LIMIT $${limitIdx}`,
-    params,
-  );
-  const events: RedactedEventRow[] = result.rows.map((row: Record<string, unknown>) => {
+  const rows = await ForgeToolsStore.listEventsForTool(db, where, limitIdx, params, systemActor);
+  const events: RedactedEventRow[] = rows.map((row: Record<string, unknown>) => {
     const eventType = String(row["event_type"]);
     if (!isEventName(eventType)) {
       return {
@@ -226,24 +215,15 @@ export async function tanrenReadCosts(
     clauses.push(`recorded_at >= $${params.length}`);
   }
   const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
-  const result = await db.query(
-    `SELECT id, task_id, run_id, project_id, cli, provider, model,
-            input_tokens, cached_input_tokens, cache_creation_tokens,
-            output_tokens, reasoning_output_tokens, total_tokens, cost_usd,
-            billing_mode, cost_basis, recorded_at
-     FROM cost_records
-     ${where}
-     ORDER BY recorded_at ASC, id ASC`,
-    params,
-  );
+  const rows = await ForgeToolsStore.listCostsForTool(db, where, params, systemActor);
   // cost_usd is best-effort and may be NULL; null rows contribute nothing to
   // the dollar total but are still returned with their token breakdown.
-  const totalUsd = result.rows.reduce<number>((sum, row) => {
+  const totalUsd = rows.reduce<number>((sum, row) => {
     const value = (row as { cost_usd: string | null }).cost_usd;
     return value === null || value === undefined ? sum : sum + Number(value);
   }, 0);
   return {
-    costs: result.rows as ReadonlyArray<Record<string, unknown>>,
+    costs: rows as ReadonlyArray<Record<string, unknown>>,
     totalUsd: totalUsd.toFixed(6),
   };
 }
@@ -262,22 +242,10 @@ export async function tanrenReadBehaviors(
   // Behaviors are persona-scoped; we list every persona reachable from the
   // project's org and union the behaviors. Matches what the dashboard
   // (P2B-0003) needs: "all behaviors my project can reference".
-  const personaResult = await db.query<{ id: string }>(
-    `SELECT id FROM personas WHERE org_id = (
-       SELECT org_id FROM projects WHERE project_id = $1
-     ) AND (scope = 'org' OR project_id = $1)`,
-    [args.projectId],
-  );
-  const personaIds = personaResult.rows.map((row) => row.id);
+  const personaIds = await ForgeToolsStore.listProjectPersonaIds(db, args.projectId, systemActor);
   if (personaIds.length === 0) return { behaviors: [] };
-  const result = await db.query(
-    `SELECT id, persona_id, title, given, "when", "then", description, metadata, created_at, updated_at
-     FROM behaviors
-     WHERE persona_id = ANY($1::text[])
-     ORDER BY title`,
-    [personaIds],
-  );
-  return { behaviors: result.rows as ReadonlyArray<Record<string, unknown>> };
+  const behaviors = await ForgeToolsStore.listBehaviorsForPersonas(db, personaIds, systemActor);
+  return { behaviors };
 }
 
 export async function tanrenReadMilestones(
