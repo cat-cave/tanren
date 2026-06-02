@@ -9,6 +9,8 @@ import type { SecretStore } from "../../contracts/secretStore.js";
 import { resolveQueryClient } from "../../data/orgScopedDb.js";
 import type { GitHubHttpClient } from "../../providers/github.js";
 import { parseGitHubRepository } from "../../providers/github.js";
+import { ForgeToolsStore } from "../../repositories/forgeTools.js";
+import { systemActor } from "../../state/actor.js";
 import { assertProjectAccess, ToolAccessDeniedError } from "./authz.js";
 
 interface RepoToolDeps {
@@ -27,15 +29,11 @@ async function loadProjectRepo(
   // has an ambient scope open; falls back to the pool otherwise (inert in R1).
   const db = resolveQueryClient(pool);
   await assertProjectAccess(db, projectId, actor);
-  const result = await db.query<{ repo_url: string; config: Record<string, unknown> | null }>(
-    "SELECT repo_url, config FROM projects WHERE project_id = $1",
-    [projectId],
-  );
-  const row = result.rows[0];
+  const row = await ForgeToolsStore.getProjectRepoAndConfig(db, projectId, systemActor);
   if (row === undefined) {
     throw new ToolAccessDeniedError(`project not found: ${projectId}`);
   }
-  const repo = parseGitHubRepository(row.repo_url);
+  const repo = parseGitHubRepository(row.repoUrl);
   const credentialRef =
     typeof row.config === "object" &&
     row.config !== null &&

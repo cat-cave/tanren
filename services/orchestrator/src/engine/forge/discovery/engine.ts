@@ -23,6 +23,8 @@
 
 import type pg from "pg";
 import type { ActorContext } from "../../../auth/schemas.js";
+import { systemActor } from "../../state/actor.js";
+import { DiscoveryStore, type ExistingSpecSummary } from "../../repositories/discovery.js";
 import { createSpec, type SpecContract } from "../../workflow/projectSpec.js";
 import { writeProvenance, type DiscoveryProvenance } from "./provenance.js";
 import {
@@ -32,8 +34,6 @@ import {
   type PlacementKind,
   type ProposedSpec,
 } from "./types.js";
-
-type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
 export interface DiscoveryEngineDeps {
   pool: pg.Pool;
@@ -52,15 +52,8 @@ export interface ClassifyInput {
 }
 
 // Loads the project's existing specs (id/title/status) to ground the answerer.
-async function loadExistingSpecs(
-  client: QueryClient,
-  projectId: string,
-): Promise<Array<{ specId: string; title: string; status: string }>> {
-  const result = await client.query<{ spec_id: string; title: string; status: string }>(
-    "SELECT spec_id, title, status FROM specs WHERE project_id = $1 ORDER BY title",
-    [projectId],
-  );
-  return result.rows.map((row) => ({ specId: row.spec_id, title: row.title, status: row.status }));
+async function loadExistingSpecs(client: pg.Pool, projectId: string): Promise<ExistingSpecSummary[]> {
+  return DiscoveryStore.listExistingSpecs(client, projectId, systemActor);
 }
 
 /** Thrown when `classifyInsight` runs without a model answerer wired (§8a). */

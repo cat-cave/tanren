@@ -18,6 +18,8 @@ export {
   getAuditJob,
   setAuditJobEnabled,
   recordAuditRun,
+  listDistinctAuditJobOrgIds,
+  AuditsStore,
   type CreateAuditJobInput,
 } from "./store.js";
 

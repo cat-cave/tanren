@@ -17,6 +17,8 @@ import type pg from "pg";
 import type { ActorContext } from "../../auth/schemas.js";
 import { PgEventStore } from "../eventStore.js";
 import { ForgeThreadStore } from "../forge/index.js";
+import { RecoveryStore } from "../repositories/recovery.js";
+import { systemActor } from "../state/actor.js";
 import { createQueuedRunFromSpec } from "../workflow/projectSpec.js";
 
 /** A halted run's recovery context: the spec, last-good commit, and outcome. */
@@ -70,18 +72,12 @@ type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
  * most recent `workspace.git_captured` event for the run.
  */
 export async function loadHaltedRunContext(pool: QueryClient, runId: string): Promise<HaltedRunContext | undefined> {
-  const run = await pool.query<{
-    spec_id: string;
-    project_id: string;
-    status: string;
-    outcome: string | null;
-  }>("SELECT spec_id, project_id, status, outcome FROM runs WHERE run_id = $1", [runId]);
-  const row = run.rows[0];
+  const row = await RecoveryStore.getRun(pool, runId, systemActor);
   if (row === undefined) return undefined;
   return {
     runId,
-    specId: row.spec_id,
-    projectId: row.project_id,
+    specId: row.specId,
+    projectId: row.projectId,
     status: row.status,
     outcome: row.outcome,
     lastGoodCommit: await loadLastGoodCommit(pool, runId),
@@ -90,29 +86,19 @@ export async function loadHaltedRunContext(pool: QueryClient, runId: string): Pr
 
 /** The most recent captured commit SHA for the run, or null when none exists. */
 export async function loadLastGoodCommit(pool: QueryClient, runId: string): Promise<string | null> {
-  const result = await pool.query<{ payload: unknown }>(
-    `SELECT payload FROM events
-       WHERE run_id = $1 AND event_type = 'workspace.git_captured'
-       ORDER BY ts DESC, id DESC
-       LIMIT 1`,
-    [runId],
-  );
-  const payload = result.rows[0]?.payload as { commits?: Array<{ sha?: unknown }> } | undefined;
+  const payload = (await RecoveryStore.getLastCapturedEventPayload(pool, runId, systemActor)) as
+    | { commits?: Array<{ sha?: unknown }> }
+    | undefined;
   const sha = payload?.commits?.[0]?.sha;
   return typeof sha === "string" && sha.length > 0 ? sha : null;
 }
 
 /** All captured commit SHAs for the run (rollback target validation). */
 export async function loadCapturedCommits(pool: QueryClient, runId: string): Promise<string[]> {
-  const result = await pool.query<{ payload: unknown }>(
-    `SELECT payload FROM events
-       WHERE run_id = $1 AND event_type = 'workspace.git_captured'
-       ORDER BY ts DESC, id DESC`,
-    [runId],
-  );
+  const payloads = await RecoveryStore.listCapturedEventPayloads(pool, runId, systemActor);
   const shas: string[] = [];
-  for (const r of result.rows) {
-    const commits = (r.payload as { commits?: Array<{ sha?: unknown }> } | undefined)?.commits ?? [];
+  for (const payload of payloads) {
+    const commits = (payload as { commits?: Array<{ sha?: unknown }> } | undefined)?.commits ?? [];
     for (const c of commits) {
       if (typeof c.sha === "string" && c.sha.length > 0) shas.push(c.sha);
     }
@@ -340,12 +326,7 @@ export async function openInspectionThread(
 
 /** Append the operator's steering note to the spec description (idempotent-ish). */
 async function appendSteeringToSpec(pool: QueryClient, specId: string, steeringNote: string): Promise<void> {
-  await pool.query(
-    `UPDATE specs
-        SET description = description || E'\n\n[operator steering] ' || $2
-      WHERE spec_id = $1`,
-    [specId, steeringNote],
-  );
+  await RecoveryStore.appendSteeringToSpec(pool, specId, steeringNote, systemActor);
 }
 
 /**
@@ -354,7 +335,5 @@ async function appendSteeringToSpec(pool: QueryClient, specId: string, steeringN
  * to `pending` lets the recovery replan re-claim it.
  */
 async function reopenSpecForReplan(pool: QueryClient, specId: string): Promise<void> {
-  await pool.query(`UPDATE specs SET status = 'pending' WHERE spec_id = $1 AND status NOT IN ('done', 'merged')`, [
-    specId,
-  ]);
+  await RecoveryStore.reopenSpecForReplan(pool, specId, systemActor);
 }

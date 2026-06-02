@@ -20,6 +20,8 @@
 
 import type pg from "pg";
 import type { ActorContext } from "../../../auth/schemas.js";
+import { systemActor } from "../../state/actor.js";
+import { DiscoveryStore, type ExistingSpecSummary } from "../../repositories/discovery.js";
 import { acceptProposals, type DiscoveryInsight, type PlacementKind, type ProposedSpec } from "../discovery/index.js";
 import { getCandidate, resolveCandidate, upsertCandidate } from "./store.js";
 import type {
@@ -54,16 +56,9 @@ export class TriageAnswererUnconfiguredError extends Error {
   }
 }
 
-async function loadExistingSpecs(
-  client: QueryClient,
-  projectId: string | null,
-): Promise<Array<{ specId: string; title: string; status: string }>> {
+async function loadExistingSpecs(client: QueryClient, projectId: string | null): Promise<ExistingSpecSummary[]> {
   if (projectId === null) return [];
-  const result = await client.query<{ spec_id: string; title: string; status: string }>(
-    "SELECT spec_id, title, status FROM specs WHERE project_id = $1 ORDER BY title",
-    [projectId],
-  );
-  return result.rows.map((r) => ({ specId: r.spec_id, title: r.title, status: r.status }));
+  return DiscoveryStore.listExistingSpecs(client, projectId, systemActor);
 }
 
 export interface IngestResult {

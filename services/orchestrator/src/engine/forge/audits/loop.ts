@@ -11,7 +11,7 @@
 
 import type pg from "pg";
 import { runWithSystemScope } from "@tanren/db";
-import { listAuditJobs } from "./store.js";
+import { listAuditJobs, listDistinctAuditJobOrgIds } from "./store.js";
 import { runAuditJob } from "./scheduler.js";
 import type { AuditCadence, AuditJob, AuditPassRunner } from "./types.js";
 import type { TriageAnswerer } from "../inbox/index.js";
@@ -119,10 +119,7 @@ export class AuditSchedulerLoop {
 
   private async listDueJobs(): Promise<AuditJob[]> {
     const now = this.now();
-    const orgIds = await runWithSystemScope(this.deps.pool, async (client) => {
-      const result = await client.query<{ org_id: string }>("SELECT DISTINCT org_id FROM audit_jobs");
-      return result.rows.map((r) => r.org_id);
-    });
+    const orgIds = await runWithSystemScope(this.deps.pool, (client) => listDistinctAuditJobOrgIds(client));
     const due: AuditJob[] = [];
     for (const orgId of orgIds) {
       const jobs = await runWithSystemScope(this.deps.pool, (client) => listAuditJobs(client, orgId));

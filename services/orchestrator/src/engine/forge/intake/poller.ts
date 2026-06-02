@@ -15,6 +15,7 @@ import { runWithSystemScope } from "@tanren/db";
 import { z } from "zod";
 import {
   ingestSource,
+  listDistinctEnabledSourceOrgIds,
   listSources,
   type AutoRouteDeps,
   type Candidate,
@@ -168,12 +169,7 @@ export class IntakePoller {
 
   /** List every org's pollable, due-now source (cross-org, system-scoped). */
   private async listDuePollableSources(): Promise<InboxSource[]> {
-    const orgIds = await runWithSystemScope(this.deps.pool, async (client) => {
-      const result = await client.query<{ org_id: string }>(
-        "SELECT DISTINCT org_id FROM inbox_sources WHERE enabled = 'true'",
-      );
-      return result.rows.map((r) => r.org_id);
-    });
+    const orgIds = await runWithSystemScope(this.deps.pool, (client) => listDistinctEnabledSourceOrgIds(client));
     const due: InboxSource[] = [];
     const now = this.now();
     for (const orgId of orgIds) {
