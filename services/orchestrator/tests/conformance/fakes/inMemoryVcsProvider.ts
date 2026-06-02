@@ -12,6 +12,7 @@ import {
   CONFORMANCE_BEHIND_PR_NUMBER,
   CONFORMANCE_CONFLICT_PR_NUMBER,
   CONFORMANCE_DIRTY_PR_NUMBER,
+  CONFORMANCE_FAILING_BRANCH,
   CONFORMANCE_HEAD_BRANCH,
   CONFORMANCE_PRESENT_FILE,
   CONFORMANCE_PRESENT_FILE_BODY,
@@ -73,6 +74,26 @@ export class InMemoryVcsProvider implements VcsProvider {
   async readPullRequestChecks(_pr: PullRequestRef, _token: ResolvedVcsToken): Promise<GitHubPullRequestChecks> {
     return {
       head: { sha: "deadbeef" },
+      checkRuns: [{ name: "build", status: "completed", conclusion: "success" }],
+      statuses: [],
+    };
+  }
+  async readBranchChecks(input: {
+    repo: RepoRef;
+    branch: string;
+    token: ResolvedVcsToken;
+  }): Promise<GitHubPullRequestChecks> {
+    // The well-known FAILING integration ref reports a failed check (a bad
+    // interaction); every other ref is green.
+    if (input.branch === CONFORMANCE_FAILING_BRANCH) {
+      return {
+        head: { sha: `sha-${input.branch}` },
+        checkRuns: [{ name: "build", status: "completed", conclusion: "failure" }],
+        statuses: [],
+      };
+    }
+    return {
+      head: { sha: `sha-${input.branch}` },
       checkRuns: [{ name: "build", status: "completed", conclusion: "success" }],
       statuses: [],
     };

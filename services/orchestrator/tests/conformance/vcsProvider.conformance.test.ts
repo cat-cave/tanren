@@ -21,6 +21,7 @@ import {
   CONFORMANCE_ANCESTOR_CONFLICT,
   CONFORMANCE_BEHIND_PR_NUMBER,
   CONFORMANCE_DIRTY_PR_NUMBER,
+  CONFORMANCE_FAILING_BRANCH,
   CONFORMANCE_HEAD_BRANCH,
   CONFORMANCE_PRESENT_FILE,
   CONFORMANCE_PRESENT_FILE_BODY,
@@ -29,6 +30,8 @@ import {
 
 const STATIC_REF = "credential/github/conformance";
 const HEAD_SHA = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
+/** P2d-2: the distinct SHA the FAILING integration ref resolves to (its check-runs fail). */
+const FAILING_SHA = "fa11edfa11edfa11edfa11edfa11edfa11edfa11";
 
 const ok = (body: unknown): GitHubHttpResponse => ({ status: 200, body });
 
@@ -88,8 +91,13 @@ class RoutingGitHubHttp implements GitHubHttpClient {
     if (input.method === "POST" && path === "/graphql") {
       return ok({ data: { markPullRequestReadyForReview: { pullRequest: { isDraft: false } } } });
     }
-    // readPullRequestChecks: check-runs + commit status; protection 404.
+    // readPullRequestChecks / readBranchChecks: check-runs + commit status; protection
+    // 404. The FAILING integration ref's SHA reports a failed check (a bad
+    // interaction — the P2d-2 batch-check signal); every other commit is green.
     if (input.method === "GET" && path.endsWith("/check-runs")) {
+      if (path.includes(FAILING_SHA)) {
+        return ok({ check_runs: [{ name: "build", status: "completed", conclusion: "failure" }] });
+      }
       return ok({ check_runs: [{ name: "build", status: "completed", conclusion: "success" }] });
     }
     if (input.method === "GET" && path.endsWith("/status")) return ok({ statuses: [] });
@@ -115,6 +123,11 @@ class RoutingGitHubHttp implements GitHubHttpClient {
       // P2c-2 readBranchHeadSha: the well-known absent branch 404s (missing ref).
       if (path.includes(encodeURIComponent(CONFORMANCE_ABSENT_BRANCH))) {
         return { status: 404, body: { message: "Not Found" } };
+      }
+      // P2d-2 readBranchChecks: the FAILING integration ref resolves to a SHA whose
+      // check-runs fail (so the prospective merged state's CI is red).
+      if (path.includes(encodeURIComponent(CONFORMANCE_FAILING_BRANCH))) {
+        return ok({ object: { sha: FAILING_SHA } });
       }
       return ok({ object: { sha: HEAD_SHA } });
     }

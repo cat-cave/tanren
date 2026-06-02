@@ -80,6 +80,13 @@ export class UnconfiguredVcsProvider implements VcsProvider {
   async readPullRequestChecks(_pr: PullRequestRef, _token: ResolvedVcsToken): Promise<GitHubPullRequestChecks> {
     return this.fail();
   }
+  async readBranchChecks(_input: {
+    repo: RepoRef;
+    branch: string;
+    token: ResolvedVcsToken;
+  }): Promise<GitHubPullRequestChecks> {
+    return this.fail();
+  }
   async readReviewVerdict(_pr: PullRequestRef, _token: ResolvedVcsToken): Promise<ReviewVerdictResult> {
     return this.fail();
   }

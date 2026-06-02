@@ -1,0 +1,257 @@
+// The `BatchMergeCoordinator` seam (autonomy-engine.md §2d — speculative batch-check
+// + bisect, the P2d-2 intelligence layer ON TOP OF the P2d-1 native queue). Where
+// P2d-1's coordinator merges queued runs ONE AT A TIME in DAG order — correct, but it
+// can only catch a bad *interaction* (two PRs that each pass alone but break together)
+// AFTER a merge, and a single bad head stalls everyone behind it — this layer:
+//
+//   1. FORMS A BATCH — the DAG-ordered, mutually-eligible prefix of the queue (reuse
+//      the EXACT P2d-1 eligibility + ordering: `isEligible` + `compareEntries`), capped
+//      by a config knob (never silently truncated — a cap is LOGGED).
+//   2. BATCH-CHECKS the PROSPECTIVE MERGED STATE — `default_branch + batch PRs`
+//      speculatively merged in DAG order (reuse the P2c-1 SpeculativeIntegrator /
+//      `buildIntegrationBranch`), then runs the CI/gate against that integration ref
+//      (the `VcsProvider` CI seam). It is a SPECULATIVE check — it NEVER touches
+//      `default_branch`.
+//   3. On PASS — the batch is validated as a combined unit → the coordinator drives
+//      its entries' real merges in DAG order through the EXISTING P2d-1 drive path (no
+//      re-surprises). Serialization + the P2d-1 ordering/lease guarantees still hold
+//      for the ACTUAL merges (the batch check is purely speculative).
+//   4. On FAIL — BISECT (the headline capability): binary-search the ordered batch to
+//      isolate the SINGLE PR whose inclusion breaks the check, REMOVE it (dequeue it to
+//      a RECOVERABLE outcome — routed to the P2b re-execution path, never dropped), and
+//      RE-FORM + RE-CHECK the batch WITHOUT the culprit so the innocent PRs still merge.
+//
+// This module carries the PURE selection/bisect core (no DB, no VCS) + the SEAMS (the
+// batch checker + the merge model/runner from P2d-1), so the batch-formation rule and
+// the bisect algorithm are conformance-tested independent of any database or forge.
+
+import { DEFAULT_MAX_BATCH_SIZE } from "../config/shared.js";
+import { compareEntries, type MergeQueueEntry, type MergeQueueSnapshot } from "./mergeCoordinator.js";
+
+// Re-export the config default so call sites that already import the batch contract
+// (the coordinator) get the knob from one place; the schema default lives in
+// config/shared.ts (the single source of truth for config defaults).
+export { DEFAULT_MAX_BATCH_SIZE };
+
+// ---- Pure batch formation -------------------------------------------------
+
+/** The outcome of forming a batch from a queue snapshot. */
+export interface BatchFormation {
+  /**
+   * The DAG-ordered, mutually-eligible batch (a prefix of the priority-ordered
+   * eligible set). Every entry's ancestors are merged-or-earlier-in-this-batch, so
+   * the batch can be speculatively integrated in this exact order without a phantom
+   * ancestor. Empty when nothing is eligible.
+   */
+  batch: MergeQueueEntry[];
+  /** True when more entries were eligible than the cap allowed (caller LOGS it). */
+  capped: boolean;
+  /** The total eligible count BEFORE the cap (for the cap log + queue stats). */
+  eligibleCount: number;
+}
+
+/**
+ * Form the batch to speculatively integrate + check this pass (PURE — no I/O). The
+ * batch is the DAG-ordered, MUTUALLY-ELIGIBLE prefix of the queue, capped at
+ * `maxBatchSize`:
+ *
+ *   - SERIALIZATION — if a merge is already in flight (`mergingInFlight`), return an
+ *     EMPTY batch (the P2d-1 one-at-a-time lock dominates; the in-flight merge's
+ *     completion re-triggers the pass).
+ *   - ELIGIBILITY — reuse the P2d-1 `isEligible` rule against the snapshot's
+ *     `mergedSpecIds` + the queued-spec set, AND the batch's own already-included
+ *     specs (so an entry whose ancestor is NOT merged but IS earlier in this batch is
+ *     still eligible — the batch's ancestor will merge first). An entry whose ancestor
+ *     is neither merged, nor earlier-in-batch, nor satisfiable is HELD (never include a
+ *     dependent whose ancestor isn't in the batch-or-already-merged).
+ *   - ORDER — sort the eligible set by the P2d-1 `compareEntries` (priority then a
+ *     stable tiebreak), then greedily take entries in that order while their ancestors
+ *     are merged-or-already-taken. This yields a prefix whose merge order == the order
+ *     the one-at-a-time path would have used.
+ *   - CAP — take at most `maxBatchSize`; set `capped` when more were eligible so the
+ *     caller logs it (no silent truncation). The dropped entries keep their queue
+ *     position and are re-considered next pass.
+ *
+ * TERMINATION/SAFETY: the batch never includes a dependent ahead of an ancestor that
+ * is not merged-or-in-the-batch, so the speculative integration order is always valid.
+ */
+export function formBatch(snapshot: MergeQueueSnapshot, maxBatchSize: number): BatchFormation {
+  if (maxBatchSize < 1) {
+    throw new Error(`maxBatchSize must be a positive integer, got ${maxBatchSize}`);
+  }
+  if (snapshot.mergingInFlight || snapshot.entries.length === 0) {
+    return { batch: [], capped: false, eligibleCount: 0 };
+  }
+
+  const queuedSpecIds = new Set(snapshot.entries.map((e) => e.specId));
+
+  // Greedy fixed point over the priority-ordered queue: an entry joins the batch once
+  // every ancestor it depends on is merged OR already in the batch. We loop until no
+  // more entries become eligible, so a chain A→B→C all enters one batch in order.
+  const ordered = [...snapshot.entries].sort(compareEntries);
+  const batchSpecIds = new Set<string>();
+  const batch: MergeQueueEntry[] = [];
+  let added = true;
+  while (added) {
+    added = false;
+    for (const entry of ordered) {
+      if (batchSpecIds.has(entry.specId)) continue;
+      // Eligible iff every dep is merged, NOT-queued (external/handled), OR already
+      // taken into THIS batch (its ancestor will merge first within the batch).
+      const ready = entry.dependsOn.every(
+        (depId) => snapshot.mergedSpecIds.has(depId) || batchSpecIds.has(depId) || !queuedSpecIds.has(depId),
+      );
+      if (!ready) continue;
+      batch.push(entry);
+      batchSpecIds.add(entry.specId);
+      added = true;
+    }
+  }
+
+  // `batch` is now in greedy-discovery order. Re-sort it into a strict DAG +
+  // priority order so the speculative integration + the real merges run in the
+  // canonical one-at-a-time order (ancestors first). A topological sort by
+  // dependency-closure-within-batch, breaking ties by `compareEntries`.
+  const dagOrdered = orderBatchTopologically(batch, batchSpecIds);
+
+  const eligibleCount = dagOrdered.length;
+  const capped = eligibleCount > maxBatchSize;
+  return { batch: dagOrdered.slice(0, maxBatchSize), capped, eligibleCount };
+}
+
+/**
+ * Order the formed batch so every entry comes AFTER every batch-internal ancestor it
+ * depends on, breaking ties by the P2d-1 `compareEntries` (priority + stable
+ * tiebreak). A stable topological sort over the batch's internal dependency edges;
+ * the batch is acyclic (DAG), so it always terminates. After this, slicing to the cap
+ * yields a valid PREFIX — capping never strands a dependent ahead of its ancestor,
+ * because an ancestor always sorts before its dependent.
+ */
+function orderBatchTopologically(batch: MergeQueueEntry[], batchSpecIds: Set<string>): MergeQueueEntry[] {
+  const remaining = [...batch].sort(compareEntries);
+  const placedSpecIds = new Set<string>();
+  const result: MergeQueueEntry[] = [];
+  while (remaining.length > 0) {
+    // The first entry (in priority order) all of whose in-batch ancestors are placed.
+    const idx = remaining.findIndex((entry) =>
+      entry.dependsOn.every((depId) => !batchSpecIds.has(depId) || placedSpecIds.has(depId)),
+    );
+    // `idx` is always >= 0 for a DAG: at least one un-placed entry has all its
+    // in-batch ancestors placed (otherwise there is a cycle, impossible in the DAG).
+    const pick = Math.max(idx, 0);
+    const [entry] = remaining.splice(pick, 1);
+    if (entry === undefined) break;
+    result.push(entry);
+    placedSpecIds.add(entry.specId);
+  }
+  return result;
+}
+
+// ---- Pure bisect core -----------------------------------------------------
+
+/**
+ * The result of bisecting a failed batch. `culpritIndex` is the position (in the
+ * batch's DAG order) of the SINGLE PR whose inclusion flips the check from pass to
+ * fail — the offending PR. `innocentPrefix` is the batch entries BEFORE the culprit
+ * (they pass together WITHOUT it, so they are provably innocent and may proceed).
+ * `checks` is the count of sub-batch checks the bisect performed (bounded by
+ * `O(log n)` — surfaced for the termination assertion + cost stats).
+ */
+export interface BisectResult {
+  culpritIndex: number;
+  culprit: MergeQueueEntry;
+  innocentPrefix: MergeQueueEntry[];
+  checks: number;
+}
+
+/**
+ * Bisect a failed batch to isolate the SINGLE offending PR (PURE driver — the only
+ * I/O is the injected `checkPrefix`). Binary search over the DAG-ordered batch:
+ *
+ *   - INVARIANT: the empty prefix PASSES (just `default_branch` — the batch is only
+ *     formed from individually-ready entries, so the base is green) and the FULL batch
+ *     FAILS (this is only called after a failed batch check). We binary-search the
+ *     boundary `k` where `prefix[0..k-1]` PASSES but `prefix[0..k]` FAILS — index `k`
+ *     is the culprit: adding exactly that PR is what breaks the check.
+ *   - `checkPrefix(n)` runs the speculative integration + CI for the FIRST `n` batch
+ *     entries (`n = 0` ⇒ base only). The driver maintains `lo` (a known-PASSING prefix
+ *     length, starts 0) and `hi` (a known-FAILING prefix length, starts `batch.length`)
+ *     and narrows `lo`/`hi` until `hi == lo + 1`. Then `batch[lo]` is the culprit.
+ *
+ * WHY IT CANNOT BLAME AN INNOCENT: the culprit `batch[lo]` is, by the maintained
+ * invariant, a PR such that the prefix WITHOUT it (`prefix[0..lo]`, length `lo`)
+ * PASSES and the prefix WITH it (length `lo+1`) FAILS — i.e. a sub-batch passes
+ * without it and fails with it. That is the definition of "the offending PR"; no PR
+ * the check tolerates is ever named.
+ *
+ * WHY IT TERMINATES: each step strictly shrinks the suspect window `[lo, hi]` (we
+ * always probe a `mid` strictly between `lo` and `hi` and move one bound to it), so
+ * `hi - lo` halves each step and the loop runs at most `ceil(log2(batch.length)) + 1`
+ * times — it cannot loop forever.
+ */
+export async function bisectCulprit(
+  batch: ReadonlyArray<MergeQueueEntry>,
+  checkPrefix: (prefixLength: number) => Promise<"pass" | "fail">,
+): Promise<BisectResult> {
+  if (batch.length === 0) {
+    throw new Error("bisectCulprit called on an empty batch (nothing to bisect)");
+  }
+  // `lo` = a prefix length known to PASS (the empty prefix = base only). `hi` = a
+  // prefix length known to FAIL (the full batch — the failed check that triggered the
+  // bisect). The culprit is at index `lo` once `hi == lo + 1`.
+  let lo = 0;
+  let hi = batch.length;
+  let checks = 0;
+  while (hi - lo > 1) {
+    // `mid` is strictly between `lo` and `hi`, so the window always shrinks.
+    const mid = lo + Math.floor((hi - lo) / 2);
+    checks += 1;
+    const verdict = await checkPrefix(mid);
+    if (verdict === "pass") {
+      // prefix[0..mid-1] passes ⇒ the culprit is at or after `mid`.
+      lo = mid;
+    } else {
+      // prefix[0..mid-1] fails ⇒ the culprit is before `mid`.
+      hi = mid;
+    }
+  }
+  const culprit = batch[lo];
+  if (culprit === undefined) {
+    throw new Error(`bisect produced an out-of-range culprit index ${lo} for batch of ${batch.length}`);
+  }
+  return { culpritIndex: lo, culprit, innocentPrefix: batch.slice(0, lo), checks };
+}
+
+// ---- Seams ----------------------------------------------------------------
+
+/** The outcome of speculatively integrating + CI-checking a set of entries. */
+export type BatchCheckVerdict =
+  // The prospective merged state (default_branch + the entries, merged in order)
+  // integrated cleanly AND its CI/gate is green — safe to merge as a unit.
+  | { result: "pass"; integrationBranch: string }
+  // The prospective merged state's CI/gate FAILED (a bad interaction) — do NOT merge.
+  | { result: "fail"; message: string }
+  // The speculative INTEGRATION itself conflicted (two entries conflict with each
+  // other) — treated like a fail for bisect (the offending entry is isolated the same
+  // way), but tagged so the dequeue routes the pair to the P2b resolver.
+  | { result: "conflict"; message: string; conflictBetween?: { specId: string; otherSpecId: string } }
+  // The prospective merged state's CI is still RUNNING (not yet terminal) — NOT a
+  // failure. The coordinator HOLDS this pass (it does NOT bisect a green-but-pending
+  // batch, which would falsely blame a PR); the next CI-completion notification
+  // re-triggers a fresh pass.
+  | { result: "pending"; message: string };
+
+/**
+ * Speculatively integrate the given entries (in the supplied DAG order) onto
+ * `default_branch` and run the CI/gate against the prospective merged tree. The
+ * production impl reuses the P2c-1 SpeculativeIntegrator (`buildIntegrationBranch`)
+ * to assemble the ephemeral integration ref, then the VcsProvider CI seam to check
+ * it. It NEVER touches `default_branch` — only the ephemeral batch-integration ref.
+ * An empty entry list checks the BASE (`default_branch`) alone — which passes (the
+ * base is green) — so the bisect's `checkPrefix(0)` invariant holds without a special
+ * case. Tests inject a fake that scripts which entry-sets pass/fail (modelling a
+ * bad-interaction PR).
+ */
+export interface BatchChecker {
+  checkBatch(input: { projectId: string; entries: ReadonlyArray<MergeQueueEntry> }): Promise<BatchCheckVerdict>;
+}

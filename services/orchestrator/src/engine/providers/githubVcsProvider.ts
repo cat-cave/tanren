@@ -165,6 +165,19 @@ export class GitHubVcsProvider implements VcsProvider {
     });
   }
 
+  async readBranchChecks(input: {
+    repo: RepoRef;
+    branch: string;
+    token: ResolvedVcsToken;
+  }): Promise<GitHubPullRequestChecks> {
+    return this.status.fetchBranchChecks({
+      repo: input.repo,
+      branch: input.branch,
+      token: input.token.token,
+      refreshToken: input.token.refresh,
+    });
+  }
+
   async readReviewVerdict(pr: PullRequestRef, token: ResolvedVcsToken): Promise<ReviewVerdictResult> {
     return this.reviewMerge.fetchReviewVerdict({
       repo: pr.repo,

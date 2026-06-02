@@ -237,6 +237,36 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["reason", "public"],
     ["message", "public"],
   ]),
+  // P2d-2 (§2d) speculative batch-check + bisect — batch composition + cap stats +
+  // the integration ref + bisect prose, all public (queue/batch visibility).
+  ...rulesFor("merge.batch.checking", [
+    ["integration", "public"],
+    ["members[].specId", "public"],
+    ["members[].prNumber", "public"],
+    ["eligibleCount", "public"],
+    ["capped", "public"],
+    ["maxBatchSize", "public"],
+  ]),
+  ...rulesFor("merge.batch.passed", [
+    ["integration", "public"],
+    ["members[].specId", "public"],
+    ["members[].prNumber", "public"],
+    ["integrationBranch", "public"],
+  ]),
+  ...rulesFor("merge.batch.bisecting", [
+    ["integration", "public"],
+    ["members[].specId", "public"],
+    ["members[].prNumber", "public"],
+    ["message", "public"],
+  ]),
+  ...rulesFor("merge.batch.culprit", [
+    ["integration", "public"],
+    ["specId", "public"],
+    ["runId", "public"],
+    ["prNumber", "public"],
+    ["checks", "public"],
+    ["message", "public"],
+  ]),
   ...rulesFor("merge.failed", [
     ["prUrl", "public"],
     ["prNumber", "public"],

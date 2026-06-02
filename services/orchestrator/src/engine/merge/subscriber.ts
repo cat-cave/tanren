@@ -23,7 +23,7 @@ import type { MergeCoordinator } from "../contracts/mergeCoordinator.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { VcsProvider } from "../contracts/vcsProvider.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
-import { buildMergeCoordinator } from "./coordinatorBuild.js";
+import { buildBatchMergeCoordinator } from "./batchCoordinatorBuild.js";
 
 export interface MergeCoordinatorSubscriberDeps {
   pool: pg.Pool;
@@ -83,7 +83,11 @@ export class MergeCoordinatorSubscriber {
     if (secrets === undefined || vcsProvider === undefined) {
       throw new Error("MergeCoordinatorSubscriber requires secrets + vcsProvider when no coordinator is injected");
     }
-    return buildMergeCoordinator({
+    // P2d-2: the native-queue driver is the speculative batch-check + bisect
+    // coordinator (it forms a batch, proves the prospective merged state green as a
+    // unit, then drives the SAME P2d-1 per-run merges in DAG order — a bad interaction
+    // is bisected to one PR rather than stalling the batch).
+    return buildBatchMergeCoordinator({
       pool: this.deps.pool,
       secrets,
       vcsProvider,

@@ -1,4 +1,5 @@
 import { setTimeout as sleepFor } from "node:timers/promises";
+import { parseCheckRuns, parseCommitStatuses, parseRefObjectSha, parseRequiredContexts } from "./githubChecksParse.js";
 
 export interface GitHubRepository {
   owner: string;
@@ -284,16 +285,73 @@ export class GitHubStatusService {
     const head = parsePullRequestHead(pull.body);
     const baseBranch = parseBaseBranch((pull.body as Record<string, unknown> | undefined)?.["base"]);
 
+    return this.fetchChecksForSha({
+      repo: input.repo,
+      token: input.token,
+      sha: head.sha,
+      ...(baseBranch !== undefined && { protectedBranch: baseBranch }),
+      ...(input.refreshToken !== undefined && { refreshToken: input.refreshToken }),
+    });
+  }
+
+  /**
+   * P2d-2 (autonomy-engine.md §2d — speculative batch-check): read the CI/check
+   * status of an arbitrary BRANCH ref (not a PR) — used to batch-check the prospective
+   * merged state on the ephemeral speculative-integration branch. Resolves the
+   * branch's HEAD SHA, then reads the SAME check-runs + commit-status endpoints
+   * `fetchPullRequestChecks` does, gated by the branch's own protection required
+   * contexts. Provider-neutral via `VcsProvider.readBranchChecks`.
+   */
+  async fetchBranchChecks(input: {
+    repo: GitHubRepository;
+    token: string;
+    branch: string;
+    refreshToken?: () => Promise<string>;
+  }): Promise<GitHubPullRequestChecks> {
+    const refResponse = await this.http.request({
+      method: "GET",
+      path: repoPath(input.repo, `/git/ref/heads/${encodeURIComponent(input.branch)}`),
+      token: input.token,
+      refreshToken: input.refreshToken,
+    });
+    if (refResponse.status !== 200) {
+      throw new Error(`GitHub branch ref fetch failed for ${input.branch}: HTTP ${refResponse.status}`);
+    }
+    const sha = parseRefObjectSha(refResponse.body);
+    if (sha === undefined) {
+      throw new Error(`GitHub branch ref ${input.branch} had no object SHA`);
+    }
+    return this.fetchChecksForSha({
+      repo: input.repo,
+      token: input.token,
+      sha,
+      protectedBranch: input.branch,
+      ...(input.refreshToken !== undefined && { refreshToken: input.refreshToken }),
+    });
+  }
+
+  /**
+   * Read the check-runs + commit statuses for a commit SHA (the shared core of the
+   * PR-keyed and branch-keyed check reads), gated by `protectedBranch`'s required
+   * contexts when supplied. Kept private so both callers parse checks identically.
+   */
+  private async fetchChecksForSha(input: {
+    repo: GitHubRepository;
+    token: string;
+    sha: string;
+    protectedBranch?: string;
+    refreshToken?: () => Promise<string>;
+  }): Promise<GitHubPullRequestChecks> {
     const [checkRuns, statuses] = await Promise.all([
       this.http.request({
         method: "GET",
-        path: repoPath(input.repo, `/commits/${encodeURIComponent(head.sha)}/check-runs`),
+        path: repoPath(input.repo, `/commits/${encodeURIComponent(input.sha)}/check-runs`),
         token: input.token,
         refreshToken: input.refreshToken,
       }),
       this.http.request({
         method: "GET",
-        path: repoPath(input.repo, `/commits/${encodeURIComponent(head.sha)}/status`),
+        path: repoPath(input.repo, `/commits/${encodeURIComponent(input.sha)}/status`),
         token: input.token,
         refreshToken: input.refreshToken,
       }),
@@ -306,10 +364,17 @@ export class GitHubStatusService {
     }
 
     const requiredContexts =
-      baseBranch === undefined ? undefined : await this.fetchRequiredContexts({ ...input, baseBranch });
+      input.protectedBranch === undefined
+        ? undefined
+        : await this.fetchRequiredContexts({
+            repo: input.repo,
+            token: input.token,
+            baseBranch: input.protectedBranch,
+            ...(input.refreshToken !== undefined && { refreshToken: input.refreshToken }),
+          });
 
     return {
-      head,
+      head: { sha: input.sha },
       checkRuns: parseCheckRuns(checkRuns.body),
       statuses: parseCommitStatuses(statuses.body),
       requiredContexts,
@@ -342,31 +407,6 @@ export class GitHubStatusService {
     }
     return parseRequiredContexts(response.body);
   }
-}
-
-function parseRequiredContexts(value: unknown): string[] | undefined {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return undefined;
-  }
-  const object = value as Record<string, unknown>;
-  // The modern `checks` array carries per-check `context`; `contexts` is the
-  // legacy string list. Prefer `checks` and fall back to `contexts`.
-  const checks = object["checks"];
-  if (Array.isArray(checks)) {
-    const names = checks
-      .map((entry) =>
-        typeof entry === "object" && entry !== null ? (entry as Record<string, unknown>)["context"] : undefined,
-      )
-      .filter((name): name is string => typeof name === "string");
-    if (names.length > 0) {
-      return names;
-    }
-  }
-  const contexts = object["contexts"];
-  if (Array.isArray(contexts)) {
-    return contexts.filter((name): name is string => typeof name === "string");
-  }
-  return [];
 }
 
 export function parseGitHubRepository(repoUrl: string): GitHubRepository {
@@ -444,57 +484,4 @@ function parsePullRequestHead(value: unknown): GitHubPullRequestHead {
     throw new Error("GitHub PR response missing head sha");
   }
   return { sha: object["sha"], ref: typeof object["ref"] === "string" ? object["ref"] : undefined };
-}
-
-function parseCheckRuns(value: unknown): GitHubCheckRun[] {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error("GitHub check-runs response was not an object");
-  }
-  const checkRuns = (value as Record<string, unknown>)["check_runs"];
-  if (!Array.isArray(checkRuns)) {
-    throw new TypeError("GitHub check-runs response missing check_runs");
-  }
-  return checkRuns.map((checkRun) => parseCheckRun(checkRun));
-}
-
-function parseCheckRun(value: unknown): GitHubCheckRun {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error("GitHub check run was not an object");
-  }
-  const object = value as Record<string, unknown>;
-  if (typeof object["name"] !== "string" || typeof object["status"] !== "string") {
-    throw new TypeError("GitHub check run missing name or status");
-  }
-  return {
-    name: object["name"],
-    status: object["status"],
-    conclusion: typeof object["conclusion"] === "string" ? object["conclusion"] : undefined,
-    url: typeof object["html_url"] === "string" ? object["html_url"] : undefined,
-  };
-}
-
-function parseCommitStatuses(value: unknown): GitHubCommitStatus[] {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error("GitHub commit status response was not an object");
-  }
-  const statuses = (value as Record<string, unknown>)["statuses"];
-  if (!Array.isArray(statuses)) {
-    throw new TypeError("GitHub commit status response missing statuses");
-  }
-  return statuses.map((status) => parseCommitStatus(status));
-}
-
-function parseCommitStatus(value: unknown): GitHubCommitStatus {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error("GitHub commit status was not an object");
-  }
-  const object = value as Record<string, unknown>;
-  if (typeof object["context"] !== "string" || typeof object["state"] !== "string") {
-    throw new TypeError("GitHub commit status missing context or state");
-  }
-  return {
-    context: object["context"],
-    state: object["state"],
-    url: typeof object["target_url"] === "string" ? object["target_url"] : undefined,
-  };
 }
