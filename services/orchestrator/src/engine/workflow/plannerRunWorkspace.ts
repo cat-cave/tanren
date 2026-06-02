@@ -9,7 +9,6 @@
 // `cloneHeadSha` is threaded onward so the PR-branch cleanup can replay the
 // writer commits onto it (dropping the bootstrap commit) before the push.
 import type { SshTarget } from "../contracts/allocator.js";
-import { resolveGithubToken } from "../credentials/githubTokenResolver.js";
 import { githubHttpsRemote, parseGitHubRepository } from "../providers/github.js";
 import { quoteSshShellArg } from "../ssh/command.js";
 import { bootstrapWorkspace, commitBootstrapState, runWorkspaceSshCommand } from "../workspace/index.js";
@@ -90,23 +89,35 @@ async function cloneWorkspace(input: RunPlannerLoopInput, target: SshTarget, wor
   return result.stdout.trim();
 }
 
-// Resolves the run's GitHub token for the clone via the SAME seam push uses: a
-// caller-injected `githubToken` (test seam) wins; otherwise the resolver mints
-// an App installation token when one is wired, else reads the static
-// `github_token` at the run's resolved credential ref. When no credential ref is
-// configured the clone must still run for the public-repo path, so we return
-// undefined (unauthenticated clone) instead of throwing; a missing secret at a
-// CONFIGURED ref still propagates so a misconfigured private run fails loudly.
-// The token is only returned (fed to the clone over stdin) — never logged.
+// Resolves the run's GitHub token for the clone through the SAME VcsProvider
+// seam the rest of the run path uses (`resolveToken`), so the clone is
+// APP-FIRST: a caller-injected `githubToken` (test seam) wins; otherwise the
+// provider mints an auto-rotating App installation token when the org installed
+// the App (`context.installation`), else reads the static `github_token` at the
+// run's resolved credential ref. This is a deliberate behavior change from the
+// prior static-ref-only clone — clone now prefers the App token when an App is
+// present, matching the CI-poll / merge stages (no more asymmetry).
+//
+// When NEITHER an App nor a static credential ref is configured the clone must
+// still run for the public-repo path, so we return undefined (unauthenticated
+// clone) instead of throwing; a missing secret at a CONFIGURED ref still
+// propagates so a misconfigured private run fails loudly. The token is only
+// returned (fed to the clone over stdin) — never logged.
 async function resolveCloneToken(input: RunPlannerLoopInput): Promise<string | undefined> {
   if (input.githubToken !== undefined) {
     return input.githubToken;
   }
   const staticRef = input.context.githubCredentialRef;
-  if (staticRef.trim() === "") {
+  // No App installation AND no static ref → unauthenticated public-repo clone.
+  if (input.context.installation === undefined && staticRef.trim() === "") {
     return undefined;
   }
-  const resolved = await resolveGithubToken({ secrets: input.secrets, staticRef });
+  const resolved = await input.vcsProvider.resolveToken({
+    secrets: input.secrets,
+    ...(input.context.installation !== undefined && { installation: input.context.installation }),
+    ...(staticRef.trim() !== "" && { staticRef }),
+    ...(input.githubAppMinter !== undefined && { minter: input.githubAppMinter }),
+  });
   return resolved.token;
 }
 
