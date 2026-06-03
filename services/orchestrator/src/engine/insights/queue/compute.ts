@@ -35,7 +35,7 @@ export interface QueueEvent {
   /** merge.queue.advanced carries the queue depth at selection. */
   queueDepth: number | null;
   /** merge.dequeued carries the reason. */
-  dequeueReason: "conflict" | "blocked" | "failed" | null;
+  dequeueReason: "conflict" | "blocked" | "failed" | "superseded" | null;
   /** merge.batch.culprit carries the number of sub-batch checks performed. */
   bisectChecks: number | null;
 }
@@ -117,7 +117,7 @@ export function deriveQueueStats(inputs: QueueStatsInputs, options: DeriveQueueO
   const batchPassRate = batchesChecked === 0 ? null : batchesPassed / batchesChecked;
 
   // --- dequeues by reason ---------------------------------------------------
-  const dequeues = { conflict: 0, blocked: 0, failed: 0 };
+  const dequeues = { conflict: 0, blocked: 0, failed: 0, superseded: 0 };
   for (const e of events) {
     if (e.eventType === "merge.dequeued" && e.dequeueReason !== null) {
       dequeues[e.dequeueReason] += 1;
@@ -263,7 +263,10 @@ export function normalizeQueueEvent(row: QueueEventQueryRow): QueueEvent {
     specId?: unknown;
   };
   const dequeueReason =
-    payload.reason === "conflict" || payload.reason === "blocked" || payload.reason === "failed"
+    payload.reason === "conflict" ||
+    payload.reason === "blocked" ||
+    payload.reason === "failed" ||
+    payload.reason === "superseded"
       ? payload.reason
       : null;
   // batch.culprit carries its own specId in payload (the events row spec_id may

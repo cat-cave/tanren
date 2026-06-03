@@ -61,6 +61,8 @@ export const QueueStats = z
         conflict: z.number().int().nonnegative(),
         blocked: z.number().int().nonnegative(),
         failed: z.number().int().nonnegative(),
+        /** Prior runs retired by a percolation re-execution (§2c supersede). */
+        superseded: z.number().int().nonnegative(),
       })
       .strict(),
 

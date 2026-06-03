@@ -45,6 +45,16 @@ export type MergeDriveOutcome =
  * ordering invariant the coordinator enforces (a dependent is never selected while
  * any ancestor is unmerged, so a dependent never merges before its ancestors).
  */
+/**
+ * Why a queue entry left the queue without merging. `conflict`/`blocked` are
+ * recoverable (a re-ready run re-enqueues a fresh entry); `failed` is terminal;
+ * `superseded` retires the entry of a run a fresh percolation re-execution replaced
+ * (the prior run is no longer a live candidate — NOT a real conflict, so it is not
+ * routed back through the P2b re-execution path). Mirrors the DB CHECK on
+ * `merge_queue.dequeue_reason`.
+ */
+export type DequeueReason = "conflict" | "blocked" | "failed" | "superseded";
+
 export interface MergeQueueEntry {
   queueId: string;
   runId: string;
@@ -57,6 +67,15 @@ export interface MergeQueueEntry {
   priority: SpecPriority;
   /** Stable creation-order tiebreak (lower sorts first) AFTER priority. */
   orderKey: number;
+}
+
+/** The spec/PR facts of a SUPERSEDED prior-run entry (returned for the observable event). */
+export interface SupersededEntry {
+  queueId: string;
+  runId: string;
+  specId: string;
+  prUrl: string;
+  prNumber: number;
 }
 
 /**
@@ -229,10 +248,25 @@ export interface MergeQueueModel {
   /**
    * Mark an entry as DEQUEUED (left the queue without merging) with the reason —
    * `conflict`/`blocked` are recoverable (a re-ready run re-enqueues a new entry);
-   * `failed` is terminal. The entry is removed from the ready set either way, so a
-   * blocked head never deadlocks independent later items (liveness).
+   * `failed` is terminal; `superseded` retires the entry of a run replaced by a
+   * fresh percolation re-execution (the prior run + its PR are no longer a live
+   * merge candidate — NOT a real conflict). The entry is removed from the ready set
+   * either way, so a blocked head never deadlocks independent later items (liveness).
    */
-  markDequeued(queueId: string, reason: "conflict" | "blocked" | "failed"): Promise<void>;
+  markDequeued(queueId: string, reason: DequeueReason): Promise<void>;
+
+  /**
+   * SUPERSEDE the active (queued/merging) merge-queue entry of a PRIOR run that a
+   * fresh percolation re-execution replaces (autonomy-engine.md §2c). Finds the
+   * prior run's active entry, dequeues it `superseded`, and returns the entry's
+   * spec/PR facts so the caller can emit the observable `merge.dequeued` — or
+   * `undefined` when the prior run had no active entry (idempotent: a second call
+   * matches no row and returns undefined). Org-scoped under RLS like every other
+   * queue write. The fix for the percolation self-conflict: without this the prior
+   * run's entry stays `queued`, so the spec has TWO live entries and the batch
+   * check integrates the spec against ITSELF.
+   */
+  supersedePriorRunEntry(runId: string): Promise<SupersededEntry | undefined>;
 
   /**
    * Crash recovery: return any entries left `merging` (a coordinator died

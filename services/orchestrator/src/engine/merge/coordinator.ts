@@ -22,6 +22,7 @@ import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import { type EventStore, PgEventStore } from "../eventStore.js";
 import {
   type CoordinateResult,
+  type DequeueReason,
   type MergeCoordinator,
   type MergeDriveOutcome,
   type MergeQueueEntry,
@@ -55,11 +56,11 @@ export type DriveMergeForQueuedRun = (input: { runId: string; projectId: string 
 export interface MergeQueueEventEmitter {
   /** merge.queue.advanced: the coordinator selected the DAG-ordered head to merge. */
   emitAdvanced(input: { projectId: string; entry: MergeQueueEntry; queueDepth: number }): Promise<void>;
-  /** merge.dequeued: an entry left the queue without merging (conflict/blocked/failed). */
+  /** merge.dequeued: an entry left the queue without merging (conflict/blocked/failed/superseded). */
   emitDequeued(input: {
     projectId: string;
     entry: MergeQueueEntry;
-    reason: "conflict" | "blocked" | "failed";
+    reason: DequeueReason;
     message: string;
   }): Promise<void>;
   /**
@@ -296,7 +297,7 @@ export class PgMergeQueueEventEmitter implements MergeQueueEventEmitter {
   async emitDequeued(input: {
     projectId: string;
     entry: MergeQueueEntry;
-    reason: "conflict" | "blocked" | "failed";
+    reason: DequeueReason;
     message: string;
   }): Promise<void> {
     await this.withScopedStore(input.projectId, (store) =>
