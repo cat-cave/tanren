@@ -25,7 +25,7 @@ import { storeGithubToken } from "../../engine/credentials/githubToken.js";
 import { storeOpencodeAuthBundle } from "../../engine/credentials/opencodeAuth.js";
 import { deriveImportRef } from "../../engine/credentials/refNamespace.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
-import { actorCanAccessOrg } from "../orgs/index.js";
+import { actorCanAccessOrg } from "../orgs/access.js";
 
 interface CredentialRoutesOptions {
   pool: pg.Pool;

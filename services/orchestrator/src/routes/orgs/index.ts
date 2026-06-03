@@ -12,6 +12,12 @@ import { DEFAULT_BUDGET_PERIOD } from "../../engine/config/index.js";
 import { migrateOrgConfig, type OrgAuditGateTarget, type OrgConfigV1 } from "../../engine/config/orgConfig.js";
 import { gatedConfigWrite, type ConfigGateGitHub } from "../../engine/config/tanrenConfigGate.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
+import { actorCanAccessOrg, actorIsOrgAdmin } from "./access.js";
+
+// Back-compat re-export: the org access predicates moved to `./access.js` (to
+// keep the import graph acyclic), but the many `from "../orgs/index.js"`
+// importers continue to resolve them here.
+export { actorCanAccessOrg, actorIsOrgAdmin } from "./access.js";
 
 /**
  * P3-0017: resolve the injectable GitHub port the audit gate opens its PR with,
@@ -231,21 +237,16 @@ function requireActor(c: { var: { actor?: ActorContext } }): ActorContext {
   return c.var.actor;
 }
 
-export function actorCanAccessOrg(actor: ActorContext, orgId: string): boolean {
-  if (actor.scopes.includes("platform:admin")) return true;
-  if (actor.orgId !== orgId) return false;
-  return actor.scopes.includes("org:member") || actor.scopes.includes("org:admin");
-}
-
-export function actorIsOrgAdmin(actor: ActorContext, orgId: string): boolean {
-  if (actor.scopes.includes("platform:admin")) return true;
-  if (actor.orgId !== orgId) return false;
-  return actor.scopes.includes("org:admin");
-}
-
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
+
+// Wave-2 operator API: the "Connect AI provider" + billing-mode settings live in
+// a sibling module but are re-exported HERE so the feature-route mount table
+// imports both org-settings factories from one place (keeping its dependency
+// count within the architecture cap). The route is org-scoped + actor-authorized
+// exactly like the org routes above; see routes/aiProvider/index.ts.
+export { createAiProviderRoutes } from "../aiProvider/index.js";
 
 interface OrgListRow {
   id: string;
