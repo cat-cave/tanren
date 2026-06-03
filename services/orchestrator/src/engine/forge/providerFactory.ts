@@ -162,8 +162,12 @@ function forgeChainEntry(ctx: {
  * resolve the project's credentials + forge routing, allocate a runner, build the
  * real provider adapter against it, run the call, and release in a `finally`.
  *
- * `runId` is a Forge-scoped synthetic id (`forge_<projectId>_<nonce>`) so the
- * allocator + cost-attribution boundary records carry a stable, non-run handle.
+ * `runId` is a Forge-scoped synthetic id (`forge_<projectId>_<nonce>`) — a stable
+ * NAMING handle for the runner / container / volume / CODEX_HOME path. It is NOT a
+ * row in `runs`, so the allocation is marked `runless`: the persisted `runners`
+ * row's run_id column is NULL and its project_id is the REAL project (project
+ * surfaces) or NULL (the greenfield interview), avoiding the run_id→runs /
+ * project_id→projects FK violations the synthetic handle would otherwise cause.
  */
 export function forgeAllocatingAnswererAdapter<TOutput>(
   infra: ForgeAnswererInfra,
@@ -182,13 +186,22 @@ export function forgeAllocatingAnswererAdapter<TOutput>(
       const scope = target.projectId ?? target.orgId;
       const runId = `forge_${scope}_${Math.random().toString(36).slice(2, 10)}`;
       const allocation = await infra.allocator.allocate({
-        // The allocator's `projectId` is a routing/label handle; a greenfield
-        // interview has no project, so it carries the org-scoped synthetic id.
+        // `runId` / `projectId` are the NAMING handle (runner/container/volume).
+        // A greenfield interview has no project, so the projectId carries an
+        // org-scoped synthetic id for naming only.
         runId,
         projectId: target.projectId ?? `org:${target.orgId}`,
         runnerImage: ctx.runnerImage,
         identitySecretRef: infra.identitySecretRef,
         ...(ctx.orgId === "" ? {} : { orgId: ctx.orgId }),
+        // A Forge ideation call has NO run — mark the allocation runless so the
+        // persisted runners row writes run_id = NULL (no `runs` row) and
+        // project_id = the REAL project (project surfaces) or NULL (greenfield
+        // interview). Without this the synthetic handle violates the
+        // run_id→runs / project_id→projects FKs.
+        runless: true,
+        persistedRunId: null,
+        persistedProjectId: target.projectId ?? null,
       });
       try {
         const adapter = buildAnswererAdapter<TOutput>(

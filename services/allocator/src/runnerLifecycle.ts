@@ -8,8 +8,21 @@ export interface RunnerSecretsClient {
 
 export interface RunnerRecord {
   runnerId: string;
-  runId: string;
-  projectId: string;
+  /**
+   * The value persisted to `runners.run_id` (FK → `runs`). `null` for a RUNLESS
+   * Forge ideation allocation, whose synthetic handle is not a real `runs` row.
+   * The runner NAMING handle is carried separately in {@link RunnerRecord.handle};
+   * this field is only the DB column value (and is read back as `null`).
+   */
+  runId: string | null;
+  /** The value persisted to `runners.project_id` (FK → `projects`); `null` when runless / project-less. */
+  projectId: string | null;
+  /**
+   * The stable NAMING handle used to derive the runner id, container name, and
+   * volume names. Always present (a synthetic `forge_<…>` id when runless). NOT a
+   * DB column — recomputed from inputs / `container_id` on read.
+   */
+  handle: string;
   /** The org the run belongs to; the `runners` row is written under its RLS scope. */
   orgId: string;
   containerId: string;
@@ -38,6 +51,19 @@ export interface AllocateInput {
   vaultRefs: string[];
   /** The org the run belongs to; the runner row is persisted under its RLS scope. */
   orgId: string;
+  /**
+   * RUNLESS Forge ideation marker. When true, `runId` / `projectId` are a stable
+   * synthetic naming HANDLE (still used for the runner id, container, and volume
+   * names) but the persisted runners row's run_id column is NULL — the handle is
+   * not a real `runs` row, so persisting it would violate the run_id→runs FK.
+   */
+  runless?: boolean;
+  /**
+   * The value to persist to project_id when {@link runless}: the REAL project id
+   * for a project-scoped Forge surface, or `null` for the project-less greenfield
+   * interview. Ignored when `runless` is false (the run path persists `projectId`).
+   */
+  persistedProjectId?: string | null;
 }
 
 export interface AllocateResult {
@@ -142,8 +168,13 @@ export class RunnerLifecycle {
 
     const record: RunnerRecord = {
       runnerId,
-      runId: input.runId,
-      projectId: input.projectId,
+      // Runless Forge ideation: run_id is NULL (no `runs` row); project_id is the
+      // caller's `persistedProjectId` (the real project, or null when project-less)
+      // — never the synthetic handle. The handle is kept in `handle` for
+      // naming/recovery only.
+      runId: input.runless === true ? null : input.runId,
+      projectId: input.runless === true ? (input.persistedProjectId ?? null) : input.projectId,
+      handle: input.runId,
       orgId: input.orgId,
       containerId,
       workspaceVolume,

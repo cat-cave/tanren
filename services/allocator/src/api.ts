@@ -11,6 +11,10 @@ export interface AllocatorApiOptions {
 }
 
 const allocateSchema = z.object({
+  // runId/projectId are the runner's naming HANDLE (container + volume names).
+  // For a runless Forge ideation allocation they are still a non-empty synthetic
+  // handle, but the persisted runners row's run_id/project_id columns are NULL
+  // (see `runless`), so they need not be real `runs` / `projects` rows.
   runId: z.string().min(1),
   projectId: z.string().min(1),
   runnerImage: z.string().min(1),
@@ -18,6 +22,15 @@ const allocateSchema = z.object({
   // REQUIRES the run's org and writes the row under that org's RLS scope. A
   // request without an org is rejected — the service can never write off-RLS.
   orgId: z.string().min(1),
+  // RUNLESS Forge ideation marker. When true, the persisted runners row's
+  // run_id is written as NULL (no `runs` row) so the insert does not violate the
+  // run_id→runs foreign key (the synthetic handle is NOT a real run). org_id is
+  // still required and real.
+  runless: z.boolean().default(false),
+  // The value to persist to project_id when `runless`: the REAL project id for a
+  // project-scoped Forge surface (preserves attribution), or null/absent for the
+  // project-less greenfield interview. Ignored when `runless` is false.
+  persistedProjectId: z.string().min(1).nullish(),
   vaultRefs: z.array(z.string().min(1)).default([]),
 });
 

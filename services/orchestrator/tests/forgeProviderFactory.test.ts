@@ -263,6 +263,12 @@ describe("forgeAllocatingAnswererAdapter (production default = real provider ans
     expect(allocateSpy).toHaveBeenCalledTimes(1);
     expect(releaseSpy).toHaveBeenCalledTimes(1);
     expect(ssh.commands.some((c) => c.command.includes("codex exec"))).toBe(true);
+    // A PROJECT-scoped runless surface: run_id is NULL (still no `runs` row) but
+    // project_id is persisted as the REAL project (FK-valid) — attribution kept.
+    const triageReq = allocateSpy.mock.calls[0]?.[0];
+    expect(triageReq?.runless).toBe(true);
+    expect(triageReq?.persistedRunId).toBeNull();
+    expect(triageReq?.persistedProjectId).toBe("project_a");
   });
 
   it("releases the runner even when the model call fails", async () => {
@@ -304,7 +310,15 @@ describe("forgeAllocatingAnswererAdapter (production default = real provider ans
       .catch(() => {});
     // The org-scoped runId is used (no project handle), and a runner was allocated.
     expect(allocateSpy).toHaveBeenCalledTimes(1);
-    expect(allocateSpy.mock.calls[0]?.[0].projectId).toBe("org:org_a");
+    const greenfieldReq = allocateSpy.mock.calls[0]?.[0];
+    expect(greenfieldReq?.projectId).toBe("org:org_a");
+    // FK-safety: a runless Forge ideation allocation marks `runless` and persists
+    // NULL run_id (no `runs` row) and NULL project_id (no project — greenfield),
+    // never the synthetic naming handle. The `org:org_a` projectId above is the
+    // naming handle only, NOT what is persisted.
+    expect(greenfieldReq?.runless).toBe(true);
+    expect(greenfieldReq?.persistedRunId).toBeNull();
+    expect(greenfieldReq?.persistedProjectId).toBeNull();
     // The factory itself returns a real provider answerer (no throw on build).
     expect(typeof factory({ orgId: "org_a", projectId: "project_a" }).classify).toBe("function");
   });

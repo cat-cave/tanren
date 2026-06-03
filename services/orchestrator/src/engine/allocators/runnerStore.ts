@@ -3,8 +3,21 @@ import { withJobOrgScope } from "../data/orgScopedDb.js";
 
 export interface ClaimRunnerInput {
   runnerId: string;
-  runId: string;
-  projectId: string;
+  /**
+   * The value written to `runners.run_id` (FK → `runs`). `null` for a RUNLESS
+   * Forge ideation allocation, whose synthetic handle is NOT a row in `runs` —
+   * persisting it would violate `runners_run_id_runs_run_id_fk`. `runners.run_id`
+   * is nullable, so NULL is the correct "no run" value. The synthetic handle is
+   * still used by the allocator for runner/container naming; only the DB column
+   * is NULL.
+   */
+  runId: string | null;
+  /**
+   * The value written to `runners.project_id` (FK → `projects`). `null` for a
+   * project-less Forge ideation allocation (e.g. the greenfield interview, which
+   * runs before any project exists) — the same FK reasoning as `runId`.
+   */
+  projectId: string | null;
   /**
    * The org the runner belongs to — the CALLER's org, threaded EXPLICITLY so the
    * `runners` row carries a valid tenant org_id even for a RUNLESS allocation (a
@@ -54,6 +67,11 @@ export class PgRunnerStore implements RunnerStore {
         // INSERT violated the runners WITH CHECK policy. The runner's org is the
         // org the allocate request belongs to, full stop. `null` is the explicit
         // legacy/unscoped-run case, written under the worker's BYPASSRLS scope.
+        //
+        // run_id ($2) and project_id ($3) are likewise the EXPLICIT values, and
+        // are NULL for a runless / project-less Forge ideation allocation — both
+        // columns are nullable, so NULL avoids the run_id→runs / project_id→projects
+        // FK violations the synthetic handle would otherwise cause.
         `INSERT INTO runners (
            runner_id, run_id, project_id, org_id, allocator, status, ssh_host, ssh_port,
            host_key_fingerprint, image_sha, container_id

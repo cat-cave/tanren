@@ -20,6 +20,35 @@ export interface AllocationRequest {
    */
   orgId?: string;
   /**
+   * RUNLESS allocation marker (Forge ideation). A Forge ideation model call (the
+   * greenfield interview / discovery / triage / recon / ⌘K conversation) has NO
+   * run — it allocates a short-lived runner for ONE model call. `runId` /
+   * `projectId` are still carried as a stable, synthetic HANDLE (used only for
+   * runner/container/volume naming, labels, and the per-call CODEX_HOME path) but
+   * the persisted `runners` row's FK columns come from {@link persistedRunId} /
+   * {@link persistedProjectId} instead — both NULL-able to avoid the
+   * run_id→runs / project_id→projects FK violations the synthetic handle causes.
+   *
+   * `true` is purely a signal that the persisted FK columns are governed by the
+   * `persisted*` overrides below (which a runless caller sets). Absent / false ⇒
+   * a real run whose `runId` / `projectId` ARE FK-valid rows (the run-executor
+   * path), persisted directly.
+   */
+  runless?: boolean;
+  /**
+   * Explicit value for the persisted `runners.run_id` column when {@link runless}.
+   * `null` ⇒ NULL (no `runs` row — the Forge case). Ignored when `runless` is not
+   * set (the run path persists `runId` directly).
+   */
+  persistedRunId?: string | null;
+  /**
+   * Explicit value for the persisted `runners.project_id` column when
+   * {@link runless}. The REAL project id for a project-scoped Forge surface
+   * (discovery / triage / recon / ⌘K — preserves project attribution), or `null`
+   * for the project-less greenfield interview. Ignored when `runless` is not set.
+   */
+  persistedProjectId?: string | null;
+  /**
    * Optional list of Vault references whose values the allocator must
    * materialize into the runner's `CODEX_HOME` mount before signaling that
    * the runner is ready. The allocator owns the lifetime of any files
@@ -38,6 +67,27 @@ export interface RunnerAllocation {
   runnerId: string;
   target: SshTarget;
   imageSha: string;
+}
+
+/**
+ * The (run_id, project_id) values a backend should PERSIST to the `runners` row's
+ * FK columns for an allocation. For a real run they are the request's FK-valid
+ * `runId` / `projectId`; for a RUNLESS Forge ideation allocation they are the
+ * caller's `persisted*` overrides (NULL run_id always; NULL or the real project
+ * id) so the insert does not violate the run_id→runs / project_id→projects FKs.
+ * The synthetic naming handle (`request.runId`) is NEVER persisted when runless.
+ */
+export function persistedRunnerKeys(request: AllocationRequest): {
+  runId: string | null;
+  projectId: string | null;
+} {
+  if (request.runless === true) {
+    return {
+      runId: request.persistedRunId ?? null,
+      projectId: request.persistedProjectId ?? null,
+    };
+  }
+  return { runId: request.runId, projectId: request.projectId };
 }
 
 export type ReleaseReason = "completed" | "failed" | "abandoned";

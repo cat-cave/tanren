@@ -6,8 +6,10 @@ const allocatorName = "sidecar-docker";
 
 interface RunnerRow {
   runner_id: string;
-  run_id: string;
-  project_id: string;
+  // Nullable: a runless Forge ideation runner persists run_id/project_id as NULL
+  // (no FK target). The naming handle is recovered from runner_id, not these.
+  run_id: string | null;
+  project_id: string | null;
   org_id: string;
   container_id: string;
   ssh_host: string;
@@ -15,6 +17,13 @@ interface RunnerRow {
   host_key_fingerprint: string;
   image_sha: string;
   created_at: Date;
+}
+
+// The runner id is `runner_<handle>` (see RunnerLifecycle.allocate). The handle
+// is the stable naming token volume names derive from, recoverable even when the
+// persisted run_id column is NULL (runless Forge ideation).
+function handleFromRunnerId(runnerId: string): string {
+  return runnerId.startsWith("runner_") ? runnerId.slice("runner_".length) : runnerId;
 }
 
 /**
@@ -89,14 +98,17 @@ export class PgRunnerStore implements RunnerStore {
     if (row === undefined) {
       return undefined;
     }
+    const handle = handleFromRunnerId(row.runner_id);
     return {
       runnerId: row.runner_id,
       runId: row.run_id,
       projectId: row.project_id,
+      handle,
       orgId: row.org_id,
       containerId: row.container_id,
-      workspaceVolume: volumeNamesFor(row.run_id).workspace,
-      codexHomeVolume: volumeNamesFor(row.run_id).codexHome,
+      // Volume names derive from the naming HANDLE (not the possibly-NULL run_id).
+      workspaceVolume: volumeNamesFor(handle).workspace,
+      codexHomeVolume: volumeNamesFor(handle).codexHome,
       sshHost: row.ssh_host,
       sshPort: row.ssh_port,
       hostKeyFingerprint: row.host_key_fingerprint,
@@ -133,14 +145,19 @@ export class PgRunnerStore implements RunnerStore {
 }
 
 function materialize(row: RunnerRow): RunnerRecord {
+  const handle = handleFromRunnerId(row.runner_id);
   return {
     runnerId: row.runner_id,
     runId: row.run_id,
     projectId: row.project_id,
+    handle,
     orgId: row.org_id,
     containerId: row.container_id,
-    workspaceVolume: `${row.container_id}-workspace`,
-    codexHomeVolume: `${row.container_id}-codex-home`,
+    // Volume names derive from the naming HANDLE — the same `volumeNamesFor`
+    // basis `allocate` created them with — so release/sweep wipe the right
+    // volumes even for a runless runner whose run_id column is NULL.
+    workspaceVolume: volumeNamesFor(handle).workspace,
+    codexHomeVolume: volumeNamesFor(handle).codexHome,
     sshHost: row.ssh_host,
     sshPort: row.ssh_port,
     hostKeyFingerprint: row.host_key_fingerprint,

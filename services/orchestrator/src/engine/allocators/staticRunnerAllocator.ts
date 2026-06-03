@@ -1,5 +1,11 @@
 import { Client } from "ssh2";
-import type { AllocationRequest, Allocator, ReleaseReason, RunnerAllocation } from "../contracts/allocator.js";
+import {
+  persistedRunnerKeys,
+  type AllocationRequest,
+  type Allocator,
+  type ReleaseReason,
+  type RunnerAllocation,
+} from "../contracts/allocator.js";
 import { normalizeHostKeyFingerprint } from "../ssh/fingerprint.js";
 import type { RunnerStore } from "./runnerStore.js";
 
@@ -65,8 +71,9 @@ export class StaticRunnerAllocator implements Allocator {
 
     await this.options.runners.claim({
       runnerId,
-      runId: request.runId,
-      projectId: request.projectId,
+      // Persist FK-valid (run_id, project_id), or NULLs for a runless Forge
+      // ideation allocation whose synthetic handle is not a real run/project.
+      ...persistedRunnerKeys(request),
       orgId: request.orgId ?? null,
       allocator: allocatorName,
       sshHost: host,

@@ -60,6 +60,7 @@ function recordFor(orgId: string, runnerId: string): RunnerRecord {
     runnerId,
     runId: RUN_A,
     projectId: PROJECT_A,
+    handle: RUN_A,
     orgId,
     containerId: "host-1",
     workspaceVolume: "vol-ws",
@@ -128,6 +129,28 @@ describeDb("allocator service PgRunnerStore — runner row written under RLS, sw
       client.query("SELECT 1 FROM runners WHERE runner_id = 'runner_scoped'"),
     );
     expect(underB.rowCount).toBe(0);
+  });
+
+  it("(a2) a RUNLESS insert (NULL run_id/project_id) is admitted under the org scope", async () => {
+    // The Forge ideation shape on the service side: NULL run_id (no `runs` row)
+    // and NULL project_id, with the real org_id. The insert commits under ORG_A
+    // (skips the run_id→runs / project_id→projects FKs the handle would violate).
+    const store = new PgRunnerStore(systemPool, appPool);
+    await store.insert({
+      ...recordFor(ORG_A, "runner_runless"),
+      runId: null,
+      projectId: null,
+      handle: "forge_org_alloc_a_abcd1234",
+    });
+
+    const underA = await runWithOrgScope(appPool, ORG_A, (client) =>
+      client.query<{ run_id: string | null; project_id: string | null; org_id: string }>(
+        "SELECT run_id, project_id, org_id FROM runners WHERE runner_id = 'runner_runless'",
+      ),
+    );
+    expect(underA.rows[0]?.org_id).toBe(ORG_A);
+    expect(underA.rows[0]?.run_id).toBeNull();
+    expect(underA.rows[0]?.project_id).toBeNull();
   });
 
   it("(b) the app role cannot write a runners row for an org OTHER than its scope (WITH CHECK denies)", async () => {

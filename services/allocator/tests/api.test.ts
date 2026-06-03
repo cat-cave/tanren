@@ -159,6 +159,27 @@ describe("allocator HTTP API", () => {
     expect(store.records[0]?.released).toBe(true);
   });
 
+  it("accepts a runless allocate and persists NULL run_id with the given project_id", async () => {
+    const { app, store } = buildApp();
+
+    const allocated = await postJson(app, "/allocate", {
+      // Synthetic Forge ideation handle — NOT a real run; runless marks it so.
+      runId: "forge_org_api_abcd1234",
+      projectId: "proj-handle",
+      orgId: "org_api",
+      runnerImage: "ghcr.io/cat-cave/tanren-runner:v0",
+      runless: true,
+      persistedProjectId: "proj_real",
+      vaultRefs: [],
+    });
+    expect(allocated.status).toBe(201);
+    // The persisted runners row has NULL run_id (no `runs` row) and the REAL
+    // project_id from `persistedProjectId` — never the synthetic handle.
+    expect(store.records[0]?.runId).toBeNull();
+    expect(store.records[0]?.projectId).toBe("proj_real");
+    expect(store.records[0]?.orgId).toBe("org_api");
+  });
+
   it("/release on an unknown runner returns released: false", async () => {
     const { app } = buildApp();
     const response = await postJson(app, "/release", {

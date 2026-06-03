@@ -147,6 +147,60 @@ describe("RunnerLifecycle.allocate", () => {
     expect(docker.containers[0]?.spec.env.TANREN_RUNNER_EPHEMERAL).toBe("1");
     expect(store.records).toHaveLength(1);
     expect(store.records[0]?.released).toBe(false);
+    // A normal run persists its FK-valid run_id/project_id.
+    expect(store.records[0]?.runId).toBe("run_42");
+    expect(store.records[0]?.projectId).toBe("proj_a");
+    expect(store.records[0]?.handle).toBe("run_42");
+  });
+
+  it("runless Forge ideation: NULL run_id/project_id persisted, handle drives naming", async () => {
+    const docker = new FakeDocker();
+    const store = new InMemoryRunnerStore();
+    const lifecycle = baseLifecycle(docker, store);
+
+    // The greenfield-interview shape: a synthetic handle, runless, no persisted
+    // project. Naming (volumes/container/runnerId/sshHost) still uses the handle.
+    const result = await lifecycle.allocate({
+      runId: "forge_org_test_abcd1234",
+      projectId: "org:org_test",
+      orgId: "org_test",
+      runnerImage: "ghcr.io/cat-cave/tanren-runner:v0",
+      vaultRefs: [],
+      runless: true,
+      persistedProjectId: null,
+    });
+
+    expect(result.runnerId).toBe("runner_forge_org_test_abcd1234");
+    expect(docker.volumeCreates).toEqual([
+      "tanren-runner-forge_org_test_abcd1234-workspace",
+      "tanren-runner-forge_org_test_abcd1234-codex-home",
+    ]);
+    // The persisted runners row has NULL run_id/project_id (no FK target); org_id
+    // is the real org; the synthetic handle is kept for naming/recovery only.
+    expect(store.records[0]?.runId).toBeNull();
+    expect(store.records[0]?.projectId).toBeNull();
+    expect(store.records[0]?.orgId).toBe("org_test");
+    expect(store.records[0]?.handle).toBe("forge_org_test_abcd1234");
+  });
+
+  it("runless project-scoped surface: NULL run_id but the REAL project_id persisted", async () => {
+    const docker = new FakeDocker();
+    const store = new InMemoryRunnerStore();
+    const lifecycle = baseLifecycle(docker, store);
+
+    await lifecycle.allocate({
+      runId: "forge_proj_a_abcd1234",
+      projectId: "proj_a",
+      orgId: "org_test",
+      runnerImage: "ghcr.io/cat-cave/tanren-runner:v0",
+      vaultRefs: [],
+      runless: true,
+      persistedProjectId: "proj_a",
+    });
+
+    // run_id NULL (no `runs` row), project_id the real FK-valid project.
+    expect(store.records[0]?.runId).toBeNull();
+    expect(store.records[0]?.projectId).toBe("proj_a");
   });
 
   it("materializes vault refs into the codex-home env bundle", async () => {
