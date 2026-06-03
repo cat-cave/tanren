@@ -50,15 +50,21 @@ export interface DeriveInput {
 // FINDING #1: the autonomous greenfield config. When the operator opts into
 // `auto`/`simulated`, the project is created with the matching review policy + the
 // `native_queue` merge engine (so derived PRs enter a merge engine instead of
-// stalling on `not_configured`), keeping the `strict` governance posture. This is
-// the ONLY deviation from the schema defaults — and only on explicit opt-in.
-// `createProject` threads this through `migrateProjectConfig` (no new plumbing).
+// stalling on `not_configured`), AND the `lenient` governance posture. Lenient
+// makes the in-loop gate's `lint`/`typecheck` ADVISORY (warn, non-blocking) while
+// `build`/`test` stay blocking — the functional-but-weak apex doctrine
+// (docs/operator-guide/apex.md): a functional-but-weak first pass lands imperfect
+// code and improves it via the issue loop instead of stalling the gate on
+// first-pass lint/type issues. This config is the ONLY deviation from the schema
+// defaults — and only on explicit opt-in. A `human`/absent autonomy keeps the safe
+// strict default. `createProject` threads this through `migrateProjectConfig` (no
+// new plumbing).
 function autonomousConfig(autonomy: "auto" | "simulated"): Record<string, unknown> {
   return {
     version: 1,
     reviewPolicy: autonomy,
     mergeIntegration: "native_queue",
-    governancePosture: "strict",
+    governancePosture: "lenient",
   };
 }
 
@@ -86,9 +92,13 @@ export interface DeriveResult {
 //   2. The `monorepo scaffold` description + acceptance criteria PIN the toolchain
 //      the default gate (`pnpm lint`/`typecheck`/`test`/`build`, per the CI
 //      `DEFAULT_CI_CONFIG`) accepts — pnpm workspaces with a `pnpm-workspace.yaml`,
-//      a root `package.json` whose `lint`/`typecheck`/`test`/`build` scripts delegate
-//      to turbo, and a committed pnpm lockfile — so the foundation is deterministic
-//      and gate-compatible (NOT the whole repo, just the toolchain the gate expects).
+//      a root `package.json` whose `lint`/`typecheck`/`test`/`build` scripts call
+//      DIRECT tools (eslint/tsc/vitest), and a committed pnpm lockfile — so the
+//      foundation is deterministic and gate-compatible (NOT the whole repo, just the
+//      toolchain the gate expects). NO turbo in the scaffold: a direct-tool toolchain
+//      is the simplest thing that satisfies the gate's script NAMES, and turbo is
+//      introduced later by the `build · turbo` spec once the toolchain is stable on
+//      `main` (so the foundation never depends on turbo being installed first).
 interface ScaffoldSpecDef {
   title: string;
   description: string;
@@ -106,14 +116,17 @@ const SCAFFOLD_SPECS: ScaffoldSpecDef[] = [
     description:
       "Stand up the monorepo on the DEFAULT TANREN TOOLCHAIN so the CI gate passes: " +
       "pnpm workspaces (a `pnpm-workspace.yaml` listing the package globs), a root " +
-      "`package.json` whose `lint`, `typecheck`, `test`, and `build` scripts EACH delegate " +
-      "to turbo (e.g. `turbo run lint`), turbo as the build orchestrator, a base tsconfig, " +
-      "a shared types package, and a COMMITTED pnpm lockfile (`pnpm-lock.yaml`). Do NOT use " +
-      "npm/yarn workspaces — the gate runs `pnpm install --frozen-lockfile` then `pnpm lint` / " +
-      "`pnpm typecheck` / `pnpm test` / `pnpm build` and rejects a non-pnpm workspace.",
+      "`package.json` whose `lint`, `typecheck`, `test`, and `build` scripts call DIRECT " +
+      'tools — `"lint": "eslint ."`, `"typecheck": "tsc --noEmit"`, ' +
+      '`"test": "vitest run"`, `"build": "tsc -b"` — with `eslint`, `typescript`, and ' +
+      "`vitest` as devDependencies, a base tsconfig, a shared types package, and a COMMITTED " +
+      "pnpm lockfile (`pnpm-lock.yaml`). Do NOT use turbo (a later spec introduces it once the " +
+      "toolchain is stable) and do NOT use npm/yarn workspaces — the gate runs " +
+      "`pnpm install --frozen-lockfile` then `pnpm lint` / `pnpm typecheck` / `pnpm test` / " +
+      "`pnpm build` and rejects a non-pnpm workspace.",
     acceptanceCriteria: [
       "given an empty repo, when the scaffold lands, then a `pnpm-workspace.yaml` and a committed `pnpm-lock.yaml` exist (pnpm workspaces, not npm/yarn)",
-      "given the root `package.json`, when inspected, then it defines `lint`, `typecheck`, `test`, and `build` scripts that each delegate to turbo",
+      "given the root `package.json`, when inspected, then its `lint`, `typecheck`, `test`, and `build` scripts call direct tools (eslint/tsc/vitest), NOT turbo, with eslint/typescript/vitest as devDependencies",
       "given the toolchain, when `pnpm install --frozen-lockfile` then `pnpm lint`, `pnpm typecheck`, `pnpm test`, and `pnpm build` run, then each exits 0 (the default CI gate is green)",
     ],
   },

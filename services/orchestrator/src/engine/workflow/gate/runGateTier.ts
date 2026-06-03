@@ -58,6 +58,11 @@ export interface RunGateTierInput {
   // Correlates the gate.* events with the loop task that triggered them (the
   // writer task for per_iteration, the planner task for pre_audit).
   taskId?: string;
+  // LENIENT POSTURE (advisory steps): step NAMES whose failure is ADVISORY — the
+  // step still runs and its outcome is recorded (a `gate.advisory_failed` warning
+  // event), but it does NOT short-circuit the tier or fail the gate. Empty (the
+  // default, every non-lenient posture) ⇒ every step blocks, behavior unchanged.
+  advisoryStepNames?: ReadonlySet<string>;
   // Plane B (P-APP-ENV-0): the PROJECT's dev+test app env, materialized into the
   // EXECUTED command's environment (the building agent's test/dev commands need
   // it). Prepended ONLY to the command handed to the substrate — the emitted
@@ -78,6 +83,7 @@ export async function runGateTier(input: RunGateTierInput): Promise<GateTierResu
     input.taskId,
   );
 
+  const advisoryStepNames = input.advisoryStepNames ?? EMPTY_ADVISORY_SET;
   const outcomes: GateStepOutcome[] = [];
   for (const step of input.steps) {
     const result = await input.ssh.run(input.target, {
@@ -97,6 +103,25 @@ export async function runGateTier(input: RunGateTierInput): Promise<GateTierResu
       outputTail: tailOf(combinedOutput(result)),
     };
     outcomes.push(outcome);
+    // LENIENT POSTURE: an advisory step's failure is RECORDED but does NOT block.
+    // We emit a `gate.advisory_failed` warning (so the timeline shows the real
+    // lint/type issue) and continue running the rest of the tier — the gate stays
+    // passing for this step. A genuinely-broken tree still blocks because build /
+    // test are never advisory.
+    if (!passed && advisoryStepNames.has(step.name)) {
+      await input.appendEvent(
+        "gate.advisory_failed",
+        {
+          tier: input.tier,
+          when: input.when,
+          advisoryStep: step.name,
+          exitCode: result.exitCode,
+          outputTail: outcome.outputTail,
+        },
+        input.taskId,
+      );
+      continue;
+    }
     if (!passed) {
       const failed: GateTierResult = {
         passed: false,
@@ -124,6 +149,9 @@ export async function runGateTier(input: RunGateTierInput): Promise<GateTierResu
   await input.appendEvent("gate.passed", { tier: input.tier, when: input.when, steps: outcomes }, input.taskId);
   return { passed: true, tier: input.tier, when: input.when, steps: outcomes };
 }
+
+// Shared empty advisory set so the strict (default) path allocates nothing.
+const EMPTY_ADVISORY_SET: ReadonlySet<string> = new Set<string>();
 
 function combinedOutput(result: SshCommandResult): string {
   if (result.failure !== undefined) {

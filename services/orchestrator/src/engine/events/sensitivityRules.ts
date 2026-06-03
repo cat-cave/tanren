@@ -2,22 +2,13 @@ import { registerSensitivities, type SensitivityRule } from "./sensitivity.js";
 import { infraSensitivityRules } from "./sensitivityRules.infra.js";
 import { appEnvSensitivityRules } from "./sensitivityRules.appEnv.js";
 
-// Sensitivity rule table. Every payload field reachable from an event must
-// have a registered tag. The eventRegistryFieldCoverage test enforces this so
-// missing tags become a hard CI failure.
-//
-// Tag taxonomy:
-// - public:   safe to display to any project member
-// - redacted: requires project:admin scope to view raw
-// - secret:   requires platform:admin scope to view raw
-//
-// Heuristics applied here:
-// - identifiers (runIds, taskIds, sha hashes, paths) are public
-// - human-authored prose (intents, reasoning, decisions) is public
-// - host fingerprints, credential refs, SSH host/port — redacted
-// - secrets, raw tokens, command stdout/stderr — secret
-//
-// Per-array paths use the "[]" suffix to indicate "applies to every element".
+// Sensitivity rule table. Every payload field reachable from an event must have a
+// registered tag (the eventRegistryFieldCoverage test enforces this as a hard CI
+// failure). Tag taxonomy: `public` = any project member; `redacted` = project:admin
+// to view raw; `secret` = platform:admin to view raw. Heuristics: identifiers
+// (runIds/taskIds/sha/paths) + human-authored prose are public; host fingerprints /
+// credential refs / SSH host:port are redacted; secrets / raw tokens / command
+// stdout/stderr are secret. A "[]" path suffix applies to every array element.
 
 export const sensitivityRules: SensitivityRule[] = [
   // run.queued
@@ -311,6 +302,15 @@ export const sensitivityRules: SensitivityRule[] = [
     ["steps[].passed", "public"],
     ["steps[].timedOut", "public"],
     ["steps[].outputTail", "secret"],
+  ]),
+  // Lenient-posture advisory step failure (lint/typecheck): names + exit code are
+  // public identifiers; the captured output tail is secret (may surface env/paths).
+  ...rulesFor("gate.advisory_failed", [
+    ["tier", "public"],
+    ["when", "public"],
+    ["advisoryStep", "public"],
+    ["exitCode", "public"],
+    ["outputTail", "secret"],
   ]),
 
   // P2B-0008 recovery lineage — operator-authored prose + identifiers, public.

@@ -22,6 +22,9 @@ export interface RunGateForWhenInput {
   // Plane B (P-APP-ENV-0): the project's dev+test app env, threaded to each tier
   // so the building agent's gate commands run with it. Never logged/emitted.
   appEnv?: Record<string, string>;
+  // LENIENT POSTURE: advisory (warn-but-don't-block) step names, threaded to each
+  // tier. Empty/absent ⇒ every step blocks (strict default, behavior unchanged).
+  advisoryStepNames?: ReadonlySet<string>;
 }
 
 // The combined result across every tier mapped to a lifecycle point. `passed`
@@ -52,6 +55,7 @@ export async function runGateForWhen(input: RunGateForWhenInput): Promise<GateOu
       appendEvent: input.appendEvent,
       taskId: input.taskId,
       ...(input.appEnv === undefined ? {} : { appEnv: input.appEnv }),
+      ...(input.advisoryStepNames === undefined ? {} : { advisoryStepNames: input.advisoryStepNames }),
     });
     results.push(result);
     if (!result.passed) {

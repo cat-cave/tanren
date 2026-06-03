@@ -182,6 +182,11 @@ export async function loadRunExecutionContext(
     // adapters at the managed OpenAI-compatible endpoint.
     routing: buildEffectiveRouting(projectConfig.routing, resolved.codexCredentialRef),
     ...endpointBaseUrlFrom(resolved),
+    // The project's governance posture drives the in-loop gate's advisory-step
+    // policy (lenient ⇒ lint/typecheck advisory, build/test blocking). Threaded
+    // from the resolved project config so a greenfield `lenient` project lands
+    // functional-but-weak code instead of stalling the gate.
+    governancePosture: projectConfig.governancePosture,
   };
 
   return { context, projectConfig, orgId: decoded.org_id };

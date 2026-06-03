@@ -107,6 +107,124 @@ export async function bootstrapWorkspace(input: BootstrapWorkspaceInput): Promis
   return result;
 }
 
+// The sentinel the guarded install prints on the NO-OP path (manifest absent, or
+// deps already installed). It rides on stdout so the caller can distinguish a
+// real install run from a skip without a second round-trip — used to cache the
+// "deps installed" flag so the next gate's ensure call is a pure no-op.
+const DEPS_NOOP_SENTINEL = "tanren: deps-ensure no-op";
+// The sentinel the guarded install prints right before it runs the install
+// command, so the caller can observe (and the diagnostic can reflect) that the
+// install path was actually taken.
+const DEPS_INSTALL_SENTINEL = "tanren: deps-ensure installing";
+
+export interface EnsureWorkspaceDepsInput {
+  ssh: SshSubstrate;
+  target: SshTarget;
+  workspacePath: string;
+  // The install command run in the workspace dir over SSH when deps are missing.
+  // Defaults to DEFAULT_BOOTSTRAP_COMMAND (the same pnpm/npm-detecting logic the
+  // cold bootstrap uses) so the install path is identical to the cold bootstrap.
+  command?: string;
+  // Plane B (P-APP-ENV-0): same substrate-boundary handling as bootstrapWorkspace
+  // — the `export K='v'; …` prelude is prepended to the EXECUTED command ONLY, never
+  // to `command`, so a failure surfaces the ORIGINAL command (prelude-free) and no
+  // app-secret value can reach the error message / events. Undefined ⇒ no app env.
+  appEnv?: Record<string, string>;
+  timeoutMs: number;
+}
+
+// The outcome of an ensure call: whether the guarded install actually RAN the
+// install command (deps were missing + a manifest was present) or was a no-op
+// (no manifest, or deps already installed). The caller caches `installed` so a
+// later gate's ensure call short-circuits once node_modules exists.
+export interface EnsureWorkspaceDepsResult {
+  installed: boolean;
+}
+
+// A typed, observable deps-install failure, mirroring WorkspaceBootstrapError.
+// Carries the exit code and a bounded output tail so a halting run outcome has a
+// concrete diagnostic. The ORIGINAL command (never the app-env prelude) is what
+// flows into the message, so no app-secret value can leak into an event payload.
+export class WorkspaceDepsInstallError extends Error {
+  override readonly name = "WorkspaceDepsInstallError";
+
+  constructor(
+    readonly workspacePath: string,
+    readonly command: string,
+    readonly exitCode: number | null,
+    readonly outputTail: string,
+    readonly timedOut: boolean,
+  ) {
+    super(depsInstallFailureMessage(command, exitCode, outputTail, timedOut));
+  }
+}
+
+// Idempotently ensures the workspace's dependencies are installed before a gate
+// runs. This closes the greenfield gap: prepareRunWorkspace bootstraps ONCE, right
+// after clone — but a greenfield clone HEAD ships no manifest, so the cold
+// bootstrap skips install; the writer THEN authors `package.json`, and the first
+// per-iteration gate would run `pnpm lint` against a workspace whose deps were
+// never installed (`turbo: not found` / `vitest: not found`). This GUARDED install
+// runs the resolved install command only when a manifest now EXISTS
+// (`package.json` / `pnpm-workspace.yaml`) AND deps are NOT yet installed
+// (`node_modules` absent); otherwise it is a pure no-op (exit 0). Brownfield —
+// where prepareRunWorkspace already installed at clone time — hits the
+// node_modules-present branch and no-ops, so behavior is unchanged. Safe to call
+// before every gate (idempotent).
+//
+// On a nonzero exit / timeout / substrate failure it throws WorkspaceDepsInstallError
+// (mirroring bootstrapWorkspace) so the failure halts the run loudly with a typed,
+// bounded diagnostic — never a silent skip.
+export async function ensureWorkspaceDepsInstalled(
+  input: EnsureWorkspaceDepsInput,
+): Promise<EnsureWorkspaceDepsResult> {
+  const command = input.command ?? DEFAULT_BOOTSTRAP_COMMAND;
+  // The guard runs entirely runner-side in ONE round-trip: if a manifest exists
+  // AND node_modules does not, print the install sentinel then run the install;
+  // otherwise print the no-op sentinel and exit 0. `set -e` is intentionally NOT
+  // used at the top — the `if`/`else` already controls flow and the install
+  // command itself surfaces its own nonzero exit as the command's exit code.
+  const guarded =
+    `if { [ -f package.json ] || [ -f pnpm-workspace.yaml ]; } && [ ! -d node_modules ]; then ` +
+    `echo ${quoteSshShellArg(DEPS_INSTALL_SENTINEL)}; ${command}; ` +
+    `else echo ${quoteSshShellArg(DEPS_NOOP_SENTINEL)}; fi`;
+  // SUBSTRATE BOUNDARY: the app-env prelude is prepended to the EXECUTED guard
+  // ONLY, never to `command` (the value carried into the error below), so a
+  // failed install surfaces the ORIGINAL install command and no app-secret value
+  // reaches WorkspaceDepsInstallError or the run's event payloads.
+  const result = await input.ssh.run(input.target, {
+    command: withAppEnv(guarded, input.appEnv),
+    cwd: input.workspacePath,
+    timeoutMs: input.timeoutMs,
+  });
+
+  const succeeded = result.failure === undefined && !result.timedOut && result.exitCode === 0;
+  if (!succeeded) {
+    throw new WorkspaceDepsInstallError(
+      input.workspacePath,
+      command,
+      result.exitCode,
+      tailOf(combinedOutput(result)),
+      result.timedOut,
+    );
+  }
+  // The install branch echoes DEPS_INSTALL_SENTINEL before running; its presence
+  // on stdout tells the caller the install path was taken (vs the no-op skip), so
+  // it can cache "deps installed" and skip the stat round-trip on the next gate.
+  return { installed: result.stdout.includes(DEPS_INSTALL_SENTINEL) };
+}
+
+function depsInstallFailureMessage(
+  command: string,
+  exitCode: number | null,
+  outputTail: string,
+  timedOut: boolean,
+): string {
+  const reason = timedOut ? "timed out" : `exited ${exitCode ?? "unknown"}`;
+  const tail = outputTail === "" ? "" : `: ${outputTail}`;
+  return `workspace deps install (${command}) ${reason}${tail}`;
+}
+
 export interface CommitBootstrapStateInput {
   ssh: SshSubstrate;
   target: SshTarget;

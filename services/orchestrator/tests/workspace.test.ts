@@ -7,9 +7,11 @@ import { parseGitLogCommit, prepareGitWorkspace } from "./fixtures/workspaceGit.
 import {
   bootstrapWorkspace,
   DEFAULT_BOOTSTRAP_COMMAND,
+  ensureWorkspaceDepsInstalled,
   runWorkspaceSshCommand,
   WorkspaceBootstrapError,
   WorkspaceCommandError,
+  WorkspaceDepsInstallError,
   workspaceRepoPathForRun,
 } from "../src/engine/workspace/index.js";
 
@@ -193,6 +195,115 @@ describe("workspace bootstrap (P3-0006)", () => {
     }).catch((caught: unknown) => caught);
     expect(substrateError).toBeInstanceOf(WorkspaceBootstrapError);
     expect((substrateError as WorkspaceBootstrapError).outputTail).toContain("connection reset");
+  });
+});
+
+describe("ensureWorkspaceDepsInstalled (greenfield deps-ensure)", () => {
+  const workspacePath = workspaceRepoPathForRun("run_ensure");
+
+  // Interprets the guarded install command against a virtual workspace: a manifest
+  // (package.json / pnpm-workspace.yaml) present? node_modules present? The guard
+  // runs the install ONLY when a manifest exists AND node_modules is absent; else
+  // it is a no-op (exit 0). The install branch echoes the install sentinel; the
+  // skip branch echoes the no-op sentinel — matching the real runner-side guard.
+  class FsAwareSsh implements SshSubstrate {
+    readonly commands: SshCommand[] = [];
+    installRan = false;
+    constructor(
+      private readonly fs: { manifest: boolean; nodeModules: boolean },
+      // When the install runs, the exit code it returns (0 = success, else fail).
+      private readonly installExit: number = 0,
+    ) {}
+    async run(_target: SshTarget, command: SshCommand): Promise<SshCommandResult> {
+      this.commands.push(command);
+      const shouldInstall = this.fs.manifest && !this.fs.nodeModules;
+      if (shouldInstall) {
+        this.installRan = true;
+        const failed = this.installExit !== 0;
+        return {
+          exitCode: this.installExit,
+          stdout: `tanren: deps-ensure installing\n${failed ? "" : "Packages: +120"}`,
+          stderr: failed ? "vitest: not found" : "",
+          timedOut: false,
+        };
+      }
+      return { exitCode: 0, stdout: "tanren: deps-ensure no-op", stderr: "", timedOut: false };
+    }
+  }
+
+  it("runs the install when a manifest is present and node_modules is absent", async () => {
+    const ssh = new FsAwareSsh({ manifest: true, nodeModules: false });
+    const result = await ensureWorkspaceDepsInstalled({
+      ssh,
+      target,
+      workspacePath,
+      command: "pnpm install --frozen-lockfile",
+      timeoutMs: 100,
+    });
+    expect(result.installed).toBe(true);
+    expect(ssh.installRan).toBe(true);
+    // The guard runs in the workspace dir and embeds the resolved install command.
+    expect(ssh.commands[0]?.command).toContain("pnpm install --frozen-lockfile");
+    expect(ssh.commands[0]?.command).toContain("node_modules");
+    expect(ssh.commands[0]?.cwd).toBe(workspacePath);
+  });
+
+  it("no-ops (no install) when node_modules already exists — brownfield path", async () => {
+    const ssh = new FsAwareSsh({ manifest: true, nodeModules: true });
+    const result = await ensureWorkspaceDepsInstalled({ ssh, target, workspacePath, timeoutMs: 100 });
+    expect(result.installed).toBe(false);
+    expect(ssh.installRan).toBe(false);
+  });
+
+  it("no-ops when no manifest exists yet (greenfield clone HEAD, pre-writer)", async () => {
+    const ssh = new FsAwareSsh({ manifest: false, nodeModules: false });
+    const result = await ensureWorkspaceDepsInstalled({ ssh, target, workspacePath, timeoutMs: 100 });
+    expect(result.installed).toBe(false);
+    expect(ssh.installRan).toBe(false);
+  });
+
+  it("defaults to the pnpm/npm-detecting command, identical to the cold bootstrap", async () => {
+    const ssh = new FsAwareSsh({ manifest: true, nodeModules: false });
+    await ensureWorkspaceDepsInstalled({ ssh, target, workspacePath, timeoutMs: 100 });
+    expect(ssh.commands[0]?.command).toContain(DEFAULT_BOOTSTRAP_COMMAND);
+  });
+
+  it("keeps the app-env prelude OFF the command field — no secret in the typed error", async () => {
+    // A failing install with an app env present: the prelude is applied to the
+    // EXECUTED guard, but the thrown error must surface the ORIGINAL install
+    // command only (no secret value).
+    const ssh = new FsAwareSsh({ manifest: true, nodeModules: false }, 1);
+    const error = await ensureWorkspaceDepsInstalled({
+      ssh,
+      target,
+      workspacePath,
+      command: "pnpm install --frozen-lockfile",
+      appEnv: { API_TOKEN: "super-secret-value" },
+      timeoutMs: 100,
+    }).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(WorkspaceDepsInstallError);
+    const typed = error as WorkspaceDepsInstallError;
+    expect(typed.exitCode).toBe(1);
+    expect(typed.command).toBe("pnpm install --frozen-lockfile");
+    // The secret VALUE must not appear in the error message / command.
+    expect(typed.message).not.toContain("super-secret-value");
+    expect(typed.command).not.toContain("super-secret-value");
+    expect(typed.outputTail).toContain("vitest: not found");
+    // The EXECUTED guard carried the prelude (the substrate boundary), so the env
+    // is materialized for the install but never leaks into the error.
+    expect(ssh.commands[0]?.command).toContain("super-secret-value");
+  });
+
+  it("throws a typed error on a timeout / substrate failure", async () => {
+    const timedOut = new ScriptedSsh([{ exitCode: null, stdout: "", stderr: "", timedOut: true }]);
+    const timeoutError = await ensureWorkspaceDepsInstalled({
+      ssh: timedOut,
+      target,
+      workspacePath,
+      timeoutMs: 50,
+    }).catch((caught: unknown) => caught);
+    expect(timeoutError).toBeInstanceOf(WorkspaceDepsInstallError);
+    expect((timeoutError as WorkspaceDepsInstallError).message).toContain("timed out");
   });
 });
 

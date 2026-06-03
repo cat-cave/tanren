@@ -44,6 +44,7 @@ export const eventTypeNames = [
   "dag.spec.percolation_replan",
   "dag.spec.speculation_held",
   "dag.spec.speculative",
+  "gate.advisory_failed",
   "gate.failed",
   "gate.passed",
   "gate.started",

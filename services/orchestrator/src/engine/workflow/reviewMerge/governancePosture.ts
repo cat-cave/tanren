@@ -114,6 +114,8 @@ export interface PostureDecision {
  *   strict + external change      → block (needs operator approval)
  *   audit_only + no external      → proceed
  *   audit_only + external change  → observe (report, do not auto-merge)
+ *   lenient                       → same as strict for external coexistence
+ *                                   (its gate-advisory relaxation is in-loop only)
  */
 export function decidePosture(posture: GovernancePosture, assessment: ExternalChangeAssessment): PostureDecision {
   const externalLogins = assessment.externalLogins;
@@ -132,10 +134,12 @@ export function decidePosture(posture: GovernancePosture, assessment: ExternalCh
       reason: `audit_only posture: external change from ${formatLogins(externalLogins)} observed; not auto-merging`,
     };
   }
+  // strict (and lenient, which mirrors strict for external-contributor
+  // coexistence) block an external change pending operator approval.
   return {
     ...base,
     kind: "block",
-    reason: `strict posture: external change from ${formatLogins(externalLogins)} blocks auto-merge; operator approval required`,
+    reason: `${posture} posture: external change from ${formatLogins(externalLogins)} blocks auto-merge; operator approval required`,
   };
 }
 

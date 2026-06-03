@@ -10,3 +10,4 @@ export {
 } from "./runGateTier.js";
 export { runGateForWhen, type GateOutcome, type RunGateForWhenInput } from "./runGateForWhen.js";
 export { resolveBootstrapCommand, resolveGateConfig, type ResolveGateConfigInput } from "./resolveGateConfig.js";
+export { advisoryStepNamesForPosture } from "./advisoryGate.js";

@@ -27,7 +27,8 @@
       "enum": [
         "strict",
         "open",
-        "audit_only"
+        "audit_only",
+        "lenient"
       ],
       "type": "string"
     },

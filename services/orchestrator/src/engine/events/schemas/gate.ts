@@ -61,3 +61,19 @@ export const GateFailedPayload = z
     steps: z.array(GateStepResult),
   })
   .strict();
+
+// gate.advisory_failed: under the LENIENT governance posture, an advisory step
+// (lint/typecheck) exited nonzero. The step's failure is RECORDED here as a
+// warning but does NOT block — the tier keeps running and the gate stays passing.
+// This makes the real first-pass quality issue visible on the timeline without
+// stalling a functional-but-weak autonomous build (the apex doctrine). Build/test
+// failures still emit `gate.failed` and block.
+export const GateAdvisoryFailedPayload = z
+  .object({
+    tier: z.string(),
+    when: GateWhen,
+    advisoryStep: z.string(),
+    exitCode: z.number().int().nullable(),
+    outputTail: z.string(),
+  })
+  .strict();

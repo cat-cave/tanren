@@ -189,7 +189,17 @@ export type PartialForgePersona = z.infer<typeof PartialForgePersona>;
 
 // ---- Governance posture / merge integration ------------------------------
 
-export const GovernancePosture = z.enum(["strict", "open", "audit_only"]);
+// Governance posture. `strict`/`open`/`audit_only` govern how Tanren coexists
+// with EXTERNAL (non-Tanren) contributors at the merge point (see
+// workflow/reviewMerge/governancePosture.ts). `lenient` additionally relaxes the
+// in-loop GATE: under it, `lint`/`typecheck` failures are ADVISORY (warn,
+// non-blocking) while `build`/`test` stay BLOCKING — the functional-but-weak apex
+// doctrine, so an autonomous greenfield build lands imperfect code and improves it
+// via the issue loop rather than stalling on first-pass quality. For the
+// external-contributor decision, `lenient` behaves like `strict` (Tanren-only PRs
+// proceed; external commits block). Additive + backward-compatible: legacy rows
+// carry no key and parse to the `strict` default (no migration).
+export const GovernancePosture = z.enum(["strict", "open", "audit_only", "lenient"]);
 export type GovernancePosture = z.infer<typeof GovernancePosture>;
 
 // The per-repo merge integration mode (autonomy-engine.md §2d):

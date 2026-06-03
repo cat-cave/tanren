@@ -16,7 +16,7 @@
 // window_exhausted rather than a generic failure (PROJECT_BRIEF §4.3).
 import type pg from "pg";
 import type { CiWhen } from "../ci/index.js";
-import type { EscapeHatches, RoutingTable } from "../config/shared.js";
+import type { EscapeHatches, GovernancePosture, RoutingTable } from "../config/shared.js";
 import type { OrgGithubAppInstallation } from "../config/orgConfig.js";
 import type { Allocator, SshTarget } from "../contracts/allocator.js";
 import type { BudgetGate } from "../contracts/dagWalker.js";
@@ -95,24 +95,23 @@ export interface PlannerRunContext {
   runnerImage: string;
   identitySecretRef: string;
   githubCredentialRef: string;
-  /**
-   * P2a (Part 2): the org's GitHub App installation, when the org installed the App. The
-   * workspace CLONE resolves its token App-first through the VcsProvider seam (like the
-   * CI-poll / merge stages), so a private clone uses the auto-rotating installation token
-   * when an App is present and only falls back to the static `githubCredentialRef` if not.
-   */
+  // P2a (Part 2): the org's GitHub App installation, when installed. The workspace
+  // CLONE resolves its token App-first through the VcsProvider seam (like the CI-poll
+  // / merge stages) — a private clone uses the auto-rotating installation token when
+  // present, else falls back to the static `githubCredentialRef`.
   installation?: OrgGithubAppInstallation;
   // Required to build the default (real Codex) adapters + usage probe. Tests that inject buildAdapters/buildUsageProbe may omit it.
   codexCredentialRef?: string;
   // The run's effective per-role provider routing table (project routing merged onto a
-  // per-role default-Codex table built from `codexCredentialRef`). This is what the default
-  // adapters resolve from — Codex stays the default ONLY because the default routing DATA
-  // says so, not any code-level hardcode. Tests that inject buildAdapters may omit it.
+  // per-role default-Codex table from `codexCredentialRef`) — what the default adapters
+  // resolve from. Codex is the default by DATA, not a hardcode. Tests may omit it.
   routing?: RoutingTable;
-  // SaaS Tier-B #5: when a MANAGED run resolved an OpenAI-compatible endpoint
-  // override, this is the base URL every resolved adapter is pointed at. Absent
-  // ⇒ BYOK (adapters use their native endpoints).
+  // SaaS Tier-B #5: a MANAGED run's OpenAI-compatible endpoint override (the base
+  // URL every resolved adapter is pointed at). Absent ⇒ BYOK (native endpoints).
   endpointBaseUrl?: string;
+  // The project's governance posture, threaded by the run worker. Drives the gate's
+  // advisory policy (`lenient` ⇒ lint/typecheck advisory; absent ⇒ strict).
+  governancePosture?: GovernancePosture;
 }
 
 export interface PlannerRunAdapterContext {
