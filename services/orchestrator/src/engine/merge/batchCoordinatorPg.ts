@@ -110,6 +110,28 @@ export class PgBatchMergeEventEmitter implements BatchMergeEventEmitter {
     );
   }
 
+  async emitInfraBlocked(input: {
+    projectId: string;
+    batch: ReadonlyArray<MergeQueueEntry>;
+    message: string;
+    attempts: number;
+  }): Promise<void> {
+    const head = input.batch[0];
+    await this.withScopedStore(input.projectId, (store) =>
+      store.append({
+        ...(head !== undefined && { runId: head.runId, specId: head.specId }),
+        projectId: input.projectId,
+        eventType: "merge.batch.infra_blocked",
+        payload: {
+          integration: "native_queue",
+          members: membersOf(input.batch),
+          message: input.message,
+          attempts: input.attempts,
+        },
+      }),
+    );
+  }
+
   async emitCulprit(input: {
     projectId: string;
     culprit: MergeQueueEntry;

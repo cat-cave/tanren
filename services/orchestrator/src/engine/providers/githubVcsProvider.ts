@@ -12,7 +12,9 @@
 // single place the forge surface for the lifecycle is reached. MERGE-SAFETY's
 // `resolveActorIdentity` (the self-identity read) composes `./githubActorIdentity`.
 
+import { setTimeout as sleepFor } from "node:timers/promises";
 import { resolveGithubToken } from "../credentials/githubTokenResolver.js";
+import { resetRef } from "./githubRefReset.js";
 import { invokeTokenIdentity, resolveGithubActorIdentity } from "./githubActorIdentity.js";
 import { setRepoActionsSecret } from "./actionsSecretSeal.js";
 import { createGitHubRepository } from "./githubRepoCreate.js";
@@ -99,10 +101,17 @@ export class GitHubVcsProvider implements VcsProvider {
   private readonly status: GitHubStatusService;
   private readonly reviewMerge: GitHubReviewMergeService;
 
-  constructor(private readonly http: GitHubHttpClient) {
+  /** Test seam: sleep used between the internal ref-reset retries (real timer in prod). */
+  private readonly sleep: (ms: number) => Promise<void>;
+
+  constructor(
+    private readonly http: GitHubHttpClient,
+    opts?: { sleep?: (ms: number) => Promise<void> },
+  ) {
     this.pulls = new GitHubPullRequestService(http);
     this.status = new GitHubStatusService(http);
     this.reviewMerge = new GitHubReviewMergeService(http);
+    this.sleep = opts?.sleep ?? ((ms) => sleepFor(ms));
   }
 
   async resolveToken(creds: VcsCredentialContext): Promise<ResolvedVcsToken> {
@@ -392,33 +401,13 @@ export class GitHubVcsProvider implements VcsProvider {
     return object !== undefined && typeof object.sha === "string" ? object.sha : undefined;
   }
 
-  /** Create the integration ref at `sha`, or force-update it if it already exists. */
+  /**
+   * (Re)set the ephemeral integration ref to `sha` (create, or force-update if it
+   * exists). Delegates to the race-safe {@link resetRef} (body-message classification +
+   * bounded internal retry on a transient HTTP 422 — Bug 1), passing the injected sleep.
+   */
   private async resetRef(repo: RepoRef, token: ResolvedVcsToken, branch: string, sha: string): Promise<void> {
-    const create = await this.http.request({
-      method: "POST",
-      path: repoApiPath(repo, "/git/refs"),
-      token: token.token,
-      refreshToken: token.refresh,
-      body: { ref: `refs/heads/${branch}`, sha },
-    });
-    if (create.status === 201) {
-      return;
-    }
-    // 422 = ref already exists; force it back to the base sha (idempotent rebuild).
-    if (create.status === 422) {
-      const update = await this.http.request({
-        method: "PATCH",
-        path: repoApiPath(repo, `/git/refs/heads/${encodeURIComponent(branch)}`),
-        token: token.token,
-        refreshToken: token.refresh,
-        body: { sha, force: true },
-      });
-      if (update.status !== 200) {
-        throw new Error(`GitHub integration ref reset failed for ${branch}: HTTP ${update.status}`);
-      }
-      return;
-    }
-    throw new Error(`GitHub integration ref create failed for ${branch}: HTTP ${create.status}`);
+    await resetRef({ http: this.http, sleep: this.sleep, repo, token, branch, sha });
   }
 
   /** Merge `headBranch` into `base` (the integration ref). 409 ⇒ conflict. */

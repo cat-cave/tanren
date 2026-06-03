@@ -41,7 +41,21 @@ import {
   type MergeQueueModel,
   type MergeRunner,
 } from "../contracts/mergeCoordinator.js";
+import { isRetriableInfraError } from "../providers/githubRefReset.js";
+import { setTimeout as sleepFor } from "node:timers/promises";
 import type { MergeQueueEventEmitter } from "./coordinator.js";
+
+/**
+ * The bound on in-pass re-checks of the SAME batch after a transient INFRA error (the
+ * check could not be RUN). After this many additional attempts the coordinator stops
+ * retrying and HOLDS loudly (merge.batch.infra_blocked) — never silently spinning, and
+ * never dequeuing a clean PR. Each retry re-checks the full batch (it does NOT shrink).
+ */
+const MAX_INFRA_RETRIES = 2;
+/** Backoff (ms) between infra-error re-checks — overridable via the `sleep` seam in tests. */
+const INFRA_RETRY_BACKOFF_MS = [250, 500];
+/** How long after an infra-error hold the subscriber should re-drive the project. */
+const INFRA_HOLD_RETRY_AFTER_MS = 3000;
 
 /**
  * Thrown by the bisect callback when a sub-batch's CI is still pending — bisect
@@ -49,6 +63,22 @@ import type { MergeQueueEventEmitter } from "./coordinator.js";
  * guesses, which could blame an innocent PR). The next CI-completion re-triggers.
  */
 class BatchCheckStillPendingError extends Error {}
+
+/**
+ * Thrown by the bisect callback when a sub-batch's check could not be RUN (a transient
+ * INFRA error from `checkEntries`). Bisect cannot name a culprit from a sub-check that
+ * never ran — so the pass aborts the bisect + HOLDS (it never blames an innocent PR for
+ * an infra error). Mirrors {@link BatchCheckStillPendingError}; carries the message +
+ * the retriable flag so the outer pass surfaces the loud infra hold.
+ */
+class BatchCheckInfraError extends Error {
+  constructor(
+    message: string,
+    readonly retriable: boolean,
+  ) {
+    super(message);
+  }
+}
 
 /** The batch-level events the coordinator emits (the P2d-2 visibility surface). */
 export interface BatchMergeEventEmitter {
@@ -69,6 +99,17 @@ export interface BatchMergeEventEmitter {
   emitBisecting(input: { projectId: string; batch: ReadonlyArray<MergeQueueEntry>; message: string }): Promise<void>;
   /** merge.batch.culprit: bisect isolated the single offending PR (dequeued, recoverable). */
   emitCulprit(input: { projectId: string; culprit: MergeQueueEntry; checks: number; message: string }): Promise<void>;
+  /**
+   * merge.batch.infra_blocked: the batch check could NOT be run (a transient/transport
+   * INFRA error) — the coordinator bounded-retried then HOLDS loudly. NO PR is
+   * bisected/dequeued; the entries stay queued (recovered on a delayed re-drive).
+   */
+  emitInfraBlocked(input: {
+    projectId: string;
+    batch: ReadonlyArray<MergeQueueEntry>;
+    message: string;
+    attempts: number;
+  }): Promise<void>;
 }
 
 export interface BatchMergeCoordinatorDeps {
@@ -85,6 +126,11 @@ export interface BatchMergeCoordinatorDeps {
    * production assembly resolves `projects.config.maxBatchSize` under RLS.
    */
   resolveMaxBatchSize?: (projectId: string) => Promise<number>;
+  /**
+   * Test seam: the sleep between infra-error re-checks. Defaults to a real timer; a
+   * test injects a no-op/recording sleep so the bounded retries run instantly.
+   */
+  sleep?: (ms: number) => Promise<void>;
 }
 
 /**
@@ -97,9 +143,11 @@ export interface BatchMergeCoordinatorDeps {
  */
 export class BatchMergeCoordinator implements MergeCoordinator {
   private readonly resolveMaxBatchSize: (projectId: string) => Promise<number>;
+  private readonly sleep: (ms: number) => Promise<void>;
 
   constructor(private readonly deps: BatchMergeCoordinatorDeps) {
     this.resolveMaxBatchSize = deps.resolveMaxBatchSize ?? (() => Promise.resolve(DEFAULT_MAX_BATCH_SIZE));
+    this.sleep = deps.sleep ?? ((ms) => sleepFor(ms));
   }
 
   async coordinate(projectId: string): Promise<CoordinateResult> {
@@ -168,14 +216,14 @@ export class BatchMergeCoordinator implements MergeCoordinator {
           `[batch-coordinator] project ${projectId}: batch CAPPED to ${current.batch.length} of ${current.eligibleCount} eligible (maxBatchSize=${maxBatchSize}); the remainder is re-considered next pass`,
         );
       }
-      await this.deps.batchEvents.emitChecking({
-        projectId,
-        batch: current.batch,
-        formation: current,
-        maxBatchSize,
-      });
-
-      const verdict = await this.checkEntries(projectId, current.batch);
+      // Check the SAME batch with a bounded retry on a transient INFRA error (the check
+      // could not be RUN). On infra exhaustion this emits the loud infra-blocked hold +
+      // returns it — we surface that hold WITHOUT bisecting/dequeuing any PR.
+      const checked = await this.checkBatchWithInfraRetry(projectId, current, maxBatchSize, queueDepth);
+      if (checked.kind === "infra-hold") {
+        return checked.result;
+      }
+      const verdict = checked.verdict;
 
       if (verdict.result === "pass") {
         await this.deps.batchEvents.emitPassed({
@@ -202,6 +250,18 @@ export class BatchMergeCoordinator implements MergeCoordinator {
         // A sub-batch's CI was still running — HOLD (no entry dequeued/blamed); the
         // next CI-completion re-triggers a fresh pass.
         return { projectId, holdReason: "all_blocked", queueDepth };
+      }
+      if ("kind" in bisect) {
+        // A sub-batch check could NOT be RUN (a transient infra error) — bisect cannot
+        // name a culprit from a check that never ran. HOLD loudly (no PR blamed); the
+        // emitInfraBlocked + delayed re-drive recover the queue.
+        await this.deps.batchEvents.emitInfraBlocked({
+          projectId,
+          batch: current.batch,
+          message: bisect.message,
+          attempts: MAX_INFRA_RETRIES + 1,
+        });
+        return { projectId, holdReason: "infra_error", retryAfterMs: INFRA_HOLD_RETRY_AFTER_MS, queueDepth };
       }
 
       // Dequeue the culprit to a RECOVERABLE outcome (conflict reason ⇒ routed to the
@@ -237,42 +297,110 @@ export class BatchMergeCoordinator implements MergeCoordinator {
   }
 
   /**
+   * Check the FULL formed batch, retrying the SAME batch on a transient INFRA error (a
+   * check that could not be RUN — distinct from a CI fail/conflict/pending). Bug 2's
+   * core safety: an infra error NEVER bisects/dequeues/blames a PR. We:
+   *   - emit merge.batch.checking, then check the batch;
+   *   - on a NON-infra verdict (pass/fail/conflict/pending) → return it to the caller
+   *     unchanged (the genuine-failure path is untouched);
+   *   - on `infra-error` → if `retriable` and the retry budget remains, back off (via
+   *     the sleep seam) and re-check the SAME batch (do NOT shrink it); a non-retriable
+   *     (typed permanent) infra error skips straight to the hold (no point retrying);
+   *   - on exhaustion → emit the LOUD merge.batch.infra_blocked event + return an
+   *     `infra_error` HOLD (entries stay queued; `retryAfterMs` re-drives the project).
+   * Re-emits merge.batch.checking on each retry so the timeline shows the re-passes.
+   */
+  private async checkBatchWithInfraRetry(
+    projectId: string,
+    formation: BatchFormation,
+    maxBatchSize: number,
+    queueDepth: number,
+  ): Promise<{ kind: "verdict"; verdict: BatchCheckVerdict } | { kind: "infra-hold"; result: CoordinateResult }> {
+    let lastMessage = "batch check could not run (infra error)";
+    for (let attempt = 0; attempt <= MAX_INFRA_RETRIES; attempt += 1) {
+      if (attempt > 0) {
+        await this.sleep(INFRA_RETRY_BACKOFF_MS[attempt - 1] ?? 500);
+      }
+      // Announce every check attempt (the initial AND each re-pass) so the timeline
+      // shows the batch is being checked — never a silent loop.
+      await this.deps.batchEvents.emitChecking({ projectId, batch: formation.batch, formation, maxBatchSize });
+      const verdict = await this.checkEntries(projectId, formation.batch);
+      if (verdict.result !== "infra-error") {
+        return { kind: "verdict", verdict };
+      }
+      lastMessage = verdict.message;
+      // A typed PERMANENT infra error: do not burn the retry budget — hold loudly now.
+      if (!verdict.retriable) break;
+    }
+    // Retries exhausted (or a permanent infra error): HOLD loudly. NEVER dequeue/blame.
+    await this.deps.batchEvents.emitInfraBlocked({
+      projectId,
+      batch: formation.batch,
+      message: lastMessage,
+      attempts: MAX_INFRA_RETRIES + 1,
+    });
+    return {
+      kind: "infra-hold",
+      result: { projectId, holdReason: "infra_error", retryAfterMs: INFRA_HOLD_RETRY_AFTER_MS, queueDepth },
+    };
+  }
+
+  /**
    * Speculatively integrate + CI-check the given entry set (the BatchChecker assembles
    * `default_branch + the entries` and runs CI on the ephemeral integration ref —
    * NEVER touching default_branch). An empty set checks the base alone (which passes —
-   * the bisect's lower-bound invariant). A thrown checker is treated as a `fail` so a
-   * transient error never lets an unverified batch through (conservatively fails).
+   * the bisect's lower-bound invariant). A THROWN checker means the check could not be
+   * SET UP / RUN (a transport/ref/transient infra error) — that is NOT a CI failure and
+   * NEVER a PR's fault, so we return the `infra-error` verdict (NOT `fail`): the caller
+   * bounded-retries the SAME batch then HOLDS loudly, never dequeuing a clean PR.
+   * `retriable` is derived from the typed provider error (transient → true; a typed
+   * permanent infra error → false).
    */
   private async checkEntries(projectId: string, entries: ReadonlyArray<MergeQueueEntry>): Promise<BatchCheckVerdict> {
     try {
       return await this.deps.checker.checkBatch({ projectId, entries });
     } catch (error) {
-      return { result: "fail", message: `batch check threw: ${String(error)}` };
+      return {
+        result: "infra-error",
+        message: `batch check threw: ${String(error)}`,
+        retriable: isRetriableInfraError(error),
+      };
     }
   }
 
   /**
    * Binary-search the failed batch to isolate the single offending PR (the pure
-   * `bisectCulprit` driver over `checkEntries`). Returns the bisect result, or
-   * `"pending"` when a sub-batch's CI was still running (the pass HOLDS rather than
-   * guess — never blaming an innocent). Each sub-batch check is a speculative
-   * integration + CI-check on a PREFIX of the batch; the pure driver guarantees it
-   * terminates + names exactly the pass→fail boundary.
+   * `bisectCulprit` driver over `checkEntries`). Returns:
+   *   - the bisect result (`BisectResult` wrapped as `{kind:"culprit",...}`-shaped via
+   *     the raw result) on a definitive pass→fail boundary;
+   *   - `"pending"` when a sub-batch's CI was still running (HOLD, never guess);
+   *   - `{kind:"infra", message}` when a sub-batch check could NOT be RUN (a transient
+   *     infra error) — bisect MUST NOT name a culprit from a check that never ran, so
+   *     the pass aborts the bisect + HOLDS loudly. Mirrors the pending pattern.
+   * Each sub-batch check is a speculative integration + CI-check on a PREFIX of the
+   * batch; the pure driver guarantees it terminates + names exactly the boundary.
    */
   private async bisectBatch(
     projectId: string,
     batch: ReadonlyArray<MergeQueueEntry>,
-  ): Promise<Awaited<ReturnType<typeof bisectCulprit>> | "pending"> {
+  ): Promise<Awaited<ReturnType<typeof bisectCulprit>> | "pending" | { kind: "infra"; message: string }> {
     try {
       return await bisectCulprit(batch, async (prefixLength) => {
         const v = await this.checkEntries(projectId, batch.slice(0, prefixLength));
         if (v.result === "pending") {
           throw new BatchCheckStillPendingError(`sub-batch CI still pending (prefix length ${prefixLength})`);
         }
+        if (v.result === "infra-error") {
+          throw new BatchCheckInfraError(
+            `sub-batch check could not run (prefix length ${prefixLength}): ${v.message}`,
+            v.retriable,
+          );
+        }
         return v.result === "pass" ? "pass" : "fail";
       });
     } catch (error) {
       if (error instanceof BatchCheckStillPendingError) return "pending";
+      if (error instanceof BatchCheckInfraError) return { kind: "infra", message: error.message };
       throw error;
     }
   }

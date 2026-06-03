@@ -113,6 +113,25 @@ export const MergeBatchBisectingPayload = z
   })
   .strict();
 
+// merge.batch.infra_blocked → the batch check could NOT be run/set up at all: a
+// transient/transport INFRA error (e.g. the speculative integration ref reset threw an
+// HTTP 422). This is NOT a CI failure and NOT a merge conflict — so NO PR is bisected,
+// blamed, or dequeued. The coordinator bounded-retried the SAME batch and, on
+// exhaustion, emits this LOUD event + HOLDS (entries stay queued, recovered on a
+// delayed re-drive). It exists so a persistent infra error surfaces loudly instead of
+// silently retrying forever OR wrongly dequeuing a clean PR.
+export const MergeBatchInfraBlockedPayload = z
+  .object({
+    integration: MergeIntegrationMode,
+    /** The held batch members (still queued — NONE dequeued), in DAG order. */
+    members: z.array(BatchMember),
+    /** The human-readable detail of the infra error that blocked the check. */
+    message: z.string(),
+    /** How many check attempts were made before holding (the exhausted retry budget). */
+    attempts: z.number().int().nonnegative(),
+  })
+  .strict();
+
 export const MergeBatchCulpritPayload = z
   .object({
     integration: MergeIntegrationMode,

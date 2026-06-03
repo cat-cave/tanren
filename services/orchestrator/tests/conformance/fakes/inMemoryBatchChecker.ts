@@ -20,6 +20,12 @@ import type { BatchMergeEventEmitter } from "../../../src/engine/merge/batchCoor
  * includes it then FAILS — exactly the "this PR breaks the combined state" signal the
  * bisect must isolate. A spec marked `conflictWhenContains` reports an integration
  * conflict instead. A spec marked `pendingWhenContains` reports a still-running CI.
+ *
+ * INFRA ERROR modelling (Bug 2): the checker can be made to THROW (the check could not
+ * be RUN — a transient ref/transport error, NOT a CI verdict). `throwInfraAlways(error)`
+ * throws on every call (a PERSISTENT infra error). `throwInfraOnce(error)` throws on the
+ * first call then behaves normally (a transient-then-success). The coordinator must map
+ * a thrown checker to the `infra-error` verdict + retry/hold, never a fail/dequeue.
  */
 export class InMemoryBatchChecker implements BatchChecker {
   /** Every entry-set checked, in order (the spec-id lists) — the bisect probe trace. */
@@ -27,6 +33,9 @@ export class InMemoryBatchChecker implements BatchChecker {
   private readonly failSpecs = new Set<string>();
   private readonly conflictSpecs = new Set<string>();
   private readonly pendingSpecs = new Set<string>();
+  private throwAlways: unknown;
+  private throwRemaining = 0;
+  private throwOnce: unknown;
 
   failWhenContains(specId: string): void {
     this.failSpecs.add(specId);
@@ -37,11 +46,27 @@ export class InMemoryBatchChecker implements BatchChecker {
   pendingWhenContains(specId: string): void {
     this.pendingSpecs.add(specId);
   }
+  /** Throw `error` on EVERY checkBatch call (a persistent infra error). */
+  throwInfraAlways(error: unknown): void {
+    this.throwAlways = error;
+  }
+  /** Throw `error` on the first `count` calls then behave normally (transient infra). */
+  throwInfraForFirst(error: unknown, count = 1): void {
+    this.throwOnce = error;
+    this.throwRemaining = count;
+  }
 
   // eslint-disable-next-line @typescript-eslint/require-await
   async checkBatch(input: { projectId: string; entries: ReadonlyArray<MergeQueueEntry> }): Promise<BatchCheckVerdict> {
     const specIds = input.entries.map((e) => e.specId);
     this.checked.push([...specIds]);
+    if (this.throwAlways !== undefined) {
+      throw this.throwAlways;
+    }
+    if (this.throwRemaining > 0) {
+      this.throwRemaining -= 1;
+      throw this.throwOnce;
+    }
     const hasPending = specIds.some((id) => this.pendingSpecs.has(id));
     if (hasPending) {
       return { result: "pending", message: `pending: ${specIds.join(",")}` };
@@ -61,13 +86,15 @@ export class InMemoryBatchChecker implements BatchChecker {
 /** A recording batch-event emitter — captures every merge.batch.* event. */
 export class RecordingBatchMergeEventEmitter implements BatchMergeEventEmitter {
   readonly events: Array<{
-    type: "checking" | "passed" | "bisecting" | "culprit";
+    type: "checking" | "passed" | "bisecting" | "culprit" | "infra_blocked";
     specIds?: string[];
     culpritSpecId?: string;
     capped?: boolean;
     eligibleCount?: number;
     maxBatchSize?: number;
     checks?: number;
+    message?: string;
+    attempts?: number;
   }> = [];
 
   // eslint-disable-next-line @typescript-eslint/require-await
@@ -95,5 +122,18 @@ export class RecordingBatchMergeEventEmitter implements BatchMergeEventEmitter {
   // eslint-disable-next-line @typescript-eslint/require-await
   async emitCulprit(input: { culprit: MergeQueueEntry; checks: number }): Promise<void> {
     this.events.push({ type: "culprit", culpritSpecId: input.culprit.specId, checks: input.checks });
+  }
+  // eslint-disable-next-line @typescript-eslint/require-await
+  async emitInfraBlocked(input: {
+    batch: ReadonlyArray<MergeQueueEntry>;
+    message: string;
+    attempts: number;
+  }): Promise<void> {
+    this.events.push({
+      type: "infra_blocked",
+      specIds: input.batch.map((e) => e.specId),
+      message: input.message,
+      attempts: input.attempts,
+    });
   }
 }

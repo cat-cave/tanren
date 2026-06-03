@@ -63,6 +63,7 @@ export const eventTypeNames = [
   "merge.batch.bisecting",
   "merge.batch.checking",
   "merge.batch.culprit",
+  "merge.batch.infra_blocked",
   "merge.batch.passed",
   "merge.behind",
   "merge.blocked",

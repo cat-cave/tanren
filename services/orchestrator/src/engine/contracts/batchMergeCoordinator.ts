@@ -239,7 +239,17 @@ export type BatchCheckVerdict =
   // failure. The coordinator HOLDS this pass (it does NOT bisect a green-but-pending
   // batch, which would falsely blame a PR); the next CI-completion notification
   // re-triggers a fresh pass.
-  | { result: "pending"; message: string };
+  | { result: "pending"; message: string }
+  // The check could not be RUN / SET UP at all — a transport/ref/transient INFRA error
+  // (e.g. the speculative integration ref reset threw a transient HTTP 422). This is
+  // DISTINCT from `fail` (a genuine CI failure), `conflict` (a genuine merge conflict),
+  // and `pending` (CI still running): we never even got a verdict for the batch. The
+  // coordinator must NEVER treat this as a PR's check-failure — it does NOT bisect and
+  // NEVER dequeues/blames a PR. Instead it bounded-retries the SAME batch and, on
+  // exhaustion, emits a LOUD `merge.batch.infra_blocked` event + HOLDS (entries stay
+  // queued). `retriable` is `false` only for a typed PERMANENT infra error (so the
+  // coordinator still holds-not-dequeues, but does not burn its retry budget first).
+  | { result: "infra-error"; message: string; retriable: boolean };
 
 /**
  * Speculatively integrate the given entries (in the supplied DAG order) onto
