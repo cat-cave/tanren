@@ -30,7 +30,12 @@ import { createIntegrationRoutes } from "./routes/integrations/index.js";
 import { createMilestoneRoutes } from "./routes/milestones/index.js";
 import { createNotificationRoutes } from "./routes/notifications/index.js";
 import { createOnboardingRoutes } from "./routes/onboarding/index.js";
-import { createAiProviderRoutes, type ConfigGateGithubFactory, createOrgRoutes } from "./routes/orgs/index.js";
+import {
+  createAiProviderRoutes,
+  type ConfigGateGithubFactory,
+  createGithubConnectRoutes,
+  createOrgRoutes,
+} from "./routes/orgs/index.js";
 import { createPersonaRoutes } from "./routes/personas/index.js";
 import { createAppEnvCiRoutes, createProjectRoutes } from "./routes/projects/index.js";
 import { createRecoveryRoutes } from "./routes/recovery/index.js";
@@ -114,6 +119,24 @@ export function mountFeatureRoutes(app: Hono<ActorContextEnv>, deps: FeatureRout
   // the credential list. Stores BYOK keys under a COST-CLASSIFIABLE ref so the
   // budget gate meters them (routes/aiProvider/index.ts).
   app.route("/orgs", createAiProviderRoutes({ pool: scopedPool, secrets, registry: credentialRegistry }));
+  // Wave-2 operator API: human-drivable "Connect GitHub" (App install OR token,
+  // server-stamped `installedAt`, no raw config PATCH) + the connected identity's
+  // REAL capability check (`canCreateRepos`) + the single onboarding readiness
+  // checklist. Org-scoped on the scoped pool; the shared minter caches App tokens.
+  // The managed App credential ref (when configured via env) backs an install
+  // connect that omits a `credentialRef`.
+  app.route(
+    "/orgs",
+    createGithubConnectRoutes({
+      pool: scopedPool,
+      secrets,
+      minter: githubAppMinter,
+      ...(process.env["TANREN_GITHUB_APP_CREDENTIAL_REF"] === undefined ||
+      process.env["TANREN_GITHUB_APP_CREDENTIAL_REF"] === ""
+        ? {}
+        : { appCredentialRef: process.env["TANREN_GITHUB_APP_CREDENTIAL_REF"] }),
+    }),
+  );
   app.route(
     "/orgs",
     // GREENFIELD: the `/projects/greenfield` create path mints the org's GitHub App

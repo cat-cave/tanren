@@ -47,6 +47,39 @@ export async function loadOrgDefaultGithubCredentialRef(pool: pg.Pool, orgId: st
   });
 }
 
+/**
+ * Set the org's default GitHub credential ref
+ * (`organizations.config.defaultCredentials.github_token`) — the token-mode
+ * counterpart to {@link persistOrgGithubAppInstallation}. Read-modify-writes the
+ * `defaultCredentials` block through `migrateOrgConfig` so the persisted blob is
+ * always a valid versioned config. Returns false when the org row is absent.
+ *
+ * RLS: same single-org scoping rationale as {@link loadOrgGithubAppInstallation}.
+ */
+export async function persistOrgDefaultGithubCredentialRef(
+  pool: pg.Pool,
+  orgId: string,
+  credentialRef: string,
+): Promise<boolean> {
+  return runWithOrgScope(pool, orgId, async (client) => {
+    const result = await client.query<{ config: unknown }>("SELECT config FROM organizations WHERE id = $1", [orgId]);
+    const row = result.rows[0];
+    if (row === undefined) {
+      return false;
+    }
+    const current = migrateOrgConfig(row.config);
+    const next = migrateOrgConfig({
+      ...current,
+      defaultCredentials: { ...current.defaultCredentials, github_token: credentialRef },
+    });
+    const updated = await client.query<{ id: string }>(
+      "UPDATE organizations SET config = $1::jsonb, updated_at = now() WHERE id = $2 RETURNING id",
+      [JSON.stringify(next), orgId],
+    );
+    return updated.rowCount !== null && updated.rowCount > 0;
+  });
+}
+
 export async function persistOrgGithubAppInstallation(
   pool: pg.Pool,
   orgId: string,
