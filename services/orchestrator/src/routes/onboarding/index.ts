@@ -59,6 +59,13 @@ const DeriveBody = z
   .object({
     capture: InterviewCapture,
     repoUrl: z.string().min(1).max(400).optional(),
+    // GREENFIELD AUTONOMY: how the derived project is governed at creation. When
+    // `auto`/`simulated`, the project lands ALREADY autonomous (a `native_queue`
+    // merge engine + the matching review policy) so the DagWalker can advance it
+    // off an empty repo with NO follow-up PATCH. Absent or `human` ⇒ the schema's
+    // safe defaults (human review, `not_configured` merge), unchanged — the
+    // brownfield/managed default.
+    autonomy: z.enum(["auto", "simulated", "human"]).optional(),
   })
   .strict();
 
@@ -101,6 +108,7 @@ export function createOnboardingRoutes(options: OnboardingRoutesOptions) {
           capture: parsed.data.capture,
           actor: { ...actor, orgId },
           ...(parsed.data.repoUrl === undefined ? {} : { repoUrl: parsed.data.repoUrl }),
+          ...(parsed.data.autonomy === undefined ? {} : { autonomy: parsed.data.autonomy }),
         },
       );
       return c.json(result, 201);

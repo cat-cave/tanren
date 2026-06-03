@@ -91,6 +91,10 @@ export interface DeriveFromCaptureInput {
   capture: InterviewCapture;
   actor: ActorContext;
   repoUrl?: string;
+  // GREENFIELD AUTONOMY: when `auto`/`simulated`, the derived project is created
+  // already autonomous (`native_queue` + the matching review policy); absent or
+  // `human` keeps the schema's safe defaults. Threaded into `deriveProductGraph`.
+  autonomy?: "auto" | "simulated" | "human";
 }
 
 export async function deriveFromCapture(
@@ -104,6 +108,7 @@ export async function deriveFromCapture(
     capture: InterviewCapture.parse(input.capture),
     actor: input.actor,
     ...(input.repoUrl === undefined ? {} : { repoUrl: input.repoUrl }),
+    ...(input.autonomy === undefined ? {} : { autonomy: input.autonomy }),
   });
 }
 

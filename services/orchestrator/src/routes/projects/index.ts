@@ -21,8 +21,9 @@ import { ProjectStore, type ProjectRow as RepoProjectRow } from "../../engine/re
 import { systemActor } from "../../engine/state/actor.js";
 import { createProject, ProjectAccessDeniedError, ProjectNotFoundError } from "../../engine/workflow/projectSpec.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
-import { actorCanAccessOrg } from "../orgs/index.js";
+import { actorCanAccessOrg, actorIsOrgAdmin } from "../orgs/index.js";
 import { BudgetPutSchema, handleBudgetGet, handleBudgetPut } from "./budget.js";
+import { GovernancePutSchema, handleGovernanceGet, handleGovernancePut } from "./governance.js";
 import { GreenfieldCreateSchema, handleGreenfieldCreate } from "./greenfield.js";
 
 // P-APP-ENV-1: re-exported here so the feature-route mounter pulls both the
@@ -185,6 +186,34 @@ export function createProjectRoutes(options: ProjectRoutesOptions) {
       return c.json({ error: "invalid_budget", issues: parsed.error.issues }, 400);
     }
     return handleBudgetPut(c, options.pool, orgId, c.req.param("projectId"), parsed.data);
+  });
+
+  // The dedicated GOVERNANCE surface (apex.md "missing endpoint → add it"): a
+  // discoverable read + update for the three settings that decide whether the
+  // autonomous DagWalker can advance a project (reviewPolicy / mergeIntegration /
+  // governancePosture) — the supported way to flip an existing project to
+  // autonomous, so an operator never hand-crafts a full-config PATCH. The READ is
+  // org-member; the MUTATION is org-admin (it changes the autonomy posture).
+  app.get("/:orgId/projects/:projectId/governance", async (c) => {
+    const actor = requireActor(c);
+    const orgId = c.req.param("orgId");
+    if (!actorCanAccessOrg(actor, orgId)) {
+      return c.json({ error: "org_access_denied" }, 403);
+    }
+    return handleGovernanceGet(c, options.pool, orgId, c.req.param("projectId"));
+  });
+
+  app.put("/:orgId/projects/:projectId/governance", async (c) => {
+    const actor = requireActor(c);
+    const orgId = c.req.param("orgId");
+    if (!actorIsOrgAdmin(actor, orgId)) {
+      return c.json({ error: "org_admin_required" }, 403);
+    }
+    const parsed = GovernancePutSchema.safeParse(await c.req.json().catch(() => {}));
+    if (!parsed.success) {
+      return c.json({ error: "invalid_governance", issues: parsed.error.issues }, 400);
+    }
+    return handleGovernancePut(c, options.pool, orgId, c.req.param("projectId"), parsed.data);
   });
 
   return app;
