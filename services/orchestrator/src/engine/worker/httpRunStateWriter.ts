@@ -63,9 +63,12 @@ export class HttpRunStateWriter implements RunStateWriter {
   ) {}
 
   async append<N extends EventName>(input: AppendEventInput<N>): Promise<void> {
-    // The server scopes the INSERT to the run's org (`runWithOrgScope`), so the
-    // body carries it. The org is the run's per-job org-id the worker set around
-    // the workflow (`runWithJobOrgId`) — the same scope the in-process write used.
+    // The server scopes the INSERT to the event's org (`runWithOrgScope`), so the
+    // body carries it — the per-job org-id the caller set (`runWithJobOrgId`), the
+    // same scope the in-process write used. A PROJECT-scoped event (the DagWalker's
+    // dag.drained / dag.budget.paused / dag.concurrency.saturated) carries no
+    // runId/specId; those keys are simply absent from `input`, so the server inserts
+    // NULL run_id/spec_id — identical to the direct `PgEventStore.append`.
     await this.post<void>("/internal/append-event", { ...input, orgId: this.requireOrgId() });
   }
 

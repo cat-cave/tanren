@@ -173,6 +173,47 @@ describeDb("plane-split P3 — control-plane run-state write endpoints (real PG,
     expect(row.rows[0]).toMatchObject({ org_id: ORG, event_type: "run.started" });
   });
 
+  it("(2b) append-event accepts a PROJECT-scoped event (null run_id/spec_id), org-scoped", async () => {
+    // The DagWalker's cold-start (onDagChange) walk emits PROJECT-scoped dag.*
+    // events — dag.drained / dag.budget.paused / dag.concurrency.saturated — which
+    // carry NO run and NO spec (they describe the project's DAG, not a single run).
+    // The control-plane append-event path MUST accept that shape (matching the
+    // direct PgEventStore.append, which inserts NULL run_id/spec_id) — previously it
+    // 400'd because the schema required runId/specId. Assert the project-scoped
+    // event lands with NULL run_id/spec_id, the right org, and the right project.
+    // seedRun establishes the org + project; the project-scoped event itself omits runId/specId.
+    const runId = "run_p3_project_scoped";
+    await seedRun(runId);
+    const app = createInternalRunStateWriteRoutes({ pool: runtimePool, verifier: new AllowAllPeerVerifier() });
+    const writer = new HttpRunStateWriter("https://control.internal:3110", fetchInto(app));
+
+    // The walker appends a project-only event: no runId, no specId — only projectId
+    // + payload (the writer adds the org from the ambient per-job scope).
+    await runWithJobOrgId(ORG, () =>
+      writer.append({
+        projectId: PROJECT,
+        eventType: "dag.drained",
+        payload: { doneCount: 2, inFlightCount: 0, blockedCount: 0 },
+      }),
+    );
+
+    const row = await ownerPool.query<{
+      run_id: string | null;
+      spec_id: string | null;
+      org_id: string;
+      project_id: string;
+      event_type: string;
+    }>("SELECT run_id, spec_id, org_id, project_id, event_type FROM events WHERE event_type = 'dag.drained'");
+    expect(row.rowCount).toBe(1);
+    expect(row.rows[0]).toMatchObject({
+      run_id: null,
+      spec_id: null,
+      org_id: ORG,
+      project_id: PROJECT,
+      event_type: "dag.drained",
+    });
+  });
+
   it("(3) record-cost persists the same cost_records row + cost.resolved event", async () => {
     const runId = "run_p3_cost";
     await seedRun(runId);
