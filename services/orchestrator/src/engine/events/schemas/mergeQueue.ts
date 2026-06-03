@@ -53,6 +53,35 @@ export const MergeDequeuedPayload = z
   })
   .strict();
 
+// GitHub-5xx resilience (GAP #2d): a transient/transport INFRA error (a 5xx/timeout)
+// blocked the per-PR coordinator's merge DRIVE — distinct from the recoverable
+// conflict/blocked dequeue. The coordinator HOLDS the entry (it stays queued) + arms a
+// delayed re-drive, bounded by a hold-attempt ceiling. This LOUD event fires when the
+// hold can no longer recover on its own and operator attention is warranted:
+//   - `kind: "ceiling"`     → the entry exhausted its consecutive infra re-drives (a
+//                             persistent outage / a logic-bug-masquerading-as-infra);
+//                             the entry is removed so it cannot loop forever.
+//   - `kind: "ambiguous"`   → the merge PUT hit a 5xx and the merged state could NOT be
+//                             confirmed; auto-re-driving could double-merge, so the
+//                             coordinator HALTS without re-PUTting (operator decides).
+// It exists so a persistent infra error / an unconfirmable merge surfaces loudly instead
+// of silently re-driving forever OR risking a double-merge.
+export const MergeQueueInfraBlockedPayload = z
+  .object({
+    prUrl: z.string(),
+    prNumber: z.number().int(),
+    integration: MergeIntegrationMode,
+    /** The spec whose entry the infra error blocked. */
+    specId: z.string(),
+    /** Which loud-halt case fired (a ceiling exhaustion vs an unconfirmable merge). */
+    kind: z.enum(["ceiling", "ambiguous"]),
+    /** How many consecutive infra re-drives were attempted before the loud halt. */
+    attempts: z.number().int().nonnegative(),
+    /** The human-readable detail of the infra error / ambiguity. */
+    message: z.string(),
+  })
+  .strict();
+
 // P2d-2 (autonomy-engine.md §2d — speculative batch-check + bisect): the
 // intelligence layer ON TOP OF the native queue. The coordinator forms a BATCH of
 // mutually-eligible entries, speculatively integrates `default_branch + batch PRs`,

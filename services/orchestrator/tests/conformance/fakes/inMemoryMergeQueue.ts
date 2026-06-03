@@ -150,6 +150,17 @@ export class InMemoryMergeQueueModel implements MergeQueueModel {
   }
 
   // eslint-disable-next-line @typescript-eslint/require-await
+  async releaseClaim(queueId: string): Promise<void> {
+    const row = this.rows.get(queueId);
+    // Only return a still-`merging` claim to `queued` (the transient-hold path); never
+    // resurrect a settled entry.
+    if (row !== undefined && row.status === "merging") {
+      row.status = "queued";
+      row.claimedAt = undefined;
+    }
+  }
+
+  // eslint-disable-next-line @typescript-eslint/require-await
   async recoverStaleClaims(_projectId: string): Promise<number> {
     let recovered = 0;
     const cutoff = this.now() - FAKE_CLAIM_LEASE_MS;
@@ -185,10 +196,12 @@ export class ScriptedMergeRunner implements MergeRunner {
 /** A recording queue-event emitter — captures every emitted queue event. */
 export class RecordingMergeQueueEventEmitter implements MergeQueueEventEmitter {
   readonly events: {
-    type: "merge.queue.advanced" | "merge.dequeued";
+    type: "merge.queue.advanced" | "merge.dequeued" | "merge.queue.infra_blocked";
     specId: string;
     reason?: "conflict" | "blocked" | "failed";
     queueDepth?: number;
+    kind?: "ceiling" | "ambiguous";
+    attempts?: number;
   }[] = [];
 
   // eslint-disable-next-line @typescript-eslint/require-await
@@ -199,5 +212,19 @@ export class RecordingMergeQueueEventEmitter implements MergeQueueEventEmitter {
   // eslint-disable-next-line @typescript-eslint/require-await
   async emitDequeued(input: { entry: MergeQueueEntry; reason: "conflict" | "blocked" | "failed" }): Promise<void> {
     this.events.push({ type: "merge.dequeued", specId: input.entry.specId, reason: input.reason });
+  }
+
+  // eslint-disable-next-line @typescript-eslint/require-await
+  async emitInfraBlocked(input: {
+    entry: MergeQueueEntry;
+    kind: "ceiling" | "ambiguous";
+    attempts: number;
+  }): Promise<void> {
+    this.events.push({
+      type: "merge.queue.infra_blocked",
+      specId: input.entry.specId,
+      kind: input.kind,
+      attempts: input.attempts,
+    });
   }
 }

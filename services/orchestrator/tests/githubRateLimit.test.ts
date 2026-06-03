@@ -6,13 +6,15 @@ import { describe, expect, it } from "vitest";
 import {
   FetchGitHubHttpClient,
   GitHubStatusService,
-  MAX_RATE_LIMIT_BACKOFF_MS,
-  MIN_RATE_LIMIT_BACKOFF_MS,
-  rateLimitBackoffMs,
   type GitHubHttpClient,
   type GitHubHttpRequest,
   type GitHubHttpResponse,
 } from "../src/engine/providers/github.js";
+import {
+  MAX_RATE_LIMIT_BACKOFF_MS,
+  MIN_RATE_LIMIT_BACKOFF_MS,
+  rateLimitBackoffMs,
+} from "../src/engine/providers/githubRetry.js";
 
 function headers(map: Record<string, string>): Headers {
   const h = new Headers();
@@ -101,6 +103,41 @@ describe("github required-context awareness (P3-0028)", () => {
       baseBranch: "main",
     });
     expect(required).toBeUndefined();
+  });
+
+  it("THROWS loudly on a 403 (token lacks Administration:read) — never a silent 'no gating'", async () => {
+    // No-silent-fallback: a 403 silently degraded to `undefined` would DISABLE required-
+    // check gating and let a PR merge without its required checks. It must surface loudly.
+    const http = new ScriptedHttp([{ status: 403, body: { message: "Resource not accessible by integration" } }]);
+    await expect(
+      new GitHubStatusService(http).fetchRequiredContexts({
+        repo: { owner: "o", name: "r" },
+        token: "t",
+        baseBranch: "main",
+      }),
+    ).rejects.toThrow(/branch-protection read failed for main: HTTP 403/u);
+  });
+
+  it("retries a transient 5xx then (if persistent) THROWS loudly — not a silent empty", async () => {
+    const slept: number[] = [];
+    let call = 0;
+    const fetchImpl = (async () => {
+      call += 1;
+      // A persistent 504 on the protection read survives the client's transient retry.
+      return new Response("", { status: 504 });
+    }) as unknown as typeof fetch;
+    const client = new FetchGitHubHttpClient({ fetchImpl, sleep: async (ms) => void slept.push(ms) });
+
+    await expect(
+      new GitHubStatusService(client).fetchRequiredContexts({
+        repo: { owner: "o", name: "r" },
+        token: "t",
+        baseBranch: "main",
+      }),
+    ).rejects.toThrow(/branch-protection read failed for main: HTTP 504/u);
+    // The client retried the transient 504 before the persistent failure surfaced.
+    expect(call).toBeGreaterThan(1);
+    expect(slept.length).toBeGreaterThan(0);
   });
 
   it("includes requiredContexts in fetchPullRequestChecks when the base branch is protected", async () => {

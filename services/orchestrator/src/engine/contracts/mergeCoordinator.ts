@@ -215,6 +215,18 @@ export interface MergeQueueModel {
   markMerged(queueId: string): Promise<void>;
 
   /**
+   * GitHub-5xx resilience: RELEASE a claimed entry back to `queued` (merging →
+   * queued) WITHOUT settling it — the entry stays IN the queue. Used when a merge
+   * drive threw a TRANSIENT/infra error (a 5xx/network blip): the PR is NOT blocked
+   * or dequeued (a `done` run would never re-ready, so a `markDequeued("blocked")`
+   * would STRAND a clean PR); instead the claim is released so the subscriber's
+   * delayed re-drive re-picks it once the gateway recovers. Distinct from
+   * `recoverStaleClaims` (which only fires after the 15-min lease) — this releases
+   * IMMEDIATELY. Idempotent: a no-longer-`merging` row is left untouched.
+   */
+  releaseClaim(queueId: string): Promise<void>;
+
+  /**
    * Mark an entry as DEQUEUED (left the queue without merging) with the reason —
    * `conflict`/`blocked` are recoverable (a re-ready run re-enqueues a new entry);
    * `failed` is terminal. The entry is removed from the ready set either way, so a

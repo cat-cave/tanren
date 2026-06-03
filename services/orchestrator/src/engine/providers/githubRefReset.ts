@@ -18,6 +18,7 @@
 
 import type { RepoRef, ResolvedVcsToken } from "../contracts/vcsProvider.js";
 import type { GitHubHttpClient } from "./github.js";
+import { isTransientStatus } from "./githubRetry.js";
 
 function repoApiPath(repo: RepoRef, suffix: string): string {
   return `/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}${suffix}`;
@@ -54,16 +55,24 @@ export class RefResetPermanentError extends Error {
 }
 
 /**
- * True iff `error` is a typed infra error from the provider layer that is RETRIABLE
- * (a transient transport/ref error). The batch coordinator uses this to set the
- * `infra-error` verdict's `retriable` flag accurately: a typed transient → retriable;
- * a typed permanent infra error → not. An UNTYPED thrown value defaults to retriable:
- * the live repro is a transient git-db 422, and a bounded retry then loud hold is safe
- * (it never dequeues); permanence is only asserted via the typed permanent error.
+ * True iff `error` is a RETRIABLE infra error from the provider layer (a transient
+ * transport/ref/merge error). Structural by design — it reads the typed errors'
+ * readonly `retriable` flag rather than enumerating classes, so the ref-reset transients
+ * (`RefResetTransientError`) AND the merge-PUT transients (`MergeTransientError`) both
+ * route to the coordinator's infra-hold, while the typed PERMANENT/AMBIGUOUS errors
+ * (`retriable: false`) do not. The batch coordinator uses it for the `infra-error`
+ * verdict's `retriable` flag; the per-PR coordinator uses it to choose hold-vs-halt.
+ *
+ * An UNTYPED thrown value defaults to RETRIABLE: the live repros are transient (a git-db
+ * 422, a gateway 504), and a bounded hold-then-loud-ceiling is safe (it never strands,
+ * and the hold-attempt ceiling stops an untyped error from looping forever). Permanence
+ * is only asserted via a typed `retriable: false`.
  */
 export function isRetriableInfraError(error: unknown): boolean {
-  if (error instanceof RefResetTransientError) return true;
-  if (error instanceof RefResetPermanentError) return false;
+  if (error instanceof Error) {
+    const flag = (error as { retriable?: unknown }).retriable;
+    if (typeof flag === "boolean") return flag;
+  }
   return true;
 }
 
@@ -154,15 +163,29 @@ async function resetRefOnce(args: {
       return;
     }
     // The force-update did not take. A "does not exist"/"cannot be updated"/422 is a
-    // transient ref-state race (retry self-heals); anything else is permanent.
+    // transient ref-state race (retry self-heals); a 5xx gateway timeout (502/503/504/
+    // 408 — the live 504 repro) is ALSO transient (the HTTP client already retried it;
+    // a raw one reaching here must still self-heal, not be misclassified permanent);
+    // anything else is permanent.
     const updateMessage = bodyMessage(update.body);
-    if (update.status === 422 || /does not exist|cannot be updated/iu.test(updateMessage)) {
+    if (
+      update.status === 422 ||
+      isTransientStatus(update.status) ||
+      /does not exist|cannot be updated/iu.test(updateMessage)
+    ) {
       throw new RefResetTransientError(
         `GitHub integration ref force-update for ${branch} hit a transient HTTP ${update.status}: ${updateMessage || "(no message)"}`,
       );
     }
     throw new RefResetPermanentError(
       `GitHub integration ref force-update for ${branch} failed: HTTP ${update.status}: ${updateMessage || "(no message)"}`,
+    );
+  }
+  // A 5xx gateway failure on the CREATE (502/503/504/408) is transient → retry, never a
+  // permanent block (defense-in-depth: the HTTP client already retries these).
+  if (isTransientStatus(create.status)) {
+    throw new RefResetTransientError(
+      `GitHub integration ref create for ${branch} hit a transient HTTP ${create.status}: ${bodyMessage(create.body) || "(no message)"}`,
     );
   }
   throw new RefResetPermanentError(
