@@ -40,13 +40,16 @@ export class WriteToolAccessDeniedError extends Error {}
 // `tanren.create_spec`
 // ---------------------------------------------------------------------------
 
+// `behaviorIds` / `milestoneId` may arrive as `null` (the OpenAI-strict answerer
+// schema returns null rather than omitting an optional key); `null` is treated
+// identically to an omitted field.
 export interface TanrenCreateSpecArgs {
   projectId: string;
   title: string;
   description: string;
   acceptanceCriteria?: string[];
-  behaviorIds?: string[];
-  milestoneId?: string;
+  behaviorIds?: string[] | null;
+  milestoneId?: string | null;
 }
 
 export async function tanrenCreateSpec(
@@ -76,16 +79,20 @@ export async function tanrenCreateSpec(
   );
   const db = resolveWritableClient(deps.pool);
   const behaviorLinks: Array<{ specId: string; behaviorId: string }> = [];
-  if (args.behaviorIds !== undefined) {
-    for (const behaviorId of args.behaviorIds) {
+  // The answerer schema is OpenAI-strict, so an unset optional arrives as `null`
+  // rather than absent — treat null and undefined the same.
+  const behaviorIds = args.behaviorIds ?? undefined;
+  const milestoneId = args.milestoneId ?? undefined;
+  if (behaviorIds !== undefined) {
+    for (const behaviorId of behaviorIds) {
       await BehaviorStore.linkToSpec(db, { specId: spec.specId, behaviorId }, actor);
       behaviorLinks.push({ specId: spec.specId, behaviorId });
     }
   }
-  if (args.milestoneId !== undefined) {
-    await MilestoneStore.setSpecMilestone(db, { specId: spec.specId, milestoneId: args.milestoneId }, actor);
+  if (milestoneId !== undefined) {
+    await MilestoneStore.setSpecMilestone(db, { specId: spec.specId, milestoneId }, actor);
   }
-  return { ...spec, behaviors: behaviorLinks, milestoneId: args.milestoneId };
+  return { ...spec, behaviors: behaviorLinks, milestoneId };
 }
 
 // ---------------------------------------------------------------------------

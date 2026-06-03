@@ -26,10 +26,10 @@ export const ForgeToolCall = z.discriminatedUnion("tool", [
       tool: z.literal("tanren.read_events"),
       args: z
         .object({
-          runId: z.string().min(1).optional(),
-          specId: z.string().min(1).optional(),
-          since: z.string().min(1).optional(),
-          limit: z.number().int().optional(),
+          runId: z.string().min(1).nullish(),
+          specId: z.string().min(1).nullish(),
+          since: z.string().min(1).nullish(),
+          limit: z.number().int().nullish(),
         })
         .strict(),
     })
@@ -39,8 +39,8 @@ export const ForgeToolCall = z.discriminatedUnion("tool", [
       tool: z.literal("tanren.read_costs"),
       args: z
         .object({
-          runId: z.string().min(1).optional(),
-          since: z.string().min(1).optional(),
+          runId: z.string().min(1).nullish(),
+          since: z.string().min(1).nullish(),
         })
         .strict(),
     })
@@ -104,8 +104,8 @@ export const ForgeToolCall = z.discriminatedUnion("tool", [
           projectId: z.string().min(1),
           title: z.string().min(1),
           description: z.string().min(1),
-          behaviorIds: z.array(z.string().min(1)).optional(),
-          milestoneId: z.string().min(1).optional(),
+          behaviorIds: z.array(z.string().min(1)).nullish(),
+          milestoneId: z.string().min(1).nullish(),
         })
         .strict(),
     })
@@ -151,8 +151,8 @@ export const ForgeWriteToolCall = z.discriminatedUnion("tool", [
           projectId: z.string().min(1),
           title: z.string().min(1),
           description: z.string().min(1),
-          behaviorIds: z.array(z.string().min(1)).optional(),
-          milestoneId: z.string().min(1).optional(),
+          behaviorIds: z.array(z.string().min(1)).nullish(),
+          milestoneId: z.string().min(1).nullish(),
         })
         .strict(),
     })
@@ -220,7 +220,7 @@ export const ForgeAnswer = z
     // executes it — a human approves it through the approve endpoint, which
     // runs the write under the approving operator's authz. Optional so the
     // common (read-only) answer omits it; absent === no proposals.
-    proposedActions: z.array(ForgeProposedAction).optional(),
+    proposedActions: z.array(ForgeProposedAction).nullish(),
   })
   .strict();
 

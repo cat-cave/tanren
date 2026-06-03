@@ -79,23 +79,57 @@
                             "additionalProperties": false,
                             "properties": {
                               "limit": {
-                                "maximum": 9007199254740991,
-                                "minimum": -9007199254740991,
-                                "type": "integer"
+                                "anyOf": [
+                                  {
+                                    "maximum": 9007199254740991,
+                                    "minimum": -9007199254740991,
+                                    "type": "integer"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
                               },
                               "runId": {
-                                "minLength": 1,
-                                "type": "string"
+                                "anyOf": [
+                                  {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
                               },
                               "since": {
-                                "minLength": 1,
-                                "type": "string"
+                                "anyOf": [
+                                  {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
                               },
                               "specId": {
-                                "minLength": 1,
-                                "type": "string"
+                                "anyOf": [
+                                  {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
                               }
                             },
+                            "required": [
+                              "runId",
+                              "specId",
+                              "since",
+                              "limit"
+                            ],
                             "type": "object"
                           },
                           "tool": {
@@ -116,14 +150,32 @@
                             "additionalProperties": false,
                             "properties": {
                               "runId": {
-                                "minLength": 1,
-                                "type": "string"
+                                "anyOf": [
+                                  {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
                               },
                               "since": {
-                                "minLength": 1,
-                                "type": "string"
+                                "anyOf": [
+                                  {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
                               }
                             },
+                            "required": [
+                              "runId",
+                              "since"
+                            ],
                             "type": "object"
                           },
                           "tool": {
@@ -322,19 +374,33 @@
                             "additionalProperties": false,
                             "properties": {
                               "behaviorIds": {
-                                "items": {
-                                  "minLength": 1,
-                                  "type": "string"
-                                },
-                                "type": "array"
+                                "anyOf": [
+                                  {
+                                    "items": {
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "type": "array"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
                               },
                               "description": {
                                 "minLength": 1,
                                 "type": "string"
                               },
                               "milestoneId": {
-                                "minLength": 1,
-                                "type": "string"
+                                "anyOf": [
+                                  {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
                               },
                               "projectId": {
                                 "minLength": 1,
@@ -348,7 +414,9 @@
                             "required": [
                               "projectId",
                               "title",
-                              "description"
+                              "description",
+                              "behaviorIds",
+                              "milestoneId"
                             ],
                             "type": "object"
                           },
@@ -566,23 +634,57 @@
                           "additionalProperties": false,
                           "properties": {
                             "limit": {
-                              "maximum": 9007199254740991,
-                              "minimum": -9007199254740991,
-                              "type": "integer"
+                              "anyOf": [
+                                {
+                                  "maximum": 9007199254740991,
+                                  "minimum": -9007199254740991,
+                                  "type": "integer"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             },
                             "runId": {
-                              "minLength": 1,
-                              "type": "string"
+                              "anyOf": [
+                                {
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             },
                             "since": {
-                              "minLength": 1,
-                              "type": "string"
+                              "anyOf": [
+                                {
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             },
                             "specId": {
-                              "minLength": 1,
-                              "type": "string"
+                              "anyOf": [
+                                {
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             }
                           },
+                          "required": [
+                            "runId",
+                            "specId",
+                            "since",
+                            "limit"
+                          ],
                           "type": "object"
                         },
                         "tool": {
@@ -603,14 +705,32 @@
                           "additionalProperties": false,
                           "properties": {
                             "runId": {
-                              "minLength": 1,
-                              "type": "string"
+                              "anyOf": [
+                                {
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             },
                             "since": {
-                              "minLength": 1,
-                              "type": "string"
+                              "anyOf": [
+                                {
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             }
                           },
+                          "required": [
+                            "runId",
+                            "since"
+                          ],
                           "type": "object"
                         },
                         "tool": {
@@ -809,19 +929,33 @@
                           "additionalProperties": false,
                           "properties": {
                             "behaviorIds": {
-                              "items": {
-                                "minLength": 1,
-                                "type": "string"
-                              },
-                              "type": "array"
+                              "anyOf": [
+                                {
+                                  "items": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "type": "array"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             },
                             "description": {
                               "minLength": 1,
                               "type": "string"
                             },
                             "milestoneId": {
-                              "minLength": 1,
-                              "type": "string"
+                              "anyOf": [
+                                {
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             },
                             "projectId": {
                               "minLength": 1,
@@ -835,7 +969,9 @@
                           "required": [
                             "projectId",
                             "title",
-                            "description"
+                            "description",
+                            "behaviorIds",
+                            "milestoneId"
                           ],
                           "type": "object"
                         },
@@ -980,162 +1116,186 @@
       "type": "array"
     },
     "proposedActions": {
-      "items": {
-        "additionalProperties": false,
-        "properties": {
-          "rationale": {
-            "maxLength": 1000,
-            "minLength": 1,
-            "type": "string"
-          },
-          "toolCall": {
-            "oneOf": [
-              {
-                "additionalProperties": false,
-                "properties": {
-                  "args": {
+      "anyOf": [
+        {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "rationale": {
+                "maxLength": 1000,
+                "minLength": 1,
+                "type": "string"
+              },
+              "toolCall": {
+                "oneOf": [
+                  {
                     "additionalProperties": false,
                     "properties": {
-                      "behaviorIds": {
-                        "items": {
-                          "minLength": 1,
-                          "type": "string"
+                      "args": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "behaviorIds": {
+                            "anyOf": [
+                              {
+                                "items": {
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                "type": "array"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "description": {
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "milestoneId": {
+                            "anyOf": [
+                              {
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "projectId": {
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "title": {
+                            "minLength": 1,
+                            "type": "string"
+                          }
                         },
-                        "type": "array"
+                        "required": [
+                          "projectId",
+                          "title",
+                          "description",
+                          "behaviorIds",
+                          "milestoneId"
+                        ],
+                        "type": "object"
                       },
-                      "description": {
-                        "minLength": 1,
-                        "type": "string"
-                      },
-                      "milestoneId": {
-                        "minLength": 1,
-                        "type": "string"
-                      },
-                      "projectId": {
-                        "minLength": 1,
-                        "type": "string"
-                      },
-                      "title": {
-                        "minLength": 1,
+                      "tool": {
+                        "const": "tanren.create_spec",
                         "type": "string"
                       }
                     },
                     "required": [
-                      "projectId",
-                      "title",
-                      "description"
+                      "tool",
+                      "args"
                     ],
                     "type": "object"
                   },
-                  "tool": {
-                    "const": "tanren.create_spec",
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "tool",
-                  "args"
-                ],
-                "type": "object"
-              },
-              {
-                "additionalProperties": false,
-                "properties": {
-                  "args": {
+                  {
                     "additionalProperties": false,
                     "properties": {
-                      "specId": {
-                        "minLength": 1,
+                      "args": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "specId": {
+                            "minLength": 1,
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "specId"
+                        ],
+                        "type": "object"
+                      },
+                      "tool": {
+                        "const": "tanren.trigger_run",
                         "type": "string"
                       }
                     },
                     "required": [
-                      "specId"
+                      "tool",
+                      "args"
                     ],
                     "type": "object"
                   },
-                  "tool": {
-                    "const": "tanren.trigger_run",
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "tool",
-                  "args"
-                ],
-                "type": "object"
-              },
-              {
-                "additionalProperties": false,
-                "properties": {
-                  "args": {
+                  {
                     "additionalProperties": false,
                     "properties": {
-                      "taskId": {
-                        "minLength": 1,
+                      "args": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "taskId": {
+                            "minLength": 1,
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "taskId"
+                        ],
+                        "type": "object"
+                      },
+                      "tool": {
+                        "const": "tanren.rerun_task",
                         "type": "string"
                       }
                     },
                     "required": [
-                      "taskId"
+                      "tool",
+                      "args"
                     ],
                     "type": "object"
                   },
-                  "tool": {
-                    "const": "tanren.rerun_task",
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "tool",
-                  "args"
-                ],
-                "type": "object"
-              },
-              {
-                "additionalProperties": false,
-                "properties": {
-                  "args": {
+                  {
                     "additionalProperties": false,
                     "properties": {
-                      "insightId": {
-                        "minLength": 1,
+                      "args": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "insightId": {
+                            "minLength": 1,
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "insightId"
+                        ],
+                        "type": "object"
+                      },
+                      "tool": {
+                        "const": "tanren.acknowledge_insight",
                         "type": "string"
                       }
                     },
                     "required": [
-                      "insightId"
+                      "tool",
+                      "args"
                     ],
                     "type": "object"
-                  },
-                  "tool": {
-                    "const": "tanren.acknowledge_insight",
-                    "type": "string"
                   }
-                },
-                "required": [
-                  "tool",
-                  "args"
-                ],
-                "type": "object"
+                ]
               }
-            ]
-          }
+            },
+            "required": [
+              "toolCall",
+              "rationale"
+            ],
+            "type": "object"
+          },
+          "type": "array"
         },
-        "required": [
-          "toolCall",
-          "rationale"
-        ],
-        "type": "object"
-      },
-      "type": "array"
+        {
+          "type": "null"
+        }
+      ]
     }
   },
   "required": [
     "body",
     "attentionItems",
     "insights",
-    "prompts"
+    "prompts",
+    "proposedActions"
   ],
   "type": "object",
   "x-tanren-schema-id": "tanren.forge_answer.v1"
