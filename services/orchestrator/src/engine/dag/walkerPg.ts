@@ -13,10 +13,11 @@
 //     dollar-budget pause) / dag.concurrency.saturated (the slot-saturation hold)
 //     through the single org-scoped event-writer seam.
 
-import { runWithOrgScope, runWithSystemScope } from "@tanren/db";
+import { runWithJobOrgId, runWithOrgScope, runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
 import type { ActorContext } from "../../auth/schemas.js";
 import type { BudgetPeriod, SpeculationThreshold } from "../config/index.js";
+import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type {
   DagEnqueuer,
   DagReadModel,
@@ -25,7 +26,7 @@ import type {
   DagSpecPhase,
   DagTickPlan,
 } from "../contracts/dagWalker.js";
-import { PgEventStore } from "../eventStore.js";
+import { type EventStore, PgEventStore } from "../eventStore.js";
 import { SpecPriority } from "../state/spec.js";
 import { createQueuedRunFromSpec } from "../workflow/projectSpec.js";
 
@@ -136,7 +137,16 @@ export class PgDagReadModel implements DagReadModel {
  * can never double-enqueue it.
  */
 export class SpecRunDagEnqueuer implements DagEnqueuer {
-  constructor(private readonly pool: pg.Pool) {}
+  /**
+   * @param runStateWriter Plane-split (autonomy loops): when present, the
+   *   run-CREATION transaction routes through the control plane (the de-privileged
+   *   data plane can no longer write `runs`/`specs`/`tasks`/`events` directly);
+   *   absent, `createQueuedRunFromSpec` runs in-process — byte-identical to today.
+   */
+  constructor(
+    private readonly pool: pg.Pool,
+    private readonly runStateWriter?: RunStateWriter,
+  ) {}
 
   async enqueueSpecRun(input: {
     projectId: string;
@@ -161,25 +171,28 @@ export class SpecRunDagEnqueuer implements DagEnqueuer {
       scopes: ["platform:admin"],
       source: "local_dev",
     };
-    const run = await createQueuedRunFromSpec(
-      this.pool,
-      {
-        specId: input.specId,
-        trigger: "dag_walker",
-        // A speculative start skips the done-only dependency gate and records the
-        // integration branch as the run's dynamic base + the per-ancestor head SHA
-        // map (the change-percolation divergence key, P2c-2).
-        ...(input.speculativeBase !== undefined && {
-          speculative: {
-            speculativeBase: input.speculativeBase,
-            ...(input.integratedAncestorShas !== undefined && {
-              integratedAncestorShas: input.integratedAncestorShas,
-            }),
-          },
-        }),
-      },
-      actor,
-    );
+    const createInput = {
+      specId: input.specId,
+      trigger: "dag_walker",
+      // A speculative start skips the done-only dependency gate and records the
+      // integration branch as the run's dynamic base + the per-ancestor head SHA
+      // map (the change-percolation divergence key, P2c-2).
+      ...(input.speculativeBase !== undefined && {
+        speculative: {
+          speculativeBase: input.speculativeBase,
+          ...(input.integratedAncestorShas !== undefined && {
+            integratedAncestorShas: input.integratedAncestorShas,
+          }),
+        },
+      }),
+    };
+    // Plane-split: route the full multi-table run-CREATE transaction through the
+    // control plane when a writer is wired; else create it in-process on the pool.
+    // Both run the SAME `createQueuedRunFromSpec` under the actor's org scope.
+    const run =
+      this.runStateWriter === undefined
+        ? await createQueuedRunFromSpec(this.pool, createInput, actor)
+        : await this.runStateWriter.createQueuedRun({ input: createInput, actor });
     return { runId: run.runId };
   }
 }
@@ -233,9 +246,18 @@ interface DagEventEmitter {
  * eventStore admits a project-only append (run_id/spec_id are nullable columns).
  */
 export class PgDagEventEmitter implements DagEventEmitter {
-  constructor(private readonly pool: pg.Pool) {}
+  /**
+   * @param runStateWriter Plane-split (autonomy loops): when present, dag.* events
+   *   append through the control-plane writer (the de-privileged data plane can no
+   *   longer write `events` directly); absent, they append in-process via the
+   *   org-scoped `PgEventStore` — byte-identical to today.
+   */
+  constructor(
+    private readonly pool: pg.Pool,
+    private readonly runStateWriter?: RunStateWriter,
+  ) {}
 
-  private async withScopedStore(projectId: string, work: (store: PgEventStore) => Promise<void>): Promise<void> {
+  private async withScopedStore(projectId: string, work: (store: EventStore) => Promise<void>): Promise<void> {
     const orgId = await runWithSystemScope(this.pool, async (client) => {
       const result = await client.query<{ org_id: string | null }>(
         "SELECT org_id FROM projects WHERE project_id = $1",
@@ -244,6 +266,15 @@ export class PgDagEventEmitter implements DagEventEmitter {
       return result.rows[0]?.org_id ?? null;
     });
     if (orgId === null) return;
+    // Plane-split: when a writer is wired, route the append through the control
+    // plane — the writer's `append` resolves the run's org from the ambient
+    // per-job org-id, so set it for the duration of the append. Absent, append
+    // in-process under a short org scope (byte-identical to today).
+    if (this.runStateWriter !== undefined) {
+      const writer = this.runStateWriter;
+      await runWithJobOrgId(orgId, () => work(writer));
+      return;
+    }
     await runWithOrgScope(this.pool, orgId, (client) => work(new PgEventStore(client)));
   }
 

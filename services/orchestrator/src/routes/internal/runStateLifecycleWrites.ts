@@ -21,9 +21,14 @@ import { runWithOrgScope } from "@tanren/db";
 import type { Context, Hono } from "hono";
 import { z } from "zod";
 import {
+  applyClearRunPercolationPending,
   applyInsertTask,
+  applyMergeRunVerifiedAncestorSha,
+  applySetRunPercolationReexecId,
   applySetRunPrUrl,
+  applySetRunSpeculativeBase,
   applySetRunStatus,
+  applySetSpecMetadata,
   applySetSpecStatus,
   applySupersedeQueuedPlannerTask,
   applyUpdateTask,
@@ -47,6 +52,37 @@ const setSpecStatusSchema = z.object({
   specId: z.string().min(1),
   orgId: z.string().min(1),
   status: z.string().min(1),
+  notFromStatuses: z.array(z.string().min(1)).optional(),
+});
+
+const setSpecMetadataSchema = z.object({
+  specId: z.string().min(1),
+  orgId: z.string().min(1),
+  metadataJson: z.string(),
+});
+
+const setRunSpeculativeBaseSchema = z.object({
+  runId: z.string().min(1),
+  orgId: z.string().min(1),
+  speculativeBase: z.string().min(1),
+});
+
+const setRunPercolationReexecIdSchema = z.object({
+  runId: z.string().min(1),
+  orgId: z.string().min(1),
+  reexecRunId: z.string().min(1),
+});
+
+const clearRunPercolationPendingSchema = z.object({
+  runId: z.string().min(1),
+  orgId: z.string().min(1),
+});
+
+const mergeRunVerifiedAncestorShaSchema = z.object({
+  runId: z.string().min(1),
+  orgId: z.string().min(1),
+  ancestorSpecId: z.string().min(1),
+  entryJson: z.string(),
 });
 
 const supersedeSchema = z.object({
@@ -130,6 +166,72 @@ export function registerRunStateLifecycleRoutes(app: Hono, deps: RunStateWriteRo
       return c.json({ error: "invalid_set_spec_status", issues: parsed.error.issues }, 400);
     }
     await runWithOrgScope(deps.pool, parsed.data.orgId, (client) => applySetSpecStatus(client, parsed.data));
+    return c.body(null, 204);
+  });
+
+  app.post("/internal/set-spec-metadata", async (c) => {
+    if (!authnPeer(c)) {
+      return c.json({ error: "untrusted_peer" }, 401);
+    }
+    const parsed = setSpecMetadataSchema.safeParse(await c.req.json().catch(() => {}));
+    if (!parsed.success) {
+      return c.json({ error: "invalid_set_spec_metadata", issues: parsed.error.issues }, 400);
+    }
+    await runWithOrgScope(deps.pool, parsed.data.orgId, (client) => applySetSpecMetadata(client, parsed.data));
+    return c.body(null, 204);
+  });
+
+  app.post("/internal/set-run-speculative-base", async (c) => {
+    if (!authnPeer(c)) {
+      return c.json({ error: "untrusted_peer" }, 401);
+    }
+    const parsed = setRunSpeculativeBaseSchema.safeParse(await c.req.json().catch(() => {}));
+    if (!parsed.success) {
+      return c.json({ error: "invalid_set_run_speculative_base", issues: parsed.error.issues }, 400);
+    }
+    await runWithOrgScope(deps.pool, parsed.data.orgId, (client) => applySetRunSpeculativeBase(client, parsed.data));
+    return c.body(null, 204);
+  });
+
+  app.post("/internal/set-run-percolation-reexec-id", async (c) => {
+    if (!authnPeer(c)) {
+      return c.json({ error: "untrusted_peer" }, 401);
+    }
+    const parsed = setRunPercolationReexecIdSchema.safeParse(await c.req.json().catch(() => {}));
+    if (!parsed.success) {
+      return c.json({ error: "invalid_set_run_percolation_reexec_id", issues: parsed.error.issues }, 400);
+    }
+    await runWithOrgScope(deps.pool, parsed.data.orgId, (client) =>
+      applySetRunPercolationReexecId(client, parsed.data),
+    );
+    return c.body(null, 204);
+  });
+
+  app.post("/internal/clear-run-percolation-pending", async (c) => {
+    if (!authnPeer(c)) {
+      return c.json({ error: "untrusted_peer" }, 401);
+    }
+    const parsed = clearRunPercolationPendingSchema.safeParse(await c.req.json().catch(() => {}));
+    if (!parsed.success) {
+      return c.json({ error: "invalid_clear_run_percolation_pending", issues: parsed.error.issues }, 400);
+    }
+    await runWithOrgScope(deps.pool, parsed.data.orgId, (client) =>
+      applyClearRunPercolationPending(client, parsed.data),
+    );
+    return c.body(null, 204);
+  });
+
+  app.post("/internal/merge-run-verified-ancestor-sha", async (c) => {
+    if (!authnPeer(c)) {
+      return c.json({ error: "untrusted_peer" }, 401);
+    }
+    const parsed = mergeRunVerifiedAncestorShaSchema.safeParse(await c.req.json().catch(() => {}));
+    if (!parsed.success) {
+      return c.json({ error: "invalid_merge_run_verified_ancestor_sha", issues: parsed.error.issues }, 400);
+    }
+    await runWithOrgScope(deps.pool, parsed.data.orgId, (client) =>
+      applyMergeRunVerifiedAncestorSha(client, parsed.data),
+    );
     return c.body(null, 204);
   });
 

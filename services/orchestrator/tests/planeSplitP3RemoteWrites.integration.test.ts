@@ -338,4 +338,116 @@ describeDb("plane-split P3 — control-plane run-state write endpoints (real PG,
     );
     expect(ev.rows[0]?.org_id).toBe(ORG);
   });
+
+  // (6) The AUTONOMY-LOOP create path: the DagWalker / merge-conflict-reexec / intake
+  // CREATE a queued run through `/internal/create-queued-run`. Prove the endpoint runs
+  // the full multi-table createQueuedRunFromSpec server-side (INSERT runs + claim spec
+  // + INSERT tasks + job_queue + run.queued/task.queued events), org-scoped under RLS —
+  // the write the de-privileged data plane can no longer do directly.
+  it("(6) create-queued-run creates the run + claims the spec + emits run.queued, server-side org-scoped", async () => {
+    const specId = `${SPEC}_walk`;
+    // Seed a fresh PENDING spec (the walker only enqueues pending specs) as the owner.
+    await ownerPool.query(
+      `INSERT INTO organizations (id, kind, external_id, login, display_name, config)
+       VALUES ($1, 'oidc', $1, $1, $1, '{"version":1}'::jsonb) ON CONFLICT (id) DO NOTHING`,
+      [ORG],
+    );
+    // The project must carry a versioned config — `createQueuedRunFromSpec` reads it.
+    await ownerPool.query(
+      `INSERT INTO projects (project_id, name, repo_url, org_id, config)
+       VALUES ($1, 'p', 'https://example.com/r.git', $2, '{"version":1}'::jsonb)
+       ON CONFLICT (project_id) DO UPDATE SET config = EXCLUDED.config`,
+      [PROJECT, ORG],
+    );
+    await ownerPool.query(
+      `INSERT INTO specs (spec_id, project_id, org_id, title, description, status)
+       VALUES ($1, $2, $3, 'walk spec', 'd', 'pending')`,
+      [specId, PROJECT, ORG],
+    );
+    const app = createInternalRunStateWriteRoutes({ pool: runtimePool, verifier: new AllowAllPeerVerifier() });
+    const writer = new HttpRunStateWriter("https://control.internal:3110", fetchInto(app));
+
+    const run = await writer.createQueuedRun({
+      input: { specId, trigger: "dag_walker" },
+      actor: { userId: "dag-walker", orgId: ORG, projectId: PROJECT, scopes: ["platform:admin"], source: "local_dev" },
+    });
+
+    expect(run.runId).toMatch(/^run_/u);
+    // The run row landed server-side, org-scoped.
+    const runRow = await ownerPool.query<{ org_id: string; status: string }>(
+      "SELECT org_id, status FROM runs WHERE run_id = $1",
+      [run.runId],
+    );
+    expect(runRow.rows[0]).toMatchObject({ org_id: ORG, status: "queued" });
+    // The spec was claimed pending→active inside the same transaction.
+    const specRow = await ownerPool.query<{ status: string }>("SELECT status FROM specs WHERE spec_id = $1", [specId]);
+    expect(specRow.rows[0]?.status).toBe("active");
+    // The run.queued event was appended (the walker's run-creation timeline).
+    const ev = await ownerPool.query("SELECT 1 FROM events WHERE run_id = $1 AND event_type = 'run.queued'", [
+      run.runId,
+    ]);
+    expect(ev.rowCount).toBe(1);
+  });
+
+  // (7) The intake auto-route's provenance stamp: `/internal/set-spec-metadata` runs
+  // the `UPDATE specs SET metadata` server-side under RLS — the write the de-privileged
+  // data plane can no longer do directly.
+  it("(7) set-spec-metadata writes the spec metadata server-side, org-scoped", async () => {
+    const specId = `${SPEC}_meta`;
+    await ownerPool.query(
+      `INSERT INTO specs (spec_id, project_id, org_id, title, description, status)
+       VALUES ($1, $2, $3, 'meta spec', 'd', 'pending')`,
+      [specId, PROJECT, ORG],
+    );
+    const app = createInternalRunStateWriteRoutes({ pool: runtimePool, verifier: new AllowAllPeerVerifier() });
+    const writer = new HttpRunStateWriter("https://control.internal:3110", fetchInto(app));
+
+    await writer.setSpecMetadata({
+      specId,
+      orgId: ORG,
+      metadataJson: JSON.stringify({ discovery: { from: "intake" } }),
+    });
+
+    const row = await ownerPool.query<{ metadata: { discovery?: { from?: string } } }>(
+      "SELECT metadata FROM specs WHERE spec_id = $1",
+      [specId],
+    );
+    expect(row.rows[0]?.metadata?.discovery?.from).toBe("intake");
+  });
+
+  // (8) The change-percolation run-column writes (part of the DagWalker loop): the
+  // bespoke `UPDATE runs SET <jsonb>` ops the de-privileged data plane can no longer
+  // run directly. Prove each endpoint performs the SAME server-side write, org-scoped.
+  it("(8) the change-percolation run-column endpoints write runs server-side, org-scoped", async () => {
+    const runId = "run_p3_percolation";
+    await seedRun(runId, "running");
+    const app = createInternalRunStateWriteRoutes({ pool: runtimePool, verifier: new AllowAllPeerVerifier() });
+    const writer = new HttpRunStateWriter("https://control.internal:3110", fetchInto(app));
+
+    await writer.setRunSpeculativeBase({ runId, orgId: ORG, speculativeBase: "tanren/integ/x" });
+    await writer.setRunPercolationReexecId({ runId, orgId: ORG, reexecRunId: "run_reexec" });
+    await writer.mergeRunVerifiedAncestorSha({
+      runId,
+      orgId: ORG,
+      ancestorSpecId: "spec_anc",
+      entryJson: JSON.stringify({ sha: "deadbeef", reviewVerdict: "approved" }),
+    });
+
+    const row = await ownerPool.query<{
+      speculative_base: string;
+      percolation_pending: { reexecRunId?: string };
+      verified_ancestor_shas: Record<string, { sha?: string; reviewVerdict?: string }>;
+    }>("SELECT speculative_base, percolation_pending, verified_ancestor_shas FROM runs WHERE run_id = $1", [runId]);
+    expect(row.rows[0]?.speculative_base).toBe("tanren/integ/x");
+    expect(row.rows[0]?.percolation_pending?.reexecRunId).toBe("run_reexec");
+    expect(row.rows[0]?.verified_ancestor_shas?.spec_anc).toMatchObject({ sha: "deadbeef", reviewVerdict: "approved" });
+
+    // And the clear endpoint drops the marker.
+    await writer.clearRunPercolationPending({ runId, orgId: ORG });
+    const cleared = await ownerPool.query<{ percolation_pending: unknown }>(
+      "SELECT percolation_pending FROM runs WHERE run_id = $1",
+      [runId],
+    );
+    expect(cleared.rows[0]?.percolation_pending).toBeNull();
+  });
 });

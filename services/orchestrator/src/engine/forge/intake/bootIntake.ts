@@ -6,6 +6,7 @@
 
 import type pg from "pg";
 import type { Allocator } from "../../contracts/allocator.js";
+import type { RunStateWriter } from "../../contracts/runStateWriter.js";
 import type { SecretStore } from "../../contracts/secretStore.js";
 import type { SshSubstrate } from "../../contracts/sshSubstrate.js";
 import type { GitHubHttpClient } from "../../providers/github.js";
@@ -22,6 +23,13 @@ export interface BootIntakeDeps {
   ssh: SshSubstrate;
   githubHttp: GitHubHttpClient;
   identitySecretRef: string;
+  /**
+   * Plane-split (autonomy loops): the control-plane run-state writer. When present
+   * (remote-writes on), the intake auto-route's spec INSERT + provenance UPDATE
+   * route through the control plane (the de-privileged data plane can no longer
+   * write `specs` directly); absent, direct on the pool — byte-identical to today.
+   */
+  runStateWriter?: RunStateWriter;
 }
 
 export interface BootedIntake {
@@ -45,7 +53,7 @@ export function startIntake(deps: BootIntakeDeps): BootedIntake {
     ssh: deps.ssh,
     identitySecretRef: deps.identitySecretRef,
   });
-  const autoRoute = intakeAutoRouteDeps();
+  const autoRoute = intakeAutoRouteDeps(deps.runStateWriter);
 
   const poller = new IntakePoller({
     pool: deps.pool,

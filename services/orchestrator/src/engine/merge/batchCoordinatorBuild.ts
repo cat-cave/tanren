@@ -47,6 +47,8 @@ async function resolveMaxBatchSize(pool: pg.Pool, projectId: string): Promise<nu
 export function buildBatchMergeCoordinator(deps: BuildMergeCoordinatorDeps): MergeCoordinator {
   return new BatchMergeCoordinator({
     queue: new PgMergeQueueModel(deps.pool),
+    // `buildDriveMerge(deps)` already threads `deps.runStateWriter` into the merge
+    // stage + the spec-status finalize + the conflict re-execution.
     runner: new PgMergeRunner(buildDriveMerge(deps)),
     checker: new PgBatchChecker({
       pool: deps.pool,
@@ -54,8 +56,10 @@ export function buildBatchMergeCoordinator(deps: BuildMergeCoordinatorDeps): Mer
       secrets: deps.secrets,
       ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
     }),
-    events: new PgMergeQueueEventEmitter(deps.pool),
-    batchEvents: new PgBatchMergeEventEmitter(deps.pool),
+    // Plane-split: route the queue/batch event emissions through the control plane
+    // when wired; else direct on the pool (byte-identical).
+    events: new PgMergeQueueEventEmitter(deps.pool, deps.runStateWriter),
+    batchEvents: new PgBatchMergeEventEmitter(deps.pool, deps.runStateWriter),
     resolveMaxBatchSize: (projectId) => resolveMaxBatchSize(deps.pool, projectId),
   });
 }

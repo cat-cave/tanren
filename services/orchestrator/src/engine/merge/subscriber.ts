@@ -20,6 +20,7 @@
 import { RUN_ACTIVITY_CHANNEL, type PgNotifyListener, runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
 import type { MergeCoordinator } from "../contracts/mergeCoordinator.js";
+import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { VcsProvider } from "../contracts/vcsProvider.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
@@ -33,6 +34,14 @@ export interface MergeCoordinatorSubscriberDeps {
   secrets?: SecretStore;
   vcsProvider?: VcsProvider;
   githubAppMinter?: GithubAppTokenMinter;
+  /**
+   * Plane-split (autonomy loops): the control-plane run-state writer. When present
+   * (remote-writes on), the production coordinator routes EVERY tenant write it
+   * drives (merge-stage events/tasks/runs/specs, spec-status finalize, conflict
+   * re-exec, queue/batch events) through the control plane; absent, direct on the
+   * pool (byte-identical). Only consulted when `coordinator` is not injected.
+   */
+  runStateWriter?: RunStateWriter;
   /**
    * The coordinator to drive. Defaults to the production
    * `buildMergeCoordinator(...)`. A test injects a recording coordinator to assert
@@ -92,6 +101,9 @@ export class MergeCoordinatorSubscriber {
       secrets,
       vcsProvider,
       ...(this.deps.githubAppMinter !== undefined && { githubAppMinter: this.deps.githubAppMinter }),
+      // Plane-split: route every coordinator-driven tenant write through the
+      // control plane when wired; else direct on the pool (byte-identical).
+      ...(this.deps.runStateWriter !== undefined && { runStateWriter: this.deps.runStateWriter }),
     });
   }
 

@@ -158,6 +158,22 @@ describeDb("plane-split P3c — the de-privileged run/spec/task lifecycle writes
     expect(still.rows[0]).toMatchObject({ status: "queued" });
   });
 
+  // (a2) The AUTONOMY-LOOP create path: a direct `INSERT INTO runs` (the DagWalker /
+  // merge-conflict-reexec / intake run-CREATE) by the data-plane role is rejected for
+  // the privilege too — the grant is gone, so the loop MUST route createQueuedRun
+  // through the control plane's `/internal/create-queued-run`.
+  it("(a2) REJECTS a direct INSERT INTO runs (the autonomy-loop run-CREATE) by the data-plane role", async () => {
+    await expect(
+      inOrgScope(dataPlanePool, (client) =>
+        client.query(
+          `INSERT INTO runs (run_id, spec_id, project_id, org_id, trigger, branch, status)
+           VALUES ($1, $2, $3, $4, 'dag_walker', 'b', 'queued')`,
+          [`${RUN}_walk`, SPEC, PROJECT, ORG],
+        ),
+      ),
+    ).rejects.toMatchObject({ code: "42501" });
+  });
+
   // (b) Same de-privilege on the spec status move (`in_flight`).
   it("(b) REJECTS a direct UPDATE specs (in_flight) by the data-plane role", async () => {
     await expect(

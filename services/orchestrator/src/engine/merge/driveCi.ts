@@ -6,6 +6,7 @@
 // a failed/timed-out poll holds the merge (so an unverified rebase never merges).
 
 import type pg from "pg";
+import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { VcsProvider } from "../contracts/vcsProvider.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
@@ -16,6 +17,11 @@ import type { ReGateCiHook } from "../workflow/reviewMerge/index.js";
 export interface BuildReGateCiForQueuedRunDeps {
   pool: pg.Pool;
   eventStore?: EventStore;
+  /**
+   * Plane-split (autonomy loops): route the re-gate CI poll's `tasks` writes
+   * through the control plane when wired (else direct on the pool — byte-identical).
+   */
+  runStateWriter?: RunStateWriter;
   secrets: SecretStore;
   vcsProvider: VcsProvider;
   runId: string;
@@ -29,6 +35,7 @@ export function buildReGateCiForQueuedRun(deps: BuildReGateCiForQueuedRunDeps): 
     const result = await pollCiForRun({
       pool: deps.pool,
       eventStore: deps.eventStore ?? new PgEventStore(deps.pool),
+      ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
       secrets: deps.secrets,
       vcsProvider: deps.vcsProvider,
       runId: deps.runId,

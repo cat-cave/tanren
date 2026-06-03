@@ -24,6 +24,8 @@
 import type { AppendEventInput, EventStore } from "../eventStore.js";
 import type { CostRecordContext, RecordedCost } from "../costs/recorder.js";
 import type { TokenUsage } from "../providers/types.js";
+import type { ActorContext } from "../../auth/schemas.js";
+import type { CreateSpecInput, CreateSpecRunInput, SpecContract, SpecRunContract } from "../workflow/projectSpec.js";
 
 /** A run-finalize transition the worker drives at run end / failure. */
 export interface FinalizeRunInput {
@@ -85,11 +87,72 @@ export interface SetRunPrUrlInput {
   prUrl: string;
 }
 
+// --- Change-percolation (the DagWalker loop's §2c run-column writes). ---
+//
+// The change-percolation coordinator (part of the DagWalker subscriber loop) drives
+// a handful of bespoke `UPDATE runs SET <jsonb column>` writes the de-privileged data
+// plane can no longer run directly (migration 0035). Each carries the run's explicit
+// org (the coordinator resolves it system-scoped) so the control-plane write is
+// org-scoped server-side. WHAT GETS WRITTEN is byte-identical to the in-process SQL.
+
+/** Re-point a speculative run's dynamic base onto the rebuilt integration branch. */
+export interface SetRunSpeculativeBaseInput {
+  runId: string;
+  orgId: string;
+  speculativeBase: string;
+}
+
+/** Stamp the percolation re-execution run id onto the dependent run's in-flight marker. */
+export interface SetRunPercolationReexecIdInput {
+  runId: string;
+  orgId: string;
+  reexecRunId: string;
+}
+
+/** Clear the in-flight percolation marker once a percolation settled (absorbed/replan). */
+export interface ClearRunPercolationPendingInput {
+  runId: string;
+  orgId: string;
+}
+
+/** Merge ONE ancestor's re-gated-clean (ABSORBED) SHA + verdict into `verified_ancestor_shas`. */
+export interface MergeRunVerifiedAncestorShaInput {
+  runId: string;
+  orgId: string;
+  ancestorSpecId: string;
+  /** The pre-serialized `{ sha, reviewVerdict? }` jsonb value for this ancestor. */
+  entryJson: string;
+}
+
+/**
+ * The `UPDATE specs SET metadata` the autonomous INTAKE drives when it stamps
+ * discovery provenance onto an auto-routed spec (`writeProvenance`). A direct
+ * `UPDATE specs` from the de-privileged data plane is rejected (migration 0035),
+ * so the intake routes this through the control plane. The caller has already
+ * merged + serialized the full metadata blob (the existing `writeProvenance`
+ * read-merge-write), so this carries the final JSON to write verbatim.
+ */
+export interface SetSpecMetadataInput {
+  specId: string;
+  orgId: string;
+  /** The fully-merged metadata JSON to write (`::jsonb`). */
+  metadataJson: string;
+}
+
 /** The `UPDATE specs SET status` the workflow drives (`in_flight` / merge-outcome). */
 export interface SetSpecStatusInput {
   specId: string;
   orgId: string;
   status: string;
+  /**
+   * Optional idempotency guard: when set, the UPDATE applies only when the spec's
+   * current status is NOT one of these (`WHERE status <> ALL(...)`). The merge
+   * coordinator's `merged` finalize + its conflict reopen carry this so a spec
+   * already in a terminal-good state (`merged`/`done`) is not clobbered —
+   * preserving the in-process guard exactly. Omitted ⇒ an unguarded set (the
+   * workflow's `in_flight` transition, unchanged).
+   */
+  notFromStatuses?: string[];
 }
 
 /**
@@ -176,6 +239,39 @@ export interface ReconcileCostInput {
 }
 
 /**
+ * Plane-split (autonomy loops): the run-CREATE write the autonomous loops drive —
+ * the DagWalker enqueuing a ready spec, the merge coordinator re-executing a
+ * conflicting spec, and the intake re-running a routed spec. Unlike the run
+ * EXECUTOR (which only UPDATES/finalizes an EXISTING run), these loops CREATE a
+ * queued run — a single atomic multi-table transaction (INSERT runs + UPDATE
+ * specs + INSERT tasks + INSERT job_queue + 2 events) that `createQueuedRunFromSpec`
+ * performs. The de-privileged data plane can no longer write `runs`/`specs`/`tasks`/
+ * `events` directly (migrations 0031/0035), so this op routes the whole transaction
+ * through the control plane.
+ *
+ * Carries the resolved `actor` (a `platform:admin` actor whose `orgId` the loop
+ * resolved system-scoped) so the server-side `createQueuedRunFromSpec` runs the
+ * SAME org-scoped transaction the loop would have run in-process.
+ */
+export interface CreateQueuedRunInput {
+  input: CreateSpecRunInput;
+  actor: ActorContext;
+}
+
+/**
+ * Plane-split (autonomy loops): the spec-CREATE write the autonomous INTAKE drives
+ * — an `auto_routable` ingested item whose triage routes a brand-new spec into the
+ * DAG (`createSpec`). A direct `INSERT INTO specs` from the de-privileged data
+ * plane is rejected (migration 0035), so the auto-route insert routes through the
+ * control plane. Carries the resolved `actor` so the server-side `createSpec` runs
+ * under the SAME org scope.
+ */
+export interface CreateSpecRemoteInput {
+  input: CreateSpecInput;
+  actor: ActorContext;
+}
+
+/**
  * The worker's run-state write surface. The worker (and the workflow it drives)
  * route every tenant run-state write through this seam so a deployment can move
  * those writes behind the control plane (remote) or keep them in-process
@@ -218,6 +314,23 @@ export interface RunStateWriter extends EventStore {
   /** The `UPDATE specs SET status` (`in_flight` / merge-outcome). */
   setSpecStatus(input: SetSpecStatusInput): Promise<void>;
 
+  /** The `UPDATE specs SET metadata` (the intake's discovery-provenance stamp). */
+  setSpecMetadata(input: SetSpecMetadataInput): Promise<void>;
+
+  // --- Change-percolation (the DagWalker loop's §2c run-column writes). ---
+
+  /** Re-point a speculative run's dynamic base onto the rebuilt integration branch. */
+  setRunSpeculativeBase(input: SetRunSpeculativeBaseInput): Promise<void>;
+
+  /** Stamp the percolation re-execution run id onto the dependent's in-flight marker. */
+  setRunPercolationReexecId(input: SetRunPercolationReexecIdInput): Promise<void>;
+
+  /** Clear the in-flight percolation marker once a percolation settled. */
+  clearRunPercolationPending(input: ClearRunPercolationPendingInput): Promise<void>;
+
+  /** Merge ONE ancestor's absorbed SHA + verdict into `verified_ancestor_shas`. */
+  mergeRunVerifiedAncestorSha(input: MergeRunVerifiedAncestorShaInput): Promise<void>;
+
   /**
    * Cancel the vestigial queued `plan` task the spec-run trigger pre-created (the
    * workflow opens its own planner task). A guarded bulk UPDATE; org from the
@@ -230,4 +343,19 @@ export interface RunStateWriter extends EventStore {
 
   /** Move one `tasks` row through a named lifecycle transition by `task_id`. */
   updateTask(input: UpdateTaskInput): Promise<void>;
+
+  // --- Autonomy loops: the run/spec CREATE writes (explicit-actor, multi-table). ---
+
+  /**
+   * Create a queued run from a ready spec (the DagWalker enqueue, the merge
+   * coordinator's conflict re-execution, the intake re-run). The full atomic
+   * `createQueuedRunFromSpec` transaction, run under the actor's org scope.
+   */
+  createQueuedRun(input: CreateQueuedRunInput): Promise<SpecRunContract>;
+
+  /**
+   * Create a new spec (the autonomous intake auto-route insert). The
+   * `createSpec` insert, run under the actor's org scope.
+   */
+  createSpec(input: CreateSpecRemoteInput): Promise<SpecContract>;
 }

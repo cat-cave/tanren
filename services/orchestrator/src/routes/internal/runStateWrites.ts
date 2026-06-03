@@ -26,6 +26,7 @@ import { CostRecorder } from "../../engine/costs/recorder.js";
 import { PgEventStore } from "../../engine/eventStore.js";
 import { verifyInternalPeer, type RunStateWriteRouteDeps } from "./internalWriteShared.js";
 import { registerRunStateLifecycleRoutes } from "./runStateLifecycleWrites.js";
+import { registerRunStateCreateRoutes } from "./runStateCreateWrites.js";
 
 export type { RunStateWriteRouteDeps } from "./internalWriteShared.js";
 
@@ -180,6 +181,12 @@ export function createInternalRunStateWriteRoutes(deps: RunStateWriteRouteDeps):
   // update-task). Kept in a sibling module so this file stays under the 500-line
   // cap; they share the same authn + `runWithOrgScope` + fixed-SQL contract.
   registerRunStateLifecycleRoutes(app, deps);
+
+  // Plane-split (autonomy loops): the run/spec CREATE endpoints (create-queued-run,
+  // create-spec) the DagWalker / merge coordinator / intake POST instead of writing
+  // the runs/specs/tasks/events tables directly. Same authn + the loop's own
+  // `createQueuedRunFromSpec` / `createSpec` (org-scoped from the carried actor).
+  registerRunStateCreateRoutes(app, deps);
 
   return app;
 }
