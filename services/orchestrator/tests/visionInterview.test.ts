@@ -43,7 +43,13 @@ interface StubState {
   specBehaviors: number;
 }
 
-function stubPool(): { pool: pg.Pool; state: StubState } {
+function stubPool(): {
+  pool: pg.Pool;
+  state: StubState;
+  // FINDING #1: the persisted project config blob, captured per projectId from the
+  // `INSERT INTO projects` call (config is the 7th column → params[6], JSON text).
+  configs: Map<string, Record<string, unknown>>;
+} {
   const state: StubState = {
     projects: new Set(),
     specs: new Map(),
@@ -53,11 +59,16 @@ function stubPool(): { pool: pg.Pool; state: StubState } {
     specMilestones: 0,
     specBehaviors: 0,
   };
+  const configs = new Map<string, Record<string, unknown>>();
   const personaIds = new Set<string>();
   const query = async (text: string, params: unknown[] = []): Promise<{ rows: unknown[]; rowCount: number }> => {
     const sql = text.replaceAll(/\s+/gu, " ").trim();
     if (sql.startsWith("INSERT INTO projects")) {
       state.projects.add(String(params[0]));
+      const rawConfig = params[6];
+      if (typeof rawConfig === "string") {
+        configs.set(String(params[0]), JSON.parse(rawConfig) as Record<string, unknown>);
+      }
       return { rows: [], rowCount: 1 };
     }
     if (sql.startsWith("INSERT INTO project_members")) return { rows: [], rowCount: 1 };
@@ -173,6 +184,7 @@ function stubPool(): { pool: pg.Pool; state: StubState } {
   return {
     pool: { query, connect: async () => ({ query, release() {} }) } as unknown as pg.Pool,
     state,
+    configs,
   };
 }
 
@@ -268,9 +280,76 @@ describe("deriveFromCapture · creates the product graph (no migration)", () => 
     // Every behavior spec is linked to a milestone + tied to its behavior.
     expect(state.specMilestones).toBe(derived.specIds.length);
     expect(state.specBehaviors).toBe(derived.behaviorIds.length);
-    // The DAG has real dependency edges: behavior specs depend on the scaffold.
-    const scaffoldCount = 3;
+    // FINDING #3: the foundation is a serialized CHAIN, not 3 parallel roots. Only
+    // the first scaffold spec (monorepo) is a root with no deps; `build` depends on
+    // it and `ci` depends on `build`, so 2 of the 3 scaffold specs now carry a dep.
+    // Every later (interface/behavior) spec depends on the scaffold too.
+    const rootlessScaffolds = 1;
     const hasDeps = [...state.specs.values()].filter((s) => s.dependsOn.length > 0).length;
-    expect(hasDeps).toBe(derived.specIds.length - scaffoldCount);
+    expect(hasDeps).toBe(derived.specIds.length - rootlessScaffolds);
+  });
+
+  it("FINDING #3: derives a serialized scaffold CHAIN (build→scaffold, ci→build), not 3 roots", async () => {
+    const { pool, state } = stubPool();
+    const answerer = createDeterministicInterviewAnswerer();
+    let capture: InterviewCapture = emptyCapture();
+    let complete = false;
+    for (let round = 1; round <= 20 && !complete; round += 1) {
+      const result = await runRound({ pool, answerer }, { round, answer: "ok", capture });
+      capture = result.capture;
+      complete = result.complete;
+    }
+    const derived = await deriveFromCapture({ pool }, { orgId: "org_a", capture, actor });
+
+    // The scaffold specs are created first, in order: monorepo, build, ci.
+    const [scaffoldId, buildId, ciId] = derived.specIds;
+    const scaffold = state.specs.get(scaffoldId);
+    const build = state.specs.get(buildId);
+    const ci = state.specs.get(ciId);
+    // monorepo scaffold is the SOLE root (no deps); build depends ONLY on scaffold;
+    // ci depends ONLY on build — a chain, not 3 empty-dep roots.
+    expect(scaffold?.dependsOn).toEqual([]);
+    expect(build?.dependsOn).toEqual([scaffoldId]);
+    expect(ci?.dependsOn).toEqual([buildId]);
+    // Exactly ONE foundation spec is a root (would have been 3 before the fix).
+    const scaffoldRoots = [scaffold, build, ci].filter((s) => (s?.dependsOn.length ?? 0) === 0).length;
+    expect(scaffoldRoots).toBe(1);
+  });
+
+  it('FINDING #1: autonomy:"auto" creates an autonomous project config (no follow-up PATCH)', async () => {
+    const { pool, configs } = stubPool();
+    const answerer = createDeterministicInterviewAnswerer();
+    let capture: InterviewCapture = emptyCapture();
+    let complete = false;
+    for (let round = 1; round <= 20 && !complete; round += 1) {
+      const result = await runRound({ pool, answerer }, { round, answer: "ok", capture });
+      capture = result.capture;
+      complete = result.complete;
+    }
+    const derived = await deriveFromCapture({ pool }, { orgId: "org_a", capture, actor, autonomy: "auto" });
+
+    const config = configs.get(derived.projectId);
+    expect(config).toBeDefined();
+    expect(config?.reviewPolicy).toBe("auto");
+    expect(config?.mergeIntegration).toBe("native_queue");
+    expect(config?.governancePosture).toBe("strict");
+  });
+
+  it("FINDING #1: omitting autonomy keeps the safe schema defaults (human / not_configured)", async () => {
+    const { pool, configs } = stubPool();
+    const answerer = createDeterministicInterviewAnswerer();
+    let capture: InterviewCapture = emptyCapture();
+    let complete = false;
+    for (let round = 1; round <= 20 && !complete; round += 1) {
+      const result = await runRound({ pool, answerer }, { round, answer: "ok", capture });
+      capture = result.capture;
+      complete = result.complete;
+    }
+    const derived = await deriveFromCapture({ pool }, { orgId: "org_a", capture, actor });
+
+    const config = configs.get(derived.projectId);
+    expect(config).toBeDefined();
+    expect(config?.reviewPolicy).toBe("human");
+    expect(config?.mergeIntegration).toBe("not_configured");
   });
 });

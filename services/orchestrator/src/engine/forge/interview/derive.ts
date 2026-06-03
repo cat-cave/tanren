@@ -37,6 +37,29 @@ export interface DeriveInput {
   actor: ActorContext;
   // Optional repo url override; otherwise derived from the identity slug.
   repoUrl?: string;
+  // GREENFIELD AUTONOMY (FINDING #1): how the derived project is governed at
+  // creation. `createProject`'s schema DEFAULTS (`reviewPolicy: "human"` +
+  // `mergeIntegration: "not_configured"`) are the SAFE brownfield/managed default,
+  // but they leave a greenfield project unable to advance itself (PRs await a human
+  // + never enter a merge engine). When the caller asks for `auto`/`simulated`, we
+  // create the project ALREADY autonomous so the DagWalker drives it off an empty
+  // repo with no follow-up PATCH. Absent or `human` ⇒ no config ⇒ the safe defaults.
+  autonomy?: "auto" | "simulated" | "human";
+}
+
+// FINDING #1: the autonomous greenfield config. When the operator opts into
+// `auto`/`simulated`, the project is created with the matching review policy + the
+// `native_queue` merge engine (so derived PRs enter a merge engine instead of
+// stalling on `not_configured`), keeping the `strict` governance posture. This is
+// the ONLY deviation from the schema defaults — and only on explicit opt-in.
+// `createProject` threads this through `migrateProjectConfig` (no new plumbing).
+function autonomousConfig(autonomy: "auto" | "simulated"): Record<string, unknown> {
+  return {
+    version: 1,
+    reviewPolicy: autonomy,
+    mergeIntegration: "native_queue",
+    governancePosture: "strict",
+  };
 }
 
 export interface DeriveResult {
@@ -48,18 +71,66 @@ export interface DeriveResult {
   milestoneIds: string[];
 }
 
-const SCAFFOLD_SPECS: Array<{ title: string; description: string }> = [
+// FINDING #3: the foundation scaffold specs. These used to carry EMPTY `dependsOn`,
+// so the DagWalker ran all three IN PARALLEL off an empty `main` — each invented the
+// repo from scratch with incompatible package-manager choices (e.g. one emitting
+// `npm workspaces`, which the default pnpm gate rejects with exit 254) and they never
+// converged (no authoritative toolchain on `main`, can't see each other's branches).
+//
+// Two fixes encoded here (the right place for this DOMAIN knowledge — not a
+// walker-wide rule):
+//   1. `dependsOnPrev` SERIALIZES the foundation into a chain: `monorepo scaffold`
+//      is the sole root; `build · turbo` depends on it; `ci · gh actions` depends on
+//      build. So one branch establishes the authoritative toolchain before the next
+//      builds on it.
+//   2. The `monorepo scaffold` description + acceptance criteria PIN the toolchain
+//      the default gate (`pnpm lint`/`typecheck`/`test`/`build`, per the CI
+//      `DEFAULT_CI_CONFIG`) accepts — pnpm workspaces with a `pnpm-workspace.yaml`,
+//      a root `package.json` whose `lint`/`typecheck`/`test`/`build` scripts delegate
+//      to turbo, and a committed pnpm lockfile — so the foundation is deterministic
+//      and gate-compatible (NOT the whole repo, just the toolchain the gate expects).
+interface ScaffoldSpecDef {
+  title: string;
+  description: string;
+  // The acceptance criteria the writer must satisfy. When absent, a generic
+  // "pipeline is green" criterion is synthesized in the create loop.
+  acceptanceCriteria?: string[];
+  // When true, this spec `dependsOn` the PREVIOUS scaffold spec in the list — the
+  // wiring that serializes the foundation into a chain instead of 3 parallel roots.
+  dependsOnPrev?: boolean;
+}
+
+const SCAFFOLD_SPECS: ScaffoldSpecDef[] = [
   {
     title: "monorepo scaffold",
-    description: "Stand up the monorepo: workspaces, base tsconfig, shared types package.",
+    description:
+      "Stand up the monorepo on the DEFAULT TANREN TOOLCHAIN so the CI gate passes: " +
+      "pnpm workspaces (a `pnpm-workspace.yaml` listing the package globs), a root " +
+      "`package.json` whose `lint`, `typecheck`, `test`, and `build` scripts EACH delegate " +
+      "to turbo (e.g. `turbo run lint`), turbo as the build orchestrator, a base tsconfig, " +
+      "a shared types package, and a COMMITTED pnpm lockfile (`pnpm-lock.yaml`). Do NOT use " +
+      "npm/yarn workspaces — the gate runs `pnpm install --frozen-lockfile` then `pnpm lint` / " +
+      "`pnpm typecheck` / `pnpm test` / `pnpm build` and rejects a non-pnpm workspace.",
+    acceptanceCriteria: [
+      "given an empty repo, when the scaffold lands, then a `pnpm-workspace.yaml` and a committed `pnpm-lock.yaml` exist (pnpm workspaces, not npm/yarn)",
+      "given the root `package.json`, when inspected, then it defines `lint`, `typecheck`, `test`, and `build` scripts that each delegate to turbo",
+      "given the toolchain, when `pnpm install --frozen-lockfile` then `pnpm lint`, `pnpm typecheck`, `pnpm test`, and `pnpm build` run, then each exits 0 (the default CI gate is green)",
+    ],
   },
   {
     title: "build · turbo",
-    description: "Wire the build pipeline (turbo) so every package builds + caches.",
+    description:
+      "Extend the turbo build pipeline established by the scaffold so every package builds + " +
+      "caches. Build on the EXISTING pnpm-workspace toolchain on `main`; do not re-invent the " +
+      "package manager.",
+    dependsOnPrev: true,
   },
   {
     title: "ci · gh actions",
-    description: "CI on GitHub Actions: install, lint, typecheck, test, build on every PR.",
+    description:
+      "CI on GitHub Actions: install with pnpm, then lint, typecheck, test, build on every PR, " +
+      "matching the root scripts the scaffold defined.",
+    dependsOnPrev: true,
   },
 ];
 
@@ -97,11 +168,20 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
   const slug = capture.identity?.slug ?? "greenfield-project";
   const repoUrl = input.repoUrl ?? `https://github.com/${slug}`;
 
+  // FINDING #1: opt-in autonomous config. `auto`/`simulated` ⇒ create the project
+  // already autonomous (`native_queue` + matching review policy) so the DagWalker
+  // can advance it off an empty repo with no follow-up PATCH. Absent/`human` ⇒ no
+  // config ⇒ createProject persists a fully-defaulted V1 (the safe defaults; an
+  // unversioned `{}` blob is rejected, no migration shim). `createProject` threads
+  // `config` through `migrateProjectConfig` — no new plumbing.
+  const autonomousOptIn = input.autonomy === "auto" || input.autonomy === "simulated";
   const project = await createProject(
     pool,
-    // No config ⇒ createProject persists a fully-defaulted V1 (an unversioned
-    // `{}` blob is now rejected, no migration shim).
-    { name: slug, repoUrl },
+    {
+      name: slug,
+      repoUrl,
+      ...(autonomousOptIn ? { config: autonomousConfig(input.autonomy as "auto" | "simulated") } : {}),
+    },
     { ...input.actor, orgId: input.orgId },
   );
   const projectId = project.projectId;
@@ -141,20 +221,32 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
 
   const specIds: string[] = [];
   const scaffoldSpecIds: string[] = [];
+  // FINDING #3: serialize the foundation into a CHAIN, not 3 parallel roots. Each
+  // spec with `dependsOnPrev` depends on the spec created immediately before it, so
+  // `monorepo scaffold` is the sole root, `build · turbo` depends on it, and
+  // `ci · gh actions` depends on build — one authoritative toolchain lands on `main`
+  // before the next builds on it (no incompatible package-manager races).
+  let previousScaffoldSpecId: string | undefined;
   for (const def of SCAFFOLD_SPECS) {
+    const dependsOn =
+      def.dependsOnPrev === true && previousScaffoldSpecId !== undefined ? [previousScaffoldSpecId] : [];
     const spec = await createSpec(
       pool,
       {
         projectId,
         title: def.title,
         description: def.description,
-        acceptanceCriteria: [`given the repo, when ${def.title} lands, then the pipeline is green`],
+        acceptanceCriteria: def.acceptanceCriteria ?? [
+          `given the repo, when ${def.title} lands, then the pipeline is green`,
+        ],
+        ...(dependsOn.length > 0 ? { dependsOn } : {}),
       },
       actor,
     );
     await MilestoneStore.setSpecMilestone(pool, { specId: spec.specId, milestoneId: scaffold.id }, actor);
     scaffoldSpecIds.push(spec.specId);
     specIds.push(spec.specId);
+    previousScaffoldSpecId = spec.specId;
   }
 
   // 3 · one milestone per interface, with a schema spec + a spec per behavior.
