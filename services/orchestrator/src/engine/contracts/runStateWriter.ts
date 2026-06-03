@@ -95,11 +95,16 @@ export interface SetRunPrUrlInput {
 // org (the coordinator resolves it system-scoped) so the control-plane write is
 // org-scoped server-side. WHAT GETS WRITTEN is byte-identical to the in-process SQL.
 
-/** Re-point a speculative run's dynamic base onto the rebuilt integration branch. */
+/**
+ * Re-point a speculative run's dynamic base onto the rebuilt integration branch, OR
+ * clear it to NULL (the §2c "ancestor-merged → non-speculative re-base": when every
+ * ancestor has merged the dependent re-bases onto plain `default_branch`, so the
+ * run's `speculative_base` becomes NULL — a real run against main).
+ */
 export interface SetRunSpeculativeBaseInput {
   runId: string;
   orgId: string;
-  speculativeBase: string;
+  speculativeBase: string | null;
 }
 
 /** Stamp the percolation re-execution run id onto the dependent run's in-flight marker. */

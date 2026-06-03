@@ -64,7 +64,9 @@ const setSpecMetadataSchema = z.object({
 const setRunSpeculativeBaseSchema = z.object({
   runId: z.string().min(1),
   orgId: z.string().min(1),
-  speculativeBase: z.string().min(1),
+  // Nullable: the §2c "ancestor-merged → non-speculative re-base" clears the base to
+  // NULL (every ancestor merged ⇒ the dependent re-bases onto plain default_branch).
+  speculativeBase: z.string().min(1).nullable(),
 });
 
 const setRunPercolationReexecIdSchema = z.object({

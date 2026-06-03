@@ -165,7 +165,11 @@ export const DagSpecPercolatingPayload = z
     // Why this percolation is happening promptly: an open P0/P1 finding or a
     // changes-requested verdict on the ancestor forces IMMEDIATE percolation; a
     // P2/P3 change would instead defer (dag.spec.percolation_deferred).
-    severity: z.enum(["P0", "P1", "P2", "P3", "changes_requested"]),
+    // `ancestor_merged` is the §2c "ancestor-merged → proactive re-base" axis: the
+    // ancestor merged to default_branch (a squash-merge leaves its run branch put, so
+    // the SHA-advance rules miss it) and the descendant is re-based onto fresh main,
+    // dropping the now-merged ancestor from the speculative stack.
+    severity: z.enum(["P0", "P1", "P2", "P3", "changes_requested", "ancestor_merged"]),
   })
   .strict();
 export type DagSpecPercolatingPayload = z.infer<typeof DagSpecPercolatingPayload>;

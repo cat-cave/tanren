@@ -82,19 +82,26 @@ export class PgPercolationReexecutor implements PercolationReexecutor {
     decision: PercolationDecision;
     integrationBranch: string;
     ancestorHeadShas: Record<string, string>;
+    nonSpeculative: boolean;
   }): Promise<{ reexecRunId: string }> {
     const orgId = await resolveOrg(this.pool, input.projectId);
 
+    // §2c "ancestor-merged → non-speculative re-base": when EVERY ancestor has merged
+    // the dependent re-bases onto plain `default_branch`, so the re-execution carries
+    // NO speculative base (NULL) + NO build-base ancestor SHAs — a real run against
+    // main. Otherwise it re-bases onto the rebuilt integration branch (the unmerged
+    // ancestors still stacked) and carries the new ancestor head SHAs as the build base.
+    const newBase = input.nonSpeculative ? null : input.integrationBranch;
+    const newBuildBase = input.nonSpeculative ? undefined : input.ancestorHeadShas;
+
     // Re-point the OLD run's base (so a detect before the new run is visible still
-    // reads the rebuilt base) + reopen the spec so createQueuedRunFromSpec re-claims
-    // it. Keep the spec's branch/work intact (we only move status), never reset.
-    // Plane-split: route both through the control plane when wired; else direct.
+    // reads the rebuilt base — or NULL when non-speculative) + reopen the spec so
+    // createQueuedRunFromSpec re-claims it. Keep the spec's branch/work intact (we
+    // only move status), never reset. Plane-split: route both through the control
+    // plane when wired; else direct.
     if (this.runStateWriter === undefined) {
       await runWithOrgScope(this.pool, orgId, async (client) => {
-        await client.query("UPDATE runs SET speculative_base = $2 WHERE run_id = $1", [
-          input.dependent.runId,
-          input.integrationBranch,
-        ]);
+        await client.query("UPDATE runs SET speculative_base = $2 WHERE run_id = $1", [input.dependent.runId, newBase]);
         await client.query(
           `UPDATE specs SET status = 'pending' WHERE spec_id = $1 AND status NOT IN ('done', 'merged')`,
           [input.dependent.specId],
@@ -104,7 +111,7 @@ export class PgPercolationReexecutor implements PercolationReexecutor {
       await this.runStateWriter.setRunSpeculativeBase({
         runId: input.dependent.runId,
         orgId,
-        speculativeBase: input.integrationBranch,
+        speculativeBase: newBase,
       });
       await this.runStateWriter.setSpecStatus({
         specId: input.dependent.specId,
@@ -130,12 +137,18 @@ export class PgPercolationReexecutor implements PercolationReexecutor {
       scopes: ["platform:admin"],
       source: "local_dev",
     };
+    // When non-speculative the run carries a NULL base + NO build-base map (a real run
+    // against main); else the rebuilt integration branch + the new ancestor head SHAs.
+    // EITHER WAY the `speculative` block is present (not undefined), so the re-exec
+    // SKIPS the done-only dependency gate (the percolation walker owns the ordering;
+    // a merged ancestor is genuinely done) AND carries the verified-SHA carry-forward
+    // + the in-flight marker the settle resolves (advancing the termination key).
     const createInput = {
       specId: input.dependent.specId,
       trigger: "change_percolation",
       speculative: {
-        speculativeBase: input.integrationBranch,
-        integratedAncestorShas: input.ancestorHeadShas,
+        speculativeBase: newBase,
+        ...(newBuildBase !== undefined && { integratedAncestorShas: newBuildBase }),
         verifiedAncestorShas: input.dependent.verifiedAncestorShas,
         percolationPending: { ...pending, reexecRunId: "" },
       },

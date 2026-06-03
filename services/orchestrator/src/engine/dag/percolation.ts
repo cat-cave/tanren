@@ -174,6 +174,11 @@ export class PercolatingCoordinator implements ChangePercolationCoordinator {
       .map((s) => decidePercolation(s))
       .sort((a, b) => a.ancestorSpecId.localeCompare(b.ancestorSpecId));
 
+    // The MERGED ancestors (the new §2c divergence axis): the kick-off DROPS these
+    // from the speculative stack (their content arrives via fresh main) — when EVERY
+    // ancestor merged the re-base is onto plain default_branch (non-speculative).
+    const mergedAncestorSpecIds = signals.filter((s) => s.ancestorMerged === true).map((s) => s.ancestorSpecId);
+
     const immediate = decisions.find((d) => d.promptness === "immediate");
     if (immediate !== undefined) {
       const severity = immediate.immediateSeverity;
@@ -191,7 +196,12 @@ export class PercolatingCoordinator implements ChangePercolationCoordinator {
         toAncestorSha: immediate.toSha,
         severity,
       });
-      const outcome = await this.deps.kickOff.kickOff({ projectId, dependent, decision: immediate });
+      const outcome = await this.deps.kickOff.kickOff({
+        projectId,
+        dependent,
+        decision: immediate,
+        mergedAncestorSpecIds,
+      });
       if (outcome.result === "reexecuting") {
         // A REAL re-execution is now in flight; it settles (absorbs/replans) on a
         // later pass once its gate+checker+auditor terminate. Not absorbed here.

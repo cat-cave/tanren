@@ -1,20 +1,12 @@
-// P2c-2 (autonomy-engine.md §2c "Change-percolation — NOT discard"): the PURE
-// cores (`decidePercolation` detect + `decideSettle`) + the two-phase
-// PercolatingCoordinator, driven through in-memory seams (TEST FIXTURES — they live
-// here, never src/).
-//
-// Proves the §2c semantics + the CRITICAL invariants:
-//   - ancestor head-SHA DIVERGENCE vs. the VERIFIED (re-gated-clean) SHA is detected;
-//   - P0/P1/changes-requested → IMMEDIATE; P2/P3 → DEFERRED (lazy);
-//   - an IMMEDIATE change KICKS OFF a real re-execution (NOT absorbed on re-base);
-//   - absorption (the verified SHA + `percolated`) happens ONLY on SETTLE after the
-//     re-execution re-gated CLEAN (gate+checker+auditor) — never on a bare re-base;
-//   - an irreconcilable re-execution (halted / audited-with-open-P0/P1) → replan
-//     (routed back WITH the change — NOT dropped, NOT merged);
-//   - a NO-OP (verified SHA matches, verdict already absorbed) does NOT re-trigger;
-//   - a STICKY changes_requested at an unchanged, already-absorbed SHA does NOT
-//     re-fire every pass (TERMINATION); an in-flight marker suppresses re-kick-off;
-//   - an ancestor-vs-ancestor conflict on the rebuild HOLDS (retried), not dropped.
+// P2c-2 (autonomy-engine.md §2c "Change-percolation — NOT discard"): the PURE cores
+// (`decidePercolation` detect + `decideSettle`) + the two-phase PercolatingCoordinator,
+// driven through in-memory seams (TEST FIXTURES — they live here, never src/). Proves
+// the §2c semantics + CRITICAL invariants: SHA-divergence vs. the VERIFIED sha →
+// IMMEDIATE (P0/P1/changes-requested + the new ancestor_merged axis) / DEFERRED (P2/P3);
+// absorption advances the verified SHA ONLY on SETTLE after a CLEAN re-gate (never on a
+// bare re-base); an irreconcilable re-exec → replan (kept alive); a no-op / sticky-
+// absorbed verdict TERMINATES (no re-trigger); an ancestor-vs-ancestor rebuild conflict
+// HOLDS (retried), not dropped.
 
 import { describe, expect, it } from "vitest";
 import {
@@ -98,6 +90,51 @@ describe("decidePercolation (pure §2c detect + severity gate + termination)", (
     expect(d.promptness).toBe("lazy");
     expect(d.lazySeverity).toBe("P3");
   });
+
+  it("a MERGED ancestor whose mergedSha ≠ verified ⇒ IMMEDIATE/ancestor_merged (the new axis)", () => {
+    // The run branch is UNCHANGED (a squash-merge leaves it put) — only the merge axis
+    // (rule 0, off default_branch head) catches it; the toSha is the merge commit.
+    const d = decidePercolation(
+      signal({
+        ancestorSpecId: "spec_a",
+        verifiedSha: "sha-old",
+        currentSha: "main-merge-sha",
+        ancestorMerged: true,
+        mergedSha: "main-merge-sha",
+      }),
+    );
+    expect(d.promptness).toBe("immediate");
+    expect(d.immediateSeverity).toBe("ancestor_merged");
+    expect(d.toSha).toBe("main-merge-sha");
+  });
+
+  it("an ALREADY-ABSORBED merged ancestor (verified == mergedSha) ⇒ NONE (no re-trigger loop)", () => {
+    const d = decidePercolation(
+      signal({
+        ancestorSpecId: "spec_a",
+        verifiedSha: "main-merge-sha",
+        currentSha: "main-merge-sha",
+        ancestorMerged: true,
+        mergedSha: "main-merge-sha",
+      }),
+    );
+    expect(d.promptness).toBe("none");
+  });
+
+  it("ancestor_merged PRECEDES the SHA-advance rules (a merge with an open P0 still labels ancestor_merged)", () => {
+    const d = decidePercolation(
+      signal({
+        ancestorSpecId: "spec_a",
+        verifiedSha: "sha-old",
+        currentSha: "main-merge-sha",
+        ancestorMerged: true,
+        mergedSha: "main-merge-sha",
+        openFindingMaxSeverity: "P0",
+      }),
+    );
+    expect(d.promptness).toBe("immediate");
+    expect(d.immediateSeverity).toBe("ancestor_merged");
+  });
 });
 
 describe("decideSettle (pure §2c re-gate verdict — absorbed only after a clean run)", () => {
@@ -153,16 +190,23 @@ class RecordingEmitter implements PercolationEventEmitter {
 }
 
 class RecordingKickOff implements PercolationKickOff {
-  readonly calls: Array<{ specId: string; ancestorSpecId: string; toSha: string }> = [];
+  readonly calls: Array<{
+    specId: string;
+    ancestorSpecId: string;
+    toSha: string;
+    mergedAncestorSpecIds: ReadonlyArray<string>;
+  }> = [];
   constructor(private readonly outcome: (d: PercolationDecision) => PercolationKickOffOutcome) {}
   async kickOff(input: {
     dependent: SpeculativeDependent;
     decision: PercolationDecision;
+    mergedAncestorSpecIds: ReadonlyArray<string>;
   }): Promise<PercolationKickOffOutcome> {
     this.calls.push({
       specId: input.dependent.specId,
       ancestorSpecId: input.decision.ancestorSpecId,
       toSha: input.decision.toSha,
+      mergedAncestorSpecIds: input.mergedAncestorSpecIds,
     });
     return this.outcome(input.decision);
   }
@@ -224,7 +268,78 @@ describe("PercolatingCoordinator (§2c two-phase chain re-integration, NOT disca
     // NOT absorbed/percolated on the kick-off — the re-gate has not run yet.
     expect(emitter.percolated).toEqual([]);
     expect(settler.absorbed).toEqual([]);
-    expect(kickOff.calls).toEqual([{ specId: "spec_b", ancestorSpecId: "spec_a", toSha: "sha-new" }]);
+    expect(kickOff.calls).toEqual([
+      { specId: "spec_b", ancestorSpecId: "spec_a", toSha: "sha-new", mergedAncestorSpecIds: [] },
+    ]);
+  });
+
+  it("a MERGED ancestor kicks off with the ancestor in mergedAncestorSpecIds (the drop set) + ancestor_merged", async () => {
+    const emitter = new RecordingEmitter();
+    const kickOff = new RecordingKickOff((d) => ({
+      result: "reexecuting",
+      ancestorSpecId: d.ancestorSpecId,
+      reexecRunId: "run_re",
+    }));
+    const coord = new PercolatingCoordinator({
+      readModel: new FixedReadModel([dependent("spec_b")], {
+        spec_b: [
+          signal({
+            ancestorSpecId: "spec_a",
+            verifiedSha: "sha-old",
+            currentSha: "main-merge-sha",
+            ancestorMerged: true,
+            mergedSha: "main-merge-sha",
+          }),
+        ],
+      }),
+      kickOff,
+      settler: new RecordingSettler(),
+      events: emitter,
+    });
+    const result = await coord.percolate(PROJECT);
+
+    expect(result.reexecuting).toEqual(["spec_b"]);
+    expect(emitter.percolating).toEqual([{ specId: "spec_b", ancestorSpecId: "spec_a", severity: "ancestor_merged" }]);
+    // The merged ancestor is in the DROP set + the toSha is the merge commit.
+    expect(kickOff.calls).toEqual([
+      { specId: "spec_b", ancestorSpecId: "spec_a", toSha: "main-merge-sha", mergedAncestorSpecIds: ["spec_a"] },
+    ]);
+  });
+
+  it("a mixed merged+unmerged set drops ONLY the merged ancestor from the speculative stack", async () => {
+    const emitter = new RecordingEmitter();
+    const kickOff = new RecordingKickOff((d) => ({
+      result: "reexecuting",
+      ancestorSpecId: d.ancestorSpecId,
+      reexecRunId: "run_re",
+    }));
+    const coord = new PercolatingCoordinator({
+      readModel: new FixedReadModel(
+        [dependent("spec_c", { integratedAncestorShas: { spec_a: "sha-old", spec_b: "sha-old" } })],
+        {
+          // spec_a MERGED (drops); spec_b unmerged + diverged (stays stacked).
+          spec_c: [
+            signal({
+              ancestorSpecId: "spec_a",
+              verifiedSha: "sha-old",
+              currentSha: "main-merge-sha",
+              ancestorMerged: true,
+              mergedSha: "main-merge-sha",
+            }),
+            signal({ ancestorSpecId: "spec_b", currentSha: "sha-new", openFindingMaxSeverity: "P1" }),
+          ],
+        },
+      ),
+      kickOff,
+      settler: new RecordingSettler(),
+      events: emitter,
+    });
+    const result = await coord.percolate(PROJECT);
+
+    expect(result.reexecuting).toEqual(["spec_c"]);
+    // ONLY the merged ancestor is in the drop set; the unmerged one stays stacked.
+    expect(kickOff.calls).toHaveLength(1);
+    expect(kickOff.calls[0]?.mergedAncestorSpecIds).toEqual(["spec_a"]);
   });
 
   it("SETTLE: an in-flight marker whose re-exec re-gated CLEAN ⇒ absorbed + percolated", async () => {
