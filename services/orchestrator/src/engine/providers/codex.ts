@@ -204,7 +204,9 @@ export function createCodexAnswerer<TOutput>(dependencies: CodexAnswererDependen
       }
       if (result.failure !== undefined || result.exitCode !== 0) {
         throw new Error(
-          `Codex Answerer failed for schema ${opts.outputSchema.name}: exit ${result.exitCode ?? "unknown"}`,
+          `Codex Answerer failed for schema ${opts.outputSchema.name}: exit ${result.exitCode ?? "unknown"}` +
+            `${result.failure === undefined ? "" : ` failure=${result.failure}`}` +
+            ` | stderr: ${harnessOutputTail(result.stderr)} | stdout: ${harnessOutputTail(result.stdout)}`,
         );
       }
       const response = await dependencies.ssh.run(dependencies.target, {
@@ -290,6 +292,12 @@ export function buildCodexAnswererExecCommand(input: {
 // calls go to the platform OpenRouter shell. BYOK ⇒ no override (unchanged).
 function codexEndpointEnv(endpointBaseUrl?: string): string[] {
   return endpointBaseUrl === undefined ? [] : [`OPENAI_BASE_URL=${quoteSshShellArg(endpointBaseUrl)}`];
+}
+
+// The tail of a harness stream, whitespace-collapsed, for surfacing the real
+// reason an Answerer failed (e.g. an OpenAI structured-output 400) in the error.
+function harnessOutputTail(stream: string | undefined): string {
+  return (stream ?? "").slice(-1000).replaceAll(/\s+/gu, " ").trim();
 }
 
 export function parseCodexJsonlTelemetry(stdout: string): CodexEventTelemetry {
