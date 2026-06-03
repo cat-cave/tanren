@@ -104,4 +104,34 @@ describe("GitHubVcsProvider.resetRef — race-safe + 422 classification (Bug 1)"
     // The create was attempted twice (the transient, then the success) — self-healed.
     expect(http.calls.filter((c) => c.method === "POST" && c.path.includes("/git/refs")).length).toBe(2);
   });
+
+  // GitHub-5xx resilience: a raw 5xx reaching the ref-reset (defense-in-depth — the
+  // HTTP client already retries these) must map to the RETRIABLE transient error, NOT a
+  // permanent block. The live repro was a 504 on the `/git/refs` force-update.
+  it("CREATE 5xx (504) → typed TRANSIENT throw (retried bounded), never permanent", async () => {
+    const http = new ScriptedHttp()
+      .on("GET", "/git/ref/heads/main", { status: 200, body: { object: { sha: BASE_SHA } } })
+      // Every create attempt returns a raw 504 gateway timeout.
+      .on("POST", "/git/refs", { status: 504, body: { message: "Gateway Timeout" } });
+
+    await expect(makeProvider(http).buildIntegrationBranch(buildInput())).rejects.toBeInstanceOf(
+      RefResetTransientError,
+    );
+    // Bounded retry of the create before surfacing (initial + 2 retries).
+    expect(http.calls.filter((c) => c.method === "POST" && c.path.includes("/git/refs")).length).toBe(3);
+  });
+
+  it("force-PATCH 5xx (504) on the live repro path → typed TRANSIENT throw, never permanent", async () => {
+    const http = new ScriptedHttp()
+      .on("GET", "/git/ref/heads/main", { status: 200, body: { object: { sha: BASE_SHA } } })
+      // Create collides (expected) → force-PATCH, which 504s every attempt.
+      .on("POST", "/git/refs", { status: 422, body: { message: "Reference already exists" } })
+      .on("PATCH", "/git/refs/heads/", { status: 504, body: { message: "Gateway Timeout" } });
+
+    await expect(makeProvider(http).buildIntegrationBranch(buildInput())).rejects.toBeInstanceOf(
+      RefResetTransientError,
+    );
+    // The whole create→force-PATCH retried (bounded) — three PATCH attempts.
+    expect(http.calls.filter((c) => c.method === "PATCH").length).toBe(3);
+  });
 });

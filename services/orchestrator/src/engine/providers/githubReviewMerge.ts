@@ -1,10 +1,12 @@
-// P3-0008: GitHub API surface for the review→merge completion half of the run
-// loop. Kept separate from providers/github.ts (the draft-PR + CI surface) so
-// each file stays focused under the 500-line cap. Every method takes a token +
-// optional refreshToken supplier so the P3-0003 resolver's 401-retry path
-// flows through unchanged — no static-token reads live here.
+// P3-0008: GitHub API surface for the review→merge completion half of the run loop.
+// Kept separate from providers/github.ts (the draft-PR + CI surface) so each file stays
+// under the 500-line cap. Every method takes a token + optional refreshToken supplier so
+// the P3-0003 resolver's 401-retry path flows through unchanged — no static-token reads.
 
 import type { GitHubHttpClient, GitHubRepository } from "./github.js";
+import { isTransientStatus } from "./githubRetry.js";
+import { MergeAmbiguousError, MergeTransientError } from "./mergeOutcomeErrors.js";
+import { parseMergeSha, parseMergedState, parseMessage } from "./githubReviewMergeParse.js";
 import {
   parseMergeability,
   type GitHubMergeabilityResult,
@@ -58,6 +60,13 @@ interface TokenInput {
   token: string;
   refreshToken?: () => Promise<string>;
 }
+
+/**
+ * How many times the double-merge guard re-`PUT`s after a transient 5xx WHEN the
+ * reconcile read confirms the PR is still open + unmerged (so a re-PUT cannot
+ * double-merge). Bounded so a persistent gateway failure surfaces loudly, not spins.
+ */
+const MERGE_TRANSIENT_RETRIES = 2;
 
 function repoPath(repo: GitHubRepository, suffix: string): string {
   return `/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}${suffix}`;
@@ -200,6 +209,15 @@ export class GitHubReviewMergeService {
    * the dispatcher can emit merge.conflict + a recoverable outcome. GitHub never
    * bypasses required checks here — a PR blocked by branch protection returns
    * 405 and surfaces as a non-merged result.
+   *
+   * GitHub-5xx resilience (double-merge guard): the merge `PUT` is NON-idempotent (a
+   * 504 may have ALREADY merged), so we opt OUT of the client's blind transient retry
+   * (`retryTransient: false`) and RE-READ the PR's `merged` state on a 5xx: confirmed
+   * merged → success; confirmed open+unmerged, retries left → re-`PUT`; confirmed
+   * open+unmerged, retries EXHAUSTED → THROW `MergeTransientError` (GAP #2d — the
+   * coordinator infra-HOLDs + re-drives, NOT a `merge.failed` that strands a clean PR);
+   * AMBIGUOUS (state unconfirmable) → THROW `MergeAmbiguousError` (a loud, operator-
+   * visible halt that never auto-re-`PUT`s). A real 405/409 still returns a conflict.
    */
   async mergePullRequest(
     input: {
@@ -208,25 +226,82 @@ export class GitHubReviewMergeService {
       mergeMethod?: "merge" | "squash" | "rebase";
     } & TokenInput,
   ): Promise<MergePullRequestResult> {
+    for (let attempt = 0; ; attempt += 1) {
+      const response = await this.http.request({
+        method: "PUT",
+        path: repoPath(input.repo, `/pulls/${input.pullNumber}/merge`),
+        token: input.token,
+        refreshToken: input.refreshToken,
+        // Do NOT let the client auto-retry this non-idempotent write on a 5xx — a 504
+        // may have merged. We reconcile against the PR's real state below instead.
+        retryTransient: false,
+        body: { merge_method: input.mergeMethod ?? "squash" },
+      });
+      if (response.status === 200) {
+        return {
+          merged: true,
+          mergeSha: parseMergeSha(response.body),
+          conflict: false,
+          status: 200,
+          message: "merged",
+        };
+      }
+      if (isTransientStatus(response.status)) {
+        // A gateway timeout on the PUT — re-read the authoritative state before deciding.
+        const merged = await this.readMerged(input);
+        if (merged.confirmed && merged.merged) {
+          // The 504 raced a completed merge — treat as the success it was.
+          return { merged: true, mergeSha: merged.sha, conflict: false, status: 200, message: "merged" };
+        }
+        if (merged.confirmed && merged.open && attempt < MERGE_TRANSIENT_RETRIES) {
+          // Confirmed still open + not merged: safe to re-PUT (the merge never landed).
+          continue;
+        }
+        if (merged.confirmed && merged.open) {
+          // Re-PUTs exhausted but the reconcile read still POSITIVELY confirms open +
+          // unmerged — a genuine-transient-not-failed outcome. THROW the typed transient
+          // so the coordinator infra-HOLDs + re-drives (safe: the merge never landed),
+          // NOT a terminal `merge.failed` dequeue that would strand a clean PR.
+          throw new MergeTransientError(
+            `merge PUT for PR #${input.pullNumber} hit a persistent transient HTTP ${response.status}; PR confirmed open + unmerged after ${MERGE_TRANSIENT_RETRIES} re-tries — holding for re-drive`,
+          );
+        }
+        // AMBIGUOUS: the reconcile read could not confirm the state. The merge MAY have
+        // landed — auto-re-driving could DOUBLE-MERGE. THROW the typed ambiguous error
+        // → a LOUD operator-visible halt that never auto-re-PUTs.
+        throw new MergeAmbiguousError(
+          `merge PUT for PR #${input.pullNumber} hit a transient HTTP ${response.status} and the merged state could NOT be confirmed; refusing to auto-retry to avoid a double-merge — operator attention required`,
+        );
+      }
+      const message = parseMessage(response.body) ?? `HTTP ${response.status}`;
+      const conflict = response.status === 405 || response.status === 409;
+      return { merged: false, conflict, status: response.status, message };
+    }
+  }
+
+  /**
+   * Re-read the PR's authoritative merged/open state — the double-merge guard's
+   * reconciliation read after a transient 5xx on the merge PUT (`GET /pulls/{n}` is a
+   * safe idempotent read). `confirmed` is whether the read itself succeeded (the
+   * merged/open booleans are TRUSTWORTHY); a non-200 is `confirmed: false`, which the
+   * caller treats as AMBIGUOUS (never re-PUTs blindly — the merge may have landed),
+   * distinct from a confirmed open+unmerged (which IS safe to re-drive).
+   */
+  private async readMerged(
+    input: { repo: GitHubRepository; pullNumber: number } & TokenInput,
+  ): Promise<{ confirmed: boolean; merged: boolean; open: boolean; sha?: string }> {
     const response = await this.http.request({
-      method: "PUT",
-      path: repoPath(input.repo, `/pulls/${input.pullNumber}/merge`),
+      method: "GET",
+      path: repoPath(input.repo, `/pulls/${input.pullNumber}`),
       token: input.token,
       refreshToken: input.refreshToken,
-      body: { merge_method: input.mergeMethod ?? "squash" },
     });
-    if (response.status === 200) {
-      return {
-        merged: true,
-        mergeSha: parseMergeSha(response.body),
-        conflict: false,
-        status: 200,
-        message: "merged",
-      };
+    if (response.status !== 200) {
+      // Could not confirm either way — report unconfirmed so the guard surfaces the
+      // AMBIGUOUS (loud, non-auto-retry) outcome rather than re-PUTting blindly.
+      return { confirmed: false, merged: false, open: false };
     }
-    const message = parseMessage(response.body) ?? `HTTP ${response.status}`;
-    const conflict = response.status === 405 || response.status === 409;
-    return { merged: false, conflict, status: response.status, message };
+    return { confirmed: true, ...parseMergedState(response.body) };
   }
 
   /**
@@ -380,22 +455,6 @@ function renderFilesDiff(value: unknown): string {
     sections.push(patch === undefined ? `diff --git ${filename}` : `diff --git ${filename}\n${patch}`);
   }
   return sections.join("\n");
-}
-
-function parseMergeSha(value: unknown): string | undefined {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return undefined;
-  }
-  const sha = (value as Record<string, unknown>)["sha"];
-  return typeof sha === "string" ? sha : undefined;
-}
-
-function parseMessage(value: unknown): string | undefined {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return undefined;
-  }
-  const message = (value as Record<string, unknown>)["message"];
-  return typeof message === "string" ? message : undefined;
 }
 
 /** The GraphQL mutation that genuinely un-drafts a PR (REST cannot do this). */

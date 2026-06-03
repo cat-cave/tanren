@@ -167,6 +167,17 @@ export class PgMergeQueueModel implements MergeQueueModel {
     await this.settle(queueId, "UPDATE merge_queue SET status = 'merged', settled_at = now() WHERE queue_id = $1", []);
   }
 
+  async releaseClaim(queueId: string): Promise<void> {
+    // Return a claimed entry to `queued` WITHOUT settling it (the entry stays in the
+    // queue) — the transient-merge-drive hold path. Only flips a STILL-`merging` row
+    // so it cannot resurrect a settled (merged/dequeued) entry.
+    await this.settle(
+      queueId,
+      "UPDATE merge_queue SET status = 'queued', claimed_at = NULL WHERE queue_id = $1 AND status = 'merging'",
+      [],
+    );
+  }
+
   async markDequeued(queueId: string, reason: "conflict" | "blocked" | "failed"): Promise<void> {
     await this.settle(
       queueId,

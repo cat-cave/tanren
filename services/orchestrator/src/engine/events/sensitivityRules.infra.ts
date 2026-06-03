@@ -241,6 +241,17 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["reason", "public"],
     ["message", "public"],
   ]),
+  // GitHub-5xx resilience (GAP #2d): the per-PR coordinator's loud infra-halt — PR
+  // identity + the halt kind + attempt count + the infra message, all public.
+  ...rulesFor("merge.queue.infra_blocked", [
+    ["prUrl", "public"],
+    ["prNumber", "public"],
+    ["integration", "public"],
+    ["specId", "public"],
+    ["kind", "public"],
+    ["attempts", "public"],
+    ["message", "public"],
+  ]),
   // P2d-2 (§2d) speculative batch-check + bisect — batch composition + cap stats +
   // the integration ref + bisect prose, all public (queue/batch visibility).
   ...rulesFor("merge.batch.checking", [

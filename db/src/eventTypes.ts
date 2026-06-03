@@ -78,6 +78,7 @@ export const eventTypeNames = [
   "merge.integration_cleaned",
   "merge.post_merge_failed",
   "merge.queue.advanced",
+  "merge.queue.infra_blocked",
   "merge.queued",
   "merge.rebased",
   "merge.retargeted",

@@ -95,6 +95,7 @@ import {
   MergeBatchPassedPayload,
   MergeDequeuedPayload,
   MergeQueueAdvancedPayload,
+  MergeQueueInfraBlockedPayload,
 } from "./schemas/mergeQueue.js";
 import { CiFlakyDetectedPayload, CiTestQuarantinedPayload } from "./schemas/ciFlaky.js";
 import { IssueOpenedPayload, MergePostMergeFailedPayload } from "./schemas/postMerge.js";
@@ -283,6 +284,11 @@ export const EventRegistry = {
   // blocked / failed) records merge.dequeued. Serialized: one merge at a time.
   "merge.queue.advanced": MergeQueueAdvancedPayload,
   "merge.dequeued": MergeDequeuedPayload,
+  // GitHub-5xx resilience (GAP #2d): a transient infra error blocked the per-PR merge
+  // DRIVE and the hold can no longer recover on its own — the entry exhausted its
+  // re-drive ceiling, or the merge state is unconfirmable (auto-retry could double-
+  // merge). A LOUD operator-visible halt (does NOT silently re-drive forever).
+  "merge.queue.infra_blocked": MergeQueueInfraBlockedPayload,
   // P2d-2 (§2d): speculative batch-check + bisect. The coordinator speculatively
   // integrates `default_branch + batch PRs` + CI-checks that prospective merged state
   // (merge.batch.checking); a green check merges the batch in DAG order

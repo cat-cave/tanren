@@ -1,5 +1,13 @@
 import { setTimeout as sleepFor } from "node:timers/promises";
 import { parseCheckRuns, parseCommitStatuses, parseRefObjectSha, parseRequiredContexts } from "./githubChecksParse.js";
+import {
+  DEFAULT_RATE_LIMIT_RETRIES,
+  DEFAULT_TRANSIENT_RETRIES,
+  headerGetter,
+  isTransientStatus,
+  rateLimitBackoffMs,
+  TRANSIENT_BACKOFF_MS,
+} from "./githubRetry.js";
 
 export interface GitHubRepository {
   owner: string;
@@ -72,6 +80,18 @@ export interface GitHubHttpRequest {
    * single time with the fresh token. Static-token callers omit this.
    */
   refreshToken?: () => Promise<string>;
+  /**
+   * GitHub-5xx resilience: when `false`, the client does NOT auto-retry a
+   * transient gateway failure (502/503/504/408 or a transport error) for THIS
+   * request — it surfaces the raw transient response/throw to the caller. The
+   * default (omitted ⇒ retry) is safe for idempotent ops (GET / ref-reset /
+   * PATCH / PUT-branch). A NON-idempotent write whose retry could double-apply
+   * server-side (the `PUT /pulls/{n}/merge` — a 504 may have merged) sets this
+   * `false` and re-checks the resource state itself instead. The 401 re-mint and
+   * 403/429 rate-limit retries are unaffected (they re-send a request that did
+   * not change state).
+   */
+  retryTransient?: boolean;
 }
 
 export interface GitHubHttpResponse {
@@ -89,19 +109,17 @@ export interface GitHubHttpClient {
   request(input: GitHubHttpRequest): Promise<GitHubHttpResponse>;
 }
 
-/** P3-0028 rate-limit backoff bounds: never wait less than this, never more. */
-export const MIN_RATE_LIMIT_BACKOFF_MS = 1_000;
-export const MAX_RATE_LIMIT_BACKOFF_MS = 60_000;
-/** Default number of times the client re-tries a rate-limited request before surfacing it. */
-export const DEFAULT_RATE_LIMIT_RETRIES = 2;
+// The rate-limit + transient-5xx classification/backoff helpers live in githubRetry.ts.
 
 export interface FetchGitHubHttpClientOptions {
   apiBaseUrl?: string;
   fetchImpl?: typeof fetch;
-  /** Test seam: sleep used between rate-limit retries. */
+  /** Test seam: sleep used between rate-limit AND transient-5xx retries. */
   sleep?: (ms: number) => Promise<void>;
   /** How many times to honor a `Retry-After` / reset before giving up. */
   maxRateLimitRetries?: number;
+  /** How many times to retry a transient 5xx / network error before giving up. */
+  maxTransientRetries?: number;
   /** Clock seam (epoch ms) for computing the wait from `X-RateLimit-Reset`. */
   now?: () => number;
 }
@@ -111,6 +129,7 @@ export class FetchGitHubHttpClient implements GitHubHttpClient {
   private readonly fetchImpl: typeof fetch;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly maxRateLimitRetries: number;
+  private readonly maxTransientRetries: number;
   private readonly now: () => number;
 
   constructor(options: FetchGitHubHttpClientOptions | string = {}, legacyFetch?: typeof fetch) {
@@ -120,14 +139,35 @@ export class FetchGitHubHttpClient implements GitHubHttpClient {
     this.fetchImpl = opts.fetchImpl ?? fetch;
     this.sleep = opts.sleep ?? ((ms) => sleepFor(ms));
     this.maxRateLimitRetries = opts.maxRateLimitRetries ?? DEFAULT_RATE_LIMIT_RETRIES;
+    this.maxTransientRetries = opts.maxTransientRetries ?? DEFAULT_TRANSIENT_RETRIES;
     this.now = opts.now ?? (() => Date.now());
   }
 
   async request(input: GitHubHttpRequest): Promise<GitHubHttpResponse> {
     let token = input.token;
     let refreshed = false;
+    // Separate counters so a 5x burst and a rate-limit burst each have their OWN
+    // ceiling — and so a request that hits BOTH a 503 then a 429 is handled within
+    // the loop (each path retries up to its own bound). The 401 re-mint is one-shot.
+    let transientRetries = 0;
+    const retryTransient = input.retryTransient !== false;
     for (let attempt = 0; ; attempt += 1) {
-      const response = await this.send(input.path, input.method, token, input.body);
+      let response: GitHubHttpResponse;
+      try {
+        response = await this.send(input.path, input.method, token, input.body);
+      } catch (error) {
+        // A TRANSPORT failure (fetch threw: connection reset / DNS / timeout). It is
+        // transient by nature (no HTTP status). Retry under the same bounded budget;
+        // on exhaustion (or when the caller opted out) re-throw LOUDLY — never a quiet
+        // degrade. A non-idempotent write (retryTransient=false) never auto-retries a
+        // throw (the request may have applied server-side).
+        if (retryTransient && transientRetries < this.maxTransientRetries) {
+          await this.sleep(TRANSIENT_BACKOFF_MS[transientRetries] ?? 2_000);
+          transientRetries += 1;
+          continue;
+        }
+        throw error;
+      }
       // 401 with a token supplier: re-mint once and retry (P3-0003 behavior).
       if (response.status === 401 && input.refreshToken !== undefined && !refreshed) {
         refreshed = true;
@@ -138,6 +178,16 @@ export class FetchGitHubHttpClient implements GitHubHttpClient {
       // and retry up to the configured ceiling rather than hammering GitHub.
       if (response.retryAfterMs !== undefined && attempt < this.maxRateLimitRetries) {
         await this.sleep(response.retryAfterMs);
+        continue;
+      }
+      // GitHub-5xx resilience: a transient gateway failure (502/503/504/408) self-heals
+      // on an immediate retry. Back off exponentially (500ms→1s→2s) up to the transient
+      // ceiling, then surface the raw 5xx response LOUDLY (the caller's `!== 200` guard
+      // turns it into a thrown error / an infra-hold) — never a silent success. Opt-out
+      // (`retryTransient: false`) lets a non-idempotent write handle its own 5xx.
+      if (retryTransient && isTransientStatus(response.status) && transientRetries < this.maxTransientRetries) {
+        await this.sleep(TRANSIENT_BACKOFF_MS[transientRetries] ?? 2_000);
+        transientRetries += 1;
         continue;
       }
       return response;
@@ -167,45 +217,6 @@ export class FetchGitHubHttpClient implements GitHubHttpClient {
       retryAfterMs: rateLimitBackoffMs(response.status, headerGetter(response.headers), this.now()),
     };
   }
-}
-
-type HeaderGetter = (name: string) => string | null;
-
-function headerGetter(headers: Headers | undefined): HeaderGetter {
-  return (name) => (headers === undefined ? null : headers.get(name));
-}
-
-/**
- * P3-0028: compute how long to wait before retrying a rate-limited GitHub
- * response, or `undefined` if the response is not rate-limited. Honors
- * `Retry-After` (delta seconds) first, then a `403/429` with
- * `X-RateLimit-Remaining: 0` + `X-RateLimit-Reset` (epoch seconds). The wait is
- * clamped to [MIN, MAX] so a bogus header can't stall the worker indefinitely.
- */
-export function rateLimitBackoffMs(status: number, getHeader: HeaderGetter, nowMs: number): number | undefined {
-  if (status !== 403 && status !== 429) {
-    return undefined;
-  }
-  const retryAfter = getHeader("retry-after");
-  if (retryAfter !== null && retryAfter.trim() !== "") {
-    const seconds = Number(retryAfter);
-    if (Number.isFinite(seconds) && seconds >= 0) {
-      return clampBackoff(seconds * 1_000);
-    }
-  }
-  const remaining = getHeader("x-ratelimit-remaining");
-  const reset = getHeader("x-ratelimit-reset");
-  if (remaining === "0" && reset !== null && reset.trim() !== "") {
-    const resetEpoch = Number(reset);
-    if (Number.isFinite(resetEpoch)) {
-      return clampBackoff(resetEpoch * 1_000 - nowMs);
-    }
-  }
-  return undefined;
-}
-
-function clampBackoff(ms: number): number {
-  return Math.min(MAX_RATE_LIMIT_BACKOFF_MS, Math.max(MIN_RATE_LIMIT_BACKOFF_MS, Math.ceil(ms)));
 }
 
 export class GitHubPullRequestService {
@@ -382,10 +393,12 @@ export class GitHubStatusService {
   }
 
   /**
-   * P3-0028: read the branch-protection required status check contexts for a
-   * base branch. Returns `undefined` when the branch is unprotected (404) or
-   * the protection config can't be read — callers treat that as "no required
-   * gating" and fall back to the all-observed-green rule.
+   * P3-0028: read the branch-protection required status check contexts for a base
+   * branch. `undefined` ONLY for a 404 — GitHub's signal the branch has NO protection
+   * (legitimately "no required gating"; callers fall back to all-observed-green).
+   * No-silent-fallback: any OTHER non-200 is a genuine ERROR, not "no gating" — a 403
+   * (token lacks `Administration:read`) returned as `undefined` would DISABLE required-
+   * check gating; a persistent 5xx survived the transient retry. So those THROW loudly.
    */
   async fetchRequiredContexts(input: {
     repo: GitHubRepository;
@@ -403,7 +416,7 @@ export class GitHubStatusService {
       return undefined;
     }
     if (response.status !== 200) {
-      return undefined;
+      throw new Error(`GitHub branch-protection read failed for ${input.baseBranch}: HTTP ${response.status}`);
     }
     return parseRequiredContexts(response.body);
   }
