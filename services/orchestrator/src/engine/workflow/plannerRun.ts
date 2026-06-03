@@ -109,9 +109,12 @@ export interface PlannerRunContext {
   // SaaS Tier-B #5: a MANAGED run's OpenAI-compatible endpoint override (the base
   // URL every resolved adapter is pointed at). Absent ⇒ BYOK (native endpoints).
   endpointBaseUrl?: string;
-  // The project's governance posture, threaded by the run worker. Drives the gate's
-  // advisory policy (`lenient` ⇒ lint/typecheck advisory; absent ⇒ strict).
+  // Governance posture (run worker): drives the gate's advisory policy (`lenient` ⇒ lint/typecheck advisory; absent ⇒ strict).
   governancePosture?: GovernancePosture;
+  // GREENFIELD MARKER (ProjectConfigV1.greenfield): drives buildDefaultGate's in-loop
+  // deps-ensure MODE — greenfield ⇒ NON-FROZEN install (a writer-added devDep installs
+  // without a regenerated lockfile); absent/false ⇒ the FROZEN brownfield default.
+  greenfield?: boolean;
 }
 
 export interface PlannerRunAdapterContext {
@@ -169,19 +172,17 @@ export interface RunPlannerLoopInput {
   ciPollDelayMs?: number;
   sleep?: (ms: number) => Promise<void>;
   pressureThresholdPercent?: number;
-  // P3-0006: the install command run over SSH after clone (so gating + intent-
-  // checking see a built tree). An explicit override; when omitted the run resolves
-  // the repo's tanren-ci.yml `bootstrap.run` (P3-0004), else the pnpm/npm-detecting
-  // DEFAULT_BOOTSTRAP_COMMAND heuristic.
+  // P3-0006: explicit install-command override run over SSH after clone. When
+  // omitted the run resolves the repo's tanren-ci.yml `bootstrap.run`, else a
+  // default (cold bootstrap: DEFAULT_BOOTSTRAP_COMMAND; in-loop deps-ensure:
+  // greenfield-aware, see buildDefaultGate).
   bootstrapCommand?: string;
   // Test seam: when omitted, the real bootstrapWorkspace runs over SSH. Tests
-  // that drive the loop with a RecordingSsh fake inject a no-op (or scripted
-  // failure) so unit runs never depend on a real install.
+  // inject a no-op (or scripted failure) so unit runs never depend on a real install.
   runBootstrap?: (input: BootstrapStepInput) => Promise<void>;
-  // Test seam mirroring runBootstrap: the synthetic post-bootstrap commit whose
-  // sha becomes the writer's diff base (run baseSha). When omitted, the real
-  // commitBootstrapState runs over SSH. Tests inject a scripted sha (or a no-op
-  // returning "") so unit runs never touch a real git tree.
+  // Test seam mirroring runBootstrap: the synthetic post-bootstrap commit whose sha
+  // becomes the writer's diff base (run baseSha). When omitted, the real
+  // commitBootstrapState runs over SSH; tests inject a scripted sha (or "").
   commitBootstrap?: (input: CommitBootstrapStepInput) => Promise<string>;
   // P3-0005 test seam: the deterministic gate the loop runs per writer
   // iteration (fast tier) and before audit (slow tier). When omitted, the

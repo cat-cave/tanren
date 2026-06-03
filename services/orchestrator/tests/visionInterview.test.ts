@@ -336,6 +336,9 @@ describe("deriveFromCapture · creates the product graph (no migration)", () => 
     // doctrine): the in-loop gate's lint/typecheck are advisory so an imperfect
     // first pass lands + improves via the issue loop instead of stalling.
     expect(config?.governancePosture).toBe("lenient");
+    // The interview path always builds off an empty repo ⇒ greenfield (drives the
+    // non-frozen in-loop deps-ensure).
+    expect(config?.greenfield).toBe(true);
   });
 
   it("FINDING #1: omitting autonomy keeps the safe schema defaults (human / not_configured)", async () => {
@@ -354,5 +357,8 @@ describe("deriveFromCapture · creates the product graph (no migration)", () => 
     expect(config).toBeDefined();
     expect(config?.reviewPolicy).toBe("human");
     expect(config?.mergeIntegration).toBe("not_configured");
+    // Even the human tier is greenfield (interview builds off an empty repo) — the
+    // safe review/merge defaults hold, but greenfield drives the non-frozen ensure.
+    expect(config?.greenfield).toBe(true);
   });
 });

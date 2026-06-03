@@ -43,6 +43,29 @@ describe("subtask loop — writer prompt rendering (writerPromptFor)", () => {
     expect(prompt).toContain("exercise the planner loop");
   });
 
+  it("threads the spec's acceptance criteria + the standing anti-stub toolchain instruction into the writer prompt", async () => {
+    const writer = makeWriter(["diff a\n"]);
+    const { input } = defaultLoopInput({
+      adapters: {
+        planner: makePlanner([buildPlan([{ title: "Wire helper", intent: "expose ok()", behaviorIds: ["B1"] }])]),
+        writer,
+        checker: makeChecker([passingCheck]),
+        auditor: makeAuditor([passingAudit]),
+      },
+    });
+    await runSubtaskLoop(input);
+
+    const prompt = writer.calls[0]!.prompt;
+    // The acceptance criteria (the same bar the checker judges) reach the writer.
+    expect(prompt).toContain("Acceptance criteria:");
+    expect(prompt).toContain("- README mentions ok");
+    // The standing toolchain instruction steers the writer away from `workspace:*`
+    // stub packages BEFORE it spends the iteration (the #273 scaffold failure mode).
+    expect(prompt).toContain("NEVER create local");
+    expect(prompt).toContain("workspace:*");
+    expect(prompt).toContain("real published packages");
+  });
+
   it("falls back to (none) in the writer prompt when the subtask has no behaviors", async () => {
     const writer = makeWriter(["diff a\n"]);
     const { input } = defaultLoopInput({

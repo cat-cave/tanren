@@ -32,6 +32,14 @@ describe("ProjectConfigV1 parser", () => {
     expect(cfg.forgePersona).toEqual({});
     expect(cfg.escapeHatches).toEqual({});
     expect(cfg.allocator).toEqual({});
+    // greenfield defaults to false (brownfield) — a legacy row parses to the
+    // safe, lockfile-frozen default; no migration.
+    expect(cfg.greenfield).toBe(false);
+  });
+
+  it("defaults greenfield to false and accepts a true override", () => {
+    expect(migrateProjectConfig({ version: 1 }).greenfield).toBe(false);
+    expect(migrateProjectConfig({ version: 1, greenfield: true }).greenfield).toBe(true);
   });
 
   it("represents all six roles in the routing table with empty chains by default", () => {

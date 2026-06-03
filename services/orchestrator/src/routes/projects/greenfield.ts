@@ -127,6 +127,11 @@ export async function handleGreenfieldCreate(
       name: input.name,
       repoUrl: created.repoUrl,
       defaultBranch: input.defaultBranch ?? created.defaultBranch,
+      // GREENFIELD MARKER: this project has NO pre-existing repo/lockfile — Tanren
+      // authors the toolchain live. Persisted so the run's in-loop deps-ensure uses
+      // a NON-FROZEN install (a writer-added devDep without a regenerated lockfile
+      // still installs), while brownfield keeps the frozen, lockfile-safe default.
+      config: { version: 1, greenfield: true },
       ...(input.runnerImage === undefined ? {} : { runnerImage: input.runnerImage }),
       ...(input.allocator === undefined ? {} : { allocator: input.allocator }),
     },

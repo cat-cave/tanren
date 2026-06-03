@@ -187,6 +187,12 @@ export async function loadRunExecutionContext(
     // from the resolved project config so a greenfield `lenient` project lands
     // functional-but-weak code instead of stalling the gate.
     governancePosture: projectConfig.governancePosture,
+    // GREENFIELD MARKER from the resolved project config. Drives the in-loop
+    // deps-ensure install MODE: greenfield ⇒ non-frozen install (a writer-added
+    // devDep installs even without a regenerated lockfile); brownfield (false) ⇒
+    // the frozen, lockfile-safe default so an existing committed lockfile is never
+    // silently mutated. Legacy rows parse to `false` (brownfield) — main's behavior.
+    greenfield: projectConfig.greenfield,
   };
 
   return { context, projectConfig, orgId: decoded.org_id };
