@@ -5,8 +5,11 @@
 //   - the project run list (fetchRunListItems)           → inFlight
 //   - the project activity feed (fetchFeedPage)          → recentMilestones
 // Asserts: counts/percent, v1Reached only when all merged, inFlight reflects
-// running/queued runs, milestones filtered to the milestone event types, the
-// org-access-denied path, and no secret leakage in a milestone detail.
+// running/queued runs, the per-inFlight `stage` derived from each run's latest
+// event (writing/auditing/merging + the running fallback), the top-level
+// `lastActivityAt` (newest event ts, advancing, null when quiet), milestones
+// filtered to the milestone event types, the org-access-denied path, and no
+// secret leakage in a milestone detail or a derived stage.
 
 import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
@@ -166,6 +169,117 @@ describe("project progress route", () => {
     expect(active?.title).toBe("Active");
     // The completed merged-spec run is NOT in-flight.
     expect(ids).not.toContain("s_merged_a");
+  });
+
+  it("derives a per-inFlight stage from each run's latest event (writing; unknown→running fallback)", async () => {
+    const { app, pool } = buildHarness();
+    seedMixedProject(pool);
+    const { body } = await getJson(app, "/orgs/org_acme/projects/proj_1/progress");
+    const progress = ProjectProgress.parse(body);
+
+    // run_active's latest stage-bearing event is writer.started (id 9), even
+    // though an older github.pr.created (id 8) also exists for the run — newest
+    // wins → "writing".
+    const active = progress.inFlight.find((s) => s.specId === "s_active");
+    expect(active?.stage).toBe("writing");
+    // run_pending's only event is dag.spec.enqueued — not a stage-bearing
+    // pipeline event → the "running" fallback.
+    const pending = progress.inFlight.find((s) => s.specId === "s_pending");
+    expect(pending?.stage).toBe("running");
+  });
+
+  it("maps the latest event to its coarse stage (auditor.started → auditing) and surfaces lastActivityAt", async () => {
+    const { app, pool } = buildHarness();
+    pool.seedProject({ project_id: "proj_aud", org_id: "org_acme", name: "Aud", repo_url: "https://x/r" });
+    pool.seedProjectMember("proj_aud", "user_alice");
+    pool.seedSpec({ spec_id: "sa", project_id: "proj_aud", title: "Auditing one", status: "in_flight" });
+    pool.seedRun({ run_id: "run_aud", spec_id: "sa", project_id: "proj_aud", status: "running" });
+    // A run mid-audit: the newest event is auditor.started, preceded by the
+    // earlier checker/writer events. Newest-first ids; explicit ts so we can
+    // assert lastActivityAt is the head event's timestamp.
+    pool.seedEvent({
+      id: 2,
+      event_type: "writer.completed",
+      spec_id: "sa",
+      run_id: "run_aud",
+      project_id: "proj_aud",
+      ts: new Date("2026-05-10T00:00:00.000Z"),
+    });
+    pool.seedEvent({
+      id: 3,
+      event_type: "checker.passed",
+      spec_id: "sa",
+      run_id: "run_aud",
+      project_id: "proj_aud",
+      ts: new Date("2026-05-10T00:05:00.000Z"),
+    });
+    pool.seedEvent({
+      id: 4,
+      event_type: "auditor.started",
+      spec_id: "sa",
+      run_id: "run_aud",
+      project_id: "proj_aud",
+      ts: new Date("2026-05-10T00:10:00.000Z"),
+    });
+
+    const { body } = await getJson(app, "/orgs/org_acme/projects/proj_aud/progress");
+    const progress = ProjectProgress.parse(body);
+
+    const item = progress.inFlight.find((s) => s.specId === "sa");
+    expect(item?.stage).toBe("auditing");
+    // lastActivityAt reflects the newest event (auditor.started @ 00:10).
+    expect(progress.lastActivityAt).toBe("2026-05-10T00:10:00.000Z");
+
+    // It advances: a newer merge.queued event becomes both the stage and the
+    // lastActivityAt head.
+    pool.seedEvent({
+      id: 5,
+      event_type: "merge.queued",
+      spec_id: "sa",
+      run_id: "run_aud",
+      project_id: "proj_aud",
+      ts: new Date("2026-05-10T00:15:00.000Z"),
+    });
+    const after = ProjectProgress.parse((await getJson(app, "/orgs/org_acme/projects/proj_aud/progress")).body);
+    expect(after.inFlight.find((s) => s.specId === "sa")?.stage).toBe("merging");
+    expect(after.lastActivityAt).toBe("2026-05-10T00:15:00.000Z");
+    expect(new Date(after.lastActivityAt!).getTime()).toBeGreaterThan(new Date(progress.lastActivityAt!).getTime());
+  });
+
+  it("lastActivityAt is null when the project has no events", async () => {
+    const { app, pool } = buildHarness();
+    pool.seedProject({ project_id: "proj_quiet", org_id: "org_acme", name: "Quiet", repo_url: "https://x/r" });
+    pool.seedProjectMember("proj_quiet", "user_alice");
+    pool.seedSpec({ spec_id: "q1", project_id: "proj_quiet", title: "Q", status: "pending" });
+
+    const { body } = await getJson(app, "/orgs/org_acme/projects/proj_quiet/progress");
+    const progress = ProjectProgress.parse(body);
+    expect(progress.lastActivityAt).toBeNull();
+    expect(progress.inFlight).toEqual([]);
+  });
+
+  it("the derived stage never leaks a secret from the run's events", async () => {
+    const { app, pool } = buildHarness();
+    pool.seedProject({ project_id: "proj_sec", org_id: "org_acme", name: "Sec", repo_url: "https://x/r" });
+    pool.seedProjectMember("proj_sec", "user_alice");
+    pool.seedSpec({ spec_id: "x1", project_id: "proj_sec", title: "Secretish", status: "in_flight" });
+    pool.seedRun({ run_id: "run_sec", spec_id: "x1", project_id: "proj_sec", status: "running" });
+    // The latest event for the run carries a secret-looking payload field; the
+    // stage is derived from the event TYPE only, so the response must read
+    // "writing" and the secret must appear nowhere in the serialized body.
+    pool.seedEvent({
+      id: 1,
+      event_type: "writer.started",
+      spec_id: "x1",
+      run_id: "run_sec",
+      project_id: "proj_sec",
+      payload: { apiToken: "ghp_inflightsecret", model: "claude" },
+    });
+
+    const { body } = await getJson(app, "/orgs/org_acme/projects/proj_sec/progress");
+    const progress = ProjectProgress.parse(body);
+    expect(progress.inFlight.find((s) => s.specId === "x1")?.stage).toBe("writing");
+    expect(JSON.stringify(progress)).not.toContain("ghp_inflightsecret");
   });
 
   it("blocked lists halted/terminal-not-merged specs", async () => {
