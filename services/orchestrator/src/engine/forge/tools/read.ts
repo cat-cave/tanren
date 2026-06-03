@@ -23,6 +23,14 @@ interface ToolDeps {
   pool: pg.Pool;
 }
 
+// The Forge answerer schemas are rendered for OpenAI strict structured outputs,
+// where an unset optional arg arrives as an explicit `null` rather than being
+// omitted (see renderAnswererJsonSchema). `isSet` collapses both `null` and
+// `undefined` to "not provided" so the tool bodies treat them identically.
+function isSet<T>(value: T | null | undefined): value is T {
+  return value !== null && value !== undefined;
+}
+
 // RLS R3a: the forge READ-tool dispatcher runs inside an ambient
 // `runWithOrgScope` (the `/forge/tools` route + the ask engine both open one).
 // Each tool reads on `resolveQueryClient(deps.pool)` — the ambient org-scoped
@@ -87,11 +95,14 @@ export async function tanrenReadRun(
 // `tanren.read_events` — applies P2A-0009 redaction by default.
 // ---------------------------------------------------------------------------
 
+// The optional fields may arrive as `null` (the OpenAI-strict answerer schema
+// returns null rather than omitting an optional key); `null` is treated the
+// same as an omitted field throughout this function.
 export interface TanrenReadEventsArgs {
-  runId?: string;
-  specId?: string;
-  since?: string;
-  limit?: number;
+  runId?: string | null;
+  specId?: string | null;
+  since?: string | null;
+  limit?: number | null;
 }
 
 export interface RedactedEventRow {
@@ -111,28 +122,33 @@ export async function tanrenReadEvents(
   args: TanrenReadEventsArgs,
   actor: ActorContext,
 ): Promise<{ events: RedactedEventRow[] }> {
-  if (args.runId === undefined && args.specId === undefined) {
+  // The answerer schema is OpenAI-strict, so an unset optional arrives as `null`
+  // (not absent); `isSet` collapses null + undefined to "not provided".
+  const runId = isSet(args.runId) ? args.runId : undefined;
+  const specId = isSet(args.specId) ? args.specId : undefined;
+  const since = isSet(args.since) ? args.since : undefined;
+  if (runId === undefined && specId === undefined) {
     throw new ToolAccessDeniedError("read_events requires runId or specId");
   }
   const db = resolveQueryClient(deps.pool);
-  if (args.runId !== undefined) {
-    await assertRunAccess(db, args.runId, actor);
+  if (runId !== undefined) {
+    await assertRunAccess(db, runId, actor);
   }
-  if (args.specId !== undefined) {
-    await assertSpecAccess(db, args.specId, actor);
+  if (specId !== undefined) {
+    await assertSpecAccess(db, specId, actor);
   }
   const clauses: string[] = [];
   const params: unknown[] = [];
-  if (args.runId !== undefined) {
-    params.push(args.runId);
+  if (runId !== undefined) {
+    params.push(runId);
     clauses.push(`run_id = $${params.length}`);
   }
-  if (args.specId !== undefined) {
-    params.push(args.specId);
+  if (specId !== undefined) {
+    params.push(specId);
     clauses.push(`spec_id = $${params.length}`);
   }
-  if (args.since !== undefined) {
-    params.push(args.since);
+  if (since !== undefined) {
+    params.push(since);
     clauses.push(`ts >= $${params.length}`);
   }
   const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
@@ -179,10 +195,12 @@ export async function tanrenReadEvents(
 // `tanren.read_costs`
 // ---------------------------------------------------------------------------
 
+// Optional fields may arrive as `null` (OpenAI-strict answerer schema) and are
+// treated identically to an omitted field.
 export interface TanrenReadCostsArgs {
-  runId?: string;
-  projectId?: string;
-  since?: string;
+  runId?: string | null;
+  projectId?: string | null;
+  since?: string | null;
 }
 
 export async function tanrenReadCosts(
@@ -190,28 +208,30 @@ export async function tanrenReadCosts(
   args: TanrenReadCostsArgs,
   actor: ActorContext,
 ): Promise<{ costs: ReadonlyArray<Record<string, unknown>>; totalUsd: string }> {
-  if (args.runId === undefined && args.projectId === undefined) {
+  const runId = isSet(args.runId) ? args.runId : undefined;
+  const since = isSet(args.since) ? args.since : undefined;
+  if (runId === undefined && !isSet(args.projectId)) {
     throw new ToolAccessDeniedError("read_costs requires runId or projectId");
   }
   const db = resolveQueryClient(deps.pool);
-  let projectId = args.projectId;
-  if (args.runId !== undefined) {
-    const access = await assertRunAccess(db, args.runId, actor);
+  let projectId = isSet(args.projectId) ? args.projectId : undefined;
+  if (runId !== undefined) {
+    const access = await assertRunAccess(db, runId, actor);
     projectId = projectId ?? access.projectId;
   } else if (projectId !== undefined) {
     await assertProjectAccess(db, projectId, actor);
   }
   const clauses: string[] = [];
   const params: unknown[] = [];
-  if (args.runId !== undefined) {
-    params.push(args.runId);
+  if (runId !== undefined) {
+    params.push(runId);
     clauses.push(`run_id = $${params.length}`);
   } else if (projectId !== undefined) {
     params.push(projectId);
     clauses.push(`project_id = $${params.length}`);
   }
-  if (args.since !== undefined) {
-    params.push(args.since);
+  if (since !== undefined) {
+    params.push(since);
     clauses.push(`recorded_at >= $${params.length}`);
   }
   const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";

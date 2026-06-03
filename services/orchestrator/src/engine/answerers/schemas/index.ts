@@ -38,6 +38,111 @@ export function listAnswererSchemas(): ReadonlyArray<AnswererSchemaDescriptor> {
 // --output-schema` and by the codegen script. Keeping this here means the
 // codegen and the drift test never need to know what `zod-to-json-schema`
 // arguments to pass.
+//
+// OpenAI's STRICT structured-outputs mode (which `codex exec --output-schema`
+// uses) is stricter than plain JSON Schema: EVERY object must list EVERY key of
+// its `properties` in `required`, and must set `additionalProperties:false`.
+// Optionality may NOT be expressed by absence-from-required; it must be a
+// NULLABLE type. `z.toJSONSchema` emits standard JSON Schema, where `.optional()`
+// / `.partial()` properties are simply dropped from `required` (and not made
+// nullable) — which OpenAI rejects with
+// `invalid_json_schema: 'required' is required ... including every key in
+// properties`. `enforceStrictNode` post-processes the rendered schema into the
+// strict shape: every object gets the full `required` list +
+// `additionalProperties:false`, and any property that was NOT originally
+// required is made nullable (so the model returns `null` instead of omitting
+// it). The Zod source schemas accept that `null` on the parse path (the
+// previously-`.optional()` fields are `.nullish()` / null-tolerant).
+type JsonObject = Record<string, unknown>;
+
+function isJsonObject(value: unknown): value is JsonObject {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+// True when a property schema already admits `null` (a `{type:"null"}` somewhere
+// in a union branch, a `type` array containing "null", or a literal null type).
+// We must not double-wrap an already-nullable property — both because it is
+// redundant and because OpenAI rejects a `{type:"null"}` repeated in an `anyOf`.
+function isAlreadyNullable(schema: JsonObject): boolean {
+  const type = schema["type"];
+  if (type === "null") return true;
+  if (Array.isArray(type) && type.includes("null")) return true;
+  for (const key of ["anyOf", "oneOf"] as const) {
+    const branches = schema[key];
+    if (Array.isArray(branches) && branches.some((b) => isJsonObject(b) && isAlreadyNullable(b))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Make a property schema nullable. A scalar with a single string `type` widens
+// to a `["<type>","null"]` type array (the compact form OpenAI prefers); any
+// other shape ($ref, anyOf/oneOf/allOf, object, array, enum, …) is wrapped in
+// `anyOf:[<orig>, {type:"null"}]` so the original constraints are preserved.
+function makeNullable(schema: JsonObject): JsonObject {
+  if (isAlreadyNullable(schema)) return schema;
+  const type = schema["type"];
+  if (typeof type === "string" && !("$ref" in schema)) {
+    return { ...schema, type: [type, "null"] };
+  }
+  return { anyOf: [schema, { type: "null" }] };
+}
+
+// Recursively rewrite a JSON Schema node into OpenAI-strict form. Returns a new
+// node (does not mutate the input). `$ref` nodes are left as-is — the object
+// they point at lives under `$defs`/`definitions` and is rewritten there, so the
+// ref keeps resolving and is never double-processed.
+function enforceStrictNode(node: unknown): unknown {
+  if (Array.isArray(node)) return node.map((item) => enforceStrictNode(item));
+  if (!isJsonObject(node)) return node;
+
+  const out: JsonObject = { ...node };
+
+  // Rewrite the def buckets and union branches first so nested objects are
+  // rewritten into strict form regardless of where they live.
+  for (const defKey of ["$defs", "definitions"] as const) {
+    const defs = out[defKey];
+    if (isJsonObject(defs)) {
+      const rewritten: JsonObject = {};
+      for (const [name, def] of Object.entries(defs)) rewritten[name] = enforceStrictNode(def);
+      out[defKey] = rewritten;
+    }
+  }
+  for (const unionKey of ["anyOf", "oneOf", "allOf"] as const) {
+    const branches = out[unionKey];
+    if (Array.isArray(branches)) out[unionKey] = branches.map((b) => enforceStrictNode(b));
+  }
+
+  // Array items (single schema or tuple form).
+  if ("items" in out) out["items"] = enforceStrictNode(out["items"]);
+  if (Array.isArray(out["prefixItems"])) out["prefixItems"] = out["prefixItems"].map((i) => enforceStrictNode(i));
+
+  // Object node: enforce required==all keys + additionalProperties:false, and
+  // make every previously-optional property nullable.
+  const properties = out["properties"];
+  if (isJsonObject(properties)) {
+    const originalRequired = new Set(Array.isArray(out["required"]) ? (out["required"] as string[]) : []);
+    const allKeys = Object.keys(properties);
+
+    const rewrittenProps: JsonObject = {};
+    for (const key of allKeys) {
+      let child = enforceStrictNode(properties[key]);
+      if (!originalRequired.has(key) && isJsonObject(child)) {
+        child = makeNullable(child);
+      }
+      rewrittenProps[key] = child;
+    }
+
+    out["properties"] = rewrittenProps;
+    out["required"] = allKeys;
+    out["additionalProperties"] = false;
+  }
+
+  return out;
+}
+
 export function renderAnswererJsonSchema(zodSchema: ZodType): Record<string, unknown> {
-  return z.toJSONSchema(zodSchema, { target: "draft-2020-12" }) as Record<string, unknown>;
+  const rendered = z.toJSONSchema(zodSchema, { target: "draft-2020-12" }) as Record<string, unknown>;
+  return enforceStrictNode(rendered) as Record<string, unknown>;
 }

@@ -111,6 +111,27 @@ export const InterviewSuggestion = z
   .strict();
 export type InterviewSuggestion = z.infer<typeof InterviewSuggestion>;
 
+// The capture DELTA a single round contributes. Every field is OPTIONAL (a
+// round adds only the items it surfaced) — but because the answerer JSON Schema
+// is rendered for OpenAI strict structured-outputs (every key required, optional
+// expressed as nullable; see renderAnswererJsonSchema), the model returns `null`
+// for the fields it has nothing to add this round. So each field is `.nullish()`
+// (accepts present | null | absent), not the plain `.optional()` that
+// `InterviewCapture.partial()` would produce (which would REJECT the model's
+// `null`). `mergeCapture` treats null exactly like an omitted field.
+export const InterviewCaptureDelta = z
+  .object({
+    identity: CaptureIdentity.nullish(),
+    personas: z.array(CapturePersona).nullish(),
+    behaviors: z.array(CaptureBehavior).nullish(),
+    interfaces: z.array(CaptureInterface).nullish(),
+    designDna: z.string().max(80).nullish(),
+    architecture: z.array(CaptureArchitectureLine).nullish(),
+    rulesets: z.array(z.string().min(1)).nullish(),
+  })
+  .strict();
+export type InterviewCaptureDelta = z.infer<typeof InterviewCaptureDelta>;
+
 // What the answerer returns for a single round: the next question (or, when the
 // interview is complete, a closing line), the capture DELTA this round added,
 // and whether the interview is done.
@@ -121,7 +142,7 @@ export const InterviewRoundOutput = z
     say: z.string().min(1).max(2000),
     // The capture this round contributes. The engine merges it into the running
     // capture (monotonic) — the answerer need only return the new items.
-    captureDelta: InterviewCapture.partial().default({}),
+    captureDelta: InterviewCaptureDelta.default({}),
     suggestions: z.array(InterviewSuggestion).max(4).default([]),
     complete: z.boolean().default(false),
   })
