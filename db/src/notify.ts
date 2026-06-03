@@ -23,7 +23,7 @@
 // as the producing write means the wake fires exactly when (and only if) the
 // write is durable. A rolled-back write emits no notification.
 //
-// `assertSafeRunId` guards the run id before it is interpolated into the NOTIFY
+// `assertSafePayloadId` guards an id before it is interpolated into the NOTIFY
 // payload literal (NOTIFY cannot bind parameters), mirroring `assertSafeOrgId`
 // in orgScope.ts — a malformed id is rejected loudly rather than smuggling SQL
 // into the notify statement.
@@ -36,17 +36,29 @@ export const JOB_QUEUE_CHANNEL = "tanren_job_queue";
 /** Per-run activity channel; the NOTIFY payload is the run id (and nothing else). */
 export const RUN_ACTIVITY_CHANNEL = "tanren_run";
 
+/**
+ * DAG-change channel; the NOTIFY payload is the project id (and nothing else).
+ * Fired whenever a spec is inserted for a project (derive / discovery-accept /
+ * plain create), so the DagWalker subscriber wakes and walks THAT project the
+ * instant its DAG gains a ready spec — without a manual trigger or worker reboot
+ * (a freshly-derived DAG has pending specs but ZERO runs, so the run-activity
+ * channel never fires for it). The payload is ONLY the project id — never tenant
+ * data — so a listener that woke on it re-reads the project's specs under the
+ * system scope (the walker is cross-org, like the worker bootstrap).
+ */
+export const DAG_CHANGE_CHANNEL = "tanren_dag";
+
 /** Anything that can issue a NOTIFY — the pool or a checked-out client. */
 type NotifyClient = Pick<Pool | PoolClient, "query">;
 
 /**
- * Guard a run id before it is interpolated into the NOTIFY payload literal.
- * Run ids are `run_<uuid>` slugs; reject anything else so a malformed id can
+ * Guard an id before it is interpolated into the NOTIFY payload literal.
+ * Our ids are `<kind>_<uuid>` slugs; reject anything else so a malformed id can
  * never inject SQL into the un-parameterizable NOTIFY statement.
  */
-function assertSafeRunId(runId: string): void {
-  if (!/^[A-Za-z0-9_:.-]+$/u.test(runId)) {
-    throw new Error(`unsafe run id for NOTIFY payload: ${JSON.stringify(runId)}`);
+function assertSafePayloadId(id: string): void {
+  if (!/^[A-Za-z0-9_:.-]+$/u.test(id)) {
+    throw new Error(`unsafe id for NOTIFY payload: ${JSON.stringify(id)}`);
   }
 }
 
@@ -68,10 +80,26 @@ export async function notifyJobEnqueued(client: NotifyClient): Promise<void> {
  * carries no tenant data across the wire.
  */
 export async function notifyRunActivity(client: NotifyClient, runId: string): Promise<void> {
-  assertSafeRunId(runId);
+  assertSafePayloadId(runId);
   // NOTIFY cannot bind parameters; runId is validated above. Single-quote the
   // literal (the id charset excludes `'`, so no embedded-quote escaping needed).
   await client.query(`NOTIFY ${RUN_ACTIVITY_CHANNEL}, '${runId}'`);
+}
+
+/**
+ * Emit a DAG-change wake for `projectId` on `client`. Call it at the spec INSERT
+ * seam so the DagWalker subscriber wakes and walks this project the moment its
+ * DAG gains a (pending) spec — covering the greenfield-derive, discovery-accept,
+ * brownfield-seed, and plain create paths, which a freshly-created project has no
+ * run to trigger off of. Delivered at COMMIT, so the wake fires exactly when the
+ * spec row is visible (a rolled-back insert emits no notification). The payload
+ * is ONLY the project id; the subscriber re-reads the DAG under the system scope.
+ */
+export async function notifyDagChanged(client: NotifyClient, projectId: string): Promise<void> {
+  assertSafePayloadId(projectId);
+  // NOTIFY cannot bind parameters; projectId is validated above. Single-quote
+  // the literal (the id charset excludes `'`, so no embedded-quote escaping).
+  await client.query(`NOTIFY ${DAG_CHANGE_CHANNEL}, '${projectId}'`);
 }
 
 /** A subscriber's wake callback. Receives the NOTIFY payload (empty string when none). */

@@ -1,11 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { getSystemPool, notifyJobEnqueued, runWithOrgScope } from "@tanren/db";
+import { getSystemPool, notifyDagChanged, notifyJobEnqueued, runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
-import { z } from "zod";
 import type { ActorContext } from "../../auth/schemas.js";
 import { type ProjectConfigV1, defaultProjectConfigV1, migrateProjectConfig } from "../config/index.js";
 import { PgEventStore } from "../eventStore.js";
-import { DEFAULT_SPEC_PRIORITY, SpecPriority } from "../state/spec.js";
+import { DEFAULT_SPEC_PRIORITY, type SpecPriority } from "../state/spec.js";
 import {
   ProjectAccessDeniedError,
   ProjectNotFoundError,
@@ -13,6 +12,7 @@ import {
   SpecNotFoundError,
   SpecNotRunnableError,
 } from "./projectSpecErrors.js";
+import { SpecProjectRowSchema } from "./projectSpecRowSchema.js";
 
 /** The pool or a checked-out client — anything that can run a query. */
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
@@ -193,6 +193,9 @@ async function createSpecOnClient(
       spec.priority,
     ],
   );
+  // Wake the DagWalker for THIS project (see notifyDagChanged): a fresh DAG has
+  // pending specs but zero runs, so the run channel never fires for it on its own.
+  await notifyDagChanged(client, spec.projectId);
   return spec;
 }
 
@@ -442,33 +445,6 @@ async function loadSpecWithProject(
     },
   };
 }
-
-const RecordOrEmpty = z
-  .unknown()
-  .transform((value) =>
-    typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : {},
-  );
-
-const StringArrayOrEmpty = z
-  .unknown()
-  .transform((value) => (Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []));
-
-const SpecProjectRowSchema = z.object({
-  project_id: z.string(),
-  name: z.string(),
-  repo_url: z.string(),
-  default_branch: z.string(),
-  runner_image: z.string(),
-  allocator: z.string(),
-  config: RecordOrEmpty,
-  spec_id: z.string(),
-  title: z.string(),
-  description: z.string(),
-  acceptance_criteria: StringArrayOrEmpty,
-  depends_on: StringArrayOrEmpty,
-  status: z.string(),
-  priority: SpecPriority,
-});
 
 async function ensureClientProjectAccess(
   client: pg.PoolClient,

@@ -6,7 +6,9 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, it } from "vitest";
 import {
+  DAG_CHANGE_CHANNEL,
   JOB_QUEUE_CHANNEL,
+  notifyDagChanged,
   notifyJobEnqueued,
   notifyRunActivity,
   PgNotifyListener,
@@ -40,9 +42,23 @@ describe("NOTIFY emitters", () => {
   it("notifyRunActivity rejects an unsafe run id rather than interpolating it", async () => {
     const client = recordingClient();
     await expect(notifyRunActivity(client as unknown as pg.PoolClient, "run_'; DROP TABLE runs;--")).rejects.toThrow(
-      /unsafe run id/u,
+      /unsafe id/u,
     );
     // Nothing was issued — the guard fires before the query.
+    expect(client.statements).toEqual([]);
+  });
+
+  it("notifyDagChanged fires NOTIFY on the dag channel with the project id as payload", async () => {
+    const client = recordingClient();
+    await notifyDagChanged(client as unknown as pg.PoolClient, "project_abc123");
+    expect(client.statements).toEqual([`NOTIFY ${DAG_CHANGE_CHANNEL}, 'project_abc123'`]);
+  });
+
+  it("notifyDagChanged rejects an unsafe project id rather than interpolating it", async () => {
+    const client = recordingClient();
+    await expect(
+      notifyDagChanged(client as unknown as pg.PoolClient, "project_'; DROP TABLE specs;--"),
+    ).rejects.toThrow(/unsafe id/u);
     expect(client.statements).toEqual([]);
   });
 });

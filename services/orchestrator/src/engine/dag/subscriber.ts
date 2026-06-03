@@ -1,17 +1,27 @@
 // The DagWalker subscriber (autonomy-engine.md §1a, §1.5): a long-lived
-// per-process listener that drives the per-project DagWalker on startup and on
-// every run.*-terminal / merge.completed notification — reacting to the
-// run-activity events ALREADY on the LISTEN/NOTIFY bus, no new polling. It is the
-// wiring the worker boot starts so the DAG self-drives.
+// per-process listener that drives the per-project DagWalker on startup, on
+// every run.*-terminal / merge.completed notification, AND on every DAG-change
+// (spec-creation) notification — reacting to events ALREADY on the LISTEN/NOTIFY
+// bus, no new polling. It is the wiring the worker boot starts so the DAG
+// self-drives.
 //
-// Mechanism: the eventStore fires a `tanren_run` NOTIFY (payload = the run id) at
-// every run-state change. This subscriber wakes on that channel, resolves the
-// run's project + status under the system scope (the payload carries no tenant
-// data, so it must re-read), and — when the run reached a TERMINAL state (a spec
-// finished, freeing a slot / unblocking dependents) — walks that run's project.
-// Walks are COALESCED per project: a project already walking re-walks once when
-// its current walk finishes (so a notification storm collapses to at most one
-// follow-up walk), and two terminal runs for the same project never race a
+// Two wake sources:
+//   - `tanren_run` (payload = run id): the eventStore fires it at every run-state
+//     change. The subscriber resolves the run's project + status under the system
+//     scope (the payload carries no tenant data, so it must re-read), and — when
+//     the run reached a TERMINAL state (a spec finished, freeing a slot /
+//     unblocking dependents) — walks that run's project.
+//   - `tanren_dag` (payload = project id): fired at the spec INSERT seam
+//     (`createSpec`). A freshly-derived/created project has pending specs but ZERO
+//     runs, so the run-activity channel never fires for it — without this channel
+//     its first walk would only happen on the next worker reboot. The subscriber
+//     walks the carried project directly (the payload IS the project id, so no
+//     re-resolve is needed; the walk itself reads the DAG system-scoped).
+//
+// Walks are COALESCED per project across BOTH channels: a project already walking
+// re-walks once when its current walk finishes (so a notification storm — terminal
+// runs and/or a burst of spec inserts during derive — collapses to at most one
+// follow-up walk), and concurrent triggers for the same project never race a
 // double-enqueue (the pending→active claim inside createQueuedRunFromSpec is the
 // idempotency boundary regardless, but coalescing keeps the load sane).
 //
@@ -20,7 +30,7 @@
 // run status covers both triggers in Phase 1 without parsing event types off the
 // payload-free channel.
 
-import { RUN_ACTIVITY_CHANNEL, type PgNotifyListener, runWithSystemScope } from "@tanren/db";
+import { DAG_CHANGE_CHANNEL, RUN_ACTIVITY_CHANNEL, type PgNotifyListener, runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
 import type { DagWalker } from "../contracts/dagWalker.js";
 import type { SpeculativeIntegrator } from "../contracts/speculativeIntegrator.js";
@@ -84,7 +94,7 @@ async function resolveRunTrigger(
  */
 export class DagWalkerSubscriber {
   private readonly walker: DagWalker;
-  private unsubscribe: (() => void) | undefined;
+  private readonly unsubscribes: Array<() => void> = [];
   private stopped = false;
   // Per-project walk coalescing: the in-flight walk promise + a "re-walk when it
   // finishes" flag, so concurrent triggers never run two walks of one project at
@@ -120,25 +130,39 @@ export class DagWalkerSubscriber {
     void this.driveAllProjects();
   }
 
-  /** Subscribe to the bus off the boot path; tolerant of a not-yet-ready DB. */
+  /** Subscribe to both wake channels off the boot path; tolerant of a not-yet-ready DB. */
   private async subscribeInBackground(): Promise<void> {
     try {
-      const unsubscribe = await this.deps.notifyListener.subscribe(RUN_ACTIVITY_CHANNEL, (payload) => {
+      const runUnsub = await this.deps.notifyListener.subscribe(RUN_ACTIVITY_CHANNEL, (payload) => {
         // Fire-and-forget: the wake handler must not block the LISTEN connection.
         // A resolve/walk failure is logged, never thrown into the notify pump.
         void this.onRunActivity(payload).catch((error: unknown) => {
           console.error(`[dag-walker] run-activity handler failed for run ${payload}:`, error);
         });
       });
-      // If stop() raced ahead of the connect, unsubscribe immediately.
-      if (this.stopped) {
-        unsubscribe();
-        return;
-      }
-      this.unsubscribe = unsubscribe;
+      this.track(runUnsub);
+
+      const dagUnsub = await this.deps.notifyListener.subscribe(DAG_CHANGE_CHANNEL, (payload) => {
+        // A spec was inserted for this project: walk it now (the payload IS the
+        // project id). Coalesced through the same per-project in-flight guard, so
+        // a burst of inserts during derive collapses to one follow-up walk.
+        void this.onDagChange(payload).catch((error: unknown) => {
+          console.error(`[dag-walker] dag-change handler failed for project ${payload}:`, error);
+        });
+      });
+      this.track(dagUnsub);
     } catch (error) {
-      console.error("[dag-walker] failed to subscribe to the run-activity bus (will not auto-drive):", error);
+      console.error("[dag-walker] failed to subscribe to the LISTEN/NOTIFY bus (will not auto-drive):", error);
     }
+  }
+
+  /** Record an unsubscribe — or, if stop() raced the connect, fire it immediately. */
+  private track(unsubscribe: () => void): void {
+    if (this.stopped) {
+      unsubscribe();
+      return;
+    }
+    this.unsubscribes.push(unsubscribe);
   }
 
   /** Best-effort initial walk of every project with a DAG. */
@@ -154,8 +178,9 @@ export class DagWalkerSubscriber {
   /** Stop listening. Idempotent; in-flight walks finish on their own. */
   stop(): void {
     this.stopped = true;
-    this.unsubscribe?.();
-    this.unsubscribe = undefined;
+    while (this.unsubscribes.length > 0) {
+      this.unsubscribes.pop()?.();
+    }
   }
 
   /** Handle one `tanren_run` wake: walk the run's project only when it terminated. */
@@ -164,6 +189,16 @@ export class DagWalkerSubscriber {
     const trigger = await resolveRunTrigger(this.deps.pool, runId);
     if (trigger === undefined || !trigger.terminal) return;
     await this.scheduleWalk(trigger.projectId);
+  }
+
+  /**
+   * Handle one `tanren_dag` wake: a spec was inserted for this project, so its
+   * DAG may have a newly-ready spec. The payload IS the project id (no run to
+   * resolve), so walk it directly through the coalescing guard.
+   */
+  private async onDagChange(projectId: string): Promise<void> {
+    if (projectId === "") return;
+    await this.scheduleWalk(projectId);
   }
 
   /**
