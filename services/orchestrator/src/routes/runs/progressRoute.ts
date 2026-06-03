@@ -35,9 +35,12 @@ export function registerProjectProgressRoute(app: Hono<ActorContextEnv>, options
     if (denial !== undefined) return denial;
 
     // One org-scoped transaction for all three reads (same scope discipline the
-    // sibling routes use). The feed is loaded a generous window deep, then
-    // filtered to the milestone event types in the helper — enough to fill the
-    // last-~20 milestones without paging the whole history.
+    // sibling routes use). The feed is loaded a generous window deep (newest
+    // first) and reused three ways in the pure reducer — recentMilestones, the
+    // per-inFlight-run `stage` (latest event per run), and the top-level
+    // `lastActivityAt` (the head event's ts) — so the live-progress signals add
+    // ZERO extra queries. The window is enough to fill the last-~20 milestones
+    // and reach each active run's latest event without paging the whole history.
     const { project, specs, runs, feed } = await runWithOrgScope(options.pool, orgId, async (client) => {
       const projectRow = await ProjectStore.get(client, projectId, systemActor);
       const specRows = await pgRepositories.projectSpecs.listForProject(client, projectId, systemActor);

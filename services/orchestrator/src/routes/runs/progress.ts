@@ -9,7 +9,11 @@
 // This module owns NO SQL and opens NO transaction: it is a pure reducer over
 // rows the caller already loaded through the org-scoped reads. No new writes,
 // no side effects, no secret values — `detail` carries only the non-secret
-// reason/message the feed redaction layer already surfaced.
+// reason/message the feed redaction layer already surfaced, and the live-
+// progress signals (`inFlight[].stage` + top-level `lastActivityAt`) are
+// derived from event TYPES + timestamps in that same feed — a label and a
+// timestamp, never a payload value — so a watcher sees a long single spec move
+// through writer→gate→checker→auditor→PR→CI→merge with zero extra queries.
 
 import { z } from "zod";
 import type { ProjectSpecRow } from "../../engine/repositories/index.js";
@@ -50,6 +54,13 @@ export const InFlightSpec = z
     specId: z.string().min(1),
     title: z.string(),
     runStatus: z.string().min(1),
+    // A coarse, human-readable pipeline stage derived from the run's LATEST
+    // event (planning/writing/gating/checking/auditing/opening_pr/ci/merging,
+    // or "running" when no stage-bearing event has landed yet). A derived
+    // label — never a payload/secret value. This is the "it's alive" signal a
+    // watcher needs while a single spec churns for 10–20 minutes without the
+    // counts changing.
+    stage: z.string().min(1),
     prUrl: z.string().nullable(),
   })
   .strict();
@@ -87,6 +98,11 @@ export const ProjectProgress = z
     inFlight: z.array(InFlightSpec),
     blocked: z.array(BlockedSpec),
     recentMilestones: z.array(ProgressMilestone),
+    // ISO timestamp of the most recent event in the project's feed, or null
+    // when the project has no events yet. The "is anything happening" signal:
+    // a watcher that sees `lastActivityAt` advancing knows the project is alive
+    // even when the spec counts don't move. A timestamp — never a value.
+    lastActivityAt: z.string().nullable(),
   })
   .strict();
 export type ProjectProgress = z.infer<typeof ProjectProgress>;
@@ -132,6 +148,56 @@ const ACTIVE_SPEC_STATUSES: ReadonlySet<string> = new Set(["in_flight", "active"
 const PENDING_SPEC_STATUSES: ReadonlySet<string> = new Set(["open", "pending"]);
 
 // ---------------------------------------------------------------------------
+// Pipeline stage derivation
+// ---------------------------------------------------------------------------
+
+// The coarse stage fallback when no stage-bearing event has landed for a run
+// yet (the run is queued/just started). Matches the InFlightSpec.runStatus
+// vocabulary so a watcher never sees an empty stage.
+export const DEFAULT_STAGE = "running";
+
+// Maps an event-type prefix → the coarse human stage. Ordered most-specific
+// first so a longer prefix (e.g. `github.pr.`) wins over a shorter sibling. We
+// match on prefix because the pipeline emits `<phase>.<verb>` families
+// (writer.started, writer.subtask.started, gate.passed, …) and any verb in a
+// family maps to the same stage. Only the event TYPE is read — never a payload
+// field — so this can never surface a secret.
+const STAGE_BY_EVENT_PREFIX: ReadonlyArray<readonly [string, string]> = [
+  ["planner.", "planning"],
+  ["writer.", "writing"],
+  ["gate.", "gating"],
+  ["checker.", "checking"],
+  ["auditor.", "auditing"],
+  ["github.pr.", "opening_pr"],
+  ["ci.", "ci"],
+  ["merge.", "merging"],
+];
+
+/**
+ * Derive the coarse pipeline stage for a run from its latest stage-bearing
+ * event type. Pure: reads only the (already-redacted, newest-first) feed and
+ * matches on the event TYPE string. Returns DEFAULT_STAGE ("running") when no
+ * event in the feed belongs to the run or none matches a known stage prefix.
+ */
+export function deriveRunStage(runId: string, feed: ReadonlyArray<ProjectFeedItem>): string {
+  // The feed is newest-first, so the first event we see for this run is its
+  // latest. The first such event that maps to a known stage wins.
+  for (const item of feed) {
+    if (item.runId !== runId) continue;
+    const stage = stageForEventType(item.eventType);
+    if (stage !== undefined) return stage;
+  }
+  return DEFAULT_STAGE;
+}
+
+function stageForEventType(eventType: string): string | undefined {
+  for (const [prefix, stage] of STAGE_BY_EVENT_PREFIX) {
+    if (eventType.startsWith(prefix)) return stage;
+  }
+  return undefined;
+}
+
+// ---------------------------------------------------------------------------
 // Aggregation
 // ---------------------------------------------------------------------------
 
@@ -160,10 +226,20 @@ export function buildProjectProgress(input: BuildProjectProgressInput): ProjectP
     v1Reached,
     specCounts: counts,
     percentComplete,
-    inFlight: buildInFlight(input.specs, input.runs),
+    inFlight: buildInFlight(input.specs, input.runs, input.feed),
     blocked: buildBlocked(input.specs),
     recentMilestones: buildMilestones(input.specs, input.feed),
+    lastActivityAt: lastActivityAt(input.feed),
   });
+}
+
+// The newest event timestamp across the whole project feed (the feed arrives
+// newest-first, so it's the head), as an ISO string — or null when the project
+// has no events yet. A timestamp only; never a payload value.
+function lastActivityAt(feed: ReadonlyArray<ProjectFeedItem>): string | null {
+  const newest = feed[0];
+  if (newest === undefined) return null;
+  return newest.ts.toISOString();
 }
 
 function bucketSpecCounts(specs: ReadonlyArray<ProjectSpecRow>): SpecCounts {
@@ -182,8 +258,15 @@ function bucketSpecCounts(specs: ReadonlyArray<ProjectSpecRow>): SpecCounts {
 
 // The latest run per spec drives inFlight: runs arrive newest-first, so the
 // first run we see for a spec is its latest. A spec is in-flight when that
-// latest run is running/queued.
-function buildInFlight(specs: ReadonlyArray<ProjectSpecRow>, runs: ReadonlyArray<RunListItem>): InFlightSpec[] {
+// latest run is running/queued. Each item also carries a coarse `stage`
+// derived from that run's latest event in the (already-loaded) feed — so a
+// watcher sees the run move through writer→gate→checker→auditor→PR→CI→merge
+// even while the spec counts hold steady.
+function buildInFlight(
+  specs: ReadonlyArray<ProjectSpecRow>,
+  runs: ReadonlyArray<RunListItem>,
+  feed: ReadonlyArray<ProjectFeedItem>,
+): InFlightSpec[] {
   const titleBySpec = new Map(specs.map((s) => [s.spec_id, s.title]));
   const seen = new Set<string>();
   const out: InFlightSpec[] = [];
@@ -195,6 +278,7 @@ function buildInFlight(specs: ReadonlyArray<ProjectSpecRow>, runs: ReadonlyArray
       specId: run.specId,
       title: titleBySpec.get(run.specId) ?? run.specTitle,
       runStatus: run.status,
+      stage: deriveRunStage(run.runId, feed),
       prUrl: run.prUrl,
     });
   }
