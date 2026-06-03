@@ -61,6 +61,11 @@ export function createCodexWriter(dependencies: CodexWriterDependencies): Writer
     cli: "codex",
     authRef: dependencies.credentialRef,
     async runWriter(opts): Promise<WriterResult> {
+      // SaaS Tier-B #5: a MANAGED run carries an endpointBaseUrl (the platform
+      // OpenRouter shell). In managed mode the credential is a plain
+      // OpenAI-compatible API key, so the materializer wraps it as codex's
+      // API-key auth.json instead of validating a ChatGPT bundle.
+      const managed = dependencies.endpointBaseUrl !== undefined;
       const auth = await materializeCodexAuthBundle({
         secrets: dependencies.secrets,
         ssh: dependencies.ssh,
@@ -69,6 +74,7 @@ export function createCodexWriter(dependencies: CodexWriterDependencies): Writer
         runId: dependencies.runId,
         baseDir: dependencies.codexHomeBaseDir,
         timeoutMs: Math.min(opts.timeoutMs, 30_000),
+        managed,
       });
       // The diff/log baseline. In a production run this is the run's BASE sha
       // (the clone point), threaded via opts.baseSha and captured ONCE after the
@@ -91,14 +97,21 @@ export function createCodexWriter(dependencies: CodexWriterDependencies): Writer
         timeoutMs: opts.timeoutMs,
       });
       const telemetry = parseCodexJsonlTelemetry(codex.stdout);
-      await persistRefreshedCodexAuthBestEffort({
-        secrets: dependencies.secrets,
-        ssh: dependencies.ssh,
-        target: dependencies.target,
-        ref: dependencies.credentialRef,
-        codexHome: auth.CODEX_HOME,
-        timeoutMs: Math.min(opts.timeoutMs, 30_000),
-      });
+      // Auth write-back is a ChatGPT-bundle refresh: codex rotates its
+      // access/refresh tokens during a run and we persist the new bundle. A
+      // managed run authenticates with a static API key (no token rotation), and
+      // its auth.json is not a codex bundle, so there is nothing to write back —
+      // skip it (storeCodexAuthBundle would reject the non-codex ref anyway).
+      if (!managed) {
+        await persistRefreshedCodexAuthBestEffort({
+          secrets: dependencies.secrets,
+          ssh: dependencies.ssh,
+          target: dependencies.target,
+          ref: dependencies.credentialRef,
+          codexHome: auth.CODEX_HOME,
+          timeoutMs: Math.min(opts.timeoutMs, 30_000),
+        });
+      }
 
       const gitState = await captureGitStateAfterCodex(
         dependencies.ssh,
@@ -136,6 +149,9 @@ export function createCodexAnswerer<TOutput>(dependencies: CodexAnswererDependen
     cli: "codex",
     authRef: dependencies.credentialRef,
     async runAnswerer(opts): Promise<TOutput> {
+      // SaaS Tier-B #5: managed ⇒ API-key auth.json against the platform
+      // endpoint (see the writer path for the rationale).
+      const managed = dependencies.endpointBaseUrl !== undefined;
       const auth = await materializeCodexAuthBundle({
         secrets: dependencies.secrets,
         ssh: dependencies.ssh,
@@ -144,6 +160,7 @@ export function createCodexAnswerer<TOutput>(dependencies: CodexAnswererDependen
         runId: dependencies.runId,
         baseDir: dependencies.codexHomeBaseDir,
         timeoutMs: Math.min(opts.timeoutMs, 30_000),
+        managed,
       });
       const workspace = opts.workspace ?? answererWorkspacePath(dependencies, opts.outputSchema.name);
       const schemaPath = `${auth.CODEX_HOME}/${safeSchemaFileName(opts.outputSchema.name)}.schema.json`;
@@ -167,14 +184,18 @@ export function createCodexAnswerer<TOutput>(dependencies: CodexAnswererDependen
         timeoutMs: opts.timeoutMs,
       });
       const telemetry = parseCodexJsonlTelemetry(result.stdout);
-      await persistRefreshedCodexAuthBestEffort({
-        secrets: dependencies.secrets,
-        ssh: dependencies.ssh,
-        target: dependencies.target,
-        ref: dependencies.credentialRef,
-        codexHome: auth.CODEX_HOME,
-        timeoutMs: Math.min(opts.timeoutMs, 30_000),
-      });
+      // Managed (API-key) auth has no token to refresh — skip the write-back
+      // (mirrors the writer path).
+      if (!managed) {
+        await persistRefreshedCodexAuthBestEffort({
+          secrets: dependencies.secrets,
+          ssh: dependencies.ssh,
+          target: dependencies.target,
+          ref: dependencies.credentialRef,
+          codexHome: auth.CODEX_HOME,
+          timeoutMs: Math.min(opts.timeoutMs, 30_000),
+        });
+      }
       if (result.timedOut) {
         throw new Error(`Codex Answerer timed out for schema ${opts.outputSchema.name}`);
       }

@@ -121,6 +121,58 @@ describe("Codex writer adapter", () => {
     expect(result.exitReason).toBe("completed");
   });
 
+  // SaaS Tier-B #5: a MANAGED codex writer (endpointBaseUrl set) materializes
+  // its credential as codex API-key auth.json from the PLAIN OpenRouter key —
+  // it must NOT run the codex-bundle validators, and it must point codex at the
+  // managed endpoint. It also skips the ChatGPT-bundle auth write-back (an API
+  // key has no token to rotate).
+  it("MANAGED writer materializes an API-key auth.json + endpoint, skipping the bundle path and write-back", async () => {
+    const baseSha = "a".repeat(40);
+    // Managed script order: no baseline capture (baseSha threaded) AND no
+    // auth write-back cat (managed) ⇒ 0 materialize-auth, 1 codex exec,
+    // 2 commit, 3 diff, 4 log.
+    const ssh = new ScriptedSsh([
+      ok(""),
+      ok("{}\n"),
+      ok(""),
+      ok("diff --git a/MANAGED.md b/MANAGED.md\n+managed\n"),
+      ok(`${commitSha("f")}\tcodex writer\n`),
+    ]);
+    const secrets = new InMemorySecretStore();
+    // The stored secret is the PLAIN OpenRouter key (not a codex bundle).
+    await secrets.put({ ref: "credential/openrouter/platform/default", value: "sk-or-v1-managed" });
+
+    const writer = createCodexWriter({
+      secrets,
+      ssh,
+      target,
+      credentialRef: "credential/openrouter/platform/default",
+      runId: "run_managed_writer",
+      endpointBaseUrl: "https://openrouter.ai/api/v1",
+    });
+    const result = await writer.runWriter({
+      prompt: "make a managed edit",
+      workspace: "/workspace/repo",
+      timeoutMs: 1000,
+      baseSha,
+    });
+
+    // The materialized auth.json is codex's API-key shape (the bundle validator
+    // is never applied to the raw key).
+    expect(ssh.commands[0]?.command.stdin).toBe(JSON.stringify({ OPENAI_API_KEY: "sk-or-v1-managed" }));
+    // codex exec carries the managed endpoint.
+    expect(ssh.commands[1]?.command.command).toContain("OPENAI_BASE_URL='https://openrouter.ai/api/v1'");
+    expect(ssh.commands[1]?.command.stdin).toBe("make a managed edit");
+    // No auth write-back: a managed run must NOT cat auth.json back into the
+    // secret store. With the script above, command[2] is the commit, not a cat.
+    const commandText = ssh.commands.map((item) => item.command.command);
+    expect(commandText.some((c) => c.includes("/codex-home/auth.json'") && c.startsWith("cat "))).toBe(false);
+    expect(result.exitReason).toBe("completed");
+    expect(result.diff).toContain("MANAGED.md");
+    // The key never leaks into the result.
+    expect(JSON.stringify(result)).not.toContain("sk-or-v1-managed");
+  });
+
   // SaaS Tier-B #5: managed mode points codex at the platform endpoint via
   // OPENAI_BASE_URL; BYOK (no override) leaves it untouched.
   it("sets OPENAI_BASE_URL when a managed endpoint override is present", () => {
