@@ -7,11 +7,13 @@
 
 import { randomUUID } from "node:crypto";
 import type {
+  DequeueReason,
   MergeDriveOutcome,
   MergeQueueEntry,
   MergeQueueModel,
   MergeQueueSnapshot,
   MergeRunner,
+  SupersededEntry,
 } from "../../../src/engine/contracts/mergeCoordinator.js";
 import type { MergeQueueEventEmitter } from "../../../src/engine/merge/coordinator.js";
 import type { SpecPriority } from "../../../src/engine/state/spec.js";
@@ -26,6 +28,8 @@ interface QueueRow {
   priority: SpecPriority;
   orderKey: number;
   status: "queued" | "merging" | "merged" | "dequeued";
+  /** The reason recorded when status → dequeued (mirrors the pg `dequeue_reason`). */
+  dequeueReason?: DequeueReason;
   /** When the entry was claimed (status → merging) — the lease anchor (ms epoch). */
   claimedAt?: number;
 }
@@ -144,9 +148,26 @@ export class InMemoryMergeQueueModel implements MergeQueueModel {
   }
 
   // eslint-disable-next-line @typescript-eslint/require-await
-  async markDequeued(queueId: string): Promise<void> {
+  async markDequeued(queueId: string, reason: DequeueReason): Promise<void> {
     const row = this.rows.get(queueId);
-    if (row !== undefined) row.status = "dequeued";
+    if (row !== undefined) {
+      row.status = "dequeued";
+      row.dequeueReason = reason;
+    }
+  }
+
+  // eslint-disable-next-line @typescript-eslint/require-await
+  async supersedePriorRunEntry(runId: string): Promise<SupersededEntry | undefined> {
+    // Retire the run's ACTIVE (queued/merging) entry — at most one, mirroring the
+    // partial unique index. Idempotent: no active entry ⇒ undefined.
+    for (const row of this.rows.values()) {
+      if (row.runId === runId && (row.status === "queued" || row.status === "merging")) {
+        row.status = "dequeued";
+        row.dequeueReason = "superseded";
+        return { queueId: row.queueId, runId, specId: row.specId, prUrl: row.prUrl, prNumber: row.prNumber };
+      }
+    }
+    return undefined;
   }
 
   // eslint-disable-next-line @typescript-eslint/require-await

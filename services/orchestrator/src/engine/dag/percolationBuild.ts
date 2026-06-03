@@ -23,9 +23,13 @@ import type {
   PercolationSettler,
   SpeculativeDependent,
 } from "../contracts/changePercolation.js";
+import type { MergeQueueEntry, MergeQueueModel } from "../contracts/mergeCoordinator.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { VcsProvider } from "../contracts/vcsProvider.js";
+import type { MergeQueueEventEmitter } from "../merge/coordinator.js";
+import { PgMergeQueueEventEmitter } from "../merge/coordinator.js";
+import { PgMergeQueueModel } from "../merge/coordinatorPg.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import { createQueuedRunFromSpec } from "../workflow/projectSpec.js";
 import { PgSpeculativeIntegrator } from "./speculativeIntegrator.js";
@@ -62,19 +66,41 @@ async function resolveOrg(pool: pg.Pool, projectId: string): Promise<string> {
 }
 
 /**
- * The production re-executor: re-points the dependent's current speculative run onto
- * the rebuilt integration, reopens the spec, and re-enqueues a REAL re-execution run
- * (the same createQueuedRunFromSpec path the DagWalker uses) so the dependent's gate
- * + checker + auditor re-run against the percolated change. The new run carries the
- * new build base + the CARRIED-FORWARD verified SHAs (so an un-changed ancestor stays
- * absorbed) + the in-flight marker (so the coordinator settles it). The dependent's
- * OWN branch/work is the run base — re-pointed, never reset.
+ * The production re-executor: SUPERSEDES the dependent's PRIOR run (retires it +
+ * dequeues its merge-queue entry + supersedes its PR), then re-enqueues a REAL
+ * re-execution run (the same createQueuedRunFromSpec path the DagWalker uses) so the
+ * dependent's gate + checker + auditor re-run against the percolated change. The new
+ * run carries the new build base + the CARRIED-FORWARD verified SHAs (so an un-changed
+ * ancestor stays absorbed) + the in-flight marker (so the coordinator settles it). The
+ * dependent's OWN git branch/work is the run base — re-pointed, never reset.
+ *
+ * The supersede is the fix for the §2c self-conflict: the kick-off ALWAYS creates a
+ * NEW run (never re-points the prior run row in place — only the prior run's git
+ * branch is reused). Without retiring the prior run + its queue entry the spec ends up
+ * with TWO live runs + TWO open PRs, both reach the merge queue, and the speculative
+ * batch check integrates the spec against ITSELF (a self-conflict naming the spec as
+ * its own ancestor) → both dequeue → the spec strands `active`. Retiring the prior run
+ * (status → cancelled, invisible to the walker + the percolation read model) and
+ * dequeuing its queue entry (`superseded`, NOT `conflict` — it is not a real conflict,
+ * so it is not routed back through the re-execution path) leaves exactly ONE live run
+ * per spec — the re-exec — which merges cleanly.
  */
 export class PgPercolationReexecutor implements PercolationReexecutor {
+  private readonly queue: MergeQueueModel;
+  private readonly queueEvents: MergeQueueEventEmitter;
+
   constructor(
     private readonly pool: pg.Pool,
     private readonly runStateWriter?: RunStateWriter,
-  ) {}
+    deps?: { queue?: MergeQueueModel; queueEvents?: MergeQueueEventEmitter },
+  ) {
+    // The native-queue model + its event emitter drive the prior-run SUPERSEDE. Both
+    // default to the production pg wirings (the queue write is a direct merge_queue
+    // UPDATE — the data plane retains that grant; the event routes through the control
+    // plane when a writer is wired). Tests inject in-memory fakes.
+    this.queue = deps?.queue ?? new PgMergeQueueModel(this.pool);
+    this.queueEvents = deps?.queueEvents ?? new PgMergeQueueEventEmitter(this.pool, this.runStateWriter);
+  }
 
   async reexecute(input: {
     projectId: string;
@@ -94,25 +120,27 @@ export class PgPercolationReexecutor implements PercolationReexecutor {
     const newBase = input.nonSpeculative ? null : input.integrationBranch;
     const newBuildBase = input.nonSpeculative ? undefined : input.ancestorHeadShas;
 
-    // Re-point the OLD run's base (so a detect before the new run is visible still
-    // reads the rebuilt base — or NULL when non-speculative) + reopen the spec so
-    // createQueuedRunFromSpec re-claims it. Keep the spec's branch/work intact (we
-    // only move status), never reset. Plane-split: route both through the control
-    // plane when wired; else direct.
+    // ORDER MATTERS (never-strand): reopen the spec to `pending` BEFORE cancelling the
+    // prior run, so EVERY failure point is recoverable:
+    //   - a throw BEFORE the cancel (e.g. during this reopen) leaves the prior run LIVE
+    //     — the pre-fix behavior, no strand (the prior run still drives the spec);
+    //   - a throw AFTER the cancel (during create) leaves the spec `pending` so the
+    //     DagWalker re-enqueues it — no `active`-spec-with-only-a-cancelled-run strand.
+    // The reverse order (cancel→reopen) opens a window where a throw between them strands
+    // the spec `active` with its only run cancelled (nothing reconciles that). Reopening
+    // first closes it. Keep the spec's git branch/work intact (we only move status),
+    // never reset. The prior run is NOT re-pointed — `supersedePriorRun` cancels it, so
+    // its `speculative_base` is dead (the read model + walker ignore a cancelled run);
+    // the re-base/build-base instead live on the NEW re-exec run (`newBase`/`newBuildBase`).
+    // Plane-split: route the spec reopen through the control plane when wired; else direct.
     if (this.runStateWriter === undefined) {
       await runWithOrgScope(this.pool, orgId, async (client) => {
-        await client.query("UPDATE runs SET speculative_base = $2 WHERE run_id = $1", [input.dependent.runId, newBase]);
         await client.query(
           `UPDATE specs SET status = 'pending' WHERE spec_id = $1 AND status NOT IN ('done', 'merged')`,
           [input.dependent.specId],
         );
       });
     } else {
-      await this.runStateWriter.setRunSpeculativeBase({
-        runId: input.dependent.runId,
-        orgId,
-        speculativeBase: newBase,
-      });
       await this.runStateWriter.setSpecStatus({
         specId: input.dependent.specId,
         orgId,
@@ -120,6 +148,12 @@ export class PgPercolationReexecutor implements PercolationReexecutor {
         notFromStatuses: ["done", "merged"],
       });
     }
+
+    // SUPERSEDE the prior run (cancel + dequeue its queue entry) AFTER the spec is
+    // `pending` so only the new run competes in the merge queue. Idempotent (a
+    // re-percolation that races finds the prior run already terminal / its entry already
+    // dequeued ⇒ no-op).
+    await this.supersedePriorRun(input.projectId, orgId, input.dependent);
 
     // The build base is the ancestor's NEW head SHAs; carry the verified (absorbed)
     // SHAs forward so an unchanged ancestor stays absorbed across the re-execution.
@@ -174,6 +208,72 @@ export class PgPercolationReexecutor implements PercolationReexecutor {
       await this.runStateWriter.setRunPercolationReexecId({ runId: run.runId, orgId, reexecRunId: run.runId });
     }
     return { reexecRunId: run.runId };
+  }
+
+  /**
+   * Retire the dependent's PRIOR run so the re-exec is the spec's ONLY live run:
+   *   1. DEQUEUE the prior run's active merge-queue entry (`superseded`) so the
+   *      speculative batch check stops integrating it (the self-conflict fix), and
+   *      emit the observable `merge.dequeued` — the LOUD, inspectable record of WHY
+   *      the prior PR left the queue. A non-conflict reason: it is NOT routed back to
+   *      the re-execution path (the re-exec already IS that re-execution).
+   *   2. CANCEL the prior run (status → cancelled) so the walker treats it as
+   *      terminal-blocked and the percolation read model (`status NOT IN
+   *      ('halted','cancelled','failed')`) no longer loads it as the live dependent —
+   *      the new re-exec run, carrying the in-flight marker, becomes the dependent on
+   *      the next pass.
+   * Both writes are idempotent + guarded (a re-percolation finds nothing to retire).
+   * The prior run's open GitHub PR is functionally retired the moment its queue entry
+   * is gone (it can no longer be selected for merge); CLOSING that PR on GitHub is a
+   * noted follow-up — the VcsProvider has no PR-close seam yet (a deliberate scope cut).
+   */
+  private async supersedePriorRun(projectId: string, orgId: string, dependent: SpeculativeDependent): Promise<void> {
+    // 1. Dequeue the prior run's active queue entry (if any) — the load-bearing fix.
+    const superseded = await this.queue.supersedePriorRunEntry(dependent.runId);
+    if (superseded !== undefined) {
+      // Synthesize the entry shape the dequeued-event emitter reads (it only reads
+      // run/spec/PR fields; the DAG-ordering fields are irrelevant to the event).
+      const entry: MergeQueueEntry = {
+        queueId: superseded.queueId,
+        runId: superseded.runId,
+        specId: superseded.specId,
+        prUrl: superseded.prUrl,
+        prNumber: superseded.prNumber,
+        dependsOn: [],
+        priority: "tbd",
+        orderKey: 0,
+      };
+      await this.queueEvents.emitDequeued({
+        projectId,
+        entry,
+        reason: "superseded",
+        message: `prior run ${dependent.runId} superseded by a percolation re-execution (upstream change from ${dependent.specId} ancestor)`,
+      });
+    }
+
+    // 2. Cancel the prior run so it is no longer a live candidate (walker + read model
+    //    both ignore a `cancelled` run). Guarded to every non-cancelled status so it is
+    //    idempotent (an already-cancelled prior run matches no row). Plane-split: route
+    //    the finalize through the control plane when wired (the de-privileged data plane
+    //    can no longer UPDATE runs); else the in-process org-scoped UPDATE.
+    const fromStatuses = ["queued", "running", "halted", "completed", "done", "failed"];
+    if (this.runStateWriter !== undefined) {
+      await this.runStateWriter.finalizeRun({
+        runId: dependent.runId,
+        orgId,
+        status: "cancelled",
+        outcome: "cancelled",
+        fromStatuses,
+      });
+      return;
+    }
+    await runWithOrgScope(this.pool, orgId, async (client) => {
+      await client.query(
+        `UPDATE runs SET status = 'cancelled', outcome = 'cancelled', ended_at = now()
+          WHERE run_id = $1 AND status = ANY($2::text[])`,
+        [dependent.runId, fromStatuses],
+      );
+    });
   }
 }
 

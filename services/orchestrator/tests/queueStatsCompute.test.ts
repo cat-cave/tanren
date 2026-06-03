@@ -94,14 +94,15 @@ describe("deriveQueueStats — batch / bisect", () => {
 });
 
 describe("deriveQueueStats — dequeues by reason", () => {
-  it("tallies conflict / blocked / failed dequeues", () => {
+  it("tallies conflict / blocked / failed / superseded dequeues", () => {
     const stats = derive([
       e("merge.dequeued", 0, { specId: "s1", dequeueReason: "conflict" }),
       e("merge.dequeued", 1000, { specId: "s2", dequeueReason: "blocked" }),
       e("merge.dequeued", 2000, { specId: "s3", dequeueReason: "failed" }),
       e("merge.dequeued", 3000, { specId: "s4", dequeueReason: "conflict" }),
+      e("merge.dequeued", 4000, { specId: "s5", dequeueReason: "superseded" }),
     ]);
-    expect(stats.dequeues).toEqual({ conflict: 2, blocked: 1, failed: 1 });
+    expect(stats.dequeues).toEqual({ conflict: 2, blocked: 1, failed: 1, superseded: 1 });
   });
 });
 

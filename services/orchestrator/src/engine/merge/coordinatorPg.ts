@@ -18,11 +18,13 @@ import { runWithOrgScope, runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
 import { SpecPriority } from "../state/spec.js";
 import {
+  type DequeueReason,
   type MergeDriveOutcome,
   type MergeQueueEntry,
   type MergeQueueModel,
   type MergeQueueSnapshot,
   type MergeRunner,
+  type SupersededEntry,
 } from "../contracts/mergeCoordinator.js";
 import type { DriveMergeForQueuedRun } from "./coordinator.js";
 
@@ -178,12 +180,55 @@ export class PgMergeQueueModel implements MergeQueueModel {
     );
   }
 
-  async markDequeued(queueId: string, reason: "conflict" | "blocked" | "failed"): Promise<void> {
+  async markDequeued(queueId: string, reason: DequeueReason): Promise<void> {
     await this.settle(
       queueId,
       "UPDATE merge_queue SET status = 'dequeued', dequeue_reason = $2, settled_at = now() WHERE queue_id = $1",
       [reason],
     );
+  }
+
+  async supersedePriorRunEntry(runId: string): Promise<SupersededEntry | undefined> {
+    const orgId = await this.resolveRunOrg(runId);
+    if (orgId === null) return undefined;
+    return runWithOrgScope(this.pool, orgId, async (client) => {
+      // Atomically retire the prior run's ACTIVE (queued/merging) entry — the partial
+      // unique index guarantees at most one — so the spec stops having two live
+      // entries (the percolation self-conflict). `RETURNING` carries the spec/PR facts
+      // for the observable `merge.dequeued` event. Idempotent: a run with no active
+      // entry (already superseded / never queued) matches no row ⇒ undefined.
+      const result = await client.query<{
+        queue_id: string;
+        spec_id: string;
+        pr_url: string;
+        pr_number: string;
+      }>(
+        `UPDATE merge_queue
+            SET status = 'dequeued', dequeue_reason = 'superseded', settled_at = now()
+          WHERE run_id = $1 AND status IN ('queued', 'merging')
+        RETURNING queue_id, spec_id, pr_url, pr_number`,
+        [runId],
+      );
+      const row = result.rows[0];
+      if (row === undefined) return;
+      return {
+        queueId: row.queue_id,
+        runId,
+        specId: row.spec_id,
+        prUrl: row.pr_url,
+        prNumber: Number(row.pr_number),
+      };
+    });
+  }
+
+  /** Resolve a run's org (system-scoped) so the superseding write hits its row. */
+  private async resolveRunOrg(runId: string): Promise<string | null> {
+    return runWithSystemScope(this.pool, async (client) => {
+      const result = await client.query<{ org_id: string | null }>("SELECT org_id FROM runs WHERE run_id = $1", [
+        runId,
+      ]);
+      return result.rows[0]?.org_id ?? null;
+    });
   }
 
   async recoverStaleClaims(projectId: string): Promise<number> {

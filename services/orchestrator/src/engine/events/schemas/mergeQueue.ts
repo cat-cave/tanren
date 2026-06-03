@@ -46,8 +46,11 @@ export const MergeDequeuedPayload = z
      *   - `blocked`   — a governance/posture or speculative hold removed it from the
      *                   head so independent later items can proceed (re-queued later).
      *   - `failed`    — the merge failed terminally; the entry is removed.
+     *   - `superseded`— a fresh percolation re-execution replaced this run; its entry
+     *                   + PR are no longer a live merge candidate (§2c). NOT a real
+     *                   conflict — the entry is retired so the spec has ONE live run.
      */
-    reason: z.enum(["conflict", "blocked", "failed"]),
+    reason: z.enum(["conflict", "blocked", "failed", "superseded"]),
     /** The human-readable detail of the dequeue (the merge-stage message). */
     message: z.string(),
   })

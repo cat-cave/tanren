@@ -25,7 +25,8 @@
       "enum": [
         "conflict",
         "blocked",
-        "failed"
+        "failed",
+        "superseded"
       ],
       "type": "string"
     },
