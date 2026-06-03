@@ -97,7 +97,7 @@ import {
 } from "./schemas/mergeQueue.js";
 import { CiFlakyDetectedPayload, CiTestQuarantinedPayload } from "./schemas/ciFlaky.js";
 import { IssueOpenedPayload, MergePostMergeFailedPayload } from "./schemas/postMerge.js";
-import { GateFailedPayload, GatePassedPayload, GateStartedPayload } from "./schemas/gate.js";
+import { GateAdvisoryFailedPayload, GateFailedPayload, GatePassedPayload, GateStartedPayload } from "./schemas/gate.js";
 import {
   JobDeadLetteredPayload,
   RunCompletedPayload,
@@ -241,6 +241,7 @@ export const EventRegistry = {
   "gate.started": GateStartedPayload,
   "gate.passed": GatePassedPayload,
   "gate.failed": GateFailedPayload,
+  "gate.advisory_failed": GateAdvisoryFailedPayload,
 
   // Phase 1 fixture orchestration
   "phase1.fixture.started": Phase1FixtureStartedPayload,

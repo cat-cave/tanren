@@ -332,7 +332,10 @@ describe("deriveFromCapture · creates the product graph (no migration)", () => 
     expect(config).toBeDefined();
     expect(config?.reviewPolicy).toBe("auto");
     expect(config?.mergeIntegration).toBe("native_queue");
-    expect(config?.governancePosture).toBe("strict");
+    // The autonomous greenfield config is LENIENT (functional-but-weak apex
+    // doctrine): the in-loop gate's lint/typecheck are advisory so an imperfect
+    // first pass lands + improves via the issue loop instead of stalling.
+    expect(config?.governancePosture).toBe("lenient");
   });
 
   it("FINDING #1: omitting autonomy keeps the safe schema defaults (human / not_configured)", async () => {

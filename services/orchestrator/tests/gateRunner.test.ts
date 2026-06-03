@@ -10,6 +10,7 @@ import type { EventName, EventPayload } from "../src/engine/events/index.js";
 import { resolveBootstrapCommand, resolveGateConfig } from "../src/engine/workflow/gate/resolveGateConfig.js";
 import { runGateForWhen } from "../src/engine/workflow/gate/runGateForWhen.js";
 import { runGateTier } from "../src/engine/workflow/gate/runGateTier.js";
+import { advisoryStepNamesForPosture } from "../src/engine/workflow/gate/advisoryGate.js";
 
 const target: SshTarget = { host: "h", port: 22, username: "u", hostKeyFingerprint: "fp" };
 
@@ -124,6 +125,84 @@ describe("runGateTier", () => {
       appendEvent,
     });
     expect(result.steps[0]!.outputTail.length).toBeLessThanOrEqual(4000);
+  });
+});
+
+describe("runGateTier advisory steps (lenient posture)", () => {
+  it("an advisory step's failure is recorded but does NOT fail the tier; the gate keeps running + passes", async () => {
+    // lint fails (advisory under lenient) but test passes (blocking). The tier
+    // must still PASS, lint must NOT short-circuit test, and a gate.advisory_failed
+    // warning must be emitted instead of gate.failed.
+    const ssh = new RecordingSsh((c) => (c === "pnpm lint" ? { exitCode: 2, stderr: "lint boom" } : {}));
+    const { events, appendEvent } = recordingEvents();
+    const result = await runGateTier({
+      ssh,
+      target,
+      workspacePath: "/ws",
+      tier: "fast",
+      when: "per_iteration",
+      steps: [
+        { name: "lint", run: "pnpm lint" },
+        { name: "typecheck", run: "pnpm typecheck" },
+        { name: "unit", run: "pnpm test" },
+      ],
+      timeoutMs: 1000,
+      appendEvent,
+      advisoryStepNames: new Set(["lint", "typecheck"]),
+    });
+
+    expect(result.passed).toBe(true);
+    // Every step ran (lint did NOT short-circuit the rest).
+    expect(ssh.commands.map((c) => c.command)).toEqual(["pnpm lint", "pnpm typecheck", "pnpm test"]);
+    // The failing advisory step is recorded with passed=false, the tier still passes.
+    expect(result.steps.find((s) => s.name === "lint")?.passed).toBe(false);
+    expect(events.map((e) => e.eventType)).toEqual(["gate.started", "gate.advisory_failed", "gate.passed"]);
+    const advisory = events.find((e) => e.eventType === "gate.advisory_failed")!.payload as {
+      advisoryStep: string;
+      exitCode: number | null;
+    };
+    expect(advisory.advisoryStep).toBe("lint");
+    expect(advisory.exitCode).toBe(2);
+  });
+
+  it("a BLOCKING step's failure still fails the tier even under an advisory set", async () => {
+    // build is NOT in the advisory set → its failure blocks (gate.failed), exactly
+    // as strict. This is the functional-but-weak guard: build/test always block.
+    const ssh = new RecordingSsh((c) => (c === "pnpm build" ? { exitCode: 1, stderr: "build broke" } : {}));
+    const { events, appendEvent } = recordingEvents();
+    const result = await runGateTier({
+      ssh,
+      target,
+      workspacePath: "/ws",
+      tier: "slow",
+      when: "pre_audit",
+      steps: [
+        { name: "build", run: "pnpm build" },
+        { name: "test", run: "pnpm test" },
+      ],
+      timeoutMs: 1000,
+      appendEvent,
+      advisoryStepNames: new Set(["lint", "typecheck"]),
+    });
+
+    expect(result.passed).toBe(false);
+    if (result.passed) return;
+    expect(result.failedStep).toBe("build");
+    // build short-circuits test (blocking failure stops the tier).
+    expect(ssh.commands.map((c) => c.command)).toEqual(["pnpm build"]);
+    expect(events.map((e) => e.eventType)).toEqual(["gate.started", "gate.failed"]);
+  });
+});
+
+describe("advisoryStepNamesForPosture", () => {
+  it("lenient → {lint, typecheck} advisory; every other posture → empty", () => {
+    expect([...advisoryStepNamesForPosture("lenient")].sort()).toEqual(["lint", "typecheck"]);
+    expect(advisoryStepNamesForPosture("strict").size).toBe(0);
+    expect(advisoryStepNamesForPosture("open").size).toBe(0);
+    expect(advisoryStepNamesForPosture("audit_only").size).toBe(0);
+    // An absent posture (the field is optional on the run context) → empty too.
+    const absent = undefined as Parameters<typeof advisoryStepNamesForPosture>[0];
+    expect(advisoryStepNamesForPosture(absent).size).toBe(0);
   });
 });
 

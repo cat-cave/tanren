@@ -310,6 +310,14 @@ describe("posture decision", () => {
     expect(decidePosture("audit_only", external).kind).toBe("observe");
     expect(decidePosture("audit_only", internal).kind).toBe("proceed");
   });
+
+  it("lenient mirrors strict for external coexistence (the gate-advisory relaxation is in-loop only)", () => {
+    const decision = decidePosture("lenient", external);
+    expect(decision.kind).toBe("block");
+    // The reason reflects the actual posture, not a hardcoded 'strict'.
+    expect(decision.reason).toContain("lenient posture");
+    expect(decidePosture("lenient", internal).kind).toBe("proceed");
+  });
 });
 
 describe("governance posture gate at the merge decision", () => {

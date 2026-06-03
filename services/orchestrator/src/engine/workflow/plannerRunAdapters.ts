@@ -16,7 +16,14 @@ import type { AnswererAdapter } from "../providers/types.js";
 import { SshCcusageAccountant, SshCodexbarUsageMonitor, SshUsageProbe, type UsageProbe } from "../usage/index.js";
 import { PgBudgetGate } from "../dag/budgetGate.js";
 import { runBudgetCeilingPreflight } from "./budgetPreflight.js";
-import { type GateOutcome, resolveGateConfig, runGateForWhen } from "./gate/index.js";
+import {
+  advisoryStepNamesForPosture,
+  type GateOutcome,
+  resolveBootstrapCommand,
+  resolveGateConfig,
+  runGateForWhen,
+} from "./gate/index.js";
+import { ensureWorkspaceDepsInstalled } from "../workspace/index.js";
 import type { PlannerRunAdapterContext, RunPlannerLoopInput } from "./plannerRun.js";
 import type { AppendEvent, SubtaskLoopAdapters } from "./subtaskLoop.js";
 import { buildDefaultConflictResolver } from "./reviewMerge/conflictResolver/index.js";
@@ -232,6 +239,18 @@ function buildResolver(
 // rest of the run, so a malformed tanren-ci.yml surfaces at the first gate
 // rather than crashing the workflow before the loop starts. Each call runs the
 // tiers mapped to `when` over SSH and emits gate.* through the run's store.
+//
+// GREENFIELD DEPS-ENSURE: before EVERY gate the callback runs a guarded
+// `ensureWorkspaceDepsInstalled` (install only when a manifest now exists AND
+// node_modules is absent). prepareRunWorkspace bootstraps ONCE right after clone,
+// before the writer — but a greenfield clone HEAD ships no manifest, so that cold
+// bootstrap skips install; the writer THEN authors `package.json`, and without
+// this the first per-iteration gate would run `pnpm lint` against an uninstalled
+// tree (`turbo: not found`). The install command is resolved LAZILY (cached
+// alongside the config) so a writer-authored `tanren-ci.yml` `bootstrap.run` is
+// honored; an `installed` flag is cached so once node_modules exists the next
+// gate's ensure is a no-op. Brownfield (deps installed at prepare) → the stat
+// check no-ops, behavior unchanged.
 export function buildDefaultGate(
   input: RunPlannerLoopInput,
   target: SshTarget,
@@ -240,6 +259,17 @@ export function buildDefaultGate(
 ): (gate: { when: CiWhen; taskId?: string }) => Promise<GateOutcome> {
   const context = input.context;
   let configPromise: ReturnType<typeof resolveGateConfig> | undefined;
+  // The lazily-resolved install command, cached alongside configPromise. An
+  // explicit input.bootstrapCommand wins; otherwise the writer-authored
+  // tanren-ci.yml `bootstrap.run` is picked up (undefined ⇒ the deps-ensure step
+  // falls back to its pnpm/npm-detecting DEFAULT_BOOTSTRAP_COMMAND).
+  let installCommandPromise: Promise<string | undefined> | undefined;
+  // Cached once node_modules exists, so pre_audit / later gates do not re-stat.
+  let depsInstalled = false;
+  // The advisory (warn-but-don't-block) step names for the run's governance
+  // posture: `lenient` ⇒ {lint, typecheck} are advisory; every other posture ⇒
+  // empty set (strict default — every step blocks, behavior unchanged).
+  const advisoryStepNames = advisoryStepNamesForPosture(context.governancePosture);
   const appendEvent = async <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string) => {
     await eventStore.append({
       runId: context.runId,
@@ -259,6 +289,33 @@ export function buildDefaultGate(
         timeoutMs: input.timeoutMs,
       });
     }
+    if (installCommandPromise === undefined) {
+      installCommandPromise =
+        input.bootstrapCommand === undefined
+          ? resolveBootstrapCommand({ ssh: input.ssh, target, workspacePath, timeoutMs: input.timeoutMs })
+          : Promise.resolve(input.bootstrapCommand);
+    }
+    // Install deps before the gate runs (idempotent). Once an ensure call has
+    // installed (or observed) node_modules we cache the flag and skip the stat.
+    if (!depsInstalled) {
+      const installCommand = await installCommandPromise;
+      const ensured = await ensureWorkspaceDepsInstalled({
+        ssh: input.ssh,
+        target,
+        workspacePath,
+        ...(installCommand === undefined ? {} : { command: installCommand }),
+        ...(input.appEnv === undefined ? {} : { appEnv: input.appEnv }),
+        timeoutMs: input.timeoutMs,
+      });
+      // The ensure is a no-op either because deps were already present OR because
+      // no manifest exists yet. We only latch `depsInstalled` once it actually
+      // installed — a manifest-less no-op must re-check at the next gate (the
+      // writer may have authored a manifest since), but an install means
+      // node_modules now exists so subsequent gates can skip the stat.
+      if (ensured.installed) {
+        depsInstalled = true;
+      }
+    }
     const config = await configPromise;
     return runGateForWhen({
       ssh: input.ssh,
@@ -269,6 +326,7 @@ export function buildDefaultGate(
       timeoutMs: input.timeoutMs,
       appendEvent,
       taskId,
+      advisoryStepNames,
       // Plane B: the project's dev+test app env, so the building agent's gate
       // commands run with it. Never logged/emitted. Distinct from Tanren creds.
       ...(input.appEnv === undefined ? {} : { appEnv: input.appEnv }),
