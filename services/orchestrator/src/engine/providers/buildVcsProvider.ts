@@ -23,6 +23,7 @@ import type { MergePullRequestResult, ReviewVerdictResult, SubmitReviewEvent } f
 import type { GitHubPullRequestChecks } from "./github.js";
 import type { PullRequestContributors } from "../workflow/reviewMerge/governancePosture.js";
 import type {
+  ActorIdentity,
   BuildIntegrationBranchInput,
   BuildIntegrationBranchResult,
   CreatedIssue,
@@ -65,6 +66,9 @@ export class UnconfiguredVcsProvider implements VcsProvider {
   }
 
   async resolveToken(_creds: VcsCredentialContext): Promise<ResolvedVcsToken> {
+    return this.fail();
+  }
+  async resolveActorIdentity(_token: ResolvedVcsToken): Promise<ActorIdentity> {
     return this.fail();
   }
   parseRepository(_repoUrl: string): RepoRef {

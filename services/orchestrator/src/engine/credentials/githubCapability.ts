@@ -102,6 +102,10 @@ export async function probeGithubAppCapability(input: GithubAppCapabilityInput):
  * authoritative `X-OAuth-Scopes` response header from `GET /user` — the actual
  * scopes the token carries — plus the authenticated `login`. The token travels
  * only in the Authorization header. A non-2xx is a LOUD failure.
+ *
+ * (MERGE-SAFETY's `resolveActorIdentity` reads the SAME `GET /user` login + id,
+ * but through the provider's HTTP client — see `githubVcsProvider.ts` — so the
+ * observability wrapper + 401-refresh apply; it does not reuse this `fetch` path.)
  */
 export async function probeGithubTokenCapability(input: GithubTokenCapabilityInput): Promise<GithubCapability> {
   const fetchImpl = input.fetchImpl ?? fetch;

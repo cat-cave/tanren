@@ -263,12 +263,48 @@ async function evaluatePosture(
   pullNumber: number,
 ): Promise<PostureDecision> {
   if (context.governancePosture === "open") {
+    // `open` short-circuits BEFORE any paid lookup — no contributor probe AND no
+    // identity resolution (both cost a GitHub call), so the paid `GET /user`/`GET
+    // /app` is skipped exactly like the contributor probe.
     return decidePosture("open", { hasExternalChange: false, externalLogins: [] });
   }
   const probe = input.contributorProbe ?? buildContributorProbe(input, context, repo, pullNumber);
   const contributors = await probe.listContributors();
-  const identity = tanrenIdentity(context.tanrenLogins);
+  // MERGE-SAFETY (self-identity): the AUTHORITATIVE Tanren login is resolved HERE,
+  // lazily (only for strict/audit_only, after `open` short-circuited above), from
+  // the SAME credential the contributor probe + the runner's git author use — so
+  // the identity set matches the login Tanren's own commits actually carry. Merged
+  // additively onto `context.tanrenLogins` (the default bot login + any configured
+  // overrides). A test that injects only a `contributorProbe` (no vcsProvider seam)
+  // keeps the configured set.
+  const resolvedLogins = await resolveTanrenLogins(input, context);
+  const identity = tanrenIdentity([...context.tanrenLogins, ...resolvedLogins]);
   return decidePosture(context.governancePosture, assessExternalChange(contributors, identity));
+}
+
+/**
+ * Resolve Tanren's authoritative pushing login(s) from the ACTIVE credential
+ * (`resolveActorIdentity`), off the SAME credential context the contributor probe
+ * resolves its token from — so the identity set and the runner's git author agree.
+ * Returns `[]` (the configured/default set still applies) when no credential is
+ * configured for the merge stage; a real resolution FAILURE on a configured
+ * credential propagates (loud), never a silent degrade.
+ */
+async function resolveTanrenLogins(
+  input: MergeForRunInput,
+  context: ReviewMergeRunContext,
+): Promise<ReadonlyArray<string>> {
+  if (context.installation === undefined && context.staticCredentialRef === undefined) {
+    return [];
+  }
+  const resolved = await input.vcsProvider.resolveToken({
+    secrets: input.secrets,
+    installation: context.installation,
+    staticRef: context.staticCredentialRef,
+    minter: input.githubAppMinter,
+  });
+  const identity = await input.vcsProvider.resolveActorIdentity(resolved);
+  return [identity.login];
 }
 
 async function buildGitHubProbe(

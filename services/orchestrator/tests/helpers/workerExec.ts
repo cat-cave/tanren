@@ -244,6 +244,12 @@ export class ScriptedGitHubHttp implements GitHubHttpClient {
   constructor(private readonly responses: GitHubHttpResponse[]) {}
 
   async request(input: GitHubHttpRequest): Promise<GitHubHttpResponse> {
+    // MERGE-SAFETY (self-identity): the authenticated clone resolves Tanren's
+    // pushing identity via the static `GET /user`. Answered out-of-band so the
+    // ordered PR/CI/merge response queue stays in lockstep.
+    if (input.method === "GET" && (input.path === "/user" || input.path.startsWith("/user?"))) {
+      return { status: 200, body: { login: "tanren[bot]", id: 424242 } };
+    }
     const response = this.responses.shift();
     if (response === undefined) {
       throw new Error(`unexpected GitHub request: ${input.method} ${input.path}`);

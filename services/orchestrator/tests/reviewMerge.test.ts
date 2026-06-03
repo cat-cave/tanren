@@ -15,7 +15,15 @@ import {
 } from "../src/engine/workflow/reviewMerge/index.js";
 import { noopConflictResolver } from "./fixtures/noopConflictResolver.js";
 import { pollReviewForRun } from "../src/engine/workflow/reviewMerge/reviewPolling.js";
-import { approvingReviewProbe, recordingMergeProbe, ReviewMergePool, unusedHttp } from "./reviewMerge.fixtures.js";
+import {
+  approvingReviewProbe,
+  FIXTURE_TANREN_LOGIN,
+  recordingMergeProbe,
+  ReviewMergePool,
+  tanrenSecrets,
+  tanrenUserHttp,
+  unusedHttp,
+} from "./reviewMerge.fixtures.js";
 
 describe("review verdict reduction", () => {
   it("changes_requested blocks even when a later approval exists from another reviewer", () => {
@@ -266,16 +274,19 @@ describe("merge dispatch stage", () => {
 });
 
 describe("external-change detection", () => {
-  const identity = tanrenIdentity(["tanren[bot]", "App/123"]);
+  // MERGE-SAFETY (self-identity): the identity set is the default bot login PLUS the
+  // login RESOLVED from the active credential (here the apex PAT user `tanren-bot-user`).
+  // The old bogus `app/<appId>` entry is GONE — it was never a real GitHub login.
+  const identity = tanrenIdentity(["tanren[bot]", "tanren-bot-user"]);
 
   it("flags a non-Tanren login as an external change", () => {
-    const out = assessExternalChange({ logins: ["tanren[bot]", "alice"] }, identity);
+    const out = assessExternalChange({ logins: ["tanren-bot-user", "alice"] }, identity);
     expect(out.hasExternalChange).toBe(true);
     expect(out.externalLogins).toEqual(["alice"]);
   });
 
-  it("treats a Tanren-only PR as having no external change (case-insensitive)", () => {
-    const out = assessExternalChange({ logins: ["Tanren[bot]", "app/123", "tanren[bot]"] }, identity);
+  it("treats a Tanren-only PR (resolved login) as having no external change (case-insensitive)", () => {
+    const out = assessExternalChange({ logins: ["Tanren-Bot-User", "tanren[bot]", "tanren-bot-user"] }, identity);
     expect(out.hasExternalChange).toBe(false);
     expect(out.externalLogins).toEqual([]);
   });
@@ -321,11 +332,20 @@ describe("posture decision", () => {
 });
 
 describe("governance posture gate at the merge decision", () => {
+  // The PR carries a commit from the RESOLVED Tanren login plus a genuine external
+  // human push (`mallory`) — still blocks.
   const externalProbe: ContributorProbe = {
-    listContributors: async () => ({ logins: ["tanren[bot]", "mallory"] }),
+    listContributors: async () => ({ logins: [FIXTURE_TANREN_LOGIN, "mallory"] }),
   };
+  // MERGE-SAFETY (self-identity): a Tanren-only PR whose commits attribute to the
+  // login resolved from the active credential (`FIXTURE_TANREN_LOGIN`) — proceeds.
   const internalProbe: ContributorProbe = {
-    listContributors: async () => ({ logins: ["tanren[bot]"] }),
+    listContributors: async () => ({ logins: [FIXTURE_TANREN_LOGIN] }),
+  };
+  // An unattributed external commit (a `.invalid`/unregistered email → `""` login)
+  // — still keys `<unknown>` → external → blocks loudly.
+  const unattributedProbe: ContributorProbe = {
+    listContributors: async () => ({ logins: [FIXTURE_TANREN_LOGIN, ""] }),
   };
 
   it("strict + external change → merge.blocked (operator_approval), no merge call, task left running", async () => {
@@ -342,9 +362,9 @@ describe("governance posture gate at the merge decision", () => {
     const result = await mergeForRun({
       pool: pool.asPgPool(),
       eventStore: events,
-      secrets: new FakeSecretStore(),
+      secrets: await tanrenSecrets(),
       resolveConflict: noopConflictResolver,
-      vcsProvider: vcsProviderOver(unusedHttp()),
+      vcsProvider: vcsProviderOver(tanrenUserHttp()),
       runId: "run_1",
       mergeProbe: probe,
       contributorProbe: externalProbe,
@@ -374,9 +394,9 @@ describe("governance posture gate at the merge decision", () => {
     const result = await mergeForRun({
       pool: pool.asPgPool(),
       eventStore: events,
-      secrets: new FakeSecretStore(),
+      secrets: await tanrenSecrets(),
       resolveConflict: noopConflictResolver,
-      vcsProvider: vcsProviderOver(unusedHttp()),
+      vcsProvider: vcsProviderOver(tanrenUserHttp()),
       runId: "run_1",
       mergeProbe: probe,
       contributorProbe: externalProbe,
@@ -404,9 +424,9 @@ describe("governance posture gate at the merge decision", () => {
     const result = await mergeForRun({
       pool: pool.asPgPool(),
       eventStore: events,
-      secrets: new FakeSecretStore(),
+      secrets: await tanrenSecrets(),
       resolveConflict: noopConflictResolver,
-      vcsProvider: vcsProviderOver(unusedHttp()),
+      vcsProvider: vcsProviderOver(tanrenUserHttp()),
       runId: "run_1",
       mergeProbe: probe,
       contributorProbe: internalProbe,
@@ -415,6 +435,33 @@ describe("governance posture gate at the merge decision", () => {
     expect(result.outcome).toBe("merged");
     expect(probe.mergeCalls).toBe(1);
     expect(events.events.find((e) => e.eventType === "merge.blocked")).toBeUndefined();
+  });
+
+  it("strict + unattributed external commit ('') → merge.blocked (<unknown>), loud, no merge call", async () => {
+    const pool = new ReviewMergePool("direct_merge", "strict");
+    const events = new FakeEventStore();
+    const probe = recordingMergeProbe({ merged: true, mergeSha: "x", conflict: false, status: 200, message: "merged" });
+
+    const result = await mergeForRun({
+      pool: pool.asPgPool(),
+      eventStore: events,
+      secrets: await tanrenSecrets(),
+      resolveConflict: noopConflictResolver,
+      vcsProvider: vcsProviderOver(tanrenUserHttp()),
+      runId: "run_1",
+      mergeProbe: probe,
+      contributorProbe: unattributedProbe,
+    });
+
+    // The resolved Tanren login does NOT rescue an unattributed (empty) commit — it
+    // keys `<unknown>` → external → blocked. We fix the INPUT, not the safety rule.
+    expect(result.outcome).toBe("blocked");
+    expect(probe.mergeCalls).toBe(0);
+    expect(events.events.find((e) => e.eventType === "merge.blocked")?.payload).toMatchObject({
+      posture: "strict",
+      mode: "operator_approval",
+      externalLogins: ["<unknown>"],
+    });
   });
 
   it("open + external change → proceeds (coexists), merge happens", async () => {

@@ -10,26 +10,21 @@
 // retry, the timed HTTP wrapper, the merge dispatch, the CI-poll semantics) is
 // preserved exactly.
 //
-// Phase 2 EXTENDS this contract WITHOUT reshaping it:
-//   - P2a (auto-rebase) adds `readMergeability(...)` + `updateBranch(...)` to
-//     read a PR branch's up-to-date state and bring it current with its base
-//     before merge (IMPLEMENTED — additive; the existing signatures are intact).
-//   - P2b (intent-preserving conflict resolution) adds the conflict-resolution
-//     read/write hooks (read both sides, write a resolved tree) the resolver
-//     drives — replacing the `noopConflictResolver` default in mergeDispatch.
-//   - P2c (speculative execution) adds the integration-branch ops (create a
-//     speculative integration ref, push a batched merge, tear it down).
-// Those intent points are marked `// Phase 2:` below. They are NOT implemented
-// here — the contract is shaped so adding them is purely additive.
-//
-// The seam is the VCS/ACTIONS provider, NOT the merge QUEUE (§1.1): the native
-// intent-preserving merge queue (P2d) sits ABOVE the provider and drives it
-// through these operations.
+// Phase 2 EXTENDS this contract WITHOUT reshaping it (all additive): P2a
+// (auto-rebase) `readMergeability`/`updateBranch`; P2b (conflict resolution) the
+// resolved-tree read/write hooks; P2c (speculative execution) the
+// integration-branch ops. The seam is the VCS/ACTIONS provider, NOT the merge
+// QUEUE (§1.1): the native merge queue (P2d) sits ABOVE it and drives these ops.
 
-import { Buffer } from "node:buffer";
-// Typed contract errors live in `./vcsProviderErrors.js` (line cap); re-exported
-// so callers import them from the contract module unchanged.
-export { RepositoryAlreadyExistsError, RepositoryCreationForbiddenError } from "./vcsProviderErrors.js";
+// Errors + base64 decode + the ActorIdentity type live in `./vcsProviderErrors.js`
+// (line cap); re-exported so callers import them from the contract module unchanged.
+export {
+  decodeBase64Content,
+  RepositoryAlreadyExistsError,
+  RepositoryCreationForbiddenError,
+} from "./vcsProviderErrors.js";
+export type { ActorIdentity } from "./vcsProviderErrors.js";
+import type { ActorIdentity } from "./vcsProviderErrors.js";
 import type { SshTarget } from "./allocator.js";
 import type { SecretStore } from "./secretStore.js";
 import type { SshSubstrate } from "./sshSubstrate.js";
@@ -208,6 +203,13 @@ export interface ResolvedVcsToken {
   source: "github_app" | "static";
   /** Re-mint / re-read the token (the 401-refresh retry path). */
   refresh(): Promise<string>;
+  /**
+   * MERGE-SAFETY (self-identity): resolve the {@link ActorIdentity} for THIS
+   * credential, populated at resolve time (App context in scope), mirroring
+   * `refresh()`. `VcsProvider.resolveActorIdentity(token)` invokes it. Absent only
+   * on a token built outside the provider's resolver (never on the push path).
+   */
+  identity?: () => Promise<ActorIdentity>;
 }
 
 // ---- Operation inputs ------------------------------------------------------
@@ -324,6 +326,14 @@ export interface VcsProvider {
    * credential-resolution operation in neutral terms.
    */
   resolveToken(creds: VcsCredentialContext): Promise<ResolvedVcsToken>;
+
+  /**
+   * MERGE-SAFETY (self-identity): resolve the {@link ActorIdentity} for the given
+   * (already-resolved) token — the run's git author + the merge stage's identity
+   * set both derive from it. GitHub: static → `GET /user`; App → `<app-slug>[bot]`.
+   * A failure is a LOUD throw (no `.invalid`/`<unknown>` fallback).
+   */
+  resolveActorIdentity(token: ResolvedVcsToken): Promise<ActorIdentity>;
 
   /** Parse a repository clone URL into the neutral {@link RepoRef}. */
   parseRepository(repoUrl: string): RepoRef;
@@ -485,14 +495,4 @@ export interface VcsProvider {
    * best-effort and idempotent, never a hard failure that blocks the merge result.
    */
   deleteBranch(repo: RepoRef, branch: string, token: ResolvedVcsToken): Promise<void>;
-}
-
-/**
- * Decode a forge `/contents` response body's base64 content to a UTF-8 string.
- * Shared by the GitHub impl (and any future provider whose contents read is
- * base64-encoded) — kept on the contract module so the decode policy lives with
- * the seam, not duplicated per impl.
- */
-export function decodeBase64Content(content: string): string {
-  return Buffer.from(content.replaceAll("\n", ""), "base64").toString("utf8");
 }

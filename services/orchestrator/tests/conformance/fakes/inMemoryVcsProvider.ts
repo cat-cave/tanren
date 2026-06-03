@@ -26,7 +26,13 @@ import type {
 import type { GitHubPullRequestChecks } from "../../../src/engine/providers/github.js";
 import type { PullRequestContributors } from "../../../src/engine/workflow/reviewMerge/governancePosture.js";
 import { RepositoryAlreadyExistsError } from "../../../src/engine/contracts/vcsProvider.js";
+import {
+  CONFORMANCE_ACTOR_ID,
+  CONFORMANCE_ACTOR_LOGIN,
+  CONFORMANCE_ACTOR_NOREPLY_EMAIL,
+} from "../vcsProviderConformance.js";
 import type {
+  ActorIdentity,
   BuildIntegrationBranchInput,
   BuildIntegrationBranchResult,
   CreatedIssue,
@@ -62,6 +68,13 @@ function parsePr(url: string): PullRequestRef {
 export class InMemoryVcsProvider implements VcsProvider {
   async resolveToken(_creds: VcsCredentialContext): Promise<ResolvedVcsToken> {
     return { token: "in-memory-token", source: "static", refresh: async () => "in-memory-token-refreshed" };
+  }
+  async resolveActorIdentity(_token: ResolvedVcsToken): Promise<ActorIdentity> {
+    return {
+      login: CONFORMANCE_ACTOR_LOGIN,
+      id: CONFORMANCE_ACTOR_ID,
+      noreplyEmail: CONFORMANCE_ACTOR_NOREPLY_EMAIL,
+    };
   }
   parseRepository(repoUrl: string): RepoRef {
     return parseRepo(repoUrl);

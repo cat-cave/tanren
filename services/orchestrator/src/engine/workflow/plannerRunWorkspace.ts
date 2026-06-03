@@ -9,6 +9,7 @@
 // `cloneHeadSha` is threaded onward so the PR-branch cleanup can replay the
 // writer commits onto it (dropping the bootstrap commit) before the push.
 import type { SshTarget } from "../contracts/allocator.js";
+import type { ActorIdentity } from "../contracts/vcsProvider.js";
 import { githubHttpsRemote, parseGitHubRepository } from "../providers/github.js";
 import { quoteSshShellArg } from "../ssh/command.js";
 import { bootstrapWorkspace, commitBootstrapState, runWorkspaceSshCommand } from "../workspace/index.js";
@@ -87,14 +88,26 @@ export async function prepareRunWorkspace(
 // a token the clone runs unauthenticated against the repo URL as-is (public-repo
 // path), unchanged.
 async function cloneWorkspace(input: RunPlannerLoopInput, target: SshTarget, workspacePath: string): Promise<string> {
-  const token = await resolveCloneToken(input);
+  const resolved = await resolveCloneCredential(input);
   const result = await runWorkspaceSshCommand(input.ssh, target, {
     label: "prepare planner-loop workspace",
     timeoutMs: input.timeoutMs,
-    command: buildCloneCommand(input.context.repoUrl, input.context.targetBranch, token, workspacePath),
-    ...(token === undefined ? {} : { stdin: token }),
+    command: buildCloneCommand(input.context.repoUrl, input.context.targetBranch, resolved, workspacePath),
+    ...(resolved.token === undefined ? {} : { stdin: resolved.token }),
   });
   return result.stdout.trim();
+}
+
+/**
+ * The resolved clone credential: the push token (fed to the clone over stdin) +
+ * MERGE-SAFETY the resolved actor identity Tanren commits as. Both derive from the
+ * SAME `resolveToken`, so the runner's git author (here) and the merge stage's
+ * Tanren-identity set (mergeDispatch) attribute to the SAME login. A genuinely
+ * unauthenticated public-repo clone has neither (it never pushes as Tanren).
+ */
+interface ResolvedCloneCredential {
+  token: string | undefined;
+  identity: ActorIdentity | undefined;
 }
 
 // Resolves the run's GitHub token for the clone through the SAME VcsProvider
@@ -106,19 +119,32 @@ async function cloneWorkspace(input: RunPlannerLoopInput, target: SshTarget, wor
 // prior static-ref-only clone — clone now prefers the App token when an App is
 // present, matching the CI-poll / merge stages (no more asymmetry).
 //
+// MERGE-SAFETY (self-identity): from the SAME resolved credential we ALSO resolve
+// Tanren's pushing identity (`resolveActorIdentity`) and set it as the runner's
+// git author below — so Tanren's own commits attribute to a REAL GitHub login
+// (not the old `.invalid` email that GitHub reports as a `null` author, which the
+// external-change gate keys `<unknown>` → external → blocked). The merge stage
+// derives its Tanren-identity set from the same credential, so they agree.
+//
 // When NEITHER an App nor a static credential ref is configured the clone must
-// still run for the public-repo path, so we return undefined (unauthenticated
-// clone) instead of throwing; a missing secret at a CONFIGURED ref still
-// propagates so a misconfigured private run fails loudly. The token is only
-// returned (fed to the clone over stdin) — never logged.
-async function resolveCloneToken(input: RunPlannerLoopInput): Promise<string | undefined> {
+// still run for the public-repo path, so we return undefined token + identity
+// (unauthenticated clone) instead of throwing; that path does not push as Tanren.
+// A missing secret at a CONFIGURED ref still propagates so a misconfigured private
+// run fails loudly. LOUD-FAILURE: when the run IS authenticated, identity
+// resolution failing is a hard throw — never a silent `.invalid` fallback.
+async function resolveCloneCredential(input: RunPlannerLoopInput): Promise<ResolvedCloneCredential> {
+  // Test seam: a pre-resolved raw clone token bypasses the provider's credential
+  // resolution entirely (it is not a resolvable App/static credential), so there is
+  // no genuine identity to resolve — keep the non-attributable placeholder. Production
+  // omits `githubToken` and takes the real resolution path below.
   if (input.githubToken !== undefined) {
-    return input.githubToken;
+    return { token: input.githubToken, identity: undefined };
   }
   const staticRef = input.context.githubCredentialRef;
-  // No App installation AND no static ref → unauthenticated public-repo clone.
+  // No App installation AND no static ref → unauthenticated public-repo clone: no
+  // token, no Tanren identity (it never pushes as Tanren).
   if (input.context.installation === undefined && staticRef.trim() === "") {
-    return undefined;
+    return { token: undefined, identity: undefined };
   }
   const resolved = await input.vcsProvider.resolveToken({
     secrets: input.secrets,
@@ -126,23 +152,22 @@ async function resolveCloneToken(input: RunPlannerLoopInput): Promise<string | u
     ...(staticRef.trim() !== "" && { staticRef }),
     ...(input.githubAppMinter !== undefined && { minter: input.githubAppMinter }),
   });
-  return resolved.token;
+  // LOUD FAILURE: an authenticated run MUST resolve a real pushing identity so its
+  // commits are attributable — a throw here, never a degrade to `planner@tanren.invalid`.
+  const identity = await input.vcsProvider.resolveActorIdentity(resolved);
+  return { token: resolved.token, identity };
 }
 
 function buildCloneCommand(
   repoUrl: string,
   targetBranch: string,
-  token: string | undefined,
+  resolved: ResolvedCloneCredential,
   workspacePath: string,
 ): string {
   const branch = quoteSshShellArg(targetBranch);
   const dest = quoteSshShellArg(workspacePath);
-  const post = [
-    `cd ${dest}`,
-    "git config user.name 'Tanren Planner'",
-    "git config user.email 'planner@tanren.invalid'",
-    "git rev-parse HEAD",
-  ];
+  const post = [`cd ${dest}`, ...gitIdentityConfig(resolved.identity), "git rev-parse HEAD"];
+  const token = resolved.token;
 
   // No token → plain unauthenticated clone of the repo URL as configured.
   if (token === undefined) {
@@ -165,4 +190,24 @@ function buildCloneCommand(
     gitAuthedCommand(["clone", "--depth", "1", "--branch", branch, remote, dest]),
     ...post,
   ].join(" && ");
+}
+
+/**
+ * MERGE-SAFETY (self-identity): the `git config user.name/user.email` lines for
+ * the run's commits. AUTHENTICATED runs set the RESOLVED login + its canonical
+ * `<id>+<login>@users.noreply.github.com` noreply email, so every writer/rebase
+ * commit (which inherits this config) is ATTRIBUTABLE — GitHub maps the email back
+ * to the login, the PR-commits author is populated, and the external-change gate
+ * sees Tanren's login (not `<unknown>`). The genuinely UNAUTHENTICATED public-repo
+ * clone (no identity) keeps a non-attributable placeholder — it never pushes as
+ * Tanren, so attribution is moot, but git still needs a configured author.
+ */
+function gitIdentityConfig(identity: ActorIdentity | undefined): string[] {
+  if (identity === undefined) {
+    return ["git config user.name 'Tanren Planner'", "git config user.email 'planner@tanren.invalid'"];
+  }
+  return [
+    `git config user.name ${quoteSshShellArg(identity.login)}`,
+    `git config user.email ${quoteSshShellArg(identity.noreplyEmail)}`,
+  ];
 }
