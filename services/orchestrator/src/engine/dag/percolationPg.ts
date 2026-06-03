@@ -35,7 +35,7 @@ import { decodePercolationPending, decodeVerified, resolveProjectOrg } from "./p
 interface SpeculativeRunRow {
   run_id: string;
   spec_id: string;
-  speculative_base: string;
+  speculative_base: string | null;
   integrated_ancestor_shas: unknown;
   verified_ancestor_shas: unknown;
   percolation_pending: unknown;
@@ -77,17 +77,19 @@ export class PgPercolationReadModel implements PercolationReadModel {
     // the shared P2c-1 projection — one snapshot per pass.
     const lifecycleSnapshot = await this.lifecycle.loadLifecycle(projectId);
     const rows = await runWithOrgScope(this.deps.pool, orgId, async (client) => {
-      // The latest run per spec that is speculative (carries a base + a non-empty
-      // build-base map) AND still in-flight (not merged/halted) — the dependents
-      // whose VERIFIED SHAs may have diverged, plus their absorbed-key + marker.
+      // The latest run per spec that is either (a) speculative (carries a base + a
+      // non-empty build-base map — its VERIFIED SHAs may have diverged) OR (b) a
+      // §2c non-speculative percolation re-exec (NULL base, empty build base, but an
+      // in-flight `percolation_pending` marker the SETTLE must resolve to advance the
+      // termination key — never strand a re-based-onto-main re-exec). Still in-flight
+      // (not merged/halted), plus the absorbed-key + marker.
       const result = await client.query<SpeculativeRunRow>(
         `SELECT DISTINCT ON (r.spec_id)
                 r.run_id, r.spec_id, r.speculative_base, r.integrated_ancestor_shas,
                 r.verified_ancestor_shas, r.percolation_pending
            FROM runs r
           WHERE r.project_id = $1
-            AND r.speculative_base IS NOT NULL
-            AND r.integrated_ancestor_shas IS NOT NULL
+            AND (r.speculative_base IS NOT NULL OR r.percolation_pending IS NOT NULL)
             AND r.status NOT IN ('halted','cancelled','failed')
           ORDER BY r.spec_id, r.started_at DESC`,
         [projectId],
@@ -117,8 +119,11 @@ export class PgPercolationReadModel implements PercolationReadModel {
             openFindingMaxSeverity: life?.openFindingMaxSeverity ?? "unaudited",
           };
         })
-        // A run whose build-base map decoded empty has nothing to percolate against.
-        .filter((d) => Object.keys(d.integratedAncestorShas).length > 0)
+        // A run whose build-base map decoded empty has nothing to DETECT against —
+        // UNLESS it carries an in-flight percolation marker (a §2c non-speculative
+        // re-exec, re-based onto plain main), which the SETTLE must still resolve to
+        // advance the termination key. Drop only the runs that are neither.
+        .filter((d) => Object.keys(d.integratedAncestorShas).length > 0 || d.pending !== undefined)
     );
   }
 
@@ -127,22 +132,21 @@ export class PgPercolationReadModel implements PercolationReadModel {
     dependent: SpeculativeDependent;
   }): Promise<AncestorChangeSignal[]> {
     const lifecycleSnapshot = await this.lifecycle.loadLifecycle(input.projectId);
-    const { repo, token, branchBySpec } = await this.resolveAncestorRead(
+    const { repo, token, branchBySpec, defaultBranch } = await this.resolveAncestorRead(
       input.projectId,
       Object.keys(input.dependent.integratedAncestorShas),
     );
     const verifiedShas = input.dependent.verifiedAncestorShas;
     const absorbedVerdicts = input.dependent.absorbedReviewVerdicts ?? {};
     const signals: AncestorChangeSignal[] = [];
+    // A MERGED ancestor's run branch is stale (a squash-merge leaves it untouched),
+    // so its divergence is keyed off the project's default_branch HEAD (the merge
+    // commit) — read ONCE per pass, shared across every merged ancestor.
+    let defaultBranchHead: string | undefined;
     for (const ancestorSpecId of Object.keys(input.dependent.integratedAncestorShas)) {
       // Detection keys off the VERIFIED (re-gated-clean) SHA, NOT the bare build
       // base — a change is actionable until the dependent's own governance re-ran.
       const verifiedSha = verifiedShas[ancestorSpecId] ?? input.dependent.integratedAncestorShas[ancestorSpecId] ?? "";
-      const branch = branchBySpec.get(ancestorSpecId);
-      // A missing branch (the ancestor's run vanished) cannot be read — treat the
-      // current SHA as the verified one (no divergence) rather than inventing a
-      // change; the dependent is left untouched (never falsely percolated).
-      const currentSha = branch === undefined ? verifiedSha : await this.headSha(repo, token, branch, verifiedSha);
       const life: SpecLifecycle =
         lifecycleSnapshot.bySpecId.get(ancestorSpecId) ??
         projectSpecLifecycle({
@@ -153,6 +157,34 @@ export class PgPercolationReadModel implements PercolationReadModel {
           ciPassed: false,
         });
       const absorbed: ReviewVerdict | undefined = absorbedVerdicts[ancestorSpecId];
+
+      // The NEW "ancestor merged" divergence axis (§2c): a merged ancestor wrote a
+      // fresh commit on default_branch while its run branch stayed put. Read the
+      // current SHA off default_branch (the merge commit), NOT the stale run branch,
+      // and flag the merge so the detect re-bases the descendant onto fresh main.
+      if (life.state === "merged") {
+        if (defaultBranchHead === undefined) {
+          defaultBranchHead = await this.headSha(repo, token, defaultBranch, verifiedSha);
+        }
+        signals.push({
+          ancestorSpecId,
+          verifiedSha,
+          currentSha: defaultBranchHead,
+          openFindingMaxSeverity: life.openFindingMaxSeverity,
+          ancestorMerged: true,
+          mergedSha: defaultBranchHead,
+          ...(life.review?.verdict !== undefined && { reviewVerdict: life.review.verdict }),
+          ...(absorbed !== undefined && { absorbedReviewVerdict: absorbed }),
+        });
+        continue;
+      }
+
+      // UNMERGED ancestor: keep the existing run-branch head behavior (reviewer-push
+      // detection). A missing branch (the ancestor's run vanished) cannot be read —
+      // treat the current SHA as the verified one (no divergence) rather than
+      // inventing a change; the dependent is left untouched (never falsely percolated).
+      const branch = branchBySpec.get(ancestorSpecId);
+      const currentSha = branch === undefined ? verifiedSha : await this.headSha(repo, token, branch, verifiedSha);
       signals.push({
         ancestorSpecId,
         verifiedSha,
@@ -165,7 +197,7 @@ export class PgPercolationReadModel implements PercolationReadModel {
     return signals;
   }
 
-  /** Resolve the repo + token + each ancestor's run branch (org-scoped). */
+  /** Resolve the repo + token + default_branch + each ancestor's run branch (org-scoped). */
   private async resolveAncestorRead(
     projectId: string,
     ancestorSpecIds: string[],
@@ -173,15 +205,21 @@ export class PgPercolationReadModel implements PercolationReadModel {
     repo: ReturnType<VcsProvider["parseRepository"]>;
     token: ResolvedVcsToken;
     branchBySpec: Map<string, string>;
+    defaultBranch: string;
   }> {
     const orgId = await resolveProjectOrg(this.deps.pool, projectId);
     if (orgId === null) throw new Error(`project ${projectId} has no org for percolation detect`);
-    const { repoUrl, projectConfig, orgConfig, branches } = await runWithOrgScope(
+    const { repoUrl, defaultBranch, projectConfig, orgConfig, branches } = await runWithOrgScope(
       this.deps.pool,
       orgId,
       async (client) => {
-        const project = await client.query<{ repo_url: string; project_config: unknown; org_config: unknown }>(
-          `SELECT p.repo_url, p.config AS project_config, o.config AS org_config
+        const project = await client.query<{
+          repo_url: string;
+          default_branch: string;
+          project_config: unknown;
+          org_config: unknown;
+        }>(
+          `SELECT p.repo_url, p.default_branch, p.config AS project_config, o.config AS org_config
              FROM projects p LEFT JOIN organizations o ON o.id = p.org_id
             WHERE p.project_id = $1`,
           [projectId],
@@ -195,6 +233,7 @@ export class PgPercolationReadModel implements PercolationReadModel {
         if (row === undefined) throw new Error(`project ${projectId} not found for percolation detect`);
         return {
           repoUrl: row.repo_url,
+          defaultBranch: row.default_branch,
           projectConfig: row.project_config,
           orgConfig: row.org_config,
           branches: branchRows.rows,
@@ -213,6 +252,7 @@ export class PgPercolationReadModel implements PercolationReadModel {
       repo: this.deps.vcsProvider.parseRepository(repoUrl),
       token,
       branchBySpec: new Map(branches.map((b) => [b.spec_id, b.branch] as const)),
+      defaultBranch,
     };
   }
 

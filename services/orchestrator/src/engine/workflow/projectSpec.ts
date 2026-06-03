@@ -71,8 +71,14 @@ export interface CreateSpecRunInput {
   branch?: string;
   // P2c-1 (§2c) SPECULATIVE start; P2c-2: `integratedAncestorShas` = build base,
   // `verifiedAncestorShas` = re-gated-clean (absorbed) carry-forward, `percolationPending` = in-flight marker.
+  //
+  // `speculativeBase: null` is the §2c "ancestor-merged → non-speculative re-base":
+  // a percolation re-execution where EVERY ancestor has merged re-bases onto plain
+  // `default_branch`, so `speculative_base` is NULL (a real run against main) — but it
+  // still carries the percolation marker and SKIPS the done-only dependency gate (the
+  // ancestor is genuinely merged; the percolation walker owns the ordering).
   speculative?: {
-    speculativeBase: string;
+    speculativeBase: string | null;
     integratedAncestorShas?: Record<string, string>;
     verifiedAncestorShas?: Record<string, string>;
     percolationPending?: unknown;

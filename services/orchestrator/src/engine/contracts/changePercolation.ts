@@ -59,8 +59,19 @@ import type { OpenFindingSeverity, ReviewVerdict, SpecLifecycleState } from "./d
  */
 export type PercolationPromptness = "immediate" | "lazy" | "none";
 
-/** The concrete blocking reason that made a percolation `immediate` (for the event). */
-export type ImmediateSeverity = "P0" | "P1" | "changes_requested";
+/**
+ * The concrete blocking reason that made a percolation `immediate` (for the event).
+ *
+ *   - `P0` / `P1` / `changes_requested` — a blocking upstream change on an UNMERGED
+ *     ancestor (a reviewer push, a new finding, a changes-requested verdict).
+ *   - `ancestor_merged` — the ancestor MERGED to `default_branch` (a NEW divergence
+ *     axis the SHA-advance rules miss: a squash-merge writes a fresh commit on main
+ *     and leaves the ancestor's run branch untouched, so the run-branch head still
+ *     equals the verified SHA → no SHA divergence → the descendant would strand on a
+ *     squash-induced conflict). This PROACTIVELY re-bases the descendant onto fresh
+ *     main, dropping the now-merged ancestor from the speculative stack.
+ */
+export type ImmediateSeverity = "P0" | "P1" | "changes_requested" | "ancestor_merged";
 /** The non-blocking reason that made a percolation `lazy` (for the deferred event). */
 export type LazySeverity = "P2" | "P3";
 
@@ -90,6 +101,24 @@ export interface AncestorChangeSignal {
    * verdict yet.
    */
   absorbedReviewVerdict?: ReviewVerdict;
+  /**
+   * The ancestor MERGED to `default_branch` — a NEW divergence axis (§2c "ancestor
+   * merge triggers dependents to auto-rebase onto the new `main`"). A squash-merge
+   * writes a fresh commit on main and leaves the ancestor's RUN BRANCH untouched, so
+   * the run-branch head still equals the verified SHA and the SHA-advance rules see
+   * NO divergence — the descendant would never re-base and would strand on a
+   * squash-induced conflict. When `true`, `currentSha`/`mergedSha` are read off the
+   * project's `default_branch` HEAD (the merge commit), NOT the stale run branch.
+   */
+  ancestorMerged?: boolean;
+  /**
+   * Present when `ancestorMerged`: the `default_branch` HEAD SHA the ancestor merged
+   * INTO (the merge commit). This is the absorbed/termination key for a merged
+   * ancestor — once `verifiedSha === mergedSha` the merge is absorbed and never
+   * re-triggers. Equals `currentSha` when set (kept distinct for clarity at the
+   * decision + marker boundary).
+   */
+  mergedSha?: string;
 }
 
 /** The per-ancestor detect decision the coordinator acts on. */
@@ -110,6 +139,14 @@ export interface PercolationDecision {
  * conformance suite pins.
  *
  * Rules, in order:
+ *   0. The ancestor MERGED to `default_branch` and the dependent has NOT yet
+ *      re-based/re-gated against that merge (`verifiedSha !== mergedSha`) ⇒
+ *      `immediate`/`ancestor_merged`. This PRECEDES the SHA-advance rules: a
+ *      squash-merge leaves the ancestor's run branch untouched, so the SHA-advance
+ *      rules would (falsely) see no divergence; this axis catches the merge and
+ *      proactively re-bases the descendant onto fresh main BEFORE it strands on a
+ *      squash-induced conflict. Once `verifiedSha === mergedSha` the merge is
+ *      absorbed and this never re-fires (the termination key).
  *   1. The SHA still matches what the dependent RE-GATED CLEAN against, AND any
  *      changes-requested verdict has ALREADY been absorbed at this SHA ⇒ `none`
  *      (the termination key). A sticky `changes_requested` that was already
@@ -134,6 +171,17 @@ export function decidePercolation(signal: AncestorChangeSignal): PercolationDeci
   // changes-requested at a new SHA is freshly actionable.
   const changesRequested = signal.reviewVerdict === "changes_requested";
   const newChangesRequested = changesRequested && (shaChanged || signal.absorbedReviewVerdict !== "changes_requested");
+
+  // (0) The ancestor MERGED to default_branch — the NEW divergence axis. A
+  //     squash-merge leaves the run branch untouched (so the SHA-advance rules below
+  //     see no divergence), but main genuinely moved. Re-base the descendant onto
+  //     fresh main NOW, dropping the merged ancestor. Once the dependent re-gated
+  //     against the merge commit (`verifiedSha === mergedSha`) it is absorbed and
+  //     never re-fires (the termination key). `base.toSha` already carries
+  //     `signal.currentSha`, which the read model set to the default_branch head.
+  if (signal.ancestorMerged === true && signal.mergedSha !== undefined && signal.verifiedSha !== signal.mergedSha) {
+    return { ...base, toSha: signal.mergedSha, promptness: "immediate", immediateSeverity: "ancestor_merged" };
+  }
 
   // (1) Termination: nothing diverged and no UN-ABSORBED review request ⇒ no-op.
   if (!shaChanged && !newChangesRequested) {
@@ -223,8 +271,13 @@ export function decideSettle(reexecState: SpecLifecycleState, reexecSeverity: Op
 export interface SpeculativeDependent {
   specId: string;
   runId: string;
-  /** The dynamic base (integration branch) the dependent's PR is built on. */
-  speculativeBase: string;
+  /**
+   * The dynamic base (integration branch) the dependent's PR is built on. NULL for a
+   * §2c "ancestor-merged → non-speculative re-base" (every ancestor merged ⇒ the
+   * dependent re-based onto plain `default_branch`); such a run is still loaded — it
+   * carries an in-flight percolation marker the settle must resolve (the termination key).
+   */
+  speculativeBase: string | null;
   /** The per-ancestor SHAs the current run is BUILT ON (the re-base base). */
   integratedAncestorShas: Record<string, string>;
   /** The per-ancestor SHAs the dependent RE-GATED CLEAN against (the absorbed key). */
@@ -300,6 +353,16 @@ export interface PercolationKickOff {
     projectId: string;
     dependent: SpeculativeDependent;
     decision: PercolationDecision;
+    /**
+     * The ancestor spec ids that have MERGED to `default_branch` (lifecycle
+     * `merged`). The kick-off DROPS these from the speculative stack: the rebuilt
+     * integration stacks only the UNMERGED ancestors (a merged ancestor's content
+     * arrives via fresh main, since the integrator resets the ephemeral ref to
+     * `default_branch` first). When EVERY ancestor has merged the re-base is onto
+     * plain `default_branch` and the re-execution is genuinely NON-speculative
+     * (`speculative_base` cleared to NULL) — a real run against main.
+     */
+    mergedAncestorSpecIds: ReadonlyArray<string>;
   }): Promise<PercolationKickOffOutcome>;
 }
 

@@ -17,7 +17,8 @@
         "P1",
         "P2",
         "P3",
-        "changes_requested"
+        "changes_requested",
+        "ancestor_merged"
       ],
       "type": "string"
     },

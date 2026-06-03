@@ -65,6 +65,7 @@ export function describeChangePercolationConformance(
         projectId: CONF_PROJECT_ID,
         dependent: CONF_CLEAN_DEPENDENT,
         decision: confDecision(),
+        mergedAncestorSpecIds: [],
       });
       expect(outcome.result).toBe("reexecuting");
       expect(outcome.ancestorSpecId).toBe("spec_anc");
@@ -78,6 +79,7 @@ export function describeChangePercolationConformance(
         projectId: CONF_PROJECT_ID,
         dependent: CONF_CONFLICT_DEPENDENT,
         decision: confDecision(),
+        mergedAncestorSpecIds: [],
       });
       expect(outcome.result).toBe("held");
       // Never re-executed on a held rebuild (the ancestors conflict first).

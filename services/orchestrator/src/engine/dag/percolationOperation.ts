@@ -49,6 +49,14 @@ export interface PercolationReexecutor {
     decision: PercolationDecision;
     integrationBranch: string;
     ancestorHeadShas: Record<string, string>;
+    /**
+     * The re-execution re-bases onto plain `default_branch` and is genuinely
+     * NON-speculative — set when EVERY ancestor has merged (the unmerged subset is
+     * empty). The re-exec run carries NO `speculative_base` (NULL) + NO build-base
+     * ancestor SHAs, so it is a real run against main (mirrors a non-speculative
+     * run), not a speculative one stacked on an integration ref.
+     */
+    nonSpeculative: boolean;
   }): Promise<{ reexecRunId: string }>;
 }
 
@@ -64,17 +72,31 @@ export class PercolatingKickOff implements PercolationKickOff {
     projectId: string;
     dependent: SpeculativeDependent;
     decision: PercolationDecision;
+    mergedAncestorSpecIds: ReadonlyArray<string>;
   }): Promise<PercolationKickOffOutcome> {
     const { projectId, dependent, decision } = input;
 
-    // 1. Rebuild the integration branch against the ancestor's NEW state. The
-    //    integrator stacks EVERY ancestor (re-resolving each one's latest branch),
-    //    so the rebuilt base reflects the upstream change. An A-vs-other conflict
-    //    surfaces here, early — `held` (routed to P2b; retried), dependent untouched.
+    // DROP the merged ancestors from the speculative stack (§2c "ancestor-merged →
+    // proactive re-base"): a merged ancestor's content arrives via FRESH MAIN (the
+    // integrator resets the ephemeral ref to default_branch first), so only the
+    // UNMERGED ancestors are stacked. When EVERY ancestor has merged this subset is
+    // empty and the re-base is onto plain default_branch — a genuinely
+    // NON-speculative re-execution.
+    const merged = new Set(input.mergedAncestorSpecIds);
+    const unmergedAncestorSpecIds = Object.keys(dependent.integratedAncestorShas).filter((id) => !merged.has(id));
+    const nonSpeculative = unmergedAncestorSpecIds.length === 0;
+
+    // 1. Rebuild the integration branch against the UNMERGED ancestors' NEW state.
+    //    The integrator resets the ephemeral ref to default_branch then stacks each
+    //    unmerged ancestor (re-resolving its latest branch), so the rebuilt base
+    //    reflects fresh main + the still-pending upstream work. An A-vs-other
+    //    conflict surfaces here, early — `held` (routed to P2b; retried), dependent
+    //    untouched. With an empty unmerged set the integrator resets the ref to plain
+    //    default_branch (no ancestor stacked); the re-exec then drops the base to NULL.
     const integration = await this.deps.integrator.buildIntegration({
       projectId,
       dependentSpecId: dependent.specId,
-      unmergedAncestorSpecIds: Object.keys(dependent.integratedAncestorShas),
+      unmergedAncestorSpecIds,
     });
     if (integration.outcome === "conflict") {
       return {
@@ -84,16 +106,18 @@ export class PercolatingKickOff implements PercolationKickOff {
       };
     }
 
-    // 2 + 3. Re-base the dependent onto the rebuilt integration AND re-execute it
-    //        through a REAL run (its gate+checker+auditor re-run against the change),
-    //        writing the in-flight marker. Absorption is deferred to the settle of a
-    //        later pass — NEVER merge unverified, NEVER absorb on a bare re-base.
+    // 2 + 3. Re-base the dependent onto the rebuilt integration (or onto plain main
+    //        when non-speculative) AND re-execute it through a REAL run (its
+    //        gate+checker+auditor re-run against the change), writing the in-flight
+    //        marker. Absorption is deferred to the settle of a later pass — NEVER
+    //        merge unverified, NEVER absorb on a bare re-base.
     const { reexecRunId } = await this.deps.reexecutor.reexecute({
       projectId,
       dependent,
       decision,
       integrationBranch: integration.integrationBranch,
       ancestorHeadShas: integration.ancestorHeadShas,
+      nonSpeculative,
     });
     return { result: "reexecuting", ancestorSpecId: decision.ancestorSpecId, reexecRunId };
   }
