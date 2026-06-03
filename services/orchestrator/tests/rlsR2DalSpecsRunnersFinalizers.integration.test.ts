@@ -226,11 +226,9 @@ describeDb("RLS R2 cohort-3 — specs + runners + finalizers through the org-sco
   //        the run → the row would have been admitted. It is denied → WITH CHECK
   //        is reading the EXPLICIT org the caller threaded.
   //
-  //      NOTE: a genuinely runless `run_id` (a `forge_<org>_<nonce>` handle with no
-  //      `runs` row) + `org:<org>` `project_id` additionally violate the
-  //      `runners_run_id_runs_run_id_fk` / `runners_project_id_projects_project_id_fk`
-  //      foreign keys — a SEPARATE pre-existing blocker pinned in (c3). This case
-  //      therefore uses FK-valid identifiers and isolates the org_id behavior.
+  //      NOTE: this case uses FK-valid identifiers to isolate the org_id behavior.
+  //      The genuinely runless case (NULL run_id / project_id, no FK target) is
+  //      proven in (c3).
   it("(c2) the runner's org is the EXPLICIT caller org (no run subquery): wrong-org is RLS-denied", async () => {
     const store = new PgRunnerStore(runtimePool);
     const baseInput = {
@@ -267,38 +265,79 @@ describeDb("RLS R2 cohort-3 — specs + runners + finalizers through the org-sco
     expect(denied.rowCount).toBe(0);
   });
 
-  // (c3) PIN the SEPARATE remaining blocker for the runless Forge allocation: even
-  //      with org_id threaded correctly, a synthetic `run_id` (`forge_<org>_<nonce>`)
-  //      with no matching `runs` row violates the `runners_run_id_runs_run_id_fk`
-  //      foreign key (and `org:<org>` `project_id` would violate the projects FK).
-  //      This is the next issue to resolve to fully unblock Forge ideation
-  //      end-to-end (relax/drop those FKs for runless allocations — a migration).
-  //      Asserted here so the limitation is visible and regression-pinned; when the
-  //      FKs are relaxed this test flips to an admit and (c2) extends to a true
-  //      runless row.
-  it("(c3) KNOWN-ISSUE: a genuinely runless run_id still violates the runs FK (separate fix)", async () => {
+  // (c3) The RUNLESS Forge ideation allocation now SUCCEEDS: with run_id /
+  //      project_id persisted as NULL (no FK target) and org_id the real org, the
+  //      INSERT satisfies the runners WITH CHECK and skips the run_id→runs /
+  //      project_id→projects FKs that the synthetic `forge_<org>_<nonce>` handle
+  //      would otherwise violate. The runner row is ADMITTED under the org scope;
+  //      a wrong-org runless claim is still RLS-denied.
+  it("(c3) a runless claim with NULL run_id/project_id is ADMITTED; wrong-org is denied", async () => {
     const store = new PgRunnerStore(runtimePool);
-    // A synthetic Forge handle with no `runs` row.
-    const forgeRunId = `forge_${ORG_A}_deadbeef`;
-    const noRun = await ownerPool.query("SELECT 1 FROM runs WHERE run_id = $1", [forgeRunId]);
-    expect(noRun.rowCount).toBe(0);
 
+    // ADMITTED: NULL run_id + NULL project_id (the greenfield-interview shape),
+    // org_id = the real org. The synthetic handle is NOT persisted; the row commits.
+    await runWithOrgScope(runtimePool, ORG_A, () =>
+      store.claim({
+        runnerId: "runner_runless",
+        runId: null,
+        projectId: null,
+        orgId: ORG_A,
+        allocator: "sidecar-docker",
+        sshHost: "10.0.0.9",
+        sshPort: 2200,
+        hostKeyFingerprint: "SHA256:forge",
+        imageSha: "img@sha256:forge",
+        containerId: "forge-host",
+      }),
+    );
+    const committed = await ownerPool.query<{ run_id: string | null; project_id: string | null; org_id: string }>(
+      "SELECT run_id, project_id, org_id FROM runners WHERE runner_id = 'runner_runless'",
+    );
+    expect(committed.rows[0]?.org_id).toBe(ORG_A);
+    expect(committed.rows[0]?.run_id).toBeNull();
+    expect(committed.rows[0]?.project_id).toBeNull();
+
+    // A project-scoped runless surface persists the REAL project_id (FK-valid)
+    // while run_id stays NULL — preserves project attribution, still FK-safe.
+    await runWithOrgScope(runtimePool, ORG_A, () =>
+      store.claim({
+        runnerId: "runner_runless_proj",
+        runId: null,
+        projectId: PROJECT_A,
+        orgId: ORG_A,
+        allocator: "sidecar-docker",
+        sshHost: "10.0.0.9",
+        sshPort: 2200,
+        hostKeyFingerprint: "SHA256:forge",
+        imageSha: "img@sha256:forge",
+        containerId: "forge-host-2",
+      }),
+    );
+    const withProj = await ownerPool.query<{ run_id: string | null; project_id: string | null }>(
+      "SELECT run_id, project_id FROM runners WHERE runner_id = 'runner_runless_proj'",
+    );
+    expect(withProj.rows[0]?.run_id).toBeNull();
+    expect(withProj.rows[0]?.project_id).toBe(PROJECT_A);
+
+    // DENIED: a runless claim carrying ORG_B under ORG_A's scope is RLS-rejected.
     await expect(
       runWithOrgScope(runtimePool, ORG_A, () =>
         store.claim({
-          runnerId: "runner_runless",
-          runId: forgeRunId,
-          projectId: PROJECT_A,
-          orgId: ORG_A,
+          runnerId: "runner_runless_wrong_org",
+          runId: null,
+          projectId: null,
+          orgId: ORG_B,
           allocator: "sidecar-docker",
           sshHost: "10.0.0.9",
           sshPort: 2200,
           hostKeyFingerprint: "SHA256:forge",
           imageSha: "img@sha256:forge",
-          containerId: "forge-host",
+          containerId: "forge-host-3",
         }),
       ),
-    ).rejects.toThrow(/runners_run_id_runs_run_id_fk|foreign key/iu);
+    ).rejects.toThrow(/row-level security|policy/iu);
+    const denied = await ownerPool.query("SELECT 1 FROM runners WHERE runner_id = 'runner_runless_wrong_org'");
+    expect(denied.rowCount).toBe(0);
   });
 
   // (e) the worker failure-path finalize UPDATE (runs → halted) commits the same

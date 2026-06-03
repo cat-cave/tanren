@@ -113,6 +113,20 @@ describe("PgRunnerStore.claim", () => {
     // written under the worker's BYPASSRLS system scope. Not coerced to a value.
     expect(pool.queries[0]!.params[3]).toBeNull();
   });
+
+  it("binds NULL run_id ($2) and project_id ($3) for a runless Forge ideation claim", async () => {
+    const pool = new RecordingPool();
+    // The runless shape: NULL run_id/project_id (no FK target), real org_id.
+    await runWithSystemJobScope(() =>
+      new PgRunnerStore(poolAs(pool)).claim({ ...claimInput, runId: null, projectId: null }),
+    );
+
+    // run_id ($2) and project_id ($3) are bound NULL verbatim — the FK columns
+    // stay NULL so the INSERT skips the run_id→runs / project_id→projects FKs.
+    expect(pool.queries[0]!.params[1]).toBeNull();
+    expect(pool.queries[0]!.params[2]).toBeNull();
+    expect(pool.queries[0]!.params[3]).toBe("org_a");
+  });
 });
 
 describe("PgRunnerStore.release", () => {

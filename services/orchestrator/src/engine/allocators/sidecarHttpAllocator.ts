@@ -1,4 +1,10 @@
-import type { AllocationRequest, Allocator, ReleaseReason, RunnerAllocation } from "../contracts/allocator.js";
+import {
+  persistedRunnerKeys,
+  type AllocationRequest,
+  type Allocator,
+  type ReleaseReason,
+  type RunnerAllocation,
+} from "../contracts/allocator.js";
 import type { RunnerStore } from "./runnerStore.js";
 
 const allocatorName = "sidecar-docker";
@@ -46,10 +52,18 @@ export class SidecarHttpAllocator implements Allocator {
       method: "POST",
       headers: this.authHeaders(),
       body: JSON.stringify({
+        // runId/projectId are the runner's naming HANDLE (container + volume
+        // names). For a runless Forge ideation allocation the service persists its
+        // runners row's run_id as NULL and project_id as `persistedProjectId`
+        // (NULL or the real project) — it keys off `runless`, not off these being
+        // absent, so naming stays stable while the FK columns stay FK-safe.
         runId: request.runId,
         projectId: request.projectId,
         runnerImage: request.runnerImage,
         orgId: request.orgId,
+        ...(request.runless === true
+          ? { runless: true, persistedProjectId: persistedRunnerKeys(request).projectId }
+          : {}),
         vaultRefs,
       }),
     });
@@ -74,8 +88,9 @@ export class SidecarHttpAllocator implements Allocator {
     // `runners` continues to find the row.
     await this.options.runners.claim({
       runnerId: allocation.runnerId,
-      runId: request.runId,
-      projectId: request.projectId,
+      // Persist FK-valid (run_id, project_id), or NULLs for a runless Forge
+      // ideation allocation whose synthetic handle is not a real run/project.
+      ...persistedRunnerKeys(request),
       orgId: request.orgId ?? null,
       allocator: allocatorName,
       sshHost: allocation.target.host,
