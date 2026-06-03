@@ -92,13 +92,25 @@ export function collectRunCredentialRefPaths(context: PlannerRunContext): string
 }
 
 /**
- * How long a run may take to read its credentials. The materialization happens
- * up front (clone token + the per-role auth bundles), so a few minutes is ample;
- * the token is non-renewable so this is also its hard ceiling.
+ * How long a run may hold its scoped credential token. The token must outlive the
+ * ENTIRE run: credentials are NOT read once up front — the codex/claude writer AND
+ * every Answerer (checker/auditor) re-materialize the per-role auth bundle on each
+ * call, so a multi-iteration run (planner reruns × writer iterations × roles) reads
+ * its credentials many times over many minutes. The token is non-renewable, so this
+ * TTL is the hard ceiling on the whole run's credential lifetime — sized generously
+ * to cover a long multi-iteration spec run (the run's real bounds are the budget gate
+ * + the iteration escape-hatches, not this token). The de-privilege still holds: the
+ * token's ACL policy is scoped to ONLY this run's credential paths, and it dies when
+ * the run window closes.
  */
-export const SCOPED_RUN_TOKEN_TTL_SECONDS = 900;
-/** A small margin over the ref count so a re-read on retry does not exhaust the token. */
-export const SCOPED_RUN_TOKEN_USES_PER_REF = 8;
+export const SCOPED_RUN_TOKEN_TTL_SECONDS = 7_200;
+/**
+ * Per-credential-ref read budget. Each writer iteration + each Answerer call
+ * re-materializes the credential (1-2 Vault reads), so a run with the max escape-hatch
+ * iterations reads a single credential dozens of times. Sized well above any real run
+ * so use-exhaustion never fails a legitimate run; the token remains path-scoped + TTL-bounded.
+ */
+export const SCOPED_RUN_TOKEN_USES_PER_REF = 256;
 
 export interface ScopedRunCredentials {
   /** The SecretStore the run's credential reads/materialization MUST use. */
