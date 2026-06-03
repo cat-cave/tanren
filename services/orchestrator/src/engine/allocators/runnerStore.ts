@@ -5,6 +5,17 @@ export interface ClaimRunnerInput {
   runnerId: string;
   runId: string;
   projectId: string;
+  /**
+   * The org the runner belongs to — the CALLER's org, threaded EXPLICITLY so the
+   * `runners` row carries a valid tenant org_id even for a RUNLESS allocation (a
+   * Forge ideation runner whose `runId` is a synthetic, non-`runs` handle). This
+   * was previously derived in-statement from `(SELECT org_id FROM runs WHERE
+   * run_id = $runId)`, which returns NULL for that runless handle and made the
+   * org-scoped INSERT violate the `runners` WITH CHECK policy (the apex onboarding
+   * interview 500'd here). `null` is the EXPLICIT legacy/unscoped-run case (the
+   * worker's system scope / BYPASSRLS), NOT a missing value.
+   */
+  orgId: string | null;
   allocator: string;
   sshHost: string;
   sshPort: number;
@@ -36,17 +47,23 @@ export class PgRunnerStore implements RunnerStore {
     // (BYPASSRLS) instead — never an implicit unscoped bare-pool write.
     await withJobOrgScope(this.pool, (client) =>
       client.query(
-        // org_id is mandatory (tanren tenancy hardening); derive it from the
-        // run this runner is claimed for so the runner row is tenant-scoped.
+        // org_id is mandatory (tanren tenancy hardening) and is the CALLER's org,
+        // passed EXPLICITLY ($4) — NOT derived from a `(SELECT org_id FROM runs
+        // …)` subquery. A RUNLESS Forge allocation has a synthetic `runId` with no
+        // matching `runs` row, so that subquery returned NULL and the org-scoped
+        // INSERT violated the runners WITH CHECK policy. The runner's org is the
+        // org the allocate request belongs to, full stop. `null` is the explicit
+        // legacy/unscoped-run case, written under the worker's BYPASSRLS scope.
         `INSERT INTO runners (
            runner_id, run_id, project_id, org_id, allocator, status, ssh_host, ssh_port,
            host_key_fingerprint, image_sha, container_id
          )
-         VALUES ($1, $2, $3, (SELECT org_id FROM runs WHERE run_id = $2), $4, 'claimed', $5, $6, $7, $8, $9)`,
+         VALUES ($1, $2, $3, $4, $5, 'claimed', $6, $7, $8, $9, $10)`,
         [
           input.runnerId,
           input.runId,
           input.projectId,
+          input.orgId,
           input.allocator,
           input.sshHost,
           input.sshPort,

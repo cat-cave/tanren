@@ -76,6 +76,7 @@ export class SidecarHttpAllocator implements Allocator {
       runnerId: allocation.runnerId,
       runId: request.runId,
       projectId: request.projectId,
+      orgId: request.orgId ?? null,
       allocator: allocatorName,
       sshHost: allocation.target.host,
       sshPort: allocation.target.port,

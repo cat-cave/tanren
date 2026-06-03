@@ -84,6 +84,7 @@ export class ManualSshAllocator implements Allocator {
         runnerId,
         runId: request.runId,
         projectId: request.projectId,
+        orgId: request.orgId ?? null,
         allocator: allocatorName,
         sshHost: host.host,
         sshPort: port,
