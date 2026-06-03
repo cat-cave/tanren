@@ -39,7 +39,7 @@ import {
 import type { DagLifecycleReadModel } from "../contracts/dagLifecycle.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SpeculativeIntegrator } from "../contracts/speculativeIntegrator.js";
-import { SpecNotRunnableError } from "../workflow/projectSpecErrors.js";
+import { SpecDependenciesBlockedError, SpecNotRunnableError } from "../workflow/projectSpecErrors.js";
 import type { SpecReadiness } from "./speculation.js";
 import { PgBudgetGate } from "./budgetGate.js";
 import { PgDagLifecycleReadModel } from "./lifecycle.js";
@@ -274,16 +274,24 @@ export class EventEmittingDagWalker implements DagWalker {
   }
 
   /**
-   * Enqueue a spec run, TOLERATING the one benign, EXPECTED race: a concurrent
-   * walker tick already claimed this spec (its pending→active claim — the
-   * idempotency boundary — won), so the enqueuer raises a SpecNotRunnableError.
-   * That is NOT an error: the spec is already in flight, there is simply nothing
-   * to do this tick. Return `undefined` (a benign skip — the caller emits no
-   * enqueued event), logged at most at debug. The behavior is IDENTICAL whether
-   * the enqueuer ran in-process (it throws the typed error directly) or through
-   * the control plane (the client reconstructs the SAME typed error from the
-   * endpoint's 409). EVERY OTHER error propagates unchanged — a genuine failure
-   * still surfaces loudly (no silent fallback).
+   * Enqueue a spec run, TOLERATING the two benign, EXPECTED per-spec enqueue
+   * conditions. Either is a benign skip (return `undefined` — the caller emits no
+   * enqueued event, logged at most at debug); the tick continues enqueuing the
+   * OTHER ready specs and never aborts. EVERY OTHER error propagates unchanged — a
+   * genuine failure (a 500 / unexpected fault) still surfaces loudly (no silent
+   * fallback). Behavior is IDENTICAL whether the enqueuer ran in-process (it throws
+   * the typed error directly) or through the control plane (the client reconstructs
+   * the SAME typed error from the endpoint's typed 409).
+   *
+   *   1. SpecNotRunnableError — a concurrent walker tick already claimed this spec
+   *      (its pending→active claim, the idempotency boundary, won). The spec is
+   *      already in flight; nothing to do this tick.
+   *   2. SpecDependenciesBlockedError — the spec's dependencies are not yet `done`
+   *      at enqueue time (the planner saw them merged via the lifecycle projection,
+   *      but the `specs.status='done'` write was not yet visible to the enqueue tx).
+   *      The spec simply is not ready yet; a later tick enqueues it once the
+   *      dependency lands as done. Tolerating it keeps this tick from aborting and
+   *      starving the OTHER ready specs.
    */
   private async enqueueOrTolerate(input: {
     projectId: string;
@@ -297,6 +305,12 @@ export class EventEmittingDagWalker implements DagWalker {
       if (error instanceof SpecNotRunnableError) {
         console.debug(
           `[dag-walker] skipped ${input.specId}: already claimed by a concurrent tick (status ${error.status}) — benign`,
+        );
+        return undefined;
+      }
+      if (error instanceof SpecDependenciesBlockedError) {
+        console.debug(
+          `[dag-walker] skipped ${input.specId}: dependencies not yet done (${error.blockedSpecIds.join(", ")}) — benign, a later tick will enqueue it`,
         );
         return undefined;
       }

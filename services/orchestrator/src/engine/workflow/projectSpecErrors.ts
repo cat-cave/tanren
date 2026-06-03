@@ -18,10 +18,11 @@ export class SpecNotFoundError extends Error {
 
 export class SpecDependenciesBlockedError extends Error {
   constructor(
-    specId: string,
+    readonly specId: string,
     readonly blockedSpecIds: string[],
   ) {
     super(`spec dependencies are not done for ${specId}: ${blockedSpecIds.join(", ")}`);
+    this.name = "SpecDependenciesBlockedError";
   }
 }
 

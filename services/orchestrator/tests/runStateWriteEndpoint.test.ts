@@ -17,7 +17,7 @@ import { runWithJobOrgId } from "@tanren/db";
 import { AllowAllPeerVerifier, DenyAllPeerVerifier, type MtlsFetch } from "../src/engine/contracts/index.js";
 import { HttpRunStateWriter, RunStateWriteTransportError } from "../src/engine/worker/index.js";
 import { createInternalRunStateWriteRoutes } from "../src/routes/internal/runStateWrites.js";
-import { SpecNotRunnableError } from "../src/engine/workflow/projectSpecErrors.js";
+import { SpecDependenciesBlockedError, SpecNotRunnableError } from "../src/engine/workflow/projectSpecErrors.js";
 
 // A pool that throws if any query runs — so a test that reaches the DB fails
 // loudly. The authn-reject + bad-request paths must return BEFORE touching it.
@@ -163,7 +163,7 @@ const CREATE_RUN_BODY = {
   },
 };
 
-describe("plane-split (autonomy loops) — create-queued-run maps SpecNotRunnableError to a typed 409", () => {
+describe("plane-split (autonomy loops) — create-queued-run maps benign per-spec errors to a typed 409", () => {
   it("returns 409 { error: spec_not_runnable, specId, status } when the claim races a concurrent tick", async () => {
     const app = createInternalRunStateWriteRoutes({
       pool: poolThatThrowsOn(new SpecNotRunnableError("spec_x", "active")),
@@ -175,7 +175,24 @@ describe("plane-split (autonomy loops) — create-queued-run maps SpecNotRunnabl
     expect(await response.json()).toEqual({ error: "spec_not_runnable", specId: "spec_x", status: "active" });
   });
 
-  it("still returns 500 for a genuine (non-SpecNotRunnable) error — no silent swallow", async () => {
+  it("returns 409 { error: spec_dependencies_blocked, specId, blockedBy } when deps are not yet done", async () => {
+    const app = createInternalRunStateWriteRoutes({
+      pool: poolThatThrowsOn(new SpecDependenciesBlockedError("spec_x", ["spec_y"])),
+      verifier: new AllowAllPeerVerifier(),
+    });
+    const response = await post(app, "/internal/create-queued-run", CREATE_RUN_BODY);
+    // The benign deps-not-yet-done condition is a TYPED 409 (a later tick enqueues
+    // it once the dependency lands as done), NOT a scary 500 that would abort the
+    // walker's whole tick and starve the OTHER ready specs.
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: "spec_dependencies_blocked",
+      specId: "spec_x",
+      blockedBy: ["spec_y"],
+    });
+  });
+
+  it("still returns 500 for a genuine (non-benign) error — no silent swallow", async () => {
     const app = createInternalRunStateWriteRoutes({
       pool: poolThatThrowsOn(new Error("connection reset by peer")),
       verifier: new AllowAllPeerVerifier(),
@@ -217,14 +234,40 @@ describe("plane-split (autonomy loops) — HttpRunStateWriter.createQueuedRun re
     await expect(promise).rejects.not.toBeInstanceOf(RunStateWriteTransportError);
   });
 
+  it("throws a reconstructed SpecDependenciesBlockedError (instanceof) on a 409 spec_dependencies_blocked response", async () => {
+    const writer = new HttpRunStateWriter(
+      "https://control.internal:3110",
+      replyWith(409, JSON.stringify({ error: "spec_dependencies_blocked", specId: "spec_x", blockedBy: ["spec_y"] })),
+    );
+    const promise = writer.createQueuedRun(baseInput);
+    // The typed error crosses the wire INTACT — so the walker's benign deps-not-yet-done
+    // skip applies identically to the control-plane path.
+    await expect(promise).rejects.toBeInstanceOf(SpecDependenciesBlockedError);
+    await expect(promise).rejects.toMatchObject({ specId: "spec_x", blockedSpecIds: ["spec_y"] });
+    // It is NOT a generic transport error.
+    await expect(promise).rejects.not.toBeInstanceOf(RunStateWriteTransportError);
+  });
+
   it("throws a RunStateWriteTransportError on any OTHER non-2xx (a genuine fault still surfaces loudly)", async () => {
     const writer = new HttpRunStateWriter("https://control.internal:3110", replyWith(500, "boom"));
     await expect(writer.createQueuedRun(baseInput)).rejects.toBeInstanceOf(RunStateWriteTransportError);
   });
 
-  it("throws a RunStateWriteTransportError on a 409 whose body is NOT spec_not_runnable (no over-broad mapping)", async () => {
+  it("throws a RunStateWriteTransportError on a 409 matching NEITHER typed shape (no over-broad mapping)", async () => {
     const writer = new HttpRunStateWriter(
       "https://control.internal:3110",
+      // An unknown 409 error code — NOT one of the two tolerated typed shapes.
+      replyWith(409, JSON.stringify({ error: "something_unexpected", specId: "spec_x" })),
+    );
+    await expect(writer.createQueuedRun(baseInput)).rejects.toBeInstanceOf(RunStateWriteTransportError);
+  });
+
+  it("throws a RunStateWriteTransportError on a 409 spec_dependencies_blocked MISSING blockedBy (malformed → not mapped)", async () => {
+    const writer = new HttpRunStateWriter(
+      "https://control.internal:3110",
+      // The spec_dependencies_blocked code but no `blockedBy` array — a malformed
+      // body must NOT be reconstructed (it would lose the blocked list); it falls
+      // back to the generic transport error so a genuine fault is never masked.
       replyWith(409, JSON.stringify({ error: "spec_dependencies_blocked", specId: "spec_x" })),
     );
     await expect(writer.createQueuedRun(baseInput)).rejects.toBeInstanceOf(RunStateWriteTransportError);
