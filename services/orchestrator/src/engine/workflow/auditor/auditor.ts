@@ -11,7 +11,10 @@ export interface AuditorSpecContext {
   specDescription: string;
   acceptanceCriteria: ReadonlyArray<string>;
   subtasks: ReadonlyArray<PlanSubtask>;
-  combinedDiff: string;
+  // The run base the combined writer change is diffed against. The auditor runs
+  // INSIDE the read-only workspace and inspects the change itself (rather than
+  // having the full combined diff injected into the prompt).
+  baselineSha: string;
 }
 
 export interface AuditorInvokeInput {
@@ -46,6 +49,11 @@ export function buildAuditorPrompt(context: AuditorSpecContext): string {
     "Return only the structured JSON required by the provided schema.",
     "Do not edit files, run mutation commands, create commits, or write to the workspace.",
     "",
+    "The combined writer change is committed on the current branch of your read-only",
+    "workspace. Inspect it yourself: run",
+    `  git diff ${context.baselineSha} -- . ':(exclude)node_modules'`,
+    "to see the change, then read the changed source files, and judge against the spec.",
+    "",
     `Spec title: ${context.specTitle}`,
     `Spec description: ${context.specDescription}`,
     "Acceptance criteria:",
@@ -57,13 +65,10 @@ export function buildAuditorPrompt(context: AuditorSpecContext): string {
         `- [${subtask.index}] ${subtask.title} (intent: ${subtask.intent}, behaviors: ${subtask.behaviorIds.join(", ") || "(none)"})`,
     ),
     "",
-    "Set passed=true only when every acceptance criterion is satisfied by the combined writer diff.",
+    "Set passed=true only when every acceptance criterion is satisfied by the combined writer change.",
     "Set recommendedAction='pass' when passed=true.",
     "Set recommendedAction='loop_to_planner' when the spec is recoverable by re-planning.",
     "Set recommendedAction='halt' when the spec is not recoverable in this run.",
-    "",
-    "Combined writer diff:",
-    context.combinedDiff,
   ].join("\n");
 }
 

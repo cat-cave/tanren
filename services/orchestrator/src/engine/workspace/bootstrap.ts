@@ -285,6 +285,46 @@ function depsInstallFailureMessage(
   return `workspace deps install (${command}) ${reason}${tail}`;
 }
 
+// The paths added to the workspace's LOCAL git ignore (`.git/info/exclude`)
+// right after clone. This is a per-checkout ignore (NOT a committed `.gitignore`)
+// so a later `git add -A` — the bootstrap commit and every writer commit — NEVER
+// sweeps an install/build tree into the repo, regardless of whether the cloned
+// repo ships a `.gitignore`. This is the durable fix for the 46MB checker-prompt
+// failure: a prior gate's `pnpm install` left `node_modules/` in the tree, and
+// `git add -A` committed it, ballooning the writer diff past the model's input
+// limit. The greenfield scaffold ALSO mandates a committed `.gitignore` (so the
+// produced repo is correct); this exclude is the workspace-side belt-and-braces.
+export const WORKSPACE_LOCAL_IGNORE_PATHS = ["node_modules/", "dist/"] as const;
+
+export interface SeedWorkspaceLocalIgnoreInput {
+  ssh: SshSubstrate;
+  target: SshTarget;
+  workspacePath: string;
+  timeoutMs: number;
+}
+
+// Appends WORKSPACE_LOCAL_IGNORE_PATHS to the cloned repo's `.git/info/exclude`
+// (idempotently — duplicate lines there are harmless and git de-dupes the match).
+// Runs over SSH in the workspace dir. Must be called AFTER the clone and BEFORE
+// the first install/commit so no `git add -A` can ever stage node_modules/dist.
+export async function seedWorkspaceLocalIgnore(input: SeedWorkspaceLocalIgnoreInput): Promise<void> {
+  const lines = WORKSPACE_LOCAL_IGNORE_PATHS.map((p) => quoteSshShellArg(p)).join(" ");
+  await runWorkspaceSshCommand(input.ssh, input.target, {
+    label: "seed workspace local git ignore",
+    cwd: input.workspacePath,
+    timeoutMs: input.timeoutMs,
+    // `git rev-parse --git-path info/exclude` resolves the exclude file for the
+    // checkout (worktree-safe) and `mkdir -p` ensures its dir exists before we
+    // append. printf one path per line.
+    command: [
+      "set -eu",
+      'exclude="$(git rev-parse --git-path info/exclude)"',
+      'mkdir -p "$(dirname "$exclude")"',
+      `printf '%s\\n' ${lines} >> "$exclude"`,
+    ].join("\n"),
+  });
+}
+
 export interface CommitBootstrapStateInput {
   ssh: SshSubstrate;
   target: SshTarget;

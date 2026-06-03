@@ -49,28 +49,38 @@ describe("structured Answerer schemas", () => {
     expect(() => planAnswerSchema.parse({ subtasks: [] })).toThrow(/Too small/u);
   });
 
-  it("builds check and audit prompts that reject mutation duties", () => {
+  it("builds check and audit prompts that self-inspect the diff (never embed it)", () => {
     const check: CheckAnswer = {
       done: true,
       reason: "ok",
       suggested_fixes: null,
     };
+    const baselineSha = "a".repeat(40);
     const checkPrompt = buildCheckPrompt({
       specTitle: "Fixture",
-      specDescription: "Review a diff",
+      specDescription: "Review a change",
       acceptanceCriteria: ["README includes ok"],
-      writerDiff: "diff --git a/README.md b/README.md\n+ok\n",
+      baselineSha,
     });
     const auditPrompt = buildAuditPrompt({
       specTitle: "Fixture",
       acceptanceCriteria: ["README includes ok"],
       checkAnswer: check,
-      writerDiff: "diff --git a/README.md b/README.md\n+ok\n",
+      baselineSha,
     });
 
     expect(checkPrompt).toContain("Do not edit files");
     expect(checkPrompt).toContain("README includes ok");
     expect(auditPrompt).toContain("Do not edit files");
     expect(auditPrompt).toContain('"done": true');
+
+    // The diff is INSPECTED by the agent, never injected: the prompt carries the
+    // baseline sha + a self-inspection instruction and no embedded diff payload.
+    for (const prompt of [checkPrompt, auditPrompt]) {
+      expect(prompt).toContain(baselineSha);
+      expect(prompt).toContain(`git diff ${baselineSha} -- . ':(exclude)node_modules'`);
+      expect(prompt).toContain("Inspect it yourself");
+      expect(prompt).not.toContain("diff --git");
+    }
   });
 });

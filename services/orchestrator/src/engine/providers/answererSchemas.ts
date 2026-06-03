@@ -138,16 +138,26 @@ export const auditAnswerSchema: AnswererOutputSchema<AuditAnswer> = {
   },
 };
 
+// The writer's change is NOT embedded in the prompt — the Answerer runs INSIDE
+// the writer's workspace (codex `--cd <workspace>`, read-only sandbox), so it
+// inspects the change itself. The baselineSha is the run base the writer's
+// change is diffed against; the node_modules exclude keeps the diff bounded
+// even if a prior gate's install left a node_modules tree.
 export function buildCheckPrompt(input: {
   specTitle: string;
   specDescription: string;
   acceptanceCriteria: string[];
-  writerDiff: string;
+  baselineSha: string;
 }): string {
   return [
-    "You are the Tanren Checker Answerer. Evaluate the writer diff against the spec.",
+    "You are the Tanren Checker Answerer. Evaluate the writer's change against the spec.",
     "Return only the structured JSON required by the provided schema.",
     "Do not edit files, run mutation commands, create commits, or write to the workspace.",
+    "",
+    "The writer's change is committed on the current branch of your read-only workspace.",
+    "Inspect it yourself: run",
+    `  git diff ${input.baselineSha} -- . ':(exclude)node_modules'`,
+    "to see the change, then read the changed source files, and judge against the spec.",
     "",
     `Spec title: ${input.specTitle}`,
     `Spec description: ${input.specDescription}`,
@@ -155,9 +165,6 @@ export function buildCheckPrompt(input: {
     ...input.acceptanceCriteria.map((criterion) => `- ${criterion}`),
     "",
     "Set done=true only when every acceptance criterion is satisfied. Use suggested_fixes=null when no fixes are needed.",
-    "",
-    "Writer diff:",
-    input.writerDiff,
   ].join("\n");
 }
 
@@ -165,12 +172,17 @@ export function buildAuditPrompt(input: {
   specTitle: string;
   acceptanceCriteria: string[];
   checkAnswer: CheckAnswer;
-  writerDiff: string;
+  baselineSha: string;
 }): string {
   return [
     "You are the Tanren Auditor Answerer. Audit whether the completed writer/check loop satisfies the spec.",
     "Return only the structured JSON required by the provided schema.",
     "Do not edit files, run mutation commands, create commits, or write to the workspace.",
+    "",
+    "The writer's change is committed on the current branch of your read-only workspace.",
+    "Inspect it yourself: run",
+    `  git diff ${input.baselineSha} -- . ':(exclude)node_modules'`,
+    "to see the change, then read the changed source files, and judge against the spec.",
     "",
     `Spec title: ${input.specTitle}`,
     "Acceptance criteria:",
@@ -180,8 +192,5 @@ export function buildAuditPrompt(input: {
     "",
     "Checker answer:",
     JSON.stringify(input.checkAnswer, null, 2),
-    "",
-    "Writer diff:",
-    input.writerDiff,
   ].join("\n");
 }

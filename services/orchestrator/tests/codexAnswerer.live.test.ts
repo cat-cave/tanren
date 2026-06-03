@@ -36,6 +36,11 @@ describeLive("live Codex Answerer adapter", () => {
       const runId = `run_codex_answerer_live_${Date.now()}`;
       const workspace = workspaceRepoPathForRun(runId);
       await prepareGitWorkspace({ ssh, target, workspacePath: workspace, timeoutMs: 30_000 });
+      // The Answerer now inspects the change itself, so the change must actually
+      // live in the workspace: capture the baseline sha, then commit the real
+      // README marker the criteria reference.
+      const baselineSha = await captureBaselineHead(ssh, target, workspace);
+      await commitReadmeMarker(ssh, target, workspace);
       const beforeStatus = await gitStatus(ssh, target, workspace);
 
       const checker = createCodexAnswerer<CheckAnswer>({
@@ -50,7 +55,7 @@ describeLive("live Codex Answerer adapter", () => {
         specTitle: "Fixture check",
         specDescription: "README should gain a success marker.",
         acceptanceCriteria: ["README.md contains the line tanren answerer ok"],
-        writerDiff: "diff --git a/README.md b/README.md\n@@\n+tanren answerer ok\n",
+        baselineSha,
         timeoutMs,
         workspace,
       });
@@ -65,7 +70,7 @@ describeLive("live Codex Answerer adapter", () => {
         specTitle: "Fixture check",
         acceptanceCriteria: ["README.md contains the line tanren answerer ok"],
         checkAnswer: check,
-        writerDiff: "diff --git a/README.md b/README.md\n@@\n+tanren answerer ok\n",
+        baselineSha,
         timeoutMs,
         workspace,
       });
@@ -80,6 +85,30 @@ describeLive("live Codex Answerer adapter", () => {
     Number(process.env.TANREN_CODEX_LIVE_TIMEOUT_MS ?? "300000") * 2 + 20_000,
   );
 });
+
+async function captureBaselineHead(ssh: Ssh2Substrate, target: SshTarget, workspace: string): Promise<string> {
+  const result = await runWorkspaceSshCommand(ssh, target, {
+    label: "capture baseline head",
+    cwd: workspace,
+    command: "git rev-parse HEAD",
+    timeoutMs: 30_000,
+  });
+  return result.stdout.trim();
+}
+
+async function commitReadmeMarker(ssh: Ssh2Substrate, target: SshTarget, workspace: string): Promise<void> {
+  await runWorkspaceSshCommand(ssh, target, {
+    label: "commit readme marker",
+    cwd: workspace,
+    command: [
+      "set -eu",
+      "printf '%s\\n' '# Tanren workspace baseline' 'tanren answerer ok' > README.md",
+      "git add README.md",
+      "GIT_AUTHOR_DATE='2026-01-01T00:00:00Z' GIT_COMMITTER_DATE='2026-01-01T00:00:00Z' git commit -m 'add answerer marker'",
+    ].join(" && "),
+    timeoutMs: 30_000,
+  });
+}
 
 async function gitStatus(ssh: Ssh2Substrate, target: SshTarget, workspace: string) {
   return await runWorkspaceSshCommand(ssh, target, {

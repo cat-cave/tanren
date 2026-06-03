@@ -18,7 +18,7 @@ export async function executeStructuredCheckTask(
     specTitle: string;
     specDescription: string;
     acceptanceCriteria: string[];
-    writerDiff: string;
+    baselineSha: string;
     timeoutMs: number;
     workspace?: string;
   },
@@ -37,7 +37,7 @@ export async function executeStructuredAuditTask(
     specTitle: string;
     acceptanceCriteria: string[];
     checkAnswer: CheckAnswer;
-    writerDiff: string;
+    baselineSha: string;
     timeoutMs: number;
     workspace?: string;
   },

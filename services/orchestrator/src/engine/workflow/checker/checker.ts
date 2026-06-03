@@ -11,7 +11,10 @@ export interface CheckerSubtaskContext {
   specDescription: string;
   acceptanceCriteria: ReadonlyArray<string>;
   subtask: PlanSubtask;
-  writerDiff: string;
+  // The run base the writer's change is diffed against. The checker runs INSIDE
+  // the writer's read-only workspace and inspects the change itself (rather than
+  // having a potentially huge diff injected into the prompt).
+  baselineSha: string;
 }
 
 export interface CheckerInvokeInput {
@@ -43,9 +46,15 @@ export async function invokeChecker(
 export function buildCheckerPrompt(context: CheckerSubtaskContext): string {
   return [
     "You are the Tanren Checker Answerer. Your ONLY job is to judge intent",
-    "satisfaction: does the writer diff fulfil the subtask intent and each",
-    "explicit acceptance criterion in the spec? Judge by reading the diff and",
+    "satisfaction: does the writer's change fulfil the subtask intent and each",
+    "explicit acceptance criterion in the spec? Judge by reading the change and",
     "the spec — nothing else.",
+    "",
+    "The writer's change is committed on the current branch of your read-only",
+    "workspace. Inspect it yourself: run",
+    `  git diff ${context.baselineSha} -- . ':(exclude)node_modules'`,
+    "to see the change, then read the changed source files. Do NOT expect the diff",
+    "to be provided inline — read it from the workspace.",
     "",
     "Hard boundaries (a separate deterministic gate, not you, owns correctness):",
     "- Do NOT run, simulate, invoke, or shell out to tests, builds, type checks,",
@@ -78,15 +87,12 @@ export function buildCheckerPrompt(context: CheckerSubtaskContext): string {
     `Subtask behavior ids: ${context.subtask.behaviorIds.join(", ") || "(none)"}`,
     "",
     "In `reasoning`, cite each acceptance criterion / behavior by name and state",
-    "whether the diff satisfies its intent and why (marking any test/build/lint-",
+    "whether the change satisfies its intent and why (marking any test/build/lint-",
     "outcome criterion as gate-deferred). Set passed=true when the subtask intent",
-    "and every diff-assessable acceptance criterion are satisfied by the diff;",
+    "and every diff-assessable acceptance criterion are satisfied by the change;",
     "gate-deferred outcome criteria must not block a pass. Always populate",
     "behaviorIdsPassed and behaviorIdsFailed (use empty arrays when none),",
     "reflecting intent satisfaction — not test/build outcomes.",
-    "",
-    "Writer diff:",
-    context.writerDiff,
   ].join("\n");
 }
 

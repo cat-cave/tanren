@@ -343,7 +343,7 @@ function auditorArgs(h: StageHarness, verdict: typeof passingAudit) {
     workspacePath: "/ws",
     plannerTaskId: "task_plan",
     plan: buildPlan([{ title: "T1", intent: "i", behaviorIds: ["B1"] }]),
-    combinedDiff: "diff",
+    baseSha: "a".repeat(40),
     specTitle: "S",
     specDescription: "D",
     acceptanceCriteria: ["AC1"],

@@ -20,18 +20,19 @@ describe("structured Answerer task helpers", () => {
       reason: "The check and diff agree.",
     });
 
+    const baselineSha = "b".repeat(40);
     const check = await executeStructuredCheckTask(checkAdapter, {
       specTitle: "Fixture",
       specDescription: "Add ok",
       acceptanceCriteria: ["Adds ok"],
-      writerDiff: "diff\n+ok\n",
+      baselineSha,
       timeoutMs: 100,
     });
     const audit = await executeStructuredAuditTask(auditAdapter, {
       specTitle: "Fixture",
       acceptanceCriteria: ["Adds ok"],
       checkAnswer: check,
-      writerDiff: "diff\n+ok\n",
+      baselineSha,
       timeoutMs: 100,
     });
 
@@ -39,6 +40,12 @@ describe("structured Answerer task helpers", () => {
     expect(audit.verified).toBe(true);
     expect(checkAdapter.lastSchemaName).toBe("tanren.check_answer.v1");
     expect(auditAdapter.lastSchemaName).toBe("tanren.audit_answer.v1");
+    // The Answerer is told to inspect the diff itself; the baseline sha rides in
+    // the prompt and no diff payload is embedded.
+    for (const prompt of [checkAdapter.lastPrompt, auditAdapter.lastPrompt]) {
+      expect(prompt).toContain(baselineSha);
+      expect(prompt).toContain("Inspect it yourself");
+    }
   });
 
   it("lets parse failures surface as hard task failures", async () => {
@@ -56,7 +63,7 @@ describe("structured Answerer task helpers", () => {
         specTitle: "Fixture",
         specDescription: "Add ok",
         acceptanceCriteria: ["Adds ok"],
-        writerDiff: "diff\n+ok\n",
+        baselineSha: "c".repeat(40),
         timeoutMs: 100,
       }),
     ).rejects.toThrow(AnswererSchemaValidationError);
@@ -68,11 +75,13 @@ class RecordingAnswerer<TOutput> implements AnswererAdapter<TOutput> {
   readonly cli = "fake";
   readonly authRef = "credential/self-hosted/answerer-tasks-test";
   lastSchemaName: string | undefined;
+  lastPrompt: string | undefined;
 
   constructor(private readonly output: TOutput) {}
 
   async runAnswerer(opts: Parameters<AnswererAdapter<TOutput>["runAnswerer"]>[0]): Promise<TOutput> {
     this.lastSchemaName = opts.outputSchema?.name;
+    this.lastPrompt = opts.prompt;
     return this.output;
   }
 }

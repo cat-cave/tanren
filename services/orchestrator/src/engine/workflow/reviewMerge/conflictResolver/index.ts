@@ -99,8 +99,6 @@ export function buildDefaultConflictResolver(deps: DefaultConflictResolverDeps):
       workspace: deps.workspacePath,
     }),
     reGate: new RunPathResolvedTreeReGate({
-      ssh: deps.ssh,
-      target: deps.target,
       workspacePath: deps.workspacePath,
       timeoutMs: deps.timeoutMs,
       runGate: deps.runGate,
