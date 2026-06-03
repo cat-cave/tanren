@@ -65,6 +65,10 @@ function autonomousConfig(autonomy: "auto" | "simulated"): Record<string, unknow
     reviewPolicy: autonomy,
     mergeIntegration: "native_queue",
     governancePosture: "lenient",
+    // The interview path always builds off an EMPTY repo — Tanren authors the
+    // toolchain live — so it is greenfield regardless of the autonomy tier (this
+    // drives the non-frozen in-loop deps-ensure; see ProjectConfigV1.greenfield).
+    greenfield: true,
   };
 }
 
@@ -99,6 +103,18 @@ export interface DeriveResult {
 //      is the simplest thing that satisfies the gate's script NAMES, and turbo is
 //      introduced later by the `build · turbo` spec once the toolchain is stable on
 //      `main` (so the foundation never depends on turbo being installed first).
+//
+// SCOPE (#273 convergence): the FIRST scaffold spec is deliberately MINIMAL — a
+// pnpm workspace with just the root + ONE trivial package, no shared-types
+// package and no tsconfig project-references. The over-prescribed earlier version
+// (shared-types + project-references + base tsconfig + lockfile in one pass) was
+// too big for a single ~10-min writer pass: most reruns TIMED OUT, and the one
+// that split the work emitted `workspace:*` STUB packages for the toolchain
+// (which the checker correctly rejected). The workspace SHAPE is preserved
+// (later specs assume a `pnpm-workspace.yaml`); shared-types / project-references
+// are deferred to a FOLLOW-ON spec if a later milestone actually needs them. An
+// EXPLICIT criterion forbids stub/`workspace:*`/fake toolchain packages —
+// typescript/eslint/vitest MUST be real published devDependencies.
 interface ScaffoldSpecDef {
   title: string;
   description: string;
@@ -114,28 +130,34 @@ const SCAFFOLD_SPECS: ScaffoldSpecDef[] = [
   {
     title: "monorepo scaffold",
     description:
-      "Stand up the monorepo on the DEFAULT TANREN TOOLCHAIN so the CI gate passes: " +
-      "pnpm workspaces (a `pnpm-workspace.yaml` listing the package globs), a root " +
-      "`package.json` whose `lint`, `typecheck`, `test`, and `build` scripts call DIRECT " +
-      'tools — `"lint": "eslint ."`, `"typecheck": "tsc --noEmit"`, ' +
-      '`"test": "vitest run"`, `"build": "tsc -b"` — with `eslint`, `typescript`, and ' +
-      "`vitest` as devDependencies, a base tsconfig, a shared types package, and a COMMITTED " +
-      "pnpm lockfile (`pnpm-lock.yaml`). Do NOT use turbo (a later spec introduces it once the " +
-      "toolchain is stable) and do NOT use npm/yarn workspaces — the gate runs " +
-      "`pnpm install --frozen-lockfile` then `pnpm lint` / `pnpm typecheck` / `pnpm test` / " +
-      "`pnpm build` and rejects a non-pnpm workspace.",
+      "Stand up a MINIMAL pnpm workspace on the DEFAULT TANREN TOOLCHAIN so the CI gate passes — " +
+      "keep it small enough to finish in ONE pass. Author: a `pnpm-workspace.yaml` declaring the " +
+      "package globs (a workspace with just the root, OR the root plus ONE trivial package); a root " +
+      "`package.json` whose `lint`, `typecheck`, `test`, and `build` scripts call DIRECT tools — " +
+      '`"lint": "eslint ."`, `"typecheck": "tsc --noEmit"`, `"test": "vitest run"`, `"build": "tsc -b"` ' +
+      "— with `eslint`, `typescript`, and `vitest` as REAL published devDependencies; a real " +
+      "`eslint.config.js` flat config that exists and passes; a `tsconfig.json`; one trivial " +
+      "`src/index.ts`; one trivial PASSING vitest test; and a COMMITTED `pnpm-lock.yaml`. " +
+      "Use the REAL published `typescript`/`eslint`/`vitest` packages — NEVER create local " +
+      "workspace stub packages, `workspace:*` placeholders, or fake toolchain binaries. Do NOT add " +
+      "a shared-types package or tsconfig project references (a later spec adds those if needed), do " +
+      "NOT use turbo (a later spec introduces it once the toolchain is stable), and do NOT use " +
+      "npm/yarn workspaces — the gate runs `pnpm install` then `pnpm lint` / `pnpm typecheck` / " +
+      "`pnpm test` / `pnpm build` and rejects a non-pnpm workspace.",
     acceptanceCriteria: [
-      "given an empty repo, when the scaffold lands, then a `pnpm-workspace.yaml` and a committed `pnpm-lock.yaml` exist (pnpm workspaces, not npm/yarn)",
+      "given an empty repo, when the scaffold lands, then a `pnpm-workspace.yaml` and a committed `pnpm-lock.yaml` exist (a minimal pnpm workspace — root only, or root + one trivial package — not npm/yarn)",
       "given the root `package.json`, when inspected, then its `lint`, `typecheck`, `test`, and `build` scripts call direct tools (eslint/tsc/vitest), NOT turbo, with eslint/typescript/vitest as devDependencies",
-      "given the toolchain, when `pnpm install --frozen-lockfile` then `pnpm lint`, `pnpm typecheck`, `pnpm test`, and `pnpm build` run, then each exits 0 (the default CI gate is green)",
+      "given the toolchain packages, when inspected, then `typescript`, `eslint`, and `vitest` are REAL published devDependencies — NOT local stub packages, `workspace:*` placeholders, or fake binaries",
+      "given the lint setup, when inspected, then a real `eslint.config.js` flat config exists (so `eslint .` runs cleanly), a `tsconfig.json` exists, and a trivial `src/index.ts` exists",
+      "given a trivial passing vitest test exists, when `pnpm install` then `pnpm lint`, `pnpm typecheck`, `pnpm test`, and `pnpm build` run, then each exits 0 (the default CI gate is green)",
     ],
   },
   {
     title: "build · turbo",
     description:
-      "Extend the turbo build pipeline established by the scaffold so every package builds + " +
-      "caches. Build on the EXISTING pnpm-workspace toolchain on `main`; do not re-invent the " +
-      "package manager.",
+      "Introduce turbo on top of the scaffold's pnpm-workspace toolchain so every package builds + " +
+      "caches. Build on the EXISTING pnpm-workspace + direct-tool scripts on `main` (the scaffold " +
+      "uses `tsc -b`, not turbo); do not re-invent the package manager.",
     dependsOnPrev: true,
   },
   {
@@ -183,20 +205,17 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
 
   // FINDING #1: opt-in autonomous config. `auto`/`simulated` ⇒ create the project
   // already autonomous (`native_queue` + matching review policy) so the DagWalker
-  // can advance it off an empty repo with no follow-up PATCH. Absent/`human` ⇒ no
-  // config ⇒ createProject persists a fully-defaulted V1 (the safe defaults; an
-  // unversioned `{}` blob is rejected, no migration shim). `createProject` threads
-  // `config` through `migrateProjectConfig` — no new plumbing.
+  // can advance it off an empty repo with no follow-up PATCH. Absent/`human` ⇒ the
+  // safe strict defaults — but STILL greenfield (the interview always builds off an
+  // empty repo), so even the human tier persists `{ version: 1, greenfield: true }`
+  // for the non-frozen in-loop deps-ensure. An unversioned `{}` blob is rejected
+  // (no migration shim); `createProject` threads `config` through
+  // `migrateProjectConfig` — no new plumbing.
   const autonomousOptIn = input.autonomy === "auto" || input.autonomy === "simulated";
-  const project = await createProject(
-    pool,
-    {
-      name: slug,
-      repoUrl,
-      ...(autonomousOptIn ? { config: autonomousConfig(input.autonomy as "auto" | "simulated") } : {}),
-    },
-    { ...input.actor, orgId: input.orgId },
-  );
+  const config = autonomousOptIn
+    ? autonomousConfig(input.autonomy as "auto" | "simulated")
+    : { version: 1, greenfield: true };
+  const project = await createProject(pool, { name: slug, repoUrl, config }, { ...input.actor, orgId: input.orgId });
   const projectId = project.projectId;
   const actor: ActorContext = { ...input.actor, orgId: input.orgId, projectId };
 

@@ -445,7 +445,26 @@ function writerFailureRejection(
   };
 }
 
+// A standing toolchain instruction prepended to every writer prompt. The
+// acceptance criteria reach the CHECKER, but the writer never saw them — so a
+// writer could (and did, in the #273 scaffold) emit `workspace:*` stub packages
+// for the toolchain that the checker then correctly rejected, burning an
+// iteration. Stating the rule up front steers the writer away from the failure
+// mode before it spends the iteration.
+const WRITER_TOOLCHAIN_INSTRUCTION =
+  "Declare real, published devDependencies and a real lockfile. NEVER create local " +
+  "workspace stub packages, `workspace:*` placeholders, or fake binaries for typescript/eslint/vitest " +
+  "or any toolchain — use the real published packages.";
+
 function writerPromptFor(input: SubtaskLoopInput, subtask: PlanSubtask): string {
+  // The spec's acceptance criteria are the SAME bar the checker judges against, so
+  // threading them into the writer prompt lets the writer aim at the gate directly
+  // instead of guessing from the intent + spec description alone. They are already
+  // in scope on `input.context` (PlannerSpecContext); no extra plumbing needed.
+  const criteria =
+    input.context.acceptanceCriteria.length > 0
+      ? ["", "Acceptance criteria:", ...input.context.acceptanceCriteria.map((criterion) => `- ${criterion}`)]
+      : [];
   return [
     `Subtask [${subtask.index}]: ${subtask.title}`,
     `Intent: ${subtask.intent}`,
@@ -453,6 +472,9 @@ function writerPromptFor(input: SubtaskLoopInput, subtask: PlanSubtask): string 
     "",
     `Spec: ${input.context.specTitle}`,
     input.context.specDescription,
+    ...criteria,
+    "",
+    WRITER_TOOLCHAIN_INSTRUCTION,
   ].join("\n");
 }
 

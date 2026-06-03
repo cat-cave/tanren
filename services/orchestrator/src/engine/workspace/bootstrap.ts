@@ -41,6 +41,31 @@ export const DEFAULT_BOOTSTRAP_COMMAND =
   "elif [ -f package.json ]; then npm install; " +
   "else echo 'tanren: no package manifest found; skipping dependency bootstrap'; fi";
 
+// The deps-ensure default install command — the NON-FROZEN sibling of
+// DEFAULT_BOOTSTRAP_COMMAND. It is the default ONLY for the per-gate GREENFIELD
+// deps-ensure (the gate callback passes it — by leaving `command` undefined — only
+// when `context.greenfield` is true and no explicit `bootstrap.run` is set). A
+// BROWNFIELD run's gate passes the FROZEN DEFAULT_BOOTSTRAP_COMMAND instead, so an
+// existing committed lockfile is never silently mutated; see buildDefaultGate.
+//
+// Why non-frozen for greenfield (vs the cold-bootstrap default's
+// `--frozen-lockfile`): the deps-ensure path runs AFTER a writer iteration that
+// just authored/extended the manifest. A writer that adds a devDep (e.g. `vitest`)
+// without perfectly regenerating `pnpm-lock.yaml` produces a manifest⇆lockfile
+// mismatch — a `--frozen-lockfile` install would then HARD-FAIL ("lockfile out of
+// date") instead of installing the new binary, and the gate would die on
+// `vitest: not found`. A non-frozen install reconciles the lockfile and installs
+// the binary, so the writer's devDeps are actually present at the gate. pnpm
+// itself is the idempotency authority: when the manifest/lockfile already agree
+// this is a cheap no-op. An explicit `tanren-ci.yml` `bootstrap.run` (or an
+// `input.bootstrapCommand` override) still wins over this default. pnpm/npm are
+// chosen by the SAME manifest probe the cold bootstrap uses (a pnpm
+// lockfile/workspace ⇒ pnpm, else npm install).
+export const DEPS_ENSURE_DEFAULT_COMMAND =
+  "if [ -f pnpm-lock.yaml ] || [ -f pnpm-workspace.yaml ]; then pnpm install; " +
+  "elif [ -f package.json ]; then npm install; " +
+  "else echo 'tanren: no package manifest found; skipping dependency bootstrap'; fi";
+
 export interface BootstrapWorkspaceInput {
   ssh: SshSubstrate;
   target: SshTarget;
@@ -121,9 +146,15 @@ export interface EnsureWorkspaceDepsInput {
   ssh: SshSubstrate;
   target: SshTarget;
   workspacePath: string;
-  // The install command run in the workspace dir over SSH when deps are missing.
-  // Defaults to DEFAULT_BOOTSTRAP_COMMAND (the same pnpm/npm-detecting logic the
-  // cold bootstrap uses) so the install path is identical to the cold bootstrap.
+  // The install command run in the workspace dir over SSH whenever a manifest
+  // exists. Defaults to DEPS_ENSURE_DEFAULT_COMMAND — the NON-FROZEN
+  // pnpm/npm-detecting install — so a writer that added a devDep without a
+  // perfectly-regenerated lockfile still gets its binary installed before the gate.
+  // The caller (buildDefaultGate) PASSES an explicit `command` for the cases where
+  // the non-frozen default is wrong: a BROWNFIELD run gets the FROZEN
+  // DEFAULT_BOOTSTRAP_COMMAND (so a committed lockfile is never mutated), and an
+  // explicit `tanren-ci.yml` `bootstrap.run` / `input.bootstrapCommand` is passed
+  // verbatim. So this default applies ONLY to the genuine greenfield case.
   command?: string;
   // Plane B (P-APP-ENV-0): same substrate-boundary handling as bootstrapWorkspace
   // — the `export K='v'; …` prelude is prepended to the EXECUTED command ONLY, never
@@ -134,9 +165,14 @@ export interface EnsureWorkspaceDepsInput {
 }
 
 // The outcome of an ensure call: whether the guarded install actually RAN the
-// install command (deps were missing + a manifest was present) or was a no-op
-// (no manifest, or deps already installed). The caller caches `installed` so a
-// later gate's ensure call short-circuits once node_modules exists.
+// install command (a manifest was present) or was a no-op (no manifest yet). The
+// install runs whenever a manifest exists — pnpm/npm is the idempotency authority,
+// so re-running on an already-installed tree is a cheap no-op — which is what lets
+// a writer-added devDep (authored AFTER an earlier partial install created
+// node_modules) actually get installed before the gate. `installed` therefore
+// reports "the install command ran", NOT "node_modules now exists for the first
+// time"; the greenfield caller re-runs ensure each gate (the manifest mutates
+// between iterations) rather than latching on this flag.
 export interface EnsureWorkspaceDepsResult {
   installed: boolean;
 }
@@ -162,15 +198,25 @@ export class WorkspaceDepsInstallError extends Error {
 // Idempotently ensures the workspace's dependencies are installed before a gate
 // runs. This closes the greenfield gap: prepareRunWorkspace bootstraps ONCE, right
 // after clone — but a greenfield clone HEAD ships no manifest, so the cold
-// bootstrap skips install; the writer THEN authors `package.json`, and the first
+// bootstrap skips install; the writer THEN authors `package.json`, and a
 // per-iteration gate would run `pnpm lint` against a workspace whose deps were
-// never installed (`turbo: not found` / `vitest: not found`). This GUARDED install
-// runs the resolved install command only when a manifest now EXISTS
-// (`package.json` / `pnpm-workspace.yaml`) AND deps are NOT yet installed
-// (`node_modules` absent); otherwise it is a pure no-op (exit 0). Brownfield —
-// where prepareRunWorkspace already installed at clone time — hits the
-// node_modules-present branch and no-ops, so behavior is unchanged. Safe to call
-// before every gate (idempotent).
+// never installed (`turbo: not found` / `vitest: not found`).
+//
+// INSTALL-TRIGGER (the P0 fix): the guarded install runs the resolved install
+// command whenever a manifest EXISTS (`package.json` / `pnpm-workspace.yaml`) —
+// it does NOT also require `node_modules` to be absent. The old `[ ! -d
+// node_modules ]` guard meant that once ANY partial install created
+// node_modules, a LATER writer-added devDep (e.g. `vitest`) was never installed,
+// so the gate died on `vitest: not found`. Letting the install run on every gate
+// (with pnpm/npm as the idempotency authority — a no-op install is cheap) means
+// the writer's freshly-added devDeps are always present at the gate. When no
+// manifest exists yet (greenfield clone HEAD, pre-writer) it is still a pure
+// no-op (exit 0). The default command (DEPS_ENSURE_DEFAULT_COMMAND) is NON-FROZEN
+// so a greenfield manifest⇆lockfile mismatch installs rather than hard-failing; the
+// caller passes an explicit `command` where that is wrong — the FROZEN
+// DEFAULT_BOOTSTRAP_COMMAND for a brownfield run (a committed lockfile is never
+// mutated) and any `tanren-ci.yml` `bootstrap.run` verbatim. Safe to call before
+// every gate.
 //
 // On a nonzero exit / timeout / substrate failure it throws WorkspaceDepsInstallError
 // (mirroring bootstrapWorkspace) so the failure halts the run loudly with a typed,
@@ -178,14 +224,17 @@ export class WorkspaceDepsInstallError extends Error {
 export async function ensureWorkspaceDepsInstalled(
   input: EnsureWorkspaceDepsInput,
 ): Promise<EnsureWorkspaceDepsResult> {
-  const command = input.command ?? DEFAULT_BOOTSTRAP_COMMAND;
-  // The guard runs entirely runner-side in ONE round-trip: if a manifest exists
-  // AND node_modules does not, print the install sentinel then run the install;
-  // otherwise print the no-op sentinel and exit 0. `set -e` is intentionally NOT
-  // used at the top — the `if`/`else` already controls flow and the install
+  const command = input.command ?? DEPS_ENSURE_DEFAULT_COMMAND;
+  // The guard runs entirely runner-side in ONE round-trip: if a manifest exists,
+  // print the install sentinel then run the install; otherwise print the no-op
+  // sentinel and exit 0. The install runs whenever a manifest is present (no
+  // node_modules gate) so a writer-added devDep installs even when an earlier
+  // partial install already created node_modules — pnpm/npm is the idempotency
+  // authority, so a redundant install is a cheap no-op. `set -e` is intentionally
+  // NOT used at the top — the `if`/`else` already controls flow and the install
   // command itself surfaces its own nonzero exit as the command's exit code.
   const guarded =
-    `if { [ -f package.json ] || [ -f pnpm-workspace.yaml ]; } && [ ! -d node_modules ]; then ` +
+    `if [ -f package.json ] || [ -f pnpm-workspace.yaml ]; then ` +
     `echo ${quoteSshShellArg(DEPS_INSTALL_SENTINEL)}; ${command}; ` +
     `else echo ${quoteSshShellArg(DEPS_NOOP_SENTINEL)}; fi`;
   // SUBSTRATE BOUNDARY: the app-env prelude is prepended to the EXECUTED guard

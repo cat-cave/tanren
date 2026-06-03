@@ -7,6 +7,7 @@ import { parseGitLogCommit, prepareGitWorkspace } from "./fixtures/workspaceGit.
 import {
   bootstrapWorkspace,
   DEFAULT_BOOTSTRAP_COMMAND,
+  DEPS_ENSURE_DEFAULT_COMMAND,
   ensureWorkspaceDepsInstalled,
   runWorkspaceSshCommand,
   WorkspaceBootstrapError,
@@ -201,11 +202,13 @@ describe("workspace bootstrap (P3-0006)", () => {
 describe("ensureWorkspaceDepsInstalled (greenfield deps-ensure)", () => {
   const workspacePath = workspaceRepoPathForRun("run_ensure");
 
-  // Interprets the guarded install command against a virtual workspace: a manifest
-  // (package.json / pnpm-workspace.yaml) present? node_modules present? The guard
-  // runs the install ONLY when a manifest exists AND node_modules is absent; else
-  // it is a no-op (exit 0). The install branch echoes the install sentinel; the
-  // skip branch echoes the no-op sentinel — matching the real runner-side guard.
+  // Interprets the guarded install command against a virtual workspace: is a
+  // manifest (package.json / pnpm-workspace.yaml) present? The P0 fix makes the
+  // guard run the install WHENEVER a manifest exists — it no longer also requires
+  // node_modules to be absent (pnpm/npm is the idempotency authority). So
+  // `nodeModules` is tracked only to PROVE the install still runs when it is
+  // present (the core regression). The install branch echoes the install sentinel;
+  // the no-manifest branch echoes the no-op sentinel — matching the runner guard.
   class FsAwareSsh implements SshSubstrate {
     readonly commands: SshCommand[] = [];
     installRan = false;
@@ -216,7 +219,9 @@ describe("ensureWorkspaceDepsInstalled (greenfield deps-ensure)", () => {
     ) {}
     async run(_target: SshTarget, command: SshCommand): Promise<SshCommandResult> {
       this.commands.push(command);
-      const shouldInstall = this.fs.manifest && !this.fs.nodeModules;
+      // The new guard: install whenever a manifest exists (node_modules state is
+      // irrelevant — a redundant install is a cheap no-op the real pnpm/npm owns).
+      const shouldInstall = this.fs.manifest;
       if (shouldInstall) {
         this.installRan = true;
         const failed = this.installExit !== 0;
@@ -231,7 +236,7 @@ describe("ensureWorkspaceDepsInstalled (greenfield deps-ensure)", () => {
     }
   }
 
-  it("runs the install when a manifest is present and node_modules is absent", async () => {
+  it("runs the install when a manifest is present", async () => {
     const ssh = new FsAwareSsh({ manifest: true, nodeModules: false });
     const result = await ensureWorkspaceDepsInstalled({
       ssh,
@@ -244,15 +249,23 @@ describe("ensureWorkspaceDepsInstalled (greenfield deps-ensure)", () => {
     expect(ssh.installRan).toBe(true);
     // The guard runs in the workspace dir and embeds the resolved install command.
     expect(ssh.commands[0]?.command).toContain("pnpm install --frozen-lockfile");
-    expect(ssh.commands[0]?.command).toContain("node_modules");
     expect(ssh.commands[0]?.cwd).toBe(workspacePath);
   });
 
-  it("no-ops (no install) when node_modules already exists — brownfield path", async () => {
+  // P0 CORE REGRESSION: the old guard (`[ ! -d node_modules ]`) meant that once
+  // ANY partial install created node_modules, a LATER writer-added devDep was
+  // never installed → the gate died on `vitest: not found`. The fix re-installs
+  // whenever a manifest exists, EVEN when node_modules is already present, so the
+  // writer's freshly-added devDep is actually installed before the gate.
+  it("re-installs when a manifest exists even though node_modules is already present", async () => {
     const ssh = new FsAwareSsh({ manifest: true, nodeModules: true });
     const result = await ensureWorkspaceDepsInstalled({ ssh, target, workspacePath, timeoutMs: 100 });
-    expect(result.installed).toBe(false);
-    expect(ssh.installRan).toBe(false);
+    expect(result.installed).toBe(true);
+    expect(ssh.installRan).toBe(true);
+    // The guard does NOT condition on node_modules anymore — it only probes for a
+    // manifest before running the install.
+    expect(ssh.commands[0]?.command).not.toContain("node_modules");
+    expect(ssh.commands[0]?.command).toContain("package.json");
   });
 
   it("no-ops when no manifest exists yet (greenfield clone HEAD, pre-writer)", async () => {
@@ -262,10 +275,13 @@ describe("ensureWorkspaceDepsInstalled (greenfield deps-ensure)", () => {
     expect(ssh.installRan).toBe(false);
   });
 
-  it("defaults to the pnpm/npm-detecting command, identical to the cold bootstrap", async () => {
+  it("defaults to the NON-FROZEN pnpm/npm-detecting deps-ensure command", async () => {
     const ssh = new FsAwareSsh({ manifest: true, nodeModules: false });
     await ensureWorkspaceDepsInstalled({ ssh, target, workspacePath, timeoutMs: 100 });
-    expect(ssh.commands[0]?.command).toContain(DEFAULT_BOOTSTRAP_COMMAND);
+    expect(ssh.commands[0]?.command).toContain(DEPS_ENSURE_DEFAULT_COMMAND);
+    // The deps-ensure default must NOT carry --frozen-lockfile (a writer-added
+    // devDep without a regenerated lockfile must still install, not hard-fail).
+    expect(ssh.commands[0]?.command).not.toContain("--frozen-lockfile");
   });
 
   it("keeps the app-env prelude OFF the command field — no secret in the typed error", async () => {

@@ -109,6 +109,20 @@ export const ProjectConfigV1 = z
     // legacy rows carry no key and parse to an ABSENT field = NO ceiling = unlimited
     // (today's behavior, byte-identical), and `.strict()` round-trips it on save.
     budget: ProjectBudget.optional(),
+    // GREENFIELD MARKER: whether this project was created greenfield — Tanren
+    // authors the repo's toolchain LIVE across writer iterations (no pre-existing
+    // committed lockfile / installed deps). It drives the in-loop deps-ensure
+    // install MODE: a greenfield run uses a NON-FROZEN install (so a writer-added
+    // devDep without a perfectly-regenerated lockfile still installs before the
+    // gate), while a brownfield run keeps the FROZEN, lockfile-safe default
+    // (`pnpm install --frozen-lockfile` / `npm ci`) so an existing committed
+    // lockfile is never silently mutated / upgraded. Set by the greenfield
+    // creation paths (`/projects/greenfield` + the interview `deriveProductGraph`);
+    // absent ⇒ `false` = brownfield (the safe default). Additive + backward-
+    // compatible: legacy rows carry no key and parse to `false` (no migration), and
+    // `.strict()` round-trips it on save. An explicit `tanren-ci.yml` `bootstrap.run`
+    // still wins over this default in BOTH cases.
+    greenfield: z.boolean().default(false),
   })
   .strict();
 export type ProjectConfigV1 = z.infer<typeof ProjectConfigV1>;

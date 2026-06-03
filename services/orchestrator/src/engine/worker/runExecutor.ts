@@ -49,7 +49,16 @@ export const DEFAULT_ESCAPE_HATCHES: Pick<
   maxRetriesPerTransientFailure: 3,
 };
 
-export const DEFAULT_TIMEOUT_MS = 300_000;
+// Per-stage agent/SSH timeout CAP (a ceiling, not a fixed wait). Bumped 5min→10min
+// for the #273 scaffold-convergence fix: the hardest first spec (a greenfield
+// monorepo scaffold) had 4/5 of its writer reruns TIME OUT at the old 5-min cap —
+// the spec was simply too large to author in one pass. This is a uniform cap
+// threaded into every stage (planner/writer/checker/auditor) and the gate/SSH
+// commands; raising the ceiling only affects a stage that ACTUALLY needs the extra
+// time (the slow writer pass) — the fast answerers/gate finish well inside it and
+// are unaffected. Kept a code constant (NOT an env var): it's an internal timeout,
+// not a budget/config knob.
+export const DEFAULT_TIMEOUT_MS = 600_000;
 export const DEFAULT_MAX_CI_POLLS = 18;
 export const DEFAULT_CI_POLL_DELAY_MS = 10_000;
 
