@@ -20,6 +20,7 @@
 
 import type pg from "pg";
 import type { ActorContext } from "../../../auth/schemas.js";
+import type { RunStateWriter } from "../../contracts/runStateWriter.js";
 import { systemActor } from "../../state/actor.js";
 import { DiscoveryStore, type ExistingSpecSummary } from "../../repositories/discovery.js";
 import { acceptProposals, type DiscoveryInsight, type PlacementKind, type ProposedSpec } from "../discovery/index.js";
@@ -120,6 +121,13 @@ export async function ingestSource(
 export interface AutoRouteDeps {
   /** Resolve a system actor carrying the candidate's org so the spec write is RLS-scoped. */
   resolveActor: (orgId: string) => ActorContext;
+  /**
+   * Plane-split (autonomy loops): the control-plane run-state writer. When present
+   * (remote-writes on), the auto-route's `acceptProposals` routes its spec INSERT +
+   * provenance UPDATE through the control plane (the de-privileged data plane can no
+   * longer write `specs` directly); absent, it writes directly — byte-identical.
+   */
+  runStateWriter?: RunStateWriter;
 }
 
 export interface AutoRouteResult {
@@ -150,7 +158,12 @@ export async function autoRouteCandidate(
     estLabel: "",
   };
   const { accepted } = await acceptProposals(
-    { pool: deps.pool },
+    {
+      pool: deps.pool,
+      // Plane-split: route the spec INSERT + provenance UPDATE through the control
+      // plane when wired (else direct on the pool — byte-identical to the operator).
+      ...(autoRouteDeps.runStateWriter !== undefined && { runStateWriter: autoRouteDeps.runStateWriter }),
+    },
     {
       projectId: candidate.projectId,
       insight: insightFor(candidate),

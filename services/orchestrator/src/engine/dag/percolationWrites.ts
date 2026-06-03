@@ -10,10 +10,11 @@
 //     stays alive) when a re-execution could not reconcile.
 //   - decodeVerified / decodePercolationPending: parse the persisted jsonb blobs.
 
-import { runWithOrgScope, runWithSystemScope } from "@tanren/db";
+import { runWithJobOrgId, runWithOrgScope, runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
 import type { PercolationPending } from "../contracts/changePercolation.js";
 import type { ReviewVerdict } from "../contracts/dagLifecycle.js";
+import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import { PgEventStore } from "../eventStore.js";
 
 /** Resolve the project's org id (system-scoped bootstrap, the same hop the walker uses). */
@@ -104,11 +105,25 @@ export function decodePercolationPending(value: unknown): PercolationPending | u
 export async function recordVerifiedAncestorSha(
   pool: pg.Pool,
   input: { projectId: string; runId: string; ancestorSpecId: string; sha: string; reviewVerdict?: ReviewVerdict },
+  runStateWriter?: RunStateWriter,
 ): Promise<void> {
   const entry: { sha: string; reviewVerdict?: ReviewVerdict } = {
     sha: input.sha,
     ...(input.reviewVerdict !== undefined && { reviewVerdict: input.reviewVerdict }),
   };
+  // Plane-split: route the `verified_ancestor_shas` merge through the control plane
+  // when wired (the de-privileged data plane can no longer UPDATE runs); else direct.
+  if (runStateWriter !== undefined) {
+    const orgId = await resolveProjectOrg(pool, input.projectId);
+    if (orgId === null) throw new Error(`project ${input.projectId} has no org for the change-percolation write`);
+    await runStateWriter.mergeRunVerifiedAncestorSha({
+      runId: input.runId,
+      orgId,
+      ancestorSpecId: input.ancestorSpecId,
+      entryJson: JSON.stringify(entry),
+    });
+    return;
+  }
   await orgScopedWrite(pool, input.projectId, async (client) => {
     await client.query(
       `UPDATE runs
@@ -124,7 +139,14 @@ export async function recordVerifiedAncestorSha(
 export async function clearPercolationPending(
   pool: pg.Pool,
   input: { projectId: string; runId: string },
+  runStateWriter?: RunStateWriter,
 ): Promise<void> {
+  if (runStateWriter !== undefined) {
+    const orgId = await resolveProjectOrg(pool, input.projectId);
+    if (orgId === null) throw new Error(`project ${input.projectId} has no org for the change-percolation write`);
+    await runStateWriter.clearRunPercolationPending({ runId: input.runId, orgId });
+    return;
+  }
   await orgScopedWrite(pool, input.projectId, async (client) => {
     await client.query("UPDATE runs SET percolation_pending = NULL WHERE run_id = $1", [input.runId]);
   });
@@ -146,20 +168,30 @@ export async function recordReplanContext(
     ancestorSha: string;
     reason: string;
   },
+  runStateWriter?: RunStateWriter,
 ): Promise<void> {
-  await orgScopedWrite(pool, input.projectId, async (client) => {
-    const store = new PgEventStore(client);
-    await store.append({
-      runId: input.runId,
+  const event = {
+    runId: input.runId,
+    specId: input.specId,
+    projectId: input.projectId,
+    eventType: "merge.conflict.replan_routed" as const,
+    payload: {
       specId: input.specId,
-      projectId: input.projectId,
-      eventType: "merge.conflict.replan_routed",
-      payload: {
-        specId: input.specId,
-        otherSpecId: input.ancestorSpecId,
-        newContext: `Percolation: re-plan ON TOP OF the upstream change from ${input.ancestorSpecId} (${input.ancestorSha}). ${input.reason}`,
-        replanStatus: "pending",
-      },
-    });
+      otherSpecId: input.ancestorSpecId,
+      newContext: `Percolation: re-plan ON TOP OF the upstream change from ${input.ancestorSpecId} (${input.ancestorSha}). ${input.reason}`,
+      replanStatus: "pending" as const,
+    },
+  };
+  // Plane-split: append the replan-context event through the control plane when
+  // wired (the writer resolves the run's org from the ambient per-job org id, so set
+  // it for the append); else append in-process under a short org scope.
+  if (runStateWriter !== undefined) {
+    const orgId = await resolveProjectOrg(pool, input.projectId);
+    if (orgId === null) throw new Error(`project ${input.projectId} has no org for the change-percolation write`);
+    await runWithJobOrgId(orgId, () => runStateWriter.append(event));
+    return;
+  }
+  await orgScopedWrite(pool, input.projectId, async (client) => {
+    await new PgEventStore(client).append(event);
   });
 }

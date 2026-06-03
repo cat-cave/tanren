@@ -144,6 +144,15 @@ export async function bootRunWorker(): Promise<BootedRunWorker> {
     // the run/merge lifecycle uses.
     vcsProvider,
     githubAppMinter,
+    // Plane-split (autonomy loops): when remote-writes is on, route EVERY tenant
+    // write the autonomy loops drive — the DagWalker's run-creation + dag.* events,
+    // the merge coordinator's merge-stage writes + spec-status + conflict re-exec,
+    // the post-merge watcher's events, and the intake's run/spec creation —
+    // through the SAME control-plane writer the run executor uses. Absent
+    // (single-role dev / remote-writes off) the loops keep their direct-pool
+    // writes, byte-identical to today. The de-privileged data-plane role must
+    // never write a tenant table directly (migrations 0031/0035).
+    ...(runStateWriter === undefined ? {} : { runStateWriter }),
   });
   const stop = async (): Promise<void> => {
     await autonomy.stop();

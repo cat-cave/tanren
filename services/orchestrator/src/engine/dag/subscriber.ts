@@ -33,6 +33,7 @@
 import { DAG_CHANGE_CHANNEL, RUN_ACTIVITY_CHANNEL, type PgNotifyListener, runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
 import type { DagWalker } from "../contracts/dagWalker.js";
+import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SpeculativeIntegrator } from "../contracts/speculativeIntegrator.js";
 import { isTerminalStatus } from "../benchmark/runnerDb.js";
 import type { ChangePercolationCoordinator } from "./percolation.js";
@@ -63,6 +64,16 @@ export interface DagWalkerSubscriberDeps {
    * so a freshly-enqueued dependent's SHAs are already recorded before detection.
    */
   percolation?: ChangePercolationCoordinator;
+  /**
+   * Plane-split (autonomy loops): the control-plane run-state writer. When present
+   * (remote-writes on), the production walker routes its run-CREATION
+   * (createQueuedRunFromSpec) AND its dag.* event emissions through the control
+   * plane instead of writing `runs`/`specs`/`tasks`/`events` directly on the
+   * de-privileged pool. Absent (single-role dev), the walker writes directly —
+   * byte-identical to today. Only consulted when `walker` is not injected (a test
+   * that injects a recording walker omits it).
+   */
+  runStateWriter?: RunStateWriter;
 }
 
 /**
@@ -112,7 +123,12 @@ export class DagWalkerSubscriber {
     if (integrator === undefined) {
       throw new Error("DagWalkerSubscriber requires a SpeculativeIntegrator when no walker is injected");
     }
-    return buildDagWalker(this.deps.pool, { integrator });
+    return buildDagWalker(this.deps.pool, {
+      integrator,
+      // Plane-split: route the walker's run-creation + dag.* events through the
+      // control plane when a writer is wired; else direct on the pool.
+      ...(this.deps.runStateWriter !== undefined && { runStateWriter: this.deps.runStateWriter }),
+    });
   }
 
   /**

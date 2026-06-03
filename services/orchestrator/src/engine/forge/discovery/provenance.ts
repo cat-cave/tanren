@@ -13,6 +13,7 @@
 
 import type pg from "pg";
 import { z } from "zod";
+import type { RunStateWriter } from "../../contracts/runStateWriter.js";
 import { systemActor } from "../../state/actor.js";
 import { DiscoveryStore } from "../../repositories/discovery.js";
 import { DiscoveryVariant, PlacementKind } from "./types.js";
@@ -75,6 +76,30 @@ export async function writeProvenance(
   }
   const next = withDiscoveryProvenance(current.metadata as Record<string, unknown> | null, provenance);
   return DiscoveryStore.setSpecMetadata(client, specId, JSON.stringify(next), systemActor);
+}
+
+/**
+ * Plane-split (autonomy loops): the control-plane variant of {@link writeProvenance}.
+ * The READ (current metadata, a SELECT the data plane keeps) runs in-process on the
+ * org-scoped pool; only the WRITE — the `UPDATE specs SET metadata` the de-privileged
+ * data plane can no longer run directly (migration 0035) — routes through the
+ * control-plane writer's `setSpecMetadata`, carrying the explicit org. WHAT GETS
+ * WRITTEN is byte-identical (the same merged blob); only WHERE the UPDATE runs moves.
+ */
+export async function writeProvenanceViaWriter(
+  readClient: QueryClient,
+  writer: RunStateWriter,
+  orgId: string,
+  specId: string,
+  provenance: DiscoveryProvenance,
+): Promise<boolean> {
+  const current = await DiscoveryStore.getSpecMetadata(readClient, specId, systemActor);
+  if (!current.found) {
+    return false;
+  }
+  const next = withDiscoveryProvenance(current.metadata as Record<string, unknown> | null, provenance);
+  await writer.setSpecMetadata({ specId, orgId, metadataJson: JSON.stringify(next) });
+  return true;
 }
 
 // Read the discovery provenance for a spec. Returns undefined when the spec has

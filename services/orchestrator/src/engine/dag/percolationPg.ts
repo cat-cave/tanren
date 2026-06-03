@@ -11,7 +11,7 @@
 //   - PgPercolationEventEmitter: writes the four dag.spec.percolation events through
 //     the single org-scoped event-writer seam (mirrors PgDagEventEmitter).
 
-import { runWithOrgScope } from "@tanren/db";
+import { runWithJobOrgId, runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
 import {
   type AncestorChangeSignal,
@@ -28,7 +28,8 @@ import { migrateOrgConfig } from "../config/orgConfig.js";
 import { migrateProjectConfig } from "../config/projectConfig.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import { PgDagLifecycleReadModel } from "./lifecycle.js";
-import { PgEventStore } from "../eventStore.js";
+import type { RunStateWriter } from "../contracts/runStateWriter.js";
+import { type EventStore, PgEventStore } from "../eventStore.js";
 import { decodePercolationPending, decodeVerified, resolveProjectOrg } from "./percolationWrites.js";
 
 interface SpeculativeRunRow {
@@ -234,15 +235,28 @@ export class PgPercolationReadModel implements PercolationReadModel {
 
 export interface PgPercolationEventEmitterDeps {
   pool: pg.Pool;
+  /**
+   * Plane-split (autonomy loops): when present, the dag.spec.percolation events
+   * append through the control-plane writer (the de-privileged data plane can no
+   * longer write `events` directly); absent, in-process via `PgEventStore`.
+   */
+  runStateWriter?: RunStateWriter;
 }
 
 /** The pg-backed dag.spec.percolation emitter (org-scoped, mirrors PgDagEventEmitter). */
 export class PgPercolationEventEmitter implements PercolationEventEmitter {
   constructor(private readonly deps: PgPercolationEventEmitterDeps) {}
 
-  private async withScopedStore(projectId: string, work: (store: PgEventStore) => Promise<void>): Promise<void> {
+  private async withScopedStore(projectId: string, work: (store: EventStore) => Promise<void>): Promise<void> {
     const orgId = await resolveProjectOrg(this.deps.pool, projectId);
     if (orgId === null) return;
+    // Plane-split: route the append through the control plane when wired (ambient
+    // per-job org carries the scope); else append in-process — byte-identical.
+    if (this.deps.runStateWriter !== undefined) {
+      const writer = this.deps.runStateWriter;
+      await runWithJobOrgId(orgId, () => work(writer));
+      return;
+    }
     await runWithOrgScope(this.deps.pool, orgId, (client) => work(new PgEventStore(client)));
   }
 

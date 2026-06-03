@@ -15,20 +15,28 @@
 import { getJobOrgId } from "@tanren/db";
 import type { MtlsFetch } from "../contracts/mtlsChannel.js";
 import type {
+  ClearRunPercolationPendingInput,
+  CreateQueuedRunInput,
+  CreateSpecRemoteInput,
   FinalizeRunInput,
   FinalizeRunResult,
   InsertTaskInput,
+  MergeRunVerifiedAncestorShaInput,
   RecordCostInput,
   ReconcileCostInput,
   RunStateWriter,
+  SetRunPercolationReexecIdInput,
   SetRunPrUrlInput,
+  SetRunSpeculativeBaseInput,
   SetRunStatusInput,
+  SetSpecMetadataInput,
   SetSpecStatusInput,
   UpdateTaskInput,
 } from "../contracts/runStateWriter.js";
 import type { RecordedCost } from "../costs/recorder.js";
 import type { EventName } from "../events/index.js";
 import type { AppendEventInput } from "../eventStore.js";
+import type { SpecContract, SpecRunContract } from "../workflow/projectSpec.js";
 
 /** Thrown when a control-plane write endpoint returns a non-2xx status. */
 export class RunStateWriteTransportError extends Error {
@@ -96,6 +104,26 @@ export class HttpRunStateWriter implements RunStateWriter {
     await this.post<void>("/internal/set-spec-status", input);
   }
 
+  async setSpecMetadata(input: SetSpecMetadataInput): Promise<void> {
+    await this.post<void>("/internal/set-spec-metadata", input);
+  }
+
+  async setRunSpeculativeBase(input: SetRunSpeculativeBaseInput): Promise<void> {
+    await this.post<void>("/internal/set-run-speculative-base", input);
+  }
+
+  async setRunPercolationReexecId(input: SetRunPercolationReexecIdInput): Promise<void> {
+    await this.post<void>("/internal/set-run-percolation-reexec-id", input);
+  }
+
+  async clearRunPercolationPending(input: ClearRunPercolationPendingInput): Promise<void> {
+    await this.post<void>("/internal/clear-run-percolation-pending", input);
+  }
+
+  async mergeRunVerifiedAncestorSha(input: MergeRunVerifiedAncestorShaInput): Promise<void> {
+    await this.post<void>("/internal/merge-run-verified-ancestor-sha", input);
+  }
+
   async supersedeQueuedPlannerTask(input: { runId: string; orgId?: string }): Promise<void> {
     await this.post<void>("/internal/supersede-queued-planner-task", {
       runId: input.runId,
@@ -109,6 +137,20 @@ export class HttpRunStateWriter implements RunStateWriter {
 
   async updateTask(input: UpdateTaskInput): Promise<void> {
     await this.post<void>("/internal/update-task", { ...input, orgId: input.orgId ?? this.requireOrgId() });
+  }
+
+  // --- Autonomy loops: the run/spec CREATE writes (explicit-actor, multi-table). ---
+  //
+  // These carry the resolved `actor` (whose `orgId` the loop resolved
+  // system-scoped) in the body — NO ambient per-job org lookup — so the server
+  // runs the same `createQueuedRunFromSpec` / `createSpec` under that org scope.
+
+  async createQueuedRun(input: CreateQueuedRunInput): Promise<SpecRunContract> {
+    return this.post<SpecRunContract>("/internal/create-queued-run", input);
+  }
+
+  async createSpec(input: CreateSpecRemoteInput): Promise<SpecContract> {
+    return this.post<SpecContract>("/internal/create-spec", input);
   }
 
   /**

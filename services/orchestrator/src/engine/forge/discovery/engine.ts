@@ -23,10 +23,11 @@
 
 import type pg from "pg";
 import type { ActorContext } from "../../../auth/schemas.js";
+import type { RunStateWriter } from "../../contracts/runStateWriter.js";
 import { systemActor } from "../../state/actor.js";
 import { DiscoveryStore, type ExistingSpecSummary } from "../../repositories/discovery.js";
 import { createSpec, type SpecContract } from "../../workflow/projectSpec.js";
-import { writeProvenance, type DiscoveryProvenance } from "./provenance.js";
+import { writeProvenance, writeProvenanceViaWriter, type DiscoveryProvenance } from "./provenance.js";
 import {
   DiscoveryInsight,
   type DiscoveryAnswerer,
@@ -43,6 +44,13 @@ export interface DiscoveryEngineDeps {
   // to a hardcoded-proposal template (§8a). Only `classifyInsight` consults it;
   // `acceptProposals` commits an already-classified set, so it is optional there.
   answerer?: DiscoveryAnswerer;
+  // Plane-split (autonomy loops): the control-plane run-state writer. When present
+  // (the autonomous-intake path under remote-writes), `acceptProposals` routes its
+  // spec INSERT (`createSpec`) + its provenance UPDATE (`writeProvenance`) through
+  // the control plane — the de-privileged data plane can no longer write `specs`
+  // directly (migration 0035). Absent (the operator route under `tanren_app`, or
+  // single-role dev), it writes directly — byte-identical to today.
+  runStateWriter?: RunStateWriter;
 }
 
 export interface ClassifyInput {
@@ -123,21 +131,28 @@ export async function acceptProposals(deps: DiscoveryEngineDeps, input: AcceptIn
   const accepted: AcceptedSpec[] = [];
 
   for (const proposal of input.proposals) {
-    const spec = await createSpec(
-      deps.pool,
-      {
-        projectId: input.projectId,
-        title: proposal.title,
-        description: proposal.description,
-        acceptanceCriteria: proposal.acceptanceCriteria,
-        // Persist the discovery/triage priority onto the spec (autonomy-engine.md
-        // §1b) so the DagWalker orders by it instead of FIFO.
-        priority: proposal.priority,
-        ...(proposal.dependsOn.length > 0 ? { dependsOn: proposal.dependsOn } : {}),
-      },
-      input.actor,
-    );
-    await writeProvenance(deps.pool, spec.specId, provenance);
+    const createSpecInput = {
+      projectId: input.projectId,
+      title: proposal.title,
+      description: proposal.description,
+      acceptanceCriteria: proposal.acceptanceCriteria,
+      // Persist the discovery/triage priority onto the spec (autonomy-engine.md
+      // §1b) so the DagWalker orders by it instead of FIFO.
+      priority: proposal.priority,
+      ...(proposal.dependsOn.length > 0 ? { dependsOn: proposal.dependsOn } : {}),
+    };
+    // Plane-split: route the spec INSERT + the provenance UPDATE through the control
+    // plane when a writer is wired (the autonomous-intake path under remote-writes);
+    // else write directly — byte-identical to the operator route.
+    const spec =
+      deps.runStateWriter === undefined
+        ? await createSpec(deps.pool, createSpecInput, input.actor)
+        : await deps.runStateWriter.createSpec({ input: createSpecInput, actor: input.actor });
+    if (deps.runStateWriter !== undefined && input.actor.orgId !== null) {
+      await writeProvenanceViaWriter(deps.pool, deps.runStateWriter, input.actor.orgId, spec.specId, provenance);
+    } else {
+      await writeProvenance(deps.pool, spec.specId, provenance);
+    }
     accepted.push({ spec, proposalId: proposal.proposalId });
   }
 

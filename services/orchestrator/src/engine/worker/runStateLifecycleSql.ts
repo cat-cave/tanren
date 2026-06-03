@@ -8,9 +8,14 @@
 // unchanged.
 
 import type {
+  ClearRunPercolationPendingInput,
   InsertTaskInput,
+  MergeRunVerifiedAncestorShaInput,
+  SetRunPercolationReexecIdInput,
   SetRunPrUrlInput,
+  SetRunSpeculativeBaseInput,
   SetRunStatusInput,
+  SetSpecMetadataInput,
   SetSpecStatusInput,
   UpdateTaskInput,
 } from "../contracts/runStateWriter.js";
@@ -33,7 +38,68 @@ export async function applySetRunPrUrl(client: QueryClient, input: SetRunPrUrlIn
 
 /** The `UPDATE specs SET status` (`in_flight` / merge-outcome). */
 export async function applySetSpecStatus(client: QueryClient, input: SetSpecStatusInput): Promise<void> {
+  // Optional idempotency guard (the merge coordinator's `merged` finalize + reopen):
+  // `WHERE status <> ALL($3)` so a spec already in a terminal-good state is not
+  // clobbered. Omitted ⇒ the unguarded set (the workflow's `in_flight`), unchanged.
+  if (input.notFromStatuses !== undefined && input.notFromStatuses.length > 0) {
+    await client.query("UPDATE specs SET status = $2 WHERE spec_id = $1 AND status <> ALL($3::text[])", [
+      input.specId,
+      input.status,
+      input.notFromStatuses,
+    ]);
+    return;
+  }
   await client.query("UPDATE specs SET status = $2 WHERE spec_id = $1", [input.specId, input.status]);
+}
+
+/** The `UPDATE specs SET metadata` (the intake's discovery-provenance stamp). */
+export async function applySetSpecMetadata(client: QueryClient, input: SetSpecMetadataInput): Promise<void> {
+  await client.query("UPDATE specs SET metadata = $2::jsonb WHERE spec_id = $1", [input.specId, input.metadataJson]);
+}
+
+// --- Change-percolation (§2c) run-column writes — byte-identical to the inline SQL. ---
+
+/** Re-point a speculative run's dynamic base (the percolation kick-off re-point). */
+export async function applySetRunSpeculativeBase(
+  client: QueryClient,
+  input: SetRunSpeculativeBaseInput,
+): Promise<void> {
+  await client.query("UPDATE runs SET speculative_base = $2 WHERE run_id = $1", [input.runId, input.speculativeBase]);
+}
+
+/** Stamp the percolation re-execution run id onto the dependent's in-flight marker. */
+export async function applySetRunPercolationReexecId(
+  client: QueryClient,
+  input: SetRunPercolationReexecIdInput,
+): Promise<void> {
+  await client.query(
+    `UPDATE runs
+        SET percolation_pending = COALESCE(percolation_pending, '{}'::jsonb) || jsonb_build_object('reexecRunId', $2::text)
+      WHERE run_id = $1`,
+    [input.runId, input.reexecRunId],
+  );
+}
+
+/** Clear the in-flight percolation marker once a percolation settled. */
+export async function applyClearRunPercolationPending(
+  client: QueryClient,
+  input: ClearRunPercolationPendingInput,
+): Promise<void> {
+  await client.query("UPDATE runs SET percolation_pending = NULL WHERE run_id = $1", [input.runId]);
+}
+
+/** Merge ONE ancestor's absorbed SHA + verdict into `verified_ancestor_shas`. */
+export async function applyMergeRunVerifiedAncestorSha(
+  client: QueryClient,
+  input: MergeRunVerifiedAncestorShaInput,
+): Promise<void> {
+  await client.query(
+    `UPDATE runs
+        SET verified_ancestor_shas =
+          COALESCE(verified_ancestor_shas, '{}'::jsonb) || jsonb_build_object($2::text, $3::jsonb)
+      WHERE run_id = $1`,
+    [input.runId, input.ancestorSpecId, input.entryJson],
+  );
 }
 
 /** Cancel the vestigial queued `plan` task the spec-run trigger pre-created. */

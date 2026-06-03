@@ -13,14 +13,21 @@
 import { getJobOrgId, runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
 import type {
+  ClearRunPercolationPendingInput,
+  CreateQueuedRunInput,
+  CreateSpecRemoteInput,
   FinalizeRunInput,
   FinalizeRunResult,
   InsertTaskInput,
+  MergeRunVerifiedAncestorShaInput,
   RecordCostInput,
   ReconcileCostInput,
   RunStateWriter,
+  SetRunPercolationReexecIdInput,
   SetRunPrUrlInput,
+  SetRunSpeculativeBaseInput,
   SetRunStatusInput,
+  SetSpecMetadataInput,
   SetSpecStatusInput,
   UpdateTaskInput,
 } from "../contracts/runStateWriter.js";
@@ -28,9 +35,20 @@ import { CostRecorder, type RecordedCost } from "../costs/recorder.js";
 import type { EventName } from "../events/index.js";
 import { PgEventStore, type AppendEventInput } from "../eventStore.js";
 import {
+  createQueuedRunFromSpec,
+  createSpec as createSpecImpl,
+  type SpecContract,
+  type SpecRunContract,
+} from "../workflow/projectSpec.js";
+import {
+  applyClearRunPercolationPending,
   applyInsertTask,
+  applyMergeRunVerifiedAncestorSha,
+  applySetRunPercolationReexecId,
   applySetRunPrUrl,
+  applySetRunSpeculativeBase,
   applySetRunStatus,
+  applySetSpecMetadata,
   applySetSpecStatus,
   applySupersedeQueuedPlannerTask,
   applyUpdateTask,
@@ -109,6 +127,26 @@ export class DirectRunStateWriter implements RunStateWriter {
     await runWithOrgScope(this.pool, input.orgId, (client) => applySetSpecStatus(client, input));
   }
 
+  async setSpecMetadata(input: SetSpecMetadataInput): Promise<void> {
+    await runWithOrgScope(this.pool, input.orgId, (client) => applySetSpecMetadata(client, input));
+  }
+
+  async setRunSpeculativeBase(input: SetRunSpeculativeBaseInput): Promise<void> {
+    await runWithOrgScope(this.pool, input.orgId, (client) => applySetRunSpeculativeBase(client, input));
+  }
+
+  async setRunPercolationReexecId(input: SetRunPercolationReexecIdInput): Promise<void> {
+    await runWithOrgScope(this.pool, input.orgId, (client) => applySetRunPercolationReexecId(client, input));
+  }
+
+  async clearRunPercolationPending(input: ClearRunPercolationPendingInput): Promise<void> {
+    await runWithOrgScope(this.pool, input.orgId, (client) => applyClearRunPercolationPending(client, input));
+  }
+
+  async mergeRunVerifiedAncestorSha(input: MergeRunVerifiedAncestorShaInput): Promise<void> {
+    await runWithOrgScope(this.pool, input.orgId, (client) => applyMergeRunVerifiedAncestorSha(client, input));
+  }
+
   async supersedeQueuedPlannerTask(input: { runId: string; orgId?: string }): Promise<void> {
     await this.inTaskScope(input.orgId, (client) => applySupersedeQueuedPlannerTask(client, input.runId));
   }
@@ -119,6 +157,20 @@ export class DirectRunStateWriter implements RunStateWriter {
 
   async updateTask(input: UpdateTaskInput): Promise<void> {
     await this.inTaskScope(input.orgId, (client) => applyUpdateTask(client, input));
+  }
+
+  // --- Autonomy loops: the run/spec CREATE writes (explicit-actor, multi-table). ---
+  //
+  // `createQueuedRunFromSpec` / `createSpec` already open their OWN
+  // `runWithOrgScope(actor.orgId)` (org-carrying actor → org-scoped tx), so the
+  // direct path is byte-identical to the loop calling them in-process today.
+
+  async createQueuedRun(input: CreateQueuedRunInput): Promise<SpecRunContract> {
+    return createQueuedRunFromSpec(this.pool, input.input, input.actor);
+  }
+
+  async createSpec(input: CreateSpecRemoteInput): Promise<SpecContract> {
+    return createSpecImpl(this.pool, input.input, input.actor);
   }
 
   /**

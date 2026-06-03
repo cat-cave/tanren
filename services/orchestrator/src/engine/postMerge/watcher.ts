@@ -23,6 +23,7 @@ import { runWithJobOrgId, runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
 import type { EventStore } from "../eventStore.js";
 import { PgEventStore } from "../eventStore.js";
+import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { VcsProvider } from "../contracts/vcsProvider.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
@@ -42,6 +43,14 @@ export interface PostMergeWatcherDeps {
   githubAppMinter?: GithubAppTokenMinter;
   /** Injectable for tests; defaults to a `PgEventStore` over `pool`. */
   eventStore?: EventStore;
+  /**
+   * Plane-split (autonomy loops): the control-plane run-state writer. When present
+   * (remote-writes on), the watcher's two `events` appends route through the
+   * control plane (the de-privileged data plane can no longer write `events`
+   * directly); absent, in-process via `PgEventStore`. Used as the `eventStore`
+   * when no explicit `eventStore` is injected (a test injects its own recorder).
+   */
+  runStateWriter?: RunStateWriter;
   /**
    * The CROSS-PROCESS atomic file-once guard. Injectable for tests; defaults to the
    * `PgPostMergeIssueClaimStore` over `pool`. Exactly one process across the fleet
@@ -66,7 +75,10 @@ export class PostMergeWatcher {
   private readonly claimStore: PostMergeIssueClaimStore;
 
   constructor(private readonly deps: PostMergeWatcherDeps) {
-    this.eventStore = deps.eventStore ?? new PgEventStore(deps.pool);
+    // Plane-split: prefer an explicitly injected eventStore (tests), then the
+    // control-plane writer when wired (remote-writes on — the writer IS an
+    // EventStore), then the in-process PgEventStore (single-role dev, unchanged).
+    this.eventStore = deps.eventStore ?? deps.runStateWriter ?? new PgEventStore(deps.pool);
     this.claimStore = deps.claimStore ?? new PgPostMergeIssueClaimStore(deps.pool);
   }
 

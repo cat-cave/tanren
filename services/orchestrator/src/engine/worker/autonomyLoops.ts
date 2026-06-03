@@ -9,6 +9,7 @@
 import type pg from "pg";
 import { PgNotifyListener } from "@tanren/db";
 import type { Allocator } from "../contracts/allocator.js";
+import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { SshSubstrate } from "../contracts/sshSubstrate.js";
 import type { VcsProvider } from "../contracts/vcsProvider.js";
@@ -36,6 +37,17 @@ export interface AutonomyLoopsDeps {
   vcsProvider: VcsProvider;
   /** P2c-1: the shared App-token minter the integrator reuses for the integration push. */
   githubAppMinter?: GithubAppTokenMinter;
+  /**
+   * Plane-split (autonomy loops): the control-plane run-state writer. When present
+   * (remote-writes on, plane-split P3), EVERY tenant write the loops drive — the
+   * DagWalker's run-creation + dag.* events, the merge coordinator's merge-stage
+   * writes + spec-status + conflict re-exec, the post-merge watcher's events, and
+   * the intake's run/spec creation — routes through the control plane over mTLS
+   * (the de-privileged data-plane role can no longer write those tables directly).
+   * Absent (single-role dev), the loops write the tenant tables directly via
+   * `deps.pool` — byte-identical to today. Mirrors the run executor's seam.
+   */
+  runStateWriter?: RunStateWriter;
 }
 
 export interface AutonomyLoops {
@@ -72,12 +84,19 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
     vcsProvider: deps.vcsProvider,
     secrets: deps.secrets,
     ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
+    // Plane-split: route the change-percolation coordinator's run-column writes +
+    // spec reopen + re-execution run-CREATE + events through the control plane when
+    // wired; else direct on the pool (byte-identical).
+    ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
   });
   const dagWalker = await startDagWalkerSubscriber({
     pool: deps.pool,
     notifyListener: dagNotifyListener,
     integrator,
     percolation,
+    // Plane-split: the walker's run-creation + dag.* events route through the
+    // control plane when wired (else direct on deps.pool, byte-identical).
+    ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
   });
   console.log(
     "[run-worker] DagWalker + change-percolation subscriber started (autonomous DAG execution + §2c percolation)",
@@ -94,6 +113,10 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
     secrets: deps.secrets,
     vcsProvider: deps.vcsProvider,
     ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
+    // Plane-split: the coordinator's merge-stage writes (events/tasks/runs/specs),
+    // its spec-status finalize, and its conflict re-execution route through the
+    // control plane when wired (else direct on deps.pool, byte-identical).
+    ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
   });
   console.log("[run-worker] native merge-queue coordinator subscriber started (autonomy-engine §2d)");
   // tempering.md dim A: the post-merge watcher reacts on the SAME run-activity bus —
@@ -107,6 +130,9 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
     secrets: deps.secrets,
     vcsProvider: deps.vcsProvider,
     ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
+    // Plane-split: the watcher's post-merge events route through the control plane
+    // when wired (else direct on deps.pool, byte-identical).
+    ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
   });
   console.log("[run-worker] post-merge auto-issue watcher subscriber started (tempering.md dim A)");
   const intake = startIntake({
@@ -116,6 +142,9 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
     ssh: deps.ssh,
     githubHttp: deps.githubHttp,
     identitySecretRef: deps.identitySecretRef,
+    // Plane-split: the intake auto-route's spec/run creation routes through the
+    // control plane when wired (else direct on deps.pool, byte-identical).
+    ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
   });
   console.log("[run-worker] intake poller + audit scheduler loops started (autonomy-engine §1d)");
   const stop = async (): Promise<void> => {

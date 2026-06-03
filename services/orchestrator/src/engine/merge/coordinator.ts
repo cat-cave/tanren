@@ -16,9 +16,10 @@
 //
 // The pg seam wirings (queue model + merge runner) live in `coordinatorPg.ts`.
 
-import { runWithOrgScope, runWithSystemScope } from "@tanren/db";
+import { runWithJobOrgId, runWithOrgScope, runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
-import { PgEventStore } from "../eventStore.js";
+import type { RunStateWriter } from "../contracts/runStateWriter.js";
+import { type EventStore, PgEventStore } from "../eventStore.js";
 import {
   type CoordinateResult,
   type MergeCoordinator,
@@ -139,9 +140,17 @@ export class EventEmittingMergeCoordinator implements MergeCoordinator {
  * the run, and the queue depth for queue/stack statistics (§2d).
  */
 export class PgMergeQueueEventEmitter implements MergeQueueEventEmitter {
-  constructor(private readonly pool: pg.Pool) {}
+  /**
+   * @param runStateWriter Plane-split (autonomy loops): when present, queue events
+   *   append through the control-plane writer (the de-privileged data plane can no
+   *   longer write `events` directly); absent, in-process via `PgEventStore`.
+   */
+  constructor(
+    private readonly pool: pg.Pool,
+    private readonly runStateWriter?: RunStateWriter,
+  ) {}
 
-  private async withScopedStore(projectId: string, work: (store: PgEventStore) => Promise<void>): Promise<void> {
+  private async withScopedStore(projectId: string, work: (store: EventStore) => Promise<void>): Promise<void> {
     const orgId = await runWithSystemScope(this.pool, async (client) => {
       const result = await client.query<{ org_id: string | null }>(
         "SELECT org_id FROM projects WHERE project_id = $1",
@@ -150,6 +159,14 @@ export class PgMergeQueueEventEmitter implements MergeQueueEventEmitter {
       return result.rows[0]?.org_id ?? null;
     });
     if (orgId === null) return;
+    // Plane-split: route the event append through the control plane when wired (the
+    // writer resolves the run's org from the ambient per-job org-id, so set it for
+    // the append); else append in-process under a short org scope — byte-identical.
+    if (this.runStateWriter !== undefined) {
+      const writer = this.runStateWriter;
+      await runWithJobOrgId(orgId, () => work(writer));
+      return;
+    }
     await runWithOrgScope(this.pool, orgId, (client) => work(new PgEventStore(client)));
   }
 

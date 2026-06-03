@@ -37,6 +37,7 @@ import {
   type WalkResult,
 } from "../contracts/dagWalker.js";
 import type { DagLifecycleReadModel } from "../contracts/dagLifecycle.js";
+import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SpeculativeIntegrator } from "../contracts/speculativeIntegrator.js";
 import type { SpecReadiness } from "./speculation.js";
 import { PgBudgetGate } from "./budgetGate.js";
@@ -303,6 +304,14 @@ export function buildSpeculationConfigResolver(pool: pg.Pool): SpeculationConfig
 export interface BuildDagWalkerDeps {
   /** The speculative integrator (builds the dynamic-base integration branch). */
   integrator: SpeculativeIntegrator;
+  /**
+   * Plane-split (autonomy loops): the control-plane run-state writer. When present,
+   * the enqueuer routes its run-CREATION through the control plane and the event
+   * emitter routes its dag.* events through it — instead of the de-privileged
+   * direct-pool writes (migrations 0031/0035). Absent ⇒ the direct-pool writes,
+   * byte-identical to today.
+   */
+  runStateWriter?: RunStateWriter;
 }
 
 /**
@@ -310,14 +319,16 @@ export interface BuildDagWalkerDeps {
  * — the single construction site the worker boot + subscriber use. Wires the pg
  * read model + lifecycle projection, the createQueuedRunFromSpec enqueuer, the pg
  * event emitter, and the per-project speculation-config resolver; the concurrency
- * ceiling defaults to the config surface (resolveWorkerConcurrency).
+ * ceiling defaults to the config surface (resolveWorkerConcurrency). When a
+ * `runStateWriter` is supplied (plane-split remote-writes), the enqueuer + event
+ * emitter route their tenant writes through the control plane instead.
  */
 export function buildDagWalker(pool: pg.Pool, deps: BuildDagWalkerDeps): DagWalker {
   return new EventEmittingDagWalker({
     readModel: new PgDagReadModel(pool),
     lifecycleReadModel: new PgDagLifecycleReadModel(pool),
-    enqueuer: new SpecRunDagEnqueuer(pool),
-    events: new PgDagEventEmitter(pool),
+    enqueuer: new SpecRunDagEnqueuer(pool, deps.runStateWriter),
+    events: new PgDagEventEmitter(pool, deps.runStateWriter),
     integrator: deps.integrator,
     speculationConfig: buildSpeculationConfigResolver(pool),
     budgetGate: new PgBudgetGate(pool),
