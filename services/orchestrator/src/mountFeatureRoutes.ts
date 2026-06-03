@@ -30,7 +30,7 @@ import { createIntegrationRoutes } from "./routes/integrations/index.js";
 import { createMilestoneRoutes } from "./routes/milestones/index.js";
 import { createNotificationRoutes } from "./routes/notifications/index.js";
 import { createOnboardingRoutes } from "./routes/onboarding/index.js";
-import { type ConfigGateGithubFactory, createOrgRoutes } from "./routes/orgs/index.js";
+import { createAiProviderRoutes, type ConfigGateGithubFactory, createOrgRoutes } from "./routes/orgs/index.js";
 import { createPersonaRoutes } from "./routes/personas/index.js";
 import { createAppEnvCiRoutes, createProjectRoutes } from "./routes/projects/index.js";
 import { createRecoveryRoutes } from "./routes/recovery/index.js";
@@ -108,6 +108,12 @@ export function mountFeatureRoutes(app: Hono<ActorContextEnv>, deps: FeatureRout
     identitySecretRef: deps.identitySecretRef,
   });
   app.route("/orgs", createOrgRoutes({ pool: scopedPool, configGateGithub }));
+  // Wave-2 operator API: the "Connect AI provider" + billing-mode settings surface.
+  // Mounted on the org-scoping pool (reads/writes `organizations.config` under RLS)
+  // and sharing the durable credential registry so a connected provider appears in
+  // the credential list. Stores BYOK keys under a COST-CLASSIFIABLE ref so the
+  // budget gate meters them (routes/aiProvider/index.ts).
+  app.route("/orgs", createAiProviderRoutes({ pool: scopedPool, secrets, registry: credentialRegistry }));
   app.route(
     "/orgs",
     // GREENFIELD: the `/projects/greenfield` create path mints the org's GitHub App
