@@ -180,9 +180,8 @@ export async function setup(projectConfig?: Record<string, unknown>) {
 // lookup). The merge probe then decides merged / conflict / failed.
 export function directMergeConfig(): Record<string, unknown> {
   return {
-    // version:1 is mandatory — migrateProjectConfig fails hard on an
-    // unversioned config. Strict schema, so the static credential ref lives
-    // under `credentials`.
+    // version:1 is mandatory — migrateProjectConfig fails hard on an unversioned
+    // config. Strict schema, so the static credential ref lives under `credentials`.
     version: 1,
     mergeIntegration: "direct_merge",
     governancePosture: "open",
@@ -361,6 +360,10 @@ export class ScriptedGitHubHttp implements GitHubHttpClient {
 
   async request(input: GitHubHttpRequest): Promise<GitHubHttpResponse> {
     this.requests.push({ ...input, token: "<redacted>" });
+    // MERGE-SAFETY (self-identity): the clone's `GET /user` identity read, answered out-of-band.
+    if (input.method === "GET" && (input.path === "/user" || input.path.startsWith("/user?"))) {
+      return { status: 200, body: { login: "tanren[bot]", id: 424242 } };
+    }
     const response = this.responses.shift();
     if (response === undefined) {
       throw new Error(`unexpected GitHub request: ${input.method} ${input.path}`);

@@ -148,7 +148,10 @@ describe("runPlannerLoopWorkflow", () => {
     expect(result.outcome.kind).toBe("window_exhausted");
     expect(result.pullRequest).toBeUndefined();
     expect(pool.runStatus).toEqual({ status: "halted", outcome: "window_exhausted" });
-    expect(github.requests).toHaveLength(0);
+    // No PR/CI/merge request was made. The ONLY GitHub call is the authenticated
+    // clone's MERGE-SAFETY identity read (`GET /user`) — it runs during clone,
+    // before the window-pressure halt; everything else (PR open, etc.) is skipped.
+    expect(github.requests.filter((r) => !(r.method === "GET" && r.path.startsWith("/user")))).toHaveLength(0);
     expect(allocator.releases).toEqual(["runner_planner"]);
   });
 

@@ -5,23 +5,22 @@
 // `pushWorkspaceBranchToGitHub` SSH push — behind the provider-neutral
 // `VcsProvider` seam. It DOES NOT re-implement any GitHub logic; it wraps it, so
 // behavior is preserved exactly (token-via-stdin clone auth, the GraphQL ready
-// mutation, the timed HTTP wrapper that decorates `githubHttp`, the merge
-// dispatch's conflict distinction, the CI-poll semantics).
+// mutation, the timed HTTP wrapper, the merge conflict distinction, CI-poll).
 //
-// The HTTP client is injected at construction (the run/merge path passes the
-// `TimedGitHubHttpClient(new FetchGitHubHttpClient())` the server/worker build),
-// so the observability decorator stays in force. The contributor read + the
-// `/contents` read live here too — both already existed as raw `githubHttp`
-// requests in the run/merge path or its siblings — so the provider is the single
-// place the GitHub forge surface for the lifecycle is reached.
+// The HTTP client is injected at construction so the observability decorator stays
+// in force. The contributor + `/contents` reads live here too — the provider is the
+// single place the forge surface for the lifecycle is reached. MERGE-SAFETY's
+// `resolveActorIdentity` (the self-identity read) composes `./githubActorIdentity`.
 
 import { resolveGithubToken } from "../credentials/githubTokenResolver.js";
+import { invokeTokenIdentity, resolveGithubActorIdentity } from "./githubActorIdentity.js";
 import { setRepoActionsSecret } from "./actionsSecretSeal.js";
 import { createGitHubRepository } from "./githubRepoCreate.js";
 import { parseCommitLogins } from "../workflow/reviewMerge/commitLogins.js";
 import type { PullRequestContributors } from "../workflow/reviewMerge/governancePosture.js";
 import { decodeBase64Content } from "../contracts/vcsProvider.js";
 import type {
+  ActorIdentity,
   BuildIntegrationBranchInput,
   BuildIntegrationBranchResult,
   CreatedIssue,
@@ -61,11 +60,10 @@ function repoApiPath(repo: RepoRef, suffix: string): string {
 }
 
 /**
- * Map GitHub's `mergeable_state` string onto the provider-neutral mergeability
- * state the merge stage gates on. `behind` → rebase; `dirty` → conflict
- * resolver; `clean`/`unstable`/`has_hooks` → mergeable (proceed). `blocked` is a
- * gating issue OTHER than freshness (failing required checks / pending review),
- * NOT a stale-branch problem. `unknown`/`draft` → unknown (do not assume current).
+ * Map GitHub's `mergeable_state` onto the provider-neutral mergeability state the
+ * merge stage gates on: `behind` → rebase; `dirty` → conflict resolver;
+ * `clean`/`unstable`/`has_hooks` → mergeable; `blocked` → a non-freshness gate
+ * (failing required checks / pending review); `unknown`/`draft` → unknown.
  */
 function mapMergeableState(state: string): PullRequestMergeability["state"] {
   switch (state) {
@@ -114,7 +112,19 @@ export class GitHubVcsProvider implements VcsProvider {
       staticRef: creds.staticRef,
       minter: creds.minter,
     });
-    return { token: resolved.token, source: resolved.source, refresh: resolved.refresh };
+    const token: ResolvedVcsToken = {
+      token: resolved.token,
+      source: resolved.source,
+      refresh: resolved.refresh,
+      // MERGE-SAFETY: the identity supplier closes over the SAME creds that
+      // resolved the token (run git author + merge identity set can't disagree). Lazy.
+      identity: () => resolveGithubActorIdentity(this.http, token, creds),
+    };
+    return token;
+  }
+
+  async resolveActorIdentity(token: ResolvedVcsToken): Promise<ActorIdentity> {
+    return invokeTokenIdentity(token);
   }
 
   parseRepository(repoUrl: string): RepoRef {
@@ -127,9 +137,8 @@ export class GitHubVcsProvider implements VcsProvider {
   }
 
   async createRepository(input: CreateRepositoryInput, token: ResolvedVcsToken): Promise<CreatedRepository> {
-    // `POST /orgs/{owner}/repos` with auto_init → an immediately-cloneable repo;
-    // the 422/403 cases map to the contract's typed errors (delegated to the
-    // helper so the provider stays under the per-file line cap).
+    // `POST /orgs/{owner}/repos` with auto_init; 422/403 → the contract's typed
+    // errors (delegated to the helper so the provider stays under the line cap).
     return createGitHubRepository(this.http, input, token);
   }
 
@@ -184,8 +193,7 @@ export class GitHubVcsProvider implements VcsProvider {
   }
 
   async setActionsSecret(input: SetActionsSecretInput): Promise<void> {
-    // Read the repo's Actions public key → sealed-box encrypt the plaintext → PUT
-    // the encrypted value. The plaintext travels ONLY inside the encrypted body.
+    // Read the Actions public key → sealed-box encrypt → PUT (plaintext stays inside the encrypted body).
     await setRepoActionsSecret(this.http, input);
   }
 
@@ -308,26 +316,22 @@ export class GitHubVcsProvider implements VcsProvider {
 
   async buildIntegrationBranch(input: BuildIntegrationBranchInput): Promise<BuildIntegrationBranchResult> {
     const { repo, token, baseBranch, integrationBranch, ancestors } = input;
-    // 1. Resolve the real base SHA and (re)set the ephemeral integration ref to
-    //    it — so a rebuild is never additive over a stale integration. NEVER
-    //    touches `default_branch`; only the ephemeral ref is written.
+    // 1. (Re)set the ephemeral integration ref to the real base SHA so a rebuild is
+    //    never additive over a stale integration. NEVER touches `default_branch`.
     const baseSha = await this.refSha(repo, token, baseBranch);
     await this.resetRef(repo, token, integrationBranch, baseSha);
 
-    // 2. Merge each ancestor's branch onto the integration ref in DAG order. A
-    //    409 from the merge API is a real conflict BETWEEN this ancestor and what
-    //    is already integrated (an earlier ancestor) — surface it here, early.
+    // 2. Merge each ancestor's branch onto the integration ref in DAG order. A 409
+    //    is a real conflict BETWEEN this ancestor and an earlier integrated one —
+    //    surfaced here, early.
     const merged: string[] = [];
     const ancestorHeadShas: Record<string, string> = {};
     for (const ancestor of ancestors) {
-      // Capture the ancestor's head SHA AT integration time (the divergence key the
-      // change-percolation detect later compares the live head against, P2c-2).
+      // Capture the ancestor's head SHA AT integration time (the P2c-2 divergence key).
       ancestorHeadShas[ancestor.specId] = await this.refSha(repo, token, ancestor.branch);
       const result = await this.mergeBranchInto(repo, token, integrationBranch, ancestor.branch);
       if (result === "conflict") {
-        // The conflict is between THIS ancestor and what is already on the
-        // integration ref. The immediately-prior integrated ancestor is the most
-        // specific other side; with none yet integrated it is the base itself.
+        // The other side is the immediately-prior integrated ancestor (or the base).
         const otherSpecId = merged.at(-1) ?? baseBranch;
         // The conflicting ancestor did not merge — drop its captured head SHA.
         delete ancestorHeadShas[ancestor.specId];
@@ -379,8 +383,7 @@ export class GitHubVcsProvider implements VcsProvider {
       token: input.token.token,
       refreshToken: input.token.refresh,
     });
-    // 404 = the ref does not exist (the ancestor's branch was deleted/renamed): no
-    // head to compare against — the detect treats it as unreadable, never invents a change.
+    // 404 = ref gone (branch deleted/renamed): unreadable, the detect never invents a change.
     if (response.status === 404) return undefined;
     if (response.status !== 200 || typeof response.body !== "object" || response.body === null) {
       throw new Error(`GitHub head-sha read failed for ${input.branch}: HTTP ${response.status}`);

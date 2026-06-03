@@ -6,11 +6,48 @@
 import type { GovernancePosture, MergeIntegration, ReviewPolicy } from "../src/engine/config/shared.js";
 import type { MergeProbe, ReviewProbe } from "../src/engine/workflow/reviewMerge/index.js";
 import type { PullRequestMergeability, UpdateBranchResult } from "../src/engine/contracts/vcsProvider.js";
+import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "../src/engine/providers/github.js";
+import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
+import { storeGithubToken } from "../src/engine/credentials/githubToken.js";
+
+/**
+ * MERGE-SAFETY (self-identity): a secret store seeded with a static GitHub token at
+ * the credential ref `ReviewMergePool` carries (`credential/github/dev`), so the
+ * merge stage's `resolveActorIdentity` token resolution succeeds and proceeds to
+ * the static `GET /user` served by {@link tanrenUserHttp}.
+ */
+export const GOVERNANCE_CREDENTIAL_REF = "credential/github/dev";
+export async function tanrenSecrets(): Promise<FakeSecretStore> {
+  const secrets = new FakeSecretStore();
+  await storeGithubToken(secrets, { ref: GOVERNANCE_CREDENTIAL_REF, token: "ghp_governanceFixtureToken" });
+  return secrets;
+}
 
 export function unusedHttp() {
   return {
     request: async () => {
       throw new Error("HTTP should not be called when a probe is injected");
+    },
+  };
+}
+
+/**
+ * MERGE-SAFETY (self-identity): the login the merge stage's `resolveActorIdentity`
+ * resolves for the governance tests' static credential. The contributor/merge
+ * probes are still injected; this is the ONLY GitHub call the merge stage makes
+ * (the static `GET /user`), so the fixture serves just that one route and throws on
+ * anything else (proving no other HTTP slips through).
+ */
+export const FIXTURE_TANREN_LOGIN = "tanren[bot]";
+
+/** A scripted transport that answers ONLY `GET /user` with {@link FIXTURE_TANREN_LOGIN}. */
+export function tanrenUserHttp(login: string = FIXTURE_TANREN_LOGIN): GitHubHttpClient {
+  return {
+    request: async (input: GitHubHttpRequest): Promise<GitHubHttpResponse> => {
+      if (input.method === "GET" && (input.path === "/user" || input.path.startsWith("/user?"))) {
+        return { status: 200, body: { login, id: 99001 } };
+      }
+      throw new Error(`HTTP should not be called when a probe is injected: ${input.method} ${input.path}`);
     },
   };
 }

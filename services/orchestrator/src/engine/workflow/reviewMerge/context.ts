@@ -39,8 +39,13 @@ export interface ReviewMergeRunContext {
   reviewPolicy: ReviewPolicy;
   /**
    * P3-0023: GitHub logins that represent Tanren's own pushes on this repo.
-   * External-change detection treats any other contributor as non-Tanren. The
-   * App bot login when an App is installed, plus the default bot login.
+   * External-change detection treats any other contributor as non-Tanren.
+   *
+   * MERGE-SAFETY (self-identity): this is the ADDITIVE belt-and-suspenders set —
+   * the default bot login plus any operator-configured `governanceTanrenLogins`.
+   * The AUTHORITATIVE entry is the login the merge stage resolves from the ACTIVE
+   * credential (`resolveActorIdentity`) and merges in at `evaluatePosture`, so the
+   * identity set agrees with the login the runner's commits actually carry.
    */
   tanrenLogins: ReadonlyArray<string>;
   /** App installation, when the org has installed the App (preferred token). */
@@ -122,7 +127,7 @@ export async function loadReviewMergeRunContext(
     mergeIntegration: projectConfig.mergeIntegration,
     governancePosture: projectConfig.governancePosture,
     reviewPolicy: projectConfig.reviewPolicy,
-    tanrenLogins: tanrenLoginsFor(installation),
+    tanrenLogins: tanrenLoginsFor(projectConfig.governanceTanrenLogins),
     installation,
     ...(staticCredentialRef !== undefined && { staticCredentialRef }),
   };
@@ -142,18 +147,17 @@ function resolvedStaticCredentialRef(resolvedRef: string | undefined, config: un
 }
 
 /**
- * The logins Tanren's own pushes carry. Always includes the default bot login;
- * a GitHub App installation contributes `<app-slug>[bot]` when the slug is
- * derivable. The org App config carries only `appId`/`installationId`, so the
- * App bot login is added only when an installation is present (the bot pushes
- * under the App identity); the default login keeps detection working without
- * an App. De-duplication happens downstream in `tanrenIdentity`.
+ * The ADDITIVE belt-and-suspenders logins Tanren's own pushes carry — the default
+ * bot login plus any operator-configured `governanceTanrenLogins` (optional; empty
+ * by default — the apex path needs ZERO config). The AUTHORITATIVE login is the one
+ * the merge stage resolves from the active credential (`resolveActorIdentity`) and
+ * merges into the identity set at `evaluatePosture`. The old bogus `app/<appId>`
+ * entry is GONE — it was never a real GitHub login (the App bot login is
+ * `<app-slug>[bot]`, now resolved live). De-duplication happens downstream in
+ * `tanrenIdentity`.
  */
-function tanrenLoginsFor(installation: OrgGithubAppInstallation | undefined): ReadonlyArray<string> {
-  if (installation === undefined) {
-    return [DEFAULT_TANREN_LOGIN];
-  }
-  return [DEFAULT_TANREN_LOGIN, `app/${installation.appId}`];
+function tanrenLoginsFor(configured: ReadonlyArray<string> | undefined): ReadonlyArray<string> {
+  return [DEFAULT_TANREN_LOGIN, ...(configured ?? [])];
 }
 
 function credentialRefFromConfig(config: unknown): string | undefined {

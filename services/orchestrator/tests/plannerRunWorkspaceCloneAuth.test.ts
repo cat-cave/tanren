@@ -39,13 +39,20 @@ const CLONE_HEAD = "a".repeat(40);
 const TOKEN = "ghp_secretClONEToken";
 const APP_TOKEN = "ghs_appInstallationToken";
 
-// A GitHub HTTP client that must never be touched on the clone-auth path — the
-// clone resolves its token via the VcsProvider seam, and the static path reads
-// the secret store, so no HTTP is issued for these unit cases.
+// A GitHub HTTP client for the clone-auth path. The only legitimate GitHub call
+// the AUTHENTICATED clone makes is MERGE-SAFETY's `resolveActorIdentity` static
+// `GET /user` (so the runner's git author attributes to a real login) — served
+// here with a fixed Tanren login/id. Every OTHER path must stay off HTTP (the
+// token resolution reads the secret store), so anything else throws loudly.
+const CLONE_ACTOR_LOGIN = "tanren-clone-bot";
+const CLONE_ACTOR_ID = 700700;
 function unusedHttp(): GitHubHttpClient {
   return {
-    request: async (_req: GitHubHttpRequest): Promise<GitHubHttpResponse> => {
-      throw new Error("clone-auth must not issue GitHub HTTP");
+    request: async (req: GitHubHttpRequest): Promise<GitHubHttpResponse> => {
+      if (req.method === "GET" && (req.path === "/user" || req.path.startsWith("/user?"))) {
+        return { status: 200, body: { login: CLONE_ACTOR_LOGIN, id: CLONE_ACTOR_ID } };
+      }
+      throw new Error(`clone-auth must not issue GitHub HTTP: ${req.method} ${req.path}`);
     },
   };
 }
@@ -73,7 +80,19 @@ function recordingProvider(): { provider: ReturnType<typeof vcsProviderOver>; ca
         return async (creds: VcsCredentialContext) => {
           calls.push(creds);
           if (creds.installation !== undefined) {
-            return { token: APP_TOKEN, source: "github_app" as const, refresh: async () => APP_TOKEN };
+            // MERGE-SAFETY: the App-first short-circuit also carries an identity
+            // supplier (the App bot login) so resolveActorIdentity resolves the
+            // git author without standing up a real App-token minter.
+            return {
+              token: APP_TOKEN,
+              source: "github_app" as const,
+              refresh: async () => APP_TOKEN,
+              identity: async () => ({
+                login: "tanren-app[bot]",
+                id: "12345",
+                noreplyEmail: "12345+tanren-app[bot]@users.noreply.github.com",
+              }),
+            };
           }
           return inner.resolveToken(creds);
         };
@@ -196,6 +215,14 @@ describe("prepareRunWorkspace clone authentication", () => {
     expect(clone?.stdin).toBe(TOKEN);
     expect(clone?.command).toContain("GIT_ASKPASS");
     expect(clone?.command).not.toContain(TOKEN);
+    // MERGE-SAFETY (self-identity) end-to-end: the RESOLVED identity (from the
+    // clone token's GET /user) lands in the workspace git config, so every writer/
+    // rebase commit is attributable to the real login — NOT `planner@tanren.invalid`.
+    expect(clone?.command).toContain(`git config user.name '${CLONE_ACTOR_LOGIN}'`);
+    expect(clone?.command).toContain(
+      `git config user.email '${CLONE_ACTOR_ID}+${CLONE_ACTOR_LOGIN}@users.noreply.github.com'`,
+    );
+    expect(clone?.command).not.toContain("planner@tanren.invalid");
   });
 
   it("P2a Part 2: clone resolves APP-FIRST through the VcsProvider seam when an App is installed", async () => {
@@ -216,6 +243,37 @@ describe("prepareRunWorkspace clone authentication", () => {
     expect(clone?.stdin).toBe(APP_TOKEN);
     expect(clone?.command).toContain("GIT_ASKPASS");
     expect(clone?.command).not.toContain(APP_TOKEN);
+  });
+
+  it("MERGE-SAFETY: an authenticated run THROWS (no silent .invalid fallback) when identity resolution fails", async () => {
+    const ssh = new RecordingSsh();
+    const secrets = new FakeSecretStore();
+    await storeGithubToken(secrets, { ref: "credential/github/dev", token: TOKEN });
+    // A provider whose token resolves but whose actor-identity resolution FAILS
+    // (e.g. GitHub returns a 5xx on GET /user). The run is authenticated (a static
+    // credential ref is present), so this MUST be a loud throw — never a degrade to
+    // the unattributable `planner@tanren.invalid` author.
+    const real = vcsProviderOver(unusedHttp());
+    const failingProvider = new Proxy(real, {
+      get(inner, prop, receiver) {
+        if (prop === "resolveActorIdentity") {
+          return async () => {
+            throw new Error("GitHub token identity read (GET /user) failed: HTTP 503");
+          };
+        }
+        return Reflect.get(inner, prop, receiver);
+      },
+    });
+
+    await expect(
+      prepareRunWorkspace(
+        makeInput(ssh, makeContext(), { secrets, vcsProvider: failingProvider }),
+        target,
+        "/workspace/runs/run_clone/repo",
+      ),
+    ).rejects.toThrow(/identity read/u);
+    // The clone never ran — the run aborts before pushing as an unattributable author.
+    expect(ssh.commands).toHaveLength(0);
   });
 
   it("P2a Part 2: clone routes through the seam (no installation) carrying the static ref only", async () => {

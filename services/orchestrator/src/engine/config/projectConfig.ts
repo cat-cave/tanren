@@ -47,6 +47,14 @@ export const ProjectConfigV1 = z
     notificationTargets: z.array(NotificationTargetRef).default([]),
     forgePersona: PartialForgePersona.default({}),
     governancePosture: GovernancePosture.default("strict"),
+    // MERGE-SAFETY (self-identity): OPTIONAL extra GitHub logins to treat as Tanren's
+    // own pushes in the external-change gate, ADDITIVE to the default bot login + the
+    // login resolved live from the active credential (`resolveActorIdentity`). The
+    // apex path needs ZERO config — this is only for orgs that push via MULTIPLE
+    // identities (e.g. several admin PATs). Optional + backward-compatible: legacy
+    // rows carry no key and parse to an absent field (the default set applies), and
+    // `.strict()` round-trips it on save.
+    governanceTanrenLogins: z.array(z.string().min(1)).optional(),
     mergeIntegration: MergeIntegration.default("not_configured"),
     // Whether the review stage requires a real human verdict before merge.
     // Defaults to `"human"` (safe: never auto-merge without a review). When a

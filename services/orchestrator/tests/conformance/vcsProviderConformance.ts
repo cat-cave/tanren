@@ -17,6 +17,7 @@
 import { describe, expect, it } from "vitest";
 import {
   RepositoryAlreadyExistsError,
+  type ActorIdentity,
   type ResolvedVcsToken,
   type VcsProvider,
 } from "../../src/engine/contracts/vcsProvider.js";
@@ -64,6 +65,15 @@ export const CONFORMANCE_FAILING_BRANCH = "tanren/integ/failing";
 /** P-APP-ENV-1: the Actions-secret name + plaintext value the suite sets. */
 export const CONFORMANCE_ACTIONS_SECRET_NAME = "RESEND_API_KEY";
 export const CONFORMANCE_ACTIONS_SECRET_VALUE = "re_conformance_plaintext_must_never_leak";
+/**
+ * MERGE-SAFETY (self-identity): the actor identity `resolveActorIdentity` resolves
+ * for the static credential the suite primes (the GitHub harness's `GET /user`
+ * serves this login+id; the in-memory fake returns it directly). The noreply is
+ * the canonical `<id>+<login>@users.noreply.github.com`.
+ */
+export const CONFORMANCE_ACTOR_LOGIN = "tanren-bot-user";
+export const CONFORMANCE_ACTOR_ID = "424242";
+export const CONFORMANCE_ACTOR_NOREPLY_EMAIL = "424242+tanren-bot-user@users.noreply.github.com";
 /** GREENFIELD: the owner + names the suite creates a brand-new repo under. */
 export const CONFORMANCE_REPO_OWNER = "cat-cave";
 export const CONFORMANCE_NEW_REPO_NAME = "tanren-greenfield-new";
@@ -88,6 +98,19 @@ export function describeVcsProviderConformance(label: string, harness: VcsProvid
       const refreshed = await resolved.refresh();
       expect(typeof refreshed).toBe("string");
       expect(refreshed.length).toBeGreaterThan(0);
+    });
+
+    it("resolveActorIdentity resolves Tanren's pushing login + id + a canonical noreply email", async () => {
+      const provider = harness.make();
+      const token = await resolve(provider);
+      const actor: ActorIdentity = await provider.resolveActorIdentity(token);
+      expect(actor.login).toBe(CONFORMANCE_ACTOR_LOGIN);
+      expect(actor.id).toBe(CONFORMANCE_ACTOR_ID);
+      // The noreply email is the canonical <id>+<login>@users.noreply.github.com
+      // (what the runner sets git user.email to so commits attribute to the login).
+      expect(actor.noreplyEmail).toBe(CONFORMANCE_ACTOR_NOREPLY_EMAIL);
+      expect(actor.noreplyEmail).toContain(actor.id);
+      expect(actor.noreplyEmail).toContain(actor.login);
     });
 
     it("parseRepository round-trips a clone URL to owner/name", () => {
