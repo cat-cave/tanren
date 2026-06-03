@@ -35,8 +35,15 @@ const OUTPUT_TAIL_LIMIT = 4_000;
 // bootstrapCommand resolver, via resolveBootstrapCommand) and passes it as
 // `command`; when the repo ships no tanren-ci.yml the resolver yields undefined
 // and this heuristic default applies.
+// `--config.confirmModulesPurge=false`: the runner is NON-INTERACTIVE (no TTY).
+// When pnpm decides it must PURGE an existing `node_modules` (e.g. one the writer
+// created with a different layout/store), it interactively confirms the removal by
+// default and ABORTS with `ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY` (exit 1)
+// when there is no TTY. We must NOT use the alternative (`CI=true`), because that
+// also flips pnpm's default to `--frozen-lockfile` — which would defeat the
+// non-frozen greenfield deps-ensure below. So we disable the purge prompt directly.
 export const DEFAULT_BOOTSTRAP_COMMAND =
-  "if [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile; " +
+  "if [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile --config.confirmModulesPurge=false; " +
   "elif [ -f package-lock.json ]; then npm ci; " +
   "elif [ -f package.json ]; then npm install; " +
   "else echo 'tanren: no package manifest found; skipping dependency bootstrap'; fi";
@@ -61,8 +68,12 @@ export const DEFAULT_BOOTSTRAP_COMMAND =
 // `input.bootstrapCommand` override) still wins over this default. pnpm/npm are
 // chosen by the SAME manifest probe the cold bootstrap uses (a pnpm
 // lockfile/workspace ⇒ pnpm, else npm install).
+// `--config.confirmModulesPurge=false`: same non-interactive-runner reason as
+// DEFAULT_BOOTSTRAP_COMMAND. This path runs the MOST often (every gate, after each
+// writer iteration), so a writer that rewrites the manifest such that pnpm wants to
+// purge `node_modules` would otherwise abort with the no-TTY error and fail the run.
 export const DEPS_ENSURE_DEFAULT_COMMAND =
-  "if [ -f pnpm-lock.yaml ] || [ -f pnpm-workspace.yaml ]; then pnpm install; " +
+  "if [ -f pnpm-lock.yaml ] || [ -f pnpm-workspace.yaml ]; then pnpm install --config.confirmModulesPurge=false; " +
   "elif [ -f package.json ]; then npm install; " +
   "else echo 'tanren: no package manifest found; skipping dependency bootstrap'; fi";
 

@@ -139,6 +139,16 @@ describe("workspace bootstrap (P3-0006)", () => {
     expect(DEFAULT_BOOTSTRAP_COMMAND).toContain("pnpm install");
   });
 
+  it("disables pnpm's interactive modules-purge confirmation (no-TTY runner) on both defaults", () => {
+    // The runner has no TTY; without this flag pnpm aborts a node_modules purge with
+    // ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY (exit 1). Must NOT be solved via
+    // CI=true (that would force --frozen-lockfile and break the greenfield deps-ensure).
+    expect(DEFAULT_BOOTSTRAP_COMMAND).toContain("pnpm install --frozen-lockfile --config.confirmModulesPurge=false");
+    expect(DEPS_ENSURE_DEFAULT_COMMAND).toContain("pnpm install --config.confirmModulesPurge=false");
+    expect(DEFAULT_BOOTSTRAP_COMMAND).not.toContain("CI=true");
+    expect(DEPS_ENSURE_DEFAULT_COMMAND).not.toContain("CI=true");
+  });
+
   it("throws a typed WorkspaceBootstrapError with exit code + output tail on failure", async () => {
     const ssh = new ScriptedSsh([
       {
