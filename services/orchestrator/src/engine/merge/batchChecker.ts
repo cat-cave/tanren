@@ -77,10 +77,16 @@ export class PgBatchChecker implements BatchChecker {
       return { result: "pass", integrationBranch: "" };
     }
 
-    const tailSpecId = input.entries.at(-1)?.specId;
-    if (tailSpecId === undefined) {
+    // The batch HEAD entry: the tail (deepest) member's queue row — the SAME row the
+    // integration ref is keyed on. The no-checks settle clock (`no_checks_since`) is
+    // persisted on THIS row, so it is stable across integration-ref rebuilds AND starts
+    // when checking begins (not at enqueue).
+    const headEntry = input.entries.at(-1);
+    if (headEntry === undefined) {
       return { result: "pass", integrationBranch: "" };
     }
+    const tailSpecId = headEntry.specId;
+    const headQueueId = headEntry.queueId;
     const integrationBranch = batchIntegrationBranchName(tailSpecId);
 
     const orgId = await this.resolveProjectOrg(input.projectId);
@@ -88,18 +94,13 @@ export class PgBatchChecker implements BatchChecker {
       throw new Error(`cannot batch-check ${input.projectId}: project has no org`);
     }
 
-    const { project, branches, minEnqueuedAtMs } = await runWithOrgScope(this.deps.pool, orgId, async (client) => {
+    const { project, branches } = await runWithOrgScope(this.deps.pool, orgId, async (client) => {
       const projectRow = await this.loadProject(client, input.projectId);
-      const specIds = input.entries.map((e) => e.specId);
-      const branchRows = await this.loadEntryBranches(client, specIds);
-      // The STABLE settle anchor: the earliest `enqueued_at` over the batch's ACTIVE
-      // queue entries. Org-scoped under the SAME RLS scope as the other loads. This is
-      // NOT the ephemeral integration sha (which resets every rebuild cycle and would
-      // never accrue elapsed time) — `merge_queue.enqueued_at` is fixed at enqueue and
-      // outlives integration-ref churn, so the grace measures real wall time since the
-      // batch became ready.
-      const anchorMs = await this.loadBatchEnqueueAnchorMs(client, specIds);
-      return { project: projectRow, branches: branchRows, minEnqueuedAtMs: anchorMs };
+      const branchRows = await this.loadEntryBranches(
+        client,
+        input.entries.map((e) => e.specId),
+      );
+      return { project: projectRow, branches: branchRows };
     });
 
     // Order the entries' branches in the caller's DAG order — a missing branch is a
@@ -132,6 +133,9 @@ export class PgBatchChecker implements BatchChecker {
       ancestors: ordered,
     });
     if (integration.outcome === "conflict") {
+      // A real integration conflict is a definitive non-no_checks verdict — CLEAR the
+      // no-checks clock so a later transient no_checks restarts the grace from scratch.
+      await this.clearNoChecksSince(orgId, headQueueId);
       return {
         result: "conflict",
         message: integration.message,
@@ -143,31 +147,44 @@ export class PgBatchChecker implements BatchChecker {
     const checks = await this.deps.vcsProvider.readBranchChecks({ repo, branch: integrationBranch, token });
     const observation = evaluateCiObservation(checks);
     // `passed`/`failed` are UNCHANGED — the safety boundary: a green prospective state
-    // merges, a red/failing check ALWAYS blocks (never settled → merged).
+    // merges, a red/failing check ALWAYS blocks (never settled → merged). Both are
+    // definitive non-no_checks verdicts → CLEAR the no-checks clock.
     if (observation.status === "passed") {
+      await this.clearNoChecksSince(orgId, headQueueId);
       return { result: "pass", integrationBranch };
     }
     if (observation.status === "failed") {
+      await this.clearNoChecksSince(orgId, headQueueId);
       return { result: "fail", message: `batch CI failed (${observation.reason}) on ${integrationBranch}` };
     }
 
-    // PENDING — split on WHY. The NO-CHECKS SETTLE (see DEFAULT_NO_CHECKS_SETTLE_MS):
-    //   - `no_checks` (GENUINELY zero check-runs + statuses, NOT required-context
-    //     gating) ⇒ this repo has NO CI registered at all on the integration ref. There
-    //     is nothing to verify; after the bounded grace, treat the gate as green (mirror
-    //     GitHub merging a PR with no required checks + no failing checks). Anchored on
-    //     the STABLE `enqueued_at` — NOT the ephemeral integration sha.
-    //   - `checks_pending` (real CI REGISTERED but not yet terminal) ⇒ HOLD unchanged.
-    //     NO settle: we WAIT for the registered CI to finish (a CI-completion NOTIFY
-    //     re-triggers the pass). A repo with real CI registers a queued check within
-    //     seconds, flipping no_checks→checks_pending BEFORE the grace elapses, so the
-    //     settle never short-circuits a repo that actually has CI.
+    // PENDING — split on WHY. The NO-CHECKS SETTLE (see DEFAULT_NO_CHECKS_SETTLE_MS), now
+    // anchored on the head entry's persisted `no_checks_since` (NOT `enqueued_at`):
+    //   - `no_checks` (GENUINELY zero check-runs + statuses, NOT required-context gating)
+    //     ⇒ this repo has NO CI registered on the freshly-rebuilt integration ref. The
+    //     grace measures CONTINUOUS no-checks: the FIRST observation sets `no_checks_since`
+    //     = now (and HOLDS); only after `now - no_checks_since >= grace` does it settle to
+    //     pass (mirror GitHub merging a PR with no required checks + no failing checks).
+    //     Because the clock starts at first-no_checks-observation (not enqueue), a backed-
+    //     up queue can NEVER let a real-CI repo settle before its workflow even registers.
+    //   - `checks_pending` (real CI REGISTERED but not yet terminal) ⇒ HOLD unchanged AND
+    //     CLEAR `no_checks_since` — the moment a real workflow registers a check the
+    //     no-checks clock is wiped, so it can never later settle. We WAIT for the
+    //     registered CI to finish (a CI-completion re-triggers the pass).
     if (observation.reason === "no_checks") {
       const noChecksSettleMs = resolveNoChecksSettleMs(project.project_config);
-      // No active queue anchor (defensive — should not happen for a non-empty batch):
-      // fall back to NOW so elapsed is 0 and we HOLD this pass rather than settle on a
-      // missing anchor. The next pass re-checks once the anchor is present.
-      const elapsed = minEnqueuedAtMs === undefined ? 0 : this.now() - minEnqueuedAtMs;
+      const sinceMs = await this.loadNoChecksSinceMs(orgId, headQueueId);
+      if (sinceMs === undefined) {
+        // FIRST continuous-no_checks observation on this head: START the clock + HOLD.
+        // Never settle on the first sighting — the grace counts from here forward.
+        await this.setNoChecksSince(orgId, headQueueId, this.now());
+        return {
+          result: "pending",
+          message: `batch has no CI on ${integrationBranch}; settling in ${noChecksSettleMs}ms`,
+          settleAfterMs: noChecksSettleMs,
+        };
+      }
+      const elapsed = this.now() - sinceMs;
       if (elapsed >= noChecksSettleMs) {
         return { result: "pass", integrationBranch };
       }
@@ -178,8 +195,9 @@ export class PgBatchChecker implements BatchChecker {
       };
     }
 
-    // Still running REGISTERED CI — NOT a failure, NOT settled: hold (the coordinator
-    // re-checks on CI completion).
+    // Still running REGISTERED CI (`checks_pending`) — NOT a failure, NOT settled: CLEAR
+    // the no-checks clock (a real check registered) + hold (re-checks on CI completion).
+    await this.clearNoChecksSince(orgId, headQueueId);
     return { result: "pending", message: `batch CI pending (${observation.reason}) on ${integrationBranch}` };
   }
 
@@ -211,27 +229,49 @@ export class PgBatchChecker implements BatchChecker {
   }
 
   /**
-   * The STABLE no-checks settle anchor: `MIN(enqueued_at)` over the batch's ACTIVE
-   * (queued/merging) `merge_queue` entries, as ms epoch (or undefined when none are
-   * active — defensive). RLS-scoped via the caller's `runWithOrgScope` client like the
-   * other loads — an off-scope call sees zero rows. The anchor is fixed at enqueue and
-   * survives integration-ref churn, so the grace measures real elapsed wall time.
+   * Read the head entry's persisted no-checks settle clock (`merge_queue.no_checks_since`)
+   * as ms epoch, or undefined when NULL (the clock is not running — no continuous
+   * no_checks window has been observed yet). Org-scoped under RLS (an off-scope read sees
+   * zero rows ⇒ undefined). This is the STABLE settle anchor: it survives integration-ref
+   * rebuilds AND starts when checking begins, not at enqueue — so the grace measures
+   * CONTINUOUS no-checks, never queue-backlog time.
    */
-  private async loadBatchEnqueueAnchorMs(
-    client: pg.PoolClient,
-    specIds: ReadonlyArray<string>,
-  ): Promise<number | undefined> {
-    if (specIds.length === 0) return undefined;
-    const result = await client.query<{ min_enqueued_at: Date | string | null }>(
-      `SELECT MIN(enqueued_at) AS min_enqueued_at
-         FROM merge_queue
-        WHERE spec_id = ANY($1::text[]) AND status IN ('queued', 'merging')`,
-      [[...specIds]],
-    );
-    const raw = result.rows[0]?.min_enqueued_at;
-    if (raw === null || raw === undefined) return undefined;
-    const ms = raw instanceof Date ? raw.getTime() : new Date(raw).getTime();
-    return Number.isNaN(ms) ? undefined : ms;
+  private async loadNoChecksSinceMs(orgId: string, queueId: string): Promise<number | undefined> {
+    return runWithOrgScope(this.deps.pool, orgId, async (client): Promise<number | undefined> => {
+      const result = await client.query<{ no_checks_since: Date | string | null }>(
+        "SELECT no_checks_since FROM merge_queue WHERE queue_id = $1",
+        [queueId],
+      );
+      const raw = result.rows[0]?.no_checks_since;
+      if (raw === null || raw === undefined) return undefined;
+      const ms = raw instanceof Date ? raw.getTime() : new Date(raw).getTime();
+      return Number.isNaN(ms) ? undefined : ms;
+    });
+  }
+
+  /** START the head entry's no-checks clock (set `no_checks_since` = the given instant). Org-scoped. */
+  private async setNoChecksSince(orgId: string, queueId: string, atMs: number): Promise<void> {
+    await runWithOrgScope(this.deps.pool, orgId, async (client) => {
+      await client.query("UPDATE merge_queue SET no_checks_since = $2 WHERE queue_id = $1", [
+        queueId,
+        new Date(atMs).toISOString(),
+      ]);
+    });
+  }
+
+  /**
+   * CLEAR the head entry's no-checks clock (`no_checks_since` → NULL) — the KEY safety
+   * reset: called on every NON-no_checks verdict (checks_pending/passed/failed/conflict),
+   * so the moment a real workflow registers a check the no-checks window is wiped and can
+   * never later settle-merge unverified. A no-op UPDATE when already NULL. Org-scoped.
+   */
+  private async clearNoChecksSince(orgId: string, queueId: string): Promise<void> {
+    await runWithOrgScope(this.deps.pool, orgId, async (client) => {
+      await client.query(
+        "UPDATE merge_queue SET no_checks_since = NULL WHERE queue_id = $1 AND no_checks_since IS NOT NULL",
+        [queueId],
+      );
+    });
   }
 
   private async resolveProjectOrg(projectId: string): Promise<string | null> {
