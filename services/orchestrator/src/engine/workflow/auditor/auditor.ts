@@ -5,13 +5,27 @@
 import { answererOutputSchemaFor, AuditAnswer, type AuditRecommendedAction } from "../../answerers/schemas/index.js";
 import type { PlanSubtask } from "../../answerers/schemas/index.js";
 import type { AnswererAdapter } from "../../providers/types.js";
+import { buildAuditorPrompt as buildAuditorPromptText } from "../answererPrompts.js";
+
+// The v2 AuditAnswer (passed / reasoning / outstandingBehaviorIds /
+// recommendedAction) closing instruction. The shared body lives in
+// answererPrompts.ts; only this schema-specific tail names the auditor's fields.
+const AUDITOR_V2_OUTPUT_INSTRUCTIONS = [
+  "Set passed=true only when every acceptance criterion is satisfied by the combined writer change.",
+  "Set recommendedAction='pass' when passed=true.",
+  "Set recommendedAction='loop_to_planner' when the spec is recoverable by re-planning.",
+  "Set recommendedAction='halt' when the spec is not recoverable in this run.",
+];
 
 export interface AuditorSpecContext {
   specTitle: string;
   specDescription: string;
   acceptanceCriteria: ReadonlyArray<string>;
   subtasks: ReadonlyArray<PlanSubtask>;
-  combinedDiff: string;
+  // The run base the combined writer change is diffed against. The auditor runs
+  // INSIDE the read-only workspace and inspects the change itself (rather than
+  // having the full combined diff injected into the prompt).
+  baselineSha: string;
 }
 
 export interface AuditorInvokeInput {
@@ -40,31 +54,23 @@ export async function invokeAuditor(
   return { verdict, schemaId: outputSchema.name };
 }
 
+// Production auditor prompt: the canonical shared body (answererPrompts.ts) with
+// the executed-subtasks context mapped down to the common input and the v2-schema
+// closing instruction supplied.
 export function buildAuditorPrompt(context: AuditorSpecContext): string {
-  return [
-    "You are the Tanren Auditor Answerer. Audit whether the executed subtask plan satisfies the spec.",
-    "Return only the structured JSON required by the provided schema.",
-    "Do not edit files, run mutation commands, create commits, or write to the workspace.",
-    "",
-    `Spec title: ${context.specTitle}`,
-    `Spec description: ${context.specDescription}`,
-    "Acceptance criteria:",
-    ...context.acceptanceCriteria.map((criterion) => `- ${criterion}`),
-    "",
-    "Executed subtasks:",
-    ...context.subtasks.map(
-      (subtask) =>
-        `- [${subtask.index}] ${subtask.title} (intent: ${subtask.intent}, behaviors: ${subtask.behaviorIds.join(", ") || "(none)"})`,
-    ),
-    "",
-    "Set passed=true only when every acceptance criterion is satisfied by the combined writer diff.",
-    "Set recommendedAction='pass' when passed=true.",
-    "Set recommendedAction='loop_to_planner' when the spec is recoverable by re-planning.",
-    "Set recommendedAction='halt' when the spec is not recoverable in this run.",
-    "",
-    "Combined writer diff:",
-    context.combinedDiff,
-  ].join("\n");
+  return buildAuditorPromptText({
+    specTitle: context.specTitle,
+    specDescription: context.specDescription,
+    acceptanceCriteria: context.acceptanceCriteria,
+    baselineSha: context.baselineSha,
+    subtasks: context.subtasks.map((subtask) => ({
+      index: subtask.index,
+      title: subtask.title,
+      intent: subtask.intent,
+      behaviorIds: subtask.behaviorIds,
+    })),
+    outputInstructions: AUDITOR_V2_OUTPUT_INSTRUCTIONS,
+  });
 }
 
 // AuditorDecision encodes the rejection-loop branch. As with the checker,

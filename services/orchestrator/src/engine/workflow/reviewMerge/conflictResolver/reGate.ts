@@ -11,18 +11,13 @@
 
 import type { CheckAnswer, AuditAnswer, PlanSubtask } from "../../../answerers/schemas/index.js";
 import type { CiWhen } from "../../../ci/index.js";
-import type { SshTarget } from "../../../contracts/allocator.js";
-import type { SshSubstrate } from "../../../contracts/sshSubstrate.js";
 import type { ReGateVerdict, ResolvedTreeReGate } from "../../../contracts/conflictResolution.js";
 import type { AnswererAdapter } from "../../../providers/types.js";
-import { runWorkspaceSshCommand } from "../../../workspace/ssh.js";
 import type { GateOutcome } from "../../gate/index.js";
 import { decideCheckerOutcome, invokeChecker } from "../../checker/checker.js";
 import { decideAuditorOutcome, invokeAuditor } from "../../auditor/auditor.js";
 
 export interface ResolvedTreeReGateDeps {
-  ssh: SshSubstrate;
-  target: SshTarget;
   workspacePath: string;
   timeoutMs: number;
   /** The deterministic gate the writer loop uses (per-iteration / pre-audit tiers). */
@@ -33,7 +28,7 @@ export interface ResolvedTreeReGateDeps {
   specTitle: string;
   specDescription: string;
   acceptanceCriteria: ReadonlyArray<string>;
-  /** The base sha the resolved diff is captured against (the run's diff base). */
+  /** The run base the checker/auditor diff the resolved tree against (self-inspected in-workspace). */
   baseSha: string;
 }
 
@@ -48,11 +43,10 @@ export class RunPathResolvedTreeReGate implements ResolvedTreeReGate {
       return { passed: false, failedStage: "gate", reason: gateFailureReason(gate) };
     }
 
-    // 2. Capture the resolved tree's combined diff for the Answerers to judge.
-    const combinedDiff = await this.captureResolvedDiff();
-
-    // 3. Checker: does the resolved diff still satisfy the spec intent? (The
-    //    resolution is judged as a single subtask: "preserve the spec intent".)
+    // 2. Judge the resolved tree. The checker/auditor run INSIDE the resolved
+    //    read-only workspace (codex `--cd`), so they inspect the resolved change
+    //    themselves (diffing against the run base) rather than being handed an
+    //    injected diff that can balloon past the model's input limit.
     const subtask: PlanSubtask = {
       index: 0,
       title: "Intent-preserving conflict resolution",
@@ -66,7 +60,7 @@ export class RunPathResolvedTreeReGate implements ResolvedTreeReGate {
         specDescription: this.deps.specDescription,
         acceptanceCriteria: this.deps.acceptanceCriteria,
         subtask,
-        writerDiff: combinedDiff,
+        baselineSha: this.deps.baseSha,
       },
       timeoutMs: this.deps.timeoutMs,
       workspace: this.deps.workspacePath,
@@ -76,14 +70,14 @@ export class RunPathResolvedTreeReGate implements ResolvedTreeReGate {
       return { passed: false, failedStage: "checker", reason: checkDecision.reason };
     }
 
-    // 4. Auditor: is the resolved spec complete + verifiable against acceptance?
+    // 3. Auditor: is the resolved spec complete + verifiable against acceptance?
     const audit = await invokeAuditor(this.deps.auditor, {
       context: {
         specTitle: this.deps.specTitle,
         specDescription: this.deps.specDescription,
         acceptanceCriteria: this.deps.acceptanceCriteria,
         subtasks: [subtask],
-        combinedDiff,
+        baselineSha: this.deps.baseSha,
       },
       timeoutMs: this.deps.timeoutMs,
       workspace: this.deps.workspacePath,
@@ -94,16 +88,6 @@ export class RunPathResolvedTreeReGate implements ResolvedTreeReGate {
     }
 
     return { passed: true, reason: "re-gate passed: gate + checker + auditor green on the resolved tree" };
-  }
-
-  private async captureResolvedDiff(): Promise<string> {
-    const result = await runWorkspaceSshCommand(this.deps.ssh, this.deps.target, {
-      label: "re-gate: capture resolved diff",
-      cwd: this.deps.workspacePath,
-      command: `git diff --no-color ${this.deps.baseSha}`,
-      timeoutMs: this.deps.timeoutMs,
-    });
-    return result.stdout;
   }
 }
 

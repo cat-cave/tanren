@@ -20,18 +20,19 @@ describe("structured Answerer task helpers", () => {
       reason: "The check and diff agree.",
     });
 
+    const baselineSha = "b".repeat(40);
     const check = await executeStructuredCheckTask(checkAdapter, {
       specTitle: "Fixture",
       specDescription: "Add ok",
       acceptanceCriteria: ["Adds ok"],
-      writerDiff: "diff\n+ok\n",
+      baselineSha,
       timeoutMs: 100,
     });
     const audit = await executeStructuredAuditTask(auditAdapter, {
       specTitle: "Fixture",
       acceptanceCriteria: ["Adds ok"],
       checkAnswer: check,
-      writerDiff: "diff\n+ok\n",
+      baselineSha,
       timeoutMs: 100,
     });
 
@@ -39,6 +40,24 @@ describe("structured Answerer task helpers", () => {
     expect(audit.verified).toBe(true);
     expect(checkAdapter.lastSchemaName).toBe("tanren.check_answer.v1");
     expect(auditAdapter.lastSchemaName).toBe("tanren.audit_answer.v1");
+    // The structured-task path routes through the SAME single-sourced prompt body
+    // (answererPrompts.ts) as the production run path: the canonical role framing +
+    // self-inspection block, the baseline sha, and no injected diff. Only the
+    // closing instruction names this path's v1 schema fields.
+    for (const prompt of [checkAdapter.lastPrompt ?? "", auditAdapter.lastPrompt ?? ""]) {
+      expect(prompt).toContain(baselineSha);
+      expect(prompt).toContain(`git diff ${baselineSha} -- . ':(exclude)node_modules'`);
+      expect(prompt).toContain("Do NOT expect the diff");
+      expect(prompt).not.toContain("diff --git");
+    }
+    // The checker's v1 closing (done / suggested_fixes), not the production v2
+    // (passed / reasoning), confirms the schema-specific tail is wired correctly.
+    expect(checkAdapter.lastPrompt).toContain(
+      "Set done=true only when every acceptance criterion is satisfied. Use suggested_fixes=null when no fixes are needed.",
+    );
+    // The auditor's v1 closing (criteria_status) + the embedded checker answer.
+    expect(auditAdapter.lastPrompt).toContain("Set criteria_status.criteria to one item per acceptance criterion.");
+    expect(auditAdapter.lastPrompt).toContain('"done": true');
   });
 
   it("lets parse failures surface as hard task failures", async () => {
@@ -56,7 +75,7 @@ describe("structured Answerer task helpers", () => {
         specTitle: "Fixture",
         specDescription: "Add ok",
         acceptanceCriteria: ["Adds ok"],
-        writerDiff: "diff\n+ok\n",
+        baselineSha: "c".repeat(40),
         timeoutMs: 100,
       }),
     ).rejects.toThrow(AnswererSchemaValidationError);
@@ -68,11 +87,13 @@ class RecordingAnswerer<TOutput> implements AnswererAdapter<TOutput> {
   readonly cli = "fake";
   readonly authRef = "credential/self-hosted/answerer-tasks-test";
   lastSchemaName: string | undefined;
+  lastPrompt: string | undefined;
 
   constructor(private readonly output: TOutput) {}
 
   async runAnswerer(opts: Parameters<AnswererAdapter<TOutput>["runAnswerer"]>[0]): Promise<TOutput> {
     this.lastSchemaName = opts.outputSchema?.name;
+    this.lastPrompt = opts.prompt;
     return this.output;
   }
 }

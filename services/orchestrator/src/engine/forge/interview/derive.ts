@@ -137,7 +137,9 @@ const SCAFFOLD_SPECS: ScaffoldSpecDef[] = [
       '`"lint": "eslint ."`, `"typecheck": "tsc --noEmit"`, `"test": "vitest run"`, `"build": "tsc -b"` ' +
       "— with `eslint`, `typescript`, and `vitest` as REAL published devDependencies; a real " +
       "`eslint.config.js` flat config that exists and passes; a `tsconfig.json`; one trivial " +
-      "`src/index.ts`; one trivial PASSING vitest test; and a COMMITTED `pnpm-lock.yaml`. " +
+      "`src/index.ts`; one trivial PASSING vitest test; a COMMITTED `.gitignore` that ignores " +
+      "`node_modules` and `dist` (so build/install artifacts are never committed); and a COMMITTED " +
+      "`pnpm-lock.yaml`. " +
       "Use the REAL published `typescript`/`eslint`/`vitest` packages — NEVER create local " +
       "workspace stub packages, `workspace:*` placeholders, or fake toolchain binaries. Do NOT add " +
       "a shared-types package or tsconfig project references (a later spec adds those if needed), do " +
@@ -149,6 +151,7 @@ const SCAFFOLD_SPECS: ScaffoldSpecDef[] = [
       "given the root `package.json`, when inspected, then its `lint`, `typecheck`, `test`, and `build` scripts call direct tools (eslint/tsc/vitest), NOT turbo, with eslint/typescript/vitest as devDependencies",
       "given the toolchain packages, when inspected, then `typescript`, `eslint`, and `vitest` are REAL published devDependencies — NOT local stub packages, `workspace:*` placeholders, or fake binaries",
       "given the lint setup, when inspected, then a real `eslint.config.js` flat config exists (so `eslint .` runs cleanly), a `tsconfig.json` exists, and a trivial `src/index.ts` exists",
+      "given the repo root, when inspected, then a committed `.gitignore` ignores `node_modules` and `dist` (so install/build artifacts are never committed)",
       "given a trivial passing vitest test exists, when `pnpm install` then `pnpm lint`, `pnpm typecheck`, `pnpm test`, and `pnpm build` run, then each exits 0 (the default CI gate is green)",
     ],
   },

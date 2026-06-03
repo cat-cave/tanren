@@ -108,7 +108,7 @@ export async function runPhase1FixtureWorkflow(input: RunPhase1FixtureInput): Pr
   await appendEvent("runner.allocated", runnerPayload(allocation));
 
   try {
-    await prepareFixtureWorkspace({ ...input, target: allocation.target, workspacePath });
+    const baselineSha = await prepareFixtureWorkspace({ ...input, target: allocation.target, workspacePath });
     await appendEvent("workspace.prepared", {
       workspacePath,
       repoUrl: context.repoUrl,
@@ -167,7 +167,7 @@ export async function runPhase1FixtureWorkflow(input: RunPhase1FixtureInput): Pr
           specTitle: context.specTitle,
           specDescription: context.specDescription,
           acceptanceCriteria: context.acceptanceCriteria,
-          writerDiff: writer.diff,
+          baselineSha,
           timeoutMs: input.timeoutMs,
           workspace: workspacePath,
         });
@@ -204,7 +204,7 @@ export async function runPhase1FixtureWorkflow(input: RunPhase1FixtureInput): Pr
           specTitle: context.specTitle,
           acceptanceCriteria: context.acceptanceCriteria,
           checkAnswer: check,
-          writerDiff: writer.diff,
+          baselineSha,
           timeoutMs: input.timeoutMs,
           workspace: workspacePath,
         });
@@ -340,10 +340,16 @@ async function completeQueuedPlannerTask(
   await appendEvent("task.completed", { taskKind: "plan" }, taskId);
 }
 
+// Clones the fixture target branch and returns the clone HEAD sha — the
+// baseline the writer's change is diffed against. `git rev-parse HEAD` runs
+// LAST and is the only stdout-producing step, so its output is the clone HEAD.
+// "" on a fake SSH that yields no output (unit paths); the real runner returns
+// a 40-hex sha. The exclude write makes a later `git add -A` skip a node_modules
+// tree a gate's install may leave behind.
 async function prepareFixtureWorkspace(
   input: RunPhase1FixtureInput & { target: SshTarget; workspacePath: string },
-): Promise<void> {
-  await runWorkspaceSshCommand(input.ssh, input.target, {
+): Promise<string> {
+  const result = await runWorkspaceSshCommand(input.ssh, input.target, {
     label: "prepare phase 1 fixture workspace",
     timeoutMs: input.timeoutMs,
     command: [
@@ -353,8 +359,11 @@ async function prepareFixtureWorkspace(
       `cd ${quoteSshShellArg(input.workspacePath)}`,
       "git config user.name 'Tanren Phase 1 Fixture'",
       "git config user.email 'phase1-fixture@tanren.invalid'",
+      `printf '%s\\n' 'node_modules/' 'dist/' >> .git/info/exclude`,
+      "git rev-parse HEAD",
     ].join(" && "),
   });
+  return result.stdout.trim();
 }
 
 async function pollCiUntilTerminal(

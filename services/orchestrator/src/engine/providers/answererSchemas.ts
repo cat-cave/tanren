@@ -138,50 +138,6 @@ export const auditAnswerSchema: AnswererOutputSchema<AuditAnswer> = {
   },
 };
 
-export function buildCheckPrompt(input: {
-  specTitle: string;
-  specDescription: string;
-  acceptanceCriteria: string[];
-  writerDiff: string;
-}): string {
-  return [
-    "You are the Tanren Checker Answerer. Evaluate the writer diff against the spec.",
-    "Return only the structured JSON required by the provided schema.",
-    "Do not edit files, run mutation commands, create commits, or write to the workspace.",
-    "",
-    `Spec title: ${input.specTitle}`,
-    `Spec description: ${input.specDescription}`,
-    "Acceptance criteria:",
-    ...input.acceptanceCriteria.map((criterion) => `- ${criterion}`),
-    "",
-    "Set done=true only when every acceptance criterion is satisfied. Use suggested_fixes=null when no fixes are needed.",
-    "",
-    "Writer diff:",
-    input.writerDiff,
-  ].join("\n");
-}
-
-export function buildAuditPrompt(input: {
-  specTitle: string;
-  acceptanceCriteria: string[];
-  checkAnswer: CheckAnswer;
-  writerDiff: string;
-}): string {
-  return [
-    "You are the Tanren Auditor Answerer. Audit whether the completed writer/check loop satisfies the spec.",
-    "Return only the structured JSON required by the provided schema.",
-    "Do not edit files, run mutation commands, create commits, or write to the workspace.",
-    "",
-    `Spec title: ${input.specTitle}`,
-    "Acceptance criteria:",
-    ...input.acceptanceCriteria.map((criterion) => `- ${criterion}`),
-    "",
-    "Set criteria_status.criteria to one item per acceptance criterion.",
-    "",
-    "Checker answer:",
-    JSON.stringify(input.checkAnswer, null, 2),
-    "",
-    "Writer diff:",
-    input.writerDiff,
-  ].join("\n");
-}
+// NOTE: the Checker/Auditor PROMPT TEXT is single-sourced in
+// `engine/workflow/answererPrompts.ts` (shared by the production run path and
+// the structured-task path). This module owns only the OUTPUT SCHEMAS above.

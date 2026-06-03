@@ -12,7 +12,12 @@ import type { SshTarget } from "../contracts/allocator.js";
 import type { ActorIdentity } from "../contracts/vcsProvider.js";
 import { githubHttpsRemote, parseGitHubRepository } from "../providers/github.js";
 import { quoteSshShellArg } from "../ssh/command.js";
-import { bootstrapWorkspace, commitBootstrapState, runWorkspaceSshCommand } from "../workspace/index.js";
+import {
+  bootstrapWorkspace,
+  commitBootstrapState,
+  runWorkspaceSshCommand,
+  seedWorkspaceLocalIgnore,
+} from "../workspace/index.js";
 import { gitAuthedCommand, gitTokenAuthPrelude } from "../workspace/githubPush.js";
 import { resolveBootstrapCommand } from "./gate/index.js";
 import type { BootstrapStepInput, CommitBootstrapStepInput, RunPlannerLoopInput } from "./plannerRun.js";
@@ -37,6 +42,13 @@ export async function prepareRunWorkspace(
   workspacePath: string,
 ): Promise<PreparedRunWorkspace> {
   const cloneHeadSha = await cloneWorkspace(input, target, workspacePath);
+
+  // Durable node_modules guard: seed the checkout's LOCAL git ignore
+  // (`.git/info/exclude`) right after clone, BEFORE any install/commit, so no
+  // later `git add -A` (the bootstrap commit or any writer commit) can sweep a
+  // node_modules/dist tree into the repo — which previously ballooned the writer
+  // diff (and the checker/auditor prompt) past the model's input limit.
+  await seedWorkspaceLocalIgnore({ ssh: input.ssh, target, workspacePath, timeoutMs: input.timeoutMs });
 
   // Command precedence: an explicit input.bootstrapCommand override wins;
   // otherwise resolve the repo's tanren-ci.yml `bootstrap.run` (P3-0004); when

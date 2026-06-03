@@ -138,12 +138,13 @@ describe("buildPlannerPrompt — full rendered contract", () => {
 });
 
 describe("buildCheckerPrompt — full rendered contract", () => {
+  const baselineSha = "a".repeat(40);
   const ctx = {
     specTitle: "Spec X",
     specDescription: "Do the thing.",
     acceptanceCriteria: ["AC1: file exists", "AC2: wired"],
     subtask: subtask(),
-    writerDiff: "diff --git a/x b/x\n+ok\n",
+    baselineSha,
   };
 
   it("renders the intent-only role framing and the hard boundaries verbatim", () => {
@@ -151,9 +152,13 @@ describe("buildCheckerPrompt — full rendered contract", () => {
     // Each continuation line of the multi-line role framing + boundaries is its
     // own array element, so assert a unique fragment of every one.
     expect(prompt).toContain("You are the Tanren Checker Answerer. Your ONLY job is to judge intent");
-    expect(prompt).toContain("satisfaction: does the writer diff fulfil the subtask intent and each");
-    expect(prompt).toContain("explicit acceptance criterion in the spec? Judge by reading the diff and");
+    expect(prompt).toContain("satisfaction: does the writer's change fulfil the subtask intent and each");
+    expect(prompt).toContain("explicit acceptance criterion in the spec? Judge by reading the change and");
     expect(prompt).toContain("the spec — nothing else.");
+    // The self-inspection instruction + baseline sha replace the injected diff.
+    expect(prompt).toContain("The writer's change is committed on the current branch of your read-only");
+    expect(prompt).toContain("Inspect it yourself: run");
+    expect(prompt).toContain(`git diff ${baselineSha} -- . ':(exclude)node_modules'`);
     expect(prompt).toContain("Hard boundaries (a separate deterministic gate, not you, owns correctness):");
     expect(prompt).toContain("- Do NOT run, simulate, invoke, or shell out to tests, builds, type checks,");
     expect(prompt).toContain("  linters, or any command. The workspace may be unbuilt; that is expected");
@@ -184,17 +189,18 @@ describe("buildCheckerPrompt — full rendered contract", () => {
     expect(prompt).toContain("Subtask behavior ids: B1, B2");
   });
 
-  it("renders the verdict-instruction lines and embeds the writer diff", () => {
+  it("renders the verdict-instruction lines and embeds no diff payload", () => {
     const prompt = buildCheckerPrompt(ctx);
     expect(prompt).toContain("In `reasoning`, cite each acceptance criterion / behavior by name and state");
-    expect(prompt).toContain("whether the diff satisfies its intent and why (marking any test/build/lint-");
+    expect(prompt).toContain("whether the change satisfies its intent and why (marking any test/build/lint-");
     expect(prompt).toContain("outcome criterion as gate-deferred). Set passed=true when the subtask intent");
-    expect(prompt).toContain("and every diff-assessable acceptance criterion are satisfied by the diff;");
+    expect(prompt).toContain("and every diff-assessable acceptance criterion are satisfied by the change;");
     expect(prompt).toContain("gate-deferred outcome criteria must not block a pass. Always populate");
     expect(prompt).toContain("behaviorIdsPassed and behaviorIdsFailed (use empty arrays when none),");
     expect(prompt).toContain("reflecting intent satisfaction — not test/build outcomes.");
-    expect(prompt).toContain("Writer diff:");
-    expect(prompt).toContain("diff --git a/x b/x\n+ok\n");
+    // No diff is injected — the agent reads it from the workspace itself.
+    expect(prompt).not.toContain("Writer diff:");
+    expect(prompt).not.toContain("diff --git");
   });
 
   it("falls back to (none) for the subtask behavior ids when empty", () => {
@@ -204,13 +210,14 @@ describe("buildCheckerPrompt — full rendered contract", () => {
 
   it("separates each block with a blank line (separator pins)", () => {
     const prompt = buildCheckerPrompt(ctx);
-    expect(prompt).toContain("the spec — nothing else.\n\nHard boundaries");
+    expect(prompt).toContain("read it from the workspace.\n\nHard boundaries");
     expect(prompt).toContain(
       "  the diff implements the behavior such a test would exercise.\n\nReturn only the structured JSON required by the provided schema.",
     );
     expect(prompt).toContain("- AC2: wired\n\nSubtask [0]: Wire the helper");
     expect(prompt).toContain("Subtask behavior ids: B1, B2\n\nIn `reasoning`,");
-    expect(prompt).toContain("not test/build outcomes.\n\nWriter diff:");
+    // The prompt ends on the verdict-instruction block — no trailing diff payload.
+    expect(prompt.trimEnd().endsWith("reflecting intent satisfaction — not test/build outcomes.")).toBe(true);
   });
 });
 
@@ -223,7 +230,7 @@ describe("buildAuditorPrompt — full rendered contract", () => {
       subtask({ index: 0, title: "S0", intent: "i0", behaviorIds: ["B1"] }),
       subtask({ index: 1, title: "S1", intent: "i1", behaviorIds: [] }),
     ],
-    combinedDiff: "diff a\ndiff b\n",
+    baselineSha: "b".repeat(40),
   };
 
   it("renders the role framing and the no-write boundary verbatim", () => {
@@ -233,6 +240,9 @@ describe("buildAuditorPrompt — full rendered contract", () => {
     );
     expect(prompt).toContain("Return only the structured JSON required by the provided schema.");
     expect(prompt).toContain("Do not edit files, run mutation commands, create commits, or write to the workspace.");
+    // The self-inspection instruction + baseline sha replace the injected diff.
+    expect(prompt).toContain("Inspect it yourself: run");
+    expect(prompt).toContain(`git diff ${"b".repeat(40)} -- . ':(exclude)node_modules'`);
   });
 
   it("renders the spec, criteria, and each executed subtask line", () => {
@@ -250,16 +260,16 @@ describe("buildAuditorPrompt — full rendered contract", () => {
     expect(prompt).toContain("- [1] S1 (intent: i1, behaviors: (none))");
   });
 
-  it("renders the pass/loop/halt recommendation rules and embeds the combined diff", () => {
+  it("renders the pass/loop/halt recommendation rules and embeds no diff payload", () => {
     const prompt = buildAuditorPrompt(ctx);
     expect(prompt).toContain(
-      "Set passed=true only when every acceptance criterion is satisfied by the combined writer diff.",
+      "Set passed=true only when every acceptance criterion is satisfied by the combined writer change.",
     );
     expect(prompt).toContain("Set recommendedAction='pass' when passed=true.");
     expect(prompt).toContain("Set recommendedAction='loop_to_planner' when the spec is recoverable by re-planning.");
     expect(prompt).toContain("Set recommendedAction='halt' when the spec is not recoverable in this run.");
-    expect(prompt).toContain("Combined writer diff:");
-    expect(prompt).toContain("diff a\ndiff b\n");
+    // No combined diff is injected — the auditor reads it from the workspace.
+    expect(prompt).not.toContain("Combined writer diff:");
   });
 
   it("separates each block with a blank line (exact adjacency pins the separators)", () => {
@@ -267,10 +277,12 @@ describe("buildAuditorPrompt — full rendered contract", () => {
     // Blank-line separators between the no-write line/spec, criteria/executed,
     // subtasks/rules, and rules/diff. Exact "\n\n" adjacency catches a separator
     // turned into spurious text.
-    expect(prompt).toContain("write to the workspace.\n\nSpec title: Spec Y");
     expect(prompt).toContain("- AC1: all helpers exist\n\nExecuted subtasks:");
     expect(prompt).toContain("behaviors: (none))\n\nSet passed=true only when");
-    expect(prompt).toContain("not recoverable in this run.\n\nCombined writer diff:");
+    // The prompt ends on the recommendation rules — no trailing diff payload.
+    expect(
+      prompt.trimEnd().endsWith("Set recommendedAction='halt' when the spec is not recoverable in this run."),
+    ).toBe(true);
   });
 });
 
@@ -300,7 +312,7 @@ describe("invoke* forwards prompt, timeout, workspace, and the canonical schema"
         specDescription: "D",
         acceptanceCriteria: ["AC1"],
         subtask: subtask(),
-        writerDiff: "diff\n",
+        baselineSha: "0".repeat(40),
       },
       timeoutMs: 4_242,
       workspace: "/ws/repo",
@@ -360,7 +372,7 @@ describe("invoke* forwards prompt, timeout, workspace, and the canonical schema"
         specDescription: "D",
         acceptanceCriteria: ["AC1"],
         subtasks: [subtask()],
-        combinedDiff: "diff\n",
+        baselineSha: "0".repeat(40),
       },
       timeoutMs: 7_777,
       workspace: "/ws/audit",

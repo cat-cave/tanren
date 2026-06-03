@@ -266,6 +266,11 @@ export interface CheckerStageInput {
   checkerTaskId: string;
   subtask: PlanSubtask;
   writerResult: WriterResult;
+  // The run base the writer's change is diffed against. The checker inspects the
+  // change itself in its read-only workspace rather than receiving an injected
+  // diff (which can balloon past the model's input limit). Omitted by unit
+  // callers that drive the stage without a base sha.
+  baseSha?: string;
   specTitle: string;
   specDescription: string;
   acceptanceCriteria: ReadonlyArray<string>;
@@ -276,6 +281,19 @@ export interface CheckerStageInput {
     subtaskIndex: number;
     verdict: CheckAnswer;
   }) => Record<string, unknown>;
+}
+
+// The base sha the checker tells the Answerer to diff against. The production
+// loop threads the run base (`baseSha`); when it is absent (unit callers that
+// drive the stage without a base) we fall back to the parent of the writer's
+// first commit, or `HEAD` when the writer produced no commits — so the prompt
+// always carries a usable git ref.
+function checkerBaselineSha(args: CheckerStageInput): string {
+  if (args.baseSha !== undefined) {
+    return args.baseSha;
+  }
+  const firstCommit = args.writerResult.commits[0];
+  return firstCommit === undefined ? "HEAD" : `${firstCommit.sha}~1`;
 }
 
 export async function runCheckerStage(args: CheckerStageInput): Promise<CheckerDecision> {
@@ -300,7 +318,7 @@ export async function runCheckerStage(args: CheckerStageInput): Promise<CheckerD
     specDescription: args.specDescription,
     acceptanceCriteria: args.acceptanceCriteria,
     subtask: args.subtask,
-    writerDiff: args.writerResult.diff,
+    baselineSha: checkerBaselineSha(args),
   };
   const startedAt = Date.now();
   const result = await invokeChecker(args.adapter, {
@@ -370,7 +388,10 @@ export interface AuditorStageInput {
   workspacePath: string;
   plannerTaskId: string;
   plan: PlanAnswer;
-  combinedDiff: string;
+  // The run base the combined writer change is diffed against. The auditor
+  // inspects the change itself in its read-only workspace rather than receiving
+  // an injected combined diff. Omitted by unit callers without a base sha.
+  baseSha?: string;
   specTitle: string;
   specDescription: string;
   acceptanceCriteria: ReadonlyArray<string>;
@@ -404,7 +425,7 @@ export async function runAuditorStage(
     specDescription: args.specDescription,
     acceptanceCriteria: args.acceptanceCriteria,
     subtasks: args.plan.subtasks,
-    combinedDiff: args.combinedDiff,
+    baselineSha: args.baseSha ?? "HEAD",
   };
   const startedAt = Date.now();
   const result = await invokeAuditor(args.adapter, {

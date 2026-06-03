@@ -1,13 +1,10 @@
 import { describe, expect, it } from "vitest";
-import {
-  auditAnswerSchema,
-  buildAuditPrompt,
-  buildCheckPrompt,
-  checkAnswerSchema,
-  planAnswerSchema,
-  type CheckAnswer,
-} from "../src/engine/providers/answererSchemas.js";
+import { auditAnswerSchema, checkAnswerSchema, planAnswerSchema } from "../src/engine/providers/answererSchemas.js";
 
+// NOTE: the Checker/Auditor PROMPT TEXT is single-sourced in
+// engine/workflow/answererPrompts.ts; its rendered-contract tests live in
+// answererPrompts.test.ts (shared) + runloopPrompts.test.ts (production
+// wrappers). This file covers only the structured OUTPUT SCHEMAS.
 describe("structured Answerer schemas", () => {
   it("validates check answers strictly", () => {
     const valid = {
@@ -47,30 +44,5 @@ describe("structured Answerer schemas", () => {
 
     expect(planAnswerSchema.parse(valid)).toEqual(valid);
     expect(() => planAnswerSchema.parse({ subtasks: [] })).toThrow(/Too small/u);
-  });
-
-  it("builds check and audit prompts that reject mutation duties", () => {
-    const check: CheckAnswer = {
-      done: true,
-      reason: "ok",
-      suggested_fixes: null,
-    };
-    const checkPrompt = buildCheckPrompt({
-      specTitle: "Fixture",
-      specDescription: "Review a diff",
-      acceptanceCriteria: ["README includes ok"],
-      writerDiff: "diff --git a/README.md b/README.md\n+ok\n",
-    });
-    const auditPrompt = buildAuditPrompt({
-      specTitle: "Fixture",
-      acceptanceCriteria: ["README includes ok"],
-      checkAnswer: check,
-      writerDiff: "diff --git a/README.md b/README.md\n+ok\n",
-    });
-
-    expect(checkPrompt).toContain("Do not edit files");
-    expect(checkPrompt).toContain("README includes ok");
-    expect(auditPrompt).toContain("Do not edit files");
-    expect(auditPrompt).toContain('"done": true');
   });
 });

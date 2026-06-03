@@ -16,7 +16,11 @@ import { describe, expect, it } from "vitest";
 import type { SshTarget } from "../src/engine/contracts/allocator.js";
 import type { SshCommand, SshCommandResult, SshSubstrate } from "../src/engine/contracts/sshSubstrate.js";
 import { captureGitStateAfterCodex } from "../src/engine/providers/codexGit.js";
-import { BOOTSTRAP_COMMIT_MESSAGE, commitBootstrapState } from "../src/engine/workspace/bootstrap.js";
+import {
+  BOOTSTRAP_COMMIT_MESSAGE,
+  commitBootstrapState,
+  seedWorkspaceLocalIgnore,
+} from "../src/engine/workspace/bootstrap.js";
 import { PR_CLEAN_REF, prepareCleanPrBranch } from "../src/engine/workspace/githubPush.js";
 
 const target: SshTarget = {
@@ -47,6 +51,29 @@ class ScriptedSsh implements SshSubstrate {
 
 const timeoutMs = 1_000;
 const workspacePath = "/workspace/runs/run_x/repo";
+
+describe("workspace local git ignore", () => {
+  it("appends node_modules/ and dist/ to the checkout's .git/info/exclude (never a committed file)", async () => {
+    // The durable node_modules guard: a per-checkout ignore so a later `git add -A`
+    // (bootstrap commit / writer commit) never sweeps an install tree into the repo
+    // — the 46MB checker-prompt failure mode. This must run AFTER clone, so it is a
+    // workspace-local exclude rather than a committed `.gitignore`.
+    const ssh = new ScriptedSsh([]);
+    await seedWorkspaceLocalIgnore({ ssh, target, workspacePath, timeoutMs });
+
+    expect(ssh.commands).toHaveLength(1);
+    const cmd = ssh.commands[0] ?? "";
+    // Resolves the worktree-correct exclude path and appends (>>) to it — never a
+    // committed .gitignore.
+    expect(cmd).toContain("git rev-parse --git-path info/exclude");
+    expect(cmd).toContain(">>");
+    expect(cmd).toContain("info/exclude");
+    expect(cmd).not.toContain(".gitignore");
+    // Both ignore paths are written.
+    expect(cmd).toContain("node_modules/");
+    expect(cmd).toContain("dist/");
+  });
+});
 
 describe("bootstrap-artifact isolation", () => {
   it("commits the bootstrap state as the writer's diff base, off the writer's commit", async () => {

@@ -359,13 +359,18 @@ describe("planner prompt + verdict decisions (pure)", () => {
         behaviorIds: ["B1"],
         estimatedTokens: null,
       },
-      writerDiff: "diff --git a/x b/x\n",
+      baselineSha: "f".repeat(40),
     });
     // Intent-only framing + explicit criteria are present.
     expect(prompt).toContain("intent");
     expect(prompt).toContain("Explicit acceptance criteria");
     expect(prompt).toContain("AC1: file exists");
     expect(prompt).toContain("AC2: behavior wired");
+    // The checker self-inspects the change (no injected diff): the prompt carries
+    // the baseline sha + a self-inspection instruction and embeds no diff.
+    expect(prompt).toContain("f".repeat(40));
+    expect(prompt).toContain("Inspect it yourself");
+    expect(prompt).not.toContain("diff --git");
     // Forbids running, simulating, or asserting tests/build/lint, and defers
     // correctness to a separate deterministic gate.
     expect(prompt).toMatch(/Do NOT run, simulate, invoke, or shell out to tests/u);

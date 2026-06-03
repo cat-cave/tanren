@@ -275,7 +275,7 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
       workspacePath: input.context.workspacePath,
       plannerTaskId,
       plan,
-      combinedDiff: combineDiffs(writerResults.map((r) => r.writer)),
+      ...(input.context.baseSha === undefined ? {} : { baseSha: input.context.baseSha }),
       specTitle: input.context.specTitle,
       specDescription: input.context.specDescription,
       acceptanceCriteria: input.context.acceptanceCriteria,
@@ -404,6 +404,7 @@ async function runSubtaskSequence(args: {
       checkerTaskId,
       subtask,
       writerResult,
+      ...(input.context.baseSha === undefined ? {} : { baseSha: input.context.baseSha }),
       specTitle: input.context.specTitle,
       specDescription: input.context.specDescription,
       acceptanceCriteria: input.context.acceptanceCriteria,
@@ -476,11 +477,4 @@ function writerPromptFor(input: SubtaskLoopInput, subtask: PlanSubtask): string 
     "",
     WRITER_TOOLCHAIN_INSTRUCTION,
   ].join("\n");
-}
-
-function combineDiffs(results: ReadonlyArray<WriterResult>): string {
-  return results
-    .map((result) => result.diff)
-    .filter((diff) => diff.length > 0)
-    .join("\n");
 }

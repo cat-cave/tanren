@@ -1,10 +1,10 @@
-// Mutation ratchet (run-loop cluster): subtaskLoop.ts builds two internal
-// strings whose content was never asserted — the per-subtask writer prompt
-// (writerPromptFor) and the auditor's combined diff (combineDiffs, which drops
-// empty diffs and newline-joins the rest). Both are observable through the fake
-// adapters: the writer records its prompt, and the auditor's prompt embeds the
-// combined diff via buildAuditorPrompt. These tests drive the real loop and
-// assert those rendered strings so the literals / fallbacks / filter survive no
+// Mutation ratchet (run-loop cluster): subtaskLoop.ts builds the per-subtask
+// writer prompt (writerPromptFor), and threads the run baseSha (not an injected
+// diff) to the auditor — which now tells the Answerer to inspect the change
+// itself in its read-only workspace. Both are observable through the fake
+// adapters: the writer records its prompt, and the auditor's prompt carries the
+// self-inspection instruction via buildAuditorPrompt. These tests drive the real
+// loop and assert those rendered strings so the literals / fallbacks survive no
 // mutation.
 import { describe, expect, it } from "vitest";
 import { runSubtaskLoop } from "../src/engine/workflow/subtaskLoop.js";
@@ -81,8 +81,8 @@ describe("subtask loop — writer prompt rendering (writerPromptFor)", () => {
   });
 });
 
-describe("subtask loop — combined diff handed to the auditor (combineDiffs)", () => {
-  it("newline-joins every non-empty writer diff in subtask order", async () => {
+describe("subtask loop — auditor self-inspects the change (no injected diff)", () => {
+  it("tells the auditor to inspect the change against the run base instead of embedding a diff", async () => {
     const auditor = makeAuditor([passingAudit]);
     const { input } = defaultLoopInput({
       adapters: {
@@ -96,38 +96,19 @@ describe("subtask loop — combined diff handed to the auditor (combineDiffs)", 
         checker: makeChecker([passingCheck, passingCheck]),
         auditor,
       },
+      // The loop threads the run base sha to the auditor (self-inspection target).
+      context: { ...defaultLoopInput().input.context, baseSha: "d".repeat(40) },
     });
     const outcome = await runSubtaskLoop(input);
     expect(outcome.kind).toBe("passed");
 
-    // The auditor prompt embeds the combined diff after the "Combined writer
-    // diff:" header — both writer diffs, newline-joined, in order.
+    // The auditor prompt carries the self-inspection instruction + the base sha,
+    // and embeds no writer-diff payload.
     const prompt = auditor.calls[0]!.prompt;
-    expect(prompt).toContain("Combined writer diff:");
-    expect(prompt).toContain("DIFF_ONE\nDIFF_TWO");
-  });
-
-  it("drops empty writer diffs from the combined diff", async () => {
-    const auditor = makeAuditor([passingAudit]);
-    const { input } = defaultLoopInput({
-      adapters: {
-        planner: makePlanner([
-          buildPlan([
-            { title: "T1", intent: "a", behaviorIds: [] },
-            { title: "T2", intent: "b", behaviorIds: [] },
-          ]),
-        ]),
-        // First subtask produces no diff (empty string) — it must be filtered
-        // out so the combined diff is just the second, non-empty diff.
-        writer: makeWriter(["", "ONLY_REAL_DIFF"]),
-        checker: makeChecker([passingCheck, passingCheck]),
-        auditor,
-      },
-    });
-    await runSubtaskLoop(input);
-
-    const prompt = auditor.calls[0]!.prompt;
-    // The non-empty diff is present; no leading blank-line join artefact.
-    expect(prompt).toContain("Combined writer diff:\nONLY_REAL_DIFF");
+    expect(prompt).toContain("Inspect it yourself: run");
+    expect(prompt).toContain(`git diff ${"d".repeat(40)} -- . ':(exclude)node_modules'`);
+    expect(prompt).not.toContain("Combined writer diff:");
+    expect(prompt).not.toContain("DIFF_ONE");
+    expect(prompt).not.toContain("DIFF_TWO");
   });
 });
