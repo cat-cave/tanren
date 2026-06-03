@@ -138,59 +138,6 @@ export const auditAnswerSchema: AnswererOutputSchema<AuditAnswer> = {
   },
 };
 
-// The writer's change is NOT embedded in the prompt — the Answerer runs INSIDE
-// the writer's workspace (codex `--cd <workspace>`, read-only sandbox), so it
-// inspects the change itself. The baselineSha is the run base the writer's
-// change is diffed against; the node_modules exclude keeps the diff bounded
-// even if a prior gate's install left a node_modules tree.
-export function buildCheckPrompt(input: {
-  specTitle: string;
-  specDescription: string;
-  acceptanceCriteria: string[];
-  baselineSha: string;
-}): string {
-  return [
-    "You are the Tanren Checker Answerer. Evaluate the writer's change against the spec.",
-    "Return only the structured JSON required by the provided schema.",
-    "Do not edit files, run mutation commands, create commits, or write to the workspace.",
-    "",
-    "The writer's change is committed on the current branch of your read-only workspace.",
-    "Inspect it yourself: run",
-    `  git diff ${input.baselineSha} -- . ':(exclude)node_modules'`,
-    "to see the change, then read the changed source files, and judge against the spec.",
-    "",
-    `Spec title: ${input.specTitle}`,
-    `Spec description: ${input.specDescription}`,
-    "Acceptance criteria:",
-    ...input.acceptanceCriteria.map((criterion) => `- ${criterion}`),
-    "",
-    "Set done=true only when every acceptance criterion is satisfied. Use suggested_fixes=null when no fixes are needed.",
-  ].join("\n");
-}
-
-export function buildAuditPrompt(input: {
-  specTitle: string;
-  acceptanceCriteria: string[];
-  checkAnswer: CheckAnswer;
-  baselineSha: string;
-}): string {
-  return [
-    "You are the Tanren Auditor Answerer. Audit whether the completed writer/check loop satisfies the spec.",
-    "Return only the structured JSON required by the provided schema.",
-    "Do not edit files, run mutation commands, create commits, or write to the workspace.",
-    "",
-    "The writer's change is committed on the current branch of your read-only workspace.",
-    "Inspect it yourself: run",
-    `  git diff ${input.baselineSha} -- . ':(exclude)node_modules'`,
-    "to see the change, then read the changed source files, and judge against the spec.",
-    "",
-    `Spec title: ${input.specTitle}`,
-    "Acceptance criteria:",
-    ...input.acceptanceCriteria.map((criterion) => `- ${criterion}`),
-    "",
-    "Set criteria_status.criteria to one item per acceptance criterion.",
-    "",
-    "Checker answer:",
-    JSON.stringify(input.checkAnswer, null, 2),
-  ].join("\n");
-}
+// NOTE: the Checker/Auditor PROMPT TEXT is single-sourced in
+// `engine/workflow/answererPrompts.ts` (shared by the production run path and
+// the structured-task path). This module owns only the OUTPUT SCHEMAS above.

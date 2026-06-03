@@ -40,12 +40,24 @@ describe("structured Answerer task helpers", () => {
     expect(audit.verified).toBe(true);
     expect(checkAdapter.lastSchemaName).toBe("tanren.check_answer.v1");
     expect(auditAdapter.lastSchemaName).toBe("tanren.audit_answer.v1");
-    // The Answerer is told to inspect the diff itself; the baseline sha rides in
-    // the prompt and no diff payload is embedded.
-    for (const prompt of [checkAdapter.lastPrompt, auditAdapter.lastPrompt]) {
+    // The structured-task path routes through the SAME single-sourced prompt body
+    // (answererPrompts.ts) as the production run path: the canonical role framing +
+    // self-inspection block, the baseline sha, and no injected diff. Only the
+    // closing instruction names this path's v1 schema fields.
+    for (const prompt of [checkAdapter.lastPrompt ?? "", auditAdapter.lastPrompt ?? ""]) {
       expect(prompt).toContain(baselineSha);
-      expect(prompt).toContain("Inspect it yourself");
+      expect(prompt).toContain(`git diff ${baselineSha} -- . ':(exclude)node_modules'`);
+      expect(prompt).toContain("Do NOT expect the diff");
+      expect(prompt).not.toContain("diff --git");
     }
+    // The checker's v1 closing (done / suggested_fixes), not the production v2
+    // (passed / reasoning), confirms the schema-specific tail is wired correctly.
+    expect(checkAdapter.lastPrompt).toContain(
+      "Set done=true only when every acceptance criterion is satisfied. Use suggested_fixes=null when no fixes are needed.",
+    );
+    // The auditor's v1 closing (criteria_status) + the embedded checker answer.
+    expect(auditAdapter.lastPrompt).toContain("Set criteria_status.criteria to one item per acceptance criterion.");
+    expect(auditAdapter.lastPrompt).toContain('"done": true');
   });
 
   it("lets parse failures surface as hard task failures", async () => {
