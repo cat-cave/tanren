@@ -84,6 +84,115 @@ describe("Codex credential contracts", () => {
     );
   });
 
+  it("materializes a MANAGED OpenRouter API key as codex API-key auth.json (no codex-bundle validation)", async () => {
+    const secrets = new FakeSecretStore();
+    // A managed run's stored secret is a PLAIN OpenRouter key string, NOT a
+    // codex auth-bundle JSON, under a non-codex provider ref.
+    await secrets.put({ ref: "credential/openrouter/platform/default", value: "sk-or-v1-managed-key" });
+    const ssh = new CapturingSshSubstrate();
+
+    const result = await materializeCodexAuthBundle({
+      secrets,
+      ssh,
+      target,
+      ref: "credential/openrouter/platform/default",
+      runId: "run_managed_1",
+      managed: true,
+    });
+
+    // The validated ref is returned verbatim (the codex-ref validator is NOT
+    // applied — it would reject this non-codex ref).
+    expect(result).toEqual({
+      CODEX_HOME: "/home/tanren/.tanren/runs/run_managed_1/codex-home",
+      ref: "credential/openrouter/platform/default",
+      redacted: true,
+    });
+    // The auth.json materialized over SSH is codex's API-key shape, carrying the
+    // raw key under OPENAI_API_KEY (codex authenticates with this against the
+    // managed OPENAI_BASE_URL endpoint).
+    expect(ssh.stdin).toBe(JSON.stringify({ OPENAI_API_KEY: "sk-or-v1-managed-key" }));
+    expect(ssh.command).toContain("auth.json");
+    // The redacted result never carries the key.
+    expect(JSON.stringify(result)).not.toContain("sk-or-v1-managed-key");
+  });
+
+  it("MANAGED mode does NOT apply the codex-bundle validator: a raw key (non-JSON) is accepted", async () => {
+    const secrets = new FakeSecretStore();
+    // A raw key is not valid JSON and would fail validateCodexAuthBundle — the
+    // managed path must NOT run it.
+    await secrets.put({ ref: "credential/anthropic/platform/default", value: "sk-ant-managed" });
+    const ssh = new CapturingSshSubstrate();
+
+    const result = await materializeCodexAuthBundle({
+      secrets,
+      ssh,
+      target,
+      ref: "credential/anthropic/platform/default",
+      runId: "run_managed_2",
+      managed: true,
+    });
+
+    expect(result.ref).toBe("credential/anthropic/platform/default");
+    expect(ssh.stdin).toBe(JSON.stringify({ OPENAI_API_KEY: "sk-ant-managed" }));
+  });
+
+  it("MANAGED mode rejects a missing or whitespace-only api key loudly", async () => {
+    const secrets = new FakeSecretStore();
+    const ssh = new CapturingSshSubstrate();
+    // Missing ref.
+    await expect(
+      materializeCodexAuthBundle({
+        secrets,
+        ssh,
+        target,
+        ref: "credential/openrouter/platform/default",
+        runId: "run_managed_3",
+        managed: true,
+      }),
+    ).rejects.toThrow("missing managed LLM credential ref: credential/openrouter/platform/default");
+    // Whitespace-only key.
+    await secrets.put({ ref: "credential/openrouter/platform/blank", value: "   " });
+    await expect(
+      materializeCodexAuthBundle({
+        secrets,
+        ssh,
+        target,
+        ref: "credential/openrouter/platform/blank",
+        runId: "run_managed_4",
+        managed: true,
+      }),
+    ).rejects.toThrow("resolved to an empty api key");
+  });
+
+  it("BYOK mode (managed unset/false) still REQUIRES + validates a codex bundle ref", async () => {
+    const secrets = new FakeSecretStore();
+    const ssh = new CapturingSshSubstrate();
+    // A non-codex ref is rejected by the codex-ref validator under BYOK.
+    await secrets.put({ ref: "credential/openrouter/platform/default", value: "sk-or-v1-x" });
+    await expect(
+      materializeCodexAuthBundle({
+        secrets,
+        ssh,
+        target,
+        ref: "credential/openrouter/platform/default",
+        runId: "run_byok_1",
+      }),
+    ).rejects.toThrow("Codex credential ref must start with credential/codex/");
+    // A codex ref whose value is a raw key (not a bundle) is rejected by the
+    // bundle validator under BYOK (proving the bundle check still runs).
+    await secrets.put({ ref: "credential/codex/dev", value: "sk-not-a-bundle" });
+    await expect(
+      materializeCodexAuthBundle({
+        secrets,
+        ssh,
+        target,
+        ref: "credential/codex/dev",
+        runId: "run_byok_2",
+        managed: false,
+      }),
+    ).rejects.toThrow("Codex auth bundle must be valid JSON");
+  });
+
   it("throws when the credential ref is missing and derives a per-run CODEX_HOME", async () => {
     const secrets = new FakeSecretStore();
     const ssh = new CapturingSshSubstrate();
