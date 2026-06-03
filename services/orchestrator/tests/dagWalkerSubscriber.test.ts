@@ -10,7 +10,7 @@
 //   - per-project walks are coalesced (a storm collapses to in-flight + one
 //     re-walk; no concurrent double-walk of one project).
 
-import { RUN_ACTIVITY_CHANNEL } from "@tanren/db";
+import { DAG_CHANGE_CHANNEL, RUN_ACTIVITY_CHANNEL } from "@tanren/db";
 import type pg from "pg";
 import { describe, expect, it, vi } from "vitest";
 import type { DagWalker, WalkResult } from "../src/engine/contracts/dagWalker.js";
@@ -172,6 +172,78 @@ describe("DagWalkerSubscriber", () => {
     sub.stop();
   });
 
+  it("a DAG-change (spec-creation) notification walks the carried project", async () => {
+    // The core fix: a freshly-derived/created project has pending specs but ZERO
+    // runs, so only the dag-change channel can wake its first walk. The payload IS
+    // the project id, so the walk runs directly with no run resolution.
+    const pool = fakePool({ projectsWithDag: [], runs: {} });
+    const listener = new FakeNotifyListener();
+    const walker = new RecordingWalker();
+    const sub = new DagWalkerSubscriber({ pool, notifyListener: listener as never, walker });
+    await sub.start();
+    await flush();
+    // Nothing on startup (no DAG yet).
+    expect(walker.walks).toEqual([]);
+
+    listener.fire(DAG_CHANGE_CHANNEL, "project_new");
+    await flush();
+
+    expect(walker.walks).toEqual(["project_new"]);
+    sub.stop();
+  });
+
+  it("an empty dag-change payload is ignored (no walk)", async () => {
+    const pool = fakePool({ projectsWithDag: [], runs: {} });
+    const listener = new FakeNotifyListener();
+    const walker = new RecordingWalker();
+    const sub = new DagWalkerSubscriber({ pool, notifyListener: listener as never, walker });
+    await sub.start();
+    await flush();
+
+    listener.fire(DAG_CHANGE_CHANNEL, "");
+    await flush();
+
+    expect(walker.walks).toEqual([]);
+    sub.stop();
+  });
+
+  it("coalesces a burst of dag-change notifications into a single re-walk", async () => {
+    // A derive inserts many specs for one project, firing a burst of dag-change
+    // NOTIFYs. They must collapse through the per-project guard to in-flight + one
+    // re-walk — never an unbounded walk-per-spec storm (no busy loop).
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let firstWalk = true;
+    const walker = new RecordingWalker(async () => {
+      if (firstWalk) {
+        firstWalk = false;
+        await gate;
+      }
+    });
+    const pool = fakePool({ projectsWithDag: [], runs: {} });
+    const listener = new FakeNotifyListener();
+    const sub = new DagWalkerSubscriber({ pool, notifyListener: listener as never, walker });
+    await sub.start();
+    await flush();
+
+    listener.fire(DAG_CHANGE_CHANNEL, "project_new");
+    // walk 1 starts + parks
+    await flush();
+    listener.fire(DAG_CHANGE_CHANNEL, "project_new");
+    listener.fire(DAG_CHANGE_CHANNEL, "project_new");
+    listener.fire(DAG_CHANGE_CHANNEL, "project_new");
+    await flush();
+
+    release();
+    await flush();
+
+    // Exactly two walks: the original + ONE coalesced re-walk (not four).
+    expect(walker.walks).toEqual(["project_new", "project_new"]);
+    sub.stop();
+  });
+
   it("ignores an unknown run id (not yet visible)", async () => {
     const pool = fakePool({ projectsWithDag: [], runs: {} });
     const listener = new FakeNotifyListener();
@@ -282,7 +354,8 @@ describe("DagWalkerSubscriber", () => {
     // Let the background subscribe register before stopping.
     await flush();
     sub.stop();
-    expect(listener.unsubscribeCount).toBe(1);
+    // Two channels are subscribed (run-activity + dag-change); stop tears both down.
+    expect(listener.unsubscribeCount).toBe(2);
   });
 
   it("does not throw into the notify pump when trigger resolution fails", async () => {

@@ -16,7 +16,9 @@ export {
 } from "./orgScope.js";
 export type { OrgScope } from "./orgScope.js";
 export {
+  DAG_CHANGE_CHANNEL,
   JOB_QUEUE_CHANNEL,
+  notifyDagChanged,
   notifyJobEnqueued,
   notifyRunActivity,
   PgNotifyListener,
