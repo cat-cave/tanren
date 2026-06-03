@@ -82,6 +82,14 @@ export class MergeCoordinatorSubscriber {
   private stopped = false;
   private readonly inFlight = new Map<string, Promise<void>>();
   private readonly rePending = new Set<string>();
+  /**
+   * One-shot delayed re-drive timers, keyed by project — armed when a coordinate pass
+   * HELD on a transient condition (an infra error) that no `tanren_run` NOTIFY will
+   * clear on its own, so a stuck single-PR queue still recovers. Bounded + IDEMPOTENT:
+   * at most one timer per project (a second hold while one is armed is a no-op — never
+   * stacked), and the timer is cleared on `stop()`.
+   */
+  private readonly retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   constructor(private readonly deps: MergeCoordinatorSubscriberDeps) {
     this.coordinator = deps.coordinator ?? this.buildProductionCoordinator();
@@ -144,6 +152,25 @@ export class MergeCoordinatorSubscriber {
     this.stopped = true;
     this.unsubscribe?.();
     this.unsubscribe = undefined;
+    for (const timer of this.retryTimers.values()) clearTimeout(timer);
+    this.retryTimers.clear();
+  }
+
+  /**
+   * Arm a ONE-SHOT delayed re-drive of `projectId` after `delayMs` (the coordinator's
+   * `retryAfterMs` from an infra-error hold). Idempotent: if a timer is already armed
+   * for this project, do nothing — never stack timers. Cleared on `stop()`.
+   */
+  private armDelayedReDrive(projectId: string, delayMs: number): void {
+    if (this.stopped || this.retryTimers.has(projectId)) return;
+    const timer = setTimeout(() => {
+      this.retryTimers.delete(projectId);
+      if (this.stopped) return;
+      void this.schedule(projectId);
+    }, delayMs);
+    // Do not keep the event loop alive solely for this re-drive timer.
+    timer.unref?.();
+    this.retryTimers.set(projectId, timer);
   }
 
   private async onRunActivity(runId: string): Promise<void> {
@@ -171,9 +198,17 @@ export class MergeCoordinatorSubscriber {
   private async runChain(projectId: string): Promise<void> {
     do {
       this.rePending.delete(projectId);
-      await this.coordinator.coordinate(projectId).catch((error: unknown) => {
+      try {
+        const result = await this.coordinator.coordinate(projectId);
+        // An infra-error hold returns no merge AND no new NOTIFY will re-trigger this
+        // project (a clean single-PR queue would otherwise hang). Arm a bounded,
+        // idempotent one-shot re-drive so the held batch is re-checked once it clears.
+        if (result.retryAfterMs !== undefined && !this.rePending.has(projectId)) {
+          this.armDelayedReDrive(projectId, result.retryAfterMs);
+        }
+      } catch (error) {
         console.error(`[merge-coordinator] coordinate pass failed for project ${projectId}:`, error);
-      });
+      }
     } while (this.rePending.has(projectId));
   }
 }

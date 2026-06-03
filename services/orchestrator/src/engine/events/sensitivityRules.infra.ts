@@ -271,6 +271,13 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["checks", "public"],
     ["message", "public"],
   ]),
+  ...rulesFor("merge.batch.infra_blocked", [
+    ["integration", "public"],
+    ["members[].specId", "public"],
+    ["members[].prNumber", "public"],
+    ["message", "public"],
+    ["attempts", "public"],
+  ]),
   ...rulesFor("merge.failed", [
     ["prUrl", "public"],
     ["prNumber", "public"],

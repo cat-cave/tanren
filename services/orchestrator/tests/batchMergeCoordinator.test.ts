@@ -17,6 +17,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { BatchMergeCoordinator } from "../src/engine/merge/batchCoordinator.js";
+import { RefResetTransientError } from "../src/engine/providers/githubRefReset.js";
 import type { SpecPriority } from "../src/engine/state/spec.js";
 import { InMemoryBatchChecker, RecordingBatchMergeEventEmitter } from "./conformance/fakes/inMemoryBatchChecker.js";
 import {
@@ -49,6 +50,8 @@ function makeHarness(maxBatchSize = 5): Harness {
     events,
     batchEvents,
     resolveMaxBatchSize: () => Promise.resolve(maxBatchSize),
+    // Run the bounded infra-error retries instantly (no real backoff in tests).
+    sleep: () => Promise.resolve(),
   });
   return { coordinator, queue, runner, checker, events, batchEvents };
 }
@@ -227,5 +230,87 @@ describe("BatchMergeCoordinator — speculative batch-check + bisect", () => {
     const result = await h.coordinator.coordinate(PROJECT);
     expect(result.holdReason).toBe("empty");
     expect(h.checker.checked).toEqual([]);
+  });
+});
+
+describe("BatchMergeCoordinator — infra-error robustness (a thrown check NEVER dequeues a clean PR)", () => {
+  it("HOLDS loudly on a PERSISTENT infra error: bounded retry, infra_blocked event, NO dequeue/blame", async () => {
+    const h = makeHarness();
+    seed(h, "spec_a");
+    seed(h, "spec_b");
+    // The check THROWS a transient infra error on EVERY attempt (the live 422 repro).
+    h.checker.throwInfraAlways(new RefResetTransientError("HTTP 422 ref reset (transient)"));
+    const dequeueSpy = vi.spyOn(h.queue, "markDequeued");
+
+    const result = await h.coordinator.coordinate(PROJECT);
+
+    // The pass HELD on infra_error — never merged, never dequeued.
+    expect(result.holdReason).toBe("infra_error");
+    expect(result.retryAfterMs).toBeGreaterThan(0);
+    // The clean PRs are STILL queued — neither was blamed/dequeued.
+    expect(h.queue.statusOf("run_spec_a")).toBe("queued");
+    expect(h.queue.statusOf("run_spec_b")).toBe("queued");
+    // markDequeued was NEVER called; no culprit/dequeue event fired.
+    expect(dequeueSpy).not.toHaveBeenCalled();
+    expect(h.batchEvents.events.some((e) => e.type === "culprit")).toBe(false);
+    expect(h.events.events.some((e) => e.type === "merge.dequeued")).toBe(false);
+    // The LOUD infra_blocked event fired with the bounded attempt count.
+    const blocked = h.batchEvents.events.find((e) => e.type === "infra_blocked");
+    expect(blocked).toBeDefined();
+    // MAX_INFRA_RETRIES (2) + the initial attempt.
+    expect(blocked?.attempts).toBe(3);
+    // The batch was re-checked the bounded number of times (initial + 2 retries), not forever.
+    expect(h.checker.checked.length).toBe(3);
+  });
+
+  it("a TRANSIENT infra error self-heals: throw once, then the retry passes and the batch merges", async () => {
+    const h = makeHarness();
+    seed(h, "spec_a");
+    seed(h, "spec_b");
+    // Throw the transient infra error ONCE; the next check succeeds.
+    h.checker.throwInfraForFirst(new RefResetTransientError("HTTP 422 (transient, self-heals)"), 1);
+    const dequeueSpy = vi.spyOn(h.queue, "markDequeued");
+
+    await h.coordinator.coordinate(PROJECT);
+
+    // Both clean PRs merged after the retry; no dequeue, no infra hold.
+    expect(h.queue.statusOf("run_spec_a")).toBe("merged");
+    expect(h.queue.statusOf("run_spec_b")).toBe("merged");
+    expect(dequeueSpy).not.toHaveBeenCalled();
+    expect(h.batchEvents.events.some((e) => e.type === "passed")).toBe(true);
+    expect(h.batchEvents.events.some((e) => e.type === "infra_blocked")).toBe(false);
+  });
+
+  it("a GENUINE fail STILL bisects → culprit → merge.dequeued(conflict) (no regression)", async () => {
+    const h = makeHarness();
+    seed(h, "spec_a");
+    seed(h, "spec_b");
+    seed(h, "spec_c");
+    // A genuine CI failure (the check RETURNS fail, it does not throw) must still bisect.
+    h.checker.failWhenContains("spec_b");
+
+    await h.coordinator.coordinate(PROJECT);
+
+    expect(h.queue.statusOf("run_spec_b")).toBe("dequeued");
+    const dq = h.events.events.find((e) => e.type === "merge.dequeued");
+    expect(dq?.specId).toBe("spec_b");
+    expect(dq?.reason).toBe("conflict");
+    expect(h.batchEvents.events.some((e) => e.type === "culprit")).toBe(true);
+    // No infra hold on a genuine failure.
+    expect(h.batchEvents.events.some((e) => e.type === "infra_blocked")).toBe(false);
+  });
+
+  it("a GENUINE conflict STILL bisects → culprit → merge.dequeued(conflict) (no regression)", async () => {
+    const h = makeHarness();
+    seed(h, "spec_a");
+    seed(h, "spec_b");
+    h.checker.conflictWhenContains("spec_b");
+
+    await h.coordinator.coordinate(PROJECT);
+
+    expect(h.queue.statusOf("run_spec_b")).toBe("dequeued");
+    const dq = h.events.events.find((e) => e.type === "merge.dequeued");
+    expect(dq?.reason).toBe("conflict");
+    expect(h.batchEvents.events.some((e) => e.type === "infra_blocked")).toBe(false);
   });
 });

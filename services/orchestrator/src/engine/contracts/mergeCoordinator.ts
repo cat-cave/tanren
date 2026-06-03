@@ -262,8 +262,21 @@ export interface CoordinateResult {
   mergedSpecId?: string;
   /** The entry dequeued this pass (conflict/blocked/failed), if any. */
   dequeuedSpecId?: string;
-  /** Why the pass selected nothing (serialized / empty / all_blocked), if it held. */
-  holdReason?: "serialized" | "empty" | "all_blocked";
+  /**
+   * Why the pass selected nothing, if it held:
+   *   - serialized / empty / all_blocked — the normal holds.
+   *   - infra_error — the batch check could not be RUN (a transient/transport infra
+   *     error); the coordinator bounded-retried then HELD loudly (no PR dequeued). The
+   *     entries stay queued; pair with `retryAfterMs` so the subscriber re-drives.
+   */
+  holdReason?: "serialized" | "empty" | "all_blocked" | "infra_error";
+  /**
+   * When set, the pass held on a TRANSIENT condition (an infra error) that no
+   * `tanren_run` NOTIFY will clear on its own — the subscriber should re-drive THIS
+   * project once after roughly this many ms so a stuck single-PR queue recovers.
+   * Bounded + idempotent at the subscriber (one timer per project, not stacked).
+   */
+  retryAfterMs?: number;
   /** The queue depth (ready entries) observed this pass — queue statistics. */
   queueDepth: number;
 }

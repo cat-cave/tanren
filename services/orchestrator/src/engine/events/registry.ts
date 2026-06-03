@@ -91,6 +91,7 @@ import {
   MergeBatchBisectingPayload,
   MergeBatchCheckingPayload,
   MergeBatchCulpritPayload,
+  MergeBatchInfraBlockedPayload,
   MergeBatchPassedPayload,
   MergeDequeuedPayload,
   MergeQueueAdvancedPayload,
@@ -292,6 +293,9 @@ export const EventRegistry = {
   "merge.batch.passed": MergeBatchPassedPayload,
   "merge.batch.bisecting": MergeBatchBisectingPayload,
   "merge.batch.culprit": MergeBatchCulpritPayload,
+  // A transient/transport INFRA error blocked the batch check (it could not be run) —
+  // the coordinator bounded-retried then HOLDS loudly; NO PR is bisected/dequeued.
+  "merge.batch.infra_blocked": MergeBatchInfraBlockedPayload,
 
   // Post-merge auto-issue creation (tempering.md dim A): after a run's PR merges
   // onto default_branch, the watcher reads the post-merge CI on the base branch;
