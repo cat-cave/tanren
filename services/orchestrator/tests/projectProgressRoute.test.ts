@@ -262,7 +262,7 @@ describe("project progress route", () => {
     const { app, pool } = buildHarness();
     pool.seedProject({ project_id: "proj_sec", org_id: "org_acme", name: "Sec", repo_url: "https://x/r" });
     pool.seedProjectMember("proj_sec", "user_alice");
-    pool.seedSpec({ spec_id: "x1", project_id: "proj_sec", title: "Secretish", status: "in_flight" });
+    pool.seedSpec({ spec_id: "x1", project_id: "proj_sec", title: "Sensitive", status: "in_flight" });
     pool.seedRun({ run_id: "run_sec", spec_id: "x1", project_id: "proj_sec", status: "running" });
     // The latest event for the run carries a secret-looking payload field; the
     // stage is derived from the event TYPE only, so the response must read
@@ -273,13 +273,13 @@ describe("project progress route", () => {
       spec_id: "x1",
       run_id: "run_sec",
       project_id: "proj_sec",
-      payload: { apiToken: "ghp_inflightsecret", model: "claude" },
+      payload: { apiToken: "ghp_LEAKED_TOKEN_VALUE", model: "claude" },
     });
 
     const { body } = await getJson(app, "/orgs/org_acme/projects/proj_sec/progress");
     const progress = ProjectProgress.parse(body);
     expect(progress.inFlight.find((s) => s.specId === "x1")?.stage).toBe("writing");
-    expect(JSON.stringify(progress)).not.toContain("ghp_inflightsecret");
+    expect(JSON.stringify(progress)).not.toContain("ghp_LEAKED_TOKEN_VALUE");
   });
 
   it("blocked lists halted/terminal-not-merged specs", async () => {
