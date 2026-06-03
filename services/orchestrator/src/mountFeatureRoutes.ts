@@ -78,18 +78,6 @@ export interface FeatureRouteDeps {
 export function mountFeatureRoutes(app: Hono<ActorContextEnv>, deps: FeatureRouteDeps): void {
   const { pool, secrets, githubHttp, githubAppMinter, credentialRegistry, configGateGithub, vaultHealthCheck } = deps;
   const benchmarkInfra = deps.benchmark;
-  // The per-surface Forge answerer factories: each Forge ideation surface
-  // resolves a REAL provider answerer (no deterministic fallback — §8a) by
-  // allocating a runner per model call against the shared infra (the same
-  // allocator / SSH / identity ref the run worker uses). Each route calls its
-  // factory with the request's org/project target.
-  const forgeAnswerers = buildForgeRouteAnswererFactories({
-    pool,
-    secrets,
-    allocator: deps.allocator,
-    ssh: deps.ssh,
-    identitySecretRef: deps.identitySecretRef,
-  });
   // RLS R3b: every `/orgs/:orgId/*` (+ `/orgs/:orgId/credentials`) operator route
   // handler runs its tenant-table reads/writes on this org-scoping pool. Combined
   // with the per-request `runWithJobOrgId` org scope the auth middleware
@@ -101,6 +89,24 @@ export function mountFeatureRoutes(app: Hono<ActorContextEnv>, deps: FeatureRout
   // self-scoping helpers (`createProject`/`createSpec` `runWithOrgScope`,
   // `resolveWritableClient`) still resolve correctly through it.
   const scopedPool = orgScopingPool(pool);
+  // The per-surface Forge answerer factories: each Forge ideation surface
+  // resolves a REAL provider answerer (no deterministic fallback — §8a) by
+  // allocating a runner per model call against the shared infra (the same
+  // allocator / SSH / identity ref the run worker uses). Each route calls its
+  // factory with the request's org/project target.
+  //
+  // The factories get the `scopedPool` (NOT the bare `pool`): a Forge answerer's
+  // org/project config reads (interview/discovery/triage/recon/conversation) must
+  // carry the request's org GUC, or under the `tanren_app` RLS role they read
+  // ZERO rows and the resolution wrongly degrades. The proxy opens a short
+  // org-scoped txn per `.query` from the request's ambient org id.
+  const forgeAnswerers = buildForgeRouteAnswererFactories({
+    pool: scopedPool,
+    secrets,
+    allocator: deps.allocator,
+    ssh: deps.ssh,
+    identitySecretRef: deps.identitySecretRef,
+  });
   app.route("/orgs", createOrgRoutes({ pool: scopedPool, configGateGithub }));
   app.route(
     "/orgs",

@@ -25,7 +25,7 @@ import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { migrate, runWithOrgScope } from "@tanren/db";
 import type { ActorContext } from "../src/auth/schemas.js";
-import { resolveQueryClient } from "../src/engine/data/orgScopedDb.js";
+import { MissingOrgScopeError, resolveQueryClient } from "../src/engine/data/orgScopedDb.js";
 import { PgEventStore } from "../src/engine/eventStore.js";
 import {
   fetchEventsPage,
@@ -97,13 +97,19 @@ describeDb("RLS R2 cohort-1 — runs + events through the org-scoped client", ()
     await seedTenant(ownerPool, ORG_B, `proj_${ORG_B}`, `spec_${ORG_B}`, "run_b");
     // One run.started event for org A's run, written by the owner via the
     // event store (project → org_id derivation), so the read loaders see it.
-    await new PgEventStore(ownerPool).append({
-      runId: RUN_A,
-      specId: SPEC_A,
-      projectId: PROJECT_A,
-      eventType: "run.started",
-      payload: { status: "running" },
-    });
+    // The event store routes its write through the org-scoped seam, which now
+    // FAILS LOUDLY without an ambient scope, so the seed runs under org A's scope
+    // (the owner pool is RLS-exempt, so the GUC is harmless but the scope is what
+    // the seam requires).
+    await runWithOrgScope(ownerPool, ORG_A, () =>
+      new PgEventStore(ownerPool).append({
+        runId: RUN_A,
+        specId: SPEC_A,
+        projectId: PROJECT_A,
+        eventType: "run.started",
+        payload: { status: "running" },
+      }),
+    );
   }, 60_000);
 
   afterAll(async () => {
@@ -118,10 +124,10 @@ describeDb("RLS R2 cohort-1 — runs + events through the org-scoped client", ()
     await adminPool.end();
   }, 30_000);
 
-  // (d) The DAL seam: ambient scoped client inside a scope, pool outside.
-  it("(d) resolveQueryClient returns the scoped client in-scope, the pool out", async () => {
-    const outside = resolveQueryClient(runtimePool);
-    expect(outside).toBe(runtimePool);
+  // (d) The DAL seam: ambient scoped client inside a scope, a LOUD throw outside one
+  //     (no silent bare-pool fallback for an unscoped tenant op).
+  it("(d) resolveQueryClient returns the scoped client in-scope and throws out of scope", async () => {
+    expect(() => resolveQueryClient(runtimePool)).toThrow(MissingOrgScopeError);
 
     await runWithOrgScope(runtimePool, ORG_A, async (client) => {
       expect(resolveQueryClient(runtimePool)).toBe(client);
@@ -205,11 +211,11 @@ describeDb("RLS R2 cohort-1 — runs + events through the org-scoped client", ()
     expect(scopedFeed.items.some((e) => e.eventType === "run.started")).toBe(true);
   });
 
-  // (c) events WRITE recorder routes through the ambient scope. Under R3b the
-  //     out-of-scope pool fallback is now DENIED by the policy (deny-by-default
-  //     for writes too) — exactly the enforcement R3b adds: an unscoped tenant
-  //     write can no longer silently land.
-  it("(c) PgEventStore(pool) writes through the ambient scope; the pool fallback is denied", async () => {
+  // (c) events WRITE recorder routes through the ambient scope. The out-of-scope
+  //     pool fallback is now REJECTED LOUDLY at the DAL seam (MissingOrgScopeError)
+  //     — strictly stronger than the prior R3b DB-level deny: an unscoped tenant
+  //     write never even reaches Postgres, so it can never silently land.
+  it("(c) PgEventStore(pool) writes through the ambient scope; the pool fallback throws loudly", async () => {
     const before = await countEvents(ownerPool, RUN_A);
 
     // In-scope: the append runs on the ambient org-scoped client. We prove that
@@ -230,8 +236,9 @@ describeDb("RLS R2 cohort-1 — runs + events through the org-scoped client", ()
       expect(Number(within.rows[0]?.n)).toBe(1);
     });
 
-    // Out-of-scope: the same store handed the pool falls back to the raw pool
-    // (empty GUC); under enforced policies the WITH CHECK rejects the INSERT.
+    // Out-of-scope: the same store handed the pool has NO ambient scope, so the
+    // DAL seam refuses the unscoped tenant write LOUDLY (it never reaches the DB's
+    // WITH CHECK) — the no-silent-fallback guarantee.
     await expect(
       new PgEventStore(runtimePool).append({
         runId: RUN_A,
@@ -240,7 +247,7 @@ describeDb("RLS R2 cohort-1 — runs + events through the org-scoped client", ()
         eventType: "run.completed",
         payload: { status: "completed", outcome: "pool" },
       }),
-    ).rejects.toThrow(/row-level security|policy/iu);
+    ).rejects.toThrow(MissingOrgScopeError);
 
     // Only the in-scope append landed (owner pool = RLS-exempt ground truth).
     const after = await countEvents(ownerPool, RUN_A);

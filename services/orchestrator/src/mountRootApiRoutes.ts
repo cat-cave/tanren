@@ -5,7 +5,7 @@
 // table; this module owns these root endpoints and the schema/workflow/error
 // deps they pull.
 
-import { runWithOrgScope, runWithSystemScope } from "@tanren/db";
+import { runWithJobOrgId, runWithOrgScope, runWithSystemJobScope, runWithSystemScope } from "@tanren/db";
 import type { Hono } from "hono";
 import type pg from "pg";
 import type { ActorContext } from "./auth/index.js";
@@ -174,16 +174,33 @@ export function mountRootApiRoutes(app: Hono<ActorContextEnv>, deps: RootApiDeps
     if (!parsed.success) {
       return c.json({ error: "invalid_ci_poll", issues: parsed.error.issues }, 400);
     }
+    const runId = c.req.param("runId");
     try {
-      return c.json(
-        await pollCiForRun({
+      // RLS R3b: this run-keyed route has no `:orgId` path param and is not always
+      // authenticated to an org (the worker drives it server-side), so the poll's
+      // tenant reads on `scopedPool` carry no ambient org. Resolve the run's org
+      // via the BYPASSRLS system scope FIRST (a cross-org bootstrap read), then run
+      // the whole poll under that org's lightweight `runWithJobOrgId` so every
+      // `scopedPool.query` opens a short org-scoped txn. A null-org/legacy run runs
+      // under the explicit per-job SYSTEM scope — never an unscoped bare-pool poll.
+      const orgRow = await runWithSystemScope(pool, (client) =>
+        client.query<{ org_id: string | null }>("SELECT org_id FROM runs WHERE run_id = $1", [runId]),
+      );
+      if (orgRow.rowCount === 0) {
+        return c.json({ error: "run_not_found", message: `run not found: ${runId}` }, 404);
+      }
+      const pollOrgId = orgRow.rows[0]?.org_id ?? null;
+      const runPoll = (): ReturnType<typeof pollCiForRun> =>
+        pollCiForRun({
           pool: scopedPool,
           secrets,
           vcsProvider,
-          runId: c.req.param("runId"),
+          runId,
           githubAppMinter,
           ...parsed.data,
-        }),
+        });
+      return c.json(
+        await (pollOrgId === null ? runWithSystemJobScope(runPoll) : runWithJobOrgId(pollOrgId, runPoll)),
         200,
       );
     } catch (error) {

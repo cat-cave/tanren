@@ -16,7 +16,7 @@
 // runner outside one). The drive returns `conflict` (a recoverable dequeue); the
 // re-run re-enters the queue once it re-gates clean.
 
-import { runWithOrgScope, runWithSystemScope } from "@tanren/db";
+import { runWithJobOrgId, runWithOrgScope, runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
 import type { ActorContext } from "../../auth/schemas.js";
 import type { SecretStore } from "../contracts/secretStore.js";
@@ -67,12 +67,18 @@ async function resolveRunFacts(pool: pg.Pool, runId: string): Promise<RunFacts> 
     throw new Error(`cannot drive merge: run ${runId} has no resolvable org/project/spec`);
   }
   const projectConfig = migrateProjectConfig(base.config);
-  const credentials = await resolveCredentialsForRun(pool, {
-    projectConfig,
-    orgId: base.org_id,
-  });
+  // `resolveCredentialsForRun` reads `organizations.config` for the org's provider
+  // mode + default credential refs — a TENANT-table read. The coordinator drives
+  // with no ambient scope, so under the `tanren_app` RLS role this read is denied
+  // (empty GUC → zero rows → OrgProviderModeUnresolved for the non-empty org). The
+  // org is already resolved above, so run it under that org's scope so the GUC
+  // admits the row.
+  const orgId = base.org_id;
+  const credentials = await runWithOrgScope(pool, orgId, (client) =>
+    resolveCredentialsForRun(client, { projectConfig, orgId }),
+  );
   return {
-    orgId: base.org_id,
+    orgId,
     projectId: base.project_id,
     specId: base.spec_id,
     githubCredentialRef: credentials.githubCredentialRef,
@@ -127,32 +133,42 @@ export function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQ
   return async ({ runId }): Promise<MergeDriveOutcome> => {
     const facts = await resolveRunFacts(deps.pool, runId);
     const eventStore = new PgEventStore(deps.pool);
-    const merge = await mergeForRun({
-      pool: deps.pool,
-      eventStore,
-      secrets: deps.secrets,
-      vcsProvider: deps.vcsProvider,
-      runId,
-      resolvedGithubCredentialRef: facts.githubCredentialRef,
-      ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
-      // The DRIVE flag: run the SAME directMerge logic (P2a/P2b/P2c-1), labelled
-      // `native_queue`. The first run-loop pass already ENQUEUED — this is the
-      // coordinator's actual merge.
-      queueDrive: true,
-      // P2b on the drive pass: re-route the conflict to a fresh re-execution (the
-      // runner is gone), returning unresolved → a recoverable conflict dequeue.
-      resolveConflict: buildDriveConflictResolver(deps.pool, facts),
-      // P2a re-gate: re-poll the PR's CI via the VcsProvider after an auto-rebase
-      // (no runner needed — it is a CI-status read).
-      reGateCi: buildReGateCiForQueuedRun({
+    // The coordinator subscriber drives this with NO ambient org scope (it wakes on
+    // the run-activity bus, not a per-org request), so `mergeForRun` — which appends
+    // `task.started` / merge events via `eventStore` and does other tenant
+    // reads/writes — would hit the H2 throw (no scope → MissingOrgScopeError) and the
+    // outcome would be masked as `blocked`, silently dequeuing every native_queue
+    // merge. `facts.orgId` is already resolved (system-scoped) above, so run the
+    // whole merge drive under the run's lightweight per-job org id: every tenant
+    // `.query` / event append opens a short `runWithOrgScope` carrying the org GUC.
+    const merge = await runWithJobOrgId(facts.orgId, () =>
+      mergeForRun({
         pool: deps.pool,
         eventStore,
         secrets: deps.secrets,
         vcsProvider: deps.vcsProvider,
         runId,
-        githubCredentialRef: facts.githubCredentialRef,
+        resolvedGithubCredentialRef: facts.githubCredentialRef,
+        ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
+        // The DRIVE flag: run the SAME directMerge logic (P2a/P2b/P2c-1), labelled
+        // `native_queue`. The first run-loop pass already ENQUEUED — this is the
+        // coordinator's actual merge.
+        queueDrive: true,
+        // P2b on the drive pass: re-route the conflict to a fresh re-execution (the
+        // runner is gone), returning unresolved → a recoverable conflict dequeue.
+        resolveConflict: buildDriveConflictResolver(deps.pool, facts),
+        // P2a re-gate: re-poll the PR's CI via the VcsProvider after an auto-rebase
+        // (no runner needed — it is a CI-status read).
+        reGateCi: buildReGateCiForQueuedRun({
+          pool: deps.pool,
+          eventStore,
+          secrets: deps.secrets,
+          vcsProvider: deps.vcsProvider,
+          runId,
+          githubCredentialRef: facts.githubCredentialRef,
+        }),
       }),
-    });
+    );
     switch (merge.outcome) {
       case "merged":
         // P2d: the run-loop's first pass left the spec NON-`done` (Tanren owns the

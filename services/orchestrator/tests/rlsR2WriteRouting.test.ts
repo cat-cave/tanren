@@ -12,8 +12,9 @@
 
 import type pg from "pg";
 import { describe, expect, it } from "vitest";
-import { runWithOrgScope } from "@tanren/db";
+import { runWithOrgScope, runWithSystemJobScope } from "@tanren/db";
 import { CostRecorder } from "../src/engine/costs/recorder.js";
+import { MissingOrgScopeError, orgScopingPool } from "../src/engine/data/orgScopedDb.js";
 import { FakeEventStore } from "./helpers/fakeEventStore.js";
 import { insertChildTask, markTaskDone } from "../src/engine/workflow/subtaskTasks.js";
 
@@ -72,11 +73,20 @@ describe("subtaskTasks — RLS R2 org-scope routing (inert)", () => {
     expect(onPool).toHaveLength(0);
   });
 
-  it("falls back to the pool for insertChildTask when there is no ambient scope", async () => {
+  it("THROWS MissingOrgScopeError for a pool-routed insertChildTask with no ambient scope", async () => {
     const { pool, onPool, onClient } = fakePool(isTaskInsert);
-    await insertChildTask(pool, childTask);
-    expect(onPool).toHaveLength(1);
+    await expect(insertChildTask(pool, childTask)).rejects.toThrow(MissingOrgScopeError);
+    expect(onPool).toHaveLength(0);
     expect(onClient).toHaveLength(0);
+  });
+
+  it("routes insertChildTask through a system-scope txn under a per-job SYSTEM scope", async () => {
+    const { pool, onPool, onClient } = fakePool(isTaskInsert);
+    await runWithSystemJobScope(async () => {
+      await insertChildTask(orgScopingPool(pool), childTask);
+    });
+    expect(onClient).toHaveLength(1);
+    expect(onPool).toHaveLength(0);
   });
 
   it("routes markTaskDone through the ambient scoped client inside a scope", async () => {
@@ -88,11 +98,20 @@ describe("subtaskTasks — RLS R2 org-scope routing (inert)", () => {
     expect(onPool).toHaveLength(0);
   });
 
-  it("falls back to the pool for markTaskDone when there is no ambient scope", async () => {
+  it("THROWS MissingOrgScopeError for a pool-routed markTaskDone with no ambient scope", async () => {
     const { pool, onPool, onClient } = fakePool(isTaskUpdate);
-    await markTaskDone(pool, "task_write", "passed");
-    expect(onPool).toHaveLength(1);
+    await expect(markTaskDone(pool, "task_write", "passed")).rejects.toThrow(MissingOrgScopeError);
+    expect(onPool).toHaveLength(0);
     expect(onClient).toHaveLength(0);
+  });
+
+  it("routes markTaskDone through a system-scope txn under a per-job SYSTEM scope", async () => {
+    const { pool, onPool, onClient } = fakePool(isTaskUpdate);
+    await runWithSystemJobScope(async () => {
+      await markTaskDone(orgScopingPool(pool), "task_write", "passed");
+    });
+    expect(onClient).toHaveLength(1);
+    expect(onPool).toHaveLength(0);
   });
 
   it("uses a handed-in query-only client verbatim (no ambient re-resolution)", async () => {
@@ -143,11 +162,21 @@ describe("CostRecorder — RLS R2 org-scope routing (inert)", () => {
     expect(onPool).toHaveLength(0);
   });
 
-  it("falls back to the pool for the cost_records INSERT when there is no ambient scope", async () => {
+  it("THROWS MissingOrgScopeError for the cost_records INSERT with no ambient scope", async () => {
     const { pool, onPool, onClient } = fakePool(isCostInsert);
     const recorder = new CostRecorder(pool, new FakeEventStore());
-    await recorder.record(ctx, tokens, {});
-    expect(onPool).toHaveLength(1);
+    await expect(recorder.record(ctx, tokens, {})).rejects.toThrow(MissingOrgScopeError);
+    expect(onPool).toHaveLength(0);
     expect(onClient).toHaveLength(0);
+  });
+
+  it("routes the cost_records INSERT through a system-scope txn under a per-job SYSTEM scope", async () => {
+    const { pool, onPool, onClient } = fakePool(isCostInsert);
+    const recorder = new CostRecorder(orgScopingPool(pool), new FakeEventStore());
+    await runWithSystemJobScope(async () => {
+      await recorder.record(ctx, tokens, {});
+    });
+    expect(onClient).toHaveLength(1);
+    expect(onPool).toHaveLength(0);
   });
 });

@@ -41,34 +41,84 @@
 // the stage code — connections held only for one DB op, never across I/O.
 
 import type pg from "pg";
-import { getJobOrgId, getOrgScope, getOrgScopedClient, runWithOrgScope } from "@tanren/db";
+import {
+  getJobOrgId,
+  getOrgScope,
+  getOrgScopedClient,
+  isSystemJobScope,
+  runWithOrgScope,
+  runWithSystemScope,
+} from "@tanren/db";
 
 /** Anything that can run a parameterized query — the pool or a checked-out client. */
 export type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
 /**
- * Resolve the query client a tenant-table read/write should run on: the ambient
- * org-scoped client if a scope is open, else the pool (inert R1-equivalent
- * fallback). Use this anywhere a runs/events query currently issues
- * `pool.query(...)` so the query joins the ambient org transaction when there is
- * one.
+ * Thrown when a TENANT-table read/write resolves with NO ambient org scope at
+ * all — neither an open connection scope (`runWithOrgScope` / `runWithSystemScope`)
+ * nor a per-job org id (`runWithJobOrgId`). Under the runtime `tanren_app`
+ * (NOBYPASSRLS) role such a query runs with an empty `app.current_org_id` GUC and
+ * the deny-by-default RLS policies return ZERO rows — a SILENT degrade. Per the
+ * no-fallback directive we FAIL LOUDLY here instead: the call site must establish
+ * the correct scope (`runWithOrgScope` / `withJobOrgScope` / a request's
+ * `runWithJobOrgId`), or, for a genuinely cross-org/system operation, the
+ * EXPLICIT `runWithSystemScope` (never the implicit raw-pool fallback this seam
+ * used to provide).
  *
- * The returned client is the same connection the surrounding `runWithOrgScope`
- * transaction is using, so reads see that transaction's writes — exactly the
- * pool's behavior in R1 (no policies), and the RLS-correct behavior in R3.
+ * `context` names the resolver that raised it so a surfaced latent call site is
+ * traceable from the stack alone.
  */
-export function resolveQueryClient(pool: pg.Pool): QueryClient {
-  return getOrgScopedClient() ?? pool;
+export class MissingOrgScopeError extends Error {
+  constructor(context: string) {
+    super(
+      `tenant-table access with no ambient org scope (${context}): establish one via runWithOrgScope / withJobOrgScope / a request's runWithJobOrgId, or runWithSystemScope for a cross-org system operation`,
+    );
+    this.name = "MissingOrgScopeError";
+  }
 }
 
 /**
- * True when an ambient org scope is open (request middleware / worker per-job
- * context established one). Cohort callers do not need this for correctness — the
- * fallback handles its absence — but it documents the seam and lets a future R3
- * change assert "tenant query must have a scope" at the boundary.
+ * Resolve the query client a tenant-table read/write should run on:
+ *   1. an OPEN connection scope (`runWithOrgScope` / `runWithSystemScope`) →
+ *      that scoped client (the read joins the open transaction / its GUC);
+ *   2. else a per-job org id (`runWithJobOrgId`) is set → the `pool`, which —
+ *      handed as an {@link orgScopingPool} — opens a SHORT `runWithOrgScope` per
+ *      `.query`, so each statement carries the job's org GUC;
+ *   3. else a per-job SYSTEM scope (`runWithSystemJobScope`, the explicit
+ *      null-org / cross-org job marker) → the `pool`, which as an
+ *      {@link orgScopingPool} opens a SHORT `runWithSystemScope` (BYPASSRLS) per
+ *      `.query`;
+ *   4. else → no scope at all → THROW {@link MissingOrgScopeError}.
+ *
+ * Arm 4 used to fall back to the bare `pool`. Under the enforced `tanren_app`
+ * RLS role that silently returns ZERO rows (empty GUC → deny-by-default), so the
+ * fallback is now a LOUD error: an unscoped tenant read is a scoping bug, not a
+ * legitimate empty result. The call site must establish a scope (a null-org /
+ * cross-org system op uses the EXPLICIT `runWithSystemJobScope` /
+ * `runWithSystemScope`, never the implicit raw-pool fallback this seam dropped).
+ */
+export function resolveQueryClient(pool: pg.Pool): QueryClient {
+  const ambient = getOrgScopedClient();
+  if (ambient !== undefined) {
+    return ambient;
+  }
+  if (getJobOrgId() !== undefined || isSystemJobScope()) {
+    return pool;
+  }
+  throw new MissingOrgScopeError("resolveQueryClient");
+}
+
+/**
+ * True when ANY ambient org context is established for a tenant read/write: an
+ * open connection scope (`runWithOrgScope` / `runWithSystemScope`), a per-job
+ * org id (`runWithJobOrgId`), or a per-job SYSTEM scope (`runWithSystemJobScope`,
+ * the explicit null-org / cross-org marker). This is the assertion boundary the
+ * resolvers enforce — when it is false a tenant query has no scope and
+ * {@link resolveQueryClient} / {@link withJobOrgScope} throw
+ * {@link MissingOrgScopeError} rather than silently degrading to the bare pool.
  */
 export function hasOrgScope(): boolean {
-  return getOrgScope() !== undefined;
+  return getOrgScope() !== undefined || getJobOrgId() !== undefined || isSystemJobScope();
 }
 
 /**
@@ -85,8 +135,10 @@ export function isPool(client: QueryClient): client is pg.Pool {
 
 /**
  * Resolve the client a write should run on given the client a store was
- * constructed with. When that is the shared pool, route through the ambient
- * org-scoped client if a scope is open, else the pool (inert fallback). When it
+ * constructed with. When that is the shared pool, route through
+ * {@link resolveQueryClient} — the ambient scoped client if a connection scope is
+ * open, the pool itself when a per-job org id self-routes each `.query`, else a
+ * thrown {@link MissingOrgScopeError} (no silent unscoped tenant write). When it
  * is a specific in-transaction client, use it as-is — the caller owns that
  * transaction. This is the write-path companion to {@link resolveQueryClient}
  * (which always starts from the pool); it centralizes the `isPool` discriminator
@@ -103,12 +155,16 @@ export function resolveWritableClient(client: QueryClient): QueryClient {
  *   1. ambient connection scope open  → run `op` on that scoped client;
  *   2. else ambient job-org-id present → open a SHORT `runWithOrgScope` per call
  *      (a connection held only for this op, never across external I/O);
- *   3. else                            → run `op` on the underlying pool (inert).
+ *   3. else a per-job SYSTEM scope set → open a SHORT `runWithSystemScope`
+ *      (BYPASSRLS) per call — the explicit null-org / cross-org job path;
+ *   4. else                            → THROW {@link MissingOrgScopeError}.
  *
  * Use this for a TIGHT batch of statements that must share one transaction /
  * snapshot with no external I/O between them (e.g. a SELECT + its dependent
- * UPDATEs); a single statement can just go through {@link orgScopingPool}. The
- * fallback (arm 3) keeps behavior identical to the pre-R3a pool path.
+ * UPDATEs); a single statement can just go through {@link orgScopingPool}. Arm 4
+ * used to run `op` on the bare pool; under the enforced `tanren_app` RLS role
+ * that silently returns ZERO rows, so an unscoped tenant op now FAILS LOUDLY —
+ * the caller must establish a job org id / connection / system-job scope first.
  */
 export async function withJobOrgScope<T>(pool: pg.Pool, op: (client: QueryClient) => Promise<T>): Promise<T> {
   const ambient = getOrgScopedClient();
@@ -119,7 +175,10 @@ export async function withJobOrgScope<T>(pool: pg.Pool, op: (client: QueryClient
   if (jobOrgId !== undefined) {
     return runWithOrgScope(pool, jobOrgId, (client) => op(client));
   }
-  return op(pool);
+  if (isSystemJobScope()) {
+    return runWithSystemScope(pool, (client) => op(client));
+  }
+  throw new MissingOrgScopeError("withJobOrgScope");
 }
 
 /**

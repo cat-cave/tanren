@@ -1,7 +1,11 @@
 import type pg from "pg";
 import { describe, expect, it } from "vitest";
 import { migrateProjectConfig } from "../src/engine/config/index.js";
-import { MissingCredentialError, resolveCredentialsForRun } from "../src/engine/credentials/resolveCredentials.js";
+import {
+  MissingCredentialError,
+  OrgProviderModeUnresolved,
+  resolveCredentialsForRun,
+} from "../src/engine/credentials/resolveCredentials.js";
 
 /**
  * Minimal pg.Pool stub for the single org-config read the resolver performs.
@@ -130,13 +134,29 @@ describe("resolveCredentialsForRun", () => {
     expect((caught as MissingCredentialError).kind).toBe("codex_chatgpt_auth");
   });
 
-  it("treats a missing org row as no defaults (project config still resolves)", async () => {
+  it("THROWS OrgProviderModeUnresolved when a NON-EMPTY org id reads back no row (scoping/denial bug, not 'no config')", async () => {
     const pool = fakePool({});
     const projectConfig = migrateProjectConfig({
       version: 1,
       credentials: { codexCredentialRef: codexProjectRef, githubCredentialRef: githubProjectRef },
     });
-    const resolved = await resolveCredentialsForRun(pool, { projectConfig, orgId: "ghost" });
+    let caught: unknown;
+    try {
+      await resolveCredentialsForRun(pool, { projectConfig, orgId: "ghost" });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(OrgProviderModeUnresolved);
+    expect((caught as OrgProviderModeUnresolved).orgId).toBe("ghost");
+  });
+
+  it("treats an EMPTY org id ('') with no row as no defaults — the legacy project-config-only path", async () => {
+    const pool = fakePool({});
+    const projectConfig = migrateProjectConfig({
+      version: 1,
+      credentials: { codexCredentialRef: codexProjectRef, githubCredentialRef: githubProjectRef },
+    });
+    const resolved = await resolveCredentialsForRun(pool, { projectConfig, orgId: "" });
     expect(resolved).toEqual({
       codexCredentialRef: codexProjectRef,
       githubCredentialRef: githubProjectRef,

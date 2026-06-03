@@ -29,7 +29,7 @@
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { migrate, runWithJobOrgId } from "@tanren/db";
-import { orgScopingPool } from "../src/engine/data/orgScopedDb.js";
+import { MissingOrgScopeError, orgScopingPool } from "../src/engine/data/orgScopedDb.js";
 import { PgEventStore } from "../src/engine/eventStore.js";
 import { CostRecorder } from "../src/engine/costs/recorder.js";
 import { insertChildTask } from "../src/engine/workflow/subtaskTasks.js";
@@ -193,11 +193,12 @@ describeDb("RLS R3a-worker — per-job WORKFLOW tenant writes carry org context"
   });
 
   // (b) The fork-the-other-way proof: the SAME helpers on the bare pool with NO
-  //     job-org-id (the legacy/unscoped fallback) write with an EMPTY GUC, so the
-  //     throwaway policy on the restricted role REJECTS the INSERT. This proves
-  //     (i) the no-job-org path really is the unscoped pool path, and (ii) it is
-  //     the per-job org-id — nothing else — that carries the worker's writes.
-  it("(b) no-job-org fallback writes on the bare pool (empty GUC → policy rejects)", async () => {
+  //     job-org-id (and no connection scope) are now refused LOUDLY at the DAL
+  //     seam — the unscoped tenant write never reaches the DB (stronger than the
+  //     prior empty-GUC policy reject). This proves (i) the no-job-org path is the
+  //     genuinely-unscoped path the seam rejects, and (ii) it is the per-job org-id
+  //     — nothing else — that carries the worker's writes.
+  it("(b) no-job-org write on the bare pool is refused loudly at the DAL seam (no silent fallback)", async () => {
     await expect(
       insertChildTask(runtimePool, {
         taskId: `task_unscoped_${ORG}`,
@@ -209,7 +210,7 @@ describeDb("RLS R3a-worker — per-job WORKFLOW tenant writes carry org context"
         cli: "fake",
         model: null,
       }),
-    ).rejects.toThrow(/row-level security|policy/iu);
+    ).rejects.toThrow(MissingOrgScopeError);
 
     // And nothing was written.
     const orphan = await ownerPool.query("SELECT 1 FROM tasks WHERE task_id = $1", [`task_unscoped_${ORG}`]);

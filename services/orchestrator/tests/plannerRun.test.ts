@@ -9,7 +9,6 @@ import { vcsProviderOver } from "./helpers/vcsProvider.js";
 import type { SshTarget } from "../src/engine/contracts/allocator.js";
 import type { SshCommand, SshCommandResult, SshSubstrate } from "../src/engine/contracts/sshSubstrate.js";
 import { CodexUsageLimitError } from "../src/engine/providers/codex.js";
-import { runPlannerLoopWorkflow } from "../src/engine/workflow/plannerRun.js";
 import { WorkspaceBootstrapError } from "../src/engine/workspace/index.js";
 import {
   accounting,
@@ -27,6 +26,7 @@ import {
   passingAudit,
   passingCheck,
   passingGitHub,
+  runPlannerLoopScoped,
   ScriptedGitHubHttp,
   setup,
   twoSubtaskAdapters,
@@ -37,7 +37,7 @@ describe("runPlannerLoopWorkflow", () => {
     const { ctx, pool, events, secrets, allocator, ssh } = await setup();
     const github = passingGitHub();
 
-    const result = await runPlannerLoopWorkflow({
+    const result = await runPlannerLoopScoped({
       pool: pool.asPgPool(),
       eventStore: events,
       allocator,
@@ -95,7 +95,7 @@ describe("runPlannerLoopWorkflow", () => {
       auditor: makeAuditor([passingAudit]) as AnswererAdapter<AuditAnswer>,
     };
 
-    const result = await runPlannerLoopWorkflow({
+    const result = await runPlannerLoopScoped({
       pool: pool.asPgPool(),
       eventStore: events,
       allocator,
@@ -127,7 +127,7 @@ describe("runPlannerLoopWorkflow", () => {
     // any request would throw
     const github = new ScriptedGitHubHttp([]);
 
-    const result = await runPlannerLoopWorkflow({
+    const result = await runPlannerLoopScoped({
       pool: pool.asPgPool(),
       eventStore: events,
       allocator,
@@ -156,7 +156,7 @@ describe("runPlannerLoopWorkflow", () => {
     const { ctx, pool, events, secrets, allocator, ssh } = await setup();
     const bootstrapCalls: string[] = [];
 
-    await runPlannerLoopWorkflow({
+    await runPlannerLoopScoped({
       pool: pool.asPgPool(),
       eventStore: events,
       allocator,
@@ -191,7 +191,7 @@ describe("runPlannerLoopWorkflow", () => {
     const { ctx, pool, events, secrets, allocator, ssh } = await setup();
     const order: string[] = [];
 
-    await runPlannerLoopWorkflow({
+    await runPlannerLoopScoped({
       pool: pool.asPgPool(),
       eventStore: events,
       allocator,
@@ -259,7 +259,7 @@ describe("runPlannerLoopWorkflow", () => {
       },
     };
 
-    await runPlannerLoopWorkflow({
+    await runPlannerLoopScoped({
       pool: pool.asPgPool(),
       eventStore: events,
       allocator,
@@ -321,7 +321,7 @@ describe("runPlannerLoopWorkflow", () => {
     );
     const bootstrapCalls: Array<string | undefined> = [];
 
-    await runPlannerLoopWorkflow({
+    await runPlannerLoopScoped({
       pool: pool.asPgPool(),
       eventStore: events,
       allocator,
@@ -354,7 +354,7 @@ describe("runPlannerLoopWorkflow", () => {
     const ssh = new ConfigReadingSsh("");
     const bootstrapCalls: Array<string | undefined> = [];
 
-    await runPlannerLoopWorkflow({
+    await runPlannerLoopScoped({
       pool: pool.asPgPool(),
       eventStore: events,
       allocator,
@@ -383,7 +383,7 @@ describe("runPlannerLoopWorkflow", () => {
     const { ctx, pool, events, secrets, allocator, ssh } = await setup();
 
     await expect(
-      runPlannerLoopWorkflow({
+      runPlannerLoopScoped({
         pool: pool.asPgPool(),
         eventStore: events,
         allocator,
@@ -425,7 +425,7 @@ describe("runPlannerLoopWorkflow", () => {
     };
 
     await expect(
-      runPlannerLoopWorkflow({
+      runPlannerLoopScoped({
         pool: pool.asPgPool(),
         eventStore: events,
         allocator,

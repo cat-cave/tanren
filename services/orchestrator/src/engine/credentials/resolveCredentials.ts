@@ -94,6 +94,27 @@ export class MissingCredentialError extends Error {
 }
 
 /**
+ * Thrown when a run/forge call carries a REAL (non-empty) org id but the org row
+ * reads back ABSENT. A real run always has a real org row, so an empty read is a
+ * scoping/RLS-denial bug (the read ran off-scope and the deny-by-default policy
+ * returned zero rows) — NOT a legitimate "org has no config" signal. Failing
+ * loudly here surfaces the scoping bug instead of silently degrading a managed
+ * org to BYOK. (The legacy `orgId === ""` path — callers that explicitly pass an
+ * empty org to resolve from project config only — still defaults to BYOK.)
+ */
+export class OrgProviderModeUnresolved extends Error {
+  readonly orgId: string;
+
+  constructor(orgId: string) {
+    super(
+      `Org provider-mode config could not be resolved for org ${JSON.stringify(orgId)}: the organizations row read back empty for a non-empty org id (a scoping/RLS-denial bug, not "no config")`,
+    );
+    this.name = "OrgProviderModeUnresolved";
+    this.orgId = orgId;
+  }
+}
+
+/**
  * Resolve a run's Codex + GitHub credential refs. Reads the org's
  * `defaultCredentials` from `organizations.config` once and applies the
  * override → project → org-default priority for each kind. Throws
@@ -162,16 +183,26 @@ function pickRef(kind: RunCredentialKind, ...layers: Array<string | undefined>):
 
 /**
  * Read + validate the org's default credential refs AND its provider-mode block
- * in a single read. A missing org row resolves to no defaults + the `byok`
- * default. A present org row is parsed through `migrateOrgConfig`, which
+ * in a single read. A present org row is parsed through `migrateOrgConfig`, which
  * fail-hard rejects a row missing an explicit `version` (no silent `byok`
  * default for unversioned rows).
+ *
+ * No-fallback directive: an ABSENT org row is interpreted by the org id —
+ *   - `orgId === ""` (the explicit legacy "resolve from project config only"
+ *     path callers pass at `runExecutionContext.ts` / `providerFactory.ts`) →
+ *     no defaults + the `byok` default, the one legitimate empty-read case;
+ *   - a NON-EMPTY org id → THROW {@link OrgProviderModeUnresolved}: a real run
+ *     always has a real org row, so an empty read is a scoping/RLS-denial bug,
+ *     NOT "no config", and must not silently degrade managed → byok.
  */
 async function loadOrgProviderModeConfig(pool: OrgConfigClient, orgId: string): Promise<OrgProviderModeConfig> {
   const result = await pool.query<{ config: unknown }>("SELECT config FROM organizations WHERE id = $1", [orgId]);
   const row = result.rows[0];
   if (row === undefined) {
-    return { providerMode: "byok" };
+    if (orgId === "") {
+      return { providerMode: "byok" };
+    }
+    throw new OrgProviderModeUnresolved(orgId);
   }
   const config: OrgConfigV1 = migrateOrgConfig(row.config);
   return {

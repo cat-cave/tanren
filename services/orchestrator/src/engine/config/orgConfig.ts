@@ -134,6 +134,25 @@ export function defaultOrgConfigV1(): OrgConfigV1 {
   return OrgConfigV1.parse({ version: 1 });
 }
 
+/**
+ * The org's GitHub App installation from a stored `organizations.config` value,
+ * or `undefined` when no App is installed. The single shared implementation the
+ * clone / draft-PR / CI-poll / merge / speculative-integrate context loaders
+ * call so the clone resolves App-first.
+ *
+ * No silent fallback (the scoping/credential hardening directive): an ABSENT
+ * config (`null`/`undefined`) and a present-but-App-less config both resolve to
+ * `undefined` (legitimately "no App"), but a config that is PRESENT yet
+ * UNPARSEABLE is a real corruption — `migrateOrgConfig` throws and that throw
+ * PROPAGATES, rather than being swallowed to a static/unauthenticated clone.
+ */
+export function installationFromOrgConfig(orgConfig: unknown): OrgGithubAppInstallation | undefined {
+  if (orgConfig === null || orgConfig === undefined) {
+    return undefined;
+  }
+  return migrateOrgConfig(orgConfig).github_app;
+}
+
 // Emits a JSON Schema artifact for documentation. Operator UIs and external
 // tools should consume the Zod schema directly; the JSON Schema is for human
 // reference and for downstream tools that cannot import Zod.

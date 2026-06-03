@@ -17,6 +17,7 @@
 
 import { describe, expect, it } from "vitest";
 import type pg from "pg";
+import { getJobOrgId } from "@tanren/db";
 import { PostMergeWatcher, POST_MERGE_FAILURE_LABEL } from "../src/engine/postMerge/watcher.js";
 import type { PostMergeIssueClaimInput, PostMergeIssueClaimStore } from "../src/engine/postMerge/issueClaimStore.js";
 import type { EventStore, AppendEventInput } from "../src/engine/eventStore.js";
@@ -91,12 +92,24 @@ function fakePool(state: FakePoolState): pg.Pool {
   return { query: client.query, connect: async () => client } as unknown as pg.Pool;
 }
 
-/** A recording event store (test fixture): captures appends, never touches Postgres. */
+/**
+ * A recording event store (test fixture): captures appends, never touches Postgres.
+ * It also captures the AMBIENT per-job org id at append time — the real
+ * `PgEventStore` resolves its write client through the throwing scope seam, so an
+ * append with no scope would hit `MissingOrgScopeError`. Recording `ambientOrgId`
+ * lets a test PROVE the watcher now files its run-timeline events under the run's
+ * resolved org scope (not unscoped → throw/lost).
+ */
 class RecordingEventStore implements EventStore {
-  readonly appends: Array<{ eventType: EventName; payload: unknown; runId?: string }> = [];
+  readonly appends: Array<{ eventType: EventName; payload: unknown; runId?: string; ambientOrgId?: string }> = [];
   // eslint-disable-next-line @typescript-eslint/require-await
   async append<N extends EventName>(input: AppendEventInput<N>): Promise<void> {
-    this.appends.push({ eventType: input.eventType, payload: input.payload, runId: input.runId });
+    this.appends.push({
+      eventType: input.eventType,
+      payload: input.payload,
+      runId: input.runId,
+      ambientOrgId: getJobOrgId(),
+    });
   }
   typesAppended(): EventName[] {
     return this.appends.map((a) => a.eventType);
@@ -227,6 +240,22 @@ describe("PostMergeWatcher", () => {
     expect(opened.reason).toBe("post_merge_failure");
     expect(opened.label).toBe(POST_MERGE_FAILURE_LABEL);
     expect(opened.issueUrl.length).toBeGreaterThan(0);
+  });
+
+  it("files its run-timeline events UNDER the run's org scope (not unscoped → MissingOrgScopeError)", async () => {
+    // Regression: the watcher wakes on the run-activity bus with NO ambient scope,
+    // and its inner system-scoped reads have already closed. The two `eventStore`
+    // appends are tenant-table writes — the real `PgEventStore` resolves its client
+    // through the throwing scope seam, so an UNSCOPED append throws
+    // MissingOrgScopeError (caught/logged → the GitHub issue is created but these
+    // run-timeline events silently LOST). The fix wraps the appends in the run's
+    // resolved org scope; here we prove both appends saw the run's org id ambient.
+    const { watcher, events } = makeWatcher({ state: { merged: { mergeSha: "abc123" } }, outcome: "fail" });
+    await watcher.check(RUN_ID);
+    expect(events.typesAppended()).toEqual(["merge.post_merge_failed", "issue.opened"]);
+    // Both appends ran with the run's org id on the ambient per-job store — the GUC
+    // a real PgEventStore would carry into its short runWithOrgScope txn.
+    expect(events.appends.map((a) => a.ambientOrgId)).toEqual([ORG_ID, ORG_ID]);
   });
 
   it("opens NO issue on a post-merge CI pass (and does not consume a claim)", async () => {

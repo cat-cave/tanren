@@ -29,6 +29,7 @@ import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { migrate, runWithOrgScope } from "@tanren/db";
 import { PgRunnerStore } from "../src/engine/allocators/runnerStore.js";
+import { MissingOrgScopeError } from "../src/engine/data/orgScopedDb.js";
 import { createSpec } from "../src/engine/workflow/projectSpec.js";
 import { SpecStore } from "../src/engine/repositories/specs.js";
 
@@ -202,12 +203,10 @@ describeDb("RLS R2 cohort-3 — specs + runners + finalizers through the org-sco
       expect(released.rows[0]?.status).toBe("released");
     });
 
-    // Out-of-scope: the same store handed the pool falls back to the raw pool
-    // (empty GUC); under R3b's enforced policy the runners WITH CHECK rejects the
-    // INSERT — an unscoped tenant write can no longer silently land.
-    await expect(store.claim({ ...claimInput, runnerId: "runner_pool" })).rejects.toThrow(
-      /row-level security|policy/iu,
-    );
+    // Out-of-scope: the same store handed the pool has NO ambient scope (no
+    // connection scope, no per-job org id), so the claim is refused LOUDLY at the
+    // DAL seam — an unscoped tenant write never even reaches the DB's WITH CHECK.
+    await expect(store.claim({ ...claimInput, runnerId: "runner_pool" })).rejects.toThrow(MissingOrgScopeError);
     const committed = await ownerPool.query("SELECT 1 FROM runners WHERE runner_id = 'runner_pool'");
     expect(committed.rowCount).toBe(0);
   });

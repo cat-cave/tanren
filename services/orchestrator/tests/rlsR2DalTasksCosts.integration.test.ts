@@ -24,6 +24,7 @@
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { migrate, runWithOrgScope } from "@tanren/db";
+import { MissingOrgScopeError } from "../src/engine/data/orgScopedDb.js";
 import { CostRecorder } from "../src/engine/costs/recorder.js";
 import { FakeEventStore } from "./helpers/fakeEventStore.js";
 import { getRunUsage } from "../src/engine/metering/index.js";
@@ -131,8 +132,8 @@ describeDb("RLS R2 cohort-2 — tasks + cost_records through the org-scoped clie
       expect(done.rows[0]?.outcome).toBe("passed");
     });
 
-    // Out-of-scope: the same helper handed the pool falls back to the raw pool
-    // (empty GUC); under R3b's enforced policy the WITH CHECK rejects the INSERT
+    // Out-of-scope: the same helper handed the pool has NO ambient scope, so the
+    // insert is refused LOUDLY at the DAL seam (never reaching the DB's WITH CHECK)
     // — an unscoped tenant write can no longer silently land.
     await expect(
       insertChildTask(runtimePool, {
@@ -145,7 +146,7 @@ describeDb("RLS R2 cohort-2 — tasks + cost_records through the org-scoped clie
         cli: "fake",
         model: null,
       }),
-    ).rejects.toThrow(/row-level security|policy/iu);
+    ).rejects.toThrow(MissingOrgScopeError);
     const committed = await countTasks(ownerPool, "task_write_pool");
     expect(committed).toBe(0);
 
@@ -190,9 +191,9 @@ describeDb("RLS R2 cohort-2 — tasks + cost_records through the org-scoped clie
       expect(Number(within.rows[0]?.n)).toBe(before + 1);
     });
 
-    // Out-of-scope: the recorder's pool fallback (empty GUC) is denied by the
-    // policy under R3b — only the in-scope record landed.
-    await expect(recorder.record(ctx, tokens, { role: "pool" })).rejects.toThrow(/row-level security|policy/iu);
+    // Out-of-scope: the recorder handed the pool has NO ambient scope, so the
+    // record is refused LOUDLY at the DAL seam — only the in-scope record landed.
+    await expect(recorder.record(ctx, tokens, { role: "pool" })).rejects.toThrow(MissingOrgScopeError);
 
     const after = await countCosts(ownerPool, RUN_A);
     expect(after - before).toBe(1);

@@ -14,7 +14,7 @@
 
 import { runWithOrgScope, runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
-import { migrateOrgConfig, type OrgGithubAppInstallation } from "../config/orgConfig.js";
+import { installationFromOrgConfig, migrateOrgConfig } from "../config/orgConfig.js";
 import { migrateProjectConfig } from "../config/projectConfig.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type {
@@ -166,17 +166,6 @@ function resolveGithubStaticRef(projectConfig: unknown, orgConfig: unknown): str
   if (orgConfig === null || orgConfig === undefined) return undefined;
   try {
     return migrateOrgConfig(orgConfig).defaultCredentials?.github_token;
-  } catch {
-    return undefined;
-  }
-}
-
-function installationFromOrgConfig(orgConfig: unknown): OrgGithubAppInstallation | undefined {
-  if (orgConfig === null || orgConfig === undefined) {
-    return undefined;
-  }
-  try {
-    return migrateOrgConfig(orgConfig).github_app;
   } catch {
     return undefined;
   }

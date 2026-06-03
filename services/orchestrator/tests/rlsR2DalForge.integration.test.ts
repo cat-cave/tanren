@@ -29,7 +29,8 @@
 
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { migrate, runWithOrgScope } from "@tanren/db";
+import { migrate, runWithOrgScope, runWithSystemScope } from "@tanren/db";
+import { MissingOrgScopeError } from "../src/engine/data/orgScopedDb.js";
 import { ForgeProposalStore } from "../src/engine/forge/proposals.js";
 import { ForgeThreadStore } from "../src/engine/forge/threads.js";
 import { ForgeTurnStore } from "../src/engine/forge/turns.js";
@@ -136,19 +137,22 @@ describeDb("RLS R2 cohort-4 — forge threads/turns/proposals through the org-sc
     const scoped = await runWithOrgScope(runtimePool, ORG_A, (client) =>
       ForgeThreadStore.get(client, created.id, ACTOR),
     );
-    const owned = await ForgeThreadStore.get(ownerPool, created.id, ACTOR);
+    // The owner baseline read is RLS-exempt cross-org ground truth — run it under
+    // the system scope (the store routes through the scope seam, which now refuses
+    // an unscoped tenant read loudly).
+    const owned = await runWithSystemScope(ownerPool, (client) => ForgeThreadStore.get(client, created.id, ACTOR));
     expect(scoped).toEqual(owned);
     expect(scoped?.id).toBe(created.id);
-    expect(await ForgeThreadStore.get(runtimePool, created.id, ACTOR)).toBeUndefined();
+    // The raw runtime pool has NO ambient scope, so the unscoped read is now refused
+    // LOUDLY at the DAL seam (stronger than the prior empty-GUC → undefined deny).
+    await expect(ForgeThreadStore.get(runtimePool, created.id, ACTOR)).rejects.toThrow(MissingOrgScopeError);
 
     // listForRun via the scope equals the OWNER baseline, and scopes to org A only.
     const scopedList = await runWithOrgScope(runtimePool, ORG_A, (client) =>
       ForgeThreadStore.listForRun(client, { orgId: ORG_A, projectId: PROJECT_A, runId: RUN_A }, ACTOR),
     );
-    const ownedList = await ForgeThreadStore.listForRun(
-      ownerPool,
-      { orgId: ORG_A, projectId: PROJECT_A, runId: RUN_A },
-      ACTOR,
+    const ownedList = await runWithSystemScope(ownerPool, (client) =>
+      ForgeThreadStore.listForRun(client, { orgId: ORG_A, projectId: PROJECT_A, runId: RUN_A }, ACTOR),
     );
     expect(scopedList.map((t) => t.id)).toEqual(ownedList.map((t) => t.id));
     expect(scopedList.map((t) => t.id)).toContain(created.id);
@@ -186,9 +190,9 @@ describeDb("RLS R2 cohort-4 — forge threads/turns/proposals through the org-sc
     });
     expect(scopedTurn.index).toBe(0);
 
-    // Append via the raw pool (no scope) is denied: under the empty GUC the
-    // parent forge_thread is invisible, so the append's index-read raises "thread
-    // not found" before any INSERT — an unscoped tenant write cannot proceed.
+    // Append via the raw pool (no scope) is refused LOUDLY at the DAL seam — an
+    // unscoped tenant write never reaches the DB (stronger than the prior empty-GUC
+    // "thread not found" / policy deny).
     await expect(
       ForgeTurnStore.append(
         runtimePool,
@@ -201,7 +205,7 @@ describeDb("RLS R2 cohort-4 — forge threads/turns/proposals through the org-sc
         },
         ACTOR,
       ),
-    ).rejects.toThrow(/row-level security|policy|thread not found/iu);
+    ).rejects.toThrow(MissingOrgScopeError);
 
     // A second scoped append advances off the committed first turn.
     const secondTurn = await runWithOrgScope(runtimePool, ORG_A, (client) =>
@@ -223,7 +227,9 @@ describeDb("RLS R2 cohort-4 — forge threads/turns/proposals through the org-sc
     const scopedList = await runWithOrgScope(runtimePool, ORG_A, (client) =>
       ForgeTurnStore.list(client, { threadId: thread.id, limit: 50 }, ACTOR),
     );
-    const ownedList = await ForgeTurnStore.list(ownerPool, { threadId: thread.id, limit: 50 }, ACTOR);
+    const ownedList = await runWithSystemScope(ownerPool, (client) =>
+      ForgeTurnStore.list(client, { threadId: thread.id, limit: 50 }, ACTOR),
+    );
     expect(scopedList.map((t) => t.id)).toEqual(ownedList.map((t) => t.id));
     expect(scopedList.map((t) => t.id)).toEqual([scopedTurn.id, secondTurn.id]);
   });
@@ -275,7 +281,9 @@ describeDb("RLS R2 cohort-4 — forge threads/turns/proposals through the org-sc
     const scopedList = await runWithOrgScope(runtimePool, ORG_A, (client) =>
       ForgeProposalStore.listForThread(client, thread.id, ACTOR),
     );
-    const ownedList = await ForgeProposalStore.listForThread(ownerPool, thread.id, ACTOR);
+    const ownedList = await runWithSystemScope(ownerPool, (client) =>
+      ForgeProposalStore.listForThread(client, thread.id, ACTOR),
+    );
     expect(scopedList.map((p) => p.id)).toEqual(ownedList.map((p) => p.id));
     expect(scopedList.map((p) => p.id)).toContain(created.id);
 
@@ -292,8 +300,11 @@ describeDb("RLS R2 cohort-4 — forge threads/turns/proposals through the org-sc
       expect(outcome.status).toBe("executed");
     });
 
-    // Committed terminal state via the OWNER pool (RLS-exempt ground truth).
-    const committed = await ForgeProposalStore.get(ownerPool, created.id, ACTOR);
+    // Committed terminal state via the OWNER pool (RLS-exempt ground truth),
+    // read under the system scope (the store routes through the scope seam).
+    const committed = await runWithSystemScope(ownerPool, (client) =>
+      ForgeProposalStore.get(client, created.id, ACTOR),
+    );
     expect(committed?.status).toBe("executed");
     expect(committed?.result).toEqual({ ok: true });
 

@@ -11,8 +11,9 @@
 // source is pollable when it has a connector kind and is enabled.
 
 import type pg from "pg";
-import { runWithSystemScope } from "@tanren/db";
+import { runWithJobOrgId, runWithSystemScope } from "@tanren/db";
 import { z } from "zod";
+import { orgScopingPool } from "../../data/orgScopedDb.js";
 import {
   ingestSource,
   InboxStore,
@@ -82,15 +83,22 @@ export interface PollSourceResult {
  * source-scoped triage answerer first.
  */
 export async function pollSourceOnce(deps: IntakePollerDeps, source: InboxSource): Promise<PollSourceResult> {
+  // `ingestSource` does tenant reads/writes (existing-spec read, candidate upsert,
+  // and — on auto-route — the discovery accept + DAG insert) directly on its pool.
+  // The poller wakes cross-org with NO ambient scope, so on the bare pool those run
+  // with an empty `app.current_org_id` GUC and RLS denies them under `tanren_app`.
+  // The source carries a concrete `orgId` (always set), so ingest under the source's
+  // per-job org id AND hand the engine the org-scoping proxy: each direct `.query`
+  // opens a short `runWithOrgScope` carrying the source's org GUC.
   const engineDeps: InboxEngineDeps = {
-    pool: deps.pool,
+    pool: orgScopingPool(deps.pool),
     connectors: deps.connectors,
     answerer: deps.answererFactory({
       orgId: source.orgId,
       ...(source.projectId === null ? {} : { projectId: source.projectId }),
     }),
   };
-  const { candidates } = await ingestSource(engineDeps, source, deps.autoRoute);
+  const { candidates } = await runWithJobOrgId(source.orgId, () => ingestSource(engineDeps, source, deps.autoRoute));
   return { source, candidates };
 }
 

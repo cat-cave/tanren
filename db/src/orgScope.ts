@@ -38,6 +38,16 @@ const storage = new AsyncLocalStorage<OrgScope>();
 // duration of one DB operation, never across external I/O.
 const jobOrgStorage = new AsyncLocalStorage<string>();
 
+// The SYSTEM counterpart of `jobOrgStorage`: a lightweight per-job marker (holds
+// NO connection) that flags the ambient work as a genuinely cross-org / null-org
+// SYSTEM job — the legacy/unscoped (`org_id NULL`) run whose tenant ops have no
+// org GUC to carry. Like `jobOrgStorage` it is safe to keep open across the
+// job's minutes of external I/O; each tenant op then opens its OWN short
+// `runWithSystemScope` (the BYPASSRLS system pool) from it. This makes the
+// null-org path an EXPLICIT system scope rather than an implicit raw-pool
+// fallback (the scoping-hardening directive: no silent unscoped tenant op).
+const jobSystemStorage = new AsyncLocalStorage<true>();
+
 /**
  * The ambient org-scoped client, or `undefined` outside any scope. Handlers
  * that have adopted the org-scoped path call `getOrgScopedClient()` and run
@@ -60,6 +70,22 @@ export function runWithJobOrgId<T>(orgId: string, work: () => Promise<T>): Promi
 /** The ambient per-job org id, or `undefined` when no job org context is set. */
 export function getJobOrgId(): string | undefined {
   return jobOrgStorage.getStore();
+}
+
+/**
+ * Run `work` flagged as a per-job SYSTEM scope: the null-org / cross-org job
+ * whose tenant ops must run on the BYPASSRLS system pool. Holds NO connection
+ * (safe across the job's external I/O); each tenant op opens a SHORT
+ * `runWithSystemScope` from this marker. The EXPLICIT system entry-point for a
+ * legacy/unscoped run, replacing the old implicit bare-pool handoff.
+ */
+export function runWithSystemJobScope<T>(work: () => Promise<T>): Promise<T> {
+  return jobSystemStorage.run(true, work);
+}
+
+/** True when an ambient per-job SYSTEM scope (null-org / cross-org job) is set. */
+export function isSystemJobScope(): boolean {
+  return jobSystemStorage.getStore() === true;
 }
 
 /** The ambient scoped client, or `undefined` outside a scope. */
