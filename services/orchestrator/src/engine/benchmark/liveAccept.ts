@@ -105,12 +105,15 @@ export function buildLiveRunAccept(deps: LiveAcceptDeps): (input: TrialAcceptInp
       return "failed";
     }
 
-    // 2. Allocate a runner via the SAME allocator the run path uses.
+    // 2. Allocate a runner via the SAME allocator the run path uses. Thread the
+    //    org so the `runners` row is written under the right tenant scope (the
+    //    allocator binds org_id explicitly now — no `runs` subquery).
     const allocation = await deps.allocator.allocate({
       runId,
       projectId: facts.project_id,
       runnerImage: facts.runner_image,
       identitySecretRef: deps.identitySecretRef,
+      orgId,
     });
     try {
       // 3. Clone the repo AT THE MERGED SHA (not a branch tip — the exact merged

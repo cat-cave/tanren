@@ -5,10 +5,14 @@ import { PgRunnerStore, type ClaimRunnerInput } from "../src/engine/allocators/r
 
 // PgRunnerStore is the orchestrator-side mirror of the runners table. The
 // mutation survivors here were all "no coverage": the exact SQL (INSERT vs
-// UPDATE, the org-id tenancy subquery, the status literals, the bound
-// parameter order) was never asserted. These tests capture the emitted SQL +
-// params so a mutated statement (wrong column, dropped status, reordered
-// params) is caught.
+// UPDATE, the explicit org-id bind, the status literals, the bound parameter
+// order) was never asserted. These tests capture the emitted SQL + params so a
+// mutated statement (wrong column, dropped status, reordered params) is caught.
+//
+// org_id is bound EXPLICITLY from the caller's `orgId` ($4) — NOT derived from a
+// `(SELECT org_id FROM runs …)` subquery — so a RUNLESS allocation (a Forge
+// ideation runner whose runId has no matching `runs` row) still writes a valid
+// tenant org and passes the runners WITH CHECK policy.
 //
 // The store routes its write through `withJobOrgScope`, which now REQUIRES an
 // ambient scope (no silent unscoped tenant write). The runner is claimed during
@@ -51,6 +55,7 @@ const claimInput: ClaimRunnerInput = {
   runnerId: "runner_run_1",
   runId: "run_1",
   projectId: "proj_a",
+  orgId: "org_a",
   allocator: "manual-ssh",
   sshHost: "10.0.0.1",
   sshPort: 2200,
@@ -70,16 +75,19 @@ describe("PgRunnerStore.claim", () => {
     expect(text).toMatch(/'claimed'/u);
   });
 
-  it("derives org_id from the run via a subquery (tenancy hardening)", async () => {
+  it("binds org_id EXPLICITLY from the caller (no run subquery), so a runless allocation still scopes", async () => {
     const pool = new RecordingPool();
     await runWithSystemJobScope(() => new PgRunnerStore(poolAs(pool)).claim(claimInput));
 
     const { text } = pool.queries[0]!;
     expect(text).toMatch(/org_id/u);
-    expect(text).toMatch(/SELECT org_id FROM runs WHERE run_id = \$2/u);
+    // The org is the caller's, bound directly — the old `(SELECT org_id FROM runs
+    // WHERE run_id = …)` subquery is GONE (it returned NULL for a runless Forge
+    // handle and broke the runners WITH CHECK policy).
+    expect(text).not.toMatch(/SELECT org_id FROM runs/u);
   });
 
-  it("binds the claim fields in the documented parameter order", async () => {
+  it("binds the claim fields in the documented parameter order (org_id is $4)", async () => {
     const pool = new RecordingPool();
     await runWithSystemJobScope(() => new PgRunnerStore(poolAs(pool)).claim(claimInput));
 
@@ -87,6 +95,7 @@ describe("PgRunnerStore.claim", () => {
       "runner_run_1",
       "run_1",
       "proj_a",
+      "org_a",
       "manual-ssh",
       "10.0.0.1",
       2200,
@@ -94,6 +103,15 @@ describe("PgRunnerStore.claim", () => {
       "img@sha256:deadbeef",
       "host-1",
     ]);
+  });
+
+  it("passes a null orgId through verbatim (the explicit legacy/unscoped-run case)", async () => {
+    const pool = new RecordingPool();
+    await runWithSystemJobScope(() => new PgRunnerStore(poolAs(pool)).claim({ ...claimInput, orgId: null }));
+
+    // null is the explicit "legacy/unscoped run" marker — bound as $4 unchanged,
+    // written under the worker's BYPASSRLS system scope. Not coerced to a value.
+    expect(pool.queries[0]!.params[3]).toBeNull();
   });
 });
 
