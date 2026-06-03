@@ -48,7 +48,26 @@ export interface MergeCoordinatorSubscriberDeps {
    * the event-driven trigger fires it.
    */
   coordinator?: MergeCoordinator;
+  /**
+   * Injectable wall clock (ms epoch) for the pending-hold debounce window — defaults
+   * to `Date.now`. A test overrides it to drive the debounce deterministically.
+   */
+  now?: () => number;
 }
+
+/**
+ * Bug B — the NOTIFY-storm debounce window (ms). While a project is in a PENDING-hold
+ * (the batch check returned `pending` — a no-checks settle counting down or a
+ * registered-CI batch still running), NOTIFY-driven re-passes are SUPPRESSED for this
+ * window so a storm of unrelated `tanren_run` NOTIFYs (concurrent specs emit ~2/sec)
+ * does NOT re-run the (expensive) batch integration on every one — the hot loop the
+ * live no-CI repo hit. The armed re-drive timer (`retryAfterMs`) is the AUTHORITATIVE
+ * re-check; it bypasses the suppression. The window is kept SHORT (≤ the CI poll
+ * cadence) so a GENUINE CI-completion / merge.completed NOTIFY is still reacted to
+ * within one window — the debounce throttles the storm, it never silences a real
+ * completion. It applies ONLY to the pending-hold state, never to a clean pass.
+ */
+const PENDING_DEBOUNCE_MS = 5_000;
 
 /** Resolve a run's project id, system-scoped (the `tanren_run` payload is run-only). */
 async function resolveRunProject(pool: pg.Pool, runId: string): Promise<string | undefined> {
@@ -90,9 +109,19 @@ export class MergeCoordinatorSubscriber {
    * stacked), and the timer is cleared on `stop()`.
    */
   private readonly retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /**
+   * Bug B debounce: per-project deadline (ms epoch) until which NOTIFY-driven re-passes
+   * are SUPPRESSED because the project is in a pending-hold. Set when a coordinate pass
+   * returns a pending hold; consulted ONLY in the NOTIFY path (`onRunActivity`). The
+   * authoritative re-check is the armed `retryAfterMs` timer, which bypasses this.
+   */
+  private readonly pendingHoldUntil = new Map<string, number>();
+  /** Injectable clock (ms epoch) for the pending-hold debounce — defaults to Date.now. */
+  private readonly now: () => number;
 
   constructor(private readonly deps: MergeCoordinatorSubscriberDeps) {
     this.coordinator = deps.coordinator ?? this.buildProductionCoordinator();
+    this.now = deps.now ?? Date.now;
   }
 
   private buildProductionCoordinator(): MergeCoordinator {
@@ -154,6 +183,7 @@ export class MergeCoordinatorSubscriber {
     this.unsubscribe = undefined;
     for (const timer of this.retryTimers.values()) clearTimeout(timer);
     this.retryTimers.clear();
+    this.pendingHoldUntil.clear();
   }
 
   /**
@@ -165,6 +195,9 @@ export class MergeCoordinatorSubscriber {
     if (this.stopped || this.retryTimers.has(projectId)) return;
     const timer = setTimeout(() => {
       this.retryTimers.delete(projectId);
+      // This timer IS the authoritative re-check for a pending/infra hold — clear the
+      // NOTIFY-suppression window so the re-drive (and any NOTIFY after it) runs fresh.
+      this.pendingHoldUntil.delete(projectId);
       if (this.stopped) return;
       void this.schedule(projectId);
     }, delayMs);
@@ -177,6 +210,15 @@ export class MergeCoordinatorSubscriber {
     if (runId === "") return;
     const projectId = await resolveRunProject(this.deps.pool, runId);
     if (projectId === undefined) return;
+    // Bug B debounce: while this project is in a pending-hold window, SUPPRESS the
+    // NOTIFY-driven re-pass — the armed `retryAfterMs` timer is the authoritative
+    // re-check. This collapses a `tanren_run` NOTIFY storm (concurrent specs emit
+    // ~2/sec) into at most one batch integration per window, killing the no-CI hot
+    // loop. The window is short (≤ the CI poll cadence) so a GENUINE CI-completion
+    // NOTIFY is still reacted to within one window once the hold lapses — it throttles
+    // the storm, never silences a real completion.
+    const holdUntil = this.pendingHoldUntil.get(projectId);
+    if (holdUntil !== undefined && this.now() < holdUntil) return;
     await this.schedule(projectId);
   }
 
@@ -200,11 +242,25 @@ export class MergeCoordinatorSubscriber {
       this.rePending.delete(projectId);
       try {
         const result = await this.coordinator.coordinate(projectId);
-        // An infra-error hold returns no merge AND no new NOTIFY will re-trigger this
-        // project (a clean single-PR queue would otherwise hang). Arm a bounded,
-        // idempotent one-shot re-drive so the held batch is re-checked once it clears.
+        // A pending/infra hold returns no merge AND no `tanren_run` NOTIFY is guaranteed
+        // to re-trigger this project on its own (a clean single-PR queue would otherwise
+        // hang; a no-checks settle expires on wall time). Arm a bounded, idempotent
+        // one-shot re-drive so the held batch is re-checked once it clears.
         if (result.retryAfterMs !== undefined && !this.rePending.has(projectId)) {
+          // Bug B: a PENDING hold (the batch CI is pending / a no-checks settle is
+          // counting down) opens a NOTIFY-suppression window so a NOTIFY storm does not
+          // re-run the integration ~2/sec. An infra-error hold does NOT suppress NOTIFYs
+          // (a clearing signal should re-check promptly) — only the armed timer recovers
+          // it. The armed re-drive timer is the authoritative re-check in both cases.
+          if (result.holdReason === "all_blocked") {
+            this.pendingHoldUntil.set(projectId, this.now() + PENDING_DEBOUNCE_MS);
+          }
           this.armDelayedReDrive(projectId, result.retryAfterMs);
+        } else if (result.retryAfterMs === undefined) {
+          // A pass that did NOT hold-pending (a merge advanced, a dequeue, or a clean
+          // empty/serialized hold) clears any stale suppression window so the next
+          // NOTIFY re-checks immediately — the debounce only ever spans a live hold.
+          this.pendingHoldUntil.delete(projectId);
         }
       } catch (error) {
         console.error(`[merge-coordinator] coordinate pass failed for project ${projectId}:`, error);

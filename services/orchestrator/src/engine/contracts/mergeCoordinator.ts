@@ -271,9 +271,14 @@ export interface CoordinateResult {
    */
   holdReason?: "serialized" | "empty" | "all_blocked" | "infra_error";
   /**
-   * When set, the pass held on a TRANSIENT condition (an infra error) that no
-   * `tanren_run` NOTIFY will clear on its own — the subscriber should re-drive THIS
-   * project once after roughly this many ms so a stuck single-PR queue recovers.
+   * When set, the pass held on a TRANSIENT/TIMED condition that no `tanren_run` NOTIFY
+   * is guaranteed to clear on its own — the subscriber should re-drive THIS project
+   * once after roughly this many ms so a stuck queue recovers. Two cases:
+   *   - an INFRA-ERROR hold (the batch check could not be run);
+   *   - a PENDING hold (Bug B) — a no-checks settle counting down, or a registered-CI
+   *     batch still running — where `retryAfterMs` is the exact settle remainder when
+   *     known, else a default recheck interval. This is what stops the no-CI hot loop:
+   *     a pending batch is re-checked on the armed timer, NOT on every unrelated NOTIFY.
    * Bounded + idempotent at the subscriber (one timer per project, not stacked).
    */
   retryAfterMs?: number;

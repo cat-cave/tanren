@@ -414,6 +414,13 @@
       "when": 1780486396447,
       "tag": "0058_tricky_vulcan",
       "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1780493096782,
+      "tag": "0059_serious_kid_colt",
+      "breakpoints": true
     }
   ]
 }

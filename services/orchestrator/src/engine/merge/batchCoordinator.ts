@@ -58,6 +58,19 @@ const INFRA_RETRY_BACKOFF_MS = [250, 500];
 const INFRA_HOLD_RETRY_AFTER_MS = 3000;
 
 /**
+ * Bug B — back off a PENDING batch (no hot loop). When a batch check returns `pending`
+ * the coordinator HOLDS, but no `tanren_run` NOTIFY is guaranteed to clear it on its
+ * own (a no-checks settle expires on wall time; a registered-CI completion fires a
+ * webhook, not necessarily a run NOTIFY). So the pass returns a `retryAfterMs` and the
+ * subscriber arms ONE idempotent re-drive timer (the SAME armDelayedReDrive infra used
+ * for the infra-error hold), instead of re-checking on every unrelated NOTIFY (the
+ * ~2/sec hot loop the live no-CI repo hit). When the verdict carries a `settleAfterMs`
+ * (the no-checks grace remaining) we wake EXACTLY at expiry; otherwise this default
+ * recheck interval applies (a registered-CI pending — re-poll the integration ref).
+ */
+const PENDING_RECHECK_MS = 15_000;
+
+/**
  * Thrown by the bisect callback when a sub-batch's CI is still pending — bisect
  * cannot give a definitive verdict, so the pass aborts the bisect + HOLDS (it never
  * guesses, which could blame an innocent PR). The next CI-completion re-triggers.
@@ -235,10 +248,19 @@ export class BatchMergeCoordinator implements MergeCoordinator {
       }
 
       if (verdict.result === "pending") {
-        // The prospective merged state's CI is still RUNNING — NOT a failure. HOLD
-        // (do NOT bisect a not-yet-terminal batch, which could blame an innocent PR);
-        // the next CI-completion notification re-triggers a fresh coordinate pass.
-        return { projectId, holdReason: "all_blocked", queueDepth };
+        // The prospective merged state's CI is still RUNNING (or the repo has no CI yet
+        // and the no-checks grace has not elapsed) — NOT a failure. HOLD (do NOT bisect
+        // a not-yet-terminal batch, which could blame an innocent PR). Bug B: return a
+        // `retryAfterMs` so the subscriber arms ONE idempotent re-drive timer instead of
+        // re-checking on every unrelated `tanren_run` NOTIFY (the no-CI hot loop). Wake
+        // EXACTLY at the settle expiry when known (`settleAfterMs`), else the default
+        // recheck interval.
+        return {
+          projectId,
+          holdReason: "all_blocked",
+          retryAfterMs: verdict.settleAfterMs ?? PENDING_RECHECK_MS,
+          queueDepth,
+        };
       }
 
       // FAIL/CONFLICT → bisect to isolate the single offending PR.
@@ -247,9 +269,10 @@ export class BatchMergeCoordinator implements MergeCoordinator {
 
       const bisect = await this.bisectBatch(projectId, current.batch);
       if (bisect === "pending") {
-        // A sub-batch's CI was still running — HOLD (no entry dequeued/blamed); the
-        // next CI-completion re-triggers a fresh pass.
-        return { projectId, holdReason: "all_blocked", queueDepth };
+        // A sub-batch's CI was still running — HOLD (no entry dequeued/blamed). Bug B:
+        // back off with a `retryAfterMs` so the subscriber re-drives once rather than
+        // re-checking on every unrelated NOTIFY (same anti-hot-loop guarantee).
+        return { projectId, holdReason: "all_blocked", retryAfterMs: PENDING_RECHECK_MS, queueDepth };
       }
       if ("kind" in bisect) {
         // A sub-batch check could NOT be RUN (a transient infra error) — bisect cannot

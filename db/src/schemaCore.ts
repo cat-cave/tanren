@@ -232,6 +232,15 @@ export const mergeQueue = pgTable(
     prUrl: text("pr_url").notNull(),
     prNumber: text("pr_number").notNull(),
     enqueuedAt: timestamp("enqueued_at", { withTimezone: true }).notNull().defaultNow(),
+    // The NO-CHECKS SETTLE anchor (the no-CI-repo merge-queue hang fix). Set the FIRST
+    // time the speculative batch check observes GENUINELY-zero checks on the rebuilt
+    // integration ref keyed on this (tail) entry, and CLEARED the moment any real
+    // verdict (checks_pending/passed/failed/conflict) is seen — so a repo whose workflow
+    // registers a check within seconds never accrues a continuous no-checks window and
+    // never settle-merges unverified. The settle grace measures `now - no_checks_since`
+    // (NOT `now - enqueued_at`, which would wrongly count queue-backlog time), so a
+    // genuinely-no-CI repo settles to pass only after the grace of CONTINUOUS no-checks.
+    noChecksSince: timestamp("no_checks_since", { withTimezone: true }),
     /** Set when the coordinator CLAIMED the entry (status → merging). */
     claimedAt: timestamp("claimed_at", { withTimezone: true }),
     /** Set when the entry reached a terminal status (merged / dequeued). */
