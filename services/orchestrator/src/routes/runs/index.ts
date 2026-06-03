@@ -39,6 +39,7 @@ import {
   fetchRunSpecSummary,
   fetchRunTasks,
 } from "./list.js";
+import { registerProjectProgressRoute } from "./progressRoute.js";
 import { handleSseStream } from "./sse.js";
 import { parseRawViewOptIn } from "./redaction.js";
 
@@ -151,6 +152,11 @@ export function createRunRoutes(options: RunRoutesOptions) {
   // The paginated events + costs reads share the same run-access gate and
   // cursor-error mapping; registered together to keep this builder focused.
   registerRunPaginationRoutes(app, options);
+
+  // The single "where is my project" aggregate (project-progress). Reuses the
+  // same org-scope discipline as the spec/run/feed reads; kept in its own
+  // builder so `createRunRoutes` stays a focused factory.
+  registerProjectProgressRoute(app, options);
 
   // -------------------------------------------------------------------------
   // GET /orgs/:orgId/projects/:projectId/runs/:runId/forge
