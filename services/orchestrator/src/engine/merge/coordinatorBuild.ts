@@ -19,6 +19,7 @@
 import { runWithJobOrgId, runWithOrgScope, runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
 import type { ActorContext } from "../../auth/schemas.js";
+import { orgScopingPool } from "../data/orgScopedDb.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { VcsProvider } from "../contracts/vcsProvider.js";
@@ -161,24 +162,34 @@ function buildDriveConflictResolver(
 export function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQueuedRun {
   return async ({ runId }): Promise<MergeDriveOutcome> => {
     const facts = await resolveRunFacts(deps.pool, runId);
+    // RLS scope for the merge drive's TENANT-TABLE READS. The coordinator subscriber
+    // wakes on the run-activity bus with NO ambient org scope (not a per-org request),
+    // so a raw `deps.pool.query` for a tenant table runs under the `tanren_app`
+    // (NOBYPASSRLS) role with an EMPTY `app.current_org_id` GUC → deny-by-default RLS
+    // returns ZERO rows. The merge stage's first read is `loadReviewMergeRunContext`
+    // (runs ⋈ projects ⋈ organizations) — an empty result there throws
+    // `ReviewMergeRunNotFoundError`, the coordinator masks the throw as
+    // `{kind:"blocked"}`, and a CLEAN, mergeable PR is silently dequeued and stranded.
+    // `resolveSpeculativeState`, `ensureMergeTask`'s SELECT, and the re-gate CI poll's
+    // run/PR reads are the same class of read on the same raw pool.
+    //
+    // `facts.orgId` is already resolved (system-scoped) above, so we run the whole
+    // drive under the run's lightweight per-job org id (`runWithJobOrgId`, holds NO
+    // connection) AND hand the read paths an `orgScopingPool`: its `.query` self-routes
+    // EACH statement through a SHORT `runWithOrgScope` carrying the org GUC (the same
+    // seam the run executor / intake feed the workflow). A connection is held only for
+    // the duration of one DB op, NEVER across the GitHub merge/CI calls `mergeForRun`
+    // interleaves — so we scope the reads without pinning a connection across I/O.
+    const scopedPool = orgScopingPool(deps.pool);
     // Plane-split: when a writer is wired, the merge stage appends its events +
     // drives its run/spec/task writes through the control plane (the writer IS an
     // EventStore + carries the run/spec/task lifecycle writer). Absent, the merge
-    // stage uses the in-process org-scoped PgEventStore — byte-identical to today.
-    // The whole drive runs under `runWithJobOrgId(facts.orgId)` (below), so the
-    // writer's ambient-org event/task appends resolve the correct org.
-    const eventStore = deps.runStateWriter ?? new PgEventStore(deps.pool);
-    // The coordinator subscriber drives this with NO ambient org scope (it wakes on
-    // the run-activity bus, not a per-org request), so `mergeForRun` — which appends
-    // `task.started` / merge events via `eventStore` and does other tenant
-    // reads/writes — would hit the H2 throw (no scope → MissingOrgScopeError) and the
-    // outcome would be masked as `blocked`, silently dequeuing every native_queue
-    // merge. `facts.orgId` is already resolved (system-scoped) above, so run the
-    // whole merge drive under the run's lightweight per-job org id: every tenant
-    // `.query` / event append opens a short `runWithOrgScope` carrying the org GUC.
+    // stage uses the in-process PgEventStore over the org-scoping pool (its appends
+    // self-route through the per-job org scope) — byte-identical to today.
+    const eventStore = deps.runStateWriter ?? new PgEventStore(scopedPool);
     const merge = await runWithJobOrgId(facts.orgId, () =>
       mergeForRun({
-        pool: deps.pool,
+        pool: scopedPool,
         eventStore,
         // Plane-split: route the merge stage's run/spec/task lifecycle writes
         // through the control plane when wired (else the in-process org-scoped
@@ -197,9 +208,11 @@ export function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQ
         // runner is gone), returning unresolved → a recoverable conflict dequeue.
         resolveConflict: buildDriveConflictResolver(deps.pool, facts, deps.runStateWriter),
         // P2a re-gate: re-poll the PR's CI via the VcsProvider after an auto-rebase
-        // (no runner needed — it is a CI-status read).
+        // (no runner needed — it is a CI-status read). `pollCiForRun` reads the run/PR
+        // context + ensures the CI task on its pool, so it gets the SAME `scopedPool`
+        // — those tenant reads carry the per-job org GUC under RLS.
         reGateCi: buildReGateCiForQueuedRun({
-          pool: deps.pool,
+          pool: scopedPool,
           eventStore,
           // Plane-split: route the re-gate CI poll's task writes through the control
           // plane when wired (else direct on the pool — byte-identical).

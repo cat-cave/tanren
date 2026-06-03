@@ -6,7 +6,11 @@
 // + CI-poll steps used into the context, so all three steps share one source.
 
 import { describe, expect, it } from "vitest";
-import { loadReviewMergeRunContext, type RunStateClient } from "../src/engine/workflow/reviewMerge/context.js";
+import {
+  loadReviewMergeRunContext,
+  ReviewMergeRunNotFoundError,
+  type RunStateClient,
+} from "../src/engine/workflow/reviewMerge/context.js";
 
 interface RowOverrides {
   config?: unknown;
@@ -85,6 +89,19 @@ describe("loadReviewMergeRunContext credential resolution", () => {
     await expect(
       loadReviewMergeRunContext(pool, "run_1", { resolvedGithubCredentialRef: "credential/openai/wrong" }),
     ).rejects.toThrow(/credential\/github\//u);
+  });
+
+  it("throws ReviewMergeRunNotFoundError when the run row is absent (genuinely missing run, even under a valid scope)", async () => {
+    // The coordinator-drive RLS fix makes the context read run under a GUC-bearing
+    // scope so an EXISTING run resolves. A genuinely-missing run (the query returns
+    // zero rows for a real reason, not an RLS deny) must STILL throw not-found — the
+    // fix must not mask an absent run.
+    const empty = {
+      async query() {
+        return { rows: [], rowCount: 0 };
+      },
+    } as unknown as RunStateClient;
+    await expect(loadReviewMergeRunContext(empty, "run_missing")).rejects.toBeInstanceOf(ReviewMergeRunNotFoundError);
   });
 });
 
