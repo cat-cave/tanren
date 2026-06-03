@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type pg from "pg";
 import { installationFromOrgConfig, type OrgGithubAppInstallation } from "../config/orgConfig.js";
+import { resolveNoChecksSettleMs, settleNoChecksObservation, timestampToMs } from "./ciNoChecksSettle.js";
+// Re-exported so call sites + tests keep importing the settle policy from `ciPolling`.
+export { settleNoChecksObservation } from "./ciNoChecksSettle.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import { validateGithubCredentialRef } from "../credentials/githubToken.js";
@@ -13,7 +16,16 @@ import { type GitHubCheckRun, type GitHubCommitStatus, type GitHubPullRequestChe
 type RunStateClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
 export type CiObservationStatus = "pending" | "passed" | "failed";
-export type CiObservationReason = "no_checks" | "checks_pending" | "all_checks_passed" | "check_failed";
+export type CiObservationReason =
+  | "no_checks"
+  | "checks_pending"
+  | "all_checks_passed"
+  | "check_failed"
+  // Bug-fix (no-CI repo hang): a genuinely-zero-checks observation whose no-checks grace
+  // has elapsed — the run loop PROMOTES it pending→passed (nothing to verify). PURE
+  // `evaluateCiObservation` never produces this; only the `pollCiForRun`/
+  // `settleNoChecksObservation` poll policy does (see there for the safety boundary).
+  | "no_checks_settled";
 
 export interface CiObservation {
   status: CiObservationStatus;
@@ -47,6 +59,8 @@ export interface PollCiForRunInput {
   githubCredentialRef?: string;
   /** P3-0003: shared installation-token minter (cache lives here). */
   githubAppMinter?: GithubAppTokenMinter;
+  /** Injectable wall clock (ms epoch) for the no-checks settle — defaults to `Date.now`. */
+  now?: () => number;
 }
 
 export interface PollCiForRunResult {
@@ -86,7 +100,8 @@ export async function pollCiForRun(input: PollCiForRunInput): Promise<PollCiForR
   }
 
   const eventStore = input.eventStore ?? new PgEventStore(input.pool);
-  const task = await ensureCiTask(input.pool, context, input.runStateWriter);
+  const nowMs = (input.now ?? Date.now)();
+  const task = await ensureCiTask(input.pool, context, nowMs, input.runStateWriter);
   if (task.created) {
     await eventStore.append({
       runId: context.runId,
@@ -111,7 +126,17 @@ export async function pollCiForRun(input: PollCiForRunInput): Promise<PollCiForR
   const credentialRef = ledgerRef;
   const pr = input.vcsProvider.parsePullRequest(context.prUrl);
   const checks = await input.vcsProvider.readPullRequestChecks(pr, resolved);
-  const observation = evaluateCiObservation(checks);
+  // PURE truth first — `evaluateCiObservation` never settles (no_checks ⇒ pending) —
+  // then the no-CI settle POLL POLICY promotes a genuinely-zero-checks observation
+  // pending→passed once the grace elapses (see `settleNoChecksObservation` for the
+  // anchor + safety boundary; `checks_pending`/`check_failed`/passed are untouched).
+  const rawObservation = evaluateCiObservation(checks);
+  const observation = settleNoChecksObservation(
+    rawObservation,
+    task.startedAtMs,
+    resolveNoChecksSettleMs(context.projectConfig),
+    nowMs,
+  );
   await persistCiObservation(input.pool, task.taskId, observation, input.runStateWriter);
 
   const payload = ciEventPayload(context.prUrl, credentialRef, observation);
@@ -287,19 +312,22 @@ async function loadCiRunContext(pool: RunStateClient, runId: string): Promise<Ci
 async function ensureCiTask(
   pool: RunStateClient,
   context: CiRunContext,
+  nowMs: number,
   writer?: RunStateWriter,
-): Promise<{ taskId: string; attempt: number; created: boolean }> {
+): Promise<{ taskId: string; attempt: number; created: boolean; startedAtMs: number }> {
   // The SELECT is a READ — the data plane keeps `tasks` SELECT, so it always runs
   // in-process (the writer carries no read surface). Only the INSERT/UPDATE route.
   const existing = await pool.query(
-    `SELECT task_id, attempt
+    `SELECT task_id, attempt, started_at
      FROM tasks
      WHERE run_id = $1 AND kind = 'ci'
      ORDER BY started_at DESC NULLS LAST, task_id ASC
      LIMIT 1`,
     [context.runId],
   );
-  const existingTask = existing.rows[0] as { task_id: string; attempt: number } | undefined;
+  const existingTask = existing.rows[0] as
+    | { task_id: string; attempt: number; started_at: Date | string | null }
+    | undefined;
   if (existingTask !== undefined) {
     const attempt = Number(existingTask.attempt) + 1;
     if (writer === undefined) {
@@ -310,7 +338,14 @@ async function ensureCiTask(
     } else {
       await writer.updateTask({ taskId: existingTask.task_id, transition: "running_attempt", attempt });
     }
-    return { taskId: existingTask.task_id, attempt, created: false };
+    // STABLE settle anchor: the task's persisted `started_at` (fixed at the FIRST poll,
+    // survives PR-head/integration-ref churn); fall back to `nowMs` when unset.
+    return {
+      taskId: existingTask.task_id,
+      attempt,
+      created: false,
+      startedAtMs: timestampToMs(existingTask.started_at) ?? nowMs,
+    };
   }
 
   const taskId = `task_${randomUUID()}`;
@@ -334,7 +369,8 @@ async function ensureCiTask(
       attempt: 1,
     });
   }
-  return { taskId, attempt: 1, created: true };
+  // A brand-new CI task starts now — anchor the no-checks grace on `nowMs` (elapsed 0).
+  return { taskId, attempt: 1, created: true, startedAtMs: nowMs };
 }
 
 async function persistCiObservation(

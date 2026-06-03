@@ -24,6 +24,7 @@ import { type BatchCheckVerdict, type BatchChecker } from "../contracts/batchMer
 import type { MergeQueueEntry } from "../contracts/mergeCoordinator.js";
 import { installationFromOrgConfig, migrateOrgConfig } from "../config/orgConfig.js";
 import { migrateProjectConfig } from "../config/projectConfig.js";
+import { DEFAULT_NO_CHECKS_SETTLE_MS } from "../config/shared.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { IntegrationAncestor, VcsProvider } from "../contracts/vcsProvider.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
@@ -54,10 +55,20 @@ export interface PgBatchCheckerDeps {
   vcsProvider: VcsProvider;
   secrets: SecretStore;
   githubAppMinter?: GithubAppTokenMinter;
+  /**
+   * Injectable wall clock (ms epoch) for the no-checks settle elapsed computation —
+   * defaults to `Date.now`. Tests override it to drive the grace boundary
+   * deterministically (mirrors the GithubAppTokenMinter clock seam).
+   */
+  now?: () => number;
 }
 
 export class PgBatchChecker implements BatchChecker {
-  constructor(private readonly deps: PgBatchCheckerDeps) {}
+  private readonly now: () => number;
+
+  constructor(private readonly deps: PgBatchCheckerDeps) {
+    this.now = deps.now ?? Date.now;
+  }
 
   async checkBatch(input: { projectId: string; entries: ReadonlyArray<MergeQueueEntry> }): Promise<BatchCheckVerdict> {
     // An empty entry set checks the base (`default_branch`) alone — which passes (the
@@ -77,13 +88,18 @@ export class PgBatchChecker implements BatchChecker {
       throw new Error(`cannot batch-check ${input.projectId}: project has no org`);
     }
 
-    const { project, branches } = await runWithOrgScope(this.deps.pool, orgId, async (client) => {
+    const { project, branches, minEnqueuedAtMs } = await runWithOrgScope(this.deps.pool, orgId, async (client) => {
       const projectRow = await this.loadProject(client, input.projectId);
-      const branchRows = await this.loadEntryBranches(
-        client,
-        input.entries.map((e) => e.specId),
-      );
-      return { project: projectRow, branches: branchRows };
+      const specIds = input.entries.map((e) => e.specId);
+      const branchRows = await this.loadEntryBranches(client, specIds);
+      // The STABLE settle anchor: the earliest `enqueued_at` over the batch's ACTIVE
+      // queue entries. Org-scoped under the SAME RLS scope as the other loads. This is
+      // NOT the ephemeral integration sha (which resets every rebuild cycle and would
+      // never accrue elapsed time) — `merge_queue.enqueued_at` is fixed at enqueue and
+      // outlives integration-ref churn, so the grace measures real wall time since the
+      // batch became ready.
+      const anchorMs = await this.loadBatchEnqueueAnchorMs(client, specIds);
+      return { project: projectRow, branches: branchRows, minEnqueuedAtMs: anchorMs };
     });
 
     // Order the entries' branches in the caller's DAG order — a missing branch is a
@@ -126,13 +142,44 @@ export class PgBatchChecker implements BatchChecker {
     // 2. Run the CI/gate against the prospective merged tree (the integration ref).
     const checks = await this.deps.vcsProvider.readBranchChecks({ repo, branch: integrationBranch, token });
     const observation = evaluateCiObservation(checks);
+    // `passed`/`failed` are UNCHANGED — the safety boundary: a green prospective state
+    // merges, a red/failing check ALWAYS blocks (never settled → merged).
     if (observation.status === "passed") {
       return { result: "pass", integrationBranch };
     }
     if (observation.status === "failed") {
       return { result: "fail", message: `batch CI failed (${observation.reason}) on ${integrationBranch}` };
     }
-    // Still running — NOT a failure: hold (the coordinator re-checks on CI completion).
+
+    // PENDING — split on WHY. The NO-CHECKS SETTLE (see DEFAULT_NO_CHECKS_SETTLE_MS):
+    //   - `no_checks` (GENUINELY zero check-runs + statuses, NOT required-context
+    //     gating) ⇒ this repo has NO CI registered at all on the integration ref. There
+    //     is nothing to verify; after the bounded grace, treat the gate as green (mirror
+    //     GitHub merging a PR with no required checks + no failing checks). Anchored on
+    //     the STABLE `enqueued_at` — NOT the ephemeral integration sha.
+    //   - `checks_pending` (real CI REGISTERED but not yet terminal) ⇒ HOLD unchanged.
+    //     NO settle: we WAIT for the registered CI to finish (a CI-completion NOTIFY
+    //     re-triggers the pass). A repo with real CI registers a queued check within
+    //     seconds, flipping no_checks→checks_pending BEFORE the grace elapses, so the
+    //     settle never short-circuits a repo that actually has CI.
+    if (observation.reason === "no_checks") {
+      const noChecksSettleMs = resolveNoChecksSettleMs(project.project_config);
+      // No active queue anchor (defensive — should not happen for a non-empty batch):
+      // fall back to NOW so elapsed is 0 and we HOLD this pass rather than settle on a
+      // missing anchor. The next pass re-checks once the anchor is present.
+      const elapsed = minEnqueuedAtMs === undefined ? 0 : this.now() - minEnqueuedAtMs;
+      if (elapsed >= noChecksSettleMs) {
+        return { result: "pass", integrationBranch };
+      }
+      return {
+        result: "pending",
+        message: `batch has no CI on ${integrationBranch}; settling in ${noChecksSettleMs - elapsed}ms`,
+        settleAfterMs: noChecksSettleMs - elapsed,
+      };
+    }
+
+    // Still running REGISTERED CI — NOT a failure, NOT settled: hold (the coordinator
+    // re-checks on CI completion).
     return { result: "pending", message: `batch CI pending (${observation.reason}) on ${integrationBranch}` };
   }
 
@@ -163,6 +210,30 @@ export class PgBatchChecker implements BatchChecker {
     return result.rows;
   }
 
+  /**
+   * The STABLE no-checks settle anchor: `MIN(enqueued_at)` over the batch's ACTIVE
+   * (queued/merging) `merge_queue` entries, as ms epoch (or undefined when none are
+   * active — defensive). RLS-scoped via the caller's `runWithOrgScope` client like the
+   * other loads — an off-scope call sees zero rows. The anchor is fixed at enqueue and
+   * survives integration-ref churn, so the grace measures real elapsed wall time.
+   */
+  private async loadBatchEnqueueAnchorMs(
+    client: pg.PoolClient,
+    specIds: ReadonlyArray<string>,
+  ): Promise<number | undefined> {
+    if (specIds.length === 0) return undefined;
+    const result = await client.query<{ min_enqueued_at: Date | string | null }>(
+      `SELECT MIN(enqueued_at) AS min_enqueued_at
+         FROM merge_queue
+        WHERE spec_id = ANY($1::text[]) AND status IN ('queued', 'merging')`,
+      [[...specIds]],
+    );
+    const raw = result.rows[0]?.min_enqueued_at;
+    if (raw === null || raw === undefined) return undefined;
+    const ms = raw instanceof Date ? raw.getTime() : new Date(raw).getTime();
+    return Number.isNaN(ms) ? undefined : ms;
+  }
+
   private async resolveProjectOrg(projectId: string): Promise<string | null> {
     return runWithSystemScope(this.deps.pool, async (client) => {
       const result = await client.query<{ org_id: string | null }>(
@@ -171,6 +242,19 @@ export class PgBatchChecker implements BatchChecker {
       );
       return result.rows[0]?.org_id ?? null;
     });
+  }
+}
+
+/**
+ * Resolve the per-project no-checks settle grace (ms) from `projects.config` the SAME
+ * way `maxBatchSize` is resolved — falling back to the schema default if the config
+ * cannot be parsed (never a hard error in the coordinator hot path).
+ */
+function resolveNoChecksSettleMs(projectConfig: unknown): number {
+  try {
+    return migrateProjectConfig(projectConfig).noChecksSettleMs;
+  } catch {
+    return DEFAULT_NO_CHECKS_SETTLE_MS;
   }
 }
 

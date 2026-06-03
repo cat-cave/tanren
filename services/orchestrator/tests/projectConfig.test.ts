@@ -268,3 +268,19 @@ describe("ProjectConfigV1 speculation knobs (P2c-1, §2c)", () => {
     );
   });
 });
+
+describe("ProjectConfigV1 no-checks settle (no-CI repo hang fix)", () => {
+  it("defaults noChecksSettleMs to 45000 (legacy rows parse cleanly)", () => {
+    expect(migrateProjectConfig({ version: 1 }).noChecksSettleMs).toBe(45_000);
+  });
+
+  it("round-trips an explicit override", () => {
+    const parsed = migrateProjectConfig({ version: 1, noChecksSettleMs: 90_000 });
+    expect(parsed.noChecksSettleMs).toBe(90_000);
+    expect(migrateProjectConfig(parsed)).toEqual(parsed);
+  });
+
+  it("rejects a negative settle grace", () => {
+    expect(() => migrateProjectConfig({ version: 1, noChecksSettleMs: -1 })).toThrow(/greater|min|>=|nonnegative/iu);
+  });
+});

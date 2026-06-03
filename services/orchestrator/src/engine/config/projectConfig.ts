@@ -2,6 +2,7 @@ import { z } from "zod";
 import { ManagedProviderConfig, ProviderMode } from "./managedProvider.js";
 import {
   DEFAULT_MAX_BATCH_SIZE,
+  DEFAULT_NO_CHECKS_SETTLE_MS,
   DEFAULT_SPECULATION_THRESHOLD,
   DEFAULT_SPECULATIVE_INTEGRATION_DEPTH,
   GovernancePosture,
@@ -86,6 +87,16 @@ export const ProjectConfigV1 = z
     // the cap is logged (never a silent truncation). Additive; legacy rows parse to
     // the default. Only consulted under `native_queue`.
     maxBatchSize: z.number().int().min(1).default(DEFAULT_MAX_BATCH_SIZE),
+    // The NO-CHECKS SETTLE GRACE (ms): how long a GENUINELY-ZERO-CHECKS observation
+    // (no check-runs + no statuses, NOT gated by required contexts) is held PENDING
+    // before the merge queue / run-loop CI gate treats it as green — the fix for a
+    // no-CI greenfield repo hanging forever. ONLY `no_checks` settles; `checks_pending`
+    // (real CI registered, not done) and `failed` are UNAFFECTED (see
+    // DEFAULT_NO_CHECKS_SETTLE_MS). Default 45_000. Additive + backward-compatible:
+    // legacy rows carry no key and parse to the default (no migration), and `.strict()`
+    // round-trips it on save. A repo with real CI flips to `checks_pending` within
+    // seconds and is never short-circuited.
+    noChecksSettleMs: z.number().int().min(0).default(DEFAULT_NO_CHECKS_SETTLE_MS),
     // P3-0025: optional per-project preview-deploy URL pattern. Drives the live
     // preview iframe in the Review surface. Supports `{branch}` and `{pr}`
     // placeholders (e.g. `https://pr-{pr}.preview.fly.dev`). Optional + additive:

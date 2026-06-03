@@ -238,8 +238,13 @@ export type BatchCheckVerdict =
   // The prospective merged state's CI is still RUNNING (not yet terminal) — NOT a
   // failure. The coordinator HOLDS this pass (it does NOT bisect a green-but-pending
   // batch, which would falsely blame a PR); the next CI-completion notification
-  // re-triggers a fresh pass.
-  | { result: "pending"; message: string }
+  // re-triggers a fresh pass. `settleAfterMs` is set ONLY for the no-checks settle
+  // path (a genuinely-zero-checks repo whose grace window has not yet elapsed): it is
+  // the exact remaining ms until the no-checks grace expires, so the coordinator can
+  // arm a PRECISE wake-up (Bug B) rather than depending on an external NOTIFY. It is
+  // ABSENT for a real `checks_pending` hold (waiting on REGISTERED CI — no settle
+  // applies; a CI-completion NOTIFY clears it).
+  | { result: "pending"; message: string; settleAfterMs?: number }
   // The check could not be RUN / SET UP at all — a transport/ref/transient INFRA error
   // (e.g. the speculative integration ref reset threw a transient HTTP 422). This is
   // DISTINCT from `fail` (a genuine CI failure), `conflict` (a genuine merge conflict),

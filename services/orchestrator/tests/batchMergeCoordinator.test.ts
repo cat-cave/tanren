@@ -210,6 +210,33 @@ describe("BatchMergeCoordinator — speculative batch-check + bisect", () => {
     expect(h.batchEvents.events.some((e) => e.type === "culprit")).toBe(false);
   });
 
+  it("Bug B: a pending verdict returns a hold WITH retryAfterMs (default 15000 when no settle remainder)", async () => {
+    const h = makeHarness();
+    seed(h, "spec_a");
+    seed(h, "spec_b");
+    // A registered-CI pending (no settleAfterMs) → the default recheck interval.
+    h.checker.pendingWhenContains("spec_b");
+
+    const result = await h.coordinator.coordinate(PROJECT);
+    expect(result.holdReason).toBe("all_blocked");
+    // The hold carries a backoff so the subscriber arms one timer instead of hot-looping.
+    expect(result.retryAfterMs).toBe(15_000);
+  });
+
+  it("Bug B: a no-checks pending verdict wakes EXACTLY at the settle remainder (settleAfterMs)", async () => {
+    const h = makeHarness();
+    seed(h, "spec_a");
+    seed(h, "spec_b");
+    // The no-checks settle: 12s remaining of the grace.
+    h.checker.pendingWhenContains("spec_b");
+    h.checker.pendingSettlesAfter(12_000);
+
+    const result = await h.coordinator.coordinate(PROJECT);
+    expect(result.holdReason).toBe("all_blocked");
+    // retryAfterMs == the settle remainder so the re-drive fires exactly at expiry.
+    expect(result.retryAfterMs).toBe(12_000);
+  });
+
   it("routes an integration-conflict batch through bisect (the conflicting PR is the culprit)", async () => {
     const h = makeHarness();
     seed(h, "spec_a");

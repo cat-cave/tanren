@@ -36,6 +36,8 @@ export class InMemoryBatchChecker implements BatchChecker {
   private throwAlways: unknown;
   private throwRemaining = 0;
   private throwOnce: unknown;
+  /** When set, a pending verdict carries this `settleAfterMs` (the no-checks settle). */
+  private pendingSettleAfterMs: number | undefined;
 
   failWhenContains(specId: string): void {
     this.failSpecs.add(specId);
@@ -45,6 +47,14 @@ export class InMemoryBatchChecker implements BatchChecker {
   }
   pendingWhenContains(specId: string): void {
     this.pendingSpecs.add(specId);
+  }
+  /**
+   * Make a pending verdict carry a `settleAfterMs` (the no-checks settle remainder) so a
+   * test can assert the coordinator wakes EXACTLY at settle expiry (Bug B). Pair with
+   * `pendingWhenContains`.
+   */
+  pendingSettlesAfter(ms: number): void {
+    this.pendingSettleAfterMs = ms;
   }
   /** Throw `error` on EVERY checkBatch call (a persistent infra error). */
   throwInfraAlways(error: unknown): void {
@@ -69,7 +79,11 @@ export class InMemoryBatchChecker implements BatchChecker {
     }
     const hasPending = specIds.some((id) => this.pendingSpecs.has(id));
     if (hasPending) {
-      return { result: "pending", message: `pending: ${specIds.join(",")}` };
+      return {
+        result: "pending",
+        message: `pending: ${specIds.join(",")}`,
+        ...(this.pendingSettleAfterMs !== undefined && { settleAfterMs: this.pendingSettleAfterMs }),
+      };
     }
     const conflict = specIds.find((id) => this.conflictSpecs.has(id));
     if (conflict !== undefined) {
