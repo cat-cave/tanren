@@ -37,6 +37,7 @@ import type { RecordedCost } from "../costs/recorder.js";
 import type { EventName } from "../events/index.js";
 import type { AppendEventInput } from "../eventStore.js";
 import type { SpecContract, SpecRunContract } from "../workflow/projectSpec.js";
+import { SpecNotRunnableError } from "../workflow/projectSpecErrors.js";
 
 /** Thrown when a control-plane write endpoint returns a non-2xx status. */
 export class RunStateWriteTransportError extends Error {
@@ -149,7 +150,16 @@ export class HttpRunStateWriter implements RunStateWriter {
   // runs the same `createQueuedRunFromSpec` / `createSpec` under that org scope.
 
   async createQueuedRun(input: CreateQueuedRunInput): Promise<SpecRunContract> {
-    return this.post<SpecRunContract>("/internal/create-queued-run", input);
+    // The endpoint returns a TYPED 409 `{ error: "spec_not_runnable", specId, status }`
+    // for the EXPECTED concurrent-tick race (a spec already past `pending` — the
+    // pending→active claim is the idempotency boundary). Reconstruct the real
+    // SpecNotRunnableError so it crosses the wire INTACT and the walker's
+    // concurrent-tick tolerance applies identically to the in-process path. Any
+    // OTHER non-2xx stays a RunStateWriteTransportError (a genuine infra fault).
+    return this.post<SpecRunContract>("/internal/create-queued-run", input, (status, body) => {
+      const parsed = status === 409 ? parseSpecNotRunnable(body) : undefined;
+      return parsed === undefined ? undefined : new SpecNotRunnableError(parsed.specId, parsed.status);
+    });
   }
 
   async createSpec(input: CreateSpecRemoteInput): Promise<SpecContract> {
@@ -170,16 +180,50 @@ export class HttpRunStateWriter implements RunStateWriter {
     return orgId;
   }
 
-  private async post<T>(endpoint: string, body: unknown): Promise<T> {
+  private async post<T>(
+    endpoint: string,
+    body: unknown,
+    // An optional per-call mapper for a non-2xx response: it reconstructs an
+    // endpoint-specific TYPED error (e.g. the create-queued-run 409
+    // `spec_not_runnable`) so the typed error crosses the wire intact. Returning
+    // `undefined` falls back to the default RunStateWriteTransportError — so a
+    // genuine fault on ANY endpoint (and any status this mapper does not claim)
+    // still surfaces loudly. Other callers pass no mapper and keep the default.
+    mapError?: (status: number, responseBody: string) => Error | undefined,
+  ): Promise<T> {
     const response = await this.mtlsFetch(`${this.baseUrl.replace(/\/$/u, "")}${endpoint}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
     });
     if (!response.ok) {
-      throw new RunStateWriteTransportError(response.status, endpoint, await response.text().catch(() => ""));
+      const responseBody = await response.text().catch(() => "");
+      const mapped = mapError?.(response.status, responseBody);
+      throw mapped ?? new RunStateWriteTransportError(response.status, endpoint, responseBody);
     }
     const text = await response.text();
     return (text === "" ? undefined : JSON.parse(text)) as T;
   }
+}
+
+/**
+ * Parse a `{ error: "spec_not_runnable", specId, status }` 409 body into its
+ * specId/status. Returns `undefined` for any other shape (so the caller falls
+ * back to the generic transport error — a genuine fault is never masked).
+ */
+function parseSpecNotRunnable(body: string): { specId: string; status: string } | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return undefined;
+  }
+  if (typeof parsed !== "object" || parsed === null) return undefined;
+  const record = parsed as Record<string, unknown>;
+  const specId = record["specId"];
+  const status = record["status"];
+  if (record["error"] !== "spec_not_runnable" || typeof specId !== "string" || typeof status !== "string") {
+    return undefined;
+  }
+  return { specId, status };
 }

@@ -23,6 +23,7 @@ import { z } from "zod";
 import { ActorContextSchema } from "../../auth/schemas.js";
 import { SpecPriority } from "../../engine/state/spec.js";
 import { createQueuedRunFromSpec, createSpec } from "../../engine/workflow/projectSpec.js";
+import { SpecNotRunnableError } from "../../engine/workflow/projectSpecErrors.js";
 import { verifyInternalPeer, type RunStateWriteRouteDeps } from "./internalWriteShared.js";
 
 const createSpecRunInputSchema = z.object({
@@ -78,8 +79,21 @@ export function registerRunStateCreateRoutes(app: Hono, deps: RunStateWriteRoute
     }
     // The actor carries the org the loop resolved (system-scoped); the function
     // opens its OWN org-scoped tx from it — the SAME multi-table CREATE the loop ran.
-    const run = await createQueuedRunFromSpec(deps.pool, parsed.data.input, parsed.data.actor);
-    return c.json(run);
+    try {
+      const run = await createQueuedRunFromSpec(deps.pool, parsed.data.input, parsed.data.actor);
+      return c.json(run);
+    } catch (error) {
+      // The pending→active claim is the idempotency boundary: a spec already past
+      // `pending` (a concurrent walker tick already claimed it) raises the TYPED
+      // SpecNotRunnableError. That is the EXPECTED, benign concurrent-tick signal —
+      // surface it as a typed 409 (NOT a 500) so the client can reconstruct the
+      // typed error and the walker's concurrent-tick tolerance applies identically
+      // to the in-process path. Genuine errors keep propagating as a 500.
+      if (error instanceof SpecNotRunnableError) {
+        return c.json({ error: "spec_not_runnable", specId: error.specId, status: error.status }, 409);
+      }
+      throw error;
+    }
   });
 
   app.post("/internal/create-spec", async (c) => {
