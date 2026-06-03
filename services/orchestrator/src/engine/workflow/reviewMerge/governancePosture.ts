@@ -51,11 +51,18 @@ export interface ExternalChangeAssessment {
   externalLogins: ReadonlyArray<string>;
 }
 
+// GitHub platform commit authors that are never an external human contributor.
+// `web-flow` authors the squash/merge commit GitHub creates via the merge API — so
+// Tanren's OWN merge of an ancestor PR stamps a `web-flow` commit that then shows up
+// in a retargeted dependent PR's history. Not a human push; must not block. A human
+// cannot forge a `web-flow`-attributed commit via git push (GitHub only attributes its
+// own API/web-created commits to it), so excluding it doesn't weaken real detection.
+const GITHUB_PLATFORM_LOGINS: ReadonlySet<string> = new Set(["web-flow"]);
+
 /**
- * Detect whether a PR carries external (non-Tanren) commits. A login is
- * external when it is not in the Tanren identity set. An empty/unknown login is
- * treated as external (conservative: an unattributed commit is not provably
- * Tanren's). With no Tanren identity configured, every contributor is external.
+ * Detect whether a PR carries external (non-Tanren) commits. External = not in the
+ * Tanren identity set AND not a GitHub platform author. An empty/unknown login is
+ * external (an unattributed commit is not provably Tanren's).
  */
 export function assessExternalChange(
   contributors: PullRequestContributors,
@@ -66,7 +73,7 @@ export function assessExternalChange(
   for (const raw of contributors.logins) {
     const login = raw.trim().toLowerCase();
     const isTanren = login !== "" && identity.logins.has(login);
-    if (isTanren) {
+    if (isTanren || GITHUB_PLATFORM_LOGINS.has(login)) {
       continue;
     }
     const key = login === "" ? "<unknown>" : login;

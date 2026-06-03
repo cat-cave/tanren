@@ -301,6 +301,13 @@ describe("external-change detection", () => {
     const out = assessExternalChange({ logins: ["tanren[bot]"] }, tanrenIdentity([]));
     expect(out.hasExternalChange).toBe(true);
   });
+
+  it("excludes GitHub's web-flow merge-commit author but still flags real external logins", () => {
+    expect(assessExternalChange({ logins: ["tanren-bot-user", "web-flow"] }, identity).hasExternalChange).toBe(false);
+    const out = assessExternalChange({ logins: ["tanren-bot-user", "web-flow", "mallory"] }, identity);
+    expect(out.hasExternalChange).toBe(true);
+    expect(out.externalLogins).toEqual(["mallory"]);
+  });
 });
 
 describe("posture decision", () => {
