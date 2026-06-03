@@ -228,15 +228,19 @@ async function seedTenant(owner: Pool, org: string): Promise<void> {
   );
   // A seeded event via the event store (single-event-writer invariant); owner =
   // RLS-exempt, org_id derived from the project. `run.started` carries a simple
-  // status payload, so it validates without run-create fields.
-  await new PgEventStore(owner).append({
-    runId: run,
-    taskId: task,
-    specId: spec,
-    projectId: project,
-    eventType: "run.started",
-    payload: { status: "running" },
-  });
+  // status payload, so it validates without run-create fields. The event store's
+  // write seam fails loudly without an ambient scope, so the seed runs under the
+  // org's scope (the owner pool is RLS-exempt, so the GUC is harmless).
+  await runWithOrgScope(owner, org, () =>
+    new PgEventStore(owner).append({
+      runId: run,
+      taskId: task,
+      specId: spec,
+      projectId: project,
+      eventType: "run.started",
+      payload: { status: "running" },
+    }),
+  );
   await owner.query(
     `INSERT INTO cost_records (task_id, run_id, project_id, org_id, cli, provider, model, billing_mode, cost_basis)
      VALUES ($1, $2, $3, $4, 'fake', 'fake', 'm', 'self_hosted', 'unknown')`,

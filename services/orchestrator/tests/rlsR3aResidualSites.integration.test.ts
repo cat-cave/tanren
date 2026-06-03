@@ -33,6 +33,7 @@
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { migrate, runWithOrgScope } from "@tanren/db";
+import { MissingOrgScopeError } from "../src/engine/data/orgScopedDb.js";
 import { PgEventStore } from "../src/engine/eventStore.js";
 import { openInspectionThread, type HaltedRunContext } from "../src/engine/recovery/index.js";
 import { tanrenReadCosts, tanrenReadEvents, tanrenReadRun, tanrenReadSpec } from "../src/engine/forge/tools/read.js";
@@ -112,23 +113,24 @@ describeDb("RLS R3a — residual forge-tool + recovery sites through the org-sco
   }, 30_000);
 
   // (a) the forge read-spec / read-run dispatchers, run inside an org scope,
-  //     return the org's rows. Under R3b the SAME dispatch on the raw pool (no
-  //     scope) is denied — its authz/read sees zero rows → "not found".
-  it("(a) forge read_spec/read_run via the org scope return the org's rows; the raw pool is denied", async () => {
+  //     return the org's rows. The SAME dispatch on the raw pool (no scope) is now
+  //     refused LOUDLY at the DAL seam — the unscoped tenant read never reaches the
+  //     DB (stronger than the prior empty-GUC "not found").
+  it("(a) forge read_spec/read_run via the org scope return the org's rows; the raw pool is refused loudly", async () => {
     const scopedSpec = await runWithOrgScope(runtimePool, ORG_A, () =>
       tanrenReadSpec({ pool: runtimePool }, { specId: SPEC_A }, ACTOR),
     );
     expect(scopedSpec.spec["spec_id"]).toBe(SPEC_A);
-    // No ambient scope (empty GUC) → the dispatcher's reads see nothing.
+    // No ambient scope → the dispatcher's tenant read is refused at the seam.
     await expect(tanrenReadSpec({ pool: runtimePool }, { specId: SPEC_A }, ACTOR)).rejects.toThrow(
-      /not found|denied/iu,
+      MissingOrgScopeError,
     );
 
     const scopedRun = await runWithOrgScope(runtimePool, ORG_A, () =>
       tanrenReadRun({ pool: runtimePool }, { runId: RUN_A }, ACTOR),
     );
     expect(scopedRun.run["run_id"]).toBe(RUN_A);
-    await expect(tanrenReadRun({ pool: runtimePool }, { runId: RUN_A }, ACTOR)).rejects.toThrow(/not found|denied/iu);
+    await expect(tanrenReadRun({ pool: runtimePool }, { runId: RUN_A }, ACTOR)).rejects.toThrow(MissingOrgScopeError);
   });
 
   // (b) read_events / read_costs run on the ambient scoped client: a row WRITTEN
