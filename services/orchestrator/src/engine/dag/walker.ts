@@ -39,6 +39,7 @@ import {
 import type { DagLifecycleReadModel } from "../contracts/dagLifecycle.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SpeculativeIntegrator } from "../contracts/speculativeIntegrator.js";
+import { SpecNotRunnableError } from "../workflow/projectSpecErrors.js";
 import type { SpecReadiness } from "./speculation.js";
 import { PgBudgetGate } from "./budgetGate.js";
 import { PgDagLifecycleReadModel } from "./lifecycle.js";
@@ -150,9 +151,14 @@ export class EventEmittingDagWalker implements DagWalker {
           depsBySpec,
         );
         if (enqueued === undefined) {
-          // A speculative integration surfaced an ancestor-vs-ancestor conflict:
-          // the dependent is HELD this tick (it cannot base on a broken
-          // integration); the walker retries once the pair reconciles/merges.
+          // The spec was NOT enqueued this tick, for one of two benign reasons:
+          //   - a speculative integration surfaced an ancestor-vs-ancestor conflict
+          //     (the dependent is HELD — it cannot base on a broken integration —
+          //     and the walker retries once the pair reconciles/merges); OR
+          //   - a CONCURRENT tick already claimed it (SpecNotRunnableError — the
+          //     pending→active claim is the idempotency boundary, so this is the
+          //     expected, harmless concurrent-tick race, swallowed in enqueueOne).
+          // Either way: skip it this tick, no error.
           continue;
         }
         enqueuedSpecIds.push(enqueue.specId);
@@ -215,16 +221,17 @@ export class EventEmittingDagWalker implements DagWalker {
     depsBySpec: Map<string, string[]>,
   ): Promise<{ runId: string } | undefined> {
     if (!enqueue.speculative) {
-      const { runId } = await this.deps.enqueuer.enqueueSpecRun({ projectId, specId: enqueue.specId });
+      const enqueued = await this.enqueueOrTolerate({ projectId, specId: enqueue.specId });
+      if (enqueued === undefined) return undefined;
       await this.deps.events.emitSpecEnqueued({
         projectId,
         specId: enqueue.specId,
-        runId,
+        runId: enqueued.runId,
         satisfiedDependsOn: depsBySpec.get(enqueue.specId) ?? [],
         inFlightBefore,
         concurrencyCeiling: ceiling,
       });
-      return { runId };
+      return { runId: enqueued.runId };
     }
 
     const integration = await this.deps.integrator.buildIntegration({
@@ -246,7 +253,7 @@ export class EventEmittingDagWalker implements DagWalker {
       return undefined;
     }
 
-    const { runId } = await this.deps.enqueuer.enqueueSpecRun({
+    const enqueued = await this.enqueueOrTolerate({
       projectId,
       specId: enqueue.specId,
       speculativeBase: integration.integrationBranch,
@@ -254,15 +261,47 @@ export class EventEmittingDagWalker implements DagWalker {
       // change-percolation divergence key); a later ancestor advance is detectable.
       integratedAncestorShas: integration.ancestorHeadShas,
     });
+    if (enqueued === undefined) return undefined;
     await this.deps.events.emitSpecSpeculative({
       projectId,
       specId: enqueue.specId,
-      runId,
+      runId: enqueued.runId,
       unmergedAncestors: enqueue.unmergedAncestors,
       threshold,
       integrationBranch: integration.integrationBranch,
     });
-    return { runId };
+    return { runId: enqueued.runId };
+  }
+
+  /**
+   * Enqueue a spec run, TOLERATING the one benign, EXPECTED race: a concurrent
+   * walker tick already claimed this spec (its pending→active claim — the
+   * idempotency boundary — won), so the enqueuer raises a SpecNotRunnableError.
+   * That is NOT an error: the spec is already in flight, there is simply nothing
+   * to do this tick. Return `undefined` (a benign skip — the caller emits no
+   * enqueued event), logged at most at debug. The behavior is IDENTICAL whether
+   * the enqueuer ran in-process (it throws the typed error directly) or through
+   * the control plane (the client reconstructs the SAME typed error from the
+   * endpoint's 409). EVERY OTHER error propagates unchanged — a genuine failure
+   * still surfaces loudly (no silent fallback).
+   */
+  private async enqueueOrTolerate(input: {
+    projectId: string;
+    specId: string;
+    speculativeBase?: string;
+    integratedAncestorShas?: Record<string, string>;
+  }): Promise<{ runId: string } | undefined> {
+    try {
+      return await this.deps.enqueuer.enqueueSpecRun(input);
+    } catch (error) {
+      if (error instanceof SpecNotRunnableError) {
+        console.debug(
+          `[dag-walker] skipped ${input.specId}: already claimed by a concurrent tick (status ${error.status}) — benign`,
+        );
+        return undefined;
+      }
+      throw error;
+    }
   }
 
   private async emitHeld(projectId: string, held: SpecReadiness[]): Promise<void> {

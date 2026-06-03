@@ -27,7 +27,7 @@ export class SpecDependenciesBlockedError extends Error {
 
 export class SpecNotRunnableError extends Error {
   constructor(
-    specId: string,
+    readonly specId: string,
     readonly status: string,
   ) {
     super(`spec ${specId} cannot be queued from status ${status}`);
