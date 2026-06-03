@@ -27,6 +27,10 @@ const invariantDocExclusions = new Set(["PROJECT_BRIEF.md", "docs/contracts/arch
 // the de-privileged data-plane role to PROVE Postgres REJECTS it — exempt from single-event-writer.
 const singleEventWriterExclusions = new Set([
   "services/orchestrator/tests/planeSplitP3bDeprivilege.integration.test.ts",
+  // The DagWalker lifecycle-read gap regression: seeds `events` via the OWNER pool
+  // (the read fixture) AND asserts the data-plane role's raw events SELECT is
+  // REJECTED — exempt like the P3b deprivilege test above.
+  "services/orchestrator/tests/planeSplitP3LifecycleRead.integration.test.ts",
   // The autonomy-loop routing proof: a guarded pool whose query REJECTS a raw event
   // insert (mirroring the de-privileged role) so the test proves the loops route
   // through the writer, never the bare pool — exempt like the P3b test above.

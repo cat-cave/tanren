@@ -9,8 +9,20 @@
 // Scope: like PgDagReadModel, it resolves the project's org (system-scoped
 // bootstrap) then reads UNDER THAT ORG SCOPE — an off-scope read sees zero rows
 // (RLS denies by default), so the snapshot is always exactly the project's DAG.
+//
+// Pool/role: the lateral join READS the `events` table, which the de-privileged
+// data-plane role (`tanren_dataplane`) has ZERO grants on — migration 0031
+// `REVOKE ALL ON TABLE events` (the data plane writes events through the control
+// plane and was assumed to never read them; the P2c-1 lifecycle read landed
+// after). So this read runs on `getSystemPool() ?? this.pool` — the BYPASSRLS
+// `tanren_system` role (which keeps SELECT on `events`) when a system URL is
+// configured, exactly as `walker.ts` does for project listing. The org scope is
+// STILL applied on top (`runWithOrgScope` sets `app.current_org_id`), so RLS /
+// tenant isolation is preserved — only the ROLE changes to one that can SELECT
+// events. Absent a system URL (single-role dev/CI/tests) it uses `this.pool`
+// verbatim, behavior-identical to before.
 
-import { runWithOrgScope, runWithSystemScope } from "@tanren/db";
+import { getSystemPool, runWithOrgScope, runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
 import {
   type DagLifecycleReadModel,
@@ -108,7 +120,12 @@ export class PgDagLifecycleReadModel implements DagLifecycleReadModel {
     if (orgId === null) {
       return { projectId, bySpecId: new Map() };
     }
-    const rows = await runWithOrgScope(this.pool, orgId, async (client) => {
+    // Read on the BYPASSRLS system role (`getSystemPool() ?? this.pool`): the
+    // lateral join SELECTs `events`, which the de-privileged data-plane role
+    // cannot read (0031 REVOKE ALL). The org scope is still applied on top, so the
+    // read stays org-scoped — only the role changes to one that can SELECT events.
+    const readPool = getSystemPool() ?? this.pool;
+    const rows = await runWithOrgScope(readPool, orgId, async (client) => {
       const result = await client.query<SpecLifecycleRow>(
         // For each spec, its LATEST run (by started_at) and the lifecycle-event
         // signals on that run. The lateral join keeps it to one row per spec; the
