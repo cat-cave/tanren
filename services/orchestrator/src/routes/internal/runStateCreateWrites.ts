@@ -32,7 +32,13 @@ const createSpecRunInputSchema = z.object({
   branch: z.string().optional(),
   speculative: z
     .object({
-      speculativeBase: z.string().min(1),
+      // §2c: `null` is the "ancestor-merged → non-speculative re-base" — a percolation
+      // re-exec whose every ancestor has merged, so the run targets plain default_branch
+      // (speculative_base IS NULL) yet still carries the percolation marker + SKIPS the
+      // done-only dependency gate (the `speculative` object's PRESENCE, null base or not,
+      // is what distinguishes a speculative create). Byte-matches the in-process
+      // `CreateSpecRunInput.speculative.speculativeBase: string | null`.
+      speculativeBase: z.string().min(1).nullable(),
       integratedAncestorShas: z.record(z.string(), z.string()).optional(),
       verifiedAncestorShas: z.record(z.string(), z.string()).optional(),
       percolationPending: z.unknown().optional(),

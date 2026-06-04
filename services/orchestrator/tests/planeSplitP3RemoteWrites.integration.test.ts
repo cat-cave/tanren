@@ -17,113 +17,46 @@
 //      endpoints end-to-end over a fake mTLS channel routed into the real app;
 //   6. the DEFAULT DirectRunStateWriter persists BYTE-IDENTICAL rows in-process.
 //
+// The AUTONOMY-LOOP create/intake/percolation write endpoints (create-queued-run ·
+// set-spec-metadata · the change-percolation run-column ops) are the sibling
+// planeSplitP3CreateWrites.integration.test.ts (the cohort is split to stay under
+// the per-file max-lines cap); both share planeSplitP3RemoteWritesHarness.ts.
+//
 // Gated behind TANREN_RLS_DB_TEST=1 + a superuser DATABASE_URL (the migration
 // owner), exactly like the RLS cohort tests. Wired into `just smoke` via
 // `just smoke-plane-split-p3`.
 
-import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { migrate, runWithJobOrgId } from "@tanren/db";
-import { AllowAllPeerVerifier, DenyAllPeerVerifier, type MtlsFetch } from "../src/engine/contracts/index.js";
+import { runWithJobOrgId } from "@tanren/db";
+import { AllowAllPeerVerifier, DenyAllPeerVerifier } from "../src/engine/contracts/index.js";
 import { orgScopingPool } from "../src/engine/data/orgScopedDb.js";
 import { DirectRunStateWriter, HttpRunStateWriter } from "../src/engine/worker/index.js";
 import { createInternalRunStateWriteRoutes } from "../src/routes/internal/runStateWrites.js";
+import {
+  createWriteEndpointHarness,
+  enabled,
+  fetchInto,
+  ORG,
+  PLAN_TASK,
+  PROJECT,
+  seedRun,
+  SPEC,
+} from "./planeSplitP3RemoteWritesHarness.js";
 
-const enabled = process.env["TANREN_RLS_DB_TEST"] === "1";
 const describeDb = enabled ? describe : describe.skip;
 
-const ADMIN_URL = process.env["DATABASE_URL"] ?? "postgres://tanren:tanren@localhost:5432/tanren";
-const RUNTIME_ROLE = "tanren_app";
-const RUNTIME_PASSWORD = process.env["TANREN_APP_DB_PASSWORD"] ?? "tanren_app";
-
-function dbName(): string {
-  return `tanren_p3_rw_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
-}
-function withDatabase(url: string, database: string): string {
-  const parsed = new URL(url);
-  parsed.pathname = `/${database}`;
-  return parsed.toString();
-}
-function runtimeUrl(adminUrl: string, database: string): string {
-  const parsed = new URL(adminUrl);
-  parsed.username = RUNTIME_ROLE;
-  parsed.password = RUNTIME_PASSWORD;
-  parsed.pathname = `/${database}`;
-  return parsed.toString();
-}
-
-const ORG = "org_p3_rw";
-const PROJECT = `proj_${ORG}`;
-const SPEC = `spec_${ORG}`;
-const PLAN_TASK = `task_plan_${ORG}`;
-
-// Route a fake MtlsFetch straight into the real endpoint app — the
-// worker→control-plane round trip with the network swapped for an in-process
-// call, so the write logic + wire shape are proven without standing up TLS.
-function fetchInto(app: ReturnType<typeof createInternalRunStateWriteRoutes>): MtlsFetch {
-  return (url, init) => app.request(new URL(url).pathname, init as RequestInit, { incoming: { socket: {} } });
-}
-
 describeDb("plane-split P3 — control-plane run-state write endpoints (real PG, enforced RLS)", () => {
-  const database = dbName();
-  let ownerPool: Pool;
-  let runtimePool: Pool;
+  const harness = createWriteEndpointHarness();
+  const ownerPool = () => harness.ownerPool();
+  const runtimePool = () => harness.runtimePool();
 
-  beforeAll(async () => {
-    const adminPool = new Pool({ connectionString: ADMIN_URL });
-    await adminPool.query(`CREATE DATABASE ${database}`);
-    await adminPool.end();
-    ownerPool = new Pool({ connectionString: withDatabase(ADMIN_URL, database) });
-    await migrate(ownerPool);
-    runtimePool = new Pool({ connectionString: runtimeUrl(ADMIN_URL, database) });
-  }, 60_000);
-
-  afterAll(async () => {
-    await runtimePool?.end();
-    await ownerPool?.end();
-    const adminPool = new Pool({ connectionString: ADMIN_URL });
-    await adminPool.query(
-      "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()",
-      [database],
-    );
-    await adminPool.query(`DROP DATABASE IF EXISTS ${database}`);
-    await adminPool.end();
-  }, 30_000);
-
-  // Each test seeds its own run (distinct run_id) so finalize transitions do not
-  // collide. Seeded as the OWNER (RLS does not apply to the table owner).
-  async function seedRun(runId: string, status = "running"): Promise<void> {
-    await ownerPool.query(
-      `INSERT INTO organizations (id, kind, external_id, login, display_name, config)
-       VALUES ($1, 'oidc', $1, $1, $1, '{"version":1}'::jsonb) ON CONFLICT (id) DO NOTHING`,
-      [ORG],
-    );
-    await ownerPool.query(
-      `INSERT INTO projects (project_id, name, repo_url, org_id)
-       VALUES ($1, 'p', 'https://example.com/r.git', $2) ON CONFLICT (project_id) DO NOTHING`,
-      [PROJECT, ORG],
-    );
-    await ownerPool.query(
-      `INSERT INTO specs (spec_id, project_id, org_id, title, description, status)
-       VALUES ($1, $2, $3, 't', 'd', 'active') ON CONFLICT (spec_id) DO NOTHING`,
-      [SPEC, PROJECT, ORG],
-    );
-    await ownerPool.query(
-      `INSERT INTO runs (run_id, spec_id, project_id, org_id, trigger, branch, status)
-       VALUES ($1, $2, $3, $4, 'cli', 'main', $5)`,
-      [runId, SPEC, PROJECT, ORG, status],
-    );
-    await ownerPool.query(
-      `INSERT INTO tasks (task_id, run_id, org_id, kind, title, status, agent_kind, cli, model)
-       VALUES ($1, $2, $3, 'plan', 'plan', 'running', 'answerer', 'fake', 'm') ON CONFLICT (task_id) DO NOTHING`,
-      [PLAN_TASK, runId, ORG],
-    );
-  }
+  beforeAll(() => harness.setUp(), 60_000);
+  afterAll(() => harness.tearDown(), 30_000);
 
   it("(1) authn rejects an untrusted peer with 401 and writes NOTHING", async () => {
     const runId = "run_p3_authn";
-    await seedRun(runId);
-    const app = createInternalRunStateWriteRoutes({ pool: runtimePool, verifier: new DenyAllPeerVerifier() });
+    await seedRun(ownerPool(), runId);
+    const app = createInternalRunStateWriteRoutes({ pool: runtimePool(), verifier: new DenyAllPeerVerifier() });
 
     const response = await app.request(
       "/internal/append-event",
@@ -143,14 +76,14 @@ describeDb("plane-split P3 — control-plane run-state write endpoints (real PG,
     );
 
     expect(response.status).toBe(401);
-    const events = await ownerPool.query("SELECT 1 FROM events WHERE run_id = $1", [runId]);
+    const events = await ownerPool().query("SELECT 1 FROM events WHERE run_id = $1", [runId]);
     expect(events.rowCount).toBe(0);
   });
 
   it("(2) append-event persists the same events row, org-scoped", async () => {
     const runId = "run_p3_event";
-    await seedRun(runId);
-    const app = createInternalRunStateWriteRoutes({ pool: runtimePool, verifier: new AllowAllPeerVerifier() });
+    await seedRun(ownerPool(), runId);
+    const app = createInternalRunStateWriteRoutes({ pool: runtimePool(), verifier: new AllowAllPeerVerifier() });
     const writer = new HttpRunStateWriter("https://control.internal:3110", fetchInto(app));
 
     // The remote writer reads the run's org from the per-job org-id scope (the
@@ -166,7 +99,7 @@ describeDb("plane-split P3 — control-plane run-state write endpoints (real PG,
       }),
     );
 
-    const row = await ownerPool.query<{ org_id: string; event_type: string }>(
+    const row = await ownerPool().query<{ org_id: string; event_type: string }>(
       "SELECT org_id, event_type FROM events WHERE run_id = $1",
       [runId],
     );
@@ -183,8 +116,8 @@ describeDb("plane-split P3 — control-plane run-state write endpoints (real PG,
     // event lands with NULL run_id/spec_id, the right org, and the right project.
     // seedRun establishes the org + project; the project-scoped event itself omits runId/specId.
     const runId = "run_p3_project_scoped";
-    await seedRun(runId);
-    const app = createInternalRunStateWriteRoutes({ pool: runtimePool, verifier: new AllowAllPeerVerifier() });
+    await seedRun(ownerPool(), runId);
+    const app = createInternalRunStateWriteRoutes({ pool: runtimePool(), verifier: new AllowAllPeerVerifier() });
     const writer = new HttpRunStateWriter("https://control.internal:3110", fetchInto(app));
 
     // The walker appends a project-only event: no runId, no specId — only projectId
@@ -197,7 +130,7 @@ describeDb("plane-split P3 — control-plane run-state write endpoints (real PG,
       }),
     );
 
-    const row = await ownerPool.query<{
+    const row = await ownerPool().query<{
       run_id: string | null;
       spec_id: string | null;
       org_id: string;
@@ -216,8 +149,8 @@ describeDb("plane-split P3 — control-plane run-state write endpoints (real PG,
 
   it("(3) record-cost persists the same cost_records row + cost.resolved event", async () => {
     const runId = "run_p3_cost";
-    await seedRun(runId);
-    const app = createInternalRunStateWriteRoutes({ pool: runtimePool, verifier: new AllowAllPeerVerifier() });
+    await seedRun(ownerPool(), runId);
+    const app = createInternalRunStateWriteRoutes({ pool: runtimePool(), verifier: new AllowAllPeerVerifier() });
     const writer = new HttpRunStateWriter("https://control.internal:3110", fetchInto(app));
 
     const recorded = await runWithJobOrgId(ORG, () =>
@@ -244,12 +177,12 @@ describeDb("plane-split P3 — control-plane run-state write endpoints (real PG,
     );
 
     expect(recorded.tokens.totalTokens).toBe(10);
-    const cost = await ownerPool.query<{ org_id: string; total_tokens: number }>(
+    const cost = await ownerPool().query<{ org_id: string; total_tokens: number }>(
       "SELECT org_id, total_tokens FROM cost_records WHERE run_id = $1",
       [runId],
     );
     expect(cost.rows[0]).toMatchObject({ org_id: ORG, total_tokens: 10 });
-    const ev = await ownerPool.query("SELECT 1 FROM events WHERE run_id = $1 AND event_type = 'cost.resolved'", [
+    const ev = await ownerPool().query("SELECT 1 FROM events WHERE run_id = $1 AND event_type = 'cost.resolved'", [
       runId,
     ]);
     expect(ev.rowCount).toBe(1);
@@ -262,8 +195,8 @@ describeDb("plane-split P3 — control-plane run-state write endpoints (real PG,
     // record endpoint, then reconcile a $4 run total and assert the rows were
     // repriced by token share (3.00 / 1.00) with cost_basis = 'ccusage'.
     const runId = "run_p3_reconcile";
-    await seedRun(runId);
-    const app = createInternalRunStateWriteRoutes({ pool: runtimePool, verifier: new AllowAllPeerVerifier() });
+    await seedRun(ownerPool(), runId);
+    const app = createInternalRunStateWriteRoutes({ pool: runtimePool(), verifier: new AllowAllPeerVerifier() });
     const writer = new HttpRunStateWriter("https://control.internal:3110", fetchInto(app));
 
     const recordCall = (totalTokens: number): Promise<unknown> =>
@@ -295,7 +228,7 @@ describeDb("plane-split P3 — control-plane run-state write endpoints (real PG,
     const result = await writer.reconcileCost({ runId, orgId: ORG, totalCostUsd: 4, basis: "ccusage" });
     expect(result).toEqual({ updated: 2 });
 
-    const rows = await ownerPool.query<{ total_tokens: number; cost_usd: string; cost_basis: string }>(
+    const rows = await ownerPool().query<{ total_tokens: number; cost_usd: string; cost_basis: string }>(
       "SELECT total_tokens, cost_usd, cost_basis FROM cost_records WHERE run_id = $1 ORDER BY total_tokens DESC",
       [runId],
     );
@@ -309,8 +242,8 @@ describeDb("plane-split P3 — control-plane run-state write endpoints (real PG,
 
   it("(4) finalize-run finalizes once + the retried finalize is a no-op (exactly-once)", async () => {
     const runId = "run_p3_finalize";
-    await seedRun(runId, "running");
-    const app = createInternalRunStateWriteRoutes({ pool: runtimePool, verifier: new AllowAllPeerVerifier() });
+    await seedRun(ownerPool(), runId, "running");
+    const app = createInternalRunStateWriteRoutes({ pool: runtimePool(), verifier: new AllowAllPeerVerifier() });
     const writer = new HttpRunStateWriter("https://control.internal:3110", fetchInto(app));
 
     const first = await writer.finalizeRun({
@@ -333,7 +266,7 @@ describeDb("plane-split P3 — control-plane run-state write endpoints (real PG,
     });
     expect(second).toEqual({ updated: false });
 
-    const run = await ownerPool.query<{ status: string; outcome: string }>(
+    const run = await ownerPool().query<{ status: string; outcome: string }>(
       "SELECT status, outcome FROM runs WHERE run_id = $1",
       [runId],
     );
@@ -342,13 +275,13 @@ describeDb("plane-split P3 — control-plane run-state write endpoints (real PG,
 
   it("(5) the DirectRunStateWriter persists byte-identical rows in-process", async () => {
     const runId = "run_p3_direct";
-    await seedRun(runId, "running");
+    await seedRun(ownerPool(), runId, "running");
     // The direct writer mirrors the worker: constructed over `orgScopingPool`,
     // its event append self-routes through the ambient per-job org scope
     // (`runWithJobOrgId`), and `finalizeRun` opens its own `runWithOrgScope` from
     // the explicit org — so the rows land under the enforced policy exactly as
     // the remote endpoint's server-side write does.
-    const writer = new DirectRunStateWriter(orgScopingPool(runtimePool));
+    const writer = new DirectRunStateWriter(orgScopingPool(runtimePool()));
 
     await runWithJobOrgId(ORG, () =>
       writer.append({
@@ -368,127 +301,15 @@ describeDb("plane-split P3 — control-plane run-state write endpoints (real PG,
     });
 
     expect(finalize).toMatchObject({ updated: true, specId: SPEC, projectId: PROJECT });
-    const run = await ownerPool.query<{ status: string; outcome: string }>(
+    const run = await ownerPool().query<{ status: string; outcome: string }>(
       "SELECT status, outcome FROM runs WHERE run_id = $1",
       [runId],
     );
     expect(run.rows[0]).toMatchObject({ status: "done", outcome: "ok" });
-    const ev = await ownerPool.query<{ org_id: string }>(
+    const ev = await ownerPool().query<{ org_id: string }>(
       "SELECT org_id FROM events WHERE run_id = $1 AND event_type = 'run.started'",
       [runId],
     );
     expect(ev.rows[0]?.org_id).toBe(ORG);
-  });
-
-  // (6) The AUTONOMY-LOOP create path: the DagWalker / merge-conflict-reexec / intake
-  // CREATE a queued run through `/internal/create-queued-run`. Prove the endpoint runs
-  // the full multi-table createQueuedRunFromSpec server-side (INSERT runs + claim spec
-  // + INSERT tasks + job_queue + run.queued/task.queued events), org-scoped under RLS —
-  // the write the de-privileged data plane can no longer do directly.
-  it("(6) create-queued-run creates the run + claims the spec + emits run.queued, server-side org-scoped", async () => {
-    const specId = `${SPEC}_walk`;
-    // Seed a fresh PENDING spec (the walker only enqueues pending specs) as the owner.
-    await ownerPool.query(
-      `INSERT INTO organizations (id, kind, external_id, login, display_name, config)
-       VALUES ($1, 'oidc', $1, $1, $1, '{"version":1}'::jsonb) ON CONFLICT (id) DO NOTHING`,
-      [ORG],
-    );
-    // The project must carry a versioned config — `createQueuedRunFromSpec` reads it.
-    await ownerPool.query(
-      `INSERT INTO projects (project_id, name, repo_url, org_id, config)
-       VALUES ($1, 'p', 'https://example.com/r.git', $2, '{"version":1}'::jsonb)
-       ON CONFLICT (project_id) DO UPDATE SET config = EXCLUDED.config`,
-      [PROJECT, ORG],
-    );
-    await ownerPool.query(
-      `INSERT INTO specs (spec_id, project_id, org_id, title, description, status)
-       VALUES ($1, $2, $3, 'walk spec', 'd', 'pending')`,
-      [specId, PROJECT, ORG],
-    );
-    const app = createInternalRunStateWriteRoutes({ pool: runtimePool, verifier: new AllowAllPeerVerifier() });
-    const writer = new HttpRunStateWriter("https://control.internal:3110", fetchInto(app));
-
-    const run = await writer.createQueuedRun({
-      input: { specId, trigger: "dag_walker" },
-      actor: { userId: "dag-walker", orgId: ORG, projectId: PROJECT, scopes: ["platform:admin"], source: "local_dev" },
-    });
-
-    expect(run.runId).toMatch(/^run_/u);
-    // The run row landed server-side, org-scoped.
-    const runRow = await ownerPool.query<{ org_id: string; status: string }>(
-      "SELECT org_id, status FROM runs WHERE run_id = $1",
-      [run.runId],
-    );
-    expect(runRow.rows[0]).toMatchObject({ org_id: ORG, status: "queued" });
-    // The spec was claimed pending→active inside the same transaction.
-    const specRow = await ownerPool.query<{ status: string }>("SELECT status FROM specs WHERE spec_id = $1", [specId]);
-    expect(specRow.rows[0]?.status).toBe("active");
-    // The run.queued event was appended (the walker's run-creation timeline).
-    const ev = await ownerPool.query("SELECT 1 FROM events WHERE run_id = $1 AND event_type = 'run.queued'", [
-      run.runId,
-    ]);
-    expect(ev.rowCount).toBe(1);
-  });
-
-  // (7) The intake auto-route's provenance stamp: `/internal/set-spec-metadata` runs
-  // the `UPDATE specs SET metadata` server-side under RLS — the write the de-privileged
-  // data plane can no longer do directly.
-  it("(7) set-spec-metadata writes the spec metadata server-side, org-scoped", async () => {
-    const specId = `${SPEC}_meta`;
-    await ownerPool.query(
-      `INSERT INTO specs (spec_id, project_id, org_id, title, description, status)
-       VALUES ($1, $2, $3, 'meta spec', 'd', 'pending')`,
-      [specId, PROJECT, ORG],
-    );
-    const app = createInternalRunStateWriteRoutes({ pool: runtimePool, verifier: new AllowAllPeerVerifier() });
-    const writer = new HttpRunStateWriter("https://control.internal:3110", fetchInto(app));
-
-    await writer.setSpecMetadata({
-      specId,
-      orgId: ORG,
-      metadataJson: JSON.stringify({ discovery: { from: "intake" } }),
-    });
-
-    const row = await ownerPool.query<{ metadata: { discovery?: { from?: string } } }>(
-      "SELECT metadata FROM specs WHERE spec_id = $1",
-      [specId],
-    );
-    expect(row.rows[0]?.metadata?.discovery?.from).toBe("intake");
-  });
-
-  // (8) The change-percolation run-column writes (part of the DagWalker loop): the
-  // bespoke `UPDATE runs SET <jsonb>` ops the de-privileged data plane can no longer
-  // run directly. Prove each endpoint performs the SAME server-side write, org-scoped.
-  it("(8) the change-percolation run-column endpoints write runs server-side, org-scoped", async () => {
-    const runId = "run_p3_percolation";
-    await seedRun(runId, "running");
-    const app = createInternalRunStateWriteRoutes({ pool: runtimePool, verifier: new AllowAllPeerVerifier() });
-    const writer = new HttpRunStateWriter("https://control.internal:3110", fetchInto(app));
-
-    await writer.setRunSpeculativeBase({ runId, orgId: ORG, speculativeBase: "tanren/integ/x" });
-    await writer.setRunPercolationReexecId({ runId, orgId: ORG, reexecRunId: "run_reexec" });
-    await writer.mergeRunVerifiedAncestorSha({
-      runId,
-      orgId: ORG,
-      ancestorSpecId: "spec_anc",
-      entryJson: JSON.stringify({ sha: "deadbeef", reviewVerdict: "approved" }),
-    });
-
-    const row = await ownerPool.query<{
-      speculative_base: string;
-      percolation_pending: { reexecRunId?: string };
-      verified_ancestor_shas: Record<string, { sha?: string; reviewVerdict?: string }>;
-    }>("SELECT speculative_base, percolation_pending, verified_ancestor_shas FROM runs WHERE run_id = $1", [runId]);
-    expect(row.rows[0]?.speculative_base).toBe("tanren/integ/x");
-    expect(row.rows[0]?.percolation_pending?.reexecRunId).toBe("run_reexec");
-    expect(row.rows[0]?.verified_ancestor_shas?.spec_anc).toMatchObject({ sha: "deadbeef", reviewVerdict: "approved" });
-
-    // And the clear endpoint drops the marker.
-    await writer.clearRunPercolationPending({ runId, orgId: ORG });
-    const cleared = await ownerPool.query<{ percolation_pending: unknown }>(
-      "SELECT percolation_pending FROM runs WHERE run_id = $1",
-      [runId],
-    );
-    expect(cleared.rows[0]?.percolation_pending).toBeNull();
   });
 });
