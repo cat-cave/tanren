@@ -98,7 +98,7 @@ function twoReadySpecsLifecycle(): DagLifecycleReadModel {
 
 const noBudgetGate: BudgetGate = {
   async resolveBudget(): Promise<ProjectBudgetState> {
-    return { ceilingUsd: undefined, period: "monthly", spentUsd: 0 };
+    return { ceilingUsd: undefined, period: "monthly", spentUsd: 0, notionalUsd: 0, gatedFigure: "real_spend" };
   },
 };
 

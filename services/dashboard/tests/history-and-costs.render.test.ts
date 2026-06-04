@@ -241,12 +241,17 @@ describe("costs dashboard (/costs)", () => {
   it("renders burn projection, headroom, and observed panels with numbers", async () => {
     const app = await build();
     const html = await (await app.request("/costs")).text();
-    expect(html).toContain("burn projection");
-    expect(html).toContain("next 30d projection");
+    expect(html).toContain("burn + forecast");
+    // The forecast surfaces a run-rate month-end ESTIMATE over BOTH figures.
+    expect(html).toContain("est. month-end · real");
+    expect(html).toContain("est. month-end · equivalent");
+    // Both the real-spend and the api-equivalent trend are surfaced side-by-side.
+    expect(html).toContain("daily real");
+    expect(html).toContain("daily equiv");
     expect(html).toContain("headroom · subscription + self-hosted");
     expect(html).toContain("observed · reported, not targeted");
     expect(html).toContain("specs merged");
-    // Total priced spend = 10 + 3 = $13.00 across both runs.
+    // Total REAL spend = 10 + 3 = $13.00 across both runs (the led headline figure).
     expect(html).toContain("$13.00");
   });
 

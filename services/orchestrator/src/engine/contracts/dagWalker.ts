@@ -26,7 +26,7 @@
 // any database or worker. The pg-backed read model + the createQueuedRunFromSpec
 // enqueuer + the LISTEN/NOTIFY subscriber live in `engine/dag/walker.ts`.
 
-import type { BudgetPeriod, SpeculationThreshold } from "../config/shared.js";
+import type { BudgetGatedFigure, BudgetPeriod, SpeculationThreshold } from "../config/shared.js";
 import type { DagLifecycleSnapshot } from "./dagLifecycle.js";
 import { computeReadiness, type SpecReadiness } from "../dag/speculation.js";
 import { priorityRank, type SpecPriority } from "../state/spec.js";
@@ -366,7 +366,21 @@ export type BudgetFailClosedReason = "unpriced_spend" | "unparseable_config";
 export interface ProjectBudgetState {
   ceilingUsd: number | undefined;
   period: BudgetPeriod;
+  /**
+   * REAL SPEND (FOCUS BilledCost; `cost_records.cost_usd`) over the period — the
+   * ONLY figure the gate compares against the ceiling. Named "spent" because it is
+   * the only field that is genuine money out the door.
+   */
   spentUsd: number;
+  /**
+   * NOTIONAL / API-EQUIVALENT VALUE (FOCUS ListCost; `cost_records.notional_cost_usd`)
+   * over the SAME period — the list-priced ESTIMATE, surfaced alongside real spend so
+   * a subscription/Teams org sees a non-zero figure. NOT money; never gated, never
+   * called "spend". The gate ignores it.
+   */
+  notionalUsd: number;
+  /** Which figure the ceiling gates (always `real_spend` today; the gate sums real). */
+  gatedFigure: BudgetGatedFigure;
   failClosed?: BudgetFailClosedReason;
 }
 

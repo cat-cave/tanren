@@ -106,8 +106,10 @@ export const DagBudgetPausedPayload = z
     // measured against it over the configured period (both in USD).
     ceilingUsd: z.number().nonnegative(),
     spentUsd: z.number().nonnegative(),
-    // The budget period the spend was summed over (calendar month vs. lifetime).
-    period: z.enum(["monthly", "total"]),
+    // The budget period the spend was summed over — mirrors the config `BudgetPeriod`
+    // enum (calendar month / quarter / year, or lifetime). A calendar-anchored window
+    // resets at its boundary; `total` is the lifetime cap.
+    period: z.enum(["monthly", "quarterly", "annual", "total"]),
     // How many ready specs the walker held back because the ceiling was reached.
     readyHeldBack: z.number().int().nonnegative(),
     // BUDGET-SAFETY (C1b / M5): present when the pause is a FAIL-CLOSED safety

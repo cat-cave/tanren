@@ -122,7 +122,7 @@ class RecordingEmitter implements DagEventEmitter {
 /** Unlimited budget (no ceiling) — the speculative cases never exercise the gate. */
 const unlimitedBudgetGate: BudgetGate = {
   async resolveBudget(): Promise<ProjectBudgetState> {
-    return { ceilingUsd: undefined, period: "monthly", spentUsd: 0 };
+    return { ceilingUsd: undefined, period: "monthly", spentUsd: 0, notionalUsd: 0, gatedFigure: "real_spend" };
   },
 };
 

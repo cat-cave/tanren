@@ -186,9 +186,27 @@ export const COSTS_SCREEN_CSS = `
 .costs-screen .num.hi { color: var(--fg-1); }
 .costs-screen .num.unpriced { color: var(--fg-4); }
 
-/* Burn sparkline */
+/* Burn sparkline — the outer bar is the NOTIONAL (equivalent) envelope; the inner
+   .spark-real overlay is REAL spend within it (real money inside the api-equivalent). */
 .costs-screen .spark { display: flex; align-items: flex-end; gap: 2px; height: 44px; }
-.costs-screen .spark > span { flex: 1; border-radius: 1px 1px 0 0; min-height: 2px; background: var(--cost-token); display: block; }
+.costs-screen .spark > span {
+  flex: 1;
+  border-radius: 1px 1px 0 0;
+  min-height: 2px;
+  background: var(--cost-window);
+  opacity: 0.45;
+  display: flex;
+  align-items: flex-end;
+  position: relative;
+}
+.costs-screen .spark > span .spark-real {
+  width: 100%;
+  min-height: 1px;
+  border-radius: 1px 1px 0 0;
+  background: var(--cost-token);
+  opacity: 1;
+  display: block;
+}
 .costs-screen .kv {
   display: grid;
   grid-template-columns: 1fr auto;

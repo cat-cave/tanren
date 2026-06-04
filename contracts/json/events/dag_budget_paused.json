@@ -9,6 +9,8 @@
     "period": {
       "enum": [
         "monthly",
+        "quarterly",
+        "annual",
         "total"
       ],
       "type": "string"

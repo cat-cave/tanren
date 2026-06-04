@@ -140,6 +140,47 @@ describe("summarizeCosts — every row shows its REAL source", () => {
   });
 });
 
+describe("summarizeCosts — notional / equivalent alongside real", () => {
+  it("sums notional in parallel and leads the headline with equivalent when real is $0", () => {
+    // A subscription org: NO real spend (cost_usd null) but a list-priced notional value.
+    const records: CostRecord[] = [
+      rec({ runId: "r1", billingMode: "subscription", costBasis: "unknown", costUsd: null, notionalCostUsd: "8.00" }),
+      rec({ runId: "r2", billingMode: "subscription", costBasis: "unknown", costUsd: null, notionalCostUsd: "2.00" }),
+    ];
+    const summary = summarizeCosts(records);
+    expect(summary.totalUsd).toBe(0);
+    expect(summary.totalNotionalUsd).toBeCloseTo(10);
+    // Real is $0 but notional > 0 ⇒ the headline leads with the equivalent figure
+    // (so the org never sees a misleading "$0 trend").
+    expect(summary.headlineBasis).toBe("equivalent");
+    const sub = summary.models.find((m) => m.mode === "subscription");
+    expect(sub?.notionalUsd).toBeCloseTo(10);
+    expect(sub?.notionalShare).toBeCloseTo(1);
+    expect(sub?.costUsd).toBe(0);
+  });
+
+  it("leads with real spend when real money is present", () => {
+    const records: CostRecord[] = [rec({ billingMode: "per_token", costUsd: "5.00", notionalCostUsd: "5.00" })];
+    const summary = summarizeCosts(records);
+    expect(summary.headlineBasis).toBe("real");
+    expect(summary.totalUsd).toBeCloseTo(5);
+    expect(summary.totalNotionalUsd).toBeCloseTo(5);
+  });
+
+  it("carries notional onto provider rows without conflating it with spend", () => {
+    const records: CostRecord[] = [
+      rec({ billingMode: "subscription", costBasis: "unknown", costUsd: null, notionalCostUsd: "3.00" }),
+    ];
+    const summary = summarizeCosts(records);
+    const row = summary.providers[0];
+    // No REAL spend basis, but it DOES carry a notional (api-equivalent) value.
+    expect(row?.priced).toBe(false);
+    expect(row?.costUsd).toBe(0);
+    expect(row?.notionalPriced).toBe(true);
+    expect(row?.notionalUsd).toBeCloseTo(3);
+  });
+});
+
 describe("projectBurn", () => {
   it("buckets priced spend by UTC day and projects linearly", () => {
     const now = new Date("2026-05-28T00:00:00.000Z");
@@ -150,6 +191,7 @@ describe("projectBurn", () => {
       rec({
         recordedAt: "2026-05-26T10:00:00.000Z",
         costUsd: null,
+        notionalCostUsd: null,
         billingMode: "subscription",
         costBasis: "unknown",
       }),
@@ -161,6 +203,39 @@ describe("projectBurn", () => {
     expect(burn.dailyAvgUsd).toBeCloseTo(6 / 14);
     expect(burn.activeDays).toBe(2);
     expect(burn.projected30dUsd).toBeCloseTo(Math.round((6 / 14) * 30 * 100) / 100);
+  });
+
+  it("buckets a notional series + month-end run-rate even when real spend is $0", () => {
+    // 31-day month, 17 days left incl. today.
+    const now = new Date("2026-05-15T00:00:00.000Z");
+    // Subscription rows: NO real spend, but a notional value lands on the notional axis.
+    const records: CostRecord[] = [
+      rec({
+        recordedAt: "2026-05-15T10:00:00.000Z",
+        costUsd: null,
+        billingMode: "subscription",
+        notionalCostUsd: "4.00",
+      }),
+      rec({
+        recordedAt: "2026-05-14T10:00:00.000Z",
+        costUsd: null,
+        billingMode: "subscription",
+        notionalCostUsd: "6.00",
+      }),
+    ];
+    const burn = projectBurn(records, { now, windowDays: 14 });
+    const notionalTotal = burn.daily.reduce((s, d) => s + d.notionalUsd, 0);
+    expect(notionalTotal).toBeCloseTo(10);
+    // No real spend.
+    expect(burn.monthToDateUsd).toBe(0);
+    expect(burn.notionalMonthToDateUsd).toBeCloseTo(10);
+    expect(burn.notionalDailyAvgUsd).toBeCloseTo(10 / 14);
+    // Active days counts rows priced on EITHER axis — so the subscription rows count.
+    expect(burn.activeDays).toBe(2);
+    expect(burn.daysLeftInMonth).toBe(17);
+    // Month-end run-rate over notional: MTD + dailyAvg × daysLeft.
+    expect(burn.projectedNotionalMonthEndUsd).toBeCloseTo(Math.round((10 + (10 / 14) * 17) * 100) / 100);
+    expect(burn.projectedRealMonthEndUsd).toBe(0);
   });
 });
 

@@ -59,8 +59,12 @@ export interface DagWalkerConformanceHarness {
   setSpec(node: DagSpecNode): void;
   /** Set the governed concurrency ceiling the walker reads. */
   setCeiling(ceiling: number): void;
-  /** Set the project's resolved budget state the walker's budget gate returns. */
-  setBudget(state: ProjectBudgetState): void;
+  /**
+   * Set the project's resolved budget state the walker's budget gate returns.
+   * `notionalUsd`/`gatedFigure` default (notional 0, gates real spend) — the walker
+   * gate only reads `spentUsd`/`ceilingUsd`/`failClosed`, so these tests omit them.
+   */
+  setBudget(state: Omit<ProjectBudgetState, "notionalUsd" | "gatedFigure">): void;
   /** The spec's current phase in the read model (reflects walk-time claims). */
   phaseOf(specId: string): DagSpecPhase | undefined;
   /** Every enqueue the walker performed, in order. */
