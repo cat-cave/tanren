@@ -14,6 +14,7 @@
 // a REAL provider answerer (`buildForgeTriageAnswererFactory`), tests a fake.
 // There is no deterministic fallback (§8a). Mounted on the shared `/orgs` base.
 
+import { randomUUID } from "node:crypto";
 import { Hono, type Context } from "hono";
 import type pg from "pg";
 import { z } from "zod";
@@ -39,9 +40,12 @@ import {
   type SourceConnector,
   type TriageAnswerer,
 } from "../../engine/forge/inbox/index.js";
+import { intakeAutoRouteDeps, intakeItem } from "../../engine/forge/intake/index.js";
+import type { GithubAppTokenMinter } from "../../engine/providers/githubAppTokenMinter.js";
 import type { ForgeAnswererTarget } from "../../engine/forge/providerFactory.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg } from "../orgs/index.js";
+import { handleProvisionWebhook } from "./webhookProvision.js";
 
 export interface InboxRoutesOptions {
   pool: pg.Pool;
@@ -63,6 +67,12 @@ export interface InboxRoutesOptions {
   answererFactory: (target: ForgeAnswererTarget) => TriageAnswerer;
   // Test seam: override the connector map (defaults to GitHub + Sentry).
   connectors?: ReadonlyMap<string, SourceConnector>;
+  // B1 (webhook provisioning): the shared App-token minter + the public base URL
+  // the GitHub `issues` webhook callback resolves against. Present in production;
+  // when absent the webhook-provision endpoint is not mounted (its prerequisites
+  // — App-token minting + a reachable callback URL — are not wired).
+  githubAppMinter?: GithubAppTokenMinter;
+  publicBaseUrl?: string;
 }
 
 const CreateSourceBody = z
@@ -82,6 +92,20 @@ const AcceptBody = z
     proposals: z.array(ProposedSpec).min(1),
     placementKind: PlacementKind,
     placementLabel: z.string().min(1).max(120),
+  })
+  .strict();
+
+// B2 — the Tanren-native "file a bug/feature INTO Tanren" body. A non-expert posts
+// a title + body (+ optional severity) and the SAME intake pipeline the webhook runs
+// triages → auto-routes it. No connector/network: the report IS the item.
+const ReportItemBody = z
+  .object({
+    title: z.string().min(1).max(300),
+    body: z.string().max(8000).default(""),
+    severity: z.enum(["info", "warn", "fail"]).default("info"),
+    // Optional caller-supplied idempotency key (e.g. a client form id); absent ⇒ a
+    // fresh id per submission, so a re-submit files a new candidate.
+    externalId: z.string().min(1).max(200).optional(),
   })
   .strict();
 
@@ -144,12 +168,89 @@ export function createInboxRoutes(options: InboxRoutesOptions) {
       }),
     };
     try {
-      const { candidates } = await ingestSource(ingestDeps, source);
+      // B3 (autonomous-by-default): pass the auto-route deps so an `auto_routable`
+      // candidate is COMMITTED into the DAG immediately (exactly like the webhook +
+      // poller paths) instead of dead-ending in the inbox awaiting a click. The API
+      // server runs as `tanren_app`, which retains `specs` INSERT under RLS, so the
+      // direct-pool write needs no `runStateWriter` (the worker/data-plane does).
+      const { candidates } = await ingestSource(ingestDeps, source, intakeAutoRouteDeps());
       return c.json({ candidates }, 200);
     } catch (error) {
       return c.json({ error: "inbox_ingest_failed", message: messageOf(error) }, 500);
     }
   });
+
+  // B2: file a bug/feature directly INTO Tanren (no GitHub round-trip). The report
+  // becomes one ingest item that flows through the SAME `intakeItem` pipeline the
+  // webhook receiver uses — real triage → an `auto_routable` report is COMMITTED into
+  // the DAG (autonomous by default), everything else lands in the inbox. This is the
+  // end-user "filed an issue, watched it become a fixed PR" surface.
+  app.post("/:orgId/inbox/sources/:sourceId/items", async (c) => {
+    const orgId = c.req.param("orgId");
+    if (!guard(c, orgId)) return c.json({ error: "org_access_denied" }, 403);
+    const source = await InboxStore.getSource(options.pool, c.req.param("sourceId"));
+    if (source === undefined || source.orgId !== orgId) {
+      return c.json({ error: "source_not_found" }, 404);
+    }
+    const parsed = ReportItemBody.safeParse(await c.req.json().catch(() => {}));
+    if (!parsed.success) return c.json({ error: "invalid_report", issues: parsed.error.issues }, 400);
+    const item = {
+      externalId: parsed.data.externalId ?? `report-${randomUUID()}`,
+      title: parsed.data.title,
+      body: parsed.data.body,
+      severity: parsed.data.severity,
+      projectId: source.projectId,
+    };
+    try {
+      const outcome = await intakeItem(
+        {
+          pool: options.pool,
+          answerer: options.answererFactory({
+            orgId,
+            ...(source.projectId === null ? {} : { projectId: source.projectId }),
+          }),
+          // The API server is `tanren_app` (retains `specs` INSERT) — direct writes.
+          autoRoute: intakeAutoRouteDeps(),
+        },
+        source,
+        item,
+      );
+      return c.json(
+        outcome.kind === "auto_routed"
+          ? { outcome: "auto_routed", candidate: outcome.candidate, specId: outcome.specId }
+          : { outcome: "inboxed", candidate: outcome.candidate },
+        201,
+      );
+    } catch (error) {
+      return c.json({ error: "inbox_report_failed", message: messageOf(error) }, 500);
+    }
+  });
+
+  // B1: provision the GitHub `issues` webhook for a project's repo over the API —
+  // mints+stores the HMAC secret, creates the GitHub hook via the org's App token,
+  // and wires the inbox source (config jsonb, no migration). Only mounted when the
+  // minter + public base URL are wired.
+  if (options.githubAppMinter !== undefined && options.publicBaseUrl !== undefined) {
+    const minter = options.githubAppMinter;
+    const publicBaseUrl = options.publicBaseUrl;
+    app.post("/:orgId/inbox/webhooks/provision", async (c) => {
+      const orgId = c.req.param("orgId");
+      const actor = requireActor(c);
+      if (!actorCanAccessOrg(actor, orgId)) return c.json({ error: "org_access_denied" }, 403);
+      return handleProvisionWebhook(
+        c,
+        {
+          pool: options.pool,
+          secrets: options.secrets,
+          githubHttp: options.githubHttp,
+          githubAppMinter: minter,
+          publicBaseUrl,
+        },
+        orgId,
+        actor,
+      );
+    });
+  }
 
   app.post("/:orgId/inbox/candidates/:id/accept", async (c) => {
     const orgId = c.req.param("orgId");

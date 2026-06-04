@@ -56,6 +56,8 @@ export { buildInboxConnectorMap, type BuildConnectorMapDeps } from "./connectorM
 
 export { InboxStore, type CreateSourceInput } from "./store.js";
 
+export { ensureIssuesInboxSource, type EnsureIssuesSourceInput, type EnsureIssuesSourceResult } from "./repoLink.js";
+
 export {
   ingestSource,
   autoRouteCandidate,

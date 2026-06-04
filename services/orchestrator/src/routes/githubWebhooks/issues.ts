@@ -78,7 +78,20 @@ export function createIssueWebhookRoutes(deps: IssueWebhookRouteDeps) {
     const mapped = mapGithubIssueWebhook(payload, source.projectId);
     if (mapped.kind === "skip") return c.json({ event, outcome: "skipped", reason: mapped.reason }, 202);
 
-    const outcome = await runIntake(deps, source, mapped.item);
+    // L1 (intake hardening): a triage/auto-route failure must NOT surface as a 500.
+    // GitHub treats a 5xx as a delivery failure and RE-DELIVERS on a backoff — a
+    // persistent error (a still-bad payload, a transient DB blip) becomes a retry
+    // STORM hammering this endpoint. The signature is already verified, so the
+    // request is authentic; we ACCEPT it (202) and report the error in the body so
+    // the failure is visible without inviting GitHub to retry. The §1d auto-route
+    // already recovers a hallucinated `dependsOn` internally; this is the backstop
+    // for everything else.
+    let outcome: IntakeOutcome;
+    try {
+      outcome = await runIntake(deps, source, mapped.item);
+    } catch (error) {
+      return c.json({ event, outcome: "intake_failed", message: messageOf(error) }, 202);
+    }
     return c.json(
       outcome.kind === "auto_routed"
         ? { event, outcome: "auto_routed", candidateId: outcome.candidate.id, specId: outcome.specId }
@@ -88,6 +101,10 @@ export function createIssueWebhookRoutes(deps: IssueWebhookRouteDeps) {
   });
 
   return app;
+}
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 async function runIntake(

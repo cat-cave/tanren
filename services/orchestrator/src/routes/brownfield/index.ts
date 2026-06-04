@@ -24,6 +24,7 @@ import {
   loadOrgDefaultGithubCredentialRef,
   loadOrgGithubAppInstallation,
 } from "../../engine/credentials/orgGithubApp.js";
+import { ensureIssuesInboxSource } from "../../engine/forge/inbox/index.js";
 import { ProjectStore } from "../../engine/repositories/index.js";
 import { systemActor } from "../../engine/state/actor.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
@@ -133,12 +134,19 @@ export function createBrownfieldRoutes(options: BrownfieldRoutesOptions) {
 
     await ProjectStore.updateRepoUrl(options.pool, projectId, parsed.data.repoUrl, systemActor);
 
+    // L2 (post-merge re-intake): provision the matching `issues` inbox source so the
+    // post-merge auto-issue → re-ingest loop closes by default and user reports have
+    // a source to land in. Idempotent. NEVER writes to the target repo (observation
+    // contract preserved — this only writes Tanren's own inbox row).
+    const inbox = await ensureIssuesInboxSource({ pool: options.pool, orgId, projectId, repoUrl: parsed.data.repoUrl });
+
     return c.json({
       projectId,
       repoUrl: parsed.data.repoUrl,
       orgId,
       detectedFiles: detected,
       writesPerformed: 0,
+      inboxSource: { id: inbox.source.id, created: inbox.created },
     });
   });
 

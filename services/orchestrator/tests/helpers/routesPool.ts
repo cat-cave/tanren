@@ -58,6 +58,8 @@ export class RoutesPool {
   readonly tasks: Array<Record<string, unknown>> = [];
   readonly jobs: Array<Record<string, unknown>> = [];
   readonly runs: Array<Record<string, unknown>> = [];
+  /** Inbox sources (the repo-link auto-provisioned `issues` source lands here). */
+  readonly inboxSources: Array<Record<string, unknown>> = [];
   /** Per-project cost-record rows (only `project_id` + `cost_usd` are summed). */
   readonly costRecords: Array<{ project_id: string; cost_usd: number }> = [];
 
@@ -305,6 +307,27 @@ export class RoutesPool {
       const spec = this.specs.get(specId);
       if (spec === undefined) return { rows: [], rowCount: 0 };
       return { rows: [{ spec_id: spec.spec_id }], rowCount: 1 };
+    }
+
+    // inbox_sources (the repo-link auto-provisioned `issues` source).
+    if (trimmed.includes("FROM inbox_sources WHERE org_id = $1")) {
+      const rows = this.inboxSources.filter((s) => s["org_id"] === String(params[0]));
+      return { rows, rowCount: rows.length };
+    }
+    if (trimmed.startsWith("INSERT INTO inbox_sources")) {
+      const row = {
+        id: String(params[0]),
+        org_id: String(params[1]),
+        project_id: params[2] === null ? null : String(params[2]),
+        kind: String(params[3]),
+        name: String(params[4]),
+        detail: String(params[5]),
+        config: JSON.parse(String(params[6])) as unknown,
+        enabled: String(params[7]),
+        auto_route: String(params[8]),
+      };
+      this.inboxSources.push(row);
+      return { rows: [row], rowCount: 1 };
     }
 
     return { rows: [], rowCount: 0 };

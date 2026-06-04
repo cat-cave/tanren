@@ -22,6 +22,7 @@ import {
   loadOrgGithubAppInstallation,
 } from "../../engine/credentials/orgGithubApp.js";
 import type { GithubAppTokenMinter } from "../../engine/providers/githubAppTokenMinter.js";
+import { ensureIssuesInboxSource } from "../../engine/forge/inbox/index.js";
 import { createProject } from "../../engine/workflow/projectSpec.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 
@@ -138,5 +139,22 @@ export async function handleGreenfieldCreate(
     scopedActor,
   );
 
-  return c.json({ ...project, repository: { fullName: created.fullName, repoUrl: created.repoUrl } }, 201);
+  // L2 (post-merge re-intake): provision the matching `issues` inbox source for the
+  // new repo so post-merge auto-issues + user-filed reports are ingested by default.
+  // Idempotent.
+  const inbox = await ensureIssuesInboxSource({
+    pool,
+    orgId,
+    projectId: project.projectId,
+    repoUrl: created.repoUrl,
+  });
+
+  return c.json(
+    {
+      ...project,
+      repository: { fullName: created.fullName, repoUrl: created.repoUrl },
+      inboxSource: { id: inbox.source.id, created: inbox.created },
+    },
+    201,
+  );
 }

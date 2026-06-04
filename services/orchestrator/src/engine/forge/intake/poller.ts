@@ -14,7 +14,12 @@ import type pg from "pg";
 import { runWithJobOrgId, runWithSystemScope } from "@tanren/db";
 import { z } from "zod";
 import { orgScopingPool } from "../../data/orgScopedDb.js";
+import type { SecretStore } from "../../contracts/secretStore.js";
+import type { GitHubHttpClient } from "../../providers/github.js";
+import type { GithubAppTokenMinter } from "../../providers/githubAppTokenMinter.js";
+import { loadOrgGithubAppInstallation } from "../../credentials/orgGithubApp.js";
 import {
+  buildInboxConnectorMap,
   ingestSource,
   InboxStore,
   type AutoRouteDeps,
@@ -41,9 +46,21 @@ export const DEFAULT_POLL_INTERVAL_MS = 5 * 60_000;
 
 export interface IntakePollerDeps {
   pool: pg.Pool;
-  // Connectors keyed by source kind (GitHub issues / Sentry / Linear / Jira) —
-  // the SAME map the inbox route builds.
-  connectors: ReadonlyMap<string, SourceConnector>;
+  // The transports the poller rebuilds a PER-ORG connector map from on each poll.
+  // App-only intake (creds-audit fix): the GitHub issues connector must mint a
+  // per-org INSTALLATION token, so the poller cannot share one org-agnostic
+  // connector map — it builds the map per source-org with that org's App
+  // installation threaded in (see `pollSourceOnce`). `secrets`/`githubHttp`/`minter`
+  // are those transports; `connectors` (when given) is a test override of the whole
+  // built map.
+  secrets: SecretStore;
+  githubHttp: GitHubHttpClient;
+  // The shared App-token minter (installation-token cache); threaded into the
+  // per-org GitHub issues connector so App-only orgs are ingestable.
+  githubAppMinter?: GithubAppTokenMinter;
+  // Test seam: a fixed connector map, used VERBATIM for every org (bypasses the
+  // per-org App rebuild). Production omits this and the poller builds per-org.
+  connectors?: ReadonlyMap<string, SourceConnector>;
   // Resolve a per-source triage answerer (the source's project `forge` routing).
   // REQUIRED — the poll path triages with a real model (no §8a fallback).
   answererFactory: (target: { orgId: string; projectId?: string }) => TriageAnswerer;
@@ -54,10 +71,22 @@ export interface IntakePollerDeps {
   now?: () => number;
 }
 
-/** Whether a source is eligible for polling at all (webhook-driven sources are skipped). */
-export function isPollableSource(source: InboxSource, connectors: ReadonlyMap<string, SourceConnector>): boolean {
+// The connector kinds the poller can serve. `isPollableSource` probes this WITHOUT
+// resolving any org (the per-org App rebuild happens later, per due source), so an
+// App-only org's GitHub source is still recognized as pollable.
+const POLLABLE_KINDS: ReadonlySet<string> = new Set(["issues", "errors"]);
+
+/**
+ * Whether a source is eligible for polling at all (webhook-driven sources are
+ * skipped). The supported kinds are probed against `connectors` when a fixed map is
+ * supplied (the test override), else against the built-in `POLLABLE_KINDS` set — so
+ * an App-only org's `issues` source (whose per-org connector is built later) is
+ * still recognized as pollable.
+ */
+export function isPollableSource(source: InboxSource, connectors?: ReadonlyMap<string, SourceConnector>): boolean {
   if (!source.enabled) return false;
-  if (!connectors.has(source.kind)) return false;
+  const known = connectors === undefined ? POLLABLE_KINDS.has(source.kind) : connectors.has(source.kind);
+  if (!known) return false;
   const config = PollConfig.safeParse(source.config);
   // A webhook-driven source (a configured secret) is served by push — skip it.
   if (config.success && config.data.webhookSecretRef !== undefined) return false;
@@ -90,9 +119,16 @@ export async function pollSourceOnce(deps: IntakePollerDeps, source: InboxSource
   // The source carries a concrete `orgId` (always set), so ingest under the source's
   // per-job org id AND hand the engine the org-scoping proxy: each direct `.query`
   // opens a short `runWithOrgScope` carrying the source's org GUC.
+  //
+  // App-only intake (creds-audit fix): build the connector map for THIS source's
+  // ORG, threading that org's GitHub App installation + the shared minter so the
+  // GitHub issues connector mints an installation token (no PAT required). A test
+  // may pin a fixed `connectors` map (used verbatim); production omits it and we
+  // rebuild per-org — mirroring how run/merge resolve App tokens per org.
+  const connectors = deps.connectors ?? (await buildOrgConnectorMap(deps, source.orgId));
   const engineDeps: InboxEngineDeps = {
     pool: orgScopingPool(deps.pool),
-    connectors: deps.connectors,
+    connectors,
     answerer: deps.answererFactory({
       orgId: source.orgId,
       ...(source.projectId === null ? {} : { projectId: source.projectId }),
@@ -100,6 +136,20 @@ export async function pollSourceOnce(deps: IntakePollerDeps, source: InboxSource
   };
   const { candidates } = await runWithJobOrgId(source.orgId, () => ingestSource(engineDeps, source, deps.autoRoute));
   return { source, candidates };
+}
+
+/** Build the inbox connector map for one org, with that org's App installation threaded in. */
+async function buildOrgConnectorMap(
+  deps: IntakePollerDeps,
+  orgId: string,
+): Promise<ReadonlyMap<string, SourceConnector>> {
+  const installation = await loadOrgGithubAppInstallation(deps.pool, orgId);
+  return buildInboxConnectorMap({
+    secrets: deps.secrets,
+    githubHttp: deps.githubHttp,
+    ...(installation === undefined ? {} : { installation }),
+    ...(deps.githubAppMinter === undefined ? {} : { minter: deps.githubAppMinter }),
+  });
 }
 
 /**

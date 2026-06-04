@@ -72,6 +72,10 @@ export interface FeatureRouteDeps {
   // P-INT-6: when set, the CI webhook receiver verifies the inbound signature
   // against this secret ref (rejecting unsigned/invalid 401). Omitted → unsigned.
   ciWebhookSigningSecretRef?: string;
+  // B1 (webhook provisioning): the public base URL Tanren is reachable at, so the
+  // inbox webhook-provision endpoint can construct the GitHub `issues` callback URL.
+  // Omitted → the provisioning endpoint is not mounted.
+  publicBaseUrl?: string;
   // Live benchmark infra (allocator + SSH + runner identity + the shared LISTEN
   // connection) so the benchmark scheduler runs REAL trials — the post-merge
   // accept tier and the LISTEN/NOTIFY terminal await. Omitted (the default) →
@@ -232,7 +236,16 @@ export function mountFeatureRoutes(app: Hono<ActorContextEnv>, deps: FeatureRout
   // connector reads via the App resolver, the real provider triage answerer.
   app.route(
     "/orgs",
-    createInboxRoutes({ pool: scopedPool, secrets, githubHttp, answererFactory: forgeAnswerers.triage }),
+    createInboxRoutes({
+      pool: scopedPool,
+      secrets,
+      githubHttp,
+      answererFactory: forgeAnswerers.triage,
+      // B1: enable the webhook-provision endpoint (needs the App minter + a public
+      // callback URL). Absent publicBaseUrl ⇒ the endpoint stays unmounted.
+      githubAppMinter,
+      ...(deps.publicBaseUrl === undefined ? {} : { publicBaseUrl: deps.publicBaseUrl }),
+    }),
   );
   // P3-0021: scheduled audits — recurring read-only Answerer passes (the audit
   // job library). A run executes a read-only pass and emits findings into the
