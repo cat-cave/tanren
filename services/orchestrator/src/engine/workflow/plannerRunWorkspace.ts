@@ -51,8 +51,8 @@ export async function prepareRunWorkspace(
   await seedWorkspaceLocalIgnore({ ssh: input.ssh, target, workspacePath, timeoutMs: input.timeoutMs });
 
   // Command precedence: an explicit input.bootstrapCommand override wins;
-  // otherwise resolve the repo's tanren-ci.yml `bootstrap.run` (P3-0004); when
-  // the repo ships no tanren-ci.yml the resolver yields undefined and the
+  // otherwise resolve the repo's .tanren/ci.yml `bootstrap.run` (P3-0004); when
+  // the repo ships no .tanren/ci.yml the resolver yields undefined and the
   // bootstrap step falls back to its pnpm/npm-detecting DEFAULT_BOOTSTRAP_COMMAND.
   const resolvedBootstrapCommand =
     input.bootstrapCommand ??

@@ -200,20 +200,27 @@ export function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQ
             timeoutMs: DRIVE_RESOLVER_TIMEOUT_MS,
             verdict,
           }),
-          // P2a re-gate: re-poll the PR's CI via the VcsProvider after an auto-rebase
-          // (no runner needed — it is a CI-status read). `pollCiForRun` reads the run/PR
-          // context + ensures the CI task on its pool, so it gets the SAME `scopedPool`
-          // — those tenant reads carry the per-job org GUC under RLS.
+          // NATIVE re-gate (no-Actions): after an auto-rebase the prior verdict is
+          // stale, so provision a FRESH runner, clone the PR head, install deps, and
+          // run the `pre_merge` gate over SSH (the merge authority — no forge poll).
+          // The runs⋈projects⋈org bootstrap read is system-scoped on `deps.pool`; the
+          // runner allocation + events scope to the run's org.
           reGateCi: buildReGateCiForQueuedRun({
-            pool: scopedPool,
+            pool: deps.pool,
+            scopedPool,
             eventStore,
-            // Plane-split: route the re-gate CI poll's task writes through the control
-            // plane when wired (else direct on the pool — byte-identical).
-            ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
             secrets: deps.secrets,
             vcsProvider: deps.vcsProvider,
+            allocator: deps.allocator,
+            ssh: deps.ssh,
+            identitySecretRef: deps.identitySecretRef,
+            orgId: facts.orgId,
+            projectId: facts.projectId,
+            specId: facts.specId,
             runId,
             githubCredentialRef: facts.githubCredentialRef,
+            ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
+            timeoutMs: DRIVE_RESOLVER_TIMEOUT_MS,
           }),
         }),
       );

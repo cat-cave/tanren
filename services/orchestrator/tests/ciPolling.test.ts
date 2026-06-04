@@ -1,27 +1,11 @@
 import { readFile } from "node:fs/promises";
 import { vcsProviderOver } from "./helpers/vcsProvider.js";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import { FakeEventStore } from "./helpers/fakeEventStore.js";
 import { CiMemoryPool, ScriptedGitHubHttp } from "./helpers/ciPollingPool.js";
 import { FetchGitHubHttpClient, parseGitHubPullRequestUrl } from "../src/engine/providers/github.js";
 import { computeCiRetryDelayMs, evaluateCiObservation, pollCiForRun } from "../src/engine/workflow/ciPolling.js";
-import { buildApp } from "../src/main.js";
-
-// buildApp constructs the (default sidecar) allocator, which REQUIRES a bearer
-// token (no `"dev"` fallback). Set one for the suite and restore it after.
-let savedAllocatorToken: string | undefined;
-beforeAll(() => {
-  savedAllocatorToken = process.env.TANREN_ALLOCATOR_TOKEN;
-  process.env.TANREN_ALLOCATOR_TOKEN = "test-token";
-});
-afterAll(() => {
-  if (savedAllocatorToken === undefined) {
-    delete process.env.TANREN_ALLOCATOR_TOKEN;
-  } else {
-    process.env.TANREN_ALLOCATOR_TOKEN = savedAllocatorToken;
-  }
-});
 
 describe("CI polling loop", () => {
   it("parses GitHub PR URLs and classifies pending, passing, and failing checks", () => {
@@ -207,38 +191,9 @@ describe("CI polling loop", () => {
     expect(failEvents.events.map((event) => event.eventType)).toEqual(["task.started", "ci.failed", "task.failed"]);
   });
 
-  it("exposes CI polling through the API and tanren status run details", async () => {
-    const pool = new CiMemoryPool();
-    const secrets = new FakeSecretStore();
-    await secrets.put({ ref: "credential/github/dev", value: "ghp_secretToken" });
-    const app = buildApp({
-      pool: pool.asPgPool(),
-      ssh: {} as never,
-      secrets,
-      githubHttp: new ScriptedGitHubHttp([
-        { status: 200, body: { head: { sha: "abc123" } } },
-        { status: 200, body: { check_runs: [] } },
-        { status: 200, body: { statuses: [] } },
-      ]),
-      vaultHealthCheck: async () => ({ ok: true, status: 200 }),
-    });
-
-    const pollResponse = await app.request("/runs/run_1/ci/poll", { method: "POST" });
-    expect(pollResponse.status).toBe(200);
-    await expect(pollResponse.json()).resolves.toMatchObject({
-      status: "pending",
-      reason: "no_checks",
-    });
-
-    const statusResponse = await app.request("/runs/run_1");
-    const status = await statusResponse.json();
-    expect(status.tasks).toEqual([expect.objectContaining({ kind: "ci", status: "running", outcome: "pending" })]);
-    expect(status.events).toEqual([
-      expect.objectContaining({ event_type: "task.started" }),
-      expect.objectContaining({ event_type: "ci.started" }),
-    ]);
-    expect(JSON.stringify(status)).not.toContain("ghp_secretToken");
-  });
+  // The `/runs/:runId/ci/poll` debug API route is GONE (no-Actions delivery model —
+  // the native gate is the merge authority, so there is no forge CI to poll over an
+  // API). `pollCiForRun` itself is still unit-covered above + below until PR-3 prunes it.
 });
 
 const liveGithubTokenFile = process.env.TANREN_GITHUB_TOKEN_FILE;

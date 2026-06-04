@@ -1,11 +1,12 @@
-// The pg + VcsProvider-backed BatchChecker (autonomy-engine.md §2d — speculative
-// batch-check). It assembles the PROSPECTIVE MERGED STATE for a batch of queued
-// entries — `default_branch + each entry's PR branch` speculatively merged in DAG
-// order onto an EPHEMERAL batch-integration ref (reuse the P2c-1
-// `VcsProvider.buildIntegrationBranch`) — then runs the CI/gate against that ref
-// (the `VcsProvider.readBranchChecks` seam + the EXACT `evaluateCiObservation`
-// reducer the run loop uses). It NEVER touches `default_branch`; only the ephemeral
-// `tanren/batch/<dependent>` ref is written + read.
+// The pg + native-gate-backed BatchChecker (autonomy-engine.md §2d — speculative
+// batch-check; the no-Actions delivery model). It assembles the PROSPECTIVE MERGED
+// STATE for a batch of queued entries — `default_branch + each entry's PR branch`
+// speculatively merged in DAG order onto an EPHEMERAL batch-integration ref (reuse
+// the P2c-1 `VcsProvider.buildIntegrationBranch`) — then runs the NATIVE GATE against
+// that ref: a fresh short-lived runner clones the integration ref, installs deps, and
+// runs the repo's `pre_merge` gate tiers over SSH (exit codes only). There is NO forge
+// check-run poll — the verdict is Tanren's own gate. It NEVER touches `default_branch`;
+// only the ephemeral `tanren/batch/<dependent>` ref is written + gated.
 //
 // Resolution mirrors PgSpeculativeIntegrator: repo + default_branch from the project,
 // the App installation from the org, the static github credential ref from
@@ -13,23 +14,30 @@
 // branch). The batch ref is named for the LAST (deepest) member's spec so it is a
 // stable, safe ref per batch tail.
 //
-// A still-RUNNING integration CI is reported `pending` (NOT a failure): the
-// coordinator HOLDS (it does not bisect a not-yet-terminal batch) and the next
-// CI-completion notification re-triggers the pass. The integration ref's own
-// build-conflict (two entries conflict with each other) is surfaced as `conflict`.
+// Because the native gate is SYNCHRONOUS (it runs to a pass/fail verdict on the
+// runner — there is no async forge CI to wait on), there is NO "pending" / no-checks
+// settle: the gate either passes (merge the batch) or fails (a bad interaction). The
+// integration ref's own build-conflict (two entries conflict with each other) is
+// surfaced as `conflict`; a runner/clone/bootstrap fault is `infra-error` (a retriable
+// HOLD — never a PR's fault, never a bisect).
 
-import { runWithOrgScope, runWithSystemScope } from "@tanren/db";
+import { runWithJobOrgId, runWithOrgScope, runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
 import { type BatchCheckVerdict, type BatchChecker } from "../contracts/batchMergeCoordinator.js";
 import type { MergeQueueEntry } from "../contracts/mergeCoordinator.js";
 import { installationFromOrgConfig, migrateOrgConfig } from "../config/orgConfig.js";
 import { migrateProjectConfig } from "../config/projectConfig.js";
-import { DEFAULT_NO_CHECKS_SETTLE_MS } from "../config/shared.js";
+import type { GovernancePosture } from "../config/shared.js";
+import type { Allocator } from "../contracts/allocator.js";
 import type { SecretStore } from "../contracts/secretStore.js";
+import type { SshSubstrate } from "../contracts/sshSubstrate.js";
 import type { IntegrationAncestor, VcsProvider } from "../contracts/vcsProvider.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
-import { evaluateCiObservation } from "../workflow/ciPolling.js";
-import { loadActiveQuarantinedCheckNames } from "../workflow/ciQuarantine.js";
+import { PgEventStore } from "../eventStore.js";
+import { runFreshRunnerMergeGate } from "./freshRunnerGate.js";
+
+/** The terminal runner image a batch re-gate allocates against when the project sets none. */
+const DEFAULT_BATCH_RUNNER_IMAGE = "ghcr.io/tanren/runner:latest";
 
 /** The ephemeral batch-integration ref the prospective merged state is built on. */
 export function batchIntegrationBranchName(tailSpecId: string): string {
@@ -42,6 +50,7 @@ export function batchIntegrationBranchName(tailSpecId: string): string {
 interface BatchProjectRow {
   repo_url: string;
   default_branch: string;
+  runner_image: string | null;
   project_config: unknown;
   org_config: unknown;
 }
@@ -55,21 +64,18 @@ export interface PgBatchCheckerDeps {
   pool: pg.Pool;
   vcsProvider: VcsProvider;
   secrets: SecretStore;
+  /** The runner allocator the native batch gate provisions a short-lived runner from. */
+  allocator: Allocator;
+  /** The SSH substrate the native batch gate clones + gates over. */
+  ssh: SshSubstrate;
+  /** The runner identity key ref (same value the worker boot seeds). */
+  identitySecretRef: string;
   githubAppMinter?: GithubAppTokenMinter;
-  /**
-   * Injectable wall clock (ms epoch) for the no-checks settle elapsed computation —
-   * defaults to `Date.now`. Tests override it to drive the grace boundary
-   * deterministically (mirrors the GithubAppTokenMinter clock seam).
-   */
-  now?: () => number;
+  timeoutMs: number;
 }
 
 export class PgBatchChecker implements BatchChecker {
-  private readonly now: () => number;
-
-  constructor(private readonly deps: PgBatchCheckerDeps) {
-    this.now = deps.now ?? Date.now;
-  }
+  constructor(private readonly deps: PgBatchCheckerDeps) {}
 
   async checkBatch(input: { projectId: string; entries: ReadonlyArray<MergeQueueEntry> }): Promise<BatchCheckVerdict> {
     // An empty entry set checks the base (`default_branch`) alone — which passes (the
@@ -79,15 +85,12 @@ export class PgBatchChecker implements BatchChecker {
     }
 
     // The batch HEAD entry: the tail (deepest) member's queue row — the SAME row the
-    // integration ref is keyed on. The no-checks settle clock (`no_checks_since`) is
-    // persisted on THIS row, so it is stable across integration-ref rebuilds AND starts
-    // when checking begins (not at enqueue).
+    // integration ref is keyed on (and the run-id handle the native gate correlates to).
     const headEntry = input.entries.at(-1);
     if (headEntry === undefined) {
       return { result: "pass", integrationBranch: "" };
     }
     const tailSpecId = headEntry.specId;
-    const headQueueId = headEntry.queueId;
     const integrationBranch = batchIntegrationBranchName(tailSpecId);
 
     const orgId = await this.resolveProjectOrg(input.projectId);
@@ -95,22 +98,14 @@ export class PgBatchChecker implements BatchChecker {
       throw new Error(`cannot batch-check ${input.projectId}: project has no org`);
     }
 
-    const { project, branches, quarantinedCheckNames } = await runWithOrgScope(
-      this.deps.pool,
-      orgId,
-      async (client) => {
-        const projectRow = await this.loadProject(client, input.projectId);
-        const branchRows = await this.loadEntryBranches(
-          client,
-          input.entries.map((e) => e.specId),
-        );
-        // THE GATE READ (CI-intelligence PR2): the batch gate inherits the same
-        // quarantine exclusion as the per-run gate — a proven-flaky check is excluded
-        // from the prospective-merged-state verdict (a real failure still blocks).
-        const quarantined = await loadActiveQuarantinedCheckNames(client, input.projectId);
-        return { project: projectRow, branches: branchRows, quarantinedCheckNames: quarantined };
-      },
-    );
+    const { project, branches } = await runWithOrgScope(this.deps.pool, orgId, async (client) => {
+      const projectRow = await this.loadProject(client, input.projectId);
+      const branchRows = await this.loadEntryBranches(
+        client,
+        input.entries.map((e) => e.specId),
+      );
+      return { project: projectRow, branches: branchRows };
+    });
 
     // Order the entries' branches in the caller's DAG order — a missing branch is a
     // hard error (we never integrate a phantom). This is the prospective merge order.
@@ -142,14 +137,11 @@ export class PgBatchChecker implements BatchChecker {
       ancestors: ordered,
     });
     if (integration.outcome === "conflict") {
-      // A real integration conflict is a definitive non-no_checks verdict — CLEAR the
-      // no-checks clock so a later transient no_checks restarts the grace from scratch.
-      await this.clearNoChecksSince(orgId, headQueueId);
       // Distinguish a SPEC-vs-SPEC conflict (two queued entries clash) from a single PR
       // dirty against the BASE. `buildIntegrationBranch` sets `otherSpecId = merged.at(-1)
       // ?? baseBranch`, so a first-merge-onto-base conflict yields `otherSpecId ===
       // default_branch` — that is a base conflict, which the coordinator drives through
-      // the real per-run resolver rather than bisecting/dequeuing.
+      // the real per-run resolver rather than bisecting/dequeuing it. (Preserved from #322.)
       const conflictsWithBase = integration.conflictBetween?.otherSpecId === project.default_branch;
       return {
         result: "conflict",
@@ -159,67 +151,63 @@ export class PgBatchChecker implements BatchChecker {
       };
     }
 
-    // 2. Run the CI/gate against the prospective merged tree (the integration ref).
-    const checks = await this.deps.vcsProvider.readBranchChecks({ repo, branch: integrationBranch, token });
-    const observation = evaluateCiObservation(checks, { quarantinedCheckNames });
-    // `passed`/`failed` are UNCHANGED — the safety boundary: a green prospective state
-    // merges, a red/failing check ALWAYS blocks (never settled → merged). Both are
-    // definitive non-no_checks verdicts → CLEAR the no-checks clock.
-    if (observation.status === "passed") {
-      await this.clearNoChecksSince(orgId, headQueueId);
-      return { result: "pass", integrationBranch };
-    }
-    if (observation.status === "failed") {
-      await this.clearNoChecksSince(orgId, headQueueId);
-      return { result: "fail", message: `batch CI failed (${observation.reason}) on ${integrationBranch}` };
-    }
-
-    // PENDING — split on WHY. The NO-CHECKS SETTLE (see DEFAULT_NO_CHECKS_SETTLE_MS), now
-    // anchored on the head entry's persisted `no_checks_since` (NOT `enqueued_at`):
-    //   - `no_checks` (GENUINELY zero check-runs + statuses, NOT required-context gating)
-    //     ⇒ this repo has NO CI registered on the freshly-rebuilt integration ref. The
-    //     grace measures CONTINUOUS no-checks: the FIRST observation sets `no_checks_since`
-    //     = now (and HOLDS); only after `now - no_checks_since >= grace` does it settle to
-    //     pass (mirror GitHub merging a PR with no required checks + no failing checks).
-    //     Because the clock starts at first-no_checks-observation (not enqueue), a backed-
-    //     up queue can NEVER let a real-CI repo settle before its workflow even registers.
-    //   - `checks_pending` (real CI REGISTERED but not yet terminal) ⇒ HOLD unchanged AND
-    //     CLEAR `no_checks_since` — the moment a real workflow registers a check the
-    //     no-checks clock is wiped, so it can never later settle. We WAIT for the
-    //     registered CI to finish (a CI-completion re-triggers the pass).
-    if (observation.reason === "no_checks") {
-      const noChecksSettleMs = resolveNoChecksSettleMs(project.project_config);
-      const sinceMs = await this.loadNoChecksSinceMs(orgId, headQueueId);
-      if (sinceMs === undefined) {
-        // FIRST continuous-no_checks observation on this head: START the clock + HOLD.
-        // Never settle on the first sighting — the grace counts from here forward.
-        await this.setNoChecksSince(orgId, headQueueId, this.now());
-        return {
-          result: "pending",
-          message: `batch has no CI on ${integrationBranch}; settling in ${noChecksSettleMs}ms`,
-          settleAfterMs: noChecksSettleMs,
-        };
-      }
-      const elapsed = this.now() - sinceMs;
-      if (elapsed >= noChecksSettleMs) {
+    // 2. Run the NATIVE gate against the prospective merged tree (the integration ref):
+    // a fresh runner clones the ref, installs deps, runs the `pre_merge` gate. The gate
+    // is synchronous → a definitive pass/fail (no async forge CI, no no-checks settle).
+    // A runner/clone/bootstrap fault is an INFRA error (a retriable hold, never a bisect).
+    try {
+      // The gate's `gate.*` event INSERTs are tenant writes, so run the whole gate
+      // under the project's ambient org scope (each event opens its own short
+      // org-scoped txn — runWithJobOrgId, NOT a held txn across the SSH ops).
+      const { outcome } = await runWithJobOrgId(orgId, () =>
+        runFreshRunnerMergeGate(
+          {
+            allocator: this.deps.allocator,
+            ssh: this.deps.ssh,
+            secrets: this.deps.secrets,
+            vcsProvider: this.deps.vcsProvider,
+            ...(this.deps.githubAppMinter !== undefined && { githubAppMinter: this.deps.githubAppMinter }),
+            eventStore: new PgEventStore(this.deps.pool),
+            identitySecretRef: this.deps.identitySecretRef,
+            timeoutMs: this.deps.timeoutMs,
+          },
+          {
+            repoUrl: project.repo_url,
+            ref: integrationBranch,
+            runnerImage: project.runner_image ?? DEFAULT_BATCH_RUNNER_IMAGE,
+            governancePosture: resolveGovernancePosture(project.project_config),
+            ...(installation !== undefined && { installation }),
+            githubCredentialRef: staticRef ?? "",
+            orgId,
+            projectId: input.projectId,
+            // A synthetic `run_`-prefixed handle for runner/workspace naming + event
+            // correlation (the batch has no single run). Sanitized to the safe charset.
+            runId: `run_batch_${tailSpecId.replaceAll(/[^A-Za-z0-9_-]/gu, "_")}`,
+            specId: tailSpecId,
+          },
+        ),
+      );
+      if (outcome.passed) {
         return { result: "pass", integrationBranch };
       }
       return {
-        result: "pending",
-        message: `batch has no CI on ${integrationBranch}; settling in ${noChecksSettleMs - elapsed}ms`,
-        settleAfterMs: noChecksSettleMs - elapsed,
+        result: "fail",
+        message: `batch gate failed on ${integrationBranch}: tier ${outcome.failure.tier} step ${outcome.failure.failedStep}`,
+      };
+    } catch (error) {
+      // The gate could not be RUN (allocate/clone/bootstrap fault) — NOT a verdict. The
+      // coordinator must never blame/bisect a PR for this: hold + bounded-retry the batch.
+      return {
+        result: "infra-error",
+        message: `batch gate could not run on ${integrationBranch}: ${error instanceof Error ? error.message : String(error)}`,
+        retriable: true,
       };
     }
-
-    // Still running REGISTERED CI (`checks_pending`) — NOT a failure, NOT settled: CLEAR
-    // the no-checks clock (a real check registered) + hold (re-checks on CI completion).
-    await this.clearNoChecksSince(orgId, headQueueId);
-    return { result: "pending", message: `batch CI pending (${observation.reason}) on ${integrationBranch}` };
   }
 
   private async loadProject(client: pg.PoolClient, projectId: string): Promise<BatchProjectRow> {
     const result = await client.query<BatchProjectRow>(
-      `SELECT p.repo_url, p.default_branch, p.config AS project_config, o.config AS org_config
+      `SELECT p.repo_url, p.default_branch, p.runner_image, p.config AS project_config, o.config AS org_config
          FROM projects p
          LEFT JOIN organizations o ON o.id = p.org_id
         WHERE p.project_id = $1`,
@@ -244,52 +232,6 @@ export class PgBatchChecker implements BatchChecker {
     return result.rows;
   }
 
-  /**
-   * Read the head entry's persisted no-checks settle clock (`merge_queue.no_checks_since`)
-   * as ms epoch, or undefined when NULL (the clock is not running — no continuous
-   * no_checks window has been observed yet). Org-scoped under RLS (an off-scope read sees
-   * zero rows ⇒ undefined). This is the STABLE settle anchor: it survives integration-ref
-   * rebuilds AND starts when checking begins, not at enqueue — so the grace measures
-   * CONTINUOUS no-checks, never queue-backlog time.
-   */
-  private async loadNoChecksSinceMs(orgId: string, queueId: string): Promise<number | undefined> {
-    return runWithOrgScope(this.deps.pool, orgId, async (client): Promise<number | undefined> => {
-      const result = await client.query<{ no_checks_since: Date | string | null }>(
-        "SELECT no_checks_since FROM merge_queue WHERE queue_id = $1",
-        [queueId],
-      );
-      const raw = result.rows[0]?.no_checks_since;
-      if (raw === null || raw === undefined) return undefined;
-      const ms = raw instanceof Date ? raw.getTime() : new Date(raw).getTime();
-      return Number.isNaN(ms) ? undefined : ms;
-    });
-  }
-
-  /** START the head entry's no-checks clock (set `no_checks_since` = the given instant). Org-scoped. */
-  private async setNoChecksSince(orgId: string, queueId: string, atMs: number): Promise<void> {
-    await runWithOrgScope(this.deps.pool, orgId, async (client) => {
-      await client.query("UPDATE merge_queue SET no_checks_since = $2 WHERE queue_id = $1", [
-        queueId,
-        new Date(atMs).toISOString(),
-      ]);
-    });
-  }
-
-  /**
-   * CLEAR the head entry's no-checks clock (`no_checks_since` → NULL) — the KEY safety
-   * reset: called on every NON-no_checks verdict (checks_pending/passed/failed/conflict),
-   * so the moment a real workflow registers a check the no-checks window is wiped and can
-   * never later settle-merge unverified. A no-op UPDATE when already NULL. Org-scoped.
-   */
-  private async clearNoChecksSince(orgId: string, queueId: string): Promise<void> {
-    await runWithOrgScope(this.deps.pool, orgId, async (client) => {
-      await client.query(
-        "UPDATE merge_queue SET no_checks_since = NULL WHERE queue_id = $1 AND no_checks_since IS NOT NULL",
-        [queueId],
-      );
-    });
-  }
-
   private async resolveProjectOrg(projectId: string): Promise<string | null> {
     return runWithSystemScope(this.deps.pool, async (client) => {
       const result = await client.query<{ org_id: string | null }>(
@@ -301,16 +243,12 @@ export class PgBatchChecker implements BatchChecker {
   }
 }
 
-/**
- * Resolve the per-project no-checks settle grace (ms) from `projects.config` the SAME
- * way `maxBatchSize` is resolved — falling back to the schema default if the config
- * cannot be parsed (never a hard error in the coordinator hot path).
- */
-function resolveNoChecksSettleMs(projectConfig: unknown): number {
+/** Resolve the project's governance posture from `projects.config` (default `strict`). */
+function resolveGovernancePosture(projectConfig: unknown): GovernancePosture {
   try {
-    return migrateProjectConfig(projectConfig).noChecksSettleMs;
+    return migrateProjectConfig(projectConfig).governancePosture;
   } catch {
-    return DEFAULT_NO_CHECKS_SETTLE_MS;
+    return "strict";
   }
 }
 

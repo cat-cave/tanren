@@ -87,6 +87,29 @@ export async function prepareCleanPrBranch(input: PrepareCleanPrBranchInput): Pr
   return PR_CLEAN_REF;
 }
 
+// Resolve the commit SHA of a workspace gitref (e.g. the pushed PR-head ref) over
+// SSH. The native merge gate publishes its verdict against this exact head sha, so
+// the published `tanren/gate` check-run lands on the commit the gate actually
+// verified. A non-zero exit / empty output is a LOUD throw — never a guessed sha.
+export async function resolveWorkspaceRefSha(input: {
+  ssh: SshSubstrate;
+  target: SshTarget;
+  workspacePath: string;
+  ref: string;
+  timeoutMs: number;
+}): Promise<string> {
+  const result = await input.ssh.run(input.target, {
+    command: `git rev-parse --verify ${quoteSshShellArg(input.ref)}`,
+    cwd: input.workspacePath,
+    timeoutMs: input.timeoutMs,
+  });
+  const sha = result.stdout.trim();
+  if (result.failure !== undefined || result.timedOut || result.exitCode !== 0 || !/^[0-9a-f]{40}$/u.test(sha)) {
+    throw new Error(`could not resolve workspace ref ${input.ref} to a commit sha`);
+  }
+  return sha;
+}
+
 export async function pushWorkspaceBranchToGitHub(input: GitHubWorkspacePushInput): Promise<void> {
   await runWorkspaceSshCommand(input.ssh, input.target, {
     label: "push workspace branch to GitHub",

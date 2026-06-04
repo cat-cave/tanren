@@ -25,6 +25,9 @@ import { type BuildMergeCoordinatorDeps, buildDriveMerge } from "./coordinatorBu
 import { PgMergeQueueEventEmitter } from "./coordinator.js";
 import { PgMergeQueueModel, PgMergeRunner } from "./coordinatorPg.js";
 
+/** The timeout (ms) the native batch gate's clone/install/gate ops run under (mirrors the drive resolver). */
+const BATCH_GATE_TIMEOUT_MS = 600_000;
+
 /**
  * Resolve a project's configured `maxBatchSize` (the P2d-2 batch cap) under the system
  * scope — the single config source of truth. Falls back to the schema default if the
@@ -55,6 +58,11 @@ export function buildBatchMergeCoordinator(deps: BuildMergeCoordinatorDeps): Mer
       pool: deps.pool,
       vcsProvider: deps.vcsProvider,
       secrets: deps.secrets,
+      // The native batch gate provisions a fresh runner to gate the integration ref.
+      allocator: deps.allocator,
+      ssh: deps.ssh,
+      identitySecretRef: deps.identitySecretRef,
+      timeoutMs: BATCH_GATE_TIMEOUT_MS,
       ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
     }),
     // Plane-split: route the queue/batch event emissions through the control plane

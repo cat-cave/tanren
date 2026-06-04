@@ -295,6 +295,9 @@ export function noopMerge() {
   };
 }
 
+// The forge PR-list + create responses. NATIVE delivery: the merge gate runs over SSH
+// (no forge poll), and the verdict-publish forge call is skipped under the unit SSH
+// fake (no head sha), so only the PR-publish tail hits the scripted client.
 export function passingGitHub(): ScriptedGitHubHttp {
   return new ScriptedGitHubHttp([
     { status: 200, body: [] },
@@ -307,21 +310,6 @@ export function passingGitHub(): ScriptedGitHubHttp {
         base: { ref: "main" },
       },
     },
-    { status: 200, body: { head: { sha: "a".repeat(40), ref: "tanren/planner-test" } } },
-    {
-      status: 200,
-      body: {
-        check_runs: [
-          {
-            name: "check",
-            status: "completed",
-            conclusion: "success",
-            html_url: "https://ci.example/check",
-          },
-        ],
-      },
-    },
-    { status: 200, body: { statuses: [] } },
   ]);
 }
 

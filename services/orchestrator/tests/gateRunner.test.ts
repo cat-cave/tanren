@@ -308,15 +308,15 @@ describe("runGateForWhen", () => {
 });
 
 describe("resolveGateConfig", () => {
-  it("returns the documented default when tanren-ci.yml is absent (empty stdout)", async () => {
+  it("returns the documented default when .tanren/ci.yml is absent (empty stdout)", async () => {
     const ssh = new RecordingSsh(() => ({ exitCode: 0, stdout: "" }));
     const config = await resolveGateConfig({ ssh, target, workspacePath: "/ws", timeoutMs: 1000 });
     expect(config).toEqual(DEFAULT_CI_CONFIG);
     // It cat'd the repo-root config path.
-    expect(ssh.commands[0]!.command).toContain("/ws/tanren-ci.yml");
+    expect(ssh.commands[0]!.command).toContain("/ws/.tanren/ci.yml");
   });
 
-  it("parses a present tanren-ci.yml into the repo's tiers", async () => {
+  it("parses a present .tanren/ci.yml into the repo's tiers", async () => {
     const yaml = [
       "version: 1",
       "tiers:",
@@ -346,7 +346,7 @@ describe("resolveGateConfig", () => {
 });
 
 describe("resolveBootstrapCommand", () => {
-  it("uses the repo-declared bootstrap.run when tanren-ci.yml ships one", async () => {
+  it("uses the repo-declared bootstrap.run when .tanren/ci.yml ships one", async () => {
     const yaml = [
       "version: 1",
       "bootstrap:",
@@ -368,10 +368,10 @@ describe("resolveBootstrapCommand", () => {
     const command = await resolveBootstrapCommand({ ssh, target, workspacePath: "/ws", timeoutMs: 1000 });
     expect(command).toBe("just install");
     // It read the repo-root config path over SSH (no live install).
-    expect(ssh.commands[0]!.command).toContain("/ws/tanren-ci.yml");
+    expect(ssh.commands[0]!.command).toContain("/ws/.tanren/ci.yml");
   });
 
-  it("returns undefined when the repo ships no tanren-ci.yml (so the default heuristic applies)", async () => {
+  it("returns undefined when the repo ships no .tanren/ci.yml (so the default heuristic applies)", async () => {
     const ssh = new RecordingSsh(() => ({ exitCode: 0, stdout: "" }));
     const command = await resolveBootstrapCommand({ ssh, target, workspacePath: "/ws", timeoutMs: 1000 });
     expect(command).toBeUndefined();
