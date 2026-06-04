@@ -15,7 +15,7 @@
 //   - PgSpecStrandEventEmitter: writes the two dag.spec.* strand events through the
 //     single org-scoped event-writer seam (mirrors PgDagEventEmitter).
 
-import { runWithJobOrgId, runWithOrgScope } from "@tanren/db";
+import { getSystemPool, runWithJobOrgId, runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
 import type {
   SpecStrandEventEmitter,
@@ -128,7 +128,17 @@ export class PgSpecStrandReadModel implements SpecStrandReadModel {
   async countPriorUnstrands(input: { projectId: string; specId: string }): Promise<number> {
     const orgId = await resolveProjectOrg(this.pool, input.projectId);
     if (orgId === null) return 0;
-    return runWithOrgScope(this.pool, orgId, async (client) => {
+    // Read on the BYPASSRLS system role (`getSystemPool() ?? this.pool`): this
+    // SELECTs `events`, which the de-privileged data-plane role cannot read (0031
+    // REVOKE ALL ON TABLE events) — so on the dataplane pool the COUNT throws
+    // `permission denied for table events` (42501). The org scope is still applied
+    // on top (`runWithOrgScope` sets app.current_org_id), so the read stays
+    // org-scoped — only the ROLE changes to one that can SELECT events. This mirrors
+    // `PgDagLifecycleReadModel.loadLifecycle`. (The specs/runs/merge_queue reads in
+    // `loadStrandCandidates` keep their grants under the dataplane role — 0035 only
+    // revoked WRITES there — so they stay on `this.pool`.)
+    const readPool = getSystemPool() ?? this.pool;
+    return runWithOrgScope(readPool, orgId, async (client) => {
       const result = await client.query<{ count: string }>(
         `SELECT count(*)::text AS count
            FROM events
