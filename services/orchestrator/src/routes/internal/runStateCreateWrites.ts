@@ -23,7 +23,7 @@ import { z } from "zod";
 import { ActorContextSchema } from "../../auth/schemas.js";
 import { SpecPriority } from "../../engine/state/spec.js";
 import { createQueuedRunFromSpec, createSpec } from "../../engine/workflow/projectSpec.js";
-import { SpecNotRunnableError } from "../../engine/workflow/projectSpecErrors.js";
+import { SpecDependenciesBlockedError, SpecNotRunnableError } from "../../engine/workflow/projectSpecErrors.js";
 import { verifyInternalPeer, type RunStateWriteRouteDeps } from "./internalWriteShared.js";
 
 const createSpecRunInputSchema = z.object({
@@ -83,14 +83,28 @@ export function registerRunStateCreateRoutes(app: Hono, deps: RunStateWriteRoute
       const run = await createQueuedRunFromSpec(deps.pool, parsed.data.input, parsed.data.actor);
       return c.json(run);
     } catch (error) {
-      // The pending→active claim is the idempotency boundary: a spec already past
-      // `pending` (a concurrent walker tick already claimed it) raises the TYPED
-      // SpecNotRunnableError. That is the EXPECTED, benign concurrent-tick signal —
-      // surface it as a typed 409 (NOT a 500) so the client can reconstruct the
-      // typed error and the walker's concurrent-tick tolerance applies identically
-      // to the in-process path. Genuine errors keep propagating as a 500.
+      // Two BENIGN per-spec enqueue conditions are surfaced as a typed 409 (NOT a
+      // 500), so the client can reconstruct the typed error and the walker's
+      // benign-skip tolerance applies identically to the in-process path. Genuine
+      // errors keep propagating as a 500.
+      //
+      //   1. SpecNotRunnableError — the pending→active claim is the idempotency
+      //      boundary: a spec already past `pending` (a concurrent walker tick
+      //      already claimed it). The EXPECTED, benign concurrent-tick signal.
+      //   2. SpecDependenciesBlockedError — the spec's dependencies are not yet
+      //      `done` at the moment this enqueue tx runs (a projection-vs-column lag:
+      //      the planner saw the ancestor as merged via the lifecycle read model,
+      //      but the `specs.status='done'` write was not yet visible to this tx).
+      //      The spec simply is not ready yet; a later tick enqueues it once the
+      //      dependency lands as done. Benign — never a tick abort.
       if (error instanceof SpecNotRunnableError) {
         return c.json({ error: "spec_not_runnable", specId: error.specId, status: error.status }, 409);
+      }
+      if (error instanceof SpecDependenciesBlockedError) {
+        return c.json(
+          { error: "spec_dependencies_blocked", specId: error.specId, blockedBy: error.blockedSpecIds },
+          409,
+        );
       }
       throw error;
     }

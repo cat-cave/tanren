@@ -37,7 +37,7 @@ import type { RecordedCost } from "../costs/recorder.js";
 import type { EventName } from "../events/index.js";
 import type { AppendEventInput } from "../eventStore.js";
 import type { SpecContract, SpecRunContract } from "../workflow/projectSpec.js";
-import { SpecNotRunnableError } from "../workflow/projectSpecErrors.js";
+import { SpecDependenciesBlockedError, SpecNotRunnableError } from "../workflow/projectSpecErrors.js";
 
 /** Thrown when a control-plane write endpoint returns a non-2xx status. */
 export class RunStateWriteTransportError extends Error {
@@ -150,16 +150,20 @@ export class HttpRunStateWriter implements RunStateWriter {
   // runs the same `createQueuedRunFromSpec` / `createSpec` under that org scope.
 
   async createQueuedRun(input: CreateQueuedRunInput): Promise<SpecRunContract> {
-    // The endpoint returns a TYPED 409 `{ error: "spec_not_runnable", specId, status }`
-    // for the EXPECTED concurrent-tick race (a spec already past `pending` — the
-    // pending→active claim is the idempotency boundary). Reconstruct the real
-    // SpecNotRunnableError so it crosses the wire INTACT and the walker's
-    // concurrent-tick tolerance applies identically to the in-process path. Any
-    // OTHER non-2xx stays a RunStateWriteTransportError (a genuine infra fault).
-    return this.post<SpecRunContract>("/internal/create-queued-run", input, (status, body) => {
-      const parsed = status === 409 ? parseSpecNotRunnable(body) : undefined;
-      return parsed === undefined ? undefined : new SpecNotRunnableError(parsed.specId, parsed.status);
-    });
+    // The endpoint returns a TYPED 409 for either of the two BENIGN per-spec
+    // enqueue conditions; reconstruct the real typed error so it crosses the wire
+    // INTACT and the walker's benign-skip tolerance applies identically to the
+    // in-process path:
+    //   - `{ error: "spec_not_runnable", specId, status }` — the EXPECTED
+    //     concurrent-tick race (a spec already past `pending`, the pending→active
+    //     idempotency boundary) → SpecNotRunnableError.
+    //   - `{ error: "spec_dependencies_blocked", specId, blockedBy }` — the spec's
+    //     dependencies are not yet `done` at enqueue time (the planner saw them
+    //     merged via the lifecycle projection, but the `specs.status='done'` write
+    //     was not yet visible to this tx) → SpecDependenciesBlockedError.
+    // Any OTHER non-2xx (and any 409 whose body matches NEITHER shape) stays a
+    // RunStateWriteTransportError (a genuine infra fault still surfaces loudly).
+    return this.post<SpecRunContract>("/internal/create-queued-run", input, reconstructBenignEnqueueError);
   }
 
   async createSpec(input: CreateSpecRemoteInput): Promise<SpecContract> {
@@ -207,6 +211,26 @@ export class HttpRunStateWriter implements RunStateWriter {
 }
 
 /**
+ * The createQueuedRun error mapper: reconstruct one of the two TYPED benign
+ * per-spec enqueue errors from a typed 409 body, so it crosses the wire intact and
+ * the walker's benign-skip tolerance applies identically to the control-plane path.
+ * A non-409, or a 409 whose body matches NEITHER typed shape, returns `undefined` —
+ * so {@link HttpRunStateWriter.post} falls back to the generic
+ * RunStateWriteTransportError and a genuine fault still surfaces loudly.
+ */
+function reconstructBenignEnqueueError(status: number, body: string): Error | undefined {
+  if (status !== 409) {
+    return undefined;
+  }
+  const notRunnable = parseSpecNotRunnable(body);
+  if (notRunnable !== undefined) {
+    return new SpecNotRunnableError(notRunnable.specId, notRunnable.status);
+  }
+  const blocked = parseSpecDependenciesBlocked(body);
+  return blocked === undefined ? undefined : new SpecDependenciesBlockedError(blocked.specId, blocked.blockedBy);
+}
+
+/**
  * Parse a `{ error: "spec_not_runnable", specId, status }` 409 body into its
  * specId/status. Returns `undefined` for any other shape (so the caller falls
  * back to the generic transport error — a genuine fault is never masked).
@@ -226,4 +250,32 @@ function parseSpecNotRunnable(body: string): { specId: string; status: string } 
     return undefined;
   }
   return { specId, status };
+}
+
+/**
+ * Parse a `{ error: "spec_dependencies_blocked", specId, blockedBy }` 409 body
+ * into its specId/blockedBy. Returns `undefined` for any other shape (so the
+ * caller falls back to the generic transport error — a genuine fault is never
+ * masked). `blockedBy` must be an array of strings.
+ */
+function parseSpecDependenciesBlocked(body: string): { specId: string; blockedBy: string[] } | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return undefined;
+  }
+  if (typeof parsed !== "object" || parsed === null) return undefined;
+  const record = parsed as Record<string, unknown>;
+  const specId = record["specId"];
+  const blockedBy = record["blockedBy"];
+  if (
+    record["error"] !== "spec_dependencies_blocked" ||
+    typeof specId !== "string" ||
+    !Array.isArray(blockedBy) ||
+    !blockedBy.every((id) => typeof id === "string")
+  ) {
+    return undefined;
+  }
+  return { specId, blockedBy: blockedBy as string[] };
 }
