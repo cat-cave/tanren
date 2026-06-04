@@ -219,61 +219,11 @@ export class FetchGitHubHttpClient implements GitHubHttpClient {
   }
 }
 
-export class GitHubPullRequestService {
-  constructor(private readonly http: GitHubHttpClient) {}
-
-  async ensureDraftPullRequest(input: EnsureDraftPullRequestInput): Promise<EnsureDraftPullRequestResult> {
-    const existing = await this.findOpenPullRequest(input);
-    if (existing !== undefined) {
-      return { ...existing, reused: true };
-    }
-
-    const created = await this.http.request({
-      method: "POST",
-      path: repoPath(input.repo, "/pulls"),
-      token: input.token,
-      refreshToken: input.refreshToken,
-      body: {
-        title: input.title,
-        head: input.headBranch,
-        base: input.baseBranch,
-        body: input.body,
-        draft: true,
-      },
-    });
-    if (created.status === 201) {
-      return { ...parsePullRequest(created.body), reused: false };
-    }
-    if (created.status === 422) {
-      const afterRace = await this.findOpenPullRequest(input);
-      if (afterRace !== undefined) {
-        return { ...afterRace, reused: true };
-      }
-    }
-    throw new Error(`GitHub draft PR creation failed: HTTP ${created.status}`);
-  }
-
-  private async findOpenPullRequest(input: EnsureDraftPullRequestInput): Promise<GitHubPullRequest | undefined> {
-    const query = new URLSearchParams({
-      state: "open",
-      head: `${input.repo.owner}:${input.headBranch}`,
-      base: input.baseBranch,
-    });
-    const response = await this.http.request({
-      method: "GET",
-      path: repoPath(input.repo, `/pulls?${query.toString()}`),
-      token: input.token,
-      refreshToken: input.refreshToken,
-    });
-    if (response.status !== 200) {
-      throw new Error(`GitHub PR lookup failed: HTTP ${response.status}`);
-    }
-    const pulls = asPullArray(response.body);
-    return pulls
-      .map((pull) => parsePullRequest(pull))
-      .find((pull) => pull.draft && pull.baseBranch === input.baseBranch);
-  }
-}
+// `GitHubPullRequestService` (find / reuse / rebase the one PR per spec head) lives in
+// `githubPullRequestReuse.ts` to keep this module under its 500-line cap. It is NOT
+// re-exported here: that would form an import cycle (the reuse module already imports the
+// shared helpers/types from this file), so importers pull the service from
+// `./githubPullRequestReuse.js` directly.
 
 export class GitHubStatusService {
   constructor(private readonly http: GitHubHttpClient) {}
@@ -449,11 +399,11 @@ export function githubHttpsRemote(repo: GitHubRepository): string {
   return `https://github.com/${repo.owner}/${repo.name}.git`;
 }
 
-function repoPath(repo: GitHubRepository, suffix: string): string {
+export function repoPath(repo: GitHubRepository, suffix: string): string {
   return `/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}${suffix}`;
 }
 
-function parsePullRequest(value: unknown): GitHubPullRequest {
+export function parsePullRequest(value: unknown): GitHubPullRequest {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new Error("GitHub PR response was not an object");
   }
@@ -469,7 +419,7 @@ function parsePullRequest(value: unknown): GitHubPullRequest {
   };
 }
 
-function asPullArray(value: unknown): unknown[] {
+export function asPullArray(value: unknown): unknown[] {
   if (!Array.isArray(value)) {
     throw new TypeError("GitHub PR lookup response was not an array");
   }

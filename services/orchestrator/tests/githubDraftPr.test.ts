@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { vcsProviderOver } from "./helpers/vcsProvider.js";
+import { RecordingPool, RecordingRunPool, RecordingSsh, ScriptedGitHubHttp } from "./helpers/githubDraftPrFakes.js";
 import type { SshTarget } from "../src/engine/contracts/allocator.js";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
-import type { SshCommand, SshCommandResult, SshSubstrate } from "../src/engine/contracts/sshSubstrate.js";
 import { storeGithubToken, validateGithubCredentialRef } from "../src/engine/credentials/githubToken.js";
 import { FakeEventStore } from "./helpers/fakeEventStore.js";
-import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "../src/engine/providers/github.js";
-import { GitHubPullRequestService, parseGitHubRepository } from "../src/engine/providers/github.js";
+import { GitHubPullRequestService } from "../src/engine/providers/githubPullRequestReuse.js";
+import { parseGitHubRepository } from "../src/engine/providers/github.js";
 import { publishDraftPullRequest, publishDraftPullRequestForRun } from "../src/engine/workflow/githubDraftPr.js";
 import {
   buildGitHubPushCommand,
@@ -156,31 +156,15 @@ describe("GitHub draft PR contract", () => {
       baseBranch: "main",
       reused: true,
     });
+    // The lookup queries by HEAD ONLY (no &base=...): a spec maps to one head branch, so
+    // we must surface its open PR regardless of the PR's current base (see §2c re-exec).
     expect(http.requests).toHaveLength(1);
-    expect(http.requests[0]?.path).toBe(
-      "/repos/cat-cave/repo/pulls?state=open&head=cat-cave%3Atanren%2Frun_123&base=main",
-    );
+    expect(http.requests[0]?.path).toBe("/repos/cat-cave/repo/pulls?state=open&head=cat-cave%3Atanren%2Frun_123");
   });
 
-  it("does not reuse open PRs for the wrong base branch or non-draft PRs", async () => {
+  it("no existing PR for the head → POSTs a new draft (unchanged first-PR path)", async () => {
     const http = new ScriptedGitHubHttp([
-      {
-        status: 200,
-        body: [
-          {
-            number: 7,
-            html_url: "https://github.com/cat-cave/repo/pull/7",
-            draft: true,
-            base: { ref: "develop" },
-          },
-          {
-            number: 8,
-            html_url: "https://github.com/cat-cave/repo/pull/8",
-            draft: false,
-            base: { ref: "main" },
-          },
-        ],
-      },
+      { status: 200, body: [] },
       {
         status: 201,
         body: {
@@ -202,7 +186,137 @@ describe("GitHub draft PR contract", () => {
     });
 
     expect(result).toMatchObject({ number: 9, reused: false, draft: true, baseBranch: "main" });
+    // find-by-head (no base) → POST new; no PATCH.
     expect(http.requests.map((request) => request.method)).toEqual(["GET", "POST"]);
+    expect(http.requests[0]?.path).toBe("/repos/cat-cave/repo/pulls?state=open&head=cat-cave%3Atanren%2Frun_123");
+    const createBody = http.requests[1]?.body as { draft?: boolean; base?: string } | undefined;
+    expect(createBody?.draft).toBe(true);
+    expect(createBody?.base).toBe("main");
+  });
+
+  it("existing open PR with the SAME base → reused, no POST and no PATCH", async () => {
+    const http = new ScriptedGitHubHttp([
+      {
+        status: 200,
+        body: [
+          {
+            number: 7,
+            html_url: "https://github.com/cat-cave/repo/pull/7",
+            draft: true,
+            base: { ref: "main" },
+          },
+        ],
+      },
+    ]);
+    const service = new GitHubPullRequestService(http);
+
+    const result = await service.ensureDraftPullRequest({
+      repo: { owner: "cat-cave", name: "repo" },
+      token: "ghp_secretToken",
+      headBranch: "tanren/run_123",
+      baseBranch: "main",
+      title: "Tanren run run_123",
+    });
+
+    expect(result).toEqual({
+      number: 7,
+      url: "https://github.com/cat-cave/repo/pull/7",
+      draft: true,
+      baseBranch: "main",
+      reused: true,
+    });
+    // Single find-by-head request — no POST, no PATCH.
+    expect(http.requests.map((request) => request.method)).toEqual(["GET"]);
+  });
+
+  it("§2c: existing open PR with a DIFFERENT base → PATCH base onto the re-exec base, reused (no 422, no second POST)", async () => {
+    // The prior run was speculative: its PR is based on the integration branch. The
+    // re-exec is non-speculative and pushes the SAME spec-derived head with base=main.
+    const http = new ScriptedGitHubHttp([
+      {
+        status: 200,
+        body: [
+          {
+            number: 7,
+            html_url: "https://github.com/cat-cave/repo/pull/7",
+            draft: true,
+            base: { ref: "tanren/integ/spec_123" },
+          },
+        ],
+      },
+      {
+        status: 200,
+        body: {
+          number: 7,
+          html_url: "https://github.com/cat-cave/repo/pull/7",
+          draft: true,
+          base: { ref: "main" },
+        },
+      },
+    ]);
+    const service = new GitHubPullRequestService(http);
+
+    const result = await service.ensureDraftPullRequest({
+      repo: { owner: "cat-cave", name: "repo" },
+      token: "ghp_secretToken",
+      headBranch: "tanren/run_123",
+      baseBranch: "main",
+      title: "Tanren run run_123",
+    });
+
+    // Reused the SAME PR (#7), now re-pointed onto main.
+    expect(result).toEqual({
+      number: 7,
+      url: "https://github.com/cat-cave/repo/pull/7",
+      draft: true,
+      baseBranch: "main",
+      reused: true,
+    });
+    // find-by-head, then PATCH /pulls/7 with the new base — no POST (so no 422).
+    expect(http.requests.map((request) => request.method)).toEqual(["GET", "PATCH"]);
+    expect(http.requests[1]?.path).toBe("/repos/cat-cave/repo/pulls/7");
+    expect((http.requests[1]?.body as { base?: string } | undefined)?.base).toBe("main");
+  });
+
+  it("422 race on POST → re-find by head returns the racing PR (no throw)", async () => {
+    // First find-by-head sees no PR (race window); POST races and loses with a 422;
+    // the re-find by head now surfaces the PR the racer created.
+    const http = new ScriptedGitHubHttp([
+      { status: 200, body: [] },
+      { status: 422, body: { message: "A pull request already exists for cat-cave:tanren/run_123." } },
+      {
+        status: 200,
+        body: [
+          {
+            number: 11,
+            html_url: "https://github.com/cat-cave/repo/pull/11",
+            draft: true,
+            base: { ref: "main" },
+          },
+        ],
+      },
+    ]);
+    const service = new GitHubPullRequestService(http);
+
+    const result = await service.ensureDraftPullRequest({
+      repo: { owner: "cat-cave", name: "repo" },
+      token: "ghp_secretToken",
+      headBranch: "tanren/run_123",
+      baseBranch: "main",
+      title: "Tanren run run_123",
+    });
+
+    expect(result).toEqual({
+      number: 11,
+      url: "https://github.com/cat-cave/repo/pull/11",
+      draft: true,
+      baseBranch: "main",
+      reused: true,
+    });
+    // find-by-head → POST (422) → re-find-by-head (returns the racing PR). Same base, so
+    // no PATCH.
+    expect(http.requests.map((request) => request.method)).toEqual(["GET", "POST", "GET"]);
+    expect(http.requests[2]?.path).toBe("/repos/cat-cave/repo/pulls?state=open&head=cat-cave%3Atanren%2Frun_123");
   });
 
   it("creates a draft PR, persists its URL, and appends redacted events", async () => {
@@ -343,78 +457,3 @@ describe("GitHub draft PR contract", () => {
     });
   });
 });
-
-class RecordingSsh implements SshSubstrate {
-  readonly commands: Array<{ target: SshTarget; command: SshCommand }> = [];
-
-  async run(sshTarget: SshTarget, command: SshCommand): Promise<SshCommandResult> {
-    this.commands.push({ target: sshTarget, command });
-    return { exitCode: 0, stdout: "", stderr: "", timedOut: false };
-  }
-}
-
-class ScriptedGitHubHttp implements GitHubHttpClient {
-  readonly requests: GitHubHttpRequest[] = [];
-
-  constructor(private readonly responses: GitHubHttpResponse[]) {}
-
-  async request(input: GitHubHttpRequest): Promise<GitHubHttpResponse> {
-    this.requests.push({ ...input, token: "<redacted>" });
-    const response = this.responses.shift();
-    if (response === undefined) {
-      throw new Error(`unexpected GitHub request: ${input.method} ${input.path}`);
-    }
-    return response;
-  }
-}
-
-class RecordingPool {
-  readonly updates: Array<{ runId: string; prUrl: string }> = [];
-
-  async query(sql: string, params: unknown[]): Promise<{ rows: unknown[]; rowCount: number }> {
-    if (sql === "UPDATE runs SET pr_url = $2 WHERE run_id = $1") {
-      this.updates.push({ runId: String(params[0]), prUrl: String(params[1]) });
-    }
-    return { rows: [], rowCount: 1 };
-  }
-
-  asPgPool() {
-    return this as never;
-  }
-}
-
-class RecordingRunPool extends RecordingPool {
-  // P2c-1: a speculative run's dynamic base; null ⇒ a normal run (default_branch).
-  constructor(readonly speculativeBase: string | null = null) {
-    super();
-  }
-
-  async query(sql: string, params: unknown[]): Promise<{ rows: unknown[]; rowCount: number }> {
-    if (sql.includes("FROM runs r") && sql.includes("JOIN projects p") && sql.includes("LEFT JOIN LATERAL")) {
-      if (params[0] !== "run_123") {
-        return { rows: [], rowCount: 0 };
-      }
-      return {
-        rowCount: 1,
-        rows: [
-          {
-            run_id: "run_123",
-            spec_id: "spec_123",
-            project_id: "project_123",
-            branch: "tanren/run_123",
-            speculative_base: this.speculativeBase,
-            repo_url: "https://github.com/cat-cave/repo.git",
-            default_branch: "main",
-            config: { githubCredentialRef: "credential/github/dev" },
-            spec_title: "Add fixture",
-            spec_description: "Create fixture file",
-            ssh_host: "runner",
-            ssh_port: 22,
-            host_key_fingerprint: "SHA256:runner-host",
-          },
-        ],
-      };
-    }
-    return await super.query(sql, params);
-  }
-}
