@@ -22,25 +22,25 @@
      ==================================================================== */
 
   /* Ink — the writing temperature. Used for fg, borders, depth. */
-  --ink-12: oklch(8% 0.012 60);    /* deepest, true near-black with the slightest warmth */
+  --ink-12: oklch(8% 0.012 60); /* deepest, true near-black with the slightest warmth */
   --ink-11: oklch(14% 0.012 60);
-  --ink-10: oklch(20% 0.010 60);
+  --ink-10: oklch(20% 0.01 60);
   --ink-09: oklch(28% 0.008 60);
   --ink-08: oklch(38% 0.006 60);
-  --ink-07: oklch(50% 0.006 60);   /* mid-gray, captions */
+  --ink-07: oklch(50% 0.006 60); /* mid-gray, captions */
   --ink-06: oklch(62% 0.004 60);
-  --ink-05: oklch(72% 0.004 60);   /* hairline borders on dark surfaces */
+  --ink-05: oklch(72% 0.004 60); /* hairline borders on dark surfaces */
   --ink-04: oklch(82% 0.004 60);
   --ink-03: oklch(89% 0.005 70);
   --ink-02: oklch(94% 0.006 75);
-  --ink-01: oklch(97% 0.006 78);   /* paper-tinted near-white */
+  --ink-01: oklch(97% 0.006 78); /* paper-tinted near-white */
 
   /* Ash — the cool industrial light surfaces. Brushed concrete, not paper.
      Slight cool-cyan undertone reads as polished metal, not warm craft. */
-  --ash-00: oklch(98.0% 0.003 220);   /* lightest — close to but not pure white */
-  --ash-01: oklch(95.4% 0.004 220);   /* canvas — primary light bg */
-  --ash-02: oklch(92.0% 0.005 220);
-  --ash-03: oklch(87.5% 0.007 220);   /* hairline-equivalent in light mode */
+  --ash-00: oklch(98% 0.003 220); /* lightest — close to but not pure white */
+  --ash-01: oklch(95.4% 0.004 220); /* canvas — primary light bg */
+  --ash-02: oklch(92% 0.005 220);
+  --ash-03: oklch(87.5% 0.007 220); /* hairline-equivalent in light mode */
 
   /* Legacy paper aliases — kept for back-compat. Point at ash. */
   --paper-00: var(--ash-00);
@@ -52,13 +52,13 @@
      Pushed hotter & more saturated for the industrial-punk pivot. */
   --ember-12: oklch(22% 0.12 30);
   --ember-11: oklch(34% 0.16 32);
-  --ember-10: oklch(48% 0.20 34);
+  --ember-10: oklch(48% 0.2 34);
   --ember-09: oklch(60% 0.22 36);
-  --ember-08: oklch(68% 0.22 40);    /* primary ember — buttons, focus */
-  --ember-07: oklch(76% 0.20 48);
+  --ember-08: oklch(68% 0.22 40); /* primary ember — buttons, focus */
+  --ember-07: oklch(76% 0.2 48);
   --ember-06: oklch(84% 0.15 56);
-  --ember-05: oklch(90% 0.10 62);
-  --ember-04: oklch(94% 0.05 70);    /* ember-tinted surface */
+  --ember-05: oklch(90% 0.1 62);
+  --ember-04: oklch(94% 0.05 70); /* ember-tinted surface */
   --ember-03: oklch(96.5% 0.03 72);
   --ember-02: oklch(98% 0.018 75);
 
@@ -72,15 +72,15 @@
   --steel-02: oklch(97% 0.01 230);
 
   /* The three cost-model semantic colors (§4 of the brief) */
-  --cost-token: oklch(66% 0.18 42);      /* per-token == ember; real dollars */
-  --cost-window: oklch(60% 0.16 295);    /* subscription window == violet */
+  --cost-token: oklch(66% 0.18 42); /* per-token == ember; real dollars */
+  --cost-window: oklch(60% 0.16 295); /* subscription window == violet */
   --cost-opportunity: oklch(70% 0.14 165); /* self-hosted == mint, "use it or lose it" */
 
   /* Status semantics */
   --status-ok: oklch(66% 0.14 155);
   --status-warn: oklch(78% 0.16 85);
-  --status-fail: oklch(60% 0.20 25);
-  --status-run: oklch(70% 0.16 240);      /* in-flight, "alive" */
+  --status-fail: oklch(60% 0.2 25);
+  --status-run: oklch(70% 0.16 240); /* in-flight, "alive" */
 
   /* ====================================================================
      SEMANTIC ALIASES (light theme default)
@@ -91,14 +91,14 @@
   --bg-sunken: var(--ash-02);
   --bg-inverted: var(--ink-12);
 
-  --fg-1: var(--ink-12);   /* primary text */
-  --fg-2: var(--ink-09);   /* secondary */
-  --fg-3: var(--ink-07);   /* tertiary / captions */
-  --fg-4: var(--ink-05);   /* disabled / hairline-on-text */
+  --fg-1: var(--ink-12); /* primary text */
+  --fg-2: var(--ink-09); /* secondary */
+  --fg-3: var(--ink-07); /* tertiary / captions */
+  --fg-4: var(--ink-05); /* disabled / hairline-on-text */
   --fg-on-inverted: var(--paper-00);
 
-  --line-1: var(--ash-03);     /* hairline */
-  --line-2: var(--ink-04);     /* harder border */
+  --line-1: var(--ash-03); /* hairline */
+  --line-2: var(--ink-04); /* harder border */
   --line-hot: var(--ember-08); /* focus / active outline */
 
   --accent: var(--ember-08);
@@ -121,20 +121,20 @@
      UI      = sans, tight tracking on small sizes, looser on display.
      Mono    = always tabular numbers.
      ==================================================================== */
-  --t-display-xl: 7.5rem;   /* 120px hero moments */
-  --t-display-l:  4.5rem;   /* 72px */
-  --t-display-m:  3rem;     /* 48px */
-  --t-display-s:  2rem;     /* 32px */
+  --t-display-xl: 7.5rem; /* 120px hero moments */
+  --t-display-l: 4.5rem; /* 72px */
+  --t-display-m: 3rem; /* 48px */
+  --t-display-s: 2rem; /* 32px */
 
-  --t-h1: 2.25rem;          /* 36px */
-  --t-h2: 1.625rem;         /* 26px */
-  --t-h3: 1.25rem;          /* 20px */
-  --t-h4: 1rem;             /* 16px */
+  --t-h1: 2.25rem; /* 36px */
+  --t-h2: 1.625rem; /* 26px */
+  --t-h3: 1.25rem; /* 20px */
+  --t-h4: 1rem; /* 16px */
 
-  --t-body-l: 1.125rem;     /* 18px */
-  --t-body:   0.9375rem;    /* 15px */
-  --t-body-s: 0.8125rem;    /* 13px */
-  --t-caption: 0.6875rem;   /* 11px */
+  --t-body-l: 1.125rem; /* 18px */
+  --t-body: 0.9375rem; /* 15px */
+  --t-body-s: 0.8125rem; /* 13px */
+  --t-caption: 0.6875rem; /* 11px */
 
   /* ====================================================================
      SPACING — 4px base scale (named for memorability)
@@ -157,11 +157,11 @@
      RADII — modest. Tanren is a hairline-precise system; corners stay tight.
      ==================================================================== */
   --r-0: 0;
-  --r-1: 2px;       /* tags, badges */
-  --r-2: 4px;       /* buttons, inputs */
-  --r-3: 6px;       /* cards */
-  --r-4: 10px;      /* large surfaces */
-  --r-full: 999px;  /* pills, only when warranted */
+  --r-1: 2px; /* tags, badges */
+  --r-2: 4px; /* buttons, inputs */
+  --r-3: 6px; /* cards */
+  --r-4: 10px; /* large surfaces */
+  --r-full: 999px; /* pills, only when warranted */
 
   /* ====================================================================
      SHADOWS — mostly absent. Used sparingly for elevated menus.
@@ -172,14 +172,14 @@
   --shadow-1: 0 1px 0 0 oklch(8% 0.012 60 / 0.04);
   --shadow-2: 0 1px 2px 0 oklch(8% 0.012 60 / 0.06), 0 1px 0 0 oklch(8% 0.012 60 / 0.04);
   --shadow-3: 0 6px 24px -8px oklch(8% 0.012 60 / 0.18), 0 1px 0 0 oklch(8% 0.012 60 / 0.06);
-  --shadow-4: 0 20px 60px -20px oklch(8% 0.012 60 / 0.30);
+  --shadow-4: 0 20px 60px -20px oklch(8% 0.012 60 / 0.3);
   /* Ember glow — for active/focused interactive surfaces only */
   --shadow-ember: 0 0 0 1px var(--ember-08), 0 6px 20px -8px oklch(66% 0.18 42 / 0.35);
 
   /* ====================================================================
      MOTION — sharp, intentional. No bounce.
      ==================================================================== */
-  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);    /* expo-out */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1); /* expo-out */
   --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
   --ease-in: cubic-bezier(0.7, 0, 0.84, 0);
   --dur-fast: 120ms;
@@ -206,7 +206,7 @@
   --fg-on-inverted: var(--ink-12);
 
   --line-1: oklch(20% 0.008 60);
-  --line-2: oklch(28% 0.010 60);
+  --line-2: oklch(28% 0.01 60);
   --line-hot: var(--ember-08);
 
   --accent-tint: oklch(22% 0.06 35);
@@ -241,18 +241,33 @@
 [data-tanren-type] h3,
 [data-tanren-type] h4 {
   font-family: var(--font-display);
-  font-weight: 700;             /* Syne reads punk-industrial at 700+ */
+  font-weight: 700; /* Syne reads punk-industrial at 700+ */
   letter-spacing: -0.02em;
-  line-height: 1.0;
+  line-height: 1;
   text-wrap: balance;
   color: var(--fg-1);
   margin: 0;
   text-transform: none;
 }
-[data-tanren-type] h1 { font-size: var(--t-display-m); letter-spacing: -0.035em; font-weight: 800; }
-[data-tanren-type] h2 { font-size: var(--t-h1); letter-spacing: -0.025em; }
-[data-tanren-type] h3 { font-size: var(--t-h2); font-weight: 600; }
-[data-tanren-type] h4 { font-size: var(--t-h3); font-family: var(--font-ui); font-weight: 500; letter-spacing: -0.005em; }
+[data-tanren-type] h1 {
+  font-size: var(--t-display-m);
+  letter-spacing: -0.035em;
+  font-weight: 800;
+}
+[data-tanren-type] h2 {
+  font-size: var(--t-h1);
+  letter-spacing: -0.025em;
+}
+[data-tanren-type] h3 {
+  font-size: var(--t-h2);
+  font-weight: 600;
+}
+[data-tanren-type] h4 {
+  font-size: var(--t-h3);
+  font-family: var(--font-ui);
+  font-weight: 500;
+  letter-spacing: -0.005em;
+}
 
 [data-tanren-type] p {
   margin: 0 0 1em;
@@ -281,7 +296,9 @@
   text-decoration-color: var(--accent);
   text-decoration-thickness: 1.5px;
   text-underline-offset: 3px;
-  transition: text-decoration-color var(--dur) var(--ease-out), color var(--dur) var(--ease-out);
+  transition:
+    text-decoration-color var(--dur) var(--ease-out),
+    color var(--dur) var(--ease-out);
 }
 [data-tanren-type] a:hover {
   color: var(--accent);

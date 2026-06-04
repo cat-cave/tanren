@@ -23,10 +23,7 @@ function repoPath(owner: string, name: string, suffix: string): string {
  * and any inline annotations (mapped to GitHub's `output.annotations` shape). A
  * 201 is the success; anything else is a LOUD throw naming the status (no token).
  */
-export async function publishGitHubCheck(
-  http: GitHubHttpClient,
-  input: PublishCheckInput,
-): Promise<PublishedCheck> {
+export async function publishGitHubCheck(http: GitHubHttpClient, input: PublishCheckInput): Promise<PublishedCheck> {
   const output: Record<string, unknown> = {
     title: input.title,
     summary: input.summary,
