@@ -32,6 +32,7 @@ import {
 } from "../contracts/mergeCoordinator.js";
 import { isRetriableInfraError } from "../providers/githubRefReset.js";
 import { isAmbiguousMergeError } from "../providers/mergeOutcomeErrors.js";
+import type { SpecEscalator } from "./coordinatorEscalate.js";
 
 /** How long after a transient merge-drive infra-hold the subscriber re-drives the project. */
 const TRANSIENT_DRIVE_HOLD_RETRY_AFTER_MS = 3000;
@@ -81,6 +82,13 @@ export interface MergeCoordinatorDeps {
   queue: MergeQueueModel;
   runner: MergeRunner;
   events: MergeQueueEventEmitter;
+  /**
+   * The NON-BRICKING conflict-escalation seam (§2c): parks a GENUINELY irreconcilable
+   * spec at `needs_attention` (frees its slot) + emits the loud `dag.spec.needs_attention`
+   * when the drive returns the `needs_attention` outcome. Reused verbatim by the batch
+   * coordinator so the two paths can never diverge.
+   */
+  escalator: SpecEscalator;
 }
 
 /**
@@ -204,6 +212,19 @@ export class EventEmittingMergeCoordinator implements MergeCoordinator {
       // coordinator does not double-emit it. The next pass (re-triggered by that
       // merge.completed on the bus) selects the next DAG head.
       return { mergedSpecId: entry.specId };
+    }
+
+    if (outcome.kind === "needs_attention") {
+      // The LOUD TERMINAL ESCALATION (§2c — non-bricking): the resolver judged this spec
+      // GENUINELY irreconcilable. PARK it at `needs_attention` (frees its slot — the rest
+      // of the DAG keeps moving) FIRST, then dequeue `needs_attention` (the entry leaves
+      // the ready set, NEVER re-queued). NOT routed through the recoverable `conflict`
+      // path — re-executing it would just re-conflict forever. The escalator emits the
+      // loud `dag.spec.needs_attention`; the dequeue emits `merge.dequeued`.
+      await this.deps.escalator.escalate({ projectId, entry, message: outcome.message });
+      await this.deps.queue.markDequeued(entry.queueId, "needs_attention");
+      await this.deps.events.emitDequeued({ projectId, entry, reason: "needs_attention", message: outcome.message });
+      return { dequeuedSpecId: entry.specId };
     }
 
     // The dequeue reason: "conflict" | "blocked" | "failed".

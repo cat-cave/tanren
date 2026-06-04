@@ -44,6 +44,8 @@ import {
 import { isRetriableInfraError } from "../providers/githubRefReset.js";
 import { setTimeout as sleepFor } from "node:timers/promises";
 import type { MergeQueueEventEmitter } from "./coordinator.js";
+import type { SpecEscalator } from "./coordinatorEscalate.js";
+import { settleDriveOutcome } from "./batchCoordinatorSettle.js";
 
 /**
  * The bound on in-pass re-checks of the SAME batch after a transient INFRA error (the
@@ -133,6 +135,13 @@ export interface BatchMergeCoordinatorDeps {
   events: MergeQueueEventEmitter;
   /** The batch-level event emitter (merge.batch.*). */
   batchEvents: BatchMergeEventEmitter;
+  /**
+   * The NON-BRICKING conflict-escalation seam (§2c), reused VERBATIM from the P2d-1
+   * coordinator: parks a GENUINELY irreconcilable spec at `needs_attention` (frees its
+   * slot) when the real drive returns the `needs_attention` outcome. The same helper
+   * both paths use, so they can never diverge.
+   */
+  escalator: SpecEscalator;
   /**
    * Resolve the per-project max batch size (the config knob). Defaults to a constant
    * `DEFAULT_MAX_BATCH_SIZE` resolver when omitted (tests inject a fixed value). The
@@ -461,11 +470,14 @@ export class BatchMergeCoordinator implements MergeCoordinator {
         continue;
       }
 
-      // A real-merge conflict/blocked/failed: dequeue recoverably + STOP the batch so
-      // no dependent merges ahead of a now-absent ancestor. The next pass re-checks.
-      const reason = outcome.kind;
-      await this.deps.queue.markDequeued(entry.queueId, reason);
-      await this.deps.events.emitDequeued({ projectId, entry, reason, message: outcome.message });
+      // A non-merged real-merge outcome (a reality the speculative check could not see,
+      // e.g. the live base moved, or — once the resolver is wired — a genuinely
+      // irreconcilable conflict): settle the entry + STOP the batch so no dependent
+      // merges ahead of a now-absent ancestor. `settleDriveOutcome` routes a
+      // `needs_attention` outcome through the NON-BRICKING escalation (park the spec +
+      // dequeue `needs_attention`, never re-executed) and a conflict/blocked/failed
+      // through the recoverable dequeue — the SAME policy the P2d-1 coordinator uses.
+      await settleDriveOutcome(this.deps, projectId, entry, outcome);
       dequeuedSpecId = entry.specId;
       break;
     }

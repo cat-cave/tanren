@@ -33,6 +33,7 @@ import { mergeForRun } from "../workflow/reviewMerge/index.js";
 import type { ConflictResolverHook, NativeQueueEnqueuer } from "../workflow/reviewMerge/index.js";
 import type { MergeDriveOutcome, MergeCoordinator } from "../contracts/mergeCoordinator.js";
 import { EventEmittingMergeCoordinator, type DriveMergeForQueuedRun, PgMergeQueueEventEmitter } from "./coordinator.js";
+import { PgSpecEscalator } from "./coordinatorEscalate.js";
 import { PgMergeQueueModel, PgMergeRunner } from "./coordinatorPg.js";
 
 export interface BuildMergeCoordinatorDeps {
@@ -291,5 +292,8 @@ export function buildMergeCoordinator(deps: BuildMergeCoordinatorDeps): MergeCoo
     // Plane-split: route the queue event emissions through the control plane when
     // wired; else direct on the pool (byte-identical).
     events: new PgMergeQueueEventEmitter(deps.pool, deps.runStateWriter),
+    // The §2c non-bricking conflict escalator (parks an irreconcilable spec at
+    // needs_attention) — plane-split-safe like the spec-status finalize above.
+    escalator: new PgSpecEscalator(deps.pool, deps.runStateWriter),
   });
 }

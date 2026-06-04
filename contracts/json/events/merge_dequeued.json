@@ -26,7 +26,8 @@
         "conflict",
         "blocked",
         "failed",
-        "superseded"
+        "superseded",
+        "needs_attention"
       ],
       "type": "string"
     },

@@ -20,6 +20,7 @@ import type { MergeCoordinator } from "../contracts/mergeCoordinator.js";
 import { PgBatchChecker } from "./batchChecker.js";
 import { BatchMergeCoordinator } from "./batchCoordinator.js";
 import { PgBatchMergeEventEmitter } from "./batchCoordinatorPg.js";
+import { PgSpecEscalator } from "./coordinatorEscalate.js";
 import { type BuildMergeCoordinatorDeps, buildDriveMerge } from "./coordinatorBuild.js";
 import { PgMergeQueueEventEmitter } from "./coordinator.js";
 import { PgMergeQueueModel, PgMergeRunner } from "./coordinatorPg.js";
@@ -60,6 +61,9 @@ export function buildBatchMergeCoordinator(deps: BuildMergeCoordinatorDeps): Mer
     // when wired; else direct on the pool (byte-identical).
     events: new PgMergeQueueEventEmitter(deps.pool, deps.runStateWriter),
     batchEvents: new PgBatchMergeEventEmitter(deps.pool, deps.runStateWriter),
+    // The §2c non-bricking conflict escalator (parks an irreconcilable spec at
+    // needs_attention) — REUSED verbatim from P2d-1, plane-split-safe via the writer.
+    escalator: new PgSpecEscalator(deps.pool, deps.runStateWriter),
     resolveMaxBatchSize: (projectId) => resolveMaxBatchSize(deps.pool, projectId),
   });
 }

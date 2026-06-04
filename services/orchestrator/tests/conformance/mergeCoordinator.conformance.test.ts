@@ -10,6 +10,7 @@ import type { SpecPriority } from "../../src/engine/state/spec.js";
 import {
   InMemoryMergeQueueModel,
   RecordingMergeQueueEventEmitter,
+  RecordingSpecEscalator,
   ScriptedMergeRunner,
 } from "./fakes/inMemoryMergeQueue.js";
 import {
@@ -22,7 +23,8 @@ describeMergeCoordinatorConformance("EventEmittingMergeCoordinator (in-memory)",
     const queue = new InMemoryMergeQueueModel();
     const runner = new ScriptedMergeRunner();
     const events = new RecordingMergeQueueEventEmitter();
-    const coordinator = new EventEmittingMergeCoordinator({ queue, runner, events });
+    const escalator = new RecordingSpecEscalator();
+    const coordinator = new EventEmittingMergeCoordinator({ queue, runner, events, escalator });
     return {
       coordinator,
       projectId: "project_conf",
@@ -45,6 +47,7 @@ describeMergeCoordinatorConformance("EventEmittingMergeCoordinator (in-memory)",
       },
       drives: runner.drives,
       events: events.events,
+      escalations: escalator.escalations,
     };
   },
 });

@@ -34,8 +34,14 @@ export interface RecordedDrive {
 export interface RecordedQueueEvent {
   type: "merge.queue.advanced" | "merge.dequeued";
   specId: string;
-  reason?: "conflict" | "blocked" | "failed";
+  reason?: "conflict" | "blocked" | "failed" | "superseded" | "needs_attention";
   queueDepth?: number;
+}
+
+/** A recorded non-bricking §2c escalation (the spec parked at `needs_attention`). */
+export interface RecordedEscalation {
+  specId: string;
+  message: string;
 }
 
 /**
@@ -58,6 +64,8 @@ export interface MergeCoordinatorConformanceHarness {
   readonly drives: RecordedDrive[];
   /** Every queue event the coordinator emitted, in order. */
   readonly events: RecordedQueueEvent[];
+  /** Every spec the coordinator escalated to `needs_attention` (the §2c non-bricking park). */
+  readonly escalations: RecordedEscalation[];
 }
 
 export interface MergeCoordinatorConformanceSuite {
@@ -171,6 +179,34 @@ export function describeMergeCoordinatorConformance(label: string, suite: MergeC
       // Pass 2: the independent P1 item proceeds — the conflict never blocked it.
       await h.coordinator.coordinate(h.projectId);
       expect(h.statusOf("run_y")).toBe("merged");
+    });
+
+    it("ESCALATES a genuinely-irreconcilable head to needs_attention (non-bricking, terminal, NEVER re-queued)", async () => {
+      const h = suite.make();
+      // The head is judged genuinely irreconcilable; an independent later item must
+      // still merge (the escalation FREES the slot — it never bricks the DAG).
+      h.seed({ runId: "run_x", specId: "spec_x", dependsOn: [], priority: "P0" });
+      h.seed({ runId: "run_y", specId: "spec_y", dependsOn: [], priority: "P1" });
+      h.scriptDrive("run_x", { kind: "needs_attention", message: "irreconcilable with spec_z" });
+
+      // Pass 1: the P0 head is driven, judged irreconcilable, ESCALATED + dequeued
+      // `needs_attention` — NOT routed through the recoverable conflict path.
+      await h.coordinator.coordinate(h.projectId);
+      expect(h.statusOf("run_x")).toBe("dequeued");
+      // The spec was parked at needs_attention (the loud, non-bricking escalation).
+      expect(h.escalations).toEqual([{ specId: "spec_x", message: "irreconcilable with spec_z" }]);
+      const dq = h.events.find((e) => e.type === "merge.dequeued");
+      expect(dq?.specId).toBe("spec_x");
+      expect(dq?.reason).toBe("needs_attention");
+
+      // Pass 2: the independent P1 item proceeds — the escalation never blocked it.
+      await h.coordinator.coordinate(h.projectId);
+      expect(h.statusOf("run_y")).toBe("merged");
+
+      // TERMINAL: the irreconcilable head is dequeued for good — it is NEVER re-driven
+      // (a re-pass selects only the empty/remaining ready set, never run_x again).
+      const drivesOfX = h.drives.filter((d) => d.runId === "run_x");
+      expect(drivesOfX).toHaveLength(1);
     });
 
     it("removes a terminally-failed head so the queue makes progress (liveness)", async () => {

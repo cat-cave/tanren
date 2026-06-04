@@ -267,6 +267,7 @@ export class PgSpecStrandEventEmitter implements SpecStrandEventEmitter {
         projectId: input.projectId,
         eventType: "dag.spec.needs_attention",
         payload: {
+          source: "strand",
           specId: input.specId,
           reason: input.reason,
           terminalRuns: input.terminalRuns,

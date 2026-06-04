@@ -49,8 +49,13 @@ export const MergeDequeuedPayload = z
      *   - `superseded`— a fresh percolation re-execution replaced this run; its entry
      *                   + PR are no longer a live merge candidate (§2c). NOT a real
      *                   conflict — the entry is retired so the spec has ONE live run.
+     *   - `needs_attention` — the intent-preserving resolver judged the spec GENUINELY
+     *                   irreconcilable; it parked at the terminal `needs_attention`
+     *                   status (freeing its slot) and is NEVER re-queued (§2c — the
+     *                   loud, non-bricking escalation). Distinct from recoverable
+     *                   `conflict` (which re-queues) and infra `failed`.
      */
-    reason: z.enum(["conflict", "blocked", "failed", "superseded"]),
+    reason: z.enum(["conflict", "blocked", "failed", "superseded", "needs_attention"]),
     /** The human-readable detail of the dequeue (the merge-stage message). */
     message: z.string(),
   })
