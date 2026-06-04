@@ -6,7 +6,7 @@
 // second pass is idempotent (no duplicate record, no re-emitted event).
 
 import { describe, expect, it } from "vitest";
-import { detectAndQuarantineFlaky } from "../src/engine/insights/ciFlaky.js";
+import { detectAndQuarantineFlaky, loadCiObservations } from "../src/engine/insights/ciFlaky.js";
 import type { AppendEventInput } from "../src/engine/eventStore.js";
 import type { EventName } from "../src/engine/events/index.js";
 
@@ -108,7 +108,12 @@ describe("detectAndQuarantineFlaky — records + emits for a genuinely-flaky che
       ci("sha1", [{ name: "unit", conclusion: "success" }], NOW.getTime() - 500),
     ];
     const store = new FakeEventStore();
-    const insights = await detectAndQuarantineFlaky(db, { projectId: PROJECT, now: NOW, eventStore: store });
+    const insights = await detectAndQuarantineFlaky(db, {
+      projectId: PROJECT,
+      now: NOW,
+      eventStore: store,
+      loadChecks: (since) => loadCiObservations(db, { projectId: PROJECT, since }),
+    });
 
     expect(db.quarantined).toHaveLength(1);
     expect(db.quarantined[0]!.check_name).toBe("unit");
@@ -128,7 +133,12 @@ describe("detectAndQuarantineFlaky — SAFETY: a consistently-failing check is n
       ci("sha3", [{ name: "broken", conclusion: "failure" }], NOW.getTime() - 1000),
     ];
     const store = new FakeEventStore();
-    const insights = await detectAndQuarantineFlaky(db, { projectId: PROJECT, now: NOW, eventStore: store });
+    const insights = await detectAndQuarantineFlaky(db, {
+      projectId: PROJECT,
+      now: NOW,
+      eventStore: store,
+      loadChecks: (since) => loadCiObservations(db, { projectId: PROJECT, since }),
+    });
 
     expect(db.quarantined).toHaveLength(0);
     expect(store.appended).toHaveLength(0);
@@ -156,7 +166,12 @@ describe("detectAndQuarantineFlaky — SAFETY: a consistently-failing check is n
       ),
     ];
     const store = new FakeEventStore();
-    await detectAndQuarantineFlaky(db, { projectId: PROJECT, now: NOW, eventStore: store });
+    await detectAndQuarantineFlaky(db, {
+      projectId: PROJECT,
+      now: NOW,
+      eventStore: store,
+      loadChecks: (since) => loadCiObservations(db, { projectId: PROJECT, since }),
+    });
     expect(db.quarantined.map((q) => q.check_name)).toEqual(["unit"]);
     // broken is NOT quarantined → its failures still reach the gate.
   });
@@ -170,8 +185,18 @@ describe("detectAndQuarantineFlaky — idempotent", () => {
       ci("sha1", [{ name: "unit", conclusion: "success" }], NOW.getTime() - 500),
     ];
     const store = new FakeEventStore();
-    await detectAndQuarantineFlaky(db, { projectId: PROJECT, now: NOW, eventStore: store });
-    const insights2 = await detectAndQuarantineFlaky(db, { projectId: PROJECT, now: NOW, eventStore: store });
+    await detectAndQuarantineFlaky(db, {
+      projectId: PROJECT,
+      now: NOW,
+      eventStore: store,
+      loadChecks: (since) => loadCiObservations(db, { projectId: PROJECT, since }),
+    });
+    const insights2 = await detectAndQuarantineFlaky(db, {
+      projectId: PROJECT,
+      now: NOW,
+      eventStore: store,
+      loadChecks: (since) => loadCiObservations(db, { projectId: PROJECT, since }),
+    });
 
     // not duplicated
     expect(db.quarantined).toHaveLength(1);
@@ -182,3 +207,55 @@ describe("detectAndQuarantineFlaky — idempotent", () => {
     expect(insights2[0]!.kind).toBe("ci_flaky");
   });
 });
+
+/**
+ * A pg substitute that HARD-FAILS on any `events` query — modelling the worker's
+ * `tanren_dataplane` role, which has no `events` grant. The tenant tables
+ * (`ci_test_results` + `quarantined_tests`) still answer normally. TEST FIXTURE.
+ */
+class DataplaneMemoryClient extends FlakyMemoryClient {
+  override async query(
+    sql: string,
+    params: ReadonlyArray<unknown> = [],
+  ): Promise<{ rows: unknown[]; rowCount: number }> {
+    if (sql.includes("FROM events")) {
+      throw new Error("permission denied for table events");
+    }
+    return super.query(sql, params);
+  }
+}
+
+describe("detectAndQuarantineFlaky — PLANE-SPLIT: the events read never touches the work pool", () => {
+  it("quarantines a flaky check on a dataplane pool that denies `events`, reading checks via loadChecks", async () => {
+    // The work pool denies `events` (like the worker's de-privileged role). The check
+    // observations arrive ONLY through `loadChecks` — the seam the worker wires to a
+    // system-scoped client. Detection still records + emits, proving the events read
+    // is fully off the work pool (no silent permission-denied at runtime).
+    const db = new DataplaneMemoryClient();
+    // The system-scoped reader half: a separate client that CAN read events.
+    const systemReader = new FlakyMemoryClientWith([
+      ci("sha1", [{ name: "unit", conclusion: "failure" }], NOW.getTime() - 1000),
+      ci("sha1", [{ name: "unit", conclusion: "success" }], NOW.getTime() - 500),
+    ]);
+    const store = new FakeEventStore();
+    const insights = await detectAndQuarantineFlaky(db, {
+      projectId: PROJECT,
+      now: NOW,
+      eventStore: store,
+      // Provided by the caller's system-scoped read — NOT the work pool.
+      loadChecks: (since) => loadCiObservations(systemReader, { projectId: PROJECT, since }),
+    });
+
+    expect(db.quarantined.map((q) => q.check_name)).toEqual(["unit"]);
+    expect(store.appended.map((a) => a.eventType)).toEqual(["ci.flaky.detected", "ci.test.quarantined"]);
+    expect(insights).toHaveLength(1);
+  });
+});
+
+/** A FlakyMemoryClient pre-seeded with check events, for the system-scoped reader half. */
+class FlakyMemoryClientWith extends FlakyMemoryClient {
+  constructor(seed: CiEventSeed[]) {
+    super();
+    this.events = seed;
+  }
+}

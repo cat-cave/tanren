@@ -38,6 +38,7 @@ export function buildCiInsightsLoop(deps: BuildCiInsightsLoopDeps): CiInsightsLo
     pool: deps.pool,
     answererFactory: triageFactory,
     autoRoute: intakeAutoRouteDeps(deps.runStateWriter),
+    ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
   });
   loop.start();
   return loop;
