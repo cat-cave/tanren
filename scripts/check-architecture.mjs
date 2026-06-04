@@ -31,6 +31,11 @@ const singleEventWriterExclusions = new Set([
   // (the read fixture) AND asserts the data-plane role's raw events SELECT is
   // REJECTED — exempt like the P3b deprivilege test above.
   "services/orchestrator/tests/planeSplitP3LifecycleRead.integration.test.ts",
+  // The strand-reconciler events-read gap regression (mirrors the lifecycle-read test
+  // above): seeds `events` via the OWNER pool to set up the cross-org prior-unstranded
+  // COUNT, and asserts the data-plane role's raw events SELECT is REJECTED — exempt
+  // from single-event-writer for the same reason as the lifecycle-read test.
+  "services/orchestrator/tests/planeSplitP3StrandReconcilerRead.integration.test.ts",
   // The autonomy-loop routing proof: a guarded pool whose query REJECTS a raw event
   // insert (mirroring the de-privileged role) so the test proves the loops route
   // through the writer, never the bare pool — exempt like the P3b test above.
