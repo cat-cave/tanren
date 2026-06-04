@@ -35,6 +35,27 @@ export const ProjectCredentialRefs = z
   .strict();
 export type ProjectCredentialRefs = z.infer<typeof ProjectCredentialRefs>;
 
+// The captured product identity / design-DNA from the greenfield vision
+// interview. The interview capture (`forge/interview/types.ts`) is otherwise
+// transient — personas/behaviors/specs are derived into their own rows, but the
+// product's IDENTITY (`pitch`) and DESIGN-DNA were dropped at derive time. This
+// is where they are PERSISTED (no new table / migration — the existing
+// `projects.config` jsonb blob), so a downstream consumer (the intent-preserving
+// conflict resolver) can frame a resolution against the product vision and judge
+// whether two specs' intents genuinely clash. Both fields are short free-form
+// notes (the interview caps `designDna` at 80, the identity `pitch` at 400).
+// Optional + additive: legacy rows carry no key and parse to an absent field (no
+// migration), and `.strict()` round-trips it untouched on save. A project created
+// without an interview (brownfield/HTTP) simply has no `productVision` — a real
+// empty state, not a stub.
+export const ProjectProductVision = z
+  .object({
+    pitch: z.string().min(1).max(400).optional(),
+    designDna: z.string().min(1).max(200).optional(),
+  })
+  .strict();
+export type ProjectProductVision = z.infer<typeof ProjectProductVision>;
+
 export const ProjectConfigV1 = z
   .object({
     version: z.literal(1),
@@ -142,6 +163,12 @@ export const ProjectConfigV1 = z
     // `.strict()` round-trips it on save. An explicit `tanren-ci.yml` `bootstrap.run`
     // still wins over this default in BOTH cases.
     greenfield: z.boolean().default(false),
+    // The captured product identity + design-DNA from the greenfield vision
+    // interview (see `ProjectProductVision`). Persisted here (not a new table) so
+    // the conflict resolver can frame a resolution against the product vision.
+    // Optional + additive: absent ⇒ no captured vision (a real empty state), and
+    // `.strict()` round-trips it untouched on save.
+    productVision: ProjectProductVision.optional(),
   })
   .strict();
 export type ProjectConfigV1 = z.infer<typeof ProjectConfigV1>;

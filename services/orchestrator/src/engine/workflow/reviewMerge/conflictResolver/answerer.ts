@@ -14,11 +14,13 @@
 
 import { answererOutputSchemaFor, ConflictAnswer } from "../../../answerers/schemas/index.js";
 import type { AnswererAdapter } from "../../../providers/types.js";
-import type {
-  ConflictAnswererInvoker,
-  ConflictedFile,
-  SpecIntent,
-  UpstreamChangeContext,
+import {
+  isProductVisionEmpty,
+  type ConflictAnswererInvoker,
+  type ConflictedFile,
+  type ProductVision,
+  type SpecIntent,
+  type UpstreamChangeContext,
 } from "../../../contracts/conflictResolution.js";
 
 export interface AnswererBackedConflictInvokerDeps {
@@ -36,6 +38,7 @@ export class AnswererBackedConflictInvoker implements ConflictAnswererInvoker {
     dagEdge: boolean;
     conflictedFiles: ReadonlyArray<ConflictedFile>;
     upstreamChange?: UpstreamChangeContext;
+    productVision?: ProductVision;
   }): Promise<ConflictAnswer> {
     const outputSchema = answererOutputSchemaFor("conflict", ConflictAnswer);
     const prompt = buildConflictResolverPrompt(input);
@@ -55,9 +58,11 @@ export function buildConflictResolverPrompt(input: {
   dagEdge: boolean;
   conflictedFiles: ReadonlyArray<ConflictedFile>;
   upstreamChange?: UpstreamChangeContext;
+  productVision?: ProductVision;
 }): string {
   const lines: string[] = [
     ...(input.upstreamChange === undefined ? conflictFraming() : upstreamChangeFraming(input.upstreamChange)),
+    ...productVisionFraming(input.productVision),
     "",
     "Hard boundaries (you are an Answerer — read-only):",
     "- Do NOT run, simulate, or shell out to tests/builds/linters. A separate",
@@ -127,6 +132,51 @@ function upstreamChangeFraming(upstream: UpstreamChangeContext): string[] {
     "",
     `Upstream change to absorb: ${upstream.changeSummary}`,
   ];
+}
+
+/**
+ * The PRODUCT-VISION framing section: the personas, the persona-behaviors tied to
+ * the two conflicting specs, and the captured design-DNA the resolution must
+ * honor AND use to judge whether the two intents GENUINELY clash. This is the
+ * signal that sharpens the classification (escalation discipline): a resolution
+ * that would VIOLATE a persona's behavior — or that cannot satisfy two specs'
+ * persona-behaviors that genuinely contradict — is a real PRODUCT-INTENT clash
+ * (the legitimate `irreconcilable` product decision a human owns); a merely
+ * MECHANICAL clash between compatible intents stays autonomously resolvable.
+ *
+ * Omitted entirely for a genuinely empty product (no personas / behaviors /
+ * design-DNA) — a real empty state, NOT a stub: the resolver simply judges on the
+ * spec intents + hunks as before.
+ */
+function productVisionFraming(vision: ProductVision | undefined): string[] {
+  if (vision === undefined || isProductVisionEmpty(vision)) return [];
+  const lines: string[] = [
+    "",
+    "=== Product vision the resolution must HONOR + use to judge whether these two intents genuinely clash ===",
+    "Frame the resolution so it keeps the product true to its personas + their",
+    "behaviors. CRUCIALLY: judge the conflict against this vision. If satisfying",
+    "BOTH specs would require CONTRADICTING a persona's behavior (two personas'",
+    "behaviors genuinely cannot both be true), that is a real PRODUCT-INTENT clash —",
+    "answer 'irreconcilable' and name the spec to re-plan. If the intents are",
+    "COMPATIBLE with the vision and only the TEXT collides, resolve to satisfy both.",
+  ];
+  if (vision.designDna !== undefined && vision.designDna.trim() !== "") {
+    lines.push("", `Design-DNA / identity: ${vision.designDna.trim()}`);
+  }
+  if (vision.personas.length > 0) {
+    lines.push("", "Personas:");
+    for (const p of vision.personas) {
+      const surface = p.surface !== undefined && p.surface.trim() !== "" ? ` [surface: ${p.surface.trim()}]` : "";
+      lines.push(`- ${p.name}${surface}: ${p.description}`);
+    }
+  }
+  if (vision.behaviors.length > 0) {
+    lines.push("", "Behaviors tied to the two conflicting specs (must stay true):");
+    for (const b of vision.behaviors) {
+      lines.push(`- (${b.persona}) ${b.title}: given ${b.given}, when ${b.when}, then ${b.thenOutcome}`);
+    }
+  }
+  return lines;
 }
 
 function baseSpecLines(conflictingSpecIntent: SpecIntent | undefined): string[] {

@@ -95,6 +95,62 @@ export interface WorkspaceConflictApplier {
   abort(): Promise<void>;
 }
 
+// ---- The product vision (the resolution must honor + judge against it) -----
+
+/** A persona the resolution must honor: who they are + their delivery surface. */
+export interface ProductVisionPersona {
+  name: string;
+  description: string;
+  /** The delivery surface (handheld / ops dashboard / …), when captured. */
+  surface?: string;
+}
+
+/** A persona-behavior the resolution must keep true (BDD Given/When/Then). */
+export interface ProductVisionBehavior {
+  /** The persona this behavior belongs to (so a contradiction is attributable). */
+  persona: string;
+  title: string;
+  given: string;
+  when: string;
+  /** The BDD `then` (the observable outcome the persona expects). */
+  thenOutcome: string;
+}
+
+/**
+ * The product-vision context the resolver frames a resolution against AND uses to
+ * judge whether the two specs' intents genuinely clash. `personas` are the
+ * project's personas; `behaviors` are the persona-behaviors linked to the two
+ * conflicting specs (the surface where a genuine persona-behavior CONTRADICTION
+ * would show up); `designDna` is the captured identity/design note. Every field
+ * may be empty — a genuinely empty product (no personas/behaviors yet) yields an
+ * empty vision, which the prompt OMITS (a real empty state, never a stub).
+ */
+export interface ProductVision {
+  personas: ReadonlyArray<ProductVisionPersona>;
+  behaviors: ReadonlyArray<ProductVisionBehavior>;
+  /** The captured product identity pitch + design-DNA (one short note), when present. */
+  designDna?: string;
+}
+
+/** True when the vision carries NO signal at all (the prompt omits the section). */
+export function isProductVisionEmpty(vision: ProductVision): boolean {
+  return (
+    vision.personas.length === 0 &&
+    vision.behaviors.length === 0 &&
+    (vision.designDna === undefined || vision.designDna.trim() === "")
+  );
+}
+
+/**
+ * Loads the product vision for a project + the two conflicting specs, RLS-scoped
+ * read-only: the project's personas, the behaviors linked to the two specs, and
+ * the captured design-DNA/identity. A genuinely empty product (no personas /
+ * behaviors / design-DNA) returns an empty vision — never an error, never a stub.
+ */
+export interface ProductVisionReader {
+  read(input: { projectId: string; mergingSpecId: string; conflictingSpecId?: string }): Promise<ProductVision>;
+}
+
 // ---- The conflict Answerer invocation -------------------------------------
 
 /**
@@ -129,6 +185,16 @@ export interface ConflictAnswererInvoker {
      * the answer schema or the `decideConflictResolution` invariants.
      */
     upstreamChange?: UpstreamChangeContext;
+    /**
+     * The product vision (personas / persona-behaviors / design-DNA) the
+     * resolution must honor AND judge the clash against. Additive + OPTIONAL: it
+     * enriches the SIGNAL the resolver classifies on (a real persona-behavior
+     * contradiction is the legitimate `irreconcilable` product decision; a
+     * mechanical clash with compatible intents stays auto-resolvable) WITHOUT
+     * changing the answer schema or the `decideConflictResolution` invariants.
+     * Absent / empty (a genuinely empty product) ⇒ the prompt omits the section.
+     */
+    productVision?: ProductVision;
   }): Promise<ConflictAnswer>;
 }
 

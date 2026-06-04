@@ -28,8 +28,10 @@
 import type { EventStore } from "../../../eventStore.js";
 import {
   decideConflictResolution,
+  isProductVisionEmpty,
   type ConflictAnswererInvoker,
   type ConflictProvenanceReader,
+  type ProductVisionReader,
   type ReplanRouter,
   type ResolvedTreeReGate,
   type SpecIntent,
@@ -44,6 +46,15 @@ export interface IntentPreservingResolverDeps {
   eventStore: EventStore;
   /** Identify the other conflicting spec + the DAG edge (DAG provenance). */
   provenance: ConflictProvenanceReader;
+  /**
+   * Loads the PRODUCT VISION (personas / persona-behaviors / design-DNA) for this
+   * project + the two conflicting specs, so the Answerer frames the resolution
+   * against the product AND judges whether the two intents genuinely clash. A
+   * genuinely empty product (no personas/behaviors) yields an empty vision the
+   * prompt omits. OPTIONAL: omitted ⇒ the resolver reasons on spec intents alone
+   * (the pre-vision behavior, unchanged), never a stub.
+   */
+  productVision?: ProductVisionReader;
   /** Gather hunks + apply/publish/abort the resolution over the runner workspace. */
   applier: WorkspaceConflictApplier;
   /** The conflict-resolution Answerer (read-only; both intents + hunks + edge). */
@@ -96,6 +107,20 @@ export function buildIntentPreservingConflictResolver(deps: IntentPreservingReso
       },
     });
 
+    // Load the product vision (personas / persona-behaviors / design-DNA) for the
+    // two conflicting specs so the Answerer frames the resolution against the
+    // product AND judges whether the intents genuinely clash. An empty product
+    // (no personas/behaviors) yields an empty vision the prompt omits (a real
+    // empty state). The reader is optional: omitted ⇒ judge on intents alone.
+    const productVision =
+      deps.productVision === undefined
+        ? undefined
+        : await deps.productVision.read({
+            projectId: deps.projectId,
+            mergingSpecId: deps.mergingSpecIntent.specId,
+            ...(provenance.conflictingSpecId !== undefined && { conflictingSpecId: provenance.conflictingSpecId }),
+          });
+
     const answer = await deps.answerer.resolve({
       mergingSpecIntent: deps.mergingSpecIntent,
       ...(provenance.conflictingSpecIntent !== undefined && {
@@ -103,6 +128,9 @@ export function buildIntentPreservingConflictResolver(deps: IntentPreservingReso
       }),
       dagEdge: provenance.dagEdge,
       conflictedFiles: gathered.files,
+      // The product-vision section is included only when it carries signal — an
+      // empty vision is omitted (the prompt builder also guards this).
+      ...(productVision !== undefined && !isProductVisionEmpty(productVision) && { productVision }),
       // P2c-2: in a percolation re-execution, reframe into upstream-change mode so
       // the ancestor's intentional change flows INTO this dependent (keeping its
       // work intact), and an irreconcilable answer re-plans THIS spec (the merging
