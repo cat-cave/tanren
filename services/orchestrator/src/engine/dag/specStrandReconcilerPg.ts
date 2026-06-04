@@ -260,6 +260,7 @@ export class PgSpecStrandEventEmitter implements SpecStrandEventEmitter {
     reason: StrandReason;
     terminalRuns: Array<{ runId: string; status: string }>;
     attempts: number;
+    message: string;
   }): Promise<void> {
     await this.withScopedStore(input.projectId, (store) =>
       store.append({
@@ -272,6 +273,7 @@ export class PgSpecStrandEventEmitter implements SpecStrandEventEmitter {
           reason: input.reason,
           terminalRuns: input.terminalRuns,
           attempts: input.attempts,
+          message: input.message,
         },
       }),
     );

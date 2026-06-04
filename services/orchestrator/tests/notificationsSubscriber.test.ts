@@ -136,7 +136,14 @@ describe("NotificationSubscriber", () => {
         "42",
         {
           event_type: "dag.spec.needs_attention",
-          payload: { source: "strand", specId: "spec_1", reason: "no_live_run", terminalRuns: [], attempts: 3 },
+          payload: {
+            source: "strand",
+            specId: "spec_1",
+            reason: "no_live_run",
+            terminalRuns: [],
+            attempts: 3,
+            message: "the autonomous self-heal could not make progress; a decision is needed",
+          },
           org_id: "org_1",
           run_id: null,
           spec_id: "spec_1",

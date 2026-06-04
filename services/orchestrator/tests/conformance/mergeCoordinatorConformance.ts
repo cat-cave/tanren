@@ -261,5 +261,87 @@ export function describeMergeCoordinatorConformance(label: string, suite: MergeC
       expect(h.drives).toEqual([]);
       expect(result.holdReason).toBe("empty");
     });
+
+    // END-TO-END (the conflict-resolution sequence's liveness contract): two
+    // genuinely-conflicting SIBLING specs. The first merges; the second's drive hits
+    // the conflict, and the drive path either RESOLVES-and-merges (happy) OR ESCALATES
+    // `needs_attention` (a genuine product clash). In BOTH the rest of the DAG keeps
+    // draining (liveness), there is NO infinite re-exec (each conflicting entry is
+    // driven exactly once), and there is NO blind `merge_conflict_reexec` re-run on the
+    // drive path (the deleted pre-PR2 stub) — the resolver/escalator replaced it.
+    it("two conflicting siblings — RESOLVED: first merges, second's conflict RESOLVES-and-merges, an independent item still drains", async () => {
+      const h = suite.make();
+      // Two siblings (both roots) that conflict with each other, plus an independent
+      // third spec that must keep draining regardless.
+      h.seed({ runId: "run_s1", specId: "spec_s1", dependsOn: [], priority: "P0" });
+      h.seed({ runId: "run_s2", specId: "spec_s2", dependsOn: [], priority: "P1" });
+      h.seed({ runId: "run_ind", specId: "spec_ind", dependsOn: [], priority: "P2" });
+      // The second sibling's drive RESOLVES the conflict in-drive (the real resolver
+      // reconciled + re-gated), so the per-run merge path retried + LANDED — a `merged`
+      // outcome (NOT a `conflict` dequeue + blind re-exec).
+      h.scriptDrive("run_s2", { kind: "merged" });
+
+      // Pass 1: the P0 sibling merges first.
+      await h.coordinator.coordinate(h.projectId);
+      expect(h.statusOf("run_s1")).toBe("merged");
+      // Pass 2: the second sibling's conflict RESOLVES → it merges (no dequeue).
+      await h.coordinator.coordinate(h.projectId);
+      expect(h.statusOf("run_s2")).toBe("merged");
+      // Pass 3: the independent item drains (liveness — never blocked by the siblings).
+      await h.coordinator.coordinate(h.projectId);
+      expect(h.statusOf("run_ind")).toBe("merged");
+
+      // No re-exec: each entry is driven EXACTLY once (no infinite re-run loop).
+      expect(h.drives.filter((d) => d.runId === "run_s2")).toHaveLength(1);
+      // No spec was parked, and NO blind `merge_conflict_reexec` re-run fired.
+      expect(h.escalations).toEqual([]);
+      assertNoBlindReexec(h.events);
+    });
+
+    it("two conflicting siblings — ESCALATED: first merges, second's conflict is genuinely irreconcilable → needs_attention, the rest of the DAG keeps draining", async () => {
+      const h = suite.make();
+      h.seed({ runId: "run_s1", specId: "spec_s1", dependsOn: [], priority: "P0" });
+      h.seed({ runId: "run_s2", specId: "spec_s2", dependsOn: [], priority: "P1" });
+      h.seed({ runId: "run_ind", specId: "spec_ind", dependsOn: [], priority: "P2" });
+      // The second sibling's intents GENUINELY conflict with the first (the resolver
+      // exhausted its bounded re-plan budget) → the drive returns `needs_attention`.
+      h.scriptDrive("run_s2", { kind: "needs_attention", message: "intents genuinely conflict with spec_s1" });
+
+      // Pass 1: the P0 sibling merges.
+      await h.coordinator.coordinate(h.projectId);
+      expect(h.statusOf("run_s1")).toBe("merged");
+      // Pass 2: the second sibling is judged irreconcilable → PARKED at needs_attention
+      // + dequeued `needs_attention` (NOT the recoverable conflict path, NOT re-queued).
+      await h.coordinator.coordinate(h.projectId);
+      expect(h.statusOf("run_s2")).toBe("dequeued");
+      expect(h.escalations).toEqual([{ specId: "spec_s2", message: "intents genuinely conflict with spec_s1" }]);
+      const dq = h.events.find((e) => e.type === "merge.dequeued" && e.specId === "spec_s2");
+      expect(dq?.reason).toBe("needs_attention");
+      // Pass 3: the independent item drains — the escalation FREED the slot (liveness).
+      await h.coordinator.coordinate(h.projectId);
+      expect(h.statusOf("run_ind")).toBe("merged");
+
+      // TERMINAL + no re-exec: the parked sibling is driven exactly once, NEVER again.
+      expect(h.drives.filter((d) => d.runId === "run_s2")).toHaveLength(1);
+      // A re-pass over the now-drained queue re-drives nothing (no infinite re-exec).
+      const drivesBefore = h.drives.length;
+      await h.coordinator.coordinate(h.projectId);
+      expect(h.drives).toHaveLength(drivesBefore);
+      // And NO blind `merge_conflict_reexec` re-run ever fired on the drive path.
+      assertNoBlindReexec(h.events);
+    });
   });
+}
+
+/**
+ * Assert the deleted pre-PR2 blind re-run never reappears on the drive path. The old
+ * stub re-enqueued a fresh run on a conflict via a `merge_conflict_reexec` trigger
+ * that re-hit the same conflict forever; the real resolver/escalator replaced it. No
+ * recorded queue event may carry that trigger string in its type or reason.
+ */
+function assertNoBlindReexec(events: ReadonlyArray<RecordedQueueEvent>): void {
+  for (const event of events) {
+    expect(event.type).not.toContain("merge_conflict_reexec");
+    expect(event.reason ?? "").not.toContain("merge_conflict_reexec");
+  }
 }

@@ -285,6 +285,11 @@ export const DagSpecNeedsAttentionPayload = z.discriminatedUnion("source", [
       terminalRuns: z.array(StrandTerminalRun),
       // How many times the spec had already been re-enqueued (exceeded the cap).
       attempts: z.number().int().nonnegative(),
+      // The human-readable DECISION ask (the escalation discipline): framed as
+      // "the autonomous self-heal could not make progress — a human must decide",
+      // NOT "an error occurred". Mirrors the merge_conflict source's `message` so
+      // both parked-state reasons surface as decisions, not error reports.
+      message: z.string(),
     })
     .strict(),
   z

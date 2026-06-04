@@ -9,11 +9,18 @@
 //      running / queued / merge-queued / mid-LIVE-percolation is NOT a strand.
 //   2. A confirmed strand under the bounded re-enqueue cap → flip `active → pending`
 //      (re-enqueue, `notFromStatuses`-guarded), CLEAR the orphaned percolation
-//      marker (so it isn't re-detected), and emit a LOUD `dag.spec.unstranded`.
+//      marker (so it isn't re-detected), and emit a LOUD `dag.spec.unstranded`. This
+//      is the AUTONOMOUS SELF-HEAL tier (the escalation discipline): a stranding is a
+//      MECHANICAL fault, so the system's own first response is to re-run/re-plan the
+//      spec — no human is involved while the bounded budget lasts.
 //   3. A confirmed strand that has ALREADY been re-enqueued more than the cap →
 //      escalate to `needs_attention` (terminal — frees the slot, blocks only
-//      dependents) + emit `dag.spec.needs_attention` (loud, with the halt history).
-//      It does NOT re-enqueue, so the DAG can never infinite-loop on a strand.
+//      dependents) + emit `dag.spec.needs_attention` with a DECISION-framed message
+//      (source `strand`): the autonomous self-heal exhausted its budget, so a human
+//      must DECIDE how to unblock the spec — framed as "can't make progress, decide",
+//      NOT "an error occurred" (the human-escalation-discipline). It does NOT
+//      re-enqueue, so the DAG can never infinite-loop on a strand (the bounded
+//      backstop prevents runaway).
 //
 // Idempotent + composition-safe: it runs LAST so percolation owns any live-marker
 // spec (condition 4 hand-off); the flip is `notFromStatuses`-guarded; and the
@@ -42,6 +49,25 @@ import { decideStrand } from "../contracts/specStrandReconciler.js";
  * escalates rather than re-enqueuing a 4th time.)
  */
 export const MAX_UNSTRAND_ATTEMPTS = 3;
+
+/**
+ * The decision-framed escalation message (the human-escalation-discipline). The
+ * re-enqueue retries are the AUTONOMOUS self-heal tier — re-running/re-planning the
+ * spec is the system's own first response to a mechanical stranding. Only when that
+ * self-heal has run out (the bounded cap) does a human enter, and then the ask is a
+ * GENUINE "can't make progress, decide" — never "an error occurred". This message
+ * frames exactly that: the autonomous self-heal exhausted its budget, so a person
+ * must decide how to unblock the spec (not debug an error). It mirrors the
+ * merge_conflict source's product-decision framing so both parked states read alike.
+ */
+function strandEscalationMessage(specId: string, attempts: number): string {
+  return (
+    `the autonomous self-heal could not make progress on spec ${specId}: it was re-enqueued ` +
+    `${attempts} times (re-run/re-planned) and STILL stranded with no live run each time — a ` +
+    `decision is needed on how to unblock it (re-scope the spec, fix its dependencies, or route ` +
+    `past it), not an error to debug.`
+  );
+}
 
 export interface SpecStrandReconcilerDeps {
   readModel: SpecStrandReadModel;
@@ -97,6 +123,7 @@ export class SpecStrandReconciler implements SpecStrandReconcilerContract {
         reason: decision.reason,
         terminalRuns: decision.terminalRuns,
         attempts: priorUnstrands,
+        message: strandEscalationMessage(candidate.specId, priorUnstrands),
       });
       result.escalated.push(candidate.specId);
       return;
