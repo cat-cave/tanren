@@ -124,15 +124,21 @@ describe("cost source attribution", () => {
     expect(computeCostUsd(source, usage({ inputTokens: 100, outputTokens: 100 }))).toBeNull();
   });
 
-  it("BUDGET-SAFETY C1: a real ccusage figure prices even an unrecognized ref (NOT unattributed)", () => {
+  it("BUDGET-SAFETY C1: an UNRECOGNIZED ref stays 'unattributed' even with a ccusage figure (ccusage prices ONLY per_token)", () => {
+    // ccusage's dollar figure is only a trustworthy REAL spend signal for a
+    // recognized per-token (real-API) credential. On an unrecognized ref we cannot
+    // know the billing model, so a ccusage figure does NOT rescue it into a priced
+    // row — it stays the loud, fail-closed `unattributed` misconfig.
     const source = resolveCostSource({
       cli: "codex",
       authRef: "vault/secret/dev/random",
       ccusageCostUsd: 0.9,
       rawUsage: {},
     });
-    expect(source.costBasis).toBe("ccusage");
-    expect(source.unattributedRefKind).toBeNull();
+    expect(source.billingMode).toBe("unattributed");
+    expect(source.costBasis).toBe("unattributed");
+    expect(source.ccusageCostUsd).toBeNull();
+    expect(source.unattributedRefKind).not.toBeNull();
   });
 
   it("resolves an empty (no-credential) ref to cost_basis 'unknown', NOT unattributed", () => {
@@ -154,7 +160,11 @@ describe("cost source attribution", () => {
     expect(source.rate).toBeNull();
   });
 
-  it("lets ccusage price a subscription credential (the only real dollars it gets)", () => {
+  it("does NOT price a subscription credential from ccusage — its figure is notional token-value, not real spend", () => {
+    // A flat-fee subscription's within-window usage has $0 real marginal cost.
+    // ccusage computes the NOTIONAL list-price value of those tokens; that must
+    // never become a priced row (it would phantom-trip the dollar budget gate).
+    // The honest result is an `unknown`/NULL subscription row.
     const source = resolveCostSource({
       cli: "codex",
       authRef: "credential/codex/dev",
@@ -162,8 +172,8 @@ describe("cost source attribution", () => {
       rawUsage: {},
     });
     expect(source.billingMode).toBe("subscription");
-    expect(source.costBasis).toBe("ccusage");
-    expect(source.ccusageCostUsd).toBe(1.5);
+    expect(source.costBasis).toBe("unknown");
+    expect(source.ccusageCostUsd).toBeNull();
   });
 
   it("ignores a zero/negative ccusage figure and falls back to the normal basis", () => {
@@ -227,12 +237,15 @@ describe("cost USD computation", () => {
   });
 
   it("returns the real ccusage figure (not a token-priced estimate) for cost_basis 'ccusage'", () => {
+    // ccusage prices only a real-API (per_token) credential — that is the call whose
+    // ccusage figure is genuine billed spend.
     const source = resolveCostSource({
       cli: "codex",
-      authRef: "credential/codex/dev",
+      authRef: "credential/openai-api/k",
       ccusageCostUsd: 3.25,
       rawUsage: {},
     });
+    expect(source.costBasis).toBe("ccusage");
     // Tokens are irrelevant to the dollar figure here — ccusage already priced it.
     expect(computeCostUsd(source, usage({ inputTokens: 9_999_999, outputTokens: 9_999_999 }))).toBe("3.250000");
   });

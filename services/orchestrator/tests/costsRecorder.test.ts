@@ -177,7 +177,9 @@ describe("CostRecorder", () => {
     expect(serialized.join("\n")).not.toContain("unknown_source");
   });
 
-  it("records a ccusage figure as cost_basis 'ccusage' when given a positive per-call ccusageCostUsd", async () => {
+  it("records a ccusage figure as cost_basis 'ccusage' when given a positive per-call ccusageCostUsd (per-token cred)", async () => {
+    // ccusage prices ONLY a real-API (per_token) credential — a subscription's
+    // ccusage figure is notional and stays NULL (covered by the subscription test).
     const pool = new FakeCostPool();
     const recorder = new CostRecorder(pool as never, new FakeEventStore());
     const result = await recorder.record(
@@ -185,7 +187,7 @@ describe("CostRecorder", () => {
         ...context,
         cli: "codex",
         model: "gpt-codex",
-        authRef: "credential/codex/dev",
+        authRef: "credential/openai-api/prod",
         ccusageCostUsd: 0.75,
       },
       usage({ inputTokens: 100, totalTokens: 100 }),
@@ -199,18 +201,27 @@ describe("CostRecorder", () => {
 });
 
 // Pool that serves a SELECT of run rows and captures the apportioning UPDATEs.
+// Rows carry an optional `billing_mode` so the ccusage reconcile's per-token
+// restriction can be exercised: a SELECT that filters `billing_mode = 'per_token'`
+// returns ONLY those rows (matching the real SQL), so a subscription row is never
+// apportioned a ccusage dollar.
 class ReconcilePool {
   readonly updates: Array<{ id: string; costUsd: string }> = [];
   readonly bases: string[] = [];
 
-  constructor(private readonly rows: Array<{ id: string; total_tokens: number }>) {}
+  constructor(private readonly rows: Array<{ id: string; total_tokens: number; billing_mode?: string }>) {}
 
   async query(
     sql: string,
     params: ReadonlyArray<unknown> = [],
   ): Promise<{ rows: ReadonlyArray<Record<string, unknown>>; rowCount: number }> {
     if (sql.startsWith("SELECT id, total_tokens FROM cost_records")) {
-      return { rows: this.rows, rowCount: this.rows.length };
+      // A row with no explicit billing_mode is an ordinary per_token (real-API) row
+      // — the default the legacy apportionment cases assume.
+      const rows = sql.includes("billing_mode = 'per_token'")
+        ? this.rows.filter((row) => (row.billing_mode ?? "per_token") === "per_token")
+        : this.rows;
+      return { rows, rowCount: rows.length };
     }
     if (sql.startsWith("UPDATE cost_records SET cost_usd")) {
       this.updates.push({ id: String(params[0]), costUsd: String(params[1]) });
@@ -252,6 +263,26 @@ describe("CostRecorder.reconcileRunCostFromCcusage", () => {
     const recorder = new CostRecorder(pool as never, new FakeEventStore());
     expect(await recorder.reconcileRunCostFromCcusage("run_test", 5)).toEqual({ updated: 0 });
     expect(pool.updates).toHaveLength(0);
+  });
+
+  it("apportions a ccusage total across PER_TOKEN rows ONLY — subscription rows stay NULL (apex-v19 regression)", async () => {
+    // A run mixing a real-API (per_token) row and subscription rows. ccusage is the
+    // notional token-value of the subscription work — NOT real spend — so the
+    // reconcile must apportion the ccusage total across the per_token row(s) only,
+    // leaving the subscription rows untouched (NULL). This is the exact bug that
+    // mis-billed apex v19 $58.55 of phantom subscription spend.
+    const pool = new ReconcilePool([
+      { id: "sub_a", total_tokens: 500, billing_mode: "subscription" },
+      { id: "pt", total_tokens: 250, billing_mode: "per_token" },
+      { id: "sub_b", total_tokens: 999, billing_mode: "subscription" },
+    ]);
+    const recorder = new CostRecorder(pool as never, new FakeEventStore());
+    const { updated } = await recorder.reconcileRunCostFromCcusage("run_test", 3);
+    // Only the per_token row is priced; it absorbs the WHOLE ccusage total (it is
+    // the only row in the per-token denominator).
+    expect(updated).toBe(1);
+    expect(pool.updates).toEqual([{ id: "pt", costUsd: "3.000000" }]);
+    expect(pool.bases).toEqual(["ccusage"]);
   });
 });
 

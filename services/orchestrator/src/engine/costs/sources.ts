@@ -187,20 +187,22 @@ export function resolveCostSource(input: AttributionInput): CostSource {
     typeof input.ccusageCostUsd === "number" && Number.isFinite(input.ccusageCostUsd) && input.ccusageCostUsd > 0
       ? input.ccusageCostUsd
       : null;
-  if (ccusageCostUsd !== null) {
-    // A real measured dollar figure prices the call regardless of ref kind —
-    // including an otherwise-unrecognized ref, which is then NOT unattributed.
-    return {
-      billingMode: ccusageBillingMode(classification.billingMode),
-      costBasis: "ccusage",
-      provider: classification.provider,
-      rate: null,
-      ccusageCostUsd,
-      unattributedRefKind: null,
-      rawUsage: input.rawUsage,
-    };
-  }
   if (classification.billingMode === "per_token") {
+    // A real-API (per-token) credential is the ONLY billing mode ccusage may price:
+    // ccusage's figure is the REAL billed/computed cost of a metered call. A ccusage
+    // figure on a SUBSCRIPTION credential is the NOTIONAL token-value of flat-fee
+    // usage (no real marginal spend) and is dropped below — never treated as spend.
+    if (ccusageCostUsd !== null) {
+      return {
+        billingMode: "per_token",
+        costBasis: "ccusage",
+        provider: classification.provider,
+        rate: null,
+        ccusageCostUsd,
+        unattributedRefKind: null,
+        rawUsage: input.rawUsage,
+      };
+    }
     const rate = providerRate(classification.provider) ?? null;
     return {
       billingMode: "per_token",
@@ -228,7 +230,12 @@ export function resolveCostSource(input: AttributionInput): CostSource {
     };
   }
   // subscription, self_hosted, or absent → an HONESTLY-unpriceable NULL-dollar
-  // row. `absent` (the no-credential path) maps to self_hosted, unchanged.
+  // row. `absent` (the no-credential path) maps to self_hosted, unchanged. A
+  // ccusage figure (if any) is DELIBERATELY DROPPED here: for a flat-fee
+  // subscription it is the notional token-value of within-window usage, NOT real
+  // marginal spend, so it must never become a priced row. The only REAL marginal
+  // subscription spend is credit-drawdown overage, recorded as `cost_basis='credits'`
+  // by the run-end credit reconcile (a separate, real signal) — never by ccusage.
   return {
     billingMode: classification.billingMode === "absent" ? "self_hosted" : classification.billingMode,
     costBasis: "unknown",
@@ -238,20 +245,6 @@ export function resolveCostSource(input: AttributionInput): CostSource {
     unattributedRefKind: null,
     rawUsage: input.rawUsage,
   };
-}
-
-// The billing_mode stamped on a ccusage-priced row: a recognized mode is kept;
-// an `absent`/`unrecognized` ref that nonetheless produced a real ccusage dollar
-// figure is recorded as self_hosted (a real measured cost, so NOT unattributed).
-function ccusageBillingMode(mode: RefClassification["billingMode"]): BillingMode {
-  switch (mode) {
-    case "subscription":
-    case "per_token":
-    case "self_hosted":
-      return mode;
-    default:
-      return "self_hosted";
-  }
 }
 
 // computeCostUsd returns a fixed-precision dollar string for the NUMERIC(14,6)
