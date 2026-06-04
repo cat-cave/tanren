@@ -111,24 +111,37 @@ jobs:
           echo "exit_code=$?" >> "$GITHUB_OUTPUT"
           set -e
       # Upload the report(s) + the test-step outcome to Tanren's ingest endpoint,
-      # authed with the per-run token already propagated as an Actions secret.
-      # Runs on success OR failure so a failing/flaky run is still ingested.
+      # HMAC-signed with the CI ingest signing key already propagated as an Actions
+      # secret (\`TANREN_RUN_TOKEN\`) — the SAME secret the ingest endpoint validates
+      # against (the per-installation CI-webhook signing secret). The endpoint keys
+      # off \`runId\` in the BODY, so the run id is the PR's run branch (\`tanren/<runId>\`)
+      # — no per-run secret. Runs on success OR failure so a failing/flaky run is
+      # still ingested. The whole step is GATED on both repo-level secrets being
+      # present (CI-intelligence is propagated): when CI-intel is NOT configured the
+      # step is a clear no-op, never a silent auth failure.
       - name: upload-junit
-        if: success() || failure()
+        if: (success() || failure()) && env.TANREN_INGEST_URL != '' && env.TANREN_RUN_TOKEN != ''
         env:
           TANREN_INGEST_URL: \${{ secrets.TANREN_INGEST_URL }}
           TANREN_RUN_TOKEN: \${{ secrets.TANREN_RUN_TOKEN }}
-          TANREN_RUN_ID: \${{ secrets.TANREN_RUN_ID }}
+          # The run id is the PR head branch with the \`tanren/\` prefix stripped
+          # (the run's PR branch is \`tanren/<runId>\`); empty for a non-run branch.
+          TANREN_HEAD_REF: \${{ github.head_ref }}
         run: |
           python3 - <<'PY'
-          import base64, hashlib, hmac, json, os, urllib.request
+          import hashlib, hmac, json, os, sys, urllib.request
+          head_ref = os.environ.get("TANREN_HEAD_REF", "")
+          run_id = head_ref[len("tanren/"):] if head_ref.startswith("tanren/run_") else ""
+          if run_id == "":
+              print("upload-junit: PR head ref is not a tanren run branch; skipping ingest")
+              sys.exit(0)
           reports = []
           for path in ("reports/junit.xml",):
               if os.path.exists(path):
                   with open(path, "r", encoding="utf-8") as fh:
                       reports.append(fh.read())
           body = json.dumps({
-              "runId": os.environ["TANREN_RUN_ID"],
+              "runId": run_id,
               "headSha": os.environ.get("GITHUB_SHA", ""),
               "attempt": int(os.environ.get("GITHUB_RUN_ATTEMPT", "1")),
               "testExitCode": int("\${{ steps.test.outputs.exit_code }}" or "0"),
