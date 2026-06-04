@@ -8,12 +8,8 @@
 // The HTTP client + token are injected, so the orchestrator wires it from the
 // P3-0003 App-token resolver and tests use the in-memory fake instead.
 
-import {
-  GitHubPullRequestService,
-  parseGitHubRepository,
-  type GitHubHttpClient,
-  type GitHubRepository,
-} from "../providers/github.js";
+import { GitHubPullRequestService } from "../providers/githubPullRequestReuse.js";
+import { parseGitHubRepository, type GitHubHttpClient, type GitHubRepository } from "../providers/github.js";
 import type { ConfigGateGitHub, GateConfigPullRequest } from "./tanrenConfigGate.js";
 
 function repoApi(repo: GitHubRepository, suffix: string): string {

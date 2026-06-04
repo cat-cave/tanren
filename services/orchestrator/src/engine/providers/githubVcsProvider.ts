@@ -42,8 +42,8 @@ import type {
   VcsProvider,
 } from "../contracts/vcsProvider.js";
 import { pushWorkspaceBranchToGitHub } from "../workspace/githubPush.js";
+import { GitHubPullRequestService } from "./githubPullRequestReuse.js";
 import {
-  GitHubPullRequestService,
   GitHubStatusService,
   parseGitHubPullRequestUrl,
   parseGitHubRepository,
