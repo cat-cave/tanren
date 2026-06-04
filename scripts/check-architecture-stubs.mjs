@@ -76,11 +76,6 @@ export const productionStubAllowlist = [
     identifier: "StubChannel",
     reason: "unconfigured channel → 'stubbed' audit record (honest not-wired), never a silent drop",
   },
-  {
-    file: "services/orchestrator/src/routes/audits/index.ts",
-    identifier: "createNoopPassRunner",
-    pending: "P3 — replaced by the SSH/Answerer-backed read-only audit pass runner",
-  },
 ];
 
 function isProductionSource(file) {

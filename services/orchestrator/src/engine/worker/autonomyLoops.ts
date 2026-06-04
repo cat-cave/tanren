@@ -209,8 +209,8 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
     allocator: deps.allocator,
     ssh: deps.ssh,
     githubHttp: deps.githubHttp,
-    // App-only intake (creds-audit fix): thread the shared App-token minter so the
-    // poller's per-org GitHub issues connector mints an installation token.
+    // The shared App-token minter: the poller's per-org issues connector mints an
+    // installation token (App-only intake), and the audit pass runner resolves a repo-read token.
     ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
     identitySecretRef: deps.identitySecretRef,
     // Plane-split: the intake auto-route's spec/run creation routes through the

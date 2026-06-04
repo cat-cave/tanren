@@ -14,7 +14,7 @@ import { runWithSystemScope } from "@tanren/db";
 import { AuditsStore } from "./store.js";
 import { runAuditJob } from "./scheduler.js";
 import type { AuditCadence, AuditJob, AuditPassRunner } from "./types.js";
-import type { TriageAnswerer } from "../inbox/index.js";
+import type { AutoRouteDeps, TriageAnswerer } from "../inbox/index.js";
 
 // The cadence → minimum elapsed window before a job is due again. A job with no
 // `lastRun` is always due (its first pass).
@@ -32,6 +32,11 @@ export interface AuditSchedulerLoopDeps {
   // Per-job triage answerer factory — a finding is triaged by the real provider
   // answerer (no §8a fallback). Consulted only when a pass produces a finding.
   answererFactory: (target: { orgId: string; projectId?: string }) => TriageAnswerer;
+  // Autonomous DAG insert (autonomy-engine.md §1d): the auto-route deps that
+  // commit an `auto_routed` finding's `routableSpec` into the DAG — so a
+  // scheduled audit autonomously becomes a real spec. Carries the control-plane
+  // `runStateWriter` (plane-split). Mirrors the intake poller.
+  autoRoute: AutoRouteDeps;
   now?: () => number;
 }
 
@@ -103,6 +108,7 @@ export class AuditSchedulerLoop {
                 orgId: job.orgId,
                 ...(job.projectId === null ? {} : { projectId: job.projectId }),
               }),
+              autoRoute: this.deps.autoRoute,
             },
             job,
           );

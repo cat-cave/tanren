@@ -38,6 +38,7 @@ import { wrapProviderInterviewAnswerer, type InterviewAnswerer } from "./intervi
 import { wrapProviderDiscoveryAnswerer, type DiscoveryAnswerer, type DiscoveryResult } from "./discovery/index.js";
 import { wrapProviderTriageAnswerer, type TriageAnswerer, type CandidateTriage } from "./inbox/index.js";
 import { wrapProviderReconAnswerer, type ReconAnswerer, type ReconReport } from "./brownfield/index.js";
+import { wrapProviderAuditAnswerer, type AuditAnswerer, type AuditPassReport } from "./audits/index.js";
 import {
   wrapProviderAnswerer,
   type ForgeConversationAnswerer,
@@ -257,6 +258,13 @@ export function buildForgeReconAnswererFactory(
   infra: ForgeAnswererInfra,
 ): (target: ForgeAnswererTarget) => ReconAnswerer {
   return (target) => wrapProviderReconAnswerer(forgeAllocatingAnswererAdapter<ReconReport>(infra, target));
+}
+
+/** Build a production scheduled-audit answerer factory (project-scoped). */
+export function buildForgeAuditAnswererFactory(
+  infra: ForgeAnswererInfra,
+): (target: ForgeAnswererTarget) => AuditAnswerer {
+  return (target) => wrapProviderAuditAnswerer(forgeAllocatingAnswererAdapter<AuditPassReport>(infra, target));
 }
 
 /** Build a production ⌘K conversation answerer factory (project-scoped). */
