@@ -29,14 +29,9 @@ import {
 
 /**
  * Run the planner-loop workflow under the EXPLICIT per-job SYSTEM scope, mirroring
- * production: the run worker (`runExecutor`) wraps the workflow in
- * `runWithJobOrgId` / `runWithSystemJobScope` and hands it the `orgScopingPool`, so
- * the workflow's tenant ops (`insertPlannerTask`, cost recorder, the M6 budget
- * preflight) always run under a scope. These DB-free tests drive the workflow
- * directly over a fake pool, so they establish the same null-org system-job scope
- * here — otherwise the tenant write resolves with no ambient scope and the hardened
- * seam correctly throws `MissingOrgScopeError` (the test pool became pool-shaped
- * once it grew a `connect()` for the budget preflight).
+ * production (the run worker wraps the workflow in `runWithSystemJobScope`). Without
+ * it the tenant write resolves with no ambient scope and the hardened seam correctly
+ * throws `MissingOrgScopeError`.
  */
 export function runPlannerLoopScoped(input: RunPlannerLoopInput): Promise<PlannerRunResult> {
   return runWithSystemJobScope(() => runPlannerLoopWorkflow(input));
@@ -382,7 +377,7 @@ export class PlannerRunPool {
   // Every `UPDATE specs SET status = ...` in spec-write order. The review-rework
   // re-entry writes 'in_flight'; the merged/handed-off tail writes merged/done.
   readonly specStatuses: string[] = [];
-  private readonly costRows: Array<{ id: string; total_tokens: number }> = [];
+  private readonly costRows: Array<{ id: string; total_tokens: number; billing_mode: string }> = [];
   private nextCostId = 1;
   private ciTask: { taskId: string; attempt: number } | undefined;
 
@@ -408,17 +403,20 @@ export class PlannerRunPool {
 
   async query(sql: string, params: unknown[] = []): Promise<{ rows: unknown[]; rowCount: number }> {
     const trimmed = sql.trim();
-    if (trimmed.startsWith("SELECT id, total_tokens FROM cost_records")) {
-      return {
-        rows: this.costRows.map((row) => ({ id: row.id, total_tokens: row.total_tokens })),
-        rowCount: this.costRows.length,
-      };
+    if (trimmed.startsWith("SELECT id, total_tokens, billing_mode FROM cost_records")) {
+      return { rows: [...this.costRows], rowCount: this.costRows.length };
     }
-    if (trimmed.startsWith("UPDATE cost_records SET cost_usd")) {
+    if (trimmed.startsWith("UPDATE cost_records SET")) {
       return { rows: [], rowCount: 1 };
     }
     if (trimmed.startsWith("INSERT INTO cost_records")) {
-      this.costRows.push({ id: String(this.nextCostId++), total_tokens: Number(params[11] ?? 0) });
+      // total_tokens $12 (idx 11); billing_mode $15 (idx 14, after notional_cost_usd $14).
+      const id = String(this.nextCostId++);
+      this.costRows.push({
+        id,
+        total_tokens: Number(params[11] ?? 0),
+        billing_mode: String(params[14] ?? "self_hosted"),
+      });
       return { rows: [], rowCount: 1 };
     }
     if (trimmed.startsWith("INSERT INTO tasks")) {

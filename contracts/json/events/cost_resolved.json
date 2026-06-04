@@ -24,6 +24,16 @@
     "model": {
       "type": "string"
     },
+    "notionalCostUsd": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "provider": {
       "type": "string"
     },
@@ -37,6 +47,7 @@
     "provider",
     "model",
     "costUsd",
+    "notionalCostUsd",
     "billingMode",
     "costBasis"
   ],

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyAuthRef, computeCostUsd, resolveCostSource } from "../src/engine/costs/index.js";
+import { classifyAuthRef, computeCostUsd, computeNotionalUsd, resolveCostSource } from "../src/engine/costs/index.js";
 import type { TokenUsage } from "../src/engine/providers/types.js";
 
 function usage(partial: Partial<TokenUsage>): TokenUsage {
@@ -248,5 +248,55 @@ describe("cost USD computation", () => {
     expect(source.costBasis).toBe("ccusage");
     // Tokens are irrelevant to the dollar figure here — ccusage already priced it.
     expect(computeCostUsd(source, usage({ inputTokens: 9_999_999, outputTokens: 9_999_999 }))).toBe("3.250000");
+  });
+});
+
+describe("notional (ListCost) computation — computeNotionalUsd", () => {
+  // openai list rate: 2.5/M input, 10/M output. 1M input + 0.5M output = 2.5 + 5 = $7.50.
+  const NOTIONAL_TOKENS = usage({ inputTokens: 1_000_000, outputTokens: 500_000, totalTokens: 1_500_000 });
+
+  it("ALWAYS computes notional list value for a subscription call (real spend is NULL there)", () => {
+    const source = resolveCostSource({ cli: "codex", authRef: "credential/codex/dev", rawUsage: {} });
+    // REAL spend is NULL (subscription window has no marginal cost)...
+    expect(computeCostUsd(source, NOTIONAL_TOKENS)).toBeNull();
+    // ...but NOTIONAL is the openai list value of the same tokens.
+    expect(computeNotionalUsd(source, NOTIONAL_TOKENS)).toBe("7.500000");
+  });
+
+  it("notional == real for a per_token provider_pricing call", () => {
+    const source = resolveCostSource({ cli: "codex", authRef: "credential/openai-api/k", rawUsage: {} });
+    expect(computeNotionalUsd(source, NOTIONAL_TOKENS)).toBe(computeCostUsd(source, NOTIONAL_TOKENS));
+    expect(computeNotionalUsd(source, NOTIONAL_TOKENS)).toBe("7.500000");
+  });
+
+  it("prefers a positive ccusage figure as notional over the static rate (subscription)", () => {
+    // A subscription cred WITH ccusage: real spend still NULL, but notional uses the
+    // (more-accurate) ccusage value, not the $7.50 static-rate figure.
+    const source = resolveCostSource({
+      cli: "codex",
+      authRef: "credential/codex/dev",
+      ccusageCostUsd: 1.5,
+      rawUsage: {},
+    });
+    expect(computeCostUsd(source, NOTIONAL_TOKENS)).toBeNull();
+    expect(computeNotionalUsd(source, NOTIONAL_TOKENS)).toBe("1.500000");
+  });
+
+  it("returns null notional for an UNRECOGNIZED ref (unpriced on both axes — no list value, ccusage untrusted)", () => {
+    const source = resolveCostSource({
+      cli: "codex",
+      authRef: "vault/secret/dev/random",
+      ccusageCostUsd: 0.9,
+      rawUsage: {},
+    });
+    expect(computeCostUsd(source, NOTIONAL_TOKENS)).toBeNull();
+    expect(computeNotionalUsd(source, NOTIONAL_TOKENS)).toBeNull();
+  });
+
+  it("returns null notional for a self-hosted ref whose provider has no list rate", () => {
+    // `credential/self-hosted/qwen` → provider 'qwen', which has NO list rate, so even
+    // notional is honestly null (no fake estimate).
+    const source = resolveCostSource({ cli: "fake", authRef: "credential/self-hosted/qwen", rawUsage: {} });
+    expect(computeNotionalUsd(source, NOTIONAL_TOKENS)).toBeNull();
   });
 });

@@ -94,9 +94,19 @@ export const costRecords = pgTable(
     outputTokens: integer("output_tokens").notNull().default(0),
     reasoningOutputTokens: integer("reasoning_output_tokens").notNull().default(0),
     totalTokens: integer("total_tokens").notNull().default(0),
-    // Cost is best-effort. NULL is an honest, allowed state when no reliable
-    // cost basis exists (subscription/self-hosted/unpriced models).
+    // REAL SPEND (FOCUS BilledCost): actual cash out the door. NULL is an honest,
+    // allowed state when no reliable real-cost basis exists (subscription
+    // within-window / self-hosted / unpriced models). The budget gate sums THIS
+    // column — it is the real-spend ceiling signal. Per-token API = real;
+    // subscription within-window = NULL; subscription overage (credits) = real.
     costUsd: numeric("cost_usd", { precision: 14, scale: 6 }),
+    // NOTIONAL VALUE (FOCUS ListCost): the dollar value of the tokens at public
+    // API LIST RATES, computed for EVERY call regardless of billing mode
+    // (including subscription/self_hosted, where real spend is $0/NULL). This is
+    // the comparable, forecastable figure — NOT real spend, and NEVER summed by
+    // the budget gate. NULL only when no provider rate is known (unpriced model /
+    // unattributed credential).
+    notionalCostUsd: numeric("notional_cost_usd", { precision: 14, scale: 6 }),
     billingMode: text("billing_mode").notNull(),
     costBasis: text("cost_basis").notNull(),
     costSourceRaw: jsonb("cost_source_raw")

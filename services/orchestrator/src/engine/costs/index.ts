@@ -13,6 +13,7 @@ export {
   type ProviderRate,
   classifyAuthRef,
   computeCostUsd,
+  computeNotionalUsd,
   providerRate,
   resolveCostSource,
 } from "./sources.js";

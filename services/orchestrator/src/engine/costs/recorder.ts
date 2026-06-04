@@ -12,7 +12,13 @@ import type pg from "pg";
 import type { TokenUsage } from "../providers/types.js";
 import type { EventStore } from "../eventStore.js";
 import { isPool, resolveWritableClient, withJobOrgScope, type QueryClient } from "../data/orgScopedDb.js";
-import { type AttributionInput, type CostSource, computeCostUsd, resolveCostSource } from "./sources.js";
+import {
+  type AttributionInput,
+  type CostSource,
+  computeCostUsd,
+  computeNotionalUsd,
+  resolveCostSource,
+} from "./sources.js";
 
 type RecorderClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
@@ -39,7 +45,13 @@ export interface CostRecordContext {
 export interface RecordedCost {
   billingMode: CostSource["billingMode"];
   costBasis: CostSource["costBasis"];
+  // REAL SPEND (FOCUS BilledCost): NULL for subscription within-window / self-hosted
+  // / unpriced; the budget gate sums this.
   costUsd: string | null;
+  // NOTIONAL VALUE (FOCUS ListCost): the tokens' dollar value at provider list rates,
+  // computed for EVERY billing mode whose provider has a rate (incl. subscription).
+  // NULL only when no provider rate is known. NEVER summed by the budget gate.
+  notionalCostUsd: string | null;
   tokens: TokenUsage;
   provider: string;
 }
@@ -114,6 +126,11 @@ export class CostRecorder {
     };
     const source = resolveCostSource(attribution);
     const costUsd = computeCostUsd(source, tokens);
+    // NOTIONAL (FOCUS ListCost): the list-rate value of the tokens, computed for
+    // EVERY call whose provider has a rate (incl. subscription/self_hosted, where
+    // `costUsd` real spend is NULL) — the comparable, forecastable figure. NEVER
+    // summed by the budget gate.
+    const notionalCostUsd = computeNotionalUsd(source, tokens);
     // RLS R2 cohort-2 (cost_records write path): route the INSERT through the
     // ambient org-scoped client when this recorder was handed the shared pool and
     // a `runWithOrgScope` scope is open; fall back to the pool when none (inert,
@@ -126,8 +143,8 @@ export class CostRecorder {
       `INSERT INTO cost_records
        (task_id, run_id, project_id, org_id, cli, provider, model,
         input_tokens, cached_input_tokens, cache_creation_tokens, output_tokens, reasoning_output_tokens, total_tokens,
-        cost_usd, billing_mode, cost_basis, cost_source_raw, user_id)
-       VALUES ($1, $2, $3, (SELECT org_id FROM runs WHERE run_id = $2), $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::jsonb, $17)`,
+        cost_usd, notional_cost_usd, billing_mode, cost_basis, cost_source_raw, user_id)
+       VALUES ($1, $2, $3, (SELECT org_id FROM runs WHERE run_id = $2), $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17::jsonb, $18)`,
       [
         context.taskId,
         context.runId,
@@ -142,6 +159,7 @@ export class CostRecorder {
         tokens.reasoningOutputTokens,
         tokens.totalTokens,
         costUsd,
+        notionalCostUsd,
         source.billingMode,
         source.costBasis,
         JSON.stringify({
@@ -167,6 +185,7 @@ export class CostRecorder {
         provider: source.provider,
         model: context.model,
         costUsd,
+        notionalCostUsd,
         billingMode: source.billingMode,
         costBasis: source.costBasis,
       },
@@ -195,6 +214,7 @@ export class CostRecorder {
       billingMode: source.billingMode,
       costBasis: source.costBasis,
       costUsd,
+      notionalCostUsd,
       tokens,
       provider: source.provider,
     };
@@ -279,17 +299,17 @@ export class CostRecorder {
     totalCostUsd: number,
     basis: "ccusage" | "credits",
   ): Promise<{ updated: number }> {
-    // ccusage's run total is REAL spend ONLY for per-token (real-API) credentials;
-    // a subscription's ccusage figure is notional token-value (no real marginal
-    // spend), so a ccusage reconcile apportions across the run's `per_token` rows
-    // ONLY and leaves subscription/self_hosted rows NULL. A `credits` reconcile is
-    // genuine subscription-overage spend, so it apportions across ALL of the run's
-    // rows (unchanged). Restricting the SELECT also restricts the token-share
-    // denominator + the per-row UPDATEs (they key off the SELECTed ids).
-    const rows = await client.query<{ id: string; total_tokens: number }>(
-      basis === "ccusage"
-        ? "SELECT id, total_tokens FROM cost_records WHERE run_id = $1 AND billing_mode = 'per_token'"
-        : "SELECT id, total_tokens FROM cost_records WHERE run_id = $1",
+    // The token-share denominator is ALWAYS the run's WHOLE token count (all rows):
+    //   - ccusage's run total is the NOTIONAL value of ALL the run's tokens, so it
+    //     apportions across EVERY row by token share into `notional_cost_usd`. The
+    //     same per-row figure is also the REAL spend (`cost_usd`) — but ONLY for
+    //     `billing_mode='per_token'` rows (for per_token real == notional); a
+    //     subscription/self_hosted row's real spend stays NULL (no marginal cost).
+    //   - a `credits` reconcile is genuine subscription-overage REAL spend, so it
+    //     apportions across ALL rows into `cost_usd` ONLY, leaving the notional value
+    //     each row already carries from write time untouched (unchanged behavior).
+    const rows = await client.query<{ id: string; total_tokens: number; billing_mode: string }>(
+      "SELECT id, total_tokens, billing_mode FROM cost_records WHERE run_id = $1",
       [runId],
     );
     const totalTokens = rows.rows.reduce((sum, row) => sum + Number(row.total_tokens), 0);
@@ -299,14 +319,47 @@ export class CostRecorder {
     let updated = 0;
     for (const row of rows.rows) {
       const share = Number(row.total_tokens) / totalTokens;
-      const costUsd = (totalCostUsd * share).toFixed(6);
-      await client.query("UPDATE cost_records SET cost_usd = $2, cost_basis = $3 WHERE id = $1", [
-        row.id,
-        costUsd,
-        basis,
-      ]);
-      updated += 1;
+      const apportioned = (totalCostUsd * share).toFixed(6);
+      updated += await this.applyApportionedRow(client, row, apportioned, basis);
     }
     return { updated };
+  }
+
+  // Apply ONE apportioned per-row figure under the per-mode column rule, returning 1
+  // if a row was written, else 0 (a credits-basis non-per_token row whose notional is
+  // unaffected and whose real spend IS this row's share still counts as written).
+  private async applyApportionedRow(
+    client: QueryClient,
+    row: { id: string; billing_mode: string },
+    apportioned: string,
+    basis: "ccusage" | "credits",
+  ): Promise<number> {
+    if (basis === "credits") {
+      // Genuine subscription-overage REAL spend → `cost_usd` on every row, basis
+      // 'credits'. `notional_cost_usd` is left as written (its own list-rate value).
+      await client.query("UPDATE cost_records SET cost_usd = $2, cost_basis = $3 WHERE id = $1", [
+        row.id,
+        apportioned,
+        basis,
+      ]);
+      return 1;
+    }
+    // ccusage: NOTIONAL on EVERY row; REAL (`cost_usd`) on per_token rows ONLY (real
+    // == notional there). A subscription/self_hosted row gets ONLY notional and keeps
+    // its NULL real spend — so subscription notional value is captured without ever
+    // tripping the real-spend budget gate.
+    if (row.billing_mode === "per_token") {
+      await client.query(
+        "UPDATE cost_records SET cost_usd = $2, notional_cost_usd = $2, cost_basis = $3 WHERE id = $1",
+        [row.id, apportioned, basis],
+      );
+    } else {
+      await client.query("UPDATE cost_records SET notional_cost_usd = $2, cost_basis = $3 WHERE id = $1", [
+        row.id,
+        apportioned,
+        basis,
+      ]);
+    }
+    return 1;
   }
 }

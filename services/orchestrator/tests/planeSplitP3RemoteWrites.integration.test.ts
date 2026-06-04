@@ -231,15 +231,28 @@ describeDb("plane-split P3 — control-plane run-state write endpoints (real PG,
     const result = await writer.reconcileCost({ runId, orgId: ORG, totalCostUsd: 4, basis: "ccusage" });
     expect(result).toEqual({ updated: 2 });
 
-    const rows = await ownerPool().query<{ total_tokens: number; cost_usd: string; cost_basis: string }>(
-      "SELECT total_tokens, cost_usd, cost_basis FROM cost_records WHERE run_id = $1 ORDER BY total_tokens DESC",
+    const rows = await ownerPool().query<{
+      total_tokens: number;
+      cost_usd: string;
+      notional_cost_usd: string;
+      cost_basis: string;
+    }>(
+      "SELECT total_tokens, cost_usd, notional_cost_usd, cost_basis FROM cost_records WHERE run_id = $1 ORDER BY total_tokens DESC",
       [runId],
     );
+    // Both rows are per_token (real-API), so REAL == NOTIONAL: the ccusage reconcile
+    // apportions $4 by token share (3.00 / 1.00) into BOTH cost_usd AND
+    // notional_cost_usd, with cost_basis = 'ccusage'.
     expect(
-      rows.rows.map((r) => ({ tokens: Number(r.total_tokens), cost: Number(r.cost_usd), basis: r.cost_basis })),
+      rows.rows.map((r) => ({
+        tokens: Number(r.total_tokens),
+        cost: Number(r.cost_usd),
+        notional: Number(r.notional_cost_usd),
+        basis: r.cost_basis,
+      })),
     ).toEqual([
-      { tokens: 30, cost: 3, basis: "ccusage" },
-      { tokens: 10, cost: 1, basis: "ccusage" },
+      { tokens: 30, cost: 3, notional: 3, basis: "ccusage" },
+      { tokens: 10, cost: 1, notional: 1, basis: "ccusage" },
     ]);
   });
 
