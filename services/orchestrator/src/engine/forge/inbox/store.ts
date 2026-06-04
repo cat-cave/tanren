@@ -143,6 +143,22 @@ export const InboxStore = {
     return row === undefined ? undefined : mapSource(row);
   },
 
+  // Replace a source's `config` jsonb (the webhook-provision path stamps a
+  // `webhookSecretRef` here — no migration; the secret REF lives in the config blob).
+  async updateSourceConfig(
+    client: QueryClient,
+    sourceId: string,
+    config: Record<string, unknown>,
+  ): Promise<InboxSource | undefined> {
+    const result = await client.query<SourceRow>(
+      `UPDATE inbox_sources SET config = $2::jsonb, updated_at = now() WHERE id = $1
+       RETURNING id, org_id, project_id, kind, name, detail, config, enabled, auto_route`,
+      [sourceId, JSON.stringify(config)],
+    );
+    const row = result.rows[0];
+    return row === undefined ? undefined : mapSource(row);
+  },
+
   // Idempotent upsert keyed by (source_id, external_id): re-polling the same
   // issue updates title/body/severity but never duplicates the candidate. A
   // already-resolved candidate keeps its status (we only refresh content/triage

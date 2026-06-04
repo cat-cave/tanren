@@ -23,6 +23,7 @@ import type { ActorContext } from "../../../auth/schemas.js";
 import type { RunStateWriter } from "../../contracts/runStateWriter.js";
 import { systemActor } from "../../state/actor.js";
 import { DiscoveryStore, type ExistingSpecSummary } from "../../repositories/discovery.js";
+import { SpecNotFoundError } from "../../workflow/projectSpec.js";
 import { acceptProposals, type DiscoveryInsight, type PlacementKind, type ProposedSpec } from "../discovery/index.js";
 import { InboxStore } from "./store.js";
 import type {
@@ -148,33 +149,53 @@ export async function autoRouteCandidate(
   autoRouteDeps: AutoRouteDeps,
 ): Promise<AutoRouteResult> {
   if (candidate.projectId === null) throw new CandidateNotPlaceableError(candidate.id);
-  const proposal: ProposedSpec = {
-    proposalId: `auto_${candidate.id}`,
-    title: routableSpec.title,
-    description: routableSpec.description,
-    acceptanceCriteria: routableSpec.acceptanceCriteria,
-    dependsOn: routableSpec.dependsOn,
-    priority: routableSpec.priority,
-    estLabel: "",
-  };
-  const { accepted } = await acceptProposals(
-    {
-      pool: deps.pool,
-      // Plane-split: route the spec INSERT + provenance UPDATE through the control
-      // plane when wired (else direct on the pool — byte-identical to the operator).
-      ...(autoRouteDeps.runStateWriter !== undefined && { runStateWriter: autoRouteDeps.runStateWriter }),
-    },
-    {
-      projectId: candidate.projectId,
-      insight: insightFor(candidate),
-      proposals: [proposal],
-      // A new ingested unit of work slots onto the backlog by default; the
-      // model's `dependsOn` (carried onto the spec) determines real DAG order.
-      placementKind: "slot_after",
-      placementLabel: "auto-routed from intake",
-      actor: autoRouteDeps.resolveActor(candidate.orgId),
-    },
-  );
+  // L1 (intake hardening): the triage LLM can HALLUCINATE a `dependsOn` referencing
+  // a spec id that does not exist in this project. That makes `acceptProposals` →
+  // `createSpec` → `ensureSpecDependenciesExist` throw `SpecNotFoundError`, which —
+  // left unhandled — strands the candidate at `auto_routed`/`resolvedSpecId=null`
+  // and (on the webhook path) 500s GitHub into a retry storm. Rather than brick the
+  // unit of work over a bad edge, DROP the unsatisfiable dependency edges and retry
+  // ONCE with no `dependsOn` (the spec still lands on the backlog; a real human can
+  // re-add an edge later). Only a dependency hallucination is recovered this way —
+  // any other failure propagates.
+  const accept = (dependsOn: string[]) =>
+    acceptProposals(
+      {
+        pool: deps.pool,
+        // Plane-split: route the spec INSERT + provenance UPDATE through the control
+        // plane when wired (else direct on the pool — byte-identical to the operator).
+        ...(autoRouteDeps.runStateWriter !== undefined && { runStateWriter: autoRouteDeps.runStateWriter }),
+      },
+      {
+        projectId: candidate.projectId!,
+        insight: insightFor(candidate),
+        proposals: [
+          {
+            proposalId: `auto_${candidate.id}`,
+            title: routableSpec.title,
+            description: routableSpec.description,
+            acceptanceCriteria: routableSpec.acceptanceCriteria,
+            dependsOn,
+            priority: routableSpec.priority,
+            estLabel: "",
+          } satisfies ProposedSpec,
+        ],
+        // A new ingested unit of work slots onto the backlog by default; the
+        // model's `dependsOn` (carried onto the spec) determines real DAG order.
+        placementKind: "slot_after",
+        placementLabel: "auto-routed from intake",
+        actor: autoRouteDeps.resolveActor(candidate.orgId),
+      },
+    );
+
+  let accepted: Awaited<ReturnType<typeof acceptProposals>>["accepted"];
+  try {
+    ({ accepted } = await accept(routableSpec.dependsOn));
+  } catch (error) {
+    // Only a hallucinated dependency is recoverable; retry once with no edges.
+    if (!(error instanceof SpecNotFoundError) || routableSpec.dependsOn.length === 0) throw error;
+    ({ accepted } = await accept([]));
+  }
   const specId = accepted[0]?.spec.specId ?? null;
   const resolved = await InboxStore.resolveCandidate(deps.pool, candidate.id, "accepted", specId);
   return { candidate: resolved ?? candidate, specId: specId ?? "" };

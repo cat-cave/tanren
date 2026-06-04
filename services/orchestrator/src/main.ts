@@ -192,6 +192,9 @@ export function buildApp(input: {
     ssh: input.ssh,
     identitySecretRef,
     ...(ciWebhookSigningSecretRef === undefined ? {} : { ciWebhookSigningSecretRef }),
+    // B1: the public base URL the inbox webhook-provision endpoint builds the GitHub
+    // `issues` callback from (shared with the auth public base URL).
+    ...(input.auth?.publicBaseUrl === undefined ? {} : { publicBaseUrl: input.auth.publicBaseUrl }),
     benchmark,
   });
 

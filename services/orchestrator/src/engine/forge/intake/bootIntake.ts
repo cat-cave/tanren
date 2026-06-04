@@ -10,8 +10,8 @@ import type { RunStateWriter } from "../../contracts/runStateWriter.js";
 import type { SecretStore } from "../../contracts/secretStore.js";
 import type { SshSubstrate } from "../../contracts/sshSubstrate.js";
 import type { GitHubHttpClient } from "../../providers/github.js";
+import type { GithubAppTokenMinter } from "../../providers/githubAppTokenMinter.js";
 import { buildForgeTriageAnswererFactory } from "../providerFactory.js";
-import { buildInboxConnectorMap } from "../inbox/index.js";
 import { AuditSchedulerLoop, createNoopPassRunner } from "../audits/index.js";
 import { IntakePoller } from "./poller.js";
 import { intakeAutoRouteDeps } from "./systemActor.js";
@@ -22,6 +22,9 @@ export interface BootIntakeDeps {
   allocator: Allocator;
   ssh: SshSubstrate;
   githubHttp: GitHubHttpClient;
+  // App-only intake (creds-audit fix): the shared App-token minter, threaded to the
+  // poller so its per-org GitHub issues connector mints an installation token.
+  githubAppMinter?: GithubAppTokenMinter;
   identitySecretRef: string;
   /**
    * Plane-split (autonomy loops): the control-plane run-state writer. When present
@@ -57,7 +60,12 @@ export function startIntake(deps: BootIntakeDeps): BootedIntake {
 
   const poller = new IntakePoller({
     pool: deps.pool,
-    connectors: buildInboxConnectorMap({ secrets: deps.secrets, githubHttp: deps.githubHttp }),
+    // App-only intake: the poller rebuilds the connector map PER-ORG (resolving each
+    // org's App installation), so it carries the transports + minter rather than a
+    // single org-agnostic map.
+    secrets: deps.secrets,
+    githubHttp: deps.githubHttp,
+    ...(deps.githubAppMinter === undefined ? {} : { githubAppMinter: deps.githubAppMinter }),
     answererFactory: triageFactory,
     autoRoute,
   });

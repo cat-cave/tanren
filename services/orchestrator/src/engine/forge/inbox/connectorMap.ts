@@ -4,7 +4,9 @@
 // poll path and the click path read sources identically.
 
 import type { SecretStore } from "../../contracts/secretStore.js";
+import type { OrgGithubAppInstallation } from "../../config/orgConfig.js";
 import type { GitHubHttpClient } from "../../providers/github.js";
+import type { GithubAppTokenMinter } from "../../providers/githubAppTokenMinter.js";
 import { createGitHubIssuesConnector } from "./githubConnector.js";
 import { createIssuesConnector } from "./issuesConnector.js";
 import { createSentryConnector, FetchSentryHttpClient, type SentryHttpClient } from "./sentryConnector.js";
@@ -18,6 +20,13 @@ export interface BuildConnectorMapDeps {
   sentryHttp?: SentryHttpClient;
   linearHttp?: LinearHttpClient;
   jiraHttp?: JiraHttpClient;
+  // App-only intake (creds-audit fix): the org's GitHub App installation + the
+  // shared minter, threaded into the GitHub issues connector so the connector mints
+  // an INSTALLATION token instead of requiring a static PAT. The poller builds this
+  // map PER-ORG (one `loadOrgGithubAppInstallation` per source's org) so App-only
+  // orgs are ingestable; absent ⇒ the connector resolves a static ref (PAT) as before.
+  installation?: OrgGithubAppInstallation;
+  minter?: GithubAppTokenMinter;
 }
 
 /** Build the default `{ issues, errors }` connector map from the shared transports. */
@@ -26,7 +35,12 @@ export function buildInboxConnectorMap(deps: BuildConnectorMapDeps): Map<string,
     [
       "issues",
       createIssuesConnector({
-        github: createGitHubIssuesConnector({ secrets: deps.secrets, githubHttp: deps.githubHttp }),
+        github: createGitHubIssuesConnector({
+          secrets: deps.secrets,
+          githubHttp: deps.githubHttp,
+          ...(deps.installation === undefined ? {} : { installation: deps.installation }),
+          ...(deps.minter === undefined ? {} : { minter: deps.minter }),
+        }),
         linear: createLinearConnector({
           secrets: deps.secrets,
           linearHttp: deps.linearHttp ?? new FetchLinearHttpClient(),
