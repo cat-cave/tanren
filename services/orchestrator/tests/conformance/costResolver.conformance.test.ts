@@ -57,7 +57,7 @@ class ProductionCostResolver implements CostResolver {
       costUsd,
       billingMode: source.billingMode,
       costBasis: source.costBasis,
-      raw: { provider: source.provider, model: input.model, rate: source.rate },
+      raw: { provider: source.provider, model: input.model },
     };
   }
 }
@@ -110,21 +110,26 @@ interface ProductionScenario extends Scenario {
 
 const productionScenarios: readonly ProductionScenario[] = [
   {
-    // per_token API key with a known provider rate → priced from the table.
-    name: "per_token Anthropic API key prices from the provider table",
+    // per_token API key with NO captured real-spend fact → honest-null/unknown.
+    // REAL SPEND IS A FACT: there is no list-rate table to invent a figure from. A
+    // BYOK anthropic key's real charge lands on the upstream invoice we cannot read.
+    name: "per_token Anthropic API key with no fact is honest-null (no list-rate table)",
     input: makeInput("anthropic", "claude-sonnet"),
     situation: { authRef: "credential/anthropic/default", cli: "claude" },
     expectBillingMode: "per_token",
-    expectCostBasis: "provider_pricing",
+    expectCostBasis: "unknown",
+    expectNullCost: true,
   },
   {
-    // per_token OpenRouter key with a known rate → also provider_pricing,
-    // proving the table covers more than one provider.
-    name: "per_token OpenRouter key prices from the provider table",
+    // per_token OpenRouter key with NO captured generation cost → honest-null too.
+    // A managed OpenRouter run that captured `usage.cost` is the separate
+    // provider_response scenario below.
+    name: "per_token OpenRouter key with no captured cost is honest-null",
     input: makeInput("openrouter", "deepseek-chat"),
     situation: { authRef: "credential/openrouter/default", cli: "opencode" },
     expectBillingMode: "per_token",
-    expectCostBasis: "provider_pricing",
+    expectCostBasis: "unknown",
+    expectNullCost: true,
   },
   {
     // OpenRouter's OWN authoritative per-call charge (usage.cost) is the REAL

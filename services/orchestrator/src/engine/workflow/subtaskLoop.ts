@@ -29,6 +29,7 @@ import type { PlannerRejectionFeedback, PlannerSpecContext } from "./planner/pla
 import { checkWindowPreflight, type CreditState, observeRunAccounting } from "./subtaskAccounting.js";
 import { gateRejection, handleRejection } from "./subtaskRework.js";
 import { type SubtaskCostContext } from "./subtaskCost.js";
+import type { RealProviderCostCapturer } from "../costs/generationCostCapture.js";
 import { insertPlannerTask, markTaskDone } from "./subtaskTasks.js";
 import { runAuditorStage, runCheckerStage, runPlannerStage, runWriterStage } from "./subtaskStages.js";
 
@@ -107,6 +108,10 @@ export interface SubtaskLoopInput {
   // changes-requested PR review forward as planner steering, so the re-plan
   // addresses the reviewer's feedback. Empty/omitted on the normal first pass.
   seedRejections?: ReadonlyArray<PlannerRejectionFeedback>;
+  // MANAGED-run real-cost capture: resolves the REAL OpenRouter `usage.cost` for a
+  // call's surfaced generation id so cost_usd is a metered FACT (`provider_response`).
+  // Present only on a managed run; absent (BYOK / non-managed) → cost_usd NULL.
+  captureRealProviderCost?: RealProviderCostCapturer;
 }
 
 export type SubtaskLoopOutcome =
@@ -152,6 +157,7 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
     runId: input.context.runId,
     specId: input.context.specId,
     projectId: input.context.projectId,
+    ...(input.captureRealProviderCost !== undefined && { captureRealProviderCost: input.captureRealProviderCost }),
   };
 
   const plannerTaskId = `task_${randomUUID()}`;

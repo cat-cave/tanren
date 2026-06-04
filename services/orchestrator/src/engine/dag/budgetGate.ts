@@ -107,11 +107,13 @@ export class PgBudgetGate implements BudgetGate {
     }
 
     const { spentUsd, unpricedCount } = await this.sumSpend(owner.orgId, projectId, budget.period);
-    // BUDGET-SAFETY (C1b): with a configured ceiling, an UNATTRIBUTED NULL-cost row
-    // (an unrecognized credential ref that should have priced) in the window means
-    // the true spend is UNKNOWN — it may already exceed the ceiling. Do not assume
-    // $0; fail CLOSED. (Honestly-unpriceable subscription/self-hosted NULLs do NOT
-    // trigger this — only cost_basis='unattributed' rows do.)
+    // BUDGET-SAFETY (C1b): with a configured ceiling, an UN-PRICED REAL-SPEND row in
+    // the window means the true spend is UNKNOWN — it may already exceed the ceiling.
+    // Do not assume $0; fail CLOSED. An un-priced real-spend row is a NULL-cost_usd
+    // row whose billing_mode is REAL-spend-bearing — `per_token` (a metered API key
+    // that captured NO real-spend FACT now that the static rate table is gone) OR
+    // `unattributed` (an unrecognized ref). An HONESTLY-$0 subscription/self_hosted
+    // NULL is NOT counted — a pure-subscription run never trips this.
     if (unpricedCount > 0) {
       return { ceilingUsd: budget.ceilingUsd, period: budget.period, spentUsd, failClosed: "unpriced_spend" };
     }
@@ -120,12 +122,13 @@ export class PgBudgetGate implements BudgetGate {
 
   /**
    * Sum the project's `cost_records.cost_usd` over the period, ORG-SCOPED (RLS), and
-   * COUNT the unattributed NULL-cost rows in the same window. `cost_usd` is nullable
+   * COUNT the UN-PRICED REAL-SPEND rows in the same window. `cost_usd` is nullable
    * (cost-unknown is an honest state) — COALESCE skips NULLs for the dollar sum; a
    * `monthly` window filters to the current calendar month, `total` sums all rows.
-   * `unpricedCount` is the BUDGET-SAFETY (C1b) signal: rows that SHOULD have priced
-   * (cost_basis='unattributed') but did not — an honestly-unpriceable subscription/
-   * self-hosted NULL is NOT counted.
+   * `unpricedCount` is the BUDGET-SAFETY (C1b) signal: NULL-cost rows whose
+   * billing_mode bears REAL spend — `per_token` (a metered API key with no captured
+   * real-spend FACT, now that the static rate table is gone) OR `unattributed` (an
+   * unrecognized ref). An honestly-$0 subscription/self_hosted NULL is NOT counted.
    */
   private async sumSpend(
     orgId: string,
@@ -136,7 +139,9 @@ export class PgBudgetGate implements BudgetGate {
     return runWithOrgScope(this.pool, orgId, async (client) => {
       const result = await client.query<{ total: string | null; unpriced: string | null }>(
         `SELECT COALESCE(SUM(cost_usd::numeric), 0)::text AS total,
-                COUNT(*) FILTER (WHERE cost_usd IS NULL AND cost_basis = 'unattributed')::text AS unpriced
+                COUNT(*) FILTER (
+                  WHERE cost_usd IS NULL AND (billing_mode = 'per_token' OR billing_mode = 'unattributed')
+                )::text AS unpriced
            FROM cost_records
           WHERE project_id = $1${windowClause}`,
         [projectId],

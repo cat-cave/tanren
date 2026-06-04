@@ -5,6 +5,7 @@ import { storeOpencodeAuthBundle } from "../credentials/opencodeAuth.js";
 import { materializeOpencodeAuthBundle } from "../credentials/opencodeMaterializer.js";
 import { quoteSshShellArg } from "../ssh/command.js";
 import type { TokenUsage, UsageLimitSignal, WriterAdapter, WriterResult } from "./types.js";
+import { findOpenRouterGenerationId, foldGenerationId } from "./openRouterGenerationId.js";
 import { captureBaselineSha, captureGitStateAfterWriter } from "./writerGit.js";
 
 // P3-0012: opencode CLI Writer adapter. opencode is a Writer-only provider in
@@ -45,6 +46,9 @@ export interface OpencodeEventTelemetry {
   rawEventCount: number;
   tokenUsage?: TokenUsage;
   usageLimit?: UsageLimitSignal;
+  // The OpenRouter generation id, when a managed (OpenRouter-routed) run surfaced
+  // one. Folded onto tokenUsage so the recorder can query the REAL `usage.cost`.
+  openRouterGenerationId?: string;
 }
 
 export function createOpencodeWriter(dependencies: OpencodeWriterDependencies): WriterAdapter {
@@ -157,6 +161,7 @@ export function parseOpencodeStreamTelemetry(stdout: string): OpencodeEventTelem
   const lines = stdout.split(/\r?\n/u).filter((line) => line.trim() !== "");
   let tokenUsage: TokenUsage | undefined;
   let usageLimit: UsageLimitSignal | undefined;
+  let openRouterGenerationId: string | undefined;
   for (const line of lines) {
     const parsed = parseJsonObject(line);
     if (parsed === undefined) {
@@ -164,8 +169,14 @@ export function parseOpencodeStreamTelemetry(stdout: string): OpencodeEventTelem
     }
     tokenUsage = findTokenUsage(parsed) ?? tokenUsage;
     usageLimit = detectUsageLimit(parsed) ?? usageLimit;
+    openRouterGenerationId = findOpenRouterGenerationId(parsed) ?? openRouterGenerationId;
   }
-  return { rawEventCount: lines.length, tokenUsage, usageLimit };
+  return {
+    rawEventCount: lines.length,
+    tokenUsage: foldGenerationId(tokenUsage, openRouterGenerationId),
+    usageLimit,
+    openRouterGenerationId,
+  };
 }
 
 function detectUsageLimit(event: Record<string, unknown>): UsageLimitSignal | undefined {

@@ -39,6 +39,7 @@ import { buildReGateCi, pollCiUntilTerminal } from "./plannerRunCi.js";
 import type { GateOutcome } from "./gate/index.js";
 import {
   buildDefaultGate,
+  buildManagedCapturerForRun,
   resolveConflictResolverHook,
   resolveRunAdaptersWithBudgetPreflight,
   simulatedReviewSeam,
@@ -104,16 +105,15 @@ export interface PlannerRunContext {
   codexCredentialRef?: string;
   // The run's effective per-role provider routing table (project routing merged onto a
   // per-role default-Codex table from `codexCredentialRef`) — what the default adapters
-  // resolve from. Codex is the default by DATA, not a hardcode. Tests may omit it.
+  // resolve from. Codex is the default by DATA. Tests may omit it.
   routing?: RoutingTable;
-  // SaaS Tier-B #5: a MANAGED run's OpenAI-compatible endpoint override (the base
-  // URL every resolved adapter is pointed at). Absent ⇒ BYOK (native endpoints).
+  // SaaS Tier-B #5: a MANAGED run's OpenAI-compatible endpoint override (the base URL
+  // every adapter is pointed at, and the real-cost capturer queries). Absent ⇒ BYOK.
   endpointBaseUrl?: string;
   // Governance posture (run worker): drives the gate's advisory policy (`lenient` ⇒ lint/typecheck advisory; absent ⇒ strict).
   governancePosture?: GovernancePosture;
   // GREENFIELD MARKER (ProjectConfigV1.greenfield): drives buildDefaultGate's in-loop
-  // deps-ensure MODE — greenfield ⇒ NON-FROZEN install (a writer-added devDep installs
-  // without a regenerated lockfile); absent/false ⇒ the FROZEN brownfield default.
+  // deps-ensure MODE — greenfield ⇒ NON-FROZEN install; absent/false ⇒ FROZEN brownfield.
   greenfield?: boolean;
 }
 
@@ -311,8 +311,8 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
     // captured diff see only the writer's changes); the clone HEAD is kept so the
     // PR-branch cleanup can drop the bootstrap commit before the push. P3-0006: deps
     // install before the writer loop so gating sees a built tree; baseSha is threaded
-    // so replanned done work isn't false-rejected as an empty delta. The clone
-    // authenticates with the run's GitHub token (same seam as push) for PRIVATE repos.
+    // so replanned done work isn't false-rejected. The clone authenticates with the
+    // run's GitHub token (same seam as push) for PRIVATE repos.
     const { cloneHeadSha, bootstrapSha, baseSha } = await prepareRunWorkspace(input, allocation.target, workspacePath);
     await appendEvent("workspace.prepared", {
       workspacePath,
@@ -327,17 +327,16 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
     };
     // Build adapters + usage probe AND run the BUDGET-SAFETY (M6) ceiling preflight (fail closed on an unreachable ceiling).
     const { adapters, usageProbe } = await resolveRunAdaptersWithBudgetPreflight(input, adapterCtx, appendEvent);
-
+    // MANAGED run: the per-call real-`usage.cost` capturer (undefined on BYOK). See its builder.
+    const captureRealProviderCost = await buildManagedCapturerForRun(input);
     // P3-0005: the deterministic gate runs on the just-bootstrapped workspace.
-    // Resolve the CI config once (tanren-ci.yml, else the default) and run the
-    // tiers mapped to each lifecycle point over SSH — exit codes only, no
-    // Answerer. Tests inject input.runGate to skip the live runner.
+    // Resolve the CI config once (tanren-ci.yml, else the default) and run the tiers
+    // mapped to each lifecycle point over SSH — exit codes only, no Answerer.
     const runGate = input.runGate ?? buildDefaultGate(input, allocation.target, workspacePath, eventStore);
 
-    // P3-0008: the write→gate→PR→CI→review tail can re-enter on a
-    // changes-requested review, re-running the loop with the reviewer feedback
-    // seeded as planner steering, up to maxReviewReworks. On approval it
-    // proceeds to the merge stage; on a non-pass loop it halts as before.
+    // P3-0008: the write→gate→PR→CI→review tail can re-enter on a changes-requested
+    // review, re-running the loop with the reviewer feedback seeded as planner
+    // steering, up to maxReviewReworks. On approval it proceeds to merge; else halts.
     const maxReworks = input.maxReviewReworks ?? 1;
     const seedRejections: PlannerRejectionFeedback[] = [];
     let outcome: SubtaskLoopOutcome | undefined;
@@ -369,6 +368,7 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
         usageProbe,
         runGate,
         seedRejections: [...seedRejections],
+        ...(captureRealProviderCost !== undefined && { captureRealProviderCost }),
       });
 
       if (outcome.kind !== "passed") {

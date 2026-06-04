@@ -28,6 +28,28 @@ import type { PlannerRunAdapterContext, RunPlannerLoopInput } from "./plannerRun
 import type { AppendEvent, SubtaskLoopAdapters } from "./subtaskLoop.js";
 import { buildDefaultConflictResolver } from "./reviewMerge/conflictResolver/index.js";
 import type { ConflictResolverHook } from "./reviewMerge/index.js";
+import { buildManagedGenerationCostCapturer, type RealProviderCostCapturer } from "../costs/generationCostCapture.js";
+
+// Builds the MANAGED-run real-cost capturer (resolves the platform OpenRouter key
+// once and returns a per-call `usage.cost` query). A managed run is identified by
+// the resolved `endpointBaseUrl` (the OpenAI-compatible managed endpoint) + the
+// platform credential ref (`codexCredentialRef`, which under managed mode IS the
+// platform OpenRouter ref). A BYOK / non-managed run sets no `endpointBaseUrl`, so
+// this returns undefined and cost_usd is left a metered FACT-or-NULL (no estimate).
+export async function buildManagedCapturerForRun(
+  input: RunPlannerLoopInput,
+): Promise<RealProviderCostCapturer | undefined> {
+  const endpointBaseUrl = input.context.endpointBaseUrl;
+  const managedCredentialRef = input.context.codexCredentialRef;
+  if (endpointBaseUrl === undefined || managedCredentialRef === undefined || managedCredentialRef === "") {
+    return undefined;
+  }
+  return buildManagedGenerationCostCapturer({
+    secrets: input.secrets,
+    managedCredentialRef,
+    endpointBaseUrl,
+  });
+}
 
 // Builds the run's four role adapters (plan/write/check/audit) by resolving the
 // project's effective routing table through the shared adapter selector. The

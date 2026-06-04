@@ -6,6 +6,7 @@ import { materializeClaudeAuthBundle } from "../credentials/claudeMaterializer.j
 import { quoteSshShellArg } from "../ssh/command.js";
 import { AnswererSchemaValidationError } from "./codex.js";
 import type { AnswererAdapter, TokenUsage, UsageLimitSignal, WriterAdapter, WriterResult } from "./types.js";
+import { findOpenRouterGenerationId, foldGenerationId } from "./openRouterGenerationId.js";
 import { captureBaselineSha, captureGitStateAfterWriter } from "./writerGit.js";
 
 // P3-0012: Claude CLI Writer + Answerer adapters. They mirror the Codex adapter
@@ -41,6 +42,9 @@ export interface ClaudeEventTelemetry {
   rawEventCount: number;
   tokenUsage?: TokenUsage;
   usageLimit?: UsageLimitSignal;
+  // The OpenRouter generation id, when a managed (OpenRouter-routed) run surfaced
+  // one. Folded onto tokenUsage so the recorder can query the REAL `usage.cost`.
+  openRouterGenerationId?: string;
 }
 
 // Raised by the Answerer path when Claude authenticated but the account's usage
@@ -252,6 +256,7 @@ export function parseClaudeStreamTelemetry(stdout: string): ClaudeEventTelemetry
   const lines = stdout.split(/\r?\n/u).filter((line) => line.trim() !== "");
   let tokenUsage: TokenUsage | undefined;
   let usageLimit: UsageLimitSignal | undefined;
+  let openRouterGenerationId: string | undefined;
   for (const line of lines) {
     const parsed = parseJsonObject(line);
     if (parsed === undefined) {
@@ -259,8 +264,14 @@ export function parseClaudeStreamTelemetry(stdout: string): ClaudeEventTelemetry
     }
     tokenUsage = findTokenUsage(parsed) ?? tokenUsage;
     usageLimit = detectUsageLimit(parsed) ?? usageLimit;
+    openRouterGenerationId = findOpenRouterGenerationId(parsed) ?? openRouterGenerationId;
   }
-  return { rawEventCount: lines.length, tokenUsage, usageLimit };
+  return {
+    rawEventCount: lines.length,
+    tokenUsage: foldGenerationId(tokenUsage, openRouterGenerationId),
+    usageLimit,
+    openRouterGenerationId,
+  };
 }
 
 // Pulls the final assistant message text out of the stream-json events. Claude

@@ -15,6 +15,13 @@ export interface TokenUsage {
   reasoningOutputTokens: number;
   // provider-reported total, else sum of the five
   totalTokens: number;
+  // The provider's generation/response id, when the managed adapter surfaced one
+  // (codex/claude/opencode response streams carry a top-level id when routed
+  // THROUGH OpenRouter). Threaded to the cost recorder so a managed OpenRouter run
+  // can post-call query `/api/v1/generation` for the REAL `usage.cost` and record
+  // cost_usd as a metered FACT (`provider_response`). Absent on BYOK / non-managed
+  // calls (no id surfaced) → cost_usd stays NULL/`unknown` (no list-rate estimate).
+  openRouterGenerationId?: string;
 }
 
 // Zero-token usage with the full disjoint shape — used as the default when an
