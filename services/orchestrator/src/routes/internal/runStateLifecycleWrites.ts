@@ -24,6 +24,7 @@ import {
   applyClearRunPercolationPending,
   applyInsertTask,
   applyMergeRunVerifiedAncestorSha,
+  applyReconcileStrandedSpec,
   applySetRunPercolationReexecId,
   applySetRunPrUrl,
   applySetRunSpeculativeBase,
@@ -53,6 +54,15 @@ const setSpecStatusSchema = z.object({
   orgId: z.string().min(1),
   status: z.string().min(1),
   notFromStatuses: z.array(z.string().min(1)).optional(),
+});
+
+// NEVER-STRAND: the atomic strand-flip — only `pending` (re-enqueue) or
+// `needs_attention` (escalation) are valid targets, so the server can never be
+// coaxed into an arbitrary spec-status write.
+const reconcileStrandedSpecSchema = z.object({
+  specId: z.string().min(1),
+  orgId: z.string().min(1),
+  status: z.enum(["pending", "needs_attention"]),
 });
 
 const setSpecMetadataSchema = z.object({
@@ -169,6 +179,22 @@ export function registerRunStateLifecycleRoutes(app: Hono, deps: RunStateWriteRo
     }
     await runWithOrgScope(deps.pool, parsed.data.orgId, (client) => applySetSpecStatus(client, parsed.data));
     return c.body(null, 204);
+  });
+
+  app.post("/internal/reconcile-stranded-spec", async (c) => {
+    if (!authnPeer(c)) {
+      return c.json({ error: "untrusted_peer" }, 401);
+    }
+    const parsed = reconcileStrandedSpecSchema.safeParse(await c.req.json().catch(() => {}));
+    if (!parsed.success) {
+      return c.json({ error: "invalid_reconcile_stranded_spec", issues: parsed.error.issues }, 400);
+    }
+    // The SAME atomic guarded UPDATE the direct path runs, server-side under the
+    // control plane's DB access. Returns whether a row moved (the won/lost signal).
+    const result = await runWithOrgScope(deps.pool, parsed.data.orgId, (client) =>
+      applyReconcileStrandedSpec(client, parsed.data),
+    );
+    return c.json(result, 200);
   });
 
   app.post("/internal/set-spec-metadata", async (c) => {

@@ -1,6 +1,7 @@
 import { registerSensitivities, type SensitivityRule } from "./sensitivity.js";
 import { infraSensitivityRules } from "./sensitivityRules.infra.js";
 import { appEnvSensitivityRules } from "./sensitivityRules.appEnv.js";
+import { strandSensitivityRules } from "./sensitivityRules.strand.js";
 
 // Sensitivity rule table. Every payload field reachable from an event must have a
 // registered tag (the eventRegistryFieldCoverage test enforces this as a hard CI
@@ -449,7 +450,6 @@ export const sensitivityRules: SensitivityRule[] = [
     ["ancestorSha", "public"],
     ["reason", "public"],
   ]),
-
   // Post-merge auto-issue creation (tempering.md dim A) — PR/merge identity + the
   // failing post-merge checks + the auto-filed issue's number/url/label, all public
   // (the regression + its tracking issue are visible run lineage, no secrets).
@@ -471,14 +471,14 @@ export const sensitivityRules: SensitivityRule[] = [
     ["prUrl", "public"],
     ["label", "public"],
   ]),
-
-  // Plane B app-environment rules (app_env.runtime_attached / app_env.ci_propagated)
-  // live in sensitivityRules.appEnv.ts; infrastructure + integration rules
-  // (runner/allocator/workspace/credential, cost + usage telemetry, github/ci/
-  // phase1/reviews/notifications/hello/redaction) live in sensitivityRules.infra.ts
-  // — both split out to keep this file under the 500-line cap.
+  // Plane B app-environment rules (app_env.*) live in sensitivityRules.appEnv.ts;
+  // infrastructure + integration rules (runner/allocator/workspace/credential, cost +
+  // usage telemetry, github/ci/phase1/reviews/notifications/hello/redaction) in
+  // sensitivityRules.infra.ts; the NEVER-STRAND reconciler rules (dag.spec.unstranded /
+  // dag.spec.needs_attention) in sensitivityRules.strand.ts — all split out under the cap.
   ...appEnvSensitivityRules,
   ...infraSensitivityRules,
+  ...strandSensitivityRules,
 ];
 
 function rulesFor(eventName: string, entries: ReadonlyArray<[string, SensitivityRule["tag"]]>): SensitivityRule[] {

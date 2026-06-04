@@ -229,3 +229,51 @@ export const DagSpecPercolationReplanPayload = z
   })
   .strict();
 export type DagSpecPercolationReplanPayload = z.infer<typeof DagSpecPercolationReplanPayload>;
+
+// NEVER-STRAND reconciler events: the DAG's self-healing safety net. A spec can get
+// stuck OCCUPYING A SLOT (`active`/`in_flight`) with NO live run — the recurring
+// stranding bug (a percolation §2c re-exec halts → the spec stays `active`, both its
+// runs terminal, the orphaned marker can't self-heal). The reconciler detects the
+// confirmed strand (slot-occupying + all runs terminal + not merge-queued + no LIVE
+// percolation marker) and re-enqueues it, with BOUNDED escalation to a loud
+// needs_attention. These events make every heal + every escalation VISIBLE.
+
+// The reason a confirmed strand was detected — shared by both strand events.
+const StrandReason = z.enum(["halted_reexec", "orphaned_marker", "no_live_run"]);
+// One of the strand's terminal runs (its id + final status) — for the audit trail.
+const StrandTerminalRun = z.object({ runId: z.string(), status: z.string() }).strict();
+
+// dag.spec.unstranded: the reconciler confirmed a strand (a spec OCCUPYING A SLOT
+// with every run terminal, not merge-queued, no LIVE percolation marker) and
+// re-enqueued it (flipped `active → pending` so the DagWalker re-runs it),
+// clearing any orphaned percolation marker. `attempt` is the 1-based re-enqueue
+// count for this spec (it escalates to needs_attention once it would EXCEED the cap).
+export const DagSpecUnstrandedPayload = z
+  .object({
+    specId: z.string(),
+    // Why the strand was reconcilable (the canonical §2c cause is a halted re-exec).
+    reason: StrandReason,
+    // The spec's terminal runs (ids + statuses) that confirmed the strand.
+    terminalRuns: z.array(StrandTerminalRun),
+    // The 1-based attempt number this re-enqueue represents (prior unstrands + 1).
+    attempt: z.number().int().positive(),
+  })
+  .strict();
+export type DagSpecUnstrandedPayload = z.infer<typeof DagSpecUnstrandedPayload>;
+
+// dag.spec.needs_attention: a strand was re-enqueued MORE than the bounded cap, so
+// the reconciler stopped re-enqueuing and moved the spec to the terminal
+// `needs_attention` status — freeing the DAG slot and blocking ONLY its dependents
+// (never the whole DAG), surfacing a loud, bounded ask-for-help. `attempts` is the
+// number of prior re-enqueues that exhausted the bound.
+export const DagSpecNeedsAttentionPayload = z
+  .object({
+    specId: z.string(),
+    reason: StrandReason,
+    // The spec's terminal runs at escalation time (the halt history).
+    terminalRuns: z.array(StrandTerminalRun),
+    // How many times the spec had already been re-enqueued (exceeded the cap).
+    attempts: z.number().int().nonnegative(),
+  })
+  .strict();
+export type DagSpecNeedsAttentionPayload = z.infer<typeof DagSpecNeedsAttentionPayload>;

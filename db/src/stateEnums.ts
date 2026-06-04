@@ -38,7 +38,8 @@ export const stateEnumLists = {
     "cancelled",
     "pending",
     "active",
-    "done"
+    "done",
+    "needs_attention"
   ],
   tasks_kind: [
     "plan",

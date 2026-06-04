@@ -9,7 +9,8 @@
     "cancelled",
     "pending",
     "active",
-    "done"
+    "done",
+    "needs_attention"
   ],
   "type": "string",
   "x-tanren-schema-id": "tanren.state.specs_status"

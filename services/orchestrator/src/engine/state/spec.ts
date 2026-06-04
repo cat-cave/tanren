@@ -34,6 +34,13 @@ export const SpecStatus = z.enum([
   "pending",
   "active",
   "done",
+  // NEVER-STRAND escalation (the safety-net reconciler): a spec the
+  // strand-reconciler re-enqueued more than the bounded number of times is moved
+  // to `needs_attention` — a TERMINAL escalation status that frees the DAG slot
+  // and blocks ONLY its dependents (never the whole DAG), surfacing a loud,
+  // bounded ask-for-help rather than re-enqueuing forever. (A later PR reuses it
+  // for genuine-conflict escalation.)
+  "needs_attention",
 ]);
 export type SpecStatus = z.infer<typeof SpecStatus>;
 
@@ -46,8 +53,12 @@ const allowedSpecTransitions: Record<SpecStatus, ReadonlyArray<SpecStatus>> = {
   cancelled: [],
   // Legacy transitions kept until callers migrate
   pending: ["active", "open"],
-  active: ["done", "halted", "cancelled", "in_flight"],
+  // The strand-reconciler flips `active → pending` (re-enqueue) and, on bounded
+  // escalation, `active → needs_attention` (give up loudly).
+  active: ["done", "halted", "cancelled", "in_flight", "pending", "needs_attention"],
   done: [],
+  // Terminal: a spec surfaced for human attention is not auto-transitioned onward.
+  needs_attention: [],
 };
 
 export function isAllowedSpecTransition(from: SpecStatus, to: SpecStatus): boolean {

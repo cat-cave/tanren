@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "attempts": {
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "reason": {
+      "enum": [
+        "halted_reexec",
+        "orphaned_marker",
+        "no_live_run"
+      ],
+      "type": "string"
+    },
+    "specId": {
+      "type": "string"
+    },
+    "terminalRuns": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "runId": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "runId",
+          "status"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "specId",
+    "reason",
+    "terminalRuns",
+    "attempts"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.dag.spec.needs_attention"
+}

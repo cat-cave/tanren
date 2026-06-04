@@ -24,6 +24,8 @@ import type {
   MergeRunVerifiedAncestorShaInput,
   RecordCostInput,
   ReconcileCostInput,
+  ReconcileStrandedSpecInput,
+  ReconcileStrandedSpecResult,
   RunStateWriter,
   SetRunPercolationReexecIdInput,
   SetRunPrUrlInput,
@@ -106,6 +108,12 @@ export class HttpRunStateWriter implements RunStateWriter {
 
   async setSpecStatus(input: SetSpecStatusInput): Promise<void> {
     await this.post<void>("/internal/set-spec-status", input);
+  }
+
+  async reconcileStrandedSpec(input: ReconcileStrandedSpecInput): Promise<ReconcileStrandedSpecResult> {
+    // Carries the org explicitly (the reconciler resolved it system-scoped); the
+    // server runs the SAME atomic guarded UPDATE and returns whether a row moved.
+    return this.post<ReconcileStrandedSpecResult>("/internal/reconcile-stranded-spec", input);
   }
 
   async setSpecMetadata(input: SetSpecMetadataInput): Promise<void> {

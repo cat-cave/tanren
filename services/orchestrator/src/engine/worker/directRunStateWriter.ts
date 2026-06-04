@@ -22,6 +22,8 @@ import type {
   MergeRunVerifiedAncestorShaInput,
   RecordCostInput,
   ReconcileCostInput,
+  ReconcileStrandedSpecInput,
+  ReconcileStrandedSpecResult,
   RunStateWriter,
   SetRunPercolationReexecIdInput,
   SetRunPrUrlInput,
@@ -44,6 +46,7 @@ import {
   applyClearRunPercolationPending,
   applyInsertTask,
   applyMergeRunVerifiedAncestorSha,
+  applyReconcileStrandedSpec,
   applySetRunPercolationReexecId,
   applySetRunPrUrl,
   applySetRunSpeculativeBase,
@@ -125,6 +128,10 @@ export class DirectRunStateWriter implements RunStateWriter {
 
   async setSpecStatus(input: SetSpecStatusInput): Promise<void> {
     await runWithOrgScope(this.pool, input.orgId, (client) => applySetSpecStatus(client, input));
+  }
+
+  async reconcileStrandedSpec(input: ReconcileStrandedSpecInput): Promise<ReconcileStrandedSpecResult> {
+    return runWithOrgScope(this.pool, input.orgId, (client) => applyReconcileStrandedSpec(client, input));
   }
 
   async setSpecMetadata(input: SetSpecMetadataInput): Promise<void> {
