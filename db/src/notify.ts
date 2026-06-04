@@ -37,6 +37,20 @@ export const JOB_QUEUE_CHANNEL = "tanren_job_queue";
 export const RUN_ACTIVITY_CHANNEL = "tanren_run";
 
 /**
+ * Notification channel; the NOTIFY payload is the appended event's id (and
+ * nothing else). Fired at the event-append seam for EVERY event — including the
+ * PROJECT-scoped events (e.g. `dag.spec.needs_attention`) that carry no run id
+ * and therefore emit no per-run `tanren_run` wake. The notification dispatcher
+ * subscriber wakes on this channel, re-reads the single event row by id under
+ * the system scope (the payload carries no tenant data, so the wake leaks
+ * nothing), decodes it to a typed event, and fans it out to the configured
+ * channels. This is the seam that makes escalations actually reach a human:
+ * without a wake on EVERY event, a `needs_attention` (no run id) would never be
+ * dispatched. A numeric bigserial id is safe in the NOTIFY payload literal.
+ */
+export const NOTIFICATION_CHANNEL = "tanren_notify";
+
+/**
  * DAG-change channel; the NOTIFY payload is the project id (and nothing else).
  * Fired whenever a spec is inserted for a project (derive / discovery-accept /
  * plain create), so the DagWalker subscriber wakes and walks THAT project the
@@ -100,6 +114,25 @@ export async function notifyDagChanged(client: NotifyClient, projectId: string):
   // NOTIFY cannot bind parameters; projectId is validated above. Single-quote
   // the literal (the id charset excludes `'`, so no embedded-quote escaping).
   await client.query(`NOTIFY ${DAG_CHANGE_CHANNEL}, '${projectId}'`);
+}
+
+/**
+ * Emit a notification wake for the appended event `eventId` on `client`. Call it
+ * at the event-append seam (PgEventStore) AFTER the INSERT so the notification
+ * dispatcher wakes for EVERY event — including project-scoped escalations
+ * (`dag.spec.needs_attention`) that carry no run id and thus fire no
+ * `tanren_run` wake. Delivered at COMMIT on the SAME transaction as the INSERT,
+ * so the wake fires exactly when the row is visible (a rolled-back append emits
+ * no notification). The payload is ONLY the event's bigserial id — the
+ * subscriber re-reads the row under the system scope, so no tenant data crosses
+ * the wire. The id is a positive integer; assert it so a malformed value can
+ * never inject SQL into the un-parameterizable NOTIFY statement.
+ */
+export async function notifyEventAppended(client: NotifyClient, eventId: string): Promise<void> {
+  if (!/^[0-9]+$/u.test(eventId)) {
+    throw new Error(`unsafe event id for NOTIFY payload: ${JSON.stringify(eventId)}`);
+  }
+  await client.query(`NOTIFY ${NOTIFICATION_CHANNEL}, '${eventId}'`);
 }
 
 /** A subscriber's wake callback. Receives the NOTIFY payload (empty string when none). */

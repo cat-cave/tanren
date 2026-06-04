@@ -51,6 +51,16 @@ export {
   type MatrixMatch,
 } from "./matrix.js";
 
-export { NotificationDispatcher, effectiveSeverityFor, type DispatcherDeps, type EventContext } from "./dispatcher.js";
+export {
+  NotificationDispatcher,
+  effectiveSeverityFor,
+  type DispatcherDeps,
+  type DefaultRoute,
+  type EventContext,
+} from "./dispatcher.js";
 
 export { buildChannelRegistry, type ChannelRegistryDeps } from "./registry.js";
+
+export { buildNotificationDispatcher, type BuildNotificationDispatcherDeps } from "./build.js";
+
+export { NotificationSubscriber, startNotificationSubscriber, type NotificationSubscriberDeps } from "./subscriber.js";

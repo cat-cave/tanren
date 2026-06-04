@@ -22,10 +22,13 @@ import { startDagWalkerSubscriber } from "../dag/subscriber.js";
 import { startMergeCoordinatorSubscriber } from "../merge/subscriber.js";
 import { startPostMergeSubscriber } from "../postMerge/subscriber.js";
 import { startIntake } from "../forge/intake/bootIntake.js";
+import { buildNotificationDispatcher } from "../notifications/build.js";
+import { startNotificationSubscriber } from "../notifications/subscriber.js";
 import type { DagWalkerSubscriber } from "../dag/subscriber.js";
 import type { MergeCoordinatorSubscriber } from "../merge/subscriber.js";
 import type { PostMergeSubscriber } from "../postMerge/subscriber.js";
 import type { BootedIntake } from "../forge/intake/bootIntake.js";
+import type { NotificationSubscriber } from "../notifications/subscriber.js";
 
 export interface AutonomyLoopsDeps {
   pool: pg.Pool;
@@ -57,6 +60,13 @@ export interface AutonomyLoops {
   mergeCoordinator: MergeCoordinatorSubscriber;
   /** tempering.md dim A: the post-merge-failure → auto-issue watcher subscriber. */
   postMerge: PostMergeSubscriber;
+  /**
+   * The notification dispatcher subscriber: wakes on EVERY appended event
+   * (`tanren_notify`) and fans high-signal events out to the configured channels
+   * — the wiring that makes `dag.spec.needs_attention` (and every fail-severity
+   * escalation) actually reach a human.
+   */
+  notifications: NotificationSubscriber;
   intake: BootedIntake;
   /** Drain every autonomy loop (the SIGTERM path); idempotent. */
   stop: () => Promise<void>;
@@ -154,6 +164,27 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
     ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
   });
   console.log("[run-worker] post-merge auto-issue watcher subscriber started (tempering.md dim A)");
+  // Notifications: build the dispatcher ONCE (channel registry with the real
+  // channel deps — `secrets` resolves Slack/webhook/etc. write-only credential
+  // refs; the shared App minter authenticates github_checks) + the code-level default
+  // route, then start the subscriber. It wakes on the `tanren_notify` bus — fired
+  // at the event-append seam for EVERY event — and fans each event through the
+  // dispatcher's matrix + severity filter. This is what makes escalations real:
+  // `dag.spec.needs_attention` (project-scoped, no run id ⇒ no `tanren_run` wake)
+  // reaches a human only because notifications key off the every-event channel.
+  // Its own LISTEN connection so it never contends with the other notify pumps.
+  const notificationNotifyListener = new PgNotifyListener(deps.pool);
+  const dispatcher = buildNotificationDispatcher({
+    pool: deps.pool,
+    secrets: deps.secrets,
+    ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
+  });
+  const notifications = await startNotificationSubscriber({
+    pool: deps.pool,
+    notifyListener: notificationNotifyListener,
+    dispatcher,
+  });
+  console.log("[run-worker] notification dispatcher subscriber started (events now reach humans)");
   const intake = startIntake({
     pool: deps.pool,
     secrets: deps.secrets,
@@ -170,10 +201,12 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
     dagWalker.stop();
     mergeCoordinator.stop();
     postMerge.stop();
+    notifications.stop();
     intake.stop();
     await dagNotifyListener.close();
     await mergeNotifyListener.close();
     await postMergeNotifyListener.close();
+    await notificationNotifyListener.close();
   };
-  return { dagWalker, mergeCoordinator, postMerge, intake, stop };
+  return { dagWalker, mergeCoordinator, postMerge, notifications, intake, stop };
 }

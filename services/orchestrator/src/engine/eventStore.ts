@@ -1,4 +1,4 @@
-import { notifyRunActivity } from "@tanren/db";
+import { notifyEventAppended, notifyRunActivity } from "@tanren/db";
 import type pg from "pg";
 import { resolveWritableClient } from "./data/orgScopedDb.js";
 import { assertEventName, EventRegistry, type EventName, type EventPayload } from "./events/index.js";
@@ -45,13 +45,14 @@ export class PgEventStore implements EventStore {
     // pool when there is none (inert, R1-equivalent). When handed a specific
     // in-transaction client, use it as-is — the caller owns that transaction.
     const client = resolveWritableClient(this.pool);
-    await client.query(
+    const inserted = await client.query<{ id: string }>(
       // org_id is the mandatory tenant-isolation key (tanren tenancy hardening),
       // derived in-statement from the event's project so every event row carries
       // its org directly rather than relying on a route-layer gate or a nullable
       // project_id → projects.org_id hop.
       `INSERT INTO events (run_id, task_id, spec_id, project_id, org_id, event_type, payload)
-       VALUES ($1, $2, $3, $4, (SELECT org_id FROM projects WHERE project_id = $4), $5, $6::jsonb)`,
+       VALUES ($1, $2, $3, $4, (SELECT org_id FROM projects WHERE project_id = $4), $5, $6::jsonb)
+       RETURNING id::text AS id`,
       [
         input.runId ?? null,
         input.taskId ?? null,
@@ -73,6 +74,16 @@ export class PgEventStore implements EventStore {
     // it emits no per-run notify.
     if (input.runId !== undefined) {
       await notifyRunActivity(client, input.runId);
+    }
+    // Notification fan-out wake: fire on EVERY appended event (carrying only the
+    // event's bigserial id) so the notification dispatcher subscriber reaches a
+    // human for events that have no run id — most importantly the project-scoped
+    // `dag.spec.needs_attention` escalation, which emits no `tanren_run` wake.
+    // Delivered at COMMIT on this same transaction; the subscriber re-reads the
+    // row under the system scope so no tenant data crosses the wire.
+    const eventId = inserted.rows[0]?.id;
+    if (eventId !== undefined) {
+      await notifyEventAppended(client, eventId);
     }
   }
 }

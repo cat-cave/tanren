@@ -110,6 +110,15 @@ const SEVERITY_OVERRIDES: Partial<Record<EventName, Severity>> = {
   "merge.post_merge_failed": "fail",
   "issue.opened": "warn",
 
+  // DAG escalation: a spec parked at the terminal `needs_attention` status — the
+  // strand reconciler exhausted its bounded re-enqueue budget, OR the
+  // intent-preserving conflict resolver judged the conflict genuinely
+  // irreconcilable. This is a RARE, GENUINE "a human must look" signal (the
+  // human-escalation-discipline contract), so it is `fail`: it must clear the
+  // matrix's warn floor AND the code-level default route so the escalation
+  // actually reaches a person rather than silently parking.
+  "dag.spec.needs_attention": "fail",
+
   // Phase 1 fixture
   "phase1.fixture.started": "info",
   "phase1.fixture.ci_pending": "info",
