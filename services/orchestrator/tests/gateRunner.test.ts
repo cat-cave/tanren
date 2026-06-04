@@ -243,6 +243,50 @@ describe("runGateForWhen", () => {
     expect(outcome.failure.failedStep).toBe("build");
   });
 
+  it("emits a gate.verdict roll-up carrying the headSha + flattened steps when a head is given", async () => {
+    const ssh = new RecordingSsh();
+    const { events, appendEvent } = recordingEvents();
+    const outcome = await runGateForWhen({
+      ssh,
+      target,
+      workspacePath: "/ws",
+      config: DEFAULT_CI_CONFIG,
+      when: "per_iteration",
+      timeoutMs: 1000,
+      appendEvent,
+      headSha: "a".repeat(40),
+    });
+    expect(outcome.passed).toBe(true);
+    const verdicts = events.filter((e) => e.eventType === "gate.verdict");
+    expect(verdicts).toHaveLength(1);
+    const payload = verdicts[0]!.payload as { headSha: string; passed: boolean; steps: Array<{ name: string }> };
+    expect(payload.headSha).toBe("a".repeat(40));
+    expect(payload.passed).toBe(true);
+    // The fast tier's three steps are flattened onto the verdict.
+    expect(payload.steps.map((s) => s.name)).toEqual(["lint", "typecheck", "unit"]);
+  });
+
+  it("emits a failing gate.verdict naming the blocking tier+step", async () => {
+    const ssh = new RecordingSsh((c) => (c === "pnpm build" ? { exitCode: 1 } : {}));
+    const { events, appendEvent } = recordingEvents();
+    const outcome = await runGateForWhen({
+      ssh,
+      target,
+      workspacePath: "/ws",
+      config: DEFAULT_CI_CONFIG,
+      when: "pre_audit",
+      timeoutMs: 1000,
+      appendEvent,
+      headSha: "b".repeat(40),
+    });
+    expect(outcome.passed).toBe(false);
+    const verdict = events.find((e) => e.eventType === "gate.verdict")!;
+    const payload = verdict.payload as { passed: boolean; failedTier?: string; failedStep?: string };
+    expect(payload.passed).toBe(false);
+    expect(payload.failedTier).toBe("slow");
+    expect(payload.failedStep).toBe("build");
+  });
+
   it("is a vacuous pass when no tier maps to the lifecycle point", async () => {
     const ssh = new RecordingSsh();
     const { events, appendEvent } = recordingEvents();

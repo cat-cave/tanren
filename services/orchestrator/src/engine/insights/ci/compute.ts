@@ -1,33 +1,30 @@
-// P2e-1 CI analytics computation (autonomy-engine.md §2d Mergify parity, item
-// 2). Pure reducer (`deriveCiAnalytics`) over the CI events the engine already
-// persists, plus a thin DB loader (`computeCiAnalytics`) that pulls those rows
-// for a project + window. No migration, no write path — every input column
-// predates this spec.
+// Native-gate analytics computation (CI-intelligence). Pure reducer
+// (`deriveCiAnalytics`) over the native `gate.verdict` events the in-loop gate
+// persists, plus a thin DB loader (`computeCiAnalytics`) that pulls those rows for
+// a project + window. The native delivery model replaced the forge-CI observation
+// events (`ci.started`/`ci.passed`/`ci.failed`) — analytics now reduce Tanren's
+// OWN gate verdict, not a forge check-run poll. No write path; read-only.
 //
-// Inputs (all read-only):
-//   - runs:   each `ci.started` (run start) paired to its terminal `ci.passed`/
-//             `ci.failed` for the same head SHA → run-level pass-rate, timing,
-//             and the retry signal (a SHA with > 1 CI run).
-//   - checks: the per-check `checkRuns[]` on every terminal CI event →
-//             per-check pass-rate + slowest/least-reliable steps.
+// Each `gate.verdict` is a self-contained observation: `headSha` (the commit the
+// gate verified), `passed` (the combined verdict), `durationMs` (the gate run's
+// own timing), and `steps[]` (the per-step grain → per-step pass-rate +
+// slowest/least-reliable steps). The retry signal is a head SHA gated more than
+// once (a re-gate after rework / rebase).
 
 import type pg from "pg";
 import { CiAnalytics, type CiCheckStat } from "./types.js";
 
 const DEFAULT_WINDOW_DAYS = 30;
-const SUCCESS_CONCLUSIONS = new Set(["success", "neutral", "skipped"]);
 const SLOWEST_LIMIT = 5;
 
-/** A normalized CI run: one `ci.*` observation row. */
+/** A normalized gate run: one `gate.verdict` observation row. */
 export interface CiRunObservation {
   headSha: string;
-  /** terminal outcome of the whole CI run. */
+  /** terminal outcome of the whole gate run. */
   outcome: "passed" | "failed";
-  /** ci.started instant for this SHA (timing clock start), if observed. */
-  startedAt: Date | null;
-  /** terminal ci.* instant (timing clock end). */
-  endedAt: Date;
-  /** per-check outcomes carried on the terminal observation. */
+  /** the gate run's own duration in ms (timing). */
+  durationMs: number;
+  /** per-step outcomes carried on the verdict (the native "check" grain). */
   checks: Array<{ name: string; outcome: "passed" | "failed" }>;
 }
 
@@ -66,11 +63,9 @@ export function deriveCiAnalytics(inputs: CiAnalyticsInputs, options: DeriveCiOp
   const retriedShas = [...runsBySha.values()].filter((n) => n > 1).length;
   const retryRate = runsBySha.size === 0 ? null : retriedShas / runsBySha.size;
 
-  // Timing: ci.started → terminal seconds, where a start was observed.
-  const durations = runs
-    .filter((r): r is CiRunObservation & { startedAt: Date } => r.startedAt !== null)
-    .map((r) => (r.endedAt.getTime() - r.startedAt.getTime()) / 1000)
-    .filter((s) => Number.isFinite(s) && s >= 0);
+  // Timing: each gate run's own `durationMs` (the native verdict carries it
+  // directly — no two-event pairing), in seconds.
+  const durations = runs.map((r) => r.durationMs / 1000).filter((s) => Number.isFinite(s) && s >= 0);
   const timing = {
     medianSeconds: median(durations),
     maxSeconds: durations.length === 0 ? null : Math.max(...durations),
@@ -132,14 +127,13 @@ export interface ComputeCiAnalyticsOptions {
 }
 
 interface CiEventQueryRow {
-  event_type: string;
   payload: unknown;
   ts: Date;
 }
 
 /**
- * Load the read-only CI events for a project + window and reduce them to
- * `CiAnalytics`. Touches only the `events` table.
+ * Load the read-only native `gate.verdict` events for a project + window and
+ * reduce them to `CiAnalytics`. Touches only the `events` table.
  */
 export async function computeCiAnalytics(
   pool: Pick<pg.Pool, "query">,
@@ -150,65 +144,47 @@ export async function computeCiAnalytics(
   const since = new Date(now.getTime() - windowDays * 24 * 60 * 60 * 1000);
 
   const result = await pool.query<CiEventQueryRow>(
-    `SELECT event_type, payload, ts
+    `SELECT payload, ts
        FROM events
        WHERE project_id = $1
-         AND event_type IN ('ci.started','ci.passed','ci.failed')
+         AND event_type = 'gate.verdict'
          AND ts >= $2
        ORDER BY ts ASC`,
     [options.projectId, since],
   );
 
   return deriveCiAnalytics(
-    { runs: reduceCiEventsToRuns(result.rows) },
+    { runs: reduceGateVerdictsToRuns(result.rows) },
     { projectId: options.projectId, windowStart: since, windowEnd: now, windowDays },
   );
 }
 
 /**
- * Reduce raw `ci.*` event rows to one `CiRunObservation` per terminal CI run.
- * Pairs each terminal (`ci.passed`/`ci.failed`) with the EARLIEST preceding
- * `ci.started` for the same head SHA that has not yet been paired (so multiple
- * CI runs on the same SHA — the retry signal — each get their own start). Pure.
+ * Reduce raw `gate.verdict` event rows to one `CiRunObservation` per gate run.
+ * Each verdict is self-contained (it carries its own `headSha`, `passed`,
+ * `durationMs`, and per-step results), so this is a direct 1:1 map — the retry
+ * signal falls out of a head SHA appearing in more than one verdict. Pure.
  */
-export function reduceCiEventsToRuns(rows: ReadonlyArray<CiEventQueryRow>): CiRunObservation[] {
-  // Per-SHA queue of unpaired ci.started instants (ordered ascending).
-  const pendingStarts = new Map<string, Date[]>();
+export function reduceGateVerdictsToRuns(rows: ReadonlyArray<CiEventQueryRow>): CiRunObservation[] {
   const runs: CiRunObservation[] = [];
-
   for (const row of rows) {
-    const payload = row.payload as { headSha?: unknown; checkRuns?: unknown };
+    const payload = row.payload as { headSha?: unknown; passed?: unknown; durationMs?: unknown; steps?: unknown };
     const headSha = typeof payload.headSha === "string" ? payload.headSha : undefined;
     if (headSha === undefined) continue;
-
-    if (row.event_type === "ci.started") {
-      const queue = pendingStarts.get(headSha) ?? [];
-      queue.push(new Date(row.ts));
-      pendingStarts.set(headSha, queue);
-      continue;
-    }
-
-    // terminal ci.passed / ci.failed
-    const outcome: "passed" | "failed" = row.event_type === "ci.passed" ? "passed" : "failed";
-    const queue = pendingStarts.get(headSha);
-    const startedAt = queue !== undefined && queue.length > 0 ? queue.shift()! : null;
-    const checks = extractCheckOutcomes(payload.checkRuns);
-    runs.push({ headSha, outcome, startedAt, endedAt: new Date(row.ts), checks });
+    const outcome: "passed" | "failed" = payload.passed === true ? "passed" : "failed";
+    const durationMs = typeof payload.durationMs === "number" && payload.durationMs >= 0 ? payload.durationMs : 0;
+    runs.push({ headSha, outcome, durationMs, checks: extractStepOutcomes(payload.steps) });
   }
-
   return runs;
 }
 
-function extractCheckOutcomes(raw: unknown): Array<{ name: string; outcome: "passed" | "failed" }> {
+function extractStepOutcomes(raw: unknown): Array<{ name: string; outcome: "passed" | "failed" }> {
   if (!Array.isArray(raw)) return [];
   const out: Array<{ name: string; outcome: "passed" | "failed" }> = [];
   for (const entry of raw) {
-    const check = entry as { name?: unknown; conclusion?: unknown };
-    if (typeof check.name !== "string") continue;
-    const conclusion = typeof check.conclusion === "string" ? check.conclusion : null;
-    // A pending check (null conclusion) has no verdict yet — skip it.
-    if (conclusion === null) continue;
-    out.push({ name: check.name, outcome: SUCCESS_CONCLUSIONS.has(conclusion) ? "passed" : "failed" });
+    const step = entry as { name?: unknown; passed?: unknown };
+    if (typeof step.name !== "string") continue;
+    out.push({ name: step.name, outcome: step.passed === true ? "passed" : "failed" });
   }
   return out;
 }

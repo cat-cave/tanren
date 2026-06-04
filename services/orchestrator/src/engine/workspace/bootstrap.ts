@@ -366,6 +366,30 @@ export async function commitBootstrapState(input: CommitBootstrapStateInput): Pr
   return sha;
 }
 
+// Resolve the workspace HEAD commit sha over SSH — the commit the native gate is
+// verifying when it runs. The native `gate.verdict` is anchored on this sha (the
+// headSha CI-intelligence reduces). Returns "" on a fake SSH that yields no output
+// (unit paths), in which case the caller emits no verdict; a real runner always
+// returns a 40-hex sha and a malformed value is a LOUD throw (never a guessed sha).
+export async function resolveWorkspaceHeadSha(input: {
+  ssh: SshSubstrate;
+  target: SshTarget;
+  workspacePath: string;
+  timeoutMs: number;
+}): Promise<string> {
+  const result = await runWorkspaceSshCommand(input.ssh, input.target, {
+    label: "resolve workspace head sha",
+    cwd: input.workspacePath,
+    timeoutMs: input.timeoutMs,
+    command: "git rev-parse HEAD",
+  });
+  const sha = result.stdout.trim();
+  if (sha !== "" && !/^[0-9a-f]{40}$/u.test(sha)) {
+    throw new Error(`workspace head resolution returned invalid sha: ${sha}`);
+  }
+  return sha;
+}
+
 function combinedOutput(result: SshCommandResult): string {
   if (result.failure !== undefined) {
     const detail = "message" in result.failure ? result.failure.message : result.failure.reason;

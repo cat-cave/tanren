@@ -54,7 +54,7 @@ export { surfaceActiveQuarantines } from "./ciFlakySurface.js";
 export {
   computeCiAnalytics,
   deriveCiAnalytics,
-  reduceCiEventsToRuns,
+  reduceGateVerdictsToRuns,
   CiAnalytics,
   type CiRunObservation,
   type CiAnalyticsInputs,

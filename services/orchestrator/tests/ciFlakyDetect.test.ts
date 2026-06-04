@@ -92,60 +92,56 @@ describe("deriveFlakyTests — minToggledShas bar", () => {
   });
 });
 
-describe("flattenCiObservations — payload → per-check observations", () => {
-  it("flattens checkRuns and maps conclusions to pass/fail", () => {
+describe("flattenCiObservations — gate.verdict payload → per-step observations", () => {
+  it("flattens steps and maps the passed flag to pass/fail", () => {
     const rows = [
       {
         ts: T0,
         payload: {
           headSha: "sha1",
-          checkRuns: [
-            { name: "unit", status: "completed", conclusion: "success" },
-            { name: "lint", status: "completed", conclusion: "failure" },
-            { name: "pending", status: "in_progress", conclusion: null },
+          steps: [
+            { name: "unit", tier: "fast", passed: true },
+            { name: "lint", tier: "fast", passed: false },
           ],
         },
       },
     ];
     const flat = flattenCiObservations(rows);
-    // pending check (null conclusion) is dropped — no verdict yet.
     expect(flat).toHaveLength(2);
     expect(flat.find((o) => o.checkName === "unit")!.outcome).toBe("passed");
     expect(flat.find((o) => o.checkName === "lint")!.outcome).toBe("failed");
   });
 
-  it("treats neutral/skipped as passes and everything else as fail", () => {
+  it("treats a missing/false passed flag as a failure", () => {
     const rows = [
       {
         ts: T0,
         payload: {
           headSha: "sha1",
-          checkRuns: [
-            { name: "a", conclusion: "neutral" },
-            { name: "b", conclusion: "skipped" },
-            { name: "c", conclusion: "timed_out" },
-            { name: "d", conclusion: "cancelled" },
+          steps: [
+            { name: "a", tier: "fast", passed: true },
+            { name: "b", tier: "fast", passed: false },
+            { name: "c", tier: "slow" },
           ],
         },
       },
     ];
     const flat = flattenCiObservations(rows);
     expect(flat.find((o) => o.checkName === "a")!.outcome).toBe("passed");
-    expect(flat.find((o) => o.checkName === "b")!.outcome).toBe("passed");
+    expect(flat.find((o) => o.checkName === "b")!.outcome).toBe("failed");
     expect(flat.find((o) => o.checkName === "c")!.outcome).toBe("failed");
-    expect(flat.find((o) => o.checkName === "d")!.outcome).toBe("failed");
   });
 
-  it("end-to-end: flatten then derive flags only the genuinely-flaky check", () => {
+  it("end-to-end: flatten then derive flags only the genuinely-flaky step", () => {
     const rows = [
       // sha1: unit toggles (fail then pass), broken always fails.
       {
         ts: new Date(T0.getTime()),
         payload: {
           headSha: "sha1",
-          checkRuns: [
-            { name: "unit", conclusion: "failure" },
-            { name: "broken", conclusion: "failure" },
+          steps: [
+            { name: "unit", tier: "fast", passed: false },
+            { name: "broken", tier: "fast", passed: false },
           ],
         },
       },
@@ -153,9 +149,9 @@ describe("flattenCiObservations — payload → per-check observations", () => {
         ts: new Date(T0.getTime() + 1000),
         payload: {
           headSha: "sha1",
-          checkRuns: [
-            { name: "unit", conclusion: "success" },
-            { name: "broken", conclusion: "failure" },
+          steps: [
+            { name: "unit", tier: "fast", passed: true },
+            { name: "broken", tier: "fast", passed: false },
           ],
         },
       },

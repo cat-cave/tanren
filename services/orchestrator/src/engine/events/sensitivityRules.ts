@@ -3,6 +3,7 @@ import { infraSensitivityRules } from "./sensitivityRules.infra.js";
 import { appEnvSensitivityRules } from "./sensitivityRules.appEnv.js";
 import { strandSensitivityRules } from "./sensitivityRules.strand.js";
 import { ciIntelSensitivityRules } from "./sensitivityRules.ciIntel.js";
+import { gateSensitivityRules } from "./sensitivityRules.gate.js";
 
 // Sensitivity rule table. Every payload field reachable from an event must have a
 // registered tag (the eventRegistryFieldCoverage test enforces this as a hard CI
@@ -274,46 +275,8 @@ export const sensitivityRules: SensitivityRule[] = [
     ["recommendedAction", "public"],
   ]),
 
-  // P3-0005 in-loop gate-check stage. Tier/step names + exit codes are public
-  // identifiers; captured command output tails carry stdout/stderr, which the
-  // taxonomy treats as secret (may surface env values or paths).
-  ...rulesFor("gate.started", [
-    ["tier", "public"],
-    ["when", "public"],
-    ["stepNames", "public"],
-    ["stepNames[]", "public"],
-  ]),
-  ...rulesFor("gate.passed", [
-    ["tier", "public"],
-    ["when", "public"],
-    ["steps[].name", "public"],
-    ["steps[].run", "public"],
-    ["steps[].exitCode", "public"],
-    ["steps[].passed", "public"],
-    ["steps[].timedOut", "public"],
-    ["steps[].outputTail", "secret"],
-  ]),
-  ...rulesFor("gate.failed", [
-    ["tier", "public"],
-    ["when", "public"],
-    ["failedStep", "public"],
-    ["exitCode", "public"],
-    ["steps[].name", "public"],
-    ["steps[].run", "public"],
-    ["steps[].exitCode", "public"],
-    ["steps[].passed", "public"],
-    ["steps[].timedOut", "public"],
-    ["steps[].outputTail", "secret"],
-  ]),
-  // Lenient-posture advisory step failure (lint/typecheck): names + exit code are
-  // public identifiers; the captured output tail is secret (may surface env/paths).
-  ...rulesFor("gate.advisory_failed", [
-    ["tier", "public"],
-    ["when", "public"],
-    ["advisoryStep", "public"],
-    ["exitCode", "public"],
-    ["outputTail", "secret"],
-  ]),
+  // The native in-loop gate rules (gate.started/passed/failed/advisory_failed/verdict)
+  // are split into ./sensitivityRules.gate.js under the 500-line cap; spread below.
 
   // P2B-0008 recovery lineage — operator-authored prose + identifiers, public.
   ...rulesFor("recovery.revise_routed", [
@@ -474,11 +437,13 @@ export const sensitivityRules: SensitivityRule[] = [
   ]),
   // Split out under the 500-line cap: app_env.* (appEnv); infra/integration —
   // runner/allocator/workspace/credential, cost+usage, github/ci/phase1/reviews/
-  // notifications/hello/redaction (infra); strand reconciler (strand); ci-intel (ciIntel).
+  // notifications/hello/redaction (infra); strand reconciler (strand); ci-intel
+  // (ciIntel); native in-loop gate (gate).
   ...appEnvSensitivityRules,
   ...infraSensitivityRules,
   ...strandSensitivityRules,
   ...ciIntelSensitivityRules,
+  ...gateSensitivityRules,
 ];
 
 function rulesFor(eventName: string, entries: ReadonlyArray<[string, SensitivityRule["tag"]]>): SensitivityRule[] {

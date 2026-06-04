@@ -512,6 +512,13 @@
       "when": 1780609171631,
       "tag": "0072_first_steel_serpent",
       "breakpoints": true
+    },
+    {
+      "idx": 73,
+      "version": "7",
+      "when": 1780610674526,
+      "tag": "0073_young_hammerhead",
+      "breakpoints": true
     }
   ]
 }

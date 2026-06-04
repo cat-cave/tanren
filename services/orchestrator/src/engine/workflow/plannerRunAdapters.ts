@@ -23,7 +23,11 @@ import {
   resolveGateConfig,
   runGateForWhen,
 } from "./gate/index.js";
-import { DEFAULT_BOOTSTRAP_COMMAND, ensureWorkspaceDepsInstalled } from "../workspace/index.js";
+import {
+  DEFAULT_BOOTSTRAP_COMMAND,
+  ensureWorkspaceDepsInstalled,
+  resolveWorkspaceHeadSha,
+} from "../workspace/index.js";
 import type { PlannerRunAdapterContext, RunPlannerLoopInput } from "./plannerRun.js";
 import type { AppendEvent, SubtaskLoopAdapters } from "./subtaskLoop.js";
 import { buildDefaultConflictResolver } from "./reviewMerge/conflictResolver/index.js";
@@ -367,6 +371,14 @@ export function buildDefaultGate(
       timeoutMs: input.timeoutMs,
     });
     const config = await configPromise;
+    // Anchor the native verdict on the commit the gate is about to verify (the
+    // workspace HEAD). "" on a fake-SSH unit path ⇒ runGateForWhen emits no verdict.
+    const headSha = await resolveWorkspaceHeadSha({
+      ssh: input.ssh,
+      target,
+      workspacePath,
+      timeoutMs: input.timeoutMs,
+    });
     return runGateForWhen({
       ssh: input.ssh,
       target,
@@ -377,6 +389,7 @@ export function buildDefaultGate(
       appendEvent,
       taskId,
       advisoryStepNames,
+      ...(headSha === "" ? {} : { headSha }),
       // Plane B: the project's dev+test app env, so the building agent's gate
       // commands run with it. Never logged/emitted. Distinct from Tanren creds.
       ...(input.appEnv === undefined ? {} : { appEnv: input.appEnv }),

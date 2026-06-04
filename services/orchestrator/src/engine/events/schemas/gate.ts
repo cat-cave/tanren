@@ -77,3 +77,38 @@ export const GateAdvisoryFailedPayload = z
     outputTail: z.string(),
   })
   .strict();
+
+// One flattened gate step in the verdict roll-up: its name, the tier it ran in,
+// and whether it passed. This is the native delivery model's "check" grain — the
+// per-step analytics + flaky-detection unit, equivalent to a forge check-run's
+// name+conclusion but produced by Tanren's own gate.
+export const GateVerdictStep = z
+  .object({
+    name: z.string(),
+    tier: z.string(),
+    passed: z.boolean(),
+  })
+  .strict();
+export type GateVerdictStep = z.infer<typeof GateVerdictStep>;
+
+// gate.verdict: the headSha-carrying ROLL-UP of one gate run at a lifecycle point
+// — the native delivery model's terminal verdict, emitted once per `runGateForWhen`
+// after every mapped tier has run (or short-circuited at a failure). It is the
+// native equivalent of the retired forge-CI observation: `headSha` anchors the
+// commit the gate verified; `passed` is the combined verdict; `durationMs` times
+// the whole gate run; `steps[]` flattens every executed step (the per-check grain
+// CI-intelligence reduces for pass-rate, timing, retries, and flaky detection).
+// `failedStep`/`failedTier` name the first blocking step when `passed` is false.
+export const GateVerdictPayload = z
+  .object({
+    when: GateWhen,
+    headSha: z.string().min(1),
+    passed: z.boolean(),
+    durationMs: z.number().int().min(0),
+    tiers: z.array(z.string()),
+    steps: z.array(GateVerdictStep),
+    failedTier: z.string().optional(),
+    failedStep: z.string().optional(),
+  })
+  .strict();
+export type GateVerdictPayload = z.infer<typeof GateVerdictPayload>;

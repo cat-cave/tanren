@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "durationMs": {
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "failedStep": {
+      "type": "string"
+    },
+    "failedTier": {
+      "type": "string"
+    },
+    "headSha": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "passed": {
+      "type": "boolean"
+    },
+    "steps": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "passed": {
+            "type": "boolean"
+          },
+          "tier": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "tier",
+          "passed"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "tiers": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "when": {
+      "enum": [
+        "per_iteration",
+        "pre_audit",
+        "pre_merge"
+      ],
+      "type": "string"
+    }
+  },
+  "required": [
+    "when",
+    "headSha",
+    "passed",
+    "durationMs",
+    "tiers",
+    "steps"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.gate.verdict"
+}

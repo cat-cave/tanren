@@ -25,6 +25,11 @@ export interface RunGateForWhenInput {
   // LENIENT POSTURE: advisory (warn-but-don't-block) step names, threaded to each
   // tier. Empty/absent ⇒ every step blocks (strict default, behavior unchanged).
   advisoryStepNames?: ReadonlySet<string>;
+  // The commit the gate is verifying (the workspace HEAD). When present, the gate
+  // emits a `gate.verdict` roll-up anchored on it — the headSha-carrying native
+  // verdict CI-intelligence reduces. Absent (unit paths with no real workspace) ⇒
+  // no verdict event (the per-tier gate.* events still narrate the run).
+  headSha?: string;
 }
 
 // The combined result across every tier mapped to a lifecycle point. `passed`
@@ -42,6 +47,7 @@ export type GateOutcome =
 export async function runGateForWhen(input: RunGateForWhenInput): Promise<GateOutcome> {
   const tiers = tiersFor(input.config, input.when);
   const results: GateTierResult[] = [];
+  const startedAtMs = Date.now();
   for (const tier of tiers) {
     const steps = input.config.tiers[tier] ?? [];
     const result = await runGateTier({
@@ -59,8 +65,38 @@ export async function runGateForWhen(input: RunGateForWhenInput): Promise<GateOu
     });
     results.push(result);
     if (!result.passed) {
-      return { passed: false, results, failure: result };
+      const outcome: GateOutcome = { passed: false, results, failure: result };
+      await emitGateVerdict(input, outcome, startedAtMs);
+      return outcome;
     }
   }
-  return { passed: true, results };
+  const outcome: GateOutcome = { passed: true, results };
+  await emitGateVerdict(input, outcome, startedAtMs);
+  return outcome;
+}
+
+// Emit the `gate.verdict` roll-up for a completed gate run when a headSha anchor
+// is available. The verdict flattens every executed step (across tiers) into the
+// per-check grain CI-intelligence reduces, anchored on the commit the gate ran
+// against. No headSha (unit paths) ⇒ no verdict (the per-tier events still fire).
+async function emitGateVerdict(input: RunGateForWhenInput, outcome: GateOutcome, startedAtMs: number): Promise<void> {
+  if (input.headSha === undefined || input.headSha === "") {
+    return;
+  }
+  const steps = outcome.results.flatMap((tier) =>
+    tier.steps.map((step) => ({ name: step.name, tier: tier.tier, passed: step.passed })),
+  );
+  await input.appendEvent(
+    "gate.verdict",
+    {
+      when: input.when,
+      headSha: input.headSha,
+      passed: outcome.passed,
+      durationMs: Date.now() - startedAtMs,
+      tiers: outcome.results.map((tier) => tier.tier),
+      steps,
+      ...(outcome.passed ? {} : { failedTier: outcome.failure.tier, failedStep: outcome.failure.failedStep }),
+    },
+    input.taskId,
+  );
 }
