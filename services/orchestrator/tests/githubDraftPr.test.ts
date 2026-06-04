@@ -61,18 +61,17 @@ describe("GitHub draft PR contract", () => {
   });
 
   it("constructs runner git push commands without embedding the token", async () => {
-    const secrets = new FakeSecretStore();
-    await secrets.put({ ref: "credential/github/dev", value: "ghp_secretToken" });
     const ssh = new RecordingSsh();
 
+    // The caller (the VcsProvider) always passes a pre-resolved push token; the
+    // push feeds it over stdin, never embedding it in the command string.
     await pushWorkspaceBranchToGitHub({
-      secrets,
       ssh,
       target,
       workspacePath: "/workspace/runs/run_123/repo",
       repoUrl: "https://github.com/cat-cave/tanren-fixture-easy",
       branch: "tanren/run_123",
-      credentialRef: "credential/github/dev",
+      token: "ghp_secretToken",
       timeoutMs: 500,
     });
 

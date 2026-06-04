@@ -4,7 +4,11 @@ import type { SecretStore, SecretValue } from "../src/engine/contracts/secretSto
 import type { NotificationTargetRow } from "../src/engine/notifications/index.js";
 
 // P3-0024 Slack channel tests. Uses an injected fetch double + an in-memory
-// secret store so dispatch is asserted without a real webhook.
+// secret store so dispatch is asserted without a real webhook. The destination
+// is ALWAYS a credential ref resolved through the secret store.
+
+const WEBHOOK_REF = "credential/slack/alerts";
+const WEBHOOK_URL = "https://hooks.slack.com/services/T/B/secret";
 
 function target(overrides: Partial<NotificationTargetRow> = {}): NotificationTargetRow {
   return {
@@ -13,7 +17,7 @@ function target(overrides: Partial<NotificationTargetRow> = {}): NotificationTar
     scope: "org",
     userId: null,
     channelKind: "slack",
-    destination: overrides.destination ?? "credential/slack/alerts",
+    destination: overrides.destination ?? WEBHOOK_REF,
     label: "slack alerts",
     enabled: true,
     weekendMute: false,
@@ -34,6 +38,8 @@ class MemorySecrets implements SecretStore {
   }
 }
 
+const resolvingSecrets = (): SecretStore => new MemorySecrets({ [WEBHOOK_REF]: WEBHOOK_URL });
+
 describe("SlackChannel", () => {
   it("resolves a credential ref to the webhook URL and POSTs the message", async () => {
     let captured: { url: string; init: RequestInit } | null = null;
@@ -41,10 +47,7 @@ describe("SlackChannel", () => {
       captured = { url: String(url), init: init as RequestInit };
       return new Response("ok", { status: 200 });
     };
-    const secrets = new MemorySecrets({
-      "credential/slack/alerts": "https://hooks.slack.com/services/T/B/secret",
-    });
-    const channel = new SlackChannel({ fetch: fakeFetch, secrets });
+    const channel = new SlackChannel({ fetch: fakeFetch, secrets: resolvingSecrets() });
     await channel.publish(target(), {
       title: "[FAIL] run.failed",
       body: "run failed details",
@@ -53,7 +56,7 @@ describe("SlackChannel", () => {
       tags: ["tanren", "severity:fail"],
     });
     expect(captured).not.toBeNull();
-    expect(captured!.url).toBe("https://hooks.slack.com/services/T/B/secret");
+    expect(captured!.url).toBe(WEBHOOK_URL);
     expect(captured!.init.method).toBe("POST");
     const body = JSON.parse(captured!.init.body as string) as {
       text: string;
@@ -66,30 +69,14 @@ describe("SlackChannel", () => {
     expect(serialized).toContain("run.failed");
   });
 
-  it("uses a full webhook URL destination verbatim without a secret store", async () => {
-    let capturedUrl: string | null = null;
-    const fakeFetch: typeof fetch = async (url) => {
-      capturedUrl = String(url);
-      return new Response("ok", { status: 200 });
-    };
-    const channel = new SlackChannel({ fetch: fakeFetch });
-    await channel.publish(target({ destination: "https://hooks.slack.com/services/X" }), {
-      title: "t",
-      body: "b",
-      severity: "info",
-      eventName: "run.started",
-    });
-    expect(capturedUrl).toBe("https://hooks.slack.com/services/X");
-  });
-
   it("adds a view-run button when payload.url is set", async () => {
     let captured: RequestInit | null = null;
     const fakeFetch: typeof fetch = async (_url, init) => {
       captured = init as RequestInit;
       return new Response("ok", { status: 200 });
     };
-    const channel = new SlackChannel({ fetch: fakeFetch });
-    await channel.publish(target({ destination: "https://hooks.slack.com/x" }), {
+    const channel = new SlackChannel({ fetch: fakeFetch, secrets: resolvingSecrets() });
+    await channel.publish(target(), {
       title: "t",
       body: "b",
       severity: "info",
@@ -101,9 +88,9 @@ describe("SlackChannel", () => {
   });
 
   it("throws when Slack returns a non-2xx status", async () => {
-    const channel = new SlackChannel({ fetch: failingFetch });
+    const channel = new SlackChannel({ fetch: failingFetch, secrets: resolvingSecrets() });
     await expect(
-      channel.publish(target({ destination: "https://hooks.slack.com/x" }), {
+      channel.publish(target(), {
         title: "t",
         body: "b",
         severity: "info",
@@ -136,8 +123,8 @@ describe("SlackChannel", () => {
       init = i as RequestInit;
       return new Response("ok", { status: 200 });
     };
-    const channel = new SlackChannel({ fetch: fakeFetch });
-    await channel.publish(target({ destination: "https://hooks.slack.com/x" }), payload);
+    const channel = new SlackChannel({ fetch: fakeFetch, secrets: resolvingSecrets() });
+    await channel.publish(target(), payload);
     return {
       headers: init!.headers as Record<string, string>,
       body: JSON.parse(init!.body as string),
@@ -239,21 +226,5 @@ describe("SlackChannel", () => {
     const header = body.blocks[0]!.text!.text;
     expect(header.length).toBe(150);
     expect(header.endsWith("...")).toBe(true);
-  });
-
-  it("does not treat a verbatim http:// URL as a credential ref", async () => {
-    let capturedUrl: string | null = null;
-    const fakeFetch: typeof fetch = async (url) => {
-      capturedUrl = String(url);
-      return new Response("ok", { status: 200 });
-    };
-    const channel = new SlackChannel({ fetch: fakeFetch });
-    await channel.publish(target({ destination: "http://hooks.internal/x" }), {
-      title: "t",
-      body: "b",
-      severity: "info",
-      eventName: "run.started",
-    });
-    expect(capturedUrl).toBe("http://hooks.internal/x");
   });
 });

@@ -159,7 +159,7 @@ describe("NotificationDispatcher", () => {
 
   it("records stubbed delivery for unwired channels", async () => {
     const client = new NotificationMemoryClient();
-    // `teams` is still unwired (only ntfy/slack/github_checks are wired).
+    // `teams` is unwired (no deps supplied; only ntfy is wired by default).
     await seedOrgTarget(client, "teams");
     await seedRoute(client, { id: "r_teams", targetId: "target_teams", eventName: "run.failed" });
 

@@ -153,13 +153,11 @@ export class GitHubVcsProvider implements VcsProvider {
 
   async pushBranch(input: PushBranchInput): Promise<void> {
     await pushWorkspaceBranchToGitHub({
-      secrets: input.secrets,
       ssh: input.ssh,
       target: input.target,
       workspacePath: input.workspacePath,
       repoUrl: input.repoUrl,
       branch: input.branch,
-      credentialRef: input.credentialRef,
       token: input.token.token,
       timeoutMs: input.timeoutMs,
       sourceRef: input.sourceRef,

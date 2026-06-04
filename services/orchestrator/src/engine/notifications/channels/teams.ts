@@ -6,9 +6,10 @@ import type { NotificationChannel } from "./types.js";
 //
 // Target shape:
 //   - `destination` is a *credential ref* pointing at the Teams incoming
-//     webhook URL (a write-only secret resolved through the secret store). For
-//     dev / back-compat a destination that is already a full
-//     `https://...webhook.office.com/...` URL is used verbatim.
+//     webhook URL (a write-only secret resolved through the secret store). The
+//     webhook URL is NEVER stored in the clear on the target row; the matrix UI
+//     persists a `credential/...` ref and the operator writes the secret
+//     separately.
 //
 // Delivery model: POST a legacy MessageCard JSON body (the shape connector
 // webhooks accept without an Adaptive Card wrapper) to the resolved URL.
@@ -17,8 +18,9 @@ import type { NotificationChannel } from "./types.js";
 
 export interface TeamsChannelDeps {
   // Secret store used to resolve a webhook credential ref into the actual
-  // Teams incoming-webhook URL. Optional only for the legacy verbatim-URL path.
-  secrets?: SecretStore;
+  // Teams incoming-webhook URL. REQUIRED — a credential ref is the only
+  // accepted destination shape.
+  secrets: SecretStore;
   // fetch is injected so tests can drive it without a real network.
   fetch?: typeof fetch;
 }
@@ -34,10 +36,10 @@ const TEAMS_THEME_BY_SEVERITY: Record<NotificationPayload["severity"], string> =
 export class TeamsChannel implements NotificationChannel {
   readonly kind = "teams" as const;
   readonly wired = true;
-  private readonly secrets: SecretStore | undefined;
+  private readonly secrets: SecretStore;
   private readonly fetchImpl: typeof fetch;
 
-  constructor(deps: TeamsChannelDeps = {}) {
+  constructor(deps: TeamsChannelDeps) {
     this.secrets = deps.secrets;
     this.fetchImpl = deps.fetch ?? fetch;
   }
@@ -101,20 +103,10 @@ function buildTeamsCard(payload: NotificationPayload): TeamsMessageCard {
   return card;
 }
 
-// Shared webhook resolution: a destination that already looks like a URL is
-// used as-is; anything else is treated as a credential ref resolved through
-// the secret store.
-export async function resolveWebhookUrl(
-  channel: string,
-  secrets: SecretStore | undefined,
-  destination: string,
-): Promise<string> {
-  if (destination.startsWith("https://") || destination.startsWith("http://")) {
-    return destination;
-  }
-  if (secrets === undefined) {
-    throw new Error(`${channel} channel needs a secret store to resolve credential ref: ${destination}`);
-  }
+// Shared webhook resolution: the destination is ALWAYS a credential ref
+// resolved through the secret store (the webhook URL is never stored in the
+// clear on the target row).
+export async function resolveWebhookUrl(channel: string, secrets: SecretStore, destination: string): Promise<string> {
   const secret = await secrets.get(destination);
   if (secret === undefined) {
     throw new Error(`missing ${channel} webhook credential ref: ${destination}`);

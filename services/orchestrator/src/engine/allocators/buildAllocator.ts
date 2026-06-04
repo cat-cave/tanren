@@ -19,6 +19,18 @@ function env(name: string): string | undefined {
   return value === undefined || value === "" ? undefined : value;
 }
 
+// Require a non-blank env var; throw a clear error when unset/blank (NO default).
+// Mirrors the allocator-side `requireEnv` so both ends of the sidecar bearer-token
+// pair fail loud rather than silently falling back to a `"dev"` token. Both
+// compose profiles set TANREN_ALLOCATOR_TOKEN.
+function requireEnv(name: string): string {
+  const value = env(name);
+  if (value === undefined) {
+    throw new Error(`${name} is required (set it in the environment; there is no default)`);
+  }
+  return value;
+}
+
 function buildStatic(runners: RunnerStore): StaticRunnerAllocator {
   // Dev-only: route to the long-lived dev compose static runner. Preserves the
   // P2A-0010 security boundary (no docker socket on orchestrator) while keeping
@@ -35,7 +47,7 @@ function buildStatic(runners: RunnerStore): StaticRunnerAllocator {
 function buildSidecar(runners: RunnerStore): SidecarHttpAllocator {
   return new SidecarHttpAllocator({
     baseUrl: env("TANREN_ALLOCATOR_URL") ?? "http://allocator:3200",
-    authToken: env("TANREN_ALLOCATOR_TOKEN") ?? "dev",
+    authToken: requireEnv("TANREN_ALLOCATOR_TOKEN"),
     runners,
   });
 }

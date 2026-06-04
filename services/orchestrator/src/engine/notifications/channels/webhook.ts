@@ -8,9 +8,8 @@ import { resolveWebhookUrl, safeReadText } from "./teams.js";
 //
 // Target shape:
 //   - `destination` is a *credential ref* pointing at the destination URL (a
-//     write-only secret resolved through the secret store). For dev /
-//     back-compat a destination that is already a full `https://...` URL is
-//     used verbatim.
+//     write-only secret resolved through the secret store). The URL is NEVER
+//     stored in the clear on the target row.
 //
 // Delivery model: POST the redacted NotificationPayload verbatim as the JSON
 // body so downstream consumers receive the canonical event shape. Any non-2xx
@@ -23,8 +22,8 @@ import { resolveWebhookUrl, safeReadText } from "./teams.js";
 // HMAC-SHA256 the body and send the digest as `X-Tanren-Signature: sha256=<hex>`
 // plus an `X-Tanren-Timestamp` header (the timestamp is bound into the digest, a
 // replay guard) — a provisioned webhook target SHOULD carry one. Sign-if-
-// configured is the explicit fallback: a target with no signing secret (no store,
-// or no value at the ref) is delivered UNSIGNED rather than failing — the
+// configured is the explicit per-target choice (NOT back-compat): a target with
+// no signing secret at the ref is delivered UNSIGNED rather than failing — the
 // destination URL still gates delivery. The secret VALUE is never logged or
 // surfaced; only the public digest crosses the wire.
 
@@ -33,9 +32,10 @@ const DEFAULT_SIGNING_REF_PREFIX = "credential/webhook-signing";
 
 export interface WebhookChannelDeps {
   // Secret store used to resolve a destination credential ref into the actual
-  // URL, AND the per-target signing secret. Optional only for the legacy
-  // verbatim-URL path; without it a target cannot be signed (unsigned fallback).
-  secrets?: SecretStore;
+  // URL, AND the per-target signing secret. REQUIRED — a credential ref is the
+  // only accepted destination shape. (A target with no signing secret at its ref
+  // is still delivered unsigned — the per-target sign-if-configured choice.)
+  secrets: SecretStore;
   // Override the per-target signing-secret ref prefix; the resolved ref is
   // `<prefix>/<targetId>`. Defaults to `credential/webhook-signing`.
   signingRefPrefix?: string;
@@ -48,12 +48,12 @@ export interface WebhookChannelDeps {
 export class WebhookChannel implements NotificationChannel {
   readonly kind = "webhook" as const;
   readonly wired = true;
-  private readonly secrets: SecretStore | undefined;
+  private readonly secrets: SecretStore;
   private readonly signingRefPrefix: string;
   private readonly now: () => number;
   private readonly fetchImpl: typeof fetch;
 
-  constructor(deps: WebhookChannelDeps = {}) {
+  constructor(deps: WebhookChannelDeps) {
     this.secrets = deps.secrets;
     this.signingRefPrefix = deps.signingRefPrefix ?? DEFAULT_SIGNING_REF_PREFIX;
     this.now = deps.nowMs ?? Date.now;
@@ -90,7 +90,6 @@ export class WebhookChannel implements NotificationChannel {
 
   /** Resolve the per-target signing secret value, or undefined when unconfigured. */
   private async resolveSigningSecret(targetId: string): Promise<string | undefined> {
-    if (this.secrets === undefined) return undefined;
     const ref = `${this.signingRefPrefix}/${targetId}`;
     const secret = await this.secrets.get(ref);
     return secret?.value;

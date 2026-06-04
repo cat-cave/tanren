@@ -32,6 +32,7 @@ const secrets = new InMemorySecretStore();
 const ALLOC_ENV_KEYS = [
   "TANREN_ALLOCATOR_KIND",
   "TANREN_ALLOCATOR_ROUTING",
+  "TANREN_ALLOCATOR_TOKEN",
   "TANREN_MANUAL_SSH_HOSTS",
   "TANREN_HETZNER_API_TOKEN",
   "TANREN_DO_API_TOKEN",
@@ -62,6 +63,10 @@ beforeEach(() => {
     savedEnv[key] = process.env[key];
     delete process.env[key];
   }
+  // The sidecar allocator REQUIRES a bearer token (no `"dev"` fallback). Set one
+  // by default so the sidecar-building cases (default / unknown-kind / sidecar /
+  // router-default) construct; cases asserting the loud throw clear it.
+  process.env.TANREN_ALLOCATOR_TOKEN = "test-token";
 });
 
 afterEach(() => {
@@ -98,6 +103,12 @@ describe("buildAllocatorFromEnv — single-kind selection", () => {
   it("selects the sidecar allocator for kind=sidecar", () => {
     process.env.TANREN_ALLOCATOR_KIND = "sidecar";
     expect(buildAllocatorFromEnv(fakePool, secrets)).toBeInstanceOf(SidecarHttpAllocator);
+  });
+
+  it("throws when the sidecar allocator token env is missing (no 'dev' fallback)", () => {
+    process.env.TANREN_ALLOCATOR_KIND = "sidecar";
+    delete process.env.TANREN_ALLOCATOR_TOKEN;
+    expect(() => buildAllocatorFromEnv(fakePool, secrets)).toThrow(/TANREN_ALLOCATOR_TOKEN is required/u);
   });
 
   it("is case-insensitive on the kind (STATIC -> static)", () => {

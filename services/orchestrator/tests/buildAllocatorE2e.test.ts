@@ -313,8 +313,10 @@ describe("buildAllocatorFromEnv — env defaults flow through allocate() (stubbe
     expect(allocation.target.username).toBe("ubuntu");
   });
 
-  it("sidecar: default base url + token from env drive the /allocate call", async () => {
+  it("sidecar: default base url + the required token from env drive the /allocate call", async () => {
     process.env.TANREN_ALLOCATOR_KIND = "sidecar";
+    // The harness sets TANREN_ALLOCATOR_TOKEN=dev (the token is REQUIRED — no
+    // `"dev"` fallback in buildSidecar; it must come from the environment).
     let captured: { url: string; auth?: string } = { url: "" };
     globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
       captured = {
@@ -330,7 +332,7 @@ describe("buildAllocatorFromEnv — env defaults flow through allocate() (stubbe
       });
     }) as typeof fetch;
     await allocateScoped(buildAllocatorFromEnv(queryPool, memSecrets()), allocReq);
-    // Defaults from buildSidecar: base url http://allocator:3200, token "dev".
+    // Default base url http://allocator:3200; the token comes from the env.
     expect(captured.url).toBe("http://allocator:3200/allocate");
     expect(captured.auth).toBe("Bearer dev");
   });

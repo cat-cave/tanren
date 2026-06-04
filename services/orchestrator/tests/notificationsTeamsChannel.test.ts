@@ -4,7 +4,11 @@ import type { SecretStore, SecretValue } from "../src/engine/contracts/secretSto
 import type { NotificationTargetRow } from "../src/engine/notifications/index.js";
 
 // Teams channel tests. Injected fetch double + in-memory secret store so
-// dispatch is asserted without a real webhook.
+// dispatch is asserted without a real webhook. The destination is ALWAYS a
+// credential ref resolved through the secret store.
+
+const WEBHOOK_REF = "credential/teams/alerts";
+const WEBHOOK_URL = "https://outlook.office.com/webhook/abc";
 
 function target(overrides: Partial<NotificationTargetRow> = {}): NotificationTargetRow {
   return {
@@ -13,7 +17,7 @@ function target(overrides: Partial<NotificationTargetRow> = {}): NotificationTar
     scope: "org",
     userId: null,
     channelKind: "teams",
-    destination: overrides.destination ?? "credential/teams/alerts",
+    destination: overrides.destination ?? WEBHOOK_REF,
     label: "teams alerts",
     enabled: true,
     weekendMute: false,
@@ -35,6 +39,8 @@ class MemorySecrets implements SecretStore {
   async delete(): Promise<void> {}
 }
 
+const resolvingSecrets = (): SecretStore => new MemorySecrets({ [WEBHOOK_REF]: WEBHOOK_URL });
+
 describe("TeamsChannel", () => {
   it("resolves a credential ref and POSTs a MessageCard body", async () => {
     let captured: { url: string; init: RequestInit } | null = null;
@@ -42,10 +48,7 @@ describe("TeamsChannel", () => {
       captured = { url: String(url), init: init as RequestInit };
       return new Response("1", { status: 200 });
     };
-    const secrets = new MemorySecrets({
-      "credential/teams/alerts": "https://outlook.office.com/webhook/abc",
-    });
-    const channel = new TeamsChannel({ fetch: fakeFetch, secrets });
+    const channel = new TeamsChannel({ fetch: fakeFetch, secrets: resolvingSecrets() });
     await channel.publish(target(), {
       title: "[FAIL] run.failed",
       body: "run failed details",
@@ -55,7 +58,7 @@ describe("TeamsChannel", () => {
       tags: ["tanren"],
     });
     expect(captured).not.toBeNull();
-    expect(captured!.url).toBe("https://outlook.office.com/webhook/abc");
+    expect(captured!.url).toBe(WEBHOOK_URL);
     expect(captured!.init.method).toBe("POST");
     const body = JSON.parse(captured!.init.body as string) as {
       "@type": string;
@@ -69,26 +72,10 @@ describe("TeamsChannel", () => {
     expect(body.potentialAction[0]?.targets[0]?.uri).toBe("https://tanren.example/runs/run_1");
   });
 
-  it("uses a full webhook URL destination verbatim without a secret store", async () => {
-    let capturedUrl: string | null = null;
-    const fakeFetch: typeof fetch = async (url) => {
-      capturedUrl = String(url);
-      return new Response("1", { status: 200 });
-    };
-    const channel = new TeamsChannel({ fetch: fakeFetch });
-    await channel.publish(target({ destination: "https://outlook.office.com/webhook/x" }), {
-      title: "t",
-      body: "b",
-      severity: "info",
-      eventName: "run.started",
-    });
-    expect(capturedUrl).toBe("https://outlook.office.com/webhook/x");
-  });
-
   it("throws when Teams returns a non-2xx status", async () => {
-    const channel = new TeamsChannel({ fetch: failingFetch });
+    const channel = new TeamsChannel({ fetch: failingFetch, secrets: resolvingSecrets() });
     await expect(
-      channel.publish(target({ destination: "https://outlook.office.com/webhook/x" }), {
+      channel.publish(target(), {
         title: "t",
         body: "b",
         severity: "info",
@@ -129,8 +116,8 @@ describe("TeamsChannel", () => {
       init = i as RequestInit;
       return new Response("1", { status: 200 });
     };
-    const channel = new TeamsChannel({ fetch: fakeFetch });
-    await channel.publish(target({ destination: "https://outlook.office.com/webhook/x" }), payload);
+    const channel = new TeamsChannel({ fetch: fakeFetch, secrets: resolvingSecrets() });
+    await channel.publish(target(), payload);
     return { headers: init!.headers as Record<string, string>, card: JSON.parse(init!.body as string) };
   }
 
@@ -205,33 +192,5 @@ describe("TeamsChannel", () => {
     expect(action["@type"]).toBe("OpenUri");
     expect(action.name).toBe("view run");
     expect(action.targets[0]).toEqual({ os: "default", uri: "https://tanren.example/runs/run_1" });
-  });
-
-  it("uses an http:// destination verbatim", async () => {
-    let capturedUrl: string | null = null;
-    const fakeFetch: typeof fetch = async (url) => {
-      capturedUrl = String(url);
-      return new Response("1", { status: 200 });
-    };
-    const channel = new TeamsChannel({ fetch: fakeFetch });
-    await channel.publish(target({ destination: "http://outlook.internal/x" }), {
-      title: "t",
-      body: "b",
-      severity: "info",
-      eventName: "run.started",
-    });
-    expect(capturedUrl).toBe("http://outlook.internal/x");
-  });
-
-  it("throws when a credential ref is given but no secret store is wired", async () => {
-    const channel = new TeamsChannel({});
-    await expect(
-      channel.publish(target({ destination: "credential/teams/alerts" }), {
-        title: "t",
-        body: "b",
-        severity: "info",
-        eventName: "run.started",
-      }),
-    ).rejects.toThrow(/teams channel needs a secret store/u);
   });
 });

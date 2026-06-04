@@ -7,9 +7,8 @@ import { resolveWebhookUrl, safeReadText } from "./teams.js";
 //
 // Target shape:
 //   - `destination` is a *credential ref* pointing at the Discord webhook URL
-//     (a write-only secret resolved through the secret store). For dev /
-//     back-compat a destination that is already a full
-//     `https://discord.com/api/webhooks/...` URL is used verbatim.
+//     (a write-only secret resolved through the secret store). The webhook URL
+//     is NEVER stored in the clear on the target row.
 //
 // Delivery model: POST a `{ content, embeds }` JSON body to the resolved URL.
 // Discord returns `204 No Content` on success; any non-2xx is surfaced as a
@@ -17,8 +16,9 @@ import { resolveWebhookUrl, safeReadText } from "./teams.js";
 
 export interface DiscordChannelDeps {
   // Secret store used to resolve a webhook credential ref into the actual
-  // Discord webhook URL. Optional only for the legacy verbatim-URL path.
-  secrets?: SecretStore;
+  // Discord webhook URL. REQUIRED — a credential ref is the only accepted
+  // destination shape.
+  secrets: SecretStore;
   // fetch is injected so tests can drive it without a real network.
   fetch?: typeof fetch;
 }
@@ -34,10 +34,10 @@ const DISCORD_COLOR_BY_SEVERITY: Record<NotificationPayload["severity"], number>
 export class DiscordChannel implements NotificationChannel {
   readonly kind = "discord" as const;
   readonly wired = true;
-  private readonly secrets: SecretStore | undefined;
+  private readonly secrets: SecretStore;
   private readonly fetchImpl: typeof fetch;
 
-  constructor(deps: DiscordChannelDeps = {}) {
+  constructor(deps: DiscordChannelDeps) {
     this.secrets = deps.secrets;
     this.fetchImpl = deps.fetch ?? fetch;
   }

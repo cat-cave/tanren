@@ -5,7 +5,11 @@ import { verifyWebhookSignature } from "../src/engine/webhooks/hmacSignature.js"
 import type { SecretStore, SecretValue } from "../src/engine/contracts/secretStore.js";
 import type { NotificationTargetRow } from "../src/engine/notifications/index.js";
 
-// Generic webhook channel tests. Injected fetch double + in-memory secrets.
+// Generic webhook channel tests. Injected fetch double + in-memory secrets. The
+// destination is ALWAYS a credential ref resolved through the secret store.
+
+const DEST_REF = "credential/webhook/alerts";
+const DEST_URL = "https://hooks.example.com/ingest";
 
 function target(overrides: Partial<NotificationTargetRow> = {}): NotificationTargetRow {
   return {
@@ -14,7 +18,7 @@ function target(overrides: Partial<NotificationTargetRow> = {}): NotificationTar
     scope: "org",
     userId: null,
     channelKind: "webhook",
-    destination: overrides.destination ?? "credential/webhook/alerts",
+    destination: overrides.destination ?? DEST_REF,
     label: "webhook alerts",
     enabled: true,
     weekendMute: false,
@@ -39,6 +43,8 @@ class MemorySecrets implements SecretStore {
   }
 }
 
+const resolvingSecrets = (): SecretStore => new MemorySecrets({ [DEST_REF]: DEST_URL });
+
 describe("WebhookChannel", () => {
   it("resolves a credential ref and POSTs the raw payload shape", async () => {
     let captured: { url: string; init: RequestInit } | null = null;
@@ -46,10 +52,7 @@ describe("WebhookChannel", () => {
       captured = { url: String(url), init: init as RequestInit };
       return new Response("ok", { status: 200 });
     };
-    const secrets = new MemorySecrets({
-      "credential/webhook/alerts": "https://hooks.example.com/ingest",
-    });
-    const channel = new WebhookChannel({ fetch: fakeFetch, secrets });
+    const channel = new WebhookChannel({ fetch: fakeFetch, secrets: resolvingSecrets() });
     await channel.publish(target(), {
       title: "run failed",
       body: "details",
@@ -58,7 +61,7 @@ describe("WebhookChannel", () => {
       url: "https://tanren.example/runs/run_1",
       tags: ["tanren"],
     });
-    expect(captured!.url).toBe("https://hooks.example.com/ingest");
+    expect(captured!.url).toBe(DEST_URL);
     const body = JSON.parse(captured!.init.body as string) as Record<string, unknown>;
     expect(body).toEqual({
       title: "run failed",
@@ -70,20 +73,20 @@ describe("WebhookChannel", () => {
     });
   });
 
-  it("uses a full URL destination verbatim and omits optional fields", async () => {
+  it("omits optional fields that are unset", async () => {
     let captured: { url: string; init: RequestInit } | null = null;
     const fakeFetch: typeof fetch = async (url, init) => {
       captured = { url: String(url), init: init as RequestInit };
       return new Response("ok", { status: 200 });
     };
-    const channel = new WebhookChannel({ fetch: fakeFetch });
-    await channel.publish(target({ destination: "https://hooks.example.com/x" }), {
+    const channel = new WebhookChannel({ fetch: fakeFetch, secrets: resolvingSecrets() });
+    await channel.publish(target(), {
       title: "t",
       body: "b",
       severity: "info",
       eventName: "run.started",
     });
-    expect(captured!.url).toBe("https://hooks.example.com/x");
+    expect(captured!.url).toBe(DEST_URL);
     const body = JSON.parse(captured!.init.body as string) as Record<string, unknown>;
     expect(body).not.toHaveProperty("url");
     expect(body).not.toHaveProperty("tags");
@@ -95,8 +98,8 @@ describe("WebhookChannel", () => {
       captured = init as RequestInit;
       return new Response("ok", { status: 200 });
     };
-    const channel = new WebhookChannel({ fetch: fakeFetch });
-    await channel.publish(target({ destination: "https://hooks.example.com/x" }), {
+    const channel = new WebhookChannel({ fetch: fakeFetch, secrets: resolvingSecrets() });
+    await channel.publish(target(), {
       title: "t",
       body: "b",
       severity: "info",
@@ -112,8 +115,8 @@ describe("WebhookChannel", () => {
       captured = init as RequestInit;
       return new Response("ok", { status: 200 });
     };
-    const channel = new WebhookChannel({ fetch: fakeFetch });
-    await channel.publish(target({ destination: "https://hooks.example.com/x" }), {
+    const channel = new WebhookChannel({ fetch: fakeFetch, secrets: resolvingSecrets() });
+    await channel.publish(target(), {
       title: "t",
       body: "b",
       severity: "warn",
@@ -124,26 +127,22 @@ describe("WebhookChannel", () => {
     expect(body.eventName).toBe("ci.failed");
   });
 
-  it("uses an http:// destination verbatim", async () => {
-    let capturedUrl: string | null = null;
-    const fakeFetch: typeof fetch = async (url) => {
-      capturedUrl = String(url);
-      return new Response("ok", { status: 200 });
-    };
-    const channel = new WebhookChannel({ fetch: fakeFetch });
-    await channel.publish(target({ destination: "http://hooks.internal/x" }), {
-      title: "t",
-      body: "b",
-      severity: "info",
-      eventName: "run.started",
-    });
-    expect(capturedUrl).toBe("http://hooks.internal/x");
+  it("throws when a credential ref cannot be resolved", async () => {
+    const channel = new WebhookChannel({ fetch: failingFetch, secrets: new MemorySecrets({}) });
+    await expect(
+      channel.publish(target({ destination: "credential/webhook/missing" }), {
+        title: "t",
+        body: "b",
+        severity: "info",
+        eventName: "run.started",
+      }),
+    ).rejects.toThrow(/missing webhook webhook credential ref/u);
   });
 
   it("throws when the endpoint returns a non-2xx status", async () => {
-    const channel = new WebhookChannel({ fetch: failingFetch });
+    const channel = new WebhookChannel({ fetch: failingFetch, secrets: resolvingSecrets() });
     await expect(
-      channel.publish(target({ destination: "https://hooks.example.com/x" }), {
+      channel.publish(target(), {
         title: "t",
         body: "b",
         severity: "info",
@@ -173,9 +172,9 @@ describe("WebhookChannel signing (P-INT-6)", () => {
 
   it("signs the body with the per-target secret and carries a timestamp header", async () => {
     const { captured, fetchImpl } = captureFetch();
-    const secrets = new MemorySecrets({ "credential/webhook-signing/t": SIGNING_SECRET });
+    const secrets = new MemorySecrets({ [DEST_REF]: DEST_URL, "credential/webhook-signing/t": SIGNING_SECRET });
     const channel = new WebhookChannel({ fetch: fetchImpl, secrets, nowMs: () => 1_700_000_000_000 });
-    await channel.publish(target({ destination: "https://hooks.example.com/x" }), payload);
+    await channel.publish(target(), payload);
 
     const headers = captured[0]!.init.headers as Record<string, string>;
     const signature = headers["X-Tanren-Signature"];
@@ -200,29 +199,21 @@ describe("WebhookChannel signing (P-INT-6)", () => {
 
   it("sends UNSIGNED when no signing secret is configured (sign-if-configured fallback)", async () => {
     const { captured, fetchImpl } = captureFetch();
-    // No signing secret at the ref.
-    const secrets = new MemorySecrets({});
+    // The destination ref resolves, but no signing secret at the signing ref.
+    const secrets = new MemorySecrets({ [DEST_REF]: DEST_URL });
     const channel = new WebhookChannel({ fetch: fetchImpl, secrets });
-    await channel.publish(target({ destination: "https://hooks.example.com/x" }), payload);
+    await channel.publish(target(), payload);
 
     const headers = captured[0]!.init.headers as Record<string, string>;
     expect(headers["X-Tanren-Signature"]).toBeUndefined();
     expect(headers["X-Tanren-Timestamp"]).toBeUndefined();
   });
 
-  it("sends UNSIGNED when no secret store is wired", async () => {
-    const { captured, fetchImpl } = captureFetch();
-    const channel = new WebhookChannel({ fetch: fetchImpl });
-    await channel.publish(target({ destination: "https://hooks.example.com/x" }), payload);
-    const headers = captured[0]!.init.headers as Record<string, string>;
-    expect(headers["X-Tanren-Signature"]).toBeUndefined();
-  });
-
   it("never leaks the signing secret into headers, the body, or the URL", async () => {
     const { captured, fetchImpl } = captureFetch();
-    const secrets = new MemorySecrets({ "credential/webhook-signing/t": SIGNING_SECRET });
+    const secrets = new MemorySecrets({ [DEST_REF]: DEST_URL, "credential/webhook-signing/t": SIGNING_SECRET });
     const channel = new WebhookChannel({ fetch: fetchImpl, secrets });
-    await channel.publish(target({ destination: "https://hooks.example.com/x" }), payload);
+    await channel.publish(target(), payload);
 
     const { url, init } = captured[0]!;
     const serialized = `${url} ${JSON.stringify(init.headers)} ${String(init.body)}`;
