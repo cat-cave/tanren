@@ -16,6 +16,7 @@ import type {
   SupersededEntry,
 } from "../../../src/engine/contracts/mergeCoordinator.js";
 import type { MergeQueueEventEmitter } from "../../../src/engine/merge/coordinator.js";
+import type { SpecEscalator } from "../../../src/engine/merge/coordinatorEscalate.js";
 import type { SpecPriority } from "../../../src/engine/state/spec.js";
 
 interface QueueRow {
@@ -219,7 +220,7 @@ export class RecordingMergeQueueEventEmitter implements MergeQueueEventEmitter {
   readonly events: {
     type: "merge.queue.advanced" | "merge.dequeued" | "merge.queue.infra_blocked";
     specId: string;
-    reason?: "conflict" | "blocked" | "failed";
+    reason?: DequeueReason;
     queueDepth?: number;
     kind?: "ceiling" | "ambiguous";
     attempts?: number;
@@ -231,7 +232,7 @@ export class RecordingMergeQueueEventEmitter implements MergeQueueEventEmitter {
   }
 
   // eslint-disable-next-line @typescript-eslint/require-await
-  async emitDequeued(input: { entry: MergeQueueEntry; reason: "conflict" | "blocked" | "failed" }): Promise<void> {
+  async emitDequeued(input: { entry: MergeQueueEntry; reason: DequeueReason }): Promise<void> {
     this.events.push({ type: "merge.dequeued", specId: input.entry.specId, reason: input.reason });
   }
 
@@ -247,5 +248,20 @@ export class RecordingMergeQueueEventEmitter implements MergeQueueEventEmitter {
       kind: input.kind,
       attempts: input.attempts,
     });
+  }
+}
+
+/**
+ * A recording SpecEscalator fake (TEST FIXTURE) — captures each non-bricking §2c
+ * escalation (the spec parked at `needs_attention`) so the conformance suite can assert
+ * the spec was escalated + the loud event would fire, without a DB. Stands in for
+ * `PgSpecEscalator`'s guarded spec-status flip + `dag.spec.needs_attention` emission.
+ */
+export class RecordingSpecEscalator implements SpecEscalator {
+  readonly escalations: { specId: string; message: string }[] = [];
+
+  // eslint-disable-next-line @typescript-eslint/require-await
+  async escalate(input: { projectId: string; entry: MergeQueueEntry; message: string }): Promise<void> {
+    this.escalations.push({ specId: input.entry.specId, message: input.message });
   }
 }

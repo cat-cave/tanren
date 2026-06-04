@@ -14,14 +14,22 @@ export const strandSensitivityRules: SensitivityRule[] = [
     ["terminalRuns[].status", "public"],
     ["attempt", "public"],
   ]),
-  // dag.spec.needs_attention: a strand exceeded the bounded re-enqueue cap and was
-  // escalated to the terminal needs_attention status.
+  // dag.spec.needs_attention: a spec parked at the terminal needs_attention status —
+  // either a strand exceeded the bounded re-enqueue cap (source `strand`), or the
+  // native merge queue judged it genuinely irreconcilable (source `merge_conflict`).
+  // All fields are public: run ids + statuses are visible run lineage, the PR url +
+  // number are public coordinates, and the message is the resolver's reason (no diff
+  // content, credentials, or command output).
   ...rulesFor("dag.spec.needs_attention", [
+    ["source", "public"],
     ["specId", "public"],
     ["reason", "public"],
     ["terminalRuns[].runId", "public"],
     ["terminalRuns[].status", "public"],
     ["attempts", "public"],
+    ["prUrl", "public"],
+    ["prNumber", "public"],
+    ["message", "public"],
   ]),
 ];
 

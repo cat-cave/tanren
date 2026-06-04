@@ -1,49 +1,89 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "additionalProperties": false,
-  "properties": {
-    "attempts": {
-      "maximum": 9007199254740991,
-      "minimum": 0,
-      "type": "integer"
-    },
-    "reason": {
-      "enum": [
-        "halted_reexec",
-        "orphaned_marker",
-        "no_live_run"
-      ],
-      "type": "string"
-    },
-    "specId": {
-      "type": "string"
-    },
-    "terminalRuns": {
-      "items": {
-        "additionalProperties": false,
-        "properties": {
-          "runId": {
-            "type": "string"
-          },
-          "status": {
-            "type": "string"
-          }
+  "oneOf": [
+    {
+      "additionalProperties": false,
+      "properties": {
+        "attempts": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
         },
-        "required": [
-          "runId",
-          "status"
-        ],
-        "type": "object"
+        "reason": {
+          "enum": [
+            "halted_reexec",
+            "orphaned_marker",
+            "no_live_run"
+          ],
+          "type": "string"
+        },
+        "source": {
+          "const": "strand",
+          "type": "string"
+        },
+        "specId": {
+          "type": "string"
+        },
+        "terminalRuns": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "runId": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "runId",
+              "status"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        }
       },
-      "type": "array"
+      "required": [
+        "source",
+        "specId",
+        "reason",
+        "terminalRuns",
+        "attempts"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "message": {
+          "type": "string"
+        },
+        "prNumber": {
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+        },
+        "prUrl": {
+          "type": "string"
+        },
+        "source": {
+          "const": "merge_conflict",
+          "type": "string"
+        },
+        "specId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "specId",
+        "prUrl",
+        "prNumber",
+        "message"
+      ],
+      "type": "object"
     }
-  },
-  "required": [
-    "specId",
-    "reason",
-    "terminalRuns",
-    "attempts"
   ],
-  "type": "object",
   "x-tanren-schema-id": "tanren.event.dag.spec.needs_attention"
 }

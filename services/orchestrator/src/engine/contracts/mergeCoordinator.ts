@@ -35,7 +35,19 @@ export type MergeDriveOutcome =
   | { kind: "conflict"; message: string }
   | { kind: "blocked"; message: string }
   // The merge failed terminally — the entry is removed (NOT re-queued).
-  | { kind: "failed"; message: string };
+  | { kind: "failed"; message: string }
+  // The LOUD TERMINAL ESCALATION (autonomy-engine.md §2c — the non-bricking conflict
+  // escalation). The intent-preserving conflict resolver (wired in a later PR) judged
+  // this spec GENUINELY irreconcilable against another in-flight spec: re-executing it
+  // blindly would just re-conflict forever. Instead the spec PARKS at the terminal
+  // `needs_attention` status — which FREES its merge slot so the rest of the DAG keeps
+  // moving (it blocks ONLY its dependents, never the whole graph), is dequeued with
+  // reason `needs_attention`, and is NEVER re-queued. Distinct from the RECOVERABLE
+  // `conflict` (which routes back through the P2b re-execution path) and the infra
+  // `failed` (a terminal merge-stage failure, not a deliberate ask-for-help). There is
+  // NO producer of this outcome yet — the drive resolver still returns the recoverable
+  // `conflict`; this vocabulary lets the later resolver simply RETURN this kind.
+  | { kind: "needs_attention"; message: string };
 
 /**
  * One ready-to-merge run in the native queue, as the coordinator orders it. DAG
@@ -50,10 +62,12 @@ export type MergeDriveOutcome =
  * recoverable (a re-ready run re-enqueues a fresh entry); `failed` is terminal;
  * `superseded` retires the entry of a run a fresh percolation re-execution replaced
  * (the prior run is no longer a live candidate — NOT a real conflict, so it is not
- * routed back through the P2b re-execution path). Mirrors the DB CHECK on
- * `merge_queue.dequeue_reason`.
+ * routed back through the P2b re-execution path); `needs_attention` is the LOUD
+ * TERMINAL escalation — a GENUINELY irreconcilable spec parked at `needs_attention`
+ * (frees its slot, NEVER re-queued, distinct from recoverable `conflict`). Mirrors the
+ * DB CHECK on `merge_queue.dequeue_reason`.
  */
-export type DequeueReason = "conflict" | "blocked" | "failed" | "superseded";
+export type DequeueReason = "conflict" | "blocked" | "failed" | "superseded" | "needs_attention";
 
 export interface MergeQueueEntry {
   queueId: string;
@@ -250,8 +264,10 @@ export interface MergeQueueModel {
    * `conflict`/`blocked` are recoverable (a re-ready run re-enqueues a new entry);
    * `failed` is terminal; `superseded` retires the entry of a run replaced by a
    * fresh percolation re-execution (the prior run + its PR are no longer a live
-   * merge candidate — NOT a real conflict). The entry is removed from the ready set
-   * either way, so a blocked head never deadlocks independent later items (liveness).
+   * merge candidate — NOT a real conflict); `needs_attention` is the LOUD TERMINAL
+   * escalation of a GENUINELY irreconcilable spec (parked at `needs_attention`, never
+   * re-queued). The entry is removed from the ready set either way, so a blocked head
+   * never deadlocks independent later items (liveness).
    */
   markDequeued(queueId: string, reason: DequeueReason): Promise<void>;
 

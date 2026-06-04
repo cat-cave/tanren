@@ -23,6 +23,7 @@ import { InMemoryBatchChecker, RecordingBatchMergeEventEmitter } from "./conform
 import {
   InMemoryMergeQueueModel,
   RecordingMergeQueueEventEmitter,
+  RecordingSpecEscalator,
   ScriptedMergeRunner,
 } from "./conformance/fakes/inMemoryMergeQueue.js";
 
@@ -35,6 +36,7 @@ interface Harness {
   checker: InMemoryBatchChecker;
   events: RecordingMergeQueueEventEmitter;
   batchEvents: RecordingBatchMergeEventEmitter;
+  escalator: RecordingSpecEscalator;
 }
 
 function makeHarness(maxBatchSize = 5): Harness {
@@ -43,17 +45,19 @@ function makeHarness(maxBatchSize = 5): Harness {
   const checker = new InMemoryBatchChecker();
   const events = new RecordingMergeQueueEventEmitter();
   const batchEvents = new RecordingBatchMergeEventEmitter();
+  const escalator = new RecordingSpecEscalator();
   const coordinator = new BatchMergeCoordinator({
     queue,
     runner,
     checker,
     events,
     batchEvents,
+    escalator,
     resolveMaxBatchSize: () => Promise.resolve(maxBatchSize),
     // Run the bounded infra-error retries instantly (no real backoff in tests).
     sleep: () => Promise.resolve(),
   });
-  return { coordinator, queue, runner, checker, events, batchEvents };
+  return { coordinator, queue, runner, checker, events, batchEvents, escalator };
 }
 
 function seed(h: Harness, specId: string, dependsOn: string[] = [], priority: SpecPriority = "tbd"): void {
@@ -107,6 +111,28 @@ describe("BatchMergeCoordinator — speculative batch-check + bisect", () => {
     expect(h.queue.statusOf("run_spec_a")).toBe("merged");
     expect(h.queue.statusOf("run_spec_b")).toBe("merged");
     expect(h.queue.statusOf("run_spec_d")).toBe("merged");
+  });
+
+  it("ESCALATES a needs_attention real-merge outcome to needs_attention (non-bricking, NOT the recoverable conflict path)", async () => {
+    const h = makeHarness();
+    // The batch check PASSES, but spec_b's REAL merge drive returns the genuinely-
+    // irreconcilable `needs_attention` outcome (the resolver's verdict the speculative
+    // check could not see). It must PARK at needs_attention, never re-execute.
+    seed(h, "spec_a");
+    seed(h, "spec_b");
+    h.runner.script("run_spec_b", { kind: "needs_attention", message: "irreconcilable with spec_z" });
+
+    await h.coordinator.coordinate(PROJECT);
+
+    // spec_a (driven first, DAG order) merged; spec_b is ESCALATED + dequeued
+    // `needs_attention` — the batch STOPS (no dependent merges past the parked spec).
+    expect(h.queue.statusOf("run_spec_a")).toBe("merged");
+    expect(h.queue.statusOf("run_spec_b")).toBe("dequeued");
+    // The spec was parked at needs_attention via the shared escalator (the loud event).
+    expect(h.escalator.escalations).toEqual([{ specId: "spec_b", message: "irreconcilable with spec_z" }]);
+    // Dequeued with the TERMINAL needs_attention reason — NOT the recoverable conflict.
+    const dq = h.events.events.find((e) => e.type === "merge.dequeued" && e.specId === "spec_b");
+    expect(dq?.reason).toBe("needs_attention");
   });
 
   it("an innocent PR is never blamed — only the unique pass→fail boundary is the culprit", async () => {

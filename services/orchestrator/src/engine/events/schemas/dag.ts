@@ -261,19 +261,42 @@ export const DagSpecUnstrandedPayload = z
   .strict();
 export type DagSpecUnstrandedPayload = z.infer<typeof DagSpecUnstrandedPayload>;
 
-// dag.spec.needs_attention: a strand was re-enqueued MORE than the bounded cap, so
-// the reconciler stopped re-enqueuing and moved the spec to the terminal
-// `needs_attention` status — freeing the DAG slot and blocking ONLY its dependents
-// (never the whole DAG), surfacing a loud, bounded ask-for-help. `attempts` is the
-// number of prior re-enqueues that exhausted the bound.
-export const DagSpecNeedsAttentionPayload = z
-  .object({
-    specId: z.string(),
-    reason: StrandReason,
-    // The spec's terminal runs at escalation time (the halt history).
-    terminalRuns: z.array(StrandTerminalRun),
-    // How many times the spec had already been re-enqueued (exceeded the cap).
-    attempts: z.number().int().nonnegative(),
-  })
-  .strict();
+// dag.spec.needs_attention: a spec parked at the terminal `needs_attention` status —
+// freeing the DAG slot and blocking ONLY its dependents (never the whole DAG),
+// surfacing a loud, bounded ask-for-help. A discriminated union on `source` because
+// TWO subsystems reach the SAME terminal parked state, each carrying its own halt
+// history:
+//   - `strand`: the NEVER-STRAND reconciler exhausted the bounded re-enqueue cap (a
+//     spec stuck occupying a slot with no live run) — the canonical §2c safety net.
+//   - `merge_conflict`: the native merge queue's intent-preserving conflict resolver
+//     judged the spec GENUINELY irreconcilable against another in-flight spec (re-
+//     executing it would just re-conflict forever), so the coordinator parked it
+//     instead of blindly re-executing (autonomy-engine.md §2c — the non-bricking
+//     conflict escalation). Carries the PR + the resolver's message.
+// One event type (no new event / no events-CHECK migration) so the DAG/UI consume the
+// parked state uniformly regardless of which subsystem escalated it.
+export const DagSpecNeedsAttentionPayload = z.discriminatedUnion("source", [
+  z
+    .object({
+      source: z.literal("strand"),
+      specId: z.string(),
+      reason: StrandReason,
+      // The spec's terminal runs at escalation time (the halt history).
+      terminalRuns: z.array(StrandTerminalRun),
+      // How many times the spec had already been re-enqueued (exceeded the cap).
+      attempts: z.number().int().nonnegative(),
+    })
+    .strict(),
+  z
+    .object({
+      source: z.literal("merge_conflict"),
+      specId: z.string(),
+      // The PR whose merge the resolver found genuinely irreconcilable.
+      prUrl: z.string(),
+      prNumber: z.number().int(),
+      // The resolver's human-readable reason the conflict could not be reconciled.
+      message: z.string(),
+    })
+    .strict(),
+]);
 export type DagSpecNeedsAttentionPayload = z.infer<typeof DagSpecNeedsAttentionPayload>;

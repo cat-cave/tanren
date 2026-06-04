@@ -230,7 +230,7 @@ export const mergeQueue = pgTable(
       .notNull()
       .references(() => organizations.id),
     status: text("status").notNull().default("queued"),
-    /** The dequeue reason when status = 'dequeued' (conflict | blocked | failed | superseded). */
+    /** The dequeue reason when status = 'dequeued' (conflict | blocked | failed | superseded | needs_attention). */
     dequeueReason: text("dequeue_reason"),
     /** The PR url + number captured at enqueue (the coordinator drives by run id). */
     prUrl: text("pr_url").notNull(),
@@ -254,7 +254,7 @@ export const mergeQueue = pgTable(
     enumCheck("merge_queue_status_check", table.status, ["queued", "merging", "merged", "dequeued"]),
     check(
       "merge_queue_dequeue_reason_check",
-      sql`${table.dequeueReason} IS NULL OR ${table.dequeueReason} IN ('conflict','blocked','failed','superseded')`,
+      sql`${table.dequeueReason} IS NULL OR ${table.dequeueReason} IN ('conflict','blocked','failed','superseded','needs_attention')`,
     ),
     index("merge_queue_org_id").on(table.orgId),
     index("merge_queue_org_project").on(table.orgId, table.projectId),
