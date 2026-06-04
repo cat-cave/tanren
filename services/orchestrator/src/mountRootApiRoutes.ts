@@ -5,23 +5,16 @@
 // table; this module owns these root endpoints and the schema/workflow/error
 // deps they pull.
 
-import { runWithJobOrgId, runWithOrgScope, runWithSystemJobScope, runWithSystemScope } from "@tanren/db";
+import { runWithOrgScope, runWithSystemScope } from "@tanren/db";
 import type { Hono } from "hono";
 import type pg from "pg";
 import type { ActorContext } from "./auth/index.js";
 import { orgScopingPool } from "./engine/data/orgScopedDb.js";
-import {
-  ciPollInputSchema,
-  draftPrInputSchema,
-  projectInputSchema,
-  runInputSchema,
-  specInputSchema,
-} from "./inputSchemas.js";
+import { draftPrInputSchema, projectInputSchema, runInputSchema, specInputSchema } from "./inputSchemas.js";
 import type { SecretStore, SshSubstrate } from "./engine/contracts/index.js";
 import { parseRawViewOptIn, redactEventRows } from "./routes/runs/redaction.js";
 import type { VcsProvider } from "./engine/contracts/vcsProvider.js";
 import type { GithubAppTokenMinter } from "./engine/providers/githubAppTokenMinter.js";
-import { CiPullRequestNotFoundError, CiRunNotFoundError, pollCiForRun } from "./engine/workflow/ciPolling.js";
 import {
   DraftPrRunnerNotFoundError,
   DraftPrRunNotFoundError,
@@ -169,50 +162,8 @@ export function mountRootApiRoutes(app: Hono<ActorContextEnv>, deps: RootApiDeps
     }
   });
 
-  app.post("/runs/:runId/ci/poll", async (c) => {
-    const parsed = ciPollInputSchema.safeParse(await c.req.json().catch(() => ({})));
-    if (!parsed.success) {
-      return c.json({ error: "invalid_ci_poll", issues: parsed.error.issues }, 400);
-    }
-    const runId = c.req.param("runId");
-    try {
-      // RLS R3b: this run-keyed route has no `:orgId` path param and is not always
-      // authenticated to an org (the worker drives it server-side), so the poll's
-      // tenant reads on `scopedPool` carry no ambient org. Resolve the run's org
-      // via the BYPASSRLS system scope FIRST (a cross-org bootstrap read), then run
-      // the whole poll under that org's lightweight `runWithJobOrgId` so every
-      // `scopedPool.query` opens a short org-scoped txn. A null-org/legacy run runs
-      // under the explicit per-job SYSTEM scope — never an unscoped bare-pool poll.
-      const orgRow = await runWithSystemScope(pool, (client) =>
-        client.query<{ org_id: string | null }>("SELECT org_id FROM runs WHERE run_id = $1", [runId]),
-      );
-      if (orgRow.rowCount === 0) {
-        return c.json({ error: "run_not_found", message: `run not found: ${runId}` }, 404);
-      }
-      const pollOrgId = orgRow.rows[0]?.org_id ?? null;
-      const runPoll = (): ReturnType<typeof pollCiForRun> =>
-        pollCiForRun({
-          pool: scopedPool,
-          secrets,
-          vcsProvider,
-          runId,
-          githubAppMinter,
-          ...parsed.data,
-        });
-      return c.json(
-        await (pollOrgId === null ? runWithSystemJobScope(runPoll) : runWithJobOrgId(pollOrgId, runPoll)),
-        200,
-      );
-    } catch (error) {
-      if (error instanceof CiRunNotFoundError) {
-        return c.json({ error: "run_not_found", message: error.message }, 404);
-      }
-      if (error instanceof CiPullRequestNotFoundError) {
-        return c.json({ error: "pull_request_not_found", message: error.message }, 409);
-      }
-      return c.json({ error: "ci_poll_failed", message: messageFromError(error) }, 502);
-    }
-  });
+  // The forge-CI poll route (`/runs/:runId/ci/poll`) is GONE: the native gate is the
+  // merge authority (no-Actions delivery model), so there is no forge check-run to poll.
 
   app.get("/runs/:runId", async (c) => {
     const runId = c.req.param("runId");

@@ -22,7 +22,8 @@
 //     every DB write (tasks/events/cost_records/runners/specs/runs) is REAL.
 // It asserts (a) the run lands `done/ok`, (b) the runner row was written AND
 // released under the run's org, and (c) the lifecycle's per-stage tenant rows
-// (plan + write tasks, ci task, events incl. runner.allocated/github.pr.created/
+// (plan + write tasks, the native gate's `gate.verdict` — the CI-stage write under
+// the no-Actions delivery model — events incl. runner.allocated/github.pr.created/
 // runner.released, cost_records, the merged spec status) all persisted org-stamped
 // — i.e. every stage's writes were admitted by the policy.
 //
@@ -88,15 +89,21 @@ const GITHUB_REF = "credential/github/dev";
 const CODEX_REF = "credential/codex/dev";
 const RUNNER_FINGERPRINT = "SHA256:lifecycle-runner-host";
 
-// A no-op SSH substrate: the workflow's git-clone / bootstrap / branch-push all
-// run over `ssh.run`; success (exit 0) lets the lifecycle proceed without a real
-// runner. The allocator's host-key fingerprint is provided so it skips the live
-// TOFU discovery handshake.
+// A no-op SSH substrate: the workflow's git-clone / bootstrap / branch-push AND the
+// NATIVE GATE (deps-ensure + the gate tiers, all over `ssh.run`) run here; success
+// (exit 0) lets the lifecycle proceed without a real runner. `git rev-parse HEAD`
+// returns a deterministic 40-hex sha so the workspace clone HEAD resolves AND the
+// native merge gate's head-sha anchor is present — so the gate emits its org-stamped
+// `gate.verdict` (the native CI-stage tenant write this test locks under RLS) and the
+// `tanren/gate` verdict publishes. The allocator's host-key fingerprint is provided so
+// it skips the live TOFU discovery handshake.
+const FAKE_HEAD_SHA = "a".repeat(40);
 class NoopSsh implements SshSubstrate {
   readonly commands: Array<{ target: SshTarget; command: SshCommand }> = [];
   async run(target: SshTarget, command: SshCommand): Promise<SshCommandResult> {
     this.commands.push({ target, command });
-    return { exitCode: 0, stdout: "", stderr: "", timedOut: false };
+    const stdout = command.command.includes("git rev-parse HEAD") ? FAKE_HEAD_SHA : "";
+    return { exitCode: 0, stdout, stderr: "", timedOut: false };
   }
 }
 
@@ -186,7 +193,10 @@ describeDb("RLS run lifecycle — a real org-scoped run writes every lifecycle t
           buildAdapters: () => twoSubtaskAdapters([passingCheck, passingCheck]),
           buildUsageProbe: () => fakeProbe(healthyWindow(), accounting(0.5)),
           runBootstrap: async () => {},
-          runGate: async () => ({ passed: true, results: [] }),
+          // NO `runGate` stub: the REAL native gate runs over the NoopSsh (every tier
+          // step exits 0 → pass) so its org-stamped `gate.*` + `gate.verdict` tenant
+          // writes are exercised under enforced RLS — the native CI-stage coverage that
+          // replaces the retired CI-poll `ci` task.
           reviewProbe: approvingReview(),
           mergeProbe: noopMerge(),
           sleep: async () => {},
@@ -220,19 +230,23 @@ describeDb("RLS run lifecycle — a real org-scoped run writes every lifecycle t
     // (4) The per-stage lifecycle writes all persisted org-stamped — proving each
     // stage's op carried the org scope (an unscoped write would have been denied,
     // failing the run before reaching `done`).
-    // - write subtasks (two) + the ci task, all org_id = ORG;
+    // - write subtasks (two), all org_id = ORG;
     const writeTasks = await ownerPool.query<{ org_id: string }>(
       "SELECT org_id FROM tasks WHERE run_id = $1 AND kind = 'write'",
       [RUN],
     );
     expect(writeTasks.rowCount).toBe(2);
     expect(writeTasks.rows.every((r) => r.org_id === ORG)).toBe(true);
-    const ciTask = await ownerPool.query<{ org_id: string }>(
-      "SELECT org_id FROM tasks WHERE run_id = $1 AND kind = 'ci'",
+    // - the NATIVE CI-stage write: the merge authority is the in-loop gate, so its
+    //   org-stamped `gate.verdict` event (NOT a forge-CI `ci` task) is the CI-stage
+    //   tenant write. A passing pre_merge verdict must have persisted under the org.
+    const gateVerdicts = await ownerPool.query<{ org_id: string; payload: { when: string; passed: boolean } }>(
+      "SELECT org_id, payload FROM events WHERE run_id = $1 AND event_type = 'gate.verdict'",
       [RUN],
     );
-    expect(ciTask.rowCount).toBe(1);
-    expect(ciTask.rows[0]?.org_id).toBe(ORG);
+    expect(gateVerdicts.rowCount).toBeGreaterThan(0);
+    expect(gateVerdicts.rows.every((r) => r.org_id === ORG)).toBe(true);
+    expect(gateVerdicts.rows.some((r) => r.payload.when === "pre_merge" && r.payload.passed === true)).toBe(true);
 
     // - cost_records from the writer/checker/auditor cost recording, org-stamped;
     const costs = await ownerPool.query<{ org_id: string }>(

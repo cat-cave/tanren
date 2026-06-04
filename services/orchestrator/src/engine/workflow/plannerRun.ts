@@ -1,19 +1,15 @@
-// P2A-0015 (medium tier): the real planner-loop run-trigger. This is the
-// production analogue of runPhase1FixtureWorkflow, but instead of a linear
-// write/check/audit it drives the full P2A-0012 planner feedback loop
-// (runSubtaskLoop) with real Codex adapters and a live usage probe.
+// The real planner-loop run-trigger. It drives the full planner feedback loop
+// (runSubtaskLoop) with real Codex adapters + a live usage probe. Adapters + the
+// usage probe are built through injectable factories that DEFAULT to real Codex /
+// SSH monitors; tests inject fakes. In production the background run worker drives
+// this with the defaults to exercise the live path end-to-end.
 //
-// The workflow stays generic and testable: adapters + the usage probe are
-// built through injectable factories that DEFAULT to real Codex / SSH usage
-// monitors. Tests inject fakes (and omit codexCredentialRef so no auth is
-// materialized). In production the background run worker (executeNextPlanJob)
-// drives this with the defaults to exercise the live path end-to-end.
-//
-// On a passing loop the workflow publishes a draft PR and polls CI (the same
-// tail Phase 1 lives-proved), then upgrades run state. Non-pass loop outcomes
-// (window_exhausted / retry_budget_exhausted / halted) map to a halted run
-// without a PR. A Codex usage-limit thrown mid-loop is caught and recorded as
-// window_exhausted rather than a generic failure (PROJECT_BRIEF §4.3).
+// On a passing loop the workflow publishes a draft PR, then runs the NATIVE pre-merge
+// gate (the merge authority — the same in-loop gate over SSH, no forge CI poll) and
+// publishes its `tanren/gate` verdict, then drives review→merge and upgrades run
+// state. Non-pass loop outcomes (window_exhausted / retry_budget_exhausted / halted)
+// map to a halted run without a PR. A Codex usage-limit thrown mid-loop is caught and
+// recorded as window_exhausted rather than a generic failure (PROJECT_BRIEF §4.3).
 import type pg from "pg";
 import type { CiWhen } from "../ci/index.js";
 import type { EscapeHatches, GovernancePosture, RoutingTable } from "../config/shared.js";
@@ -34,8 +30,7 @@ import type { AnswererAdapter } from "../providers/types.js";
 import type { UsageProbe } from "../usage/index.js";
 import { workspaceRepoPathForRun } from "../workspace/index.js";
 import { prepareCleanPrBranch } from "../workspace/githubPush.js";
-import type { PollCiForRunResult } from "./ciPolling.js";
-import { buildReGateCi, pollCiUntilTerminal } from "./plannerRunCi.js";
+import { buildReGateCi, type MergeGateRunContext, runMergeGateForRun } from "./plannerRunCi.js";
 import type { GateOutcome } from "./gate/index.js";
 import {
   buildDefaultGate,
@@ -241,10 +236,12 @@ export interface PlannerRunResult {
   workspacePath: string;
   outcome: SubtaskLoopOutcome;
   pullRequest?: PublishedDraftPullRequest;
-  ci?: PollCiForRunResult;
-  // P3-0008 review→merge tail. `review` carries the final review verdict and
-  // `merge` the merge-stage outcome. Both omitted when the run halted before CI
-  // or stopped at changes-requested after exhausting the rework budget.
+  // The native pre-merge gate verdict (the merge authority). Omitted when the run
+  // halted before the gate.
+  mergeGate?: GateOutcome;
+  // The review→merge tail. `review` carries the final review verdict and `merge` the
+  // merge-stage outcome. Both omitted when the run halted before the gate or stopped
+  // at changes-requested after exhausting the rework budget.
   review?: PollReviewForRunResult;
   merge?: MergeForRunResult;
 }
@@ -331,6 +328,10 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
     // Resolve the CI config once (tanren-ci.yml, else the default) and run the tiers
     // mapped to each lifecycle point over SSH — exit codes only, no Answerer.
     const runGate = input.runGate ?? buildDefaultGate(input, allocation.target, workspacePath, eventStore);
+    // The native merge-gate context: the merge authority runs `runGate` at `pre_merge`
+    // on the live runner + publishes the `tanren/gate` verdict. The same context feeds
+    // the post-rebase re-gate hook (`buildReGateCi`).
+    const mergeGateCtx: MergeGateRunContext = { runGate, target: allocation.target, workspacePath, eventStore };
 
     // P3-0008: the write→gate→PR→CI→review tail can re-enter on a changes-requested
     // review, re-running the loop with the reviewer feedback seeded as planner
@@ -339,7 +340,7 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
     const seedRejections: PlannerRejectionFeedback[] = [];
     let outcome: SubtaskLoopOutcome | undefined;
     let pullRequest: PublishedDraftPullRequest | undefined;
-    let ci: PollCiForRunResult | undefined;
+    let mergeGate: GateOutcome | undefined;
     let review: PollReviewForRunResult | undefined;
 
     for (let reworks = 0; ; reworks += 1) {
@@ -376,11 +377,10 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
         return { runId: context.runId, workspacePath, outcome };
       }
 
-      // Prepare the PR branch: replay the writer commits onto the clone HEAD,
-      // dropping the synthetic bootstrap commit (and its install artifacts), so
-      // the pushed branch / PR carries only the writer's changes. The working
-      // HEAD is left intact so a review-rework re-entry keeps its bootstrapSha
-      // diff base. No-op (pushes HEAD) on fake-SSH / no-bootstrap paths.
+      // Prepare the PR branch: replay the writer commits onto the clone HEAD, dropping
+      // the synthetic bootstrap commit (+ install artifacts), so the pushed branch / PR
+      // carries only the writer's changes. The working HEAD is left intact so a
+      // review-rework re-entry keeps its bootstrapSha diff base. No-op on fake-SSH.
       const pushSourceRef = await prepareCleanPrBranch({
         ssh: input.ssh,
         target: allocation.target,
@@ -412,7 +412,9 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
         githubCredentialRef: context.githubCredentialRef,
         timeoutMs: input.timeoutMs,
       });
-      ci = await pollCiUntilTerminal(input);
+      // THE MERGE AUTHORITY (native delivery): run the `pre_merge` gate on the live
+      // runner + publish the `tanren/gate` verdict. Passing proceeds; failing THROWS.
+      mergeGate = await runMergeGateForRun(input, mergeGateCtx);
 
       review = await pollReviewForRun({
         pool: input.pool,
@@ -449,7 +451,7 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
       // exhausted: halt for operator action (surfaces on the review sub-surface
       // + the recovery surface). No merge.
       await finalizeNonPass(finalizeRunState, context.runId, "halted");
-      return { runId: context.runId, workspacePath, outcome, pullRequest, ci, review };
+      return { runId: context.runId, workspacePath, outcome, pullRequest, mergeGate, review };
     }
 
     const merge = await mergeForRun({
@@ -475,18 +477,16 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
         checker: adapters.checker,
         auditor: adapters.auditor,
       }),
-      // P2a: after an auto-rebase advances the branch, re-poll CI to a terminal
-      // verdict (the prior green is stale) before merging — through the SAME CI
-      // path the run already uses.
-      reGateCi: buildReGateCi(input),
+      // After an auto-rebase the prior verdict is stale, so re-run the native
+      // `pre_merge` gate + re-publish before merging — the merge authority, no forge poll.
+      reGateCi: buildReGateCi(input, mergeGateCtx),
       // P2d: under `native_queue` the merge stage enters this run into the queue.
       ...nativeQueueSeam(input),
     });
 
-    // Finalize the run + spec for the merge stage's outcome (see
-    // finalizeMergeOutcome; a native_queue enqueue leaves the spec NON-done).
+    // Finalize the run + spec for the merge stage's outcome (a native_queue enqueue leaves the spec NON-done).
     await finalizeMergeOutcome(input, finalizeRunState, context, merge);
-    return { runId: context.runId, workspacePath, outcome, pullRequest, ci, review, merge };
+    return { runId: context.runId, workspacePath, outcome, pullRequest, mergeGate, review, merge };
   } catch (error) {
     // Finalize the run for the thrown error (recoverable halt for a known
     // bootstrap/usage-limit fault, else a generic `failed`) + emit its event,

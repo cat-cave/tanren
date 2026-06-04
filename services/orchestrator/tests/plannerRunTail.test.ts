@@ -40,8 +40,10 @@ import {
   twoSubtaskAdapters,
 } from "./plannerRun.fixtures.js";
 
-// One PR-publish + CI-poll round of GitHub responses. The review/merge stages
-// are probe-injected, so only this tail hits the scripted client.
+// One PR-publish round of GitHub responses (the forge PR-list + create). The native
+// merge gate runs over SSH (no forge poll); the verdict-publish forge call is skipped
+// here because the unit SSH fake yields no head sha. The review/merge stages are
+// probe-injected, so only this PR-publish tail hits the scripted client.
 function ghRound(): GitHubHttpResponse[] {
   return [
     { status: 200, body: [] },
@@ -54,16 +56,6 @@ function ghRound(): GitHubHttpResponse[] {
         base: { ref: "main" },
       },
     },
-    { status: 200, body: { head: { sha: "a".repeat(40), ref: "tanren/planner-test" } } },
-    {
-      status: 200,
-      body: {
-        check_runs: [
-          { name: "check", status: "completed", conclusion: "success", html_url: "https://ci.example/check" },
-        ],
-      },
-    },
-    { status: 200, body: { statuses: [] } },
   ];
 }
 

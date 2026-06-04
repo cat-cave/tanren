@@ -262,7 +262,7 @@ function buildResolver(
 
 // Builds the production gate callback. The CI config is resolved lazily on the
 // first gate call (the workspace is bootstrapped by then) and cached for the
-// rest of the run, so a malformed tanren-ci.yml surfaces at the first gate
+// rest of the run, so a malformed .tanren/ci.yml surfaces at the first gate
 // rather than crashing the workflow before the loop starts. Each call runs the
 // tiers mapped to `when` over SSH and emits gate.* through the run's store.
 //
@@ -273,11 +273,11 @@ function buildResolver(
 // the writer THEN authors `package.json`, and without this the first
 // per-iteration gate would run `pnpm lint` against an uninstalled tree
 // (`turbo: not found` / `vitest: not found`). The install command is resolved
-// LAZILY (cached alongside the config) so a writer-authored `tanren-ci.yml`
+// LAZILY (cached alongside the config) so a writer-authored `.tanren/ci.yml`
 // `bootstrap.run` is honored.
 //
 // INSTALL MODE (greenfield vs brownfield): when NO explicit install command is set
-// (no `input.bootstrapCommand`, no `tanren-ci.yml` `bootstrap.run`), the DEFAULT
+// (no `input.bootstrapCommand`, no `.tanren/ci.yml` `bootstrap.run`), the DEFAULT
 // is chosen by `context.greenfield`. A greenfield run (Tanren authored the repo
 // live) uses the NON-FROZEN deps-ensure default so a writer-added devDep installs
 // even without a perfectly-regenerated lockfile. A brownfield run keeps the
@@ -305,7 +305,7 @@ export function buildDefaultGate(
   let configPromise: ReturnType<typeof resolveGateConfig> | undefined;
   // The lazily-resolved EXPLICIT install command, cached alongside configPromise.
   // An explicit input.bootstrapCommand wins; otherwise the writer-authored
-  // tanren-ci.yml `bootstrap.run` is picked up. Undefined here ⇒ no explicit
+  // .tanren/ci.yml `bootstrap.run` is picked up. Undefined here ⇒ no explicit
   // command, and the per-gate DEFAULT is chosen by `context.greenfield`
   // (greenfield ⇒ non-frozen DEPS_ENSURE_DEFAULT_COMMAND; brownfield ⇒ frozen
   // DEFAULT_BOOTSTRAP_COMMAND) — see the install-mode block below.
@@ -335,7 +335,7 @@ export function buildDefaultGate(
     }
     if (installCommandPromise === undefined) {
       // Resolve the EXPLICIT install command, if any: an `input.bootstrapCommand`
-      // override wins; otherwise the repo's `tanren-ci.yml` `bootstrap.run`
+      // override wins; otherwise the repo's `.tanren/ci.yml` `bootstrap.run`
       // (undefined when the repo ships no `bootstrap:` key). The greenfield-vs-
       // brownfield DEFAULT (applied below only when this is undefined) is NOT
       // baked in here, so an explicit command always wins verbatim in both cases.

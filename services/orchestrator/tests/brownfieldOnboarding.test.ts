@@ -30,6 +30,7 @@ import {
   type ReconReport,
   type RepoReader,
 } from "../src/engine/forge/brownfield/index.js";
+import { resolveCiConfig } from "../src/engine/ci/index.js";
 import { createDeterministicReconAnswerer } from "./fixtures/forge/deterministicReconAnswerer.js";
 import type { IngestedItem } from "../src/engine/forge/inbox/types.js";
 
@@ -126,44 +127,47 @@ describe("config-injection · 5 files + per-file exclude + open PR", () => {
     expect(files).toHaveLength(5);
     expect(files[0]?.path).toBe(".tanren/PROJECT.md");
     expect(files[0]?.snapshot).toBe(true);
-    expect(files.map((f) => f.path)).toContain(".github/workflows/tanren-ci.yml");
+    // NATIVE delivery: the gate definition is `.tanren/ci.yml` (a CiConfigV1), NOT a
+    // GitHub Actions workflow.
+    expect(files.map((f) => f.path)).toContain(".tanren/ci.yml");
+    expect(files.map((f) => f.path)).not.toContain(".github/workflows/tanren-ci.yml");
     expect(files.map((f) => f.path)).toContain("CODEOWNERS");
-    // P2e-2: the native merge queue drives merges — no `.mergify.yml` is injected.
+    // The native merge queue drives merges — no `.mergify.yml` is injected.
     expect(files.map((f) => f.path)).not.toContain(".mergify.yml");
     // The snapshot mirrors the recon report.
     expect(files[0]?.content).toContain("tanren-fixture-easy");
     expect(files[0]?.content).toContain("smoke fixture");
   });
 
-  it("CI-intelligence: the tanren-ci.yml emits a JUnit report + uploads it to the ingest endpoint", () => {
+  it("the injected .tanren/ci.yml is a native CiConfigV1 gate definition (no Actions job)", () => {
     const files = proposeConfigFiles(proposeInput);
-    const ci = files.find((f) => f.path === ".github/workflows/tanren-ci.yml");
+    const ci = files.find((f) => f.path === ".tanren/ci.yml");
     expect(ci).toBeDefined();
     const yaml = ci?.content ?? "";
-    // The test step emits a JUnit report (vitest reporter flag).
-    expect(yaml).toContain("--reporter=junit");
-    expect(yaml).toContain("--outputFile=reports/junit.xml");
-    // The test-step exit code is captured (the runner-crash-with-clean-XML guard).
-    expect(yaml).toContain("exit_code");
-    // An upload step POSTs to the ingest endpoint, on success OR failure — but only
-    // when the CI-ingest secrets are present (a clear no-op when CI-intel is not
-    // configured, never a silent auth failure).
-    expect(yaml).toContain("upload-junit");
-    expect(yaml).toContain("success() || failure()");
-    expect(yaml).toContain("env.TANREN_INGEST_URL != ''");
-    expect(yaml).toContain("env.TANREN_RUN_TOKEN != ''");
-    expect(yaml).toContain("/webhooks/ci/junit");
-    // HMAC-signed with the ingest signing key propagated as an Actions secret
-    // (`TANREN_RUN_TOKEN`); the run id is derived from the PR run branch, not a secret.
-    expect(yaml).toContain("TANREN_RUN_TOKEN");
-    expect(yaml).toContain("github.head_ref");
-    expect(yaml).toContain("x-hub-signature-256");
+    // It is a CiConfigV1: versioned, with a bootstrap, tiers, and a `when` policy.
+    expect(yaml).toContain("version: 1");
+    expect(yaml).toContain("bootstrap:");
+    expect(yaml).toMatch(/tiers:/u);
+    expect(yaml).toContain("fast:");
+    expect(yaml).toContain("slow:");
+    // The `when` policy maps slow → pre_merge (the native gate is the merge authority).
+    expect(yaml).toContain("pre_merge");
+    // It is NOT a GitHub Actions workflow and carries NO forge-CI / JUnit-upload plumbing.
+    expect(yaml).not.toContain("runs-on:");
+    expect(yaml).not.toContain("actions/checkout");
+    expect(yaml).not.toContain("/webhooks/ci/junit");
+    expect(yaml).not.toContain("x-hub-signature-256");
+    // CRUCIAL: it resolves as a valid CiConfigV1 (the native runner consumes it via
+    // resolveGateConfig) — slow runs at pre_merge (the merge authority).
+    const config = resolveCiConfig(yaml);
+    expect(config.version).toBe(1);
+    expect(config.when.slow).toContain("pre_merge");
   });
 
   it("honors per-file exclude", () => {
-    const files = proposeConfigFiles(proposeInput, [".github/workflows/tanren-ci.yml", "CODEOWNERS"]);
+    const files = proposeConfigFiles(proposeInput, [".tanren/ci.yml", "CODEOWNERS"]);
     expect(files).toHaveLength(3);
-    expect(files.map((f) => f.path)).not.toContain(".github/workflows/tanren-ci.yml");
+    expect(files.map((f) => f.path)).not.toContain(".tanren/ci.yml");
     expect(files.map((f) => f.path)).not.toContain("CODEOWNERS");
   });
 

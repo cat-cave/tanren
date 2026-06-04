@@ -24,11 +24,7 @@ import { mountReportRoutes, type MountReportRoutesDeps } from "./routes/experime
 import { createForgeAskRoutes, createForgeProposalRoutes, createForgeRoutes } from "./routes/forge/mount.js";
 import { createInboxRoutes } from "./routes/inbox/index.js";
 import { createAuditRoutes } from "./routes/audits/index.js";
-import {
-  createGithubWebhookRoutes,
-  createIssueWebhookRoutes,
-  createJunitIngestRoutes,
-} from "./routes/githubWebhooks/index.js";
+import { createIssueWebhookRoutes, createJunitIngestRoutes } from "./routes/githubWebhooks/index.js";
 import { createInsightRoutes } from "./routes/insights/index.js";
 import { createIntegrationRoutes } from "./routes/integrations/index.js";
 import { createMilestoneRoutes } from "./routes/milestones/index.js";
@@ -207,20 +203,9 @@ export function mountFeatureRoutes(app: Hono<ActorContextEnv>, deps: FeatureRout
   );
   // P3-0010 (write-action approval): approve/reject proposed write actions.
   app.route("/orgs", createForgeProposalRoutes({ pool: scopedPool }));
-  // P3-0028 webhook-driven CI (option). Mounted at root so GitHub posts to
-  // `/github/webhooks/ci`. Polling remains the default fallback. NOT org-keyed
-  // per-request (the webhook resolves its run's org server-side via the system
-  // scope), so it keeps the bare pool.
-  app.route(
-    "/",
-    createGithubWebhookRoutes({
-      pool,
-      secrets,
-      vcsProvider: deps.vcsProvider,
-      githubAppMinter,
-      ...(deps.ciWebhookSigningSecretRef === undefined ? {} : { signingSecretRef: deps.ciWebhookSigningSecretRef }),
-    }),
-  );
+  // The forge-CI webhook (`/github/webhooks/ci`) is GONE: the native gate is the
+  // merge authority (no-Actions delivery model), so there is no forge check-run
+  // state for a webhook to advance.
   // P1d autonomous intake — the GitHub issues WEBHOOK RECEIVER (autonomy-engine.md
   // §1d). GitHub posts to `/github/webhooks/issues/:sourceId`; the receiver
   // verifies the source's signature (mandatory), triages with the real provider

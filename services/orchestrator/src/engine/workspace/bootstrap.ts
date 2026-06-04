@@ -31,9 +31,9 @@ const OUTPUT_TAIL_LIMIT = 4_000;
 // falls into. npm is always present in the base runner image; pnpm is too.
 //
 // This is the fallback used only when the repo declares no install command: the
-// run path resolves the repo's tanren-ci.yml `bootstrap.run` (P3-0004's
+// run path resolves the repo's .tanren/ci.yml `bootstrap.run` (P3-0004's
 // bootstrapCommand resolver, via resolveBootstrapCommand) and passes it as
-// `command`; when the repo ships no tanren-ci.yml the resolver yields undefined
+// `command`; when the repo ships no .tanren/ci.yml the resolver yields undefined
 // and this heuristic default applies.
 // `--config.confirmModulesPurge=false`: the runner is NON-INTERACTIVE (no TTY).
 // When pnpm decides it must PURGE an existing `node_modules` (e.g. one the writer
@@ -64,7 +64,7 @@ export const DEFAULT_BOOTSTRAP_COMMAND =
 // `vitest: not found`. A non-frozen install reconciles the lockfile and installs
 // the binary, so the writer's devDeps are actually present at the gate. pnpm
 // itself is the idempotency authority: when the manifest/lockfile already agree
-// this is a cheap no-op. An explicit `tanren-ci.yml` `bootstrap.run` (or an
+// this is a cheap no-op. An explicit `.tanren/ci.yml` `bootstrap.run` (or an
 // `input.bootstrapCommand` override) still wins over this default. pnpm/npm are
 // chosen by the SAME manifest probe the cold bootstrap uses (a pnpm
 // lockfile/workspace ⇒ pnpm, else npm install).
@@ -164,7 +164,7 @@ export interface EnsureWorkspaceDepsInput {
   // The caller (buildDefaultGate) PASSES an explicit `command` for the cases where
   // the non-frozen default is wrong: a BROWNFIELD run gets the FROZEN
   // DEFAULT_BOOTSTRAP_COMMAND (so a committed lockfile is never mutated), and an
-  // explicit `tanren-ci.yml` `bootstrap.run` / `input.bootstrapCommand` is passed
+  // explicit `.tanren/ci.yml` `bootstrap.run` / `input.bootstrapCommand` is passed
   // verbatim. So this default applies ONLY to the genuine greenfield case.
   command?: string;
   // Plane B (P-APP-ENV-0): same substrate-boundary handling as bootstrapWorkspace
@@ -226,7 +226,7 @@ export class WorkspaceDepsInstallError extends Error {
 // so a greenfield manifest⇆lockfile mismatch installs rather than hard-failing; the
 // caller passes an explicit `command` where that is wrong — the FROZEN
 // DEFAULT_BOOTSTRAP_COMMAND for a brownfield run (a committed lockfile is never
-// mutated) and any `tanren-ci.yml` `bootstrap.run` verbatim. Safe to call before
+// mutated) and any `.tanren/ci.yml` `bootstrap.run` verbatim. Safe to call before
 // every gate.
 //
 // On a nonzero exit / timeout / substrate failure it throws WorkspaceDepsInstallError

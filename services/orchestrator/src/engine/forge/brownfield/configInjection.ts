@@ -1,10 +1,12 @@
-// P3-0016: the config-injection PR. From a confirmed recon report + the chosen
-// governance posture, propose the integration files, let the operator EXCLUDE
-// any, then open ONE PR in the target repo that adds the kept files. "No runs
-// until merged" — opening the PR performs the only writes brownfield onboarding
-// ever makes, and the run loop stays gated on the merge. Tanren's native merge
-// queue (P2d) drives the merge directly, so no external merge-queue config is
-// injected — only the CI gate, CODEOWNERS, and the project snapshot land.
+// The config-injection PR. From a confirmed recon report + the chosen governance
+// posture, propose the integration files, let the operator EXCLUDE any, then open
+// ONE PR in the target repo that adds the kept files. "No runs until merged" —
+// opening the PR performs the only writes brownfield onboarding ever makes, and the
+// run loop stays gated on the merge. Tanren's native merge queue drives the merge
+// directly. The injected gate is `.tanren/ci.yml` — the NATIVE gate definition
+// (CiConfigV1) Tanren runs itself over SSH, NOT a GitHub Actions workflow — alongside
+// CODEOWNERS and the project snapshot. No forge-CI config is injected (no-Actions
+// delivery model): the native gate is the merge authority.
 //
 // The GitHub side is an injectable `ConfigInjectionGitHub` port (same shape as
 // the P3-0017 `ConfigGateGitHub`): production wires the App-token-backed adapter
@@ -79,85 +81,40 @@ ${architecture}
 `;
 }
 
-const TANREN_CI_YAML = `# tanren-ci.yml — added by tanren config-injection (P3-0016)
-name: tanren-ci
-on:
-  pull_request:
-    branches: [main]
-jobs:
-  tanren-gate:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: install
-        run: corepack pnpm install --frozen-lockfile
-      - name: lint
-        run: corepack pnpm run lint
-      - name: typecheck
-        run: corepack pnpm run typecheck
-      # Emit a JUnit report so Tanren can ingest PER-TEST results (CI-intelligence).
-      # Capture the test step's exit code separately: a runner that crashes AFTER
-      # writing a clean-looking report must NOT be read as all-green (the
-      # silent-failure guard) — \`--test-exit-code\` is uploaded alongside the XML.
-      #   vitest: --reporter=junit --outputFile (shown below)
-      #   pytest: --junitxml=reports/junit.xml
-      #   go:     gotestsum --junitfile reports/junit.xml
-      - name: test
-        id: test
-        run: |
-          mkdir -p reports
-          set +e
-          corepack pnpm run test -- --reporter=junit --outputFile=reports/junit.xml
-          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
-          set -e
-      # Upload the report(s) + the test-step outcome to Tanren's ingest endpoint,
-      # HMAC-signed with the CI ingest signing key already propagated as an Actions
-      # secret (\`TANREN_RUN_TOKEN\`) — the SAME secret the ingest endpoint validates
-      # against (the per-installation CI-webhook signing secret). The endpoint keys
-      # off \`runId\` in the BODY, so the run id is the PR's run branch (\`tanren/<runId>\`)
-      # — no per-run secret. Runs on success OR failure so a failing/flaky run is
-      # still ingested. The whole step is GATED on both repo-level secrets being
-      # present (CI-intelligence is propagated): when CI-intel is NOT configured the
-      # step is a clear no-op, never a silent auth failure.
-      - name: upload-junit
-        if: (success() || failure()) && env.TANREN_INGEST_URL != '' && env.TANREN_RUN_TOKEN != ''
-        env:
-          TANREN_INGEST_URL: \${{ secrets.TANREN_INGEST_URL }}
-          TANREN_RUN_TOKEN: \${{ secrets.TANREN_RUN_TOKEN }}
-          # The run id is the PR head branch with the \`tanren/\` prefix stripped
-          # (the run's PR branch is \`tanren/<runId>\`); empty for a non-run branch.
-          TANREN_HEAD_REF: \${{ github.head_ref }}
-        run: |
-          python3 - <<'PY'
-          import hashlib, hmac, json, os, sys, urllib.request
-          head_ref = os.environ.get("TANREN_HEAD_REF", "")
-          run_id = head_ref[len("tanren/"):] if head_ref.startswith("tanren/run_") else ""
-          if run_id == "":
-              print("upload-junit: PR head ref is not a tanren run branch; skipping ingest")
-              sys.exit(0)
-          reports = []
-          for path in ("reports/junit.xml",):
-              if os.path.exists(path):
-                  with open(path, "r", encoding="utf-8") as fh:
-                      reports.append(fh.read())
-          body = json.dumps({
-              "runId": run_id,
-              "headSha": os.environ.get("GITHUB_SHA", ""),
-              "attempt": int(os.environ.get("GITHUB_RUN_ATTEMPT", "1")),
-              "testExitCode": int("\${{ steps.test.outputs.exit_code }}" or "0"),
-              "reports": reports,
-          }).encode("utf-8")
-          sig = hmac.new(os.environ["TANREN_RUN_TOKEN"].encode("utf-8"), body, hashlib.sha256).hexdigest()
-          req = urllib.request.Request(
-              os.environ["TANREN_INGEST_URL"] + "/webhooks/ci/junit",
-              data=body,
-              headers={"content-type": "application/json", "x-hub-signature-256": "sha256=" + sig},
-          )
-          with urllib.request.urlopen(req) as resp:
-              print(resp.status, resp.read().decode("utf-8"))
-          PY
-      - name: build
-        run: corepack pnpm run build
+// The native gate DEFINITION (`.tanren/ci.yml` — a CiConfigV1, NOT a GitHub Actions
+// workflow). This is the SAME file Tanren's in-loop native gate consumes via
+// `resolveGateConfig`: it declares the tiered shell steps + the `when` policy that
+// maps each tier to a lifecycle point. There is NO Actions job, no JUnit upload, no
+// HMAC secret — Tanren runs these steps itself over SSH on the runner and reads the
+// verdict from exit codes (the no-Actions delivery model). The `pre_merge` tier is
+// the merge authority. A repo can edit this file to change what the gate runs.
+const TANREN_CI_CONFIG = `# .tanren/ci.yml — added by tanren config-injection.
+# The native gate definition (CiConfigV1) Tanren runs over SSH on the runner. NOT a
+# GitHub Actions workflow: there is no forge CI here — Tanren's gate is the authority.
+version: 1
+bootstrap:
+  run: corepack pnpm install --frozen-lockfile
+tiers:
+  # The cheap tier — runs after every writer iteration.
+  fast:
+    - name: lint
+      run: corepack pnpm run lint
+    - name: typecheck
+      run: corepack pnpm run typecheck
+    - name: unit
+      run: corepack pnpm run test
+  # The expensive tier — runs before the audit AND before the merge (the authority).
+  slow:
+    - name: build
+      run: corepack pnpm run build
+    - name: test
+      run: corepack pnpm run test
+when:
+  fast:
+    - per_iteration
+  slow:
+    - pre_audit
+    - pre_merge
 `;
 
 function codeowners(team: string): string {
@@ -188,9 +145,9 @@ export function proposeConfigFiles(input: ProposeFilesInput, excludePaths: Reado
       snapshot: true,
     },
     {
-      path: ".github/workflows/tanren-ci.yml",
-      content: TANREN_CI_YAML,
-      addedLines: countLines(TANREN_CI_YAML),
+      path: ".tanren/ci.yml",
+      content: TANREN_CI_CONFIG,
+      addedLines: countLines(TANREN_CI_CONFIG),
     },
     { path: "CODEOWNERS", content: codeowners(team), addedLines: countLines(codeowners(team)) },
     {
