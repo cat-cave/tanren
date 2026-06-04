@@ -15,8 +15,7 @@ const NOW = new Date("2026-05-15T00:00:00Z");
 
 interface CiEventSeed {
   headSha: string;
-  outcome: "passed" | "failed";
-  checkRuns: Array<{ name: string; conclusion: string | null }>;
+  steps: Array<{ name: string; tier: string; passed: boolean }>;
   tsMs: number;
 }
 
@@ -41,7 +40,7 @@ interface QuarantineRow {
 
 /**
  * Minimal in-memory pg substitute for the two SQL shapes ciFlaky.ts emits: the
- * ci.* event SELECT and the quarantined_tests SELECT/INSERT. TEST FIXTURE only.
+ * gate.verdict event SELECT and the quarantined_tests SELECT/INSERT. TEST FIXTURE only.
  */
 class FlakyMemoryClient {
   events: CiEventSeed[] = [];
@@ -54,7 +53,7 @@ class FlakyMemoryClient {
       const rows = this.events
         .filter((e) => e.tsMs >= since.getTime())
         .sort((a, b) => a.tsMs - b.tsMs)
-        .map((e) => ({ payload: { headSha: e.headSha, checkRuns: e.checkRuns }, ts: new Date(e.tsMs) }));
+        .map((e) => ({ payload: { headSha: e.headSha, steps: e.steps }, ts: new Date(e.tsMs) }));
       return { rows, rowCount: rows.length };
     }
     // CI-intelligence PR2: the per-test results loader. No per-test seeds in these
@@ -96,8 +95,14 @@ class FlakyMemoryClient {
   }
 }
 
+// Build a gate.verdict seed from a compact {name, conclusion} check list — a
+// non-"success" conclusion maps to a failed step (a null/pending conclusion is
+// dropped, mirroring the native gate which only records completed steps).
 function ci(headSha: string, checkRuns: Array<{ name: string; conclusion: string | null }>, tsMs: number): CiEventSeed {
-  return { headSha, outcome: "failed", checkRuns, tsMs };
+  const steps = checkRuns
+    .filter((c) => c.conclusion !== null)
+    .map((c) => ({ name: c.name, tier: "fast", passed: c.conclusion === "success" }));
+  return { headSha, steps, tsMs };
 }
 
 describe("detectAndQuarantineFlaky — records + emits for a genuinely-flaky check", () => {

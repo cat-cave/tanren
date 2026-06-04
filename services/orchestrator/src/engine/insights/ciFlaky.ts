@@ -1,19 +1,20 @@
 // P2e-1 (autonomy-engine.md §2d "Reaching Mergify parity → removing it
 // entirely"): flaky-test detection + auto-quarantine.
 //
-// Tanren already persists every CI observation as a `ci.passed` / `ci.failed`
-// event, each carrying the per-check `checkRuns[]` (name + conclusion) and the
-// `headSha` the checks ran against. This module reduces those observations
-// across runs/attempts and flags a CHECK that is DEMONSTRABLY non-deterministic.
+// Tanren persists every native gate run as a `gate.verdict` event, each carrying
+// the per-step `steps[]` (name + passed) and the `headSha` the gate ran against.
+// This module reduces those verdicts across runs/attempts and flags a STEP that is
+// DEMONSTRABLY non-deterministic. (A "check" here is a native gate STEP — the
+// native delivery model's grain — not a forge check-run.)
 //
 // CRITICAL SAFETY — quarantine ≠ ignore-all-failures:
-//   - A check is flaky ONLY when it BOTH passed AND failed on the SAME head SHA
+//   - A step is flaky ONLY when it BOTH passed AND failed on the SAME head SHA
 //     (same code, different result) — genuine non-determinism. The toggle must
 //     be observed on at least `flakyMinToggledShas` distinct SHAs (default 1, but
 //     a higher bar means "repeatedly flaky").
-//   - A check that ONLY ever fails (across every SHA) is a CONSISTENT failure —
+//   - A step that ONLY ever fails (across every SHA) is a CONSISTENT failure —
 //     genuinely broken — and is NEVER flagged or quarantined.
-//   - A check that ONLY ever passes is fine and is never flagged.
+//   - A step that ONLY ever passes is fine and is never flagged.
 //
 // The reducer (`deriveFlakyTests`) is pure over its inputs; the DB loader
 // (`loadCiObservations`) is the only impure shell. `detectAndQuarantineFlaky`
@@ -121,11 +122,10 @@ interface CiEventRow {
 }
 
 /**
- * Load the per-check CI observations for a project + window from the persisted
- * `ci.passed` / `ci.failed` events. Each event carries `checkRuns[]` (name +
- * conclusion) and `headSha`; we flatten to one `CiCheckObservation` per check
- * run. A check run counts as failed when its conclusion is anything other than
- * a clean success.
+ * Load the per-step gate observations for a project + window from the persisted
+ * `gate.verdict` events. Each verdict carries `steps[]` (name + passed) and
+ * `headSha`; we flatten to one `CiCheckObservation` per step. A step counts as
+ * failed when its `passed` flag is not strictly true.
  */
 export async function loadCiObservations(
   pool: Pick<pg.Pool, "query">,
@@ -135,7 +135,7 @@ export async function loadCiObservations(
     `SELECT payload, ts
        FROM events
        WHERE project_id = $1
-         AND event_type IN ('ci.passed','ci.failed')
+         AND event_type = 'gate.verdict'
          AND ts >= $2
        ORDER BY ts ASC`,
     [options.projectId, options.since],
@@ -143,25 +143,19 @@ export async function loadCiObservations(
   return flattenCiObservations(result.rows);
 }
 
-const SUCCESS_CONCLUSIONS = new Set(["success", "neutral", "skipped"]);
-
-/** Flatten raw `ci.*` event payloads to per-check observations. Pure. */
+/** Flatten raw `gate.verdict` event payloads to per-step observations. Pure. */
 export function flattenCiObservations(rows: ReadonlyArray<CiEventRow>): CiCheckObservation[] {
   const out: CiCheckObservation[] = [];
   for (const row of rows) {
-    const payload = row.payload as { headSha?: unknown; checkRuns?: unknown };
+    const payload = row.payload as { headSha?: unknown; steps?: unknown };
     const headSha = typeof payload.headSha === "string" ? payload.headSha : undefined;
     if (headSha === undefined) continue;
-    const checkRuns = Array.isArray(payload.checkRuns) ? payload.checkRuns : [];
-    for (const raw of checkRuns) {
-      const check = raw as { name?: unknown; status?: unknown; conclusion?: unknown };
-      if (typeof check.name !== "string") continue;
-      // Only completed checks carry a verdict; an in-flight (pending) check is
-      // not yet an outcome and never contributes to a flaky signal.
-      const conclusion = typeof check.conclusion === "string" ? check.conclusion : null;
-      if (conclusion === null) continue;
-      const outcome: "passed" | "failed" = SUCCESS_CONCLUSIONS.has(conclusion) ? "passed" : "failed";
-      out.push({ checkName: check.name, headSha, outcome, observedAt: new Date(row.ts) });
+    const steps = Array.isArray(payload.steps) ? payload.steps : [];
+    for (const raw of steps) {
+      const step = raw as { name?: unknown; passed?: unknown };
+      if (typeof step.name !== "string") continue;
+      const outcome: "passed" | "failed" = step.passed === true ? "passed" : "failed";
+      out.push({ checkName: step.name, headSha, outcome, observedAt: new Date(row.ts) });
     }
   }
   return out;

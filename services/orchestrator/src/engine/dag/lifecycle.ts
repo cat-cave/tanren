@@ -158,7 +158,12 @@ export class PgDagLifecycleReadModel implements DagLifecycleReadModel {
         LEFT JOIN LATERAL (
           SELECT
             bool_or(e.event_type = 'github.pr.created')          AS pr_opened,
-            bool_or(e.event_type = 'ci.passed')                  AS ci_passed,
+            -- NATIVE delivery: "CI green" is a PASSING pre-merge native gate verdict
+            -- (the merge authority), not a forge check-run poll. A passing gate.verdict
+            -- at when='pre_merge' is the ci_green ladder signal.
+            bool_or(e.event_type = 'gate.verdict'
+                    AND (e.payload ->> 'passed')::boolean
+                    AND e.payload ->> 'when' = 'pre_merge')      AS ci_passed,
             bool_or(e.event_type = 'review.approved')            AS review_approved,
             bool_or(e.event_type = 'review.changes_requested')   AS review_changes_requested,
             bool_or(e.event_type = 'review.auto_approved')       AS review_auto_approved,

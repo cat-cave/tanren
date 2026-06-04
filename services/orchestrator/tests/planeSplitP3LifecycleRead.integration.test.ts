@@ -118,11 +118,18 @@ describeDb("plane-split P3 — the DagWalker lifecycle read uses the system pool
        VALUES ($1, $2, $3, $4, 'dag_walker', 'main', 'completed')`,
       [RUN, SPEC, PROJECT, ORG],
     );
-    for (const eventType of ["github.pr.created", "ci.passed", "merge.completed"]) {
+    // NATIVE delivery: "ci green" is a PASSING pre-merge native gate verdict, so the
+    // ladder uses a gate.verdict (passed, when=pre_merge) — not a forge ci.passed.
+    const seeds: Array<{ eventType: string; payload: string }> = [
+      { eventType: "github.pr.created", payload: "{}" },
+      { eventType: "gate.verdict", payload: JSON.stringify({ when: "pre_merge", passed: true, headSha: "abc" }) },
+      { eventType: "merge.completed", payload: "{}" },
+    ];
+    for (const seed of seeds) {
       await ownerPool.query(
         `INSERT INTO events (run_id, spec_id, project_id, org_id, event_type, payload)
-         VALUES ($1, $2, $3, $4, $5, '{}'::jsonb)`,
-        [RUN, SPEC, PROJECT, ORG, eventType],
+         VALUES ($1, $2, $3, $4, $5, $6::jsonb)`,
+        [RUN, SPEC, PROJECT, ORG, seed.eventType, seed.payload],
       );
     }
   }, 60_000);
@@ -152,7 +159,7 @@ describeDb("plane-split P3 — the DagWalker lifecycle read uses the system pool
     await expect(
       runWithOrgScope(dataPlanePool, ORG, (client) =>
         // The minimal shape of the lifecycle lateral join's `events` read.
-        client.query("SELECT bool_or(event_type = 'ci.passed') FROM events WHERE run_id = $1", [RUN]),
+        client.query("SELECT bool_or(event_type = 'gate.verdict') FROM events WHERE run_id = $1", [RUN]),
       ),
     ).rejects.toMatchObject({ code: "42501" });
   });

@@ -108,7 +108,13 @@ import {
   IssueOpenedPayload,
   MergePostMergeFailedPayload,
 } from "./schemas/postMerge.js";
-import { GateAdvisoryFailedPayload, GateFailedPayload, GatePassedPayload, GateStartedPayload } from "./schemas/gate.js";
+import {
+  GateAdvisoryFailedPayload,
+  GateFailedPayload,
+  GatePassedPayload,
+  GateStartedPayload,
+  GateVerdictPayload,
+} from "./schemas/gate.js";
 import {
   JobDeadLetteredPayload,
   RunCompletedPayload,
@@ -260,11 +266,14 @@ export const EventRegistry = {
   // counts + head SHA + attempt only — names/files are public, never secret values.
   "ci.tests.reported": CiTestsReportedPayload,
 
-  // P3-0005 in-loop deterministic gate-check stage (exit-code driven; no agent)
+  // The in-loop deterministic native gate (exit-code driven; no agent). `gate.verdict`
+  // is the headSha-carrying terminal roll-up CI-intelligence reduces — the native
+  // delivery model's verdict, replacing the retired forge-CI observation events.
   "gate.started": GateStartedPayload,
   "gate.passed": GatePassedPayload,
   "gate.failed": GateFailedPayload,
   "gate.advisory_failed": GateAdvisoryFailedPayload,
+  "gate.verdict": GateVerdictPayload,
 
   // Phase 1 fixture orchestration
   "phase1.fixture.started": Phase1FixtureStartedPayload,
