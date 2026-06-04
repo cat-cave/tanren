@@ -18,6 +18,7 @@ import {
   NotificationPayload as NotificationPayloadSchema,
   type NotificationTargetRow,
   type Severity,
+  severityMeetsFloor,
 } from "./schemas.js";
 
 // P2A-0017 dispatcher.
@@ -54,6 +55,32 @@ export interface DispatcherDeps {
   // Optional deep-link builder for the matrix UI's "view run" affordance.
   // Receives the event and returns a URL or undefined.
   urlFor?: (event: TypedEvent, context: EventContext) => string | undefined;
+  // Code-level DEFAULT ROUTE (the "never silently drop a fail-severity event"
+  // guarantee). When an event's effective severity meets `minSeverity`
+  // (default `warn`) and NO per-org `notification_routes` row matched it, the
+  // dispatcher delivers to this fallback channel/destination so a genuine
+  // escalation — most importantly `dag.spec.needs_attention` — still reaches a
+  // human even on an org that never configured a route. Per-org routes that DO
+  // match always take precedence (and augment, not replace) the default — the
+  // default fires ONLY when the matrix found nothing. When this is absent and a
+  // fail-severity event matched no route, the dispatcher emits a LOUD log
+  // (never a silent drop) so the gap is visible.
+  defaultRoute?: DefaultRoute;
+}
+
+export interface DefaultRoute {
+  // The channel kind the default fallback delivers through. Must be a kind the
+  // dispatcher's channel registry knows (it is, since the registry is built
+  // with one adapter per kind).
+  channelKind: ChannelKind;
+  // The channel destination (a credential ref or a verbatim URL — channel-
+  // specific, exactly as a target row's `destination`).
+  destination: string;
+  // The minimum effective severity that triggers the default route when no
+  // configured route matched. Defaults to `warn` so routine info/ok lifecycle
+  // events never reach a human via the default (no spam) while every
+  // warn/fail escalation does.
+  minSeverity?: Severity;
 }
 
 export interface EventContext {
@@ -89,6 +116,7 @@ export class NotificationDispatcher {
   private readonly now: () => Date;
   private readonly log: NonNullable<DispatcherDeps["log"]>;
   private readonly urlFor: DispatcherDeps["urlFor"];
+  private readonly defaultRoute: DispatcherDeps["defaultRoute"];
 
   constructor(deps: DispatcherDeps) {
     this.query = deps.query;
@@ -96,6 +124,7 @@ export class NotificationDispatcher {
     this.now = deps.now ?? (() => new Date());
     this.log = deps.log ?? defaultLog;
     this.urlFor = deps.urlFor;
+    this.defaultRoute = deps.defaultRoute;
   }
 
   async onEvent(event: TypedEvent, context: EventContext): Promise<void> {
@@ -115,7 +144,10 @@ export class NotificationDispatcher {
       effectiveSeverity: severity,
     });
 
-    if (matches.length === 0) return;
+    if (matches.length === 0) {
+      await this.handleNoMatch(event, context, severity);
+      return;
+    }
 
     const now = this.now();
     const weekend = isWeekendInUtc(now);
@@ -183,6 +215,91 @@ export class NotificationDispatcher {
         });
       }
     }
+  }
+
+  /**
+   * No configured route matched this event. The "never silently drop a genuine
+   * escalation" guarantee: if the event's effective severity meets the default
+   * route's floor (default `warn`) we deliver to the code-level default channel
+   * when one is configured; otherwise — a fail-severity event with no route at
+   * all — we emit a LOUD log (never a silent drop). A routine sub-floor event
+   * (info/ok lifecycle) returns quietly: that is the no-spam contract, not a
+   * dropped escalation.
+   */
+  private async handleNoMatch(event: TypedEvent, context: EventContext, severity: Severity): Promise<void> {
+    const floor = this.defaultRoute?.minSeverity ?? "warn";
+    if (!severityMeetsFloor(severity, floor)) return;
+
+    if (this.defaultRoute === undefined) {
+      // A genuine escalation that reaches NO human because the org configured no
+      // route AND no code-level default is wired. This is the loud failure the
+      // no-silent-fallback rule demands — surfaced, never swallowed.
+      this.log("error", "no notification route configured for a fail-severity event", {
+        eventName: event.eventType,
+        severity,
+        orgId: context.orgId,
+        specId: context.specId ?? null,
+        runId: context.runId ?? null,
+      });
+      return;
+    }
+
+    const route = this.defaultRoute;
+    const target = this.buildDefaultTarget(route, context.orgId ?? "");
+    const channel = this.channels[route.channelKind];
+    if (channel === undefined) {
+      // The default route names a kind the registry has no adapter for. Loud,
+      // not silent — the escalation still failed to reach a human.
+      this.log("error", "default notification route names an unregistered channel kind", {
+        eventName: event.eventType,
+        channelKind: route.channelKind,
+        severity,
+      });
+      return;
+    }
+    try {
+      const payload = this.buildPayload(event, context, severity);
+      const status = await this.invokeChannel(channel, target, payload);
+      await this.recordDispatch({
+        channel: route.channelKind,
+        payload: {
+          eventName: event.eventType,
+          targetId: target.id,
+          layering: "default_route",
+          severity,
+          title: payload.title,
+        },
+        status,
+        attempts: 1,
+        sentAt: status === "sent" ? this.now() : null,
+      });
+    } catch (caught) {
+      this.log("error", "notification dispatcher swallowed unexpected error on the default route", {
+        eventName: event.eventType,
+        channelKind: route.channelKind,
+        error: errorMessage(caught),
+      });
+    }
+  }
+
+  /** Build the synthetic org-scoped target the default route delivers through. */
+  private buildDefaultTarget(route: DefaultRoute, orgId: string): NotificationTargetRow {
+    const now = this.now();
+    return {
+      id: "notif_target_default",
+      orgId,
+      scope: "org",
+      userId: null,
+      channelKind: route.channelKind,
+      destination: route.destination,
+      label: "default route",
+      enabled: true,
+      // The default route never weekend-mutes: a fail-severity escalation must
+      // land regardless of the day.
+      weekendMute: false,
+      createdAt: now,
+      updatedAt: now,
+    };
   }
 
   private async loadMatrixContext(args: {

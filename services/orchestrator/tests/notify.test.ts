@@ -8,7 +8,9 @@ import { describe, expect, it } from "vitest";
 import {
   DAG_CHANGE_CHANNEL,
   JOB_QUEUE_CHANNEL,
+  NOTIFICATION_CHANNEL,
   notifyDagChanged,
+  notifyEventAppended,
   notifyJobEnqueued,
   notifyRunActivity,
   PgNotifyListener,
@@ -59,6 +61,20 @@ describe("NOTIFY emitters", () => {
     await expect(
       notifyDagChanged(client as unknown as pg.PoolClient, "project_'; DROP TABLE specs;--"),
     ).rejects.toThrow(/unsafe id/u);
+    expect(client.statements).toEqual([]);
+  });
+
+  it("notifyEventAppended fires NOTIFY on the notify channel with the event id as payload", async () => {
+    const client = recordingClient();
+    await notifyEventAppended(client as unknown as pg.PoolClient, "42");
+    expect(client.statements).toEqual([`NOTIFY ${NOTIFICATION_CHANNEL}, '42'`]);
+  });
+
+  it("notifyEventAppended rejects a non-numeric event id rather than interpolating it", async () => {
+    const client = recordingClient();
+    await expect(notifyEventAppended(client as unknown as pg.PoolClient, "1; DROP TABLE events;--")).rejects.toThrow(
+      /unsafe event id/u,
+    );
     expect(client.statements).toEqual([]);
   });
 });
