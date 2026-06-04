@@ -6,6 +6,7 @@ import {
   buildOpencodeWriterCommand,
   createOpencodeWriter,
   parseOpencodeStreamTelemetry,
+  resolveOpencodeModel,
   ZAI_GLM_MODEL,
 } from "../src/engine/providers/opencode.js";
 
@@ -89,25 +90,87 @@ describe("opencode writer adapter", () => {
     expect(command).toContain("--model 'zai/glm-5.1'");
   });
 
-  // SaaS Tier-B #5: managed mode points opencode at the platform endpoint via
-  // OPENAI_BASE_URL; BYOK (no override) leaves it untouched.
-  it("sets OPENAI_BASE_URL when a managed endpoint override is present", () => {
-    const command = buildOpencodeWriterCommand({
+  // SaaS Tier-B #5 (OpenRouter cookbook): a managed run exports XDG_CONFIG_HOME
+  // (so opencode reads the OpenRouter provider opencode.json) and selects the
+  // openrouter provider via the model namespace; BYOK leaves both untouched.
+  it("exports XDG_CONFIG_HOME for a managed run; omits it for BYOK", () => {
+    const managed = buildOpencodeWriterCommand({
+      dataHome: "/data",
+      workspace: "/workspace/repo",
+      model: "openrouter/anthropic/claude-sonnet-latest",
+      configHome: "/config",
+    });
+    expect(managed).toContain("XDG_CONFIG_HOME='/config'");
+    expect(managed).toContain("--model 'openrouter/anthropic/claude-sonnet-latest'");
+    const byok = buildOpencodeWriterCommand({
       dataHome: "/data",
       workspace: "/workspace/repo",
       model: ZAI_GLM_MODEL,
-      endpointBaseUrl: "https://openrouter.ai/api/v1",
     });
-    expect(command).toContain("OPENAI_BASE_URL='https://openrouter.ai/api/v1'");
+    expect(byok).not.toContain("XDG_CONFIG_HOME");
   });
 
-  it("does not set OPENAI_BASE_URL for a BYOK run", () => {
-    const command = buildOpencodeWriterCommand({
-      dataHome: "/data",
-      workspace: "/workspace/repo",
-      model: ZAI_GLM_MODEL,
+  it("namespaces a managed model under the openrouter provider", () => {
+    expect(resolveOpencodeModel("anthropic/claude-sonnet-latest", true)).toBe(
+      "openrouter/anthropic/claude-sonnet-latest",
+    );
+    // An already-namespaced model is left alone.
+    expect(resolveOpencodeModel("openrouter/google/gemini-flash-latest", true)).toBe(
+      "openrouter/google/gemini-flash-latest",
+    );
+    // BYOK passes the model through unchanged (defaulting to Zai GLM).
+    expect(resolveOpencodeModel(undefined, false)).toBe(ZAI_GLM_MODEL);
+  });
+
+  // SaaS Tier-B #5 (OpenRouter cookbook): a managed opencode writer materializes
+  // auth.json ({"openrouter":{"type":"api","key":<key>}}) + opencode.json
+  // (provider.openrouter), exports XDG_CONFIG_HOME, and selects the openrouter
+  // provider. The key arrives on stdin, never in a command string or the result.
+  it("MANAGED writer materializes the openrouter auth.json + opencode.json and selects the provider", async () => {
+    const ssh = new ScriptedSsh([
+      // materialize auth.json (openrouter)
+      ok(""),
+      // materialize opencode.json (provider config)
+      ok(""),
+      // baseline sha
+      ok(`${baselineSha}\n`),
+      // opencode run
+      ok("{}\n"),
+      // commit
+      ok(""),
+      // diff
+      ok("diff --git a/M.md b/M.md\n+m\n"),
+      // log
+      ok(""),
+    ]);
+    const secrets = new InMemorySecretStore();
+    await secrets.put({ ref: "credential/openrouter/platform/default", value: "sk-or-v1-oc-managed" });
+
+    const writer = createOpencodeWriter({
+      secrets,
+      ssh,
+      target,
+      credentialRef: "credential/openrouter/platform/default",
+      runId: "run_oc_managed",
+      model: "anthropic/claude-sonnet-latest",
+      endpointBaseUrl: "https://openrouter.ai/api/v1",
     });
-    expect(command).not.toContain("OPENAI_BASE_URL");
+    const result = await writer.runWriter({ prompt: "managed edit", workspace: "/workspace/repo", timeoutMs: 1000 });
+
+    // auth.json: the openrouter provider entry, key on stdin (not in the command).
+    expect(ssh.commands[0]?.command.command).toContain("opencode/auth.json");
+    expect(ssh.commands[0]?.command.command).not.toContain("sk-or-v1-oc-managed");
+    expect(JSON.parse(ssh.commands[0]?.command.stdin ?? "{}")).toEqual({
+      openrouter: { type: "api", key: "sk-or-v1-oc-managed" },
+    });
+    // opencode.json: declares the openrouter provider.
+    expect(ssh.commands[1]?.command.command).toContain("opencode.json");
+    expect(ssh.commands[1]?.command.command).toContain("openrouter");
+    // The run exports XDG_CONFIG_HOME + selects the openrouter-namespaced model.
+    expect(ssh.commands[3]?.command.command).toContain("XDG_CONFIG_HOME=");
+    expect(ssh.commands[3]?.command.command).toContain("--model 'openrouter/anthropic/claude-sonnet-latest'");
+    expect(result.exitReason).toBe("completed");
+    expect(JSON.stringify(result)).not.toContain("sk-or-v1-oc-managed");
   });
 
   it("returns timeout, crashed, and window_exhausted distinctly", async () => {

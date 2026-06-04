@@ -2,7 +2,7 @@ import type { SshTarget } from "../contracts/allocator.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { SshSubstrate } from "../contracts/sshSubstrate.js";
 import { storeCodexAuthBundle } from "../credentials/codexAuth.js";
-import { materializeCodexAuthBundle } from "../credentials/codexMaterializer.js";
+import { codexManagedEnvPath, materializeCodexAuthBundle } from "../credentials/codexMaterializer.js";
 import { quoteSshShellArg } from "../ssh/command.js";
 import type { AnswererAdapter, TokenUsage, UsageLimitSignal, WriterAdapter, WriterResult } from "./types.js";
 import { captureBaselineSha, captureGitStateAfterCodex } from "./codexGit.js";
@@ -15,8 +15,9 @@ export interface CodexWriterDependencies {
   runId: string;
   codexHomeBaseDir?: string;
   // SaaS Tier-B #5: optional managed-endpoint base URL. When set (managed run),
-  // codex is pointed at this OpenAI-compatible endpoint (the platform OpenRouter
-  // shell) via OPENAI_BASE_URL. Absent ⇒ BYOK: no override (unchanged).
+  // the materializer writes codex's config.toml OpenRouter provider block
+  // (base_url = this endpoint) + an OPENROUTER_API_KEY env file the exec sources,
+  // so codex routes THROUGH OpenRouter. Absent ⇒ BYOK: no override (unchanged).
   endpointBaseUrl?: string;
 }
 
@@ -62,9 +63,10 @@ export function createCodexWriter(dependencies: CodexWriterDependencies): Writer
     authRef: dependencies.credentialRef,
     async runWriter(opts): Promise<WriterResult> {
       // SaaS Tier-B #5: a MANAGED run carries an endpointBaseUrl (the platform
-      // OpenRouter shell). In managed mode the credential is a plain
-      // OpenAI-compatible API key, so the materializer wraps it as codex's
-      // API-key auth.json instead of validating a ChatGPT bundle.
+      // OpenRouter shell). In managed mode the credential is a plain OpenRouter
+      // API key, so the materializer writes codex's config.toml OpenRouter
+      // provider block + an OPENROUTER_API_KEY env file (the cookbook path)
+      // instead of validating a ChatGPT bundle.
       const managed = dependencies.endpointBaseUrl !== undefined;
       const auth = await materializeCodexAuthBundle({
         secrets: dependencies.secrets,
@@ -75,6 +77,7 @@ export function createCodexWriter(dependencies: CodexWriterDependencies): Writer
         baseDir: dependencies.codexHomeBaseDir,
         timeoutMs: Math.min(opts.timeoutMs, 30_000),
         managed,
+        endpointBaseUrl: dependencies.endpointBaseUrl,
       });
       // The diff/log baseline. In a production run this is the run's BASE sha
       // (the clone point), threaded via opts.baseSha and captured ONCE after the
@@ -91,7 +94,7 @@ export function createCodexWriter(dependencies: CodexWriterDependencies): Writer
         command: buildCodexExecCommand({
           codexHome: auth.CODEX_HOME,
           workspace: opts.workspace,
-          endpointBaseUrl: dependencies.endpointBaseUrl,
+          managed: auth.managed,
         }),
         stdin: opts.prompt,
         timeoutMs: opts.timeoutMs,
@@ -149,8 +152,8 @@ export function createCodexAnswerer<TOutput>(dependencies: CodexAnswererDependen
     cli: "codex",
     authRef: dependencies.credentialRef,
     async runAnswerer(opts): Promise<TOutput> {
-      // SaaS Tier-B #5: managed ⇒ API-key auth.json against the platform
-      // endpoint (see the writer path for the rationale).
+      // SaaS Tier-B #5: managed ⇒ config.toml OpenRouter provider block + an
+      // OPENROUTER_API_KEY env file (see the writer path for the rationale).
       const managed = dependencies.endpointBaseUrl !== undefined;
       const auth = await materializeCodexAuthBundle({
         secrets: dependencies.secrets,
@@ -161,6 +164,7 @@ export function createCodexAnswerer<TOutput>(dependencies: CodexAnswererDependen
         baseDir: dependencies.codexHomeBaseDir,
         timeoutMs: Math.min(opts.timeoutMs, 30_000),
         managed,
+        endpointBaseUrl: dependencies.endpointBaseUrl,
       });
       const workspace = opts.workspace ?? answererWorkspacePath(dependencies, opts.outputSchema.name);
       const schemaPath = `${auth.CODEX_HOME}/${safeSchemaFileName(opts.outputSchema.name)}.schema.json`;
@@ -178,7 +182,7 @@ export function createCodexAnswerer<TOutput>(dependencies: CodexAnswererDependen
           workspace,
           schemaPath,
           outputPath,
-          endpointBaseUrl: dependencies.endpointBaseUrl,
+          managed: auth.managed,
         }),
         stdin: opts.prompt,
         timeoutMs: opts.timeoutMs,
@@ -243,18 +247,17 @@ async function persistRefreshedCodexAuthBestEffort(input: {
   }
 }
 
-export function buildCodexExecCommand(input: {
-  codexHome: string;
-  workspace: string;
-  endpointBaseUrl?: string;
-}): string {
+export function buildCodexExecCommand(input: { codexHome: string; workspace: string; managed?: boolean }): string {
   return [
+    ...managedKeyEnvPrefix(input.codexHome, input.managed),
     `CODEX_HOME=${quoteSshShellArg(input.codexHome)}`,
-    ...codexEndpointEnv(input.endpointBaseUrl),
     "codex exec",
     "--sandbox workspace-write",
     "--json",
-    "--ignore-user-config",
+    // BYOK: ignore any host-level codex config. MANAGED: we DELIBERATELY do NOT
+    // pass --ignore-user-config so codex reads the per-run CODEX_HOME/config.toml
+    // that declares the OpenRouter provider + selects it (the cookbook path).
+    ...codexUserConfigFlag(input.managed),
     "--cd",
     quoteSshShellArg(input.workspace),
     "-",
@@ -266,15 +269,15 @@ export function buildCodexAnswererExecCommand(input: {
   workspace: string;
   schemaPath: string;
   outputPath: string;
-  endpointBaseUrl?: string;
+  managed?: boolean;
 }): string {
   return [
+    ...managedKeyEnvPrefix(input.codexHome, input.managed),
     `CODEX_HOME=${quoteSshShellArg(input.codexHome)}`,
-    ...codexEndpointEnv(input.endpointBaseUrl),
     "codex exec",
     "--sandbox read-only",
     "--json",
-    "--ignore-user-config",
+    ...codexUserConfigFlag(input.managed),
     "--ignore-rules",
     "--skip-git-repo-check",
     "--cd",
@@ -287,12 +290,33 @@ export function buildCodexAnswererExecCommand(input: {
   ].join(" ");
 }
 
-// SaaS Tier-B #5: the managed-endpoint env override codex reads. When a managed
-// run resolves the platform endpoint, we set OPENAI_BASE_URL so codex's API
-// calls go to the platform OpenRouter shell. BYOK ⇒ no override (unchanged).
-function codexEndpointEnv(endpointBaseUrl?: string): string[] {
-  return endpointBaseUrl === undefined ? [] : [`OPENAI_BASE_URL=${quoteSshShellArg(endpointBaseUrl)}`];
+// SaaS Tier-B #5 (OpenRouter cookbook): a MANAGED run sources the per-run env
+// file the materializer wrote (chmod 600, exporting OPENROUTER_API_KEY — the
+// `env_key` the config.toml provider block names) before invoking codex, so the
+// platform key reaches codex via the env WITHOUT ever appearing in the command
+// string. BYOK ⇒ no prefix (unchanged).
+function managedKeyEnvPrefix(codexHome: string, managed?: boolean): string[] {
+  return managed === true ? [`.`, quoteSshShellArg(codexManagedEnvPath(codexHome)), "&&"] : [];
 }
+
+// BYOK pins `--ignore-user-config`; MANAGED omits it so CODEX_HOME/config.toml is
+// honored. (UNVERIFIED LIVE — see the file-level NOTE below.)
+function codexUserConfigFlag(managed?: boolean): string[] {
+  return managed === true ? [] : ["--ignore-user-config"];
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// NOTE (codex MANAGED path — needs a LIVE codex verification before relying on
+// it in production): OpenRouter's Codex-CLI cookbook configures codex via
+// `config.toml` (`model_provider = "openrouter"` + `[model_providers.openrouter]`
+// with `base_url` + `env_key="OPENROUTER_API_KEY"`). We materialize exactly that
+// into the per-run CODEX_HOME and DROP `--ignore-user-config` for managed runs so
+// codex reads it. It is UNVERIFIED whether `codex exec` (a) honors a CODEX_HOME
+// `config.toml` written this way and (b) routes through OpenRouter end-to-end
+// under these flags. The BYOK path (auth.json + `--ignore-user-config`) is
+// UNCHANGED and remains the proven one. Verify managed codex against a real
+// OpenRouter key before depending on it.
+// ─────────────────────────────────────────────────────────────────────────────
 
 // The tail of a harness stream, whitespace-collapsed, for surfacing the real
 // reason an Answerer failed (e.g. an OpenAI structured-output 400) in the error.

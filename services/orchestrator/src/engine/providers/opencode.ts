@@ -35,8 +35,9 @@ export interface OpencodeWriterDependencies {
   model?: string;
   opencodeDataBaseDir?: string;
   // SaaS Tier-B #5: optional managed-endpoint base URL. When set (managed run),
-  // opencode is pointed at this OpenAI-compatible endpoint (the platform
-  // OpenRouter shell) via OPENAI_BASE_URL. Absent ⇒ BYOK: no override.
+  // the materializer writes an OpenRouter auth.json + opencode.json and the
+  // writer selects the openrouter provider (the cookbook path), so opencode
+  // routes THROUGH OpenRouter. Absent ⇒ BYOK: no override (Zai GLM, unchanged).
   endpointBaseUrl?: string;
 }
 
@@ -60,6 +61,7 @@ export function createOpencodeWriter(dependencies: OpencodeWriterDependencies): 
         runId: dependencies.runId,
         baseDir: dependencies.opencodeDataBaseDir,
         timeoutMs: Math.min(opts.timeoutMs, 30_000),
+        managed: dependencies.endpointBaseUrl !== undefined,
       });
       const baselineSha = await captureBaselineSha(
         dependencies.ssh,
@@ -71,8 +73,8 @@ export function createOpencodeWriter(dependencies: OpencodeWriterDependencies): 
         command: buildOpencodeWriterCommand({
           dataHome: auth.XDG_DATA_HOME,
           workspace: opts.workspace,
-          model: dependencies.model ?? ZAI_GLM_MODEL,
-          endpointBaseUrl: dependencies.endpointBaseUrl,
+          model: resolveOpencodeModel(dependencies.model, auth.managed),
+          configHome: auth.XDG_CONFIG_HOME,
         }),
         stdin: opts.prompt,
         timeoutMs: opts.timeoutMs,
@@ -108,11 +110,14 @@ export function buildOpencodeWriterCommand(input: {
   dataHome: string;
   workspace: string;
   model: string;
-  endpointBaseUrl?: string;
+  // SaaS Tier-B #5: the config home holding the managed `opencode.json`. Set ⇒
+  // managed run; we export XDG_CONFIG_HOME so opencode reads the OpenRouter
+  // provider config. Absent ⇒ BYOK (unchanged).
+  configHome?: string;
 }): string {
   return [
     `XDG_DATA_HOME=${quoteSshShellArg(input.dataHome)}`,
-    ...opencodeEndpointEnv(input.endpointBaseUrl),
+    ...opencodeConfigHomeEnv(input.configHome),
     "opencode",
     "run",
     "--print-logs",
@@ -124,12 +129,23 @@ export function buildOpencodeWriterCommand(input: {
   ].join(" ");
 }
 
-// SaaS Tier-B #5: the managed-endpoint env override opencode reads. When a
-// managed run resolves the platform endpoint, we set OPENAI_BASE_URL so
-// opencode's OpenAI-compatible calls go to the platform OpenRouter shell. BYOK
-// ⇒ no override (unchanged).
-function opencodeEndpointEnv(endpointBaseUrl?: string): string[] {
-  return endpointBaseUrl === undefined ? [] : [`OPENAI_BASE_URL=${quoteSshShellArg(endpointBaseUrl)}`];
+// SaaS Tier-B #5 (OpenRouter cookbook): a managed run reads its `opencode.json`
+// OpenRouter provider config from the per-run config home (XDG_CONFIG_HOME).
+// BYOK ⇒ no override (unchanged).
+function opencodeConfigHomeEnv(configHome?: string): string[] {
+  return configHome === undefined ? [] : [`XDG_CONFIG_HOME=${quoteSshShellArg(configHome)}`];
+}
+
+// SaaS Tier-B #5 (OpenRouter cookbook): a managed opencode run selects the
+// openrouter provider. The chain's model is namespaced under that provider as
+// `openrouter/<slug>` unless it already carries an `openrouter/` prefix. BYOK ⇒
+// the chain model (default ZAI_GLM_MODEL), unchanged.
+export function resolveOpencodeModel(model: string | undefined, managed: boolean): string {
+  if (!managed) {
+    return model ?? ZAI_GLM_MODEL;
+  }
+  const slug = model ?? ZAI_GLM_MODEL;
+  return slug.startsWith("openrouter/") ? slug : `openrouter/${slug}`;
 }
 
 // Parses opencode's `--print-logs` output: one JSON object per line. Token
