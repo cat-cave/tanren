@@ -77,6 +77,24 @@ describe("VaultSecretStore", () => {
     expect(calls[0]).toBe("http://vault:8200/v1/kv-prod/data/credential/token");
   });
 
+  it("maps a `secret://`-scheme ref to a clean KV path (no empty `//` segment → no 404)", async () => {
+    // The integration-link route + deploy provisioner mint `secret://…` refs. Left
+    // verbatim, the `//` splits into an empty path segment and Vault 404s the write.
+    // The scheme must be stripped so put + get resolve to the same clean key.
+    const calls: string[] = [];
+    const fetchImpl = vi.fn<typeof fetch>(async (url) => {
+      calls.push(typeof url === "string" ? url : url.toString());
+      return new Response(JSON.stringify({ data: { data: { value: "tok" } } }), { status: 200 });
+    });
+    const store = new VaultSecretStore({ addr: "http://vault:8200", token: "t", fetchImpl });
+    const ref = "secret://org/org_1/integration/deploy.vercel/token";
+    await store.put({ ref, value: "tok" });
+    expect(calls[0]).toBe("http://vault:8200/v1/secret/data/org/org_1/integration/deploy.vercel/token");
+    // get round-trips: same key path, original ref echoed back.
+    await expect(store.get(ref)).resolves.toEqual({ ref, value: "tok" });
+    expect(calls[1]).toBe("http://vault:8200/v1/secret/data/org/org_1/integration/deploy.vercel/token");
+  });
+
   it("reads the value from the nested KV v2 data.data envelope", async () => {
     // The real value lives at body.data.data.value; a flattened envelope must not resolve.
     const fetchImpl = vi.fn<typeof fetch>(

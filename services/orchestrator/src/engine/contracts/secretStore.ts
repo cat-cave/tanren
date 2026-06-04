@@ -139,7 +139,7 @@ export class VaultSecretStore implements SecretStore {
   }
 
   private url(ref: string): string {
-    return `${this.options.addr.replace(/\/$/u, "")}/v1/${encodePath(this.mount)}/data/${encodePath(ref)}`;
+    return `${this.options.addr.replace(/\/$/u, "")}/v1/${encodePath(this.mount)}/data/${encodePath(vaultKeyPath(ref))}`;
   }
 }
 
@@ -168,4 +168,20 @@ function encodePath(path: string): string {
     .split("/")
     .map((segment) => encodeURIComponent(segment))
     .join("/");
+}
+
+/**
+ * Map a secret REF to a Vault KV v2 key path. Refs come in two shapes: bare paths
+ * (`credential/github/org/<org>/bot`) and `secret://`-scheme refs minted by the
+ * integration-link route + the deploy provisioner (`secret://org/<org>/integration/
+ * deploy.vercel/token`). The scheme is a logical marker, not part of the key — left
+ * in, its `//` splits into an empty path segment and Vault 404s the write. Strip the
+ * leading `secret://`, collapse any resulting double slashes, and drop a leading
+ * slash so both ref shapes resolve to a clean key. Bare refs pass through unchanged.
+ */
+function vaultKeyPath(ref: string): string {
+  return ref
+    .replace(/^secret:\/\//u, "")
+    .replaceAll(/\/{2,}/gu, "/")
+    .replace(/^\/+/u, "");
 }
