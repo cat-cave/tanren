@@ -7,6 +7,7 @@ import type { SecretStore } from "../../contracts/secretStore.js";
 import type { OrgGithubAppInstallation } from "../../config/orgConfig.js";
 import type { GitHubHttpClient } from "../../providers/github.js";
 import type { GithubAppTokenMinter } from "../../providers/githubAppTokenMinter.js";
+import { createCiInsightsConnector } from "./ciInsightsConnector.js";
 import { createGitHubIssuesConnector } from "./githubConnector.js";
 import { createIssuesConnector } from "./issuesConnector.js";
 import { createSentryConnector, FetchSentryHttpClient, type SentryHttpClient } from "./sentryConnector.js";
@@ -52,5 +53,10 @@ export function buildInboxConnectorMap(deps: BuildConnectorMapDeps): Map<string,
       "errors",
       createSentryConnector({ secrets: deps.secrets, sentryHttp: deps.sentryHttp ?? new FetchSentryHttpClient() }),
     ],
+    // CI-intelligence PR3: the CI-insights source (a `system` source). It pulls
+    // nothing — the worker's CiInsightsLoop emits its candidates — so the connector
+    // is a registered no-op (a stray ingest over it is safe), keeping the kind a
+    // recognized member of the map.
+    ["system", createCiInsightsConnector()],
   ]);
 }

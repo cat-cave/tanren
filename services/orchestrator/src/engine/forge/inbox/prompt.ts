@@ -7,7 +7,36 @@
 // project's existing specs so dedupe + placement reference reality. Asks for
 // exactly one `CandidateTriage`; the strict output schema enforces the rest.
 
+import { isCiInsightSource } from "./ciInsightsSource.js";
 import type { TriageAnswererContext } from "./types.js";
+
+// The root-cause triage branch for a CI-insight candidate (PR3 generative loop).
+// A CI insight is not a feature request — it is EVIDENCE of a recurring CI problem
+// (a flaky test's toggled-SHA / passes-on-retry record, or a slow suite's p95
+// trend + worst offenders), and the candidate body carries that evidence. So the
+// model must reason about WHY before it routes: hypothesize the root cause from the
+// evidence, then propose the mechanical fix as the `routableSpec`. The verdict
+// gates autonomy exactly as it does for issues/audits — a clear mechanical fix
+// ships (`auto_routable`), a fix that needs a product decision waits (`needs_call`).
+const CI_INSIGHT_TRIAGE_LINES: string[] = [
+  "This candidate is a CI INSIGHT — durable evidence of a recurring CI problem, not a",
+  "feature request. The body above is the evidence (a flaky test's toggled-SHA /",
+  "passes-on-retry record + sample failures, OR a slow suite's p95 trend + its worst-",
+  "offender tests). The mechanical quarantine already made the flake non-blocking, so",
+  "this is the DURABLE fix, not an emergency. Reason about the ROOT CAUSE first:",
+  "- Flaky: from the evidence, hypothesize WHY it is non-deterministic — a race, shared",
+  "  mutable state / fixture, test-order dependence, or an unmocked external dependency —",
+  "  then make `routableSpec` the concrete mechanical fix, e.g. `Fix the race in <test>:",
+  "  isolate the shared fixture / inject a deterministic clock`.",
+  "- Slow CI: the p95 is dominated by the named worst-offender tests; make `routableSpec`",
+  "  the concrete fix, e.g. `Split/parallelize suite <suite>; p95 dominated by <tests>`.",
+  "Autonomy: a CLEAR mechanical fix you can specify → `auto_routable` (it ships). A fix",
+  "that needs a PRODUCT call (e.g. the slow suite tests a feature whose value is in",
+  "question, or the flake hides a real behavior question) → `needs_call` (it waits in",
+  "the inbox). If you CANNOT identify a resolvable root cause from the evidence, do NOT",
+  "fabricate a fix — return `needs_call` with `routableSpec` null. Never invent a fix.",
+  "",
+];
 
 export function buildTriagePrompt(context: TriageAnswererContext): string {
   const existing = context.existingSpecs.map((spec) => `- ${spec.specId} · ${spec.title} (${spec.status})`).join("\n");
@@ -20,6 +49,7 @@ export function buildTriagePrompt(context: TriageAnswererContext): string {
     "Body:",
     context.candidate.body,
     "",
+    ...(isCiInsightSource(context.source) ? CI_INSIGHT_TRIAGE_LINES : []),
     "Existing specs in this project's DAG (id · title · status):",
     existing === "" ? "(none)" : existing,
     "",

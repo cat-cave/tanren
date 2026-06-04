@@ -25,6 +25,16 @@ export interface InsightThresholds {
   // demands repeated flakes. `flakyWindowDays` bounds the observation lookback.
   flakyMinToggledShas: number;
   flakyWindowDays: number;
+  // ci_insights GENERATIVE loop (PR3). The recurrence bars before the loop emits a
+  // DURABLE-FIX candidate (a spec) for a recurring CI problem — anti-spam: a fix is
+  // generated only for a PROVEN problem, never per flaky run.
+  // `ciInsightFlakyMinShas`: a flaky test must be proven on at least this many
+  //   distinct toggled SHAs before a fix-spec is generated (>= the quarantine bar).
+  // `ciInsightSlowMinSuiteTests`: a suite needs at least this many slow tests before
+  //   a "split/parallelize the suite" candidate is worth a spec (a single slow test
+  //   is a test-level fix, not a suite split).
+  ciInsightFlakyMinShas: number;
+  ciInsightSlowMinSuiteTests: number;
   // cache freshness
   cacheFreshnessMs: number;
 }
@@ -41,5 +51,10 @@ export const DEFAULT_THRESHOLDS: InsightThresholds = {
   reviewStallHours: 48,
   flakyMinToggledShas: 1,
   flakyWindowDays: 14,
+  // A durable fix-spec is generated only for a repeatedly-flaky test (proven on >= 2
+  // distinct SHAs) — a higher bar than the quarantine floor (1), so a one-off flake
+  // is quarantined but not yet specced. A suite needs >= 2 slow tests to be worth a split.
+  ciInsightFlakyMinShas: 2,
+  ciInsightSlowMinSuiteTests: 2,
   cacheFreshnessMs: 60 * 60 * 1000,
 };
