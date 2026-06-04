@@ -19,7 +19,13 @@ const orchestrator = resolve(repoRoot, "services/orchestrator");
 
 // Each entry: a directory (relative to the orchestrator package) whose files are
 // copied verbatim from `src/` to the mirror path under `dist/`.
-const ASSET_DIRS = ["engine/answerers/schemas/generated"];
+const ASSET_DIRS = [
+  "engine/answerers/schemas/generated",
+  // The vendored LiteLLM model-price snapshot read at runtime by
+  // engine/costs/pricing/modelPriceSource.ts (same `readFileSync(import.meta.dirname)`
+  // pattern as the answerer schemas — bare `tsc` drops the .json, so copy it).
+  "engine/costs/pricing",
+];
 
 let copied = 0;
 for (const rel of ASSET_DIRS) {

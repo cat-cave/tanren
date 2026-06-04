@@ -32,3 +32,17 @@ export {
   queryGenerationCost,
   realProviderCostFrom,
 } from "./openRouterCost.js";
+
+// ModelPriceSource — the REAL, MAINTAINED per-model rate source (LiteLLM's
+// vendored `model_prices_and_context_window.json`). Any COMPUTED figure (notional
+// cost, forward spec/DAG estimate) sources its rates HERE, never a hardcoded table;
+// a model missing from the source resolves to a LOUD `null`. (Foundation: this PR
+// adds the source + data + refresh recipe; rewiring the recorder/notional/forecast
+// callers onto it is a dependent PR.)
+export {
+  type ModelPrice,
+  type ModelPriceMap,
+  ModelPriceSource,
+  type RateAxis,
+  defaultModelPriceSource,
+} from "./pricing/modelPriceSource.js";

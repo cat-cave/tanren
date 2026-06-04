@@ -43,6 +43,15 @@ dashboard-types-drift:
 knip:
   corepack pnpm run check:knip
 
+# Re-fetch LiteLLM's maintained model-price source and re-vendor the snapshot at
+# services/orchestrator/src/engine/costs/pricing/model_prices.json. Run on a
+# schedule so the snapshot stays current with upstream (providers add/adjust
+# models). SCHEDULING NOTE: wire this into the existing scheduled-CI lane (the same
+# lane the scheduled mutation-CI runs on) as a follow-up — this PR adds only the
+# recipe, not a CI cron trigger. Use `--check` in CI to fail on a stale snapshot.
+refresh-model-prices:
+  node scripts/refresh-model-prices.mjs
+
 spelling:
   corepack pnpm run check:spelling
 
