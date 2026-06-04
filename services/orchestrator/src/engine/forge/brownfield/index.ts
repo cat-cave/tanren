@@ -25,3 +25,22 @@ export {
   type SeededSpec,
   type SeedSource,
 } from "./seed.js";
+export {
+  classifyWorkflowIntents,
+  replacementFor,
+  severityFor,
+  BranchProtectionInput,
+  WorkflowIntent,
+  WorkflowIntentCategory,
+  WorkflowIntentSource,
+  NativeReplacementKind,
+  DispositionSeverity,
+  type ClassifyWorkflowIntentInput,
+} from "./workflowIntent.js";
+export {
+  buildMigrationReport,
+  DispositionStatus,
+  MigrationDisposition,
+  MigrationRiskReport,
+  type BuildMigrationReportInput,
+} from "./migrationReport.js";

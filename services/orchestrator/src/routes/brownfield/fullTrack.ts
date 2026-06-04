@@ -18,6 +18,12 @@
 //     config (P3-0023). The external-push behavior is DERIVED from the posture
 //     (see `governancePosture.ts`), so no new config field + no migration.
 //
+//   POST /:orgId/projects/:projectId/migration
+//     Re-index the linked repo (read-only) and classify its existing automation
+//     into workflow INTENT (not YAML) → native replacements → a migration-risk
+//     report with the not-ready-while-security/compliance/production-dropped
+//     rule. The report is TRANSIENT (returned, not persisted) — no migration.
+//
 // Every GitHub/Answerer seam is injectable so tests mock them. The recon report
 // rides on the request between steps (transient — no interview-session table),
 // mirroring the greenfield capture model: no migration.
@@ -41,6 +47,9 @@ import {
   proposeConfigFiles,
   runRecon,
   seedDagFromReconAndIssues,
+  buildMigrationReport,
+  classifyWorkflowIntents,
+  BranchProtectionInput,
   ReconReport,
   type ConfigInjectionGitHub,
   type ReconAnswerer,
@@ -95,6 +104,19 @@ const SeedDagBody = z
   .strict();
 
 const GovernanceBody = z.object({ posture: GovernancePosture }).strict();
+
+const MigrationBody = z
+  .object({
+    repoUrl: z.string().min(1).max(400),
+    // Branch protection / required checks arrive separately from the file tree;
+    // the caller (or a future provider read) supplies them so the classifier can
+    // account for required-status-checks + approval rules. Optional.
+    branchProtection: z.array(BranchProtectionInput).default([]),
+    // Intent ids the operator chose to drop. Dropping a security/compliance/
+    // production intent flips `tanrenNativeReady` to false (the not-ready rule).
+    droppedIds: z.array(z.string().min(1).max(120)).default([]),
+  })
+  .strict();
 
 export function createBrownfieldFullTrackRoutes(options: BrownfieldFullTrackOptions) {
   const app = new Hono<ActorContextEnv>();
@@ -209,6 +231,42 @@ export function createBrownfieldFullTrackRoutes(options: BrownfieldFullTrackOpti
       },
       200,
     );
+  });
+
+  // POST /:orgId/projects/:projectId/migration
+  //   Re-index the linked repo (read-only, the SAME recon read surface), classify
+  //   every discovered automation into workflow INTENT, and return the
+  //   migration-risk report (per-item disposition + the not-ready verdict). The
+  //   report is transient — it is RETURNED, never persisted as a new entity-shape
+  //   (no migration). The repo reader + token resolution mirror the recon route.
+  app.post("/:orgId/projects/:projectId/migration", async (c) => {
+    const guard = await guardOrg(c, options.pool);
+    if (guard.error !== undefined) return c.json({ error: guard.error }, guard.status);
+    const parsed = MigrationBody.safeParse(await c.req.json().catch(() => {}));
+    if (!parsed.success) return c.json({ error: "invalid_migration", issues: parsed.error.issues }, 400);
+    try {
+      const resolved = await resolveTokenFor(options, guard.orgId);
+      const reader =
+        options.repoReaderFor?.(parsed.data.repoUrl, guard.defaultBranch, resolved) ??
+        new GithubRepoReader({
+          http: options.githubHttp,
+          resolved,
+          defaultBranch: guard.defaultBranch,
+        });
+      const index = await reader.index(parsed.data.repoUrl);
+      const intents = classifyWorkflowIntents({
+        index,
+        branchProtection: parsed.data.branchProtection,
+      });
+      const report = buildMigrationReport({
+        repoUrl: parsed.data.repoUrl,
+        intents,
+        droppedIds: parsed.data.droppedIds,
+      });
+      return c.json({ filesIndexed: index.filesIndexed, intents, report }, 200);
+    } catch (error) {
+      return c.json({ error: "migration_failed", message: messageOf(error) }, 502);
+    }
   });
 
   return app;
