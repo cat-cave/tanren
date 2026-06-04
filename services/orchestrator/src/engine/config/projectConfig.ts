@@ -40,15 +40,13 @@ export type ProjectCredentialRefs = z.infer<typeof ProjectCredentialRefs>;
 // interview. The interview capture (`forge/interview/types.ts`) is otherwise
 // transient — personas/behaviors/specs are derived into their own rows, but the
 // product's IDENTITY (`pitch`) and DESIGN-DNA were dropped at derive time. This
-// is where they are PERSISTED (no new table / migration — the existing
-// `projects.config` jsonb blob), so a downstream consumer (the intent-preserving
-// conflict resolver) can frame a resolution against the product vision and judge
-// whether two specs' intents genuinely clash. Both fields are short free-form
-// notes (the interview caps `designDna` at 80, the identity `pitch` at 400).
-// Optional + additive: legacy rows carry no key and parse to an absent field (no
-// migration), and `.strict()` round-trips it untouched on save. A project created
-// without an interview (brownfield/HTTP) simply has no `productVision` — a real
-// empty state, not a stub.
+// is where they are PERSISTED (on the existing `projects.config` jsonb blob), so a
+// downstream consumer (the intent-preserving conflict resolver) can frame a
+// resolution against the product vision and judge whether two specs' intents
+// genuinely clash. Both fields are short free-form notes (the interview caps
+// `designDna` at 80, the identity `pitch` at 400). Both optional: a project
+// created without an interview (brownfield/HTTP) simply has no `productVision` —
+// a real empty state, not a stub.
 export const ProjectProductVision = z
   .object({
     pitch: z.string().min(1).max(400).optional(),
@@ -74,9 +72,8 @@ export const ProjectConfigV1 = z
     // own pushes in the external-change gate, ADDITIVE to the default bot login + the
     // login resolved live from the active credential (`resolveActorIdentity`). The
     // apex path needs ZERO config — this is only for orgs that push via MULTIPLE
-    // identities (e.g. several admin PATs). Optional + backward-compatible: legacy
-    // rows carry no key and parse to an absent field (the default set applies), and
-    // `.strict()` round-trips it on save.
+    // identities (e.g. several admin PATs). Optional: absent ⇒ only the default set
+    // (bot login + live-resolved credential login) applies.
     governanceTanrenLogins: z.array(z.string().min(1)).optional(),
     // MERGE-HARDENING (GAP #3): the configurable PLATFORM / KNOWN-AUTOMATION committer
     // login set, ADDITIVE to the built-in `web-flow` (GitHub's merge-commit author). On
@@ -85,57 +82,49 @@ export const ProjectConfigV1 = z
     // mechanical co-author trailer / a second bot must not strand a done-run spec into a
     // 3×-churn→park). These are NOT treated as Tanren's own identity (that is
     // `governanceTanrenLogins`) and on the `human` tier they STILL block — the
-    // auto-approve is scoped to the autonomous tiers only. Optional + backward-compatible:
-    // legacy rows carry no key (only `web-flow` is recognized), and `.strict()` round-trips
-    // it on save.
+    // auto-approve is scoped to the autonomous tiers only. Optional: absent ⇒ only
+    // the built-in `web-flow` is recognized.
     governancePlatformLogins: z.array(z.string().min(1)).optional(),
     mergeIntegration: MergeIntegration.default("not_configured"),
     // Whether the review stage requires a real human verdict before merge.
     // Defaults to `"human"` (safe: never auto-merge without a review). When a
     // project opts into `"auto"` (the no-review tier), the review stage
     // short-circuits to an approved verdict so the merge dispatch proceeds.
-    // Additive + backward-compatible: legacy rows carry no key and parse to the
-    // `"human"` default (no migration), and `.strict()` round-trips it on save.
     reviewPolicy: ReviewPolicy.default("human"),
     // P2c-1 (autonomy-engine.md §2c): how far along an ancestor must be before a
     // dependent may start building SPECULATIVELY (against the ancestor's
     // prospective merged world) rather than waiting for it to genuinely merge.
     // Defaults to `moderate` (the §6 resolved default: CI-green + audited with no
-    // open P0/P1 unblocks a dependent even with review pending). Additive +
-    // backward-compatible: legacy rows carry no key and parse to the default (no
-    // migration), and `.strict()` round-trips it on save. The dependent's MERGE
-    // still waits for the real ancestor merge — the threshold gates WORK, not MERGE.
+    // open P0/P1 unblocks a dependent even with review pending). The dependent's
+    // MERGE still waits for the real ancestor merge — the threshold gates WORK,
+    // not MERGE.
     speculationThreshold: SpeculationThreshold.default(DEFAULT_SPECULATION_THRESHOLD),
     // P2c-1 (§2c open decision §6): the max number of UNMERGED ancestors deep a
     // speculative integration branch may stack. A ready dependent whose
     // unmerged-ancestor depth EXCEEDS this is HELD (logged via
     // dag.spec.speculation_held, never silently truncated) until ancestors merge.
-    // Default 2. Additive; legacy rows parse to the default.
+    // Default 2.
     speculativeIntegrationDepth: z.number().int().min(1).default(DEFAULT_SPECULATIVE_INTEGRATION_DEPTH),
     // P2d-2 (§2d): the MAX BATCH SIZE for speculative batch-check + bisect — how many
     // mutually-eligible queued entries the native MergeCoordinator speculatively
     // integrates + CI-checks as a combined unit before merging. A larger batch
     // amortizes the integration-CI run; a smaller one shrinks bisect cost. Default 5.
     // When more entries are eligible the batch is CAPPED to the DAG-ordered prefix +
-    // the cap is logged (never a silent truncation). Additive; legacy rows parse to
-    // the default. Only consulted under `native_queue`.
+    // the cap is logged (never a silent truncation). Only consulted under `native_queue`.
     maxBatchSize: z.number().int().min(1).default(DEFAULT_MAX_BATCH_SIZE),
     // The NO-CHECKS SETTLE GRACE (ms): how long a GENUINELY-ZERO-CHECKS observation
     // (no check-runs + no statuses, NOT gated by required contexts) is held PENDING
     // before the merge queue / run-loop CI gate treats it as green — the fix for a
     // no-CI greenfield repo hanging forever. ONLY `no_checks` settles; `checks_pending`
     // (real CI registered, not done) and `failed` are UNAFFECTED (see
-    // DEFAULT_NO_CHECKS_SETTLE_MS). Default 45_000. Additive + backward-compatible:
-    // legacy rows carry no key and parse to the default (no migration), and `.strict()`
-    // round-trips it on save. A repo with real CI flips to `checks_pending` within
-    // seconds and is never short-circuited.
+    // DEFAULT_NO_CHECKS_SETTLE_MS). Default 45_000. A repo with real CI flips to
+    // `checks_pending` within seconds and is never short-circuited.
     noChecksSettleMs: z.number().int().min(0).default(DEFAULT_NO_CHECKS_SETTLE_MS),
     // P3-0025: optional per-project preview-deploy URL pattern. Drives the live
     // preview iframe in the Review surface. Supports `{branch}` and `{pr}`
-    // placeholders (e.g. `https://pr-{pr}.preview.fly.dev`). Optional + additive:
-    // legacy rows carry no key and parse to an absent field (no migration), and
-    // `.strict()` round-trips it untouched on save. The dashboard never writes a
-    // preview URL onto runs — it derives one from this pattern at render time.
+    // placeholders (e.g. `https://pr-{pr}.preview.fly.dev`). Optional. The dashboard
+    // never writes a preview URL onto runs — it derives one from this pattern at
+    // render time.
     previewUrlPattern: z.string().min(1).optional(),
     // The deploy target a project carries once the `deploy` capability is
     // provisioned. A project either HAS a deploy target (these keys present) or does
@@ -149,16 +138,13 @@ export const ProjectConfigV1 = z
     deployAppName: z.string().min(1).optional(),
     envAttachmentRef: z.string().min(1).optional(),
     // P3-0002: optional credential refs the run executor resolves before a run.
-    // Backward-compatible — legacy rows carry no `credentials` key and parse to
-    // an absent field (the resolver then falls back to the org defaults).
-    // Refs are the P2A-0013 managed namespace (`credential/<kind>/<scope>/...`),
-    // not vault:// URIs.
+    // Absent ⇒ the resolver falls back to the org defaults. Refs are the P2A-0013
+    // managed namespace (`credential/<kind>/<scope>/...`), not vault:// URIs.
     credentials: ProjectCredentialRefs.optional(),
     // SaaS Tier-B #5: optional per-project override of the org's BYOK-vs-managed
-    // toggle. Absent ⇒ inherit the org `providerMode` (so legacy rows parse to
-    // an absent field and the org default applies — no migration). When set, it
-    // wins over the org for this project. `managedProvider` likewise overrides
-    // the org's platform credential ref + endpoint for this project only.
+    // toggle. Absent ⇒ inherit the org `providerMode`. When set, it wins over the
+    // org for this project. `managedProvider` likewise overrides the org's platform
+    // credential ref + endpoint for this project only.
     providerMode: ProviderMode.optional(),
     managedProvider: ManagedProviderConfig.optional(),
     // The per-project DOLLAR BUDGET CEILING (autonomy-engine.md §3 proof 6): a
@@ -168,9 +154,8 @@ export const ProjectConfigV1 = z
     // enqueuing new spec runs (genuine `budget_paused` → `dag.budget.paused`);
     // in-flight runs are not killed. Whole-object override: a project that sets a
     // budget overrides the org's `defaultBudget`; a project that omits it inherits
-    // the org default (the walker resolves project-over-org). Optional + additive:
-    // legacy rows carry no key and parse to an ABSENT field = NO ceiling = unlimited
-    // (today's behavior, byte-identical), and `.strict()` round-trips it on save.
+    // the org default (the walker resolves project-over-org). Optional: absent ⇒
+    // NO ceiling = unlimited.
     budget: ProjectBudget.optional(),
     // PER-CREDENTIAL CREDIT/OVERAGE USD RATE (cost PR-C): the dollar value of one
     // prepaid credit, keyed by credential ref-KIND (see `CreditRates`). The
@@ -180,8 +165,7 @@ export const ProjectConfigV1 = z
     // project-over-org (this map wins over the org `defaultCreditRates`). A
     // credential that drew down credits with NO configured rate is a LOUD unknown
     // (NULL real spend + `cost.credit_rate_unknown`), never a silent guess.
-    // Optional + additive: legacy rows carry no key and parse to an EMPTY map (no
-    // migration), and `.strict()` round-trips it on save.
+    // Defaults to an EMPTY map (no rates configured).
     creditRates: CreditRates.default({}),
     // GREENFIELD MARKER: whether this project was created greenfield — Tanren
     // authors the repo's toolchain LIVE across writer iterations (no pre-existing
@@ -192,16 +176,13 @@ export const ProjectConfigV1 = z
     // (`pnpm install --frozen-lockfile` / `npm ci`) so an existing committed
     // lockfile is never silently mutated / upgraded. Set by the greenfield
     // creation paths (`/projects/greenfield` + the interview `deriveProductGraph`);
-    // absent ⇒ `false` = brownfield (the safe default). Additive + backward-
-    // compatible: legacy rows carry no key and parse to `false` (no migration), and
-    // `.strict()` round-trips it on save. An explicit `tanren-ci.yml` `bootstrap.run`
-    // still wins over this default in BOTH cases.
+    // absent ⇒ `false` = brownfield (the safe default). An explicit `tanren-ci.yml`
+    // `bootstrap.run` still wins over this default in BOTH cases.
     greenfield: z.boolean().default(false),
     // The captured product identity + design-DNA from the greenfield vision
     // interview (see `ProjectProductVision`). Persisted here (not a new table) so
     // the conflict resolver can frame a resolution against the product vision.
-    // Optional + additive: absent ⇒ no captured vision (a real empty state), and
-    // `.strict()` round-trips it untouched on save.
+    // Optional: absent ⇒ no captured vision (a real empty state).
     productVision: ProjectProductVision.optional(),
   })
   .strict();

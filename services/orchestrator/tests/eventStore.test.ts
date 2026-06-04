@@ -3,11 +3,11 @@ import { describe, expect, it } from "vitest";
 import { runWithOrgScope, runWithSystemJobScope } from "@tanren/db";
 import { PgEventStore } from "../src/engine/eventStore.js";
 import { MissingOrgScopeError, orgScopingPool } from "../src/engine/data/orgScopedDb.js";
-import { listEventNames } from "../src/engine/events.js";
+import { listEventNames } from "../src/engine/events/index.js";
 import { FakeEventStore } from "./helpers/fakeEventStore.js";
 
-describe("event store (legacy shim)", () => {
-  it("re-exports listEventNames from the registry barrel", () => {
+describe("event store", () => {
+  it("exposes listEventNames from the registry barrel", () => {
     expect(listEventNames()).toContain("planner.completed");
   });
 

@@ -86,8 +86,8 @@ export const OrgConfigV1 = z
     // SaaS Tier-B #5: the BYOK-vs-managed provider toggle. `byok` (default)
     // resolves the tenant's own credential — unchanged behavior. `managed`
     // resolves the platform-owned credential (managedProvider.credentialRef)
-    // and points the harness at the managed endpoint. Additive + defaulted so
-    // legacy rows parse to `byok` with no migration; the hosting layer flips it.
+    // and points the harness at the managed endpoint. Defaults to `byok`; the
+    // hosting layer flips it.
     providerMode: ProviderMode.default("byok"),
     // Optional managed-provider override (platform credential ref + endpoint).
     // Absent ⇒ the managed defaults (platform OpenRouter shell) apply; only
@@ -95,18 +95,16 @@ export const OrgConfigV1 = z
     managedProvider: ManagedProviderConfig.optional(),
     // The ORG-LEVEL DEFAULT dollar budget ceiling (autonomy-engine.md §3 proof 6).
     // A project that sets its own `budget` overrides this; a project that omits it
-    // inherits this org default (the DagWalker resolves project-over-org). Optional
-    // + additive: an absent default means NO org-wide ceiling = unlimited unless a
-    // project sets its own (today's behavior, byte-identical); legacy rows parse to
-    // an absent field (no migration) and `.strict()` round-trips it on save.
+    // inherits this org default (the DagWalker resolves project-over-org). Optional:
+    // an absent default means NO org-wide ceiling = unlimited unless a project sets
+    // its own.
     defaultBudget: ProjectBudget.optional(),
     // The ORG-LEVEL DEFAULT per-credential credit/overage USD rates (cost PR-C),
     // keyed by credential ref-KIND (see `CreditRates`). A project's own
     // `creditRates` overrides this per kind; a kind only the org configures
-    // inherits here (the cost reconcile resolves project-over-org). Optional +
-    // additive: an absent map means NO org-default rate for any kind (a drawdown
-    // then lands NULL-and-loud unless the project configures the rate); legacy
-    // rows parse to an EMPTY map (no migration) and `.strict()` round-trips it.
+    // inherits here (the cost reconcile resolves project-over-org). Defaults to an
+    // EMPTY map: NO org-default rate for any kind (a drawdown then lands
+    // NULL-and-loud unless the project configures the rate).
     defaultCreditRates: CreditRates.default({}),
   })
   .strict();

@@ -9,7 +9,11 @@ import { VaultSecretsClient } from "./vaultSecrets.js";
 import { requireEnv } from "./requireEnv.js";
 
 const port = Number(process.env["ALLOCATOR_PORT"] ?? 3200);
-const authToken = process.env["TANREN_ALLOCATOR_TOKEN"] ?? "dev";
+// The bearer token gating `/allocate` + `/release` is REQUIRED — no `"dev"`
+// fallback (the surviving sibling of the removed `dev-root-token`). The compose
+// stacks set it (dev: `dev`; prod: required via `:?`); a blank/unset value fails
+// hard rather than silently accepting `Bearer dev`.
+const authToken = requireEnv("TANREN_ALLOCATOR_TOKEN");
 const maxRunHours = Number(process.env["TANREN_MAX_RUN_HOURS"] ?? 6);
 const networkName = process.env["TANREN_ALLOCATOR_NETWORK"] ?? "tanren_default";
 const hostSshPortEnv = process.env["TANREN_ALLOCATOR_HOST_SSH_PORT"];

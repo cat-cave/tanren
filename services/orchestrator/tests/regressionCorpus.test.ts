@@ -93,7 +93,7 @@ describe("regression: GitHub 401 token re-mint retry (audit Medium — installat
       const status = seen.length === 1 ? 401 : 200;
       return { status, text: async () => JSON.stringify({ ok: status === 200 }) };
     }) as unknown as typeof fetch;
-    const client = new FetchGitHubHttpClient("https://api.github.com", fetchImpl);
+    const client = new FetchGitHubHttpClient({ apiBaseUrl: "https://api.github.com", fetchImpl });
     const response = await client.request({
       method: "GET",
       path: "/repos/a/b",
@@ -110,7 +110,7 @@ describe("regression: GitHub 401 token re-mint retry (audit Medium — installat
       calls += 1;
       return { status: 401, text: async () => "" };
     }) as unknown as typeof fetch;
-    const client = new FetchGitHubHttpClient("https://api.github.com", fetchImpl);
+    const client = new FetchGitHubHttpClient({ apiBaseUrl: "https://api.github.com", fetchImpl });
     const response = await client.request({ method: "GET", path: "/repos/a/b", token: "t" });
     expect(response.status).toBe(401);
     expect(calls).toBe(1);
