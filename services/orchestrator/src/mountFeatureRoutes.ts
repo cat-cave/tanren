@@ -41,7 +41,7 @@ import {
   createOrgRoutes,
 } from "./routes/orgs/index.js";
 import { createPersonaRoutes } from "./routes/personas/index.js";
-import { createAppEnvCiRoutes, createProjectRoutes } from "./routes/projects/index.js";
+import { createAppEnvCiRoutes, createCiIngestSecretsRoutes, createProjectRoutes } from "./routes/projects/index.js";
 import { createRecoveryRoutes } from "./routes/recovery/index.js";
 import { createRunRoutes } from "./routes/runs/index.js";
 import { createSpecRoutes } from "./routes/specs/index.js";
@@ -159,6 +159,23 @@ export function mountFeatureRoutes(app: Hono<ActorContextEnv>, deps: FeatureRout
   app.route(
     "/orgs",
     createAppEnvCiRoutes({ pool: scopedPool, secrets, vcsProvider: deps.vcsProvider, githubAppMinter }),
+  );
+  // CI-intelligence (PR2): propagate the CI INGEST secrets (the JUnit-upload signing
+  // key + the ingest base URL) to the target repo's Actions secrets, so
+  // `tanren-ci.yml`'s `upload-junit` step authenticates against `POST /webhooks/ci/junit`.
+  // Mounts ONLY when CI ingest is fully configured (the same signing-secret ref the
+  // ingest endpoint validates against + the public base URL); absent either ⇒ the
+  // route stays unmounted (no propagation of a never-authenticating secret).
+  app.route(
+    "/orgs",
+    createCiIngestSecretsRoutes({
+      pool: scopedPool,
+      secrets,
+      vcsProvider: deps.vcsProvider,
+      githubAppMinter,
+      ...(deps.ciWebhookSigningSecretRef === undefined ? {} : { signingSecretRef: deps.ciWebhookSigningSecretRef }),
+      ...(deps.publicBaseUrl === undefined ? {} : { publicBaseUrl: deps.publicBaseUrl }),
+    }),
   );
   app.route("/orgs", createSpecRoutes({ pool: scopedPool }));
   app.route("/orgs", createPersonaRoutes({ pool: scopedPool }));

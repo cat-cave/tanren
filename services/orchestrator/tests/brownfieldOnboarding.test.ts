@@ -145,12 +145,18 @@ describe("config-injection · 5 files + per-file exclude + open PR", () => {
     expect(yaml).toContain("--outputFile=reports/junit.xml");
     // The test-step exit code is captured (the runner-crash-with-clean-XML guard).
     expect(yaml).toContain("exit_code");
-    // An upload step POSTs to the ingest endpoint, on success OR failure.
+    // An upload step POSTs to the ingest endpoint, on success OR failure — but only
+    // when the CI-ingest secrets are present (a clear no-op when CI-intel is not
+    // configured, never a silent auth failure).
     expect(yaml).toContain("upload-junit");
-    expect(yaml).toContain("if: success() || failure()");
+    expect(yaml).toContain("success() || failure()");
+    expect(yaml).toContain("env.TANREN_INGEST_URL != ''");
+    expect(yaml).toContain("env.TANREN_RUN_TOKEN != ''");
     expect(yaml).toContain("/webhooks/ci/junit");
-    // Authed with the per-run token propagated as an Actions secret (HMAC sig).
+    // HMAC-signed with the ingest signing key propagated as an Actions secret
+    // (`TANREN_RUN_TOKEN`); the run id is derived from the PR run branch, not a secret.
     expect(yaml).toContain("TANREN_RUN_TOKEN");
+    expect(yaml).toContain("github.head_ref");
     expect(yaml).toContain("x-hub-signature-256");
   });
 

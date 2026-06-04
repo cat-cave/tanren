@@ -31,6 +31,9 @@ import { handleProjectArchive, handleProjectUnarchive } from "./lifecycle.js";
 // project CRUD routes and the app-env CI-secret propagation route from one import
 // site (keeping the mounter under its per-file dependency cap).
 export { createAppEnvCiRoutes } from "./appEnvCi.js";
+// CI-intelligence (PR2): the CI-ingest Actions-secret propagation route, re-exported
+// here for the same single-import-site reason as the app-env CI route above.
+export { createCiIngestSecretsRoutes } from "./ciIngestSecrets.js";
 
 interface ProjectRoutesOptions {
   pool: pg.Pool;
