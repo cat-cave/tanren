@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "creditsConsumed": {
+      "exclusiveMinimum": 0,
+      "type": "number"
+    },
+    "reason": {
+      "type": "string"
+    },
+    "refKind": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "refKind",
+    "creditsConsumed",
+    "reason"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.cost.credit_rate_unknown"
+}

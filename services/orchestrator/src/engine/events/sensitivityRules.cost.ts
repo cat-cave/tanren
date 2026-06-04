@@ -51,6 +51,21 @@ export const costSensitivityRules: SensitivityRule[] = [
     ["ceilingUsd", "public"],
     ["reason", "public"],
   ]),
+  // cost.credit_rate_unknown (cost PR-C) — refKind is the secret-free KIND label,
+  // creditsConsumed is an operational count, reason is a fixed diagnosis. No secret.
+  ...rulesFor("cost.credit_rate_unknown", [
+    ["refKind", "public"],
+    ["creditsConsumed", "public"],
+    ["reason", "public"],
+  ]),
+  // cost.overage_unobservable (cost PR-C) — provider/refKind/authoritativeSource are
+  // secret-free identifiers, reason is a fixed diagnosis string; all public.
+  ...rulesFor("cost.overage_unobservable", [
+    ["provider", "public"],
+    ["refKind", "public"],
+    ["authoritativeSource", "public"],
+    ["reason", "public"],
+  ]),
 ];
 
 function rulesFor(eventName: string, entries: ReadonlyArray<[string, SensitivityRule["tag"]]>): SensitivityRule[] {

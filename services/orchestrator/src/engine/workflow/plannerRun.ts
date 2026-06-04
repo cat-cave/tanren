@@ -97,24 +97,23 @@ export interface PlannerRunContext {
   identitySecretRef: string;
   githubCredentialRef: string;
   // P2a (Part 2): the org's GitHub App installation, when installed. The workspace
-  // CLONE resolves its token App-first through the VcsProvider seam (like the CI-poll
-  // / merge stages) — a private clone uses the auto-rotating installation token when
-  // present, else falls back to the static `githubCredentialRef`.
+  // CLONE resolves its token App-first through the VcsProvider seam (like the CI-poll /
+  // merge stages), else falls back to the static `githubCredentialRef`.
   installation?: OrgGithubAppInstallation;
   // Required to build the default (real Codex) adapters + usage probe. Tests that inject buildAdapters/buildUsageProbe may omit it.
   codexCredentialRef?: string;
   // The run's effective per-role provider routing table (project routing merged onto a
-  // per-role default-Codex table from `codexCredentialRef`) — what the default adapters
-  // resolve from. Codex is the default by DATA. Tests may omit it.
+  // per-role default-Codex table from `codexCredentialRef`). Codex is the default by DATA.
   routing?: RoutingTable;
-  // SaaS Tier-B #5: a MANAGED run's OpenAI-compatible endpoint override (the base URL
-  // every adapter is pointed at, and the real-cost capturer queries). Absent ⇒ BYOK.
+  // SaaS Tier-B #5: a MANAGED run's OpenAI-compatible endpoint override (the base URL every adapter is pointed at + the real-cost capturer queries). Absent ⇒ BYOK.
   endpointBaseUrl?: string;
   // Governance posture (run worker): drives the gate's advisory policy (`lenient` ⇒ lint/typecheck advisory; absent ⇒ strict).
   governancePosture?: GovernancePosture;
-  // GREENFIELD MARKER (ProjectConfigV1.greenfield): drives buildDefaultGate's in-loop
-  // deps-ensure MODE — greenfield ⇒ NON-FROZEN install; absent/false ⇒ FROZEN brownfield.
+  // GREENFIELD MARKER (ProjectConfigV1.greenfield): drives buildDefaultGate's in-loop deps-ensure MODE — greenfield ⇒ NON-FROZEN install; absent/false ⇒ FROZEN brownfield.
   greenfield?: boolean;
+  // cost PR-C: the CONFIGURED per-credential credit→USD rate (runExecutionContext
+  // resolves it from project/org `creditRates`). Absent ⇒ a real drawdown is NULL-and-loud.
+  creditUsdRate?: number;
 }
 
 export interface PlannerRunAdapterContext {
@@ -152,11 +151,10 @@ export interface RunPlannerLoopInput {
   credentialScoping?: RunCredentialScoping;
   vcsProvider: VcsProvider;
   /**
-   * P2a (Part 2): the shared GitHub App installation-token minter (its cache
-   * lives here). Threaded into the App-first clone-token resolution so a private
-   * clone reuses the same minted/cached installation token as the run's other
-   * stages instead of minting a throwaway. Omitted (the default) → the provider
-   * mints a per-call minter when an App is installed.
+   * P2a (Part 2): the shared GitHub App installation-token minter (its cache lives
+   * here). Threaded into the App-first clone-token resolution so a private clone
+   * reuses the same minted/cached installation token as the run's other stages.
+   * Omitted (the default) → the provider mints a per-call minter when App-installed.
    */
   githubAppMinter?: GithubAppTokenMinter;
   context: PlannerRunContext;
@@ -366,6 +364,8 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
         escapeHatches: input.escapeHatches,
         timeoutMs: input.timeoutMs,
         usageProbe,
+        // cost PR-C: the CONFIGURED per-credential credit→USD rate (see context field).
+        ...(context.creditUsdRate !== undefined && { creditUsdRate: context.creditUsdRate }),
         runGate,
         seedRejections: [...seedRejections],
         ...(captureRealProviderCost !== undefined && { captureRealProviderCost }),

@@ -8,13 +8,20 @@ export {
   type RawUsage,
   BillingMode,
   CostBasis,
-  DEFAULT_CREDIT_USD_RATE,
   type AttributionInput,
   classifyAuthRef,
   computeCostUsd,
   computeNotionalUsd,
+  credentialSlugOf,
+  refKindOf,
   resolveCostSource,
 } from "./sources.js";
+
+// cost PR-C: per-credential credit/overage USD-rate resolution + the honest
+// Claude-overage seam. The credit-drawdown reconcile resolves the rate from
+// CONFIG (never a constant); the Claude overage path is a LOUD honest gap.
+export { type CreditRateResolution, resolveCreditUsdRate } from "./creditRate.js";
+export { type ClaudeOverageReachability, classifyOverageReachability } from "./claudeOverage.js";
 
 export { CostRecorder, type CostRecordContext, type RecordedCost } from "./recorder.js";
 

@@ -2,6 +2,7 @@ import { z } from "zod";
 import { ManagedProviderConfig, ProviderMode } from "./managedProvider.js";
 import {
   AllocatorConfig,
+  CreditRates,
   EscapeHatches,
   ForgePersona,
   NotificationTargetRef,
@@ -99,6 +100,14 @@ export const OrgConfigV1 = z
     // project sets its own (today's behavior, byte-identical); legacy rows parse to
     // an absent field (no migration) and `.strict()` round-trips it on save.
     defaultBudget: ProjectBudget.optional(),
+    // The ORG-LEVEL DEFAULT per-credential credit/overage USD rates (cost PR-C),
+    // keyed by credential ref-KIND (see `CreditRates`). A project's own
+    // `creditRates` overrides this per kind; a kind only the org configures
+    // inherits here (the cost reconcile resolves project-over-org). Optional +
+    // additive: an absent map means NO org-default rate for any kind (a drawdown
+    // then lands NULL-and-loud unless the project configures the rate); legacy
+    // rows parse to an EMPTY map (no migration) and `.strict()` round-trips it.
+    defaultCreditRates: CreditRates.default({}),
   })
   .strict();
 export type OrgConfigV1 = z.infer<typeof OrgConfigV1>;
@@ -151,6 +160,20 @@ export function installationFromOrgConfig(orgConfig: unknown): OrgGithubAppInsta
     return undefined;
   }
   return migrateOrgConfig(orgConfig).github_app;
+}
+
+// The org's DEFAULT per-credential credit/overage USD rates from a stored
+// `organizations.config` value (cost PR-C), or an EMPTY map when no org row /
+// no rates are configured. The org-default LAYER the run-end credit reconcile
+// falls back to under a project's own `creditRates`. Mirrors
+// `installationFromOrgConfig`'s no-silent-fallback contract: an absent config is
+// legitimately "no org rates" (empty map), but a PRESENT-yet-UNPARSEABLE config
+// throws (migrateOrgConfig) rather than being swallowed to a silent empty map.
+export function creditRatesFromOrgConfig(orgConfig: unknown): Record<string, number> {
+  if (orgConfig === null || orgConfig === undefined) {
+    return {};
+  }
+  return migrateOrgConfig(orgConfig).defaultCreditRates;
 }
 
 // Emits a JSON Schema artifact for documentation. Operator UIs and external

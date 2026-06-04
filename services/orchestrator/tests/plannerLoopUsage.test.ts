@@ -4,7 +4,60 @@
 import { describe, expect, it } from "vitest";
 import type { CcusageAccounting, UsageProbe, WindowObservation } from "../src/engine/usage/index.js";
 import { runSubtaskLoop } from "../src/engine/workflow/subtaskLoop.js";
-import { defaultLoopInput } from "./helpers/plannerLoopHelpers.js";
+import {
+  defaultLoopInput,
+  makeAuditor,
+  makeChecker,
+  makePlanner,
+  makeWriter,
+  passingAudit,
+  passingCheck,
+  buildPlan,
+} from "./helpers/plannerLoopHelpers.js";
+
+// A drawing-down credit window: 1000 credits at the pre-flight, 990 at run-end →
+// 10 consumed. Used to exercise the credit-drawdown reconcile paths.
+function drawdownProbe(): UsageProbe {
+  const creditQueue = [1000, 990];
+  return {
+    async observeWindow(): Promise<WindowObservation> {
+      const remaining = creditQueue.shift() ?? 990;
+      return {
+        usage: {
+          provider: "openai",
+          windows: [
+            {
+              slot: "primary",
+              usedPercent: 30,
+              resetsAt: "2026-06-01T00:00:00Z",
+              windowMinutes: 300,
+              resetDescription: "soon",
+            },
+          ],
+          creditsRemaining: remaining,
+          accountEmail: null,
+          source: "codex-cli",
+          capturedAt: "2026-05-28T00:00:00Z",
+        },
+        pressure: null,
+      };
+    },
+    async observeAccounting() {
+      return accounting(5);
+    },
+  };
+}
+
+// Adapters whose writer runs under a specific credential ref, so the run-end
+// reconcile classifies its credit/overage signal off that ref.
+function adaptersWithAuthRef(authRef: string) {
+  return {
+    planner: makePlanner([buildPlan([{ title: "T1", intent: "Touch README", behaviorIds: ["B1"] }])]),
+    writer: { ...makeWriter(["diff --git README\n+ok\n"]), authRef },
+    checker: makeChecker([passingCheck]),
+    auditor: makeAuditor([passingAudit]),
+  };
+}
 
 function healthyWindow(): WindowObservation {
   return {
@@ -194,5 +247,71 @@ describe("subtask loop — usage probe wiring", () => {
     const names = events.events.map((event) => event.eventType);
     expect(names).not.toContain("usage.window.observed");
     expect(names).not.toContain("usage.accounting.observed");
+  });
+
+  it("cost PR-C: a credit drawdown with NO configured rate is NULL-and-loud, never a constant", async () => {
+    // A Codex subscription credential genuinely draws down credits, but the loop is
+    // given NO creditUsdRate (no config). Real spend must be recorded as unknown
+    // (no cost update) and a loud cost.credit_rate_unknown event must fire — the old
+    // $0.04 magic-constant fallback is gone.
+    const { input, pool, events } = defaultLoopInput({
+      usageProbe: drawdownProbe(),
+      adapters: adaptersWithAuthRef("credential/codex/org/o1/default"),
+    });
+    const outcome = await runSubtaskLoop(input);
+
+    expect(outcome.kind).toBe("passed");
+    expect(pool.costUpdates).toHaveLength(0);
+    const unknown = events.events.find((event) => event.eventType === "cost.credit_rate_unknown");
+    expect(unknown).toBeDefined();
+    const unknownPayload = unknown!.payload as { refKind: string; creditsConsumed: number };
+    expect(unknownPayload.refKind).toBe("credential/codex");
+    expect(unknownPayload.creditsConsumed).toBe(10);
+  });
+
+  it("cost PR-C: a configured per-credential rate prices the drawdown (no loud-unknown)", async () => {
+    const { input, pool, events } = defaultLoopInput({
+      usageProbe: drawdownProbe(),
+      adapters: adaptersWithAuthRef("credential/codex/org/o1/default"),
+      creditUsdRate: 0.07,
+    });
+    const outcome = await runSubtaskLoop(input);
+
+    expect(outcome.kind).toBe("passed");
+    // 10 credits × $0.07 = $0.70, apportioned with cost_basis='credits'.
+    expect(pool.costUpdates.every((update) => update.basis === "credits")).toBe(true);
+    const summed = pool.costUpdates.reduce((sum, update) => sum + Number(update.costUsd), 0);
+    expect(summed).toBeCloseTo(0.7, 5);
+    expect(events.events.map((event) => event.eventType)).not.toContain("cost.credit_rate_unknown");
+  });
+
+  it("cost PR-C: a Claude subscription's overage is recorded NULL-and-loud (honest gap, never approximated)", async () => {
+    // The Claude CLI subscription bundle reports no credit-balance delta locally, so
+    // observeWindow yields a null creditsRemaining (no drawdown). The overage real
+    // spend is UNKNOWN — a loud cost.overage_unobservable fires, ccusage stays
+    // notional-only (no real cost update), and overage is NOT approximated.
+    const { input, pool, events } = defaultLoopInput({
+      usageProbe: fakeProbe(healthyWindow(), accounting(0.6)),
+      adapters: adaptersWithAuthRef("credential/claude/org/o1/default"),
+    });
+    const outcome = await runSubtaskLoop(input);
+
+    expect(outcome.kind).toBe("passed");
+    const overage = events.events.find((event) => event.eventType === "cost.overage_unobservable");
+    expect(overage).toBeDefined();
+    const overagePayload = overage!.payload as { provider: string; authoritativeSource: string };
+    expect(overagePayload.provider).toBe("anthropic");
+    expect(overagePayload.authoritativeSource).toBe("anthropic-admin-api-cost-report");
+    // No REAL overage spend was invented — the ccusage figure stays notional only.
+    expect(pool.costUpdates).toHaveLength(0);
+  });
+
+  it("cost PR-C: a non-subscription (self-hosted) credential emits NO overage gap event", async () => {
+    const { input, events } = defaultLoopInput({
+      usageProbe: fakeProbe(healthyWindow(), accounting(null)),
+    });
+    const outcome = await runSubtaskLoop(input);
+    expect(outcome.kind).toBe("passed");
+    expect(events.events.map((event) => event.eventType)).not.toContain("cost.overage_unobservable");
   });
 });

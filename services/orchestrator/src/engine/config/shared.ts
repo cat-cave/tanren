@@ -186,6 +186,32 @@ export const ProjectBudget = z
   .strict();
 export type ProjectBudget = z.infer<typeof ProjectBudget>;
 
+// ---- Per-credential credit/overage USD rate ------------------------------
+
+// The DOLLAR VALUE OF ONE prepaid credit, keyed by the credential's SAFE
+// PROVIDER-SLUG label (the `credential/<slug>` prefix, secret name + scope
+// stripped — see `credentialSlugOf` in costs/sources.ts; e.g.
+// `credential/codex/org/o1/default` keys under `credential/codex`). This is the
+// REAL drawdown rate the run-end reconcile multiplies a positive credit-drawdown
+// delta by to land subscription-OVERAGE spend (`cost_basis='credits'`).
+//
+// It is per-CREDENTIAL CONFIG, NOT a magic constant: a subscription's
+// credit→USD rate is account/plan-specific (e.g. Codex Pro observed at $0.04
+// /credit) and MUST be configured per credential kind, never hardcoded. A
+// credential that DID draw down credits but has NO configured rate is a LOUD
+// unknown — the run-end reconcile records NULL real spend + emits
+// `cost.credit_rate_unknown`, NEVER a silent guess (REAL SPEND IS A FACT).
+//
+// Keyed by provider-SLUG so one rate covers every credential of that provider
+// (`credential/codex` → 0.04). Resolution is project-config over org-config
+// (the org `defaultCreditRates` is the fallback layer). Optional + additive:
+// legacy rows carry no key and parse to an EMPTY map (no migration) — the rate
+// is then UNKNOWN for every credential, so a drawdown lands NULL-and-loud
+// rather than silently priced at a removed default. `.strict()` round-trips it
+// on save. `usdPerCredit` is a positive dollar amount.
+export const CreditRates = z.record(z.string().min(1), z.number().positive());
+export type CreditRates = z.infer<typeof CreditRates>;
+
 // ---- Notification target ref ---------------------------------------------
 
 // References a row in the (future) `notification_targets` table delivered by

@@ -207,6 +207,47 @@ export const CostCeilingUnreachablePayload = z
   })
   .strict();
 
+// cost.credit_rate_unknown (cost PR-C): a run's subscription credential DREW DOWN
+// prepaid credits (a real, positive drawdown delta) but NO per-credential credit→USD
+// rate is configured for its ref-KIND at either the project or org layer. The
+// drawdown's REAL dollar spend is therefore UNKNOWN — recorded as NULL, NOT priced
+// at a removed magic constant (REAL SPEND IS A FACT). Surfaced LOUDLY so an operator
+// configures the rate (`config.creditRates[<refKind>]`). Names the ref KIND only
+// (`refKind`, secret-free), never the secret value; carries the consumed credits so
+// the operator sees the unpriced drawdown's magnitude.
+export const CostCreditRateUnknownPayload = z
+  .object({
+    // The SAFE ref-kind label the rate lookup missed (e.g. `credential/codex`).
+    refKind: z.string(),
+    // The positive credit-drawdown delta whose USD value is unknown.
+    creditsConsumed: z.number().positive(),
+    // A fixed, secret-free diagnosis string.
+    reason: z.string(),
+  })
+  .strict();
+
+// cost.overage_unobservable (cost PR-C): a run executed under a SUBSCRIPTION
+// credential whose "extra usage"/OVERAGE real dollar spend is NOT reachable from
+// the local CLI path (today: the Claude CLI subscription bundle — Claude reports
+// only window percentages + a local-ESTIMATE cost locally; the authoritative
+// overage figure lives in the Anthropic Console / Admin API, an org integration not
+// wired here). The overage real spend is therefore UNKNOWN/NULL — NOT approximated
+// from the local estimate (REAL SPEND IS A FACT). Surfaced LOUDLY as an honest gap.
+// Names the provider + the authoritative source that WOULD carry the figure.
+export const CostOverageUnobservablePayload = z
+  .object({
+    // The subscription provider whose overage is uncaptured (e.g. "anthropic").
+    provider: z.string(),
+    // The SAFE ref-kind label of the credential (secret-free).
+    refKind: z.string(),
+    // The authoritative source that WOULD carry the real figure (a fixed,
+    // secret-free identifier, e.g. "anthropic-admin-api-cost-report").
+    authoritativeSource: z.string(),
+    // A fixed, secret-free diagnosis string.
+    reason: z.string(),
+  })
+  .strict();
+
 // Usage monitoring (P2A-cost-monitors): codexbar (live subscription windows)
 // and ccusage (token-consumption accounting), captured in the runner over SSH.
 
