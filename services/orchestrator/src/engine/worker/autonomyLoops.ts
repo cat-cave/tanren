@@ -16,6 +16,7 @@ import type { VcsProvider } from "../contracts/vcsProvider.js";
 import type { GitHubHttpClient } from "../providers/github.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import { buildPercolationCoordinator } from "../dag/percolationBuild.js";
+import { buildSpecStrandReconciler } from "../dag/specStrandReconcilerPg.js";
 import { PgSpeculativeIntegrator } from "../dag/speculativeIntegrator.js";
 import { startDagWalkerSubscriber } from "../dag/subscriber.js";
 import { startMergeCoordinatorSubscriber } from "../merge/subscriber.js";
@@ -89,11 +90,23 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
     // wired; else direct on the pool (byte-identical).
     ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
   });
+  // NEVER-STRAND safety net: the strand reconciler runs LAST in the walk chain (walk
+  // → percolate → reconcile) + on a low-frequency periodic backstop, re-enqueuing any
+  // spec stuck OCCUPYING A SLOT with no live run (the recurring stranding bug) with
+  // bounded escalation to needs_attention. It makes the DAG self-heal from EVERY
+  // stranding cause, not just the §2c re-exec halt percolation can catch.
+  const reconciler = buildSpecStrandReconciler({
+    pool: deps.pool,
+    // Plane-split: route the reconciler's spec flip + marker clear + events through
+    // the control plane when wired; else direct on the pool (byte-identical).
+    ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
+  });
   const dagWalker = await startDagWalkerSubscriber({
     pool: deps.pool,
     notifyListener: dagNotifyListener,
     integrator,
     percolation,
+    reconciler,
     // Plane-split: the walker's run-creation + dag.* events route through the
     // control plane when wired (else direct on deps.pool, byte-identical).
     ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),

@@ -372,7 +372,11 @@
     "reexecutor",
     "reexecution",
     "repros",
-    "unconfirmable"
+    "toctou",
+    "unconfirmable",
+    "unstrand",
+    "unstranded",
+    "unstrands"
   ],
   "ignoreRegExpList": ["/\\b[0-9a-f]{7,40}\\b/", "/[A-Za-z0-9+/]{24,}={0,2}/"],
   "dictionaries": ["typescript", "node", "npm", "html", "css", "softwareTerms", "bash", "filetypes"],

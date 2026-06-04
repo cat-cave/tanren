@@ -124,12 +124,14 @@ import {
   DagConcurrencySaturatedPayload,
   DagDrainedPayload,
   DagSpecEnqueuedPayload,
+  DagSpecNeedsAttentionPayload,
   DagSpecPercolatedPayload,
   DagSpecPercolatingPayload,
   DagSpecPercolationDeferredPayload,
   DagSpecPercolationReplanPayload,
   DagSpecSpeculationHeldPayload,
   DagSpecSpeculativePayload,
+  DagSpecUnstrandedPayload,
 } from "./schemas/dag.js";
 
 // The EventRegistry is the single source of truth mapping event names to
@@ -364,6 +366,12 @@ export const EventRegistry = {
   "dag.spec.percolated": DagSpecPercolatedPayload,
   "dag.spec.percolation_deferred": DagSpecPercolationDeferredPayload,
   "dag.spec.percolation_replan": DagSpecPercolationReplanPayload,
+  // NEVER-STRAND reconciler (the DAG self-heal safety net): a spec stuck OCCUPYING
+  // A SLOT with no live run was re-enqueued (dag.spec.unstranded), or — once it
+  // exceeded the bounded re-enqueue cap — escalated to the terminal needs_attention
+  // status (dag.spec.needs_attention), so the DAG either advances or asks loudly.
+  "dag.spec.unstranded": DagSpecUnstrandedPayload,
+  "dag.spec.needs_attention": DagSpecNeedsAttentionPayload,
 
   // Plane B app environment (P-APP-ENV-2): the project's runtime-scoped app env was
   // attached to the DEPLOYED app (Vercel/Fly). Records the deploy target + the env

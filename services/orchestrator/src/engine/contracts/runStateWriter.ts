@@ -161,6 +161,31 @@ export interface SetSpecStatusInput {
 }
 
 /**
+ * NEVER-STRAND reconciler: the ATOMIC, strand-invariant-guarded `UPDATE specs SET
+ * status` the reconciler drives to re-enqueue (`active → pending`) OR escalate
+ * (`active → needs_attention`) a CONFIRMED strand. Unlike {@link SetSpecStatusInput}
+ * (guarded only by `status <> ALL(...)`), this re-checks the FULL strand condition
+ * INSIDE the same statement — `status='active'` AND no live (`queued`/`running`) run
+ * AND no active (`queued`/`merging`) merge_queue entry AND no `percolation_pending`
+ * marker pointing at a live run — so a concurrent percolation re-exec that created a
+ * live run / reclaimed the spec between the reconciler's READ and this FLIP makes the
+ * UPDATE match ZERO rows (a safe no-op, no double-run). The writer reports whether a
+ * row moved so the reconciler only emits its event + clears the marker when it did.
+ */
+export interface ReconcileStrandedSpecInput {
+  specId: string;
+  orgId: string;
+  /** The flip target: `pending` (re-enqueue) or `needs_attention` (bounded escalation). */
+  status: "pending" | "needs_attention";
+}
+
+/** The result of the atomic strand flip: whether a row actually moved (false ⇒ a concurrent writer won, no-op). */
+export interface ReconcileStrandedSpecResult {
+  /** True iff the guarded UPDATE matched the still-stranded `active` row (the flip happened). */
+  flipped: boolean;
+}
+
+/**
  * The named `tasks` lifecycle transitions, each mapping to ONE fixed UPDATE in
  * `runStateLifecycleSql.ts`:
  *   - `running`                       → status='running', started_at=COALESCE(started_at, now()), ended_at=NULL
@@ -318,6 +343,14 @@ export interface RunStateWriter extends EventStore {
 
   /** The `UPDATE specs SET status` (`in_flight` / merge-outcome). */
   setSpecStatus(input: SetSpecStatusInput): Promise<void>;
+
+  /**
+   * NEVER-STRAND: the ATOMIC strand-invariant-guarded `UPDATE specs SET status`
+   * (`active → pending` re-enqueue / `active → needs_attention` escalation). Returns
+   * whether a row moved, so a concurrent re-exec that reclaimed the spec makes the
+   * flip a safe no-op (`flipped:false`) instead of a double-run.
+   */
+  reconcileStrandedSpec(input: ReconcileStrandedSpecInput): Promise<ReconcileStrandedSpecResult>;
 
   /** The `UPDATE specs SET metadata` (the intake's discovery-provenance stamp). */
   setSpecMetadata(input: SetSpecMetadataInput): Promise<void>;
