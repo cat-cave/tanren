@@ -406,10 +406,10 @@ export const NotificationFailedPayload = z
   })
   .strict();
 
-// P-INT-2 `integration.provisioned` lives in its own module (schemas/onboarding.ts)
-// to keep this file under the 500-line cap; re-exported here so the registry import
-// site is unchanged.
+// `integration.provisioned` (schemas/onboarding.ts) + `deploy.triggered`
+// (schemas/deploy.ts) live in their own modules (500-line cap), re-exported here.
 export { IntegrationProvisionedPayload } from "./onboarding.js";
+export { DeployTriggeredPayload } from "./deploy.js";
 
 const RunnerProofPayload = z
   .object({

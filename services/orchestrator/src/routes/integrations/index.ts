@@ -36,13 +36,14 @@ import {
   type IntegrationProvisioner,
 } from "../../engine/contracts/integrationProvisioner.js";
 import {
+  capabilitiesForProviderKind,
   productionProvisionerDeps,
   provisionCapability,
   resolveProviderKind,
 } from "../../engine/integrations/provisioningEngine.js";
 import { OrgIntegrationsStore } from "../../engine/repositories/orgIntegrations.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
-import { actorCanAccessOrg } from "../orgs/index.js";
+import { actorCanAccessOrg, actorIsOrgAdmin } from "../orgs/index.js";
 
 export interface IntegrationRoutesOptions {
   pool: pg.Pool;
@@ -51,6 +52,17 @@ export interface IntegrationRoutesOptions {
 }
 
 const ProvisionMode = z.enum(["greenfield", "brownfield"]);
+
+// The integration-LINK body ("connect Vercel/Fly/Slack/Sentry"): the provider TOKEN
+// (stored in the SecretStore by ref — never persisted as a value or echoed) + the
+// non-secret org metadata the provisioner runs under (Vercel teamId/slug, Fly
+// orgSlug + image, Sentry org slug). Org-admin only.
+const LinkBody = z
+  .object({
+    token: z.string().min(1).max(4096),
+    metadata: z.record(z.string(), z.unknown()).optional(),
+  })
+  .strict();
 
 const ProvisionBody = z
   .object({
@@ -99,6 +111,65 @@ export function createIntegrationRoutes(options: IntegrationRoutesOptions) {
       return c.json(outcome, outcome.status === "not_linked" ? 200 : 201);
     } catch (error) {
       return c.json({ error: "provision_failed", message: messageOf(error) }, 500);
+    }
+  });
+
+  // POST /:orgId/integrations/:providerKind — LINK an org integration grant. The
+  // API-drivable "connect Vercel/Fly/Slack/Sentry" surface: validates + stores the
+  // provider token in the SecretStore (REF only) and records the `org_integrations`
+  // grant so `provision`/`discover` then work (they no longer return not_linked).
+  // Org-ADMIN gated (a write); a non-admin → 403. The token VALUE is never echoed,
+  // logged, or placed in an event — only its ref name.
+  app.post("/:orgId/integrations/:providerKind", async (c) => {
+    const actor = requireActor(c);
+    const orgId = c.req.param("orgId");
+    const providerKind = c.req.param("providerKind");
+    if (!actorIsOrgAdmin(actor, orgId)) {
+      return c.json({ error: "org_admin_required" }, 403);
+    }
+    let capabilities: string[];
+    try {
+      capabilities = capabilitiesForProviderKind(providerKind);
+    } catch (error) {
+      return c.json({ error: "unknown_provider_kind", message: messageOf(error) }, 400);
+    }
+    const parsed = LinkBody.safeParse(await c.req.json().catch(() => {}));
+    if (!parsed.success) {
+      return c.json({ error: "invalid_link", issues: parsed.error.issues }, 400);
+    }
+    try {
+      // Store the token under a stable, org+provider-scoped ref. The VALUE lives ONLY
+      // in the SecretStore; the grant + event carry the ref name alone.
+      const credentialRef = `secret://org/${orgId}/integration/${providerKind}/token`;
+      await options.secrets.put({ ref: credentialRef, value: parsed.data.token });
+      const grant = await OrgIntegrationsStore.upsert(
+        options.pool,
+        {
+          orgId,
+          providerKind,
+          credentialRef,
+          metadata: parsed.data.metadata ?? {},
+          capabilities,
+          status: "linked",
+        },
+        { kind: "operator", id: actor.userId },
+      );
+      // The grant upsert IS the durable audit record (org-scoped under RLS); no
+      // `events` append here — `events` is project-scoped (its org_id derives from a
+      // project), and an org-level link has no project to scope the row to.
+      // Refs only — never the token value.
+      return c.json(
+        {
+          status: "linked",
+          providerKind,
+          credentialRef,
+          capabilities,
+          metadataKeys: Object.keys(grant.metadata),
+        },
+        201,
+      );
+    } catch (error) {
+      return c.json({ error: "link_failed", message: messageOf(error) }, 500);
     }
   });
 

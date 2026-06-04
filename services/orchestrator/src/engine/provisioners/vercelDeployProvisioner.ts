@@ -5,18 +5,24 @@
 // the full lifecycle is unit-tested against a scripted fake with NO live Vercel
 // calls or credentials in CI.
 //
-// API surface used (Vercel REST v9):
-//   - GET  /v9/projects[?teamId=…]   → list the team's projects (discover)
-//   - POST /v9/projects[?teamId=…]   → create a project under the team (provision)
+// API surface used (Vercel REST):
+//   - GET  /v9/projects[?teamId=…]    → list the team's projects (discover)
+//   - POST /v9/projects[?teamId=…]    → create a project under the team (provision)
+//   - POST /v13/deployments[?teamId=…] → TRIGGER a build + release of a git ref
 // Team scoping: the org grant's metadata may carry `teamId` (Vercel team) and/or
 // `slug`; when present they are threaded as the `teamId` query param + used to
 // shape the preview-URL pattern. The org grant's `credentialRef` resolves to the
 // Vercel team token (a bearer) — resolved by the base, never held here.
 //
-// Preview-URL pattern: Vercel preview deploys resolve at
-//   https://<project>-<deployment-hash>[-<team-slug>].vercel.app
-// We capture that as a template with a `*` wildcard for the per-deploy hash, the
-// stable part the runtime deploy surface needs to build a preview URL.
+// Preview-URL pattern (CONVERGED on the dashboard's `derivePreviewUrl`): Vercel
+// serves a DETERMINISTIC per-branch preview at
+//   https://<project>-git-<branch>[-<team-slug>].vercel.app
+// We capture that with a `{branch}` placeholder (the same token the dashboard
+// substitutes) — NOT a `*` wildcard, which the dashboard could not resolve.
+//
+// Deploy trigger: `triggerDeploy` POSTs `/v13/deployments` with a `gitSource`
+// pointing at the merged repo + ref, so Vercel pulls the merged commit and builds
+// + releases it. It returns the live deployment id + the resolved deployment URL.
 
 import type { OrgGrant, ProjectContext } from "../contracts/integrationProvisioner.js";
 import {
@@ -25,6 +31,8 @@ import {
   type DeployEnvVar,
   type DeployProviderApi,
   type DeployProvisionerDeps,
+  type DeployResult,
+  type DeploySource,
 } from "./deployProvisioner.js";
 
 const VERCEL_API_BASE = "https://api.vercel.com";
@@ -51,12 +59,16 @@ function teamSlug(grant: OrgGrant): string | undefined {
   return typeof value === "string" && value !== "" ? value : undefined;
 }
 
-/** Compose the team-scoped Vercel preview-URL pattern for a project. */
+/**
+ * Compose the team-scoped Vercel preview-URL pattern for a project. Uses the
+ * DETERMINISTIC git-branch preview form (`<project>-git-<branch>-<scope>`) with a
+ * `{branch}` placeholder — the SAME token the dashboard's `derivePreviewUrl`
+ * substitutes — so a rendered preview URL resolves directly (no `*` wildcard).
+ */
 function previewUrlPattern(grant: OrgGrant, projectName: string): string {
   const slug = teamSlug(grant);
   const suffix = slug === undefined ? "" : `-${slug}`;
-  // `*` stands for the per-deployment hash Vercel injects on each preview.
-  return `https://${projectName}-*${suffix}.vercel.app`;
+  return `https://${projectName}-git-{branch}${suffix}.vercel.app`;
 }
 
 /** Append `teamId=` when the grant carries a team id (joined with `&` if the path already has a query). */
@@ -131,6 +143,35 @@ class VercelDeployApi implements DeployProviderApi {
         throw new Error(`vercel set env '${variable.key}' failed: ${response.status} ${response.text}`);
       }
     }
+  }
+
+  async triggerDeploy(grant: OrgGrant, token: string, app: DeployApp, source: DeploySource): Promise<DeployResult> {
+    // POST /v13/deployments with a `gitSource` so Vercel pulls the MERGED commit
+    // (the repo + ref) and builds + releases it. `name` ties the deployment to the
+    // existing project; `target: production` releases it as the live deploy. Vercel
+    // returns the deployment id + the resolved deployment URL.
+    const response = await this.transport.request({
+      method: "POST",
+      url: scoped(grant, "/v13/deployments"),
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: {
+        name: app.name,
+        project: app.appId,
+        target: "production",
+        gitSource: { type: "github", repo: source.repo, ref: source.ref },
+      },
+    });
+    if (!response.ok) {
+      throw new Error(`vercel trigger deploy for '${app.appId}' failed: ${response.status} ${response.text}`);
+    }
+    const body = (response.json ?? {}) as { id?: string; url?: string; readyState?: string; status?: string };
+    if (body.id === undefined || body.url === undefined) {
+      throw new Error(`vercel trigger deploy for '${app.appId}' returned no id/url: ${response.text}`);
+    }
+    // Vercel's `url` is the bare host (no scheme); normalize to an https origin so
+    // the resolved URL is directly renderable.
+    const url = body.url.startsWith("http") ? body.url : `https://${body.url}`;
+    return { deploymentId: body.id, url, state: body.readyState ?? body.status ?? "QUEUED" };
   }
 }
 

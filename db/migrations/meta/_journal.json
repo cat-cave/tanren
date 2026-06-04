@@ -484,6 +484,13 @@
       "when": 1780588650042,
       "tag": "0068_rare_human_cannonball",
       "breakpoints": true
+    },
+    {
+      "idx": 69,
+      "version": "7",
+      "when": 1780592046171,
+      "tag": "0069_loose_tarantula",
+      "breakpoints": true
     }
   ]
 }
