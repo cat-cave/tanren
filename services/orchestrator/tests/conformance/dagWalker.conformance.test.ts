@@ -60,7 +60,7 @@ class MemoryDag {
   }
 
   snapshot(projectId: string): DagSnapshot {
-    return { projectId, nodes: [...this.nodes.values()].map((n) => ({ ...n })) };
+    return { projectId, nodes: [...this.nodes.values()].map((n) => ({ ...n })), archived: false };
   }
 
   /**

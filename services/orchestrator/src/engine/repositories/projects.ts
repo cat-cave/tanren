@@ -4,6 +4,10 @@ import type { ActorRef } from "../state/actor.js";
 
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
+/** A project's operator lifecycle: the autonomous-walker-driven default, or paused. */
+const ProjectLifecycleEnum = z.enum(["active", "archived"]);
+export type ProjectLifecycle = z.infer<typeof ProjectLifecycleEnum>;
+
 // The project row as the HTTP project/brownfield routes read it. `config` is an
 // opaque JSON blob the route layer migrates/validates with `migrateProjectConfig`
 // — the repository does not interpret it, so it stays `unknown` here. The SQL the
@@ -19,6 +23,9 @@ export const ProjectRow = z.object({
   runnerImage: z.string(),
   allocator: z.string(),
   config: z.unknown(),
+  // Operator lifecycle: `active` (default) or `archived` (paused). Defaults to
+  // `active` when the column is absent on a row (e.g. a test fake that predates it).
+  lifecycle: ProjectLifecycleEnum.default("active"),
   // Present only on the single-project read (which selects it for the tenant
   // check); null when the column is absent/unset.
   orgId: z.string().nullable().optional(),
@@ -33,6 +40,7 @@ interface RawProjectRow {
   runner_image: unknown;
   allocator: unknown;
   config: unknown;
+  lifecycle?: unknown;
   org_id?: unknown;
 }
 
@@ -49,6 +57,8 @@ function decodeProjectRow(raw: RawProjectRow): ProjectRow {
     runnerImage: raw.runner_image,
     allocator: raw.allocator,
     config: raw.config,
+    // Absent on a fake/legacy row ⇒ the schema default ("active") applies.
+    lifecycle: raw.lifecycle ?? undefined,
     orgId: raw.org_id === undefined ? undefined : ((raw.org_id ?? null) as string | null),
   });
 }
@@ -57,7 +67,7 @@ export const ProjectStore = {
   /** All projects for an org, ordered by name (the project-list route). */
   async listForOrg(client: QueryClient, orgId: string, _actor: ActorRef): Promise<ProjectRow[]> {
     const result = await client.query(
-      `SELECT ${SELECT_PROJECT_COLUMNS}
+      `SELECT ${SELECT_PROJECT_COLUMNS}, lifecycle
          FROM projects
         WHERE org_id = $1
         ORDER BY name`,
@@ -73,7 +83,7 @@ export const ProjectStore = {
    */
   async get(client: QueryClient, projectId: string, _actor: ActorRef): Promise<ProjectRow | undefined> {
     const result = await client.query(
-      `SELECT ${SELECT_PROJECT_COLUMNS}, org_id
+      `SELECT ${SELECT_PROJECT_COLUMNS}, org_id, lifecycle
          FROM projects
         WHERE project_id = $1`,
       [projectId],

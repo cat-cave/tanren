@@ -45,7 +45,11 @@ const OTHER_SPEC = "spec_ready_other";
 function readyReadModel(): DagReadModel {
   return {
     async loadSnapshot(projectId: string): Promise<DagSnapshot> {
-      return { projectId, nodes: [{ specId: SPEC, phase: "pending", dependsOn: [], priority: "tbd", orderKey: 1 }] };
+      return {
+        projectId,
+        nodes: [{ specId: SPEC, phase: "pending", dependsOn: [], priority: "tbd", orderKey: 1 }],
+        archived: false,
+      };
     },
   };
 }

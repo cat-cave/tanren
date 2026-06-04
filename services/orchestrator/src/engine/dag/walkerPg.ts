@@ -92,12 +92,18 @@ export class PgDagReadModel implements DagReadModel {
   constructor(private readonly pool: pg.Pool) {}
 
   async loadSnapshot(projectId: string): Promise<DagSnapshot> {
-    const orgId = await this.resolveProjectOrg(projectId);
-    if (orgId === null) {
+    const project = await this.resolveProject(projectId);
+    if (project.orgId === null) {
       // No resolvable org ⇒ no DAG the walker may schedule (RLS would deny every
       // read anyway). An empty snapshot drains cleanly rather than throwing.
-      return { projectId, nodes: [] };
+      return { projectId, nodes: [], archived: false };
     }
+    if (project.archived) {
+      // Archived ⇒ dormant. Skip the spec read entirely; the walker short-circuits
+      // on `archived` and enqueues nothing.
+      return { projectId, nodes: [], archived: true };
+    }
+    const orgId = project.orgId;
     const nodes = await runWithOrgScope(this.pool, orgId, async (client) => {
       const result = await client.query<SpecDagRow>(
         `SELECT spec_id, status, depends_on, priority,
@@ -117,16 +123,17 @@ export class PgDagReadModel implements DagReadModel {
         }),
       );
     });
-    return { projectId, nodes };
+    return { projectId, nodes, archived: false };
   }
 
-  private async resolveProjectOrg(projectId: string): Promise<string | null> {
+  private async resolveProject(projectId: string): Promise<{ orgId: string | null; archived: boolean }> {
     return runWithSystemScope(this.pool, async (client) => {
-      const result = await client.query<{ org_id: string | null }>(
-        "SELECT org_id FROM projects WHERE project_id = $1",
+      const result = await client.query<{ org_id: string | null; lifecycle: string }>(
+        "SELECT org_id, lifecycle FROM projects WHERE project_id = $1",
         [projectId],
       );
-      return result.rows[0]?.org_id ?? null;
+      const row = result.rows[0];
+      return { orgId: row?.org_id ?? null, archived: row?.lifecycle === "archived" };
     });
   }
 }

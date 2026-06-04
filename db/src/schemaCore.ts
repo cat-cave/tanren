@@ -39,6 +39,10 @@ export const projects = pgTable(
     config: jsonb("config")
       .notNull()
       .default(sql`'{}'::jsonb`),
+    // Operator lifecycle: 'active' (the default — the autonomous walker drives it)
+    // or 'archived' (the walker + strand reconciler skip it; in-flight runs/specs
+    // are cancelled on archive). Flipped only through the dedicated archive surface.
+    lifecycle: text("lifecycle").notNull().default("active"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     orgId: text("org_id")
       .notNull()
