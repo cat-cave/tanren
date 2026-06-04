@@ -24,6 +24,14 @@
     ".env.example"
   ],
   "words": [
+    "pytest",
+    "junitxml",
+    "gotestsum",
+    "junitfile",
+    "formedness",
+    "hashlib",
+    "hexdigest",
+    "urlopen",
     "libsodium",
     "blakejs",
     "nacl",

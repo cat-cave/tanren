@@ -95,8 +95,54 @@ jobs:
         run: corepack pnpm run lint
       - name: typecheck
         run: corepack pnpm run typecheck
+      # Emit a JUnit report so Tanren can ingest PER-TEST results (CI-intelligence).
+      # Capture the test step's exit code separately: a runner that crashes AFTER
+      # writing a clean-looking report must NOT be read as all-green (the
+      # silent-failure guard) — \`--test-exit-code\` is uploaded alongside the XML.
+      #   vitest: --reporter=junit --outputFile (shown below)
+      #   pytest: --junitxml=reports/junit.xml
+      #   go:     gotestsum --junitfile reports/junit.xml
       - name: test
-        run: corepack pnpm run test
+        id: test
+        run: |
+          mkdir -p reports
+          set +e
+          corepack pnpm run test -- --reporter=junit --outputFile=reports/junit.xml
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+          set -e
+      # Upload the report(s) + the test-step outcome to Tanren's ingest endpoint,
+      # authed with the per-run token already propagated as an Actions secret.
+      # Runs on success OR failure so a failing/flaky run is still ingested.
+      - name: upload-junit
+        if: success() || failure()
+        env:
+          TANREN_INGEST_URL: \${{ secrets.TANREN_INGEST_URL }}
+          TANREN_RUN_TOKEN: \${{ secrets.TANREN_RUN_TOKEN }}
+          TANREN_RUN_ID: \${{ secrets.TANREN_RUN_ID }}
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib, hmac, json, os, urllib.request
+          reports = []
+          for path in ("reports/junit.xml",):
+              if os.path.exists(path):
+                  with open(path, "r", encoding="utf-8") as fh:
+                      reports.append(fh.read())
+          body = json.dumps({
+              "runId": os.environ["TANREN_RUN_ID"],
+              "headSha": os.environ.get("GITHUB_SHA", ""),
+              "attempt": int(os.environ.get("GITHUB_RUN_ATTEMPT", "1")),
+              "testExitCode": int("\${{ steps.test.outputs.exit_code }}" or "0"),
+              "reports": reports,
+          }).encode("utf-8")
+          sig = hmac.new(os.environ["TANREN_RUN_TOKEN"].encode("utf-8"), body, hashlib.sha256).hexdigest()
+          req = urllib.request.Request(
+              os.environ["TANREN_INGEST_URL"] + "/webhooks/ci/junit",
+              data=body,
+              headers={"content-type": "application/json", "x-hub-signature-256": "sha256=" + sig},
+          )
+          with urllib.request.urlopen(req) as resp:
+              print(resp.status, resp.read().decode("utf-8"))
+          PY
       - name: build
         run: corepack pnpm run build
 `;

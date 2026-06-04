@@ -25,6 +25,7 @@ export const eventTypeNames = [
   "ci.passed",
   "ci.started",
   "ci.test.quarantined",
+  "ci.tests.reported",
   "cost.ceiling_unreachable",
   "cost.failed",
   "cost.resolved",
