@@ -6,7 +6,7 @@
 // `surfaceActiveQuarantines` renders the active rows read-only (no write).
 
 import { describe, expect, it } from "vitest";
-import { detectAndQuarantineFlaky } from "../src/engine/insights/ciFlaky.js";
+import { detectAndQuarantineFlaky, loadCiObservations } from "../src/engine/insights/ciFlaky.js";
 import { surfaceActiveQuarantines } from "../src/engine/insights/ciFlakySurface.js";
 import type { AppendEventInput } from "../src/engine/eventStore.js";
 import type { EventName } from "../src/engine/events/index.js";
@@ -135,7 +135,12 @@ describe("detectAndQuarantineFlaky — per-test grain", () => {
       tr("suite.flaky", "sha1", "passed", -1000, "unit"),
     ];
     const store = new FakeEventStore();
-    const insights = await detectAndQuarantineFlaky(db, { projectId: PROJECT, now: NOW, eventStore: store });
+    const insights = await detectAndQuarantineFlaky(db, {
+      projectId: PROJECT,
+      now: NOW,
+      eventStore: store,
+      loadChecks: (since) => loadCiObservations(db, { projectId: PROJECT, since }),
+    });
 
     expect(db.quarantined).toHaveLength(1);
     expect(db.quarantined[0]!.test_id).toBe("suite.flaky");
@@ -148,7 +153,12 @@ describe("detectAndQuarantineFlaky — per-test grain", () => {
     const db = new PerTestMemoryClient();
     db.testRows = [tr("suite.broken", "sha1", "failed", -2000), tr("suite.broken", "sha2", "failed", -1000)];
     const store = new FakeEventStore();
-    await detectAndQuarantineFlaky(db, { projectId: PROJECT, now: NOW, eventStore: store });
+    await detectAndQuarantineFlaky(db, {
+      projectId: PROJECT,
+      now: NOW,
+      eventStore: store,
+      loadChecks: (since) => loadCiObservations(db, { projectId: PROJECT, since }),
+    });
     expect(db.quarantined).toHaveLength(0);
     expect(store.appended).toHaveLength(0);
   });

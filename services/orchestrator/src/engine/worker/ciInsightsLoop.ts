@@ -16,7 +16,8 @@
 import type pg from "pg";
 import { runWithJobOrgId, runWithOrgScope, runWithSystemScope } from "@tanren/db";
 import { PgEventStore } from "../eventStore.js";
-import { detectAndQuarantineFlaky } from "../insights/ciFlaky.js";
+import type { RunStateWriter } from "../contracts/runStateWriter.js";
+import { detectAndQuarantineFlaky, loadCiObservations } from "../insights/ciFlaky.js";
 import { emitCiInsightCandidates } from "../insights/ciInsightsCandidates.js";
 import type { InsightThresholds } from "../insights/thresholds.js";
 import type { AutoRouteDeps, TriageAnswerer } from "../forge/inbox/index.js";
@@ -24,6 +25,15 @@ import type { ForgeAnswererTarget } from "../forge/providerFactory.js";
 
 export interface CiInsightsLoopDeps {
   pool: pg.Pool;
+  /**
+   * Plane-split: the control-plane run-state writer. The worker runs as
+   * `tanren_dataplane`, which has NO `events` grant — so the detector's
+   * `ci.flaky.detected` / `ci.test.quarantined` emits CANNOT go through the
+   * org-scoped data-plane client; they route through this writer (the control
+   * plane) instead. Absent ⇒ in-process via `PgEventStore` (tests / single
+   * privileged pool), exactly as `DeployOnMergeWatcher` does it.
+   */
+  runStateWriter?: RunStateWriter;
   /** Per-org/project threshold overrides (Phase 3 makes these configurable). */
   thresholds?: Partial<InsightThresholds>;
   /**
@@ -108,17 +118,28 @@ export class CiInsightsLoop {
 
   private async detectForProject(project: ProjectOrgRow): Promise<void> {
     const nowDate = new Date(this.now());
-    await runWithOrgScope(this.deps.pool, project.org_id, async (client) => {
-      // The detector reads ci.* events + ci_test_results and writes quarantined_tests
-      // + emits the operator events — all on this ORG-SCOPED client, so every read +
-      // write is RLS-admitted under the project's org (deny-by-default off-scope).
-      await detectAndQuarantineFlaky(client, {
-        projectId: project.project_id,
-        now: nowDate,
-        ...(this.deps.thresholds !== undefined && { thresholds: this.deps.thresholds }),
-        eventStore: new PgEventStore(client),
-      });
-    });
+    // PLANE-SPLIT: the worker runs as `tanren_dataplane`. Tenant work
+    // (`ci_test_results` + `quarantined_tests`) runs on the org-scoped client — both
+    // are RLS-admitted under the project's org. But `events` is OFF this plane: the
+    // `ci.*` READ goes through a system-scoped client (no dataplane `events` grant)
+    // and the `ci.flaky.detected` / `ci.test.quarantined` EMITS route through the
+    // control-plane writer. Both event sites are wrapped in the job org id so the
+    // control plane attributes them. Absent a writer (single privileged pool), the
+    // in-process `PgEventStore` on the org client serves (tests / non-plane-split).
+    await runWithJobOrgId(project.org_id, () =>
+      runWithOrgScope(this.deps.pool, project.org_id, async (client) => {
+        await detectAndQuarantineFlaky(client, {
+          projectId: project.project_id,
+          now: nowDate,
+          ...(this.deps.thresholds !== undefined && { thresholds: this.deps.thresholds }),
+          eventStore: this.deps.runStateWriter ?? new PgEventStore(client),
+          loadChecks: (since) =>
+            runWithSystemScope(this.deps.pool, (sysClient) =>
+              loadCiObservations(sysClient, { projectId: project.project_id, since }),
+            ),
+        });
+      }),
+    );
     // PR3 generative arm: AFTER the mechanical quarantine, turn each genuine recurring
     // problem into a durable-fix candidate that ships through the inbox auto-route
     // spine. Runs under a per-job org id (the emitter wraps the pool in

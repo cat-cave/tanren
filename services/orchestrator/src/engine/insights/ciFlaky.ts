@@ -218,6 +218,17 @@ export interface DetectFlakyContext {
   now?: Date;
   thresholds?: Partial<InsightThresholds>;
   eventStore: EventStore;
+  /**
+   * Loads the `ci.*` check observations for `[since, now]`. The events read is a
+   * caller-provided seam BECAUSE the two callers sit on different DB planes: the
+   * dashboard route runs as `tanren_app` (reads `events` on its own org client),
+   * but the worker loop runs as `tanren_dataplane` — which has NO `events` grant —
+   * and so MUST read them through a system-scoped client. Keeping the read here as
+   * an injected loader is what lets the same detector serve both planes without a
+   * silent permission-denied. `pool` is used only for the tenant tables
+   * (`ci_test_results` + `quarantined_tests`), which both planes can reach.
+   */
+  loadChecks: (since: Date) => Promise<CiCheckObservation[]>;
 }
 
 interface ExistingQuarantineRow {
@@ -245,7 +256,7 @@ export async function detectAndQuarantineFlaky(
   // Check-level verdicts from the `ci.*` event history (the original grain) AND
   // per-test verdicts from the `ci_test_results` history (the new PR2 grain). Both
   // record onto the SAME quarantine surface and surface as `ci_flaky` insights.
-  const checkObservations = await loadCiObservations(pool, { projectId: context.projectId, since });
+  const checkObservations = await context.loadChecks(since);
   const checkVerdicts = deriveFlakyTests(checkObservations, { minToggledShas: t.flakyMinToggledShas });
   const testObservations = await loadCiTestObservations(pool, { projectId: context.projectId, since });
   const testVerdicts = deriveFlakyTestsPerTest(testObservations, { minToggledShas: t.flakyMinToggledShas });

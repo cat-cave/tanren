@@ -17,7 +17,7 @@ import { computePaceAnomaly } from "./paceAnomaly.js";
 import { computeRetryHotspot } from "./retryHotspot.js";
 import { computeReviewStall } from "./reviewStall.js";
 import { computeStuck } from "./stuck.js";
-import { detectAndQuarantineFlaky } from "./ciFlaky.js";
+import { detectAndQuarantineFlaky, loadCiObservations } from "./ciFlaky.js";
 import { readFreshOrCompute } from "./cache.js";
 import { DEFAULT_THRESHOLDS, type InsightThresholds } from "./thresholds.js";
 import { type Insight, type InsightKind } from "./types.js";
@@ -94,6 +94,8 @@ export async function loadInsightsForProject(
       now: options.now,
       thresholds: options.thresholds,
       eventStore: options.eventStore,
+      // App-role route: this `pool` already reads `events` under the request's org scope.
+      loadChecks: (since) => loadCiObservations(pool, { projectId: options.projectId, since }),
     });
     out.push(...flaky);
   }
