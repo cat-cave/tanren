@@ -470,6 +470,13 @@
       "when": 1780582031119,
       "tag": "0066_lean_havok",
       "breakpoints": true
+    },
+    {
+      "idx": 67,
+      "version": "7",
+      "when": 1780585710610,
+      "tag": "0067_needy_gladiator",
+      "breakpoints": true
     }
   ]
 }

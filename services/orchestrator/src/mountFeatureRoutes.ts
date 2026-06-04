@@ -24,7 +24,11 @@ import { mountReportRoutes, type MountReportRoutesDeps } from "./routes/experime
 import { createForgeAskRoutes, createForgeProposalRoutes, createForgeRoutes } from "./routes/forge/mount.js";
 import { createInboxRoutes } from "./routes/inbox/index.js";
 import { createAuditRoutes } from "./routes/audits/index.js";
-import { createGithubWebhookRoutes, createIssueWebhookRoutes } from "./routes/githubWebhooks/index.js";
+import {
+  createGithubWebhookRoutes,
+  createIssueWebhookRoutes,
+  createJunitIngestRoutes,
+} from "./routes/githubWebhooks/index.js";
 import { createInsightRoutes } from "./routes/insights/index.js";
 import { createIntegrationRoutes } from "./routes/integrations/index.js";
 import { createMilestoneRoutes } from "./routes/milestones/index.js";
@@ -203,6 +207,20 @@ export function mountFeatureRoutes(app: Hono<ActorContextEnv>, deps: FeatureRout
   // the CI receiver it resolves its tenant server-side, so it keeps the bare pool;
   // the auto-route DAG insert runs under the resolved org's RLS scope internally.
   app.route("/", createIssueWebhookRoutes({ pool, secrets, answererFactory: forgeAnswerers.triage }));
+  // CI-intelligence ingestion (foundation): the generated repo's CI uploads its
+  // parsed JUnit report to `/webhooks/ci/junit`, authed with the per-run token
+  // (HMAC over the raw body via the CI webhook signing secret). Mounted at root
+  // like the other webhook receivers; resolves its run's org server-side and
+  // writes the per-test rows under that org's RLS scope. Reuses the CI webhook
+  // signing-secret ref (the same per-installation Actions secret).
+  app.route(
+    "/",
+    createJunitIngestRoutes({
+      pool,
+      secrets,
+      ...(deps.ciWebhookSigningSecretRef === undefined ? {} : { signingSecretRef: deps.ciWebhookSigningSecretRef }),
+    }),
+  );
   app.route("/orgs", createInsightRoutes({ pool: scopedPool }));
   // P3-0014: spec discovery — the model DERIVES proposed specs + DAG placement
   // from the insight; accept → create specs with provenance.

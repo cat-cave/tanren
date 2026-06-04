@@ -97,7 +97,7 @@ import {
   MergeQueueAdvancedPayload,
   MergeQueueInfraBlockedPayload,
 } from "./schemas/mergeQueue.js";
-import { CiFlakyDetectedPayload, CiTestQuarantinedPayload } from "./schemas/ciFlaky.js";
+import { CiFlakyDetectedPayload, CiTestQuarantinedPayload, CiTestsReportedPayload } from "./schemas/ciFlaky.js";
 import { IssueOpenedPayload, MergePostMergeFailedPayload } from "./schemas/postMerge.js";
 import { GateAdvisoryFailedPayload, GateFailedPayload, GatePassedPayload, GateStartedPayload } from "./schemas/gate.js";
 import {
@@ -240,6 +240,11 @@ export const EventRegistry = {
   // consistently-failing check is never flagged — quarantine ≠ ignore-failures.
   "ci.flaky.detected": CiFlakyDetectedPayload,
   "ci.test.quarantined": CiTestQuarantinedPayload,
+
+  // CI-intelligence ingestion (foundation): a JUnit report was uploaded from the
+  // generated repo's CI and parsed into per-test rows (ci_test_results). Summary
+  // counts + head SHA + attempt only — names/files are public, never secret values.
+  "ci.tests.reported": CiTestsReportedPayload,
 
   // P3-0005 in-loop deterministic gate-check stage (exit-code driven; no agent)
   "gate.started": GateStartedPayload,

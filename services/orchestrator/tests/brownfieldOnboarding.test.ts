@@ -135,6 +135,25 @@ describe("config-injection · 5 files + per-file exclude + open PR", () => {
     expect(files[0]?.content).toContain("smoke fixture");
   });
 
+  it("CI-intelligence: the tanren-ci.yml emits a JUnit report + uploads it to the ingest endpoint", () => {
+    const files = proposeConfigFiles(proposeInput);
+    const ci = files.find((f) => f.path === ".github/workflows/tanren-ci.yml");
+    expect(ci).toBeDefined();
+    const yaml = ci?.content ?? "";
+    // The test step emits a JUnit report (vitest reporter flag).
+    expect(yaml).toContain("--reporter=junit");
+    expect(yaml).toContain("--outputFile=reports/junit.xml");
+    // The test-step exit code is captured (the runner-crash-with-clean-XML guard).
+    expect(yaml).toContain("exit_code");
+    // An upload step POSTs to the ingest endpoint, on success OR failure.
+    expect(yaml).toContain("upload-junit");
+    expect(yaml).toContain("if: success() || failure()");
+    expect(yaml).toContain("/webhooks/ci/junit");
+    // Authed with the per-run token propagated as an Actions secret (HMAC sig).
+    expect(yaml).toContain("TANREN_RUN_TOKEN");
+    expect(yaml).toContain("x-hub-signature-256");
+  });
+
   it("honors per-file exclude", () => {
     const files = proposeConfigFiles(proposeInput, [".github/workflows/tanren-ci.yml", "CODEOWNERS"]);
     expect(files).toHaveLength(3);

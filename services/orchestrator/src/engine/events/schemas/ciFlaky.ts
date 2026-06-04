@@ -44,3 +44,30 @@ export const CiTestQuarantinedPayload = FlakyEvidence.extend({
   /** The quarantine-surface row id recorded for this check. */
   quarantineId: z.string().min(1),
 }).strict();
+
+// CI-intelligence ingestion (foundation): a JUnit report was uploaded from the
+// generated repo's CI and parsed into per-test rows for a run. The payload is a
+// SUMMARY only (counts + the head SHA + attempt) — never a secret value, never a
+// test's stdout/stderr. Test names/files (which DO ride the persisted rows) are
+// `public` like every other CI identifier; nothing secret is in this event.
+export const CiTestsReportedPayload = z
+  .object({
+    /** The commit SHA the report was produced against (CI `github.sha`). */
+    headSha: z.string(),
+    /** The CI re-run attempt this report came from (GitHub `run_attempt`), ≥ 1. */
+    attempt: z.number().int().positive(),
+    /** Total `<testcase>` rows persisted from this report. */
+    total: z.number().int().nonnegative(),
+    /** Of those, how many were `failed` or `error`. */
+    failures: z.number().int().nonnegative(),
+    /** How many cases showed a fail-then-pass WITHIN this run (single-run flaky). */
+    flaky: z.number().int().nonnegative(),
+    /**
+     * The test-step exit code the runner reported (the `--test-exit-code`
+     * upload guard). A non-zero code with a clean-looking report flags a
+     * runner-crash-after-write — recorded so a later phase never reads such a
+     * report as "all green". Null when the uploader did not supply it.
+     */
+    testExitCode: z.number().int().nullable(),
+  })
+  .strict();

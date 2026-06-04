@@ -2,6 +2,7 @@ import { registerSensitivities, type SensitivityRule } from "./sensitivity.js";
 import { infraSensitivityRules } from "./sensitivityRules.infra.js";
 import { appEnvSensitivityRules } from "./sensitivityRules.appEnv.js";
 import { strandSensitivityRules } from "./sensitivityRules.strand.js";
+import { ciIntelSensitivityRules } from "./sensitivityRules.ciIntel.js";
 
 // Sensitivity rule table. Every payload field reachable from an event must have a
 // registered tag (the eventRegistryFieldCoverage test enforces this as a hard CI
@@ -471,14 +472,13 @@ export const sensitivityRules: SensitivityRule[] = [
     ["prUrl", "public"],
     ["label", "public"],
   ]),
-  // Plane B app-environment rules (app_env.*) live in sensitivityRules.appEnv.ts;
-  // infrastructure + integration rules (runner/allocator/workspace/credential, cost +
-  // usage telemetry, github/ci/phase1/reviews/notifications/hello/redaction) in
-  // sensitivityRules.infra.ts; the NEVER-STRAND reconciler rules (dag.spec.unstranded /
-  // dag.spec.needs_attention) in sensitivityRules.strand.ts — all split out under the cap.
+  // Split out under the 500-line cap: app_env.* (appEnv); infra/integration —
+  // runner/allocator/workspace/credential, cost+usage, github/ci/phase1/reviews/
+  // notifications/hello/redaction (infra); strand reconciler (strand); ci-intel (ciIntel).
   ...appEnvSensitivityRules,
   ...infraSensitivityRules,
   ...strandSensitivityRules,
+  ...ciIntelSensitivityRules,
 ];
 
 function rulesFor(eventName: string, entries: ReadonlyArray<[string, SensitivityRule["tag"]]>): SensitivityRule[] {
