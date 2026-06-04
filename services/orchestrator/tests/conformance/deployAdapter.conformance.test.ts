@@ -145,14 +145,16 @@ describe("DirectApiDeployAdapter — verify (proven deploy)", () => {
     const transport = scriptedDeployTransport("vercel");
     const { instance } = adapter(transport, 200, 3);
     const { ref, deploymentId } = await provisionAndDeploy(transport, instance, vercelGrant, "acme-web");
-    transport.scriptDeploymentStates(deploymentId, ["BUILDING"]); // never advances
+    // The deployment never advances past BUILDING.
+    transport.scriptDeploymentStates(deploymentId, ["BUILDING"]);
     await expect(instance.verify(vercelGrant, ref, deploymentId)).rejects.toThrow(/never became READY after 3 polls/u);
     expect(transport.statusPolls(deploymentId)).toBe(3);
   });
 
   it("fails LOUD when READY but the URL smoke check is unreachable", async () => {
     const transport = scriptedDeployTransport("vercel");
-    const { instance } = adapter(transport, 503); // URL answers 503 (not reachable)
+    // The deployed URL answers 503 (not reachable).
+    const { instance } = adapter(transport, 503);
     const { ref, deploymentId } = await provisionAndDeploy(transport, instance, vercelGrant, "acme-web");
     transport.scriptDeploymentStates(deploymentId, ["READY"]);
     await expect(instance.verify(vercelGrant, ref, deploymentId)).rejects.toThrow(
