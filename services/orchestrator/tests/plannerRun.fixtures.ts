@@ -295,9 +295,11 @@ export function noopMerge() {
   };
 }
 
-// The forge PR-list + create responses. NATIVE delivery: the merge gate runs over SSH
-// (no forge poll), and the verdict-publish forge call is skipped under the unit SSH
-// fake (no head sha), so only the PR-publish tail hits the scripted client.
+// The forge calls of a passing native run: PR-list + create, then the `tanren/gate`
+// verdict-PUBLISH (a check-run, 201 → { id, html_url }). NATIVE delivery runs the merge
+// gate over SSH (no forge poll); the only forge call after the PR is the verdict publish.
+// The publish 201 is unused (harmless leftover) on a fake-SSH unit path that yields no
+// head sha (the publish is skipped), and consumed when the SSH fake yields a real head sha.
 export function passingGitHub(): ScriptedGitHubHttp {
   return new ScriptedGitHubHttp([
     { status: 200, body: [] },
@@ -310,6 +312,7 @@ export function passingGitHub(): ScriptedGitHubHttp {
         base: { ref: "main" },
       },
     },
+    { status: 201, body: { id: 9001, html_url: "https://github.com/cat-cave/tanren-fixture-medium/runs/9001" } },
   ]);
 }
 
