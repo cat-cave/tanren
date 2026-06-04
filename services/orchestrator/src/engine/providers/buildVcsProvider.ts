@@ -32,6 +32,9 @@ import type {
   CreateRepositoryInput,
   OpenDraftPullRequestInput,
   OpenedPullRequest,
+  PublishCheckInput,
+  PublishedCheck,
+  PublishStatusInput,
   PullRequestMergeability,
   PullRequestRef,
   PushBranchInput,
@@ -90,6 +93,12 @@ export class UnconfiguredVcsProvider implements VcsProvider {
     return this.fail();
   }
   async setActionsSecret(_input: SetActionsSecretInput): Promise<void> {
+    return this.fail();
+  }
+  async publishCheck(_input: PublishCheckInput): Promise<PublishedCheck> {
+    return this.fail();
+  }
+  async publishStatus(_input: PublishStatusInput): Promise<void> {
     return this.fail();
   }
   async markReadyForReview(_pr: PullRequestRef, _token: ResolvedVcsToken): Promise<void> {

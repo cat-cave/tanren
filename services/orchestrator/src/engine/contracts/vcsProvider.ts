@@ -3,18 +3,18 @@
 // lifecycle performs directly against a forge today (GitHub now; GitLab/others
 // later). This is a PURE EXTRACTION of the operations the PR-open / CI-poll /
 // review / merge stages already perform — it adds no behavior. The GitHub impl
-// (`engine/providers/githubVcsProvider.ts`) COMPOSES the existing
-// `GitHubPullRequestService` / `GitHubStatusService` / `GitHubReviewMergeService`
-// + the token resolver + the SSH push, so every current behavior
-// (token-via-stdin clone auth, the GraphQL ready mutation, the 401-refresh
-// retry, the timed HTTP wrapper, the merge dispatch, the CI-poll semantics) is
-// preserved exactly.
+// (`engine/providers/githubVcsProvider.ts`) COMPOSES the existing GitHub services
+// (`GitHubPullRequestService`/`GitHubStatusService`/`GitHubReviewMergeService`) +
+// the token resolver + the SSH push, so every current behavior (token-via-stdin
+// clone auth, the GraphQL ready mutation, the 401-refresh retry, the timed HTTP
+// wrapper, the merge dispatch, the CI-poll semantics) is preserved exactly.
 //
 // Phase 2 EXTENDS this contract WITHOUT reshaping it (all additive): P2a
-// (auto-rebase) `readMergeability`/`updateBranch`; P2b (conflict resolution) the
-// resolved-tree read/write hooks; P2c (speculative execution) the
-// integration-branch ops. The seam is the VCS/ACTIONS provider, NOT the merge
-// QUEUE (§1.1): the native merge queue (P2d) sits ABOVE it and drives these ops.
+// auto-rebase (`readMergeability`/`updateBranch`), P2b conflict-resolution hooks,
+// P2c speculative-execution integration-branch ops. The seam is the VCS/ACTIONS
+// provider, NOT the merge QUEUE (§1.1): the native merge queue (P2d) sits ABOVE it.
+// Track B (no-Actions doctrine) adds `publishCheck`/`publishStatus` — Tanren
+// PUBLISHING its own gate verdict to the forge (additive; nothing gates on it yet).
 
 // Errors + base64 decode + the ActorIdentity type live in `./vcsProviderErrors.js`
 // (line cap); re-exported so callers import them from the contract module unchanged.
@@ -24,7 +24,18 @@ export {
   RepositoryCreationForbiddenError,
 } from "./vcsProviderErrors.js";
 export type { ActorIdentity } from "./vcsProviderErrors.js";
+// Track B (no-Actions doctrine): the native check/status PUBLICATION payloads live
+// in `./vcsProviderPublish.js` (line cap); re-exported so callers import them here.
+export type {
+  CheckAnnotation,
+  CheckConclusion,
+  PublishCheckInput,
+  PublishedCheck,
+  PublishStatusInput,
+  StatusState,
+} from "./vcsProviderPublish.js";
 import type { ActorIdentity } from "./vcsProviderErrors.js";
+import type { PublishCheckInput, PublishedCheck, PublishStatusInput } from "./vcsProviderPublish.js";
 import type { SshTarget } from "./allocator.js";
 import type { SecretStore } from "./secretStore.js";
 import type { SshSubstrate } from "./sshSubstrate.js";
@@ -87,12 +98,11 @@ export interface OpenedPullRequest {
 /**
  * P2a: the up-to-date / mergeability state of a PR branch relative to its base,
  * read in provider-neutral terms. The merge stage uses this BEFORE merging to
- * decide whether a rebase/update is needed (`behind`), whether the branch is a
- * genuine conflict the resolver must handle (`dirty`), or whether it is current
- * and safe to merge (`clean`). It is derived from GitHub's PR `mergeable_state`
- * + the head/base comparison; a GitLab impl maps it from its own divergence
- * signal. `baseBranch` / `headBranch` are surfaced so the rebase + events can
- * name the refs without a second read.
+ * decide whether a rebase/update is needed (`behind`), a genuine conflict the
+ * resolver must handle (`dirty`), or it is current and safe to merge (`clean`).
+ * Derived from GitHub's PR `mergeable_state` + the head/base comparison (a GitLab
+ * impl maps its own divergence signal). `baseBranch`/`headBranch` are surfaced so
+ * the rebase + events name the refs without a second read.
  */
 export interface PullRequestMergeability {
   /**
@@ -136,11 +146,10 @@ export interface BuildIntegrationBranchInput {
 
 /**
  * P2c: the outcome of building a speculative integration branch. `integrated`
- * means every ancestor merged cleanly onto the integration ref (the dependent's
- * dynamic base is ready). `conflict` means two ancestors conflict WITH EACH OTHER
- * — surfaced HERE, early, on the integration branch, so the P2b resolver runs
- * against it (not against the innocent dependent); `conflictBetween` names the two
- * conflicting ancestor specs so the resolver gets both intents.
+ * means every ancestor merged cleanly (the dependent's dynamic base is ready).
+ * `conflict` means two ancestors conflict WITH EACH OTHER — surfaced HERE, early,
+ * so the P2b resolver runs against the integration branch (not the innocent
+ * dependent); `conflictBetween` names the pair so the resolver gets both intents.
  */
 export interface BuildIntegrationBranchResult {
   outcome: "integrated" | "conflict";
@@ -275,12 +284,11 @@ export interface CreatedIssue {
 /**
  * P-APP-ENV-1: set (create or overwrite) a single ACTIONS REPOSITORY SECRET on
  * the target repo, so the project's `tanren-ci.yml` tests that read e.g.
- * `RESEND_API_KEY` find it. The `value` is the PLAINTEXT app-env secret resolved
- * from the App Environment store — it is SECRET and load-bearing: the provider
- * MUST transmit it ONLY inside the forge's encrypted secret payload (GitHub:
- * libsodium sealed-box against the repo's Actions public key) and MUST NOT log
- * it, return it, or place it in an event. `name` is the secret name (an env-var
- * key) and is non-secret. Idempotent: GitHub's PUT creates or replaces (201/204).
+ * `RESEND_API_KEY` find it. The `value` is the PLAINTEXT app-env secret — SECRET
+ * and load-bearing: the provider MUST transmit it ONLY inside the forge's
+ * encrypted payload (GitHub: libsodium sealed-box against the repo's Actions
+ * public key) and MUST NOT log/return/emit it. `name` (the env-var key) is
+ * non-secret. Idempotent: GitHub's PUT creates or replaces (201/204).
  */
 export interface SetActionsSecretInput {
   repo: RepoRef;
@@ -296,24 +304,8 @@ export interface SetActionsSecretInput {
  * performs directly against the forge, behind a provider-neutral seam. Each
  * operation takes a pre-`resolveToken`'d {@link ResolvedVcsToken} so a stage
  * resolves once and performs many operations (unchanged from today's probes).
- *
- * Methods, and the EXISTING call sites they extract:
- *   - resolveToken        ← githubTokenResolver.resolveGithubToken (clone-auth /
- *                            credential resolution for a repo)
- *   - parseRepository /
- *     parsePullRequest    ← github.parseGitHubRepository / parseGitHubPullRequestUrl
- *   - pushBranch          ← githubPush.pushWorkspaceBranchToGitHub
- *   - openDraftPullRequest← github.GitHubPullRequestService.ensureDraftPullRequest
- *   - markReadyForReview  ← githubReviewMerge.markReadyForReview (the GraphQL
- *                            un-draft mutation)
- *   - readPullRequestChecks ← github.GitHubStatusService.fetchPullRequestChecks
- *                            (CI/check status + required contexts)
- *   - readReviewVerdict   ← githubReviewMerge.fetchReviewVerdict
- *   - readPullRequestDiff ← githubReviewMerge.fetchPullRequestDiff
- *   - submitReview        ← githubReviewMerge.submitReview
- *   - listContributors    ← mergeDispatch's PR-commits contributor read
- *   - mergePullRequest    ← githubReviewMerge.mergePullRequest
- *   - readFileOnBranch    ← the forge `/contents` read on a base/head ref
+ * Each method's own doc names the existing call site it extracts (resolveToken ←
+ * `githubTokenResolver.resolveGithubToken`, pushBranch ← `githubPush.*`, etc.).
  *
  * NOTE the GitHub webhooks/auth/forge-recon/config-gate GitHub code is NOT part
  * of this seam — only the run+merge lifecycle path is routed through it.
@@ -367,6 +359,23 @@ export interface VcsProvider {
   setActionsSecret(input: SetActionsSecretInput): Promise<void>;
 
   /**
+   * Track B (no-Actions doctrine): publish a Tanren-NATIVE check-run for `headSha`
+   * (GitHub `POST .../check-runs`, a `completed` run carrying the `conclusion` +
+   * title/summary + optional inline annotations) — how Tanren's own gate verdict
+   * reaches the forge instead of only READING Actions' check-runs. ADDITIVE:
+   * nothing gates on it yet (the shadow-check/cutover step wires it); token never logged.
+   */
+  publishCheck(input: PublishCheckInput): Promise<PublishedCheck>;
+
+  /**
+   * Track B (no-Actions doctrine): publish a Tanren-NATIVE commit STATUS for
+   * `headSha` (GitHub `POST .../statuses/{sha}`) — the lower-friction signal (no
+   * `checks:write` scope) the `github_checks` channel already proves. ADDITIVE:
+   * nothing gates on it yet; token never logged.
+   */
+  publishStatus(input: PublishStatusInput): Promise<void>;
+
+  /**
    * Open a tracking issue (title/body/labels) on the repo. The post-merge-failure
    * watcher calls this to file ONE tracking issue per merge when the post-merge CI
    * on `default_branch` fails. NOT idempotent at the forge — the caller owns
@@ -387,10 +396,9 @@ export interface VcsProvider {
    * P2d-2 (speculative batch-check): read the CI/check status of an arbitrary
    * BRANCH ref (not a PR) — the prospective merged state on an ephemeral
    * speculative-integration branch. Same check-runs + commit-status semantics as
-   * `readPullRequestChecks`, keyed on the branch's HEAD SHA + gated by the branch's
-   * own protection required contexts, so the batch-check reuses the EXACT CI-poll
-   * evaluator (`evaluateCiObservation`). Provider-neutral: a GitLab impl maps it from
-   * its own pipeline-for-ref read.
+   * `readPullRequestChecks`, keyed on the branch's HEAD SHA + its own protection
+   * required contexts, so the batch-check reuses the EXACT CI-poll evaluator
+   * (`evaluateCiObservation`). A GitLab impl maps it from its pipeline-for-ref read.
    */
   readBranchChecks(input: { repo: RepoRef; branch: string; token: ResolvedVcsToken }): Promise<GitHubPullRequestChecks>;
 
@@ -451,40 +459,34 @@ export interface VcsProvider {
   readMergeability(pr: PullRequestRef, token: ResolvedVcsToken): Promise<PullRequestMergeability>;
 
   /**
-   * P2a: bring the PR branch up to date with its base (the server-side fast
-   * path: GitHub `PUT /repos/{o}/{r}/pulls/{n}/update-branch`). Returns
-   * `updated` when the branch was advanced (the caller must then re-poll CI to
-   * green before merging), `up_to_date` when nothing was needed, and `conflict`
-   * when GitHub reports the update cannot be performed because of a real merge
-   * conflict (422) — the caller routes that to the conflict-resolution hook
-   * rather than merging broken work. It NEVER merges and NEVER silently
-   * swallows a conflict.
+   * P2a: bring the PR branch up to date with its base (the server-side fast path:
+   * GitHub `PUT .../pulls/{n}/update-branch`). Returns `updated` when the branch
+   * was advanced (the caller then re-polls CI to green before merging), `up_to_date`
+   * when nothing was needed, and `conflict` when GitHub reports a real merge
+   * conflict (422) — routed to the conflict-resolution hook rather than merging
+   * broken work. It NEVER merges and NEVER silently swallows a conflict.
    */
   updateBranch(pr: PullRequestRef, token: ResolvedVcsToken): Promise<UpdateBranchResult>;
 
   /**
    * P2c (speculative execution): build (or reset + rebuild) the ephemeral
    * SPECULATIVE INTEGRATION BRANCH for a dependent — `baseBranch` + each unmerged
-   * ancestor's branch merged in DAG order (server-side merges via the forge merge
-   * API). It NEVER touches `default_branch`/`main`; it writes only the ephemeral
-   * integration ref. When two ancestors conflict WITH EACH OTHER it returns
-   * `conflict` (naming the pair) rather than forcing the conflict — the caller
-   * routes that pair to the P2b resolver and rebuilds. The dependent's PR then
-   * bases on this ref (the dynamic base). Idempotent: re-running resets the ref to
-   * `baseBranch` first, so a stale integration is never additive.
+   * ancestor merged in DAG order (server-side forge merges). It NEVER touches
+   * `default_branch`/`main`; it writes only the ephemeral integration ref. When
+   * two ancestors conflict WITH EACH OTHER it returns `conflict` (naming the pair)
+   * rather than forcing it — the caller routes that pair to the P2b resolver and
+   * rebuilds; the dependent's PR bases on this ref (the dynamic base). Idempotent:
+   * re-running resets the ref to `baseBranch` first, so a stale integration is never additive.
    */
   buildIntegrationBranch(input: BuildIntegrationBranchInput): Promise<BuildIntegrationBranchResult>;
 
   /**
-   * P2c (speculative execution — land-on-real-main): re-point an open PR's BASE
-   * to a new branch (GitHub `PATCH /repos/{o}/{r}/pulls/{n}` with `{ base }`).
-   * When a speculative dependent's ancestors all genuinely merge, the merge stage
-   * re-targets the dependent's PR from its ephemeral integration ref to
-   * `default_branch` BEFORE merging, so the dependent lands on real `main` (never
-   * the integration ref). After the re-target the caller runs the P2a
-   * up-to-date/auto-rebase + re-gate flow so the branch lands cleanly. Idempotent:
-   * re-targeting to the branch the PR is already based on is a no-op on GitHub's
-   * side (the PATCH returns the unchanged PR).
+   * P2c (speculative execution — land-on-real-main): re-point an open PR's BASE to
+   * a new branch (GitHub `PATCH .../pulls/{n}` with `{ base }`). When a speculative
+   * dependent's ancestors all genuinely merge, the merge stage re-targets the PR
+   * from its ephemeral integration ref to `default_branch` BEFORE merging, so it
+   * lands on real `main`; the caller then runs the P2a up-to-date/re-gate flow.
+   * Idempotent: re-targeting to the current base is a no-op (PATCH returns the PR).
    */
   retargetPullRequestBase(pr: PullRequestRef, newBase: string, token: ResolvedVcsToken): Promise<void>;
 
