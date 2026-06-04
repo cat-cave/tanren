@@ -21,7 +21,10 @@ const patterns = [
 const ignoredDirs = new Set(["node_modules", "dist", "coverage", ".git"]);
 // Long-running narrative/roadmap docs (gain sections as the plan evolves); the 500-line cap does not fit them.
 const roadmapDocs = ["PROJECT_BRIEF.md", "docs/roadmap/R-WAVES.md", "docs/roadmap/autonomy-engine.md"];
-const lineMaxExclusions = new Set([...roadmapDocs, "pnpm-lock.yaml"]);
+// The vendored LiteLLM model-price snapshot is DATA (refreshed by
+// scripts/refresh-model-prices.mjs), exempt from the 500-line source cap.
+const vendoredData = ["services/orchestrator/src/engine/costs/pricing/model_prices.json"];
+const lineMaxExclusions = new Set([...roadmapDocs, ...vendoredData, "pnpm-lock.yaml"]);
 const invariantDocExclusions = new Set(["PROJECT_BRIEF.md", "docs/contracts/architecture-checks.md"]);
 // Plane-split P3b: these files deliberately attempt (or document) a RAW event insert by
 // the de-privileged data-plane role to PROVE Postgres REJECTS it — exempt from single-event-writer.

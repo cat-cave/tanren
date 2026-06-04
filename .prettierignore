@@ -24,6 +24,10 @@ contracts/json/**
 db/src/stateEnums.ts
 db/src/eventTypes.ts
 
+# Vendored LiteLLM model-price snapshot (data, refreshed by
+# scripts/refresh-model-prices.mjs — Prettier must not reformat the upstream JSON)
+services/orchestrator/src/engine/costs/pricing/model_prices.json
+
 # Hi-fidelity design reference (vendored)
 tanren-hi-fidelity/**
 
