@@ -132,9 +132,7 @@ export class FetchGitHubHttpClient implements GitHubHttpClient {
   private readonly maxTransientRetries: number;
   private readonly now: () => number;
 
-  constructor(options: FetchGitHubHttpClientOptions | string = {}, legacyFetch?: typeof fetch) {
-    const opts: FetchGitHubHttpClientOptions =
-      typeof options === "string" ? { apiBaseUrl: options, fetchImpl: legacyFetch } : options;
+  constructor(opts: FetchGitHubHttpClientOptions = {}) {
     this.apiBaseUrl = opts.apiBaseUrl ?? "https://api.github.com";
     this.fetchImpl = opts.fetchImpl ?? fetch;
     this.sleep = opts.sleep ?? ((ms) => sleepFor(ms));

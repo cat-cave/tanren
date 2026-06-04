@@ -121,7 +121,7 @@ describe("FetchGitHubHttpClient 401 refresh", () => {
       tokensSeen.push(String((init.headers as Record<string, string>).Authorization));
       return new Response("", { status: call === 1 ? 401 : 200 });
     }) as unknown as typeof fetch;
-    const client = new FetchGitHubHttpClient("https://api.github.com", fetchImpl);
+    const client = new FetchGitHubHttpClient({ apiBaseUrl: "https://api.github.com", fetchImpl });
     const response = await client.request({
       method: "GET",
       path: "/repos/x/y",
@@ -140,7 +140,7 @@ describe("FetchGitHubHttpClient 401 refresh", () => {
       call += 1;
       return new Response("", { status: 401 });
     }) as unknown as typeof fetch;
-    const client = new FetchGitHubHttpClient("https://api.github.com", fetchImpl);
+    const client = new FetchGitHubHttpClient({ apiBaseUrl: "https://api.github.com", fetchImpl });
     const response = await client.request({ method: "GET", path: "/repos/x/y", token: "stale" });
     expect(response.status).toBe(401);
     expect(call).toBe(1);
