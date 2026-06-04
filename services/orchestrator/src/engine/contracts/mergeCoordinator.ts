@@ -330,8 +330,14 @@ export interface CoordinateResult {
    *   - infra_error — the batch check could not be RUN (a transient/transport infra
    *     error); the coordinator bounded-retried then HELD loudly (no PR dequeued). The
    *     entries stay queued; pair with `retryAfterMs` so the subscriber re-drives.
+   *   - infra_blocked — GAP #1 (runaway guard): a TERMINAL infra halt. The per-project
+   *     CROSS-PASS consecutive-infra-hold CEILING fired (a persistent outage / a
+   *     permanent error mis-routed to the hold): the coordinator emitted a loud terminal
+   *     `merge.batch.infra_blocked` and returns NO `retryAfterMs`, so the subscriber arms
+   *     NO further timer. No PR is dequeued (the entries stay queued for an operator); the
+   *     loop simply STOPS re-driving. Mirrors the per-PR coordinator's ceiling halt.
    */
-  holdReason?: "serialized" | "empty" | "all_blocked" | "infra_error";
+  holdReason?: "serialized" | "empty" | "all_blocked" | "infra_error" | "infra_blocked";
   /**
    * When set, the pass held on a TRANSIENT/TIMED condition that no `tanren_run` NOTIFY
    * is guaranteed to clear on its own — the subscriber should re-drive THIS project

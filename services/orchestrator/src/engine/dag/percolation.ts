@@ -64,6 +64,17 @@ export interface PercolationPassResult {
    * dependents are still processed, and the stale marker is cleared next pass.
    */
   skipped: string[];
+  /**
+   * Dependents whose processing THREW a non-benign error this pass (a transient DB/RLS/
+   * VcsProvider failure in settle OR detect). RECORD-AND-CONTINUE (the walker's tolerate
+   * pattern): the error is logged + the dependent recorded here, but the pass CONTINUES
+   * so one dependent's failure can NEVER starve the OTHERS. A re-execution kicked off
+   * before a later throw is NOT rolled back — it settles on a later pass; the throwing
+   * dependent re-detects on the next notification (the loop re-converges). This is NOT a
+   * silent swallow — the loud per-dependent log + this bucket surface it; only the
+   * pass-aborting blast radius is removed. (The benign terminal case stays in `skipped`.)
+   */
+  failed: string[];
 }
 
 export interface ChangePercolationCoordinator {
@@ -89,6 +100,7 @@ function emptyResult(projectId: string): PercolationPassResult {
     held: [],
     unchanged: [],
     skipped: [],
+    failed: [],
   };
 }
 
@@ -108,7 +120,21 @@ export class PercolatingCoordinator implements ChangePercolationCoordinator {
     const dependents = await this.deps.readModel.loadSpeculativeDependents(projectId);
     const result = emptyResult(projectId);
     for (const dependent of dependents) {
-      await this.processDependent(projectId, dependent, result);
+      // RECORD-AND-CONTINUE (the walker's tolerate pattern): a transient DB/RLS/
+      // VcsProvider throw while processing ONE dependent (settle OR detect) must not
+      // ABORT the whole pass and starve the remaining dependents. Log it loudly +
+      // record it in `failed`, then carry on; the dependent re-detects next notification.
+      // (The benign terminal SpecNotRunnableError is still handled inside `detect` →
+      // `skipped`; it never reaches here.)
+      try {
+        await this.processDependent(projectId, dependent, result);
+      } catch (error) {
+        console.error(
+          `[change-percolation] dependent ${dependent.specId} threw while percolating (recorded + continuing; other dependents still process):`,
+          error,
+        );
+        result.failed.push(dependent.specId);
+      }
     }
     return result;
   }

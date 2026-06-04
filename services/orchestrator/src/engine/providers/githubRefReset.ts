@@ -76,6 +76,20 @@ export function isRetriableInfraError(error: unknown): boolean {
   return true;
 }
 
+/**
+ * Classify a non-OK status from a speculative-integration forge read (a ref read / a
+ * `/merges` call) into the TYPED infra error `isRetriableInfraError` reads. A transient
+ * gateway status (502/503/504/408) is `RefResetTransientError` (retriable: true → a
+ * bounded re-drive self-heals); ANY other status — a 404 (a deleted/renamed ancestor
+ * branch), a 403 (auth/permission), a 422, etc. — is `RefResetPermanentError`
+ * (retriable: false → the batch holds loud-ONCE then the per-batch ceiling escalates,
+ * instead of re-driving the 3s infra loop forever on a missing branch).
+ */
+export function refReadStatusError(op: string, subject: string, status: number): Error {
+  const detail = `GitHub ${op} for ${subject} failed: HTTP ${status}`;
+  return isTransientStatus(status) ? new RefResetTransientError(detail) : new RefResetPermanentError(detail);
+}
+
 /** Extract GitHub's `{message}` from a parsed JSON response body, if present. */
 function bodyMessage(body: unknown): string {
   if (typeof body === "object" && body !== null && typeof (body as { message?: unknown }).message === "string") {

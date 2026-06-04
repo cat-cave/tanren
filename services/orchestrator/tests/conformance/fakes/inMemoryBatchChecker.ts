@@ -109,6 +109,8 @@ export class RecordingBatchMergeEventEmitter implements BatchMergeEventEmitter {
     checks?: number;
     message?: string;
     attempts?: number;
+    terminal?: boolean;
+    consecutiveHolds?: number;
   }> = [];
 
   // eslint-disable-next-line @typescript-eslint/require-await
@@ -142,12 +144,16 @@ export class RecordingBatchMergeEventEmitter implements BatchMergeEventEmitter {
     batch: ReadonlyArray<MergeQueueEntry>;
     message: string;
     attempts: number;
+    terminal?: boolean;
+    consecutiveHolds?: number;
   }): Promise<void> {
     this.events.push({
       type: "infra_blocked",
       specIds: input.batch.map((e) => e.specId),
       message: input.message,
       attempts: input.attempts,
+      ...(input.terminal !== undefined && { terminal: input.terminal }),
+      ...(input.consecutiveHolds !== undefined && { consecutiveHolds: input.consecutiveHolds }),
     });
   }
 }

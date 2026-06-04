@@ -112,6 +112,23 @@ export interface PostureDecision {
 }
 
 /**
+ * MERGE-HARDENING (GAP #3): the autonomous-tier auto-approve context. On an AUTONOMOUS
+ * tier (reviewPolicy `auto`/`simulated` driving `native_queue`) a `strict`/`lenient`
+ * posture BLOCK whose external committers are ALL configured platform / known-automation
+ * logins is AUTO-APPROVED instead of stranding a done-run spec into a 3×-churn→park. The
+ * built-in `web-flow` is already filtered as non-external in `assessExternalChange`; this
+ * extends that to a per-project CONFIGURABLE known-bot set, but only for the autonomous
+ * tiers. On the `human` tier (`autonomousTier: false`) the block STILL stands — a human
+ * makes the real decision. Absent ⇒ today's behavior (block) is byte-identical.
+ */
+export interface AutonomousAutoApprove {
+  /** True only for the autonomous merge tiers (reviewPolicy auto/simulated + native_queue). */
+  autonomousTier: boolean;
+  /** The configured platform / known-automation logins (lower-cased), additive to `web-flow`. */
+  platformLogins: ReadonlySet<string>;
+}
+
+/**
  * The core posture gate. Given the configured posture and an external-change
  * assessment, decide whether the merge stage may proceed, must block pending
  * operator approval, or should observe-only (hand off without merging).
@@ -119,12 +136,18 @@ export interface PostureDecision {
  *   open                          → always proceed
  *   strict + no external change   → proceed (Tanren's own work)
  *   strict + external change      → block (needs operator approval)
+ *                                   UNLESS GAP #3 auto-approves (autonomous tier +
+ *                                   every external login is a configured known-bot)
  *   audit_only + no external      → proceed
  *   audit_only + external change  → observe (report, do not auto-merge)
  *   lenient                       → same as strict for external coexistence
  *                                   (its gate-advisory relaxation is in-loop only)
  */
-export function decidePosture(posture: GovernancePosture, assessment: ExternalChangeAssessment): PostureDecision {
+export function decidePosture(
+  posture: GovernancePosture,
+  assessment: ExternalChangeAssessment,
+  autoApprove?: AutonomousAutoApprove,
+): PostureDecision {
   const externalLogins = assessment.externalLogins;
   const base = { posture, external: assessment.hasExternalChange, externalLogins };
   if (posture === "open" || !assessment.hasExternalChange) {
@@ -139,6 +162,22 @@ export function decidePosture(posture: GovernancePosture, assessment: ExternalCh
       ...base,
       kind: "observe",
       reason: `audit_only posture: external change from ${formatLogins(externalLogins)} observed; not auto-merging`,
+    };
+  }
+  // GAP #3: an AUTONOMOUS-tier block whose external committers are ALL configured
+  // platform/known-automation logins auto-approves (the obvious-continue, never a strand
+  // → 3×-churn → park). `<unknown>` (an unattributed commit) is NEVER a known-bot, so a
+  // genuinely-external human still blocks. The `human` tier (autonomousTier false) skips
+  // this and blocks — a real human decision.
+  if (
+    autoApprove?.autonomousTier === true &&
+    externalLogins.length > 0 &&
+    externalLogins.every((login) => autoApprove.platformLogins.has(login))
+  ) {
+    return {
+      ...base,
+      kind: "proceed",
+      reason: `${posture} posture: external commits are all known-automation logins (${formatLogins(externalLogins)}); auto-approved on the autonomous tier`,
     };
   }
   // strict (and lenient, which mirrors strict for external-contributor

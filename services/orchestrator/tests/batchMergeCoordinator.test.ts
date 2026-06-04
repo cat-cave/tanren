@@ -17,7 +17,8 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { BatchMergeCoordinator } from "../src/engine/merge/batchCoordinator.js";
-import { RefResetTransientError } from "../src/engine/providers/githubRefReset.js";
+import { MAX_BATCH_INFRA_HOLDS } from "../src/engine/merge/batchInfraHoldCeiling.js";
+import { RefResetPermanentError, RefResetTransientError } from "../src/engine/providers/githubRefReset.js";
 import type { SpecPriority } from "../src/engine/state/spec.js";
 import { InMemoryBatchChecker, RecordingBatchMergeEventEmitter } from "./conformance/fakes/inMemoryBatchChecker.js";
 import {
@@ -314,6 +315,86 @@ describe("BatchMergeCoordinator — infra-error robustness (a thrown check NEVER
     expect(blocked?.attempts).toBe(3);
     // The batch was re-checked the bounded number of times (initial + 2 retries), not forever.
     expect(h.checker.checked.length).toBe(3);
+  });
+
+  it("GAP #1 (runaway guard): SUSTAINED infra holds ESCALATE to a TERMINAL merge.batch.infra_blocked after the cap (no infinite re-drive)", async () => {
+    const h = makeHarness();
+    seed(h, "spec_a");
+    seed(h, "spec_b");
+    // A PERSISTENT outage: every check (every pass) throws a transient infra error, so
+    // each pass exhausts its in-pass retry budget + HOLDS. Each delayed re-drive is a
+    // fresh coordinate pass — the cross-pass ceiling must terminate the re-drive loop.
+    h.checker.throwInfraAlways(new RefResetTransientError("HTTP 504 (persistent gateway outage)"));
+    const dequeueSpy = vi.spyOn(h.queue, "markDequeued");
+
+    // Drive repeatedly (simulating the subscriber's delayed re-drive timer). The first
+    // MAX_BATCH_INFRA_HOLDS-1 passes hold recoverably (infra_error + retryAfterMs); the
+    // MAX_BATCH_INFRA_HOLDS'th hits the ceiling → terminal halt (no retryAfterMs).
+    let last = await h.coordinator.coordinate(PROJECT);
+    let passes = 1;
+    for (let i = 0; i < 20 && last.holdReason === "infra_error"; i += 1) {
+      // A recoverable hold re-arms the timer (a positive retryAfterMs).
+      expect(last.retryAfterMs).toBeGreaterThan(0);
+      last = await h.coordinator.coordinate(PROJECT);
+      passes += 1;
+    }
+
+    // The ceiling fired EXACTLY at the cap: a TERMINAL halt with NO retryAfterMs (the
+    // subscriber arms no further timer — the re-drive loop STOPS).
+    expect(passes).toBe(MAX_BATCH_INFRA_HOLDS);
+    expect(last.holdReason).toBe("infra_blocked");
+    expect(last.retryAfterMs).toBeUndefined();
+    // NO PR was ever dequeued/blamed (an infra error never blames a clean PR).
+    expect(dequeueSpy).not.toHaveBeenCalled();
+    expect(h.queue.statusOf("run_spec_a")).toBe("queued");
+    expect(h.queue.statusOf("run_spec_b")).toBe("queued");
+    // The LOUD terminal event fired exactly once, marked terminal with the hold count.
+    const terminal = h.batchEvents.events.filter((e) => e.type === "infra_blocked" && e.terminal === true);
+    expect(terminal).toHaveLength(1);
+    expect(terminal[0]?.consecutiveHolds).toBe(MAX_BATCH_INFRA_HOLDS);
+    // The earlier (recoverable) holds emitted a NON-terminal infra_blocked each.
+    const recoverable = h.batchEvents.events.filter((e) => e.type === "infra_blocked" && e.terminal !== true);
+    expect(recoverable).toHaveLength(MAX_BATCH_INFRA_HOLDS - 1);
+  });
+
+  it("GAP #1: a recovering infra hold (transient then pass) RESETS the streak — it never reaches the terminal ceiling", async () => {
+    const h = makeHarness();
+    seed(h, "spec_a");
+    // Throw on EVERY attempt of the first pass (3 = MAX_INFRA_RETRIES 2 + the initial),
+    // exhausting it + holding ONCE; then self-heal so the next pass passes + merges. The
+    // streak resets on the passing verdict — the ceiling is never reached.
+    h.checker.throwInfraForFirst(new RefResetTransientError("HTTP 504 (brief blip)"), 3);
+
+    const held = await h.coordinator.coordinate(PROJECT);
+    expect(held.holdReason).toBe("infra_error");
+    expect(held.retryAfterMs).toBeGreaterThan(0);
+
+    const merged = await h.coordinator.coordinate(PROJECT);
+    expect(merged.holdReason).toBeUndefined();
+    expect(h.queue.statusOf("run_spec_a")).toBe("merged");
+    // It never escalated to a terminal halt.
+    expect(h.batchEvents.events.some((e) => e.type === "infra_blocked" && e.terminal === true)).toBe(false);
+  });
+
+  it("GAP #1/#2: a PERMANENT (typed non-retriable) infra error also escalates via the SAME ceiling (holds, never re-drives forever)", async () => {
+    const h = makeHarness();
+    seed(h, "spec_a");
+    // A typed-permanent infra error (e.g. a 404 on a deleted ancestor branch): it skips
+    // the in-pass retry budget (no point retrying) but STILL holds — and across passes
+    // the cross-pass ceiling escalates it to a terminal halt rather than re-driving 3s
+    // forever on a missing branch.
+    h.checker.throwInfraAlways(new RefResetPermanentError("HTTP 404 ref read (deleted ancestor branch)"));
+
+    let last = await h.coordinator.coordinate(PROJECT);
+    let passes = 1;
+    for (let i = 0; i < 20 && last.holdReason === "infra_error"; i += 1) {
+      last = await h.coordinator.coordinate(PROJECT);
+      passes += 1;
+    }
+    expect(passes).toBe(MAX_BATCH_INFRA_HOLDS);
+    expect(last.holdReason).toBe("infra_blocked");
+    expect(last.retryAfterMs).toBeUndefined();
+    expect(h.batchEvents.events.some((e) => e.type === "infra_blocked" && e.terminal === true)).toBe(true);
   });
 
   it("a TRANSIENT infra error self-heals: throw once, then the retry passes and the batch merges", async () => {

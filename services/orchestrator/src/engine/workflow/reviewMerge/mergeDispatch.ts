@@ -177,7 +177,7 @@ export async function mergeForRun(input: MergeForRunInput): Promise<MergeForRunR
   // hand-off is already a human-merge path — Tanren is not auto-merging, so
   // there is nothing for the posture to block and the gate is skipped.
   if (integration !== "external_reviewer") {
-    const decision = await evaluatePosture(input, context, pr.repo, pr.pullNumber);
+    const decision = await evaluatePosture(input, context, pr.repo, pr.pullNumber, integration);
     if (decision.kind !== "proceed") {
       return dispatcher.blockByPosture(decision);
     }
@@ -261,6 +261,7 @@ async function evaluatePosture(
   context: ReviewMergeRunContext,
   repo: RepoRef,
   pullNumber: number,
+  integration: DispatchedIntegration,
 ): Promise<PostureDecision> {
   if (context.governancePosture === "open") {
     // `open` short-circuits BEFORE any paid lookup — no contributor probe AND no
@@ -279,7 +280,20 @@ async function evaluatePosture(
   // keeps the configured set.
   const resolvedLogins = await resolveTanrenLogins(input, context);
   const identity = tanrenIdentity([...context.tanrenLogins, ...resolvedLogins]);
-  return decidePosture(context.governancePosture, assessExternalChange(contributors, identity));
+  // GAP #3: on an AUTONOMOUS tier (reviewPolicy auto/simulated driving native_queue) a
+  // posture block whose external committers are ALL configured platform/known-automation
+  // logins auto-approves instead of stranding a done-run spec → 3×-churn → park. The
+  // `human` tier still blocks (a real human decision). The platform set is the
+  // CONFIGURABLE per-project known-bot set, not a hardcoded single `web-flow`.
+  const autonomousTier =
+    integration === "native_queue" && (context.reviewPolicy === "auto" || context.reviewPolicy === "simulated");
+  const platformLogins = new Set(
+    context.platformLogins.map((login) => login.trim().toLowerCase()).filter((l) => l !== ""),
+  );
+  return decidePosture(context.governancePosture, assessExternalChange(contributors, identity), {
+    autonomousTier,
+    platformLogins,
+  });
 }
 
 /**

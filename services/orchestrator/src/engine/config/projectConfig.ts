@@ -77,6 +77,17 @@ export const ProjectConfigV1 = z
     // rows carry no key and parse to an absent field (the default set applies), and
     // `.strict()` round-trips it on save.
     governanceTanrenLogins: z.array(z.string().min(1)).optional(),
+    // MERGE-HARDENING (GAP #3): the configurable PLATFORM / KNOWN-AUTOMATION committer
+    // login set, ADDITIVE to the built-in `web-flow` (GitHub's merge-commit author). On
+    // an AUTONOMOUS tier (reviewPolicy `auto`/`simulated` + `native_queue`) a posture
+    // BLOCK whose only external committers are ALL in this set is AUTO-APPROVED (a
+    // mechanical co-author trailer / a second bot must not strand a done-run spec into a
+    // 3×-churn→park). These are NOT treated as Tanren's own identity (that is
+    // `governanceTanrenLogins`) and on the `human` tier they STILL block — the
+    // auto-approve is scoped to the autonomous tiers only. Optional + backward-compatible:
+    // legacy rows carry no key (only `web-flow` is recognized), and `.strict()` round-trips
+    // it on save.
+    governancePlatformLogins: z.array(z.string().min(1)).optional(),
     mergeIntegration: MergeIntegration.default("not_configured"),
     // Whether the review stage requires a real human verdict before merge.
     // Defaults to `"human"` (safe: never auto-merge without a review). When a

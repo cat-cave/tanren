@@ -153,6 +153,11 @@ export class ReviewMergePool {
   speculativeBase: string | null = null;
   specDependsOn: string[] = [];
   mergedAncestors: string[] = [];
+  /**
+   * GAP #3: the configurable platform / known-automation committer logins. Set by a test
+   * to prove the autonomous-tier auto-approve; absent ⇒ the config omits the key.
+   */
+  governancePlatformLogins: string[] | undefined = undefined;
 
   async query(sql: string, params: unknown[]): Promise<{ rows: unknown[]; rowCount: number }> {
     if (sql.startsWith("SELECT speculative_base, spec_id, project_id FROM runs")) {
@@ -187,6 +192,9 @@ export class ReviewMergePool {
                     mergeIntegration: this.mergeIntegration,
                     governancePosture: this.governancePosture,
                     reviewPolicy: this.reviewPolicy,
+                    ...(this.governancePlatformLogins !== undefined && {
+                      governancePlatformLogins: this.governancePlatformLogins,
+                    }),
                     credentials: { githubCredentialRef: "credential/github/dev" },
                   },
                   default_branch: "main",

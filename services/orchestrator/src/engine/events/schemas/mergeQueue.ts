@@ -166,6 +166,18 @@ export const MergeBatchInfraBlockedPayload = z
     message: z.string(),
     /** How many check attempts were made before holding (the exhausted retry budget). */
     attempts: z.number().int().nonnegative(),
+    /**
+     * The RUNAWAY-GUARD ceiling fired (optional; absent ⇒ the recoverable in-pass hold).
+     * A recoverable infra hold re-drives every `INFRA_HOLD_RETRY_AFTER_MS` — but a
+     * PERSISTENT outage / permanent-error would otherwise re-drive forever. After
+     * `consecutiveHolds` CROSS-PASS consecutive infra holds the coordinator stops
+     * re-arming the timer and emits this TERMINAL halt (`terminal: true`) — operator
+     * attention required, no further auto-retry. Mirrors the per-PR coordinator's
+     * `merge.queue.infra_blocked` ceiling.
+     */
+    terminal: z.boolean().optional(),
+    /** When terminal: the count of consecutive cross-pass infra holds that hit the cap. */
+    consecutiveHolds: z.number().int().nonnegative().optional(),
   })
   .strict();
 
