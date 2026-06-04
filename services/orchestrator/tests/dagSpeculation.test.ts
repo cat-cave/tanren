@@ -31,7 +31,7 @@ function lifecycleSnap(entries: Record<string, SpecLifecycle>): DagLifecycleSnap
   return { projectId: "p", bySpecId: new Map(Object.entries(entries)) };
 }
 
-const snap = (nodes: DagSpecNode[]): DagSnapshot => ({ projectId: "p", nodes });
+const snap = (nodes: DagSpecNode[]): DagSnapshot => ({ projectId: "p", nodes, archived: false });
 
 describe("ancestorCrossedThreshold", () => {
   it("conservative requires merged", () => {

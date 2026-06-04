@@ -25,6 +25,7 @@ import { actorCanAccessOrg, actorIsOrgAdmin } from "../orgs/index.js";
 import { BudgetPutSchema, handleBudgetGet, handleBudgetPut } from "./budget.js";
 import { GovernancePutSchema, handleGovernanceGet, handleGovernancePut } from "./governance.js";
 import { GreenfieldCreateSchema, handleGreenfieldCreate } from "./greenfield.js";
+import { handleProjectArchive, handleProjectUnarchive } from "./lifecycle.js";
 
 // P-APP-ENV-1: re-exported here so the feature-route mounter pulls both the
 // project CRUD routes and the app-env CI-secret propagation route from one import
@@ -216,6 +217,28 @@ export function createProjectRoutes(options: ProjectRoutesOptions) {
     return handleGovernancePut(c, options.pool, orgId, c.req.param("projectId"), parsed.data);
   });
 
+  // The project LIFECYCLE surface: archive PAUSES the project (cancels its in-flight
+  // runs; the walker + reconciler then skip it), unarchive RESUMES it. Both org-admin
+  // (they change the autonomy posture). Handlers live in `lifecycle.ts` to keep this
+  // file under the per-file line cap.
+  app.post("/:orgId/projects/:projectId/archive", async (c) => {
+    const actor = requireActor(c);
+    const orgId = c.req.param("orgId");
+    if (!actorIsOrgAdmin(actor, orgId)) {
+      return c.json({ error: "org_admin_required" }, 403);
+    }
+    return handleProjectArchive(c, options.pool, orgId, c.req.param("projectId"));
+  });
+
+  app.post("/:orgId/projects/:projectId/unarchive", async (c) => {
+    const actor = requireActor(c);
+    const orgId = c.req.param("orgId");
+    if (!actorIsOrgAdmin(actor, orgId)) {
+      return c.json({ error: "org_admin_required" }, 403);
+    }
+    return handleProjectUnarchive(c, options.pool, orgId, c.req.param("projectId"));
+  });
+
   return app;
 }
 
@@ -239,6 +262,8 @@ function toProjectContract(row: RepoProjectRow) {
     runnerImage: row.runnerImage,
     allocator: row.allocator,
     config: migrateProjectConfig(row.config),
+    // Expose the operator lifecycle so list + read consumers see paused projects.
+    lifecycle: row.lifecycle,
   };
 }
 

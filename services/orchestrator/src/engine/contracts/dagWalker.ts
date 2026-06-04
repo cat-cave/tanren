@@ -68,6 +68,13 @@ export interface DagSpecNode {
 export interface DagSnapshot {
   projectId: string;
   nodes: DagSpecNode[];
+  /**
+   * Operator lifecycle: `true` once the project has been archived through the
+   * dedicated archive surface. An archived project is dormant — the walker
+   * enqueues nothing and the strand reconciler re-enqueues nothing — so its DAG
+   * never advances until it is unarchived. Defaults to `false`.
+   */
+  archived: boolean;
 }
 
 // ---- Tick plan (the pure scheduling decision) -----------------------------
@@ -88,7 +95,11 @@ export type DagTickStatus =
   // NOTHING this tick. Decided in the walker (it needs the live spend sum), never
   // in the pure planner — the pure planners only ever produce
   // enqueued/drained/concurrency_saturated; the walker overrides to budget_paused.
-  | "budget_paused";
+  | "budget_paused"
+  // The project is ARCHIVED (operator lifecycle): the walker short-circuits before
+  // planning and enqueues nothing. Decided in the walker (the pure planner never
+  // sees an archived project — the walk returns before planning).
+  | "archived";
 
 /** The deterministic plan a tick produces from a snapshot + a ceiling. */
 export interface DagTickPlan {

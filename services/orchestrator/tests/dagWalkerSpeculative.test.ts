@@ -41,9 +41,12 @@ function node(specId: string, phase: DagSpecNode["phase"], dependsOn: string[], 
 }
 
 class FixedReadModel implements DagReadModel {
-  constructor(private readonly nodes: DagSpecNode[]) {}
+  constructor(
+    private readonly nodes: DagSpecNode[],
+    private readonly archived = false,
+  ) {}
   async loadSnapshot(projectId: string): Promise<DagSnapshot> {
-    return { projectId, nodes: this.nodes.map((n) => ({ ...n })) };
+    return { projectId, nodes: this.nodes.map((n) => ({ ...n })), archived: this.archived };
   }
 }
 
@@ -151,6 +154,7 @@ function makeWalker(opts: {
   depthCap?: number;
   ceiling?: number;
   integrator?: SpeculativeIntegrator;
+  archived?: boolean;
 }): {
   walker: EventEmittingDagWalker;
   enqueuer: RecordingEnqueuer;
@@ -161,7 +165,7 @@ function makeWalker(opts: {
   const emitter = new RecordingEmitter();
   const integrator = opts.integrator ?? new FakeIntegrator("ok");
   const walker = new EventEmittingDagWalker({
-    readModel: new FixedReadModel(opts.nodes),
+    readModel: new FixedReadModel(opts.nodes, opts.archived ?? false),
     lifecycleReadModel: new FixedLifecycle(opts.lifecycle),
     enqueuer,
     events: emitter,
@@ -324,6 +328,25 @@ describe("DagWalker speculative execution (§2c)", () => {
     expect((integrator as FakeIntegrator).calls).toEqual([]);
     // It emitted dag.spec.enqueued (the ready-spec outcome), never dag.drained.
     expect(emitter.enqueued).toEqual(["schema"]);
+    expect(emitter.drained).toEqual([]);
+  });
+
+  it("an ARCHIVED project enqueues nothing — the walk short-circuits before planning", async () => {
+    // A ready spec that WOULD enqueue on an active project; archived ⇒ dormant.
+    const { walker, enqueuer, emitter } = makeWalker({
+      nodes: [node("spec_ready", "pending", [], 0)],
+      lifecycle: { spec_ready: "pending" },
+      threshold: "moderate",
+      archived: true,
+    });
+    const result = await walker.walk(PROJECT);
+
+    expect(result.status).toBe("archived");
+    expect(result.enqueuedSpecIds).toEqual([]);
+    expect(result.enqueuedRunIds).toEqual([]);
+    // No enqueue, no event — fully dormant.
+    expect(enqueuer.records).toEqual([]);
+    expect(emitter.enqueued).toEqual([]);
     expect(emitter.drained).toEqual([]);
   });
 });

@@ -25,7 +25,7 @@ import type {
   StrandReason,
 } from "../contracts/specStrandReconciler.js";
 import { classifySpecStatus } from "./walkerPg.js";
-import { decodePercolationPending, resolveProjectOrg } from "./percolationWrites.js";
+import { decodePercolationPending, resolveProjectOrg, resolveProjectOrgLifecycle } from "./percolationWrites.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import { applyReconcileStrandedSpec } from "../worker/runStateLifecycleSql.js";
 import { type EventStore, PgEventStore } from "../eventStore.js";
@@ -57,8 +57,10 @@ export class PgSpecStrandReadModel implements SpecStrandReadModel {
   constructor(private readonly pool: pg.Pool) {}
 
   async loadStrandCandidates(projectId: string): Promise<SpecStrandSnapshot[]> {
-    const orgId = await resolveProjectOrg(this.pool, projectId);
-    if (orgId === null) return [];
+    const { orgId, archived } = await resolveProjectOrgLifecycle(this.pool, projectId);
+    // No resolvable org ⇒ nothing to reconcile. Archived ⇒ dormant: never re-enqueue
+    // an archived project's stranded specs (it stays paused until unarchived).
+    if (orgId === null || archived) return [];
     return runWithOrgScope(this.pool, orgId, async (client) => {
       const specRows = await client.query<StrandSpecRow>("SELECT spec_id, status FROM specs WHERE project_id = $1", [
         projectId,

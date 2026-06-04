@@ -27,6 +27,25 @@ export async function resolveProjectOrg(pool: pg.Pool, projectId: string): Promi
   });
 }
 
+/**
+ * Resolve a project's org AND its operator lifecycle in one system-scoped read.
+ * `archived` is true once the project has been archived through the archive
+ * surface — the strand reconciler skips an archived project so it stays dormant.
+ */
+export async function resolveProjectOrgLifecycle(
+  pool: pg.Pool,
+  projectId: string,
+): Promise<{ orgId: string | null; archived: boolean }> {
+  return runWithSystemScope(pool, async (client) => {
+    const result = await client.query<{ org_id: string | null; lifecycle: string }>(
+      "SELECT org_id, lifecycle FROM projects WHERE project_id = $1",
+      [projectId],
+    );
+    const row = result.rows[0];
+    return { orgId: row?.org_id ?? null, archived: row?.lifecycle === "archived" };
+  });
+}
+
 async function orgScopedWrite(
   pool: pg.Pool,
   projectId: string,

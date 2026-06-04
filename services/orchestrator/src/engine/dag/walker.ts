@@ -111,6 +111,14 @@ export class EventEmittingDagWalker implements DagWalker {
       this.deps.budgetGate.resolveBudget(projectId),
     ]);
 
+    // Operator lifecycle gate: an ARCHIVED project is dormant. Enqueue nothing this
+    // tick (and every tick) — the in-flight runs were already cancelled at archive
+    // time, and the periodic backstop re-walks reach this same short-circuit, so an
+    // archived project never advances until it is unarchived.
+    if (snapshot.archived) {
+      return { projectId, status: "archived", enqueuedSpecIds: [], enqueuedRunIds: [] };
+    }
+
     // The dollar-budget gate (autonomy-engine.md §3 proof 6 + BUDGET-SAFETY C1b/M5):
     // when the project's cumulative spend has reached the configured ceiling — OR the
     // gate must FAIL CLOSED (unpriced spend / unparseable config) — enqueue NOTHING

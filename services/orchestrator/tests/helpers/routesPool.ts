@@ -33,6 +33,7 @@ interface ProjectRow {
   runner_image: string;
   allocator: string;
   config: unknown;
+  lifecycle: string;
   org_id: string | null;
 }
 
@@ -95,10 +96,16 @@ export class RoutesPool {
       // Bare versioned config by default (see seedOrg): unversioned rows now
       // fail hard.
       config: input.config ?? { version: 1 },
+      lifecycle: input.lifecycle ?? "active",
       org_id: input.org_id,
     };
     this.projects.set(row.project_id, row);
     return row;
+  }
+
+  /** Seed a run row (only the fields the lifecycle-cascade test reads). */
+  seedRun(input: { run_id: string; project_id: string; status: string }): void {
+    this.runs.push({ run_id: input.run_id, project_id: input.project_id, status: input.status });
   }
 
   seedSpec(input: Partial<SpecRow> & { spec_id: string; project_id: string }): SpecRow {
@@ -220,6 +227,26 @@ export class RoutesPool {
       if (project === undefined) return { rows: [], rowCount: 0 };
       project.repo_url = String(params[0]);
       return { rows: [{ project_id: project.project_id }], rowCount: 1 };
+    }
+    // The lifecycle archive/unarchive flip ($1 = target, $2 = project id).
+    if (trimmed.startsWith("UPDATE projects SET lifecycle")) {
+      const project = this.projects.get(String(params[1]));
+      if (project === undefined) return { rows: [], rowCount: 0 };
+      project.lifecycle = String(params[0]);
+      return { rows: [{ project_id: project.project_id }], rowCount: 1 };
+    }
+    // The archive cascade: cancel a project's in-flight (queued|running) runs
+    // ($1 = project id). Flips matching rows to `cancelled` and returns their ids.
+    if (trimmed.startsWith("UPDATE runs SET status = 'cancelled'")) {
+      const projectId = String(params[0]);
+      const cancelled = this.runs.filter(
+        (r) => r["project_id"] === projectId && ["queued", "running"].includes(String(r["status"])),
+      );
+      for (const run of cancelled) {
+        run["status"] = "cancelled";
+        run["outcome"] = "cancelled";
+      }
+      return { rows: cancelled.map((r) => ({ run_id: r["run_id"] })), rowCount: cancelled.length };
     }
     if (trimmed.startsWith("INSERT INTO project_members")) {
       this.projectMembers.set(`${String(params[0])}:${String(params[1])}`, {

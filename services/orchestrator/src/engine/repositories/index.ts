@@ -5,7 +5,7 @@ export { EventStore, type EventCursor, type RawEventRow } from "./events.js";
 export { CostStore, type CostCursor } from "./costs.js";
 export { JobRow, JobStore } from "./jobs.js";
 export { ActorStore, TaskActorRow } from "./actors.js";
-export { ProjectRow, ProjectStore } from "./projects.js";
+export { ProjectRow, ProjectStore, type ProjectLifecycle } from "./projects.js";
 export { ProjectSpecStore, type ProjectSpecRow, type SpecPatch } from "./projectSpecs.js";
 // Integration-provisioning foundation (P-INT-0 + P-APP-ENV-0): the org-level
 // integration registry (Plane A) + the built product's app-environment store
