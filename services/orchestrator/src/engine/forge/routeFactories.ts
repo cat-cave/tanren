@@ -7,6 +7,7 @@
 // testable in providerFactory.ts.
 
 import {
+  buildForgeAuditAnswererFactory,
   buildForgeConversationAnswererFactory,
   buildForgeDiscoveryAnswererFactory,
   buildForgeInterviewAnswererFactory,
@@ -19,23 +20,47 @@ import type { InterviewAnswerer } from "./interview/index.js";
 import type { DiscoveryAnswerer } from "./discovery/index.js";
 import type { TriageAnswerer } from "./inbox/index.js";
 import type { ReconAnswerer } from "./brownfield/index.js";
+import { createAnswererPassRunner, type AuditAnswerer, type AuditPassRunner } from "./audits/index.js";
 import type { ForgeConversationAnswerer } from "./conversation/index.js";
+import type { GitHubHttpClient } from "../providers/github.js";
+import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 
 export interface ForgeRouteAnswererFactories {
   interview: (target: ForgeAnswererTarget) => InterviewAnswerer;
   discovery: (target: ForgeAnswererTarget) => DiscoveryAnswerer;
   triage: (target: ForgeAnswererTarget) => TriageAnswerer;
   recon: (target: ForgeAnswererTarget) => ReconAnswerer;
+  audit: (target: ForgeAnswererTarget) => AuditAnswerer;
   conversation: (target: ForgeAnswererTarget) => ForgeConversationAnswerer;
+  /**
+   * Build the REAL scheduled-audit pass runner (the audit route's production
+   * runner: it indexes the project's repo READ-ONLY and has the audit answerer
+   * surface findings). Takes the repo-read GitHub infra (the answerer infra alone
+   * has no GitHub client). Colocated here so the route mount adds NO new import.
+   */
+  auditPassRunnerFor: (github: {
+    githubHttp: GitHubHttpClient;
+    githubAppMinter?: GithubAppTokenMinter;
+  }) => AuditPassRunner;
 }
 
 /** Build every per-surface Forge answerer factory from the shared infra. */
 export function buildForgeRouteAnswererFactories(infra: ForgeAnswererInfra): ForgeRouteAnswererFactories {
+  const audit = buildForgeAuditAnswererFactory(infra);
   return {
     interview: buildForgeInterviewAnswererFactory(infra),
     discovery: buildForgeDiscoveryAnswererFactory(infra),
     triage: buildForgeTriageAnswererFactory(infra),
     recon: buildForgeReconAnswererFactory(infra),
+    audit,
     conversation: buildForgeConversationAnswererFactory(infra),
+    auditPassRunnerFor: (github) =>
+      createAnswererPassRunner({
+        pool: infra.pool,
+        secrets: infra.secrets,
+        githubHttp: github.githubHttp,
+        ...(github.githubAppMinter === undefined ? {} : { githubAppMinter: github.githubAppMinter }),
+        answererFactory: audit,
+      }),
   };
 }

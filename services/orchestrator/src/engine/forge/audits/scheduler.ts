@@ -18,6 +18,7 @@
 
 import type pg from "pg";
 import { InboxStore } from "../inbox/store.js";
+import { autoRouteCandidate, type AutoRouteDeps } from "../inbox/engine.js";
 import type { Candidate, InboxSource, TriageAnswerer } from "../inbox/types.js";
 import { AuditsStore } from "./store.js";
 import {
@@ -41,6 +42,14 @@ export interface AuditSchedulerDeps {
   // deterministic verdict (§8a). A job with no findings never consults it, so it
   // is optional on the deps (a clean/no-op pass needs no model).
   answerer?: TriageAnswerer;
+  // Autonomous DAG insert (autonomy-engine.md §1d): when wired, an `auto_routed`
+  // finding carrying a `routableSpec` is COMMITTED INTO THE DAG (no operator) so
+  // the DagWalker executes "Tanren proactively found + is fixing a problem".
+  // Mirrors the inbox poller's `autoRoute`. Plane-split: it carries the
+  // control-plane `runStateWriter` so the spec write routes through the control
+  // plane in the data-plane worker. Absent ⇒ the finding rests `auto_routed` in
+  // the inbox (the manual-review default).
+  autoRoute?: AutoRouteDeps;
   // Test/clock seam.
   now?: () => Date;
 }
@@ -130,21 +139,28 @@ export async function runAuditJob(deps: AuditSchedulerDeps, job: AuditJob): Prom
       });
       // System source ⇒ auto_routable ⇒ candidate rests `auto_routed`.
       const status = triage.verdict === "auto_routable" ? "auto_routed" : "triaged";
-      candidates.push(
-        await InboxStore.upsertCandidate(
-          deps.pool,
-          source,
-          {
-            externalId: `${job.id}:${finding.externalId}`,
-            title: finding.title,
-            body: finding.body,
-            severity: finding.severity,
-            projectId: job.projectId,
-          },
-          triage,
-          status,
-        ),
+      let candidate = await InboxStore.upsertCandidate(
+        deps.pool,
+        source,
+        {
+          externalId: `${job.id}:${finding.externalId}`,
+          title: finding.title,
+          body: finding.body,
+          severity: finding.severity,
+          projectId: job.projectId,
+        },
+        triage,
+        status,
       );
+      // Autonomous DAG insert: when the loop is autonomous and the triage produced
+      // a routable spec, COMMIT it now (no operator) so the audit finding becomes a
+      // real spec the DagWalker executes — idempotent on (source_id, external_id),
+      // so re-running the audit re-resolves the same candidate without a new spec.
+      // Mirrors `ingestSource` (inbox/engine.ts) exactly.
+      if (deps.autoRoute !== undefined && status === "auto_routed" && triage.routableSpec !== null) {
+        candidate = (await autoRouteCandidate(deps, candidate, triage.routableSpec, deps.autoRoute)).candidate;
+      }
+      candidates.push(candidate);
     }
   }
 

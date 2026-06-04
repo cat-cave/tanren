@@ -5,13 +5,13 @@
 //   POST /:orgId/audits/:jobId/enable         enable the job
 //   POST /:orgId/audits/:jobId/disable        pause the job
 //   POST /:orgId/audits/:jobId/run            run the read-only pass now →
-//                                             findings auto-route to the inbox
+//                                             findings auto-route into the DAG
 //
-// The pass runner is injectable (`passRunner`) and defaults to the safe no-op
-// runner, so the endpoint is live without SSH/provider infra. Mounted on the
-// shared `/orgs` base. Findings emitted by a run land in the candidate inbox
-// (P3-0022) via the scheduler's system-source auto-route — this route never
-// forks the inbox.
+// The pass runner is REQUIRED (the production default is the real Answerer-backed
+// pass over the project's repo; tests inject a fake). Mounted on the shared
+// `/orgs` base. A run executes the read-only pass; each finding is triaged and —
+// when auto-routable — COMMITTED INTO THE DAG as a spec (no operator), the same
+// hand-off the autonomous loop runs. This route never forks the inbox.
 
 import { Hono } from "hono";
 import type pg from "pg";
@@ -21,28 +21,29 @@ import {
   AuditCadence,
   AuditKind,
   AuditsStore,
-  createNoopPassRunner,
   recommendCoverage,
   runAuditJob,
   type AuditPassRunner,
   type AuditSchedulerDeps,
 } from "../../engine/forge/audits/index.js";
 import type { TriageAnswerer } from "../../engine/forge/inbox/index.js";
+import { intakeAutoRouteDeps } from "../../engine/forge/intake/index.js";
 import type { ForgeAnswererTarget } from "../../engine/forge/providerFactory.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg } from "../orgs/index.js";
 
 export interface AuditRoutesOptions {
   pool: pg.Pool;
-  // Injectable read-only pass executor (SSH/Answerer-backed in prod; a fake in
-  // tests). Defaults to the safe no-op runner (a clean pass that records no
-  // findings — the §8a "absence is the honest behavior" case).
-  passRunner?: AuditPassRunner;
+  // The read-only pass executor — REQUIRED. Production injects the real
+  // Answerer-backed runner (`createAnswererPassRunner`, which indexes the
+  // project's repo READ-ONLY and has the audit answerer surface findings); tests
+  // inject a fake. There is NO no-op default (§8a — a clean pass must be the
+  // answerer's honest verdict, never a silent stub).
+  passRunner: AuditPassRunner;
   // The triage answerer factory, called per-run with the job's org/project so an
   // emitted finding is triaged by a REAL provider answerer
   // (`buildForgeTriageAnswererFactory`); tests pass a fake. REQUIRED — there is
-  // no deterministic fallback. The default no-op pass yields no findings, so the
-  // answerer is consulted only once a real pass runner surfaces one.
+  // no deterministic fallback.
   answererFactory: (target: ForgeAnswererTarget) => TriageAnswerer;
 }
 
@@ -60,11 +61,7 @@ const CreateJobBody = z
 
 export function createAuditRoutes(options: AuditRoutesOptions) {
   const app = new Hono<ActorContextEnv>();
-  // arch-allow: pending P3 audit-pass-runner — createNoopPassRunner is the TEMPORARY
-  // default until the SSH/Answerer-backed read-only pass runner is built and wired as
-  // the production default. When that lands, drop this fallback (make passRunner required)
-  // and the allowlist entry tightens. P8a §8a.
-  const passRunner = options.passRunner ?? createNoopPassRunner();
+  const passRunner = options.passRunner;
 
   app.get("/:orgId/audits", async (c) => {
     const orgId = c.req.param("orgId");
@@ -97,6 +94,14 @@ export function createAuditRoutes(options: AuditRoutesOptions) {
         orgId,
         ...(job.projectId === null ? {} : { projectId: job.projectId }),
       }),
+      // Auto-route an auto-routable finding's spec into the DAG (no operator) —
+      // the SAME hand-off the autonomous loop runs. A finding→spec is the
+      // autonomous intake path (not the operator's personal write), so it commits
+      // under the SAME org-scoped system actor the loop/poller use
+      // (`intakeAutoRouteDeps`), RLS-scoped to the request's org. The route's
+      // org-scoped pool enforces RLS; no separate control-plane writer is needed
+      // (that split lives in the worker).
+      autoRoute: intakeAutoRouteDeps(),
     };
     try {
       const result = await runAuditJob(schedulerDeps, job);

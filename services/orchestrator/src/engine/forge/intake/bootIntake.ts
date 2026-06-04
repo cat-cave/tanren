@@ -11,8 +11,8 @@ import type { SecretStore } from "../../contracts/secretStore.js";
 import type { SshSubstrate } from "../../contracts/sshSubstrate.js";
 import type { GitHubHttpClient } from "../../providers/github.js";
 import type { GithubAppTokenMinter } from "../../providers/githubAppTokenMinter.js";
-import { buildForgeTriageAnswererFactory } from "../providerFactory.js";
-import { AuditSchedulerLoop, createNoopPassRunner } from "../audits/index.js";
+import { buildForgeAuditAnswererFactory, buildForgeTriageAnswererFactory } from "../providerFactory.js";
+import { AuditSchedulerLoop, createAnswererPassRunner } from "../audits/index.js";
 import { IntakePoller } from "./poller.js";
 import { intakeAutoRouteDeps } from "./systemActor.js";
 
@@ -22,8 +22,8 @@ export interface BootIntakeDeps {
   allocator: Allocator;
   ssh: SshSubstrate;
   githubHttp: GitHubHttpClient;
-  // App-only intake (creds-audit fix): the shared App-token minter, threaded to the
-  // poller so its per-org GitHub issues connector mints an installation token.
+  // The shared App-token minter: the poller's per-org GitHub issues connector mints an
+  // installation token (App-only intake), and the audit pass runner resolves a repo-read token.
   githubAppMinter?: GithubAppTokenMinter;
   identitySecretRef: string;
   /**
@@ -49,13 +49,14 @@ export interface BootedIntake {
  * result into the DAG. Returns the handles so the worker boot's `stop()` drains them.
  */
 export function startIntake(deps: BootIntakeDeps): BootedIntake {
-  const triageFactory = buildForgeTriageAnswererFactory({
+  const forgeInfra = {
     pool: deps.pool,
     secrets: deps.secrets,
     allocator: deps.allocator,
     ssh: deps.ssh,
     identitySecretRef: deps.identitySecretRef,
-  });
+  };
+  const triageFactory = buildForgeTriageAnswererFactory(forgeInfra);
   const autoRoute = intakeAutoRouteDeps(deps.runStateWriter);
 
   const poller = new IntakePoller({
@@ -73,10 +74,20 @@ export function startIntake(deps: BootIntakeDeps): BootedIntake {
 
   const auditScheduler = new AuditSchedulerLoop({
     pool: deps.pool,
-    // No-op pass runner until an SSH-backed pass is wired (§8a: a clean pass is
-    // honest absence). An emitted finding triages through the real answerer.
-    passRunner: createNoopPassRunner(),
+    // The REAL read-only pass runner: it resolves the project's repo, indexes it
+    // READ-ONLY, and has the audit answerer surface findings (§8a — no silent
+    // empty pass; a repo-less job or a missing credential is a LOUD failure).
+    passRunner: createAnswererPassRunner({
+      pool: deps.pool,
+      secrets: deps.secrets,
+      githubHttp: deps.githubHttp,
+      ...(deps.githubAppMinter === undefined ? {} : { githubAppMinter: deps.githubAppMinter }),
+      answererFactory: buildForgeAuditAnswererFactory(forgeInfra),
+    }),
+    // An emitted finding triages through the real provider answerer.
     answererFactory: triageFactory,
+    // Auto-route a finding's spec into the DAG (the autonomous loop).
+    autoRoute,
   });
   auditScheduler.start();
 

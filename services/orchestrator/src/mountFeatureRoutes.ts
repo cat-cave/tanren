@@ -265,11 +265,18 @@ export function mountFeatureRoutes(app: Hono<ActorContextEnv>, deps: FeatureRout
     }),
   );
   // P3-0021: scheduled audits — recurring read-only Answerer passes (the audit
-  // job library). A run executes a read-only pass and emits findings into the
-  // candidate inbox as a system (auto-routing) source; the pass runner defaults
-  // to a safe no-op (no findings) until an SSH-backed runner is wired, and an
-  // emitted finding is triaged by the real provider triage answerer.
-  app.route("/orgs", createAuditRoutes({ pool: scopedPool, answererFactory: forgeAnswerers.triage }));
+  // job library). A run executes the REAL read-only pass (the audit answerer
+  // indexes the project's repo READ-ONLY and surfaces findings); each finding is
+  // triaged by the real provider answerer and, when auto-routable, COMMITTED INTO
+  // THE DAG as a spec (no operator) — the same hand-off the autonomous loop runs.
+  app.route(
+    "/orgs",
+    createAuditRoutes({
+      pool: scopedPool,
+      passRunner: forgeAnswerers.auditPassRunnerFor({ githubHttp, githubAppMinter }),
+      answererFactory: forgeAnswerers.triage,
+    }),
+  );
   // DORA delivery metrics + the benchmark experiment/cell report+CRUD surface.
   // The benchmark scheduler runs on the scoped pool; its live accept/await seams
   // carry their own infra (allocator/ssh/identity/notify) when the boot wired it.

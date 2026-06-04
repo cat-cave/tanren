@@ -87,7 +87,10 @@ export function createDeterministicTriageAnswerer(): TriageAnswerer {
     async triage(context: TriageAnswererContext): Promise<CandidateTriage> {
       const { candidate, source } = context;
 
-      // System sources auto-route: their findings are pre-vetted audits.
+      // System sources auto-route: their findings are pre-vetted audits. A
+      // placeable (project-scoped) finding carries a routableSpec so the
+      // auto-route commits a real spec into the DAG (mirrors what the real
+      // provider answerer fills for an auto-routable candidate).
       if (source.autoRoute || source.kind === "system" || source.kind === "scheduled_audit") {
         return CandidateTriageOk({
           dedupe: "no match · audit finding",
@@ -96,7 +99,16 @@ export function createDeterministicTriageAnswerer(): TriageAnswerer {
           verdict: "auto_routable",
           duplicateOfSpecId: null,
           discoveryVariant: variantFor(candidate.severity),
-          routableSpec: null,
+          routableSpec:
+            candidate.projectId === null
+              ? null
+              : {
+                  title: candidate.title,
+                  description: candidate.body || candidate.title,
+                  acceptanceCriteria: [`Resolve the audit finding: ${candidate.title}`],
+                  dependsOn: [],
+                  priority: candidate.severity === "fail" ? "P1" : "P2",
+                },
         });
       }
 
