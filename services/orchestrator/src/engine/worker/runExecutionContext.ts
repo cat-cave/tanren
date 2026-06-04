@@ -10,8 +10,9 @@
 import { z } from "zod";
 import type pg from "pg";
 import { migrateProjectConfig, type ProjectConfigV1 } from "../config/index.js";
-import { installationFromOrgConfig } from "../config/orgConfig.js";
+import { creditRatesFromOrgConfig, installationFromOrgConfig } from "../config/orgConfig.js";
 import type { RoutingTable } from "../config/shared.js";
+import { resolveCreditUsdRate } from "../costs/index.js";
 import type { ResolvedRunCredentials } from "../credentials/resolveCredentials.js";
 import { resolveCredentialsForRun } from "../credentials/resolveCredentials.js";
 import type { PlannerRunContext } from "../workflow/plannerRun.js";
@@ -151,6 +152,17 @@ export async function loadRunExecutionContext(
     orgId: decoded.org_id ?? "",
   });
 
+  // cost PR-C: resolve the run's CONFIGURED per-credential credit→USD rate, keyed on
+  // the resolved Codex credential's ref-KIND, project-`creditRates` over
+  // org-`defaultCreditRates`. A null resolution (no rate configured for this kind) is
+  // threaded as an ABSENT context field, so a real credit drawdown lands
+  // NULL-and-loud rather than at a removed magic constant.
+  const creditRate = resolveCreditUsdRate({
+    authRef: resolved.codexCredentialRef,
+    projectRates: projectConfig.creditRates,
+    orgRates: creditRatesFromOrgConfig(decoded.org_config),
+  });
+
   const context: PlannerRunContext = {
     runId: decoded.run_id,
     specId: decoded.spec_id,
@@ -193,6 +205,9 @@ export async function loadRunExecutionContext(
     // the frozen, lockfile-safe default so an existing committed lockfile is never
     // silently mutated. Legacy rows parse to `false` (brownfield) — main's behavior.
     greenfield: projectConfig.greenfield,
+    // cost PR-C: the CONFIGURED per-credential credit→USD rate (absent ⇒ no rate
+    // configured for this credential's kind; a real drawdown then lands NULL-and-loud).
+    ...(creditRate.usdPerCredit !== null && { creditUsdRate: creditRate.usdPerCredit }),
   };
 
   return { context, projectConfig, orgId: decoded.org_id };

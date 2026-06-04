@@ -69,15 +69,13 @@ export const CostBasis = z.enum([
 ]);
 export type CostBasis = z.infer<typeof CostBasis>;
 
-// Dollar value of one prepaid Codex/ChatGPT credit. Observed on the live Pro
-// account: 1000 credits for $40 (and $10 for 250) → $0.04/credit (pre-tax list
-// rate). Credit drawdown is the REAL marginal spend for subscription-overage
-// usage (within-window usage draws no credits), so it is recorded as a first-
-// class cost (cost_basis='credits'). This is a real-drawdown rate, NOT a token
-// price table. It is account/plan-specific and should become per-credential
-// config when more providers are wired.
-export const DEFAULT_CREDIT_USD_RATE = 0.04;
-
+// The dollar value of one prepaid credit is account/plan-specific (the old
+// `DEFAULT_CREDIT_USD_RATE = 0.04` was a single Codex-Pro observation: 1000
+// credits for $40). It is no longer a magic constant — it is per-credential
+// CONFIG (`config/shared.ts` `CreditRates`, resolved by `creditRate.ts`), so the
+// credit-drawdown → USD reconcile multiplies a real drawdown by a CONFIGURED
+// rate. A credential that drew down credits with no configured rate is a LOUD
+// unknown (NULL real spend + `cost.credit_rate_unknown`), never a silent guess.
 export const RawUsage = z.record(z.string(), z.unknown());
 export type RawUsage = z.infer<typeof RawUsage>;
 
@@ -166,11 +164,21 @@ export function classifyAuthRef(authRef: string): RefClassification {
     // unpriceable (subscription-equivalent NULL dollars), never a misconfig.
     return { billingMode: "absent", provider: "unknown" };
   }
-  // Codex/Claude CLI ChatGPT-subscription bundles live under credential/codex/.
+  // The Codex CLI ChatGPT-subscription bundle lives under credential/codex/.
   // These are subscription-window dollars, never per-token.
   if (authRef.startsWith("credential/codex/")) {
     return { billingMode: "subscription", provider: "openai" };
   }
+  // The Claude CLI subscription bundle (`credential/claude/`, the OAuth/API-key
+  // auth bundle — see claudeAuth.ts) is an Anthropic SUBSCRIPTION: within-window
+  // usage is flat-fee ($0 real / notional-only), and "extra usage" overage bills
+  // at API rates. It is subscription billing, NOT per-token. Its real overage
+  // figure is NOT reachable from the local CLI path (see costs/claudeOverage.ts).
+  if (authRef.startsWith("credential/claude/")) {
+    return { billingMode: "subscription", provider: "anthropic" };
+  }
+  // `credential/anthropic/` is a raw token-billed Anthropic API KEY (BYOK), not
+  // the subscription bundle above — per-token.
   if (authRef.startsWith("credential/anthropic/")) {
     return { billingMode: "per_token", provider: "anthropic" };
   }
@@ -201,6 +209,25 @@ export function refKindOf(ref: string): string {
     return parts[0] ?? "unknown";
   }
   return parts.slice(0, -1).join("/");
+}
+
+// The PROVIDER-SLUG segment of a credential ref, SAFE to surface in an event: the
+// `credential/<slug>` prefix (e.g. `credential/codex/org/o1/default` →
+// `credential/codex`). This is the per-PROVIDER kind (one slug per provider), the
+// stable key the per-credential credit rate config (`CreditRates`) is keyed on — so
+// ONE configured rate covers every credential of that provider regardless of its
+// scope/name. An empty ref → `unknown`. Never the secret value.
+export function credentialSlugOf(ref: string): string {
+  const parts = ref.split("/").filter((part) => part !== "");
+  if (parts.length === 0) {
+    return "unknown";
+  }
+  if (parts[0] === "credential" && parts.length >= 2) {
+    return `credential/${parts[1]}`;
+  }
+  // A non-`credential/` ref (or a bare single segment) has no provider slug; fall
+  // back to its leading kind segments so the key is still secret-free + stable.
+  return refKindOf(ref);
 }
 
 // A positive, finite number or null. Real-spend facts are only believed when

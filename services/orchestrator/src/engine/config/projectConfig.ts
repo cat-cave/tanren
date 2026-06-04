@@ -11,6 +11,7 @@ import {
   PartialAllocatorConfig,
   PartialEscapeHatches,
   PartialForgePersona,
+  CreditRates,
   ProjectBudget,
   ReviewPolicy,
   RoutingTable,
@@ -160,6 +161,17 @@ export const ProjectConfigV1 = z
     // legacy rows carry no key and parse to an ABSENT field = NO ceiling = unlimited
     // (today's behavior, byte-identical), and `.strict()` round-trips it on save.
     budget: ProjectBudget.optional(),
+    // PER-CREDENTIAL CREDIT/OVERAGE USD RATE (cost PR-C): the dollar value of one
+    // prepaid credit, keyed by credential ref-KIND (see `CreditRates`). The
+    // run-end reconcile multiplies a positive credit-drawdown delta by THIS rate
+    // to land subscription-overage real spend (`cost_basis='credits'`) — it is
+    // per-credential CONFIG, never the old hardcoded $0.04 constant. Resolution is
+    // project-over-org (this map wins over the org `defaultCreditRates`). A
+    // credential that drew down credits with NO configured rate is a LOUD unknown
+    // (NULL real spend + `cost.credit_rate_unknown`), never a silent guess.
+    // Optional + additive: legacy rows carry no key and parse to an EMPTY map (no
+    // migration), and `.strict()` round-trips it on save.
+    creditRates: CreditRates.default({}),
     // GREENFIELD MARKER: whether this project was created greenfield — Tanren
     // authors the repo's toolchain LIVE across writer iterations (no pre-existing
     // committed lockfile / installed deps). It drives the in-loop deps-ensure

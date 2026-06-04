@@ -27,7 +27,9 @@ import {
   AllocatorFailedPayload,
   AllocatorRequestedPayload,
   CostCeilingUnreachablePayload,
+  CostCreditRateUnknownPayload,
   CostFailedPayload,
+  CostOverageUnobservablePayload,
   CostResolvedPayload,
   CostUnattributablePayload,
   CostUnattributedPayload,
@@ -215,6 +217,11 @@ export const EventRegistry = {
   "cost.unattributable": CostUnattributablePayload,
   "cost.unattributed": CostUnattributedPayload,
   "cost.ceiling_unreachable": CostCeilingUnreachablePayload,
+  // cost PR-C: a real credit drawdown with no configured per-credential rate
+  // (NULL real spend, loud) + a subscription whose overage is not locally
+  // observable (Claude; NULL real spend, loud honest gap).
+  "cost.credit_rate_unknown": CostCreditRateUnknownPayload,
+  "cost.overage_unobservable": CostOverageUnobservablePayload,
 
   // Usage monitoring (P2A-cost-monitors): codexbar live subscription windows
   // + ccusage token-consumption accounting, captured runner-side over SSH.
