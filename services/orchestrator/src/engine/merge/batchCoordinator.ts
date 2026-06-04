@@ -10,10 +10,11 @@
 // BatchChecker reuses the P2c-1 SpeculativeIntegrator + the VcsProvider CI seam),
 // emitting merge.batch.checking; (4) on PASS → drive the batch's real merges in DAG
 // order via the P2d-1 path (one at a time — serialization holds), emitting
-// merge.batch.passed; (5) on FAIL/CONFLICT → BISECT to isolate the single offending PR,
-// DEQUEUE it recoverably (routed to re-execution, NOT dropped), emit
-// merge.batch.bisecting + merge.batch.culprit, and RE-FORM + RE-CHECK without it so the
-// innocent PRs still merge.
+// merge.batch.passed; (5) on FAIL / SPEC-vs-SPEC CONFLICT → BISECT to isolate the single
+// offending PR, DEQUEUE it recoverably (routed to re-execution, NOT dropped), and RE-FORM
+// + RE-CHECK without it so the innocent PRs still merge. A BASE conflict (a single PR dirty
+// against `default_branch`, `conflictsWithBase`) is NOT bisected — it is driven through the
+// per-run intent-preserving resolver (the same path that resolves a dirty PR).
 //
 // INVARIANTS (mirroring the spec): a batch whose check fails NEVER merges to
 // default_branch (only a passing prospective state's entries are driven); ordering
@@ -42,7 +43,7 @@ import { isRetriableInfraError } from "../providers/githubRefReset.js";
 import { setTimeout as sleepFor } from "node:timers/promises";
 import type { MergeQueueEventEmitter } from "./coordinator.js";
 import type { SpecEscalator } from "./coordinatorEscalate.js";
-import { settleDriveOutcome } from "./batchCoordinatorSettle.js";
+import { driveBaseConflict, settleDriveOutcome } from "./batchCoordinatorSettle.js";
 import { BatchInfraHoldCeiling, holdOnInfra } from "./batchInfraHoldCeiling.js";
 
 /**
@@ -261,11 +262,8 @@ export class BatchMergeCoordinator implements MergeCoordinator {
       if (verdict.result === "pass") {
         // Real progress (a runnable verdict) — clear any infra-hold streak.
         this.infraHolds.reset(projectId);
-        await this.deps.batchEvents.emitPassed({
-          projectId,
-          batch: current.batch,
-          integrationBranch: verdict.integrationBranch,
-        });
+        const { integrationBranch } = verdict;
+        await this.deps.batchEvents.emitPassed({ projectId, batch: current.batch, integrationBranch });
         return this.mergeBatch(projectId, current.batch, queueDepth);
       }
 
@@ -278,17 +276,24 @@ export class BatchMergeCoordinator implements MergeCoordinator {
         // EXACTLY at the settle expiry when known (`settleAfterMs`), else the default
         // recheck interval. A pending hold is NOT an infra error — clear the streak.
         this.infraHolds.reset(projectId);
-        return {
-          projectId,
-          holdReason: "all_blocked",
-          retryAfterMs: verdict.settleAfterMs ?? PENDING_RECHECK_MS,
-          queueDepth,
-        };
+        const retryAfterMs = verdict.settleAfterMs ?? PENDING_RECHECK_MS;
+        return { projectId, holdReason: "all_blocked", retryAfterMs, queueDepth };
       }
 
-      // FAIL/CONFLICT → bisect to isolate the single offending PR. A runnable fail/
-      // conflict verdict is real progress (the check RAN) — clear any infra-hold streak.
+      // A runnable fail/conflict verdict is real progress (the check RAN) — clear any
+      // infra-hold streak.
       this.infraHolds.reset(projectId);
+
+      // BASE-CONFLICT SHORT-CIRCUIT: a `conflict` against the BASE branch (a single PR
+      // dirty vs `default_branch`, not a batch interaction) is DRIVEN through the per-run
+      // resolver, never bisected — bisect+dequeue would brick it forever (nothing
+      // re-admits a conflict-dequeued entry). See `driveBaseConflict`. A spec-vs-spec
+      // conflict (`conflictsWithBase` false) keeps the bisect-and-dequeue path below.
+      if (verdict.result === "conflict" && verdict.conflictsWithBase) {
+        return driveBaseConflict(this.deps, projectId, current.batch, verdict, queueDepth);
+      }
+
+      // FAIL / SPEC-vs-SPEC CONFLICT → bisect to isolate the single offending PR.
       const failMessage = verdict.result === "conflict" ? `integration conflict: ${verdict.message}` : verdict.message;
       await this.deps.batchEvents.emitBisecting({ projectId, batch: current.batch, message: failMessage });
 
@@ -306,27 +311,22 @@ export class BatchMergeCoordinator implements MergeCoordinator {
         return this.infraHold(projectId, current.batch, bisect.message, queueDepth);
       }
 
-      // Dequeue the culprit to a RECOVERABLE outcome (conflict reason ⇒ routed to the
-      // P2b re-execution path by the dequeue handler — the run loop re-enqueues it once
-      // it re-gates clean). It is NEVER dropped/merged.
+      // Dequeue the culprit to a RECOVERABLE outcome (conflict reason ⇒ routed to the P2b
+      // re-execution path — the run loop re-enqueues it once it re-gates clean; NEVER dropped).
       await this.deps.queue.markDequeued(bisect.culprit.queueId, "conflict");
+      const dequeueMessage = `bisected as the offending PR in a failed batch check: ${failMessage}`;
       await this.deps.events.emitDequeued({
         projectId,
         entry: bisect.culprit,
         reason: "conflict",
-        message: `bisected as the offending PR in a failed batch check: ${failMessage}`,
+        message: dequeueMessage,
       });
-      await this.deps.batchEvents.emitCulprit({
-        projectId,
-        culprit: bisect.culprit,
-        checks: bisect.checks,
-        message: failMessage,
-      });
+      const { culprit, checks } = bisect;
+      await this.deps.batchEvents.emitCulprit({ projectId, culprit, checks, message: failMessage });
       excludedSpecIds.add(bisect.culprit.specId);
 
-      // RE-FORM the batch WITHOUT the culprit (reload the snapshot so the dequeued
-      // culprit is gone + a newly-eligible entry can join + the cap re-applies), then
-      // re-check the innocent remainder on the next loop iteration.
+      // RE-FORM the batch WITHOUT the culprit (reload the snapshot so the dequeued culprit
+      // is gone + a newly-eligible entry can join + the cap re-applies), then re-check next loop.
       const refreshed = await this.deps.queue.loadSnapshot(projectId);
       const reformed = formBatch(refreshed, maxBatchSize);
       reformed.batch = reformed.batch.filter((e) => !excludedSpecIds.has(e.specId));
