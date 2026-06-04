@@ -11,7 +11,7 @@
 
 import { describe, expect, it } from "vitest";
 import { GitHubVcsProvider } from "../src/engine/providers/githubVcsProvider.js";
-import { RefResetTransientError } from "../src/engine/providers/githubRefReset.js";
+import { RefResetPermanentError, RefResetTransientError } from "../src/engine/providers/githubRefReset.js";
 import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "../src/engine/providers/github.js";
 import type { BuildIntegrationBranchInput, ResolvedVcsToken } from "../src/engine/contracts/vcsProvider.js";
 
@@ -133,5 +133,73 @@ describe("GitHubVcsProvider.resetRef — race-safe + 422 classification (Bug 1)"
     );
     // The whole create→force-PATCH retried (bounded) — three PATCH attempts.
     expect(http.calls.filter((c) => c.method === "PATCH").length).toBe(3);
+  });
+});
+
+// GAP #2 (merge hardening): `refSha` + `mergeBranchInto` must throw the TYPED
+// RefResetPermanentError (retriable: false) on a PERMANENT status (a 404 deleted/renamed
+// ancestor branch, a 403) — NOT an untyped Error that the merge coordinator's
+// `isRetriableInfraError` defaults to retriable → the 3s infra re-drive loop forever. A
+// transient 5xx stays the RETRIABLE typed error. The 409-on-/merges conflict path is
+// untouched (a conflict is NOT an infra error).
+describe("GitHubVcsProvider — typed PERMANENT vs TRANSIENT on refSha / mergeBranchInto (GAP #2)", () => {
+  function buildInputWithAncestor() {
+    return { ...buildInput(), ancestors: [{ specId: "spec_anc", branch: "feat-anc" }] };
+  }
+
+  it("refSha 404 (base branch gone) → RefResetPermanentError (not retriable, holds-loud-once)", async () => {
+    const http = new ScriptedHttp().on("GET", "/git/ref/heads/main", {
+      status: 404,
+      body: { message: "Not Found" },
+    });
+    await expect(makeProvider(http).buildIntegrationBranch(buildInput())).rejects.toBeInstanceOf(
+      RefResetPermanentError,
+    );
+    // It read the ref ONCE — no infinite re-read (the permanent status is terminal here).
+    expect(http.calls.filter((c) => c.method === "GET").length).toBe(1);
+  });
+
+  it("refSha 5xx (504) on the base read → RefResetTransientError (a genuine gateway blip)", async () => {
+    const http = new ScriptedHttp().on("GET", "/git/ref/heads/main", {
+      status: 504,
+      body: { message: "Gateway Timeout" },
+    });
+    await expect(makeProvider(http).buildIntegrationBranch(buildInput())).rejects.toBeInstanceOf(
+      RefResetTransientError,
+    );
+  });
+
+  it("refSha 404 on an ANCESTOR branch (deleted/renamed mid-batch) → RefResetPermanentError", async () => {
+    const http = new ScriptedHttp()
+      .on("GET", "/git/ref/heads/main", { status: 200, body: { object: { sha: BASE_SHA } } })
+      .on("POST", "/git/refs", { status: 201, body: { ref: "refs/heads/tanren/batch/spec_x" } })
+      // The ancestor branch ref read 404s — it was deleted/renamed after the batch formed.
+      .on("GET", "/git/ref/heads/feat-anc", { status: 404, body: { message: "Not Found" } });
+    await expect(makeProvider(http).buildIntegrationBranch(buildInputWithAncestor())).rejects.toBeInstanceOf(
+      RefResetPermanentError,
+    );
+  });
+
+  it("mergeBranchInto 404 (head/base gone) → RefResetPermanentError; 409 stays a conflict (unchanged)", async () => {
+    const okBase = new ScriptedHttp()
+      .on("GET", "/git/ref/heads/main", { status: 200, body: { object: { sha: BASE_SHA } } })
+      .on("POST", "/git/refs", { status: 201, body: { ref: "refs/heads/tanren/batch/spec_x" } })
+      .on("GET", "/git/ref/heads/feat-anc", { status: 200, body: { object: { sha: "ancSha" } } });
+
+    // A 404 from POST /merges (the head branch vanished) → typed PERMANENT, never retriable.
+    const http404 = new ScriptedHttp()
+      .on("GET", "/git/ref/heads/main", { status: 200, body: { object: { sha: BASE_SHA } } })
+      .on("POST", "/git/refs", { status: 201, body: { ref: "refs/heads/tanren/batch/spec_x" } })
+      .on("GET", "/git/ref/heads/feat-anc", { status: 200, body: { object: { sha: "ancSha" } } })
+      .on("POST", "/merges", { status: 404, body: { message: "Not Found" } });
+    await expect(makeProvider(http404).buildIntegrationBranch(buildInputWithAncestor())).rejects.toBeInstanceOf(
+      RefResetPermanentError,
+    );
+
+    // The 409 conflict path is UNCHANGED: a genuine conflict resolves to outcome
+    // `conflict` (NOT an infra error, NOT a throw).
+    const http409 = okBase.on("POST", "/merges", { status: 409, body: { message: "Merge conflict" } });
+    const result = await makeProvider(http409).buildIntegrationBranch(buildInputWithAncestor());
+    expect(result.outcome).toBe("conflict");
   });
 });

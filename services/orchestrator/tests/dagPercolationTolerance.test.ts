@@ -8,7 +8,7 @@
 // Every OTHER error still propagates loudly (no silent fallback). Driven through
 // in-memory seams (test fixtures — they live here, never in src/).
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   type AncestorChangeSignal,
   type PercolationDecision,
@@ -111,18 +111,80 @@ describe("PercolatingCoordinator — kick-off tolerance (terminal-between-load-a
     expect(kickOff.calls).toEqual(["spec_b", "spec_c"]);
   });
 
-  it("a NON-SpecNotRunnable error from the kick-off STILL propagates (no silent fallback)", async () => {
-    const coord = new PercolatingCoordinator({
-      readModel: new FixedReadModel([dependent("spec_b")], {
-        spec_b: [signal({ ancestorSpecId: "spec_a", currentSha: "sha-new", openFindingMaxSeverity: "P0" })],
-      }),
-      kickOff: new KickOff(() => {
-        throw new Error("unexpected fault");
-      }),
-      settler: new NoopSettler(),
-      events: new NoopEmitter(),
-    });
+  it("a NON-SpecNotRunnable kick-off throw is RECORDED-AND-CONTINUED — the OTHER dependents still percolate (GAP #4)", async () => {
+    // spec_b's kick-off throws a transient (non-terminal) fault; spec_c is healthy. The
+    // pass must NOT abort: it records spec_b in `failed` (logged loudly — not swallowed)
+    // and STILL re-executes spec_c. One dependent's failure can never starve the others.
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const kickOff = new KickOff((dep, decision) => {
+        if (dep.specId === "spec_b") throw new Error("transient VcsProvider fault");
+        return { result: "reexecuting", ancestorSpecId: decision.ancestorSpecId, reexecRunId: "run_re" };
+      });
+      const coord = new PercolatingCoordinator({
+        readModel: new FixedReadModel([dependent("spec_b"), dependent("spec_c")], {
+          spec_b: [signal({ ancestorSpecId: "spec_a", currentSha: "sha-new", openFindingMaxSeverity: "P0" })],
+          spec_c: [signal({ ancestorSpecId: "spec_a", currentSha: "sha-new", openFindingMaxSeverity: "P0" })],
+        }),
+        kickOff,
+        settler: new NoopSettler(),
+        events: new NoopEmitter(),
+      });
 
-    await expect(coord.percolate(PROJECT)).rejects.toThrow("unexpected fault");
+      const result = await coord.percolate(PROJECT);
+
+      // spec_b recorded as failed (NOT skipped — it was not the benign terminal case),
+      // spec_c STILL re-executed (the throw did not abort the pass).
+      expect(result.failed).toEqual(["spec_b"]);
+      expect(result.reexecuting).toEqual(["spec_c"]);
+      expect(result.skipped).toEqual([]);
+      expect(kickOff.calls).toEqual(["spec_b", "spec_c"]);
+      // LOUD, not silent: the per-dependent failure was logged (no silent swallow).
+      expect(errSpy).toHaveBeenCalled();
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
+  it("a throw in the SETTLE phase (PHASE 1) is also record-and-continued (GAP #4)", async () => {
+    // spec_b has a pending marker (PHASE 1 settle) and its settler.absorb throws; spec_c
+    // is a healthy detect. The settle-phase throw must NOT abort — spec_c still percolates.
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const pendingDep: SpeculativeDependent = {
+        ...dependent("spec_b"),
+        lifecycleState: "audited",
+        openFindingMaxSeverity: "none",
+        pending: { ancestorSpecId: "spec_a", toSha: "sha-new", reexecRunId: "run_re_b" },
+      };
+      const throwingSettler: PercolationSettler = {
+        async absorb() {
+          throw new Error("transient DB fault writing the absorbed sha");
+        },
+        async replan() {},
+      };
+      const kickOff = new KickOff((_, decision) => ({
+        result: "reexecuting",
+        ancestorSpecId: decision.ancestorSpecId,
+        reexecRunId: "run_re",
+      }));
+      const coord = new PercolatingCoordinator({
+        readModel: new FixedReadModel([pendingDep, dependent("spec_c")], {
+          spec_c: [signal({ ancestorSpecId: "spec_a", currentSha: "sha-new", openFindingMaxSeverity: "P0" })],
+        }),
+        kickOff,
+        settler: throwingSettler,
+        events: new NoopEmitter(),
+      });
+
+      const result = await coord.percolate(PROJECT);
+
+      expect(result.failed).toEqual(["spec_b"]);
+      expect(result.reexecuting).toEqual(["spec_c"]);
+      expect(kickOff.calls).toEqual(["spec_c"]);
+      expect(errSpy).toHaveBeenCalled();
+    } finally {
+      errSpy.mockRestore();
+    }
   });
 });

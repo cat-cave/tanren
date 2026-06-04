@@ -115,6 +115,8 @@ export class PgBatchMergeEventEmitter implements BatchMergeEventEmitter {
     batch: ReadonlyArray<MergeQueueEntry>;
     message: string;
     attempts: number;
+    terminal?: boolean;
+    consecutiveHolds?: number;
   }): Promise<void> {
     const head = input.batch[0];
     await this.withScopedStore(input.projectId, (store) =>
@@ -127,6 +129,10 @@ export class PgBatchMergeEventEmitter implements BatchMergeEventEmitter {
           members: membersOf(input.batch),
           message: input.message,
           attempts: input.attempts,
+          // GAP #1 (runaway guard): mark the TERMINAL cross-pass ceiling escalation so
+          // the timeline distinguishes the loud STOP from the recoverable in-pass hold.
+          ...(input.terminal === true && { terminal: true }),
+          ...(input.consecutiveHolds !== undefined && { consecutiveHolds: input.consecutiveHolds }),
         },
       }),
     );

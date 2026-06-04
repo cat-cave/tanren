@@ -14,7 +14,7 @@
 
 import { setTimeout as sleepFor } from "node:timers/promises";
 import { resolveGithubToken } from "../credentials/githubTokenResolver.js";
-import { resetRef } from "./githubRefReset.js";
+import { RefResetPermanentError, refReadStatusError, resetRef } from "./githubRefReset.js";
 import { invokeTokenIdentity, resolveGithubActorIdentity } from "./githubActorIdentity.js";
 import { setRepoActionsSecret } from "./actionsSecretSeal.js";
 import { createGitHubRepository } from "./githubRepoCreate.js";
@@ -372,11 +372,15 @@ export class GitHubVcsProvider implements VcsProvider {
       refreshToken: token.refresh,
     });
     if (response.status !== 200 || typeof response.body !== "object" || response.body === null) {
-      throw new Error(`GitHub ref read failed for ${branch}: HTTP ${response.status}`);
+      // TYPED (see refReadStatusError): a 404 (deleted/renamed ancestor branch) / 403 is
+      // PERMANENT — an untyped Error defaulted retriable → re-drove the 3s infra loop
+      // forever on a missing branch; a transient 5xx stays retriable.
+      throw refReadStatusError("ref read", branch, response.status);
     }
     const object = (response.body as { object?: { sha?: unknown } }).object;
     if (object === undefined || typeof object.sha !== "string") {
-      throw new Error(`GitHub ref read for ${branch} returned no sha`);
+      // A 200 with no sha is a malformed/permanent response, not a transient blip.
+      throw new RefResetPermanentError(`GitHub ref read for ${branch} returned no sha`);
     }
     return object.sha;
   }
@@ -431,7 +435,12 @@ export class GitHubVcsProvider implements VcsProvider {
     if (response.status === 409) {
       return "conflict";
     }
-    throw new Error(`GitHub speculative merge of ${headBranch} into ${base} failed: HTTP ${response.status}`);
+    // TYPED (see refSha): a 404 (the head/base branch was deleted/renamed mid-batch) or
+    // a 403 is PERMANENT — without the typed error the untyped throw defaulted retriable
+    // and re-drove the 3s infra loop forever on a missing branch. A transient 5xx stays
+    // retriable so a genuine gateway blip still self-heals. The 409-conflict path above
+    // is unchanged (a genuine conflict is NOT an infra error).
+    throw refReadStatusError("speculative merge", `${headBranch} into ${base}`, response.status);
   }
 
   async retargetPullRequestBase(pr: PullRequestRef, newBase: string, token: ResolvedVcsToken): Promise<void> {

@@ -252,8 +252,8 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["attempts", "public"],
     ["message", "public"],
   ]),
-  // P2d-2 (§2d) speculative batch-check + bisect — batch composition + cap stats +
-  // the integration ref + bisect prose, all public (queue/batch visibility).
+  // P2d-2 (§2d) speculative batch-check + bisect — batch composition + cap/ceiling stats
+  // + the integration ref + bisect prose, all public (queue/batch visibility).
   ...rulesFor("merge.batch.checking", [
     ["integration", "public"],
     ["members[].specId", "public"],
@@ -288,6 +288,8 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["members[].prNumber", "public"],
     ["message", "public"],
     ["attempts", "public"],
+    ["terminal", "public"],
+    ["consecutiveHolds", "public"],
   ]),
   ...rulesFor("merge.failed", [
     ["prUrl", "public"],

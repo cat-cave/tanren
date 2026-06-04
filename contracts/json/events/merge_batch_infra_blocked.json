@@ -7,6 +7,11 @@
       "minimum": 0,
       "type": "integer"
     },
+    "consecutiveHolds": {
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+    },
     "integration": {
       "enum": [
         "native_queue",
@@ -38,6 +43,9 @@
     },
     "message": {
       "type": "string"
+    },
+    "terminal": {
+      "type": "boolean"
     }
   },
   "required": [

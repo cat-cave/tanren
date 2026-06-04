@@ -48,6 +48,14 @@ export interface ReviewMergeRunContext {
    * identity set agrees with the login the runner's commits actually carry.
    */
   tanrenLogins: ReadonlyArray<string>;
+  /**
+   * MERGE-HARDENING (GAP #3): the configurable PLATFORM / KNOWN-AUTOMATION committer
+   * login set, ADDITIVE to the built-in `web-flow`. On an AUTONOMOUS tier (reviewPolicy
+   * `auto`/`simulated` + `native_queue`) a posture BLOCK whose external committers are
+   * ALL in this set is AUTO-APPROVED rather than stranding a done-run spec into a
+   * 3×-churn→park. NOT Tanren's own identity; on the `human` tier these still block.
+   */
+  platformLogins: ReadonlyArray<string>;
   /** App installation, when the org has installed the App (preferred token). */
   installation?: OrgGithubAppInstallation;
   /** Static GitHub credential ref (fallback when no App is installed). */
@@ -128,6 +136,7 @@ export async function loadReviewMergeRunContext(
     governancePosture: projectConfig.governancePosture,
     reviewPolicy: projectConfig.reviewPolicy,
     tanrenLogins: tanrenLoginsFor(projectConfig.governanceTanrenLogins),
+    platformLogins: projectConfig.governancePlatformLogins ?? [],
     installation,
     ...(staticCredentialRef !== undefined && { staticCredentialRef }),
   };
