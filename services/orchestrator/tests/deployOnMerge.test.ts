@@ -13,6 +13,7 @@ import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
 import type { EventStore, AppendEventInput } from "../src/engine/eventStore.js";
 import type { EventName } from "../src/engine/events/index.js";
 import { scriptedDeployTransport, type ScriptedDeployTransport } from "./conformance/fakes/scriptedDeployTransport.js";
+import { scriptedUrlProbe, instantVerifyPollPolicy } from "./conformance/fakes/scriptedUrlProbe.js";
 
 const RUN_ID = "run_dep";
 const PROJECT_ID = "project_dep";
@@ -93,6 +94,11 @@ async function run(state: PoolState, transport: ScriptedDeployTransport, events:
     secrets: secrets(),
     transport,
     eventStore: events,
+    // Inject the scripted smoke probe + instant poll so the post-trigger `verify`
+    // runs over the scripted transport (no live network / no real timers). The
+    // scripted transport reports READY by default, so verify polls once + smokes 200.
+    urlProbe: scriptedUrlProbe(),
+    verifyPoll: instantVerifyPollPolicy(),
   });
   await watcher.check(RUN_ID);
 }
@@ -142,6 +148,41 @@ describe("DeployOnMergeWatcher (a deploy happened)", () => {
     expect(payload["provider"]).toBe("deploy.vercel");
     expect(payload["url"]).toMatch(/^https:\/\//u);
     expect(JSON.stringify(deploy)).not.toContain("re_live_secret");
+
+    // The deploy is PROVEN, not fire-and-forget: verify polled to READY + smoked the
+    // URL, and recorded deploy.verified (provider + url + state + smoke status).
+    const verified = events.appends.find((a) => a.eventType === "deploy.verified");
+    expect(verified).toBeDefined();
+    expect(verified!.ambientOrgId).toBe(ORG_ID);
+    const vPayload = verified!.payload as Record<string, unknown>;
+    expect(vPayload["provider"]).toBe("deploy.vercel");
+    expect(vPayload["state"]).toBe("READY");
+    expect(vPayload["smokeStatus"]).toBe(200);
+    expect(vPayload["url"]).toMatch(/^https:\/\//u);
+    expect(JSON.stringify(verified)).not.toContain("deploy_token");
+  });
+
+  it("fails LOUD when the triggered deploy never becomes READY (verify guard)", async () => {
+    const transport = scriptedDeployTransport("vercel", []);
+    await transport.request({
+      method: "POST",
+      url: "https://api.vercel.com/v9/projects",
+      headers: {},
+      body: { name: "acme-widget" },
+    });
+    const events = new RecordingEventStore();
+    const watcher = new DeployOnMergeWatcher({
+      pool: fakePool({ merged: true, config: VERCEL_TARGET, grant: VERCEL_GRANT }),
+      secrets: secrets(),
+      transport,
+      eventStore: events,
+      urlProbe: scriptedUrlProbe(),
+      verifyPoll: instantVerifyPollPolicy(3),
+    });
+    // The triggered deployment reports ERROR — verify must throw, no deploy.verified.
+    transport.scriptDeploymentStates("vercel_deploy_1", ["ERROR"]);
+    await expect(watcher.check(RUN_ID)).rejects.toThrow(/FAILURE state 'ERROR'/u);
+    expect(events.appends.find((a) => a.eventType === "deploy.verified")).toBeUndefined();
   });
 
   it("is a clean NO-OP for a project with no deploy integration (no error, no deploy)", async () => {

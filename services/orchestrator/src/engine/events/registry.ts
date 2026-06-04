@@ -51,6 +51,7 @@ import {
   AppEnvCiPropagatedPayload,
   AppEnvRuntimeAttachedPayload,
   DeployTriggeredPayload,
+  DeployVerifiedPayload,
   CiFailedPayload,
   CiPassedPayload,
   CiStartedPayload,
@@ -339,6 +340,11 @@ export const EventRegistry = {
   // release onto the project's deploy app (Vercel/Fly). The deploy target + the
   // resolved live URL + the deployment id — all non-secret.
   "deploy.triggered": DeployTriggeredPayload,
+
+  // Deploy VERIFIED ("the deploy is PROVEN live"): the DeployAdapter polled the
+  // provider to a READY terminal + smoke-checked the resolved URL. The proof a
+  // triggered deploy actually became reachable — non-secret (provider + url + state).
+  "deploy.verified": DeployVerifiedPayload,
 
   // Hello / smoke run
   "hello.started": HelloStartedPayload,

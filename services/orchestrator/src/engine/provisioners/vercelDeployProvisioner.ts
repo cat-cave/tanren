@@ -29,6 +29,7 @@ import {
   DeployProvisioner,
   type DeployApp,
   type DeployEnvVar,
+  type DeploymentStatus,
   type DeployProviderApi,
   type DeployProvisionerDeps,
   type DeployResult,
@@ -172,6 +173,35 @@ class VercelDeployApi implements DeployProviderApi {
     // the resolved URL is directly renderable.
     const url = body.url.startsWith("http") ? body.url : `https://${body.url}`;
     return { deploymentId: body.id, url, state: body.readyState ?? body.status ?? "QUEUED" };
+  }
+
+  async getDeployment(
+    grant: OrgGrant,
+    token: string,
+    _app: DeployApp,
+    deploymentId: string,
+  ): Promise<DeploymentStatus> {
+    // GET /v13/deployments/{id} → the deployment's `readyState` (Vercel's lifecycle:
+    // QUEUED → BUILDING → READY, or ERROR / CANCELED on failure). The verify poll
+    // collapses that into the ready/failed terminals it waits on.
+    const response = await this.transport.request({
+      method: "GET",
+      url: scoped(grant, `/v13/deployments/${encodeURIComponent(deploymentId)}`),
+      headers: { authorization: `Bearer ${token}` },
+    });
+    if (!response.ok) {
+      throw new Error(`vercel get deployment '${deploymentId}' failed: ${response.status} ${response.text}`);
+    }
+    const body = (response.json ?? {}) as { url?: string; readyState?: string; status?: string };
+    const state = body.readyState ?? body.status ?? "QUEUED";
+    const host = body.url ?? "";
+    const url = host === "" ? "" : host.startsWith("http") ? host : `https://${host}`;
+    return {
+      state,
+      terminalReady: state === "READY",
+      terminalFailed: state === "ERROR" || state === "CANCELED",
+      url,
+    };
   }
 }
 

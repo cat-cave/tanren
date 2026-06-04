@@ -96,6 +96,25 @@ export interface DeployResult {
 }
 
 /**
+ * The provider-reported live status of a TRIGGERED deployment, read back by polling
+ * (the verify step). `state` is the provider's own string; `terminalReady` /
+ * `terminalFailed` collapse the provider's vocabulary into the two outcomes verify
+ * waits on (Vercel READY/ERROR/CANCELED, Fly started/stopped/failed). `url` is the
+ * resolved live URL the deployment is reachable at (carried through so verify smoke-
+ * checks it). NON-SECRET — a URL + a state string.
+ */
+export interface DeploymentStatus {
+  /** The provider's raw state string (e.g. "BUILDING" | "READY" | "ERROR" | "started"). */
+  state: string;
+  /** The deployment finished and is live (the provider reported a ready/running terminal). */
+  terminalReady: boolean;
+  /** The deployment finished in FAILURE (the provider reported an error/canceled terminal). */
+  terminalFailed: boolean;
+  /** The resolved live URL the deployment is reachable at (concrete, no placeholder). */
+  url: string;
+}
+
+/**
  * The provider-specific HTTP primitives. The base class drives find-or-create,
  * bind, discover, artifact assembly, and runtime env attachment on top of these;
  * a new deploy provider implements only this surface (Vercel / Fly do today).
@@ -123,6 +142,14 @@ export interface DeployProviderApi {
    * no-op): a configured deploy that cannot release is a hard error.
    */
   triggerDeploy(grant: OrgGrant, token: string, app: DeployApp, source: DeploySource): Promise<DeployResult>;
+  /**
+   * Read the live status of a TRIGGERED deployment (the verify poll): Vercel
+   * `GET /v13/deployments/{id}` (`readyState`), Fly `GET /v1/apps/{app}/machines/{id}`
+   * (`state`). Returns the provider's state collapsed into the ready/failed terminals
+   * verify waits on, plus the resolved URL. A provider read FAILURE throws LOUD — a
+   * deployment whose status cannot be read is a hard error, never an assumed-ready.
+   */
+  getDeployment(grant: OrgGrant, token: string, app: DeployApp, deploymentId: string): Promise<DeploymentStatus>;
 }
 
 /**
@@ -197,6 +224,23 @@ export abstract class DeployProvisioner implements IntegrationProvisioner {
       throw new Error(`${this.api.providerKind}: cannot deploy unknown app '${appId}' (not found under the org grant)`);
     }
     return this.api.triggerDeploy(grant, token, app, source);
+  }
+
+  /**
+   * Read the live status of a previously-triggered deployment on `appId` (the verify
+   * poll primitive). Resolves the org token, finds the app under the grant, and hands
+   * it to the provider's {@link DeployProviderApi.getDeployment}. A missing app or a
+   * provider read failure throws LOUD — never an assumed-ready degrade.
+   */
+  async deploymentStatus(grant: OrgGrant, appId: string, deploymentId: string): Promise<DeploymentStatus> {
+    const token = await this.resolveToken(grant);
+    const app = (await this.api.listApps(grant, token)).find((candidate) => candidate.appId === appId);
+    if (app === undefined) {
+      throw new Error(
+        `${this.api.providerKind}: cannot read deployment status for unknown app '${appId}' (not found under the org grant)`,
+      );
+    }
+    return this.api.getDeployment(grant, token, app, deploymentId);
   }
 
   async discover(grant: OrgGrant): Promise<ExistingResource[]> {

@@ -498,6 +498,13 @@
       "when": 1780592790323,
       "tag": "0070_complete_kat_farrell",
       "breakpoints": true
+    },
+    {
+      "idx": 71,
+      "version": "7",
+      "when": 1780604658812,
+      "tag": "0071_worried_skreet",
+      "breakpoints": true
     }
   ]
 }
