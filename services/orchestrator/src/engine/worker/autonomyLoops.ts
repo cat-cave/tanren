@@ -125,10 +125,16 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
     notifyListener: mergeNotifyListener,
     secrets: deps.secrets,
     vcsProvider: deps.vcsProvider,
+    // The drive-path conflict resolver provisions a short-lived runner + workspace to
+    // run the REAL intent-preserving resolver (the blind-re-exec stub is gone). The
+    // allocator/ssh/identity are the SAME the intake + run executor use.
+    allocator: deps.allocator,
+    ssh: deps.ssh,
+    identitySecretRef: deps.identitySecretRef,
     ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
     // Plane-split: the coordinator's merge-stage writes (events/tasks/runs/specs),
-    // its spec-status finalize, and its conflict re-execution route through the
-    // control plane when wired (else direct on deps.pool, byte-identical).
+    // its spec-status finalize, and its conflict resolver's replan write route
+    // through the control plane when wired (else direct on deps.pool, byte-identical).
     ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
   });
   console.log("[run-worker] native merge-queue coordinator subscriber started (autonomy-engine §2d)");

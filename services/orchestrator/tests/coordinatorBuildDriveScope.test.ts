@@ -28,7 +28,9 @@ import { describe, expect, it } from "vitest";
 import type pg from "pg";
 import { getOrgScope } from "@tanren/db";
 import { buildDriveMerge } from "../src/engine/merge/coordinatorBuild.js";
+import { FakeAllocator } from "../src/engine/contracts/allocator.js";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
+import { FakeSshSubstrate } from "../src/engine/contracts/sshSubstrate.js";
 import { InMemoryVcsProvider } from "./conformance/fakes/inMemoryVcsProvider.js";
 
 const RUN_ID = "run_drive";
@@ -171,6 +173,12 @@ function driveDeps(pool: pg.Pool) {
     pool,
     secrets: new FakeSecretStore(),
     vcsProvider: new InMemoryVcsProvider(),
+    // The drive-path conflict resolver's deps. This test exercises the
+    // external_reviewer HAND-OFF (no conflict), so the resolver hook is never
+    // invoked — fakes satisfy the now-required deps without being driven.
+    allocator: new FakeAllocator(),
+    ssh: new FakeSshSubstrate(),
+    identitySecretRef: "secret/runner/identity",
   };
 }
 
