@@ -99,10 +99,15 @@ describe("subtask loop — usage probe wiring", () => {
     expect(names).toContain("usage.accounting.observed");
     expect(names).not.toContain("usage.window.pressure");
 
-    // Real ccusage cost was apportioned across every cost_records row of the run.
-    expect(pool.costUpdates).toHaveLength(pool.costInserts.length);
-    const summed = pool.costUpdates.reduce((sum, update) => sum + Number(update.costUsd), 0);
-    expect(summed).toBeCloseTo(0.6, 5);
+    // The run's cost rows are self-hosted (the fake adapter's ref), so the ccusage
+    // figure is the NOTIONAL token-value of all the run's tokens — apportioned across
+    // EVERY row into notional_cost_usd, summing to the $0.6 total. REAL spend
+    // (cost_usd) stays NULL on the self-hosted rows (ccusage is never real spend for
+    // a non-per_token credential — the apex-v19 fix), so costUpdates is empty.
+    expect(pool.notionalUpdates).toHaveLength(pool.costInserts.length);
+    const summedNotional = pool.notionalUpdates.reduce((sum, update) => sum + Number(update.notionalCostUsd), 0);
+    expect(summedNotional).toBeCloseTo(0.6, 5);
+    expect(pool.costUpdates).toHaveLength(0);
   });
 
   it("escalates window pressure and halts BEFORE dispatching the planner", async () => {

@@ -14,6 +14,7 @@ export const costSensitivityRules: SensitivityRule[] = [
     ["provider", "public"],
     ["model", "public"],
     ["costUsd", "public"],
+    ["notionalCostUsd", "public"],
     ["billingMode", "public"],
     ["costBasis", "public"],
   ]),

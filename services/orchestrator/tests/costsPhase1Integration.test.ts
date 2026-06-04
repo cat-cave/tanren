@@ -91,13 +91,17 @@ describe("phase 1 fixture cost-record persistence", () => {
     expect(result.ci.status).toBe("passed");
     // write, check, audit
     expect(pool.costInserts).toHaveLength(3);
-    // Insert columns: ...billing_mode($14), cost_basis($15) → 0-based 13, 14.
-    const billingModes = pool.costInserts.map((row) => String(row.params[13]));
-    const costBases = pool.costInserts.map((row) => String(row.params[14]));
+    // Insert columns: ...cost_usd($14), notional_cost_usd($15), billing_mode($16),
+    // cost_basis($17) → 0-based 12, 13, 14, 15.
+    const billingModes = pool.costInserts.map((row) => String(row.params[14]));
+    const costBases = pool.costInserts.map((row) => String(row.params[15]));
     expect(billingModes).toEqual(["self_hosted", "self_hosted", "self_hosted"]);
     expect(costBases).toEqual(["unknown", "unknown", "unknown"]);
-    // cost_usd is NULL for self-hosted (best-effort, no fake estimate).
+    // cost_usd is NULL for self-hosted (best-effort, no fake estimate). The fixture's
+    // self-hosted provider ("p2a-0011-test") has no list rate, so notional_cost_usd is
+    // honestly NULL too — null on BOTH axes (no fake estimate).
     expect(pool.costInserts.map((row) => row.params[12])).toEqual([null, null, null]);
+    expect(pool.costInserts.map((row) => row.params[13])).toEqual([null, null, null]);
     const costRecorded = events.events.filter((event) => event.eventType === "cost.resolved");
     expect(costRecorded).toHaveLength(3);
     expect(
@@ -198,10 +202,12 @@ describe("phase 1 fixture cost-record persistence", () => {
     const writerInsert = pool.costInserts[0];
     // cost_usd
     expect(writerInsert?.params[12]).toBeNull();
+    // notional_cost_usd — an unattributed misconfig is unpriced on BOTH axes.
+    expect(writerInsert?.params[13]).toBeNull();
     // billing_mode
-    expect(String(writerInsert?.params[13])).toBe("unattributed");
-    // cost_basis
     expect(String(writerInsert?.params[14])).toBe("unattributed");
+    // cost_basis
+    expect(String(writerInsert?.params[15])).toBe("unattributed");
     // The misconfig is surfaced LOUDLY — a cost.unattributed event naming the ref
     // KIND only (never the secret name "something").
     const unattributed = events.events.find((event) => event.eventType === "cost.unattributed");

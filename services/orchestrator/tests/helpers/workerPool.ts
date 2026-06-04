@@ -55,13 +55,13 @@ export class WorkerPool {
   private readonly projects = new Map<string, ProjectRow>();
   private readonly specs = new Map<string, SpecRow>();
   private readonly runs = new Map<string, RunRow>();
-  private readonly costRows: Array<{ id: string; total_tokens: number }> = [];
+  private readonly costRows: Array<{ id: string; total_tokens: number; billing_mode: string }> = [];
   private nextCostId = 1;
   private ciTask: { taskId: string; attempt: number } | undefined;
 
   /** Seed a cost row so the post-run accrual read (`getRunUsage`) returns usage. */
-  seedCostRow(totalTokens: number): void {
-    this.costRows.push({ id: String(this.nextCostId++), total_tokens: totalTokens });
+  seedCostRow(totalTokens: number, billingMode = "per_token"): void {
+    this.costRows.push({ id: String(this.nextCostId++), total_tokens: totalTokens, billing_mode: billingMode });
   }
 
   async query(sql: string, params: unknown[] = []): Promise<{ rows: unknown[]; rowCount: number }> {
@@ -205,18 +205,23 @@ export class WorkerPool {
       const tokens = this.costRows.reduce((sum, r) => sum + r.total_tokens, 0);
       return single({ runs: tokens, tokens, cost_usd: tokens === 0 ? 0 : 1.5 });
     }
-    // cost_records reconcile path
-    if (trimmed.startsWith("SELECT id, total_tokens FROM cost_records")) {
+    // cost_records reconcile path (now selects billing_mode for the two-axis split).
+    if (trimmed.startsWith("SELECT id, total_tokens, billing_mode FROM cost_records")) {
       return {
-        rows: this.costRows.map((r) => ({ id: r.id, total_tokens: r.total_tokens })),
+        rows: this.costRows.map((r) => ({ id: r.id, total_tokens: r.total_tokens, billing_mode: r.billing_mode })),
         rowCount: this.costRows.length,
       };
     }
-    if (trimmed.startsWith("UPDATE cost_records SET cost_usd")) {
+    if (trimmed.startsWith("UPDATE cost_records SET")) {
       return { rows: [], rowCount: 1 };
     }
     if (trimmed.startsWith("INSERT INTO cost_records")) {
-      this.costRows.push({ id: String(this.nextCostId++), total_tokens: Number(params[11] ?? 0) });
+      // billing_mode is param 15 (1-based $15 → 0-based 14) after notional_cost_usd ($14).
+      this.costRows.push({
+        id: String(this.nextCostId++),
+        total_tokens: Number(params[11] ?? 0),
+        billing_mode: String(params[14] ?? "self_hosted"),
+      });
       return { rows: [], rowCount: 1 };
     }
     if (trimmed.startsWith("INSERT INTO tasks")) {

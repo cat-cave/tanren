@@ -133,8 +133,11 @@ export const CostResolvedPayload = z
     cli: z.string(),
     provider: z.string(),
     model: z.string(),
-    // cost is best-effort: null when no reliable basis exists.
+    // REAL SPEND (FOCUS BilledCost): null when no reliable real-cost basis exists.
     costUsd: z.string().nullable(),
+    // NOTIONAL VALUE (FOCUS ListCost): the tokens' value at provider list rates,
+    // computed for every billing mode whose provider has a rate; null when unpriced.
+    notionalCostUsd: z.string().nullable(),
     billingMode: z.string(),
     costBasis: z.string(),
   })

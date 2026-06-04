@@ -70,6 +70,21 @@ export interface CostSource {
   // and the budget gate fails closed on the resulting NULL-dollar row. `null` for
   // every honest (priced or honestly-unpriceable) source.
   unattributedRefKind: string | null;
+  // NOTIONAL pricing input (FOCUS ListCost): the provider's public LIST rate for
+  // this call's provider, when one is known — set for EVERY classification whose
+  // provider HAS a rate (per_token AND subscription/self_hosted/absent, since e.g.
+  // `credential/codex/` classifies to provider `openai`, which is priced). It is
+  // computed independently of `rate` (which is set only on the provider_pricing
+  // REAL-spend path) so notional value is computed even when real spend is NULL.
+  // `null` when the provider has no list rate (unpriced model / unattributed).
+  notionalRate: ProviderRate | null;
+  // NOTIONAL ccusage figure: the positive ccusage dollar value for THIS call, kept
+  // for the NOTIONAL axis EVEN WHEN it was dropped from real spend (a subscription's
+  // ccusage figure is notional token-value, dropped from `ccusageCostUsd`/cost_usd
+  // but a more-accurate NOTIONAL signal than the static rate). `null` when no
+  // positive ccusage figure is present, OR for an `unattributed` ref (where we
+  // cannot trust the billing model, so we never use its ccusage on EITHER axis).
+  notionalCcusageCostUsd: number | null;
   rawUsage: RawUsage;
 }
 
@@ -187,6 +202,11 @@ export function resolveCostSource(input: AttributionInput): CostSource {
     typeof input.ccusageCostUsd === "number" && Number.isFinite(input.ccusageCostUsd) && input.ccusageCostUsd > 0
       ? input.ccusageCostUsd
       : null;
+  // NOTIONAL list rate: the provider's public rate when one is known, computed for
+  // EVERY billing mode (it is the comparable ListCost figure, independent of whether
+  // real spend exists). `unrecognized` has provider 'unknown' → no rate → null, so
+  // an unattributed misconfig stays unpriced on BOTH axes.
+  const notionalRate = providerRate(classification.provider) ?? null;
   if (classification.billingMode === "per_token") {
     // A real-API (per-token) credential is the ONLY billing mode ccusage may price:
     // ccusage's figure is the REAL billed/computed cost of a metered call. A ccusage
@@ -200,6 +220,10 @@ export function resolveCostSource(input: AttributionInput): CostSource {
         rate: null,
         ccusageCostUsd,
         unattributedRefKind: null,
+        notionalRate,
+        // For a per_token ccusage call real == notional, so the same figure is the
+        // preferred notional value too.
+        notionalCcusageCostUsd: ccusageCostUsd,
         rawUsage: input.rawUsage,
       };
     }
@@ -212,6 +236,10 @@ export function resolveCostSource(input: AttributionInput): CostSource {
       rate,
       ccusageCostUsd: null,
       unattributedRefKind: null,
+      notionalRate,
+      // No positive ccusage on this branch (it was handled above); notional prices
+      // from the list rate.
+      notionalCcusageCostUsd: null,
       rawUsage: input.rawUsage,
     };
   }
@@ -226,6 +254,11 @@ export function resolveCostSource(input: AttributionInput): CostSource {
       rate: null,
       ccusageCostUsd: null,
       unattributedRefKind: classification.refKind,
+      // provider is 'unknown' here → notionalRate is null: an unattributed misconfig
+      // is unpriced on BOTH axes (it never even has a notional list value). We also
+      // never trust its ccusage figure (we cannot know the billing model).
+      notionalRate,
+      notionalCcusageCostUsd: null,
       rawUsage: input.rawUsage,
     };
   }
@@ -243,6 +276,13 @@ export function resolveCostSource(input: AttributionInput): CostSource {
     rate: null,
     ccusageCostUsd: null,
     unattributedRefKind: null,
+    // REAL spend is NULL here (no marginal cost), but the NOTIONAL list value IS
+    // computable: a Codex subscription classifies to provider `openai` (a priced
+    // provider), so `notionalRate` is set and notional dollars are computed for the
+    // call regardless of billing mode. A positive ccusage figure — dropped from
+    // real spend above — is the more-accurate NOTIONAL value, so carry it here.
+    notionalRate,
+    notionalCcusageCostUsd: ccusageCostUsd,
     rawUsage: input.rawUsage,
   };
 }
@@ -257,17 +297,42 @@ export function computeCostUsd(source: CostSource, tokens: TokenUsage): string |
   if (source.costBasis !== "provider_pricing" || source.rate === null) {
     return null;
   }
-  const rate = source.rate;
-  // reasoning tokens are billed at the output rate; cached-input at the cache
-  // rate when known, otherwise treated as uncached input.
+  return formatUsd(priceTokensAtRate(source.rate, tokens));
+}
+
+// computeNotionalUsd returns the NOTIONAL list-rate dollar value (FOCUS ListCost)
+// of a call's tokens for the cost_records.notional_cost_usd column, or null when
+// no provider list rate is known. Unlike computeCostUsd (REAL spend, NULL for
+// subscription/self-hosted), this is computed for EVERY billing mode whose
+// provider has a rate — including subscription/self_hosted, where real spend is
+// $0/NULL — so notional value is the comparable, forecastable figure. A positive
+// ccusage figure (kept on `notionalCcusageCostUsd` even when dropped from real
+// spend) is the more-accurate notional value, so it is preferred; otherwise the
+// list rate prices the same per-bucket arithmetic computeCostUsd uses. NO fake
+// estimate: null when the provider is unpriced (unpriced model / unattributed).
+export function computeNotionalUsd(source: CostSource, tokens: TokenUsage): string | null {
+  if (source.notionalCcusageCostUsd !== null) {
+    return formatUsd(source.notionalCcusageCostUsd);
+  }
+  if (source.notionalRate === null) {
+    return null;
+  }
+  return formatUsd(priceTokensAtRate(source.notionalRate, tokens));
+}
+
+// The shared per-bucket pricing arithmetic for BOTH real-spend (provider_pricing)
+// and notional (list-rate) dollars. reasoning tokens are billed at the output
+// rate; cached-input at the cache rate when known, otherwise treated as uncached
+// input; cache-creation at the input rate.
+function priceTokensAtRate(rate: ProviderRate, tokens: TokenUsage): number {
   const cacheRate = rate.cachedInputCostPerMillion ?? rate.inputCostPerMillion;
-  const dollars =
+  return (
     (tokens.inputTokens * rate.inputCostPerMillion) / 1_000_000 +
     (tokens.cachedInputTokens * cacheRate) / 1_000_000 +
     (tokens.cacheCreationTokens * rate.inputCostPerMillion) / 1_000_000 +
     (tokens.outputTokens * rate.outputCostPerMillion) / 1_000_000 +
-    (tokens.reasoningOutputTokens * rate.outputCostPerMillion) / 1_000_000;
-  return formatUsd(dollars);
+    (tokens.reasoningOutputTokens * rate.outputCostPerMillion) / 1_000_000
+  );
 }
 
 function formatUsd(value: number): string {

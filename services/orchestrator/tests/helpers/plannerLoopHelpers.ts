@@ -31,8 +31,11 @@ export class FakePool {
   readonly costInserts: Array<{ taskId: string; cli: string }> = [];
   // cost_records rows keyed by synthetic id, with the total_tokens needed by
   // reconcileRunCostFromCcusage. costUpdates captures the apportioning UPDATEs.
-  readonly costRows: Array<{ id: string; totalTokens: number }> = [];
+  readonly costRows: Array<{ id: string; totalTokens: number; billingMode: string }> = [];
+  // REAL `cost_usd` writes (per_token ccusage + all credits rows).
   readonly costUpdates: Array<{ id: string; costUsd: string; basis: string | null }> = [];
+  // NOTIONAL `notional_cost_usd` writes (the ccusage all-rows axis).
+  readonly notionalUpdates: Array<{ id: string; notionalCostUsd: string; basis: string | null }> = [];
   private nextCostId = 1;
 
   async query(
@@ -40,18 +43,26 @@ export class FakePool {
     params: ReadonlyArray<unknown> = [],
   ): Promise<{ rows: ReadonlyArray<Record<string, unknown>>; rowCount: number }> {
     const trimmed = sql.trim();
-    if (trimmed.startsWith("SELECT id, total_tokens FROM cost_records")) {
+    if (trimmed.startsWith("SELECT id, total_tokens, billing_mode FROM cost_records")) {
       return {
-        rows: this.costRows.map((row) => ({ id: row.id, total_tokens: row.totalTokens })),
+        rows: this.costRows.map((row) => ({
+          id: row.id,
+          total_tokens: row.totalTokens,
+          billing_mode: row.billingMode,
+        })),
         rowCount: this.costRows.length,
       };
     }
-    if (trimmed.startsWith("UPDATE cost_records SET cost_usd")) {
-      this.costUpdates.push({
-        id: String(params[0]),
-        costUsd: String(params[1]),
-        basis: params[2] === undefined ? null : String(params[2]),
-      });
+    // The two-axis reconcile UPDATEs: anchor on the `SET ` prefix — `notional_cost_usd
+    // = $2` CONTAINS the substring `cost_usd = $2`, so a bare includes() over-matches.
+    if (trimmed.startsWith("UPDATE cost_records SET")) {
+      const basis = params[2] === undefined ? null : String(params[2]);
+      if (trimmed.includes("SET cost_usd = $2")) {
+        this.costUpdates.push({ id: String(params[0]), costUsd: String(params[1]), basis });
+      }
+      if (trimmed.includes("notional_cost_usd = $2")) {
+        this.notionalUpdates.push({ id: String(params[0]), notionalCostUsd: String(params[1]), basis });
+      }
       return { rows: [], rowCount: 1 };
     }
     if (trimmed.startsWith("INSERT INTO tasks")) {
@@ -108,7 +119,13 @@ export class FakePool {
     }
     if (trimmed.startsWith("INSERT INTO cost_records")) {
       this.costInserts.push({ taskId: String(params[0]), cli: String(params[3]) });
-      this.costRows.push({ id: String(this.nextCostId++), totalTokens: Number(params[11] ?? 0) });
+      // total_tokens is param 12 (1-based $12 → 0-based 11); billing_mode is param 15
+      // (the notional_cost_usd column inserted at $14 shifted billing_mode to $15).
+      this.costRows.push({
+        id: String(this.nextCostId++),
+        totalTokens: Number(params[11] ?? 0),
+        billingMode: String(params[14] ?? "self_hosted"),
+      });
       return { rows: [], rowCount: 1 };
     }
     return { rows: [], rowCount: 0 };

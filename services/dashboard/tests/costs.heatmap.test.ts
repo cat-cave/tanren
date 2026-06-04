@@ -23,6 +23,7 @@ function rec(over: Partial<CostRecord>): CostRecord {
     reasoningOutputTokens: 0,
     totalTokens: 1500,
     costUsd: null,
+    notionalCostUsd: null,
     billingMode: "subscription",
     costBasis: "unknown",
     recordedAt: "2026-05-28T12:00:00.000Z",

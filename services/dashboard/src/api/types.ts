@@ -125,8 +125,20 @@ export interface CostRecord {
   outputTokens: number;
   reasoningOutputTokens: number;
   totalTokens: number;
-  /** Fixed-precision dollar string, or null when the basis is `unknown`. */
+  /**
+   * REAL SPEND (FOCUS BilledCost): fixed-precision dollar string, or null for
+   * subscription within-window / self-hosted / unpriced calls. The budget gate
+   * sums THIS column.
+   */
   costUsd: string | null;
+  /**
+   * NOTIONAL VALUE (FOCUS ListCost): the tokens' dollar value at provider list
+   * rates, computed for EVERY call whose provider has a rate (including
+   * subscription/self-hosted, where real spend is null). The comparable,
+   * forecastable figure — never summed by the budget gate. Null only when no
+   * provider rate is known (unpriced model / unattributed credential).
+   */
+  notionalCostUsd: string | null;
   billingMode: BillingMode;
   costBasis: CostBasis;
   recordedAt: string;

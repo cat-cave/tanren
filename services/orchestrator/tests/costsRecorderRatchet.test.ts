@@ -55,10 +55,11 @@ const P = {
   reasoning: 10,
   total: 11,
   costUsd: 12,
-  billingMode: 13,
-  costBasis: 14,
-  sourceRaw: 15,
-  userId: 16,
+  notionalCostUsd: 13,
+  billingMode: 14,
+  costBasis: 15,
+  sourceRaw: 16,
+  userId: 17,
 } as const;
 
 describe("CostRecorder.record — exact persisted column shape", () => {
@@ -146,6 +147,7 @@ describe("CostRecorder.record — exact persisted column shape", () => {
       billingMode: "per_token" as const,
       costBasis: "ccusage" as const,
       costUsd: "9.990000",
+      notionalCostUsd: "9.990000",
       tokens: usage({ totalTokens: 5 }),
       provider: "openai",
     };
@@ -162,17 +164,28 @@ describe("CostRecorder.record — exact persisted column shape", () => {
 });
 
 class ReconcilePool {
+  // Captures REAL `cost_usd` writes (per_token ccusage + all credits rows). Rows with
+  // no explicit billing_mode default to per_token, so the legacy apportionment ratchets
+  // (which read `updates`) read the same per-row cost_usd dollars unchanged.
   readonly updates: Array<{ id: string; costUsd: string; basis: string }> = [];
-  constructor(private readonly rows: Array<{ id: string; total_tokens: number }>) {}
+  constructor(private readonly rows: Array<{ id: string; total_tokens: number; billing_mode?: string }>) {}
   async query(
     sql: string,
     params: ReadonlyArray<unknown> = [],
   ): Promise<{ rows: ReadonlyArray<Record<string, unknown>>; rowCount: number }> {
-    if (sql.startsWith("SELECT id, total_tokens FROM cost_records")) {
-      return { rows: this.rows, rowCount: this.rows.length };
+    if (sql.startsWith("SELECT id, total_tokens, billing_mode FROM cost_records")) {
+      const rows = this.rows.map((row) => ({ ...row, billing_mode: row.billing_mode ?? "per_token" }));
+      return { rows, rowCount: rows.length };
     }
-    if (sql.startsWith("UPDATE cost_records SET cost_usd")) {
+    // Capture only the REAL cost_usd writes (per_token ccusage rows write
+    // `SET cost_usd = $2, notional_cost_usd = $2`; credits rows write
+    // `SET cost_usd = $2`). Anchor on the `SET ` prefix — `notional_cost_usd = $2`
+    // CONTAINS the substring `cost_usd = $2`, so a bare includes() would over-match.
+    if (sql.startsWith("UPDATE cost_records SET") && sql.includes("SET cost_usd = $2")) {
       this.updates.push({ id: String(params[0]), costUsd: String(params[1]), basis: String(params[2]) });
+      return { rows: [], rowCount: 1 };
+    }
+    if (sql.startsWith("UPDATE cost_records SET")) {
       return { rows: [], rowCount: 1 };
     }
     return { rows: [], rowCount: 0 };
