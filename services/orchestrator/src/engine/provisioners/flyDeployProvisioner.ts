@@ -167,7 +167,12 @@ class FlyDeployApi implements DeployProviderApi {
     return { deploymentId: body.id, url: previewUrlPattern(app.name), state: body.state ?? "started" };
   }
 
-  async getDeployment(_grant: OrgGrant, token: string, app: DeployApp, deploymentId: string): Promise<DeploymentStatus> {
+  async getDeployment(
+    _grant: OrgGrant,
+    token: string,
+    app: DeployApp,
+    deploymentId: string,
+  ): Promise<DeploymentStatus> {
     // GET /v1/apps/{app}/machines/{id} → the machine's `state` (Fly's lifecycle:
     // created → starting → started, or stopped / failed / destroyed on failure). The
     // app's stable hostname IS the deployment URL (one host per app). The verify poll

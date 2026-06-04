@@ -243,7 +243,10 @@ function parseStatusRead(
   if (match === null) {
     return undefined;
   }
-  return { deploymentId: decodeURIComponent(match[2] as string), appOrDeploymentRef: decodeURIComponent(match[1] as string) };
+  return {
+    deploymentId: decodeURIComponent(match[2] as string),
+    appOrDeploymentRef: decodeURIComponent(match[1] as string),
+  };
 }
 
 function parseDeploy(

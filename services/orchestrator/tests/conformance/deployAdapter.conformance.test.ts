@@ -100,7 +100,12 @@ describe("DirectApiDeployAdapter — delegation", () => {
 });
 
 describe("DirectApiDeployAdapter — verify (proven deploy)", () => {
-  async function provisionAndDeploy(transport: ScriptedDeployTransport, instance: DirectApiDeployAdapter, grant: OrgGrant, name: string) {
+  async function provisionAndDeploy(
+    transport: ScriptedDeployTransport,
+    instance: DirectApiDeployAdapter,
+    grant: OrgGrant,
+    name: string,
+  ) {
     const artifact = await instance.provisionOrBind(grant, ctx(name), { mode: "provision" });
     const ref: DeployRef = { provider: grant.providerKind, appId: artifact.deployRef!.appId };
     const { deploymentId } = await instance.deploy(grant, ref, { repo: `acme/${name}`, ref: "main" });
@@ -150,7 +155,9 @@ describe("DirectApiDeployAdapter — verify (proven deploy)", () => {
     const { instance } = adapter(transport, 503); // URL answers 503 (not reachable)
     const { ref, deploymentId } = await provisionAndDeploy(transport, instance, vercelGrant, "acme-web");
     transport.scriptDeploymentStates(deploymentId, ["READY"]);
-    await expect(instance.verify(vercelGrant, ref, deploymentId)).rejects.toThrow(/not reachable \(smoke check returned HTTP 503\)/u);
+    await expect(instance.verify(vercelGrant, ref, deploymentId)).rejects.toThrow(
+      /not reachable \(smoke check returned HTTP 503\)/u,
+    );
   });
 
   it("Fly: polls machine state to 'started' then smoke-checks the app URL", async () => {

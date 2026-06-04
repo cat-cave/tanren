@@ -175,7 +175,12 @@ class VercelDeployApi implements DeployProviderApi {
     return { deploymentId: body.id, url, state: body.readyState ?? body.status ?? "QUEUED" };
   }
 
-  async getDeployment(grant: OrgGrant, token: string, _app: DeployApp, deploymentId: string): Promise<DeploymentStatus> {
+  async getDeployment(
+    grant: OrgGrant,
+    token: string,
+    _app: DeployApp,
+    deploymentId: string,
+  ): Promise<DeploymentStatus> {
     // GET /v13/deployments/{id} → the deployment's `readyState` (Vercel's lifecycle:
     // QUEUED → BUILDING → READY, or ERROR / CANCELED on failure). The verify poll
     // collapses that into the ready/failed terminals it waits on.

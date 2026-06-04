@@ -28,9 +28,7 @@ import type { DeploySource, DeployResult } from "../provisioners/deployProvision
  * one (`bind`) — the same greenfield/brownfield split the IntegrationProvisioner
  * draws. `bind` carries the provider-side resource id to link.
  */
-export type ProvisionOrBindInput =
-  | { mode: "provision" }
-  | { mode: "bind"; existingResourceId: string };
+export type ProvisionOrBindInput = { mode: "provision" } | { mode: "bind"; existingResourceId: string };
 
 /**
  * The non-secret outcome of `verify`: whether the deployment reached a live, READY
@@ -116,7 +114,11 @@ export interface DeployAdapter {
   /** The adapter class kind this impl speaks for (e.g. "direct_api"). */
   readonly kind: string;
   /** Find-or-create (or bind) the project's deploy app; yields the deploy artifact. */
-  provisionOrBind(grant: OrgGrant, projectCtx: ProjectContext, input: ProvisionOrBindInput): Promise<ProvisionedArtifact>;
+  provisionOrBind(
+    grant: OrgGrant,
+    projectCtx: ProjectContext,
+    input: ProvisionOrBindInput,
+  ): Promise<ProvisionedArtifact>;
   /** Trigger a build + release of `source` onto the app `ref` points at (fire — verify proves it). */
   deploy(grant: OrgGrant, ref: DeployRef, source: DeploySource): Promise<DeployResult>;
   /**
