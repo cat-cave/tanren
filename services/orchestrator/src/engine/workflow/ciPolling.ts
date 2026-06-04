@@ -8,6 +8,8 @@ import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import { validateGithubCredentialRef } from "../credentials/githubToken.js";
 import { routeTaskUpdate } from "./taskWriteRouting.js";
+import { type EvaluateCiObservationOptions, loadActiveQuarantinedCheckNames } from "./ciQuarantine.js";
+import { isFailedCheckRun, isFailedStatus, isPendingCheckRun, isPendingStatus } from "./ciCheckPredicates.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import type { VcsProvider } from "../contracts/vcsProvider.js";
 import { type EventStore, PgEventStore } from "../eventStore.js";
@@ -22,9 +24,8 @@ export type CiObservationReason =
   | "all_checks_passed"
   | "check_failed"
   // Bug-fix (no-CI repo hang): a genuinely-zero-checks observation whose no-checks grace
-  // has elapsed — the run loop PROMOTES it pending→passed (nothing to verify). PURE
-  // `evaluateCiObservation` never produces this; only the `pollCiForRun`/
-  // `settleNoChecksObservation` poll policy does (see there for the safety boundary).
+  // has elapsed — the run loop PROMOTES it pending→passed. PURE `evaluateCiObservation`
+  // never produces this; only the `pollCiForRun`/`settleNoChecksObservation` poll policy does.
   | "no_checks_settled";
 
 export interface CiObservation {
@@ -126,11 +127,14 @@ export async function pollCiForRun(input: PollCiForRunInput): Promise<PollCiForR
   const credentialRef = ledgerRef;
   const pr = input.vcsProvider.parsePullRequest(context.prUrl);
   const checks = await input.vcsProvider.readPullRequestChecks(pr, resolved);
+  // THE GATE READ (CI-intelligence PR2): exclude proven-flaky quarantined checks
+  // from the failure verdict (RLS-admitted READ; a real regression still blocks).
+  const quarantinedCheckNames = await loadActiveQuarantinedCheckNames(input.pool, context.projectId);
   // PURE truth first — `evaluateCiObservation` never settles (no_checks ⇒ pending) —
   // then the no-CI settle POLL POLICY promotes a genuinely-zero-checks observation
   // pending→passed once the grace elapses (see `settleNoChecksObservation` for the
   // anchor + safety boundary; `checks_pending`/`check_failed`/passed are untouched).
-  const rawObservation = evaluateCiObservation(checks);
+  const rawObservation = evaluateCiObservation(checks, { quarantinedCheckNames });
   const observation = settleNoChecksObservation(
     rawObservation,
     task.startedAtMs,
@@ -189,7 +193,11 @@ export async function pollCiForRun(input: PollCiForRunInput): Promise<PollCiForR
   };
 }
 
-export function evaluateCiObservation(checks: GitHubPullRequestChecks): CiObservation {
+export function evaluateCiObservation(
+  checks: GitHubPullRequestChecks,
+  options: EvaluateCiObservationOptions = {},
+): CiObservation {
+  const quarantined = options.quarantinedCheckNames ?? new Set<string>();
   const allFailing = [
     ...checks.checkRuns.filter(isFailedCheckRun).map((check) => ({
       kind: "check_run" as const,
@@ -203,7 +211,7 @@ export function evaluateCiObservation(checks: GitHubPullRequestChecks): CiObserv
       state: status.state,
       url: status.url,
     })),
-  ];
+  ].filter((check) => !quarantined.has(check.name));
   const allPending = [
     ...checks.checkRuns.filter(isPendingCheckRun).map((check) => ({
       kind: "check_run" as const,
@@ -457,24 +465,6 @@ function ciEventPayload(prUrl: string, credentialRef: string, observation: CiObs
     pendingChecks: observation.pendingChecks,
   };
 }
-
-function isFailedCheckRun(check: GitHubCheckRun): boolean {
-  return check.status === "completed" && !successfulCheckConclusions.has(check.conclusion ?? "");
-}
-
-function isPendingCheckRun(check: GitHubCheckRun): boolean {
-  return check.status !== "completed";
-}
-
-function isFailedStatus(status: GitHubCommitStatus): boolean {
-  return status.state === "failure" || status.state === "error";
-}
-
-function isPendingStatus(status: GitHubCommitStatus): boolean {
-  return status.state === "pending";
-}
-
-const successfulCheckConclusions = new Set(["success", "neutral", "skipped"]);
 
 interface CiRunContext {
   runId: string;

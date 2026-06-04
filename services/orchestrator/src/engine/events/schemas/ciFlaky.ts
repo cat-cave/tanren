@@ -18,21 +18,37 @@ import { z } from "zod";
 //   - ci.test.quarantined → that check was recorded on the quarantine surface
 //                           (quarantined_tests). Operator-visible by design.
 
-/** The non-determinism evidence shared by both flaky events. */
+// The non-determinism evidence shared by both flaky events. CI-intelligence PR2
+// adds the per-TEST grain: a quarantine is EITHER check-level (checkName only) or
+// a single flaky TEST (testId set, with its file/suite). Both share the toggle +
+// observation counts; the per-test fields are optional so a check-level event is
+// unchanged.
 const FlakyEvidence = z
   .object({
-    /** The check/test name that toggled outcome (the GitHub check run name). */
+    /** The check/test name that toggled outcome (the GitHub check run name / suite). */
     checkName: z.string().min(1),
     /**
-     * The number of DISTINCT head SHAs on which this check was observed to BOTH
-     * pass and fail (the genuine-non-determinism count). Always ≥ 1 — the
+     * CI-intelligence PR2: the stable test id when this is a PER-TEST quarantine;
+     * absent for a check-level quarantine. The merge gate actuates a per-test row
+     * by this id while keeping the owning check job active.
+     */
+    testId: z.string().min(1).optional(),
+    /** The test's source file, when this is a per-test quarantine and known. */
+    file: z.string().nullable().optional(),
+    /** The test's owning suite, when this is a per-test quarantine and known. */
+    suite: z.string().nullable().optional(),
+    /**
+     * The number of DISTINCT head SHAs on which this check/test was observed to
+     * BOTH pass and fail (the genuine-non-determinism count). Always ≥ 1 — the
      * detector never fires on a single outcome.
      */
     toggledShaCount: z.number().int().positive(),
-    /** Total CI observations of this check across the window (pass + fail). */
+    /** Total CI observations of this check/test across the window (pass + fail). */
     observationCount: z.number().int().positive(),
     /** Passes-on-retry: the check failed then passed on the SAME head SHA. */
-    passedOnRetryCount: z.number().int().nonnegative(),
+    passedOnRetryCount: z.number().int().nonnegative().optional(),
+    /** Per-test intra-run recoveries (a fail-then-pass within one run). */
+    intraRunFlakyCount: z.number().int().nonnegative().optional(),
     /** A sample of the head SHAs that exhibited the toggle (capped, for triage). */
     sampleShas: z.array(z.string()),
   })

@@ -29,6 +29,7 @@ import type { SecretStore } from "../contracts/secretStore.js";
 import type { IntegrationAncestor, VcsProvider } from "../contracts/vcsProvider.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import { evaluateCiObservation } from "../workflow/ciPolling.js";
+import { loadActiveQuarantinedCheckNames } from "../workflow/ciQuarantine.js";
 
 /** The ephemeral batch-integration ref the prospective merged state is built on. */
 export function batchIntegrationBranchName(tailSpecId: string): string {
@@ -94,14 +95,22 @@ export class PgBatchChecker implements BatchChecker {
       throw new Error(`cannot batch-check ${input.projectId}: project has no org`);
     }
 
-    const { project, branches } = await runWithOrgScope(this.deps.pool, orgId, async (client) => {
-      const projectRow = await this.loadProject(client, input.projectId);
-      const branchRows = await this.loadEntryBranches(
-        client,
-        input.entries.map((e) => e.specId),
-      );
-      return { project: projectRow, branches: branchRows };
-    });
+    const { project, branches, quarantinedCheckNames } = await runWithOrgScope(
+      this.deps.pool,
+      orgId,
+      async (client) => {
+        const projectRow = await this.loadProject(client, input.projectId);
+        const branchRows = await this.loadEntryBranches(
+          client,
+          input.entries.map((e) => e.specId),
+        );
+        // THE GATE READ (CI-intelligence PR2): the batch gate inherits the same
+        // quarantine exclusion as the per-run gate — a proven-flaky check is excluded
+        // from the prospective-merged-state verdict (a real failure still blocks).
+        const quarantined = await loadActiveQuarantinedCheckNames(client, input.projectId);
+        return { project: projectRow, branches: branchRows, quarantinedCheckNames: quarantined };
+      },
+    );
 
     // Order the entries' branches in the caller's DAG order — a missing branch is a
     // hard error (we never integrate a phantom). This is the prospective merge order.
@@ -145,7 +154,7 @@ export class PgBatchChecker implements BatchChecker {
 
     // 2. Run the CI/gate against the prospective merged tree (the integration ref).
     const checks = await this.deps.vcsProvider.readBranchChecks({ repo, branch: integrationBranch, token });
-    const observation = evaluateCiObservation(checks);
+    const observation = evaluateCiObservation(checks, { quarantinedCheckNames });
     // `passed`/`failed` are UNCHANGED — the safety boundary: a green prospective state
     // merges, a red/failing check ALWAYS blocks (never settled → merged). Both are
     // definitive non-no_checks verdicts → CLEAR the no-checks clock.

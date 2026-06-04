@@ -31,16 +31,26 @@ export { computePaceAnomaly } from "./paceAnomaly.js";
 export { computeStuck } from "./stuck.js";
 export { computeReviewStall } from "./reviewStall.js";
 
-// P2e-1 Mergify parity (autonomy-engine.md §2d).
+// P2e-1 Mergify parity (autonomy-engine.md §2d) + CI-intelligence PR2.
 export {
   detectAndQuarantineFlaky,
   deriveFlakyTests,
   loadCiObservations,
+  loadCiTestObservations,
   flattenCiObservations,
   type CiCheckObservation,
   type FlakyVerdict,
   type DetectFlakyContext,
 } from "./ciFlaky.js";
+export {
+  deriveFlakyTestsPerTest,
+  deriveTestDurationProfiles,
+  type CiTestObservation,
+  type FlakyTestVerdict,
+  type TestDurationProfile,
+  type DurationProfileOptions,
+} from "./ciFlakyTests.js";
+export { surfaceActiveQuarantines } from "./ciFlakySurface.js";
 export {
   computeCiAnalytics,
   deriveCiAnalytics,

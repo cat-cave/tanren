@@ -1,0 +1,119 @@
+// CI-intelligence PR2 — the worker-loop flaky+duration detector. Before this, the
+// flaky detector ran ONLY as a side effect of the dashboard `GET …/insights`
+// route (the route passed an eventStore so a read triggered the write). That made
+// actuation depend on a human opening a page. This loop drives the SAME
+// `detectAndQuarantineFlaky` pass on a cadence — independent of any GET — so a
+// proven-flaky check/test is quarantined (and the merge gate's quarantine READ
+// excludes it) without an operator trigger.
+//
+// Template: the AuditSchedulerLoop (engine/forge/audits/loop.ts) — a long-lived
+// per-process loop the worker boot starts, cross-org (system-scoped to enumerate),
+// per-project under that project's org scope (so the `quarantined_tests` write +
+// the `ci.flaky.detected`/`ci.test.quarantined` emits are RLS-admitted, exactly as
+// the insights route runs them inside the request's org transaction). Tolerant of a
+// per-project failure: one project erroring never stalls the rest or the next tick.
+
+import type pg from "pg";
+import { runWithOrgScope, runWithSystemScope } from "@tanren/db";
+import { PgEventStore } from "../eventStore.js";
+import { detectAndQuarantineFlaky } from "../insights/ciFlaky.js";
+import type { InsightThresholds } from "../insights/thresholds.js";
+
+export interface CiInsightsLoopDeps {
+  pool: pg.Pool;
+  /** Per-org/project threshold overrides (Phase 3 makes these configurable). */
+  thresholds?: Partial<InsightThresholds>;
+  now?: () => number;
+}
+
+interface ProjectOrgRow {
+  project_id: string;
+  org_id: string;
+}
+
+/**
+ * The recurring CI-insights detector. `start()` ticks on an interval; each tick
+ * runs `detectAndQuarantineFlaky` for every project (under its org scope). The
+ * detector is idempotent (the partial unique index + ON CONFLICT DO NOTHING guard
+ * a re-record; events fire once per episode), so re-running on a cadence is safe.
+ */
+export class CiInsightsLoop {
+  private timer: NodeJS.Timeout | undefined;
+  private stopped = false;
+  private ticking = false;
+  private readonly now: () => number;
+
+  constructor(
+    private readonly deps: CiInsightsLoopDeps,
+    private readonly tickIntervalMs: number = 15 * 60_000,
+  ) {
+    this.now = deps.now ?? (() => Date.now());
+  }
+
+  start(): void {
+    if (this.timer !== undefined) return;
+    void this.tick();
+    this.timer = setInterval(() => void this.tick(), this.tickIntervalMs);
+    this.timer.unref?.();
+  }
+
+  stop(): void {
+    this.stopped = true;
+    if (this.timer !== undefined) {
+      clearInterval(this.timer);
+      this.timer = undefined;
+    }
+  }
+
+  /** Run one detection pass over every project. Returns the project ids processed. */
+  async tick(): Promise<string[]> {
+    if (this.ticking || this.stopped) return [];
+    this.ticking = true;
+    try {
+      let projects: ProjectOrgRow[];
+      try {
+        projects = await this.listProjects();
+      } catch (error) {
+        console.error("[ci-insights] failed to list projects (will retry next tick):", error);
+        return [];
+      }
+      const processed: string[] = [];
+      for (const project of projects) {
+        if (this.stopped) break;
+        try {
+          await this.detectForProject(project);
+          processed.push(project.project_id);
+        } catch (error) {
+          console.error(`[ci-insights] detection failed for project ${project.project_id}:`, error);
+        }
+      }
+      return processed;
+    } finally {
+      this.ticking = false;
+    }
+  }
+
+  private async detectForProject(project: ProjectOrgRow): Promise<void> {
+    const nowDate = new Date(this.now());
+    await runWithOrgScope(this.deps.pool, project.org_id, async (client) => {
+      // The detector reads ci.* events + ci_test_results and writes quarantined_tests
+      // + emits the operator events — all on this ORG-SCOPED client, so every read +
+      // write is RLS-admitted under the project's org (deny-by-default off-scope).
+      await detectAndQuarantineFlaky(client, {
+        projectId: project.project_id,
+        now: nowDate,
+        ...(this.deps.thresholds !== undefined && { thresholds: this.deps.thresholds }),
+        eventStore: new PgEventStore(client),
+      });
+    });
+  }
+
+  private async listProjects(): Promise<ProjectOrgRow[]> {
+    return runWithSystemScope(this.deps.pool, async (client) => {
+      const result = await client.query<ProjectOrgRow>(
+        "SELECT project_id, org_id FROM projects WHERE org_id IS NOT NULL",
+      );
+      return result.rows;
+    });
+  }
+}

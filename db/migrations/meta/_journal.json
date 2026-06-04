@@ -477,6 +477,13 @@
       "when": 1780585710610,
       "tag": "0067_needy_gladiator",
       "breakpoints": true
+    },
+    {
+      "idx": 68,
+      "version": "7",
+      "when": 1780588650042,
+      "tag": "0068_rare_human_cannonball",
+      "breakpoints": true
     }
   ]
 }

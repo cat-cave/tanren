@@ -87,6 +87,11 @@ class FakeClient {
       const ids = (params?.[0] as string[]) ?? [];
       return { rows: ids.map((specId) => ({ spec_id: specId, branch: `tanren/${specId}` })) };
     }
+    // CI-intelligence PR2: the merge-gate quarantine READ. No quarantines seeded
+    // in these settle tests → empty active set (no exclusion).
+    if (text.includes("FROM quarantined_tests") && text.includes("cleared_at IS NULL")) {
+      return { rows: [] };
+    }
     // loadNoChecksSinceMs: SELECT no_checks_since FROM merge_queue WHERE queue_id = $1.
     if (text.includes("SELECT no_checks_since FROM merge_queue")) {
       const queueId = params?.[0] as string;

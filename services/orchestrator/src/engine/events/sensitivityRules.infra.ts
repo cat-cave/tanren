@@ -154,25 +154,8 @@ export const infraSensitivityRules: SensitivityRule[] = [
   ...ciObservationRules("ci.passed"),
   ...ciObservationRules("ci.failed"),
 
-  // P2e-1 flaky detection + quarantine — check name + non-determinism evidence,
-  // all public (the whole point is operator visibility of the quarantine).
-  ...rulesFor("ci.flaky.detected", [
-    ["checkName", "public"],
-    ["toggledShaCount", "public"],
-    ["observationCount", "public"],
-    ["passedOnRetryCount", "public"],
-    ["sampleShas", "public"],
-    ["sampleShas[]", "public"],
-  ]),
-  ...rulesFor("ci.test.quarantined", [
-    ["checkName", "public"],
-    ["toggledShaCount", "public"],
-    ["observationCount", "public"],
-    ["passedOnRetryCount", "public"],
-    ["sampleShas", "public"],
-    ["sampleShas[]", "public"],
-    ["quarantineId", "public"],
-  ]),
+  // P2e-1 flaky detection + quarantine rules live in sensitivityRules.ciIntel.ts
+  // (next to ci.tests.reported) to keep this file under the 500-line cap.
 
   // phase 1 fixture orchestration
   ...rulesFor("phase1.fixture.started", [

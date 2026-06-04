@@ -15,6 +15,35 @@ export const ciIntelSensitivityRules: SensitivityRule[] = [
     ["flaky", "public"],
     ["testExitCode", "public"],
   ]),
+  // P2e-1 + CI-intelligence PR2 flaky detection + quarantine — check/test name +
+  // non-determinism evidence, all `public` (the whole point is operator visibility
+  // of the quarantine). The per-test grain adds testId/file/suite/intraRunFlakyCount;
+  // those are public CI identifiers like the check name — nothing secret rides here.
+  ...rulesFor("ci.flaky.detected", [
+    ["checkName", "public"],
+    ["testId", "public"],
+    ["file", "public"],
+    ["suite", "public"],
+    ["toggledShaCount", "public"],
+    ["observationCount", "public"],
+    ["passedOnRetryCount", "public"],
+    ["intraRunFlakyCount", "public"],
+    ["sampleShas", "public"],
+    ["sampleShas[]", "public"],
+  ]),
+  ...rulesFor("ci.test.quarantined", [
+    ["checkName", "public"],
+    ["testId", "public"],
+    ["file", "public"],
+    ["suite", "public"],
+    ["toggledShaCount", "public"],
+    ["observationCount", "public"],
+    ["passedOnRetryCount", "public"],
+    ["intraRunFlakyCount", "public"],
+    ["sampleShas", "public"],
+    ["sampleShas[]", "public"],
+    ["quarantineId", "public"],
+  ]),
 ];
 
 function rulesFor(eventName: string, entries: ReadonlyArray<[string, SensitivityRule["tag"]]>): SensitivityRule[] {

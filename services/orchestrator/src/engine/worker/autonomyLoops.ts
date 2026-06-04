@@ -22,6 +22,7 @@ import { startDagWalkerSubscriber } from "../dag/subscriber.js";
 import { startMergeCoordinatorSubscriber } from "../merge/subscriber.js";
 import { startPostMergeSubscriber } from "../postMerge/subscriber.js";
 import { startIntake } from "../forge/intake/bootIntake.js";
+import { CiInsightsLoop } from "./ciInsightsLoop.js";
 import { buildNotificationDispatcher } from "../notifications/build.js";
 import { startNotificationSubscriber } from "../notifications/subscriber.js";
 import type { DagWalkerSubscriber } from "../dag/subscriber.js";
@@ -68,6 +69,12 @@ export interface AutonomyLoops {
    */
   notifications: NotificationSubscriber;
   intake: BootedIntake;
+  /**
+   * CI-intelligence PR2: the flaky+duration detector ON A LOOP. It runs the
+   * quarantine detection on a cadence (NOT on the dashboard GET), so the merge
+   * gate's quarantine read has fresh quarantines without an operator opening a page.
+   */
+  ciInsights: CiInsightsLoop;
   /** Drain every autonomy loop (the SIGTERM path); idempotent. */
   stop: () => Promise<void>;
 }
@@ -200,16 +207,23 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
     ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
   });
   console.log("[run-worker] intake poller + audit scheduler loops started (autonomy-engine §1d)");
+  // CI-intelligence PR2: the flaky+duration detector on a cadence (replaces the
+  // dashboard-GET-on-read trigger). Each tick quarantines proven-flaky checks/tests
+  // so the merge gate's quarantine read excludes them — autonomous, no operator GET.
+  const ciInsights = new CiInsightsLoop({ pool: deps.pool });
+  ciInsights.start();
+  console.log("[run-worker] CI-insights flaky+duration detector loop started (CI-intelligence PR2)");
   const stop = async (): Promise<void> => {
     dagWalker.stop();
     mergeCoordinator.stop();
     postMerge.stop();
     notifications.stop();
     intake.stop();
+    ciInsights.stop();
     await dagNotifyListener.close();
     await mergeNotifyListener.close();
     await postMergeNotifyListener.close();
     await notificationNotifyListener.close();
   };
-  return { dagWalker, mergeCoordinator, postMerge, notifications, intake, stop };
+  return { dagWalker, mergeCoordinator, postMerge, notifications, intake, ciInsights, stop };
 }
