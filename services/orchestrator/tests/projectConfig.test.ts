@@ -42,6 +42,28 @@ describe("ProjectConfigV1 parser", () => {
     expect(migrateProjectConfig({ version: 1, greenfield: true }).greenfield).toBe(true);
   });
 
+  it("parses a provisioned deploy target (env not yet attached → envAttachmentRef absent)", () => {
+    // Regression: provisioning the `deploy` capability writes these keys onto the
+    // project config; `.strict()` rejected the un-declared ones, so every project READ
+    // 500'd (which starved the budget gate → paused the walker). The keys are declared
+    // and the provisioner writes a CLEAN shape — `envAttachmentRef` is absent until
+    // `attachRuntimeAppEnv` lands it, never a null placeholder.
+    const cfg = migrateProjectConfig({
+      version: 1,
+      deployProvider: "deploy.vercel",
+      deployAppId: "prj_abc123",
+      deployAppName: "apex-url-shortener-v20",
+      previewUrlPattern: "https://pr-{pr}.preview.vercel.app",
+    });
+    expect(cfg.deployProvider).toBe("deploy.vercel");
+    expect(cfg.deployAppId).toBe("prj_abc123");
+    expect(cfg.envAttachmentRef).toBeUndefined();
+  });
+
+  it("REJECTS a null deploy key (the writer must never persist a null placeholder)", () => {
+    expect(() => migrateProjectConfig({ version: 1, envAttachmentRef: null })).toThrow(/.+/u);
+  });
+
   it("represents all six roles in the routing table with empty chains by default", () => {
     const cfg = migrateProjectConfig({ version: 1 });
     for (const role of RoleId.options) {

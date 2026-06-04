@@ -46,8 +46,9 @@ describe("VercelDeployProvisioner", () => {
     expect(artifact.deployRef?.appId).toMatch(/^vercel_app_/u);
     expect(artifact.deployRef?.previewUrlPattern).toBe("https://acme-web-git-{branch}-acme.vercel.app");
     expect(artifact.projectConfig?.["previewUrlPattern"]).toBe("https://acme-web-git-{branch}-acme.vercel.app");
-    // The env-attach seam for P-APP-ENV-2 is present but unpopulated here.
-    expect(artifact.projectConfig?.["envAttachmentRef"]).toBeNull();
+    // The env-attach seam (P-APP-ENV-2) is ABSENT until attachRuntimeAppEnv lands it —
+    // the provisioner never writes a null placeholder (a config a strict read rejects).
+    expect(artifact.projectConfig).not.toHaveProperty("envAttachmentRef");
   });
 
   it("provision is idempotent: a second run reuses the app, never creating a 2nd", async () => {
