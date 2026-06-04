@@ -223,7 +223,14 @@ describeDb("benchmark entities — migration applies + RLS isolates + scorecard 
     expect(card!.writerIterations).toBe(3);
     expect(card!.tokens.total).toBe(150);
     expect(card!.costUsd).toBeCloseTo(0.25);
-    expect(card!.costBasisMix).toEqual({ ccusage: 1, provider_pricing: 0, credits: 0, unknown: 0, unattributed: 0 });
+    expect(card!.costBasisMix).toEqual({
+      provider_response: 0,
+      ccusage: 1,
+      provider_pricing: 0,
+      credits: 0,
+      unknown: 0,
+      unattributed: 0,
+    });
     expect(card!.reachedAcceptGreen).toBe(true);
   });
 

@@ -19,3 +19,16 @@ export {
 } from "./sources.js";
 
 export { CostRecorder, type CostRecordContext, type RecordedCost } from "./recorder.js";
+
+// OpenRouter's authoritative per-call cost query (the `provider_response` real-
+// spend capture path). The only provider surface that hands back a real-dollar
+// figure per generation; BYOK-aware (see openRouterCost.ts).
+export {
+  type OpenRouterCostQueryInput,
+  type OpenRouterGenerationCost,
+  type OpenRouterHttpClient,
+  type OpenRouterHttpRequest,
+  type OpenRouterHttpResponse,
+  queryGenerationCost,
+  realProviderCostFrom,
+} from "./openRouterCost.js";

@@ -128,10 +128,20 @@ describe("regression: cost-basis allow-list (audit High — mandatory cost attri
   it("accepts only the honest cost bases (incl. BUDGET-SAFETY 'unattributed') and rejects the catch-all placeholder", () => {
     const forbiddenPlaceholder = ["legacy", "unknown"].join("_");
     // BUDGET-SAFETY (C1): 'unattributed' is the LOUD basis for an unrecognized
-    // credential ref (NULL cost, NOT a silent $0) — added alongside the four honest bases.
-    expect(CostBasis.options).toEqual(["ccusage", "provider_pricing", "credits", "unknown", "unattributed"]);
+    // credential ref (NULL cost, NOT a silent $0). 'provider_response' is the
+    // provider's OWN authoritative per-call charge (OpenRouter's usage.cost) — the
+    // REAL deduction that outranks every estimate. Both ride alongside the honest bases.
+    expect(CostBasis.options).toEqual([
+      "ccusage",
+      "provider_response",
+      "provider_pricing",
+      "credits",
+      "unknown",
+      "unattributed",
+    ]);
     expect(CostBasis.safeParse(forbiddenPlaceholder).success).toBe(false);
     expect(CostBasis.safeParse("unknown").success).toBe(true);
     expect(CostBasis.safeParse("unattributed").success).toBe(true);
+    expect(CostBasis.safeParse("provider_response").success).toBe(true);
   });
 });

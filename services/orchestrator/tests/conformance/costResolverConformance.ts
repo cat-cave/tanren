@@ -8,17 +8,20 @@
 //   billingMode — how the credential is billed: per_token | subscription |
 //     self_hosted. Every resolution MUST land on exactly one of these.
 //
-//   costBasis — how the (possibly null) dollar figure was derived: ccusage |
-//     provider_pricing | credits | unknown. This is an HONEST provenance tag,
-//     not a confidence score: it must reflect what was ACTUALLY used.
+//   costBasis — how the (possibly null) dollar figure was derived:
+//     provider_response | ccusage | provider_pricing | credits | unknown. This is
+//     an HONEST provenance tag, not a confidence score: it must reflect what was
+//     ACTUALLY used. `provider_response` is the provider's OWN authoritative
+//     per-call charge (OpenRouter's usage.cost) — the most accurate real spend.
 //
 //   the §11.3 / §16.3 hard rule — an unresolvable cost is NEVER a fabricated
 //     placeholder. When no reliable per-call dollar basis exists, the
 //     resolution MUST be `costUsd === null` with `costBasis === "unknown"`.
 //     There is no placeholder basis, no "$0 estimate", no invented denominator.
 //     The DB enforces the same invariant: cost_records.cost_basis is pinned by
-//     a CHECK to exactly {ccusage, provider_pricing, credits, unknown}, so any
-//     basis string OUTSIDE that set is a CHECK-rejected row — a HARD failure, not
+//     a CHECK to exactly {provider_response, ccusage, provider_pricing, credits,
+//     unknown, unattributed}, so any basis string OUTSIDE that set is a
+//     CHECK-rejected row — a HARD failure, not
 //     a silent downgrade. This spec asserts the in-process half of that pact:
 //     no impl may emit a costBasis the CHECK would reject, and the unknown
 //     state is honest-null, never a placeholder dollar figure.
@@ -39,10 +42,19 @@ import type { CostResolution, CostResolutionInput, CostResolver } from "../../sr
 const BILLING_MODES = ["per_token", "subscription", "self_hosted", "unattributed"] as const;
 
 // The cost bases the DB CHECK constraint pins cost_records.cost_basis to
-// (migration 0016, widened in 0056 for `unattributed`). An impl that emits
-// anything outside this set produces a row the CHECK rejects — the hard-failure
-// rule. Mirrors the widened cost_records.cost_basis CHECK exactly.
-const ALLOWED_COST_BASES = ["ccusage", "provider_pricing", "credits", "unknown", "unattributed"] as const;
+// (migration 0016, widened in 0056 for `unattributed`, in 0065 for
+// `provider_response`). An impl that emits anything outside this set produces a
+// row the CHECK rejects — the hard-failure rule. Mirrors the widened
+// cost_records.cost_basis CHECK exactly. `provider_response` is OpenRouter's
+// authoritative `usage.cost` — the REAL deduction that outranks every estimate.
+const ALLOWED_COST_BASES = [
+  "ccusage",
+  "provider_response",
+  "provider_pricing",
+  "credits",
+  "unknown",
+  "unattributed",
+] as const;
 type AllowedCostBasis = (typeof ALLOWED_COST_BASES)[number];
 
 export interface Scenario {

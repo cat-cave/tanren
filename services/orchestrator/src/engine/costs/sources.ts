@@ -11,10 +11,19 @@
 //     self_hosted  — local GPU / fixed-fee endpoint; no per-call dollar basis.
 //
 //   cost_basis — how the dollar figure (if any) was derived:
-//     ccusage          — derived from the ccusage tool (next PR).
-//     provider_pricing — computed from a known per-token price table.
-//     unknown          — no reliable basis; cost_usd IS NULL. This is an
-//                        HONEST, ALLOWED state — it does NOT fail the task.
+//     ccusage           — derived from the ccusage tool.
+//     provider_response — the provider's OWN authoritative per-call charge,
+//                         returned in its API response (OpenRouter's
+//                         `usage.cost` / `/api/v1/generation.total_cost`). This
+//                         is the REAL amount deducted from the balance — no
+//                         inference markup, native tokenizer — so it is the most
+//                         accurate real-spend figure and OUTRANKS every estimate
+//                         (ccusage and the static rate table).
+//     provider_pricing  — computed from a known per-token price table (an
+//                         ESTIMATE: the static list rate × tokens, NOT the
+//                         provider's real charge).
+//     unknown           — no reliable basis; cost_usd IS NULL. This is an
+//                         HONEST, ALLOWED state — it does NOT fail the task.
 //
 // Subscription windows are percent-of-window limits, not token budgets, so we
 // never fabricate a "$20 / 50M tokens" estimate. When we cannot price a call
@@ -36,7 +45,14 @@ import type { TokenUsage } from "../providers/types.js";
 export const BillingMode = z.enum(["per_token", "subscription", "self_hosted", "unattributed"]);
 export type BillingMode = z.infer<typeof BillingMode>;
 
-export const CostBasis = z.enum(["ccusage", "provider_pricing", "credits", "unknown", "unattributed"]);
+export const CostBasis = z.enum([
+  "ccusage",
+  "provider_response",
+  "provider_pricing",
+  "credits",
+  "unknown",
+  "unattributed",
+]);
 export type CostBasis = z.infer<typeof CostBasis>;
 
 // Dollar value of one prepaid Codex/ChatGPT credit. Observed on the live Pro
@@ -59,10 +75,30 @@ export interface CostSource {
   provider: string;
   // Per-token rate entry when costBasis === 'provider_pricing', else null.
   rate: ProviderRate | null;
+  // The provider's OWN authoritative per-call charge when costBasis ===
+  // 'provider_response', else null. This is OpenRouter's `usage.cost` /
+  // `/api/v1/generation.total_cost` — the REAL amount deducted, computed by the
+  // provider from native token usage with no inference markup. It is the most
+  // accurate real-spend figure, so it OUTRANKS BOTH ccusage and the static
+  // table. Only OpenRouter surfaces such a figure today; absent everywhere else.
+  realProviderCostUsd: number | null;
   // Real dollar figure carried over from ccusage when costBasis === 'ccusage',
   // else null. ccusage reports actual billed/computed cost from the CLI's own
   // session logs, so when present it OUTRANKS the static provider table.
   ccusageCostUsd: number | null;
+  // LOUD ESTIMATE flag (NEVER let an estimate masquerade as real spend). True
+  // when this per_token row's real-spend `cost_usd` was priced from the STATIC
+  // list-rate table for a provider whose AUTHORITATIVE real charge we COULD have
+  // captured but did not — i.e. OpenRouter, whose `usage.cost` is reachable via
+  // a post-call `/api/v1/generation` query (built in the sibling
+  // `costs/openRouterCost.ts` client) but is NOT yet wired per-call (the harness
+  // does not surface the generation id; see that client's REACHABILITY note). The
+  // recorder surfaces it
+  // on `cost.resolved` (estimateOnly) so an operator knows the dollar figure is a
+  // list-rate ESTIMATE, not OpenRouter's real deduction. False for a real
+  // provider_response/ccusage/credits figure, and for providers (openai/anthropic)
+  // that expose no authoritative per-call charge to capture.
+  estimateOnly: boolean;
   // BUDGET-SAFETY (C1): the SAFE ref-KIND label (e.g. `credential/mystery`, never
   // the secret value) when the credential ref was UNRECOGNIZED — set iff
   // billingMode/costBasis are 'unattributed'. The recorder emits a
@@ -91,6 +127,11 @@ export interface CostSource {
 export interface AttributionInput {
   cli: "codex" | "claude" | "opencode" | "aider" | "pi" | "reasonix" | "fake";
   authRef: string;
+  // The provider's OWN authoritative per-call charge for THIS call (OpenRouter's
+  // `usage.cost` / `/api/v1/generation.total_cost`). A positive value is the REAL
+  // deduction and OUTRANKS ccusage AND the static table → costBasis becomes
+  // 'provider_response'. null/0 falls back to the next-best basis.
+  realProviderCostUsd?: number | null;
   // Real dollar figure for THIS call, derived from ccusage (apportioned by
   // token share against the run-level ccusage total — see CostRecorder
   // .reconcileRunCostFromCcusage). A positive value wins over the static
@@ -187,17 +228,25 @@ export function refKindOf(ref: string): string {
 // every call), but it NO LONGER silently coerces an unrecognized ref into a $0
 // self-hosted row — that would defeat the budget ceiling (BUDGET-SAFETY C1).
 //
-// Cost-basis precedence (PROJECT_BRIEF §4): a positive ccusage figure is a
-// REAL billed/computed dollar amount from the CLI's own logs, so it wins over
-// everything — even for a subscription credential, where ccusage may still
-// compute a comparable cost. Otherwise a per_token credential with a known
-// provider rate prices from the static table; a RECOGNIZED subscription/
+// Cost-basis precedence (PROJECT_BRIEF §4): the provider's OWN authoritative
+// per-call charge (`provider_response`, e.g. OpenRouter's `usage.cost`) is the
+// REAL deduction with no markup, so it wins over EVERYTHING. Next, a positive
+// ccusage figure is a REAL billed/computed dollar amount from the CLI's own logs.
+// Otherwise a per_token credential with a known provider rate prices from the
+// static table (an ESTIMATE — flagged `estimateOnly` for OpenRouter, whose real
+// charge we could have captured but did not); a RECOGNIZED subscription/
 // self-hosted (or the no-credential `absent` path) is honestly unknown (cost_usd
 // NULL); an UNRECOGNIZED ref is `unattributed` (also NULL, but flagged so the
 // recorder narrates it and the budget gate fails closed). Either way the task
 // does NOT fail here.
 export function resolveCostSource(input: AttributionInput): CostSource {
   const classification = classifyAuthRef(input.authRef);
+  const realProviderCostUsd =
+    typeof input.realProviderCostUsd === "number" &&
+    Number.isFinite(input.realProviderCostUsd) &&
+    input.realProviderCostUsd > 0
+      ? input.realProviderCostUsd
+      : null;
   const ccusageCostUsd =
     typeof input.ccusageCostUsd === "number" && Number.isFinite(input.ccusageCostUsd) && input.ccusageCostUsd > 0
       ? input.ccusageCostUsd
@@ -208,25 +257,50 @@ export function resolveCostSource(input: AttributionInput): CostSource {
   // an unattributed misconfig stays unpriced on BOTH axes.
   const notionalRate = providerRate(classification.provider) ?? null;
   if (classification.billingMode === "per_token") {
-    // A real-API (per-token) credential is the ONLY billing mode ccusage may price:
-    // ccusage's figure is the REAL billed/computed cost of a metered call. A ccusage
-    // figure on a SUBSCRIPTION credential is the NOTIONAL token-value of flat-fee
-    // usage (no real marginal spend) and is dropped below — never treated as spend.
+    // (1) HIGHEST precedence — the provider's OWN authoritative per-call charge
+    // (OpenRouter's `usage.cost`). This IS the real deduction, so it sets real
+    // spend directly and is NEVER an estimate. The notional list value is still
+    // computed independently (it may differ — list rate vs the provider's actual
+    // charge), so `notionalRate` rides through unchanged.
+    if (realProviderCostUsd !== null) {
+      return {
+        billingMode: "per_token",
+        costBasis: "provider_response",
+        provider: classification.provider,
+        rate: null,
+        realProviderCostUsd,
+        ccusageCostUsd: null,
+        unattributedRefKind: null,
+        notionalRate,
+        // Notional stays the list-rate computation (NOT the real charge), so the
+        // two FOCUS axes can honestly differ. No positive ccusage carried here.
+        notionalCcusageCostUsd: null,
+        estimateOnly: false,
+        rawUsage: input.rawUsage,
+      };
+    }
+    // (2) A real-API (per-token) credential is the ONLY billing mode ccusage may
+    // price: ccusage's figure is the REAL billed/computed cost of a metered call. A
+    // ccusage figure on a SUBSCRIPTION credential is the NOTIONAL token-value of
+    // flat-fee usage (no real marginal spend) and is dropped below — never spend.
     if (ccusageCostUsd !== null) {
       return {
         billingMode: "per_token",
         costBasis: "ccusage",
         provider: classification.provider,
         rate: null,
+        realProviderCostUsd: null,
         ccusageCostUsd,
         unattributedRefKind: null,
         notionalRate,
         // For a per_token ccusage call real == notional, so the same figure is the
         // preferred notional value too.
         notionalCcusageCostUsd: ccusageCostUsd,
+        estimateOnly: false,
         rawUsage: input.rawUsage,
       };
     }
+    // (3) Static list-rate table — an ESTIMATE, not the provider's real charge.
     const rate = providerRate(classification.provider) ?? null;
     return {
       billingMode: "per_token",
@@ -234,12 +308,22 @@ export function resolveCostSource(input: AttributionInput): CostSource {
       costBasis: rate === null ? "unknown" : "provider_pricing",
       provider: classification.provider,
       rate,
+      realProviderCostUsd: null,
       ccusageCostUsd: null,
       unattributedRefKind: null,
       notionalRate,
       // No positive ccusage on this branch (it was handled above); notional prices
       // from the list rate.
       notionalCcusageCostUsd: null,
+      // LOUD ESTIMATE flag: OpenRouter is the one provider whose AUTHORITATIVE real
+      // charge (`usage.cost`) we COULD have captured (via the
+      // `costs/openRouterCost.ts` client) but did not wire per-call, so a
+      // static-table price for it is an
+      // estimate standing in for a known-reachable real figure — flag it so it is
+      // never mistaken for real spend. For openai/anthropic (no per-call provider
+      // charge to capture) the static table is the best available basis, not a
+      // stand-in, so it is NOT flagged.
+      estimateOnly: rate !== null && classification.provider === "openrouter",
       rawUsage: input.rawUsage,
     };
   }
@@ -252,6 +336,7 @@ export function resolveCostSource(input: AttributionInput): CostSource {
       costBasis: "unattributed",
       provider: classification.provider,
       rate: null,
+      realProviderCostUsd: null,
       ccusageCostUsd: null,
       unattributedRefKind: classification.refKind,
       // provider is 'unknown' here → notionalRate is null: an unattributed misconfig
@@ -259,6 +344,7 @@ export function resolveCostSource(input: AttributionInput): CostSource {
       // never trust its ccusage figure (we cannot know the billing model).
       notionalRate,
       notionalCcusageCostUsd: null,
+      estimateOnly: false,
       rawUsage: input.rawUsage,
     };
   }
@@ -274,6 +360,7 @@ export function resolveCostSource(input: AttributionInput): CostSource {
     costBasis: "unknown",
     provider: classification.provider,
     rate: null,
+    realProviderCostUsd: null,
     ccusageCostUsd: null,
     unattributedRefKind: null,
     // REAL spend is NULL here (no marginal cost), but the NOTIONAL list value IS
@@ -283,6 +370,8 @@ export function resolveCostSource(input: AttributionInput): CostSource {
     // real spend above — is the more-accurate NOTIONAL value, so carry it here.
     notionalRate,
     notionalCcusageCostUsd: ccusageCostUsd,
+    // No real-spend dollar figure here at all, so nothing to flag as an estimate.
+    estimateOnly: false,
     rawUsage: input.rawUsage,
   };
 }
@@ -291,6 +380,12 @@ export function resolveCostSource(input: AttributionInput): CostSource {
 // cost_records.cost_usd column, or null when cost is genuinely unknown
 // (subscription / self-hosted / unpriced model). NO fake estimate.
 export function computeCostUsd(source: CostSource, tokens: TokenUsage): string | null {
+  // HIGHEST precedence — the provider's OWN authoritative per-call charge
+  // (OpenRouter's `usage.cost`). It IS the real deduction, so it is the dollar
+  // figure verbatim; tokens are irrelevant (the provider already priced it).
+  if (source.costBasis === "provider_response" && source.realProviderCostUsd !== null) {
+    return formatUsd(source.realProviderCostUsd);
+  }
   if (source.costBasis === "ccusage" && source.ccusageCostUsd !== null) {
     return formatUsd(source.ccusageCostUsd);
   }

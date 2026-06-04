@@ -64,7 +64,7 @@ describe("cost source attribution", () => {
     });
   });
 
-  it("prices a managed platform OpenRouter run via provider_pricing", () => {
+  it("prices a managed platform OpenRouter run via provider_pricing but FLAGS it estimateOnly (no real cost captured)", () => {
     const source = resolveCostSource({
       cli: "aider",
       authRef: "credential/openrouter/platform/default",
@@ -74,6 +74,78 @@ describe("cost source attribution", () => {
     expect(source.costBasis).toBe("provider_pricing");
     expect(source.provider).toBe("openrouter");
     expect(source.rate?.inputCostPerMillion).toBeGreaterThan(0);
+    // LOUD ESTIMATE: OpenRouter's authoritative `usage.cost` was NOT captured for
+    // this call, so the static-table figure is an estimate, not the real charge —
+    // it must be flagged so an operator never mistakes it for real spend.
+    expect(source.estimateOnly).toBe(true);
+    expect(source.realProviderCostUsd).toBeNull();
+  });
+
+  it("does NOT flag estimateOnly for a per_token provider with no authoritative per-call charge (openai/anthropic)", () => {
+    // openai/anthropic expose no per-call provider charge to capture, so the static
+    // table is the BEST available basis here — not a stand-in for a reachable real
+    // figure. Flagging it would be a false alarm.
+    for (const ref of ["credential/openai-api/k", "credential/anthropic/k"]) {
+      const source = resolveCostSource({ cli: "codex", authRef: ref, rawUsage: {} });
+      expect(source.costBasis).toBe("provider_pricing");
+      expect(source.estimateOnly).toBe(false);
+    }
+  });
+
+  it("captures OpenRouter's REAL usage.cost as provider_response — cost_usd is the real figure, outranking the static table", () => {
+    // The accurate path: a captured OpenRouter `usage.cost` (the REAL deduction).
+    // It OUTRANKS the static rate table, sets real spend directly, and is NEVER an
+    // estimate. The notional list value stays the rate-table computation (it may
+    // honestly differ from the real charge).
+    const source = resolveCostSource({
+      cli: "aider",
+      authRef: "credential/openrouter/platform/default",
+      realProviderCostUsd: 0.0731,
+      rawUsage: {},
+    });
+    expect(source.billingMode).toBe("per_token");
+    expect(source.costBasis).toBe("provider_response");
+    expect(source.provider).toBe("openrouter");
+    expect(source.realProviderCostUsd).toBe(0.0731);
+    expect(source.estimateOnly).toBe(false);
+    // Real spend == the captured figure, regardless of tokens.
+    expect(computeCostUsd(source, usage({ inputTokens: 9_999, outputTokens: 9_999 }))).toBe("0.073100");
+    // Notional stays the list-rate value (rate ride-through), independent of real.
+    expect(source.notionalRate?.inputCostPerMillion).toBeGreaterThan(0);
+  });
+
+  it("a real provider_response figure OUTRANKS a ccusage figure on the same call", () => {
+    // Both present → the provider's OWN authoritative charge wins (no markup, native
+    // tokenizer); the ccusage figure is dropped from real spend.
+    const source = resolveCostSource({
+      cli: "aider",
+      authRef: "credential/openrouter/platform/default",
+      realProviderCostUsd: 0.05,
+      ccusageCostUsd: 0.09,
+      rawUsage: {},
+    });
+    expect(source.costBasis).toBe("provider_response");
+    expect(source.realProviderCostUsd).toBe(0.05);
+    expect(source.ccusageCostUsd).toBeNull();
+    expect(computeCostUsd(source, usage({ inputTokens: 1, outputTokens: 1 }))).toBe("0.050000");
+  });
+
+  it("ignores a zero/negative provider cost and falls back to the next basis (flagged estimate for openrouter)", () => {
+    const zero = resolveCostSource({
+      cli: "aider",
+      authRef: "credential/openrouter/platform/default",
+      realProviderCostUsd: 0,
+      rawUsage: {},
+    });
+    expect(zero.costBasis).toBe("provider_pricing");
+    expect(zero.estimateOnly).toBe(true);
+    const negative = resolveCostSource({
+      cli: "aider",
+      authRef: "credential/openrouter/platform/default",
+      realProviderCostUsd: -1,
+      rawUsage: {},
+    });
+    expect(negative.costBasis).toBe("provider_pricing");
   });
 
   it("resolves a subscription ref to cost_basis 'unknown' (no fake estimate)", () => {

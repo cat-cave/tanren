@@ -19,10 +19,12 @@ describe("cost-records token-type + nullable-cost migration", () => {
     expect(sql).toMatch(/DROP TABLE "subscription_window_denominators"/u);
   });
 
-  it("constrains cost_basis to the three accepted values", async () => {
+  it("constrains cost_basis to the accepted values (incl. provider_response — OpenRouter's real charge)", async () => {
     const sql = await readAllMigrations();
     expect(sql).toMatch(/cost_basis.*IN.*'ccusage'/u);
     expect(sql).toMatch(/'provider_pricing'/u);
+    // The authoritative real-charge basis (OpenRouter's usage.cost) was widened in.
+    expect(sql).toMatch(/'provider_response'/u);
     expect(sql).toMatch(/cost_basis.*'unknown'/su);
     expect(sql).not.toContain(`${"legacy"}_${"unknown"}`);
     expect(sql).not.toContain("unknown_source");

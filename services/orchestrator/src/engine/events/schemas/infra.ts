@@ -140,6 +140,15 @@ export const CostResolvedPayload = z
     notionalCostUsd: z.string().nullable(),
     billingMode: z.string(),
     costBasis: z.string(),
+    // LOUD ESTIMATE flag (NEVER let an estimate masquerade as real spend). True
+    // when this per_token row's real-spend `costUsd` was priced from the STATIC
+    // list-rate table for OpenRouter — whose AUTHORITATIVE per-call charge
+    // (`usage.cost`, reachable via a `/api/v1/generation` query) we COULD have
+    // captured but have not wired per-call yet — so an operator knows the dollar
+    // figure is a list-rate ESTIMATE, not OpenRouter's real deduction. Absent
+    // (treated as false) for every real provider_response/ccusage/credits figure
+    // and for providers with no authoritative per-call charge (openai/anthropic).
+    estimateOnly: z.boolean().optional(),
   })
   .strict();
 

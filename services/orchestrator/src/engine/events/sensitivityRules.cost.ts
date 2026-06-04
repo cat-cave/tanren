@@ -17,6 +17,9 @@ export const costSensitivityRules: SensitivityRule[] = [
     ["notionalCostUsd", "public"],
     ["billingMode", "public"],
     ["costBasis", "public"],
+    // LOUD ESTIMATE flag — a boolean operational signal (this OpenRouter row's
+    // dollar figure is a list-rate estimate, not the real deduction). No secret.
+    ["estimateOnly", "public"],
   ]),
   ...rulesFor("cost.failed", [
     ["taskId", "public"],

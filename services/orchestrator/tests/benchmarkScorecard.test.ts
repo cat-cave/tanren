@@ -121,7 +121,14 @@ describe("projectTrialScorecard — §2.3 field projection", () => {
     expect(card.tokens.input).toBe(30);
     // Only the priced record contributes; the null one does not zero it out.
     expect(card.costUsd).toBeCloseTo(0.5);
-    expect(card.costBasisMix).toEqual({ ccusage: 1, provider_pricing: 0, credits: 0, unknown: 1, unattributed: 0 });
+    expect(card.costBasisMix).toEqual({
+      provider_response: 0,
+      ccusage: 1,
+      provider_pricing: 0,
+      credits: 0,
+      unknown: 1,
+      unattributed: 0,
+    });
   });
 
   it("returns null cost when every record is unpriced (honest absence)", () => {

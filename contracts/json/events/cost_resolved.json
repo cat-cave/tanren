@@ -21,6 +21,9 @@
         }
       ]
     },
+    "estimateOnly": {
+      "type": "boolean"
+    },
     "model": {
       "type": "string"
     },
