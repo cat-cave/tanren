@@ -32,6 +32,10 @@ export type TrialTokens = z.infer<typeof TrialTokens>;
 // defeating misconfig is visible in the scorecard.
 export const CostBasisMix = z
   .object({
+    // The provider's OWN authoritative per-call charge (OpenRouter's `usage.cost`):
+    // the most accurate real-spend basis. A DISTINCT bucket so high-confidence real
+    // spend is not folded into the rate-table estimate (`provider_pricing`).
+    provider_response: z.number().int().nonnegative(),
     ccusage: z.number().int().nonnegative(),
     provider_pricing: z.number().int().nonnegative(),
     credits: z.number().int().nonnegative(),
@@ -201,6 +205,7 @@ export function projectTrialScorecard(inputs: TrialProjectionInputs): TrialScore
   const costUsd = priced.length === 0 ? null : priced.reduce((sum, c) => sum + (c.costUsd ?? 0), 0);
 
   const costBasisMix: CostBasisMix = {
+    provider_response: 0,
     ccusage: 0,
     provider_pricing: 0,
     credits: 0,
@@ -208,7 +213,8 @@ export function projectTrialScorecard(inputs: TrialProjectionInputs): TrialScore
     unattributed: 0,
   };
   for (const c of costs) {
-    if (c.costBasis === "ccusage") costBasisMix.ccusage += 1;
+    if (c.costBasis === "provider_response") costBasisMix.provider_response += 1;
+    else if (c.costBasis === "ccusage") costBasisMix.ccusage += 1;
     else if (c.costBasis === "provider_pricing") costBasisMix.provider_pricing += 1;
     else if (c.costBasis === "credits") costBasisMix.credits += 1;
     else if (c.costBasis === "unattributed") costBasisMix.unattributed += 1;

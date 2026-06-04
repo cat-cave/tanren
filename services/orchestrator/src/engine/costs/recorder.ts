@@ -33,6 +33,22 @@ export interface CostRecordContext {
   // Wall-clock runtime of the underlying call — recorded in cost_source_raw
   // for audit; no longer used to fabricate a dollar figure.
   runtimeSeconds?: number;
+  // The provider's OWN authoritative per-call charge for THIS call (OpenRouter's
+  // `usage.cost` / `/api/v1/generation.total_cost`) — the REAL amount deducted
+  // from the balance, no inference markup, native tokenizer. A positive value is
+  // the most accurate real-spend figure and OUTRANKS ccusage AND the static table
+  // → cost_basis becomes 'provider_response'. null/0 falls back to the next basis.
+  //
+  // REACHABILITY (today): no CLI adapter (codex/aider/pi/opencode) surfaces this
+  // per call — they parse only token fields, never the provider's cost or a
+  // generation id — so this is null on every live call right now. The accurate
+  // capture path is a post-call OpenRouter `/api/v1/generation` query (built in
+  // `costs/openRouterCost.ts`), which needs a generation id the harness does not
+  // yet emit. Until that id is surfaced, an OpenRouter per_token row prices from
+  // the static table and is flagged `estimateOnly` (LOUD, see sources.ts) — never
+  // silently presented as the real deduction. This field is the typed seam the
+  // capture wires into the moment the id (or a CLI that emits `usage.cost`) lands.
+  realProviderCostUsd?: number | null;
   // Real per-call dollar figure derived from ccusage (apportioned by token
   // share against the run-level ccusage total). Positive → cost_basis becomes
   // 'ccusage'. Usually null at first write: the run-level total is only known
@@ -121,6 +137,13 @@ export class CostRecorder {
     const attribution: AttributionInput = {
       cli: context.cli,
       authRef: context.authRef,
+      // The provider's OWN authoritative per-call charge (OpenRouter's
+      // `usage.cost`), when a capture surfaced it for this call. HIGHEST
+      // precedence — sets real spend as `provider_response`, outranking ccusage
+      // AND the static table. null on every live call today (no source surfaces
+      // it yet — see CostRecordContext.realProviderCostUsd), so the OpenRouter
+      // per_token row prices from the table and is flagged `estimateOnly`.
+      realProviderCostUsd: context.realProviderCostUsd ?? null,
       ccusageCostUsd: context.ccusageCostUsd ?? null,
       rawUsage,
     };
@@ -188,6 +211,12 @@ export class CostRecorder {
         notionalCostUsd,
         billingMode: source.billingMode,
         costBasis: source.costBasis,
+        // LOUD ESTIMATE flag: true when this OpenRouter per_token row's real-spend
+        // costUsd is the STATIC list-rate estimate standing in for the provider's
+        // authoritative `usage.cost` (which we could capture but have not wired per
+        // call yet) — so an operator never mistakes the figure for the real
+        // deduction. False for a real provider_response/ccusage/credits figure.
+        estimateOnly: source.estimateOnly,
       },
     });
     // BUDGET-SAFETY (C1): an UNRECOGNIZED credential ref priced this real call as

@@ -41,7 +41,7 @@ function trial(over: Partial<TrialScorecard> & { runId: string; totalTokens?: nu
       total: totalTokens ?? 0,
     },
     costUsd: null,
-    costBasisMix: { ccusage: 0, provider_pricing: 0, credits: 0, unknown: 0, unattributed: 0 },
+    costBasisMix: { provider_response: 0, ccusage: 0, provider_pricing: 0, credits: 0, unknown: 0, unattributed: 0 },
     ...rest,
   };
 }

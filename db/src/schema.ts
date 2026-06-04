@@ -122,7 +122,7 @@ export const costRecords = pgTable(
     ),
     check(
       "cost_records_cost_basis_check",
-      sql`${table.costBasis} IN ('ccusage','provider_pricing','credits','unknown','unattributed')`,
+      sql`${table.costBasis} IN ('ccusage','provider_response','provider_pricing','credits','unknown','unattributed')`,
     ),
     index("cost_records_org_id").on(table.orgId),
     index("cost_records_org_run").on(table.orgId, table.runId),

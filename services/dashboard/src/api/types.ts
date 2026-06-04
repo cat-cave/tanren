@@ -97,14 +97,17 @@ export interface PaletteGroup {
 export type BillingMode = "per_token" | "subscription" | "self_hosted" | "unattributed";
 
 /**
- * How a dollar figure (if any) was derived. `ccusage` (real billed/computed
- * cost from the CLI's own session logs), `provider_pricing` (computed from a
- * known per-token price table), `credits` (prepaid-credit drawdown), `unknown`
- * (no reliable basis — `costUsd` is null; an HONEST, allowed state, never a
- * fabricated placeholder), `unattributed` (BUDGET-SAFETY C1: an unrecognized
- * credential ref — NULL-dollar but flagged). Mirrors `RunCostRecord.costBasis`.
+ * How a dollar figure (if any) was derived. `provider_response` (the provider's
+ * OWN authoritative per-call charge — OpenRouter's `usage.cost`, the REAL
+ * deduction with no markup; outranks every estimate), `ccusage` (real
+ * billed/computed cost from the CLI's own session logs), `provider_pricing`
+ * (computed from a known per-token price table — an ESTIMATE), `credits`
+ * (prepaid-credit drawdown), `unknown` (no reliable basis — `costUsd` is null;
+ * an HONEST, allowed state, never a fabricated placeholder), `unattributed`
+ * (BUDGET-SAFETY C1: an unrecognized credential ref — NULL-dollar but flagged).
+ * Mirrors `RunCostRecord.costBasis`.
  */
-export type CostBasis = "ccusage" | "provider_pricing" | "credits" | "unknown" | "unattributed";
+export type CostBasis = "ccusage" | "provider_response" | "provider_pricing" | "credits" | "unknown" | "unattributed";
 
 /**
  * A single cost record (`GET .../runs/:runId/costs` items). Token accounting is

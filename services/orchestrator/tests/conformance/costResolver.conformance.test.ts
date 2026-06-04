@@ -23,6 +23,9 @@ interface CredentialSituation {
   authRef: string;
   cli: AttributionInput["cli"];
   ccusageCostUsd?: number | null;
+  // The provider's OWN authoritative per-call charge (OpenRouter's `usage.cost`):
+  // when present, the resolution is `provider_response` real spend.
+  realProviderCostUsd?: number | null;
 }
 
 // Adapter over the canonical cost model. One instance = one credential
@@ -46,6 +49,7 @@ class ProductionCostResolver implements CostResolver {
       cli: this.situation.cli,
       authRef: this.situation.authRef,
       ccusageCostUsd: this.situation.ccusageCostUsd ?? null,
+      realProviderCostUsd: this.situation.realProviderCostUsd ?? null,
       rawUsage: { provider: input.provider, model: input.model },
     });
     const costUsd = computeCostUsd(source, tokens);
@@ -121,6 +125,16 @@ const productionScenarios: readonly ProductionScenario[] = [
     situation: { authRef: "credential/openrouter/default", cli: "opencode" },
     expectBillingMode: "per_token",
     expectCostBasis: "provider_pricing",
+  },
+  {
+    // OpenRouter's OWN authoritative per-call charge (usage.cost) is the REAL
+    // deduction — it OUTRANKS the static table AND ccusage and prices as
+    // provider_response. The most accurate real-spend basis.
+    name: "OpenRouter authoritative usage.cost prices as provider_response (real charge)",
+    input: makeInput("openrouter", "deepseek-real-cost"),
+    situation: { authRef: "credential/openrouter/platform/default", cli: "aider", realProviderCostUsd: 0.0421 },
+    expectBillingMode: "per_token",
+    expectCostBasis: "provider_response",
   },
   {
     // A real positive ccusage figure OUTRANKS the static table (PROJECT_BRIEF

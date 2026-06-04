@@ -28,6 +28,7 @@
     "costBasis": {
       "enum": [
         "ccusage",
+        "provider_response",
         "provider_pricing",
         "credits",
         "unknown",

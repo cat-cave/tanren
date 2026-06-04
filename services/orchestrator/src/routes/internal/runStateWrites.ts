@@ -57,6 +57,11 @@ const recordCostSchema = z.object({
       model: z.string(),
       authRef: z.string(),
       runtimeSeconds: z.number().optional(),
+      // The provider's OWN authoritative per-call charge (OpenRouter's
+      // `usage.cost`), threaded through the control-plane record path exactly like
+      // ccusageCostUsd so a real captured figure sets `provider_response` real
+      // spend server-side. null on every live call today (no source surfaces it).
+      realProviderCostUsd: z.number().nullable().optional(),
       ccusageCostUsd: z.number().nullable().optional(),
       userId: z.string().nullable().optional(),
     })

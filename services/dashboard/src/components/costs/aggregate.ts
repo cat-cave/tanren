@@ -84,6 +84,9 @@ export interface CostBasisMeta {
 
 export const COST_BASIS_META: Record<CostBasis, CostBasisMeta> = {
   ccusage: { basis: "ccusage", label: "ccusage · real billed" },
+  // The provider's OWN authoritative per-call charge (OpenRouter's `usage.cost`):
+  // the REAL deduction with no markup — the most accurate real-spend basis.
+  provider_response: { basis: "provider_response", label: "provider response · real charge" },
   provider_pricing: { basis: "provider_pricing", label: "provider pricing · rate table" },
   credits: { basis: "credits", label: "credits · prepaid drawdown" },
   unknown: { basis: "unknown", label: "no priced basis · tokens only" },
