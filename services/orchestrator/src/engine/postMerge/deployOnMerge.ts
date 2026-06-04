@@ -30,6 +30,9 @@ import { type DeployHttpTransport, fetchDeployTransport } from "../provisioners/
 import { OrgIntegrationsStore } from "../repositories/orgIntegrations.js";
 import { attachRuntimeAppEnv } from "../workflow/attachRuntimeAppEnv.js";
 import { deployProvisionerFor } from "../workflow/deployProvisionerFor.js";
+import { buildDeployAdapter } from "../deploy/buildDeployAdapter.js";
+import { DIRECT_API_ADAPTER_KIND } from "../deploy/directApiDeployAdapter.js";
+import type { UrlReachabilityProbe, VerifyPollPolicy } from "../contracts/deployAdapter.js";
 
 /** The deploy artifact a project carries in its config once a deploy capability was provisioned. */
 export interface ProjectDeployTarget {
@@ -64,6 +67,14 @@ export interface DeployOnMergeWatcherDeps {
    * directly); absent, in-process via `PgEventStore`.
    */
   runStateWriter?: RunStateWriter;
+  /**
+   * The URL smoke-check probe the post-trigger `verify` runs against the resolved
+   * deploy URL. Injectable for tests (a scripted probe); defaults to the production
+   * fetch probe inside `buildDeployAdapter` when absent.
+   */
+  urlProbe?: UrlReachabilityProbe;
+  /** The verify poll cadence + bound; defaults to the production policy when absent. */
+  verifyPoll?: VerifyPollPolicy;
 }
 
 /**
@@ -142,6 +153,54 @@ export class DeployOnMergeWatcher {
           deploymentId: result.deploymentId,
           url: result.url,
           state: result.state,
+        },
+      });
+    });
+
+    // PROVE the deploy: poll the provider to a READY terminal + smoke-check the URL.
+    // A configured deploy that never becomes ready (or whose URL never serves) throws
+    // LOUD here — `deploy.triggered` is no longer the end; `deploy.verified` is the
+    // proof. On success emit `deploy.verified` (provider + url + state, non-secret).
+    await this.verifyDeploy(runId, merged.projectId, target, grant.providerKind, result.deploymentId);
+  }
+
+  /**
+   * Verify the just-triggered deploy is live, then record `deploy.verified`. Builds
+   * the `direct_api` DeployAdapter (the wrapped provider provisioner + the verify
+   * seams), polls to READY + smoke-checks the resolved URL (LOUD throw on failure /
+   * never-ready / unreachable), and appends the non-secret proof under the org scope.
+   */
+  private async verifyDeploy(
+    runId: string,
+    projectId: string,
+    target: ProjectDeployTarget,
+    providerKind: string,
+    deploymentId: string,
+  ): Promise<void> {
+    const grant = await this.loadGrant(target);
+    if (grant === undefined) {
+      // The grant was present moments ago (the trigger resolved it); a disappearance
+      // mid-flight is a hard error, never a skipped verify.
+      throw new Error(`deployOnMerge: verify lost the org grant for '${target.provider}' on project '${projectId}'`);
+    }
+    const adapter = buildDeployAdapter(DIRECT_API_ADAPTER_KIND, {
+      provisioner: { transport: this.deps.transport, secrets: this.deps.secrets },
+      ...(this.deps.urlProbe !== undefined && { urlProbe: this.deps.urlProbe }),
+      ...(this.deps.verifyPoll !== undefined && { poll: this.deps.verifyPoll }),
+    });
+    const verification = await adapter.verify(grant, { provider: providerKind, appId: target.appId }, deploymentId);
+    await runWithJobOrgId(target.orgId, async () => {
+      await this.eventStore.append({
+        runId,
+        projectId,
+        eventType: "deploy.verified",
+        payload: {
+          provider: target.provider,
+          appId: target.appId,
+          deploymentId,
+          url: verification.url,
+          state: verification.state,
+          smokeStatus: verification.smokeStatus,
         },
       });
     });

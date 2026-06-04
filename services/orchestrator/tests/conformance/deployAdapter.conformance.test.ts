@@ -1,0 +1,195 @@
+// DeployAdapter conformance (the deployment seam above IntegrationProvisioner): the
+// `direct_api` adapter must DELEGATE provisionOrBind/deploy/status to the wrapped
+// Vercel/Fly provisioners, and `verify` must POLL the provider to a READY terminal +
+// SMOKE-CHECK the resolved URL — failing LOUD on a failure terminal, a never-ready
+// budget exhaustion, or an unreachable URL. Driven entirely over the scripted in-
+// memory deploy transport + a scripted URL probe — NO live Vercel/Fly/network calls.
+
+import { describe, expect, it } from "vitest";
+import { InMemorySecretStore } from "../../src/engine/contracts/secretStore.js";
+import type { OrgGrant, ProjectContext } from "../../src/engine/contracts/integrationProvisioner.js";
+import type { DeployRef } from "../../src/engine/contracts/deployAdapter.js";
+import { buildDeployAdapter } from "../../src/engine/deploy/buildDeployAdapter.js";
+import { DirectApiDeployAdapter, DIRECT_API_ADAPTER_KIND } from "../../src/engine/deploy/directApiDeployAdapter.js";
+import { scriptedDeployTransport, type ScriptedDeployTransport } from "./fakes/scriptedDeployTransport.js";
+import { scriptedUrlProbe, instantVerifyPollPolicy } from "./fakes/scriptedUrlProbe.js";
+
+const TOKEN_REF = "secret://org/deploy-token";
+const TOKEN_VALUE = "fly_or_vercel_super_secret_token";
+
+function secrets(): InMemorySecretStore {
+  const store = new InMemorySecretStore();
+  void store.put({ ref: TOKEN_REF, value: TOKEN_VALUE });
+  return store;
+}
+
+const vercelGrant: OrgGrant = {
+  providerKind: "deploy.vercel",
+  credentialRef: TOKEN_REF,
+  metadata: { teamId: "team_abc", slug: "acme" },
+};
+
+const flyGrant: OrgGrant = {
+  providerKind: "deploy.flyio",
+  credentialRef: TOKEN_REF,
+  metadata: { orgSlug: "acme", image: "registry.fly.io/acme-web:deployment-1" },
+};
+
+const ctx = (name: string): ProjectContext => ({ projectId: `proj_${name}`, orgId: "org_1", stack: "node", name });
+
+function adapter(transport: ScriptedDeployTransport, urlStatus = 200, maxPolls = 10) {
+  const probe = scriptedUrlProbe(urlStatus);
+  const instance = new DirectApiDeployAdapter({
+    provisioner: { transport, secrets: secrets() },
+    urlProbe: probe,
+    poll: instantVerifyPollPolicy(maxPolls),
+  });
+  return { instance, probe };
+}
+
+describe("DirectApiDeployAdapter — delegation", () => {
+  it("provisionOrBind(provision) delegates to the provisioner's find-or-create", async () => {
+    const transport = scriptedDeployTransport("vercel");
+    const { instance } = adapter(transport);
+    const artifact = await instance.provisionOrBind(vercelGrant, ctx("acme-web"), { mode: "provision" });
+    expect(artifact.deployRef?.provider).toBe("deploy.vercel");
+    expect(transport.appNames()).toEqual(["acme-web"]);
+    expect(JSON.stringify(artifact)).not.toContain(TOKEN_VALUE);
+  });
+
+  it("provisionOrBind(bind) links an already-discovered resource", async () => {
+    const transport = scriptedDeployTransport("vercel", ["existing-proj"]);
+    const { instance } = adapter(transport);
+    const existingId = `vercel_app_1`;
+    const artifact = await instance.provisionOrBind(vercelGrant, ctx("whatever"), {
+      mode: "bind",
+      existingResourceId: existingId,
+    });
+    expect(artifact.deployRef?.appId).toBe(existingId);
+    // bind never creates a second app.
+    expect(transport.appNames()).toEqual(["existing-proj"]);
+  });
+
+  it("deploy TRIGGERS a build of the merged ref via the wrapped provisioner", async () => {
+    const transport = scriptedDeployTransport("vercel");
+    const { instance } = adapter(transport);
+    const artifact = await instance.provisionOrBind(vercelGrant, ctx("acme-web"), { mode: "provision" });
+    const ref: DeployRef = { provider: "deploy.vercel", appId: artifact.deployRef!.appId };
+    const result = await instance.deploy(vercelGrant, ref, { repo: "acme/acme-web", ref: "main" });
+    const triggered = transport.deploysTriggered();
+    expect(triggered).toHaveLength(1);
+    expect(triggered[0]!.body["gitSource"]).toEqual({ type: "github", repo: "acme/acme-web", ref: "main" });
+    expect(result.url).toMatch(/^https:\/\//u);
+  });
+
+  it("status reads a deployment's current provider state without polling", async () => {
+    const transport = scriptedDeployTransport("vercel");
+    const { instance } = adapter(transport);
+    const artifact = await instance.provisionOrBind(vercelGrant, ctx("acme-web"), { mode: "provision" });
+    const appId = artifact.deployRef!.appId;
+    const ref: DeployRef = { provider: "deploy.vercel", appId };
+    const { deploymentId } = await instance.deploy(vercelGrant, ref, { repo: "acme/acme-web", ref: "main" });
+    transport.scriptDeploymentStates(deploymentId, ["BUILDING"]);
+    const status = await instance.status(vercelGrant, ref, deploymentId);
+    expect(status.state).toBe("BUILDING");
+    expect(status.ready).toBe(false);
+    expect(status.failed).toBe(false);
+    // A single read — not a poll loop.
+    expect(transport.statusPolls(deploymentId)).toBe(1);
+  });
+});
+
+describe("DirectApiDeployAdapter — verify (proven deploy)", () => {
+  async function provisionAndDeploy(transport: ScriptedDeployTransport, instance: DirectApiDeployAdapter, grant: OrgGrant, name: string) {
+    const artifact = await instance.provisionOrBind(grant, ctx(name), { mode: "provision" });
+    const ref: DeployRef = { provider: grant.providerKind, appId: artifact.deployRef!.appId };
+    const { deploymentId } = await instance.deploy(grant, ref, { repo: `acme/${name}`, ref: "main" });
+    return { ref, deploymentId };
+  }
+
+  it("polls the provider through BUILDING→READY then smoke-checks the resolved URL", async () => {
+    const transport = scriptedDeployTransport("vercel");
+    const { instance, probe } = adapter(transport);
+    const { ref, deploymentId } = await provisionAndDeploy(transport, instance, vercelGrant, "acme-web");
+    transport.scriptDeploymentStates(deploymentId, ["QUEUED", "BUILDING", "BUILDING", "READY"]);
+
+    const verification = await instance.verify(vercelGrant, ref, deploymentId);
+
+    expect(verification.ready).toBe(true);
+    expect(verification.state).toBe("READY");
+    expect(verification.pollCount).toBe(4);
+    expect(verification.smokeStatus).toBe(200);
+    expect(transport.statusPolls(deploymentId)).toBe(4);
+    // The smoke probe was run against the RESOLVED deploy URL (no placeholder).
+    expect(probe.probed).toHaveLength(1);
+    expect(probe.probed[0]).toMatch(/^https:\/\//u);
+    expect(probe.probed[0]).not.toContain("{branch}");
+  });
+
+  it("fails LOUD when the deployment reaches a FAILURE terminal", async () => {
+    const transport = scriptedDeployTransport("vercel");
+    const { instance, probe } = adapter(transport);
+    const { ref, deploymentId } = await provisionAndDeploy(transport, instance, vercelGrant, "acme-web");
+    transport.scriptDeploymentStates(deploymentId, ["BUILDING", "ERROR"]);
+    await expect(instance.verify(vercelGrant, ref, deploymentId)).rejects.toThrow(/FAILURE state 'ERROR'/u);
+    // A failed deploy is never smoke-checked.
+    expect(probe.probed).toEqual([]);
+  });
+
+  it("fails LOUD when the deployment never becomes READY within the poll budget", async () => {
+    const transport = scriptedDeployTransport("vercel");
+    const { instance } = adapter(transport, 200, 3);
+    const { ref, deploymentId } = await provisionAndDeploy(transport, instance, vercelGrant, "acme-web");
+    transport.scriptDeploymentStates(deploymentId, ["BUILDING"]); // never advances
+    await expect(instance.verify(vercelGrant, ref, deploymentId)).rejects.toThrow(/never became READY after 3 polls/u);
+    expect(transport.statusPolls(deploymentId)).toBe(3);
+  });
+
+  it("fails LOUD when READY but the URL smoke check is unreachable", async () => {
+    const transport = scriptedDeployTransport("vercel");
+    const { instance } = adapter(transport, 503); // URL answers 503 (not reachable)
+    const { ref, deploymentId } = await provisionAndDeploy(transport, instance, vercelGrant, "acme-web");
+    transport.scriptDeploymentStates(deploymentId, ["READY"]);
+    await expect(instance.verify(vercelGrant, ref, deploymentId)).rejects.toThrow(/not reachable \(smoke check returned HTTP 503\)/u);
+  });
+
+  it("Fly: polls machine state to 'started' then smoke-checks the app URL", async () => {
+    const transport = scriptedDeployTransport("fly");
+    const { instance, probe } = adapter(transport);
+    const { ref, deploymentId } = await provisionAndDeploy(transport, instance, flyGrant, "acme-web");
+    transport.scriptDeploymentStates(deploymentId, ["created", "starting", "started"]);
+    const verification = await instance.verify(flyGrant, ref, deploymentId);
+    expect(verification.ready).toBe(true);
+    expect(verification.state).toBe("started");
+    expect(verification.url).toBe("https://acme-web.fly.dev");
+    expect(probe.probed).toEqual(["https://acme-web.fly.dev"]);
+  });
+
+  it("the deploy token VALUE is never returned in a verification result", async () => {
+    const transport = scriptedDeployTransport("vercel");
+    const { instance } = adapter(transport);
+    const { ref, deploymentId } = await provisionAndDeploy(transport, instance, vercelGrant, "acme-web");
+    transport.scriptDeploymentStates(deploymentId, ["READY"]);
+    const verification = await instance.verify(vercelGrant, ref, deploymentId);
+    expect(JSON.stringify(verification)).not.toContain(TOKEN_VALUE);
+  });
+});
+
+describe("buildDeployAdapter (registry/factory)", () => {
+  it("builds the direct_api adapter", () => {
+    const built = buildDeployAdapter(DIRECT_API_ADAPTER_KIND, {
+      provisioner: { transport: scriptedDeployTransport("vercel"), secrets: secrets() },
+      urlProbe: scriptedUrlProbe(),
+      poll: instantVerifyPollPolicy(),
+    });
+    expect(built.kind).toBe("direct_api");
+  });
+
+  it("fails LOUD for a deferred / unknown adapter class (never a silent default)", () => {
+    expect(() =>
+      buildDeployAdapter("pulumi", {
+        provisioner: { transport: scriptedDeployTransport("vercel"), secrets: secrets() },
+      }),
+    ).toThrow(/adapter class 'pulumi' is not implemented yet/u);
+  });
+});

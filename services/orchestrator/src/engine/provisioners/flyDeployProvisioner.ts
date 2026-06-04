@@ -28,6 +28,7 @@ import {
   DeployProvisioner,
   type DeployApp,
   type DeployEnvVar,
+  type DeploymentStatus,
   type DeployProviderApi,
   type DeployProvisionerDeps,
   type DeployResult,
@@ -164,6 +165,29 @@ class FlyDeployApi implements DeployProviderApi {
       throw new Error(`fly trigger deploy for '${app.name}' returned no machine id: ${response.text}`);
     }
     return { deploymentId: body.id, url: previewUrlPattern(app.name), state: body.state ?? "started" };
+  }
+
+  async getDeployment(_grant: OrgGrant, token: string, app: DeployApp, deploymentId: string): Promise<DeploymentStatus> {
+    // GET /v1/apps/{app}/machines/{id} → the machine's `state` (Fly's lifecycle:
+    // created → starting → started, or stopped / failed / destroyed on failure). The
+    // app's stable hostname IS the deployment URL (one host per app). The verify poll
+    // collapses the state into its ready/failed terminals.
+    const response = await this.transport.request({
+      method: "GET",
+      url: `${FLY_API_BASE}/v1/apps/${encodeURIComponent(app.name)}/machines/${encodeURIComponent(deploymentId)}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    if (!response.ok) {
+      throw new Error(`fly get machine '${deploymentId}' on '${app.name}' failed: ${response.status} ${response.text}`);
+    }
+    const body = (response.json ?? {}) as { state?: string };
+    const state = body.state ?? "created";
+    return {
+      state,
+      terminalReady: state === "started",
+      terminalFailed: state === "stopped" || state === "failed" || state === "destroyed",
+      url: previewUrlPattern(app.name),
+    };
   }
 }
 

@@ -37,6 +37,15 @@ export interface ScriptedDeployTransport extends DeployHttpTransport {
    * test can assert the deployment endpoint was hit + the merged git ref reached it.
    */
   deploysTriggered(): { appId: string; body: Record<string, unknown> }[];
+  /**
+   * Script the status sequence the emulated provider reports for a deployment id on
+   * successive `getDeployment` polls (the verify poll). The LAST entry is repeated
+   * once exhausted, so a `[…,"READY"]` sequence stays READY. Lets a test drive
+   * verify through BUILDING→READY (poll-to-ready) or to a failure terminal.
+   */
+  scriptDeploymentStates(deploymentId: string, states: string[]): void;
+  /** How many `getDeployment` status polls the transport served for a deployment id. */
+  statusPolls(deploymentId: string): number;
 }
 
 /**
@@ -66,6 +75,10 @@ export function scriptedDeployTransport(flavor: DeployFlavor, seedNames: string[
   // prove a real deploy was triggered (not just an empty app created).
   const triggered: { appId: string; body: Record<string, unknown> }[] = [];
   let deployCounter = 0;
+  // Scripted status sequences for the verify poll: deploymentId → state list (the
+  // last entry repeats once exhausted). `pollsByDeployment` counts polls served.
+  const stateScripts = new Map<string, string[]>();
+  const pollsByDeployment = new Map<string, number>();
 
   const listBody = (): unknown =>
     flavor === "vercel"
@@ -77,10 +90,27 @@ export function scriptedDeployTransport(flavor: DeployFlavor, seedNames: string[
     bearersSeen,
     envByApp: () => structuredClone(envByApp),
     deploysTriggered: () => structuredClone(triggered),
+    scriptDeploymentStates: (deploymentId, states) => {
+      stateScripts.set(deploymentId, [...states]);
+    },
+    statusPolls: (deploymentId) => pollsByDeployment.get(deploymentId) ?? 0,
     async request(req: DeployHttpRequest): Promise<DeployHttpResponse> {
       bearersSeen.push(req.headers["authorization"] ?? "");
 
       if (req.method === "GET") {
+        // A deployment-status GET (the verify poll): Vercel `/v13/deployments/{id}`,
+        // Fly `/v1/apps/{name}/machines/{id}`. Served from the scripted state
+        // sequence (default READY when no script) so verify can poll to a terminal.
+        const status = parseStatusRead(flavor, req);
+        if (status !== undefined) {
+          const served = pollsByDeployment.get(status.deploymentId) ?? 0;
+          pollsByDeployment.set(status.deploymentId, served + 1);
+          const script = stateScripts.get(status.deploymentId) ?? [flavor === "vercel" ? "READY" : "started"];
+          const state = script[Math.min(served, script.length - 1)] as string;
+          return flavor === "vercel"
+            ? okResponse({ readyState: state, url: `${status.appOrDeploymentRef}.vercel.app` })
+            : okResponse({ state });
+        }
         return okResponse(listBody());
       }
       // Deploy TRIGGER requests: Vercel `/v13/deployments`, Fly
@@ -187,6 +217,35 @@ function parseSetEnv(
  * `gitSource`; Fly POSTs `/v1/apps/{name}/machines` (the app in the path). Returns
  * undefined for any other POST (so the create-app branch still runs).
  */
+/**
+ * Recognize a deployment-STATUS read (the verify poll) and extract the deployment id
+ * + an app-or-deployment ref used to shape the URL field. Vercel GETs
+ * `/v13/deployments/{id}`; Fly GETs `/v1/apps/{name}/machines/{id}`. Returns
+ * undefined for the bare list GET (so it falls through to `listBody`).
+ */
+function parseStatusRead(
+  flavor: DeployFlavor,
+  req: DeployHttpRequest,
+): { deploymentId: string; appOrDeploymentRef: string } | undefined {
+  if (req.method !== "GET") {
+    return undefined;
+  }
+  const path = req.url.split("?")[0] ?? "";
+  if (flavor === "vercel") {
+    const match = /\/v13\/deployments\/([^/]+)$/u.exec(path);
+    if (match === null) {
+      return undefined;
+    }
+    const id = decodeURIComponent(match[1] as string);
+    return { deploymentId: id, appOrDeploymentRef: id };
+  }
+  const match = /\/v1\/apps\/([^/]+)\/machines\/([^/]+)$/u.exec(path);
+  if (match === null) {
+    return undefined;
+  }
+  return { deploymentId: decodeURIComponent(match[2] as string), appOrDeploymentRef: decodeURIComponent(match[1] as string) };
+}
+
 function parseDeploy(
   flavor: DeployFlavor,
   req: DeployHttpRequest,

@@ -28,4 +28,14 @@ export const integrationProvisioningSensitivityRules: SensitivityRule[] = [
   { eventName: "deploy.triggered", path: "deploymentId", tag: "public" },
   { eventName: "deploy.triggered", path: "url", tag: "public" },
   { eventName: "deploy.triggered", path: "state", tag: "public" },
+
+  // deploy.verified ("the deploy is PROVEN live"): the verified deploy target + the
+  // resolved live URL + the final READY state + the smoke HTTP status. All non-secret
+  // — the deploy token + runtime env values went only into the provider requests.
+  { eventName: "deploy.verified", path: "provider", tag: "public" },
+  { eventName: "deploy.verified", path: "appId", tag: "public" },
+  { eventName: "deploy.verified", path: "deploymentId", tag: "public" },
+  { eventName: "deploy.verified", path: "url", tag: "public" },
+  { eventName: "deploy.verified", path: "state", tag: "public" },
+  { eventName: "deploy.verified", path: "smokeStatus", tag: "public" },
 ];

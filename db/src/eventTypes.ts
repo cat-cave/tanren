@@ -50,6 +50,7 @@ export const eventTypeNames = [
   "dag.spec.speculative",
   "dag.spec.unstranded",
   "deploy.triggered",
+  "deploy.verified",
   "gate.advisory_failed",
   "gate.failed",
   "gate.passed",
