@@ -2,10 +2,10 @@ import { describe, expect, it } from "vitest";
 import { InMemorySecretStore, type SshSubstrate } from "../src/engine/contracts/index.js";
 import { buildApp } from "../src/main.js";
 
-// These contract tests never reach the draft-PR route, so a never-invoked stub
-// satisfies the SSH dep shape; the explicit memory store satisfies the required
-// SecretStore injection.
+// Contract tests never reach the draft-PR route, so a never-invoked stub satisfies
+// the SSH dep shape; the explicit memory store satisfies the SecretStore injection.
 const ssh = {} as SshSubstrate;
+const doneOrMerged = (status: string): boolean => status === "done" || status === "merged";
 
 describe("project/spec workflow contract", () => {
   it("creates a project, creates a spec, and queues a run from persisted rows", async () => {
@@ -275,7 +275,7 @@ class ContractPool {
     if (sql.startsWith("SELECT spec_id FROM specs WHERE project_id = $1 AND spec_id = ANY")) {
       return this.selectSpecsForProject(String(params[0]), params[1] as string[]);
     }
-    if (sql.startsWith("SELECT spec_id FROM specs WHERE project_id = $1 AND status = 'done'")) {
+    if (sql.startsWith("SELECT spec_id FROM specs WHERE project_id = $1 AND status IN ('done', 'merged')")) {
       return this.selectDoneSpecsForProject(String(params[0]), params[1] as string[]);
     }
     if (sql.startsWith("INSERT INTO specs")) {
@@ -342,7 +342,7 @@ class ContractPool {
   private selectDoneSpecsForProject(projectId: string, specIds: string[]): { rows: unknown[]; rowCount: number } {
     const rows = specIds
       .map((specId) => this.specs.get(specId))
-      .filter((spec): spec is SpecRow => spec !== undefined && spec.projectId === projectId && spec.status === "done")
+      .filter((spec): spec is SpecRow => spec?.projectId === projectId && doneOrMerged(spec.status))
       .map((spec) => ({ spec_id: spec.specId }));
     return { rows, rowCount: rows.length };
   }

@@ -37,6 +37,7 @@ import {
   type PercolationSettler,
   type SpeculativeDependent,
 } from "../contracts/changePercolation.js";
+import { SpecNotRunnableError } from "../workflow/projectSpecErrors.js";
 
 /** What one full percolation pass over a project produced (for the subscriber + tests). */
 export interface PercolationPassResult {
@@ -55,6 +56,14 @@ export interface PercolationPassResult {
   held: string[];
   /** Dependents with NO actionable change (the termination key — verified SHA matches). */
   unchanged: string[];
+  /**
+   * Dependents BENIGNLY SKIPPED this pass: the spec became merged/done between the
+   * load and the re-execution kick-off, so its claim raised SpecNotRunnableError (a
+   * terminal spec is not re-runnable). The change is moot (a merged spec carries its
+   * upstream content already); skip it WITHOUT aborting the pass — the OTHER
+   * dependents are still processed, and the stale marker is cleared next pass.
+   */
+  skipped: string[];
 }
 
 export interface ChangePercolationCoordinator {
@@ -79,6 +88,7 @@ function emptyResult(projectId: string): PercolationPassResult {
     inFlight: [],
     held: [],
     unchanged: [],
+    skipped: [],
   };
 }
 
@@ -196,12 +206,31 @@ export class PercolatingCoordinator implements ChangePercolationCoordinator {
         toAncestorSha: immediate.toSha,
         severity,
       });
-      const outcome = await this.deps.kickOff.kickOff({
-        projectId,
-        dependent,
-        decision: immediate,
-        mergedAncestorSpecIds,
-      });
+      let outcome;
+      try {
+        outcome = await this.deps.kickOff.kickOff({
+          projectId,
+          dependent,
+          decision: immediate,
+          mergedAncestorSpecIds,
+        });
+      } catch (error) {
+        // TOLERATE a candidate that became terminal between load and kick-off: the
+        // re-execution reopens the spec to `pending` (a no-op once merged/done) then
+        // claims it, and the claim raises SpecNotRunnableError on a non-`pending`
+        // spec. A merged spec is never a percolation dependent (its re-base is moot),
+        // so SKIP it benignly — debug-log, record it, and let the pass CONTINUE
+        // processing the OTHER dependents. Every OTHER error still propagates (no
+        // silent fallback). Mirrors the walker's enqueueOrTolerate spirit (#278).
+        if (error instanceof SpecNotRunnableError) {
+          console.debug(
+            `[change-percolation] skipped ${dependent.specId}: became ${error.status} between load and re-exec (terminal — not a percolation dependent) — benign`,
+          );
+          result.skipped.push(dependent.specId);
+          return;
+        }
+        throw error;
+      }
       if (outcome.result === "reexecuting") {
         // A REAL re-execution is now in flight; it settles (absorbs/replans) on a
         // later pass once its gate+checker+auditor terminate. Not absorbed here.

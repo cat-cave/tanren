@@ -400,8 +400,16 @@ async function ensureSpecDependenciesDone(client: pg.PoolClient, spec: SpecContr
   if (spec.dependsOn.length === 0) {
     return;
   }
+  // A dependency is SATISFIED when its spec reached a terminal-complete status —
+  // EITHER the Phase-0/1 `done` OR the Phase-2 `merged` (a merged PR ends the spec
+  // at `merged`, never `done`). Both map to the walker's `done` phase
+  // (classifySpecStatus) and the lifecycle projection's `merged` state, so the
+  // planner sees a fully-MERGED dep chain as ready; this gate MUST agree, or a
+  // dependent whose deps are all `merged` is rejected with
+  // SpecDependenciesBlockedError (which the walker tolerates as benign-transient →
+  // a PERMANENT stall, since a merged dep never becomes `done`).
   const result = await client.query(
-    "SELECT spec_id FROM specs WHERE project_id = $1 AND status = 'done' AND spec_id = ANY($2::text[])",
+    "SELECT spec_id FROM specs WHERE project_id = $1 AND status IN ('done', 'merged') AND spec_id = ANY($2::text[])",
     [spec.projectId, spec.dependsOn],
   );
   const done = new Set(result.rows.map((row) => String(row.spec_id)));

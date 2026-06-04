@@ -291,4 +291,39 @@ describe("DagWalker speculative execution (§2c)", () => {
     await real.walker.walk(PROJECT);
     expect(real.enqueuer.records[0]).toEqual({ specId: "spec_c" });
   });
+
+  // THE READY-NOT-ENQUEUED REGRESSION (apex v18): a `pending` schema spec whose
+  // dependency chain is ALL `merged` (the scaffold→build→ci chain) must be classified
+  // READY and enqueued NON-speculatively (no integration branch — its deps are all on
+  // main), under the DEFAULT conservative threshold. The DAG was stalling at 3/14: the
+  // planner saw the merged chain as crossed (so the spec was uncategorized in the
+  // drained event — neither done/blocked/in-flight, it was READY) but the non-speculative
+  // enqueue gate rejected it because the deps were `merged`, not `done`. The walker
+  // classification half is pinned here (the gate half is the (6a) plane-split DB test);
+  // together they prove the all-merged chain advances past 3/14.
+  it("a pending spec whose dependency chain is ALL merged is READY + enqueued non-speculatively (NOT drained)", async () => {
+    const { walker, enqueuer, emitter, integrator } = makeWalker({
+      // scaffold → build → ci all done/merged; the schema spec depends on all three.
+      nodes: [
+        node("scaffold", "done", [], 0),
+        node("build", "done", ["scaffold"], 1),
+        node("ci", "done", ["scaffold", "build"], 2),
+        node("schema", "pending", ["scaffold", "build", "ci"], 3),
+      ],
+      lifecycle: { scaffold: "merged", build: "merged", ci: "merged", schema: "pending" },
+      threshold: "conservative",
+    });
+    const result = await walker.walk(PROJECT);
+
+    // The schema spec was classified READY and ENQUEUED — not stranded in a drained tick.
+    expect(result.status).toBe("enqueued");
+    expect(result.enqueuedSpecIds).toEqual(["schema"]);
+    // NON-speculative: every dependency is merged (on main), so there is NO integration
+    // branch (no speculativeBase) and the integrator is never consulted.
+    expect(enqueuer.records).toEqual([{ specId: "schema" }]);
+    expect((integrator as FakeIntegrator).calls).toEqual([]);
+    // It emitted dag.spec.enqueued (the ready-spec outcome), never dag.drained.
+    expect(emitter.enqueued).toEqual(["schema"]);
+    expect(emitter.drained).toEqual([]);
+  });
 });

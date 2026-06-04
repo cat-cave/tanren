@@ -30,7 +30,12 @@ import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js"
 import { PgDagLifecycleReadModel } from "./lifecycle.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import { type EventStore, PgEventStore } from "../eventStore.js";
-import { decodePercolationPending, decodeVerified, resolveProjectOrg } from "./percolationWrites.js";
+import {
+  clearPercolationPending,
+  decodePercolationPending,
+  decodeVerified,
+  resolveProjectOrg,
+} from "./percolationWrites.js";
 
 interface SpeculativeRunRow {
   run_id: string;
@@ -56,6 +61,13 @@ export interface PgPercolationReadModelDeps {
   vcsProvider: VcsProvider;
   secrets: SecretStore;
   githubAppMinter?: GithubAppTokenMinter;
+  /**
+   * Plane-split (autonomy loops): when present, the stale-marker housekeeping
+   * clear (a `percolation_pending` marker left on a now-MERGED/DONE run) routes
+   * through the control plane (the de-privileged data plane can no longer UPDATE
+   * runs); absent, the clear runs in-process org-scoped — byte-identical to today.
+   */
+  runStateWriter?: RunStateWriter;
 }
 
 /**
@@ -96,35 +108,52 @@ export class PgPercolationReadModel implements PercolationReadModel {
       );
       return result.rows;
     });
-    return (
-      rows
-        .map((row): SpeculativeDependent => {
-          const life = lifecycleSnapshot.bySpecId.get(row.spec_id);
-          const buildBase = asShaMap(row.integrated_ancestor_shas);
-          // The verified (absorbed) map defaults to the build base before the first
-          // percolation: a fresh speculative start was audited against its build
-          // base, so that IS its verified SHA until an ancestor changes.
-          const verified = decodeVerified(row.verified_ancestor_shas);
-          const verifiedShas = Object.keys(verified.shas).length > 0 ? verified.shas : buildBase;
-          const pending = decodePercolationPending(row.percolation_pending);
-          return {
-            specId: row.spec_id,
-            runId: row.run_id,
-            speculativeBase: row.speculative_base,
-            integratedAncestorShas: buildBase,
-            verifiedAncestorShas: verifiedShas,
-            absorbedReviewVerdicts: verified.verdicts,
-            ...(pending !== undefined && { pending }),
-            lifecycleState: life?.state ?? "building",
-            openFindingMaxSeverity: life?.openFindingMaxSeverity ?? "unaudited",
-          };
-        })
-        // A run whose build-base map decoded empty has nothing to DETECT against —
-        // UNLESS it carries an in-flight percolation marker (a §2c non-speculative
-        // re-exec, re-based onto plain main), which the SETTLE must still resolve to
-        // advance the termination key. Drop only the runs that are neither.
-        .filter((d) => Object.keys(d.integratedAncestorShas).length > 0 || d.pending !== undefined)
-    );
+    const dependents = rows
+      .map((row): SpeculativeDependent => {
+        const life = lifecycleSnapshot.bySpecId.get(row.spec_id);
+        const buildBase = asShaMap(row.integrated_ancestor_shas);
+        // The verified (absorbed) map defaults to the build base before the first
+        // percolation: a fresh speculative start was audited against its build
+        // base, so that IS its verified SHA until an ancestor changes.
+        const verified = decodeVerified(row.verified_ancestor_shas);
+        const verifiedShas = Object.keys(verified.shas).length > 0 ? verified.shas : buildBase;
+        const pending = decodePercolationPending(row.percolation_pending);
+        return {
+          specId: row.spec_id,
+          runId: row.run_id,
+          speculativeBase: row.speculative_base,
+          integratedAncestorShas: buildBase,
+          verifiedAncestorShas: verifiedShas,
+          absorbedReviewVerdicts: verified.verdicts,
+          ...(pending !== undefined && { pending }),
+          lifecycleState: life?.state ?? "building",
+          openFindingMaxSeverity: life?.openFindingMaxSeverity ?? "unaudited",
+        };
+      })
+      // A run whose build-base map decoded empty has nothing to DETECT against —
+      // UNLESS it carries an in-flight percolation marker (a §2c non-speculative
+      // re-exec, re-based onto plain main), which the SETTLE must still resolve to
+      // advance the termination key. Drop only the runs that are neither.
+      .filter((d) => Object.keys(d.integratedAncestorShas).length > 0 || d.pending !== undefined);
+
+    // EXCLUDE TERMINAL specs (`merged`/`done` both project to lifecycle `merged`):
+    // a merged spec is NEVER a percolation dependent — its re-base is moot, and it
+    // cannot be re-executed (the spec status is terminal, so a kick-off's reopen is
+    // a no-op and the claim raises SpecNotRunnableError). The §2c marker-widening
+    // (load runs carrying a `percolation_pending` even with a NULL speculative_base)
+    // started ALSO loading the run of an already-merged spec when a STALE marker
+    // lingered on it — returning it made the coordinator try to re-exec a merged
+    // spec, aborting the whole pass. Drop them here, and CLEAR the moot marker
+    // (idempotent — a NULL marker stays NULL) so it is never re-detected. Live
+    // (non-terminal) dependents are returned for the coordinator to settle/detect.
+    const terminalWithMarker = dependents.filter((d) => d.lifecycleState === "merged" && d.pending !== undefined);
+    for (const terminal of terminalWithMarker) {
+      console.debug(
+        `[change-percolation] clearing stale percolation_pending on merged/done spec ${terminal.specId} (run ${terminal.runId}) — a terminal spec is never a percolation dependent`,
+      );
+      await clearPercolationPending(this.deps.pool, { projectId, runId: terminal.runId }, this.deps.runStateWriter);
+    }
+    return dependents.filter((d) => d.lifecycleState !== "merged");
   }
 
   async loadAncestorSignals(input: {
