@@ -505,6 +505,13 @@
       "when": 1780604658812,
       "tag": "0071_worried_skreet",
       "breakpoints": true
+    },
+    {
+      "idx": 72,
+      "version": "7",
+      "when": 1780609171631,
+      "tag": "0072_first_steel_serpent",
+      "breakpoints": true
     }
   ]
 }

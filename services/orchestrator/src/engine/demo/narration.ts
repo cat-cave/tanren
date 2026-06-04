@@ -1,11 +1,15 @@
-// P3-0011: demo-role narration generator.
+// Demo-role narration — the operator-facing SUMMARY layered ON TOP of the real
+// per-behavior demo EVIDENCE (design doc § "Native Deployment And Demos": the demo
+// engine in demoEngine.ts produces the verifiable per-behavior evidence; this module
+// turns it into the operator-facing "here is what this run demonstrated" prose). The
+// two are NOT parallel paths: narration summarizes evidence, it never invents a
+// verdict. When the caller threads the recorded `BehaviorEvidence` through
+// `DemoNarrationInput.evidence`, a FAILED behavior is surfaced honestly (folded into
+// the body + showStopperRisks) — the prose can never claim a behavior passed that the
+// evidence says failed.
 //
-// The demo role produces a spec-completion narration — the operator-facing
-// "here is what this run demonstrated" block — shaped by the P2A-0008
-// `DemoAnswer` schema. Phase 2 shipped only the schema; v0 narration was a
-// pure template. This module swaps that template for a real Answerer call
-// (default Codex, Claude selectable) WITHOUT touching the DemoAnswer
-// contract: the Answerer is asked to emit exactly the P2A-0008 shape and the
+// The narration is shaped by the P2A-0008 `DemoAnswer` schema. The Answerer is asked
+// to emit exactly the P2A-0008 shape (default Codex, Claude selectable) and the
 // result is parsed through the same Zod source of truth.
 //
 // The Answerer is injected (an `AnswererAdapter<DemoAnswer>`), so unit tests
@@ -22,6 +26,7 @@
 
 import { answererOutputSchemaFor, DemoAnswer } from "../answerers/schemas/index.js";
 import type { AnswererAdapter } from "../providers/types.js";
+import type { BehaviorEvidence } from "./demoEvidence.js";
 
 // Behavior the run demonstrated. Mirrors the P2A-0018 behavior shape the
 // caller resolves upstream so this module stays free of repository access.
@@ -47,6 +52,12 @@ export interface DemoNarrationInput {
   // Risks the loop flagged but did not resolve (e.g. auditor caveats, gate
   // warnings). Carried through to showStopperRisks so the demo is honest.
   unresolvedRisks: ReadonlyArray<string>;
+  // The VERIFIABLE per-behavior demo evidence the demo engine recorded against the
+  // live deploy surface (demoEngine.ts). When present, the narration is layered ON
+  // TOP of it: a FAILED behavior is folded into the body + showStopperRisks so the
+  // prose can never claim a behavior the evidence says failed. Absent (no deploy
+  // surface, so no demo ran) ⇒ the narration falls back to the spec's behaviors.
+  evidence?: ReadonlyArray<BehaviorEvidence>;
   // Workspace path passed through to the Answerer adapter. Codex needs a
   // workspace mount even for a read-only answerer call.
   workspace?: string;
@@ -89,6 +100,17 @@ export function buildDemoPrompt(input: DemoNarrationInput): string {
           ),
           "",
         ];
+  const evidence =
+    input.evidence === undefined || input.evidence.length === 0
+      ? []
+      : [
+          "Live demo evidence (each behavior exercised against the deployed surface — " +
+            "narrate ONLY what this evidence supports, never claim a failed behavior passed):",
+          ...input.evidence.map(
+            (entry) => `- ${entry.behaviorId} (${entry.behaviorTitle}): ${entry.outcome} — ${entry.detail}`,
+          ),
+          "",
+        ];
   const risks =
     input.unresolvedRisks.length === 0
       ? ["Unresolved risks: none reported.", ""]
@@ -109,7 +131,7 @@ export function buildDemoPrompt(input: DemoNarrationInput): string {
     "- showStopperRisks: every unresolved risk above, verbatim or paraphrased",
     "- links: relevant links (the PR above, when present)",
   ];
-  return [...header, ...behaviors, ...risks, ...link, ...footer].join("\n");
+  return [...header, ...behaviors, ...evidence, ...risks, ...link, ...footer].join("\n");
 }
 
 // templateDemoNarration is the deterministic fallback. It composes the same
@@ -117,6 +139,12 @@ export function buildDemoPrompt(input: DemoNarrationInput): string {
 // demo never hard-fails when no credential is available or the live call
 // throws. Exported for the fallback-path test.
 export function templateDemoNarration(input: DemoNarrationInput): DemoAnswer {
+  // When live demo evidence is present, the template summarizes IT (the verifiable
+  // per-behavior verdicts) rather than the spec's declared behaviors — so the
+  // fallback prose is honest about what actually exercised on the live surface.
+  if (input.evidence !== undefined && input.evidence.length > 0) {
+    return templateFromEvidence(input, input.evidence);
+  }
   const behaviorCount = input.behaviors.length;
   const headline =
     behaviorCount === 0
@@ -139,6 +167,30 @@ export function templateDemoNarration(input: DemoNarrationInput): DemoAnswer {
     body: bodyParts.filter((part) => part !== "").join(" "),
     highlightBehaviorIds: input.behaviors.map((behavior) => behavior.id),
     showStopperRisks: [...input.unresolvedRisks],
+    links,
+  });
+}
+
+// templateFromEvidence composes the DemoAnswer from the recorded per-behavior demo
+// evidence. The summary is HONEST: only PASSED behaviors are highlighted, every
+// FAILED behavior becomes a show-stopper risk (alongside any unresolved risk), and
+// the body reports the live pass/fail tally.
+function templateFromEvidence(input: DemoNarrationInput, evidence: ReadonlyArray<BehaviorEvidence>): DemoAnswer {
+  const passed = evidence.filter((entry) => entry.outcome === "passed");
+  const failed = evidence.filter((entry) => entry.outcome === "failed");
+  const headline = `Demoed: ${input.specTitle} (${String(passed.length)}/${String(evidence.length)} behaviors live)`;
+  const bodyParts: string[] = [
+    input.specDescription,
+    `Exercised ${String(evidence.length)} behavior${evidence.length === 1 ? "" : "s"} against the live deploy: ` +
+      `${String(passed.length)} passed, ${String(failed.length)} failed.`,
+  ];
+  const failedRisks = failed.map((entry) => `Behavior "${entry.behaviorTitle}" did not exercise live: ${entry.detail}`);
+  const links = input.prUrl !== undefined && input.prUrl !== "" ? [{ label: "Open PR", url: input.prUrl }] : [];
+  return DemoAnswer.parse({
+    headline,
+    body: bodyParts.filter((part) => part !== "").join(" "),
+    highlightBehaviorIds: passed.map((entry) => entry.behaviorId),
+    showStopperRisks: [...failedRisks, ...input.unresolvedRisks],
     links,
   });
 }

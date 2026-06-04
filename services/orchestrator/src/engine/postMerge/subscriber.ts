@@ -40,6 +40,14 @@ export interface PostMergeSubscriberDeps extends PostMergeWatcherDeps {
    * deploy failure is logged + isolated, so it never suppresses the issue watcher.
    */
   deployWatcher?: RunMergeWatcher;
+  /**
+   * The demo-on-deploy watcher (demos-as-evidence): driven on the SAME wake, AFTER the
+   * deploy watcher, so by the time it runs the deploy watcher has emitted
+   * `deploy.verified`. It exercises the spec's behaviors against the verified deploy
+   * surface and records per-behavior evidence; a run with no verified deploy is a
+   * clean no-op. ISOLATED — a demo failure is logged and never suppresses the others.
+   */
+  demoWatcher?: RunMergeWatcher;
 }
 
 /**
@@ -51,6 +59,7 @@ export interface PostMergeSubscriberDeps extends PostMergeWatcherDeps {
 export class PostMergeSubscriber {
   private readonly watcher: PostMergeWatcher;
   private readonly deployWatcher: RunMergeWatcher | undefined;
+  private readonly demoWatcher: RunMergeWatcher | undefined;
   private unsubscribe: (() => void) | undefined;
   private stopped = false;
   private readonly inFlight = new Map<string, Promise<void>>();
@@ -59,6 +68,7 @@ export class PostMergeSubscriber {
   constructor(private readonly deps: PostMergeSubscriberDeps) {
     this.watcher = deps.watcher ?? new PostMergeWatcher(deps);
     this.deployWatcher = deps.deployWatcher;
+    this.demoWatcher = deps.demoWatcher;
   }
 
   // eslint-disable-next-line @typescript-eslint/require-await
@@ -121,6 +131,14 @@ export class PostMergeSubscriber {
       if (this.deployWatcher !== undefined) {
         await this.deployWatcher.check(runId).catch((error: unknown) => {
           console.error(`[post-merge] deploy-on-merge failed for run ${runId}:`, error);
+        });
+      }
+      // The demo-on-deploy watcher runs AFTER the deploy watcher (so `deploy.verified`
+      // is already emitted) but is equally ISOLATED: a demo failure is logged and never
+      // suppresses the issue/deploy watchers. A run with no verified deploy is a no-op.
+      if (this.demoWatcher !== undefined) {
+        await this.demoWatcher.check(runId).catch((error: unknown) => {
+          console.error(`[post-merge] demo-on-deploy failed for run ${runId}:`, error);
         });
       }
     } while (this.rePending.has(runId));

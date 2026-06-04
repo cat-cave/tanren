@@ -1,5 +1,11 @@
 import { z } from "zod";
 
+// Demos-as-evidence payloads live in their own module (schemas/demo.ts) but are
+// re-exported through this post-merge barrel — the demo-on-deploy watcher is itself a
+// post-merge subscriber — so the EventRegistry pulls them off one barrel it already
+// imports (keeps the registry under its dependency cap).
+export { DemoEvidenceRecordedPayload, DemoCompletedPayload } from "./demo.js";
+
 // Post-merge auto-issue creation (tempering.md dimension A, the last core
 // run-loop item). After a run's PR merges onto `default_branch`, the post-merge
 // watcher reads the post-merge CI on the base branch (the SAME readBranchChecks

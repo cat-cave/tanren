@@ -14,6 +14,7 @@
 // the provider bearer.
 
 import type {
+  DemoSurface,
   DeployAdapter,
   DeployRef,
   DeployStatus,
@@ -68,6 +69,24 @@ export class DirectApiDeployAdapter implements DeployAdapter {
     const provisioner = deployProvisionerFor(ref.provider, this.deps.provisioner);
     const read = await provisioner.deploymentStatus(grant, ref.appId, deploymentId);
     return { state: read.state, ready: read.terminalReady, failed: read.terminalFailed, url: read.url };
+  }
+
+  /**
+   * Resolve the demo EXERCISE SURFACE for a `direct_api` deploy: the resolved live
+   * `web_url`, read from the deployment's provider status (the SAME concrete URL
+   * `verify` smoke-checked). A deployment the provider reports with no URL throws
+   * LOUD — there is no surface for the demo engine to exercise, and that is never a
+   * silent skip. Read-only: this never triggers/mutates a deployment.
+   */
+  async demoSurface(grant: OrgGrant, ref: DeployRef, deploymentId: string): Promise<DemoSurface> {
+    const provisioner = deployProvisionerFor(ref.provider, this.deps.provisioner);
+    const read = await provisioner.deploymentStatus(grant, ref.appId, deploymentId);
+    if (read.url === "") {
+      throw new Error(
+        `demoSurface: deployment '${deploymentId}' on '${ref.provider}/${ref.appId}' has no resolved URL — no web surface to exercise`,
+      );
+    }
+    return { kind: "web_url", url: read.url };
   }
 
   /**

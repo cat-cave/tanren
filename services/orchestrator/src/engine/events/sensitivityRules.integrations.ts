@@ -38,4 +38,17 @@ export const integrationProvisioningSensitivityRules: SensitivityRule[] = [
   { eventName: "deploy.verified", path: "url", tag: "public" },
   { eventName: "deploy.verified", path: "state", tag: "public" },
   { eventName: "deploy.verified", path: "smokeStatus", tag: "public" },
+
+  // demos-as-evidence: the per-behavior demo verdict + the summary. Every field is
+  // non-secret — a behavior id/title, a surface kind, an outcome, and the OBSERVABLE
+  // SHAPE of the reach ("GET /links → HTTP 200"); never a token or a response body.
+  { eventName: "demo.evidence.recorded", path: "behaviorId", tag: "public" },
+  { eventName: "demo.evidence.recorded", path: "behaviorTitle", tag: "public" },
+  { eventName: "demo.evidence.recorded", path: "surfaceKind", tag: "public" },
+  { eventName: "demo.evidence.recorded", path: "outcome", tag: "public" },
+  { eventName: "demo.evidence.recorded", path: "detail", tag: "public" },
+  { eventName: "demo.completed", path: "surfaceKind", tag: "public" },
+  { eventName: "demo.completed", path: "behaviorCount", tag: "public" },
+  { eventName: "demo.completed", path: "passed", tag: "public" },
+  { eventName: "demo.completed", path: "failed", tag: "public" },
 ];

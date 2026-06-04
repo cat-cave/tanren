@@ -7,13 +7,16 @@
 // fails LOUD) and then SMOKE-CHECKS the resolved URL is HTTP-reachable. This makes
 // "a deploy happened" PROVEN, not merely triggered.
 //
-// SCOPE (foundational slice): this port covers the apex-relevant `direct_api`
-// adapter class (the Vercel/Fly providers) and the verify capability only. The
-// full DeployAdapter lifecycle the direction doc proposes — buildArtifact / plan /
-// applyPreview / demoSurface / promote / rollback / teardownPreview / costEstimate,
-// and the other adapter classes (pulumi / mobile_release / package_release /
-// manual_external) — are DEFERRED. They slot in as new methods on this port + new
-// registry arms, exactly like the IntegrationProvisioner / Allocator seams grow.
+// SCOPE: this port covers the apex-relevant `direct_api` adapter class (the
+// Vercel/Fly providers). It carries the verify capability (poll-to-ready + URL
+// smoke) AND — the demos-as-evidence addition — `demoSurface`, which resolves the
+// EXERCISE SURFACE (a `DemoSurface`) the demo engine runs the spec's behavior checks
+// against, so demo evidence is tied to the spec's BEHAVIORS and not to the provider.
+// The rest of the lifecycle the direction doc proposes — buildArtifact / plan /
+// applyPreview / promote / rollback / teardownPreview / costEstimate, and the other
+// adapter classes (pulumi / mobile_release / package_release / manual_external) — is
+// DEFERRED. Each slots in as new methods on this port + new registry arms, exactly
+// like the IntegrationProvisioner / Allocator seams grow.
 //
 // SECRET DISCIPLINE: this port never holds or returns a secret VALUE. The deploy
 // token is resolved INSIDE the wrapped `DeployProvisioner` (from the org grant's
@@ -77,6 +80,32 @@ export interface DeployRef {
 }
 
 /**
+ * The EXERCISE SURFACE a demo runs its behavior checks against — the design doc's
+ * "demos are first-class behavior evidence tied to the spec's behaviors, NOT to the
+ * provider" made concrete. The surface is how the demo engine REACHES the deployed
+ * product to prove a behavior; it is deliberately a tagged union so the demo engine
+ * stays provider-AGNOSTIC: a `direct_api` (Vercel/Fly) deploy resolves to a live
+ * `web_url`, but a `package_release` would resolve to an installable package, a
+ * `mobile_release` to an app-store channel, a `manual_external` to a download — and
+ * the demo engine exercises whatever surface it is handed. New surface kinds slot in
+ * as new arms here (never a refactor), exactly like the DeployAdapter classes grow.
+ *
+ * NON-SECRET: a surface only ever carries a public reach handle (a URL, a package
+ * coordinate) — never a token, never a credential ref.
+ */
+export type DemoSurface = {
+  /** A live web endpoint the demo exercises over HTTP (the `direct_api` deploy URL). */
+  kind: "web_url";
+  /** The resolved live URL the deployed app serves at (concrete, no placeholder). */
+  url: string;
+};
+// FUTURE surface arms (deferred, NOT a refactor when they land — a new union member +
+// a new `demoSurface` arm on the owning adapter class):
+//   | { kind: "package"; registry: string; coordinate: string }
+//   | { kind: "app_channel"; platform: string; track: string }
+//   | { kind: "download"; artifactUrl: string }
+
+/**
  * The HTTP-reachability probe `verify`'s smoke step runs against the resolved URL —
  * an injectable seam (scripted in tests; a real `fetch` HEAD/GET in production) so
  * the conformance suite proves the smoke check WITHOUT a live network call. Returns
@@ -129,4 +158,13 @@ export interface DeployAdapter {
   verify(grant: OrgGrant, ref: DeployRef, deploymentId: string): Promise<DeployVerification>;
   /** Read a triggered deployment's current provider status (one read, no polling). */
   status(grant: OrgGrant, ref: DeployRef, deploymentId: string): Promise<DeployStatus>;
+  /**
+   * Resolve the EXERCISE SURFACE the demo engine runs behavior checks against — the
+   * seam that decouples "demo evidence" from the provider. For a `direct_api` deploy
+   * this is the resolved live `web_url` (read from the deployment's status, so it is
+   * the same concrete URL `verify` proved); other adapter classes resolve other
+   * surface kinds. THROWS LOUD when no surface can be resolved (e.g. the provider
+   * reports no URL) — a demo with no surface to exercise is never a silent skip.
+   */
+  demoSurface(grant: OrgGrant, ref: DeployRef, deploymentId: string): Promise<DemoSurface>;
 }
