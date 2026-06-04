@@ -12,6 +12,10 @@
 import type { GitHubHttpClient } from "./github.js";
 import type { PublishCheckInput, PublishedCheck, PublishStatusInput } from "../contracts/vcsProvider.js";
 
+// Re-export the publish payload types so the provider imports the publish FUNCTIONS
+// and their TYPES from this single module (one fewer cross-module dependency there).
+export type { PublishCheckInput, PublishedCheck, PublishStatusInput } from "../contracts/vcsProvider.js";
+
 function repoPath(owner: string, name: string, suffix: string): string {
   return `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}${suffix}`;
 }

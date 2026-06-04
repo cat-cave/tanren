@@ -1,25 +1,25 @@
-// P2·0: the GitHub VcsProvider impl. It COMPOSES the existing GitHub code —
-// `GitHubPullRequestService` (draft-PR), `GitHubStatusService` (CI/checks),
-// `GitHubReviewMergeService` (mark-ready/reviews/diff/merge), the
-// `resolveGithubToken` resolver (App-first + 401-refresh), and the
-// `pushWorkspaceBranchToGitHub` SSH push — behind the provider-neutral seam. It
-// does NOT re-implement GitHub logic; it wraps it, so behavior is preserved
-// exactly. The HTTP client is injected at construction (the observability
-// decorator stays in force); the contributor + `/contents` + publish reads live
-// here too — the provider is the single place the lifecycle reaches the forge.
-// MERGE-SAFETY's `resolveActorIdentity` composes `./githubActorIdentity`; Track B's
-// native check/status publish composes `./githubPublishCheck`.
+// P2·0: the GitHub VcsProvider impl. It COMPOSES the existing GitHub code
+// (`GitHubPullRequestService`, `GitHubStatusService`, `GitHubReviewMergeService`,
+// the `resolveGithubToken` resolver, the `pushWorkspaceBranchToGitHub` SSH push,
+// `./githubActorIdentity`, and Track B's `./githubPublishCheck`) behind the
+// provider-neutral seam — it wraps GitHub logic, never re-implements it, so
+// behavior is preserved exactly. The HTTP client is injected at construction.
 
 import { setTimeout as sleepFor } from "node:timers/promises";
 import { resolveGithubToken } from "../credentials/githubTokenResolver.js";
 import { RefResetPermanentError, refReadStatusError, resetRef } from "./githubRefReset.js";
 import { invokeTokenIdentity, resolveGithubActorIdentity } from "./githubActorIdentity.js";
 import { setRepoActionsSecret } from "./actionsSecretSeal.js";
-import { publishGitHubCheck, publishGitHubStatus } from "./githubPublishCheck.js";
+import {
+  publishGitHubCheck,
+  publishGitHubStatus,
+  type PublishCheckInput,
+  type PublishedCheck,
+  type PublishStatusInput,
+} from "./githubPublishCheck.js";
 import { createGitHubRepository } from "./githubRepoCreate.js";
 import { parseCommitLogins } from "../workflow/reviewMerge/commitLogins.js";
 import type { PullRequestContributors } from "../workflow/reviewMerge/governancePosture.js";
-import { decodeBase64Content } from "../contracts/vcsProvider.js";
 import type {
   ActorIdentity,
   BuildIntegrationBranchInput,
@@ -30,9 +30,6 @@ import type {
   CreateRepositoryInput,
   OpenDraftPullRequestInput,
   OpenedPullRequest,
-  PublishCheckInput,
-  PublishedCheck,
-  PublishStatusInput,
   PullRequestMergeability,
   PullRequestRef,
   PushBranchInput,
@@ -46,6 +43,7 @@ import type {
 import { pushWorkspaceBranchToGitHub } from "../workspace/githubPush.js";
 import { GitHubPullRequestService } from "./githubPullRequestReuse.js";
 import {
+  decodeBase64Content,
   GitHubStatusService,
   parseGitHubPullRequestUrl,
   parseGitHubRepository,
@@ -126,8 +124,8 @@ export class GitHubVcsProvider implements VcsProvider {
       token: resolved.token,
       source: resolved.source,
       refresh: resolved.refresh,
-      // MERGE-SAFETY: the (lazy) identity supplier closes over the SAME creds that
-      // resolved the token (run git author + merge identity set can't disagree).
+      // MERGE-SAFETY: the lazy identity supplier closes over the SAME creds that resolved
+      // the token (run git author + merge identity set can't disagree).
       identity: () => resolveGithubActorIdentity(this.http, token, creds),
     };
     return token;
@@ -147,8 +145,7 @@ export class GitHubVcsProvider implements VcsProvider {
   }
 
   async createRepository(input: CreateRepositoryInput, token: ResolvedVcsToken): Promise<CreatedRepository> {
-    // `POST /orgs/{owner}/repos` with auto_init; 422/403 → the contract's typed
-    // errors (delegated to the helper so the provider stays under the line cap).
+    // `POST /orgs/{owner}/repos` with auto_init; 422/403 → the contract's typed errors (in the helper).
     return createGitHubRepository(this.http, input, token);
   }
 
@@ -203,16 +200,16 @@ export class GitHubVcsProvider implements VcsProvider {
   }
 
   async setActionsSecret(input: SetActionsSecretInput): Promise<void> {
-    // Read the Actions public key → sealed-box encrypt → PUT (plaintext stays inside the encrypted body).
     await setRepoActionsSecret(this.http, input);
   }
 
+  // Track B: POST a native check-run / commit status; token never logged.
   async publishCheck(input: PublishCheckInput): Promise<PublishedCheck> {
-    return publishGitHubCheck(this.http, input); // Track B: POST a native check-run; token never logged.
+    return publishGitHubCheck(this.http, input);
   }
 
   async publishStatus(input: PublishStatusInput): Promise<void> {
-    await publishGitHubStatus(this.http, input); // Track B: POST a native commit status; token never logged.
+    await publishGitHubStatus(this.http, input);
   }
 
   async markReadyForReview(pr: PullRequestRef, token: ResolvedVcsToken): Promise<void> {
@@ -380,9 +377,8 @@ export class GitHubVcsProvider implements VcsProvider {
       refreshToken: token.refresh,
     });
     if (response.status !== 200 || typeof response.body !== "object" || response.body === null) {
-      // TYPED (see refReadStatusError): a 404/403 (deleted/renamed branch) is PERMANENT
-      // — an untyped Error defaulted retriable → re-drove the 3s infra loop forever on a
-      // missing branch; a transient 5xx stays retriable.
+      // TYPED (see refReadStatusError): a 404/403 (deleted/renamed branch) is PERMANENT —
+      // an untyped Error defaulted retriable → re-drove the 3s infra loop forever; 5xx stays retriable.
       throw refReadStatusError("ref read", branch, response.status);
     }
     const object = (response.body as { object?: { sha?: unknown } }).object;
@@ -443,10 +439,9 @@ export class GitHubVcsProvider implements VcsProvider {
     if (response.status === 409) {
       return "conflict";
     }
-    // TYPED (see refSha): a 404/403 (the head/base branch deleted/renamed mid-batch) is
-    // PERMANENT — an untyped throw defaulted retriable and re-drove the 3s infra loop
-    // forever on a missing branch; a transient 5xx stays retriable. The 409-conflict path
-    // above is unchanged (a genuine conflict is NOT an infra error).
+    // TYPED (see refSha): a 404/403 (head/base branch deleted/renamed mid-batch) is PERMANENT
+    // — an untyped throw defaulted retriable and re-drove the 3s infra loop forever; a 5xx stays
+    // retriable. The 409-conflict path above is unchanged (a genuine conflict is NOT an infra error).
     throw refReadStatusError("speculative merge", `${headBranch} into ${base}`, response.status);
   }
 

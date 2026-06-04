@@ -1,5 +1,8 @@
 import { setTimeout as sleepFor } from "node:timers/promises";
 import { parseCheckRuns, parseCommitStatuses, parseRefObjectSha, parseRequiredContexts } from "./githubChecksParse.js";
+// Re-export the `/contents` base64 decoder (it lives in the contract module) so the
+// GitHub provider sources every GitHub value-helper from `github.js` — one fewer dep there.
+export { decodeBase64Content } from "../contracts/vcsProvider.js";
 import {
   DEFAULT_RATE_LIMIT_RETRIES,
   DEFAULT_TRANSIENT_RETRIES,
