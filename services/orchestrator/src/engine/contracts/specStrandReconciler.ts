@@ -198,6 +198,8 @@ export interface SpecStrandEventEmitter {
     reason: StrandReason;
     terminalRuns: Array<{ runId: string; status: string }>;
     attempts: number;
+    /** The decision-framed ask (the escalation discipline) — "can't make progress, decide", not an error. */
+    message: string;
   }): Promise<void>;
 }
 

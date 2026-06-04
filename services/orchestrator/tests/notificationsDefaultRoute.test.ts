@@ -48,7 +48,14 @@ describe("NotificationDispatcher default route", () => {
     await dispatcher.onEvent(
       {
         eventType: "dag.spec.needs_attention",
-        payload: { source: "strand", specId: "spec_1", reason: "no_live_run", terminalRuns: [], attempts: 3 },
+        payload: {
+          source: "strand",
+          specId: "spec_1",
+          reason: "no_live_run",
+          terminalRuns: [],
+          attempts: 3,
+          message: "the autonomous self-heal could not make progress; a decision is needed",
+        },
       },
       { orgId: "org_1", actorUserId: null, specId: "spec_1", projectId: "project_1" },
     );
@@ -60,6 +67,48 @@ describe("NotificationDispatcher default route", () => {
     expect(client.dispatches[0]?.status).toBe("sent");
     const logPayload = client.dispatches[0]?.payload as { layering?: string } | undefined;
     expect(logPayload?.layering).toBe("default_route");
+  });
+
+  it("routes BOTH needs_attention sources (strand AND merge_conflict) at fail severity — no source-specific gap", async () => {
+    // The escalation event is a discriminated union on `source`; the dispatcher routes
+    // on event name + severity (source-agnostic), so BOTH the strand-reconciler
+    // escalation and the merge-conflict escalation must clear the default route's floor
+    // and land. Pins that closing PR4 leaves no default-route gap for the strand source.
+    for (const payload of [
+      {
+        source: "strand" as const,
+        specId: "spec_1",
+        reason: "no_live_run" as const,
+        terminalRuns: [],
+        attempts: 3,
+        message: "the autonomous self-heal could not make progress; a decision is needed",
+      },
+      {
+        source: "merge_conflict" as const,
+        specId: "spec_1",
+        prUrl: "https://github.com/o/r/pull/9",
+        prNumber: 9,
+        message: "the resolver judged these specs' intents genuinely conflict",
+      },
+    ]) {
+      const client = new NotificationMemoryClient();
+      const ntfy = new CapturingChannel("ntfy");
+      const dispatcher = new NotificationDispatcher({
+        query: client as unknown as pg.Pool,
+        channels: baseRegistry(ntfy),
+        now: () => new Date("2026-01-05T12:00:00Z"),
+        defaultRoute: { channelKind: "ntfy", destination: "tanren-escalations" },
+      });
+
+      await dispatcher.onEvent(
+        { eventType: "dag.spec.needs_attention", payload },
+        { orgId: "org_1", actorUserId: null, specId: "spec_1", projectId: "project_1" },
+      );
+
+      expect(ntfy.calls).toHaveLength(1);
+      expect(ntfy.calls[0]?.payload.severity).toBe("fail");
+      expect(ntfy.calls[0]?.target.destination).toBe("tanren-escalations");
+    }
   });
 
   it("LOUD-logs (never silently drops) a fail-severity event when no route AND no default route", async () => {
@@ -77,7 +126,14 @@ describe("NotificationDispatcher default route", () => {
     await dispatcher.onEvent(
       {
         eventType: "dag.spec.needs_attention",
-        payload: { source: "strand", specId: "spec_1", reason: "no_live_run", terminalRuns: [], attempts: 3 },
+        payload: {
+          source: "strand",
+          specId: "spec_1",
+          reason: "no_live_run",
+          terminalRuns: [],
+          attempts: 3,
+          message: "the autonomous self-heal could not make progress; a decision is needed",
+        },
       },
       { orgId: "org_1", actorUserId: null, specId: "spec_1" },
     );

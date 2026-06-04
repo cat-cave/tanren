@@ -14,28 +14,11 @@
 //     only dependents).
 
 import { describe, expect, it } from "vitest";
-import {
-  decideStrand,
-  type SpecStrandEventEmitter,
-  type SpecStrandReadModel,
-  type SpecStrandSnapshot,
-  type SpecStrandWriter,
-  type StrandReason,
-} from "../src/engine/contracts/specStrandReconciler.js";
+import { decideStrand } from "../src/engine/contracts/specStrandReconciler.js";
 import { MAX_UNSTRAND_ATTEMPTS, SpecStrandReconciler } from "../src/engine/dag/specStrandReconciler.js";
 import { classifySpecStatus } from "../src/engine/dag/walkerPg.js";
 import { applyReconcileStrandedSpec } from "../src/engine/worker/runStateLifecycleSql.js";
-
-const PROJECT = "project_strand";
-
-function snapshot(over: Partial<SpecStrandSnapshot> & { specId: string }): SpecStrandSnapshot {
-  return {
-    status: "active",
-    runs: [{ runId: "run_old", status: "cancelled" }],
-    hasActiveMergeQueueEntry: false,
-    ...over,
-  };
-}
+import { FixedReadModel, PROJECT, RecordingEmitter, RecordingWriter, snapshot } from "./helpers/specStrandFixtures.js";
 
 describe("decideStrand (the pure 5-part strand predicate)", () => {
   it("a slot-occupying spec with ALL runs terminal + no marker ⇒ reconcilable (no_live_run)", () => {
@@ -163,58 +146,6 @@ describe("classifySpecStatus(needs_attention)", () => {
   });
 });
 
-// --- In-memory seam fixtures (TEST FIXTURES — they live here, never src/). ---
-
-class FixedReadModel implements SpecStrandReadModel {
-  constructor(
-    private candidates: SpecStrandSnapshot[],
-    private priorUnstrands: Record<string, number> = {},
-  ) {}
-  setCandidates(candidates: SpecStrandSnapshot[]): void {
-    this.candidates = candidates;
-  }
-  async loadStrandCandidates(): Promise<SpecStrandSnapshot[]> {
-    return this.candidates;
-  }
-  async countPriorUnstrands(input: { specId: string }): Promise<number> {
-    return this.priorUnstrands[input.specId] ?? 0;
-  }
-}
-
-class RecordingWriter implements SpecStrandWriter {
-  readonly reEnqueued: string[] = [];
-  readonly escalated: string[] = [];
-  readonly clearedMarkers: string[] = [];
-  /**
-   * Whether the atomic guarded flip "moved a row". Default true (no concurrent
-   * writer); a test sets it false to SIMULATE a concurrent re-exec that reclaimed the
-   * spec between the reconciler's read and the flip — the heal must then be a no-op.
-   */
-  constructor(private readonly flipped = true) {}
-  async reEnqueueSpec(input: { specId: string }): Promise<{ flipped: boolean }> {
-    this.reEnqueued.push(input.specId);
-    return { flipped: this.flipped };
-  }
-  async escalateSpec(input: { specId: string }): Promise<{ flipped: boolean }> {
-    this.escalated.push(input.specId);
-    return { flipped: this.flipped };
-  }
-  async clearOrphanedMarker(input: { runId: string }): Promise<void> {
-    this.clearedMarkers.push(input.runId);
-  }
-}
-
-class RecordingEmitter implements SpecStrandEventEmitter {
-  readonly unstranded: Array<{ specId: string; reason: StrandReason; attempt: number }> = [];
-  readonly needsAttention: Array<{ specId: string; reason: StrandReason; attempts: number }> = [];
-  async emitUnstranded(input: { specId: string; reason: StrandReason; attempt: number }): Promise<void> {
-    this.unstranded.push({ specId: input.specId, reason: input.reason, attempt: input.attempt });
-  }
-  async emitNeedsAttention(input: { specId: string; reason: StrandReason; attempts: number }): Promise<void> {
-    this.needsAttention.push({ specId: input.specId, reason: input.reason, attempts: input.attempts });
-  }
-}
-
 describe("SpecStrandReconciler (the safety-net coordinator)", () => {
   it("a confirmed strand → flip to pending + dag.spec.unstranded + orphaned marker cleared", async () => {
     const readModel = new FixedReadModel([
@@ -321,10 +252,35 @@ describe("SpecStrandReconciler (the safety-net coordinator)", () => {
     expect(writer.escalated).toEqual(["spec_a"]);
     expect(writer.reEnqueued).toEqual([]);
     expect(writer.clearedMarkers).toEqual(["run_reexec"]);
-    expect(events.needsAttention).toEqual([
-      { specId: "spec_a", reason: "halted_reexec", attempts: MAX_UNSTRAND_ATTEMPTS },
-    ]);
+    expect(events.needsAttention).toHaveLength(1);
+    expect(events.needsAttention[0]).toMatchObject({
+      specId: "spec_a",
+      reason: "halted_reexec",
+      attempts: MAX_UNSTRAND_ATTEMPTS,
+    });
     expect(events.unstranded).toEqual([]);
+  });
+
+  it("ESCALATION DISCIPLINE: the cap escalation reads as a DECISION ('can't make progress, decide'), NOT an error", async () => {
+    // The human-escalation-discipline: the re-enqueues are the autonomous self-heal
+    // tier; the cap escalation must frame a GENUINE product/scoping decision, never an
+    // "an error occurred" report. Assert the surfaced message reads exactly that way.
+    const readModel = new FixedReadModel(
+      [snapshot({ specId: "spec_a", status: "active", runs: [{ runId: "r", status: "cancelled" }] })],
+      { spec_a: MAX_UNSTRAND_ATTEMPTS },
+    );
+    const writer = new RecordingWriter();
+    const events = new RecordingEmitter();
+    await new SpecStrandReconciler({ readModel, writer, events }).reconcile(PROJECT);
+
+    const message = events.needsAttention[0]?.message ?? "";
+    // The DECISION framing — the autonomous self-heal ran out + a person must decide.
+    expect(message).toMatch(/could not make progress/u);
+    expect(message).toMatch(/decision is needed/u);
+    expect(message).toMatch(/not an error to debug/u);
+    // It names the bounded self-heal that preceded the ask (re-run/re-planned N times).
+    expect(message).toContain(String(MAX_UNSTRAND_ATTEMPTS));
+    expect(message).toContain("spec_a");
   });
 
   it("re-enqueues at most 3 times then escalates (the cap is `>=`, not `>`)", async () => {
