@@ -65,6 +65,7 @@ describe("Codex credential contracts", () => {
     expect(result).toEqual({
       CODEX_HOME: "/home/tanren/.tanren/runs/run_123/codex-home",
       ref: "credential/codex/dev",
+      managed: false,
       redacted: true,
     });
     expect(JSON.stringify(result)).not.toContain("secret-token");
@@ -84,7 +85,7 @@ describe("Codex credential contracts", () => {
     );
   });
 
-  it("materializes a MANAGED OpenRouter API key as codex API-key auth.json (no codex-bundle validation)", async () => {
+  it("materializes a MANAGED OpenRouter key as a config.toml provider block + key env file (no codex-bundle validation)", async () => {
     const secrets = new FakeSecretStore();
     // A managed run's stored secret is a PLAIN OpenRouter key string, NOT a
     // codex auth-bundle JSON, under a non-codex provider ref.
@@ -98,6 +99,7 @@ describe("Codex credential contracts", () => {
       ref: "credential/openrouter/platform/default",
       runId: "run_managed_1",
       managed: true,
+      endpointBaseUrl: "https://openrouter.ai/api/v1",
     });
 
     // The validated ref is returned verbatim (the codex-ref validator is NOT
@@ -105,13 +107,20 @@ describe("Codex credential contracts", () => {
     expect(result).toEqual({
       CODEX_HOME: "/home/tanren/.tanren/runs/run_managed_1/codex-home",
       ref: "credential/openrouter/platform/default",
+      managed: true,
       redacted: true,
     });
-    // The auth.json materialized over SSH is codex's API-key shape, carrying the
-    // raw key under OPENAI_API_KEY (codex authenticates with this against the
-    // managed OPENAI_BASE_URL endpoint).
-    expect(ssh.stdin).toBe(JSON.stringify({ OPENAI_API_KEY: "sk-or-v1-managed-key" }));
-    expect(ssh.command).toContain("auth.json");
+    // A single materialization command writes both the key env file and the
+    // config.toml; the key arrives on stdin (the export line), the config.toml is
+    // interpolated, and neither leaks the key into the command string.
+    expect(ssh.commands).toHaveLength(1);
+    expect(ssh.stdin).toBe("export OPENROUTER_API_KEY='sk-or-v1-managed-key'\n");
+    expect(ssh.command).toContain("openrouter.env");
+    expect(ssh.command).toContain("config.toml");
+    expect(ssh.command).toContain('model_provider = "openrouter"');
+    expect(ssh.command).toContain('base_url = "https://openrouter.ai/api/v1"');
+    expect(ssh.command).toContain('env_key = "OPENROUTER_API_KEY"');
+    expect(ssh.command).not.toContain("sk-or-v1-managed-key");
     // The redacted result never carries the key.
     expect(JSON.stringify(result)).not.toContain("sk-or-v1-managed-key");
   });
@@ -130,10 +139,11 @@ describe("Codex credential contracts", () => {
       ref: "credential/anthropic/platform/default",
       runId: "run_managed_2",
       managed: true,
+      endpointBaseUrl: "https://openrouter.ai/api/v1",
     });
 
     expect(result.ref).toBe("credential/anthropic/platform/default");
-    expect(ssh.stdin).toBe(JSON.stringify({ OPENAI_API_KEY: "sk-ant-managed" }));
+    expect(ssh.stdin).toBe("export OPENROUTER_API_KEY='sk-ant-managed'\n");
   });
 
   it("MANAGED mode rejects a missing or whitespace-only api key loudly", async () => {
@@ -148,6 +158,7 @@ describe("Codex credential contracts", () => {
         ref: "credential/openrouter/platform/default",
         runId: "run_managed_3",
         managed: true,
+        endpointBaseUrl: "https://openrouter.ai/api/v1",
       }),
     ).rejects.toThrow("missing managed LLM credential ref: credential/openrouter/platform/default");
     // Whitespace-only key.
@@ -160,8 +171,25 @@ describe("Codex credential contracts", () => {
         ref: "credential/openrouter/platform/blank",
         runId: "run_managed_4",
         managed: true,
+        endpointBaseUrl: "https://openrouter.ai/api/v1",
       }),
     ).rejects.toThrow("resolved to an empty api key");
+  });
+
+  it("MANAGED mode requires an endpoint base URL (no silent fallback)", async () => {
+    const secrets = new FakeSecretStore();
+    await secrets.put({ ref: "credential/openrouter/platform/default", value: "sk-or-v1-managed-key" });
+    const ssh = new CapturingSshSubstrate();
+    await expect(
+      materializeCodexAuthBundle({
+        secrets,
+        ssh,
+        target,
+        ref: "credential/openrouter/platform/default",
+        runId: "run_managed_5",
+        managed: true,
+      }),
+    ).rejects.toThrow("managed Codex run requires an endpoint base URL");
   });
 
   it("BYOK mode (managed unset/false) still REQUIRES + validates a codex bundle ref", async () => {
@@ -270,10 +298,12 @@ describe("Codex credential contracts", () => {
 class CapturingSshSubstrate implements SshSubstrate {
   command = "";
   stdin: string | undefined;
+  readonly commands: Array<{ command: string; stdin: string | undefined }> = [];
 
   async run(_target: SshTarget, command: SshCommand): Promise<SshCommandResult> {
     this.command = command.command;
     this.stdin = command.stdin;
+    this.commands.push({ command: command.command, stdin: command.stdin });
     return { exitCode: 0, stdout: "", stderr: "", timedOut: false };
   }
 }

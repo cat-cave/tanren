@@ -137,23 +137,78 @@ describe("Claude writer adapter", () => {
     expect(command).toContain("--add-dir '/workspace/repo'");
   });
 
-  // SaaS Tier-B #5: managed mode points the Claude CLI at the platform endpoint
-  // via ANTHROPIC_BASE_URL. BYOK (no override) leaves it untouched.
-  it("sets ANTHROPIC_BASE_URL when a managed endpoint override is present", () => {
+  // SaaS Tier-B #5 (OpenRouter cookbook): a managed run sets ANTHROPIC_BASE_URL
+  // (the `/api` form) + blanks ANTHROPIC_API_KEY on the command. The secret
+  // ANTHROPIC_AUTH_TOKEN is in settings.json (asserted in the materializer test),
+  // never on the command. BYOK (no override) leaves all three untouched.
+  it("sets ANTHROPIC_BASE_URL + blanks ANTHROPIC_API_KEY for a managed run, without the secret token", () => {
     const command = buildClaudeWriterCommand({
       configDir: "/home/tanren/claude",
       workspace: "/workspace/repo",
-      endpointBaseUrl: "https://openrouter.ai/api/v1",
+      managed: true,
+      anthropicBaseUrl: "https://openrouter.ai/api",
     });
-    expect(command).toContain("ANTHROPIC_BASE_URL='https://openrouter.ai/api/v1'");
+    expect(command).toContain("ANTHROPIC_BASE_URL='https://openrouter.ai/api'");
+    expect(command).toContain("ANTHROPIC_API_KEY=''");
+    expect(command).not.toContain("ANTHROPIC_AUTH_TOKEN");
   });
 
-  it("does not set ANTHROPIC_BASE_URL for a BYOK run", () => {
+  it("does not set the OpenRouter env vars for a BYOK run", () => {
     const command = buildClaudeWriterCommand({
       configDir: "/home/tanren/claude",
       workspace: "/workspace/repo",
     });
     expect(command).not.toContain("ANTHROPIC_BASE_URL");
+    expect(command).not.toContain("ANTHROPIC_API_KEY");
+    expect(command).not.toContain("ANTHROPIC_AUTH_TOKEN");
+  });
+
+  // SaaS Tier-B #5 (OpenRouter cookbook): a managed claude writer materializes a
+  // settings.json carrying the OpenRouter env block (secret AUTH_TOKEN inside)
+  // from the PLAIN OpenRouter key, sets the `/api` base + blank API key on the
+  // command, and never leaks the key into the command string or the result.
+  it("MANAGED writer materializes settings.json with the OpenRouter env block + sets the /api base", async () => {
+    const ssh = new ScriptedSsh([
+      // materialize settings.json
+      ok(""),
+      // capture baseline sha
+      ok(`${baselineSha}\n`),
+      // claude run
+      ok("{}\n"),
+      // commit
+      ok(""),
+      // diff
+      ok("diff --git a/M.md b/M.md\n+m\n"),
+      // log
+      ok(""),
+    ]);
+    const secrets = new InMemorySecretStore();
+    await secrets.put({ ref: "credential/openrouter/platform/default", value: "sk-or-v1-claude-managed" });
+
+    const writer = createClaudeWriter({
+      secrets,
+      ssh,
+      target,
+      credentialRef: "credential/openrouter/platform/default",
+      runId: "run_claude_managed",
+      endpointBaseUrl: "https://openrouter.ai/api/v1",
+    });
+    const result = await writer.runWriter({ prompt: "managed edit", workspace: "/workspace/repo", timeoutMs: 1000 });
+
+    // settings.json is materialized (the secret AUTH_TOKEN arrives on stdin, not
+    // in the command string).
+    expect(ssh.commands[0]?.command.command).toContain("settings.json");
+    expect(ssh.commands[0]?.command.command).not.toContain("sk-or-v1-claude-managed");
+    const settings = JSON.parse(ssh.commands[0]?.command.stdin ?? "{}");
+    expect(settings.env.ANTHROPIC_BASE_URL).toBe("https://openrouter.ai/api");
+    expect(settings.env.ANTHROPIC_AUTH_TOKEN).toBe("sk-or-v1-claude-managed");
+    expect(settings.env.ANTHROPIC_API_KEY).toBe("");
+    // The claude run command carries the /api base + blank API key, no secret.
+    expect(ssh.commands[2]?.command.command).toContain("ANTHROPIC_BASE_URL='https://openrouter.ai/api'");
+    expect(ssh.commands[2]?.command.command).toContain("ANTHROPIC_API_KEY=''");
+    expect(ssh.commands[2]?.command.command).not.toContain("sk-or-v1-claude-managed");
+    expect(result.exitReason).toBe("completed");
+    expect(JSON.stringify(result)).not.toContain("sk-or-v1-claude-managed");
   });
 
   it("maps the Claude disjoint usage shape straight across with no de-overlap", () => {

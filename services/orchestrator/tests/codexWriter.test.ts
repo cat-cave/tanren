@@ -121,15 +121,16 @@ describe("Codex writer adapter", () => {
     expect(result.exitReason).toBe("completed");
   });
 
-  // SaaS Tier-B #5: a MANAGED codex writer (endpointBaseUrl set) materializes
-  // its credential as codex API-key auth.json from the PLAIN OpenRouter key —
-  // it must NOT run the codex-bundle validators, and it must point codex at the
-  // managed endpoint. It also skips the ChatGPT-bundle auth write-back (an API
-  // key has no token to rotate).
-  it("MANAGED writer materializes an API-key auth.json + endpoint, skipping the bundle path and write-back", async () => {
+  // SaaS Tier-B #5 (OpenRouter cookbook): a MANAGED codex writer
+  // (endpointBaseUrl set) materializes the OpenRouter config.toml provider block
+  // + an OPENROUTER_API_KEY env file from the PLAIN OpenRouter key — it must NOT
+  // run the codex-bundle validators, the exec must source the env file + drop
+  // --ignore-user-config, and the key VALUE must never enter the command string.
+  // It also skips the ChatGPT-bundle auth write-back (no token to rotate).
+  it("MANAGED writer materializes the OpenRouter config.toml + key env file, skipping the bundle path and write-back", async () => {
     const baseSha = "a".repeat(40);
     // Managed script order: no baseline capture (baseSha threaded) AND no
-    // auth write-back cat (managed) ⇒ 0 materialize-auth, 1 codex exec,
+    // auth write-back cat (managed) ⇒ 0 materialize-config, 1 codex exec,
     // 2 commit, 3 diff, 4 log.
     const ssh = new ScriptedSsh([
       ok(""),
@@ -157,11 +158,17 @@ describe("Codex writer adapter", () => {
       baseSha,
     });
 
-    // The materialized auth.json is codex's API-key shape (the bundle validator
-    // is never applied to the raw key).
-    expect(ssh.commands[0]?.command.stdin).toBe(JSON.stringify({ OPENAI_API_KEY: "sk-or-v1-managed" }));
-    // codex exec carries the managed endpoint.
-    expect(ssh.commands[1]?.command.command).toContain("OPENAI_BASE_URL='https://openrouter.ai/api/v1'");
+    // The materialization command writes config.toml (provider block) + the key
+    // env file; the secret key arrives on stdin (the export line), never in the
+    // command string.
+    expect(ssh.commands[0]?.command.command).toContain("config.toml");
+    expect(ssh.commands[0]?.command.command).toContain("openrouter.env");
+    expect(ssh.commands[0]?.command.command).not.toContain("sk-or-v1-managed");
+    expect(ssh.commands[0]?.command.stdin).toBe("export OPENROUTER_API_KEY='sk-or-v1-managed'\n");
+    // codex exec sources the env file + honors CODEX_HOME config.toml (no
+    // --ignore-user-config) so it routes through the OpenRouter provider.
+    expect(ssh.commands[1]?.command.command).toContain("openrouter.env' && CODEX_HOME=");
+    expect(ssh.commands[1]?.command.command).not.toContain("--ignore-user-config");
     expect(ssh.commands[1]?.command.stdin).toBe("make a managed edit");
     // No auth write-back: a managed run must NOT cat auth.json back into the
     // secret store. With the script above, command[2] is the commit, not a cat.
@@ -173,20 +180,24 @@ describe("Codex writer adapter", () => {
     expect(JSON.stringify(result)).not.toContain("sk-or-v1-managed");
   });
 
-  // SaaS Tier-B #5: managed mode points codex at the platform endpoint via
-  // OPENAI_BASE_URL; BYOK (no override) leaves it untouched.
-  it("sets OPENAI_BASE_URL when a managed endpoint override is present", () => {
+  // SaaS Tier-B #5: a managed codex exec sources the OPENROUTER_API_KEY env file
+  // and drops --ignore-user-config so CODEX_HOME/config.toml is honored. A BYOK
+  // run keeps --ignore-user-config and sources nothing.
+  it("sources the OpenRouter env file + drops --ignore-user-config for a managed run", () => {
     const command = buildCodexExecCommand({
       codexHome: "/home/tanren/.codex",
       workspace: "/workspace/repo",
-      endpointBaseUrl: "https://openrouter.ai/api/v1",
+      managed: true,
     });
-    expect(command).toContain("OPENAI_BASE_URL='https://openrouter.ai/api/v1'");
+    expect(command).toContain(". '/home/tanren/.codex/openrouter.env' && CODEX_HOME=");
+    expect(command).not.toContain("--ignore-user-config");
   });
 
-  it("does not set OPENAI_BASE_URL for a BYOK run", () => {
+  it("keeps --ignore-user-config and sources nothing for a BYOK run", () => {
     const command = buildCodexExecCommand({ codexHome: "/home/tanren/.codex", workspace: "/workspace/repo" });
-    expect(command).not.toContain("OPENAI_BASE_URL");
+    expect(command).toContain("--ignore-user-config");
+    expect(command).not.toContain("openrouter.env");
+    expect(command).not.toContain("OPENROUTER_API_KEY");
   });
 
   it("does not leak auth secrets through commands or writer results", async () => {

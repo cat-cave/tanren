@@ -96,11 +96,76 @@ describe("Claude credential contracts", () => {
     expect(result).toEqual({
       CLAUDE_CONFIG_DIR: "/home/tanren/.tanren/runs/run_123/claude-home",
       ref: "credential/claude/dev",
+      managed: false,
       redacted: true,
     });
     expect(ssh.command).toContain(".credentials.json");
     expect(ssh.command).not.toContain("secret-token");
     expect(ssh.stdin).toBe(claudeJson);
+  });
+
+  it("MANAGED: materializes a settings.json OpenRouter env block (no claude-bundle validation)", async () => {
+    const secrets = new FakeSecretStore();
+    // A managed run's secret is a PLAIN OpenRouter key, NOT a claude bundle.
+    await secrets.put({ ref: "credential/openrouter/platform/default", value: "sk-or-v1-claude" });
+    const ssh = new CapturingSsh();
+    const result = await materializeClaudeAuthBundle({
+      secrets,
+      ssh,
+      target,
+      ref: "credential/openrouter/platform/default",
+      runId: "run_managed_c",
+      managed: true,
+      endpointBaseUrl: "https://openrouter.ai/api/v1",
+    });
+    expect(result).toEqual({
+      CLAUDE_CONFIG_DIR: "/home/tanren/.tanren/runs/run_managed_c/claude-home",
+      ref: "credential/openrouter/platform/default",
+      // The cookbook needs the `/api` base, NOT `/api/v1`.
+      anthropicBaseUrl: "https://openrouter.ai/api",
+      managed: true,
+      redacted: true,
+    });
+    // settings.json (not .credentials.json) carries the env block; the secret
+    // AUTH_TOKEN arrives on stdin, never in the command string.
+    expect(ssh.command).toContain("settings.json");
+    expect(ssh.command).not.toContain("sk-or-v1-claude");
+    expect(JSON.parse(ssh.stdin ?? "{}")).toEqual({
+      env: {
+        ANTHROPIC_BASE_URL: "https://openrouter.ai/api",
+        ANTHROPIC_AUTH_TOKEN: "sk-or-v1-claude",
+        ANTHROPIC_API_KEY: "",
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain("sk-or-v1-claude");
+  });
+
+  it("MANAGED claude rejects a missing endpoint or empty key loudly", async () => {
+    const secrets = new FakeSecretStore();
+    const ssh = new CapturingSsh();
+    await secrets.put({ ref: "credential/openrouter/platform/default", value: "sk-or-v1-x" });
+    await expect(
+      materializeClaudeAuthBundle({
+        secrets,
+        ssh,
+        target,
+        ref: "credential/openrouter/platform/default",
+        runId: "run_managed_c2",
+        managed: true,
+      }),
+    ).rejects.toThrow("managed Claude run requires an endpoint base URL");
+    await secrets.put({ ref: "credential/openrouter/platform/blank", value: "  " });
+    await expect(
+      materializeClaudeAuthBundle({
+        secrets,
+        ssh,
+        target,
+        ref: "credential/openrouter/platform/blank",
+        runId: "run_managed_c3",
+        managed: true,
+        endpointBaseUrl: "https://openrouter.ai/api/v1",
+      }),
+    ).rejects.toThrow("resolved to an empty api key");
   });
 
   it("builds a restrictive materialization command in umask→mkdir→cat→chmod order", () => {
@@ -166,11 +231,60 @@ describe("opencode credential contracts", () => {
     expect(result).toEqual({
       XDG_DATA_HOME: "/home/tanren/.tanren/runs/run_123/opencode-home",
       ref: "credential/opencode/dev",
+      managed: false,
       redacted: true,
     });
     expect(ssh.command).toContain("opencode/auth.json");
     expect(ssh.command).not.toContain("secret-zai-key");
     expect(ssh.stdin).toBe(opencodeJson);
+  });
+
+  it("MANAGED: materializes an openrouter auth.json + opencode.json (no Zai-bundle validation)", async () => {
+    const secrets = new FakeSecretStore();
+    // A managed run's secret is a PLAIN OpenRouter key, NOT a Zai opencode bundle.
+    await secrets.put({ ref: "credential/openrouter/platform/default", value: "sk-or-v1-oc" });
+    const ssh = new CapturingSsh();
+    const result = await materializeOpencodeAuthBundle({
+      secrets,
+      ssh,
+      target,
+      ref: "credential/openrouter/platform/default",
+      runId: "run_managed_o",
+      managed: true,
+    });
+    expect(result).toEqual({
+      XDG_DATA_HOME: "/home/tanren/.tanren/runs/run_managed_o/opencode-home",
+      ref: "credential/openrouter/platform/default",
+      XDG_CONFIG_HOME: "/home/tanren/.tanren/runs/run_managed_o/opencode-config",
+      managed: true,
+      redacted: true,
+    });
+    // Two commands: auth.json (secret on stdin) then opencode.json (no secret).
+    expect(ssh.commands).toHaveLength(2);
+    expect(ssh.commands[0]?.command).toContain("opencode/auth.json");
+    expect(ssh.commands[0]?.command).not.toContain("sk-or-v1-oc");
+    expect(JSON.parse(ssh.commands[0]?.stdin ?? "{}")).toEqual({
+      openrouter: { type: "api", key: "sk-or-v1-oc" },
+    });
+    expect(ssh.commands[1]?.command).toContain("opencode.json");
+    expect(ssh.commands[1]?.command).toContain("openrouter");
+    expect(JSON.stringify(result)).not.toContain("sk-or-v1-oc");
+  });
+
+  it("MANAGED opencode rejects an empty key loudly", async () => {
+    const secrets = new FakeSecretStore();
+    const ssh = new CapturingSsh();
+    await secrets.put({ ref: "credential/openrouter/platform/blank", value: "   " });
+    await expect(
+      materializeOpencodeAuthBundle({
+        secrets,
+        ssh,
+        target,
+        ref: "credential/openrouter/platform/blank",
+        runId: "run_managed_o2",
+        managed: true,
+      }),
+    ).rejects.toThrow("resolved to an empty api key");
   });
 
   it("builds a restrictive materialization command nesting auth.json under opencode/", () => {
@@ -196,10 +310,12 @@ class CapturingSsh implements SshSubstrate {
   command = "";
   stdin: string | undefined;
   result: SshCommandResult = { exitCode: 0, stdout: "", stderr: "", timedOut: false };
+  readonly commands: Array<{ command: string; stdin: string | undefined }> = [];
 
   async run(_target: SshTarget, command: SshCommand): Promise<SshCommandResult> {
     this.command = command.command;
     this.stdin = command.stdin;
+    this.commands.push({ command: command.command, stdin: command.stdin });
     return this.result;
   }
 }

@@ -26,8 +26,9 @@ export interface ClaudeWriterDependencies {
   model?: string;
   claudeHomeBaseDir?: string;
   // SaaS Tier-B #5: optional managed-endpoint base URL. When set (managed run),
-  // the CLI is pointed at this OpenAI/Anthropic-compatible endpoint (the
-  // platform OpenRouter shell) via ANTHROPIC_BASE_URL. Absent ⇒ BYOK: no
+  // the materializer writes a settings.json OpenRouter env block and the command
+  // exports ANTHROPIC_BASE_URL (the `/api` form) + a blank ANTHROPIC_API_KEY, so
+  // the CLI routes THROUGH OpenRouter (the cookbook path). Absent ⇒ BYOK: no
   // override, the CLI hits Anthropic directly (unchanged).
   endpointBaseUrl?: string;
 }
@@ -69,6 +70,8 @@ export function createClaudeWriter(dependencies: ClaudeWriterDependencies): Writ
         runId: dependencies.runId,
         baseDir: dependencies.claudeHomeBaseDir,
         timeoutMs: Math.min(opts.timeoutMs, 30_000),
+        managed: dependencies.endpointBaseUrl !== undefined,
+        endpointBaseUrl: dependencies.endpointBaseUrl,
       });
       const baselineSha = await captureBaselineSha(
         dependencies.ssh,
@@ -81,7 +84,8 @@ export function createClaudeWriter(dependencies: ClaudeWriterDependencies): Writ
           configDir: auth.CLAUDE_CONFIG_DIR,
           workspace: opts.workspace,
           model: dependencies.model,
-          endpointBaseUrl: dependencies.endpointBaseUrl,
+          managed: auth.managed,
+          anthropicBaseUrl: auth.anthropicBaseUrl,
         }),
         stdin: opts.prompt,
         timeoutMs: opts.timeoutMs,
@@ -123,6 +127,8 @@ export function createClaudeAnswerer<TOutput>(dependencies: ClaudeAnswererDepend
         runId: dependencies.runId,
         baseDir: dependencies.claudeHomeBaseDir,
         timeoutMs: Math.min(opts.timeoutMs, 30_000),
+        managed: dependencies.endpointBaseUrl !== undefined,
+        endpointBaseUrl: dependencies.endpointBaseUrl,
       });
       const workspace = opts.workspace ?? answererWorkspacePath(dependencies, opts.outputSchema.name);
       await dependencies.ssh.run(dependencies.target, {
@@ -134,7 +140,8 @@ export function createClaudeAnswerer<TOutput>(dependencies: ClaudeAnswererDepend
           configDir: auth.CLAUDE_CONFIG_DIR,
           workspace,
           model: dependencies.model,
-          endpointBaseUrl: dependencies.endpointBaseUrl,
+          managed: auth.managed,
+          anthropicBaseUrl: auth.anthropicBaseUrl,
         }),
         stdin: buildAnswererPrompt(opts.prompt, opts.outputSchema.name, opts.outputSchema.jsonSchema),
         timeoutMs: opts.timeoutMs,
@@ -164,11 +171,12 @@ export function buildClaudeWriterCommand(input: {
   configDir: string;
   workspace: string;
   model?: string;
-  endpointBaseUrl?: string;
+  managed?: boolean;
+  anthropicBaseUrl?: string;
 }): string {
   return [
     `CLAUDE_CONFIG_DIR=${quoteSshShellArg(input.configDir)}`,
-    ...claudeEndpointEnv(input.endpointBaseUrl),
+    ...claudeManagedEnv(input.managed, input.anthropicBaseUrl),
     "claude",
     "-p",
     "--output-format stream-json",
@@ -180,12 +188,21 @@ export function buildClaudeWriterCommand(input: {
   ].join(" ");
 }
 
-// SaaS Tier-B #5: the managed-endpoint env override the Claude CLI reads. When
-// a managed run resolves the platform endpoint, we set ANTHROPIC_BASE_URL so the
-// CLI's API calls go to the platform OpenRouter shell with the platform key.
-// BYOK ⇒ no override (empty prefix), the CLI hits Anthropic directly.
-function claudeEndpointEnv(endpointBaseUrl?: string): string[] {
-  return endpointBaseUrl === undefined ? [] : [`ANTHROPIC_BASE_URL=${quoteSshShellArg(endpointBaseUrl)}`];
+// SaaS Tier-B #5 (OpenRouter cookbook): a MANAGED run routes the Claude CLI
+// THROUGH OpenRouter. The cookbook requires THREE env vars:
+//   ANTHROPIC_BASE_URL = https://openrouter.ai/api   (the `/api` form, NOT
+//                                                      `/api/v1`),
+//   ANTHROPIC_AUTH_TOKEN = <OpenRouter key>,
+//   ANTHROPIC_API_KEY = ""                            (explicitly blanked).
+// The secret AUTH_TOKEN is materialized into CLAUDE_CONFIG_DIR/settings.json (it
+// must NOT enter the command string); the two NON-secret vars are set here on
+// the command. BYOK ⇒ no override (empty prefix), the CLI hits Anthropic
+// directly (unchanged).
+function claudeManagedEnv(managed?: boolean, anthropicBaseUrl?: string): string[] {
+  if (managed !== true || anthropicBaseUrl === undefined) {
+    return [];
+  }
+  return [`ANTHROPIC_BASE_URL=${quoteSshShellArg(anthropicBaseUrl)}`, `ANTHROPIC_API_KEY=${quoteSshShellArg("")}`];
 }
 
 // Answerer mode is read-only: no edit permission, no workspace mutation. The
@@ -195,11 +212,12 @@ export function buildClaudeAnswererCommand(input: {
   configDir: string;
   workspace: string;
   model?: string;
-  endpointBaseUrl?: string;
+  managed?: boolean;
+  anthropicBaseUrl?: string;
 }): string {
   return [
     `CLAUDE_CONFIG_DIR=${quoteSshShellArg(input.configDir)}`,
-    ...claudeEndpointEnv(input.endpointBaseUrl),
+    ...claudeManagedEnv(input.managed, input.anthropicBaseUrl),
     "claude",
     "-p",
     "--output-format stream-json",
