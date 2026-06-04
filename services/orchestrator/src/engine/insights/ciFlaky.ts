@@ -24,8 +24,10 @@
 import type pg from "pg";
 import { randomUUID } from "node:crypto";
 import type { EventStore } from "../eventStore.js";
+import type { EventPayload } from "../events/index.js";
 import { DEFAULT_THRESHOLDS, type InsightThresholds } from "./thresholds.js";
 import { type Insight } from "./types.js";
+import { type CiTestObservation, deriveFlakyTestsPerTest, type FlakyTestVerdict } from "./ciFlakyTests.js";
 
 /** A single per-check CI outcome observed on one head SHA at one instant. */
 export interface CiCheckObservation {
@@ -165,6 +167,52 @@ export function flattenCiObservations(rows: ReadonlyArray<CiEventRow>): CiCheckO
   return out;
 }
 
+interface CiTestRow {
+  test_id: string;
+  file: string | null;
+  suite: string | null;
+  head_sha: string;
+  outcome: string;
+  duration_ms: number | null;
+  retries: number;
+  observed_at: Date | string;
+}
+
+/**
+ * Load the per-test results for a project + window from `ci_test_results` (the
+ * JUnit-ingested per-test history). Each row is one `<testcase>` for one (run,
+ * attempt). Org-scoped under RLS by the caller's client — a read off the wrong
+ * scope sees zero rows. Pure DB shell; the reducers in `ciFlakyTests.ts` derive
+ * the verdicts.
+ */
+export async function loadCiTestObservations(
+  pool: Pick<pg.Pool, "query">,
+  options: { projectId: string; since: Date },
+): Promise<CiTestObservation[]> {
+  const result = await pool.query<CiTestRow>(
+    `SELECT test_id, file, suite, head_sha, outcome, duration_ms, retries, observed_at
+       FROM ci_test_results
+      WHERE project_id = $1
+        AND observed_at >= $2
+      ORDER BY observed_at ASC`,
+    [options.projectId, options.since],
+  );
+  return result.rows.map((row) => ({
+    testId: row.test_id,
+    file: row.file,
+    suite: row.suite,
+    headSha: row.head_sha,
+    outcome: normalizeTestOutcome(row.outcome),
+    durationMs: row.duration_ms,
+    retries: Number(row.retries),
+    observedAt: row.observed_at instanceof Date ? row.observed_at : new Date(row.observed_at),
+  }));
+}
+
+function normalizeTestOutcome(raw: string): CiTestObservation["outcome"] {
+  return raw === "passed" || raw === "failed" || raw === "error" || raw === "skipped" ? raw : "failed";
+}
+
 export interface DetectFlakyContext {
   projectId: string;
   now?: Date;
@@ -174,6 +222,7 @@ export interface DetectFlakyContext {
 
 interface ExistingQuarantineRow {
   check_name: string;
+  test_id: string | null;
 }
 
 /**
@@ -193,19 +242,26 @@ export async function detectAndQuarantineFlaky(
   const now = context.now ?? new Date();
   const since = new Date(now.getTime() - t.flakyWindowDays * 24 * 60 * 60 * 1000);
 
-  const observations = await loadCiObservations(pool, { projectId: context.projectId, since });
-  const verdicts = deriveFlakyTests(observations, { minToggledShas: t.flakyMinToggledShas });
-  if (verdicts.length === 0) return [];
+  // Check-level verdicts from the `ci.*` event history (the original grain) AND
+  // per-test verdicts from the `ci_test_results` history (the new PR2 grain). Both
+  // record onto the SAME quarantine surface and surface as `ci_flaky` insights.
+  const checkObservations = await loadCiObservations(pool, { projectId: context.projectId, since });
+  const checkVerdicts = deriveFlakyTests(checkObservations, { minToggledShas: t.flakyMinToggledShas });
+  const testObservations = await loadCiTestObservations(pool, { projectId: context.projectId, since });
+  const testVerdicts = deriveFlakyTestsPerTest(testObservations, { minToggledShas: t.flakyMinToggledShas });
+  if (checkVerdicts.length === 0 && testVerdicts.length === 0) return [];
 
+  // The set of ACTIVE quarantine targets, keyed exactly as the unique index:
+  // coalesce(test_id, check_name). Idempotency check before the guarded insert.
   const existing = await pool.query<ExistingQuarantineRow>(
-    `SELECT check_name FROM quarantined_tests
+    `SELECT check_name, test_id FROM quarantined_tests
       WHERE project_id = $1 AND cleared_at IS NULL`,
     [context.projectId],
   );
-  const alreadyQuarantined = new Set(existing.rows.map((r) => r.check_name));
+  const activeTargets = new Set(existing.rows.map((r) => r.test_id ?? r.check_name));
 
   const insights: Insight[] = [];
-  for (const verdict of verdicts) {
+  for (const verdict of checkVerdicts) {
     const evidence = {
       checkName: verdict.checkName,
       toggledShaCount: verdict.toggledShaCount,
@@ -213,45 +269,137 @@ export async function detectAndQuarantineFlaky(
       passedOnRetryCount: verdict.passedOnRetryCount,
       sampleShas: verdict.sampleShas,
     };
-
-    if (!alreadyQuarantined.has(verdict.checkName)) {
-      const quarantineId = `quarantine_${randomUUID()}`;
-      // Insert under the partial unique index; ON CONFLICT DO NOTHING makes a
-      // concurrent detector pass a no-op rather than an error.
-      const inserted = await pool.query(
-        `INSERT INTO quarantined_tests
-           (id, project_id, check_name, toggled_sha_count, observation_count, evidence, quarantined_at)
-         VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)
-         ON CONFLICT (project_id, check_name) WHERE cleared_at IS NULL DO NOTHING`,
-        [
-          quarantineId,
-          context.projectId,
-          verdict.checkName,
-          verdict.toggledShaCount,
-          verdict.observationCount,
-          JSON.stringify(evidence),
-          now,
-        ],
-      );
-      // Emit the operator-visible events ONLY on a fresh insert so an operator
-      // is notified exactly once per quarantine episode.
-      if ((inserted.rowCount ?? 0) > 0) {
-        await context.eventStore.append({
-          projectId: context.projectId,
-          eventType: "ci.flaky.detected",
-          payload: evidence,
-        });
-        await context.eventStore.append({
-          projectId: context.projectId,
-          eventType: "ci.test.quarantined",
-          payload: { ...evidence, quarantineId },
-        });
-      }
-    }
-
+    await recordQuarantine(pool, context, {
+      target: verdict.checkName,
+      checkName: verdict.checkName,
+      testId: null,
+      toggledShaCount: verdict.toggledShaCount,
+      observationCount: verdict.observationCount,
+      evidence,
+      now,
+      activeTargets,
+    });
     insights.push(buildFlakyInsight(context.projectId, verdict, now, t.flakyWindowDays));
   }
+
+  for (const verdict of testVerdicts) {
+    // The check_name a per-test quarantine carries is the test's suite when known
+    // (so the operator sees the owning job); the test_id is the actuating key.
+    const checkName = verdict.suite ?? verdict.testId;
+    const evidence = {
+      checkName,
+      testId: verdict.testId,
+      file: verdict.file,
+      suite: verdict.suite,
+      toggledShaCount: verdict.toggledShaCount,
+      observationCount: verdict.observationCount,
+      intraRunFlakyCount: verdict.intraRunFlakyCount,
+      sampleShas: verdict.sampleShas,
+    };
+    await recordQuarantine(pool, context, {
+      target: verdict.testId,
+      checkName,
+      testId: verdict.testId,
+      toggledShaCount: verdict.toggledShaCount,
+      observationCount: verdict.observationCount,
+      evidence,
+      now,
+      activeTargets,
+    });
+    insights.push(buildFlakyTestInsight(context.projectId, verdict, now, t.flakyWindowDays));
+  }
   return insights;
+}
+
+interface RecordQuarantineInput {
+  /** The coalesce(test_id, check_name) key used for idempotency + the unique index. */
+  target: string;
+  checkName: string;
+  testId: string | null;
+  toggledShaCount: number;
+  observationCount: number;
+  evidence: EventPayload<"ci.flaky.detected">;
+  now: Date;
+  activeTargets: Set<string>;
+}
+
+/**
+ * Record ONE quarantine (check-level or per-test) on the surface, idempotently.
+ * The partial unique index keyed on coalesce(test_id, check_name) is the hard
+ * guard; ON CONFLICT DO NOTHING makes a concurrent detector pass a no-op. The
+ * operator-visible events fire ONLY on a fresh insert (exactly once per episode).
+ */
+async function recordQuarantine(
+  pool: Pick<pg.Pool, "query">,
+  context: DetectFlakyContext,
+  input: RecordQuarantineInput,
+): Promise<void> {
+  if (input.activeTargets.has(input.target)) return;
+  const quarantineId = `quarantine_${randomUUID()}`;
+  const inserted = await pool.query(
+    `INSERT INTO quarantined_tests
+       (id, project_id, check_name, test_id, toggled_sha_count, observation_count, evidence, quarantined_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)
+     ON CONFLICT (project_id, coalesce(test_id, check_name)) WHERE cleared_at IS NULL DO NOTHING`,
+    [
+      quarantineId,
+      context.projectId,
+      input.checkName,
+      input.testId,
+      input.toggledShaCount,
+      input.observationCount,
+      JSON.stringify(input.evidence),
+      input.now,
+    ],
+  );
+  if ((inserted.rowCount ?? 0) > 0) {
+    input.activeTargets.add(input.target);
+    await context.eventStore.append({
+      projectId: context.projectId,
+      eventType: "ci.flaky.detected",
+      payload: input.evidence,
+    });
+    await context.eventStore.append({
+      projectId: context.projectId,
+      eventType: "ci.test.quarantined",
+      payload: { ...input.evidence, quarantineId },
+    });
+  }
+}
+
+function buildFlakyTestInsight(projectId: string, verdict: FlakyTestVerdict, now: Date, windowDays: number): Insight {
+  const insightId = `insight_ci_flaky_${projectId}_${verdict.testId}_${randomUUID()}`;
+  const intraNote = verdict.intraRunFlakyCount > 0 ? ` (recovered intra-run ${verdict.intraRunFlakyCount}×)` : "";
+  return {
+    id: insightId,
+    kind: "ci_flaky",
+    projectId,
+    severity: "warn",
+    title: `Flaky test quarantined: ${verdict.testId}`,
+    body:
+      `Test "${verdict.testId}" both passed AND failed on ${verdict.toggledShaCount} unchanged ` +
+      `commit(s) in the last ${windowDays}d${intraNote}. It is quarantined PER-TEST (the owning ` +
+      `check job stays active) so its non-determinism does not block the queue. A CONSISTENTLY-` +
+      `failing test is never quarantined — investigate and clear this once the flake is fixed.`,
+    payload: {
+      kind: "ci_flaky",
+      checkName: verdict.suite ?? verdict.testId,
+      toggledShaCount: verdict.toggledShaCount,
+      observationCount: verdict.observationCount,
+      passedOnRetryCount: verdict.intraRunFlakyCount,
+      sampleShas: verdict.sampleShas,
+      windowDays,
+    },
+    actions: [
+      {
+        label: "Snooze · 24h",
+        toolCall: { tool: "tanren.acknowledge_insight", args: { insightId } },
+      },
+    ],
+    computedAt: now,
+    acknowledgedAt: null,
+    acknowledgedBy: null,
+  };
 }
 
 function buildFlakyInsight(projectId: string, verdict: FlakyVerdict, now: Date, windowDays: number): Insight {

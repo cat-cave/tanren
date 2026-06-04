@@ -32,6 +32,7 @@ interface QuarantineRow {
   id: string;
   project_id: string;
   check_name: string;
+  test_id: string | null;
   toggled_sha_count: number;
   observation_count: number;
   evidence: unknown;
@@ -56,28 +57,37 @@ class FlakyMemoryClient {
         .map((e) => ({ payload: { headSha: e.headSha, checkRuns: e.checkRuns }, ts: new Date(e.tsMs) }));
       return { rows, rowCount: rows.length };
     }
-    if (t.startsWith("SELECT check_name FROM quarantined_tests")) {
+    // CI-intelligence PR2: the per-test results loader. No per-test seeds in these
+    // check-level tests, so it returns empty (the check-level path is exercised).
+    if (t.includes("FROM ci_test_results")) {
+      return { rows: [], rowCount: 0 };
+    }
+    if (t.startsWith("SELECT check_name, test_id FROM quarantined_tests")) {
       const projectId = String(params[0]);
       const rows = this.quarantined
         .filter((q) => q.project_id === projectId && q.cleared_at === null)
-        .map((q) => ({ check_name: q.check_name }));
+        .map((q) => ({ check_name: q.check_name, test_id: q.test_id }));
       return { rows, rowCount: rows.length };
     }
     if (t.startsWith("INSERT INTO quarantined_tests")) {
+      // Params: id, project_id, check_name, test_id, toggled, observation, evidence, now.
       const projectId = String(params[1]);
       const checkName = String(params[2]);
-      // honour the partial-unique index: no active row for (project, check).
+      const testId = params[3] === null ? null : String(params[3]);
+      // honour the partial-unique index on coalesce(test_id, check_name).
+      const target = testId ?? checkName;
       const exists = this.quarantined.some(
-        (q) => q.project_id === projectId && q.check_name === checkName && q.cleared_at === null,
+        (q) => q.project_id === projectId && (q.test_id ?? q.check_name) === target && q.cleared_at === null,
       );
       if (exists) return { rows: [], rowCount: 0 };
       this.quarantined.push({
         id: String(params[0]),
         project_id: projectId,
         check_name: checkName,
-        toggled_sha_count: Number(params[3]),
-        observation_count: Number(params[4]),
-        evidence: JSON.parse(String(params[5])),
+        test_id: testId,
+        toggled_sha_count: Number(params[4]),
+        observation_count: Number(params[5]),
+        evidence: JSON.parse(String(params[6])),
         cleared_at: null,
       });
       return { rows: [], rowCount: 1 };

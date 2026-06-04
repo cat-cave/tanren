@@ -13,8 +13,8 @@ import { Hono } from "hono";
 import type pg from "pg";
 import type { ActorContext } from "../../auth/schemas.js";
 import { assertProjectAccess, ToolAccessDeniedError } from "../../engine/forge/tools/authz.js";
-import { PgEventStore } from "../../engine/eventStore.js";
 import { acknowledgeInsight, loadInsightsForProject } from "../../engine/insights/index.js";
+import { surfaceActiveQuarantines } from "../../engine/insights/ciFlakySurface.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg } from "../orgs/index.js";
 
@@ -41,16 +41,16 @@ export function createInsightRoutes(options: InsightRoutesOptions) {
       throw error;
     }
     try {
-      // P2e-1: pass an event store so flaky-test detection runs on read — a
-      // newly-proven-flaky check is quarantined + the ci.flaky.* events emitted,
-      // and every active quarantine surfaces as a `ci_flaky` insight. The store
-      // rides the org-scoped pool, so the writes land under the request's org
-      // transaction (RLS-admitted).
-      const insights = await loadInsightsForProject(options.pool, {
-        projectId,
-        eventStore: new PgEventStore(options.pool),
-      });
-      return c.json({ insights });
+      // CI-intelligence PR2: the GET is now READ-ONLY for flaky. Flaky DETECTION +
+      // quarantine WRITES moved off this GET onto the worker loop (CiInsightsLoop) —
+      // the GET no longer triggers a write. We still SURFACE every active quarantine
+      // as a `ci_flaky` insight via the read-only `surfaceActiveQuarantines` so the
+      // operator keeps seeing them; the other (pure) insight kinds load as before.
+      const [insights, quarantineInsights] = await Promise.all([
+        loadInsightsForProject(options.pool, { projectId }),
+        surfaceActiveQuarantines(options.pool, projectId),
+      ]);
+      return c.json({ insights: [...insights, ...quarantineInsights] });
     } catch (error) {
       return c.json(
         {

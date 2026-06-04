@@ -44,9 +44,15 @@ export const workflowInsights = pgTable(
 // ignore-all-failures. A consistently-failing (genuinely broken) check is never
 // recorded here, so a real failure can never be masked by this table.
 //
-// One active row per (project, check name). `evidence` carries the
+// One active row per (project, quarantine target). `evidence` carries the
 // non-determinism proof (toggled-sha count, observation count, passes-on-retry)
-// so an operator can audit WHY the check was quarantined.
+// so an operator can audit WHY the check (or test) was quarantined.
+//
+// CI-intelligence PR2: the quarantine target is EITHER a whole check job
+// (`test_id` NULL — the original check-level grain) OR a single flaky TEST within
+// a check (`test_id` set — the per-test grain over `ci_test_results`). The active
+// grain is `coalesce(test_id, check_name)` so a single flaky test is quarantined
+// WITHOUT disabling the whole check job, while check-level quarantine keeps working.
 export const quarantinedTests = pgTable(
   "quarantined_tests",
   {
@@ -55,6 +61,13 @@ export const quarantinedTests = pgTable(
       .notNull()
       .references(() => projects.projectId),
     checkName: text("check_name").notNull(),
+    /**
+     * The flaky test's stable id (`ci_test_results.test_id`) when this row
+     * quarantines a single TEST; NULL for a whole-check-job quarantine. The merge
+     * gate excludes a quarantined test's failure by `test_id` and a quarantined
+     * check by `check_name`, so both grains actuate through the same surface.
+     */
+    testId: text("test_id"),
     /** How many distinct head SHAs showed the check both pass AND fail. */
     toggledShaCount: integer("toggled_sha_count").notNull(),
     /** Total CI observations of this check across the detection window. */
@@ -69,11 +82,13 @@ export const quarantinedTests = pgTable(
   (table) => [
     check("quarantined_tests_toggled_check", sql`${table.toggledShaCount} >= 1`),
     check("quarantined_tests_observation_check", sql`${table.observationCount} >= 1`),
-    // At most one ACTIVE quarantine per (project, check). A partial unique index
-    // keyed on the not-yet-cleared rows lets a check be re-quarantined after a
-    // prior clearance without colliding with the historical row.
+    // At most one ACTIVE quarantine per (project, target). The target is
+    // `coalesce(test_id, check_name)`: a per-test row (test_id set) and a
+    // check-level row (test_id NULL) for the SAME check do not collide, and a
+    // target can be re-quarantined after a prior clearance (the partial index
+    // keys only the not-yet-cleared rows).
     uniqueIndex("quarantined_tests_active_unique")
-      .on(table.projectId, table.checkName)
+      .on(table.projectId, sql`coalesce(${table.testId}, ${table.checkName})`)
       .where(sql`${table.clearedAt} IS NULL`),
     index("quarantined_tests_project").on(table.projectId, desc(table.quarantinedAt)),
   ],

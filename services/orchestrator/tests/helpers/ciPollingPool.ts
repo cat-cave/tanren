@@ -62,6 +62,11 @@ export class CiMemoryPool {
     if (sql.startsWith("NOTIFY")) {
       return { rows: [], rowCount: 0 };
     }
+    // CI-intelligence PR2: the merge-gate quarantine READ. No quarantines are
+    // seeded in these polling tests, so it returns an empty active set (no exclusion).
+    if (sql.includes("FROM quarantined_tests") && sql.includes("cleared_at IS NULL")) {
+      return { rows: [], rowCount: 0 };
+    }
     if (sql.includes("SELECT org_id FROM runs WHERE run_id = $1")) {
       const run = this.runs.find((candidate) => candidate.run_id === params[0]);
       return { rows: run === undefined ? [] : [{ org_id: run.org_id }], rowCount: run === undefined ? 0 : 1 };
