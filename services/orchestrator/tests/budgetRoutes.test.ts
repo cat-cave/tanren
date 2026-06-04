@@ -78,6 +78,44 @@ describe("project budget routes", () => {
     expect(body.remainingUsd).toBeNull();
     expect(body.paused).toBe(false);
     expect(body.spentUsd).toBe(0);
+    // The view always names the gated figure (real spend) + carries notional.
+    expect(body.gatedFigure).toBe("real_spend");
+    expect(body.notionalUsd).toBe(0);
+  });
+
+  it("surfaces notional alongside real spend, and names the gated figure (real spend)", async () => {
+    const { app, pool } = buildHarness();
+    // A subscription-style project: NO real spend but a notional (api-equivalent)
+    // value lands on the notional axis.
+    pool.seedCostRecord("proj_1", 0, 12);
+    pool.seedCostRecord("proj_1", 0, 8);
+    await putJson(app, "/orgs/org_acme/projects/proj_1/budget", { ceilingUsd: 50, period: "total" });
+
+    const { body } = await getJson(app, "/orgs/org_acme/projects/proj_1/budget");
+    // Real spend is $0 (the gated figure) — the ceiling is not reached.
+    expect(body.spentUsd).toBe(0);
+    expect(body.paused).toBe(false);
+    // But the notional / equivalent figure is surfaced (never called "spend").
+    expect(body.notionalUsd).toBe(20);
+    expect(body.gatedFigure).toBe("real_spend");
+    // Headroom is measured against the GATED figure (real spend), not notional.
+    expect(body.remainingUsd).toBe(50);
+  });
+
+  it("accepts quarterly + annual periods and a gatedFigure label without a migration", async () => {
+    const { app } = buildHarness();
+    const q = await putJson(app, "/orgs/org_acme/projects/proj_1/budget", { ceilingUsd: 200, period: "quarterly" });
+    expect(q.status).toBe(200);
+    expect(q.body.period).toBe("quarterly");
+
+    const a = await putJson(app, "/orgs/org_acme/projects/proj_1/budget", {
+      ceilingUsd: 500,
+      period: "annual",
+      gatedFigure: "real_spend",
+    });
+    expect(a.status).toBe(200);
+    expect(a.body.period).toBe("annual");
+    expect(a.body.gatedFigure).toBe("real_spend");
   });
 
   it("sets a project budget and the read-back reflects it", async () => {

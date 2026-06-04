@@ -2,7 +2,9 @@
 export {
   AllocatorConfig,
   AllocatorKind,
+  BudgetGatedFigure,
   BudgetPeriod,
+  DEFAULT_BUDGET_GATED_FIGURE,
   DEFAULT_BUDGET_PERIOD,
   DEFAULT_SPECULATION_THRESHOLD,
   DEFAULT_SPECULATIVE_INTEGRATION_DEPTH,

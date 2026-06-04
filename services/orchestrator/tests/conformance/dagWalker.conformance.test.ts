@@ -192,9 +192,17 @@ class RecordingEventEmitter implements DagEventEmitter {
  * case that wants to exercise the dollar-budget gate sets a ceiling + spend.
  */
 class MemoryBudgetGate implements BudgetGate {
-  private state: ProjectBudgetState = { ceilingUsd: undefined, period: "monthly", spentUsd: 0 };
-  set(state: ProjectBudgetState): void {
-    this.state = state;
+  private state: ProjectBudgetState = {
+    ceilingUsd: undefined,
+    period: "monthly",
+    spentUsd: 0,
+    notionalUsd: 0,
+    gatedFigure: "real_spend",
+  };
+  // The conformance cases set only the gate-relevant fields; fill the notional/
+  // gated-figure surfacing fields the walker gate never reads.
+  set(state: Omit<ProjectBudgetState, "notionalUsd" | "gatedFigure">): void {
+    this.state = { notionalUsd: 0, gatedFigure: "real_spend", ...state };
   }
   async resolveBudget(): Promise<ProjectBudgetState> {
     return this.state;

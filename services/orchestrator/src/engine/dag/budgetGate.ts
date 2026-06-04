@@ -20,7 +20,7 @@
 
 import { runWithOrgScope, runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
-import { DEFAULT_BUDGET_PERIOD, type BudgetPeriod } from "../config/index.js";
+import { DEFAULT_BUDGET_GATED_FIGURE, DEFAULT_BUDGET_PERIOD, type BudgetPeriod } from "../config/index.js";
 import { migrateOrgConfig } from "../config/orgConfig.js";
 import { migrateProjectConfig } from "../config/projectConfig.js";
 import type { ProjectBudget } from "../config/shared.js";
@@ -80,7 +80,13 @@ export class PgBudgetGate implements BudgetGate {
     if (owner === null || owner.orgId === null) {
       // No resolvable project/org ⇒ no budget the walker can enforce (and the
       // cost-sum read would be denied by RLS anyway). Treat as unlimited.
-      return { ceilingUsd: undefined, period: DEFAULT_BUDGET_PERIOD, spentUsd: 0 };
+      return {
+        ceilingUsd: undefined,
+        period: DEFAULT_BUDGET_PERIOD,
+        spentUsd: 0,
+        notionalUsd: 0,
+        gatedFigure: DEFAULT_BUDGET_GATED_FIGURE,
+      };
     }
     const orgConfig = await runWithSystemScope(this.pool, async (client) => {
       const result = await client.query<{ config: unknown }>("SELECT config FROM organizations WHERE id = $1", [
@@ -97,16 +103,24 @@ export class PgBudgetGate implements BudgetGate {
         ceilingUsd: undefined,
         period: DEFAULT_BUDGET_PERIOD,
         spentUsd: 0,
+        notionalUsd: 0,
+        gatedFigure: DEFAULT_BUDGET_GATED_FIGURE,
         failClosed: "unparseable_config",
       };
     }
     const budget = resolution.budget;
     if (budget === undefined) {
       // Genuinely ABSENT budget ⇒ unlimited: skip the (otherwise unnecessary) sum.
-      return { ceilingUsd: undefined, period: DEFAULT_BUDGET_PERIOD, spentUsd: 0 };
+      return {
+        ceilingUsd: undefined,
+        period: DEFAULT_BUDGET_PERIOD,
+        spentUsd: 0,
+        notionalUsd: 0,
+        gatedFigure: DEFAULT_BUDGET_GATED_FIGURE,
+      };
     }
 
-    const { spentUsd, unpricedCount } = await this.sumSpend(owner.orgId, projectId, budget.period);
+    const { spentUsd, notionalUsd, unpricedCount } = await this.sumSpend(owner.orgId, projectId, budget.period);
     // BUDGET-SAFETY (C1b): with a configured ceiling, an UN-PRICED REAL-SPEND row in
     // the window means the true spend is UNKNOWN — it may already exceed the ceiling.
     // Do not assume $0; fail CLOSED. An un-priced real-spend row is a NULL-cost_usd
@@ -115,9 +129,22 @@ export class PgBudgetGate implements BudgetGate {
     // `unattributed` (an unrecognized ref). An HONESTLY-$0 subscription/self_hosted
     // NULL is NOT counted — a pure-subscription run never trips this.
     if (unpricedCount > 0) {
-      return { ceilingUsd: budget.ceilingUsd, period: budget.period, spentUsd, failClosed: "unpriced_spend" };
+      return {
+        ceilingUsd: budget.ceilingUsd,
+        period: budget.period,
+        spentUsd,
+        notionalUsd,
+        gatedFigure: budget.gatedFigure,
+        failClosed: "unpriced_spend",
+      };
     }
-    return { ceilingUsd: budget.ceilingUsd, period: budget.period, spentUsd };
+    return {
+      ceilingUsd: budget.ceilingUsd,
+      period: budget.period,
+      spentUsd,
+      notionalUsd,
+      gatedFigure: budget.gatedFigure,
+    };
   }
 
   /**
@@ -134,11 +161,12 @@ export class PgBudgetGate implements BudgetGate {
     orgId: string,
     projectId: string,
     period: BudgetPeriod,
-  ): Promise<{ spentUsd: number; unpricedCount: number }> {
-    const windowClause = period === "monthly" ? " AND recorded_at >= date_trunc('month', now())" : "";
+  ): Promise<{ spentUsd: number; notionalUsd: number; unpricedCount: number }> {
+    const windowClause = budgetWindowClause(period);
     return runWithOrgScope(this.pool, orgId, async (client) => {
-      const result = await client.query<{ total: string | null; unpriced: string | null }>(
+      const result = await client.query<{ total: string | null; notional: string | null; unpriced: string | null }>(
         `SELECT COALESCE(SUM(cost_usd::numeric), 0)::text AS total,
+                COALESCE(SUM(notional_cost_usd::numeric), 0)::text AS notional,
                 COUNT(*) FILTER (
                   WHERE cost_usd IS NULL AND (billing_mode = 'per_token' OR billing_mode = 'unattributed')
                 )::text AS unpriced
@@ -147,7 +175,31 @@ export class PgBudgetGate implements BudgetGate {
         [projectId],
       );
       const row = result.rows[0];
-      return { spentUsd: Number(row?.total ?? "0"), unpricedCount: Number(row?.unpriced ?? "0") };
+      return {
+        spentUsd: Number(row?.total ?? "0"),
+        notionalUsd: Number(row?.notional ?? "0"),
+        unpricedCount: Number(row?.unpriced ?? "0"),
+      };
     });
+  }
+}
+
+/**
+ * The `recorded_at` window clause for a budget period. `total` sums the project's
+ * lifetime (no clause); every other period is a CALENDAR-anchored rolling window
+ * via `date_trunc` (a fresh window opens at each calendar boundary). All values
+ * are members of the frozen `BudgetPeriod` enum, so the trunc unit is a constant —
+ * never user input — and the query stays parameter-free for the project id only.
+ */
+function budgetWindowClause(period: BudgetPeriod): string {
+  switch (period) {
+    case "monthly":
+      return " AND recorded_at >= date_trunc('month', now())";
+    case "quarterly":
+      return " AND recorded_at >= date_trunc('quarter', now())";
+    case "annual":
+      return " AND recorded_at >= date_trunc('year', now())";
+    case "total":
+      return "";
   }
 }

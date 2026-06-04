@@ -102,16 +102,42 @@ export function dollars(value: string | null): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+/**
+ * The HEADLINE FIGURE the costs view leads with. Vocabulary discipline
+ * (FOCUS-aligned): `real` = real money out the door (BilledCost / `cost_usd`);
+ * `equivalent` = the API-equivalent, list-priced ESTIMATE (ListCost /
+ * `notional_cost_usd`) — never called "spend".
+ *
+ * A subscription/Teams org meters NO per-call real spend (`cost_usd` null), so its
+ * real total is $0 and a real-led headline would read "$0 trend" — actively
+ * misleading. So the headline leads with the EQUIVALENT figure when real spend is
+ * absent but notional value exists; otherwise it leads with real spend. Both figures
+ * are always shown side-by-side regardless — this only picks which one is the lead.
+ */
+export type HeadlineBasis = "real" | "equivalent";
+
+export function pickHeadlineBasis(totalUsd: number, notionalUsd: number): HeadlineBasis {
+  return totalUsd <= 0 && notionalUsd > 0 ? "equivalent" : "real";
+}
+
 /** A per-pricing-model rollup: dollars, tokens, record + run counts, share. */
 export interface ModelRollup {
   mode: BillingMode;
   meta: PricingModelMeta;
+  /** REAL spend (BilledCost / `cost_usd`) for this model; subscription/self-hosted ≈ 0. */
   costUsd: number;
+  /**
+   * NOTIONAL / API-EQUIVALENT value (ListCost / `notional_cost_usd`) for this model —
+   * the list-priced estimate, non-zero even for subscription/self-hosted. NOT spend.
+   */
+  notionalUsd: number;
   totalTokens: number;
   records: number;
   runs: number;
-  /** Fraction of total spend [0,1]; 0 when total spend is 0. */
+  /** Fraction of total REAL spend [0,1]; 0 when total real spend is 0. */
   share: number;
+  /** Fraction of total NOTIONAL value [0,1]; 0 when total notional is 0. */
+  notionalShare: number;
 }
 
 /**
@@ -129,14 +155,26 @@ export interface ProviderRow {
   runs: number;
   totalTokens: number;
   costUsd: number;
+  /** NOTIONAL / API-equivalent value (ListCost / `notional_cost_usd`) for the row. */
+  notionalUsd: number;
   /** True when EVERY record in the row had a null `costUsd` (unpriced). */
   priced: boolean;
+  /** True when EVERY record in the row had a null `notionalCostUsd`. */
+  notionalPriced: boolean;
   share: number;
 }
 
 export interface CostSummary {
-  /** Total priced spend across all records (subscription/self-hosted may be 0). */
+  /** Total REAL spend across all records (subscription/self-hosted may be 0). */
   totalUsd: number;
+  /**
+   * Total NOTIONAL / API-EQUIVALENT value (ListCost / `notional_cost_usd`) across all
+   * records — the list-priced estimate, non-zero for a subscription/Teams org whose
+   * real spend is $0. NOT money out the door; never called "spend".
+   */
+  totalNotionalUsd: number;
+  /** Which figure the headline leads with (real spend, or equivalent when real is $0). */
+  headlineBasis: HeadlineBasis;
   totalTokens: number;
   totalRecords: number;
   totalRuns: number;
@@ -144,27 +182,31 @@ export interface CostSummary {
   models: ModelRollup[];
   /** Provider breakdown rows, sorted by dollars desc then tokens desc. */
   providers: ProviderRow[];
-  /** Count of records whose dollar basis is honestly `unknown`. */
+  /** Count of records whose REAL-spend basis is honestly `unknown` (null `costUsd`). */
   unpricedRecords: number;
 }
 
 /** Roll a flat list of cost records into the dashboard summary. */
 export function summarizeCosts(records: readonly CostRecord[]): CostSummary {
   const totalUsd = records.reduce((sum, r) => sum + dollars(r.costUsd), 0);
+  const totalNotionalUsd = records.reduce((sum, r) => sum + dollars(r.notionalCostUsd), 0);
   const totalTokens = records.reduce((sum, r) => sum + r.totalTokens, 0);
   const runIds = new Set(records.map((r) => r.runId));
 
   const models = PRICING_MODELS.map((mode) => {
     const inMode = records.filter((r) => r.billingMode === mode);
     const costUsd = inMode.reduce((sum, r) => sum + dollars(r.costUsd), 0);
+    const notionalUsd = inMode.reduce((sum, r) => sum + dollars(r.notionalCostUsd), 0);
     return {
       mode,
       meta: PRICING_MODEL_META[mode],
       costUsd,
+      notionalUsd,
       totalTokens: inMode.reduce((sum, r) => sum + r.totalTokens, 0),
       records: inMode.length,
       runs: new Set(inMode.map((r) => r.runId)).size,
       share: totalUsd > 0 ? costUsd / totalUsd : 0,
+      notionalShare: totalNotionalUsd > 0 ? notionalUsd / totalNotionalUsd : 0,
     } satisfies ModelRollup;
   });
 
@@ -172,6 +214,8 @@ export function summarizeCosts(records: readonly CostRecord[]): CostSummary {
 
   return {
     totalUsd,
+    totalNotionalUsd,
+    headlineBasis: pickHeadlineBasis(totalUsd, totalNotionalUsd),
     totalTokens,
     totalRecords: records.length,
     totalRuns: runIds.size,
@@ -195,7 +239,9 @@ function groupProviders(records: readonly CostRecord[], totalUsd: number): Provi
       runs: Set<string>;
       tokens: number;
       usd: number;
+      notionalUsd: number;
       pricedCount: number;
+      notionalPricedCount: number;
       count: number;
     }
   >();
@@ -203,14 +249,25 @@ function groupProviders(records: readonly CostRecord[], totalUsd: number): Provi
     const key = `${r.cli}|${r.model}|${r.provider}|${r.billingMode}|${r.costBasis}`;
     let entry = byKey.get(key);
     if (entry === undefined) {
-      entry = { sample: r, runs: new Set(), tokens: 0, usd: 0, pricedCount: 0, count: 0 };
+      entry = {
+        sample: r,
+        runs: new Set(),
+        tokens: 0,
+        usd: 0,
+        notionalUsd: 0,
+        pricedCount: 0,
+        notionalPricedCount: 0,
+        count: 0,
+      };
       byKey.set(key, entry);
     }
     entry.runs.add(r.runId);
     entry.tokens += r.totalTokens;
     entry.usd += dollars(r.costUsd);
+    entry.notionalUsd += dollars(r.notionalCostUsd);
     entry.count += 1;
     if (r.costUsd !== null) entry.pricedCount += 1;
+    if (r.notionalCostUsd !== null) entry.notionalPricedCount += 1;
   }
   const rows = [...byKey.values()].map(
     (e): ProviderRow => ({
@@ -222,7 +279,9 @@ function groupProviders(records: readonly CostRecord[], totalUsd: number): Provi
       runs: e.runs.size,
       totalTokens: e.tokens,
       costUsd: e.usd,
+      notionalUsd: e.notionalUsd,
       priced: e.pricedCount === e.count && e.count > 0,
+      notionalPriced: e.notionalPricedCount === e.count && e.count > 0,
       share: totalUsd > 0 ? e.usd / totalUsd : 0,
     }),
   );
@@ -235,16 +294,40 @@ function groupProviders(records: readonly CostRecord[], totalUsd: number): Provi
 // derived from real recordedAt timestamps + priced dollars; no invented data.
 // ---------------------------------------------------------------------------
 
+/** One day's buckets — REAL spend and NOTIONAL value, kept side-by-side. */
+export interface BurnDay {
+  day: string;
+  /** REAL spend (BilledCost / `cost_usd`) bucketed to this UTC day. */
+  usd: number;
+  /** NOTIONAL / API-equivalent value (ListCost / `notional_cost_usd`) for the day. */
+  notionalUsd: number;
+}
+
 export interface BurnProjection {
-  /** Daily priced-spend buckets over the window, oldest → newest. */
-  daily: { day: string; usd: number }[];
-  /** Average daily priced spend across the buckets. */
+  /** Daily REAL + NOTIONAL buckets over the window, oldest → newest. */
+  daily: BurnDay[];
+  /** Average daily REAL spend across the buckets. */
   dailyAvgUsd: number;
-  /** Priced spend so far this calendar month. */
+  /** Average daily NOTIONAL value across the buckets. */
+  notionalDailyAvgUsd: number;
+  /** REAL spend so far this calendar month. */
   monthToDateUsd: number;
-  /** Linear next-30d projection (dailyAvg * 30), rounded to cents. */
+  /** NOTIONAL value so far this calendar month. */
+  notionalMonthToDateUsd: number;
+  /** Linear next-30d REAL projection (dailyAvg × 30), rounded to cents. An ESTIMATE. */
   projected30dUsd: number;
-  /** Number of days with at least one priced record. */
+  /** Linear next-30d NOTIONAL projection (notionalDailyAvg × 30). An ESTIMATE. */
+  projectedNotional30dUsd: number;
+  /**
+   * Run-rate projection of REAL spend to the END of the current calendar month
+   * (month-to-date + dailyAvg × remaining days). An honestly-labeled linear ESTIMATE.
+   */
+  projectedRealMonthEndUsd: number;
+  /** Same run-rate projection over NOTIONAL value. An honestly-labeled ESTIMATE. */
+  projectedNotionalMonthEndUsd: number;
+  /** Whole UTC days left in the current calendar month (today counts as remaining). */
+  daysLeftInMonth: number;
+  /** Number of days with at least one priced (real OR notional) record. */
   activeDays: number;
 }
 
@@ -266,37 +349,63 @@ export function projectBurn(
 ): BurnProjection {
   const now = opts.now ?? new Date();
   const windowDays = opts.windowDays ?? 14;
-  const buckets = new Map<string, number>();
+  const buckets = new Map<string, { usd: number; notionalUsd: number }>();
   for (let i = windowDays - 1; i >= 0; i -= 1) {
     const d = new Date(now);
     d.setUTCDate(d.getUTCDate() - i);
-    buckets.set(d.toISOString().slice(0, 10), 0);
+    buckets.set(d.toISOString().slice(0, 10), { usd: 0, notionalUsd: 0 });
   }
   let monthToDateUsd = 0;
+  let notionalMonthToDateUsd = 0;
   const monthPrefix = now.toISOString().slice(0, 7);
   const activeDaySet = new Set<string>();
   for (const r of records) {
     const usd = dollars(r.costUsd);
-    if (usd <= 0) continue;
+    const notionalUsd = dollars(r.notionalCostUsd);
+    // A row with NO priced figure on either axis contributes nothing to the burn.
+    if (usd <= 0 && notionalUsd <= 0) continue;
     const key = dayKey(r.recordedAt);
-    if (buckets.has(key)) {
-      buckets.set(key, (buckets.get(key) ?? 0) + usd);
+    const bucket = buckets.get(key);
+    if (bucket !== undefined) {
+      bucket.usd += usd;
+      bucket.notionalUsd += notionalUsd;
       activeDaySet.add(key);
     }
     if (key.startsWith(monthPrefix)) {
       monthToDateUsd += usd;
+      notionalMonthToDateUsd += notionalUsd;
     }
   }
-  const daily = [...buckets.entries()].map(([day, usd]) => ({ day, usd }));
+  const daily = [...buckets.entries()].map(([day, b]) => ({ day, usd: b.usd, notionalUsd: b.notionalUsd }));
   const total = daily.reduce((sum, d) => sum + d.usd, 0);
+  const notionalTotal = daily.reduce((sum, d) => sum + d.notionalUsd, 0);
   const dailyAvgUsd = daily.length > 0 ? total / daily.length : 0;
+  const notionalDailyAvgUsd = daily.length > 0 ? notionalTotal / daily.length : 0;
+
+  // Run-rate to month end: month-to-date + the daily average over the days that
+  // REMAIN in the calendar month (today inclusive). A flat linear estimate — labeled
+  // as such in the view; we never imply a confidence interval.
+  const daysLeftInMonth = utcDaysLeftInMonth(now);
   return {
     daily,
     dailyAvgUsd,
+    notionalDailyAvgUsd,
     monthToDateUsd,
+    notionalMonthToDateUsd,
     projected30dUsd: Math.round(dailyAvgUsd * 30 * 100) / 100,
+    projectedNotional30dUsd: Math.round(notionalDailyAvgUsd * 30 * 100) / 100,
+    projectedRealMonthEndUsd: Math.round((monthToDateUsd + dailyAvgUsd * daysLeftInMonth) * 100) / 100,
+    projectedNotionalMonthEndUsd:
+      Math.round((notionalMonthToDateUsd + notionalDailyAvgUsd * daysLeftInMonth) * 100) / 100,
+    daysLeftInMonth,
     activeDays: activeDaySet.size,
   };
+}
+
+/** Whole UTC days remaining in `now`'s calendar month, today inclusive (≥ 0). */
+function utcDaysLeftInMonth(now: Date): number {
+  const daysInMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0)).getUTCDate();
+  return Math.max(0, daysInMonth - now.getUTCDate() + 1);
 }
 
 // ---------------------------------------------------------------------------

@@ -60,11 +60,15 @@ export class RoutesPool {
   readonly runs: Array<Record<string, unknown>> = [];
   /** Inbox sources (the repo-link auto-provisioned `issues` source lands here). */
   readonly inboxSources: Array<Record<string, unknown>> = [];
-  /** Per-project cost-record rows (only `project_id` + `cost_usd` are summed). */
-  readonly costRecords: Array<{ project_id: string; cost_usd: number }> = [];
+  /**
+   * Per-project cost-record rows the budget-sum query reads. `cost_usd` is REAL
+   * spend; `notional_cost_usd` is the API-equivalent value (defaults to the real
+   * figure for a per-token row, where real == notional).
+   */
+  readonly costRecords: Array<{ project_id: string; cost_usd: number; notional_cost_usd: number }> = [];
 
-  seedCostRecord(projectId: string, costUsd: number): void {
-    this.costRecords.push({ project_id: projectId, cost_usd: costUsd });
+  seedCostRecord(projectId: string, costUsd: number, notionalCostUsd: number = costUsd): void {
+    this.costRecords.push({ project_id: projectId, cost_usd: costUsd, notional_cost_usd: notionalCostUsd });
   }
 
   seedOrg(input: Partial<OrgRow> & { id: string }): OrgRow {
@@ -202,8 +206,10 @@ export class RoutesPool {
     // the windowing (monthly vs. total) is exercised by the gate's unit tests.
     if (trimmed.startsWith("SELECT COALESCE(SUM(cost_usd")) {
       const projectId = String(params[0]);
-      const total = this.costRecords.filter((r) => r.project_id === projectId).reduce((sum, r) => sum + r.cost_usd, 0);
-      return { rows: [{ total: String(total) }], rowCount: 1 };
+      const mine = this.costRecords.filter((r) => r.project_id === projectId);
+      const total = mine.reduce((sum, r) => sum + r.cost_usd, 0);
+      const notional = mine.reduce((sum, r) => sum + r.notional_cost_usd, 0);
+      return { rows: [{ total: String(total), notional: String(notional), unpriced: "0" }], rowCount: 1 };
     }
     if (trimmed.startsWith("INSERT INTO projects")) {
       this.seedProject({

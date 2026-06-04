@@ -2,10 +2,14 @@
 // OBSERVATION + MUTATION endpoints for the budget ceiling the DagWalker enforces.
 //
 //   GET  /:orgId/projects/:projectId/budget
-//     → { ceilingUsd | null, period, spentUsd, remainingUsd | null, paused }
-//       the resolved ceiling (project-over-org), the cumulative spend over the
-//       period, the remaining headroom, and whether the walker is paused on budget.
-//   PUT  /:orgId/projects/:projectId/budget   { ceilingUsd, period? }
+//     → { ceilingUsd | null, period, gatedFigure, spentUsd, notionalUsd,
+//         remainingUsd | null, paused }
+//       the resolved ceiling (project-over-org), which figure it gates (real spend),
+//       the cumulative REAL spend over the period, the API-EQUIVALENT notional value
+//       over the same period (surfaced so a subscription org sees a non-zero figure;
+//       NOT spend, NOT gated), the remaining headroom against the gated figure, and
+//       whether the walker is paused on budget.
+//   PUT  /:orgId/projects/:projectId/budget   { ceilingUsd, period?, gatedFigure? }
 //     → the same shape, re-read after the write. Sets the project's OWN budget,
 //       read-modify-writing `projects.config.budget` through the SAME versioned
 //       project-config path the rest of the config uses — a dedicated, discoverable
@@ -19,26 +23,48 @@
 import type { Context } from "hono";
 import type pg from "pg";
 import { z } from "zod";
-import { DEFAULT_BUDGET_PERIOD, migrateProjectConfig } from "../../engine/config/index.js";
+import {
+  type BudgetGatedFigure,
+  DEFAULT_BUDGET_GATED_FIGURE,
+  DEFAULT_BUDGET_PERIOD,
+  migrateProjectConfig,
+} from "../../engine/config/index.js";
 import { type ProjectBudgetState, shouldPauseOnBudget } from "../../engine/contracts/dagWalker.js";
 import { PgBudgetGate } from "../../engine/dag/budgetGate.js";
 import { ProjectStore } from "../../engine/repositories/index.js";
 import { systemActor } from "../../engine/state/actor.js";
 
 // `ceilingUsd: null` clears the project's own budget; a number (with optional
-// period) sets it. `period` defaults to the same default the config schema uses.
+// period + gated-figure) sets it. `period` defaults to the same default the config
+// schema uses; `gatedFigure` names which figure the ceiling caps and defaults to
+// `real_spend` (the figure the DagWalker's gate actually sums).
 export const BudgetPutSchema = z
   .object({
     ceilingUsd: z.number().nonnegative().nullable(),
-    period: z.enum(["monthly", "total"]).optional(),
+    period: z.enum(["monthly", "quarterly", "annual", "total"]).optional(),
+    gatedFigure: z.enum(["real_spend", "notional"]).optional(),
   })
   .strict();
 
-/** The read-shape both GET and PUT return — the apex-proof + operator surface. */
+/**
+ * The read-shape both GET and PUT return — the apex-proof + operator surface.
+ *
+ * Vocabulary discipline (FOCUS-aligned): `spentUsd` is REAL money out the door
+ * (BilledCost; the figure the ceiling gates). `notionalUsd` is the API-EQUIVALENT,
+ * list-priced ESTIMATE (ListCost) over the SAME period — surfaced so a subscription
+ * org sees a non-zero figure; it is NOT spend and is NEVER gated. `gatedFigure`
+ * names which figure the ceiling caps (always `real_spend` today), so a reader never
+ * has to guess; `remainingUsd` is the headroom against THAT gated figure.
+ */
 export interface BudgetView {
   ceilingUsd: number | null;
-  period: "monthly" | "total";
+  period: "monthly" | "quarterly" | "annual" | "total";
+  /** Which figure the ceiling gates (always `real_spend` today). */
+  gatedFigure: BudgetGatedFigure;
+  /** REAL spend over the period (the gated figure). */
   spentUsd: number;
+  /** Notional / API-equivalent value over the same period (NOT spend, NOT gated). */
+  notionalUsd: number;
   remainingUsd: number | null;
   paused: boolean;
 }
@@ -48,7 +74,10 @@ function toView(state: ProjectBudgetState): BudgetView {
   return {
     ceilingUsd,
     period: state.period,
+    gatedFigure: state.gatedFigure,
     spentUsd: state.spentUsd,
+    notionalUsd: state.notionalUsd,
+    // Headroom is measured against the GATED figure (real spend) — never notional.
     remainingUsd: ceilingUsd === null ? null : Math.max(0, ceilingUsd - state.spentUsd),
     // BUDGET-SAFETY (C1b/M5): a fail-closed safety pause shows as paused too, not
     // just the genuine ceiling-reached case.
@@ -90,7 +119,11 @@ export async function handleBudgetPut(
     budget:
       body.ceilingUsd === null
         ? undefined
-        : { ceilingUsd: body.ceilingUsd, period: body.period ?? DEFAULT_BUDGET_PERIOD },
+        : {
+            ceilingUsd: body.ceilingUsd,
+            period: body.period ?? DEFAULT_BUDGET_PERIOD,
+            gatedFigure: body.gatedFigure ?? DEFAULT_BUDGET_GATED_FIGURE,
+          },
   };
   // Round-trip through the versioned parser so the persisted blob is always a valid
   // ProjectConfigV1 (drops the `budget` key entirely when cleared — `.strict()`).

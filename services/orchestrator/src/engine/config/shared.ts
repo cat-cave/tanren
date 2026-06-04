@@ -130,16 +130,39 @@ export type PartialAllocatorConfig = z.infer<typeof PartialAllocatorConfig>;
 // ---- Dollar budget ceiling (autonomy-engine.md §3 proof 6) ---------------
 
 // The PERIOD a budget ceiling sums spend over:
-//   - `monthly` — the CURRENT CALENDAR MONTH (UTC): spend recorded since the
-//                 first of this month (`date_trunc('month', now())`). A fresh
-//                 window opens automatically each month boundary — the rolling
-//                 operating budget for a continuously-running project.
-//   - `total`   — the project's LIFETIME: every cost record ever attributed to
-//                 the project. A hard lifetime cap (e.g. a fixed `apex` budget).
-export const BudgetPeriod = z.enum(["monthly", "total"]);
+//   - `monthly`   — the CURRENT CALENDAR MONTH (UTC): spend recorded since the
+//                   first of this month (`date_trunc('month', now())`). A fresh
+//                   window opens automatically each month boundary — the rolling
+//                   operating budget for a continuously-running project.
+//   - `quarterly` — the CURRENT CALENDAR QUARTER (UTC): spend recorded since
+//                   `date_trunc('quarter', now())`. A coarser rolling window.
+//   - `annual`    — the CURRENT CALENDAR YEAR (UTC): spend recorded since
+//                   `date_trunc('year', now())`. The coarsest rolling window.
+//   - `total`     — the project's LIFETIME: every cost record ever attributed to
+//                   the project. A hard lifetime cap (e.g. a fixed `apex` budget).
+//
+// All non-`total` values are CALENDAR-anchored rolling windows (additive: legacy
+// `monthly`/`total` rows are unchanged; the new values need no migration since
+// the column is config jsonb).
+export const BudgetPeriod = z.enum(["monthly", "quarterly", "annual", "total"]);
 export type BudgetPeriod = z.infer<typeof BudgetPeriod>;
 
 export const DEFAULT_BUDGET_PERIOD: BudgetPeriod = "monthly";
+
+// The FIGURE a budget ceiling gates. Vocabulary discipline (FOCUS-aligned):
+//   - `real_spend`  — REAL money out the door (FOCUS BilledCost; `cost_usd`). The
+//                     ONLY figure the DagWalker's gate sums today, and the default.
+//   - `notional`    — the API-equivalent / list-priced ESTIMATE (FOCUS ListCost;
+//                     `notional_cost_usd`). NOT real money — never called "spend".
+//                     Reserved for a future gate mode; the label is surfaced now so
+//                     a read never has to guess which figure the ceiling caps.
+// Additive + defaulted: an absent value resolves to `real_spend` (today's behavior,
+// byte-identical). The gate implementation still sums REAL spend regardless — this
+// names the gated figure honestly; it does not silently change the gate.
+export const BudgetGatedFigure = z.enum(["real_spend", "notional"]);
+export type BudgetGatedFigure = z.infer<typeof BudgetGatedFigure>;
+
+export const DEFAULT_BUDGET_GATED_FIGURE: BudgetGatedFigure = "real_spend";
 
 // The per-project/org DOLLAR BUDGET CEILING — a governed SETTING (lives in
 // project/org config JSON), never an env var. When the project's cumulative
@@ -151,11 +174,14 @@ export const DEFAULT_BUDGET_PERIOD: BudgetPeriod = "monthly";
 //
 // Optional + additive everywhere it is referenced: an absent budget means NO
 // ceiling (unlimited — today's behavior, byte-identical). `ceilingUsd` is a
-// non-negative dollar amount; `period` defaults to `monthly`.
+// non-negative dollar amount; `period` defaults to `monthly`; `gatedFigure`
+// names which figure the ceiling caps and defaults to `real_spend` (the figure
+// the gate actually sums).
 export const ProjectBudget = z
   .object({
     ceilingUsd: z.number().nonnegative(),
     period: BudgetPeriod.default(DEFAULT_BUDGET_PERIOD),
+    gatedFigure: BudgetGatedFigure.default(DEFAULT_BUDGET_GATED_FIGURE),
   })
   .strict();
 export type ProjectBudget = z.infer<typeof ProjectBudget>;
