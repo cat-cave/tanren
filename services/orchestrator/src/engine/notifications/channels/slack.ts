@@ -8,9 +8,7 @@ import type { NotificationChannel } from "./types.js";
 //   - `destination` is a *credential ref* pointing at the Slack incoming
 //     webhook URL (a write-only secret). We never store the webhook URL in
 //     the clear on the target row: the matrix UI persists a `credential/...`
-//     ref and the operator writes the secret separately. For dev / back-compat
-//     a destination that is already a full `https://hooks.slack.com/...` URL is
-//     used verbatim.
+//     ref and the operator writes the secret separately.
 //
 // Delivery model: POST the standard Slack incoming-webhook JSON body
 // (`{ text, blocks }`) to the resolved URL. Slack returns `200 ok` on success
@@ -19,10 +17,9 @@ import type { NotificationChannel } from "./types.js";
 
 export interface SlackChannelDeps {
   // Secret store used to resolve a webhook credential ref into the actual
-  // Slack incoming-webhook URL. Required when targets store a credential ref
-  // (the recommended write-only model). Optional only for the legacy
-  // verbatim-URL path.
-  secrets?: SecretStore;
+  // Slack incoming-webhook URL. REQUIRED — a credential ref is the only
+  // accepted destination shape.
+  secrets: SecretStore;
   // fetch is injected so tests can drive it without a real network. The
   // default is the global fetch in Node 20+.
   fetch?: typeof fetch;
@@ -38,10 +35,10 @@ const SLACK_EMOJI_BY_SEVERITY: Record<NotificationPayload["severity"], string> =
 export class SlackChannel implements NotificationChannel {
   readonly kind = "slack" as const;
   readonly wired = true;
-  private readonly secrets: SecretStore | undefined;
+  private readonly secrets: SecretStore;
   private readonly fetchImpl: typeof fetch;
 
-  constructor(deps: SlackChannelDeps = {}) {
+  constructor(deps: SlackChannelDeps) {
     this.secrets = deps.secrets;
     this.fetchImpl = deps.fetch ?? fetch;
   }
@@ -60,15 +57,9 @@ export class SlackChannel implements NotificationChannel {
     }
   }
 
-  // A destination that already looks like a webhook URL is used as-is; anything
-  // else is treated as a credential ref and resolved through the secret store.
+  // The destination is ALWAYS a credential ref resolved through the secret
+  // store (the webhook URL is never stored in the clear on the target row).
   private async resolveWebhookUrl(destination: string): Promise<string> {
-    if (destination.startsWith("https://") || destination.startsWith("http://")) {
-      return destination;
-    }
-    if (this.secrets === undefined) {
-      throw new Error(`slack channel needs a secret store to resolve credential ref: ${destination}`);
-    }
     const secret = await this.secrets.get(destination);
     if (secret === undefined) {
       throw new Error(`missing Slack webhook credential ref: ${destination}`);

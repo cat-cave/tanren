@@ -1,5 +1,11 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
+# The allocator API token is required (fail-loud, no silent "dev" default) by
+# buildAllocator + the standalone allocator. Provide a dev default here so every
+# recipe — incl. the RLS smoke tests that construct the real app — inherits it;
+# real deploys set it via compose/env.
+export TANREN_ALLOCATOR_TOKEN := env_var_or_default("TANREN_ALLOCATOR_TOKEN", "dev")
+
 default:
   just --list
 

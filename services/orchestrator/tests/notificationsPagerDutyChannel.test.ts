@@ -4,6 +4,11 @@ import type { SecretStore, SecretValue } from "../src/engine/contracts/secretSto
 import type { NotificationTargetRow } from "../src/engine/notifications/index.js";
 
 // PagerDuty Events API v2 channel tests. Injected fetch double + secret store.
+// The destination is ALWAYS a credential ref pointing at the routing key
+// (resolved through the secret store).
+
+const ROUTING_KEY_REF = "credential/pagerduty/routing-key";
+const ROUTING_KEY = "R0UTINGKEY";
 
 function target(overrides: Partial<NotificationTargetRow> = {}): NotificationTargetRow {
   return {
@@ -12,7 +17,7 @@ function target(overrides: Partial<NotificationTargetRow> = {}): NotificationTar
     scope: "org",
     userId: null,
     channelKind: "pagerduty",
-    destination: overrides.destination ?? "credential/pagerduty/routing-key",
+    destination: overrides.destination ?? ROUTING_KEY_REF,
     label: "pagerduty oncall",
     enabled: true,
     weekendMute: false,
@@ -34,6 +39,8 @@ class MemorySecrets implements SecretStore {
   async delete(): Promise<void> {}
 }
 
+const resolvingSecrets = (): SecretStore => new MemorySecrets({ [ROUTING_KEY_REF]: ROUTING_KEY });
+
 describe("PagerDutyChannel", () => {
   it("resolves a routing-key ref and POSTs a trigger event", async () => {
     let captured: { url: string; init: RequestInit } | null = null;
@@ -41,12 +48,9 @@ describe("PagerDutyChannel", () => {
       captured = { url: String(url), init: init as RequestInit };
       return new Response("{}", { status: 202 });
     };
-    const secrets = new MemorySecrets({
-      "credential/pagerduty/routing-key": "R0UTINGKEY",
-    });
     const channel = new PagerDutyChannel({
       fetch: fakeFetch,
-      secrets,
+      secrets: resolvingSecrets(),
       apiBaseUrl: "https://events.pagerduty.test",
     });
     await channel.publish(target(), {
@@ -64,28 +68,12 @@ describe("PagerDutyChannel", () => {
       payload: { summary: string; severity: string; source: string; custom_details: unknown };
       client_url?: string;
     };
-    expect(body.routing_key).toBe("R0UTINGKEY");
+    expect(body.routing_key).toBe(ROUTING_KEY);
     expect(body.event_action).toBe("trigger");
     expect(body.payload.severity).toBe("critical");
     expect(body.payload.summary).toBe("run failed");
     expect(body.payload.source).toBe("run.failed");
     expect(body.client_url).toBe("https://tanren.example/runs/run_1");
-  });
-
-  it("uses a bare routing key destination verbatim", async () => {
-    let body: { routing_key: string } | null = null;
-    const fakeFetch: typeof fetch = async (_url, init) => {
-      body = JSON.parse((init as RequestInit).body as string) as { routing_key: string };
-      return new Response("{}", { status: 202 });
-    };
-    const channel = new PagerDutyChannel({ fetch: fakeFetch });
-    await channel.publish(target({ destination: "BAREKEY1234567890BAREKEY12345678" }), {
-      title: "t",
-      body: "b",
-      severity: "info",
-      eventName: "run.started",
-    });
-    expect(body!.routing_key).toBe("BAREKEY1234567890BAREKEY12345678");
   });
 
   it("maps severity to the PagerDuty scale", async () => {
@@ -97,9 +85,9 @@ describe("PagerDutyChannel", () => {
       captured.push(body.payload.severity);
       return new Response("{}", { status: 202 });
     };
-    const channel = new PagerDutyChannel({ fetch: fakeFetch });
+    const channel = new PagerDutyChannel({ fetch: fakeFetch, secrets: resolvingSecrets() });
     for (const severity of ["ok", "info", "warn", "fail"] as const) {
-      await channel.publish(target({ destination: "BAREKEY" }), {
+      await channel.publish(target(), {
         title: "t",
         body: "b",
         severity,
@@ -110,9 +98,9 @@ describe("PagerDutyChannel", () => {
   });
 
   it("throws when PagerDuty does not return 202", async () => {
-    const channel = new PagerDutyChannel({ fetch: failingFetch });
+    const channel = new PagerDutyChannel({ fetch: failingFetch, secrets: resolvingSecrets() });
     await expect(
-      channel.publish(target({ destination: "BAREKEY" }), {
+      channel.publish(target(), {
         title: "t",
         body: "b",
         severity: "info",
@@ -148,15 +136,18 @@ describe("PagerDutyChannel", () => {
 
   async function capture(
     payload: Parameters<PagerDutyChannel["publish"]>[1],
-    destination = "BAREKEY",
   ): Promise<{ url: string; headers: Record<string, string>; event: Event }> {
     let init: { url: string; req: RequestInit } | null = null;
     const fakeFetch: typeof fetch = async (url, req) => {
       init = { url: String(url), req: req as RequestInit };
       return new Response("{}", { status: 202 });
     };
-    const channel = new PagerDutyChannel({ fetch: fakeFetch, apiBaseUrl: "https://events.pagerduty.test" });
-    await channel.publish(target({ destination }), payload);
+    const channel = new PagerDutyChannel({
+      fetch: fakeFetch,
+      secrets: resolvingSecrets(),
+      apiBaseUrl: "https://events.pagerduty.test",
+    });
+    await channel.publish(target(), payload);
     return {
       url: init!.url,
       headers: init!.req.headers as Record<string, string>,
@@ -170,8 +161,12 @@ describe("PagerDutyChannel", () => {
       capturedUrl = String(url);
       return new Response("{}", { status: 202 });
     };
-    const channel = new PagerDutyChannel({ fetch: fakeFetch, apiBaseUrl: "https://events.pagerduty.test/" });
-    await channel.publish(target({ destination: "BAREKEY" }), {
+    const channel = new PagerDutyChannel({
+      fetch: fakeFetch,
+      secrets: resolvingSecrets(),
+      apiBaseUrl: "https://events.pagerduty.test/",
+    });
+    await channel.publish(target(), {
       title: "t",
       body: "b",
       severity: "info",
@@ -217,23 +212,5 @@ describe("PagerDutyChannel", () => {
     });
     expect(withUrl.event.client).toBe("tanren");
     expect(withUrl.event.client_url).toBe("https://tanren.example/runs/run_1");
-  });
-
-  it("treats a destination without a slash as a verbatim routing key, not a ref", async () => {
-    // No secret store wired; a slash-free key must be used as-is (not resolved).
-    const { event } = await capture({ title: "t", body: "b", severity: "info", eventName: "run.started" }, "BAREKEY");
-    expect(event.routing_key).toBe("BAREKEY");
-  });
-
-  it("throws when a credential ref is given but no secret store is wired", async () => {
-    const channel = new PagerDutyChannel({});
-    await expect(
-      channel.publish(target({ destination: "credential/pd/key" }), {
-        title: "t",
-        body: "b",
-        severity: "info",
-        eventName: "run.started",
-      }),
-    ).rejects.toThrow(/pagerduty channel needs a secret store/u);
   });
 });

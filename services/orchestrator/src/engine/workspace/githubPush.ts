@@ -1,7 +1,5 @@
 import type { SshTarget } from "../contracts/allocator.js";
-import type { SecretStore } from "../contracts/secretStore.js";
 import type { SshSubstrate } from "../contracts/sshSubstrate.js";
-import { validateGithubCredentialRef, validateGithubToken } from "../credentials/githubToken.js";
 import { githubHttpsRemote, parseGitHubRepository } from "../providers/github.js";
 import { quoteSshShellArg } from "../ssh/command.js";
 import { runWorkspaceSshCommand } from "./ssh.js";
@@ -12,22 +10,20 @@ export interface DraftPrBranchInput {
 }
 
 export interface GitHubWorkspacePushInput {
-  secrets: SecretStore;
   ssh: SshSubstrate;
   target: SshTarget;
   workspacePath: string;
   repoUrl: string;
   branch: string;
-  credentialRef: string;
   timeoutMs: number;
   /**
-   * P3-0003: pre-resolved push token. When the caller already minted an App
-   * installation token (or read the static secret) via the token resolver, it
-   * passes it here and we skip the ref-based read. Installation tokens are used
-   * over HTTPS as the `x-access-token` password, exactly like a PAT, so the
-   * `git push` command below is unchanged. Omitted → legacy ref-based read.
+   * P3-0003: the pre-resolved push token. The caller (the VcsProvider) mints an
+   * App installation token (or reads the static secret) via the token resolver
+   * and passes it here. Installation tokens are used over HTTPS as the
+   * `x-access-token` password, exactly like a PAT, so the `git push` command
+   * below is unchanged.
    */
-  token?: string;
+  token: string;
   /**
    * The local gitref pushed as the PR branch. Defaults to "HEAD". The run path
    * passes {@link PR_CLEAN_REF} — the writer commits replayed onto the clone HEAD
@@ -92,23 +88,13 @@ export async function prepareCleanPrBranch(input: PrepareCleanPrBranchInput): Pr
 }
 
 export async function pushWorkspaceBranchToGitHub(input: GitHubWorkspacePushInput): Promise<void> {
-  const token = input.token ?? (await readStaticPushToken(input.secrets, input.credentialRef));
   await runWorkspaceSshCommand(input.ssh, input.target, {
     label: "push workspace branch to GitHub",
     cwd: input.workspacePath,
     timeoutMs: input.timeoutMs,
     command: buildGitHubPushCommand({ repoUrl: input.repoUrl, branch: input.branch, sourceRef: input.sourceRef }),
-    stdin: token,
+    stdin: input.token,
   });
-}
-
-async function readStaticPushToken(secrets: SecretStore, ref: string): Promise<string> {
-  const credentialRef = validateGithubCredentialRef(ref);
-  const secret = await secrets.get(credentialRef);
-  if (secret === undefined) {
-    throw new Error(`missing GitHub credential ref: ${credentialRef}`);
-  }
-  return validateGithubToken(secret.value);
 }
 
 export function draftPrBranchName(input: DraftPrBranchInput): string {

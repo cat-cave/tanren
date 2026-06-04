@@ -1,12 +1,27 @@
 import { readFile } from "node:fs/promises";
 import { vcsProviderOver } from "./helpers/vcsProvider.js";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import { FakeEventStore } from "./helpers/fakeEventStore.js";
 import { CiMemoryPool, ScriptedGitHubHttp } from "./helpers/ciPollingPool.js";
 import { FetchGitHubHttpClient, parseGitHubPullRequestUrl } from "../src/engine/providers/github.js";
 import { computeCiRetryDelayMs, evaluateCiObservation, pollCiForRun } from "../src/engine/workflow/ciPolling.js";
 import { buildApp } from "../src/main.js";
+
+// buildApp constructs the (default sidecar) allocator, which REQUIRES a bearer
+// token (no `"dev"` fallback). Set one for the suite and restore it after.
+let savedAllocatorToken: string | undefined;
+beforeAll(() => {
+  savedAllocatorToken = process.env.TANREN_ALLOCATOR_TOKEN;
+  process.env.TANREN_ALLOCATOR_TOKEN = "test-token";
+});
+afterAll(() => {
+  if (savedAllocatorToken === undefined) {
+    delete process.env.TANREN_ALLOCATOR_TOKEN;
+  } else {
+    process.env.TANREN_ALLOCATOR_TOKEN = savedAllocatorToken;
+  }
+});
 
 describe("CI polling loop", () => {
   it("parses GitHub PR URLs and classifies pending, passing, and failing checks", () => {

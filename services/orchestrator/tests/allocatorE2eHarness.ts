@@ -117,6 +117,10 @@ export function installAllocatorE2eLifecycle(): void {
       savedEnv[key] = process.env[key];
       delete process.env[key];
     }
+    // The sidecar allocator REQUIRES a bearer token (no `"dev"` fallback); set a
+    // default so sidecar-building e2e cases construct. Cases that assert the token
+    // flows through override it explicitly.
+    process.env.TANREN_ALLOCATOR_TOKEN = "dev";
   });
 
   afterEach(() => {

@@ -7,8 +7,8 @@ import { safeReadText } from "./teams.js";
 //
 // Target shape:
 //   - `destination` is a *credential ref* pointing at the integration routing
-//     key (a write-only secret resolved through the secret store). For dev /
-//     back-compat a 32-char routing key passed verbatim is used as-is.
+//     key (a write-only secret resolved through the secret store). The routing
+//     key is NEVER stored in the clear on the target row.
 //
 // Delivery model: POST a `trigger` event to the Events API v2 enqueue
 // endpoint. Severity maps onto PagerDuty's critical/error/warning/info scale.
@@ -16,9 +16,9 @@ import { safeReadText } from "./teams.js";
 // thrown Error which the dispatcher catches and records as `status='failed'`.
 
 export interface PagerDutyChannelDeps {
-  // Secret store used to resolve a routing-key credential ref. Optional only
-  // for the legacy verbatim-key path.
-  secrets?: SecretStore;
+  // Secret store used to resolve a routing-key credential ref. REQUIRED — a
+  // credential ref is the only accepted destination shape.
+  secrets: SecretStore;
   fetch?: typeof fetch;
   // Events API base; injectable for tests. Defaults to the public endpoint.
   apiBaseUrl?: string;
@@ -35,11 +35,11 @@ const PD_SEVERITY_BY_SEVERITY: Record<NotificationPayload["severity"], string> =
 export class PagerDutyChannel implements NotificationChannel {
   readonly kind = "pagerduty" as const;
   readonly wired = true;
-  private readonly secrets: SecretStore | undefined;
+  private readonly secrets: SecretStore;
   private readonly fetchImpl: typeof fetch;
   private readonly apiBaseUrl: string;
 
-  constructor(deps: PagerDutyChannelDeps = {}) {
+  constructor(deps: PagerDutyChannelDeps) {
     this.secrets = deps.secrets;
     this.fetchImpl = deps.fetch ?? fetch;
     this.apiBaseUrl = deps.apiBaseUrl ?? "https://events.pagerduty.com";
@@ -61,15 +61,9 @@ export class PagerDutyChannel implements NotificationChannel {
     }
   }
 
-  // A destination shaped like a credential ref is resolved through the secret
-  // store; anything else (a bare routing key) is used verbatim.
+  // The destination is ALWAYS a credential ref resolved through the secret
+  // store (the routing key is never stored in the clear on the target row).
   private async resolveRoutingKey(destination: string): Promise<string> {
-    if (!destination.includes("/")) {
-      return destination;
-    }
-    if (this.secrets === undefined) {
-      throw new Error(`pagerduty channel needs a secret store to resolve credential ref: ${destination}`);
-    }
     const secret = await this.secrets.get(destination);
     if (secret === undefined) {
       throw new Error(`missing pagerduty routing-key credential ref: ${destination}`);

@@ -3,7 +3,11 @@ import { DiscordChannel } from "../src/engine/notifications/channels/discord.js"
 import type { SecretStore, SecretValue } from "../src/engine/contracts/secretStore.js";
 import type { NotificationTargetRow } from "../src/engine/notifications/index.js";
 
-// Discord channel tests. Injected fetch double + in-memory secret store.
+// Discord channel tests. Injected fetch double + in-memory secret store. The
+// destination is ALWAYS a credential ref resolved through the secret store.
+
+const WEBHOOK_REF = "credential/discord/alerts";
+const WEBHOOK_URL = "https://discord.com/api/webhooks/1/abc";
 
 function target(overrides: Partial<NotificationTargetRow> = {}): NotificationTargetRow {
   return {
@@ -12,7 +16,7 @@ function target(overrides: Partial<NotificationTargetRow> = {}): NotificationTar
     scope: "org",
     userId: null,
     channelKind: "discord",
-    destination: overrides.destination ?? "credential/discord/alerts",
+    destination: overrides.destination ?? WEBHOOK_REF,
     label: "discord alerts",
     enabled: true,
     weekendMute: false,
@@ -34,6 +38,8 @@ class MemorySecrets implements SecretStore {
   async delete(): Promise<void> {}
 }
 
+const resolvingSecrets = (): SecretStore => new MemorySecrets({ [WEBHOOK_REF]: WEBHOOK_URL });
+
 describe("DiscordChannel", () => {
   it("resolves a credential ref and POSTs a content+embeds body", async () => {
     let captured: { url: string; init: RequestInit } | null = null;
@@ -41,10 +47,7 @@ describe("DiscordChannel", () => {
       captured = { url: String(url), init: init as RequestInit };
       return new Response(null, { status: 204 });
     };
-    const secrets = new MemorySecrets({
-      "credential/discord/alerts": "https://discord.com/api/webhooks/1/abc",
-    });
-    const channel = new DiscordChannel({ fetch: fakeFetch, secrets });
+    const channel = new DiscordChannel({ fetch: fakeFetch, secrets: resolvingSecrets() });
     await channel.publish(target(), {
       title: "[FAIL] run.failed",
       body: "run failed details",
@@ -53,7 +56,7 @@ describe("DiscordChannel", () => {
       url: "https://tanren.example/runs/run_1",
     });
     expect(captured).not.toBeNull();
-    expect(captured!.url).toBe("https://discord.com/api/webhooks/1/abc");
+    expect(captured!.url).toBe(WEBHOOK_URL);
     const body = JSON.parse(captured!.init.body as string) as {
       content: string;
       embeds: Array<{ title: string; description: string; color: number; url?: string }>;
@@ -64,32 +67,28 @@ describe("DiscordChannel", () => {
     expect(body.embeds[0]?.url).toBe("https://tanren.example/runs/run_1");
   });
 
-  it("uses a full webhook URL destination verbatim without a secret store", async () => {
-    let capturedUrl: string | null = null;
-    const fakeFetch: typeof fetch = async (url) => {
-      capturedUrl = String(url);
-      return new Response(null, { status: 204 });
-    };
-    const channel = new DiscordChannel({ fetch: fakeFetch });
-    await channel.publish(target({ destination: "https://discord.com/api/webhooks/x" }), {
-      title: "t",
-      body: "b",
-      severity: "info",
-      eventName: "run.started",
-    });
-    expect(capturedUrl).toBe("https://discord.com/api/webhooks/x");
-  });
-
   it("throws when Discord returns a non-2xx status", async () => {
-    const channel = new DiscordChannel({ fetch: failingFetch });
+    const channel = new DiscordChannel({ fetch: failingFetch, secrets: resolvingSecrets() });
     await expect(
-      channel.publish(target({ destination: "https://discord.com/api/webhooks/x" }), {
+      channel.publish(target(), {
         title: "t",
         body: "b",
         severity: "info",
         eventName: "run.started",
       }),
     ).rejects.toThrow(/discord publish failed: 400/u);
+  });
+
+  it("throws when a credential ref cannot be resolved", async () => {
+    const channel = new DiscordChannel({ secrets: new MemorySecrets({}) });
+    await expect(
+      channel.publish(target({ destination: "credential/discord/missing" }), {
+        title: "t",
+        body: "b",
+        severity: "info",
+        eventName: "run.started",
+      }),
+    ).rejects.toThrow(/missing discord webhook credential ref/u);
   });
 
   interface Embed {
@@ -109,8 +108,8 @@ describe("DiscordChannel", () => {
       init = i as RequestInit;
       return new Response(null, { status: 204 });
     };
-    const channel = new DiscordChannel({ fetch: fakeFetch });
-    await channel.publish(target({ destination: "https://discord.com/api/webhooks/x" }), payload);
+    const channel = new DiscordChannel({ fetch: fakeFetch, secrets: resolvingSecrets() });
+    await channel.publish(target(), payload);
     return { headers: init!.headers as Record<string, string>, body: JSON.parse(init!.body as string) };
   }
 
@@ -172,33 +171,5 @@ describe("DiscordChannel", () => {
   it("omits embed.url when payload.url is unset", async () => {
     const { body } = await capture({ title: "t", body: "b", severity: "info", eventName: "run.started" });
     expect(body.embeds[0]).not.toHaveProperty("url");
-  });
-
-  it("uses an http:// destination verbatim", async () => {
-    let capturedUrl: string | null = null;
-    const fakeFetch: typeof fetch = async (url) => {
-      capturedUrl = String(url);
-      return new Response(null, { status: 204 });
-    };
-    const channel = new DiscordChannel({ fetch: fakeFetch });
-    await channel.publish(target({ destination: "http://discord.internal/x" }), {
-      title: "t",
-      body: "b",
-      severity: "info",
-      eventName: "run.started",
-    });
-    expect(capturedUrl).toBe("http://discord.internal/x");
-  });
-
-  it("throws when a credential ref is given but no secret store is wired", async () => {
-    const channel = new DiscordChannel({});
-    await expect(
-      channel.publish(target({ destination: "credential/discord/alerts" }), {
-        title: "t",
-        body: "b",
-        severity: "info",
-        eventName: "run.started",
-      }),
-    ).rejects.toThrow(/discord channel needs a secret store/u);
   });
 });

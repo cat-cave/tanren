@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import { InMemorySecretStore, type SshSubstrate } from "../src/engine/contracts/index.js";
 import { buildApp } from "../src/main.js";
 
-// Contract tests never reach the draft-PR route, so a never-invoked stub satisfies
-// the SSH dep shape; the explicit memory store satisfies the SecretStore injection.
+// buildApp's default sidecar allocator REQUIRES a bearer token (no `"dev"` fallback).
+process.env.TANREN_ALLOCATOR_TOKEN ??= "test-token";
 const ssh = {} as SshSubstrate;
 const doneOrMerged = (status: string): boolean => status === "done" || status === "merged";
 

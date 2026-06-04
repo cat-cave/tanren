@@ -17,7 +17,8 @@ import { ChannelKind } from "./schemas.js";
 //
 //   - ntfy (P2A-0017): the original v0 reference channel.
 //   - slack (P3-0024): incoming-webhook delivery; the webhook URL is resolved
-//     from a write-only credential ref via the secret store.
+//     from a write-only credential ref via the secret store. Only wired when
+//     `slack` deps (carrying the secret store) are supplied.
 //   - github_checks (P3-0024): posts a commit status to a PR head SHA, authed
 //     through the P3-0003 token resolver. Only wired when `github` deps are
 //     supplied.
@@ -27,10 +28,12 @@ import { ChannelKind } from "./schemas.js";
 //   - twilio: SMS via the Twilio REST API.
 //   - pagerduty: Events API v2 trigger.
 //
-// ntfy / slack are always wired because their adapters degrade safely (ntfy
-// has an env-default base URL; slack accepts a verbatim webhook URL). The
-// remaining six only construct a real adapter when their deps are present so
-// an operator who never configured them keeps the honest "stubbed" audit row.
+// ntfy is always wired because its adapter degrades safely (it has an
+// env-default base URL). Every credential-resolving channel (slack / teams /
+// discord / webhook / email / twilio / pagerduty / github_checks) only
+// constructs a real adapter when its deps key — carrying the secret store it
+// needs to resolve its write-only credential ref — is present, so an operator
+// who never configured one keeps the honest "stubbed" audit row.
 
 export interface ChannelRegistryDeps {
   ntfy?: NtfyChannelDeps;
@@ -60,7 +63,9 @@ function buildChannel(kind: ChannelKind, deps: ChannelRegistryDeps): Notificatio
     case "ntfy":
       return new NtfyChannel(deps.ntfy ?? {});
     case "slack":
-      return new SlackChannel(deps.slack ?? {});
+      // slack needs a secret store to resolve its webhook credential ref;
+      // without it we cannot deliver, so fall back to a stub.
+      return deps.slack === undefined ? new StubChannel(kind) : new SlackChannel(deps.slack);
     case "github_checks":
       // github_checks needs a secret store to resolve tokens; without it we
       // cannot mint/read credentials, so fall back to a stub.
