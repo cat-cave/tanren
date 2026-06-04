@@ -9,32 +9,41 @@
 // SAME directMerge logic: P2a up-to-date/auto-rebase (server-side GitHub update +
 // CI re-poll — no runner needed, it is all VcsProvider/CI calls), P2c-1 retarget,
 // then merge. A real CONFLICT (P2b) on the drive pass — where the original run's
-// runner is gone — is routed back to a REAL re-execution: the conflicting spec is
-// reopened and re-enqueued through the SAME createQueuedRunFromSpec path the
-// DagWalker/percolation uses, so its gate+checker+auditor re-run against the new
-// base (the intent-preserving reconciliation happens inside a run, never a second
-// runner outside one). The drive returns `conflict` (a recoverable dequeue); the
-// re-run re-enters the queue once it re-gates clean.
+// runner is gone — is now resolved by the REAL intent-preserving conflict resolver
+// (driveConflictResolve.ts): the drive PROVISIONS a short-lived runner + workspace
+// and runs the SAME resolver the in-loop direct_merge path runs, then CLASSIFIES the
+// outcome (resolved → the merge retries + lands; bounded re-plan → recoverable
+// `conflict`; genuine product clash / re-plan budget exhausted → the `needs_attention`
+// escalation PR1 parks; percolation owns the spec → a recoverable hold). The
+// blind-re-exec stub is GONE — a drive-path conflict now reasons, never just re-runs.
 
 import { runWithJobOrgId, runWithOrgScope, runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
-import type { ActorContext } from "../../auth/schemas.js";
 import { orgScopingPool } from "../data/orgScopedDb.js";
+import type { Allocator } from "../contracts/allocator.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SecretStore } from "../contracts/secretStore.js";
+import type { SshSubstrate } from "../contracts/sshSubstrate.js";
 import type { VcsProvider } from "../contracts/vcsProvider.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import { migrateProjectConfig } from "../config/projectConfig.js";
 import { resolveCredentialsForRun } from "../credentials/resolveCredentials.js";
 import { PgEventStore } from "../eventStore.js";
-import { createQueuedRunFromSpec } from "../workflow/projectSpec.js";
 import { buildReGateCiForQueuedRun } from "./driveCi.js";
+import {
+  buildDriveConflictResolve,
+  type DriveConflictVerdict,
+  PercolationOwnsSpecError,
+} from "./driveConflictResolve.js";
 import { mergeForRun } from "../workflow/reviewMerge/index.js";
-import type { ConflictResolverHook, NativeQueueEnqueuer } from "../workflow/reviewMerge/index.js";
+import type { NativeQueueEnqueuer } from "../workflow/reviewMerge/index.js";
 import type { MergeDriveOutcome, MergeCoordinator } from "../contracts/mergeCoordinator.js";
 import { EventEmittingMergeCoordinator, type DriveMergeForQueuedRun, PgMergeQueueEventEmitter } from "./coordinator.js";
 import { PgSpecEscalator } from "./coordinatorEscalate.js";
 import { PgMergeQueueModel, PgMergeRunner } from "./coordinatorPg.js";
+
+/** The default timeout (ms) the drive-path resolver's SSH/git/model ops run under. */
+const DRIVE_RESOLVER_TIMEOUT_MS = 600_000;
 
 export interface BuildMergeCoordinatorDeps {
   pool: pg.Pool;
@@ -42,13 +51,24 @@ export interface BuildMergeCoordinatorDeps {
   vcsProvider: VcsProvider;
   githubAppMinter?: GithubAppTokenMinter;
   /**
+   * The runner allocator the drive-path conflict resolver provisions a short-lived
+   * runner from (the original run's runner is gone by drive time). REQUIRED for a
+   * managed/native_queue run — a missing allocator is a LOUD throw on the conflict
+   * path, NEVER a silent revert to the deleted blind-re-exec.
+   */
+  allocator: Allocator;
+  /** The SSH substrate the drive-path resolver clones + re-gates over. REQUIRED (see allocator). */
+  ssh: SshSubstrate;
+  /** The runner identity key ref (same value the worker boot seeds). REQUIRED for the resolver. */
+  identitySecretRef: string;
+  /**
    * Plane-split (autonomy loops): the control-plane run-state writer. When present
    * (remote-writes on), the coordinator routes EVERY tenant write it drives through
    * the control plane: the merge stage's events/tasks/runs/specs (mergeForRun's
-   * `eventStore` + `runStateWriter` seams), the drive-pass spec-status finalize +
-   * conflict spec reopen (`setSpecStatus`), the conflict re-execution run-CREATE
-   * (`createQueuedRun`), and the queue/batch event emissions. Absent (single-role
-   * dev), the coordinator writes those tables directly — byte-identical to today.
+   * `eventStore` + `runStateWriter` seams), the drive-pass spec-status finalize, the
+   * conflict resolver's replan spec-status write, and the queue/batch event
+   * emissions. Absent (single-role dev), the coordinator writes those tables
+   * directly — byte-identical to today.
    */
   runStateWriter?: RunStateWriter;
 }
@@ -57,6 +77,7 @@ interface RunFacts {
   orgId: string;
   projectId: string;
   specId: string;
+  runId: string;
   githubCredentialRef: string;
 }
 
@@ -94,63 +115,8 @@ async function resolveRunFacts(pool: pg.Pool, runId: string): Promise<RunFacts> 
     orgId,
     projectId: base.project_id,
     specId: base.spec_id,
+    runId,
     githubCredentialRef: credentials.githubCredentialRef,
-  };
-}
-
-/**
- * The drive-pass conflict resolver: the original run's runner is gone, so an
- * intent-preserving resolution must happen INSIDE a fresh run, not a second runner.
- * It reopens the conflicting spec + re-enqueues it through the SAME
- * createQueuedRunFromSpec path (the percolation/DagWalker reuse), so the spec's own
- * gate+checker+auditor re-run against the new base. It returns `{ resolved: false }`
- * so the merge stage emits the recoverable `merge.conflict` and the queue dequeues
- * with `conflict` — the re-run re-enters the queue once it re-gates clean.
- */
-function buildDriveConflictResolver(
-  pool: pg.Pool,
-  facts: RunFacts,
-  runStateWriter?: RunStateWriter,
-): ConflictResolverHook {
-  return async () => {
-    const actor: ActorContext = {
-      userId: "merge-coordinator",
-      orgId: facts.orgId,
-      projectId: facts.projectId,
-      scopes: ["platform:admin"],
-      source: "local_dev",
-    };
-    // Reopen the spec so createQueuedRunFromSpec re-claims it (keep its branch/work
-    // intact — only the status moves), then re-enqueue a real re-execution run.
-    // Plane-split: both the reopen (setSpecStatus, guarded) + the re-execution
-    // run-CREATE route through the control plane when a writer is wired; else they
-    // run directly on the pool — byte-identical to today.
-    if (runStateWriter === undefined) {
-      await runWithOrgScope(pool, facts.orgId, async (client) => {
-        await client.query(
-          `UPDATE specs SET status = 'pending' WHERE spec_id = $1 AND status NOT IN ('done', 'merged')`,
-          [facts.specId],
-        );
-      });
-    } else {
-      await runStateWriter.setSpecStatus({
-        specId: facts.specId,
-        orgId: facts.orgId,
-        status: "pending",
-        notFromStatuses: ["done", "merged"],
-      });
-    }
-    const reExec =
-      runStateWriter === undefined
-        ? createQueuedRunFromSpec(pool, { specId: facts.specId, trigger: "merge_conflict_reexec" }, actor)
-        : runStateWriter.createQueuedRun({ input: { specId: facts.specId, trigger: "merge_conflict_reexec" }, actor });
-    await reExec.catch((error: unknown) => {
-      // A re-enqueue failure (e.g. the spec already re-claimed by another path) is
-      // non-fatal: the conflict is still surfaced as a recoverable dequeue and the
-      // next walk re-evaluates. Logged, never thrown into the merge drive.
-      console.warn(`[merge-coordinator] conflict re-execution enqueue for spec ${facts.specId} skipped:`, error);
-    });
-    return { resolved: false };
   };
 }
 
@@ -188,43 +154,79 @@ export function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQ
     // stage uses the in-process PgEventStore over the org-scoping pool (its appends
     // self-route through the per-job org scope) — byte-identical to today.
     const eventStore = deps.runStateWriter ?? new PgEventStore(scopedPool);
-    const merge = await runWithJobOrgId(facts.orgId, () =>
-      mergeForRun({
-        pool: scopedPool,
-        eventStore,
-        // Plane-split: route the merge stage's run/spec/task lifecycle writes
-        // through the control plane when wired (else the in-process org-scoped
-        // writes run — byte-identical to today).
-        ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
-        secrets: deps.secrets,
-        vcsProvider: deps.vcsProvider,
-        runId,
-        resolvedGithubCredentialRef: facts.githubCredentialRef,
-        ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
-        // The DRIVE flag: run the SAME directMerge logic (P2a/P2b/P2c-1), labelled
-        // `native_queue`. The first run-loop pass already ENQUEUED — this is the
-        // coordinator's actual merge.
-        queueDrive: true,
-        // P2b on the drive pass: re-route the conflict to a fresh re-execution (the
-        // runner is gone), returning unresolved → a recoverable conflict dequeue.
-        resolveConflict: buildDriveConflictResolver(deps.pool, facts, deps.runStateWriter),
-        // P2a re-gate: re-poll the PR's CI via the VcsProvider after an auto-rebase
-        // (no runner needed — it is a CI-status read). `pollCiForRun` reads the run/PR
-        // context + ensures the CI task on its pool, so it gets the SAME `scopedPool`
-        // — those tenant reads carry the per-job org GUC under RLS.
-        reGateCi: buildReGateCiForQueuedRun({
+    // The §2c classify-then-escalate capture cell: the merge dispatcher only sees the
+    // conflict hook's `{resolved:boolean}`, so the drive-path resolver records its
+    // autonomous disposition (resolved / bounded-replan / escalate / percolation-yield)
+    // HERE for the outcome map below. The conflict resolver provisions a fresh runner +
+    // workspace + runs the REAL intent-preserving resolver (the blind-re-exec stub is gone).
+    const verdict: DriveConflictVerdict = {};
+    let merge;
+    try {
+      merge = await runWithJobOrgId(facts.orgId, () =>
+        mergeForRun({
           pool: scopedPool,
           eventStore,
-          // Plane-split: route the re-gate CI poll's task writes through the control
-          // plane when wired (else direct on the pool — byte-identical).
+          // Plane-split: route the merge stage's run/spec/task lifecycle writes
+          // through the control plane when wired (else the in-process org-scoped
+          // writes run — byte-identical to today).
           ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
           secrets: deps.secrets,
           vcsProvider: deps.vcsProvider,
           runId,
-          githubCredentialRef: facts.githubCredentialRef,
+          resolvedGithubCredentialRef: facts.githubCredentialRef,
+          ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
+          // The DRIVE flag: run the SAME directMerge logic (P2a/P2b/P2c-1), labelled
+          // `native_queue`. The first run-loop pass already ENQUEUED — this is the
+          // coordinator's actual merge.
+          queueDrive: true,
+          // P2b on the drive pass: the REAL intent-preserving conflict resolver. It
+          // provisions a short-lived runner (the original run's is gone), clones
+          // head+base, runs the same resolver the in-loop direct_merge path runs, and
+          // classifies the outcome into `verdict` (resolved → retry+land; bounded
+          // re-plan → recoverable conflict; genuine clash / budget exhausted →
+          // needs_attention; percolation owns it → a yield throw). LOUD if deps missing.
+          resolveConflict: buildDriveConflictResolve({
+            pool: deps.pool,
+            scopedPool,
+            facts,
+            allocator: deps.allocator,
+            ssh: deps.ssh,
+            secrets: deps.secrets,
+            vcsProvider: deps.vcsProvider,
+            ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
+            ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
+            eventStore,
+            identitySecretRef: deps.identitySecretRef,
+            timeoutMs: DRIVE_RESOLVER_TIMEOUT_MS,
+            verdict,
+          }),
+          // P2a re-gate: re-poll the PR's CI via the VcsProvider after an auto-rebase
+          // (no runner needed — it is a CI-status read). `pollCiForRun` reads the run/PR
+          // context + ensures the CI task on its pool, so it gets the SAME `scopedPool`
+          // — those tenant reads carry the per-job org GUC under RLS.
+          reGateCi: buildReGateCiForQueuedRun({
+            pool: scopedPool,
+            eventStore,
+            // Plane-split: route the re-gate CI poll's task writes through the control
+            // plane when wired (else direct on the pool — byte-identical).
+            ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
+            secrets: deps.secrets,
+            vcsProvider: deps.vcsProvider,
+            runId,
+            githubCredentialRef: facts.githubCredentialRef,
+          }),
         }),
-      }),
-    );
+      );
+    } catch (error) {
+      // PERCOLATION MUTUAL EXCLUSION: the conflict hook threw because
+      // change-percolation already owns this spec. The drive YIELDS — a recoverable
+      // `blocked` hold (the entry leaves the head; the subscriber re-drives later),
+      // NEVER an escalation and NEVER a race with percolation's own re-exec.
+      if (error instanceof PercolationOwnsSpecError) {
+        return { kind: "blocked", message: error.message };
+      }
+      throw error;
+    }
     switch (merge.outcome) {
       case "merged":
         // P2d: the run-loop's first pass left the spec NON-`done` (Tanren owns the
@@ -235,6 +237,18 @@ export function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQ
         await markSpecMerged(deps.pool, facts, deps.runStateWriter);
         return { kind: "merged", ...(merge.mergeSha !== undefined && { mergeSha: merge.mergeSha }) };
       case "conflict":
+        // CLASSIFY-THEN-ESCALATE: the merge stage emitted a recoverable `conflict`
+        // (the resolver returned `{resolved:false}`). The drive-path resolver's
+        // disposition decides what the queue does with it:
+        //   - `escalate` — the two intents are GENUINELY incompatible (the bounded
+        //     re-plan budget is exhausted): park the spec at `needs_attention` (PR1's
+        //     escalator), NEVER re-queued. A product decision, not an error.
+        //   - `replanned` (default) — a bounded autonomous re-plan is in flight (the
+        //     resolver routed a spec back to the planner WITH the other change): a
+        //     recoverable `conflict` — the re-planned spec re-runs + re-enters the queue.
+        if (verdict.disposition === "escalate") {
+          return { kind: "needs_attention", message: verdict.message ?? merge.message ?? "specs' intents conflict" };
+        }
         return { kind: "conflict", message: merge.message ?? "merge conflict" };
       case "blocked":
         return { kind: "blocked", message: merge.message ?? "merge blocked" };

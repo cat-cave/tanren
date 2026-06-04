@@ -181,6 +181,28 @@ export function describeMergeCoordinatorConformance(label: string, suite: MergeC
       expect(h.statusOf("run_y")).toBe("merged");
     });
 
+    it("a conflict the drive RESOLVES now MERGES (no dequeue + no re-exec) — the real resolver wired", async () => {
+      // The drive-path intent-preserving resolver (driveConflictResolve.ts) reconciled
+      // the conflict + re-gated clean, so the per-run merge path RETRIED the merge and
+      // it landed — the drive RETURNS `merged`, not the old `conflict` dequeue+re-exec.
+      // The conformance harness scripts the per-run merge-drive OUTCOME (the resolver
+      // runs INSIDE the drive), so a resolving drive is exactly a `merged` outcome.
+      const h = suite.make();
+      h.seed({ runId: "run_r", specId: "spec_r", dependsOn: [], priority: "P0" });
+      h.scriptDrive("run_r", { kind: "merged" });
+
+      const result = await h.coordinator.coordinate(h.projectId);
+
+      // It MERGED — never dequeued (the pre-PR2 blind-re-exec stub would have dequeued
+      // `conflict` here and re-enqueued a fresh run that re-hit the same conflict).
+      expect(result.mergedSpecId).toBe("spec_r");
+      expect(h.statusOf("run_r")).toBe("merged");
+      expect(h.events.some((e) => e.type === "merge.dequeued")).toBe(false);
+      // TERMINAL: a re-pass never re-drives the merged entry (no re-exec loop).
+      await h.coordinator.coordinate(h.projectId);
+      expect(h.drives.filter((d) => d.runId === "run_r")).toHaveLength(1);
+    });
+
     it("ESCALATES a genuinely-irreconcilable head to needs_attention (non-bricking, terminal, NEVER re-queued)", async () => {
       const h = suite.make();
       // The head is judged genuinely irreconcilable; an independent later item must

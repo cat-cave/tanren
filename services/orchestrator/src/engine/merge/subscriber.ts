@@ -19,9 +19,11 @@
 
 import { RUN_ACTIVITY_CHANNEL, type PgNotifyListener, runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
+import type { Allocator } from "../contracts/allocator.js";
 import type { MergeCoordinator } from "../contracts/mergeCoordinator.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SecretStore } from "../contracts/secretStore.js";
+import type { SshSubstrate } from "../contracts/sshSubstrate.js";
 import type { VcsProvider } from "../contracts/vcsProvider.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import { buildBatchMergeCoordinator } from "./batchCoordinatorBuild.js";
@@ -34,6 +36,16 @@ export interface MergeCoordinatorSubscriberDeps {
   secrets?: SecretStore;
   vcsProvider?: VcsProvider;
   githubAppMinter?: GithubAppTokenMinter;
+  /**
+   * The runner allocator + SSH substrate + identity ref the drive-path conflict
+   * resolver provisions a short-lived runner from (the original run's runner is
+   * gone by drive time). REQUIRED when `coordinator` is not injected (the
+   * production path) — a missing allocator/ssh on a real conflict is a LOUD throw,
+   * never a silent revert to the deleted blind-re-exec.
+   */
+  allocator?: Allocator;
+  ssh?: SshSubstrate;
+  identitySecretRef?: string;
   /**
    * Plane-split (autonomy loops): the control-plane run-state writer. When present
    * (remote-writes on), the production coordinator routes EVERY tenant write it
@@ -125,9 +137,18 @@ export class MergeCoordinatorSubscriber {
   }
 
   private buildProductionCoordinator(): MergeCoordinator {
-    const { secrets, vcsProvider } = this.deps;
+    const { secrets, vcsProvider, allocator, ssh, identitySecretRef } = this.deps;
     if (secrets === undefined || vcsProvider === undefined) {
       throw new Error("MergeCoordinatorSubscriber requires secrets + vcsProvider when no coordinator is injected");
+    }
+    // The drive-path conflict resolver provisions a short-lived runner + workspace to
+    // run the REAL intent-preserving resolver (the blind-re-exec stub is gone). Its
+    // allocator/ssh/identity are REQUIRED for the production coordinator — a missing
+    // one is a LOUD throw at assembly, never a silent revert on the conflict path.
+    if (allocator === undefined || ssh === undefined || identitySecretRef === undefined) {
+      throw new Error(
+        "MergeCoordinatorSubscriber requires allocator + ssh + identitySecretRef when no coordinator is injected (the drive-path conflict resolver provisions a runner)",
+      );
     }
     // P2d-2: the native-queue driver is the speculative batch-check + bisect
     // coordinator (it forms a batch, proves the prospective merged state green as a
@@ -137,6 +158,9 @@ export class MergeCoordinatorSubscriber {
       pool: this.deps.pool,
       secrets,
       vcsProvider,
+      allocator,
+      ssh,
+      identitySecretRef,
       ...(this.deps.githubAppMinter !== undefined && { githubAppMinter: this.deps.githubAppMinter }),
       // Plane-split: route every coordinator-driven tenant write through the
       // control plane when wired; else direct on the pool (byte-identical).
