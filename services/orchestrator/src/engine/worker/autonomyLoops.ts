@@ -23,13 +23,14 @@ import { startMergeCoordinatorSubscriber } from "../merge/subscriber.js";
 import { startPostMergeSubscriber } from "../postMerge/subscriber.js";
 import { buildDeployOnMergeWatcher } from "../postMerge/deployOnMerge.js";
 import { startIntake } from "../forge/intake/bootIntake.js";
-import { CiInsightsLoop } from "./ciInsightsLoop.js";
+import { buildCiInsightsLoop } from "./buildCiInsightsLoop.js";
 import { buildNotificationDispatcher } from "../notifications/build.js";
 import { startNotificationSubscriber } from "../notifications/subscriber.js";
 import type { DagWalkerSubscriber } from "../dag/subscriber.js";
 import type { MergeCoordinatorSubscriber } from "../merge/subscriber.js";
 import type { PostMergeSubscriber } from "../postMerge/subscriber.js";
 import type { BootedIntake } from "../forge/intake/bootIntake.js";
+import type { CiInsightsLoop } from "./ciInsightsLoop.js";
 import type { NotificationSubscriber } from "../notifications/subscriber.js";
 
 export interface AutonomyLoopsDeps {
@@ -218,12 +219,23 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
     ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
   });
   console.log("[run-worker] intake poller + audit scheduler loops started (autonomy-engine §1d)");
-  // CI-intelligence PR2: the flaky+duration detector on a cadence (replaces the
+  // CI-intelligence PR2+PR3: the flaky+duration detector on a cadence (replaces the
   // dashboard-GET-on-read trigger). Each tick quarantines proven-flaky checks/tests
-  // so the merge gate's quarantine read excludes them — autonomous, no operator GET.
-  const ciInsights = new CiInsightsLoop({ pool: deps.pool });
-  ciInsights.start();
-  console.log("[run-worker] CI-insights flaky+duration detector loop started (CI-intelligence PR2)");
+  // so the merge gate's quarantine read excludes them (PR2), THEN turns each genuine
+  // recurring problem into an auto-routed root-cause fix-spec that ships through the
+  // inbox auto-route spine (PR3) — autonomous, no operator GET. Built via the factory
+  // so this composition root stays under the runtime-import cap.
+  const ciInsights = buildCiInsightsLoop({
+    pool: deps.pool,
+    secrets: deps.secrets,
+    allocator: deps.allocator,
+    ssh: deps.ssh,
+    identitySecretRef: deps.identitySecretRef,
+    ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
+  });
+  console.log(
+    "[run-worker] CI-insights detect+quarantine + generative root-cause loop started (CI-intelligence PR2+PR3)",
+  );
   const stop = async (): Promise<void> => {
     dagWalker.stop();
     mergeCoordinator.stop();

@@ -14,15 +14,28 @@
 // per-project failure: one project erroring never stalls the rest or the next tick.
 
 import type pg from "pg";
-import { runWithOrgScope, runWithSystemScope } from "@tanren/db";
+import { runWithJobOrgId, runWithOrgScope, runWithSystemScope } from "@tanren/db";
 import { PgEventStore } from "../eventStore.js";
 import { detectAndQuarantineFlaky } from "../insights/ciFlaky.js";
+import { emitCiInsightCandidates } from "../insights/ciInsightsCandidates.js";
 import type { InsightThresholds } from "../insights/thresholds.js";
+import type { AutoRouteDeps, TriageAnswerer } from "../forge/inbox/index.js";
+import type { ForgeAnswererTarget } from "../forge/providerFactory.js";
 
 export interface CiInsightsLoopDeps {
   pool: pg.Pool;
   /** Per-org/project threshold overrides (Phase 3 makes these configurable). */
   thresholds?: Partial<InsightThresholds>;
+  /**
+   * The GENERATIVE arm (PR3). When BOTH are wired the loop also emits one
+   * auto-routed candidate per GENUINE recurring problem (flaky/slow) AFTER the
+   * mechanical quarantine, root-cause-triages it, and ships the fix-spec through the
+   * SAME inbox auto-route spine. Absent ⇒ the loop only detects+quarantines (PR2),
+   * so a caller that has no provider answerer / auto-route still runs.
+   */
+  answererFactory?: (target: ForgeAnswererTarget) => TriageAnswerer;
+  /** The autonomous DAG-insert deps (system actor + plane-split writer). */
+  autoRoute?: AutoRouteDeps;
   now?: () => number;
 }
 
@@ -106,6 +119,28 @@ export class CiInsightsLoop {
         eventStore: new PgEventStore(client),
       });
     });
+    // PR3 generative arm: AFTER the mechanical quarantine, turn each genuine recurring
+    // problem into a durable-fix candidate that ships through the inbox auto-route
+    // spine. Runs under a per-job org id (the emitter wraps the pool in
+    // `orgScopingPool`, like the intake poller) so the candidate/spec writes are
+    // RLS-scoped. Only when the generative deps are wired (else PR2 detect-only).
+    await this.emitForProject(project, nowDate);
+  }
+
+  private async emitForProject(project: ProjectOrgRow, nowDate: Date): Promise<void> {
+    const { answererFactory, autoRoute } = this.deps;
+    if (answererFactory === undefined || autoRoute === undefined) return;
+    await runWithJobOrgId(project.org_id, () =>
+      emitCiInsightCandidates({
+        pool: this.deps.pool,
+        projectId: project.project_id,
+        orgId: project.org_id,
+        answerer: answererFactory({ orgId: project.org_id, projectId: project.project_id }),
+        autoRoute,
+        now: nowDate,
+        ...(this.deps.thresholds !== undefined && { thresholds: this.deps.thresholds }),
+      }),
+    );
   }
 
   private async listProjects(): Promise<ProjectOrgRow[]> {
