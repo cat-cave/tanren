@@ -102,7 +102,12 @@ import {
   MergeQueueInfraBlockedPayload,
 } from "./schemas/mergeQueue.js";
 import { CiFlakyDetectedPayload, CiTestQuarantinedPayload, CiTestsReportedPayload } from "./schemas/ciFlaky.js";
-import { IssueOpenedPayload, MergePostMergeFailedPayload } from "./schemas/postMerge.js";
+import {
+  DemoCompletedPayload,
+  DemoEvidenceRecordedPayload,
+  IssueOpenedPayload,
+  MergePostMergeFailedPayload,
+} from "./schemas/postMerge.js";
 import { GateAdvisoryFailedPayload, GateFailedPayload, GatePassedPayload, GateStartedPayload } from "./schemas/gate.js";
 import {
   JobDeadLetteredPayload,
@@ -345,6 +350,15 @@ export const EventRegistry = {
   // provider to a READY terminal + smoke-checked the resolved URL. The proof a
   // triggered deploy actually became reachable — non-secret (provider + url + state).
   "deploy.verified": DeployVerifiedPayload,
+
+  // Demos-as-evidence (design doc § "Native Deployment And Demos"): after a deploy is
+  // VERIFIED, the demo engine exercises each of the spec's BEHAVIORS against the
+  // deployed SURFACE and records evidence PER behavior (demo.evidence.recorded) plus a
+  // summary tally (demo.completed). Demo evidence is tied to the spec's behaviors, NOT
+  // the provider — every field is non-secret (behavior id · surface kind · outcome ·
+  // an observable detail; never a token / response body).
+  "demo.evidence.recorded": DemoEvidenceRecordedPayload,
+  "demo.completed": DemoCompletedPayload,
 
   // Hello / smoke run
   "hello.started": HelloStartedPayload,

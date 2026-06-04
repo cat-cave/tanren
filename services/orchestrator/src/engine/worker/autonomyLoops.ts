@@ -21,7 +21,7 @@ import { PgSpeculativeIntegrator } from "../dag/speculativeIntegrator.js";
 import { startDagWalkerSubscriber } from "../dag/subscriber.js";
 import { startMergeCoordinatorSubscriber } from "../merge/subscriber.js";
 import { startPostMergeSubscriber } from "../postMerge/subscriber.js";
-import { buildDeployOnMergeWatcher } from "../postMerge/deployOnMerge.js";
+import { buildDeployOnMergeWatcher, buildDemoOnDeployWatcher } from "../postMerge/deployOnMerge.js";
 import { startIntake } from "../forge/intake/bootIntake.js";
 import { buildCiInsightsLoop } from "./buildCiInsightsLoop.js";
 import { buildNotificationDispatcher } from "../notifications/build.js";
@@ -171,12 +171,21 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
     secrets: deps.secrets,
     ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
   });
+  // Demos-as-evidence: on the SAME wake, AFTER the deploy is verified, exercise the
+  // spec's behaviors against the live deploy surface + record per-behavior evidence.
+  // A run with no verified deploy is a clean no-op.
+  const demoWatcher = buildDemoOnDeployWatcher({
+    pool: deps.pool,
+    secrets: deps.secrets,
+    ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
+  });
   const postMerge = await startPostMergeSubscriber({
     pool: deps.pool,
     notifyListener: postMergeNotifyListener,
     secrets: deps.secrets,
     vcsProvider: deps.vcsProvider,
     deployWatcher,
+    demoWatcher,
     ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
     // Plane-split: the watcher's post-merge events route through the control plane
     // when wired (else direct on deps.pool, byte-identical).

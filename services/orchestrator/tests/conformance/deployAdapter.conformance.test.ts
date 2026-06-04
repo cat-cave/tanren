@@ -184,6 +184,36 @@ describe("DirectApiDeployAdapter — verify (proven deploy)", () => {
   });
 });
 
+describe("DirectApiDeployAdapter — demoSurface (the demo exercise surface)", () => {
+  async function provisionAndDeploy(transport: ScriptedDeployTransport, instance: DirectApiDeployAdapter) {
+    const artifact = await instance.provisionOrBind(vercelGrant, ctx("acme-web"), { mode: "provision" });
+    const ref: DeployRef = { provider: "deploy.vercel", appId: artifact.deployRef!.appId };
+    const { deploymentId } = await instance.deploy(vercelGrant, ref, { repo: "acme/acme-web", ref: "main" });
+    return { ref, deploymentId };
+  }
+
+  it("resolves the live web_url surface from the deployment status (the same resolved URL)", async () => {
+    const transport = scriptedDeployTransport("vercel");
+    const { instance } = adapter(transport);
+    const { ref, deploymentId } = await provisionAndDeploy(transport, instance);
+    transport.scriptDeploymentStates(deploymentId, ["READY"]);
+    const surface = await instance.demoSurface(vercelGrant, ref, deploymentId);
+    expect(surface.kind).toBe("web_url");
+    expect(surface.url).toMatch(/^https:\/\//u);
+    // demoSurface is a READ — no second deploy was triggered.
+    expect(transport.deploysTriggered()).toHaveLength(1);
+  });
+
+  it("never returns the deploy token VALUE in a surface", async () => {
+    const transport = scriptedDeployTransport("vercel");
+    const { instance } = adapter(transport);
+    const { ref, deploymentId } = await provisionAndDeploy(transport, instance);
+    transport.scriptDeploymentStates(deploymentId, ["READY"]);
+    const surface = await instance.demoSurface(vercelGrant, ref, deploymentId);
+    expect(JSON.stringify(surface)).not.toContain(TOKEN_VALUE);
+  });
+});
+
 describe("buildDeployAdapter (registry/factory)", () => {
   it("builds the direct_api adapter", () => {
     const built = buildDeployAdapter(DIRECT_API_ADAPTER_KIND, {

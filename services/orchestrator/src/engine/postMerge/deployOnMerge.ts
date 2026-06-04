@@ -289,3 +289,9 @@ export function buildDeployOnMergeWatcher(deps: {
     ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
   });
 }
+
+// Re-export the demo-on-deploy watcher factory off this same post-merge-deploy-path
+// module, so the autonomy-loops boot imports both deploy-path watchers from ONE
+// symbol source (keeps that file under the max-dependencies cap). The demo watcher
+// runs right after this one on the same wake (demos-as-evidence).
+export { buildDemoOnDeployWatcher } from "./demoOnDeploy.js";
