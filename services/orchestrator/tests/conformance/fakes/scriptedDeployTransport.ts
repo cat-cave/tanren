@@ -31,6 +31,12 @@ export interface ScriptedDeployTransport extends DeployHttpTransport {
    * proving they reached the deploy transport and nowhere else.
    */
   envByApp(): Record<string, Record<string, string>>;
+  /**
+   * Every deploy TRIGGER the emulated provider received (the load-bearing "a deploy
+   * actually happened" signal): the target app id + the deploy request body, so a
+   * test can assert the deployment endpoint was hit + the merged git ref reached it.
+   */
+  deploysTriggered(): { appId: string; body: Record<string, unknown> }[];
 }
 
 /**
@@ -56,6 +62,10 @@ export function scriptedDeployTransport(flavor: DeployFlavor, seedNames: string[
   // appId → { KEY: value } received via set-env. Mirrors the provider holding the
   // app's environment, so a test can prove the runtime values reached the transport.
   const envByApp: Record<string, Record<string, string>> = {};
+  // The deploy triggers the provider received (app id + request body), so a test can
+  // prove a real deploy was triggered (not just an empty app created).
+  const triggered: { appId: string; body: Record<string, unknown> }[] = [];
+  let deployCounter = 0;
 
   const listBody = (): unknown =>
     flavor === "vercel"
@@ -66,11 +76,24 @@ export function scriptedDeployTransport(flavor: DeployFlavor, seedNames: string[
     appNames: () => [...apps.keys()],
     bearersSeen,
     envByApp: () => structuredClone(envByApp),
+    deploysTriggered: () => structuredClone(triggered),
     async request(req: DeployHttpRequest): Promise<DeployHttpResponse> {
       bearersSeen.push(req.headers["authorization"] ?? "");
 
       if (req.method === "GET") {
         return okResponse(listBody());
+      }
+      // Deploy TRIGGER requests: Vercel `/v13/deployments`, Fly
+      // `/v1/apps/{name}/machines`. The provider builds + releases the merged ref;
+      // captured into `triggered` so a test can prove the deploy actually fired.
+      const deploy = parseDeploy(flavor, req);
+      if (deploy !== undefined) {
+        deployCounter += 1;
+        triggered.push({ appId: deploy.appId, body: deploy.body });
+        const id = `${flavor}_deploy_${deployCounter}`;
+        return flavor === "vercel"
+          ? okResponse({ id, url: `${deploy.appId}.vercel.app`, readyState: "QUEUED" }, 200)
+          : okResponse({ id, state: "started" }, 200);
       }
       // Set-env requests (P-APP-ENV-2): Vercel `/v10/projects/{id}/env`, Fly
       // `/v1/apps/{name}/secrets`. Captured into envByApp so the test can assert the
@@ -156,4 +179,36 @@ function parseSetEnv(
     vars[key] = value;
   }
   return { appId, vars };
+}
+
+/**
+ * Recognize a deploy-TRIGGER request and extract the target appId + the request
+ * body. Vercel POSTs `/v13/deployments` carrying `project` (the app id) + a
+ * `gitSource`; Fly POSTs `/v1/apps/{name}/machines` (the app in the path). Returns
+ * undefined for any other POST (so the create-app branch still runs).
+ */
+function parseDeploy(
+  flavor: DeployFlavor,
+  req: DeployHttpRequest,
+): { appId: string; body: Record<string, unknown> } | undefined {
+  if (req.method !== "POST") {
+    return undefined;
+  }
+  const path = req.url.split("?")[0] ?? "";
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  if (flavor === "vercel") {
+    if (!path.endsWith("/v13/deployments")) {
+      return undefined;
+    }
+    const appId = body["project"];
+    if (typeof appId !== "string" || appId === "") {
+      throw new TypeError("scripted deploy transport: vercel deployment request missing `project`");
+    }
+    return { appId, body };
+  }
+  const match = /\/v1\/apps\/([^/]+)\/machines$/u.exec(path);
+  if (match === null) {
+    return undefined;
+  }
+  return { appId: decodeURIComponent(match[1] as string), body };
 }

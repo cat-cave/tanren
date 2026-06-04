@@ -42,6 +42,12 @@ export interface DeployProvisionerDeps {
  * A provider-side deploy app/project: the stable handle (`appId`), the human
  * `name` used both as the brownfield label and as the find-or-create idempotency
  * key, and the `previewUrlPattern` the provider exposes for preview deploys.
+ *
+ * PREVIEW-URL CONVENTION (converged end-to-end): the pattern uses the SAME
+ * `{branch}` / `{pr}` placeholders the dashboard's `derivePreviewUrl` substitutes —
+ * NOT a `*` wildcard (which the dashboard cannot resolve). Vercel exposes a
+ * deterministic per-branch URL (`…-git-{branch}-<scope>.vercel.app`); Fly serves a
+ * single stable hostname (no placeholder). So a rendered preview URL always resolves.
  */
 export interface DeployApp {
   appId: string;
@@ -58,6 +64,35 @@ export interface DeployApp {
 export interface DeployEnvVar {
   key: string;
   value: string;
+}
+
+/**
+ * The source the deploy is built FROM: the merged repo (`owner/name`) + the git
+ * `ref` (branch/sha) the provider builds + releases. Captured post-merge so the
+ * live product reflects the merged commit. NON-SECRET — only the repo coordinates +
+ * a git ref; the deploy token is resolved separately (never carried here).
+ */
+export interface DeploySource {
+  /** The merged repo, `owner/name` (the GitHub slug the run merged onto). */
+  repo: string;
+  /** The git ref the provider builds + releases (the run's branch / the default branch). */
+  ref: string;
+}
+
+/**
+ * The live result of TRIGGERING a deploy: the provider-side deployment handle
+ * (`deploymentId`), the resolved live URL the release is reachable at, and the
+ * deployment `state` the provider reported. NON-SECRET — a URL + ids; surfaced into
+ * `deploy.triggered` + the project config. `url` is the concrete, resolved URL (no
+ * `{branch}`/`*` placeholder), so the rendered link resolves directly.
+ */
+export interface DeployResult {
+  /** The provider's stable deployment handle (Vercel deployment id, Fly machine/release id). */
+  deploymentId: string;
+  /** The resolved live URL the deployment is reachable at (concrete, no placeholder). */
+  url: string;
+  /** The deployment state the provider reported (e.g. "BUILDING" | "READY" | "started"). */
+  state: string;
 }
 
 /**
@@ -79,6 +114,15 @@ export interface DeployProviderApi {
    * provider receives the values; this code never logs/returns them.
    */
   setEnvVars(grant: OrgGrant, token: string, appId: string, vars: ReadonlyArray<DeployEnvVar>): Promise<void>;
+  /**
+   * TRIGGER a build + release of `source` onto the created app: Vercel
+   * `POST /v13/deployments` (gitSource = the merged repo + ref); Fly a Machines
+   * release that runs the app's latest image. Returns the live deployment handle +
+   * resolved URL + state. This is the step that makes a deploy ACTUALLY HAPPEN —
+   * `createApp` alone yields an empty app. A failure throws LOUD (never a silent
+   * no-op): a configured deploy that cannot release is a hard error.
+   */
+  triggerDeploy(grant: OrgGrant, token: string, app: DeployApp, source: DeploySource): Promise<DeployResult>;
 }
 
 /**
@@ -137,6 +181,22 @@ export abstract class DeployProvisioner implements IntegrationProvisioner {
     }
     const token = await this.resolveToken(grant);
     await this.api.setEnvVars(grant, token, appId, vars);
+  }
+
+  /**
+   * TRIGGER a real deploy of `source` onto the app identified by `appId`. Resolves
+   * the org deploy token, finds the app under the grant (by its stable id), and
+   * hands it to the provider's `triggerDeploy` (which builds + releases the merged
+   * ref). Returns the live deployment handle + resolved URL. A missing app or a
+   * provider failure throws LOUD — a configured deploy never silently no-ops.
+   */
+  async deploy(grant: OrgGrant, appId: string, source: DeploySource): Promise<DeployResult> {
+    const token = await this.resolveToken(grant);
+    const app = (await this.api.listApps(grant, token)).find((candidate) => candidate.appId === appId);
+    if (app === undefined) {
+      throw new Error(`${this.api.providerKind}: cannot deploy unknown app '${appId}' (not found under the org grant)`);
+    }
+    return this.api.triggerDeploy(grant, token, app, source);
   }
 
   async discover(grant: OrgGrant): Promise<ExistingResource[]> {

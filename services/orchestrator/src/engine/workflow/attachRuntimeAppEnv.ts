@@ -29,9 +29,8 @@ import type { SecretStore } from "../contracts/secretStore.js";
 import type { EventStore } from "../eventStore.js";
 import { OrgIntegrationsStore } from "../repositories/orgIntegrations.js";
 import { resolveAppEnvForScope } from "./resolveAppEnv.js";
-import type { DeployProvisioner, DeployEnvVar, DeployProvisionerDeps } from "../provisioners/deployProvisioner.js";
-import { VercelDeployProvisioner, VERCEL_PROVIDER_KIND } from "../provisioners/vercelDeployProvisioner.js";
-import { FlyDeployProvisioner, FLY_PROVIDER_KIND } from "../provisioners/flyDeployProvisioner.js";
+import type { DeployEnvVar } from "../provisioners/deployProvisioner.js";
+import { deployProvisionerFor } from "./deployProvisionerFor.js";
 import type { DeployHttpTransport } from "../provisioners/deployTransport.js";
 
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
@@ -72,26 +71,6 @@ export interface AttachRuntimeAppEnvResult {
   appId: string;
   /** The env var KEY NAMES attached (sorted). NEVER any value. */
   attachedKeys: string[];
-}
-
-/**
- * Construct the typed deploy provisioner for a deployRef's provider kind. Returns
- * the concrete {@link DeployProvisioner} (not the bare port) so the caller can use
- * `attachRuntimeEnv`. An unknown provider kind fails LOUD — a deployRef pointing at
- * a provider with no deploy provisioner is a misconfiguration, never a silent skip.
- */
-function deployProvisionerFor(providerKind: string, deps: DeployProvisionerDeps): DeployProvisioner {
-  switch (providerKind) {
-    case VERCEL_PROVIDER_KIND:
-      return new VercelDeployProvisioner(deps);
-    case FLY_PROVIDER_KIND:
-      return new FlyDeployProvisioner(deps);
-    default:
-      throw new Error(
-        `attachRuntimeAppEnv: deployRef provider '${providerKind}' has no deploy provisioner ` +
-          `(expected '${VERCEL_PROVIDER_KIND}' or '${FLY_PROVIDER_KIND}')`,
-      );
-  }
 }
 
 /**

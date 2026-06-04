@@ -44,8 +44,8 @@ describe("VercelDeployProvisioner", () => {
 
     expect(artifact.deployRef?.provider).toBe("deploy.vercel");
     expect(artifact.deployRef?.appId).toMatch(/^vercel_app_/u);
-    expect(artifact.deployRef?.previewUrlPattern).toBe("https://acme-web-*-acme.vercel.app");
-    expect(artifact.projectConfig?.["previewUrlPattern"]).toBe("https://acme-web-*-acme.vercel.app");
+    expect(artifact.deployRef?.previewUrlPattern).toBe("https://acme-web-git-{branch}-acme.vercel.app");
+    expect(artifact.projectConfig?.["previewUrlPattern"]).toBe("https://acme-web-git-{branch}-acme.vercel.app");
     // The env-attach seam for P-APP-ENV-2 is present but unpopulated here.
     expect(artifact.projectConfig?.["envAttachmentRef"]).toBeNull();
   });
@@ -118,6 +118,34 @@ describe("VercelDeployProvisioner", () => {
     expect(transport.bearersSeen).toEqual([]);
     expect(transport.envByApp()).toEqual({});
   });
+
+  it("deploy TRIGGERS a build of the merged ref + returns a resolved URL", async () => {
+    const transport = scriptedDeployTransport("vercel");
+    const prov = new VercelDeployProvisioner({ transport, secrets: secrets() });
+    // The app must exist (provision created it) before a deploy is triggered.
+    const artifact = await prov.provision(vercelGrant, ctx("acme-web"));
+    const appId = artifact.deployRef!.appId;
+
+    const result = await prov.deploy(vercelGrant, appId, { repo: "acme/acme-web", ref: "main" });
+
+    // The deployment endpoint was hit with the merged repo + ref (a real deploy).
+    const triggered = transport.deploysTriggered();
+    expect(triggered).toHaveLength(1);
+    expect(triggered[0]!.appId).toBe(appId);
+    expect(triggered[0]!.body["gitSource"]).toEqual({ type: "github", repo: "acme/acme-web", ref: "main" });
+    // A resolved, concrete URL (no placeholder) + a deployment id + state.
+    expect(result.url).toMatch(/^https:\/\//u);
+    expect(result.url).not.toContain("{branch}");
+    expect(result.deploymentId).toMatch(/^vercel_deploy_/u);
+    expect(result.state).toBe("QUEUED");
+  });
+
+  it("deploy fails loud for an unknown app id (never a silent no-op)", async () => {
+    const prov = new VercelDeployProvisioner({ transport: scriptedDeployTransport("vercel"), secrets: secrets() });
+    await expect(prov.deploy(vercelGrant, "prj_missing", { repo: "a/b", ref: "main" })).rejects.toThrow(
+      /cannot deploy unknown app/u,
+    );
+  });
 });
 
 describe("FlyDeployProvisioner", () => {
@@ -181,5 +209,32 @@ describe("FlyDeployProvisioner", () => {
     await expect(prov.attachRuntimeEnv(flyGrant, "acme-web", [{ key: "K", value: "v" }])).rejects.toThrow(
       /credentialRef/u,
     );
+  });
+
+  it("deploy TRIGGERS a Machines release of the app's image + returns the app URL", async () => {
+    const transport = scriptedDeployTransport("fly");
+    const prov = new FlyDeployProvisioner({ transport, secrets: secrets() });
+    const grantWithImage: OrgGrant = {
+      ...flyGrant,
+      metadata: { ...flyGrant.metadata, image: "registry.fly.io/acme-web:deployment-1" },
+    };
+    await prov.provision(grantWithImage, ctx("acme-web"));
+
+    const result = await prov.deploy(grantWithImage, "fly_app_1", { repo: "acme/acme-web", ref: "main" });
+
+    const triggered = transport.deploysTriggered();
+    expect(triggered).toHaveLength(1);
+    expect(triggered[0]!.appId).toBe("acme-web");
+    expect(triggered[0]!.body["config"]).toEqual({ image: "registry.fly.io/acme-web:deployment-1" });
+    expect(result.url).toBe("https://acme-web.fly.dev");
+    expect(result.deploymentId).toMatch(/^fly_deploy_/u);
+  });
+
+  it("deploy fails loud when no release image is configured", async () => {
+    const transport = scriptedDeployTransport("fly");
+    const prov = new FlyDeployProvisioner({ transport, secrets: secrets() });
+    await prov.provision(flyGrant, ctx("acme-web"));
+    // flyGrant carries no `image`, so the release has nothing to deploy.
+    await expect(prov.deploy(flyGrant, "fly_app_1", { repo: "a/b", ref: "main" })).rejects.toThrow(/image/u);
   });
 });

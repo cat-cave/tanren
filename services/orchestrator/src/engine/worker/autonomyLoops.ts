@@ -21,6 +21,7 @@ import { PgSpeculativeIntegrator } from "../dag/speculativeIntegrator.js";
 import { startDagWalkerSubscriber } from "../dag/subscriber.js";
 import { startMergeCoordinatorSubscriber } from "../merge/subscriber.js";
 import { startPostMergeSubscriber } from "../postMerge/subscriber.js";
+import { buildDeployOnMergeWatcher } from "../postMerge/deployOnMerge.js";
 import { startIntake } from "../forge/intake/bootIntake.js";
 import { CiInsightsLoop } from "./ciInsightsLoop.js";
 import { buildNotificationDispatcher } from "../notifications/build.js";
@@ -160,17 +161,27 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
   // branch and auto-opens ONE tracking issue on a genuine failure. Its own LISTEN
   // connection so it never contends with the walker's / coordinator's notify pumps.
   const postMergeNotifyListener = new PgNotifyListener(deps.pool);
+  // Deploy-on-merge ("a deploy happened"): on the SAME merge.completed wake, a
+  // project with a deploy integration gets its merged commit built + released onto
+  // its Vercel/Fly app + its runtime env attached. A project with no deploy target
+  // is a clean no-op; a configured deploy that fails is LOUD (logged, isolated).
+  const deployWatcher = buildDeployOnMergeWatcher({
+    pool: deps.pool,
+    secrets: deps.secrets,
+    ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
+  });
   const postMerge = await startPostMergeSubscriber({
     pool: deps.pool,
     notifyListener: postMergeNotifyListener,
     secrets: deps.secrets,
     vcsProvider: deps.vcsProvider,
+    deployWatcher,
     ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
     // Plane-split: the watcher's post-merge events route through the control plane
     // when wired (else direct on deps.pool, byte-identical).
     ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
   });
-  console.log("[run-worker] post-merge auto-issue watcher subscriber started (tempering.md dim A)");
+  console.log("[run-worker] post-merge auto-issue + deploy-on-merge watcher subscriber started (tempering.md dim A)");
   // Notifications: build the dispatcher ONCE (channel registry with the real
   // channel deps — `secrets` resolves Slack/webhook/etc. write-only credential
   // refs; the shared App minter authenticates github_checks) + the code-level default

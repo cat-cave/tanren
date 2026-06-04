@@ -20,6 +20,11 @@
 import { RUN_ACTIVITY_CHANNEL, type PgNotifyListener } from "@tanren/db";
 import { PostMergeWatcher, type PostMergeWatcherDeps } from "./watcher.js";
 
+/** The minimal per-run watcher shape the subscriber drives on each bus wake. */
+export interface RunMergeWatcher {
+  check(runId: string): Promise<void>;
+}
+
 export interface PostMergeSubscriberDeps extends PostMergeWatcherDeps {
   /** The shared LISTEN connection (its own, so it never contends with the walker's pump). */
   notifyListener: PgNotifyListener;
@@ -28,6 +33,13 @@ export interface PostMergeSubscriberDeps extends PostMergeWatcherDeps {
    * injects a recording watcher to assert the event-driven trigger fires it.
    */
   watcher?: PostMergeWatcher;
+  /**
+   * The deploy-on-merge watcher (apex "a deploy happened"): driven on the SAME
+   * `merge.completed` wake as the issue watcher. Optional — wired when a deploy
+   * transport is available; absent, the subscriber only drives the issue watcher. A
+   * deploy failure is logged + isolated, so it never suppresses the issue watcher.
+   */
+  deployWatcher?: RunMergeWatcher;
 }
 
 /**
@@ -38,6 +50,7 @@ export interface PostMergeSubscriberDeps extends PostMergeWatcherDeps {
  */
 export class PostMergeSubscriber {
   private readonly watcher: PostMergeWatcher;
+  private readonly deployWatcher: RunMergeWatcher | undefined;
   private unsubscribe: (() => void) | undefined;
   private stopped = false;
   private readonly inFlight = new Map<string, Promise<void>>();
@@ -45,6 +58,7 @@ export class PostMergeSubscriber {
 
   constructor(private readonly deps: PostMergeSubscriberDeps) {
     this.watcher = deps.watcher ?? new PostMergeWatcher(deps);
+    this.deployWatcher = deps.deployWatcher;
   }
 
   // eslint-disable-next-line @typescript-eslint/require-await
@@ -102,6 +116,13 @@ export class PostMergeSubscriber {
       await this.watcher.check(runId).catch((error: unknown) => {
         console.error(`[post-merge] check failed for run ${runId}:`, error);
       });
+      // The deploy-on-merge watcher runs on the SAME wake but is ISOLATED: a deploy
+      // failure is logged and never suppresses the issue watcher (and vice versa).
+      if (this.deployWatcher !== undefined) {
+        await this.deployWatcher.check(runId).catch((error: unknown) => {
+          console.error(`[post-merge] deploy-on-merge failed for run ${runId}:`, error);
+        });
+      }
     } while (this.rePending.has(runId));
   }
 }

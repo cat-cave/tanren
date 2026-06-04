@@ -17,4 +17,15 @@ export const integrationProvisioningSensitivityRules: SensitivityRule[] = [
   { eventName: "integration.provisioned", path: "surfaces.notificationTargetId", tag: "public" },
   { eventName: "integration.provisioned", path: "surfaces.projectConfigKeys[]", tag: "public" },
   { eventName: "integration.provisioned", path: "surfaces.deployRef", tag: "public" },
+
+  // deploy.triggered ("a deploy happened"): the deploy target + merged source + the
+  // resolved live URL + deployment id. Every field is non-secret — the deploy token
+  // + runtime env VALUES went only into the provider requests, never this event.
+  { eventName: "deploy.triggered", path: "provider", tag: "public" },
+  { eventName: "deploy.triggered", path: "appId", tag: "public" },
+  { eventName: "deploy.triggered", path: "repo", tag: "public" },
+  { eventName: "deploy.triggered", path: "ref", tag: "public" },
+  { eventName: "deploy.triggered", path: "deploymentId", tag: "public" },
+  { eventName: "deploy.triggered", path: "url", tag: "public" },
+  { eventName: "deploy.triggered", path: "state", tag: "public" },
 ];

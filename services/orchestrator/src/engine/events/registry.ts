@@ -48,6 +48,7 @@ import {
 import {
   AppEnvCiPropagatedPayload,
   AppEnvRuntimeAttachedPayload,
+  DeployTriggeredPayload,
   CiFailedPayload,
   CiPassedPayload,
   CiStartedPayload,
@@ -326,6 +327,11 @@ export const EventRegistry = {
   // P-INT-2 capability-driven onboarding: a project leaf resource was provisioned
   // or bound from the org grant (refs only, never secret values).
   "integration.provisioned": IntegrationProvisionedPayload,
+
+  // Deploy-on-merge ("a deploy happened"): a run's merge triggered a real build +
+  // release onto the project's deploy app (Vercel/Fly). The deploy target + the
+  // resolved live URL + the deployment id — all non-secret.
+  "deploy.triggered": DeployTriggeredPayload,
 
   // Hello / smoke run
   "hello.started": HelloStartedPayload,

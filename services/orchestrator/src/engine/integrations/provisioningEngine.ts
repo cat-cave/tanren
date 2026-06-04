@@ -73,6 +73,29 @@ const CAPABILITY_DEFAULT_PROVIDER: Readonly<Record<string, string>> = {
 const DEPLOY_PROVIDER_KINDS = new Set(["deploy.vercel", "deploy.flyio"]);
 
 /**
+ * The capability a provider kind satisfies — the inverse of
+ * {@link CAPABILITY_DEFAULT_PROVIDER}, used by the integration-LINK route to record
+ * the grant's `capabilities`. A deploy provider kind maps to `deploy`; the canonical
+ * single-provider capabilities map back from their default. An unknown provider kind
+ * is REJECTED (throws) — linking a provider Tanren has no provisioner for is an
+ * operator error, surfaced as a 400, never a silent empty-capability grant.
+ */
+export function capabilitiesForProviderKind(providerKind: string): string[] {
+  if (DEPLOY_PROVIDER_KINDS.has(providerKind)) {
+    return ["deploy"];
+  }
+  for (const [capability, kind] of Object.entries(CAPABILITY_DEFAULT_PROVIDER)) {
+    if (kind === providerKind) {
+      return [capability];
+    }
+  }
+  throw new Error(
+    `unknown provider kind '${providerKind}' — expected one of: ` +
+      `${[...DEPLOY_PROVIDER_KINDS, ...Object.values(CAPABILITY_DEFAULT_PROVIDER)].join(", ")}`,
+  );
+}
+
+/**
  * Resolve the provider kind for a (capability, optional explicit provider). An
  * explicit `providerKind` always wins (and is validated against the capability for
  * deploy); otherwise the single canonical provider is used. Throws on an
