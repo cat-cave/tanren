@@ -249,14 +249,15 @@ export class EventEmittingDagWalker implements DagWalker {
     });
     if (integration.outcome === "conflict") {
       // The conflict is BETWEEN two ancestors — surfaced early on the integration
-      // branch (§2c), where the P2b intent-preserving resolver runs against the
-      // integration branch (not against the innocent dependent). The integrator
-      // returns the conflicting pair; the dependent is HELD this tick (it cannot
-      // base on a broken integration). The walker re-walks once the pair
-      // reconciles/merges (the next merge.completed notification). Logged (not
-      // silently dropped) per the §2c "no silent caps / no silent drops" rule.
+      // branch (§2c). The dependent is HELD this tick (it cannot base on a broken
+      // integration); this branch ONLY holds + logs — it does NOT itself resolve the
+      // conflict. The real resolution happens later when the conflicting ancestor is
+      // driven through the merge queue (the coordinator routes a base-dirty PR through
+      // the per-run intent-preserving resolver). The walker re-walks once the pair
+      // reconciles/merges (the next merge.completed notification). Logged (not silently
+      // dropped) per the §2c "no silent caps / no silent drops" rule.
       console.warn(
-        `[dag-walker] held speculative ${enqueue.specId}: ancestors ${integration.conflictBetween?.specId} and ${integration.conflictBetween?.otherSpecId} conflict on ${integration.integrationBranch} (routes to the intent-preserving resolver): ${integration.message}`,
+        `[dag-walker] held speculative ${enqueue.specId}: ancestors ${integration.conflictBetween?.specId} and ${integration.conflictBetween?.otherSpecId} are dirty/conflict on ${integration.integrationBranch}; awaiting merge-queue resolve: ${integration.message}`,
       );
       return undefined;
     }

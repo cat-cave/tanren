@@ -231,10 +231,21 @@ export type BatchCheckVerdict =
   | { result: "pass"; integrationBranch: string }
   // The prospective merged state's CI/gate FAILED (a bad interaction) — do NOT merge.
   | { result: "fail"; message: string }
-  // The speculative INTEGRATION itself conflicted (two entries conflict with each
-  // other) — treated like a fail for bisect (the offending entry is isolated the same
-  // way), but tagged so the dequeue routes the pair to the P2b resolver.
-  | { result: "conflict"; message: string; conflictBetween?: { specId: string; otherSpecId: string } }
+  // The speculative INTEGRATION itself conflicted — `conflictBetween` names the pair.
+  //   - `conflictsWithBase: false` (a SPEC-vs-SPEC conflict — two queued entries conflict
+  //     with each other) is treated like a fail for bisect: the offending entry is
+  //     isolated + dequeued recoverably the same way.
+  //   - `conflictsWithBase: true` (`conflictBetween.otherSpecId` is the project's BASE
+  //     branch — a single PR dirty against `default_branch`, no other spec involved) is
+  //     NOT a batch interaction at all: the coordinator drives the culprit through the
+  //     SAME real per-run merge path that already resolves a dirty PR (rebase onto base →
+  //     intent-preserving resolver → re-gate → re-push), NEVER bisecting/dequeuing it.
+  | {
+      result: "conflict";
+      message: string;
+      conflictsWithBase: boolean;
+      conflictBetween?: { specId: string; otherSpecId: string };
+    }
   // The prospective merged state's CI is still RUNNING (not yet terminal) — NOT a
   // failure. The coordinator HOLDS this pass (it does NOT bisect a green-but-pending
   // batch, which would falsely blame a PR); the next CI-completion notification

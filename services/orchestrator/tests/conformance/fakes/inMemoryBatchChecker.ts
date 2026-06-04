@@ -32,6 +32,8 @@ export class InMemoryBatchChecker implements BatchChecker {
   readonly checked: string[][] = [];
   private readonly failSpecs = new Set<string>();
   private readonly conflictSpecs = new Set<string>();
+  /** Specs that report a BASE conflict (a single PR dirty against `default_branch`). */
+  private readonly baseConflictSpecs = new Set<string>();
   private readonly pendingSpecs = new Set<string>();
   private throwAlways: unknown;
   private throwRemaining = 0;
@@ -44,6 +46,16 @@ export class InMemoryBatchChecker implements BatchChecker {
   }
   conflictWhenContains(specId: string): void {
     this.conflictSpecs.add(specId);
+  }
+  /**
+   * Report a BASE conflict (a single PR dirty against `default_branch`) when the checked
+   * set contains `specId` — the verdict carries `conflictsWithBase: true` and names
+   * `specId` as the culprit. The coordinator drives this through the per-run resolver
+   * (driveMerge), NOT bisect/dequeue. Distinct from `conflictWhenContains` (a spec-vs-spec
+   * conflict that still bisects).
+   */
+  baseConflictWhenContains(specId: string): void {
+    this.baseConflictSpecs.add(specId);
   }
   pendingWhenContains(specId: string): void {
     this.pendingSpecs.add(specId);
@@ -85,9 +97,21 @@ export class InMemoryBatchChecker implements BatchChecker {
         ...(this.pendingSettleAfterMs !== undefined && { settleAfterMs: this.pendingSettleAfterMs }),
       };
     }
+    // A BASE conflict (a single PR dirty against the base) takes precedence: the verdict
+    // names the culprit + flags `conflictsWithBase` so the coordinator drives it through
+    // the per-run resolver rather than bisecting.
+    const baseConflict = specIds.find((id) => this.baseConflictSpecs.has(id));
+    if (baseConflict !== undefined) {
+      return {
+        result: "conflict",
+        message: `base conflict on ${baseConflict}`,
+        conflictsWithBase: true,
+        conflictBetween: { specId: baseConflict, otherSpecId: "main" },
+      };
+    }
     const conflict = specIds.find((id) => this.conflictSpecs.has(id));
     if (conflict !== undefined) {
-      return { result: "conflict", message: `conflict on ${conflict}` };
+      return { result: "conflict", message: `conflict on ${conflict}`, conflictsWithBase: false };
     }
     const bad = specIds.find((id) => this.failSpecs.has(id));
     if (bad !== undefined) {

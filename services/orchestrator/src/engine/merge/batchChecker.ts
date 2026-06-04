@@ -145,9 +145,16 @@ export class PgBatchChecker implements BatchChecker {
       // A real integration conflict is a definitive non-no_checks verdict — CLEAR the
       // no-checks clock so a later transient no_checks restarts the grace from scratch.
       await this.clearNoChecksSince(orgId, headQueueId);
+      // Distinguish a SPEC-vs-SPEC conflict (two queued entries clash) from a single PR
+      // dirty against the BASE. `buildIntegrationBranch` sets `otherSpecId = merged.at(-1)
+      // ?? baseBranch`, so a first-merge-onto-base conflict yields `otherSpecId ===
+      // default_branch` — that is a base conflict, which the coordinator drives through
+      // the real per-run resolver rather than bisecting/dequeuing.
+      const conflictsWithBase = integration.conflictBetween?.otherSpecId === project.default_branch;
       return {
         result: "conflict",
         message: integration.message,
+        conflictsWithBase,
         ...(integration.conflictBetween !== undefined && { conflictBetween: integration.conflictBetween }),
       };
     }
