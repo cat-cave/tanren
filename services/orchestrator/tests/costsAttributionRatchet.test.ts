@@ -147,7 +147,7 @@ describe("resolveCostSource — basis precedence + ccusage guard", () => {
   it("accepts the smallest positive ccusage figure as basis 'ccusage'", () => {
     const source = resolveCostSource({
       cli: "codex",
-      authRef: "credential/codex/dev",
+      authRef: "credential/openai-api/k",
       ccusageCostUsd: 0.000001,
       rawUsage: {},
     });
@@ -223,7 +223,7 @@ describe("computeCostUsd — per-bucket pricing arithmetic", () => {
   it("returns the real ccusage dollars verbatim (formatUsd of ccusageCostUsd)", () => {
     const src = resolveCostSource({
       cli: "codex",
-      authRef: "credential/codex/dev",
+      authRef: "credential/openai-api/k",
       ccusageCostUsd: 2.345678,
       rawUsage: {},
     });
@@ -235,7 +235,7 @@ describe("computeCostUsd — per-bucket pricing arithmetic", () => {
     // Infinity to hit the non-finite branch directly.
     const src = resolveCostSource({
       cli: "codex",
-      authRef: "credential/codex/dev",
+      authRef: "credential/openai-api/k",
       ccusageCostUsd: 5,
       rawUsage: {},
     });

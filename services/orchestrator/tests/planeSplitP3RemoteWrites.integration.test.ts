@@ -209,7 +209,10 @@ describeDb("plane-split P3 — control-plane run-state write endpoints (real PG,
             projectId: PROJECT,
             cli: "fake",
             model: "m",
-            authRef: "fake:local",
+            // A per-token (real-API) ref so the rows are eligible for ccusage
+            // repricing — the ccusage reconcile prices per_token rows ONLY (a
+            // subscription's ccusage figure is notional, never real spend).
+            authRef: "credential/openai-api/k",
           },
           tokens: {
             inputTokens: 0,

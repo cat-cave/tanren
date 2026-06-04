@@ -279,8 +279,17 @@ export class CostRecorder {
     totalCostUsd: number,
     basis: "ccusage" | "credits",
   ): Promise<{ updated: number }> {
+    // ccusage's run total is REAL spend ONLY for per-token (real-API) credentials;
+    // a subscription's ccusage figure is notional token-value (no real marginal
+    // spend), so a ccusage reconcile apportions across the run's `per_token` rows
+    // ONLY and leaves subscription/self_hosted rows NULL. A `credits` reconcile is
+    // genuine subscription-overage spend, so it apportions across ALL of the run's
+    // rows (unchanged). Restricting the SELECT also restricts the token-share
+    // denominator + the per-row UPDATEs (they key off the SELECTed ids).
     const rows = await client.query<{ id: string; total_tokens: number }>(
-      "SELECT id, total_tokens FROM cost_records WHERE run_id = $1",
+      basis === "ccusage"
+        ? "SELECT id, total_tokens FROM cost_records WHERE run_id = $1 AND billing_mode = 'per_token'"
+        : "SELECT id, total_tokens FROM cost_records WHERE run_id = $1",
       [runId],
     );
     const totalTokens = rows.rows.reduce((sum, row) => sum + Number(row.total_tokens), 0);
