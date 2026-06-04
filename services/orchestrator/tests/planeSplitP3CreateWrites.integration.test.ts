@@ -99,6 +99,60 @@ describeDb("plane-split P3 — control-plane autonomy-loop create/intake writes 
     expect(ev.rowCount).toBe(1);
   });
 
+  // (6a) THE READY-NOT-ENQUEUED REGRESSION: a NON-speculative enqueue (no `speculative`
+  // object → the full done-only dependency gate RUNS) of a spec whose dependency is
+  // `merged` (NOT `done`) must SUCCEED. The walker's planner + classifier treat a
+  // `merged` dep as satisfied (a merged PR ends the spec at `merged`, never `done`), so
+  // it plans the dependent as READY and enqueues it non-speculatively — but the gate
+  // formerly accepted ONLY `status='done'`, so it threw SpecDependenciesBlockedError,
+  // which the walker tolerates as benign-transient → a PERMANENT stall (a merged dep
+  // never becomes `done`). The gate now admits `done` OR `merged`; this proves the
+  // all-merged dep chain enqueues + claims the dependent instead of stalling.
+  it("(6a) create-queued-run NON-speculatively enqueues a spec whose dependency is MERGED (the ready-not-enqueued fix)", async () => {
+    const depSpecId = `${SPEC}_merged_dep`;
+    const specId = `${SPEC}_ready_on_merged`;
+    await ownerPool().query(
+      `INSERT INTO organizations (id, kind, external_id, login, display_name, config)
+       VALUES ($1, 'oidc', $1, $1, $1, '{"version":1}'::jsonb) ON CONFLICT (id) DO NOTHING`,
+      [ORG],
+    );
+    await ownerPool().query(
+      `INSERT INTO projects (project_id, name, repo_url, org_id, config)
+       VALUES ($1, 'p', 'https://example.com/r.git', $2, '{"version":1}'::jsonb)
+       ON CONFLICT (project_id) DO UPDATE SET config = EXCLUDED.config`,
+      [PROJECT, ORG],
+    );
+    // The dependency is MERGED (the Phase-2 terminal status), NOT `done`.
+    await ownerPool().query(
+      `INSERT INTO specs (spec_id, project_id, org_id, title, description, status)
+       VALUES ($1, $2, $3, 'merged dep', 'd', 'merged')
+       ON CONFLICT (spec_id) DO UPDATE SET status = 'merged'`,
+      [depSpecId, PROJECT, ORG],
+    );
+    // The dependent is PENDING, depends on the merged spec.
+    await ownerPool().query(
+      `INSERT INTO specs (spec_id, project_id, org_id, title, description, status, depends_on)
+       VALUES ($1, $2, $3, 'ready on merged dep', 'd', 'pending', ARRAY[$4::text])`,
+      [specId, PROJECT, ORG, depSpecId],
+    );
+    const app = createInternalRunStateWriteRoutes({ pool: runtimePool(), verifier: new AllowAllPeerVerifier() });
+    const writer = new HttpRunStateWriter("https://control.internal:3110", fetchInto(app));
+
+    // NON-speculative: no `speculative` object ⇒ the full done-only dependency gate RUNS.
+    const run = await writer.createQueuedRun({
+      input: { specId, trigger: "dag_walker" },
+      actor: { userId: "dag-walker", orgId: ORG, projectId: PROJECT, scopes: ["platform:admin"], source: "local_dev" },
+    });
+
+    expect(run.runId).toMatch(/^run_/u);
+    // The merged dependency satisfied the gate — the dependent was claimed pending→active
+    // (formerly this threw SpecDependenciesBlockedError, stalling the DAG forever).
+    const specRow = await ownerPool().query<{ status: string }>("SELECT status FROM specs WHERE spec_id = $1", [
+      specId,
+    ]);
+    expect(specRow.rows[0]?.status).toBe("active");
+  });
+
   // (6b) §2c "ancestor-merged → non-speculative re-base": a percolation re-exec
   // whose every ancestor has merged onto plain default_branch CREATEs through
   // `/internal/create-queued-run` with the `speculative` object PRESENT but its

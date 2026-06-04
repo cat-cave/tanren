@@ -164,3 +164,132 @@ describe("PgPercolationReadModel.loadAncestorSignals (§2c merged-ancestor axis)
     expect(b?.currentSha).toBe("sha-old");
   });
 });
+
+// ---- loadSpeculativeDependents: exclude terminal + clear stale marker -------
+
+/**
+ * A fake pool for `loadSpeculativeDependents`: one MERGED dependent run carrying a
+ * STALE `percolation_pending` marker + one LIVE (in-flight) dependent run. The
+ * lifecycle projection flips a spec to `merged` when its id is in `mergedSpecIds`.
+ * Records every `percolation_pending = NULL` clear so the test asserts the moot
+ * marker on the merged run is cleared (and the live one is NOT).
+ */
+class DependentsFakePool {
+  readonly clearedRunIds: string[] = [];
+  constructor(private readonly mergedSpecIds: Set<string>) {}
+  async connect(): Promise<DependentsFakeClient> {
+    return new DependentsFakeClient(this.mergedSpecIds, this.clearedRunIds);
+  }
+  async query(sql: string, params?: unknown[]): Promise<{ rows: unknown[] }> {
+    return new DependentsFakeClient(this.mergedSpecIds, this.clearedRunIds).query(sql, params);
+  }
+}
+
+class DependentsFakeClient {
+  constructor(
+    private readonly mergedSpecIds: Set<string>,
+    private readonly clearedRunIds: string[],
+  ) {}
+  release(): void {
+    /* no-op */
+  }
+  async query(sql: string, params?: unknown[]): Promise<{ rows: unknown[] }> {
+    const text = sql.replaceAll(/\s+/gu, " ").trim();
+    if (
+      text.startsWith("BEGIN") ||
+      text.startsWith("SET LOCAL") ||
+      text.startsWith("COMMIT") ||
+      text.startsWith("ROLLBACK")
+    ) {
+      return { rows: [] };
+    }
+    if (text.includes("SELECT org_id FROM projects")) {
+      return { rows: [{ org_id: ORG }] };
+    }
+    // The stale-marker housekeeping clear — record which run it targeted.
+    if (text.includes("UPDATE runs SET percolation_pending = NULL")) {
+      this.clearedRunIds.push(String((params ?? [])[0]));
+      return { rows: [] };
+    }
+    // The lifecycle projection: spec_merged is `merged`, spec_live is in-flight.
+    if (text.includes("FROM specs s") && text.includes("LEFT JOIN LATERAL")) {
+      const specIds = ["spec_merged", "spec_live"];
+      return {
+        rows: specIds.map((specId) => ({
+          spec_id: specId,
+          spec_status: this.mergedSpecIds.has(specId) ? "merged" : "active",
+          run_id: `run_${specId}`,
+          run_status: "running",
+          pr_opened: true,
+          ci_passed: true,
+          audit_passed: true,
+          audit_recommended_action: null,
+          audit_outstanding_count: 0,
+          review_approved: false,
+          review_changes_requested: false,
+          review_auto_approved: false,
+          merge_completed: this.mergedSpecIds.has(specId),
+        })),
+      };
+    }
+    // The dependents load: each run carries a build base + a stale in-flight marker.
+    if (text.includes("FROM runs r") && text.includes("r.percolation_pending")) {
+      const marker = { ancestorSpecId: "spec_anc", toSha: "sha-new", reexecRunId: "run_reexec" };
+      return {
+        rows: [
+          {
+            run_id: "run_spec_merged",
+            spec_id: "spec_merged",
+            speculative_base: "tanren/integ/spec_merged",
+            integrated_ancestor_shas: { spec_anc: "sha-old" },
+            verified_ancestor_shas: { spec_anc: "sha-old" },
+            percolation_pending: marker,
+          },
+          {
+            run_id: "run_spec_live",
+            spec_id: "spec_live",
+            speculative_base: "tanren/integ/spec_live",
+            integrated_ancestor_shas: { spec_anc: "sha-old" },
+            verified_ancestor_shas: { spec_anc: "sha-old" },
+            percolation_pending: marker,
+          },
+        ],
+      };
+    }
+    return { rows: [] };
+  }
+}
+
+function makeDependentsReadModel(pool: DependentsFakePool): PgPercolationReadModel {
+  return new PgPercolationReadModel({
+    pool: pool as unknown as pg.Pool,
+    vcsProvider: new FakeVcs() as unknown as VcsProvider,
+    secrets: new InMemorySecretStore(),
+  });
+}
+
+describe("PgPercolationReadModel.loadSpeculativeDependents (exclude terminal + clear stale marker)", () => {
+  it("a MERGED spec with a stale percolation_pending marker is NOT returned as a dependent", async () => {
+    const pool = new DependentsFakePool(new Set(["spec_merged"]));
+    const dependents = await makeDependentsReadModel(pool).loadSpeculativeDependents(PROJECT);
+
+    // The merged spec is excluded; only the live in-flight dependent survives.
+    expect(dependents.map((d) => d.specId)).toEqual(["spec_live"]);
+  });
+
+  it("clears the stale marker on the merged run, but NOT on the live one (idempotent housekeeping)", async () => {
+    const pool = new DependentsFakePool(new Set(["spec_merged"]));
+    await makeDependentsReadModel(pool).loadSpeculativeDependents(PROJECT);
+
+    // Exactly the merged run's moot marker is cleared; the live run is untouched.
+    expect(pool.clearedRunIds).toEqual(["run_spec_merged"]);
+  });
+
+  it("when NO dependent is terminal, nothing is cleared and both are returned", async () => {
+    const pool = new DependentsFakePool(new Set());
+    const dependents = await makeDependentsReadModel(pool).loadSpeculativeDependents(PROJECT);
+
+    expect(dependents.map((d) => d.specId).sort()).toEqual(["spec_live", "spec_merged"]);
+    expect(pool.clearedRunIds).toEqual([]);
+  });
+});

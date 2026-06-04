@@ -352,6 +352,9 @@ export function buildPercolationCoordinator(deps: BuildPercolationCoordinatorDep
       vcsProvider: deps.vcsProvider,
       secrets: deps.secrets,
       ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
+      // Plane-split: route the stale-marker housekeeping clear (a `percolation_pending`
+      // left on a now-merged/done run) through the control plane when wired.
+      ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
     }),
     kickOff: new PercolatingKickOff({
       integrator,

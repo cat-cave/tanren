@@ -88,6 +88,7 @@ class RecordingPercolation implements ChangePercolationCoordinator {
       inFlight: [],
       held: [],
       unchanged: [],
+      skipped: [],
     };
   }
 }
