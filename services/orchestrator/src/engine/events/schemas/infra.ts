@@ -135,19 +135,16 @@ export const CostResolvedPayload = z
     model: z.string(),
     // REAL SPEND (FOCUS BilledCost): null when no reliable real-cost basis exists.
     costUsd: z.string().nullable(),
-    // NOTIONAL VALUE (FOCUS ListCost): the tokens' value at provider list rates,
-    // computed for every billing mode whose provider has a rate; null when unpriced.
+    // NOTIONAL VALUE (FOCUS ListCost): the tokens' COMPUTED value from the maintained
+    // LiteLLM model-price source (keyed by model id); null when the model is unpriced.
     notionalCostUsd: z.string().nullable(),
     billingMode: z.string(),
     costBasis: z.string(),
-    // LOUD ESTIMATE flag (NEVER let an estimate masquerade as real spend). True
-    // when this per_token row's real-spend `costUsd` was priced from the STATIC
-    // list-rate table for OpenRouter — whose AUTHORITATIVE per-call charge
-    // (`usage.cost`, reachable via a `/api/v1/generation` query) we COULD have
-    // captured but have not wired per-call yet — so an operator knows the dollar
-    // figure is a list-rate ESTIMATE, not OpenRouter's real deduction. Absent
-    // (treated as false) for every real provider_response/ccusage/credits figure
-    // and for providers with no authoritative per-call charge (openai/anthropic).
+    // RETIRED (kept optional so historical events still validate): the old
+    // `estimateOnly` LOUD-ESTIMATE flag flagged a per_token row whose real spend was
+    // priced from a STATIC list-rate table. That path is GONE — real spend is now a
+    // metered FACT or NULL (no list-rate estimate ever fills cost_usd), so nothing
+    // emits this field anymore.
     estimateOnly: z.boolean().optional(),
   })
   .strict();

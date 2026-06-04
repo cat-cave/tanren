@@ -5,6 +5,7 @@ import { storeCodexAuthBundle } from "../credentials/codexAuth.js";
 import { codexManagedEnvPath, materializeCodexAuthBundle } from "../credentials/codexMaterializer.js";
 import { quoteSshShellArg } from "../ssh/command.js";
 import type { AnswererAdapter, TokenUsage, UsageLimitSignal, WriterAdapter, WriterResult } from "./types.js";
+import { findOpenRouterGenerationId, foldGenerationId } from "./openRouterGenerationId.js";
 import { captureBaselineSha, captureGitStateAfterCodex } from "./codexGit.js";
 
 export interface CodexWriterDependencies {
@@ -25,6 +26,9 @@ export interface CodexEventTelemetry {
   rawEventCount: number;
   tokenUsage?: TokenUsage;
   usageLimit?: UsageLimitSignal;
+  // The OpenRouter generation id (managed run); folded onto tokenUsage so the cost
+  // recorder can query the REAL `usage.cost` (see TokenUsage.openRouterGenerationId).
+  openRouterGenerationId?: string;
 }
 
 // Raised by the Answerer path when Codex authenticated but the account's
@@ -313,9 +317,9 @@ function codexUserConfigFlag(managed?: boolean): string[] {
 // into the per-run CODEX_HOME and DROP `--ignore-user-config` for managed runs so
 // codex reads it. It is UNVERIFIED whether `codex exec` (a) honors a CODEX_HOME
 // `config.toml` written this way and (b) routes through OpenRouter end-to-end
-// under these flags. The BYOK path (auth.json + `--ignore-user-config`) is
-// UNCHANGED and remains the proven one. Verify managed codex against a real
-// OpenRouter key before depending on it.
+// under these flags. The BYOK path (auth.json + `--ignore-user-config`) is UNCHANGED
+// and remains the proven one. Verify managed codex against a real OpenRouter key
+// before depending on it.
 // ─────────────────────────────────────────────────────────────────────────────
 
 // The tail of a harness stream, whitespace-collapsed, for surfacing the real
@@ -328,6 +332,7 @@ export function parseCodexJsonlTelemetry(stdout: string): CodexEventTelemetry {
   const lines = stdout.split(/\r?\n/u).filter((line) => line.trim() !== "");
   let tokenUsage: TokenUsage | undefined;
   let usageLimit: UsageLimitSignal | undefined;
+  let openRouterGenerationId: string | undefined;
   for (const line of lines) {
     const parsed = parseJsonObject(line);
     if (parsed === undefined) {
@@ -335,8 +340,14 @@ export function parseCodexJsonlTelemetry(stdout: string): CodexEventTelemetry {
     }
     tokenUsage = findTokenUsage(parsed) ?? tokenUsage;
     usageLimit = detectUsageLimit(parsed) ?? usageLimit;
+    openRouterGenerationId = findOpenRouterGenerationId(parsed) ?? openRouterGenerationId;
   }
-  return { rawEventCount: lines.length, tokenUsage, usageLimit };
+  return {
+    rawEventCount: lines.length,
+    tokenUsage: foldGenerationId(tokenUsage, openRouterGenerationId),
+    usageLimit,
+    openRouterGenerationId,
+  };
 }
 
 // detectUsageLimit recognizes the Codex JSONL events emitted when the account
@@ -439,10 +450,9 @@ function findTokenUsage(value: unknown): TokenUsage | undefined {
   return undefined;
 }
 
-// Transforms Codex's INCLUSIVE token shape into the disjoint TokenUsage
-// buckets. In Codex JSONL, cached_input_tokens ⊆ input_tokens and
-// reasoning_output_tokens ⊆ output_tokens, so we subtract the overlaps to
-// keep the buckets mutually exclusive (total = sum of parts).
+// Transforms Codex's INCLUSIVE token shape into the disjoint TokenUsage buckets. In
+// Codex JSONL, cached_input_tokens ⊆ input_tokens and reasoning_output_tokens ⊆
+// output_tokens, so we subtract the overlaps to keep the buckets mutually exclusive.
 function tokenUsageFromRecord(record: Record<string, unknown>): TokenUsage | undefined {
   const rawInput = numberField(record, ["input_tokens", "inputTokens", "prompt_tokens", "promptTokens"]);
   const rawOutput = numberField(record, ["output_tokens", "outputTokens", "completion_tokens", "completionTokens"]);

@@ -29,9 +29,10 @@ export type ProviderMode = z.infer<typeof ProviderMode>;
 // The default platform OpenRouter credential ref. This is just the secret-store
 // KEY the hosting layer writes the platform OpenRouter API key under; the OSS
 // never sees the key itself, only selects this ref. It is classified by the
-// cost path (engine/costs/sources.ts) as `credential/openrouter/` →
-// per_token / openrouter / provider_pricing, so managed usage is priced and
-// metered like any other OpenRouter call.
+// cost path (engine/costs/sources.ts) as `credential/openrouter/` → per_token /
+// openrouter. A managed run records cost_usd as a metered FACT (`provider_response`)
+// from OpenRouter's real `usage.cost` (queried per the surfaced generation id) —
+// not from any list-rate table (there is none).
 export const DEFAULT_MANAGED_CREDENTIAL_REF = "credential/openrouter/platform/default";
 
 // OpenRouter's OpenAI-API-compatible base URL. The harness adapters point their

@@ -10,11 +10,9 @@ export {
   CostBasis,
   DEFAULT_CREDIT_USD_RATE,
   type AttributionInput,
-  type ProviderRate,
   classifyAuthRef,
   computeCostUsd,
   computeNotionalUsd,
-  providerRate,
   resolveCostSource,
 } from "./sources.js";
 

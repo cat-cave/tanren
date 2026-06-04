@@ -89,7 +89,10 @@ describe("CostRecorder.record — exact persisted column shape", () => {
       11, 22, 33, 44, 55, 165,
     ]);
     expect(p[P.billingMode]).toBe("per_token");
-    expect(p[P.costBasis]).toBe("provider_pricing");
+    // REAL SPEND IS A FACT: a per_token call with no captured fact → cost_usd NULL,
+    // cost_basis 'unknown' (no static rate table).
+    expect(p[P.costBasis]).toBe("unknown");
+    expect(p[P.costUsd]).toBeNull();
     expect(p[P.userId]).toBe("user_7");
   });
 
@@ -105,7 +108,7 @@ describe("CostRecorder.record — exact persisted column shape", () => {
     expect(raw.authRef).toBe("credential/openai-api/k");
     expect(raw.runtimeSeconds).toBe(42);
     expect(raw.billingMode).toBe("per_token");
-    expect(raw.costBasis).toBe("provider_pricing");
+    expect(raw.costBasis).toBe("unknown");
     expect(raw.provider).toBe("openai");
     expect(raw.rawUsage).toEqual({ stream: "x" });
   });
@@ -120,12 +123,18 @@ describe("CostRecorder.record — exact persisted column shape", () => {
     expect(raw.runtimeSeconds).toBeNull();
   });
 
-  it("routes the cost.resolved event with the resolved provider + basis", async () => {
+  it("routes the cost.resolved event with the resolved provider + basis + the real FACT figure", async () => {
     const pool = new FakeCostPool();
     const events = new FakeEventStore();
     const recorder = new CostRecorder(pool as never, events);
     await recorder.record(
-      { ...context, cli: "codex", model: "gpt-x", authRef: "credential/anthropic/k" },
+      {
+        ...context,
+        cli: "aider",
+        model: "deepseek",
+        authRef: "credential/openrouter/platform/default",
+        realProviderCostUsd: 0.0731,
+      },
       usage({ outputTokens: 1_000_000, totalTokens: 1_000_000 }),
       {},
     );
@@ -133,11 +142,11 @@ describe("CostRecorder.record — exact persisted column shape", () => {
     const ev = events.events[0]!;
     expect(ev.eventType).toBe("cost.resolved");
     const payload = ev.payload as { provider: string; costBasis: string; billingMode: string; costUsd: string };
-    expect(payload.provider).toBe("anthropic");
+    expect(payload.provider).toBe("openrouter");
     expect(payload.billingMode).toBe("per_token");
-    expect(payload.costBasis).toBe("provider_pricing");
-    // anthropic output rate 15/M -> $15.00
-    expect(payload.costUsd).toBe("15.000000");
+    expect(payload.costBasis).toBe("provider_response");
+    // The captured OpenRouter usage.cost is the verbatim real figure (a metered FACT).
+    expect(payload.costUsd).toBe("0.073100");
   });
 
   it("delegates to the persist override and does NOT touch the pool when one is wired", async () => {

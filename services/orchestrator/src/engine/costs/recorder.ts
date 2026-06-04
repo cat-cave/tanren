@@ -19,6 +19,7 @@ import {
   computeNotionalUsd,
   resolveCostSource,
 } from "./sources.js";
+import { defaultModelPriceSource, type ModelPriceSource } from "./pricing/modelPriceSource.js";
 
 type RecorderClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
@@ -39,15 +40,12 @@ export interface CostRecordContext {
   // the most accurate real-spend figure and OUTRANKS ccusage AND the static table
   // → cost_basis becomes 'provider_response'. null/0 falls back to the next basis.
   //
-  // REACHABILITY (today): no CLI adapter (codex/aider/pi/opencode) surfaces this
-  // per call — they parse only token fields, never the provider's cost or a
-  // generation id — so this is null on every live call right now. The accurate
-  // capture path is a post-call OpenRouter `/api/v1/generation` query (built in
-  // `costs/openRouterCost.ts`), which needs a generation id the harness does not
-  // yet emit. Until that id is surfaced, an OpenRouter per_token row prices from
-  // the static table and is flagged `estimateOnly` (LOUD, see sources.ts) — never
-  // silently presented as the real deduction. This field is the typed seam the
-  // capture wires into the moment the id (or a CLI that emits `usage.cost`) lands.
+  // CAPTURE PATH: a managed OpenRouter run captures this via a post-call
+  // `/api/v1/generation` query (built in `costs/openRouterCost.ts`), keyed off the
+  // generation id the managed adapters now surface (TokenUsage.openRouterGenerationId)
+  // — see the run worker's capture seam. A positive value makes cost_usd a metered
+  // FACT (`provider_response`). null/0 → no fact → cost_usd NULL (`unknown`); there
+  // is NO list-rate estimate (REAL SPEND IS A FACT, see sources.ts).
   realProviderCostUsd?: number | null;
   // Real per-call dollar figure derived from ccusage (apportioned by token
   // share against the run-level ccusage total). Positive → cost_basis becomes
@@ -118,6 +116,10 @@ export class CostRecorder {
     // cost_records directly. Absent (in-process control plane / tests) it writes
     // in-process, unchanged.
     private readonly reconcile?: CostReconcile,
+    // The maintained per-model price source the NOTIONAL estimate is computed from
+    // (LiteLLM's vendored data). Defaults to the vendored snapshot; a test injects a
+    // small fixture map so notional is deterministic without the 1.3 MB file.
+    private readonly priceSource: ModelPriceSource = defaultModelPriceSource(),
   ) {}
 
   // record persists a single cost_records row with the full typed token
@@ -137,23 +139,26 @@ export class CostRecorder {
     const attribution: AttributionInput = {
       cli: context.cli,
       authRef: context.authRef,
+      // The model id — the NOTIONAL estimate's lookup key (computeNotionalUsd →
+      // ModelPriceSource). Never used for real spend.
+      model: context.model,
       // The provider's OWN authoritative per-call charge (OpenRouter's
       // `usage.cost`), when a capture surfaced it for this call. HIGHEST
-      // precedence — sets real spend as `provider_response`, outranking ccusage
-      // AND the static table. null on every live call today (no source surfaces
-      // it yet — see CostRecordContext.realProviderCostUsd), so the OpenRouter
-      // per_token row prices from the table and is flagged `estimateOnly`.
+      // precedence — sets real spend as `provider_response`, outranking ccusage.
+      // Captured for a managed OpenRouter run via the generation-id query; null
+      // otherwise → cost_usd NULL (`unknown`), never a list-rate estimate.
       realProviderCostUsd: context.realProviderCostUsd ?? null,
       ccusageCostUsd: context.ccusageCostUsd ?? null,
       rawUsage,
     };
     const source = resolveCostSource(attribution);
     const costUsd = computeCostUsd(source, tokens);
-    // NOTIONAL (FOCUS ListCost): the list-rate value of the tokens, computed for
-    // EVERY call whose provider has a rate (incl. subscription/self_hosted, where
-    // `costUsd` real spend is NULL) — the comparable, forecastable figure. NEVER
-    // summed by the budget gate.
-    const notionalCostUsd = computeNotionalUsd(source, tokens);
+    // NOTIONAL (FOCUS ListCost): the COMPUTED list value of the tokens from the
+    // maintained LiteLLM model price (keyed by model id), for EVERY call (incl.
+    // subscription/self_hosted, where `costUsd` real spend is NULL) — the
+    // comparable, forecastable figure. NULL when the model is unpriced. NEVER
+    // summed by the budget gate; NEVER written to cost_usd.
+    const notionalCostUsd = computeNotionalUsd(source, tokens, this.priceSource);
     // RLS R2 cohort-2 (cost_records write path): route the INSERT through the
     // ambient org-scoped client when this recorder was handed the shared pool and
     // a `runWithOrgScope` scope is open; fall back to the pool when none (inert,
@@ -211,12 +216,6 @@ export class CostRecorder {
         notionalCostUsd,
         billingMode: source.billingMode,
         costBasis: source.costBasis,
-        // LOUD ESTIMATE flag: true when this OpenRouter per_token row's real-spend
-        // costUsd is the STATIC list-rate estimate standing in for the provider's
-        // authoritative `usage.cost` (which we could capture but have not wired per
-        // call yet) — so an operator never mistakes the figure for the real
-        // deduction. False for a real provider_response/ccusage/credits figure.
-        estimateOnly: source.estimateOnly,
       },
     });
     // BUDGET-SAFETY (C1): an UNRECOGNIZED credential ref priced this real call as

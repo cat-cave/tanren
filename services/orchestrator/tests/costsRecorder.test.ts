@@ -1,7 +1,23 @@
 import { describe, expect, it } from "vitest";
 import { CostRecorder } from "../src/engine/costs/index.js";
+import { ModelPriceSource, type ModelPriceMap } from "../src/engine/costs/pricing/modelPriceSource.js";
 import { FakeEventStore } from "./helpers/fakeEventStore.js";
 import type { TokenUsage } from "../src/engine/providers/types.js";
+
+// Deterministic INJECTED model-price source so NOTIONAL is computed against known
+// rates (not the vendored file). The recorder test models below are keyed into it.
+// `gpt-test`/`gpt-codex`/`gpt`: 2.5/M in, 10/M out (openai-shaped, cost PER TOKEN).
+const fixturePriceMap: ModelPriceMap = {
+  "gpt-test": { litellm_provider: "openai", mode: "chat", input_cost_per_token: 2.5e-6, output_cost_per_token: 1e-5 },
+  "gpt-codex": { litellm_provider: "openai", mode: "chat", input_cost_per_token: 2.5e-6, output_cost_per_token: 1e-5 },
+  gpt: { litellm_provider: "openai", mode: "chat", input_cost_per_token: 2.5e-6, output_cost_per_token: 1e-5 },
+};
+const priceSource = new ModelPriceSource(fixturePriceMap);
+
+// Build a recorder whose NOTIONAL estimate resolves against the fixture price map.
+function makeRecorder(pool: unknown, events: FakeEventStore = new FakeEventStore()): CostRecorder {
+  return new CostRecorder(pool as never, events, undefined, undefined, priceSource);
+}
 
 interface InsertedRow {
   table: string;
@@ -54,29 +70,36 @@ const BILLING_MODE = 14;
 const COST_BASIS = 15;
 
 describe("CostRecorder", () => {
-  it("persists a provider_pricing cost row when given a per-token API-key ref", async () => {
+  it("persists a per_token API-key call with cost_usd NULL (no captured fact) but a NOTIONAL value", async () => {
+    // REAL SPEND IS A FACT: a per_token credential with no captured fact records
+    // cost_usd = NULL / cost_basis = 'unknown' (no static table). NOTIONAL is still
+    // computed from the model price.
     const pool = new FakeCostPool();
     const events = new FakeEventStore();
-    const recorder = new CostRecorder(pool as never, events);
+    const recorder = makeRecorder(pool, events);
     const result = await recorder.record(
       { ...context, cli: "codex", model: "gpt-test", authRef: "credential/openai-api/prod" },
       usage({ inputTokens: 1_000_000, totalTokens: 1_000_000 }),
       { foo: "bar" },
     );
     expect(result.billingMode).toBe("per_token");
-    expect(result.costBasis).toBe("provider_pricing");
-    expect(result.costUsd).not.toBeNull();
+    expect(result.costBasis).toBe("unknown");
+    expect(result.costUsd).toBeNull();
+    // gpt-test list rate: 1M input @2.5/M = $2.50 notional.
+    expect(result.notionalCostUsd).toBe("2.500000");
     expect(pool.inserts).toHaveLength(1);
     const insertParams = pool.inserts[0]?.params ?? [];
     expect(insertParams[BILLING_MODE]).toBe("per_token");
-    expect(insertParams[COST_BASIS]).toBe("provider_pricing");
+    expect(insertParams[COST_BASIS]).toBe("unknown");
+    expect(insertParams[COST_USD]).toBeNull();
+    expect(insertParams[NOTIONAL_COST_USD]).toBe("2.500000");
     expect(events.events.map((event) => event.eventType)).toEqual(["cost.resolved"]);
   });
 
   it("records a subscription-billed call with cost_usd NULL, cost_basis 'unknown', and a full token breakdown — and does NOT fail", async () => {
     const pool = new FakeCostPool();
     const events = new FakeEventStore();
-    const recorder = new CostRecorder(pool as never, events);
+    const recorder = makeRecorder(pool, events);
     const tokens = usage({
       inputTokens: 6980,
       cachedInputTokens: 4480,
@@ -92,7 +115,7 @@ describe("CostRecorder", () => {
     expect(result.billingMode).toBe("subscription");
     expect(result.costBasis).toBe("unknown");
     expect(result.costUsd).toBeNull();
-    // NOTIONAL value IS computed for the subscription call (openai list rate) even
+    // NOTIONAL value IS computed for the subscription call (model price) even
     // though REAL spend is NULL — the comparable, forecastable figure.
     expect(result.notionalCostUsd).not.toBeNull();
     expect(pool.inserts).toHaveLength(1);
@@ -109,7 +132,7 @@ describe("CostRecorder", () => {
   it("records a self-hosted call with cost_usd NULL without failing", async () => {
     const pool = new FakeCostPool();
     const events = new FakeEventStore();
-    const recorder = new CostRecorder(pool as never, events);
+    const recorder = makeRecorder(pool, events);
     const result = await recorder.record(
       {
         ...context,
@@ -129,7 +152,7 @@ describe("CostRecorder", () => {
   it("BUDGET-SAFETY C1: records an UNRECOGNIZED ref as 'unattributed' and emits a LOUD cost.unattributed (NOT a silent $0)", async () => {
     const pool = new FakeCostPool();
     const events = new FakeEventStore();
-    const recorder = new CostRecorder(pool as never, events);
+    const recorder = makeRecorder(pool, events);
     const result = await recorder.record(
       { ...context, cli: "codex", model: "gpt", authRef: "vault/secret/dev/legacy" },
       usage({ inputTokens: 12, outputTokens: 8, totalTokens: 20 }),
@@ -156,7 +179,7 @@ describe("CostRecorder", () => {
   it("does NOT emit cost.unattributed for an honestly-unpriceable subscription ref", async () => {
     const pool = new FakeCostPool();
     const events = new FakeEventStore();
-    const recorder = new CostRecorder(pool as never, events);
+    const recorder = makeRecorder(pool, events);
     await recorder.record(
       { ...context, cli: "codex", model: "gpt-codex", authRef: "credential/codex/dev" },
       usage({ inputTokens: 5, totalTokens: 5 }),
@@ -169,7 +192,7 @@ describe("CostRecorder", () => {
   it("never writes a placeholder cost basis to cost_records", async () => {
     const pool = new FakeCostPool();
     const events = new FakeEventStore();
-    const recorder = new CostRecorder(pool as never, events);
+    const recorder = makeRecorder(pool, events);
     await recorder.record(
       { ...context, cli: "codex", model: "gpt-codex", authRef: "credential/codex/dev" },
       usage({ inputTokens: 1, outputTokens: 1, totalTokens: 2 }),
@@ -186,7 +209,7 @@ describe("CostRecorder", () => {
     // ccusage prices ONLY a real-API (per_token) credential — a subscription's
     // ccusage figure is notional and stays NULL (covered by the subscription test).
     const pool = new FakeCostPool();
-    const recorder = new CostRecorder(pool as never, new FakeEventStore());
+    const recorder = makeRecorder(pool);
     const result = await recorder.record(
       {
         ...context,
@@ -207,12 +230,12 @@ describe("CostRecorder", () => {
     expect(pool.inserts[0]?.params[NOTIONAL_COST_USD]).toBe("0.750000");
   });
 
-  it("records a subscription call with notional_cost_usd populated (tokens × openai rate) AND cost_usd NULL", async () => {
+  it("records a subscription call with notional_cost_usd populated (tokens × model price) AND cost_usd NULL", async () => {
     // The headline of the notional-vs-real split: a flat-fee subscription has $0
     // REAL marginal spend (cost_usd NULL), but its tokens DO have a comparable
-    // NOTIONAL list value (openai rate) — recorded in notional_cost_usd.
+    // NOTIONAL list value (model price) — recorded in notional_cost_usd.
     const pool = new FakeCostPool();
-    const recorder = new CostRecorder(pool as never, new FakeEventStore());
+    const recorder = makeRecorder(pool);
     const result = await recorder.record(
       { ...context, cli: "codex", model: "gpt-codex", authRef: "credential/codex/dev" },
       // openai: input 2.5/M → 1M input = $2.50; output 10/M → 0.5M = $5.00 → $7.50.
@@ -227,25 +250,27 @@ describe("CostRecorder", () => {
     expect(params[NOTIONAL_COST_USD]).toBe("7.500000");
   });
 
-  it("records a per_token provider_pricing call with notional == real (same priced figure on both columns)", async () => {
+  it("records a per_token call with NO captured fact as cost_usd NULL but notional from the model price", async () => {
+    // REAL SPEND IS A FACT: no captured fact → cost_usd NULL (no static table). The
+    // NOTIONAL value IS computed (gpt list rate: 1M in @2.5 + 0.5M out @10 = $7.50).
     const pool = new FakeCostPool();
-    const recorder = new CostRecorder(pool as never, new FakeEventStore());
+    const recorder = makeRecorder(pool);
     const result = await recorder.record(
       { ...context, cli: "codex", model: "gpt", authRef: "credential/openai-api/prod" },
       usage({ inputTokens: 1_000_000, outputTokens: 500_000, totalTokens: 1_500_000 }),
       {},
     );
-    expect(result.costBasis).toBe("provider_pricing");
-    expect(result.costUsd).toBe("7.500000");
+    expect(result.costBasis).toBe("unknown");
+    expect(result.costUsd).toBeNull();
     expect(result.notionalCostUsd).toBe("7.500000");
     const params = pool.inserts[0]?.params ?? [];
-    expect(params[COST_USD]).toBe("7.500000");
+    expect(params[COST_USD]).toBeNull();
     expect(params[NOTIONAL_COST_USD]).toBe("7.500000");
   });
 
   it("records an UNRECOGNIZED ref with BOTH cost_usd AND notional_cost_usd NULL (unpriced on both axes)", async () => {
     const pool = new FakeCostPool();
-    const recorder = new CostRecorder(pool as never, new FakeEventStore());
+    const recorder = makeRecorder(pool);
     const result = await recorder.record(
       { ...context, cli: "codex", model: "gpt", authRef: "vault/secret/dev/legacy" },
       usage({ inputTokens: 12, outputTokens: 8, totalTokens: 20 }),
@@ -258,9 +283,9 @@ describe("CostRecorder", () => {
     expect(params[NOTIONAL_COST_USD]).toBeNull();
   });
 
-  it("prefers a positive ccusage figure as notional on a subscription call (more accurate than the static rate)", async () => {
+  it("prefers a positive ccusage figure as notional on a subscription call (more accurate than the model rate)", async () => {
     const pool = new FakeCostPool();
-    const recorder = new CostRecorder(pool as never, new FakeEventStore());
+    const recorder = makeRecorder(pool);
     const result = await recorder.record(
       // A subscription cred WITH a ccusage figure: real spend stays NULL (subscription
       // ccusage is dropped from real spend), but notional prefers the ccusage value.
@@ -270,7 +295,7 @@ describe("CostRecorder", () => {
     );
     expect(result.billingMode).toBe("subscription");
     expect(result.costUsd).toBeNull();
-    // ccusage 1.5 preferred over the $7.50 static-rate notional.
+    // ccusage 1.5 preferred over the $7.50 model-price notional.
     expect(result.notionalCostUsd).toBe("1.500000");
     expect(pool.inserts[0]?.params[NOTIONAL_COST_USD]).toBe("1.500000");
   });

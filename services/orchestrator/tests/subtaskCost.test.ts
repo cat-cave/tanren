@@ -132,6 +132,56 @@ describe("recordWriterCost", () => {
     });
     expect(calls[0]!.tokens).toEqual(emptyTokenUsage);
   });
+
+  it("captures the REAL provider cost for a managed call carrying an OpenRouter generation id", async () => {
+    // A managed run surfaced an openRouterGenerationId on the writer's token usage and
+    // wired a capturer → the recorder context carries the captured real FACT, so
+    // cost_usd becomes a metered figure (provider_response) downstream.
+    const { recorder, calls } = recordingRecorder();
+    const captured: string[] = [];
+    const capturer = async (generationId: string): Promise<number | null> => {
+      captured.push(generationId);
+      return 0.0321;
+    };
+    await recordWriterCost({
+      ctx: { ...ctx(recorder), captureRealProviderCost: capturer },
+      adapter: writerAdapter,
+      taskId: "task_write",
+      runtimeSeconds: 1,
+      tokenUsage: { ...emptyTokenUsage, openRouterGenerationId: "gen-abc123" },
+      rawUsage: {},
+    });
+    expect(captured).toEqual(["gen-abc123"]);
+    expect(calls[0]!.context).toMatchObject({ realProviderCostUsd: 0.0321 });
+  });
+
+  it("does NOT capture (real cost null) when no generation id is present, even with a capturer wired", async () => {
+    const { recorder, calls } = recordingRecorder();
+    const capturer = vi.fn<(generationId: string) => Promise<number | null>>(async () => 0.5);
+    await recordWriterCost({
+      ctx: { ...ctx(recorder), captureRealProviderCost: capturer },
+      adapter: writerAdapter,
+      taskId: "task_write",
+      runtimeSeconds: 1,
+      tokenUsage: emptyTokenUsage,
+      rawUsage: {},
+    });
+    expect(capturer).not.toHaveBeenCalled();
+    expect(calls[0]!.context).toMatchObject({ realProviderCostUsd: null });
+  });
+
+  it("does NOT capture when a generation id is present but NO capturer is wired (BYOK / non-managed)", async () => {
+    const { recorder, calls } = recordingRecorder();
+    await recordWriterCost({
+      ctx: ctx(recorder),
+      adapter: writerAdapter,
+      taskId: "task_write",
+      runtimeSeconds: 1,
+      tokenUsage: { ...emptyTokenUsage, openRouterGenerationId: "gen-xyz" },
+      rawUsage: {},
+    });
+    expect(calls[0]!.context).toMatchObject({ realProviderCostUsd: null });
+  });
 });
 
 describe("secondsSince", () => {
