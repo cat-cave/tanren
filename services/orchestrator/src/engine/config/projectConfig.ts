@@ -137,6 +137,17 @@ export const ProjectConfigV1 = z
     // `.strict()` round-trips it untouched on save. The dashboard never writes a
     // preview URL onto runs — it derives one from this pattern at render time.
     previewUrlPattern: z.string().min(1).optional(),
+    // The deploy target a project carries once the `deploy` capability is
+    // provisioned. A project either HAS a deploy target (these keys present) or does
+    // not (absent) — that absence is semantic, not a compat shim. The deploy-on-merge
+    // watcher reads `deployProvider` + `deployAppId` to trigger a release;
+    // `deployAppName` is the human app name; `envAttachmentRef` is written by
+    // `attachRuntimeAppEnv` once the runtime env is attached. Strict: the writer
+    // never persists a null placeholder, so the reader never accepts one.
+    deployProvider: z.string().min(1).optional(),
+    deployAppId: z.string().min(1).optional(),
+    deployAppName: z.string().min(1).optional(),
+    envAttachmentRef: z.string().min(1).optional(),
     // P3-0002: optional credential refs the run executor resolves before a run.
     // Backward-compatible — legacy rows carry no `credentials` key and parse to
     // an absent field (the resolver then falls back to the org defaults).

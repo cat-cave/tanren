@@ -269,9 +269,9 @@ export abstract class DeployProvisioner implements IntegrationProvisioner {
         deployAppId: app.appId,
         deployAppName: app.name,
         previewUrlPattern: app.previewUrlPattern,
-        // The seam P-APP-ENV-2 fills: the runtime env attachment for this app is
-        // attached separately (Plane B) and referenced here once it lands.
-        envAttachmentRef: null,
+        // `envAttachmentRef` is intentionally ABSENT here, not a null placeholder:
+        // the runtime env attachment is a separate Plane-B step (`attachRuntimeAppEnv`)
+        // that writes the ref once it lands. Absent = not yet attached.
       },
       secretRefs: { deployToken: tokenAliasRef },
     };
