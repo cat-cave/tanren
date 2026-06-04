@@ -72,6 +72,20 @@ function autonomousConfig(autonomy: "auto" | "simulated"): Record<string, unknow
   };
 }
 
+// The product-vision slice of the project config (the identity `pitch` + the
+// `designDna`), persisted onto `projects.config` so the conflict resolver can
+// frame a resolution against the product vision. Only the captured fields are
+// written — an interview that surfaced neither yields `{}` (no `productVision`
+// key at all = a real empty state, parsed away by the optional schema field).
+function productVisionConfig(capture: InterviewCapture): { productVision?: Record<string, string> } {
+  const vision: Record<string, string> = {};
+  const pitch = capture.identity?.pitch.trim();
+  if (pitch !== undefined && pitch !== "") vision["pitch"] = pitch;
+  const designDna = capture.designDna.trim();
+  if (designDna !== "") vision["designDna"] = designDna;
+  return Object.keys(vision).length > 0 ? { productVision: vision } : {};
+}
+
 export interface DeriveResult {
   projectId: string;
   projectName: string;
@@ -215,9 +229,16 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
   // (no migration shim); `createProject` threads `config` through
   // `migrateProjectConfig` — no new plumbing.
   const autonomousOptIn = input.autonomy === "auto" || input.autonomy === "simulated";
-  const config = autonomousOptIn
+  const baseConfig = autonomousOptIn
     ? autonomousConfig(input.autonomy as "auto" | "simulated")
     : { version: 1, greenfield: true };
+  // PERSIST THE PRODUCT VISION (no migration). The interview capture is otherwise
+  // transient — personas/behaviors/specs become rows, but the product's IDENTITY
+  // (`pitch`) + DESIGN-DNA were previously dropped. Persist them onto the existing
+  // `projects.config` blob so the conflict resolver can frame a resolution against
+  // the product vision. Only the fields the interview actually captured are
+  // written (omit empties) — a real empty state, not a stub.
+  const config = { ...baseConfig, ...productVisionConfig(capture) };
   const project = await createProject(pool, { name: slug, repoUrl, config }, { ...input.actor, orgId: input.orgId });
   const projectId = project.projectId;
   const actor: ActorContext = { ...input.actor, orgId: input.orgId, projectId };
@@ -233,6 +254,11 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
         projectId,
         name: persona.name,
         description: persona.description,
+        // The persona's delivery SURFACE (handheld / ops dashboard / …) is part of
+        // the product vision the conflict resolver reads back, but the personas
+        // table has no `surface` column — persist it on the existing `metadata`
+        // jsonb (no migration). Omit it when the interview captured none.
+        ...(persona.surface.trim() !== "" && { metadata: { surface: persona.surface } }),
       }),
       actor,
     );

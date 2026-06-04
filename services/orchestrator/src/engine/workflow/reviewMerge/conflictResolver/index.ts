@@ -23,6 +23,7 @@ import type { GateOutcome } from "../../gate/index.js";
 import type { CiWhen } from "../../../ci/index.js";
 import { AnswererBackedConflictInvoker } from "./answerer.js";
 import { PgConflictProvenanceReader } from "./provenance.js";
+import { PgProductVisionReader } from "./productVision.js";
 import { RunPathResolvedTreeReGate } from "./reGate.js";
 import { SpecStatusReplanRouter } from "./replanRouter.js";
 import { SshWorkspaceConflictApplier } from "./workspaceApplier.js";
@@ -85,6 +86,17 @@ export function buildDefaultConflictResolver(deps: DefaultConflictResolverDeps):
     },
     eventStore: deps.eventStore,
     provenance: new PgConflictProvenanceReader(deps.pool),
+    // The product-vision reader rides the run's already org-scoped client (the
+    // same `deps.pool` the provenance reader uses) + the resolved org. It loads
+    // the personas / persona-behaviors / design-DNA the Answerer frames the
+    // resolution against AND judges a genuine product-intent clash on — uniform
+    // across BOTH merge paths (this in-loop `direct_merge` path + the drive path,
+    // which calls this same factory). A run with no resolved org or an empty
+    // product yields an empty vision the prompt omits (a real empty state).
+    productVision: new PgProductVisionReader({
+      client: deps.pool,
+      ...(deps.orgId !== undefined && { orgId: deps.orgId }),
+    }),
     applier: new SshWorkspaceConflictApplier({
       ssh: deps.ssh,
       target: deps.target,

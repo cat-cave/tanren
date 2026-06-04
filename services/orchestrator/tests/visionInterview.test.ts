@@ -37,6 +37,9 @@ interface StubState {
   projects: Set<string>;
   specs: Map<string, { dependsOn: string[] }>;
   personas: number;
+  // The metadata jsonb persisted per persona INSERT (where the derive persists
+  // the persona `surface`, there being no `surface` column).
+  personaMetadata: Array<Record<string, unknown>>;
   behaviors: number;
   milestones: number;
   specMilestones: number;
@@ -54,6 +57,7 @@ function stubPool(): {
     projects: new Set(),
     specs: new Map(),
     personas: 0,
+    personaMetadata: [],
     behaviors: 0,
     milestones: 0,
     specMilestones: 0,
@@ -94,6 +98,11 @@ function stubPool(): {
     if (sql.startsWith("INSERT INTO personas")) {
       state.personas += 1;
       personaIds.add(String(params[0]));
+      // The metadata jsonb is the 7th column (params[6], JSON text) — capture it so
+      // a test can assert the persona `surface` is persisted there (no `surface` column).
+      const rawMeta = params[6];
+      const metadata = typeof rawMeta === "string" ? (JSON.parse(rawMeta) as Record<string, unknown>) : {};
+      state.personaMetadata.push(metadata);
       return {
         rows: [
           {
@@ -103,7 +112,7 @@ function stubPool(): {
             project_id: params[3],
             name: params[4],
             description: params[5],
-            metadata: {},
+            metadata,
             created_at: new Date(),
             updated_at: new Date(),
           },
@@ -360,5 +369,30 @@ describe("deriveFromCapture · creates the product graph (no migration)", () => 
     // Even the human tier is greenfield (interview builds off an empty repo) — the
     // safe review/merge defaults hold, but greenfield drives the non-frozen ensure.
     expect(config?.greenfield).toBe(true);
+  });
+
+  it("persists the PRODUCT VISION (design-DNA + identity pitch on config; persona surface on metadata) — no migration", async () => {
+    const { pool, configs, state } = stubPool();
+    const answerer = createDeterministicInterviewAnswerer();
+    let capture: InterviewCapture = emptyCapture();
+    let complete = false;
+    for (let round = 1; round <= 20 && !complete; round += 1) {
+      const result = await runRound({ pool, answerer }, { round, answer: "ok", capture });
+      capture = result.capture;
+      complete = result.complete;
+    }
+    const derived = await deriveFromCapture({ pool }, { orgId: "org_a", capture, actor });
+
+    // Design-DNA + identity pitch land on `projects.config.productVision` (the
+    // existing jsonb blob — no new table). The interview captured both.
+    const config = configs.get(derived.projectId);
+    const vision = config?.productVision as { pitch?: string; designDna?: string } | undefined;
+    expect(vision).toBeDefined();
+    expect(vision?.designDna).toBe("industrial");
+    expect(vision?.pitch).toContain("supply chain operations");
+    // The persona SURFACE is persisted on the persona `metadata` jsonb (no column).
+    const surfaces = state.personaMetadata.map((m) => m["surface"]).filter((s) => s !== undefined);
+    expect(surfaces).toContain("desktop");
+    expect(surfaces).toContain("handheld");
   });
 });
