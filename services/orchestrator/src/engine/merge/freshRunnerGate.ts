@@ -16,6 +16,7 @@
 // SSH stdin via the shared git credential helper — never on the command line, never
 // logged. The runner is ALWAYS released (loud-on-leak in the finally).
 
+import { randomUUID } from "node:crypto";
 import type { Allocator, RunnerHandle } from "../contracts/allocator.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
@@ -90,11 +91,24 @@ export async function runFreshRunnerMergeGate(
   deps: FreshRunnerGateDeps,
   ctx: FreshRunnerGateContext,
 ): Promise<FreshRunnerGateResult> {
+  // UNIQUE re-gate handle. The allocators derive the runner primary key as
+  // `runner_${runId}`, but the ORIGINAL run already allocated `runner_${ctx.runId}`
+  // and only RELEASED it (release sets status='released', it does NOT delete the
+  // `runners` row). Reusing `ctx.runId` here re-inserts the SAME pkey → a
+  // `runners_pkey` unique-constraint violation that bricked the live batch gate
+  // (and would also collide across this re-gate's own batch retries). So derive a
+  // synthetic, per-attempt-unique handle for BOTH the allocation (→ a unique
+  // `runner_…` row) AND the workspace path (→ its own clone dir). The REAL
+  // `ctx.runId` is still used for run-scoped events + credentials. randomUUID is
+  // fine here — this is engine code, not a deterministic workflow script.
+  const regateRunId = `${ctx.runId}-regate-${randomUUID()}`;
   const allocation = await deps.allocator.allocate({
     // Runless: the original run's runner is gone, so allocate a fresh short-lived
-    // runner for THIS re-gate only. runId/projectId are the stable naming handle;
-    // the persisted FK columns come from persisted* (no runs-row FK for a re-gate).
-    runId: ctx.runId,
+    // runner for THIS re-gate only under the UNIQUE handle (so the derived
+    // `runner_${regateRunId}` pkey never collides with the original run's retained
+    // row or a prior re-gate attempt). The persisted FK columns come from persisted*
+    // (no runs-row FK for a re-gate).
+    runId: regateRunId,
     projectId: ctx.projectId,
     runnerImage: ctx.runnerImage,
     identitySecretRef: deps.identitySecretRef,
@@ -103,7 +117,7 @@ export async function runFreshRunnerMergeGate(
     persistedRunId: null,
     persistedProjectId: ctx.projectId,
   });
-  const workspacePath = workspaceRepoPathForRun(ctx.runId);
+  const workspacePath = workspaceRepoPathForRun(regateRunId);
   try {
     const headSha = await cloneRefForGate(deps, ctx, allocation.target, workspacePath);
     // node_modules guard BEFORE any install, mirroring the run-loop workspace prep.

@@ -101,6 +101,8 @@
     "corepack",
     "lefthook",
     "pnpm",
+    "pkey",
+    "regate",
     "tsup",
     "tsx",
     "aider",
