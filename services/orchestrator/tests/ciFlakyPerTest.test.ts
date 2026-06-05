@@ -11,7 +11,7 @@ import {
   deriveTestDurationProfiles,
   type CiTestObservation,
 } from "../src/engine/insights/ciFlakyTests.js";
-import { evaluateCiObservation } from "../src/engine/workflow/ciPolling.js";
+import { evaluateCiObservation } from "../src/engine/workflow/ciObservation.js";
 
 const T0 = new Date("2026-05-01T00:00:00Z");
 function trow(

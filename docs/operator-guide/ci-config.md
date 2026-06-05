@@ -1,28 +1,30 @@
-# Repo-sourced tiered CI config (`tanren-ci.yml`)
+# The native gate definition (`.tanren/ci.yml`)
 
-`tanren-ci.yml` is the single source of truth for the shell checks Tanren runs
-against a target repo. It lives **in the target repo** (committed at the repo
-root), not in the Tanren monorepo. The same file is read by two consumers so
-the same steps run in both places:
+`.tanren/ci.yml` is the single source of truth for the shell checks Tanren runs
+against a target repo. It lives **in the target repo** (committed at
+`.tanren/ci.yml`), not in the Tanren monorepo.
 
-- **GitHub Actions** (via the CI poller) — the checks that gate the PR.
-- **The in-loop gate** (a future spec) — the checks Tanren runs on the runner
-  workspace during a run, before audit and before merge.
+It is the **native gate definition** — it declares the tiered checks Tanren runs
+**itself**, over SSH, on the runner workspace during a run. **There is no GitHub
+Actions.** Tanren is the merge authority: it runs these steps and reads the
+verdict from exit codes — it does not inject an Actions workflow and does not poll
+a forge check-run. This file is a `CiConfigV1` (a tiered step definition), **not**
+an Actions workflow.
 
-This document is the schema reference. The parser/validator that implements it
-lives at `services/orchestrator/src/engine/ci/`. P3-0004 ships the **contract +
-parser only**: nothing in this module executes a step. Execution is owned by
-the separate in-loop gate spec.
-
-A copy-pasteable example is at `fixtures/tanren-ci.sample.yml`.
+The parser/validator lives at `services/orchestrator/src/engine/ci/`; the runner
+that executes the steps over SSH lives at
+`services/orchestrator/src/engine/workflow/gate/`. A copy-pasteable example is at
+`fixtures/tanren-ci.sample.yml`.
 
 ## Why tiers
 
 Checks are grouped into named **tiers** by cost. A cheap tier (`fast`) runs on
-every iteration; an expensive tier (`slow`) runs only at the points where the
-extra cost is worth it (before an audit, before a merge). The `when` policy
+every writer iteration; an expensive tier (`slow`) runs only at the points where
+the extra cost is worth it (before an audit, before a merge). The `when` policy
 maps each tier to those lifecycle points declaratively, so adding a check never
-requires touching orchestrator code — only the repo's `tanren-ci.yml`.
+requires touching orchestrator code — only the repo's `.tanren/ci.yml`. The
+`pre_merge` tier is the **merge authority**: a passing `pre_merge` gate is what
+admits the merge.
 
 ## Schema
 
@@ -35,7 +37,7 @@ bootstrap: # optional
 tiers: # required; `fast` and `slow` are mandatory
   fast: # a tier is a non-empty list of named steps
     - name: lint # step name (free text, non-empty)
-      run: "pnpm lint" # shell command run verbatim by the consumer
+      run: "pnpm lint" # shell command Tanren runs verbatim over SSH
     - name: typecheck
       run: "pnpm typecheck"
   slow:
@@ -59,7 +61,7 @@ when: # required; every declared tier MUST appear here
 | Field           | Required | Description                                                                                       |
 | --------------- | -------- | ------------------------------------------------------------------------------------------------- |
 | `version`       | yes      | Schema version. Must be the literal `1`.                                                          |
-| `bootstrap.run` | no       | Install/provision command run once before any tier. Read by P3-0006 workspace bootstrap.          |
+| `bootstrap.run` | no       | Install/provision command Tanren runs over SSH before the gate.                                   |
 | `tiers`         | yes      | Map of tier name to a non-empty list of `{ name, run }` steps. `fast` and `slow` are required.    |
 | `when`          | yes      | Map of tier name to a non-empty list of lifecycle points. Every declared tier must have an entry. |
 
@@ -67,7 +69,16 @@ when: # required; every declared tier MUST appear here
 
 - `per_iteration` — after each writer iteration (cheap feedback).
 - `pre_audit` — before handing the work to an auditor.
-- `pre_merge` — before merging the PR.
+- `pre_merge` — before merging the PR. **This is the merge authority.**
+
+## Per-test grain (optional)
+
+When a `test` step emits a JUnit report to `reports/junit.xml` (e.g.
+`vitest --reporter=junit --outputFile=reports/junit.xml`), Tanren reads it back
+over SSH after the gate and ingests the per-test rows **in-process** — feeding
+flaky-detection + auto-quarantine. There is no upload step, no webhook, no signing
+secret: the gate produced the report on the runner, and Tanren ingests it
+directly. A repo that emits no JUnit simply has no per-test grain (a clean no-op).
 
 ## Validation rules (fails loudly)
 
@@ -87,7 +98,7 @@ values — not arbitrary YAML.)
 
 ## Default when the file is absent
 
-If a repo ships no `tanren-ci.yml`, `resolveCiConfig(undefined)` returns a
+If a repo ships no `.tanren/ci.yml`, `resolveCiConfig(undefined)` returns a
 built-in default that mirrors this monorepo's own conventions:
 
 | Tier   | Steps                       | Runs at                  |

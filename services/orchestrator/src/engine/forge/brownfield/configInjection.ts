@@ -9,7 +9,7 @@
 // delivery model): the native gate is the merge authority.
 //
 // The GitHub side is an injectable `ConfigInjectionGitHub` port (same shape as
-// the P3-0017 `ConfigGateGitHub`): production wires the App-token-backed adapter
+// the `ConfigGateGitHub`): production wires the App-token-backed adapter
 // (`githubConfigInjection.ts`), tests inject a fake that records the committed
 // files + returns a synthetic PR. No new entity, no migration — the files land
 // in the target repo via a PR, not in our database.
@@ -118,7 +118,7 @@ when:
 `;
 
 function codeowners(team: string): string {
-  return `# CODEOWNERS — scaffolded by tanren config-injection (P3-0016)
+  return `# CODEOWNERS — scaffolded by tanren config-injection
 * @${team}
 .tanren/** @${team}
 .github/** @${team}
@@ -175,7 +175,7 @@ export interface InjectedConfigPullRequest {
 }
 
 // Port the engine opens the PR through. Production wires the App-backed adapter;
-// tests inject a fake. Mirrors the P3-0017 `ConfigGateGitHub` seam.
+// tests inject a fake. Mirrors the `ConfigGateGitHub` seam.
 export interface ConfigInjectionGitHub {
   openConfigInjectionPr(input: {
     repoUrl: string;

@@ -19,6 +19,7 @@ import { runBudgetCeilingPreflight } from "./budgetPreflight.js";
 import {
   advisoryStepNamesForPosture,
   type GateOutcome,
+  ingestGateJunit,
   resolveBootstrapCommand,
   resolveGateConfig,
   runGateForWhen,
@@ -379,7 +380,7 @@ export function buildDefaultGate(
       workspacePath,
       timeoutMs: input.timeoutMs,
     });
-    return runGateForWhen({
+    const outcome = await runGateForWhen({
       ssh: input.ssh,
       target,
       workspacePath,
@@ -394,7 +395,48 @@ export function buildDefaultGate(
       // commands run with it. Never logged/emitted. Distinct from Tanren creds.
       ...(input.appEnv === undefined ? {} : { appEnv: input.appEnv }),
     });
+    // NATIVE PER-TEST INGEST: read the runner's JUnit report (if the gate's test step
+    // emitted one) + persist the per-test rows IN-PROCESS — the CI-intelligence grain,
+    // straight from the runner, no webhook. Best-effort: it never affects the verdict.
+    await ingestGateJunitBestEffort(input, target, workspacePath, headSha, outcome.passed);
+    return outcome;
   };
+}
+
+/**
+ * Ingest the gate's JUnit report in-process, best-effort. Skipped when there is no
+ * head-sha anchor (fake-SSH unit path) or no org (a legacy/unscoped run — the
+ * `ci_test_results` row is org-stamped). The run already runs under the org's ambient
+ * scope, so `input.pool` self-scopes the INSERT. A read/parse error is logged + swallowed
+ * (the per-test grain is an enrichment, never a gate-blocker), so it can NEVER fail the run.
+ */
+async function ingestGateJunitBestEffort(
+  input: RunPlannerLoopInput,
+  target: SshTarget,
+  workspacePath: string,
+  headSha: string,
+  gatePassed: boolean,
+): Promise<void> {
+  const orgId = input.context.orgId;
+  if (headSha === "" || orgId === undefined || orgId === null) {
+    return;
+  }
+  try {
+    await ingestGateJunit({
+      ssh: input.ssh,
+      target,
+      workspacePath,
+      client: input.pool,
+      runId: input.context.runId,
+      projectId: input.context.projectId,
+      orgId,
+      headSha,
+      timeoutMs: input.timeoutMs,
+      gatePassed,
+    });
+  } catch (error) {
+    console.error(`[gate] native JUnit ingest failed for run ${input.context.runId} (non-blocking):`, error);
+  }
 }
 
 export function defaultUsageProbe(input: RunPlannerLoopInput, ctx: PlannerRunAdapterContext): UsageProbe {

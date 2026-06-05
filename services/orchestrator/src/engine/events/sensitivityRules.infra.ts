@@ -149,28 +149,8 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["message", "public"],
   ]),
 
-  // ci.* (observation payloads share field shape)
-  ...ciObservationRules("ci.started"),
-  ...ciObservationRules("ci.passed"),
-  ...ciObservationRules("ci.failed"),
-
-  // P2e-1 flaky detection + quarantine rules live in sensitivityRules.ciIntel.ts
+  // Flaky detection + quarantine rules live in sensitivityRules.ciIntel.ts
   // (next to ci.tests.reported) to keep this file under the 500-line cap.
-
-  // phase 1 fixture orchestration
-  ...rulesFor("phase1.fixture.started", [
-    ["repoUrl", "public"],
-    ["targetBranch", "public"],
-  ]),
-  ...rulesFor("phase1.fixture.ci_pending", [
-    ["attempt", "public"],
-    ["nextPollAfterMs", "public"],
-  ]),
-  ...rulesFor("phase1.fixture.completed", [
-    ["prUrl", "public"],
-    ["ciStatus", "public"],
-  ]),
-  ...rulesFor("phase1.fixture.failed", [["message", "public"]]),
 
   // reviews
   ...rulesFor("review.requested", [
@@ -454,30 +434,4 @@ export const infraSensitivityRules: SensitivityRule[] = [
 
 function rulesFor(eventName: string, entries: ReadonlyArray<[string, SensitivityRule["tag"]]>): SensitivityRule[] {
   return entries.map(([path, tag]) => ({ eventName, path, tag }));
-}
-
-function ciObservationRules(eventName: string): SensitivityRule[] {
-  return rulesFor(eventName, [
-    ["prUrl", "public"],
-    ["credentialRef", "redacted"],
-    ["redacted", "public"],
-    ["status", "public"],
-    ["reason", "public"],
-    ["headSha", "public"],
-    ["checkRuns[].name", "public"],
-    ["checkRuns[].status", "public"],
-    ["checkRuns[].conclusion", "public"],
-    ["checkRuns[].url", "public"],
-    ["statuses[].context", "public"],
-    ["statuses[].state", "public"],
-    ["statuses[].url", "public"],
-    ["failingChecks[].kind", "public"],
-    ["failingChecks[].name", "public"],
-    ["failingChecks[].state", "public"],
-    ["failingChecks[].url", "public"],
-    ["pendingChecks[].kind", "public"],
-    ["pendingChecks[].name", "public"],
-    ["pendingChecks[].state", "public"],
-    ["pendingChecks[].url", "public"],
-  ]);
 }

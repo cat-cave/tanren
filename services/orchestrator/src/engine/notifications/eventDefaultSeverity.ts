@@ -1,17 +1,17 @@
 import { listEventNames, type EventName } from "../events/index.js";
 import type { Severity } from "./schemas.js";
 
-// P2A-0017: map every event name in the P2A-0007 registry to a default
+// Map every event name in the registry to a default
 // severity. The matrix UI consumes this map to render the event row's
 // default level; the dispatcher consults it at fire time to decide whether
 // a route's minSeverity floor is met.
 //
 // Severity taxonomy:
 //   ok    - happy-path completion that an operator wants to celebrate
-//           (run.completed, ci.passed, github.pr.merged).
+//           (run.completed, gate.passed, github.pr.merged).
 //   info  - normal-flight progress that some operators want, most don't
 //           (lifecycle started/queued, subtask progress, redaction audit).
-//   warn  - degraded but recoverable (ci.failed, checker rejection, github
+//   warn  - degraded but recoverable (gate.failed, checker rejection, github
 //           failures, planner re-request) — usually surfaces in dashboards
 //           regardless of opt-in.
 //   fail  - run-halting / unattributable / lost-work signals (run.failed,
@@ -99,11 +99,6 @@ const SEVERITY_OVERRIDES: Partial<Record<EventName, Severity>> = {
   "github.pr.merged": "ok",
   "github.failed": "warn",
 
-  // CI
-  "ci.started": "info",
-  "ci.passed": "ok",
-  "ci.failed": "warn",
-
   // Post-merge auto-issue creation (tempering.md dim A): a post-merge regression
   // on default_branch is a real change-failure (fail); auto-opening its tracking
   // issue is an operator-actionable signal (warn).
@@ -118,12 +113,6 @@ const SEVERITY_OVERRIDES: Partial<Record<EventName, Severity>> = {
   // matrix's warn floor AND the code-level default route so the escalation
   // actually reaches a person rather than silently parking.
   "dag.spec.needs_attention": "fail",
-
-  // Phase 1 fixture
-  "phase1.fixture.started": "info",
-  "phase1.fixture.ci_pending": "info",
-  "phase1.fixture.completed": "ok",
-  "phase1.fixture.failed": "fail",
 
   // Review
   "review.requested": "info",

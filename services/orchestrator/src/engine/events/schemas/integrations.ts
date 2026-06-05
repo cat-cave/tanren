@@ -1,8 +1,8 @@
 import { z } from "zod";
 
-// External integration events: GitHub (branch/PR), CI polling, phase 1
-// fixture orchestration, review lifecycle, notification dispatch, and the
-// developer-facing hello run.
+// External integration events: GitHub (branch/PR), the review lifecycle, and the
+// merge stage. (The native gate is the merge authority — there are no forge-CI
+// observation events here; the gate's own verdict lives in schemas/gate.ts.)
 
 export const GithubBranchPushedPayload = z
   .object({
@@ -43,78 +43,6 @@ export const GithubFailedPayload = z
   .object({
     operation: z.string(),
     branch: z.string().optional(),
-    message: z.string(),
-  })
-  .strict();
-
-const CheckRunSummary = z
-  .object({
-    name: z.string(),
-    status: z.string(),
-    conclusion: z.string().nullable().optional(),
-    url: z.string().optional(),
-  })
-  .strict();
-
-const CommitStatusSummary = z
-  .object({
-    context: z.string(),
-    state: z.string(),
-    url: z.string().optional(),
-  })
-  .strict();
-
-const CiCheckRef = z
-  .object({
-    kind: z.enum(["check_run", "commit_status"]),
-    name: z.string(),
-    state: z.string(),
-    url: z.string().optional(),
-  })
-  .strict();
-
-const CiObservationPayload = z
-  .object({
-    prUrl: z.string(),
-    credentialRef: z.string(),
-    redacted: z.literal(true),
-    status: z.enum(["pending", "passed", "failed"]),
-    reason: z.string(),
-    headSha: z.string(),
-    checkRuns: z.array(CheckRunSummary),
-    statuses: z.array(CommitStatusSummary),
-    failingChecks: z.array(CiCheckRef),
-    pendingChecks: z.array(CiCheckRef),
-  })
-  .strict();
-
-export const CiStartedPayload = CiObservationPayload;
-export const CiPassedPayload = CiObservationPayload;
-export const CiFailedPayload = CiObservationPayload;
-
-export const Phase1FixtureStartedPayload = z
-  .object({
-    repoUrl: z.string(),
-    targetBranch: z.string(),
-  })
-  .strict();
-
-export const Phase1FixtureCiPendingPayload = z
-  .object({
-    attempt: z.number().int(),
-    nextPollAfterMs: z.number().int(),
-  })
-  .strict();
-
-export const Phase1FixtureCompletedPayload = z
-  .object({
-    prUrl: z.string(),
-    ciStatus: z.string(),
-  })
-  .strict();
-
-export const Phase1FixtureFailedPayload = z
-  .object({
     message: z.string(),
   })
   .strict();
@@ -474,27 +402,5 @@ export const AppEnvRuntimeAttachedPayload = z
     appId: z.string(),
     /** The env var KEY NAMES attached (sorted). NEVER the values. */
     keys: z.array(z.string()),
-  })
-  .strict();
-
-// Plane B app-environment (P-APP-ENV-1): the project's TEST-scoped app env was
-// propagated to the target repo's GitHub Actions repository SECRETS, so the
-// project's `tanren-ci.yml` tests that read e.g. RESEND_API_KEY pass. Lives here
-// alongside `app_env.runtime_attached` as a CI integration. SECURITY: carries ONLY
-// the project, the repo (owner/name), and the Actions-secret KEY NAMES — never a
-// secret VALUE; this event is the observable proof the propagation ran.
-export const AppEnvCiPropagatedPayload = z
-  .object({
-    /** The Tanren project whose test-scoped app env was propagated. */
-    projectId: z.string(),
-    /** The target repo the Actions secrets were set on. */
-    repo: z
-      .object({
-        owner: z.string(),
-        name: z.string(),
-      })
-      .strict(),
-    /** The Actions-secret KEY NAMES set (sorted). NEVER the values. */
-    secretNames: z.array(z.string()),
   })
   .strict();

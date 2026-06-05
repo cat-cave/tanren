@@ -27,7 +27,7 @@ import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { VcsProvider } from "../contracts/vcsProvider.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
-import { evaluateCiObservation, type CiObservation } from "../workflow/ciPolling.js";
+import { evaluateCiObservation, type CiObservation } from "../workflow/ciObservation.js";
 import { loadReviewMergeRunContext, type ReviewMergeRunContext } from "../workflow/reviewMerge/context.js";
 import { PgPostMergeIssueClaimStore, type PostMergeIssueClaimStore } from "./issueClaimStore.js";
 

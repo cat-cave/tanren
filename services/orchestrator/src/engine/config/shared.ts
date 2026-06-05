@@ -330,25 +330,6 @@ export const DEFAULT_SPECULATIVE_INTEGRATION_DEPTH = 2;
 // truncation); the dropped entries keep their queue position for the next pass.
 export const DEFAULT_MAX_BATCH_SIZE = 5;
 
-// The NO-CHECKS SETTLE GRACE (ms) — the bug-fix for a no-CI repo hanging the merge
-// queue / run loop forever. `evaluateCiObservation` stays PURE: it reports raw truth
-// (`no_checks` ⇒ pending) and never settles. The INTERPRETATION "this repo has NO CI
-// registered at all → after a bounded grace, treat the gate as green" is a
-// COORDINATOR/POLL POLICY anchored on a STABLE timestamp (the queue `enqueued_at` /
-// the CI task `started_at` — NOT the ephemeral integration sha, which resets every
-// rebuild cycle and would never accrue elapsed time). This MIRRORS GitHub merging a
-// PR that has no required checks + no failing checks: there is nothing to verify.
-//
-// SAFETY BOUNDARY (preserved everywhere this is consulted): a `failed`/`check_failed`
-// observation ALWAYS blocks (never settled → merged); a `checks_pending` observation
-// (real CI registered but not yet done) ALWAYS waits (NO settle — the settle is for
-// GENUINELY-ZERO checks only). A repo with real CI registers a queued check within
-// seconds → flips `no_checks`→`checks_pending` BEFORE this grace elapses → is never
-// short-circuited. Default 45s (the resolved default — comfortably longer than the
-// few seconds a real CI takes to register its first queued check). A governed config
-// knob (`projects.config.noChecksSettleMs`), never an env var.
-export const DEFAULT_NO_CHECKS_SETTLE_MS = 45_000;
-
 // ---- Errors --------------------------------------------------------------
 
 // Thrown by the migration helpers when the persisted `version` discriminator

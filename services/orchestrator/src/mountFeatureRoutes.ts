@@ -24,7 +24,7 @@ import { mountReportRoutes, type MountReportRoutesDeps } from "./routes/experime
 import { createForgeAskRoutes, createForgeProposalRoutes, createForgeRoutes } from "./routes/forge/mount.js";
 import { createInboxRoutes } from "./routes/inbox/index.js";
 import { createAuditRoutes } from "./routes/audits/index.js";
-import { createIssueWebhookRoutes, createJunitIngestRoutes } from "./routes/githubWebhooks/index.js";
+import { createIssueWebhookRoutes } from "./routes/githubWebhooks/index.js";
 import { createInsightRoutes } from "./routes/insights/index.js";
 import { createIntegrationRoutes } from "./routes/integrations/index.js";
 import { createMilestoneRoutes } from "./routes/milestones/index.js";
@@ -37,7 +37,7 @@ import {
   createOrgRoutes,
 } from "./routes/orgs/index.js";
 import { createPersonaRoutes } from "./routes/personas/index.js";
-import { createAppEnvCiRoutes, createCiIngestSecretsRoutes, createProjectRoutes } from "./routes/projects/index.js";
+import { createProjectRoutes } from "./routes/projects/index.js";
 import { createRecoveryRoutes } from "./routes/recovery/index.js";
 import { createRunRoutes } from "./routes/runs/index.js";
 import { createSpecRoutes } from "./routes/specs/index.js";
@@ -65,9 +65,6 @@ export interface FeatureRouteDeps {
   allocator: Allocator;
   ssh: SshSubstrate;
   identitySecretRef: string;
-  // P-INT-6: when set, the CI webhook receiver verifies the inbound signature
-  // against this secret ref (rejecting unsigned/invalid 401). Omitted → unsigned.
-  ciWebhookSigningSecretRef?: string;
   // B1 (webhook provisioning): the public base URL Tanren is reachable at, so the
   // inbox webhook-provision endpoint can construct the GitHub `issues` callback URL.
   // Omitted → the provisioning endpoint is not mounted.
@@ -149,30 +146,10 @@ export function mountFeatureRoutes(app: Hono<ActorContextEnv>, deps: FeatureRout
     // the same App resolution).
     createProjectRoutes({ pool: scopedPool, secrets, vcsProvider: deps.vcsProvider, githubAppMinter }),
   );
-  // P-APP-ENV-1: push a project's TEST-scoped app env to the target repo's Actions
-  // secrets (so `tanren-ci.yml` tests that read e.g. RESEND_API_KEY pass). Uses the
-  // VcsProvider seam (App-first token + sealed-box secret set); names-only signal.
-  app.route(
-    "/orgs",
-    createAppEnvCiRoutes({ pool: scopedPool, secrets, vcsProvider: deps.vcsProvider, githubAppMinter }),
-  );
-  // CI-intelligence (PR2): propagate the CI INGEST secrets (the JUnit-upload signing
-  // key + the ingest base URL) to the target repo's Actions secrets, so
-  // `tanren-ci.yml`'s `upload-junit` step authenticates against `POST /webhooks/ci/junit`.
-  // Mounts ONLY when CI ingest is fully configured (the same signing-secret ref the
-  // ingest endpoint validates against + the public base URL); absent either ⇒ the
-  // route stays unmounted (no propagation of a never-authenticating secret).
-  app.route(
-    "/orgs",
-    createCiIngestSecretsRoutes({
-      pool: scopedPool,
-      secrets,
-      vcsProvider: deps.vcsProvider,
-      githubAppMinter,
-      ...(deps.ciWebhookSigningSecretRef === undefined ? {} : { signingSecretRef: deps.ciWebhookSigningSecretRef }),
-      ...(deps.publicBaseUrl === undefined ? {} : { publicBaseUrl: deps.publicBaseUrl }),
-    }),
-  );
+  // The app-env-to-Actions-secrets + CI-ingest-secrets routes are GONE: the native gate
+  // runs the project's tests over SSH with the app env materialized in-process, and the
+  // per-test JUnit grain is ingested in-process from the runner — no Actions secrets,
+  // no JUnit-upload webhook (the no-Actions delivery model).
   app.route("/orgs", createSpecRoutes({ pool: scopedPool }));
   app.route("/orgs", createPersonaRoutes({ pool: scopedPool }));
   app.route("/orgs", createBehaviorRoutes({ pool: scopedPool }));
@@ -213,20 +190,8 @@ export function mountFeatureRoutes(app: Hono<ActorContextEnv>, deps: FeatureRout
   // the CI receiver it resolves its tenant server-side, so it keeps the bare pool;
   // the auto-route DAG insert runs under the resolved org's RLS scope internally.
   app.route("/", createIssueWebhookRoutes({ pool, secrets, answererFactory: forgeAnswerers.triage }));
-  // CI-intelligence ingestion (foundation): the generated repo's CI uploads its
-  // parsed JUnit report to `/webhooks/ci/junit`, authed with the per-run token
-  // (HMAC over the raw body via the CI webhook signing secret). Mounted at root
-  // like the other webhook receivers; resolves its run's org server-side and
-  // writes the per-test rows under that org's RLS scope. Reuses the CI webhook
-  // signing-secret ref (the same per-installation Actions secret).
-  app.route(
-    "/",
-    createJunitIngestRoutes({
-      pool,
-      secrets,
-      ...(deps.ciWebhookSigningSecretRef === undefined ? {} : { signingSecretRef: deps.ciWebhookSigningSecretRef }),
-    }),
-  );
+  // The JUnit-upload webhook (`/webhooks/ci/junit`) is GONE: the native gate ingests the
+  // runner's JUnit report IN-PROCESS after it runs (no Actions upload step, no HMAC).
   app.route("/orgs", createInsightRoutes({ pool: scopedPool }));
   // P3-0014: spec discovery — the model DERIVES proposed specs + DAG placement
   // from the insight; accept → create specs with provenance.

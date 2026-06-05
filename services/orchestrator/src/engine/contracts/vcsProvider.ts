@@ -282,24 +282,6 @@ export interface CreatedIssue {
 }
 
 /**
- * P-APP-ENV-1: set (create or overwrite) a single ACTIONS REPOSITORY SECRET on
- * the target repo, so the project's `tanren-ci.yml` tests that read e.g.
- * `RESEND_API_KEY` find it. The `value` is the PLAINTEXT app-env secret — SECRET
- * and load-bearing: the provider MUST transmit it ONLY inside the forge's
- * encrypted payload (GitHub: libsodium sealed-box against the repo's Actions
- * public key) and MUST NOT log/return/emit it. `name` (the env-var key) is
- * non-secret. Idempotent: GitHub's PUT creates or replaces (201/204).
- */
-export interface SetActionsSecretInput {
-  repo: RepoRef;
-  token: ResolvedVcsToken;
-  /** The secret name (the env-var key); non-secret. */
-  name: string;
-  /** The PLAINTEXT secret value; transmitted ONLY inside the encrypted payload. */
-  value: string;
-}
-
-/**
  * The VcsProvider contract: every VCS/CI operation the run + merge lifecycle
  * performs directly against the forge, behind a provider-neutral seam. Each
  * operation takes a pre-`resolveToken`'d {@link ResolvedVcsToken} so a stage
@@ -348,15 +330,6 @@ export interface VcsProvider {
 
   /** Open (or re-use) a draft pull request; idempotent on an open head/base. */
   openDraftPullRequest(input: OpenDraftPullRequestInput): Promise<OpenedPullRequest>;
-
-  /**
-   * P-APP-ENV-1: set (create/overwrite) one ACTIONS REPOSITORY SECRET on the
-   * target repo. On GitHub: read the repo's Actions public key, encrypt `value`
-   * with a libsodium sealed-box against that key, and PUT the encrypted value +
-   * its `key_id`. The plaintext `value` NEVER leaves the encrypted payload — it
-   * is never logged, returned, or emitted. Idempotent (create or replace).
-   */
-  setActionsSecret(input: SetActionsSecretInput): Promise<void>;
 
   /**
    * Track B (no-Actions doctrine): publish a Tanren-NATIVE check-run for `headSha`

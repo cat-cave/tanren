@@ -27,14 +27,6 @@ import { GovernancePutSchema, handleGovernanceGet, handleGovernancePut } from ".
 import { GreenfieldCreateSchema, handleGreenfieldCreate } from "./greenfield.js";
 import { handleProjectArchive, handleProjectUnarchive } from "./lifecycle.js";
 
-// P-APP-ENV-1: re-exported here so the feature-route mounter pulls both the
-// project CRUD routes and the app-env CI-secret propagation route from one import
-// site (keeping the mounter under its per-file dependency cap).
-export { createAppEnvCiRoutes } from "./appEnvCi.js";
-// CI-intelligence (PR2): the CI-ingest Actions-secret propagation route, re-exported
-// here for the same single-import-site reason as the app-env CI route above.
-export { createCiIngestSecretsRoutes } from "./ciIngestSecrets.js";
-
 interface ProjectRoutesOptions {
   pool: pg.Pool;
   // GREENFIELD: the deps the `/projects/greenfield` create path needs to mint the
