@@ -1,4 +1,4 @@
-// Plane-split P3: the DEFAULT (in-process, direct-DB) run-state writer. Performs
+// The DEFAULT (in-process, direct-DB) run-state writer. Performs
 // the EXACT writes the worker has always done — the `PgEventStore` INSERT, the
 // `CostRecorder.record` INSERT, and the run-finalize `UPDATE runs` — under the
 // worker's per-job org scope, on the worker's own (`tanren_app`) pool.
@@ -7,8 +7,8 @@
 // every write through the per-job org-scoped short transaction (R3a-worker), and
 // the finalize runs its UPDATE + the matching `run.*` event in ONE org-scoped
 // transaction (the `withRunFinalizeScope` behavior). Selecting this writer (the
-// default, no flag) keeps the data plane writing tenant tables directly — so P3
-// is fully REVERSIBLE: flipping the flag off restores the pre-P3 write path.
+// default, no flag) keeps the data plane writing tenant tables directly — so the cutover
+// is fully REVERSIBLE: flipping the flag off restores the direct write path.
 
 import { getJobOrgId, runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
@@ -109,7 +109,7 @@ export class DirectRunStateWriter implements RunStateWriter {
     });
   }
 
-  // --- Plane-split P3c: the run/spec/task lifecycle writes. ---
+  // --- the run/spec/task lifecycle writes. ---
   //
   // The run/spec ops carry an explicit org, so they open their OWN
   // `runWithOrgScope(orgId)` (like `finalizeRun`). The task ops resolve org from

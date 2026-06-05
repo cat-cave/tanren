@@ -1,4 +1,4 @@
-// VercelDeployProvisioner (P-INT-4) — `IntegrationProvisioner` for provider kind
+// VercelDeployProvisioner — `IntegrationProvisioner` for provider kind
 // `deploy.vercel`. Creates/finds a Vercel PROJECT under the org's team grant so
 // the built product can be deployed, and captures the preview-URL pattern + a
 // deployment ref. All HTTP goes through the injectable `DeployHttpTransport`, so

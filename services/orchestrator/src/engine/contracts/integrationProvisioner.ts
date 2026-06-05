@@ -1,9 +1,9 @@
-// The IntegrationProvisioner port (P-INT-0, the keystone of Plane A): one
+// The IntegrationProvisioner port (the keystone of Plane A): one
 // contract every project-INTEGRATION provider implements, behind a registry, with
 // a conformance suite — exactly the shape `Allocator` / `VcsProvider` /
 // `SecretStore` already have. NO provider impl lives here: this wave proves the
 // SEAM with an in-memory fake (under tests/) only; the concrete providers land in
-// the next wave (P-INT-1+).
+// later provider waves.
 //
 // SCOPE — what this port IS and IS NOT:
 //   - IS: project-INTEGRATION providers (sentry | slack | linear | jira |
@@ -14,7 +14,7 @@
 //     `deployRef` (→ deploy metadata). Sentry/Slack/Deploy fit these cleanly:
 //     Sentry → projectConfig + secretRefs(DSN) + inboxSource; Slack →
 //     notificationTarget + secretRefs; Deploy → deployRef + secretRefs.
-//   - IS NOT: cloud-ALLOCATOR provisioning (P-INT-5: Hetzner/DO/AWS/GCP/K8s). A
+//   - IS NOT: cloud-ALLOCATOR provisioning (Hetzner/DO/AWS/GCP/K8s). A
 //     cloud allocator yields a per-run SSH key pair + a pinned host-key fingerprint
 //     + cloud-init / runner labels — NONE of which fit `ProvisionedArtifact`.
 //     That SSH/host-key automation is a separate extension of the EXISTING
@@ -32,7 +32,7 @@
 // two planes) and docs/roadmap/integration-provisioning.md (the build sequence).
 //
 // The registry (`buildIntegrationProvisioner`) is the single append point real
-// providers register at (P-INT-1+): each adds ONE `case` arm + its dep-slice on
+// providers register here: each adds ONE `case` arm + its dep-slice on
 // `IntegrationProvisionerDeps`, exactly like `buildVcsProvider`'s case arms.
 
 import { SentryProvisioner, type SentryProvisionerDeps } from "../providers/sentryProvisioner.js";
@@ -177,7 +177,7 @@ export function resolveSmartDefault(
  * implemented. Selecting it constructs this and any operation throws loudly — the
  * correct "unconfigured" default (failing loud is not a stand-in), exactly like
  * `UnconfiguredAllocator` / `UnconfiguredVcsProvider`. No provider is registered
- * in this foundation wave, so EVERY kind resolves to this until P-INT-1+ wire the
+ * in this foundation wave, so EVERY kind resolves to this until the providers wire the
  * real impls. The name carries no stub/fake/noop stem, so it is the CORRECT
  * unconfigured default — not a production stub.
  */
@@ -212,7 +212,7 @@ export class UnconfiguredIntegrationProvisioner implements IntegrationProvisione
  * {@link UnconfiguredIntegrationProvisioner}. A provider lands as a NEW case here
  * (+ its impl + a conformance entry), not a refactor, exactly like
  * `buildAllocator` / `buildVcsProvider`. Cloud-ALLOCATOR kinds (`allocator.*`,
- * P-INT-5) do NOT belong here — see the SCOPE note in the module header: their
+ *) do NOT belong here — see the SCOPE note in the module header: their
  * SSH/host-key automation extends the `Allocator` seam, not this port.
  */
 export type IntegrationProviderKind = string;
@@ -226,7 +226,7 @@ export type IntegrationProviderKind = string;
 export interface IntegrationProvisionerDeps {
   /** Sentry's injected `{ http: SentryProvisionHttpClient; secrets: SecretStore }`. */
   sentry?: SentryProvisionerDeps;
-  /** The HTTP transport the deploy provisioners (P-INT-4) run over (scripted fake in tests). */
+  /** The HTTP transport the deploy provisioners run over (scripted fake in tests). */
   transport?: DeployHttpTransport;
   /** The SecretStore deploy-token aliases / DSNs are written into. */
   secrets?: SecretStore;
@@ -246,11 +246,11 @@ function makeSentryProvisioner(deps: SentryProvisionerDeps | undefined): Integra
 
 /**
  * Select + construct the IntegrationProvisioner for a provider kind. Real
- * project-integration impls slot in as new `case` arms (P-INT-1+, each pulling
+ * project-integration impls slot in as new `case` arms (each pulling
  * its own slice of {@link IntegrationProvisionerDeps}) — exactly like
  * `buildAllocator` / `buildVcsProvider`; an unregistered kind resolves to the
  * hard-throw {@link UnconfiguredIntegrationProvisioner}. Cloud-ALLOCATOR kinds
- * (`allocator.*`, P-INT-5) do NOT belong here — they extend the Allocator seam.
+ * (`allocator.*`) do NOT belong here — they extend the Allocator seam.
  */
 export function buildIntegrationProvisioner(
   kind: IntegrationProviderKind,
@@ -259,7 +259,7 @@ export function buildIntegrationProvisioner(
   switch (kind) {
     case "sentry":
       return makeSentryProvisioner(deps.sentry);
-    // --- P-INT-4 deploy provisioners (Vercel + Fly) --------------------------
+    // --- deploy provisioners (Vercel + Fly) --------------------------
     case "deploy.vercel":
     case "deploy.flyio": {
       const transport = deps.transport ?? fetchDeployTransport();
@@ -269,13 +269,13 @@ export function buildIntegrationProvisioner(
       const deployDeps = { transport, secrets: deps.secrets };
       return kind === "deploy.vercel" ? new VercelDeployProvisioner(deployDeps) : new FlyDeployProvisioner(deployDeps);
     }
-    // P-INT-3 — Plane-A Slack `notify` provisioner (bot `chat.postMessage` model);
+    // Plane-A Slack `notify` provisioner (bot `chat.postMessage` model);
     // `buildSlackProvisioner` resolves the grant's bot-token ref against the
     // configured SecretStore.
     case "slack":
       return buildSlackProvisioner();
     // Other real impls (linear, jira) slot in here as new cases. Cloud-allocator
-    // (`allocator.*`, P-INT-5) is NOT one of these — it extends the Allocator seam
+    // (`allocator.*`) is NOT one of these — it extends the Allocator seam
     // (see the module-header SCOPE note).
     default:
       return new UnconfiguredIntegrationProvisioner(kind);

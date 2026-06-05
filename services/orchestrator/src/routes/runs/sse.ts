@@ -1,4 +1,4 @@
-// P2A-0014 SSE handler — emits status/task/event/cost frames as the run
+// SSE handler — emits status/task/event/cost frames as the run
 // progresses.
 //
 // LISTEN/NOTIFY (replaces the old fixed 1s tick): every run-state write — event

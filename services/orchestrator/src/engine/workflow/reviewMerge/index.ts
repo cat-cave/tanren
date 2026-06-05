@@ -1,4 +1,4 @@
-// P3-0008: the review→merge completion half of the run loop. Barrel export so
+// the review→merge completion half of the run loop. Barrel export so
 // plannerRun.ts (and tests) import the stages + their types from one place.
 
 export {

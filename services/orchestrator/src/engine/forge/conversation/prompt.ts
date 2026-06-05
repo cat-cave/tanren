@@ -1,4 +1,4 @@
-// P3-0010: prompt construction for the thick-Forge conversation answerer.
+// prompt construction for the thick-Forge conversation answerer.
 //
 // Turns the structured conversation context (operator question + audience-
 // filtered thread history + read-tool results) into the single text prompt the

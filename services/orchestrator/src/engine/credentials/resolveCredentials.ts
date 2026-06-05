@@ -1,4 +1,4 @@
-// P3-0002: credential→project→run resolution.
+// credential→project→run resolution.
 //
 // A run needs a Codex credential ref (to build the four Codex roles) and a
 // GitHub credential ref (to publish the draft PR + poll CI). A caller may pass

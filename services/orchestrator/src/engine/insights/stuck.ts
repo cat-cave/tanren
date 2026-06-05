@@ -1,4 +1,4 @@
-// P3-0020 `stuck` compute. Derives from the P2A-0018 spec-dependency graph
+// `stuck` compute. Derives from the spec-dependency graph
 // (`spec_dependencies` directed edges: `from_spec_id` depends on
 // `to_spec_id`). A spec is "stuck" when it is itself not yet finished and at
 // least one of its declared dependencies is not finished either, so the chain
@@ -12,7 +12,7 @@
 // dependency.
 //
 // Reported from existing rows only — no migration to the source data (the
-// only schema change in P3-0020 is widening the `workflow_insights.kind`
+// only schema change in is widening the `workflow_insights.kind`
 // cache CHECK; see `db/src/schemaInsights.ts`).
 
 import type pg from "pg";

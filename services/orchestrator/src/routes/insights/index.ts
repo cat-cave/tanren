@@ -1,4 +1,4 @@
-// P2A-0020 HTTP routes for workflow insights.
+// HTTP routes for workflow insights.
 //
 // `GET /orgs/:orgId/projects/:projectId/insights` returns the read-through
 // cache for every supported kind. The handler enforces the same project

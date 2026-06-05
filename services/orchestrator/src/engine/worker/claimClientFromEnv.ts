@@ -1,17 +1,17 @@
-// Plane-split P2: resolve the worker's job-CLAIM client from the environment.
+// Resolve the worker's job-CLAIM client from the environment.
 //
 //   - When the control-plane claim endpoint is configured
 //     (TANREN_CLAIM_ENDPOINT_URL + the data-plane's mTLS cert env), the worker
 //     claims over the mTLS endpoint — an `HttpJobClaimClient` on a
 //     `buildNodeMtlsFetch` channel. The data plane no longer touches `job_queue`
-//     to claim (the DB-surface shrink P2 delivers).
+//     to claim (the DB-surface shrink the control-plane claim delivers).
 //   - Otherwise → `undefined`, so the worker falls back to the in-process
 //     `DirectJobClaimClient` (the unchanged DB-CAS). The single-process
 //     `TANREN_RUN_WORKER=1` dev path always lands here — it shares the API pool,
 //     so a network claim hop would add risk for no isolation gain.
 //
 // CLAIM SEMANTICS ARE IDENTICAL either way: the endpoint wraps the SAME
-// `JobQueue.claim`. See docs/roadmap/saas-rls-and-plane-split-plan.md (P2).
+// `JobQueue.claim`. See docs/roadmap/saas-rls-and-plane-split-plan.md.
 
 import { HttpJobClaimClient, type JobClaimClient } from "../contracts/jobClaim.js";
 import { buildNodeMtlsFetch, type MtlsCertPaths } from "../contracts/mtlsChannelNode.js";

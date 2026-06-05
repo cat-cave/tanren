@@ -1,4 +1,4 @@
-// P2A-0012: cost-recording helpers for the planner-feedback loop. Extracted
+// cost-recording helpers for the planner-feedback loop. Extracted
 // out of subtaskLoop.ts so the orchestration file stays under the 500-line
 // architecture cap. Every Answerer/Writer call in the loop runs through these
 // helpers. Token accounting is mandatory; cost is best-effort (NULL when

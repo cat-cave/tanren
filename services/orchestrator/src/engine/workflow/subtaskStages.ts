@@ -1,4 +1,4 @@
-// P2A-0012: per-call stage functions for the planner-feedback loop. Each
+// per-call stage functions for the planner-feedback loop. Each
 // stage owns a single planner / writer / checker / auditor invocation
 // (event append, cost record, task-row update). The orchestrator in
 // subtaskLoop.ts sequences these stages; this file holds the inner detail
@@ -56,7 +56,7 @@ export async function runPlannerStage(args: PlannerStageInput): Promise<PlanAnsw
     rejectionHistory: args.rejectionHistory,
   });
   const runtimeSeconds = secondsSince(startedAt);
-  // P3-0029: stage-transition latency as a structured timing log (no schema).
+  // stage-transition latency as a structured timing log (no schema).
   emitStageTiming("plan", Date.now() - startedAt, { runId: args.runId, attempt: args.attempt });
   await args.appendEvent(
     "planner.subtasks.emitted",
@@ -90,7 +90,7 @@ export async function runPlannerStage(args: PlannerStageInput): Promise<PlanAnsw
 
 export interface WriterStageInput {
   pool: LoopQueryClient;
-  /** Plane-split P3c: route the writer task INSERT/UPDATE remote when wired. */
+  /** route the writer task INSERT/UPDATE remote when wired. */
   writer?: RunStateWriter;
   costCtx: SubtaskCostContext;
   adapter: WriterAdapter;
@@ -256,7 +256,7 @@ async function emitWriterSubtaskFailed(args: WriterStageInput, failureKind: stri
 
 export interface CheckerStageInput {
   pool: LoopQueryClient;
-  /** Plane-split P3c: route the checker task INSERT/UPDATE remote when wired. */
+  /** route the checker task INSERT/UPDATE remote when wired. */
   writer?: RunStateWriter;
   costCtx: SubtaskCostContext;
   adapter: AnswererAdapter<CheckAnswer>;
@@ -380,7 +380,7 @@ export async function runCheckerStage(args: CheckerStageInput): Promise<CheckerD
 
 export interface AuditorStageInput {
   pool: LoopQueryClient;
-  /** Plane-split P3c: route the auditor task INSERT/UPDATE remote when wired. */
+  /** route the auditor task INSERT/UPDATE remote when wired. */
   writer?: RunStateWriter;
   costCtx: SubtaskCostContext;
   adapter: AnswererAdapter<AuditAnswer>;

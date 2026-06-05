@@ -1,4 +1,4 @@
-// P3-0005 in-loop deterministic gate-check stage. This is the automation half
+// in-loop deterministic gate-check stage. This is the automation half
 // of the verification split: it runs a CI tier's shell steps over SSH in the
 // bootstrapped runner workspace and judges pass/fail PURELY from exit codes.
 // There is no Answerer / model here — correctness is exit codes only. The
@@ -63,7 +63,7 @@ export interface RunGateTierInput {
   // event), but it does NOT short-circuit the tier or fail the gate. Empty (the
   // default, every non-lenient posture) ⇒ every step blocks, behavior unchanged.
   advisoryStepNames?: ReadonlySet<string>;
-  // Plane B (P-APP-ENV-0): the PROJECT's dev+test app env, materialized into the
+  // Plane B: the PROJECT's dev+test app env, materialized into the
   // EXECUTED command's environment (the building agent's test/dev commands need
   // it). Prepended ONLY to the command handed to the substrate — the emitted
   // gate.* `step.run` stays the ORIGINAL command, so no secret value reaches the

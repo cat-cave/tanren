@@ -62,7 +62,7 @@ async function vaultHealth() {
 export async function createApp() {
   const pool = getProductionPool();
   await runMigrationsAsOwner();
-  // P2B: the secret-store backend is selected by TANREN_SECRET_STORE
+  // The secret-store backend is selected by TANREN_SECRET_STORE
   // (default `vault`, so existing deployments are unchanged). See
   // engine/contracts/secretStoreFactory.ts.
   const runnerSecrets = buildSecretStore();
@@ -71,7 +71,7 @@ export async function createApp() {
     pool,
     secrets: runnerSecrets,
     auth: buildAuthFromEnv(pool, port),
-    // P3-0029: wrap the SSH substrate so every runner command emits a boundary
+    // wrap the SSH substrate so every runner command emits a boundary
     // timing record. Behavior is unchanged; this only measures. The per-run
     // draft-PR route pushes the runner workspace branch over this substrate.
     ssh: new TimedCommandSubstrate(new SshCommandSubstrate(runnerSecrets)),
@@ -97,17 +97,17 @@ export function buildApp(input: {
     throw new Error("buildApp requires an explicit SecretStore (set TANREN_SECRET_STORE; tests inject a memory store)");
   }
   const secrets = input.secrets;
-  // P3-0029: wrap the GitHub HTTP client so every API round trip emits a
+  // wrap the GitHub HTTP client so every API round trip emits a
   // boundary timing record (with method, path template, status, 429 flag).
   const githubHttp = new TimedGitHubHttpClient(input.githubHttp ?? new FetchGitHubHttpClient());
-  // P2·0: the run/merge lifecycle's VCS/CI operations route through the
+  // The run/merge lifecycle's VCS/CI operations route through the
   // VcsProvider seam (the registry default is the real GitHub impl, composing
   // `githubHttp`). The forge-recon / config-gate / notifications GitHub code
   // keeps using `githubHttp` directly — only the run+merge path uses the seam.
   const vcsProvider = buildVcsProvider(githubHttp);
   const identitySecretRef = input.runnerIdentitySecretRef ?? runnerIdentitySecretRef;
   const vaultHealthCheck = input.vaultHealthCheck ?? vaultHealth;
-  // P3-0003: one shared minter so installation-token caching spans routes.
+  // one shared minter so installation-token caching spans routes.
   const githubAppMinter = new GithubAppTokenMinter({ secrets });
 
   if (input.auth !== undefined) {
@@ -139,7 +139,7 @@ export function buildApp(input: {
   // an orchestrator restart.
   const credentialRegistry = input.credentialRegistry ?? new SecretStoreCredentialRegistry(secrets);
 
-  // P3-0017: audit-gate GitHub port factory. Mints the org's App token (or the
+  // audit-gate GitHub port factory. Mints the org's App token (or the
   // static fallback) so a Bucket-B write opens a PR in `tanren-config`. Injectable.
   const configGateGithub: ConfigGateGithubFactory = async (orgId) => {
     const installation = await loadOrgGithubAppInstallation(input.pool, orgId);
@@ -264,11 +264,11 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const app = await createApp();
   serve({ fetch: app.fetch, port });
   console.log(`orchestrator listening on :${port}`);
-  // Plane-split P2: the control-plane INTERNAL mTLS listener (separate HTTPS
+  // The control-plane INTERNAL mTLS listener (separate HTTPS
   // server) serving `/internal/claim-job` — the same atomic CAS, transport
   // behind mTLS. Starts only when TANREN_INTERNAL_TLS_* are set (see internalServer.ts).
   startInternalMtlsServer({ pool: getProductionPool() });
-  // P3-0001 / plane-split P1: the run worker dequeues `plan` jobs. It is now a
+  // The run worker dequeues `plan` jobs. It is now a
   // STANDALONE deployable (`worker-main.ts`, the `worker` service); the API runs
   // it in-process ONLY as a single-process dev convenience (TANREN_RUN_WORKER=1),
   // sharing the same `bootRunWorker` construction as the standalone entrypoint.

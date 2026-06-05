@@ -34,7 +34,7 @@ export interface CiInsightsLoopDeps {
    * privileged pool), exactly as `DeployOnMergeWatcher` does it.
    */
   runStateWriter?: RunStateWriter;
-  /** Per-org/project threshold overrides (Phase 3 makes these configurable). */
+  /** Per-org/project threshold overrides. */
   thresholds?: Partial<InsightThresholds>;
   /**
    * The GENERATIVE arm (PR3). When BOTH are wired the loop also emits one

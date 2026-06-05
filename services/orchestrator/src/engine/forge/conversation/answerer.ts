@@ -1,8 +1,8 @@
-// P3-0010: the conversation answerer implementations.
+// the conversation answerer implementations.
 //
 //   - `ForgeAnswererStepSchema`   — the strict JSON contract the provider
 //     returns each step (request read tools OR finalize a ForgeAnswer).
-//   - `wrapProviderAnswerer`      — adapts a P3-0012 AnswererAdapter (Claude /
+//   - `wrapProviderAnswerer`      — adapts a AnswererAdapter (Claude /
 //     Codex, resolved via adapterSelector) into a ForgeConversationAnswerer.
 //
 // The scripted fake answerer lives under tests/fixtures (P1c §8a) — it is a

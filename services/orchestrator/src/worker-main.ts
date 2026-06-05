@@ -1,4 +1,4 @@
-// Plane-split P1: the standalone run-executor worker entrypoint — the DATA
+// The standalone run-executor worker entrypoint — the DATA
 // PLANE container. It boots ONLY the worker loop in its own process: builds the
 // runtime (`tanren_app`) + system (`tanren_system`) pools exactly like the API,
 // claims jobs from `job_queue` (unchanged DB-CAS), and runs the
@@ -6,11 +6,11 @@
 // (`main.ts`) no longer runs the worker in-process by default; this container is
 // the data plane.
 //
-// P1 is a PROCESS-BOUNDARY change only — no trust change. The worker still holds
-// the same DB + Vault access the in-process worker did and claims directly from
-// `job_queue`. P2 adds mTLS + routes the claim/writes through a control-plane
-// API (shrinking the data plane's DB surface); P3 de-privileges to per-run
-// scoped credentials. See docs/roadmap/saas-rls-and-plane-split-plan.md.
+// The split is configurable in layers: a bare process boundary (the worker
+// holds the same DB + Vault access and claims directly from `job_queue`); mTLS
+// routing of the claim + writes through a control-plane API (shrinking the data
+// plane's DB surface); and per-run scoped credentials (the full de-privilege).
+// See docs/roadmap/saas-rls-and-plane-split-plan.md.
 //
 // Does NOT migrate: the API owns the migrate step (this container `depends_on`
 // it in compose). SIGTERM/SIGINT graceful drain is installed by

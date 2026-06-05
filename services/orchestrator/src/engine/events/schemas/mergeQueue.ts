@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { MergeIntegrationMode } from "./integrations.js";
 
-// P2d (autonomy-engine.md §2d): the native intelligent merge queue. Under
+// autonomy-engine.md §2d: the native intelligent merge queue. Under
 // `native_queue`, a ready-to-merge run ENTERS Tanren's own queue instead of
 // merging immediately; the MergeCoordinator then orders ready runs in DAG order
 // (ancestor before dependent, priority within a layer) and SERIALIZES their merges
@@ -41,7 +41,7 @@ export const MergeDequeuedPayload = z
     specId: z.string(),
     /**
      * Why the entry was dequeued without merging:
-     *   - `conflict`  — the merge hit a real conflict and was routed to the P2b
+     *   - `conflict`  — the merge hit a real conflict and was routed to the conflict resolver
      *                   resolver / recoverable hold (re-queued on the next signal).
      *   - `blocked`   — a governance/posture or speculative hold removed it from the
      *                   head so independent later items can proceed (re-queued later).
@@ -90,7 +90,7 @@ export const MergeQueueInfraBlockedPayload = z
   })
   .strict();
 
-// P2d-2 (autonomy-engine.md §2d — speculative batch-check + bisect): the
+// autonomy-engine.md §2d — speculative batch-check + bisect: the
 // intelligence layer ON TOP OF the native queue. The coordinator forms a BATCH of
 // mutually-eligible entries, speculatively integrates `default_branch + batch PRs`,
 // and CI-checks that PROSPECTIVE merged state BEFORE any real merge — catching a bad

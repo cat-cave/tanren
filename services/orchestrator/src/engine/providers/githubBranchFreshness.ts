@@ -1,9 +1,9 @@
-// P2a up-to-date enforcement: parse a GitHub PR-detail body into the branch
+// up-to-date enforcement: parse a GitHub PR-detail body into the branch
 // freshness snapshot the merge stage gates on. Kept separate from
 // githubReviewMerge.ts so that file stays under the 500-line architecture cap.
 
 /**
- * P2a: GitHub's PR mergeability snapshot. `mergeableState` is the raw
+ * GitHub's PR mergeability snapshot. `mergeableState` is the raw
  * `mergeable_state` string (`clean` / `behind` / `dirty` / `blocked` /
  * `unknown` / `unstable` / `draft`); `behind` is the derived boolean the
  * up-to-date check gates on. `baseBranch` / `headBranch` name the refs.
@@ -15,13 +15,13 @@ export interface GitHubMergeabilityResult {
   headBranch: string;
 }
 
-/** P2a: the outcome of GitHub's update-branch (server-side rebase-onto-base). */
+/** the outcome of GitHub's update-branch (server-side rebase-onto-base). */
 export interface GitHubUpdateBranchResult {
   outcome: "updated" | "up_to_date" | "conflict";
   message: string;
 }
 
-/** Parse a GitHub PR detail body into the P2a mergeability snapshot. */
+/** Parse a GitHub PR detail body into the mergeability snapshot. */
 export function parseMergeability(value: unknown): GitHubMergeabilityResult {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new TypeError("GitHub PR response was not an object");

@@ -33,7 +33,7 @@ function requireEnv(name: string): string {
 
 function buildStatic(runners: RunnerStore): StaticRunnerAllocator {
   // Dev-only: route to the long-lived dev compose static runner. Preserves the
-  // P2A-0010 security boundary (no docker socket on orchestrator) while keeping
+  // security boundary (no docker socket on orchestrator) while keeping
   // `just smoke` working. See docs/operator-guide/runners.md.
   return new StaticRunnerAllocator({
     host: env("TANREN_RUNNER_SSH_HOST") ?? "runner",

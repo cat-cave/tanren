@@ -1,4 +1,4 @@
-// P3-0022 candidate-inbox HTTP routes.
+// candidate-inbox HTTP routes.
 //
 //   GET  /:orgId/inbox                       → { sources, candidates }
 //   POST /:orgId/inbox/sources               create a configurable source
@@ -9,7 +9,7 @@
 //   POST /:orgId/inbox/candidates/:id/close-duplicate
 //
 // The GitHub Issues connector is wired from the injected `secrets` + `githubHttp`
-// (the same deps the rest of P3 uses); the triage answerer is resolved per-ingest
+// (the same deps the rest of the inbox uses); the triage answerer is resolved per-ingest
 // from the source's org/project via `answererFactory(target)` — production wires
 // a REAL provider answerer (`buildForgeTriageAnswererFactory`), tests a fake.
 // There is no deterministic fallback (§8a). Mounted on the shared `/orgs` base.

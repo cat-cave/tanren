@@ -7,7 +7,7 @@
 //   - SpecRunDagEnqueuer: createQueuedRunFromSpec under a platform-admin actor
 //     carrying the project's org (the atomic pending→active claim is the
 //     idempotency boundary). A speculative start threads the dynamic base + skips
-//     the done-only dependency gate (P2c-1).
+//     the done-only dependency gate.
 //   - PgDagEventEmitter: writes dag.spec.enqueued / dag.spec.speculative /
 //     dag.spec.speculation_held / dag.drained / dag.budget.paused (the GENUINE
 //     dollar-budget pause) / dag.concurrency.saturated (the slot-saturation hold)
@@ -185,7 +185,7 @@ export class SpecRunDagEnqueuer implements DagEnqueuer {
       trigger: "dag_walker",
       // A speculative start skips the done-only dependency gate and records the
       // integration branch as the run's dynamic base + the per-ancestor head SHA
-      // map (the change-percolation divergence key, P2c-2).
+      // map (the change-percolation divergence key).
       ...(input.speculativeBase !== undefined && {
         speculative: {
           speculativeBase: input.speculativeBase,

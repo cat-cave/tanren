@@ -71,7 +71,7 @@ export interface RecordedCost {
 }
 
 /**
- * Plane-split P3: a persistence override for {@link CostRecorder.record}. When
+ * A persistence override for {@link CostRecorder.record}. When
  * supplied, `record` delegates the cost_records INSERT (+ its `cost.resolved`
  * event) to this function instead of writing in-process — so the run worker can
  * route the cost write through the control-plane endpoint (`HttpRunStateWriter`)
@@ -85,7 +85,7 @@ export type CostPersist = (input: {
 }) => Promise<RecordedCost>;
 
 /**
- * Plane-split P3c: a reconcile override for the recorder's run-end
+ * a reconcile override for the recorder's run-end
  * apportion/back-fill. When supplied, `reconcileRunCostFromCcusage` /
  * `reconcileRunCostFromCredits` delegate the apportioning `cost_records`
  * SELECT+UPDATEs (which the data plane may no longer perform directly —
@@ -105,11 +105,11 @@ export class CostRecorder {
   constructor(
     private readonly pool: RecorderClient,
     private readonly eventStore: EventStore,
-    // Plane-split P3: optional remote-write delegate. When set, `record` routes
+    // Optional remote-write delegate. When set, `record` routes
     // the persist through it (the control-plane endpoint) rather than the
     // in-process INSERT below.
     private readonly persist?: CostPersist,
-    // Plane-split P3c: optional remote-reconcile delegate. When set, the run-end
+    // optional remote-reconcile delegate. When set, the run-end
     // apportion/back-fill (`reconcileRunCost*`) routes its cost_records
     // SELECT+UPDATEs through the control-plane endpoint rather than this.pool —
     // closing the de-privilege gap where the data plane can no longer UPDATE
@@ -130,7 +130,7 @@ export class CostRecorder {
     tokens: TokenUsage,
     rawUsage: Record<string, unknown>,
   ): Promise<RecordedCost> {
-    // Plane-split P3: when a remote-write delegate is wired, the cost_records
+    // When a remote-write delegate is wired, the cost_records
     // INSERT + its cost.resolved event run server-side (control plane), so the
     // data plane writes no tenant rows directly. Same shape, same return value.
     if (this.persist !== undefined) {
@@ -278,7 +278,7 @@ export class CostRecorder {
   }
 
   // applyReconcile is the SERVER-SIDE entry point for the control-plane
-  // reconcile endpoint (plane-split P3c): the worker has already resolved the
+  // reconcile endpoint (the plane split): the worker has already resolved the
   // run-level total + basis (the credit/ccusage precedence ran data-plane-side),
   // so this just performs the in-process apportion under the run's org scope. It
   // NEVER delegates (the endpoint constructs a delegate-free recorder), so it is
@@ -301,7 +301,7 @@ export class CostRecorder {
     if (!(Number.isFinite(totalCostUsd) && totalCostUsd > 0)) {
       return { updated: 0 };
     }
-    // Plane-split P3c: when a remote-reconcile delegate is wired, the apportioning
+    // when a remote-reconcile delegate is wired, the apportioning
     // SELECT + per-row UPDATEs run server-side (control plane), so the
     // de-privileged data plane never UPDATEs cost_records directly. The dollar
     // total + basis are already resolved above; only the write moves.

@@ -1,4 +1,4 @@
-// Plane-split P3b: the LIVE de-privilege negative proof, extracted from
+// the LIVE de-privilege negative proof, extracted from
 // plane-split-worker.ts (file-size cap). Connects to the running stack as the
 // de-privileged `tanren_dataplane` role (the SAME role the `worker` container now
 // connects as after the cutover) and attempts a direct, correctly-org-scoped

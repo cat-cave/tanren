@@ -1,6 +1,6 @@
-// The non-merged drive-outcome SETTLE mapping for the P2d-2 BatchMergeCoordinator,
+// The non-merged drive-outcome SETTLE mapping for the BatchMergeCoordinator,
 // split from `batchCoordinator.ts` to keep that file under the 500-line cap. It is the
-// SAME settle policy the P2d-1 EventEmittingMergeCoordinator applies, so the two
+// SAME settle policy the EventEmittingMergeCoordinator applies, so the two
 // coordinators can never diverge on how a real-merge outcome leaves the queue:
 //   - `needs_attention` → the NON-BRICKING conflict escalation (§2c): PARK the spec at
 //     `needs_attention` (frees its slot) via the shared `SpecEscalator`, then dequeue
@@ -117,7 +117,7 @@ export async function driveBaseConflict(
   return { projectId, queueDepth, dequeuedSpecId: culprit.specId };
 }
 
-/** Drive ONE entry's real merge through the P2d-1 path; a thrown drive ⇒ recoverable blocked. */
+/** Drive ONE entry's real merge through the native-queue path; a thrown drive ⇒ recoverable blocked. */
 async function driveOneEntry(
   deps: BatchBaseConflictDeps,
   projectId: string,

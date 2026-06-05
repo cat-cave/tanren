@@ -1,7 +1,7 @@
 import type { NotificationPayload, NotificationTargetRow } from "../schemas.js";
 import type { NotificationChannel } from "./types.js";
 
-// P2A-0017 ntfy channel — the only channel kind wired in v0.
+// ntfy channel — the only channel kind wired in v0.
 //
 // Target shape:
 //   - `destination` is either a full ntfy topic URL (`https://ntfy.example/foo`)

@@ -255,7 +255,7 @@ export const CostOverageUnobservablePayload = z
   })
   .strict();
 
-// Usage monitoring (P2A-cost-monitors): codexbar (live subscription windows)
+// Usage monitoring: codexbar (live subscription windows)
 // and ccusage (token-consumption accounting), captured in the runner over SSH.
 
 // One concurrent rolling subscription window, mirroring the codexbar shape.

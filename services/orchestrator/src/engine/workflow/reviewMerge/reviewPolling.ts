@@ -1,11 +1,11 @@
-// P3-0008: the review-polling stage. Runs AFTER CI passes (additive to the
+// the review-polling stage. Runs AFTER CI passes (additive to the
 // planner-run tail). It marks the draft PR ready-for-review, emits
 // review.requested, then polls the PR's review verdict. On approval it returns
 // `approved` so the caller proceeds to the merge stage; on changes_requested it
 // emits review.changes_requested (carrying the reviewer feedback as steering
 // for the writer-rework re-entry) and returns `changes_requested`.
 //
-// All GitHub calls go through the P3-0003 resolver/client (App-or-static,
+// All GitHub calls go through the resolver/client (App-or-static,
 // 401-retry). The poll function is injectable so tests never hit real GitHub.
 
 import type { ReviewAnswer } from "../../answerers/schemas/index.js";
@@ -37,7 +37,7 @@ import {
 export interface PollReviewForRunInput {
   pool: RunStateClient;
   eventStore?: EventStore;
-  // Plane-split P3c: route the review task INSERT/UPDATE through the control plane
+  // route the review task INSERT/UPDATE through the control plane
   // when wired (remote-writes on); absent, the in-process org-scoped write runs.
   runStateWriter?: RunStateWriter;
   secrets: SecretStore;

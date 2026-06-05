@@ -1,6 +1,6 @@
-// P-APP-ENV-2 — attach a project's RUNTIME-scoped app env to the DEPLOYED app.
+// attach a project's RUNTIME-scoped app env to the DEPLOYED app.
 //
-// The clean engine entrypoint that fills the `envAttachmentRef` seam P-INT-4 left
+// The clean engine entrypoint that fills the `envAttachmentRef` seam left
 // on the deploy artifact: when a project has a deploy artifact (the `deployRef` in
 // its `projects.config`), resolve its runtime-scoped `project_app_env` (secret
 // values from the SecretStore) and `setEnvVars` them onto the deployed app via the
@@ -36,7 +36,7 @@ import type { DeployHttpTransport } from "../provisioners/deployTransport.js";
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
 /**
- * The `deployRef` the deploy provisioner (P-INT-4) wrote into `projects.config`:
+ * The `deployRef` the deploy provisioner wrote into `projects.config`:
  * the provider kind + the deployed app/project id. The attach flow reads it to
  * know WHICH provider + WHICH app to attach the runtime env onto.
  */
@@ -58,7 +58,7 @@ export interface AttachRuntimeAppEnvInput {
   projectId: string;
   /** The project's org (resolves the deploy org grant from org_integrations). */
   orgId: string;
-  /** The deploy artifact ref from the project's config (P-INT-4's deployRef). */
+  /** The deploy artifact ref from the project's config (the deployRef). */
   deployRef: DeployArtifactRef;
   actor: ActorRef;
 }

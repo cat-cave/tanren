@@ -1,4 +1,4 @@
-// Plane-split P3c: the control-plane RUN/SPEC/TASK LIFECYCLE write endpoints. The
+// the control-plane RUN/SPEC/TASK LIFECYCLE write endpoints. The
 // data-plane worker POSTs these over mTLS instead of writing `runs` / `specs` /
 // `tasks` directly (migration 0035 drops its remaining write grants on those
 // tables):
@@ -137,7 +137,7 @@ const updateTaskSchema = z.object({
 });
 
 /**
- * Register the P3c lifecycle write endpoints on the internal write-routes app.
+ * Register the lifecycle write endpoints on the internal write-routes app.
  * Each parses its body, authenticates the peer, and runs the shared applier under
  * the run's org scope. Returns 204 (no body) on success — the worker's seam
  * methods all return void.

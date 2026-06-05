@@ -1,4 +1,4 @@
-// P3-0028 queue lease recovery. A crashed worker leaves its claimed job
+// queue lease recovery. A crashed worker leaves its claimed job
 // `running` with a lease it can no longer renew. The reaper periodically sweeps
 // expired leases: jobs with retry budget remaining go back to `queued` (so a
 // healthy worker re-claims them), and jobs that have exhausted their bounded
@@ -7,7 +7,7 @@
 //
 // This file OWNS the recovery side of the queue (the reaper loop + dead-letter
 // event emission); the worker heartbeat that keeps a live job's lease fresh
-// lives alongside the executor. P3-0029 observability stays OUT of here.
+// lives alongside the executor. observability stays OUT of here.
 
 import { runWithJobOrgId, runWithSystemScope } from "@tanren/db";
 import type pg from "pg";

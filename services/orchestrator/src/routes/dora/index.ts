@@ -1,4 +1,4 @@
-// P3-0019 HTTP route for DORA-like delivery metrics.
+// HTTP route for DORA-like delivery metrics.
 //
 // `GET /orgs/:orgId/projects/:projectId/dora?windowDays=30` returns the four
 // reported (not targeted) DORA metrics derived from existing run/event data.

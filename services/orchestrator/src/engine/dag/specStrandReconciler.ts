@@ -16,7 +16,7 @@
 //   3. A confirmed strand that has ALREADY been re-enqueued more than the cap →
 //      escalate to `needs_attention` (terminal — frees the slot, blocks only
 //      dependents) + emit `dag.spec.needs_attention` with a DECISION-framed message
-//      (source `strand`): the autonomous self-heal exhausted its budget, so a human
+//      source `strand`: the autonomous self-heal exhausted its budget, so a human
 //      must DECIDE how to unblock the spec — framed as "can't make progress, decide",
 //      NOT "an error occurred" (the human-escalation-discipline). It does NOT
 //      re-enqueue, so the DAG can never infinite-loop on a strand (the bounded

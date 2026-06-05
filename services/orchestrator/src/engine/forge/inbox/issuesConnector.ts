@@ -4,7 +4,7 @@
 // serve every issue-tracker provider. This dispatcher reads `config.provider`
 // and routes to the matching provider connector:
 //
-//   • `github` (the default when `provider` is absent) → the P3-0022 GitHub
+//   • `github` (the default when `provider` is absent) → the GitHub
 //     Issues connector. Existing GitHub sources carry no `provider` field, so
 //     they keep working unchanged.
 //   • `linear` → the Linear GraphQL connector.

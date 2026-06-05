@@ -83,7 +83,7 @@ export const ReviewAutoApprovedPayload = z
   })
   .strict();
 
-// P3-0008 merge stage. The integration is one of the per-repo MergeIntegration
+// merge stage. The integration is one of the per-repo MergeIntegration
 // modes (native_queue / direct_merge / external_reviewer). `merge.queued`
 // fires when the PR is handed to the integration (a native-queue enqueue, a
 // direct merge attempt, or an external-reviewer hand-off); `merge.completed`
@@ -135,7 +135,7 @@ export const MergeConflictPayload = z
   })
   .strict();
 
-// P2c-1 (autonomy-engine.md §2c): a SPECULATIVE dependent's MERGE is HELD because
+// autonomy-engine.md §2c: a SPECULATIVE dependent's MERGE is HELD because
 // one or more of its ancestors are not yet genuinely merged. Its WORK proceeded
 // (it built against a speculative integration branch), but its MERGE must wait so
 // no unreviewed ancestor code reaches `main` early. The merge stage emits this
@@ -153,10 +153,10 @@ export const MergeSpeculativeHeldPayload = z
   })
   .strict();
 
-// P2c-1 (§2c step 3): a speculative dependent's ancestors have all merged, so its
+// §2c step 3: a speculative dependent's ancestors have all merged, so its
 // hold CLEARED — the merge stage re-points the dependent's PR base from its
 // ephemeral integration ref to `default_branch` (GitHub PATCH /pulls/:n { base })
-// BEFORE merging, so it lands on REAL `main` (never the integration ref). The P2a
+// BEFORE merging, so it lands on REAL `main` (never the integration ref). The up-to-date
 // auto-rebase + re-gate then brings the branch current with `default_branch`.
 export const MergeRetargetedPayload = z
   .object({
@@ -170,7 +170,7 @@ export const MergeRetargetedPayload = z
   })
   .strict();
 
-// P2c-1 (§2c cleanup): the ephemeral integration ref (`tanren/integ/<dep>`) was
+// §2c cleanup: the ephemeral integration ref (`tanren/integ/<dep>`) was
 // deleted after the dependent merged onto real `main`. Best-effort + idempotent —
 // a missing ref is still success; this records that the cleanup ran.
 export const MergeIntegrationCleanedPayload = z
@@ -183,7 +183,7 @@ export const MergeIntegrationCleanedPayload = z
   })
   .strict();
 
-// P2a up-to-date enforcement. Before merging, the stage checks the PR branch's
+// up-to-date enforcement. Before merging, the stage checks the PR branch's
 // freshness: `merge.behind` records that the branch was out of date with its
 // base (so a rebase is being driven); `merge.rebased` records that the
 // server-side update-branch advanced the branch onto base and the stage is
@@ -213,7 +213,7 @@ export const MergeRebasedPayload = z
   })
   .strict();
 
-// P2b intent-preserving conflict resolution (autonomy-engine.md §2b). On a real
+// intent-preserving conflict resolution (autonomy-engine.md §2b). On a real
 // conflict between the merging spec and what is now on the base branch, the
 // resolver makes the resolution INSPECTABLE through three events:
 //   - merge.conflict.resolving      → the resolver was invoked: which other spec
@@ -283,7 +283,7 @@ export const MergeConflictIrreconcilablePayload = z
   })
   .strict();
 
-// P2b: the routed-back-to-planner record — the durable carrier that keeps a
+// the routed-back-to-planner record — the durable carrier that keeps a
 // re-planned spec's intent ALIVE. Emitted by the replan router when an
 // irreconcilable conflict (or a failed re-gate) routes one spec back to the
 // planner with the other's change as new context. The next planner pass reads
@@ -300,7 +300,7 @@ export const MergeConflictReplanRoutedPayload = z
   })
   .strict();
 
-// P3-0023 external-push governance posture. Emitted at the merge decision when
+// external-push governance posture. Emitted at the merge decision when
 // the configured posture holds an auto-merge:
 //   strict / lenient + external → mode "operator_approval" (lenient mirrors strict)
 //   audit_only + external change → mode "audit_only" (observed, never merged)
@@ -393,7 +393,7 @@ export const HelloCompletedPayload = z
   })
   .strict();
 
-// Plane B app-environment (P-APP-ENV-2): the project's RUNTIME-scoped app env was
+// Plane B app-environment: the project's RUNTIME-scoped app env was
 // attached to the DEPLOYED app (Vercel/Fly) as its environment. The deploy is an
 // external integration the built product runs on, so the event lives here.
 //

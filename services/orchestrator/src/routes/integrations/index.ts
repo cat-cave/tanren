@@ -1,4 +1,4 @@
-// P-INT-2: the capability-driven onboarding HTTP surface (orchestrator side).
+// the capability-driven onboarding HTTP surface (orchestrator side).
 //
 //   POST /:orgId/projects/:projectId/integrations/provision
 //     Body: { capability, providerKind?, mode, chosenResourceId?, stack?, name? }.

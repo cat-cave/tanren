@@ -13,7 +13,7 @@
 // Pool/role: the lateral join READS the `events` table, which the de-privileged
 // data-plane role (`tanren_dataplane`) has ZERO grants on — migration 0031
 // `REVOKE ALL ON TABLE events` (the data plane writes events through the control
-// plane and was assumed to never read them; the P2c-1 lifecycle read landed
+// plane and was assumed to never read them; the lifecycle read landed
 // after). So this read runs on `getSystemPool() ?? this.pool` — the BYPASSRLS
 // `tanren_system` role (which keeps SELECT on `events`) when a system URL is
 // configured, exactly as `walker.ts` does for project listing. The org scope is

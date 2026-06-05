@@ -1,12 +1,12 @@
-// P2A-0019: Forge write actions. These are the operator-button-driven CTAs
+// Forge write actions. These are the operator-button-driven CTAs
 // the hi-fi shows in attention items and prompts (`open new spec`,
 // `trigger run`, `rerun task`, `acknowledge insight`). In v0 they are
 // invoked by the dashboard on the operator's behalf — there is no LLM
-// caller — so authz is the same as the underlying P2A-0013 routes.
+// caller — so authz is the same as the underlying routes.
 //
 // The implementations are thin wrappers over the workflow functions; they
-// exist as a discrete surface so the future LLM (Phase 3) calls one stable
-// shape regardless of whether the underlying engine path moves.
+// exist as a discrete surface so the LLM author calls one stable shape
+// regardless of whether the underlying engine path moves.
 
 import type pg from "pg";
 import type { ActorContext } from "../../../auth/schemas.js";
@@ -72,7 +72,7 @@ export async function tanrenCreateSpec(
       // the LLM is not expected to author criteria. The dashboard's
       // operator-button forms the criteria array; when omitted we use a
       // sensible single-criterion placeholder so the spec is still
-      // runnable. Phase 3 will tighten this contract.
+      // runnable. A later pass can tighten this contract.
       acceptanceCriteria: args.acceptanceCriteria ?? ["Define acceptance criteria"],
     },
     actor,
@@ -109,8 +109,8 @@ export async function tanrenTriggerRun(
 
 // ---------------------------------------------------------------------------
 // `tanren.rerun_task` — v0 rerun queues a fresh run for the same spec. The
-// "rerun a specific task in-place" semantic is a Phase 3 affordance that
-// requires the planner-feedback loop changes from P2A-0012. We surface the
+// "rerun a specific task in-place" semantic is a later affordance that
+// requires the planner-feedback loop changes. We surface the
 // stable tool shape now so the dashboard can call it; the underlying
 // implementation will tighten without changing the tool contract.
 // ---------------------------------------------------------------------------
@@ -129,8 +129,8 @@ export async function tanrenRerunTask(
 }
 
 // ---------------------------------------------------------------------------
-// `tanren.acknowledge_insight` — writes through to the P2A-0020 cache table.
-// A second in-memory mirror is kept so dashboards (and the legacy P2A-0019
+// `tanren.acknowledge_insight` — writes through to the cache table.
+// A second in-memory mirror is kept so dashboards (and the
 // tool stub tests) that ack an insight which never made it into the cache
 // (e.g. a synthetic insight emitted by the v0 narration generator before
 // the route persists it) still see a recorded ack. The DB is the source of

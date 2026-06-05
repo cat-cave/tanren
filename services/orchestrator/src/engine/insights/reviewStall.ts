@@ -1,4 +1,4 @@
-// P3-0020 `review_stall` compute. Derives from the P3-0008 review/merge event
+// `review_stall` compute. Derives from the review/merge event
 // stream (`review.requested`, `review.changes_requested`, `review.approved`,
 // `merge.completed`). A PR is stalled when its most recent review/merge signal
 // is a `review.requested` (awaiting a verdict) or `review.changes_requested`

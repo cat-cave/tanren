@@ -1,7 +1,7 @@
 import type { ChannelKind, NotificationPayload, NotificationTargetRow } from "../schemas.js";
 import type { NotificationChannel } from "./types.js";
 
-// P2A-0017 stub channel.
+// stub channel.
 //
 // Every channel kind that has not yet shipped a real adapter (slack,
 // github_checks, teams, discord, email, twilio, pagerduty, webhook) is

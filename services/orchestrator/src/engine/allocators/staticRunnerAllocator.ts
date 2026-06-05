@@ -36,7 +36,7 @@ export interface StaticRunnerAllocatorOptions {
 
 /**
  * Allocator that hands back a fixed SSH target backed by the dev-compose
- * static runner service. This preserves the P2A-0010 security boundary
+ * static runner service. This preserves the security boundary
  * (orchestrator has no Docker socket) while keeping `just smoke` working
  * against the static `runner` container at port 22 inside the compose
  * network. Production deployments use the SidecarHttpAllocator instead.

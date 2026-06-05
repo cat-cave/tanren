@@ -139,7 +139,7 @@ const SEVERITY_OVERRIDES: Partial<Record<EventName, Severity>> = {
   // Redaction audit — info, never raised, but auditable surface.
   "redaction.raw_access": "info",
 
-  // P2B-0008 recovery lineage — operator-initiated recovery progress; info so
+  // recovery lineage — operator-initiated recovery progress; info so
   // the matrix rows default off but the records stay auditable.
   "recovery.revise_routed": "info",
   "recovery.replan_queued": "info",

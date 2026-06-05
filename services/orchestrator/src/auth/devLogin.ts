@@ -5,7 +5,7 @@ import type { IdentityClaims } from "./schemas.js";
  * DEV-ONLY sign-in escape hatch.
  *
  * Synthetic identity minted by `TANREN_DEV_LOGIN=1`. The first
- * `/auth/login?provider=local_dev` handshake runs the SAME P2A-0003 upsert path
+ * `/auth/login?provider=local_dev` handshake runs the SAME upsert path
  * as github_oauth, creating the `tanren-dev` org (admin) + dev operator user —
  * there is no parallel auth bypass.
  *

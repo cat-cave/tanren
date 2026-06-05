@@ -7,7 +7,7 @@ import { validateOpencodeAuthBundle, validateOpencodeCredentialRef } from "./ope
 import { validateCredentialRef } from "./codexAuth.js";
 import { resolveManagedOpenRouterKey } from "./managedKey.js";
 
-// P3-0012: materialize an opencode credential bundle onto the runner under a
+// materialize an opencode credential bundle onto the runner under a
 // per-run data dir, mirroring the Codex/Claude materializers. opencode reads
 // provider credentials from `auth.json` inside its data dir, located via
 // XDG_DATA_HOME, so the run's writer points XDG_DATA_HOME at this base.

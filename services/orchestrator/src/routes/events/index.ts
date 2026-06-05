@@ -1,4 +1,4 @@
-// P2A-0014: paginated events read API.
+// paginated events read API.
 //
 // The actual handler is mounted as part of `createRunRoutes` in
 // `../runs/index.ts` so the run-scoped /events path lives next to the rest

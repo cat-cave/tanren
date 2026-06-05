@@ -2,7 +2,7 @@ import type { SecretStore } from "../../contracts/secretStore.js";
 import type { NotificationPayload, NotificationTargetRow } from "../schemas.js";
 import type { NotificationChannel } from "./types.js";
 
-// P3-0024 Slack channel — second wired channel after ntfy.
+// Slack channel — second wired channel after ntfy.
 //
 // Target shape:
 //   - `destination` is a *credential ref* pointing at the Slack incoming

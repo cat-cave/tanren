@@ -1,4 +1,4 @@
-// P2A-0013: project CRUD routes scoped under an org. Project create is the
+// project CRUD routes scoped under an org. Project create is the
 // non-brownfield path (caller supplies repoUrl + name). The brownfield link
 // endpoint lives in routes/brownfield/ and reads target-repo files via the
 // org's GitHub App credentials; it never writes.

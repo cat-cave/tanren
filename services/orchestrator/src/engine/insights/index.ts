@@ -1,4 +1,4 @@
-// P2A-0020 barrel.
+// barrel.
 
 export {
   CiFlakyPayload,
@@ -31,7 +31,7 @@ export { computePaceAnomaly } from "./paceAnomaly.js";
 export { computeStuck } from "./stuck.js";
 export { computeReviewStall } from "./reviewStall.js";
 
-// P2e-1 Mergify parity (autonomy-engine.md §2d) + CI-intelligence PR2.
+// Mergify parity (autonomy-engine.md §2d) + CI-intelligence PR2.
 export {
   detectAndQuarantineFlaky,
   deriveFlakyTests,

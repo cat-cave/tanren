@@ -6,11 +6,11 @@
 //
 // The drive REUSES the merge stage — it is NOT a second merge impl. `driveMergeForQueuedRun`
 // calls `mergeForRun({ queueDrive: true })` for the claimed head run, which runs the
-// SAME directMerge logic: P2a up-to-date/auto-rebase (server-side GitHub update +
-// CI re-poll — no runner needed, it is all VcsProvider/CI calls), P2c-1 retarget,
-// then merge. A real CONFLICT (P2b) on the drive pass — where the original run's
+// SAME directMerge logic: up-to-date/auto-rebase (server-side GitHub update +
+// CI re-poll — no runner needed, it is all VcsProvider/CI calls), retarget,
+// then merge. A real CONFLICT on the drive pass — where the original run's
 // runner is gone — is now resolved by the REAL intent-preserving conflict resolver
-// (driveConflictResolve.ts): the drive PROVISIONS a short-lived runner + workspace
+// driveConflictResolve.ts: the drive PROVISIONS a short-lived runner + workspace
 // and runs the SAME resolver the in-loop direct_merge path runs, then CLASSIFIES the
 // outcome (resolved → the merge retries + lands; bounded re-plan → recoverable
 // `conflict`; genuine product clash / re-plan budget exhausted → the `needs_attention`
@@ -123,7 +123,7 @@ async function resolveRunFacts(pool: pg.Pool, runId: string): Promise<RunFacts> 
 /**
  * Build the production merge-drive closure: drive ONE queued run's merge through
  * the EXISTING `mergeForRun` path in `native_queue` DRIVE mode. Maps the
- * merge-stage outcome to the coordinator's drive outcome. Exported so the P2d-2
+ * merge-stage outcome to the coordinator's drive outcome. Exported so the batch former
  * batch-coordinator assembly (batchCoordinatorBuild.ts) reuses the SAME drive path.
  */
 export function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQueuedRun {
@@ -175,11 +175,12 @@ export function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQ
           runId,
           resolvedGithubCredentialRef: facts.githubCredentialRef,
           ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
-          // The DRIVE flag: run the SAME directMerge logic (P2a/P2b/P2c-1), labelled
-          // `native_queue`. The first run-loop pass already ENQUEUED — this is the
+          // The DRIVE flag: run the SAME directMerge logic (up-to-date/rebase +
+          // conflict-resolution + retarget), labelled `native_queue`. The first
+          // run-loop pass already ENQUEUED — this is the
           // coordinator's actual merge.
           queueDrive: true,
-          // P2b on the drive pass: the REAL intent-preserving conflict resolver. It
+          // on the drive pass: the REAL intent-preserving conflict resolver. It
           // provisions a short-lived runner (the original run's is gone), clones
           // head+base, runs the same resolver the in-loop direct_merge path runs, and
           // classifies the outcome into `verdict` (resolved → retry+land; bounded
@@ -236,11 +237,11 @@ export function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQ
     }
     switch (merge.outcome) {
       case "merged":
-        // P2d: the run-loop's first pass left the spec NON-`done` (Tanren owns the
+        // the run-loop's first pass left the spec NON-`done` (Tanren owns the
         // merge); the DRIVE pass is what actually merged, so it sets the spec
         // `merged` HERE (the merge dispatcher only finalizes the task). This is the
         // single point the ancestor's status reaches `merged` — which is exactly
-        // what unblocks its dependents in `mergedSpecIds` + the P2c-1 hold.
+        // what unblocks its dependents in `mergedSpecIds` + the merge-hold.
         await markSpecMerged(deps.pool, facts, deps.runStateWriter);
         return { kind: "merged", ...(merge.mergeSha !== undefined && { mergeSha: merge.mergeSha }) };
       case "conflict":
@@ -303,7 +304,7 @@ export function buildNativeQueueEnqueuer(pool: pg.Pool): NativeQueueEnqueuer {
   };
 }
 
-/** Assemble the production native MergeCoordinator (P2d-1: one-at-a-time DAG-ordered). */
+/** Assemble the production native MergeCoordinator (one-at-a-time DAG-ordered). */
 export function buildMergeCoordinator(deps: BuildMergeCoordinatorDeps): MergeCoordinator {
   return new EventEmittingMergeCoordinator({
     queue: new PgMergeQueueModel(deps.pool),

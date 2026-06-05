@@ -1,10 +1,10 @@
-// P3-0029 observability: a lightweight timing helper used at the
+// observability: a lightweight timing helper used at the
 // provider / SSH / GitHub adapter boundaries and at workflow stage
 // transitions. It captures wall-clock latency for an operation and emits a
 // single structured-log line per call. It deliberately does NOT persist to
 // any DB table or event type — observability here is logs + metrics + tests,
 // not schema (no migration, no new event). The queue-wait timing is owned by
-// P3-0028 and is intentionally out of scope here.
+// and is intentionally out of scope here.
 //
 // The emitted record carries only non-sensitive metadata (operation name,
 // boundary, duration, outcome, and caller-supplied attributes that the call

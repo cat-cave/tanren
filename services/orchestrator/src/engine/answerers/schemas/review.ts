@@ -7,7 +7,7 @@
 // reviewer (reviewPolicy: "simulated"). It reads the PR diff + the spec's
 // title/description/acceptance-criteria and returns a single verdict, which the
 // review stage then posts as a REAL GitHub review on the PR. It is read-only
-// (an Answerer): it never edits files, runs commands, or merges — it only
+// an Answerer: it never edits files, runs commands, or merges — it only
 // judges and explains.
 import { z } from "zod";
 

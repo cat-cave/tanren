@@ -1,9 +1,9 @@
 import type { SecretStore } from "../contracts/secretStore.js";
 import { validateCredentialRef } from "./codexAuth.js";
 
-// P3-0012: opencode CLI credential bundle. The stored secret is the JSON
+// opencode CLI credential bundle. The stored secret is the JSON
 // opencode persists for its authenticated providers (its `auth.json`). For the
-// P3-0012 expansion only the Zai GLM provider is supported, so the bundle must
+// expansion only the Zai GLM provider is supported, so the bundle must
 // carry a `zai` provider entry. (The previously-considered Wafer provider was
 // discontinued 2026-05-27 and is intentionally NOT accepted.)
 export const opencodeAuthKind = "opencode_cli_auth";

@@ -1,4 +1,4 @@
-// P2A-0015: shared utilities for `just acceptance-easy` and `just
+// shared utilities for `just acceptance-easy` and `just
 // acceptance-medium`. The acceptance gate runs locally with live Codex +
 // GitHub credentials; this module owns env loading, the persisted-state
 // assertions both tiers share, and the proof-block printer the operator
@@ -232,7 +232,7 @@ export interface AcceptanceCriteriaInput {
 // capability that is exercised when the writer's first attempt is inadequate;
 // it is proven by the loop's tests and observed opportunistically in live
 // runs, not asserted on every run. The deterministic "tests pass" signal lives
-// in post-PR CI here, and (Phase 3) in an in-loop gate-check stage.
+// in post-PR CI here, and in the in-loop gate-check stage.
 export function assertAcceptanceCriteria(input: AcceptanceCriteriaInput): void {
   const { tier, expectedOutcome, snapshot } = input;
   const failures: string[] = [];
@@ -280,8 +280,8 @@ export function assertAcceptanceCriteria(input: AcceptanceCriteriaInput): void {
 // -- proof block ----------------------------------------------------------
 
 // printProofBlock emits the structured evidence block the operator pastes
-// into ROADMAP.md as Phase 2A completion evidence. The format mirrors the
-// Phase 1 "Current live proof" sentence the spec references.
+// into ROADMAP.md as completion evidence. The format mirrors the
+// "Current live proof" sentence the spec references.
 export function printProofBlock(input: {
   tier: "easy" | "medium";
   snapshot: PersistedRunSnapshot;

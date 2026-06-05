@@ -7,8 +7,8 @@ type EventStoreClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
 // AppendEventInput is generic over the event name so the compiler enforces
 // that the payload matches the registered Zod schema for that event. The
-// constructor still accepts a bare `string` for legacy migrate-in-progress
-// callers; the runtime parser rejects unknown names and bad payload shapes.
+// constructor also accepts a bare `string` name for callers that build the
+// name dynamically; the runtime parser rejects unknown names and bad payloads.
 export type AppendEventInput<N extends EventName = EventName> = {
   // run_id / spec_id are nullable on the events table: a PROJECT-scoped event
   // (e.g. the DagWalker's `dag.drained` / `dag.budget.paused`, which describe the

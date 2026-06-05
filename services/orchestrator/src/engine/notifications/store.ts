@@ -11,7 +11,7 @@ import {
   NotificationTargetRow as NotificationTargetRowSchema,
 } from "./schemas.js";
 
-// P2A-0017 repository layer for `notification_targets` and
+// repository layer for `notification_targets` and
 // `notification_routes`, plus the dispatch log writer for the existing
 // `notifications` table (now repurposed as a dispatch ledger — see
 // docs/operator-guide/notifications.md).
@@ -165,8 +165,8 @@ function qualifiedRouteColumns(): string {
     .join(", ");
 }
 
-// Dispatch log writer. The legacy `notifications` table (P1) is now scoped
-// as a dispatch ledger: each call to publish() — successful, failed, or
+// Dispatch log writer. The `notifications` table is a dispatch ledger:
+// each call to publish() — successful, failed, or
 // stubbed — appends one row here. The dispatcher writes through this
 // helper so the audit trail is consistent regardless of channel.
 export type DispatchStatus = "sent" | "failed" | "stubbed" | "skipped";

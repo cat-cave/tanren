@@ -1,4 +1,4 @@
-// P3-0022 candidate-inbox barrel. The inbox route + tests import the typed
+// candidate-inbox barrel. The inbox route + tests import the typed
 // surface from here.
 
 export {

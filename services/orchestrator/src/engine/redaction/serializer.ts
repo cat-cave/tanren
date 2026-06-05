@@ -5,7 +5,7 @@ import { sensitivityFor } from "../events/sensitivity.js";
 import { canViewRaw, describeRequiredScope } from "./scopes.js";
 import { containsCredentialSubstring, looksLikeCredential } from "./highEntropy.js";
 
-// Central redaction serializer for P2A-0009.
+// Central redaction serializer for.
 //
 // The serializer walks an event payload using the field-path map registered
 // in `sensitivityRules.ts`, replacing each leaf the actor cannot view raw
@@ -22,7 +22,7 @@ import { containsCredentialSubstring, looksLikeCredential } from "./highEntropy.
 //      bumped to `redacted` so it is hidden from project members. The
 //      detector documents its false-positive policy.
 //
-// Marker shape (matches the P2A-0009 spec):
+// Marker shape (matches the spec):
 //   { __redacted: true, sensitivity: "redacted" | "secret", hint: "..." }
 //
 // `redactedPaths` is the flat list of json-pointer-style paths that were
@@ -188,7 +188,7 @@ const UNKNOWN_SENSITIVITY_DEFAULT: Sensitivity = "redacted";
 // isRedactionMarker is a small helper for tests and UI code that wants to
 // detect whether a payload field is a marker rather than a real value.
 // Bracket access keeps the lint clean while preserving the marker shape
-// the P2A-0009 spec mandates.
+// the spec mandates.
 export function isRedactionMarker(value: unknown): value is RedactionMarker {
   if (typeof value !== "object" || value === null) {
     return false;

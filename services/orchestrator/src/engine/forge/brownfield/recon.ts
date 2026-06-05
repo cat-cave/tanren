@@ -1,4 +1,4 @@
-// P3-0016: the read-only recon engine. Composes the injectable `RepoReader`
+// the read-only recon engine. Composes the injectable `RepoReader`
 // (indexes the linked repo READ-ONLY) with the `ReconAnswerer` (reconstructs the
 // chapters + gaps from the indexed evidence).
 //

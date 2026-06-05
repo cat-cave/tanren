@@ -1,4 +1,4 @@
-// P3-0008: shared run-context loading for the review + merge stages. Both
+// shared run-context loading for the review + merge stages. Both
 // stages need the same run row (PR URL, project config → mergeIntegration,
 // org App installation). Kept in one place so reviewPolling.ts and
 // mergeDispatch.ts stay focused and under the 500-line cap.
@@ -13,7 +13,7 @@ import { validateGithubCredentialRef } from "../../credentials/githubToken.js";
 export type RunStateClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
 /**
- * P3-0023: the conventional login Tanren's own pushes carry when no org App is
+ * the conventional login Tanren's own pushes carry when no org App is
  * installed. The GitHub App bot login is `<app-slug>[bot]`; absent a configured
  * slug we fall back to this so external-change detection still has a Tanren
  * identity to compare against.
@@ -29,7 +29,7 @@ export interface ReviewMergeRunContext {
   baseBranch: string;
   /** Resolved per-repo merge integration (project config). */
   mergeIntegration: MergeIntegration;
-  /** P3-0023: external-push governance posture (project config). */
+  /** external-push governance posture (project config). */
   governancePosture: GovernancePosture;
   /**
    * AUDIT-EVIDENCE BASELINE: the versioned governance POLICY in effect for this
@@ -45,7 +45,7 @@ export interface ReviewMergeRunContext {
    */
   reviewPolicy: ReviewPolicy;
   /**
-   * P3-0023: GitHub logins that represent Tanren's own pushes on this repo.
+   * GitHub logins that represent Tanren's own pushes on this repo.
    * External-change detection treats any other contributor as non-Tanren.
    *
    * MERGE-SAFETY (self-identity): this is the ADDITIVE belt-and-suspenders set —

@@ -74,8 +74,8 @@ export interface MergeCoordinatorSubscriberDeps {
  * window so a storm of unrelated `tanren_run` NOTIFYs (concurrent specs emit ~2/sec)
  * does NOT re-run the (expensive) batch integration on every one — the hot loop the
  * live no-CI repo hit. The armed re-drive timer (`retryAfterMs`) is the AUTHORITATIVE
- * re-check; it bypasses the suppression. The window is kept SHORT (≤ the CI poll
- * cadence) so a GENUINE CI-completion / merge.completed NOTIFY is still reacted to
+ * re-check; it bypasses the suppression. The window is kept SHORT (≤ the
+ * registered-check settle cadence) so a GENUINE check-completion / merge.completed NOTIFY is still reacted to
  * within one window — the debounce throttles the storm, it never silences a real
  * completion. It applies ONLY to the pending-hold state, never to a clean pass.
  */
@@ -150,9 +150,9 @@ export class MergeCoordinatorSubscriber {
         "MergeCoordinatorSubscriber requires allocator + ssh + identitySecretRef when no coordinator is injected (the drive-path conflict resolver provisions a runner)",
       );
     }
-    // P2d-2: the native-queue driver is the speculative batch-check + bisect
+    // the native-queue driver is the speculative batch-check + bisect
     // coordinator (it forms a batch, proves the prospective merged state green as a
-    // unit, then drives the SAME P2d-1 per-run merges in DAG order — a bad interaction
+    // unit, then drives the SAME per-run merges in DAG order — a bad interaction
     // is bisected to one PR rather than stalling the batch).
     return buildBatchMergeCoordinator({
       pool: this.deps.pool,
@@ -238,7 +238,7 @@ export class MergeCoordinatorSubscriber {
     // NOTIFY-driven re-pass — the armed `retryAfterMs` timer is the authoritative
     // re-check. This collapses a `tanren_run` NOTIFY storm (concurrent specs emit
     // ~2/sec) into at most one batch integration per window, killing the no-CI hot
-    // loop. The window is short (≤ the CI poll cadence) so a GENUINE CI-completion
+    // loop. The window is short (≤ the registered-check settle cadence) so a GENUINE check-completion
     // NOTIFY is still reacted to within one window once the hold lapses — it throttles
     // the storm, never silences a real completion.
     const holdUntil = this.pendingHoldUntil.get(projectId);

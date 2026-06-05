@@ -1,4 +1,4 @@
-// P3-0001: the background run worker loop. Runs in-process alongside the HTTP
+// the background run worker loop. Runs in-process alongside the HTTP
 // server (gated behind TANREN_RUN_WORKER=1, default OFF). Maintains up to
 // `concurrency` in-flight `plan` jobs; each slot loops claim→execute until the
 // queue is empty, then idles until either a job-enqueued NOTIFY wakes it or the

@@ -1,4 +1,4 @@
-// P2A-0012: real planner workflow. Orchestrates plan -> per-subtask write +
+// real planner workflow. Orchestrates plan -> per-subtask write +
 // check -> audit, with checker- and auditor-rejection loops that re-invoke
 // the planner with structured feedback up to the configured retry budget.
 // On budget exhaustion the run halts with outcome="retry_budget_exhausted"
@@ -61,7 +61,7 @@ export interface SubtaskLoopCostHooks {
 export interface SubtaskLoopInput {
   pool: LoopQueryClient;
   eventStore: EventStore;
-  // Plane-split P3c: the lifecycle writer. When present (remote-writes on), the
+  // the lifecycle writer. When present (remote-writes on), the
   // loop's `tasks` INSERT/UPDATE route through the control plane; absent, the
   // in-process org-scoped writes run as before.
   runStateWriter?: RunStateWriter;
@@ -94,7 +94,7 @@ export interface SubtaskLoopInput {
   // Dollar value of one prepaid credit, for credit-drawdown cost. Defaults to
   // DEFAULT_CREDIT_USD_RATE (the observed Pro-account rate).
   creditUsdRate?: number;
-  // P3-0005: the deterministic, exit-code-driven gate-check seam. Runs the CI
+  // the deterministic, exit-code-driven gate-check seam. Runs the CI
   // tiers mapped to a lifecycle point over the bootstrapped workspace (NO
   // Answerer). The loop calls it with when="per_iteration" after each writer
   // iteration (a fail routes back to writer rework via the planner-rerequest
@@ -103,7 +103,7 @@ export interface SubtaskLoopInput {
   // that drive the loop without a workspace). Tests inject a mock to assert
   // routing without a live runner. `taskId` correlates the gate.* events.
   runGate?: (input: { when: CiWhen; taskId?: string }) => Promise<GateOutcome>;
-  // P3-0008: prior rejections to seed the planner's rejectionHistory with before
+  // prior rejections to seed the planner's rejectionHistory with before
   // the first plan. Used by the review-rework re-entry to carry a
   // changes-requested PR review forward as planner steering, so the re-plan
   // addresses the reviewer's feedback. Empty/omitted on the normal first pass.
@@ -244,7 +244,7 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
       continue;
     }
 
-    // P3-0005: the slow tier (build/test) runs before the audit. A nonzero exit
+    // the slow tier (build/test) runs before the audit. A nonzero exit
     // blocks the audit — auditing a tree that does not build/test is wasted —
     // and routes the run to rework via the same planner-rerequest path.
     if (input.runGate !== undefined) {
@@ -387,7 +387,7 @@ async function runSubtaskSequence(args: {
       return { kind: "rejection", rejection: writerFailureRejection(writerOutcome.failureKind, plan.subtasks) };
     }
     const writerResult = writerOutcome.writer;
-    // P3-0005: deterministic per-iteration gate. The fast tier runs over the
+    // deterministic per-iteration gate. The fast tier runs over the
     // bootstrapped workspace right after the writer edits. A nonzero exit means
     // the tree is broken (build/lint/typecheck/unit), so route straight back to
     // writer rework via the planner-rerequest path BEFORE spending a checker

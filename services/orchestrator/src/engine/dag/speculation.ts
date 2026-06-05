@@ -1,4 +1,4 @@
-// Speculative readiness — the PURE core of P2c-1 (autonomy-engine.md §2c). Given
+// Speculative readiness — the PURE core of speculative readiness (autonomy-engine.md §2c). Given
 // the DAG snapshot, the per-spec lifecycle projection, the configured speculation
 // threshold, and the max integration depth, decide for each pending spec:
 //
@@ -13,7 +13,7 @@
 // suite pins. The planner (`engine/contracts/dagWalker.ts`) calls it to compute
 // the ready set; the walker (`engine/dag/walker.ts`) wires the real lifecycle read
 // model + config and emits the dag.spec.speculative / dag.spec.speculation_held
-// events. Change-percolation is explicitly OUT of scope (P2c-2): this unit starts
+// events. Change-percolation is explicitly OUT of scope: this unit starts
 // dependents early and re-gates against reality when ancestors really merge.
 
 import type { DagSpecNode } from "../contracts/dagWalker.js";

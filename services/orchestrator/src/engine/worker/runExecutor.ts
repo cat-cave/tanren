@@ -1,4 +1,4 @@
-// P3-0001: the dequeue→execute seam. `executeNextPlanJob` atomically claims one
+// the dequeue→execute seam. `executeNextPlanJob` atomically claims one
 // queued `plan` job, re-hydrates its `PlannerRunContext`, and runs the real
 // plan→write→check→audit→draft-PR→CI workflow to completion.
 //
@@ -9,7 +9,7 @@
 //   1. fail the claimed job row (so the queue reflects the failure), and
 //   2. re-finalize a run the workflow left in a NON-recoverable terminal state
 //      (`failed`) or still `running` (a crash) into a recoverable `halted`
-//      outcome, so the run surfaces on the P2B-0008 recovery surface rather
+//      outcome, so the run surfaces on the recovery surface rather
 //      than disappearing or looking stuck.
 //
 // Idempotency: the claim is atomic (`FOR UPDATE SKIP LOCKED` → CAS to
@@ -62,7 +62,7 @@ export const DEFAULT_TIMEOUT_MS = 600_000;
 export const DEFAULT_MAX_CI_POLLS = 18;
 export const DEFAULT_CI_POLL_DELAY_MS = 10_000;
 
-// P3-0028 queue lease recovery. While a claimed job executes, the worker
+// queue lease recovery. While a claimed job executes, the worker
 // renews its lease on this interval; the lease window is a multiple of the
 // interval so a single missed heartbeat does not trip the reaper. A crashed
 // worker stops heartbeating, its lease lapses, and the reaper recovers the job.
@@ -72,21 +72,21 @@ export const DEFAULT_LEASE_MS = 60_000;
 export interface RunExecutorDeps {
   pool: pg.Pool;
   jobQueue: JobQueue;
-  // Plane-split P2: how this worker CLAIMS a job. Defaults to a
+  // How this worker CLAIMS a job. Defaults to a
   // `DirectJobClaimClient` over `jobQueue` (the unchanged DB-CAS) so the
   // in-process / single-process path is behavior-identical. The cross-process
   // `worker` container injects an `HttpJobClaimClient` that claims over the mTLS
   // control-plane endpoint instead of touching `job_queue` directly. The rest of
-  // the queue surface (fail/complete/heartbeat) still uses `jobQueue` — P2 moves
-  // only the CLAIM; routing the WRITES through the control plane is P3.
+  // the queue surface (fail/complete/heartbeat) still uses `jobQueue`; the
+  // control-plane routing moves the CLAIM and the run-state WRITES separately.
   claimClient?: JobClaimClient;
-  // Plane-split P3: how this worker WRITES the run's tenant state — event-append,
+  // How this worker WRITES the run's tenant state — event-append,
   // cost-record insert, and run finalize. Omit (the DEFAULT) → the worker does
   // today's in-process org-scoped DB writes directly (the `DirectRunStateWriter`
   // path, lower risk, behavior-identical). Set to an `HttpRunStateWriter` (when
   // TANREN_DATA_PLANE_REMOTE_WRITES=1) → those writes route through the
   // control-plane `/internal/*` write endpoints over mTLS, so the data plane
-  // writes no tenant tables directly. Keeping DIRECT the default makes P3
+  // writes no tenant tables directly. Keeping DIRECT the default makes the cutover
   // REVERSIBLE: nothing changes unless the flag is set. A legacy/unscoped run
   // (org_id NULL) ALWAYS uses the direct path — it has no org to scope a remote
   // write to.
@@ -100,7 +100,7 @@ export interface RunExecutorDeps {
   // never reaches a runner). Omitted for a non-Vault backend.
   credentialScoping?: RunCredentialScoping;
   vcsProvider: VcsProvider;
-  // P2a (Part 2): shared App installation-token minter, threaded into the
+  // Part 2: shared App installation-token minter, threaded into the
   // workflow so the App-first CLONE token reuses the same minted/cached token as
   // the CI-poll / merge stages. Optional — the provider mints per-call when absent.
   githubAppMinter?: GithubAppTokenMinter;
@@ -112,7 +112,7 @@ export interface RunExecutorDeps {
   timeoutMs?: number;
   maxCiPolls?: number;
   ciPollDelayMs?: number;
-  // P3-0028 lease tuning. `leaseMs` is the lease window stamped on claim and on
+  // lease tuning. `leaseMs` is the lease window stamped on claim and on
   // each heartbeat; `heartbeatIntervalMs` is how often the worker renews it
   // while the workflow runs.
   leaseMs?: number;
@@ -137,7 +137,7 @@ export type ExecuteJobResult =
  */
 export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<ExecuteJobResult> {
   const leaseMs = deps.leaseMs ?? DEFAULT_LEASE_MS;
-  // Plane-split P2: claim through the claim CLIENT (direct DB-CAS in-process, or
+  // Claim through the claim CLIENT (direct DB-CAS in-process, or
   // the mTLS control-plane endpoint cross-process). Same exactly-once claim — the
   // endpoint wraps the same `JobQueue.claim`. Default keeps the direct path so an
   // un-wired worker is unchanged.
@@ -153,15 +153,15 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
     return { kind: "failed", jobId: job.id, failure };
   }
 
-  // P3-0028: renew the lease on an interval so a healthy worker holds its claim
+  // renew the lease on an interval so a healthy worker holds its claim
   // while the (potentially long) workflow runs. The reaper only recovers a job
   // whose lease has lapsed — i.e. a crashed worker that stopped heartbeating.
   const stopHeartbeat = startHeartbeat(deps, job.id, leaseMs);
   // RLS: the catch-path recoverable finalize must org-scope its UPDATE runs, or
   // the enforced `tanren_app` policy denies the unscoped write and the run sticks
   // `queued` forever. The owning run's org is KNOWN from the claim itself — the
-  // queue carries it (job_queue stays OUTSIDE RLS; P1 threaded org_id onto the
-  // row, P2 returns it from the claim). So we seed the finalize scope from the
+  // queue carries it (job_queue stays OUTSIDE RLS; org_id is threaded onto the
+  // row and returned from the claim). So we seed the finalize scope from the
   // CLAIMED org immediately, BEFORE any work that can throw (credential
   // resolution / context hydration). An EARLY failure — e.g. misconfigured
   // credentials throwing in `loadRunContextScoped` before `resolvedOrgId` could
@@ -196,7 +196,7 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
       await establishJobOrgContext(deps.pool, orgId, runId);
     }
 
-    // Plane B (P-APP-ENV-0): resolve the PROJECT's dev+test app env — the env vars
+    // Plane B: resolve the PROJECT's dev+test app env — the env vars
     // + secrets the product Tanren is BUILDING needs to run + test the app it
     // writes — from the `project_app_env` store (secret refs read from the secret
     // manager). Materialized over the runner into the building agent's command env
@@ -221,12 +221,12 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
     // its OWN short org-scoped txn from that org-id, so a connection is held only
     // for one DB op, never across I/O. A legacy/unscoped run (org_id NULL) sets
     // no org-id and the proxy is behavior-identical to the bare pool (inert).
-    // Plane-split P3: when a remote run-state writer is wired AND the run has an
+    // When a remote run-state writer is wired AND the run has an
     // org (so server-side scoping is possible), route the workflow's tenant
     // run-state writes — events, cost_records, the terminal run finalize —
     // through it (the control-plane endpoints). Otherwise inject nothing: the
     // workflow uses its own in-process org-scoped stores over `orgScopingPool`,
-    // BYTE-IDENTICAL to the pre-P3 direct path (and its mutation suite).
+    // BYTE-IDENTICAL to the direct in-process path (and its mutation suite).
     const remoteWriter = orgId === null ? undefined : deps.runStateWriter;
     const remoteWorkflowSeams =
       remoteWriter === undefined || orgId === null
@@ -237,14 +237,14 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
               deps.pool,
               remoteWriter,
               (cost) => remoteWriter.recordCost(cost),
-              // Plane-split P3c: route the run-end cost reconcile/apportion through
+              // route the run-end cost reconcile/apportion through
               // the control plane too — the de-privileged data plane can no longer
               // UPDATE cost_records directly (migration 0031).
               (rec) => remoteWriter.reconcileCost({ ...rec, orgId }),
             ),
             finalizeRun: (f: { runId: string; status: string; outcome: string; fromStatuses: string[] }) =>
               remoteWriter.finalizeRun({ ...f, orgId }).then(() => {}),
-            // Plane-split P3c: the full lifecycle writer. When present (remote-writes
+            // the full lifecycle writer. When present (remote-writes
             // on), the workflow routes its run/spec/task lifecycle writes through the
             // control plane; absent, it does its byte-identical in-process writes.
             runStateWriter: remoteWriter,
@@ -264,7 +264,7 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
         // de-privileges the run's credential reads behind a per-run child token.
         ...(deps.credentialScoping === undefined ? {} : { credentialScoping: deps.credentialScoping }),
         vcsProvider: deps.vcsProvider,
-        // P2a (Part 2): the App-first clone reuses the shared minter when present.
+        // Part 2: the App-first clone reuses the shared minter when present.
         ...(deps.githubAppMinter === undefined ? {} : { githubAppMinter: deps.githubAppMinter }),
         context,
         // Plane B: the project's resolved dev+test app env (over the runner,
@@ -274,7 +274,7 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
         timeoutMs: deps.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         maxCiPolls: deps.maxCiPolls ?? DEFAULT_MAX_CI_POLLS,
         ciPollDelayMs: deps.ciPollDelayMs ?? DEFAULT_CI_POLL_DELAY_MS,
-        // P2d: under `native_queue` the merge stage enters the ready run into the
+        // under `native_queue` the merge stage enters the ready run into the
         // native merge queue (the coordinator drives the actual merge). Built from
         // the worker's real pool so the queue write is RLS-scoped.
         nativeQueueEnqueuer: buildNativeQueueEnqueuer(deps.pool),
@@ -317,7 +317,7 @@ async function loadRunContextScoped(
   return runWithOrgScope(deps.pool, jobOrgId, load);
 }
 
-// Plane B (P-APP-ENV-0): resolve + MERGE the project's dev and test app-env into
+// Plane B: resolve + MERGE the project's dev and test app-env into
 // one env map for the run workspace. Each scope's entries are resolved under the
 // run's org scope (so RLS gates which project's entries are visible) with secret
 // refs read from the secret manager. dev and test overlap is intentional (both

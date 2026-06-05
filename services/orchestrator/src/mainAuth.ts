@@ -36,7 +36,7 @@ export function buildAuthFromEnv(
   if (clientId !== undefined && clientId !== "" && clientSecret !== undefined && clientSecret !== "") {
     providers.set("github_oauth", new GitHubOAuthProvider({ clientId, clientSecret }));
   }
-  // P3-0030: Authentik (or any OIDC IdP) as a second identity provider. Additive
+  // Authentik (or any OIDC IdP) as a second identity provider. Additive
   // and opt-in: registers only when issuer + client id/secret are all set, so
   // github_oauth/local_dev behavior is unchanged when the OIDC env is absent.
   const oidc = buildOidcProviderFromEnv();

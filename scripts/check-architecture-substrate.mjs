@@ -93,7 +93,7 @@ export function checkNoHostBindMounts(projectFiles) {
       if (match && isAllowedAllocatorDockerSocketMount(file, text, index + 1)) {
         return;
       }
-      // Plane-split P2: the control↔data-plane mTLS certs are supplied to the
+      // The control↔data-plane mTLS certs are supplied to the
       // orchestrator + worker as a READ-ONLY mount of the dev cert dir at
       // /etc/tanren/mtls. This is config material, not workload-execution
       // substrate (the invariant this rule guards), so it is allowed.
@@ -116,7 +116,7 @@ function isAllowedDockerSocketMount(file, line) {
   return isComposeFile(file) && line.trim() === "- /var/run/docker.sock:/var/run/docker.sock";
 }
 
-// Plane-split P2: a read-only mount of the dev mTLS cert dir into the control /
+// A read-only mount of the dev mTLS cert dir into the control /
 // data plane at /etc/tanren/mtls. Allowed as config (not workload substrate).
 function isAllowedMtlsCertMount(file, line) {
   return isComposeFile(file) && /^\s*-\s*\/tmp\/tanren-mtls:\/etc\/tanren\/mtls:ro\s*$/u.test(line);

@@ -1,4 +1,4 @@
-// P3-0001: public worker surface. The env-gated in-process lifecycle helpers
+// public worker surface. The env-gated in-process lifecycle helpers
 // (`startRunWorker` / `runWorkerEnabled`) live in `lifecycle.ts`; the standalone
 // boot (`bootRunWorker`) lives in `boot.ts`. This barrel re-exports both so the
 // public surface is one import site — and so `boot.ts` can import the lifecycle
@@ -16,12 +16,12 @@ export {
   type ExecuteJobResult,
 } from "./runExecutor.js";
 export { RunWorker, type RunWorkerOptions } from "./runWorker.js";
-// P3-0001 / plane-split P1: the in-process lifecycle helpers (split out to break
+// The in-process lifecycle helpers (split out to break
 // the barrel↔boot cycle) + the shared standalone boot the `worker-main.ts`
 // entrypoint and the in-process flag path (main.ts) both call.
 export { runWorkerEnabled, startRunWorker, type StartRunWorkerInput, type StartedRunWorker } from "./lifecycle.js";
 export { bootRunWorker, type BootedRunWorker } from "./boot.js";
-// Plane-split P3: the run-state WRITER impls + env resolver (the DEFAULT direct
+// The run-state WRITER impls + env resolver (the DEFAULT direct
 // in-process writer vs the remote control-plane writer over mTLS).
 export { DirectRunStateWriter } from "./directRunStateWriter.js";
 export { HttpRunStateWriter, RunStateWriteTransportError } from "./httpRunStateWriter.js";

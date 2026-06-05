@@ -1,17 +1,17 @@
-// P3-0014 spec discovery engine.
+// spec discovery engine.
 //
 // Two operations, both composing existing foundations:
 //
 //   classifyInsight(deps, input)
 //     Runs a Forge CLASSIFICATION over the injectable `DiscoveryAnswerer`
-//     (the same seam shape as the P3-0010 conversation answerer — provider in
+//     (the same seam shape as the conversation answerer — provider in
 //     prod, fake in tests). It grounds the answerer with the project's existing
 //     specs (read through the typed spec list) and returns the proposed specs +
 //     DAG-placement options + impact deltas. NOTHING is persisted here.
 //
 //   acceptProposals(deps, input)
 //     Commits accepted proposals: creates each spec through the EXISTING
-//     P2A-0013 `createSpec` path (so authz/dependency checks are unchanged),
+//     `createSpec` path (so authz/dependency checks are unchanged),
 //     then persists discovery PROVENANCE onto each new spec's `metadata` JSONB
 //     and records the chosen DAG-placement. Returns the created spec-ids.
 //

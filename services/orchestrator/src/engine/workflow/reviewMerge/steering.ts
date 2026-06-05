@@ -1,4 +1,4 @@
-// P3-0008: turn a changes-requested PR review into the planner-feedback record
+// turn a changes-requested PR review into the planner-feedback record
 // routed through the same rework path the checker/auditor/gate use. Kept out of
 // plannerRun.ts so that file stays under the 500-line architecture cap.
 

@@ -3,12 +3,11 @@
 // shows it like any other check. It maps a `GateOutcome` to a Tanren-native
 // check-run (`tanren/gate`) and publishes it through `VcsProvider.publishCheck`.
 //
-// This REPLACES the old model where the forge carried GitHub Actions' check-runs
-// that Tanren READ for the merge decision. Now Tanren runs the gate itself and
-// PUBLISHES its own verdict — the publication is informational (the merge decision
-// is already made from `GateOutcome.passed`); it surfaces the native verdict on
-// the PR. Re-published whenever the head SHA changes (e.g. after an auto-rebase
-// re-gate), since a check-run is keyed on the commit it concerns.
+// Tanren runs the gate itself and PUBLISHES its own verdict — the publication is
+// informational (the merge decision is already made from `GateOutcome.passed`);
+// it surfaces the native verdict on the PR. Re-published whenever the head SHA
+// changes (e.g. after an auto-rebase re-gate), since a check-run is keyed on the
+// commit it concerns.
 //
 // SECURITY: the resolved token is passed only to the publish call's auth header
 // (never logged/returned). The summary carries only non-secret tier/step names.

@@ -1,28 +1,28 @@
 // The `BatchMergeCoordinator` seam (autonomy-engine.md §2d — speculative batch-check
-// + bisect, the P2d-2 intelligence layer ON TOP OF the P2d-1 native queue). Where
-// P2d-1's coordinator merges queued runs ONE AT A TIME in DAG order — correct, but it
+// + bisect, the intelligence layer ON TOP OF the native merge queue). The native
+// queue merges queued runs ONE AT A TIME in DAG order — correct, but it
 // can only catch a bad *interaction* (two PRs that each pass alone but break together)
 // AFTER a merge, and a single bad head stalls everyone behind it — this layer:
 //
 //   1. FORMS A BATCH — the DAG-ordered, mutually-eligible prefix of the queue (reuse
-//      the EXACT P2d-1 eligibility + ordering: `isEligible` + `compareEntries`), capped
+//      the queue's eligibility + ordering: `isEligible` + `compareEntries`), capped
 //      by a config knob (never silently truncated — a cap is LOGGED).
 //   2. BATCH-CHECKS the PROSPECTIVE MERGED STATE — `default_branch + batch PRs`
-//      speculatively merged in DAG order (reuse the P2c-1 SpeculativeIntegrator /
+//      speculatively merged in DAG order (reuse the SpeculativeIntegrator /
 //      `buildIntegrationBranch`), then runs the CI/gate against that integration ref
 //      (the `VcsProvider` CI seam). It is a SPECULATIVE check — it NEVER touches
 //      `default_branch`.
 //   3. On PASS — the batch is validated as a combined unit → the coordinator drives
-//      its entries' real merges in DAG order through the EXISTING P2d-1 drive path (no
-//      re-surprises). Serialization + the P2d-1 ordering/lease guarantees still hold
+//      its entries' real merges in DAG order through the native queue's drive path (no
+//      re-surprises). Serialization + the native queue's ordering/lease guarantees still hold
 //      for the ACTUAL merges (the batch check is purely speculative).
 //   4. On FAIL — BISECT (the headline capability): binary-search the ordered batch to
 //      isolate the SINGLE PR whose inclusion breaks the check, REMOVE it (dequeue it to
-//      a RECOVERABLE outcome — routed to the P2b re-execution path, never dropped), and
+//      a RECOVERABLE outcome — routed to the re-execution path, never dropped), and
 //      RE-FORM + RE-CHECK the batch WITHOUT the culprit so the innocent PRs still merge.
 //
 // This module carries the PURE selection/bisect core (no DB, no VCS) + the SEAMS (the
-// batch checker + the merge model/runner from P2d-1), so the batch-formation rule and
+// batch checker + the native queue's merge model/runner), so the batch-formation rule and
 // the bisect algorithm are conformance-tested independent of any database or forge.
 
 import { DEFAULT_MAX_BATCH_SIZE } from "../config/shared.js";
@@ -56,15 +56,15 @@ export interface BatchFormation {
  * `maxBatchSize`:
  *
  *   - SERIALIZATION — if a merge is already in flight (`mergingInFlight`), return an
- *     EMPTY batch (the P2d-1 one-at-a-time lock dominates; the in-flight merge's
+ *     EMPTY batch (the native queue's one-at-a-time lock dominates; the in-flight merge's
  *     completion re-triggers the pass).
- *   - ELIGIBILITY — reuse the P2d-1 `isEligible` rule against the snapshot's
+ *   - ELIGIBILITY — reuse the native queue's `isEligible` rule against the snapshot's
  *     `mergedSpecIds` + the queued-spec set, AND the batch's own already-included
  *     specs (so an entry whose ancestor is NOT merged but IS earlier in this batch is
  *     still eligible — the batch's ancestor will merge first). An entry whose ancestor
  *     is neither merged, nor earlier-in-batch, nor satisfiable is HELD (never include a
  *     dependent whose ancestor isn't in the batch-or-already-merged).
- *   - ORDER — sort the eligible set by the P2d-1 `compareEntries` (priority then a
+ *   - ORDER — sort the eligible set by the native queue's `compareEntries` (priority then a
  *     stable tiebreak), then greedily take entries in that order while their ancestors
  *     are merged-or-already-taken. This yields a prefix whose merge order == the order
  *     the one-at-a-time path would have used.
@@ -121,7 +121,7 @@ export function formBatch(snapshot: MergeQueueSnapshot, maxBatchSize: number): B
 
 /**
  * Order the formed batch so every entry comes AFTER every batch-internal ancestor it
- * depends on, breaking ties by the P2d-1 `compareEntries` (priority + stable
+ * depends on, breaking ties by the native queue's `compareEntries` (priority + stable
  * tiebreak). A stable topological sort over the batch's internal dependency edges;
  * the batch is acyclic (DAG), so it always terminates. After this, slicing to the cap
  * yields a valid PREFIX — capping never strands a dependent ahead of its ancestor,
@@ -270,7 +270,7 @@ export type BatchCheckVerdict =
 /**
  * Speculatively integrate the given entries (in the supplied DAG order) onto
  * `default_branch` and run the CI/gate against the prospective merged tree. The
- * production impl reuses the P2c-1 SpeculativeIntegrator (`buildIntegrationBranch`)
+ * production impl reuses the SpeculativeIntegrator (`buildIntegrationBranch`)
  * to assemble the ephemeral integration ref, then the VcsProvider CI seam to check
  * it. It NEVER touches `default_branch` — only the ephemeral batch-integration ref.
  * An empty entry list checks the BASE (`default_branch`) alone — which passes (the

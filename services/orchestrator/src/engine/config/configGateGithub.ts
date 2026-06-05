@@ -1,12 +1,12 @@
-// P3-0017: the real GitHub adapter behind the audit-gate `ConfigGateGitHub`
-// port. Wraps the shared `GitHubHttpClient` (P3-0028) so the gate can:
+// the real GitHub adapter behind the audit-gate `ConfigGateGitHub`
+// port. Wraps the shared `GitHubHttpClient` so the gate can:
 //   1. resolve the base branch's head SHA,
 //   2. create the head branch (idempotently),
 //   3. commit `tanren.yaml` to that branch via the contents API,
 //   4. open (or reuse) the PR via `GitHubPullRequestService`.
 //
 // The HTTP client + token are injected, so the orchestrator wires it from the
-// P3-0003 App-token resolver and tests use the in-memory fake instead.
+// App-token resolver and tests use the in-memory fake instead.
 
 import { GitHubPullRequestService } from "../providers/githubPullRequestReuse.js";
 import { parseGitHubRepository, type GitHubHttpClient, type GitHubRepository } from "../providers/github.js";

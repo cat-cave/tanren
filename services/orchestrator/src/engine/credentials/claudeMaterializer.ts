@@ -7,7 +7,7 @@ import { validateClaudeAuthBundle, validateClaudeCredentialRef } from "./claudeA
 import { validateCredentialRef } from "./codexAuth.js";
 import { resolveManagedOpenRouterKey } from "./managedKey.js";
 
-// P3-0012: materialize a Claude CLI credential bundle onto the runner under a
+// materialize a Claude CLI credential bundle onto the runner under a
 // per-run CLAUDE_CONFIG_DIR, mirroring the Codex materializer. The Claude CLI
 // reads its session credentials from `.credentials.json` inside the config dir,
 // so the run's writer/answerer all point CLAUDE_CONFIG_DIR at the same path.

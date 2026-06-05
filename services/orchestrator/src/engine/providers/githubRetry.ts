@@ -1,9 +1,9 @@
-// GitHub HTTP retry/backoff classification — the rate-limit (P3-0028) + transient-5xx
+// GitHub HTTP retry/backoff classification — the rate-limit + transient-5xx
 // (GitHub-5xx resilience) helpers, extracted from github.ts so the client stays under
 // its line cap and the classification lives in ONE focused, testable place. Pure
 // functions + constants only; no I/O.
 
-/** P3-0028 rate-limit backoff bounds: never wait less than this, never more. */
+/** rate-limit backoff bounds: never wait less than this, never more. */
 export const MIN_RATE_LIMIT_BACKOFF_MS = 1_000;
 export const MAX_RATE_LIMIT_BACKOFF_MS = 60_000;
 /** Default number of times the client re-tries a rate-limited request before surfacing it. */
@@ -36,7 +36,7 @@ export function headerGetter(headers: Headers | undefined): HeaderGetter {
 }
 
 /**
- * P3-0028: compute how long to wait before retrying a rate-limited GitHub
+ * compute how long to wait before retrying a rate-limited GitHub
  * response, or `undefined` if the response is not rate-limited. Honors
  * `Retry-After` (delta seconds) first, then a `403/429` with
  * `X-RateLimit-Remaining: 0` + `X-RateLimit-Reset` (epoch seconds). The wait is

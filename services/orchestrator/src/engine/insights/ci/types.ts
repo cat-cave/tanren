@@ -1,5 +1,5 @@
-// P2e-1 CI analytics types (autonomy-engine.md §2d Mergify parity, item 2:
-// "CI analytics / insights per project"). The shapes are language-neutral and
+// CI analytics types (autonomy-engine.md §2d): per-project CI pass-rate,
+// timing, and reliability. The shapes are language-neutral and
 // schema-validated so the read route and any future consumer share one
 // contract. Pure compute — no write path.
 

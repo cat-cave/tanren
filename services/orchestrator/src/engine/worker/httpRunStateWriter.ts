@@ -1,7 +1,7 @@
-// Plane-split P3: the REMOTE run-state writer. Routes each of the worker's
+// The REMOTE run-state writer. Routes each of the worker's
 // tenant run-state writes — event-append, cost-record insert, run finalize — to
 // the control plane's `/internal/*` write endpoints over the mTLS {@link
-// MtlsFetch} channel (the SAME mutually-authenticated transport P2 built for the
+// MtlsFetch} channel (the SAME mutually-authenticated transport used for the
 // claim endpoint). The control plane then runs the EXACT SAME org-scoped write
 // server-side, under ITS DB access — so the data plane needs no broad tenant
 // write grants. Enabled by `TANREN_DATA_PLANE_REMOTE_WRITES=1`.
@@ -92,7 +92,7 @@ export class HttpRunStateWriter implements RunStateWriter {
     return this.post<FinalizeRunResult>("/internal/finalize-run", input);
   }
 
-  // --- Plane-split P3c: the run/spec/task lifecycle writes. ---
+  // --- the run/spec/task lifecycle writes. ---
   //
   // The run/spec ops carry an explicit org (the workflow has the run context);
   // the task ops resolve org from the ambient per-job scope (`requireOrgId`),

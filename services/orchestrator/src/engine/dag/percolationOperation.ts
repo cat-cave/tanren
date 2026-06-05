@@ -1,7 +1,7 @@
 // The production change-percolation KICK-OFF operation (autonomy-engine.md §2c
 // "Change-percolation — NOT discard"): for ONE (dependent, ancestor-change) it
 // rebuilds the speculative integration against the ancestor's NEW state (reuse the
-// P2c-1 SpeculativeIntegrator), re-bases the dependent onto it, and RE-EXECUTES the
+// SpeculativeIntegrator), re-bases the dependent onto it, and RE-EXECUTES the
 // dependent through a REAL run so its OWN gate + checker + auditor genuinely re-run
 // against the percolated change. It is the `PercolationKickOff` seam the
 // PercolatingCoordinator drives.
@@ -13,7 +13,7 @@
 //
 // Flow:
 //   1. REBUILD the integration (SpeculativeIntegrator). An ancestor-vs-other-ancestor
-//      conflict ⇒ `held` (routed to P2b; retried) — the dependent untouched.
+//      conflict ⇒ `held` (routed to the conflict resolver; retried) — the dependent untouched.
 //   2. RE-BASE the dependent onto the rebuilt integration (update `speculative_base`
 //      + the build-base `integrated_ancestor_shas`).
 //   3. RE-ENQUEUE the dependent for re-execution (the DagWalker run path) and write
@@ -90,7 +90,7 @@ export class PercolatingKickOff implements PercolationKickOff {
     //    The integrator resets the ephemeral ref to default_branch then stacks each
     //    unmerged ancestor (re-resolving its latest branch), so the rebuilt base
     //    reflects fresh main + the still-pending upstream work. An A-vs-other
-    //    conflict surfaces here, early — `held` (routed to P2b; retried), dependent
+    //    conflict surfaces here, early — `held` (routed to the conflict resolver; retried), dependent
     //    untouched. With an empty unmerged set the integrator resets the ref to plain
     //    default_branch (no ancestor stacked); the re-exec then drops the base to NULL.
     const integration = await this.deps.integrator.buildIntegration({

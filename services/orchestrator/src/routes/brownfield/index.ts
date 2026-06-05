@@ -1,10 +1,10 @@
-// P2A-0013: brownfield link endpoint. Verifies the configured GitHub App can
+// brownfield link endpoint. Verifies the configured GitHub App can
 // reach the target repo, reads `.github/workflows/` and `CODEOWNERS` (no
 // writes), and persists the linkage on the project row.
 //
-// Phase 2 contract: this endpoint NEVER writes to the target repository. It
-// is observation-only; the operator opts in to writes via a separate
-// installation flow that ships in a later spec.
+// Contract: this endpoint NEVER writes to the target repository. It is
+// observation-only; the operator opts in to writes via a separate
+// installation flow.
 
 import { Hono } from "hono";
 import type pg from "pg";
@@ -34,7 +34,7 @@ interface BrownfieldRoutesOptions {
   pool: pg.Pool;
   secrets: SecretStore;
   githubHttp: GitHubHttpClient;
-  /** P3-0003: shared installation-token minter (cache lives here). */
+  /** shared installation-token minter (cache lives here). */
   githubAppMinter?: GithubAppTokenMinter;
 }
 

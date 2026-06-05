@@ -4,8 +4,8 @@ import { ActorKind, type ActorRef } from "../state/actor.js";
 
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
-// Actor info derived from task rows. Phase 2 does not yet have a dedicated
-// actors table; this store gives downstream callers a typed view of the
+// Actor info derived from task rows. There is no dedicated actors table;
+// this store gives downstream callers a typed view of the
 // agent_kind column without exposing raw SQL row casts.
 export const TaskActorRow = z.object({
   taskId: z.string(),

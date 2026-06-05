@@ -1,4 +1,4 @@
-// Plane-split P2: the control↔data-plane authenticated transport seam (locked
+// The control↔data-plane authenticated transport seam (locked
 // decision #3 = mTLS). This is a CONTRACT-shaped seam: the data plane reaches
 // the control plane through a `fetch`-shaped {@link MtlsFetch}, and the control
 // plane authenticates a caller through an {@link MtlsPeerVerifier}. Both are
@@ -10,7 +10,7 @@
 // `certCommonName`) live in `mtlsChannelNode.ts` — kept out of this contract
 // module so the contract stays dependency-light and the impl carries the
 // `node:tls`/`undici` surface. See docs/roadmap/saas-rls-and-plane-split-plan.md
-// (plane-split P2).
+//.
 
 /**
  * A `fetch`-shaped function the data plane calls the control plane through. The

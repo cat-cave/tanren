@@ -4,7 +4,7 @@ import type { ActorContext } from "../../auth/schemas.js";
 
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
-// P2A-0018: spec dependencies form a DAG. An edge `from -> to` means `from`
+// spec dependencies form a DAG. An edge `from -> to` means `from`
 // depends on `to` (i.e. `to` must complete first). Cycle detection runs on
 // every insert; an attempt that would close a cycle throws
 // CyclicSpecDependencyError carrying the printable cycle path.

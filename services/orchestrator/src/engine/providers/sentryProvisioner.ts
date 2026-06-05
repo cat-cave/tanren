@@ -1,4 +1,4 @@
-// P-INT-1: the Sentry IntegrationProvisioner — the concrete proof of the
+// the Sentry IntegrationProvisioner — the concrete proof of the
 // `IntegrationProvisioner` port (the keystone of Plane A). It implements the
 // "Sentry concrete model" of docs/operator-guide/integration-provisioning.md:
 // from an org-level Sentry token grant, Tanren DISCOVERS the org's existing

@@ -36,7 +36,7 @@ export const sensitivityRules: SensitivityRule[] = [
     ["outcome", "public"],
   ]),
   // `message` stays "public": for a bootstrap failure it is `messageOf(error)` ===
-  // `WorkspaceBootstrapError.message`, which (post P-APP-ENV-0) carries the ORIGINAL
+  // `WorkspaceBootstrapError.message`, which (post) carries the ORIGINAL
   // prelude-free command — the Plane-B app-env prelude is injected only at the SSH
   // substrate boundary, never into the command string the error message embeds. So
   // an app-secret VALUE cannot reach this payload. "public" remains correct.
@@ -70,7 +70,7 @@ export const sensitivityRules: SensitivityRule[] = [
     ["reason", "public"],
   ]),
 
-  // P3-0028 dead-letter event — identifiers + a failure summary, all public.
+  // dead-letter event — identifiers + a failure summary, all public.
   ...rulesFor("job.dead_lettered", [
     ["jobId", "public"],
     ["taskKind", "public"],
@@ -188,7 +188,7 @@ export const sensitivityRules: SensitivityRule[] = [
     ["message", "public"],
   ]),
 
-  // P2A-0012 planner rejection-loop event
+  // planner rejection-loop event
   ...rulesFor("planner.rerequested", [
     ["runId", "public"],
     ["plannerTaskId", "public"],
@@ -229,7 +229,7 @@ export const sensitivityRules: SensitivityRule[] = [
     ["behaviorIdsFailed", "public"],
     ["behaviorIdsFailed[]", "public"],
   ]),
-  // P2A-0012 rejection event emitted by the checker rejection-loop branch
+  // rejection event emitted by the checker rejection-loop branch
   ...rulesFor("checker.rejected", [
     ["runId", "public"],
     ["taskId", "public"],
@@ -265,7 +265,7 @@ export const sensitivityRules: SensitivityRule[] = [
     ["outstandingBehaviorIds[]", "public"],
     ["recommendedAction", "public"],
   ]),
-  // P2A-0012 rejection event emitted by the auditor rejection-loop branch
+  // rejection event emitted by the auditor rejection-loop branch
   ...rulesFor("auditor.rejected", [
     ["runId", "public"],
     ["auditTaskId", "public"],
@@ -278,7 +278,7 @@ export const sensitivityRules: SensitivityRule[] = [
   // The native in-loop gate rules (gate.started/passed/failed/advisory_failed/verdict)
   // are split into ./sensitivityRules.gate.js under the 500-line cap; spread below.
 
-  // P2B-0008 recovery lineage — operator-authored prose + identifiers, public.
+  // recovery lineage — operator-authored prose + identifiers, public.
   ...rulesFor("recovery.revise_routed", [
     ["runId", "public"],
     ["specId", "public"],
@@ -366,7 +366,7 @@ export const sensitivityRules: SensitivityRule[] = [
     ["inFlightCount", "public"],
     ["concurrencyCeiling", "public"],
   ]),
-  // P2c-1 (§2c) speculative-execution events — spec/run ids, ancestor ids, the
+  // (§2c) speculative-execution events — spec/run ids, ancestor ids, the
   // threshold label, the integration branch ref, and non-sensitive counts.
   ...rulesFor("dag.spec.speculative", [
     ["specId", "public"],
@@ -381,7 +381,7 @@ export const sensitivityRules: SensitivityRule[] = [
     ["depth", "public"],
     ["depthCap", "public"],
   ]),
-  // P2c-2 (§2c) change-percolation events — spec/run/ancestor ids, ancestor head
+  // (§2c) change-percolation events — spec/run/ancestor ids, ancestor head
   // SHAs (public: a commit hash is not a secret), the severity label, the resolver
   // flag, and the irreconcilable diagnosis reason. None carry diff content,
   // credentials, or command output.

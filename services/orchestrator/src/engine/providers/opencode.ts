@@ -8,7 +8,7 @@ import type { TokenUsage, UsageLimitSignal, WriterAdapter, WriterResult } from "
 import { findOpenRouterGenerationId, foldGenerationId } from "./openRouterGenerationId.js";
 import { captureBaselineSha, captureGitStateAfterWriter } from "./writerGit.js";
 
-// P3-0012: opencode CLI Writer adapter. opencode is a Writer-only provider in
+// opencode CLI Writer adapter. opencode is a Writer-only provider in
 // this expansion and is pinned to the Zai GLM 5.1 model (`zai/glm-5.1`). It
 // mirrors the Codex/Claude Writer contract (same WriterAdapter shape, same
 // SSH-execution + credential-ref materialization) but invokes the `opencode`

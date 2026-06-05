@@ -1,10 +1,10 @@
-// P2A-0020 insight dispatcher. `computeInsight(kind, context, db)` calls
+// insight dispatcher. `computeInsight(kind, context, db)` calls
 // the per-kind pure compute function. `loadInsightsForProject` is the
 // read-through entry point used by the HTTP route and by the Forge
-// narration generator (P2A-0019); it walks every kind, reading the cache
+// narration generator; it walks every kind, reading the cache
 // first and recomputing if stale.
 //
-// P2e-1 note: `ci_flaky` is NOT a pure read-through compute — detecting a flaky
+// note: `ci_flaky` is NOT a pure read-through compute — detecting a flaky
 // check also RECORDS it on the quarantine surface and EMITS operator-visible
 // events. It therefore lives outside the cache-backed `computeInsight` switch
 // and runs through `detectAndQuarantineFlaky` only when an `eventStore` is

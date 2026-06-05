@@ -59,7 +59,7 @@ export interface DefaultConflictResolverDeps {
   checker: AnswererAdapter<CheckAnswer>;
   auditor: AnswererAdapter<AuditAnswer>;
   runGate: (input: { when: CiWhen; taskId?: string }) => Promise<GateOutcome>;
-  // P2c-2: present when this run is a change-percolation re-execution — reframes the
+  // present when this run is a change-percolation re-execution — reframes the
   // resolver into upstream-change mode (the ancestor's change flows INTO this spec).
   upstreamChange?: { ancestorSpecId: string; changeSummary: string };
 }

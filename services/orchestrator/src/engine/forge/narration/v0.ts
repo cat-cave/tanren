@@ -1,15 +1,15 @@
-// P2A-0019: templated v0 narration generator.
+// templated v0 narration generator.
 //
-// Phase 3 swaps this module for an LLM caller without touching the
+// A later LLM caller can swap in behind the same `forge_turns` schema; the
 // `forge_turns` schema. The generator produces a `ForgeAnswer` (the
-// P2A-0008 schema) by composing structured project context — recent
+// schema) by composing structured project context — recent
 // runs, pending reviews, week-to-date cost, velocity, workflow insights
 // — into the four shape blocks the hi-fi defines:
 //
 //   - body: a single-sentence project pulse
 //   - attentionItems: ranked queue (pending reviews, budget warnings,
 //     blockers)
-//   - insights: passed through from P2A-0020 (v0 doesn't generate them)
+//   - insights: passed through from upstream (v0 doesn't generate them)
 //   - prompts: hardcoded follow-up prompt list keyed by the project's
 //     current state
 //
@@ -47,7 +47,7 @@ export interface NarrationVelocity {
 }
 
 export interface NarrationInsight {
-  // Mirrors the ForgeInsight shape from P2A-0008 but with an id so the
+  // Mirrors the ForgeInsight shape from but with an id so the
   // acknowledge_insight tool has something to bind to.
   id: string;
   kind: ForgeInsight["kind"];
@@ -182,7 +182,7 @@ function mapInsight(insight: NarrationInsight): ForgeInsight {
 
 // Hardcoded suggested-prompt list. v0 keys these to the current state
 // (idle / has-review / has-blocked) so the operator sees prompts that
-// make sense for the situation. Phase 3 will derive these dynamically.
+// make sense for the situation. A later LLM pass derives these dynamically.
 function buildPrompts(input: NarrationInput): string[] {
   const prompts: string[] = [];
   if (input.pendingReviews.length > 0) {

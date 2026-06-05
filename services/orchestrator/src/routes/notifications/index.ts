@@ -1,5 +1,5 @@
-// P2B-0002 (additive): thin HTTP surface over the P2A-0017 notifications
-// engine. P2A-0017 shipped the schema, store, matrix evaluator, and ntfy
+// (additive): thin HTTP surface over the notifications
+// engine. shipped the schema, store, matrix evaluator, and ntfy
 // channel but no HTTP routes; the dashboard is a separate process and needs
 // to read/write `notification_targets` + `notification_routes` over HTTP to
 // make the notifications-matrix UI functional. This file ONLY wraps the

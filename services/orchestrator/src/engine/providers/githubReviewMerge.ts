@@ -1,7 +1,7 @@
-// P3-0008: GitHub API surface for the review→merge completion half of the run loop.
+// GitHub API surface for the review→merge completion half of the run loop.
 // Kept separate from providers/github.ts (the draft-PR + CI surface) so each file stays
 // under the 500-line cap. Every method takes a token + optional refreshToken supplier so
-// the P3-0003 resolver's 401-retry path flows through unchanged — no static-token reads.
+// the resolver's 401-retry path flows through unchanged — no static-token reads.
 
 import type { GitHubHttpClient, GitHubRepository } from "./github.js";
 import { isTransientStatus } from "./githubRetry.js";
@@ -305,7 +305,7 @@ export class GitHubReviewMergeService {
   }
 
   /**
-   * P2a: read the PR's up-to-date / mergeability state. GitHub computes
+   * read the PR's up-to-date / mergeability state. GitHub computes
    * `mergeable_state` asynchronously, so a freshly-opened/updated PR can briefly
    * report `unknown` (with `mergeable: null`); the caller treats that as "do not
    * assume current". `behind` is true when GitHub says the head is out of date
@@ -328,7 +328,7 @@ export class GitHubReviewMergeService {
   }
 
   /**
-   * P2a: bring the PR branch up to date with its base via GitHub's server-side
+   * bring the PR branch up to date with its base via GitHub's server-side
    * update-branch endpoint (`PUT /pulls/{n}/update-branch`). A 202 is an
    * accepted update (the branch advanced onto base — re-gate then merge); a 422
    * is GitHub reporting the update cannot be performed because of a real merge

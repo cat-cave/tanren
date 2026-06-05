@@ -1,7 +1,7 @@
-// P3-0016: mount both brownfield route groups in one call so `main.ts` stays a
+// mount both brownfield route groups in one call so `main.ts` stays a
 // thin wiring file (under the 500-line cap):
-//   - the P2B-0002 minimal link endpoint (`createBrownfieldRoutes`), and
-//   - the P3-0016 full track (recon → config-injection PR → DAG seed →
+//   - the minimal link endpoint (`createBrownfieldRoutes`), and
+//   - the full track (recon → config-injection PR → DAG seed →
 //     governance) (`createBrownfieldFullTrackRoutes`).
 // Both share the same pool/secrets/github plumbing; every GitHub/Answerer seam
 // inside is injectable, and neither adds a migration.

@@ -1,5 +1,5 @@
-// P2A-0019 shared authz helpers for Forge tools. Mirrors the access checks
-// used by P2A-0013 routes so every tool enforces the same gate. Tools call
+// shared authz helpers for Forge tools. Mirrors the access checks
+// used by routes so every tool enforces the same gate. Tools call
 // into these before reading or writing.
 
 import type { ActorContext } from "../../../auth/schemas.js";

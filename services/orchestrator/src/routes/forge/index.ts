@@ -1,4 +1,4 @@
-// P2A-0019: Forge HTTP routes. The dashboard hits these from the project
+// Forge HTTP routes. The dashboard hits these from the project
 // view and run-detail page. Tool invocations land at `/forge/tools/:toolId`
 // and route to the typed implementations in `engine/forge/tools/`.
 //
@@ -260,7 +260,7 @@ export function createForgeRoutes(options: ForgeRoutesOptions) {
 }
 
 // ---------------------------------------------------------------------------
-// Tool dispatch — the discriminated union from P2A-0008 keys into the
+// Tool dispatch — the discriminated union from keys into the
 // typed implementations. Adding a new tool is: extend `ForgeToolCall`,
 // implement the function, add a case here.
 // ---------------------------------------------------------------------------

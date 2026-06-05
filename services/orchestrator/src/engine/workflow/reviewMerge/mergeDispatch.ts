@@ -1,9 +1,9 @@
-// P3-0008: the merge stage. Runs after the review stage returns `approved`.
+// the merge stage. Runs after the review stage returns `approved`.
 // Dispatches to one of the per-repo MergeIntegration modes selected from the
 // project config:
 //
 //   direct_merge      → GitHub merge API (PUT /pulls/:n/merge)
-//   native_queue      → enter Tanren's native merge queue (P2d); the coordinator
+//   native_queue      → enter Tanren's native merge queue; the coordinator
 //                       later DRIVES the merge through the same per-run path
 //   external_reviewer → stop at ready-for-review; emit a hand-off and let a
 //                       human merge (no merge call is made here)
@@ -15,7 +15,7 @@
 // conflict-resolver attaches to. Required checks are never bypassed: a
 // branch-protected PR returns 405 and is reported as not-merged, not forced.
 //
-// P2a up-to-date enforcement: BEFORE the direct merge, the stage reads the PR
+// up-to-date enforcement: BEFORE the direct merge, the stage reads the PR
 // branch's mergeability (`readMergeability`). A `behind` branch is auto-rebased
 // via the server-side update-branch API (`updateBranch`) and its CI is re-polled
 // to green (`reGateCi`) before merging — emitting `merge.behind` + `merge.rebased`
@@ -95,7 +95,7 @@ export async function mergeForRun(input: MergeForRunInput): Promise<MergeForRunR
     payload: { taskKind: "merge" },
   });
 
-  // P2c-1 (§2c): resolve the run's speculative state. A NORMAL run is undefined
+  // §2c: resolve the run's speculative state. A NORMAL run is undefined
   // and proceeds unchanged. A SPECULATIVE run's PR is based on its integration ref
   // (`speculative_base`); its merge must NEVER land into that ref — it must land on
   // real `default_branch`.
@@ -134,7 +134,7 @@ export async function mergeForRun(input: MergeForRunInput): Promise<MergeForRunR
     }
     // (b) HOLD CLEARED (all ancestors merged): RE-TARGET the PR base from the
     // integration ref to `default_branch` (§2c step 3) so the dependent lands on
-    // REAL `main`, never the integration ref. The P2a up-to-date/auto-rebase + CI
+    // REAL `main`, never the integration ref. The up-to-date/auto-rebase + CI
     // re-gate below then brings the branch current with `default_branch`. The base
     // is re-pointed on the forge BEFORE any merge call, so directMerge's
     // mergeability read + merge act against `default_branch`.
@@ -170,7 +170,7 @@ export async function mergeForRun(input: MergeForRunInput): Promise<MergeForRunR
     ...(speculative !== undefined && { speculativeCleanup: speculative.speculativeBase }),
   });
 
-  // P3-0023 governance posture gate. Only Tanren-initiated auto-merges
+  // governance posture gate. Only Tanren-initiated auto-merges
   // (direct_merge / native_queue) are governed: a strict-posture external
   // change blocks (operator approval required); an audit_only external change
   // is observed (no merge call). The external_reviewer / not_configured
@@ -187,7 +187,7 @@ export async function mergeForRun(input: MergeForRunInput): Promise<MergeForRunR
     return dispatcher.handOff();
   }
   if (integration === "native_queue" && input.queueDrive !== true) {
-    // P2d: the run-loop's first pass under `native_queue` ENTERS the queue instead
+    // the run-loop's first pass under `native_queue` ENTERS the queue instead
     // of merging. The native MergeCoordinator later drives the actual merge (a
     // second mergeForRun call with `queueDrive: true` → the directMerge path
     // below). A speculative dependent whose hold has NOT cleared returned `blocked`
@@ -196,14 +196,14 @@ export async function mergeForRun(input: MergeForRunInput): Promise<MergeForRunR
     return dispatcher.enqueueNative();
   }
   // `direct_merge`, OR `native_queue` on the coordinator DRIVE pass: the SAME
-  // per-run merge path (P2a up-to-date/rebase + P2b conflict-resolution + P2c-1
+  // per-run merge path (up-to-date/rebase + conflict-resolution + retarget
   // retarget). The dispatcher labels its events from `this.deps.integration`, so a
   // drive pass records `native_queue` — not a second merge implementation.
   return dispatcher.directMerge();
 }
 
 /**
- * P2c-1 (§2c): the speculative state of a run at merge time. `undefined` for a
+ * §2c: the speculative state of a run at merge time. `undefined` for a
  * NORMAL run (no `speculative_base`) — it merges against `default_branch` as
  * always. For a SPECULATIVE run, `speculativeBase` is the integration ref the PR
  * is based on and `unmergedAncestors` is the (possibly empty) set of deps not yet
@@ -345,7 +345,7 @@ async function buildGitHubProbe(
 }
 
 /**
- * P3-0023 production contributor probe. Lists the PR's commits through the
+ * production contributor probe. Lists the PR's commits through the
  * VcsProvider and collects the distinct author + committer logins for the
  * external-change detection in the governance/review-merge decision path. Token
  * resolution is lazy — only paid when the gate actually needs contributors.

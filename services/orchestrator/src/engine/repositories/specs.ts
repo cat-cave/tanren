@@ -98,7 +98,7 @@ export const SpecStore = {
   },
 
   /**
-   * Behavior ids attached to a spec (P2A-0018). The `spec_behaviors` table may
+   * Behavior ids attached to a spec. The `spec_behaviors` table may
    * be absent on older deployments; the route degrades to an empty list, so this
    * read surfaces the raw rows and lets the caller own that fallback.
    */

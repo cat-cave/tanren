@@ -37,7 +37,7 @@ interface SidecarReleaseResponse {
 
 /**
  * Orchestrator-side allocator client. The orchestrator container no longer has
- * Docker socket access (P2A-0010); instead it calls the allocator sidecar over
+ * Docker socket access; instead it calls the allocator sidecar over
  * HTTP. The sidecar owns container lifecycle and finalizer cleanup.
  */
 export class SidecarHttpAllocator implements Allocator {

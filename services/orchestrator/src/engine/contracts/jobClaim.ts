@@ -1,8 +1,7 @@
-// Plane-split P2: the job-CLAIM seam between the data plane (worker) and the
-// control plane (orchestrator). P1 had the worker claim directly from
-// `job_queue` via DB-CAS; P2 moves the claim behind a control-plane endpoint so
-// the data plane no longer needs direct `job_queue` write access in the
-// cross-process topology (full de-privilege is P3).
+// The job-CLAIM seam between the data plane (worker) and the
+// control plane (orchestrator). The worker can claim directly from `job_queue`
+// via DB-CAS, or — when wired — behind a control-plane endpoint so the data
+// plane needs no direct `job_queue` write access in the cross-process topology.
 //
 // The seam is one interface — {@link JobClaimClient} — with two impls:
 //   - `DirectJobClaimClient` wraps the existing `JobQueue.claim` (the same
@@ -17,7 +16,7 @@
 // CLAIM SEMANTICS ARE UNCHANGED in both impls: the endpoint's handler calls the
 // SAME `JobQueue.claim`, so exactly-once is preserved end to end. Only the
 // TRANSPORT to that CAS differs. See docs/roadmap/saas-rls-and-plane-split-plan.md
-// (plane-split P2).
+//.
 
 import type { JobEnvelope, JobQueue } from "./jobQueue.js";
 import type { MtlsFetch } from "./mtlsChannel.js";

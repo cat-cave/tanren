@@ -1,5 +1,5 @@
-// P2e-1 (autonomy-engine.md §2d "Reaching Mergify parity → removing it
-// entirely"): flaky-test detection + auto-quarantine.
+// Flaky-test detection + auto-quarantine (autonomy-engine.md §2d), the native
+// CI intelligence that makes a managed merge queue unnecessary.
 //
 // Tanren persists every native gate run as a `gate.verdict` event, each carrying
 // the per-step `steps[]` (name + passed) and the `headSha` the gate ran against.

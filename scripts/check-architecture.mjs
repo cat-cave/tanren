@@ -26,13 +26,13 @@ const roadmapDocs = ["PROJECT_BRIEF.md", "docs/roadmap/R-WAVES.md", "docs/roadma
 const vendoredData = ["services/orchestrator/src/engine/costs/pricing/model_prices.json"];
 const lineMaxExclusions = new Set([...roadmapDocs, ...vendoredData, "pnpm-lock.yaml"]);
 const invariantDocExclusions = new Set(["PROJECT_BRIEF.md", "docs/contracts/architecture-checks.md"]);
-// Plane-split P3b: these files deliberately attempt (or document) a RAW event insert by
+// these files deliberately attempt (or document) a RAW event insert by
 // the de-privileged data-plane role to PROVE Postgres REJECTS it — exempt from single-event-writer.
 const singleEventWriterExclusions = new Set([
   "services/orchestrator/tests/planeSplitP3bDeprivilege.integration.test.ts",
   // The DagWalker lifecycle-read gap regression: seeds `events` via the OWNER pool
   // (the read fixture) AND asserts the data-plane role's raw events SELECT is
-  // REJECTED — exempt like the P3b deprivilege test above.
+  // REJECTED — exempt like the deprivilege test above.
   "services/orchestrator/tests/planeSplitP3LifecycleRead.integration.test.ts",
   // The strand-reconciler events-read gap regression (mirrors the lifecycle-read test
   // above): seeds `events` via the OWNER pool to set up the cross-org prior-unstranded
@@ -41,7 +41,7 @@ const singleEventWriterExclusions = new Set([
   "services/orchestrator/tests/planeSplitP3StrandReconcilerRead.integration.test.ts",
   // The autonomy-loop routing proof: a guarded pool whose query REJECTS a raw event
   // insert (mirroring the de-privileged role) so the test proves the loops route
-  // through the writer, never the bare pool — exempt like the P3b test above.
+  // through the writer, never the bare pool — exempt like the test above.
   "services/orchestrator/tests/autonomyLoopRemoteWrites.test.ts",
   "scripts/smoke/plane-split-deprivilege.ts",
   "scripts/smoke/plane-split-worker.ts",
@@ -279,7 +279,7 @@ function checkGitHubActions(projectFiles) {
 
 // Files that still contain pre-Phase-2A raw row casts. New casts in workflow
 // code are rejected; clearing this allowlist as those files migrate is part
-// of the typed-state contract owned by P2A-0005.
+// of the typed-state contract owned by.
 const workflowRowCastAllowlist = new Set([
   "services/orchestrator/src/engine/workflow/ciPolling.ts",
   "services/orchestrator/src/engine/workflow/githubDraftPr.ts",

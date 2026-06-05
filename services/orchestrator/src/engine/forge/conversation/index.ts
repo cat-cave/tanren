@@ -1,4 +1,4 @@
-// P3-0010: thick-Forge conversation backend barrel.
+// thick-Forge conversation backend barrel.
 //
 // The LLM-backed conversation engine that replaces the templated v0 narration
 // for operator-driven questions. The Forge thread route imports `askForge` +

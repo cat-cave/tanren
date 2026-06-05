@@ -1,4 +1,4 @@
-// P3-0010 (write-action approval): the Forge action-proposal store.
+// write-action approval: the Forge action-proposal store.
 //
 // A Forge answerer PROPOSES a write on its final turn; the conversation engine
 // persists each proposal here as `pending` and never executes it. A human

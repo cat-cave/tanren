@@ -8,7 +8,7 @@ import { z } from "zod";
 export const ActorKind = z.enum(["system", "operator", "writer", "answerer", "forge_template", "ci_poller"]);
 export type ActorKind = z.infer<typeof ActorKind>;
 
-// An ActorRef identifies the caller for audit/event purposes. Phase 2 callers
+// An ActorRef identifies the caller for audit/event purposes. Callers
 // should always pass one; the orchestrator falls back to `system` only at
 // boundaries we control.
 export const ActorRef = z.object({

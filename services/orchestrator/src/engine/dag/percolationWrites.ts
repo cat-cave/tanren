@@ -175,7 +175,7 @@ export async function clearPercolationPending(
  * Record the upstream change as planner context (intent stays alive) when a
  * re-execution could not reconcile. The re-execution already routed the dependent
  * back through the planner/resolver; this is the durable, inspectable carrier of WHY
- * (the P2b "merge.conflict.replan_routed" event, reused). It does NOT drop the spec.
+ * (the "merge.conflict.replan_routed" event, reused). It does NOT drop the spec.
  */
 export async function recordReplanContext(
   pool: pg.Pool,

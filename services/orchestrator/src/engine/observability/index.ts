@@ -1,7 +1,7 @@
-// P3-0029 observability: single import surface for the boundary timing layer.
+// observability: single import surface for the boundary timing layer.
 // Latency at the provider / SSH / GitHub adapter boundaries and at workflow
 // stage transitions is captured as structured logs — no DB table, no event
-// type, no migration. Queue-wait timing is owned by P3-0028 and is not here.
+// type, no migration. Queue-wait timing is owned by and is not here.
 export {
   consoleTimingSink,
   emitStageTiming,

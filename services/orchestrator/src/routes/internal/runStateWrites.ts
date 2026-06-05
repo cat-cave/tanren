@@ -1,4 +1,4 @@
-// Plane-split P3: the control-plane RUN-STATE WRITE endpoints. The data-plane
+// The control-plane RUN-STATE WRITE endpoints. The data-plane
 // worker POSTs its tenant run-state writes here over mTLS instead of writing the
 // control DB directly:
 //
@@ -191,7 +191,7 @@ export function createInternalRunStateWriteRoutes(deps: RunStateWriteRouteDeps):
     return c.json(result);
   });
 
-  // Plane-split P3c: the run/spec/task lifecycle write endpoints (set-run-status,
+  // the run/spec/task lifecycle write endpoints (set-run-status,
   // set-run-pr-url, set-spec-status, supersede-queued-planner-task, insert-task,
   // update-task). Kept in a sibling module so this file stays under the 500-line
   // cap; they share the same authn + `runWithOrgScope` + fixed-SQL contract.

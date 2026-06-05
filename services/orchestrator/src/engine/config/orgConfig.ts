@@ -25,7 +25,7 @@ const defaultEscapeHatches = () => EscapeHatches.parse({});
 const defaultAllocator = () => AllocatorConfig.parse({});
 const defaultForgePersona = () => ForgePersona.parse({});
 
-// P3-0002: org-level default credential refs, keyed by P2A-0013 credential
+// org-level default credential refs, keyed by credential
 // kind. A project that binds no credential of a given kind inherits the org
 // default. Stored in `organizations.config` JSONB so no DB migration is needed.
 // Both keys are optional; an org may default only one kind.
@@ -37,7 +37,7 @@ export const OrgDefaultCredentials = z
   .strict();
 export type OrgDefaultCredentials = z.infer<typeof OrgDefaultCredentials>;
 
-// P3-0003: per-org GitHub App installation. When present, the token resolver
+// per-org GitHub App installation. When present, the token resolver
 // prefers minting an auto-rotating installation token (from the App private
 // key stored in Vault under `credentialRef`) over the static `github_token`
 // fallback. Persisted in `organizations.config` JSONB — no DB migration. The
@@ -52,7 +52,7 @@ export const OrgGithubAppInstallation = z
   .strict();
 export type OrgGithubAppInstallation = z.infer<typeof OrgGithubAppInstallation>;
 
-// P3-0017: tanren-config audit-gate target. When the gate is ON
+// tanren-config audit-gate target. When the gate is ON
 // (`auditGateEnabled`), Bucket-B config writes (routing/limits) do not apply
 // to the DB directly — they are rendered as a `configFile` diff and opened as a
 // PR in this separate `repo` (the DB stays source of truth; apply happens on

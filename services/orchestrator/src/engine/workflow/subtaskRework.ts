@@ -1,5 +1,5 @@
 // Rework-routing helpers shared by runSubtaskLoop. A rejection — from the
-// checker, the auditor, or the P3-0005 deterministic gate — is routed back to
+// checker, the auditor, or the deterministic gate — is routed back to
 // the planner via planner.rerequested up to the per-spec rerun budget. Keeping
 // these here keeps subtaskLoop.ts focused on the loop topology under the
 // 500-line architecture cap.

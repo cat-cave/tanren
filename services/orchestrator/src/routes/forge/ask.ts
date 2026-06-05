@@ -1,4 +1,4 @@
-// P3-0010: thick-Forge conversation HTTP route.
+// thick-Forge conversation HTTP route.
 //
 // `POST /:orgId/forge/threads/:threadId/ask` runs one operator question
 // through the LLM-backed conversation engine (engine/forge/conversation) and
@@ -113,7 +113,7 @@ export function createForgeAskRoutes(options: ForgeAskRoutesOptions) {
           operatorTurn: result.operatorTurn,
           forgeTurn: result.forgeTurn,
           toolsUsed: result.toolResults.map((entry) => entry.call.tool),
-          // Pending write proposals the answerer raised this turn (P3-0010
+          // Pending write proposals the answerer raised this turn (the conversation
           // write-action approval). The dashboard renders these as live
           // approve/reject cards; the engine never executed them.
           proposals: result.proposals,

@@ -1,12 +1,12 @@
-// P2e-1 (autonomy-engine.md §2d Mergify parity) read routes for the two pure
+// (autonomy-engine.md §2d) read routes for the two pure
 // CI/queue read-models:
 //
 //   GET /orgs/:orgId/projects/:projectId/ci-analytics?windowDays=30
 //        → per-project CI pass-rate, timing, slowest/least-reliable checks,
-//          retry rate. (parity item 2: "CI analytics / insights per project")
+//          retry rate.
 //   GET /orgs/:orgId/projects/:projectId/queue-stats?windowDays=30
 //        → queue depth over time, time-in-queue, batch pass-rate, bisect /
-//          culprit counts, stack depth. (parity item 3: "Queue / stack stats")
+//          culprit counts, stack depth.
 //
 // Authz mirrors the DORA + workflow-insights routes exactly: org membership +
 // project access through the same `assertProjectAccess` gate the Forge tool

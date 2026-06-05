@@ -1,8 +1,8 @@
-// P2A-0014: Run-detail read API surface — list, snapshot, events, costs,
+// Run-detail read API surface — list, snapshot, events, costs,
 // Forge bundle, SSE stream, and project activity feed. Every handler is
-// scoped through `assertProjectAccess` (P2A-0019 helper) so the same authz
+// scoped through `assertProjectAccess` (helper) so the same authz
 // gate the Forge tool surface uses governs the public API. Event/cost
-// payloads pass through the P2A-0009 redaction serializer with the actor's
+// payloads pass through the redaction serializer with the actor's
 // scope; the dashboard opts into raw values via `?raw=true` or the
 // `X-View-Raw` header and the audit emitter handles the trail.
 //
@@ -414,7 +414,7 @@ async function fetchForgeBundle(pool: pg.Pool, args: ForgeBundleArgs): Promise<R
 }
 
 function fallbackSpec(specId: string): RunSpecSummary {
-  // Legacy fixture runs may reference a spec_id that no longer has a row in
+  // A fixture run may reference a spec_id that has no row in
   // the specs table. The contract requires a spec object on RunDetail, so we
   // return a degraded-but-typed shape rather than 500ing. The dashboard can
   // render "spec missing".

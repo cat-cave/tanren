@@ -1,4 +1,4 @@
-// P3-0022 Sentry source connector.
+// Sentry source connector.
 //
 // Reads UNRESOLVED Sentry issues for an org/project through the Sentry Web API
 // (`GET /api/0/projects/{org}/{project}/issues/?query=is:unresolved`) and maps

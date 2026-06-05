@@ -161,18 +161,18 @@ export const EventRegistry = {
   "task.completed": TaskCompletedPayload,
   "task.failed": TaskFailedPayload,
 
-  // P3-0028 queue hardening: a job whose retry budget is exhausted is
+  // queue hardening: a job whose retry budget is exhausted is
   // dead-lettered (terminal) rather than retried forever.
   "job.dead_lettered": JobDeadLetteredPayload,
 
-  // Planner role (legacy single-pass + Phase 2 subtask emission)
+  // Planner role (single-pass + subtask emission)
   "planner.started": PlannerStartedPayload,
   "planner.completed": PlannerCompletedPayload,
   "planner.failed": PlannerFailedPayload,
   "planner.subtasks.emitted": PlannerSubtasksEmittedPayload,
   "planner.rerequested": PlannerRerequestedPayload,
 
-  // Writer role (legacy + Phase 2 subtask narration)
+  // Writer role (single-pass + subtask narration)
   "writer.started": WriterStartedPayload,
   "writer.completed": WriterCompletedPayload,
   "writer.failed": WriterFailedPayload,
@@ -229,7 +229,7 @@ export const EventRegistry = {
   "cost.credit_rate_unknown": CostCreditRateUnknownPayload,
   "cost.overage_unobservable": CostOverageUnobservablePayload,
 
-  // Usage monitoring (P2A-cost-monitors): codexbar live subscription windows
+  // Usage monitoring: codexbar live subscription windows
   // + ccusage token-consumption accounting, captured runner-side over SSH.
   "usage.window.observed": UsageWindowObservedPayload,
   "usage.window.pressure": UsageWindowPressurePayload,
@@ -270,28 +270,28 @@ export const EventRegistry = {
   "review.auto_approved": ReviewAutoApprovedPayload,
   "review.changes_requested": ReviewChangesRequestedPayload,
 
-  // P3-0008 merge stage: per-repo integration dispatch + conflict scaffolding
+  // merge stage: per-repo integration dispatch + conflict scaffolding
   "merge.queued": MergeQueuedPayload,
   "merge.completed": MergeCompletedPayload,
   "merge.failed": MergeFailedPayload,
   "merge.conflict": MergeConflictPayload,
-  // P2a up-to-date enforcement: branch behind base → auto-rebase + re-gate CI.
+  // up-to-date enforcement: branch behind base → auto-rebase + re-gate CI.
   "merge.behind": MergeBehindPayload,
   "merge.rebased": MergeRebasedPayload,
-  // P2b intent-preserving conflict resolution: resolver invoked → resolved
+  // intent-preserving conflict resolution: resolver invoked → resolved
   // (re-gated) or irreconcilable (one spec re-planned, intent kept alive).
   "merge.conflict.resolving": MergeConflictResolvingPayload,
   "merge.conflict.resolved": MergeConflictResolvedPayload,
   "merge.conflict.irreconcilable": MergeConflictIrreconcilablePayload,
   "merge.conflict.replan_routed": MergeConflictReplanRoutedPayload,
-  // P3-0023 external-push governance posture block (strict / audit_only)
+  // external-push governance posture block (strict / audit_only)
   "merge.blocked": MergeBlockedPayload,
-  // P2c-1 (§2c): a speculative dependent's MERGE held until its ancestors merge,
+  // §2c: a speculative dependent's MERGE held until its ancestors merge,
   // then re-targeted from the integration ref to default_branch + the ref cleaned.
   "merge.speculative_held": MergeSpeculativeHeldPayload,
   "merge.retargeted": MergeRetargetedPayload,
   "merge.integration_cleaned": MergeIntegrationCleanedPayload,
-  // P2d (§2d): the native intelligent merge queue. A ready run ENTERS the queue
+  // §2d: the native intelligent merge queue. A ready run ENTERS the queue
   // (merge.queued w/ native_queue), the coordinator selects the DAG-ordered head
   // (merge.queue.advanced), and an entry that left without merging (conflict /
   // blocked / failed) records merge.dequeued. Serialized: one merge at a time.
@@ -302,7 +302,7 @@ export const EventRegistry = {
   // re-drive ceiling, or the merge state is unconfirmable (auto-retry could double-
   // merge). A LOUD operator-visible halt (does NOT silently re-drive forever).
   "merge.queue.infra_blocked": MergeQueueInfraBlockedPayload,
-  // P2d-2 (§2d): speculative batch-check + bisect. The coordinator speculatively
+  // §2d: speculative batch-check + bisect. The coordinator speculatively
   // integrates `default_branch + batch PRs` + CI-checks that prospective merged state
   // (merge.batch.checking); a green check merges the batch in DAG order
   // (merge.batch.passed); a failed check is BISECTED (merge.batch.bisecting) to isolate
@@ -324,12 +324,12 @@ export const EventRegistry = {
   "merge.post_merge_failed": MergePostMergeFailedPayload,
   "issue.opened": IssueOpenedPayload,
 
-  // Notification dispatch (schemas declared; dispatcher lands in P2A-0017)
+  // Notification dispatch (schemas declared; dispatcher lands in)
   "notification.enqueued": NotificationEnqueuedPayload,
   "notification.sent": NotificationSentPayload,
   "notification.failed": NotificationFailedPayload,
 
-  // P-INT-2 capability-driven onboarding: a project leaf resource was provisioned
+  // capability-driven onboarding: a project leaf resource was provisioned
   // or bound from the org grant (refs only, never secret values).
   "integration.provisioned": IntegrationProvisionedPayload,
 
@@ -358,11 +358,11 @@ export const EventRegistry = {
   "hello.ssh_completed": HelloSshCompletedPayload,
   "hello.completed": HelloCompletedPayload,
 
-  // Redaction audit (P2A-0009): emitted whenever an elevated-scope actor
+  // Redaction audit: emitted whenever an elevated-scope actor
   // reads raw payload values via the redaction serializer.
   "redaction.raw_access": RedactionRawAccessPayload,
 
-  // P2B-0008 failure recovery: operator-initiated recovery actions against a
+  // failure recovery: operator-initiated recovery actions against a
   // halted run, persisted as run lineage in the events table.
   "recovery.revise_routed": RecoveryReviseRoutedPayload,
   "recovery.replan_queued": RecoveryReplanQueuedPayload,
@@ -385,11 +385,11 @@ export const EventRegistry = {
   // concurrency-saturation hold (no in-flight slot free) — two distinct outcomes.
   "dag.budget.paused": DagBudgetPausedPayload,
   "dag.concurrency.saturated": DagConcurrencySaturatedPayload,
-  // P2c-1 (§2c): speculative execution — a dependent started early on a
+  // §2c: speculative execution — a dependent started early on a
   // speculative integration branch, or was held over the depth cap.
   "dag.spec.speculative": DagSpecSpeculativePayload,
   "dag.spec.speculation_held": DagSpecSpeculationHeldPayload,
-  // P2c-2 (§2c CHANGE-PERCOLATION): an ancestor changed after a dependent started
+  // §2c CHANGE-PERCOLATION: an ancestor changed after a dependent started
   // speculatively — the delta percolates down the chain (NOT discarded). Started,
   // absorbed, deferred (lazy P2/P3), or routed-back-to-planner (irreconcilable).
   "dag.spec.percolating": DagSpecPercolatingPayload,

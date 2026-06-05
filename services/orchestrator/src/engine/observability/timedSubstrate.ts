@@ -1,8 +1,8 @@
-// P3-0029 observability: a timing decorator for the COMMAND SUBSTRATE boundary.
+// observability: a timing decorator for the COMMAND SUBSTRATE boundary.
 // It implements the CommandSubstrate contract and delegates to a real substrate,
 // emitting one structured timing record per `run()` call. It does NOT change
 // the substrate's behavior, retry semantics, or result shape — it only
-// measures latency at the boundary. Queue-wait timing is owned by P3-0028 and
+// measures latency at the boundary. Queue-wait timing is owned by and
 // is out of scope.
 //
 // The emitted attributes are secret-free: the runner backend plus (for the SSH

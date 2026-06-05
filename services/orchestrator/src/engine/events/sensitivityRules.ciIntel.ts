@@ -15,7 +15,7 @@ export const ciIntelSensitivityRules: SensitivityRule[] = [
     ["flaky", "public"],
     ["testExitCode", "public"],
   ]),
-  // P2e-1 + CI-intelligence PR2 flaky detection + quarantine — check/test name +
+  // + CI-intelligence PR2 flaky detection + quarantine — check/test name +
   // non-determinism evidence, all `public` (the whole point is operator visibility
   // of the quarantine). The per-test grain adds testId/file/suite/intraRunFlakyCount;
   // those are public CI identifiers like the check name — nothing secret rides here.

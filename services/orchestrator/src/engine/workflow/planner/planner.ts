@@ -1,5 +1,5 @@
-// P2A-0012: real planner module. Builds the Codex-targeted prompt that emits
-// a typed `PlanAnswer` (P2A-0008) and dispatches it through an injected
+// real planner module. Builds the Codex-targeted prompt that emits
+// a typed `PlanAnswer` and dispatches it through an injected
 // Answerer adapter. The Answerer abstraction lets unit tests drive the loop
 // without an SSH-backed Codex CLI; the production wiring uses the Codex
 // adapter (see services/orchestrator/src/engine/providers/codex.ts).
@@ -7,14 +7,14 @@ import { answererOutputSchemaFor, PlanAnswer, type PlanSubtask } from "../../ans
 import type { AnswererAdapter } from "../../providers/types.js";
 
 // Compact spec context the planner consumes. Behaviors are passed in
-// pre-resolved (P2A-0018 entity lookups happen at workflow construction
+// pre-resolved (entity lookups happen at workflow construction
 // time so the planner module stays free of repository access).
 export interface PlannerSpecContext {
   specTitle: string;
   specDescription: string;
   acceptanceCriteria: ReadonlyArray<string>;
   // Behavior ids the planner may reference. v0 keeps them opaque strings;
-  // P2A-0018 entity title/given/when/then text is rendered upstream into the
+  // entity title/given/when/then text is rendered upstream into the
   // `behaviorContext` field below.
   behaviorIds: ReadonlyArray<string>;
   behaviorContext: ReadonlyArray<{ id: string; title: string; description: string }>;
@@ -24,9 +24,9 @@ export interface PlannerSpecContext {
 // Carrying both the producer and the structured reason matters because the
 // auditor and the checker reject for very different reasons (a checker
 // rejects per-subtask criteria; the auditor rejects the integrated result;
-// P3-0005's deterministic gate rejects on a nonzero build/test/lint exit).
+// the deterministic gate rejects on a nonzero build/test/lint exit).
 export interface PlannerRejectionFeedback {
-  // P3-0008 adds "reviewer": a changes-requested PR review routed back through
+  // adds "reviewer": a changes-requested PR review routed back through
   // the same rework path the checker/auditor/gate use, so the planner re-plans
   // against the reviewer's feedback. "writer" is a hard writer failure (the
   // provider crashed / timed out mid-subtask) routed through the SAME path so a

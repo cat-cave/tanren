@@ -1,4 +1,4 @@
-// P3-0010: thick-Forge conversation engine.
+// thick-Forge conversation engine.
 //
 // Orchestrates one operator→Forge exchange against a persisted thread:
 //   1. Append the operator's question as a turn (authorKind "operator").
@@ -9,7 +9,7 @@
 //      maxToolRounds so a misbehaving answerer can't loop forever).
 //   4. Append the finalized ForgeAnswer as a turn (authorKind "forge_llm").
 //
-// WRITE actions follow the propose→approve→execute pattern (P3-0010 write-
+// WRITE actions follow the propose→approve→execute pattern (write-
 // action approval): the answerer is still constrained to the READ family for
 // tool DISPATCH (a write-tool request mid-loop is dropped, never executed), but
 // its final answer may carry `proposedActions` — write tools it wants a human

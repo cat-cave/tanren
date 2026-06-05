@@ -1,10 +1,10 @@
-// P3-0019 DORA metric computation. Pure reducer (`deriveDoraMetrics`) over
+// DORA metric computation. Pure reducer (`deriveDoraMetrics`) over
 // rows that runs/tasks/events already persist, plus a thin DB loader
 // (`computeDoraMetrics`) that pulls those rows for a project + window. No new
 // data collection and no migration — every input column predates this spec.
 //
 // Inputs (all read-only):
-//   - merges:   `merge.completed` events (P3-0008) joined to their spec's
+//   - merges:   `merge.completed` events joined to their spec's
 //               created_at → one merge row per completed merge.
 //   - runs:     terminal runs in the window (status completed/failed/
 //               halted/cancelled) → change-failure-rate denominator.

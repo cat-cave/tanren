@@ -1,11 +1,11 @@
-// Plane-split P1+P2 cross-process smoke. Proves the run-executor worker is a
-// STANDALONE deployable that claims over the mTLS CONTROL-PLANE endpoint (P2): a
+// Cross-process plane-split smoke. Proves the run-executor worker is a
+// STANDALONE deployable that claims over the mTLS CONTROL-PLANE endpoint: a
 // run enqueued against the shared Postgres (the same `job_queue` insert the
 // control-plane API does) is CLAIMED and EXECUTED by the separate `worker`
 // compose container — across the API↔worker process boundary — and finalized,
 // all under the RLS-enforced `tanren_app` runtime role.
 //
-// Plane-split P2 adds a DIRECT proof of the control-plane claim channel: the
+// A DIRECT proof of the control-plane claim channel: the
 // smoke itself acts as a data-plane client and hits the live orchestrator's
 // `/internal/claim-job` endpoint (a) over mTLS with the worker's client cert →
 // it claims a seeded job + returns its org_id, and (b) without a client cert →
@@ -38,8 +38,8 @@
 // run's org scope on the `tanren_app` role but DENIED under an empty scope
 // (deny-by-default) — proving the worker container runs under enforced RLS.
 //
-// Plane-split P3 adds a DIRECT proof of the control-plane WRITE endpoints
-// (`proveMtlsWriteEndpoints`): the smoke acts as a data-plane client and (a)
+// A DIRECT proof of the control-plane WRITE endpoints
+// `proveMtlsWriteEndpoints`: the smoke acts as a data-plane client and (a)
 // without a cert is rejected at TLS on a write endpoint, and (b) with the worker
 // cert finalizes a seeded run + appends its event over mTLS — the rows landing
 // server-side under enforced RLS, with a retried finalize a no-op (exactly-once).
@@ -47,7 +47,7 @@
 // cross-process run below ALSO finalizes via these endpoints (the worker writes
 // no tenant tables directly); its terminal-state assertion then proves the
 // remote-write path end-to-end. See docs/roadmap/saas-rls-and-plane-split-plan.md
-// (plane-split P3).
+//.
 
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -176,7 +176,7 @@ async function rlsVisibility(): Promise<[number, number, string | undefined]> {
   }
 }
 
-// Plane-split P2: seed a SECOND queued run whose job the smoke claims DIRECTLY
+// Seed a SECOND queued run whose job the smoke claims DIRECTLY
 // over the mTLS endpoint. It uses a DISTINCT task_kind (`demo`, an existing
 // allowed kind) so the worker container — which claims only `plan` — never
 // steals it; the smoke's mTLS claim is the only consumer, making the
@@ -290,7 +290,7 @@ async function proveMtlsClaimEndpoint(): Promise<void> {
   );
 }
 
-// Plane-split P3: a run the smoke finalizes DIRECTLY over the mTLS write
+// A run the smoke finalizes DIRECTLY over the mTLS write
 // endpoints (distinct run_id so it never races the worker container).
 const writeRunId = `run_${randomUUID()}`;
 
@@ -324,7 +324,7 @@ async function readWriteProbeRun(): Promise<{ status: string | undefined; events
   }
 }
 
-// Prove the control-plane mTLS WRITE endpoints directly (P3): (1) a NO-cert caller
+// Prove the control-plane mTLS WRITE endpoints directly: (1) a NO-cert caller
 // is rejected at TLS on a write endpoint; (2) the worker's client cert finalizes a
 // seeded run + appends its run.failed event over mTLS, and the rows LAND under the
 // control plane's enforced-RLS org scope — server-side, so the data plane wrote
@@ -410,17 +410,17 @@ async function main(): Promise<void> {
     `[plane-split-smoke] seeded queued run ${runId} (org ${orgId}); waiting for the worker container…\n`,
   );
 
-  // Plane-split P2: prove the control-plane mTLS claim endpoint directly
+  // Prove the control-plane mTLS claim endpoint directly
   // (authn-closed + a trusted claim that threads org_id) on its OWN seeded job,
   // claimed by run_id so it never races the worker container's job above.
   await proveMtlsClaimEndpoint();
 
-  // Plane-split P3: prove the control-plane mTLS WRITE endpoints directly
+  // Prove the control-plane mTLS WRITE endpoints directly
   // (authn-closed + a trusted finalize/append that lands rows server-side under
   // enforced RLS, exactly-once) on its OWN seeded run.
   await proveMtlsWriteEndpoints();
 
-  // Plane-split P3b (the CUTOVER): when proving the de-privilege, confirm a
+  // The de-privilege CUTOVER: when proving the de-privilege, confirm a
   // direct tenant write by the de-privileged data-plane role is denied by
   // Postgres BEFORE waiting on the worker — a fast, deterministic negative proof.
   if (proveDeprivilegeEnabled()) {

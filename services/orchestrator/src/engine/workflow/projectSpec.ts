@@ -69,7 +69,7 @@ export interface CreateSpecRunInput {
   specId: string;
   trigger?: string;
   branch?: string;
-  // P2c-1 (§2c) SPECULATIVE start; P2c-2: `integratedAncestorShas` = build base,
+  // (§2c) SPECULATIVE start;: `integratedAncestorShas` = build base,
   // `verifiedAncestorShas` = re-gated-clean (absorbed) carry-forward, `percolationPending` = in-flight marker.
   //
   // `speculativeBase: null` is the §2c "ancestor-merged → non-speculative re-base":
@@ -255,7 +255,7 @@ async function ensureProjectAccess(pool: QueryClient, projectId: string, actor?:
   throw new ProjectAccessDeniedError(projectId);
 }
 
-/** JSON-encode a value for a jsonb column, or NULL when absent (the P2c-2 percolation columns). */
+/** JSON-encode a value for a jsonb column, or NULL when absent (the percolation columns). */
 function jsonbOrNull(value: unknown): string | null {
   return value === undefined || value === null ? null : JSON.stringify(value);
 }
@@ -299,7 +299,7 @@ async function createQueuedRunFromSpecOnClient(
 ): Promise<SpecRunContract> {
   const loaded = await loadSpecWithProject(client, input.specId);
   await ensureClientProjectAccess(client, loaded.project.projectId, actor);
-  // P2c-1: a speculative start skips the done-only gate (the walker enforced the threshold gate).
+  // a speculative start skips the done-only gate (the walker enforced the threshold gate).
   if (input.speculative === undefined) await ensureSpecDependenciesDone(client, loaded.spec);
   const plannerTaskId = `task_${randomUUID()}`;
   const run: SpecRunContract = {
@@ -315,7 +315,7 @@ async function createQueuedRunFromSpecOnClient(
     spec: { ...loaded.spec, status: "in_flight" },
   };
 
-  // P2c-2 percolation columns — set only on a speculative start (`verified`/`pending` carried onto a re-execution run).
+  // percolation columns — set only on a speculative start (`verified`/`pending` carried onto a re-execution run).
   const spec = input.speculative;
   await client.query(
     // org_id derived in-statement from the parent project (tanren tenancy).

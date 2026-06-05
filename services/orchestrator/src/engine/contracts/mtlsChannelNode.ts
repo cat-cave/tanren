@@ -1,4 +1,4 @@
-// Plane-split P2: the real Node mTLS impls behind the `mtlsChannel.ts` contract.
+// The real Node mTLS impls behind the `mtlsChannel.ts` contract.
 // Kept separate from the contract so the contract stays dependency-light and the
 // `node:tls` / `node:https` surface lives in one place.
 //

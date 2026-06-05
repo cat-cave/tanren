@@ -1,4 +1,4 @@
-// P2A-0013: behavior CRUD routes. Behaviors are owned by a persona; the
+// behavior CRUD routes. Behaviors are owned by a persona; the
 // persona's org/project scoping is the authorization boundary.
 
 import { Hono } from "hono";
@@ -14,7 +14,7 @@ interface BehaviorRoutesOptions {
 }
 
 /* eslint-disable unicorn/no-thenable */
-// "then" is part of the BDD Given/When/Then vocabulary used by P2A-0018
+// "then" is part of the BDD Given/When/Then vocabulary used by behaviors
 // behaviors. The lint warning about thenable objects does not apply to a Zod
 // schema field name; this disable mirrors the engine BehaviorRow schema.
 const BehaviorCreateBody = z.object({

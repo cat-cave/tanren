@@ -1,4 +1,4 @@
-// P2A-0015: acceptance config loader.
+// acceptance config loader.
 //
 // Reads operator-supplied credentials and target repo from a single config
 // file. Stack-internal details (database URL, Vault addr/token, SSH host/

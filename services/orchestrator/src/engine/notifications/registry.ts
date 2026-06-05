@@ -15,12 +15,12 @@ import { ChannelKind } from "./schemas.js";
 // not supplied is registered as a StubChannel so the matrix can be configured
 // against it without crashing the dispatcher.
 //
-//   - ntfy (P2A-0017): the original v0 reference channel.
-//   - slack (P3-0024): incoming-webhook delivery; the webhook URL is resolved
+//   - ntfy: the original v0 reference channel.
+//   - slack: incoming-webhook delivery; the webhook URL is resolved
 //     from a write-only credential ref via the secret store. Only wired when
 //     `slack` deps (carrying the secret store) are supplied.
-//   - github_checks (P3-0024): posts a commit status to a PR head SHA, authed
-//     through the P3-0003 token resolver. Only wired when `github` deps are
+//   - github_checks: posts a commit status to a PR head SHA, authed
+//     through the token resolver. Only wired when `github` deps are
 //     supplied.
 //   - teams / discord / webhook: incoming-webhook POSTs (per-platform body
 //     shape). Wired when their deps key is supplied.

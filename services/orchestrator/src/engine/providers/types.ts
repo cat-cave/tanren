@@ -69,7 +69,7 @@ export interface WriterAdapter {
   readonly cli: "claude" | "codex" | "opencode" | "aider" | "pi" | "reasonix" | "fake";
   // authRef is the credential reference that this adapter will use at call
   // time. The orchestrator reads it at task completion to attribute the
-  // resulting cost record to one of the three v0 cost models (P2A-0011).
+  // resulting cost record to one of the three v0 cost models.
   // Adapters that do not consume an LLM (e.g. fake fixtures) still declare
   // an authRef so the CostRecorder can run uniformly.
   readonly authRef: string;
@@ -98,7 +98,7 @@ export interface AnswererRunOptions<TOutput> {
 export interface AnswererAdapter<TOutput> {
   readonly kind: "answerer";
   readonly cli: "claude" | "codex" | "fake";
-  // See WriterAdapter.authRef: P2A-0011 attribution applies uniformly to
+  // See WriterAdapter.authRef: attribution applies uniformly to
   // every real Codex planner/writer/checker/auditor call.
   readonly authRef: string;
   runAnswerer(opts: AnswererRunOptions<TOutput>): Promise<TOutput>;

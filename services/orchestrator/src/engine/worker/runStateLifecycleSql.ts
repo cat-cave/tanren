@@ -1,10 +1,10 @@
-// Plane-split P3c: the ONE source of truth for the run/spec/task LIFECYCLE write
+// the ONE source of truth for the run/spec/task LIFECYCLE write
 // SQL. Both the in-process `DirectRunStateWriter` and the control-plane
 // `/internal/*` endpoints execute these SAME fixed, parameterized statements, so
 // the persisted rows are byte-for-byte identical whichever plane runs them — and
 // the endpoint never runs caller-supplied SQL (it maps a structured op to a
 // fixed statement here). The strings are byte-identical to the inline `.query`
-// the workflow drove before P3c, so the direct path + its mutation suite are
+// the workflow drove before, so the direct path + its mutation suite are
 // unchanged.
 
 import type {

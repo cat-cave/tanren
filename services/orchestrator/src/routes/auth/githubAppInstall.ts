@@ -1,4 +1,4 @@
-// P3-0003: GitHub App install-onboarding flow, mirroring the OAuth login flow
+// GitHub App install-onboarding flow, mirroring the OAuth login flow
 // in `routes/auth/index.ts` (state cookie → authorize redirect → callback →
 // persist to the org).
 //

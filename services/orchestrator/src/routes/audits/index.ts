@@ -1,4 +1,4 @@
-// P3-0021 scheduled-audits HTTP routes.
+// scheduled-audits HTTP routes.
 //
 //   GET  /:orgId/audits                      → { jobs, recommended }
 //   POST /:orgId/audits                       create an audit job (the composer)

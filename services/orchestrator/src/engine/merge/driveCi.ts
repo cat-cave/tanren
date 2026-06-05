@@ -1,5 +1,5 @@
 // The merge-coordinator drive-pass NATIVE re-gate (the no-Actions delivery model).
-// When the coordinator drives a queued run's merge and P2a auto-rebases the branch,
+// When the coordinator drives a queued run's merge and auto-rebase rewrites the branch,
 // the prior verdict is stale — so the merge stage re-gates the PR head BEFORE merging.
 // At drive time the run's original runner is GONE, so this re-gate PROVISIONS A FRESH
 // runner, clones the PR head branch, installs deps, and runs the repo's `pre_merge`

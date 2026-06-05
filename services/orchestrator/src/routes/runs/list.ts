@@ -1,4 +1,4 @@
-// P2A-0014: data loaders backing the run-detail API surface. Each function
+// data loaders backing the run-detail API surface. Each function
 // here decodes raw pg rows into the contract types from contract.ts. The
 // route layer composes these; no SQL lives in routes/runs/index.ts.
 
@@ -108,7 +108,7 @@ export async function fetchRunSpecSummary(pool: QueryClient, specId: string): Pr
 }
 
 async function fetchBehaviorIds(pool: QueryClient, specId: string): Promise<string[]> {
-  // spec_behaviors table arrived with P2A-0018; older deployments without
+  // spec_behaviors table arrived with; older deployments without
   // the table degrade to an empty list rather than 500ing.
   try {
     return await SpecStore.selectBehaviorIds(pool, specId, systemActor);

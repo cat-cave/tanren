@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-// P-INT-2 capability-driven onboarding event schema, split into its own module so
+// capability-driven onboarding event schema, split into its own module so
 // `schemas/integrations.ts` stays under the 500-line cap. A capability-driven
 // onboarding provisioned (or bound) a project-level leaf resource (a Sentry
 // project + DSN, a Slack channel, a deploy app) from the org grant. The payload

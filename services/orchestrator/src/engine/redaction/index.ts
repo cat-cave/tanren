@@ -1,7 +1,7 @@
-// Single import surface for the P2A-0009 redaction layer. Callers wire
+// Single import surface for the redaction layer. Callers wire
 // route handlers to `redactEventPayload` + `emitRedactionAudit`; everything
 // else (scope policy, marker shape, high-entropy heuristic) is exported
-// here for tests and adjacent surfaces (notifications dispatch, P2A-0014
+// here for tests and adjacent surfaces (notifications dispatch, the read
 // run-detail API) that need to apply the same redaction discipline.
 
 export {

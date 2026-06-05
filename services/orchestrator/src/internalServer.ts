@@ -1,4 +1,4 @@
-// Plane-split P2: the control-plane INTERNAL mTLS listener. A SEPARATE HTTPS
+// The control-plane INTERNAL mTLS listener. A SEPARATE HTTPS
 // server from the public API (`main.ts`, plain HTTP on ORCHESTRATOR_PORT) that
 // serves ONLY the internal `/internal/*` surface — today the `/internal/claim-job`
 // endpoint the data-plane worker claims through. Keeping it on its own port +
@@ -12,7 +12,7 @@
 //                                       the CA that signs trusted data-plane certs
 // When the cert env is unset the internal listener does NOT start (single-process
 // dev / the in-process `TANREN_RUN_WORKER=1` path needs no network claim). See
-// docs/roadmap/saas-rls-and-plane-split-plan.md (plane-split P2).
+// docs/roadmap/saas-rls-and-plane-split-plan.md.
 
 import { createServer } from "node:https";
 import { serve } from "@hono/node-server";
@@ -43,7 +43,7 @@ export function buildInternalApp(deps: { pool: pg.Pool }): Hono {
   // handshake, so this is defense-in-depth + the peer-identity surface.
   const verifier = new NodeMtlsPeerVerifier();
   app.route("/", createInternalClaimRoutes({ pool: deps.pool, verifier }));
-  // Plane-split P3: the run-state WRITE endpoints (append-event / record-cost /
+  // The run-state WRITE endpoints (append-event / record-cost /
   // finalize-run) the remote-writes worker posts its tenant writes to.
   app.route("/", createInternalRunStateWriteRoutes({ pool: deps.pool, verifier }));
   return app;

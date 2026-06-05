@@ -1,4 +1,4 @@
-// P2A-0014: Run-detail read API contract — single source of truth for the
+// Run-detail read API contract — single source of truth for the
 // HTTP request/response shapes 2B dashboard surfaces consume. The shapes
 // here are frozen at spec exit; changes require an addendum in
 // docs/contracts/run-detail-api.md.
@@ -55,7 +55,7 @@ export type TaskTimelineEntry = z.infer<typeof TaskTimelineEntry>;
 // ---------------------------------------------------------------------------
 
 // Event payloads are typed by EventRegistry on write; the API surface keeps
-// `payload` as `unknown` because the redaction layer (P2A-0009) may strip or
+// `payload` as `unknown` because the redaction layer may strip or
 // rewrite fields per actor scope. `redactedPaths` lists fields the
 // serializer dropped so the dashboard can render a "hidden by redaction"
 // hint without guessing.
@@ -75,7 +75,7 @@ export const RunEventRow = z
 export type RunEventRow = z.infer<typeof RunEventRow>;
 
 // ---------------------------------------------------------------------------
-// Cost record (typed CostRecord per P2A-0011)
+// Cost record (typed CostRecord per)
 // ---------------------------------------------------------------------------
 
 export const RunCostRecord = z
@@ -140,7 +140,7 @@ export const RunDetail = z
     // Capped recent events (default RECENT_EVENT_CAP); pagination via /events.
     recentEvents: z.array(RunEventRow),
     costs: z.array(RunCostRecord),
-    // Insight rows are validated by the P2A-0020 schema; kept as `unknown`
+    // Insight rows are validated by the schema; kept as `unknown`
     // here so this contract stays decoupled from the InsightPayload union
     // (which may add kinds in addendums).
     insights: z.array(z.unknown()),

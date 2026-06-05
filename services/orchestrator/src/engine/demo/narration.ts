@@ -8,13 +8,13 @@
 // the body + showStopperRisks) — the prose can never claim a behavior passed that the
 // evidence says failed.
 //
-// The narration is shaped by the P2A-0008 `DemoAnswer` schema. The Answerer is asked
-// to emit exactly the P2A-0008 shape (default Codex, Claude selectable) and the
+// The narration is shaped by the `DemoAnswer` schema. The Answerer is asked
+// to emit exactly the shape (default Codex, Claude selectable) and the
 // result is parsed through the same Zod source of truth.
 //
 // The Answerer is injected (an `AnswererAdapter<DemoAnswer>`), so unit tests
 // drive the generator without an SSH-backed CLI. Production wiring resolves
-// the adapter from the project's `demo` routing chain via the P3-0012
+// the adapter from the project's `demo` routing chain via the opencode
 // adapter selector (default Codex; Claude when the chain heads with it).
 //
 // Graceful degradation is a first-class requirement: when no demo credential
@@ -28,7 +28,7 @@ import { answererOutputSchemaFor, DemoAnswer } from "../answerers/schemas/index.
 import type { AnswererAdapter } from "../providers/types.js";
 import type { BehaviorEvidence } from "./demoEvidence.js";
 
-// Behavior the run demonstrated. Mirrors the P2A-0018 behavior shape the
+// Behavior the run demonstrated. Mirrors the behavior shape the
 // caller resolves upstream so this module stays free of repository access.
 export interface DemoBehaviorContext {
   id: string;
@@ -71,7 +71,7 @@ export interface DemoNarrationResult {
   // Which path produced the narration. The caller records this for
   // traceability and so the dashboard can flag template-fallback narration.
   provenance: DemoNarrationProvenance;
-  // The schema id the Answerer was invoked with (the P2A-0008 demo schema).
+  // The schema id the Answerer was invoked with (the demo schema).
   schemaId: string;
 }
 
@@ -197,7 +197,7 @@ function templateFromEvidence(input: DemoNarrationInput, evidence: ReadonlyArray
 
 // generateDemoNarration produces the demo-role narration.
 //
-// When `answerer` is non-null, it runs the real Answerer against the P2A-0008
+// When `answerer` is non-null, it runs the real Answerer against the Forge
 // DemoAnswer schema. If that call throws (timeout, usage-limit, validation,
 // transport), it degrades to the template rather than propagating — the demo
 // must not hard-fail on a flaky CLI. When `answerer` is null (no credential

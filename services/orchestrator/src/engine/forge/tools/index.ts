@@ -1,5 +1,5 @@
-// P2A-0019: barrel for Forge tool implementations. Each export name
-// matches the corresponding `ForgeToolCall` variant from the P2A-0008
+// barrel for Forge tool implementations. Each export name
+// matches the corresponding `ForgeToolCall` variant from the Forge
 // schema (with the `tanren.`/`repo.` prefix removed). The dashboard's
 // `/forge/tools` route dispatches to these by name.
 

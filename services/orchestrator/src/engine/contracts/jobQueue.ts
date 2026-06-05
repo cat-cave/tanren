@@ -8,7 +8,7 @@ export interface JobEnvelope<TPayload = unknown> {
   taskKind: string;
   payload: TPayload;
   attempts: number;
-  /** P3-0028: configured re-claim ceiling for this job. */
+  /** configured re-claim ceiling for this job. */
   maxAttempts: number;
   // RLS R3b: the owning run's org, stamped on enqueue (job_queue.org_id). The
   // queue stays OUTSIDE RLS, so this is the worker's tenant BOOTSTRAP source —
@@ -23,9 +23,9 @@ export type EnqueueJob<TPayload = unknown> = Omit<JobEnvelope<TPayload>, "id" | 
   maxAttempts?: number;
 };
 
-/** P3-0028 queue lease default: a claimed job's lease lives this long unless renewed. */
+/** queue lease default: a claimed job's lease lives this long unless renewed. */
 export const DEFAULT_LEASE_MS = 60_000;
-/** P3-0028 retry-budget default: bounded re-claim attempts before dead-lettering. */
+/** retry-budget default: bounded re-claim attempts before dead-lettering. */
 export const DEFAULT_MAX_ATTEMPTS = 5;
 
 /** A job the reaper recovered: either requeued (lease expired, budget left) or dead-lettered. */
@@ -42,13 +42,13 @@ export interface JobQueue<TPayload = unknown> {
   enqueue(job: EnqueueJob<TPayload>): Promise<JobEnvelope<TPayload>>;
   /** Claim one queued job. `leaseMs` sets the initial lease window (default {@link DEFAULT_LEASE_MS}). */
   claim(taskKind: string, options?: { runId?: string; leaseMs?: number }): Promise<JobEnvelope<TPayload> | undefined>;
-  /** P3-0028: extend a claimed job's lease while the worker is still executing it. */
+  /** extend a claimed job's lease while the worker is still executing it. */
   heartbeat(id: string, leaseMs?: number): Promise<void>;
   complete(id: string): Promise<void>;
   fail(id: string, failure: { kind: string; message: string }): Promise<void>;
   failQueuedForRun(runId: string, failure: { kind: string; message: string }): Promise<void>;
   /**
-   * P3-0028 lease recovery: requeue `running` jobs whose lease has lapsed
+   * lease recovery: requeue `running` jobs whose lease has lapsed
    * (crashed worker). A job that still has retry budget is returned to
    * `queued`; one that has exhausted its budget is dead-lettered. Returns the
    * jobs it acted on so the caller can emit `job.dead_lettered` events.

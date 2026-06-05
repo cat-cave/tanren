@@ -1,4 +1,4 @@
-// P3-0003: unified GitHub token resolution. Replaces the scattered
+// unified GitHub token resolution. Replaces the scattered
 // `loadGithubToken(secrets, ref)` helpers that only knew how to read a static
 // secret. The resolver chooses, in order:
 //

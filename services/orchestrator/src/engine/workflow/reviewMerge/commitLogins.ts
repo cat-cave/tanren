@@ -1,4 +1,4 @@
-// P3-0023: pure helpers to derive the distinct author + committer logins from a
+// pure helpers to derive the distinct author + committer logins from a
 // GitHub PR commits response. Extracted from mergeDispatch.ts to keep that file
 // under the 500-line architecture cap; the merge stage's contributor probe uses
 // these to feed the external-change posture gate.

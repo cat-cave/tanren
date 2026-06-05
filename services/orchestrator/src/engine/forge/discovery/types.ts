@@ -1,14 +1,14 @@
-// P3-0014 spec discovery: typed contracts for the discovery flow.
+// spec discovery: typed contracts for the discovery flow.
 //
 // Discovery classifies an INSIGHT (a sales note, GitHub issue, or exec memo)
 // into PROPOSED SPECS, each with a small set of DAG-PLACEMENT OPTIONS (where in
 // the dependency graph the spec lands) plus an IMPACT-DELTA summary (which
 // personas/behaviors/specs change). The classification itself is a Forge
-// conversation: it runs over the SAME P3-0010 conversation answerer seam, so
+// conversation: it runs over the SAME conversation answerer seam, so
 // the LLM call is injectable and mockable (see `DiscoveryAnswerer`).
 //
 // Provenance — which insight produced which spec, the chosen placement, the
-// variant — is persisted on the spec record's `metadata` JSONB (P3-0014
+// variant — is persisted on the spec record's `metadata` JSONB (discovery
 // migration 0023), NOT in a bespoke table; see `provenance.ts`.
 
 import { z } from "zod";
@@ -97,7 +97,7 @@ export const DiscoveryResult = z
   .strict();
 export type DiscoveryResult = z.infer<typeof DiscoveryResult>;
 
-// The injectable discovery answerer — the LLM seam, mirroring P3-0010's
+// The injectable discovery answerer — the LLM seam, mirroring the conversation answerer's
 // `ForgeConversationAnswerer`. The real implementation wraps a provider
 // Answerer; tests inject a fake. The answerer never executes tools itself: it
 // returns the classification (the engine may ground it via read tools first).

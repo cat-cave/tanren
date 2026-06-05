@@ -1,4 +1,4 @@
-// P2A-0013: persona CRUD routes. Personas are owned by an org and optionally
+// persona CRUD routes. Personas are owned by an org and optionally
 // project-scoped. The store enforces visibility — these handlers only translate
 // HTTP shapes and surface common error cases.
 

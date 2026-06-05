@@ -1,4 +1,4 @@
-// P3-0014 spec discovery barrel. The discovery route + tests import the typed
+// spec discovery barrel. The discovery route + tests import the typed
 // surface from here.
 
 export {

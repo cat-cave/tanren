@@ -1,4 +1,4 @@
-// P2A-0013: milestone CRUD routes. Milestones are project-scoped and ordered.
+// milestone CRUD routes. Milestones are project-scoped and ordered.
 
 import { Hono } from "hono";
 import type pg from "pg";

@@ -17,7 +17,7 @@ export interface GitHubWorkspacePushInput {
   branch: string;
   timeoutMs: number;
   /**
-   * P3-0003: the pre-resolved push token. The caller (the VcsProvider) mints an
+   * the pre-resolved push token. The caller (the VcsProvider) mints an
    * App installation token (or reads the static secret) via the token resolver
    * and passes it here. Installation tokens are used over HTTPS as the
    * `x-access-token` password, exactly like a PAT, so the `git push` command

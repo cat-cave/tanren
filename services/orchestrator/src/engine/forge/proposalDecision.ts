@@ -1,4 +1,4 @@
-// P3-0010 (write-action approval): decide a pending Forge action proposal.
+// write-action approval: decide a pending Forge action proposal.
 //
 // The safety property: the model proposed the write, but it executes ONLY when
 // a human approves it, and ONLY under the APPROVING operator's ActorContext.
@@ -7,7 +7,7 @@
 //   approve → claim the proposal (idempotent), re-validate its args into a
 //     typed ForgeWriteToolCall, execute the underlying write through the
 //     injected dispatcher (which authz's the operator's ActorContext exactly
-//     like the P2A-0013 routes), record `executed`/`failed`, and append a forge
+//     like the routes), record `executed`/`failed`, and append a forge
 //     turn narrating the outcome.
 //   reject  → claim the proposal as `rejected` and append a turn recording it.
 //

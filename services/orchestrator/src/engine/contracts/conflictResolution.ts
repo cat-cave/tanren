@@ -5,7 +5,7 @@
 // BOTH conflicting specs' intent + acceptance criteria and the DAG edge between
 // them, so it resolves to satisfy BOTH intents, then RE-GATES (gate + checker +
 // auditor over the resolved tree) before any merge. A mechanical resolver (git
-// rerere / Mergify) that only picks text is exactly what this is NOT.
+// rerere) that only picks text is exactly what this is NOT.
 //
 // This contract carries the SEAMS the resolver composes (provenance read · the
 // workspace conflict applier · the conflict Answerer · the re-gate · the replan
@@ -82,7 +82,7 @@ export interface GatheredConflict {
  * `applyResolution` writes the resolved file contents into the SAME workspace
  * tree (markers removed) so the re-gate runs against the resolved tree. Neither
  * step pushes — the resolver re-gates first; only a clean re-gate proceeds to the
- * P2a merge path.
+ * merge path.
  */
 export interface WorkspaceConflictApplier {
   /** Attempt the merge/rebase in the workspace; return the conflicted files. */
@@ -154,7 +154,7 @@ export interface ProductVisionReader {
 // ---- The conflict Answerer invocation -------------------------------------
 
 /**
- * P2c-2 (autonomy-engine.md §2c change-percolation): the UPSTREAM-CHANGE framing.
+ * autonomy-engine.md §2c change-percolation: the UPSTREAM-CHANGE framing.
  * When an ANCESTOR A changes after a dependent B started speculatively, the SAME
  * intent-preserving resolver runs — but the model is told the conflict it sees is
  * A's INTENTIONAL upstream change flowing INTO B (not a symmetric two-spec
@@ -179,7 +179,7 @@ export interface ConflictAnswererInvoker {
     dagEdge: boolean;
     conflictedFiles: ReadonlyArray<ConflictedFile>;
     /**
-     * P2c-2: present iff this is an UPSTREAM-CHANGE percolation (not a symmetric
+     * present iff this is an UPSTREAM-CHANGE percolation (not a symmetric
      * merge conflict). It reframes the prompt — apply the ancestor's change into
      * the dependent while keeping the dependent's work intact — without changing
      * the answer schema or the `decideConflictResolution` invariants.

@@ -26,7 +26,7 @@ export interface MountReportRoutesDeps {
 
 export function mountReportRoutes(app: Hono<ActorContextEnv>, deps: MountReportRoutesDeps): void {
   app.route("/orgs", createDoraRoutes({ pool: deps.pool }));
-  // P2e-1 Mergify-parity read-models: per-project CI analytics + native-queue
+  // Native CI-intelligence read-models: per-project CI analytics + native-queue
   // statistics, both pure reads over the existing event/run data plane.
   app.route("/orgs", createCiInsightRoutes({ pool: deps.pool }));
   // Benchmark report/CRUD surface (tanren-method-benchmark §4.2.4): author

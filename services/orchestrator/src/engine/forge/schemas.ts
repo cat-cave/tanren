@@ -1,4 +1,4 @@
-// P2A-0019: Forge conversation substrate schemas.
+// Forge conversation substrate schemas.
 //
 // `forge_threads` is the unit of operator-Forge conversation, scoped to an
 // org (and optionally a project or run). `forge_turns` are append-only
@@ -6,12 +6,12 @@
 //   - source: what triggered the turn (an event, a cost record, an insight,
 //     a prior turn, or an operator action)
 //   - audience: the minimum access scope that can read the turn's render
-//     payload; the read path through P2A-0009 redaction respects this
-//   - authorKind: `forge_template` (v0), `forge_llm` (Phase 3 swap-in), or
-//     `operator` (operator-typed message — used in Phase 3)
-//   - render: the typed `ForgeAnswer` payload from P2A-0008
+//     payload; the read path through redaction respects this
+//   - authorKind: `forge_template` (v0 fallback), `forge_llm` (the real-LLM
+//     answerer), or `operator` (operator-typed message)
+//   - render: the typed `ForgeAnswer` payload from the Forge
 //
-// The render payload is validated against the P2A-0008 `ForgeAnswer` schema
+// The render payload is validated against the `ForgeAnswer` schema
 // at append time; readers do not have to re-validate but receive a typed
 // unknown that they can re-parse if they need exhaustive type safety.
 
@@ -83,7 +83,7 @@ export const ForgeTurnRow = z
     source: ForgeTurnSource,
     audience: ForgeTurnAudience,
     authorKind: ForgeAuthorKind,
-    // render is the structured ForgeAnswer (P2A-0008) the dashboard will
+    // render is the structured ForgeAnswer the dashboard will
     // render. We persist as unknown and validate explicitly on append so the
     // append path is the bottleneck; readers re-parse only if they need
     // typed access.
@@ -134,13 +134,13 @@ export const ForgeTurnAppendInput = z
     source: ForgeTurnSource,
     audience: ForgeTurnAudience,
     authorKind: ForgeAuthorKind,
-    // Validated against the P2A-0008 ForgeAnswer schema in the store.
+    // Validated against the ForgeAnswer schema in the store.
     render: ForgeAnswer,
   })
   .strict();
 export type ForgeTurnAppendInput = z.infer<typeof ForgeTurnAppendInput>;
 
-// Re-export the P2A-0008 ForgeAnswer + its derivatives so downstream
+// Re-export the ForgeAnswer + its derivatives so downstream
 // callers (route layer, narration generator) have a single import surface.
 export { ForgeAnswer } from "../answerers/schemas/forge.js";
 export type { ForgeAnswer as ForgeAnswerPayload } from "../answerers/schemas/forge.js";

@@ -1,17 +1,17 @@
-// P3-0016 brownfield onboarding (full track): typed contracts for the
+// brownfield onboarding (full track): typed contracts for the
 // read-only recon step.
 //
-// The brownfield "full track" goes beyond the minimal repo-link (P2B-0002):
+// The brownfield "full track" goes beyond the minimal repo-link:
 //   1. read-only RECON — a read-only Answerer indexes the linked repo and
 //      pre-fills the onboarding chapters (identity / personas / behaviors /
 //      architecture / risks) plus the gap questions the operator must answer.
 //   2. config-injection PR — propose 6 integration files, let the operator
 //      exclude any, then open ONE PR in the target repo (no runs until merge).
 //   3. DAG seed — turn recon gaps + GitHub issues into seed specs.
-//   4. governance picker — wire the P3-0023 posture modes into onboarding.
+//   4. governance picker — wire the posture modes into onboarding.
 //
 // The recon Answerer is INJECTABLE/MOCKABLE — the same seam shape as the
-// P3-0010 conversation + P3-0015 interview answerers: production wraps a
+// conversation + interview answerers: production wraps a
 // provider read-only Answerer, tests inject a fake, and a deterministic
 // fallback keeps the step live without provider infra. NOTHING here is
 // persisted as a new entity-shape: the recon report is transient (carried on
@@ -116,7 +116,7 @@ export type ReconReport = z.infer<typeof ReconReport>;
 // ── The injectable recon Answerer + repo reader seams ──────────────────────
 
 // The read-only Answerer: given the repo index, infer the chapters + gaps.
-// Mirrors the P3-0010/0015 answerer shape so it slots into the same seam.
+// Mirrors the conversation/interview answerer shape so it slots into the same seam.
 export interface ReconAnswerer {
   read(index: ReconIndex): Promise<ReconReport>;
 }
