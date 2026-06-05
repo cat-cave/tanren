@@ -382,7 +382,7 @@ function EscapeHatchesPanel(props: SettingsBodyProps) {
                 <div class={`hatch-card${card.stub ? " stub" : ""}`}>
                   <div class="l">
                     {card.label}
-                    {card.stub === true && <span class="badge"> phase 3 stub</span>}
+                    {card.stub === true && <span class="badge"> not yet enforced</span>}
                   </div>
                   <input
                     type="number"

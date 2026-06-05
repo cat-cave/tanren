@@ -6,7 +6,7 @@ import { z } from "zod";
 import type { ActorContext } from "../../auth/schemas.js";
 import { MilestoneStatus, MilestoneStore } from "../../engine/entities/milestones.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
-import { actorCanAccessOrg } from "../orgs/index.js";
+import { actorCanAccessOrg } from "../orgs/access.js";
 
 interface MilestoneRoutesOptions {
   pool: pg.Pool;

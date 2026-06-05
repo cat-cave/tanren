@@ -10,7 +10,12 @@ export {
   type RunGateTierInput,
 } from "./runGateTier.js";
 export { runGateForWhen, type GateOutcome, type RunGateForWhenInput } from "./runGateForWhen.js";
-export { resolveBootstrapCommand, resolveGateConfig, type ResolveGateConfigInput } from "./resolveGateConfig.js";
+export {
+  GateConfigReadError,
+  resolveBootstrapCommand,
+  resolveGateConfig,
+  type ResolveGateConfigInput,
+} from "./resolveGateConfig.js";
 export { advisoryStepNamesForPosture } from "./advisoryGate.js";
 export { runNativeMergeGate } from "./runMergeGate.js";
 export { publishGateVerdict, NATIVE_GATE_CHECK_NAME, type PublishGateVerdictInput } from "./publishGateVerdict.js";

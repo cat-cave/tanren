@@ -43,7 +43,7 @@ import {
 } from "../../engine/integrations/provisioningEngine.js";
 import { OrgIntegrationsStore } from "../../engine/repositories/orgIntegrations.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
-import { actorCanAccessOrg, actorIsOrgAdmin } from "../orgs/index.js";
+import { actorCanAccessOrg, actorIsOrgAdmin } from "../orgs/access.js";
 
 export interface IntegrationRoutesOptions {
   pool: pg.Pool;

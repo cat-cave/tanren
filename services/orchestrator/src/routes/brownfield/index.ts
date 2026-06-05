@@ -28,7 +28,7 @@ import { ensureIssuesInboxSource } from "../../engine/forge/inbox/index.js";
 import { ProjectStore } from "../../engine/repositories/index.js";
 import { systemActor } from "../../engine/state/actor.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
-import { actorCanAccessOrg } from "../orgs/index.js";
+import { actorCanAccessOrg } from "../orgs/access.js";
 
 interface BrownfieldRoutesOptions {
   pool: pg.Pool;

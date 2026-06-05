@@ -2,12 +2,12 @@
 // `buildSecretStore`: a pluggable seam selected by KIND, with the REAL GitHub
 // impl as the production default and a HARD-THROW (`UnconfiguredVcsProvider`,
 // like `UnconfiguredAllocator`) for kinds that are not yet implemented — never a
-// stub/no-op stand-in (P8a §8a). The kind defaults to `github` (the only forge
-// the run+merge lifecycle supports today); `TANREN_VCS_PROVIDER` can name it
+// stub/no-op stand-in. The kind defaults to `github` (the only forge the
+// run+merge lifecycle supports today); `TANREN_VCS_PROVIDER` can name it
 // explicitly so a future `gitlab` impl slots in as a new case, not a refactor.
 //
-// The seam is the VCS/ACTIONS provider, NOT the merge QUEUE (§1.1): the queue
-// drives the provider through its operations.
+// The seam drives the forge's PR/merge VCS operations, NOT the merge QUEUE: the
+// queue drives the provider through its operations.
 
 import { FetchGitHubHttpClient, type GitHubHttpClient } from "./github.js";
 import { GitHubVcsProvider } from "./githubVcsProvider.js";

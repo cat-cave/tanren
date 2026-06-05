@@ -1,10 +1,12 @@
 // Reads the target repo's native gate definition (`.tanren/ci.yml`) off the
 // bootstrapped runner workspace and resolves it into a typed CiConfigV1. This is the
 // SAME file `configInjection` writes — the native delivery model's single gate
-// definition (NOT a GitHub Actions workflow). When the file is absent we hand
+// definition (NOT a GitHub Actions workflow). When the file is ABSENT we hand
 // `undefined` to resolveCiConfig, which yields the documented default tiers — never a
 // silent empty gate. Invalid YAML/shape throws from the resolver, failing the run
-// loudly rather than gating against nothing.
+// loudly rather than gating against nothing. A READ FAILURE (substrate error,
+// timeout, nonzero exit) is NOT treated as "absent": it throws, so a transient
+// substrate hiccup can never silently downgrade a repo's real gate to the defaults.
 import { bootstrapCommand, type CiConfigV1, resolveCiConfig } from "../../ci/index.js";
 import type { RunnerHandle } from "../../contracts/allocator.js";
 import type { CommandSubstrate } from "../../contracts/commandSubstrate.js";
@@ -20,21 +22,42 @@ export interface ResolveGateConfigInput {
   timeoutMs: number;
 }
 
+/**
+ * Thrown when reading `.tanren/ci.yml` over the substrate FAILS (substrate error,
+ * timeout, or nonzero/null exit). This is DISTINCT from the file being absent: an
+ * absent file is a legitimate "no config → default tiers" signal, but a read
+ * FAILURE must fail the run loudly (no-silent-fallback doctrine) rather than be
+ * mistaken for "absent" and silently downgrade the repo's real gate to defaults.
+ */
+export class GateConfigReadError extends Error {
+  constructor(detail: string) {
+    super(`failed to read ${CI_CONFIG_FILENAME} from the runner workspace: ${detail}`);
+    this.name = "GateConfigReadError";
+  }
+}
+
 // Reads `<workspace>/.tanren/ci.yml` over SSH. Returns the raw file text when the
-// file is present and non-empty, or `undefined` when it is absent or unreadable.
-// The `cat`-if-present command emits nothing and exits 0 when the file does not
-// exist, so we distinguish "no config" (→ undefined) from real content without
-// treating an absent file as an error. Any read failure (substrate error,
-// timeout, nonzero exit) also yields `undefined` so a transient stat hiccup
-// degrades to the default rather than crashing the loop.
+// file is present and non-empty, or `undefined` when it is genuinely ABSENT. The
+// `cat`-if-present command emits nothing and exits 0 when the file does not exist,
+// so an exit-0 empty read is the unambiguous "no config" case (→ undefined). A real
+// read failure (substrate error, timeout, nonzero/null exit) is NOT "absent" — it
+// throws {@link GateConfigReadError} so the run fails loudly instead of silently
+// gating against the defaults.
 async function readCiConfigText(input: ResolveGateConfigInput): Promise<string | undefined> {
   const path = `${input.workspacePath.replace(/\/+$/u, "")}/${CI_CONFIG_FILENAME}`;
   const result = await input.ssh.run(input.target, {
     command: `if [ -f ${quoteSshShellArg(path)} ]; then cat ${quoteSshShellArg(path)}; fi`,
     timeoutMs: input.timeoutMs,
   });
-  if (result.failure !== undefined || result.timedOut || result.exitCode !== 0) {
-    return undefined;
+  if (result.failure !== undefined) {
+    const detail = "message" in result.failure ? result.failure.message : result.failure.reason;
+    throw new GateConfigReadError(`substrate ${result.failure.kind}: ${detail}`);
+  }
+  if (result.timedOut) {
+    throw new GateConfigReadError(`timed out after ${input.timeoutMs}ms`);
+  }
+  if (result.exitCode !== 0) {
+    throw new GateConfigReadError(`nonzero exit ${String(result.exitCode)}`);
   }
   return result.stdout.trim() === "" ? undefined : result.stdout;
 }

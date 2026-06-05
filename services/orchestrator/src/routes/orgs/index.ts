@@ -14,11 +14,6 @@ import { gatedConfigWrite, type ConfigGateGitHub } from "../../engine/config/tan
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg, actorIsOrgAdmin } from "./access.js";
 
-// Back-compat re-export: the org access predicates moved to `./access.js` (to
-// keep the import graph acyclic), but the many `from "../orgs/index.js"`
-// importers continue to resolve them here.
-export { actorCanAccessOrg, actorIsOrgAdmin } from "./access.js";
-
 // Wave-2 "Connect GitHub" + onboarding-status routes live in the sibling
 // `github.ts`; re-exported here so the feature-mount table imports the whole
 // org-route surface from one module (keeping its dependency count in budget).

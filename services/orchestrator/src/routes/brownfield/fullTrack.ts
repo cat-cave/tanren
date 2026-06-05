@@ -64,7 +64,7 @@ import type { GithubAppTokenMinter } from "../../engine/providers/githubAppToken
 import { ProjectStore } from "../../engine/repositories/index.js";
 import { systemActor } from "../../engine/state/actor.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
-import { actorCanAccessOrg } from "../orgs/index.js";
+import { actorCanAccessOrg } from "../orgs/access.js";
 
 export interface BrownfieldFullTrackOptions {
   pool: pg.Pool;

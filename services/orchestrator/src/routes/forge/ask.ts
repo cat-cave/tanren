@@ -43,7 +43,7 @@ import type { ForgeAnswererTarget } from "../../engine/forge/providerFactory.js"
 import type { GitHubHttpClient } from "../../engine/providers/github.js";
 import type { SecretStore } from "../../engine/contracts/secretStore.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
-import { actorCanAccessOrg } from "../orgs/index.js";
+import { actorCanAccessOrg } from "../orgs/access.js";
 
 export interface ForgeAskRoutesOptions {
   pool: pg.Pool;

@@ -4,10 +4,8 @@
 // routes (credentials, ai-provider) import for their actor checks — keeping the
 // import graph acyclic (the re-export of `createAiProviderRoutes` from
 // `orgs/index.ts` would otherwise form a cycle with a route that needed these
-// predicates from `orgs/index.ts`).
-//
-// `orgs/index.ts` re-exports both for back-compat, so the many existing
-// `from "../orgs/index.js"` importers are unaffected.
+// predicates from `orgs/index.ts`). Every consumer imports the predicates
+// directly from this leaf — `orgs/index.ts` does NOT re-export them.
 
 import type { ActorContext } from "../../auth/schemas.js";
 

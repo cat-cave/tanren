@@ -8,10 +8,10 @@
 // SaaS Tier-A #3: the Vault ref is DERIVED server-side from the authenticated
 // `{kind, scope, ownerId}` plus a caller-supplied name (see
 // `engine/credentials/refNamespace.ts`); the route never trusts an arbitrary
-// caller ref. A caller may still supply a full ref for back-compat, but it must
-// name the SAME tenant the route already authorized — a ref whose scope/owner
-// segment points at a different tenant is rejected with a 400, closing the
-// cross-tenant key-collision/overwrite hole.
+// caller ref. A caller-supplied full ref is accepted only when byte-equal to
+// the server-side derivation for the SAME tenant the route already authorized —
+// a ref whose scope/owner segment points at a different tenant is rejected with
+// a 400, closing the cross-tenant key-collision/overwrite hole.
 
 import { Hono } from "hono";
 import type pg from "pg";

@@ -19,7 +19,7 @@ import { assertProjectAccess, ToolAccessDeniedError } from "../../engine/forge/t
 import { ProjectStore } from "../../engine/repositories/index.js";
 import { systemActor } from "../../engine/state/actor.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
-import { actorCanAccessOrg } from "../orgs/index.js";
+import { actorCanAccessOrg } from "../orgs/access.js";
 import { fetchFeedPage, fetchRunListItems } from "./list.js";
 import { buildProjectProgress, RECENT_MILESTONE_CAP } from "./progress.js";
 

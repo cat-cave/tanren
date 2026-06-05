@@ -176,9 +176,8 @@ export type PartialAllocatorConfig = z.infer<typeof PartialAllocatorConfig>;
 //   - `total`     — the project's LIFETIME: every cost record ever attributed to
 //                   the project. A hard lifetime cap (e.g. a fixed `apex` budget).
 //
-// All non-`total` values are CALENDAR-anchored rolling windows (additive: legacy
-// `monthly`/`total` rows are unchanged; the new values need no migration since
-// the column is config jsonb).
+// All non-`total` values are CALENDAR-anchored rolling windows. The period lives
+// in config jsonb; an absent value defaults to `monthly`.
 export const BudgetPeriod = z.enum(["monthly", "quarterly", "annual", "total"]);
 export type BudgetPeriod = z.infer<typeof BudgetPeriod>;
 
@@ -239,11 +238,10 @@ export type ProjectBudget = z.infer<typeof ProjectBudget>;
 //
 // Keyed by provider-SLUG so one rate covers every credential of that provider
 // (`credential/codex` → 0.04). Resolution is project-config over org-config
-// (the org `defaultCreditRates` is the fallback layer). Optional + additive:
-// legacy rows carry no key and parse to an EMPTY map (no migration) — the rate
-// is then UNKNOWN for every credential, so a drawdown lands NULL-and-loud
-// rather than silently priced at a removed default. `.strict()` round-trips it
-// on save. `usdPerCredit` is a positive dollar amount.
+// (the org `defaultCreditRates` is the fallback layer). Optional: an absent key
+// parses to an EMPTY map — the rate is then UNKNOWN for every credential, so a
+// drawdown lands NULL-and-loud rather than silently priced at a default.
+// `.strict()` round-trips it on save. `usdPerCredit` is a positive dollar amount.
 export const CreditRates = z.record(z.string().min(1), z.number().positive());
 export type CreditRates = z.infer<typeof CreditRates>;
 
@@ -284,8 +282,7 @@ export type PartialForgePersona = z.infer<typeof PartialForgePersona>;
 // doctrine, so an autonomous greenfield build lands imperfect code and improves it
 // via the issue loop rather than stalling on first-pass quality. For the
 // external-contributor decision, `lenient` behaves like `strict` (Tanren-only PRs
-// proceed; external commits block). Additive + backward-compatible: legacy rows
-// carry no key and parse to the `strict` default (no migration).
+// proceed; external commits block). An absent value parses to the `strict` default.
 export const GovernancePosture = z.enum(["strict", "open", "audit_only", "lenient"]);
 export type GovernancePosture = z.infer<typeof GovernancePosture>;
 

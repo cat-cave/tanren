@@ -22,7 +22,7 @@ import {
   SpecNotFoundError,
 } from "../../engine/workflow/projectSpec.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
-import { actorCanAccessOrg, actorIsOrgAdmin } from "../orgs/index.js";
+import { actorCanAccessOrg, actorIsOrgAdmin } from "../orgs/access.js";
 
 interface SpecRoutesOptions {
   pool: pg.Pool;

@@ -200,13 +200,13 @@ export function CredentialsBody(props: CredentialsBodyProps) {
           </form>
 
           <div class="section-label" style="margin-top:4px">
-            ▮ future bundle kinds
+            ▮ other bundle kinds
           </div>
           <div class="grid-2">
             {[
-              ["opencode", "subscription · phase 3"],
-              ["claude bundle", "claude code login · phase 3"],
-              ["custom", "drop a json file · phase 3"],
+              ["opencode", "subscription · import in credentials settings"],
+              ["claude bundle", "claude code login · import in credentials settings"],
+              ["custom", "drop a json file · import in credentials settings"],
             ].map(([name, desc]) => (
               <div class="sunken" style="opacity:0.55">
                 <div class="mono" style="font-size:11.5px">

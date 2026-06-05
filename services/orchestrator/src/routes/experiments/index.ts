@@ -31,7 +31,7 @@ import {
   loadCellTrialScorecards,
 } from "../../engine/benchmark/store.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
-import { actorCanAccessOrg } from "../orgs/index.js";
+import { actorCanAccessOrg } from "../orgs/access.js";
 
 export interface ExperimentRoutesOptions {
   pool: pg.Pool;

@@ -30,7 +30,7 @@ import type { TriageAnswerer } from "../../engine/forge/inbox/index.js";
 import { intakeAutoRouteDeps } from "../../engine/forge/intake/index.js";
 import type { ForgeAnswererTarget } from "../../engine/forge/providerFactory.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
-import { actorCanAccessOrg } from "../orgs/index.js";
+import { actorCanAccessOrg } from "../orgs/access.js";
 
 export interface AuditRoutesOptions {
   pool: pg.Pool;

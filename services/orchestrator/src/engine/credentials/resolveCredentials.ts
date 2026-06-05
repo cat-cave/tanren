@@ -99,8 +99,9 @@ export class MissingCredentialError extends Error {
  * scoping/RLS-denial bug (the read ran off-scope and the deny-by-default policy
  * returned zero rows) — NOT a legitimate "org has no config" signal. Failing
  * loudly here surfaces the scoping bug instead of silently degrading a managed
- * org to BYOK. (The legacy `orgId === ""` path — callers that explicitly pass an
- * empty org to resolve from project config only — still defaults to BYOK.)
+ * org to BYOK. (The empty-org resolve mode — `orgId === ""`, where callers
+ * explicitly pass an empty org to resolve from project config only — legitimately
+ * defaults to BYOK.)
  */
 export class OrgProviderModeUnresolved extends Error {
   readonly orgId: string;
@@ -188,9 +189,10 @@ function pickRef(kind: RunCredentialKind, ...layers: Array<string | undefined>):
  * default for unversioned rows).
  *
  * No-fallback directive: an ABSENT org row is interpreted by the org id —
- *   - `orgId === ""` (the explicit legacy "resolve from project config only"
- *     path callers pass at `runExecutionContext.ts` / `providerFactory.ts`) →
- *     no defaults + the `byok` default, the one legitimate empty-read case;
+ *   - the empty-org resolve mode — `orgId === ""`, the explicit "resolve from
+ *     project config only" mode callers pass at `runExecutionContext.ts` /
+ *     `providerFactory.ts` → no defaults + the `byok` default, the one
+ *     legitimate empty-read case;
  *   - a NON-EMPTY org id → THROW {@link OrgProviderModeUnresolved}: a real run
  *     always has a real org row, so an empty read is a scoping/RLS-denial bug,
  *     NOT "no config", and must not silently degrade managed → byok.

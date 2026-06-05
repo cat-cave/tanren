@@ -204,8 +204,8 @@ export function buildApp(input: {
     c.json({ service: "orchestrator", version: process.env["npm_package_version"] ?? "0.0.0" }),
   );
 
-  // The Phase-1 root API endpoints (project/spec creation, credential + auth-
-  // bundle imports, per-run draft-PR / CI-poll, the legacy `/runs/:runId` read)
+  // The root API endpoints (project/spec creation, credential + auth-
+  // bundle imports, per-run draft-PR, the `/runs/:runId` read)
   // live in `mountRootApiRoutes`. Behavior is identical.
   mountRootApiRoutes(app, {
     pool: input.pool,
