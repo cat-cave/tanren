@@ -49,8 +49,8 @@ tanren projects link  --org-id <orgId> --project-id <projectId> --repo-url <url>
 ```
 
 `projects link` is the brownfield contract: the orchestrator verifies the
-configured GitHub App can `GET /repos/:owner/:repo`, reads
-`.github/workflows/` and `CODEOWNERS` for display, and
+configured GitHub App can `GET /repos/:owner/:repo`, reads the native gate
+config `.tanren/ci.yml` (a `CiConfigV1`) and `CODEOWNERS` for display, and
 persists the linkage. **No files are ever written to the target repository.**
 
 ## Specs

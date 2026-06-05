@@ -1,31 +1,33 @@
 # Project and Organization Config
 
-Phase 2A introduces a typed, versioned config substrate for both
-organizations and projects. The schemas live next to the orchestrator engine
+Tanren carries a typed, versioned config substrate for both organizations and
+projects. The schemas live next to the orchestrator engine
 at `services/orchestrator/src/engine/config/` and are the single source of
 truth — JSON Schema is a generated documentation artifact, not an
 independently maintained file.
 
 ## Where config lives
 
-Phase 2 stores config in the database only:
+Typed config is stored in the database only:
 
-- `organizations.config` (jsonb, added in migration `0004_thick_miracleman`)
-  carries `OrgConfigV1`.
-- `projects.config` (jsonb, existed from Phase 1) carries `ProjectConfigV1`.
+- `organizations.config` (jsonb) carries `OrgConfigV1`.
+- `projects.config` (jsonb) carries `ProjectConfigV1`.
 
 Other operator surfaces that _look_ like config are intentionally kept out
 of the DB:
 
-- `.github/workflows/tanren-ci.yml` and `CODEOWNERS` live in the target
-  repository. Tanren reads them at link time (P2A-0013) but does not author
-  or write them back in Phase 2. (Merge ordering is Tanren's own native merge
-  queue — there is no external merge-queue config in the repo.)
-- The optional `tanren-config` audit-gate write path that promotes
-  reviewed config changes through a PR review is **Phase 3 scope** and not
-  built in this spec. `OrgConfigV1.auditGateEnabled` exposes the on/off
-  bit so the operator UI can render the toggle, but the write path is
-  inert in v0.
+- `.tanren/ci.yml` (a `CiConfigV1`, **not** a GitHub Actions workflow) and
+  `CODEOWNERS` live in the target repository. `.tanren/ci.yml` is the native
+  shell-tier gate definition Tanren runs over SSH — the sole merge authority.
+  Tanren reads it from the workspace (`engine/workflow/gate/resolveGateConfig.ts`)
+  and, for a brownfield link, can propose it as an injected file
+  (`forge/brownfield/configInjection.ts`); it is not an environment-coupled
+  Actions artifact. (Merge ordering is Tanren's own native merge queue — there
+  is no external merge-queue config in the repo.)
+- The optional `tanren-config` audit-gate write path that promotes reviewed
+  config changes through a PR review is not yet built.
+  `OrgConfigV1.auditGateEnabled` exposes the on/off bit so the operator UI can
+  render the toggle, but the write path is inert.
 
 ## Versioning
 
@@ -50,10 +52,9 @@ dropped.
 
 Tanren's writer/Answerer roles are `plan`, `write`, `check`, `audit`,
 `demo`, and `forge`. The routing table maps each role to a **fallback
-chain** of `{ cli, model, authRef, healthHint? }` entries. The v0 stack
-only emits Codex entries, but every role's chain is always an array — the
-schema shape does not change when Claude, opencode, or other providers
-arrive in Phase 3.
+chain** of `{ cli, model, authRef, healthHint? }` entries. Every role's chain
+is always an array, so the schema shape does not change as Codex, Claude,
+opencode, or other providers are mixed into a chain.
 
 Example with a single Codex entry for the writer:
 

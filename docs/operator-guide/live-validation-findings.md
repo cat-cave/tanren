@@ -98,12 +98,13 @@ rejected with `42501` when it tries to write `events`/`cost_records`, then
   path, and the registry is durable, so an imported credential survives a restart
   and appears in the credential LIST.
 
-- **Fresh / reset dev DB.** Migration `0026` makes `org_id` NOT NULL on the core
-  tables; a dev volume created before it cannot be backfilled in place. A live run
-  needs a fresh or reset dev DB (`just down-dev` then `just up-dev`). Volume wipes
-  are expected — Tanren has no legacy-data compatibility surface.
+- **Fresh / reset dev DB.** The schema makes `org_id` NOT NULL on the core
+  tables; a dev volume created before that constraint existed cannot be
+  backfilled in place. A live run needs a fresh or reset dev DB (`just down-dev`
+  then `just up-dev`). Volume wipes are expected — Tanren has no legacy-data
+  compatibility surface.
 
-- **Prod role passwords.** Migrations `0029`/`0030`/`0031` create the
+- **Prod role passwords.** The baseline schema creates the
   `tanren_app`/`tanren_system`/`tanren_dataplane` roles with DEV/CI default
   passwords. Production rotates each out-of-band and supplies it via the runtime
   `DATABASE_URL` / `TANREN_SYSTEM_DATABASE_URL` / `TANREN_DATAPLANE_DB_PASSWORD`.

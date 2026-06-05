@@ -94,9 +94,11 @@ The runner image bundles both (pinned via the `CODEXBAR_VERSION` /
 `CCUSAGE_VERSION` build args in `runner/Dockerfile`). Operators can eyeball the
 tools against a host `CODEX_HOME` with `just usage [provider] [cli]`.
 
-<!-- TODO(P2A-cost-monitors-wiring): the monitors live in
-services/orchestrator/src/engine/usage/; the planner/writer loop consumes them
-(window pre-flight + ccusage cost-basis) in the next PR. -->
+The monitors live in `services/orchestrator/src/engine/usage/` and the
+planner/writer loop consumes them: `workflow/budgetPreflight.ts` checks the
+subscription-window pressure before a subtask runs, and `workflow/subtaskLoop.ts`
+threads the ccusage accounting through to the cost-basis on the recorded
+`cost_records` row.
 
 ## Operational checks
 
@@ -111,10 +113,27 @@ WHERE t.status = 'done' AND c.id IS NULL`. A successful task without a cost row
 - `cost_usd IS NULL` rows are expected and fine for subscription/self-hosted
   calls.
 
-## Rate-table updates
+## Notional rates (no pinned table)
 
-`services/orchestrator/src/engine/costs/sources.ts` pins per-provider rates at
-known v0 list prices (OpenAI $2.50/$10 per million for input/output, Anthropic
-$3/$15, OpenRouter $5/$15). Updating these is a one-line edit in that file;
-keep this doc synchronized with the source date and include the upstream link
-in the commit message (see AGENTS.md "Version Verification").
+`cost_usd` is only ever a metered FACT (`provider_response` / `ccusage` /
+`credits`). There is **no** static per-provider list-rate table anywhere in the
+cost engine. When a COMPUTED figure is needed — the notional/equivalent value on
+`notional_cost_usd`, or a forward spec/DAG estimate — its rates come from a
+vendored LiteLLM snapshot, not a hardcoded constant:
+
+- `services/orchestrator/src/engine/costs/pricing/model_prices.json` is the
+  vendored copy of LiteLLM's `model_prices_and_context_window.json` (the same
+  per-model price data ccusage consumes: input / output / cache-read /
+  cache-creation per model).
+- `pricing/modelPriceSource.ts` loads that snapshot at import and exposes
+  per-model rates keyed by model id. A model that is not in the snapshot resolves
+  to `null` (loud-unknown) — never a fallback guess.
+
+To update rates, refresh the snapshot rather than editing a constant:
+
+```sh
+just refresh-model-prices   # runs scripts/refresh-model-prices.mjs
+```
+
+Commit the refreshed `model_prices.json` with the upstream source date in the
+commit message (see AGENTS.md "Version Verification").

@@ -1,9 +1,10 @@
 # GitHub App connectivity (P3-0003)
 
-Tanren's preferred long-term GitHub integration is a **per-org GitHub App
+Tanren's preferred GitHub integration is a **per-org GitHub App
 installation** that mints short-lived, auto-rotating installation tokens. These
-tokens are used for repo clone, draft-PR creation, and CI status polling. A
-static personal-access-token (PAT) fallback remains for dev and back-compat.
+tokens are used for repo clone, draft-PR creation, and publishing the native
+`tanren/gate` verdict as a commit status. A static personal-access-token (PAT)
+path is used when no App is installed (the dev / self-hosted no-App path).
 
 This is an **operator setup step**: you register the App once for the Tanren
 deployment, store its credentials in Vault, and then each org installs it. The
@@ -14,8 +15,9 @@ the static-token path is used unchanged.
 
 1. GitHub → **Settings → Developer settings → GitHub Apps → New GitHub App**.
 2. Permissions (repository): **Contents: Read & write**, **Pull requests: Read
-   & write**, **Metadata: Read-only**, **Checks: Read-only**, **Commit
-   statuses: Read-only**. Organization: **Members: Read-only** (review-gate
+   & write**, **Metadata: Read-only**, **Checks: Read & write**, **Commit
+   statuses: Read & write** (Tanren publishes its own `tanren/gate` verdict as a
+   commit status / check). Organization: **Members: Read-only** (review-gate
    routing). Do **not** grant admin/secrets.
 3. Set the **Setup / Callback URL** to:
    `https://<orchestrator-public-url>/auth/github-app/callback`
@@ -47,11 +49,11 @@ private key is never returned.
 
 ## 3. Wire the orchestrator environment
 
-| Variable                           | Purpose                                                            |
-| ---------------------------------- | ------------------------------------------------------------------ |
-| `TANREN_GITHUB_APP_CREDENTIAL_REF` | Vault ref of the App credential from step 2.                       |
-| `TANREN_GITHUB_APP_INSTALL_URL`    | The App install URL from step 1.                                   |
-| `TANREN_GITHUB_APP_TOKEN_REF`      | (optional) static-token fallback ref, e.g. `credential/github/...` |
+| Variable                           | Purpose                                                                       |
+| ---------------------------------- | ----------------------------------------------------------------------------- |
+| `TANREN_GITHUB_APP_CREDENTIAL_REF` | Vault ref of the App credential from step 2.                                  |
+| `TANREN_GITHUB_APP_INSTALL_URL`    | The App install URL from step 1.                                              |
+| `TANREN_GITHUB_APP_TOKEN_REF`      | (optional) static-token ref for the no-App path, e.g. `credential/github/...` |
 
 The install route (`/auth/github-app/*`) only mounts when both
 `TANREN_GITHUB_APP_CREDENTIAL_REF` and `TANREN_GITHUB_APP_INSTALL_URL` are set.
@@ -75,7 +77,7 @@ orchestrator install flow.
 
 ## How the token resolver chooses App vs. static
 
-For repo clone, draft PR, and CI polling, the resolver
+For repo clone, draft PR, and publishing the `tanren/gate` status, the resolver
 (`engine/credentials/githubTokenResolver.ts`) picks, in order:
 
 1. **App installation token** — when the org's
@@ -85,10 +87,9 @@ For repo clone, draft PR, and CI polling, the resolver
    installation token. Tokens are cached per installation and re-minted before
    expiry, or immediately on a `401` (the HTTP client retries once with a fresh
    token).
-2. **Static token fallback** — otherwise the configured/legacy
-   `credential/github/...` ref (or `TANREN_GITHUB_APP_TOKEN_REF`) is read from
-   Vault. This keeps dev and existing Phase-2 flows working when no App is
-   installed.
+2. **Static token** — otherwise the configured `credential/github/...` ref (or
+   `TANREN_GITHUB_APP_TOKEN_REF`) is read from Vault. This is the path for a dev
+   or self-hosted deployment that has not installed the App.
 
 Installation tokens are used over HTTPS as the `x-access-token` password for
 `git push`, identical to a PAT, so the workspace push command is unchanged.
