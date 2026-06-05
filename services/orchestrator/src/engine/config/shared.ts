@@ -94,6 +94,21 @@ export const AllocatorConfig = z
     memoryMb: z.number().int().min(256).default(4096),
     cpus: z.number().int().min(1).default(2),
     runnerImage: z.string().min(1).default("ghcr.io/cat-cave/tanren-runner:v0"),
+    // Run-sandbox reaper (the ≈204 GB disk-leak safety net). A STATIC / long-lived
+    // reused runner keeps `/workspace` across runs, so a run dir the per-run
+    // teardown missed (e.g. the orchestrator crashed mid-run) leaks forever. The
+    // reaper sweeps `/workspace/runs/*` and removes any dir OLDER than the retention
+    // window whose run is not still active. These are GOVERNED CONFIG KNOBS on the
+    // (system/infra-level) allocator config — never `process.env.X ?? default` — with
+    // a sane documented default, the same shape as `concurrency`.
+    //
+    // Retention is a grace window, not a hard TTL: it only protects against deleting a
+    // dir whose run is between terminal-state and the next active-set read; an ACTIVE
+    // run is protected absolutely regardless of age. 60 min is comfortably longer than
+    // any single run dir lives untracked.
+    runWorkspaceRetentionMinutes: z.number().int().min(1).default(60),
+    /** How often the reaper sweeps the long-lived runner's `/workspace/runs/*`. */
+    runWorkspaceReapIntervalMinutes: z.number().int().min(1).default(30),
   })
   .strict();
 export type AllocatorConfig = z.infer<typeof AllocatorConfig>;
@@ -114,6 +129,25 @@ export function resolveWorkerConcurrency(): number {
   return AllocatorConfig.parse({}).concurrency;
 }
 
+/** The reaper's retention + sweep cadence, resolved from the same governed config surface. */
+export interface RunWorkspaceReaperConfig {
+  retentionMs: number;
+  reapIntervalMs: number;
+}
+
+/**
+ * Resolve the run-sandbox reaper's retention window + sweep cadence from
+ * `AllocatorConfig` (the single schema default is the one source of truth), never
+ * from `process.env`. Mirrors `resolveWorkerConcurrency`.
+ */
+export function resolveRunWorkspaceReaperConfig(): RunWorkspaceReaperConfig {
+  const config = AllocatorConfig.parse({});
+  return {
+    retentionMs: config.runWorkspaceRetentionMinutes * 60_000,
+    reapIntervalMs: config.runWorkspaceReapIntervalMinutes * 60_000,
+  };
+}
+
 // See PartialEscapeHatches for why this is not `AllocatorConfig.partial()`.
 export const PartialAllocatorConfig = z
   .object({
@@ -122,6 +156,8 @@ export const PartialAllocatorConfig = z
     memoryMb: z.number().int().min(256).optional(),
     cpus: z.number().int().min(1).optional(),
     runnerImage: z.string().min(1).optional(),
+    runWorkspaceRetentionMinutes: z.number().int().min(1).optional(),
+    runWorkspaceReapIntervalMinutes: z.number().int().min(1).optional(),
   })
   .strict();
 export type PartialAllocatorConfig = z.infer<typeof PartialAllocatorConfig>;

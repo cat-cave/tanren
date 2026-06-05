@@ -39,6 +39,9 @@ describe("OrgConfigV1 parser", () => {
       memoryMb: 4096,
       cpus: 2,
       runnerImage: "ghcr.io/cat-cave/tanren-runner:v0",
+      // Run-sandbox reaper knobs (the ≈204 GB disk-leak safety net) — governed config defaults.
+      runWorkspaceRetentionMinutes: 60,
+      runWorkspaceReapIntervalMinutes: 30,
     });
     expect(cfg.forgePersona).toEqual({ systemPromptOverride: null, enableTools: [] });
   });

@@ -27,8 +27,10 @@ export {
   SpeculationThreshold,
   UnknownConfigVersionError,
   emptyRoutingTable,
+  resolveRunWorkspaceReaperConfig,
   resolveWorkerConcurrency,
 } from "./shared.js";
+export type { RunWorkspaceReaperConfig } from "./shared.js";
 
 export {
   DEFAULT_MANAGED_CREDENTIAL_REF,

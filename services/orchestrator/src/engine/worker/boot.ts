@@ -20,7 +20,12 @@ import { buildClaimClientFromEnv } from "./claimClientFromEnv.js";
 import { buildRunStateWriterFromEnv } from "./runStateWriterFromEnv.js";
 import type { JobReaper } from "./jobReaper.js";
 import type { RunWorker } from "./runWorker.js";
-import { buildRunCredentialScoping, startRunWorker } from "./lifecycle.js";
+import {
+  buildRunCredentialScoping,
+  startRunWorker,
+  startRunWorkspaceReaper,
+  type RunWorkspaceReaper,
+} from "./lifecycle.js";
 
 /** What {@link bootRunWorker} returns so callers (and tests) can drain + assert. */
 export interface BootedRunWorker {
@@ -38,7 +43,14 @@ export interface BootedRunWorker {
    * same executor + allocator.
    */
   autonomy: AutonomyLoops;
-  /** Drain the worker + reaper + autonomy loops (the SIGTERM path). */
+  /**
+   * The run-sandbox reaper (layer 2 of the ≈204 GB disk-leak fix): the periodic
+   * sweep of a LONG-LIVED runner's `/workspace/runs/*` that removes stale, non-active
+   * run dirs. Present only when the allocator is long-lived (static); undefined for
+   * ephemeral kinds whose sandbox dies with the container on release.
+   */
+  runWorkspaceReaper: RunWorkspaceReaper | undefined;
+  /** Drain the worker + reaper + autonomy loops + run-sandbox reaper (the SIGTERM path). */
   stop: () => Promise<void>;
 }
 
@@ -154,11 +166,18 @@ export async function bootRunWorker(): Promise<BootedRunWorker> {
     // never write a tenant table directly (migrations 0031/0035).
     ...(runStateWriter === undefined ? {} : { runStateWriter }),
   });
+  // Run-sandbox reaper (layer 2 of the ≈204 GB disk-leak fix): start the periodic
+  // `/workspace/runs/*` sweep ONLY for a long-lived (static) runner — the builder reads
+  // TANREN_ALLOCATOR_KIND and returns undefined (logging why) for an ephemeral kind,
+  // whose sandbox is destroyed with its container on release. The per-run teardown
+  // (layer 1, in the run's `finally`) runs for every kind regardless.
+  const runWorkspaceReaper = startRunWorkspaceReaper({ pool, secrets, ssh, identitySecretRef });
   const stop = async (): Promise<void> => {
     await autonomy.stop();
+    runWorkspaceReaper?.stop();
     await Promise.all([worker.stop(), reaper.stop()]);
   };
-  return { worker, reaper, pool, secrets, autonomy, stop };
+  return { worker, reaper, pool, secrets, autonomy, runWorkspaceReaper, stop };
 }
 
 /**
