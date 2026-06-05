@@ -20,7 +20,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "drizzle-orm": "^0.45.0",
-    "pg": "^8.13.1"
+    "drizzle-orm": "^0.45.2",
+    "pg": "^8.21.0"
   }
 }

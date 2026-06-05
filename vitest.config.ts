@@ -30,15 +30,19 @@ export default defineConfig({
       // to their (narrower) subsets of this set.
       include: ["cli/src/**", "db/src/**", "services/*/src/**"],
       thresholds: {
-        // Strictness wave 2 — REPO-WIDE floor. Measured baseline at authoring
-        // time (corepack pnpm vitest run --coverage over all src):
-        //   statements 79.53%  branches 74.16%  functions 84.8%  lines 79.53%
-        // Floors set just below each to be non-breaking guards against
-        // regression of the whole suite.
-        statements: 79,
-        branches: 73,
-        functions: 84,
-        lines: 79,
+        // Strictness wave 2 — REPO-WIDE floor. RE-BASELINED for Vitest 4: the v8
+        // coverage provider switched from v8-to-istanbul to AST-based remapping
+        // (more accurate, so reported numbers dropped vs v3 — the SAME 3607 tests
+        // still pass; a measurement change, not a coverage regression). Measured
+        // under Vitest 4 over all src:
+        //   statements 75.65%  branches 66.06%  functions 75.23%  lines 76.92%
+        // Floors set just below each — non-breaking guards against regression of
+        // the whole suite. (The per-glob workflow-critical floors below were
+        // unaffected by the remapping and keep their original, higher values.)
+        statements: 75,
+        branches: 65,
+        functions: 74,
+        lines: 76,
         // Answerer reasoning paths — observed 100/100/100. Floor well below.
         "services/orchestrator/src/engine/workflow/auditor/**": {
           statements: 90,
