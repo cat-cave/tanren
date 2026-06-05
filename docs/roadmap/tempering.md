@@ -90,6 +90,35 @@ and long-horizon work — none block this.
 
 ## Done (this is real, on `main`)
 
+### Native delivery — Action-less (v21) ✅
+
+Tanren owns the delivery operating model end-to-end; there is no GitHub Actions in
+the delivery path. All merged on `main` (PRs #323–#334):
+
+- **The native gate is the merge authority.** `.tanren/ci.yml` (a `CiConfigV1`,
+  not an Actions workflow) declares tiered shell checks; the orchestrator runs them
+  itself over SSH (`engine/workflow/gate/`); the `pre_merge` tier admits the merge
+  and the verdict publishes to the forge as a `tanren/gate` check
+  (`engine/workflow/plannerRunCi.ts`). The dead Actions path was pruned and JUnit
+  is ingested in-process (#329, #330). `docs/operator-guide/ci-config.md`.
+- **DeployAdapter + demos-as-evidence.** `engine/contracts/deployAdapter.ts`
+  (provision-or-bind · `verify` poll-to-READY + URL smoke · `demoSurface`),
+  deploy-on-merge (`engine/postMerge/deployOnMerge.ts`), and the demo engine
+  (`engine/demo/`) recording per-behavior evidence tied to the spec's declared
+  behaviors (#323, #327). `docs/operator-guide/deploy.md`.
+- **Brownfield workflow-intent importer + migration-risk report**
+  (`engine/forge/brownfield/`) — migrates _intent_ (not YAML) into native gates
+  and classifies each discovered automation migrated/replaced/dropped/blocked (#325).
+- **Audit-evidence + security baseline** in the event store
+  (`engine/events/schemas/audit.ts`): every governing decision (gate/deploy/merge)
+  carries a non-secret actor + governance-policy-version envelope (#331).
+- **Named execution-backend substrate seams** — `CommandSubstrate` /
+  `FileSubstrate` / `CredentialMaterializer` / `UsageMeter` / `ReleaseFinalizer` /
+  `RunnerHandle` (`engine/contracts/`), so a future non-SSH backend slots in as an
+  impl, not a refactor (#332).
+- **Unified status vocabulary** — one canonical run/spec/task status enum
+  (`engine/state/`); a successful run ends at `completed` (no second `done`) (#334).
+
 ### A — Core run loop ✅
 
 - The harness-integration frontier that paused the project (`All configured
@@ -107,7 +136,7 @@ authentication methods failed`) is **resolved** — durable Vault-backed
   answerer JSON schemas are copied into `dist`; `.claude/` is excluded from the
   Docker build context.
 - **Tiered integration proven:** easy (`open` / `direct_merge` / `auto`), medium
-  (same + a two-tier `tanren-ci.yml`), hard (same + `reviewPolicy: simulated` —
+  (same + a two-tier `.tanren/ci.yml` native gate), hard (same + `reviewPolicy: simulated` —
   the orchestrator-managed reviewer posts a real GitHub `COMMENT` review and
   drives the verdict internally, self-PR-safe). `markReadyForReview` un-drafts
   via the GraphQL ready mutation.
@@ -216,8 +245,10 @@ adapters select the writer/answerers from the project routing table.
   DORA). Real-cost-gated.
 - **GitLab / VCS-provider abstraction**
   (`docs/roadmap/vcs-adapterization-plan.md`) — **held** until a real second
-  backend; GitHub is coupled across PR / merge / CI (the merge queue is now
-  Tanren's own native queue; CI is GitHub Actions).
+  backend. Delivery is already native (the merge queue is Tanren's own; the gate
+  runs over SSH and publishes a `tanren/gate` check — no Actions). What remains
+  GitHub-coupled is the thin VCS surface itself: PR/review APIs, check/status
+  publication, and clone/push auth behind the `VcsProvider` seam.
 - **agy / pi / reasonix live harness validation** — pi/reasonix writer-only
   adapters are built; agy is deferred (broken headless). Awaits credentials.
 - **The Rust rewrite / native harness** — long-horizon. The prepwork

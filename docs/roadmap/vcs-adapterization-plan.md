@@ -56,52 +56,47 @@ All paths are under `services/orchestrator/src/` unless noted.
 | `routes/auth/githubAppInstall.ts`                                                         | The App install onboarding flow (state cookie → GitHub install URL → callback persists `{installationId, appId, credentialRef}`). Pure GitHub App lifecycle.                                                                                                                                                                                                                                          |
 | `auth/githubProvider.ts`                                                                  | **Operator identity** via GitHub OAuth (`/login/oauth/authorize`, `/user`, `/user/emails`, `/user/orgs`). NOTE: this is ALREADY abstracted behind the `IdentityProvider` interface + registry in `mainAuth.ts` (alongside OIDC/Authentik/local_dev). It is **out of scope** for VCS adapterization — operator login and repo connectivity are separate concerns and the identity seam already exists. |
 
-### 1c. CI provider — "GitHub Actions runs `tanren-ci.yml`"
+### 1c. The gate — native, not a CI provider
 
-This is not a single file; it is an execution _model_ split across two places:
+There is **no CI-provider coupling to abstract**: delivery is Action-less. The gate
+is Tanren's own and is provider-neutral by construction:
 
-- **`engine/ci/schema.ts` + `engine/ci/resolve.ts`** — the versioned `tanren-ci.yml`
-  contract (tiers `fast`/`slow`, `when` lifecycle points, `bootstrap`). The doc
-  comment states the file "is the single source of truth that BOTH GitHub
-  Actions and the in-loop gate read so the same shell steps run in both places."
-- **`engine/workflow/gate/**`\** — the *in-loop\* gate runs those tier steps over
-  SSH on the runner (provider-neutral; just shell). This half is NOT coupled.
-- **GitHub Actions side** — Tanren does **not** generate or push a workflow file;
-  it relies on the target repo already having a GitHub Actions workflow that runs
-  the `tanren-ci.yml` steps, and then **observes** the result by polling
-  `check-runs`/`statuses` (`ciPolling.ts`) or reacting to GitHub check webhooks
-  (`ciWebhook.ts`). So "CI invocation" today = "GitHub Actions is assumed to be
-  wired up out-of-band; Tanren only observes via the GitHub checks API."
+- **`engine/ci/schema.ts` + `engine/ci/resolve.ts`** — the versioned `.tanren/ci.yml`
+  contract (tiers `fast`/`slow`, `when` lifecycle points, `bootstrap`). A
+  `CiConfigV1`, not an Actions workflow.
+- **`engine/workflow/gate/**`** — Tanren runs those tier steps **itself\*\*, over SSH
+  on the runner workspace, and reads the verdict from exit codes. This is just
+  shell; it is provider-neutral and not coupled to any VCS.
+- **Verdict publication** — the result is published back to the forge as a
+  `tanren/gate` check (`engine/workflow/plannerRunCi.ts`); the `pre_merge` tier is
+  the merge authority. There is no external CI to trigger or poll; the dead Actions
+  observe path (the old `ciPolling.ts` / `ciWebhook.ts` model) was pruned in the
+  no-Actions cutover. Reading post-merge branch checks for the auto-issue watcher
+  uses `VcsProvider.readBranchChecks`, the same provider seam below.
 
-**What a non-Actions CI provider needs:** something to _trigger_ a CI run on a
-ref (GitLab CI pipelines, Buildkite, Jenkins) and a uniform way to _observe_ its
-status that is not "GitHub check-runs + commit-statuses + branch-protection
-required contexts." The observe side is the entire payload of `ciPolling.ts`'s
-`evaluateCiObservation` — it would have to be re-expressed against a neutral
-"check result" shape. The trigger side does not exist in code at all today
-(Actions is assumed pre-wired), so a CI-provider abstraction must _invent_ a
-trigger surface that GitHub's impl can leave as a no-op.
+So the only VCS coupling here is **publishing** a check result, which is part of
+the `VcsProvider` surface (§2), not a separate CI-provider abstraction.
 
-### 1d. Merge integration — Mergify (GitHub-org-only)
+### 1d. Merge integration — native queue (no Mergify)
 
 - **`engine/workflow/reviewMerge/mergeDispatch.ts`** — the merge stage. Four
   modes from project config: `direct_merge` (PUT `/pulls/:n/merge`),
-  `mergify_queue` (apply a `tanren:merge` label that **Mergify** watches),
-  `external_reviewer` (hand off to a human), `not_configured` (safe default →
-  hand off). Emits `merge.queued` / `merge.completed` / `merge.conflict` /
-  `merge.failed` / `merge.blocked`.
+  `native_queue` (enter Tanren's **own** intelligent merge queue — DAG-order
+  serialized merge + speculative batch-check + bisect + intent-preserving conflict
+  resolution; no external app), `external_reviewer` (hand off to a human),
+  `not_configured` (safe default → hand off). Emits `merge.queued` /
+  `merge.completed` / `merge.conflict` / `merge.failed` / `merge.blocked`.
 - **`engine/workflow/reviewMerge/governancePosture.ts`** — strict/open/audit_only
   posture gate; resolves PR contributors via GET `/pulls/:n/commits` GitHub
   logins to detect external (non-Tanren) changes.
 - **`engine/workflow/reviewMerge/reviewPolling.ts` + `context.ts`** — mark-ready +
   review-verdict polling (GitHub review model).
 
-The `MergeIntegration` config enum and the dispatcher _structure_ are already
-mode-pluggable, but **`mergify_queue` is fundamentally GitHub-org-specific**:
-Mergify is a GitHub App that watches labels on a GitHub org. GitLab's equivalent
-is **merge trains** (a native, completely different mechanism — you don't apply a
-label, you enqueue via the MR API / "merge when pipeline succeeds"). So the merge
-seam is mode-pluggable in shape but the _modes themselves don't transfer_.
+The merge engine itself (`native_queue`) is Tanren's own and provider-neutral in
+intent — what it needs from a VCS is mechanical: open/update a PR, read review +
+check state, and accept a merge. Those calls are the `VcsProvider` surface (§2);
+GitLab/Gitea would supply their own impl (MR API, pipeline/check state, merge-train
+or merge-when-pipeline-succeeds). There is no Mergify-style external app to port.
 
 ### 1e. Anything else that purely assumes GitHub
 

@@ -1,15 +1,31 @@
 # Tanren
 
-Tanren is the platform for end-to-end agentic code development. You give it a
-spec; it plans, writes the code with a real agent, checks and audits the result,
-opens a draft PR, runs CI, reviews, and merges — against your real repository,
-with honest cost accounting.
+Tanren is the platform for end-to-end agentic code delivery. You give it a spec;
+it plans, writes the code with a real agent, checks and audits the result, gates
+the merge with its **own native checks**, merges, and then deploys the change and
+runs a demo against the live surface — against your real repository, with honest
+cost accounting.
+
+**Tanren is opinionated about the method, not the product.** You choose what you
+build, the language and framework, which LLMs do the work, the deploy target, and
+how much human review is required. Tanren owns the delivery operating model:
+software is specified, built, gated, merged, deployed, and demoed through
+Tanren-native concepts — never through repo-embedded workflow automation.
+
+**Delivery is Action-less.** There is no injected GitHub Actions workflow, no
+`runs-on: tanren`, no external CI engine in the delivery path. The gate is
+Tanren's own: tiered shell checks run over SSH on the runner workspace; the
+`pre_merge` tier is the merge authority; verdicts publish back to the forge as
+`tanren/gate` checks. The VCS stores code, hosts the PR review surface, and
+accepts the merge — it does not orchestrate delivery. (Tanren's own monorepo CI
+is a separate concern, and runs on GitHub Actions like any other repo; the
+no-Actions doctrine governs the delivery path for the apps Tanren _builds_.)
 
 ## Current state (read this first)
 
-**Tanren delivers merged PRs from natural-language specs, live-validated across
-three tiers with real Codex and real credentials.** The full loop —
-`plan → write → check → audit → in-loop gate → draft PR → CI → review → merge` —
+**Tanren delivers merged, deployed PRs from natural-language specs, live-validated
+across three tiers with real Codex and real credentials.** The full loop —
+`spec → plan → write → check → audit → native gate → merge → deploy → demo` —
 runs end-to-end through the background **run worker**, driven from the dashboard
 or the `tanren` CLI, with no fake adapters anywhere in the runtime path.
 
@@ -24,8 +40,9 @@ Live-proven acceptance (the §14 gate — see `docs/operator-guide/acceptance.md
 Each tier was driven by a real operator flow: sign in → create an org → import
 real provider credentials → link a repo → submit a spec → trigger a run → watch
 it merge. **Private repositories work** (the workspace clone authenticates with
-the org's GitHub token over HTTPS). All three of the project's cost models, the
-event log, and full run/task provenance are persisted and inspectable.
+the org's GitHub token over HTTPS). The merge is admitted by Tanren's own
+`pre_merge` gate — not an Actions check. All three of the project's cost models,
+the event log, and full run/task provenance are persisted and inspectable.
 
 ### What's built and merged on `main`
 
@@ -34,6 +51,41 @@ event log, and full run/task provenance are persisted and inspectable.
   the full loop with real writer/answerer adapters (Codex/Claude/opencode behind
   a versioned harness protocol). No fake adapter is reachable from production
   source — fakes live only in `tests/`.
+- **The native gate is the merge authority** — no GitHub Actions in the delivery
+  path. `.tanren/ci.yml` (a `CiConfigV1`, not an Actions workflow) declares tiered
+  shell checks; the orchestrator runs them itself over SSH on the runner workspace
+  (`engine/workflow/gate/runGateTier.ts`), and the `pre_merge` tier admits the
+  merge. The verdict is published to the forge as a `tanren/gate` check
+  (`engine/workflow/plannerRunCi.ts`); a JUnit report the gate produces is ingested
+  in-process for flaky-detection (no upload, no webhook, no signing secret). See
+  `docs/operator-guide/ci-config.md`.
+- **Deploy + demo as native delivery stages.** A `DeployAdapter`
+  (`engine/contracts/deployAdapter.ts`) provisions-or-binds a deploy target,
+  triggers a deploy on merge (`engine/postMerge/deployOnMerge.ts`), and `verify`
+  polls the provider to READY + smoke-checks the URL. The **demo engine**
+  (`engine/demo/`) then exercises the spec's declared behaviors against the live
+  surface and records per-behavior evidence (demos-as-evidence) — the demo asks
+  whether the behavior is correct; the adapter decides whether the user sees a
+  URL, package, app channel, or download. See `docs/operator-guide/deploy.md`.
+- **Brownfield workflow-intent migration.** Onboarding an existing repo reads its
+  `.github/workflows/`, package scripts, and branch protection and migrates the
+  _intent_ — not the YAML — into native gates, emitting a **migration-risk report**
+  (`engine/forge/brownfield/`) that classifies each discovered automation as
+  migrated / replaced / dropped / blocked. Unsupported behavior becomes an
+  auditable risk, never a preserved Actions workflow.
+- **Audit-evidence + security baseline in the event store.** Every governing
+  delivery decision (gate verdict, deploy, merge) carries a non-secret audit
+  envelope — initiating + approving actor, governance policy version — appended
+  through the single typed event path (`engine/events/schemas/audit.ts`). No
+  secret value ever enters an event payload.
+- **Named execution-backend substrate seams.** The backend differences are
+  explicit contracts — `CommandSubstrate` / `FileSubstrate` /
+  `CredentialMaterializer` / `UsageMeter` / `ReleaseFinalizer` /
+  `RunnerHandle` (`engine/contracts/`) — so a future non-SSH backend slots in as a
+  new impl, not a refactor.
+- **A unified status vocabulary** — one canonical run/spec/task status enum
+  (`engine/state/`); a successful run ends at `completed` (no second `done`),
+  so every producer and consumer reads the same vocabulary.
 - **Per-project, tiered integration policy** — `governancePosture`
   (`strict`/`open`/`audit_only`), `mergeIntegration`
   (`native_queue`/`direct_merge`/`external_reviewer`/`not_configured`), and
@@ -72,6 +124,13 @@ cells` CRUD + `report` / `compare`. See `docs/roadmap/tanren-method-benchmark.md
 - **A data-access layer** behind a conformance-covered `Repositories` seam
   (`engine/repositories/**`, `engine/contracts/repositories.ts`); the HTTP routes
   and the run-lifecycle writes are migrated off raw SQL.
+- **Cost as fact, with a budget gate.** Token accounting is mandatory; dollar cost
+  is sourced — **notional** figures rate from LiteLLM `model_prices`, **metered
+  real spend** comes from the provider's metering backend, and the figure is
+  NULL-loud when unattributable (no hardcoded price table for any provider). The
+  **only run gate is budget** — per-task / per-day / per-project / per-org dollar
+  ceilings, enforced by the walker; `QuotaPolicy` is deleted. See
+  `docs/operator-guide/costs.md`.
 - **Quality bars** — `LISTEN/NOTIFY` (no 1s polling), conformance suites for
   Allocator / JobQueue / EventStore / SecretStore / CostResolver / Repositories,
   ~13 Stryker mutation clusters + a weekly full-repo job (`mutation-weekly.yml`),
@@ -104,11 +163,11 @@ web UI) **autonomously**, over real surfaces. It is gated on real Tier-1 credent
 `docs/operator-guide/validation-credentials.md`) and spends real credits under a
 budget ceiling.
 
-Smaller near-term items: **Vault per-run scoped credentials** (the last big
-data-plane de-privilege), the **benchmark seed corpus**, the **remaining DAL
+Smaller near-term items: the **benchmark seed corpus** and the **remaining DAL
 clusters** (forge/recovery — quota is gone); long-horizon: the GitLab/VCS
-abstraction and the Rust rewrite / native harness. None of these block the core
-promise above.
+abstraction and the Rust rewrite / native harness. (Vault per-run scoped
+credentials — the last big data-plane de-privilege — is now **done**.) None of
+these block the core promise above.
 
 ## Quickstart for a real run (operator flow)
 
@@ -169,6 +228,6 @@ volumes).
 - **`docs/roadmap/forward-roadmap.md`** — the detailed four-dimension plan (core
   run loop · pipeline experimentation · refactor/scale prepwork · managed-hosting).
 - **`ROADMAP.md`** — the phase history (Phase 0–3) + exit criteria.
-- **`docs/operator-guide/`** — operator runbooks (run, credentials, CLI, CI
-  config, deploy, acceptance, costs, auth, …).
+- **`docs/operator-guide/`** — operator runbooks (run, credentials, CLI, the
+  native gate definition `ci-config.md`, deploy + demo, acceptance, costs, auth, …).
 - **`CLAUDE.md`** / **`AGENTS.md`** — orientation for agents working in the repo.

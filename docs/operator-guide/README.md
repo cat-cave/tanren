@@ -1,21 +1,48 @@
 # Operator Guide
 
-## Current state (post-Phase 1)
+## What Tanren delivers
 
-Phase 1 (real-agent PR loop) is complete and live-proven on `main`. The Phase 1 baseline that Phase 2 specs extend:
+Tanren takes a spec to a merged, deployed, demoed change — through its **own native
+delivery model**, against your real repository. The loop is
+`spec → plan → write → check → audit → native gate → merge → deploy → demo`, driven
+by the background run worker with real writer/answerer adapters. It is live-proven
+on `main` across three governance tiers (easy / medium / hard, the hard one a
+private repo), each to a merged PR with real Codex and real credentials.
 
-- The orchestrator and dashboard run from `docker compose up`; the orchestrator drives a runner container over a real SSH boundary; the local Docker allocator records and releases runner allocations.
-- A persisted spec for an owned fixture repository can be planned, written by a real Codex CLI writer in a runner workspace, judged by Codex `--output-schema` Answerers on checker and auditor verdicts, and shipped as a draft PR. CI status against the PR is polled and persisted.
-- The thin CLI (`tanren doctor`, `tanren status`) exists. Live Phase 1 proof: run `run_a347d451-3911-470d-b506-280b602343a9`, draft PR `https://github.com/cat-cave/tanren-fixture-easy/pull/6`.
+**Delivery is Action-less.** Tanren does not inject a GitHub Actions workflow and
+does not poll an external CI engine. The gate is Tanren's own: tiered shell checks
+declared in the target repo's `.tanren/ci.yml` (a `CiConfigV1`, **not** an Actions
+workflow), run over SSH on the runner workspace; the `pre_merge` tier is the merge
+authority; the verdict publishes to the forge as a `tanren/gate` check. The VCS
+stores code, hosts the PR review surface, and accepts the merge — it does not
+orchestrate delivery. (Tanren's own monorepo CI runs on GitHub Actions like any
+other repo; that is orthogonal to the delivery doctrine.)
 
-Phase 2 turns this baseline into an operator-controlled product surface. The end state is that an operator can register a GitHub org as a Tanren tenant, link a repo, configure credentials and routing, submit a spec, run the real workflow, recover from failure, and view the resulting PR — all through the dashboard with no CLI or DB access. Phase 2 spec entries are tracked in `ROADMAP.md` and `docs/roadmap/phase-2a-specs.md` / `docs/roadmap/phase-2b-specs.md`. The Phase 2 readiness audit (`docs/audits/phase2-readiness.md`) is the backlog input.
+The model in one picture:
 
-## Phase 2 backlog at a glance
+| Conventional repo automation | Tanren-native equivalent             |
+| ---------------------------- | ------------------------------------ |
+| `.github/workflows/*.yml`    | native gate (`.tanren/ci.yml` tiers) |
+| GitHub-hosted runner         | Tanren runner (SSH, per-run)         |
+| Actions secrets              | scoped Tanren credentials            |
+| deploy workflow              | `DeployAdapter` (deploy-on-merge)    |
+| required status check        | `tanren/gate` published verdict      |
+| marketplace action           | typed external integration           |
 
-- **Phase 2A (operator backend + contracts, 20 specs)**: organizations as tenants; multi-user GitHub OAuth; typed workflow state; 6-role fallback-chain routing; semantic-rich events; Answerer schemas for plan/check/audit/demo/forge; redaction by access scope; allocator sidecar isolation; mandatory cost attribution; planner feedback loops; Forge narration substrate; workflow insights; product entities (personas/behaviors/milestones/spec-deps); typed CLI/API + `/doctor`; run-detail read API; acceptance gate (easy + medium); design tokens import; notifications matrix; dev/prod compose split.
-- **Phase 2B (operator dashboard, 9 specs incl. one stretch)**: dashboard shell with ⌘K palette; org-full + minimal-existing onboarding; chat-primary project view; spec creation; run detail; history and costs; failure recovery; operator-triggered live workflow; demo recording. Optional: thin greenfield project create.
+## The runbooks
 
-Open the per-spec detail files for the implementation contracts (Owns / Consumes / Produces / What / Why / How / Test plan / Quality bar / Real-functionality validation / Worktree-isolation safety) of every Phase 2 entry.
+- **`operator-driven-run.md`** — the full operator flow: sign in, create an org,
+  import credentials, link a repo, submit a spec, trigger a run, watch it merge +
+  deploy.
+- **`ci-config.md`** — the native gate definition (`.tanren/ci.yml`).
+- **`deploy.md`** — deploy-on-merge, `verify`, and demos-as-evidence.
+- **`credentials.md`** / **`github-app.md`** / **`auth.md`** — credential import,
+  the per-org GitHub App, and identity providers.
+- **`costs.md`** — cost-as-fact (notional vs metered) and the budget gate.
+- **`runners.md`** — the per-run runner substrate and isolation.
+- **`acceptance.md`** — the §14 acceptance gate; **`live-validation-findings.md`**
+  — what the three live tiers proved and the config gotchas.
+- **`cli.md`** — the thin `tanren` CLI reference.
 
 ## Running the stack
 
@@ -27,7 +54,7 @@ corepack pnpm install
 just smoke
 ```
 
-`just smoke` builds the images, starts the compose stack, runs `tanren doctor` (orchestrator / Postgres / Vault connectivity), verifies direct runner SSH, runs the live SSH integration test, then drives the real run path across the API↔worker process boundary (`smoke-plane-split-*`) and the RLS isolation proofs.
+`just smoke` builds the images, starts the compose stack, runs `tanren doctor` (orchestrator / Postgres / Vault connectivity), verifies direct runner SSH, runs the live SSH integration test, then drives the real run path across the API↔worker process boundary (`smoke-plane-split-*`, including the `42501` de-privilege proofs) and the RLS isolation proofs.
 
 To inspect manually while the stack is up:
 
@@ -38,24 +65,17 @@ corepack pnpm --filter @tanren/cli tanren status <run_id>
 
 `tanren status <run_id>` returns the run row, ordered planner/writer/checker/auditor tasks, events, and cost records.
 
-## Live Phase 1 Proof
+## Live component proofs
 
-With compose Postgres, Vault, orchestrator, and runner running, the opt-in live proof exercises the real-agent workflow:
+With the compose stack up, the opt-in live proofs drive real Codex / GitHub against an owned fixture repo with real credentials (no fakes):
 
 ```sh
-TANREN_CODEX_AUTH_JSON_FILE=/path/to/auth.json \
-TANREN_GITHUB_TOKEN_FILE=/path/to/github-token \
-TANREN_GITHUB_REPO_URL=https://github.com/cat-cave/tanren-fixture-easy \
-just live-phase1-fixture
+TANREN_GITHUB_TOKEN_FILE=/path/to/github-token just live-github-draft-pr
+TANREN_GITHUB_TOKEN_FILE=/path/to/github-token just live-ci-poll
+TANREN_CODEX_AUTH_JSON_FILE=/path/to/auth.json just live-codex-writer
 ```
 
-Expected proof:
-
-- Vitest reports `services/orchestrator/tests/phase1Fixture.live.test.ts` passing.
-- The persisted run has `outcome = 'phase1_fixture_complete'`.
-- `plan`, `write`, `check`, `audit`, and `ci` tasks are all `done`.
-- Events include `github.pr.created`, `ci.passed`, and `phase1.fixture.completed`.
-- The fixture repository receives a draft PR from the runner-produced branch.
+The full end-to-end live walkthrough across all three governance tiers — including the native-gate config per tier and the simulated reviewer for the human-review tier — is in `live-validation-findings.md`.
 
 To clean up:
 
@@ -69,4 +89,4 @@ If you are moving from an older local database shape, reset the volume before ru
 docker compose -f compose.dev.yml down -v
 ```
 
-For prod deployment and the Vault init flow, see `deploy.md` (P2A-0004).
+For prod deployment and the Vault init flow, see `deploy.md`.

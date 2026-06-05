@@ -32,15 +32,13 @@ Roadmap specs must declare owned paths before work starts. Parallel agents shoul
 
 Do not revert user changes. If a file has unrelated edits, preserve them and scope your patch to the task.
 
-## Mergify Stacks
+## Parallel Work — Worktrees
 
-Use Mergify stacks for dependent Phase 1+ PRs. Each commit in a stack becomes its own PR and must be independently green. Keep independent specs in separate stacks; use one stack only when later commits genuinely depend on earlier commits.
-
-Do not manually edit stack-managed PR titles or bodies. Put the PR context and validation in the commit message, use `mergify stack push`, and add a `mergify stack note` before pushing any amendment to an already-pushed commit.
+Parallel work runs in isolated git worktrees, one unit of work per PR. Keep independent specs in separate worktrees. Serialize any PR that edits a DB migration or a shared file (nav, `screens.ts`, `main.ts`). Put the PR context and validation in the commit message.
 
 ## Version Verification
 
-Before changing any version pin, verify the current version against the upstream project source. This applies to GitHub Actions, Docker images, Node, pnpm, Postgres, Vault, oxlint, TypeScript, and any new runtime dependency. Record the upstream source in the PR or roadmap spec.
+Before changing any version pin, verify the current version against the upstream project source. This applies to GitHub Actions (Tanren's own monorepo CI), Docker images, Node, pnpm, Postgres, Vault, oxlint, TypeScript, and any new runtime dependency. Record the upstream source in the PR or roadmap spec.
 
 ## Brief Invariants
 
