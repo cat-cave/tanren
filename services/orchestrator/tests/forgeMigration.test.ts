@@ -1,24 +1,21 @@
-// P2A-0019: forge_threads + forge_turns migration shape test.
-// P3-0010: forge_action_proposals migration shape test.
+// forge_threads + forge_turns + forge_action_proposals migration shape test.
+// The migration chain was collapsed to a single baseline
+// (`0000_collapsed_baseline.sql`); the old 0011 (substrate) and 0028
+// (action-proposals) migrations fold into the baseline's final-state shape.
 
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-const migrationPath = fileURLToPath(new URL("../../../db/migrations/0011_faulty_norman_osborn.sql", import.meta.url));
-const proposalsMigrationPath = fileURLToPath(
-  new URL("../../../db/migrations/0028_massive_callisto.sql", import.meta.url),
-);
+const migrationPath = fileURLToPath(new URL("../../../db/migrations/0000_collapsed_baseline.sql", import.meta.url));
 
 async function readMigration(): Promise<string> {
   return readFile(migrationPath, "utf8");
 }
 
-async function readProposalsMigration(): Promise<string> {
-  return readFile(proposalsMigrationPath, "utf8");
-}
+const readProposalsMigration = readMigration;
 
-describe("0011 forge substrate migration", () => {
+describe("forge substrate baseline shape", () => {
   it("creates the forge_threads table with the scope CHECK and consistency CHECK", async () => {
     const sql = await readMigration();
     expect(sql).toContain('CREATE TABLE "forge_threads"');
@@ -53,7 +50,7 @@ describe("0011 forge substrate migration", () => {
   });
 });
 
-describe("0028 forge_action_proposals migration (P3-0010 write-action approval)", () => {
+describe("forge_action_proposals baseline shape (P3-0010 write-action approval)", () => {
   it("creates the forge_action_proposals table with tool + status CHECKs", async () => {
     const sql = await readProposalsMigration();
     expect(sql).toContain('CREATE TABLE "forge_action_proposals"');

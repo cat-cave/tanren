@@ -2,16 +2,18 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-// Verifies the 0009 migration ships the P2A-0017 notifications matrix
-// tables with the constraints and indexes the dispatcher relies on.
+// Verifies the collapsed baseline ships the P2A-0017 notifications matrix
+// tables with the constraints and indexes the dispatcher relies on. The
+// migration chain was collapsed to a single baseline; the final-state
+// event_name CHECK vocab (after every later widening) lives in the baseline.
 
-const migrationPath = fileURLToPath(new URL("../../../db/migrations/0009_lonely_krista_starr.sql", import.meta.url));
+const migrationPath = fileURLToPath(new URL("../../../db/migrations/0000_collapsed_baseline.sql", import.meta.url));
 
 async function readMigration(): Promise<string> {
   return readFile(migrationPath, "utf8");
 }
 
-describe("0009 notifications-matrix migration", () => {
+describe("notifications-matrix baseline shape", () => {
   it("creates the notification_targets table with channel_kind and scope CHECKs", async () => {
     const sql = await readMigration();
     expect(sql).toContain('CREATE TABLE "notification_targets"');
@@ -31,9 +33,11 @@ describe("0009 notifications-matrix migration", () => {
     expect(sql).toMatch(/min_severity.*IN \('ok','info','warn','fail'\)/u);
     expect(sql).toContain("notification_routes_event_name_check");
     // event_name CHECK reuses the events.event_type enum: at least one
-    // canonical event from each lifecycle band must appear.
+    // canonical event from each lifecycle band must appear. (Asserting the
+    // final-state vocab — the collapsed baseline carries the events enum after
+    // every later widening/rename, e.g. `ci.failed` → `ci.tests.reported`.)
     expect(sql).toContain("'run.failed'");
-    expect(sql).toContain("'ci.failed'");
+    expect(sql).toContain("'ci.tests.reported'");
     expect(sql).toContain("'auditor.verdict'");
   });
 

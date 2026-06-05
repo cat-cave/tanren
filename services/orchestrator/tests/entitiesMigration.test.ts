@@ -2,16 +2,19 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-// Verifies the 0005 migration ships the P2A-0018 product entity tables with
-// the constraints and default seed block the spec requires.
+// Verifies the collapsed baseline ships the P2A-0018 product entity tables with
+// the constraints the spec requires. The migration chain was collapsed to a
+// single baseline (`0000_collapsed_baseline.sql`); the old 0005 migration's
+// seed/backfill DO blocks are gone — a zero-user, zero-DB collapse never
+// traverses a backfill — so only the final table + constraint shape is asserted.
 
-const migrationPath = fileURLToPath(new URL("../../../db/migrations/0005_wise_molly_hayes.sql", import.meta.url));
+const migrationPath = fileURLToPath(new URL("../../../db/migrations/0000_collapsed_baseline.sql", import.meta.url));
 
 async function readMigration(): Promise<string> {
   return readFile(migrationPath, "utf8");
 }
 
-describe("0005 product-entities migration", () => {
+describe("product-entities baseline shape", () => {
   it("creates the personas table with scope and scope/project consistency CHECKs", async () => {
     const sql = await readMigration();
     expect(sql).toContain('CREATE TABLE "personas"');
@@ -48,19 +51,5 @@ describe("0005 product-entities migration", () => {
     expect(sql).toContain('CREATE TABLE "spec_dependencies"');
     expect(sql).toContain("spec_dependencies_no_self_loop");
     expect(sql).toContain("spec_dependencies_from_spec_id_to_spec_id_pk");
-  });
-
-  it("ships a default-seed DO block that fails the migration if any spec lacks milestone or behavior", async () => {
-    const sql = await readMigration();
-    expect(sql).toContain("DO $$");
-    expect(sql).toContain("P2A-0018 seed left");
-    expect(sql).toContain("Developer · fixture operator");
-    expect(sql).toContain("'runs the fixture'");
-    expect(sql).toContain("M1");
-  });
-
-  it("seeds the default org sentinel only when projects lack an org_id", async () => {
-    const sql = await readMigration();
-    expect(sql).toContain("org_default_p2a_0018");
   });
 });

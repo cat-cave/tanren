@@ -1,48 +1,36 @@
-import { readdir, readFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-const migrationsDir = fileURLToPath(new URL("../../../db/migrations/", import.meta.url));
+// The migration chain was collapsed to a single baseline
+// (`0000_collapsed_baseline.sql`): the cost_records token-type + nullable-cost +
+// CHECK-vocab evolution (old 0013 …) folded into the baseline with its
+// FINAL-state shape. The intermediate DROP TABLE / ALTER COLUMN / UPDATE-backfill
+// / ADD-CONSTRAINT-re-add dances are gone (a zero-user, zero-DB collapse never
+// traverses them); the live shape is asserted directly off the baseline, where
+// every CHECK is an inline CREATE TABLE constraint on its own line.
 
-async function readAllMigrations(): Promise<string> {
-  const entries = (await readdir(migrationsDir)).filter((entry) => entry.endsWith(".sql")).sort();
-  const contents: string[] = [];
-  for (const entry of entries) {
-    contents.push(await readFile(new URL(entry, `file://${migrationsDir}`), "utf8"));
-  }
-  return contents.join("\n");
+const migrationPath = fileURLToPath(new URL("../../../db/migrations/0000_collapsed_baseline.sql", import.meta.url));
+
+async function readBaseline(): Promise<string> {
+  return readFile(migrationPath, "utf8");
 }
 
-// The single LATEST `ADD CONSTRAINT ... CHECK` statement re-adding the named
-// constraint — i.e. the live CHECK the DB currently enforces (later migrations
-// supersede earlier ones). Used to assert a dead value was pruned from the
-// constraint even though the historical migration that first introduced it is
-// still on disk.
-async function latestCheckClause(constraint: string): Promise<string> {
-  const entries = (await readdir(migrationsDir)).filter((entry) => entry.endsWith(".sql")).sort();
-  let latest = "";
-  for (const entry of entries) {
-    const sql = await readFile(new URL(entry, `file://${migrationsDir}`), "utf8");
-    for (const statement of sql.split("--> statement-breakpoint")) {
-      if (statement.includes(`ADD CONSTRAINT "${constraint}"`) && statement.includes("CHECK")) {
-        latest = statement;
-      }
-    }
-  }
-  return latest;
+// The single line carrying the named inline `CONSTRAINT "<name>" CHECK (...)` —
+// the live CHECK the DB enforces.
+async function checkClause(constraint: string): Promise<string> {
+  const sql = await readBaseline();
+  return sql.split("\n").find((line) => line.includes(`CONSTRAINT "${constraint}" CHECK`)) ?? "";
 }
 
-describe("cost-records token-type + nullable-cost migration", () => {
-  it("drops the fake subscription_window_denominators table", async () => {
-    const sql = await readAllMigrations();
-    expect(sql).toMatch(/DROP TABLE "subscription_window_denominators"/u);
+describe("cost-records token-type + nullable-cost baseline shape", () => {
+  it("does NOT carry the dropped fake subscription_window_denominators table", async () => {
+    const sql = await readBaseline();
+    expect(sql).not.toContain("subscription_window_denominators");
   });
 
   it("constrains cost_basis to the accepted values (incl. provider_response — OpenRouter's real charge)", async () => {
-    // The LIVE cost_basis CHECK (latest ADD CONSTRAINT), not the concatenated
-    // history — so a pruned value is asserted GONE even though the migration that
-    // first introduced it stays on disk.
-    const check = await latestCheckClause("cost_records_cost_basis_check");
+    const check = await checkClause("cost_records_cost_basis_check");
     expect(check).toContain("'ccusage'");
     // The authoritative real-charge basis (OpenRouter's usage.cost).
     expect(check).toContain("'provider_response'");
@@ -54,38 +42,32 @@ describe("cost-records token-type + nullable-cost migration", () => {
     expect(check).not.toContain("unknown_source");
   });
 
-  it("constrains billing_mode to the three accepted values", async () => {
-    const sql = await readAllMigrations();
-    expect(sql).toMatch(/billing_mode.*IN.*'per_token'/u);
-    expect(sql).toMatch(/'subscription'/u);
-    expect(sql).toMatch(/'self_hosted'/u);
+  it("constrains billing_mode to the accepted values", async () => {
+    const check = await checkClause("cost_records_billing_mode_check");
+    expect(check).toContain("'per_token'");
+    expect(check).toContain("'subscription'");
+    expect(check).toContain("'self_hosted'");
   });
 
   it("makes cost_usd nullable (cost-unknown is an allowed state)", async () => {
-    const sql = await readAllMigrations();
-    expect(sql).toMatch(/ALTER COLUMN "cost_usd" DROP NOT NULL/u);
+    const sql = await readBaseline();
+    // The column is created nullable — the cost_usd line carries no NOT NULL.
+    const costUsdLine = sql.split("\n").find((line) => line.includes('"cost_usd" numeric')) ?? "";
+    expect(costUsdLine).not.toContain("NOT NULL");
   });
 
-  it("adds the disjoint token-type columns", async () => {
-    const sql = await readAllMigrations();
+  it("carries the disjoint token-type columns", async () => {
+    const sql = await readBaseline();
     for (const column of ["cached_input_tokens", "cache_creation_tokens", "reasoning_output_tokens", "total_tokens"]) {
       expect(sql).toContain(`"${column}"`);
     }
-  });
-
-  it("converts existing rows' pricing_mode and cost_source into billing_mode and cost_basis", async () => {
-    const sql = await readAllMigrations();
-    expect(sql).toMatch(/UPDATE "cost_records" SET "billing_mode"/u);
-    expect(sql).toMatch(/UPDATE "cost_records" SET "cost_basis"/u);
-    // codexbar was the fake estimate — it drops to 'unknown'.
-    expect(sql).toMatch(/'codexbar' THEN 'unknown'/u);
   });
 
   it("prunes the retired cost.unattributable event name from the live events_event_type CHECK", async () => {
     // cost.unattributable was retained-for-compat but never thrown (cost-unknown
     // is an allowed NULL state); pruned in the v21 cleanup. The live cost-misconfig
     // event is cost.unattributed (BUDGET-SAFETY C1), which remains.
-    const check = await latestCheckClause("events_event_type_check");
+    const check = await checkClause("events_event_type_check");
     expect(check).not.toContain("'cost.unattributable'");
     expect(check).toContain("'cost.unattributed'");
   });
