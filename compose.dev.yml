@@ -105,6 +105,22 @@ services:
       # host. In a real deployment this stays on the private control↔data network
       # (not host-published); it is exposed here only for the smoke.
       - "3110:3110"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - |
+          fetch("http://127.0.0.1:3100/healthz")
+            .then(async (response) => {
+              if (!response.ok) process.exit(1);
+              const body = await response.json();
+              if (body.ok !== true) process.exit(1);
+            })
+            .catch(() => process.exit(1));
+      interval: 5s
+      timeout: 5s
+      retries: 20
     depends_on:
       postgres:
         condition: service_healthy
@@ -193,7 +209,7 @@ services:
         condition: service_healthy
       # The orchestrator owns the migrate step; wait for it before claiming jobs.
       orchestrator:
-        condition: service_started
+        condition: service_healthy
 
   allocator:
     build:
@@ -254,7 +270,7 @@ services:
       postgres:
         condition: service_healthy
       orchestrator:
-        condition: service_started
+        condition: service_healthy
 
   runner:
     # Dev-only static runner: backward-compat target for `just smoke`'s direct

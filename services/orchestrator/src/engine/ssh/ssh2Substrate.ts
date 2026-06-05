@@ -105,18 +105,23 @@ export class SshCommandSubstrate implements CommandSubstrate {
             fail(messageFromError(error));
             return;
           }
+          this.collectStream(
+            stream,
+            state,
+            (channelError) => fail(messageFromError(channelError)),
+            () => {
+              settle({
+                exitCode: state.exitCode,
+                stdout: state.stdout,
+                stderr: state.stderr,
+                signal: state.signal,
+                timedOut: false,
+              });
+            },
+          );
           if (command.stdin !== undefined) {
             stream.end(command.stdin);
           }
-          this.collectStream(stream, state, () => {
-            settle({
-              exitCode: state.exitCode,
-              stdout: state.stdout,
-              stderr: state.stderr,
-              signal: state.signal,
-              timedOut: false,
-            });
-          });
         });
       });
       // PERSISTENT listener (`.on`, not `.once`): ssh2 emits "error" AGAIN during
@@ -154,13 +159,20 @@ export class SshCommandSubstrate implements CommandSubstrate {
     });
   }
 
-  private collectStream(stream: ClientChannel, state: RunState, onClose: () => void): void {
+  private collectStream(
+    stream: ClientChannel,
+    state: RunState,
+    onError: (error: unknown) => void,
+    onClose: () => void,
+  ): void {
     stream.on("data", (chunk: Buffer) => {
       state.stdout += chunk.toString("utf8");
     });
     stream.stderr.on("data", (chunk: Buffer) => {
       state.stderr += chunk.toString("utf8");
     });
+    stream.on("error", onError);
+    stream.stderr.on("error", onError);
     stream.once("exit", (code: number | null, signal?: string) => {
       state.exitCode = code;
       state.signal = signal;
