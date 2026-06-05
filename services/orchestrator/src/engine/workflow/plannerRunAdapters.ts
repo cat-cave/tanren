@@ -7,7 +7,7 @@
  */
 import type pg from "pg";
 import type { CiWhen } from "../ci/index.js";
-import type { SshTarget } from "../contracts/allocator.js";
+import type { RunnerHandle } from "../contracts/allocator.js";
 import type { EventName, EventPayload } from "../events/index.js";
 import type { EventStore } from "../eventStore.js";
 import type { ReviewAnswer } from "../answerers/schemas/index.js";
@@ -150,7 +150,7 @@ export function resolveConflictResolverHook(
   input: RunPlannerLoopInput,
   deps: {
     eventStore: EventStore;
-    target: SshTarget;
+    target: RunnerHandle;
     workspacePath: string;
     baseSha: string;
     runGate: (gate: { when: CiWhen; taskId?: string }) => Promise<GateOutcome>;
@@ -169,7 +169,7 @@ function defaultConflictResolver(
   input: RunPlannerLoopInput,
   deps: {
     eventStore: EventStore;
-    target: SshTarget;
+    target: RunnerHandle;
     workspacePath: string;
     baseSha: string;
     runGate: (gate: { when: CiWhen; taskId?: string }) => Promise<GateOutcome>;
@@ -218,7 +218,7 @@ function buildResolver(
   input: RunPlannerLoopInput,
   deps: {
     eventStore: EventStore;
-    target: SshTarget;
+    target: RunnerHandle;
     workspacePath: string;
     baseSha: string;
     runGate: (gate: { when: CiWhen; taskId?: string }) => Promise<GateOutcome>;
@@ -298,7 +298,7 @@ function buildResolver(
 // no-op when deps already agree, behavior-equivalent to main.
 export function buildDefaultGate(
   input: RunPlannerLoopInput,
-  target: SshTarget,
+  target: RunnerHandle,
   workspacePath: string,
   eventStore: EventStore,
 ): (gate: { when: CiWhen; taskId?: string }) => Promise<GateOutcome> {
@@ -415,7 +415,7 @@ export function buildDefaultGate(
  */
 async function ingestGateJunitBestEffort(
   input: RunPlannerLoopInput,
-  target: SshTarget,
+  target: RunnerHandle,
   workspacePath: string,
   headSha: string,
   gatePassed: boolean,

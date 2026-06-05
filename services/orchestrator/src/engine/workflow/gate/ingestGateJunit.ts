@@ -15,16 +15,16 @@
 import type pg from "pg";
 import { parseJunitReport } from "../../ci/junit.js";
 import { ingestJunitResults } from "../../ci/junitIngest.js";
-import type { SshTarget } from "../../contracts/allocator.js";
-import type { SshSubstrate } from "../../contracts/sshSubstrate.js";
+import type { RunnerHandle } from "../../contracts/allocator.js";
+import type { CommandSubstrate } from "../../contracts/commandSubstrate.js";
 import { quoteSshShellArg } from "../../ssh/command.js";
 
 /** The conventional workspace path a repo's test step writes its JUnit report to. */
 const JUNIT_REPORT_PATH = "reports/junit.xml";
 
 export interface IngestGateJunitInput {
-  ssh: SshSubstrate;
-  target: SshTarget;
+  ssh: CommandSubstrate;
+  target: RunnerHandle;
   workspacePath: string;
   /** The ambient-org-scoped client the per-test INSERT + event ride (RLS-checked). */
   client: Pick<pg.Pool | pg.PoolClient, "query">;

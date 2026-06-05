@@ -7,14 +7,15 @@
 
 import { describe, expect, it } from "vitest";
 import { emptyRoutingTable, RoutingTable } from "../src/engine/config/shared.js";
-import type { SshTarget } from "../src/engine/contracts/allocator.js";
+import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
-import type { SshCommand, SshCommandResult, SshSubstrate } from "../src/engine/contracts/sshSubstrate.js";
+import type { RunnerCommand, CommandResult, CommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
 import { EmptyRoutingChainError } from "../src/engine/providers/adapterSelector.js";
 import { defaultRoutingAdapters } from "../src/engine/workflow/plannerRunAdapters.js";
 import type { PlannerRunAdapterContext, RunPlannerLoopInput } from "../src/engine/workflow/plannerRun.js";
 
-const target: SshTarget = {
+const target: RunnerHandle = {
+  backend: "ssh",
   host: "runner",
   port: 22,
   username: "tanren",
@@ -22,8 +23,8 @@ const target: SshTarget = {
   identitySecretRef: "runner/test/identity",
 };
 
-class NoopSsh implements SshSubstrate {
-  async run(_target: SshTarget, _command: SshCommand): Promise<SshCommandResult> {
+class NoopSsh implements CommandSubstrate {
+  async run(_target: RunnerHandle, _command: RunnerCommand): Promise<CommandResult> {
     return { exitCode: 0, stdout: "", stderr: "", timedOut: false };
   }
 }

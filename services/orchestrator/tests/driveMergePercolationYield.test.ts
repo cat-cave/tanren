@@ -12,7 +12,7 @@ import type pg from "pg";
 import { buildDriveMerge } from "../src/engine/merge/coordinatorBuild.js";
 import { FakeAllocator } from "../src/engine/contracts/allocator.js";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
-import { FakeSshSubstrate } from "../src/engine/contracts/sshSubstrate.js";
+import { FakeCommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
 import { InMemoryVcsProvider } from "./conformance/fakes/inMemoryVcsProvider.js";
 import { CONFORMANCE_CONFLICT_PR_NUMBER } from "./conformance/vcsProviderConformance.js";
 
@@ -107,7 +107,7 @@ describe("buildDriveMerge — percolation mutual exclusion (the drive YIELDS, ne
       secrets: new FakeSecretStore(),
       vcsProvider: new InMemoryVcsProvider(),
       allocator,
-      ssh: new FakeSshSubstrate(),
+      ssh: new FakeCommandSubstrate(),
       identitySecretRef: "secret/runner/identity",
     });
 

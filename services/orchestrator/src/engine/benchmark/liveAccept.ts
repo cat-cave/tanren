@@ -19,8 +19,8 @@ import { runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
 import { z } from "zod";
 import type { CiStep } from "../ci/index.js";
-import type { Allocator, SshTarget } from "../contracts/allocator.js";
-import type { SshSubstrate } from "../contracts/sshSubstrate.js";
+import type { Allocator, RunnerHandle } from "../contracts/allocator.js";
+import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import { PgEventStore } from "../eventStore.js";
 import type { EventName, EventPayload } from "../events/index.js";
 import { quoteSshShellArg } from "../ssh/command.js";
@@ -37,7 +37,7 @@ export interface LiveAcceptDeps {
   /** The SAME allocator the run path uses (reused, not a second one). */
   allocator: Allocator;
   /** The SAME SSH substrate the run path drives the runner over. */
-  ssh: SshSubstrate;
+  ssh: CommandSubstrate;
   /** The runner identity key ref (mirrors the worker's `identitySecretRef`). */
   identitySecretRef: string;
   /** Per-step SSH timeout for the clone/bootstrap/accept commands. */
@@ -253,8 +253,8 @@ function buildAcceptAppendEvent(
  * runs on precisely the commit that landed, nothing more recent.
  */
 async function cloneAtMergedSha(
-  ssh: SshSubstrate,
-  target: SshTarget,
+  ssh: CommandSubstrate,
+  target: RunnerHandle,
   input: { workspacePath: string; repoUrl: string; mergedSha: string; timeoutMs: number },
 ): Promise<void> {
   await runWorkspaceSshCommand(ssh, target, {

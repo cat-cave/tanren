@@ -30,7 +30,7 @@ import { migrateProjectConfig } from "../config/projectConfig.js";
 import type { GovernancePosture } from "../config/shared.js";
 import type { Allocator } from "../contracts/allocator.js";
 import type { SecretStore } from "../contracts/secretStore.js";
-import type { SshSubstrate } from "../contracts/sshSubstrate.js";
+import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import type { IntegrationAncestor, VcsProvider } from "../contracts/vcsProvider.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import { PgEventStore } from "../eventStore.js";
@@ -67,7 +67,7 @@ export interface PgBatchCheckerDeps {
   /** The runner allocator the native batch gate provisions a short-lived runner from. */
   allocator: Allocator;
   /** The SSH substrate the native batch gate clones + gates over. */
-  ssh: SshSubstrate;
+  ssh: CommandSubstrate;
   /** The runner identity key ref (same value the worker boot seeds). */
   identitySecretRef: string;
   githubAppMinter?: GithubAppTokenMinter;

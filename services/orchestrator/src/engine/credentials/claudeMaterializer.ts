@@ -1,6 +1,7 @@
-import type { SshTarget } from "../contracts/allocator.js";
+import type { RunnerHandle } from "../contracts/allocator.js";
 import type { SecretStore } from "../contracts/secretStore.js";
-import type { SshSubstrate } from "../contracts/sshSubstrate.js";
+import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
+import { CommandFileSubstrate } from "../ssh/commandFileSubstrate.js";
 import { quoteSshShellArg } from "../ssh/command.js";
 import { validateClaudeAuthBundle, validateClaudeCredentialRef } from "./claudeAuth.js";
 import { validateCredentialRef } from "./codexAuth.js";
@@ -12,8 +13,8 @@ import { resolveManagedOpenRouterKey } from "./managedKey.js";
 // so the run's writer/answerer all point CLAUDE_CONFIG_DIR at the same path.
 export interface MaterializeClaudeAuthInput {
   secrets: SecretStore;
-  ssh: SshSubstrate;
-  target: SshTarget;
+  ssh: CommandSubstrate;
+  target: RunnerHandle;
   ref: string;
   runId: string;
   baseDir?: string;
@@ -66,13 +67,16 @@ export async function materializeClaudeAuthBundle(input: MaterializeClaudeAuthIn
     throw new Error(`missing Claude credential ref: ${ref}`);
   }
   const bundle = validateClaudeAuthBundle(secret.value);
-  const command = buildClaudeAuthMaterializationCommand(configDir);
-  const result = await input.ssh.run(input.target, {
-    command,
-    stdin: bundle.authJson,
+  // Secret bytes ride the FILE SUBSTRATE seam (chmod-600 write, content on stdin)
+  // — the named form of the heredoc that wrote .credentials.json inline before.
+  const files = new CommandFileSubstrate(input.ssh);
+  const result = await files.writeFile(input.target, {
+    path: `${configDir}/.credentials.json`,
+    content: bundle.authJson,
+    mode: 0o600,
     timeoutMs: input.timeoutMs ?? 30_000,
   });
-  assertMaterializationOk(result);
+  assertFileWriteOk(result, "Claude");
   return { CLAUDE_CONFIG_DIR: configDir, ref, managed: false, redacted: true };
 }
 
@@ -129,21 +133,23 @@ function failureMessage(failure: { message?: string; reason?: string }): string 
   return failure.message ?? failure.reason ?? "unknown failure";
 }
 
+// Assert a FileSubstrate write succeeded — a credential write that did not land
+// must halt the run loudly, never degrade. Mirrors assertMaterializationOk.
+function assertFileWriteOk(
+  result: { ok: boolean; failure?: { message?: string; reason?: string } },
+  cli: string,
+): void {
+  if (!result.ok) {
+    const detail = result.failure === undefined ? "unknown failure" : failureMessage(result.failure);
+    throw new Error(`${cli} credential materialization failed: ${detail}`);
+  }
+}
+
 export function claudeConfigDirForRun(runId: string, baseDir = "/home/tanren/.tanren/runs"): string {
   if (!/^[A-Za-z0-9._-]+$/u.test(runId)) {
     throw new Error("run id is not safe for a runner path");
   }
   return `${baseDir.replace(/\/$/u, "")}/${runId}/claude-home`;
-}
-
-export function buildClaudeAuthMaterializationCommand(configDir: string): string {
-  const credentialsPath = `${configDir}/.credentials.json`;
-  return [
-    "umask 077",
-    `mkdir -p ${quoteSshShellArg(configDir)}`,
-    `cat > ${quoteSshShellArg(credentialsPath)}`,
-    `chmod 600 ${quoteSshShellArg(credentialsPath)}`,
-  ].join(" && ");
 }
 
 // Writes the managed `settings.json` (with the OpenRouter env block) into

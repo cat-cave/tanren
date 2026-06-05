@@ -27,7 +27,7 @@ import { AllocatorConfig, migrateProjectConfig } from "../config/index.js";
 import type { ProjectConfigV1 } from "../config/index.js";
 import type { Allocator } from "../contracts/allocator.js";
 import type { SecretStore } from "../contracts/secretStore.js";
-import type { SshSubstrate } from "../contracts/sshSubstrate.js";
+import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import { resolveCredentialsForRun } from "../credentials/resolveCredentials.js";
 import { ForgeToolsStore } from "../repositories/forgeTools.js";
 import { systemActor } from "../state/actor.js";
@@ -61,7 +61,7 @@ export interface ForgeAnswererInfra {
   pool: pg.Pool;
   secrets: SecretStore;
   allocator: Allocator;
-  ssh: SshSubstrate;
+  ssh: CommandSubstrate;
   /** The runner identity key ref (same value `main.ts` seeds for the server). */
   identitySecretRef: string;
 }

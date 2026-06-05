@@ -1,5 +1,6 @@
 import {
   persistedRunnerKeys,
+  sshRunnerHandle,
   type AllocationRequest,
   type Allocator,
   type ReleaseReason,
@@ -74,13 +75,13 @@ export class SidecarHttpAllocator implements Allocator {
     const allocation: RunnerAllocation = {
       runnerId: body.runnerId,
       imageSha: body.imageSha,
-      target: {
+      target: sshRunnerHandle({
         host: body.sshHost,
         port: body.sshPort,
         username: this.options.sshUsername ?? "tanren",
         hostKeyFingerprint: body.hostKeyFingerprint,
         identitySecretRef: request.identitySecretRef,
-      },
+      }),
     };
 
     // Sidecar already persisted its own row for ownership; the orchestrator
@@ -93,9 +94,9 @@ export class SidecarHttpAllocator implements Allocator {
       ...persistedRunnerKeys(request),
       orgId: request.orgId ?? null,
       allocator: allocatorName,
-      sshHost: allocation.target.host,
-      sshPort: allocation.target.port,
-      hostKeyFingerprint: allocation.target.hostKeyFingerprint,
+      sshHost: body.sshHost,
+      sshPort: body.sshPort,
+      hostKeyFingerprint: body.hostKeyFingerprint,
       imageSha: allocation.imageSha,
       containerId: allocation.runnerId,
     });

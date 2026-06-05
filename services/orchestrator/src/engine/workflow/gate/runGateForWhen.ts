@@ -6,14 +6,14 @@
 // present and the documented P3-0004 default when absent (resolveCiConfig).
 import type { CiConfigV1, CiWhen } from "../../ci/index.js";
 import { tiersFor } from "../../ci/index.js";
-import type { SshTarget } from "../../contracts/allocator.js";
-import type { SshSubstrate } from "../../contracts/sshSubstrate.js";
+import type { RunnerHandle } from "../../contracts/allocator.js";
+import type { CommandSubstrate } from "../../contracts/commandSubstrate.js";
 import { serviceAuditActor } from "../../events/schemas/audit.js";
 import { type GateAppendEvent, type GateTierResult, runGateTier } from "./runGateTier.js";
 
 export interface RunGateForWhenInput {
-  ssh: SshSubstrate;
-  target: SshTarget;
+  ssh: CommandSubstrate;
+  target: RunnerHandle;
   workspacePath: string;
   config: CiConfigV1;
   when: CiWhen;

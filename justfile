@@ -153,8 +153,8 @@ wait-for-stack:
 # Stack connectivity smoke: the orchestrator's `/healthz` (DB + Vault) via the
 # CLI `doctor`, plus raw SSH reachability of the runner container. This replaces
 # the old `smoke-hello`, which drove a SYNTHETIC fake-adapter workflow that no
-# longer exists in runtime source. The SSH SUBSTRATE path (the orchestrator's
-# real Ssh2Substrate) is proven separately by `smoke-ssh-integration`.
+# longer exists in runtime source. The COMMAND SUBSTRATE path (the orchestrator's
+# real SshCommandSubstrate) is proven separately by `smoke-ssh-integration`.
 smoke-connectivity:
   corepack pnpm --filter @tanren/cli tanren doctor
   ssh -i /tmp/tanren_runner_key -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/tmp/tanren_runner_known_hosts tanren@localhost 'echo tanren-runner-ok'

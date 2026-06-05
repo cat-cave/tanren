@@ -7,9 +7,9 @@ import type {
   ReviewAnswer,
 } from "../answerers/schemas/index.js";
 import type { RoutingChainEntry, RoutingTable } from "../config/shared.js";
-import type { SshTarget } from "../contracts/allocator.js";
+import type { RunnerHandle } from "../contracts/allocator.js";
 import type { SecretStore } from "../contracts/secretStore.js";
-import type { SshSubstrate } from "../contracts/sshSubstrate.js";
+import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import { timedAnswererAdapter, timedWriterAdapter } from "../observability/index.js";
 import { createAiderWriter } from "./aider.js";
 import { createClaudeAnswerer, createClaudeWriter } from "./claude.js";
@@ -55,8 +55,8 @@ export type SelectableAnswererCli = (typeof SELECTABLE_ANSWERER_CLIS)[number];
 
 export interface AdapterSelectorDependencies {
   secrets: SecretStore;
-  ssh: SshSubstrate;
-  target: SshTarget;
+  ssh: CommandSubstrate;
+  target: RunnerHandle;
   runId: string;
   // SaaS Tier-B #5: optional OpenAI-compatible base URL for a MANAGED run. When
   // present (resolveCredentialsForRun returned `providerMode === "managed"`),

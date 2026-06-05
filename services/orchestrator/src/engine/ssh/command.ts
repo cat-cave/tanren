@@ -1,4 +1,4 @@
-import type { SshCommand } from "../contracts/sshSubstrate.js";
+import type { RunnerCommand } from "../contracts/commandSubstrate.js";
 
 export function quoteSshShellArg(value: string): string {
   if (value.includes("\0")) {
@@ -7,7 +7,7 @@ export function quoteSshShellArg(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
-export function buildSshExecCommand(command: SshCommand): string {
+export function buildSshExecCommand(command: RunnerCommand): string {
   if (command.cwd === undefined || command.cwd === "") {
     return command.command;
   }

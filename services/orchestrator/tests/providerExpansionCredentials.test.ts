@@ -1,25 +1,21 @@
 import { describe, expect, it } from "vitest";
-import type { SshTarget } from "../src/engine/contracts/allocator.js";
+import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
-import type { SshCommand, SshCommandResult, SshSubstrate } from "../src/engine/contracts/sshSubstrate.js";
+import type { RunnerCommand, CommandResult, CommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
 import {
   storeClaudeAuthBundle,
   validateClaudeAuthBundle,
   validateClaudeCredentialRef,
 } from "../src/engine/credentials/claudeAuth.js";
-import {
-  buildClaudeAuthMaterializationCommand,
-  claudeConfigDirForRun,
-  materializeClaudeAuthBundle,
-} from "../src/engine/credentials/claudeMaterializer.js";
+import { claudeConfigDirForRun, materializeClaudeAuthBundle } from "../src/engine/credentials/claudeMaterializer.js";
 import { validateOpencodeAuthBundle, validateOpencodeCredentialRef } from "../src/engine/credentials/opencodeAuth.js";
 import {
-  buildOpencodeAuthMaterializationCommand,
   materializeOpencodeAuthBundle,
   opencodeDataHomeForRun,
 } from "../src/engine/credentials/opencodeMaterializer.js";
 
-const target: SshTarget = {
+const target: RunnerHandle = {
+  backend: "ssh",
   host: "runner",
   port: 22,
   username: "tanren",
@@ -168,14 +164,6 @@ describe("Claude credential contracts", () => {
     ).rejects.toThrow("resolved to an empty api key");
   });
 
-  it("builds a restrictive materialization command in umask→mkdir→cat→chmod order", () => {
-    const command = buildClaudeAuthMaterializationCommand("/tmp/claude home");
-    expect(command).toBe(
-      "umask 077 && mkdir -p '/tmp/claude home' && " +
-        "cat > '/tmp/claude home/.credentials.json' && chmod 600 '/tmp/claude home/.credentials.json'",
-    );
-  });
-
   it("throws when the materialized credential ref is missing from the store", async () => {
     const secrets = new FakeSecretStore();
     const ssh = new CapturingSsh();
@@ -287,14 +275,6 @@ describe("opencode credential contracts", () => {
     ).rejects.toThrow("resolved to an empty api key");
   });
 
-  it("builds a restrictive materialization command nesting auth.json under opencode/", () => {
-    const command = buildOpencodeAuthMaterializationCommand("/tmp/oc home");
-    expect(command).toBe(
-      "umask 077 && mkdir -p '/tmp/oc home/opencode' && " +
-        "cat > '/tmp/oc home/opencode/auth.json' && chmod 600 '/tmp/oc home/opencode/auth.json'",
-    );
-  });
-
   it("throws when the opencode credential ref is missing and derives a per-run data home", async () => {
     const secrets = new FakeSecretStore();
     const ssh = new CapturingSsh();
@@ -306,13 +286,13 @@ describe("opencode credential contracts", () => {
   });
 });
 
-class CapturingSsh implements SshSubstrate {
+class CapturingSsh implements CommandSubstrate {
   command = "";
   stdin: string | undefined;
-  result: SshCommandResult = { exitCode: 0, stdout: "", stderr: "", timedOut: false };
+  result: CommandResult = { exitCode: 0, stdout: "", stderr: "", timedOut: false };
   readonly commands: Array<{ command: string; stdin: string | undefined }> = [];
 
-  async run(_target: SshTarget, command: SshCommand): Promise<SshCommandResult> {
+  async run(_target: RunnerHandle, command: RunnerCommand): Promise<CommandResult> {
     this.command = command.command;
     this.stdin = command.stdin;
     this.commands.push({ command: command.command, stdin: command.stdin });
@@ -328,7 +308,7 @@ describe("materialization failure surfacing", () => {
     ssh.result = { exitCode: 7, stdout: "", stderr: "denied", timedOut: false };
     await expect(
       materializeClaudeAuthBundle({ secrets, ssh, target, ref: "credential/claude/dev", runId: "run_1" }),
-    ).rejects.toThrow("Claude credential materialization failed with exit code 7");
+    ).rejects.toThrow("Claude credential materialization failed: file write failed with exit code 7");
   });
 
   it("surfaces an SSH failure message for opencode materialization", async () => {

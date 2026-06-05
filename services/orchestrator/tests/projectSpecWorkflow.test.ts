@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { InMemorySecretStore, type SshSubstrate } from "../src/engine/contracts/index.js";
+import { InMemorySecretStore, type CommandSubstrate } from "../src/engine/contracts/index.js";
 import { buildApp } from "../src/main.js";
 
 // buildApp's default sidecar allocator REQUIRES a bearer token (no `"dev"` fallback).
 process.env.TANREN_ALLOCATOR_TOKEN ??= "test-token";
-const ssh = {} as SshSubstrate;
+const ssh = {} as CommandSubstrate;
 const doneOrMerged = (status: string): boolean => status === "done" || status === "merged";
 
 describe("project/spec workflow contract", () => {

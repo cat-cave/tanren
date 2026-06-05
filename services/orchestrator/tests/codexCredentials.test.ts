@@ -1,20 +1,17 @@
 import { describe, expect, it } from "vitest";
-import type { SshTarget } from "../src/engine/contracts/allocator.js";
+import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
-import type { SshCommand, SshCommandResult, SshSubstrate } from "../src/engine/contracts/sshSubstrate.js";
+import type { RunnerCommand, CommandResult, CommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
 import {
   storeCodexAuthBundle,
   validateCodexAuthBundle,
   validateCodexCredentialRef,
   validateCredentialRef,
 } from "../src/engine/credentials/codexAuth.js";
-import {
-  buildCodexAuthMaterializationCommand,
-  codexHomeForRun,
-  materializeCodexAuthBundle,
-} from "../src/engine/credentials/codexMaterializer.js";
+import { codexHomeForRun, materializeCodexAuthBundle } from "../src/engine/credentials/codexMaterializer.js";
 
-const target: SshTarget = {
+const target: RunnerHandle = {
+  backend: "ssh",
   host: "runner",
   port: 22,
   username: "tanren",
@@ -74,15 +71,6 @@ describe("Codex credential contracts", () => {
     expect(ssh.command).not.toContain("secret-token");
     expect(ssh.command).not.toContain(Buffer.from(authJson, "utf8").toString("base64"));
     expect(ssh.stdin).toBe(authJson);
-  });
-
-  it("builds a restrictive materialization command in umask→mkdir→cat→chmod order", () => {
-    const command = buildCodexAuthMaterializationCommand("/tmp/codex home");
-
-    expect(command).toBe(
-      "umask 077 && mkdir -p '/tmp/codex home' && " +
-        "cat > '/tmp/codex home/auth.json' && chmod 600 '/tmp/codex home/auth.json'",
-    );
   });
 
   it("materializes a MANAGED OpenRouter key as a config.toml provider block + key env file (no codex-bundle validation)", async () => {
@@ -295,12 +283,12 @@ describe("Codex credential contracts", () => {
   });
 });
 
-class CapturingSshSubstrate implements SshSubstrate {
+class CapturingSshSubstrate implements CommandSubstrate {
   command = "";
   stdin: string | undefined;
   readonly commands: Array<{ command: string; stdin: string | undefined }> = [];
 
-  async run(_target: SshTarget, command: SshCommand): Promise<SshCommandResult> {
+  async run(_target: RunnerHandle, command: RunnerCommand): Promise<CommandResult> {
     this.command = command.command;
     this.stdin = command.stdin;
     this.commands.push({ command: command.command, stdin: command.stdin });

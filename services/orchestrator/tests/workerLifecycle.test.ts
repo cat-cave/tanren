@@ -15,7 +15,7 @@ import type { Allocator } from "../src/engine/contracts/allocator.js";
 import type { ClaimJobOptions, JobClaimClient } from "../src/engine/contracts/jobClaim.js";
 import type { JobEnvelope } from "../src/engine/contracts/jobQueue.js";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
-import type { SshSubstrate } from "../src/engine/contracts/sshSubstrate.js";
+import type { CommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
 import { storeGithubToken } from "../src/engine/credentials/githubToken.js";
 import type { GitHubHttpClient } from "../src/engine/providers/github.js";
 import { createProject, createQueuedRunFromSpec, createSpec } from "../src/engine/workflow/projectSpec.js";
@@ -33,7 +33,7 @@ const noopAllocator: Allocator = {
   },
   async release() {},
 };
-const noopSsh: SshSubstrate = {
+const noopSsh: CommandSubstrate = {
   async run() {
     return { exitCode: 0, stdout: "", stderr: "", timedOut: false };
   },

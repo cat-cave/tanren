@@ -10,7 +10,7 @@ import type pg from "pg";
 import type { Allocator } from "../contracts/allocator.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SecretStore } from "../contracts/secretStore.js";
-import type { SshSubstrate } from "../contracts/sshSubstrate.js";
+import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import { buildForgeTriageAnswererFactory } from "../forge/providerFactory.js";
 import { intakeAutoRouteDeps } from "../forge/intake/systemActor.js";
 import { CiInsightsLoop } from "./ciInsightsLoop.js";
@@ -19,7 +19,7 @@ export interface BuildCiInsightsLoopDeps {
   pool: pg.Pool;
   secrets: SecretStore;
   allocator: Allocator;
-  ssh: SshSubstrate;
+  ssh: CommandSubstrate;
   identitySecretRef: string;
   /** Plane-split: routes the generated candidate's spec INSERT through the control plane when wired. */
   runStateWriter?: RunStateWriter;

@@ -13,9 +13,9 @@ import { buildAllocatorFromEnv } from "../allocators/index.js";
 import { resolveWorkerConcurrency } from "../config/index.js";
 import { buildSecretStore, type SecretStore } from "../contracts/index.js";
 import { startAutonomyLoops, type AutonomyLoops } from "./autonomyLoops.js";
-import { TimedGitHubHttpClient, TimedSshSubstrate } from "../observability/index.js";
+import { TimedGitHubHttpClient, TimedCommandSubstrate } from "../observability/index.js";
 import { buildVcsProvider, FetchGitHubHttpClient, GithubAppTokenMinter } from "../providers/buildVcsProvider.js";
-import { Ssh2Substrate } from "../ssh/index.js";
+import { SshCommandSubstrate } from "../ssh/index.js";
 import { buildClaimClientFromEnv } from "./claimClientFromEnv.js";
 import { buildRunStateWriterFromEnv } from "./runStateWriterFromEnv.js";
 import type { JobReaper } from "./jobReaper.js";
@@ -92,7 +92,7 @@ export async function bootRunWorker(): Promise<BootedRunWorker> {
   // SSH / GitHub plumbing (the poller's triage answerer allocates a runner per
   // model call exactly as the Forge route factories do).
   const allocator = buildAllocatorFromEnv(pool, secrets);
-  const ssh = new TimedSshSubstrate(new Ssh2Substrate(secrets));
+  const ssh = new TimedCommandSubstrate(new SshCommandSubstrate(secrets));
   const githubHttp = new TimedGitHubHttpClient(new FetchGitHubHttpClient());
   // P2·0: the run/merge lifecycle routes its VCS/CI ops through the VcsProvider
   // seam (registry default = the real GitHub impl composing `githubHttp`).

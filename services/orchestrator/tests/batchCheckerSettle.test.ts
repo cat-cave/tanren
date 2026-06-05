@@ -15,8 +15,13 @@ import type pg from "pg";
 import { describe, expect, it } from "vitest";
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
 import { PgBatchChecker } from "../src/engine/merge/batchChecker.js";
-import type { Allocator, AllocationRequest, RunnerAllocation, SshTarget } from "../src/engine/contracts/allocator.js";
-import type { SshCommand, SshCommandResult, SshSubstrate } from "../src/engine/contracts/sshSubstrate.js";
+import type {
+  Allocator,
+  AllocationRequest,
+  RunnerAllocation,
+  RunnerHandle,
+} from "../src/engine/contracts/allocator.js";
+import type { RunnerCommand, CommandResult, CommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
 import type { MergeQueueEntry } from "../src/engine/contracts/mergeCoordinator.js";
 import type {
   BuildIntegrationBranchInput,
@@ -29,7 +34,8 @@ import type {
 
 const ORG = "org_1";
 const PROJECT = "project_1";
-const TARGET: SshTarget = {
+const TARGET: RunnerHandle = {
+  backend: "ssh",
   host: "runner",
   port: 22,
   username: "tanren",
@@ -123,9 +129,9 @@ class FakeAllocator implements Allocator {
  * DEFAULT tiers run (the `pre_merge` tier is `pnpm build` then `pnpm test`). Only the
  * actual GATE STEP commands carry `gateExit` (0 ⇒ pass, nonzero ⇒ fail at the step).
  */
-class GateDrivingSsh implements SshSubstrate {
+class GateDrivingSsh implements CommandSubstrate {
   constructor(private readonly gateExit: number) {}
-  async run(_target: SshTarget, command: SshCommand): Promise<SshCommandResult> {
+  async run(_target: RunnerHandle, command: RunnerCommand): Promise<CommandResult> {
     const cmd = command.command;
     if (cmd.includes("git rev-parse HEAD") || cmd.includes("git clone")) {
       return { exitCode: 0, stdout: "a".repeat(40), stderr: "", timedOut: false };
@@ -161,7 +167,7 @@ function entry(specId: string): MergeQueueEntry {
 
 function makeChecker(
   integration: BuildIntegrationBranchResult,
-  ssh: SshSubstrate,
+  ssh: CommandSubstrate,
   allocator: Allocator = new FakeAllocator(),
 ): PgBatchChecker {
   return new PgBatchChecker({

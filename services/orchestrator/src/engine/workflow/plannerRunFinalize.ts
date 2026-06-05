@@ -10,7 +10,9 @@
 // default path + its mutation suite are unchanged). The `fromStatuses` guard is
 // what the remote endpoint applies for exactly-once.
 
-import type { Allocator, RunnerAllocation } from "../contracts/allocator.js";
+import type { Allocator, ReleaseReason, RunnerAllocation } from "../contracts/allocator.js";
+import { asSshRunnerHandle } from "../contracts/allocator.js";
+import { AllocatorReleaseFinalizer } from "../contracts/releaseFinalizer.js";
 import { CodexUsageLimitError } from "../providers/codex.js";
 import type { EventName, EventPayload } from "../events/index.js";
 import { WorkspaceBootstrapError } from "../workspace/index.js";
@@ -23,16 +25,19 @@ import type { SubtaskLoopOutcome } from "./subtaskLoop.js";
 // already depends on, keeping that file's dependency count under the cap.
 export { applyScopedRunCredentials, type RunCredentialScoping } from "./plannerRunScopedCreds.js";
 
-/** The `runner.allocated` event payload — runner id/image + the SSH target's public fields. */
+/** The `runner.allocated` event payload — runner id/image + the SSH handle's public fields. */
 export function runnerPayload(allocation: RunnerAllocation) {
+  // The allocation's `target` is the opaque RunnerHandle; the event payload carries
+  // the SSH handle's public reach fields, so narrow to the SSH shape here.
+  const handle = asSshRunnerHandle(allocation.target);
   return {
     runnerId: allocation.runnerId,
     imageSha: allocation.imageSha,
     target: {
-      host: allocation.target.host,
-      port: allocation.target.port,
-      username: allocation.target.username,
-      hostKeyFingerprint: allocation.target.hostKeyFingerprint,
+      host: handle.host,
+      port: handle.port,
+      username: handle.username,
+      hostKeyFingerprint: handle.hostKeyFingerprint,
     },
   };
 }
@@ -258,16 +263,15 @@ export async function releaseRunnerWithCleanupProof(
   allocator: Allocator,
   runnerId: string,
   appendEvent: <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string) => Promise<void>,
+  reason: ReleaseReason = "completed",
 ): Promise<void> {
   await appendEvent("runner.released", { runnerId });
-  let releaseError: unknown;
-  try {
-    await allocator.release(runnerId);
-  } catch (error) {
-    releaseError = error;
-  }
-  const cleanedUp = releaseError === undefined;
-  const failure = cleanedUp ? {} : { failureReason: releaseFailureSummary(releaseError) };
+  // Release through the RELEASE FINALIZER seam: it owns the release + returns a
+  // reconcilable outcome WITHOUT throwing (a throw here would mask the run's real
+  // failure). `release.finalized` is the audit PROOF the outcome carries.
+  const outcome = await new AllocatorReleaseFinalizer(allocator).finalize(runnerId, reason);
+  const cleanedUp = outcome.kind === "released";
+  const failure = cleanedUp ? {} : { failureReason: releaseFailureSummary(outcome.message) };
   await appendEvent("release.finalized", {
     runnerId,
     cleanedUp,
@@ -280,7 +284,6 @@ export async function releaseRunnerWithCleanupProof(
 // release error is an allocator/HTTP fault message (a runner id, a status, a provider
 // message) — never a credential value — but we still bound it to a single line so no
 // multi-line provider dump rides along.
-function releaseFailureSummary(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
+function releaseFailureSummary(message: string): string {
   return message.split("\n")[0]?.slice(0, 300) ?? "runner release failed";
 }

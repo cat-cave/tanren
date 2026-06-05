@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { SshTarget } from "../src/engine/contracts/allocator.js";
+import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
 import {
   SshUsageProbe,
   type CcusageAccounting,
@@ -9,7 +9,8 @@ import {
   type WindowUsage,
 } from "../src/engine/usage/index.js";
 
-const target: SshTarget = {
+const target: RunnerHandle = {
+  backend: "ssh",
   host: "runner",
   port: 22,
   username: "tanren",

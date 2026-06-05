@@ -8,7 +8,7 @@
 // the install artifacts (lockfiles, node_modules) sit below the base. The
 // `cloneHeadSha` is threaded onward so the PR-branch cleanup can replay the
 // writer commits onto it (dropping the bootstrap commit) before the push.
-import type { SshTarget } from "../contracts/allocator.js";
+import type { RunnerHandle } from "../contracts/allocator.js";
 import type { ActorIdentity } from "../contracts/vcsProvider.js";
 import { githubHttpsRemote, parseGitHubRepository } from "../providers/github.js";
 import { quoteSshShellArg } from "../ssh/command.js";
@@ -38,7 +38,7 @@ export interface PreparedRunWorkspace {
 // returns the run's clone-HEAD / bootstrap / base shas.
 export async function prepareRunWorkspace(
   input: RunPlannerLoopInput,
-  target: SshTarget,
+  target: RunnerHandle,
   workspacePath: string,
 ): Promise<PreparedRunWorkspace> {
   const cloneHeadSha = await cloneWorkspace(input, target, workspacePath);
@@ -99,7 +99,11 @@ export async function prepareRunWorkspace(
 // command string, the process args, or any emitted `workspace.*` event. Without
 // a token the clone runs unauthenticated against the repo URL as-is (public-repo
 // path), unchanged.
-async function cloneWorkspace(input: RunPlannerLoopInput, target: SshTarget, workspacePath: string): Promise<string> {
+async function cloneWorkspace(
+  input: RunPlannerLoopInput,
+  target: RunnerHandle,
+  workspacePath: string,
+): Promise<string> {
   const resolved = await resolveCloneCredential(input);
   const result = await runWorkspaceSshCommand(input.ssh, target, {
     label: "prepare planner-loop workspace",

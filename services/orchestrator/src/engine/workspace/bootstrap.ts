@@ -5,8 +5,8 @@
 // command over SSH in the workspace dir immediately after a successful clone
 // and BEFORE the first writer iteration, so gating + intent-checking operate
 // on a built tree.
-import type { SshTarget } from "../contracts/allocator.js";
-import type { SshCommandResult, SshSubstrate } from "../contracts/sshSubstrate.js";
+import type { RunnerHandle } from "../contracts/allocator.js";
+import type { CommandResult, CommandSubstrate } from "../contracts/commandSubstrate.js";
 import { quoteSshShellArg } from "../ssh/command.js";
 import { withAppEnv } from "../ssh/appEnvPrelude.js";
 import { runWorkspaceSshCommand } from "./ssh.js";
@@ -78,8 +78,8 @@ export const DEPS_ENSURE_DEFAULT_COMMAND =
   "else echo 'tanren: no package manifest found; skipping dependency bootstrap'; fi";
 
 export interface BootstrapWorkspaceInput {
-  ssh: SshSubstrate;
-  target: SshTarget;
+  ssh: CommandSubstrate;
+  target: RunnerHandle;
   workspacePath: string;
   // The install command, run in the workspace dir over SSH. Defaults to
   // DEFAULT_BOOTSTRAP_COMMAND when omitted.
@@ -116,7 +116,7 @@ export class WorkspaceBootstrapError extends Error {
 // Installs the target repo's dependencies in the cloned workspace over SSH.
 // Returns the raw SSH result on success; throws WorkspaceBootstrapError on a
 // nonzero exit, timeout, or substrate failure.
-export async function bootstrapWorkspace(input: BootstrapWorkspaceInput): Promise<SshCommandResult> {
+export async function bootstrapWorkspace(input: BootstrapWorkspaceInput): Promise<CommandResult> {
   const command = input.command ?? DEFAULT_BOOTSTRAP_COMMAND;
   // SUBSTRATE BOUNDARY: the app-env prelude is prepended ONLY to the string handed
   // to `ssh.run` — never to `command`, which is the value that flows into the
@@ -154,8 +154,8 @@ const DEPS_NOOP_SENTINEL = "tanren: deps-ensure no-op";
 const DEPS_INSTALL_SENTINEL = "tanren: deps-ensure installing";
 
 export interface EnsureWorkspaceDepsInput {
-  ssh: SshSubstrate;
-  target: SshTarget;
+  ssh: CommandSubstrate;
+  target: RunnerHandle;
   workspacePath: string;
   // The install command run in the workspace dir over SSH whenever a manifest
   // exists. Defaults to DEPS_ENSURE_DEFAULT_COMMAND — the NON-FROZEN
@@ -297,8 +297,8 @@ function depsInstallFailureMessage(
 export const WORKSPACE_LOCAL_IGNORE_PATHS = ["node_modules/", "dist/"] as const;
 
 export interface SeedWorkspaceLocalIgnoreInput {
-  ssh: SshSubstrate;
-  target: SshTarget;
+  ssh: CommandSubstrate;
+  target: RunnerHandle;
   workspacePath: string;
   timeoutMs: number;
 }
@@ -326,8 +326,8 @@ export async function seedWorkspaceLocalIgnore(input: SeedWorkspaceLocalIgnoreIn
 }
 
 export interface CommitBootstrapStateInput {
-  ssh: SshSubstrate;
-  target: SshTarget;
+  ssh: CommandSubstrate;
+  target: RunnerHandle;
   workspacePath: string;
   timeoutMs: number;
 }
@@ -372,8 +372,8 @@ export async function commitBootstrapState(input: CommitBootstrapStateInput): Pr
 // (unit paths), in which case the caller emits no verdict; a real runner always
 // returns a 40-hex sha and a malformed value is a LOUD throw (never a guessed sha).
 export async function resolveWorkspaceHeadSha(input: {
-  ssh: SshSubstrate;
-  target: SshTarget;
+  ssh: CommandSubstrate;
+  target: RunnerHandle;
   workspacePath: string;
   timeoutMs: number;
 }): Promise<string> {
@@ -390,7 +390,7 @@ export async function resolveWorkspaceHeadSha(input: {
   return sha;
 }
 
-function combinedOutput(result: SshCommandResult): string {
+function combinedOutput(result: CommandResult): string {
   if (result.failure !== undefined) {
     const detail = "message" in result.failure ? result.failure.message : result.failure.reason;
     return [result.stdout, result.stderr, detail].filter((part) => part !== undefined && part !== "").join("\n");

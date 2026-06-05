@@ -22,7 +22,7 @@ import { describe, expect, it } from "vitest";
 import type pg from "pg";
 import { FakeAllocator } from "../src/engine/contracts/allocator.js";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
-import { FakeSshSubstrate } from "../src/engine/contracts/sshSubstrate.js";
+import { FakeCommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
 import {
   buildDriveConflictResolve,
   type DriveConflictResolveDeps,
@@ -131,7 +131,7 @@ function makeDeps(
     scopedPool: pool,
     facts: FACTS,
     allocator,
-    ssh: new FakeSshSubstrate(),
+    ssh: new FakeCommandSubstrate(),
     secrets: new FakeSecretStore(),
     vcsProvider: new InMemoryVcsProvider(),
     eventStore: new FakeEventStore(),

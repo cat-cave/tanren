@@ -24,6 +24,7 @@
     ".env.example"
   ],
   "words": [
+    "Daytona",
     "pytest",
     "junitxml",
     "gotestsum",

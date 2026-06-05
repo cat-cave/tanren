@@ -23,7 +23,7 @@ import type { Allocator } from "../contracts/allocator.js";
 import type { MergeCoordinator } from "../contracts/mergeCoordinator.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SecretStore } from "../contracts/secretStore.js";
-import type { SshSubstrate } from "../contracts/sshSubstrate.js";
+import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import type { VcsProvider } from "../contracts/vcsProvider.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import { buildBatchMergeCoordinator } from "./batchCoordinatorBuild.js";
@@ -44,7 +44,7 @@ export interface MergeCoordinatorSubscriberDeps {
    * never a silent revert to the deleted blind-re-exec.
    */
   allocator?: Allocator;
-  ssh?: SshSubstrate;
+  ssh?: CommandSubstrate;
   identitySecretRef?: string;
   /**
    * Plane-split (autonomy loops): the control-plane run-state writer. When present

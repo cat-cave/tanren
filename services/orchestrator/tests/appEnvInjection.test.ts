@@ -5,8 +5,8 @@
 
 import { describe, expect, it } from "vitest";
 import type pg from "pg";
-import type { SshTarget } from "../src/engine/contracts/allocator.js";
-import type { SshCommand, SshCommandResult, SshSubstrate } from "../src/engine/contracts/sshSubstrate.js";
+import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
+import type { RunnerCommand, CommandResult, CommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
 import type { EventName, EventPayload } from "../src/engine/events/index.js";
 import { runGateTier } from "../src/engine/workflow/gate/runGateTier.js";
 import { buildAppEnvPrelude, withAppEnv } from "../src/engine/ssh/appEnvPrelude.js";
@@ -17,11 +17,11 @@ import { systemActor } from "../src/engine/state/actor.js";
 import { AppEnvironmentStore } from "../src/engine/repositories/appEnvironment.js";
 import { resolveAppEnvForScope } from "../src/engine/workflow/resolveAppEnv.js";
 
-const target: SshTarget = { host: "h", port: 22, username: "u", hostKeyFingerprint: "fp" };
+const target: RunnerHandle = { host: "h", port: 22, username: "u", hostKeyFingerprint: "fp" };
 
-class RecordingSsh implements SshSubstrate {
-  readonly commands: SshCommand[] = [];
-  async run(_target: SshTarget, command: SshCommand): Promise<SshCommandResult> {
+class RecordingSsh implements CommandSubstrate {
+  readonly commands: RunnerCommand[] = [];
+  async run(_target: RunnerHandle, command: RunnerCommand): Promise<CommandResult> {
     this.commands.push(command);
     return { exitCode: 0, stdout: "", stderr: "", timedOut: false };
   }
@@ -130,9 +130,9 @@ describe("run-workspace app-env injection (bootstrap failure path)", () => {
   const workspacePath = "/ws";
 
   // An SSH that returns a scripted failing result (exit 1) and records what ran.
-  class FailingSsh implements SshSubstrate {
-    readonly commands: SshCommand[] = [];
-    async run(_target: SshTarget, command: SshCommand): Promise<SshCommandResult> {
+  class FailingSsh implements CommandSubstrate {
+    readonly commands: RunnerCommand[] = [];
+    async run(_target: RunnerHandle, command: RunnerCommand): Promise<CommandResult> {
       this.commands.push(command);
       // The failing command echoes nothing of the env (a realistic install error);
       // the leak under test is the COMMAND STRING in the error message, not stderr.

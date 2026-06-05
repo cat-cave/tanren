@@ -1,5 +1,6 @@
 import {
   persistedRunnerKeys,
+  sshRunnerHandle,
   type AllocationRequest,
   type Allocator,
   type ReleaseReason,
@@ -183,13 +184,13 @@ export class GcpAllocator implements Allocator {
     const allocation: RunnerAllocation = {
       runnerId,
       imageSha: `${request.runnerImage}@sha256:gcp`,
-      target: {
+      target: sshRunnerHandle({
         host: ip,
         port,
         username: this.options.sshUsername,
         hostKeyFingerprint: this.options.hostKeyFingerprint,
         identitySecretRef: request.identitySecretRef,
-      },
+      }),
     };
 
     try {

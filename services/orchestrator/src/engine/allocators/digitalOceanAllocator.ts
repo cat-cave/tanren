@@ -1,5 +1,6 @@
 import {
   persistedRunnerKeys,
+  sshRunnerHandle,
   type AllocationRequest,
   type Allocator,
   type ReleaseReason,
@@ -155,13 +156,13 @@ export class DigitalOceanAllocator implements Allocator {
     const allocation: RunnerAllocation = {
       runnerId,
       imageSha: `${request.runnerImage}@sha256:digitalocean`,
-      target: {
+      target: sshRunnerHandle({
         host: ip,
         port,
         username,
         hostKeyFingerprint: this.options.hostKeyFingerprint,
         identitySecretRef: request.identitySecretRef,
-      },
+      }),
     };
 
     try {

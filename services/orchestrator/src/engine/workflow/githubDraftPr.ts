@@ -1,9 +1,10 @@
 import type pg from "pg";
 import { installationFromOrgConfig, type OrgGithubAppInstallation } from "../config/orgConfig.js";
-import type { SshTarget } from "../contracts/allocator.js";
+import type { RunnerHandle } from "../contracts/allocator.js";
+import { sshRunnerHandle } from "../contracts/allocator.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SecretStore } from "../contracts/secretStore.js";
-import type { SshSubstrate } from "../contracts/sshSubstrate.js";
+import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import { redactedGithubTokenResult, validateGithubCredentialRef } from "../credentials/githubToken.js";
 import { type EventStore, PgEventStore } from "../eventStore.js";
 import type { VcsProvider } from "../contracts/vcsProvider.js";
@@ -23,8 +24,8 @@ export interface PublishDraftPullRequestInput {
   orgId?: string | null;
   secrets: SecretStore;
   vcsProvider: VcsProvider;
-  ssh: SshSubstrate;
-  target: SshTarget;
+  ssh: CommandSubstrate;
+  target: RunnerHandle;
   runId: string;
   specId: string;
   projectId: string;
@@ -60,7 +61,7 @@ export interface PublishDraftPullRequestForRunInput {
   eventStore?: EventStore;
   secrets: SecretStore;
   vcsProvider: VcsProvider;
-  ssh: SshSubstrate;
+  ssh: CommandSubstrate;
   runId: string;
   githubCredentialRef?: string;
   identitySecretRef: string;
@@ -187,13 +188,13 @@ export async function publishDraftPullRequestForRun(
     secrets: input.secrets,
     vcsProvider: input.vcsProvider,
     ssh: input.ssh,
-    target: {
+    target: sshRunnerHandle({
       host: context.runner.sshHost,
       port: context.runner.sshPort,
       username: "tanren",
       hostKeyFingerprint: context.runner.hostKeyFingerprint,
       identitySecretRef: input.identitySecretRef,
-    },
+    }),
     runId: context.runId,
     specId: context.specId,
     projectId: context.projectId,

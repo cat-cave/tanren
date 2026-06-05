@@ -1,8 +1,9 @@
 import { Client } from "ssh2";
 import type { ClientChannel, ServerHostKeyAlgorithm } from "ssh2";
-import type { SshTarget } from "../contracts/allocator.js";
+import type { RunnerHandle, SshRunnerHandle } from "../contracts/allocator.js";
+import { asSshRunnerHandle } from "../contracts/allocator.js";
 import type { SecretStore } from "../contracts/secretStore.js";
-import type { SshCommand, SshCommandResult, SshSubstrate } from "../contracts/sshSubstrate.js";
+import type { RunnerCommand, CommandResult, CommandSubstrate } from "../contracts/commandSubstrate.js";
 import { defineFailure } from "../failure.js";
 import { buildSshExecCommand } from "./command.js";
 import { hostKeyFingerprintMatches } from "./fingerprint.js";
@@ -10,7 +11,7 @@ import { hostKeyFingerprintMatches } from "./fingerprint.js";
 type Ssh2Client = Pick<Client, "connect" | "destroy" | "end" | "exec" | "once">;
 type Ssh2ClientFactory = () => Ssh2Client;
 
-export interface Ssh2SubstrateOptions {
+export interface SshCommandSubstrateOptions {
   clientFactory?: Ssh2ClientFactory;
   connectTimeoutMs?: number;
   serverHostKeyAlgorithms?: ServerHostKeyAlgorithm[];
@@ -25,17 +26,21 @@ interface RunState {
   timer?: NodeJS.Timeout;
 }
 
-export class Ssh2Substrate implements SshSubstrate {
+export class SshCommandSubstrate implements CommandSubstrate {
   private readonly clientFactory: Ssh2ClientFactory;
 
   constructor(
     private readonly secrets: SecretStore,
-    private readonly options: Ssh2SubstrateOptions = {},
+    private readonly options: SshCommandSubstrateOptions = {},
   ) {
     this.clientFactory = options.clientFactory ?? (() => new Client());
   }
 
-  async run(target: SshTarget, command: SshCommand): Promise<SshCommandResult> {
+  async run(handle: RunnerHandle, command: RunnerCommand): Promise<CommandResult> {
+    // The CommandSubstrate contract surface is the OPAQUE RunnerHandle; the SSH
+    // impl narrows it to its concrete SshRunnerHandle (LOUD if a non-SSH handle is
+    // ever routed here) and reads its reach fields from there.
+    const target = asSshRunnerHandle(handle);
     const identity = await this.secrets.get(target.identitySecretRef);
     if (identity === undefined) {
       return this.failureResult(target, `missing SSH identity secret: ${target.identitySecretRef}`);
@@ -52,17 +57,17 @@ export class Ssh2Substrate implements SshSubstrate {
   }
 
   private async runClient(
-    target: SshTarget,
-    command: SshCommand,
+    target: SshRunnerHandle,
+    command: RunnerCommand,
     privateKey: string,
     execCommand: string,
-  ): Promise<SshCommandResult> {
-    return await new Promise<SshCommandResult>((resolve) => {
+  ): Promise<CommandResult> {
+    return await new Promise<CommandResult>((resolve) => {
       const client = this.clientFactory();
       const state: RunState = { stdout: "", stderr: "", exitCode: null, settled: false };
       let hostKeyFailure: string | undefined;
 
-      const settle = (result: SshCommandResult, close: "end" | "destroy" = "end"): void => {
+      const settle = (result: CommandResult, close: "end" | "destroy" = "end"): void => {
         if (state.settled) {
           return;
         }
@@ -154,7 +159,7 @@ export class Ssh2Substrate implements SshSubstrate {
     stream.once("close", onClose);
   }
 
-  private failureResult(target: SshTarget, message: string): SshCommandResult {
+  private failureResult(target: SshRunnerHandle, message: string): CommandResult {
     return {
       exitCode: null,
       stdout: "",
@@ -165,7 +170,7 @@ export class Ssh2Substrate implements SshSubstrate {
   }
 }
 
-function formatTarget(target: SshTarget): string {
+function formatTarget(target: SshRunnerHandle): string {
   return `${target.username}@${target.host}:${target.port}`;
 }
 

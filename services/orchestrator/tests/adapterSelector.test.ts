@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { RoutingChainEntry, RoutingTable } from "../src/engine/config/shared.js";
-import type { SshTarget } from "../src/engine/contracts/allocator.js";
+import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
-import type { SshCommand, SshCommandResult, SshSubstrate } from "../src/engine/contracts/sshSubstrate.js";
+import type { RunnerCommand, CommandResult, CommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
 import {
   buildAdaptersFromRouting,
   buildAnswererAdapter,
@@ -19,7 +19,8 @@ import {
   harnessSupportsRole,
 } from "../src/engine/providers/harnessCapability.js";
 
-const target: SshTarget = {
+const target: RunnerHandle = {
+  backend: "ssh",
   host: "runner",
   port: 22,
   username: "tanren",
@@ -189,8 +190,8 @@ describe("harness capability model (Track C §4 protocol contract)", () => {
   });
 });
 
-class NoopSsh implements SshSubstrate {
-  async run(_target: SshTarget, _command: SshCommand): Promise<SshCommandResult> {
+class NoopSsh implements CommandSubstrate {
+  async run(_target: RunnerHandle, _command: RunnerCommand): Promise<CommandResult> {
     return { exitCode: 0, stdout: "", stderr: "", timedOut: false };
   }
 }

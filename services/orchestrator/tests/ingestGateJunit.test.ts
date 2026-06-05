@@ -7,10 +7,11 @@
 import type pg from "pg";
 import { describe, expect, it } from "vitest";
 import { ingestGateJunit } from "../src/engine/workflow/gate/ingestGateJunit.js";
-import type { SshTarget } from "../src/engine/contracts/allocator.js";
-import type { SshCommand, SshCommandResult, SshSubstrate } from "../src/engine/contracts/sshSubstrate.js";
+import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
+import type { RunnerCommand, CommandResult, CommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
 
-const TARGET: SshTarget = {
+const TARGET: RunnerHandle = {
+  backend: "ssh",
   host: "runner",
   port: 22,
   username: "tanren",
@@ -29,9 +30,9 @@ const JUNIT_XML = `<?xml version="1.0"?>
 </testsuites>`;
 
 /** An SSH that serves the JUnit report when the gate cats the conventional path. */
-class JunitSsh implements SshSubstrate {
+class JunitSsh implements CommandSubstrate {
   constructor(private readonly xml: string | undefined) {}
-  async run(_target: SshTarget, command: SshCommand): Promise<SshCommandResult> {
+  async run(_target: RunnerHandle, command: RunnerCommand): Promise<CommandResult> {
     if (command.command.includes("reports/junit.xml")) {
       return { exitCode: 0, stdout: this.xml ?? "", stderr: "", timedOut: false };
     }
@@ -66,7 +67,7 @@ class RecordingClient {
   }
 }
 
-function deps(ssh: SshSubstrate, client: RecordingClient) {
+function deps(ssh: CommandSubstrate, client: RecordingClient) {
   return {
     ssh,
     target: TARGET,

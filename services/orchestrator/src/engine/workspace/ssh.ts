@@ -1,5 +1,5 @@
-import type { SshTarget } from "../contracts/allocator.js";
-import type { SshCommandResult, SshSubstrate } from "../contracts/sshSubstrate.js";
+import type { RunnerHandle } from "../contracts/allocator.js";
+import type { CommandResult, CommandSubstrate } from "../contracts/commandSubstrate.js";
 
 export interface WorkspaceSshCommand {
   command: string;
@@ -13,7 +13,7 @@ export class WorkspaceCommandError extends Error {
   constructor(
     message: string,
     readonly label: string,
-    readonly result: SshCommandResult,
+    readonly result: CommandResult,
   ) {
     super(message);
     this.name = "WorkspaceCommandError";
@@ -21,10 +21,10 @@ export class WorkspaceCommandError extends Error {
 }
 
 export async function runWorkspaceSshCommand(
-  ssh: SshSubstrate,
-  target: SshTarget,
+  ssh: CommandSubstrate,
+  target: RunnerHandle,
   command: WorkspaceSshCommand,
-): Promise<SshCommandResult> {
+): Promise<CommandResult> {
   const result = await ssh.run(target, command);
   if (result.failure !== undefined || result.timedOut || result.exitCode !== 0) {
     throw new WorkspaceCommandError(workspaceFailureMessage(command.label, result), command.label, result);
@@ -32,7 +32,7 @@ export async function runWorkspaceSshCommand(
   return result;
 }
 
-function workspaceFailureMessage(label: string, result: SshCommandResult): string {
+function workspaceFailureMessage(label: string, result: CommandResult): string {
   if (result.failure !== undefined) {
     const detail = "message" in result.failure ? result.failure.message : result.failure.reason;
     return `${label} failed: ${detail}`;

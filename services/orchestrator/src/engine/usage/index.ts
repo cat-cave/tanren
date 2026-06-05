@@ -7,6 +7,7 @@ export type {
   CcusageModelUsage,
   SubscriptionWindow,
   UsageAccountant,
+  UsageMeter,
   UsageMonitor,
   WindowUsage,
 } from "./contracts.js";
@@ -18,6 +19,7 @@ export {
   buildCodexbarUsageCommand,
   SshCcusageAccountant,
   SshCodexbarUsageMonitor,
+  SshUsageMeter,
   type UsageNote,
 } from "./sshMonitors.js";
 export { SshUsageProbe, type SshUsageProbeConfig, type UsageProbe, type WindowObservation } from "./probe.js";

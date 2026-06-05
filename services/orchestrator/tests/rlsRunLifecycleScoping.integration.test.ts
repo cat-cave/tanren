@@ -37,8 +37,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { migrate, setSystemPool } from "@tanren/db";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import { PgJobQueue } from "../src/engine/contracts/jobQueue.js";
-import type { SshTarget } from "../src/engine/contracts/allocator.js";
-import type { SshCommand, SshCommandResult, SshSubstrate } from "../src/engine/contracts/sshSubstrate.js";
+import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
+import type { RunnerCommand, CommandResult, CommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
 import { storeGithubToken } from "../src/engine/credentials/githubToken.js";
 import { StaticRunnerAllocator } from "../src/engine/allocators/staticRunnerAllocator.js";
 import { PgRunnerStore } from "../src/engine/allocators/runnerStore.js";
@@ -98,9 +98,9 @@ const RUNNER_FINGERPRINT = "SHA256:lifecycle-runner-host";
 // `tanren/gate` verdict publishes. The allocator's host-key fingerprint is provided so
 // it skips the live TOFU discovery handshake.
 const FAKE_HEAD_SHA = "a".repeat(40);
-class NoopSsh implements SshSubstrate {
-  readonly commands: Array<{ target: SshTarget; command: SshCommand }> = [];
-  async run(target: SshTarget, command: SshCommand): Promise<SshCommandResult> {
+class NoopSsh implements CommandSubstrate {
+  readonly commands: Array<{ target: RunnerHandle; command: RunnerCommand }> = [];
+  async run(target: RunnerHandle, command: RunnerCommand): Promise<CommandResult> {
     this.commands.push({ target, command });
     const stdout = command.command.includes("git rev-parse HEAD") ? FAKE_HEAD_SHA : "";
     return { exitCode: 0, stdout, stderr: "", timedOut: false };

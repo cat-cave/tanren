@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { vcsProviderOver } from "./helpers/vcsProvider.js";
 import { RecordingPool, RecordingRunPool, RecordingSsh, ScriptedGitHubHttp } from "./helpers/githubDraftPrFakes.js";
-import type { SshTarget } from "../src/engine/contracts/allocator.js";
+import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import { storeGithubToken, validateGithubCredentialRef } from "../src/engine/credentials/githubToken.js";
 import { FakeEventStore } from "./helpers/fakeEventStore.js";
@@ -15,7 +15,8 @@ import {
   pushWorkspaceBranchToGitHub,
 } from "../src/engine/workspace/githubPush.js";
 
-const target: SshTarget = {
+const target: RunnerHandle = {
+  backend: "ssh",
   host: "runner",
   port: 22,
   username: "tanren",

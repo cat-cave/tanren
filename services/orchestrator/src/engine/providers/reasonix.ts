@@ -1,6 +1,6 @@
-import type { SshTarget } from "../contracts/allocator.js";
+import type { RunnerHandle } from "../contracts/allocator.js";
 import type { SecretStore } from "../contracts/secretStore.js";
-import type { SshSubstrate } from "../contracts/sshSubstrate.js";
+import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import { validateCredentialRef } from "../credentials/codexAuth.js";
 import { quoteSshShellArg } from "../ssh/command.js";
 import type { TokenUsage, UsageLimitSignal, WriterAdapter, WriterResult } from "./types.js";
@@ -40,8 +40,8 @@ export const REASONIX_API_KEY_ENV_VAR = "DEEPSEEK_API_KEY";
 
 export interface ReasonixWriterDependencies {
   secrets: SecretStore;
-  ssh: SshSubstrate;
-  target: SshTarget;
+  ssh: CommandSubstrate;
+  target: RunnerHandle;
   credentialRef: string;
   runId: string;
   // The reasonix/DeepSeek model id this adapter pins (e.g. "deepseek-reasoner").
@@ -119,7 +119,7 @@ export async function resolveReasonixApiKey(secrets: SecretStore, ref: string): 
 // Builds the non-interactive reasonix invocation. The DeepSeek API key is
 // injected as a command-scoped DEEPSEEK_API_KEY env var so it never lands in a
 // file and is redacted from the adapter's own result. The workspace is the cwd
-// (the SshCommand.cwd cd's into it), so reasonix operates on the run's git repo.
+// (the RunnerCommand.cwd cd's into it), so reasonix operates on the run's git repo.
 export function buildReasonixWriterCommand(input: { apiKey: string; task: string; model?: string }): string {
   return [
     `${REASONIX_API_KEY_ENV_VAR}=${quoteSshShellArg(input.apiKey)}`,

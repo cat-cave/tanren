@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { SshTarget } from "../src/engine/contracts/allocator.js";
-import type { SshCommand, SshCommandResult, SshSubstrate } from "../src/engine/contracts/sshSubstrate.js";
+import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
+import type { RunnerCommand, CommandResult, CommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
 import { defineFailure } from "../src/engine/failure.js";
 import { createFakeWriter } from "./fixtures/fakeWriter.js";
 import { parseGitLogCommit, prepareGitWorkspace } from "./fixtures/workspaceGit.js";
@@ -16,7 +16,8 @@ import {
   workspaceRepoPathForRun,
 } from "../src/engine/workspace/index.js";
 
-const target: SshTarget = {
+const target: RunnerHandle = {
+  backend: "ssh",
   host: "runner",
   port: 22,
   username: "tanren",
@@ -219,15 +220,15 @@ describe("ensureWorkspaceDepsInstalled (greenfield deps-ensure)", () => {
   // `nodeModules` is tracked only to PROVE the install still runs when it is
   // present (the core regression). The install branch echoes the install sentinel;
   // the no-manifest branch echoes the no-op sentinel — matching the runner guard.
-  class FsAwareSsh implements SshSubstrate {
-    readonly commands: SshCommand[] = [];
+  class FsAwareSsh implements CommandSubstrate {
+    readonly commands: RunnerCommand[] = [];
     installRan = false;
     constructor(
       private readonly fs: { manifest: boolean; nodeModules: boolean },
       // When the install runs, the exit code it returns (0 = success, else fail).
       private readonly installExit: number = 0,
     ) {}
-    async run(_target: SshTarget, command: SshCommand): Promise<SshCommandResult> {
+    async run(_target: RunnerHandle, command: RunnerCommand): Promise<CommandResult> {
       this.commands.push(command);
       // The new guard: install whenever a manifest exists (node_modules state is
       // irrelevant — a redundant install is a cheap no-op the real pnpm/npm owns).
@@ -333,12 +334,12 @@ describe("ensureWorkspaceDepsInstalled (greenfield deps-ensure)", () => {
   });
 });
 
-class ScriptedSsh implements SshSubstrate {
-  readonly commands: Array<{ target: SshTarget; command: SshCommand }> = [];
+class ScriptedSsh implements CommandSubstrate {
+  readonly commands: Array<{ target: RunnerHandle; command: RunnerCommand }> = [];
 
-  constructor(private readonly results: SshCommandResult[]) {}
+  constructor(private readonly results: CommandResult[]) {}
 
-  async run(sshTarget: SshTarget, command: SshCommand): Promise<SshCommandResult> {
+  async run(sshTarget: RunnerHandle, command: RunnerCommand): Promise<CommandResult> {
     this.commands.push({ target: sshTarget, command });
     const result = this.results.shift();
     if (result === undefined) {

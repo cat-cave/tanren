@@ -1,5 +1,6 @@
 import {
   persistedRunnerKeys,
+  sshRunnerHandle,
   type AllocationRequest,
   type Allocator,
   type ReleaseReason,
@@ -203,7 +204,7 @@ export class HetznerAllocator implements Allocator {
       const allocation: RunnerAllocation = {
         runnerId,
         imageSha: `${request.runnerImage}@sha256:hetzner`,
-        target: { host: ip, port, username, hostKeyFingerprint, identitySecretRef },
+        target: sshRunnerHandle({ host: ip, port, username, hostKeyFingerprint, identitySecretRef }),
       };
 
       await this.options.runners.claim({

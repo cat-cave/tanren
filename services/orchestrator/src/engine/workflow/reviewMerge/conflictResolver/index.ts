@@ -10,9 +10,9 @@
 
 import type pg from "pg";
 import type { CheckAnswer, AuditAnswer, ConflictAnswer } from "../../../answerers/schemas/index.js";
-import type { SshTarget } from "../../../contracts/allocator.js";
+import type { RunnerHandle } from "../../../contracts/allocator.js";
 import type { RunStateWriter } from "../../../contracts/runStateWriter.js";
-import type { SshSubstrate } from "../../../contracts/sshSubstrate.js";
+import type { CommandSubstrate } from "../../../contracts/commandSubstrate.js";
 import type { EventStore } from "../../../eventStore.js";
 import { buildConflictResolverAdapter } from "../../../providers/adapterSelector.js";
 import type { AnswererAdapter } from "../../../providers/types.js";
@@ -36,9 +36,9 @@ export interface DefaultConflictResolverDeps {
   pool: QueryClient;
   runStateWriter?: RunStateWriter;
   eventStore: EventStore;
-  ssh: SshSubstrate;
+  ssh: CommandSubstrate;
   secrets: SecretStore;
-  target: SshTarget;
+  target: RunnerHandle;
   workspacePath: string;
   baseSha: string;
   timeoutMs: number;

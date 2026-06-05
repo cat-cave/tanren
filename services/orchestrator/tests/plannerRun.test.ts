@@ -6,8 +6,8 @@
 // builders live in plannerRun.fixtures.ts (500-line cap split).
 import { describe, expect, it } from "vitest";
 import { vcsProviderOver } from "./helpers/vcsProvider.js";
-import type { SshTarget } from "../src/engine/contracts/allocator.js";
-import type { SshCommand, SshCommandResult, SshSubstrate } from "../src/engine/contracts/sshSubstrate.js";
+import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
+import type { RunnerCommand, CommandResult, CommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
 import { CodexUsageLimitError } from "../src/engine/providers/codex.js";
 import { WorkspaceBootstrapError } from "../src/engine/workspace/index.js";
 import {
@@ -462,10 +462,10 @@ describe("runPlannerLoopWorkflow", () => {
 // resolver cats the repo config, and an empty success for every other command
 // (clone, etc.). An empty `configYaml` models a repo with no .tanren/ci.yml — the
 // `cat`-if-present command simply prints nothing.
-class ConfigReadingSsh implements SshSubstrate {
+class ConfigReadingSsh implements CommandSubstrate {
   constructor(private readonly configYaml: string) {}
 
-  async run(_target: SshTarget, command: SshCommand): Promise<SshCommandResult> {
+  async run(_target: RunnerHandle, command: RunnerCommand): Promise<CommandResult> {
     const stdout = command.command.includes(".tanren/ci.yml") ? this.configYaml : "";
     return { exitCode: 0, stdout, stderr: "", timedOut: false };
   }
@@ -474,12 +474,12 @@ class ConfigReadingSsh implements SshSubstrate {
 // SSH fake that returns the clone HEAD sha on the workspace-prep `git rev-parse`
 // (so the run captures a real cloneHeadSha and the PR-branch cleanup actually
 // runs), empty for everything else, and records every command issued.
-class CloneHeadSsh implements SshSubstrate {
+class CloneHeadSsh implements CommandSubstrate {
   readonly commands: string[] = [];
 
   constructor(private readonly cloneHead: string) {}
 
-  async run(_target: SshTarget, command: SshCommand): Promise<SshCommandResult> {
+  async run(_target: RunnerHandle, command: RunnerCommand): Promise<CommandResult> {
     this.commands.push(command.command);
     const isClonePrep = command.command.includes("git clone") && command.command.includes("git rev-parse HEAD");
     return { exitCode: 0, stdout: isClonePrep ? `${this.cloneHead}\n` : "", stderr: "", timedOut: false };

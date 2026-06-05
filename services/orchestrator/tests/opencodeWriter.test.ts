@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { SshTarget } from "../src/engine/contracts/allocator.js";
+import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
-import type { SshCommand, SshCommandResult, SshSubstrate } from "../src/engine/contracts/sshSubstrate.js";
+import type { RunnerCommand, CommandResult, CommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
 import {
   buildOpencodeWriterCommand,
   createOpencodeWriter,
@@ -10,7 +10,8 @@ import {
   ZAI_GLM_MODEL,
 } from "../src/engine/providers/opencode.js";
 
-const target: SshTarget = {
+const target: RunnerHandle = {
+  backend: "ssh",
   host: "runner",
   port: 22,
   username: "tanren",
@@ -207,11 +208,11 @@ describe("opencode writer adapter", () => {
   });
 });
 
-function ok(stdout: string): SshCommandResult {
+function ok(stdout: string): CommandResult {
   return { exitCode: 0, stdout, stderr: "", timedOut: false };
 }
 
-async function runWith(opencodeResult: SshCommandResult) {
+async function runWith(opencodeResult: CommandResult) {
   const ssh = new ScriptedSsh([ok(""), ok(`${baselineSha}\n`), opencodeResult, ok(""), ok(""), ok("")]);
   const secrets = new InMemorySecretStore();
   await secrets.put({ ref: "credential/opencode/dev", value: authJson });
@@ -225,12 +226,12 @@ async function runWith(opencodeResult: SshCommandResult) {
   return await writer.runWriter({ prompt: "write", workspace: "/workspace/repo", timeoutMs: 1000 });
 }
 
-class ScriptedSsh implements SshSubstrate {
-  readonly commands: Array<{ target: SshTarget; command: SshCommand }> = [];
+class ScriptedSsh implements CommandSubstrate {
+  readonly commands: Array<{ target: RunnerHandle; command: RunnerCommand }> = [];
 
-  constructor(private readonly results: SshCommandResult[]) {}
+  constructor(private readonly results: CommandResult[]) {}
 
-  async run(sshTarget: SshTarget, command: SshCommand): Promise<SshCommandResult> {
+  async run(sshTarget: RunnerHandle, command: RunnerCommand): Promise<CommandResult> {
     this.commands.push({ target: sshTarget, command });
     const result = this.results.shift();
     if (result === undefined) {

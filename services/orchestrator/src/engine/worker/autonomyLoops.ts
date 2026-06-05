@@ -11,7 +11,7 @@ import { PgNotifyListener } from "@tanren/db";
 import type { Allocator } from "../contracts/allocator.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SecretStore } from "../contracts/secretStore.js";
-import type { SshSubstrate } from "../contracts/sshSubstrate.js";
+import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import type { VcsProvider } from "../contracts/vcsProvider.js";
 import type { GitHubHttpClient } from "../providers/github.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
@@ -37,7 +37,7 @@ export interface AutonomyLoopsDeps {
   pool: pg.Pool;
   secrets: SecretStore;
   allocator: Allocator;
-  ssh: SshSubstrate;
+  ssh: CommandSubstrate;
   githubHttp: GitHubHttpClient;
   identitySecretRef: string;
   /** P2c-1: the VcsProvider the speculative integrator drives to build integration branches. */

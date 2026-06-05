@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { SshTarget } from "../src/engine/contracts/allocator.js";
-import type { SshCommand, SshCommandResult, SshSubstrate } from "../src/engine/contracts/sshSubstrate.js";
+import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
+import type { RunnerCommand, CommandResult, CommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
 import { auditAnswerSchema, checkAnswerSchema, planAnswerSchema } from "../src/engine/providers/answererSchemas.js";
 import { fakeAuditor, fakeChecker, fakePlanner } from "./fixtures/fakeAnswerers.js";
 import { createFakeWriter } from "./fixtures/fakeWriter.js";
@@ -48,7 +48,8 @@ describe("fake provider adapters", () => {
   });
 });
 
-const target: SshTarget = {
+const target: RunnerHandle = {
+  backend: "ssh",
   host: "runner",
   port: 22,
   username: "tanren",
@@ -56,10 +57,10 @@ const target: SshTarget = {
   identitySecretRef: "runner/test/identity",
 };
 
-class ScriptedSsh implements SshSubstrate {
-  constructor(private readonly results: SshCommandResult[]) {}
+class ScriptedSsh implements CommandSubstrate {
+  constructor(private readonly results: CommandResult[]) {}
 
-  async run(_target: SshTarget, _command: SshCommand): Promise<SshCommandResult> {
+  async run(_target: RunnerHandle, _command: RunnerCommand): Promise<CommandResult> {
     const result = this.results.shift();
     if (result === undefined) {
       throw new Error("unexpected SSH command");

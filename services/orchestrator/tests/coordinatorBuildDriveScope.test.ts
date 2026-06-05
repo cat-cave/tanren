@@ -30,7 +30,7 @@ import { getOrgScope } from "@tanren/db";
 import { buildDriveMerge } from "../src/engine/merge/coordinatorBuild.js";
 import { FakeAllocator } from "../src/engine/contracts/allocator.js";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
-import { FakeSshSubstrate } from "../src/engine/contracts/sshSubstrate.js";
+import { FakeCommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
 import { InMemoryVcsProvider } from "./conformance/fakes/inMemoryVcsProvider.js";
 
 const RUN_ID = "run_drive";
@@ -177,7 +177,7 @@ function driveDeps(pool: pg.Pool) {
     // external_reviewer HAND-OFF (no conflict), so the resolver hook is never
     // invoked — fakes satisfy the now-required deps without being driven.
     allocator: new FakeAllocator(),
-    ssh: new FakeSshSubstrate(),
+    ssh: new FakeCommandSubstrate(),
     identitySecretRef: "secret/runner/identity",
   };
 }

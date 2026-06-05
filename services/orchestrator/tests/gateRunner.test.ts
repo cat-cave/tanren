@@ -4,21 +4,21 @@
 // gate.* event emission, and the default-config path.
 import { describe, expect, it } from "vitest";
 import { DEFAULT_CI_CONFIG, resolveCiConfig, tiersFor } from "../src/engine/ci/index.js";
-import type { SshTarget } from "../src/engine/contracts/allocator.js";
-import type { SshCommand, SshCommandResult, SshSubstrate } from "../src/engine/contracts/sshSubstrate.js";
+import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
+import type { RunnerCommand, CommandResult, CommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
 import type { EventName, EventPayload } from "../src/engine/events/index.js";
 import { resolveBootstrapCommand, resolveGateConfig } from "../src/engine/workflow/gate/resolveGateConfig.js";
 import { runGateForWhen } from "../src/engine/workflow/gate/runGateForWhen.js";
 import { runGateTier } from "../src/engine/workflow/gate/runGateTier.js";
 import { advisoryStepNamesForPosture } from "../src/engine/workflow/gate/advisoryGate.js";
 
-const target: SshTarget = { host: "h", port: 22, username: "u", hostKeyFingerprint: "fp" };
+const target: RunnerHandle = { host: "h", port: 22, username: "u", hostKeyFingerprint: "fp" };
 
 // Maps each command to a scripted result; unmatched commands default to exit 0.
-class RecordingSsh implements SshSubstrate {
-  readonly commands: SshCommand[] = [];
-  constructor(private readonly script: (command: string) => Partial<SshCommandResult> = () => ({})) {}
-  async run(_target: SshTarget, command: SshCommand): Promise<SshCommandResult> {
+class RecordingSsh implements CommandSubstrate {
+  readonly commands: RunnerCommand[] = [];
+  constructor(private readonly script: (command: string) => Partial<CommandResult> = () => ({})) {}
+  async run(_target: RunnerHandle, command: RunnerCommand): Promise<CommandResult> {
     this.commands.push(command);
     return {
       exitCode: 0,

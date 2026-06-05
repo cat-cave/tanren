@@ -3,15 +3,15 @@
 // MUST NOT exist in any production/runtime path: production code resolves the
 // real writer adapter from the project's role-routing config. This fixture lives
 // under tests/ so it is unreachable from src/.
-import type { SshTarget } from "../../src/engine/contracts/allocator.js";
-import type { SshSubstrate } from "../../src/engine/contracts/sshSubstrate.js";
+import type { RunnerHandle } from "../../src/engine/contracts/allocator.js";
+import type { CommandSubstrate } from "../../src/engine/contracts/commandSubstrate.js";
 import type { WriterAdapter, WriterResult } from "../../src/engine/providers/types.js";
 import { fakeSelfHostedAuthRef } from "./fakeAnswerers.js";
 import { captureGitMutation, runFakeWriterMutation } from "./workspaceGit.js";
 
 export interface FakeWriterDependencies {
-  ssh: SshSubstrate;
-  target: SshTarget;
+  ssh: CommandSubstrate;
+  target: RunnerHandle;
 }
 
 export function createFakeWriter(dependencies: FakeWriterDependencies): WriterAdapter {

@@ -1,11 +1,11 @@
 import { readFile } from "node:fs/promises";
 import type { ServerHostKeyAlgorithm } from "ssh2";
 import { describe, expect, it } from "vitest";
-import type { SshTarget } from "../src/engine/contracts/allocator.js";
+import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
 import { storeCodexAuthBundle } from "../src/engine/credentials/codexAuth.js";
 import { createCodexWriter } from "../src/engine/providers/codex.js";
-import { Ssh2Substrate } from "../src/engine/ssh/index.js";
+import { SshCommandSubstrate } from "../src/engine/ssh/index.js";
 import { runWorkspaceSshCommand, workspaceRepoPathForRun } from "../src/engine/workspace/index.js";
 import { prepareGitWorkspace } from "./fixtures/workspaceGit.js";
 
@@ -28,7 +28,7 @@ describeLive("live Codex writer adapter", () => {
         value: await readFile(requireEnv("TANREN_SSH_KEY_PATH"), "utf8"),
       });
       const target = liveTarget();
-      const ssh = new Ssh2Substrate(secrets, {
+      const ssh = new SshCommandSubstrate(secrets, {
         serverHostKeyAlgorithms: parseHostKeyAlgorithms(process.env.TANREN_SSH_HOST_KEY_ALGORITHMS),
       });
       const runId = `run_codex_live_${Date.now()}`;
@@ -64,8 +64,9 @@ describeLive("live Codex writer adapter", () => {
   );
 });
 
-function liveTarget(): SshTarget {
+function liveTarget(): RunnerHandle {
   return {
+    backend: "ssh",
     host: process.env.TANREN_SSH_HOST ?? "127.0.0.1",
     port: Number(process.env.TANREN_SSH_PORT ?? "2222"),
     username: process.env.TANREN_SSH_USER ?? "tanren",

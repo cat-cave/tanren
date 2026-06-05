@@ -6,12 +6,12 @@
 import type pg from "pg";
 import { describe, expect, it } from "vitest";
 import type { Allocator } from "../src/engine/contracts/allocator.js";
-import type { SshSubstrate } from "../src/engine/contracts/sshSubstrate.js";
+import type { CommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
 import type { PgNotifyListener } from "@tanren/db";
 import { buildLiveBenchmarkRunnerDeps, buildLiveBenchmarkScheduler } from "../src/engine/benchmark/liveScheduler.js";
 
 const fakeAllocator = {} as Allocator;
-const fakeSsh = {} as SshSubstrate;
+const fakeSsh = {} as CommandSubstrate;
 const fakeListener = {} as PgNotifyListener;
 const fakePool = {} as pg.Pool;
 

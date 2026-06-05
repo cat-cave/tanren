@@ -4,14 +4,14 @@
  * cap. These run over the runner SSH substrate to capture the baseline sha,
  * commit the writer's changes, and diff/log the result into a WriterResult.
  */
-import type { SshTarget } from "../contracts/allocator.js";
-import type { SshSubstrate } from "../contracts/sshSubstrate.js";
+import type { RunnerHandle } from "../contracts/allocator.js";
+import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import { runWorkspaceSshCommand } from "../workspace/index.js";
 import type { Commit, WriterResult } from "./types.js";
 
 export async function captureBaselineSha(
-  ssh: SshSubstrate,
-  target: SshTarget,
+  ssh: CommandSubstrate,
+  target: RunnerHandle,
   workspace: string,
   timeoutMs: number,
 ): Promise<string> {
@@ -29,8 +29,8 @@ export async function captureBaselineSha(
 }
 
 async function commitWorkspaceChangesAfterCodex(
-  ssh: SshSubstrate,
-  target: SshTarget,
+  ssh: CommandSubstrate,
+  target: RunnerHandle,
   workspace: string,
   timeoutMs: number,
 ): Promise<void> {
@@ -49,8 +49,8 @@ async function commitWorkspaceChangesAfterCodex(
 }
 
 export async function captureGitStateAfterCodex(
-  ssh: SshSubstrate,
-  target: SshTarget,
+  ssh: CommandSubstrate,
+  target: RunnerHandle,
   workspace: string,
   baselineSha: string,
   timeoutMs: number,
@@ -60,8 +60,8 @@ export async function captureGitStateAfterCodex(
 }
 
 async function captureGitStateAfterBaseline(
-  ssh: SshSubstrate,
-  target: SshTarget,
+  ssh: CommandSubstrate,
+  target: RunnerHandle,
   workspace: string,
   baselineSha: string,
   timeoutMs: number,

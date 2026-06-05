@@ -1,5 +1,5 @@
-import type { SshTarget } from "../contracts/allocator.js";
-import type { SshSubstrate } from "../contracts/sshSubstrate.js";
+import type { RunnerHandle } from "../contracts/allocator.js";
+import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import { githubHttpsRemote, parseGitHubRepository } from "../providers/github.js";
 import { quoteSshShellArg } from "../ssh/command.js";
 import { runWorkspaceSshCommand } from "./ssh.js";
@@ -10,8 +10,8 @@ export interface DraftPrBranchInput {
 }
 
 export interface GitHubWorkspacePushInput {
-  ssh: SshSubstrate;
-  target: SshTarget;
+  ssh: CommandSubstrate;
+  target: RunnerHandle;
   workspacePath: string;
   repoUrl: string;
   branch: string;
@@ -38,8 +38,8 @@ export interface GitHubWorkspacePushInput {
 export const PR_CLEAN_REF = "refs/tanren/pr-clean";
 
 export interface PrepareCleanPrBranchInput {
-  ssh: SshSubstrate;
-  target: SshTarget;
+  ssh: CommandSubstrate;
+  target: RunnerHandle;
   workspacePath: string;
   // The clone HEAD (run-base before bootstrap) the writer commits replay onto.
   cloneHeadSha: string;
@@ -92,8 +92,8 @@ export async function prepareCleanPrBranch(input: PrepareCleanPrBranchInput): Pr
 // the published `tanren/gate` check-run lands on the commit the gate actually
 // verified. A non-zero exit / empty output is a LOUD throw — never a guessed sha.
 export async function resolveWorkspaceRefSha(input: {
-  ssh: SshSubstrate;
-  target: SshTarget;
+  ssh: CommandSubstrate;
+  target: RunnerHandle;
   workspacePath: string;
   ref: string;
   timeoutMs: number;
