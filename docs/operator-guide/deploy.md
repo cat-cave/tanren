@@ -15,7 +15,7 @@ Phase 3 (P3-0030) hardens the prod profile: a cloudflared tunnel exposure profil
 
 ```sh
 just up-dev          # builds and starts the dev stack
-just smoke           # Phase 1 fixture smoke test (CI's gate)
+just smoke           # full local smoke/process-boundary/RLS gate
 just down-dev        # tears the stack down and removes volumes
 ```
 
@@ -36,6 +36,15 @@ Before `just up-prod` will succeed, the operator must export:
 | `TANREN_PUBLIC_BASE_URL`             | The absolute URL the orchestrator is reachable at; used to compute the OAuth redirect URI.                                            |
 | `TANREN_RUNNER_AUTHORIZED_KEY`       | SSH `authorized_keys` line installed on the runner.                                                                                   |
 | `TANREN_RUNNER_IDENTITY_PRIVATE_KEY` | Private key the orchestrator uses to SSH into the runner.                                                                             |
+| `TANREN_INTERNAL_TLS_CERT`           | Path mounted in the orchestrator container to the internal mTLS server certificate.                                                   |
+| `TANREN_INTERNAL_TLS_KEY`            | Path mounted in the orchestrator container to the internal mTLS server private key.                                                   |
+| `TANREN_INTERNAL_TLS_CA`             | Path mounted in the orchestrator container to the CA that signs trusted data-plane client certificates.                               |
+| `TANREN_CLAIM_ENDPOINT_URL`          | Internal mTLS base URL the worker uses for job claims and run-state writes, typically `https://orchestrator:3110`.                    |
+| `TANREN_DATA_PLANE_TLS_CERT`         | Path mounted in the worker container to the data-plane client certificate.                                                            |
+| `TANREN_DATA_PLANE_TLS_KEY`          | Path mounted in the worker container to the data-plane client private key.                                                            |
+| `TANREN_DATA_PLANE_TLS_CA`           | Path mounted in the worker container to the CA that verifies the control-plane internal mTLS server certificate.                      |
+
+The prod profile starts the standalone `worker` service and keeps remote run-state writes enabled by default. The mTLS variables above are therefore required: the worker must claim jobs and post `events`/`cost_records` through the control plane instead of writing tenant tables directly. Mount the referenced cert/key/CA files with your platform's secret or certificate mechanism before running `just up-prod`.
 
 Optional:
 

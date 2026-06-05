@@ -13,6 +13,13 @@
 ##   TANREN_RUNNER_IDENTITY_PRIVATE_KEY  Private key the orchestrator uses to SSH into runner.
 ##   TANREN_PUBLIC_BASE_URL              Absolute URL the orchestrator is reachable at (used for OAuth redirect URI).
 ##   TANREN_ALLOCATOR_TOKEN              Bearer token the orchestrator uses to talk to the allocator sidecar.
+##   TANREN_INTERNAL_TLS_CERT            Control-plane internal mTLS server cert path mounted in the orchestrator.
+##   TANREN_INTERNAL_TLS_KEY             Control-plane internal mTLS server key path mounted in the orchestrator.
+##   TANREN_INTERNAL_TLS_CA              CA path mounted in the orchestrator; signs trusted data-plane client certs.
+##   TANREN_CLAIM_ENDPOINT_URL           Internal mTLS base URL the worker uses for claims and run-state writes.
+##   TANREN_DATA_PLANE_TLS_CERT          Data-plane client cert path mounted in the worker.
+##   TANREN_DATA_PLANE_TLS_KEY           Data-plane client key path mounted in the worker.
+##   TANREN_DATA_PLANE_TLS_CA            CA path mounted in the worker; verifies the control-plane server cert.
 ##
 ## Optional env:
 ##   DASHBOARD_HOST_PORT                 Host port to publish the dashboard on (default 3000).
@@ -114,15 +121,19 @@ services:
       TANREN_OIDC_LOGIN_CLAIM: ${TANREN_OIDC_LOGIN_CLAIM:-}
       TANREN_OIDC_NAME_CLAIM: ${TANREN_OIDC_NAME_CLAIM:-}
       TANREN_OIDC_GROUPS_CLAIM: ${TANREN_OIDC_GROUPS_CLAIM:-}
-      # Plane-split P2: the control-plane internal mTLS CLAIM listener
-      # (`/internal/claim-job`). Supply the server cert/key + CA paths
-      # (operator-mounted) to start it; leave unset to disable (the worker then
-      # claims via direct DB-CAS). Keep this listener on the private control↔data
-      # network — never publish its port.
+      # Plane-split P2/P3b: prod requires the control-plane internal mTLS
+      # listener because the standalone worker claims jobs and posts run-state
+      # writes through `/internal/*`. These paths must point at operator-mounted
+      # cert material. Keep this listener on the private control↔data network;
+      # never publish its port.
       TANREN_INTERNAL_MTLS_PORT: ${TANREN_INTERNAL_MTLS_PORT:-3110}
-      TANREN_INTERNAL_TLS_CERT: ${TANREN_INTERNAL_TLS_CERT:-}
-      TANREN_INTERNAL_TLS_KEY: ${TANREN_INTERNAL_TLS_KEY:-}
-      TANREN_INTERNAL_TLS_CA: ${TANREN_INTERNAL_TLS_CA:-}
+      TANREN_INTERNAL_TLS_CERT: ${TANREN_INTERNAL_TLS_CERT:?TANREN_INTERNAL_TLS_CERT must be set for the prod profile}
+      TANREN_INTERNAL_TLS_KEY: ${TANREN_INTERNAL_TLS_KEY:?TANREN_INTERNAL_TLS_KEY must be set for the prod profile}
+      TANREN_INTERNAL_TLS_CA: ${TANREN_INTERNAL_TLS_CA:?TANREN_INTERNAL_TLS_CA must be set for the prod profile}
+      # Plane-split topology: prod runs the data plane in the standalone
+      # `worker` service. Keep the API process out of the run-worker loop even if
+      # operator env contains TANREN_RUN_WORKER=1.
+      TANREN_RUN_WORKER: ""
     healthcheck:
       test:
         - CMD
@@ -182,14 +193,13 @@ services:
       # Same sidecar allocator the orchestrator uses (ephemeral runners on demand).
       TANREN_ALLOCATOR_URL: http://allocator:3200
       TANREN_ALLOCATOR_TOKEN: ${TANREN_ALLOCATOR_TOKEN:?TANREN_ALLOCATOR_TOKEN must be set for the prod profile}
-      # Plane-split P2: claim over the control-plane mTLS endpoint. Supply the
-      # endpoint URL + the data-plane client cert paths (operator-mounted, e.g. via
-      # a secrets volume or the platform's cert manager) to route the claim over
-      # mTLS; leave unset to keep the direct DB-CAS (P1 behavior).
-      TANREN_CLAIM_ENDPOINT_URL: ${TANREN_CLAIM_ENDPOINT_URL:-}
-      TANREN_DATA_PLANE_TLS_CERT: ${TANREN_DATA_PLANE_TLS_CERT:-}
-      TANREN_DATA_PLANE_TLS_KEY: ${TANREN_DATA_PLANE_TLS_KEY:-}
-      TANREN_DATA_PLANE_TLS_CA: ${TANREN_DATA_PLANE_TLS_CA:-}
+      # Plane-split P2/P3b: claim over the control-plane mTLS endpoint. The
+      # endpoint URL + data-plane client cert paths are required in prod because
+      # the worker is de-privileged and remote-writes is enabled by default.
+      TANREN_CLAIM_ENDPOINT_URL: ${TANREN_CLAIM_ENDPOINT_URL:?TANREN_CLAIM_ENDPOINT_URL must be set for the prod profile}
+      TANREN_DATA_PLANE_TLS_CERT: ${TANREN_DATA_PLANE_TLS_CERT:?TANREN_DATA_PLANE_TLS_CERT must be set for the prod profile}
+      TANREN_DATA_PLANE_TLS_KEY: ${TANREN_DATA_PLANE_TLS_KEY:?TANREN_DATA_PLANE_TLS_KEY must be set for the prod profile}
+      TANREN_DATA_PLANE_TLS_CA: ${TANREN_DATA_PLANE_TLS_CA:?TANREN_DATA_PLANE_TLS_CA must be set for the prod profile}
       # Plane-split P3b (the CUTOVER): remote-writes is ON BY DEFAULT — the worker
       # routes its run-state WRITES (event-append, cost-record insert, run finalize)
       # AND the reaper's dead-letter event through the control-plane `/internal/*`

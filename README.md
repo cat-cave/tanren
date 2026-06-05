@@ -199,8 +199,8 @@ just fast-check                   # the 15-step non-build gate (format/lint/type
 just smoke
 ```
 
-`just smoke` builds the orchestrator, dashboard, and runner images, starts the
-stack, and verifies:
+`just smoke` builds the orchestrator, worker, allocator, dashboard, and runner
+images, starts the stack, and verifies:
 
 - `smoke-connectivity` — `tanren doctor` (orchestrator / Postgres / Vault) +
   direct runner SSH reachability.
