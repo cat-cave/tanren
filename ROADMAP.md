@@ -230,6 +230,14 @@ cite). The 10 → 1M north-star is `docs/architecture/future-refactor-and-scale.
   single-baseline codebase: `schemaCore.ts` `.default('{}'::jsonb)` (a latent-500
   source) and the `resolveCredentials.ts` `orgId === ''` BYOK branch (a live path
   mislabeled "legacy" — make it a first-class named mode or remove it).
+- **Type-aware lint strictness ratchet.** The type-aware pass
+  (`oxlint --type-aware`, config `oxlintrc.typeaware.json`, powered by
+  oxlint-tsgolint/tsgo) currently runs only the 3 high-value typed rules ported
+  from the old ESLint pass (`no-floating-promises`, `no-misused-promises`,
+  `await-thenable`) with the broader type-aware **categories OFF**. Planned: turn
+  those categories on (`no-base-to-string`, `unbound-method`,
+  `restrict-template-expressions`, …), triage the surfaced warnings, and ratchet
+  them to error — a strictness wave for broader type-aware coverage.
 
 ---
 

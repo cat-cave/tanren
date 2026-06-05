@@ -4,11 +4,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsc -p tsconfig.json && pnpm run build:client",
+    "build": "tsgo -p tsconfig.json && pnpm run build:client",
     "build:client": "node scripts/build-client.mjs",
     "dev": "tsx src/main.tsx",
     "start": "node dist/main.js",
-    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.client.json",
+    "typecheck": "tsgo -p tsconfig.json --noEmit && tsgo -p tsconfig.client.json",
     "test:e2e": "playwright test"
   },
   "dependencies": {

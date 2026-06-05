@@ -15,9 +15,9 @@
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsgo -p tsconfig.json",
     "migrate": "tsx src/migrate.ts",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsgo -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "drizzle-orm": "^0.45.2",

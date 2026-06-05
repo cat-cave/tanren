@@ -4,11 +4,14 @@ Tanren follows `PROJECT_BRIEF.md` as the source of truth. When this file and the
 
 ## Required Local Checks
 
-Run the narrowest useful check while editing, then run the full gate before
-handing off. The canonical gate is the justfile — **`just fast-check`** (the
-15-step non-build gate) and **`just ci`** (adds the build), then **`just smoke`**.
-The per-step pnpm scripts below are the same checks, lower-fidelity than the
-recipes:
+Run the narrowest useful check while editing (e.g. **`just affected-typecheck`** /
+**`affected-test`** — only what changed vs `origin/main`), then run the full gate
+before handing off. The canonical gate is the justfile — **`just fast-check`** (the
+non-build gate) and **`just ci`** (adds the build), then **`just smoke`**. The
+toolchain is oxc/native — **tsgo** (typecheck+build), **oxlint** +
+**`oxlint --type-aware`** (lint), **oxfmt** (format), **vitest 4** (test),
+**Turborepo** (build/typecheck cache); no `tsc`. The per-step pnpm scripts below
+are the same checks, lower-fidelity than the recipes:
 
 ```sh
 corepack pnpm run format:check

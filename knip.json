@@ -32,7 +32,7 @@
     "services/orchestrator/src/routes/events/index.ts",
     "services/dashboard/src/api/http.gen.ts"
   ],
-  "ignoreDependencies": ["@playwright/test", "hono", "oxfmt", "@commitlint/cli"],
+  "ignoreDependencies": ["@playwright/test", "hono", "@commitlint/cli"],
   "ignoreBinaries": ["just", "playwright"],
   "ignoreExportsUsedInFile": true,
   "rules": {

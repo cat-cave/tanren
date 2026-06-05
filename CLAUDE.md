@@ -63,8 +63,9 @@ real credits under the $50 ceiling. The rest of the forward to-do (`ROADMAP.md`
 ## Working rules
 
 - **CI is the gatekeeper.** Never merge a PR without full green CI and up-to-date-with-`main`.
-- The full gate is **`just ci`** (`just fast-check` for the non-build steps) + **`just smoke`**. Run them before pushing.
-- Parallel work runs in isolated git worktrees, one unit of work per PR. Serialize any PR that edits a DB migration or a shared file (nav, `screens.ts`, `main.ts`).
+- The full gate is **`just ci`** (`just fast-check` for the non-build steps) + **`just smoke`**. Run them before pushing. For a faster inner loop, **`just affected-typecheck` / `affected-build` / `affected-test`** run only what changed vs `origin/main`.
+- **Toolchain** (oxc / native, no `tsc`): **tsgo** (`@typescript/native-preview`) does typecheck + build; **oxlint** is the fast linter and **`oxlint --type-aware`** (oxlint-tsgolint) is the typed pass (config `oxlintrc.typeaware.json`); **oxfmt** is the formatter (`.oxfmtrc.json`, `just format`); **vitest 4** is the test runner; **Turborepo** caches build/typecheck (`.turbo/`). vitest stays the mutation (Stryker, weekly) + e2e runner.
+- Parallel work runs in isolated git worktrees, one unit of work per PR — see the discipline in **`docs/playbooks/parallel-orchestration.md`**. Serialize any PR that edits a DB migration or a shared file (nav, `screens.ts`, `main.ts`).
 - Adapters are slottable behind contracts with conformance suites (`services/orchestrator/tests/conformance/**`); add a backend as a new impl + registry entry, not a refactor.
 - Tenant queries run org-scoped (`db/src/orgScope.ts`); RLS denies by default, so a query off the scoped client sees **zero** rows. New tenant-table sites must carry org scope.
 

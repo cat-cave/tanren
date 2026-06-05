@@ -1,0 +1,25 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript"],
+  // The TYPE-AWARE lint pass (oxlint --type-aware, powered by oxlint-tsgolint/tsgo).
+  // It replaced the old ESLint + typescript-eslint pass — same idea, no tsc.
+  // Categories are OFF for now so this is a FAITHFUL port of the old pass (exactly
+  // the 3 high-value typed rules below). PLANNED STRICTNESS RATCHET (see ROADMAP):
+  // turn the type-aware categories back on (no-base-to-string, unbound-method,
+  // restrict-template-expressions, etc.), triage the surfaced warnings, and ratchet
+  // them to error — broader type-aware coverage than the original 3.
+  "categories": {
+    "correctness": "off",
+    "suspicious": "off",
+    "pedantic": "off",
+    "perf": "off",
+    "style": "off",
+    "restriction": "off",
+    "nursery": "off"
+  },
+  "rules": {
+    "typescript/no-floating-promises": "error",
+    "typescript/no-misused-promises": "error",
+    "typescript/await-thenable": "error"
+  }
+}
