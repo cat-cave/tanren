@@ -52,10 +52,6 @@ const PROVIDER_SPECS: Record<AiProvider, AiProviderSpec> = {
   codex: { slug: "codex", secretKind: "auth_bundle" },
 };
 
-export function isAiProvider(value: string): value is AiProvider {
-  return (AI_PROVIDERS as readonly string[]).includes(value);
-}
-
 export function aiProviderSecretKind(provider: AiProvider): AiProviderSecretKind {
   return PROVIDER_SPECS[provider].secretKind;
 }

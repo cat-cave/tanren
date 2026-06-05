@@ -1,7 +1,6 @@
 import { z } from "zod";
 
 export const OrgKindSchema = z.enum(["github_org", "github_user", "oidc"]);
-export type OrgKind = z.infer<typeof OrgKindSchema>;
 
 export const IdentityProviderIdSchema = z.enum(["github_oauth", "oidc", "local_dev"]);
 export type IdentityProviderId = z.infer<typeof IdentityProviderIdSchema>;
@@ -68,7 +67,6 @@ export const ApiTokenSchema = z.object({
   lastUsedAt: z.date().nullable(),
   createdAt: z.date(),
 });
-export type ApiToken = z.infer<typeof ApiTokenSchema>;
 
 export const ActorContextSchema = z.object({
   userId: z.string().min(1),

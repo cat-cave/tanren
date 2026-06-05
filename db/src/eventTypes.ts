@@ -133,4 +133,5 @@ export const eventTypeNames = [
   "writer.subtask.started"
 ] as const;
 
+/** @public */
 export type EventTypeName = (typeof eventTypeNames)[number];

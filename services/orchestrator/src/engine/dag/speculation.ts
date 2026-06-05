@@ -80,11 +80,6 @@ export function ancestorCrossedThreshold(lifecycle: SpecLifecycle, threshold: Sp
   }
 }
 
-/** True when an ancestor is genuinely merged (the merge-gate, distinct from the threshold). */
-export function ancestorMerged(lifecycle: SpecLifecycle | undefined): boolean {
-  return lifecycle?.state === "merged";
-}
-
 /**
  * Compute the readiness of every PENDING spec under the threshold + depth cap.
  * Returns a map keyed by spec id so the planner can build the ready set + classify

@@ -56,8 +56,8 @@ export interface MergeCoordinatorSubscriberDeps {
   runStateWriter?: RunStateWriter;
   /**
    * The coordinator to drive. Defaults to the production
-   * `buildMergeCoordinator(...)`. A test injects a recording coordinator to assert
-   * the event-driven trigger fires it.
+   * `buildBatchMergeCoordinator(...)` (via `buildProductionCoordinator`). A test
+   * injects a recording coordinator to assert the event-driven trigger fires it.
    */
   coordinator?: MergeCoordinator;
   /**

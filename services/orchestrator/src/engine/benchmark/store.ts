@@ -8,7 +8,7 @@
 // org-scoped (RLS): `experiments` carries org_id directly; `experiment_cells`
 // derive their org via the parent experiment (migration 0033 policies).
 
-import { runWithOrgScope, runWithSystemScope } from "@tanren/db";
+import { runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
 import { z } from "zod";
 import { ExperimentCellRow, ExperimentRow, FrozenConfig, SeedTaskRef } from "./entities.js";
@@ -135,20 +135,6 @@ export async function getExperiment(pool: pg.Pool, orgId: string, experimentId: 
   });
 }
 
-/**
- * The org that owns an experiment — the bootstrap a route resolves BEFORE any
- * org-scoped work (the worker's job-bootstrap pattern). Reads cross-org via the
- * system scope so an enforced-RLS empty-GUC read does not see zero rows.
- */
-export async function loadExperimentOrgId(pool: pg.Pool, experimentId: string): Promise<string | null> {
-  return runWithSystemScope(pool, async (client) => {
-    const result = await client.query<{ org_id: string }>(`SELECT org_id FROM experiments WHERE experiment_id = $1`, [
-      experimentId,
-    ]);
-    return result.rows[0]?.org_id ?? null;
-  });
-}
-
 // ---- Cells ----------------------------------------------------------------
 
 export interface CreateCellInput {
@@ -210,20 +196,6 @@ export async function getCell(pool: pg.Pool, orgId: string, cellId: string): Pro
     );
     if (result.rows[0] === undefined) throw new CellNotFoundError(cellId);
     return decodeCell(result.rows[0]);
-  });
-}
-
-/** The org that owns a cell (via its experiment) — the per-cell org bootstrap. */
-export async function loadCellOrgId(pool: pg.Pool, cellId: string): Promise<string | null> {
-  return runWithSystemScope(pool, async (client) => {
-    const result = await client.query<{ org_id: string }>(
-      `SELECT e.org_id
-         FROM experiment_cells c
-         INNER JOIN experiments e ON e.experiment_id = c.experiment_id
-        WHERE c.cell_id = $1`,
-      [cellId],
-    );
-    return result.rows[0]?.org_id ?? null;
   });
 }
 

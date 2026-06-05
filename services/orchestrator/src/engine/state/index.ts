@@ -7,13 +7,7 @@ export {
   listAllowedRunTransitions,
   transitionRun,
 } from "./run.js";
-export {
-  SpecStatus,
-  IllegalSpecTransitionError,
-  isAllowedSpecTransition,
-  listAllowedSpecTransitions,
-  transitionSpec,
-} from "./spec.js";
+export { SpecStatus, IllegalSpecTransitionError, isAllowedSpecTransition, transitionSpec } from "./spec.js";
 export {
   TaskKind,
   TaskStatus,

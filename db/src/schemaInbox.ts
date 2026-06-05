@@ -28,10 +28,6 @@ import { sql } from "drizzle-orm";
 import { check, index, jsonb, pgTable, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
 import { organizations, projects, specs } from "./schemaCore.js";
 
-// Connector kinds — mirrors the hi-fi `INBOX_SOURCES` glyph keys. `system`
-// sources auto-route; the rest feed candidates that wait for an operator call.
-const SOURCE_KINDS = ["issues", "errors", "system", "manual", "scheduled_audit"] as const;
-
 export const inboxSources = pgTable(
   "inbox_sources",
   {
@@ -73,20 +69,6 @@ export const inboxSources = pgTable(
   ],
 );
 
-// Candidate lifecycle: `triaged` is the resting state for external candidates
-// awaiting an operator call; the four resolutions mirror the hi-fi actions
-// (accept→discovery / fold-into-live-run / dismiss / close-as-dup), and
-// `auto_routed` is the terminal state for a system source's auto-promoted find.
-const CANDIDATE_STATUSES = [
-  "new",
-  "triaged",
-  "auto_routed",
-  "accepted",
-  "folded",
-  "dismissed",
-  "closed_duplicate",
-] as const;
-
 export const candidates = pgTable(
   "candidates",
   {
@@ -126,8 +108,3 @@ export const candidates = pgTable(
     index("candidates_status").on(table.status),
   ],
 );
-
-// Runtime literal lists, exported for the orchestrator engine to validate
-// against without re-declaring the union.
-export const inboxSourceKinds = SOURCE_KINDS;
-export const candidateStatuses = CANDIDATE_STATUSES;

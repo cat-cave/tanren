@@ -1,7 +1,7 @@
 /**
  * Reusable server-rendered primitives for the onboarding /
  * credentials / notifications screens. Rebuilt as TSX from the hi-fi
- * (`flows.jsx` OnbShell / StepHeading / Field / Toggle / StatusBadge /
+ * (`flows.jsx` OnbShell / StepHeading / Field / Toggle /
  * PhaseBadge). Pure presentation; interactivity is handled by the screen's
  * own island (`onboarding.ts`) reading `data-*` hooks.
  */
@@ -117,17 +117,6 @@ export function Toggle(props: { on: boolean; dataAttrs?: Record<string, string> 
 /** Roadmap-phase badge (`v0` wired, `p3`/`p4` stub). */
 export function PhaseBadge(props: { phase: "v0" | "p3" | "p4" }) {
   return <span class={`phase-badge phase-${props.phase}`}>{props.phase}</span>;
-}
-
-/** Integration connection-state badge. */
-export function StatusBadge(props: { status: string }) {
-  const kind =
-    props.status === "connected" || props.status === "always-on"
-      ? "on"
-      : props.status === "auth needed" || props.status === "action needed"
-        ? "warn"
-        : "off";
-  return <span class={`status-badge status-${kind}`}>{props.status}</span>;
 }
 
 /** Severity chip used in the matrix and event rows. */

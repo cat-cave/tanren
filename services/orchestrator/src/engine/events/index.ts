@@ -28,7 +28,6 @@ export {
   listSensitivityPathsFor,
   registerSensitivity,
   registerSensitivities,
-  resetSensitivityRulesForTesting,
 } from "./sensitivity.js";
 
 export { ensureSensitivityRulesRegistered, sensitivityRules } from "./sensitivityRules.js";
