@@ -5,10 +5,10 @@
 > `scripts/acceptance/easy.ts`, `scripts/acceptance/medium.ts`) have been
 > **deleted**. The system is now only ever exercised through the real
 > dequeue→execute path: a dashboard/API-triggered run enqueues a `plan`
-> job and the **background run worker** (`TANREN_RUN_WORKER=1`, see
-> `services/orchestrator/src/engine/worker/`) claims and executes it. To
-> exercise a full run live, trigger it through the dashboard/API with the
-> worker enabled. The per-tier persisted-state **assertions** survive as
+> job and the standalone **background run worker** service claims and
+> executes it. To exercise a full run live, trigger it through the
+> dashboard/API with the worker service running. The per-tier persisted-state
+> **assertions** survive as
 > CI dry-run smokes (`services/orchestrator/tests/phase2Acceptance{Easy,Medium}.test.ts`,
 > backed by `scripts/acceptance/common.ts`). Component-level live smokes
 > (`just live-codex-*`, `live-github-*`, `live-ci-poll`, `live-phase1-fixture`)
@@ -31,7 +31,7 @@
 >
 > Like everything since P3-0001, the hard tier is exercised **only through
 > the real dequeue→execute path** — a triggered run enqueues a `plan` job
-> and the background worker (`TANREN_RUN_WORKER=1`) claims and executes it.
+> and the standalone background worker service claims and executes it.
 > There is **no** direct-execution script (the deleted `scripts/acceptance/*`
 > are not reintroduced).
 
@@ -103,14 +103,15 @@ Create a GitHub repo `cat-cave/tanren-fixture-hard` whose single spec is
 
 ### How the operator runs it
 
-1. Bring up the dev stack **with the worker enabled**:
+1. Bring up the dev stack **with the standalone worker**:
 
    ```sh
-   TANREN_RUN_WORKER=1 just up-dev
+   just up-dev
    ```
 
-   (Or set `TANREN_RUN_WORKER=1` on the orchestrator service; the worker
-   is the only thing that dequeues `plan` jobs.)
+   The compose profile starts the standalone `worker` service; the
+   orchestrator service keeps `TANREN_RUN_WORKER` empty so only one data
+   plane dequeues `plan` jobs.
 
 2. Create the project for `cat-cave/tanren-fixture-hard` with
    `mergeIntegration: "direct_merge"` and the hard spec text, then

@@ -67,14 +67,11 @@ services:
       # authenticated against the synthetic `tanren-dev` org. compose.prod.yml
       # MUST never set this flag. See docs/operator-guide/auth.md.
       TANREN_DEV_LOGIN: ${TANREN_DEV_LOGIN:-}
-      # IN-PROCESS run-executor worker (P3-0001). Plane-split P1 moved the data
-      # plane into the standalone `worker` service (above), so the API no longer
-      # runs the worker by default. This flag is the single-process dev/test
-      # convenience: OPT-IN via host env, default OFF. Set TANREN_RUN_WORKER=1 (in
-      # .env) to have the ORCHESTRATOR also dequeue runs in-process — handy for a
-      # one-container loop without the separate `worker` service.
-      # TANREN_RUN_WORKER_CONCURRENCY bounds in-flight runs.
-      TANREN_RUN_WORKER: ${TANREN_RUN_WORKER:-}
+      # Plane-split topology: this compose profile always runs the data plane in
+      # the standalone `worker` service, so the API process must not also dequeue
+      # runs in-process. Keep this literal empty value so a host/.env
+      # TANREN_RUN_WORKER=1 cannot create duplicate run/merge loops.
+      TANREN_RUN_WORKER: ""
       TANREN_RUN_WORKER_CONCURRENCY: ${TANREN_RUN_WORKER_CONCURRENCY:-2}
       # Dev profile: orchestrator routes /hello/run to the long-lived static
       # `runner` service over the compose network. The allocator sidecar is

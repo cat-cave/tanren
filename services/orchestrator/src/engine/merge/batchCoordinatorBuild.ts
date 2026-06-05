@@ -64,6 +64,7 @@ export function buildBatchMergeCoordinator(deps: BuildMergeCoordinatorDeps): Mer
       identitySecretRef: deps.identitySecretRef,
       timeoutMs: BATCH_GATE_TIMEOUT_MS,
       ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
+      ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
     }),
     // Plane-split: route the queue/batch event emissions through the control plane
     // when wired; else direct on the pool (byte-identical).

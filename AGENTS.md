@@ -27,8 +27,8 @@ corepack pnpm run check
 The compose smoke for infrastructure changes is:
 
 ```sh
-docker compose -f compose.dev.yml build orchestrator dashboard runner
-TANREN_RUNNER_AUTHORIZED_KEY="$(cat /tmp/tanren_runner_key.pub)" TANREN_RUNNER_IDENTITY_PRIVATE_KEY="$(cat /tmp/tanren_runner_key)" docker compose -f compose.dev.yml up -d postgres vault orchestrator dashboard runner ntfy
+docker compose -f compose.dev.yml build orchestrator worker allocator dashboard runner
+TANREN_RUNNER_AUTHORIZED_KEY="$(cat /tmp/tanren_runner_key.pub)" TANREN_RUNNER_IDENTITY_PRIVATE_KEY="$(cat /tmp/tanren_runner_key)" docker compose -f compose.dev.yml up -d postgres vault orchestrator worker allocator dashboard runner ntfy
 ```
 
 Then verify CLI `doctor` and `status`, plus runner SSH (the synthetic `hello` workflow was purged from the runtime; `just smoke-connectivity` is the fake-free connectivity check). The dev and prod profiles split is described in `docs/operator-guide/deploy.md` (P2A-0004).

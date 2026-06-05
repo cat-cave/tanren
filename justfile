@@ -160,7 +160,7 @@ down-dev:
 # `just vault-init-prod` once before `just up-prod`. See
 # docs/operator-guide/deploy.md.
 up-prod:
-  docker compose -f compose.prod.yml up -d postgres vault orchestrator dashboard runner ntfy
+  docker compose -f compose.prod.yml up -d postgres vault orchestrator worker dashboard ntfy
 
 down-prod:
   docker compose -f compose.prod.yml down
@@ -418,7 +418,7 @@ smoke: compose-build compose-up wait-for-stack smoke-connectivity smoke-ssh-inte
 # P3-0001: the Phase 2A direct-execution acceptance gate (`just acceptance`,
 # scripts/acceptance/easy.ts + medium.ts) was removed once the run executor
 # landed. The system is now only ever exercised through the real
-# dequeue→execute path (the background run worker, TANREN_RUN_WORKER=1). The
+# dequeue→execute path (the standalone background run worker service). The
 # per-tier persisted-state ASSERTIONS still ship as CI dry-run smokes
 # (services/orchestrator/tests/phase2Acceptance{Easy,Medium}.test.ts) which
 # import scripts/acceptance/common.ts. Component-level live smokes
@@ -429,7 +429,8 @@ smoke: compose-build compose-up wait-for-stack smoke-connectivity smoke-ssh-inte
 # (executeNextPlanJob) with adapters/gate/review/merge probes scripted to force
 # a planner re-plan, an auditor rejection loop, and a conflict-resolution merge.
 # No live Codex/SSH/GitHub. The live fixture-hard scenario (triggered through the
-# dashboard with TANREN_RUN_WORKER=1) is documented in docs/operator-guide/acceptance.md.
+# dashboard/API while the standalone worker service is running) is documented in
+# docs/operator-guide/acceptance.md.
 acceptance-hard:
   corepack pnpm exec vitest run services/orchestrator/tests/acceptanceHardTier.test.ts
 

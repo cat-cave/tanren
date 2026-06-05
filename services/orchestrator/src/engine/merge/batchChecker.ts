@@ -31,7 +31,9 @@ import type { GovernancePosture } from "../config/shared.js";
 import type { Allocator } from "../contracts/allocator.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
+import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { IntegrationAncestor, VcsProvider } from "../contracts/vcsProvider.js";
+import { orgScopingPool } from "../data/orgScopedDb.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import { PgEventStore } from "../eventStore.js";
 import { runFreshRunnerMergeGate } from "./freshRunnerGate.js";
@@ -71,6 +73,7 @@ export interface PgBatchCheckerDeps {
   /** The runner identity key ref (same value the worker boot seeds). */
   identitySecretRef: string;
   githubAppMinter?: GithubAppTokenMinter;
+  runStateWriter?: RunStateWriter;
   timeoutMs: number;
 }
 
@@ -174,7 +177,7 @@ export class PgBatchChecker implements BatchChecker {
               secrets: this.deps.secrets,
               vcsProvider: this.deps.vcsProvider,
               ...(this.deps.githubAppMinter !== undefined && { githubAppMinter: this.deps.githubAppMinter }),
-              eventStore: new PgEventStore(this.deps.pool),
+              eventStore: this.deps.runStateWriter ?? new PgEventStore(orgScopingPool(this.deps.pool)),
               identitySecretRef: this.deps.identitySecretRef,
               timeoutMs: this.deps.timeoutMs,
             },

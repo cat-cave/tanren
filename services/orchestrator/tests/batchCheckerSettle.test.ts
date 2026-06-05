@@ -15,6 +15,7 @@ import type pg from "pg";
 import { describe, expect, it } from "vitest";
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
 import { PgBatchChecker } from "../src/engine/merge/batchChecker.js";
+import type { AppendEventInput } from "../src/engine/eventStore.js";
 import type {
   Allocator,
   AllocationRequest,
@@ -23,6 +24,7 @@ import type {
 } from "../src/engine/contracts/allocator.js";
 import type { RunnerCommand, CommandResult, CommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
 import type { MergeQueueEntry } from "../src/engine/contracts/mergeCoordinator.js";
+import type { RunStateWriter } from "../src/engine/contracts/runStateWriter.js";
 import type {
   BuildIntegrationBranchInput,
   BuildIntegrationBranchResult,
@@ -34,6 +36,8 @@ import type {
 
 const ORG = "org_1";
 const PROJECT = "project_1";
+const INSERT_INTO_PREFIX = "INSERT INTO ";
+const EVENT_TABLE_TOKEN = "events";
 const TARGET: RunnerHandle = {
   backend: "ssh",
   host: "runner",
@@ -43,26 +47,51 @@ const TARGET: RunnerHandle = {
   identitySecretRef: "id",
 };
 
+function isEventTableInsert(text: string): boolean {
+  if (!text.startsWith(INSERT_INTO_PREFIX)) return false;
+  const tableToken = text.slice(INSERT_INTO_PREFIX.length).trimStart().split(/[\s(]/u)[0]?.replaceAll('"', "");
+  return tableToken === EVENT_TABLE_TOKEN;
+}
+
 /** A fake pool answering the checker's project/org/entry-branch reads. */
+interface FakePoolOptions {
+  rejectEventInserts?: boolean;
+  requireScopedEventInserts?: boolean;
+  queries?: string[];
+}
+
 class FakePool {
+  constructor(private readonly options: FakePoolOptions = {}) {}
   async query(sql: string, params?: unknown[]): Promise<{ rows: unknown[] }> {
-    return new FakeClient().query(sql, params);
+    return new FakeClient(this.options).query(sql, params);
   }
   async connect(): Promise<FakeClient> {
-    return new FakeClient();
+    return new FakeClient(this.options);
   }
 }
 
 class FakeClient {
+  private inTransaction = false;
+  private hasOrgScope = false;
+  constructor(private readonly options: FakePoolOptions = {}) {}
   async query(sql: string, params?: unknown[]): Promise<{ rows: unknown[] }> {
     const text = sql.replaceAll(/\s+/gu, " ").trim();
-    if (
-      text.startsWith("BEGIN") ||
-      text.startsWith("SET LOCAL") ||
-      text.startsWith("COMMIT") ||
-      text.startsWith("ROLLBACK") ||
-      text.startsWith("NOTIFY")
-    ) {
+    this.options.queries?.push(text);
+    if (text.startsWith("BEGIN")) {
+      this.inTransaction = true;
+      this.hasOrgScope = false;
+      return { rows: [] };
+    }
+    if (text.startsWith("SET LOCAL app.current_org_id")) {
+      this.hasOrgScope = true;
+      return { rows: [] };
+    }
+    if (text.startsWith("SET LOCAL") || text.startsWith("NOTIFY")) {
+      return { rows: [] };
+    }
+    if (text.startsWith("COMMIT") || text.startsWith("ROLLBACK")) {
+      this.inTransaction = false;
+      this.hasOrgScope = false;
       return { rows: [] };
     }
     if (text.includes("SELECT org_id FROM projects")) {
@@ -85,9 +114,19 @@ class FakeClient {
       const ids = (params?.[0] as string[]) ?? [];
       return { rows: ids.map((specId) => ({ spec_id: specId, branch: `tanren/${specId}` })) };
     }
-    // The native gate emits its gate.* events through PgEventStore — accept the write.
+    // The native gate emits its gate.* records through PgEventStore; accept that append.
+    if (isEventTableInsert(text) && this.options.rejectEventInserts === true) {
+      throw Object.assign(new Error("permission denied for table events"), { code: "42501" });
+    }
+    if (
+      isEventTableInsert(text) &&
+      this.options.requireScopedEventInserts === true &&
+      (!this.inTransaction || !this.hasOrgScope)
+    ) {
+      throw Object.assign(new Error("unscoped event insert"), { code: "42501" });
+    }
     if (text.startsWith("INSERT INTO")) {
-      return { rows: [] };
+      return { rows: [{ id: "event_1" }] };
     }
     throw new Error(`unexpected query: ${text}`);
   }
@@ -174,18 +213,50 @@ function makeChecker(
   integration: BuildIntegrationBranchResult,
   ssh: CommandSubstrate,
   allocator: Allocator = new FakeAllocator(),
+  options: { pool?: pg.Pool; runStateWriter?: RunStateWriter } = {},
 ): { checker: PgBatchChecker; vcs: FakeVcsProvider } {
   const vcs = new FakeVcsProvider(integration);
   const checker = new PgBatchChecker({
-    pool: new FakePool() as unknown as pg.Pool,
+    pool: options.pool ?? (new FakePool() as unknown as pg.Pool),
     vcsProvider: vcs as unknown as VcsProvider,
     secrets: new InMemorySecretStore(),
     allocator,
     ssh,
     identitySecretRef: "id",
+    ...(options.runStateWriter !== undefined && { runStateWriter: options.runStateWriter }),
     timeoutMs: 1000,
   });
   return { checker, vcs };
+}
+
+function unexpectedWriterMethod(method: string): Promise<never> {
+  return Promise.reject(new Error(`unexpected writer method: ${method}`));
+}
+
+function recordingRunStateWriter(): { writer: RunStateWriter; events: AppendEventInput[] } {
+  const events: AppendEventInput[] = [];
+  const writer = {
+    append(input: AppendEventInput) {
+      events.push(input);
+      return Promise.resolve();
+    },
+    recordCost: () => unexpectedWriterMethod("recordCost"),
+    reconcileCost: () => unexpectedWriterMethod("reconcileCost"),
+    finalizeRun: () => unexpectedWriterMethod("finalizeRun"),
+    setRunStatus: () => unexpectedWriterMethod("setRunStatus"),
+    setRunPrUrl: () => unexpectedWriterMethod("setRunPrUrl"),
+    setSpecStatus: () => unexpectedWriterMethod("setSpecStatus"),
+    reconcileStrandedSpec: () => unexpectedWriterMethod("reconcileStrandedSpec"),
+    setSpecMetadata: () => unexpectedWriterMethod("setSpecMetadata"),
+    setRunSpeculativeBase: () => unexpectedWriterMethod("setRunSpeculativeBase"),
+    setRunPercolationReexecId: () => unexpectedWriterMethod("setRunPercolationReexecId"),
+    clearRunPercolationPending: () => unexpectedWriterMethod("clearRunPercolationPending"),
+    mergeRunVerifiedAncestorSha: () => unexpectedWriterMethod("mergeRunVerifiedAncestorSha"),
+    supersedeQueuedPlannerTask: () => unexpectedWriterMethod("supersedeQueuedPlannerTask"),
+    insertTask: () => unexpectedWriterMethod("insertTask"),
+    updateTask: () => unexpectedWriterMethod("updateTask"),
+  } as unknown as RunStateWriter;
+  return { writer, events };
 }
 
 describe("PgBatchChecker — native gate on the integration ref (no-Actions delivery)", () => {
@@ -210,6 +281,34 @@ describe("PgBatchChecker — native gate on the integration ref (no-Actions deli
     const verdict = await checker.checkBatch({ projectId: PROJECT, entries: [entry("spec_a")] });
     expect(verdict.result).toBe("fail");
     expect(vcs.deletedBranches).toEqual(["tanren/batch/spec_a"]);
+  });
+
+  it("routes fresh-runner gate events through the run-state writer, never the raw worker pool", async () => {
+    const pool = new FakePool({ rejectEventInserts: true }) as unknown as pg.Pool;
+    const { writer, events } = recordingRunStateWriter();
+    const { checker } = makeChecker(INTEGRATED, new GateDrivingSsh(0), new FakeAllocator(), {
+      pool,
+      runStateWriter: writer,
+    });
+
+    const verdict = await checker.checkBatch({ projectId: PROJECT, entries: [entry("spec_a")] });
+
+    expect(verdict.result).toBe("pass");
+    expect(events.map((event) => event.eventType)).toContain("gate.started");
+    expect(events.map((event) => event.eventType)).toContain("gate.verdict");
+    expect(events.every((event) => event.projectId === PROJECT && event.runId === "run_batch_spec_a")).toBe(true);
+  });
+
+  it("scopes direct fresh-runner gate event writes when no run-state writer is configured", async () => {
+    const queries: string[] = [];
+    const pool = new FakePool({ queries, requireScopedEventInserts: true }) as unknown as pg.Pool;
+    const { checker } = makeChecker(INTEGRATED, new GateDrivingSsh(0), new FakeAllocator(), { pool });
+
+    const verdict = await checker.checkBatch({ projectId: PROJECT, entries: [entry("spec_a")] });
+
+    expect(verdict.result).toBe("pass");
+    expect(queries).toContain("SET LOCAL app.current_org_id = 'org_1'");
+    expect(queries.some((query) => isEventTableInsert(query))).toBe(true);
   });
 
   it("a SPEC-vs-SPEC integration conflict → conflict (conflictsWithBase=false)", async () => {
