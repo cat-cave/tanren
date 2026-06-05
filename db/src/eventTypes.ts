@@ -51,6 +51,7 @@ export const eventTypeNames = [
   "gate.advisory_failed",
   "gate.failed",
   "gate.passed",
+  "gate.publish_failed",
   "gate.started",
   "gate.verdict",
   "github.branch.pushed",

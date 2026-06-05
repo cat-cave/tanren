@@ -5,7 +5,8 @@
 // runner, clones the PR head branch, installs deps, and runs the repo's `pre_merge`
 // gate over SSH (the native merge authority — NO forge check-run poll). A passing
 // gate is `passed`; a failing/errored gate holds the merge (an unverified rebase
-// never merges). The verdict is published to the forge as a `tanren/gate` check-run.
+// never merges). The verdict is BEST-EFFORT published to the forge as a `tanren/gate`
+// commit status — a publish failure is a non-fatal warning, never a held merge.
 
 import { runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
@@ -18,7 +19,7 @@ import type { GovernancePosture } from "../config/shared.js";
 import { installationFromOrgConfig, type OrgGithubAppInstallation } from "../config/orgConfig.js";
 import { migrateProjectConfig } from "../config/projectConfig.js";
 import { PgEventStore, type EventStore } from "../eventStore.js";
-import { publishGateVerdict } from "../workflow/gate/index.js";
+import { publishGateVerdictBestEffort } from "../workflow/gate/index.js";
 import { runFreshRunnerMergeGate } from "./freshRunnerGate.js";
 import type { ReGateCiHook } from "../workflow/reviewMerge/index.js";
 
@@ -91,7 +92,7 @@ export function buildReGateCiForQueuedRun(deps: BuildReGateCiForQueuedRunDeps): 
           specId: deps.specId,
         },
       );
-      await publishReGateVerdict(deps, ctx, headSha, outcome.passed);
+      await publishReGateVerdict(deps, ctx, eventStore, headSha, outcome.passed);
       return { status: outcome.passed ? "passed" : "failed" };
     } catch (error) {
       // An infra error during the re-gate (allocate/clone/bootstrap) is NOT a verdict —
@@ -102,10 +103,17 @@ export function buildReGateCiForQueuedRun(deps: BuildReGateCiForQueuedRunDeps): 
   };
 }
 
-/** Publish the native re-gate verdict to the forge against the re-gated head sha. */
+/**
+ * BEST-EFFORT publish the native re-gate verdict to the forge against the re-gated head
+ * sha. The publish only MIRRORS the (already-decided) verdict onto the PR, so a publish
+ * failure (a token-credential 403, a transient 5xx) is caught + recorded as a non-fatal
+ * `gate.publish_failed` warning and the re-gate's own `passed`/`failed` status stands —
+ * a publish hiccup must never turn a passed re-gate into a held merge.
+ */
 async function publishReGateVerdict(
   deps: BuildReGateCiForQueuedRunDeps,
   ctx: ReGateRunContext,
+  eventStore: EventStore,
   headSha: string,
   passed: boolean,
 ): Promise<void> {
@@ -119,13 +127,29 @@ async function publishReGateVerdict(
     ...(staticRef.trim() !== "" && { staticRef }),
     ...(deps.githubAppMinter !== undefined && { minter: deps.githubAppMinter }),
   });
-  await publishGateVerdict({
-    vcsProvider: deps.vcsProvider,
-    repo: deps.vcsProvider.parseRepository(ctx.repoUrl),
-    token,
-    headSha,
-    outcome: passed ? { passed: true, results: [] } : { passed: false, results: [], failure: RE_GATE_FAILURE },
-  });
+  await publishGateVerdictBestEffort(
+    {
+      vcsProvider: deps.vcsProvider,
+      repo: deps.vcsProvider.parseRepository(ctx.repoUrl),
+      token,
+      headSha,
+      outcome: passed ? { passed: true, results: [] } : { passed: false, results: [], failure: RE_GATE_FAILURE },
+    },
+    "pre_merge",
+    passed,
+    async ({ when, headSha: sha, passed: verdictPassed, reason }) => {
+      console.warn(
+        `[merge] forge re-gate verdict publish failed for run ${deps.runId} (non-fatal; merge stands on internal verdict): ${reason}`,
+      );
+      await eventStore.append({
+        runId: deps.runId,
+        specId: deps.specId,
+        projectId: deps.projectId,
+        eventType: "gate.publish_failed",
+        payload: { when, headSha: sha, passed: verdictPassed, reason },
+      });
+    },
+  );
 }
 
 /** A synthetic failure outcome for the published verdict when the re-gate failed (detail is on the events). */

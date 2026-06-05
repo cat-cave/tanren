@@ -104,6 +104,7 @@ import {
   GateAdvisoryFailedPayload,
   GateFailedPayload,
   GatePassedPayload,
+  GatePublishFailedPayload,
   GateStartedPayload,
   GateVerdictPayload,
 } from "./schemas/gate.js";
@@ -262,6 +263,7 @@ export const EventRegistry = {
   "gate.passed": GatePassedPayload,
   "gate.failed": GateFailedPayload,
   "gate.advisory_failed": GateAdvisoryFailedPayload,
+  "gate.publish_failed": GatePublishFailedPayload,
   "gate.verdict": GateVerdictPayload,
 
   // Review lifecycle

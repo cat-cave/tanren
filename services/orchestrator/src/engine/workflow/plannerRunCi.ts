@@ -5,9 +5,14 @@
 // merge-decision point the run's runner + workspace are still live, so
 // `runMergeGateForRun` reuses the run's already-built gate closure with
 // `when: "pre_merge"` and publishes the verdict to the forge as a `tanren/gate`
-// check-run (`publishGateVerdict`). A passing gate proceeds to merge; a failing one
+// commit status (`publishGateVerdict`). A passing gate proceeds to merge; a failing one
 // throws (the loop halts) — exactly as the old CI poll did, but the verdict comes
 // from Tanren's own gate over SSH, never from reading GitHub Actions.
+//
+// The forge publication is BEST-EFFORT: it only mirrors the (already-decided) verdict
+// onto the PR, so a publish failure (e.g. a token credential 403, a transient 5xx) is
+// caught, recorded as a `gate.publish_failed` warning, and the run PROCEEDS to merge on
+// the internal verdict. The gate verdict — not the forge publish — is the authority.
 //
 // `buildReGateCi` is the merge stage's re-gate hook (after an auto-rebase advances
 // the branch, the prior verdict is stale). At that point the run's original runner
@@ -18,7 +23,7 @@
 import type { RunnerHandle } from "../contracts/allocator.js";
 import { resolveWorkspaceHeadSha } from "../workspace/index.js";
 import { type CiWhen } from "../ci/index.js";
-import { type GateOutcome, publishGateVerdict, runNativeMergeGate } from "./gate/index.js";
+import { type GateOutcome, publishGateVerdictBestEffort, runNativeMergeGate } from "./gate/index.js";
 import type { EventStore } from "../eventStore.js";
 import type { ReGateCiHook } from "./reviewMerge/index.js";
 import type { RunPlannerLoopInput } from "./plannerRun.js";
@@ -33,9 +38,11 @@ export interface MergeGateRunContext {
 
 /**
  * Run the native `pre_merge` gate on the run's live runner (the merge authority) and
- * publish the verdict to the forge as a `tanren/gate` check-run. A passing gate
- * RETURNS its outcome (the caller proceeds to merge); a failing gate THROWS so the
- * loop halts without merging — the same control flow the retired CI poll had.
+ * BEST-EFFORT publish the verdict to the forge as a `tanren/gate` commit status. A
+ * passing gate RETURNS its outcome (the caller proceeds to merge); a failing gate
+ * THROWS so the loop halts without merging — the same control flow the retired CI poll
+ * had. A failed forge PUBLISH of a passing verdict is NON-fatal (it never aborts the
+ * run): the publish is informational; the internal verdict decides the merge.
  */
 export async function runMergeGateForRun(input: RunPlannerLoopInput, ctx: MergeGateRunContext): Promise<GateOutcome> {
   const outcome = await runNativeMergeGate({ runGate: ctx.runGate });
@@ -47,10 +54,13 @@ export async function runMergeGateForRun(input: RunPlannerLoopInput, ctx: MergeG
 }
 
 /**
- * Publish the native gate verdict to the forge against the just-gated workspace HEAD.
- * Resolves the head sha + an App-first/static token through the SAME seams the PR /
- * merge stages use. A genuinely unauthenticated public-repo run (no installation, no
- * static ref) skips publication (it has no token to publish with).
+ * BEST-EFFORT publish the native gate verdict to the forge against the just-gated
+ * workspace HEAD. Resolves the head sha + an App-first/static token through the SAME
+ * seams the PR / merge stages use. A genuinely unauthenticated public-repo run (no
+ * installation, no static ref) skips publication (it has no token to publish with).
+ * A publish failure (403/404/5xx/network) is caught + recorded as a non-fatal
+ * `gate.publish_failed` warning; it NEVER aborts the run, which merges on the
+ * internal verdict regardless of whether the forge mirror succeeded.
  */
 async function publishMergeVerdict(
   input: RunPlannerLoopInput,
@@ -78,13 +88,29 @@ async function publishMergeVerdict(
     ...(staticRef.trim() !== "" && { staticRef }),
     ...(input.githubAppMinter !== undefined && { minter: input.githubAppMinter }),
   });
-  await publishGateVerdict({
-    vcsProvider: input.vcsProvider,
-    repo: input.vcsProvider.parseRepository(context.repoUrl),
-    token,
-    headSha,
-    outcome,
-  });
+  await publishGateVerdictBestEffort(
+    {
+      vcsProvider: input.vcsProvider,
+      repo: input.vcsProvider.parseRepository(context.repoUrl),
+      token,
+      headSha,
+      outcome,
+    },
+    "pre_merge",
+    outcome.passed,
+    async ({ when, headSha: sha, passed, reason }) => {
+      console.warn(
+        `[gate] forge verdict publish failed for run ${context.runId} (non-fatal; merging on internal verdict): ${reason}`,
+      );
+      await ctx.eventStore.append({
+        runId: context.runId,
+        specId: context.specId,
+        projectId: context.projectId,
+        eventType: "gate.publish_failed",
+        payload: { when, headSha: sha, passed, reason },
+      });
+    },
+  );
 }
 
 /**
