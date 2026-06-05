@@ -1,77 +1,64 @@
 # Tanren — start here (for agents)
 
-Tanren turns specs into merged PRs through an agent workflow that runs each unit
-of work per-PR through real CI. **v0 (Phases 0–3) is built and merged, and the
-real run loop is live-validated end-to-end across three tiers (easy/medium/hard,
-the hard one a private repo) — each reached a merged PR with real Codex + real
-credentials.**
+Tanren turns specs into merged PRs — **autonomously** — through an agent workflow
+that runs each unit of work per-PR through real CI. **v0 (Phases 0–3) is built and
+merged, and the real run loop is live-validated end-to-end across three tiers
+(easy/medium/hard, the hard one a private repo)** — each reached a merged PR with
+real Codex + real credentials.
+
+**v21 native delivery is the doctrine.** Delivery is **Action-less**: the native
+shell-tier gate (`.tanren/ci.yml`, a `CiConfigV1` — _not_ a GitHub Actions
+workflow) runs over SSH and is the **sole merge authority**; the verdict publishes
+back to the forge as the `tanren/gate` commit status. Mergify is fully removed
+(`native_queue` is the merge engine); migrations are collapsed to a single
+baseline; the status vocabulary is unified; Vault per-run scoped credentials are
+done. (Tanren's own monorepo CI runs on GitHub Actions like any repo; the
+no-Actions doctrine governs the delivery path for the apps Tanren _builds_.)
 
 ## Read order for a fresh session
 
 1. **`README.md`** — current state up top + the quickstart.
-2. **`docs/roadmap/tempering.md`** — the live forward tracker (the single live
-   to-do): what's done, what's next near- and long-term, and how a fresh clone
-   reproduces the validated state.
-3. **`docs/roadmap/autonomy-engine.md`** — the plan for the largest remaining
-   effort (DAG-walker · real-LLM Forge · native merge queue · `apex` · the
-   stub-ban + real-e2e guardrails). The build starts here.
-4. **`docs/roadmap/forward-roadmap.md`** — the detailed four-dimension reference
-   (more granular than tempering.md).
+2. **`ROADMAP.md`** — the single consolidated roadmap: current state, frozen phase
+   history, the durable architecture posture, and the live forward to-do.
+3. **`PROJECT_BRIEF.md`** — the durable source-of-truth vision.
+4. **`docs/architecture/autonomy-engine.md`** — the durable design rationale for
+   the autonomy engine (DagWalker · real-LLM Forge · native merge queue ·
+   speculation + percolation · `apex` · the stub-ban + real-e2e guardrails).
 5. **`docs/operator-guide/live-validation-findings.md`** — what the live
    validation proved across all three tiers + the config gotchas.
-6. **`ROADMAP.md`** — phase history + exit criteria.
-7. **`PROJECT_BRIEF.md`** — the durable source-of-truth vision.
 
-## What's next (pull from `docs/roadmap/tempering.md`, not from memory)
+## What's next (pull from `ROADMAP.md` §4, not from memory)
 
 The core promise — a real user gets merged PRs from specs, on public **and
 private** repos, across easy/medium/hard governance tiers — is **done and
-live-proven**.
-
-**The active build is the autonomy engine** (`docs/roadmap/autonomy-engine.md`).
-**Phase 1 — the autonomy core — is merged on `main`** (PRs #220–#226,
-2026-06-01): the DAG now drives itself. The manual driver and the deterministic
-Forge stubs are gone — the autonomous **DagWalker**, persisted **priority**,
-**real-LLM Forge** (deterministic answerers moved to `tests/fixtures/`),
-**webhook-first intake**, the **stub-ban lint** (`no-production-stubs`), and the
-**real-resource `just e2e` gate** all landed, with `QuotaPolicy` deleted (budget
-is the only gate) and concurrency moved env→config.
-
-**Phase 2 — native merge coordination — is also merged on `main`** (PRs #228–#236,
-2026-06-02): the **`VcsProvider` seam**, **auto-rebase**, **DAG-aware
-intent-preserving conflict resolution**, **speculative execution** +
-**change-percolation**, the **native intelligent merge queue** (DAG-order
-serialized merge + speculative batch-check + bisect), **CI-intelligence parity**
-(flaky-quarantine · CI analytics · queue stats), and **Mergify removed entirely**
-(`native_queue` is the merge engine). Each unit was adversarially verified before
-merge.
+live-proven**. The **autonomy engine** (autonomy Phases 1 and 2) is **merged on
+`main`**: the DAG drives itself via the **DagWalker** and the **native intelligent
+merge queue** coordinates merges (full design rationale:
+`docs/architecture/autonomy-engine.md`; phase history: `ROADMAP.md` §2).
 
 **The only remaining major effort is Phase 3 — `apex`**: the max-difficulty
-fixture (rough operator notes → a deployed product autonomously). It is gated on
-the real Tier-1 credentials (GitHub App + Slack + a deploy target;
-`docs/operator-guide/validation-credentials.md`) and spends real credits under the
-$50 ceiling. Everything else below is hardening, content, and long-horizon items:
+fixture (rough operator notes → a deployed product autonomously). It is the
+**active live-validation vehicle** — the operator contract
+(`docs/operator-guide/apex.md`) and the live-run setup exist, the Tier-1
+credentials (GitHub App + Slack + a deploy target;
+`docs/operator-guide/validation-credentials.md`) are provisioned, and it spends
+real credits under the $50 ceiling. The rest of the forward to-do (`ROADMAP.md`
+§4):
 
-- **A — core run loop.** ✅ Done, now **autonomous**. The harness frontier is
-  resolved; the loop converges; private-repo clone auth works; the simulated
-  reviewer closes the human-review tier; and the **DagWalker** drives the spec
-  graph with no per-spec trigger (Phase 1). Remaining: post-merge auto-issue
-  creation (and the Phase-2 merge coordination the walker now requires).
-- **B — pipeline experimentation.** The tanren-method **benchmark toolkit is
-  code-complete** (entities/scorecard/reducers/runner/accept/CLI). Remaining: the
-  **seed corpus** (tiered seed repos + hidden accept tiers) and running the
-  experiments. See `docs/roadmap/tanren-method-benchmark.md`.
-- **C — refactor/scale prepwork.** The `Repositories` seam + conformance is in;
-  routes + run-lifecycle writes are migrated off raw SQL; `LISTEN/NOTIFY`
-  replaced 1s polling. Remaining: the rest of the DAL (forge/recovery — quota is
-  gone), `typify→serde` codegen, the first whole-repo mutation baseline.
-- **D — managed-hosting.** RLS + plane-split **P1→P3c** done + live-validated
-  (events/cost AND run/spec/task lifecycle writes route through the control
-  plane, `42501`-proven); the standalone allocator is org-threaded. Remaining:
-  **Vault per-run scoped credentials** (the last big de-privilege; also remove
-  the `?? "dev-root-token"` fallbacks in `main.ts` + `allocator/main.ts`).
-- **Held:** agy harness (broken headless); GitLab/VCS abstraction (GitHub-coupled
-  via Mergify/Actions); the Rust rewrite/native harness.
+- **Benchmark seed corpus.** The tanren-method toolkit is code-complete; what
+  remains is the **content** — tiered seed repos + hidden accept tiers + running
+  the experiments. See `docs/roadmap/tanren-method-benchmark.md`.
+- **Remaining DAL clusters.** Two forge stores still issue raw SQL
+  (`forge/audits/store.ts` + `forge/inbox/store.ts`) — move them onto the
+  `Repositories` seam; plus `typify→serde` codegen and the first whole-repo
+  mutation baseline.
+- **Residual hardening.** A few surviving Tier-2 backcompat items on a zero-users,
+  single-baseline codebase: `schemaCore.ts` `.default('{}'::jsonb)` (latent-500)
+  and the `resolveCredentials.ts` `orgId === ''` BYOK branch (a live path
+  mislabeled "legacy").
+- **Held / long-horizon:** a second `VcsProvider` backend (GitLab — the seam
+  already shipped; the Mergify/Actions coupling that once justified deferring it is
+  gone); the agy harness (broken headless); the Rust rewrite / native harness.
 
 ## Working rules
 

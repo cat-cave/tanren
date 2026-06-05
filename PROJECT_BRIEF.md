@@ -200,7 +200,7 @@ Concrete consequence: if a Writer spends 45 minutes writing high-quality code an
 
 Writers in v0:
 
-- **opencode** (with ZAI, Wafer, OpenRouter, or any opencode provider — the operator's choice).
+- **opencode** (with ZAI, OpenRouter, or any opencode provider — the operator's choice).
 - **claude** (claude-code CLI; despite supporting structured output, it can also be used purely as a Writer).
 - **codex** (codex CLI; same).
 
@@ -231,7 +231,7 @@ Answerers in v0:
 Best-fit defaults (operator-overridable per project):
 
 - **Planner** (Answerer): `claude opus` (latest). Highest-quality structured planning.
-- **Writer** (Writer): `opencode glm-5.1` via ZAI by default, fallback to `opencode + Wafer`. Cheap, capable, fast iteration; perfect for the "write code, don't talk about it" role.
+- **Writer** (Writer): `opencode glm-5.1` via ZAI by default, fallback to `opencode` via OpenRouter. Cheap, capable, fast iteration; perfect for the "write code, don't talk about it" role.
 - **Check-task** (Answerer): `codex gpt-5-codex` (or current). Fast, structured, code-aware.
 - **Auditor** (Answerer): `codex gpt-5-codex` (latest) for general; `claude opus` for high-stakes specs.
 
@@ -557,7 +557,7 @@ Tanren's credential system is a v0 requirement, not a layered-on feature. Prior 
 
 ### §8.1 What credentials Tanren handles
 
-- **LLM provider credentials**: claude OAuth tokens, codex OAuth tokens, opencode-provider API keys (ZAI key, Wafer key, OpenRouter key, Anthropic direct API key, OpenAI direct API key, plus config files where required like opencode's ZAI config).
+- **LLM provider credentials**: claude OAuth tokens, codex OAuth tokens, opencode-provider API keys (ZAI key, OpenRouter key, Anthropic direct API key, OpenAI direct API key, plus config files where required like opencode's ZAI config).
 - **SCM credentials**: GitHub PATs, GitHub App installations (per-org), GitLab tokens (v1), Bitbucket (v1).
 - **Allocator credentials**: Hetzner API tokens, AWS access keys (v1), GCP service-account JSON (v1), Cloudflared tokens.
 - **Notification credentials**: ntfy.sh access tokens, Slack webhooks (v1), Discord webhooks (v1).
@@ -720,11 +720,11 @@ CREATE TABLE cost_records (
   input_tokens      INTEGER NOT NULL DEFAULT 0,
   output_tokens     INTEGER NOT NULL DEFAULT 0,
   cached_tokens     INTEGER NOT NULL DEFAULT 0,
-  cost_usd          NUMERIC(14,6) NOT NULL,
-  pricing_mode      TEXT NOT NULL CHECK (pricing_mode IN
-                      ('per_token','opportunity_cost','subscription_window')),
-  cost_source       TEXT NOT NULL CHECK (cost_source IN
-                      ('provider_direct','ccusage','codexbar','opportunity_computed')),
+  cost_usd          NUMERIC(14,6),            -- NULL-loud when unattributable
+  billing_mode      TEXT NOT NULL CHECK (billing_mode IN
+                      ('per_token','subscription','self_hosted','unattributed')),
+  cost_basis        TEXT NOT NULL CHECK (cost_basis IN
+                      ('ccusage','provider_response','credits','unknown','unattributed')),
   cost_source_raw   JSONB NOT NULL,           -- the raw signal we derived from
   recorded_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
   tenant_id         TEXT,
@@ -797,7 +797,7 @@ CREATE TABLE notifications (
 
 - **`projects` table** is mandatory because you cannot test the workflow without a project to test against. The solo-builder happens to have one row; that does not justify deleting the table.
 - **`tenant_id` and `user_id` columns** are NULL in solo-builder. They exist in v0 so the team-builder transition is "add a non-NULL write" not "rewrite every query." Per §1.2 invariant: column exists, NULL in v0, non-NULL in v1+.
-- **`cost_records.pricing_mode`** enumerates all three cost models (§4). A v0 cost-records row must have one of `per_token`, `opportunity_cost`, `subscription_window`. The dashboard's cost view depends on all three being first-class.
+- **`cost_records.billing_mode`** enumerates the cost models (§4). A cost-records row carries one of `per_token`, `subscription`, `self_hosted`, `unattributed`. The dashboard's cost view depends on all being first-class.
 - **`runners.image_sha`** is the forensic record of which runner image produced a workflow's output. Combined with `cost_records.cost_source_raw`, the full audit trail of "what version of what tool generated this PR" is reconstructable.
 - **`rate_limit_observations`** is first-class telemetry, not optional. Every 429 lands here. The dashboard reads this to warn the operator before they're about to push their claude-max into the weekly cap.
 
