@@ -64,7 +64,7 @@ const SPECS = [
     description: "x",
     acceptanceCriteria: ["a"],
     dependsOn: [],
-    status: "pending",
+    status: "open",
   },
   {
     specId: "spec_2",
@@ -73,7 +73,7 @@ const SPECS = [
     description: "x",
     acceptanceCriteria: ["a"],
     dependsOn: ["spec_1"],
-    status: "pending",
+    status: "open",
   },
   {
     specId: "spec_3",
@@ -82,7 +82,7 @@ const SPECS = [
     description: "x",
     acceptanceCriteria: ["a"],
     dependsOn: ["spec_1", "spec_2"],
-    status: "pending",
+    status: "open",
   },
 ];
 const MILESTONES = [

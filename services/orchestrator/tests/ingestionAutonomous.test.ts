@@ -159,7 +159,7 @@ function stubPool(opts: StubOpts = {}): {
     }
     if (sql.startsWith("SELECT spec_id, title, status FROM specs")) {
       return {
-        rows: [...existing].map((id) => ({ spec_id: id, title: id, status: "pending" })),
+        rows: [...existing].map((id) => ({ spec_id: id, title: id, status: "open" })),
         rowCount: existing.size,
       };
     }

@@ -82,7 +82,7 @@ export function auditEnvelopeSensitivityPaths(): ReadonlyArray<[string, "public"
 }
 
 // Project the engine's runtime `ActorRef` onto the frozen `AuditActor` event shape.
-// The runtime taxonomy is finer-grained (writer_codex / answerer_codex / ci_poller
+// The runtime taxonomy is finer-grained (writer / answerer / ci_poller
 // / ...); for the audit trail the only durable distinction is human-vs-service, so
 // every non-`operator` kind projects to `service` and `operator` projects to `human`.
 // `id`/`label` carry through verbatim (they are already non-secret handles).

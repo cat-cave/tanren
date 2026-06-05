@@ -25,7 +25,7 @@ function baseInputs(overrides: Partial<TrialProjectionInputs> = {}): TrialProjec
   return {
     run: {
       runId: "run_1",
-      status: "done",
+      status: "completed",
       outcome: null,
       startedAt: RUN_START,
       endedAt: RUN_END,
@@ -43,7 +43,7 @@ describe("projectTrialScorecard — §2.3 field projection", () => {
     const card = projectTrialScorecard(baseInputs({ events: [{ eventType: "merge.completed", ts: MERGED }] }));
     expect(card.activeExecutionSeconds).toBe(900);
     expect(card.leadTimeSeconds).toBe(1440);
-    expect(card.terminalStatus).toBe("done");
+    expect(card.terminalStatus).toBe("completed");
     expect(card.haltReason).toBeNull();
   });
 

@@ -23,21 +23,21 @@ function n(
 }
 
 describe("classifySpecStatus", () => {
-  it("maps pending → pending", () => {
-    expect(classifySpecStatus("pending")).toBe("pending");
+  it("maps open → pending (ready-to-start bucket)", () => {
+    expect(classifySpecStatus("open")).toBe("pending");
   });
-  it("maps active / in_flight / open / review → in_flight (slot consumers)", () => {
-    for (const s of ["active", "in_flight", "open", "review"]) {
+  it("maps in_flight / review → in_flight (slot consumers)", () => {
+    for (const s of ["in_flight", "review"]) {
       expect(classifySpecStatus(s)).toBe("in_flight");
     }
   });
-  it("maps done AND merged → done (a merged dep is satisfied)", () => {
-    expect(classifySpecStatus("done")).toBe("done");
+  it("maps merged → done (a merged dep is satisfied)", () => {
     expect(classifySpecStatus("merged")).toBe("done");
   });
-  it("maps halted / cancelled → terminal_blocked (blocks dependents, not satisfied)", () => {
+  it("maps halted / cancelled / needs_attention → terminal_blocked (blocks dependents, not satisfied)", () => {
     expect(classifySpecStatus("halted")).toBe("terminal_blocked");
     expect(classifySpecStatus("cancelled")).toBe("terminal_blocked");
+    expect(classifySpecStatus("needs_attention")).toBe("terminal_blocked");
   });
   it("treats an unknown status as a slot consumer, never a satisfied dependency", () => {
     expect(classifySpecStatus("something_new")).toBe("in_flight");

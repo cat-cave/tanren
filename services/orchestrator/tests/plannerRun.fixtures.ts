@@ -471,8 +471,8 @@ export class PlannerRunPool {
       this.runStatus = { status: "running", outcome: null };
       return { rows: [], rowCount: 1 };
     }
-    if (trimmed.startsWith("UPDATE runs SET status = 'done'")) {
-      this.runStatus = { status: "done", outcome: "ok" };
+    if (trimmed.startsWith("UPDATE runs SET status = 'completed'")) {
+      this.runStatus = { status: "completed", outcome: "ok" };
       return { rows: [], rowCount: 1 };
     }
     if (trimmed.startsWith("UPDATE runs SET status = 'halted'")) {

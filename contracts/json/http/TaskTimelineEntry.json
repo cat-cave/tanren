@@ -61,15 +61,15 @@
         {
           "enum": [
             "passed",
+            "ok",
+            "pending",
             "failed",
             "rejected_by_checker",
             "rejected_by_auditor",
             "timed_out",
             "crashed",
             "window_exhausted",
-            "cancelled",
-            "ok",
-            "pending"
+            "cancelled"
           ],
           "type": "string"
         },

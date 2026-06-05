@@ -83,9 +83,9 @@ describe("deriveDoraMetrics — deploy frequency divisor", () => {
 });
 
 describe("deriveDoraMetrics — change-failure boundary statuses", () => {
-  it("counts failed/halted/cancelled as failures and done/completed as clean", () => {
+  it("counts failed/halted/cancelled as failures and completed as clean", () => {
     const finishedRuns = [
-      { runId: "r1", status: "done", endedAt: WINDOW_END },
+      { runId: "r1", status: "completed", endedAt: WINDOW_END },
       { runId: "r2", status: "completed", endedAt: WINDOW_END },
       { runId: "r3", status: "failed", endedAt: WINDOW_END },
       { runId: "r4", status: "halted", endedAt: WINDOW_END },
@@ -101,7 +101,7 @@ describe("deriveDoraMetrics — change-failure boundary statuses", () => {
   it("treats an unknown terminal status as NOT a failure", () => {
     // A status outside the FAILURE_STATUSES set must not inflate failures.
     const finishedRuns = [
-      { runId: "r1", status: "done", endedAt: WINDOW_END },
+      { runId: "r1", status: "completed", endedAt: WINDOW_END },
       { runId: "r2", status: "mysterious", endedAt: WINDOW_END },
     ];
     const m = deriveDoraMetrics({ ...EMPTY, finishedRuns }, OPTIONS);
@@ -154,10 +154,10 @@ class DoraLoaderPool {
         rowCount: 1,
       };
     }
-    if (t.includes("FROM runs r") && t.includes("'done','completed','failed','halted','cancelled'")) {
+    if (t.includes("FROM runs r") && t.includes("'completed','failed','halted','cancelled'")) {
       return {
         rows: [
-          { run_id: "r1", status: "done", ended_at: new Date("2026-05-21T00:00:00Z") },
+          { run_id: "r1", status: "completed", ended_at: new Date("2026-05-21T00:00:00Z") },
           { run_id: "r2", status: "failed", ended_at: new Date("2026-05-21T00:00:00Z") },
         ],
         rowCount: 2,

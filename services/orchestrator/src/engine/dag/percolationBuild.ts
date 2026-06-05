@@ -120,14 +120,14 @@ export class PgPercolationReexecutor implements PercolationReexecutor {
     const newBase = input.nonSpeculative ? null : input.integrationBranch;
     const newBuildBase = input.nonSpeculative ? undefined : input.ancestorHeadShas;
 
-    // ORDER MATTERS (never-strand): reopen the spec to `pending` BEFORE cancelling the
+    // ORDER MATTERS (never-strand): reopen the spec to `open` BEFORE cancelling the
     // prior run, so EVERY failure point is recoverable:
     //   - a throw BEFORE the cancel (e.g. during this reopen) leaves the prior run LIVE
     //     — the pre-fix behavior, no strand (the prior run still drives the spec);
-    //   - a throw AFTER the cancel (during create) leaves the spec `pending` so the
-    //     DagWalker re-enqueues it — no `active`-spec-with-only-a-cancelled-run strand.
+    //   - a throw AFTER the cancel (during create) leaves the spec `open` so the
+    //     DagWalker re-enqueues it — no `in_flight`-spec-with-only-a-cancelled-run strand.
     // The reverse order (cancel→reopen) opens a window where a throw between them strands
-    // the spec `active` with its only run cancelled (nothing reconciles that). Reopening
+    // the spec `in_flight` with its only run cancelled (nothing reconciles that). Reopening
     // first closes it. Keep the spec's git branch/work intact (we only move status),
     // never reset. The prior run is NOT re-pointed — `supersedePriorRun` cancels it, so
     // its `speculative_base` is dead (the read model + walker ignore a cancelled run);
@@ -135,22 +135,21 @@ export class PgPercolationReexecutor implements PercolationReexecutor {
     // Plane-split: route the spec reopen through the control plane when wired; else direct.
     if (this.runStateWriter === undefined) {
       await runWithOrgScope(this.pool, orgId, async (client) => {
-        await client.query(
-          `UPDATE specs SET status = 'pending' WHERE spec_id = $1 AND status NOT IN ('done', 'merged')`,
-          [input.dependent.specId],
-        );
+        await client.query(`UPDATE specs SET status = 'open' WHERE spec_id = $1 AND status <> 'merged'`, [
+          input.dependent.specId,
+        ]);
       });
     } else {
       await this.runStateWriter.setSpecStatus({
         specId: input.dependent.specId,
         orgId,
-        status: "pending",
-        notFromStatuses: ["done", "merged"],
+        status: "open",
+        notFromStatuses: ["merged"],
       });
     }
 
     // SUPERSEDE the prior run (cancel + dequeue its queue entry) AFTER the spec is
-    // `pending` so only the new run competes in the merge queue. Idempotent (a
+    // `open` so only the new run competes in the merge queue. Idempotent (a
     // re-percolation that races finds the prior run already terminal / its entry already
     // dequeued ⇒ no-op).
     await this.supersedePriorRun(input.projectId, orgId, input.dependent);

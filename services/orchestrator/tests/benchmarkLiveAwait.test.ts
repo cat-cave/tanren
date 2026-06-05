@@ -50,7 +50,7 @@ function fakePool(statuses: string[]): pg.Pool {
       if (/FROM runs WHERE run_id/u.test(sql)) {
         const status = next();
         reads += 1;
-        return { rows: [{ status, outcome: status === "done" ? "ok" : null }], rowCount: 1 };
+        return { rows: [{ status, outcome: status === "completed" ? "ok" : null }], rowCount: 1 };
       }
       return { rows: [], rowCount: 0 };
     },
@@ -62,7 +62,7 @@ function fakePool(statuses: string[]): pg.Pool {
 
 describe("buildLiveAwaitTerminal", () => {
   it("resolves immediately when the run is already terminal at subscribe time", async () => {
-    const pool = fakePool(["done"]);
+    const pool = fakePool(["completed"]);
     const listener = new FakeNotifyListener();
     const awaitTerminal = buildLiveAwaitTerminal({
       pool,
@@ -70,7 +70,7 @@ describe("buildLiveAwaitTerminal", () => {
       trialTimeoutMs: 5_000,
     });
     const snapshot = await awaitTerminal({ orgId: ORG, runId: RUN });
-    expect(snapshot?.status).toBe("done");
+    expect(snapshot?.status).toBe("completed");
     expect(snapshot?.merged).toBe(true);
     // It subscribed to the run-activity channel and tore the subscription down.
     expect(listener.subscriptions).toEqual([{ channel: RUN_ACTIVITY_CHANNEL }]);
@@ -79,7 +79,7 @@ describe("buildLiveAwaitTerminal", () => {
 
   it("wakes on a tanren_run NOTIFY for this run and resolves on the next read", async () => {
     // First read: running; after a NOTIFY wakes the loop, the second read is done.
-    const pool = fakePool(["running", "done"]);
+    const pool = fakePool(["running", "completed"]);
     const listener = new FakeNotifyListener();
     const awaitTerminal = buildLiveAwaitTerminal({
       pool,
@@ -95,12 +95,12 @@ describe("buildLiveAwaitTerminal", () => {
     });
     listener.fire(RUN_ACTIVITY_CHANNEL, RUN);
     const snapshot = await pending;
-    expect(snapshot?.status).toBe("done");
+    expect(snapshot?.status).toBe("completed");
     expect(listener.unsubscribeCount).toBe(1);
   });
 
   it("ignores a NOTIFY for a DIFFERENT run (filters on the run id payload)", async () => {
-    const pool = fakePool(["running", "running", "done"]);
+    const pool = fakePool(["running", "running", "completed"]);
     const listener = new FakeNotifyListener();
     const awaitTerminal = buildLiveAwaitTerminal({
       pool,
@@ -116,7 +116,7 @@ describe("buildLiveAwaitTerminal", () => {
     // eventually advances it to the terminal status instead.
     listener.fire(RUN_ACTIVITY_CHANNEL, "run_other");
     const snapshot = await pending;
-    expect(snapshot?.status).toBe("done");
+    expect(snapshot?.status).toBe("completed");
   });
 
   it("times out safely (returns the last non-terminal snapshot) when the run never terminates", async () => {

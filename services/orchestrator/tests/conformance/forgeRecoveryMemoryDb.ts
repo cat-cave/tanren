@@ -121,9 +121,9 @@ export class ForgeRecoveryScopedClient {
       if (row !== undefined) row.description = `${row.description}\n\n[operator steering] ${params[1] as string}`;
       return { rows: [], rowCount: row ? 1 : 0 };
     }
-    if (sql === "UPDATE specs SET status = 'pending' WHERE spec_id = $1 AND status NOT IN ('done', 'merged')") {
-      const row = this.visibleSpecs.find((s) => s.spec_id === params[0] && !["done", "merged"].includes(s.status));
-      if (row !== undefined) row.status = "pending";
+    if (sql === "UPDATE specs SET status = 'open' WHERE spec_id = $1 AND status <> 'merged'") {
+      const row = this.visibleSpecs.find((s) => s.spec_id === params[0] && s.status !== "merged");
+      if (row !== undefined) row.status = "open";
       return { rows: [], rowCount: row ? 1 : 0 };
     }
     return undefined;

@@ -200,8 +200,8 @@ class SpecRunPool {
     if (sql.startsWith("SELECT spec_id FROM specs WHERE project_id = $1 AND spec_id = ANY")) {
       return this.selectSpecsForProject(String(params[0]), params[1] as string[]);
     }
-    if (sql.includes("status = 'done'") && sql.includes("spec_id = ANY")) {
-      // Dependency-done check: only `done` specs match. Pending deps yield [].
+    if (sql.includes("status = 'merged'") && sql.includes("spec_id = ANY")) {
+      // Dependency-done check: only `merged` specs match. Unmerged deps yield [].
       return this.selectDoneSpecsForProject(String(params[0]), params[1] as string[]);
     }
     if (sql.startsWith("INSERT INTO specs")) {
@@ -212,10 +212,10 @@ class SpecRunPool {
     if (sql.includes("FROM specs s") && sql.includes("JOIN projects p")) {
       return this.selectSpecProject(String(params[0]));
     }
-    if (sql.startsWith("UPDATE specs SET status = 'active'")) {
+    if (sql.startsWith("UPDATE specs SET status = 'in_flight'")) {
       const spec = this.specs.get(String(params[0]));
-      if (spec !== undefined && spec.status === "pending") {
-        spec.status = "active";
+      if (spec !== undefined && spec.status === "open") {
+        spec.status = "in_flight";
         return { rows: [{ spec_id: spec.specId }], rowCount: 1 };
       }
       return { rows: [], rowCount: 0 };
@@ -271,7 +271,7 @@ class SpecRunPool {
   private selectDoneSpecsForProject(projectId: string, specIds: string[]): { rows: unknown[]; rowCount: number } {
     const rows = specIds
       .map((specId) => this.specs.get(specId))
-      .filter((spec): spec is SpecRow => spec !== undefined && spec.projectId === projectId && spec.status === "done")
+      .filter((spec): spec is SpecRow => spec !== undefined && spec.projectId === projectId && spec.status === "merged")
       .map((spec) => ({ spec_id: spec.specId }));
     return { rows, rowCount: rows.length };
   }

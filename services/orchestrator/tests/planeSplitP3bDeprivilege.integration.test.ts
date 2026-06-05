@@ -113,7 +113,7 @@ describeDb("plane-split P3b — the de-privileged tanren_dataplane role (real PG
     );
     await ownerPool.query(
       `INSERT INTO specs (spec_id, project_id, org_id, title, description, status)
-       VALUES ($1, $2, $3, 't', 'd', 'active')`,
+       VALUES ($1, $2, $3, 't', 'd', 'in_flight')`,
       [SPEC, PROJECT, ORG],
     );
     await ownerPool.query(

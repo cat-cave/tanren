@@ -83,7 +83,7 @@ export interface DeriveCellOptions {
   tooWideRatio?: number;
 }
 
-const MERGED_STATUSES = new Set(["done", "completed"]);
+const MERGED_STATUSES = new Set(["completed"]);
 
 function toFigure(ci: ConfidenceInterval, def: MetricDef, tooWideRatio: number): CellMetricFigure {
   let tooWideToCall = false;

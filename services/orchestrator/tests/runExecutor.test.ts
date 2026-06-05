@@ -49,7 +49,7 @@ describe("run worker — org-scoped execution (runExecutor RLS seam)", () => {
     const result = await executeNextPlanJob(deps(pool, secrets, jobQueue, passingGitHub()));
 
     expect(result).toMatchObject({ kind: "completed", runId: run.runId });
-    expect(pool.runStatus).toEqual({ status: "done", outcome: "ok" });
+    expect(pool.runStatus).toEqual({ status: "completed", outcome: "ok" });
   });
 
   it("runs a legacy/unscoped job (org_id NULL) on the bare-pool path", async () => {
@@ -61,7 +61,7 @@ describe("run worker — org-scoped execution (runExecutor RLS seam)", () => {
     const result = await executeNextPlanJob(deps(pool, secrets, jobQueue, passingGitHub()));
 
     expect(result.kind).toBe("completed");
-    expect(pool.runStatus).toEqual({ status: "done", outcome: "ok" });
+    expect(pool.runStatus).toEqual({ status: "completed", outcome: "ok" });
   });
 
   it("fails the job loudly when the claimed run is not reachable under its own org (JobOrgContextLost)", async () => {

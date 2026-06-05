@@ -208,7 +208,7 @@ async function seedCredentialFreeRun(owner: Pool): Promise<void> {
   );
   await owner.query(
     `INSERT INTO specs (spec_id, project_id, org_id, title, description, acceptance_criteria, status)
-     VALUES ($1, $2, $3, 't', 'd', $4::jsonb, 'active')`,
+     VALUES ($1, $2, $3, 't', 'd', $4::jsonb, 'in_flight')`,
     [SPEC, PROJECT, ORG, JSON.stringify(["ac"])],
   );
   await owner.query(

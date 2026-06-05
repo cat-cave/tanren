@@ -14,19 +14,19 @@ export const TaskKind = z.enum([
 ]);
 export type TaskKind = z.infer<typeof TaskKind>;
 
-export const TaskStatus = z.enum([
-  "queued",
-  "claimed",
-  "running",
-  "done",
-  "failed",
-  // Phase 2 canonical "cancelled" value kept alongside legacy "done"
-  "cancelled",
-]);
+// The canonical task-status vocabulary (v21). `done` is the success terminal a
+// task ends at; `failed`/`cancelled` are the unhappy terminals. This is the one
+// vocabulary — there is no second set to normalize.
+export const TaskStatus = z.enum(["queued", "claimed", "running", "done", "failed", "cancelled"]);
 export type TaskStatus = z.infer<typeof TaskStatus>;
 
+// The task-outcome vocabulary. `ok` is the generic success outcome a `done` task
+// carries (the review/merge stages write it); `pending` marks an in-flight CI
+// re-poll; the rest name a specific failure mode.
 export const TaskOutcome = z.enum([
   "passed",
+  "ok",
+  "pending",
   "failed",
   "rejected_by_checker",
   "rejected_by_auditor",
@@ -34,9 +34,6 @@ export const TaskOutcome = z.enum([
   "crashed",
   "window_exhausted",
   "cancelled",
-  // Phase 0/1 historical outcomes still present in the database
-  "ok",
-  "pending",
 ]);
 export type TaskOutcome = z.infer<typeof TaskOutcome>;
 

@@ -109,7 +109,7 @@ describeDb("plane-split P3 — the DagWalker lifecycle read uses the system pool
       );
       await ownerPool.query(
         `INSERT INTO specs (spec_id, project_id, org_id, title, description, status)
-         VALUES ($1, $2, $3, 't', 'd', 'active')`,
+         VALUES ($1, $2, $3, 't', 'd', 'in_flight')`,
         [spec, project, org],
       );
     }

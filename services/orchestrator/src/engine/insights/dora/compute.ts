@@ -6,7 +6,7 @@
 // Inputs (all read-only):
 //   - merges:   `merge.completed` events (P3-0008) joined to their spec's
 //               created_at → one merge row per completed merge.
-//   - runs:     terminal runs in the window (status done/completed/failed/
+//   - runs:     terminal runs in the window (status completed/failed/
 //               halted/cancelled) → change-failure-rate denominator.
 //   - halts:    halt boundaries (a run reaching status 'halted') paired with
 //               the next merge for the same spec → recovery time for MTTR.
@@ -174,7 +174,7 @@ export async function computeDoraMetrics(
        WHERE r.project_id = $1
          AND r.ended_at IS NOT NULL
          AND r.ended_at >= $2
-         AND r.status IN ('done','completed','failed','halted','cancelled')`,
+         AND r.status IN ('completed','failed','halted','cancelled')`,
     [options.projectId, since],
   );
 

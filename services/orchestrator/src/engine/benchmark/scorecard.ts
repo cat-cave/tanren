@@ -44,7 +44,7 @@ export const CostBasisMix = z
   .strict();
 export type CostBasisMix = z.infer<typeof CostBasisMix>;
 
-export const TerminalStatus = z.enum(["done", "completed", "halted", "failed", "cancelled"]);
+export const TerminalStatus = z.enum(["completed", "halted", "failed", "cancelled"]);
 export type TerminalStatus = z.infer<typeof TerminalStatus>;
 
 export const TrialScorecard = z
@@ -129,7 +129,7 @@ export interface TrialProjectionInputs {
   reachedAcceptGreen?: boolean | null;
 }
 
-const TERMINAL_STATUSES = new Set(["done", "completed", "halted", "failed", "cancelled"]);
+const TERMINAL_STATUSES = new Set(["completed", "halted", "failed", "cancelled"]);
 
 /**
  * Pure projection of one trial's run-set into a `TrialScorecard`. Deterministic

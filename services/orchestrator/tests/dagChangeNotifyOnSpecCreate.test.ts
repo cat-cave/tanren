@@ -1,6 +1,6 @@
 // The producer half of the spec-creation → DagWalker wake (subscriber.ts): proves
 // `createSpec` fires `NOTIFY tanren_dag, '<projectId>'` at the INSERT seam, so a
-// freshly-derived/created DAG (pending specs, ZERO runs — the run-activity channel
+// freshly-derived/created DAG (open specs, ZERO runs — the run-activity channel
 // never fires for it) wakes the walker without a worker reboot. The consumer half
 // (the subscriber walking on a dag-change wake) is covered in
 // dagWalkerSubscriber.test.ts; the NOTIFY statement shape in notify.test.ts. The
@@ -86,7 +86,7 @@ describe("createSpec dag-change wake", () => {
     });
 
     expect(spec.projectId).toBe(projectId);
-    expect(spec.status).toBe("pending");
+    expect(spec.status).toBe("open");
     expect(notifies).toContain(`NOTIFY ${DAG_CHANGE_CHANNEL}, '${projectId}'`);
   });
 

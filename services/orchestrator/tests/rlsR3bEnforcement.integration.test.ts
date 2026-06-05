@@ -213,7 +213,7 @@ async function seedTenant(owner: Pool, org: string): Promise<void> {
   );
   await owner.query(
     `INSERT INTO specs (spec_id, project_id, org_id, title, description, status)
-     VALUES ($1, $2, $3, 't', 'd', 'active')`,
+     VALUES ($1, $2, $3, 't', 'd', 'in_flight')`,
     [spec, project, org],
   );
   await owner.query(

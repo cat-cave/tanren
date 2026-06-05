@@ -60,7 +60,7 @@ function seedMixedProject(pool: ProgressRoutesPool): void {
   pool.seedSpec({ spec_id: "s_merged_a", project_id: "proj_1", title: "Merged A", status: "merged" });
   pool.seedSpec({ spec_id: "s_merged_b", project_id: "proj_1", title: "Merged B", status: "merged" });
   pool.seedSpec({ spec_id: "s_active", project_id: "proj_1", title: "Active", status: "in_flight" });
-  pool.seedSpec({ spec_id: "s_pending", project_id: "proj_1", title: "Pending", status: "pending" });
+  pool.seedSpec({ spec_id: "s_pending", project_id: "proj_1", title: "Pending", status: "open" });
   pool.seedSpec({ spec_id: "s_halted", project_id: "proj_1", title: "Halted", status: "halted" });
 
   // Runs: the active spec's latest run is running (with a PR); the pending
@@ -250,7 +250,7 @@ describe("project progress route", () => {
     const { app, pool } = buildHarness();
     pool.seedProject({ project_id: "proj_quiet", org_id: "org_acme", name: "Quiet", repo_url: "https://x/r" });
     pool.seedProjectMember("proj_quiet", "user_alice");
-    pool.seedSpec({ spec_id: "q1", project_id: "proj_quiet", title: "Q", status: "pending" });
+    pool.seedSpec({ spec_id: "q1", project_id: "proj_quiet", title: "Q", status: "open" });
 
     const { body } = await getJson(app, "/orgs/org_acme/projects/proj_quiet/progress");
     const progress = ProjectProgress.parse(body);
@@ -312,14 +312,13 @@ describe("project progress route", () => {
     pool.seedProject({ project_id: "proj_done", org_id: "org_acme", name: "Done", repo_url: "https://x/r" });
     pool.seedProjectMember("proj_done", "user_alice");
     pool.seedSpec({ spec_id: "d1", project_id: "proj_done", title: "One", status: "merged" });
-    pool.seedSpec({ spec_id: "d2", project_id: "proj_done", title: "Two", status: "done" });
+    pool.seedSpec({ spec_id: "d2", project_id: "proj_done", title: "Two", status: "merged" });
 
     const { body } = await getJson(app, "/orgs/org_acme/projects/proj_done/progress");
     const progress = ProjectProgress.parse(body);
     expect(progress.v1Reached).toBe(true);
     expect(progress.percentComplete).toBe(100);
-    expect(progress.specCounts.merged).toBe(1);
-    expect(progress.specCounts.done).toBe(1);
+    expect(progress.specCounts.merged).toBe(2);
   });
 
   it("a milestone detail surfaces a non-secret reason/message but never a secret value", async () => {

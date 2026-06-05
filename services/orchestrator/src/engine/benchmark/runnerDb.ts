@@ -42,8 +42,8 @@ export interface RunStatusSnapshot {
   merged: boolean;
 }
 
-const TERMINAL_STATUSES = new Set(["done", "completed", "halted", "failed", "cancelled"]);
-const MERGED_STATUSES = new Set(["done", "completed"]);
+const TERMINAL_STATUSES = new Set(["completed", "halted", "failed", "cancelled"]);
+const MERGED_STATUSES = new Set(["completed"]);
 
 export class CellNotFoundError extends Error {
   constructor(readonly cellId: string) {
@@ -142,7 +142,7 @@ export async function loadCellOrgId(pool: pg.Pool, cellId: string): Promise<stri
 /**
  * Read the current status of a run under org scope. Returns undefined when the
  * run is not yet visible / not found (the poller keeps waiting). `merged` is
- * true only for a clean terminal (`done`/`completed`).
+ * true only for a clean terminal (`completed`).
  */
 export async function readRunStatus(
   pool: pg.Pool,

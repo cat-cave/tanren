@@ -36,12 +36,12 @@ describe("INTERPLAY: strand reconciler ↔ conflict escalation (no double-handli
     // run owns it; condition 2 (no live run) fails ⇒ not reconcilable. The reconciler
     // never yanks a spec a re-plan is actively re-running.
     const queued = decideStrand(
-      snapshot({ specId: "spec_replan", status: "active", runs: [{ runId: "run_replan", status: "queued" }] }),
+      snapshot({ specId: "spec_replan", status: "in_flight", runs: [{ runId: "run_replan", status: "queued" }] }),
     );
     expect(queued.reconcilable).toBe(false);
     // Same for a RUNNING re-plan run.
     const running = decideStrand(
-      snapshot({ specId: "spec_replan", status: "active", runs: [{ runId: "run_replan", status: "running" }] }),
+      snapshot({ specId: "spec_replan", status: "in_flight", runs: [{ runId: "run_replan", status: "running" }] }),
     );
     expect(running.reconcilable).toBe(false);
   });

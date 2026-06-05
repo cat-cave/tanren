@@ -5,7 +5,7 @@ import { buildApp } from "../src/main.js";
 // buildApp's default sidecar allocator REQUIRES a bearer token (no `"dev"` fallback).
 process.env.TANREN_ALLOCATOR_TOKEN ??= "test-token";
 const ssh = {} as CommandSubstrate;
-const doneOrMerged = (status: string): boolean => status === "done" || status === "merged";
+const doneOrMerged = (status: string): boolean => status === "merged";
 
 describe("project/spec workflow contract", () => {
   it("creates a project, creates a spec, and queues a run from persisted rows", async () => {
@@ -66,7 +66,7 @@ describe("project/spec workflow contract", () => {
     expect(spec).toMatchObject({
       specId: expect.stringMatching(/^spec_/u),
       projectId: project.projectId,
-      status: "pending",
+      status: "open",
       dependsOn: [foundation.specId],
       priority: "tbd",
     });
@@ -86,7 +86,7 @@ describe("project/spec workflow contract", () => {
         repoUrl: "https://github.com/cat-cave/tanren-fixture-easy",
         defaultBranch: "main",
       },
-      spec: { acceptanceCriteria: ["GET /healthz returns ok"], status: "active" },
+      spec: { acceptanceCriteria: ["GET /healthz returns ok"], status: "in_flight" },
       plannerTaskId: expect.stringMatching(/^task_/u),
       plannerJobId: expect.stringMatching(/^\d+$/u),
     });
@@ -275,7 +275,7 @@ class ContractPool {
     if (sql.startsWith("SELECT spec_id FROM specs WHERE project_id = $1 AND spec_id = ANY")) {
       return this.selectSpecsForProject(String(params[0]), params[1] as string[]);
     }
-    if (sql.startsWith("SELECT spec_id FROM specs WHERE project_id = $1 AND status IN ('done', 'merged')")) {
+    if (sql.startsWith("SELECT spec_id FROM specs WHERE project_id = $1 AND status = 'merged'")) {
       return this.selectDoneSpecsForProject(String(params[0]), params[1] as string[]);
     }
     if (sql.startsWith("INSERT INTO specs")) {
@@ -290,10 +290,10 @@ class ContractPool {
       this.runs.push(runFromParams(params));
       return { rows: [], rowCount: 1 };
     }
-    if (sql.startsWith("UPDATE specs SET status = 'active'")) {
+    if (sql.startsWith("UPDATE specs SET status = 'in_flight'")) {
       const spec = this.specs.get(String(params[0]));
-      if (spec !== undefined && spec.status === "pending") {
-        spec.status = "active";
+      if (spec !== undefined && spec.status === "open") {
+        spec.status = "in_flight";
         return { rows: [{ spec_id: spec.specId }], rowCount: 1 };
       }
       return { rows: [], rowCount: 0 };
@@ -328,7 +328,7 @@ class ContractPool {
 
   markSpecDone(specId: string): void {
     const spec = this.specs.get(specId);
-    if (spec !== undefined) spec.status = "done";
+    if (spec !== undefined) spec.status = "merged";
   }
 
   private selectSpecsForProject(projectId: string, specIds: string[]): { rows: unknown[]; rowCount: number } {

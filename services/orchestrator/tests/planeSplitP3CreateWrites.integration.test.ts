@@ -69,7 +69,7 @@ describeDb("plane-split P3 — control-plane autonomy-loop create/intake writes 
     );
     await ownerPool().query(
       `INSERT INTO specs (spec_id, project_id, org_id, title, description, status)
-       VALUES ($1, $2, $3, 'walk spec', 'd', 'pending')`,
+       VALUES ($1, $2, $3, 'walk spec', 'd', 'open')`,
       [specId, PROJECT, ORG],
     );
     const app = createInternalRunStateWriteRoutes({ pool: runtimePool(), verifier: new AllowAllPeerVerifier() });
@@ -87,11 +87,11 @@ describeDb("plane-split P3 — control-plane autonomy-loop create/intake writes 
       [run.runId],
     );
     expect(runRow.rows[0]).toMatchObject({ org_id: ORG, status: "queued" });
-    // The spec was claimed pending→active inside the same transaction.
+    // The spec was claimed open→in_flight inside the same transaction.
     const specRow = await ownerPool().query<{ status: string }>("SELECT status FROM specs WHERE spec_id = $1", [
       specId,
     ]);
-    expect(specRow.rows[0]?.status).toBe("active");
+    expect(specRow.rows[0]?.status).toBe("in_flight");
     // The run.queued event was appended (the walker's run-creation timeline).
     const ev = await ownerPool().query("SELECT 1 FROM events WHERE run_id = $1 AND event_type = 'run.queued'", [
       run.runId,
@@ -104,7 +104,7 @@ describeDb("plane-split P3 — control-plane autonomy-loop create/intake writes 
   // `merged` (NOT `done`) must SUCCEED. The walker's planner + classifier treat a
   // `merged` dep as satisfied (a merged PR ends the spec at `merged`, never `done`), so
   // it plans the dependent as READY and enqueues it non-speculatively — but the gate
-  // formerly accepted ONLY `status='done'`, so it threw SpecDependenciesBlockedError,
+  // formerly accepted ONLY `status='merged'`, so it threw SpecDependenciesBlockedError,
   // which the walker tolerates as benign-transient → a PERMANENT stall (a merged dep
   // never becomes `done`). The gate now admits `done` OR `merged`; this proves the
   // all-merged dep chain enqueues + claims the dependent instead of stalling.
@@ -132,7 +132,7 @@ describeDb("plane-split P3 — control-plane autonomy-loop create/intake writes 
     // The dependent is PENDING, depends on the merged spec.
     await ownerPool().query(
       `INSERT INTO specs (spec_id, project_id, org_id, title, description, status, depends_on)
-       VALUES ($1, $2, $3, 'ready on merged dep', 'd', 'pending', ARRAY[$4::text])`,
+       VALUES ($1, $2, $3, 'ready on merged dep', 'd', 'open', ARRAY[$4::text])`,
       [specId, PROJECT, ORG, depSpecId],
     );
     const app = createInternalRunStateWriteRoutes({ pool: runtimePool(), verifier: new AllowAllPeerVerifier() });
@@ -145,12 +145,12 @@ describeDb("plane-split P3 — control-plane autonomy-loop create/intake writes 
     });
 
     expect(run.runId).toMatch(/^run_/u);
-    // The merged dependency satisfied the gate — the dependent was claimed pending→active
+    // The merged dependency satisfied the gate — the dependent was claimed open→in_flight
     // (formerly this threw SpecDependenciesBlockedError, stalling the DAG forever).
     const specRow = await ownerPool().query<{ status: string }>("SELECT status FROM specs WHERE spec_id = $1", [
       specId,
     ]);
-    expect(specRow.rows[0]?.status).toBe("active");
+    expect(specRow.rows[0]?.status).toBe("in_flight");
   });
 
   // (6b) §2c "ancestor-merged → non-speculative re-base": a percolation re-exec
@@ -182,7 +182,7 @@ describeDb("plane-split P3 — control-plane autonomy-loop create/intake writes 
     // otherwise block this enqueue.
     await ownerPool().query(
       `INSERT INTO specs (spec_id, project_id, org_id, title, description, status, depends_on)
-       VALUES ($1, $2, $3, 'null-base re-exec spec', 'd', 'pending', ARRAY['spec_anc_not_done'])`,
+       VALUES ($1, $2, $3, 'null-base re-exec spec', 'd', 'open', ARRAY['spec_anc_not_done'])`,
       [specId, PROJECT, ORG],
     );
     const app = createInternalRunStateWriteRoutes({ pool: runtimePool(), verifier: new AllowAllPeerVerifier() });
@@ -210,11 +210,11 @@ describeDb("plane-split P3 — control-plane autonomy-loop create/intake writes 
     expect(runRow.rows[0]).toMatchObject({ org_id: ORG, status: "queued", speculative_base: null });
     expect(runRow.rows[0]?.percolation_pending?.reexecOf).toBe("spec_anc_not_done");
     // The done-only dependency gate was SKIPPED (present speculative object) — the spec
-    // was still claimed pending→active despite its dependency being absent/not-done.
+    // was still claimed open→in_flight despite its dependency being absent/not-done.
     const specRow = await ownerPool().query<{ status: string }>("SELECT status FROM specs WHERE spec_id = $1", [
       specId,
     ]);
-    expect(specRow.rows[0]?.status).toBe("active");
+    expect(specRow.rows[0]?.status).toBe("in_flight");
   });
 
   // (7) The intake auto-route's provenance stamp: `/internal/set-spec-metadata` runs
@@ -224,7 +224,7 @@ describeDb("plane-split P3 — control-plane autonomy-loop create/intake writes 
     const specId = `${SPEC}_meta`;
     await ownerPool().query(
       `INSERT INTO specs (spec_id, project_id, org_id, title, description, status)
-       VALUES ($1, $2, $3, 'meta spec', 'd', 'pending')`,
+       VALUES ($1, $2, $3, 'meta spec', 'd', 'open')`,
       [specId, PROJECT, ORG],
     );
     const app = createInternalRunStateWriteRoutes({ pool: runtimePool(), verifier: new AllowAllPeerVerifier() });

@@ -7,9 +7,6 @@
     "merged",
     "halted",
     "cancelled",
-    "pending",
-    "active",
-    "done",
     "needs_attention"
   ],
   "type": "string",

@@ -104,11 +104,11 @@ describe("runPlannerLoopWorkflow — review-rework re-entry", () => {
       }) as Parameters<typeof runPlannerLoopScoped>[0],
     );
 
-    // Approved on the second pass → handed-off (not_configured default) → done/ok.
+    // Approved on the second pass → handed-off (not_configured default) → completed/ok.
     expect(result.outcome.kind).toBe("passed");
-    expect(pool.runStatus).toEqual({ status: "done", outcome: "ok" });
-    // The re-entry put the spec back in_flight before the final done.
-    expect(pool.specStatuses).toEqual(["in_flight", "done"]);
+    expect(pool.runStatus).toEqual({ status: "completed", outcome: "ok" });
+    // The re-entry put the spec back in_flight before the final merged.
+    expect(pool.specStatuses).toEqual(["in_flight", "merged"]);
     // The loop re-entered: the planner was invoked a second time, and that
     // second prompt carried the reviewer's changes-requested feedback as the
     // seeded rejection steering (producer "reviewer" → renamed body in prose).
@@ -194,7 +194,7 @@ describe("runPlannerLoopWorkflow — merge-outcome mapping (direct_merge)", () =
     );
 
     expect(result.merge?.outcome).toBe("merged");
-    expect(pool.runStatus).toEqual({ status: "done", outcome: "ok" });
+    expect(pool.runStatus).toEqual({ status: "completed", outcome: "ok" });
     // A direct merge marks the spec merged (not the handed-off "done").
     expect(pool.specStatuses).toEqual(["merged"]);
   });
@@ -376,7 +376,7 @@ describe("runPlannerLoopWorkflow — release cleanup-proof", () => {
     );
 
     expect(result.merge?.outcome).toBe("merged");
-    expect(pool.runStatus).toEqual({ status: "done", outcome: "ok" });
+    expect(pool.runStatus).toEqual({ status: "completed", outcome: "ok" });
 
     const finalized = events.events.find((e) => e.eventType === "release.finalized");
     expect(finalized).toBeDefined();

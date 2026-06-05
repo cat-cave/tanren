@@ -198,16 +198,16 @@ export class RecoveryMemoryPool {
       return { rows: [], rowCount: spec ? 1 : 0 };
     }
     // reopen spec for replan
-    if (t.startsWith("UPDATE specs SET status = 'pending' WHERE spec_id = $1")) {
+    if (t.startsWith("UPDATE specs SET status = 'open' WHERE spec_id = $1")) {
       const spec = this.specs.get(String(params[0]));
-      if (spec && spec.status !== "done" && spec.status !== "merged") spec.status = "pending";
+      if (spec && spec.status !== "merged") spec.status = "open";
       return { rows: [], rowCount: spec ? 1 : 0 };
     }
     // claimPendingSpec
-    if (t.startsWith("UPDATE specs SET status = 'active' WHERE spec_id = $1 AND status = 'pending'")) {
+    if (t.startsWith("UPDATE specs SET status = 'in_flight' WHERE spec_id = $1 AND status = 'open'")) {
       const spec = this.specs.get(String(params[0]));
-      if (spec && spec.status === "pending") {
-        spec.status = "active";
+      if (spec && spec.status === "open") {
+        spec.status = "in_flight";
         return { rows: [{ spec_id: spec.spec_id }], rowCount: 1 };
       }
       return { rows: [], rowCount: 0 };

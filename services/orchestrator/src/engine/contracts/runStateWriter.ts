@@ -153,19 +153,19 @@ export interface SetSpecStatusInput {
    * Optional idempotency guard: when set, the UPDATE applies only when the spec's
    * current status is NOT one of these (`WHERE status <> ALL(...)`). The merge
    * coordinator's `merged` finalize + its conflict reopen carry this so a spec
-   * already in a terminal-good state (`merged`/`done`) is not clobbered —
-   * preserving the in-process guard exactly. Omitted ⇒ an unguarded set (the
-   * workflow's `in_flight` transition, unchanged).
+   * already in the terminal-good `merged` state is not clobbered — preserving the
+   * in-process guard exactly. Omitted ⇒ an unguarded set (the workflow's `in_flight`
+   * transition, unchanged).
    */
   notFromStatuses?: string[];
 }
 
 /**
  * NEVER-STRAND reconciler: the ATOMIC, strand-invariant-guarded `UPDATE specs SET
- * status` the reconciler drives to re-enqueue (`active → pending`) OR escalate
- * (`active → needs_attention`) a CONFIRMED strand. Unlike {@link SetSpecStatusInput}
+ * status` the reconciler drives to re-enqueue (`in_flight → open`) OR escalate
+ * (`in_flight → needs_attention`) a CONFIRMED strand. Unlike {@link SetSpecStatusInput}
  * (guarded only by `status <> ALL(...)`), this re-checks the FULL strand condition
- * INSIDE the same statement — `status='active'` AND no live (`queued`/`running`) run
+ * INSIDE the same statement — `status='in_flight'` AND no live (`queued`/`running`) run
  * AND no active (`queued`/`merging`) merge_queue entry AND no `percolation_pending`
  * marker pointing at a live run — so a concurrent percolation re-exec that created a
  * live run / reclaimed the spec between the reconciler's READ and this FLIP makes the
@@ -175,13 +175,13 @@ export interface SetSpecStatusInput {
 export interface ReconcileStrandedSpecInput {
   specId: string;
   orgId: string;
-  /** The flip target: `pending` (re-enqueue) or `needs_attention` (bounded escalation). */
-  status: "pending" | "needs_attention";
+  /** The flip target: `open` (re-enqueue) or `needs_attention` (bounded escalation). */
+  status: "open" | "needs_attention";
 }
 
 /** The result of the atomic strand flip: whether a row actually moved (false ⇒ a concurrent writer won, no-op). */
 export interface ReconcileStrandedSpecResult {
-  /** True iff the guarded UPDATE matched the still-stranded `active` row (the flip happened). */
+  /** True iff the guarded UPDATE matched the still-stranded `in_flight` row (the flip happened). */
   flipped: boolean;
 }
 
@@ -346,7 +346,7 @@ export interface RunStateWriter extends EventStore {
 
   /**
    * NEVER-STRAND: the ATOMIC strand-invariant-guarded `UPDATE specs SET status`
-   * (`active → pending` re-enqueue / `active → needs_attention` escalation). Returns
+   * (`in_flight → open` re-enqueue / `in_flight → needs_attention` escalation). Returns
    * whether a row moved, so a concurrent re-exec that reclaimed the spec makes the
    * flip a safe no-op (`flipped:false`) instead of a double-run.
    */

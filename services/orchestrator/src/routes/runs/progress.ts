@@ -40,7 +40,6 @@ export const SpecCounts = z
   .object({
     total: z.number().int().nonnegative(),
     merged: z.number().int().nonnegative(),
-    done: z.number().int().nonnegative(),
     active: z.number().int().nonnegative(),
     pending: z.number().int().nonnegative(),
     needsAttention: z.number().int().nonnegative(),
@@ -142,10 +141,10 @@ const IN_FLIGHT_RUN_STATUSES: ReadonlySet<string> = new Set(["running", "queued"
 const BLOCKED_SPEC_STATUSES: ReadonlySet<string> = new Set(["halted", "cancelled", "needs_attention", "blocked"]);
 
 // Active (in-progress) spec statuses.
-const ACTIVE_SPEC_STATUSES: ReadonlySet<string> = new Set(["in_flight", "active", "review"]);
+const ACTIVE_SPEC_STATUSES: ReadonlySet<string> = new Set(["in_flight", "review"]);
 
 // Not-yet-started spec statuses.
-const PENDING_SPEC_STATUSES: ReadonlySet<string> = new Set(["open", "pending"]);
+const PENDING_SPEC_STATUSES: ReadonlySet<string> = new Set(["open"]);
 
 // ---------------------------------------------------------------------------
 // Pipeline stage derivation
@@ -217,7 +216,7 @@ export interface BuildProjectProgressInput {
 export function buildProjectProgress(input: BuildProjectProgressInput): ProjectProgress {
   const counts = bucketSpecCounts(input.specs);
   const total = input.specs.length;
-  const merged = counts.merged + counts.done;
+  const merged = counts.merged;
   const percentComplete = total === 0 ? 0 : Math.round((merged / total) * 100);
   const v1Reached = total > 0 && merged === total;
 
@@ -243,11 +242,10 @@ function lastActivityAt(feed: ReadonlyArray<ProjectFeedItem>): string | null {
 }
 
 function bucketSpecCounts(specs: ReadonlyArray<ProjectSpecRow>): SpecCounts {
-  const counts = { total: specs.length, merged: 0, done: 0, active: 0, pending: 0, needsAttention: 0, other: 0 };
+  const counts = { total: specs.length, merged: 0, active: 0, pending: 0, needsAttention: 0, other: 0 };
   for (const spec of specs) {
     const status = spec.status;
     if (status === "merged") counts.merged += 1;
-    else if (status === "done") counts.done += 1;
     else if (ACTIVE_SPEC_STATUSES.has(status)) counts.active += 1;
     else if (PENDING_SPEC_STATUSES.has(status)) counts.pending += 1;
     else if (BLOCKED_SPEC_STATUSES.has(status)) counts.needsAttention += 1;

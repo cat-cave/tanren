@@ -70,7 +70,7 @@ export const specs = pgTable(
       .array()
       .notNull()
       .default(sql`'{}'::text[]`),
-    status: text("status").notNull().default("pending"),
+    status: text("status").notNull().default("open"),
     // Execution priority (autonomy-engine.md §1b): the DagWalker orders the ready
     // set by this (P0 first … `tbd` last) before the deterministic tiebreak. It
     // originates on a discovery/triage `ProposedSpec` and is persisted at create

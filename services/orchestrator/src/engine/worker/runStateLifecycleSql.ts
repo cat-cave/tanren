@@ -55,16 +55,16 @@ export async function applySetSpecStatus(client: QueryClient, input: SetSpecStat
 }
 
 /**
- * NEVER-STRAND: the ATOMIC, strand-invariant-guarded flip (`active → pending`
- * re-enqueue / `active → needs_attention` escalation). The WHERE clause re-checks the
+ * NEVER-STRAND: the ATOMIC, strand-invariant-guarded flip (`in_flight → open`
+ * re-enqueue / `in_flight → needs_attention` escalation). The WHERE clause re-checks the
  * FULL strand condition IN THE SAME STATEMENT so the read→flip is not a TOCTOU window:
- *   - `status = 'active'` (the spec still occupies a slot as the stranding column — and
+ *   - `status = 'in_flight'` (the spec still occupies a slot as the stranding column — and
  *     the only legal source state for both flip targets), AND
  *   - NO live (`queued`/`running`) run for the spec (condition 2/5), AND
  *   - NO active (`queued`/`merging`) merge_queue entry for any of its runs (condition 3), AND
  *   - NO `percolation_pending` marker whose `reexecRunId` points at a live run (condition 4).
  * If a concurrent percolation re-exec created a live run / reclaimed the spec
- * (`pending → active` via `claimPendingSpec`) between the reconciler's READ and this
+ * (`open → in_flight` via `claimPendingSpec`) between the reconciler's READ and this
  * UPDATE, the guard fails → ZERO rows match → a safe no-op (the reconciler skips
  * emitting / clearing). `RETURNING spec_id` + the row-count is the won/lost signal.
  */
@@ -76,7 +76,7 @@ export async function applyReconcileStrandedSpec(
     `UPDATE specs
         SET status = $2
       WHERE spec_id = $1
-        AND status = 'active'
+        AND status = 'in_flight'
         AND NOT EXISTS (
               SELECT 1 FROM runs r
                WHERE r.spec_id = specs.spec_id AND r.status IN ('queued','running')

@@ -22,7 +22,7 @@ function trial(over: Partial<TrialScorecard> & { runId: string; totalTokens?: nu
     cellId: "cell",
     trialIndex: 0,
     reachedAcceptGreen: null,
-    terminalStatus: "done",
+    terminalStatus: "completed",
     haltReason: null,
     leadTimeSeconds: null,
     activeExecutionSeconds: null,
@@ -94,9 +94,9 @@ describe("deriveCellScorecard — §3.2 median + CI", () => {
 
   it("computes merge-success and accept-green proportions honestly", () => {
     const trials = [
-      trial({ runId: "r1", terminalStatus: "done", reachedAcceptGreen: true }),
+      trial({ runId: "r1", terminalStatus: "completed", reachedAcceptGreen: true }),
       trial({ runId: "r2", terminalStatus: "halted", reachedAcceptGreen: null }),
-      trial({ runId: "r3", terminalStatus: "done", reachedAcceptGreen: false }),
+      trial({ runId: "r3", terminalStatus: "completed", reachedAcceptGreen: false }),
     ];
     const cell = deriveCellScorecard(trials);
     expect(cell.mergeSuccessRate).toBeCloseTo(2 / 3);

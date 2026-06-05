@@ -172,7 +172,7 @@ export class ReviewMergePool {
     if (sql.startsWith("SELECT depends_on FROM specs")) {
       return { rows: [{ depends_on: this.specDependsOn }], rowCount: 1 };
     }
-    if (sql.includes("SELECT spec_id FROM specs") && sql.includes("status IN ('done', 'merged')")) {
+    if (sql.includes("SELECT spec_id FROM specs") && sql.includes("status = 'merged'")) {
       return { rows: this.mergedAncestors.map((spec_id) => ({ spec_id })), rowCount: this.mergedAncestors.length };
     }
     if (sql.includes("FROM runs r") && sql.includes("default_branch")) {

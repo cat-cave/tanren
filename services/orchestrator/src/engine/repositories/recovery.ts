@@ -94,12 +94,10 @@ export const RecoveryStore = {
   },
 
   /**
-   * Reopen the spec (status → 'pending') so the recovery replan can re-claim it,
-   * leaving terminal (`done`/`merged`) specs untouched.
+   * Reopen the spec (status → 'open') so the recovery replan can re-claim it,
+   * leaving the terminal `merged` spec untouched.
    */
   async reopenSpecForReplan(client: QueryClient, specId: string, _actor: ActorRef): Promise<void> {
-    await client.query(`UPDATE specs SET status = 'pending' WHERE spec_id = $1 AND status NOT IN ('done', 'merged')`, [
-      specId,
-    ]);
+    await client.query(`UPDATE specs SET status = 'open' WHERE spec_id = $1 AND status <> 'merged'`, [specId]);
   },
 } as const;

@@ -163,11 +163,11 @@ export class HttpRunStateWriter implements RunStateWriter {
     // INTACT and the walker's benign-skip tolerance applies identically to the
     // in-process path:
     //   - `{ error: "spec_not_runnable", specId, status }` — the EXPECTED
-    //     concurrent-tick race (a spec already past `pending`, the pending→active
+    //     concurrent-tick race (a spec already past `open`, the open→in_flight
     //     idempotency boundary) → SpecNotRunnableError.
     //   - `{ error: "spec_dependencies_blocked", specId, blockedBy }` — the spec's
-    //     dependencies are not yet `done` at enqueue time (the planner saw them
-    //     merged via the lifecycle projection, but the `specs.status='done'` write
+    //     dependencies are not yet `merged` at enqueue time (the planner saw them
+    //     merged via the lifecycle projection, but the `specs.status='merged'` write
     //     was not yet visible to this tx) → SpecDependenciesBlockedError.
     // Any OTHER non-2xx (and any 409 whose body matches NEITHER shape) stays a
     // RunStateWriteTransportError (a genuine infra fault still surfaces loudly).

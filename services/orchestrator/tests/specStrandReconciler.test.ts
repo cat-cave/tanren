@@ -5,7 +5,7 @@
 //     LIVE percolation marker + not merge-queued ⇒ reconcilable; a spec with a queued
 //     run, a merge-queued spec, or a spec whose marker points at a LIVE run ⇒ NOT;
 //     a spec whose marker is on a TERMINAL run ⇒ reconcilable;
-//   - the reconciler flips a confirmed strand to pending + emits dag.spec.unstranded
+//   - the reconciler flips a confirmed strand to open + emits dag.spec.unstranded
 //     + clears the orphaned marker;
 //   - idempotency: a second pass with a now-queued run is a no-op;
 //   - bounded escalation: after the cap is exceeded → needs_attention +
@@ -25,7 +25,7 @@ describe("decideStrand (the pure 5-part strand predicate)", () => {
     const d = decideStrand(
       snapshot({
         specId: "spec_a",
-        status: "active",
+        status: "in_flight",
         runs: [
           { runId: "run_1", status: "cancelled" },
           { runId: "run_2", status: "failed" },
@@ -45,7 +45,7 @@ describe("decideStrand (the pure 5-part strand predicate)", () => {
     const d = decideStrand(
       snapshot({
         specId: "spec_a",
-        status: "active",
+        status: "in_flight",
         runs: [
           { runId: "run_prior", status: "cancelled" },
           // The halted re-exec carries a percolation marker whose re-exec is NOT live.
@@ -85,7 +85,7 @@ describe("decideStrand (the pure 5-part strand predicate)", () => {
       snapshot({
         specId: "spec_a",
         status: "review",
-        runs: [{ runId: "run_done", status: "done" }],
+        runs: [{ runId: "run_done", status: "completed" }],
         hasActiveMergeQueueEntry: true,
       }),
     );
@@ -116,7 +116,7 @@ describe("decideStrand (the pure 5-part strand predicate)", () => {
         runs: [
           {
             runId: "run_dep",
-            status: "done",
+            status: "completed",
             percolationPending: { reexecRunId: "run_dead", reexecRunLive: false },
           },
         ],
@@ -127,15 +127,15 @@ describe("decideStrand (the pure 5-part strand predicate)", () => {
     expect(d.orphanedMarkerRunIds).toEqual(["run_dep"]);
   });
 
-  it("condition 1: a spec that does NOT occupy a slot (merged/done/halted/cancelled/needs_attention) ⇒ NOT reconcilable", () => {
-    for (const status of ["merged", "done", "halted", "cancelled", "needs_attention"]) {
+  it("condition 1: a spec that does NOT occupy a slot (merged/halted/cancelled/needs_attention) ⇒ NOT reconcilable", () => {
+    for (const status of ["merged", "halted", "cancelled", "needs_attention"]) {
       const d = decideStrand(snapshot({ specId: "spec_a", status, runs: [{ runId: "r", status: "cancelled" }] }));
       expect(`${status}:${d.reconcilable}`).toBe(`${status}:false`);
     }
   });
 
   it("condition 5: a slot-occupying spec with ZERO runs (mid-creation) ⇒ NOT reconcilable", () => {
-    const d = decideStrand(snapshot({ specId: "spec_a", status: "active", runs: [] }));
+    const d = decideStrand(snapshot({ specId: "spec_a", status: "in_flight", runs: [] }));
     expect(d.reconcilable).toBe(false);
   });
 });
@@ -147,11 +147,11 @@ describe("classifySpecStatus(needs_attention)", () => {
 });
 
 describe("SpecStrandReconciler (the safety-net coordinator)", () => {
-  it("a confirmed strand → flip to pending + dag.spec.unstranded + orphaned marker cleared", async () => {
+  it("a confirmed strand → flip to open + dag.spec.unstranded + orphaned marker cleared", async () => {
     const readModel = new FixedReadModel([
       snapshot({
         specId: "spec_a",
-        status: "active",
+        status: "in_flight",
         runs: [
           { runId: "run_prior", status: "cancelled" },
           {
@@ -178,7 +178,7 @@ describe("SpecStrandReconciler (the safety-net coordinator)", () => {
 
   it("idempotent: a spec with a now-queued run (already re-enqueued) is a no-op", async () => {
     const readModel = new FixedReadModel([
-      snapshot({ specId: "spec_a", status: "active", runs: [{ runId: "run_new", status: "queued" }] }),
+      snapshot({ specId: "spec_a", status: "in_flight", runs: [{ runId: "run_new", status: "queued" }] }),
     ]);
     const writer = new RecordingWriter();
     const events = new RecordingEmitter();
@@ -196,12 +196,12 @@ describe("SpecStrandReconciler (the safety-net coordinator)", () => {
       snapshot({
         specId: "spec_mq",
         status: "review",
-        runs: [{ runId: "run_done", status: "done" }],
+        runs: [{ runId: "run_done", status: "completed" }],
         hasActiveMergeQueueEntry: true,
       }),
       snapshot({
         specId: "spec_live",
-        status: "active",
+        status: "in_flight",
         runs: [
           {
             runId: "run_dep",
@@ -227,7 +227,7 @@ describe("SpecStrandReconciler (the safety-net coordinator)", () => {
       [
         snapshot({
           specId: "spec_a",
-          status: "active",
+          status: "in_flight",
           runs: [
             { runId: "run_prior", status: "cancelled" },
             {
@@ -266,7 +266,7 @@ describe("SpecStrandReconciler (the safety-net coordinator)", () => {
     // tier; the cap escalation must frame a GENUINE product/scoping decision, never an
     // "an error occurred" report. Assert the surfaced message reads exactly that way.
     const readModel = new FixedReadModel(
-      [snapshot({ specId: "spec_a", status: "active", runs: [{ runId: "r", status: "cancelled" }] })],
+      [snapshot({ specId: "spec_a", status: "in_flight", runs: [{ runId: "r", status: "cancelled" }] })],
       { spec_a: MAX_UNSTRAND_ATTEMPTS },
     );
     const writer = new RecordingWriter();
@@ -286,7 +286,7 @@ describe("SpecStrandReconciler (the safety-net coordinator)", () => {
   it("re-enqueues at most 3 times then escalates (the cap is `>=`, not `>`)", async () => {
     // One BELOW the cap ⇒ still re-enqueues (the 3rd re-enqueue, attempt #3).
     const below = new FixedReadModel(
-      [snapshot({ specId: "spec_a", status: "active", runs: [{ runId: "r", status: "cancelled" }] })],
+      [snapshot({ specId: "spec_a", status: "in_flight", runs: [{ runId: "r", status: "cancelled" }] })],
       { spec_a: MAX_UNSTRAND_ATTEMPTS - 1 },
     );
     const wBelow = new RecordingWriter();
@@ -299,7 +299,7 @@ describe("SpecStrandReconciler (the safety-net coordinator)", () => {
 
     // AT the cap ⇒ escalates (no 4th re-enqueue).
     const at = new FixedReadModel(
-      [snapshot({ specId: "spec_a", status: "active", runs: [{ runId: "r", status: "cancelled" }] })],
+      [snapshot({ specId: "spec_a", status: "in_flight", runs: [{ runId: "r", status: "cancelled" }] })],
       { spec_a: MAX_UNSTRAND_ATTEMPTS },
     );
     const wAt = new RecordingWriter();
@@ -318,7 +318,7 @@ describe("SpecStrandReconciler (the safety-net coordinator)", () => {
     const readModel = new FixedReadModel([
       snapshot({
         specId: "spec_a",
-        status: "active",
+        status: "in_flight",
         runs: [
           { runId: "run_prior", status: "cancelled" },
           {
@@ -346,7 +346,7 @@ describe("SpecStrandReconciler (the safety-net coordinator)", () => {
 
   it("ATOMIC GUARD also protects escalation: a lost race on the needs_attention flip ⇒ no-op", async () => {
     const readModel = new FixedReadModel(
-      [snapshot({ specId: "spec_a", status: "active", runs: [{ runId: "r", status: "cancelled" }] })],
+      [snapshot({ specId: "spec_a", status: "in_flight", runs: [{ runId: "r", status: "cancelled" }] })],
       { spec_a: MAX_UNSTRAND_ATTEMPTS },
     );
     const writer = new RecordingWriter(false);
@@ -384,16 +384,16 @@ function fakeStrandClient(rowCount: number): {
 describe("applyReconcileStrandedSpec (the atomic guarded UPDATE)", () => {
   it("zero rows matched (a concurrent writer won) ⇒ { flipped: false }", async () => {
     const { client, seen } = fakeStrandClient(0);
-    const res = await applyReconcileStrandedSpec(client, { specId: "spec_a", orgId: "org_1", status: "pending" });
+    const res = await applyReconcileStrandedSpec(client, { specId: "spec_a", orgId: "org_1", status: "open" });
     expect(res).toEqual({ flipped: false });
     // The single statement re-checks the FULL strand invariant atomically: still
-    // active, no live run, not merge-queued, no live-re-exec percolation marker.
+    // in_flight, no live run, not merge-queued, no live-re-exec percolation marker.
     expect(seen).toHaveLength(1);
-    expect(seen[0]?.sql).toContain("status = 'active'");
+    expect(seen[0]?.sql).toContain("status = 'in_flight'");
     expect(seen[0]?.sql).toContain("r.status IN ('queued','running')");
     expect(seen[0]?.sql).toContain("mq.status IN ('queued','merging')");
     expect(seen[0]?.sql).toContain("percolation_pending");
-    expect(seen[0]?.params).toEqual(["spec_a", "pending"]);
+    expect(seen[0]?.params).toEqual(["spec_a", "open"]);
   });
 
   it("one row matched (still a strand) ⇒ { flipped: true }", async () => {

@@ -6,8 +6,7 @@
     "halted",
     "completed",
     "failed",
-    "cancelled",
-    "done"
+    "cancelled"
   ],
   "type": "string",
   "x-tanren-schema-id": "tanren.state.runs_status"

@@ -443,7 +443,7 @@ describe("SpecStore SQL + array decoding", () => {
 describe("ActorStore SQL", () => {
   it("selects the actor projection for a single task", async () => {
     const client = new StubClient([
-      { rowCount: 1, rows: [{ task_id: "task_1", agent_kind: "writer_codex", cli: "codex", model: "gpt-5" }] },
+      { rowCount: 1, rows: [{ task_id: "task_1", agent_kind: "writer", cli: "codex", model: "gpt-5" }] },
     ]);
     await ActorStore.getForTask(client, "task_1", systemActor);
     const sql = client.queries[0].sql;

@@ -22,41 +22,41 @@ export function priorityRank(priority: SpecPriority): number {
   return SPEC_PRIORITY_RANK[priority];
 }
 
+// The single, canonical spec-status vocabulary (v21). A spec is `open` (ready to
+// schedule, not yet started), `in_flight` (occupying a DAG slot — claimed or
+// running), `review` (PR open, awaiting merge), or `merged` (the satisfied
+// terminal). `halted`/`cancelled` are terminal-blocked; `needs_attention` is the
+// bounded-escalation terminal. There is NO second `pending/active/done` vocabulary
+// — every producer and consumer speaks THIS one, so `classifySpecStatus` no longer
+// normalizes two enums.
 export const SpecStatus = z.enum([
-  // Phase 2 canonical values
   "open",
   "in_flight",
   "review",
   "merged",
   "halted",
   "cancelled",
-  // Phase 0/1 historical values still present in the database
-  "pending",
-  "active",
-  "done",
   // NEVER-STRAND escalation (the safety-net reconciler): a spec the
   // strand-reconciler re-enqueued more than the bounded number of times is moved
   // to `needs_attention` — a TERMINAL escalation status that frees the DAG slot
   // and blocks ONLY its dependents (never the whole DAG), surfacing a loud,
-  // bounded ask-for-help rather than re-enqueuing forever. (A later PR reuses it
-  // for genuine-conflict escalation.)
+  // bounded ask-for-help rather than re-enqueuing forever. (Also reused for
+  // genuine-conflict escalation.)
   "needs_attention",
 ]);
 export type SpecStatus = z.infer<typeof SpecStatus>;
 
 const allowedSpecTransitions: Record<SpecStatus, ReadonlyArray<SpecStatus>> = {
+  // A fresh spec is `open`; claiming a slot moves it `in_flight`.
   open: ["in_flight"],
-  in_flight: ["review", "halted", "cancelled", "done"],
+  // The strand-reconciler flips `in_flight → open` (re-enqueue) and, on bounded
+  // escalation, `in_flight → needs_attention` (give up loudly). A merge can also
+  // land an in-flight spec directly at `merged` (the native-queue drive path).
+  in_flight: ["review", "merged", "halted", "cancelled", "open", "needs_attention"],
   review: ["merged", "halted"],
   halted: ["in_flight", "cancelled"],
   merged: [],
   cancelled: [],
-  // Legacy transitions kept until callers migrate
-  pending: ["active", "open"],
-  // The strand-reconciler flips `active → pending` (re-enqueue) and, on bounded
-  // escalation, `active → needs_attention` (give up loudly).
-  active: ["done", "halted", "cancelled", "in_flight", "pending", "needs_attention"],
-  done: [],
   // Terminal: a spec surfaced for human attention is not auto-transitioned onward.
   needs_attention: [],
 };

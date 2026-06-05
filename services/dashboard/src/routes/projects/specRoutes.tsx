@@ -144,12 +144,12 @@ function depStatus(
     if (run.needsReview) return "review";
     if (run.status === "running") return "live";
     if (run.outcome !== null && HALTED_OUTCOMES.has(run.outcome)) return "blocked";
-    if (run.status === "completed" || run.status === "succeeded") return "done";
+    if (run.status === "completed") return "done";
     if (run.status === "queued") return "queued";
   }
   const s = spec.status.toLowerCase();
-  if (s === "merged" || s === "done") return "done";
-  if (s === "in_flight" || s === "running" || s === "active") return "live";
+  if (s === "merged") return "done";
+  if (s === "in_flight" || s === "running") return "live";
   if (s === "review") return "review";
   if (s === "blocked" || s === "halted") return "blocked";
   return "queued";

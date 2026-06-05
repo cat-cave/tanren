@@ -145,12 +145,12 @@ describeDb("BenchmarkRunner — runs trials end-to-end under RLS + the accept st
     );
     await ownerPool.query(
       `INSERT INTO specs (spec_id, project_id, org_id, title, description, acceptance_criteria, status, created_at)
-       VALUES ($1, $2, $3, 't', 'd', '[]'::jsonb, 'active', '2026-05-01T00:00:00.000Z')`,
+       VALUES ($1, $2, $3, 't', 'd', '[]'::jsonb, 'in_flight', '2026-05-01T00:00:00.000Z')`,
       [spec, project, org],
     );
     await ownerPool.query(
       `INSERT INTO runs (run_id, spec_id, project_id, org_id, trigger, branch, status, started_at, ended_at)
-       VALUES ($1, $2, $3, $4, 'benchmark', 'tanren/x', 'done', '2026-05-01T00:10:00.000Z', '2026-05-01T00:25:00.000Z')`,
+       VALUES ($1, $2, $3, $4, 'benchmark', 'tanren/x', 'completed', '2026-05-01T00:10:00.000Z', '2026-05-01T00:25:00.000Z')`,
       [runId, spec, project, org],
     );
     // Seed a merge.completed with an EXPLICIT timestamp (the scorecard's lead-time
@@ -172,8 +172,8 @@ describeDb("BenchmarkRunner — runs trials end-to-end under RLS + the accept st
         pool: appPool,
         // INJECT execution: provision a real terminal run instead of a live worker.
         provisionTrial: ({ trialIndex }) => provisionRealRun(ORG_A, trialIndex),
-        // INJECT terminal-await: the seeded runs are already `done` + merged.
-        awaitTerminal: async () => ({ status: "done", outcome: "ok", merged: true }),
+        // INJECT terminal-await: the seeded runs are already `completed` + merged.
+        awaitTerminal: async () => ({ status: "completed", outcome: "ok", merged: true }),
         // The accept step runs the cell's hidden tier over a fake SSH substrate
         // (always exit 0 → passed) and emits the net-new benchmark.accept event
         // through a real org-scoped PgEventStore.

@@ -167,13 +167,13 @@ const CREATE_RUN_BODY = {
 describe("plane-split (autonomy loops) — create-queued-run maps benign per-spec errors to a typed 409", () => {
   it("returns 409 { error: spec_not_runnable, specId, status } when the claim races a concurrent tick", async () => {
     const app = createInternalRunStateWriteRoutes({
-      pool: poolThatThrowsOn(new SpecNotRunnableError("spec_x", "active")),
+      pool: poolThatThrowsOn(new SpecNotRunnableError("spec_x", "in_flight")),
       verifier: new AllowAllPeerVerifier(),
     });
     const response = await post(app, "/internal/create-queued-run", CREATE_RUN_BODY);
     // The benign concurrent-tick race is a TYPED 409, NOT a scary 500.
     expect(response.status).toBe(409);
-    expect(await response.json()).toEqual({ error: "spec_not_runnable", specId: "spec_x", status: "active" });
+    expect(await response.json()).toEqual({ error: "spec_not_runnable", specId: "spec_x", status: "in_flight" });
   });
 
   it("returns 409 { error: spec_dependencies_blocked, specId, blockedBy } when deps are not yet done", async () => {
@@ -291,13 +291,13 @@ describe("plane-split (autonomy loops) — HttpRunStateWriter.createQueuedRun re
   it("throws a reconstructed SpecNotRunnableError (instanceof) on a 409 spec_not_runnable response", async () => {
     const writer = new HttpRunStateWriter(
       "https://control.internal:3110",
-      replyWith(409, JSON.stringify({ error: "spec_not_runnable", specId: "spec_x", status: "active" })),
+      replyWith(409, JSON.stringify({ error: "spec_not_runnable", specId: "spec_x", status: "in_flight" })),
     );
     const promise = writer.createQueuedRun(baseInput);
     // The typed error crosses the wire INTACT — so the walker's in-process
     // concurrent-tick tolerance applies identically to the control-plane path.
     await expect(promise).rejects.toBeInstanceOf(SpecNotRunnableError);
-    await expect(promise).rejects.toMatchObject({ specId: "spec_x", status: "active" });
+    await expect(promise).rejects.toMatchObject({ specId: "spec_x", status: "in_flight" });
     // It is NOT a generic transport error.
     await expect(promise).rejects.not.toBeInstanceOf(RunStateWriteTransportError);
   });

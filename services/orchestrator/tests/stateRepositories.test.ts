@@ -236,10 +236,10 @@ describe("ActorStore", () => {
     const client = new StubClient([
       {
         rowCount: 1,
-        rows: [{ task_id: "task_1", agent_kind: "writer_codex", cli: "codex", model: "gpt-5" }],
+        rows: [{ task_id: "task_1", agent_kind: "writer", cli: "codex", model: "gpt-5" }],
       },
     ]);
     const actor = await ActorStore.getForTask(client, "task_1", systemActor);
-    expect(actor?.agentKind).toBe("writer_codex");
+    expect(actor?.agentKind).toBe("writer");
   });
 });

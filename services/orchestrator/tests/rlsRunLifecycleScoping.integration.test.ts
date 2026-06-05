@@ -207,12 +207,12 @@ describeDb("RLS run lifecycle — a real org-scoped run writes every lifecycle t
     expect(result.kind).toBe("completed");
     expect(result).toMatchObject({ runId: RUN, outcome: "passed" });
 
-    // (2) The run landed done/ok (owner read = RLS-exempt ground truth).
+    // (2) The run landed completed/ok (owner read = RLS-exempt ground truth).
     const run = await ownerPool.query<{ status: string; outcome: string | null; pr_url: string | null }>(
       "SELECT status, outcome, pr_url FROM runs WHERE run_id = $1",
       [RUN],
     );
-    expect(run.rows[0]?.status).toBe("done");
+    expect(run.rows[0]?.status).toBe("completed");
     expect(run.rows[0]?.outcome).toBe("ok");
     expect(run.rows[0]?.pr_url).not.toBeNull();
 
@@ -269,7 +269,7 @@ describeDb("RLS run lifecycle — a real org-scoped run writes every lifecycle t
 
     // - the spec was advanced to its terminal lifecycle status, org-scoped.
     const spec = await ownerPool.query<{ status: string }>("SELECT status FROM specs WHERE spec_id = $1", [SPEC]);
-    expect(["done", "merged"]).toContain(spec.rows[0]?.status);
+    expect(spec.rows[0]?.status).toBe("merged");
   });
 });
 
@@ -293,7 +293,7 @@ async function seedCredentialCompleteRun(owner: Pool): Promise<void> {
   );
   await owner.query(
     `INSERT INTO specs (spec_id, project_id, org_id, title, description, acceptance_criteria, status)
-     VALUES ($1, $2, $3, 'Add status helpers', 'Implement two small helpers.', $4::jsonb, 'active')`,
+     VALUES ($1, $2, $3, 'Add status helpers', 'Implement two small helpers.', $4::jsonb, 'in_flight')`,
     [SPEC, PROJECT, ORG, JSON.stringify(["status.ts exports ok()", "status.ts exports fail()"])],
   );
   await owner.query(

@@ -280,14 +280,12 @@ async function markSpecMerged(pool: pg.Pool, facts: RunFacts, runStateWriter?: R
       specId: facts.specId,
       orgId: facts.orgId,
       status: "merged",
-      notFromStatuses: ["merged", "done"],
+      notFromStatuses: ["merged"],
     });
     return;
   }
   await runWithOrgScope(pool, facts.orgId, async (client) => {
-    await client.query(`UPDATE specs SET status = 'merged' WHERE spec_id = $1 AND status NOT IN ('merged', 'done')`, [
-      facts.specId,
-    ]);
+    await client.query(`UPDATE specs SET status = 'merged' WHERE spec_id = $1 AND status <> 'merged'`, [facts.specId]);
   });
 }
 

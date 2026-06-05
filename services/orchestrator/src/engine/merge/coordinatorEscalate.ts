@@ -95,14 +95,14 @@ export class PgSpecEscalator implements SpecEscalator {
         specId,
         orgId,
         status: "needs_attention",
-        notFromStatuses: ["merged", "done", "needs_attention"],
+        notFromStatuses: ["merged", "needs_attention"],
       });
       return;
     }
     await runWithOrgScope(this.pool, orgId, async (client) => {
       await client.query(
         `UPDATE specs SET status = 'needs_attention'
-           WHERE spec_id = $1 AND status NOT IN ('merged', 'done', 'needs_attention')`,
+           WHERE spec_id = $1 AND status NOT IN ('merged', 'needs_attention')`,
         [specId],
       );
     });

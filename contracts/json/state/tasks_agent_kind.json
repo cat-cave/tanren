@@ -3,12 +3,10 @@
   "enum": [
     "system",
     "operator",
-    "writer_codex",
-    "answerer_codex",
-    "forge_template",
-    "ci_poller",
     "writer",
-    "answerer"
+    "answerer",
+    "forge_template",
+    "ci_poller"
   ],
   "type": "string",
   "x-tanren-schema-id": "tanren.state.tasks_agent_kind"
