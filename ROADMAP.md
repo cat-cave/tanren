@@ -275,3 +275,17 @@ repo, set the project config for the tier, submit a spec, and watch it reach a
 merged PR. The three fixtures used for the live proof are
 `cat-cave/tanren-fixture-{easy,medium,hard}`; the walkthrough + config gotchas are
 in `docs/operator-guide/live-validation-findings.md`.
+
+---
+
+## 7. Beyond apex — dogfooding & the update problem
+
+apex proves the **greenfield** loop. The horizon past it is **Tanren building
+Tanren**: brownfield change against this monorepo, the interactive/UX surface that
+the API-only apex driver can't reach, and the self-update question apex never asks
+(how a running Tanren adopts a merged change to its own code without bricking
+itself). The bridge fixtures (brownfield-apex → UX e2e → self-change), the
+two-loop self-update model, and the deployer-can't-brick-itself rule are designed
+in **`docs/roadmap/dogfooding.md`**. How a team should _drive_ this repo with
+parallel agents (the orchestration discipline behind every PR above) is
+**`docs/playbooks/parallel-orchestration.md`**.

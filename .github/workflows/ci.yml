@@ -12,6 +12,10 @@ jobs:
       contents: read
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+      # Turborepo runs build/typecheck (via `just ci`). Its cache lives in .turbo/;
+      # the cache step below persists it across runs so unchanged packages are
+      # restored, not rebuilt. Telemetry off in CI.
+      TURBO_TELEMETRY_DISABLED: "1"
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
@@ -21,6 +25,23 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y just
       - run: corepack enable
       - run: corepack prepare pnpm@11.1.0 --activate
+      # Resolve the pnpm content-addressable store path so we can cache it (pnpm is
+      # only on PATH after corepack activates it, hence this ordering).
+      - run: echo "PNPM_STORE_PATH=$(pnpm store path --silent)" >> "$GITHUB_ENV"
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.PNPM_STORE_PATH }}
+          key: pnpm-store-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            pnpm-store-${{ runner.os }}-
+      - name: Cache turbo
+        uses: actions/cache@v4
+        with:
+          path: .turbo
+          key: turbo-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            turbo-${{ runner.os }}-
       - run: pnpm install --frozen-lockfile
       - run: just ci
       - run: just smoke
