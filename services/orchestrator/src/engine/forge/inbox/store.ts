@@ -1,4 +1,4 @@
-// P3-0022 candidate-inbox store: the `inbox_sources` + `candidates` (migration
+// candidate-inbox store: the `inbox_sources` + `candidates` (migration
 // 0024) member of the `Repositories` seam. Pure SQL + row mapping; no Forge or
 // GitHub here. The engine (engine.ts) composes this with the connectors + the
 // triage answerer.

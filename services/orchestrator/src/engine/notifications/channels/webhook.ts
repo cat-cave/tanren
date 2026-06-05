@@ -16,7 +16,7 @@ import { resolveWebhookUrl, safeReadText } from "./teams.js";
 // is surfaced as a thrown Error which the dispatcher catches and records as
 // `status='failed'`.
 //
-// Signing (P-INT-6): each target gets a per-target signing secret resolved from
+// Signing: each target gets a per-target signing secret resolved from
 // the secret store at `<signingRefPrefix>/<targetId>` (default
 // `credential/webhook-signing/<targetId>`). When the store holds that secret we
 // HMAC-SHA256 the body and send the digest as `X-Tanren-Signature: sha256=<hex>`

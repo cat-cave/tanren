@@ -1,6 +1,6 @@
-// P-INT-6 webhook HMAC signing/verification — the shared helper both the
+// webhook HMAC signing/verification — the shared helper both the
 // OUTBOUND notification webhook channel and the INBOUND webhook receivers stand
-// on (integration-provisioning.md P-INT-6).
+// on (integration-provisioning.md).
 //
 // Outbound: we sign each webhook body with an HMAC-SHA256 under the target's
 // signing secret and send the digest as `X-Tanren-Signature: sha256=<hex>` plus

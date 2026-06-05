@@ -1,7 +1,7 @@
-// P2A-0019 GitHub-repo tools (`repo.read_file`, `repo.grep`,
+// GitHub-repo tools (`repo.read_file`, `repo.grep`,
 // `repo.read_issue`). v0 reuses the existing FetchGitHubHttpClient and
 // pulls the GitHub App token from the project's `githubCredentialRef`
-// config field (same wiring as P2A-0013 brownfield link).
+// config field (same wiring as brownfield link).
 
 import type pg from "pg";
 import type { ActorContext } from "../../../auth/schemas.js";

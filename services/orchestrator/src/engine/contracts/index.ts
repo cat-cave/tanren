@@ -1,6 +1,6 @@
 export * from "./allocator.js";
 export * from "./costResolver.js";
-// Integration-provisioning foundation (P-INT-0): the IntegrationProvisioner port
+// Integration-provisioning foundation: the IntegrationProvisioner port
 // every provider implements (sentry | slack | deploy.* | …), its registry
 // (`buildIntegrationProvisioner`), and the pure `resolveSmartDefault` helper. No
 // provider impl is wired in this wave — every kind resolves to the hard-throw
@@ -9,11 +9,11 @@ export * from "./integrationProvisioner.js";
 export * from "./internalRpc.js";
 export * from "./jobClaim.js";
 export * from "./jobQueue.js";
-// Plane-split P2: the mTLS channel CONTRACT (transport-light). The Node impl
+// The mTLS channel CONTRACT (transport-light). The Node impl
 // (`mtlsChannelNode.ts`) carries the `node:https`/`node:tls` surface and is
 // imported directly by the server/boot, not re-exported here.
 export * from "./mtlsChannel.js";
-// Plane-split P3: the run-state WRITE seam contract (transport-light). The
+// The run-state WRITE seam contract (transport-light). The
 // Direct/Http impls live under `engine/worker/**` (they carry the store / Node
 // surface), imported directly by the worker/boot — not re-exported here.
 export * from "./runStateWriter.js";

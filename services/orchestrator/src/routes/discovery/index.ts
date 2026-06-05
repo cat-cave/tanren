@@ -1,4 +1,4 @@
-// P3-0014 spec-discovery HTTP routes.
+// spec-discovery HTTP routes.
 //
 //   POST /:orgId/projects/:projectId/discovery/classify
 //     Body: a DiscoveryInsight. Runs the discovery engine's classification
@@ -7,7 +7,7 @@
 //
 //   POST /:orgId/projects/:projectId/discovery/accept
 //     Body: { insight, proposals, placementKind, placementLabel }. Creates the
-//     accepted specs through the existing P2A-0013 path and stamps discovery
+//     accepted specs through the existing path and stamps discovery
 //     provenance onto each spec's metadata. Returns the created spec-ids.
 //
 // The answerer is resolved per-request from the request's org/project via

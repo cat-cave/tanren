@@ -137,7 +137,7 @@ export function simulatedReviewSeam(
   };
 }
 
-// Builds the PRODUCTION default intent-preserving conflict resolver (P2b,
+// Builds the PRODUCTION default intent-preserving conflict resolver (
 // autonomy-engine.md §2b) — the real replacement for `noopConflictResolver` as
 // the `resolveConflict` hook the merge stage calls on a detected conflict. It
 // composes the run's already-resolved merge-stage context (the runner target +
@@ -182,7 +182,7 @@ function defaultConflictResolver(
   // and the hook is invoked. So a run that merges cleanly never constructs it —
   // and `context.routing` (always present in production) is required only on the
   // conflict path, where a missing routing is a genuine misconfiguration to fail
-  // loudly on, not a silent no-op. P2c-2: read the run's percolation marker here so
+  // loudly on, not a silent no-op.: read the run's percolation marker here so
   // a percolation re-execution's conflict is resolved in UPSTREAM-CHANGE mode.
   return async (conflictContext) => {
     const upstreamChange = await readPercolationUpstreamChange(input);

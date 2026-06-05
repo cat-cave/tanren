@@ -1,6 +1,6 @@
 import { type NotificationRouteRow, type NotificationTargetRow, type Severity, severityMeetsFloor } from "./schemas.js";
 
-// P2A-0017 matrix evaluation.
+// matrix evaluation.
 //
 // The matrix is `notification_targets × notification_routes` plus the
 // hi-fi's two-layer model: a `scope = user` target row overrides a
@@ -97,7 +97,7 @@ function isLive(target: NotificationTargetRow, route: NotificationRouteRow, effe
 }
 
 // isWeekendInUtc returns true when `now` falls on Saturday or Sunday in
-// UTC. v0 uses UTC by design; Phase 3 will accept an org timezone (the
+// UTC. v0 uses UTC by design; an org timezone is a later option (the
 // matrix already carries `weekendMute` as a per-target flag so no schema
 // change is needed there).
 export function isWeekendInUtc(now: Date): boolean {

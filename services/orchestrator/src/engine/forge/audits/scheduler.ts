@@ -1,9 +1,9 @@
-// P3-0021 scheduled-audits scheduler. Composes the foundations:
+// scheduled-audits scheduler. Composes the foundations:
 //
 //   runAuditJob(deps, job)
 //     Runs the job's read-only Answerer pass (over the injectable
 //     `AuditPassRunner`), then EMITS each finding into the candidate inbox
-//     (P3-0022) as a candidate. Findings land on a SYSTEM source that
+// as a candidate. Findings land on a SYSTEM source that
 //     auto-routes (`kind: "scheduled_audit"`, `autoRoute: true`), so each
 //     finding is triaged auto_routable and upserted as `auto_routed` with no
 //     manual triage. Finally it stamps the job's `last_run` + findings roll-up.

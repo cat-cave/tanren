@@ -12,9 +12,8 @@ export type RoleId = z.infer<typeof RoleId>;
 export const HealthHint = z.enum(["ok", "warn", "rate_limited", "fail"]);
 export type HealthHint = z.infer<typeof HealthHint>;
 
-// A single fallback step. v0 only emits Codex entries; the schema is stable
-// when Claude, opencode, and other CLIs arrive in Phase 3 so no shape change
-// is required to populate them.
+// A single fallback step. The schema is stable across providers — Codex,
+// Claude, opencode, and other CLIs all populate it with no shape change.
 export const RoutingChainEntry = z
   .object({
     cli: z.string().min(1),
@@ -215,7 +214,7 @@ export type CreditRates = z.infer<typeof CreditRates>;
 // ---- Notification target ref ---------------------------------------------
 
 // References a row in the (future) `notification_targets` table delivered by
-// P2A-0017. Stored as a uuid so the contract is stable before the table
+//. Stored as a uuid so the contract is stable before the table
 // lands; the parser does not look the value up.
 export const NotificationTargetRef = z.string().uuid();
 export type NotificationTargetRef = z.infer<typeof NotificationTargetRef>;
@@ -258,13 +257,13 @@ export type GovernancePosture = z.infer<typeof GovernancePosture>;
 //   - `direct_merge`      — Tanren merges the PR immediately when it is ready
 //                           (audited + reviewed + CI-green), via the GitHub merge
 //                           API. No queue: each ready run merges as it finishes.
-//   - `native_queue`      — Tanren's OWN intelligent merge queue (P2d). A ready run
+//   - `native_queue`      — Tanren's OWN intelligent merge queue. A ready run
 //                           ENTERS the queue instead of merging immediately; the
 //                           native MergeCoordinator then orders ready runs in DAG
 //                           order (ancestor before dependent, priority within a
 //                           layer) and SERIALIZES their merges (one at a time),
-//                           driving the SAME per-run merge path (P2a up-to-date +
-//                           P2b conflict-resolution + P2c-1 retarget). This is the
+//                           driving the SAME per-run merge path (up-to-date +
+//                           conflict-resolution + retarget). This is the
 //                           queue — native, provider-agnostic, intent-preserving.
 //   - `external_reviewer` — stop at ready-for-review; a human merges (no auto-merge).
 //   - `not_configured`    — treated as `external_reviewer` (never auto-merge a repo

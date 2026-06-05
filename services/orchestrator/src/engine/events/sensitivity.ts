@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-// Sensitivity tags drive the redaction layer in P2A-0009. Each payload field
+// Sensitivity tags drive the redaction layer in. Each payload field
 // is registered with a tag, and the redaction serializer consults this map at
 // API/serialization time when an actor's scope determines whether the field
 // is returned raw or redacted. The taxonomy is intentionally small so the

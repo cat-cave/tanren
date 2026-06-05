@@ -1,7 +1,7 @@
-// P3-0015: the provider-backed interview answerer (the real LLM seam).
+// the provider-backed interview answerer (the real LLM seam).
 //
-// Adapts a P3-0012 AnswererAdapter into the `InterviewAnswerer` seam, mirroring
-// P3-0010's `wrapProviderAnswerer`. Each `ask` is one structured provider call
+// Adapts a AnswererAdapter into the `InterviewAnswerer` seam, mirroring
+// the conversation answerer's `wrapProviderAnswerer`. Each `ask` is one structured provider call
 // returning an `InterviewRoundOutput` (the next question + capture delta).
 // Production wires this; tests use the fake/deterministic answerers so no test
 // hits a provider.

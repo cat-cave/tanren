@@ -1,4 +1,4 @@
-// Plane-split P3c: the shared TASK-write routing seam for the workflow stages.
+// the shared TASK-write routing seam for the workflow stages.
 // Mirrors `buildFinalizeRunState`'s pattern — a single helper that runs the
 // structured remote op through the `RunStateWriter` when one is wired
 // (remote-writes on), else the byte-identical in-process `direct` write on the

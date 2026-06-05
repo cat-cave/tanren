@@ -1,15 +1,15 @@
 // The production BatchMergeCoordinator (autonomy-engine.md §2d — speculative
-// batch-check + bisect, the P2d-2 intelligence layer over the P2d-1 native queue).
-// It is a SCHEDULER over the EXISTING per-run merge path (the SAME P2d-1 MergeRunner /
+// batch-check + bisect, the intelligence layer over the native merge queue).
+// It is a SCHEDULER over the EXISTING per-run merge path (the SAME MergeRunner /
 // MergeQueueModel), NOT a second merge implementation — it adds a speculative
 // validation step BEFORE the real merges:
 //
-// Each pass (`coordinate(projectId)`): (1) recover stale claims (P2d-1 lease) + load
+// Each pass (`coordinate(projectId)`): (1) recover stale claims (lease) + load
 // the queue snapshot under RLS; (2) FORM a batch (the DAG-ordered mutually-eligible
 // prefix; capped + logged); (3) BATCH-CHECK the prospective merged state (the
-// BatchChecker reuses the P2c-1 SpeculativeIntegrator + the VcsProvider CI seam),
+// BatchChecker reuses the SpeculativeIntegrator + the VcsProvider CI seam),
 // emitting merge.batch.checking; (4) on PASS → drive the batch's real merges in DAG
-// order via the P2d-1 path (one at a time — serialization holds), emitting
+// order via the native-queue path (one at a time — serialization holds), emitting
 // merge.batch.passed; (5) on FAIL / SPEC-vs-SPEC CONFLICT → BISECT to isolate the single
 // offending PR, DEQUEUE it recoverably (routed to re-execution, NOT dropped), and RE-FORM
 // + RE-CHECK without it so the innocent PRs still merge. A BASE conflict (a single PR dirty
@@ -21,7 +21,7 @@
 // (ancestor-before-dependent) is preserved within + across batches; the culprit's
 // work is preserved (recoverable dequeue, never discarded); no innocent PR is dropped;
 // bisect terminates (each step shrinks the suspect set); a crash mid-batch leaves the
-// queue recoverable (the P2d-1 lease/recovery, reused unchanged).
+// queue recoverable (the native queue's lease/recovery, reused unchanged).
 
 import {
   type BatchCheckVerdict,
@@ -91,7 +91,7 @@ class BatchCheckInfraError extends Error {
   }
 }
 
-/** The batch-level events the coordinator emits (the P2d-2 visibility surface). */
+/** The batch-level events the coordinator emits (the batch-layer visibility surface). */
 export interface BatchMergeEventEmitter {
   /** merge.batch.checking: a batch was formed + is being speculatively integrated + checked. */
   emitChecking(input: {
@@ -139,7 +139,7 @@ export interface BatchMergeCoordinatorDeps {
   /** The batch-level event emitter (merge.batch.*). */
   batchEvents: BatchMergeEventEmitter;
   /**
-   * The NON-BRICKING conflict-escalation seam (§2c), reused VERBATIM from the P2d-1
+   * The NON-BRICKING conflict-escalation seam (§2c), reused VERBATIM from the native queue
    * coordinator: parks a GENUINELY irreconcilable spec at `needs_attention` (frees its
    * slot) when the real drive returns the `needs_attention` outcome. The same helper
    * both paths use, so they can never diverge.
@@ -160,9 +160,9 @@ export interface BatchMergeCoordinatorDeps {
 
 /**
  * The production BatchMergeCoordinator. Adds the speculative batch-check + bisect on
- * top of the P2d-1 one-at-a-time drive. It reloads the queue every pass (DAG state is
+ * top of the native queue's one-at-a-time drive. It reloads the queue every pass (DAG state is
  * the source of truth, never cached). It performs the REAL merges through the SAME
- * P2d-1 runner/model, so the P2d-1 ordering + serialization + lease/recovery guarantees
+ * runner/model, so the native queue's ordering + serialization + lease/recovery guarantees
  * hold unchanged; the only addition is that the batch is PROVEN green as a combined
  * unit before any of it merges, and a bad interaction is isolated to one PR via bisect.
  */
@@ -182,9 +182,9 @@ export class BatchMergeCoordinator implements MergeCoordinator {
   }
 
   async coordinate(projectId: string): Promise<CoordinateResult> {
-    // P2d-1 crash recovery FIRST: a coordinator that died mid-merge left a stale
+    // crash recovery FIRST: a coordinator that died mid-merge left a stale
     // `merging` claim; return it to `queued` (the merge is idempotent) so this pass
-    // re-considers it. The lease (recoverStaleClaims) is the SAME P2d-1 mechanism.
+    // re-considers it. The lease (recoverStaleClaims) is the SAME native-queue mechanism.
     await this.deps.queue.recoverStaleClaims(projectId);
 
     const maxBatchSize = await this.resolveMaxBatchSize(projectId);
@@ -192,7 +192,7 @@ export class BatchMergeCoordinator implements MergeCoordinator {
     const queueDepth = snapshot.entries.length;
 
     // Form the batch from the CURRENT snapshot (a merge already in flight ⇒ empty
-    // batch: the P2d-1 serialization lock dominates and we hold this pass).
+    // batch: the native queue's serialization lock dominates and we hold this pass).
     const formation = formBatch(snapshot, maxBatchSize);
     if (formation.batch.length === 0) {
       const holdReason = snapshot.mergingInFlight
@@ -311,7 +311,7 @@ export class BatchMergeCoordinator implements MergeCoordinator {
         return this.infraHold(projectId, current.batch, bisect.message, queueDepth);
       }
 
-      // Dequeue the culprit to a RECOVERABLE outcome (conflict reason ⇒ routed to the P2b
+      // Dequeue the culprit to a RECOVERABLE outcome (conflict reason ⇒ routed to the
       // re-execution path — the run loop re-enqueues it once it re-gates clean; NEVER dropped).
       await this.deps.queue.markDequeued(bisect.culprit.queueId, "conflict");
       const dequeueMessage = `bisected as the offending PR in a failed batch check: ${failMessage}`;
@@ -442,7 +442,7 @@ export class BatchMergeCoordinator implements MergeCoordinator {
   }
 
   /**
-   * Drive the validated batch's REAL merges in DAG order through the P2d-1 path (the
+   * Drive the validated batch's REAL merges in DAG order through the native-queue path (the
    * SAME runner/model). Each entry is claimed (serialization lock), driven, + settled —
    * one at a time, ancestor before dependent. A merged entry advances; a non-merged
    * real-merge outcome (a reality the speculative check could not see, e.g. the live
@@ -476,7 +476,7 @@ export class BatchMergeCoordinator implements MergeCoordinator {
       // A non-merged real-merge outcome: settle + STOP the batch (no dependent merges
       // ahead of a now-absent ancestor). `settleDriveOutcome` routes `needs_attention`
       // through the NON-BRICKING escalation (park the spec, never re-executed) and a
-      // conflict/blocked/failed through the recoverable dequeue — the SAME P2d-1 policy.
+      // conflict/blocked/failed through the recoverable dequeue — the SAME native-queue policy.
       await settleDriveOutcome(this.deps, projectId, entry, outcome);
       dequeuedSpecId = entry.specId;
       break;
@@ -489,7 +489,7 @@ export class BatchMergeCoordinator implements MergeCoordinator {
     };
   }
 
-  /** Drive ONE entry's real merge through the P2d-1 path; a thrown drive ⇒ recoverable blocked. */
+  /** Drive ONE entry's real merge through the native-queue path; a thrown drive ⇒ recoverable blocked. */
   private async driveOne(projectId: string, entry: MergeQueueEntry): Promise<MergeDriveOutcome> {
     try {
       return await this.deps.runner.driveMerge({ runId: entry.runId, projectId });

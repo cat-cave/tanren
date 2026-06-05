@@ -1,8 +1,8 @@
-// P3-0015 greenfield onboarding: vision-interview engine barrel.
+// greenfield onboarding: vision-interview engine barrel.
 //
 // The multi-round Forge vision interview (round → accumulate capture) and the
 // completion derivation (capture → project + personas/behaviors/milestones/
-// specs via the P2A-0018/0013 paths). The interview route imports `runRound` +
+// specs via the entity-creation paths). The interview route imports `runRound` +
 // `deriveFromCapture` and wires the provider answerer; tests inject a fixture.
 
 export {

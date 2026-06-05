@@ -1,11 +1,11 @@
-// P3-0010: thick-Forge conversation types.
+// thick-Forge conversation types.
 //
 // The conversation engine (engine.ts) reads a thread's prior turns, asks an
 // injectable Answerer to reason over them (optionally invoking READ tools from
-// the P2A-0019 Forge tool surface), and persists the operator + Forge turns.
+// the Forge tool surface), and persists the operator + Forge turns.
 //
 // `ForgeConversationAnswerer` is the seam that makes the LLM call mockable:
-// the real implementation wraps a provider Answerer (P3-0012 Claude/Codex);
+// the real implementation wraps a provider Answerer (Claude/Codex);
 // tests inject a deterministic fake so no test ever hits a provider. The
 // answerer never executes tools itself — it RETURNS the read-tool calls it
 // wants, the engine runs them (through the authz'd tool layer), feeds the
@@ -17,7 +17,7 @@ import type { ForgeTurnRow } from "../schemas.js";
 
 // A single read-tool invocation the answerer requested. Only the read family
 // is honored by the engine; write tools (create_spec / trigger_run / …) are
-// deferred (see engine.ts) — the answerer must not drive them in P3-0010.
+// deferred (see engine.ts) — the answerer must not drive them in.
 export type ForgeReadToolCall = Extract<
   ForgeToolCall,
   {

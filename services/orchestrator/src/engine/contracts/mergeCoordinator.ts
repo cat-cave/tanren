@@ -1,10 +1,10 @@
 // The `MergeCoordinator` seam: Tanren's OWN native intelligent merge queue
-// (autonomy-engine.md §2d — the headline P2d capability). Under the
+// (autonomy-engine.md §2d — the headline capability). Under the
 // `native_queue` merge integration, a ready-to-merge run ENTERS this queue
 // instead of merging immediately; the coordinator then ORDERS ready runs in DAG
 // order (ancestor before dependent, priority within a layer, deterministic
 // tiebreak) and SERIALIZES their merges — one at a time — by driving the EXISTING
-// per-run merge path (P2a up-to-date/rebase + P2b conflict-resolution + P2c-1
+// per-run merge path (up-to-date/rebase + conflict-resolution + retarget
 // retarget-to-default_branch → merge). It is NOT a second merge implementation; it
 // is a SCHEDULER over the existing merge stage, mirroring how the DagWalker is a
 // scheduler over the existing run executor.
@@ -43,7 +43,7 @@ export type MergeDriveOutcome =
   // `needs_attention` status — which FREES its merge slot so the rest of the DAG keeps
   // moving (it blocks ONLY its dependents, never the whole graph), is dequeued with
   // reason `needs_attention`, and is NEVER re-queued. Distinct from the RECOVERABLE
-  // `conflict` (which routes back through the P2b re-execution path) and the infra
+  // `conflict` (which routes back through the re-execution path) and the infra
   // `failed` (a terminal merge-stage failure, not a deliberate ask-for-help). There is
   // NO producer of this outcome yet — the drive resolver still returns the recoverable
   // `conflict`; this vocabulary lets the later resolver simply RETURN this kind.
@@ -62,7 +62,7 @@ export type MergeDriveOutcome =
  * recoverable (a re-ready run re-enqueues a fresh entry); `failed` is terminal;
  * `superseded` retires the entry of a run a fresh percolation re-execution replaced
  * (the prior run is no longer a live candidate — NOT a real conflict, so it is not
- * routed back through the P2b re-execution path); `needs_attention` is the LOUD
+ * routed back through the re-execution path); `needs_attention` is the LOUD
  * TERMINAL escalation — a GENUINELY irreconcilable spec parked at `needs_attention`
  * (frees its slot, NEVER re-queued, distinct from recoverable `conflict`). Mirrors the
  * DB CHECK on `merge_queue.dequeue_reason`.
@@ -140,7 +140,7 @@ export interface MergeSelection {
  *      genuinely merged (in `mergedSpecIds`) OR is not itself a queued entry's spec
  *      (an external/already-handled dependency). An entry with an ancestor that is
  *      STILL QUEUED is held (it would merge a dependent before its ancestor) and
- *      surfaced in `blockedByDependency`. This is the invariant that makes P2c-1's
+ *      surfaced in `blockedByDependency`. This is the invariant that makes the merge-hold's
  *      ordered merge real: A merges, THEN B, THEN C — never a dependent first.
  *   3. PRIORITY + TIEBREAK — among eligible entries, pick the one that sorts first
  *      by priority (P0 → tbd), then `orderKey`, then `specId` (total determinism).
@@ -189,7 +189,7 @@ export function selectNextMerge(snapshot: MergeQueueSnapshot): MergeSelection {
  * the runs it actually holds, and the merge stage's own speculative-hold gate is
  * the backstop that no unmerged ancestor code reaches `main`.
  *
- * Exported so the P2d-2 batch former reuses the EXACT SAME eligibility rule (a
+ * Exported so the batch former reuses the EXACT SAME eligibility rule (a
  * batch is a set of mutually-eligible entries — never a second, divergent notion of
  * "ready").
  */
@@ -199,7 +199,7 @@ export function isEligible(entry: MergeQueueEntry, mergedSpecIds: Set<string>, q
 
 /**
  * DAG layer is enforced by eligibility; within it, priority then a stable tiebreak.
- * Exported so the P2d-2 batch former orders a batch the SAME way the single-merge
+ * Exported so the batch former orders a batch the SAME way the single-merge
  * selection does (so a batch's merge order == the order the one-at-a-time path would
  * have used).
  */
@@ -297,8 +297,8 @@ export interface MergeQueueModel {
 /**
  * Drives ONE queued run's merge through the EXISTING per-run merge path (NOT a
  * second merge impl). Production wires this to `mergeForRun` in its `native_queue`
- * DRIVE mode — which runs the SAME directMerge logic (P2a up-to-date/rebase + P2b
- * conflict-resolution + P2c-1 retarget). Tests inject a fake. Returns the drive
+ * DRIVE mode — which runs the SAME directMerge logic (up-to-date/rebase + conflict-resolution
+ * conflict-resolution + retarget). Tests inject a fake. Returns the drive
  * outcome the coordinator maps to a queue-state transition + event.
  */
 export interface MergeRunner {

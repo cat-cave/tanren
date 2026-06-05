@@ -2,7 +2,7 @@
 // batch-check; the no-Actions delivery model). It assembles the PROSPECTIVE MERGED
 // STATE for a batch of queued entries — `default_branch + each entry's PR branch`
 // speculatively merged in DAG order onto an EPHEMERAL batch-integration ref (reuse
-// the P2c-1 `VcsProvider.buildIntegrationBranch`) — then runs the NATIVE GATE against
+// the `VcsProvider.buildIntegrationBranch`) — then runs the NATIVE GATE against
 // that ref: a fresh short-lived runner clones the integration ref, installs deps, and
 // runs the repo's `pre_merge` gate tiers over SSH (exit codes only). There is NO forge
 // check-run poll — the verdict is Tanren's own gate. It NEVER touches `default_branch`;

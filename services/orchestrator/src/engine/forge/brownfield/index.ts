@@ -1,4 +1,4 @@
-// P3-0016 brownfield onboarding (full track) engine barrel.
+// brownfield onboarding (full track) engine barrel.
 //
 // Recon (read-only Answerer) → config-injection PR → DAG seed → governance.
 // Every seam is injectable/mockable; nothing here adds a migration.

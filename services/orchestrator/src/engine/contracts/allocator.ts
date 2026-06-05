@@ -98,7 +98,7 @@ export interface AllocationRequest {
    */
   vaultRefs?: string[];
   /**
-   * Optional run labels used by the allocator router (P3-0027) to pick an
+   * Optional run labels used by the allocator router to pick an
    * allocator kind and apply its pool policy. Allocators that do not route on
    * labels ignore this field. Absent / empty means "use the default kind".
    */

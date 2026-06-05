@@ -12,7 +12,7 @@ interface RedactEventRowsInput {
   rawView: boolean;
 }
 
-// redactEventRows applies the P2A-0009 redaction layer to event rows at read
+// redactEventRows applies the redaction layer to event rows at read
 // time. Raw payloads stay in the events table; this serializer hides sensitive
 // fields based on the actor's scope. When rawView is true and the actor has an
 // elevated scope, a redaction.raw_access audit event is emitted per row that

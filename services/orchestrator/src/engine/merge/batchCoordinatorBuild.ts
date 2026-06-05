@@ -1,12 +1,12 @@
-// The production assembly of the P2d-2 BatchMergeCoordinator (autonomy-engine.md §2d
+// The production assembly of the BatchMergeCoordinator (autonomy-engine.md §2d
 // — speculative batch-check + bisect), wired from the merge-coordinator subscriber.
 // It is the native-queue DRIVER: it forms a batch, proves the prospective merged
 // state (`default_branch + batch PRs`) green as a COMBINED unit (the PgBatchChecker:
-// speculative integration via P2c-1 + the VcsProvider branch-CI seam), then drives
-// the SAME P2d-1 per-run merges in DAG order — a bad interaction is bisected to ONE
+// speculative integration + the VcsProvider branch-CI seam), then drives
+// the SAME per-run merges in DAG order — a bad interaction is bisected to ONE
 // PR (recoverable dequeue → re-execution) rather than stalling the batch.
 //
-// It REUSES the P2d-1 pieces verbatim — the SAME PgMergeQueueModel (queue + lease),
+// It REUSES the native-queue pieces verbatim — the SAME PgMergeQueueModel (queue + lease),
 // the SAME PgMergeRunner over `buildDriveMerge` (the real per-run merge path), the
 // SAME PgMergeQueueEventEmitter (advanced / dequeued) — and ADDS the PgBatchChecker +
 // PgBatchMergeEventEmitter (merge.batch.*). The max batch size is resolved per-project
@@ -29,7 +29,7 @@ import { PgMergeQueueModel, PgMergeRunner } from "./coordinatorPg.js";
 const BATCH_GATE_TIMEOUT_MS = 600_000;
 
 /**
- * Resolve a project's configured `maxBatchSize` (the P2d-2 batch cap) under the system
+ * Resolve a project's configured `maxBatchSize` (the batch cap) under the system
  * scope — the single config source of truth. Falls back to the schema default if the
  * project/config cannot be read (never a hard error in the coordinator hot path).
  */
@@ -47,7 +47,7 @@ async function resolveMaxBatchSize(pool: pg.Pool, projectId: string): Promise<nu
   }
 }
 
-/** Assemble the production P2d-2 BatchMergeCoordinator (the native-queue driver). */
+/** Assemble the production BatchMergeCoordinator (the native-queue driver). */
 export function buildBatchMergeCoordinator(deps: BuildMergeCoordinatorDeps): MergeCoordinator {
   return new BatchMergeCoordinator({
     queue: new PgMergeQueueModel(deps.pool),
@@ -70,7 +70,7 @@ export function buildBatchMergeCoordinator(deps: BuildMergeCoordinatorDeps): Mer
     events: new PgMergeQueueEventEmitter(deps.pool, deps.runStateWriter),
     batchEvents: new PgBatchMergeEventEmitter(deps.pool, deps.runStateWriter),
     // The §2c non-bricking conflict escalator (parks an irreconcilable spec at
-    // needs_attention) — REUSED verbatim from P2d-1, plane-split-safe via the writer.
+    // needs_attention) — REUSED verbatim from the native queue, plane-split-safe via the writer.
     escalator: new PgSpecEscalator(deps.pool, deps.runStateWriter),
     resolveMaxBatchSize: (projectId) => resolveMaxBatchSize(deps.pool, projectId),
   });

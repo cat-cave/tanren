@@ -1,4 +1,4 @@
-// P3-0015: capture merge + key helpers.
+// capture merge + key helpers.
 //
 // Each interview round returns a capture DELTA; the engine merges it into the
 // running capture monotonically (lists only grow, de-duped by a natural key).

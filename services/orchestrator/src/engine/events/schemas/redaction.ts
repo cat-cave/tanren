@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-// redaction.raw_access is the audit-trail event the P2A-0009 redaction layer
+// redaction.raw_access is the audit-trail event the redaction layer
 // emits when an elevated-scope actor (org:admin or platform:admin) requests
 // raw payload values via an explicit raw-view opt-in. The presence of one of
 // these rows is the operator-facing proof that a privileged read happened.

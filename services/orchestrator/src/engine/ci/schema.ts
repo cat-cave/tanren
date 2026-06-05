@@ -1,17 +1,17 @@
 import { z } from "zod";
 
 // Versioned Zod schema for `tanren-ci.yml` — the repo-sourced tiered CI
-// contract. This file is the single source of truth that BOTH GitHub Actions
-// and the in-loop gate read so the same shell steps run in both places. This
-// module is the contract + parser ONLY: it never executes any step (the in-loop
-// gate stage that runs the steps lives under workflow/gate/).
+// contract. Tanren's native in-loop gate is the sole CI authority (Action-less
+// delivery): it reads this contract and runs the declared shell steps over SSH.
+// This module is the contract + parser ONLY — it never executes a step (the gate
+// stage that runs the steps lives under workflow/gate/).
 
 // ---- Lifecycle points -----------------------------------------------------
 
 // The points in a run's lifecycle at which a tier may be invoked. A tier is
 // mapped to one or more of these via the `when` policy below. Declarative so
-// both the CI poller (GitHub Actions side) and the in-loop gate can ask
-// "which tiers run at this point?" without hard-coding tier names.
+// the in-loop gate can ask "which tiers run at this point?" without
+// hard-coding tier names.
 export const CiWhen = z.enum(["per_iteration", "pre_audit", "pre_merge"]);
 export type CiWhen = z.infer<typeof CiWhen>;
 
@@ -32,7 +32,7 @@ export type CiStep = z.infer<typeof CiStep>;
 
 // ---- Bootstrap -------------------------------------------------------------
 
-// Optional install/bootstrap command run before any tier. P3-0006 workspace
+// Optional install/bootstrap command run before any tier. workspace
 // bootstrap reads this to provision dependencies (e.g. `pnpm install`).
 export const CiBootstrap = z
   .object({

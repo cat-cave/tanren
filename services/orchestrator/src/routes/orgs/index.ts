@@ -1,7 +1,7 @@
-// P2A-0013: org-scoped CRUD routes. Org list/read/config-update.
+// org-scoped CRUD routes. Org list/read/config-update.
 // Authorization: every route requires the actor to be a member of the
 // addressed org (or `platform:admin`). Org config uses the typed
-// `OrgConfigV1` shape from P2A-0006.
+// `OrgConfigV1` shape from.
 
 import { runWithSystemScope } from "@tanren/db";
 import { Hono } from "hono";
@@ -25,7 +25,7 @@ export { actorCanAccessOrg, actorIsOrgAdmin } from "./access.js";
 export { createGithubConnectRoutes } from "./github.js";
 
 /**
- * P3-0017: resolve the injectable GitHub port the audit gate opens its PR with,
+ * resolve the injectable GitHub port the audit gate opens its PR with,
  * for a given org + target. `undefined` means "no client available" — the route
  * then refuses to apply a gated write rather than silently bypassing the gate.
  * The factory is async + per-request so the App token is freshly minted.
@@ -37,7 +37,7 @@ export type ConfigGateGithubFactory = (
 
 interface OrgRoutesOptions {
   pool: pg.Pool;
-  /** P3-0017 audit-gate GitHub port factory; omitted in pure config tests. */
+  /** audit-gate GitHub port factory; omitted in pure config tests. */
   configGateGithub?: ConfigGateGithubFactory;
 }
 
@@ -142,7 +142,7 @@ export function createOrgRoutes(options: OrgRoutesOptions) {
     }
     const prevConfig = migrateOrgConfig(current.rows[0].config);
 
-    // P3-0017: when the gate is ON and this is a Bucket-B write, do NOT apply —
+    // when the gate is ON and this is a Bucket-B write, do NOT apply —
     // open a PR in the tanren-config repo and report the gated outcome instead.
     let gated: Awaited<ReturnType<typeof gatedConfigWrite>>;
     try {

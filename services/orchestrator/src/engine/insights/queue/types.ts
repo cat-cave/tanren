@@ -1,6 +1,5 @@
-// P2e-1 queue/stack statistics types (autonomy-engine.md §2d Mergify parity,
-// item 3: "Queue / stack statistics"). These surface what Mergify's queue
-// dashboard did — depth over time, time-in-queue, batch pass-rate, bisect /
+// queue/stack statistics types (autonomy-engine.md §2d). These surface what a
+// managed merge-queue dashboard would — depth over time, time-in-queue, batch pass-rate, bisect /
 // culprit counts, stack depth — derived purely from the native queue's OWN
 // events. Language-neutral + schema-validated; pure compute, no write path.
 

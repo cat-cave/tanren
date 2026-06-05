@@ -1,4 +1,4 @@
-// P2A-0019: Forge thread store. Threads are scoped to org / project / run
+// Forge thread store. Threads are scoped to org / project / run
 // and are the parent for an ordered append-only sequence of turns. The
 // store is intentionally thin — the heavier per-turn logic (redaction on
 // read, schema validation on append) lives in `turns.ts`.

@@ -4,7 +4,7 @@ import type { IdentityClaims, IdentityOrgClaim, IdentityProviderId } from "./sch
 
 /**
  * Generic OIDC provider (Authentik first). Implements the IdentityProvider
- * contract used by P2A-0003's auth handshake against any standards-compliant
+ * contract used by the auth handshake against any standards-compliant
  * OpenID Connect identity provider:
  *
  *   1. authorize URL is built from the discovery `authorization_endpoint`;

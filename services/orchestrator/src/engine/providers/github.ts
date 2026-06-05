@@ -47,7 +47,7 @@ export interface GitHubPullRequestChecks {
   checkRuns: GitHubCheckRun[];
   statuses: GitHubCommitStatus[];
   /**
-   * P3-0028 required-check awareness: the branch-protection required status
+   * required-check awareness: the branch-protection required status
    * check contexts for the PR's base branch, or `undefined` when the base
    * branch has no protection (or it could not be read). A run only passes when
    * every required context is green; when this is `undefined` the loop falls
@@ -63,7 +63,7 @@ export interface EnsureDraftPullRequestInput {
   baseBranch: string;
   title: string;
   body?: string;
-  /** P3-0003: re-mint token + retry once on a 401. */
+  /** re-mint token + retry once on a 401. */
   refreshToken?: () => Promise<string>;
 }
 
@@ -77,7 +77,7 @@ export interface GitHubHttpRequest {
   token: string;
   body?: unknown;
   /**
-   * P3-0003: optional token-supplier. When provided and the request returns
+   * optional token-supplier. When provided and the request returns
    * 401 (e.g. an installation token expired/was revoked between mint and use),
    * the client re-mints once via `refreshToken()` and retries the request a
    * single time with the fresh token. Static-token callers omit this.
@@ -101,7 +101,7 @@ export interface GitHubHttpResponse {
   status: number;
   body: unknown;
   /**
-   * P3-0028: rate-limit signal lifted from the response headers. Present when
+   * rate-limit signal lifted from the response headers. Present when
    * GitHub reports a `Retry-After` (seconds) or an exhausted primary rate-limit
    * window (`X-RateLimit-Remaining: 0` + `X-RateLimit-Reset` epoch seconds).
    */
@@ -169,13 +169,13 @@ export class FetchGitHubHttpClient implements GitHubHttpClient {
         }
         throw error;
       }
-      // 401 with a token supplier: re-mint once and retry (P3-0003 behavior).
+      // 401 with a token supplier: re-mint once and retry (behavior).
       if (response.status === 401 && input.refreshToken !== undefined && !refreshed) {
         refreshed = true;
         token = await input.refreshToken();
         continue;
       }
-      // P3-0028: rate-limited — honor Retry-After / X-RateLimit-Reset, back off,
+      // rate-limited — honor Retry-After / X-RateLimit-Reset, back off,
       // and retry up to the configured ceiling rather than hammering GitHub.
       if (response.retryAfterMs !== undefined && attempt < this.maxRateLimitRetries) {
         await this.sleep(response.retryAfterMs);
@@ -257,7 +257,7 @@ export class GitHubStatusService {
   }
 
   /**
-   * P2d-2 (autonomy-engine.md §2d — speculative batch-check): read the CI/check
+   * autonomy-engine.md §2d — speculative batch-check: read the CI/check
    * status of an arbitrary BRANCH ref (not a PR) — used to batch-check the prospective
    * merged state on the ephemeral speculative-integration branch. Resolves the
    * branch's HEAD SHA, then reads the SAME check-runs + commit-status endpoints
@@ -344,7 +344,7 @@ export class GitHubStatusService {
   }
 
   /**
-   * P3-0028: read the branch-protection required status check contexts for a base
+   * read the branch-protection required status check contexts for a base
    * branch. `undefined` ONLY for a 404 — GitHub's signal the branch has NO protection
    * (legitimately "no required gating"; callers fall back to all-observed-green).
    * No-silent-fallback: any OTHER non-200 is a genuine ERROR, not "no gating" — a 403

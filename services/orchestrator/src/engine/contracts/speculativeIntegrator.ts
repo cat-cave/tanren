@@ -5,28 +5,28 @@
 // DAG order. The seam owns resolving each ancestor's PR/run branch, the repo +
 // VCS credentials, and driving `VcsProvider.buildIntegrationBranch`; it returns
 // the integration branch ref (the dynamic base) OR a structured ANCESTOR-VS-
-// ANCESTOR conflict so the walker can route that pair to the P2b resolver (the
+// ANCESTOR conflict so the walker can route that pair to the conflict resolver (the
 // conflict surfaces HERE, early, on the integration branch — not against the
 // innocent dependent). The walker stays a pure scheduler; the VCS work lives
 // behind this seam (the pg/VcsProvider impl is in `engine/dag/speculativeIntegrator.ts`).
 //
 // Change-percolation (re-integrating an upstream change down a live chain) is
-// OUT of scope here — that is P2c-2. This seam only builds the branch a dependent
-// STARTS on; re-gating against reality at real merge time reuses the P2a path.
+// OUT of scope here — that is change-percolation. This seam only builds the branch a dependent
+// STARTS on; re-gating against reality at real merge time reuses the up-to-date path.
 
 /**
  * The result of building a dependent's speculative integration branch. On
  * `integrated`, `integrationBranch` is the dynamic base the dependent's run is
  * created against. On `conflict`, two of the dependent's ancestors conflict WITH
  * EACH OTHER — `conflictBetween` names the pair so the walker routes it to the
- * P2b resolver and the dependent is HELD this tick (it cannot base on a broken
+ * resolver and the dependent is HELD this tick (it cannot base on a broken
  * integration); the walker retries once the pair is reconciled/merged.
  */
 export interface IntegrationOutcome {
   outcome: "integrated" | "conflict";
   integrationBranch: string;
   /**
-   * P2c-2 (change-percolation): the head SHA each merged ancestor was integrated
+   * change-percolation: the head SHA each merged ancestor was integrated
    * AT, keyed by ancestor spec id. The walker records this on the dependent's
    * speculative run as the divergence key; a later ancestor advance past the
    * recorded SHA is what the change-percolation detect keys off.

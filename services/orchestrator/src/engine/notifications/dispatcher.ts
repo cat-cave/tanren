@@ -21,7 +21,7 @@ import {
   severityMeetsFloor,
 } from "./schemas.js";
 
-// P2A-0017 dispatcher.
+// dispatcher.
 //
 // Flow per event:
 //   1. Resolve the event's effective severity (default-map + verdict
@@ -30,10 +30,10 @@ import {
 //   2. Load applicable matrix context (targets + routes for this event,
 //      scoped to the org). The dispatcher is given an `orgId` per event —
 //      `null` events skip notifications entirely.
-//   3. Evaluate the matrix (P2A-0017 matrix.ts).
+//   3. Evaluate the matrix (matrix.ts).
 //   4. For each match:
 //        a. Apply weekend mute if target.weekendMute && weekend.
-//        b. Redact the payload through P2A-0009 against a `system-actor`
+//        b. Redact the payload through the redaction layer against a `system-actor`
 //           that holds only `project:member`. Channels (especially the
 //           future slack/webhook adapters) MUST NOT receive raw bytes —
 //           the safest scope is "project:member" so even `redacted`

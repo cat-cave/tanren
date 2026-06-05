@@ -1,5 +1,5 @@
 // The production MergeCoordinator (autonomy-engine.md §2d — the native intelligent
-// merge queue, the headline P2d capability). A per-project SCHEDULER over the
+// merge queue, the headline capability). A per-project SCHEDULER over the
 // EXISTING per-run merge path: it orders ready-to-merge runs in DAG order
 // (ancestor before dependent, priority within a layer) and SERIALIZES their merges
 // (one at a time) by driving `mergeForRun` in its `native_queue` DRIVE mode — it
@@ -48,7 +48,7 @@ const MAX_INFRA_HOLD_ATTEMPTS = 5;
 /**
  * Drives ONE queued run's merge through the existing per-run merge path. The
  * worker boot supplies this as a closure over `mergeForRun` in `native_queue`
- * DRIVE mode (the SAME directMerge logic — P2a/P2b/P2c-1) so this module does not
+ * DRIVE mode (the SAME directMerge logic — up-to-date/conflict-resolution/retarget) so this module does not
  * import the heavy run-loop seam graph. Tests inject a fake runner directly.
  */
 export type DriveMergeForQueuedRun = (input: { runId: string; projectId: string }) => Promise<MergeDriveOutcome>;

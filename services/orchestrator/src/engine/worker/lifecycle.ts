@@ -1,4 +1,4 @@
-// P3-0001 / plane-split P1: the run-worker lifecycle helpers — `startRunWorker`
+// The run-worker lifecycle helpers — `startRunWorker`
 // (build + start the worker and its co-located reaper, install graceful-drain
 // signal handlers) and the `runWorkerEnabled()` flag gate.
 //
@@ -39,7 +39,7 @@ export interface StartRunWorkerInput {
   // credential reads behind a per-run child token.
   credentialScoping?: RunCredentialScoping;
   vcsProvider: VcsProvider;
-  // P2a (Part 2): shared App installation-token minter (cache lives here),
+  // Part 2: shared App installation-token minter (cache lives here),
   // threaded to the workflow so the App-first clone reuses it. Optional — the
   // provider mints a per-call minter when absent.
   githubAppMinter?: GithubAppTokenMinter;
@@ -50,12 +50,12 @@ export interface StartRunWorkerInput {
   // spend-rate change is config, not a redeploy. The future DagWalker reads the
   // same per-project/org ceiling and throttles BELOW it on live signals.
   concurrency: number;
-  // Plane-split P2: how the worker CLAIMS. Omit for the direct DB-CAS over a
+  // How the worker CLAIMS. Omit for the direct DB-CAS over a
   // `PgJobQueue` (the in-process / single-process path); the cross-process
   // `worker` container passes an `HttpJobClaimClient` that claims over the mTLS
   // control-plane endpoint.
   claimClient?: JobClaimClient;
-  // Plane-split P3: how the worker WRITES the run's tenant state. Omit (the
+  // How the worker WRITES the run's tenant state. Omit (the
   // DEFAULT) for today's in-process org-scoped DB writes; the cross-process
   // `worker` container passes an `HttpRunStateWriter` (under
   // TANREN_DATA_PLANE_REMOTE_WRITES=1) that routes writes through the
@@ -106,8 +106,8 @@ export function startRunWorker(input: StartRunWorkerInput): StartedRunWorker {
     { concurrency: input.concurrency, notifyListener, ...input.options },
   );
   worker.start();
-  // P3-0028: a co-located reaper recovers leases dropped by crashed workers.
-  // Plane-split P3b: the reaper's dead-letter `events` append is the one worker
+  // a co-located reaper recovers leases dropped by crashed workers.
+  // the reaper's dead-letter `events` append is the one worker
   // event-write OUTSIDE the run executor, so when remote-writes is on it must
   // ALSO route through the control plane — otherwise the de-privileged
   // `tanren_dataplane` role (which has NO `events` grant) would be denied the

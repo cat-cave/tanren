@@ -1,4 +1,4 @@
-// The injectable HTTP transport the deploy provisioners run over (P-INT-4). A
+// The injectable HTTP transport the deploy provisioners run over. A
 // thin `request` seam so the Vercel/Fly provisioners are unit-tested against a
 // SCRIPTED fake (no real Vercel/Fly calls in CI) while production wires the real
 // `fetch`-backed transport. Mirrors the injectable-client shape the cloud

@@ -1,4 +1,4 @@
-// P3-0015: the vision-interview prompt builder.
+// the vision-interview prompt builder.
 //
 // Renders the per-round prompt handed to a provider Answerer. It states the
 // goal (a multi-round product vision interview that accumulates a structured

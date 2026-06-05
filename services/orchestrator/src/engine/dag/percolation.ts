@@ -262,7 +262,7 @@ export class PercolatingCoordinator implements ChangePercolationCoordinator {
         // later pass once its gate+checker+auditor terminate. Not absorbed here.
         result.reexecuting.push(dependent.specId);
       } else {
-        // held: an ancestor-vs-ancestor conflict on the rebuild (routed to P2b);
+        // held: an ancestor-vs-ancestor conflict on the rebuild (routed to the conflict resolver);
         // the dependent is untouched + retried next notification.
         result.held.push(dependent.specId);
       }

@@ -1,16 +1,15 @@
-// Plane-split P3: the RUN-STATE WRITE seam between the data plane (worker) and
-// the control plane (orchestrator). P2 moved only the job CLAIM behind the mTLS
-// control-plane endpoint; P3 moves the worker's run-state WRITES — event-append,
-// cost-record insert, and run finalize (failed/halted/done) — behind the same
-// authenticated channel so a compromised data-plane runner can no longer write
-// the control DB directly.
+// The RUN-STATE WRITE seam between the data plane (worker) and
+// the control plane (orchestrator). Beyond the mTLS job-CLAIM, this routes the
+// worker's run-state WRITES — event-append, cost-record insert, and run finalize
+// (failed/halted/completed) — behind the same authenticated channel so a
+// compromised data-plane runner can no longer write the control DB directly.
 //
 // The seam is one interface — {@link RunStateWriter} — with two impls:
 //   - `DirectRunStateWriter` performs the SAME org-scoped in-process DB writes
 //     the worker does today (the unchanged `PgEventStore` / `CostRecorder` /
 //     `UPDATE runs` under the worker's per-job org scope). It is the DEFAULT —
 //     lower risk, behavior-identical — so nothing changes unless the remote-write
-//     flag is set. This keeps P3 REVERSIBLE.
+//     flag is set. This keeps the cutover REVERSIBLE.
 //   - `HttpRunStateWriter` POSTs each write to the control-plane `/internal/*`
 //     write endpoints over the mTLS {@link MtlsFetch} channel. The control plane
 //     then performs the EXACT SAME org-scoped write server-side, under ITS DB
@@ -19,7 +18,7 @@
 // WHAT GETS WRITTEN IS IDENTICAL in both impls: same columns/values, same
 // org-scoping, same exactly-once semantics — the only difference is WHERE the
 // statement runs (in the data plane vs. server-side in the control plane). See
-// docs/roadmap/saas-rls-and-plane-split-plan.md (plane-split P3) and R-WAVES.md.
+// docs/roadmap/saas-rls-and-plane-split-plan.md and R-WAVES.md.
 
 import type { AppendEventInput, EventStore } from "../eventStore.js";
 import type { CostRecordContext, RecordedCost } from "../costs/recorder.js";
@@ -56,12 +55,12 @@ export interface FinalizeRunResult {
 }
 
 /**
- * Plane-split P3c — the run/spec/task LIFECYCLE writes the data-plane workflow
+ * The run/spec/task LIFECYCLE writes the data-plane workflow
  * still drives directly today (the non-finalize run transitions, the spec status
  * moves, and the subtask/CI/review/merge task rows). Routing these through the
  * seam lets migration `0035` REVOKE the data plane's remaining write grants on
- * `runs` / `specs` / `tasks` — after P3c the data plane writes those tables ONLY
- * via the control plane (mirroring P3b's events/cost_records).
+ * `runs` / `specs` / `tasks` — after the data plane writes those tables ONLY
+ * via the control plane (mirroring the events/cost_records).
  *
  * Each op carries the run's `orgId` so the control-plane write is org-scoped
  * server-side (the in-process `DirectRunStateWriter` opens the SAME scope). The
@@ -333,7 +332,7 @@ export interface RunStateWriter extends EventStore {
    */
   finalizeRun(input: FinalizeRunInput): Promise<FinalizeRunResult>;
 
-  // --- Plane-split P3c: the run/spec/task lifecycle writes. ---
+  // --- the run/spec/task lifecycle writes. ---
 
   /** The non-finalize `UPDATE runs` (the `running` transition). */
   setRunStatus(input: SetRunStatusInput): Promise<void>;

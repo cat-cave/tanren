@@ -1,4 +1,4 @@
-// P2A-0012: task-row persistence helpers for the planner-feedback loop.
+// task-row persistence helpers for the planner-feedback loop.
 // Subtasks reuse the existing `tasks` table (Option B in the spec): the
 // planner task is the parent and writer/check tasks reference it via
 // `parent_task_id`. The existing `attempt` column carries writer-retry
@@ -19,7 +19,7 @@ type LoopQueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 // SQL/columns/params are unchanged so behavior is identical — `subtaskStages`
 // tests (which hand a bare query-only stub, not a pool) stay green.
 //
-// Plane-split P3c: each helper also takes an optional `writer`. When present
+// each helper also takes an optional `writer`. When present
 // (remote-writes on), the tasks INSERT/UPDATE routes through the control-plane
 // endpoint (the data plane no longer writes `tasks` directly); the persisted row
 // is byte-identical (the server runs the SAME fixed SQL). Absent (the default),

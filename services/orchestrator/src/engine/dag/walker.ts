@@ -59,7 +59,7 @@ export type SpeculationConfigResolver = (projectId: string) => Promise<Speculati
 
 export interface DagWalkerDeps {
   readModel: DagReadModel;
-  /** P2c-1: the per-spec lifecycle projection the speculation threshold reasons over. */
+  /** the per-spec lifecycle projection the speculation threshold reasons over. */
   lifecycleReadModel: DagLifecycleReadModel;
   enqueuer: DagEnqueuer;
   events: DagEventEmitter;
@@ -71,9 +71,9 @@ export interface DagWalkerDeps {
    * `ceilingUsd: undefined` ⇒ unlimited ⇒ behavior byte-identical to today.
    */
   budgetGate: BudgetGate;
-  /** P2c-1: builds a dependent's speculative integration branch (the dynamic base). */
+  /** builds a dependent's speculative integration branch (the dynamic base). */
   integrator: SpeculativeIntegrator;
-  /** P2c-1: resolves the project's speculation threshold + depth cap from config. */
+  /** resolves the project's speculation threshold + depth cap from config. */
   speculationConfig: SpeculationConfigResolver;
   /**
    * The governed concurrency ceiling (autonomy-engine.md §1.4): defaults to the
@@ -94,7 +94,7 @@ export interface DagWalkerDeps {
  * It never holds DAG state in memory across ticks (it reloads every walk), so the
  * DAG rows are always the source of truth. The subscriber drives it on startup +
  * on every relevant notification (incl. ancestor `merge.completed`, which re-walks
- * so a freshly-merged ancestor re-gates its dependents against reality — P2a).
+ * so a freshly-merged ancestor re-gates its dependents against reality —).
  */
 export class EventEmittingDagWalker implements DagWalker {
   private readonly concurrency: ConcurrencyResolver;
@@ -217,7 +217,7 @@ export class EventEmittingDagWalker implements DagWalker {
    * Enqueue one planned spec. A NON-speculative spec (all deps merged) enqueues
    * against `default_branch` and emits dag.spec.enqueued. A SPECULATIVE spec first
    * builds its integration branch; on an ancestor-vs-ancestor conflict it is held
-   * (returns undefined — the conflict pair surfaced for the P2b resolver); else it
+   * (returns undefined — the conflict pair surfaced for the resolver); else it
    * enqueues against the integration branch and emits dag.spec.speculative.
    */
   private async enqueueOne(
@@ -266,7 +266,7 @@ export class EventEmittingDagWalker implements DagWalker {
       projectId,
       specId: enqueue.specId,
       speculativeBase: integration.integrationBranch,
-      // P2c-2: record the per-ancestor head SHA the run integrated against (the
+      // record the per-ancestor head SHA the run integrated against (the
       // change-percolation divergence key); a later ancestor advance is detectable.
       integratedAncestorShas: integration.ancestorHeadShas,
     });

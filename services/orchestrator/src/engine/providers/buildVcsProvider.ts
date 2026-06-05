@@ -1,4 +1,4 @@
-// P2·0: the VcsProvider registry/selector. Mirrors `buildAllocator` /
+// The VcsProvider registry/selector. Mirrors `buildAllocator` /
 // `buildSecretStore`: a pluggable seam selected by KIND, with the REAL GitHub
 // impl as the production default and a HARD-THROW (`UnconfiguredVcsProvider`,
 // like `UnconfiguredAllocator`) for kinds that are not yet implemented — never a

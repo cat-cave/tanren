@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 export const JobKind = z.enum([
-  // Phase 2 canonical values
+  // canonical run-stage values
   "hello",
   "phase1_fixture",
   "phase2_easy",
@@ -10,12 +10,12 @@ export const JobKind = z.enum([
   "recovery_revise",
   "recovery_replan",
   "recovery_rollback",
-  // P3-0005 in-loop deterministic gate-check stage
+  // in-loop deterministic gate-check stage
   "gate",
-  // P3-0008 review→merge completion stages (run AFTER CI passes)
+  // review→merge completion stages (run AFTER CI passes)
   "review",
   "merge",
-  // Phase 0/1 task-kind values that are also enqueued as jobs today
+  // task-kind values that are also enqueued as jobs
   "plan",
   "write",
   "check",
@@ -33,7 +33,7 @@ export const JobStatus = z.enum([
   "done",
   "failed",
   "cancelled",
-  // P3-0028: terminal state for a job whose bounded re-claim budget is
+  // terminal state for a job whose bounded re-claim budget is
   // exhausted. A dead-lettered job is never re-claimed; it surfaces a
   // `job.dead_lettered` lifecycle event for operator triage.
   "dead_letter",
@@ -41,7 +41,7 @@ export const JobStatus = z.enum([
 export type JobStatus = z.infer<typeof JobStatus>;
 
 const allowedJobTransitions: Record<JobStatus, ReadonlyArray<JobStatus>> = {
-  // P3-0028 lease recovery: a reaper requeues an expired `running` job, so
+  // lease recovery: a reaper requeues an expired `running` job, so
   // running → queued is a legal transition (crashed-worker recovery).
   queued: ["claimed", "cancelled", "running"],
   claimed: ["running", "cancelled"],

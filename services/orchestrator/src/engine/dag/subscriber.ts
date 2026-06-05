@@ -27,7 +27,7 @@
 //
 // Reaching `merge.completed` is a strict subset of "run reached terminal" here
 // (a merge finalizes the run + flips the spec to merged), so keying off terminal
-// run status covers both triggers in Phase 1 without parsing event types off the
+// run status covers both triggers without parsing event types off the
 // payload-free channel.
 
 import { DAG_CHANGE_CHANNEL, RUN_ACTIVITY_CHANNEL, type PgNotifyListener, runWithSystemScope } from "@tanren/db";
@@ -54,7 +54,7 @@ export interface DagWalkerSubscriberDeps {
   /** The shared LISTEN connection (the SAME one the SSE source / benchmark use). */
   notifyListener: PgNotifyListener;
   /**
-   * The speculative integrator (P2c-1) the production walker uses to build a
+   * The speculative integrator the production walker uses to build a
    * dependent's dynamic-base integration branch. Required when `walker` is not
    * injected (the production path); a test that injects `walker` omits it.
    */
@@ -66,7 +66,7 @@ export interface DagWalkerSubscriberDeps {
    */
   walker?: DagWalker;
   /**
-   * P2c-2 (change-percolation): the coordinator that, on the SAME notifications,
+   * change-percolation: the coordinator that, on the SAME notifications,
    * detects whether an ancestor changed under an in-flight speculative dependent
    * and percolates the delta down the chain (NOT discard). Optional — when absent
    * the subscriber only walks (a test that asserts walking alone omits it); the
@@ -299,7 +299,7 @@ export class DagWalkerSubscriber {
     do {
       this.reWalkPending.delete(projectId);
       await this.walker.walk(projectId);
-      // P2c-2: after the walk (so any just-enqueued speculative dependent's
+      // after the walk (so any just-enqueued speculative dependent's
       // integrated SHAs are already recorded), detect + percolate ancestor changes
       // into in-flight speculative dependents. A percolation failure is logged,
       // never fatal to the walk loop — the next notification re-detects.

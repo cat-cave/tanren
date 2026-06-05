@@ -144,7 +144,7 @@ export type DagConcurrencySaturatedPayload = z.infer<typeof DagConcurrencySatura
 // reviewer pushes new commits, a P0/P1 finding lands, changes-requested), the
 // walker does NOT throw away the dependent's work — it PERCOLATES the upstream
 // delta down the chain (rebuild the speculative integration with the ancestor's
-// NEW state → re-base → re-gate; a conflict/semantic-break invokes the P2b
+// NEW state → re-base → re-gate; a conflict/semantic-break invokes the conflict
 // intent-preserving resolver in UPSTREAM-CHANGE mode). These events make that live
 // re-integration visible: which ancestor changed, why (severity), and the outcome.
 
@@ -181,7 +181,7 @@ export type DagSpecPercolatingPayload = z.infer<typeof DagSpecPercolatingPayload
 // and the re-gate (gate + checker + auditor) passed against the new base while the
 // dependent's OWN work stayed intact. The new integrated SHA is recorded so a
 // no-op re-trigger does not re-percolate (termination). `viaResolver` is true when
-// the re-base/re-gate surfaced a conflict/semantic-break that the P2b resolver
+// the re-base/re-gate surfaced a conflict/semantic-break that the resolver
 // (upstream-change mode) reconciled before the clean re-gate.
 export const DagSpecPercolatedPayload = z
   .object({
@@ -217,7 +217,7 @@ export type DagSpecPercolationDeferredPayload = z.infer<typeof DagSpecPercolatio
 // dag.spec.percolation_replan: the percolation could NOT reconcile the upstream
 // change with the dependent's work (the resolver returned irreconcilable, or the
 // re-gate failed). The dependent's work is NOT discarded and NOT merged — it is
-// routed BACK TO THE PLANNER with the ancestor's change as new context (the P2b
+// routed BACK TO THE PLANNER with the ancestor's change as new context (the conflict
 // replan path), so the intent stays alive and is re-planned on top of the change.
 export const DagSpecPercolationReplanPayload = z
   .object({

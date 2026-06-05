@@ -277,7 +277,7 @@ export class PgMergeQueueModel implements MergeQueueModel {
 /**
  * The production merge runner: drives ONE queued run's merge through the EXISTING
  * per-run merge path (mergeForRun in `native_queue` DRIVE mode) — NOT a second
- * merge impl. The actual mergeForRun call (with its full P2a/P2b/P2c-1 wiring) is
+ * merge impl. The actual mergeForRun call (with its full up-to-date/conflict-resolution/retarget wiring) is
  * injected as `drive` so this module does not import the heavy run-loop seam graph;
  * the worker boot supplies the same wiring the run loop uses.
  */

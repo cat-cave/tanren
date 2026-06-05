@@ -1,11 +1,11 @@
-// P2A-0019: Forge turn store. Turns are append-only, ordered within a
+// Forge turn store. Turns are append-only, ordered within a
 // thread, and carry a typed `ForgeAnswer` render payload. The append path
-// validates the render against the P2A-0008 schema; readers receive an
+// validates the render against the schema; readers receive an
 // `unknown` they can re-parse if they need exhaustive type safety.
 //
 // Audience scoping: a turn carries a single `audience` value (the minimum
 // scope required to read it). The list/get helpers filter rows the actor's
-// scope cannot reach. This is a coarse-grained complement to P2A-0009 which
+// scope cannot reach. This is a coarse-grained complement to which
 // redacts individual fields inside event payloads — Forge turns rendered
 // for an org-admin audience are simply not visible to project-only members.
 

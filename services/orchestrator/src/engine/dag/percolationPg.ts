@@ -7,7 +7,7 @@
 //     in-flight SPECULATIVE dependents (the build base + the VERIFIED/absorbed SHA
 //     map + the in-flight marker + the dependent's OWN lifecycle) and, per ancestor,
 //     its CURRENT head SHA (via the VcsProvider) + lifecycle severity/verdict (the
-//     P2c-1 lifecycle projection). DAG state is the source of truth: read fresh.
+//     lifecycle projection). DAG state is the source of truth: read fresh.
 //   - PgPercolationEventEmitter: writes the four dag.spec.percolation events through
 //     the single org-scoped event-writer seam (mirrors PgDagEventEmitter).
 
@@ -74,7 +74,7 @@ export interface PgPercolationReadModelDeps {
  * The pg + VcsProvider-backed percolation detect read model. Reads the project's
  * IN-FLIGHT speculative dependents under RLS, and for each resolves its ancestors'
  * CURRENT head SHAs (via the VcsProvider ref read) + lifecycle severities (via the
- * shared P2c-1 lifecycle projection). Read-only: detection NEVER mutates.
+ * shared lifecycle projection). Read-only: detection NEVER mutates.
  */
 export class PgPercolationReadModel implements PercolationReadModel {
   private readonly lifecycle: PgDagLifecycleReadModel;
@@ -86,7 +86,7 @@ export class PgPercolationReadModel implements PercolationReadModel {
     const orgId = await resolveProjectOrg(this.deps.pool, projectId);
     if (orgId === null) return [];
     // The dependent's OWN lifecycle (for settling an in-flight marker) comes from
-    // the shared P2c-1 projection — one snapshot per pass.
+    // the shared projection — one snapshot per pass.
     const lifecycleSnapshot = await this.lifecycle.loadLifecycle(projectId);
     const rows = await runWithOrgScope(this.deps.pool, orgId, async (client) => {
       // The latest run per spec that is either (a) speculative (carries a base + a

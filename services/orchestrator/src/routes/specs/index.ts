@@ -1,4 +1,4 @@
-// P2A-0013: spec CRUD routes scoped by org+project. Run trigger and spec
+// spec CRUD routes scoped by org+project. Run trigger and spec
 // dependency wiring delegate to `engine/workflow/projectSpec.ts`.
 
 import { runWithOrgScope } from "@tanren/db";

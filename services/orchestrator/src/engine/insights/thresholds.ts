@@ -1,5 +1,5 @@
-// P2A-0020 thresholds. Each constant is the documented v0 default. Phase 3
-// makes these per-org-configurable; the contract for that future migration
+// thresholds. Each constant is the documented v0 default. Per-org
+// configurability is a later option; the contract for it
 // is: `Thresholds` becomes a function of `orgId` and the call sites already
 // receive the resolved bag so no compute-function signature changes. See
 // docs/architecture/insights.md.
@@ -16,10 +16,10 @@ export interface InsightThresholds {
   paceAnomalyMultiplier: number;
   paceAnomalyWindowDays: number;
   paceAnomalyMinSamples: number;
-  // review_stall (P3-0020). `stuck` needs no threshold — it is a pure
+  // review_stall. `stuck` needs no threshold — it is a pure
   // graph-reachability check over current spec statuses.
   reviewStallHours: number;
-  // ci_flaky (P2e-1). `flakyMinToggledShas` is the SAFETY bar: a check must show
+  // ci_flaky. `flakyMinToggledShas` is the SAFETY bar: a check must show
   // a pass+fail toggle on at least this many distinct head SHAs to be
   // quarantined (default 1 — a single proven non-determinism). Raising it
   // demands repeated flakes. `flakyWindowDays` bounds the observation lookback.

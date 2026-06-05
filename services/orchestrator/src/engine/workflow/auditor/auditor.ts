@@ -1,5 +1,5 @@
-// P2A-0012: auditor module for the planner-feedback loop. Runs the typed
-// AuditAnswer schema (P2A-0008) after every subtask has passed its checker
+// auditor module for the planner-feedback loop. Runs the typed
+// AuditAnswer schema after every subtask has passed its checker
 // pass, and exposes a `decideAuditorOutcome` helper that maps the
 // `recommendedAction` into the rejection-loop branch the subtask loop takes.
 import { answererOutputSchemaFor, AuditAnswer, type AuditRecommendedAction } from "../../answerers/schemas/index.js";

@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { AuditEnvelope } from "./audit.js";
 
-// P3-0005 in-loop gate-check stage. The gate is the deterministic, exit-code
+// in-loop gate-check stage. The gate is the deterministic, exit-code
 // driven half of the verification split: it runs a tier's shell steps over SSH
 // in the bootstrapped runner workspace and judges pass/fail purely from exit
 // codes — no Answerer, no model. These events narrate that execution so the

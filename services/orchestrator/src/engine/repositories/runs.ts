@@ -69,7 +69,7 @@ function decodeRunRow(raw: RawRunRow): RunRow {
 }
 
 // ---------------------------------------------------------------------------
-// Run-detail / run-list read projections (P2A route loaders).
+// Run-detail / run-list read projections (the route loaders).
 //
 // The run-detail API surface (routes/runs) projects a narrower, route-specific
 // column set than the canonical RunRow (no user_id; the list view joins the

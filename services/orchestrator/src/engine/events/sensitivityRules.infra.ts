@@ -48,7 +48,7 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["result.failure.message", "redacted"],
   ]),
 
-  // workspace (workspace.failed.message → see P-APP-ENV-0 audit in sensitivityRules.ts)
+  // workspace (workspace.failed.message → see audit in sensitivityRules.ts)
   ...rulesFor("workspace.prepared", [
     ["runnerId", "public"],
     ["workspacePath", "public"],
@@ -93,7 +93,7 @@ export const infraSensitivityRules: SensitivityRule[] = [
   // cost / cost-safety — extracted to ./sensitivityRules.cost.ts (500-line cap).
   ...costSensitivityRules,
 
-  // usage monitoring (P2A-cost-monitors) — percent-of-window + token counts are non-sensitive operational telemetry; all public.
+  // usage monitoring — percent-of-window + token counts are non-sensitive operational telemetry; all public.
   ...rulesFor("usage.window.observed", [
     ["provider", "public"],
     ["windows[].slot", "public"],
@@ -179,7 +179,7 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["message", "public"],
   ]),
 
-  // P3-0008 merge stage — PR identifiers + integration mode + prose, all public
+  // merge stage — PR identifiers + integration mode + prose, all public
   ...rulesFor("merge.queued", [
     ["prUrl", "public"],
     ["prNumber", "public"],
@@ -194,7 +194,7 @@ export const infraSensitivityRules: SensitivityRule[] = [
   // AUDIT ENVELOPE on the terminal merge: policy version + initiating actor +
   // approving actor (the human reviewer when a review tier gated it), all public.
   ...auditEnvelopeRulesFor("merge.completed"),
-  // P2d (§2d) native merge queue — PR identifiers + spec id + queue stats + prose,
+  // (§2d) native merge queue — PR identifiers + spec id + queue stats + prose,
   // all public (queue visibility + queue/stack statistics).
   ...rulesFor("merge.queue.advanced", [
     ["prUrl", "public"],
@@ -222,7 +222,7 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["attempts", "public"],
     ["message", "public"],
   ]),
-  // P2d-2 (§2d) speculative batch-check + bisect — batch composition + cap/ceiling stats
+  // (§2d) speculative batch-check + bisect — batch composition + cap/ceiling stats
   // + the integration ref + bisect prose, all public (queue/batch visibility).
   ...rulesFor("merge.batch.checking", [
     ["integration", "public"],
@@ -275,7 +275,7 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["headBranch", "public"],
     ["message", "public"],
   ]),
-  // P2a up-to-date enforcement — PR identifiers + refs + freshness signal, public.
+  // up-to-date enforcement — PR identifiers + refs + freshness signal, public.
   ...rulesFor("merge.behind", [
     ["prUrl", "public"],
     ["prNumber", "public"],
@@ -292,7 +292,7 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["headBranch", "public"],
     ["reGatedCi", "public"],
   ]),
-  // P2c-1 (§2c): a speculative dependent's merge held for unmerged ancestors —
+  // §2c: a speculative dependent's merge held for unmerged ancestors —
   // PR identifiers + the integration ref + ancestor spec ids, all public.
   ...rulesFor("merge.speculative_held", [
     ["prUrl", "public"],
@@ -301,7 +301,7 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["speculativeBase", "public"],
     ["unmergedAncestors[]", "public"],
   ]),
-  // P2c-1 (§2c step 3): the cleared-hold retarget to default_branch + ref cleanup
+  // §2c step 3: the cleared-hold retarget to default_branch + ref cleanup
   // — PR identifiers + branch refs, all public.
   ...rulesFor("merge.retargeted", [
     ["prUrl", "public"],
@@ -316,7 +316,7 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["integration", "public"],
     ["integrationBranch", "public"],
   ]),
-  // P2b intent-preserving conflict resolution — PR identifiers + spec ids +
+  // intent-preserving conflict resolution — PR identifiers + spec ids +
   // refs + the DAG-edge signal + file paths + reasoning prose, all public.
   ...rulesFor("merge.conflict.resolving", [
     ["prUrl", "public"],
@@ -352,14 +352,14 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["reason", "public"],
     ["fromFailedReGate", "public"],
   ]),
-  // P2b replan-routed — spec ids + new planning context + status, all public.
+  // replan-routed — spec ids + new planning context + status, all public.
   ...rulesFor("merge.conflict.replan_routed", [
     ["specId", "public"],
     ["otherSpecId", "public"],
     ["newContext", "public"],
     ["replanStatus", "public"],
   ]),
-  // P3-0023 governance posture block — PR identifiers + posture + external
+  // governance posture block — PR identifiers + posture + external
   // contributor logins (public GitHub handles) + prose, all public.
   ...rulesFor("merge.blocked", [
     ["prUrl", "public"],
@@ -372,7 +372,7 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["reason", "public"],
   ]),
 
-  // notifications + P-INT-2 onboarding (the latter in its own module)
+  // notifications + onboarding (the latter in its own module)
   ...rulesFor("notification.enqueued", [
     ["channel", "public"],
     ["eventName", "public"],

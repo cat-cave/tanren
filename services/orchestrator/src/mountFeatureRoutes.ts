@@ -50,7 +50,7 @@ export interface FeatureRouteDeps {
   pool: pg.Pool;
   secrets: SecretStore;
   githubHttp: GitHubHttpClient;
-  // P2·0: the VcsProvider seam, used by the run/merge-lifecycle routes (the CI
+  // The VcsProvider seam, used by the run/merge-lifecycle routes (the CI
   // webhook fallback). The forge-recon / inbox / config-gate routes keep using
   // `githubHttp` directly — only the run+merge path goes through the provider.
   vcsProvider: VcsProvider;
@@ -161,13 +161,13 @@ export function mountFeatureRoutes(app: Hono<ActorContextEnv>, deps: FeatureRout
     githubAppMinter,
     reconAnswererFactory: forgeAnswerers.recon,
   });
-  // P3-0003: GitHub App install flow; mounts only when configured via env.
+  // GitHub App install flow; mounts only when configured via env.
   // SECURITY (H1): the install/callback handlers write the org's
   // `config.github_app` and self-authorize the request actor against the TARGET
   // org (org-admin), so they run on the org-scoping pool — never the raw pool.
   mountGithubAppInstallFromEnv(app, { pool: scopedPool, secrets, minter: githubAppMinter });
   app.route("/orgs", createForgeRoutes({ pool: scopedPool, secrets, githubHttp }));
-  // P3-0010: thick-Forge LLM conversation endpoint (⌘K chat morph); the answerer
+  // thick-Forge LLM conversation endpoint (⌘K chat morph); the answerer
   // is the real provider conversation answerer, resolved per-request.
   app.route(
     "/orgs",
@@ -178,7 +178,7 @@ export function mountFeatureRoutes(app: Hono<ActorContextEnv>, deps: FeatureRout
       answererFactory: forgeAnswerers.conversation,
     }),
   );
-  // P3-0010 (write-action approval): approve/reject proposed write actions.
+  // write-action approval: approve/reject proposed write actions.
   app.route("/orgs", createForgeProposalRoutes({ pool: scopedPool }));
   // The forge-CI webhook (`/github/webhooks/ci`) is GONE: the native gate is the
   // merge authority (no-Actions delivery model), so there is no forge check-run
@@ -193,13 +193,13 @@ export function mountFeatureRoutes(app: Hono<ActorContextEnv>, deps: FeatureRout
   // The JUnit-upload webhook (`/webhooks/ci/junit`) is GONE: the native gate ingests the
   // runner's JUnit report IN-PROCESS after it runs (no Actions upload step, no HMAC).
   app.route("/orgs", createInsightRoutes({ pool: scopedPool }));
-  // P3-0014: spec discovery — the model DERIVES proposed specs + DAG placement
+  // spec discovery — the model DERIVES proposed specs + DAG placement
   // from the insight; accept → create specs with provenance.
   app.route("/orgs", createDiscoveryRoutes({ pool: scopedPool, answererFactory: forgeAnswerers.discovery }));
-  // P3-0015: greenfield onboarding — Forge vision interview → derived product
+  // greenfield onboarding — Forge vision interview → derived product
   // graph via the existing creation paths; the real provider interview answerer.
   app.route("/orgs", createOnboardingRoutes({ pool: scopedPool, answererFactory: forgeAnswerers.interview }));
-  // P3-0022: candidate inbox — issue sources → Forge triage → discovery accept;
+  // candidate inbox — issue sources → Forge triage → discovery accept;
   // connector reads via the App resolver, the real provider triage answerer.
   app.route(
     "/orgs",
@@ -214,7 +214,7 @@ export function mountFeatureRoutes(app: Hono<ActorContextEnv>, deps: FeatureRout
       ...(deps.publicBaseUrl === undefined ? {} : { publicBaseUrl: deps.publicBaseUrl }),
     }),
   );
-  // P3-0021: scheduled audits — recurring read-only Answerer passes (the audit
+  // scheduled audits — recurring read-only Answerer passes (the audit
   // job library). A run executes the REAL read-only pass (the audit answerer
   // indexes the project's repo READ-ONLY and surfaces findings); each finding is
   // triaged by the real provider answerer and, when auto-routable, COMMITTED INTO
@@ -232,7 +232,7 @@ export function mountFeatureRoutes(app: Hono<ActorContextEnv>, deps: FeatureRout
   // carry their own infra (allocator/ssh/identity/notify) when the boot wired it.
   mountReportRoutes(app, { pool: scopedPool, ...(benchmarkInfra === undefined ? {} : { benchmark: benchmarkInfra }) });
   app.route("/orgs", createNotificationRoutes({ pool: scopedPool }));
-  // P-INT-2: capability-driven onboarding — "enable error tracking / notify /
+  // capability-driven onboarding — "enable error tracking / notify /
   // deploy" resolves the org grant, builds the provisioner with PRODUCTION deps,
   // applies confirm-with-smart-default, persists the artifact (inbox source /
   // notification target / projects.config / secret refs), and emits

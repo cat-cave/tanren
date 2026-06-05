@@ -1,15 +1,15 @@
-// P3-0015 greenfield onboarding: typed contracts for the vision interview.
+// greenfield onboarding: typed contracts for the vision interview.
 //
 // The greenfield "full track" is a multi-round Forge VISION INTERVIEW. Across
 // ~14 rounds Forge asks the operator about their product and accumulates a
 // structured CAPTURE — identity, personas, behaviors, interfaces, design-DNA,
 // architecture, rulesets. On completion the capture is DERIVED into the live
 // product graph: a project's personas/behaviors/milestones/specs, created
-// through the SAME P2A-0018/0013 entity-creation paths so authz + dependency
-// checks are unchanged. The derived DAG then renders via P3-0013.
+// through the SAME entity-creation paths so authz + dependency
+// checks are unchanged. The derived DAG then renders via.
 //
 // The interview itself runs over the SAME injectable answerer seam as the
-// P3-0010 conversation + P3-0014 discovery flows: the real implementation
+// conversation + discovery flows: the real implementation
 // wraps a provider Answerer; tests inject a fake; a deterministic fallback
 // keeps the flow live without provider infra. NOTHING here is persisted — the
 // capture is carried round-to-round on the request (the surface re-submits the
@@ -41,7 +41,7 @@ export const CapturePersona = z
 export type CapturePersona = z.infer<typeof CapturePersona>;
 
 /* eslint-disable unicorn/no-thenable */
-// `then` is BDD Given/When/Then vocabulary (mirrors the P2A-0018 BehaviorRow
+// `then` is BDD Given/When/Then vocabulary (mirrors the BehaviorRow
 // field name); the thenable-object lint does not apply to a schema field.
 export const CaptureBehavior = z
   .object({
@@ -159,8 +159,8 @@ export interface InterviewAnswererContext {
   capture: InterviewCapture;
 }
 
-// The injectable interview answerer — the LLM seam, mirroring P3-0010's
-// `ForgeConversationAnswerer` + P3-0014's `DiscoveryAnswerer`. The real
+// The injectable interview answerer — the LLM seam, mirroring the conversation answerer's
+// `ForgeConversationAnswerer` + the `DiscoveryAnswerer`. The real
 // implementation wraps a provider Answerer; tests inject a fake; the
 // deterministic default keeps the flow live without provider infra.
 export interface InterviewAnswerer {

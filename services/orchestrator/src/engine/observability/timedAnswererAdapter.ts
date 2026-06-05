@@ -1,4 +1,4 @@
-// P3-0029 observability: timing decorator for the Answerer provider boundary.
+// observability: timing decorator for the Answerer provider boundary.
 // Implements AnswererAdapter and delegates to a real adapter, emitting one
 // structured timing record per runAnswerer call. The provider's core logic is
 // NOT rewritten — this only measures latency at the call boundary.

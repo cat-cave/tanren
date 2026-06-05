@@ -1,4 +1,4 @@
-// Single import surface for the P2A-0017 notifications matrix. Wiring
+// Single import surface for the notifications matrix. Wiring
 // (orchestrator startup, route handlers, tests) should import from this
 // barrel rather than reaching into individual files.
 

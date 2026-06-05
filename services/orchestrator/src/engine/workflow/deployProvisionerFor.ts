@@ -3,7 +3,7 @@
 // caller can use `attachRuntimeEnv` / `deploy`. An unknown provider kind fails LOUD
 // — a deployRef pointing at a provider with no deploy provisioner is a
 // misconfiguration, never a silent skip. Used by both the runtime-env attach flow
-// (P-APP-ENV-2) and the deploy-on-merge trigger.
+// and the deploy-on-merge trigger.
 
 import type { DeployProvisioner, DeployProvisionerDeps } from "../provisioners/deployProvisioner.js";
 import { VercelDeployProvisioner, VERCEL_PROVIDER_KIND } from "../provisioners/vercelDeployProvisioner.js";

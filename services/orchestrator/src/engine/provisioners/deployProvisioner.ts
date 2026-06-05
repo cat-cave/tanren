@@ -1,4 +1,4 @@
-// The shared shape of the deploy IntegrationProvisioners (P-INT-4): Vercel + Fly.
+// The shared shape of the deploy IntegrationProvisioners: Vercel + Fly.
 // A deploy provisioner creates the deploy app/project under the org/team grant so
 // the built product can be deployed (unblocks apex's live-preview-deploy). Both
 // providers share the same lifecycle — discover (list existing apps) / provision
@@ -9,7 +9,7 @@
 //
 // SCOPE: this creates the app + captures the deploy ref + preview-URL pattern and
 // leaves a CLEAN SEAM (`envAttachmentRef`) for attaching the app's RUNTIME env
-// vars — that attachment is P-APP-ENV-2 (Plane B), explicitly OUT of scope here.
+// vars — that attachment is the runtime app-env wiring (Plane B), explicitly OUT of scope here.
 //
 // Secret handling: the deploy TOKEN is the org grant's `credentialRef` (already in
 // the SecretStore). `provision`/`bind` mint a per-app, deploy-scoped ALIAS ref
@@ -127,7 +127,7 @@ export interface DeployProviderApi {
   /** Create one app/project under the team. Caller has already checked it is absent. */
   createApp(grant: OrgGrant, token: string, name: string, projectCtx: ProjectContext): Promise<DeployApp>;
   /**
-   * Attach the runtime env VARS onto the deployed app (P-APP-ENV-2): Vercel
+   * Attach the runtime env VARS onto the deployed app: Vercel
    * `POST /v10/projects/{id}/env`, Fly the app-secrets endpoint. Each var's VALUE
    * is sent as the app's environment over the transport — and ONLY there. The
    * provider receives the values; this code never logs/returns them.
@@ -196,7 +196,7 @@ export abstract class DeployProvisioner implements IntegrationProvisioner {
   }
 
   /**
-   * P-APP-ENV-2: attach the runtime env VARS onto an already-deployed app (the
+   * attach the runtime env VARS onto an already-deployed app (the
    * `appId` from the `deployRef`). Resolves the org grant's deploy token and hands
    * the vars to the provider's `setEnvVars`. The VALUES travel ONLY into that
    * request; this method returns nothing and logs/keeps nothing. An empty `vars`
@@ -294,7 +294,7 @@ export abstract class DeployProvisioner implements IntegrationProvisioner {
    * preview-URL pattern), the non-secret projectConfig, and a per-app deploy-token
    * ALIAS ref (a pointer to the org credential, NOT the value). The alias makes the
    * runtime deploy adapter resolve the right scoped token without re-deriving the
-   * org grant. `envAttachmentRef` is the clean seam P-APP-ENV-2 attaches the app's
+   * org grant. `envAttachmentRef` is the clean seam attaches the app's
    * runtime env vars onto — left unpopulated here by design.
    */
   private async artifactFor(grant: OrgGrant, app: DeployApp): Promise<ProvisionedArtifact> {

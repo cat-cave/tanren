@@ -1,4 +1,4 @@
-// P3-0021 scheduled-audits store: the `audit_jobs` (migration 0025) member of
+// scheduled-audits store: the `audit_jobs` (migration 0025) member of
 // the `Repositories` seam. Pure SQL + row mapping; no Answerer or inbox here.
 // The scheduler (scheduler.ts) composes this with the pass runner + the inbox.
 //

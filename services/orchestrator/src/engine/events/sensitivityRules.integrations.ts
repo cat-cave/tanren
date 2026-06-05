@@ -1,7 +1,7 @@
 import type { SensitivityRule } from "./sensitivity.js";
 import { auditEnvelopeRulesFor } from "./sensitivityRules.audit.js";
 
-// P-INT-2 capability-driven onboarding sensitivity rules, split into their own
+// capability-driven onboarding sensitivity rules, split into their own
 // module so `sensitivityRules.infra.ts` stays under the 500-line cap. ALL fields
 // are public: the `integration.provisioned` payload narrates a provision/bind by
 // REFERENCE only — capability/provider/action/mode + the secret-manager ref NAMES

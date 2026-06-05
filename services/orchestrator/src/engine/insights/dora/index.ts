@@ -1,4 +1,4 @@
-// P3-0019 DORA metrics barrel.
+// DORA metrics barrel.
 
 export { DoraMetrics, DoraMetricFigure } from "./types.js";
 export {

@@ -1,8 +1,8 @@
-// P2a: the MergeDispatcher — the per-run merge driver, split out of
+// the MergeDispatcher — the per-run merge driver, split out of
 // mergeDispatch.ts to keep each file under the 500-line architecture cap.
 // `mergeForRun` builds the dispatcher and calls one of its mode methods
 // (handOff / enqueueNative / directMerge / blockByPosture). directMerge runs
-// the P2a up-to-date enforcement (ensureUpToDate) BEFORE the merge: a behind
+// the up-to-date enforcement (ensureUpToDate) BEFORE the merge: a behind
 // branch is rebased + re-gated, a dirty/422 branch is routed to the
 // conflict-resolver hook — never merged stale, never merged broken.
 
@@ -30,7 +30,7 @@ export interface DispatcherDeps {
   pr: { repo: RepoRef; pullNumber: number };
   probe: MergeProbe;
   /**
-   * P2c-1 (§2c cleanup): the ephemeral integration ref to delete AFTER a
+   * §2c cleanup: the ephemeral integration ref to delete AFTER a
    * speculative dependent merges onto `default_branch`. Present only for a
    * speculative run whose hold cleared; absent for a normal run.
    */
@@ -72,7 +72,7 @@ export class MergeDispatcher {
   /**
    * The integration label the directMerge path stamps on its events. `direct_merge`
    * for the immediate-merge mode; `native_queue` when the coordinator DRIVES the
-   * SAME path for a queued head (P2d) — so the events read `native_queue` without a
+   * SAME path for a queued head — so the events read `native_queue` without a
    * second merge implementation. Only these two modes reach directMerge.
    */
   private mergeLabel(): "direct_merge" | "native_queue" {
@@ -80,7 +80,7 @@ export class MergeDispatcher {
   }
 
   /**
-   * P3-0023: a governance posture blocked the merge. Emits the typed
+   * a governance posture blocked the merge. Emits the typed
    * `merge.blocked` event with the posture, mode, and external logins, then
    * leaves the task `running` so the operator-approval / audit recovery surface
    * can pick it up (the block is recoverable, not a hard failure — analogous to
@@ -118,7 +118,7 @@ export class MergeDispatcher {
   }
 
   /**
-   * P2d (native_queue, first pass): ENTER the run into Tanren's native merge queue
+   * native_queue, first pass: ENTER the run into Tanren's native merge queue
    * instead of merging now. Persists the queue entry (idempotent — a re-pass does
    * not double-queue), emits merge.queued exactly once (on creation), and finalizes
    * the run as `queued` (done) so the run loop returns + frees its slot. The native
@@ -158,7 +158,7 @@ export class MergeDispatcher {
       eventType: "merge.queued",
       payload: { ...this.prFields(), integration: this.mergeLabel() },
     });
-    // P2a up-to-date enforcement: BEFORE merging, ensure the PR branch is current
+    // up-to-date enforcement: BEFORE merging, ensure the PR branch is current
     // with its base. A stale branch is rebased + re-gated here; a real conflict is
     // routed to the resolver hook — so we never discover a 405/409 at merge time
     // and never merge broken work.
@@ -184,7 +184,7 @@ export class MergeDispatcher {
           ...this.auditEnvelope(),
         },
       });
-      // P2c-1 (§2c cleanup): the dependent merged onto `default_branch`; delete its
+      // §2c cleanup: the dependent merged onto `default_branch`; delete its
       // ephemeral integration ref. Best-effort — a cleanup failure never undoes the
       // merge (the merge already landed), so it is logged and swallowed.
       await this.cleanupIntegrationBranch();
@@ -208,7 +208,7 @@ export class MergeDispatcher {
   }
 
   /**
-   * P2c-1 (§2c cleanup): delete the ephemeral integration ref after a speculative
+   * §2c cleanup: delete the ephemeral integration ref after a speculative
    * dependent merged onto `default_branch`. No-op for a normal run (no cleanup
    * ref). Best-effort: a delete failure is logged + swallowed — the merge already
    * landed, so cleanup must never turn a successful merge into a failure. Emits
@@ -235,7 +235,7 @@ export class MergeDispatcher {
   }
 
   /**
-   * P2a: ensure the PR branch is up to date with its base before the merge.
+   * ensure the PR branch is up to date with its base before the merge.
    *
    *   clean / blocked / unknown → proceed (the merge API itself gates on
    *       required checks / protection; `unknown` means GitHub has not computed
@@ -341,7 +341,7 @@ export class MergeDispatcher {
   }
 
   /**
-   * P2a: a behind/dirty branch surfaced a real conflict (the `dirty` state or a
+   * a behind/dirty branch surfaced a real conflict (the `dirty` state or a
    * 422 from update-branch). Route it through the SAME conflict-resolver hook as
    * a merge-time conflict; if the resolver resolves it we retry the merge once,
    * otherwise emit the recoverable merge.conflict outcome — never a raw merge.
@@ -373,7 +373,7 @@ export class MergeDispatcher {
   }
 
   /**
-   * Invoke the intent-preserving conflict-resolution hook (P2b). The hook is a
+   * Invoke the intent-preserving conflict-resolution hook. The hook is a
    * REQUIRED merge-stage input — production wires the real
    * `intentPreservingConflictResolver` (built from the run's merge-stage
    * context), tests inject a fake under tests/. There is no noop default: a
@@ -412,7 +412,7 @@ export class MergeDispatcher {
       },
     });
     // A conflict is recoverable, not a hard failure: leave the task running so
-    // the P2B-0008 recovery surface can pick it up.
+    // the recovery surface can pick it up.
     await this.finalize("conflict", { taskOutcome: "pending", taskStatus: "running" });
     return this.result("conflict", { message });
   }

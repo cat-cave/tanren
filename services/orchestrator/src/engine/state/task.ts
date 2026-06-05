@@ -6,7 +6,7 @@ export const TaskKind = z.enum([
   "check",
   "audit",
   "ci",
-  // P3-0008 review→merge completion stages (run AFTER CI passes)
+  // review→merge completion stages (run AFTER CI passes)
   "review",
   "merge",
   "demo",

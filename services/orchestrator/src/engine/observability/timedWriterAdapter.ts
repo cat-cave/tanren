@@ -1,4 +1,4 @@
-// P3-0029 observability: timing decorator for the Writer provider boundary.
+// observability: timing decorator for the Writer provider boundary.
 // Implements WriterAdapter and delegates to a real adapter, emitting one
 // structured timing record per runWriter call. The provider's core logic is
 // NOT rewritten — this only measures latency at the call boundary.

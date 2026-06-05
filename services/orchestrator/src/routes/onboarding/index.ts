@@ -1,4 +1,4 @@
-// P3-0015 greenfield-onboarding HTTP routes (vision interview → derive).
+// greenfield-onboarding HTTP routes (vision interview → derive).
 //
 //   POST /:orgId/onboarding/interview/round
 //     Body: { round, answer, capture }. Runs ONE interview round over the
@@ -9,8 +9,8 @@
 //   POST /:orgId/onboarding/interview/derive
 //     Body: { capture, repoUrl? }. On completion, derives the product graph —
 //     project + personas/behaviors/milestones/specs — through the existing
-//     P2A-0018/0013 creation paths and returns the new project + derived ids.
-//     The DAG is then read back via the existing P3-0013 project-DAG endpoint.
+//     creation paths and returns the new project + derived ids.
+//     The DAG is then read back via the existing project-DAG endpoint.
 //
 // The answerer is resolved per-request from the request's org via
 // `answererFactory(target)` — production wires `buildForgeInterviewAnswererFactory`

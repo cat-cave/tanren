@@ -1,4 +1,4 @@
-// P2A-0013: credential reference CRUD. Values live in Vault (or the in-memory
+// credential reference CRUD. Values live in Vault (or the in-memory
 // SecretStore in tests); the routes only manipulate references and never
 // return secret values. Credential refs are namespaced as
 // `credential/<slug>/<scope>/<ownerId>/<name>`. Org-scoped credentials live

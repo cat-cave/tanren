@@ -113,7 +113,7 @@ function conflictFraming(): string[] {
 }
 
 /**
- * The P2c-2 upstream-change framing header: this is NOT a symmetric collision —
+ * The upstream-change framing header: this is NOT a symmetric collision —
  * an ANCESTOR changed AFTER the DEPENDENT started speculatively, and the
  * ancestor's intentional change must flow INTO the dependent while the dependent's
  * own work stays intact. `decision='resolve'` = the absorbed tree (keep BOTH); an

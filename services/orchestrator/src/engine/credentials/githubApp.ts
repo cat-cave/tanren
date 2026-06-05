@@ -1,4 +1,4 @@
-// P3-0003: GitHub App credential kind. Unlike `github_token` (a single static
+// GitHub App credential kind. Unlike `github_token` (a single static
 // PAT/installation token), a GitHub App credential is the App's identity: its
 // numeric App id plus the RSA private key (PEM) used to sign the short-lived
 // app JWT. Installation tokens are minted on demand from these (see

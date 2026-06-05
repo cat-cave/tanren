@@ -1,4 +1,4 @@
-// P2A-0020 read-through cache for typed workflow insights.
+// read-through cache for typed workflow insights.
 //
 // The cache lives in `workflow_insights`. Rows are "fresh" when
 // `acknowledged_at IS NULL` and `computed_at > NOW() - cacheFreshnessMs`.

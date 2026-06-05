@@ -4,7 +4,7 @@
 // `VcsProvider.buildIntegrationBranch` to assemble the ephemeral integration ref
 // (`tanren/integ/<dependent>`) = `default_branch + each ancestor branch` merged in
 // DAG order. It returns the integration branch (the dependent's dynamic base) or
-// the ancestor-vs-ancestor conflict pair (which the walker routes to the P2b
+// the ancestor-vs-ancestor conflict pair (which the walker routes to the conflict
 // resolver). It NEVER touches `default_branch`; only the ephemeral ref is written.
 //
 // Resolution mirrors the draft-PR context load (publishDraftPullRequestForRun):

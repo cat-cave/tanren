@@ -1,9 +1,9 @@
-// P2A-0020 `retry_hotspot` compute. Detects writer × spec pairs that have
+// `retry_hotspot` compute. Detects writer × spec pairs that have
 // been retried at least `retryHotspotMinAttempts` times within the last
 // `retryHotspotWindowDays` days, citing the most recent rejection reasons
 // from `planner.rerequested` events for that spec.
 //
-// Inputs derive from P2A-0012 (planner-feedback loop): writer tasks land as
+// Inputs derive from the planner-feedback loop: writer tasks land as
 // child rows under a planner task with `parent_task_id = plannerTaskId` and
 // the `attempt` column carries the writer-retry attempt number. We treat
 // distinct writer tasks for the same (specId, cli, model) inside the window

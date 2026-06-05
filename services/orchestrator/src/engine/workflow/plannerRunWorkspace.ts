@@ -2,7 +2,7 @@
 // from plannerRun.ts to keep it under the 500-line architecture cap.
 //
 // It clones the target branch (capturing the clone HEAD), installs deps
-// (P3-0006 bootstrap), and commits the bootstrap-generated tree as ONE synthetic
+// (bootstrap), and commits the bootstrap-generated tree as ONE synthetic
 // commit. The bootstrap commit's sha becomes the writer's diff base, so the
 // checker/auditor and the captured diff see only the writer's real changes —
 // the install artifacts (lockfiles, node_modules) sit below the base. The
@@ -51,7 +51,7 @@ export async function prepareRunWorkspace(
   await seedWorkspaceLocalIgnore({ ssh: input.ssh, target, workspacePath, timeoutMs: input.timeoutMs });
 
   // Command precedence: an explicit input.bootstrapCommand override wins;
-  // otherwise resolve the repo's .tanren/ci.yml `bootstrap.run` (P3-0004); when
+  // otherwise resolve the repo's .tanren/ci.yml `bootstrap.run`; when
   // the repo ships no .tanren/ci.yml the resolver yields undefined and the
   // bootstrap step falls back to its pnpm/npm-detecting DEFAULT_BOOTSTRAP_COMMAND.
   const resolvedBootstrapCommand =
@@ -59,7 +59,7 @@ export async function prepareRunWorkspace(
     (await resolveBootstrapCommand({ ssh: input.ssh, target, workspacePath, timeoutMs: input.timeoutMs }));
   const runBootstrap =
     input.runBootstrap ?? ((stepInput: BootstrapStepInput) => bootstrapWorkspace(stepInput).then(() => {}));
-  // Plane B (P-APP-ENV-0): the building agent runs install/build under the
+  // Plane B: the building agent runs install/build under the
   // project's dev+test app env. The app env is passed SEPARATELY (NOT folded into
   // the command string): `bootstrapWorkspace` builds the `export …;` prelude at
   // the SSH substrate boundary and prepends it to the EXECUTED command only, so

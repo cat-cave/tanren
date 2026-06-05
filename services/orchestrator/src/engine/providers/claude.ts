@@ -9,7 +9,7 @@ import type { AnswererAdapter, TokenUsage, UsageLimitSignal, WriterAdapter, Writ
 import { findOpenRouterGenerationId, foldGenerationId } from "./openRouterGenerationId.js";
 import { captureBaselineSha, captureGitStateAfterWriter } from "./writerGit.js";
 
-// P3-0012: Claude CLI Writer + Answerer adapters. They mirror the Codex adapter
+// Claude CLI Writer + Answerer adapters. They mirror the Codex adapter
 // contracts (same WriterAdapter/AnswererAdapter shapes, same SSH-execution +
 // credential-ref materialization) but invoke the `claude` CLI. The Claude CLI
 // streams JSON events on stdout (`--output-format stream-json`), so token usage

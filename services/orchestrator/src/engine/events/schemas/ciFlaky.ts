@@ -1,7 +1,6 @@
 import { z } from "zod";
 
-// P2e-1 (autonomy-engine.md §2d "Reaching Mergify parity → removing it
-// entirely"): flaky-test detection + auto-quarantine. Tanren already records
+// Flaky-test detection + auto-quarantine (autonomy-engine.md §2d). Tanren records
 // per-run CI observations (ci.passed / ci.failed, each carrying the per-check
 // `checkRuns[]` and the `headSha`). The flaky detector reduces those
 // observations across runs/attempts and flags a CHECK that is DEMONSTRABLY

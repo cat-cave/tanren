@@ -19,10 +19,10 @@
 //   - absence-is-correct: a HARD-THROW default (UnconfiguredAllocator) or an
 //     honest "not wired" audit record (StubChannel records 'stubbed').
 //   - pending: a TEMPORARY exemption whose real replacement is not yet built
-//     (e.g. the audit pass runner → P3). These tighten when the phase lands and
-//     the real default is wired. (P2b retired the noopConflictResolver entries:
+//     (e.g. an unwired audit pass runner). These tighten once the real default
+//     is wired. (retired the noopConflictResolver entries:
 //     the intent-preserving resolver is now the production default.)
-// The OSS quota no-op is intentionally NOT on this list — P1·0 deleted it.
+// The OSS quota no-op is intentionally NOT on this list — it was deleted.
 
 function diagnostic(rule, file, message, line = 1) {
   return { rule, file, line, message };

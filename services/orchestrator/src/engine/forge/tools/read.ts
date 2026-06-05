@@ -1,10 +1,10 @@
-// P2A-0019: read-only Forge tool implementations for the `tanren.*` family.
+// read-only Forge tool implementations for the `tanren.*` family.
 //
 // Each tool mirrors one variant of the `ForgeToolCall` discriminated union
-// in P2A-0008. v0 wraps the existing repository functions (P2A-0005 runs,
-// P2A-0011 cost recorder, P2A-0014 event readers, P2A-0018 entity stores).
-// Event-shaped data passes through the P2A-0009 redaction serializer with
-// rawView=false by default; the dashboard's run-detail surface (P2A-0014)
+// in. v0 wraps the existing repository functions (runs,
+// cost recorder, event readers, entity stores).
+// Event-shaped data passes through the redaction serializer with
+// rawView=false by default; the dashboard's run-detail surface
 // is the elevated-view entry point that emits audit events when an admin
 // opts into rawView. The `repo.*` family lives in `repo.ts`.
 
@@ -92,7 +92,7 @@ export async function tanrenReadRun(
 }
 
 // ---------------------------------------------------------------------------
-// `tanren.read_events` — applies P2A-0009 redaction by default.
+// `tanren.read_events` — applies redaction by default.
 // ---------------------------------------------------------------------------
 
 // The optional fields may arrive as `null` (the OpenAI-strict answerer schema
@@ -261,7 +261,7 @@ export async function tanrenReadBehaviors(
   await assertProjectAccess(db, args.projectId, actor);
   // Behaviors are persona-scoped; we list every persona reachable from the
   // project's org and union the behaviors. Matches what the dashboard
-  // (P2B-0003) needs: "all behaviors my project can reference".
+  // needs: "all behaviors my project can reference".
   const personaIds = await ForgeToolsStore.listProjectPersonaIds(db, args.projectId, systemActor);
   if (personaIds.length === 0) return { behaviors: [] };
   const behaviors = await ForgeToolsStore.listBehaviorsForPersonas(db, personaIds, systemActor);
@@ -279,7 +279,7 @@ export async function tanrenReadMilestones(
 }
 
 // ---------------------------------------------------------------------------
-// `tanren.read_insights` — wraps the P2A-0020 compute-on-read dispatcher.
+// `tanren.read_insights` — wraps the compute-on-read dispatcher.
 // The dashboard's ⌘K palette and the Forge narration generator both call
 // this tool, so a single shared loader keeps the cache hit-rate consistent.
 // ---------------------------------------------------------------------------

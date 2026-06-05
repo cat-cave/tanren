@@ -1,7 +1,7 @@
-// P3-0022 GitHub Issues source connector.
+// GitHub Issues source connector.
 //
 // Reads open issues for a repo through the SAME GitHub plumbing as the rest of
-// P3 — the P3-0003 `resolveGithubToken` (App installation token, static
+// The `resolveGithubToken` (App installation token, static
 // fallback) + the injectable `GitHubHttpClient`. It maps each issue to a raw
 // `IngestedItem` the engine persists as a candidate. Pull requests (which the
 // Issues API also returns) are filtered out.

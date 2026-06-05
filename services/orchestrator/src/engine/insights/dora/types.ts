@@ -1,4 +1,4 @@
-// P3-0019 DORA-like delivery metrics — type definitions.
+// DORA-like delivery metrics — type definitions.
 //
 // The four DORA metrics, REPORTED not targeted, derived from data that runs,
 // tasks, and events already persist (no new collection, no migration):

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * P2A-0016 drift guard: the dashboard's copy of the design tokens CSS must
+ * drift guard: the dashboard's copy of the design tokens CSS must
  * stay byte-identical to the source of truth in `docs/design/tokens/`.
  *
  * Tokens live in `docs/design/tokens/colors_and_type.css`. The dashboard

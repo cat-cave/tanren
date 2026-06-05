@@ -84,7 +84,7 @@ export const TaskFailedPayload = z
   })
   .strict();
 
-// P3-0028 queue hardening. Emitted when a job's bounded re-claim budget is
+// queue hardening. Emitted when a job's bounded re-claim budget is
 // exhausted and the job is moved to the terminal `dead_letter` state instead
 // of being retried forever. `attempts` is the final attempt count that tripped
 // the budget; `maxAttempts` is the configured ceiling. The failure kind/message

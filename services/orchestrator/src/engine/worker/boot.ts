@@ -1,10 +1,10 @@
-// Plane-split P1: shared run-executor worker boot. Builds the same
+// Shared run-executor worker boot. Builds the same
 // pools/secrets/allocator/ssh/github wiring the in-process boot used, seeds the
 // runner identity secret, and starts the worker loop. Used by BOTH the
 // in-process flag path (main.ts, TANREN_RUN_WORKER=1) and the standalone
 // `worker-main.ts` entrypoint (the data-plane container). The worker is now a
 // standalone deployable; this is the single construction site so the two paths
-// can never drift. See docs/roadmap/saas-rls-and-plane-split-plan.md (P1).
+// can never drift. See docs/roadmap/saas-rls-and-plane-split-plan.md.
 
 import { readFile } from "node:fs/promises";
 import { createDbPool } from "@tanren/db";
@@ -49,9 +49,9 @@ export interface BootedRunWorker {
  * Pools mirror the API exactly: the runtime pool is `createDbPool()`
  * (`DATABASE_URL`, the restricted `tanren_app` role under R3b); the BYPASSRLS
  * `tanren_system` pool is resolved lazily by `runWithSystemScope`/the reaper from
- * `TANREN_SYSTEM_DATABASE_URL`. P1 is a process-boundary change ONLY — the worker
- * still claims directly from `job_queue` (DB-CAS, unchanged); P2 moves the claim
- * behind a control-plane API and adds mTLS, P3 de-privileges the data plane.
+ * `TANREN_SYSTEM_DATABASE_URL`. The split is layered: a bare process boundary
+ * (the worker claims directly from `job_queue` via DB-CAS); an mTLS control-plane
+ * claim; and the full data-plane de-privilege — each gated by config.
  *
  * Does NOT run migrations: the control-plane API owns the migrate step (the
  * worker container `depends_on` it), and the in-process flag path already
@@ -62,7 +62,7 @@ export async function bootRunWorker(): Promise<BootedRunWorker> {
   const pool = createDbPool();
   const secrets = buildSecretStore();
   await seedRunnerIdentitySecret(secrets, identitySecretRef);
-  // Plane-split P2: when the control-plane claim endpoint + the data-plane mTLS
+  // When the control-plane claim endpoint + the data-plane mTLS
   // certs are configured, claim over the mTLS endpoint (so this container never
   // touches `job_queue` to claim); else fall back to the direct DB-CAS. The
   // standalone `worker` container sets the endpoint env; the single-process dev
@@ -71,16 +71,16 @@ export async function bootRunWorker(): Promise<BootedRunWorker> {
   console.log(
     claimClient === undefined
       ? "[run-worker] claiming via direct DB-CAS (no control-plane endpoint configured)"
-      : "[run-worker] claiming via the mTLS control-plane endpoint (plane-split P2)",
+      : "[run-worker] claiming via the mTLS control-plane endpoint",
   );
-  // Plane-split P3: when TANREN_DATA_PLANE_REMOTE_WRITES=1 (+ endpoint + certs),
+  // When TANREN_DATA_PLANE_REMOTE_WRITES=1 (+ endpoint + certs),
   // route the worker's run-state WRITES through the control plane over mTLS; else
   // the worker writes the tenant tables directly (the default, reversible).
   const runStateWriter = buildRunStateWriterFromEnv();
   console.log(
     runStateWriter === undefined
       ? "[run-worker] writing run state via direct in-process DB writes (remote-writes off)"
-      : "[run-worker] writing run state via the mTLS control-plane endpoints (plane-split P3)",
+      : "[run-worker] writing run state via the mTLS control-plane endpoints",
   );
   // Concurrency is a GOVERNED CONFIG KNOB, not an env var (autonomy-engine.md
   // §1.4): resolve the worker's slot ceiling from the config surface's
@@ -94,10 +94,10 @@ export async function bootRunWorker(): Promise<BootedRunWorker> {
   const allocator = buildAllocatorFromEnv(pool, secrets);
   const ssh = new TimedCommandSubstrate(new SshCommandSubstrate(secrets));
   const githubHttp = new TimedGitHubHttpClient(new FetchGitHubHttpClient());
-  // P2·0: the run/merge lifecycle routes its VCS/CI ops through the VcsProvider
+  // The run/merge lifecycle routes its VCS/CI ops through the VcsProvider
   // seam (registry default = the real GitHub impl composing `githubHttp`).
   const vcsProvider = buildVcsProvider(githubHttp);
-  // P2a (Part 2): the shared App installation-token minter (cache lives here),
+  // Part 2: the shared App installation-token minter (cache lives here),
   // threaded into the workflow so the App-first CLONE token reuses the same
   // minted/cached installation token as the CI-poll / merge stages.
   const githubAppMinter = new GithubAppTokenMinter({ secrets });
@@ -139,7 +139,7 @@ export async function bootRunWorker(): Promise<BootedRunWorker> {
     ssh,
     githubHttp,
     identitySecretRef,
-    // P2c-1: the DagWalker's speculative integrator builds a dependent's
+    // the DagWalker's speculative integrator builds a dependent's
     // dynamic-base integration branch through the SAME VcsProvider + App minter
     // the run/merge lifecycle uses.
     vcsProvider,

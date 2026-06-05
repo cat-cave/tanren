@@ -1,4 +1,4 @@
-// P-INT-2: the capability → provisioner onboarding engine (orchestrator side).
+// the capability → provisioner onboarding engine (orchestrator side).
 //
 // The onboarding/greenfield/brownfield flow requests a CAPABILITY ("enable error
 // tracking", "notify on Slack", "deploy") for a project — NOT a leaf secret. For

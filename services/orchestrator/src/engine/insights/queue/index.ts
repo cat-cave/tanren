@@ -1,4 +1,4 @@
-// P2e-1 queue/stack statistics barrel (autonomy-engine.md §2d Mergify parity).
+// queue/stack statistics barrel (autonomy-engine.md §2d).
 
 export { QueueStats, QueueDepthPoint } from "./types.js";
 export {

@@ -40,13 +40,13 @@ export interface AutonomyLoopsDeps {
   ssh: CommandSubstrate;
   githubHttp: GitHubHttpClient;
   identitySecretRef: string;
-  /** P2c-1: the VcsProvider the speculative integrator drives to build integration branches. */
+  /** the VcsProvider the speculative integrator drives to build integration branches. */
   vcsProvider: VcsProvider;
-  /** P2c-1: the shared App-token minter the integrator reuses for the integration push. */
+  /** the shared App-token minter the integrator reuses for the integration push. */
   githubAppMinter?: GithubAppTokenMinter;
   /**
    * Plane-split (autonomy loops): the control-plane run-state writer. When present
-   * (remote-writes on, plane-split P3), EVERY tenant write the loops drive — the
+   * (remote-writes on, full de-privilege), EVERY tenant write the loops drive — the
    * DagWalker's run-creation + dag.* events, the merge coordinator's merge-stage
    * writes + spec-status + conflict re-exec, the post-merge watcher's events, and
    * the intake's run/spec creation — routes through the control plane over mTLS
@@ -59,7 +59,7 @@ export interface AutonomyLoopsDeps {
 
 export interface AutonomyLoops {
   dagWalker: DagWalkerSubscriber;
-  /** P2d: the native merge queue coordinator subscriber. */
+  /** the native merge queue coordinator subscriber. */
   mergeCoordinator: MergeCoordinatorSubscriber;
   /** tempering.md dim A: the post-merge-failure → auto-issue watcher subscriber. */
   postMerge: PostMergeSubscriber;
@@ -95,7 +95,7 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
     secrets: deps.secrets,
     ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
   });
-  // P2c-2: the change-percolation coordinator runs on the SAME notifications as
+  // the change-percolation coordinator runs on the SAME notifications as
   // the walker — when an ancestor changes under an in-flight speculative dependent,
   // it percolates the delta down the chain (rebuild → re-base → re-gate) rather
   // than discarding the dependent's work.
@@ -133,7 +133,7 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
   console.log(
     "[run-worker] DagWalker + change-percolation subscriber started (autonomous DAG execution + §2c percolation)",
   );
-  // P2d: the native intelligent merge queue. It reacts on the SAME run-activity bus
+  // the native intelligent merge queue. It reacts on the SAME run-activity bus
   // — a ready `native_queue` run entering the queue, and a merge completing — and
   // merges ONE entry at a time in DAG order (ancestor before dependent), driving the
   // existing per-run merge path. Its own LISTEN connection so it never contends with

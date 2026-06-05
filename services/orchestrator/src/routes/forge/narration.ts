@@ -1,4 +1,4 @@
-// P2A-0019 narration generators, split out of routes/forge/index.ts (which is
+// narration generators, split out of routes/forge/index.ts (which is
 // at the 500-line cap) so the route file stays under it after the RLS R2
 // cohort-4 org-scoping wrapping. The route handlers call these inside a
 // `runWithOrgScope` txn; the generators load typed context from existing
@@ -221,7 +221,7 @@ export async function generateRunDetailTurn(args: GenerateRunDetailArgs) {
   );
 }
 
-// Convert P2A-0020 insights into the NarrationInsight shape expected by the
+// Convert insights into the NarrationInsight shape expected by the
 // v0 narration generator. Actions whose `toolCall` doesn't parse as a known
 // ForgeToolCall (e.g. a future variant added before the schema is updated)
 // are dropped so the narration stays renderable.

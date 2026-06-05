@@ -1,9 +1,9 @@
-// P3-0029 observability: a timing decorator for the GitHub HTTP boundary. It
+// observability: a timing decorator for the GitHub HTTP boundary. It
 // implements GitHubHttpClient and delegates to a real client, emitting one
 // structured timing record per request with the HTTP method, the path
 // TEMPLATE (numeric ids/SHAs collapsed so cardinality stays bounded), the
 // response status, and a `rateLimited` flag for 429s. The token and request
-// body are never logged. Behavior (including the P3-0003 401 re-mint retry) is
+// body are never logged. Behavior (including the GitHub-App 401 re-mint retry) is
 // unchanged — this only measures the round trip.
 import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "../providers/github.js";
 import { consoleTimingSink, timed, type TimingSink } from "./timing.js";

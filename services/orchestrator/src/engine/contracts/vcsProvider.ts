@@ -1,20 +1,18 @@
 // The `VcsProvider` seam (autonomy-engine.md §1.1, §2, §2d, §5): the
-// provider-agnostic surface over the VCS + CI operations the run + merge
-// lifecycle performs directly against a forge today (GitHub now; GitLab/others
-// later). This is a PURE EXTRACTION of the operations the PR-open / CI-poll /
-// review / merge stages already perform — it adds no behavior. The GitHub impl
-// (`engine/providers/githubVcsProvider.ts`) COMPOSES the existing GitHub services
+// provider-agnostic surface over the VCS operations the run + merge lifecycle
+// performs against a forge (GitHub now; GitLab/others later). The GitHub impl
+// (`engine/providers/githubVcsProvider.ts`) COMPOSES the GitHub services
 // (`GitHubPullRequestService`/`GitHubStatusService`/`GitHubReviewMergeService`) +
-// the token resolver + the SSH push, so every current behavior (token-via-stdin
-// clone auth, the GraphQL ready mutation, the 401-refresh retry, the timed HTTP
-// wrapper, the merge dispatch, the CI-poll semantics) is preserved exactly.
+// the token resolver + the SSH push: token-via-stdin clone auth, the GraphQL
+// ready mutation, the 401-refresh retry, the timed HTTP wrapper, and the merge
+// dispatch all live behind this one contract.
 //
-// Phase 2 EXTENDS this contract WITHOUT reshaping it (all additive): P2a
-// auto-rebase (`readMergeability`/`updateBranch`), P2b conflict-resolution hooks,
-// P2c speculative-execution integration-branch ops. The seam is the VCS/ACTIONS
-// provider, NOT the merge QUEUE (§1.1): the native merge queue (P2d) sits ABOVE it.
-// Track B (no-Actions doctrine) adds `publishCheck`/`publishStatus` — Tanren
-// PUBLISHING its own gate verdict to the forge (additive; nothing gates on it yet).
+// The surface covers the full merge-coordination grain: auto-rebase
+// (`readMergeability`/`updateBranch`), conflict-resolution hooks, and
+// speculative-execution integration-branch ops. It is the VCS provider, NOT the
+// merge QUEUE (§1.1): the native merge queue sits ABOVE it. `publishCheck` /
+// `publishStatus` let Tanren PUBLISH its own native gate verdict to the forge so
+// the PR UI shows it (the merge decision is already made by the native gate).
 
 // Errors + base64 decode + the ActorIdentity type live in `./vcsProviderErrors.js`
 // (line cap); re-exported so callers import them from the contract module unchanged.
@@ -96,7 +94,7 @@ export interface OpenedPullRequest {
 }
 
 /**
- * P2a: the up-to-date / mergeability state of a PR branch relative to its base,
+ * the up-to-date / mergeability state of a PR branch relative to its base,
  * read in provider-neutral terms. The merge stage uses this BEFORE merging to
  * decide whether a rebase/update is needed (`behind`), a genuine conflict the
  * resolver must handle (`dirty`), or it is current and safe to merge (`clean`).
@@ -122,8 +120,8 @@ export interface PullRequestMergeability {
 }
 
 /**
- * P2c: one ancestor in a speculative integration branch — its branch ref + the
- * spec it implements (so the coordinator can route an A-vs-B conflict to the P2b
+ * one ancestor in a speculative integration branch — its branch ref + the
+ * spec it implements (so the coordinator can route an A-vs-B conflict to the conflict
  * intent-preserving resolver with the right intent). DAG order is the order the
  * coordinator passes these in (ancestors before dependents).
  */
@@ -132,7 +130,7 @@ export interface IntegrationAncestor {
   branch: string;
 }
 
-/** Input to building/refreshing a speculative integration branch (P2c). */
+/** Input to building/refreshing a speculative integration branch. */
 export interface BuildIntegrationBranchInput {
   repo: RepoRef;
   token: ResolvedVcsToken;
@@ -145,10 +143,10 @@ export interface BuildIntegrationBranchInput {
 }
 
 /**
- * P2c: the outcome of building a speculative integration branch. `integrated`
+ * the outcome of building a speculative integration branch. `integrated`
  * means every ancestor merged cleanly (the dependent's dynamic base is ready).
  * `conflict` means two ancestors conflict WITH EACH OTHER — surfaced HERE, early,
- * so the P2b resolver runs against the integration branch (not the innocent
+ * so the conflict resolver runs against the integration branch (not the innocent
  * dependent); `conflictBetween` names the pair so the resolver gets both intents.
  */
 export interface BuildIntegrationBranchResult {
@@ -158,7 +156,7 @@ export interface BuildIntegrationBranchResult {
   /** The ancestor spec ids that merged cleanly, in order. */
   mergedAncestors: string[];
   /**
-   * P2c-2 (change-percolation): the head SHA each merged ancestor was integrated
+   * change-percolation: the head SHA each merged ancestor was integrated
    * AT, keyed by ancestor spec id — recorded on the dependent's run as the
    * divergence key, so a later ancestor advance is detectable. Present for the
    * `mergedAncestors`; an ancestor that conflicted (not merged) is absent.
@@ -366,7 +364,7 @@ export interface VcsProvider {
   readPullRequestChecks(pr: PullRequestRef, token: ResolvedVcsToken): Promise<GitHubPullRequestChecks>;
 
   /**
-   * P2d-2 (speculative batch-check): read the CI/check status of an arbitrary
+   * speculative batch-check: read the CI/check status of an arbitrary
    * BRANCH ref (not a PR) — the prospective merged state on an ephemeral
    * speculative-integration branch. Same check-runs + commit-status semantics as
    * `readPullRequestChecks`, keyed on the branch's HEAD SHA + its own protection
@@ -403,8 +401,8 @@ export interface VcsProvider {
 
   /**
    * Read a file's UTF-8 content on `ref` (a branch/sha), or `undefined` when it
-   * does not exist on that ref. Phase 2 (P2b conflict resolution / P2c
-   * speculative integration) reads base-branch state through this.
+   * does not exist on that ref. Conflict resolution and speculative
+   * integration read base-branch state through this.
    */
   readFileOnBranch(input: {
     repo: RepoRef;
@@ -414,7 +412,7 @@ export interface VcsProvider {
   }): Promise<string | undefined>;
 
   /**
-   * P2c-2 (change-percolation detect): read a branch's current HEAD SHA (or
+   * change-percolation detect: read a branch's current HEAD SHA (or
    * `undefined` when the ref does not exist). The change-percolation detect
    * compares an ancestor branch's current head against the SHA the dependent
    * INTEGRATED against — a divergence is an upstream change to percolate. On
@@ -424,7 +422,7 @@ export interface VcsProvider {
   readBranchHeadSha(input: { repo: RepoRef; branch: string; token: ResolvedVcsToken }): Promise<string | undefined>;
 
   /**
-   * P2a: read the PR branch's up-to-date / mergeability state relative to its
+   * read the PR branch's up-to-date / mergeability state relative to its
    * base — the signal the merge stage gates on (behind → update; dirty →
    * conflict resolver; clean → merge). On GitHub this reads the PR's
    * `mergeable` / `mergeable_state` fields + the base/head refs.
@@ -432,7 +430,7 @@ export interface VcsProvider {
   readMergeability(pr: PullRequestRef, token: ResolvedVcsToken): Promise<PullRequestMergeability>;
 
   /**
-   * P2a: bring the PR branch up to date with its base (the server-side fast path:
+   * bring the PR branch up to date with its base (the server-side fast path:
    * GitHub `PUT .../pulls/{n}/update-branch`). Returns `updated` when the branch
    * was advanced (the caller then re-polls CI to green before merging), `up_to_date`
    * when nothing was needed, and `conflict` when GitHub reports a real merge
@@ -442,29 +440,29 @@ export interface VcsProvider {
   updateBranch(pr: PullRequestRef, token: ResolvedVcsToken): Promise<UpdateBranchResult>;
 
   /**
-   * P2c (speculative execution): build (or reset + rebuild) the ephemeral
+   * speculative execution: build (or reset + rebuild) the ephemeral
    * SPECULATIVE INTEGRATION BRANCH for a dependent — `baseBranch` + each unmerged
    * ancestor merged in DAG order (server-side forge merges). It NEVER touches
    * `default_branch`/`main`; it writes only the ephemeral integration ref. When
    * two ancestors conflict WITH EACH OTHER it returns `conflict` (naming the pair)
-   * rather than forcing it — the caller routes that pair to the P2b resolver and
+   * rather than forcing it — the caller routes that pair to the conflict resolver and
    * rebuilds; the dependent's PR bases on this ref (the dynamic base). Idempotent:
    * re-running resets the ref to `baseBranch` first, so a stale integration is never additive.
    */
   buildIntegrationBranch(input: BuildIntegrationBranchInput): Promise<BuildIntegrationBranchResult>;
 
   /**
-   * P2c (speculative execution — land-on-real-main): re-point an open PR's BASE to
+   * speculative execution — land-on-real-main: re-point an open PR's BASE to
    * a new branch (GitHub `PATCH .../pulls/{n}` with `{ base }`). When a speculative
    * dependent's ancestors all genuinely merge, the merge stage re-targets the PR
    * from its ephemeral integration ref to `default_branch` BEFORE merging, so it
-   * lands on real `main`; the caller then runs the P2a up-to-date/re-gate flow.
+   * lands on real `main`; the caller then runs the up-to-date/re-gate flow.
    * Idempotent: re-targeting to the current base is a no-op (PATCH returns the PR).
    */
   retargetPullRequestBase(pr: PullRequestRef, newBase: string, token: ResolvedVcsToken): Promise<void>;
 
   /**
-   * P2c (speculative execution — cleanup): delete an ephemeral branch ref (the
+   * speculative execution — cleanup: delete an ephemeral branch ref (the
    * `tanren/integ/<dep>` integration branch) after the dependent has merged. A
    * missing ref (already deleted) is treated as success — the cleanup is
    * best-effort and idempotent, never a hard failure that blocks the merge result.

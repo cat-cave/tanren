@@ -3,7 +3,7 @@ import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import { runWorkspaceSshCommand } from "../workspace/index.js";
 import type { Commit, WriterResult } from "./types.js";
 
-// P3-0012: shared baseline/diff/commit capture for CLI writer adapters that,
+// shared baseline/diff/commit capture for CLI writer adapters that,
 // like Codex, edit the workspace in place and let us derive the result from git
 // state after the CLI exits. Codex keeps its own copy (so the Codex path is not
 // refactored); new adapters (Claude, opencode) share this module.

@@ -1,10 +1,10 @@
 import type { ChannelKind, NotificationPayload, NotificationTargetRow } from "../schemas.js";
 
-// P2A-0017 channel interface.
+// channel interface.
 //
 // Every channel kind (ntfy, slack, github_checks, teams, discord, email,
-// twilio, pagerduty, webhook) implements this interface. In Phase 2A v0,
-// only `NtfyChannel` performs real delivery; the remaining kinds are
+// twilio, pagerduty, webhook) implements this interface. `NtfyChannel`
+// performs real delivery; the remaining kinds are
 // registered as `StubChannel` so the matrix can be configured and the
 // dispatcher can record "stubbed delivery" log rows instead of crashing.
 //

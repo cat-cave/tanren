@@ -11,7 +11,7 @@ import { resolveGithubToken, type ResolvedGithubToken } from "../../credentials/
 import type { NotificationPayload, NotificationTargetRow } from "../schemas.js";
 import type { NotificationChannel } from "./types.js";
 
-// P3-0024 GitHub Checks channel — third wired channel.
+// GitHub Checks channel — third wired channel.
 //
 // Target shape:
 //   - `destination` is the PR URL the notification should annotate
@@ -21,7 +21,7 @@ import type { NotificationChannel } from "./types.js";
 //     installation token and a static fallback token without the extra
 //     `checks:write` permission a full check-run requires).
 //
-// Auth (P3-0003): the channel NEVER reads a static token directly. It calls
+// Auth: the channel NEVER reads a static token directly. It calls
 // `resolveGithubToken({ secrets, installation })`, which mints an auto-rotating
 // App installation token when the org has installed the App, and falls back to
 // the static ref otherwise. The resolver also hands back a `refresh()` supplier

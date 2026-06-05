@@ -1,4 +1,4 @@
-// P3-0003: read/write the per-org GitHub App installation block living in
+// read/write the per-org GitHub App installation block living in
 // `organizations.config.github_app` (JSONB; no dedicated table). Both the
 // install-onboarding callback (write) and the token resolver (read) go through
 // here so the JSONB round-trip stays in one place and always flows through

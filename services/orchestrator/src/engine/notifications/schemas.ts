@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-// P2A-0017 notifications matrix Zod schemas.
+// notifications matrix Zod schemas.
 //
 // The hi-fi defines a per-event × per-channel × severity matrix. We persist
 // it as two tables:

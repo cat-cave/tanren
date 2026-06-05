@@ -5,7 +5,7 @@ import type { ActorContext } from "../../auth/schemas.js";
 
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
-// P2A-0018: persona is a role-like entity owned by an org and optionally
+// persona is a role-like entity owned by an org and optionally
 // project-scoped. The schema uses text ids for parity with existing tables;
 // new rows are minted as `persona_<uuid>` but inbound ids only need to be
 // stable opaque strings.

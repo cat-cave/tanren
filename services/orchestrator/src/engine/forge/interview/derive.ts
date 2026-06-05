@@ -1,17 +1,17 @@
-// P3-0015 greenfield onboarding: derive the product graph from a completed
+// greenfield onboarding: derive the product graph from a completed
 // vision-interview capture.
 //
 // This is the heart of "interview → DAG". On completion the accumulated
 // capture is turned into a live project's product graph, created through the
 // SAME foundations rather than a forked write path:
 //
-//   project    → createProject              (P2A-0013 workflow)
-//   personas   → PersonaStore.create        (P2A-0018)
+//   project    → createProject              (workflow)
+//   personas   → PersonaStore.create
 //   behaviors  → BehaviorStore.create + linkToSpec
-//   milestones → MilestoneStore.create + setSpecMilestone   (P2A-0018)
-//   specs      → createSpec                 (P2A-0013, incl. dependency wiring)
+//   milestones → MilestoneStore.create + setSpecMilestone
+//   specs      → createSpec                 (incl. dependency wiring)
 //
-// The derived DAG is exactly what P3-0013's `getProjectDag` then reads back:
+// The derived DAG is exactly what `getProjectDag` then reads back:
 //   - A foundation milestone (M1 · scaffold) of scaffold specs every later
 //     spec depends on (the critical path root).
 //   - One milestone per inferred INTERFACE (the hi-fi "handheld" / "ops
@@ -53,7 +53,7 @@ export interface DeriveInput {
 // stalling on `not_configured`), AND the `lenient` governance posture. Lenient
 // makes the in-loop gate's `lint`/`typecheck` ADVISORY (warn, non-blocking) while
 // `build`/`test` stay blocking — the functional-but-weak apex doctrine
-// (docs/operator-guide/apex.md): a functional-but-weak first pass lands imperfect
+// docs/operator-guide/apex.md: a functional-but-weak first pass lands imperfect
 // code and improves it via the issue loop instead of stalling the gate on
 // first-pass lint/type issues. This config is the ONLY deviation from the schema
 // defaults — and only on explicit opt-in. A `human`/absent autonomy keeps the safe

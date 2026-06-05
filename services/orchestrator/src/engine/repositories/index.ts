@@ -7,7 +7,7 @@ export { JobRow, JobStore } from "./jobs.js";
 export { ActorStore, TaskActorRow } from "./actors.js";
 export { ProjectRow, ProjectStore, type ProjectLifecycle } from "./projects.js";
 export { ProjectSpecStore, type ProjectSpecRow, type SpecPatch } from "./projectSpecs.js";
-// Integration-provisioning foundation (P-INT-0 + P-APP-ENV-0): the org-level
+// Integration-provisioning foundation (+): the org-level
 // integration registry (Plane A) + the built product's app-environment store
 // (Plane B).
 export { OrgIntegrationsStore, type OrgIntegration, type OrgIntegrationStatus } from "./orgIntegrations.js";

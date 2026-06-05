@@ -1,10 +1,10 @@
-// P3-0022 candidate inbox: typed contracts for the intake → triage flow.
+// candidate inbox: typed contracts for the intake → triage flow.
 //
 // A configurable SOURCE (connector kind + config) ingests CANDIDATES. Each
 // external candidate is TRIAGED by Forge (dedupe → match-to-spec/milestone →
 // propose DAG placement → verdict). System sources (e.g. scheduled audits)
 // carry `autoRoute` and skip manual triage. The triage itself runs over an
-// injectable answerer seam (mirrors P3-0010 / P3-0014) so the Forge call is
+// injectable answerer seam (mirrors the conversation answerer) so the Forge call is
 // mockable and nothing here couples to a provider.
 
 import { z } from "zod";
@@ -129,8 +129,8 @@ export interface SourceConnector {
   fetch(source: InboxSource): Promise<IngestedItem[]>;
 }
 
-// The triage answerer seam — mirrors P3-0010's `ForgeConversationAnswerer` and
-// P3-0014's `DiscoveryAnswerer`. The real impl wraps a provider Answerer; tests
+// The triage answerer seam — mirrors the `ForgeConversationAnswerer` and
+// the `DiscoveryAnswerer`. The real impl wraps a provider Answerer; tests
 // inject a fake; the engine falls back to a deterministic grounded answerer.
 export interface TriageAnswererContext {
   candidate: Pick<Candidate, "title" | "body" | "severity" | "sourceKind" | "projectId">;

@@ -1,4 +1,4 @@
-// P2B-0008 (additive): typed Zod recovery routes for halted runs. Mounted
+// (additive): typed Zod recovery routes for halted runs. Mounted
 // under `/orgs` like the run-detail + notifications surfaces. Implements the
 // four operator-initiated recovery actions:
 //   POST .../runs/:runId/recovery/revise               → revise_spec
@@ -8,7 +8,7 @@
 //   GET  .../runs/:runId/recovery                      → recovery context
 //
 // Authz mirrors the existing route pattern exactly: `requireActor` +
-// `actorCanAccessOrg` + project/run access via `assertRunAccess` (P2A-0019).
+// `actorCanAccessOrg` + project/run access via `assertRunAccess`.
 // Every action persists a typed `recovery.*` lineage event (the events table is
 // the lineage home). The heavy lifting lives in `engine/recovery`.
 
@@ -119,7 +119,7 @@ interface RunGate {
 
 /**
  * Shared authz + load gate: actor present, can access the org, can access the
- * run (project membership via P2A-0019 `assertRunAccess`), and the run+project
+ * run (project membership via `assertRunAccess`), and the run+project
  * line up. Returns a `denial` Response when any check fails.
  */
 async function gateRun(pool: pg.Pool, c: Context<ActorContextEnv>): Promise<RunGate> {

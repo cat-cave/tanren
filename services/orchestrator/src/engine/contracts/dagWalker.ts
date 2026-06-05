@@ -8,12 +8,12 @@
 //      — DAG state is the source of truth, never in-memory.
 //   2. Computes the READY SET: pending specs whose dependencies are all DONE
 //      (the same predicate the manual-trigger path enforces via
-//      ensureSpecDependenciesDone). Speculative readiness (§2c) is Phase 2;
-//      Phase-1 readiness = all deps merged/done.
+//      ensureSpecDependenciesDone). Speculative readiness (§2c) is layered on
+//      top; base readiness = all deps merged/done.
 //   3. Orders the ready set deterministically (priority comes in P1b; here a
 //      stable creation-order tiebreak, with a clean seam for priority ordering).
-//   4. Enqueues up to the GOVERNED CONCURRENCY HEADROOM (the config ceiling from
-//      P1·0, never an env var) of ready specs via createQueuedRunFromSpec — the
+//   4. Enqueues up to the GOVERNED CONCURRENCY HEADROOM (the config ceiling,
+//      never an env var) of ready specs via createQueuedRunFromSpec — the
 //      SAME parallel worker runs them.
 //
 // Idempotent: a spec already in-flight (active / building / pr_open / running) is
@@ -182,7 +182,7 @@ function isReady(node: DagSpecNode, byId: Map<string, DagSpecNode>): boolean {
   return node.dependsOn.every((depId) => byId.get(depId)?.phase === "done");
 }
 
-// ---- Speculative tick plan (P2c-1, autonomy-engine.md §2c) -----------------
+// ---- Speculative tick plan (autonomy-engine.md §2c) -----------------
 
 /**
  * The per-spec speculation outcome the walker narrates: each spec the walker
@@ -214,7 +214,7 @@ export interface DagSpeculativeTickPlan extends DagTickPlan {
  * SPECULATION THRESHOLD" (per the lifecycle projection), not "all deps done". A
  * spec ready with one or more deps not-yet-merged is SPECULATIVE; a spec that
  * would be ready but whose unmerged-ancestor depth exceeds the cap is HELD (not
- * truncated). Ordering, headroom, and idempotency are unchanged from Phase 1.
+ * truncated). Ordering, headroom, and idempotency hold every tick.
  *
  * `conservative` reduces EXACTLY to the Phase-1 predicate (a crossed ancestor is a
  * merged one — `phase === "done"`), so the baseline behavior is preserved.
@@ -316,7 +316,7 @@ export interface DagEnqueuer {
     projectId: string;
     specId: string;
     /**
-     * P2c-1: the SPECULATIVE integration branch the run's PR bases on (the dynamic
+     * the SPECULATIVE integration branch the run's PR bases on (the dynamic
      * base), present iff the walker started this spec speculatively. When set, the
      * enqueuer skips the `done`-only dependency gate (the walker already enforced
      * the threshold gate) and persists `speculative_base` on the run. Absent ⇒ a
@@ -324,7 +324,7 @@ export interface DagEnqueuer {
      */
     speculativeBase?: string;
     /**
-     * P2c-2 (change-percolation): the head SHA each unmerged ancestor was
+     * change-percolation: the head SHA each unmerged ancestor was
      * integrated AT, keyed by ancestor spec id. Persisted on the run as the
      * DIVERGENCE KEY — the change-percolation detect later compares each ancestor's
      * live head against this. Present iff `speculativeBase` is.

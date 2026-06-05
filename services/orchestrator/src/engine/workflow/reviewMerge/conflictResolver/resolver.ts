@@ -13,7 +13,7 @@
 //   4. On `resolve`: apply the resolution to the tree, RE-RUN gate + checker +
 //      auditor against the RESOLVED tree; only on a clean re-gate publish the
 //      resolved branch and return `{ resolved: true }` so the dispatcher retries
-//      the merge through the P2a path. An unverified resolution NEVER merges.
+//      the merge through the up-to-date path. An unverified resolution NEVER merges.
 //   5. On `irreconcilable` (or a FAILED re-gate): route ONE spec back to the
 //      planner with the other's change as new context (intent stays ALIVE),
 //      abort the in-progress merge, and return `{ resolved: false }` so the
@@ -64,7 +64,7 @@ export interface IntentPreservingResolverDeps {
   /** Route one spec back to the planner with the other's change (intent stays alive). */
   replan: ReplanRouter;
   /**
-   * P2c-2 (change-percolation): present when THIS run is a percolation re-execution
+   * change-percolation: present when THIS run is a percolation re-execution
    * — the ancestor whose intentional upstream change must flow IN. It reframes the
    * Answerer into UPSTREAM-CHANGE mode (apply the ancestor's change INTO the
    * dependent, keeping its work intact). Absent for a normal symmetric conflict.
@@ -131,7 +131,7 @@ export function buildIntentPreservingConflictResolver(deps: IntentPreservingReso
       // The product-vision section is included only when it carries signal — an
       // empty vision is omitted (the prompt builder also guards this).
       ...(productVision !== undefined && !isProductVisionEmpty(productVision) && { productVision }),
-      // P2c-2: in a percolation re-execution, reframe into upstream-change mode so
+      // in a percolation re-execution, reframe into upstream-change mode so
       // the ancestor's intentional change flows INTO this dependent (keeping its
       // work intact), and an irreconcilable answer re-plans THIS spec (the merging
       // side) WITH the ancestor's change — the now-reachable replan path.
@@ -168,7 +168,7 @@ export function buildIntentPreservingConflictResolver(deps: IntentPreservingReso
     }
 
     // Clean re-gate: publish the resolved branch; the dispatcher retries the
-    // merge through the P2a path. The resolution diff is the rewritten files.
+    // merge through the up-to-date path. The resolution diff is the rewritten files.
     await deps.applier.publishResolved();
     await deps.eventStore.append({
       runId: context.runId,

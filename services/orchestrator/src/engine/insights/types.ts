@@ -1,12 +1,12 @@
-// P2A-0020 workflow-insights type definitions.
+// workflow-insights type definitions.
 //
 // Each insight kind has a strongly-typed payload. The discriminated union on
 // `kind` is the single source of truth shared by the compute functions, the
 // cache writer/reader, the HTTP route, and any consumer (the Forge narration
-// generator from P2A-0019 is the first).
+// generator from is the first).
 //
 // The `actions` array carries operator-actionable CTAs. Each action holds a
-// `toolCall` shaped like the P2A-0008 `ForgeToolCall` discriminated union.
+// `toolCall` shaped like the `ForgeToolCall` discriminated union.
 // We intentionally type `toolCall` as `unknown` here so this module stays
 // loosely coupled to the Forge tool schema — callers re-parse the field
 // through `ForgeToolCall` when they need typed access. (The hi-fi only
@@ -15,8 +15,8 @@
 // for v0.)
 //
 // Thresholds (retry counts, lookback windows, cost-ratio bar) live in
-// `thresholds.ts` so the compute functions stay declarative. Phase 3 will
-// make these per-org configurable; see `docs/architecture/insights.md`.
+// `thresholds.ts` so the compute functions stay declarative; per-org
+// configurability is a later option (see `docs/architecture/insights.md`).
 
 import { z } from "zod";
 
@@ -24,13 +24,13 @@ export const InsightKind = z.enum([
   "retry_hotspot",
   "model_mismatch",
   "pace_anomaly",
-  // P3-0020 additions, both derived from existing rows (no migration to the
+  // additions, both derived from existing rows (no migration to the
   // source data; see schemaInsights.ts for the cache `kind` CHECK widening):
-  // `stuck` from spec-dependency-chain analysis (P2A-0018), `review_stall`
-  // from review.* events (P3-0008).
+  // `stuck` from spec-dependency-chain analysis, `review_stall`
+  // from review.* events.
   "stuck",
   "review_stall",
-  // P2e-1 (§2d Mergify parity): a CI check proven non-deterministic (flaky) on
+  // §2d: a CI check proven non-deterministic (flaky) on
   // unchanged code and auto-quarantined. Surfaced so the quarantine is visible.
   "ci_flaky",
 ]);
@@ -42,7 +42,7 @@ export type InsightSeverity = z.infer<typeof InsightSeverity>;
 export const InsightAction = z
   .object({
     label: z.string().min(1),
-    // ForgeToolCall shape from P2A-0008. Typed as unknown here to avoid a
+    // ForgeToolCall shape from. Typed as unknown here to avoid a
     // module-level coupling between insights and the Forge tool schema; the
     // route layer re-parses through the discriminated union before dispatch.
     toolCall: z.unknown(),
@@ -98,8 +98,8 @@ export const PaceAnomalyPayload = z
   .strict();
 export type PaceAnomalyPayload = z.infer<typeof PaceAnomalyPayload>;
 
-// P3-0020 `stuck`: a spec that cannot progress because one or more of its
-// declared dependencies (P2A-0018 spec_dependencies edges) are not yet done.
+// `stuck`: a spec that cannot progress because one or more of its
+// declared dependencies (spec_dependencies edges) are not yet done.
 // `blockedSpecId` is waiting on the specs in `blockingSpecs`.
 export const StuckPayload = z
   .object({
@@ -122,7 +122,7 @@ export const StuckPayload = z
   .strict();
 export type StuckPayload = z.infer<typeof StuckPayload>;
 
-// P3-0020 `review_stall`: a spec whose PR has been in review (a
+// `review_stall`: a spec whose PR has been in review (a
 // `review.requested` or `review.changes_requested` is the latest review/merge
 // signal) for longer than the configured threshold with no subsequent
 // approval or merge. `phase` distinguishes a fresh review awaiting a verdict
@@ -141,7 +141,7 @@ export const ReviewStallPayload = z
   .strict();
 export type ReviewStallPayload = z.infer<typeof ReviewStallPayload>;
 
-// P2e-1 `ci_flaky`: a CI check proven non-deterministic (it BOTH passed and
+// `ci_flaky`: a CI check proven non-deterministic (it BOTH passed and
 // failed on the same head SHA) and auto-quarantined. `toggledShaCount` is the
 // genuine-non-determinism count (always ≥ 1 — a consistently-failing check is
 // never surfaced here). `passedOnRetryCount` records failed-then-passed-on-retry

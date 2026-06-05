@@ -2,7 +2,7 @@
 // `plannerRun.ts` (file-size + complexity caps). All terminal `UPDATE runs`
 // transitions the workflow drives go through {@link FinalizeRunState}.
 //
-// Plane-split P3: `buildFinalizeRunState` returns a closure that — when the
+// `buildFinalizeRunState` returns a closure that — when the
 // worker injects a remote finalizer (`input.finalizeRun`, remote-writes on) —
 // routes the terminal UPDATE through the control-plane endpoint; otherwise it
 // runs the SAME in-process UPDATE the workflow always has (the
@@ -63,7 +63,7 @@ export function buildFinalizeRunState(input: RunPlannerLoopInput, runId: string)
 }
 
 /**
- * Plane-split P3c: drive the run's `running` transition, routing through the
+ * drive the run's `running` transition, routing through the
  * lifecycle writer when wired (remote) — else the byte-identical in-process
  * `UPDATE runs ... started_at = now()`. The remote path requires the run's org
  * (the seam is only wired when it is known).
@@ -78,7 +78,7 @@ export async function markRunRunning(input: RunPlannerLoopInput, context: Planne
 }
 
 /**
- * Plane-split P3c: set the spec's status, routing through the lifecycle writer
+ * set the spec's status, routing through the lifecycle writer
  * when wired (remote) — else the byte-identical in-process `UPDATE specs`. The
  * remote path requires the run's org (the seam is only wired when it is known).
  */
@@ -137,7 +137,7 @@ export async function finalizeNonPass(
  *         ENTERED the native queue; the coordinator's DRIVE pass merges it later).
  *         So the spec MUST stay in its pre-merge (`in_flight`) status until that drive
  *         merges — otherwise the ordering invariant's two reads (`mergedSpecIds` + the
- *         P2c-1 speculative-hold, both keyed on `status = 'merged'`) would treat a
+ *         speculative-hold, both keyed on `status = 'merged'`) would treat a
  *         queued-but-UNMERGED ancestor as merged and let a dependent merge ahead of it
  *         (the cardinal sin).
  */
@@ -162,7 +162,7 @@ export async function finalizeMergeOutcome(
     );
     return;
   }
-  // P2d: a `native_queue` first-pass `queued` outcome ENTERED the queue but did NOT
+  // a `native_queue` first-pass `queued` outcome ENTERED the queue but did NOT
   // merge — Tanren still owns the merge, so the spec must NOT become `merged` here
   // (the coordinator's drive-pass merge sets `merged`). Leave the spec in its
   // in-flight status; only the run finalizes (it successfully enqueued). Every other
@@ -198,7 +198,7 @@ export async function finalizeWorkflowError(error: unknown, ctx: WorkflowErrorCo
   if (error instanceof WorkspaceBootstrapError) {
     // Dependency install failed: the workspace can't build/test, so the run can't
     // be gated. Surface it as a halting, recoverable outcome (lands on the
-    // P2B-0008 recovery surface) rather than a crash, reusing the
+    // recovery surface) rather than a crash, reusing the
     // workspace.failed event + the halted run state.
     await ctx.appendEvent("workspace.failed", { workspacePath: ctx.workspacePath, message: error.message });
     await finalizeNonPass(ctx.finalizeRunState, ctx.runId, "halted");
@@ -230,7 +230,7 @@ export async function finalizeWorkflowError(error: unknown, ctx: WorkflowErrorCo
 // its own planner task, so the pre-created artifacts are vestigial — cancel them
 // so the run does not carry a dangling queued task.
 export async function supersedeQueuedPlannerTask(input: RunPlannerLoopInput, runId: string): Promise<void> {
-  // Plane-split P3c: the vestigial `plan` task cancel routes through the lifecycle
+  // the vestigial `plan` task cancel routes through the lifecycle
   // writer when wired (remote), else the byte-identical in-process write. The
   // `job_queue` cancel always runs in-process — `job_queue` is a cross-org system
   // table OUTSIDE RLS that the data plane keeps writing directly.

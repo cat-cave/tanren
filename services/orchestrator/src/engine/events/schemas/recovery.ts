@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-// P2B-0008 recovery-lineage events. Every operator-initiated recovery action
+// recovery-lineage events. Every operator-initiated recovery action
 // against a halted run persists a typed lineage record here so the run-detail
 // history shows the halt → recover chain. The events table is the lineage home
 // (append-only, run/spec/project-scoped) — no separate lineage table needed.
@@ -18,7 +18,7 @@ export const RecoveryAction = z.enum([
 export type RecoveryAction = z.infer<typeof RecoveryAction>;
 
 // revise_spec: the operator chose to revise the failing spec. The action does
-// not mutate the spec itself (the P2B-0003 edit form does that) — it records
+// not mutate the spec itself (the edit form does that) — it records
 // the intent and routes the operator there.
 export const RecoveryReviseRoutedPayload = z
   .object({

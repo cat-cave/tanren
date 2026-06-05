@@ -17,7 +17,7 @@ type RunStateClient = Pick<pg.Pool | pg.PoolClient, "query">;
 export interface PublishDraftPullRequestInput {
   pool: RunStateClient;
   eventStore?: EventStore;
-  // Plane-split P3c: route the `UPDATE runs SET pr_url` through the control plane
+  // route the `UPDATE runs SET pr_url` through the control plane
   // when wired (remote-writes on) — else the byte-identical in-process write on
   // `pool`. `orgId` scopes the remote write (present whenever the writer is).
   runStateWriter?: RunStateWriter;
@@ -38,7 +38,7 @@ export interface PublishDraftPullRequestInput {
   githubCredentialRef?: string;
   projectConfig?: Record<string, unknown>;
   timeoutMs: number;
-  /** P3-0003: org App installation; when set, prefer minting an App token. */
+  /** org App installation; when set, prefer minting an App token. */
   installation?: OrgGithubAppInstallation;
   githubAppMinter?: GithubAppTokenMinter;
   /**
@@ -69,7 +69,7 @@ export interface PublishDraftPullRequestForRunInput {
   title?: string;
   body?: string;
   timeoutMs: number;
-  /** P3-0003: shared installation-token minter (cache lives here). */
+  /** shared installation-token minter (cache lives here). */
   githubAppMinter?: GithubAppTokenMinter;
 }
 
@@ -200,7 +200,7 @@ export async function publishDraftPullRequestForRun(
     projectId: context.projectId,
     workspacePath: input.workspacePath ?? workspaceRepoPathForRun(context.runId),
     repoUrl: context.repoUrl,
-    // P2c-1 (§2c): honor the run's DYNAMIC BASE — a speculative run's PR bases on
+    // §2c: honor the run's DYNAMIC BASE — a speculative run's PR bases on
     // its integration branch (the prospective merged world), else `default_branch`
     // — so the operator `POST /runs/:id/github/draft-pr` route opens the same base
     // the autonomous loop does (not always `default_branch`).
@@ -296,7 +296,7 @@ interface DraftPrRunContext {
   specId: string;
   projectId: string;
   branch: string;
-  /** P2c-1: the speculative integration branch (dynamic base), when speculative. */
+  /** the speculative integration branch (dynamic base), when speculative. */
   speculativeBase?: string;
   repoUrl: string;
   defaultBranch: string;

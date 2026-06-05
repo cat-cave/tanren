@@ -1,16 +1,15 @@
 import { z } from "zod";
 
 // Semantic-rich planner/writer/checker/auditor event payloads. These fields
-// are what the Forge narration substrate (P2A-0019) renders directly. The
-// shapes are intentionally a superset of the legacy phase 1 emits so the
-// existing fixture run replays without re-derivation.
+// are what the Forge narration substrate renders directly. The
+// shapes are intentionally a superset of the single-pass emits so the
+// fixture run replays without re-derivation.
 
 const SubtaskSummary = z
   .object({
     title: z.string(),
     acceptanceCriteria: z.array(z.string()).optional(),
-    // Phase 2 enrichments — optional during the transition so legacy phase 1
-    // payloads continue to parse.
+    // Subtask enrichments — optional so older single-pass payloads still parse.
     index: z.number().int().optional(),
     intent: z.string().optional(),
     estimatedTokens: z.number().int().nullable().optional(),
@@ -18,7 +17,7 @@ const SubtaskSummary = z
   })
   .strict();
 
-// planner.started carries the task kind correlator; once P2A-0012 lands the
+// planner.started carries the task kind correlator; once lands the
 // rationale field will be required.
 export const PlannerStartedPayload = z
   .object({
@@ -45,7 +44,7 @@ export const PlannerFailedPayload = z
   })
   .strict();
 
-// planner.subtasks.emitted is the explicit Phase 2 event the spec describes;
+// planner.subtasks.emitted is the explicit subtask-emission event;
 // keeping it distinct from planner.completed so future consumers can subscribe
 // to the subtask emission without coupling to planner lifecycle.
 export const PlannerSubtasksEmittedPayload = z
@@ -111,8 +110,8 @@ export const WriterStartedPayload = z
   })
   .strict();
 
-// writer.subtask.started — Phase 2 declares-intent variant; both forms
-// coexist while P2A-0012 wires the loop.
+// writer.subtask.started — the declares-intent variant; both forms
+// coexist while wires the loop.
 export const WriterSubtaskStartedPayload = z
   .object({
     runId: z.string(),
@@ -123,9 +122,9 @@ export const WriterSubtaskStartedPayload = z
   })
   .strict();
 
-// writer.completed is the legacy phase 1 shape (WriterResult). Semantic
-// fields are accepted as optional so phase 1 fixture rows still parse and
-// phase 2 writers can populate them.
+// writer.completed is the single-pass shape (WriterResult). Semantic
+// fields are accepted as optional so fixture rows still parse and
+// subtask writers can populate them.
 export const WriterCompletedPayload = z
   .object({
     diff: z.string(),
@@ -139,7 +138,7 @@ export const WriterCompletedPayload = z
         usageLimit: z.object({ message: z.string() }).optional(),
       })
       .optional(),
-    // Phase 2 narration enrichments
+    // narration enrichments
     intent: z.string().optional(),
     decisions: z.array(WriterDecision).optional(),
     toolCalls: z.array(WriterToolCall).optional(),
@@ -193,14 +192,14 @@ export const CheckerStartedPayload = z
   })
   .strict();
 
-// checker.completed wraps the legacy CheckAnswer shape and accepts the
-// Phase 2 verdict fields as optional.
+// checker.completed wraps the CheckAnswer shape and accepts the
+// verdict fields as optional.
 export const CheckerCompletedPayload = z
   .object({
     done: z.boolean(),
     reason: z.string(),
     suggested_fixes: z.array(z.string()).nullable(),
-    // Phase 2 verdict enrichments
+    // verdict enrichments
     passed: z.boolean().optional(),
     reasoning: z.string().optional(),
     behaviorIdsPassed: z.array(z.string()).optional(),
@@ -242,7 +241,7 @@ export const AuditorCompletedPayload = z
       })
       .strict(),
     reason: z.string(),
-    // Phase 2 verdict enrichments
+    // verdict enrichments
     passed: z.boolean().optional(),
     reasoning: z.string().optional(),
     outstandingBehaviorIds: z.array(z.string()).optional(),
@@ -267,7 +266,7 @@ export const AuditorFailedPayload = z
   })
   .strict();
 
-// P2A-0012 rejection events. The planner-feedback-loop emits one of these on
+// rejection events. The planner-feedback-loop emits one of these on
 // every rejection, carrying a structured `producer` (which Answerer rejected),
 // the rejection `reason`, and the resulting `plannerRerunCount` so the run
 // detail timeline can render the loop without joining tasks.
@@ -275,9 +274,9 @@ export const PlannerRerequestedPayload = z
   .object({
     runId: z.string(),
     plannerTaskId: z.string(),
-    // P3-0005 adds "gate": the deterministic exit-code gate is a third
+    // adds "gate": the deterministic exit-code gate is a third
     // rejection producer alongside the checker and auditor Answerers.
-    // P3-0008 adds "reviewer": a changes-requested PR review routed back through
+    // adds "reviewer": a changes-requested PR review routed back through
     // the same rework path. "writer" is a hard writer failure (crashed / timed
     // out mid-subtask) routed through the same rework path.
     producer: z.enum(["checker", "auditor", "gate", "reviewer", "writer"]),

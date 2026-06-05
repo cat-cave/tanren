@@ -1,4 +1,4 @@
-// FlyDeployProvisioner (P-INT-4) — `IntegrationProvisioner` for provider kind
+// FlyDeployProvisioner — `IntegrationProvisioner` for provider kind
 // `deploy.flyio`. Creates/finds a Fly.io APP under the org grant so the built
 // product can be deployed, and captures the preview-URL pattern + a deployment
 // ref. All HTTP goes through the injectable `DeployHttpTransport`, so the full

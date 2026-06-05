@@ -1,4 +1,4 @@
-// P3-0021 scheduled-audits barrel. The audits route + tests import the typed
+// scheduled-audits barrel. The audits route + tests import the typed
 // surface from here.
 
 export {

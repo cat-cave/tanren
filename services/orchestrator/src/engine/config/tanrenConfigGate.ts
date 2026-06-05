@@ -1,4 +1,4 @@
-// P3-0017: the tanren-config audit-gate write flow.
+// the tanren-config audit-gate write flow.
 //
 // An optional org toggle (`organizations.config.auditGateEnabled`) that routes
 // Bucket-B config writes (routing chains + escape-hatch limits) through a PR in
@@ -147,7 +147,7 @@ export interface GateConfigPullRequest {
 
 /**
  * The minimal GitHub surface the gate needs, expressed as one injectable port
- * so tests pass a fake (no network). A real adapter wraps the P3-0003 App
+ * so tests pass a fake (no network). A real adapter wraps the App
  * client + `GitHubPullRequestService` / `GitHubReviewMergeService`.
  */
 export interface ConfigGateGitHub {

@@ -7,7 +7,7 @@ import type { Sensitivity } from "../events/sensitivity.js";
 // that as an explicit lookup so the policy is auditable in one place rather
 // than as numeric arithmetic.
 //
-// Policy (matches the P2A-0009 entry verbatim):
+// Policy (matches the entry verbatim):
 //   public   -> any authenticated actor
 //   redacted -> requires org:admin OR project:admin OR platform:admin
 //   secret   -> requires platform:admin

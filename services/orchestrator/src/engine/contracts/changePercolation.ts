@@ -4,14 +4,14 @@
 // P0/P1 finding lands, A is changes-requested, a P2/P3 patch applies), the walker
 // must NOT throw away B's and C's work. It treats A's change as a DELTA to
 // PERCOLATE down the chain: rebuild B's speculative integration with A's NEW state
-// (reusing the P2c-1 SpeculativeIntegrator), re-base B onto it, and RE-EXECUTE B
+// (reusing the SpeculativeIntegrator), re-base B onto it, and RE-EXECUTE B
 // THROUGH A REAL RUN so B's own gate + checker + auditor genuinely re-run against
 // the percolated change (the planner re-plans / the upstream-change resolver
 // reconciles on a break, keeping B's work intact). It is a CHAIN RE-INTEGRATION,
 // not a rollback.
 //
 // CRITICAL — the re-gate is a REAL RUN, observed across passes. A re-base alone is
-// NOT verification (that was the original P2c-2 defect). Percolation is therefore
+// NOT verification (that was the original change-percolation defect). Percolation is therefore
 // TWO-PHASE and event-driven, settled over the LISTEN/NOTIFY bus the walker rides:
 //   - KICK-OFF (immediate change, not already in flight): rebuild + re-base the
 //     dependent onto the ancestor's new head, write the IN-FLIGHT marker, and
@@ -36,7 +36,7 @@
 //     to the planner WITH the upstream change as context; it never drops the work.
 //   - NEVER MERGE UNVERIFIED — the ABSORBED key (`verified_ancestor_shas`) is set
 //     ONLY after the dependent's own gate+checker+auditor re-ran clean in a real
-//     run; the P2c-1 merge-hold + retarget-to-default_branch still govern the merge.
+//     run; the merge-hold + retarget-to-default_branch still govern the merge.
 //   - TERMINATES — detection keys off `verified_ancestor_shas` (not the bare build
 //     base) AND the in-flight marker, so a sticky `changes_requested` at an
 //     unchanged SHA does not re-trigger every walk.
@@ -210,7 +210,7 @@ export function decidePercolation(signal: AncestorChangeSignal): PercolationDeci
 
 /**
  * The IN-FLIGHT percolation marker persisted on the dependent's run
- * (`percolation_pending`): the exact signal a re-execution was kicked off for. It
+ * `percolation_pending`: the exact signal a re-execution was kicked off for. It
  * is the LOOP GUARD — while it is set the detect skips re-triggering — and it is
  * what the SETTLE phase resolves against when the re-execution terminates.
  */
@@ -321,7 +321,7 @@ export interface PercolationReadModel {
  * dependent re-based onto it, and a real re-execution enqueued — its gate + checker
  * + auditor will run; the change is NOT yet absorbed (it settles when that run
  * terminates clean). `held`: the rebuild surfaced an ancestor-vs-ancestor conflict
- * (routed to the P2b resolver as in P2c-1) — retried next walk; the work untouched.
+ * (routed to the conflict resolver as in the merge-hold) — retried next walk; the work untouched.
  */
 export interface PercolationKickOffOutcome {
   result: "reexecuting" | "held";
@@ -335,8 +335,8 @@ export interface PercolationKickOffOutcome {
 /**
  * Kicks off the §2c chain re-integration for ONE (dependent, ancestor-change):
  *   1. Rebuild the dependent's speculative integration against the ancestor's NEW
- *      state (reuse the P2c-1 SpeculativeIntegrator). An A-vs-other conflict ⇒
- *      `held` (routed to P2b, retried next walk).
+ *      state (reuse the SpeculativeIntegrator). An A-vs-other conflict ⇒
+ *      `held` (routed to the conflict resolver, retried next walk).
  *   2. Re-base the dependent onto the rebuilt integration (update `speculative_base`
  *      + `integrated_ancestor_shas`), keeping the dependent's OWN branch/work as the
  *      base — never reset/discarded.

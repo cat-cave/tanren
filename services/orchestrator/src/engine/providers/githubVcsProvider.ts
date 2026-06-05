@@ -1,4 +1,4 @@
-// P2·0: the GitHub VcsProvider impl. It COMPOSES the existing GitHub code
+// The GitHub VcsProvider impl. It COMPOSES the existing GitHub code
 // (`GitHubPullRequestService`, `GitHubStatusService`, `GitHubReviewMergeService`,
 // the `resolveGithubToken` resolver, the `pushWorkspaceBranchToGitHub` SSH push,
 // `./githubActorIdentity`, and Track B's `./githubPublishCheck`) behind the
@@ -333,7 +333,7 @@ export class GitHubVcsProvider implements VcsProvider {
     const merged: string[] = [];
     const ancestorHeadShas: Record<string, string> = {};
     for (const ancestor of ancestors) {
-      // Capture the ancestor's head SHA AT integration time (the P2c-2 divergence key).
+      // Capture the ancestor's head SHA AT integration time (the divergence key).
       ancestorHeadShas[ancestor.specId] = await this.refSha(repo, token, ancestor.branch);
       const result = await this.mergeBranchInto(repo, token, integrationBranch, ancestor.branch);
       if (result === "conflict") {

@@ -1,4 +1,4 @@
-// P2A-0013: /doctor JSON endpoint. Mirrors the CLI `tanren doctor` output by
+// /doctor JSON endpoint. Mirrors the CLI `tanren doctor` output by
 // reusing the same check functions. Both surfaces wire through `runDoctor`.
 
 import { Hono } from "hono";

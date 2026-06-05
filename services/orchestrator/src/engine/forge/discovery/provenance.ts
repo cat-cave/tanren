@@ -1,4 +1,4 @@
-// P3-0014 spec discovery: provenance, stored on the spec record.
+// spec discovery: provenance, stored on the spec record.
 //
 // Provenance answers "which insight produced this spec, and how was it placed?"
 // It is 1:1 with a spec, so rather than a bespoke `spec_provenance` table it

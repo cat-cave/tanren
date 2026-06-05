@@ -1,11 +1,11 @@
-// P3-0016: the DAG-seed step. Turns the recon report's GAPS + the repo's open
-// GitHub ISSUES into seed specs, created through the SAME P2A-0013 `createSpec`
+// the DAG-seed step. Turns the recon report's GAPS + the repo's open
+// GitHub ISSUES into seed specs, created through the SAME `createSpec`
 // path as every other spec (so authz + dependency checks are unchanged). The
 // hi-fi shows a source legend (issue vs. gap) + dedupe — we carry each spec's
 // `source` so the surface renders the legend, and we de-dupe by a normalized
 // title so an issue and a gap describing the same work don't both seed.
 //
-// Issues are fetched through the existing P3-0022 `IngestedItem` shape (the
+// Issues are fetched through the existing `IngestedItem` shape (the
 // inbox GitHub connector returns these); the engine accepts them as an injected
 // list so it stays provider-free + trivially testable. No migration — specs
 // land in the existing `specs` table.
@@ -30,7 +30,7 @@ export interface SeedDagInput {
   projectId: string;
   orgId: string;
   report: ReconReport;
-  /** Open issues for the repo (P3-0022 `IngestedItem`s). May be empty. */
+  /** Open issues for the repo (`IngestedItem`s). May be empty. */
   issues: ReadonlyArray<IngestedItem>;
   actor: ActorContext;
 }

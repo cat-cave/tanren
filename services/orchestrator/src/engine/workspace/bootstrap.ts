@@ -1,4 +1,4 @@
-// P3-0006: per-repo workspace bootstrap. Runs clone the target repo into a
+// per-repo workspace bootstrap. Runs clone the target repo into a
 // runner workspace but never install its dependencies, so the cloned tree
 // cannot build or test — the live acceptance-medium evidence showed the
 // checker hitting `vitest: not found`. This step runs the project's install
@@ -31,7 +31,7 @@ const OUTPUT_TAIL_LIMIT = 4_000;
 // falls into. npm is always present in the base runner image; pnpm is too.
 //
 // This is the fallback used only when the repo declares no install command: the
-// run path resolves the repo's .tanren/ci.yml `bootstrap.run` (P3-0004's
+// run path resolves the repo's .tanren/ci.yml `bootstrap.run` (the
 // bootstrapCommand resolver, via resolveBootstrapCommand) and passes it as
 // `command`; when the repo ships no .tanren/ci.yml the resolver yields undefined
 // and this heuristic default applies.
@@ -84,7 +84,7 @@ export interface BootstrapWorkspaceInput {
   // The install command, run in the workspace dir over SSH. Defaults to
   // DEFAULT_BOOTSTRAP_COMMAND when omitted.
   command?: string;
-  // Plane B (P-APP-ENV-0): the PROJECT's dev+test app env, materialized into the
+  // Plane B: the PROJECT's dev+test app env, materialized into the
   // EXECUTED command's environment ONLY (an `export K='v'; …` prelude built at
   // THIS substrate boundary). It is DELIBERATELY kept off the `command` field —
   // the original command (never the prelude) is what flows into
@@ -98,7 +98,7 @@ export interface BootstrapWorkspaceInput {
 
 // A typed, observable bootstrap failure. Carries the exit code and a bounded
 // tail of the combined install output so the halting run outcome and the
-// P2B-0008 recovery surface have a concrete diagnostic to show.
+// recovery surface have a concrete diagnostic to show.
 export class WorkspaceBootstrapError extends Error {
   override readonly name = "WorkspaceBootstrapError";
 
@@ -167,7 +167,7 @@ export interface EnsureWorkspaceDepsInput {
   // explicit `.tanren/ci.yml` `bootstrap.run` / `input.bootstrapCommand` is passed
   // verbatim. So this default applies ONLY to the genuine greenfield case.
   command?: string;
-  // Plane B (P-APP-ENV-0): same substrate-boundary handling as bootstrapWorkspace
+  // Plane B: same substrate-boundary handling as bootstrapWorkspace
   // — the `export K='v'; …` prelude is prepended to the EXECUTED command ONLY, never
   // to `command`, so a failure surfaces the ORIGINAL command (prelude-free) and no
   // app-secret value can reach the error message / events. Undefined ⇒ no app env.

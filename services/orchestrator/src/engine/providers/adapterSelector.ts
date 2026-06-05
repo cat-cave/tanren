@@ -20,7 +20,7 @@ import { createPiWriter } from "./pi.js";
 import { createReasonixWriter } from "./reasonix.js";
 import type { AnswererAdapter, WriterAdapter } from "./types.js";
 
-// P3-0012: resolves a routing-table fallback-chain entry (P2A-0006:
+// resolves a routing-table fallback-chain entry (
 // { cli, model, authRef, healthHint? }) into a concrete Writer/Answerer
 // adapter. This is the selector the buildAdapters path uses to make the new
 // Claude + opencode providers selectable as chain entries — WITHOUT any schema
@@ -30,7 +30,7 @@ import type { AnswererAdapter, WriterAdapter } from "./types.js";
 // its adapter from a chain entry; no persisted shape changes.
 //
 // Supported CLIs:
-//   - "codex":    Writer + Answerer (the P2A template; unchanged)
+//   - "codex":    Writer + Answerer (the default template)
 //   - "claude":   Writer + Answerer
 //   - "opencode": Writer only, Zai GLM 5.1 (no Answerer; mirrors the type-level
 //                 AnswererAdapter.cli union which excludes opencode)
@@ -95,7 +95,7 @@ export function buildWriterAdapter(deps: AdapterSelectorDependencies, entry: Rou
   if (!harnessSupportsRole(entry.cli, "write")) {
     throw new UnsupportedProviderError(entry.cli, "writer");
   }
-  // P3-0029: wrap the built adapter so every real provider call emits a
+  // wrap the built adapter so every real provider call emits a
   // boundary timing record. The adapter's core logic is untouched.
   switch (entry.cli) {
     case "codex":
@@ -121,7 +121,7 @@ export function buildWriterAdapter(deps: AdapterSelectorDependencies, entry: Rou
 export function buildAnswererAdapter<TOutput>(
   deps: AdapterSelectorDependencies,
   entry: RoutingChainEntry,
-  // P3-0029: the loop role (plan/check/audit/demo) the resolved Answerer
+  // the loop role (plan/check/audit/demo) the resolved Answerer
   // serves, threaded into the boundary timing record. Defaults to the generic
   // "answerer" dimension when a caller does not pin a role.
   role = "answerer",
@@ -208,7 +208,7 @@ export function buildSimulatedReviewerAdapter(
   return buildAnswererAdapter<ReviewAnswer>(deps, chainHead(routing, "audit"), "review");
 }
 
-// Resolves the intent-preserving conflict-resolution Answerer (P2b,
+// Resolves the intent-preserving conflict-resolution Answerer (
 // autonomy-engine.md §2b). Like the simulated reviewer, there is no dedicated
 // `conflict` routing chain — resolving a DAG-aware conflict is a high-stakes
 // reasoning judgment over BOTH specs' intent + the conflict hunks + the DAG
@@ -223,8 +223,8 @@ export function buildConflictResolverAdapter(
   return buildAnswererAdapter<ConflictAnswer>(deps, chainHead(routing, "audit"), "conflict");
 }
 
-// P3-0011: resolves the project's `demo` routing chain into an Answerer that
-// emits the P2A-0008 DemoAnswer. The demo role defaults to an EMPTY chain
+// resolves the project's `demo` routing chain into an Answerer that
+// emits the DemoAnswer. The demo role defaults to an EMPTY chain
 // (see RoutingTable in config/shared.ts), so a project without a configured
 // demo credential resolves to `null` — the signal the demo narrator uses to
 // fall back to its deterministic template instead of hard-failing. When the

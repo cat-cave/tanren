@@ -1,14 +1,14 @@
-// P3-0021 scheduled audits: typed contracts for the recurring read-only
+// scheduled audits: typed contracts for the recurring read-only
 // Answerer-pass library.
 //
 // An AUDIT JOB is a persisted recurring pass (kind / cadence / target-window /
 // Answerer CLI / enabled / last-run / findings). When a job RUNS, an injectable
 // `AuditPassRunner` executes a read-only Answerer pass (over the SSH substrate
 // in prod; a fake in tests) and returns FINDINGS. The scheduler emits those
-// findings into the candidate inbox (P3-0022) through a SYSTEM source that
+// findings into the candidate inbox through a SYSTEM source that
 // auto-routes — so audit findings become candidates with no manual triage.
 //
-// The pass runner is a seam (mirrors P3-0010 / P3-0014 / the inbox triage
+// The pass runner is a seam (mirrors the conversation / discovery / inbox triage
 // answerer) so nothing here couples to a provider and the whole flow is
 // mockable end-to-end.
 

@@ -1,4 +1,4 @@
-// Plane-split P2: the control-plane CLAIM endpoint. `POST /internal/claim-job`
+// The control-plane CLAIM endpoint. `POST /internal/claim-job`
 // runs the EXISTING atomic claim (`FOR UPDATE SKIP LOCKED` → CAS to `running`,
 // via `JobQueue.claim`) and returns the claimed job — incl. its `org_id`
 // threaded onto the queue row (R3b). The data-plane `worker` calls this over the

@@ -1,9 +1,9 @@
-// P3-0005: the loop-facing gate seam. Resolves which tiers run at a lifecycle
+// the loop-facing gate seam. Resolves which tiers run at a lifecycle
 // point from the (already-resolved) CI config and runs each in order, stopping
 // at the first tier that fails. This is what the writer loop calls — once per
 // writer iteration with when="per_iteration", and once before the audit with
 // when="pre_audit". The config is sourced from the repo's tanren-ci.yml when
-// present and the documented P3-0004 default when absent (resolveCiConfig).
+// present and the documented default when absent (resolveCiConfig).
 import type { CiConfigV1, CiWhen } from "../../ci/index.js";
 import { tiersFor } from "../../ci/index.js";
 import type { RunnerHandle } from "../../contracts/allocator.js";
@@ -20,7 +20,7 @@ export interface RunGateForWhenInput {
   timeoutMs: number;
   appendEvent: GateAppendEvent;
   taskId?: string;
-  // Plane B (P-APP-ENV-0): the project's dev+test app env, threaded to each tier
+  // Plane B: the project's dev+test app env, threaded to each tier
   // so the building agent's gate commands run with it. Never logged/emitted.
   appEnv?: Record<string, string>;
   // LENIENT POSTURE: advisory (warn-but-don't-block) step names, threaded to each

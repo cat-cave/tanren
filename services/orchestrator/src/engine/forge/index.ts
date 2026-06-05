@@ -1,6 +1,5 @@
-// P2A-0019 Forge data substrate barrel. Routes (P2A-0019), the Phase 2B
-// dashboard, and the Phase 3 LLM author all import the typed surface from
-// here.
+// Forge data substrate barrel. The routes, the dashboard, and the LLM author
+// all import the typed surface from here.
 
 export {
   ForgeThreadScope,
@@ -36,8 +35,8 @@ export {
 
 export * from "./tools/index.js";
 
-// P3-0010: thick-Forge LLM conversation backend (the Phase 3 swap-in for the
-// templated v0 narration on operator-driven questions).
+// thick-Forge LLM conversation backend (the real-LLM answerer for
+// operator-driven questions; the templated v0 narration is the fallback).
 export * from "./conversation/index.js";
 
 export {

@@ -1,5 +1,5 @@
-// P3-0016 brownfield onboarding (full track) HTTP routes. Layered on top of the
-// P2B-0002 minimal link endpoint (which lives in `./index.ts`); these add the
+// brownfield onboarding (full track) HTTP routes. Layered on top of the
+// minimal link endpoint (which lives in `./index.ts`); these add the
 // deeper steps without touching the link handler:
 //
 //   POST /:orgId/projects/:projectId/recon
@@ -11,11 +11,11 @@
 //     (operator-excluded paths removed). "No runs until merged."
 //
 //   POST /:orgId/projects/:projectId/seed-dag
-//     Turn recon gaps + open GitHub issues into seed specs (P2A-0013 createSpec).
+//     Turn recon gaps + open GitHub issues into seed specs (createSpec).
 //
 //   POST /:orgId/projects/:projectId/governance
 //     Persist the chosen posture (strict | open | audit_only) onto the project
-//     config (P3-0023). The external-push behavior is DERIVED from the posture
+//     config. The external-push behavior is DERIVED from the posture
 //     (see `governancePosture.ts`), so no new config field + no migration.
 //
 //   POST /:orgId/projects/:projectId/migration

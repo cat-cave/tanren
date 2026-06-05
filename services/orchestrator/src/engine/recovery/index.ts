@@ -1,7 +1,7 @@
-// P2B-0008 failure-recovery engine. The four operator-initiated recovery
+// failure-recovery engine. The four operator-initiated recovery
 // actions for a halted run, each enforcing project access (via the route's
 // authz gate before calling here), persisting a typed lineage event, and —
-// where it re-runs work — re-invoking the existing P2A-0012 planner loop by
+// where it re-runs work — re-invoking the existing planner loop by
 // queuing a fresh run from the (possibly revised) spec.
 //
 // Lineage home: the events table. Each action appends a `recovery.*` event so
@@ -120,7 +120,7 @@ export interface ReviseSpecResult {
 }
 
 /**
- * revise_spec — record the intent + return the spec-edit href (P2B-0003 surface).
+ * revise_spec — record the intent + return the spec-edit href (surface).
  * The action itself never mutates the spec; the edit form does, then the
  * operator triggers a replan. This keeps the gesture observable without forking
  * the spec-edit write path.
@@ -154,7 +154,7 @@ export interface ReplanResult {
 /**
  * replan_with_steering — append the operator's steering note to the spec
  * description, then re-invoke the planner by queuing a fresh run from the spec
- * (the P2A-0012 loop picks it up from the job queue). The steering note is
+ * (the loop picks it up from the job queue). The steering note is
  * carried into the next planner invocation via the spec text it plans against.
  */
 export async function replanWithSteering(

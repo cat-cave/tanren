@@ -1,4 +1,4 @@
-// P3-0021 scheduled-audits: forge-recommended coverage gaps.
+// scheduled-audits: forge-recommended coverage gaps.
 //
 // The "forge recommends" panel (hi-fi `AUDIT_RECOMMENDED`) surfaces audit kinds
 // the org is NOT yet running, with a grounded "why" and a target window to fill.

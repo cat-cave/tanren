@@ -1,20 +1,20 @@
-// P2A-0020 `model_mismatch` compute. Groups cost records by spec class
+// `model_mismatch` compute. Groups cost records by spec class
 // (milestone label) and writer model over the configured comparison window,
 // then emits one insight per spec class where the most-recently-used model
 // costs at least `modelMismatchCostRatio`× the cheapest model with enough
 // merged samples.
 //
-// Inputs derive from P2A-0011 (cost records) joined with the merged outcome
-// from `runs` and the spec→milestone link from P2A-0018. v0 uses the
+// Inputs derive from cost records joined with the merged outcome
+// from `runs` and the spec→milestone link from. v0 uses the
 // milestone *label* as the spec class because it is the stable, operator-
 // readable grouping; specs without a milestone bucket into "unclassified"
 // and are skipped (no comparable peers).
 //
 // The action surface re-uses `tanren.acknowledge_insight` for snooze/dismiss
 // and `tanren.create_spec` for the operator to draft a routing-change spec.
-// Phase 3 will swap in a dedicated `tanren.switch_writer_for_spec_class`
-// tool once the routing layer (P2A-0013 has spec-class config; the runtime
-// allocator hookup is a Phase 3 surface).
+// A dedicated `tanren.switch_writer_for_spec_class` tool can swap in once the
+// routing layer carries spec-class config (the runtime allocator hookup is a
+// later surface).
 
 import type pg from "pg";
 import { randomUUID } from "node:crypto";

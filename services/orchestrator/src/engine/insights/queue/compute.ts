@@ -1,8 +1,8 @@
-// P2e-1 queue/stack statistics (autonomy-engine.md §2d Mergify parity, item 3).
+// queue/stack statistics (autonomy-engine.md §2d).
 // A pure reducer (`deriveQueueStats`) over the native queue's OWN events plus a
 // thin DB loader (`computeQueueStats`). No migration, no write path — every
-// input event predates this spec (P2d / P2d-2). This is the read-model that
-// justifies "remove Mergify": Tanren now surfaces what Mergify's queue did.
+// input event predates this read-model. This is the read-model that surfaces
+// what a managed merge queue's dashboard would — from the native queue's own events.
 //
 // Inputs (all read-only native-queue events):
 //   - merge.queued          → an entry ENTERED the queue (time-in-queue start).

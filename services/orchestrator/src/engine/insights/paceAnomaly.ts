@@ -1,4 +1,4 @@
-// P2A-0020 `pace_anomaly` compute. Compares the elapsed time of in-flight
+// `pace_anomaly` compute. Compares the elapsed time of in-flight
 // writer-subtask tasks against the class average over the last
 // `paceAnomalyWindowDays` days of same-class completed subtasks. Emits one
 // insight per in-flight task whose elapsed-time multiplier crosses the

@@ -1,4 +1,4 @@
-// SlackProvisioner (P-INT-3) — the Plane-A Slack `notify` provisioner: it
+// SlackProvisioner — the Plane-A Slack `notify` provisioner: it
 // CREATES / FINDS the Tanren notification channel for a project from the org's
 // Slack bot grant, so an operator never hand-creates a channel per project. It is
 // a WRITER against the Slack Web API (distinct from the runtime send adapter

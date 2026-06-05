@@ -3,7 +3,7 @@
 // non-recoverable state into a recoverable terminal state + emits the matching
 // `run.*` event, under the run's org scope.
 //
-// Plane-split P3: when a remote `RunStateWriter` is wired AND the run has an org,
+// When a remote `RunStateWriter` is wired AND the run has an org,
 // the finalize + event route through the control-plane endpoints (the data plane
 // writes no tenant tables directly); otherwise they run the SAME in-process
 // org-scoped writes as before (the DEFAULT, behavior-identical, reversible). The
@@ -29,7 +29,7 @@ export async function finalizeRunRecoverable(
   message: string,
   orgId: string | null,
 ): Promise<void> {
-  // Plane-split P3: when a remote writer is wired AND the run has an org, route
+  // When a remote writer is wired AND the run has an org, route
   // the finalize (UPDATE runs → halted) + the run.failed event through the
   // control-plane endpoints. The finalize endpoint applies the SAME
   // `status IN ('running','queued','failed')` guard server-side (exactly-once),

@@ -90,7 +90,7 @@ export interface PlannerRunContext {
   runnerImage: string;
   identitySecretRef: string;
   githubCredentialRef: string;
-  // P2a (Part 2): the org's GitHub App installation, when installed. The workspace
+  // Part 2: the org's GitHub App installation, when installed. The workspace
   // CLONE resolves its token App-first through the VcsProvider seam (like the CI-poll /
   // merge stages), else falls back to the static `githubCredentialRef`.
   installation?: OrgGithubAppInstallation;
@@ -124,17 +124,17 @@ export interface PlannerRunAdapterContext {
 export interface RunPlannerLoopInput {
   pool: RunStateClient;
   eventStore?: EventStore;
-  // Plane-split P3: the cost recorder the loop persists cost_records through.
+  // The cost recorder the loop persists cost_records through.
   // Defaults to an in-process `CostRecorder` over `pool` + `eventStore` (today's
   // direct DB write). The run worker injects a writer-backed recorder so the cost
   // INSERT routes through the control-plane endpoint when remote-writes is on.
   recorder?: CostRecorder;
-  // Plane-split P3: how the workflow finalizes the run (the terminal `UPDATE runs`).
+  // How the workflow finalizes the run (the terminal `UPDATE runs`).
   // Defaults to the in-process org-scoped UPDATE on `pool`; the worker injects a
   // writer-backed finalizer that routes through the control-plane endpoint when
   // remote-writes is on. Returns nothing — the workflow doesn't branch on it.
   finalizeRun?: (input: { runId: string; status: string; outcome: string; fromStatuses: string[] }) => Promise<void>;
-  // Plane-split P3c: the run/spec/task LIFECYCLE writer. When present (remote-writes
+  // the run/spec/task LIFECYCLE writer. When present (remote-writes
   // on, the run has an org), every non-finalize `runs` / `specs` / `tasks` write the
   // workflow drives routes through the control-plane endpoints; absent (the default),
   // the workflow runs its byte-identical in-process org-scoped writes on `pool`.
@@ -145,7 +145,7 @@ export interface RunPlannerLoopInput {
   // Dimension D — the per-run credential-scoping seam ({@link applyScopedRunCredentials}).
   credentialScoping?: RunCredentialScoping;
   vcsProvider: VcsProvider;
-  // P2a (Part 2): the shared GitHub App installation-token minter (cache lives here),
+  // Part 2: the shared GitHub App installation-token minter (cache lives here),
   // threaded into App-first clone-token resolution so a private clone reuses the run's
   // minted/cached token. Omitted → the provider mints a per-call minter when installed.
   githubAppMinter?: GithubAppTokenMinter;
@@ -162,7 +162,7 @@ export interface RunPlannerLoopInput {
   ciPollDelayMs?: number;
   sleep?: (ms: number) => Promise<void>;
   pressureThresholdPercent?: number;
-  // P3-0006: explicit install-command override run over SSH after clone. When
+  // explicit install-command override run over SSH after clone. When
   // omitted the run resolves the repo's tanren-ci.yml `bootstrap.run`, else a
   // default (cold bootstrap: DEFAULT_BOOTSTRAP_COMMAND; in-loop deps-ensure:
   // greenfield-aware, see buildDefaultGate).
@@ -174,9 +174,9 @@ export interface RunPlannerLoopInput {
   // becomes the writer's diff base (run baseSha). When omitted, the real
   // commitBootstrapState runs over SSH; tests inject a scripted sha (or "").
   commitBootstrap?: (input: CommitBootstrapStepInput) => Promise<string>;
-  // P3-0005 test seam: the deterministic gate the loop runs per writer iteration
+  // test seam: the deterministic gate the loop runs per writer iteration
   // (fast tier) and before audit (slow tier). When omitted, the default reads the
-  // workspace's tanren-ci.yml (or the P3-0004 default) and runs the mapped tiers.
+  // workspace's tanren-ci.yml (or the default) and runs the mapped tiers.
   // Tests inject a mock to assert routing without a live runner.
   runGate?: (input: { when: CiWhen; taskId?: string }) => Promise<GateOutcome>;
   // Test seams. Omitted in production → real Codex adapters + SSH usage probe.
@@ -189,17 +189,17 @@ export interface RunPlannerLoopInput {
   // Answerer is resolved from the project routing (audit chain head; Codex by
   // default). Only invoked when the project's reviewPolicy is "simulated".
   buildSimulatedReviewer?: (ctx: PlannerRunAdapterContext) => AnswererAdapter<ReviewAnswer>;
-  // P3-0008 review→merge tail seams. Omitted in production → the real GitHub
-  // review/merge stages drive through the P3-0003 resolver. Tests inject mocks
+  // review→merge tail seams. Omitted in production → the real GitHub
+  // review/merge stages drive through the resolver. Tests inject mocks
   // so unit runs never hit GitHub.
   reviewProbe?: ReviewProbe;
   mergeProbe?: MergeProbe;
   resolveConflict?: ConflictResolverHook;
-  // P2d (native_queue): enters a ready run into the native merge queue (→ mergeForRun).
+  // native_queue: enters a ready run into the native merge queue (→ mergeForRun).
   nativeQueueEnqueuer?: NativeQueueEnqueuer;
   // Max review→rework re-entries before the run halts pending operator action.
   maxReviewReworks?: number;
-  // Plane B (P-APP-ENV-0): the PROJECT's dev+test app env — env vars + secrets the
+  // Plane B: the PROJECT's dev+test app env — env vars + secrets the
   // product Tanren is BUILDING needs to run+test its app. Resolved by the worker
   // from `project_app_env` (dev+test), materialized over the runner into the building
   // agent's command env (gate + bootstrap), NEVER logged and DISTINCT from Tanren's
@@ -242,7 +242,7 @@ export interface PlannerRunResult {
 }
 
 /**
- * Plane-split P3c: the optional lifecycle-writer seam for a sub-stage input — the
+ * the optional lifecycle-writer seam for a sub-stage input — the
  * `runStateWriter` when one is wired, else `{}` (the sub-stage does its in-process
  * write). One helper so the workflow threads it into each stage with no per-call
  * `exactOptionalPropertyTypes` ternary (keeping the workflow's branch count down).
@@ -268,12 +268,12 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
   // Dimension D: de-privilege the run behind a per-run scoped Vault child token
   // BEFORE any credential read ({@link applyScopedRunCredentials}).
   const input = await applyScopedRunCredentials(rawInput, appendEvent);
-  // Plane-split P3: how the run's terminal status is finalized (remote via the
+  // How the run's terminal status is finalized (remote via the
   // control-plane endpoint, or the byte-identical in-process UPDATE) — see
   // {@link buildFinalizeRunState}.
   const finalizeRunState = buildFinalizeRunState(input, context.runId);
 
-  // Plane-split P3c: the `running` transition + the supersede route through the
+  // the `running` transition + the supersede route through the
   // lifecycle writer when wired (remote), else the byte-identical in-process write.
   await markRunRunning(input, context);
   await supersedeQueuedPlannerTask(input, context.runId);
@@ -296,7 +296,7 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
     // Clone + bootstrap-install + commit-the-bootstrap-state in one stage. The
     // bootstrap commit's sha is the writer's diff base (checker/auditor + captured
     // diff see only the writer's changes); the clone HEAD is kept so the PR-branch
-    // cleanup drops the bootstrap commit before push. P3-0006: deps install before
+    // cleanup drops the bootstrap commit before push.: deps install before
     // the writer loop so gating sees a built tree; baseSha is threaded so replanned
     // done work isn't false-rejected. Clone auth uses the run's GitHub token (PRIVATE repos).
     const { cloneHeadSha, bootstrapSha, baseSha } = await prepareRunWorkspace(input, allocation.target, workspacePath);
@@ -315,7 +315,7 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
     const { adapters, usageProbe } = await resolveRunAdaptersWithBudgetPreflight(input, adapterCtx, appendEvent);
     // MANAGED run: the per-call real-`usage.cost` capturer (undefined on BYOK). See its builder.
     const captureRealProviderCost = await buildManagedCapturerForRun(input);
-    // P3-0005: the deterministic gate runs on the just-bootstrapped workspace.
+    // the deterministic gate runs on the just-bootstrapped workspace.
     // Resolve the CI config once (tanren-ci.yml, else the default) and run the tiers
     // mapped to each lifecycle point over SSH — exit codes only, no Answerer.
     const runGate = input.runGate ?? buildDefaultGate(input, allocation.target, workspacePath, eventStore);
@@ -324,7 +324,7 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
     // the post-rebase re-gate hook (`buildReGateCi`).
     const mergeGateCtx: MergeGateRunContext = { runGate, target: allocation.target, workspacePath, eventStore };
 
-    // P3-0008: the write→gate→PR→CI→review tail can re-enter on a changes-requested
+    // the write→gate→PR→CI→review tail can re-enter on a changes-requested
     // review, re-running the loop with the reviewer feedback seeded as planner
     // steering, up to maxReviewReworks. On approval it proceeds to merge; else halts.
     const maxReworks = input.maxReviewReworks ?? 1;
@@ -457,7 +457,7 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
       // Same source as PR-creation + CI-poll (project record → org default).
       resolvedGithubCredentialRef: context.githubCredentialRef,
       mergeProbe: input.mergeProbe,
-      // P2b: the intent-preserving conflict resolver is the PRODUCTION DEFAULT
+      // the intent-preserving conflict resolver is the PRODUCTION DEFAULT
       // for the resolveConflict hook (replacing noopConflictResolver). Tests
       // inject input.resolveConflict to skip the live runner/model; production
       // omits it → the real resolver, built from the run's merge-stage context.
@@ -473,7 +473,7 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
       // After an auto-rebase the prior verdict is stale, so re-run the native
       // `pre_merge` gate + re-publish before merging — the merge authority, no forge poll.
       reGateCi: buildReGateCi(input, mergeGateCtx),
-      // P2d: under `native_queue` the merge stage enters this run into the queue.
+      // under `native_queue` the merge stage enters this run into the queue.
       ...nativeQueueSeam(input),
     });
 

@@ -1,6 +1,6 @@
-// P3-0016: the real GitHub `RepoReader` behind the recon step. Reads the linked
-// repo READ-ONLY through the SAME P3-0003 token resolution + injectable
-// `GitHubHttpClient` (P3-0028) as the rest of P3 — it lists the repo tree and
+// the real GitHub `RepoReader` behind the recon step. Reads the linked
+// repo READ-ONLY through the SAME token resolution + injectable
+// `GitHubHttpClient` as the rest of the brownfield reader — it lists the repo tree and
 // pulls a small set of high-signal files (manifests, READMEs, CI workflows) for
 // the recon Answerer to reason over. It NEVER writes to the target repo.
 //

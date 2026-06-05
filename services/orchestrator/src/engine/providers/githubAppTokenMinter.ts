@@ -1,4 +1,4 @@
-// P3-0003: GitHub App installation-token minter.
+// GitHub App installation-token minter.
 //
 // Flow (GitHub's documented App auth):
 //   1. Sign a short-lived (~10 min) RS256 JWT with the App private key. The JWT

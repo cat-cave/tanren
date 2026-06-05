@@ -1,13 +1,13 @@
-// Plane-split P3: resolve the worker's RUN-STATE WRITER from the environment.
+// Resolve the worker's RUN-STATE WRITER from the environment.
 //
 //   - With TANREN_DATA_PLANE_REMOTE_WRITES=1 AND the write endpoint URL +
 //     data-plane mTLS certs configured, the worker routes its run-state writes
 //     through the control plane: an `HttpRunStateWriter` on the SAME
-//     `buildNodeMtlsFetch` channel P2 built for the claim. The data plane then
-//     writes NO tenant tables directly (the P3 de-privilege end-state).
+//     `buildNodeMtlsFetch` channel used for the claim. The data plane then
+//     writes NO tenant tables directly (the full de-privilege end-state).
 //   - Otherwise → `undefined`, so the worker uses the DEFAULT `DirectRunStateWriter`
 //     (today's in-process org-scoped DB writes). The flag-OFF path is unchanged —
-//     so P3 is REVERSIBLE: nothing changes unless the flag is explicitly set.
+//     so the cutover is REVERSIBLE: nothing changes unless the flag is set.
 //
 // The write endpoint shares the claim endpoint's host (the internal mTLS
 // listener), so it reuses TANREN_CLAIM_ENDPOINT_URL by default; an override

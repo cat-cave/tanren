@@ -25,7 +25,7 @@ import {
 // top of the org-level defaults; the routing table is a full table at the
 // project layer because the operator UI renders the merged view per role.
 
-// P3-0002: a project's bound credential references. Both fields are optional;
+// a project's bound credential references. Both fields are optional;
 // a project may bind only one kind and inherit the other from the org default.
 export const ProjectCredentialRefs = z
   .object({
@@ -90,7 +90,7 @@ export const ProjectConfigV1 = z
     // project opts into `"auto"` (the no-review tier), the review stage
     // short-circuits to an approved verdict so the merge dispatch proceeds.
     reviewPolicy: ReviewPolicy.default("human"),
-    // P2c-1 (autonomy-engine.md §2c): how far along an ancestor must be before a
+    // autonomy-engine.md §2c: how far along an ancestor must be before a
     // dependent may start building SPECULATIVELY (against the ancestor's
     // prospective merged world) rather than waiting for it to genuinely merge.
     // Defaults to `moderate` (the §6 resolved default: CI-green + audited with no
@@ -98,20 +98,20 @@ export const ProjectConfigV1 = z
     // MERGE still waits for the real ancestor merge — the threshold gates WORK,
     // not MERGE.
     speculationThreshold: SpeculationThreshold.default(DEFAULT_SPECULATION_THRESHOLD),
-    // P2c-1 (§2c open decision §6): the max number of UNMERGED ancestors deep a
+    // §2c open decision §6: the max number of UNMERGED ancestors deep a
     // speculative integration branch may stack. A ready dependent whose
     // unmerged-ancestor depth EXCEEDS this is HELD (logged via
     // dag.spec.speculation_held, never silently truncated) until ancestors merge.
     // Default 2.
     speculativeIntegrationDepth: z.number().int().min(1).default(DEFAULT_SPECULATIVE_INTEGRATION_DEPTH),
-    // P2d-2 (§2d): the MAX BATCH SIZE for speculative batch-check + bisect — how many
+    // §2d: the MAX BATCH SIZE for speculative batch-check + bisect — how many
     // mutually-eligible queued entries the native MergeCoordinator speculatively
     // integrates + CI-checks as a combined unit before merging. A larger batch
     // amortizes the integration-CI run; a smaller one shrinks bisect cost. Default 5.
     // When more entries are eligible the batch is CAPPED to the DAG-ordered prefix +
     // the cap is logged (never a silent truncation). Only consulted under `native_queue`.
     maxBatchSize: z.number().int().min(1).default(DEFAULT_MAX_BATCH_SIZE),
-    // P3-0025: optional per-project preview-deploy URL pattern. Drives the live
+    // optional per-project preview-deploy URL pattern. Drives the live
     // preview iframe in the Review surface. Supports `{branch}` and `{pr}`
     // placeholders (e.g. `https://pr-{pr}.preview.fly.dev`). Optional. The dashboard
     // never writes a preview URL onto runs — it derives one from this pattern at
@@ -128,8 +128,8 @@ export const ProjectConfigV1 = z
     deployAppId: z.string().min(1).optional(),
     deployAppName: z.string().min(1).optional(),
     envAttachmentRef: z.string().min(1).optional(),
-    // P3-0002: optional credential refs the run executor resolves before a run.
-    // Absent ⇒ the resolver falls back to the org defaults. Refs are the P2A-0013
+    // optional credential refs the run executor resolves before a run.
+    // Absent ⇒ the resolver falls back to the org defaults. Refs are the spec-creation
     // managed namespace (`credential/<kind>/<scope>/...`), not vault:// URIs.
     credentials: ProjectCredentialRefs.optional(),
     // SaaS Tier-B #5: optional per-project override of the org's BYOK-vs-managed

@@ -1,4 +1,4 @@
-// P3-0022 candidate-inbox engine. Composes the existing foundations:
+// candidate-inbox engine. Composes the existing foundations:
 //
 //   ingestSource(deps, source)
 //     Pulls raw items from the source's CONNECTOR, triages each (over the
@@ -7,7 +7,7 @@
 //     candidates land `triaged`, awaiting an operator call.
 //
 //   acceptCandidate(deps, input)
-//     The accept→discovery hand-off. It reuses the P3-0014 discovery engine's
+//     The accept→discovery hand-off. It reuses the discovery engine's
 //     `acceptProposals` to create the spec(s) + stamp provenance, then resolves
 //     the candidate to `accepted` with the created spec-id. This deliberately
 //     composes discovery rather than re-implementing spec creation.
@@ -202,7 +202,7 @@ export async function autoRouteCandidate(
 }
 
 // Build a discovery insight from a candidate so the accept hand-off reuses the
-// P3-0014 discovery accept path verbatim.
+// discovery accept path verbatim.
 function insightFor(candidate: Candidate): DiscoveryInsight {
   const variant = candidate.triage?.discoveryVariant ?? "feature";
   return {
@@ -244,7 +244,7 @@ export interface AcceptCandidateResult {
   specId: string;
 }
 
-// Accept → discovery: create the spec via the P3-0014 accept path, then resolve
+// Accept → discovery: create the spec via the accept path, then resolve
 // the candidate to `accepted` carrying the new spec-id.
 export async function acceptCandidate(
   deps: InboxEngineDeps,

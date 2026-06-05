@@ -1,12 +1,12 @@
-// P3-0016: the real GitHub adapter behind the `ConfigInjectionGitHub` port.
-// Wraps the shared `GitHubHttpClient` (P3-0028) to: read the base branch head
+// the real GitHub adapter behind the `ConfigInjectionGitHub` port.
+// Wraps the shared `GitHubHttpClient` to: read the base branch head
 // SHA, create the head branch (idempotently), PUT each kept file via the
 // contents API, then open (or reuse) the PR via `GitHubPullRequestService`.
-// Modeled on the P3-0017 `FetchConfigGateGitHub` adapter — same branch/commit/
+// Modeled on the `FetchConfigGateGitHub` adapter — same branch/commit/
 // PR shape, generalized to commit MULTIPLE files in one PR.
 //
 // The HTTP client + token are injected, so the orchestrator wires it from the
-// P3-0003 App-token resolver and tests use the in-memory fake port instead.
+// App-token resolver and tests use the in-memory fake port instead.
 
 import { GitHubPullRequestService } from "../../providers/githubPullRequestReuse.js";
 import { parseGitHubRepository, type GitHubHttpClient, type GitHubRepository } from "../../providers/github.js";

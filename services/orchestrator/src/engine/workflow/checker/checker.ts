@@ -1,5 +1,5 @@
-// P2A-0012: checker module for the planner-feedback loop. Builds the
-// per-subtask check prompt against the typed CheckAnswer schema (P2A-0008)
+// checker module for the planner-feedback loop. Builds the
+// per-subtask check prompt against the typed CheckAnswer schema
 // and exposes a `decideCheckerOutcome` helper the subtask loop uses to
 // branch into the rejection-loop path.
 import { answererOutputSchemaFor, CheckAnswer } from "../../answerers/schemas/index.js";

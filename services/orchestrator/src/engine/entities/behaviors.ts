@@ -6,7 +6,7 @@ import { PersonaStore } from "./personas.js";
 
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
-// P2A-0018: behavior is a Given/When/Then scenario owned by a persona.
+// behavior is a Given/When/Then scenario owned by a persona.
 // Check/Audit answerers can reference behavior ids when reporting verdicts.
 export const BehaviorMetadata = z.record(z.string(), z.unknown());
 export type BehaviorMetadata = z.infer<typeof BehaviorMetadata>;

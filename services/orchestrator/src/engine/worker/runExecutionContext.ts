@@ -1,4 +1,4 @@
-// P3-0001: load everything a claimed `plan` job needs to execute the real
+// load everything a claimed `plan` job needs to execute the real
 // planner-loop workflow. This is the inverse of `createQueuedRunFromSpec`: the
 // trigger persists a run + spec + project + a queued `plan` job; the worker
 // claims that job and re-hydrates the `PlannerRunContext` from those rows plus
@@ -75,7 +75,7 @@ const RunSpecProjectRowSchema = z.object({
   branch: z.string(),
   repo_url: z.string(),
   default_branch: z.string(),
-  // P2c-1: the speculative integration branch this run's PR bases on (the dynamic
+  // the speculative integration branch this run's PR bases on (the dynamic
   // base), or NULL for a normal run that bases on `default_branch`.
   speculative_base: z.string().nullable(),
   runner_image: z.string(),
@@ -169,7 +169,7 @@ export async function loadRunExecutionContext(
     projectId: decoded.project_id,
     orgId: decoded.org_id,
     repoUrl: decoded.repo_url,
-    // P2c-1 (autonomy-engine.md §2c): DYNAMIC BASE. A speculative run's PR bases
+    // autonomy-engine.md §2c: DYNAMIC BASE. A speculative run's PR bases
     // on its integration branch (the prospective merged world of its unmerged
     // ancestors); a normal run bases on `default_branch`. The run's MERGE stage
     // still re-gates against `default_branch` once ancestors genuinely merge.
@@ -181,7 +181,7 @@ export async function loadRunExecutionContext(
     runnerImage: decoded.runner_image,
     identitySecretRef: input.identitySecretRef,
     githubCredentialRef: resolved.githubCredentialRef,
-    // P2a (Part 2): the org App installation, so the clone resolves App-first.
+    // Part 2: the org App installation, so the clone resolves App-first.
     ...(installationFromOrgConfig(decoded.org_config) !== undefined && {
       installation: installationFromOrgConfig(decoded.org_config),
     }),

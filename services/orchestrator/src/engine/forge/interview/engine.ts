@@ -1,10 +1,10 @@
-// P3-0015 greenfield onboarding: the vision-interview engine.
+// greenfield onboarding: the vision-interview engine.
 //
-// Two operations, mirroring the P3-0014 discovery engine shape:
+// Two operations, mirroring the discovery engine shape:
 //
 //   runRound(deps, input)
 //     Runs ONE interview round over the injectable `InterviewAnswerer` (the
-//     same seam shape as the P3-0010 conversation answerer — provider in prod,
+//     same seam shape as the conversation answerer — provider in prod,
 //     fake in tests, deterministic fallback otherwise). It feeds the answerer
 //     the round number + the operator's prior answer + the running capture,
 //     then MERGES the returned delta into the capture and returns the next
@@ -14,9 +14,9 @@
 //
 //   deriveFromCapture(deps, input)
 //     On completion, turns the accumulated capture into a live project's
-//     product graph through the existing P2A-0018/0013 creation paths (see
+//     product graph through the existing entity-creation paths (see
 //     `derive.ts`). Returns the new project + the derived spec/entity ids; the
-//     DAG is then read back via P3-0013's `getProjectDag`.
+//     DAG is then read back via `getProjectDag`.
 
 import type pg from "pg";
 import type { ActorContext } from "../../../auth/schemas.js";

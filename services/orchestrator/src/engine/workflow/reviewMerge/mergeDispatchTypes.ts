@@ -18,7 +18,7 @@ export type DispatchedIntegration = "native_queue" | "direct_merge" | "external_
 
 /**
  * The outcome of the merge stage. `conflict` is the recoverable branch;
- * `blocked` is the P3-0023 governance-posture outcome — a strict-posture
+ * `blocked` is the governance-posture outcome — a strict-posture
  * external change held for operator approval, or an audit_only observed change.
  */
 export type MergeOutcomeKind = "merged" | "queued" | "handed_off" | "conflict" | "failed" | "blocked";
@@ -37,7 +37,7 @@ export interface MergeForRunResult {
 export interface MergeForRunInput {
   pool: RunStateClient;
   eventStore?: EventStore;
-  // Plane-split P3c: route the merge task INSERT/UPDATE through the control plane
+  // route the merge task INSERT/UPDATE through the control plane
   // when wired (remote-writes on); absent, the in-process org-scoped write runs.
   runStateWriter?: RunStateWriter;
   secrets: SecretStore;
@@ -55,13 +55,13 @@ export interface MergeForRunInput {
    */
   mergeProbe?: MergeProbe;
   /**
-   * P3-0023 test seam. Resolves the PR's distinct contributor logins for
+   * test seam. Resolves the PR's distinct contributor logins for
    * external-change detection. Production omits it → the dispatcher lists the
    * PR commits through the VcsProvider and derives the logins.
    */
   contributorProbe?: ContributorProbe;
   /**
-   * P2b intent-preserving conflict resolver — a REQUIRED merge-stage input.
+   * intent-preserving conflict resolver — a REQUIRED merge-stage input.
    * Invoked on a detected merge conflict BEFORE the recoverable `merge.conflict`
    * outcome is emitted. Production wires the real
    * `intentPreservingConflictResolver` (built from the run's merge-stage context,
@@ -73,7 +73,7 @@ export interface MergeForRunInput {
    */
   resolveConflict: ConflictResolverHook;
   /**
-   * P2a up-to-date enforcement: re-poll the run's CI to a terminal verdict after
+   * up-to-date enforcement: re-poll the run's CI to a terminal verdict after
    * an auto-rebase advanced the branch (the branch HEAD moved, so the prior
    * green is stale). Production wires this to `pollCiForRun` through the SAME
    * vcsProvider seam; tests inject a scripted re-gate. Post-rebase re-gating is
@@ -84,7 +84,7 @@ export interface MergeForRunInput {
    */
   reGateCi?: ReGateCiHook;
   /**
-   * P2d (native_queue): the hook that ENTERS a ready run into Tanren's native
+   * native_queue: the hook that ENTERS a ready run into Tanren's native
    * merge queue (instead of merging immediately). Required ONLY when the resolved
    * integration is `native_queue` AND this is the run-loop's first pass (not the
    * coordinator DRIVE pass) — the dispatcher calls it to persist the queue entry +
@@ -95,10 +95,11 @@ export interface MergeForRunInput {
    */
   enqueueNativeQueue?: NativeQueueEnqueuer;
   /**
-   * P2d (native_queue): the DRIVE flag. The native queue's MergeCoordinator calls
+   * native_queue: the DRIVE flag. The native queue's MergeCoordinator calls
    * mergeForRun a SECOND time for the claimed head run with `queueDrive: true` —
-   * which runs the SAME directMerge logic (P2a/P2b/P2c-1) as `direct_merge`, but
-   * labels its events `native_queue`. Absent (the default) on the run-loop's first
+   * which runs the SAME directMerge logic (up-to-date/rebase + conflict-resolution
+   * + retarget) as `direct_merge`, but labels its events `native_queue`. Absent
+   * (the default) on the run-loop's first
    * pass, where `native_queue` ENQUEUES instead of merging. This is how the
    * coordinator reuses the per-run merge path without a second merge impl.
    */
@@ -106,7 +107,7 @@ export interface MergeForRunInput {
 }
 
 /**
- * P2d: enters a ready-to-merge run into the native merge queue. Returns whether the
+ * enters a ready-to-merge run into the native merge queue. Returns whether the
  * entry was newly created (so merge.queued is emitted exactly once). The pg impl
  * persists the row under RLS via the MergeQueueModel; a test injects a fake.
  */
@@ -121,25 +122,25 @@ export type NativeQueueEnqueuer = (input: {
 /** Injectable merge-operation probe (real GitHub by default; mocked in tests). */
 export interface MergeProbe {
   merge(): Promise<MergePullRequestResult>;
-  /** P2a: read the PR branch's up-to-date / mergeability state before merging. */
+  /** read the PR branch's up-to-date / mergeability state before merging. */
   readMergeability(): Promise<PullRequestMergeability>;
-  /** P2a: bring the PR branch up to date with its base (server-side update). */
+  /** bring the PR branch up to date with its base (server-side update). */
   updateBranch(): Promise<UpdateBranchResult>;
   /**
-   * P2c-1 (§2c step 3): re-point the PR's base to `newBase` (default_branch) when
+   * §2c step 3: re-point the PR's base to `newBase` (default_branch) when
    * a speculative dependent's hold clears, so it lands on real `main`, not the
-   * ephemeral integration ref. Followed by the P2a rebase + re-gate flow.
+   * ephemeral integration ref. Followed by the rebase + re-gate flow.
    */
   retargetBase(newBase: string): Promise<void>;
   /**
-   * P2c-1 (§2c cleanup): delete the ephemeral integration ref after the dependent
+   * §2c cleanup: delete the ephemeral integration ref after the dependent
    * merged. Best-effort + idempotent (a missing ref is success).
    */
   deleteIntegrationBranch(branch: string): Promise<void>;
 }
 
 /**
- * P2a re-gate hook: drive the run's CI back to a terminal verdict after a
+ * re-gate hook: drive the run's CI back to a terminal verdict after a
  * rebase. Returns the CI status so the stage knows whether to merge (`passed`),
  * fail (`failed`), or hold (`pending` after the budget). Production resolves
  * this to a `pollCiForRun` loop; tests inject a scripted result.

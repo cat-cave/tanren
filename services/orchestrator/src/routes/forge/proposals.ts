@@ -1,4 +1,4 @@
-// P3-0010 (write-action approval): approve / reject / list Forge action
+// write-action approval: approve / reject / list Forge action
 // proposals.
 //
 //   GET  /:orgId/forge/threads/:threadId/proposals    pending + decided list
@@ -8,7 +8,7 @@
 // The model proposed the write; these routes are where a HUMAN decides. On
 // approve the write executes through `buildWriteToolDispatcher`, which authz's
 // the APPROVING operator's ActorContext (the write tools enforce the same gate
-// as the P2A-0013 routes). Decisions are idempotent: a proposal already decided
+// as the routes). Decisions are idempotent: a proposal already decided
 // returns 409 and never re-executes (the store's conditional claim is the
 // backstop). Mounted alongside the ask route on the same `/orgs` base.
 
@@ -99,7 +99,7 @@ export function createForgeProposalRoutes(options: ForgeProposalRoutesOptions) {
 }
 
 // Dispatches an approved WRITE through the typed tool layer. The write tools
-// authz the actor (same gate as the P2A-0013 routes) and throw
+// authz the actor (same gate as the routes) and throw
 // WriteToolAccessDeniedError / ToolAccessDeniedError on denial — surfaced by
 // the decide engine as a `failed` outcome.
 export function buildWriteToolDispatcher(options: ForgeProposalRoutesOptions): ForgeWriteToolDispatcher {

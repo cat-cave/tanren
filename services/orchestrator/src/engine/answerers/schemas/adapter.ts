@@ -1,10 +1,10 @@
-// Bridges the typed Phase 2 Answerer schemas (Zod source of truth) to the
+// Bridges the typed Answerer schemas (Zod source of truth) to the
 // `AnswererOutputSchema` interface accepted by the existing Codex Answerer
 // adapter (`services/orchestrator/src/engine/providers/codex.ts`). The
 // generated JSON Schema files under `generated/` are the canonical artifact
 // that `codex exec --output-schema` consumes; this helper loads that mirror
-// at runtime so a future cutover from Phase 1 schemas (P2A-0012, P2A-0019)
-// can swap callers over without re-stating the JSON Schema in code.
+// at runtime so a future cutover can swap callers over without re-stating
+// the JSON Schema in code.
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 

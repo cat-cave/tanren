@@ -1,4 +1,4 @@
-// P3-0023: external-push governance posture. The `governancePosture` enum on
+// external-push governance posture. The `governancePosture` enum on
 // the project config (strict | open | audit_only) already exists; this module
 // turns it into actual behavior at the merge decision point.
 //

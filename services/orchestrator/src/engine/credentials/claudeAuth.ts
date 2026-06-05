@@ -1,7 +1,7 @@
 import type { SecretStore } from "../contracts/secretStore.js";
 import { validateCredentialRef } from "./codexAuth.js";
 
-// P3-0012: Claude CLI credential bundle. Mirrors the Codex auth contract — the
+// Claude CLI credential bundle. Mirrors the Codex auth contract — the
 // stored secret is the JSON the Claude CLI persists for an authenticated
 // session (its `.credentials.json` token bundle). We validate it is a non-empty
 // JSON object carrying a recognizable token field, but never inspect or log the
