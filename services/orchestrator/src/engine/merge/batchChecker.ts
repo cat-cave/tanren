@@ -128,80 +128,98 @@ export class PgBatchChecker implements BatchChecker {
     });
     const repo = this.deps.vcsProvider.parseRepository(project.repo_url);
 
-    // 1. Build the prospective merged state on the ephemeral batch ref (NEVER main).
-    const integration = await this.deps.vcsProvider.buildIntegrationBranch({
-      repo,
-      token,
-      baseBranch: project.default_branch,
-      integrationBranch,
-      ancestors: ordered,
-    });
-    if (integration.outcome === "conflict") {
-      // Distinguish a SPEC-vs-SPEC conflict (two queued entries clash) from a single PR
-      // dirty against the BASE. `buildIntegrationBranch` sets `otherSpecId = merged.at(-1)
-      // ?? baseBranch`, so a first-merge-onto-base conflict yields `otherSpecId ===
-      // default_branch` — that is a base conflict, which the coordinator drives through
-      // the real per-run resolver rather than bisecting/dequeuing it. (Preserved from #322.)
-      const conflictsWithBase = integration.conflictBetween?.otherSpecId === project.default_branch;
-      return {
-        result: "conflict",
-        message: integration.message,
-        conflictsWithBase,
-        ...(integration.conflictBetween !== undefined && { conflictBetween: integration.conflictBetween }),
-      };
-    }
-
-    // 2. Run the NATIVE gate against the prospective merged tree (the integration ref):
-    // a fresh runner clones the ref, installs deps, runs the `pre_merge` gate. The gate
-    // is synchronous → a definitive pass/fail (no async forge CI, no no-checks settle).
-    // A runner/clone/bootstrap fault is an INFRA error (a retriable hold, never a bisect).
+    // The ephemeral `tanren/batch/<tail>` ref is EPHEMERAL per check: build it,
+    // gate it, then ALWAYS tear it down (pass / fail / conflict / infra-error) so a
+    // retry or the next batch starts from a clean ref instead of a stale leftover.
+    // `buildIntegrationBranch`'s `resetRef` IS idempotent (create→force-PATCH), so a
+    // leftover ref no longer 422-bricks — but leaving it around accumulates dead refs
+    // and re-points the next build off a stale tail; the teardown keeps it clean.
     try {
-      // The gate's `gate.*` event INSERTs are tenant writes, so run the whole gate
-      // under the project's ambient org scope (each event opens its own short
-      // org-scoped txn — runWithJobOrgId, NOT a held txn across the SSH ops).
-      const { outcome } = await runWithJobOrgId(orgId, () =>
-        runFreshRunnerMergeGate(
-          {
-            allocator: this.deps.allocator,
-            ssh: this.deps.ssh,
-            secrets: this.deps.secrets,
-            vcsProvider: this.deps.vcsProvider,
-            ...(this.deps.githubAppMinter !== undefined && { githubAppMinter: this.deps.githubAppMinter }),
-            eventStore: new PgEventStore(this.deps.pool),
-            identitySecretRef: this.deps.identitySecretRef,
-            timeoutMs: this.deps.timeoutMs,
-          },
-          {
-            repoUrl: project.repo_url,
-            ref: integrationBranch,
-            runnerImage: project.runner_image ?? DEFAULT_BATCH_RUNNER_IMAGE,
-            governancePosture: resolveGovernancePosture(project.project_config),
-            ...(installation !== undefined && { installation }),
-            githubCredentialRef: staticRef ?? "",
-            orgId,
-            projectId: input.projectId,
-            // A synthetic `run_`-prefixed handle for runner/workspace naming + event
-            // correlation (the batch has no single run). Sanitized to the safe charset.
-            runId: `run_batch_${tailSpecId.replaceAll(/[^A-Za-z0-9_-]/gu, "_")}`,
-            specId: tailSpecId,
-          },
-        ),
-      );
-      if (outcome.passed) {
-        return { result: "pass", integrationBranch };
+      // 1. Build the prospective merged state on the ephemeral batch ref (NEVER main).
+      const integration = await this.deps.vcsProvider.buildIntegrationBranch({
+        repo,
+        token,
+        baseBranch: project.default_branch,
+        integrationBranch,
+        ancestors: ordered,
+      });
+      if (integration.outcome === "conflict") {
+        // Distinguish a SPEC-vs-SPEC conflict (two queued entries clash) from a single PR
+        // dirty against the BASE. `buildIntegrationBranch` sets `otherSpecId = merged.at(-1)
+        // ?? baseBranch`, so a first-merge-onto-base conflict yields `otherSpecId ===
+        // default_branch` — that is a base conflict, which the coordinator drives through
+        // the real per-run resolver rather than bisecting/dequeuing it. (Preserved from #322.)
+        const conflictsWithBase = integration.conflictBetween?.otherSpecId === project.default_branch;
+        return {
+          result: "conflict",
+          message: integration.message,
+          conflictsWithBase,
+          ...(integration.conflictBetween !== undefined && { conflictBetween: integration.conflictBetween }),
+        };
       }
-      return {
-        result: "fail",
-        message: `batch gate failed on ${integrationBranch}: tier ${outcome.failure.tier} step ${outcome.failure.failedStep}`,
-      };
-    } catch (error) {
-      // The gate could not be RUN (allocate/clone/bootstrap fault) — NOT a verdict. The
-      // coordinator must never blame/bisect a PR for this: hold + bounded-retry the batch.
-      return {
-        result: "infra-error",
-        message: `batch gate could not run on ${integrationBranch}: ${error instanceof Error ? error.message : String(error)}`,
-        retriable: true,
-      };
+
+      // 2. Run the NATIVE gate against the prospective merged tree (the integration ref):
+      // a fresh runner clones the ref, installs deps, runs the `pre_merge` gate. The gate
+      // is synchronous → a definitive pass/fail (no async forge CI, no no-checks settle).
+      // A runner/clone/bootstrap fault is an INFRA error (a retriable hold, never a bisect).
+      try {
+        // The gate's `gate.*` event INSERTs are tenant writes, so run the whole gate
+        // under the project's ambient org scope (each event opens its own short
+        // org-scoped txn — runWithJobOrgId, NOT a held txn across the SSH ops).
+        const { outcome } = await runWithJobOrgId(orgId, () =>
+          runFreshRunnerMergeGate(
+            {
+              allocator: this.deps.allocator,
+              ssh: this.deps.ssh,
+              secrets: this.deps.secrets,
+              vcsProvider: this.deps.vcsProvider,
+              ...(this.deps.githubAppMinter !== undefined && { githubAppMinter: this.deps.githubAppMinter }),
+              eventStore: new PgEventStore(this.deps.pool),
+              identitySecretRef: this.deps.identitySecretRef,
+              timeoutMs: this.deps.timeoutMs,
+            },
+            {
+              repoUrl: project.repo_url,
+              ref: integrationBranch,
+              runnerImage: project.runner_image ?? DEFAULT_BATCH_RUNNER_IMAGE,
+              governancePosture: resolveGovernancePosture(project.project_config),
+              ...(installation !== undefined && { installation }),
+              githubCredentialRef: staticRef ?? "",
+              orgId,
+              projectId: input.projectId,
+              // A synthetic `run_`-prefixed handle for runner/workspace naming + event
+              // correlation (the batch has no single run). Sanitized to the safe charset.
+              runId: `run_batch_${tailSpecId.replaceAll(/[^A-Za-z0-9_-]/gu, "_")}`,
+              specId: tailSpecId,
+            },
+          ),
+        );
+        if (outcome.passed) {
+          return { result: "pass", integrationBranch };
+        }
+        return {
+          result: "fail",
+          message: `batch gate failed on ${integrationBranch}: tier ${outcome.failure.tier} step ${outcome.failure.failedStep}`,
+        };
+      } catch (error) {
+        // The gate could not be RUN (allocate/clone/bootstrap fault) — NOT a verdict. The
+        // coordinator must never blame/bisect a PR for this: hold + bounded-retry the batch.
+        return {
+          result: "infra-error",
+          message: `batch gate could not run on ${integrationBranch}: ${error instanceof Error ? error.message : String(error)}`,
+          retriable: true,
+        };
+      }
+    } finally {
+      // Tear down the ephemeral batch ref (idempotent: deleteBranch swallows 404/422 of
+      // an already-gone ref). Best-effort — a teardown hiccup must never overwrite the
+      // verdict (resetRef force-updates a leftover anyway), so it is caught + logged.
+      await this.deps.vcsProvider.deleteBranch(repo, integrationBranch, token).catch((error: unknown) => {
+        console.warn(
+          `[merge] batch ref teardown of ${integrationBranch} failed (non-fatal; next build force-resets it):`,
+          error instanceof Error ? error.message : String(error),
+        );
+      });
     }
   }
 

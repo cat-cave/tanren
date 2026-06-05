@@ -96,6 +96,8 @@ class FakeClient {
 
 /** A fake VcsProvider: integration is configurable; token/repo resolution is canned. */
 class FakeVcsProvider implements Partial<VcsProvider> {
+  /** The ephemeral batch refs `deleteBranch` was asked to tear down. */
+  readonly deletedBranches: string[] = [];
   constructor(private readonly integration: BuildIntegrationBranchResult) {}
   async resolveToken(_creds: VcsCredentialContext): Promise<ResolvedVcsToken> {
     return { token: "t", source: "static", refresh: async () => "t2" };
@@ -106,6 +108,9 @@ class FakeVcsProvider implements Partial<VcsProvider> {
   }
   async buildIntegrationBranch(_input: BuildIntegrationBranchInput): Promise<BuildIntegrationBranchResult> {
     return this.integration;
+  }
+  async deleteBranch(_repo: RepoRef, branch: string, _token: ResolvedVcsToken): Promise<void> {
+    this.deletedBranches.push(branch);
   }
 }
 
@@ -169,37 +174,42 @@ function makeChecker(
   integration: BuildIntegrationBranchResult,
   ssh: CommandSubstrate,
   allocator: Allocator = new FakeAllocator(),
-): PgBatchChecker {
-  return new PgBatchChecker({
+): { checker: PgBatchChecker; vcs: FakeVcsProvider } {
+  const vcs = new FakeVcsProvider(integration);
+  const checker = new PgBatchChecker({
     pool: new FakePool() as unknown as pg.Pool,
-    vcsProvider: new FakeVcsProvider(integration) as unknown as VcsProvider,
+    vcsProvider: vcs as unknown as VcsProvider,
     secrets: new InMemorySecretStore(),
     allocator,
     ssh,
     identitySecretRef: "id",
     timeoutMs: 1000,
   });
+  return { checker, vcs };
 }
 
 describe("PgBatchChecker — native gate on the integration ref (no-Actions delivery)", () => {
   it("an empty batch passes (the bisect lower-bound — the base is green)", async () => {
-    const checker = makeChecker(INTEGRATED, new GateDrivingSsh(0));
+    const { checker } = makeChecker(INTEGRATED, new GateDrivingSsh(0));
     const verdict = await checker.checkBatch({ projectId: PROJECT, entries: [] });
     expect(verdict.result).toBe("pass");
   });
 
-  it("a passing integration gate → pass + releases the runner", async () => {
+  it("a passing integration gate → pass + releases the runner + tears down the batch ref", async () => {
     const allocator = new FakeAllocator();
-    const checker = makeChecker(INTEGRATED, new GateDrivingSsh(0), allocator);
+    const { checker, vcs } = makeChecker(INTEGRATED, new GateDrivingSsh(0), allocator);
     const verdict = await checker.checkBatch({ projectId: PROJECT, entries: [entry("spec_a")] });
     expect(verdict.result).toBe("pass");
     expect(allocator.releases).toEqual(["runner_batch"]);
+    // The ephemeral batch ref is ALWAYS torn down (next batch/retry starts clean).
+    expect(vcs.deletedBranches).toEqual(["tanren/batch/spec_a"]);
   });
 
-  it("a failing integration gate → fail (a bad interaction blocks the batch)", async () => {
-    const checker = makeChecker(INTEGRATED, new GateDrivingSsh(1));
+  it("a failing integration gate → fail + tears down the batch ref", async () => {
+    const { checker, vcs } = makeChecker(INTEGRATED, new GateDrivingSsh(1));
     const verdict = await checker.checkBatch({ projectId: PROJECT, entries: [entry("spec_a")] });
     expect(verdict.result).toBe("fail");
+    expect(vcs.deletedBranches).toEqual(["tanren/batch/spec_a"]);
   });
 
   it("a SPEC-vs-SPEC integration conflict → conflict (conflictsWithBase=false)", async () => {
@@ -209,10 +219,12 @@ describe("PgBatchChecker — native gate on the integration ref (no-Actions deli
       message: "spec_a vs spec_b clash",
       conflictBetween: { specId: "spec_b", otherSpecId: "spec_a" },
     };
-    const checker = makeChecker(conflict, new GateDrivingSsh(0));
+    const { checker, vcs } = makeChecker(conflict, new GateDrivingSsh(0));
     const verdict = await checker.checkBatch({ projectId: PROJECT, entries: [entry("spec_a"), entry("spec_b")] });
     if (verdict.result !== "conflict") throw new Error("unreachable");
     expect(verdict.conflictsWithBase).toBe(false);
+    // Even a conflict tears down the (already-reset-to-base) ref so it never lingers.
+    expect(vcs.deletedBranches).toEqual(["tanren/batch/spec_b"]);
   });
 
   it("a base conflict → conflict (conflictsWithBase=true, preserved from #322)", async () => {
@@ -223,16 +235,18 @@ describe("PgBatchChecker — native gate on the integration ref (no-Actions deli
       // buildIntegrationBranch sets otherSpecId = default_branch for a first-merge-onto-base clash.
       conflictBetween: { specId: "spec_a", otherSpecId: "main" },
     };
-    const checker = makeChecker(baseConflict, new GateDrivingSsh(0));
+    const { checker } = makeChecker(baseConflict, new GateDrivingSsh(0));
     const verdict = await checker.checkBatch({ projectId: PROJECT, entries: [entry("spec_a")] });
     if (verdict.result !== "conflict") throw new Error("unreachable");
     expect(verdict.conflictsWithBase).toBe(true);
   });
 
-  it("a runner-allocation fault → infra-error (a retriable hold, never a bisect)", async () => {
-    const checker = makeChecker(INTEGRATED, new GateDrivingSsh(0), new FakeAllocator(true));
+  it("a runner-allocation fault → infra-error (a retriable hold) + still tears down the batch ref", async () => {
+    const { checker, vcs } = makeChecker(INTEGRATED, new GateDrivingSsh(0), new FakeAllocator(true));
     const verdict = await checker.checkBatch({ projectId: PROJECT, entries: [entry("spec_a")] });
     if (verdict.result !== "infra-error") throw new Error("unreachable");
     expect(verdict.retriable).toBe(true);
+    // Even on an infra-error the ephemeral ref is torn down (the finally always runs).
+    expect(vcs.deletedBranches).toEqual(["tanren/batch/spec_a"]);
   });
 });
