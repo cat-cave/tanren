@@ -215,6 +215,32 @@ export class ProgressRoutesPool {
       return { rows, rowCount: rows.length };
     }
 
+    // fetchCompletionBlockingSpecIds: unbounded merge signal projection.
+    if (trimmed.startsWith("WITH signal_events AS (")) {
+      const projectId = String(params[0]);
+      const orgId = String(params[1]);
+      const decided = new Set<string>();
+      const blocked = new Set<string>();
+      const events = this.events
+        .filter((e) => e.project_id === projectId && e.org_id === orgId)
+        .filter((e) => isMergeCompletionSignal(e))
+        .sort((a, b) => b.ts.getTime() - a.ts.getTime() || b.id - a.id);
+      for (const event of events) {
+        const ids = attributedSpecIds(event, this.runs);
+        if (event.event_type === "merge.completed") {
+          for (const id of ids) decided.add(id);
+          continue;
+        }
+        for (const id of ids) {
+          if (decided.has(id)) continue;
+          decided.add(id);
+          blocked.add(id);
+        }
+      }
+      const rows = [...blocked].sort().map((spec_id) => ({ spec_id }));
+      return { rows, rowCount: rows.length };
+    }
+
     return { rows: [], rowCount: 0 };
   }
 
@@ -227,4 +253,50 @@ export class ProgressRoutesPool {
   asPgPool(): pg.Pool {
     return this as unknown as pg.Pool;
   }
+}
+
+function isMergeCompletionSignal(event: EventRow): boolean {
+  if (event.event_type === "merge.completed") return true;
+  const payload = payloadRecord(event);
+  if (!isNativeQueueOrLegacyPayload(payload)) return false;
+  if (event.event_type === "merge.queue.infra_blocked") return true;
+  if (event.event_type === "merge.batch.infra_blocked") return payload["terminal"] === true;
+  if (event.event_type === "merge.dequeued") return payload["reason"] === "blocked" || payload["reason"] === "failed";
+  return false;
+}
+
+function isNativeQueueOrLegacyPayload(payload: Record<string, unknown>): boolean {
+  const integration = payload["integration"];
+  return integration === undefined || integration === "native_queue";
+}
+
+function attributedSpecIds(event: EventRow, runs: ReadonlyArray<RunRow>): string[] {
+  const ids: string[] = [];
+  const payload = payloadRecord(event);
+  appendSpecId(ids, payload["specId"]);
+  appendMemberSpecIds(ids, payload["members"]);
+  if (event.event_type !== "merge.batch.infra_blocked" || ids.length === 0) {
+    appendSpecId(ids, event.spec_id);
+  }
+  if (ids.length === 0) {
+    appendSpecId(ids, runs.find((run) => run.run_id === event.run_id)?.spec_id);
+  }
+  return [...new Set(ids)];
+}
+
+function appendMemberSpecIds(ids: string[], members: unknown): void {
+  if (!Array.isArray(members)) return;
+  for (const member of members) {
+    if (member === null || typeof member !== "object") continue;
+    appendSpecId(ids, (member as Record<string, unknown>)["specId"]);
+  }
+}
+
+function appendSpecId(ids: string[], value: unknown): void {
+  if (typeof value === "string" && value !== "") ids.push(value);
+}
+
+function payloadRecord(event: EventRow): Record<string, unknown> {
+  if (event.payload === null || typeof event.payload !== "object") return {};
+  return event.payload as Record<string, unknown>;
 }

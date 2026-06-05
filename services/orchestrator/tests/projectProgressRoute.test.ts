@@ -313,12 +313,148 @@ describe("project progress route", () => {
     pool.seedProjectMember("proj_done", "user_alice");
     pool.seedSpec({ spec_id: "d1", project_id: "proj_done", title: "One", status: "merged" });
     pool.seedSpec({ spec_id: "d2", project_id: "proj_done", title: "Two", status: "merged" });
+    pool.seedEvent({
+      id: 1,
+      event_type: "merge.dequeued",
+      spec_id: "d1",
+      run_id: "run_external",
+      project_id: "proj_done",
+      payload: { integration: "external_reviewer", reason: "blocked", message: "external reviewer blocked" },
+    });
+    pool.seedEvent({
+      id: 2,
+      event_type: "merge.dequeued",
+      spec_id: "d2",
+      run_id: "run_conflict",
+      project_id: "proj_done",
+      payload: { integration: "native_queue", reason: "conflict", message: "recoverable conflict" },
+    });
 
     const { body } = await getJson(app, "/orgs/org_acme/projects/proj_done/progress");
     const progress = ProjectProgress.parse(body);
     expect(progress.v1Reached).toBe(true);
     expect(progress.percentComplete).toBe(100);
     expect(progress.specCounts.merged).toBe(2);
+    expect(progress.blocked).toEqual([]);
+  });
+
+  it("does not mark v1 reached when a completed ok run later has a failed legacy dequeue", async () => {
+    const { app, pool } = buildHarness();
+    pool.seedProject({ project_id: "proj_stale", org_id: "org_acme", name: "Stale", repo_url: "https://x/r" });
+    pool.seedProjectMember("proj_stale", "user_alice");
+    pool.seedSpec({ spec_id: "stale_a", project_id: "proj_stale", title: "Already merged", status: "merged" });
+    pool.seedSpec({ spec_id: "stale_b", project_id: "proj_stale", title: "Open PR", status: "merged" });
+    pool.seedRun({
+      run_id: "run_open_pr",
+      spec_id: "stale_b",
+      project_id: "proj_stale",
+      status: "completed",
+      outcome: "ok",
+      pr_url: "https://example.com/pull/42",
+    });
+    pool.seedEvent({
+      id: 1,
+      event_type: "merge.completed",
+      spec_id: "stale_b",
+      run_id: "run_open_pr",
+      project_id: "proj_stale",
+      payload: { prUrl: "https://example.com/pull/42" },
+    });
+    pool.seedEvent({
+      id: 2,
+      event_type: "merge.dequeued",
+      spec_id: null,
+      run_id: "run_open_pr",
+      project_id: "proj_stale",
+      payload: {
+        reason: "failed",
+        message: 'duplicate key value violates unique constraint "runners_pkey"',
+      },
+    });
+
+    const { body } = await getJson(app, "/orgs/org_acme/projects/proj_stale/progress");
+    const progress = ProjectProgress.parse(body);
+
+    expect(progress.specCounts.merged).toBe(2);
+    expect(progress.v1Reached).toBe(false);
+    expect(progress.percentComplete).toBe(50);
+    expect(progress.recentMilestones[0]).toMatchObject({
+      type: "merge.dequeued",
+      specId: "stale_b",
+      title: "Open PR",
+      detail: 'duplicate key value violates unique constraint "runners_pkey"',
+    });
+    expect(progress.blocked).toEqual([{ specId: "stale_b", title: "Open PR", status: "completion_blocked" }]);
+  });
+
+  it("blocks completion when terminal merge infra is outside the recent feed window", async () => {
+    const { app, pool } = buildHarness();
+    pool.seedProject({ project_id: "proj_deep", org_id: "org_acme", name: "Deep", repo_url: "https://x/r" });
+    pool.seedProjectMember("proj_deep", "user_alice");
+    pool.seedSpec({ spec_id: "deep_a", project_id: "proj_deep", title: "Done", status: "merged" });
+    pool.seedSpec({ spec_id: "deep_b", project_id: "proj_deep", title: "Terminal hold", status: "merged" });
+    pool.seedRun({ run_id: "run_deep", spec_id: "deep_b", project_id: "proj_deep", status: "failed" });
+    pool.seedEvent({
+      id: 1,
+      event_type: "merge.batch.infra_blocked",
+      spec_id: "wrong_batch_row",
+      run_id: "run_deep",
+      project_id: "proj_deep",
+      payload: {
+        integration: "native_queue",
+        members: [{ specId: "deep_b", prNumber: 42 }],
+        message: "batch check setup exhausted",
+        attempts: 3,
+        terminal: true,
+        consecutiveHolds: 3,
+      },
+    });
+    for (let id = 2; id <= 205; id += 1) {
+      pool.seedEvent({
+        id,
+        event_type: "writer.started",
+        spec_id: "deep_a",
+        run_id: `run_noise_${id}`,
+        project_id: "proj_deep",
+      });
+    }
+
+    const progress = ProjectProgress.parse((await getJson(app, "/orgs/org_acme/projects/proj_deep/progress")).body);
+
+    expect(progress.specCounts.merged).toBe(2);
+    expect(progress.v1Reached).toBe(false);
+    expect(progress.percentComplete).toBe(50);
+    expect(progress.recentMilestones.some((m) => m.type === "merge.batch.infra_blocked")).toBe(false);
+    expect(progress.blocked).toEqual([{ specId: "deep_b", title: "Terminal hold", status: "completion_blocked" }]);
+  });
+
+  it("lets a newer merge.completed clear an older terminal merge dequeue failure", async () => {
+    const { app, pool } = buildHarness();
+    pool.seedProject({ project_id: "proj_cleared", org_id: "org_acme", name: "Cleared", repo_url: "https://x/r" });
+    pool.seedProjectMember("proj_cleared", "user_alice");
+    pool.seedSpec({ spec_id: "clear_a", project_id: "proj_cleared", title: "Cleared", status: "merged" });
+    pool.seedRun({ run_id: "run_clear", spec_id: "clear_a", project_id: "proj_cleared", status: "completed" });
+    pool.seedEvent({
+      id: 1,
+      event_type: "merge.dequeued",
+      spec_id: null,
+      run_id: "run_clear",
+      project_id: "proj_cleared",
+      payload: { integration: "native_queue", specId: "clear_a", reason: "failed", message: "check setup failed" },
+    });
+    pool.seedEvent({
+      id: 2,
+      event_type: "merge.completed",
+      spec_id: "clear_a",
+      run_id: "run_clear",
+      project_id: "proj_cleared",
+      payload: { integration: "native_queue", prNumber: 7, prUrl: "https://example.com/pull/7" },
+    });
+
+    const progress = ProjectProgress.parse((await getJson(app, "/orgs/org_acme/projects/proj_cleared/progress")).body);
+    expect(progress.v1Reached).toBe(true);
+    expect(progress.percentComplete).toBe(100);
+    expect(progress.blocked).toEqual([]);
   });
 
   it("a milestone detail surfaces a non-secret reason/message but never a secret value", async () => {
