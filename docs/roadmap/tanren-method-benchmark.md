@@ -2,14 +2,15 @@
 
 > **Status: the toolkit described here is BUILT** (prerequisite met — the run
 > loop is live-validated to merged PRs across three tiers). Code-complete on
-> `main` under `engine/benchmark/**` (entities, migration `0033`; `TrialScorecard`
+> `main` under `engine/benchmark/**` (experiment/cell/trial entities — now folded
+> into the collapsed baseline + `db/src/schema*.ts`; the `TrialScorecard`
 > projection; `deriveCellScorecard`/`compareCells` reducers; `BenchmarkRunner`
 > scheduling trials through the real worker; the post-merge hidden-`accept` step
-> emitting `benchmark.accept.*`, migration `0034`) plus the
-> `tanren experiments`/`tanren cells` CRUD + `report`/`compare` CLI over the
-> `/orgs/:orgId/experiments[/cells]` routes. **The remaining piece is the seed
-> corpus** (§1.2/§4.3 — content, not code). Where the design below says
-> "net-new"/"proposed", that work has now landed.
+> emitting `benchmark.accept.*`) plus the `tanren experiments`/`tanren cells` CRUD
+> and the `report`/`compare` CLI over the `/orgs/:orgId/experiments[/cells]`
+> routes. **The remaining piece is the seed corpus** (§1.2/§4.3 — content, not
+> code). Where the design below says "net-new"/"proposed", that work has now
+> landed.
 
 ## §0 — Why this exists, and what it is NOT
 
