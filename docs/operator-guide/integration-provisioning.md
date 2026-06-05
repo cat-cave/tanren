@@ -1,5 +1,18 @@
 # Integration provisioning boundaries
 
+> **Status — built (design-of-record).** The provisioner substrate is shipped:
+> the `org_integrations` table + repo, the `IntegrationProvisioner` contract +
+> registry, the Sentry / Slack / Fly / Vercel provisioners, the `hetznerAllocator`,
+> and the per-project **App Environment** store
+> (`engine/repositories/appEnvironment.ts` +
+> `engine/workflow/{attachRuntimeAppEnv,resolveAppEnv}.ts`, injected over SSH by
+> `engine/ssh/appEnvPrelude.ts`). This document is the durable **two-plane boundary
+> model** that governs how those pieces fit together; the per-integration matrix
+> below records the intended posture per provider (some rows still describe the
+> least-privilege / discovery refinements that remain per provider). It is **not**
+> a GitHub-Actions design — delivery is Action-less (see the `test`/gate note
+> below).
+
 Tanren integrations must start from an **org-level grant** whenever the upstream
 platform allows it. Project-, repo-, channel-, phone-, or environment-specific
 resources are Tanren-managed artifacts created from that grant during project
@@ -56,16 +69,20 @@ description, source: byo | provisioned }`. Secret values never live in DB config
     dev+test app env so the building agent can run + test the app it is writing.
     Materialized like run credentials (over SSH, never logged), but resolved from
     the **project App Environment** store, not Tanren's provider creds.
-  - **`test` / CI:** the test-scoped vars reach CI — Tanren sets them as the target
-    repo's Actions secrets (via the `VcsProvider`) so the project's `tanren-ci.yml`
-    tests that need `RESEND_API_KEY` pass.
+  - **`test` / gate:** the test-scoped vars reach the gate run — because the gate
+    (`.tanren/ci.yml`) runs **over SSH on the runner, not in GitHub Actions**,
+    Tanren injects the test-scoped app env into the gate command's environment via
+    the SSH prelude (`engine/ssh/appEnvPrelude.ts`, resolved by
+    `workflow/attachRuntimeAppEnv.ts`), never logged and never written to an event.
+    There are **no** target-repo Actions secrets and no `setActionsSecret` — that
+    is impossible under v21's Action-less delivery.
   - **`runtime` / deploy:** the deploy provisioner attaches the runtime-scoped vars
     as the **deployed app's** environment (Vercel/Fly env), so the live product has
     its secrets.
 
-This is its own build track (**P-APP-ENV**, see the roadmap build plan), parallel
-to the Plane-A provisioner work and equally required by `apex` (the apex product's
-Slack bot token + any app env are Plane B).
+This is shipped (the App Environment store + the scope-resolved SSH injection),
+parallel to the Plane-A provisioner work and exercised by `apex` (the apex
+product's Slack bot token + any app env are Plane B).
 
 ## Boundary model
 
@@ -104,21 +121,25 @@ Slack bot token + any app env are Plane B).
 | Secret stores             | Infra bootstrap credential                                                                      | Secret paths/namespaces                                                      | Correctly bootstrap-level, not per-project.                                                                                      | No user-project provisioning; provide migration/import tooling.                                                                                                       |
 | GitHub OAuth / OIDC       | Deployment/client config or per-org IdP app                                                     | Redirect URIs/group mapping                                                  | Currently infra-env.                                                                                                             | For SaaS, Tanren platform owns app; tenant/org mapping is config. For self-hosted, operator creates IdP app once.                                                     |
 
-## Immediate code backlog
+## Substrate (shipped)
 
-1. Add an `org_integrations` config surface separate from `inbox_sources` and
-   notification targets. It should store non-secret provider metadata and refs
-   to managed credentials.
-2. Add provider provisioner ports, separate from runtime poll/send adapters:
-   `SentryProvisioner`, `SlackProvisioner`, `DeployProvisioner`,
-   `CloudAllocatorProvisioner`, etc.
-3. Change onboarding/greenfield flows to request capabilities, not leaf secrets.
-   Example: "enable Sentry errors" should call the Sentry provisioner, create the
-   Sentry project/key/source, and then pass the DSN into the generated project.
-4. Keep leaf-resource manual entry only as a fallback path for providers that do
-   not expose provisioning APIs or require workspace-owner interactive consent.
-5. Update validation manifests so P0/P1 credentials are org grants and
-   project-specific resources are asserted as created artifacts during the run.
+The boundary model above is realized by:
+
+1. The `org_integrations` config surface (separate from `inbox_sources` and
+   notification targets): non-secret provider metadata + refs to managed
+   credentials, behind the `org_integrations` table + repository.
+2. The `IntegrationProvisioner` contract + registry — provider provisioner ports
+   separate from the runtime poll/send adapters (Sentry / Slack / Fly / Vercel
+   provisioners + the `hetznerAllocator`).
+3. Onboarding / greenfield flows request capabilities, not leaf secrets:
+   "enable Sentry errors" calls the Sentry provisioner, creates the project /
+   key / source, and passes the DSN into the generated project.
+4. Leaf-resource manual entry (BYO) remains the path for providers that do not
+   expose provisioning APIs or require workspace-owner interactive consent.
+
+The per-provider matrix's "Required change" column records the remaining
+least-privilege and discovery refinements that are still worthwhile per provider
+(e.g. tighter scopes, repo-access checks) — not missing foundations.
 
 ## Sentry concrete model
 

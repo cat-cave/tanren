@@ -157,15 +157,18 @@ instead of running Vault; credential refs and tenant namespacing
 (`credential/<slug>/<scope>/<ownerId>/<name>`) are uniform across backends. See
 [`credentials.md`](credentials.md).
 
-## Quota / admission gate + managed-provider toggle
+## Managed-provider toggle
 
 For multi-tenant / SaaS-priming deployments, the orchestrator carries a
-**quota/admission-gate** seam (`engine/quota/`, DB-backed policy + a
-**metering-export** hook) and a **BYOK-vs-managed provider toggle**
-(`engine/config/managedProvider.ts`, `providerMode: "byok" | "managed"`,
-default `byok`). Both default off / pass-through, so a single-tenant self-hosted
-deployment is unaffected unless it opts in. Tenancy is DB-enforced (mandatory
-`org_id`).
+**BYOK-vs-managed provider toggle** (`engine/config/managedProvider.ts`,
+`providerMode: "byok" | "managed"`, default `byok`). It defaults to BYOK /
+pass-through, so a single-tenant self-hosted deployment is unaffected unless it
+opts in. Tenancy is DB-enforced (mandatory `org_id`).
+
+There is **no** admission/quota gate: `engine/quota/` was deleted and the single
+project/org **budget** ceiling (walker-enforced; `GET/PUT /projects/:id/budget`
+and `/orgs/:orgId/budget`) is the only spend gate. Usage metering is exported via
+`engine/metering/` (`getOrgUsage` / `streamBillableRuns`).
 
 ## Principled config bucketing
 

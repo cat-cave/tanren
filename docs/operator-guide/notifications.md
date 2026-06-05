@@ -23,10 +23,10 @@ Three persistent shapes:
   row carries an `enabled` flag and a `minSeverity` floor. The floor
   filters out events whose mapped severity sits below the floor — useful
   for "I only want failures on this pager" rows.
-- `notifications` — the dispatch ledger. The legacy Phase 1 table is now
-  scoped as an append-only log of every publish attempt: `sent`,
-  `failed`, `stubbed`, or `skipped` (with the reason). UI surfaces read
-  it for the "last delivery" badge; operators read it for forensics.
+- `notifications` — the dispatch ledger: an append-only log of every
+  publish attempt, scoped to `sent`, `failed`, `stubbed`, or `skipped`
+  (with the reason). UI surfaces read it for the "last delivery" badge;
+  operators read it for forensics.
 
 The matrix is `notification_targets × notification_routes`. A `scope = user`
 target row overrides a `scope = org` target row for the same

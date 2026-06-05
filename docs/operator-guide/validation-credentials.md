@@ -1,12 +1,14 @@
 # Validation credentials — the real-connection matrix
 
-This is the plan for proving Tanren's connectors **function in practice**, not
-just in theory — for two purposes:
+This is the operator how-to for proving Tanren's connectors **function in
+practice**: which creds to provision, where each one lives, and which live check
+exercises it. It covers two uses:
 
 1. **Initial individual real validation** — a human wires up one connector and
    runs its targeted live check once.
-2. **CI automation** (nightly / weekly / on-demand) — the same connectors run on
-   a cadence so a regression that breaks a real connector is caught.
+2. **Recurring real-credential validation** — the same connectors run on a
+   credentialed runner on a cadence so a regression that breaks a real connector
+   is caught.
 
 ## The one principle that shapes the format
 
@@ -38,9 +40,9 @@ both real-world setup and testing:
 - `secret_manager_ref` → **production**: it's already stored; nothing to import.
   This is what a real operator's manifest looks like (they configured it in the
   UI; the manifest just references the stored ref).
-- `inline` | `file` | `env` → **testing**: the `just e2e` harness (built as
-  **P8b**) reads the manifest, imports each entry into the fresh stack's secret
-  manager, then runs the suite. A real operator never fills these in.
+- `inline` | `file` | `env` → **testing**: the `just e2e` harness reads the
+  manifest, imports each entry into the fresh stack's secret manager, then runs
+  the suite. A real operator never fills these in.
 
 That is the seam that guarantees "we test what we ship": the e2e suite configures
 connectors through the **same managed-credential path** a user does — never a
@@ -55,9 +57,9 @@ back-door env read, never a mock (the §8b no-mock arch check forbids it).
 
 ## Cadence model (purpose #2)
 
-**Per-PR is never real-credential.** Public PR CI has no secrets (the existing
-`just acceptance` discipline). The per-PR fast path stays mock + the §8a stub-ban
-arch lint + the §8b no-mock arch check. Real connectors run only on a
+**Per-PR is never real-credential.** Public PR CI has no secrets. The per-PR fast
+path stays fixture + the §8a stub-ban arch lint (`no-production-stubs`) + the §8b
+no-mock arch check — both are built and enforced. Real connectors run only on a
 credentialed runner, on one of:
 
 | Cadence                     | What runs                                                                                                                                                                                  | Why                                                                                           |

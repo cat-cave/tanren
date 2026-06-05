@@ -24,9 +24,9 @@ means the API is still starting). If host `:3000` is already in use, set
 published port and open <http://localhost:3003> instead — the in-container port
 stays 3000.
 
-> **Fresh-DB caveat.** Migration `0026` makes `org_id` NOT NULL on the core
-> tables (runs/tasks/events/cost_records/specs/runners). A dev volume created
-> before that migration cannot be backfilled in place, so a live run needs a
+> **Fresh-DB caveat.** The schema makes `org_id` NOT NULL on the core tables
+> (runs/tasks/events/cost_records/specs/runners). A dev volume created before
+> that constraint existed cannot be backfilled in place, so a live run needs a
 > **fresh or reset dev DB**: `just down-dev` (which removes volumes) then
 > `just up-dev`, or otherwise drop the orchestrator volume before bringing the
 > stack up.
@@ -57,9 +57,11 @@ the top-left and your projects in the sidenav.
 ## 3. Onboard an existing project + import credentials
 
 If you have no project yet, follow the existing-project onboarding flow
-(**link a repo** → `/onboarding/existing`). The dashboard reads
-`.github/workflows/` and `CODEOWNERS` for display and **writes
-nothing** to the target repo.
+(**link a repo** → `/onboarding/existing`). The native gate config Tanren reads
+is `.tanren/ci.yml` (a `CiConfigV1`); the dashboard reads it and `CODEOWNERS` for
+display and **writes nothing** to the target repo at link time. (A brownfield
+link can later _propose_ `.tanren/ci.yml` as an injected file for the operator to
+approve.)
 
 Before a run can do real work it needs CLI credentials (Codex, etc.). Import
 them from the credentials surface — see [credentials.md](./credentials.md).
@@ -74,8 +76,8 @@ one acceptance criterion, an optional milestone, behavior tags, and optional
 spec dependencies. There is no raw-config editor. Submitting persists the spec
 and returns you to the spec list.
 
-A spec you declare a dependency on must reach `done` before a dependent spec can
-run — that gate is enforced at trigger time (step 5).
+A spec you declare a dependency on must reach `merged` before a dependent spec
+can run — that gate is enforced at trigger time (step 5).
 
 ## 5. Trigger the run from the spec UI
 
@@ -99,7 +101,7 @@ failures**:
 
 | What you see                                                                                        | Why                                                           | What to do                                        |
 | --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- | ------------------------------------------------- |
-| _this spec is blocked: a spec it depends on has not finished yet_ (`409 spec_dependencies_blocked`) | A `dependsOn` spec is not `done`.                             | Finish the dependency run first, then re-trigger. |
+| _this spec is blocked: a spec it depends on has not finished yet_ (`409 spec_dependencies_blocked`) | A `dependsOn` spec is not `merged`.                           | Finish the dependency run first, then re-trigger. |
 | _this spec is not runnable_ (`409 spec_not_runnable`)                                               | The spec already started a run or is not in a runnable state. | Open its existing run from the spec row instead.  |
 | _you do not have access to start a run for this spec_ (`403`)                                       | Org/project access denied.                                    | Check you are in the right org/project.           |
 | _could not reach the orchestrator_                                                                  | The API is down.                                              | Confirm the stack is up (step 1), then retry.     |
