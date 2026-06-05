@@ -10,12 +10,13 @@
 // default path + its mutation suite are unchanged). The `fromStatuses` guard is
 // what the remote endpoint applies for exactly-once.
 
-import type { Allocator, ReleaseReason, RunnerAllocation } from "../contracts/allocator.js";
+import type { Allocator, ReleaseReason, RunnerAllocation, RunnerHandle } from "../contracts/allocator.js";
 import { asSshRunnerHandle } from "../contracts/allocator.js";
+import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import { AllocatorReleaseFinalizer } from "../contracts/releaseFinalizer.js";
 import { CodexUsageLimitError } from "../providers/codex.js";
 import type { EventName, EventPayload } from "../events/index.js";
-import { WorkspaceBootstrapError } from "../workspace/index.js";
+import { removeRunWorkspaceDir, WorkspaceBootstrapError } from "../workspace/index.js";
 import type { MergeForRunResult } from "./reviewMerge/index.js";
 import type { PlannerRunContext, RunPlannerLoopInput } from "./plannerRun.js";
 import type { SubtaskLoopOutcome } from "./subtaskLoop.js";
@@ -258,12 +259,30 @@ export async function supersedeQueuedPlannerTask(input: RunPlannerLoopInput, run
 // Called from the run's `finally`, so it MUST NOT re-throw: a throw would mask the
 // run's real failure (the catch already finalized + re-raised it). The event is the
 // loud record of a failed teardown WITHOUT swallowing the original error.
+//
+// `runWorkspace` is layer 1 of the run-sandbox disk-leak fix (≈204 GB incident):
+// BEFORE the runner is released, the run's `/workspace/runs/<runId>` dir is removed
+// over SSH. On a STATIC / long-lived reused runner `/workspace` survives every run,
+// so this is the inline reclaim of the run's clone+build tree; on an EPHEMERAL runner
+// the release destroys the volume anyway (the `rm` is then a cheap, harmless no-op
+// against a soon-dead container). The removal NEVER throws — a failed `rm` is logged
+// and tolerated, exactly like the release leak, so it cannot mask the run's outcome.
 export async function releaseRunnerWithCleanupProof(
   allocator: Allocator,
   runnerId: string,
   appendEvent: <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string) => Promise<void>,
+  runWorkspace: { ssh: CommandSubstrate; target: RunnerHandle; runId: string },
   reason: ReleaseReason = "completed",
 ): Promise<void> {
+  // Layer 1: remove the run's sandbox dir before release. Tolerant — a failure is
+  // logged (the dir is left for the periodic reaper, layer 2, to reclaim) and never
+  // re-thrown, so it cannot mask the run's real failure in the caller's `finally`.
+  const teardown = await removeRunWorkspaceDir(runWorkspace.ssh, runWorkspace.target, runWorkspace.runId);
+  if (!teardown.removed) {
+    console.warn(
+      `[run-workspace] failed to remove ${runWorkspace.runId} sandbox at end of run (reaper will reclaim): ${teardown.reason ?? "unknown"}`,
+    );
+  }
   await appendEvent("runner.released", { runnerId });
   // Release through the RELEASE FINALIZER seam: it owns the release + returns a
   // reconcilable outcome WITHOUT throwing (a throw here would mask the run's real

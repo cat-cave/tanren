@@ -33,6 +33,15 @@ export {
   type ReapJobsResult,
   type JobReaperOptions,
 } from "./jobReaper.js";
+// The run-sandbox reaper (the ≈204 GB disk-leak safety net) + its boot wiring.
+export {
+  RunWorkspaceReaper,
+  parseRunDirListing,
+  type RunWorkspaceReaperDeps,
+  type RunWorkspaceDirEntry,
+  type ActiveRunIdSource,
+} from "./runWorkspaceReaper.js";
+export { startRunWorkspaceReaper, buildPgActiveRunIdSource } from "./buildRunWorkspaceReaper.js";
 export {
   loadRunExecutionContext,
   RunExecutionContextNotFoundError,

@@ -18,6 +18,11 @@ import type { RunCredentialScoping } from "../workflow/plannerRunScopedCreds.js"
 // Re-exported so `boot.ts` builds the dimension-D credential-scoping seam from a
 // module it already depends on (keeping boot's import-dependency count under cap).
 export { buildRunCredentialScoping } from "../workflow/plannerRunScopedCreds.js";
+// Likewise re-exported here: the run-sandbox reaper is another co-located worker
+// reaper (this module's header owns "start the worker and its co-located reaper"), so
+// boot starts it from this same module — no new boot import-dependency.
+export { startRunWorkspaceReaper } from "./buildRunWorkspaceReaper.js";
+export type { RunWorkspaceReaper } from "./runWorkspaceReaper.js";
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import type { VcsProvider } from "../contracts/vcsProvider.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";

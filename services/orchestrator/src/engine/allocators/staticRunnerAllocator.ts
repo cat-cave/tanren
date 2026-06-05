@@ -6,6 +6,7 @@ import {
   type Allocator,
   type ReleaseReason,
   type RunnerAllocation,
+  type SshRunnerHandle,
 } from "../contracts/allocator.js";
 import { normalizeHostKeyFingerprint } from "../ssh/fingerprint.js";
 import type { RunnerStore } from "./runnerStore.js";
@@ -52,22 +53,29 @@ export class StaticRunnerAllocator implements Allocator {
     this.clientFactory = options.clientFactory ?? (() => new Client());
   }
 
-  async allocate(request: AllocationRequest): Promise<RunnerAllocation> {
+  /**
+   * Resolve the SSH handle to the shared static runner WITHOUT claiming a runner
+   * row. The host-key fingerprint is the configured one, else a fresh per-call TOFU
+   * discovery (the static runner regenerates host keys on each restart). Used both
+   * by `allocate` and by the run-sandbox REAPER, which needs to reach the SAME
+   * long-lived runner to sweep its `/workspace/runs/*` but is not a run allocation
+   * (so it persists no row).
+   */
+  async resolveTarget(identitySecretRef: string): Promise<SshRunnerHandle> {
     const host = this.options.host;
     const port = this.options.port;
     const username = this.options.username ?? "tanren";
     const fingerprint = this.options.hostKeyFingerprint ?? (await this.discoverHostKeyFingerprint(host, port));
+    return sshRunnerHandle({ host, port, username, hostKeyFingerprint: fingerprint, identitySecretRef });
+  }
+
+  async allocate(request: AllocationRequest): Promise<RunnerAllocation> {
+    const target = await this.resolveTarget(request.identitySecretRef);
     const runnerId = `runner_${request.runId}`;
     const allocation: RunnerAllocation = {
       runnerId,
       imageSha: `${request.runnerImage}@sha256:static`,
-      target: sshRunnerHandle({
-        host,
-        port,
-        username,
-        hostKeyFingerprint: fingerprint,
-        identitySecretRef: request.identitySecretRef,
-      }),
+      target,
     };
 
     await this.options.runners.claim({
@@ -77,9 +85,9 @@ export class StaticRunnerAllocator implements Allocator {
       ...persistedRunnerKeys(request),
       orgId: request.orgId ?? null,
       allocator: allocatorName,
-      sshHost: host,
-      sshPort: port,
-      hostKeyFingerprint: fingerprint,
+      sshHost: target.host,
+      sshPort: target.port,
+      hostKeyFingerprint: target.hostKeyFingerprint,
       imageSha: allocation.imageSha,
       containerId: runnerId,
     });

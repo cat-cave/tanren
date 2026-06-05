@@ -489,9 +489,11 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
     await finalizeWorkflowError(error, { finalizeRunState, appendEvent, runId: context.runId, workspacePath });
     throw error;
   } finally {
-    // SECURITY-BASELINE CLEANUP-PROOF: release through the RELEASE FINALIZER seam +
-    // emit the `release.finalized` audit proof. `releaseReason` reflects the run's
-    // outcome; the helper never throws (a throw here would mask the run's error).
-    await releaseRunnerWithCleanupProof(input.allocator, allocation.runnerId, appendEvent, releaseReason);
+    // SECURITY-BASELINE CLEANUP-PROOF: remove the run's `/workspace/runs/<runId>`
+    // sandbox (layer 1 of the ≈204 GB disk-leak fix), then release through the RELEASE
+    // FINALIZER seam + emit `release.finalized`. The helper never throws (a throw here
+    // would mask the run's error); `releaseReason` reflects the run's outcome.
+    const runWorkspace = { ssh: input.ssh, target: allocation.target, runId: context.runId };
+    await releaseRunnerWithCleanupProof(input.allocator, allocation.runnerId, appendEvent, runWorkspace, releaseReason);
   }
 }
