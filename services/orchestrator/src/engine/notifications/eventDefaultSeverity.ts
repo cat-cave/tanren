@@ -66,6 +66,10 @@ const SEVERITY_OVERRIDES: Partial<Record<EventName, Severity>> = {
   // Runner / allocator
   "runner.allocated": "info",
   "runner.released": "info",
+  // Security-baseline cleanup-proof: a release normally cleans up (info). The
+  // dispatcher promotes to warn when `cleanedUp=false` (residual resources to
+  // reconcile) — a leaked runner is operator-actionable.
+  "release.finalized": "info",
   "runner.failed": "warn",
   "allocator.requested": "info",
   "allocator.allocated": "info",

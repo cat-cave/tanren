@@ -24,8 +24,11 @@ import type pg from "pg";
 import type { EventStore } from "../eventStore.js";
 import { PgEventStore } from "../eventStore.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
+import { serviceAuditActor, type AuditEnvelope } from "../events/schemas/audit.js";
 import { systemActor } from "../state/actor.js";
 import type { SecretStore } from "../contracts/secretStore.js";
+import { migrateProjectConfig } from "../config/index.js";
+import { type EgressPolicy, defaultEgressPolicy } from "../security/egressPolicy.js";
 import { type DeployHttpTransport, fetchDeployTransport } from "../provisioners/deployTransport.js";
 import { OrgIntegrationsStore } from "../repositories/orgIntegrations.js";
 import { attachRuntimeAppEnv } from "../workflow/attachRuntimeAppEnv.js";
@@ -41,6 +44,12 @@ export interface ProjectDeployTarget {
   /** The deployed app/project id (the deployRef's appId). */
   appId: string;
   orgId: string;
+  /**
+   * AUDIT-EVIDENCE BASELINE: the governance policy version (the project config
+   * version), stamped onto the governing `deploy.triggered` / `deploy.verified`
+   * events so the audit trail records which policy revision the deploy ran under.
+   */
+  policyVersion: number;
 }
 
 /** The merged-run coordinates a deploy is triggered FROM. */
@@ -75,6 +84,13 @@ export interface DeployOnMergeWatcherDeps {
   urlProbe?: UrlReachabilityProbe;
   /** The verify poll cadence + bound; defaults to the production policy when absent. */
   verifyPoll?: VerifyPollPolicy;
+  /**
+   * SECURITY-BASELINE deploy-target allowlist (egressPolicy.ts). Consulted BEFORE a
+   * deploy fires so the deploy target is governed by policy, not assumed allowed.
+   * Defaults to the default-permissive policy (OSS / self-host posture); a
+   * managed-hosting build slots a restrictive policy WITHOUT touching this watcher.
+   */
+  egressPolicy?: EgressPolicy;
 }
 
 /**
@@ -102,6 +118,19 @@ export class DeployOnMergeWatcher {
     const target = await this.loadDeployTarget(merged.projectId);
     // No deploy integration on the project ⇒ clean no-op (not an error).
     if (target === undefined) return;
+
+    // SECURITY-BASELINE deploy-target allowlist: a denied target is a LOUD hard
+    // failure (no silent fallback) — the deploy never fires against an off-allowlist
+    // target. The default policy is permissive (OSS posture), so this is a no-op
+    // until a managed restrictive policy is slotted.
+    const policy = this.deps.egressPolicy ?? defaultEgressPolicy;
+    const decision = policy.allowsDeployTarget({ provider: target.provider, appId: target.appId });
+    if (!decision.allowed) {
+      throw new Error(
+        `deployOnMerge: deploy target '${target.provider}' for project '${merged.projectId}' is not ` +
+          `allowed by the egress policy: ${decision.reason}`,
+      );
+    }
 
     // Idempotent: this merge already deployed.
     if (await this.alreadyDeployed(runId)) return;
@@ -153,6 +182,13 @@ export class DeployOnMergeWatcher {
           deploymentId: result.deploymentId,
           url: result.url,
           state: result.state,
+          // AUDIT-EVIDENCE BASELINE: the released artifact's NON-SECRET provenance —
+          // the provider's stable deployment handle bound to the merged source ref
+          // (`<provider>:<deploymentId>@<ref>`), the reference a provenance attestation
+          // keys on. No `checksum`: the `direct_api` provider exposes no content digest
+          // at trigger time, so it is honestly absent (never a fabricated hash).
+          artifact: { provenanceRef: `${target.provider}:${result.deploymentId}@${merged.ref}` },
+          ...deployAuditEnvelope(target),
         },
       });
     });
@@ -201,6 +237,7 @@ export class DeployOnMergeWatcher {
           url: verification.url,
           state: verification.state,
           smokeStatus: verification.smokeStatus,
+          ...deployAuditEnvelope(target),
         },
       });
     });
@@ -244,7 +281,11 @@ export class DeployOnMergeWatcher {
       const provider = config["deployProvider"];
       const appId = config["deployAppId"];
       if (typeof provider !== "string" || typeof appId !== "string") return;
-      return { provider, appId, orgId: row.org_id };
+      // The governance policy version IS the project config version; parse it
+      // through the strict migrator (a missing/unknown version is a LOUD error,
+      // never a silent default) so the deploy audit record carries the real policy.
+      const policyVersion = migrateProjectConfig(config).version;
+      return { provider, appId, orgId: row.org_id, policyVersion };
     });
   }
 
@@ -264,6 +305,17 @@ export class DeployOnMergeWatcher {
       OrgIntegrationsStore.getGrant(client, target.orgId, target.provider, systemActor),
     );
   }
+}
+
+/**
+ * AUDIT-EVIDENCE BASELINE: the audit envelope stamped onto the governing deploy
+ * events. A deploy-on-merge is driven by the autonomous engine with no human in the
+ * loop, so the initiating actor is the SERVICE and there is no approving actor; the
+ * policy version is the project's governance config revision. Shared by both the
+ * trigger and the verify so they carry an identical envelope.
+ */
+function deployAuditEnvelope(target: ProjectDeployTarget): AuditEnvelope {
+  return { policyVersion: target.policyVersion, initiatingActor: serviceAuditActor };
 }
 
 /** Derive `owner/name` from a GitHub PR URL (`https://github.com/owner/name/pull/N`). */

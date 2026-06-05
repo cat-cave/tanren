@@ -103,6 +103,42 @@ describe("P2d native_queue merge stage", () => {
     expect(probe.mergeCalls).toBe(1);
     const completed = events.events.find((e) => e.eventType === "merge.completed");
     expect(completed?.payload).toMatchObject({ integration: "native_queue", mergeSha: "merge-sha" });
+    // AUDIT-EVIDENCE BASELINE: the terminal merge carries the governance policy
+    // version + the initiating SERVICE actor. The fixture's reviewPolicy is `human`,
+    // so a human APPROVER gated it — recorded as a generic human approving actor.
+    expect(completed?.payload).toMatchObject({
+      policyVersion: 1,
+      initiatingActor: { kind: "service", id: "tanren-engine" },
+      approvingActor: { kind: "human" },
+    });
+  });
+
+  it("records NO approving actor on the AUTONOMOUS tier (reviewPolicy auto)", async () => {
+    // The autonomous tier has no human verdict — the audit trail records that honestly
+    // (no approving actor), distinct from the human tier above which records one.
+    const pool = new ReviewMergePool("direct_merge", "open", "auto");
+    const events = new FakeEventStore();
+    const probe = recordingMergeProbe({ merged: true, mergeSha: "s", conflict: false, status: 200, message: "m" });
+
+    const result = await mergeForRun({
+      pool: pool.asPgPool(),
+      eventStore: events,
+      secrets: new FakeSecretStore(),
+      resolveConflict: noopConflictResolver,
+      vcsProvider: vcsProviderOver(unusedHttp()),
+      runId: "run_1",
+      mergeProbe: probe,
+    });
+
+    expect(result.outcome).toBe("merged");
+    const completed = events.events.find((e) => e.eventType === "merge.completed");
+    expect(completed?.payload).toMatchObject({
+      policyVersion: 1,
+      initiatingActor: { kind: "service", id: "tanren-engine" },
+    });
+    // No human review gated this merge ⇒ no approving actor (an honest empty state).
+    const completedPayload = completed!.payload as Record<string, unknown>;
+    expect(completedPayload["approvingActor"]).toBeUndefined();
   });
 
   it("direct_merge is UNCHANGED — it merges immediately (no queue)", async () => {

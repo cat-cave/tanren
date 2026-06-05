@@ -32,6 +32,13 @@ export interface ReviewMergeRunContext {
   /** P3-0023: external-push governance posture (project config). */
   governancePosture: GovernancePosture;
   /**
+   * AUDIT-EVIDENCE BASELINE: the versioned governance POLICY in effect for this
+   * run's merge decision — the project config version (the revision that defines
+   * its posture / review policy / merge integration). Stamped onto the governing
+   * `merge.completed` event so the audit trail records WHICH policy gated the merge.
+   */
+  policyVersion: number;
+  /**
    * Whether the review stage requires a human verdict before merge (project
    * config). `auto` short-circuits the review poll to an approved verdict;
    * `human` (the default) preserves the GitHub-polling behavior.
@@ -134,6 +141,7 @@ export async function loadReviewMergeRunContext(
     baseBranch: row.default_branch ?? "main",
     mergeIntegration: projectConfig.mergeIntegration,
     governancePosture: projectConfig.governancePosture,
+    policyVersion: projectConfig.version,
     reviewPolicy: projectConfig.reviewPolicy,
     tanrenLogins: tanrenLoginsFor(projectConfig.governanceTanrenLogins),
     platformLogins: projectConfig.governancePlatformLogins ?? [],

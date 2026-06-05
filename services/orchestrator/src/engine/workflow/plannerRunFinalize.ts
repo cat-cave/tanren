@@ -10,7 +10,7 @@
 // default path + its mutation suite are unchanged). The `fromStatuses` guard is
 // what the remote endpoint applies for exactly-once.
 
-import type { RunnerAllocation } from "../contracts/allocator.js";
+import type { Allocator, RunnerAllocation } from "../contracts/allocator.js";
 import { CodexUsageLimitError } from "../providers/codex.js";
 import type { EventName, EventPayload } from "../events/index.js";
 import { WorkspaceBootstrapError } from "../workspace/index.js";
@@ -239,4 +239,48 @@ export async function supersedeQueuedPlannerTask(input: RunPlannerLoopInput, run
     await input.runStateWriter.supersedeQueuedPlannerTask({ runId });
   }
   await input.pool.query("UPDATE job_queue SET status = 'cancelled' WHERE run_id = $1 AND status = 'queued'", [runId]);
+}
+
+// SECURITY-BASELINE CLEANUP-PROOF (tanren-direction.md § "Security Baseline":
+// "Release events prove cleanup and list residual resources, if any."). The runner is
+// an untrusted-code surface; the audit trail must record WHETHER its run-end teardown
+// actually succeeded, not assume it. `runner.released` narrates the intent;
+// `release.finalized` is the PROOF — `cleanedUp: false` with the runner listed as a
+// residual resource (+ a non-secret `failureReason`) when the release throws, so an
+// orphan sweeper / operator can reconcile the leak. This is the audit EVENT only — the
+// allocator still owns the destroy/wipe mechanism. Lives here (a module plannerRun.ts
+// already imports) so the run keeps its dependency count under the cap.
+//
+// Called from the run's `finally`, so it MUST NOT re-throw: a throw would mask the
+// run's real failure (the catch already finalized + re-raised it). The event is the
+// loud record of a failed teardown WITHOUT swallowing the original error.
+export async function releaseRunnerWithCleanupProof(
+  allocator: Allocator,
+  runnerId: string,
+  appendEvent: <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string) => Promise<void>,
+): Promise<void> {
+  await appendEvent("runner.released", { runnerId });
+  let releaseError: unknown;
+  try {
+    await allocator.release(runnerId);
+  } catch (error) {
+    releaseError = error;
+  }
+  const cleanedUp = releaseError === undefined;
+  const failure = cleanedUp ? {} : { failureReason: releaseFailureSummary(releaseError) };
+  await appendEvent("release.finalized", {
+    runnerId,
+    cleanedUp,
+    residualResources: cleanedUp ? [] : [`runner:${runnerId}`],
+    ...failure,
+  });
+}
+
+// A NON-SECRET one-line summary of a release failure for the cleanup-proof event. A
+// release error is an allocator/HTTP fault message (a runner id, a status, a provider
+// message) — never a credential value — but we still bound it to a single line so no
+// multi-line provider dump rides along.
+function releaseFailureSummary(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.split("\n")[0]?.slice(0, 300) ?? "runner release failed";
 }

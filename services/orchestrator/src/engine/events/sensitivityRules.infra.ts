@@ -1,6 +1,7 @@
 import type { SensitivityRule } from "./sensitivity.js";
 import { costSensitivityRules } from "./sensitivityRules.cost.js";
 import { integrationProvisioningSensitivityRules } from "./sensitivityRules.integrations.js";
+import { auditBaselineSensitivityRules, auditEnvelopeRulesFor } from "./sensitivityRules.audit.js";
 
 // Infrastructure-and-integration sensitivity rules, split out of
 // sensitivityRules.ts to keep each file under the 500-line cap (role rules stay
@@ -31,6 +32,9 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["target.hostKeyFingerprint", "redacted"],
   ]),
   ...rulesFor("runner.released", [["runnerId", "public"]]),
+  // Security-baseline cleanup-proof + deploy.triggered artifact ref (the
+  // audit-baseline rules), all public — see ./sensitivityRules.audit.ts.
+  ...auditBaselineSensitivityRules,
   ...rulesFor("runner.failed", [
     ["runnerId", "public"],
     ["command", "redacted"],
@@ -187,6 +191,9 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["integration", "public"],
     ["mergeSha", "public"],
   ]),
+  // AUDIT ENVELOPE on the terminal merge: policy version + initiating actor +
+  // approving actor (the human reviewer when a review tier gated it), all public.
+  ...auditEnvelopeRulesFor("merge.completed"),
   // P2d (§2d) native merge queue — PR identifiers + spec id + queue stats + prose,
   // all public (queue visibility + queue/stack statistics).
   ...rulesFor("merge.queue.advanced", [

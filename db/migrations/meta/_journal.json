@@ -526,6 +526,13 @@
       "when": 1780616580020,
       "tag": "0074_public_stepford_cuckoos",
       "breakpoints": true
+    },
+    {
+      "idx": 75,
+      "version": "7",
+      "when": 1780618857141,
+      "tag": "0075_silky_alex_power",
+      "breakpoints": true
     }
   ]
 }

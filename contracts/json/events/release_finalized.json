@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "cleanedUp": {
+      "type": "boolean"
+    },
+    "failureReason": {
+      "type": "string"
+    },
+    "residualResources": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "runnerId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "runnerId",
+    "cleanedUp",
+    "residualResources"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.release.finalized"
+}

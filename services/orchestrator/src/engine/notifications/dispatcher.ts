@@ -402,6 +402,15 @@ export function effectiveSeverityFor(event: TypedEvent): Severity {
       return promote(base);
     }
   }
+  // Security-baseline cleanup-proof: a clean release is info; a FAILED teardown
+  // (`cleanedUp=false`, residual resources to reconcile) promotes one tier so a
+  // leaked runner reaches the operator.
+  if (event.eventType === "release.finalized") {
+    const payload = event.payload as { cleanedUp?: boolean };
+    if (payload.cleanedUp === false) {
+      return promote(base);
+    }
+  }
   return base;
 }
 

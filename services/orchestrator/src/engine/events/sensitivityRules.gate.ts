@@ -1,4 +1,5 @@
 import type { SensitivityRule } from "./sensitivity.js";
+import { auditEnvelopeRulesFor } from "./sensitivityRules.audit.js";
 
 // Native in-loop gate sensitivity rules, split out of sensitivityRules.ts to keep
 // each file under the 500-line cap. The gate is the native delivery model's merge
@@ -61,6 +62,10 @@ export const gateSensitivityRules: SensitivityRule[] = [
     ["failedTier", "public"],
     ["failedStep", "public"],
   ]),
+  // AUDIT ENVELOPE on the gate verdict: policy version + initiating/approving actor,
+  // all public (non-secret by construction). The gate is the merge authority, so its
+  // verdict is a governing event that must carry the audit-evidence fields.
+  ...auditEnvelopeRulesFor("gate.verdict"),
 ];
 
 function rulesFor(eventName: string, entries: ReadonlyArray<[string, SensitivityRule["tag"]]>): SensitivityRule[] {

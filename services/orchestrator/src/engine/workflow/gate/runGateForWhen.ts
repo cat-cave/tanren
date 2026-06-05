@@ -8,6 +8,7 @@ import type { CiConfigV1, CiWhen } from "../../ci/index.js";
 import { tiersFor } from "../../ci/index.js";
 import type { SshTarget } from "../../contracts/allocator.js";
 import type { SshSubstrate } from "../../contracts/sshSubstrate.js";
+import { serviceAuditActor } from "../../events/schemas/audit.js";
 import { type GateAppendEvent, type GateTierResult, runGateTier } from "./runGateTier.js";
 
 export interface RunGateForWhenInput {
@@ -30,6 +31,12 @@ export interface RunGateForWhenInput {
   // verdict CI-intelligence reduces. Absent (unit paths with no real workspace) ⇒
   // no verdict event (the per-tier gate.* events still narrate the run).
   headSha?: string;
+  // AUDIT-EVIDENCE BASELINE: the versioned governance policy in effect (the project
+  // config version). Stamped onto the `gate.verdict` roll-up so the merge authority's
+  // verdict records WHICH policy revision it was judged under. Optional: a caller
+  // without a project-governance context (a unit path) omits it — an honest absence,
+  // never a fabricated version.
+  policyVersion?: number;
 }
 
 // The combined result across every tier mapped to a lifecycle point. `passed`
@@ -96,6 +103,11 @@ async function emitGateVerdict(input: RunGateForWhenInput, outcome: GateOutcome,
       tiers: outcome.results.map((tier) => tier.tier),
       steps,
       ...(outcome.passed ? {} : { failedTier: outcome.failure.tier, failedStep: outcome.failure.failedStep }),
+      // AUDIT ENVELOPE: the gate runs autonomously (the service initiates it); the
+      // governance policy version is threaded from the run's project config when
+      // available. No approving actor — a gate verdict is a machine judgment.
+      initiatingActor: serviceAuditActor,
+      ...(input.policyVersion === undefined ? {} : { policyVersion: input.policyVersion }),
     },
     input.taskId,
   );

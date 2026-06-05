@@ -7,6 +7,7 @@
 // conflict-resolver hook — never merged stale, never merged broken.
 
 import { routeTaskUpdate } from "../taskWriteRouting.js";
+import { serviceAuditActor, type AuditEnvelope } from "../../events/schemas/audit.js";
 import type { EventStore } from "../../eventStore.js";
 import type { MergePullRequestResult } from "../../providers/githubReviewMerge.js";
 import type { PullRequestMergeability, RepoRef } from "../../contracts/vcsProvider.js";
@@ -47,6 +48,25 @@ export class MergeDispatcher {
   private prFields() {
     const { context, pr } = this.deps;
     return { prUrl: context.prUrl, prNumber: pr.pullNumber };
+  }
+
+  /**
+   * AUDIT-EVIDENCE BASELINE: the audit envelope stamped onto the terminal
+   * `merge.completed` event. The merge is driven by the autonomous engine, so the
+   * INITIATING actor is the service. The APPROVING actor is recorded ONLY when a
+   * HUMAN review tier actually gated the merge (`reviewPolicy === "human"`) — a
+   * generic `human` approver, the honest "a human verdict was required and given".
+   * On the autonomous tiers (`auto`/`simulated`) there is no separate approver, so
+   * the field is absent (a true empty state, never a placeholder actor). The policy
+   * version is the run's governance config revision.
+   */
+  private auditEnvelope(): AuditEnvelope {
+    const humanApproved = this.deps.context.reviewPolicy === "human";
+    return {
+      policyVersion: this.deps.context.policyVersion,
+      initiatingActor: serviceAuditActor,
+      ...(humanApproved ? { approvingActor: { kind: "human" as const } } : {}),
+    };
   }
 
   /**
@@ -157,7 +177,12 @@ export class MergeDispatcher {
       await eventStore.append({
         ...this.base(),
         eventType: "merge.completed",
-        payload: { ...this.prFields(), integration: this.mergeLabel(), mergeSha: merge.mergeSha },
+        payload: {
+          ...this.prFields(),
+          integration: this.mergeLabel(),
+          mergeSha: merge.mergeSha,
+          ...this.auditEnvelope(),
+        },
       });
       // P2c-1 (§2c cleanup): the dependent merged onto `default_branch`; delete its
       // ephemeral integration ref. Best-effort — a cleanup failure never undoes the
@@ -333,7 +358,12 @@ export class MergeDispatcher {
         await this.deps.eventStore.append({
           ...this.base(),
           eventType: "merge.completed",
-          payload: { ...this.prFields(), integration: this.mergeLabel(), mergeSha: merge.mergeSha },
+          payload: {
+            ...this.prFields(),
+            integration: this.mergeLabel(),
+            mergeSha: merge.mergeSha,
+            ...this.auditEnvelope(),
+          },
         });
         await this.finalize("merged", { taskOutcome: "ok", taskStatus: "done" });
         return this.result("merged", { mergeSha: merge.mergeSha });
