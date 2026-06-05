@@ -1,9 +1,9 @@
 /**
- * Run-detail + review screen styles (P2B-0004). Recreated from the hi-fi
+ * Run-detail + review screen styles. Recreated from the hi-fi
  * (`tanren-hi-fidelity/project/view-run.jsx` / `view-review.jsx`), token-driven
  * only — no hardcoded colors. Exported as a string and inlined via a `<style>`
  * tag in the page body so this screen owns its CSS without touching the shared
- * `shell.css` (owned by P2B-0001).
+ * `shell.css` (owned by).
  */
 
 export const RUN_DETAIL_CSS = `
@@ -238,7 +238,7 @@ export const RUN_DETAIL_CSS = `
 .preview .placeholder-frame .pl-note { font-size: 11.5px; color: var(--fg-3); margin-top: 6px; line-height: 1.5; }
 .preview .placeholder-frame a { color: var(--ember-08); text-decoration: underline; }
 .preview .placeholder-frame code { font-family: var(--font-mono); font-size: 10.5px; color: var(--fg-2); background: var(--bg-sunken); padding: 0 3px; }
-/* P3-0025 live preview-deploy iframe. max-width is driven by the device tabs
+/* live preview-deploy iframe. max-width is driven by the device tabs
    (the review island sets it inline: none / 768px / 375px). Sandboxed in TSX. */
 .preview .preview-iframe { width: 100%; height: 100%; min-height: 420px; border: 1px solid var(--line-2); background: white; transition: max-width 160ms; }
 

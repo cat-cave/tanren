@@ -1,8 +1,8 @@
 /**
- * P3-0022 candidate-inbox mount, registered through the append-only screen
- * registry. Composes P3-0014 (accept routes a candidate into the discovery
+ * candidate-inbox mount, registered through the append-only screen
+ * registry. Composes the discovery accept (routes a candidate into the discovery
  * flow — the "accept · open in discovery" action links to the project's
- * discovery surface) and P3-0010 (the per-candidate triage read-out).
+ * discovery surface) and the conversation read (the per-candidate triage read-out).
  *
  * Routes registered:
  *   GET  /inbox                                source list + candidate stream
@@ -10,10 +10,10 @@
  *   POST /inbox/candidates/:id/dismiss         dismiss
  *   POST /inbox/candidates/:id/close-duplicate close as duplicate
  *
- * The inbox client is its OWN api module (`api/inboxClient.ts`) per the P2B
+ * The inbox client is its OWN api module (`api/inboxClient.ts`) per the screen-isolation
  * integration lesson; the route instantiates it with the forwarded cookie.
  * Accept (→ discovery) is a navigation, not a write here — the discovery
- * surface owns the spec-creation hand-off (P3-0014).
+ * surface owns the spec-creation hand-off.
  */
 
 import type { Context, Hono } from "hono";

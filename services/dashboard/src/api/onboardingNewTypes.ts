@@ -1,5 +1,5 @@
 /**
- * P3-0015 greenfield-onboarding client types — the dashboard-side mirror of the
+ * greenfield-onboarding client types — the dashboard-side mirror of the
  * orchestrator's `engine/forge/interview` contracts. Kept in their own module
  * (the discovery isolation lesson: parallel client-touching screens own their
  * own api modules so they never diverge a shared client).

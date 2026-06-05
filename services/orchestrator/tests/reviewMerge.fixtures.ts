@@ -74,7 +74,7 @@ export function recordingMergeProbe(
     status: number;
     message: string;
   },
-  // P2a: by default the probe reports the branch CLEAN + up to date, so existing
+  // by default the probe reports the branch CLEAN + up to date, so existing
   // merge tests exercise the unchanged "merge once" path. The freshness tests
   // override these to drive the behind / dirty branches.
   freshness: {
@@ -93,7 +93,7 @@ export function recordingMergeProbe(
     mergeCalls: 0,
     mergeabilityCalls: 0,
     updateBranchCalls: 0,
-    // P2c-1: record the retarget + cleanup so the speculative-land-on-main tests
+    // record the retarget + cleanup so the speculative-land-on-main tests
     // can assert the PR base was re-pointed to default_branch + the integ ref cleaned.
     retargetedBases: [] as string[],
     deletedIntegrationBranches: [] as string[],
@@ -145,7 +145,7 @@ export class ReviewMergePool {
   ) {}
 
   /**
-   * P2c-1: the speculative-merge-hold lookups. By default a run is NOT speculative
+   * the speculative-merge-hold lookups. By default a run is NOT speculative
    * (speculative_base null) and has no deps, so the hold is a no-op and existing
    * tests proceed to merge unchanged. A test can set `speculativeBase` +
    * `specDependsOn` + `mergedAncestors` to drive the hold path.
@@ -205,14 +205,14 @@ export class ReviewMergePool {
       };
     }
     if (sql.includes("FROM tasks") && sql.includes("LIMIT 1")) {
-      // Plane-split P3c: the ensure-system-task SELECT now binds kind as a
+      // the ensure-system-task SELECT now binds kind as a
       // parameter (`kind = $2`), so read it from params rather than the SQL literal.
       const kind = String(params[1]);
       const task = this.tasks.find((t) => t.run_id === params[0] && t.kind === kind);
       return { rows: task === undefined ? [] : [task], rowCount: task === undefined ? 0 : 1 };
     }
     if (sql.startsWith("INSERT INTO tasks")) {
-      // Plane-split P3c: the ensure-system-task INSERT now binds kind/title as
+      // the ensure-system-task INSERT now binds kind/title as
       // parameters (`$3, $4`); read kind from params[2] rather than the SQL literal.
       const kind = String(params[2]);
       this.tasks.push({ task_id: params[0], run_id: params[1], kind, status: "running" });

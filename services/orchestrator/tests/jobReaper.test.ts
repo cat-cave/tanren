@@ -1,4 +1,4 @@
-// P3-0028: the reaper requeues expired leases and dead-letters exhausted ones,
+// the reaper requeues expired leases and dead-letters exhausted ones,
 // emitting a `job.dead_lettered` lifecycle event for each dead letter.
 
 import { afterEach, describe, expect, it, vi } from "vitest";

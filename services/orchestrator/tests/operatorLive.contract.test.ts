@@ -1,4 +1,4 @@
-// P2B-0006 operator-triggered live workflow — contract test.
+// operator-triggered live workflow — contract test.
 //
 // The dashboard's "▶ start a run" affordance POSTs to a dashboard route that
 // calls the typed orchestrator client's `triggerRun`, which POSTs the

@@ -1,4 +1,4 @@
-// P3-0010: thick-Forge conversation engine tests.
+// thick-Forge conversation engine tests.
 //
 // Exercises the LLM-backed conversation backend with a MOCKED answerer (no
 // provider is ever contacted): the engine reads prior turns, invokes a READ

@@ -1,4 +1,4 @@
-// P2c-2 (autonomy-engine.md §2c): the UPSTREAM-CHANGE MODE of the P2b
+// (autonomy-engine.md §2c): the UPSTREAM-CHANGE MODE of the P2b
 // intent-preserving resolver. The SAME conflict Answerer + the SAME
 // `decideConflictResolution` core are reused — only the PROMPT FRAMING differs:
 // the ancestor's intentional change flows INTO the dependent while the dependent's

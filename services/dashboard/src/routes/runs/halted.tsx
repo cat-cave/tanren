@@ -1,10 +1,10 @@
 /**
- * P2B-0008 failure-recovery routes. Mounted via the append-only screen registry
- * (`SCREEN_MOUNTS`) — appended AFTER P2B-0004's run-detail mount so the literal
- * `/runs/halted` resolves to this list page (P2B-0004's `/runs/:runId` handler
+ * failure-recovery routes. Mounted via the append-only screen registry
+ * (`SCREEN_MOUNTS`) — appended AFTER the run-detail mount so the literal
+ * `/runs/halted` resolves to this list page (the run-detail `/runs/:runId` handler
  * delegates the `halted` literal back via `next()`).
  *
- * Owns ONLY P2B-0008 paths — its own file, no edits to P2B-0004's
+ * Owns ONLY paths — its own file, no edits to the run-detail screen's
  * `routes/runs/index.tsx`:
  *   GET  /runs/halted                              — halted-run list
  *   GET  /runs/:runId/recover                      — per-run recovery surface

@@ -1,6 +1,6 @@
 /**
- * P2B-0005 costs dashboard body. Renders the all-sources cost picture from
- * aggregated P2A-0011 records: total + per-source stacked bar, per-pricing-model
+ * costs dashboard body. Renders the all-sources cost picture from
+ * aggregated records: total + per-source stacked bar, per-pricing-model
  * source cards (the three §4 cost models), per-provider breakdown table (every
  * row shows its REAL cost source), burn projection, headroom, and the observed-
  * metrics stub. Presentation only — figures come from `aggregate.ts`.
@@ -16,7 +16,7 @@ export interface CostsBodyProps {
   summary: CostSummary;
   burn: BurnProjection;
   metrics: ObservedMetrics;
-  /** P3-0018 subscription-window utilization heatmap (30d × 5-window). */
+  /** subscription-window utilization heatmap (30d × 5-window). */
   heatmap: HeatmapMatrix;
   /** Active date-range pill (7d / 30d / 90d / all). */
   range: string;

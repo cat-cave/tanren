@@ -1,7 +1,7 @@
 /**
- * Dashboard-internal POST handlers for P2B-0002 write actions. The browser
+ * Dashboard-internal POST handlers for write actions. The browser
  * submits plain HTML forms to these dashboard paths; each handler forwards the
- * session cookie to the orchestrator's typed P2A-0013 / P2A-0017 routes (so
+ * session cookie to the orchestrator's typed product-API routes (so
  * the orchestrator URL stays server-side, mirroring the shell's /forge/tools
  * proxy) and then redirects back to the originating screen.
  *
@@ -45,7 +45,7 @@ export function mountOnboardingActions(app: Hono, deps: ShellDeps): void {
     if (orgId === undefined || label === "" || value === "") {
       return redirectTo(c, "/onboarding/credentials", "missing label or key");
     }
-    // Opaque API-key import: ref encodes scope + label per P2A-0013 namespacing.
+    // Opaque API-key import: ref encodes scope + label per namespacing.
     const ref = `credential/opaque/org/${orgId}/${label}`;
     const result = await client.importCredential({
       scope: "org",
@@ -73,10 +73,10 @@ export function mountOnboardingActions(app: Hono, deps: ShellDeps): void {
   });
 
   app.post("/onboarding/credentials/github", async (c) => {
-    // GitHub token import (P3-0002). Org-scoped (billed to / shared by the org)
+    // GitHub token import. Org-scoped (billed to / shared by the org)
     // so a project can resolve it as the run's GitHub credential. The token is
     // forwarded write-only and never echoed back. Ref defaults into the
-    // P2A-0013 managed namespace (`credential/github/org/<orgId>/<label>`).
+    // managed namespace (`credential/github/org/<orgId>/<label>`).
     const client = clientFor(c, deps);
     const orgId = await firstOrgId(client);
     const form = await c.req.parseBody();
@@ -144,10 +144,10 @@ export function mountOnboardingActions(app: Hono, deps: ShellDeps): void {
 
   // ── infrastructure (step 4) ──────────────────────────────────────────────
   app.post("/onboarding/org/infra", async (c) => {
-    // Allocator defaults live in org config (P2A-0006). The v0 surface only
+    // Allocator defaults live in org config. The v0 surface only
     // confirms local-docker is active; persisting concurrency/image into org
     // config is a no-op-safe redirect here (full org-config PATCH is owned by
-    // P2A-0013 and exercised from /settings). We acknowledge + advance.
+    // and exercised from /settings). We acknowledge + advance.
     await c.req.parseBody();
     return redirectTo(c, "/onboarding/org?step=4", "local-docker defaults saved");
   });

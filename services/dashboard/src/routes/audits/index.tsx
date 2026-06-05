@@ -1,9 +1,9 @@
 /**
- * P3-0021 scheduled-audits mount, registered through the append-only screen
+ * scheduled-audits mount, registered through the append-only screen
  * registry. The job library + the window-fill bar + the forge-recommended
  * coverage panel + the new-audit composer, all server-rendered through the
  * shell. Reached from the sidebar (system · scheduled audits), the costs-page
- * "schedule overnight audits" CTA (P3-0018), and the greenfield arrival step.
+ * "schedule overnight audits" CTA, and the greenfield arrival step.
  *
  * Routes registered:
  *   GET  /audits                       job library + window-fill + recommended
@@ -12,8 +12,8 @@
  *   POST /audits/:jobId/disable        pause
  *   POST /audits/:jobId/run            run the read-only pass now → inbox
  *
- * The audits client is its OWN api module (`api/auditsClient.ts`) per the P2B
- * integration lesson; the window-fill bar reads the SAME P3-0018 subscription
+ * The audits client is its OWN api module (`api/auditsClient.ts`) per the screen-isolation
+ * integration lesson; the window-fill bar reads the SAME subscription
  * heatmap the costs page uses (via the shared OrchestratorClient + buildHeatmap)
  * so it ties to real idle-window data and invents nothing.
  */

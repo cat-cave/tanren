@@ -1,5 +1,5 @@
 /**
- * Notifications matrix (P2B-0002) against the P2A-0017 schema. Fully
+ * Notifications matrix against the schema. Fully
  * functional: channels column (all 9 channel kinds), the per-event ×
  * per-channel × severity matrix, an add-channel form, and a weekend-mute
  * toggle per target.

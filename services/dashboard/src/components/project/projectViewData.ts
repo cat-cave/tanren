@@ -19,7 +19,7 @@ export interface AttentionEntry {
   priority: string;
   title: string;
   sub: string;
-  /** In-shell route to navigate to, or null for a no-op (Phase 3 surface). */
+  /** In-shell route to navigate to, or null for a no-op (a later surface). */
   href: string | null;
   tone: "hot" | "warn" | "";
 }
@@ -29,7 +29,7 @@ export interface DagNode {
   milestone: string;
   title: string;
   status: "done" | "live" | "review" | "blocked" | "queued";
-  /** In-shell route on click, or null (queued/blocked → no-op in Phase 2). */
+  /** In-shell route on click, or null (queued/blocked → no-op). */
   href: string | null;
 }
 
@@ -88,7 +88,7 @@ function formatUsd(value: number): string {
   return `$${value.toFixed(2)}`;
 }
 
-/** Sum the run-list cost column (string-encoded numeric per P2A-0011). */
+/** Sum the run-list cost column (string-encoded numeric per). */
 export function sumRunCosts(runs: RunListItem[]): number {
   return runs.reduce((acc, run) => acc + (Number(run.costTotalUsd) || 0), 0);
 }
@@ -130,9 +130,9 @@ function prHandle(prUrl: string): string {
 }
 
 function buildDagNodes(input: BuildProjectViewInput): DagNode[] {
-  // The Phase-2 DAG snapshot is a read-only, data-derived layout: one node per
+  // The DAG snapshot is a read-only, data-derived layout: one node per
   // recent run, grouped under its milestone label when known, with status
-  // colors. Full DAG-from-spec-graph layout is Phase 3 (DAG-primary mode).
+  // colors. The full DAG-from-spec-graph layout is a later surface (DAG-primary mode).
   const milestoneFor = (index: number): string => {
     const milestone = input.milestones[index % Math.max(1, input.milestones.length)];
     return milestone?.label ?? "—";

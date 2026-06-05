@@ -35,7 +35,7 @@ import {
 
 const STATIC_REF = "credential/github/conformance";
 const HEAD_SHA = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
-/** P2d-2: the distinct SHA the FAILING integration ref resolves to (its check-runs fail). */
+/** the distinct SHA the FAILING integration ref resolves to (its check-runs fail). */
 const FAILING_SHA = "fa11edfa11edfa11edfa11edfa11edfa11edfa11";
 
 const ok = (body: unknown): GitHubHttpResponse => ({ status: 200, body });
@@ -68,7 +68,7 @@ class RoutingGitHubHttp implements GitHubHttpClient {
       return { status: 409, body: { message: "merge conflict" } };
     }
     if (input.method === "PUT" && path.endsWith("/merge")) return ok({ sha: "merge-sha", merged: true });
-    // updateBranch (P2a): the behind PR is accepted (202); the dirty PR conflicts
+    // updateBranch: the behind PR is accepted (202); the dirty PR conflicts
     // (422); any other PR is already current (204).
     const updateMatch = /\/pulls\/(\d+)\/update-branch$/u.exec(path);
     if (input.method === "PUT" && updateMatch !== null) {
@@ -78,7 +78,7 @@ class RoutingGitHubHttp implements GitHubHttpClient {
       if (number === CONFORMANCE_DIRTY_PR_NUMBER) return { status: 422, body: { message: "merge conflict" } };
       return { status: 204, body: {} };
     }
-    // PR detail GET (P2a mergeability + markReadyForReview node id): vary
+    // PR detail GET (mergeability + markReadyForReview node id): vary
     // mergeable_state by PR number — the behind PR is `behind`, the dirty PR is
     // `dirty`, everything else `clean`.
     const detailMatch = /\/pulls\/(\d+)$/u.exec(path);
@@ -93,7 +93,7 @@ class RoutingGitHubHttp implements GitHubHttpClient {
         mergeable_state: mergeableState,
       });
     }
-    // retargetPullRequestBase (P2c): PATCH /pulls/:n { base } → the updated PR.
+    // retargetPullRequestBase: PATCH /pulls/:n { base } → the updated PR.
     if (input.method === "PATCH" && /\/pulls\/\d+$/u.test(path)) {
       const base = (input.body as { base?: unknown } | undefined)?.base;
       return ok({ number: 7, base: { ref: typeof base === "string" ? base : "main" } });
@@ -103,7 +103,7 @@ class RoutingGitHubHttp implements GitHubHttpClient {
     }
     // readPullRequestChecks / readBranchChecks: check-runs + commit status; protection
     // 404. The FAILING integration ref's SHA reports a failed check (a bad
-    // interaction — the P2d-2 batch-check signal); every other commit is green.
+    // interaction — the batch-check signal); every other commit is green.
     if (input.method === "GET" && path.endsWith("/check-runs")) {
       if (path.includes(FAILING_SHA)) {
         return ok({ check_runs: [{ name: "build", status: "completed", conclusion: "failure" }] });
@@ -126,15 +126,15 @@ class RoutingGitHubHttp implements GitHubHttpClient {
     if (input.method === "GET" && path.endsWith("/commits")) {
       return ok([{ author: { login: "author-bot" }, committer: { login: "author-bot" } }]);
     }
-    // buildIntegrationBranch (P2c): resolve the base ref sha, (re)create the
+    // buildIntegrationBranch: resolve the base ref sha, (re)create the
     // ephemeral integration ref, then merge each ancestor branch. The conflict
     // ancestor's branch yields a 409 from the merges endpoint.
     if (input.method === "GET" && /\/git\/ref\/heads\//u.test(path)) {
-      // P2c-2 readBranchHeadSha: the well-known absent branch 404s (missing ref).
+      // readBranchHeadSha: the well-known absent branch 404s (missing ref).
       if (path.includes(encodeURIComponent(CONFORMANCE_ABSENT_BRANCH))) {
         return { status: 404, body: { message: "Not Found" } };
       }
-      // P2d-2 readBranchChecks: the FAILING integration ref resolves to a SHA whose
+      // readBranchChecks: the FAILING integration ref resolves to a SHA whose
       // check-runs fail (so the prospective merged state's CI is red).
       if (path.includes(encodeURIComponent(CONFORMANCE_FAILING_BRANCH))) {
         return ok({ object: { sha: FAILING_SHA } });
@@ -147,7 +147,7 @@ class RoutingGitHubHttp implements GitHubHttpClient {
     if (input.method === "PATCH" && /\/git\/refs\/heads\//u.test(path)) {
       return ok({ ref: "refs/heads/integ" });
     }
-    // deleteBranch (P2c cleanup): DELETE /git/refs/heads/:branch → 204.
+    // deleteBranch (cleanup): DELETE /git/refs/heads/:branch → 204.
     if (input.method === "DELETE" && /\/git\/refs\/heads\//u.test(path)) {
       return { status: 204, body: {} };
     }

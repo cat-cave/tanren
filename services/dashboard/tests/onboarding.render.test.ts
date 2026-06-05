@@ -1,4 +1,4 @@
-// P2B-0002 onboarding / credentials / notifications render + flow tests.
+// onboarding / credentials / notifications render + flow tests.
 // Mirrors the shell.render.test.ts harness: build the dashboard app with a
 // stubbed pool + a mocked orchestrator (global fetch), then assert rendered
 // HTML and the POST proxy behavior. No live orchestrator / DB.
@@ -117,7 +117,7 @@ function mockOrchestrator(opts: { doctor?: unknown; matrix?: unknown } = {}): Mo
         writesPerformed: 0,
       });
     }
-    // P3-0016 full-track recon (read-only Answerer pre-fill).
+    // full-track recon (read-only Answerer pre-fill).
     if (url.endsWith("/recon") && method === "POST") {
       const body = JSON.parse(String(init?.body ?? "{}"));
       return json({

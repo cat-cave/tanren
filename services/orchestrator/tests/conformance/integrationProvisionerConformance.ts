@@ -5,7 +5,7 @@
 // find-or-create on `provision`, `bind` over a discovered resource, and that the
 // artifact carries secret REFS (never values) — never private fields. The same
 // fixtures will validate every real provider (Sentry/Slack/deploy/…) as they land
-// in P-INT-1+, so a new provider gets contract coverage by adding one entry to the
+// as providers land, so a new provider gets contract coverage by adding one entry to the
 // per-impl invocation file. Mirrors the Allocator / VcsProvider conformance shape.
 
 import { describe, expect, it } from "vitest";

@@ -125,7 +125,7 @@ export function scriptedDeployTransport(flavor: DeployFlavor, seedNames: string[
           ? okResponse({ id, url: `${deploy.appId}.vercel.app`, readyState: "QUEUED" }, 200)
           : okResponse({ id, state: "started" }, 200);
       }
-      // Set-env requests (P-APP-ENV-2): Vercel `/v10/projects/{id}/env`, Fly
+      // Set-env requests: Vercel `/v10/projects/{id}/env`, Fly
       // `/v1/apps/{name}/secrets`. Captured into envByApp so the test can assert the
       // right KEYS + VALUES reached the transport (and nowhere else).
       const setEnv = parseSetEnv(flavor, req);

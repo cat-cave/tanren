@@ -1,7 +1,7 @@
 /**
- * P3-0014 spec-discovery mount, registered through the append-only screen
- * registry. Composes P3-0010 (the Forge classification runs over the same
- * answerer seam, here via the orchestrator discovery route) and P3-0013 (the
+ * spec-discovery mount, registered through the append-only screen
+ * registry. Composes the Forge classification (the classification runs over the same
+ * answerer seam, here via the orchestrator discovery route) and the project-DAG read (the
  * accepted specs land as DAG nodes; the success banner links into the DAG).
  *
  * Routes registered:
@@ -11,7 +11,7 @@
  *   POST /projects/:projectId/discovery/accept   create specs + provenance + place
  *
  * The discovery client is its OWN api module (`api/discoveryClient.ts`) per the
- * P2B integration lesson; the route instantiates it with the forwarded cookie.
+ * screen-isolation lesson; the route instantiates it with the forwarded cookie.
  */
 
 import type { Context, Hono } from "hono";

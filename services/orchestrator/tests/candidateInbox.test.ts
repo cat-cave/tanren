@@ -1,9 +1,9 @@
-// P3-0022 candidate-inbox engine tests.
+// candidate-inbox engine tests.
 //
 // Exercises the GitHub Issues connector (MOCKED GitHubHttpClient + secrets — no
 // network), the deterministic triage answerer (dedupe / match / placement /
 // verdict + auto-route for system sources), the ingest pipeline (connector →
-// triage → upsert), and the accept→discovery hand-off (reuses the P3-0014
+// triage → upsert), and the accept→discovery hand-off (reuses the discovery
 // accept path, creating a spec + resolving the candidate). The pool is a
 // lightweight in-memory stub keyed by SQL substring, mirroring the orchestrator
 // engine-test pattern (see specDiscovery.test.ts).

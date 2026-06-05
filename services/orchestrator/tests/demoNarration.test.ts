@@ -1,4 +1,4 @@
-// P3-0011: demo-role narration tests. Cover the real-Answerer path (mocked,
+// demo-role narration tests. Cover the real-Answerer path (mocked,
 // so no SSH/CLI is touched), the no-credential fallback, the live-failure
 // fallback, prompt shape, and the adapter-selector resolution.
 
@@ -43,7 +43,7 @@ class RecordingAnswerer implements AnswererAdapter<DemoAnswer> {
     this.lastSchemaName = opts.outputSchema.name;
     this.lastPrompt = opts.prompt;
     // Parse through the supplied schema to mirror a real adapter so the test
-    // also exercises the P2A-0008 contract end-to-end.
+    // also exercises the contract end-to-end.
     return opts.outputSchema.parse(this.output);
   }
 }
@@ -73,7 +73,7 @@ describe("demo-role narration (P3-0011)", () => {
     expect(result.provenance).toBe("answerer");
     expect(result.schemaId).toBe("tanren.demo_answer.v1");
     expect(result.answer).toEqual(llmAnswer);
-    // The Answerer was invoked with the P2A-0008 demo schema.
+    // The Answerer was invoked with the demo schema.
     expect(answerer.lastSchemaName).toBe("tanren.demo_answer.v1");
     // The prompt carries the spec + behaviors + risk + PR context.
     expect(answerer.lastPrompt).toContain("Supplier onboarding flow");

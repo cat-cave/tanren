@@ -1,5 +1,5 @@
 /**
- * P3-0014 discovery seed insights — the three hi-fi `view-discovery` variants
+ * discovery seed insights — the three hi-fi `view-discovery` variants
  * (feature / bug / strategic) pre-filled into the insight form so an operator
  * can classify immediately or edit the body first. These are starting points,
  * not fixtures: the form posts whatever the operator submits.

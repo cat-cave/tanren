@@ -1,4 +1,4 @@
-// P2d (autonomy-engine.md §2d) — the run-loop merge finalize. The CARDINAL-SIN
+// (autonomy-engine.md §2d) — the run-loop merge finalize. The CARDINAL-SIN
 // fix: under `native_queue`, the first-pass `queued` outcome ENTERED the queue but
 // did NOT merge (Tanren owns the merge — the coordinator's drive pass merges it
 // later), so the spec must NOT be marked `merged` here. Every other mode lands the

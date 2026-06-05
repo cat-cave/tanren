@@ -1,11 +1,11 @@
 /**
- * Run-detail live-update island (P2B-0004). Subscribes to the run's SSE feed
- * (the dashboard same-origin proxy → orchestrator P2A-0014 `/stream`) and
+ * Run-detail live-update island. Subscribes to the run's SSE feed
+ * (the dashboard same-origin proxy → orchestrator `/stream`) and
  * patches the cost bar, trajectory spine, run status, and per-moment events in
  * place — no page reload, no client router.
  *
  * The server renders the full initial view; this island only reconciles the
- * deltas the SSE frames carry. Frame contract (P2A-0014 `SseEventName`):
+ * deltas the SSE frames carry. Frame contract (`SseEventName`):
  *   - `snapshot` { run, tasks, recentEvents, costs }  (initial, full)
  *   - `status`   { runId, status, outcome }
  *   - `task`     <TaskTimelineEntry>                   (single changed task)

@@ -1,4 +1,4 @@
-// P2A-0015: runPlannerLoopWorkflow integration tests. The workflow is driven
+// runPlannerLoopWorkflow integration tests. The workflow is driven
 // with fake adapters + a fake usage probe (so no real SSH/Codex), asserting on
 // the persisted run state, the PR/CI tail on a passing loop, the halted
 // mapping for non-pass outcomes, and the CodexUsageLimitError → window

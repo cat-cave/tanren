@@ -1,6 +1,6 @@
 /**
- * P3-0015 greenfield-onboarding screen CSS. Layered ON TOP of the shared
- * P2B-0002 `OnbStyles` (which owns `.onb`, `.step-heading`, the journey strip)
+ * greenfield-onboarding screen CSS. Layered ON TOP of the shared
+ * `OnbStyles` (which owns `.onb`, `.step-heading`, the journey strip)
  * — this only adds the greenfield-specific bits: the interview chat + the live
  * "what forge captured" panel, the derived-DAG frame, and the arrival card.
  * Token-only (no hardcoded colors) so ink/ash themes both work. Recreated from

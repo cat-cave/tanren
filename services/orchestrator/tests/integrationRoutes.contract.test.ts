@@ -1,4 +1,4 @@
-// P-INT-2 route contract tests: the capability-driven onboarding HTTP surface.
+// route contract tests: the capability-driven onboarding HTTP surface.
 // Validates the structured not-linked response (200 link-first, not a crash), the
 // cross-org guard, and the unresolvable-capability 400. The full provision/bind →
 // persist → event flow is covered hermetically in integrationProvisioningEngine.test.ts

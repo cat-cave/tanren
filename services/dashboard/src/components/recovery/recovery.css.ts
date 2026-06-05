@@ -1,8 +1,8 @@
 /**
- * Halted-run failure-recovery screen styles (P2B-0008). Recreated from the
+ * Halted-run failure-recovery screen styles. Recreated from the
  * hi-fi `view-failure.jsx`, token-driven only — no hardcoded colors. Exported
  * as a string and inlined via a `<style>` tag in the page body so this screen
- * owns its CSS without touching the shared `shell.css` (owned by P2B-0001).
+ * owns its CSS without touching the shared `shell.css` (owned by).
  */
 
 export const RECOVERY_CSS = `
@@ -146,7 +146,7 @@ export const RECOVERY_CSS = `
 .btn.danger { color: var(--status-fail); border-color: var(--status-fail); }
 .btn[disabled] { opacity: 0.45; cursor: not-allowed; }
 
-/* ---- dag impact strip (flat list in Phase 2) ---- */
+/* ---- dag impact strip (flat list) ---- */
 .dag-impact { border: 1px solid var(--line-1); background: var(--bg-canvas); padding: 14px; }
 .dag-impact .head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 10px; }
 .dag-impact .head .lbl {

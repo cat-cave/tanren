@@ -1,4 +1,4 @@
-// Plane-split P3 — the control-plane AUTONOMY-LOOP write endpoints, proven against
+// Plane-split — the control-plane AUTONOMY-LOOP write endpoints, proven against
 // a REAL Postgres under the enforced `tanren_app` RLS role (no SQL mocks). These
 // are the CREATE / intake / change-percolation writes the de-privileged data plane
 // can no longer perform directly — the DagWalker, the merge-conflict re-exec, and

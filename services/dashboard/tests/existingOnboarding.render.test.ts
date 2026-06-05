@@ -1,4 +1,4 @@
-// P3-0016 — rendered-HTML assertions for the brownfield onboarding FULL track:
+// rendered-HTML assertions for the brownfield onboarding FULL track:
 // the 5-step shell (link → recon → config-injection PR → DAG seed →
 // governance), each driven by a MOCKED orchestrator route via global fetch.
 // Mirrors the greenfield.render pattern: stub the pg pool + mock the

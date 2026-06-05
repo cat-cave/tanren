@@ -1,4 +1,4 @@
-// P-INT-6 — the shared webhook HMAC sign/verify helper (constant-time,
+// the shared webhook HMAC sign/verify helper (constant-time,
 // timestamp-bound). Both the outbound notification webhook channel and the
 // inbound receivers stand on this surface.
 

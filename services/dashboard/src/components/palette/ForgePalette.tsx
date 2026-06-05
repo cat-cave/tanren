@@ -1,8 +1,8 @@
 /**
  * ForgePalette — the ⌘K overlay modal (server-rendered shell chrome). Recreates
  * the hi-fi `ForgePalette`: a search input + grouped results sourced from the
- * orchestrator Forge tool surface (P2A-0019), which MORPHS IN PLACE into a chat
- * thread (P3-0010). Quick actions and ask-forge prompts carry a `route` (read
+ * orchestrator Forge tool surface, which MORPHS IN PLACE into a chat
+ * thread. Quick actions and ask-forge prompts carry a `route` (read
  * action → navigate); forge-this items carry a `tool` (write action → operator
  * button endpoint).
  *
@@ -16,7 +16,7 @@
  * the island (`client/palette.ts`) owns open/close, filter, navigation, the
  * morph to chat-mode, and the fetch/render of turns. Read/navigation actions
  * auto-navigate; proposed WRITE actions render as LIVE approve/reject cards
- * (P3-0010 write-action approval) — the island POSTs the decision to the
+ * (write-action approval) — the island POSTs the decision to the
  * dashboard's `/forge/proposals/{approve,reject}` proxy, and the orchestrator
  * executes the write under the approving operator's authz.
  */

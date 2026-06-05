@@ -1,5 +1,5 @@
 /**
- * P3-0017 config-as-code surface — the dashboard view of the tanren-config
+ * config-as-code surface — the dashboard view of the tanren-config
  * audit gate. Server-rendered Hono JSX (NOT the prototype `view-config.jsx`),
  * matching its two states:
  *

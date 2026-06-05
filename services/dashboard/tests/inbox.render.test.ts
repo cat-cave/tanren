@@ -1,4 +1,4 @@
-// P3-0022 — rendered-HTML assertions for the candidate-inbox surface: the
+// rendered-HTML assertions for the candidate-inbox surface: the
 // configurable source list, the candidate stream with each card's Forge triage
 // read-out, the verdict-driven actions (accept→discovery / fold / dismiss /
 // close-as-dup), and the auto-routed resting state. Mirrors the

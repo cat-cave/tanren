@@ -1,5 +1,5 @@
 /**
- * DAG-canvas island (P3-0013). Hydrates the server-rendered DAG-primary view:
+ * DAG-canvas island. Hydrates the server-rendered DAG-primary view:
  *   - mode persistence: the chat↔DAG choice is stored in localStorage + a
  *     cookie (like the theme toggle) so the server renders the right mode on
  *     the next load; the toggle links carry `?mode=` as the no-JS fallback;

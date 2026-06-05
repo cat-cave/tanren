@@ -1,5 +1,5 @@
 /**
- * P3-0016 brownfield step 3 — config-injection PR. Previews the 6 proposed
+ * brownfield step 3 — config-injection PR. Previews the 6 proposed
  * files, lets the operator EXCLUDE any (a checkbox per file), then opens ONE PR
  * in the target repo with the kept files. "No runs until merged." After the PR
  * opens, renders the PR link + the committed-file list. Recreated from the

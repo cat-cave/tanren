@@ -1,5 +1,5 @@
 /**
- * Shared presentational building blocks for the P2B-0003 screens — the
+ * Shared presentational building blocks for the screens — the
  * hi-fi `PageHead` and `KpiStrip` rebuilt as Hono JSX (NOT imported from the
  * prototype). Every screen body wraps its content in `<div class="p2b">` so
  * the inline `ScreenStyles` selectors (`.p2b …`) apply without leaking into

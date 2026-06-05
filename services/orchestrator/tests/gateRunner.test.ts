@@ -1,4 +1,4 @@
-// P3-0005: unit tests for the deterministic gate runner. They drive runGateTier
+// unit tests for the deterministic gate runner. They drive runGateTier
 // / runGateForWhen / resolveGateConfig against a recording SSH mock (no live
 // runner) and assert exit-code-driven pass/fail, short-circuit-on-failure, the
 // gate.* event emission, and the default-config path.

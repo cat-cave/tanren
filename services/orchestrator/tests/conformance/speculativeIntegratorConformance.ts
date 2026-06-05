@@ -5,7 +5,7 @@
 // CONTRACT behaviorally through the public `buildIntegration` surface only: a
 // clean build returns `integrated` with the integration branch ref; an
 // ancestor-vs-ancestor conflict returns `conflict` naming the pair (it does NOT
-// throw — the walker routes the pair to the P2b resolver). Mirrors the Allocator /
+// throw — the walker routes the pair to the resolver). Mirrors the Allocator /
 // DagWalker / VcsProvider suites.
 
 import { describe, expect, it } from "vitest";

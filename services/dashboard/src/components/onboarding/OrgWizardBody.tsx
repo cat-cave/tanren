@@ -1,5 +1,5 @@
 /**
- * Org-setup wizard (P2B-0002) — the full 4-step track at /onboarding/org:
+ * Org-setup wizard — the full 4-step track at /onboarding/org:
  *   step 1 · link GitHub org + stack-health (/doctor)
  *   step 2 · credentials (CredentialsBody)
  *   step 3 · notifications matrix (NotificationsBody)
@@ -321,7 +321,7 @@ export interface OrgWizardBodyProps {
   myCredentials: CredentialRecord[];
   matrix: NotificationMatrix;
   operator: string;
-  /** P3-0003: orchestrator install-flow href (`/auth/github-app/install?orgId=…`). */
+  /** orchestrator install-flow href (`/auth/github-app/install?orgId=…`). */
   appInstallHref?: string;
 }
 

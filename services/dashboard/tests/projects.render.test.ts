@@ -1,4 +1,4 @@
-// P2B-0003 verification harness — `app.request`-based rendered-HTML + POST
+// Projects-screen verification harness — `app.request`-based rendered-HTML + POST
 // behavior assertions for the chat-primary project view, spec creation, and
 // routing & limits settings. Mirrors the shell test pattern
 // (tests/shell.render.test.ts): stub the pg pool + mock the orchestrator
@@ -8,7 +8,7 @@
 //   - project-view-chat-primary.md: page head, KPI strip, narration pulse,
 //     attention queue, subopt callouts (supported kinds), velocity, activity, dag.
 //   - project-and-spec.md: spec list, spec creation form (schema-bound, no JSON
-//     editor), create POST → P2A-0013.
+//     editor), create POST.
 //   - routing-and-limits.md: 6-role chains, vault panel, escape hatches,
 //     audit-gate off caption, add/reorder/remove + save flows.
 
@@ -68,7 +68,7 @@ describe("project view (chat-primary)", () => {
     const html = await (await app.request("/projects/project_easy")).text();
     expect(html).toContain("retry hotspot");
     expect(html).toContain("writer retries on supplier-scorecard class");
-    // P3-0020 review_stall now renders (kind label is underscore-stripped).
+    // review_stall now renders (kind label is underscore-stripped).
     expect(html).toContain("review stall on auth PR");
     // callout action posts the carried tool call.
     expect(html).toContain('action="/projects/project_easy/insights/act"');

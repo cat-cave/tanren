@@ -1,5 +1,5 @@
 /**
- * Pure SVG layout for the DAG-primary canvas (P3-0013). Takes the assembled
+ * Pure SVG layout for the DAG-primary canvas. Takes the assembled
  * `ProjectDag` plus a group-by mode and produces absolute node rectangles +
  * edge line segments in a fixed viewBox, so the rendering components
  * (`DagNodes`/`DagEdges`) stay dumb and the layout is unit-testable.

@@ -1,13 +1,13 @@
 /**
- * Review-handoff island (P2B-0004). Hydrates the server-rendered review chat:
+ * Review-handoff island. Hydrates the server-rendered review chat:
  *   - clicking a behavior row toggles its you-verified state;
  *   - clicking a deferral action (handle / defer / dismiss) resolves it;
  *   - the readiness-gate pills + nudge turn recompute live from those states;
- *   - clicking a device tab (P3-0025) re-widths the live preview iframe.
+ *   - clicking a device tab re-widths the live preview iframe.
  *
  * No server round-trip for the checklist (it is operator-local verification);
  * `request changes` is a real form POST handled server-side. Sign-off CTAs stay
- * disabled in v0 per the spec (merge integration is Phase 3).
+ * disabled in v0 per the spec (merge integration is a later surface).
  */
 
 export function initReviewHandoff(): void {
@@ -61,7 +61,7 @@ export function initReviewHandoff(): void {
         nudge.textContent = "All behaviors verified ✓. Settle the deferrals to unlock sign-off.";
       }
     }
-    // Sign-off stays disabled in v0 regardless (merge integration is Phase 3),
+    // Sign-off stays disabled in v0 regardless (merge integration is a later surface),
     // but we reflect the readiness intent on the title for clarity.
     for (const btn of root.querySelectorAll<HTMLElement>('[data-review="signoff"]')) {
       btn.setAttribute(
@@ -73,7 +73,7 @@ export function initReviewHandoff(): void {
     }
   };
 
-  // P3-0025: device-tab switching re-widths the live preview iframe (or its
+  // device-tab switching re-widths the live preview iframe (or its
   // empty-state placeholder). Tabs carry a `data-width` (CSS max-width); the
   // active tab gets the `.active` class. No server round-trip — pure view state.
   const previewFrame =

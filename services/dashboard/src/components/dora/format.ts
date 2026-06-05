@@ -1,5 +1,5 @@
 /**
- * P3-0019 DORA display formatters — pure string helpers for the metrics panel.
+ * DORA display formatters — pure string helpers for the metrics panel.
  * Each guards `null`/non-finite inputs to "—" so an uncomputable metric never
  * renders a fabricated zero.
  */

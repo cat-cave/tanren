@@ -1,9 +1,9 @@
-// P3-0015 greenfield-onboarding engine tests.
+// greenfield-onboarding engine tests.
 //
 // Exercises the interview round loop (with a MOCKED answerer — no provider is
 // contacted — and the deterministic scripted fallback), the capture merge, and
 // the derivation path (project + personas + behaviors + milestones + specs all
-// created through the existing P2A-0018/0013 stores). The pool is a lightweight
+// created through the existing entity stores). The pool is a lightweight
 // in-memory stub keyed by SQL substring, mirroring the discovery engine-test
 // pattern. No migration is required — every row lands in an existing table.
 

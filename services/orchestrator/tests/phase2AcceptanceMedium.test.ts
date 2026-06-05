@@ -1,4 +1,4 @@
-// P2A-0015 dry-run smoke for the medium-tier acceptance assertions.
+// dry-run smoke for the medium-tier acceptance assertions.
 //
 // Medium adds two requirements on top of the easy tier:
 //   - ≥ 2 write tasks under the planner (i.e. the planner emitted ≥ 2

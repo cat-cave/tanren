@@ -87,7 +87,7 @@ class RecordingWalker implements DagWalker {
   }
 }
 
-/** A recording percolation coordinator: counts passes per project (P2c-2). */
+/** A recording percolation coordinator: counts passes per project. */
 class RecordingPercolation implements ChangePercolationCoordinator {
   readonly passes: string[] = [];
   constructor(private readonly fail = false) {}

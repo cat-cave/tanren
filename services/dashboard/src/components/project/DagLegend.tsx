@@ -1,5 +1,5 @@
 /**
- * DAG legend (P3-0013) — bottom-left graphical key for the five status
+ * DAG legend — bottom-left graphical key for the five status
  * swatches + the numbered attention badge, matching the hi-fi `dag-legend`.
  * Reads as a key, not chrome. Colours from tokens only.
  */

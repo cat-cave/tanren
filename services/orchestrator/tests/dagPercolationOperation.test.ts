@@ -1,10 +1,10 @@
-// P2c-2 (autonomy-engine.md §2c): the PercolatingKickOff operation — rebuild the
+// (autonomy-engine.md §2c): the PercolatingKickOff operation — rebuild the
 // integration + re-base + RE-EXECUTE the dependent through a real run. Driven
 // through in-memory seams (TEST FIXTURES — they live here, never src/). Proves:
 //   - it REBUILDS the integration via the SpeculativeIntegrator (reused, not duped);
 //   - on a clean rebuild it RE-EXECUTES (re-base + re-enqueue), returning the
 //     re-execution run id — it does NOT absorb / record a SHA here (that is settle);
-//   - on an ancestor-vs-ancestor conflict on the rebuild it HOLDS (routed to P2b),
+//   - on an ancestor-vs-ancestor conflict on the rebuild it HOLDS (routed to),
 //     with NO re-execution kicked off.
 
 import { describe, expect, it } from "vitest";

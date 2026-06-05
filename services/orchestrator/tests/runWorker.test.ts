@@ -1,4 +1,4 @@
-// P3-0001: real-system test for the dequeue→execute seam.
+// real-system test for the dequeue→execute seam.
 //
 // This replaces the deleted direct-execution acceptance drivers
 // (scripts/acceptance/easy.ts + medium.ts) with a test that proves the path

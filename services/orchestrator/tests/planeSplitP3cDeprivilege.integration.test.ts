@@ -1,4 +1,4 @@
-// Plane-split P3c — the run/spec/task LIFECYCLE de-privilege CUTOVER proof,
+// The run/spec/task LIFECYCLE de-privilege CUTOVER proof,
 // against a REAL Postgres (no SQL mocks). This is the security payoff of the
 // wave: with remote-writes ON the data plane writes `runs`/`specs`/`tasks` ONLY
 // through the control plane, so migration 0035 DROPS those write grants from the

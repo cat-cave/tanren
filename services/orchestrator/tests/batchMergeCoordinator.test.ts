@@ -1,8 +1,8 @@
 // Behavior tests for the REAL BatchMergeCoordinator (autonomy-engine.md §2d —
 // speculative batch-check + bisect) wired to in-memory fakes (TEST FIXTURES, tests/
-// only): the P2d-1 queue model + merge runner, an in-memory BatchChecker (models a
+// only): the queue model + merge runner, an in-memory BatchChecker (models a
 // bad-interaction PR WITHOUT a VCS), and recording event emitters. They prove the
-// P2d-2 contract end to end:
+// contract end to end:
 //   - a batch whose combined check PASSES merges every entry in DAG order;
 //   - a batch with ONE bad-interaction PR fails the check, bisect isolates EXACTLY
 //     that PR (not an innocent), the culprit is dequeued to a RECOVERABLE outcome

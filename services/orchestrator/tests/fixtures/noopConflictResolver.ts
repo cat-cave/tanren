@@ -1,5 +1,5 @@
 // TEST FIXTURE ONLY (P8a §8a). The no-op conflict resolver was the TEMPORARY
-// production default through P2a; P2b replaced it with the real
+// production default through; replaced it with the real
 // `intentPreservingConflictResolver` and moved this here. It now lives ONLY
 // under tests/ — the `no-production-stubs` lint forbids it (or any stub) in
 // production src/. Tests that exercise the merge stage WITHOUT a real resolver

@@ -1,4 +1,4 @@
-// P3-0014 spec-discovery engine tests.
+// spec-discovery engine tests.
 //
 // Exercises classification (with a MOCKED discovery answerer — no provider is
 // contacted), the deterministic fallback answerer for each variant, and the

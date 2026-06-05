@@ -120,7 +120,7 @@ export function describeMergeCoordinatorConformance(label: string, suite: MergeC
     });
 
     it("a dependent is NOT eligible while its ancestor is merely QUEUED — only once the ancestor's drive MERGES it", async () => {
-      // The cardinal-sin regression lock (P2d): a queued-but-UNMERGED ancestor must
+      // The cardinal-sin regression lock: a queued-but-UNMERGED ancestor must
       // NOT satisfy a dependent. This drives the WHOLE loop with NO manual setMerged
       // — the dependent becomes eligible ONLY because the coordinator's own drive
       // merged the ancestor (which is the single point an ancestor reaches merged).

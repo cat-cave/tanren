@@ -1,4 +1,4 @@
-// Plane-split P2: behavior tests for the worker's job-CLAIM client resolution
+// Plane-split: behavior tests for the worker's job-CLAIM client resolution
 // from the environment (`buildClaimClientFromEnv` / `dataPlaneMtlsCertPathsFromEnv`).
 //
 // The resolver decides HOW the worker claims: the direct DB-CAS (default) or the

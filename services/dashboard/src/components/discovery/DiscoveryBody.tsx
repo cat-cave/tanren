@@ -1,12 +1,12 @@
 /**
- * P3-0014 spec-discovery surface (the hi-fi `view-discovery` flow). Composes:
+ * spec-discovery surface (the hi-fi `view-discovery` flow). Composes:
  *   - an INSIGHT card with provenance (source / who / when / glyph) + an
  *     editable body the operator classifies;
  *   - the FORGE CLASSIFICATION thread (summary + read-hint) — the same Forge
- *     answerer seam as P3-0010, here flavoured for discovery;
+ *     answerer seam as the conversation surface, here flavoured for discovery;
  *   - PROPOSED-SPEC cards;
  *   - the three DAG-PLACEMENT options (slot-after / jump-backlog / interrupt),
- *     one marked recommended, selectable via the discovery island (P3-0013 DAG);
+ *     one marked recommended, selectable via the discovery island (DAG);
  *   - the deltas + impact panel (personas / behaviors / specs).
  *
  * Classification is a server POST (`/projects/:projectId/discovery?classify`),

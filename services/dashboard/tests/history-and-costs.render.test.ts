@@ -1,4 +1,4 @@
-// P2B-0005 history & costs rendered-HTML tests. Mirrors the P2B-0001 shell
+// history & costs rendered-HTML tests. Mirrors the shell
 // harness (tests/shell.render.test.ts): build the app with a stubbed pool +
 // a mocked orchestrator (global fetch), then assert the rendered screens.
 //
@@ -10,7 +10,7 @@
 //   - burn projection + headroom + observed panels render numbers;
 //   - date-range filter pills + export-csv action present;
 //   - /costs/export.csv emits a CSV with the real cost_basis per row;
-//   - /history lists prior runs from the P2A-0014 run-list read API.
+//   - /history lists prior runs from the run-list read API.
 
 import type pg from "pg";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -265,7 +265,7 @@ describe("costs dashboard (/costs)", () => {
     expect(html).toContain('href="/costs/export.csv"');
   });
 
-  // P3-0018 — the subscription-window utilization heatmap on the costs page.
+  // the subscription-window utilization heatmap on the costs page.
   it("renders the subscription-window heatmap + overnight-audits Forge prompt", async () => {
     const app = await build();
     const html = await (await app.request("/costs")).text();
@@ -279,7 +279,7 @@ describe("costs dashboard (/costs)", () => {
     expect(html).toContain("heatmap-cell");
     expect(html).toContain("avg fill");
     // The "scheduled overnight audits" Forge affordance opens the palette,
-    // pre-seeded with the audit prompt (stays inside the P2A-0019 surface).
+    // pre-seeded with the audit prompt (stays inside the surface).
     expect(html).toContain("ask forge to schedule overnight audits");
     expect(html).toContain('data-island-trigger="palette"');
     expect(html).toContain("data-palette-prefill");
@@ -313,7 +313,7 @@ describe("history list (/history)", () => {
     // Outcome badges.
     expect(html).toContain("merged-ready");
     expect(html).toContain("halted");
-    // Row links to the run detail (P2B-0004).
+    // Row links to the run detail.
     expect(html).toContain("/projects/project_easy/runs/run_a1");
   });
 

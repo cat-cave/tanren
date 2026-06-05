@@ -8,11 +8,11 @@ import {
   PlanAnswer,
 } from "../src/engine/answerers/schemas/index.js";
 
-// Parser tests for the five Phase 2 Answerer schemas. Each role has a
+// Parser tests for the five Answerer schemas. Each role has a
 // positive case + at least one negative case so the contract surface stays
-// honest as the Zod sources evolve. The Phase 1 fixture regression assertion
+// honest as the Zod sources evolve. The fixture regression assertion
 // lives next to the check/audit cases: a representative single-spec fixture
-// answer (no behavior ids declared yet because Phase 1 does not surface
+// answer (no behavior ids declared yet because the fixture does not surface
 // behaviors) must still validate.
 
 describe("PlanAnswer", () => {
@@ -52,8 +52,8 @@ describe("PlanAnswer", () => {
 
 describe("CheckAnswer", () => {
   it("accepts a passing Phase-1-shaped fixture answer with empty behavior arrays", () => {
-    // Phase 1 fixture spec declares no behaviors, so the regression payload
-    // carries empty behavior arrays. This asserts Phase 1 fixture checker
+    // the fixture spec declares no behaviors, so the regression payload
+    // carries empty behavior arrays. This asserts the fixture checker
     // results validate against the regenerated schema unchanged.
     const value = {
       passed: true,

@@ -89,7 +89,7 @@ function bodyFor(topic: Topic, grounded: boolean, context: ForgeConversationCont
 
 // Read-tool actions render as auto-navigate cards in the dashboard; write-tool
 // actions are deferred and would render inert. This answerer only emits read
-// actions (navigation), keeping P3-0010 inside the read/navigation scope.
+// actions (navigation), keeping inside the read/navigation scope.
 function attentionFor(topic: Topic, context: ForgeConversationContext): ForgeAttentionItem[] {
   if (context.runId !== null && topic === "run") {
     return [

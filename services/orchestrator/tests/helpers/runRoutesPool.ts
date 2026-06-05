@@ -1,4 +1,4 @@
-// P2A-0014 test pool. Covers the SQL shapes the run-detail read API emits:
+// test pool. Covers the SQL shapes the run-detail read API emits:
 // runs / tasks / events / cost_records / specs / spec_behaviors /
 // spec_milestones / project_members / forge_threads / forge_turns /
 // workflow_insights / personas / behaviors / milestones.
@@ -451,7 +451,7 @@ export class RunRoutesPool {
       return { rows, rowCount: rows.length };
     }
 
-    // workflow_insights table (P2A-0020). Return empty rows so the cache
+    // workflow_insights table. Return empty rows so the cache
     // walks to the compute path which itself walks our other tables.
     if (/FROM workflow_insights/u.test(trimmed)) {
       return { rows: [], rowCount: 0 };
@@ -460,7 +460,7 @@ export class RunRoutesPool {
       return { rows: [], rowCount: 0 };
     }
 
-    // P2A-0020 retry_hotspot / model_mismatch / pace_anomaly compute helpers
+    // retry_hotspot / model_mismatch / pace_anomaly compute helpers
     // query runs/tasks/events directly — return empty so the insight list
     // is [] in tests by default (we explicitly test the filter elsewhere).
     return { rows: [], rowCount: 0 };

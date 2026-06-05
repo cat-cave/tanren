@@ -1,5 +1,5 @@
 /**
- * P3-0019 DORA-like delivery-metric response types. Kept in their own module
+ * DORA-like delivery-metric response types. Kept in their own module
  * (not the shared `types.ts`) so the metrics surface owns its contract and the
  * shared type barrel stays under the 500-line cap. Mirrors the orchestrator
  * `DoraMetrics` schema returned by `GET .../dora`.
@@ -18,7 +18,7 @@ export interface DoraMetricFigure {
 
 /**
  * The four DORA metrics, REPORTED not targeted, derived from existing run/
- * event data over a time window (`GET .../dora`, P3-0019).
+ * event data over a time window (`GET .../dora`).
  */
 export interface DoraMetrics {
   projectId: string;

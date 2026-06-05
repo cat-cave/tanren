@@ -1,5 +1,5 @@
 /**
- * Spec-detail model (P3-0013) — shapes the spec drawer + full page from the
+ * Spec-detail model — shapes the spec drawer + full page from the
  * orchestrator primitives (spec + its dependency edges + run history). Pure +
  * I/O-free so the route handler stays thin and the derivation is testable.
  */

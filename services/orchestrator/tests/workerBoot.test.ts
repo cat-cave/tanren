@@ -1,4 +1,4 @@
-// Plane-split P1: behavior tests for the standalone worker entrypoint boot.
+// Plane-split: behavior tests for the standalone worker entrypoint boot.
 //
 // What they prove (observable outcomes, no mock-only assertions):
 //   1. `bootRunWorker` builds the runtime pool from DATABASE_URL and STARTS the

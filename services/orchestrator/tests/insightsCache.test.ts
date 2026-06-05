@@ -1,4 +1,4 @@
-// P2A-0020 read-through cache tests.
+// read-through cache tests.
 
 import type pg from "pg";
 import { describe, expect, it, vi } from "vitest";

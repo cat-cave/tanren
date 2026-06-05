@@ -1,10 +1,10 @@
 /**
- * Existing-project · minimal (P2B-0002) — link-only, 1 step. Rebuilt as TSX
+ * Existing-project · minimal — link-only, 1 step. Rebuilt as TSX
  * from `view-onboard-existing.jsx` step 1 ONLY. NO recon agent, NO
  * config-injection PR, NO DAG seeding, NO governance picker (all phase 3).
  *
  * The operator picks a repo the GitHub App can see, fills the project-config
- * form, and submits. Submit creates the project row (P2A-0013) then calls the
+ * form, and submits. Submit creates the project row then calls the
  * brownfield-link endpoint which reads `.github/workflows/` and `CODEOWNERS`
  * for display but WRITES NOTHING to the target repo.
  */

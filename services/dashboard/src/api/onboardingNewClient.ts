@@ -1,8 +1,8 @@
 /**
- * P3-0015 greenfield-onboarding client. A STANDALONE client over the shared
+ * greenfield-onboarding client. A STANDALONE client over the shared
  * HTTP transport (`OrchestratorHttpClient`) — not folded into the product
  * `OrchestratorClient` chain — so the greenfield surface owns its own api module
- * (the P3-0014/P2B isolation lesson). Two calls map 1:1 onto the orchestrator
+ * (the screen-isolation lesson). Two calls map 1:1 onto the orchestrator
  * onboarding routes:
  *   round  → POST /orgs/:orgId/onboarding/interview/round
  *   derive → POST /orgs/:orgId/onboarding/interview/derive

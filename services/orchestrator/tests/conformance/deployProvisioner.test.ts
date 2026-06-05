@@ -1,4 +1,4 @@
-// Deploy-provisioner specifics (P-INT-4) beyond the shared IntegrationProvisioner
+// Deploy-provisioner specifics beyond the shared IntegrationProvisioner
 // conformance suite: the captured deployRef + preview-URL pattern, the idempotent
 // find-or-create that NEVER creates a second app on re-provision, brownfield
 // discover/bind, and — the load-bearing security property — that NO deploy-token
@@ -46,7 +46,7 @@ describe("VercelDeployProvisioner", () => {
     expect(artifact.deployRef?.appId).toMatch(/^vercel_app_/u);
     expect(artifact.deployRef?.previewUrlPattern).toBe("https://acme-web-git-{branch}-acme.vercel.app");
     expect(artifact.projectConfig?.["previewUrlPattern"]).toBe("https://acme-web-git-{branch}-acme.vercel.app");
-    // The env-attach seam (P-APP-ENV-2) is ABSENT until attachRuntimeAppEnv lands it —
+    // The env-attach seam is ABSENT until attachRuntimeAppEnv lands it —
     // the provisioner never writes a null placeholder (a config a strict read rejects).
     expect(artifact.projectConfig).not.toHaveProperty("envAttachmentRef");
   });

@@ -1,5 +1,5 @@
 /**
- * P3-0018 subscription-window utilization heatmap panel (server-rendered).
+ * subscription-window utilization heatmap panel (server-rendered).
  * Recreates the hi-fi `view-costs` heatmap: a 30-day × 5-window grid of fill
  * cells, a per-window avg-fill column, the "every dark cell is paid-for capacity
  * you didn't use" framing, and the "ask forge to schedule overnight audits"
@@ -8,7 +8,7 @@
  *
  * The affordance opens the existing Forge palette (the ⌘K island) pre-seeded
  * with the audit prompt via `data-island-trigger="palette"` + a prefill, so it
- * stays inside the declared Forge surface (P2A-0019) and adds no new write path.
+ * stays inside the declared Forge surface and adds no new write path.
  */
 
 import { pct, tokens } from "./format.js";
@@ -153,7 +153,7 @@ function PatternCallout(props: { matrix: HeatmapMatrix }) {
       <button type="button" class="btn primary" data-island-trigger="palette" data-palette-prefill={FORGE_AUDIT_PROMPT}>
         ask forge to schedule overnight audits
       </button>
-      {/* P3-0021: direct route to the scheduled-audits library (the surface
+      {/* direct route to the scheduled-audits library (the surface
           that turns this idle-window pitch into real recurring passes). */}
       <a class="btn ghost" href="/audits" data-audits-cta>
         open scheduled audits ↗

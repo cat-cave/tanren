@@ -1,7 +1,7 @@
 /**
- * P3-0021 scheduled-audits styles. Layered ON TOP of the shared `p2b` screen
+ * scheduled-audits styles. Layered ON TOP of the shared `p2b` screen
  * scaffolding (the audits body renders `ScreenStyles` for the shared classes,
- * then this for the audits-only bits). Everything keys off the P2A-0016 design
+ * then this for the audits-only bits). Everything keys off the design
  * tokens — no hardcoded colours — matching the hi-fi `view-audits` look without
  * importing the prototype JSX/CSS.
  */

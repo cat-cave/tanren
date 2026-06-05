@@ -1,4 +1,4 @@
-// P2d (autonomy-engine.md §2d) — serialization hardening: `recoverStaleClaims` is
+// (autonomy-engine.md §2d) — serialization hardening: `recoverStaleClaims` is
 // LEASE-GUARDED. A FRESH `merging` claim (a coordinator actively driving a merge)
 // must SURVIVE a concurrent coordinate pass — only a STALE claim (a coordinator
 // that genuinely crashed, claim older than the lease) is reclaimed. Without the

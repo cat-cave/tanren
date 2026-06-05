@@ -98,7 +98,7 @@ describe("adapter selector (P3-0012 fallback-chain resolution)", () => {
 
   it("admits the new providers as fallback-chain entries with NO schema migration", () => {
     // The routing table parses chains mixing all three providers without any
-    // shape change — confirming P2A-0006's claim that new providers slot into
+    // shape change — confirming the claim that new providers slot into
     // the existing per-role chain (cli/model are free-form strings).
     const parsed = RoutingTable.parse({
       write: {

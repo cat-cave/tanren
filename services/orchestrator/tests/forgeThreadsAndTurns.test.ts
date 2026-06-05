@@ -1,4 +1,4 @@
-// P2A-0019: thread/turn append/read + audience scope tests.
+// thread/turn append/read + audience scope tests.
 
 import type pg from "pg";
 import { describe, expect, it } from "vitest";

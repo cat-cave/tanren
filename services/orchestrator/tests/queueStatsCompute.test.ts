@@ -1,4 +1,4 @@
-// P2e-1 queue/stack-statistics reducer tests. `deriveQueueStats` is pure over
+// queue/stack-statistics reducer tests. `deriveQueueStats` is pure over
 // the native-queue events + the dependency edges, so every metric is asserted
 // against hand-built fixtures — no DB. Covers depth-over-time, time-in-queue,
 // batch pass-rate, bisect/culprit counts, dequeue-by-reason, and stack depth.

@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-// Verifies the collapsed baseline ships the P2A-0017 notifications matrix
+// Verifies the collapsed baseline ships the notifications matrix
 // tables with the constraints and indexes the dispatcher relies on. The
 // migration chain was collapsed to a single baseline; the final-state
 // event_name CHECK vocab (after every later widening) lives in the baseline.

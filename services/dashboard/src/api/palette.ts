@@ -1,8 +1,8 @@
 /**
- * The v0 command-palette surface (P2A-0019). These are the templated
+ * The v0 command-palette surface. These are the templated
  * suggestions described in the spec — quick actions (read routes), forge-this
  * write suggestions (operator-button tools), and ask-forge prompts. Thick-LLM
- * palette responses are Phase 3; this surface is deliberately static.
+ * live palette responses are a later surface; this surface is deliberately static.
  *
  * Split out of `orchestrator.ts` (it is a pure presentation helper, not part of
  * the HTTP client) so the product client stays under the 500-line cap.
@@ -14,7 +14,7 @@ import type { PaletteGroup, ProjectSummary } from "./types.js";
  * Build the v0 palette groups for an org's project context.
  *
  * Read actions carry `route`; write actions carry a `tool` id declared in the
- * P2A-0019 Forge tool surface so the palette can never invoke an undeclared
+ * Forge tool surface so the palette can never invoke an undeclared
  * tool. Projects are passed in so quick actions can deep-link the live project.
  */
 export function buildPaletteGroups(input: { orgLogin: string; projects: ProjectSummary[] }): PaletteGroup[] {
@@ -64,7 +64,7 @@ export function buildPaletteGroups(input: { orgLogin: string; projects: ProjectS
     ],
   };
   // ask-forge items carry NEITHER route nor tool: the palette morphs into a
-  // thick-Forge chat thread (P3-0010) and sends the title as the question.
+  // thick-Forge chat thread and sends the title as the question.
   const askForge: PaletteGroup = {
     group: "ask forge",
     items: [

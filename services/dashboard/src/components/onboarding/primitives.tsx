@@ -1,5 +1,5 @@
 /**
- * Reusable server-rendered primitives for the P2B-0002 onboarding /
+ * Reusable server-rendered primitives for the onboarding /
  * credentials / notifications screens. Rebuilt as TSX from the hi-fi
  * (`flows.jsx` OnbShell / StepHeading / Field / Toggle / StatusBadge /
  * PhaseBadge). Pure presentation; interactivity is handled by the screen's

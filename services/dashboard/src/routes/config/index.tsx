@@ -1,5 +1,5 @@
 /**
- * P3-0017 mount: the tanren-config audit-gate surface + the Settings toggle.
+ * mount: the tanren-config audit-gate surface + the Settings toggle.
  * Registered through the append-only screen registry (see `app/screens.ts`);
  * reuses `loadShellContext` + `renderShell` and never touches the chrome.
  *
@@ -8,7 +8,7 @@
  *   POST /settings/config/toggle   flip the audit-gate toggle (org config PATCH)
  *
  * Reads go through the typed `OrchestratorClient.getOrg`; the toggle is a
- * server-side form POST that PATCHes `organizations.config` (P2A-0013) and
+ * server-side form POST that PATCHes `organizations.config` and
  * redirects back. The gate-ON view's diff/PR is resolved from the org config +
  * the most recent gated PATCH response surfaced by the orchestrator (202).
  */

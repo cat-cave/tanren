@@ -1,4 +1,4 @@
-// Conformance for the two integration-provisioning stores (P-INT-0 + P-APP-ENV-0):
+// Conformance for the two integration-provisioning stores (+):
 // `OrgIntegrationsStore` (Plane A) and `AppEnvironmentStore` (Plane B). Driven
 // through an in-memory `pg` query target that — like the repositories conformance
 // harness — models RLS row visibility: a client scoped to org X sees only org X's

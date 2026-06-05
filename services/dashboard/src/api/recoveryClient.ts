@@ -1,5 +1,5 @@
 /**
- * P2B-0008 failure-recovery client surface, split out of `orchestrator.ts` so
+ * failure-recovery client surface, split out of `orchestrator.ts` so
  * the product client stays under the 500-line architecture cap (same split
  * rationale as `httpClient.ts`). These methods land on `OrchestratorClient`
  * via inheritance — `OrchestratorClient extends OrchestratorRecoveryClient` —
@@ -25,7 +25,7 @@ export abstract class OrchestratorRecoveryClient extends OrchestratorHttpClient 
     return this.getJson<RecoveryContext>(this.recoveryBase(loc, runId));
   }
 
-  /** revise_spec — record the intent + get the spec-edit href (P2B-0003). */
+  /** revise_spec — record the intent + get the spec-edit href. */
   async recoveryRevise(loc: RunLocation, runId: string): Promise<RecoveryActionResult> {
     const r = await this.sendJson<RecoveryActionResult>("POST", `${this.recoveryBase(loc, runId)}/revise`);
     return r.body ?? { ok: r.ok };

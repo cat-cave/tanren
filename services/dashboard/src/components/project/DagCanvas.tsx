@@ -1,5 +1,5 @@
 /**
- * The DAG-primary canvas shell (P3-0013): the "N need you" strip, the spec/
+ * The DAG-primary canvas shell: the "N need you" strip, the spec/
  * behavior/critical-path count line, group-by + fit/zoom controls, the SVG
  * canvas (headers + edges + nodes), and the bottom-left legend.
  *

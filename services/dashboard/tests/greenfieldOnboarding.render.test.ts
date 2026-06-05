@@ -1,7 +1,7 @@
-// P3-0015 — rendered-HTML assertions for the greenfield onboarding surface:
+// rendered-HTML assertions for the greenfield onboarding surface:
 // the 3-step shell, the vision-interview chat + live capture panel (round
 // accumulates captures via a MOCKED orchestrator interview route), the derived
-// spec-DAG step (rendered via the P3-0013 DagCanvas over the live derived
+// spec-DAG step (rendered via the DagCanvas over the live derived
 // graph), and the arrival card. Mirrors the discovery.render pattern: stub the
 // pg pool + mock the orchestrator APIs via global fetch, then assert the HTML.
 
@@ -192,7 +192,7 @@ describe("greenfield · derive → spec dag (step 2)", () => {
     expect(html).toContain("data-derived-dag");
     expect(html).toContain("the engine");
     expect(html).toContain("derived from interview");
-    // the DAG canvas rendered the derived specs (P3-0013 island).
+    // the DAG canvas rendered the derived specs (island).
     expect(html).toContain("monorepo scaffold");
     expect(html).toContain("clock in with badge");
     // advance form carries the derived projectId forward to arrival.

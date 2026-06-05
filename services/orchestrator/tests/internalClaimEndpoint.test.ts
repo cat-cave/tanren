@@ -1,4 +1,4 @@
-// Plane-split P2: behavior tests for the control-plane `/internal/claim-job`
+// Plane-split: behavior tests for the control-plane `/internal/claim-job`
 // endpoint + the claim clients that reach it. No mock-only assertions — every
 // test drives the REAL endpoint handler and asserts an observable outcome:
 //

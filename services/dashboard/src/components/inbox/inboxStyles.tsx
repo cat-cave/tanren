@@ -1,7 +1,7 @@
 /**
- * P3-0022 candidate-inbox styles. Layered ON TOP of the shared `p2b` / project
+ * candidate-inbox styles. Layered ON TOP of the shared `p2b` / project
  * screen scaffolding (the inbox body renders `ScreenStyles` for the shared
- * classes, then this for the inbox-only bits). Everything keys off the P2A-0016
+ * classes, then this for the inbox-only bits). Everything keys off the shared
  * design tokens — no hardcoded colours — matching the hi-fi `view-inbox` look
  * without importing the prototype JSX/CSS.
  */

@@ -1,5 +1,5 @@
 // Tiny in-memory pg substitute that pattern-matches the SQL emitted by the
-// P2A-0018 entity stores. Deliberately small: exercises decode/encode and
+// entity stores. Deliberately small: exercises decode/encode and
 // cycle detection, not a Postgres replacement.
 
 interface StubResult {

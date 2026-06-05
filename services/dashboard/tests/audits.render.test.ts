@@ -1,4 +1,4 @@
-// P3-0021 — rendered-HTML assertions for the scheduled-audits surface: the
+// rendered-HTML assertions for the scheduled-audits surface: the
 // audit-job library (kind / cadence / window / last-run / findings + enable
 // toggle), the window-fill bar, the forge-recommended coverage panel, and the
 // new-audit composer. Mirrors the inbox.render pattern: stub the pg pool + mock

@@ -1,5 +1,5 @@
 /**
- * P3-0010 thick-Forge chat island helper — the chat-mode half of the ⌘K
+ * thick-Forge chat island helper — the chat-mode half of the ⌘K
  * palette, split out of `palette.ts` to keep both under the 500-line cap.
  *
  * Owns the chat thread DOM: appends user + forge turns, renders the answer
@@ -10,7 +10,7 @@
  * Action cards: a card whose toolCall is a READ tool maps to an in-shell route
  * and navigates on click (auto-navigate). WRITE actions the answerer PROPOSES
  * (create_spec / trigger_run / rerun_task / acknowledge_insight) are now LIVE
- * (P3-0010 write-action approval): each pending proposal renders an
+ * (write-action approval): each pending proposal renders an
  * approve/reject card that POSTs to the dashboard's same-origin proposal proxy.
  * The model proposed; a human decides; the orchestrator executes under the
  * approving operator's authz.
@@ -139,7 +139,7 @@ export function appendForgeTurn(chat: HTMLElement, answer: ForgeAnswer, handlers
 }
 
 // Renders the pending write proposals the answerer raised as LIVE approve/
-// reject cards (P3-0010 write-action approval). Each decision POSTs to the
+// reject cards (write-action approval). Each decision POSTs to the
 // dashboard's same-origin proxy; the card updates in place to the resulting
 // status (executed / rejected / failed / already-decided) without re-asking.
 const STATUS_LABEL: Record<string, string> = {

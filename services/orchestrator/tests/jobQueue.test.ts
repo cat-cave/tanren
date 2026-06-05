@@ -71,7 +71,7 @@ describe("job queue", () => {
     expect(client.sql).toContain("BEGIN");
     expect(client.sql[1]).toContain("FOR UPDATE SKIP LOCKED");
     expect(client.sql[1]).toContain("SET status = 'running'");
-    // P3-0028: the claim stamps a heartbeat + lease window.
+    // the claim stamps a heartbeat + lease window.
     expect(client.sql[1]).toContain("leased_until = now() +");
     expect(client.sql).toContain("COMMIT");
     expect(client.released).toBe(true);

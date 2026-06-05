@@ -1,4 +1,4 @@
-// P3-0017 audit-gate org-config PATCH route tests. Builds the org route with an
+// audit-gate org-config PATCH route tests. Builds the org route with an
 // injected (mocked) GitHub port and asserts the gate behavior end-to-end at the
 // route layer:
 //   - gate ON + Bucket-B write  → 202 + PR opened, DB NOT mutated;

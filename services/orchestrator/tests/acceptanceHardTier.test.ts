@@ -1,18 +1,18 @@
-// P3-0026: the final v0 acceptance HARD tier, exercised through the REAL
+// the final v0 acceptance HARD tier, exercised through the REAL
 // dequeue→execute path (the same seam runWorker.test.ts proves for the easy
 // path). This is the deterministic replacement for the deleted direct-execution
-// acceptance drivers (scripts/acceptance/*, removed in P3-0001): instead of a
+// acceptance drivers (scripts/acceptance/*, removed in): instead of a
 // linear easy run we script the FAKE adapters / gate / merge probe so a single
 // run is forced down all three hard branches the v0 release gate must survive:
 //
-//   1. PLANNER RE-PLAN via the P3-0005 in-loop gate: the first writer
+//   1. PLANNER RE-PLAN via the in-loop gate: the first writer
 //      iteration's per_iteration gate FAILS → gateRejection → handleRejection
 //      emits `planner.rerequested` and the loop re-plans (re-invokes the
 //      planner) instead of dispatching a doomed checker call.
 //   2. AUDITOR REJECTION LOOP: after the tree gates green, the auditor returns
 //      `loop_to_planner` once → another `planner.rerequested` → re-plan, then
 //      passes on the next audit.
-//   3. CONFLICT RESOLUTION (P3-0008): the approved PR's direct merge reports a
+//   3. CONFLICT RESOLUTION: the approved PR's direct merge reports a
 //      conflict; the conflict-resolver hook resolves it and the retried merge
 //      succeeds — the run lands a coherent terminal `done/ok`.
 //
@@ -175,7 +175,7 @@ describe("acceptance hard tier (dequeue→execute, all hard paths)", () => {
               status: 200,
               message: "merged",
             }),
-            // P2a: branch reports clean → up-to-date enforcement is a no-op.
+            // branch reports clean → up-to-date enforcement is a no-op.
             readMergeability: async () => ({
               state: "clean" as const,
               behind: false,

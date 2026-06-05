@@ -1,7 +1,7 @@
 /**
- * P3-0018 subscription-window utilization heatmap — pure aggregation. Derives a
+ * subscription-window utilization heatmap — pure aggregation. Derives a
  * 30-day × 5-window fill matrix (+ per-window average fill) from the SAME
- * P2A-0011 cost records the costs dashboard already gathers. No new data
+ * cost records the costs dashboard already gathers. No new data
  * collection, no migration: we read records whose `billingMode === "subscription"`
  * — the server-enforced subscription windows (chatgpt / claude / zai bundles) —
  * and bucket their token volume by when it was recorded.

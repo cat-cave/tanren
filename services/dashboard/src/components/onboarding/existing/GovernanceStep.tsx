@@ -1,5 +1,5 @@
 /**
- * P3-0016 brownfield step 5 — governance posture picker. Wires the P3-0023
+ * brownfield step 5 — governance posture picker. Wires the
  * posture modes (strict | open | audit_only) into onboarding: the operator
  * picks one, the route persists it onto the project config, and the
  * external-push policy is DERIVED from the posture (no separate config field).
@@ -80,7 +80,7 @@ export function GovernanceStep(props: {
             );
           })}
           <div class="foot">
-            <div class="hint">↑ external-push behavior is derived from the posture (P3-0023)</div>
+            <div class="hint">↑ external-push behavior is derived from the posture</div>
             <div class="grow"></div>
             <button type="submit" class="btn primary">
               save posture ↗

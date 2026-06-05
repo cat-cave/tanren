@@ -1,11 +1,11 @@
 /**
- * HaltedRunBody — the failure-recovery screen (P2B-0008) rendered server-side
+ * HaltedRunBody — the failure-recovery screen rendered server-side
  * inside the shell. Recreated from the hi-fi `view-failure.jsx`:
  *   - page head (eyebrow + title + run/spec/retry/elapsed/$ sub-line + halted pill)
  *   - failure-context strip (4 cells)
  *   - recovery chat (left) — templated v0 narration analyzing the failure
  *   - recovery cards (right) — the four actions + last-resort abandon
- *   - dag-impact strip — flat list of downstream-blocked specs (Phase 2)
+ *   - dag-impact strip — flat list of downstream-blocked specs
  *
  * The recovery cards are plain server-rendered <form>s that POST to the
  * dashboard's same-origin recovery handler (which proxies to the orchestrator

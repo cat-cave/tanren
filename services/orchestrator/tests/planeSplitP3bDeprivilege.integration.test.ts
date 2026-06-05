@@ -1,4 +1,4 @@
-// Plane-split P3b — the de-privilege CUTOVER proof, against a REAL Postgres (no
+// The de-privilege CUTOVER proof, against a REAL Postgres (no
 // SQL mocks). This is the security payoff of the wave: with remote-writes ON the
 // data plane writes `events`/`cost_records` ONLY through the control plane, so
 // migration 0031 DROPS those write grants from the `tanren_dataplane` role the
@@ -23,7 +23,7 @@
 //       to the de-privileged data-plane role, not the table or the policy.
 //
 // Gated behind TANREN_RLS_DB_TEST=1 + an owner/superuser DATABASE_URL (the
-// migration role), exactly like the RLS cohort + P3a tests. Wired into
+// migration role), exactly like the RLS cohort + tests. Wired into
 // `just smoke` via `just smoke-plane-split-p3b`.
 
 import { Pool, type PoolClient } from "pg";
@@ -174,10 +174,10 @@ describeDb("plane-split P3b — the de-privileged tanren_dataplane role (real PG
     ).rejects.toMatchObject({ code: "42501" });
   });
 
-  // (b2) Plane-split P3c — the run-end reconcile/apportion is an UPDATE of
+  // (b2) The run-end reconcile/apportion is an UPDATE of
   // cost_records, and the data-plane role's UPDATE grant is ALSO gone (0031
   // dropped INSERT/UPDATE/DELETE). This is the exact write that failed the live
-  // run at finalize before P3c routed it through the control plane; assert it is
+  // run at finalize before routed it through the control plane; assert it is
   // rejected for the PRIVILEGE (42501), so the reconcile MUST go remote.
   it("(b2) REJECTS a direct UPDATE of cost_records by the data-plane role (reconcile path)", async () => {
     await expect(
@@ -200,7 +200,7 @@ describeDb("plane-split P3b — the de-privileged tanren_dataplane role (real PG
   // RLS that the data plane still writes directly (the supersede's queue cancel,
   // the worker's claim/complete/fail). Proving we did not over-revoke the role's
   // legitimate system-table reach. (The run/spec/task lifecycle writes were
-  // DROPPED in P3c — migration 0035 — and are asserted rejected in the P3c test.)
+  // DROPPED by migration 0035 — and are asserted rejected in the test.)
   it("(d) ALLOWS the data-plane role to write job_queue (system table kept)", async () => {
     const queue = await dataPlanePool.query(
       "UPDATE job_queue SET status = 'cancelled' WHERE run_id = $1 AND status = 'queued'",

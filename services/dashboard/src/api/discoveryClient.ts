@@ -1,8 +1,8 @@
 /**
- * P3-0014 spec-discovery client. A STANDALONE client over the shared HTTP
+ * spec-discovery client. A STANDALONE client over the shared HTTP
  * transport (`OrchestratorHttpClient`) — not folded into the product
  * `OrchestratorClient` inheritance chain — so the discovery surface owns its
- * own api module per the P2B integration lesson (parallel client-touching
+ * own api module per the screen-isolation lesson (parallel client-touching
  * screens diverge when they all extend the same client). The discovery route
  * instantiates it directly with the forwarded cookie header.
  *

@@ -1,5 +1,5 @@
 /**
- * P2B-0008 failure-recovery contracts the halted-run surface consumes from the
+ * failure-recovery contracts the halted-run surface consumes from the
  * orchestrator recovery routes. Split out of `types.ts` (re-exported there) to
  * keep that file under the 500-line architecture cap. Local + minimal: only the
  * fields the recovery page + action proxies read.

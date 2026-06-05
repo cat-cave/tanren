@@ -75,7 +75,7 @@ describe("TaskStatus transitions", () => {
 
 describe("JobStatus transitions", () => {
   it("shares the core task lifecycle for states tasks also have", () => {
-    // P3-0028: the job lifecycle is a SUPERSET of the task lifecycle — it adds
+    // the job lifecycle is a SUPERSET of the task lifecycle — it adds
     // queue-recovery transitions (running/failed → queued for a reaper requeue,
     // and → dead_letter for retry-budget exhaustion). For every transition the
     // task lifecycle allows from a shared state, the job lifecycle must allow it
@@ -135,7 +135,7 @@ describe("enum membership", () => {
     // The dead `writer_codex`/`answerer_codex` actor kinds were pruned (v21).
     expect(ActorKind.options).toContain("writer");
     expect(ActorKind.options).not.toContain("writer_codex");
-    // P3-0028 dead-letter terminal state.
+    // dead-letter terminal state.
     expect(JobStatus.options).toContain("dead_letter");
   });
 });

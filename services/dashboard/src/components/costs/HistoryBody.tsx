@@ -1,7 +1,7 @@
 /**
- * P2B-0005 history list body. Renders prior-run history from the P2A-0014
+ * history list body. Renders prior-run history from the run-list
  * filtered run list (`GET .../runs`), with status filter pills. Each row links
- * to the run detail (P2B-0004) and surfaces the run-level cost total, spec
+ * to the run detail and surfaces the run-level cost total, spec
  * title, outcome badge, and elapsed time. Presentation only.
  */
 
@@ -15,7 +15,7 @@ export interface HistoryBodyProps {
   status: string;
   orgId: string;
   orgLogin: string;
-  /** Project the history is scoped to (run list is project-scoped in P2A-0014). */
+  /** Project the history is scoped to (run list is project-scoped in). */
   projectId: string;
   projectName: string;
   /** True when the operator has no projects to scope a history list to. */

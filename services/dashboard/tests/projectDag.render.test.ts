@@ -1,4 +1,4 @@
-// P3-0013 — rendered-HTML assertions for the DAG-primary project view, the
+// rendered-HTML assertions for the DAG-primary project view, the
 // chat↔DAG toggle, the spec-drawer fragment, and the full-page spec view.
 // Mirrors the projects.render.test pattern: stub the pg pool + mock the
 // orchestrator product APIs via global fetch, then assert the rendered screens.

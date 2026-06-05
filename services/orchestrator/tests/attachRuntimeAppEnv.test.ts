@@ -1,4 +1,4 @@
-// P-APP-ENV-2 attach-flow coverage: the project's RUNTIME-scoped app env is
+// attach-flow coverage: the project's RUNTIME-scoped app env is
 // attached to the DEPLOYED app (right names + values reach the deploy transport),
 // a non-runtime-scoped entry is NOT attached, the plaintext never appears in the
 // emitted event / the result, and the flow works over both Vercel + Fly via the

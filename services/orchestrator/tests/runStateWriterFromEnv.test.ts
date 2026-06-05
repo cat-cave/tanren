@@ -1,4 +1,4 @@
-// Plane-split P3: behavior tests for the worker's run-state WRITER resolution
+// Plane-split: behavior tests for the worker's run-state WRITER resolution
 // from the environment (`buildRunStateWriterFromEnv` / `remoteWritesEnabled`).
 //
 // The resolver decides WHERE the worker writes run state: in-process direct DB

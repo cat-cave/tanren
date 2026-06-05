@@ -1,7 +1,7 @@
 /**
- * P3-0017 config-surface CSS. Lives in the owned config subtree (NOT shell.css)
+ * config-surface CSS. Lives in the owned config subtree (NOT shell.css)
  * and is emitted as a `<style data-screen="config">` block by the config body.
- * Every color is a design token (P2A-0016) — no hardcoded palette. Class names
+ * Every color is a design token — no hardcoded palette. Class names
  * are namespaced under `.config-screen` so they never collide with the chrome.
  */
 

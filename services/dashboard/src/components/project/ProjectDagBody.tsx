@@ -1,8 +1,8 @@
 /**
- * DAG-primary project view body (P3-0013). The full spec-graph canvas leads;
+ * DAG-primary project view body. The full spec-graph canvas leads;
  * Forge is collapsed to a clickable pill on the right rail alongside velocity +
  * activity. A chat↔DAG toggle in the header switches modes (the chat-primary
- * view from P2B-0003 is the other mode; this is the alternate, not a forced
+ * view from is the other mode; this is the alternate, not a forced
  * default). The toggle persists client-side like the theme toggle — see the
  * `dag-canvas` island + `data-mode-toggle`.
  */

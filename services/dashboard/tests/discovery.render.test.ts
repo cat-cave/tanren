@@ -1,4 +1,4 @@
-// P3-0014 — rendered-HTML assertions for the spec-discovery surface: the
+// rendered-HTML assertions for the spec-discovery surface: the
 // insight form + provenance card, the variant tabs, the Forge classification
 // thread + proposed-spec cards, the three DAG-placement options (one
 // recommended), and the accept flow. Mirrors the projectDag.render pattern:

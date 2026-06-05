@@ -1,4 +1,4 @@
-// P3-0017 tanren-config audit-gate surface render tests. Mirrors the DORA
+// tanren-config audit-gate surface render tests. Mirrors the DORA
 // harness: build the app with a stubbed pool + a mocked orchestrator (global
 // fetch), then assert the rendered /settings/config screen in both states.
 //

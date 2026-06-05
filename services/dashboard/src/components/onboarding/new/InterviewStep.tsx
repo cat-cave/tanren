@@ -1,5 +1,5 @@
 /**
- * P3-0015 — step 1 of the greenfield track: the multi-round Forge VISION
+ * step 1 of the greenfield track: the multi-round Forge VISION
  * INTERVIEW. The left column is the chat (Forge's current question + the prior
  * turn + inline suggestions); the right column is the live `CapturePanel`.
  *

@@ -1,4 +1,4 @@
-// P3-0021 scheduled-audits engine tests.
+// scheduled-audits engine tests.
 //
 // Exercises the scheduler (a MOCKED read-only pass → findings → candidate
 // inbox auto-route), the enable/disable toggle + run recording, the store

@@ -79,7 +79,7 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
   }
 
   /**
-   * All cost records for a run (`GET .../runs/:runId/costs`, P2A-0011), walking
+   * All cost records for a run (`GET .../runs/:runId/costs`), walking
    * the cursor pages so the costs dashboard sees the full set. Capped at
    * `maxPages` so a runaway cursor can never spin forever. Empty on failure.
    */
@@ -134,7 +134,7 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
   // `OrchestratorHttpClient`; each forwards the session cookie and degrades to
   // an empty/undefined result so a page never 500s when a data source is down.
 
-  /** Runs for the project's attention queue + KPIs (P2A-0014). */
+  /** Runs for the project's attention queue + KPIs. */
   async listRuns(
     orgId: string,
     projectId: string,
@@ -150,7 +150,7 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
     return json?.items ?? [];
   }
 
-  /** Project activity feed (P2A-0014). */
+  /** Project activity feed. */
   async listFeed(orgId: string, projectId: string): Promise<ProjectFeedItem[]> {
     const json = await this.getJson<{ items?: ProjectFeedItem[] }>(
       `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/feed`,
@@ -159,8 +159,8 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
   }
 
   /**
-   * Workflow insights, filtered to the supported kinds (P2A-0020 trio plus the
-   * P3-0020 `stuck` + `review_stall` and the P2e-1 `ci_flaky` additions).
+   * Workflow insights, filtered to the supported kinds (trio plus the
+   * `stuck` + `review_stall` and the `ci_flaky` additions).
    * Acknowledged rows drop out.
    */
   async listInsights(orgId: string, projectId: string): Promise<InsightSummary[]> {
@@ -173,7 +173,7 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
   }
 
   /**
-   * DORA-like delivery metrics for a project over a window (P3-0019). Reported,
+   * DORA-like delivery metrics for a project over a window. Reported,
    * not targeted; derived from existing run/event data. `undefined` on failure
    * so the panel degrades to an empty state instead of 500-ing.
    */
@@ -185,7 +185,7 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
     return json?.metrics;
   }
 
-  /** Project milestones for the velocity card + spec form (P2A-0018). */
+  /** Project milestones for the velocity card + spec form. */
   async listMilestones(orgId: string, projectId: string): Promise<MilestoneSummary[]> {
     const json = await this.getJson<{ milestones?: MilestoneSummary[] }>(
       `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/milestones`,
@@ -193,7 +193,7 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
     return json?.milestones ?? [];
   }
 
-  /** Project specs (spec list + dependency picker, P2A-0013). */
+  /** Project specs (spec list + dependency picker). */
   async listSpecs(orgId: string, projectId: string): Promise<SpecSummary[]> {
     const json = await this.getJson<{ specs?: SpecSummary[] }>(
       `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/specs`,
@@ -201,7 +201,7 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
     return json?.specs ?? [];
   }
 
-  /** Project personas — needed to enumerate behaviors (P2A-0018). */
+  /** Project personas — needed to enumerate behaviors. */
   async listPersonas(orgId: string, projectId: string): Promise<PersonaSummary[]> {
     const json = await this.getJson<{ personas?: PersonaSummary[] }>(
       `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/personas`,
@@ -209,7 +209,7 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
     return json?.personas ?? [];
   }
 
-  /** Behaviors for a persona (the spec-form behavior picker, P2A-0018). */
+  /** Behaviors for a persona (the spec-form behavior picker). */
   async listBehaviors(orgId: string, projectId: string, personaId: string): Promise<BehaviorSummary[]> {
     const json = await this.getJson<{ behaviors?: BehaviorSummary[] }>(
       `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/behaviors?personaId=${encodeURIComponent(personaId)}`,
@@ -224,12 +224,12 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
     return lists.flat();
   }
 
-  /** Full project incl. merged config (routing + escape hatches, P2A-0013). */
+  /** Full project incl. merged config (routing + escape hatches). */
   async getProject(orgId: string, projectId: string): Promise<ProjectDetail | undefined> {
     return this.getJson<ProjectDetail>(`/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}`);
   }
 
-  /** Persist project config (routing/escape-hatches save flow, P2A-0013). */
+  /** Persist project config (routing/escape-hatches save flow). */
   async patchProjectConfig(
     orgId: string,
     projectId: string,
@@ -243,7 +243,7 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
     return { ok: result.ok, status: result.status };
   }
 
-  /** Create a spec attached to the project (P2A-0013). */
+  /** Create a spec attached to the project. */
   async createSpec(
     orgId: string,
     projectId: string,
@@ -262,7 +262,7 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
   }
 
   /**
-   * Trigger a live run from a spec (P2B-0006). POSTs to the orchestrator's
+   * Trigger a live run from a spec. POSTs to the orchestrator's
    * run-from-spec endpoint with `trigger: "dashboard"` so the run's origin is
    * recorded as the operator-driven dashboard flow. The body is forwarded as-is
    * by `sendJson`, so a 4xx (403 org/project access, 409 deps-blocked /
@@ -285,7 +285,7 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
   }
 
   /**
-   * Best-effort Forge project-view narration (P2A-0019): create a project
+   * Best-effort Forge project-view narration: create a project
    * thread, generate the templated turn, and return its render payload. Any
    * failure yields `undefined` so the project view degrades to the
    * data-derived attention queue without the narration pulse line.
@@ -311,14 +311,14 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
     return turn.body?.render;
   }
 
-  // ── P2B-0002 onboarding / credentials / notifications ──────────────────
+  // ── onboarding / credentials / notifications ──────────────────
 
-  /** Stack-health report (P2A-0013 `/doctor`). `undefined` when unreachable. */
+  /** Stack-health report (`/doctor`). `undefined` when unreachable. */
   async doctor(): Promise<DoctorReport | undefined> {
     return this.getJson<DoctorReport>("/doctor");
   }
 
-  /** Org-scoped credential references (P2A-0013). Never returns values. */
+  /** Org-scoped credential references. Never returns values. */
   async listOrgCredentials(orgId: string): Promise<CredentialRecord[]> {
     const json = await this.getJson<{ credentials?: CredentialRecord[] }>(
       `/orgs/${encodeURIComponent(orgId)}/credentials`,
@@ -326,7 +326,7 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
     return json?.credentials ?? [];
   }
 
-  /** Personal credential references (P2A-0013). Never returns values. */
+  /** Personal credential references. Never returns values. */
   async listMyCredentials(): Promise<CredentialRecord[]> {
     const json = await this.getJson<{ credentials?: CredentialRecord[] }>("/credentials/me");
     return json?.credentials ?? [];
@@ -344,7 +344,7 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
     return this.sendJson("POST", `${base}?kind=${encodeURIComponent(input.kind)}`, input.body);
   }
 
-  /** Delete an org-scoped credential reference (P2A-0013). */
+  /** Delete an org-scoped credential reference. */
   async deleteOrgCredential(orgId: string, ref: string): Promise<boolean> {
     const result = await this.sendJson(
       "DELETE",
@@ -353,7 +353,7 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
     return result.ok;
   }
 
-  /** Create a project row (P2A-0013, non-brownfield create path). */
+  /** Create a project row (non-brownfield create path). */
   async createProject(orgId: string, body: Record<string, unknown>): Promise<CreatedProject | undefined> {
     const result = await this.sendJson("POST", `/orgs/${encodeURIComponent(orgId)}/projects`, body);
     if (!result.ok) return undefined;
@@ -361,7 +361,7 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
   }
 
   /**
-   * Link a target repo (P2A-0013 brownfield). Reads `.github/workflows/` and
+   * Link a target repo (brownfield). Reads `.github/workflows/` and
    * `CODEOWNERS` for display; WRITES NOTHING to the target.
    */
   async brownfieldLink(
@@ -381,13 +381,13 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
     return { ok: true, status: result.status, result: result.body as BrownfieldLinkResult };
   }
 
-  /** The full notifications matrix for an org (P2A-0017). Empty on failure. */
+  /** The full notifications matrix for an org. Empty on failure. */
   async notificationMatrix(orgId: string): Promise<NotificationMatrix> {
     const json = await this.getJson<NotificationMatrix>(`/orgs/${encodeURIComponent(orgId)}/notifications/matrix`);
     return json ?? { targets: [], routes: [], events: [] };
   }
 
-  /** Create a notification target (P2A-0017). */
+  /** Create a notification target. */
   async createNotificationTarget(
     orgId: string,
     body: Record<string, unknown>,
@@ -397,14 +397,14 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
     return result.body as NotificationTarget;
   }
 
-  /** Create/replace a notification route opt-in (P2A-0017). */
+  /** Create/replace a notification route opt-in. */
   async createNotificationRoute(orgId: string, body: Record<string, unknown>): Promise<NotificationRoute | undefined> {
     const result = await this.sendJson("POST", `/orgs/${encodeURIComponent(orgId)}/notifications/routes`, body);
     if (!result.ok) return undefined;
     return result.body as NotificationRoute;
   }
 
-  // ── P2B-0004 run-detail / review / SSE ─────────────────────────────────
+  // ── run-detail / review / SSE ─────────────────────────────────
   // The dashboard route is `/runs/:runId` (the spec permits deriving
   // org/project from the run); the orchestrator API is org+project-scoped, so
   // we resolve the run's location by scanning the operator's orgs + projects
@@ -432,7 +432,7 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
 
   /**
    * Fetch the full run-detail snapshot. `rawView` opts into unredacted
-   * payloads via `?raw=true` (the orchestrator emits the P2A-0009 audit
+   * payloads via `?raw=true` (the orchestrator emits the audit
    * trail); the dashboard only sets it for admins. `undefined` when the run
    * is missing or access is denied.
    */

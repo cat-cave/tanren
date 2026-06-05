@@ -1,8 +1,8 @@
 /**
- * P2B-0008 recovery view-model. Derives the four failure-context cells and the
+ * recovery view-model. Derives the four failure-context cells and the
  * templated recovery-chat narration from the contract-typed RunDetail
- * (P2A-0014) + RecoveryContext (orchestrator recovery route). All v0 narration
- * is templated from event payloads — thick Forge LLM responses are Phase 3.
+ * + RecoveryContext (orchestrator recovery route). All v0 narration
+ * is templated from event payloads — thick Forge LLM responses are a later surface.
  */
 
 import type { RunDetail, RunEventRow, TaskTimelineEntry } from "../../api/types.js";
@@ -137,7 +137,7 @@ export function buildFailureContext(detail: RunDetail, lastGoodCommit: string | 
   };
 }
 
-/** Downstream-blocked specs (flat list in Phase 2; full DAG is Phase 3). */
+/** Downstream-blocked specs (flat list; the full DAG is a later surface). */
 export interface DownstreamImpact {
   blockedSpecs: string[];
   haltedSpecTitle: string;

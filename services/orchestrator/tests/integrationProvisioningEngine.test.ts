@@ -1,4 +1,4 @@
-// P-INT-2 engine tests: the capability → grant → discover → smart-default →
+// engine tests: the capability → grant → discover → smart-default →
 // provision/bind → persist → event flow, driven over an in-memory stub pool
 // (keyed by SQL substring, mirroring candidateInbox.test.ts) + a FAKE
 // IntegrationProvisioner (under tests/, never wired into prod) + an in-memory
@@ -31,7 +31,7 @@ const ACTOR = { kind: "operator", id: "user_a" } as const;
 const TOKEN_REF = "org/org_int_1/sentry/token";
 
 // The exact `inbox_sources_kind_check` set (migration 0024). The stub pool below
-// enforces it so a provisioner emitting a CHECK-violating inbox kind (the P-INT-2
+// enforces it so a provisioner emitting a CHECK-violating inbox kind (the capability-onboarding
 // blocking bug) FAILS the persistence test instead of silently passing.
 const INBOX_KIND_CHECK = new Set(["issues", "errors", "system", "manual", "scheduled_audit"]);
 
@@ -291,7 +291,7 @@ describe("provisionCapability — idempotent re-onboard", () => {
   });
 });
 
-// Regression guard for the P-INT-2 blocking bug: a provisioner that emits an
+// Regression guard for the blocking bug: a provisioner that emits an
 // inbox-source kind outside `inbox_sources_kind_check` (e.g. "sentry" instead of
 // "errors") must FAIL persistence — the stub pool mirrors the real DB CHECK, so a
 // future provider re-introducing a bad kind can't pass silently.

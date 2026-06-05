@@ -1,4 +1,4 @@
-// P2B-0008 — rendered-HTML acceptance tests for the halted-run failure-recovery
+// rendered-HTML acceptance tests for the halted-run failure-recovery
 // surface. Mirrors the run-detail render harness: build the app with a stubbed
 // pool + a mocked orchestrator (global fetch) and assert the server-rendered
 // HTML and the same-origin recovery-action proxies. No live orchestrator/runner.
@@ -26,7 +26,7 @@ describe("P2B-0008 halted-run list", () => {
     expect(html).toContain("halted runs");
     expect(html).toContain("no SSR theme flash");
     expect(html).toContain(RUN_ID);
-    // not the P2B-0004 placeholder
+    // not the placeholder
     expect(html).not.toContain("documented placeholder");
   });
 });

@@ -1,4 +1,4 @@
-// P2e-1 flaky quarantine-surface tests. Exercises `detectAndQuarantineFlaky`
+// flaky quarantine-surface tests. Exercises `detectAndQuarantineFlaky`
 // end to end against a small in-memory pg substitute + a fake event store (both
 // TEST FIXTURES, under tests/). Proves: a proven-flaky check is RECORDED on the
 // quarantine surface AND both operator-visible events fire; a consistently-
