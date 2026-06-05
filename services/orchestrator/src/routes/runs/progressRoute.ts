@@ -14,7 +14,7 @@ import { runWithOrgScope } from "@tanren/db";
 import type { Context, Hono } from "hono";
 import type pg from "pg";
 import type { ActorContext } from "../../auth/schemas.js";
-import { pgRepositories } from "../../engine/contracts/repositories.js";
+import { pgRepositories, type QueryClient } from "../../engine/contracts/repositories.js";
 import { assertProjectAccess, ToolAccessDeniedError } from "../../engine/forge/tools/authz.js";
 import { ProjectStore } from "../../engine/repositories/index.js";
 import { systemActor } from "../../engine/state/actor.js";
@@ -34,30 +34,39 @@ export function registerProjectProgressRoute(app: Hono<ActorContextEnv>, options
     const denial = await gateProjectAccess(options.pool, projectId, actor, c);
     if (denial !== undefined) return denial;
 
-    // One org-scoped transaction for all three reads (same scope discipline the
-    // sibling routes use). The feed is loaded a generous window deep (newest
-    // first) and reused three ways in the pure reducer — recentMilestones, the
-    // per-inFlight-run `stage` (latest event per run), and the top-level
-    // `lastActivityAt` (the head event's ts) — so the live-progress signals add
-    // ZERO extra queries. The window is enough to fill the last-~20 milestones
-    // and reach each active run's latest event without paging the whole history.
-    const { project, specs, runs, feed } = await runWithOrgScope(options.pool, orgId, async (client) => {
-      const projectRow = await ProjectStore.get(client, projectId, systemActor);
-      const specRows = await pgRepositories.projectSpecs.listForProject(client, projectId, systemActor);
-      const runItems = await fetchRunListItems(client, { projectId, orgId, status: undefined, specId: undefined });
-      const feedPage = await fetchFeedPage(client, {
-        projectId,
-        orgId,
-        cursor: undefined,
-        // A milestone is a fraction of the feed; pull a generous window so the
-        // top ~20 milestones are present even when interleaved with noise.
-        pageSize: String(RECENT_MILESTONE_CAP * 10),
-        actor,
-        // Redacted view ONLY — the progress surface never opts into raw values.
-        rawView: false,
-      });
-      return { project: projectRow, specs: specRows, runs: runItems, feed: feedPage.items };
-    });
+    // One org-scoped transaction for all progress reads (same scope discipline the
+    // sibling routes use). The feed stays a bounded recent window for
+    // milestones/stages/lastActivityAt; completion blockers come from the
+    // unbounded merge-signal projection below so an old terminal halt still
+    // prevents false v1 completion.
+    const { project, specs, runs, feed, completionBlockingSpecIds } = await runWithOrgScope(
+      options.pool,
+      orgId,
+      async (client) => {
+        const projectRow = await ProjectStore.get(client, projectId, systemActor);
+        const specRows = await pgRepositories.projectSpecs.listForProject(client, projectId, systemActor);
+        const runItems = await fetchRunListItems(client, { projectId, orgId, status: undefined, specId: undefined });
+        const blockers = await fetchCompletionBlockingSpecIds(client, { projectId, orgId });
+        const feedPage = await fetchFeedPage(client, {
+          projectId,
+          orgId,
+          cursor: undefined,
+          // A milestone is a fraction of the feed; pull a generous window so the
+          // top ~20 milestones are present even when interleaved with noise.
+          pageSize: String(RECENT_MILESTONE_CAP * 10),
+          actor,
+          // Redacted view ONLY — the progress surface never opts into raw values.
+          rawView: false,
+        });
+        return {
+          project: projectRow,
+          specs: specRows,
+          runs: runItems,
+          feed: feedPage.items,
+          completionBlockingSpecIds: blockers,
+        };
+      },
+    );
 
     // The project-access gate above already authorized the actor against the
     // project; this is the same defense-in-depth tenant check the project-read
@@ -73,9 +82,100 @@ export function registerProjectProgressRoute(app: Hono<ActorContextEnv>, options
       specs,
       runs,
       feed,
+      completionBlockingSpecIds,
     });
     return c.json(progress);
   });
+}
+
+async function fetchCompletionBlockingSpecIds(
+  client: QueryClient,
+  args: { projectId: string; orgId: string },
+): Promise<ReadonlySet<string>> {
+  const result = await client.query<{ spec_id: string }>(
+    `WITH signal_events AS (
+       SELECT id, ts, event_type, spec_id, run_id, payload
+         FROM events
+        WHERE project_id = $1
+          AND org_id = $2
+          AND (
+            event_type = 'merge.completed'
+            OR (
+              event_type = 'merge.queue.infra_blocked'
+              AND (NOT (payload ? 'integration') OR payload ->> 'integration' = 'native_queue')
+            )
+            OR (
+              event_type = 'merge.batch.infra_blocked'
+              AND payload ->> 'terminal' = 'true'
+              AND (NOT (payload ? 'integration') OR payload ->> 'integration' = 'native_queue')
+            )
+            OR (
+              event_type = 'merge.dequeued'
+              AND payload ->> 'reason' IN ('blocked', 'failed')
+              AND (NOT (payload ? 'integration') OR payload ->> 'integration' = 'native_queue')
+            )
+          )
+     ),
+     payload_member_ids AS (
+       SELECT s.id, NULLIF(member ->> 'specId', '') AS spec_id
+         FROM signal_events s
+         CROSS JOIN LATERAL jsonb_array_elements(
+           CASE
+             WHEN jsonb_typeof(s.payload -> 'members') = 'array' THEN s.payload -> 'members'
+             ELSE '[]'::jsonb
+           END
+         ) AS member
+     ),
+     payload_spec_ids AS (
+       SELECT id, NULLIF(payload ->> 'specId', '') AS spec_id
+         FROM signal_events
+     ),
+     payload_ids AS (
+       SELECT id, spec_id FROM payload_spec_ids WHERE spec_id IS NOT NULL
+       UNION
+       SELECT id, spec_id FROM payload_member_ids WHERE spec_id IS NOT NULL
+     ),
+     run_spec_ids AS (
+       SELECT s.id, NULLIF(r.spec_id, '') AS spec_id
+         FROM signal_events s
+         INNER JOIN runs r
+                 ON r.run_id = s.run_id
+                AND r.project_id = $1
+                AND r.org_id = $2
+        WHERE s.run_id IS NOT NULL
+     ),
+     attributed AS (
+       SELECT s.id, s.ts, s.event_type, p.spec_id
+         FROM signal_events s
+         INNER JOIN payload_ids p ON p.id = s.id
+       UNION
+       SELECT s.id, s.ts, s.event_type, s.spec_id
+         FROM signal_events s
+        WHERE s.spec_id IS NOT NULL
+          AND (
+            s.event_type <> 'merge.batch.infra_blocked'
+            OR NOT EXISTS (SELECT 1 FROM payload_ids p WHERE p.id = s.id)
+          )
+       UNION
+       SELECT s.id, s.ts, s.event_type, r.spec_id
+         FROM signal_events s
+         INNER JOIN run_spec_ids r ON r.id = s.id
+        WHERE r.spec_id IS NOT NULL
+          AND s.spec_id IS NULL
+          AND NOT EXISTS (SELECT 1 FROM payload_ids p WHERE p.id = s.id)
+     ),
+     latest AS (
+       SELECT DISTINCT ON (spec_id) spec_id, event_type
+         FROM attributed
+        ORDER BY spec_id, ts DESC, id DESC
+     )
+     SELECT spec_id
+       FROM latest
+      WHERE event_type IN ('merge.queue.infra_blocked', 'merge.batch.infra_blocked', 'merge.dequeued')
+      ORDER BY spec_id`,
+    [args.projectId, args.orgId],
+  );
+  return new Set(result.rows.map((row) => row.spec_id));
 }
 
 // Same project-access gate the run/feed routes use: ToolAccessDeniedError is the

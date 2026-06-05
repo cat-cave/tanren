@@ -207,6 +207,8 @@ export interface BuildProjectProgressInput {
   runs: ReadonlyArray<RunListItem>;
   // Project activity-feed items (newest-first), as `fetchFeedPage` returns them.
   feed: ReadonlyArray<ProjectFeedItem>;
+  // Spec ids whose latest merge completion signal is a terminal infra halt.
+  completionBlockingSpecIds: ReadonlySet<string>;
 }
 
 /**
@@ -216,9 +218,12 @@ export interface BuildProjectProgressInput {
 export function buildProjectProgress(input: BuildProjectProgressInput): ProjectProgress {
   const counts = bucketSpecCounts(input.specs);
   const total = input.specs.length;
-  const merged = counts.merged;
-  const percentComplete = total === 0 ? 0 : Math.round((merged / total) * 100);
-  const v1Reached = total > 0 && merged === total;
+  const mergedButBlocked = input.specs.filter(
+    (spec) => spec.status === "merged" && input.completionBlockingSpecIds.has(spec.spec_id),
+  ).length;
+  const effectivelyMerged = Math.max(0, counts.merged - mergedButBlocked);
+  const percentComplete = total === 0 ? 0 : Math.round((effectivelyMerged / total) * 100);
+  const v1Reached = total > 0 && effectivelyMerged === total;
 
   return ProjectProgress.parse({
     project: input.project,
@@ -226,8 +231,8 @@ export function buildProjectProgress(input: BuildProjectProgressInput): ProjectP
     specCounts: counts,
     percentComplete,
     inFlight: buildInFlight(input.specs, input.runs, input.feed),
-    blocked: buildBlocked(input.specs),
-    recentMilestones: buildMilestones(input.specs, input.feed),
+    blocked: buildBlocked(input.specs, input.completionBlockingSpecIds),
+    recentMilestones: buildMilestones(input.specs, input.runs, input.feed),
     lastActivityAt: lastActivityAt(input.feed),
   });
 }
@@ -283,10 +288,17 @@ function buildInFlight(
   return out;
 }
 
-function buildBlocked(specs: ReadonlyArray<ProjectSpecRow>): BlockedSpec[] {
+function buildBlocked(
+  specs: ReadonlyArray<ProjectSpecRow>,
+  completionBlockingSpecIds: ReadonlySet<string>,
+): BlockedSpec[] {
   return specs
-    .filter((s) => BLOCKED_SPEC_STATUSES.has(s.status))
-    .map((s) => ({ specId: s.spec_id, title: s.title, status: s.status }));
+    .filter((s) => BLOCKED_SPEC_STATUSES.has(s.status) || completionBlockingSpecIds.has(s.spec_id))
+    .map((s) => ({
+      specId: s.spec_id,
+      title: s.title,
+      status: completionBlockingSpecIds.has(s.spec_id) ? "completion_blocked" : s.status,
+    }));
 }
 
 // Filter the (already-redacted) feed to the milestone event types, newest-first,
@@ -295,13 +307,15 @@ function buildBlocked(specs: ReadonlyArray<ProjectSpecRow>): BlockedSpec[] {
 // known-safe string fields.
 function buildMilestones(
   specs: ReadonlyArray<ProjectSpecRow>,
+  runs: ReadonlyArray<RunListItem>,
   feed: ReadonlyArray<ProjectFeedItem>,
 ): ProgressMilestone[] {
   const titleBySpec = new Map(specs.map((s) => [s.spec_id, s.title]));
+  const specByRun = new Map(runs.map((r) => [r.runId, r.specId]));
   const out: ProgressMilestone[] = [];
   for (const item of feed) {
     if (!MILESTONE_EVENT_TYPES.has(item.eventType)) continue;
-    const specId = item.specId;
+    const specId = milestoneSpecId(item, specByRun);
     out.push({
       type: item.eventType,
       specId,
@@ -314,14 +328,57 @@ function buildMilestones(
   return out;
 }
 
+function milestoneSpecId(item: ProjectFeedItem, specByRun: ReadonlyMap<string, string>): string | null {
+  if (item.eventType === "merge.batch.infra_blocked") {
+    return payloadSpecIds(item)[0] ?? item.specId;
+  }
+  if (item.specId !== null) return item.specId;
+  if (item.eventType === "merge.dequeued") {
+    return payloadSpecIds(item)[0] ?? specByRun.get(item.runId) ?? null;
+  }
+  if (!isMergeInfraBlockedEvent(item)) return null;
+  return payloadSpecIds(item)[0] ?? null;
+}
+
+function isMergeInfraBlockedEvent(item: ProjectFeedItem): boolean {
+  return item.eventType === "merge.queue.infra_blocked" || item.eventType === "merge.batch.infra_blocked";
+}
+
+function payloadSpecIds(item: ProjectFeedItem): string[] {
+  const ids: string[] = [];
+  const payload = payloadRecord(item);
+  if (payload !== undefined) {
+    appendSpecId(ids, payload["specId"]);
+    appendMemberSpecIds(ids, payload["members"]);
+  }
+  return [...new Set(ids)];
+}
+
+function appendMemberSpecIds(ids: string[], members: unknown): void {
+  if (!Array.isArray(members)) return;
+  for (const member of members) {
+    if (member === null || typeof member !== "object") continue;
+    appendSpecId(ids, (member as Record<string, unknown>)["specId"]);
+  }
+}
+
+function appendSpecId(ids: string[], value: unknown): void {
+  if (typeof value === "string" && value !== "") ids.push(value);
+}
+
+function payloadRecord(item: ProjectFeedItem): Record<string, unknown> | undefined {
+  const payload = item.payload;
+  if (payload === null || typeof payload !== "object") return undefined;
+  return payload as Record<string, unknown>;
+}
+
 // A short, non-secret summary pulled from the (redacted) payload: the
 // reason/message a merge/dag event carries. Never a secret — these are the
 // human-readable status strings the event schemas define (e.g. dequeue reason,
 // conflict message), and redaction has already run.
 function milestoneDetail(item: ProjectFeedItem): string | null {
-  const payload = item.payload;
-  if (payload === null || typeof payload !== "object") return null;
-  const record = payload as Record<string, unknown>;
+  const record = payloadRecord(item);
+  if (record === undefined) return null;
   const message = record["message"];
   if (typeof message === "string" && message !== "") return message;
   const reason = record["reason"];
