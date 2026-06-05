@@ -48,7 +48,17 @@ function renderEventTypesTs(names) {
     const trailing = index === names.length - 1 ? "" : ",";
     lines.push(`  ${JSON.stringify(name)}${trailing}`);
   });
-  lines.push("] as const;", "", "export type EventTypeName = (typeof eventTypeNames)[number];", "");
+  lines.push(
+    "] as const;",
+    "",
+    // `@public`: this generated type is part of the event-name contract (the union
+    // mirror of the registry). It is intentionally exported for downstream/typed
+    // consumers even when this monorepo has no internal reference — the tag tells
+    // knip it is a deliberate public surface, not dead code.
+    "/** @public */",
+    "export type EventTypeName = (typeof eventTypeNames)[number];",
+    "",
+  );
   return lines.join("\n");
 }
 

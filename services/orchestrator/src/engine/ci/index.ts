@@ -3,7 +3,6 @@
 // it is the sole CI authority (Action-less delivery). Contract + parser only —
 // no execution lives here.
 export {
-  CI_WHEN_VALUES,
   CiBootstrap,
   CiConfigV1,
   CiStep,

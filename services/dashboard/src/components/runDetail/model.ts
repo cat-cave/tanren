@@ -12,9 +12,6 @@
 
 import type { RunCostRecord, RunDetail, RunEventRow, TaskTimelineEntry } from "../../api/types.js";
 
-/** A cost-source semantic color key (matches the design tokens). */
-export type CostSource = "per_token" | "subscription" | "self_hosted" | "unattributed";
-
 /** The token var for a billing mode's cost-source color. */
 export function costSourceVar(mode: RunCostRecord["billingMode"]): string {
   switch (mode) {

@@ -1,5 +1,3 @@
-export type AgentKind = "writer" | "answerer";
-
 // Token consumption by TYPE. Disjoint buckets — never fold into one number.
 // All buckets are mutually exclusive and sum to totalTokens.
 export interface TokenUsage {

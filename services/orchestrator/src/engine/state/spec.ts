@@ -85,7 +85,3 @@ export function transitionSpec(from: SpecStatus, to: SpecStatus): asserts to is 
     throw new IllegalSpecTransitionError(from, to);
   }
 }
-
-export function listAllowedSpecTransitions(from: SpecStatus): ReadonlyArray<SpecStatus> {
-  return allowedSpecTransitions[from];
-}

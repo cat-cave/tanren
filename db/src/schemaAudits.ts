@@ -24,13 +24,6 @@ import { sql } from "drizzle-orm";
 import { check, index, jsonb, pgTable, text, timestamp } from "drizzle-orm/pg-core";
 import { organizations, projects } from "./schemaCore.js";
 
-// The audit kinds — mirror the hi-fi `AUDIT_KIND_GLYPH` keys plus the deferred
-// stale-specs sweep called out in PROJECT_BRIEF §2.2.
-const AUDIT_KINDS = ["security", "deps", "a11y", "mutation", "perf", "license", "stale_specs"] as const;
-
-// How often the pass runs; the surface renders the human cadence label.
-const AUDIT_CADENCES = ["nightly", "weekly", "monthly"] as const;
-
 export const auditJobs = pgTable(
   "audit_jobs",
   {
@@ -70,8 +63,3 @@ export const auditJobs = pgTable(
     index("audit_jobs_project_id").on(table.projectId),
   ],
 );
-
-// Runtime literal lists, exported for the orchestrator engine to validate
-// against without re-declaring the unions.
-export const auditKinds = AUDIT_KINDS;
-export const auditCadences = AUDIT_CADENCES;

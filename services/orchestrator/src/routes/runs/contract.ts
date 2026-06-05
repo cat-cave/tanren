@@ -253,9 +253,6 @@ export const SseStatusFrame = z
   .strict();
 export type SseStatusFrame = z.infer<typeof SseStatusFrame>;
 
-export const SseTaskFrame = TaskTimelineEntry;
-export type SseTaskFrame = TaskTimelineEntry;
-
 export const SseEventsFrame = z
   .object({
     events: z.array(RunEventRow),

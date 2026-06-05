@@ -36,7 +36,3 @@ export const draftPrInputSchema = z.object({
   body: z.string().optional(),
   timeoutMs: z.number().int().positive().optional(),
 });
-
-export const ciPollInputSchema = z.object({
-  githubCredentialRef: z.string().min(1).optional(),
-});

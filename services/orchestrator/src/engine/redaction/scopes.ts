@@ -31,19 +31,6 @@ export const sensitivityToRequiredScopes: Record<Sensitivity, ReadonlySet<ActorS
   secret: SCOPES_VIEWING_SECRET,
 };
 
-// AccessScopeOrder is exported so callers and tests can reason about the
-// relative privilege of scopes without re-implementing the policy. Lower
-// index = lower privilege. The redaction layer itself uses
-// `sensitivityToRequiredScopes`; this ordering is documentation that future
-// surfaces (UI hints, comparators) can consult.
-export const AccessScopeOrder: readonly ActorScope[] = [
-  "project:member",
-  "org:member",
-  "project:admin",
-  "org:admin",
-  "platform:admin",
-];
-
 // canViewRaw returns true when the actor holds at least one of the scopes
 // required to view the given sensitivity. public is always viewable. An
 // actor with no overlapping scopes never views above public.
