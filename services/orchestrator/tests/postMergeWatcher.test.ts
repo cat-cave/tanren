@@ -25,7 +25,7 @@ import type { EventName } from "../src/engine/events/index.js";
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
 import { InMemoryVcsProvider } from "./conformance/fakes/inMemoryVcsProvider.js";
 import type { GitHubPullRequestChecks } from "../src/engine/providers/github.js";
-import type { RepoRef, ResolvedVcsToken } from "../src/engine/contracts/vcsProvider.js";
+import type { RepoRef, ResolvedVcsToken, VcsCredentialContext } from "../src/engine/contracts/vcsProvider.js";
 
 const RUN_ID = "run_pm";
 const PROJECT_ID = "project_pm";
@@ -34,10 +34,21 @@ const ORG_ID = "org_pm";
 const PR_URL = "https://github.com/acme/widget/pull/12";
 const PR_NUMBER = 12;
 const BASE_BRANCH = "main";
+const CODEX_ORG_REF = "credential/codex/org_pm/default";
+const GITHUB_ORG_REF = "credential/github/org_pm/default";
 
 interface FakePoolState {
   /** Whether the run has a merge.completed event (and its merge sha). */
   merged?: { mergeSha?: string };
+  projectConfig?: unknown;
+  orgConfig?: unknown;
+}
+
+function defaultOrgConfig() {
+  return {
+    version: 1,
+    defaultCredentials: { codex_chatgpt_auth: CODEX_ORG_REF, github_token: GITHUB_ORG_REF },
+  };
 }
 
 /**
@@ -49,7 +60,7 @@ interface FakePoolState {
 function fakePool(state: FakePoolState): pg.Pool {
   const client = {
     // eslint-disable-next-line @typescript-eslint/require-await
-    query: async (sql: string) => {
+    query: async (sql: string, params: unknown[] = []) => {
       const text = sql.trim();
       if (/^(BEGIN|COMMIT|ROLLBACK|SET LOCAL)/u.test(text)) return { rows: [], rowCount: 0 };
       if (/event_type = 'merge\.completed'/u.test(sql)) {
@@ -69,6 +80,25 @@ function fakePool(state: FakePoolState): pg.Pool {
       if (/org_id FROM projects WHERE project_id/u.test(sql)) {
         return { rows: [{ org_id: ORG_ID }], rowCount: 1 };
       }
+      if (text.startsWith("SELECT config FROM organizations WHERE id = $1")) {
+        const orgId = params[0];
+        return orgId === ORG_ID
+          ? { rows: [{ config: state.orgConfig ?? defaultOrgConfig() }], rowCount: 1 }
+          : { rows: [], rowCount: 0 };
+      }
+      if (/SELECT r\.org_id, r\.project_id, r\.spec_id, p\.config/u.test(sql)) {
+        return {
+          rows: [
+            {
+              org_id: ORG_ID,
+              project_id: PROJECT_ID,
+              spec_id: SPEC_ID,
+              config: state.projectConfig ?? { version: 1 },
+            },
+          ],
+          rowCount: 1,
+        };
+      }
       if (/FROM runs r/u.test(sql)) {
         return {
           rows: [
@@ -77,9 +107,9 @@ function fakePool(state: FakePoolState): pg.Pool {
               spec_id: SPEC_ID,
               project_id: PROJECT_ID,
               pr_url: PR_URL,
-              config: { version: 1 },
+              config: state.projectConfig ?? { version: 1 },
               default_branch: BASE_BRANCH,
-              org_config: null,
+              org_config: state.orgConfig ?? defaultOrgConfig(),
             },
           ],
           rowCount: 1,
@@ -195,13 +225,25 @@ class ScriptedVcsProvider extends InMemoryVcsProvider {
   }
 }
 
+class StaticRefRequiredVcsProvider extends ScriptedVcsProvider {
+  readonly staticRefs: Array<string | undefined> = [];
+  override async resolveToken(creds: VcsCredentialContext): Promise<ResolvedVcsToken> {
+    this.staticRefs.push(creds.staticRef);
+    if (creds.staticRef !== GITHUB_ORG_REF) {
+      throw new Error(`expected post-merge staticRef ${GITHUB_ORG_REF}, got ${String(creds.staticRef)}`);
+    }
+    return super.resolveToken(creds);
+  }
+}
+
 function makeWatcher(args: {
   state: FakePoolState;
   outcome: "fail" | "pass" | "pending";
   claims?: InMemoryClaimStore;
   failCreate?: boolean;
+  vcs?: ScriptedVcsProvider;
 }): { watcher: PostMergeWatcher; vcs: ScriptedVcsProvider; events: RecordingEventStore; claims: InMemoryClaimStore } {
-  const vcs = new ScriptedVcsProvider(args.outcome, args.failCreate ?? false);
+  const vcs = args.vcs ?? new ScriptedVcsProvider(args.outcome, args.failCreate ?? false);
   const events = new RecordingEventStore();
   const claims = args.claims ?? new InMemoryClaimStore();
   const watcher = new PostMergeWatcher({
@@ -256,6 +298,28 @@ describe("PostMergeWatcher", () => {
     // Both appends ran with the run's org id on the ambient per-job store — the GUC
     // a real PgEventStore would carry into its short runWithOrgScope txn.
     expect(events.appends.map((a) => a.ambientOrgId)).toEqual([ORG_ID, ORG_ID]);
+  });
+
+  it("threads the run-resolved org-default GitHub credential into post-merge token resolution", async () => {
+    // Regression: merge/review already resolve project-record/org-default refs and
+    // pass them into loadReviewMergeRunContext, but post-merge used to call the
+    // loader without that option. With no project JSONB credential, a real provider
+    // then saw no staticRef and threw NoGithubCredentialConfiguredError.
+    const vcs = new StaticRefRequiredVcsProvider("fail");
+    const { watcher } = makeWatcher({
+      state: {
+        merged: { mergeSha: "abc123" },
+        projectConfig: { version: 1 },
+        orgConfig: defaultOrgConfig(),
+      },
+      outcome: "fail",
+      vcs,
+    });
+
+    await watcher.check(RUN_ID);
+
+    expect(vcs.staticRefs).toEqual([GITHUB_ORG_REF]);
+    expect(vcs.createdIssues).toHaveLength(1);
   });
 
   it("opens NO issue on a post-merge CI pass (and does not consume a claim)", async () => {
