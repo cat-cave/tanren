@@ -46,7 +46,7 @@
 // When the `worker` container is run with TANREN_DATA_PLANE_REMOTE_WRITES=1, the
 // cross-process run below ALSO finalizes via these endpoints (the worker writes
 // no tenant tables directly); its terminal-state assertion then proves the
-// remote-write path end-to-end. See docs/roadmap/saas-rls-and-plane-split-plan.md
+// remote-write path end-to-end. See ROADMAP.md
 //.
 
 import { randomUUID } from "node:crypto";

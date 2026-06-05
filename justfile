@@ -235,7 +235,7 @@ smoke-rls-r2-cohort4:
 # openInspectionThread stamps forge_threads.org_id. Same ephemeral-DB +
 # restricted-role harness as R1 / R2 cohorts. After this every REQUEST-reachable
 # tenant query carries context; the worker per-job WORKFLOW execution is the one
-# remaining surface to scope before R3b (see docs/roadmap/R-WAVES.md).
+# remaining surface to scope before R3b (see ROADMAP.md).
 smoke-rls-r3a:
   DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/rlsR3aResidualSites.integration.test.ts
 
@@ -349,7 +349,7 @@ smoke-e2e-artifacts:
 # down the job would stay queued and this smoke would time out. Credential-free,
 # so the worker lands the run in a recoverable `halted` state — the proof is the
 # boundary crossing + the worker-written terminal state, not a green run. See
-# docs/roadmap/saas-rls-and-plane-split-plan.md (P1).
+# ROADMAP.md.
 smoke-plane-split-worker:
   DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" corepack pnpm exec tsx scripts/smoke/plane-split-worker.ts
 

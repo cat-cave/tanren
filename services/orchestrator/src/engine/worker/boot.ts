@@ -4,7 +4,7 @@
 // in-process flag path (main.ts, TANREN_RUN_WORKER=1) and the standalone
 // `worker-main.ts` entrypoint (the data-plane container). The worker is now a
 // standalone deployable; this is the single construction site so the two paths
-// can never drift. See docs/roadmap/saas-rls-and-plane-split-plan.md.
+// can never drift. See ROADMAP.md.
 
 import { readFile } from "node:fs/promises";
 import { createDbPool } from "@tanren/db";

@@ -11,7 +11,7 @@
 //     so a network claim hop would add risk for no isolation gain.
 //
 // CLAIM SEMANTICS ARE IDENTICAL either way: the endpoint wraps the SAME
-// `JobQueue.claim`. See docs/roadmap/saas-rls-and-plane-split-plan.md.
+// `JobQueue.claim`. See ROADMAP.md.
 
 import { HttpJobClaimClient, type JobClaimClient } from "../contracts/jobClaim.js";
 import { buildNodeMtlsFetch, type MtlsCertPaths } from "../contracts/mtlsChannelNode.js";

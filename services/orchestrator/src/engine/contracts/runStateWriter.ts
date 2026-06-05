@@ -18,7 +18,7 @@
 // WHAT GETS WRITTEN IS IDENTICAL in both impls: same columns/values, same
 // org-scoping, same exactly-once semantics — the only difference is WHERE the
 // statement runs (in the data plane vs. server-side in the control plane). See
-// docs/roadmap/saas-rls-and-plane-split-plan.md and R-WAVES.md.
+// ROADMAP.md.
 
 import type { AppendEventInput, EventStore } from "../eventStore.js";
 import type { CostRecordContext, RecordedCost } from "../costs/recorder.js";

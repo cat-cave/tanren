@@ -142,7 +142,7 @@ services:
     # the orchestrator's mTLS `/internal/claim-job` endpoint when
     # TANREN_CLAIM_ENDPOINT_URL + the data-plane cert paths below are supplied
     # (else it falls back to the direct DB-CAS). P3 routes the WRITES + de-privileges
-    # to per-run creds. See docs/roadmap/saas-rls-and-plane-split-plan.md.
+    # to per-run creds. See ROADMAP.md.
     build:
       context: .
       dockerfile: services/orchestrator/Dockerfile
@@ -182,7 +182,7 @@ services:
       # supply the claim/write endpoint URL + the data-plane mTLS certs above —
       # with remote-writes on but no endpoint/certs the worker refuses to start
       # (buildRunStateWriterFromEnv throws) rather than silently writing directly.
-      # See docs/roadmap/saas-rls-and-plane-split-plan.md (P3b).
+      # See ROADMAP.md.
       TANREN_DATA_PLANE_REMOTE_WRITES: ${TANREN_DATA_PLANE_REMOTE_WRITES:-1}
     depends_on:
       postgres:

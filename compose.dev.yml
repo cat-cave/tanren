@@ -46,7 +46,7 @@ services:
       # RLS as table owner). TANREN_SYSTEM_DATABASE_URL is the narrow BYPASSRLS
       # `tanren_system` role (migration 0030) that `runWithSystemScope` connects
       # as for genuinely cross-org system reads (the reaper's lineage sweep, the
-      # hello fixture's cross-org seeding). See docs/roadmap/saas-rls-and-plane-split-plan.md.
+      # hello fixture's cross-org seeding). See ROADMAP.md.
       DATABASE_URL: postgres://tanren_app:tanren_app@postgres:5432/tanren
       MIGRATION_DATABASE_URL: postgres://tanren:tanren@postgres:5432/tanren
       TANREN_SYSTEM_DATABASE_URL: postgres://tanren_system:tanren_system@postgres:5432/tanren
@@ -91,7 +91,7 @@ services:
       # the dev self-signed material `just gen-mtls-certs` writes to
       # /tmp/tanren-mtls (bind-mounted below). When unset the listener does not
       # start (single-process dev); here we always wire it so the worker can claim
-      # over mTLS. See docs/roadmap/saas-rls-and-plane-split-plan.md (P2).
+      # over mTLS. See ROADMAP.md.
       TANREN_INTERNAL_MTLS_PORT: "3110"
       TANREN_INTERNAL_TLS_CERT: /etc/tanren/mtls/server.crt
       TANREN_INTERNAL_TLS_KEY: /etc/tanren/mtls/server.key
@@ -124,7 +124,7 @@ services:
     # the SAME DB/Vault/allocator/runner access the in-process worker had — P1 is
     # a process-boundary change only, NO trust change (P2 adds mTLS + shrinks the
     # DB surface, P3 de-privileges to per-run creds). See
-    # docs/roadmap/saas-rls-and-plane-split-plan.md.
+    # ROADMAP.md.
     build:
       context: .
       dockerfile: services/orchestrator/Dockerfile
@@ -178,7 +178,7 @@ services:
       # then the worker MUST also use a write-capable role, so the default flip
       # pairs the role + the flag. The in-process TANREN_RUN_WORKER=1 dev path
       # keeps direct writes (single process, no isolation gain — see boot.ts). See
-      # docs/roadmap/saas-rls-and-plane-split-plan.md (P3b).
+      # ROADMAP.md.
       TANREN_DATA_PLANE_REMOTE_WRITES: ${TANREN_DATA_PLANE_REMOTE_WRITES:-1}
     volumes:
       - /tmp/tanren-mtls:/etc/tanren/mtls:ro

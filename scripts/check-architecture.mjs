@@ -19,13 +19,8 @@ const patterns = [
   "justfile",
 ];
 const ignoredDirs = new Set(["node_modules", "dist", "coverage", ".git"]);
-// Long-running narrative docs (gain sections as the plan evolves; 500-line cap doesn't fit). autonomy-engine.md is moving roadmap/ → architecture/ — exempt both across the move.
-const roadmapDocs = [
-  "PROJECT_BRIEF.md",
-  "docs/roadmap/R-WAVES.md",
-  "docs/roadmap/autonomy-engine.md",
-  "docs/architecture/autonomy-engine.md",
-];
+// Long-running narrative docs (gain sections as the plan evolves; 500-line cap doesn't fit).
+const roadmapDocs = ["PROJECT_BRIEF.md", "ROADMAP.md", "docs/architecture/autonomy-engine.md"];
 // The vendored LiteLLM model-price snapshot is DATA (refreshed by
 // scripts/refresh-model-prices.mjs), exempt from the 500-line source cap.
 const vendoredData = ["services/orchestrator/src/engine/costs/pricing/model_prices.json"];
@@ -42,7 +37,6 @@ const singleEventWriterExclusions = new Set([
   "services/orchestrator/tests/autonomyLoopRemoteWrites.test.ts",
   "scripts/smoke/plane-split-deprivilege.ts",
   "scripts/smoke/plane-split-worker.ts",
-  "docs/roadmap/R-WAVES.md",
   "justfile",
 ]);
 const requiredDocs = [

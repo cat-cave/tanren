@@ -10,7 +10,7 @@
 // holds the same DB + Vault access and claims directly from `job_queue`); mTLS
 // routing of the claim + writes through a control-plane API (shrinking the data
 // plane's DB surface); and per-run scoped credentials (the full de-privilege).
-// See docs/roadmap/saas-rls-and-plane-split-plan.md.
+// See ROADMAP.md.
 //
 // Does NOT migrate: the API owns the migrate step (this container `depends_on`
 // it in compose). SIGTERM/SIGINT graceful drain is installed by

@@ -29,7 +29,7 @@
 // — a provisioner creates the artifact; the runtime adapter then uses it.
 //
 // See docs/operator-guide/integration-provisioning.md (the boundary model + the
-// two planes) and docs/roadmap/integration-provisioning.md (the build sequence).
+// two planes) and docs/operator-guide/integration-provisioning.md (the build sequence).
 //
 // The registry (`buildIntegrationProvisioner`) is the single append point real
 // providers register here: each adds ONE `case` arm + its dep-slice on
