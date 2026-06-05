@@ -57,8 +57,14 @@ const allowedSpecTransitions: Record<SpecStatus, ReadonlyArray<SpecStatus>> = {
   halted: ["in_flight", "cancelled"],
   merged: [],
   cancelled: [],
-  // Terminal: a spec surfaced for human attention is not auto-transitioned onward.
-  needs_attention: [],
+  // A spec surfaced for human attention is not AUTO-transitioned onward by any
+  // background loop (the strand reconciler / merge coordinator never re-touch it).
+  // The ONE permitted exit is the operator's explicit human-in-the-loop resolution
+  // (the `requeue` endpoint, workflow/requeueAttentionSpec): once the human has
+  // ADDRESSED the underlying blocker they re-enter the spec at `open` so the
+  // DagWalker re-picks it up. This is the escalation discipline's "addressed,
+  // proceed" — the only transition out of the bounded-escalation terminal.
+  needs_attention: ["open"],
 };
 
 export function isAllowedSpecTransition(from: SpecStatus, to: SpecStatus): boolean {

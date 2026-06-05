@@ -254,4 +254,67 @@ describeDb("RLS operator flow — the control-plane CRUD walk under the tanren_a
     const body = (await listed.json()) as { specs: Array<{ specId: string }> };
     expect(body.specs.map((s) => s.specId)).toContain(createdBody.specId);
   });
+
+  // STEP 7 — RESOLVE A needs_attention ESCALATION (the operator API gap the live
+  // apex run surfaced). A spec that exhausted its retry budget parks at the terminal
+  // `needs_attention` status; the operator's `requeue` resolution must flip it back to
+  // the runnable `open` re-entry status (so the DagWalker re-picks it up) and emit an
+  // actor-stamped audit event — all under the enforced `tanren_app` role. A spec NOT
+  // parked at needs_attention is a clean 409, never a silent re-transition.
+  let attentionSpecId: string;
+  it("7a. parks a spec at needs_attention, then POST …/specs/:id/requeue resolves it (open + audit event)", async () => {
+    // Create a spec, then (owner = RLS-exempt) park it at the terminal escalation
+    // status — modelling the strand-reconciler bounded escalation.
+    const created = await app.request(`/orgs/${orgId}/projects/${projectId}/specs`, {
+      method: "POST",
+      headers: authHeaders({ "content-type": "application/json" }),
+      body: JSON.stringify({
+        title: "Stuck spec",
+        description: "Blocked on a platform bug",
+        acceptanceCriteria: ["x"],
+      }),
+    });
+    expect(created.status).toBe(201);
+    attentionSpecId = ((await created.json()) as { specId: string }).specId;
+    await ownerPool.query("UPDATE specs SET status = 'needs_attention' WHERE spec_id = $1", [attentionSpecId]);
+
+    const requeued = await app.request(`/orgs/${orgId}/projects/${projectId}/specs/${attentionSpecId}/requeue`, {
+      method: "POST",
+      headers: authHeaders({ "content-type": "application/json" }),
+    });
+    expect(requeued.status).toBe(200);
+    const requeueBody = (await requeued.json()) as { specId: string; status: string; fromSource: string };
+    expect(requeueBody).toMatchObject({ specId: attentionSpecId, status: "open", fromSource: "strand" });
+
+    // Ground truth (owner): the spec is back to the runnable `open` re-entry status…
+    const specRow = await ownerPool.query<{ status: string }>("SELECT status FROM specs WHERE spec_id = $1", [
+      attentionSpecId,
+    ]);
+    expect(specRow.rows[0]?.status).toBe("open");
+    // …and the actor-stamped resolution audit event was emitted.
+    const eventRow = await ownerPool.query<{ payload: { resolvedBy: string; fromSource: string } }>(
+      "SELECT payload FROM events WHERE spec_id = $1 AND event_type = 'dag.spec.attention_resolved'",
+      [attentionSpecId],
+    );
+    expect(eventRow.rowCount).toBe(1);
+    expect(eventRow.rows[0]?.payload.fromSource).toBe("strand");
+    expect(typeof eventRow.rows[0]?.payload.resolvedBy).toBe("string");
+  });
+
+  it("7b. requeue on a spec NOT in needs_attention is a clean 409 (no silent re-transition)", async () => {
+    // The spec from 7a is now `open`. A second requeue must be rejected, not silently
+    // re-flipped (the no-op-or-error contract).
+    const res = await app.request(`/orgs/${orgId}/projects/${projectId}/specs/${attentionSpecId}/requeue`, {
+      method: "POST",
+      headers: authHeaders({ "content-type": "application/json" }),
+    });
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe("spec_not_in_attention");
+    // The spec's status is untouched (still `open`).
+    const specRow = await ownerPool.query<{ status: string }>("SELECT status FROM specs WHERE spec_id = $1", [
+      attentionSpecId,
+    ]);
+    expect(specRow.rows[0]?.status).toBe("open");
+  });
 });

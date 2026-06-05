@@ -57,6 +57,18 @@ describe("SpecStatus transitions", () => {
   it("rejects skipping review", () => {
     expect(() => transitionSpec("open", "merged")).toThrowError(IllegalSpecTransitionError);
   });
+
+  it("allows the operator's needs_attention → open resolution (the requeue re-entry)", () => {
+    // The bounded-escalation terminal has exactly ONE exit: the human-in-the-loop
+    // requeue back to the runnable `open` re-entry status (the DagWalker re-picks it).
+    expect(() => transitionSpec("needs_attention", "open")).not.toThrow();
+  });
+
+  it("rejects any OTHER exit from needs_attention (it is otherwise terminal)", () => {
+    // No background loop auto-transitions a parked spec onward; only the requeue exits.
+    expect(() => transitionSpec("needs_attention", "in_flight")).toThrowError(IllegalSpecTransitionError);
+    expect(() => transitionSpec("needs_attention", "merged")).toThrowError(IllegalSpecTransitionError);
+  });
 });
 
 describe("TaskStatus transitions", () => {

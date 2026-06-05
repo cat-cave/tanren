@@ -40,3 +40,7 @@ export class ProjectAccessDeniedError extends Error {
     super(`actor cannot access project: ${projectId}`);
   }
 }
+
+// SpecNotInAttentionError lives in `./requeueAttentionSpec.ts` (its sole producer)
+// to keep this file under the max-classes-per-file cap; it is re-exported from
+// `projectSpec.ts` alongside the others, so callers import it from one place.

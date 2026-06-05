@@ -153,9 +153,11 @@ export interface SpecStrandReadModel {
   /** Load the project's slot-occupying specs + the facts the predicate needs. */
   loadStrandCandidates(projectId: string): Promise<SpecStrandSnapshot[]>;
   /**
-   * How many times the reconciler has already re-enqueued this spec (the count of
-   * prior `dag.spec.unstranded` events for it). Drives the bounded escalation: once
-   * this EXCEEDS the cap the next reconcile escalates to `needs_attention` instead.
+   * How many times the reconciler has already re-enqueued this spec SINCE the last
+   * operator resolution (the count of `dag.spec.unstranded` events AFTER the most
+   * recent `dag.spec.attention_resolved` — so a human-in-the-loop requeue resets the
+   * budget). Drives the bounded escalation: once this EXCEEDS the cap the next
+   * reconcile escalates to `needs_attention` instead.
    */
   countPriorUnstrands(input: { projectId: string; specId: string }): Promise<number>;
 }

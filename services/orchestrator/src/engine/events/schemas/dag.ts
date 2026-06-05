@@ -307,3 +307,25 @@ export const DagSpecNeedsAttentionPayload = z.discriminatedUnion("source", [
     .strict(),
 ]);
 export type DagSpecNeedsAttentionPayload = z.infer<typeof DagSpecNeedsAttentionPayload>;
+
+// dag.spec.attention_resolved: the OPERATOR (a human, never a background loop)
+// resolved a `needs_attention` escalation — they ADDRESSED the underlying blocker
+// (e.g. fixed a platform bug, re-scoped a dependency) and told Tanren to retry the
+// spec. The spec transitions `needs_attention → open` so the autonomous DagWalker
+// re-picks it up, and the spec's bounded re-enqueue budget RESETS (the strand
+// reconciler counts only `dag.spec.unstranded` events AFTER the most recent
+// resolution — so a re-queued spec genuinely re-runs the full retry budget rather
+// than immediately re-escalating). This is the human-in-the-loop counterpart to
+// `dag.spec.needs_attention`: the loud, actor-stamped "addressed, proceed" decision
+// (the escalation discipline). `fromSource` records which subsystem had parked it.
+export const DagSpecAttentionResolvedPayload = z
+  .object({
+    specId: z.string(),
+    // Which subsystem had parked the spec (mirrors the needs_attention `source`),
+    // so the timeline links the resolution to the escalation it answers.
+    fromSource: z.enum(["strand", "merge_conflict"]),
+    // The actor who resolved it (the operator's user id) — actor-stamped, non-secret.
+    resolvedBy: z.string(),
+  })
+  .strict();
+export type DagSpecAttentionResolvedPayload = z.infer<typeof DagSpecAttentionResolvedPayload>;
