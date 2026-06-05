@@ -12,6 +12,11 @@ default:
 format-check:
   corepack pnpm run format:check
 
+# Auto-format with oxfmt (the oxc formatter, config in .oxfmtrc.json). `format-check`
+# is the gate; this writes the fixes for the file types oxfmt owns.
+format:
+  corepack pnpm run format
+
 lint:
   corepack pnpm run lint
 

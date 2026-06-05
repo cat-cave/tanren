@@ -247,6 +247,8 @@
     "opencode",
     "openrouter",
     "orchestrator",
+    "oxfmt",
+    "oxfmtrc",
     "oxlint",
     "oxlintrc",
     "parallelizable",
