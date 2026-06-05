@@ -109,7 +109,9 @@ function checkLineMax(projectFiles) {
   for (const { file, text } of projectFiles) {
     if (
       lineMaxExclusions.has(file) ||
-      file.startsWith("db/migrations/meta/") ||
+      // The collapsed single baseline (db/migrations/0000_*.sql) is generated
+      // DDL + the RLS/role/grant tail, not a source module — exempt like meta/.
+      file.startsWith("db/migrations/") ||
       file.startsWith("services/orchestrator/src/engine/answerers/schemas/generated/") ||
       file.startsWith("contracts/json/")
     ) {
