@@ -2,9 +2,9 @@
 
 **Surface**: linking an existing GitHub repository as a Tanren project, without the brownfield recon agent or config-injection PR.
 
-**Owning spec**: P2B-0002 (`docs/roadmap/phase-2b-specs.md`).
+**Owning spec**: P2B-0002 (see [`ROADMAP.md`](../../../ROADMAP.md)).
 
-**Hi-fi reference**: `tanren-hi-fidelity/project/view-onboard-existing.jsx` step 1 (link repo) only; remaining hi-fi steps (recon, config-injection PR, DAG seeding, governance posture) ship in Phase 3. Low-fi import at `docs/design/operator-flows/onboarding-existing-project-minimal.svg`.
+**Hi-fi reference**: `tanren-hi-fidelity/project/view-onboard-existing.jsx` step 1 (link repo) only. The remaining hi-fi steps (recon, config-injection PR, DAG seeding, governance posture) shipped as the **full brownfield track** (`routes/brownfield/fullTrack.ts`, `engine/forge/brownfield/**`) — see the "Reductions" note below; this doc covers the minimal link-only surface.
 
 ## In scope for Phase 2
 
@@ -14,12 +14,14 @@
 - [ ] **GitHub App scope card**: lists what Tanren can and cannot do on this repo — clone & push from runner workspaces, open draft PRs from `tanren/spec_*` branches, poll CI status, read org members for review routing; never push main, never bypass protection, never force-push.
 - [ ] **Confirmation**: submitting the form creates the project row via P2A-0013 (which reads target-repo files for display but writes nothing) and routes the operator to the project view.
 
-## Reductions from the hi-fi
+## Reductions from the hi-fi (now superseded by the full brownfield track)
 
-- **Read-only answerer recon (hi-fi step 2)**: Phase 3 brownfield recon agent. v0 does not index the target repo or pre-fill personas/behaviors/architecture from it.
-- **Config-injection PR (hi-fi step 3)**: Phase 3. v0 does not author any PR against the target repo. If the target repo lacks the Bucket A files Tanren needs, the project view surfaces a "missing files" warning but the operator handles it via their normal repo workflow.
-- **Spec DAG + issue ingest (hi-fi step 4)**: Phase 3. v0 does not derive specs from agent gaps or ingest GitHub issues.
-- **Governance posture picker (hi-fi step 5)**: Phase 3. v0 implicitly assumes strict posture; external-push policy is documented but not configurable.
+This minimal surface is link-only; the steps below shipped as the separate **full brownfield track**:
+
+- **Read-only answerer recon (hi-fi step 2)**: shipped — the brownfield recon indexes the target repo (`engine/forge/brownfield/**`).
+- **Config-injection PR (hi-fi step 3)**: shipped — the full track authors a config-injection PR against the target repo (`engine/forge/brownfield/configInjection.ts` + `githubConfigInjection.ts`). It emits the native `.tanren/ci.yml` gate config (a `CiConfigV1`, not a GitHub Actions workflow).
+- **Spec DAG + issue ingest (hi-fi step 4)**: the workflow-intent importer + candidate inbox ship; deriving specs from agent gaps + issue ingest are wired (`engine/forge/inbox/**`, `engine/forge/brownfield/workflowIntent.ts`).
+- **Governance posture picker (hi-fi step 5)**: shipped — `strict | open | audit_only` is real merge-time behavior (`engine/workflow/reviewMerge/governancePosture.ts`).
 
 ## Done when
 

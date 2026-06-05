@@ -2,7 +2,7 @@
 
 **Surface**: org-level history list, total-spend stacked bar across the four cost sources, per-provider breakdown, burn projection, and headroom panel.
 
-**Owning spec**: P2B-0005 (`docs/roadmap/phase-2b-specs.md`).
+**Owning spec**: P2B-0005 (see [`ROADMAP.md`](../../../ROADMAP.md)).
 
 **Hi-fi reference**: `tanren-hi-fidelity/project/view-costs.jsx`. Low-fi import at `docs/design/operator-flows/history-and-costs.svg`.
 

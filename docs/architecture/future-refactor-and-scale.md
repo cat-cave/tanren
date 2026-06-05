@@ -1,20 +1,21 @@
 # Future-refactor & scale north-star (10 → 1M, zero-trust)
 
 **Status: analysis / scoping. No build is authorized by this doc.** A Rust rewrite is **HELD**.
-(Update: the RLS + control/data-plane split this doc once called "plan-only" has since shipped —
-RLS fully enforced + live-validated, plane split at P3b; the structural prepwork below remains
-the live to-do.) This is the _map_ — the binding constraints in the **real current architecture**
-and the highest-leverage moves that make the eventual refactor feasible. Decisions are deferred.
+(Update: the RLS + control/data-plane split this doc once called "plan-only" has shipped — RLS
+fully enforced + live-validated, the plane split complete through Vault per-run scoped credentials,
+and `LISTEN/NOTIFY` replaced the 1s polling. The remaining prepwork below — the data-access seam,
+the DB-row JSON-Schema export, conformance for the un-seamed surfaces — is the live to-do.) This is
+the _map_ of the binding constraints in the **real current architecture** and the highest-leverage
+moves that make the eventual refactor feasible. Decisions are deferred.
 
 It builds on, and does **not** duplicate:
 
 - [`portability-and-longevity.md`](./portability-and-longevity.md) — the existing
   north star (contracts-as-durable-asset, JSON-Schema export, conformance suites,
   mutation testing, harness protocol, the OSS↔hosting billing seam). Read it first.
-- `docs/roadmap/saas-rls-and-plane-split-plan.md` — the RLS + plane-split plan
-  (referenced from `README.md`; **plan-only / pending decisions** as of this
-  writing). This doc tells you _what scale forces_ the plane split to become; that
-  doc owns the _how_ of RLS + tenant isolation.
+- [`ROADMAP.md`](../../ROADMAP.md) — the SaaS hardening history (RLS denies-by-default,
+  control/data-plane split, Vault per-run scoped credentials, `42501`-proven). This doc tells you
+  _what scale forces_ the plane split to become; the roadmap records that work as done.
 - [`PROJECT_BRIEF.md`](../../PROJECT_BRIEF.md) — the durable vision and the eight
   architectural invariants (§1.2), which constrain every option below.
 
@@ -32,18 +33,16 @@ Read before trusting any claim below. The shape, as actually built on `main`:
   opens **one** `pg.Pool` (`db/src/client.ts`: `new Pool({ connectionString })`,
   constructed once in `main.ts`). Every repository, route loader, SSE stream, and
   the worker share it.
-- **The worker is in-process and poll-based.** `engine/worker/runWorker.ts` runs
-  _inside_ the HTTP server, gated behind `TANREN_RUN_WORKER=1` (default OFF),
-  `DEFAULT_CONCURRENCY = 2`, `DEFAULT_POLL_INTERVAL_MS = 1000`. Slots loop
-  claim→execute→idle. There is no separate worker fleet, no external queue.
+- **The worker is in-process and event-driven.** `engine/worker/runWorker.ts` runs
+  _inside_ the HTTP server, gated behind `TANREN_RUN_WORKER=1` (default OFF). Slots
+  loop claim→execute→idle. There is no separate worker fleet, no external queue.
 - **The queue is Postgres-native and already correct in shape.**
   `engine/contracts/jobQueue.ts` `claim()` is the textbook
   `… FOR UPDATE SKIP LOCKED LIMIT 1` CTE + CAS to `running` with a lease
   (`leased_until`, `heartbeat_at`), reaped by `engine/worker/jobReaper.ts`.
-  **`LISTEN/NOTIFY` is documented as a swap-in but not yet wired** — the worker and
-  the SSE stream both poll at 1s (`routes/runs/sse.ts`: "v0 uses a poll-based
-  source at 1s tick … a Postgres LISTEN/NOTIFY swap-in lands behind the same frame
-  format").
+  **`LISTEN/NOTIFY` is wired** (`db/src/notify.ts`, channel `tanren_run`): every
+  run-state write fires a `NOTIFY` at commit, and the worker + SSE stream wake on it
+  rather than polling. A long backstop interval bounds latency only if a NOTIFY is missed — the 1s hot poll is gone.
 - **Data access is raw SQL, hand-typed, scattered.** The orchestrator does **not**
   use Drizzle as its query layer — Drizzle lives in `db/` for the schema +
   migrations only. Routes and the engine issue **~207 raw `pool.query(...)` call
@@ -54,11 +53,14 @@ Read before trusting any claim below. The shape, as actually built on `main`:
   (actors/jobs/runs/specs/tasks, ~567 lines) is a _partial_ data-access layer: the
   canonical write paths go through it, but most **read** paths (route loaders, SSE,
   DORA, costs, insights) issue their own SQL directly against the shared pool.
-- **Tenant isolation is application-level only.** Every loader and the SSE deltas
-  filter by `org_id` as "defense-in-depth tenant predicate" in hand-written
-  `WHERE` clauses (see `routes/runs/sse.ts`). Migration `0026` made `org_id`
-  NOT NULL on the core tables. There is **no Postgres RLS** — isolation is one
-  forgotten `AND org_id = $n` away from a cross-tenant leak.
+- **Tenant isolation is Postgres-RLS-enforced.** `org_id` is `NOT NULL` on the core
+  tables and **RLS policies deny by default** keyed on a session-set org (see
+  `db/src/orgScope.ts`): a query off the org-scoped client sees zero cross-tenant
+  rows even if a hand-written `WHERE org_id = $n` is forgotten. Loaders still carry
+  the predicate as defense-in-depth, but the database — not the application — is now
+  the isolation backstop. (The collapsed baseline `0000_collapsed_baseline.sql`
+  carries the `NOT NULL` constraints and the RLS policies; the old per-migration
+  numbers are gone.)
 - **The dashboard is a BFF that re-derives types over HTTP.**
   `services/dashboard` (Hono SSR + esbuild-built client "islands" under
   `src/client/**`) does **not** read Postgres for product data; it `fetch()`es the
@@ -137,7 +139,7 @@ takes an `ActorContext`(or an org-scoped handle) so the`org*id` predicate is
   hand-maintained liability.
 - **Crate-shaped module boundaries now, in TS.** Structure the engine as if each
   major seam were already a separate publishable unit (`contracts`, `data`,
-  `queue`, `substrate`, `providers`, `workflow`, `quota`, `costs`). The TS module
+  `queue`, `substrate`, `providers`, `workflow`, `costs`). The TS module
   graph is the dry-run of the eventual Rust workspace crate graph — a clean
   boundary today is a `Cargo.toml` member later; a leaky one is a rewrite.
 
@@ -240,10 +242,10 @@ LOCKED` queue) is the lowest-friction split — the queue contract was built for
 **Tie-in, not duplication:** the **RLS direction is what makes the plane split
 safe.** A worker fleet + a control-plane API touching one Postgres is only
 tenant-safe if isolation is enforced _in the database_ (RLS keyed on a session-set
-`org_id`), not in 269 hand-written `WHERE` clauses now spread across parallel
-processes. Sequencing: **RLS lands first (per the plane-split plan), then the
-worker fleet is a safe split.** This doc names _why scale forces it_; the plan owns
-the policy design and session-variable / role mechanics.
+`org_id`), not in hand-written `WHERE` clauses spread across parallel processes.
+**RLS landed first (enforced today), so the worker fleet is now a safe split** —
+the shipped policies (`db/src/orgScope.ts` + the collapsed baseline) own the
+session-variable / role mechanics.
 
 ---
 
@@ -261,22 +263,19 @@ named against the **current** design, with the concrete change.
   obstacle, and it's a config bump. One Postgres, one pool, one worker process
   handle 10 easily; the runs are agent-bound, not DB-bound.
 - **Change:** raise worker concurrency; size the pool (`new Pool` takes a `max`).
-  Wire **`LISTEN/NOTIFY`** so the worker and SSE stop polling at 1s — the single
-  cheapest latency + load win, _already designed for_ in `jobQueue.ts` and
-  `sse.ts`.
+  `LISTEN/NOTIFY` is already wired (`db/src/notify.ts`), so the worker and SSE are
+  event-driven, not 1s-polling — that latency + load win is banked.
 
 ### 100 concurrent — first real pressure: the shared pool & in-process worker
 
 - **Binding constraint:** the **single in-process worker + single shared pool**.
   100 concurrent runs means 100 live SSH sessions orchestrated from one Node event
-  loop, plus 100 SSE streams polling, plus the worker — all on _one_ pool. Pool
+  loop, plus 100 SSE streams, plus the worker — all on _one_ pool. Pool
   exhaustion and event-loop contention (one process doing fan-out + execution +
-  HTTP) are the first ceilings. The 1s poll in `sse.ts` becomes 100× redundant DB
-  load.
+  HTTP) are the first ceilings.
 - **Change:** (a) **split the worker out of the HTTP process** into a small fleet
   (the flag → a deployment boundary; the queue already supports N claimers via
-  `SKIP LOCKED`). (b) **`LISTEN/NOTIFY`** becomes mandatory — kill the polls.
-  (c) a **pooler** (PgBouncer/transaction pooling) so worker + API + SSE don't
+  `SKIP LOCKED`). (b) a **pooler** (PgBouncer/transaction pooling) so worker + API + SSE don't
   fight over one `pg.Pool`. Postgres itself is nowhere near its ceiling here.
 
 ### 1,000 concurrent — Postgres write contention & job-queue hot rows
@@ -285,8 +284,9 @@ named against the **current** design, with the concrete change.
   primary.** 1,000 runs emit high-rate `events`, `cost_records`, and `job_queue`
   churn. `cost_records` is an append-heavy ledger (a row per LLM call); `events` is
   append-only audit; the `FOR UPDATE SKIP LOCKED` claim contends on the hot
-  "queued" rows. SSE fan-out is now thousands of streams — poll-based is untenable
-  (`LISTEN/NOTIFY` or an event bus). Single-primary write throughput is the wall.
+  "queued" rows. SSE fan-out is now thousands of streams — even with `LISTEN/NOTIFY`
+  wake, thousands of LISTEN connections on one primary want a dedicated event-bus
+  fan-out tier. Single-primary write throughput is the wall.
 - **Change:**
   - **Read replicas** for the dashboard/DORA/cost/SSE read paths (read-mostly per
     PROJECT_BRIEF §6.5) — offload the primary. The data-access layer (§1) is what
@@ -297,9 +297,11 @@ named against the **current** design, with the concrete change.
   - **An event bus / fan-out tier** for SSE (the edge plane, §3): the worker
     publishes run deltas once; an edge tier fans out to N subscribers, instead of
     N subscribers each polling Postgres.
-  - **Backpressure via the existing `QuotaPolicy` admission seam**
-    (`engine/quota/`, longevity doc): `checkAdmission` is already the pre-flight
-    gate; at this scale it also becomes the load-shedding valve.
+  - **Backpressure via the walker's admission point.** The DagWalker already gates
+    new work on the budget ceiling (`engine/dag/budgetGate.ts`) before spawning
+    runs; that scheduling chokepoint is where a load-shedding valve (a concurrency
+    or spend cap that defers rather than spawns) belongs at this scale. There is no
+    separate quota-admission seam — budget is the only gate today.
 
 ### 1,000,000 concurrent — single-Postgres is the wall; shard or split planes
 
@@ -325,11 +327,12 @@ named against the **current** design, with the concrete change.
     LLM call.
 
 **The throughline:** every ceiling above is a **"single"** in today's design, and
-every fix is enabled by a **contract** that already exists or by the **data-access
-seam + RLS** that don't yet. The conformance-suited seams (`JobQueue`,
-`EventStore`, `Allocator`, `SecretStore`) are the ones that scale by impl-swap with
-no rewrite; the un-seamed surfaces (raw SQL data access, in-process worker,
-poll-based SSE) are the ones that force code change at each step. **That asymmetry
+every fix is enabled by a **contract** that already exists (RLS and `LISTEN/NOTIFY`
+now among them) or by the **data-access seam** that doesn't yet. The
+conformance-suited seams (`JobQueue`, `EventStore`, `Allocator`, `SecretStore`) are
+the ones that scale by impl-swap with no rewrite; the un-seamed surfaces (raw SQL
+data access, the in-process worker) are the ones that force code change at each
+step. **That asymmetry
 is the entire argument for the early moves in §7.**
 
 ---
@@ -445,17 +448,14 @@ sites behind it, org-scoped by construction.** The single highest-leverage move:
    (c) makes "route reads to a replica" / "shard by org" a one-place change at
    1k/1M scale, (d) unsticks the 500-line files mixing querying with mapping.
    \_Nothing else here is feasible at scale without it.*
-2. **Wire `LISTEN/NOTIFY` for the worker and SSE.** Already designed for in
-   `jobQueue.ts` and `sse.ts`; kills 1s polling; the cheapest latency + load win;
-   the first thing the 100-concurrent step demands anyway.
-3. **Generate the dashboard's client types from the JSON-Schema export + add a
+2. **Generate the dashboard's client types from the JSON-Schema export + add a
    drift gate.** Eliminate the hand-mirrored `api/*Types.ts` (the largest type-
    sharing gap), prove end-to-end type sharing today, and make the BFF↔orchestrator
    contract un-driftable.
-4. **Add DB row contracts to `contracts/json/**`and a continuous`typify`
+3. **Add DB row contracts to `contracts/json/**`and a continuous`typify`
    generation check.\*\* Makes the neutral schema cover the whole contract surface
    and proves continuous Rust-portability — for free, in CI, before any rewrite.
-5. **Backfill conformance suites for `SshSubstrate`, the provider/harness adapters,
+4. **Backfill conformance suites for `SshSubstrate`, the provider/harness adapters,
    `CostResolver`, and the new data-access seam.** Extends the proven-equivalence
    base from 4 seams toward "every load-bearing seam," which is the precondition
    for §6.
@@ -488,13 +488,13 @@ sites behind it, org-scoped by construction.** The single highest-leverage move:
 
 ## Appendix: the map in one line per layer
 
-| Layer            | Today (real)                                              | Forces a change at | Fix                                   |
-| ---------------- | --------------------------------------------------------- | ------------------ | ------------------------------------- |
-| Data access      | ~269 raw SQL sites, hand-typed rows, hand `org_id` filter | 100 → 1k → 1M      | data-access layer (§1) + RLS (§3/§5)  |
-| Worker           | in-process, poll@1s, flagged off, concurrency 2           | 100                | split to fleet (queue supports it)    |
-| Queue            | PG `FOR UPDATE SKIP LOCKED`, no `LISTEN/NOTIFY` yet       | 10 → 1k → 1M       | `NOTIFY`; partition; impl-swap seam   |
-| DB               | one primary, one shared pool                              | 100 → 1k → 1M      | pooler → replicas → partition → shard |
-| SSE / fan-out    | poll@1s per stream                                        | 1k                 | `NOTIFY` → event-bus edge plane       |
-| Type sharing     | Zod→JSON-Schema gated; dashboard re-derives by hand       | now (correctness)  | gen FE types from JSON-Schema (§2)    |
-| Tenant isolation | app-level `WHERE org_id` only, NOT NULL since 0026        | now (security)     | Postgres RLS (RLS plan)               |
-| Proof of port    | 4 conformance seams + Stryker + JSON-Schema export        | before rewrite     | conformance for all seams + fixtures  |
+| Layer            | Today (real)                                              | Forces a change at | Fix                                       |
+| ---------------- | --------------------------------------------------------- | ------------------ | ----------------------------------------- |
+| Data access      | ~269 raw SQL sites, hand-typed rows, hand `org_id` filter | 100 → 1k → 1M      | data-access layer (§1) + RLS (§3/§5)      |
+| Worker           | in-process, event-driven (`NOTIFY`), flagged off          | 100                | split to fleet (queue supports it)        |
+| Queue            | PG `FOR UPDATE SKIP LOCKED` + `LISTEN/NOTIFY` wired       | 1k → 1M            | partition; impl-swap seam                 |
+| DB               | one primary, one shared pool                              | 100 → 1k → 1M      | pooler → replicas → partition → shard     |
+| SSE / fan-out    | `NOTIFY`-wake per stream (1s poll gone)                   | 1k                 | event-bus edge plane at high stream count |
+| Type sharing     | Zod→JSON-Schema gated; dashboard re-derives by hand       | now (correctness)  | gen FE types from JSON-Schema (§2)        |
+| Tenant isolation | Postgres RLS (denies by default) + org-scoped client      | done               | RLS enforced; sharding follows at 1M      |
+| Proof of port    | 4 conformance seams + Stryker + JSON-Schema export        | before rewrite     | conformance for all seams + fixtures      |

@@ -1,23 +1,34 @@
-# Workflow Insights (P2A-0020)
+# Workflow Insights
 
 Workflow insights are typed, operator-facing callouts derived from the same
-event / cost / task data Phase 2 already persists. The hi-fi surfaces them
-inline in project view and run detail as "suboptimal callouts"; the Forge
-narration generator (P2A-0019) consumes the same loader so the same insights
-appear inside Forge turns.
+event / cost / task data the orchestrator already persists. The hi-fi surfaces
+them inline in project view and run detail as "suboptimal callouts"; the Forge
+narration generator consumes the same loader so the same insights appear inside
+Forge turns.
 
-Owner spec: `P2A-0020` in `docs/roadmap/phase-2a-specs.md`.
+## Insight kinds
 
-## v0 kinds
+The `InsightPayload` discriminated union (`engine/insights/types.ts`) is the
+single source of truth; the cache `kind` CHECK in `db/src/schemaInsights.ts`
+widens with it:
 
-| kind             | source                                                 | severity rule                                     |
-| ---------------- | ------------------------------------------------------ | ------------------------------------------------- |
-| `retry_hotspot`  | tasks (writer) joined with planner.rerequested         | `warn` when ≥ `min+1` attempts; otherwise `info`  |
-| `model_mismatch` | cost_records joined with merged runs + spec_milestones | `warn` whenever the ratio is exceeded             |
-| `pace_anomaly`   | in-flight writer tasks vs class average                | `warn` at ≥ 1.5× the multiplier; otherwise `info` |
+| kind             | source                                                 | severity rule                                         |
+| ---------------- | ------------------------------------------------------ | ----------------------------------------------------- |
+| `retry_hotspot`  | tasks (writer) joined with planner.rerequested         | `warn` when ≥ `min+1` attempts; otherwise `info`      |
+| `model_mismatch` | cost_records joined with merged runs + spec_milestones | `warn` whenever the ratio is exceeded                 |
+| `pace_anomaly`   | in-flight writer tasks vs class average                | `warn` at ≥ 1.5× the multiplier; otherwise `info`     |
+| `stuck`          | spec-dependency-chain analysis (`stuck.ts`)            | a spec blocked behind unmet dependencies              |
+| `review_stall`   | `review.*` events (`reviewStall.ts`)                   | a review parked past the stall threshold              |
+| `ci_flaky`       | a CI check proven non-deterministic + auto-quarantined | surfaced so the quarantine is visible (`ci_flaky.ts`) |
 
-`stuck` and `review_stall` defer to Phase 3 — they depend on
-spec-dependency-chain analysis and review polling.
+`stuck`, `review_stall`, and `ci_flaky` ship today — the earlier "defer to a
+later phase" framing is obsolete. Both `stuck` and `review_stall` derive from
+existing rows (no migration to the source data); `ci_flaky` is part of the
+native CI-intelligence parity (flaky-quarantine).
+
+Beyond the per-project insight feed, three analytics families compute on their
+own modules: **DORA** metrics (`engine/insights/dora/`), **queue** stats
+(`engine/insights/queue/`), and **CI** analytics (`engine/insights/ci/`).
 
 ## Computation model
 
@@ -53,15 +64,15 @@ testable from synthetic fixture data.
 | `paceAnomalyMinSamples`          | 3       | minimum sample size for the average to mean anything |
 | `cacheFreshnessMs`               | 1 hour  | matches spec read-path                               |
 
-Phase 3 will make these per-org configurable. The compute-function signature
-already accepts an explicit `thresholds: Partial<InsightThresholds>` so the
-future migration is purely "resolve from org config and pass into the call".
+Per-org configurability is a future move; the compute-function signature
+already accepts an explicit `thresholds: Partial<InsightThresholds>` so wiring
+it is purely "resolve from org config and pass into the call".
 
 ## Action routing
 
 Each insight carries one or more `InsightAction` records. The action's
-`toolCall` is shaped like a P2A-0008 `ForgeToolCall`. v0 reuses the existing
-tool variants only — no new tool variant was needed for the three v0 kinds:
+`toolCall` is shaped like a `ForgeToolCall`. Insights reuse the existing tool
+variants — no new tool variant was needed:
 
 | insight kind     | actions                                                                   |
 | ---------------- | ------------------------------------------------------------------------- |
@@ -70,19 +81,20 @@ tool variants only — no new tool variant was needed for the three v0 kinds:
 | `pace_anomaly`   | `tanren.read_run`, `tanren.acknowledge_insight`                           |
 
 When the operator clicks the action button, the dashboard hits the existing
-`POST /orgs/.../forge/tools` route (P2A-0019), which dispatches into the
-matching tool implementation. Acknowledge actions land at the P2A-0020
+`POST /orgs/.../forge/tools` route, which dispatches into the matching tool
+implementation. Acknowledge actions land at the
 `POST /orgs/.../projects/.../insights/:id/acknowledge` endpoint via the
 shared `acknowledgeInsight` helper — both code paths write the same row.
 
 ## Cache table
 
-`db/src/schemaInsights.ts` and migration `0012_cheerful_sleepwalker.sql`:
+`workflow_insights` lives in `db/src/schemaInsights.ts` (part of the collapsed
+baseline migration, not a standalone numbered migration):
 
 ```sql
 CREATE TABLE workflow_insights (
   id TEXT PRIMARY KEY,
-  kind TEXT NOT NULL CHECK (kind IN ('retry_hotspot','model_mismatch','pace_anomaly')),
+  kind TEXT NOT NULL CHECK (kind IN ('retry_hotspot','model_mismatch','pace_anomaly','stuck','review_stall','ci_flaky')),
   project_id TEXT NOT NULL REFERENCES projects(project_id),
   severity TEXT NOT NULL CHECK (severity IN ('info','warn','fail')),
   payload JSONB NOT NULL,
@@ -96,7 +108,7 @@ CREATE INDEX workflow_insights_project_kind
 
 Acknowledged rows stay in the table for audit. The read path filters them
 out so they don't surface again until something else recomputes (which the
-v0 read path doesn't do automatically — the operator must trigger a fresh
+read path doesn't do automatically — the operator must trigger a fresh
 compute by hitting the route after the cache window expires).
 
 ## Forge surface integration

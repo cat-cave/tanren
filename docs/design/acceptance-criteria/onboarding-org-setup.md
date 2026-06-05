@@ -2,7 +2,7 @@
 
 **Surface**: the 4-step onboarding wizard a fresh operator runs after first GitHub sign-in.
 
-**Owning spec**: P2B-0002 (`docs/roadmap/phase-2b-specs.md`).
+**Owning spec**: P2B-0002 (see [`ROADMAP.md`](../../../ROADMAP.md)).
 
 **Hi-fi reference**: `tanren-hi-fidelity/project/view-onboard-org.jsx`; low-fi import will land at `docs/design/operator-flows/onboarding-org-setup.svg`.
 

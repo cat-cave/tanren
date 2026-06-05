@@ -2,7 +2,7 @@
 
 **Surface**: project list, project detail (settings sub-sections), and spec creation.
 
-**Owning spec**: P2B-0003 (`docs/roadmap/phase-2b-specs.md`).
+**Owning spec**: P2B-0003 (see [`ROADMAP.md`](../../../ROADMAP.md)).
 
 **Hi-fi reference**: spec creation reachable from project view ("discover spec ↗"); project settings reachable from sidenav. Low-fi import at `docs/design/operator-flows/project-and-spec.svg`.
 

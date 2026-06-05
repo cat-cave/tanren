@@ -1,10 +1,11 @@
 # Hi-fi ↔ Implementation Audit
 
-**Dated 2026-05-29.** This is a from-scratch, evidence-grounded audit of the
-locally-installed hi-fidelity design bundle (`tanren-hi-fidelity/`) against the
-current codebase on `main`. It **replaces** the previous "Phase 3 Hi-Fi Design
-Gaps" content and folds in the stale `hifi-vision-changes.md` notes (whose "open"
-deltas were all already applied to the hi-fi — see chat3 transcript).
+This is the current hi-fi ↔ implementation gap audit (the doc CLAUDE.md points
+to): an evidence-grounded audit of the locally-installed hi-fidelity design
+bundle (`tanren-hi-fidelity/`) against the codebase on `main`. It is the single
+home for vision-delta tracking; the earlier running-log of vision changes has
+been folded in (its "open" deltas were all already applied to the hi-fi — see the
+chat3 transcript).
 
 It contains two sets:
 
@@ -154,18 +155,21 @@ follow each.
   auto-rotating installation-token vault entry that already appears in settings.
 - **Confidence: high.**
 
-### 1.6 Tenancy / quota surface — exists in code, absent from hi-fi
+### 1.6 Tenancy / metering surface — exists in code, absent from hi-fi
 
 - **Hi-fi**: budgets are modeled as a monthly **cost cap** only
-  (`view-onboard-org.jsx` step 4, `view-costs.jsx`). No tenant-quota concept.
-- **Implementation**: `engine/quota/` (`dbPolicy.ts`, `noopPolicy.ts`,
-  `meteringExport.ts`, `contracts.ts`) is a per-tenant quota/metering policy
-  layer.
-- **Why diverged**: purposeful (SaaS multi-tenant seam).
+  (`view-onboard-org.jsx` step 4, `view-costs.jsx`).
+- **Implementation**: there is **no per-tenant quota policy layer** — the old
+  `engine/quota/` (DB + no-op quota policies + metering export) was **deleted**;
+  budget is the only admission gate (walker-enforced single $ ceiling). The read
+  seam a hosting layer bills off moved to `engine/metering/index.ts`
+  (`getOrgUsage` / `streamBillableRuns`, derived from `cost_records`).
+- **Why diverged**: purposeful (SaaS metering seam) — but the gate is budget, not
+  a quota table.
 - **Suggested hi-fi edit**: if the hi-fi is to cover hosted/multi-tenant, add a
-  **quota/metering** surface (per-org limits + metering export) distinct from the
-  monthly cost cap. **Flag for the user** whether the vision hi-fi should depict
-  hosting-tier concerns at all.
+  **metering** surface (per-org usage export) distinct from the monthly cost cap.
+  **Flag for the user** whether the vision hi-fi should depict hosting-tier
+  concerns at all.
 - **Confidence: medium** (clearly built; placement in a self-host vision is a
   judgment call).
 
@@ -178,13 +182,13 @@ follow each.
 
 ### 1.8 Merge integration — hi-fi and impl are ALIGNED (no change)
 
-- The hi-fi review gate's four CTAs (mergify queue / direct merge / external
+- The hi-fi review gate's four CTAs (native queue / direct merge / external
   reviewer / not configured) map exactly to
   `engine/workflow/reviewMerge/mergeDispatch.ts`
-  (`mergify_queue | direct_merge | external_reviewer | not_configured`). The
-  per-repo `mergeIntegration` tweak (chat3) is already in the hi-fi. **No edit
-  needed**, and the stale `hifi-vision-changes.md` "make merge CTAs conditional"
-  item is **DONE** (chat3).
+  (`native_queue | direct_merge | external_reviewer | not_configured`). Mergify is
+  removed; `native_queue` is the merge engine, so the hi-fi's merge-integration CTA
+  reads **native queue**, not "mergify queue". The per-repo `mergeIntegration` tweak
+  is already in the hi-fi.
 - **Confidence: high.**
 
 ### 1.9 Governance posture — hi-fi brownfield has a picker; impl has the behavior
@@ -202,15 +206,15 @@ follow each.
 - **Confidence: medium** (behavior is clearly built; exact hi-fi copy delta is a
   wording change).
 
-### 1.10 Stale `hifi-vision-changes.md` — all "open" deltas already applied
+### 1.10 Former vision-changes running-log — all "open" deltas already applied
 
-For the record (folding the old doc in): every "open vision change" listed in the
-former `hifi-vision-changes.md` — drop Wafer from routing/vault, per-repo merge
-CTAs, brownfield `config.yaml` → `PROJECT.md` one-time snapshot, settings audit-
-gate-conditional caption + subtitle — was **already applied to the hi-fi** in the
-chat3 session (see `tanren-hi-fidelity/chats/chat3.md` and the current
-`view-settings.jsx` / `view-onboard-existing.jsx` / `view-review.jsx`). That doc
-is therefore **superseded**; do not treat its items as open work.
+For the record (folding the old running-log in): every "open vision change" it
+listed — drop Wafer from routing/vault, per-repo merge CTAs, brownfield
+`config.yaml` → `PROJECT.md` one-time snapshot, settings audit-gate-conditional
+caption + subtitle — was **already applied to the hi-fi** in the chat3 session
+(see `tanren-hi-fidelity/chats/chat3.md` and the current `view-settings.jsx` /
+`view-onboard-existing.jsx` / `view-review.jsx`). Those items are **done**; do not
+treat them as open work.
 **Confidence: high.**
 
 ---
@@ -219,22 +223,21 @@ is therefore **superseded**; do not treat its items as open work.
 
 Real surfaces/flows the hi-fi specifies that the code does not yet (fully) build.
 
-### 2.1 Forge **in-conversation write-action approval** — RESOLVED / IN-REVIEW (was the single biggest gap)
+### 2.1 Forge **in-conversation write-action approval** — MERGED (PR #139) (was the single biggest gap)
 
 - **Hi-fi**: `shared.jsx` `ForgePalette` chat mode renders **action cards** that
   act mid-conversation; the design intent (chat1/chat4) is Forge that can _propose
   → operator confirms → execute_ inside the thread. The hi-fi also shows write
   affordances throughout (create spec, trigger run, etc.).
-- **Resolved (in PR review — `feat/forge-write-action-approval`)**: implemented the
-  safe **propose → approve → execute** pattern. The model never executes a write;
-  a human approves it and the write runs under the **approving operator's** authz.
+- **Merged (PR #139)**: implemented the safe **propose → approve → execute**
+  pattern. The model never executes a write; a human approves it and the write runs
+  under the **approving operator's** authz.
   - The Forge answerer's final `ForgeAnswer` may carry optional `proposedActions`
     (`engine/answerers/schemas/forge.ts`); the conversation engine
     (`engine/forge/conversation/engine.ts`) no longer drops these — it persists
-    each as a **pending** `forge_action_proposals` row (new migration
-    `0028_massive_callisto.sql`, `db/src/schemaForge.ts`; org*id NOT NULL +
-    indexed per the 0026 tenancy pattern). Read-tool behavior is unchanged; mid-
-    loop write-tool \_dispatch* is still dropped.
+    each as a **pending** `forge_action_proposals` row (`db/src/schemaForge.ts`;
+    `org_id` NOT NULL + indexed, part of the collapsed baseline). Read-tool
+    behavior is unchanged; mid-loop write-tool _dispatch_ is still dropped.
   - Approve/reject routes (`routes/forge/proposals.ts`) re-validate + authz the
     deciding operator against the underlying write (reusing
     `engine/forge/tools/write.ts`), execute it, append a forge turn, and advance
@@ -248,8 +251,8 @@ Real surfaces/flows the hi-fi specifies that the code does not yet (fully) build
   - **Tools the model may propose**: the existing four write tools
     (`tanren.create_spec`, `tanren.trigger_run`, `tanren.rerun_task`,
     `tanren.acknowledge_insight`).
-- **Remaining (for the human reviewer to confirm)**: that proposed-tool set
-  starts at exactly those four; broadening it is a follow-up.
+- **Follow-up**: the proposed-tool set starts at exactly those four; broadening it
+  is future work.
 - **Confidence: high.**
 
 ### 2.2 Overview (org command deck) — placeholder only

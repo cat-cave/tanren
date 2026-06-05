@@ -13,11 +13,10 @@ artifact and the audit (`phase-3-hifi-gaps.md`) is the output.
   HTML/CSS/JS prototypes — the visual target). Treat prototypes as pixel-spec,
   not as code to copy.
 - **`docs/design/phase-3-hifi-gaps.md`** — the current, real **hi-fi ↔
-  implementation audit**: where the build is behind the hi-fi (build work) and
-  where the hi-fi is behind the build (hi-fi edits). This is the durable output
-  of every revision pass; keep it current, purge stale notes.
-- **`docs/design/hifi-vision-changes.md`** — running log of vision-level deltas
-  the revision introduces (intent changes, not just visuals).
+  implementation audit** and the single home for vision-delta tracking: where the
+  build is behind the hi-fi (build work), where the hi-fi is behind the build
+  (hi-fi edits), and the vision-level intent changes a revision introduces. This is
+  the durable output of every revision pass; keep it current, purge stale notes.
 
 ## Steps for a new revision
 
@@ -41,9 +40,9 @@ artifact and the audit (`phase-3-hifi-gaps.md`) is the output.
    - **Set 2 — the build is behind the hi-fi.** Missing pages, lacking/stubbed
      Forge features, partial or deferred flows, polish the design calls for.
      These are **build work** → specs.
-5. **Record the deltas.** Vision-level intent changes go in
-   `hifi-vision-changes.md`; the full two-set audit replaces the body of
-   `phase-3-hifi-gaps.md` (purge what no longer reflects reality).
+5. **Record the deltas.** Both the vision-level intent changes and the full
+   two-set audit land in `phase-3-hifi-gaps.md`, replacing its body (purge what no
+   longer reflects reality).
 6. **File the build work.** Turn Set 2 into roadmap specs
    (`docs/roadmap/**`), dependency-ordered, each shippable per-PR-through-CI.
    Don't start building before the user confirms scope on anything ambiguous.

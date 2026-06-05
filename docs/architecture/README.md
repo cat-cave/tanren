@@ -1,26 +1,67 @@
 # Architecture Notes
 
-Phase 0 is the Tanren kernel. It keeps behavior synthetic where agents are concerned, but the infrastructure boundaries are real:
+This directory documents the **shipped** architecture of Tanren — the durable
+seams and the substrate behind them. Phases 0–3 and the autonomy engine
+(Phases 1 + 2) are built and merged; these notes describe the system as it runs
+on `main`, not a plan. For the phase history and the forward roadmap, see
+[`ROADMAP.md`](../../ROADMAP.md); for the durable vision and invariants, see
+[`PROJECT_BRIEF.md`](../../PROJECT_BRIEF.md).
 
-- Postgres schema is defined in `db/src/schema.ts`; committed Drizzle migrations are drift-checked.
-- The orchestrator reaches runner workloads through `SshSubstrate`.
-- The local Docker allocator records and releases runner allocations; workload commands still run over SSH.
-- The real run path prepares a git workspace inside the runner and the role-routed Writer (Codex by default) mutates that workspace. (The synthetic fake-adapter workspace helpers are TEST FIXTURES ONLY — `services/orchestrator/tests/fixtures/` — never in runtime source.)
-- Writer output is captured from git state: diff bytes and commit metadata, not self-reported completion text.
-- Planner, Writer, Checker, and Auditor tasks are queued, claimed, completed, or failed through durable run/task/job state.
+## The substrate (always true)
+
+- Postgres schema is defined in `db/src/schema.ts`; the committed Drizzle
+  migrations are collapsed to a single baseline (`db/migrations/0000_collapsed_baseline.sql`
+  plus a small number of additive event-type migrations) and are drift-checked.
+- Tenant isolation is **Postgres-RLS-enforced** (denies by default) keyed on a
+  session-set org via `db/src/orgScope.ts`; a query off the org-scoped client
+  sees zero cross-tenant rows.
+- The orchestrator reaches runner workloads through `SshSubstrate`; credentials
+  are injected per-session over SSH (Vault per-run scoped tokens), never as
+  ambient env or CI secrets.
+- Planner, Writer, Checker, and Auditor tasks are queued, claimed, completed, or
+  failed through durable run/task/job state; the queue is Postgres-native
+  (`FOR UPDATE SKIP LOCKED` + lease) with `LISTEN/NOTIFY` wake (channel
+  `tanren_run`).
 - Events are appended only through `services/orchestrator/src/engine/eventStore.ts`.
+- Writer output is captured from git state (diff bytes + commit metadata), never
+  from self-reported completion text.
+- The native shell-tier gate (`.tanren/ci.yml`, a `CiConfigV1`) runs over SSH and
+  is the **sole merge authority** — delivery is Action-less. The verdict
+  publishes as the `tanren/gate` commit status. Mergify is removed; the native
+  merge queue (`engine/merge/coordinator.ts`) is the merge engine.
 
-The active workflow dispatcher lives under `services/orchestrator/src/engine/workflow/**`. Files in that directory may coordinate Writer and Answerer roles; role-specific provider code should stay separated elsewhere.
+The fake-adapter and in-memory fixtures referenced by tests are **test fixtures
+only** (`services/orchestrator/tests/fixtures/`), never in runtime source.
 
-Phase 1 should build on these contracts instead of replacing them. Real CLIs, GitHub PR creation, CI polling, and Answerer schemas should plug into the durable task loop and runner workspace model already present.
+## Adapter seams (slottable behind contracts + conformance suites)
 
-## Phase 1 boundary (post-completion)
+Every backend is a new implementation + registry entry behind a stable contract,
+proven by a shared conformance suite — not a refactor. The seams: `Allocator`,
+`SecretStore`, `JobQueue`, `EventStore`, `SourceConnector`, `IdentityProvider`,
+`WriterAdapter`/`AnswererAdapter`, `CostResolver`, and the `VcsProvider`
+(`engine/contracts/vcsProvider.ts` + `engine/providers/{buildVcsProvider,githubVcsProvider}.ts`)
+that abstracts PR/merge VCS operations.
 
-Phase 1 closed in May 2026 with all seven specs (P1-0001 through P1-0007) merged on `main` and the end-to-end live proof committed in `ROADMAP.md`. The boundary Phase 2 inherits:
+## Documents in this directory
 
-- The Phase 1 runner workspace model and SSH execution boundary are unchanged. Phase 2A's allocator-isolation spec (P2A-0010) narrows the Docker socket exposure with a sidecar and adds workspace cleanup, but the SSH substrate and runner image contracts remain stable.
-- Codex is the only working CLI for both Writer and Answerer roles; Phase 2 extends routing to a 6-role fallback chain shape (P2A-0006) but keeps Codex as the only resolved provider until Phase 3.
-- The fake-provider and Phase 0 hello surfaces are preserved as smoke fixtures. Phase 2 does not remove them.
-- Schema migrations in Phase 2A are destructive against local dev data; the live `run_a347d451…` proof is preserved in ROADMAP as a record, not as a migrated DB row.
-
-Phase 2A specs that touch the schema (`P2A-0003` auth/orgs, `P2A-0005` typed state, `P2A-0006` versioned config, `P2A-0007` events, `P2A-0011` costs, `P2A-0017` notifications, `P2A-0018` product entities, `P2A-0019` Forge turns, `P2A-0020` workflow insights) coordinate their migrations through the foundation P2A-0001 / P2A-0002 work. Each spec's migration is additive to the Phase 1 baseline; the order is dictated by the Phase 2A parallelization plan in `ROADMAP.md`.
+- [`harness-protocol.md`](./harness-protocol.md) — the versioned
+  harness↔orchestrator protocol and the capability table (which CLIs write vs.
+  answer).
+- [`harness-adapter-specs.md`](./harness-adapter-specs.md) — the per-adapter
+  mapping onto that protocol.
+- [`forge.md`](./forge.md) — the Forge conversation substrate and the thick
+  LLM-backed Forge author (propose → approve → execute write actions).
+- [`insights.md`](./insights.md) — typed operator-facing workflow insights and
+  the DORA / queue / CI analytics families.
+- [`product-entities.md`](./product-entities.md) — the Persona → Behavior → Spec
+  product model with milestones and DAG dependency edges.
+- [`portability-and-longevity.md`](./portability-and-longevity.md) — the
+  contracts-as-durable-asset north star (JSON-Schema export, conformance suites,
+  mutation testing) and the OSS↔hosting billing seam (budget gate +
+  metering-export).
+- [`future-refactor-and-scale.md`](./future-refactor-and-scale.md) — the
+  10 → 1M scale map and the highest-leverage structural moves (data-access seam,
+  plane split) that remain.
+- `autonomy-engine.md` — the autonomy core + native merge coordination design
+  rationale (DagWalker, real-LLM Forge, speculation + percolation, the stub-ban
+  and real-e2e guardrails).
