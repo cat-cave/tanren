@@ -21,6 +21,7 @@
 import { describe, expect, it } from "vitest";
 import type pg from "pg";
 import { FakeAllocator } from "../src/engine/contracts/allocator.js";
+import type { AllocationRequest } from "../src/engine/contracts/allocator.js";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import { FakeCommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
 import {
@@ -111,12 +112,16 @@ function fakePool(opts: { percolationPending?: unknown; priorReplans: number }):
 class SpyAllocator extends FakeAllocator {
   allocateCalls = 0;
   releaseCalls = 0;
+  readonly requests: AllocationRequest[] = [];
+  readonly releases: string[] = [];
   override async allocate(request: Parameters<FakeAllocator["allocate"]>[0]) {
     this.allocateCalls += 1;
+    this.requests.push(request);
     return super.allocate(request);
   }
-  override async release(): Promise<void> {
+  override async release(runnerId: string): Promise<void> {
     this.releaseCalls += 1;
+    this.releases.push(runnerId);
   }
 }
 
@@ -161,6 +166,32 @@ describe("buildDriveConflictResolve — classify-then-escalate + percolation/cap
     // A runner WAS provisioned (the real resolution path) and released.
     expect(allocator.allocateCalls).toBe(1);
     expect(allocator.releaseCalls).toBe(1);
+  });
+
+  it("allocates the short-lived resolver with a unique synthetic handle, not the original run id", async () => {
+    const pool = fakePool({ priorReplans: 0 });
+    const allocator = new SpyAllocator();
+    const verdict: DriveConflictVerdict = {};
+    let workspacePath = "";
+    const hook = buildDriveConflictResolve(
+      makeDeps(pool, allocator, verdict, (_target, workspace) => {
+        workspacePath = workspace;
+        return (async () => ({ resolved: true })) satisfies ConflictResolverHook;
+      }),
+    );
+
+    await hook(CONTEXT);
+
+    const handle = allocator.requests[0]?.runId;
+    expect(handle).toMatch(/^run_x-resolve-[0-9a-f-]+$/u);
+    expect(handle).not.toBe(FACTS.runId);
+    expect(allocator.requests[0]).toMatchObject({
+      runless: true,
+      persistedRunId: null,
+      persistedProjectId: FACTS.projectId,
+    });
+    expect(allocator.releases[0]).toBe(`runner_${handle}`);
+    expect(workspacePath).toBe(`/workspace/runs/${handle}/repo`);
   });
 
   it("RE-PLANNED (under the cap): an unresolved-but-compatible conflict → {resolved:false} + verdict 'replanned' (recoverable, NOT escalation)", async () => {

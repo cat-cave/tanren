@@ -21,8 +21,6 @@
 // (ancestor-before-dependent) is preserved within + across batches; the culprit's
 // work is preserved (recoverable dequeue, never discarded); no innocent PR is dropped;
 // bisect terminates (each step shrinks the suspect set); a crash mid-batch leaves the
-// queue recoverable (the native queue's lease/recovery, reused unchanged).
-
 import {
   type BatchCheckVerdict,
   type BatchChecker,
@@ -43,8 +41,13 @@ import { isRetriableInfraError } from "../providers/githubRefReset.js";
 import { setTimeout as sleepFor } from "node:timers/promises";
 import type { MergeQueueEventEmitter } from "./coordinator.js";
 import type { SpecEscalator } from "./coordinatorEscalate.js";
-import { driveBaseConflict, settleDriveOutcome } from "./batchCoordinatorSettle.js";
-import { BatchInfraHoldCeiling, holdOnInfra } from "./batchInfraHoldCeiling.js";
+import {
+  driveBaseConflict,
+  type BatchDriveInfraHold,
+  holdOnRetriableDriveThrow,
+  settleDriveOutcome,
+} from "./batchCoordinatorSettle.js";
+import { BatchInfraHoldCeiling, holdOnInfra, terminalInfraBlock } from "./batchInfraHoldCeiling.js";
 
 /**
  * The bound on in-pass re-checks of the SAME batch after a transient INFRA error (the
@@ -250,9 +253,6 @@ export class BatchMergeCoordinator implements MergeCoordinator {
           `[batch-coordinator] project ${projectId}: batch CAPPED to ${current.batch.length} of ${current.eligibleCount} eligible (maxBatchSize=${maxBatchSize}); the remainder is re-considered next pass`,
         );
       }
-      // Check the SAME batch with a bounded retry on a transient INFRA error (the check
-      // could not be RUN). On exhaustion → `infraHold` (the GAP #1 cross-pass ceiling),
-      // never bisecting any PR.
       const checked = await this.checkBatchWithInfraRetry(projectId, current, maxBatchSize);
       if (checked.kind === "infra-exhausted") {
         return this.infraHold(projectId, current.batch, checked.message, queueDepth);
@@ -260,40 +260,35 @@ export class BatchMergeCoordinator implements MergeCoordinator {
       const verdict = checked.verdict;
 
       if (verdict.result === "pass") {
-        // Real progress (a runnable verdict) — clear any infra-hold streak.
-        this.infraHolds.reset(projectId);
         const { integrationBranch } = verdict;
         await this.deps.batchEvents.emitPassed({ projectId, batch: current.batch, integrationBranch });
-        return this.mergeBatch(projectId, current.batch, queueDepth);
+        const result = await this.mergeBatch(projectId, current.batch, queueDepth);
+        if (result.holdReason !== "infra_error" && result.holdReason !== "infra_blocked") {
+          this.infraHolds.reset(projectId);
+        }
+        return result;
       }
 
       if (verdict.result === "pending") {
-        // The prospective merged state's CI is still RUNNING (or the repo has no CI yet
-        // and the no-checks grace has not elapsed) — NOT a failure. HOLD (do NOT bisect
-        // a not-yet-terminal batch, which could blame an innocent PR). Bug B: return a
-        // `retryAfterMs` so the subscriber arms ONE idempotent re-drive timer instead of
-        // re-checking on every unrelated `tanren_run` NOTIFY (the no-CI hot loop). Wake
-        // EXACTLY at the settle expiry when known (`settleAfterMs`), else the default
-        // recheck interval. A pending hold is NOT an infra error — clear the streak.
         this.infraHolds.reset(projectId);
         const retryAfterMs = verdict.settleAfterMs ?? PENDING_RECHECK_MS;
         return { projectId, holdReason: "all_blocked", retryAfterMs, queueDepth };
       }
 
-      // A runnable fail/conflict verdict is real progress (the check RAN) — clear any
-      // infra-hold streak.
-      this.infraHolds.reset(projectId);
-
-      // BASE-CONFLICT SHORT-CIRCUIT: a `conflict` against the BASE branch (a single PR
-      // dirty vs `default_branch`, not a batch interaction) is DRIVEN through the per-run
-      // resolver, never bisected — bisect+dequeue would brick it forever (nothing
-      // re-admits a conflict-dequeued entry). See `driveBaseConflict`. A spec-vs-spec
-      // conflict (`conflictsWithBase` false) keeps the bisect-and-dequeue path below.
+      // BASE-CONFLICT SHORT-CIRCUIT: drive a dirty-vs-base PR through the per-run resolver.
       if (verdict.result === "conflict" && verdict.conflictsWithBase) {
-        return driveBaseConflict(this.deps, projectId, current.batch, verdict, queueDepth);
+        const result = await driveBaseConflict(this.deps, projectId, current.batch, verdict, queueDepth);
+        if (!("projectId" in result)) {
+          if (result.kind === "infra_terminal")
+            return this.terminalInfraBlock(projectId, [result.entry], result.message, queueDepth);
+          return this.infraHold(projectId, current.batch, result.message, queueDepth);
+        }
+        this.infraHolds.reset(projectId);
+        return result;
       }
 
-      // FAIL / SPEC-vs-SPEC CONFLICT → bisect to isolate the single offending PR.
+      this.infraHolds.reset(projectId);
+
       const failMessage = verdict.result === "conflict" ? `integration conflict: ${verdict.message}` : verdict.message;
       await this.deps.batchEvents.emitBisecting({ projectId, batch: current.batch, message: failMessage });
 
@@ -441,15 +436,6 @@ export class BatchMergeCoordinator implements MergeCoordinator {
     }
   }
 
-  /**
-   * Drive the validated batch's REAL merges in DAG order through the native-queue path (the
-   * SAME runner/model). Each entry is claimed (serialization lock), driven, + settled —
-   * one at a time, ancestor before dependent. A merged entry advances; a non-merged
-   * real-merge outcome (a reality the speculative check could not see, e.g. the live
-   * base moved) dequeues recoverably + STOPS the batch (no dependent merges ahead of a
-   * now-missing ancestor) — the next pass re-forms from the new reality. NEVER merges an
-   * entry the batch check did not validate.
-   */
   private async mergeBatch(
     projectId: string,
     batch: ReadonlyArray<MergeQueueEntry>,
@@ -467,16 +453,18 @@ export class BatchMergeCoordinator implements MergeCoordinator {
       await this.deps.events.emitAdvanced({ projectId, entry, queueDepth });
 
       const outcome = await this.driveOne(projectId, entry);
+      if (outcome.kind === "infra_hold") {
+        return this.infraHold(projectId, batch, outcome.message, queueDepth);
+      }
+      if (outcome.kind === "infra_terminal") {
+        return this.terminalInfraBlock(projectId, [outcome.entry], outcome.message, queueDepth);
+      }
       if (outcome.kind === "merged") {
         await this.deps.queue.markMerged(entry.queueId);
         mergedSpecId = entry.specId;
         continue;
       }
 
-      // A non-merged real-merge outcome: settle + STOP the batch (no dependent merges
-      // ahead of a now-absent ancestor). `settleDriveOutcome` routes `needs_attention`
-      // through the NON-BRICKING escalation (park the spec, never re-executed) and a
-      // conflict/blocked/failed through the recoverable dequeue — the SAME native-queue policy.
       await settleDriveOutcome(this.deps, projectId, entry, outcome);
       dequeuedSpecId = entry.specId;
       break;
@@ -489,12 +477,23 @@ export class BatchMergeCoordinator implements MergeCoordinator {
     };
   }
 
-  /** Drive ONE entry's real merge through the native-queue path; a thrown drive ⇒ recoverable blocked. */
-  private async driveOne(projectId: string, entry: MergeQueueEntry): Promise<MergeDriveOutcome> {
+  private async driveOne(projectId: string, entry: MergeQueueEntry): Promise<MergeDriveOutcome | BatchDriveInfraHold> {
     try {
       return await this.deps.runner.driveMerge({ runId: entry.runId, projectId });
     } catch (error) {
+      const hold = await holdOnRetriableDriveThrow(this.deps, projectId, entry, error);
+      if (hold !== undefined) return hold;
       return { kind: "blocked", message: `merge drive threw: ${String(error)}` };
     }
+  }
+
+  private async terminalInfraBlock(
+    projectId: string,
+    batch: ReadonlyArray<MergeQueueEntry>,
+    message: string,
+    queueDepth: number,
+  ): Promise<CoordinateResult> {
+    this.infraHolds.reset(projectId);
+    return terminalInfraBlock({ events: this.deps.batchEvents, projectId, batch, message, queueDepth });
   }
 }

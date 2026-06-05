@@ -22,8 +22,8 @@ export interface SystemTaskSpec {
 
 /**
  * Ensure the single SYSTEM task for a run⋈kind exists and is `running`, returning
- * its id. Re-running re-opens the latest row (status `running`, `ended_at` NULL);
- * the first run inserts it (attempt 1). The SELECT is a READ (the data plane
+ * its id. Re-running re-opens the latest row (status `running`, stale terminal
+ * fields NULL, `ended_at` NULL); the first run inserts it (attempt 1). The SELECT is a READ (the data plane
  * keeps `tasks` SELECT); only the INSERT/UPDATE route through `writer` when wired
  * (remote-writes on) — else the byte-identical in-process write on `pool`.
  * Shared by the CI / review / merge stages so the ensure-task shape lives once.
@@ -43,7 +43,7 @@ export async function ensureSystemTask(
       writer,
       pool,
       { taskId: existingTask.task_id, transition: "running" },
-      "UPDATE tasks SET status = 'running', started_at = COALESCE(started_at, now()), ended_at = NULL WHERE task_id = $1",
+      "UPDATE tasks SET status = 'running', outcome = NULL, failure_kind = NULL, started_at = COALESCE(started_at, now()), ended_at = NULL WHERE task_id = $1",
       [existingTask.task_id],
     );
     return existingTask.task_id;

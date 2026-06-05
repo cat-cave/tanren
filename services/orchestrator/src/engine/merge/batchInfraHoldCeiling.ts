@@ -72,6 +72,27 @@ export async function holdOnInfra(args: {
   return { projectId, holdReason: "infra_error", retryAfterMs: INFRA_HOLD_RETRY_AFTER_MS, queueDepth };
 }
 
+export async function terminalInfraBlock(args: {
+  events: BatchMergeEventEmitter;
+  projectId: string;
+  batch: ReadonlyArray<MergeQueueEntry>;
+  message: string;
+  queueDepth: number;
+}): Promise<CoordinateResult> {
+  await args.events.emitInfraBlocked({
+    projectId: args.projectId,
+    batch: args.batch,
+    message: args.message,
+    attempts: 1,
+    terminal: true,
+    consecutiveHolds: 1,
+  });
+  console.error(
+    `[batch-coordinator] project ${args.projectId}: batch drive HALTED; operator attention required: ${args.message}`,
+  );
+  return { projectId: args.projectId, holdReason: "infra_blocked", queueDepth: args.queueDepth };
+}
+
 /** The bounded per-project consecutive-infra-hold counter (a runaway guard). */
 export class BatchInfraHoldCeiling {
   private readonly holds = new Map<string, number>();

@@ -187,7 +187,7 @@ export interface ReconcileStrandedSpecResult {
 /**
  * The named `tasks` lifecycle transitions, each mapping to ONE fixed UPDATE in
  * `runStateLifecycleSql.ts`:
- *   - `running`                       → status='running', started_at=COALESCE(started_at, now()), ended_at=NULL
+ *   - `running`                       → status='running', outcome=NULL, failure_kind=NULL, started_at=COALESCE(started_at, now()), ended_at=NULL
  *   - `running_attempt`               → + attempt=$attempt (CI re-poll)
  *   - `running_pending`               → status='running', outcome='pending', ended_at=NULL
  *   - `running_pending_clear_failure` → + failure_kind=NULL

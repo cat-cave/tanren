@@ -8,8 +8,6 @@ import {
 } from "../contracts/allocator.js";
 import type { RunnerStore } from "./runnerStore.js";
 
-const allocatorName = "sidecar-docker";
-
 export interface SidecarHttpAllocatorOptions {
   /** Base URL of the allocator sidecar, e.g. `http://allocator:3200`. */
   baseUrl: string;
@@ -17,7 +15,7 @@ export interface SidecarHttpAllocatorOptions {
   authToken: string;
   /** Username the SSH substrate authenticates with. */
   sshUsername?: string;
-  /** Stores the runners table row mirror for orchestrator-side bookkeeping. */
+  /** Stores release bookkeeping for the sidecar-owned runners row. */
   runners: RunnerStore;
   /** Override for tests. */
   fetchImpl?: typeof fetch;
@@ -83,23 +81,6 @@ export class SidecarHttpAllocator implements Allocator {
         identitySecretRef: request.identitySecretRef,
       }),
     };
-
-    // Sidecar already persisted its own row for ownership; the orchestrator
-    // mirror is kept idempotent so existing workflow code that reads from
-    // `runners` continues to find the row.
-    await this.options.runners.claim({
-      runnerId: allocation.runnerId,
-      // Persist FK-valid (run_id, project_id), or NULLs for a runless Forge
-      // ideation allocation whose synthetic handle is not a real run/project.
-      ...persistedRunnerKeys(request),
-      orgId: request.orgId ?? null,
-      allocator: allocatorName,
-      sshHost: body.sshHost,
-      sshPort: body.sshPort,
-      hostKeyFingerprint: body.hostKeyFingerprint,
-      imageSha: allocation.imageSha,
-      containerId: allocation.runnerId,
-    });
 
     return allocation;
   }

@@ -12,6 +12,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { BatchMergeCoordinator } from "../src/engine/merge/batchCoordinator.js";
+import { RefResetTransientError } from "../src/engine/providers/githubRefReset.js";
 import type { SpecPriority } from "../src/engine/state/spec.js";
 import { InMemoryBatchChecker, RecordingBatchMergeEventEmitter } from "./conformance/fakes/inMemoryBatchChecker.js";
 import {
@@ -114,6 +115,25 @@ describe("BatchMergeCoordinator — base-conflict routing (drive, not bisect)", 
     const dq = h.events.events.find((e) => e.type === "merge.dequeued" && e.specId === "spec_b");
     expect(dq?.reason).toBe("conflict");
     expect(h.batchEvents.events.some((e) => e.type === "bisecting")).toBe(false);
+  });
+
+  it("a transient base-conflict drive throw holds and leaves the culprit queued", async () => {
+    const h = makeHarness();
+    seed(h, "spec_b");
+    h.checker.baseConflictWhenContains("spec_b");
+    const dequeueSpy = vi.spyOn(h.queue, "markDequeued");
+    h.runner.driveMerge = async (input) => {
+      h.runner.drives.push({ runId: input.runId });
+      throw new RefResetTransientError("resolver runner allocate hit duplicate runners_pkey");
+    };
+
+    const result = await h.coordinator.coordinate(PROJECT);
+
+    expect(result.holdReason).toBe("infra_error");
+    expect(result.retryAfterMs).toBeGreaterThan(0);
+    expect(h.queue.statusOf("run_spec_b")).toBe("queued");
+    expect(dequeueSpy).not.toHaveBeenCalled();
+    expect(h.events.events.some((e) => e.type === "merge.dequeued")).toBe(false);
   });
 
   it("a SPEC-vs-SPEC conflict (conflictsWithBase false) STILL bisects-and-dequeues (unchanged)", async () => {

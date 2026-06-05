@@ -29,7 +29,7 @@ const makeAllocateFetch = (): typeof fetch =>
     )) as typeof fetch;
 
 describe("SidecarHttpAllocator", () => {
-  it("POSTs /allocate with the bearer token and mirrors the runner row", async () => {
+  it("POSTs /allocate with the bearer token and leaves row persistence to the sidecar", async () => {
     let captured: {
       url: string;
       method?: string;
@@ -86,8 +86,9 @@ describe("SidecarHttpAllocator", () => {
     expect(result.runnerId).toBe("runner_run_1");
     expect(result.target.host).toBe("tanren-runner-run_1");
     expect(result.target.identitySecretRef).toBe("runner/identity");
-    expect(runners.claims).toHaveLength(1);
-    expect(runners.claims[0]?.allocator).toBe("sidecar-docker");
+    // The allocator sidecar already persisted the `runners` row under org RLS;
+    // the orchestrator client must not double-insert the same primary key.
+    expect(runners.claims).toHaveLength(0);
   });
 
   it("posts /release with the reason and clears the mirror row", async () => {

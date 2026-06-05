@@ -415,6 +415,54 @@ describe("BatchMergeCoordinator — infra-error robustness (a thrown check NEVER
     expect(h.batchEvents.events.some((e) => e.type === "infra_blocked")).toBe(false);
   });
 
+  it("a transient real-merge drive throw releases the claim and holds, with no blocked dequeue", async () => {
+    const h = makeHarness();
+    seed(h, "spec_a");
+    const dequeueSpy = vi.spyOn(h.queue, "markDequeued");
+    h.runner.driveMerge = async (input) => {
+      h.runner.drives.push({ runId: input.runId });
+      throw new RefResetTransientError('duplicate key value violates unique constraint "runners_pkey"');
+    };
+
+    const result = await h.coordinator.coordinate(PROJECT);
+
+    expect(result.holdReason).toBe("infra_error");
+    expect(result.retryAfterMs).toBeGreaterThan(0);
+    expect(h.queue.statusOf("run_spec_a")).toBe("queued");
+    expect(dequeueSpy).not.toHaveBeenCalled();
+    expect(h.events.events.some((e) => e.type === "merge.dequeued")).toBe(false);
+  });
+
+  it("repeated transient real-merge drive throws hit the terminal batch infra ceiling without blocked dequeues", async () => {
+    const h = makeHarness();
+    seed(h, "spec_a");
+    const dequeueSpy = vi.spyOn(h.queue, "markDequeued");
+    h.runner.driveMerge = async (input) => {
+      h.runner.drives.push({ runId: input.runId });
+      throw new RefResetTransientError("persistent resolver runner allocation outage");
+    };
+
+    let last = await h.coordinator.coordinate(PROJECT);
+    let passes = 1;
+    for (let i = 0; i < 20 && last.holdReason === "infra_error"; i += 1) {
+      expect(last.retryAfterMs).toBeGreaterThan(0);
+      expect(h.queue.statusOf("run_spec_a")).toBe("queued");
+      expect(h.events.events.some((e) => e.type === "merge.dequeued")).toBe(false);
+      last = await h.coordinator.coordinate(PROJECT);
+      passes += 1;
+    }
+
+    expect(passes).toBe(MAX_BATCH_INFRA_HOLDS);
+    expect(last.holdReason).toBe("infra_blocked");
+    expect(last.retryAfterMs).toBeUndefined();
+    expect(h.queue.statusOf("run_spec_a")).toBe("queued");
+    expect(dequeueSpy).not.toHaveBeenCalled();
+    expect(h.events.events.some((e) => e.type === "merge.dequeued")).toBe(false);
+    const terminal = h.batchEvents.events.filter((e) => e.type === "infra_blocked" && e.terminal === true);
+    expect(terminal).toHaveLength(1);
+    expect(terminal[0]?.consecutiveHolds).toBe(MAX_BATCH_INFRA_HOLDS);
+  });
+
   it("a GENUINE fail STILL bisects → culprit → merge.dequeued(conflict) (no regression)", async () => {
     const h = makeHarness();
     seed(h, "spec_a");
