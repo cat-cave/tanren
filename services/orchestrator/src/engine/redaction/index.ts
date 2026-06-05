@@ -4,13 +4,7 @@
 // here for tests and adjacent surfaces (notifications dispatch, the read
 // run-detail API) that need to apply the same redaction discipline.
 
-export {
-  AccessScopeOrder,
-  canViewRaw,
-  describeRequiredScope,
-  hasElevatedScope,
-  sensitivityToRequiredScopes,
-} from "./scopes.js";
+export { canViewRaw, describeRequiredScope, hasElevatedScope, sensitivityToRequiredScopes } from "./scopes.js";
 
 export {
   redactEventPayload,

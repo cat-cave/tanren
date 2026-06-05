@@ -23,10 +23,10 @@
 // → serde (docs/architecture/portability-and-longevity.md §3); this script is
 // the TypeScript arm of that single-neutral-source pipeline.
 
+import { spawnSync } from "node:child_process";
 import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { argv, exit } from "node:process";
-import { format, resolveConfig } from "prettier";
 
 const repoRoot = resolve(import.meta.dirname, "..");
 const httpSchemaDir = resolve(repoRoot, "contracts/json/http");
@@ -173,13 +173,18 @@ function renderFile() {
   return `${header}${blocks.join("\n\n")}\n`;
 }
 
-// Run the rendered source through the project's Prettier config so the
-// committed file is already format-clean (otherwise the `format:check` gate
-// would reformat it and reintroduce drift against codegen).
-async function renderFormatted() {
+// Run the rendered source through oxfmt (the project's formatter, configured by
+// .oxfmtrc.json) so the committed file is already format-clean — otherwise the
+// `format:check` gate would reformat it and reintroduce drift against codegen.
+// oxfmt has no Node API, so format via its stdin mode (the filepath only tells
+// it which parser to use; the .oxfmtrc.json is picked up from the repo root).
+function renderFormatted() {
   const raw = renderFile();
-  const config = (await resolveConfig(outFile)) ?? {};
-  return format(raw, { ...config, parser: "typescript" });
+  const result = spawnSync("oxfmt", ["--stdin-filepath", outFile], { input: raw, encoding: "utf8" });
+  if (result.status !== 0) {
+    throw new Error(`oxfmt failed to format generated types: ${result.stderr || result.error}`);
+  }
+  return result.stdout;
 }
 
 function readCurrent() {
@@ -190,9 +195,9 @@ function readCurrent() {
   }
 }
 
-async function main() {
+function main() {
   const check = new Set(argv.slice(2)).has("--check");
-  const expected = await renderFormatted();
+  const expected = renderFormatted();
   const current = readCurrent();
 
   if (current === expected) {
@@ -217,5 +222,5 @@ async function main() {
 
 // Only run the CLI when invoked directly (not when imported by the test).
 if (process.argv[1] === import.meta.filename) {
-  await main();
+  main();
 }

@@ -39,8 +39,6 @@ const allowedRunTransitions: Record<RunStatus, ReadonlyArray<RunStatus>> = {
   cancelled: [],
 };
 
-export type RunTransition = { from: RunStatus; to: RunStatus };
-
 export function isAllowedRunTransition(from: RunStatus, to: RunStatus): boolean {
   return allowedRunTransitions[from].includes(to);
 }

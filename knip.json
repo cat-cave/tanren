@@ -29,17 +29,15 @@
     "services/dashboard/src/design/index.ts",
     "services/dashboard/src/design/tokens.ts",
     "services/orchestrator/src/routes/costs/index.ts",
-    "services/orchestrator/src/routes/events/index.ts"
+    "services/orchestrator/src/routes/events/index.ts",
+    "services/dashboard/src/api/http.gen.ts"
   ],
-  "ignoreDependencies": ["@playwright/test", "hono", "prettier", "@commitlint/cli"],
+  "ignoreDependencies": ["@playwright/test", "hono", "oxfmt", "@commitlint/cli"],
   "ignoreBinaries": ["just", "playwright"],
   "ignoreExportsUsedInFile": true,
   "rules": {
-    "exports": "off",
-    "types": "off",
     "nsExports": "off",
     "nsTypes": "off",
-    "enumMembers": "off",
-    "duplicates": "off"
+    "enumMembers": "off"
   }
 }

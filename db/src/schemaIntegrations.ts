@@ -32,11 +32,6 @@ import { sql } from "drizzle-orm";
 import { check, index, jsonb, pgTable, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
 import { organizations, projects } from "./schemaCore.js";
 
-// Provisioning lifecycle of an org-level integration grant. `linked` is the
-// resting state (a usable grant); `provisioning` while a long-running org-level
-// setup is mid-flight; `error` when the last grant operation failed.
-const ORG_INTEGRATION_STATUSES = ["linked", "provisioning", "error"] as const;
-
 export const orgIntegrations = pgTable(
   "org_integrations",
   {
@@ -69,14 +64,6 @@ export const orgIntegrations = pgTable(
     index("org_integrations_org_id").on(table.orgId),
   ],
 );
-
-// Which phases an app-env entry reaches. The resolver materializes an entry only
-// for the phase(s) named here — a `dev`-only entry never reaches CI/runtime.
-const APP_ENV_SCOPES = ["build", "test", "runtime", "dev"] as const;
-
-// How the entry's value was supplied: `byo` = the operator added it; `provisioned`
-// = an IntegrationProvisioner created the app's resource and emitted its secret.
-const APP_ENV_SOURCES = ["byo", "provisioned"] as const;
 
 export const projectAppEnv = pgTable(
   "project_app_env",
@@ -114,9 +101,3 @@ export const projectAppEnv = pgTable(
     index("project_app_env_project_id").on(table.projectId),
   ],
 );
-
-// Runtime literal lists, exported for the orchestrator engine to validate
-// against without re-declaring the unions.
-export const orgIntegrationStatuses = ORG_INTEGRATION_STATUSES;
-export const appEnvScopes = APP_ENV_SCOPES;
-export const appEnvSources = APP_ENV_SOURCES;

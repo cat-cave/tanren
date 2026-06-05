@@ -1,9 +1,11 @@
 // Formatting gate (Track B wave 5). Two layers:
-//   1. Prettier (`prettier --check`) owns all the file types it understands
-//      (ts/tsx/js/mjs/json/md/yml/yaml) — see .prettierrc / .prettierignore.
-//   2. The custom whitespace/newline scan below covers the file types Prettier
-//      does NOT format (shell scripts, Dockerfiles, SQL), so trailing
-//      whitespace + missing final newlines are still caught there.
+//   1. oxfmt (`oxfmt --check`) owns all the file types it understands
+//      (ts/tsx/js/mjs/json/md/yml/yaml) — config in .oxfmtrc.json. oxfmt is the
+//      oxc formatter (same VoidZero stack as oxlint); it replaced Prettier with
+//      byte-identical output on this codebase.
+//   2. The custom whitespace/newline scan below covers the file types oxfmt does
+//      NOT format (shell scripts, Dockerfiles, SQL), so trailing whitespace +
+//      missing final newlines are still caught there.
 import { spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { relative } from "node:path";
@@ -11,7 +13,7 @@ import { argv, exit } from "node:process";
 import { glob } from "node:fs/promises";
 
 const ignored = new Set(["node_modules", "dist", "coverage", ".git"]);
-// File types Prettier does not handle — keep the bespoke whitespace scan for
+// File types oxfmt does not handle — keep the bespoke whitespace scan for
 // these so the gate still rejects trailing whitespace / missing final newlines.
 const patterns = ["**/*.{sql,sh}", "Dockerfile", "**/Dockerfile"];
 const files = new Set();
@@ -24,13 +26,11 @@ for (const pattern of patterns) {
 
 let failed = false;
 
-// Layer 1: Prettier owns the formats it understands.
-const prettier = spawnSync(
-  "node",
-  ["node_modules/prettier/bin/prettier.cjs", "--check", "**/*.{ts,tsx,js,mjs,json,md,yml,yaml}"],
-  { stdio: "inherit" },
-);
-if (prettier.status !== 0) {
+// Layer 1: oxfmt owns the formats it understands.
+const oxfmt = spawnSync("node_modules/.bin/oxfmt", ["--check", "**/*.{ts,tsx,js,mjs,json,md,yml,yaml}"], {
+  stdio: "inherit",
+});
+if (oxfmt.status !== 0) {
   failed = true;
 }
 

@@ -12,6 +12,11 @@ default:
 format-check:
   corepack pnpm run format:check
 
+# Auto-format with oxfmt (the oxc formatter, config in .oxfmtrc.json). `format-check`
+# is the gate; this writes the fixes for the file types oxfmt owns.
+format:
+  corepack pnpm run format
+
 lint:
   corepack pnpm run lint
 
@@ -69,6 +74,8 @@ prune-worktrees *ARGS:
 spelling:
   corepack pnpm run check:spelling
 
+# Whole-repo typecheck via Turborepo (cached per package; FULL TURBO on a no-op
+# re-run). `just ci`/`fast-check` use this; the cache lives in .turbo/ (gitignored).
 typecheck:
   corepack pnpm run typecheck
 
@@ -76,6 +83,21 @@ fast-check: format-check lint types-lint architecture schema-drift state-drift e
 
 test:
   corepack pnpm run test
+
+# AFFECTED-ONLY inner loop (NOT the gate — the gate runs the full suite). Typecheck/
+# build only the packages whose sources (or whose dependencies' sources) changed vs a
+# base ref, via Turborepo's `...[ref]` filter; default base `origin/main`. Use while
+# iterating to skip unaffected packages. Example: `just affected-typecheck HEAD~1`.
+affected-typecheck base="origin/main":
+  corepack pnpm exec turbo run typecheck --filter="...[{{base}}]"
+
+affected-build base="origin/main":
+  corepack pnpm exec turbo run build --filter="...[{{base}}]"
+
+# Run only the tests related to files changed vs a base ref (Vitest `--changed`).
+# Fast feedback while editing; `just test` (full + coverage) remains the gate.
+affected-test base="origin/main":
+  corepack pnpm exec vitest run --changed {{base}}
 
 # Stryker mutation testing — Track C §5 of
 # docs/architecture/portability-and-longevity.md. Turns test-strength into a

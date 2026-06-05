@@ -5,7 +5,7 @@
 // attempts. No new table is required.
 import type pg from "pg";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
-import type { AnswererAdapter, WriterAdapter } from "../providers/types.js";
+import type { AnswererAdapter } from "../providers/types.js";
 import type { PlanAnswer } from "../answerers/schemas/index.js";
 import { resolveWritableClient } from "../data/orgScopedDb.js";
 
@@ -128,8 +128,4 @@ export async function markTaskFailed(
     `UPDATE tasks SET status = 'failed', outcome = 'failed', failure_kind = $2, ended_at = now() WHERE task_id = $1`,
     [taskId, failureKind],
   );
-}
-
-export function writerAdapterRowMeta(writer: WriterAdapter): { cli: string; agentKind: "writer" } {
-  return { cli: writer.cli, agentKind: "writer" };
 }

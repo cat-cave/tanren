@@ -48,10 +48,8 @@ import type { AnswererAdapter, WriterAdapter } from "./types.js";
 // without a separate source of truth. Adding a harness = one capability entry +
 // its adapter; these sets and the role checks below follow automatically.
 export const SELECTABLE_WRITER_CLIS = WRITER_CAPABLE_CLIS;
-export type SelectableWriterCli = (typeof SELECTABLE_WRITER_CLIS)[number];
 
 export const SELECTABLE_ANSWERER_CLIS = ANSWERER_CAPABLE_CLIS;
-export type SelectableAnswererCli = (typeof SELECTABLE_ANSWERER_CLIS)[number];
 
 export interface AdapterSelectorDependencies {
   secrets: SecretStore;

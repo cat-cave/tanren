@@ -5,8 +5,6 @@
 // `codex exec --output-schema` callers.
 import { z, type ZodType } from "zod";
 
-import { answererSchemaCatalog, type AnswererRole, type AnswererSchemaDescriptor } from "./catalog.js";
-
 export { PlanAnswer, PlanSubtask, PLAN_ANSWER_SCHEMA_ID } from "./plan.js";
 export { CheckAnswer, CHECK_ANSWER_SCHEMA_ID } from "./check.js";
 export { AuditAnswer, AuditRecommendedAction, AUDIT_ANSWER_SCHEMA_ID } from "./audit.js";
@@ -28,10 +26,6 @@ export { ConflictAnswer, ConflictResolutionDecision, ResolvedFile, CONFLICT_ANSW
 export { answererOutputSchemaFor, type AnswererOutputSchema } from "./adapter.js";
 
 export { answererSchemaCatalog, type AnswererRole, type AnswererSchemaDescriptor } from "./catalog.js";
-
-export function listAnswererSchemas(): ReadonlyArray<AnswererSchemaDescriptor> {
-  return (Object.keys(answererSchemaCatalog) as AnswererRole[]).map((role) => answererSchemaCatalog[role]);
-}
 
 // renderAnswererJsonSchema is the single chokepoint that converts a Zod
 // source schema to the JSON Schema shape used both by `codex exec

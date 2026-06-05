@@ -15,8 +15,6 @@ import { z } from "zod";
 export const CiWhen = z.enum(["per_iteration", "pre_audit", "pre_merge"]);
 export type CiWhen = z.infer<typeof CiWhen>;
 
-export const CI_WHEN_VALUES: ReadonlyArray<CiWhen> = CiWhen.options;
-
 // ---- Steps -----------------------------------------------------------------
 
 // A single named shell command within a tier. `run` is an opaque shell string

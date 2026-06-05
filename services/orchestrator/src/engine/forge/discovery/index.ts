@@ -33,5 +33,4 @@ export {
   withDiscoveryProvenance,
   parseDiscoveryProvenance,
   writeProvenance,
-  readProvenance,
 } from "./provenance.js";

@@ -13,10 +13,6 @@
 // that is the test's owning suite/job, so a single flaky test's quarantine
 // narrows to that check, not the whole gate.
 
-import type pg from "pg";
-
-type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
-
 // Options for `evaluateCiObservation`. `quarantinedCheckNames` is the set of
 // ACTIVE-quarantined check names: a failing check in this set is EXCLUDED from
 // `failingChecks`, so a proven-flaky check failing no longer flips `status` to
@@ -25,27 +21,4 @@ type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 // quarantined), so a real regression is never masked. Omitted ⇒ no exclusion.
 export interface EvaluateCiObservationOptions {
   quarantinedCheckNames?: ReadonlySet<string>;
-}
-
-interface ActiveQuarantineRow {
-  check_name: string;
-}
-
-/**
- * Load the set of ACTIVE-quarantined check names for a project (the `check_name`
- * of every not-yet-cleared `quarantined_tests` row — check-level rows carry the
- * check, per-test rows carry the owning suite/job). Runs on the caller's client,
- * so under RLS an off-scope read sees zero rows (deny-by-default) — never a silent
- * wrong-org read. Returns an EMPTY set when nothing is quarantined.
- */
-export async function loadActiveQuarantinedCheckNames(
-  client: QueryClient,
-  projectId: string,
-): Promise<ReadonlySet<string>> {
-  const result = await client.query<ActiveQuarantineRow>(
-    `SELECT check_name FROM quarantined_tests
-      WHERE project_id = $1 AND cleared_at IS NULL`,
-    [projectId],
-  );
-  return new Set(result.rows.map((row) => row.check_name));
 }

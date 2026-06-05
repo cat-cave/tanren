@@ -415,9 +415,3 @@ function bootstrapFailureMessage(
   const tail = outputTail === "" ? "" : `: ${outputTail}`;
   return `workspace bootstrap (${command}) ${reason}${tail}`;
 }
-
-// Kept exported so callers that want to build the workspace-dir-scoped command
-// string themselves (e.g. for logging) stay consistent with what we run.
-export function bootstrapCommandForLog(workspacePath: string, command: string): string {
-  return `cd ${quoteSshShellArg(workspacePath)} && ${command}`;
-}

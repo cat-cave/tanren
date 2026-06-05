@@ -7,8 +7,8 @@
 //
 //   specs.metadata = { "discovery": { <DiscoveryProvenance> }, ... }
 //
-// `readProvenance` / `writeProvenance` are the only touch-points; both round-
-// trip through the strict schema so a malformed legacy blob degrades to
+// `parseDiscoveryProvenance` / `writeProvenance` are the only touch-points; both
+// round-trip through the strict schema so a malformed legacy blob degrades to
 // `undefined` rather than throwing on read.
 
 import type pg from "pg";
@@ -100,14 +100,4 @@ export async function writeProvenanceViaWriter(
   const next = withDiscoveryProvenance(current.metadata as Record<string, unknown> | null, provenance);
   await writer.setSpecMetadata({ specId, orgId, metadataJson: JSON.stringify(next) });
   return true;
-}
-
-// Read the discovery provenance for a spec. Returns undefined when the spec has
-// none (or does not exist).
-export async function readProvenance(client: QueryClient, specId: string): Promise<DiscoveryProvenance | undefined> {
-  const result = await DiscoveryStore.getSpecMetadata(client, specId, systemActor);
-  if (!result.found) {
-    return undefined;
-  }
-  return parseDiscoveryProvenance(result.metadata);
 }

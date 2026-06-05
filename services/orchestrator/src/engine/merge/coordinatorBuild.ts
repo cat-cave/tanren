@@ -1,8 +1,9 @@
-// The production assembly of the native MergeCoordinator (autonomy-engine.md §2d),
-// wired from the worker's autonomy loops alongside the DagWalker. It composes the
-// pg queue model, the per-run MERGE RUNNER (which drives the EXISTING per-run merge
-// path — mergeForRun in `native_queue` DRIVE mode), and the org-scoped queue-event
-// emitter into the `MergeCoordinator` the subscriber drives on every notification.
+// The production drive closures for the native merge queue (autonomy-engine.md §2d),
+// wired from the worker's autonomy loops alongside the DagWalker. `buildDriveMerge`
+// is the per-run MERGE RUNNER (it drives the EXISTING per-run merge path — mergeForRun
+// in `native_queue` DRIVE mode); `buildNativeQueueEnqueuer` is the run-loop's first-pass
+// enqueue hook. The batch coordinator assembly (batchCoordinatorBuild.ts) composes these
+// into the `MergeCoordinator` the subscriber drives on every notification.
 //
 // The drive REUSES the merge stage — it is NOT a second merge impl. `driveMergeForQueuedRun`
 // calls `mergeForRun({ queueDrive: true })` for the claimed head run, which runs the
@@ -37,10 +38,9 @@ import {
 } from "./driveConflictResolve.js";
 import { mergeForRun } from "../workflow/reviewMerge/index.js";
 import type { NativeQueueEnqueuer } from "../workflow/reviewMerge/index.js";
-import type { MergeDriveOutcome, MergeCoordinator } from "../contracts/mergeCoordinator.js";
-import { EventEmittingMergeCoordinator, type DriveMergeForQueuedRun, PgMergeQueueEventEmitter } from "./coordinator.js";
-import { PgSpecEscalator } from "./coordinatorEscalate.js";
-import { PgMergeQueueModel, PgMergeRunner } from "./coordinatorPg.js";
+import type { MergeDriveOutcome } from "../contracts/mergeCoordinator.js";
+import type { DriveMergeForQueuedRun } from "./coordinator.js";
+import { PgMergeQueueModel } from "./coordinatorPg.js";
 
 /** The default timeout (ms) the drive-path resolver's SSH/git/model ops run under. */
 const DRIVE_RESOLVER_TIMEOUT_MS = 600_000;
@@ -302,18 +302,4 @@ export function buildNativeQueueEnqueuer(pool: pg.Pool): NativeQueueEnqueuer {
     const { created } = await model.enqueue(input);
     return { created };
   };
-}
-
-/** Assemble the production native MergeCoordinator (one-at-a-time DAG-ordered). */
-export function buildMergeCoordinator(deps: BuildMergeCoordinatorDeps): MergeCoordinator {
-  return new EventEmittingMergeCoordinator({
-    queue: new PgMergeQueueModel(deps.pool),
-    runner: new PgMergeRunner(buildDriveMerge(deps)),
-    // Plane-split: route the queue event emissions through the control plane when
-    // wired; else direct on the pool (byte-identical).
-    events: new PgMergeQueueEventEmitter(deps.pool, deps.runStateWriter),
-    // The §2c non-bricking conflict escalator (parks an irreconcilable spec at
-    // needs_attention) — plane-split-safe like the spec-status finalize above.
-    escalator: new PgSpecEscalator(deps.pool, deps.runStateWriter),
-  });
 }

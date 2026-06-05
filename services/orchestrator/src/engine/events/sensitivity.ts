@@ -62,9 +62,3 @@ export function listSensitivityPathsFor(eventName: string): FieldPath[] {
   const prefix = `${eventName}:`;
   return [...ruleMap.keys()].filter((key) => key.startsWith(prefix)).map((key) => key.slice(prefix.length));
 }
-
-// resetSensitivityRulesForTesting allows test isolation. Production code never
-// calls this; it is exported only for the registry self-tests.
-export function resetSensitivityRulesForTesting(): void {
-  ruleMap.clear();
-}
