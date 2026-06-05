@@ -31,7 +31,7 @@ function rec(over: Partial<CostRecord>): CostRecord {
     costUsd: "1.000000",
     notionalCostUsd: "1.000000",
     billingMode: "per_token",
-    costBasis: "provider_pricing",
+    costBasis: "provider_response",
     recordedAt: "2026-05-28T12:00:00.000Z",
     ...over,
   };
@@ -43,7 +43,7 @@ describe("summarizeCosts — three pricing models", () => {
       rec({
         runId: "r1",
         billingMode: "per_token",
-        costBasis: "provider_pricing",
+        costBasis: "provider_response",
         costUsd: "10.00",
       }),
       rec({
@@ -92,7 +92,7 @@ describe("summarizeCosts — three pricing models", () => {
 describe("summarizeCosts — every row shows its REAL source", () => {
   it("keeps distinct cost-basis rows separate and labels each real source", () => {
     const records: CostRecord[] = [
-      rec({ runId: "r1", costBasis: "provider_pricing", costUsd: "5.00" }),
+      rec({ runId: "r1", costBasis: "provider_response", costUsd: "5.00" }),
       rec({ runId: "r1", costBasis: "ccusage", costUsd: "3.00" }),
       rec({
         runId: "r2",
@@ -105,10 +105,10 @@ describe("summarizeCosts — every row shows its REAL source", () => {
       }),
     ];
     const summary = summarizeCosts(records);
-    // provider_pricing and ccusage for the same triple are NOT merged — the
+    // provider_response and ccusage for the same triple are NOT merged — the
     // source dot must be unambiguous.
     const bases = summary.providers.map((p) => p.costBasis);
-    expect(bases).toContain("provider_pricing");
+    expect(bases).toContain("provider_response");
     expect(bases).toContain("ccusage");
     expect(bases).toContain("unknown");
     // No row invents a dollar figure for an unknown basis.

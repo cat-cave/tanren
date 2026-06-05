@@ -124,7 +124,6 @@ describe("projectTrialScorecard — §2.3 field projection", () => {
     expect(card.costBasisMix).toEqual({
       provider_response: 0,
       ccusage: 1,
-      provider_pricing: 0,
       credits: 0,
       unknown: 1,
       unattributed: 0,

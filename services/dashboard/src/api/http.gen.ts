@@ -27,7 +27,7 @@ export interface RunCostRecord {
   cacheCreationTokens: number;
   cachedInputTokens: number;
   cli: string;
-  costBasis: "ccusage" | "provider_response" | "provider_pricing" | "credits" | "unknown" | "unattributed";
+  costBasis: "ccusage" | "provider_response" | "credits" | "unknown" | "unattributed";
   costUsd: string | null;
   id: number | string;
   inputTokens: number;
@@ -49,7 +49,7 @@ export interface RunDetail {
     cacheCreationTokens: number;
     cachedInputTokens: number;
     cli: string;
-    costBasis: "ccusage" | "provider_response" | "provider_pricing" | "credits" | "unknown" | "unattributed";
+    costBasis: "ccusage" | "provider_response" | "credits" | "unknown" | "unattributed";
     costUsd: string | null;
     id: number | string;
     inputTokens: number;
@@ -229,7 +229,7 @@ export interface SseCostsFrame {
     cacheCreationTokens: number;
     cachedInputTokens: number;
     cli: string;
-    costBasis: "ccusage" | "provider_response" | "provider_pricing" | "credits" | "unknown" | "unattributed";
+    costBasis: "ccusage" | "provider_response" | "credits" | "unknown" | "unattributed";
     costUsd: string | null;
     id: number | string;
     inputTokens: number;

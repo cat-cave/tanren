@@ -160,7 +160,7 @@ benchmark. Mapping each to where it already lives:
 | Signal                       | Where it lives today                                                                                                        |
 | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
 | Tokens by type (mandatory)   | `cost_records.{input,cached_input,cache_creation,output,reasoning_output,total}_tokens` — first-class, always present.      |
-| Cost by source (best-effort) | `cost_records.{cost_usd,billing_mode,cost_basis}` — 4 sources (`ccusage`/`provider_pricing`/`credits`/`unknown`).           |
+| Cost by source (best-effort) | `cost_records.{cost_usd,billing_mode,cost_basis}` — bases `provider_response`/`ccusage`/`credits`/`unknown`/`unattributed`. |
 | Audited-concern count        | scheduled-audits library + auditor rejections; auditor `loop_to_planner` shows as `planner.rerequested` (producer=auditor). |
 | Retry / re-plan count        | `planner.rerequested` events (producer `gate` vs `auditor`); `tasks.attempt`; retry-hotspot insight (`engine/insights`).    |
 | Halt count + reason          | `runs.status='halted'` + `runs.outcome` (`retry_budget_exhausted`/`escape_hatch_hit`/`window_exhausted`/`quota_exceeded`).  |
@@ -191,7 +191,7 @@ TrialScorecard {
   gateFailures, reviewIterations, auditedConcerns: number
   tokens: { input, cachedInput, cacheCreation, output, reasoning, total }
   costUsd: number | null             // null is honest; aggregate handles it
-  costBasisMix: { ccusage, provider_pricing, credits, unknown }
+  costBasisMix: { provider_response, ccusage, credits, unknown, unattributed }
 }
 ```
 

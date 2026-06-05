@@ -163,7 +163,7 @@ describeDb("RLS R3a — residual forge-tool + recovery sites through the org-sco
         `INSERT INTO cost_records
            (task_id, run_id, project_id, org_id, cli, provider, model,
             total_tokens, cost_usd, billing_mode, cost_basis)
-         VALUES ($1, $2, $3, $4, 'fake', 'fake', 'm', 10, '0.10', 'per_token', 'provider_pricing')`,
+         VALUES ($1, $2, $3, $4, 'fake', 'fake', 'm', 10, '0.10', 'per_token', 'provider_response')`,
         [`task_${ORG_A}`, RUN_A, PROJECT_A, ORG_A],
       );
       return tanrenReadCosts({ pool: runtimePool }, { runId: RUN_A }, ACTOR);

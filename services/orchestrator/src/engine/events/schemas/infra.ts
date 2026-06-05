@@ -168,12 +168,6 @@ export const CostResolvedPayload = z
     notionalCostUsd: z.string().nullable(),
     billingMode: z.string(),
     costBasis: z.string(),
-    // RETIRED (kept optional so historical events still validate): the old
-    // `estimateOnly` LOUD-ESTIMATE flag flagged a per_token row whose real spend was
-    // priced from a STATIC list-rate table. That path is GONE — real spend is now a
-    // metered FACT or NULL (no list-rate estimate ever fills cost_usd), so nothing
-    // emits this field anymore.
-    estimateOnly: z.boolean().optional(),
   })
   .strict();
 
@@ -181,21 +175,6 @@ export const CostFailedPayload = z
   .object({
     taskId: z.string().optional(),
     message: z.string(),
-  })
-  .strict();
-
-// cost.unattributable is retained in the event registry for compatibility but
-// is no longer thrown for missing cost (cost-unknown is now an allowed state
-// recorded as cost_usd = NULL). Kept harmless per the locked contract.
-export const CostUnattributablePayload = z
-  .object({
-    taskId: z.string(),
-    cli: z.string(),
-    authRef: z.string(),
-    reason: z.string(),
-    inputTokens: z.number().int().optional(),
-    outputTokens: z.number().int().optional(),
-    cachedInputTokens: z.number().int().optional(),
   })
   .strict();
 

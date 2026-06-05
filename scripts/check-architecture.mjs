@@ -55,7 +55,7 @@ const requiredDocs = [
   "docs/playbooks/github-workflow.md",
   "docs/contracts/architecture-checks.md",
 ];
-const costBases = new Set(["ccusage", "provider_pricing", "unknown"]);
+const costBases = new Set(["ccusage", "provider_response", "credits", "unknown", "unattributed"]);
 const billingModes = new Set(["per_token", "subscription", "self_hosted"]);
 
 function normalizePath(path) {
@@ -209,7 +209,7 @@ function checkCostSources(projectFiles) {
     {
       pattern: /cost_basis\s+IN\s*\(([^)]*)\)/giu,
       allowed: costBases,
-      label: "cost_basis (ccusage, provider_pricing, unknown)",
+      label: "cost_basis (ccusage, provider_response, credits, unknown, unattributed)",
     },
     {
       pattern: /billing_mode\s+IN\s*\(([^)]*)\)/giu,

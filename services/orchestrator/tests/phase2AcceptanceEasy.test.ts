@@ -116,7 +116,7 @@ describe("phase2 acceptance — easy tier dry-run smoke", () => {
         expectedOutcome: "phase2_easy_complete",
         snapshot: easySnapshot({
           costBases: [
-            { taskKind: "write", basis: "provider_pricing", billingMode: "per_token" },
+            { taskKind: "write", basis: "provider_response", billingMode: "per_token" },
             { taskKind: "check", basis: "unknown", billingMode: "subscription" },
             { taskKind: "audit", basis: "unknown", billingMode: "self_hosted" },
           ],

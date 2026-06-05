@@ -18,7 +18,7 @@ function realRunEvidence(): ArtifactEvidence {
       outcome: "phase2_easy_complete",
       prUrl: "https://github.com/cat-cave/tanren-fixture-easy/pull/7",
       costRecords: [
-        { taskKind: "write", basis: "provider_pricing", billingMode: "per_token" },
+        { taskKind: "write", basis: "provider_response", billingMode: "per_token" },
         { taskKind: "check", basis: "unknown", billingMode: "subscription" },
         { taskKind: "audit", basis: "unknown", billingMode: "subscription" },
       ],

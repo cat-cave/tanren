@@ -67,7 +67,7 @@ function cost(over: Partial<RunCostRecord>): RunCostRecord {
     totalTokens: 150,
     costUsd: "0.0200",
     billingMode: "per_token",
-    costBasis: "provider_pricing",
+    costBasis: "provider_response",
     recordedAt: "2026-05-28T10:00:30.000Z",
     ...over,
   };

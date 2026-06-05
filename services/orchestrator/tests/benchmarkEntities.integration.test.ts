@@ -226,7 +226,6 @@ describeDb("benchmark entities — migration applies + RLS isolates + scorecard 
     expect(card!.costBasisMix).toEqual({
       provider_response: 0,
       ccusage: 1,
-      provider_pricing: 0,
       credits: 0,
       unknown: 0,
       unattributed: 0,

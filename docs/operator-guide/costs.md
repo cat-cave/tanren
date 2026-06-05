@@ -39,15 +39,19 @@ Two orthogonal axes describe each row:
 | `subscription` | server-enforced rolling window | `credential/codex/...`                                                               |
 | `self_hosted`  | local GPU / fixed-fee endpoint | `credential/self-hosted/...`                                                         |
 
-| `cost_basis`       | Meaning                                                                              |
-| ------------------ | ------------------------------------------------------------------------------------ |
-| `provider_pricing` | dollar figure computed from a per-token rate table                                   |
-| `ccusage`          | dollar figure from the ccusage tool (only when ccusage reports a positive `costUSD`) |
-| `unknown`          | no reliable basis → `cost_usd IS NULL`                                               |
+| `cost_basis`        | Meaning                                                                                           |
+| ------------------- | ------------------------------------------------------------------------------------------------- |
+| `provider_response` | the provider's OWN authoritative per-call charge (OpenRouter's `usage.cost`) — the REAL deduction |
+| `ccusage`           | dollar figure from the ccusage tool (only when ccusage reports a positive `costUSD`)              |
+| `credits`           | prepaid-credit drawdown reconciled to USD at the configured per-credential rate                   |
+| `unknown`           | no reliable basis → `cost_usd IS NULL`                                                            |
+| `unattributed`      | BUDGET-SAFETY C1: an unrecognized credential ref → `cost_usd IS NULL`, flagged loud               |
 
-`provider_pricing` is computed from the disjoint buckets:
-`input` at the input rate, `cached_input` at the cache rate, `cache_creation`
-at the input rate, and both `output` and `reasoning_output` at the output rate.
+Real spend is a metered FACT: `cost_usd` is written only from a real-spend basis
+(`provider_response` / `ccusage` / `credits`). There is **no** static list-rate
+table — a per-token call with no captured fact records `cost_usd = NULL` /
+`cost_basis = 'unknown'`. (The forecastable list-rate value lives separately on
+`notional_cost_usd`, never on `cost_usd`.)
 
 Subscription windows are **percent-of-window limits, not token budgets** — there
 is no fixed token denominator, so subscription and self-hosted calls record
@@ -61,8 +65,9 @@ The recorder reads the adapter's `authRef` and classifies its `billing_mode`:
 1. `credential/codex/...` → `subscription` (never per-token, even though the
    underlying provider is OpenAI).
 2. `credential/anthropic/...`, `credential/openai-api/...`,
-   `credential/openrouter/...` → `per_token`. A known rate-table entry yields
-   `cost_basis = 'provider_pricing'`; an unknown model yields `'unknown'`.
+   `credential/openrouter/...` → `per_token`. A captured authoritative per-call
+   charge yields `cost_basis = 'provider_response'`; a positive ccusage figure
+   yields `'ccusage'`; with neither real-spend fact the row is `'unknown'`.
 3. `credential/self-hosted/...` → `self_hosted` (cost unknown).
 4. Anything else → `self_hosted` billing with `cost_basis = 'unknown'`. The
    recorder still writes the row; it never throws for missing cost.
@@ -96,7 +101,8 @@ services/orchestrator/src/engine/usage/; the planner/writer loop consumes them
 ## Operational checks
 
 - `SELECT cost_basis, COUNT(*) FROM cost_records GROUP BY cost_basis`. Every
-  value must be one of `ccusage`, `provider_pricing`, `unknown`.
+  value must be one of `ccusage`, `provider_response`, `credits`, `unknown`,
+  `unattributed`.
 - `SELECT billing_mode, COUNT(*) FROM cost_records GROUP BY billing_mode`. Every
   value must be one of `per_token`, `subscription`, `self_hosted`.
 - `SELECT t.task_id FROM tasks t LEFT JOIN cost_records c ON c.task_id = t.task_id

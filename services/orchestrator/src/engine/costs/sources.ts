@@ -55,18 +55,7 @@ import { defaultModelPriceSource, type ModelPrice, type ModelPriceSource } from 
 export const BillingMode = z.enum(["per_token", "subscription", "self_hosted", "unattributed"]);
 export type BillingMode = z.infer<typeof BillingMode>;
 
-export const CostBasis = z.enum([
-  "ccusage",
-  "provider_response",
-  // provider_pricing is NO LONGER PRODUCED — `cost_usd` is a metered FACT, never a
-  // list-rate estimate. It remains in the allowed set (the cost_records.cost_basis
-  // CHECK still permits it) only so historical rows validate; nothing writes it.
-  // (Later cleanup: drop from the CHECK once no historical provider_pricing rows remain.)
-  "provider_pricing",
-  "credits",
-  "unknown",
-  "unattributed",
-]);
+export const CostBasis = z.enum(["ccusage", "provider_response", "credits", "unknown", "unattributed"]);
 export type CostBasis = z.infer<typeof CostBasis>;
 
 // The dollar value of one prepaid credit is account/plan-specific (the old

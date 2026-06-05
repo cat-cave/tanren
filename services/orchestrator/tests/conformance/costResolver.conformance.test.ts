@@ -63,7 +63,7 @@ class ProductionCostResolver implements CostResolver {
 }
 
 // Token usage with a non-trivial spread across the disjoint buckets so the
-// provider_pricing math (input/cache/output/reasoning rates) is actually
+// notional model-price math (input/cache/output/reasoning rates) is actually
 // exercised, not a zero-token no-op.
 const PRICED_TOKENS = {
   inputTokens: 1_000_000,

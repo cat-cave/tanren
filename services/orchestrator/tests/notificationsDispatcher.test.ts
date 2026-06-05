@@ -373,8 +373,8 @@ describe("effectiveSeverityFor", () => {
     expect(effectiveSeverityFor({ eventType: "run.completed", payload: { status: "succeeded" } })).toBe("ok");
     expect(
       effectiveSeverityFor({
-        eventType: "cost.unattributable",
-        payload: { taskId: "t", cli: "codex", authRef: "x", reason: "x" },
+        eventType: "cost.unattributed",
+        payload: { taskId: "t", cli: "codex", refKind: "credential/mystery", reason: "x" },
       }),
     ).toBe("fail");
   });

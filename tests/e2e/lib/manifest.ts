@@ -26,7 +26,7 @@ export type PersistedArtifactKind =
   | "merged_pr"
   // A specific file present on the base branch after the merge (the work landed).
   | "implemented_file"
-  // cost_records rows with a real cost_basis (ccusage / provider_pricing) and a
+  // cost_records rows with a real cost_basis (ccusage / provider_response) and a
   // real billing_mode — proof the run accounted real spend.
   | "cost_records"
   // The DORA projection accumulated from the merged run(s).

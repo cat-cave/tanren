@@ -27,7 +27,6 @@ export const eventTypeNames = [
   "cost.failed",
   "cost.overage_unobservable",
   "cost.resolved",
-  "cost.unattributable",
   "cost.unattributed",
   "credential.failed",
   "credential.loaded",

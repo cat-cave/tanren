@@ -71,7 +71,9 @@ describeDb("readRunArtifacts against a real Postgres", () => {
     expect(artifacts.status).toBe("done");
     expect(artifacts.outcome).toBe("phase2_easy_complete");
     expect(artifacts.prUrl).toBe(PR_URL);
-    expect(artifacts.costRecords).toEqual([{ taskKind: "write", basis: "provider_pricing", billingMode: "per_token" }]);
+    expect(artifacts.costRecords).toEqual([
+      { taskKind: "write", basis: "provider_response", billingMode: "per_token" },
+    ]);
     // The run is merged (outcome + pr_url set), so it counts toward the project's
     // DORA deployment projection — the same merge-derived COUNT the gate asserts.
     expect(artifacts.doraDeploymentCount).toBe(1);
@@ -115,7 +117,7 @@ async function seedMergedRun(owner: DbPool): Promise<void> {
   await owner.query(
     `INSERT INTO cost_records
        (task_id, run_id, project_id, org_id, cli, provider, model, billing_mode, cost_basis)
-     VALUES ($1, $2, $3, $4, 'codex', 'openai', 'gpt-5', 'per_token', 'provider_pricing')`,
+     VALUES ($1, $2, $3, $4, 'codex', 'openai', 'gpt-5', 'per_token', 'provider_response')`,
     [TASK_ID, RUN_ID, PROJECT_ID, ORG_ID],
   );
 }

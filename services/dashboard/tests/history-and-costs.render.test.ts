@@ -88,7 +88,7 @@ const COSTS: Record<string, unknown[]> = {
       totalTokens: 280000,
       costUsd: "10.00",
       billingMode: "per_token",
-      costBasis: "provider_pricing",
+      costBasis: "provider_response",
       recordedAt: "2026-05-28T10:05:00.000Z",
     },
     {
@@ -229,7 +229,7 @@ describe("costs dashboard (/costs)", () => {
   it("shows every provider row's REAL cost source, no fabricated placeholder", async () => {
     const app = await build();
     const html = await (await app.request("/costs")).text();
-    expect(html).toContain("provider pricing · rate table");
+    expect(html).toContain("provider response · real charge");
     expect(html).toContain("ccusage · real billed");
     // Unknown basis is honestly labelled + shows no invented dollar.
     expect(html).toContain("no priced basis · tokens only");
@@ -293,7 +293,7 @@ describe("costs CSV export (/costs/export.csv)", () => {
     expect(res.headers.get("content-type")).toContain("text/csv");
     const body = await res.text();
     expect(body.split("\n")[0]).toBe("cli,model,provider,billing_mode,cost_basis,runs,total_tokens,cost_usd,share");
-    expect(body).toContain("provider_pricing");
+    expect(body).toContain("provider_response");
     expect(body).toContain("ccusage");
     expect(body).toContain("unknown");
     expect(body).not.toContain(FORBIDDEN_PLACEHOLDER);

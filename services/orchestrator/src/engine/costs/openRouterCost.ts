@@ -22,8 +22,8 @@
 // surface OpenRouter's generation id in their output, so there is no id to query
 // per call right now. This client is the REAL, tested capture path the moment an
 // adapter (or the managed OpenAI-compatible shim) surfaces that id; until then an
-// OpenRouter per_token row prices from the static table and is flagged
-// `estimateOnly` (LOUD) — it is NEVER silently presented as the real deduction.
+// OpenRouter per_token row with no captured charge records cost_usd NULL with
+// cost_basis 'unknown' — real spend is a metered FACT, NEVER a list-rate estimate.
 //
 // BYOK CAVEAT. Under bring-your-own-key (the tenant's own upstream provider key
 // behind OpenRouter), OpenRouter's `total_cost` is its ROUTING/credit figure, not
