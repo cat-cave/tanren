@@ -17,7 +17,7 @@
     "check:event-drift": "node scripts/generate-event-type-check.mjs --check",
     "check:knip": "knip",
     "check:mutation": "stryker run",
-    "check:spelling": "cspell --no-progress --gitignore \"**/*.{ts,tsx,js,mjs,md,yml,yaml}\"",
+    "check:spelling": "cspell --no-progress \"**/*.{ts,tsx,js,mjs,md,yml,yaml}\"",
     "check:types-lint": "eslint .",
     "codegen:answerer-schemas": "node scripts/answerer-schema-export.mjs",
     "codegen:contract-schemas": "node scripts/contract-schema-export.mjs",
