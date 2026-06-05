@@ -32,7 +32,7 @@ import {
   type HaltedRunContext,
 } from "../../engine/recovery/index.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
-import { actorCanAccessOrg } from "../orgs/index.js";
+import { actorCanAccessOrg } from "../orgs/access.js";
 
 interface RecoveryRoutesOptions {
   pool: pg.Pool;

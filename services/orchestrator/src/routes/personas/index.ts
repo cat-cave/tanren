@@ -8,7 +8,7 @@ import { z } from "zod";
 import type { ActorContext } from "../../auth/schemas.js";
 import { PersonaStore } from "../../engine/entities/personas.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
-import { actorCanAccessOrg } from "../orgs/index.js";
+import { actorCanAccessOrg } from "../orgs/access.js";
 
 interface PersonaRoutesOptions {
   pool: pg.Pool;

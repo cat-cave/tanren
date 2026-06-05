@@ -80,8 +80,6 @@ export interface AcceptanceConfig extends OperatorConfig, Required<StackConfig> 
 //   1. $TANREN_ACCEPTANCE_CONFIG (explicit absolute path)
 //   2. ./tanren.acceptance.json (repo root)
 //   3. ~/.config/tanren/acceptance.json
-//   4. Legacy env vars (TANREN_CODEX_AUTH_JSON_FILE etc.) — emits a one-line
-//      deprecation hint pointing at tanren.acceptance.example.json.
 export async function loadAcceptanceConfig(): Promise<AcceptanceConfig> {
   const operator = await loadOperatorConfig();
   const stack = loadStackConfig();
@@ -106,14 +104,6 @@ async function loadOperatorConfig(): Promise<LoadedOperatorConfig> {
       const parsed = await readOperatorConfigFile(candidate);
       return { ...parsed, source: candidate };
     }
-  }
-  const fromEnv = loadOperatorConfigFromEnv();
-  if (fromEnv !== undefined) {
-    process.stderr.write(
-      "tanren acceptance: legacy TANREN_* env vars detected. Move credentials into tanren.acceptance.json " +
-        "(see tanren.acceptance.example.json). Env-var support will be removed in a future spec.\n",
-    );
-    return { ...fromEnv, source: "env" };
   }
   throw new AcceptanceConfigError(
     `no acceptance config found. Checked:\n${candidatePaths.map((p) => `  - ${p}`).join("\n")}\n` +
@@ -167,21 +157,6 @@ async function readOperatorConfigFile(path: string): Promise<OperatorConfig> {
       typeof obj.github_base_branch === "string" && obj.github_base_branch.trim() !== ""
         ? obj.github_base_branch.trim()
         : undefined,
-  };
-}
-
-function loadOperatorConfigFromEnv(): OperatorConfig | undefined {
-  const codex = process.env.TANREN_CODEX_AUTH_JSON_FILE;
-  const github = process.env.TANREN_GITHUB_TOKEN_FILE;
-  const repo = process.env.TANREN_GITHUB_REPO_URL;
-  if (!codex || !github || !repo) {
-    return undefined;
-  }
-  return {
-    codex_auth_file: codex,
-    github_token_file: github,
-    github_repo_url: repo,
-    github_base_branch: process.env.TANREN_GITHUB_BASE_BRANCH,
   };
 }
 

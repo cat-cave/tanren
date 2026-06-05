@@ -1,11 +1,11 @@
 /**
- * brownfield step 3 — config-injection PR. Previews the 6 proposed
+ * brownfield step 3 — config-injection PR. Previews the 5 proposed
  * files, lets the operator EXCLUDE any (a checkbox per file), then opens ONE PR
  * in the target repo with the kept files. "No runs until merged." After the PR
  * opens, renders the PR link + the committed-file list. Recreated from the
  * hi-fi `view-onboard-existing` step 3.
  *
- * The 6 files mirror the orchestrator `proposeConfigFiles` output exactly so the
+ * The 5 files mirror the orchestrator `proposeConfigFiles` output exactly so the
  * checkbox `value` (the file path) round-trips into the `excludePaths` form
  * field the route forwards.
  */
@@ -22,7 +22,7 @@ interface PreviewFile {
 // order + paths (line counts are approximate previews until the PR is opened).
 const PROPOSED: PreviewFile[] = [
   { path: ".tanren/PROJECT.md", addedLines: 30, snapshot: true },
-  { path: ".github/workflows/tanren-ci.yml", addedLines: 24 },
+  { path: ".tanren/ci.yml", addedLines: 24 },
   { path: "CODEOWNERS", addedLines: 4 },
   { path: ".gitignore", addedLines: 3 },
   { path: ".github/PULL_REQUEST_TEMPLATE.md", addedLines: 4 },

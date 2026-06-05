@@ -18,7 +18,7 @@ import {
   NotificationTargetStore,
 } from "../../engine/notifications/index.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
-import { actorCanAccessOrg } from "../orgs/index.js";
+import { actorCanAccessOrg } from "../orgs/access.js";
 
 interface NotificationRoutesOptions {
   pool: pg.Pool;

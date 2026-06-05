@@ -31,7 +31,7 @@ export { computePaceAnomaly } from "./paceAnomaly.js";
 export { computeStuck } from "./stuck.js";
 export { computeReviewStall } from "./reviewStall.js";
 
-// Mergify parity (autonomy-engine.md §2d) + CI-intelligence PR2.
+// Native flaky-quarantine (autonomy-engine.md §2d) + CI-intelligence PR2.
 export {
   detectAndQuarantineFlaky,
   deriveFlakyTests,

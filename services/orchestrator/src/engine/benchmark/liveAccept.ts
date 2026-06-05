@@ -193,9 +193,10 @@ async function loadRunAcceptFacts(
 
 /**
  * Resolve the merged commit sha from the run's merge events. A run that merged
- * via direct_merge emits `merge.completed` with `mergeSha`; a Mergify/webhook
- * merge surfaces `github.pr.merged` with `mergeSha`. We take the most recent
- * event of either kind that carries a sha. Returns undefined when none does.
+ * via direct_merge emits `merge.completed` with `mergeSha`; an external
+ * (webhook-signalled) PR merge surfaces `github.pr.merged` with `mergeSha`. We
+ * take the most recent event of either kind that carries a sha. Returns
+ * undefined when none does.
  */
 async function resolveMergedSha(pool: pg.Pool, orgId: string, runId: string): Promise<string | undefined> {
   return runWithOrgScope(pool, orgId, async (client) => {

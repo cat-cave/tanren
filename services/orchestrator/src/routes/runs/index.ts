@@ -25,7 +25,7 @@ import { assertProjectAccess, assertRunAccess, ToolAccessDeniedError } from "../
 import { ForgeThreadStore, ForgeTurnStore } from "../../engine/forge/index.js";
 import { loadInsightsForProject } from "../../engine/insights/index.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
-import { actorCanAccessOrg } from "../orgs/index.js";
+import { actorCanAccessOrg } from "../orgs/access.js";
 import { type RunDetail, type RunListItem, type RunSpecSummary, RECENT_EVENT_CAP } from "./contract.js";
 import {
   fetchCostsPage,

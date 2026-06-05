@@ -124,8 +124,6 @@ export const SUPPORTED_ORG_CONFIG_VERSIONS: ReadonlyArray<number> = [1];
 //     legacy rows; every persisted config carries an explicit `version`);
 //   - `version === 1`: parse as V1 directly;
 //   - any other observed version: throw UnknownConfigVersionError.
-// The name is retained as the org-config parse surface; the old shim behavior
-// (defaulting unversioned/`{}` rows into V1) is deleted.
 export function migrateOrgConfig(raw: unknown): OrgConfigV1 {
   const observed = readObservedVersion(raw);
   if (observed === 1) {
@@ -144,7 +142,7 @@ export function defaultOrgConfigV1(): OrgConfigV1 {
 /**
  * The org's GitHub App installation from a stored `organizations.config` value,
  * or `undefined` when no App is installed. The single shared implementation the
- * clone / draft-PR / CI-poll / merge / speculative-integrate context loaders
+ * clone / draft-PR / merge / speculative-integrate context loaders
  * call so the clone resolves App-first.
  *
  * No silent fallback (the scoping/credential hardening directive): an ABSENT

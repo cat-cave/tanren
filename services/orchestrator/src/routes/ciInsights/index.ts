@@ -18,7 +18,7 @@ import type { ActorContext } from "../../auth/schemas.js";
 import { assertProjectAccess, ToolAccessDeniedError } from "../../engine/forge/tools/authz.js";
 import { computeCiAnalytics, computeQueueStats } from "../../engine/insights/index.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
-import { actorCanAccessOrg } from "../orgs/index.js";
+import { actorCanAccessOrg } from "../orgs/access.js";
 
 interface CiInsightRoutesOptions {
   pool: pg.Pool;

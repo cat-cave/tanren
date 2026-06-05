@@ -7,7 +7,11 @@ import { DEFAULT_CI_CONFIG, resolveCiConfig, tiersFor } from "../src/engine/ci/i
 import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
 import type { RunnerCommand, CommandResult, CommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
 import type { EventName, EventPayload } from "../src/engine/events/index.js";
-import { resolveBootstrapCommand, resolveGateConfig } from "../src/engine/workflow/gate/resolveGateConfig.js";
+import {
+  GateConfigReadError,
+  resolveBootstrapCommand,
+  resolveGateConfig,
+} from "../src/engine/workflow/gate/resolveGateConfig.js";
 import { runGateForWhen } from "../src/engine/workflow/gate/runGateForWhen.js";
 import { runGateTier } from "../src/engine/workflow/gate/runGateTier.js";
 import { advisoryStepNamesForPosture } from "../src/engine/workflow/gate/advisoryGate.js";
@@ -375,10 +379,31 @@ describe("resolveGateConfig", () => {
     expect(tiersFor(config, "pre_audit")).toEqual(["slow"]);
   });
 
-  it("degrades to the default when the read fails", async () => {
+  // No-silent-fallback doctrine: a READ FAILURE is NOT "absent". A nonzero exit,
+  // a timeout, or a substrate failure must THROW GateConfigReadError — never
+  // silently degrade a repo's real gate to the defaults.
+  it("throws (never silently defaults) on a nonzero-exit read", async () => {
     const ssh = new RecordingSsh(() => ({ exitCode: 1 }));
-    const config = await resolveGateConfig({ ssh, target, workspacePath: "/ws", timeoutMs: 1000 });
-    expect(config).toEqual(DEFAULT_CI_CONFIG);
+    await expect(resolveGateConfig({ ssh, target, workspacePath: "/ws", timeoutMs: 1000 })).rejects.toBeInstanceOf(
+      GateConfigReadError,
+    );
+  });
+
+  it("throws (never silently defaults) on a read timeout", async () => {
+    const ssh = new RecordingSsh(() => ({ exitCode: null, timedOut: true }));
+    await expect(resolveGateConfig({ ssh, target, workspacePath: "/ws", timeoutMs: 1000 })).rejects.toBeInstanceOf(
+      GateConfigReadError,
+    );
+  });
+
+  it("throws (never silently defaults) on a substrate failure", async () => {
+    const ssh = new RecordingSsh(() => ({
+      exitCode: null,
+      failure: { kind: "ssh_failed", target: "h", message: "connection refused" },
+    }));
+    await expect(resolveGateConfig({ ssh, target, workspacePath: "/ws", timeoutMs: 1000 })).rejects.toBeInstanceOf(
+      GateConfigReadError,
+    );
   });
 });
 
@@ -414,10 +439,14 @@ describe("resolveBootstrapCommand", () => {
     expect(command).toBeUndefined();
   });
 
-  it("returns undefined when the config read fails (degrades to the default heuristic)", async () => {
+  // No-silent-fallback doctrine: a config READ FAILURE must THROW (it shares the
+  // same readCiConfigText path), never quietly fall through to the default
+  // install heuristic as if the repo shipped no config.
+  it("throws (never silently defaults) when the config read fails", async () => {
     const ssh = new RecordingSsh(() => ({ exitCode: 1 }));
-    const command = await resolveBootstrapCommand({ ssh, target, workspacePath: "/ws", timeoutMs: 1000 });
-    expect(command).toBeUndefined();
+    await expect(
+      resolveBootstrapCommand({ ssh, target, workspacePath: "/ws", timeoutMs: 1000 }),
+    ).rejects.toBeInstanceOf(GateConfigReadError);
   });
 
   it("returns undefined when a present config omits the bootstrap section", async () => {

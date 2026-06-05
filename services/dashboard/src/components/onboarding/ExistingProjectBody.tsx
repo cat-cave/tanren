@@ -1,11 +1,14 @@
 /**
  * Existing-project · minimal — link-only, 1 step. Rebuilt as TSX
- * from `view-onboard-existing.jsx` step 1 ONLY. NO recon agent, NO
- * config-injection PR, NO DAG seeding, NO governance picker (all phase 3).
+ * from `view-onboard-existing.jsx` step 1 ONLY. This minimal variant runs NO
+ * recon agent, opens NO config-injection PR, seeds NO DAG, and shows NO
+ * governance picker — those all live in the FULL existing-project onboarding
+ * flow (`routes/onboarding/existing`, the recon → config-injection-PR → governance
+ * steps); this surface deliberately links only.
  *
  * The operator picks a repo the GitHub App can see, fills the project-config
  * form, and submits. Submit creates the project row then calls the
- * brownfield-link endpoint which reads `.github/workflows/` and `CODEOWNERS`
+ * brownfield-link endpoint which reads the repo's existing config + `CODEOWNERS`
  * for display but WRITES NOTHING to the target repo.
  */
 
@@ -18,7 +21,7 @@ function GithubScopeCard() {
   const can = [
     "clone & push from runner workspaces",
     "open draft PRs from tanren/spec_* branches",
-    "poll ci check status",
+    "publish the tanren/gate verdict as a commit status",
     "read org members for review-gate routing",
   ];
   const cannot = [
@@ -57,14 +60,14 @@ function GithubScopeCard() {
 
 function WhatHappensNext() {
   const points = [
-    "tanren reads any existing .github/workflows/ and CODEOWNERS — for display only",
-    "tanren does NOT write to the target repo (no config-injection PR in v0)",
-    "tanren does NOT run a recon agent (no repo indexing / persona inference in v0)",
+    "tanren reads the repo's existing config + CODEOWNERS — for display only",
+    "this link-only flow does NOT write to the target repo (no config-injection PR)",
+    "this link-only flow does NOT run a recon agent (no repo indexing / persona inference)",
     "the project row is created and you land on the project view",
   ];
   return (
     <div class="col-card live" style="gap:8px">
-      <div class="h">↑ what happens when you link (v0 minimal scope)</div>
+      <div class="h">↑ what happens when you link (minimal · link-only scope)</div>
       <ul class="scope-list" style="font-family:var(--font-ui);font-size:12px">
         {points.map((text) => (
           <li>
@@ -75,7 +78,10 @@ function WhatHappensNext() {
           </li>
         ))}
       </ul>
-      <div class="mono-dim">↑ recon, config-injection PR, spec DAG, and governance posture all ship in Phase 3.</div>
+      <div class="mono-dim">
+        ↑ recon, the config-injection PR, spec DAG seeding, and governance posture run in the full existing-project
+        onboarding flow.
+      </div>
     </div>
   );
 }

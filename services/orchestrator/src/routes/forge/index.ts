@@ -36,7 +36,7 @@ import {
 import type { GitHubHttpClient } from "../../engine/providers/github.js";
 import type { SecretStore } from "../../engine/contracts/secretStore.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
-import { actorCanAccessOrg } from "../orgs/index.js";
+import { actorCanAccessOrg } from "../orgs/access.js";
 import { generateProjectViewTurn, generateRunDetailTurn } from "./narration.js";
 
 interface ForgeRoutesOptions {

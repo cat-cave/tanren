@@ -37,7 +37,7 @@ export const workflowInsights = pgTable(
   ],
 );
 
-// P2e-1 (autonomy-engine.md §2d Mergify parity): the quarantine SURFACE. When
+// P2e-1 (autonomy-engine.md §2d native flaky-quarantine): the quarantine SURFACE. When
 // the flaky detector (engine/insights/ciFlaky.ts) proves a check is
 // non-deterministic on UNCHANGED code, it records the check here. This is a
 // VISIBILITY + record surface, not a gate override: quarantine ≠

@@ -35,7 +35,7 @@ import {
   SpecNotFoundError,
 } from "../../engine/workflow/projectSpec.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
-import { actorCanAccessOrg } from "../orgs/index.js";
+import { actorCanAccessOrg } from "../orgs/access.js";
 
 export interface DiscoveryRoutesOptions {
   pool: pg.Pool;

@@ -44,7 +44,7 @@ import { intakeAutoRouteDeps, intakeItem } from "../../engine/forge/intake/index
 import type { GithubAppTokenMinter } from "../../engine/providers/githubAppTokenMinter.js";
 import type { ForgeAnswererTarget } from "../../engine/forge/providerFactory.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
-import { actorCanAccessOrg } from "../orgs/index.js";
+import { actorCanAccessOrg } from "../orgs/access.js";
 import { handleProvisionWebhook } from "./webhookProvision.js";
 
 export interface InboxRoutesOptions {

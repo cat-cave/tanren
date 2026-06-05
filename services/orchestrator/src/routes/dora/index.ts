@@ -11,7 +11,7 @@ import type { ActorContext } from "../../auth/schemas.js";
 import { assertProjectAccess, ToolAccessDeniedError } from "../../engine/forge/tools/authz.js";
 import { computeDoraMetrics } from "../../engine/insights/dora/index.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
-import { actorCanAccessOrg } from "../orgs/index.js";
+import { actorCanAccessOrg } from "../orgs/access.js";
 
 interface DoraRoutesOptions {
   pool: pg.Pool;

@@ -1,6 +1,6 @@
-// The Phase-1 root-level API handlers, extracted from `buildApp` in main.ts:
+// The root-level API handlers, extracted from `buildApp` in main.ts:
 // project/spec creation, the auth-bundle + GitHub credential imports, the
-// per-run draft-PR / CI-poll actions, and the legacy `/runs/:runId` debug read.
+// per-run draft-PR action, and the `/runs/:runId` debug read.
 // main.ts keeps app construction, auth wiring, and the feature-route mount
 // table; this module owns these root endpoints and the schema/workflow/error
 // deps they pull.
@@ -52,7 +52,7 @@ function actorOf(c: { var: { actor?: ActorContext } }): ActorContext | undefined
 }
 
 /**
- * Register the Phase-1 root API endpoints on `app`. Registration order matches
+ * Register the root API endpoints on `app`. Registration order matches
  * the prior inline block in `buildApp`; behavior is identical.
  */
 export function mountRootApiRoutes(app: Hono<ActorContextEnv>, deps: RootApiDeps): void {
@@ -60,8 +60,8 @@ export function mountRootApiRoutes(app: Hono<ActorContextEnv>, deps: RootApiDeps
   // RLS HTTP-route scoping: these root handlers are RESOURCE-keyed (no `:orgId`
   // path segment), so the auth middleware resolves the request's org from the
   // addressed spec/run/project and publishes it on the `runWithJobOrgId` ambient.
-  // The per-run workflow handlers (`draft-pr`, `ci/poll`) issue raw `pool.query`
-  // against tenant tables (`runs`/`runners`/`tasks`), so they run on this
+  // The per-run workflow handler (`draft-pr`) issues raw `pool.query`
+  // against tenant tables (`runs`/`runners`/`tasks`), so it runs on this
   // org-scoping pool: each `.query` opens a SHORT `runWithOrgScope` from the
   // ambient org id, so the enforced `tanren_app` policies admit the rows. (The
   // creation handlers — `createProject`/`createSpec`/`createQueuedRunFromSpec` —
@@ -161,9 +161,6 @@ export function mountRootApiRoutes(app: Hono<ActorContextEnv>, deps: RootApiDeps
       return c.json({ error: "github_draft_pr_failed", message: messageFromError(error) }, 502);
     }
   });
-
-  // The forge-CI poll route (`/runs/:runId/ci/poll`) is GONE: the native gate is the
-  // merge authority (no-Actions delivery model), so there is no forge check-run to poll.
 
   app.get("/runs/:runId", async (c) => {
     const runId = c.req.param("runId");

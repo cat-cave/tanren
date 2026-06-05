@@ -16,8 +16,9 @@ export function parseRequiredContexts(value: unknown): string[] | undefined {
     return undefined;
   }
   const object = value as Record<string, unknown>;
-  // The modern `checks` array carries per-check `context`; `contexts` is the
-  // legacy string list. Prefer `checks` and fall back to `contexts`.
+  // GitHub returns required contexts in two shapes: a `checks` array carrying
+  // per-check `context`, or a flat `contexts` string list. Read the structured
+  // `checks` shape first, then the flat `contexts` list.
   const checks = object["checks"];
   if (Array.isArray(checks)) {
     const names = checks

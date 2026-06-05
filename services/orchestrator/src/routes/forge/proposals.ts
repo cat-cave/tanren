@@ -32,7 +32,7 @@ import {
 } from "../../engine/forge/index.js";
 import type { ForgeWriteToolCall } from "../../engine/answerers/schemas/forge.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
-import { actorCanAccessOrg } from "../orgs/index.js";
+import { actorCanAccessOrg } from "../orgs/access.js";
 
 export interface ForgeProposalRoutesOptions {
   pool: pg.Pool;

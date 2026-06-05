@@ -21,7 +21,7 @@ import { ProjectStore, type ProjectRow as RepoProjectRow } from "../../engine/re
 import { systemActor } from "../../engine/state/actor.js";
 import { createProject, ProjectAccessDeniedError, ProjectNotFoundError } from "../../engine/workflow/projectSpec.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
-import { actorCanAccessOrg, actorIsOrgAdmin } from "../orgs/index.js";
+import { actorCanAccessOrg, actorIsOrgAdmin } from "../orgs/access.js";
 import { BudgetPutSchema, handleBudgetGet, handleBudgetPut } from "./budget.js";
 import { GovernancePutSchema, handleGovernanceGet, handleGovernancePut } from "./governance.js";
 import { GreenfieldCreateSchema, handleGreenfieldCreate } from "./greenfield.js";

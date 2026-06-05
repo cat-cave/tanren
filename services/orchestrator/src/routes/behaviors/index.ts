@@ -7,7 +7,7 @@ import { z } from "zod";
 import type { ActorContext } from "../../auth/schemas.js";
 import { BehaviorStore } from "../../engine/entities/behaviors.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
-import { actorCanAccessOrg } from "../orgs/index.js";
+import { actorCanAccessOrg } from "../orgs/access.js";
 
 interface BehaviorRoutesOptions {
   pool: pg.Pool;

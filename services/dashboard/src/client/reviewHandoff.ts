@@ -6,8 +6,9 @@
  *   - clicking a device tab re-widths the live preview iframe.
  *
  * No server round-trip for the checklist (it is operator-local verification);
- * `request changes` is a real form POST handled server-side. Sign-off CTAs stay
- * disabled in v0 per the spec (merge integration is a later surface).
+ * `request changes` is a real form POST handled server-side. The sign-off CTA is
+ * informational only: the actual merge is driven by the native merge queue once
+ * the review verdict + gate are settled, not by this dashboard button.
  */
 
 export function initReviewHandoff(): void {
@@ -61,14 +62,15 @@ export function initReviewHandoff(): void {
         nudge.textContent = "All behaviors verified ✓. Settle the deferrals to unlock sign-off.";
       }
     }
-    // Sign-off stays disabled in v0 regardless (merge integration is a later surface),
-    // but we reflect the readiness intent on the title for clarity.
+    // The sign-off CTA is informational: the native merge queue performs the
+    // merge once the review verdict + gate are settled. We reflect the readiness
+    // intent on the title for clarity.
     for (const btn of root.querySelectorAll<HTMLElement>('[data-review="signoff"]')) {
       btn.setAttribute(
         "title",
         canSignOff
-          ? "merge integration · not wired in v0 — Phase 3 (review is otherwise ready)"
-          : "merge integration · not wired in v0 — Phase 3",
+          ? "review ready · the native merge queue merges on verdict + green gate"
+          : "review not yet settled · the native merge queue merges once ci, behaviors + deferrals are green",
       );
     }
   };

@@ -19,8 +19,13 @@ const patterns = [
   "justfile",
 ];
 const ignoredDirs = new Set(["node_modules", "dist", "coverage", ".git"]);
-// Long-running narrative/roadmap docs (gain sections as the plan evolves); the 500-line cap does not fit them.
-const roadmapDocs = ["PROJECT_BRIEF.md", "docs/roadmap/R-WAVES.md", "docs/roadmap/autonomy-engine.md"];
+// Long-running narrative docs (gain sections as the plan evolves; 500-line cap doesn't fit). autonomy-engine.md is moving roadmap/ → architecture/ — exempt both across the move.
+const roadmapDocs = [
+  "PROJECT_BRIEF.md",
+  "docs/roadmap/R-WAVES.md",
+  "docs/roadmap/autonomy-engine.md",
+  "docs/architecture/autonomy-engine.md",
+];
 // The vendored LiteLLM model-price snapshot is DATA (refreshed by
 // scripts/refresh-model-prices.mjs), exempt from the 500-line source cap.
 const vendoredData = ["services/orchestrator/src/engine/costs/pricing/model_prices.json"];
@@ -29,19 +34,11 @@ const invariantDocExclusions = new Set(["PROJECT_BRIEF.md", "docs/contracts/arch
 // these files deliberately attempt (or document) a RAW event insert by
 // the de-privileged data-plane role to PROVE Postgres REJECTS it — exempt from single-event-writer.
 const singleEventWriterExclusions = new Set([
+  // These tests seed `events` via the OWNER pool then PROVE the de-privileged data-plane
+  // role's raw events INSERT/SELECT is REJECTED — exempt from single-event-writer.
   "services/orchestrator/tests/planeSplitP3bDeprivilege.integration.test.ts",
-  // The DagWalker lifecycle-read gap regression: seeds `events` via the OWNER pool
-  // (the read fixture) AND asserts the data-plane role's raw events SELECT is
-  // REJECTED — exempt like the deprivilege test above.
   "services/orchestrator/tests/planeSplitP3LifecycleRead.integration.test.ts",
-  // The strand-reconciler events-read gap regression (mirrors the lifecycle-read test
-  // above): seeds `events` via the OWNER pool to set up the cross-org prior-unstranded
-  // COUNT, and asserts the data-plane role's raw events SELECT is REJECTED — exempt
-  // from single-event-writer for the same reason as the lifecycle-read test.
   "services/orchestrator/tests/planeSplitP3StrandReconcilerRead.integration.test.ts",
-  // The autonomy-loop routing proof: a guarded pool whose query REJECTS a raw event
-  // insert (mirroring the de-privileged role) so the test proves the loops route
-  // through the writer, never the bare pool — exempt like the test above.
   "services/orchestrator/tests/autonomyLoopRemoteWrites.test.ts",
   "scripts/smoke/plane-split-deprivilege.ts",
   "scripts/smoke/plane-split-worker.ts",

@@ -16,7 +16,7 @@ import { assertProjectAccess, ToolAccessDeniedError } from "../../engine/forge/t
 import { acknowledgeInsight, loadInsightsForProject } from "../../engine/insights/index.js";
 import { surfaceActiveQuarantines } from "../../engine/insights/ciFlakySurface.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
-import { actorCanAccessOrg } from "../orgs/index.js";
+import { actorCanAccessOrg } from "../orgs/access.js";
 
 interface InsightRoutesOptions {
   pool: pg.Pool;
