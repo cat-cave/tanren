@@ -79,6 +79,26 @@ export const GateAdvisoryFailedPayload = z
   })
   .strict();
 
+// gate.publish_failed: publishing the (already-decided) gate verdict to the forge
+// failed. The native gate is the merge authority — this PUBLISH only mirrors that
+// verdict onto the PR for visibility/branch-protection, so a publish failure is a
+// NON-fatal WARNING: the run proceeds to merge on the internal `gate.verdict`. The
+// commonest cause is a token credential attempting a check-run (Apps-only → 403),
+// but `publishGateVerdict` now issues a commit status, so this should be rare (a
+// transient 5xx / network blip / a status that 403/404s on a locked-down repo).
+// `headSha` anchors the commit; `passed` records the verdict that was being
+// published; `reason` is a non-secret diagnostic (HTTP status / error class — the
+// token never appears in it). Build/test gate FAILURES still emit `gate.failed`.
+export const GatePublishFailedPayload = z
+  .object({
+    when: GateWhen,
+    headSha: z.string().min(1),
+    passed: z.boolean(),
+    reason: z.string(),
+  })
+  .strict();
+export type GatePublishFailedPayload = z.infer<typeof GatePublishFailedPayload>;
+
 // One flattened gate step in the verdict roll-up: its name, the tier it ran in,
 // and whether it passed. This is the native delivery model's "check" grain — the
 // per-step analytics + flaky-detection unit, equivalent to a forge check-run's

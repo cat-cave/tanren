@@ -46,6 +46,15 @@ export const gateSensitivityRules: SensitivityRule[] = [
     ["exitCode", "public"],
     ["outputTail", "secret"],
   ]),
+  // A forge-publish failure of an already-decided verdict (non-fatal): the lifecycle
+  // point, commit, decided verdict, and the non-secret reason (HTTP status / error
+  // class — the token is never in it) are all public diagnostics.
+  ...rulesFor("gate.publish_failed", [
+    ["when", "public"],
+    ["headSha", "public"],
+    ["passed", "public"],
+    ["reason", "public"],
+  ]),
   // The native gate verdict roll-up: the commit, lifecycle point, combined verdict,
   // timing, tier list, and the flattened per-step names+outcomes are all public
   // identifiers/metrics (it carries NO command output tail — no secret surface).

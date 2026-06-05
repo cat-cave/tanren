@@ -14,4 +14,5 @@ export { resolveBootstrapCommand, resolveGateConfig, type ResolveGateConfigInput
 export { advisoryStepNamesForPosture } from "./advisoryGate.js";
 export { runNativeMergeGate } from "./runMergeGate.js";
 export { publishGateVerdict, NATIVE_GATE_CHECK_NAME, type PublishGateVerdictInput } from "./publishGateVerdict.js";
+export { publishGateVerdictBestEffort, type EmitPublishFailed } from "./publishGateVerdictBestEffort.js";
 export { ingestGateJunit, type IngestGateJunitInput } from "./ingestGateJunit.js";

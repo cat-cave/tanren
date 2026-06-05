@@ -8,6 +8,13 @@
       "when": 1780631413171,
       "tag": "0000_collapsed_baseline",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1780639469604,
+      "tag": "0001_gate_publish_failed_event",
+      "breakpoints": true
     }
   ]
 }
