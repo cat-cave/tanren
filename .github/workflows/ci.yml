@@ -29,14 +29,14 @@ jobs:
       # only on PATH after corepack activates it, hence this ordering).
       - run: echo "PNPM_STORE_PATH=$(pnpm store path --silent)" >> "$GITHUB_ENV"
       - name: Cache pnpm store
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ${{ env.PNPM_STORE_PATH }}
           key: pnpm-store-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: |
             pnpm-store-${{ runner.os }}-
       - name: Cache turbo
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: .turbo
           key: turbo-${{ runner.os }}-${{ github.sha }}

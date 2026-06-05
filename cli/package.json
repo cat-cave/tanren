@@ -7,8 +7,11 @@
     "tanren": "./dist/main.js"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json && chmod +x dist/main.js",
+    "build": "tsgo -p tsconfig.json && chmod +x dist/main.js",
     "tanren": "tsx src/main.ts",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsgo -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.1"
   }
 }

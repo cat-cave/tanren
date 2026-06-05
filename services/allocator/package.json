@@ -4,10 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsgo -p tsconfig.json",
     "dev": "tsx src/main.ts",
     "start": "node dist/main.js",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsgo -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "@hono/node-server": "^2.0.4",
