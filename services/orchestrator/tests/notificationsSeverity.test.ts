@@ -18,7 +18,7 @@ describe("eventDefaultSeverity coverage", () => {
   it("classifies the canonical examples per the spec", () => {
     expect(defaultSeverityFor("run.completed")).toBe("ok");
     expect(defaultSeverityFor("run.failed")).toBe("fail");
-    expect(defaultSeverityFor("ci.failed")).toBe("warn");
+    expect(defaultSeverityFor("github.failed")).toBe("warn");
     expect(defaultSeverityFor("cost.unattributable")).toBe("fail");
     expect(defaultSeverityFor("redaction.raw_access")).toBe("info");
     expect(defaultSeverityFor("writer.subtask.completed")).toBe("info");

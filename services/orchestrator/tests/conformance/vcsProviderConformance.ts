@@ -62,9 +62,6 @@ export const CONFORMANCE_ANCESTOR_CONFLICT = { specId: "spec_x", branch: "tanren
 export const CONFORMANCE_GREEN_BRANCH = "tanren/integ/green";
 /** P2d-2: a branch ref whose CI (readBranchChecks) is FAILING (a bad interaction). */
 export const CONFORMANCE_FAILING_BRANCH = "tanren/integ/failing";
-/** P-APP-ENV-1: the Actions-secret name + plaintext value the suite sets. */
-export const CONFORMANCE_ACTIONS_SECRET_NAME = "RESEND_API_KEY";
-export const CONFORMANCE_ACTIONS_SECRET_VALUE = "re_conformance_plaintext_must_never_leak";
 /**
  * MERGE-SAFETY (self-identity): the actor identity `resolveActorIdentity` resolves
  * for the static credential the suite primes (the GitHub harness's `GET /user`
@@ -153,23 +150,6 @@ export function describeVcsProviderConformance(label: string, harness: VcsProvid
       expect(issue.number).toBeGreaterThan(0);
       expect(typeof issue.url).toBe("string");
       expect(issue.url.length).toBeGreaterThan(0);
-    });
-
-    it("setActionsSecret sets a repo Actions secret (encrypted; plaintext never leaks)", async () => {
-      const provider = harness.make();
-      const token = await resolve(provider);
-      // Resolves (no throw) — the secret was created/overwritten on the repo. The
-      // GitHub harness's scripted transport ASSERTS the PUT body carries a key_id +
-      // a non-empty encrypted_value and that the PLAINTEXT never appears anywhere
-      // in the request; the in-memory fake records the NAME only (never the value).
-      await expect(
-        provider.setActionsSecret({
-          repo: REPO,
-          token,
-          name: CONFORMANCE_ACTIONS_SECRET_NAME,
-          value: CONFORMANCE_ACTIONS_SECRET_VALUE,
-        }),
-      ).resolves.toBeUndefined();
     });
 
     // ---- GREENFIELD: createRepository -----------------------------------

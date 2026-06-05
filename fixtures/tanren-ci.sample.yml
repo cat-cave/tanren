@@ -1,16 +1,16 @@
-# Sample tanren-ci.yml — the repo-sourced tiered CI contract.
+# Sample .tanren/ci.yml — the native gate definition (CiConfigV1).
 #
-# Drop this file at the root of a target repo to control which shell steps run
-# at each point in a Tanren run's lifecycle. The SAME file is read by GitHub
-# Actions (the CI poller) and by Tanren's in-loop gate, so a step you put in
-# the `fast` tier runs both on every iteration locally and in CI.
+# Drop this file at `.tanren/ci.yml` in a target repo to control which shell steps
+# Tanren runs at each point in a run's lifecycle. Tanren runs these steps ITSELF,
+# over SSH, on the runner — there is NO GitHub Actions. The `pre_merge` tier is the
+# merge authority: a passing pre_merge gate admits the merge.
 #
 # See docs/operator-guide/ci-config.md for the full schema reference.
 
 version: 1
 
-# Optional. Run once before any tier to provision dependencies. P3-0006
-# workspace bootstrap reads this field.
+# Optional. Run once before the gate to provision dependencies (Tanren runs it
+# over SSH on the runner workspace).
 bootstrap:
   run: "pnpm install --frozen-lockfile"
 

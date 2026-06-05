@@ -9,7 +9,6 @@ import { setTimeout as sleepFor } from "node:timers/promises";
 import { resolveGithubToken } from "../credentials/githubTokenResolver.js";
 import { RefResetPermanentError, refReadStatusError, resetRef } from "./githubRefReset.js";
 import { invokeTokenIdentity, resolveGithubActorIdentity } from "./githubActorIdentity.js";
-import { setRepoActionsSecret } from "./actionsSecretSeal.js";
 import {
   publishGitHubCheck,
   publishGitHubStatus,
@@ -35,7 +34,6 @@ import type {
   PushBranchInput,
   RepoRef,
   ResolvedVcsToken,
-  SetActionsSecretInput,
   UpdateBranchResult,
   VcsCredentialContext,
   VcsProvider,
@@ -197,11 +195,7 @@ export class GitHubVcsProvider implements VcsProvider {
     return { number: body.number, url: body.html_url };
   }
 
-  async setActionsSecret(input: SetActionsSecretInput): Promise<void> {
-    await setRepoActionsSecret(this.http, input);
-  }
-
-  // Track B: POST a native check-run / commit status; token never logged.
+  // POST a native check-run / commit status; token never logged.
   async publishCheck(input: PublishCheckInput): Promise<PublishedCheck> {
     return publishGitHubCheck(this.http, input);
   }

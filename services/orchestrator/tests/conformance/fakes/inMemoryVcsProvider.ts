@@ -46,7 +46,6 @@ import type {
   PushBranchInput,
   RepoRef,
   ResolvedVcsToken,
-  SetActionsSecretInput,
   UpdateBranchResult,
   VcsCredentialContext,
   VcsProvider,
@@ -112,16 +111,6 @@ export class InMemoryVcsProvider implements VcsProvider {
     this.createdIssues.push({ title: input.title, body: input.body, labels: input.labels ?? [] });
     const number = this.createdIssues.length;
     return { number, url: `https://github.com/${input.repo.owner}/${input.repo.name}/issues/${number}` };
-  }
-  /**
-   * Recorded Actions-secret NAMES only — the contract forbids retaining the
-   * plaintext, so the fake stores `name` + that-it-was-set (an `encrypted` flag),
-   * NEVER the value. Tests assert the right names were set without the plaintext
-   * ever being observable here.
-   */
-  readonly actionsSecrets: Array<{ name: string; encrypted: true }> = [];
-  async setActionsSecret(input: SetActionsSecretInput): Promise<void> {
-    this.actionsSecrets.push({ name: input.name, encrypted: true });
   }
   async markReadyForReview(_pr: PullRequestRef, _token: ResolvedVcsToken): Promise<void> {}
   async readPullRequestChecks(_pr: PullRequestRef, _token: ResolvedVcsToken): Promise<GitHubPullRequestChecks> {

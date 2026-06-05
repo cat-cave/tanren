@@ -48,13 +48,9 @@ import {
   WorkspacePreparedPayload,
 } from "./schemas/infra.js";
 import {
-  AppEnvCiPropagatedPayload,
   AppEnvRuntimeAttachedPayload,
   DeployTriggeredPayload,
   DeployVerifiedPayload,
-  CiFailedPayload,
-  CiPassedPayload,
-  CiStartedPayload,
   GithubBranchPushedPayload,
   GithubFailedPayload,
   GithubPrCreatedPayload,
@@ -82,10 +78,6 @@ import {
   NotificationEnqueuedPayload,
   NotificationFailedPayload,
   NotificationSentPayload,
-  Phase1FixtureCiPendingPayload,
-  Phase1FixtureCompletedPayload,
-  Phase1FixtureFailedPayload,
-  Phase1FixtureStartedPayload,
   ReviewApprovedPayload,
   ReviewAutoApprovedPayload,
   ReviewChangesRequestedPayload,
@@ -248,22 +240,17 @@ export const EventRegistry = {
   "github.pr.merged": GithubPrMergedPayload,
   "github.failed": GithubFailedPayload,
 
-  // CI polling
-  "ci.started": CiStartedPayload,
-  "ci.passed": CiPassedPayload,
-  "ci.failed": CiFailedPayload,
-
-  // P2e-1 (§2d Mergify parity): flaky-test detection + auto-quarantine. The
-  // detector reduces ci.passed/ci.failed observations and flags a check that
-  // toggled outcome on UNCHANGED code (ci.flaky.detected); that check is then
-  // recorded on the quarantine surface (ci.test.quarantined). A
-  // consistently-failing check is never flagged — quarantine ≠ ignore-failures.
+  // Flaky-test detection + auto-quarantine. The detector reduces the native gate's
+  // per-step verdicts and flags a STEP that toggled outcome on UNCHANGED code
+  // (ci.flaky.detected); that step is then recorded on the quarantine surface
+  // (ci.test.quarantined). A consistently-failing step is never flagged — quarantine
+  // ≠ ignore-failures.
   "ci.flaky.detected": CiFlakyDetectedPayload,
   "ci.test.quarantined": CiTestQuarantinedPayload,
 
-  // CI-intelligence ingestion (foundation): a JUnit report was uploaded from the
-  // generated repo's CI and parsed into per-test rows (ci_test_results). Summary
-  // counts + head SHA + attempt only — names/files are public, never secret values.
+  // CI-intelligence per-test grain: the native gate ingested the runner's JUnit report
+  // IN-PROCESS into per-test rows (ci_test_results). Summary counts + head SHA + attempt
+  // only — names/files are public, never secret values.
   "ci.tests.reported": CiTestsReportedPayload,
 
   // The in-loop deterministic native gate (exit-code driven; no agent). `gate.verdict`
@@ -275,13 +262,7 @@ export const EventRegistry = {
   "gate.advisory_failed": GateAdvisoryFailedPayload,
   "gate.verdict": GateVerdictPayload,
 
-  // Phase 1 fixture orchestration
-  "phase1.fixture.started": Phase1FixtureStartedPayload,
-  "phase1.fixture.ci_pending": Phase1FixtureCiPendingPayload,
-  "phase1.fixture.completed": Phase1FixtureCompletedPayload,
-  "phase1.fixture.failed": Phase1FixtureFailedPayload,
-
-  // Review lifecycle (schemas from Phase 2; P3-0008 wires the emitters)
+  // Review lifecycle
   "review.requested": ReviewRequestedPayload,
   "review.approved": ReviewApprovedPayload,
   "review.auto_approved": ReviewAutoApprovedPayload,
@@ -420,16 +401,12 @@ export const EventRegistry = {
   "dag.spec.unstranded": DagSpecUnstrandedPayload,
   "dag.spec.needs_attention": DagSpecNeedsAttentionPayload,
 
-  // Plane B app environment (P-APP-ENV-2): the project's runtime-scoped app env was
-  // attached to the DEPLOYED app (Vercel/Fly). Records the deploy target + the env
-  // KEY NAMES only — never a secret value.
+  // Plane B app environment: the project's runtime-scoped app env was attached to the
+  // DEPLOYED app (Vercel/Fly). Records the deploy target + the env KEY NAMES only —
+  // never a secret value. (There is no CI-secret-propagation event: the native gate
+  // runs the project's tests over SSH with the app env materialized in-process — no
+  // Actions secrets to propagate.)
   "app_env.runtime_attached": AppEnvRuntimeAttachedPayload,
-
-  // Plane B app environment (P-APP-ENV-1): the project's test-scoped app env was
-  // propagated to the target repo's GitHub Actions secrets (so `tanren-ci.yml`
-  // tests that read e.g. RESEND_API_KEY pass). Records the repo + the secret KEY
-  // NAMES only — never a secret value.
-  "app_env.ci_propagated": AppEnvCiPropagatedPayload,
 } as const satisfies Record<string, z.ZodTypeAny>;
 
 export type EventRegistry = typeof EventRegistry;
