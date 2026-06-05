@@ -19,8 +19,10 @@
 // marker, so the NEXT bus wake re-checks; a passing post-merge CI files nothing.
 // Only a genuine FAILURE files an issue + records the marker.
 
-import { runWithJobOrgId, runWithSystemScope } from "@tanren/db";
+import { runWithJobOrgId, runWithOrgScope, runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
+import { migrateProjectConfig } from "../config/projectConfig.js";
+import { resolveCredentialsForRun } from "../credentials/resolveCredentials.js";
 import type { EventStore } from "../eventStore.js";
 import { PgEventStore } from "../eventStore.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
@@ -164,7 +166,37 @@ export class PostMergeWatcher {
 
   /** Load the review/merge run context (prUrl, baseBranch=default_branch, credentials), system-scoped. */
   private async loadContext(runId: string): Promise<ReviewMergeRunContext | undefined> {
-    return runWithSystemScope(this.deps.pool, async (client) => loadReviewMergeRunContext(client, runId));
+    const githubCredentialRef = await this.resolveGithubCredentialRef(runId);
+    return runWithSystemScope(this.deps.pool, async (client) =>
+      loadReviewMergeRunContext(client, runId, { resolvedGithubCredentialRef: githubCredentialRef }),
+    );
+  }
+
+  /** Resolve the run's effective GitHub credential ref using the same project→org-default chain as merge. */
+  private async resolveGithubCredentialRef(runId: string): Promise<string> {
+    const base = await runWithSystemScope(this.deps.pool, async (client) => {
+      const result = await client.query<{
+        org_id: string | null;
+        project_id: string | null;
+        spec_id: string | null;
+        config: unknown;
+      }>(
+        `SELECT r.org_id, r.project_id, r.spec_id, p.config
+           FROM runs r JOIN projects p ON p.project_id = r.project_id
+          WHERE r.run_id = $1`,
+        [runId],
+      );
+      return result.rows[0];
+    });
+    if (base === undefined || base.org_id === null || base.project_id === null || base.spec_id === null) {
+      throw new Error(`cannot check post-merge state: run ${runId} has no resolvable org/project/spec`);
+    }
+    const orgId = base.org_id;
+    const projectConfig = migrateProjectConfig(base.config);
+    const credentials = await runWithOrgScope(this.deps.pool, orgId, (client) =>
+      resolveCredentialsForRun(client, { projectConfig, orgId }),
+    );
+    return credentials.githubCredentialRef;
   }
 
   private async resolveToken(context: ReviewMergeRunContext) {
