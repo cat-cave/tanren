@@ -2,7 +2,7 @@
 
 **Surface**: a one-page project-create form for greenfield projects, with no Forge interview.
 
-**Owning spec**: P2B-0009 — **stretch** (`docs/roadmap/phase-2b-specs.md`). Ships only if Phase 2B is otherwise on schedule; otherwise greenfield migrates entirely to Phase 3.
+**Owning spec**: P2B-0009 — **stretch** (see [`ROADMAP.md`](../../../ROADMAP.md)). Ships only if Phase 2B is otherwise on schedule; otherwise greenfield migrates entirely to Phase 3.
 
 **Hi-fi reference**: `tanren-hi-fidelity/project/view-onboard-new.jsx` — the full hi-fi shows a 3-step multi-round Forge interview that derives a 71-spec DAG; this v0 surface ships only the title/repo/behaviors form. Low-fi import at `docs/design/operator-flows/onboarding-new-project-thin.svg`.
 

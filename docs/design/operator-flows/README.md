@@ -1,26 +1,18 @@
 # Operator Flows (low-fi wireframes)
 
-This directory will hold the low-fi wireframe imports for every operator surface Phase 2B builds. The imports are sourced from the design tool the project uses (Claude Design today). Each flow is a per-surface artifact (PDF, PNG, or SVG) named after the owning P2B spec.
+This directory was intended to hold low-fi wireframe imports (one per operator
+surface) named after the owning spec. **Those imports were never done** — the
+operator surfaces were built directly against the hi-fi vision bundle
+(`tanren-hi-fidelity/`) and the per-surface acceptance criteria in
+`../acceptance-criteria/`, so the intermediate low-fi artifacts proved
+unnecessary.
 
-## Status (as of Phase 2A foundation)
+The surfaces themselves shipped: the ⌘K Forge palette + chat morph, onboarding
+(org / credentials / notifications / brownfield / greenfield), project view
+(chat-primary + DAG + spec drawer/page), run detail + review handoff, failure
+recovery, and history & costs are all mounted in
+`services/dashboard/src/app/screens.ts`. The current hi-fi ↔ implementation gap
+audit is the live source of design-vs-build truth:
+[`../phase-3-hifi-gaps.md`](../phase-3-hifi-gaps.md).
 
-Low-fi imports are pending — they ship as part of an ongoing hi-fi vision iteration (see `docs/design/hifi-vision-changes.md`). Acceptance criteria for each surface are already locked in `../acceptance-criteria/` and reference this directory by filename; once imports land, no acceptance-criteria edits should be needed unless the vision itself shifts.
-
-## Expected files
-
-| File                                    | Owning spec        |
-| --------------------------------------- | ------------------ |
-| `shell-and-palette.{pdf,png,svg}`       | P2B-0001           |
-| `onboarding-org-setup.*`                | P2B-0002           |
-| `onboarding-existing-project-minimal.*` | P2B-0002           |
-| `onboarding-new-project-thin.*`         | P2B-0009 (stretch) |
-| `credentials.*`                         | P2B-0002           |
-| `notifications-matrix.*`                | P2B-0002           |
-| `project-and-spec.*`                    | P2B-0003           |
-| `routing-and-limits.*`                  | P2B-0003           |
-| `run-detail.*`                          | P2B-0004           |
-| `review-handoff.*`                      | P2B-0004           |
-| `failure-recovery.*`                    | P2B-0008           |
-| `history-and-costs.*`                   | P2B-0005           |
-
-When importing, prefer SVG for surfaces that include callouts and PDF/PNG only as a fallback. Each import must be referenced by exactly one acceptance-criteria file.
+This directory is kept only as a placeholder; no wireframe imports are expected.

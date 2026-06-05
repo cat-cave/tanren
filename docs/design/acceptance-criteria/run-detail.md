@@ -2,9 +2,9 @@
 
 **Surface**: the per-run drilldown showing live cost, trajectory spine, writer reasoning, and per-task detail.
 
-**Owning spec**: P2B-0004 (`docs/roadmap/phase-2b-specs.md`).
+**Owning spec**: P2B-0004 (see [`ROADMAP.md`](../../../ROADMAP.md)).
 
-**Hi-fi reference**: `tanren-hi-fidelity/project/view-run.jsx`. Low-fi import at `docs/design/operator-flows/run-detail.svg`.
+**Hi-fi reference**: `tanren-hi-fidelity/project/view-run.jsx`.
 
 ## In scope for Phase 2
 
@@ -23,15 +23,15 @@
   - **Intent + BDD side-by-side**: writer's declared intent and the BDD scenario from the spec's behavior.
   - **Tools called**: count + list of structured tool invocations with arg and output summary (from P2A-0007 semantic event fields).
   - **Decisions**: bullet list of structured decisions captured during the run.
-  - **Ask-Forge CTA**: a chip that would open a Forge thread bound to this moment (Phase 2 writes a thread row via P2A-0019 but the LLM-driven response ships in Phase 3).
+  - **Ask-Forge CTA**: a chip that opens a Forge thread bound to this moment; the thick LLM-backed Forge author answers in-thread (shipped — `/forge/threads/:id/ask`).
 - [ ] **Live updates**: SSE stream from P2A-0014 keeps the cost bar, trajectory spine, and reasoning pane live without page reload.
 - [ ] **Redaction**: any high-entropy or credential-shaped string is redacted-by-default per P2A-0009; a `view raw` action is available only to admins and emits an audit event.
 
 ## Reductions from the hi-fi
 
 - **Live preview deploy iframe** (only on review handoff in the hi-fi, not here): N/A here.
-- **Forge composer that actually answers "why slow?"**: ships as a thread-creation stub in v0; LLM responses are Phase 3.
-- **`pace_anomaly` callout**: in scope for v0; `stuck` is Phase 3.
+- **Forge composer that actually answers "why slow?"**: shipped — the thick real-LLM Forge author answers in-thread.
+- **Workflow-insight callouts**: `pace_anomaly`, `stuck`, and `review_stall` all ship.
 
 ## Done when
 

@@ -2,9 +2,9 @@
 
 **Surface**: the application shell every other dashboard route renders inside.
 
-**Owning spec**: P2B-0001 (`docs/roadmap/phase-2b-specs.md`).
+**Owning spec**: P2B-0001 (see [`ROADMAP.md`](../../../ROADMAP.md)).
 
-**Hi-fi reference**: `tanren-hi-fidelity/project/shared.jsx` (`TopBar`, `SideNav`, `ForgePalette`); `tanren-hi-fidelity/project/app.jsx` (route wiring); low-fi import will land at `docs/design/operator-flows/shell-and-palette.svg`.
+**Hi-fi reference**: `tanren-hi-fidelity/project/shared.jsx` (`TopBar`, `SideNav`, `ForgePalette`); `tanren-hi-fidelity/project/app.jsx` (route wiring).
 
 ## In scope for Phase 2
 
@@ -19,9 +19,9 @@
 
 ## Reductions from the hi-fi
 
-- Roadmap, personas, DORA sidenav rows render as placeholders. The full surfaces ship with the Phase 3 product expansion.
-- Org pill switcher does not yet support creating or leaving orgs; that lives in Phase 3 multi-tenant administration.
-- ⌘K palette items are templated v0 suggestions; thick Forge LLM-driven palette responses are Phase 3.
+- The org-level `overview`, `roadmap`, and `personas` sidenav rows still render as placeholders (`phase: "3+"`). DORA is mounted.
+- Org pill switcher does not yet support creating or leaving orgs; that remains future multi-tenant administration work.
+- ⌘K palette: the thick Forge LLM-driven chat morph ships (the palette morphs into a real conversation thread via `/forge/threads/:id/ask`).
 
 ## Done when
 

@@ -159,7 +159,7 @@ Each turn carries the same `render` (`ForgeAnswer` payload from P2A-0008) the Fo
 
 ## `GET /orgs/:orgId/projects/:projectId/runs/:runId/stream` (SSE)
 
-Server-Sent Events stream for live run updates. v0 uses a poll loop at 1s tick; the same frame format is preserved when the orchestrator's workflow swaps in a Postgres `LISTEN/NOTIFY` source later.
+Server-Sent Events stream for live run updates. The stream is event-driven: it `LISTEN`s on the Postgres `tanren_run` channel and re-polls its deltas on a `NOTIFY` wake (`db/src/notify.ts`), with a long backstop interval only bounding latency if a `NOTIFY` is ever missed. The 1s hot poll is gone; the frame format is unchanged.
 
 **Frames**
 
@@ -185,7 +185,7 @@ data: { ts: ISO-8601 }                       // every 15s when otherwise idle
 
 **Stream end conditions**
 
-- The connection closes when the run reaches a terminal status (`completed`, `failed`, `cancelled`, `halted`, or legacy `done`) AND one final post-terminal poll has flushed remaining deltas.
+- The connection closes when the run reaches a terminal status (`completed`, `failed`, `cancelled`, `halted`) AND one final post-terminal poll has flushed remaining deltas.
 - Clients should close the connection on the terminal `status` frame; a 60s client-initiated keepalive is recommended.
 
 **Redaction**: same as `/events`. `?raw=true` propagates.
@@ -233,7 +233,6 @@ Project activity feed — events across every run in the project, newest-first, 
 Any change to a schema in `contract.ts` requires:
 
 1. An addendum section in this doc with a date and short rationale.
-2. A roadmap note linking the addendum from `docs/roadmap/phase-2a-specs.md`.
-3. A migration plan for any 2B dashboard surface that consumed the old shape.
+2. A migration plan for any dashboard surface that consumed the old shape.
 
 Adding a new SSE frame name does **not** require an addendum — clients ignore unknown event types per the SSE spec. Renaming or removing an existing frame does.

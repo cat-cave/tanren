@@ -92,25 +92,19 @@ The `x-tanren-schema-id` annotation on each file is the stable contract identifi
   - The workflow `planner` / `checker` / `auditor` report 0% in the full-scope run as a Stryker scoping artifact (per-test coverage attribution fails for these ESM `.js`-import + `@tanren/db`-alias modules). Measured in isolation they score ~56% (planner 66 / checker 60 / auditor 39), so the true scope strength is above the 39.89% headline.
 - **How to run:** `just mutation`. The HTML report lands at `reports/mutation/index.html` and the machine-readable score at `reports/mutation/mutation.json` (both gitignored under `reports/`).
 
-## The OSS↔hosting billing seam (quota-admission-gate + metering-export)
+## The OSS↔hosting billing seam (budget gate + metering-export)
 
-tanren is open-source and self-hostable; a separate, **closed hosting layer** runs it as a SaaS. The boundary between them for billing is two narrow seams that live **in this repo** — the OSS _enforces_ quotas and _exports_ usage; it never decides pricing, plans, or charges. **Billing/pricing policy lives entirely outside the repo.** A self-hosted deployment that wires nothing is unrestricted: default behavior is unchanged.
+tanren is open-source and self-hostable; a separate, **closed hosting layer** runs it as a SaaS. The boundary between them for billing is two narrow surfaces that live **in this repo** — the OSS _enforces_ a budget ceiling and _exports_ usage; it never decides pricing, plans, or charges. **Billing/pricing policy lives entirely outside the repo.** A self-hosted deployment that sets no budget is unrestricted: default behavior is unchanged.
 
-### 1. `QuotaPolicy` — the pluggable admission seam (`engine/quota/`)
+### 1. Budget — the single spend gate (`engine/dag/budgetGate.ts`)
 
-```ts
-interface QuotaPolicy {
-  checkAdmission(orgId, requested): Promise<{ admit; reason?; windowKey? }>; // pre-flight
-  accrueUsage(orgId, usage): Promise<void>; // post-run, from the run's cost_records
-}
-```
+There is **one** admission gate: a single total-dollar ceiling, configured as a project/org config knob and enforced by the DAG walker. There is no pluggable `QuotaPolicy` and no per-dimension quota table — the `engine/quota/` admission seam and the `org_quotas`/`DbQuotaPolicy` reference policy were deleted; budget is the only gate.
 
-- **Pre-flight gate.** The run-executor (`engine/worker/runExecutor.ts`) calls `checkAdmission(orgId)` **before any runner/credential/workflow work**. On a deny it finalizes the run in the recoverable `quota_exceeded` outcome (surfaces on the P2B-0008 recovery surface), emits `run.quota_exceeded`, and completes the job without executing. A legacy unscoped run (`org_id` NULL) is never gated.
-- **Post-run accrual.** On completion the executor reads the run's real usage from `cost_records` (`getRunUsage`) and hands it to `accrueUsage` — ground truth, not an estimate. Best-effort: a metering blip never masks a completed run.
-- **Default = unlimited.** `NoopQuotaPolicy` (the wired default) always admits and accrues nothing, so self-hosters are unrestricted. The hosting layer wires its own `QuotaPolicy` via `StartRunWorkerInput.quotaPolicy`.
-- **DB-backed reference policy.** `DbQuotaPolicy` reads ceilings + consumed counters from the `org_quotas` table (migration 0027). **"No row" = unlimited**; a NULL limit on any dimension = that dimension uncapped. The hosting layer writes the limits and owns window/rollover semantics (`window_key`, `reset_at` are opaque hosting-layer metadata; the OSS never auto-resets — it only reads + accrues).
+- **Walker-enforced.** Before the DagWalker schedules more work it checks the org/project's running real spend (from `cost_records`) against the configured `ceilingUsd`. Over the ceiling, it pauses the DAG and emits `dag.budget.paused` rather than spawning further runs.
+- **Config knob, not env.** The ceiling is read/written through the budget routes (`GET`/`PUT` at `/projects/:id/budget` and `/orgs/:orgId/budget`); it is a first-class config value, not an environment variable. A deployment that sets no ceiling is unrestricted.
+- **Ground truth.** Spend is the run's real metered usage from `cost_records`, not an estimate. See [`budget-model.md`](../roadmap/budget-model.md) for the budget design-of-record and the forward cost-dimension design.
 
-### 2. Metering-export — the read seam a hosting layer bills off (`engine/quota/meteringExport.ts`)
+### 2. Metering-export — the read seam a hosting layer bills off (`engine/metering/index.ts`)
 
 Typed reads derived straight from `cost_records` grouped by `org_id` (the rich, token-typed, multi-basis cost ledger). **Not billing logic** — just a clean read the hosting layer ingests:
 
@@ -125,7 +119,7 @@ A self-hosted tenant brings its own LLM key (**BYOK**: it imports its own Codex/
 
 The seam is a credential-**source** + endpoint toggle, NOT a new harness adapter:
 
-- **`providerMode: "byok" | "managed"`** (`engine/config/managedProvider.ts`), added to org config (default `"byok"`) and project-overridable. Additive + `.strict()`-safe in the `config` JSONB — legacy rows parse to `byok`, **no migration**.
+- **`providerMode: "byok" | "managed"`** (`engine/config/managedProvider.ts`), part of org config (default `"byok"`) and project-overridable, carried in the `config` JSONB.
 - **Credential resolution** (`engine/credentials/resolveCredentials.ts`): under `managed`, the run resolves a **platform-owned** ref (`credential/openrouter/platform/default` by default — the secret-store key the hosting layer writes the platform OpenRouter API key under) instead of the tenant's imported LLM credential. The GitHub credential is always the tenant's; managed mode only swaps the LLM source. An explicit credential pin forces BYOK. The OSS only **selects** the platform ref — it never sees the key.
 - **Harness endpoint override** (`engine/providers/{aider,opencode,claude,codex}.ts`): each OpenAI-API-compatible adapter takes an optional base-URL override. A managed run points the harness at the OpenRouter endpoint (`https://openrouter.ai/api/v1`) — aider via `--openai-api-base` + `OPENAI_API_KEY`, codex/opencode via `OPENAI_BASE_URL`, claude via `ANTHROPIC_BASE_URL`. BYOK passes no override, so the existing native-endpoint behavior is byte-identical. The endpoint is resolved from config and injectable for tests.
 - **Metering stays tenant-scoped.** A managed run's `authRef` is the `credential/openrouter/platform/...` ref, which the cost path (`engine/costs/sources.ts`) already classifies as `per_token` / `openrouter` (real spend captured as `provider_response` from OpenRouter's `usage.cost`, else NULL/`unknown`), and `cost_records.org_id` is derived in-statement from the run. So managed usage is priced and **metered to the tenant's org** through the very same metering-export read the hosting layer bills off — no separate path.

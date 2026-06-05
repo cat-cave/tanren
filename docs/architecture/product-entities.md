@@ -1,12 +1,8 @@
-# Product Entities (P2A-0018)
+# Product Entities
 
 Tanren's product information model is the persistent shape behind the hi-fi
-vision. Even though Phase 2 does not ship the DAG canvas or the Forge
-interview, every Phase 2 spec persists data through this model so the
-Phase 2B and Phase 3 surfaces are additive — they read these tables, they
-do not migrate them.
-
-Owner spec: `P2A-0018` in `docs/roadmap/phase-2a-specs.md`.
+vision. The DAG canvas, the spec-creation forms, and the Forge interview all
+read these tables; they do not migrate them.
 
 ## Vocabulary
 
@@ -14,8 +10,8 @@ The hierarchy is **Persona → Behavior → Spec**, with Specs grouped by
 **Milestone** and connected by directed **Spec Dependency** edges.
 
 - **Persona** — a role on a project (or shared across projects in an org).
-  Examples: "Sales Manager", "Line Worker". Authoring lives in Phase 2B
-  spec-creation forms and Phase 3 Forge interview.
+  Examples: "Sales Manager", "Line Worker". Authoring lives in the
+  spec-creation forms and the Forge interview.
 - **Behavior** — owned by a persona. A BDD `Given / When / Then` scenario
   plus a free-form description. The unit of verification: Check and Audit
   Answerers reference behavior ids when reporting a verdict.
@@ -60,7 +56,7 @@ stable opaque strings.
 
 The `PersonaStore`, `BehaviorStore`, `MilestoneStore`, and
 `SpecDependencyStore` accept an `ActorContext` from
-`services/orchestrator/src/auth/schemas.ts` (P2A-0003) and enforce the
+`services/orchestrator/src/auth/schemas.ts` and enforce the
 rules above on every read and write.
 
 ## Cycle detection
@@ -74,32 +70,20 @@ operator can see which existing edges to remove. Self-loops throw
 `SelfSpecDependencyError`. SQL also enforces the no-self-loop CHECK as a
 backstop.
 
-## Default seed
+## Seeding
 
-The 0004 migration includes a `DO $$ ... $$` block that walks every spec
-row missing a `spec_milestones` or `spec_behaviors` link and attaches a
-per-project default:
+These tables were originally bootstrapped by a one-shot default-seed
+`DO $$ ... $$` block (a per-project default milestone/persona/behavior for any
+spec missing the links). That migration was folded into the collapsed baseline
+(`db/migrations/0000_collapsed_baseline.sql`) and is no longer a separate
+numbered migration; new projects populate these tables through the
+spec-creation forms and the Forge interview, and `org_id` is `NOT NULL` on the
+core tables (no sentinel-org backfill remains).
 
-- Milestone: `label = "M1"`, `name = "Hello"`, `order_index = 0`, status
-  `planned`.
-- Persona: project-scoped, `name = "Developer · fixture operator"`.
-- Behavior: title `"runs the fixture"`, Given `"operator on a fresh
-stack"`, When `"they invoke the fixture flow"`, Then `"the run
-completes end-to-end"`.
+## Consumers
 
-A project whose `org_id` is still null inherits the sentinel
-organization `org_default_p2a_0018`. The block ends with a guard that
-fails the migration if any spec still lacks a milestone or behavior
-link, so the post-condition is enforced rather than assumed.
-
-## Phase plan
-
-- Phase 2A (this spec): tables, Zod schemas, repositories, cycle
-  detection, default seed.
-- P2A-0013: HTTP routes and CLI commands for persona / behavior /
-  milestone / dependency CRUD will consume these stores. No routes
-  ship in this spec.
-- Phase 2B: spec-creation form selects a milestone and tags one or more
-  behaviors.
-- Phase 3: DAG canvas authoring and Forge interview populate these
-  tables interactively. No further migration is needed.
+- HTTP routes and CLI commands for persona / behavior / milestone / dependency
+  CRUD consume these stores.
+- The spec-creation forms select a milestone and tag one or more behaviors.
+- The DAG canvas authoring and the Forge interview populate these tables
+  interactively. They read this model; they do not migrate it.

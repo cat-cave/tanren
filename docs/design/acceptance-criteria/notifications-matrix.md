@@ -8,7 +8,7 @@
 
 **Surface**: the per-event × per-channel × severity matrix operators configure during org setup and edit from settings.
 
-**Owning spec**: P2B-0002 (`docs/roadmap/phase-2b-specs.md`).
+**Owning spec**: P2B-0002 (see [`ROADMAP.md`](../../../ROADMAP.md)).
 
 **Hi-fi reference**: `tanren-hi-fidelity/project/view-onboard-org.jsx` step 3 (notifications). Low-fi import at `docs/design/operator-flows/notifications-matrix.svg`.
 

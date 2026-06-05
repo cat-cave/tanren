@@ -1,8 +1,8 @@
-# Phase 2B Acceptance Criteria
+# Acceptance Criteria
 
-One file per operator surface. Each file is the contract a P2B spec must satisfy before its dashboard surface is considered done. Files are written against the hi-fi vision and the Phase 2 workflow inventory in `ROADMAP.md`; per-spec implementation scope (Owns / Consumes / Produces / etc.) lives in `docs/roadmap/phase-2b-specs.md`.
+One file per operator surface. Each file is the contract a dashboard surface must satisfy. Files are written against the hi-fi vision and the workflow inventory in [`ROADMAP.md`](../../../ROADMAP.md).
 
-Reductions from the hi-fi as-shown are explicit in each file. They are not "out of scope forever" — they are deferred to Phase 3 per ROADMAP, and the reduction line cites which Phase 3 surface picks them up.
+**Most of these surfaces have shipped.** The earlier "reduced in v0, deferred to Phase 3" framing is largely superseded: the thick real-LLM Forge (composer answers, propose→approve→execute write actions), the native merge queue (`native_queue` is the merge engine), the DAG canvas + DAG-primary mode, the `stuck` / `review_stall` / `ci_flaky` insights, and the brownfield recon + config-injection PR flow are all built. The genuinely-still-deferred surfaces are the org-level `/overview`, `/roadmap`, and `/personas` screens (still `phase: "3+"` in `services/dashboard/src/app/routes.ts`). Each file marks the shipped items done and keeps only the real remaining reductions.
 
 ## Surfaces and owning specs
 
@@ -28,5 +28,5 @@ Each acceptance-criteria file follows the same shape:
 2. **Owning spec** — link.
 3. **Hi-fi reference** — pointer to the relevant view file or low-fi import.
 4. **In scope for Phase 2** — checklist of behaviors a reviewer can verify against the live dashboard.
-5. **Reductions from the hi-fi** — what is intentionally out of v0, with the Phase 3 bucket each item lands in.
+5. **Reductions from the hi-fi** — what remains genuinely out of scope (shipped items are marked done).
 6. **Done when** — single-sentence exit criterion.

@@ -2,7 +2,7 @@
 
 **Surface**: the credentials screen accessible during onboarding and from settings, for managing org-shared API keys and dev-personal bundles.
 
-**Owning spec**: P2B-0002 (`docs/roadmap/phase-2b-specs.md`).
+**Owning spec**: P2B-0002 (see [`ROADMAP.md`](../../../ROADMAP.md)).
 
 **Hi-fi reference**: `tanren-hi-fidelity/project/view-onboard-org.jsx` step 2 (credentials) and the equivalent screen reachable from settings. Low-fi import at `docs/design/operator-flows/credentials.svg`.
 
