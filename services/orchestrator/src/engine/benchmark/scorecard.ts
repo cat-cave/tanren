@@ -34,10 +34,9 @@ export const CostBasisMix = z
   .object({
     // The provider's OWN authoritative per-call charge (OpenRouter's `usage.cost`):
     // the most accurate real-spend basis. A DISTINCT bucket so high-confidence real
-    // spend is not folded into the rate-table estimate (`provider_pricing`).
+    // spend is not folded into the honest `unknown` bucket.
     provider_response: z.number().int().nonnegative(),
     ccusage: z.number().int().nonnegative(),
-    provider_pricing: z.number().int().nonnegative(),
     credits: z.number().int().nonnegative(),
     unknown: z.number().int().nonnegative(),
     unattributed: z.number().int().nonnegative(),
@@ -207,7 +206,6 @@ export function projectTrialScorecard(inputs: TrialProjectionInputs): TrialScore
   const costBasisMix: CostBasisMix = {
     provider_response: 0,
     ccusage: 0,
-    provider_pricing: 0,
     credits: 0,
     unknown: 0,
     unattributed: 0,
@@ -215,7 +213,6 @@ export function projectTrialScorecard(inputs: TrialProjectionInputs): TrialScore
   for (const c of costs) {
     if (c.costBasis === "provider_response") costBasisMix.provider_response += 1;
     else if (c.costBasis === "ccusage") costBasisMix.ccusage += 1;
-    else if (c.costBasis === "provider_pricing") costBasisMix.provider_pricing += 1;
     else if (c.costBasis === "credits") costBasisMix.credits += 1;
     else if (c.costBasis === "unattributed") costBasisMix.unattributed += 1;
     else costBasisMix.unknown += 1;

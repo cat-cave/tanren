@@ -48,6 +48,6 @@ Before changing any version pin, verify the current version against the upstream
 - Writers and Answerers are distinct roles.
 - Events are appended only through `services/orchestrator/src/engine/eventStore.ts`.
 - Token accounting is mandatory and recorded as disjoint typed buckets; cost is best-effort.
-- Cost records use `billing_mode` in `per_token`/`subscription`/`self_hosted` and `cost_basis` in `ccusage`/`provider_pricing`/`unknown`. `cost_usd` may be NULL when `cost_basis = 'unknown'`.
+- Cost records use `billing_mode` in `per_token`/`subscription`/`self_hosted` and `cost_basis` in `ccusage`/`provider_response`/`credits`/`unknown`/`unattributed`. `cost_usd` may be NULL when `cost_basis = 'unknown'`.
 - No placeholder cost source is allowed.
 - Source, config, and docs files stay under 500 lines unless an exception is documented in `docs/contracts/architecture-checks.md`.

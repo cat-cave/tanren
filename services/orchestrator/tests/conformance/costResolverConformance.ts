@@ -9,7 +9,7 @@
 //     self_hosted. Every resolution MUST land on exactly one of these.
 //
 //   costBasis — how the (possibly null) dollar figure was derived:
-//     provider_response | ccusage | provider_pricing | credits | unknown. This is
+//     provider_response | ccusage | credits | unknown. This is
 //     an HONEST provenance tag, not a confidence score: it must reflect what was
 //     ACTUALLY used. `provider_response` is the provider's OWN authoritative
 //     per-call charge (OpenRouter's usage.cost) — the most accurate real spend.
@@ -19,7 +19,7 @@
 //     resolution MUST be `costUsd === null` with `costBasis === "unknown"`.
 //     There is no placeholder basis, no "$0 estimate", no invented denominator.
 //     The DB enforces the same invariant: cost_records.cost_basis is pinned by
-//     a CHECK to exactly {provider_response, ccusage, provider_pricing, credits,
+//     a CHECK to exactly {provider_response, ccusage, credits,
 //     unknown, unattributed}, so any basis string OUTSIDE that set is a
 //     CHECK-rejected row — a HARD failure, not
 //     a silent downgrade. This spec asserts the in-process half of that pact:
@@ -43,18 +43,12 @@ const BILLING_MODES = ["per_token", "subscription", "self_hosted", "unattributed
 
 // The cost bases the DB CHECK constraint pins cost_records.cost_basis to
 // (migration 0016, widened in 0056 for `unattributed`, in 0065 for
-// `provider_response`). An impl that emits anything outside this set produces a
-// row the CHECK rejects — the hard-failure rule. Mirrors the widened
+// `provider_response`, and pruned in 0076 of the never-produced
+// `provider_pricing`). An impl that emits anything outside this set produces a
+// row the CHECK rejects — the hard-failure rule. Mirrors the live
 // cost_records.cost_basis CHECK exactly. `provider_response` is OpenRouter's
 // authoritative `usage.cost` — the REAL deduction that outranks every estimate.
-const ALLOWED_COST_BASES = [
-  "ccusage",
-  "provider_response",
-  "provider_pricing",
-  "credits",
-  "unknown",
-  "unattributed",
-] as const;
+const ALLOWED_COST_BASES = ["ccusage", "provider_response", "credits", "unknown", "unattributed"] as const;
 type AllowedCostBasis = (typeof ALLOWED_COST_BASES)[number];
 
 export interface Scenario {
@@ -143,7 +137,7 @@ export function describeCostResolverConformance(label: string, harness: CostReso
         const resolution = await resolver.resolve(scenario.input);
         // §11.3/§16.3: an unknown basis is ALWAYS null-cost (no placeholder, no
         // "$0 estimate", no rejected-basis downgrade); a declared known basis
-        // (ccusage / provider_pricing / credits) ALWAYS carries a real, finite,
+        // (ccusage / provider_response / credits) ALWAYS carries a real, finite,
         // positive dollar figure. The observed pair must equal the required one.
         const expectedIsNull = scenario.expectCostBasis === "unknown";
         // The scenario name rides INSIDE the compared object so a failure names

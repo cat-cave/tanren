@@ -131,17 +131,13 @@ describe("regression: cost-basis allow-list (audit High — mandatory cost attri
     // credential ref (NULL cost, NOT a silent $0). 'provider_response' is the
     // provider's OWN authoritative per-call charge (OpenRouter's usage.cost) — the
     // REAL deduction that outranks every estimate. Both ride alongside the honest bases.
-    expect(CostBasis.options).toEqual([
-      "ccusage",
-      "provider_response",
-      "provider_pricing",
-      "credits",
-      "unknown",
-      "unattributed",
-    ]);
+    expect(CostBasis.options).toEqual(["ccusage", "provider_response", "credits", "unknown", "unattributed"]);
     expect(CostBasis.safeParse(forbiddenPlaceholder).success).toBe(false);
     expect(CostBasis.safeParse("unknown").success).toBe(true);
     expect(CostBasis.safeParse("unattributed").success).toBe(true);
     expect(CostBasis.safeParse("provider_response").success).toBe(true);
+    // provider_pricing was the never-produced static-rate basis — pruned (v21
+    // cleanup); real spend is a metered FACT, never a list-rate estimate.
+    expect(CostBasis.safeParse("provider_pricing").success).toBe(false);
   });
 });

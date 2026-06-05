@@ -147,7 +147,7 @@ export const RUN_DETAIL: RunDetail = {
       totalTokens: 1800,
       costUsd: "0.8400",
       billingMode: "per_token",
-      costBasis: "provider_pricing",
+      costBasis: "provider_response",
       recordedAt: new Date().toISOString(),
     },
   ],

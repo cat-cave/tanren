@@ -31,7 +31,6 @@ import {
   CostFailedPayload,
   CostOverageUnobservablePayload,
   CostResolvedPayload,
-  CostUnattributablePayload,
   CostUnattributedPayload,
   CredentialFailedPayload,
   CredentialLoadedPayload,
@@ -222,7 +221,6 @@ export const EventRegistry = {
   // Cost resolution
   "cost.resolved": CostResolvedPayload,
   "cost.failed": CostFailedPayload,
-  "cost.unattributable": CostUnattributablePayload,
   "cost.unattributed": CostUnattributedPayload,
   "cost.ceiling_unreachable": CostCeilingUnreachablePayload,
   // cost PR-C: a real credit drawdown with no configured per-credential rate

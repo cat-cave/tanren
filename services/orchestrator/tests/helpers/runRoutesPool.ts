@@ -211,7 +211,7 @@ export class RunRoutesPool {
       total_tokens: input.total_tokens ?? 0,
       cost_usd: input.cost_usd ?? "0.001",
       billing_mode: input.billing_mode ?? "per_token",
-      cost_basis: input.cost_basis ?? "provider_pricing",
+      cost_basis: input.cost_basis ?? "provider_response",
       recorded_at: input.recorded_at ?? new Date(2026, 4, 1, 0, 0, input.id),
     };
     this.costs.push(row);

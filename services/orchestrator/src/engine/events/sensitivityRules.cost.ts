@@ -2,10 +2,9 @@ import type { SensitivityRule } from "./sensitivity.js";
 
 // Cost / cost-safety sensitivity rules, split out of sensitivityRules.infra.ts to
 // keep each file under the 500-line cap. Covers cost.resolved/failed and the
-// BUDGET-SAFETY cost-misconfig events (cost.unattributable / cost.unattributed /
-// cost.ceiling_unreachable). NONE carry a secret VALUE — a credential is named by
-// its KIND/ref only (refKind is the secret-name-stripped path; authRef on the
-// legacy cost.unattributable is `redacted`), so cost dollars + modes + counts are
+// BUDGET-SAFETY cost-misconfig events (cost.unattributed / cost.ceiling_unreachable).
+// NONE carry a secret VALUE — a credential is named by its KIND/ref only (refKind
+// is the secret-name-stripped path), so cost dollars + modes + counts are
 // non-sensitive operational telemetry (public).
 export const costSensitivityRules: SensitivityRule[] = [
   ...rulesFor("cost.resolved", [
@@ -17,22 +16,10 @@ export const costSensitivityRules: SensitivityRule[] = [
     ["notionalCostUsd", "public"],
     ["billingMode", "public"],
     ["costBasis", "public"],
-    // LOUD ESTIMATE flag — a boolean operational signal (this OpenRouter row's
-    // dollar figure is a list-rate estimate, not the real deduction). No secret.
-    ["estimateOnly", "public"],
   ]),
   ...rulesFor("cost.failed", [
     ["taskId", "public"],
     ["message", "public"],
-  ]),
-  ...rulesFor("cost.unattributable", [
-    ["taskId", "public"],
-    ["cli", "public"],
-    ["authRef", "redacted"],
-    ["reason", "public"],
-    ["inputTokens", "public"],
-    ["outputTokens", "public"],
-    ["cachedInputTokens", "public"],
   ]),
   // cost.unattributed (BUDGET-SAFETY C1) — refKind is the secret-free KIND label
   // (the credential-name segment stripped), reason is a fixed diagnosis string;

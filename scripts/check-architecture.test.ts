@@ -41,7 +41,7 @@ describe("architecture checker", () => {
       "scripts/contract-schema-export.mjs": "#!/usr/bin/env node\n",
       ".github/workflows/ci.yml": "steps:\n  - uses: actions/checkout@v6\n  - uses: actions/setup-node@v6\n",
       "db/migrations/0001.sql":
-        "CHECK (cost_basis IN ('ccusage','provider_pricing','unknown'))\nCHECK (billing_mode IN ('per_token','subscription','self_hosted'))\n",
+        "CHECK (cost_basis IN ('ccusage','provider_response','credits','unknown','unattributed'))\nCHECK (billing_mode IN ('per_token','subscription','self_hosted'))\n",
       "services/orchestrator/src/engine/eventStore.ts": "export const ok = true;\n",
     });
 

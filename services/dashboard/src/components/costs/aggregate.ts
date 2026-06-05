@@ -8,7 +8,7 @@
  *
  * Every record carries the FROZEN P2A-0011 `billingMode` + `costBasis` enums.
  * The operator-facing "three cost models" are the `billingMode` axis:
- *   - per_token    → §4.1 token-billed (real dollars; basis ccusage|provider_pricing)
+ *   - per_token    → §4.1 token-billed (real dollars; basis ccusage|provider_response)
  *   - subscription → §4.3 subscription-window (no per-call $ basis; costUsd null
  *                    unless ccusage computes one)
  *   - self_hosted  → §4.2 flat-fee / opportunity (utilization, not a cap)
@@ -46,7 +46,7 @@ export const PRICING_MODEL_META: Record<BillingMode, PricingModelMeta> = {
     label: "per-token · llm api",
     model: "model 1 · real dollars",
     colorVar: "var(--cost-token)",
-    hint: "token-billed api keys · priced from rate tables",
+    hint: "token-billed api keys · real metered spend (provider charge / ccusage)",
   },
   subscription: {
     mode: "subscription",
@@ -87,7 +87,6 @@ export const COST_BASIS_META: Record<CostBasis, CostBasisMeta> = {
   // The provider's OWN authoritative per-call charge (OpenRouter's `usage.cost`):
   // the REAL deduction with no markup — the most accurate real-spend basis.
   provider_response: { basis: "provider_response", label: "provider response · real charge" },
-  provider_pricing: { basis: "provider_pricing", label: "provider pricing · rate table" },
   credits: { basis: "credits", label: "credits · prepaid drawdown" },
   unknown: { basis: "unknown", label: "no priced basis · tokens only" },
   // BUDGET-SAFETY C1: an UNRECOGNIZED credential ref — cost could not be priced;

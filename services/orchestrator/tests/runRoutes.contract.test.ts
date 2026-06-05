@@ -281,7 +281,7 @@ describe("P2A-0014 run-detail API — costs pagination", () => {
     expect(body.items.length).toBe(2);
     const cost = RunCostRecord.parse(body.items[0]);
     expect(cost.runId).toBe(runId);
-    expect(cost.costBasis).toBe("provider_pricing");
+    expect(cost.costBasis).toBe("provider_response");
     expect(body.nextCursor).toBeNull();
   });
 });

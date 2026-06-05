@@ -8,7 +8,7 @@
 // $0) so the budget gate fails closed. 'credits' is the prepaid-credit drawdown
 // basis. All are real DB-persisted values, so every read-side consumer must
 // accept them.
-export type CostBasis = "ccusage" | "provider_response" | "provider_pricing" | "credits" | "unknown" | "unattributed";
+export type CostBasis = "ccusage" | "provider_response" | "credits" | "unknown" | "unattributed";
 export type BillingMode = "per_token" | "subscription" | "self_hosted" | "unattributed";
 
 export interface CostResolutionInput {

@@ -19,7 +19,7 @@ describe("eventDefaultSeverity coverage", () => {
     expect(defaultSeverityFor("run.completed")).toBe("ok");
     expect(defaultSeverityFor("run.failed")).toBe("fail");
     expect(defaultSeverityFor("github.failed")).toBe("warn");
-    expect(defaultSeverityFor("cost.unattributable")).toBe("fail");
+    expect(defaultSeverityFor("cost.unattributed")).toBe("fail");
     expect(defaultSeverityFor("redaction.raw_access")).toBe("info");
     expect(defaultSeverityFor("writer.subtask.completed")).toBe("info");
     expect(defaultSeverityFor("github.pr.merged")).toBe("ok");

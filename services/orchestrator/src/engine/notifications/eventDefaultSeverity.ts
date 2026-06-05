@@ -14,9 +14,9 @@ import type { Severity } from "./schemas.js";
 //   warn  - degraded but recoverable (gate.failed, checker rejection, github
 //           failures, planner re-request) — usually surfaces in dashboards
 //           regardless of opt-in.
-//   fail  - run-halting / unattributable / lost-work signals (run.failed,
-//           run.halted, cost.unattributable, task.failed). These should be
-//           reachable on every operator's pager-style channel by default.
+//   fail  - run-halting / lost-work signals (run.failed, run.halted,
+//           cost.unattributed, task.failed). These should be reachable on
+//           every operator's pager-style channel by default.
 //
 // A few events are not operator-actionable (allocator internals,
 // notification.* meta-events) and stay at `info` so the matrix UI defaults
@@ -88,7 +88,6 @@ const SEVERITY_OVERRIDES: Partial<Record<EventName, Severity>> = {
   // Cost
   "cost.resolved": "info",
   "cost.failed": "warn",
-  "cost.unattributable": "fail",
   // An unrecognized credential ref priced a real call as $0 — a budget-defeating
   // misconfig the operator must fix; surfaced as fail.
   "cost.unattributed": "fail",

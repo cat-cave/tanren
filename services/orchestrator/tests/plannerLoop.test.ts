@@ -204,8 +204,6 @@ describe("subtask loop — budget exhaustion", () => {
     expect(outcome.plannerRerunCount).toBeGreaterThan(2);
     expect(outcome.lastRejection.producer).toBe("checker");
 
-    const unattributable = events.events.filter((event) => event.eventType === "cost.unattributable");
-    expect(unattributable).toHaveLength(0);
     const costResolved = events.events.filter((event) => event.eventType === "cost.resolved");
     expect(costResolved).toHaveLength(9);
     expect(pool.costInserts).toHaveLength(9);

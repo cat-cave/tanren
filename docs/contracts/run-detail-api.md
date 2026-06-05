@@ -138,7 +138,7 @@ Cursor-paginated cost records for a run.
 - Disjoint token buckets: `inputTokens`, `cachedInputTokens`, `cacheCreationTokens`, `outputTokens`, `reasoningOutputTokens`, `totalTokens`.
 - `costUsd`: a fixed-precision dollar string, or `null` when cost is unknown (best-effort).
 - `billingMode`: `per_token` | `subscription` | `self_hosted`.
-- `costBasis`: `ccusage` | `provider_pricing` | `unknown` (`unknown` ⇒ `costUsd` is null).
+- `costBasis`: `ccusage` | `provider_response` | `credits` | `unknown` | `unattributed` (`unknown` ⇒ `costUsd` is null).
 
 ---
 
