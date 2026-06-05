@@ -15,12 +15,14 @@ import {
   createSpec,
   ProjectAccessDeniedError,
   ProjectNotFoundError,
+  requeueAttentionSpec,
   SpecDependenciesBlockedError,
+  SpecNotInAttentionError,
   SpecNotRunnableError,
   SpecNotFoundError,
 } from "../../engine/workflow/projectSpec.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
-import { actorCanAccessOrg } from "../orgs/index.js";
+import { actorCanAccessOrg, actorIsOrgAdmin } from "../orgs/index.js";
 
 interface SpecRoutesOptions {
   pool: pg.Pool;
@@ -185,6 +187,40 @@ export function createSpecRoutes(options: SpecRoutesOptions) {
       }
       if (error instanceof SpecNotRunnableError) {
         return c.json({ error: "spec_not_runnable", message: error.message }, 409);
+      }
+      throw error;
+    }
+  });
+
+  // The human-in-the-loop resolution of a `needs_attention` escalation (the operator
+  // API gap the live apex run surfaced). When a spec exhausts its retry budget it parks
+  // at the terminal `needs_attention` status, blocking its dependents — and there is no
+  // AUTO exit (the escalation discipline: a human must DECIDE how to unblock it). Once
+  // the operator has ADDRESSED the underlying blocker (e.g. fixed a platform bug) this
+  // is the "addressed, proceed" action: it flips the spec `needs_attention → open` so
+  // the autonomous DagWalker re-picks it up, resets its bounded re-enqueue budget, and
+  // emits an actor-stamped `dag.spec.attention_resolved` audit event. A MUTATION, so it
+  // is org-ADMIN scoped (mirrors the settings/config writes). A spec not parked at
+  // `needs_attention` is a clean 409 — never a silent re-transition of a real state.
+  app.post("/:orgId/projects/:projectId/specs/:specId/requeue", async (c) => {
+    const actor = requireActor(c);
+    const orgId = c.req.param("orgId");
+    const specId = c.req.param("specId");
+    if (!actorIsOrgAdmin(actor, orgId)) {
+      return c.json({ error: "org_admin_required" }, 403);
+    }
+    try {
+      const result = await requeueAttentionSpec(options.pool, { specId }, { ...actor, orgId });
+      return c.json(result, 200);
+    } catch (error) {
+      if (error instanceof SpecNotFoundError) {
+        return c.json({ error: "spec_not_found", message: error.message }, 404);
+      }
+      if (error instanceof SpecNotInAttentionError) {
+        return c.json({ error: "spec_not_in_attention", message: error.message }, 409);
+      }
+      if (error instanceof ProjectAccessDeniedError) {
+        return c.json({ error: "project_access_denied", message: error.message }, 403);
       }
       throw error;
     }

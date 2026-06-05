@@ -46,6 +46,15 @@ describe("INTERPLAY: strand reconciler ↔ conflict escalation (no double-handli
     expect(running.reconcilable).toBe(false);
   });
 
+  it("the operator's requeue re-entry status (open) is a RUNNABLE walker candidate", () => {
+    // The requeue endpoint flips a parked spec `needs_attention → open`. The walker
+    // classifies `open` as the `pending` scheduling bucket — i.e. a ready candidate it
+    // will re-pick up. (This is the selection-predicate side of the requeue: a re-queued
+    // spec genuinely re-enters the autonomous flow rather than staying terminal_blocked.)
+    expect(classifySpecStatus("needs_attention")).toBe("terminal_blocked");
+    expect(classifySpecStatus("open")).toBe("pending");
+  });
+
   it("the reconciler coordinator skips a needs_attention spec even if it somehow appears as a candidate", async () => {
     // Belt-and-suspenders: the pg read model only loads in_flight specs (so a parked
     // spec is never even a candidate). But if a stale snapshot surfaced one, the pure

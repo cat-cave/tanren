@@ -141,10 +141,22 @@ export class PgSpecStrandReadModel implements SpecStrandReadModel {
     // revoked WRITES there — so they stay on `this.pool`.)
     const readPool = getSystemPool() ?? this.pool;
     return runWithOrgScope(readPool, orgId, async (client) => {
+      // BUDGET RESET on operator resolution: count only the `dag.spec.unstranded`
+      // events AFTER the spec's MOST RECENT `dag.spec.attention_resolved` (the
+      // human-in-the-loop requeue). When an operator addresses the blocker and
+      // re-queues a parked spec, its bounded re-enqueue budget starts fresh — so the
+      // spec genuinely re-runs the full retry budget rather than immediately
+      // re-escalating off the pre-resolution unstrand history. Specs never resolved
+      // carry the `MIN(id) - 1` floor (0), i.e. ALL their unstrand events count.
       const result = await client.query<{ count: string }>(
         `SELECT count(*)::text AS count
            FROM events
-          WHERE spec_id = $1 AND event_type = 'dag.spec.unstranded'`,
+          WHERE spec_id = $1
+            AND event_type = 'dag.spec.unstranded'
+            AND id > COALESCE(
+              (SELECT max(id) FROM events
+                WHERE spec_id = $1 AND event_type = 'dag.spec.attention_resolved'),
+              0)`,
         [input.specId],
       );
       return Number(result.rows[0]?.count ?? "0");

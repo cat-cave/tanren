@@ -131,6 +131,7 @@ import {
   DagBudgetPausedPayload,
   DagConcurrencySaturatedPayload,
   DagDrainedPayload,
+  DagSpecAttentionResolvedPayload,
   DagSpecEnqueuedPayload,
   DagSpecNeedsAttentionPayload,
   DagSpecPercolatedPayload,
@@ -404,6 +405,10 @@ export const EventRegistry = {
   // status (dag.spec.needs_attention), so the DAG either advances or asks loudly.
   "dag.spec.unstranded": DagSpecUnstrandedPayload,
   "dag.spec.needs_attention": DagSpecNeedsAttentionPayload,
+  // The human-in-the-loop resolution of a needs_attention escalation: the operator
+  // addressed the blocker and re-queued the spec (needs_attention → open), resetting
+  // its bounded re-enqueue budget so the DagWalker genuinely re-runs it.
+  "dag.spec.attention_resolved": DagSpecAttentionResolvedPayload,
 
   // Plane B app environment: the project's runtime-scoped app env was attached to the
   // DEPLOYED app (Vercel/Fly). Records the deploy target + the env KEY NAMES only —

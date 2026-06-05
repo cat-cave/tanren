@@ -107,6 +107,8 @@ export {
   SpecNotFoundError,
   SpecNotRunnableError,
 };
+export { requeueAttentionSpec, SpecNotInAttentionError } from "./requeueAttentionSpec.js";
+export type { RequeueAttentionResult } from "./requeueAttentionSpec.js";
 
 export async function createProject(
   pool: pg.Pool,

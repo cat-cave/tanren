@@ -129,6 +129,26 @@ planner run. The full set of four recovery actions and their guardrails is
 documented in [failure-recovery.md](./failure-recovery.md). The trigger flow's
 job is only to make the halt observable and get you to that surface.
 
+## 7b. Resolve a `needs_attention` escalation (requeue a stuck spec)
+
+When a spec exhausts its bounded retry budget — the NEVER-STRAND reconciler
+re-enqueued it the capped number of times with no progress, or the merge queue
+judged its conflict genuinely irreconcilable — it parks at the terminal
+`needs_attention` status. That frees the DAG slot but **blocks its dependents**:
+the autonomous walker will not route past it on its own, because a human must
+DECIDE how to unblock it (the escalation discipline). Once you have **addressed
+the underlying blocker** (fixed a platform bug, re-scoped a dependency, etc.),
+tell Tanren to proceed:
+
+- **`POST /orgs/:orgId/projects/:projectId/specs/:specId/requeue`** (org-admin).
+  It flips the spec `needs_attention → open` so the DagWalker re-picks it up,
+  **resets its bounded re-enqueue budget** (so it genuinely re-runs the full
+  retry budget rather than immediately re-escalating off the old halt history),
+  and emits an actor-stamped `dag.spec.attention_resolved` audit event. The
+  response carries the spec's new `open` status and which subsystem had parked it.
+- A spec **not** parked at `needs_attention` is a clean `409 spec_not_in_attention`
+  — the action never silently re-transitions a running/merged/open spec.
+
 ## 8. See the finished run in history + costs
 
 A completed run shows up in the project's run history and on the costs surface

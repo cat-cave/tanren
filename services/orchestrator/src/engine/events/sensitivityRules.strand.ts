@@ -31,6 +31,15 @@ export const strandSensitivityRules: SensitivityRule[] = [
     ["prNumber", "public"],
     ["message", "public"],
   ]),
+  // dag.spec.attention_resolved: an operator resolved a needs_attention escalation
+  // and re-queued the spec. All fields are public — the spec id is run lineage, the
+  // `fromSource` is an enum label, and `resolvedBy` is a user id (an actor handle, no
+  // secret, no diff content, no command output).
+  ...rulesFor("dag.spec.attention_resolved", [
+    ["specId", "public"],
+    ["fromSource", "public"],
+    ["resolvedBy", "public"],
+  ]),
 ];
 
 function rulesFor(eventName: string, entries: ReadonlyArray<[string, SensitivityRule["tag"]]>): SensitivityRule[] {
