@@ -1,8 +1,8 @@
-// Plane-split P3 — the DagWalker LIFECYCLE READ gap regression, against a REAL
+// Plane-split — the DagWalker LIFECYCLE READ gap regression, against a REAL
 // Postgres (no SQL mocks). This is the residual read-gap PR #269 left open: the
 // worker connects as the de-privileged `tanren_dataplane` role (0031 REVOKE ALL
 // ON TABLE events), but `PgDagLifecycleReadModel.loadLifecycle` reads `events`
-// (the P2c-1 lateral join). #269 routed the walker's WRITES through the control
+// (the lateral join). #269 routed the walker's WRITES through the control
 // plane but left this READ on the dataplane role — so every walk that loaded the
 // lifecycle projection threw `permission denied for table events` (42501) from
 // BOTH the boot walk and the notification walk.

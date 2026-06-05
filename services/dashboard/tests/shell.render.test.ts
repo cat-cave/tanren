@@ -1,4 +1,4 @@
-// P2B-0001 shell verification harness — `app.request`-based rendered-HTML
+// shell verification harness — `app.request`-based rendered-HTML
 // assertions. Mirrors the orchestrator contract-test pattern
 // (services/orchestrator/tests/runRoutes.contract.test.ts): build the app with
 // a stubbed pool + a mocked orchestrator (global fetch), then assert the
@@ -99,8 +99,8 @@ describe("dashboard shell rendering", () => {
     mockOrchestrator();
     const app = await build();
     const html = await (await app.request("/projects")).text();
-    // overview/roadmap/personas are phase 3+ (DORA shipped in P3-0019,
-    // discovery in P3-0014).
+    // overview/roadmap/personas are phase 3+ (DORA shipped in,
+    // discovery in).
     expect(html).toContain("roadmap");
     expect(html).toMatch(/roadmap[\s\S]*?phase 3\+/u);
     expect((html.match(/phase 3\+/gu) ?? []).length).toBeGreaterThanOrEqual(3);
@@ -277,7 +277,7 @@ describe("dashboard dev-login proxy (TANREN_DEV_LOGIN=1)", () => {
 // spec lands. The phase-3+ rows stay placeholders for all of Phase 2B, keeping
 // this regression test stable regardless of merge order.
 describe("screen-router mounting convention (fan-out extension point)", () => {
-  // Isolate the registry: real child screens (e.g. P2B-0005's mountCostsScreen)
+  // Isolate the registry: real child screens (e.g. the mountCostsScreen)
   // self-register at module load, so reset before each case to exercise ONLY
   // the fake mount this block pushes. The /costs example path is now a real
   // route, so without this reset the real screen would shadow the fake one.

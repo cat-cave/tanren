@@ -1,5 +1,5 @@
 /**
- * DAG dependency edges (P3-0013). Straight hot/cool lines between node centres
+ * DAG dependency edges. Straight hot/cool lines between node centres
  * with arrow markers, matching the hi-fi `bparr-hot` / `bparr-cool` markers.
  * Cool edges use `--line-2`; hot edges (touching a node that needs action) use
  * `--ember-08`. No hardcoded colours.

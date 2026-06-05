@@ -1,4 +1,4 @@
-// P3-0029 observability: regression corpus seeded from the Phase 2 readiness
+// observability: regression corpus seeded from the readiness
 // audit (docs/audits/phase2-readiness.md). Each test names the audit finding
 // it guards so a future regression in one of these workflow-critical
 // behaviors fails loudly. This is a deliberately SMALL, named set — it grows
@@ -82,7 +82,7 @@ describe("regression: GitHub URL parsing (audit High — review/merge + repo sco
 });
 
 // Audit (Medium): "GitHub credentials ... Prefer GitHub App installation
-// tokens ...". P3-0003 added a single 401 re-mint+retry. The regression guard:
+// tokens ...". added a single 401 re-mint+retry. The regression guard:
 // a 401 followed by a fresh token must retry EXACTLY once with the new token,
 // and a non-401 must never trigger a re-mint.
 describe("regression: GitHub 401 token re-mint retry (audit Medium — installation tokens)", () => {

@@ -1,4 +1,4 @@
-// Shared CLI argument parsing helpers used by the P2A-0013 commands.
+// Shared CLI argument parsing helpers used by the commands.
 
 export type ParsedArgs = Record<string, string | string[] | undefined> & { _: string[] };
 

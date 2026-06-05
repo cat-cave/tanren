@@ -1,7 +1,7 @@
 /**
  * Shell mounting + the extension-point convention every child screen uses.
  *
- * ## How child screens (P2B-0002…0009) mount their routes — THE convention
+ * ## How child screens mount their routes — THE convention
  *
  * 1. **Add a mount function to the append-only screen registry** in
  *    `./screens.ts`: `SCREEN_MOUNTS.push(mountCostsScreen)`. Each entry is a
@@ -82,7 +82,7 @@ export async function loadShellContext(
 
 /**
  * Render a page body inside the shell. The single entry point child screens use
- * so the chrome stays consistent and owned by P2B-0001.
+ * so the chrome stays consistent and owned by.
  */
 export function renderShell(
   c: Context,
@@ -131,7 +131,7 @@ export function mountShell(app: Hono, deps: ShellDeps): void {
     app.get("/", (c) => c.redirect("/projects"));
   }
 
-  // Project list (placeholder until P2B-0003).
+  // Project list (placeholder until).
   if (!hasGetRoute(app, "/projects")) {
     app.get("/projects", async (c) => {
       const ctx = await loadShellContext(c, deps, { activeNavId: "projects" });

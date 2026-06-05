@@ -1,5 +1,5 @@
 /**
- * DAG node rects + milestone/column headers (P3-0013). Each node carries the
+ * DAG node rects + milestone/column headers. Each node carries the
  * locked visual language: one of five status colours+glyphs, a pulsing ring for
  * live/review/blocked, a numbered attention badge, and milestone-ring headers.
  * Every node is click-routed to the spec drawer via `data-spec-id` (the

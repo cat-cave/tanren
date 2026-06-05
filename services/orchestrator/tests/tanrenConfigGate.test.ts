@@ -1,4 +1,4 @@
-// P3-0017 tanren-config audit-gate unit tests (pure module). Covers Bucket-B
+// tanren-config audit-gate unit tests (pure module). Covers Bucket-B
 // detection, the tanren.yaml render + diff, the gated-write decision (gate ON
 // opens a PR via a fake GitHub port instead of applying; gate OFF / non-Bucket-B
 // applies directly), and apply-on-merge.

@@ -1,4 +1,4 @@
-// P2A-0020 in-memory pg substitute for the workflow-insights compute and
+// in-memory pg substitute for the workflow-insights compute and
 // cache layer. Mirrors the other helper memory clients: only the SQL shapes
 // emitted by `services/orchestrator/src/engine/insights/**` are handled.
 //

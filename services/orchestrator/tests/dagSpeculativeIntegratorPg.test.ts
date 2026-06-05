@@ -1,4 +1,4 @@
-// P2c-1: focused unit test of `PgSpeculativeIntegrator`'s VcsProvider driving +
+// focused unit test of `PgSpeculativeIntegrator`'s VcsProvider driving +
 // ancestor-branch resolution, over a FAKE pool + FAKE VcsProvider (test fixtures —
 // they live here, never src/). It proves the integrator resolves each unmerged
 // ancestor's run branch under the project org, orders them in the caller's DAG

@@ -1,6 +1,6 @@
-// P2A-0020 per-kind compute tests using the InsightsMemoryClient fixture.
+// per-kind compute tests using the InsightsMemoryClient fixture.
 //
-// The Phase 1 fixture data produces zero insights — no retries, no model
+// The fixture data produces zero insights — no retries, no model
 // variance, no slow in-flight tasks. We assert that exact shape, then layer
 // synthetic data that should trigger each kind.
 

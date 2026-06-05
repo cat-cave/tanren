@@ -1,4 +1,4 @@
-// P2e-1 flaky-detection reducer tests. `deriveFlakyTests` is pure over its
+// flaky-detection reducer tests. `deriveFlakyTests` is pure over its
 // per-check CI observations, so every assertion is against hand-built fixtures
 // — no DB. The CRITICAL SAFETY property is proven here: a CONSISTENTLY-failing
 // check is NEVER flagged (so quarantine can never mask a genuinely-broken test),

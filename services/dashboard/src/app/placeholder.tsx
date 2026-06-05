@@ -1,5 +1,5 @@
 /**
- * Placeholder page body for sidenav rows that do not yet have a Phase-2B
+ * Placeholder page body for sidenav rows that do not yet have an
  * implementation. Every placeholder states which phase the surface ships in and
  * (where known) the owning spec, satisfying the acceptance criterion that empty
  * routes are documented rather than blank.

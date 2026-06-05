@@ -1,15 +1,15 @@
 /**
- * P3-0019 DORA metrics route. Mounts ONE GET through the shell:
+ * DORA metrics route. Mounts ONE GET through the shell:
  *   GET /dora?windowDays=30 — org-level DORA-like delivery metrics panel.
  *
  * The four metrics (lead time, deploy frequency, change-failure rate, MTTR) are
  * computed orchestrator-side from existing run/event data (`GET .../dora`,
- * P3-0019); this route just resolves the active project, fetches the payload,
+ *); this route just resolves the active project, fetches the payload,
  * and renders it through the shell. Reported, not targeted — no new collection.
  *
  * Mounted via ONE append to SCREEN_MOUNTS in app/screens.ts. Reuses
  * loadShellContext + renderShell; never touches the chrome. Overrides the
- * P2B-0001 `/dora` placeholder for the `dora` sidenav row.
+ * `/dora` placeholder for the `dora` sidenav row.
  */
 
 import type { Context, Hono } from "hono";

@@ -1,6 +1,6 @@
-// P2B-0004 — SSE proxy test with a FAKE upstream stream (no live orchestrator).
+// SSE proxy test with a FAKE upstream stream (no live orchestrator).
 // The dashboard exposes a same-origin proxy at /runs/:runId/stream that forwards
-// the orchestrator P2A-0014 stream with the session cookie; the browser island
+// the orchestrator stream with the session cookie; the browser island
 // subscribes to it. Here we stub fetch so the "orchestrator" returns a canned
 // `event:/data:` SSE body and assert the proxy streams it through verbatim with
 // the right content-type.

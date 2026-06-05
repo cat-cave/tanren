@@ -1,12 +1,12 @@
 /**
- * P2B-0005 cost aggregation — pure shaping of P2A-0011 cost records (consumed
- * via P2A-0014's run-scoped `/costs` API) into the figures the costs dashboard
+ * cost aggregation — pure shaping of cost records (consumed
+ * via the run-scoped `/costs` API) into the figures the costs dashboard
  * renders. No I/O, no presentation: the route fetches records, this module
  * rolls them up, and the view composes the markup.
  *
  * ## The three pricing models (PROJECT_BRIEF §4) ↔ the real enum
  *
- * Every record carries the FROZEN P2A-0011 `billingMode` + `costBasis` enums.
+ * Every record carries the FROZEN `billingMode` + `costBasis` enums.
  * The operator-facing "three cost models" are the `billingMode` axis:
  *   - per_token    → §4.1 token-billed (real dollars; basis ccusage|provider_response)
  *   - subscription → §4.3 subscription-window (no per-call $ basis; costUsd null
@@ -20,7 +20,7 @@
  * The hi-fi's older source labels (`provider_direct` / `codexbar` /
  * `opportunity_computed`, and a four-way token/window/opp/infra split) are
  * reconciled here onto the shipped `billingMode` axis. There is no `infra`
- * billing mode in P2A-0011 cost records, so infra is NOT fabricated — only the
+ * billing mode in cost records, so infra is NOT fabricated — only the
  * three real models are surfaced.
  */
 
@@ -340,7 +340,7 @@ function dayKey(iso: string): string {
 /**
  * Build a burn projection over the trailing `windowDays` ending at `now`.
  * Buckets priced dollars by UTC day; the projection is a flat linear estimate
- * (dailyAvg × 30) — deliberately simple for v0, refined in Phase 3.
+ * (dailyAvg × 30) — deliberately simple for v0.
  */
 export function projectBurn(
   records: readonly CostRecord[],
@@ -423,7 +423,7 @@ const HALTED_OUTCOMES = new Set(["halted", "escape_hatch_hit", "retry_budget_exh
 
 /**
  * Observed run metrics for the reported-not-targeted panel. `merged` is keyed
- * on the Phase-1/2 completion outcomes; halt-rate on the escape-hatch family.
+ * on the completion outcomes; halt-rate on the escape-hatch family.
  * Cost-per-merged divides total priced spend by the merged-run count.
  */
 export function observeMetrics(runs: readonly { outcome: string | null }[], totalPricedUsd: number): ObservedMetrics {

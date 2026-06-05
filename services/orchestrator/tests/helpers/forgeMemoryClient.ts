@@ -1,4 +1,4 @@
-// In-memory pg substitute scoped to the P2A-0019 Forge thread/turn stores
+// In-memory pg substitute scoped to the Forge thread/turn stores
 // and the embedded scope checks. Mirrors the entity/routes memory clients;
 // only the SQL fragments emitted by the forge layer are handled.
 
@@ -138,7 +138,7 @@ export class ForgeMemoryClient {
       const row = this.turns.find((t) => t.id === String(params[0]));
       return single(row);
     }
-    // ---- P3-0010 forge_action_proposals ----
+    // ---- forge_action_proposals ----
     if (trimmed.startsWith("INSERT INTO forge_action_proposals")) {
       const row: ProposalRow = {
         id: String(params[0]),

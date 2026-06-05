@@ -1,4 +1,4 @@
-// Test helpers shared by the P2A-0012 planner-loop test suites. Provides:
+// Test helpers shared by the planner-loop test suites. Provides:
 // - FakePool, a tiny pg substitute that captures task + cost inserts;
 // - factories for in-memory planner / checker / auditor / writer adapters;
 // - canned PlanAnswer / CheckAnswer / AuditAnswer fixtures;

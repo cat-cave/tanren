@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-// Verifies the collapsed baseline ships the P2A-0018 product entity tables with
+// Verifies the collapsed baseline ships the product entity tables with
 // the constraints the spec requires. The migration chain was collapsed to a
 // single baseline (`0000_collapsed_baseline.sql`); the old 0005 migration's
 // seed/backfill DO blocks are gone — a zero-user, zero-DB collapse never

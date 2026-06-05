@@ -4,7 +4,7 @@
  * the design-token stylesheets, sets the initial `data-theme`, and loads the
  * client-islands bundle that hydrates the interactive bits.
  *
- * Child screens (P2B-0002…0009) do NOT reimplement this — they call
+ * Child screens do NOT reimplement this — they call
  * `renderShell(...)` (see `mountShell.tsx`) with their page body and a context
  * describing the active org/project/nav row. This is the shared extension
  * point; keeping it here means the fan-out subagents never touch the chrome.

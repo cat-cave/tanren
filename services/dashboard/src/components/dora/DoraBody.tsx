@@ -1,5 +1,5 @@
 /**
- * P3-0019 DORA-like metrics panel body. Renders the four delivery metrics —
+ * DORA-like metrics panel body. Renders the four delivery metrics —
  * lead time, deploy frequency, change-failure rate, mean time to restore —
  * derived from existing run/event data by the orchestrator (`GET .../dora`).
  *

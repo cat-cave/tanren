@@ -1,4 +1,4 @@
-// P2A-0019: templated v0 narration generator tests.
+// templated v0 narration generator tests.
 
 import { describe, expect, it } from "vitest";
 import type { ActorContext } from "../src/auth/schemas.js";

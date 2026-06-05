@@ -1,16 +1,16 @@
 /**
- * Routing & limits settings (P2B-0003). Renders the 6-role fallback-chain
+ * Routing & limits settings. Renders the 6-role fallback-chain
  * editor, the Vault per-cred policy panel (read-only), the escape-hatches
  * editor, and the conditional audit-gate caption — all generated from the
- * P2A-0006 routing schema (`RoutingTable` / `EscapeHatches`). v0 ships only
+ * routing schema (`RoutingTable` / `EscapeHatches`). v0 ships only
  * functional Codex bindings, but the editor handles 1..N-entry chains for
  * every role and any provider the schema accepts.
  *
  * Mutations are server-side form POSTs to this spec's own settings routes
  * (add / remove / reorder a chain entry; save escape hatches). Each POST loads
- * the merged config, applies the edit, and PATCHes it back via P2A-0013 (which
- * delegates to P2A-0006). No PR is opened — the audit-gate caption defaults to
- * the "edits land in the dashboard" state in Phase 2.
+ * the merged config, applies the edit, and PATCHes it back via the product API (which
+ * delegates to). No PR is opened — the audit-gate caption defaults to
+ * the "edits land in the dashboard" state.
  */
 
 import {
@@ -34,7 +34,7 @@ export const ROLE_DESCRIPTIONS: Record<RoleId, string> = {
   forge: "read-only narration with operator write-buttons · config edits land via this surface",
 };
 
-/** Default escape-hatch values (P2A-0006 schema defaults) shown as the diff cue. */
+/** Default escape-hatch values (schema defaults) shown as the diff cue. */
 export const ESCAPE_HATCH_DEFAULTS: EscapeHatches = {
   maxWriterIterPerSubtask: 5,
   maxPlannerRerunsPerSpec: 3,
@@ -50,9 +50,9 @@ interface VaultEntry {
 }
 
 /**
- * Vault per-cred policy display. Phase-2 v0 surfaces the Codex session-cookie
+ * Vault per-cred policy display. v0 surfaces the Codex session-cookie
  * entry as the wired credential; other rows describe their rotation policy.
- * Read-only — no values rendered (only paths + policy). Phase 3 reads these
+ * Read-only — no values rendered (only paths + policy). A later surface reads these
  * from the live Vault policy API.
  */
 const VAULT_ENTRIES: VaultEntry[] = [
@@ -75,15 +75,15 @@ export interface SettingsBodyProps {
   routing: RoutingTable;
   escapeHatches: EscapeHatches;
   orgId: string;
-  /** Org audit-gate flag (P3-0017). On → Bucket-B writes route through a PR. */
+  /** Org audit-gate flag. On → Bucket-B writes route through a PR. */
   auditGate: boolean;
   /** The configured tanren-config repo (`owner/name`), when the gate is set. */
   auditGateRepo?: string;
   /** True after a successful save; renders the saved banner. */
   saved?: boolean;
-  /** Org-scoped credential refs (P3-0002), used to populate the binding dropdowns. */
+  /** Org-scoped credential refs, used to populate the binding dropdowns. */
   orgCredentials?: CredentialRecord[];
-  /** The project's currently-bound credential refs (P3-0002). */
+  /** The project's currently-bound credential refs. */
   boundCredentials?: { codexCredentialRef?: string; githubCredentialRef?: string };
 }
 
@@ -249,7 +249,7 @@ function VaultPanel() {
 }
 
 /**
- * Credentials binding (P3-0002). Two dropdowns — Codex + GitHub — populated
+ * Credentials binding. Two dropdowns — Codex + GitHub — populated
  * from the org's credential REFERENCES (never values), persisting the chosen
  * refs into project config via the settings PATCH path. An empty selection
  * clears the binding so the run falls back to the org default. No secret value
@@ -411,9 +411,9 @@ function EscapeHatchesPanel(props: SettingsBodyProps) {
 /**
  * The "tell forge to change config" panel. The caption is conditional on the
  * org audit-gate flag: on → "edits land as a pr in <org>/tanren-config"; off
- * (Phase 2 default) → "edits land in the dashboard · no PR required". The
+ * (the v0 default) → "edits land in the dashboard · no PR required". The
  * audit-gate toggle itself is hidden in v0. The natural-language input is a
- * stub (full Forge config-edit PRs are Phase 3).
+ * stub (full Forge config-edit PRs are a later surface).
  */
 function AuditGatePanel(props: SettingsBodyProps) {
   return (

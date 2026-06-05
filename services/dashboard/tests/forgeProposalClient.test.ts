@@ -1,4 +1,4 @@
-// P3-0010 (write-action approval): the dashboard's proposal-decision client.
+// (write-action approval): the dashboard's proposal-decision client.
 //
 // `decideForgeProposal` POSTs to the orchestrator's approve/reject route and
 // maps the HTTP status to a typed outcome the palette island renders. The

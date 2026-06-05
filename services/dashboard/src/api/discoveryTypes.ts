@@ -1,8 +1,8 @@
 /**
- * P3-0014 spec-discovery client types — the dashboard-side mirror of the
+ * spec-discovery client types — the dashboard-side mirror of the
  * orchestrator's `engine/forge/discovery` contracts. Kept in their own module
  * (not `types.ts`, which is at the 500-line cap) so the discovery surface owns
- * its own data shapes — the same isolation lesson the P2B integration pass
+ * its own data shapes — the same screen-isolation lesson the dashboard
  * recorded (parallel client-touching screens get their own api modules).
  */
 

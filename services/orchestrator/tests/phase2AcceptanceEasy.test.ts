@@ -1,4 +1,4 @@
-// P2A-0015 dry-run smoke for the easy-tier acceptance assertions.
+// dry-run smoke for the easy-tier acceptance assertions.
 //
 // The live `just acceptance-easy` recipe is local-only (real Codex, real
 // GitHub PR). This test exercises the persisted-state assertion module

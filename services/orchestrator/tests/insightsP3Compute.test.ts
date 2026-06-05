@@ -1,6 +1,6 @@
-// P3-0020 compute tests for the two new workflow insights:
-//   - `stuck`: derived from spec_dependencies + spec status (P2A-0018).
-//   - `review_stall`: derived from review.*/merge.completed events (P3-0008).
+// compute tests for the two new workflow insights:
+//   - `stuck`: derived from spec_dependencies + spec status.
+//   - `review_stall`: derived from review.*/merge.completed events.
 // Both use the InsightsMemoryClient fixture, mirroring insightsCompute.test.ts.
 
 import type pg from "pg";

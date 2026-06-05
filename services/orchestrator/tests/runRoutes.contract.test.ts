@@ -1,4 +1,4 @@
-// P2A-0014 contract tests. Each endpoint:
+// contract tests. Each endpoint:
 //   - returns the contract-typed shape (validated against the Zod schema)
 //   - rejects unauth (no actor) with 401 via the auth middleware
 //   - rejects cross-org with 403
@@ -73,7 +73,7 @@ function seedRunFixture(
     pr_url: "https://github.com/cat-cave/tanren-fixture-easy/pull/42",
     branch: "tanren/phase1-fixture",
   });
-  // Tasks: planner, writer, checker, auditor, ci — full Phase 1 chain.
+  // Tasks: planner, writer, checker, auditor, ci — the full role chain.
   for (const [i, kind] of ["plan", "write", "check", "audit", "ci"].entries()) {
     pool.seedTask({
       task_id: `task_${kind}_${i}`,

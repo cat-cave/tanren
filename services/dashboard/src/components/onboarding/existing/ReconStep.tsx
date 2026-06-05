@@ -1,5 +1,5 @@
 /**
- * P3-0016 brownfield step 2 — read-only recon. Renders the chapters the
+ * brownfield step 2 — read-only recon. Renders the chapters the
  * read-only Answerer pre-filled (identity / personas / behaviors / architecture
  * / risks) for operator review, plus the gap cards the operator settles. The
  * recon report rides forward on a hidden form field (transient — no session

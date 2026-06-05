@@ -1,4 +1,4 @@
-// P2B-0004 — rendered-HTML acceptance tests for the run-detail + review
+// rendered-HTML acceptance tests for the run-detail + review
 // surfaces. Mirrors the shell render harness (shell.render.test.ts): build the
 // app with a stubbed pool + a mocked orchestrator (global fetch) and assert the
 // server-rendered HTML. No live orchestrator, no DB.
@@ -105,7 +105,7 @@ describe("P2B-0004 run-detail screen", () => {
 
   it("delegates /runs/halted to P2B-0008's halted-run list (not the run-detail page)", async () => {
     // The `:runId` handler must NOT treat the literal `halted` as a run id —
-    // it delegates via next() so P2B-0008's halted-run list claims the route.
+    // it delegates via next() so the halted-run list claims the route.
     mockOrchestrator();
     const app = await build();
     const html = await (await app.request("/runs/halted")).text();
@@ -164,7 +164,7 @@ describe("P2B-0004 review handoff", () => {
 });
 
 // ---------------------------------------------------------------------------
-// P3-0025 — live preview-deploy pane in the review surface.
+// live preview-deploy pane in the review surface.
 // ---------------------------------------------------------------------------
 
 /**

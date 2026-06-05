@@ -1,8 +1,8 @@
 /**
- * P3-0016 — the brownfield (`/onboarding/existing`) FULL track body: the 5-step
+ * the brownfield (`/onboarding/existing`) FULL track body: the 5-step
  * shell over the shared `OnbStyles` plus the brownfield-specific
  * `ExistingStyles`. Pure dispatch over the active step:
- *   1 link repo        — the P2B-0002 `ExistingProjectBody` (reused verbatim)
+ *   1 link repo        — the `ExistingProjectBody` (reused verbatim)
  *   2 recon            — read-only Answerer chapters + gaps
  *   3 config-injection — 6-file preview + per-file exclude → open PR
  *   4 spec dag + seed  — recon gaps + GitHub issues → seed specs

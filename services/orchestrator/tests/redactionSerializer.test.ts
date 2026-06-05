@@ -9,7 +9,7 @@ import {
   redactEventPayload,
 } from "../src/engine/redaction/index.js";
 
-// These tests pin the P2A-0009 contract: redact by default, opt-in raw for
+// These tests pin the contract: redact by default, opt-in raw for
 // elevated actors, emit an audit row when raw bytes flowed.
 
 function actor(scopes: ActorContext["scopes"], overrides: Partial<ActorContext> = {}): ActorContext {
@@ -333,7 +333,7 @@ describe("redaction audit emitter", () => {
 });
 
 describe("redaction round-trip against Phase 1-shaped events", () => {
-  // Synthesized fixture events shaped like the Phase 1 timeline. Each is
+  // Synthesized fixture events shaped like the fixture timeline. Each is
   // serialized for a project_member; every redacted/secret field must come
   // back as a marker.
   const member = actor(["project:member"]);

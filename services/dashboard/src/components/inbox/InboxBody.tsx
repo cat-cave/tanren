@@ -1,10 +1,10 @@
 /**
- * P3-0022 candidate-inbox surface (the hi-fi `view-inbox` flow). Composes:
+ * candidate-inbox surface (the hi-fi `view-inbox` flow). Composes:
  *   - the CONFIGURABLE source list (connector kind + detail + on/auto state);
  *   - the candidate stream, each with its Forge TRIAGE read-out (dedupe /
- *     match / placement / verdict) — the same answerer seam as P3-0010/P3-0014;
+ *     match / placement / verdict) — the same answerer seam as the conversation/discovery surfaces;
  *   - per-candidate ACTIONS that map to the orchestrator inbox routes:
- *       accept → opens discovery with the candidate (P3-0014 hand-off),
+ *       accept → opens discovery with the candidate (hand-off),
  *       fold-into-live-run / dismiss / close-as-dup.
  *
  * System sources auto-route (verdict auto_routable → candidate `auto_routed`);

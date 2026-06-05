@@ -1,13 +1,13 @@
 /**
- * P3-0021 scheduled-audits surface (the hi-fi `view-audits` flow). Composes:
- *   - the WHY-SCHEDULE pitch + the window-fill bar (ties to the P3-0018 idle
+ * scheduled-audits surface (the hi-fi `view-audits` flow). Composes:
+ *   - the WHY-SCHEDULE pitch + the window-fill bar (ties to the idle
  *     subscription-cost windows — reads existing data, never invents);
  *   - the AUDIT-JOB library (kind / cadence / target-window / Answerer CLI /
  *     last-run / findings) with a per-job enable toggle + run-now action;
  *   - the FORGE-RECOMMENDED coverage panel (gaps the org isn't yet running);
  *   - the NEW-AUDIT composer.
  *
- * Findings auto-route to the candidate inbox (P3-0022): a run emits each finding
+ * Findings auto-route to the candidate inbox: a run emits each finding
  * into the inbox as a system source, so the footer + the findings cell link to
  * `/inbox`. Every write is a server-side form POST to the audits route; the
  * surface holds no client state of its own.

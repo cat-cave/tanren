@@ -1,24 +1,24 @@
 /**
- * P2B-0003 mount: the chat-primary project view, the spec creation surface +
+ * mount: the chat-primary project view, the spec creation surface +
  * spec list, and the routing & limits settings — all registered through the
  * append-only screen registry (see `app/screens.ts`). Routes reuse the shell's
  * `loadShellContext` + `renderShell` and never touch the chrome. Backend reads
  * go through the typed `OrchestratorClient` (extended additively); writes are
- * server-side form POSTs that call P2A-0013/0019 and redirect back.
+ * server-side form POSTs that call the product API and redirect back.
  *
- * P3-0013 adds a DAG-primary mode (`?mode=dag` + persisted cookie) and
+ * adds a DAG-primary mode (`?mode=dag` + persisted cookie) and
  * delegates the spec drawer / full-page routes to `./specRoutes`.
  *
  * Routes registered:
  *   GET  /projects/:projectId                          project view (chat | dag)
  *   GET  /projects/:projectId/specs                    spec list
  *   GET  /projects/:projectId/specs/new                spec creation form
- *   POST /projects/:projectId/specs                    create spec (→ P2A-0013)
- *   POST /projects/:projectId/insights/act             subopt callout action (→ P2A-0019)
+ *   POST /projects/:projectId/specs                    create spec
+ *   POST /projects/:projectId/insights/act             subopt callout action
  *   GET  /settings/routing                             routing & limits (active project)
  *   GET  /settings/routing/:projectId                  routing & limits (explicit project)
- *   POST /settings/routing/:projectId/add|remove|reorder|hatches  config mutations (→ P2A-0013/0006)
- *   POST /settings/routing/:projectId/credentials                 bind codex+github refs (P3-0002)
+ *   POST /settings/routing/:projectId/add|remove|reorder|hatches  config mutations
+ *   POST /settings/routing/:projectId/credentials                 bind codex+github refs
  */
 
 import type { Context, Hono } from "hono";
@@ -54,7 +54,7 @@ function asArray(value: string | string[] | undefined): string[] {
 
 export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
   // -------------------------------------------------------------------------
-  // Chat-primary project view (overrides the P2B-0001 placeholder).
+  // Chat-primary project view (overrides the placeholder).
   // -------------------------------------------------------------------------
   app.get("/projects/:projectId", async (c) => {
     const projectId = c.req.param("projectId");
@@ -171,13 +171,13 @@ export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
     );
   });
 
-  // P3-0013 spec drawer fragment + full-page spec view (split into specRoutes
+  // spec drawer fragment + full-page spec view (split into specRoutes
   // to stay under the line cap). Registered after `/specs/new` so the static
   // route is not shadowed by the `:specId` param route.
   mountSpecDetailRoutes(app, deps);
 
   // -------------------------------------------------------------------------
-  // Create spec (POST → P2A-0013). Re-renders the form with an error banner on
+  // Create spec (POST →). Re-renders the form with an error banner on
   // failure; redirects to the spec list on success.
   // -------------------------------------------------------------------------
   app.post("/projects/:projectId/specs", async (c) => {
@@ -221,14 +221,14 @@ export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
     }
     // Milestone + behavior associations are carried as form fields; the
     // create-spec route persists the spec, and the run-detail loader already
-    // reads spec↔milestone/behavior links from P2A-0018 join tables. v0 leaves
+    // reads spec↔milestone/behavior links from join tables. v0 leaves
     // the association write to the planner; the operator's selections are
     // forwarded but not yet bound here (documented punt — see PR body).
     return c.redirect(`/projects/${projectId}/specs`);
   });
 
   // -------------------------------------------------------------------------
-  // Suboptimal-callout action: proxy the carried Forge tool call to P2A-0019
+  // Suboptimal-callout action: proxy the carried Forge tool call to the forge route
   // via the dashboard's existing /forge/tools proxy contract, then redirect
   // back to the project view.
   // -------------------------------------------------------------------------
@@ -309,7 +309,7 @@ function mountRoutingSettingsScreens(app: Hono, deps: ShellDeps): void {
     const { routing, escapeHatches } = resolveConfig(detail?.config);
     const boundCredentials = detail?.config?.credentials ?? {};
     const saved = c.req.query("saved") === "1";
-    // P3-0017: surface the org audit-gate state so the toggle reflects reality.
+    // surface the org audit-gate state so the toggle reflects reality.
     const auditGate = org?.config.auditGateEnabled === true;
     return renderShell(
       c,
@@ -385,7 +385,7 @@ function mountRoutingSettingsScreens(app: Hono, deps: ShellDeps): void {
     return c.redirect(`/settings/routing/${projectId}?saved=1`);
   });
 
-  // Bind the project's Codex + GitHub credential refs (P3-0002). An empty
+  // Bind the project's Codex + GitHub credential refs. An empty
   // submitted value clears the binding so the run inherits the org default.
   app.post("/settings/routing/:projectId/credentials", async (c) => {
     const projectId = c.req.param("projectId");
@@ -432,7 +432,7 @@ function mountRoutingSettingsScreens(app: Hono, deps: ShellDeps): void {
 /**
  * Load the merged config, apply `edit` to a working copy, PATCH it back. The
  * working copy is built from a defaulted routing table + escape hatches so the
- * PATCH always sends a complete, schema-valid config (P2A-0006 / P2A-0013).
+ * PATCH always sends a complete, schema-valid config (/).
  */
 async function mutateConfig(
   c: Context,

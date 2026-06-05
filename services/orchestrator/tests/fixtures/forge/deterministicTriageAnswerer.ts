@@ -1,7 +1,7 @@
-// P3-0022 candidate-inbox: deterministic, grounded triage answerer.
+// candidate-inbox: deterministic, grounded triage answerer.
 //
 // The fallback `TriageAnswerer` used when no provider Answerer is wired — the
-// analogue of P3-0014's `createDeterministicDiscoveryAnswerer`. It is grounded
+// analogue of the discovery `createDeterministicDiscoveryAnswerer`. It is grounded
 // (it reads the candidate + the existing-spec list it is handed) but
 // deterministic, so the triage endpoint is live without provider infra and the
 // verdict is testable without hitting an LLM. Production swaps in a

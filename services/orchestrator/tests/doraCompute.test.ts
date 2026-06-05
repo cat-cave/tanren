@@ -1,4 +1,4 @@
-// P3-0019 DORA-metric reducer tests. `deriveDoraMetrics` is pure over its
+// DORA-metric reducer tests. `deriveDoraMetrics` is pure over its
 // inputs (merge / finished-run / recovery rows), so every metric is asserted
 // against hand-built fixture rows — no DB. Covers each of the four metrics plus
 // the honest-absence (`null`) and genuine-zero shapes.

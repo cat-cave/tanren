@@ -1,4 +1,4 @@
-// P2A-0013: dispatch handlers for the new product-API CLI verbs. Keeps the
+// dispatch handlers for the new product-API CLI verbs. Keeps the
 // growing surface out of `cli/src/main.ts` so that file stays under the
 // 500-line architecture cap.
 

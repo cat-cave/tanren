@@ -46,7 +46,7 @@ export class RecordingPool {
 }
 
 export class RecordingRunPool extends RecordingPool {
-  // P2c-1: a speculative run's dynamic base; null ⇒ a normal run (default_branch).
+  // a speculative run's dynamic base; null ⇒ a normal run (default_branch).
   constructor(readonly speculativeBase: string | null = null) {
     super();
   }

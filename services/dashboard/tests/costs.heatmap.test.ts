@@ -1,6 +1,6 @@
-// P3-0018 subscription-window heatmap aggregation unit tests. Exercises the
+// subscription-window heatmap aggregation unit tests. Exercises the
 // 30-day × 5-window fill matrix + per-window avg-fill derived from existing
-// P2A-0011 cost records (billingMode === "subscription"). Pure functions — no
+// cost records (billingMode === "subscription"). Pure functions — no
 // I/O, no new data collection.
 
 import { describe, expect, it } from "vitest";

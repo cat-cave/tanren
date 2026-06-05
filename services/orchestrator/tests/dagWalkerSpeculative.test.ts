@@ -1,4 +1,4 @@
-// P2c-1 (autonomy-engine.md §2c): the EventEmittingDagWalker's SPECULATIVE
+// (autonomy-engine.md §2c): the EventEmittingDagWalker's SPECULATIVE
 // behavior, driven through in-memory seams (test fixtures — they live here, never
 // in src/). Proves: a speculative dependent gets a DYNAMIC BASE = its integration
 // branch + emits dag.spec.speculative; an A-vs-B integration conflict surfaces and
@@ -286,7 +286,7 @@ describe("DagWalker speculative execution (§2c)", () => {
     expect(spec.enqueuer.records[0]).toEqual({ specId: "spec_b", speculativeBase: "tanren/integ/spec_b" });
 
     // Tick 2 (after A REALLY merges): a fresh dependent C on the now-merged A bases
-    // on default_branch (re-gate against reality, P2a). No speculative base.
+    // on default_branch (re-gate against reality). No speculative base.
     const real = makeWalker({
       nodes: [node("spec_a", "done", [], 0), node("spec_c", "pending", ["spec_a"], 1)],
       lifecycle: { spec_a: "merged", spec_c: "pending" },

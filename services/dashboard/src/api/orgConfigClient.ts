@@ -1,5 +1,5 @@
 /**
- * P3-0017 org-config client surface, split out of `orchestrator.ts` so the
+ * org-config client surface, split out of `orchestrator.ts` so the
  * product client stays under the 500-line architecture cap (same split
  * rationale as `recoveryClient.ts` / `forgeConversationClient.ts`). Lands on
  * `OrchestratorClient` via inheritance.
@@ -22,12 +22,12 @@ export interface PatchOrgConfigResult {
 }
 
 export abstract class OrchestratorOrgConfigClient extends OrchestratorForgeConversationClient {
-  /** Org with its merged config (`GET /orgs/:orgId`, P2A-0013). */
+  /** Org with its merged config (`GET /orgs/:orgId`). */
   async getOrg(orgId: string): Promise<OrgDetail | undefined> {
     return this.getJson<OrgDetail>(`/orgs/${encodeURIComponent(orgId)}`);
   }
 
-  /** Persist org config (P2A-0013 PATCH); reports a gated outcome (P3-0017). */
+  /** Persist org config (PATCH); reports a gated outcome. */
   async patchOrgConfig(orgId: string, config: OrgConfig): Promise<PatchOrgConfigResult> {
     const result = await this.sendJson<{ gated?: boolean; pr?: { number: number; url: string } }>(
       "PATCH",

@@ -1,6 +1,6 @@
 /**
- * P3-0021 window-fill bar data — derives the per-window fill columns from the
- * P3-0018 subscription-window heatmap (reads existing data; no new collection).
+ * window-fill bar data — derives the per-window fill columns from the
+ * subscription-window heatmap (reads existing data; no new collection).
  * Each column is one of the five 5-hour windows with its avg fill % and a
  * status tier (lo < 30% / mid / hi ≥ 70%), exactly the cost-view idle-window
  * story the audits surface ties into.

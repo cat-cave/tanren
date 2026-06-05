@@ -1,9 +1,9 @@
-// P3-0010: thick-Forge chat island — action-card routing logic.
+// thick-Forge chat island — action-card routing logic.
 //
 // `routeForAction` is the seam that decides whether a ForgeAnswer action
 // renders as an AUTO-NAVIGATE card (read tools → in-shell route). Write tools
 // return undefined: they are NOT navigation actions — proposed writes render as
-// live approve/reject proposal cards instead (P3-0010 write-action approval,
+// live approve/reject proposal cards instead (write-action approval,
 // covered by forgeProposalClient.test.ts). Unit-tested directly (no DOM).
 
 import { describe, expect, it } from "vitest";

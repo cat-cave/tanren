@@ -1,8 +1,8 @@
 /**
- * P3-0016 brownfield full-track client. A STANDALONE client over the shared
+ * brownfield full-track client. A STANDALONE client over the shared
  * HTTP transport (`OrchestratorHttpClient`) — not folded into the product
  * `OrchestratorClient` chain — so the brownfield full-track surface owns its
- * own api module (the P3-0014/0015 isolation lesson). Four calls map 1:1 onto
+ * own api module (the screen-isolation lesson). Four calls map 1:1 onto
  * the orchestrator brownfield full-track routes:
  *   recon           → POST .../recon
  *   configInjection → POST .../config-injection
@@ -81,7 +81,7 @@ export class ExistingBrownfieldClient extends OrchestratorHttpClient {
     return { ok: r.ok, status: r.status, result: r.body };
   }
 
-  /** Persist the chosen governance posture (P3-0023). */
+  /** Persist the chosen governance posture. */
   async governance(
     orgId: string,
     projectId: string,

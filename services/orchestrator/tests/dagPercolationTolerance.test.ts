@@ -1,4 +1,4 @@
-// P2c-2 percolation kick-off TOLERANCE (the apex v18 fix): the PercolatingCoordinator
+// percolation kick-off TOLERANCE (the apex v18 fix): the PercolatingCoordinator
 // must SKIP — not abort on — a candidate that became TERMINAL (merged/done) between the
 // load and the re-execution kick-off. The re-exec reopens the spec to `pending` (a no-op
 // once merged/done) then claims it, and the claim raises SpecNotRunnableError on a

@@ -17,12 +17,12 @@ function boot(): void {
   initTheme();
   initOrgSwitcher();
   initPalette();
-  // P2B-0004 run-detail + review islands (no-op when their markup is absent).
+  // run-detail + review islands (no-op when their markup is absent).
   initRunStream();
   initReviewHandoff();
-  // P3-0013 DAG-primary canvas + spec drawer (no-op when absent).
+  // DAG-primary canvas + spec drawer (no-op when absent).
   initDagCanvas();
-  // P3-0014 spec-discovery placement selection (no-op when absent).
+  // spec-discovery placement selection (no-op when absent).
   initDiscovery();
 }
 

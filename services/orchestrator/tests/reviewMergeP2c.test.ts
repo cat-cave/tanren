@@ -1,4 +1,4 @@
-// P2c-1 (autonomy-engine.md §2c): the SPECULATIVE-MERGE-HOLD at the merge stage —
+// (autonomy-engine.md §2c): the SPECULATIVE-MERGE-HOLD at the merge stage —
 // the safety property that a speculative dependent's MERGE waits until its
 // ancestors are genuinely merged (no unreviewed ancestor code reaches `main`
 // early). Its WORK proceeded against the integration branch, but `mergeForRun`
@@ -96,7 +96,7 @@ describe("P2c-1 speculative-merge-hold (merge stage)", () => {
     pool.specDependsOn = ["spec_a"];
     pool.mergedAncestors = ["spec_a"];
     const events = new FakeEventStore();
-    // After the retarget to `main`, the branch is BEHIND the new base → P2a rebases.
+    // After the retarget to `main`, the branch is BEHIND the new base → rebases.
     const probe = recordingMergeProbe(
       { merged: true, mergeSha: "rebased-sha", conflict: false, status: 200, message: "merged" },
       {
@@ -121,7 +121,7 @@ describe("P2c-1 speculative-merge-hold (merge stage)", () => {
     });
 
     expect(result.outcome).toBe("merged");
-    // Re-target THEN P2a rebase onto the new (real) base THEN merge.
+    // Re-target THEN rebase onto the new (real) base THEN merge.
     expect(probe.retargetedBases).toEqual(["main"]);
     expect(probe.updateBranchCalls).toBe(1);
     expect(reGateCalls).toBe(1);

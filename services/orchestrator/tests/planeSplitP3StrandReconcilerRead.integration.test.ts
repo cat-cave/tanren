@@ -1,4 +1,4 @@
-// Plane-split P3 — the NEVER-STRAND reconciler EVENTS-READ gap regression,
+// Plane-split — the NEVER-STRAND reconciler EVENTS-READ gap regression,
 // against a REAL Postgres (no SQL mocks). Same class as PR #270's lifecycle-read
 // gap: the worker connects as the de-privileged `tanren_dataplane` role (0031
 // REVOKE ALL ON TABLE events), but `PgSpecStrandReadModel.countPriorUnstrands`

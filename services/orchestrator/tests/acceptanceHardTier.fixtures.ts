@@ -1,6 +1,6 @@
 /**
  * acceptanceHardTier.fixtures — the scripted fakes, gates, and seeded-run setup
- * for the P3-0026 hard-tier acceptance test. Extracted from
+ * for the hard-tier acceptance test. Extracted from
  * acceptanceHardTier.test.ts to keep that file under the 500-line cap.
  */
 import type { AuditAnswer, CheckAnswer, PlanAnswer } from "../src/engine/answerers/schemas/index.js";
@@ -210,7 +210,7 @@ export function hardTierWorkflowRunner(github: GitHubHttpClient, trace: HardTier
                 message: "merged",
               };
         },
-        // P2a: the branch reports CLEAN, so the up-to-date enforcement is a no-op
+        // the branch reports CLEAN, so the up-to-date enforcement is a no-op
         // and this fixture still exercises the merge-TIME conflict + resolver
         // retry path (the GitHub merge API returns the 409 on the first attempt).
         readMergeability: async () => ({

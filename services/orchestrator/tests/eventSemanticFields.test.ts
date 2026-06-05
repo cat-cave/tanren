@@ -140,7 +140,7 @@ describe("event semantic fields", () => {
 
   it("registered sensitivity rules cover all the documented sensitive fields", () => {
     // sensitive tags: secret is reserved for raw stdout/stderr; ensure at
-    // least one such registration exists so the P2A-0009 redaction layer has
+    // least one such registration exists so the redaction layer has
     // a downstream contract to test against.
     const rules = listSensitivityRules();
     const secrets = rules.filter((rule) => rule.tag === "secret");

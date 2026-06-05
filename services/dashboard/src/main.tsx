@@ -19,7 +19,7 @@ const ForgeToolProxyBody = z.object({
   args: z.record(z.string(), z.unknown()).default({}),
 });
 
-/** Body for the dashboard's thick-Forge chat proxy (P3-0010 ⌘K chat morph). */
+/** Body for the dashboard's thick-Forge chat proxy (⌘K chat morph). */
 const ForgeAskProxyBody = z.object({
   orgId: z.string().min(1),
   question: z.string().min(1).max(4000),
@@ -28,7 +28,7 @@ const ForgeAskProxyBody = z.object({
   threadId: z.string().min(1).optional(),
 });
 
-/** Body for the proposal approve/reject proxy (P3-0010 write-action approval). */
+/** Body for the proposal approve/reject proxy (write-action approval). */
 const ForgeProposalDecisionBody = z.object({
   orgId: z.string().min(1),
   proposalId: z.string().min(1),
@@ -176,7 +176,7 @@ export async function createApp(options: CreateAppOptions = {}) {
     return c.json(result);
   });
 
-  // P3-0010 thick-Forge chat proxy: the ⌘K chat morph POSTs the operator's
+  // thick-Forge chat proxy: the ⌘K chat morph POSTs the operator's
   // question here, we forward the cookie to the orchestrator's LLM-backed
   // conversation endpoint and return the forge turn's ForgeAnswer render.
   app.post("/forge/ask", async (c) => {
@@ -200,7 +200,7 @@ export async function createApp(options: CreateAppOptions = {}) {
     return c.json(result);
   });
 
-  // P3-0010 write-action approval: approve/reject a proposed write. The palette
+  // write-action approval: approve/reject a proposed write. The palette
   // island POSTs here; we forward the cookie to the orchestrator's decision
   // route (which authz's + executes under the approving operator). Idempotent —
   // an already-decided proposal surfaces as `already_decided`, never a re-run.
@@ -226,7 +226,7 @@ export async function createApp(options: CreateAppOptions = {}) {
     });
   }
 
-  // Child screens (P2B-0002…0009) FIRST, via the append-only screen registry,
+  // Child screens FIRST, via the append-only screen registry,
   // so their real routes claim their paths before the shell fills the gaps.
   mountScreens(app, shellDeps);
 

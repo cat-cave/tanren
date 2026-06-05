@@ -1,16 +1,16 @@
 /**
- * P3-0015 greenfield onboarding (`/onboarding/new`) — the FULL track that
+ * greenfield onboarding (`/onboarding/new`) — the FULL track that
  * supersedes the thin form: multi-round Forge vision interview → derived spec
  * DAG → arrival. Registered through the append-only screen registry (its own
  * mount fn), so it does NOT edit the SHARED `routes/onboarding/index.tsx`
  * brownfield handler — it owns its routes entirely under `routes/onboarding/new`.
  *
  * Composes:
- *   - P3-0010 answerer seam: each interview round runs over the orchestrator's
+ *   - answerer seam: each interview round runs over the orchestrator's
  *     injectable interview answerer (deterministic fallback live by default).
- *   - P2A-0018/0013: on completion the capture DERIVES a real project's
+ *   - on completion the capture DERIVES a real project's
  *     personas/behaviors/milestones/specs (orchestrator `…/interview/derive`).
- *   - P3-0013: step 2 renders the just-derived graph via `getProjectDag` +
+ *   -: step 2 renders the just-derived graph via `getProjectDag` +
  *     `DagCanvas` — the DAG is live, not a mock.
  *
  * State model (no migration, no session table): the running capture rides on a
@@ -195,7 +195,7 @@ async function handleDerive(c: Context, ctx: ShellContext, deps: ShellDeps, capt
   return renderDerivedStep(c, ctx, deps, 2, result.projectId, result.projectName);
 }
 
-// Fetch the live derived DAG (P3-0013) for the project and render step 2 or 3.
+// Fetch the live derived DAG for the project and render step 2 or 3.
 async function renderDerivedStep(
   c: Context,
   ctx: ShellContext,

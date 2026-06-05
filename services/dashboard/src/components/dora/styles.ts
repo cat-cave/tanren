@@ -1,7 +1,7 @@
 /**
- * P3-0019 DORA panel screen-scoped CSS. Lives in the owned `components/dora`
+ * DORA panel screen-scoped CSS. Lives in the owned `components/dora`
  * subtree (NOT shell.css) and is emitted as a `<style data-screen="dora">`
- * block by the DORA body. Every color is a design token (P2A-0016) — no
+ * block by the DORA body. Every color is a design token — no
  * hardcoded palette. Class names are namespaced under `.dora-screen` so they
  * never collide with shell chrome or the costs screen.
  */

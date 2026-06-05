@@ -1,9 +1,9 @@
 /**
- * Credentials surface (P2B-0002). Two columns — `org · shared` (billed to org)
+ * Credentials surface. Two columns — `org · shared` (billed to org)
  * and `dev · {user}` (billed to the operator) — each listing existing
  * credential REFERENCES (never values) and write-only import forms.
  *
- * Redaction (P2A-0009): no credential value is ever rendered after entry. The
+ * Redaction: no credential value is ever rendered after entry. The
  * list shows ref / kind / scope / created-at only; "view auth.json" surfaces
  * file metadata, not contents. Inputs are write-only and never re-populated.
  */

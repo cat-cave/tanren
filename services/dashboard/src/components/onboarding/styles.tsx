@@ -1,6 +1,6 @@
 /**
- * Screen-scoped CSS for the P2B-0002 onboarding / credentials / notifications
- * surfaces. The shell (P2B-0001) owns `shell.css`; child screens may not edit
+ * Screen-scoped CSS for the onboarding / credentials / notifications
+ * surfaces. The shell owns `shell.css`; child screens may not edit
  * it, so we ship our own token-driven styles inlined via a `<style>` tag (see
  * `OnbStyles`). Recreated from the hi-fi (`view-onboard-org.jsx`,
  * `view-onboard-existing.jsx`, `flows.jsx`, `styles.css`); token-only, no

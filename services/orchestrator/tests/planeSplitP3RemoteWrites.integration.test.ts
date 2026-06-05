@@ -1,4 +1,4 @@
-// Plane-split P3 — the control-plane RUN-STATE WRITE endpoints + the
+// Plane-split — the control-plane RUN-STATE WRITE endpoints + the
 // HttpRunStateWriter, proven against a REAL Postgres under the enforced
 // `tanren_app` RLS role (no SQL mocks). This is the security payoff of P3: the
 // data plane stops writing tenant tables directly — it POSTs to the control
@@ -189,7 +189,7 @@ describeDb("plane-split P3 — control-plane run-state write endpoints (real PG,
   });
 
   it("(3b) reconcile-cost apportions the run's cost_records server-side, org-scoped", async () => {
-    // Plane-split P3c: the run-end reconcile/back-fill must ALSO route through the
+    // the run-end reconcile/back-fill must ALSO route through the
     // control plane — the de-privileged data plane can no longer UPDATE
     // cost_records directly (0031). Seed two cost rows (token shares 3:1) via the
     // record endpoint, then reconcile a $4 run total and assert the rows were

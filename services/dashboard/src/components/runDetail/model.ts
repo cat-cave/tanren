@@ -1,6 +1,6 @@
 /**
- * Pure presentation helpers for the run-detail surface (P2B-0004). These take
- * the contract-typed run-detail payload (P2A-0014) and derive the view-model
+ * Pure presentation helpers for the run-detail surface. These take
+ * the contract-typed run-detail payload and derive the view-model
  * the TSX renders: the unified cost bar, the trajectory spine, and the
  * reasoning pane for a selected moment. No DOM, no JSX — kept pure so the unit
  * tests can assert the derivation without rendering.
@@ -215,7 +215,7 @@ export function spineProgress(moments: TrajectoryMoment[]): { donePct: number; l
 }
 
 // ---------------------------------------------------------------------------
-// Reasoning pane: structured fields from typed semantic events (P2A-0007)
+// Reasoning pane: structured fields from typed semantic events
 // ---------------------------------------------------------------------------
 
 /** A structured tool invocation pulled from the event payload. */
@@ -302,7 +302,7 @@ export function reasoningForTask(detail: RunDetail, taskId: string | null): Mome
 }
 
 // ---------------------------------------------------------------------------
-// P3-0008 review / merge state (derived from the run's typed events)
+// review / merge state (derived from the run's typed events)
 // ---------------------------------------------------------------------------
 
 /** The review/merge phase the operator surface reflects. */
@@ -377,7 +377,7 @@ export function reviewMergeStateFromEvents(events: RunEventRow[]): ReviewMergeSt
 }
 
 // ---------------------------------------------------------------------------
-// P3-0025 live preview-deploy URL (derived from per-project config + run state)
+// live preview-deploy URL (derived from per-project config + run state)
 // ---------------------------------------------------------------------------
 
 /** Pull the PR number out of a GitHub PR URL (`.../pull/142` → `142`), or null. */

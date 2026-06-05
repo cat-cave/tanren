@@ -1,5 +1,5 @@
 /**
- * P2B-0006 operator-triggered live workflow — the run-trigger mount.
+ * operator-triggered live workflow — the run-trigger mount.
  *
  * The "▶ start a run" affordance in the spec UI (SpecListBody) is a server-
  * rendered `<form method="post">` that POSTs here. This route resolves the
@@ -8,11 +8,11 @@
  * `trigger: "dashboard"` so the run's origin is recorded as the dashboard flow.
  *
  * On a 201 it redirects (303 POST-redirect-GET, so a browser refresh never
- * re-submits) to `/runs/:runId` — the P2B-0004 live run-detail view with its
+ * re-submits) to `/runs/:runId` — the live run-detail view with its
  * SSE feed. On a 4xx it re-renders the spec list with a typed, operator-facing
  * error banner: 409 spec_dependencies_blocked / spec_not_runnable are
  * meaningful feedback, NOT swallowed. A forced halt later surfaces on the
- * run-detail view and routes to the P2B-0008 recovery surface; see
+ * run-detail view and routes to the recovery surface; see
  * docs/operator-guide/operator-driven-run.md.
  *
  * Mounted via the append-only screen registry (`app/screens.ts`) so its POST
@@ -72,7 +72,7 @@ export function mountTriggerScreens(app: Hono, deps: ShellDeps): void {
     });
 
     if (result.ok && result.body !== undefined) {
-      // POST-redirect-GET to the live run-detail view (P2B-0004).
+      // POST-redirect-GET to the live run-detail view.
       return c.redirect(`/runs/${encodeURIComponent(result.body.runId)}`, 303);
     }
     return reRender(triggerErrorMessage(result.status, result.body));

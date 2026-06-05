@@ -1,9 +1,9 @@
 /**
- * P3-0015 — step 3 of the greenfield track: SOURCES, AUDITS, DORA, ARRIVAL. The
+ * step 3 of the greenfield track: SOURCES, AUDITS, DORA, ARRIVAL. The
  * derived project is real now, so this closes the flow: issue sources that feed
  * the DAG, the scheduled-audit library, DORA shown as observed-not-targeted,
  * and the arrival card ("your smithy is ready · N specs, 1 ready"). The arrival
- * action links into the live project's DAG (P3-0013) — the flow is done. The
+ * action links into the live project's DAG — the flow is done. The
  * source/audit toggles here are the visual entry points to their owning
  * surfaces (inbox / audits), not re-implementations of them.
  */

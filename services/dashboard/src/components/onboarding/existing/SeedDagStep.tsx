@@ -1,5 +1,5 @@
 /**
- * P3-0016 brownfield step 4 — spec DAG + issue ingest. Before seeding, offers a
+ * brownfield step 4 — spec DAG + issue ingest. Before seeding, offers a
  * "seed" button (POSTs to the route, which calls the orchestrator seed-dag
  * endpoint: recon gaps + open GitHub issues → seed specs, de-duped). After
  * seeding, renders the source legend (issue vs. gap) + the seeded specs.

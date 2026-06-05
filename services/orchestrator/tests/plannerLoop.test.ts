@@ -1,4 +1,4 @@
-// P2A-0012: planner-feedback-loop integration tests. Each test wires the
+// planner-feedback-loop integration tests. Each test wires the
 // loop with in-memory adapters from helpers/plannerLoopHelpers and asserts
 // on the event timeline + task-row shape produced by runSubtaskLoop.
 import { describe, expect, it } from "vitest";
@@ -341,7 +341,7 @@ describe("planner prompt + verdict decisions (pure)", () => {
     });
   });
 
-  // P3-0007: the checker is reframed to judge intent satisfaction only. The
+  // the checker is reframed to judge intent satisfaction only. The
   // prompt must forbid running/asserting tests/build/lint (a separate
   // deterministic gate owns correctness) and must require per-criterion
   // citation against the spec's explicit acceptance criteria.

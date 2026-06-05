@@ -1,7 +1,7 @@
-// P3-0014 spec discovery: deterministic, variant-aware discovery answerer.
+// spec discovery: deterministic, variant-aware discovery answerer.
 //
 // The fallback `DiscoveryAnswerer` used when no provider Answerer is wired —
-// the analogue of P3-0010's `createDeterministicForgeAnswerer`. It is grounded
+// the analogue of the conversation `createDeterministicForgeAnswerer`. It is grounded
 // (it reads the insight body + the existing-spec list it is handed) but
 // deterministic, so the discovery endpoint is live without provider infra and
 // the classification is testable without hitting an LLM. Production swaps in a

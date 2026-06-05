@@ -1,4 +1,4 @@
-// P2d (autonomy-engine.md §2d): the PURE merge-queue selection core
+// (autonomy-engine.md §2d): the PURE merge-queue selection core
 // (`selectNextMerge`) — the DAG-order + priority + serialization decision, pinned
 // with no DB or VCS. The conformance suite drives the full coordinator; this pins
 // the ordering algorithm directly so each rule is unambiguous.

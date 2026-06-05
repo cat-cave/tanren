@@ -1,4 +1,4 @@
-// P2d (autonomy-engine.md §2d): the merge-stage behavior under the `native_queue`
+// (autonomy-engine.md §2d): the merge-stage behavior under the `native_queue`
 // integration. The first run-loop pass ENTERS the ready run into Tanren's native
 // merge queue (emits merge.queued, NEVER calls the merge API); the coordinator's
 // DRIVE pass (`queueDrive: true`) runs the SAME directMerge path, labelled

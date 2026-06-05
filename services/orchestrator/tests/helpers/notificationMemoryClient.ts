@@ -1,5 +1,5 @@
 // Tiny in-memory pg substitute that pattern-matches the SQL emitted by the
-// P2A-0017 notification stores (targets, routes, dispatch log). Mirrors the
+// notification stores (targets, routes, dispatch log). Mirrors the
 // EntityMemoryClient approach used for product entities.
 
 interface StubResult {

@@ -1,4 +1,4 @@
-// Plane-split P3 — unit-level behavior of the run-state write endpoints + the
+// Plane-split — unit-level behavior of the run-state write endpoints + the
 // HttpRunStateWriter that need NO database:
 //
 //   1. authn REJECTS an untrusted (non-mTLS) peer with 401 BEFORE any DB work —
@@ -49,7 +49,7 @@ describe("plane-split P3 — write endpoint authn + validation (no DB)", () => {
       "/internal/append-event",
       "/internal/record-cost",
       "/internal/finalize-run",
-      // Plane-split P3c lifecycle endpoints — same authn-before-DB contract.
+      // Plane-split lifecycle endpoints — same authn-before-DB contract.
       "/internal/set-run-status",
       "/internal/set-run-pr-url",
       "/internal/set-spec-status",

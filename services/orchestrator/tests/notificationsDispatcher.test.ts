@@ -15,7 +15,7 @@ import { NotificationMemoryClient } from "./helpers/notificationMemoryClient.js"
 import type { ChannelRegistryDeps } from "../src/engine/notifications/registry.js";
 import { buildChannelRegistry } from "../src/engine/notifications/registry.js";
 
-// P2A-0017 dispatcher tests: end-to-end matrix evaluation + redaction +
+// dispatcher tests: end-to-end matrix evaluation + redaction +
 // channel publish + dispatch log. No real network; channels are either
 // stubs or a test-double NtfyChannel via the injected `fetch`.
 

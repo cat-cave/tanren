@@ -1,4 +1,4 @@
-// P3-0005: the gate's routing inside runSubtaskLoop. A mock runGate stands in
+// the gate's routing inside runSubtaskLoop. A mock runGate stands in
 // for the live exit-code gate so we can assert routing without a runner:
 // - a fast-tier (per_iteration) fail routes back to writer rework via the
 //   planner-rerequest path with producer="gate";

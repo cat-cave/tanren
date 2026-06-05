@@ -1,7 +1,7 @@
 // Per-implementation invocations of the IntegrationProvisioner conformance suite
 // + the registry / resolveSmartDefault unit coverage. The foundation wave has NO
 // real provider, so the contract is proven against the in-memory fake (the shape a
-// real provider's behavior will be held to). When P-INT-1+ land Sentry/Slack/…,
+// real provider's behavior will be held to). As providers land Sentry/Slack/…,
 // each adds one `describeIntegrationProvisionerConformance(...)` entry here — the
 // "slottable implementation" enabler, exactly like the allocator conformance file.
 
@@ -156,7 +156,7 @@ describe("SentryProvisioner — Sentry-specific behavior", () => {
   });
 });
 
-// --- P-INT-4 deploy provisioners: the SAME contract over both real providers ----
+// --- deploy provisioners: the SAME contract over both real providers ----
 // driven against a scripted in-memory transport (no live Vercel/Fly calls). Each
 // `make()` builds a fresh secret store (seeded with the org deploy token) + a
 // transport seeded with one existing app, so the brownfield `bind` spec targets it.
@@ -197,7 +197,7 @@ describeIntegrationProvisionerConformance("FlyDeployProvisioner", {
   seededResourceId: "fly_app_1",
 });
 
-// --- Contract conformance over the REAL SlackProvisioner (P-INT-3) -------------
+// --- Contract conformance over the REAL SlackProvisioner -------------
 // Driven against the scripted Slack transport (no real Slack call in CI). Seeded
 // with one brownfield channel so the bind spec has a target. Each make() gets its
 // own transport so the per-instance state (provision → discover) is isolated.

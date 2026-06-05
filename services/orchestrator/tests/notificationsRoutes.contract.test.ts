@@ -1,4 +1,4 @@
-// P2B-0002 (additive HTTP surface over P2A-0017): contract tests for the
+// (additive HTTP surface over): contract tests for the
 // notifications routes the dashboard consumes. Reuses the in-memory
 // notification pg substitute. Validates the matrix payload shape, target +
 // route creation, the cross-org guard on route creation, and that the event

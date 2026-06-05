@@ -1,5 +1,5 @@
 /**
- * Typed project-DAG read (P3-0013). The orchestrator already exposes every
+ * Typed project-DAG read. The orchestrator already exposes every
  * primitive the spec graph is built from — specs (with `dependsOn` spec-id
  * edges + status), milestones, behaviors, and runs — but no single endpoint
  * that returns the assembled graph. Rather than add a new persisted view or a
@@ -43,7 +43,7 @@ function priorityFor(status: DagStatus): DagNode["priority"] {
 
 /**
  * Pick the most-recent run per spec from the run list (runs arrive newest
- * first per P2A-0014 ordering, so the first match wins).
+ * first per ordering, so the first match wins).
  */
 function latestRunsBySpec(runs: RunListItem[]): Map<string, RunListItem> {
   const map = new Map<string, RunListItem>();

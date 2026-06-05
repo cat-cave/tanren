@@ -1,13 +1,13 @@
 /**
- * P2B-0004 run-detail + review-handoff routes. Mounted via the append-only
+ * run-detail + review-handoff routes. Mounted via the append-only
  * screen registry (`SCREEN_MOUNTS`) so the real routes claim their paths before
  * the shell fills gaps. Owns ONLY the run-detail surface (`/runs/:runId`) and
  * its review sub-surface (`/runs/:runId/review`) — `/runs/halted` belongs to
- * P2B-0008, so the `:runId` handler delegates that literal back to the shell
+ *, so the `:runId` handler delegates that literal back to the shell
  * placeholder via `next()`.
  *
  * The dashboard route is run-scoped (`/runs/:runId`); the orchestrator API
- * (P2A-0014) is org+project-scoped, so we resolve the run's location from the
+ * is org+project-scoped, so we resolve the run's location from the
  * operator's orgs/projects, then fetch the contract-typed RunDetail snapshot.
  * A same-origin SSE proxy (`/runs/:runId/stream`) forwards the orchestrator
  * stream with the session cookie so the browser island can subscribe without
@@ -22,7 +22,7 @@ import { RunDetailBody } from "../../components/runDetail/RunDetailBody.js";
 import { ReviewBody, type MergeIntegration } from "../../components/runDetail/ReviewBody.js";
 import { derivePreviewUrl } from "../../components/runDetail/model.js";
 
-/** Admin scopes that may opt into raw (unredacted) event payloads (P2A-0009). */
+/** Admin scopes that may opt into raw (unredacted) event payloads. */
 const ADMIN_ROLES = new Set(["org:admin", "platform:admin", "project:admin"]);
 
 function actorCanViewRaw(role: string | undefined): boolean {
@@ -30,7 +30,7 @@ function actorCanViewRaw(role: string | undefined): boolean {
 }
 
 /**
- * P3-0008: resolve the per-repo merge integration from the project's merged
+ * resolve the per-repo merge integration from the project's merged
  * config (`GET /orgs/:orgId/projects/:projectId` → `config.mergeIntegration`).
  * Falls back to `not_configured` when the project read fails or the field is
  * absent (legacy rows), which renders the settings-link branch.
@@ -53,7 +53,7 @@ export function mountRunDetailScreens(app: Hono, deps: ShellDeps): void {
   // -------------------------------------------------------------------------
   app.get("/runs/:runId", async (c, next) => {
     const runId = c.req.param("runId");
-    // `/runs/halted` is P2B-0008's surface — let the shell placeholder claim it.
+    // `/runs/halted` is the surface — let the shell placeholder claim it.
     if (runId === "halted") return next();
 
     const client = clientFor(c, deps);
@@ -88,7 +88,7 @@ export function mountRunDetailScreens(app: Hono, deps: ShellDeps): void {
   });
 
   // -------------------------------------------------------------------------
-  // GET /runs/:runId/stream — same-origin SSE proxy → orchestrator P2A-0014.
+  // GET /runs/:runId/stream — same-origin SSE proxy → orchestrator.
   // -------------------------------------------------------------------------
   app.get("/runs/:runId/stream", async (c) => {
     const runId = c.req.param("runId");
@@ -136,7 +136,7 @@ export function mountRunDetailScreens(app: Hono, deps: ShellDeps): void {
       projectId: loc.projectId,
     });
     const base = `/runs/${encodeURIComponent(runId)}`;
-    // P3-0008 + P3-0025: read the project once and derive both the merge
+    // +: read the project once and derive both the merge
     // integration and the per-PR preview-deploy URL from its config.
     const project = await client.getProject(loc.orgId, loc.projectId).catch(() => {});
     const previewUrl = derivePreviewUrl(project?.config.previewUrlPattern, detail.run);
@@ -158,8 +158,8 @@ export function mountRunDetailScreens(app: Hono, deps: ShellDeps): void {
 
   // -------------------------------------------------------------------------
   // POST /runs/:runId/review/request-changes — loop the spec back to the
-  // planner. The Phase-2 spec-rework write path (P2A-0012/0013) and its UI live
-  // in P2B-0003/0006/0008; here we record the operator's request and confirm it,
+  // planner. The spec-rework write path and its UI live in the
+  // run-detail screens; here we record the operator's request and confirm it,
   // then return the operator to the run detail. This is the documented v0
   // reduction: the gesture is real and observable; the live replan wiring lands
   // with the operator-driven-workflow spec.
@@ -190,9 +190,9 @@ export function mountRunDetailScreens(app: Hono, deps: ShellDeps): void {
 
   // -------------------------------------------------------------------------
   // POST /runs/:runId/review/sign-off — the operator hand-off that drives the
-  // P3-0008 merge stage through the repo's configured integration. The live
+  // merge stage through the repo's configured integration. The live
   // orchestrator merge-dispatch trigger lands with the operator-driven workflow
-  // (P2B-0006); here we record the gesture and confirm the configured mode so it
+  //; here we record the gesture and confirm the configured mode so it
   // is real + observable, then return the operator to the run detail.
   // -------------------------------------------------------------------------
   app.post("/runs/:runId/review/sign-off", async (c) => {
@@ -316,9 +316,7 @@ function SignOffAck(props: { runId: string; mode: MergeIntegration; runHref: str
         <section class="placeholder-card">
           <p>
             Your <strong>sign-off</strong> has been recorded. This run's repo is configured for{" "}
-            <strong>{action}</strong> (P3-0008 merge stage). The live merge-dispatch trigger ships with the
-            operator-driven workflow (P2B-0006); the merge stage itself runs on the orchestrator after a run's review is
-            approved.
+            <strong>{action}</strong>. The merge stage runs on the orchestrator after a run's review is approved.
           </p>
           <p class="placeholder-note">
             <a href={props.runHref}>← back to the run</a>

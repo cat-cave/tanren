@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { NtfyChannel } from "../src/engine/notifications/channels/ntfy.js";
 import type { NotificationTargetRow } from "../src/engine/notifications/index.js";
 
-// P2A-0017 ntfy integration smoke. Uses an injected fetch double to assert
+// ntfy integration smoke. Uses an injected fetch double to assert
 // the URL resolution, headers, and body shape match the ntfy server's
 // expectations without requiring a live broker.
 

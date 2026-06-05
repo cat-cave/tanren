@@ -1,4 +1,4 @@
-// P2B-0008 contract + integration tests for the four halted-run recovery
+// contract + integration tests for the four halted-run recovery
 // actions. Uses an in-memory pg substitute (RecoveryMemoryPool) so no live
 // runner or DB is required. Validates: authz (cross-org 403, wrong-project
 // 404), each action's lineage event, rollback confirmation + no-prior-commit
@@ -126,7 +126,7 @@ describe("P2B-0008 replan_with_steering", () => {
 
     // steering carried into the next planner invocation via the spec text
     expect(h.pool.specs.get(SPEC)?.description).toContain(note);
-    // a fresh planner run + plan job were queued (the P2A-0012 loop picks it up)
+    // a fresh planner run + plan job were queued (the loop picks it up)
     expect(h.pool.runs.has(body.result.replanRunId)).toBe(true);
     expect(h.pool.jobs.some((j) => j.task_kind === "plan" && j.run_id === body.result.replanRunId)).toBe(true);
     // lineage record persisted on the ORIGINAL halted run
@@ -220,7 +220,7 @@ describe("P2B-0008 real-functionality bar — revise + replan chain", () => {
     expect(chain).toEqual(["recovery.revise_routed", "recovery.replan_queued"]);
     // every lineage record is bound to the original halted run for run-detail history
     expect(h.pool.lineageEvents().every((e) => e.run_id === RUN)).toBe(true);
-    // a fresh planner run is queued — the P2A-0012 loop runs it to completion
+    // a fresh planner run is queued — the loop runs it to completion
     expect(h.pool.jobs.some((j) => j.task_kind === "plan")).toBe(true);
   });
 });

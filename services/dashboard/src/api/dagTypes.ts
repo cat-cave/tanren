@@ -1,5 +1,5 @@
 /**
- * Pure project-DAG types (P3-0013). Kept free of any runtime / server-only
+ * Pure project-DAG types. Kept free of any runtime / server-only
  * import so both the server (route + builder) and the browser island can
  * import them without dragging the orchestrator client (and its `process`
  * usage) into the client typecheck/bundle.

@@ -1,7 +1,7 @@
 /**
- * P2B-0005 screen-scoped CSS. Lives in the owned costs subtree (NOT shell.css)
+ * screen-scoped CSS. Lives in the owned costs subtree (NOT shell.css)
  * and is emitted as a `<style data-screen="costs">` block by the costs/history
- * bodies. Every color is a design token (P2A-0016) — no hardcoded palette.
+ * bodies. Every color is a design token — no hardcoded palette.
  * Class names are namespaced under `.costs-screen` / `.history-screen` so they
  * never collide with shell chrome classes.
  */
@@ -235,7 +235,7 @@ export const COSTS_SCREEN_CSS = `
   color: var(--fg-3);
 }
 
-/* P3-0018 subscription-window utilization heatmap */
+/* subscription-window utilization heatmap */
 .costs-screen .hm-intro {
   font-family: var(--font-ui);
   font-size: 12px;

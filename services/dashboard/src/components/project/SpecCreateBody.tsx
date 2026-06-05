@@ -1,9 +1,9 @@
 /**
- * Spec creation surface (P2B-0003). A schema-bound form — NO free-text JSON
+ * Spec creation surface. A schema-bound form — NO free-text JSON
  * editor — that lets the operator pick a milestone, tag behaviors, write a
  * description + acceptance criteria, and optionally declare spec dependencies.
- * Fields map 1:1 onto the P2A-0013 `SpecCreateSchema` (title, description,
- * acceptanceCriteria[], dependsOn[]) plus the P2A-0018 milestone/behavior
+ * Fields map 1:1 onto the `SpecCreateSchema` (title, description,
+ * acceptanceCriteria[], dependsOn[]) plus the milestone/behavior
  * associations carried as form fields the route handler forwards.
  *
  * The form POSTs to `/projects/:projectId/specs` (this spec's own route),
@@ -185,7 +185,7 @@ export function SpecListBody(props: {
   project: ProjectSummary;
   specs: SpecSummary[];
   runBySpec: Record<string, string | undefined>;
-  /** Set when a prior run-trigger (P2B-0006) failed; shown inline on the row. */
+  /** Set when a prior run-trigger failed; shown inline on the row. */
   error?: string;
   /** The spec id the trigger error belongs to. */
   errorSpecId?: string;

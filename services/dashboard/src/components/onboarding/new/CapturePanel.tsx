@@ -1,5 +1,5 @@
 /**
- * P3-0015 — the live "what forge captured" panel (step 1 right rail). Renders
+ * the live "what forge captured" panel (step 1 right rail). Renders
  * the accumulated interview capture: identity, personas, behaviors, interfaces,
  * design-DNA, architecture, rulesets. Each section shows a done/live/empty
  * glyph so the operator watches the capture fill as the interview progresses

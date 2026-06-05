@@ -1,8 +1,8 @@
 /**
- * P3-0015 — step 2 of the greenfield track: the DERIVED SPEC DAG. After the
+ * step 2 of the greenfield track: the DERIVED SPEC DAG. After the
  * interview completes, the capture is derived into a real project's product
  * graph (personas/behaviors/milestones/specs) via the orchestrator. This step
- * renders that graph using the P3-0013 `DagCanvas` over the same `ProjectDag`
+ * renders that graph using the `DagCanvas` over the same `ProjectDag`
  * read the project view uses — the DAG here is not a mock, it is the live graph
  * that was just derived (click-to-inspect, group-by, zoom all come for free).
  */

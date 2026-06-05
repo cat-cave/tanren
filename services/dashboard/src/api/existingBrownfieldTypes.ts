@@ -1,5 +1,5 @@
 /**
- * P3-0016 brownfield full-track client types — the dashboard-side mirror of the
+ * brownfield full-track client types — the dashboard-side mirror of the
  * orchestrator's `engine/forge/brownfield` recon/seed contracts + the
  * config-injection / governance route payloads. Kept in their own module (the
  * discovery/greenfield isolation lesson: parallel client-touching screens own

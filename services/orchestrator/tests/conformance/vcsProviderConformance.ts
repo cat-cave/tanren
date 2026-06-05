@@ -45,22 +45,22 @@ export const CONFORMANCE_PRESENT_FILE = "tanren-ci.yml";
 export const CONFORMANCE_PRESENT_FILE_BODY = "version: 1\n";
 export const CONFORMANCE_ABSENT_FILE = "does/not/exist.yml";
 export const CONFORMANCE_CONFLICT_PR_NUMBER = 9;
-/** P2a: a PR whose branch is behind base (clean update available). */
+/** a PR whose branch is behind base (clean update available). */
 export const CONFORMANCE_BEHIND_PR_NUMBER = 11;
-/** P2a: a PR whose branch conflicts with base (update-branch reports a conflict). */
+/** a PR whose branch conflicts with base (update-branch reports a conflict). */
 export const CONFORMANCE_DIRTY_PR_NUMBER = 13;
 export const CONFORMANCE_HEAD_BRANCH = "tanren/run_conf";
-/** P2c-2: a branch that does not exist (readBranchHeadSha → undefined). */
+/** a branch that does not exist (readBranchHeadSha → undefined). */
 export const CONFORMANCE_ABSENT_BRANCH = "tanren/does-not-exist";
-/** P2c: ancestor branches that speculatively integrate cleanly onto the base. */
+/** ancestor branches that speculatively integrate cleanly onto the base. */
 export const CONFORMANCE_INTEGRATION_BRANCH = "tanren/integ/spec_c";
 export const CONFORMANCE_ANCESTOR_A = { specId: "spec_a", branch: "tanren/run_a" };
 export const CONFORMANCE_ANCESTOR_B = { specId: "spec_b", branch: "tanren/run_b" };
-/** P2c: an ancestor branch that conflicts WITH ANOTHER ancestor on the integration ref. */
+/** an ancestor branch that conflicts WITH ANOTHER ancestor on the integration ref. */
 export const CONFORMANCE_ANCESTOR_CONFLICT = { specId: "spec_x", branch: "tanren/run_conflict" };
-/** P2d-2: a branch ref whose CI (readBranchChecks) is GREEN (prospective merged state passes). */
+/** a branch ref whose CI (readBranchChecks) is GREEN (prospective merged state passes). */
 export const CONFORMANCE_GREEN_BRANCH = "tanren/integ/green";
-/** P2d-2: a branch ref whose CI (readBranchChecks) is FAILING (a bad interaction). */
+/** a branch ref whose CI (readBranchChecks) is FAILING (a bad interaction). */
 export const CONFORMANCE_FAILING_BRANCH = "tanren/integ/failing";
 /**
  * MERGE-SAFETY (self-identity): the actor identity `resolveActorIdentity` resolves
@@ -257,7 +257,7 @@ export function describeVcsProviderConformance(label: string, harness: VcsProvid
       expect(content).toBeUndefined();
     });
 
-    // ---- P2c-2: branch head SHA (change-percolation divergence key) ------
+    // ----: branch head SHA (change-percolation divergence key) ------
 
     it("readBranchHeadSha returns a SHA for an existing branch", async () => {
       const provider = harness.make();
@@ -274,7 +274,7 @@ export function describeVcsProviderConformance(label: string, harness: VcsProvid
       expect(sha).toBeUndefined();
     });
 
-    // ---- P2d-2: branch-ref CI read (batch-check) -------------------------
+    // ----: branch-ref CI read (batch-check) -------------------------
     it("readBranchChecks reads CI for a GREEN integration ref (prospective merged state passes)", async () => {
       const provider = harness.make();
       const token = await resolve(provider);
@@ -293,7 +293,7 @@ export function describeVcsProviderConformance(label: string, harness: VcsProvid
       expect(checks.checkRuns.some((c) => c.conclusion === "failure")).toBe(true);
     });
 
-    // ---- P2a: up-to-date / mergeability + update-branch ------------------
+    // ----: up-to-date / mergeability + update-branch ------------------
 
     it("readMergeability of a current PR reports clean (not behind) with the refs", async () => {
       const provider = harness.make();
@@ -336,7 +336,7 @@ export function describeVcsProviderConformance(label: string, harness: VcsProvid
       expect(result.outcome).toBe("conflict");
     });
 
-    // ---- P2c: speculative integration branch -----------------------------
+    // ----: speculative integration branch -----------------------------
 
     it("buildIntegrationBranch integrates clean ancestors onto the base in order", async () => {
       const provider = harness.make();

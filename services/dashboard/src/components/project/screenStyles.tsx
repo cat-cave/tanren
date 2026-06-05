@@ -1,8 +1,8 @@
 /**
- * P2B-0003 screen styles. The shell only links `tokens.css` + `shell.css`
- * (both owned by P2B-0001, which this spec must not edit), so the project /
+ * screen styles. The shell only links `tokens.css` + `shell.css`
+ * (both owned by, which this spec must not edit), so the project /
  * spec / settings screens ship their own CSS inline via a `<style>` tag that
- * each page body renders once near the top. Everything keys off the P2A-0016
+ * each page body renders once near the top. Everything keys off the shared
  * design tokens — no hardcoded colors — matching the hi-fi look without
  * importing the prototype JSX/CSS.
  */

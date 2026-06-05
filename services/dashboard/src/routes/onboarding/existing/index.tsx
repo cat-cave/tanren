@@ -1,15 +1,15 @@
 /**
- * P3-0016 brownfield onboarding FULL track (`/onboarding/existing`) — the 5-step
- * flow that supersedes the P2B-0002 minimal link form: link repo → read-only
+ * brownfield onboarding FULL track (`/onboarding/existing`) — the 5-step
+ * flow that supersedes the minimal link form: link repo → read-only
  * recon → config-injection PR → DAG seed → governance posture.
  *
  * Owns the brownfield `existing` handlers entirely (the shared
  * `routes/onboarding/index.tsx` delegates here via `mountExistingBrownfield`, so
  * the org/credentials/notifications handlers there are untouched, and the
  * greenfield `new` flow is never touched). Composes:
- *   - P2B-0002 minimal link: step 1 reuses the existing create-project +
+ *   - minimal link: step 1 reuses the existing create-project +
  *     brownfield-link POST, then advances into recon.
- *   - P3-0016 brownfield engine (orchestrator): recon / config-injection /
+ *   - brownfield engine (orchestrator): recon / config-injection /
  *     seed-dag / governance, all behind the injectable `ExistingBrownfieldClient`.
  *
  * State model (no migration, no session table): the recon report + repoUrl +
@@ -66,7 +66,7 @@ export function mountExistingBrownfield(app: Hono, deps: ShellDeps): void {
     );
   });
 
-  // Step 1 → 2 link POST. The reused P2B-0002 `ExistingProjectBody` form posts
+  // Step 1 → 2 link POST. The reused `ExistingProjectBody` form posts
   // here (its action is `/onboarding/existing/link`); we create + link the
   // project, run recon, and advance into step 2.
   app.post("/onboarding/existing/link", async (c) => {

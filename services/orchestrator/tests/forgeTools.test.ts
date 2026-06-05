@@ -1,4 +1,4 @@
-// P2A-0019: tool stub return-shape + write-action authz tests.
+// tool stub return-shape + write-action authz tests.
 
 import type pg from "pg";
 import { describe, expect, it } from "vitest";

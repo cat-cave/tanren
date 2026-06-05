@@ -1,4 +1,4 @@
-// P2B-0004 — unit tests for the pure run-detail view-model derivations
+// unit tests for the pure run-detail view-model derivations
 // (cost summary, trajectory spine, reasoning extraction). No DOM, no rendering.
 
 import { describe, expect, it } from "vitest";

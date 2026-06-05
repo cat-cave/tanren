@@ -1,4 +1,4 @@
-// P3-0028: the GitHub HTTP client honors rate-limit signals (Retry-After /
+// the GitHub HTTP client honors rate-limit signals (Retry-After /
 // X-RateLimit-Reset) with bounded backoff instead of hammering, and the status
 // service reads branch-protection required contexts.
 

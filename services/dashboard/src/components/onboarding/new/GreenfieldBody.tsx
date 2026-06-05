@@ -1,5 +1,5 @@
 /**
- * P3-0015 — the greenfield (`/onboarding/new`) flow body: the 3-step shell
+ * the greenfield (`/onboarding/new`) flow body: the 3-step shell
  * (interview → derived dag → arrival) over the shared `OnbStyles` plus the
  * greenfield-specific `GreenfieldStyles`. Pure dispatch over the active step;
  * each step body owns its own render + forms. The journey strip mirrors the

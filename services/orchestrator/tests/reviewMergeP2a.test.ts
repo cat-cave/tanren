@@ -1,4 +1,4 @@
-// P2a up-to-date enforcement + auto-rebase: the merge-stage tests proving the
+// up-to-date enforcement + auto-rebase: the merge-stage tests proving the
 // freshness gate. Split out of reviewMerge.test.ts to keep each test file under
 // the 500-line architecture cap. They drive `mergeForRun` directly with the
 // recording merge probe (whose readMergeability / updateBranch the freshness

@@ -1,4 +1,4 @@
-// P3-0030: OIDC provider (Authentik first) unit tests. Deterministic — the
+// OIDC provider (Authentik first) unit tests. Deterministic — the
 // discovery, token, and userinfo endpoints are all mocked via an injected
 // fetch; no live IdP, no network, no DB.
 

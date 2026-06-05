@@ -1,6 +1,6 @@
 /**
- * Append-only screen-router registry — THE mounting convention for the Phase 2B
- * fan-out (P2B-0002…0009).
+ * Append-only screen-router registry — THE mounting convention for the
+ * fan-out .
  *
  * Each child spec adds exactly one mount function to `SCREEN_MOUNTS` and owns
  * its routes under its own `src/routes/<area>/**` subtree. The array is
@@ -9,7 +9,7 @@
  * registered child route is always present first and the shell only fills the
  * remaining gaps with placeholders (see the ordering contract in `mountShell`).
  *
- * Example (a future P2B-0005 history & costs screen):
+ * Example (a future history & costs screen):
  *
  *   // services/dashboard/src/routes/costs/index.tsx
  *   import { loadShellContext, renderShell, type ShellDeps } from "../../app/mountShell.js";
@@ -32,67 +32,67 @@ import type { ShellDeps } from "./mountShell.js";
 export type ScreenMount = (app: Hono, deps: ShellDeps) => void;
 
 /**
- * Registered child screens, in mount order. Empty during P2B-0001 — every
+ * Registered child screens, in mount order. Empty until a screen registers — every
  * sidenav row resolves to a documented placeholder until its owning spec lands
  * and appends its mount function here.
  */
 export const SCREEN_MOUNTS: ScreenMount[] = [];
 
-// P2B-0003 — chat-primary project view, spec creation, routing & limits.
+// chat-primary project view, spec creation, routing & limits.
 import { mountProjectScreens } from "../routes/projects/index.js";
 SCREEN_MOUNTS.push(mountProjectScreens);
 
-// P2B-0002 onboarding (org setup + existing-project) + credentials + notifications.
+// onboarding (org setup + existing-project) + credentials + notifications.
 import { mountOnboardingScreens } from "../routes/onboarding/index.js";
 SCREEN_MOUNTS.push(mountOnboardingScreens);
 
-// P2B-0005: dashboard history & costs (overrides the /costs placeholder).
+// dashboard history & costs (overrides the /costs placeholder).
 import { mountCostsScreen } from "../routes/costs/index.js";
 SCREEN_MOUNTS.push(mountCostsScreen);
 
-// P2B-0004: run-detail view + review-handoff sub-surface (SSE live).
+// run-detail view + review-handoff sub-surface (SSE live).
 import { mountRunDetailScreens } from "../routes/runs/index.js";
 SCREEN_MOUNTS.push(mountRunDetailScreens);
 
-// P2B-0008: halted-run failure-recovery surface (`/runs/halted` list +
-// `/runs/:runId/recover`). Appended AFTER P2B-0004 so its `/runs/:runId`
+// halted-run failure-recovery surface (`/runs/halted` list +
+// `/runs/:runId/recover`). Appended AFTER so its `/runs/:runId`
 // handler delegates the `halted` literal back via next() and lands here.
 import { mountHaltedRunScreens } from "../routes/runs/halted.js";
 SCREEN_MOUNTS.push(mountHaltedRunScreens);
 
-// P2B-0006: operator-triggered live run (POST /projects/:projectId/specs/:specId/run).
+// operator-triggered live run (POST /projects/:projectId/specs/:specId/run).
 import { mountTriggerScreens } from "../routes/runs/trigger/index.js";
 SCREEN_MOUNTS.push(mountTriggerScreens);
 
-// P3-0019: DORA-like delivery metrics panel (overrides the /dora placeholder).
+// DORA-like delivery metrics panel (overrides the /dora placeholder).
 import { mountDoraScreen } from "../routes/dora/index.js";
 SCREEN_MOUNTS.push(mountDoraScreen);
 
-// P3-0014: spec discovery (insight → classification → proposed specs →
+// spec discovery (insight → classification → proposed specs →
 // DAG placement → accept with provenance). Overrides the /discovery placeholder
 // and adds the project-scoped discovery routes.
 import { mountDiscoveryScreens } from "../routes/discovery/index.js";
 SCREEN_MOUNTS.push(mountDiscoveryScreens);
 
-// P3-0017: tanren-config audit-gate surface (config-as-code PR review) + the
+// tanren-config audit-gate surface (config-as-code PR review) + the
 // Settings toggle. Overrides the /settings/config placeholder.
 import { mountConfigScreen } from "../routes/config/index.js";
 SCREEN_MOUNTS.push(mountConfigScreen);
 
-// P3-0022: candidate inbox (configurable issue sources → Forge triage →
+// candidate inbox (configurable issue sources → Forge triage →
 // accept→discovery / fold / dismiss / close-as-dup). Overrides the /inbox
 // placeholder.
 import { mountInboxScreens } from "../routes/inbox/index.js";
 SCREEN_MOUNTS.push(mountInboxScreens);
 
-// P3-0015: greenfield onboarding (the FULL `/onboarding/new` track —
+// greenfield onboarding (the FULL `/onboarding/new` track —
 // multi-round vision interview → derived spec DAG → arrival). Owns its routes
 // entirely under routes/onboarding/new; does not touch the shared brownfield
 // onboarding handler.
 import { mountGreenfieldOnboarding } from "../routes/onboarding/new/index.js";
 SCREEN_MOUNTS.push(mountGreenfieldOnboarding);
 
-// P3-0021: scheduled audits — the recurring read-only Answerer-pass library
+// scheduled audits — the recurring read-only Answerer-pass library
 // (job library + window-fill bar + forge-recommended coverage + composer).
 // Overrides the /audits placeholder; findings auto-route to the inbox.
 import { mountAuditScreens } from "../routes/audits/index.js";

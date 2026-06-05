@@ -75,7 +75,7 @@ const INSIGHTS = [
     acknowledgedAt: null,
   },
   {
-    // P3-0020 review_stall — now a supported kind that MUST render.
+    // review_stall — now a supported kind that MUST render.
     id: "ins_2",
     kind: "review_stall",
     projectId: "project_easy",

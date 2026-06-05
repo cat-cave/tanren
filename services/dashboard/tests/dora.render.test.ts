@@ -1,9 +1,9 @@
-// P3-0019 DORA metrics panel rendered-HTML tests. Mirrors the P2B-0005 costs
+// DORA metrics panel rendered-HTML tests. Mirrors the costs
 // harness: build the app with a stubbed pool + a mocked orchestrator (global
 // fetch), then assert the rendered /dora screen.
 //
 // Coverage:
-//   - /dora overrides the P2B-0001 placeholder (real screen);
+//   - /dora overrides the placeholder (real screen);
 //   - all four DORA metrics render with formatted values + samples;
 //   - the panel is explicitly labelled "reported, not targeted";
 //   - the window pills render and a non-default window is forwarded;

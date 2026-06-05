@@ -7,9 +7,9 @@ import type { SecretStore, SecretValue } from "../src/engine/contracts/secretSto
 import type { OrgGithubAppInstallation } from "../src/engine/config/orgConfig.js";
 import type { NotificationPayload, NotificationTargetRow } from "../src/engine/notifications/index.js";
 
-// P3-0024 GitHub Checks channel tests. The GitHub HTTP client is mocked so we
+// GitHub Checks channel tests. The GitHub HTTP client is mocked so we
 // assert the request shape (PR head-sha lookup, then commit-status POST) and
-// the P3-0003 token resolution path (App installation token vs static) without
+// the token resolution path (App installation token vs static) without
 // a real network.
 
 function target(overrides: Partial<NotificationTargetRow> = {}): NotificationTargetRow {

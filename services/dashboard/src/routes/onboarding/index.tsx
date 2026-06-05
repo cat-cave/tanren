@@ -1,8 +1,8 @@
 /**
- * P2B-0002 screen mounts: org-setup wizard (`/onboarding/org`), existing-
+ * screen mounts: org-setup wizard (`/onboarding/org`), existing-
  * project minimal link flow (`/onboarding/existing`), the standalone
  * credentials surface (`/onboarding/credentials`), and the notifications
- * matrix (`/notifications`). All render through the P2B-0001 shell via
+ * matrix (`/notifications`). All render through the shell via
  * `renderShell`; chrome is untouched.
  *
  * Registered by appending a single line to `SCREEN_MOUNTS` in
@@ -18,7 +18,7 @@ import { NotificationsBody } from "../../components/onboarding/NotificationsBody
 import { OrgWizardBody } from "../../components/onboarding/OrgWizardBody.js";
 import { OnbStyles } from "../../components/onboarding/styles.js";
 import { mountOnboardingActions } from "./actions.js";
-// P3-0016: the brownfield `existing` handlers (5-step full track) live in their
+// the brownfield `existing` handlers (5-step full track) live in their
 // own module. The shared route file delegates the entire `existing` section to
 // it — the org/credentials/notifications handlers below are untouched.
 import { mountExistingBrownfield } from "./existing/index.js";
@@ -26,7 +26,7 @@ import { mountExistingBrownfield } from "./existing/index.js";
 /** The public GitHub App install URL (configurable; sensible default). */
 const GITHUB_APP_URL = process.env["TANREN_GITHUB_APP_URL"] ?? "https://github.com/apps/tanren/installations/new";
 
-// P3-0003: when set, the org-setup wizard offers the orchestrator-driven App
+// when set, the org-setup wizard offers the orchestrator-driven App
 // install flow (`/auth/github-app/install?orgId=…`) which provisions an
 // auto-rotating installation token. Points at the orchestrator's public URL.
 const ORCHESTRATOR_PUBLIC_URL = process.env["TANREN_ORCHESTRATOR_PUBLIC_URL"];
@@ -52,7 +52,7 @@ function noticeOf(c: Context): string | undefined {
 
 export function mountOnboardingScreens(app: Hono, deps: ShellDeps): void {
   mountOnboardingActions(app, deps);
-  // P3-0016: brownfield `existing` full track (link → recon → config-injection
+  // brownfield `existing` full track (link → recon → config-injection
   // PR → DAG seed → governance). Owns GET/POST `/onboarding/existing`.
   mountExistingBrownfield(app, deps);
 
@@ -169,5 +169,5 @@ export function mountOnboardingScreens(app: Hono, deps: ShellDeps): void {
   });
 
   // The brownfield `existing` flow (GET + link/step POSTs) is owned by
-  // `mountExistingBrownfield` (P3-0016, called above) — see ./existing/index.tsx.
+  // `mountExistingBrownfield` (called above) — see ./existing/index.tsx.
 }

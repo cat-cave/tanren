@@ -130,7 +130,7 @@ export function fakeWorkflowRunner(github: GitHubHttpClient) {
       sleep: async () => {},
       buildAdapters: () => passingAdapters(),
       buildUsageProbe: () => fakeProbe(),
-      // P3-0008 review→merge tail: approve the review and no-op the merge so the
+      // review→merge tail: approve the review and no-op the merge so the
       // dequeue→execute seam runs end-to-end without real GitHub review/merge.
       reviewProbe: {
         markReady: async () => {},
@@ -147,7 +147,7 @@ export function fakeWorkflowRunner(github: GitHubHttpClient) {
           status: 200,
           message: "merged",
         }),
-        // P2a: branch reports clean → up-to-date enforcement is a no-op.
+        // branch reports clean → up-to-date enforcement is a no-op.
         readMergeability: async () => ({
           state: "clean" as const,
           behind: false,

@@ -1,4 +1,4 @@
-// P2c-1 (autonomy-engine.md §2c): the pure lifecycle projection. Proves each
+// (autonomy-engine.md §2c): the pure lifecycle projection. Proves each
 // lifecycle state + open-finding max severity is DERIVED correctly from the spec
 // status + the latest run's lifecycle-event signals — the input the speculation
 // threshold reasons over.

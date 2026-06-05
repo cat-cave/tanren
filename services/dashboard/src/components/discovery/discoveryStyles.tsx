@@ -1,8 +1,8 @@
 /**
- * P3-0014 discovery-surface styles. Layered ON TOP of the shared `p2b` /
+ * discovery-surface styles. Layered ON TOP of the shared `p2b` /
  * project screen scaffolding (the discovery body renders `ScreenStyles` for the
  * shared classes, then this for the discovery-only bits). Everything keys off
- * the P2A-0016 design tokens — no hardcoded colours — matching the hi-fi
+ * the design tokens — no hardcoded colours — matching the hi-fi
  * `view-discovery` look without importing the prototype JSX/CSS.
  */
 

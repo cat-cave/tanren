@@ -1,4 +1,4 @@
-// P3-0001: behavior tests for loadRunExecutionContext — the inverse of
+// behavior tests for loadRunExecutionContext — the inverse of
 // createQueuedRunFromSpec that re-hydrates a claimed plan job's PlannerRunContext
 // from its run⋈spec⋈project rows + resolved credentials. Asserts the mapped
 // context fields (so a swapped column survives nothing), the acceptance-criteria

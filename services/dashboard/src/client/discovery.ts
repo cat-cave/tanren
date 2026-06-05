@@ -1,9 +1,9 @@
 /**
- * P3-0014 discovery island. Hydrates the server-rendered classification panel:
+ * discovery island. Hydrates the server-rendered classification panel:
  * clicking a DAG-placement option selects it (highlights the card + writes the
  * chosen kind/label into the accept form's hidden inputs + the "placement ·"
  * caption). No server round-trip for selection — the accept itself is a real
- * form POST handled server-side, mirroring the P2B/P3 island convention
+ * form POST handled server-side, mirroring the island convention
  * (interactivity is local; writes go through the server). No-op when the
  * discovery markup is absent.
  */

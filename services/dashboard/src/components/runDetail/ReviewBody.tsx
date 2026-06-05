@@ -1,10 +1,10 @@
 /**
- * ReviewBody — the review-handoff sub-surface (P2B-0004), reachable from the
+ * ReviewBody — the review-handoff sub-surface, reachable from the
  * run detail. Recreated from the hi-fi `view-review.jsx`:
  *   - page head (PR + repo eyebrow, "review with forge", spec/change sub-line)
  *   - Forge review chat (left): opening narration, clickable behavior checklist,
  *     writer-deferred items with handle/defer/dismiss actions, a live nudge turn
- *   - preview pane (right): live preview-deploy iframe (P3-0025) at a per-PR
+ *   - preview pane (right): live preview-deploy iframe at a per-PR
  *     preview URL, device-width tabs (desktop/tablet/mobile), open ↗, and a
  *     graceful empty state when no preview URL is configured/available
  *   - readiness gate (bottom): three state pills + sign-off CTAs per the
@@ -21,7 +21,7 @@ import type { RunDetail, RunEventRow } from "../../api/types.js";
 import { summarizeCosts, formatUsd, reviewMergeStateFromEvents, type ReviewMergeState } from "./model.js";
 import { RUN_DETAIL_CSS } from "./runDetail.css.js";
 
-/** The four Phase-2 merge-integration modes (mirrors P2A-0006 MergeIntegration). */
+/** The four merge-integration modes (mirrors MergeIntegration). */
 export type MergeIntegration = "native_queue" | "direct_merge" | "external_reviewer" | "not_configured";
 
 export interface ReviewDeferral {
@@ -34,7 +34,7 @@ export interface ReviewDeferral {
 
 export interface ReviewBodyProps {
   detail: RunDetail;
-  /** Resolved per-repo merge integration (P2A-0006). Defaults to not_configured. */
+  /** Resolved per-repo merge integration. Defaults to not_configured. */
   mergeIntegration: MergeIntegration;
   /** Path back to the run detail. */
   runHref: string;
@@ -45,14 +45,14 @@ export interface ReviewBodyProps {
   /** Project settings link (for the not_configured branch). */
   settingsHref: string;
   /**
-   * P3-0025: the per-PR preview-deploy URL for the live iframe, derived from the
+   * the per-PR preview-deploy URL for the live iframe, derived from the
    * project's `previewUrlPattern` + run state. `null` when no pattern is
    * configured / no PR exists yet — the preview pane renders its empty state.
    */
   previewUrl: string | null;
 }
 
-/** Human label + pill class for the derived review/merge phase (P3-0008). */
+/** Human label + pill class for the derived review/merge phase. */
 function reviewMergePill(state: ReviewMergeState): {
   label: string;
   cls: "ok" | "warn" | "danger";
@@ -124,7 +124,7 @@ function repoFromUrl(url: string | null): string {
   return match?.[1] ?? "repo";
 }
 
-// The sign-off CTA drives the P3-0008 merge stage through its per-repo
+// The sign-off CTA drives the merge stage through its per-repo
 // integration. The gesture posts to `signOffHref`; the orchestrator dispatches
 // to the configured integration (direct merge / native merge queue / external-
 // reviewer hand-off). `not_configured` has no merge path — only a settings link.
@@ -154,7 +154,7 @@ function MergeActions(props: { mode: MergeIntegration; settingsHref: string; sig
   );
 }
 
-// P3-0025: the live preview-deploy pane. When the project declares a
+// the live preview-deploy pane. When the project declares a
 // `previewUrlPattern`, we render a sandboxed iframe at the per-PR preview URL
 // with device-width tabs (the `review` island swaps the iframe's max-width).
 // The iframe is `sandbox`ed (scripts only, same-origin denied) so a hostile
@@ -234,7 +234,7 @@ export function ReviewBody(props: ReviewBodyProps) {
   const ciTask = detail.tasks.find((t) => t.kind === "ci");
   const ciGreen = ciTask?.outcome === "passed";
   const forgedBy = detail.tasks.find((t) => t.kind === "write")?.cli ?? detail.tasks[0]?.cli ?? "agent";
-  // P3-0008: derive the live review/merge phase from the run's typed events.
+  // derive the live review/merge phase from the run's typed events.
   const reviewState = reviewMergeStateFromEvents(detail.recentEvents);
   const reviewPill = reviewMergePill(reviewState);
   const mergeDone = reviewState.phase === "merged" || reviewState.phase === "merge_queued";

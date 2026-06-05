@@ -443,7 +443,7 @@ describe("CostRecorder.reconcileRunCostFromCredits", () => {
   });
 });
 
-// Plane-split P3c: with a remote-reconcile delegate wired (the worker's de-privileged
+// with a remote-reconcile delegate wired (the worker's de-privileged
 // data-plane mode), the run-end reconcile/apportion must route the cost_records
 // SELECT+UPDATEs through the delegate (the control-plane endpoint) instead of
 // writing via this.pool — the data plane can no longer UPDATE cost_records (0031).

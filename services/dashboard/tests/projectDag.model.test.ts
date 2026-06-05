@@ -1,4 +1,4 @@
-// P3-0013 — unit tests for the pure DAG model (`buildProjectDag`), the SVG
+// unit tests for the pure DAG model (`buildProjectDag`), the SVG
 // layout (`layoutDag`), and the spec-detail derivation (`buildSpecDetail`).
 // These exercise the data-shaping in isolation: status mapping, dependency
 // edges, hot/cool flags, attention numbering, critical-path detection,

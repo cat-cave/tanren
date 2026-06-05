@@ -1,7 +1,7 @@
 /**
- * DAG-primary + spec-drawer styles (P3-0013). Shipped inline (the shell only
- * links tokens.css + shell.css, both P2B-0001-owned). Everything keys off the
- * P2A-0016 design tokens — no hardcoded colours — matching the hi-fi
+ * DAG-primary + spec-drawer styles. Shipped inline (the shell only
+ * links tokens.css + shell.css, both shell-owned). Everything keys off the
+ * design tokens — no hardcoded colours — matching the hi-fi
  * `05-dag-primary` / `gap-spec-drawer` screenshots.
  */
 

@@ -1,4 +1,4 @@
-// P2b merge-stage integration: the dispatcher's conflict path with the
+// merge-stage integration: the dispatcher's conflict path with the
 // intent-preserving resolver as the (production-default) `resolveConflict` hook.
 // Here a fake resolver stands in for the real one (the resolver's own behavior
 // is unit-tested in conflictResolver.test.ts); these assert the DISPATCHER's

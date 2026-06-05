@@ -1,7 +1,7 @@
 // Verifies the DEV-ONLY sign-in escape hatch (feat/dev-login-escape-hatch):
 //   (a) with TANREN_DEV_LOGIN=1 the local_dev provider is registered and a
 //       /auth/login -> /auth/callback handshake mints a session and creates the
-//       synthetic dev org + admin user via the existing P2A-0003 upsert path;
+//       synthetic dev org + admin user via the existing upsert path;
 //   (b) with the flag unset, local_dev is NOT registered (no behavior change);
 //   (c) the flag is refused under a prod-like (TANREN_COOKIE_SECURE=1) context.
 // Deterministic: a fake identity pool, no real network, no DB.
@@ -102,7 +102,7 @@ describe("dev-login escape hatch (buildAuthFromEnv)", () => {
     );
     expect(state).not.toBe("");
 
-    // callback mints the session + creates org/admin (P2A-0003 path).
+    // callback mints the session + creates org/admin (path).
     const callback = await app.request(`/auth/callback?provider=local_dev&code=local-dev&state=${state}`, {
       headers: { cookie: `tanren_oauth_state=${state}` },
     });

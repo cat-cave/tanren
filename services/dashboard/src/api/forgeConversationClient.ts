@@ -1,5 +1,5 @@
 /**
- * P3-0010 thick-Forge conversation client surface, split out of
+ * thick-Forge conversation client surface, split out of
  * `orchestrator.ts` so the product client stays under the 500-line architecture
  * cap (same split rationale as `recoveryClient.ts`). Lands on
  * `OrchestratorClient` via inheritance.
@@ -16,7 +16,7 @@ import { OrchestratorRecoveryClient } from "./recoveryClient.js";
 import type { ForgeAnswer } from "./types.js";
 
 /**
- * P3-0010 (write-action approval): a write the Forge answerer proposed, awaiting
+ * (write-action approval): a write the Forge answerer proposed, awaiting
  * a human decision. The dashboard renders pending proposals as live
  * approve/reject cards; executed/rejected/failed are terminal states.
  */
@@ -47,11 +47,11 @@ export interface ForgeAskResponse {
   threadId: string;
   answer: ForgeAnswer;
   toolsUsed: string[];
-  /** P3-0010: pending write proposals the answerer raised this turn. */
+  /** pending write proposals the answerer raised this turn. */
   proposals: ForgeActionProposal[];
 }
 
-/** The outcome of an approve/reject decision (P3-0010 write-action approval). */
+/** The outcome of an approve/reject decision (write-action approval). */
 export interface ForgeProposalDecisionResponse {
   /** The proposal in its post-decision state, when the orchestrator returned it. */
   proposal?: ForgeActionProposal;
@@ -101,7 +101,7 @@ export abstract class OrchestratorForgeConversationClient extends OrchestratorRe
   }
 
   /**
-   * Approve or reject a proposed write action (P3-0010 write-action approval).
+   * Approve or reject a proposed write action (write-action approval).
    * On approve the orchestrator re-validates + authz's the APPROVING operator
    * and executes the write; the response carries the post-decision proposal.
    * An already-decided proposal returns `already_decided` (the idempotent 409)

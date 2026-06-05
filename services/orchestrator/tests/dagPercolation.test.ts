@@ -1,4 +1,4 @@
-// P2c-2 (autonomy-engine.md §2c "Change-percolation — NOT discard"): the PURE cores
+// (autonomy-engine.md §2c "Change-percolation — NOT discard"): the PURE cores
 // (`decidePercolation` detect + `decideSettle`) + the two-phase PercolatingCoordinator,
 // driven through in-memory seams (TEST FIXTURES — they live here, never src/). Proves
 // the §2c semantics + CRITICAL invariants: SHA-divergence vs. the VERIFIED sha →

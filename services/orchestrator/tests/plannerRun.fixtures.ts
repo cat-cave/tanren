@@ -230,7 +230,7 @@ export function pendingReview() {
   };
 }
 
-// P2a: the merge stage reads branch freshness before merging. These tail fixtures
+// the merge stage reads branch freshness before merging. These tail fixtures
 // exercise the merge OUTCOME mapping, so they report the branch CLEAN + up to date
 // (the enforcement is a no-op; the merge() outcome drives the result, as pre-P2a).
 function cleanFreshness() {
@@ -242,7 +242,7 @@ function cleanFreshness() {
       headBranch: "tanren/run_1",
     }),
     updateBranch: async () => ({ outcome: "up_to_date" as const, message: "up to date" }),
-    // P2c-1: non-speculative fixtures never re-target/clean (no speculative_base),
+    // non-speculative fixtures never re-target/clean (no speculative_base),
     // but the probe must satisfy the full MergeProbe contract.
     retargetBase: async () => {},
     deleteIntegrationBranch: async () => {},
@@ -273,7 +273,7 @@ export function mergedMerge() {
   };
 }
 
-// P3-0008: inject an approving review probe + a no-op merge probe so the post-CI
+// inject an approving review probe + a no-op merge probe so the post-CI
 // review→merge tail completes without hitting GitHub. The default test-pool config
 // resolves mergeIntegration=not_configured → the merge stage hands off (no merge call).
 export function approvingReview() {
@@ -438,7 +438,7 @@ export class PlannerRunPool {
             project_id: this.runContext.projectId,
             pr_url: this.prUrl,
             config: this.projectConfig,
-            // P3-0008 review/merge context columns (shares this SELECT prefix).
+            // review/merge context columns (shares this SELECT prefix).
             default_branch: "main",
             org_config: null,
           },

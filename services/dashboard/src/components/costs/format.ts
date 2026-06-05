@@ -1,5 +1,5 @@
 /**
- * P2B-0005 display formatters — pure string helpers shared by the costs +
+ * display formatters — pure string helpers shared by the costs +
  * history views. Kept separate so the aggregation stays presentation-free.
  */
 

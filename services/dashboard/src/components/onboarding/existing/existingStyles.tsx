@@ -1,6 +1,6 @@
 /**
- * P3-0016 brownfield full-track screen CSS. Layered ON TOP of the shared
- * P2B-0002 `OnbStyles` (which owns `.onb`, `.step-heading`, the journey strip,
+ * brownfield full-track screen CSS. Layered ON TOP of the shared
+ * `OnbStyles` (which owns `.onb`, `.step-heading`, the journey strip,
  * `.col-card`, `.foot`, `.btn`, `.pill`). This adds only the brownfield-specific
  * bits: the recon chapter cards + gap cards, the config-injection file column +
  * preview, the DAG-seed source legend, and the governance posture picker.

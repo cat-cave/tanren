@@ -1,4 +1,4 @@
-// P3-0001 / plane-split P1: behavior tests for the run-worker lifecycle helpers
+// / plane-split P1: behavior tests for the run-worker lifecycle helpers
 // in `lifecycle.ts` — `startRunWorker` (which takes the slot concurrency from
 // the `concurrency` config input, NOT an env var — autonomy-engine.md §1.4) and
 // the dep threading.

@@ -1,8 +1,8 @@
 /**
- * P3-0022 candidate-inbox client types — the dashboard-side mirror of the
+ * candidate-inbox client types — the dashboard-side mirror of the
  * orchestrator's `engine/forge/inbox` contracts. Kept in their own module (the
  * shared `types.ts` is at the 500-line cap) so the inbox surface owns its data
- * shapes — the P2B integration isolation lesson (parallel client-touching
+ * shapes — the screen-isolation lesson (parallel client-touching
  * screens get their own api modules).
  */
 

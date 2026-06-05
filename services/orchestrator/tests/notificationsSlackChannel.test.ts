@@ -3,7 +3,7 @@ import { SlackChannel } from "../src/engine/notifications/channels/slack.js";
 import type { SecretStore, SecretValue } from "../src/engine/contracts/secretStore.js";
 import type { NotificationTargetRow } from "../src/engine/notifications/index.js";
 
-// P3-0024 Slack channel tests. Uses an injected fetch double + an in-memory
+// Slack channel tests. Uses an injected fetch double + an in-memory
 // secret store so dispatch is asserted without a real webhook. The destination
 // is ALWAYS a credential ref resolved through the secret store.
 

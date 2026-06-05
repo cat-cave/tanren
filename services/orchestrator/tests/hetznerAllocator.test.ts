@@ -220,7 +220,7 @@ describe("HetznerAllocator", () => {
 
   // Regression for the ssh2@1.17.0 malformed-public-key bug: an UNPARSEABLE
   // public key escaping the generator must NOT cause a teardown leak. Because
-  // all keypair generation + the host-key fingerprint are computed in Phase 1
+  // all keypair generation + the host-key fingerprint are computed up front
   // (before any external side effect), a bad key fails BEFORE secrets.put /
   // createSshKey / createServer — so nothing is stored or provisioned to leak.
   it("rejects with NO external side effect when a malformed public key reaches the fingerprint step", async () => {

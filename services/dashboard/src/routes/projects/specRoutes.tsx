@@ -1,5 +1,5 @@
 /**
- * P3-0013 spec-detail routes — the spec drawer fragment (fetched by the
+ * spec-detail routes — the spec drawer fragment (fetched by the
  * DAG-canvas island on node click) and the escalated full-page spec view.
  * Split out of `routes/projects/index.tsx` to keep both modules under the
  * 500-line cap. Reads compose the existing typed orchestrator reads (spec +
@@ -87,10 +87,10 @@ export function mountSpecDetailRoutes(app: Hono, deps: ShellDeps): void {
 }
 
 /**
- * Resolve the project-view mode (P3-0013). An explicit `?mode=` query wins (the
+ * Resolve the project-view mode. An explicit `?mode=` query wins (the
  * toggle links carry it as the no-JS fallback); otherwise the persisted cookie
  * (`tanren_project_mode`, set by the dag-canvas island like the theme toggle)
- * decides; default is the P2B-0003 chat-primary view.
+ * decides; default is the chat-primary view.
  */
 export function resolveProjectMode(c: Context): "chat" | "dag" {
   const q = c.req.query("mode");

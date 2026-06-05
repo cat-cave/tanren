@@ -156,7 +156,7 @@ describe("ProjectConfigV1 parser", () => {
   });
 
   it("rejects the removed `mergify_queue` merge integration (no-legacy fail-hard)", () => {
-    // P2e-2: Mergify is gone. A stored config that still names `mergify_queue`
+    // Mergify is gone. A stored config that still names `mergify_queue`
     // must FAIL the versioned parse — never be silently coerced to another mode.
     expect(() => migrateProjectConfig({ version: 1, mergeIntegration: "mergify_queue" })).toThrow(/.+/u);
   });

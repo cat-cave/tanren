@@ -1,6 +1,6 @@
 /**
  * Forge palette island (⌘K). Hydrates the server-rendered palette markup and
- * the P3-0010 chat morph:
+ * the chat morph:
  *   - ⌘K / Ctrl+K toggles the overlay anywhere in the shell; the "ask forge"
  *     trigger and Escape / backdrop-click close it;
  *   - typing filters items by title/desc;
@@ -15,7 +15,7 @@
  * Items + grouping are rendered by the server; this island never invents a
  * palette action — it can only act on the `data-route`/`data-tool` the server
  * emitted, which keeps the palette inside the declared Forge tool surface
- * (P2A-0019). Chat answers come from the orchestrator (the model never runs in
+ *. Chat answers come from the orchestrator (the model never runs in
  * the browser).
  */
 
@@ -135,7 +135,7 @@ export function initPalette(): void {
       onChip: (text) => void send(text),
       onNavigate: (route) => navigate(route),
     });
-    // P3-0010 write-action approval: render any proposed writes as live
+    // write-action approval: render any proposed writes as live
     // approve/reject cards. The model proposed; the operator decides here.
     appendProposals(refs.chat, refs.orgId, response.proposals);
   };

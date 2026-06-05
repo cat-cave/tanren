@@ -1,4 +1,4 @@
-// P3-0016: the deterministic read-only recon Answerer fallback.
+// the deterministic read-only recon Answerer fallback.
 //
 // Keeps the recon step LIVE without provider infra (same role the scripted
 // interview answerer plays for greenfield). It does NOT call any model — it

@@ -1,5 +1,5 @@
 // Tiny in-memory pg substitute that covers the SQL shapes used by the
-// P2A-0013 route layer (orgs, projects, specs, doctor, brownfield link) plus the
+// route layer (orgs, projects, specs, doctor, brownfield link) plus the
 // per-project budget surface (ownership + config read-modify-write + cost sum).
 // Deliberately scoped: only the SQL fragments the routes emit are handled.
 

@@ -1,5 +1,5 @@
 /**
- * RunDetailBody — the run-detail screen (P2B-0004) rendered server-side inside
+ * RunDetailBody — the run-detail screen rendered server-side inside
  * the shell. Recreated from the hi-fi `view-run.jsx`:
  *   - page head (eyebrow + title + run/spec/branch sub-line + action buttons)
  *   - unified cost bar (per-token, window, tokens in/out, spend rate, run meta)
@@ -8,7 +8,7 @@
  *   - events list with redacted/raw access
  *   - PR/CI chips + failure diagnostics
  *
- * Every field is contract-typed from the P2A-0014 RunDetail payload. The body
+ * Every field is contract-typed from the RunDetail payload. The body
  * carries `data-*` hooks so the `runStream` client island can patch the cost
  * bar, spine, and events live off the SSE feed without a page reload.
  */

@@ -1,4 +1,4 @@
-// P2c-2 (§2c "ancestor-merged → proactive re-base"): focused unit test of
+// (§2c "ancestor-merged → proactive re-base"): focused unit test of
 // `PgPercolationReadModel.loadAncestorSignals`'s NEW merged-ancestor divergence
 // axis, over a FAKE pool + FAKE VcsProvider (test fixtures — they live here, never
 // src/). It proves:

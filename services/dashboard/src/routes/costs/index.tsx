@@ -1,12 +1,12 @@
 /**
- * P2B-0005 history & costs routes. Mounts THREE GETs through the shell:
- *   GET /costs            — org-level cost dashboard (overrides the P2B-0001
+ * history & costs routes. Mounts THREE GETs through the shell:
+ *   GET /costs            — org-level cost dashboard (overrides the shell's
  *                           placeholder for the `costs` sidenav row)
  *   GET /costs/export.csv — provider-breakdown CSV export
- *   GET /history          — prior-run history list (project-scoped per P2A-0014)
+ *   GET /history          — prior-run history list (project-scoped per)
  *
- * The costs dashboard aggregates P2A-0011 records across every run in every
- * project the operator can see: it lists runs (P2A-0014 `/runs`) then walks each
+ * The costs dashboard aggregates records across every run in every
+ * project the operator can see: it lists runs (`/runs`) then walks each
  * run's `/costs` page. The run list is the same read API the history list uses.
  *
  * Mounted via ONE append to SCREEN_MOUNTS in app/screens.ts. Reuses
@@ -143,7 +143,7 @@ export function mountCostsScreen(app: Hono, deps: ShellDeps): void {
   });
 
   // -------------------------------------------------------------------------
-  // GET /history — prior-run history list (project-scoped per P2A-0014)
+  // GET /history — prior-run history list (project-scoped per)
   // -------------------------------------------------------------------------
   app.get("/history", async (c: Context) => {
     const ctx = await loadShellContext(c, deps, { activeNavId: "costs" });

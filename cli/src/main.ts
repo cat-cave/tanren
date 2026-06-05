@@ -162,7 +162,7 @@ ${listProductCommands()
 
 export async function main(argv: string[]) {
   const [command, subcommand, ...rest] = argv;
-  // P2A-0013 product API commands (orgs/projects/specs/personas/behaviors/milestones/credentials)
+  // product API commands (orgs/projects/specs/personas/behaviors/milestones/credentials)
   if (command !== undefined) {
     const handler = findProductHandler(command, subcommand);
     if (handler !== undefined) {

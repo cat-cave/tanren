@@ -1,4 +1,4 @@
-// P2B-0008 in-memory pg substitute for the recovery engine + route. Handles
+// in-memory pg substitute for the recovery engine + route. Handles
 // exactly the SQL the recovery flow emits: run lookups, the
 // `workspace.git_captured` lineage scan, spec UPDATEs, the events INSERT, and
 // the `createQueuedRunFromSpec` transaction (loadSpecWithProject JOIN, INSERT

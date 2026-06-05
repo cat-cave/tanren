@@ -12,7 +12,7 @@
  *   // TypeScript constants:
  *   import { fontFamilies, spacing, radius, duration, ease } from "./design";
  *
- * Per P2A-0016: this package is import-only in Phase 2A. Do not restyle any
+ * Per: this package is import-only. Do not restyle any
  * existing dashboard surface in the same commit that introduces it.
  */
 

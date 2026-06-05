@@ -1,5 +1,5 @@
 /**
- * Spec drawer + full-page spec view (P3-0013). Clicking any DAG node opens the
+ * Spec drawer + full-page spec view. Clicking any DAG node opens the
  * `SpecDrawerBody` (a slide-in over the canvas), which shows status, the
  * blocked reason, the latest run, acceptance criteria (BDD), dependency chips
  * (depends-on / blocks), and economics — with routing to run-detail/review and

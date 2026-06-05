@@ -1,10 +1,10 @@
 /**
- * Chat-primary project view body (P2B-0003). The operator home: a Forge
+ * Chat-primary project view body. The operator home: a Forge
  * narration card (pulse + ranked attention queue + suboptimal callouts +
  * suggested prompts + composer) on the left, and a DAG snapshot + velocity +
- * activity feed on the right. DAG-primary mode is a documented Phase-3
+ * activity feed on the right. DAG-primary mode is a documented later
  * placeholder. Every number is data-derived (see `projectViewData.ts`); the
- * subopt callouts render real P2A-0020 insights only.
+ * subopt callouts render real insights only.
  */
 
 import type { InsightSummary } from "../../api/types.js";
@@ -104,7 +104,7 @@ function ForgeNarrationCard(props: ProjectViewBodyProps) {
           )}
         </div>
 
-        {/* 3. SUBOPTIMAL CALLOUTS: real P2A-0020 insights only */}
+        {/* 3. SUBOPTIMAL CALLOUTS: real insights only */}
         {insights.length > 0 && (
           <div class="forge-turn">
             <div class="turn-label">▮ {insights.length} workflow callouts</div>
@@ -116,7 +116,7 @@ function ForgeNarrationCard(props: ProjectViewBodyProps) {
           </div>
         )}
 
-        {/* 4. PROMPTS: suggested follow-ups (Phase-2 placeholder composer) */}
+        {/* 4. PROMPTS: suggested follow-ups (placeholder composer) */}
         <div class="forge-turn">
           <div class="turn-label">▮ ask anything</div>
           <div class="chips">
@@ -164,7 +164,7 @@ function AttentionRow(props: { entry: AttentionEntry }) {
 /**
  * A suboptimal callout — a rendered insight with operator-button actions. Each
  * action POSTs the carried Forge tool call through the dashboard's `/forge/tools`
- * proxy (which forwards to P2A-0019). Buttons only appear for declared tools.
+ * proxy (which forwards to). Buttons only appear for declared tools.
  */
 function SuboptCallout(props: { insight: InsightSummary; orgId: string | undefined; projectId: string }) {
   const { insight } = props;
@@ -191,7 +191,7 @@ function SuboptCallout(props: { insight: InsightSummary; orgId: string | undefin
 
 /**
  * Read-only DAG snapshot. Lays recent runs out as status-colored nodes in a
- * simple grid (full spec-graph layout is Phase-3 DAG-primary mode). Node click
+ * simple grid (the full spec-graph layout is the later DAG-primary mode). Node click
  * routes per the hi-fi rule: live/done/review → run detail; blocked/queued →
  * no-op.
  */

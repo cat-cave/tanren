@@ -1,9 +1,9 @@
-// P2A-0020 action-routing + multi-run end-to-end scenario.
+// action-routing + multi-run end-to-end scenario.
 //
 // Validates:
 //  - the multi-run scenario produces both retry_hotspot and model_mismatch
 //    insights read through the loader / cache
-//  - every insight action's `toolCall` parses against the P2A-0008
+//  - every insight action's `toolCall` parses against the Forge
 //    ForgeToolCall discriminated union (i.e. clicking the action calls a
 //    real tool)
 //  - the `tanren.acknowledge_insight` tool persists through to the cache

@@ -1,4 +1,4 @@
-// P3-0029 observability: unit tests for the boundary timing layer — the
+// observability: unit tests for the boundary timing layer — the
 // `timed()` helper, the stage-timing emitter, and the SSH / GitHub / provider
 // decorators. These prove the layer measures latency and emits structured
 // records WITHOUT changing the wrapped behavior or leaking secrets.

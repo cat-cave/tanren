@@ -1,8 +1,8 @@
 /**
- * P3-0021 scheduled-audits client. A STANDALONE client over the shared HTTP
+ * scheduled-audits client. A STANDALONE client over the shared HTTP
  * transport (`OrchestratorHttpClient`) — not folded into the product
  * `OrchestratorClient` chain — so the audits surface owns its own api module per
- * the P2B integration lesson. The audits route instantiates it directly with
+ * the screen-isolation lesson. The audits route instantiates it directly with
  * the forwarded cookie header.
  *
  * Calls map 1:1 onto the orchestrator audit routes:

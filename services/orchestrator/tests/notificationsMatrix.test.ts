@@ -7,7 +7,7 @@ import {
   type NotificationTargetRow,
 } from "../src/engine/notifications/index.js";
 
-// P2A-0017 matrix-evaluation unit tests. The matrix routes (target × route)
+// matrix-evaluation unit tests. The matrix routes (target × route)
 // pairs through the dispatcher; these tests pin the layering and severity-
 // floor rules without involving channels or the database.
 

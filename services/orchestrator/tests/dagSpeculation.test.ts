@@ -1,4 +1,4 @@
-// P2c-1 (autonomy-engine.md §2c): the pure speculative-readiness core + the
+// (autonomy-engine.md §2c): the pure speculative-readiness core + the
 // speculative tick planner. Proves the THRESHOLD predicate (conservative needs
 // merged; moderate unblocks on CI-green+audited-no-P0/P1; aggressive on PR-open),
 // the transitive unmerged-ancestor stacking, and the DEPTH CAP holding a too-deep

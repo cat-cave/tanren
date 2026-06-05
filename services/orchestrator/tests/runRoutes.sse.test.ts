@@ -1,4 +1,4 @@
-// P2A-0014 SSE driver tests. Drive the SseDriver directly (not through an
+// SSE driver tests. Drive the SseDriver directly (not through an
 // HTTP response) so the test can observe frames synchronously. The route
 // handler wraps the same driver in hono's streaming helper; that wiring is
 // covered by the contract test.

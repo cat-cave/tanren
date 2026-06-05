@@ -4,7 +4,7 @@
  * it ships in.
  *
  * This is the single source of truth that both `SideNav` (chrome) and
- * `mountShell` (route registration) read from. Child screens (P2B-0002…0009)
+ * `mountShell` (route registration) read from. Child screens
  * extend the shell by registering their handler at a row's `path` — see the
  * "mount your route here" convention documented in `mountShell.tsx`. Rows whose
  * `phase` is not `"2b"` render as documented placeholders until their owning
@@ -39,7 +39,7 @@ export interface NavGroup {
 /**
  * The four groups, exactly per the acceptance criteria. Project-scoped rows use
  * a `:projectId` placeholder; `SideNav` substitutes the active project. Rows
- * without a Phase-2B implementation are marked `phase: "3+"` and render as
+ * without an implementation yet are marked `phase: "3+"` and render as
  * placeholders carrying that label.
  */
 export const NAV_GROUPS: NavGroup[] = [

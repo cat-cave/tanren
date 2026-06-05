@@ -1,4 +1,4 @@
-// P3-0016 brownfield onboarding (full track) engine tests.
+// brownfield onboarding (full track) engine tests.
 //
 // Exercises the four engine pieces with MOCKED seams (no provider, no network):
 //   - recon: a fake `RepoReader` + a mocked `ReconAnswerer` pre-fill chapters,
@@ -7,8 +7,8 @@
 //     per-file exclude; `openConfigInjectionPr` opens a PR through a fake
 //     `ConfigInjectionGitHub` that records the committed files.
 //   - seed-dag: recon gaps + GitHub issues become specs (created through the
-//     existing P2A-0013 `createSpec` path on an in-memory pool), de-duped.
-//   - governance posture: the posture is a P3-0023 enum value persisted via the
+//     existing `createSpec` path on an in-memory pool), de-duped.
+//   - governance posture: the posture is a enum value persisted via the
 //     project config (covered at the route layer; here we assert the policy
 //     copy stays in lockstep with the posture).
 //

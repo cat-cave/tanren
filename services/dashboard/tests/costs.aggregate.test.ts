@@ -1,4 +1,4 @@
-// P2B-0005 cost-aggregation unit tests. Exercises the three pricing models
+// cost-aggregation unit tests. Exercises the three pricing models
 // (per_token / subscription / self_hosted), real-source reconciliation (every
 // row carries its REAL cost_basis; no fabricated unknown-source placeholder),
 // burn projection, and observed metrics. Pure functions — no I/O.

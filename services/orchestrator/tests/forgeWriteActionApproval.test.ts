@@ -1,4 +1,4 @@
-// P3-0010 (write-action approval): end-to-end behavior of propose → approve →
+// (write-action approval): end-to-end behavior of propose → approve →
 // execute, plus reject, idempotency, and authz denial.
 //
 // No provider is contacted (a scripted fake answerer) and no real mutation

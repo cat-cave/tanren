@@ -135,7 +135,7 @@ export class WorkerPool {
         branch: run.branch,
         repo_url: project.repo_url,
         default_branch: project.default_branch,
-        // P2c-1: the run's speculative integration branch (dynamic base) or null.
+        // the run's speculative integration branch (dynamic base) or null.
         speculative_base: run.speculative_base ?? null,
         runner_image: project.runner_image,
         config: project.config,
@@ -167,7 +167,7 @@ export class WorkerPool {
         spec_id: String(params[1]),
         project_id: String(params[2]),
         branch: String(params[4]),
-        // P2c-1: speculative_base is $6 (NULL for a normal run).
+        // speculative_base is $6 (NULL for a normal run).
         speculative_base: params[5] === undefined || params[5] === null ? null : String(params[5]),
       });
       return { rows: [], rowCount: 1 };
@@ -193,7 +193,7 @@ export class WorkerPool {
       this.specStatus = "merged";
       return { rows: [], rowCount: 1 };
     }
-    // P3-0008 merge stage marks the spec merged with a parameterized status.
+    // merge stage marks the spec merged with a parameterized status.
     if (trimmed.startsWith("UPDATE specs SET status = $2")) {
       this.specStatus = String(params[1]);
       return { rows: [], rowCount: 1 };
@@ -233,10 +233,10 @@ export class WorkerPool {
     if (trimmed.startsWith("UPDATE tasks")) {
       return { rows: [], rowCount: 1 };
     }
-    // CI poll + P3-0008 review/merge context: run⋈project read. Both stages
+    // CI poll + review/merge context: run⋈project read. Both stages
     // share this SELECT prefix. Return the project's STORED config so the merge
     // context resolves the run's real mergeIntegration / governancePosture (the
-    // P3-0026 hard tier seeds direct_merge + open to exercise the conflict
+    // hard tier seeds direct_merge + open to exercise the conflict
     // branch); the top-level githubCredentialRef is preserved for the CI-poll
     // cred read. A run whose project carries no mergeIntegration migrates to the
     // not_configured → external_reviewer hand-off as before.
@@ -254,7 +254,7 @@ export class WorkerPool {
         project_id: run.project_id,
         pr_url: this.prUrl,
         config: storedConfig,
-        // P3-0008 review/merge context columns (shares this SELECT prefix).
+        // review/merge context columns (shares this SELECT prefix).
         default_branch: "main",
         org_config: null,
       });
