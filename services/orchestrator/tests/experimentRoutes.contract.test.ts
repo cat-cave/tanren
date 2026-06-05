@@ -48,7 +48,7 @@ function scorecard(runId: string, leadTimeSeconds: number): TrialScorecard {
     cellId: null,
     trialIndex: 0,
     reachedAcceptGreen: null,
-    terminalStatus: "done",
+    terminalStatus: "completed",
     haltReason: null,
     leadTimeSeconds,
     activeExecutionSeconds: leadTimeSeconds / 2,

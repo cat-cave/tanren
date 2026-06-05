@@ -94,15 +94,15 @@ export function registerRunStateCreateRoutes(app: Hono, deps: RunStateWriteRoute
       // benign-skip tolerance applies identically to the in-process path. Genuine
       // errors keep propagating as a 500.
       //
-      //   1. SpecNotRunnableError — the pending→active claim is the idempotency
-      //      boundary: a spec already past `pending` (a concurrent walker tick
+      //   1. SpecNotRunnableError — the open→in_flight claim is the idempotency
+      //      boundary: a spec already past `open` (a concurrent walker tick
       //      already claimed it). The EXPECTED, benign concurrent-tick signal.
       //   2. SpecDependenciesBlockedError — the spec's dependencies are not yet
-      //      `done` at the moment this enqueue tx runs (a projection-vs-column lag:
+      //      `merged` at the moment this enqueue tx runs (a projection-vs-column lag:
       //      the planner saw the ancestor as merged via the lifecycle read model,
-      //      but the `specs.status='done'` write was not yet visible to this tx).
+      //      but the `specs.status='merged'` write was not yet visible to this tx).
       //      The spec simply is not ready yet; a later tick enqueues it once the
-      //      dependency lands as done. Benign — never a tick abort.
+      //      dependency lands as merged. Benign — never a tick abort.
       if (error instanceof SpecNotRunnableError) {
         return c.json({ error: "spec_not_runnable", specId: error.specId, status: error.status }, 409);
       }

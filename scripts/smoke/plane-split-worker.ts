@@ -97,7 +97,7 @@ async function seedQueuedRun(): Promise<void> {
     );
     await owner.query(
       `INSERT INTO specs (spec_id, project_id, org_id, title, description, acceptance_criteria, status)
-       VALUES ($1, $2, $3, 'Plane-split worker proof', 'Cross-process claim+execute', $4::jsonb, 'active')`,
+       VALUES ($1, $2, $3, 'Plane-split worker proof', 'Cross-process claim+execute', $4::jsonb, 'in_flight')`,
       [specId, projectId, orgId, JSON.stringify(["worker claims it across the process boundary"])],
     );
     await owner.query(

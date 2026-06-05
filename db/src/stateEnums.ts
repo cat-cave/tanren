@@ -11,10 +11,10 @@ export const stateEnumLists = {
     "halted",
     "completed",
     "failed",
-    "cancelled",
-    "done"
+    "cancelled"
   ],
   runs_outcome: [
+    "ok",
     "hello_complete",
     "phase1_fixture_complete",
     "phase2_easy_complete",
@@ -24,10 +24,7 @@ export const stateEnumLists = {
     "retry_budget_exhausted",
     "window_exhausted",
     "cancelled",
-    "hello_world_complete",
-    "ok",
-    "failed",
-    "pending"
+    "failed"
   ],
   specs_status: [
     "open",
@@ -36,9 +33,6 @@ export const stateEnumLists = {
     "merged",
     "halted",
     "cancelled",
-    "pending",
-    "active",
-    "done",
     "needs_attention"
   ],
   tasks_kind: [
@@ -62,25 +56,23 @@ export const stateEnumLists = {
   ],
   tasks_outcome: [
     "passed",
+    "ok",
+    "pending",
     "failed",
     "rejected_by_checker",
     "rejected_by_auditor",
     "timed_out",
     "crashed",
     "window_exhausted",
-    "cancelled",
-    "ok",
-    "pending"
+    "cancelled"
   ],
   tasks_agent_kind: [
     "system",
     "operator",
-    "writer_codex",
-    "answerer_codex",
-    "forge_template",
-    "ci_poller",
     "writer",
-    "answerer"
+    "answerer",
+    "forge_template",
+    "ci_poller"
   ],
   job_queue_status: [
     "queued",

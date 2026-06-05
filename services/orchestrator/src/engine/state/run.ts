@@ -4,21 +4,18 @@ import { z } from "zod";
 // constraints in db/migrations/0002 are generated from these via
 // scripts/generate-state-checks.mjs and verified by the drift check.
 
-export const RunStatus = z.enum([
-  // Phase 2 canonical values
-  "queued",
-  "running",
-  "halted",
-  "completed",
-  "failed",
-  "cancelled",
-  // Phase 0/1 historical values still present in the database
-  "done",
-]);
+// The single, canonical run-status vocabulary (v21). A successful run ends at
+// `completed` — there is NO second `done` value, so every producer/consumer reads
+// one vocabulary.
+export const RunStatus = z.enum(["queued", "running", "halted", "completed", "failed", "cancelled"]);
 export type RunStatus = z.infer<typeof RunStatus>;
 
+// The run-outcome vocabulary. `ok` is the generic success outcome a completed run
+// carries; the `phase*_complete` / escape-hatch / exhaustion values name WHY a run
+// ended. (The dead Phase-0/1 `hello_world_complete` + `pending` outcomes were
+// pruned in v21 — nothing wrote them.)
 export const RunOutcome = z.enum([
-  // Phase 2 canonical outcomes
+  "ok",
   "hello_complete",
   "phase1_fixture_complete",
   "phase2_easy_complete",
@@ -28,22 +25,16 @@ export const RunOutcome = z.enum([
   "retry_budget_exhausted",
   "window_exhausted",
   "cancelled",
-  // Phase 0/1 historical outcomes still present in the database
-  "hello_world_complete",
-  "ok",
   "failed",
-  "pending",
 ]);
 export type RunOutcome = z.infer<typeof RunOutcome>;
 
-// Legal status transitions per the spec. Including legacy "done" so the
-// existing fixture flow keeps working until callers migrate to "completed".
+// Legal status transitions per the spec. A successful run lands at `completed`.
 const allowedRunTransitions: Record<RunStatus, ReadonlyArray<RunStatus>> = {
   queued: ["running"],
-  running: ["halted", "completed", "failed", "cancelled", "done"],
+  running: ["halted", "completed", "failed", "cancelled"],
   halted: ["running", "cancelled"],
   completed: [],
-  done: [],
   failed: [],
   cancelled: [],
 };

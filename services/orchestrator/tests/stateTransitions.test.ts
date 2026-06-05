@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  ActorKind,
   IllegalJobTransitionError,
   IllegalRunTransitionError,
   IllegalSpecTransitionError,
@@ -116,17 +117,24 @@ describe("JobStatus transitions", () => {
 });
 
 describe("enum membership", () => {
-  it("includes Phase 2 canonical values plus legacy values", () => {
+  it("exposes the single canonical vocabulary (no legacy duplicates)", () => {
     expect(RunStatus.options).toContain("queued");
     expect(RunStatus.options).toContain("completed");
-    expect(RunStatus.options).toContain("done");
+    // The legacy run-status `done` was unified into `completed` (v21).
+    expect(RunStatus.options).not.toContain("done");
     expect(RunOutcome.options).toContain("hello_complete");
-    expect(RunOutcome.options).toContain("hello_world_complete");
+    expect(RunOutcome.options).not.toContain("hello_world_complete");
     expect(SpecStatus.options).toContain("in_flight");
-    expect(SpecStatus.options).toContain("pending");
+    // The legacy spec-status vocabulary (pending/active/done) was unified (v21).
+    expect(SpecStatus.options).not.toContain("pending");
+    expect(SpecStatus.options).not.toContain("active");
+    expect(SpecStatus.options).not.toContain("done");
     expect(TaskKind.options).toContain("forge");
     expect(TaskStatus.options).toContain("claimed");
     expect(TaskOutcome.options).toContain("rejected_by_checker");
+    // The dead `writer_codex`/`answerer_codex` actor kinds were pruned (v21).
+    expect(ActorKind.options).toContain("writer");
+    expect(ActorKind.options).not.toContain("writer_codex");
     // P3-0028 dead-letter terminal state.
     expect(JobStatus.options).toContain("dead_letter");
   });

@@ -311,7 +311,7 @@ describeDb("plane-split P3 — control-plane run-state write endpoints (real PG,
     const finalize = await writer.finalizeRun({
       runId,
       orgId: ORG,
-      status: "done",
+      status: "completed",
       outcome: "ok",
       fromStatuses: ["running", "queued"],
     });
@@ -321,7 +321,7 @@ describeDb("plane-split P3 — control-plane run-state write endpoints (real PG,
       "SELECT status, outcome FROM runs WHERE run_id = $1",
       [runId],
     );
-    expect(run.rows[0]).toMatchObject({ status: "done", outcome: "ok" });
+    expect(run.rows[0]).toMatchObject({ status: "completed", outcome: "ok" });
     const ev = await ownerPool().query<{ org_id: string }>(
       "SELECT org_id FROM events WHERE run_id = $1 AND event_type = 'run.started'",
       [runId],

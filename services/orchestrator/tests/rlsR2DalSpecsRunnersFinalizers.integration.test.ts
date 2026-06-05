@@ -152,22 +152,22 @@ describeDb("RLS R2 cohort-3 — specs + runners + finalizers through the org-sco
     // Status UPDATE inside a scope: visible within the SAME transaction (only if
     // the UPDATE used the ambient client).
     await runWithOrgScope(runtimePool, ORG_A, async (client) => {
-      await SpecStore.updateStatus(client, created.specId, { from: "pending", to: "active" }, ACTOR_A);
+      await SpecStore.updateStatus(client, created.specId, { from: "open", to: "in_flight" }, ACTOR_A);
       const within = await client.query<{ status: string }>("SELECT status FROM specs WHERE spec_id = $1", [
         created.specId,
       ]);
-      expect(within.rows[0]?.status).toBe("active");
+      expect(within.rows[0]?.status).toBe("in_flight");
     });
 
     // Status UPDATE via the raw pool (no scope) now matches ZERO rows under the
     // policy → the store raises "spec not found". Under R3b an unscoped write
     // can neither read nor mutate a tenant row.
     await expect(
-      SpecStore.updateStatus(runtimePool, created.specId, { from: "active", to: "done" }, ACTOR_A),
+      SpecStore.updateStatus(runtimePool, created.specId, { from: "in_flight", to: "merged" }, ACTOR_A),
     ).rejects.toThrow(/spec not found/u);
-    // The spec is still 'active' (the denied UPDATE changed nothing) per owner.
+    // The spec is still 'in_flight' (the denied UPDATE changed nothing) per owner.
     const stillActive = await SpecStore.get(ownerPool, created.specId, ACTOR_A);
-    expect(stillActive?.status).toBe("active");
+    expect(stillActive?.status).toBe("in_flight");
   });
 
   // (c) runner-metadata WRITES route through the ambient scope, and fall back to
@@ -391,7 +391,7 @@ async function seedTenant(owner: Pool, orgId: string, projectId: string, specId:
   );
   await owner.query(
     `INSERT INTO specs (spec_id, project_id, org_id, title, description, status)
-     VALUES ($1, $2, $3, 't', 'd', 'pending')`,
+     VALUES ($1, $2, $3, 't', 'd', 'open')`,
     [specId, projectId, orgId],
   );
   await owner.query(

@@ -126,20 +126,20 @@ export async function finalizeNonPass(
 
 /**
  * Finalize the run + spec for the merge stage's terminal outcome:
- *   - conflict → recoverable halt (the conflict event already emitted), spec NOT done;
+ *   - conflict → recoverable halt (the conflict event already emitted), spec NOT merged;
  *   - failed → run failed;
- *   - merged → run done/ok; spec `merged`;
- *   - queued/handed_off → run done/ok; spec status depends on WHO owns the merge:
+ *   - merged → run completed/ok; spec `merged`;
+ *   - queued/handed_off → run completed/ok; spec status depends on WHO owns the merge:
  *       - `external_reviewer` / `not_configured` HAND OFF — Tanren is NOT going to
- *         merge, so the spec is `done` (the merge is left to an operator).
+ *         merge, so the spec is `merged` (the actual git merge is left to an operator,
+ *         but the spec's work is done).
  *       - `native_queue` does NOT hand off — Tanren OWNS the merge (the run merely
  *         ENTERED the native queue; the coordinator's DRIVE pass merges it later).
- *         So the spec MUST stay in its pre-merge status (NOT `done`/`merged`) until
- *         that drive merges — otherwise the ordering invariant's two reads
- *         (`mergedSpecIds` + the P2c-1 speculative-hold, both keyed on
- *         `status IN ('done','merged')`) would treat a queued-but-UNMERGED ancestor
- *         as merged and let a dependent merge ahead of it (the cardinal sin).
- * Byte-identical to the inline branches it replaces for every non-native_queue mode.
+ *         So the spec MUST stay in its pre-merge (`in_flight`) status until that drive
+ *         merges — otherwise the ordering invariant's two reads (`mergedSpecIds` + the
+ *         P2c-1 speculative-hold, both keyed on `status = 'merged'`) would treat a
+ *         queued-but-UNMERGED ancestor as merged and let a dependent merge ahead of it
+ *         (the cardinal sin).
  */
 export async function finalizeMergeOutcome(
   input: RunPlannerLoopInput,
@@ -163,20 +163,19 @@ export async function finalizeMergeOutcome(
     return;
   }
   // P2d: a `native_queue` first-pass `queued` outcome ENTERED the queue but did NOT
-  // merge — Tanren still owns the merge, so the spec must NOT become `done`/`merged`
-  // here (the coordinator's drive-pass merge sets `merged`). Leave the spec in its
+  // merge — Tanren still owns the merge, so the spec must NOT become `merged` here
+  // (the coordinator's drive-pass merge sets `merged`). Leave the spec in its
   // in-flight status; only the run finalizes (it successfully enqueued). Every other
-  // mode is unchanged: `merged` → `merged`, a hand-off `queued`/`handed_off` → `done`.
+  // mode lands the spec at `merged`: a merge or a hand-off both end the spec there.
   const isNativeQueueEnqueue = outcome === "queued" && integration === "native_queue";
   if (!isNativeQueueEnqueue) {
-    const specStatus = outcome === "merged" ? "merged" : "done";
-    await setSpecStatus(input, context, specStatus);
+    await setSpecStatus(input, context, "merged");
   }
   await finalizeRunState(
-    "done",
+    "completed",
     "ok",
     ["running", "queued"],
-    "UPDATE runs SET status = 'done', outcome = 'ok', ended_at = now() WHERE run_id = $1",
+    "UPDATE runs SET status = 'completed', outcome = 'ok', ended_at = now() WHERE run_id = $1",
     [context.runId],
   );
 }

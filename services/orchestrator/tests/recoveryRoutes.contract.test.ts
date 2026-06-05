@@ -30,7 +30,7 @@ function harness(who: ActorContext | undefined = actor, seedCommit = true) {
   const pool = new RecoveryMemoryPool();
   pool.seedProject({ project_id: PROJECT, org_id: ORG });
   pool.seedProjectMember(PROJECT, actor.userId);
-  pool.seedSpec({ spec_id: SPEC, project_id: PROJECT, status: "active" });
+  pool.seedSpec({ spec_id: SPEC, project_id: PROJECT, status: "in_flight" });
   pool.seedRun({
     run_id: RUN,
     spec_id: SPEC,

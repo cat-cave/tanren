@@ -115,7 +115,7 @@ describe("DagWalkerSubscriber — NEVER-STRAND composition + periodic backstop",
     const order: string[] = [];
     const pool = fakePool({
       projectsWithDag: [],
-      runs: { run_done: { projectId: "project_x", status: "done" } },
+      runs: { run_done: { projectId: "project_x", status: "completed" } },
     });
     const listener = new FakeNotifyListener();
     const walker = new RecordingWalker(async () => {
@@ -148,7 +148,7 @@ describe("DagWalkerSubscriber — NEVER-STRAND composition + periodic backstop",
   it("a reconciler failure is non-fatal to the walk loop (logged, swallowed)", async () => {
     const pool = fakePool({
       projectsWithDag: [],
-      runs: { run_done: { projectId: "project_x", status: "done" } },
+      runs: { run_done: { projectId: "project_x", status: "completed" } },
     });
     const listener = new FakeNotifyListener();
     const walker = new RecordingWalker();

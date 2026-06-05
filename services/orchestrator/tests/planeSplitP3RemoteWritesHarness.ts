@@ -117,7 +117,7 @@ export async function seedRun(ownerPool: Pool, runId: string, status = "running"
   );
   await ownerPool.query(
     `INSERT INTO specs (spec_id, project_id, org_id, title, description, status)
-     VALUES ($1, $2, $3, 't', 'd', 'active') ON CONFLICT (spec_id) DO NOTHING`,
+     VALUES ($1, $2, $3, 't', 'd', 'in_flight') ON CONFLICT (spec_id) DO NOTHING`,
     [SPEC, PROJECT, ORG],
   );
   await ownerPool.query(

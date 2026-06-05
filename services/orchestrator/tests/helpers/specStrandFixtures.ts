@@ -16,10 +16,10 @@ import type {
 /** The project id every strand-fixture test reconciles under. */
 export const PROJECT = "project_strand";
 
-/** Build a strand snapshot with sensible defaults (an active spec, one cancelled run). */
+/** Build a strand snapshot with sensible defaults (an in-flight spec, one cancelled run). */
 export function snapshot(over: Partial<SpecStrandSnapshot> & { specId: string }): SpecStrandSnapshot {
   return {
-    status: "active",
+    status: "in_flight",
     runs: [{ runId: "run_old", status: "cancelled" }],
     hasActiveMergeQueueEntry: false,
     ...over,

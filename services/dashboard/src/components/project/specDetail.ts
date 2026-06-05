@@ -60,12 +60,12 @@ function statusForSpec(specStatus: string, latest: RunListItem | undefined): Dag
     if (latest.needsReview) return "review";
     if (latest.status === "running") return "live";
     if (latest.outcome !== null && HALTED.has(latest.outcome)) return "blocked";
-    if (latest.status === "completed" || latest.status === "done") return "done";
+    if (latest.status === "completed") return "done";
     if (latest.status === "queued") return "queued";
   }
   const s = specStatus.toLowerCase();
-  if (s === "merged" || s === "done") return "done";
-  if (s === "in_flight" || s === "running" || s === "active") return "live";
+  if (s === "merged") return "done";
+  if (s === "in_flight" || s === "running") return "live";
   if (s === "review") return "review";
   if (s === "blocked" || s === "halted") return "blocked";
   return "queued";

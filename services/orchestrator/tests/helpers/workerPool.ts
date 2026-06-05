@@ -184,16 +184,16 @@ export class WorkerPool {
       this.eventTypes.push(String(params[4] ?? ""));
       return { rows: [{ id: "1" }], rowCount: 1 };
     }
-    // spec status transitions (claim 'active', finalize 'done')
-    if (trimmed.startsWith("UPDATE specs SET status = 'active'")) {
-      this.specStatus = "active";
+    // spec status transitions (claim 'in_flight', finalize 'merged')
+    if (trimmed.startsWith("UPDATE specs SET status = 'in_flight'")) {
+      this.specStatus = "in_flight";
       return { rows: [{ spec_id: String(params[0]) }], rowCount: 1 };
     }
-    if (trimmed.startsWith("UPDATE specs SET status = 'done'")) {
-      this.specStatus = "done";
+    if (trimmed.startsWith("UPDATE specs SET status = 'merged'")) {
+      this.specStatus = "merged";
       return { rows: [], rowCount: 1 };
     }
-    // P3-0008 merge stage marks the spec merged/done with a parameterized status.
+    // P3-0008 merge stage marks the spec merged with a parameterized status.
     if (trimmed.startsWith("UPDATE specs SET status = $2")) {
       this.specStatus = String(params[1]);
       return { rows: [], rowCount: 1 };
@@ -272,8 +272,8 @@ export class WorkerPool {
       this.runStatus = { status: "running", outcome: null };
       return { rows: [], rowCount: 1 };
     }
-    if (trimmed.startsWith("UPDATE runs SET status = 'done'")) {
-      this.runStatus = { status: "done", outcome: "ok" };
+    if (trimmed.startsWith("UPDATE runs SET status = 'completed'")) {
+      this.runStatus = { status: "completed", outcome: "ok" };
       return { rows: [], rowCount: 1 };
     }
     if (trimmed.startsWith("UPDATE runs SET status = 'halted'")) {

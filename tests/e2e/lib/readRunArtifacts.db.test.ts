@@ -68,7 +68,7 @@ describeDb("readRunArtifacts against a real Postgres", () => {
   it("returns the seeded merged run, its cost_records, and a non-zero DORA count", async () => {
     const artifacts = await readRunArtifacts(ownerPool, RUN_ID);
     expect(artifacts.runId).toBe(RUN_ID);
-    expect(artifacts.status).toBe("done");
+    expect(artifacts.status).toBe("completed");
     expect(artifacts.outcome).toBe("phase2_easy_complete");
     expect(artifacts.prUrl).toBe(PR_URL);
     expect(artifacts.costRecords).toEqual([
@@ -106,12 +106,12 @@ async function seedMergedRun(owner: DbPool): Promise<void> {
   );
   await owner.query(
     `INSERT INTO runs (run_id, spec_id, project_id, org_id, trigger, branch, status, outcome, pr_url)
-     VALUES ($1, $2, $3, $4, 'api', 'main', 'done', 'phase2_easy_complete', $5)`,
+     VALUES ($1, $2, $3, $4, 'api', 'main', 'completed', 'phase2_easy_complete', $5)`,
     [RUN_ID, SPEC_ID, PROJECT_ID, ORG_ID, PR_URL],
   );
   await owner.query(
     `INSERT INTO tasks (task_id, run_id, org_id, kind, title, status, agent_kind, cli)
-     VALUES ($1, $2, $3, 'write', 'write', 'done', 'writer_codex', 'codex')`,
+     VALUES ($1, $2, $3, 'write', 'write', 'done', 'writer', 'codex')`,
     [TASK_ID, RUN_ID, ORG_ID],
   );
   await owner.query(

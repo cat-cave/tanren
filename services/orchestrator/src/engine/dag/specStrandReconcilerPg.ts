@@ -153,11 +153,12 @@ export class PgSpecStrandReadModel implements SpecStrandReadModel {
 }
 
 /**
- * The pg-backed strand writer. The two status flips are `notFromStatuses`-guarded
- * (`['done','merged']`) so a just-landed merge is never clobbered — byte-identical to
- * the percolation reexecutor's reopen. Plane-split: route through the control-plane
- * writer when wired (the de-privileged data plane can no longer UPDATE specs/runs);
- * else direct on the org-scoped pool.
+ * The pg-backed strand writer. The two status flips re-check the FULL strand
+ * invariant (`status = 'in_flight'` AND no live run/queue entry) in the same UPDATE so
+ * a just-landed merge is never clobbered — byte-identical to the percolation
+ * reexecutor's reopen. Plane-split: route through the control-plane writer when wired
+ * (the de-privileged data plane can no longer UPDATE specs/runs); else direct on the
+ * org-scoped pool.
  */
 export class PgSpecStrandWriter implements SpecStrandWriter {
   constructor(
@@ -166,7 +167,7 @@ export class PgSpecStrandWriter implements SpecStrandWriter {
   ) {}
 
   async reEnqueueSpec(input: { projectId: string; specId: string }): Promise<{ flipped: boolean }> {
-    return this.atomicFlip(input.projectId, input.specId, "pending");
+    return this.atomicFlip(input.projectId, input.specId, "open");
   }
 
   async escalateSpec(input: { projectId: string; specId: string }): Promise<{ flipped: boolean }> {
@@ -184,7 +185,7 @@ export class PgSpecStrandWriter implements SpecStrandWriter {
   private async atomicFlip(
     projectId: string,
     specId: string,
-    status: "pending" | "needs_attention",
+    status: "open" | "needs_attention",
   ): Promise<{ flipped: boolean }> {
     const orgId = await resolveProjectOrg(this.pool, projectId);
     if (orgId === null) throw new Error(`project ${projectId} has no org for the strand-reconciler write`);

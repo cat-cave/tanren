@@ -31,25 +31,23 @@ import { SpecPriority } from "../state/spec.js";
 import { createQueuedRunFromSpec } from "../workflow/projectSpec.js";
 
 /**
- * Normalize a persisted spec status (either the Phase-0/1 `pending/active/done`
- * enum or the Phase-2 `open/in_flight/review/merged/...` enum) into the walker's
- * three scheduling buckets. A spec the walker may START is `pending`; one already
- * OCCUPYING A SLOT (claimed or running) is `in_flight`; a SATISFIED DEPENDENCY is
- * `done` — and a merged spec counts as done for readiness (§1a: "all deps
- * merged/done"). A terminally-halted/cancelled spec is neither a candidate nor a
- * satisfied dependency: it blocks any dependent (which is correct — the dependent
- * cannot run on a halted ancestor until an operator routes past it).
+ * Map a persisted spec status (the SINGLE canonical `open/in_flight/review/merged/
+ * halted/cancelled/needs_attention` vocabulary) onto the walker's three scheduling
+ * buckets. A spec the walker may START (`open`) maps to the `pending` bucket; one
+ * already OCCUPYING A SLOT (`in_flight`/`review`) maps to `in_flight`; the
+ * SATISFIED-DEPENDENCY terminal (`merged`) maps to `done` (§1a: "all deps merged").
+ * A terminally-halted/cancelled/needs_attention spec is neither a candidate nor a
+ * satisfied dependency: it blocks any dependent (correct — the dependent cannot run
+ * on a halted ancestor until an operator routes past it). There is no second status
+ * vocabulary to normalize: every writer speaks this one.
  */
 export function classifySpecStatus(status: string): DagSpecPhase {
   switch (status) {
-    case "pending":
-      return "pending";
-    case "active":
     case "open":
+      return "pending";
     case "in_flight":
     case "review":
       return "in_flight";
-    case "done":
     case "merged":
       return "done";
     case "halted":

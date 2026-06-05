@@ -55,7 +55,7 @@ function scorecard(runId: string, reachedAcceptGreen: boolean | null): TrialScor
     cellId: "cell_1",
     trialIndex: 0,
     reachedAcceptGreen,
-    terminalStatus: "done",
+    terminalStatus: "completed",
     haltReason: null,
     leadTimeSeconds: 100,
     activeExecutionSeconds: 50,
@@ -99,7 +99,8 @@ function deps(cell: CellWithExperiment, opts?: DepsOpts): { deps: BenchmarkRunne
       cap.provisioned.push(trialIndex);
       return { runId: `run_${trialIndex}`, taskId: `task_${trialIndex}` };
     },
-    awaitTerminal: async () => (terminate ? { status: "done", outcome: "ok", merged: resolved.merged } : undefined),
+    awaitTerminal: async () =>
+      terminate ? { status: "completed", outcome: "ok", merged: resolved.merged } : undefined,
     runAccept: async ({ trialIndex }) => {
       cap.accepted.push(trialIndex);
       return resolved.accept ?? "passed";

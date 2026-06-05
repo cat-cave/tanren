@@ -293,13 +293,13 @@ export class EventEmittingDagWalker implements DagWalker {
    * the SAME typed error from the endpoint's typed 409).
    *
    *   1. SpecNotRunnableError — a concurrent walker tick already claimed this spec
-   *      (its pending→active claim, the idempotency boundary, won). The spec is
+   *      (its open→in_flight claim, the idempotency boundary, won). The spec is
    *      already in flight; nothing to do this tick.
-   *   2. SpecDependenciesBlockedError — the spec's dependencies are not yet `done`
+   *   2. SpecDependenciesBlockedError — the spec's dependencies are not yet `merged`
    *      at enqueue time (the planner saw them merged via the lifecycle projection,
-   *      but the `specs.status='done'` write was not yet visible to the enqueue tx).
+   *      but the `specs.status='merged'` write was not yet visible to the enqueue tx).
    *      The spec simply is not ready yet; a later tick enqueues it once the
-   *      dependency lands as done. Tolerating it keeps this tick from aborting and
+   *      dependency lands as merged. Tolerating it keeps this tick from aborting and
    *      starving the OTHER ready specs.
    */
   private async enqueueOrTolerate(input: {

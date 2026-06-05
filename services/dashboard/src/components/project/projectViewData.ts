@@ -155,7 +155,7 @@ function dagStatusForRun(run: RunListItem): DagNode["status"] {
   if (run.outcome === "halted" || run.outcome === "escape_hatch_hit" || run.outcome === "retry_budget_exhausted") {
     return "blocked";
   }
-  if (run.status === "completed" || run.status === "done") return "done";
+  if (run.status === "completed") return "done";
   return "queued";
 }
 

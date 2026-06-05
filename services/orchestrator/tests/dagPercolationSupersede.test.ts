@@ -86,11 +86,11 @@ class RecordingDequeueEmitter implements MergeQueueEventEmitter {
  */
 class RecordingWriter {
   readonly finalizes: FinalizeRunInput[] = [];
-  /** Records every `setSpecStatus` (the spec reopen to `pending`), in order. */
+  /** Records every `setSpecStatus` (the spec reopen to `open`), in order. */
   readonly specStatuses: Array<{ specId: string; status: string }> = [];
   createdRuns = 0;
   /** When true, `finalizeRun` (the prior-run CANCEL step) THROWS — simulating an
-   *  infra fault AT the cancel, to prove the spec is already `pending` (recoverable). */
+   *  infra fault AT the cancel, to prove the spec is already `open` (recoverable). */
   failFinalize = false;
 
   // eslint-disable-next-line @typescript-eslint/require-await
@@ -194,9 +194,9 @@ describe("PgPercolationReexecutor supersede (§2c self-conflict fix)", () => {
     expect(reexecRunId).toBe("run_reexec");
     expect(writer.createdRuns).toBe(1);
 
-    // NEVER-STRAND ORDER: the spec was reopened to `pending` BEFORE the prior run was
-    // cancelled — so a throw at the cancel always leaves a recoverable `pending` spec.
-    expect(writer.specStatuses).toEqual([{ specId: SPEC, status: "pending" }]);
+    // NEVER-STRAND ORDER: the spec was reopened to `open` BEFORE the prior run was
+    // cancelled — so a throw at the cancel always leaves a recoverable `open` spec.
+    expect(writer.specStatuses).toEqual([{ specId: SPEC, status: "open" }]);
 
     // The prior run was CANCELLED (terminal — invisible to the walker + read model).
     expect(writer.finalizes).toHaveLength(1);
@@ -264,7 +264,7 @@ describe("PgPercolationReexecutor supersede (§2c self-conflict fix)", () => {
     expect(events.dequeued).toHaveLength(0);
   });
 
-  it("never-strand: a throw AT the prior-run cancel leaves the spec `pending` (recoverable), NOT active-with-a-cancelled-run", async () => {
+  it("never-strand: a throw AT the prior-run cancel leaves the spec `open` (recoverable), NOT in_flight-with-a-cancelled-run", async () => {
     const queue = new InMemoryMergeQueueModel();
     queue.seed({ runId: PRIOR_RUN, specId: SPEC, dependsOn: ["spec_a"], priority: "tbd" });
     const events = new RecordingDequeueEmitter();
@@ -286,9 +286,9 @@ describe("PgPercolationReexecutor supersede (§2c self-conflict fix)", () => {
       }),
     ).rejects.toThrow("injected infra fault at the prior-run cancel");
 
-    // THE INVARIANT: the spec was reopened to `pending` BEFORE the cancel threw — so the
-    // DagWalker re-enqueues it. It is NOT stranded `active` with only a cancelled run.
-    expect(writer.specStatuses).toEqual([{ specId: SPEC, status: "pending" }]);
+    // THE INVARIANT: the spec was reopened to `open` BEFORE the cancel threw — so the
+    // DagWalker re-enqueues it. It is NOT stranded `in_flight` with only a cancelled run.
+    expect(writer.specStatuses).toEqual([{ specId: SPEC, status: "open" }]);
     // The cancel was ATTEMPTED (the throw point) and the re-exec run was NOT created
     // (the create comes after the cancel — the spec is recovered, not double-run).
     expect(writer.finalizes).toHaveLength(1);

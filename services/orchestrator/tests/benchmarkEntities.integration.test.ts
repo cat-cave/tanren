@@ -68,12 +68,12 @@ async function seedOrg(
   );
   await pool.query(
     `INSERT INTO specs (spec_id, project_id, org_id, title, description, acceptance_criteria, status, created_at)
-     VALUES ($1, $2, $3, 't', 'd', '[]'::jsonb, 'active', '2026-05-01T00:00:00.000Z')`,
+     VALUES ($1, $2, $3, 't', 'd', '[]'::jsonb, 'in_flight', '2026-05-01T00:00:00.000Z')`,
     [spec, project, org],
   );
   await pool.query(
     `INSERT INTO runs (run_id, spec_id, project_id, org_id, trigger, branch, status, started_at, ended_at)
-     VALUES ($1, $2, $3, $4, 'cli', 'tanren/x', 'done', '2026-05-01T00:10:00.000Z', '2026-05-01T00:25:00.000Z')`,
+     VALUES ($1, $2, $3, $4, 'cli', 'tanren/x', 'completed', '2026-05-01T00:10:00.000Z', '2026-05-01T00:25:00.000Z')`,
     [runId, spec, project, org],
   );
 

@@ -140,9 +140,9 @@ export class PgMergeQueueModel implements MergeQueueModel {
       );
       const mergingInFlight = Number(merging.rows[0]?.count ?? "0") > 0;
 
-      // The specs that have GENUINELY merged (done/merged) — satisfied ancestors.
+      // The specs that have GENUINELY merged — satisfied ancestors.
       const mergedRows = await client.query<{ spec_id: string }>(
-        "SELECT spec_id FROM specs WHERE project_id = $1 AND status IN ('done','merged')",
+        "SELECT spec_id FROM specs WHERE project_id = $1 AND status = 'merged'",
         [projectId],
       );
       const mergedSpecIds = new Set(mergedRows.rows.map((r) => r.spec_id));

@@ -1,16 +1,11 @@
 import { z } from "zod";
 
-export const ActorKind = z.enum([
-  "system",
-  "operator",
-  "writer_codex",
-  "answerer_codex",
-  "forge_template",
-  "ci_poller",
-  // Phase 0/1 historical agent_kind values still persisted on tasks
-  "writer",
-  "answerer",
-]);
+// The canonical actor / `agent_kind` vocabulary (v21). The implementation-coupled
+// `writer`/`answerer` are the values actually written to `tasks.agent_kind`
+// (the planner/writer/answerer tasks) — the aspirational `writer_codex`/
+// `answerer_codex` duplicates were never written and were pruned, leaving ONE
+// vocabulary.
+export const ActorKind = z.enum(["system", "operator", "writer", "answerer", "forge_template", "ci_poller"]);
 export type ActorKind = z.infer<typeof ActorKind>;
 
 // An ActorRef identifies the caller for audit/event purposes. Phase 2 callers

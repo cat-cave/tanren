@@ -180,7 +180,7 @@ async function createSpecOnClient(
     description: input.description,
     acceptanceCriteria: input.acceptanceCriteria,
     dependsOn: input.dependsOn ?? [],
-    status: "pending",
+    status: "open",
     priority: input.priority ?? DEFAULT_SPEC_PRIORITY,
   };
 
@@ -200,7 +200,7 @@ async function createSpecOnClient(
     ],
   );
   // Wake the DagWalker for THIS project (see notifyDagChanged): a fresh DAG has
-  // pending specs but zero runs, so the run channel never fires for it on its own.
+  // open specs but zero runs, so the run channel never fires for it on its own.
   await notifyDagChanged(client, spec.projectId);
   return spec;
 }
@@ -312,7 +312,7 @@ async function createQueuedRunFromSpecOnClient(
     plannerTaskId,
     plannerJobId: "",
     project: loaded.project,
-    spec: { ...loaded.spec, status: "active" },
+    spec: { ...loaded.spec, status: "in_flight" },
   };
 
   // P2c-2 percolation columns — set only on a speculative start (`verified`/`pending` carried onto a re-execution run).
@@ -388,7 +388,7 @@ async function createQueuedRunFromSpecOnClient(
 
 async function claimPendingSpec(client: pg.PoolClient, spec: SpecContract): Promise<void> {
   const result = await client.query(
-    "UPDATE specs SET status = 'active' WHERE spec_id = $1 AND status = 'pending' RETURNING spec_id",
+    "UPDATE specs SET status = 'in_flight' WHERE spec_id = $1 AND status = 'open' RETURNING spec_id",
     [spec.specId],
   );
   if (result.rowCount === 0) {
@@ -400,16 +400,14 @@ async function ensureSpecDependenciesDone(client: pg.PoolClient, spec: SpecContr
   if (spec.dependsOn.length === 0) {
     return;
   }
-  // A dependency is SATISFIED when its spec reached a terminal-complete status —
-  // EITHER the Phase-0/1 `done` OR the Phase-2 `merged` (a merged PR ends the spec
-  // at `merged`, never `done`). Both map to the walker's `done` phase
-  // (classifySpecStatus) and the lifecycle projection's `merged` state, so the
+  // A dependency is SATISFIED when its spec reached the terminal-complete `merged`
+  // status (a merged PR ends the spec at `merged`). This maps to the walker's `done`
+  // phase (classifySpecStatus) and the lifecycle projection's `merged` state, so the
   // planner sees a fully-MERGED dep chain as ready; this gate MUST agree, or a
   // dependent whose deps are all `merged` is rejected with
-  // SpecDependenciesBlockedError (which the walker tolerates as benign-transient →
-  // a PERMANENT stall, since a merged dep never becomes `done`).
+  // SpecDependenciesBlockedError (which the walker tolerates as benign-transient).
   const result = await client.query(
-    "SELECT spec_id FROM specs WHERE project_id = $1 AND status IN ('done', 'merged') AND spec_id = ANY($2::text[])",
+    "SELECT spec_id FROM specs WHERE project_id = $1 AND status = 'merged' AND spec_id = ANY($2::text[])",
     [spec.projectId, spec.dependsOn],
   );
   const done = new Set(result.rows.map((row) => String(row.spec_id)));

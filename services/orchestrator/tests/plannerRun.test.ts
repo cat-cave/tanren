@@ -63,7 +63,7 @@ describe("runPlannerLoopWorkflow", () => {
     expect(result.pullRequest?.prNumber).toBe(7);
     // The native merge gate (the merge authority) passed — no forge CI poll.
     expect(result.mergeGate?.passed).toBe(true);
-    expect(pool.runStatus).toEqual({ status: "done", outcome: "ok" });
+    expect(pool.runStatus).toEqual({ status: "completed", outcome: "ok" });
     expect(allocator.releases).toEqual(["runner_planner"]);
 
     const names = events.events.map((event) => event.eventType);

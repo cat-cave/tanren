@@ -136,7 +136,7 @@ describe("DagWalkerSubscriber", () => {
   it("a TERMINAL run notification fires the walker for that run's project", async () => {
     const pool = fakePool({
       projectsWithDag: [],
-      runs: { run_done: { projectId: "project_x", status: "done" } },
+      runs: { run_done: { projectId: "project_x", status: "completed" } },
     });
     const listener = new FakeNotifyListener();
     const walker = new RecordingWalker();
@@ -278,7 +278,7 @@ describe("DagWalkerSubscriber", () => {
     });
     const pool = fakePool({
       projectsWithDag: [],
-      runs: { run_done: { projectId: "project_x", status: "done" } },
+      runs: { run_done: { projectId: "project_x", status: "completed" } },
     });
     const listener = new FakeNotifyListener();
     const sub = new DagWalkerSubscriber({ pool, notifyListener: listener as never, walker });
@@ -305,7 +305,7 @@ describe("DagWalkerSubscriber", () => {
   it("runs the change-percolation pass alongside the walk on a terminal notification (P2c-2)", async () => {
     const pool = fakePool({
       projectsWithDag: [],
-      runs: { run_done: { projectId: "project_x", status: "done" } },
+      runs: { run_done: { projectId: "project_x", status: "completed" } },
     });
     const listener = new FakeNotifyListener();
     const walker = new RecordingWalker();
@@ -326,7 +326,7 @@ describe("DagWalkerSubscriber", () => {
   it("a percolation failure is non-fatal to the walk loop (logged, swallowed)", async () => {
     const pool = fakePool({
       projectsWithDag: [],
-      runs: { run_done: { projectId: "project_x", status: "done" } },
+      runs: { run_done: { projectId: "project_x", status: "completed" } },
     });
     const listener = new FakeNotifyListener();
     const walker = new RecordingWalker();

@@ -65,9 +65,9 @@ interface SseStreamArgs {
 
 const HEARTBEAT_INTERVAL_MS = 15_000;
 // Terminal statuses end the stream once a final post-terminal poll flushes
-// remaining deltas. Matches the canonical Phase 2 transitions; "done" is
-// kept for legacy fixture runs still pinned to the Phase 1 outcome.
-const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled", "halted", "done"]);
+// remaining deltas. Matches the canonical run terminals (a successful run ends
+// at `completed`).
+const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled", "halted"]);
 
 const TERMINAL_GRACE_POLLS = 1;
 

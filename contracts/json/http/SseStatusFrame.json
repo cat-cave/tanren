@@ -6,6 +6,7 @@
       "anyOf": [
         {
           "enum": [
+            "ok",
             "hello_complete",
             "phase1_fixture_complete",
             "phase2_easy_complete",
@@ -15,10 +16,7 @@
             "retry_budget_exhausted",
             "window_exhausted",
             "cancelled",
-            "hello_world_complete",
-            "ok",
-            "failed",
-            "pending"
+            "failed"
           ],
           "type": "string"
         },
@@ -37,8 +35,7 @@
         "halted",
         "completed",
         "failed",
-        "cancelled",
-        "done"
+        "cancelled"
       ],
       "type": "string"
     }

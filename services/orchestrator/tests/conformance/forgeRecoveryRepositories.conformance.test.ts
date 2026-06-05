@@ -36,7 +36,7 @@ function seedSpec(d: ForgeRecoveryDb, over: Partial<ForgeRecoveryDb["specs"][num
     project_id: "project_a",
     title: "Spec A",
     description: "desc",
-    status: "active",
+    status: "in_flight",
     metadata: null,
     org_id: ORG_A,
     ...over,
@@ -137,7 +137,7 @@ describe("Repositories conformance: forge/recovery (in-memory pg)", () => {
       await repos.recovery.appendSteeringToSpec(clientA(d), "spec_a", "go left", systemActor);
       expect(d.specs[0]!.description).toContain("[operator steering] go left");
       await repos.recovery.reopenSpecForReplan(clientA(d), "spec_a", systemActor);
-      expect(d.specs[0]!.status).toBe("pending");
+      expect(d.specs[0]!.status).toBe("open");
     });
 
     it("leaves terminal specs untouched on reopen", async () => {
@@ -157,7 +157,7 @@ describe("Repositories conformance: forge/recovery (in-memory pg)", () => {
       expect(await repos.recovery.listCapturedEventPayloads(clientB(d), "run_a", systemActor)).toHaveLength(0);
       // An off-scope reopen matches no visible spec → no status change.
       await repos.recovery.reopenSpecForReplan(clientB(d), "spec_a", systemActor);
-      expect(d.specs[0]!.status).toBe("active");
+      expect(d.specs[0]!.status).toBe("in_flight");
     });
   });
 

@@ -83,6 +83,7 @@ export interface RunDetail {
     branch: string;
     endedAt: string | null;
     outcome:
+      | "ok"
       | "hello_complete"
       | "phase1_fixture_complete"
       | "phase2_easy_complete"
@@ -92,17 +93,14 @@ export interface RunDetail {
       | "retry_budget_exhausted"
       | "window_exhausted"
       | "cancelled"
-      | "hello_world_complete"
-      | "ok"
       | "failed"
-      | "pending"
       | null;
     prUrl: string | null;
     projectId: string;
     runId: string;
     specId: string;
     startedAt: string;
-    status: "queued" | "running" | "halted" | "completed" | "failed" | "cancelled" | "done";
+    status: "queued" | "running" | "halted" | "completed" | "failed" | "cancelled";
     trigger: string;
   };
   spec: {
@@ -121,6 +119,8 @@ export interface RunDetail {
     model: string | null;
     outcome:
       | "passed"
+      | "ok"
+      | "pending"
       | "failed"
       | "rejected_by_checker"
       | "rejected_by_auditor"
@@ -128,8 +128,6 @@ export interface RunDetail {
       | "crashed"
       | "window_exhausted"
       | "cancelled"
-      | "ok"
-      | "pending"
       | null;
     parentTaskId: string | null;
     runId: string;
@@ -161,6 +159,7 @@ export interface RunListItem {
   lastEventAt: string | null;
   needsReview: boolean;
   outcome:
+    | "ok"
     | "hello_complete"
     | "phase1_fixture_complete"
     | "phase2_easy_complete"
@@ -170,10 +169,7 @@ export interface RunListItem {
     | "retry_budget_exhausted"
     | "window_exhausted"
     | "cancelled"
-    | "hello_world_complete"
-    | "ok"
     | "failed"
-    | "pending"
     | null;
   prUrl: string | null;
   projectId: string;
@@ -181,7 +177,7 @@ export interface RunListItem {
   specId: string;
   specTitle: string;
   startedAt: string;
-  status: "queued" | "running" | "halted" | "completed" | "failed" | "cancelled" | "done";
+  status: "queued" | "running" | "halted" | "completed" | "failed" | "cancelled";
   trigger: string;
 }
 
@@ -199,6 +195,7 @@ export interface RunSummary {
   branch: string;
   endedAt: string | null;
   outcome:
+    | "ok"
     | "hello_complete"
     | "phase1_fixture_complete"
     | "phase2_easy_complete"
@@ -208,17 +205,14 @@ export interface RunSummary {
     | "retry_budget_exhausted"
     | "window_exhausted"
     | "cancelled"
-    | "hello_world_complete"
-    | "ok"
     | "failed"
-    | "pending"
     | null;
   prUrl: string | null;
   projectId: string;
   runId: string;
   specId: string;
   startedAt: string;
-  status: "queued" | "running" | "halted" | "completed" | "failed" | "cancelled" | "done";
+  status: "queued" | "running" | "halted" | "completed" | "failed" | "cancelled";
   trigger: string;
 }
 
@@ -268,6 +262,7 @@ export interface SseHeartbeatFrame {
 /** Generated from `tanren.http.SseStatusFrame` (contracts/json/http/SseStatusFrame.json). */
 export interface SseStatusFrame {
   outcome:
+    | "ok"
     | "hello_complete"
     | "phase1_fixture_complete"
     | "phase2_easy_complete"
@@ -277,13 +272,10 @@ export interface SseStatusFrame {
     | "retry_budget_exhausted"
     | "window_exhausted"
     | "cancelled"
-    | "hello_world_complete"
-    | "ok"
     | "failed"
-    | "pending"
     | null;
   runId: string;
-  status: "queued" | "running" | "halted" | "completed" | "failed" | "cancelled" | "done";
+  status: "queued" | "running" | "halted" | "completed" | "failed" | "cancelled";
 }
 
 /** Generated from `tanren.http.TaskTimelineEntry` (contracts/json/http/TaskTimelineEntry.json). */
@@ -296,6 +288,8 @@ export interface TaskTimelineEntry {
   model: string | null;
   outcome:
     | "passed"
+    | "ok"
+    | "pending"
     | "failed"
     | "rejected_by_checker"
     | "rejected_by_auditor"
@@ -303,8 +297,6 @@ export interface TaskTimelineEntry {
     | "crashed"
     | "window_exhausted"
     | "cancelled"
-    | "ok"
-    | "pending"
     | null;
   parentTaskId: string | null;
   runId: string;

@@ -163,7 +163,7 @@ export const SPECS = [
     description: "",
     acceptanceCriteria: [],
     dependsOn: [],
-    status: "active",
+    status: "in_flight",
   },
   {
     specId: "spec_pick",
@@ -172,7 +172,7 @@ export const SPECS = [
     description: "",
     acceptanceCriteria: [],
     dependsOn: [SPEC_ID],
-    status: "pending",
+    status: "open",
   },
   {
     specId: "spec_scan",
@@ -181,7 +181,7 @@ export const SPECS = [
     description: "",
     acceptanceCriteria: [],
     dependsOn: [SPEC_ID],
-    status: "pending",
+    status: "open",
   },
 ];
 

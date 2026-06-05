@@ -2,7 +2,7 @@
 //
 // This is the PRODUCTION injection for the BenchmarkRunner's `awaitTerminal`
 // seam. The runner enqueues a trial's `plan` job and the worker executes it; this
-// module waits for that run to reach a TERMINAL `runs.status` (done/completed/
+// module waits for that run to reach a TERMINAL `runs.status` (completed/
 // halted/failed/cancelled) and returns its snapshot — or undefined if the
 // deadline passes without terminating.
 //

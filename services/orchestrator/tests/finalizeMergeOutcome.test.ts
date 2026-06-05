@@ -1,9 +1,9 @@
 // P2d (autonomy-engine.md §2d) — the run-loop merge finalize. The CARDINAL-SIN
 // fix: under `native_queue`, the first-pass `queued` outcome ENTERED the queue but
 // did NOT merge (Tanren owns the merge — the coordinator's drive pass merges it
-// later), so the spec must NOT be marked `done`/`merged` here. Every other mode is
-// unchanged: `direct_merge` `merged` → spec `merged`; an `external_reviewer`
-// hand-off → spec `done`.
+// later), so the spec must NOT be marked `merged` here. Every other mode lands the
+// spec at `merged`: `direct_merge` `merged` → spec `merged`; an `external_reviewer`
+// hand-off → spec `merged` (the actual git merge is left to an operator).
 
 import { describe, expect, it } from "vitest";
 import { finalizeMergeOutcome } from "../src/engine/workflow/plannerRunFinalize.js";
@@ -56,14 +56,14 @@ async function run(pool: RecordingPool, outcome: MergeOutcomeKind, integration: 
 }
 
 describe("finalizeMergeOutcome — native_queue spec status (P2d cardinal-sin fix)", () => {
-  it("a native_queue first-pass `queued` enqueue leaves the spec NOT done/merged", async () => {
+  it("a native_queue first-pass `queued` enqueue leaves the spec NOT merged", async () => {
     const pool = new RecordingPool();
     await run(pool, "queued", "native_queue");
     // The spec status is NEVER written (it stays in its in-flight status until the
-    // coordinator's drive pass merges it). This is the fix: no `done`, no `merged`.
+    // coordinator's drive pass merges it). This is the fix: no `merged`.
     expect(pool.touchedSpec()).toBe(false);
-    // The RUN still finalizes done/ok (the enqueue succeeded).
-    expect(pool.queries.some((q) => q.sql.includes("UPDATE runs SET status = 'done'"))).toBe(true);
+    // The RUN still finalizes completed/ok (the enqueue succeeded).
+    expect(pool.queries.some((q) => q.sql.includes("UPDATE runs SET status = 'completed'"))).toBe(true);
   });
 
   it("a direct_merge `merged` marks the spec `merged` (unchanged)", async () => {
@@ -72,10 +72,10 @@ describe("finalizeMergeOutcome — native_queue spec status (P2d cardinal-sin fi
     expect(pool.specStatusWritten()).toBe("merged");
   });
 
-  it("an external_reviewer hand-off `handed_off` marks the spec `done` (unchanged)", async () => {
+  it("an external_reviewer hand-off `handed_off` marks the spec `merged`", async () => {
     const pool = new RecordingPool();
     await run(pool, "handed_off", "external_reviewer");
-    expect(pool.specStatusWritten()).toBe("done");
+    expect(pool.specStatusWritten()).toBe("merged");
   });
 
   it("a native_queue DRIVE-pass `merged` marks the spec `merged` (the merge landed)", async () => {

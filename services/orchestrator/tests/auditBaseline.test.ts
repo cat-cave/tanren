@@ -102,7 +102,7 @@ describe("audit-evidence baseline — the shared envelope", () => {
       id: "u_1",
       label: "bob",
     });
-    expect(auditActorFromRef({ kind: "writer_codex" })).toEqual({ kind: "service" });
+    expect(auditActorFromRef({ kind: "writer" })).toEqual({ kind: "service" });
     expect(serviceAuditActor).toEqual({ kind: "service", id: "tanren-engine" });
   });
 

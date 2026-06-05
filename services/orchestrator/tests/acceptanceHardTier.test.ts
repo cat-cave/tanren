@@ -107,7 +107,7 @@ describe("acceptance hard tier (dequeue→execute, all hard paths)", () => {
 
     // Coherent terminal state: the conflict was resolved, the merge succeeded,
     // and the run + spec landed merged/done — NOT halted.
-    expect(pool.runStatus).toEqual({ status: "done", outcome: "ok" });
+    expect(pool.runStatus).toEqual({ status: "completed", outcome: "ok" });
     expect(pool.specStatus).toBe("merged");
     // Within budget: the run did not exhaust the rerun budget (no halt).
     expect(await jobQueue.claim("plan")).toBeUndefined();
@@ -191,7 +191,7 @@ describe("acceptance hard tier (dequeue→execute, all hard paths)", () => {
     // Initial plan + gate re-plan + auditor re-plan = 3 planner invocations,
     // all within the default rerun budget.
     expect(planner.calls.length).toBe(3);
-    expect(pool.runStatus.status).toBe("done");
+    expect(pool.runStatus.status).toBe("completed");
   });
 
   it("halts (recoverable) and stays within budget when the checker rejects past the rerun budget", async () => {

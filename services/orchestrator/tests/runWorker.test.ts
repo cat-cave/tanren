@@ -51,8 +51,8 @@ describe("run worker (dequeue→execute seam)", () => {
 
     expect(result).toMatchObject({ kind: "completed", runId: run.runId, outcome: "passed" });
     // Real terminal state on the run + the spec (workflow finalization).
-    expect(pool.runStatus).toEqual({ status: "done", outcome: "ok" });
-    expect(pool.specStatus).toBe("done");
+    expect(pool.runStatus).toEqual({ status: "completed", outcome: "ok" });
+    expect(pool.specStatus).toBe("merged");
     // The job reached a terminal queue state (not left running).
     expect(await jobQueue.claim("plan")).toBeUndefined();
   });
@@ -160,7 +160,7 @@ describe("run worker (dequeue→execute seam)", () => {
 
     expect(worker.isDraining).toBe(true);
     expect(results).toContain("completed");
-    expect(pool.runStatus.status).toBe("done");
+    expect(pool.runStatus.status).toBe("completed");
   });
 
   it("wakes an idle slot on a job-enqueued NOTIFY instead of waiting out the backstop", async () => {
@@ -198,7 +198,7 @@ describe("run worker (dequeue→execute seam)", () => {
       });
     }
     expect(results).toContain("completed");
-    expect(pool.runStatus.status).toBe("done");
+    expect(pool.runStatus.status).toBe("completed");
 
     await worker.stop();
   });

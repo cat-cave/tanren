@@ -88,7 +88,7 @@ const ACCEPT_RESULT = {
         specId: "spec_new1",
         projectId: "project_easy",
         title: "add csv export to the stats page",
-        status: "pending",
+        status: "open",
       },
     },
   ],

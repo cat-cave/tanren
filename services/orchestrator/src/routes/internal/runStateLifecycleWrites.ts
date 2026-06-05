@@ -62,7 +62,7 @@ const setSpecStatusSchema = z.object({
 const reconcileStrandedSpecSchema = z.object({
   specId: z.string().min(1),
   orgId: z.string().min(1),
-  status: z.enum(["pending", "needs_attention"]),
+  status: z.enum(["open", "needs_attention"]),
 });
 
 const setSpecMetadataSchema = z.object({
