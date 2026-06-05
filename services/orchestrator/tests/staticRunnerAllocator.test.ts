@@ -224,7 +224,7 @@ describe("StaticRunnerAllocator", () => {
     // Regression for a P0: a single pre-handshake SSH blip crashed the whole
     // control plane. ssh2 emits "error" once for the failed handshake and AGAIN
     // during teardown after settle() calls client.destroy(). A `.once` listener
-    // consumes the first emission, leaving the second unlistened, so Node's
+    // consumes the first emission, leaving the second with no listener, so Node's
     // EventEmitter throws an unhandled "error" → exit(1). With a persistent `.on`
     // listener the second emission hits the `settled` guard and is a no-op. If
     // this regresses, the destroy()-triggered re-emit throws inside the test.
