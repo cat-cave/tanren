@@ -330,6 +330,17 @@ export class RecordingAllocator implements Allocator {
   }
 }
 
+// A RecordingAllocator whose `release` THROWS — drives the security-baseline
+// cleanup-proof's FAILED-teardown branch (the run records `release.finalized` with
+// `cleanedUp: false` + the runner as a residual resource, and does NOT mask the
+// run's own outcome).
+export class FailingReleaseAllocator extends RecordingAllocator {
+  async release(runnerId: string): Promise<void> {
+    this.releases.push(runnerId);
+    throw new Error("hetzner: deleteServer 500\nsecond line should be dropped");
+  }
+}
+
 export class RecordingSsh implements SshSubstrate {
   readonly commands: Array<{ target: SshTarget; command: SshCommand }> = [];
 

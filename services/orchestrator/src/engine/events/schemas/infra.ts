@@ -44,6 +44,34 @@ export const RunnerReleasedPayload = z
   })
   .strict();
 
+// SECURITY-BASELINE CLEANUP-PROOF (tanren-direction.md § "Security Baseline":
+// "Release events prove cleanup and list residual resources, if any."). A runner is
+// an untrusted-code execution surface; when a run ends, the allocator's release MUST
+// tear it down, and the audit trail must record WHETHER the teardown actually
+// succeeded — not assume it. `release.finalized` is the audit EVENT of the finalize
+// outcome (it does NOT replace the allocator's release mechanism): `cleanedUp` is the
+// proof the release call completed without error; `residualResources` lists any
+// resource references that may NOT have been torn down (the release threw) so an
+// orphan sweeper / an operator can reconcile them. A clean release records
+// `cleanedUp: true` + an empty `residualResources`. SECURITY: a residual reference is
+// a non-secret RESOURCE HANDLE (a runner id / a server id), never a credential value.
+export const ReleaseFinalizedPayload = z
+  .object({
+    /** The released runner's id (the resource the release targeted). */
+    runnerId: z.string(),
+    /** True ⇒ the allocator's release completed without error (teardown proven). */
+    cleanedUp: z.boolean(),
+    /**
+     * Resource references that may remain after a FAILED release (the release threw),
+     * for orphan reconciliation. Empty on a clean release. Each entry is a NON-SECRET
+     * resource handle (e.g. `runner:<id>`), never a credential or secret value.
+     */
+    residualResources: z.array(z.string()),
+    /** When the release failed: the non-secret error summary (no stack, no secret). */
+    failureReason: z.string().optional(),
+  })
+  .strict();
+
 const SshCommandFailure = z
   .union([
     z.object({ reason: z.string(), message: z.string().optional() }).strict(),

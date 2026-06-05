@@ -102,6 +102,7 @@ export const eventTypeNames = [
   "recovery.revise_routed",
   "recovery.rollback_queued",
   "redaction.raw_access",
+  "release.finalized",
   "review.approved",
   "review.auto_approved",
   "review.changes_requested",

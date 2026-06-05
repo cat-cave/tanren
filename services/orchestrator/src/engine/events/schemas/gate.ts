@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { AuditEnvelope } from "./audit.js";
 
 // P3-0005 in-loop gate-check stage. The gate is the deterministic, exit-code
 // driven half of the verification split: it runs a tier's shell steps over SSH
@@ -99,6 +100,10 @@ export type GateVerdictStep = z.infer<typeof GateVerdictStep>;
 // the whole gate run; `steps[]` flattens every executed step (the per-check grain
 // CI-intelligence reduces for pass-rate, timing, retries, and flaky detection).
 // `failedStep`/`failedTier` name the first blocking step when `passed` is false.
+// The audit envelope is MERGED into the verdict's own fields (a flat payload) so
+// the gate verdict — the merge authority's terminal decision — carries the
+// governance policy version + the actor who drove the gate, exactly as the
+// audit-evidence doctrine requires for a governing event.
 export const GateVerdictPayload = z
   .object({
     when: GateWhen,
@@ -110,5 +115,6 @@ export const GateVerdictPayload = z
     failedTier: z.string().optional(),
     failedStep: z.string().optional(),
   })
+  .extend(AuditEnvelope.shape)
   .strict();
 export type GateVerdictPayload = z.infer<typeof GateVerdictPayload>;

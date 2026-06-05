@@ -21,6 +21,7 @@ import {
   changesThenApproveReview,
   conflictMerge,
   directMergeConfig,
+  FailingReleaseAllocator,
   failedMerge,
   fakeProbe,
   healthyWindow,
@@ -317,5 +318,76 @@ describe("runPlannerLoopWorkflow — non-pass loop outcome mapping", () => {
     expect(result.outcome.kind).toBe("halted");
     expect(result.pullRequest).toBeUndefined();
     expect(pool.runStatus).toEqual({ status: "halted", outcome: "halted" });
+  });
+});
+
+// SECURITY-BASELINE CLEANUP-PROOF (tanren-direction.md § "Security Baseline"): the
+// run-end release emits a `release.finalized` audit event proving WHETHER the runner
+// was torn down + listing any residual resources to reconcile.
+describe("runPlannerLoopWorkflow — release cleanup-proof", () => {
+  it("records a clean release.finalized (cleanedUp, no residuals) on a successful teardown", async () => {
+    const { ctx, pool, events, secrets, allocator, ssh } = await setup(directMergeConfig());
+    const github = new ScriptedGitHubHttp([...ghRound()]);
+
+    await runPlannerLoopScoped(
+      baseInput({
+        pool: pool.asPgPool(),
+        eventStore: events,
+        allocator,
+        ssh,
+        secrets,
+        vcsProvider: vcsProviderOver(github),
+        context: ctx,
+        buildAdapters: () => twoSubtaskAdapters([passingCheck, passingCheck]),
+        reviewProbe: approvingReview(),
+        mergeProbe: mergedMerge(),
+      }) as Parameters<typeof runPlannerLoopScoped>[0],
+    );
+
+    const finalized = events.events.find((e) => e.eventType === "release.finalized");
+    expect(finalized).toBeDefined();
+    expect(finalized!.payload).toEqual({
+      runnerId: "runner_planner",
+      cleanedUp: true,
+      residualResources: [],
+    });
+  });
+
+  it("records a FAILED release.finalized (residual runner + bounded reason) when teardown throws, without masking the run", async () => {
+    const { ctx, pool, events, secrets, ssh } = await setup(directMergeConfig());
+    const allocator = new FailingReleaseAllocator();
+    const github = new ScriptedGitHubHttp([...ghRound()]);
+
+    // The run still completes normally — a failed teardown is recorded loudly, never
+    // re-thrown into the run's outcome (the release runs in `finally`).
+    const result = await runPlannerLoopScoped(
+      baseInput({
+        pool: pool.asPgPool(),
+        eventStore: events,
+        allocator,
+        ssh,
+        secrets,
+        vcsProvider: vcsProviderOver(github),
+        context: ctx,
+        buildAdapters: () => twoSubtaskAdapters([passingCheck, passingCheck]),
+        reviewProbe: approvingReview(),
+        mergeProbe: mergedMerge(),
+      }) as Parameters<typeof runPlannerLoopScoped>[0],
+    );
+
+    expect(result.merge?.outcome).toBe("merged");
+    expect(pool.runStatus).toEqual({ status: "done", outcome: "ok" });
+
+    const finalized = events.events.find((e) => e.eventType === "release.finalized");
+    expect(finalized).toBeDefined();
+    const payload = finalized!.payload as {
+      cleanedUp: boolean;
+      residualResources: string[];
+      failureReason?: string;
+    };
+    expect(payload.cleanedUp).toBe(false);
+    expect(payload.residualResources).toEqual(["runner:runner_planner"]);
+    // The reason is a NON-SECRET single line (multi-line provider dumps are dropped).
+    expect(payload.failureReason).toBe("hetzner: deleteServer 500");
   });
 });

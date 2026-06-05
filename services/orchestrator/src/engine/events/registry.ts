@@ -37,6 +37,7 @@ import {
   CredentialLoadedPayload,
   CredentialRequestedPayload,
   CredentialScopedTokenMintedPayload,
+  ReleaseFinalizedPayload,
   RunnerAllocatedPayload,
   RunnerFailedPayload,
   RunnerReleasedPayload,
@@ -197,6 +198,9 @@ export const EventRegistry = {
   // Runner allocation
   "runner.allocated": RunnerAllocatedPayload,
   "runner.released": RunnerReleasedPayload,
+  // Security-baseline cleanup-proof: the audit event of the run-end release —
+  // whether the runner was actually torn down + any residual resources to reconcile.
+  "release.finalized": ReleaseFinalizedPayload,
   "runner.failed": RunnerFailedPayload,
   "allocator.requested": AllocatorRequestedPayload,
   "allocator.allocated": AllocatorAllocatedPayload,

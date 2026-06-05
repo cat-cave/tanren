@@ -1,7 +1,30 @@
 import { z } from "zod";
+import { AuditEnvelope } from "./audit.js";
 
 // Deploy-on-merge event schema, split out of schemas/integrations.ts to keep each
 // file under the 500-line cap.
+
+// DeployArtifact — the audit-evidence doctrine requires that where a deploy
+// produces an artifact, the event records its CHECKSUM + PROVENANCE (never the
+// artifact contents, never a secret). For a `direct_api` deploy the provider builds
+// the artifact server-side and exposes a content digest + a build/deployment handle
+// the digest derives from; this records those NON-SECRET references so an auditor can
+// tie the deployed surface back to the exact artifact a provenance attestation would
+// cover. Optional fields: a provider that exposes no digest yet records the
+// provenance ref alone — an honest partial, never a fabricated hash.
+export const DeployArtifact = z
+  .object({
+    /** The content checksum of the built artifact, `<algo>:<hex>` (e.g. `sha256:...`). NEVER the contents. */
+    checksum: z.string().min(1).optional(),
+    /**
+     * The provenance reference the artifact derives from — the non-secret build /
+     * image / deployment handle a provenance attestation is keyed on (e.g. the
+     * image ref or the provider build id). NEVER a token or a signed-URL secret.
+     */
+    provenanceRef: z.string().min(1),
+  })
+  .strict();
+export type DeployArtifact = z.infer<typeof DeployArtifact>;
 
 // Deploy-on-merge ("a deploy happened"): a run's merge triggered a real build +
 // release of the merged commit onto the project's deploy app (Vercel/Fly). The
@@ -26,7 +49,17 @@ export const DeployTriggeredPayload = z
     url: z.string(),
     /** The deployment state the provider reported (e.g. "QUEUED" | "READY" | "started"). */
     state: z.string(),
+    /**
+     * The artifact the deploy released — its checksum + provenance ref (non-secret).
+     * Optional: a provider that exposes no artifact digest at trigger time records no
+     * artifact (an honest absence), never a placeholder. See {@link DeployArtifact}.
+     */
+    artifact: DeployArtifact.optional(),
   })
+  // AUDIT ENVELOPE: a deploy is a governing delivery action — it carries the
+  // governance policy version + the actor who drove it (the autonomous service on
+  // deploy-on-merge). Flat-merged onto the payload.
+  .extend(AuditEnvelope.shape)
   .strict();
 
 // Deploy VERIFIED ("the deploy is PROVEN live"): after `deploy.triggered`, the
@@ -50,4 +83,7 @@ export const DeployVerifiedPayload = z
     /** The HTTP status the URL smoke check observed (the deployment answered). */
     smokeStatus: z.number().int(),
   })
+  // AUDIT ENVELOPE: the verify is the proof step of the same governing deploy
+  // action — it carries the same policy version + initiating actor.
+  .extend(AuditEnvelope.shape)
   .strict();

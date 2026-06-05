@@ -1,4 +1,5 @@
 import type { SensitivityRule } from "./sensitivity.js";
+import { auditEnvelopeRulesFor } from "./sensitivityRules.audit.js";
 
 // P-INT-2 capability-driven onboarding sensitivity rules, split into their own
 // module so `sensitivityRules.infra.ts` stays under the 500-line cap. ALL fields
@@ -28,6 +29,9 @@ export const integrationProvisioningSensitivityRules: SensitivityRule[] = [
   { eventName: "deploy.triggered", path: "deploymentId", tag: "public" },
   { eventName: "deploy.triggered", path: "url", tag: "public" },
   { eventName: "deploy.triggered", path: "state", tag: "public" },
+  // The released artifact's checksum + provenance ref (non-secret) + the audit
+  // envelope (policy version + initiating actor) — a deploy is a governing action.
+  ...auditEnvelopeRulesFor("deploy.triggered"),
 
   // deploy.verified ("the deploy is PROVEN live"): the verified deploy target + the
   // resolved live URL + the final READY state + the smoke HTTP status. All non-secret
@@ -38,6 +42,8 @@ export const integrationProvisioningSensitivityRules: SensitivityRule[] = [
   { eventName: "deploy.verified", path: "url", tag: "public" },
   { eventName: "deploy.verified", path: "state", tag: "public" },
   { eventName: "deploy.verified", path: "smokeStatus", tag: "public" },
+  // The audit envelope on the verify (same governing deploy action), all public.
+  ...auditEnvelopeRulesFor("deploy.verified"),
 
   // demos-as-evidence: the per-behavior demo verdict + the summary. Every field is
   // non-secret — a behavior id/title, a surface kind, an outcome, and the OBSERVABLE

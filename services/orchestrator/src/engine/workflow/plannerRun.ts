@@ -47,6 +47,7 @@ import {
   finalizeNonPass,
   finalizeWorkflowError,
   markRunRunning,
+  releaseRunnerWithCleanupProof,
   type RunCredentialScoping,
   runnerPayload,
   runOutcomeFor,
@@ -104,6 +105,8 @@ export interface PlannerRunContext {
   endpointBaseUrl?: string;
   // Governance posture (run worker): drives the gate's advisory policy (`lenient` ⇒ lint/typecheck advisory; absent ⇒ strict).
   governancePosture?: GovernancePosture;
+  // AUDIT-EVIDENCE BASELINE: governance policy version (project config version), stamped onto the `gate.verdict` roll-up. Absent on unit paths with no config.
+  policyVersion?: number;
   // GREENFIELD MARKER (ProjectConfigV1.greenfield): drives buildDefaultGate's in-loop deps-ensure MODE — greenfield ⇒ NON-FROZEN install; absent/false ⇒ FROZEN brownfield.
   greenfield?: boolean;
   // cost PR-C: the CONFIGURED per-credential credit→USD rate (runExecutionContext
@@ -266,14 +269,8 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
   const workspacePath = rawInput.workspacePath ?? workspaceRepoPathForRun(context.runId);
   const recorder = rawInput.recorder ?? new CostRecorder(rawInput.pool, eventStore);
   const appendEvent = async <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string) => {
-    await eventStore.append({
-      runId: context.runId,
-      specId: context.specId,
-      projectId: context.projectId,
-      taskId,
-      eventType,
-      payload,
-    });
+    const { runId, specId, projectId } = context;
+    await eventStore.append({ runId, specId, projectId, taskId, eventType, payload });
   };
 
   // Dimension D: de-privilege the run behind a per-run scoped Vault child token
@@ -494,7 +491,7 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
     await finalizeWorkflowError(error, { finalizeRunState, appendEvent, runId: context.runId, workspacePath });
     throw error;
   } finally {
-    await input.allocator.release(allocation.runnerId);
-    await appendEvent("runner.released", { runnerId: allocation.runnerId });
+    // SECURITY-BASELINE CLEANUP-PROOF: release + prove teardown (releaseCleanupProof.ts).
+    await releaseRunnerWithCleanupProof(input.allocator, allocation.runnerId, appendEvent);
   }
 }
