@@ -255,15 +255,52 @@ describe("runGateForWhen", () => {
       timeoutMs: 1000,
       appendEvent,
       headSha: "a".repeat(40),
+      policyVersion: 1,
     });
     expect(outcome.passed).toBe(true);
     const verdicts = events.filter((e) => e.eventType === "gate.verdict");
     expect(verdicts).toHaveLength(1);
-    const payload = verdicts[0]!.payload as { headSha: string; passed: boolean; steps: Array<{ name: string }> };
+    const payload = verdicts[0]!.payload as {
+      headSha: string;
+      passed: boolean;
+      steps: Array<{ name: string }>;
+      policyVersion?: number;
+      initiatingActor?: { kind: string; id?: string };
+      approvingActor?: unknown;
+    };
     expect(payload.headSha).toBe("a".repeat(40));
     expect(payload.passed).toBe(true);
     // The fast tier's three steps are flattened onto the verdict.
     expect(payload.steps.map((s) => s.name)).toEqual(["lint", "typecheck", "unit"]);
+    // AUDIT-EVIDENCE BASELINE: the verdict carries the governance policy version + the
+    // initiating SERVICE actor (the gate runs autonomously — no approver, a machine
+    // judgment). The merge authority's verdict is now an audit-grade governing event.
+    expect(payload.policyVersion).toBe(1);
+    expect(payload.initiatingActor).toEqual({ kind: "service", id: "tanren-engine" });
+    expect(payload.approvingActor).toBeUndefined();
+  });
+
+  it("emits a gate.verdict with the initiating actor but NO policy version when none is threaded", async () => {
+    const ssh = new RecordingSsh();
+    const { events, appendEvent } = recordingEvents();
+    await runGateForWhen({
+      ssh,
+      target,
+      workspacePath: "/ws",
+      config: DEFAULT_CI_CONFIG,
+      when: "per_iteration",
+      timeoutMs: 1000,
+      appendEvent,
+      headSha: "b".repeat(40),
+    });
+    const payload = events.find((e) => e.eventType === "gate.verdict")!.payload as {
+      policyVersion?: number;
+      initiatingActor?: unknown;
+    };
+    // No project-governance context ⇒ an HONEST absence of policy version (never a
+    // fabricated 0), but the initiating actor is still recorded.
+    expect(payload.policyVersion).toBeUndefined();
+    expect(payload.initiatingActor).toEqual({ kind: "service", id: "tanren-engine" });
   });
 
   it("emits a failing gate.verdict naming the blocking tier+step", async () => {

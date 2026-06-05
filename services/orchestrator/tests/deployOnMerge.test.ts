@@ -81,7 +81,10 @@ function secrets(): InMemorySecretStore {
 // The scripted transport assigns the created app the id `vercel_app_1` — the
 // provider-side handle the provisioner would have stored as `deployAppId`.
 const VERCEL_APP_ID = "vercel_app_1";
-const VERCEL_TARGET = { deployProvider: "deploy.vercel", deployAppId: VERCEL_APP_ID };
+// `version: 1` mirrors a real persisted project config — the deploy watcher parses
+// it through the strict migrator to resolve the governance policy version for the
+// deploy audit record (a missing version is a LOUD error in production, never a default).
+const VERCEL_TARGET = { version: 1, deployProvider: "deploy.vercel", deployAppId: VERCEL_APP_ID };
 const VERCEL_GRANT = {
   provider_kind: "deploy.vercel",
   credential_ref: "secret://org/deploy-token",
@@ -148,6 +151,14 @@ describe("DeployOnMergeWatcher (a deploy happened)", () => {
     expect(payload["provider"]).toBe("deploy.vercel");
     expect(payload["url"]).toMatch(/^https:\/\//u);
     expect(JSON.stringify(deploy)).not.toContain("re_live_secret");
+    // AUDIT-EVIDENCE BASELINE: the deploy carries the governance policy version + the
+    // initiating actor (the autonomous service, no approver) + a NON-SECRET artifact
+    // provenance ref (the deployment handle bound to the merged ref, no checksum here).
+    expect(payload["policyVersion"]).toBe(1);
+    expect(payload["initiatingActor"]).toEqual({ kind: "service", id: "tanren-engine" });
+    expect(payload["approvingActor"]).toBeUndefined();
+    expect(payload["artifact"]).toEqual({ provenanceRef: `deploy.vercel:vercel_deploy_1@${BRANCH}` });
+    expect((payload["artifact"] as Record<string, unknown>)["checksum"]).toBeUndefined();
 
     // The deploy is PROVEN, not fire-and-forget: verify polled to READY + smoked the
     // URL, and recorded deploy.verified (provider + url + state + smoke status).
@@ -160,6 +171,9 @@ describe("DeployOnMergeWatcher (a deploy happened)", () => {
     expect(vPayload["smokeStatus"]).toBe(200);
     expect(vPayload["url"]).toMatch(/^https:\/\//u);
     expect(JSON.stringify(verified)).not.toContain("deploy_token");
+    // The verify carries the SAME audit envelope (governing deploy action).
+    expect(vPayload["policyVersion"]).toBe(1);
+    expect(vPayload["initiatingActor"]).toEqual({ kind: "service", id: "tanren-engine" });
   });
 
   it("fails LOUD when the triggered deploy never becomes READY (verify guard)", async () => {

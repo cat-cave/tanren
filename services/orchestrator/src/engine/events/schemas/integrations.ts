@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { AuditEnvelope } from "./audit.js";
 
 // External integration events: GitHub (branch/PR), the review lifecycle, and the
 // merge stage. (The native gate is the merge authority — there are no forge-CI
@@ -99,6 +100,11 @@ export const MergeQueuedPayload = z
   })
   .strict();
 
+// merge.completed is the terminal governing event of the delivery loop — code
+// reaches `main`. The audit envelope records the governance policy version + the
+// initiating actor (the autonomous service) AND the approving actor when a human
+// review tier gated the merge (absent on the autonomous tiers — the honest "no
+// human approver" state). Flat-merged onto the payload.
 export const MergeCompletedPayload = z
   .object({
     prUrl: z.string(),
@@ -106,6 +112,7 @@ export const MergeCompletedPayload = z
     integration: MergeIntegrationMode,
     mergeSha: z.string().optional(),
   })
+  .extend(AuditEnvelope.shape)
   .strict();
 
 export const MergeFailedPayload = z

@@ -230,10 +230,9 @@ export function pendingReview() {
   };
 }
 
-// P2a: the merge stage now reads branch freshness before merging. These tail
-// fixtures exercise the merge OUTCOME mapping, so they report the branch CLEAN +
-// up to date — the up-to-date enforcement is a no-op and the merge() outcome
-// drives the result, exactly as before P2a.
+// P2a: the merge stage reads branch freshness before merging. These tail fixtures
+// exercise the merge OUTCOME mapping, so they report the branch CLEAN + up to date
+// (the enforcement is a no-op; the merge() outcome drives the result, as pre-P2a).
 function cleanFreshness() {
   return {
     readMergeability: async () => ({
@@ -274,10 +273,9 @@ export function mergedMerge() {
   };
 }
 
-// P3-0008: inject an approving review probe + a no-op merge probe so the
-// post-CI review→merge tail completes without hitting GitHub. The default
-// project config in the test pool resolves mergeIntegration=not_configured →
-// the merge stage hands off (no merge call), so the merge probe is never used.
+// P3-0008: inject an approving review probe + a no-op merge probe so the post-CI
+// review→merge tail completes without hitting GitHub. The default test-pool config
+// resolves mergeIntegration=not_configured → the merge stage hands off (no merge call).
 export function approvingReview() {
   return {
     markReady: async () => {},
@@ -303,9 +301,8 @@ export function noopMerge() {
 
 // The forge calls of a passing native run: PR-list + create, then the `tanren/gate`
 // verdict-PUBLISH (a check-run, 201 → { id, html_url }). NATIVE delivery runs the merge
-// gate over SSH (no forge poll); the only forge call after the PR is the verdict publish.
-// The publish 201 is unused (harmless leftover) on a fake-SSH unit path that yields no
-// head sha (the publish is skipped), and consumed when the SSH fake yields a real head sha.
+// gate over the command substrate (no forge poll); the publish 201 is consumed only when
+// the SSH fake yields a real head sha (skipped, harmless, on a no-head-sha fake path).
 export function passingGitHub(): ScriptedGitHubHttp {
   return new ScriptedGitHubHttp([
     { status: 200, body: [] },
@@ -336,9 +333,18 @@ export class RecordingAllocator implements Allocator {
   }
 }
 
+// A RecordingAllocator whose `release` THROWS — drives the security-baseline
+// cleanup-proof's FAILED-teardown branch (the run records `release.finalized` with
+// `cleanedUp: false` + the residual runner, without masking the run's own outcome).
+export class FailingReleaseAllocator extends RecordingAllocator {
+  async release(runnerId: string): Promise<void> {
+    this.releases.push(runnerId);
+    throw new Error("hetzner: deleteServer 500\nsecond line should be dropped");
+  }
+}
+
 export class RecordingSsh implements CommandSubstrate {
   readonly commands: Array<{ target: RunnerHandle; command: RunnerCommand }> = [];
-
   async run(sshTarget: RunnerHandle, command: RunnerCommand): Promise<CommandResult> {
     this.commands.push({ target: sshTarget, command });
     return { exitCode: 0, stdout: "", stderr: "", timedOut: false };
@@ -482,9 +488,8 @@ export class PlannerRunPool {
 
   // A minimal `connect()` so seams that open a `runWithOrgScope` /
   // `runWithSystemScope` transaction (e.g. the BUDGET-SAFETY M6 PgBudgetGate
-  // preflight) work over this fake: the returned client routes `query` back here
-  // and `release()` is a no-op. The budget read's `SELECT ... FROM projects`
-  // hits the catch-all (empty rows) → no resolvable org → unlimited (no-op).
+  // preflight) work over this fake: the client routes `query` back here, `release()`
+  // is a no-op, and the budget read hits the catch-all (empty → unlimited no-op).
   async connect(): Promise<{ query: PlannerRunPool["query"]; release: () => void }> {
     return { query: this.query.bind(this), release: () => {} };
   }

@@ -199,6 +199,9 @@ export async function loadRunExecutionContext(
     // from the resolved project config so a greenfield `lenient` project lands
     // functional-but-weak code instead of stalling the gate.
     governancePosture: projectConfig.governancePosture,
+    // AUDIT-EVIDENCE BASELINE: the governance policy version (the project config
+    // version), threaded onto the gate.verdict roll-up the run emits.
+    policyVersion: projectConfig.version,
     // GREENFIELD MARKER from the resolved project config. Drives the in-loop
     // deps-ensure install MODE: greenfield ⇒ non-frozen install (a writer-added
     // devDep installs even without a regenerated lockfile); brownfield (false) ⇒

@@ -5,8 +5,78 @@
     "appId": {
       "type": "string"
     },
+    "approvingActor": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "human",
+            "service"
+          ],
+          "type": "string"
+        },
+        "label": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "type": "object"
+    },
+    "artifact": {
+      "additionalProperties": false,
+      "properties": {
+        "checksum": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "provenanceRef": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "provenanceRef"
+      ],
+      "type": "object"
+    },
     "deploymentId": {
       "type": "string"
+    },
+    "initiatingActor": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "human",
+            "service"
+          ],
+          "type": "string"
+        },
+        "label": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "type": "object"
+    },
+    "policyVersion": {
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
     },
     "provider": {
       "type": "string"

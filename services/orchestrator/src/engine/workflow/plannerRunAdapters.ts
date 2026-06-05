@@ -390,6 +390,9 @@ export function buildDefaultGate(
       appendEvent,
       taskId,
       advisoryStepNames,
+      // AUDIT-EVIDENCE BASELINE: the governance policy version, threaded so the
+      // gate.verdict roll-up records which policy revision the gate was judged under.
+      ...(input.context.policyVersion === undefined ? {} : { policyVersion: input.context.policyVersion }),
       ...(headSha === "" ? {} : { headSha }),
       // Plane B: the project's dev+test app env, so the building agent's gate
       // commands run with it. Never logged/emitted. Distinct from Tanren creds.

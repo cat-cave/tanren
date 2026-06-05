@@ -42,28 +42,6 @@ export function runnerPayload(allocation: RunnerAllocation) {
   };
 }
 
-// Release the run's runner through the RELEASE FINALIZER seam and act on the
-// outcome: emit `runner.released` on a clean teardown, or log a LOUD leak (real
-// cost/capacity) the allocator's sweeper reconciles by age. Never throws for a
-// release failure — called from the run loop's `finally`, where a throw would
-// mask the run's own error.
-export async function finalizeRunnerRelease(
-  allocator: Allocator,
-  runnerId: string,
-  reason: ReleaseReason,
-  runId: string,
-  appendEvent: (eventType: "runner.released", payload: { runnerId: string }) => Promise<void>,
-): Promise<void> {
-  const outcome = await new AllocatorReleaseFinalizer(allocator).finalize(runnerId, reason);
-  if (outcome.kind === "released") {
-    await appendEvent("runner.released", { runnerId });
-    return;
-  }
-  console.error(
-    `[run ${runId}] FAILED to release runner ${runnerId} — leaked (sweeper will reconcile): ${outcome.message}`,
-  );
-}
-
 /** Finalize the run's terminal state, direct (in-process) or remote (control plane). */
 export type FinalizeRunState = (
   status: string,
@@ -266,4 +244,46 @@ export async function supersedeQueuedPlannerTask(input: RunPlannerLoopInput, run
     await input.runStateWriter.supersedeQueuedPlannerTask({ runId });
   }
   await input.pool.query("UPDATE job_queue SET status = 'cancelled' WHERE run_id = $1 AND status = 'queued'", [runId]);
+}
+
+// SECURITY-BASELINE CLEANUP-PROOF (tanren-direction.md § "Security Baseline":
+// "Release events prove cleanup and list residual resources, if any."). The runner is
+// an untrusted-code surface; the audit trail must record WHETHER its run-end teardown
+// actually succeeded, not assume it. `runner.released` narrates the intent;
+// `release.finalized` is the PROOF — `cleanedUp: false` with the runner listed as a
+// residual resource (+ a non-secret `failureReason`) when the release throws, so an
+// orphan sweeper / operator can reconcile the leak. This is the audit EVENT only — the
+// allocator still owns the destroy/wipe mechanism. Lives here (a module plannerRun.ts
+// already imports) so the run keeps its dependency count under the cap.
+//
+// Called from the run's `finally`, so it MUST NOT re-throw: a throw would mask the
+// run's real failure (the catch already finalized + re-raised it). The event is the
+// loud record of a failed teardown WITHOUT swallowing the original error.
+export async function releaseRunnerWithCleanupProof(
+  allocator: Allocator,
+  runnerId: string,
+  appendEvent: <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string) => Promise<void>,
+  reason: ReleaseReason = "completed",
+): Promise<void> {
+  await appendEvent("runner.released", { runnerId });
+  // Release through the RELEASE FINALIZER seam: it owns the release + returns a
+  // reconcilable outcome WITHOUT throwing (a throw here would mask the run's real
+  // failure). `release.finalized` is the audit PROOF the outcome carries.
+  const outcome = await new AllocatorReleaseFinalizer(allocator).finalize(runnerId, reason);
+  const cleanedUp = outcome.kind === "released";
+  const failure = cleanedUp ? {} : { failureReason: releaseFailureSummary(outcome.message) };
+  await appendEvent("release.finalized", {
+    runnerId,
+    cleanedUp,
+    residualResources: cleanedUp ? [] : [`runner:${runnerId}`],
+    ...failure,
+  });
+}
+
+// A NON-SECRET one-line summary of a release failure for the cleanup-proof event. A
+// release error is an allocator/HTTP fault message (a runner id, a status, a provider
+// message) — never a credential value — but we still bound it to a single line so no
+// multi-line provider dump rides along.
+function releaseFailureSummary(message: string): string {
+  return message.split("\n")[0]?.slice(0, 300) ?? "runner release failed";
 }
