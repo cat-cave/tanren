@@ -182,11 +182,11 @@ export function buildDriveConflictResolve(deps: DriveConflictResolveDeps): Confl
     }
 
     const ctx = await loadDriveRunContext(deps);
+    const resolverHandle = `${deps.facts.runId}-resolve-${crypto.randomUUID()}`;
     const allocation = await deps.allocator.allocate({
-      // Runless: the original run's runner is gone, so we allocate a fresh
-      // short-lived runner for THIS resolution only. `runId`/`projectId` are the
-      // stable naming handle; the persisted FK columns come from `persisted*`.
-      runId: deps.facts.runId,
+      // Runless: use a synthetic naming handle so retained `runner_${runId}` rows
+      // from the original run cannot collide with this short-lived resolver.
+      runId: resolverHandle,
       projectId: deps.facts.projectId,
       runnerImage: ctx.runnerImage,
       identitySecretRef: deps.identitySecretRef,
@@ -195,7 +195,7 @@ export function buildDriveConflictResolve(deps: DriveConflictResolveDeps): Confl
       persistedRunId: null,
       persistedProjectId: deps.facts.projectId,
     });
-    const workspacePath = workspaceRepoPathForRun(deps.facts.runId);
+    const workspacePath = workspaceRepoPathForRun(resolverHandle);
     try {
       // Clone the HEAD (PR) branch into the workspace; the resolver's
       // SshWorkspaceConflictApplier.gather() then merges base INTO it to surface

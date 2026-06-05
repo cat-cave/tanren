@@ -21,6 +21,15 @@ import type {
 } from "../contracts/mergeCoordinator.js";
 import type { MergeQueueEventEmitter } from "./coordinator.js";
 import type { SpecEscalator } from "./coordinatorEscalate.js";
+import { isRetriableInfraError } from "../providers/githubRefReset.js";
+import { isAmbiguousMergeError } from "../providers/mergeOutcomeErrors.js";
+
+/** How long after a transient batch drive throw the subscriber re-drives the project. */
+export const BATCH_DRIVE_INFRA_RETRY_AFTER_MS = 3000;
+
+export type BatchDriveInfraHold =
+  | { kind: "infra_hold"; message: string; retryAfterMs: number }
+  | { kind: "infra_terminal"; message: string; entry: MergeQueueEntry };
 
 /** The slice of the batch coordinator's deps the settle mapping needs. */
 export interface BatchSettleDeps {
@@ -32,6 +41,33 @@ export interface BatchSettleDeps {
 /** The slice of deps the base-conflict drive needs (settle deps + the merge runner). */
 export interface BatchBaseConflictDeps extends BatchSettleDeps {
   runner: MergeRunner;
+}
+
+export async function holdOnRetriableDriveThrow(
+  deps: BatchSettleDeps,
+  projectId: string,
+  entry: MergeQueueEntry,
+  error: unknown,
+): Promise<BatchDriveInfraHold | undefined> {
+  if (isAmbiguousMergeError(error)) {
+    await deps.queue.markDequeued(entry.queueId, "blocked");
+    return {
+      kind: "infra_terminal",
+      message: `merge drive state ambiguous; auto-retry could double-merge: ${String(error)}`,
+      entry,
+    };
+  }
+  if (!isRetriableInfraError(error)) return undefined;
+  await deps.queue.releaseClaim(entry.queueId);
+  console.warn(
+    `[batch-coordinator] project ${projectId}: merge drive for spec ${entry.specId} threw a transient infra error; holding + re-driving (entry stays queued):`,
+    error,
+  );
+  return {
+    kind: "infra_hold",
+    message: `merge drive threw transient infra error: ${String(error)}`,
+    retryAfterMs: BATCH_DRIVE_INFRA_RETRY_AFTER_MS,
+  };
 }
 
 /**
@@ -83,7 +119,7 @@ export async function driveBaseConflict(
   batch: ReadonlyArray<MergeQueueEntry>,
   verdict: Extract<BatchCheckVerdict, { result: "conflict" }>,
   queueDepth: number,
-): Promise<CoordinateResult> {
+): Promise<CoordinateResult | BatchDriveInfraHold> {
   const culpritSpecId = verdict.conflictBetween?.specId;
   const culprit = batch.find((e) => e.specId === culpritSpecId);
   if (culprit === undefined) {
@@ -105,6 +141,9 @@ export async function driveBaseConflict(
   await deps.events.emitAdvanced({ projectId, entry: culprit, queueDepth });
 
   const outcome = await driveOneEntry(deps, projectId, culprit);
+  if (outcome.kind === "infra_hold" || outcome.kind === "infra_terminal") {
+    return outcome;
+  }
   if (outcome.kind === "merged") {
     await deps.queue.markMerged(culprit.queueId);
     return { projectId, queueDepth, mergedSpecId: culprit.specId };
@@ -122,10 +161,12 @@ async function driveOneEntry(
   deps: BatchBaseConflictDeps,
   projectId: string,
   entry: MergeQueueEntry,
-): Promise<MergeDriveOutcome> {
+): Promise<MergeDriveOutcome | BatchDriveInfraHold> {
   try {
     return await deps.runner.driveMerge({ runId: entry.runId, projectId });
   } catch (error) {
+    const hold = await holdOnRetriableDriveThrow(deps, projectId, entry, error);
+    if (hold !== undefined) return hold;
     return { kind: "blocked", message: `merge drive threw: ${String(error)}` };
   }
 }

@@ -187,7 +187,7 @@ export async function applyUpdateTask(client: QueryClient, input: UpdateTaskInpu
   switch (input.transition) {
     case "running":
       await client.query(
-        "UPDATE tasks SET status = 'running', started_at = COALESCE(started_at, now()), ended_at = NULL WHERE task_id = $1",
+        "UPDATE tasks SET status = 'running', outcome = NULL, failure_kind = NULL, started_at = COALESCE(started_at, now()), ended_at = NULL WHERE task_id = $1",
         [input.taskId],
       );
       return;
