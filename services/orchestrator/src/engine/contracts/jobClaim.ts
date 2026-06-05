@@ -15,7 +15,7 @@
 //
 // CLAIM SEMANTICS ARE UNCHANGED in both impls: the endpoint's handler calls the
 // SAME `JobQueue.claim`, so exactly-once is preserved end to end. Only the
-// TRANSPORT to that CAS differs. See docs/roadmap/saas-rls-and-plane-split-plan.md
+// TRANSPORT to that CAS differs. See ROADMAP.md
 //.
 
 import type { JobEnvelope, JobQueue } from "./jobQueue.js";

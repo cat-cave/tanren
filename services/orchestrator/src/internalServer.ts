@@ -12,7 +12,7 @@
 //                                       the CA that signs trusted data-plane certs
 // When the cert env is unset the internal listener does NOT start (single-process
 // dev / the in-process `TANREN_RUN_WORKER=1` path needs no network claim). See
-// docs/roadmap/saas-rls-and-plane-split-plan.md.
+// ROADMAP.md.
 
 import { createServer } from "node:https";
 import { serve } from "@hono/node-server";

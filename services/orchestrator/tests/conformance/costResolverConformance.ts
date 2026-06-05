@@ -31,7 +31,7 @@
 // `Scenario` list: each scenario names a credential/usage situation and the
 // billingMode + costBasis + null-ness the contract REQUIRES for it. The spec
 // runs every scenario through the impl's `resolve` and asserts the contract.
-// Track C §4 (backfill conformance suites) of docs/roadmap/forward-roadmap.md.
+// Track C §4 (backfill conformance suites) of ROADMAP.md.
 import { describe, expect, it } from "vitest";
 import type { CostResolution, CostResolutionInput, CostResolver } from "../../src/engine/contracts/costResolver.js";
 

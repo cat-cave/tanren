@@ -3,7 +3,7 @@
 `apex` is the one real, end-to-end run that proves **Tanren works**. Read this
 before driving it — the role it puts you in is counterintuitive, and getting it
 wrong invalidates the result. The full design (domain, DAG shape, proof
-checklist) is `docs/roadmap/autonomy-engine.md` §4; this doc is the **operating
+checklist) is `docs/architecture/autonomy-engine.md` §4; this doc is the **operating
 contract for the human/orchestrator driving the run.**
 
 ## What is under test — and what is NOT

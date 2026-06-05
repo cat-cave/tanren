@@ -7,8 +7,7 @@ credentials. This records **what each tier proved, the gaps live validation
 found-and-fixed, and the config gotchas** — so a fresh agent can reproduce the
 validated state without rediscovering them.
 
-The single live forward tracker is `docs/roadmap/tempering.md`; the detailed
-four-dimension plan is `docs/roadmap/forward-roadmap.md`.
+The single live forward tracker is `ROADMAP.md`.
 
 ## What the three tiers proved (each reached a merged PR)
 

@@ -9,7 +9,7 @@
 // The real Node impls (`buildNodeMtlsFetch` / `nodeMtlsServerOptions` /
 // `certCommonName`) live in `mtlsChannelNode.ts` — kept out of this contract
 // module so the contract stays dependency-light and the impl carries the
-// `node:tls`/`undici` surface. See docs/roadmap/saas-rls-and-plane-split-plan.md
+// `node:tls`/`undici` surface. See ROADMAP.md
 //.
 
 /**

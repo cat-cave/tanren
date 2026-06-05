@@ -1,5 +1,5 @@
-// observability: regression corpus seeded from the readiness
-// audit (docs/audits/phase2-readiness.md). Each test names the audit finding
+// observability: regression corpus seeded from the historical Phase-2
+// readiness audit. Each test names the audit finding
 // it guards so a future regression in one of these workflow-critical
 // behaviors fails loudly. This is a deliberately SMALL, named set — it grows
 // as new audit-rooted bugs are found, not a broad re-test of every module.
