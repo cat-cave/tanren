@@ -120,6 +120,37 @@ describe("SSH substrate contract", () => {
     expect(result.failure?.kind).toBe("ssh_failed");
   });
 
+  it("survives a DOUBLE 'error' emission (pre-handshake loss + teardown re-emit) without crashing", async () => {
+    // Regression for a P0: a single transient SSH blip crashed the whole control
+    // plane. ssh2 emits "error" once for "Connection lost before handshake" and
+    // AGAIN during teardown after settle() calls client.destroy(). A `.once`
+    // listener consumes the first emission, leaving the second with no listener,
+    // so Node's EventEmitter throws an unhandled "error" → exit(1). With a
+    // persistent `.on` listener the second emission is swallowed by the settled
+    // guard. If this regresses, the second emit below throws inside the test
+    // (unhandled "error" on an EventEmitter) and the test fails/crashes.
+    const secrets = new FakeSecretStore();
+    await secrets.put({ ref: target.identitySecretRef, value: "private-key" });
+
+    // The fake destroy() re-emits "error" exactly as ssh2 does during teardown.
+    const { client, state } = createDoubleErrorClient();
+    const substrate = new SshCommandSubstrate(secrets, { clientFactory: () => client });
+
+    // The fake's connect() emits the pre-handshake error, which drives
+    // settle() → destroy() → a SECOND "error" emission during teardown.
+    const result = await substrate.run(target, { command: "echo ok", timeoutMs: 100 });
+
+    // Settles exactly once, to a single ssh_failed CommandResult — the first
+    // error's message wins; the teardown re-emit is a no-op.
+    expect(result.exitCode).toBeNull();
+    expect(result.timedOut).toBe(false);
+    expect(result.failure?.kind).toBe("ssh_failed");
+    expect(result.failure?.message).toBe("Connection lost before handshake");
+    // settle() ran exactly once → exactly one destroy(); the teardown re-emit it
+    // triggered did not loop back into a second settle.
+    expect(state.destroyCount).toBe(1);
+  });
+
   it("returns ssh_failed with timedOut when the SSH operation exceeds the command timeout", async () => {
     vi.useFakeTimers();
     const secrets = new FakeSecretStore();
@@ -147,6 +178,39 @@ function createNeverReadyClient(): Client {
     exec: () => client,
   });
   return client as unknown as Client;
+}
+
+/**
+ * A fake ssh2 Client whose `destroy()` re-emits "error" — reproducing ssh2's
+ * real teardown behaviour after a pre-handshake connection loss. The first
+ * "error" the test emits drives settle() → destroy(), which fires a SECOND
+ * "error". We deliberately attach NO counting listener of our own: the
+ * substrate's production listener must be the only one. That way, if the fix
+ * regressed to `.once`, the second emit would find no listener and Node's
+ * EventEmitter would THROW an unhandled "error" — surfacing the crash inside the
+ * test. `destroyCount` is tracked via the method override (not a listener).
+ */
+function createDoubleErrorClient(): { client: Client & EventEmitter; state: { destroyCount: number } } {
+  const emitter = new EventEmitter();
+  const state = { destroyCount: 0 };
+  const client = Object.assign(emitter, {
+    connect: () => {
+      // Emit the pre-handshake loss AFTER the substrate has attached its
+      // listeners (connect() is called synchronously after they are wired).
+      queueMicrotask(() => emitter.emit("error", new Error("Connection lost before handshake")));
+      return client;
+    },
+    destroy: () => {
+      state.destroyCount += 1;
+      // ssh2 emits "error" again during teardown after a pre-handshake loss.
+      // With `.once` in production this second emit has no listener → throws.
+      emitter.emit("error", new Error("read ECONNRESET"));
+      return client;
+    },
+    end: () => client,
+    exec: () => client,
+  });
+  return { client: client as unknown as Client & EventEmitter, state };
 }
 
 type HostVerifier = (fingerprint: string) => boolean;

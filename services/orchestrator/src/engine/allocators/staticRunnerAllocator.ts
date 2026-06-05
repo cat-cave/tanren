@@ -31,7 +31,7 @@ export interface StaticRunnerAllocatorOptions {
   /** Timeout for the TOFU discovery handshake. */
   discoverTimeoutMs?: number;
   /** Override for tests. */
-  clientFactory?: () => Pick<Client, "connect" | "destroy" | "end" | "once">;
+  clientFactory?: () => Pick<Client, "connect" | "destroy" | "end" | "once" | "on">;
 }
 
 /**
@@ -46,7 +46,7 @@ export interface StaticRunnerAllocatorOptions {
  * the orchestrator cannot rely on a baked-in fingerprint.
  */
 export class StaticRunnerAllocator implements Allocator {
-  private readonly clientFactory: () => Pick<Client, "connect" | "destroy" | "end" | "once">;
+  private readonly clientFactory: () => Pick<Client, "connect" | "destroy" | "end" | "once" | "on">;
 
   constructor(private readonly options: StaticRunnerAllocatorOptions) {
     this.clientFactory = options.clientFactory ?? (() => new Client());
@@ -130,10 +130,17 @@ export class StaticRunnerAllocator implements Allocator {
         () => settle(() => reject(new Error(`static runner host key discovery timed out after ${timeoutMs}ms`))),
         timeoutMs,
       );
-      client.once("error", (error: Error) => {
-        // The discovery handshake intentionally aborts after the host key is
-        // verified — we have no identity to authenticate with. Once we have
-        // captured the fingerprint any subsequent error is expected.
+      // PERSISTENT listener (`.on`, not `.once`): the discovery handshake
+      // intentionally aborts after the host key is captured (we have no identity
+      // to authenticate with), and ssh2 emits "error" both for that intended
+      // abort AND a second time during teardown — likewise for a pre-handshake
+      // "Connection lost before handshake" blip, where destroy() re-emits. With
+      // `.once` that second emission has no listener and Node's EventEmitter
+      // throws an unhandled "error" → the orchestrator exits(1). The `settled`
+      // guard makes a repeat invocation a no-op, so we keep listening and swallow
+      // any follow-up error. The listener is GC'd with the client once allocate()
+      // settles.
+      client.on("error", (error: Error) => {
         if (captured !== undefined) {
           finishWithCapture();
           return;
